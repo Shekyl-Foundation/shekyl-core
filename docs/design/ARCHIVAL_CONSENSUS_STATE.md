@@ -97,6 +97,16 @@ reopen, not a gate-3 patch.
 
 ## 3. Read surface — what the emission leg consumes
 
+> **Two validators (`SO-D11`, 2026-10-09).** Where this section says the
+> snapshot (`R_market`, `Σwork`) is taken or stored **at the epoch close**,
+> or that a credit is the **serve-credit bit**, it describes the C++
+> daemon, consensus until `DEL-008`. In the Rust validator the close
+> freezes the budget only; the epoch's slash pass gathers, an epoch later,
+> over the pairs whose settlement row is Served
+> ([`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §15).
+> §3.3, §3.5 and §4 states both where the rule is pinned; passages that are not split
+> are the C++'s.
+
 Keying is **`P_canonical_id`** throughout (emission leg §6.1):
 
 ```text
@@ -140,17 +150,32 @@ R_market(shard_id, E) =
 ```
 
 - **One consensus value** per `(shard, E)` — identical for every claimer.
-- **Pinned measure:** count at **epoch close** with `serve_credit_bit ∧ good_through` — not
+- **Pinned measure (C++ daemon, goes with `DEL-008`):** count at **epoch close** with `serve_credit_bit ∧ good_through` — not
   bond-slot count, not time-weighted over `E` (rejected: buys little, costs determinism).
   A bonded `P` that misses challenges **without** earning credit **does not** inflate
   `R_market` at that `E` — slash latency trades bond-resolution timing, not scarcity at
   E-close ([`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](../completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) §3.1).
+- **Pinned measure (the design; Rust validator, `SO-D11`,
+  [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §15):** count at the
+  **slash pass of `E`**, the block at `slash_deadline_height(E)`. The credit term is
+  not `serve_credit_bit`. A pair `(P, shard)` is credited for `E` iff its **settlement
+  row for `E` is Served**: two passes among the three draws the beacon selects. A pair
+  issued fewer than three draws in `E` is not counted. The pass settles `E`, slashes
+  on its Missed rows, then gathers. Bond records are read as of the pass, after `E`'s
+  own slashes. The shards counted are those **closed and final** (closed at least
+  `reorg_cap` blocks deep) as of the slash-pass block. A shard's age is still measured
+  at the epoch's own close height `(E+1)·SEB`. Code: `Transition::gather` and
+  `gather_universe` in `rust/shekyl-chain-rules/src/archival/close.rs`. The C++ daemon
+  is the live consensus path until `DEL-008` and keeps the measure above.
 - **`Market` membership (per epoch `E`):** record exists ∧ `E ≥ E_join + 1` ∧
   `good_through(P,E)` at E-close ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2.2).
   **No serve-credit bits before join** or for epoch `E_join` (partial). Foundation
   `CompleteTree` excluded from `market_R` / `Σwork` (E-2).
 - **Materialization:** may be stored per `(shard_id, E)` at epoch close or computed on
-  read from the ledger; semantics are fixed either way.
+  read from the ledger; semantics are fixed either way. The C++ daemon stores it at the
+  epoch close (until `DEL-008`). The Rust validator stores it in the block that runs
+  `E`'s slash pass: one row for every shard in the gather's universe, zeros included,
+  for every settled epoch (`SO-D11`).
 
 ### 3.4 Holdings + good-standing (gate 4)
 
@@ -194,8 +219,21 @@ logged bond/slash/re-bond timeline.
 Σwork(E) → Σ_{P'∈Market} Curve(work_{P'}(E))
 ```
 
-Finalized at settlement epoch `E` **close**. Inputs are the three record families above;
+Finalized at settlement epoch `E` **close** in the C++ daemon (goes with `DEL-008`).
+Inputs are the three record families above;
 arithmetic is owned by [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §4.0.
+
+**The design, and the Rust validator (`SO-D11`,
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §15):** `Σwork(E)` is
+finalized at the **slash pass of `E`**, in the block at `slash_deadline_height(E)`
+(connecting height `(E+2)·SEB − 1` under the pinned one-epoch grace). It is folded
+over the pairs whose settlement row for `E` is Served (§3.3) and written in that
+block with `r_market(·, E)`. The epoch close, the block at connecting height
+`(E+1)·SEB − 1`, freezes `budget(E)` and nothing else. The gather runs for every
+settled epoch, Served pairs or none, so `Σwork(E)` exists, possibly zero, once `E` is
+settled. With no draw issued no pair is Served and `Σwork` is zero for every epoch.
+That holds on every chain until the secret draw lands, and the Rust validator does
+not become consensus (`DEL-008`) before the draw is live.
 
 **Implementation choice (not consensus-visible):** epoch-close sweep **or** incremental
 per-`P` delta when serve-credit state settles (re-cap one `P`, apply delta to `Σwork`) — the
@@ -243,6 +281,13 @@ them.
    `E` are fixed once `E` closes (within the reorg horizon). Per E-3, they are immune to
    **later** slashes via `good_through(E)` evaluated at close. This boundary is **the
    same** as emission §4.5's lagged `Σwork` read — pin together, not separately.
+   That is the C++ daemon's boundary, and it goes with `DEL-008`. In the design and
+   in the Rust validator (`SO-D11`,
+   [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §15) the boundary
+   is the **slash pass of `E`**: `r_market(·, E)` and `Σwork(E)` are fixed once the
+   block at `slash_deadline_height(E)` connects, from the settlement rows that pass
+   wrote and the bond records after `E`'s own slashes. The rows are insert-once on
+   `E`. The joint pin with emission §4.5 moves with it.
 
    > **Joint finalization-boundary pin (2026-06-12, with emission §4.5).** Epoch `E`
    > covers heights `[E·SEB, (E+1)·SEB)`; its close materializes during the connect of
@@ -259,6 +304,16 @@ them.
    > never strand a connected emission citing a definalized epoch. The `W` window
    > (§5; emission §6.6) is necessary but not sufficient — row existence is the citing
    > gate.
+   > **UPDATE 2026-10-09 (`SO-D11`):** the pin above is the C++ daemon's and goes with
+   > `DEL-008`. In the Rust validator the close, at connecting height
+   > `(E+1)·SEB − 1`, writes `budget(E)` only. `Σwork(E)` is written by the slash pass
+   > of `E`, at connecting height `(E+2)·SEB − 1 = h_close(E) + SEB − 1`. An emission
+   > citing `E` is valid from connecting height `(E+2)·SEB = h_close(E) + SEB`, one
+   > epoch later. Row existence stays the citing gate, and the row is `Σwork`'s
+   > (CEN-J23). The strict bound `current_block_height > h_close(E)` stays true and no
+   > longer binds. The claimable span is 25 epochs, `[C − 26, C − 2]` for a block in
+   > epoch `C`; `W` stays 26
+   > ([`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §15).
 
 3. **Canonical stable `shard_id`** — same shard, same id, for all `P` and all time;
    otherwise holdings cannot be matched across emissions (§6.4 "compatible holdings").

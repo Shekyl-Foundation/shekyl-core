@@ -24,7 +24,7 @@ tree.
 This document does **not** restate them — it cites them, and specifies the
 corpus and protocol §6.3.4 leaves to the bench.
 
-**Instrument:** `rust/shekyl-wss-q1b-bench` (bins `spend_edge`, `open_edge`).
+**Instrument:** `rust/shekyl-wss-q1b-bench` (bins `spend_edge`, `open_edge`, `verify_edge`, `assemble_edge`).
 
 **Identifier family:** `WSS-` — this is bench work under the wallet-side store
 round and registers **no new family**

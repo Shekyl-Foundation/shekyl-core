@@ -1,0 +1,230 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The inbound claim and the relay fan-out (CS-Q10, CS-Q2 step 7).
+//!
+//! An inbound session's claim arrives in its handshake request, which the
+//! router's claim tap copies to the owner. A block that connects is sent
+//! compact to every established session but the one that supplied it, and
+//! a block this node mined to every established session.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use shekyl_chain_ingest::service::{ArrivalTag, Reply};
+use shekyl_chain_sync::SyncState;
+use shekyl_p2p_harness::sync::{announcement, Bodies, Node, ServingPeer, Step};
+use shekyl_p2p_session::harness::timed_sync_request;
+
+#[path = "chain_sync/support.rs"]
+mod support;
+
+use support::{claim, claim_of, logs, rng, session_rng, source, spend, wait_synced, LIMIT};
+
+/// An inbound session's claim arrives in its handshake request and in
+/// every timed sync, and the session layer hands each to the owner
+/// (CS-Q10, Rick 2026-10-24; brief §2.1): a session whose handshake
+/// claimed nothing is no source; once its timed sync claims the chain,
+/// the session serves the headers and the bodies, with no outbound dial.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_inbound_session_serves_the_sync_after_its_claim() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("inbound-src", &corpus, &steps).await;
+    let (count, _, _) = held.tip().expect("a chain");
+    let mut node = Node::start(
+        "inbound",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
+    let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+    let id = node.accept(Box::new(peer), None).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        seen.headers(),
+        0,
+        "an inbound session with no claim is no source"
+    );
+    assert!(node.inject(id, timed_sync_request(claim_of(&held))).await);
+    wait_synced(&node, count).await;
+    assert!(seen.headers() >= 1 && seen.bodies() >= 1);
+    node.stop().await;
+    held.stop().await;
+}
+
+/// A connected announcement is relayed (CS-Q2 step 7): to
+/// every established session but the one that announced it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_connected_announcement_is_relayed_to_every_other_session() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("relay-src", &corpus, &steps).await;
+    let (count, _, _) = held.tip().expect("a chain");
+    // The node holds every block but the last.
+    let mut node = Node::start(
+        "relay",
+        corpus.rules(),
+        &steps[..steps.len() - 1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
+    let (_, work, top) = node.chain.tip().expect("a chain");
+    let mut seen = Vec::new();
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let (peer, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+        seen.push(asked);
+        ids.push(
+            node.connect(Box::new(peer), Some(claim(count - 1, work, top)))
+                .await,
+        );
+    }
+    assert!(
+        node.wait(LIMIT, |node| node.state() == SyncState::Synced)
+            .await,
+        "state {:?}",
+        node.state()
+    );
+    assert!(
+        node.inject(ids[0], announcement(&held.store, count - 1))
+            .await
+    );
+    assert!(
+        node.wait(LIMIT, |node| node.count() == count).await,
+        "the announcement did not connect"
+    );
+    assert!(
+        node.wait(LIMIT, |_| seen[1].announced() == 1
+            && seen[2].announced() == 1)
+            .await,
+        "relayed {:?}",
+        seen.iter().map(|seen| seen.announced()).collect::<Vec<_>>()
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(seen[0].announced(), 0, "not back to the announcer");
+    node.stop().await;
+    held.stop().await;
+}
+
+/// A synced node that fetches the next block by sync relays it once it
+/// connects, to every established session but the one that supplied it
+/// (CS-Q2 step 7, amended 2026-10-24). Two peers hold the node's own tip;
+/// a third claims one block more, serves its header and body, and never
+/// receives that block back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_block_fetched_by_sync_is_relayed_to_all_but_its_supplier() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("sync-relay-src", &corpus, &steps).await;
+    let full = claim_of(&held);
+    let (count, _, _) = held.tip().expect("a chain");
+    let mut node = Node::start(
+        "sync-relay",
+        corpus.rules(),
+        &steps[..steps.len() - 1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
+    let (_, work, top) = node.chain.tip().expect("a chain");
+    let mut level = Vec::new();
+    for _ in 0..2 {
+        let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+        node.connect(Box::new(peer), Some(claim(count - 1, work, top)))
+            .await;
+        level.push(seen);
+    }
+    assert!(
+        node.wait(LIMIT, |node| node.state() == SyncState::Synced)
+            .await,
+        "state {:?}",
+        node.state()
+    );
+    let (peer, supplier) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+    node.connect(Box::new(peer), Some(full)).await;
+    assert!(
+        node.wait(LIMIT, |node| node.count() == count).await,
+        "the next block was not fetched"
+    );
+    assert!(supplier.bodies() >= 1, "the block came by sync");
+    assert!(
+        node.wait(LIMIT, |_| level.iter().all(|seen| seen.announced() == 1))
+            .await,
+        "relayed {:?}",
+        level
+            .iter()
+            .map(|seen| seen.announced())
+            .collect::<Vec<_>>()
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(supplier.announced(), 0, "not back to the supplier");
+    node.stop().await;
+    held.stop().await;
+}
+
+/// A block this node mined is relayed to every established session (CS-5
+/// F1): no session supplied it, so none is skipped. The block enters by
+/// `offer_local`, the one path in for the miner's sink, `submit_block` and
+/// `generateblocks`, and the owner learns of it only from the new tip.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_block_this_node_mined_is_relayed_to_every_session() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("mined-relay-src", &corpus, &steps).await;
+    let (count, _, _) = held.tip().expect("a chain");
+    let Some((Step::Block { block, bodies }, before)) = steps.split_last() else {
+        panic!("the corpus ends in a block");
+    };
+    let mut node = Node::start(
+        "mined-relay",
+        corpus.rules(),
+        before,
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
+    let (_, work, top) = node.chain.tip().expect("a chain");
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        let (peer, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+        seen.push(asked);
+        node.connect(Box::new(peer), Some(claim(count - 1, work, top)))
+            .await;
+    }
+    assert!(
+        node.wait(LIMIT, |node| node.state() == SyncState::Synced)
+            .await,
+        "state {:?}",
+        node.state()
+    );
+    let mined = node
+        .chain
+        .service
+        .door()
+        .offer_local(ArrivalTag(u64::MAX), block.clone(), bodies.clone())
+        .await
+        .expect("the door takes a local block");
+    assert!(
+        matches!(mined.reply, Reply::Connected { .. }),
+        "the mined block did not connect: {:?}",
+        mined.reply
+    );
+    assert!(
+        node.wait(LIMIT, |_| seen.iter().all(|seen| seen.announced() == 1))
+            .await,
+        "relayed {:?}",
+        seen.iter().map(|seen| seen.announced()).collect::<Vec<_>>()
+    );
+    node.stop().await;
+    held.stop().await;
+}

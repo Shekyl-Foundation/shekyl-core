@@ -67,7 +67,6 @@ using namespace epee;
 
 #include "crypto/crypto.h"
 #include "util.h"
-#include "stack_trace.h"
 #include "memwipe.h"
 #include "net/net_parse_helpers.h"                  // epee::net_utils::parse_url
 #include "string_tools.h"                           // epee::string_tools
@@ -80,7 +79,6 @@ using namespace epee;
 #define STRSAFE_NO_DEPRECATE
 #endif
   #include <windows.h>
-  #include <shlobj.h>
   #include <strsafe.h>
 #else 
   #include <sys/file.h>
@@ -605,54 +603,7 @@ std::string get_nix_version_display_string()
 
 
 
-#ifdef WIN32
-  std::string get_special_folder_path(int nfolder, bool iscreate)
-  {
-    WCHAR psz_path[MAX_PATH] = L"";
-
-    if (SHGetSpecialFolderPathW(NULL, psz_path, nfolder, iscreate))
-    {
-      try
-      {
-        return string_tools::utf16_to_utf8(psz_path);
-      }
-      catch (const std::exception &e)
-      {
-        MERROR("utf16_to_utf8 failed: " << e.what());
-        return "";
-      }
-    }
-
-    LOG_ERROR("SHGetSpecialFolderPathW() failed, could not obtain requested path.");
-    return "";
-  }
-#endif
   
-  std::string get_default_data_dir()
-  {
-    /* Please for the love of god refactor  the ifdefs out of this */
-
-    // namespace fs = std::filesystem;
-    // Windows < Vista: C:\Documents and Settings\Username\Application Data\CRYPTONOTE_NAME
-    // Windows >= Vista: C:\Users\Username\AppData\Roaming\CRYPTONOTE_NAME
-    // Unix & Mac: ~/.CRYPTONOTE_NAME
-    std::string config_folder;
-
-#ifdef WIN32
-    config_folder = get_special_folder_path(CSIDL_COMMON_APPDATA, true) + "\\" + CRYPTONOTE_NAME;
-#else
-    std::string pathRet;
-    char* pszHome = getenv("HOME");
-    if (pszHome == NULL || strlen(pszHome) == 0)
-      pathRet = "/";
-    else
-      pathRet = pszHome;
-    config_folder = (pathRet + "/." + CRYPTONOTE_NAME);
-#endif
-
-    return config_folder;
-  }
-
   bool create_directories_if_necessary(const std::string& path)
   {
     namespace fs = std::filesystem;
@@ -699,41 +650,6 @@ std::string get_nix_version_display_string()
     return false;
   }
 
-#ifdef STACK_TRACE
-#ifdef _WIN32
-  // https://stackoverflow.com/questions/1992816/how-to-handle-seg-faults-under-windows
-  static LONG WINAPI windows_crash_handler(PEXCEPTION_POINTERS pExceptionInfo)
-  {
-    tools::log_stack_trace("crashing");
-    exit(1);
-    return EXCEPTION_CONTINUE_SEARCH;
-  }
-  static void setup_crash_dump()
-  {
-    SetUnhandledExceptionFilter(windows_crash_handler);
-  }
-#else
-  static void posix_crash_handler(int signal)
-  {
-    tools::log_stack_trace(("crashing with fatal signal " + std::to_string(signal)).c_str());
-#ifdef NDEBUG
-    _exit(1);
-#else
-    abort();
-#endif
-  }
-  static void setup_crash_dump()
-  {
-    signal(SIGSEGV, posix_crash_handler);
-    signal(SIGBUS, posix_crash_handler);
-    signal(SIGILL, posix_crash_handler);
-    signal(SIGFPE, posix_crash_handler);
-  }
-#endif
-#else
-  static void setup_crash_dump() {}
-#endif
-
   bool disable_core_dumps()
   {
 #ifdef __GLIBC__
@@ -778,15 +694,13 @@ std::string get_nix_version_display_string()
     // the backend it was written against and wrong for the one underneath it.
     //
     // Every entry point now initialises logging exactly once, with its FINAL
-    // configuration. Callers that genuinely want stderr only say so themselves
-    // (cn_deserialize.cpp, object_sizes.cpp, gen_ssl_cert.cpp).
+    // configuration. A caller that genuinely wants stderr only says so itself
+    // (cn_deserialize.cpp).
     //
     // M*/MC* calls before that final init (the glibc warning below, the
     // wallet missing-config MERROR, the daemon FAT32 MERROR) reach stderr
     // through shekyl_log_emit's pre-init passthrough. They do not install
     // the subscriber, so they cannot recreate the inert `--log-file` bug.
-
-    setup_crash_dump();
 
     sanitize_locale();
 
@@ -1035,27 +949,6 @@ std::string get_nix_version_display_string()
   }
 #endif
 
-  void closefrom(int fd)
-  {
-#if defined(_WIN32)
-    (void)fd;
-#elif defined __FreeBSD__ || defined __OpenBSD__ || defined __NetBSD__ || defined __DragonFly__
-    ::closefrom(fd);
-#else
-#if defined __GLIBC__
-    const int sc_open_max =  sysconf(_SC_OPEN_MAX);
-    const int MAX_FDS = std::min(65536, sc_open_max);
-#else
-    const int MAX_FDS = 65536;
-#endif
-    while (fd < MAX_FDS)
-    {
-      close(fd);
-      ++fd;
-    }
-#endif
-  }
-
   std::string get_human_readable_timestamp(uint64_t ts)
   {
     char buffer[64];
@@ -1298,87 +1191,6 @@ std::string get_nix_version_display_string()
 
   // Calculate a "sync weight" over ranges of blocks in the blockchain, suitable for
   // calculating sync time estimates
-  uint64_t cumulative_block_sync_weight(cryptonote::network_type nettype, uint64_t start_block, uint64_t num_blocks)
-  {
-    if (nettype != cryptonote::MAINNET)
-    {
-      // No detailed data available except for Mainnet: Give back the number of blocks
-      // as a very simple and non-varying block sync weight for ranges of Testnet and
-      // Stagenet blocks
-      return num_blocks;
-    }
-
-    // The following is a table of average blocks sizes in bytes over the Monero mainnet
-    // blockchain, where the block size is averaged over ranges of 10,000 blocks
-    // (about 2 weeks worth of blocks each).
-    // The first array entry of 442 thus means "The average byte size of the blocks
-    // 0 .. 9,999 is 442". The info "block_size" from the "get_block_header_by_height"
-    // RPC call was used for calculating this. This table (and the whole mechanism
-    // of calculating a "sync weight") is most important when estimating times for
-    // syncing from scratch. Without it the fast progress through the (in comparison)
-    // rather small blocks in the early blockchain) would lead to vastly underestimated
-    // total sync times.
-    // It's no big problem for estimates that this table will, over time, and if not
-    // updated, miss larger and larger parts at the top of the blockchain, as long
-    // as block size averages there do not differ wildly.
-    // Without time-consuming tests it's hard to say how much the estimates would
-    // improve if one would not only take block sizes into account, but also varying
-    // verification times i.e. the different CPU effort needed for the different
-    // transaction types (FCMP++ with Bulletproofs+).
-    // Testnet and Stagenet are neglected here because of their much smaller
-    // importance.
-    static const uint32_t average_block_sizes[] =
-    {
-      442, 1211, 1445, 1763, 2272, 8217, 5603, 9999, 16358, 10805, 5290, 4362,
-      4325, 5584, 4515, 5008, 4789, 5196, 7660, 3829, 6034, 2925, 3762, 2545,
-      2437, 2553, 2167, 2761, 2015, 1969, 2350, 1731, 2367, 2078, 2026, 3518,
-      2214, 1908, 1780, 1640, 1976, 1647, 1921, 1716, 1895, 2150, 2419, 2451,
-      2147, 2327, 2251, 1644, 1750, 1481, 1570, 1524, 1562, 1668, 1386, 1494,
-      1637, 1880, 1431, 1472, 1637, 1363, 1762, 1597, 1999, 1564, 1341, 1388,
-      1530, 1476, 1617, 1488, 1368, 1906, 1403, 1695, 1535, 1598, 1318, 1234,
-      1358, 1406, 1698, 1554, 1591, 1758, 1426, 2389, 1946, 1533, 1308, 2701,
-      1525, 1653, 3580, 1889, 2913, 8164, 5154, 3762, 3356, 4360, 3589, 4844,
-      4232, 3781, 3882, 5924, 10790, 7185, 7442, 8214, 8509, 7484, 6939, 7391,
-      8210, 15572, 39680, 44810, 53873, 54639, 68227, 63428, 62386, 68504,
-      83073, 103858, 117573, 98089, 96793, 102337, 94714, 129568, 251584,
-      132026, 94579, 94516, 95722, 106495, 121824, 153983, 162338, 136608,
-      137104, 109872, 91114, 84757, 96339, 74251, 94314, 143216, 155837,
-      129968, 120201, 109913, 101588, 97332, 104611, 95310, 93419, 113345,
-      100743, 92152, 57565, 22533, 37564, 21823, 19980, 18277, 18402, 14344,
-      12142, 15842, 13677, 17631, 18294, 22270, 41422, 39296, 36688, 33512,
-      33831, 27582, 22276, 27516, 27317, 25505, 24426, 20566, 23045, 26766,
-      28185, 26169, 27011, 28642, 34994, 34442, 30682, 34357, 31640, 41167,
-      41301, 48616, 51075, 55061, 49909, 44606, 47091, 53828, 42520, 39023,
-      55245, 56145, 51119, 60398, 71821, 48142, 60310, 56041, 54176, 66220,
-      56336, 55248, 56656, 63305, 54029, 77136, 71902, 71618, 83587, 81068,
-      69062, 54848, 53681, 53555,
-      50616    // Blocks 2,400,000 to 2,409,999 in July 2021
-    };
-    const uint64_t block_range_size = 10000;
-
-    uint64_t num_block_sizes = sizeof(average_block_sizes) / sizeof(average_block_sizes[0]);
-    uint64_t weight = 0;
-    uint64_t table_index = start_block / block_range_size;
-    for (;;) {
-      if (num_blocks == 0)
-      {
-        break;
-      }
-      if (table_index >= num_block_sizes)
-      {
-        // Take all blocks beyond our table as having the size of the blocks
-        // in the last table entry i.e. in the most recent known block range
-        weight += num_blocks * average_block_sizes[num_block_sizes - 1];
-        break;
-      }
-      uint64_t portion_size = std::min(num_blocks, block_range_size - start_block % block_range_size);
-      weight += portion_size * average_block_sizes[table_index];
-      table_index++;
-      num_blocks -= portion_size;
-      start_block += portion_size;
-    }
-    return weight;
-  }
 
   std::vector<std::pair<std::string, size_t>> split_string_by_width(const std::string &s, size_t columns)
   {

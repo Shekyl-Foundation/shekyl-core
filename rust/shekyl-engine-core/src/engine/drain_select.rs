@@ -119,7 +119,7 @@ fn ranked_mature(
 ) -> Vec<&DrainCandidate> {
     let mut mature: Vec<&DrainCandidate> = candidates
         .iter()
-        .filter(|c| c.spendable_height <= reference_height)
+        .filter(|c| shekyl_curve_tree::in_tree_at_reference(c.spendable_height, reference_height))
         .collect();
     mature.sort_by(|a, b| b.amount.cmp(&a.amount).then(a.output_id.cmp(&b.output_id)));
     mature
@@ -309,6 +309,12 @@ mod tests {
     use super::*;
     use crate::engine::drain_amount::{choose_drain_amount, DrainRequest};
 
+    /// The reference height the tests select against. Their mature
+    /// candidates mature at 10, and the tree committed at 11 is the first
+    /// that holds them (`in_tree_at_reference`); those at 99 and 999 are not
+    /// in it.
+    const REFERENCE: BlockHeight = BlockHeight::from_raw(11);
+
     fn candidate(output_id: u64, amount: u64, spendable_height: u64) -> DrainCandidate {
         DrainCandidate {
             output_id: GlobalOutputIndex::from_raw(output_id),
@@ -379,8 +385,7 @@ mod tests {
             candidate(2, 100, 10),
             candidate(3, 7, 10),
         ];
-        let sel = select_for_drain(&candidates, amount(90, 112), BlockHeight::from_raw(10))
-            .expect("covers");
+        let sel = select_for_drain(&candidates, amount(90, 112), REFERENCE).expect("covers");
         assert_eq!(sel.chosen, vec![GlobalOutputIndex::from_raw(2)]);
         assert_eq!(sel.input_total, AtomicUnits::from_raw(100));
     }
@@ -392,8 +397,7 @@ mod tests {
             candidate(2, 40, 10),
             candidate(3, 40, 10),
         ];
-        let sel = select_for_drain(&candidates, amount(70, 120), BlockHeight::from_raw(10))
-            .expect("covers");
+        let sel = select_for_drain(&candidates, amount(70, 120), REFERENCE).expect("covers");
         // Two 40s cover 70; the third is not consumed.
         assert_eq!(sel.chosen.len(), 2);
         assert_eq!(sel.input_total, AtomicUnits::from_raw(80));
@@ -403,7 +407,7 @@ mod tests {
     fn immature_outputs_are_not_selected() {
         // Only the immature output could cover; selection must refuse.
         let candidates = [candidate(1, 10, 10), candidate(2, 1000, 999)];
-        let err = select_for_drain(&candidates, amount(500, 1010), BlockHeight::from_raw(10))
+        let err = select_for_drain(&candidates, amount(500, 1010), REFERENCE)
             .expect_err("immature excluded");
         assert_eq!(err, DrainSelectError::Insufficient);
     }
@@ -418,15 +422,14 @@ mod tests {
             candidate(2, 50, 10),
             candidate(5, 50, 10),
         ];
-        let sel = select_for_drain(&candidates, amount(40, 150), BlockHeight::from_raw(10))
-            .expect("covers");
+        let sel = select_for_drain(&candidates, amount(40, 150), REFERENCE).expect("covers");
         assert_eq!(sel.chosen, vec![GlobalOutputIndex::from_raw(2)]);
     }
 
     #[test]
     fn insufficient_mature_total_refuses() {
         let candidates = [candidate(1, 10, 10), candidate(2, 20, 10)];
-        let err = select_for_drain(&candidates, amount(31, 31), BlockHeight::from_raw(10));
+        let err = select_for_drain(&candidates, amount(31, 31), REFERENCE);
         // 31 > affordable 31? affordable is 31, target 31 ok at amount stage,
         // but mature total is 30 < 31 → select refuses.
         assert_eq!(err, Err(DrainSelectError::Insufficient));
@@ -445,10 +448,10 @@ mod tests {
         // Nine mature candidates of 10 each: the eight largest sum to 80.
         let candidates: Vec<_> = (1..=9).map(|i| candidate(i, 10, 10)).collect();
 
-        let over = select_for_drain(&candidates, amount(90, 90), BlockHeight::from_raw(10));
+        let over = select_for_drain(&candidates, amount(90, 90), REFERENCE);
         assert_eq!(over, Err(DrainSelectError::InputCapExceeded));
 
-        let at_cap = select_for_drain(&candidates, amount(80, 90), BlockHeight::from_raw(10))
+        let at_cap = select_for_drain(&candidates, amount(80, 90), REFERENCE)
             .expect("eight inputs cover 80");
         assert_eq!(at_cap.chosen.len(), shekyl_tx_builder::MAX_INPUTS);
         assert_eq!(at_cap.input_total, AtomicUnits::from_raw(80));
@@ -467,12 +470,8 @@ mod tests {
             candidate(2, 200, 10),
             candidate(3, 400, 99),
         ];
-        let sel = select_for_sweep(
-            &candidates,
-            AtomicUnits::from_raw(50),
-            BlockHeight::from_raw(10),
-        )
-        .expect("two mature candidates fund a 50 fee");
+        let sel = select_for_sweep(&candidates, AtomicUnits::from_raw(50), REFERENCE)
+            .expect("two mature candidates fund a 50 fee");
         assert_eq!(
             sel.chosen,
             vec![
@@ -502,12 +501,8 @@ mod tests {
     fn sweep_caps_at_max_inputs_and_takes_a_full_pass() {
         // Nine mature candidates of 10 each: one pass spends the cap (80).
         let candidates: Vec<_> = (1..=9).map(|i| candidate(i, 10, 10)).collect();
-        let sel = select_for_sweep(
-            &candidates,
-            AtomicUnits::from_raw(5),
-            BlockHeight::from_raw(10),
-        )
-        .expect("a full pass fits the cap");
+        let sel = select_for_sweep(&candidates, AtomicUnits::from_raw(5), REFERENCE)
+            .expect("a full pass fits the cap");
         assert_eq!(sel.chosen.len(), shekyl_tx_builder::MAX_INPUTS);
         assert_eq!(sel.input_total, AtomicUnits::from_raw(80));
         assert_eq!(sel.payment, AtomicUnits::from_raw(75));
@@ -524,7 +519,7 @@ mod tests {
         let none = select_for_sweep(
             &[candidate(1, 100, 99)],
             AtomicUnits::from_raw(5),
-            BlockHeight::from_raw(10),
+            REFERENCE,
         );
         assert_eq!(
             none,
@@ -535,14 +530,14 @@ mod tests {
         let dust = select_for_sweep(
             &[candidate(1, 50, 10)],
             AtomicUnits::from_raw(50),
-            BlockHeight::from_raw(10),
+            REFERENCE,
         );
         assert_eq!(dust, Err(SweepSelectError::DustPool));
 
         let one_over = select_for_sweep(
             &[candidate(1, 51, 10)],
             AtomicUnits::from_raw(50),
-            BlockHeight::from_raw(10),
+            REFERENCE,
         );
         assert_eq!(
             one_over,
@@ -553,7 +548,7 @@ mod tests {
         let two_over = select_for_sweep(
             &[candidate(1, 52, 10)],
             AtomicUnits::from_raw(50),
-            BlockHeight::from_raw(10),
+            REFERENCE,
         )
         .expect("net 2 is the smallest splittable sweep");
         assert_eq!(two_over.payment, AtomicUnits::from_raw(2));

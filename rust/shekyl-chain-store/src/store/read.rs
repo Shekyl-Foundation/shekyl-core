@@ -39,14 +39,19 @@
 
 use core::ops::{Range, RangeInclusive};
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
-use shekyl_chain_rules::{AtHeight, RecordedWeights, Tip};
+use shekyl_chain_rules::{
+    AtHeight, BlockDrawsFloor, Claimable, EpochFloor, Pricing, RecordedWeights,
+    ReleaseJournalFloor, Settling, SlashLogFloor, Tip,
+};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
     PCanonicalId, SettlementEpoch, ShardId, TreeLeaf, TreePosition, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
+use std::collections::{BTreeMap, BTreeSet};
 
+use crate::archival_snapshot::ArchivalSnapshot;
 use crate::codec::{
     ArchivalLastSlashEpochCell, BlockInfo, BondRecord, CurveTreeState, OutTx, PropertyCell,
     RMarket, SigmaWorkMilli, SlashLogEntry, TotalBurnedCell, TxOutputIndices,
@@ -55,10 +60,14 @@ use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
-use super::archival_reads::{self, PassCount, ServedShard};
+use super::archival_fold::{self, BlockArchivalFold};
+use super::archival_reads::{
+    self, BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount,
+    ServedShard, SettlementRow, SupportSeats,
+};
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
-use super::tx_reads::{self, Prunable, TxLocation, TxRecord};
+use super::tx_reads::{self, ArchivalGood, TxLocation, TxRecord};
 
 use super::chain_reads;
 use super::curve_reads;
@@ -459,9 +468,30 @@ impl ReadSnapshot<'_> {
         })
     }
 
+    /// How many outputs the transaction at `id` recorded, from
+    /// `tx_outputs` (**T5**). The shard fold counts in-domain outputs from
+    /// this row, not by parsing the pruned segment.
+    ///
+    /// # Errors
+    ///
+    /// As [`tx_archival_good`](Self::tx_archival_good): an id at or past the dense
+    /// count is [`AtIndex::BeyondCount`]; a hole below it is SI-9.
+    pub fn tx_output_count(&self, id: TxStorageId) -> Result<AtIndex<u64>, StoreError> {
+        Ok(
+            match tx_reads::output_indices_at(&self.txn, id)
+                .map_err(chain_reads::ReadFault::into_plain)?
+            {
+                AtIndex::Recorded(indices) => AtIndex::Recorded(
+                    u64::try_from(indices.0.len()).expect("an output count fits u64"),
+                ),
+                AtIndex::BeyondCount => AtIndex::BeyondCount,
+            },
+        )
+    }
+
     /// The long-term weight median **in force for** the block at `height`
     /// — the value it was validated and fee-floored against (SCR-19), the
-    /// O(1) read that retires `rebuild_relay_floor_ring`'s stepped median
+    /// O(1) read that replaces the stepped median the old relay floor kept
     /// (FL-R3-STORE). A projection of R3.
     ///
     /// # Errors
@@ -715,54 +745,88 @@ impl ReadSnapshot<'_> {
     }
 
     /// **T3.** The permanent half of the transaction with `hash` — where it
-    /// is, its pruned and `pqc_auths` segments, its two permanent hash rows
-    /// — or `None`. Replaces `get_pruned_tx_blob`, `get_prunable_tx_hash`,
-    /// `get_tx_block_height`, and with [`tx_prunable`](Self::tx_prunable)
-    /// the whole of `get_tx_blob` ([`TxRecord::wire_bytes`], STX-8).
+    /// is, its pruned segment, and the three permanent operand rows (the
+    /// skeleton, [`TxRecord::skeleton_of`](super::TxRecord::skeleton_of)) — or `None`. Replaces
+    /// `get_pruned_tx_blob`, `get_prunable_tx_hash`, `get_tx_block_height`,
+    /// and with [`tx_archival_good`](Self::tx_archival_good) the whole of
+    /// `get_tx_blob` ([`TxRecord::wire_bytes`], STX-8).
     ///
     /// # Errors
     ///
     /// A recorded transaction missing its pruned segment or its prunable
-    /// hash row, or a `pqc_auths` segment without its hash row, is **SI-7**
-    /// (§7.7 legs (i)–(ii)). A hash row without its segment is
-    /// [`PqcAuths::Discarded`](super::PqcAuths::Discarded) — the retention
-    /// prune's one state for that region, not a fault. A present index
-    /// whose `tx_id` is at or past the dense count is **SI-9**; an
-    /// undecodable row is SI-7; engine errors pass through.
+    /// hash row is **SI-7** (§7.7 leg (i)). A present index whose `tx_id` is
+    /// at or past the dense count is **SI-9**; an undecodable row is SI-7;
+    /// engine errors pass through.
     pub fn tx_record(&self, hash: &TxHash) -> Result<Option<TxRecord>, StoreError> {
         tx_reads::record_at(&self.txn, hash).map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **T4.** Whether this node holds the prunable region of the
-    /// transaction at `id` — the archival good (`PDM-Q6` item 1;
+    /// **T4.** Whether this node holds the **archival good** of the
+    /// transaction at `id` — its prunable region and, for a 4-part txid,
+    /// its `pqc_auths` region, as one unit (`PDM-Q6` item 1; `SB-Q2`;
     /// `DRS_E1_STX.md` §2.3). Replaces `get_prunable_tx_blob`.
     ///
     /// Bound first: at or beyond [`tx_count`](Self::tx_count) this is
     /// [`AtIndex::BeyondCount`] and no row is read — `TxStorageId::from_raw`
     /// is public, so a forged or stale id is invalid input, not corruption.
-    /// Below it, [`Prunable::Retained`] or [`Prunable::Discarded`] — the
-    /// latter §7.7 leg (iii)'s defined state, never an absence.
+    /// Below it, [`ArchivalGood::Retained`] or [`ArchivalGood::Discarded`]
+    /// — the latter §7.7 leg (iii)'s defined state, never an absence.
     ///
     /// # Errors
     ///
     /// An id below the count with no primary `txs_pruned` row is **SI-9**;
-    /// below it with no `txs_prunable_hash` row is **SI-7** (leg (i));
-    /// engine errors pass through.
-    pub fn tx_prunable(&self, id: TxStorageId) -> Result<AtIndex<Prunable>, StoreError> {
-        tx_reads::prunable_at(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
+    /// below it with no `txs_prunable_hash` row, or with a `pqc_auths`
+    /// segment and no `txs_pqc_auth_hash` row, is **SI-7** (legs (i)–(ii));
+    /// one region held and the other not is **SI-42**; engine errors pass
+    /// through.
+    pub fn tx_archival_good(&self, id: TxStorageId) -> Result<AtIndex<ArchivalGood>, StoreError> {
+        tx_reads::archival_good_at(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// The checked archival fold of one block: each issued id's cumulative
+    /// length before it, held to the block's cell (SI-13, SI-24).
+    /// [`tx_shard`](Self::tx_shard) is one id of this fold, and a block
+    /// reply builds it once (`SB-Q2`).
+    ///
+    /// # Errors
+    ///
+    /// A missing block cell is **SI-7**. The cell below its parent is
+    /// **SI-13**. The block's length rows disagreeing with its cell is
+    /// **SI-24**. An overflowing fold is **SI-8**. Engine errors pass
+    /// through.
+    pub fn block_archival_fold(
+        &self,
+        height: BlockHeight,
+    ) -> Result<BlockArchivalFold, StoreError> {
+        archival_fold::fold_of(&self.txn, height).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **T5.** The archival shard of the transaction at `location`:
+    /// `shekyl_types::shard_of` over the length recorded before it, from
+    /// [`block_archival_fold`](Self::block_archival_fold). The RPC's
+    /// `archived` slot names this shard (`PDM-Q10`, `SB-Q2`).
+    ///
+    /// # Errors
+    ///
+    /// Those of [`block_archival_fold`](Self::block_archival_fold), and
+    /// **SI-9** when `id` is outside the ids its block issued.
+    pub fn tx_shard(&self, location: TxLocation) -> Result<ShardId, StoreError> {
+        self.block_archival_fold(location.height)?
+            .shard(location.id)
     }
 
     /// **T4b.** Whether the transaction at `id` is in the **archival shard
     /// partition's domain** — it carries archival good (`SHT-Q1` RULED, Rick
-    /// 2026-09-27; `docs/design/ARCHIVAL_SHARD_T_DERIVATION.md` §2).
+    /// 2026-09-27; `docs/completed/ARCHIVAL_SHARD_T_DERIVATION.md` §2).
     ///
     /// Answered from the two digests **as recorded at ingest**, which a prune
     /// never deletes — so this is the one safe way to evaluate the ruling's
     /// predicate on a node that has discarded bodies. Recomputing the digests
     /// from a pruned body would place its own discarded spends outside the
-    /// domain and split shard boundaries against an archival node.
+    /// domain and split shard boundaries against a node that still holds the
+    /// body.
     ///
-    /// Bound first, as [`tx_prunable`](Self::tx_prunable).
+    /// Bound first, as [`tx_archival_good`](Self::tx_archival_good).
     ///
     /// # Errors
     ///
@@ -776,7 +840,7 @@ impl ReadSnapshot<'_> {
     /// **T5.** The `output_amounts` indices of the outputs of the
     /// transaction at `id`, in `vout` order. Replaces
     /// `get_tx_amount_output_indices`. Bound first, as
-    /// [`tx_prunable`](Self::tx_prunable).
+    /// [`tx_archival_good`](Self::tx_archival_good).
     ///
     /// # Errors
     ///
@@ -903,12 +967,15 @@ impl ReadSnapshot<'_> {
     /// **A2.** Every slash logged against `persona` strictly above `height`,
     /// in log order — the history half of the as-of-height holdings fold
     /// (`shekyl-archival-retention::holds_shard_at`). Empty when none.
+    /// `floor` is the log's retirement floor under the caller's rule set; a
+    /// range starting below it is SI-26, not an empty answer.
     pub fn slash_log_after(
         &self,
         persona: &PCanonicalId,
         height: BlockHeight,
+        floor: SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, StoreError> {
-        archival_reads::slash_log_after(&self.txn, persona, height)
+        archival_reads::slash_log_after(&self.txn, persona, height, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
@@ -949,26 +1016,168 @@ impl ReadSnapshot<'_> {
         &self,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Pricing>,
     ) -> Result<Option<RMarket>, StoreError> {
-        archival_reads::r_market(&self.txn, shard, epoch)
+        archival_reads::r_market(&self.txn, shard, epoch, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A7.** Frozen `Σwork(E)`, in milli-units. `None` is an epoch that
     /// never closed.
-    pub fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, StoreError> {
-        archival_reads::sigma_work(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    pub fn sigma_work(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SigmaWorkMilli>, StoreError> {
+        archival_reads::sigma_work(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A8.** Frozen `budget(E)`. `None` is an epoch that never closed.
-    pub fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError> {
-        archival_reads::budget(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    pub fn budget(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<AtomicUnits>, StoreError> {
+        archival_reads::budget(&self.txn, epoch, floor).map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A9.** Slash watermark ([`ArchivalLastSlashEpochCell`]). `None` is
     /// no epoch settled yet.
     pub fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, StoreError> {
         self.get_property::<ArchivalLastSlashEpochCell>()
+    }
+
+    /// Every catalogued table's rows as stored bytes, by table name, in key
+    /// order — the whole file at the byte level, for a **differential**: two
+    /// stores that should hold the same state compared table by table, so a
+    /// difference names its table (`DRS_E5_POOL_ALT_PRUNE.md` a6's
+    /// self-differential: a store that switched A → B against one that
+    /// connected B directly). Not a consensus read and not a digest: no
+    /// rule reads it, and it carries no domain-separated commitment. A
+    /// table absent from the file is absent from the map.
+    ///
+    /// # Errors
+    ///
+    /// Engine errors.
+    pub fn table_rows(&self) -> Result<BTreeMap<&'static str, super::undo::RawRows>, StoreError> {
+        let mut out = BTreeMap::new();
+        for target in crate::schema::undo_targets() {
+            if let Some(rows) = target.raw_rows(&self.txn)? {
+                out.insert(target.name(), rows);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The proof-of-work hash this node recorded for the block at `height`
+    /// (`block_pow`, written by `connect`), under the seed it was computed
+    /// under. [`AtHeight::AboveTip`] past the tip.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a recorded height with no row or an undecodable one; engine
+    /// errors.
+    pub fn recorded_pow(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<crate::codec::RecordedPow>, StoreError> {
+        match self.tip_row()? {
+            Some((tip, _)) if height.to_raw() <= tip => {}
+            _ => return Ok(AtHeight::AboveTip),
+        }
+        chain_reads::cell(
+            &self.txn,
+            crate::schema::BLOCK_POW,
+            height.to_raw(),
+            "block_pow",
+        )
+        .map_err(chain_reads::ReadFault::into_plain)?
+        .map(AtHeight::Recorded)
+        .ok_or_else(|| {
+            StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                key: "block_pow",
+                fault: CellFault::Absent,
+            })
+        })
+    }
+
+    /// **SAL-13.** The recorded block at `height` as the candidate it was:
+    /// the block, every listed transaction's whole wire bytes (`pruned ‖
+    /// pqc_auths ‖ prunable`, [`TxRecord::wire_bytes`]) in the header's
+    /// order, and its attestation witness (A10; CEN-K5b: the witness is
+    /// captured off its height row before the pop). What a switch reads for
+    /// each block it is about to demote, on the snapshot taken before the
+    /// pops (`DRS_E5_POOL_ALT_PRUNE.md` §2.3): the cheap tier judges it, its
+    /// row is written from that verdict, and its listed bodies go back to
+    /// the pool. [`AtHeight::AboveTip`] past the tip.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 when a listed hash has no record, a region a poppable height
+    /// must hold is discarded (the retention prune keeps every body above
+    /// the undo floor, so a body missing there is a store that disagrees
+    /// with its own floor), the reassembled bytes do not parse as a
+    /// transaction, or the witness row is not a witness; whatever
+    /// [`block`](Self::block) and the per-transaction reads return; engine
+    /// errors.
+    pub fn candidate_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<shekyl_chain_rules::Candidate>, StoreError> {
+        let body = match self.block(height)? {
+            AtHeight::Recorded(body) => body,
+            AtHeight::AboveTip => return Ok(AtHeight::AboveTip),
+        };
+        let corrupt = |key: &'static str, reason: &'static str| {
+            StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                key,
+                fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+                    codec: "recorded_candidate",
+                    reason,
+                }),
+            })
+        };
+        let mut transactions = Vec::with_capacity(body.block.transaction_hashes.len());
+        for hash in &body.block.transaction_hashes {
+            let Some(record) = self.tx_record(hash)? else {
+                return Err(corrupt(
+                    "tx_indices",
+                    "a listed hash has no recorded transaction",
+                ));
+            };
+            let (prunable, pqc_auths) = match self.tx_archival_good(record.location.id)? {
+                AtIndex::Recorded(ArchivalGood::Retained {
+                    prunable,
+                    pqc_auths,
+                }) => (prunable, pqc_auths),
+                AtIndex::Recorded(ArchivalGood::Discarded) => {
+                    return Err(corrupt(
+                        "txs_prunable",
+                        "a body at a poppable height is discarded",
+                    ))
+                }
+                AtIndex::BeyondCount => {
+                    return Err(corrupt("txs_pruned", "a recorded id is beyond the count"))
+                }
+            };
+            let bytes = record.wire_bytes(&prunable, pqc_auths.as_ref());
+            let tx = shekyl_wire::Transaction::read(&mut bytes.as_slice())
+                .map_err(|_| corrupt("txs_pruned", "the reassembled transaction does not parse"))?;
+            transactions.push(tx);
+        }
+        let witness = match self.attestation_witness_at(height)? {
+            AtHeight::Recorded(bytes) => bytes,
+            AtHeight::AboveTip => unreachable!("the block at this height was just read"),
+        };
+        let witness = witness
+            .map(shekyl_types::archival::AttestationWitness::new)
+            .transpose()
+            .map_err(|_| corrupt("archival_attestation_witness", "the row is not a witness"))?;
+        Ok(AtHeight::Recorded(
+            shekyl_chain_rules::Candidate::new(body.block, transactions)
+                .with_attestation_witness(witness),
+        ))
     }
 
     /// **A10.** Attestation witness bytes, unparsed. [`AtHeight::AboveTip`]
@@ -996,8 +1205,9 @@ impl ReadSnapshot<'_> {
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<bool, StoreError> {
-        archival_reads::slash_applied(&self.txn, persona, shard, epoch)
+        archival_reads::slash_applied(&self.txn, persona, shard, epoch, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
@@ -1009,6 +1219,169 @@ impl ReadSnapshot<'_> {
     ) -> Result<Option<AtomicUnits>, StoreError> {
         archival_reads::budget_accruing(&self.txn, epoch)
             .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A14.** What `epoch` settled for `(persona, shard)`. `None` is a
+    /// pair no draw was issued to, or an epoch not settled yet.
+    pub fn settlement_row(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SettlementRow>, StoreError> {
+        archival_reads::settlement_row(&self.txn, persona, shard, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A15.** Every draw issued in `epoch`, in `(P, shard, h, j)` order.
+    pub fn issued_draws(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::issued_draws(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// Every support draw issued in `epoch`, in `(P, h, j)` order.
+    pub fn support_issued(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::support_issued(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// The support row `(persona, epoch)`. `None` is no row, not a miss.
+    pub fn support_settlement(
+        &self,
+        persona: &PCanonicalId,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SettlementRow>, StoreError> {
+        archival_reads::support_settlement(&self.txn, persona, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A16.** The running digest of the draws issued in `epoch`;
+    /// [`IssuedDigest::ZERO`] when none was.
+    pub fn issued_digest(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<IssuedDigest, StoreError> {
+        archival_reads::issued_digest(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A17.** The shards `persona` was Served on at each of `epochs`,
+    /// ascending per epoch. An epoch with none is absent. One hop of the
+    /// persona's shards, then a point read of each epoch (`SO-D2`).
+    pub fn served_at(
+        &self,
+        persona: &PCanonicalId,
+        epochs: &BTreeSet<SettlementEpoch>,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
+        archival_reads::served_at(&self.txn, persona, epochs, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A18.** What the draw's count rule recorded for the block at
+    /// `height`, or `None` for a block no row was written for.
+    pub fn block_draws(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<BlockDraws>, StoreError> {
+        archival_reads::block_draws(&self.txn, height, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A23.** The complete trees the block at `height` seated, in persona
+    /// order, or `None` for a block no row was written for.
+    /// [`SupportSeats::EMPTY`] is a block that seated nobody. A height below `floor` is SI-34, the
+    /// same window as [`Self::block_draws`].
+    pub fn support_block_seats(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportSeats>, StoreError> {
+        archival_reads::support_block_seats(&self.txn, height, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A19.** The digest of `epoch`'s drawable set as written at its
+    /// open, or `None` for an epoch with no recorded set. An all-zero
+    /// digest is a digest.
+    pub fn drawable_digest(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Option<DrawableDigest>, StoreError> {
+        archival_reads::drawable_digest(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A22.** The complete trees `epoch`'s slash pass excluded from its
+    /// market, as frozen beside `Σwork(E)`, or `None` for an epoch not
+    /// settled. An empty set is a value.
+    pub fn complete_trees(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<CompleteTreeSet>, StoreError> {
+        archival_reads::complete_trees(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A20.** Every Release journaled strictly above `height`, ascending
+    /// by height and then persona, each with the record it replaced.
+    /// `floor` is the journal's ([`ReleaseJournalFloor`]); a range starting
+    /// below it is SI-28, not an empty answer.
+    pub fn release_journal_after(
+        &self,
+        height: BlockHeight,
+        floor: ReleaseJournalFloor,
+    ) -> Result<Vec<archival_reads::ReleasedRecord>, StoreError> {
+        archival_reads::release_journal_after(&self.txn, height, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A21.** Every slash logged strictly above `height`, every
+    /// persona's, in log order, each with its height. A range starting
+    /// below `floor` is SI-26, as for A2.
+    pub fn slash_log_rows_after(
+        &self,
+        height: BlockHeight,
+        floor: SlashLogFloor,
+    ) -> Result<Vec<archival_reads::LoggedSlash>, StoreError> {
+        archival_reads::slash_log_rows_after(&self.txn, height, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// The archival state as of this snapshot, as the E2 trace carries it
+    /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`): the nine table
+    /// families walked whole and the slash watermark cell, re-encoded
+    /// through [`ArchivalSnapshot`]'s constructors. The redb leg of the
+    /// archival comparison; the LMDB leg arrives in the trace's `0x04`
+    /// record, and the grader diffs the two by family and key.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a row that does not decode; SI-23 for a second accruing
+    /// row; the engine's.
+    pub fn archival_snapshot(&self) -> Result<ArchivalSnapshot, StoreError> {
+        let mut snapshot =
+            archival_reads::snapshot_rows(&self.txn).map_err(chain_reads::ReadFault::into_plain)?;
+        if let Some(epoch) = self.last_settled_slash_epoch()? {
+            snapshot
+                .set_last_slash_epoch(epoch)
+                .expect("the first row of an empty singleton family");
+        }
+        Ok(snapshot)
     }
 }
 

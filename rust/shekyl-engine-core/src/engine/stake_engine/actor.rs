@@ -26,7 +26,7 @@ use shekyl_types::{BlockCount, PCanonicalId};
 use crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona;
 use crate::engine::pscan::scan_step::{FundingOutputMatch, KeyImageWatchSet};
 use crate::engine::stake_timing::{OsRngGapAdapter, DEFAULT_ENTRY_GAP};
-use crate::engine::{Network, ShekylAddress};
+use shekyl_crypto_pq::archival_p::PersonaDestination;
 
 use super::helpers::{derive_funding_key_image, draw_entry_gap_guarded};
 use super::types::*;
@@ -70,6 +70,10 @@ pub(crate) struct StakeEngine {
     /// see the field docs there). Feature-gated out of default builds.
     #[cfg(feature = "gf7-hooks")]
     pub(crate) observer: Box<dyn BroadcastTimelineObserver>,
+    /// The id of the network the wallet's personas are on: every spend this
+    /// engine assembles (bond post, emission claim, drain) signs under it
+    /// (`NETWORK_IDENTITY.md` NI-Q4).
+    pub(crate) network: shekyl_network::NetworkId,
 }
 
 impl StakeEngine {
@@ -145,10 +149,9 @@ impl StakeEngine {
             let _ = probe; // consumed; used only to exercise the source
         }
 
-        // 4. Entry-gap draw + per-draw degeneracy guard (S4/S5, Round 2/3).
-        //    `draw_entry_gap_guarded` draws twice (spread_draw, spread_probe) and
-        //    fires `RngDegeneracy` if they are equal (double-jitter-trap detection).
-        //    The actual timing draw result is returned on success.
+        // 4. Entry-gap draw (S4/S5). The helper absorbs an equal pair and
+        //    returns `DegenerateDraw` only when the whole run collided.
+        //    The spread it returns is the placement.
         let mut rng = OsRngGapAdapter;
         let spread = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
             .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
@@ -196,22 +199,17 @@ impl StakeEngine {
         )
     }
 
-    /// Project the held persona at `slot` into its public
-    /// [`ShekylAddress`](shekyl_address::ShekylAddress) — built **in-actor**,
-    /// from the already-live bundle (never re-derived). The reply type is
-    /// structurally public-only (an address cannot carry a secret), so
-    /// **no `P` secret leaves the actor** (rule 36). The orchestrator
-    /// uses this only to address a funding transfer *to* `P`
-    /// (`Engine::stake_in`), where `P` is a public recipient. `network`
-    /// is the principal wallet's network (the actor is
-    /// network-agnostic; the address's network is the sender's).
-    pub(crate) fn receive_address_of(&self, slot: PSlot, network: Network) -> ShekylAddress {
-        let keys = self
-            .held
+    /// The held persona at `slot`'s payment destination: its spend, view and
+    /// ML-KEM encapsulation keys, taken from the already-live bundle (never
+    /// re-derived). The reply type holds public keys only, so **no `P`
+    /// secret leaves the actor** (rule 36). The orchestrator uses this only
+    /// to pay a funding transfer *to* `P` (`Engine::stake_in`).
+    pub(crate) fn payment_destination_of(&self, slot: PSlot) -> PersonaDestination {
+        self.held
             .get(&slot)
-            .expect("receive_address_of called for a held slot")
-            .keys();
-        keys.to_address(network)
+            .expect("payment_destination_of called for a held slot")
+            .keys()
+            .payment_destination()
     }
 
     /// Wipe the retired slot iff it is ephemeral; a bonded persona is left
@@ -536,11 +534,9 @@ impl Actor for StakeEngine {
             .bundles
             .into_iter()
             .map(|(slot, keys)| {
-                let tagged = if args.bonded.contains(&slot) {
-                    HeldPersona::Bonded(BondedPersona(keys))
-                } else {
-                    HeldPersona::Ephemeral(EphemeralPersona(keys))
-                };
+                // Tags the bundle and leaves its receipt-key slot empty
+                // (`HeldPersona::hold`): no FN-DSA work happens at start.
+                let tagged = HeldPersona::hold(keys, args.bonded.contains(&slot));
                 (slot, tagged)
             })
             .collect::<BTreeMap<_, _>>();
@@ -585,6 +581,7 @@ impl Actor for StakeEngine {
             watch_quarantine: BTreeSet::new(),
             #[cfg(feature = "gf7-hooks")]
             observer: args.observer,
+            network: args.network,
         })
     }
 

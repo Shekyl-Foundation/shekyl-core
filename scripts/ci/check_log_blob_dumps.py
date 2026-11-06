@@ -69,16 +69,11 @@ DEFINITIONS = {
     "contrib/epee/src/hex.cpp": ["to_hex::string", "to_hex::formatted"],
 }
 
-# Headers that DEFINE logging macros. More than one, and not only epee's:
-# `LOG_ERROR_CCONTEXT` and the `*_CCONTEXT_*` family live in net_utils_base.h,
-# and some are defined inline in .inl files. That is why the pattern below
-# keeps a permissive uppercase arm rather than being generated wholesale from
-# one header -- a generated-only pattern would silently drop every macro
-# defined somewhere else.
-LOG_HEADERS = (
-    "contrib/epee/include/misc_log_ex.h",
-    "contrib/epee/include/net/net_utils_base.h",
-)
+# Headers that DEFINE logging macros. Some are defined inline in .inl files,
+# which is why the pattern below keeps a permissive uppercase arm rather than
+# being generated wholesale from one header -- a generated-only pattern would
+# silently drop every macro defined somewhere else.
+LOG_HEADERS = ("contrib/epee/include/misc_log_ex.h",)
 
 # Uppercase families, deliberately over-inclusive: a false positive costs one
 # allowlist row with a stated bound, a false negative is the defect this file
@@ -93,7 +88,7 @@ def derive_log_macros():
     Deliberately independent of the name pattern. An earlier version of this
     check extracted candidates using the same shape it then validated, so it
     could only ever find macros that already matched -- it reported clean while
-    `_erro`, `_warn` and `_dbg*` (real wrappers, used in net_node.inl itself)
+    `_erro`, `_warn` and `_dbg*` (real wrappers, which the C++ p2p host used)
     went unmatched. A check that filters by the thing it is checking cannot
     fail.
 
@@ -331,7 +326,7 @@ void f(const blobdata &blob) {
 '''
 
 # A LOWERCASE wrapper. `_erro`/`_warn`/`_dbg*` are real logging macros
-# (misc_log_ex.h) used in net_node.inl itself, and no uppercase pattern reaches
+# (misc_log_ex.h) the C++ p2p host used, and no uppercase pattern reaches
 # them -- they are matched only because the derivation adds them by name. If
 # the derivation silently returned an empty set this fixture goes red, so the
 # coverage check cannot pass vacuously.

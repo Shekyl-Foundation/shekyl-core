@@ -3,39 +3,32 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Three-tier ladder. Economy is the relay floor; standard is `4F`;
-//! priority is `max(2RC/M, 4F)` so the slots are monotone by construction.
+//! Three-tier ladder. Economy is the relay floor; standard is the policy's
+//! [`RelayPolicy::standard_over_economy`] times that floor; priority is
+//! `max(f·RC/M, standard)`, `f` the policy's
+//! [`RelayPolicy::priority_factor`], so the slots are monotone by
+//! construction. At the shipped policy these are 4 and 2.
 
 use super::correction::FeeCorrection;
 use super::relay::{checked_relay_fee_floor, clamped_median};
 use crate::params::{EconomicParams, SCALE};
+use crate::RelayPolicy;
 
-/// `round_money_up(v, 2)` — round UP to 2 significant decimal digits.
-///
-/// Off the served path (FL-R21). Kept as the production owner of the
-/// rounding rule: wallet cap and the FL instrument import this rather
-/// than carrying a third copy. Saturation is unreachable for any fee
-/// the ladder can emit.
-#[must_use]
-pub fn round_money_up_2(v: u64) -> u64 {
-    if v < 100 {
-        return v;
-    }
-    let mut unit = 1u64;
-    let mut head = v;
-    while head >= 100 {
-        head /= 10;
-        unit *= 10;
-    }
-    v.div_ceil(unit).saturating_mul(unit)
-}
-
-/// Wallet-side emission-claim value floor, atomic units
+/// Wallet-side emission-claim hold, atomic units
 /// (`ENGINE_CADENCE_DRIVER.md` §4): hold settled epochs until Σreward
-/// clears this. Genesis economy × claim envelope, rounded up to 3.6 SKL
-/// so the floor errs toward holding one more epoch. Uniform across
-/// wallets (anti-fingerprint). Not consensus.
-pub const EMISSION_CLAIM_FEE_FLOOR: u64 = 3_600_000_000;
+/// clears it and the live fee. Derived (ruling 9): the claim leg's priced
+/// weight at the chain's genesis Economy rung, on the shipped lattice —
+/// `config/relay_policy.json` `emission_claim_fee_floor_atomic`, recomputed
+/// by `shekyl-engine-core`'s test. Uniform across wallets
+/// (anti-fingerprint). Not consensus. The shipped
+/// [`RelayPolicy::emission_claim_fee_floor`](crate::RelayPolicy::emission_claim_fee_floor).
+pub const EMISSION_CLAIM_FEE_FLOOR: u64 = crate::params::GENERATED_EMISSION_CLAIM_FEE_FLOOR;
+
+/// Standard rung over the economy rung at the shipped policy. The served
+/// ladder is `standard = 4F`. Generated from `config/relay_policy.json`
+/// `standard_rung_over_economy`; a policy's is
+/// [`RelayPolicy::standard_over_economy`](crate::RelayPolicy::standard_over_economy).
+pub const STANDARD_RUNG_OVER_ECONOMY: u64 = crate::params::GENERATED_STANDARD_RUNG_OVER_ECONOMY;
 
 /// The three priced rungs. [`Self::as_slots`] is the wire projection:
 /// `[economy, standard, priority]`.
@@ -62,8 +55,8 @@ impl FeeLadder {
     }
 }
 
-/// Three-tier ladder: economy = [`super::relay_fee_floor`], standard = `4F`,
-/// priority = `max(2RC/M, 4F)`.
+/// Three-tier ladder: economy = [`super::relay_fee_floor`], standard =
+/// `policy`'s ratio times that floor, priority = `max(f·RC/M, standard)`.
 ///
 /// `base_reward` is the M_r-neutral total (`max(curve(remaining), TAIL)`);
 /// `median` is the long-term fee median; `c` is raw [`FeeCorrection`].
@@ -75,8 +68,9 @@ pub fn corrected_fee_ladder(
     ref_tx_weight: u64,
     c: FeeCorrection,
     params: &EconomicParams,
+    policy: &RelayPolicy,
 ) -> FeeLadder {
-    checked_corrected_fee_ladder(base_reward, median, ref_tx_weight, c, params)
+    checked_corrected_fee_ladder(base_reward, median, ref_tx_weight, c, params, policy)
         .unwrap_or(FeeLadder::SATURATED)
 }
 
@@ -91,6 +85,7 @@ pub fn checked_corrected_fee_ladder(
     ref_tx_weight: u64,
     c: FeeCorrection,
     params: &EconomicParams,
+    policy: &RelayPolicy,
 ) -> Option<FeeLadder> {
     let mfw = u128::from(clamped_median(median, params));
     let base = u128::from(base_reward);
@@ -98,16 +93,23 @@ pub fn checked_corrected_fee_ladder(
     let ms = mfw.checked_mul(u128::from(SCALE))?;
 
     let economy = checked_relay_fee_floor(base_reward, median, ref_tx_weight, c, params)?;
-    // `4F` in u128, saturating at the u64 rail. Not `economy.checked_mul(4)`:
-    // that multiplies in u64 and would refuse a ladder the pre-FL-R20 shape
-    // still priced (BLOCK_REWARD_OVERESTIMATE fallback).
-    let standard = u64::try_from(u128::from(economy) * 4).unwrap_or(u64::MAX);
+    // The Standard multiple in u128, saturating at the u64 rail. Not
+    // `economy.checked_mul(STANDARD_RUNG_OVER_ECONOMY)`: that multiplies in
+    // u64 and would refuse a ladder the pre-FL-R20 shape still priced
+    // (BLOCK_REWARD_OVERESTIMATE fallback).
+    let standard = u64::try_from(u128::from(economy) * u128::from(policy.standard_over_economy))
+        .unwrap_or(u64::MAX);
     // Raised to `standard` so the ladder is monotone by construction. At a
     // reward small enough to truncate every quotient to zero, economy is
-    // `max(1)` = 1, standard is 4, and an unfloored priority is 0.
-    let priority = u64::try_from(base.checked_mul(cq)?.checked_mul(2)? / ms)
-        .unwrap_or(u64::MAX)
-        .max(standard);
+    // `max(1)` = 1, standard is that times the policy's ratio, and an
+    // unfloored priority is 0.
+    let priority = u64::try_from(
+        base.checked_mul(cq)?
+            .checked_mul(u128::from(policy.priority_factor))?
+            / ms,
+    )
+    .unwrap_or(u64::MAX)
+    .max(standard);
     Some(FeeLadder {
         economy,
         standard,
@@ -120,6 +122,7 @@ mod tests {
     use super::*;
     use crate::base_block_reward;
     use crate::fee::relay::relay_fee_floor;
+    use crate::RELAY_FLOOR_REFERENCE_TX_WEIGHT as W_REF;
 
     fn shipped() -> EconomicParams {
         EconomicParams::default()
@@ -131,18 +134,41 @@ mod tests {
         let zone = params.full_reward_zone;
         let coin = 1_000_000_000u64;
         assert_eq!(
-            corrected_fee_ladder(10 * coin, zone, 3_000, FeeCorrection::UNITY, &params).as_slots(),
+            corrected_fee_ladder(
+                10 * coin,
+                zone,
+                W_REF,
+                FeeCorrection::UNITY,
+                &params,
+                &crate::RelayPolicy::SHIPPED
+            )
+            .as_slots(),
             [333, 1332, 66_666]
         );
         // Heritage case 2 used to pass Mnw = 15 MB over Mlw = the zone. The
         // median is one operand now; that pair always reduced to the zone.
         assert_eq!(
-            corrected_fee_ladder(10 * coin, zone, 3_000, FeeCorrection::UNITY, &params).as_slots(),
+            corrected_fee_ladder(
+                10 * coin,
+                zone,
+                W_REF,
+                FeeCorrection::UNITY,
+                &params,
+                &crate::RelayPolicy::SHIPPED
+            )
+            .as_slots(),
             [333, 1332, 66_666]
         );
         assert_eq!(
-            corrected_fee_ladder(10 * coin, 5 * zone, 3_000, FeeCorrection::UNITY, &params)
-                .as_slots(),
+            corrected_fee_ladder(
+                10 * coin,
+                5 * zone,
+                W_REF,
+                FeeCorrection::UNITY,
+                &params,
+                &crate::RelayPolicy::SHIPPED
+            )
+            .as_slots(),
             [13, 52, 13_333]
         );
     }
@@ -157,17 +183,25 @@ mod tests {
             0,
             FeeCorrection::from_scaled(u64::MAX),
             &params,
+            &crate::RelayPolicy::SHIPPED,
         )
         .is_none());
-        assert!(
-            checked_corrected_fee_ladder(u64::MAX, z, 0, FeeCorrection::UNITY, &params).is_some()
-        );
+        assert!(checked_corrected_fee_ladder(
+            u64::MAX,
+            z,
+            0,
+            FeeCorrection::UNITY,
+            &params,
+            &crate::RelayPolicy::SHIPPED
+        )
+        .is_some());
         assert!(checked_corrected_fee_ladder(
             u64::MAX,
             z,
             u64::MAX,
             FeeCorrection::from_scaled(2),
             &params,
+            &crate::RelayPolicy::SHIPPED,
         )
         .is_none());
         assert!(checked_corrected_fee_ladder(
@@ -176,6 +210,7 @@ mod tests {
             u64::MAX,
             FeeCorrection::from_scaled(1),
             &params,
+            &crate::RelayPolicy::SHIPPED,
         )
         .is_some());
         assert!(checked_corrected_fee_ladder(
@@ -184,14 +219,16 @@ mod tests {
             1,
             FeeCorrection::from_scaled(1),
             &params,
+            &crate::RelayPolicy::SHIPPED,
         )
         .is_none());
         assert!(checked_corrected_fee_ladder(
             10_000_000_000,
             z,
-            3_000,
+            W_REF,
             FeeCorrection::UNITY,
-            &params
+            &params,
+            &crate::RelayPolicy::SHIPPED
         )
         .is_some());
     }
@@ -206,6 +243,7 @@ mod tests {
                 0,
                 FeeCorrection::from_scaled(u64::MAX),
                 &params,
+                &crate::RelayPolicy::SHIPPED,
             ),
             FeeLadder::SATURATED
         );
@@ -219,9 +257,10 @@ mod tests {
         let ladder = corrected_fee_ladder(
             10 * coin,
             5 * params.full_reward_zone,
-            3_000,
+            W_REF,
             FeeCorrection::from_scaled(16 * SCALE),
             &params,
+            &crate::RelayPolicy::SHIPPED,
         );
         assert_eq!(ladder.economy, 213);
         assert_eq!(13 * 16, 208, "the rescale-after value this rung must beat");
@@ -237,14 +276,37 @@ mod tests {
         let zone = p.full_reward_zone;
         let base = base_block_reward(0, &p).unwrap();
         assert_eq!(
-            corrected_fee_ladder(base, zone, 3_000, FeeCorrection::UNITY, &p).priority,
-            13_653_333
+            corrected_fee_ladder(
+                base,
+                zone,
+                W_REF,
+                FeeCorrection::UNITY,
+                &p,
+                &crate::RelayPolicy::SHIPPED
+            )
+            .priority,
+            6_826_666
         );
         assert_eq!(
-            corrected_fee_ladder(base, zone, 3_000, FeeCorrection::from_scaled(2 * SCALE), &p)
-                .priority,
-            27_306_666
+            corrected_fee_ladder(
+                base,
+                zone,
+                W_REF,
+                FeeCorrection::from_scaled(2 * SCALE),
+                &p,
+                &crate::RelayPolicy::SHIPPED
+            )
+            .priority,
+            13_653_333
         );
+    }
+
+    #[test]
+    fn standard_rung_over_economy_is_four() {
+        // The ratio the ladder multiplies by. `economy_rung_is_the_relay_floor`
+        // keeps `floor * 4` as an independent check that the product is that
+        // multiple, so this pin and that assertion are not the same line.
+        assert_eq!(STANDARD_RUNG_OVER_ECONOMY, 4);
     }
 
     #[test]
@@ -257,8 +319,15 @@ mod tests {
             for &median in &[zone, 5 * zone, 50 * zone, 50_000_000] {
                 for &c in &[SCALE * 68 / 100, SCALE, 2 * SCALE, 16 * SCALE] {
                     let c = FeeCorrection::from_scaled(c);
-                    let ladder = corrected_fee_ladder(reward, median, 3_000, c, &params);
-                    let floor = relay_fee_floor(reward, median, 3_000, c, &params);
+                    let ladder = corrected_fee_ladder(
+                        reward,
+                        median,
+                        W_REF,
+                        c,
+                        &params,
+                        &crate::RelayPolicy::SHIPPED,
+                    );
+                    let floor = relay_fee_floor(reward, median, W_REF, c, &params);
                     assert_eq!(
                         ladder.economy, floor,
                         "economy != relay floor at reward={reward} median={median} c={c:?}",
@@ -284,9 +353,10 @@ mod tests {
                     let ladder = corrected_fee_ladder(
                         reward,
                         m,
-                        3_000,
+                        W_REF,
                         FeeCorrection::from_scaled(c),
                         &params,
+                        &crate::RelayPolicy::SHIPPED,
                     );
                     assert!(
                         ladder.economy <= ladder.standard,
@@ -304,7 +374,14 @@ mod tests {
             }
         }
 
-        let degenerate = corrected_fee_ladder(1, zone, 3_000, FeeCorrection::UNITY, &params);
+        let degenerate = corrected_fee_ladder(
+            1,
+            zone,
+            W_REF,
+            FeeCorrection::UNITY,
+            &params,
+            &crate::RelayPolicy::SHIPPED,
+        );
         assert_eq!(
             degenerate.as_slots(),
             [1, 4, 4],
@@ -312,12 +389,44 @@ mod tests {
         );
     }
 
+    /// E16-7: each of the policy's ladder fields moves the rung that reads
+    /// it, and `w_ref` moves the floor.
     #[test]
-    fn round_money_up_two_places_matches_cpp() {
-        assert_eq!(round_money_up_2(0), 0);
-        assert_eq!(round_money_up_2(99), 99);
-        assert_eq!(round_money_up_2(101), 110);
-        assert_eq!(round_money_up_2(27_810), 28_000);
-        assert_eq!(round_money_up_2(13_653_333), 14_000_000);
+    fn each_policy_field_moves_its_rung() {
+        let p = shipped();
+        let zone = p.full_reward_zone;
+        let base = 10 * 1_000_000_000u64;
+        let shipped_policy = crate::RelayPolicy::SHIPPED;
+        let ladder = |policy: &crate::RelayPolicy| {
+            corrected_fee_ladder(
+                base,
+                zone,
+                policy.ref_tx_weight,
+                FeeCorrection::UNITY,
+                &p,
+                policy,
+            )
+        };
+        let at = ladder(&shipped_policy);
+        assert_eq!(at.as_slots(), [333, 1332, 66_666]);
+
+        let standard = crate::RelayPolicy {
+            standard_over_economy: 5,
+            ..shipped_policy
+        };
+        assert_eq!(ladder(&standard).standard, 5 * at.economy);
+
+        let priority = crate::RelayPolicy {
+            priority_factor: 3,
+            ..shipped_policy
+        };
+        // One floor of 3·R·C/M (2·R·C/M is 66 666.6…), not 3 × ⌊R·C/M⌋.
+        assert_eq!(ladder(&priority).priority, 100_000);
+
+        let heavier = crate::RelayPolicy {
+            ref_tx_weight: 6_000,
+            ..shipped_policy
+        };
+        assert_eq!(ladder(&heavier).economy, 666);
     }
 }

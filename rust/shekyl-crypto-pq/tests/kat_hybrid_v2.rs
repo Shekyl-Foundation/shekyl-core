@@ -60,9 +60,12 @@ use shekyl_crypto_pq::signature::{
 };
 use std::path::{Path, PathBuf};
 
-/// Every ratified signing surface and its scheme-level domain constant. A new
-/// `SCHEME_DOMAIN_*` constant must be added here (the pinned test counts the
-/// fixture's vectors against this table, so forgetting is loud).
+/// Every ratified signing surface of **this scheme** (Ed25519 + ML-DSA-65,
+/// scheme byte 1) and its scheme-level domain constant. A new
+/// `SCHEME_DOMAIN_*` constant signed under scheme 1 must be added here (the
+/// pinned test counts the fixture's vectors against this table, so
+/// forgetting is loud). The domains signed under scheme 3 are not surfaces
+/// of this scheme; their table and vectors are `kat_fn_dsa_hybrid_v1.rs`.
 const SURFACES: [(&str, &[u8]); 6] = [
     ("pqc_auth_tx", SCHEME_DOMAIN_PQC_AUTH_TX),
     ("pqc_auth_tx_multisig", SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG),

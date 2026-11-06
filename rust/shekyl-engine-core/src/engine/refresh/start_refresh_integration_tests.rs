@@ -47,9 +47,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use shekyl_crypto_pq::account::{
-    rederive_account, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
-};
+use shekyl_crypto_pq::account::{account_from_seed, Network, SEED_BYTES};
 use shekyl_rpc_transport::HttpRpc;
 use tempfile::TempDir;
 use tokio::sync::{watch, RwLock};
@@ -94,7 +92,7 @@ async fn make_engine_arc() -> (Arc<RwLock<Engine<SoloSigner>>>, TempDir) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let base_path = tmp.path().join("wallet");
     let creds = Credentials::password_only(b"start-refresh integration tests");
-    let mut seed = [0u8; MASTER_SEED_BYTES];
+    let mut seed = [0u8; SEED_BYTES];
     for (i, b) in seed.iter_mut().enumerate() {
         *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(13);
     }
@@ -239,16 +237,16 @@ async fn drop_releases_slot_for_subsequent_start_refresh() {
 //    dropped.
 // 3. Wrap in `Arc<RwLock<…>>` and call `Engine::start_refresh`.
 
-/// Deterministic master seed shared by every hybrid engine built
+/// Deterministic wallet seed shared by every hybrid engine built
 /// via [`make_hybrid_engine_arc`]. Pulled out as a constant (Stage 2)
 /// so tests can re-derive the wallet's [`ViewMaterial`] without an
 /// `Engine::keys()` accessor — that accessor was removed when the
 /// key blob moved into the `KeyActor` (`STAGE_2_KEY_ENGINE_ACTOR.md`
 /// §6). `seed[i] = (i & 0xff) * 17`, matching the prior inline loop.
-const HYBRID_WALLET_SEED: [u8; MASTER_SEED_BYTES] = {
-    let mut seed = [0u8; MASTER_SEED_BYTES];
+const HYBRID_WALLET_SEED: [u8; SEED_BYTES] = {
+    let mut seed = [0u8; SEED_BYTES];
     let mut i = 0usize;
-    while i < MASTER_SEED_BYTES {
+    while i < SEED_BYTES {
         // `i & 0xff` is masked to 0..=255, so the `as u8` cast is
         // exact, never truncating. `u8::try_from` (the runtime form
         // this const replaced) is not const-stable, so the masked
@@ -262,20 +260,16 @@ const HYBRID_WALLET_SEED: [u8; MASTER_SEED_BYTES] = {
 };
 
 /// Re-derive the hybrid wallet's [`ViewMaterial`] from
-/// [`HYBRID_WALLET_SEED`] using the **same** derivation parameters
-/// [`EngineCreateParams::for_test_full`] pins (`Network::Stagenet` →
-/// [`DerivationNetwork::Stagenet`], [`SeedFormat::Bip39`]). This is
+/// [`HYBRID_WALLET_SEED`] through the **same** derivation `Engine::create`
+/// runs ([`account_from_seed`] on the network
+/// [`EngineCreateParams::for_test_full`] pins, `Network::Stagenet`). This is
 /// the Stage-2 replacement for `ViewMaterial::try_from_keys(engine.keys())`:
 /// the orchestrator no longer exposes its keys (they live in the
 /// `KeyActor`), so the test re-derives the byte-identical view
 /// material from the known seed instead.
 fn hybrid_engine_view_material() -> ViewMaterial {
-    let blob = rederive_account(
-        &HYBRID_WALLET_SEED,
-        DerivationNetwork::Stagenet,
-        SeedFormat::Bip39,
-    )
-    .expect("rederive_account for hybrid wallet seed (stagenet/bip39)");
+    let (_master, blob) = account_from_seed(&HYBRID_WALLET_SEED, Network::Stagenet)
+        .expect("account_from_seed for the hybrid wallet seed (stagenet)");
     ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against re-derived hybrid blob")
 }
@@ -833,22 +827,22 @@ async fn ingest_pre_pass_reorg_rolls_back_and_resumes_from_cursor() {
     }
 }
 
-/// CT-5a §3.3 (R1-Q4 / O3) respawn happy-path KAT through the engine ingest
-/// entry point. A fail-stopped curve-tree actor is healed by
-/// [`Engine::ingest_scan_result_with_respawn`]: the first attempt sees the
-/// dead actor (classified `recoverable_by_respawn`), the engine respawns it
-/// (drop + reopen — cursor resumes from the persisted store tip, no genesis
-/// replay), and the retry ingests the new range. The witness that the
-/// respawn-and-retry actually progressed — rather than merely reopening — is
-/// the post-heal tip advancing past the pre-kill tip.
+/// CT-5a §3.3 (O3) recovery happy-path KAT through the engine ingest entry
+/// point. A poisoned curve-tree client is healed by
+/// [`Engine::ingest_scan_result_with_recovery`]: the first attempt sees the
+/// poison (classified `recoverable_by_rebuild`), the actor rebuilds the
+/// client in place over the store it owns (cursor resumes from the persisted
+/// store tip, no genesis replay), and the retry ingests the new range. The
+/// witness that the rebuild-and-retry actually progressed is the post-heal
+/// tip advancing past the pre-poison tip.
 ///
 /// The bounded-retry-then-surface escalation for a deterministically-corrupt
 /// store (O3-sub) is CT-5d, not exercised here (this fixture's store is
-/// clean, so one respawn heals it). Leaves are empty (the merge-path empty-
+/// clean, so one rebuild heals it). Leaves are empty (the merge-path empty-
 /// leaf shape); behavioral leaf/root correctness is the CT-2-oracle KAT
 /// (commit 6) / Tier-B completeness (CT-5c).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
+async fn ingest_pre_pass_rebuilds_a_poisoned_client_in_place() {
     const MASTER_SEED: [u8; 32] = [
         0x9d, 0x42, 0x1f, 0x88, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0,
         0xc0, 0xd0, 0xe0, 0xf0, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f, 0x6a, 0x7b, 0x8c, 0x9d, 0xae,
@@ -880,7 +874,7 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
         .collect();
     {
         let g = arc.read().await;
-        g.ingest_scan_result_with_respawn(&mut forward)
+        g.ingest_scan_result_with_recovery(&mut forward)
             .await
             .expect("forward feed ingests genesis-through-tip");
         assert_eq!(
@@ -893,28 +887,29 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
         );
     }
 
-    // Simulate a fail-stop of the curve-tree actor (panic-free): the bare
-    // ingest path now classifies the dead actor as respawn-recoverable.
+    // Poison the client, as a post-commit rollback failure would: the bare
+    // ingest path classifies it as recoverable by an in-place rebuild.
     {
         let g = arc.read().await;
-        g.curve_tree.kill_and_wait_for_test().await;
+        g.curve_tree.poison_for_test().await;
         let err = g
             .ingest_scan_result_into_curve_tree(&mut forward)
             .await
-            .expect_err("a fail-stopped actor fails the bare (no-respawn) ingest");
+            .expect_err("a poisoned client fails the bare (no-recovery) ingest");
         assert!(
             matches!(
                 err,
-                RefreshError::CurveTreeIngest { fault } if fault.recoverable_by_respawn()
+                RefreshError::CurveTreeIngest { fault } if fault.recoverable_by_rebuild()
             ),
-            "a fail-stopped actor is classified respawn-recoverable, got {err:?}",
+            "a poisoned client is classified recoverable by rebuild, got {err:?}",
         );
     }
 
     // Second forward feed: range 6..8 (heights 6, 7), supplied as leaves so
-    // no daemon backfill is needed. Through the respawn-aware wrapper, the
-    // first attempt hits the dead actor, the engine respawns (cursor resumes
-    // from the persisted tip 5), and the retry ingests 6, 7 to tip 7.
+    // no daemon backfill is needed. Through the recovering wrapper, the first
+    // attempt hits the poisoned client, the actor rebuilds it in place
+    // (cursor resumes from the persisted tip 5), and the retry ingests 6, 7
+    // to tip 7.
     let mut forward2 = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(6), None);
     forward2.processed_height_range =
         shekyl_types::BlockHeight::from_raw(6)..shekyl_types::BlockHeight::from_raw(8);
@@ -931,16 +926,16 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
         .collect();
     {
         let g = arc.read().await;
-        g.ingest_scan_result_with_respawn(&mut forward2)
+        g.ingest_scan_result_with_recovery(&mut forward2)
             .await
-            .expect("respawn-and-retry heals the fail-stop and ingests the new range");
+            .expect("rebuild-and-retry heals the poison and ingests the new range");
         assert_eq!(
             g.curve_tree
                 .ingested_tip_height()
                 .await
                 .expect("cursor read"),
             Some(shekyl_curve_tree::BlockHeight::from_raw(7)),
-            "post-respawn the tree resumed from persisted tip 5 and ingested \
+            "post-rebuild the tree resumed from persisted tip 5 and ingested \
              6, 7 to tip 7 — the heal progressed, it did not merely reopen",
         );
     }
@@ -994,7 +989,7 @@ async fn ingest_rejects_header_root_mismatch() {
     // §3.3 / O5 (the lying-daemon defense, CT-5b's load-bearing KAT). A
     // daemon serving leaves that do not reconstruct to the consensus
     // header-committed root it claims is the inconsistent liar. The
-    // ingest-time verify must reject it *terminally* — a respawn re-derives
+    // ingest-time verify must reject it *terminally* — a rebuild re-derives
     // the same root, so it is not recoverable — and the refresh pre-pass
     // returning `Err` means the ledger merge never runs (O2: the ledger
     // never advances past tree state the wallet cannot reproduce).
@@ -1450,6 +1445,7 @@ fn ct2_tier_a_chain(name: &str) -> Vec<Ct2FixtureBlock> {
                 // (coinbase-only regtest fixture). `is_miner` drives the +60
                 // maturity offset in the client's drain order.
                 leaves: vec![crate::scan::OwnedTxLeaves {
+                    tx_hash: shekyl_types::TxHash::from_bytes([0xc2; 32]),
                     is_miner: true,
                     leaf_entry_blob: Some(blob),
                     outputs,
@@ -1673,5 +1669,181 @@ async fn engine_ingest_reorg_matches_ct2_tier_a_oracle_at_every_height() {
         "post-reorg engine root != reorg_deep oracle at heights {:?} (first {} shown)",
         &mismatches[..mismatches.len().min(10)],
         mismatches.len().min(10),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The registrant through the production refresh (CT-6 §11.12)
+// ---------------------------------------------------------------------------
+
+/// A transaction paying `amount` to the hybrid wallet, as a block would
+/// carry it: the output constructed with the wallet's own view material, the
+/// KEM ciphertext and the `0x07` leaf entry in `extra`, the encrypted amount
+/// and label in the committed base — everything the scanner recovers from.
+fn transaction_paying_the_hybrid_wallet(amount: u64) -> shekyl_wire::Transaction {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    use curve25519_dalek::scalar::Scalar;
+    use shekyl_crypto_pq::output::construct_output;
+    use shekyl_scanner::Extra;
+    use shekyl_wire::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
+
+    let (_master, blob) = account_from_seed(&HYBRID_WALLET_SEED, Network::Stagenet)
+        .expect("account_from_seed for the hybrid wallet seed (stagenet)");
+    let tx_key_secret = [0x2du8; 32];
+    let tx_pubkey = &Scalar::from_bytes_mod_order(tx_key_secret) * ED25519_BASEPOINT_TABLE;
+    let constructed = construct_output(
+        &tx_key_secret,
+        &blob.x25519_pk,
+        &blob.ml_kem_ek,
+        blob.spend_pk.as_canonical_bytes(),
+        amount,
+        0,
+    )
+    .expect("construct an output to the hybrid wallet");
+
+    let mut kem = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());
+    kem.extend_from_slice(&constructed.kem_ciphertext_x25519);
+    kem.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
+    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, [kem]);
+    extra.push_pqc_leaf_entries(constructed.pqc_leaf.entry_bytes().to_vec());
+
+    Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: vec![Input::Gen(0)],
+            outputs: vec![Output {
+                amount: 0,
+                key: constructed.output_key,
+                view_tag: constructed.view_tag_prefilter,
+            }],
+            extra: extra.serialize(),
+        },
+        ct: Ct::Null(CtBase {
+            enc_amounts: vec![constructed.enc_amount_wire().to_bytes()],
+            enc_labels: vec![constructed.enc_label_wire().to_bytes()],
+            commitments: vec![constructed.commitment],
+        }),
+    }
+}
+
+/// A chain of `n` blocks whose block `paying_at` carries one transaction
+/// paying the hybrid wallet, with every header's `curve_tree_root` the root
+/// a tree fed these blocks reconstructs (CT-5b §3.3 verifies each height),
+/// and `first_output_index` kept as the daemon keeps it.
+fn chain_paying_the_hybrid_wallet(
+    n: u64,
+    paying_at: u64,
+    amount: u64,
+) -> (Vec<shekyl_scanner::ScannableBlock>, u64) {
+    use crate::engine::curve_tree_decode::decode_block_leaves;
+    use crate::engine::test_support::make_synthetic_block;
+    use shekyl_curve_tree::{BlockLeaves, CurveTreeClient, TxLeafInputs};
+
+    let mut shadow = CurveTreeClient::new();
+    let mut chain = Vec::with_capacity(usize::try_from(n).expect("small"));
+    let mut parent = BlockHash::NULL;
+    let mut next_output = 0u64;
+    let mut paid_gindex = None;
+    for h in 0..n {
+        let mut block = make_synthetic_block(h, parent);
+        block.first_output_index = Some(next_output);
+        if h == paying_at {
+            let tx = transaction_paying_the_hybrid_wallet(amount);
+            block.block.transaction_hashes.push(tx.hash());
+            block.transactions.push(shekyl_wire::BoundTx::whole(tx));
+            // The coinbase has no outputs, so the payment is the block's
+            // first output.
+            paid_gindex = Some(next_output);
+        }
+        // Feed the shadow tree what the engine's decoder will feed the
+        // real one, and read back the root this height's header commits.
+        let leaves = decode_block_leaves(&block).expect("the block decodes");
+        let inputs: Vec<TxLeafInputs<'_>> = leaves
+            .iter()
+            .map(|tx| TxLeafInputs {
+                is_miner: tx.is_miner,
+                tx_hash: Some(tx.tx_hash),
+                leaf_entry_blob: tx.leaf_entry_blob.as_deref(),
+                outputs: tx.outputs.as_slice(),
+            })
+            .collect();
+        shadow
+            .ingest_block(BlockLeaves {
+                height: shekyl_curve_tree::BlockHeight::from_raw(h),
+                txs: &inputs,
+            })
+            .expect("the shadow tree ingests");
+        block.block.header.curve_tree_root = shadow
+            .root_at(shekyl_curve_tree::BlockHeight::from_raw(h))
+            .expect("the shadow tree answers at its tip");
+        next_output += leaves.iter().map(|tx| tx.outputs.len() as u64).sum::<u64>();
+        parent = block.block.hash();
+        chain.push(block);
+    }
+    (
+        chain,
+        paid_gindex.expect("the paying height is in the chain"),
+    )
+}
+
+/// The production refresh registers what its scan finds before the fold
+/// reaches it. One refresh over a chain that pays the wallet at height 2
+/// and runs on past the lock window — so the payment is found, drained and
+/// its chunk closed inside one scan result — leaves the output held with
+/// nothing owed: the task offered the result's own detections to the tree
+/// between the ingest's rollback and its first fold.
+///
+/// This is the test the engine-level passes in `ownership::tests` cannot
+/// stand in for: they drive `ingest_scan_result_into_curve_tree`, which
+/// builds its own set, while `run_refresh_task` builds the set itself and
+/// hands it to the ingest. With the task handing over an empty set
+/// instead, the probe below is the output's first registration and reads
+/// `after_drain == 1`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn refresh_registers_a_found_output_before_the_fold_reaches_it() {
+    const MASTER_SEED: [u8; 32] = [
+        0x71, 0x3b, 0x2c, 0x9e, 0x44, 0x0d, 0x5f, 0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x18,
+        0x29, 0x3a, 0x4b, 0x5c, 0x6d, 0x7e, 0x8f, 0x90, 0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07,
+        0x18, 0x29,
+    ];
+    let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+    // Paid at height 2; the lock window is 10 blocks; 30 blocks is past
+    // the drain by a margin and the whole span is one scan result.
+    let (chain, paid_gindex) = chain_paying_the_hybrid_wallet(30, 2, 1_000_000);
+    let paid_key = chain[2].transactions[0].tx().prefix.outputs[0].key;
+    let mock = TestDaemon::with_seed_and_chain(daemon_seed, chain);
+    let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+    let handle = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+        .await
+        .expect("start_refresh claims the slot");
+    let summary = handle.join().await.expect("the refresh joins");
+    assert_eq!(
+        summary.transfers_detected, 1,
+        "the scan found the payment; the fixture is live"
+    );
+
+    let g = arc.read().await;
+    assert_eq!(
+        g.ledger.read().ledger.ledger.transfers().len(),
+        1,
+        "and the merge kept it"
+    );
+    let pair = (
+        shekyl_curve_tree::Gindex::from_raw(paid_gindex),
+        shekyl_curve_tree::OneTimePubkey::from_bytes(paid_key),
+    );
+    let probe = g
+        .curve_tree
+        .sync_owned(vec![pair])
+        .await
+        .expect("sync on the live actor");
+    assert_eq!(
+        probe.already_held, 1,
+        "registered by the refresh before its leaf folded"
+    );
+    assert_eq!(
+        probe.reconciliation, None,
+        "and captured by the fold, so the spend-time sync owes nothing"
     );
 }

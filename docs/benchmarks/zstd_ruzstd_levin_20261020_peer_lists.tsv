@@ -1,0 +1,11 @@
+class	name	input	libzstd1	lib_sent	ruzstd	ruzstd_fcs	ru_sent	lib_compress_ns	ru_compress_ns	lib_decode_ns	ru_decode_ns	ru_decode_libframe_ns
+handshake-req	request	258	244	true	262	264	false	3527	11027	266	1087	1246
+handshake-resp	ipv4-12	731	334	true	351	353	true	4156	14239	360	1575	1638
+handshake-resp	ipv6-12	887	476	true	499	501	true	4576	15717	364	1612	1660
+handshake-resp	tor-12	1415	767	true	989	991	true	5650	19004	2160	1667	8464
+handshake-resp	mixed-12	1011	586	true	659	661	true	4941	17160	1682	1853	6700
+timed-sync-req	request	158	146	false	164	168	false	3601	11513	256	1058	1190
+timed-sync-resp	ipv4-12	671	277	true	292	294	true	4097	14281	351	1609	1654
+timed-sync-resp	ipv6-12	827	419	true	439	441	true	4440	15329	347	1582	1658
+timed-sync-resp	tor-12	1355	710	true	928	930	true	5534	19019	2153	1635	7990
+timed-sync-resp	mixed-12	951	533	true	597	599	true	4790	16618	1841	1800	6472

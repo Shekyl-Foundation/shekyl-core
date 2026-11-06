@@ -1,15 +1,14 @@
 # FL — Fee Ladder Derivation from Shekyl Miner Economics
 
-**Status:** OPEN — **round 19 (§11) OPEN, 2026-09-10: the relay floor follows raw `C` (FL-R20), the quantizers and §10 go (FL-R21), the wallet pays the served rung exactly (FL-R22), admission is lookback-min over `G` = 5 blocks (FL-R23; `G` re-derived per node at review A-1, 2026-09-10), SMA resolution decided on FL-E3 (FL-R24); confirmation run pre-registered §11.5, implementation spec §11.6 **SIGNED OFF by the maintainer in-channel 2026-09-11** — PR A (FL-R24, the consensus operand) is MERGED to `dev`; **PR B (relay policy) and PR C (the FL-R21 deletion sweep) are cleared to implement.** §8 now carries
+**Status:** CLOSED — **round 19 (§11) CLOSED 2026-10-16: PR A (FL-R24, the consensus operand), PR B (FL-R20/FL-R22/FL-R23, relay policy) and PR C (FL-R21, FL-R26, FL-R27, FL-R28 and the floor's one Rust owner, #1096) are landed.** The relay floor follows raw `C`, the quantizers are gone, the wallet pays the served rung exactly, admission is lookback-min over `G` = 5 blocks on the fee lattice, and the lattice is a Rust constant off the wire. What this document still carries open is owned elsewhere: FL-R13 (the floor's basis, `w_ref`, the zone) by EUP-5 G, the document's replacement by the economics unification round, the DRS-X store flip for wiring the Rust floor in. §8 now carries
 **FL-R12′ and FL-R17 SIGNED and FL-R14 RULED** (in-channel, provenance
 per-row); the remaining rows hold their marked states. Rows marked BUILT
 refer to the round-9 implementation, which **merged as PR #640**
 (`fb06e1d2b`, from `feat/fee-ladder-impl-1`), and the follow-up
 mechanical sweep — FL-R15's rename and FL-R16b's guard removal —
 **merged as PR #654**; both branches are deleted and archive-tagged.
-What keeps this document OPEN is round 19 (§11) and the residue queued in
-[`FOLLOWUPS.md`](../FOLLOWUPS.md), each row pointing at the §-row that
-carries its blocker. **FL-R3 is CLOSED premise-refuted** (FL-R21): the
+Residue is queued in [`FOLLOWUPS.md`](../FOLLOWUPS.md), each row pointing
+at the §-row that carries its blocker. **FL-R3 is CLOSED premise-refuted** (FL-R21): the
 pow2 snap its band smoothed is deleted, so nothing is restored, and §10
 is closed as record (archive tag
 `archive/fl-r3-time-grid-2026-09-11`).
@@ -24,8 +23,11 @@ Convention, because the family token is one case-flip from a rung symbol:
 rung symbols always appear backticked as `Fl` / `Fn` / `Fm` / `Fh`; family
 tokens are always `FL-` followed by a digit or section letter.
 
-Branch: `design/fee-ladder-derivation` (worktree, off `dev`). `file:line`
-anchors in §1–§9 are at `dev` = 6d2f49a5c unless stated; FL-V8…FL-V11
+This document is the round's record. The rules it ruled live in the
+census row CEN-M3 ([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md))
+and in the code — `shekyl-economics`'s `fee` module, `shekyl-chain-rules`'s
+`relay_floor`, `shekyl-engine-core`'s `fee_policy` — and where they and
+this text disagree, they win. `file:line` anchors in §1–§9 are at `dev` = 6d2f49a5c unless stated; FL-V8…FL-V11
 (minted at review round 2) are anchored at the merge with `dev` =
 a566a466. Round-state record: [`FEE_LADDER_ROUND.md`](FEE_LADDER_ROUND.md).
 
@@ -34,7 +36,7 @@ a566a466. Round-state record: [`FEE_LADDER_ROUND.md`](FEE_LADDER_ROUND.md).
 ## §0 The question and its jurisdiction
 
 `Blockchain::get_dynamic_base_fee_estimate_2021_scaling`
-(`src/cryptonote_core/blockchain.cpp:4475-4508`) serves a four-rung fee
+(`src/cryptonote_core/blockchain.cpp`) serves a four-rung fee
 ladder (`Fl`/`Fn`/`Fm`/`Fh`) transliterated from ArticMine's Monero 2021
 scaling paper, cited by URL at `blockchain.cpp:4477`. The rungs are
 block-expansion price points: each is (approximately) the per-byte fee at
@@ -54,9 +56,10 @@ The three Shekyl mechanisms absent from the ArticMine calibration:
    `b = min(0.9, 0.5·sqrt(v/50)·circulating/total)`
    (`rust/shekyl-economics/src/burn.rs`).
 3. **Emission split** — the miner receives `(1 − σ(t))` of the (penalized,
-   modulated) block emission, `σ(0) = 0.15` decaying `×0.9` per year
-   (`rust/shekyl-economics/src/emission_share.rs`,
-   `src/shekyl/economics.h:95-116`).
+   modulated) block emission. `σ` is 0 at height 0 and 0.15 at block 1
+   (`EMISSION_SPLIT_EPOCH`), then decays `×0.9` per year measured from
+   block 1 (`rust/shekyl-economics/src/emission_share.rs`,
+   `compute_emission_split` in `src/shekyl/economics.h`).
 
 ### §0.1 Census collision and sequencing hold (coordination, 2026-09-03)
 
@@ -324,7 +327,7 @@ hysteresis/smoothing on `C`, then re-test; if still divergent, surface in
 
 A module in `rust/shekyl-economics-sim` (extending the existing sim per the
 drift-pair ban) that calls the **canonical** `shekyl-economics` functions —
-`calc_burn_pct`, `calc_release_multiplier`, `calc_effective_emission_share`,
+`calc_burn_pct`, `calc_release_multiplier`, `emission_share`,
 and the KAT-pinned penalty via the crate's block-reward entry point — and
 reimplements none of them. Hand arithmetic in this document is illustration;
 the tables in §4 come from the instrument.
@@ -392,7 +395,7 @@ by FL-R17.
   `blockchain.cpp:4541` (`get_dynamic_base_fee_estimate_2021_scaling`).
 - Additionally — a factor the brief did not list — the miner does not
   receive the whole modulated reward: `compute_emission_split`
-  (`blockchain.cpp:1795-1798`, `src/shekyl/economics.h:95-116`) diverts
+  (`validate_miner_transaction` in `blockchain.cpp`; the wrapper is in `src/shekyl/economics.h`) diverts
   `σ(t)` (15% at genesis, ×0.9/year) to the staker pool, and the split
   operand is the modulated reward (per the F-B1c block comment at
   `blockchain.cpp:6349-6365`), so the miner bears exactly `(1−σ)` of any
@@ -408,7 +411,7 @@ by FL-R17.
   `Mfw = min(Mnw, Mlw)`), then a further 2% acceptance buffer.
 - Callers: pool admission `tx_pool.cpp:250` — where the `kept_by_block ||`
   disjunct proves transactions arriving *in blocks* bypass the check — and
-  the daemon submit re-gate `src/rpc/daemon_submit_ffi.cpp:823`. **The fee
+  the daemon submit re-gate `src/rpc/daemon_submit_ffi.cpp`. **The fee
   floor is relay/admission policy, not block validity.** Changing the ladder
   is therefore not a chain-splitting consensus change; but a floor/ladder
   divergence fragments mempools and dead-letters wallets (FL-V5), so the
@@ -452,13 +455,19 @@ FL-C6 explicitly. (Bound is hand-derived; the instrument re-derives it.)
 
 ### FL-V6 — Scaling-test pins are hypothetical-state, not genesis-state
 
-`tests/unit_tests/scaling_2021.cpp:88-119` pins the ladder at a
+`tests/unit_tests/scaling_2021.cpp` pins the ladder at a
 **10 SKL reward** across three median states (340/1400/5400/67000 at
 `Mnw=Mlw=Zm`; 22000 top with `Mnw=15,000,000`; 13/53/1100/14000 at
-`Mnw=Mlw=1,500,000`). Genesis conditions are ~2048 SKL reward at `M=Zm`,
-whose daemon-rounded `Fh` = 14,000,000 is the KAT-pinned wallet cap
-(`fee_policy.rs:23-27`). The two "14000"-shaped numbers are different
-states; citations must not conflate them.
+`Mnw=Mlw=1,500,000`). Genesis conditions are a 1,024 SKL reward at
+`M=Zm` (the design's ESF 22 per block), where the legacy transliteration's
+daemon-rounded `Fh` is 6,900,000 (the transliteration and its KATs were
+deleted in PR C, `7bcea06e9`). The wallet cap is no longer derived from
+`Fh`: it is the structural bound `absolute_fee_rate_cap`, 88 746 666
+(FL-R28; `fee_policy.rs`). When this finding was written, the code
+applied the emission speed factor per minute, so genesis paid ~2,048 SKL
+and `Fh` was 14,000,000 — the figure that sat beside the scaling test's
+"14000" (corrected 2026-10-04). Hypothetical-state and genesis-state
+numbers are different states; citations must not conflate them.
 
 ---
 
@@ -497,6 +506,12 @@ lives. Correct statement:
   2²¹` blocks exactly. (Tail entry ≈ block 17 061 260, ~year 65; the
   ±1 against any independently quoted height is a fencepost convention,
   not a disagreement.)
+- *These three bullets are the per-minute convention's curve, as the code
+  ran it when the finding was written (corrected 2026-10-04).* At the
+  design's 22 per block `base_block_reward` is `(remaining_supply >> 22)`
+  floored at 0.6/block, the identity reads `2²²` blocks, and tail entry on
+  the neutral trajectory is block 31 215 255, ~year 119. The supply cap
+  and its cliff went with FL-R12′.
 - The cited precedent does not transfer: Monero's tail is perpetual
   because Monero's supply cap is unreachable
   (`DESIGN_CONCEPTS.md:544`).
@@ -591,7 +606,7 @@ wins.
   the census-R2 reopen criterion (§0.1), now literally: the named
   function is called by the red test.
 
-### FL-V11 — The ladder's anti-spam floor decays 3 413× across the emission curve; the round measured it and failed to name it (review round 2)
+### FL-V11 — The ladder's anti-spam floor decays 1 707× across the emission curve (3 413× as measured at ESF 21); the round measured it and failed to name it (review round 2)
 
 `Fl = R·w_ref/Mfw²` is linear in the reward. At `Mfw = Zm`: genesis
 `Fl = 68 266` atomic/byte; tail-era `Fl = 20` atomic/byte — a **3 413×
@@ -602,6 +617,12 @@ than the one ArticMine's constants (`w_ref = 3000`, `Zm = 300 000`) were
 tuned for — on a chain where stakers are paid to store whatever the
 floor admits, and where the burn loop is downstream of fee level.
 
+*Measured on the per-minute convention's ESF 21 (corrected 2026-10-04).*
+At the design's 22 per block, genesis pays 1,024 SKL, so genesis
+`Fl = 34 133` atomic/byte against the same tail-era 20: a **1 707× decay**,
+~29× wider than Monero's span. The finding's shape stands; the paragraph
+above and item 1 below keep the ESF-21 figures the round measured.
+
 Two things stated on the record:
 
 1. **The instrument printed this number and the round failed to name the
@@ -610,8 +631,9 @@ Two things stated on the record:
    finding until it is named against the thing it breaks.
 2. **§5.2's proposed ladder does not resolve it.** The correction keeps
    `Fl ∝ R` by construction, and `C_q`'s 19× range cannot offset a
-   3 413× reward decay: the corrected tail-era floor is ~20·`C_q`
-   against a genesis ~46 000–68 000. The open question — whether the
+   1 707× reward decay: the corrected tail-era floor is ~20·`C_q`
+   against a genesis ~23 000–34 000 (3 413× and ~46 000–68 000 when
+   written, at ESF 21). The open question — whether the
    anti-spam floor should be reward-proportional *at all*, versus an
    absolute constant or a fee-era recalibration — is **new derivation
    scope** requiring its own pre-registered criteria (repeating this
@@ -619,6 +641,45 @@ Two things stated on the record:
    deferral FL-D5. Per the maintainer's review: **if FL-R12′ lands on
    the cap side, the fee floor is the sole long-run security budget and
    this is genesis-blocking, not a calibration question.**
+
+
+### FL-V12 — The served rate's whole-atomic-unit resolution is an output quantizer wherever `F` is small (FL PR C, 2026-10-16)
+
+`--fee-ladder`'s feedback grid runs FL-C7's loop through the served
+ladder, whose rungs are whole atomic units per byte. On the exact window
+(FL-R24) **582 of 600 cells converge** under FL-E1's 50 bp bar; **18 do
+not, worst tail amplitude 833 bp**. That is above FL-E1's pre-registered
+falsifier (§11.5: any cell above one tick, 100–250 bp, on either arm).
+
+**What the 18 are.** All sit at the widest medians, where the served
+standard rung is a two- or three-digit integer, and every one toggles
+between exactly two standard-rung values one served-floor unit apart
+(`standard = 4F`, so 4 atomic units): 48 ↔ 52 at `M` = 50·`Zm`, age 0
+(833 bp, four cells); 124 ↔ 128 at 50·`Zm`, age 12 (322 bp, eight
+cells); 664 ↔ 668 at 10·`Zm`, age 30 (60 bp, six cells). The served
+rate's resolution is acting as an output quantizer, the class FL-R21
+removed from the served path, wherever `F` is small.
+
+**What they are not: loop instability.** `--fee-floor` runs the same
+grid with the floor at `SCALE` resolution (`floor_rate`, below the
+owner's `max(1)` truncation). There, 17 of the 18 converge under 50 bp;
+the eighteenth (age 12, `ε` = 3, `D` = 400, displaced start) reads
+87 bp — above the bar, under one tick, and one of the four cells §11.7
+already records. The dynamics converge; the integer output does not
+resolve the fixed point.
+
+**Why `F` is small there:** the floor decays with the reward (FL-V11)
+and with `M²`, so at a wide median late in the curve one atomic unit of
+the rate is several percent of it.
+
+**Disposition: a requirement on the floor-basis round, EUP-5 G
+(FL-R13), not a change here.** Whatever basis that round derives must
+state the served rate's resolution such that one unit of the rate stays
+inside FL-E1's bar across the reachable state space. The basis sets
+`F`'s magnitude, so the resolution is chosen there. The bar and the
+served ladder are unchanged; `--fee-ladder` labels these cells
+`FL-V12-resolution` and keeps any other shape above the bar as
+`OSCILLATING`, so a real instability cannot be read as this one.
 
 ## §3 The model
 
@@ -663,8 +724,8 @@ the miner-effective reward `(1−σ)·M_r·R` and divided by `(1−b)`.
 ### §3.2 What each inherited rung turns out to *be* (derived, not asserted)
 
 Running the algebra through the folded integer expressions at
-`blockchain.cpp:4488-4501` (instrument-verified against the C++ KATs,
-`fee_ladder.rs` tests):
+`blockchain.cpp:4488-4501` (verified against the C++ KATs by the
+`fee_ladder.rs` tests at review round 3, `7c668a460`):
 
 - **`Fl` = `R·w_ref/M²`** is the fee at which a single reference-weight
   transaction added to an exactly-median block pays its own penalty
@@ -697,11 +758,17 @@ and zero client changes.** Only rung *count* touches the wire (§7).
 
 Instrument: `shekyl-economics-sim --fee-ladder` (`src/fee_ladder.rs`),
 calling only canonical `shekyl-economics` functions for economics
-quantities; its "current-ladder" comparison column is pinned against the
-C++ oracle by four KATs (the three `scaling_2021.cpp` `wallet_fee_estimate`
-triples, the `relay_fee` set, and the genesis-condition
-`Fh = 14,000,000` the wallet cap is derived from). Full JSON is
-reproducible from the module; headline numbers:
+quantities. The tables below are the round's runs at review round 3
+(`7c668a460`), whose JSON reproduces from the module at that commit. Their
+"current-ladder" column is the inherited ladder, pinned in that run
+against the C++ oracle by four KATs (the three `scaling_2021.cpp`
+`wallet_fee_estimate` triples, the `relay_fee` set, and the
+genesis-condition legacy `Fh`, 6,900,000 at the design's 1,024-SKL
+genesis). Today's `--fee-ladder` prints the served ladder only; headline
+numbers. The run these were measured on applied
+the emission speed factor per minute, a 2,048-SKL genesis; §4.3 is
+re-measured at 1,024 SKL (2026-10-04), and the other subsections keep their
+measured values:
 
 ### §4.1 The correction surface (FL-C5 input)
 
@@ -723,6 +790,10 @@ whole rung somewhere reachable.
 
 ### §4.2 Corrected vs current rung tables (extract)
 
+These rows are the retired per-minute run, genesis reward 2,048 SKL, whose
+top rung rounds to 14,000,000. The design genesis is 1,024 SKL. Its legacy
+`Fh` KAT is 6,900,000, and §4.3 is the table re-measured on that reward.
+
 | State | `C` | current (rounded) | corrected | floor-accept | floor bounce? |
 | --- | --- | --- | --- | --- | --- |
 | genesis-quiet (`v=0`) | 0.680 | 69 000 / 280 000 / 1 100 000 / 14 000 000 | 47 000 / 190 000 / 750 000 / 9 300 000 | 63 556 | **yes** |
@@ -734,8 +805,8 @@ whole rung somewhere reachable.
 
 (These tables measure the *mispricing* and therefore apply raw `C`; the
 values a §5.2 daemon would actually serve apply the quantized `C_q` and
-differ by up to one pow2 step. The instrument's `served_ceil_cq` column
-carries them — measured highlights, review round 3: in every quiet state
+differ by up to one pow2 step. Measured highlights, review round 3, of
+the pow2 ceiling snap FL-R21 deleted: in every quiet state
 with `C ∈ (0.5, 1]` the ceiling rule gives `C_q = 1`, so the **served
 ladder equals today's ladder exactly** — genesis-quiet, genesis-baseline
 and mature-quiet all serve `[69 000/16 000, …]` unchanged, meaning launch
@@ -770,7 +841,7 @@ emits — through the production owner `shekyl_economics::corrected_fee_ladder`.
 
 `x_i = f_i·M/R` is the expansion fraction of the median that rung `i` funds on
 an average-cost basis. Measured at genesis with baseline volume, where
-`R` = 2048 SKL and the correction is **`C` = 0.85**. **Every row states `C`
+`R` = 1,024 SKL and the correction is **`C` = 0.85**. **Every row states `C`
 because `x` is not invariant under it:** the correction sits inside the floor
 and the priority rung while `R` is the `M_r`-neutral total, so `C` scales the
 fee side without scaling the divisor. (This is a change from the previous
@@ -782,7 +853,13 @@ measured had no correction at all.)
 | `Zm` (300 000) | 0.850% | 3.400% | **170.0%** | 4.00, **50** |
 | `3·Zm` | 0.283% | 1.133% | **170.0%** | 4.00, **150** |
 | `10·Zm` | 0.085% | 0.340% | **170.0%** | 4.00, **500** |
-| `50·Zm` | 0.017% | 0.067% | **170.0%** | 4.00, **2523** |
+| `50·Zm` | 0.016% | 0.064% | **170.0%** | 4.00, **2638** |
+
+Re-measured 2026-10-04 at `R` = 1,024 SKL, the design's ESF 22 per block.
+The table was first measured at the per-minute convention's 2,048 SKL; the
+first three rows are unchanged, and the `50·Zm` row read 0.017%, 0.067%
+and 2523. That row moves because its economy rung is a few atomic units
+per weight, where integer rounding is coarse, and halving `R` coarsens it.
 
 Reproduce with
 `cargo test -p shekyl-economics-sim served_ladder_spacing_table -- --nocapture`.
@@ -825,6 +902,9 @@ What the measurement shows:
   resolved on the record in §5.3.
 
 ### §4.4 Dwell (FL-C4a)
+
+*Disposition: FL-C4a is closed and its instrument deleted (§11.4). This
+section is the round's record of what it measured.*
 
 **Metrics (corrected at review round 3):** *median dwell* (blocks a posted
 value persists, whole trace), *distinct posted values* (true set
@@ -1192,8 +1272,8 @@ disclosure.
 
 - `b` cap and `M_r` rails confirmed on-grid (0.9 at `(v=500, ratio=0.9)`;
   0.8 at `v=0`; 1.3 by `v=100`).
-- **Tail era:** entry headroom `tail·2^esf` = 1 258 291 200 000 000 atomic;
-  the tail lasts exactly **2 097 152 blocks (~8 years)**, then the supply
+- **Tail era:** entry headroom `tail·2^esf` = 2 516 582 400 000 000 atomic;
+  the tail lasts exactly **4 194 304 blocks (~16 years)**, then the supply
   cap zeroes the *validation* reward permanently — Shekyl's mining era
   ends by construction.
 - **At exhaustion, FL-V1's divergence reaches its terminal form:** the
@@ -1518,13 +1598,13 @@ ride each row.
 | FL-R10 | FL-V1 recorded as a defect independent of this ladder (estimate/validation reward divergence, terminal form §4.6). **No longer standing: DISCHARGED at #640** — with FL-R12′ in the tree both sides agree at exhaustion (`val_reward_at_exhaustion = 600 000 000`), so §4.6's record is the historical evidence, not current behaviour | record — **closed at #640** | ⚖ (F14b evidence) |
 | FL-R11 | The G6b fossil-flag punt is discharged **for the fee constants only**: this round derives the ladder *given* the 300 000-byte zone; the zone value itself and the 1.7×/×50 clamps remain underived | record | ⚖ CEN-G6b |
 | FL-R12′ | **Terminal emission-state ruling — SIGNED at review round 8 (maintainer, in-channel, with the composition given verbatim).** Direction: perpetual tail (accepted round 4; the round-4 dormancy rationale stands). **Signed composition: `paid = max(M_r·curve(remaining), TAIL) · penalty(x)`** — `remaining` floored at zero (non-saturating accumulator; reuses the cap function's own saturating-sub lesson), `cap_reward_to_remaining_supply` retired, one owner, no flag path (discharges FL-V9). The three operators, each placed on the record: **(1) Floor on the paid emission, not the base** — the release multiplier exists to pace a *finite remaining* toward demand; under a perpetual tail there is nothing to defer, so `M_r` at the tail would only make the perpetual inflation rate wobble with activity, and wobble the wrong way for a security floor (paying least when fees are lowest); `max(M_r·curve, TAIL)` gives it no object. **(2) Penalty AFTER the floor** — the operator the F-1 draft was silent on, and the one that decides whether block-size governance survives the ruling: floor-last (`max(M_r·curve·(1−x²), TAIL)`) would kill the penalty at the tail *permanently* (W5 realized, forever, since no post-tail era exists); the signed order keeps expansion costing the full `TAIL` at `x = 1`. **Ordering rule, generalized: floors belong to emission; penalties apply to the paid quantity.** (3) The floor is on the **pre-split total**, not the miner's share (`σ(t)` ≈ 0.1% by year 65 — immaterial to the number, material to which quantity 0.6 describes). **Ladder operand consequence:** the estimate prices against `R_eff = max(M_r·curve, TAIL)` and the correction drops `M_r` (`C′ = (1−σ)/(1−b)`) so multiplier and floor are not double-counted — algebraically identical to the prior `C·R` wherever the floor does not bind, and it kills the `[0,0,0]`-ladder-at-exhaustion defect (the V1 class re-created by the unamended draft). FL-R1/R3/R5 operands updated; oracle re-oriented (FL-V10). FL-D1 **closed as answered** — the ruling abolishes the era D1 deferred to, and the signed order penalizes the tail like any other reward. **Build authorization: YES from the maintainer, upon this record.** **ROUND-8 AMENDMENT (estimate side) ADOPTED in the maintainer's words**: the signature governs the payer, not the row consuming the operand; quantize the whole volume-dependent scalar; "bounded cost against structural regression is the right selector, and it isn't close." Rider satisfied by construction (§5.2). **BUILT on `feat/fee-ladder-impl-1`** (the round-9 atomic bundle, a follow-up PR to this document — none of it is in this PR): one owner `paid_block_reward` (Rust) + marshal-only C++, no flag path, cap retired, accumulator through the asymptote, FL-R14 build assertion, FL-R16a error arm removed (estimator + relay dead-letters closed), FL-R16c, oracle graduated green — **FL-R15 (rename) and FL-R16b (the `ActivityMetric` cap guard) are NOT in this bundle**, both riding the follow-up mechanical rename PR, FL-R16b by its own ratified row | **SIGNED — composition as above; BUILT** | signed in-channel at review round 8 |
-| FL-R13 | **Fee-floor basis (FL-V11)**: whether the anti-spam floor stays reward-proportional (`Fl ∝ R`, decaying 3 413× to the permanent tail floor of 20·`C_q` atomic/byte) or moves to an absolute/recalibrated basis. New derivation scope with its own pre-registered criteria — not resolved by §5.2, which inherits the decay by construction. **FL-R12′ SIGNED at round 8 retires the genesis-blocking escalation**: the reward-proportional floor now has a permanent nonzero terminal value instead of reaching 0, so this is a calibration round (is 20·`C_q`/byte the right permanent floor for a chain whose stakers store what it admits?), not a security-budget-existence question | **decision required — own round, criteria first; non-blocking (gate satisfied by the FL-R12′ signature; reverts to genesis-blocking if the direction reverses to the cap)** | minted at review round 2; recalibrated at review round 4 |
+| FL-R13 | **Fee-floor basis (FL-V11)**: whether the anti-spam floor stays reward-proportional (`Fl ∝ R`, decaying 1 707× to the permanent tail floor of 20·`C_q` atomic/byte, from 34 133·`C_q` at the 1 024-SKL genesis; 3 413× on the per-minute curve this row was written on) or moves to an absolute/recalibrated basis. New derivation scope with its own pre-registered criteria — not resolved by §5.2, which inherits the decay by construction. **FL-R12′ SIGNED at round 8 retires the genesis-blocking escalation**: the reward-proportional floor now has a permanent nonzero terminal value instead of reaching 0, so this is a calibration round (is 20·`C_q`/byte the right permanent floor for a chain whose stakers store what it admits?), not a security-budget-existence question. **DIRECTION RULED 2026-10-05 (Rick): fees are decoupled from the block reward.** `F = R·C·w_ref/M²` keeps only the job it was derived for, the price of growing a block past the median, which is the penalty and is correctly in reward units; the admission floor, the user-facing rungs and any retention charge get a basis of their own. The arm set (fixed atomic per byte, a utilization-indexed base fee, hash-denominated) is this round's, in EUP-5 G ([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2). No code changes until it is derived | **decision required — own round, criteria first; non-blocking (gate satisfied by the FL-R12′ signature; reverts to genesis-blocking if the direction reverses to the cap)** | minted at review round 2; recalibrated at review round 4 |
 | FL-R14 | **Persisted accumulator width — RULED (b) by the maintainer at review round 4, in-channel: keep `u64` persisted.** Rationale as ruled: the binding bound is not the LMDB column but the genesis-frozen **64-bit range-proof width** (`shekyl-bulletproofs` `prove_plus`, commitments in `[0, 2⁶⁴)`) — a `u128` accumulator cannot help a chain whose outputs cannot provably exceed 2⁶⁴ atomic; it would be a check that can't be the first to fail. Build obligation: encode the ≈ 89 750-year bound as a **build-time assertion** over `(tail × blocks_per_year)` with the range-proof width named as the reason, so a re-parameterization (bigger tail, fewer decimals) fails loudly. Documented failure mode the assertion guards: accumulator wrap **un-saturating `remaining`** (wrapped small `ag` → huge `remaining` → curve reward resumes) | **RULED (b)** | ruled in-channel at review round 4 |
 | FL-R15 | **Rename sweep (FL-R12′ implementation obligation):** `money_supply` → asymptote-class name reaches `config/economics_params.json`, the codegen, engine-core consumers, the census rows, and every doc naming it — each hit classified asserts-is / records-was / describes-a-closed-hazard before editing (census + CHANGELOG hits are legitimately records-was). **Method note (reusable):** a name sweep finds `MONEY_SUPPLY`; only a *jobs enumeration* — emission input, burn-ratio denominator, activity invariant, headroom operand — reveals that two of the four jobs are **assertions that the cap holds**; that enumeration is what surfaced FL-R16, and it is the instrument, not the name list **BUILT on `feat/fee-ladder-impl-2`:** the JSON key, both codegen paths, the Rust field/const surface (incl. the engine snapshot's `emission_curve_asymptote_atomic`) and the C++ macro (`SHEKYL_EMISSION_CURVE_ASYMPTOTE`, rule 93 prefix). Behaviour unchanged, and observed so rather than asserted — the parameter digest hashes values at fixed byte offsets, not field names, so its tests passed unre-pinned, and `--fee-ladder`/`--stage2` are byte-identical across the rename. Docs classified as prescribed; the one hit deliberately left alone is `blockchain.cpp`'s quotation of the inherited Monero rationale, where the old name is *quoted text* rather than a reference | **record — BUILT** | minted at the FL-R12′ direction; guard dispositions re-minted FL-R16a/b/c at review round 4; built at impl-2 **Digest sequencing, corrected against what happened (`CLIENT_VERSION_CONSTANTS_VALIDATION.md` §3.12 (ii)):** that note predicted "VC-1 widens first, this rename re-pins". **The order flipped** — the rename landed on `dev` while VC-1 sat unmerged, so VC-1's own merge is what re-pins, and the pinned literal now lives in `rust/shekyl-rpc-types/build.rs` (moved there by VC-R5 so the failure can print the computed value). Expected red, not a broken build. **And the two digests over this file disagree about this rename, both correctly:** the parameter digest hashes values at fixed byte offsets and is name-blind, so it passed unre-pinned; `CONSENSUS_CONSTANTS_DIGEST` canonicalises `key value` pairs and is name-sensitive, so it moves. A key is part of the binding for an identity check (every generator reads it by name), and is not part of it for a fixture-lineage check. Two instruments, two jobs, one file. |
 | FL-R16 | **REJECTED AS WRITTEN at review round 4 and re-minted below.** The original row's headline claims did not survive source: `economics_differential.rs:145` is `#[cfg(test)]` fixture replay (`engine/mod.rs:288-289`), not a live consumer; `ActivityMetric::new` has **zero production constructors** on `dev`; the consensus burn path (`blockchain.cpp:1804` → `compute_fee_burn` → `calc_burn_pct`) never touches it, so "taking the burn's activity input down" was false; and the date conflated tail *onset* (~yr 65) with *exhaustion* (~yr 73) — `circulating > asymptote` first occurs at exhaustion. Kept as the record of the defect: three relayed claims entered a §8 row unverified | **superseded by FL-R16a/b/c** | rejected at review round 4 |
 | FL-R16a | **Past-asymptote error arm (BUILD-BLOCKING):** `base_block_reward`'s `AlreadyGeneratedExceedsSupply` (`emission.rs:61`) is unreachable-by-design today and load-bearing wrong under the accepted direction. Consequences if the ruled accumulator ships with the arm intact, both at exhaustion ≈ yr 73: (i) the 5-arg estimate path (`blockchain.cpp:4541-4544`) errors → falls to the 10 000-SKL `BLOCK_REWARD_OVERESTIMATE` placeholder → `fee_policy.rs` refuses that snapshot **by design** → **no wallet can quote a fee**; (ii) `get_current_fee_per_byte` (`:4448-4453`) returns its failure-arm 0 → `check_fee` rejects everything → **the mempool refuses every transaction** (`kept_by_block` excepted). Removal ships with the FL-R12′ implementation *[Pins re-resolved 2026-09-21 (E6 slice 4 precursor): the arm is gone — `emission.rs:56`–`:61` is now the doc comment recording its removal; `blockchain.cpp:4541`/`:4448` have moved to the fee-estimate path around `:4350`–`:4360`. Unreachability rests on the perpetual tail (a past-asymptote **gross** accumulator is a legitimate tail state), not on gross-vs-net — so FL-R16c's definitional correction leaves this disposition untouched.]* | **decision folded into the FL-R12′ build — BUILT** | minted at review round 4; pins re-resolved 2026-09-21 |
 | FL-R16b | **`ActivityMetric::new` cap guard (`activity.rs:124`): non-blocking API cleanup.** False under the accepted direction, but fixture-test-only today — remove with the rename sweep, not on the build's critical path. **BUILT on `feat/fee-ladder-impl-2`:** the check and its `CirculatingExceedsSupply` discriminator are gone, and the test flipped to assert *acceptance* past the asymptote (observed red against the guard first) so the new semantics are asserted rather than merely un-asserted. `EMISSION_CURVE_ASYMPTOTE`'s docstring lost the rationale that cited this guard; the constant's surviving bound-assertion is FL-R14's build check on the u64 headroom *above* the asymptote — the opposite direction *[Pin re-resolved 2026-09-21: the guard is gone; `activity.rs:194` (`new_accepts_circulating_past_the_asymptote`) is the test that asserts acceptance.]* | **record — BUILT** | minted at review round 4; built at impl-2; pin re-resolved 2026-09-21 |
-| FL-R16c | **Burn-ratio semantics past the asymptote:** `calc_burn_pct`'s `supply_ratio` (`burn.rs:76-78`) is unsaturated — exceeds 1.0 after exhaustion, drifting the burn toward `burn_cap` (≈ 0.0037%/yr issuance scale, negligible but unnamed). Disposition: saturate at `SCALE`, one line. And the sweep must not walk past the pre-existing definitional bug: `circulating_supply = already_generated_coins` (`blockchain.cpp:1787`, `:2074`) is **gross emission ignoring burn** **BUILT 2026-09-21, both halves, by E6 slice 4's precursor (`CHAIN_RULES_SLICE_4.md` §3.1 S15; the sweep that rediscovered this as a fresh finding because the pins below had drifted).** *Saturation half:* `burn.rs:83`–`:85` (`.min(SCALE)`), landed at impl-2. *Definitional half:* `circulating_supply = coins_generated − total_burned`, derived **once** in `shekyl-economics::supply::CirculatingSupply::derive` (checked: `total_burned > coins_generated` is a store-invariant violation, never a saturating zero) and consumed by `compute_fee_burn` / `calc_burn_pct_at`; the two C++ assignment sites — **re-resolved: `blockchain.cpp:1534` (validation, was `:1787`) and `:1821` (template, was `:2074`)** — now pass the two store facts (`shekyl::supply_facts`) and define nothing; the accrual site (`:5916`) shares the same single read. **The two halves are independent, not cause and compensation:** the saturation is a consequence of the perpetual tail (FL-R12′ — TAIL is paid forever while burn is a fraction of fees, so net supply passes the asymptote whenever cumulative burn lags the tail; `supply::tests::net_supply_exceeds_the_asymptote_under_the_tail` is the one-block-then-`ceil(asymptote/SCALE/tail)`-blocks demonstration), so correcting the operand does **not** dissolve the clamp; it stays as a belt with its reason rewritten. **Not in scope, recorded for this lane:** the relay-floor ring (`relay_floor_ring.cpp:125`, `fee_correction_from`) and the fee estimate still form `C` over the **gross** operand through `shekyl_calc_burn_pct` — the ring recomputes rungs at historical heights and no per-height cumulative-burn fact exists in either store (only per-block `block_burn` rows). Whether the served correction follows the consensus definition is a fee-ladder question with a store dependency, not slice 4's. **Also gross, recorded for the economics lane:** the sim recorder (`shekyl-economics-sim/src/record.rs:188`, `circulating = ag_start`) and the wallet differential oracle (`shekyl-engine-core/src/engine/economics_differential.rs`, via `ActivityMetric`) — while the sim's own f64 engine (`engine.rs:271`) already subtracts `total_burned`, so the sim disagrees with itself. Aligning the recorder shifts `burn_pct_bp` in the committed `baseline_steady_state.json`; that is the economics lane's review. The precursor regenerated the fixtures for the digest label only — every recorded value is unchanged. **Recorded for the economics lane:** net-of-burn makes burn self-damping (more burned → lower ratio → lower burn %) — negative feedback on a *cumulative* quantity against a *per-block* flow, so its time constant is the chain's whole history, monotone and never relaxing; invisible in a 10–20-year sim and visible only near exhaustion, the regime the sim cannot reach. | **record — BUILT (both halves)** | minted at review round 4; built 2026-09-21 |
+| FL-R16c | **Burn-ratio semantics past the asymptote:** `calc_burn_pct`'s `supply_ratio` (`burn.rs:76-78`) is unsaturated — exceeds 1.0 after exhaustion, drifting the burn toward `burn_cap` (≈ 0.0037%/yr issuance scale, negligible but unnamed). Disposition: saturate at `SCALE`, one line. And the sweep must not walk past the pre-existing definitional bug: `circulating_supply = already_generated_coins` (`blockchain.cpp:1787`, `:2074`) is **gross emission ignoring burn** **BUILT 2026-09-21, both halves, by E6 slice 4's precursor (`CHAIN_RULES_SLICE_4.md` §3.1 S15; the sweep that rediscovered this as a fresh finding because the pins below had drifted).** *Saturation half:* `burn.rs:83`–`:85` (`.min(SCALE)`), landed at impl-2. *Definitional half:* `circulating_supply = coins_generated − total_burned`, derived **once** in `shekyl-economics::supply::CirculatingSupply::derive` (checked: `total_burned > coins_generated` is a store-invariant violation, never a saturating zero) and consumed by `compute_fee_burn` / `calc_burn_pct_at`; the two C++ assignment sites — **re-resolved: `blockchain.cpp:1534` (validation, was `:1787`) and `:1821` (template, was `:2074`)** — now pass the two store facts (`shekyl::supply_facts`) and define nothing; the accrual site (`:5916`) shares the same single read. **The two halves are independent, not cause and compensation:** the saturation is a consequence of the perpetual tail (FL-R12′ — TAIL is paid forever while burn is a fraction of fees, so net supply passes the asymptote whenever cumulative burn lags the tail; `supply::tests::net_supply_exceeds_the_asymptote_under_the_tail` is the one-block-then-`ceil(asymptote/SCALE/tail)`-blocks demonstration), so correcting the operand does **not** dissolve the clamp; it stays as a belt with its reason rewritten. **UPDATE 2026-10-28 (the store flip):** the relay-floor ring is deleted. `ChainView::burned_through` is the per-height cumulative burn, and quote and admission price the burn on the net circulating supply (a Design row in the flip's divergence register). **Also gross, recorded for the economics lane:** the sim recorder (`shekyl-economics-sim/src/record.rs:188`, `circulating = ag_start`) and the wallet differential oracle (`shekyl-engine-core/src/engine/economics_differential.rs`, via `ActivityMetric`) — while the sim's own f64 engine (`engine.rs:271`) already subtracts `total_burned`, so the sim disagrees with itself. Aligning the recorder shifts `burn_pct_bp` in the committed `baseline_steady_state.json`; that is the economics lane's review. The precursor regenerated the fixtures for the digest label only — every recorded value is unchanged. **Recorded for the economics lane:** net-of-burn makes burn self-damping (more burned → lower ratio → lower burn %) — negative feedback on a *cumulative* quantity against a *per-block* flow, so its time constant is the chain's whole history, monotone and never relaxing; invisible in a 10–20-year sim and visible only near exhaustion, the regime the sim cannot reach. | **record — BUILT (both halves)** | minted at review round 4; built 2026-09-21 |
 | FL-R17 | **Rung count — SIGNED (a): THREE TIERS. Maintainer, in-channel, review round 7** ("sign it as three tier"). Rationale as signed: (i) **no privacy argument applies to the default case** — the default bucket is the majority set and its users bear no meaningful reduction (defaulted model: the standard bucket at ×1.25, §4.7); (ii) **the non-default case does not significantly degrade privacy** — a smaller set is still, arguably, much *larger* than Monero RingCT's ring-16, the de facto standard. (iii) The ruling's interpretive frame, in the maintainer's words: the privacy cost of a tier is *a bounded per-transaction candidate-set reduction for anchored attacks, with no linkage primitive to amplify it under FCMP++ — the kind of cost a proportionality judgment handles, not the kind the priority order was written for*. This frame *reconciles* rather than contradicts the stake-quorum rejection (the hierarchy's canonical privacy-wins ruling): there the cost was **structural and unbounded** — a per-persona uptime log growing without ceiling — so the lexicographic ordering applied; here it is **bounded, once per anchored transaction**, so proportionality applies. Same hierarchy, two instruments, selected by whether the cost is bounded — read together, the two rulings are one position. The round's supporting arithmetic for (ii): a priority transaction's anchored candidate set is `W/20` for an anchor window of `W` transactions, above ring-16 for any anchor looser than `W = 320` txs — at baseline volume, any anchor wider than ≈ 6.4 blocks (~13 minutes); tighter time-windows come with higher volume, which scales the set back up. Tier contracts and the default are §5.5. **Candidate (b) REJECTED; rule-21 reopeners as set by the maintainer at round 7, superseding the round's drafted three:** (r1) **FL-C4b's already-registered mechanism** — any rung whose measured mainnet usage share falls below 5% over a window is deleted or explicitly ruled an emergency lane; it needs no new row, and it is what retires priority if "many people use it" proves wrong; (r2) **any transaction-format or spend-proof change that introduces an on-chain way to relate two transactions** — the no-linkage-primitive premise is what makes the cost bounded, so its loss reopens the fee-tier disposition itself. *Method note (steering, round 7): r2 is anchored to the premise the argument rests on, not to a magnitude the argument produced — a threshold reopener invites argument about whether the number was crossed; a premise reopener either holds or does not, checkable by reading the format. Tie reopeners to assumptions, not magnitudes.* The median-dynamics gate lapses for this decision; W8 re-homed to FL-D7 | **SIGNED (a) — three tiers** | signed in-channel at review round 7 |
 | FL-R18 | **The anonymity premise this row rests on was examined and found EMPTY. There is no harm here for a mechanism to fix, and (a) — accept as bounded — is what remains, not an option chosen over others on cost.** *(Provenance, stated precisely per round 4's standing rule for this table: **COUNTERSIGNED on (a) in-channel and relayed** through the umbrella lane, 2026-09-06. That is a relayed countersignature, not an in-tree one — no approving review or maintainer commit carries it — and the row says so rather than letting a relay read as a signature.)* **The premise:** a served fee flipping faster than 240 blocks was assumed to shrink the cohort a transaction hides in — the ground on which this row was surfaced (round 12) and briefly ruled (c), a minimum-dwell floor (round 13). **The refutation, both legs verified in this tree (§4.5b):** (1) `reference_block` travels **in the clear** on the wire with an admissible age of 5–100 blocks, exposing construction time far more finely than a 125–429-block fee flip — and making the reference-block cohort *smaller* than the fee cohort §4.4 set out to protect; (2) `C_q` is a deterministic function of public chain state, so every conforming wallet at a height posts the same rate and the fee is **redundant with the block that carries it** — a fact this document already asserted in its own W3 row while §4.4 built a gate on its opposite. **Redundant data leaks nothing, so there is nothing to protect and nothing to fix.** The maintainer's own statement of the finding, which is the row: *`C_q` is deterministic from public chain state, so every conforming wallet in a window computes the same value and an observer derives it from the block regardless; the fee is redundant with what the block already discloses.* **What survives is not anonymity:** the quote-then-broadcast rejection race (measured, §4.5b — and **disposition-independent**: every quantized served map lands within 22–39 thin-margin cells of 800, the §7 band being neutral and a dwell floor modestly worse; minted as **FL-R19**), and plain user-facing unpredictability. **Consequently the mechanisms are moot, not out-competed:** (b) a wider band, (c) the dwell floor, and (d) FL-D6 smoothing were each proposed to close a harm that does not exist. **(c) additionally fails on its own terms**, and that measurement stands whatever the premise did: no candidate `N` closes the cells, because a dwell floor is a DELAY in a feedback loop and delay destabilises — flip rate falls while oscillating-cell count RISES 14 → 101 (§4.5a). **Nothing ships and no rework reaches the bundle**; `fee_correction_quantized` is unchanged. *(Post-countersignature implementation note: the crate function is indeed unchanged, and #640 review cycle 5 removed the band from the SERVED path. Round 17 RULED that the band stays and is restored — see FL-R3 — so this clause stands as written about the mechanism, and the served-path gap is an implementation item with a named owner, not a reopening of this row.)* **Kept, because they are findings independent of the disposition:** FL-C4a's re-grounding — itself corrected at round 15, and now **not an anonymity criterion at all** (§1.4 note) — and the estimate clamp's measured role (§5.2). **How this happened, on the record rather than smoothed:** four layers of threat model were built on the premise without anyone asking what the leak was | **(a) COUNTERSIGNED — the premise is refuted, so nothing remains to mechanise (relayed countersignature; see provenance)** | surfaced round 12; ruled (c) round 13; premise refuted round 14; residual corrected round 15 |
 | FL-R19 | **Quote-to-broadcast rejection race — RULED (b): clamp the served economy rung with a fixed margin above the unbuffered relay floor.** *(Countersigned in-channel and relayed 2026-09-06; a relayed countersignature, not an in-tree one.)* **The threat, stated properly — ADVERSARY: NONE.** This is a **liveness** failure, not a disclosure: nothing leaks, nobody is watching. *Event:* the short-term median contracts between construction and broadcast, raising the relay floor above the already-quoted fee, and the relay refuses the transaction. **Three conjuncts must all hold:** (i) the construction-to-broadcast gap spans **at least one block** — the median cannot move inside a block interval; (ii) the **short-term median is the binding term** (below the long-term effective median), i.e. the quiet-chain case; and (iii) the state sits in the thin-margin band — **25 of 800 swept served-map cells**, concentrated at the widest median and oldest age (§4.5b; the ruling quoted 22, the banded map, before #640 removed the band from the served path — 154 before the round-16 instrument correction and 49 before #640 re-measured against the shipped owner). *Consequence:* a refused broadcast, recoverable by re-quoting — **no fund loss, no disclosure.** **Why (b) and not the others:** **(d) re-quote at broadcast is REFUTED, not merely unchosen** — `rv.txnFee` is an **operand of `shekyl_verify_ct_balance`** (`src/fcmp/ct_semantics.cpp`, both the standard site and the bond-post variant), so the fee closes the commitment sum and re-quoting means **re-constructing and re-signing**. For a hot interactive wallet that is a no-op dressed as a fix (construction and broadcast are seconds apart and the median cannot move in that window); for the flows that ARE exposed — offline signing, hardware confirmation, batched or scheduled sends — re-signing at broadcast is precisely the expensive round trip the failure would have cost anyway. **It helps the population that does not need it and cannot help the one that does.** **(c) re-deriving the relay floor with the ladder stays open, but NOT HERE**: legitimate to want at the cutover (CEN-M3 / FL-D2), and it must not be justified by this race. **(a) accept** is what (b) improves on at negligible cost. **BINDING IMPLEMENTATION CONSTRAINT, not advice: the margin MUST be a fixed deterministic multiplier — never randomized, never per-wallet.** A per-wallet or randomized margin makes the quote no longer derivable from chain state and manufactures exactly the fingerprint FL-R18 established does not otherwise exist. **Why it is cheap:** it binds only where the clamp binds, so the **775 of 800 cells above the thin band pay nothing** (the ruling quoted ~646 at 1.29×, derived from figures that have since been re-measured three times; against the shipped owner and the shipped no-band served map the median margin is 2.10× and 25 cells are thin); the overpay is bounded and small in absolute terms on a low-fee chain; and determinism is preserved by the constraint above. **SIZING — the acceptance criterion is PRE-REGISTERED here, before the numbers exist: choose the margin to cover the plausible median contraction over the p95 construction-to-broadcast gap for the OFFLINE-SIGNING flow.** And the instrument is named, including what it is NOT: the refusal RATE cannot size this — these traces are structurally blind to it and that blindness is the finding, not a zero (§4.5b). The quantity that can see it is the **construction-to-broadcast gap distribution across real wallet flows**, which is wallet instrumentation rather than chain simulation and therefore **not this lane's measurement to take**. If that distribution turns out sub-block for essentially every flow, **the margin may be nominal** | **RULED (b) — margin fixed and deterministic; sizing criterion pre-registered, gap distribution owed by the wallet lane** **UPDATE 2026-09-10 (§11):** **RE-RULED — superseded by FL-R23.** Sizing premise void: there is no offline signing (decision log 2026-09-07); the gap is one hot session, 0–2 blocks; no distribution is owed and no margin is paid. The liveness threat model stands and is restated at §11.1 item 8. | minted round 14; ruled round 16 |
@@ -1535,6 +1615,8 @@ ride each row.
 | FL-R24 | **SMA resolution for the floor operand:** (i) integer `tx_count_sum/720` as shipped — the 1/V tick is a grace cost under FL-R23, a quote-quality question only; (ii) exact `(tx_count_sum, baseline·720)` via the scale-invariant ratio functions — floor-only breaks FL-V1 by ≤ one tick; reward-and-floor is a consensus change to `M_r`'s operand (own row, rule 07). Decision rule pre-registered §11.5 FL-E3. §11.2 | **RULED in-channel 2026-09-10 ("accepted/agree"): (ii) exact SMA for reward AND floor** — the FL-E3 rule fired (integer tick 307 bp at age 30, §11.7) | **consensus row** (change to `M_r`'s operand resolution; pre-genesis; opened by the implementing PR, rule 07 evaluated there) |
 | FL-R25 | **The fourth fee slot is DELETED, not bridged.** FL-V3 (cycle 1) found slot 2 reachable only through `FeePriority::Elevated` — *"the `Elevated` priority, as defined by Monero"* — with **zero production callers, the GUI included**: wire-served and dead. The round's response was to build the RK-5 bridge (slot 2 mirrors slot 1) so a transliterated `Elevated` caller would pay the standard rate and stay in the largest anonymity set, then a contract test to assert the bridge holds, and round 19 then had to ask which slot the priority formula occupies. **Three artifacts protecting one dead enum variant, and the anonymity set the bridge protected had no members.** The premise also fails on its own terms: we are not wire-compatible with Monero — different address format, transaction format and proof system — so nothing that speaks Monero's RPC can reach this chain. The slot existed because ArticMine's 2021 ladder produced four numbers. **RK-5 REOPENED under rule 21** (our own pre-genesis ruling; its premise was that something consumes four slots, and nothing does) and discharged by deletion: `fees.resize(3)`, `FeeTiers([u64; 3])`, `FeeTier::Medium` and `FeePriority::Elevated` deleted, `fee_tier_for` collapsed to a bijection, the `chain_facts` pod and its vectors cut to three, the #640 contract test asserting three ascending tiers with no mirror clause, and both `get_fee_estimate` oracle vectors **regenerated, not edited**. Rules 60 and 15; pre-genesis, daemon and wallet ship together, no deployed network to skew. **§11.6 item 4's `fees[2] = 2RC/M` was never a slip — the wire was.** One behaviour change, named: priority `3` reached the bridge slot at the standard rate and now reaches `High`. | **RULED in-channel 2026-09-11** | minted at round 19, landed before PR B |
 | FL-R26 | **`grace_blocks` is DELETED from the estimate path and the RPC — not zeroed.** FL-R20's un-gracing (ruled 2026-09-11) makes the served ladder a function of chain state alone: `Mlw` is the un-graced long-term effective median, so `grace_blocks` moves no rung. What it used to buy was a lookahead — zeroes inserted into the long-term window pulled `M` down and the quote UP, so a quote survived the next few blocks — and **FL-R23 does that job exactly rather than probabilistically**, which is the same argument that withdrew the fixed pad (FL-R22): every economy user paid the premium forever for protection the lookback already gives by identity. It was redundant on *every* rung, not only slot 0: grace protected quotes taken AT the floor, and a standard quote is `4F`. **A tunable with no effect is worse than no tunable**, so the parameter goes rather than being pinned at zero. **Measured while implementing, and it sharpens the ruling: the lookahead was already all but inert in production.** `grace_blocks` is capped at `CRYPTONOTE_REWARD_BLOCKS_WINDOW` = 100 against a `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` = 100 000 window, so the zeroes move the median by at most 100 ranks in 100 000 — and on a locally flat weight distribution, by nothing at all. Restoring the graced shape verbatim left both a floor-pinned fixture and a 5 000-block high-median fixture **bit-for-bit unchanged**; `fee_2021_scaling.grace_blocks_do_not_move_the_served_ladder` therefore pins the mechanism at a window equal to the grace cap, where the zeroes saturate, and says so in its own comment. **Wire change** (`grace_blocks` is an RPC parameter), so it carries a `CORE_RPC_VERSION` bump and belongs with the RK-5 wire lane or PR C — explicitly **not** PR B. **Reopener (rule 21), cross-referenced to FL-R19:** if a long-gap construction path ever lands — cold signing, offline signing, multisig — `G` = 5 may not cover the quote-to-broadcast gap, at which point the lookahead question returns. FL-R19's sizing premise was voided on "there is no offline signing" (decision log 2026-09-07); **this row is where that premise is re-examined if that changes**, and a lookahead restored here would need FL-R19's binding constraint (fixed, deterministic, never per-wallet) rather than the inherited zero-insertion shape. | **RULED in-channel 2026-09-11** (with the un-graced `M`: *"the right end state is `grace_blocks` deleted from the estimate path and from the RPC — not zeroed, deleted"*) | not PR B — wire change; queued with the RK-5 lane / PR C |
+| FL-R27 | **The fee lattice is a Rust constant, off the wire:** `shekyl_economics::FEE_QUANTIZATION_MASK` (1 000 atomic units, from `DISPLAY_DECIMAL_POINT` and the fee's six decimal places) and `quantized_fee`, the one rounding relay admission and the wallet both call; `relay_floor_admits(fee, weight, floors)` takes neither the mask nor the slack; the C++ mask, its three hand-offs and `get_fee_estimate.quantization_mask` deleted at `CORE_RPC_VERSION` 3.57. One fact had four sources, and a per-daemon mask is a per-daemon fingerprint (FL-C1). Relay policy, not chain identity. §11.2 | **RULED in-channel 2026-10-16** (PR C, #1096) | none — CEN-M3's formula text updated by PR C |
+| FL-R28 | **The wallet's absolute cap is the exact structural maximum of `C`, checked on the rate:** `C_max = ⌊SCALE·release_max/(SCALE−burn_cap)⌋` = 13.0 (the expression is monotone in each clamped operand), cap `2·R₀·C_max/(Zm·SCALE)` = 88 746 666, swept reachable peak 36 904 281 under it; no pow2 snap, and with no served mask the check reads the raw per-weight rate for every tier and `Custom`. §11.2 | **RULED in-channel 2026-10-16** (PR C, #1096) | none — wallet-side |
 
 Signatures are recorded per-row with their provenance (in-channel, review
 rounds 4–8); this line remains for any wholesale countersign the
@@ -1548,7 +1630,7 @@ maintainer chooses to add: ________________
 | FL-D2 | Relay-floor re-derivation (scale `get_dynamic_base_fee` by `C_q`) | CEN-M3 is a queued census-R2 row; ruling it here would create the double-ratification §0.1 forbids **UPDATE 2026-09-10 (§11):** **CLOSED** — FL-R20 is the re-derivation (`F = R·C·w_ref/M²`); the CEN-M3 routing is discharged and the census row's formula text is carried by the implementing PR (§11.6). | *First criterion FIRED (the §0.1 sequencing landed at round 2; both resume conjuncts satisfied at round 8):* the item is routed, not reopened here — it lands in CEN-M3's resumed round. Early trigger unchanged: the clamp observed binding in > 50% of mainnet estimate calls over a 30-day window (evidence the floor, not the ladder, is setting prices) |
 | FL-D3 | A fourth tier, if UX ever wants one | No engine tier addresses one (FL-V3: `Elevated` has zero production callers); a rung without users is fingerprint surface | an engine/GUI round proposes a user-facing tier with a predicted ≥ 5% usage share under FL-C4b's test |
 | FL-D4 | Zone value (300 000) and the 1.7×/×50 clamps | CEN-G6b/G6 own them; this round consumed them as boundary (§1.8) | census-R2 may resume (both §0.1 conjuncts satisfied: FL-R12′ signed, red-test discharged); FL-R11 records the partial discharge so R2 inherits a smaller question |
-| FL-D5 | Fee-floor basis derivation (FL-V11 / FL-R13) — whether `Fl ∝ R` survives a 3 413× reward decay as the anti-spam floor, on a chain where stakers store what the floor admits | Its own pre-registered round: criteria must be committed before the floor model is chosen | Open on its own merits (FL-R12′ signature satisfied): the floor's long-run role is the *permanent tail-era floor* and the genesis-blocking escalation is retired; the round opens as FL-R13's calibration |
+| FL-D5 | Fee-floor basis derivation (FL-V11 / FL-R13) — whether `Fl ∝ R` survives a 1 707× reward decay (3 413× at ESF 21, when written) as the anti-spam floor, on a chain where stakers store what the floor admits | Its own pre-registered round: criteria must be committed before the floor model is chosen | Open on its own merits (FL-R12′ signature satisfied): the floor's long-run role is the *permanent tail-era floor* and the genesis-blocking escalation is retired; the round opens as FL-R13's calibration |
 | FL-D6 | Fee-variance smoothing pool (declined as a floor at the FL-R12′ direction; may still earn a place as *smoothing*, never as the security floor) | Post-genesis per the accepted direction — no pre-genesis blocker exists once the tail is the floor **UPDATE 2026-09-10 (§11):** **moot** — nothing to smooth once the snap is gone (FL-R21); the tail-onset reopen no longer has a subject. | Design reopens **before tail onset** (by height ≈ 60·`BLOCKS_PER_YEAR`, five years ahead of the ≈ year-65 tail entry), or **early** if over any rolling 90-day mainnet window the 10th-percentile day's miner fee income falls below 25% of the window median (the dormancy signal the declined pool was meant to paper over) |
 | FL-D7 | W8: miner fee-rank ordering leak — block position reveals fee rank under any multi-rate ladder, and FL-R17's three-tier signature keeps it live | Under a ladder a miner has a *legitimate* reason to order by fee, so inclusion order cannot be made a checkable rule without breaking the fee market — the constraint W8 identified is only available under uniform rates | (a) any FL-R17 reopener fires (single-rate reconsidered ⇒ the checkable rule becomes available); (b) the relay/P2P-3 round takes inclusion-ordering scope and finds a ladder-compatible mitigation (e.g. intra-block shuffle of same-rate transactions, which three tiers still permit within each tier) |
 | FL-D8 | **Boundary-cell OCCUPANCY: what fraction of chain TIME is spent in the cells where `C` sits near a pow2 boundary.** A measurement deferral, not a design one — nothing is being postponed except taking a number. Every disposition that has turned on flicker argued it from **cell count** — how many of the 800 swept cells oscillate — and cell count is a property of the SWEEP GRID, not of the chain: it says how much of the parameter space flickers, never how often anyone is standing there. Three dispositions have now rested on that unknown (FL-C4a's dwell gate, FL-C7's residual, FL-R18's acceptance of it as bounded) and FL-R3's restoration is the fourth. The quantity is occupancy-weighted flicker: over drift-honest traces, the fraction of blocks whose `C` lies within the band region, and the flip rate weighted by it **MEASURED at round 18 (§10.10), and it selected `P`**: over the dwell ensemble, boundary occupancy reaches **741‰**, mean residence per visit **up to 637 blocks**, max residence **13 597 blocks**. C10-4's rule — `P` must exceed expected residence — therefore rejects `P` = 60 and 240 and selects **720**, independently the natural ceiling since the fold cannot outrun the 720-block average feeding it. No candidate spans the worst single visit (≈ 19 days at 120 s); that residual is the `1/P` first-step effect §10.2 prices, recorded not left to be discovered. **This closes D8 as an owed measurement.** | Not owed by any current disposition. FL-R3 is ruled on the band's own record and does not wait for this; the round-16/17 figures were sufficient for every decision taken. It is registered because the unknown has been load-bearing four times and the argument gets re-run from scratch each time **UPDATE 2026-09-10 (§11):** **moot** — no pow2 boundary cells exist to occupy (FL-R21). Round 2b took the number anyway (`/tmp/fl_r3_round2b.summary`); it is a measurement of a deleted mechanism. | **Due the next time a disposition turns on flicker** — any reopening of FL-C4a, FL-C7, FL-R18 or FL-R3, or any proposal to change the quantization rule, the band margin, or the served map. The point of the row is that the fifth occasion reaches for a number instead of an argument. Instrument: the existing drift-honest traces already evolve the state needed; this is an added statistic, not a new model |
@@ -1997,12 +2079,13 @@ owes the store lane the requirement, not a patch.
   `start = h > W ? h − W : 0`, `W` = `SHEKYL_TX_VOLUME_WINDOW`, and the
   `h` = 0 / `cum(−1)` = 0 edges as the walk defines them
   (`blockchain.cpp:2055–2061`).
-- **Layout precedent, not invention.** `mdb_block_info_4.bi_cum_rct` is a
-  cumulative-at-write, differenced-at-read per-block counter
-  (`db_lmdb.cpp`, `bi.bi_cum_rct = num_rct_outs; bi.bi_cum_rct +=
-  bi_prev->bi_cum_rct`), pop-symmetric for free because the row goes with
-  the block. The redb block row carries the same field in the same
-  discipline. Eight bytes per block.
+- **Layout precedent, not invention.** `mdb_block_info_4.bi_cum_rct` was
+  written as a cumulative-at-write, differenced-at-read counter
+  (`bi.bi_cum_rct = num_rct_outs` plus the parent's total), pop-symmetric
+  because the row goes with the block. That add was deleted 2026-10-05:
+  the column stores this block's count only (`db_lmdb.cpp:1019`) and is
+  never read, so it is no longer an example of the pattern. The shape this
+  requirement asks for is that cumulative one. Eight bytes per block.
 - **Consensus bit-identity gate (rule 47).** `get_tx_volume_avg` is not a
   fee-estimate convenience: it feeds `get_block_reward` inside
   `validate_miner_transaction` (`blockchain.cpp:1669`), i.e. **block
@@ -2545,13 +2628,16 @@ Round 2b's results go in §10.15.
 
 Closed as record 2026-09-10 by §11 (FL-R21). Round 2b completed (`/tmp/fl_r3_round2b.summary`: settled-anchor band and window arms reported; not selected, not read for selection). The one round-2b figure that carried forward is not about any arm: the 27 oscillating raw-`C` feedback cells are all adjacent-integer SMA toggles (§11.1 item 6), which is the finding that sized FL-R24.
 
-## §11 The floor follows `C` — round 19 (OPEN; pre-registered 2026-09-10)
+## §11 The floor follows `C` — round 19 (CLOSED 2026-10-16; pre-registered 2026-09-10)
 
-**Status:** OPEN. Rulings received in-channel 2026-09-09 → 2026-09-10 and
-recorded here per row (§11.2); the confirmation run FL-E1…FL-E3 is
-pre-registered at §11.5 and its results are recorded at §11.7 (FL-E1…FL-E3 run 2026-09-10; FL-R24 RULED: exact SMA for reward and floor, a consensus row); the implementation
-spec is §11.6, **signed off in-channel 2026-09-11** (PR A merged; PR B and
-PR C cleared). **This round supersedes §10**,
+**Status:** CLOSED 2026-10-16. Rulings received in-channel 2026-09-09 →
+2026-09-10 and recorded here per row (§11.2), with two more from PR C's
+implementation (FL-R27, FL-R28, Rick 2026-10-16); the confirmation run
+FL-E1…FL-E3 is pre-registered at §11.5 and its results are recorded at
+§11.7 (FL-E1…FL-E3 run 2026-09-10; FL-R24 RULED: exact SMA for reward and
+floor, a consensus row); the implementation spec is §11.6, **signed off
+in-channel 2026-09-11**, and all three PRs are landed (PR A, PR B, PR C
+#1096). **This round supersedes §10**,
 which closes as record at §10.16 — not because its measurements were wrong
 but because the thing it was restoring turned out to rest on a premise
 refuted two rounds before §10 opened (§11.1 item 2).
@@ -2587,7 +2673,7 @@ Each of these was read at the implementation during the exchange; none is
 taken from another document's prose.
 
 1. **Acceptance is `C`-free.** `Blockchain::check_fee`
-   (`src/cryptonote_core/blockchain.cpp:4476–4491`) admits
+   (`src/cryptonote_core/blockchain.cpp`) admits
    `fee ≥ needed − needed/50` with `needed` rounded up to the quantization
    mask, against `get_current_fee_per_byte()` (`:4453`) — the inherited
    `0.95·R·w_ref/M²`, no `C` anywhere in it. `C` enters only the *served*
@@ -2658,6 +2744,20 @@ taken from another document's prose.
    `transfer_pending_tx_tests.rs:1053` asserts it equals the built
    transaction's canonical `weight()`. The buffer and Monero's 0.95 were
    both papering over the quote-to-admission gap and nothing else.
+10. **The C++ floor priced the burn on the gross supply** (found by PR C,
+   2026-10-16, building the floor's one Rust owner). `fee_correction_from`
+   (`src/cryptonote_core/relay_floor_ring.cpp`) passed
+   `already_generated_coins` to `shekyl_calc_burn_pct`, where the
+   validator prices the burn on the **net** circulating supply,
+   `coins_generated − total_burned` (FL-R16c; `shekyl-chain-rules`
+   `rules/miner.rs`, `BurnOperands`). So the floor's `b`, and therefore
+   its `C`, differed from what the miner is paid as soon as anything had
+   burned: the FL-V1 identity was broken in the C++ composition. The
+   served estimate shared the operand, so quote and admission agreed with
+   each other. Not patched in the C++ (it is non-canon): the one Rust
+   composition (`shekyl_economics::relay_floor_from`, PR C §6) takes the
+   validator's `CirculatingSupply`, and quote and admission move together
+   to it at the DRS-X store flip.
 
 ### §11.2 Rulings
 
@@ -2830,6 +2930,32 @@ the wallet lane owes no distribution, and no margin is sized because
 none is paid. The row's threat model (liveness, adversary none) was
 correct and is what finding 8 restates.
 
+**FL-R27 — The fee lattice is a Rust constant, off the wire (Rick,
+2026-10-16).** `shekyl_economics::FEE_QUANTIZATION_MASK` = 1 000 atomic
+units, derived from `DISPLAY_DECIMAL_POINT` and the fee's six decimal
+places, with `quantized_fee(weight, rate)` the one rounding a paid fee
+meets; relay admission (`relay_floor_admits(fee, weight, floors)`, which
+reads the lattice and `RELAY_ADMISSION_SLACK_BP` itself) and the wallet's
+fee arithmetic (`shekyl_rpc_client::tx_fee`) both call it. The C++ mask
+(`Blockchain::get_fee_quantization_mask`), its three hand-offs to Rust and
+`get_fee_estimate.quantization_mask` are deleted (`CORE_RPC_VERSION`
+3.57). Why: one fact had four sources; a daemon serving a different mask
+put its wallets' fees on a lattice of its choosing — a per-daemon
+fingerprint (FL-C1) — and forced the wallet cap to check a mask-rounded
+charge rather than the rate. Relay policy, not chain identity, so a Rust
+constant and not a `config/economics_params.json` entry.
+
+**FL-R28 — The wallet's absolute cap is the exact structural maximum of
+`C`, checked on the rate (Rick, 2026-10-16).** `fee_correction`'s
+expression is monotone in each clamped operand, so
+`C_max = ⌊SCALE·release_max/(SCALE−burn_cap)⌋` — 13.0 at canonical
+parameters — is its exact maximum, and the pow2 ceiling that made it 16
+only loosened the bound. The cap is `2·R₀·C_max/(Zm·SCALE)` =
+**88 746 666** (R₀ = 1 024 SKL, Zm = 300 000), pinned, and the swept
+reachable peak, 36 904 281, stays under it. With no daemon-served mask
+(FL-R27) the "effective weight-1 charge" the cap used to read has no
+subject: every tier and `Custom` are checked on the raw per-weight rate.
+
 ### §11.3 Roads not taken
 
 Kept as record so they are not re-derived (rule 21 — each names its
@@ -2851,7 +2977,7 @@ reopening condition):
 | FL-C1 continuous-schedule precommitment | **met — satisfied, not merely un-overruled** | daemon-computed rung values identical for all wallets at a height (§1.1's own clarification); no wallet-side arithmetic beyond `rate × weight`; `round_money_up_2` leaves the served path but `get_fee_quantization_mask` survives at admission, so paid fees still sit on a lattice — "arbitrary-precision fees" was never on the table; the overrule of §11.2(a) recorded as premise-refuted |
 | FL-C2 coverage | **met exactly** | economy = floor by identity |
 | FL-C3 fee rounding | **re-based** | `round_money_up_2` leaves the served path (finding 7); the mask remains the only rounding |
-| FL-C4a dwell | **re-grounded** on quote quality, not anonymity (§1.4 note) | FL-R24's remaining question |
+| FL-C4a dwell | **closed** | the anonymity ground was refuted (FL-R18); quote stability is answered by FL-R23's identity, a quote at `F(h)` admitted within `G` blocks; the size of the per-block move is FL-E2's, in basis points. With the exact window `C` moves a sliver nearly every block, so a count of integer-rung changes reads "unstable" exactly when the design works; the dwell instrument is deleted (PR C, #1096) |
 | FL-C4b/c | unchanged | three tiers, FL-R17 |
 | FL-C5 | **met** | ladder multiples 1 : 4 : `2M/w_ref` unchanged |
 | FL-C6 relay-floor coherence | **met by construction** | closes FL-D2 |
@@ -2995,7 +3121,19 @@ predicate and a repo-wide deletion in one diff (review 2026-09-10):
   (one value, one identity), then item 2 — and that is the order PR B
   landed in: `ca16135a2`, `cbd363658`, `52d143b92`, `622a90969`. Order
   and numbering only; no item's content changed.)*
-- **PR C — the FL-R21 deletion sweep** (economics, FFI, instrument).
+- **PR C — the FL-R21 deletion sweep and the round's close-out. LANDED
+  (#1096, 2026-10-16).** FL-R21's last quantizers (`quantize_pow2_ceil`,
+  `round_money_up_2`; the hysteresis band, `MIN_REPRESENTABLE_C` and
+  `fee_correction_quantized` had left with #1087); FL-R26 (`grace_blocks`
+  deleted, 3.57); FL-R27 (the lattice a Rust constant off the wire) and
+  FL-R28 (the cap on exact `C`, checked on the rate); the sim on the
+  validator's operand (`VolumeWindow`, the ArticMine column and the
+  integer-SMA arm deleted, `floor_rate` kept with its owner cross-check);
+  and the "economics" item below built as `shekyl_economics::relay_floor_from`
+  / `fee_ladder_from` over `FeeOperands` with
+  `shekyl_chain_rules::relay_floor_window` reading the operands off the
+  view — tested against the captured chains, **wired in at the DRS-X store
+  flip**, which deletes the C++ ring.
 
 *Daemon (`blockchain.cpp`, `tx_pool.cpp`), Rust-forward per rule 20:*
 
@@ -3170,3 +3308,70 @@ at `G` = 5 with the A-1/A-2/A-3 amendments; FL-R24
 RULED (ii)-with-reward; §11.6 goes to spec review
 unchanged except that `check_fee`'s Rust predicate takes the `G+1` floors
 as computed, whichever operand resolution is ruled.
+
+## §12 The fee lattice and the rounding loop (ESR-15 landed 2026-10-27; the step's size is open)
+
+The fee loop is `converge_weight_fee_by` in `shekyl-tx-weight`. The caller
+supplies the pricer. The wallet passes `quantized_fee`. In the sim the
+pricer is part of `PerByteRate`, stamped when the rate is minted: a
+production rate is the lattice, and the flat control arm's admission rate
+is the unrounded product. Relay admission reads the same `quantized_fee`.
+The loop is held to seven properties (ruled 2026-10-24):
+
+1. **Never under-pays.** The fee it returns clears admission at the rate it
+   was priced at.
+2. **Least.** No lattice value below the returned `f` satisfies
+   `f ≥ rate × weight(f)`. Iterating from a seed at or below the least fixed
+   point converges to it, because `predict_weight` and the pricer are both
+   non-decreasing in the fee. The seed must never exceed the least fixed
+   point, and that is asserted; the with-change variant seeds from the
+   no-change fee, which is at or below its own fixed point. A high seed would
+   silently over-pay.
+3. **Bounded over-payment.** `f − rate × weight(f) < MASK` at the returned
+   `f`, taken at the final weight, including any varint byte the rounding
+   forced.
+4. **Exact.** Integer arithmetic throughout; no float reaches the fee.
+5. **Fails closed.** If `weight × rate` or the rounding leaves `u64`, the
+   loop returns `None` and each caller decides explicitly. A saturated
+   `u64::MAX` is a violation: it is a number, and it is not a refusal.
+6. **Terminates by agreement.** The loop exits when two successive passes
+   return the same fee (`next == fee`), never by hitting its pass limit. The
+   limit of 11 follows from the varint argument and stays as a
+   `debug_assert!` that running out is unreachable. The agreement is the
+   fixed point's with itself; payer and admission are item 7.
+7. **One lattice on both sides.** The payer rounds to the lattice admission
+   checks against, `shekyl_economics::quantized_fee` and
+   `FEE_QUANTIZATION_MASK`, read from one owner.
+
+The seven properties, graded on the code each loop was. "Representable"
+means `weight × rate` fits in `u64`.
+
+| Property | Old wallet `converge_fee` | Old `converge_weight_fee` | Unified loop |
+| --- | --- | --- | --- |
+| Never under-pays | Held on representable cells | Held on representable cells (the fixed point is the product) | Held |
+| Least | The value from seed 0 is the least; the seed invariant was unasserted | Held (the seed is 0) | Held; a seed above the least point is refused in debug |
+| Bounded over-payment | Held on representable cells | Held: the gap is 0 when the product fits | Held: the worst gap on the grid is 999 atomic |
+| Exact | Held | Held | Held |
+| Fails closed | Violated: `fee_from_weight` returns `u64::MAX` | Violated: `saturating_mul` returns `u64::MAX` | Held: the loop returns `None` |
+| Terminates by agreement | Violated by the exhaustion tail, which returns `fee.max(next)` | The same tail | Held: a return is `next == fee`; exhaustion is a `debug_assert` and then `None` |
+| One lattice | Held: the pricer is `quantized_fee` | Does not apply | Held: payer and admission call `quantized_fee` |
+
+The worst over-payment on the shape space, the varint-boundary rates and
+depths 0, 1 and the maximum is **999 atomic**, one below the mask. One
+cell where rounding the unrounded fee up is a third fee: depth 24,
+1-in/1-out, rate 2 182 818, unrounded 34 359 738 138, rounded up
+34 359 739 000, in-loop 34 361 921 000. The rounding crosses `2^35`.
+
+### The lattice's size — OPEN, owed to EUP-5
+
+`FEE_QUANTIZATION_MASK` is 1 000 atomic, `10^(DISPLAY_DECIMAL_POINT − FEE_DECIMAL_PLACES)`.
+Its ground is display precision and one rounding shared by the payer and
+admission. FL-R18 found the anonymity premise for a fee mechanism empty,
+and FL-R21 deleted `round_money_up_2` on that finding. FL-C1 is why the
+daemon does not serve a lattice of its own (a per-daemon fingerprint), not
+why the step is 1 000. FL-R27 placed the constant in Rust. The six
+decimals stay until EUP-5 rules the size. The loop is correct for any mask.
+
+`--stage2` prints the step in basis points of that year's mean ordinary
+fee. Year 1 on the baseline is 0.0084 bp. Where the fee prints 0.0001 SKL
+the step is 169.4915 bp, above the 50 bp bar FL-V12 uses.

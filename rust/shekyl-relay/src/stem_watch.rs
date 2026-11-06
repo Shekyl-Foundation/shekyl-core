@@ -48,35 +48,30 @@
 //! Baking any of them in would freeze a decision the round has explicitly left
 //! open, and would do it in the layer hardest to change later.
 //!
-//! # Scope: every zone that stems is observed
+//! # Scope: every connector that stems is observed
 //!
-//! Nothing on this side chooses which zones are observed; the caller does.
-//! Since §89.5 (GATE 3 of 3 deleted) Dandelion++ runs on **every** zone, not
-//! only clearnet -- `dandelionpp_notify` is no longer gated on
-//! `nzone == public_`. A Tor zone that stems produces stem observations
-//! like any other. Q12-U3's `/get_stem_tallies` row carries a `zone` label
-//! at the C++ merge so those observations are distinguishable.
+//! Nothing on this side chooses which connectors are observed; the caller
+//! does. A stem records the connector it was forwarded on, and the tally
+//! keeps the first one, because a connection id is one session.
+//! `/get_stem_tallies` carries that connector on the row.
 //!
 //! ```text
-//! levin_notify.cpp  dandelionpp_notify        <- every zone, noise-off
+//! shekyl-relay      owner::actor  (a stem forwarded to a successor)
 //!         |
 //!         v
-//! levin_notify.cpp  record_stem_observation
-//!         |
-//!         v
-//! shekyl-ffi        shekyl_relay_zone_record_stem
-//!         |
-//!         v
-//! shekyl-relay      Zone::record_stem  ->  StemWatch::stemmed
+//! shekyl-relay      Relay::record_stem  ->  StemWatch::stemmed
 //! ```
 //!
-//! **An empty tally for a zone that is not configured still means "no
+//! (Until 2026-11-05 the first two hops were `levin_notify.cpp`'s
+//! `dandelionpp_notify` → `record_stem_observation` and `shekyl-ffi`'s
+//! `shekyl_relay_zone_record_stem`; the relay owner took their place.)
+//!
+//! **An empty tally for a connector that is not configured still means "no
 //! stems", not "no drops".** The two read identically off [`StemTally`] and
-//! mean opposite things. The zone label is how an operator tells a zone
-//! that is not running from one that is running clean. The endpoint stays
-//! AdminOnly: a per-successor tally set is the node's anonymity-graph
-//! edge set, and a zone label is strictly more disclosive than the
-//! flattened list.
+//! mean opposite things. The connector on the row is how an operator tells
+//! them apart. The endpoint stays AdminOnly: a per-successor tally set is
+//! the node's anonymity-graph edge set, and a connector label is strictly
+//! more disclosive than the flattened list.
 
 use std::collections::HashMap;
 
@@ -108,6 +103,34 @@ impl TxId {
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    /// The ids' first eight bytes, hex, space-separated: the form the
+    /// relay's debug lines name transactions in, so one transaction can be
+    /// followed from a sender's log to a receiver's (the brief's fleet
+    /// evidence, `P2P_3_REMNANT_CUTOVER_BRIEF.md` §5).
+    #[must_use]
+    pub fn short_list(ids: &[TxId]) -> String {
+        let mut out = String::with_capacity(ids.len() * 17);
+        for (n, id) in ids.iter().enumerate() {
+            if n > 0 {
+                out.push(' ');
+            }
+            for byte in &id.0[..8] {
+                out.push_str(&format!("{byte:02x}"));
+            }
+        }
+        out
+    }
+
+    /// [`Self::short_list`] for a relay debug line, in a measurement build
+    /// only (the `measurement-spans` feature). A shipped node logs counts:
+    /// ids beside the session a batch came from, or the stem hop it went
+    /// to, would let its own log name the transactions it originated and
+    /// where it first sent them, which the C++ relay's lines never did.
+    #[must_use]
+    pub fn measured_list(ids: &[TxId]) -> Option<String> {
+        cfg!(feature = "measurement-spans").then(|| Self::short_list(ids))
     }
 }
 
@@ -144,6 +167,10 @@ pub struct StemTally {
     /// A locally-originated transaction has no source, and its key is
     /// recorded as `None`, matching `in_mapping_[nil]`.
     sources: std::collections::BTreeSet<Option<ConnectionId>>,
+    /// Connector the first resolved observation on this successor was
+    /// forwarded on. A connection id is one session, so a later observation
+    /// keeps this value.
+    connector: Option<crate::ConnectorId>,
 }
 
 impl StemTally {
@@ -158,6 +185,12 @@ impl StemTally {
     pub fn distinct_sources(&self) -> usize {
         self.sources.len()
     }
+
+    /// Connector the first resolved observation on this successor used.
+    #[must_use]
+    pub fn connector(&self) -> Option<crate::ConnectorId> {
+        self.connector
+    }
 }
 
 /// Light export of a [`StemTally`] for telemetry and off-strand publish.
@@ -170,6 +203,9 @@ pub struct StemTallySnapshot {
     pub silent: u64,
     /// Distinct `in_mapping_` keys that contributed (§35.4).
     pub distinct_sources: u64,
+    /// Connector the successor was forwarded on. Absent until an observation
+    /// resolves.
+    pub connector: Option<crate::ConnectorId>,
 }
 
 impl From<&StemTally> for StemTallySnapshot {
@@ -180,13 +216,14 @@ impl From<&StemTally> for StemTallySnapshot {
             // `BTreeSet::len` is `usize`; cast once at the export edge so the
             // wire/readout contract stays a fixed-width counter.
             distinct_sources: t.distinct_sources() as u64,
+            connector: t.connector,
         }
     }
 }
 
 /// Stem observations in flight, and their per-successor resolutions.
 ///
-/// One instance per zone, owned by [`crate::Zone`]. Sync by construction:
+/// One instance per zone, owned by [`crate::Relay`]. Sync by construction:
 /// nothing here sleeps or spawns — [`StemWatch::expire`] is driven from the
 /// same `now` the rest of the zone's schedule uses, so the outcome is a
 /// function of the poll clock exactly as every other relay decision is.
@@ -202,6 +239,11 @@ pub struct StemWatch {
 struct Pending {
     successor: ConnectionId,
     source: Option<ConnectionId>,
+    /// The connector the stem was forwarded on. The embargo was drawn from
+    /// this connector's measured transit. The draw consumes it; the stored
+    /// value is what the stem-connector tests read.
+    #[cfg_attr(not(test), allow(dead_code))]
+    connector: crate::ConnectorId,
     deadline: Millis,
 }
 
@@ -220,6 +262,7 @@ impl StemWatch {
         tx: TxId,
         successor: ConnectionId,
         source: Option<ConnectionId>,
+        connector: crate::ConnectorId,
         deadline: Millis,
     ) {
         self.pending.insert(
@@ -227,9 +270,16 @@ impl StemWatch {
             Pending {
                 successor,
                 source,
+                connector,
                 deadline,
             },
         );
+    }
+
+    /// The connector recorded for a still-pending stem.
+    #[cfg(test)]
+    pub fn pending_connector(&self, tx: TxId) -> Option<crate::ConnectorId> {
+        self.pending.get(&tx).map(|pending| pending.connector)
     }
 
     /// Record that `tx` was seen again, arriving `from` a peer (`None` when
@@ -287,10 +337,11 @@ impl StemWatch {
     /// Resolve every observation whose deadline has passed as
     /// [`StemOutcome::Silent`]. Driven from the zone's poll clock.
     ///
-    /// Returns how many resolved, so a caller can assert the drive ran rather
-    /// than inferring it from an unchanged tally — the liveness half of the
-    /// standing witness discipline.
-    pub fn expire(&mut self, now: Millis) -> usize {
+    /// Returns the transactions that resolved silent. Each is an embargo
+    /// that fired: the successor it was charged to did not propagate it in
+    /// time, and the zone's reshape acts on it (`Relay::fire_embargoes`). The
+    /// length is also what a witness asserts to see the drive ran.
+    pub fn expire(&mut self, now: Millis) -> Vec<TxId> {
         let due: Vec<TxId> = self
             .pending
             .iter()
@@ -302,11 +353,15 @@ impl StemWatch {
                 self.resolve(p, StemOutcome::Silent);
             }
         }
-        due.len()
+        due
     }
 
     fn resolve(&mut self, p: Pending, outcome: StemOutcome) {
         let tally = self.tallies.entry(p.successor).or_default();
+        // First observation wins. The successor is one session.
+        if tally.connector.is_none() {
+            tally.connector = Some(p.connector);
+        }
         match outcome {
             StemOutcome::Propagated => tally.propagated += 1,
             StemOutcome::Silent => tally.silent += 1,
@@ -418,9 +473,31 @@ mod tests {
     }
 
     #[test]
+    fn short_list_names_each_id_by_its_first_eight_bytes() {
+        let mut full = [0xabu8; 32];
+        full[7] = 0x01;
+        full[8] = 0xff;
+        assert_eq!(
+            TxId::short_list(&[tx(0x5a), TxId::from_bytes(full)]),
+            "5a00000000000000 ababababababab01",
+            "sixteen hex digits each, the ninth byte never shown, space-separated"
+        );
+        assert_eq!(TxId::short_list(&[]), "");
+    }
+
+    /// The ids reach a debug line in a measurement build only.
+    #[test]
+    fn only_a_measurement_build_names_the_ids() {
+        assert_eq!(
+            TxId::measured_list(&[tx(0x5a)]).is_some(),
+            cfg!(feature = "measurement-spans")
+        );
+    }
+
+    #[test]
     fn a_transaction_that_returns_before_its_deadline_counts_as_propagated() {
         let mut w = StemWatch::default();
-        w.stemmed(tx(1), peer(9), None, 1_000);
+        w.stemmed(tx(1), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
         assert_eq!(w.in_flight(), 1, "fixture: the observation is armed");
         w.seen(&tx(1), Some(peer(3)));
         assert_eq!(w.in_flight(), 0, "resolution clears the pending entry");
@@ -432,10 +509,10 @@ mod tests {
     #[test]
     fn a_transaction_that_never_returns_counts_as_silent_at_its_deadline() {
         let mut w = StemWatch::default();
-        w.stemmed(tx(1), peer(9), None, 1_000);
-        assert_eq!(w.expire(999), 0, "not due yet");
+        w.stemmed(tx(1), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
+        assert_eq!(w.expire(999).len(), 0, "not due yet");
         assert!(w.tally(&peer(9)).is_none(), "nothing resolved before due");
-        assert_eq!(w.expire(1_000), 1, "due at exactly the deadline");
+        assert_eq!(w.expire(1_000).len(), 1, "due at exactly the deadline");
         let t = w.tally(&peer(9)).expect("resolved");
         assert_eq!((t.propagated, t.silent), (0, 1));
     }
@@ -447,10 +524,10 @@ mod tests {
         // no longer holding — and reshape fires precisely when a successor
         // looks dark, so this is the operative case, not an edge one.
         let mut w = StemWatch::default();
-        w.stemmed(tx(1), peer(1), None, 1_000);
-        w.stemmed(tx(1), peer(2), None, 2_000);
+        w.stemmed(tx(1), peer(1), None, crate::ConnectorId::Clearnet, 1_000);
+        w.stemmed(tx(1), peer(2), None, crate::ConnectorId::Clearnet, 2_000);
         assert_eq!(w.in_flight(), 1, "one observation, not two");
-        assert_eq!(w.expire(2_000), 1);
+        assert_eq!(w.expire(2_000).len(), 1);
         assert!(
             w.tally(&peer(1)).is_none(),
             "the original successor is not charged for a silence it was not \
@@ -466,7 +543,13 @@ mod tests {
         // supplying 100 transactions still contributes ONE distinct source.
         let mut w = StemWatch::default();
         for i in 0..100u8 {
-            w.stemmed(tx(i), peer(9), Some(peer(42)), 1_000);
+            w.stemmed(
+                tx(i),
+                peer(9),
+                Some(peer(42)),
+                crate::ConnectorId::Clearnet,
+                1_000,
+            );
             w.seen(&tx(i), Some(peer(42)));
         }
         let t = w.tally(&peer(9)).expect("resolved");
@@ -478,7 +561,7 @@ mod tests {
              counts 100, the gate cannot distinguish farming from breadth"
         );
 
-        w.stemmed(tx(200), peer(9), None, 1_000);
+        w.stemmed(tx(200), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
         w.seen(&tx(200), Some(peer(7)));
         assert_eq!(
             w.tally(&peer(9)).expect("resolved").distinct_sources(),
@@ -494,7 +577,7 @@ mod tests {
         // fix does not help. If the echo resolves, the signal is defeated by
         // one message, by exactly the adversary it exists to detect.
         let mut w = StemWatch::default();
-        w.stemmed(tx(1), peer(9), None, 1_000);
+        w.stemmed(tx(1), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
 
         w.seen(&tx(1), Some(peer(9)));
         assert_eq!(
@@ -512,7 +595,7 @@ mod tests {
 
         // And an arrival with no peer resolves: it cannot be the successor,
         // which is always a real connection.
-        w.stemmed(tx(2), peer(9), None, 1_000);
+        w.stemmed(tx(2), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
         w.seen(&tx(2), None);
         assert_eq!(w.tally(&peer(9)).expect("resolved").propagated, 2);
     }
@@ -521,11 +604,11 @@ mod tests {
     fn the_snapshot_is_ordered_and_omits_peers_with_no_resolved_observations() {
         let mut w = StemWatch::default();
         // Inserted out of order; only peer 2 and peer 7 resolve anything.
-        w.stemmed(tx(1), peer(7), None, 1_000);
+        w.stemmed(tx(1), peer(7), None, crate::ConnectorId::Clearnet, 1_000);
         w.seen(&tx(1), Some(peer(3)));
-        w.stemmed(tx(2), peer(2), None, 1_000);
-        assert_eq!(w.expire(1_000), 1);
-        w.stemmed(tx(3), peer(5), None, 9_000); // still pending — no outcome
+        w.stemmed(tx(2), peer(2), None, crate::ConnectorId::Clearnet, 1_000);
+        assert_eq!(w.expire(1_000).len(), 1);
+        w.stemmed(tx(3), peer(5), None, crate::ConnectorId::Clearnet, 9_000); // still pending — no outcome
 
         let snap = w.snapshot();
         assert_eq!(
@@ -536,14 +619,29 @@ mod tests {
         );
         assert_eq!(snap[0].1.silent, 1);
         assert_eq!(snap[1].1.propagated, 1);
+        assert_eq!(snap[0].1.connector, Some(crate::ConnectorId::Clearnet));
+    }
+
+    #[test]
+    fn the_first_resolved_observation_keeps_its_connector() {
+        let mut w = StemWatch::default();
+        w.stemmed(tx(1), peer(9), None, crate::ConnectorId::Tor, 1_000);
+        w.seen(&tx(1), Some(peer(3)));
+        w.stemmed(tx(2), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
+        w.seen(&tx(2), Some(peer(4)));
+        assert_eq!(
+            w.tally(&peer(9)).expect("resolved").connector(),
+            Some(crate::ConnectorId::Tor),
+            "a connection id is one session, so the later connector does not replace the first"
+        );
     }
 
     #[test]
     fn forgetting_a_peer_drops_its_tally_and_its_in_flight_observations() {
         let mut w = StemWatch::default();
-        w.stemmed(tx(1), peer(9), None, 1_000);
+        w.stemmed(tx(1), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
         w.seen(&tx(1), Some(peer(3)));
-        w.stemmed(tx(2), peer(9), None, 5_000);
+        w.stemmed(tx(2), peer(9), None, crate::ConnectorId::Clearnet, 5_000);
         assert!(w.tally(&peer(9)).is_some());
         w.forget(&peer(9));
         assert!(w.tally(&peer(9)).is_none(), "tally dropped, not retained");
@@ -562,9 +660,9 @@ mod tests {
         // in, counts out, no ratio and no decay.
         let mut w = StemWatch::default();
         for i in 0..10u8 {
-            w.stemmed(tx(i), peer(9), None, 1_000);
+            w.stemmed(tx(i), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
         }
-        assert_eq!(w.expire(1_000), 10);
+        assert_eq!(w.expire(1_000).len(), 10);
         let t = w.tally(&peer(9)).expect("resolved");
         assert_eq!(
             (t.propagated, t.silent, t.observations()),
@@ -577,9 +675,9 @@ mod tests {
     fn next_deadline_is_the_earliest_in_flight_observation() {
         let mut w = StemWatch::default();
         assert!(w.next_deadline().is_none(), "empty watch has no wake");
-        w.stemmed(tx(1), peer(9), None, 5_000);
-        w.stemmed(tx(2), peer(8), None, 3_000);
-        w.stemmed(tx(3), peer(7), None, 9_000);
+        w.stemmed(tx(1), peer(9), None, crate::ConnectorId::Clearnet, 5_000);
+        w.stemmed(tx(2), peer(8), None, crate::ConnectorId::Clearnet, 3_000);
+        w.stemmed(tx(3), peer(7), None, crate::ConnectorId::Clearnet, 9_000);
         assert_eq!(w.next_deadline(), Some(3_000));
         w.seen(&tx(2), Some(peer(1)));
         assert_eq!(

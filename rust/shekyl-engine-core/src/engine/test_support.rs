@@ -348,7 +348,7 @@ struct State {
     fee_errors: VecDeque<RpcError>,
 
     /// Health snapshot returned by `get_health`. Fixed to a healthy,
-    /// fully-synced daemon (peers present, `target_height == 0`) so the
+    /// fully-synced daemon (peers present, `synchronized`) so the
     /// `DaemonEngine` impl is complete for tests that don't exercise the
     /// health gate. Watchdog health-gating and health-failure paths are
     /// driven through the hermetic `StubDaemon` in the `submit_lifecycle`
@@ -396,16 +396,15 @@ impl State {
 /// ceiling tests build their own violating snapshots explicitly.
 fn default_fee_estimates() -> FeeEstimates {
     FeeEstimates {
-        economy: FeeRate::new(5, 1).expect("economy fee rate is non-zero"),
-        standard: FeeRate::new(10, 1).expect("standard fee rate is non-zero"),
-        priority: FeeRate::new(40, 1).expect("priority fee rate is non-zero"),
-        quantization_mask: 1,
+        economy: FeeRate::new(5).expect("economy fee rate is non-zero"),
+        standard: FeeRate::new(10).expect("standard fee rate is non-zero"),
+        priority: FeeRate::new(40).expect("priority fee rate is non-zero"),
     }
 }
 
 /// Construct the default [`DaemonHealth`] that every `TestDaemon`
 /// returns from `get_health`: a healthy, fully-synced daemon (peers
-/// present, `target_height == 0`). `TestDaemon` health is fixed to this
+/// present, `synchronized`). `TestDaemon` health is fixed to this
 /// value — the watchdog health-gate and health-failure paths are driven
 /// by the hermetic `StubDaemon` in the `submit_lifecycle` test module,
 /// which controls both health facts and submit outcomes.
@@ -422,47 +421,34 @@ pub fn test_block_hash_at(height: u64) -> [u8; 32] {
     h
 }
 
-/// Outbound peers a healthy test daemon reports. Non-zero so a health
-/// reading is not the peerless alarm. Inbound is zero ("none").
-const TEST_DAEMON_OUTGOING_CONNECTIONS: u64 = 8;
-
 /// How far above its chain count a syncing test daemon places
-/// `target_height`. The lead only has to be strictly positive: the sync
-/// predicate refuses any target the count has not reached. It is not a
-/// protocol constant.
+/// `target_height`, so the reply looks like a real syncing daemon's. No
+/// reader decides on it; the flag is what makes the double "syncing". It is
+/// not a protocol constant.
 const SYNCING_TARGET_LEAD: u64 = 10_000;
 
 /// `get_info` for [`TestDaemon`] and any other double that should answer
 /// as this daemon does.
 ///
-/// `syncing` moves both halves of the predicate together: the flag clears
-/// and the target sits [`SYNCING_TARGET_LEAD`] above the count. A reply
-/// that changes only one of those is not a state this double emits. The
-/// sentinel-only case (target `0` with the flag clear) is built in
-/// `synced_chain_facts_tests` against the constructor.
+/// `syncing` clears the flag, which is the whole predicate, and places the
+/// target [`SYNCING_TARGET_LEAD`] above the count. A synchronized double
+/// reports no target.
 pub(crate) fn daemon_get_info(chain_count: u64, syncing: bool) -> serde_json::Value {
-    let target_height = if syncing {
-        chain_count.saturating_add(SYNCING_TARGET_LEAD)
-    } else {
-        // `0` is the wire's synchronized sentinel, not an absent field.
-        0
-    };
+    let target_height = syncing.then(|| chain_count.saturating_add(SYNCING_TARGET_LEAD));
     super::daemon::synced_chain_facts::GetInfoDocument {
         chain_count: ChainCount::from_raw(chain_count),
         target_height,
         synchronized: !syncing,
         top_hash: BlockHash::from_bytes(test_block_hash_at(chain_count.saturating_sub(1))),
-        outgoing_connections: TEST_DAEMON_OUTGOING_CONNECTIONS,
-        incoming_connections: 0,
+        has_peers: true,
     }
     .to_value()
 }
 
 fn default_health() -> DaemonHealth {
     DaemonHealth {
-        connections: TEST_DAEMON_OUTGOING_CONNECTIONS,
+        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
         height: 0,
-        target_height: 0,
         synchronized: true,
     }
 }
@@ -786,13 +772,11 @@ impl DaemonEngine for TestDaemon {
     /// Serve the in-memory chain directly, overriding the single fetch
     /// override point (the [`block_fetch`](super::block_fetch) default
     /// would drive the real RPC transport `TestDaemon::post` panics on).
-    /// The synthetic chain stores full bodies (nothing is ever pruned), so
-    /// the body `form` is irrelevant here — the same lookup serves both,
-    /// and the scripted error/reorg queues fire identically on either.
-    fn fetch_scannable_block_in_form(
+    /// The synthetic chain's bodies are whole and already bound
+    /// (`BoundTx::whole`); the scripted error/reorg queues fire here.
+    fn fetch_scannable_block(
         &self,
         number: usize,
-        _form: super::block_fetch::TxBodyForm,
     ) -> impl Send + std::future::Future<Output = Result<ScannableBlock, RpcError>> {
         let state = self.state.clone();
         async move {
@@ -986,6 +970,94 @@ pub(crate) fn funding_record(
     crate::__test_helpers::funding_record_for_test(p_slot, gindex, height, amount, lineage)
 }
 
+// ---- Seeded curve-tree leaves ---------------------------------------------
+
+/// Which of a seeded leaf's three published points a preimage names.
+#[derive(Clone, Copy)]
+enum SeededPoint {
+    OutputKey = 1,
+    Commitment = 2,
+    LeafCommitment = 3,
+}
+
+/// A valid Ed25519 point, byte-distinct per `(chain, height, index, which)`.
+/// `key_image_generator` is a hash-to-point, so any preimage gives one.
+fn seeded_point(chain: u8, height: u64, index: u64, which: SeededPoint) -> [u8; 32] {
+    let mut preimage = [0u8; 32];
+    preimage[0] = chain;
+    preimage[1] = which as u8;
+    preimage[2..10].copy_from_slice(&height.to_le_bytes());
+    preimage[10..18].copy_from_slice(&index.to_le_bytes());
+    shekyl_fcmp::tree::key_image_generator(&preimage)
+}
+
+/// The output key [`seeded_tx_leaves`] gives output `index` of the block at
+/// `height` on `chain`.
+pub(crate) fn seeded_output_key(chain: u8, height: u64, index: u64) -> [u8; 32] {
+    seeded_point(chain, height, index, SeededPoint::OutputKey)
+}
+
+/// The commitment [`seeded_tx_leaves`] gives that same output.
+pub(crate) fn seeded_commitment(chain: u8, height: u64, index: u64) -> [u8; 32] {
+    seeded_point(chain, height, index, SeededPoint::Commitment)
+}
+
+/// The hash [`seeded_tx_leaves`] gives the one transaction of the block at
+/// `height` on `chain`.
+pub(crate) fn seeded_tx_hash(chain: u8, height: u64) -> shekyl_types::TxHash {
+    let mut bytes = [0u8; 32];
+    bytes[0] = chain;
+    bytes[1] = 0xee;
+    bytes[2..10].copy_from_slice(&height.to_le_bytes());
+    shekyl_types::TxHash::from_bytes(bytes)
+}
+
+/// One block's leaves for the curve-tree actor: a single non-coinbase
+/// transaction of `n` outputs, so its leaves drain one lock window after
+/// `height`.
+///
+/// Every output's `O`, `C` and leaf commitment is distinct from every other
+/// point in the fixture — a chain of identical leaves cannot show a path
+/// built over the wrong ones. `chain` is the fork: two chains give the same
+/// heights and the same gindexes to different outputs, which is what a
+/// reorg does to a gindex.
+pub(crate) fn seeded_tx_leaves(
+    chain: u8,
+    height: u64,
+    n: u64,
+) -> Arc<Vec<crate::scan::OwnedTxLeaves>> {
+    use shekyl_curve_tree::{CommitmentBytes, OneTimePubkey, RawOutput, TargetKind};
+
+    if n == 0 {
+        return Arc::new(Vec::new());
+    }
+    let mut outputs = Vec::new();
+    let mut blob = Vec::new();
+    for index in 0..n {
+        outputs.push(RawOutput {
+            output_key: OneTimePubkey::from_bytes(seeded_output_key(chain, height, index)),
+            commitment: Some(CommitmentBytes::from_bytes(seeded_commitment(
+                chain, height, index,
+            ))),
+            target: TargetKind::TaggedKey,
+        });
+        let mut entry = [0x07u8; 64];
+        entry[..32].copy_from_slice(&seeded_point(
+            chain,
+            height,
+            index,
+            SeededPoint::LeafCommitment,
+        ));
+        blob.extend_from_slice(&entry);
+    }
+    Arc::new(vec![crate::scan::OwnedTxLeaves {
+        is_miner: false,
+        tx_hash: seeded_tx_hash(chain, height),
+        leaf_entry_blob: Some(blob),
+        outputs,
+    }])
+}
+
 // ---- Shared wallet fixtures (WI-RPC-5 hoist) -----------------------------
 //
 // One home for the never-connecting daemon / deterministic-seed / staker
@@ -998,7 +1070,7 @@ pub(crate) fn funding_record(
 use crate::engine::{
     Credentials, DaemonClient, Engine, EngineCreateParams, OpenedEngine, SoloSigner,
 };
-use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+use shekyl_crypto_pq::account::SEED_BYTES;
 use shekyl_engine_file::SafetyOverrides;
 use shekyl_types::PSlot;
 use tempfile::TempDir;
@@ -1015,10 +1087,10 @@ pub(crate) fn dummy_daemon() -> DaemonClient {
     DaemonClient::new(rpc)
 }
 
-/// Deterministic master seed; `multiplier` keeps distinct suites on
+/// Deterministic wallet seed; `multiplier` keeps distinct suites on
 /// distinct wallets (each former private copy had its own).
-pub(crate) fn fixed_seed(multiplier: u8) -> [u8; MASTER_SEED_BYTES] {
-    let mut s = [0u8; MASTER_SEED_BYTES];
+pub(crate) fn fixed_seed(multiplier: u8) -> [u8; SEED_BYTES] {
+    let mut s = [0u8; SEED_BYTES];
     for (i, b) in s.iter_mut().enumerate() {
         *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(multiplier);
     }
@@ -1045,7 +1117,7 @@ pub(crate) fn non_staker_engine(seed_multiplier: u8) -> (TempDir, Engine<SoloSig
 /// `staking_enabled`, then reopens so the `StakeEngine` spawns). Idle — the
 /// caller activates a persona if it needs one
 /// ([`activate_persona`]).
-pub(crate) fn staker_engine(slot: u32, seed_multiplier: u8) -> (TempDir, Engine<SoloSigner>) {
+pub(crate) async fn staker_engine(slot: u32, seed_multiplier: u8) -> (TempDir, Engine<SoloSigner>) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let base = tmp.path().join("wallet");
     let (creds, seed) = (test_creds(), fixed_seed(seed_multiplier));
@@ -1055,7 +1127,7 @@ pub(crate) fn staker_engine(slot: u32, seed_multiplier: u8) -> (TempDir, Engine<
     engine
         .persist_bond_record(PSlot::from_raw(slot))
         .expect("persist bond record → staking_enabled");
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
     let opened = Engine::<SoloSigner>::open_full(
         &base,
         &creds,
@@ -1116,12 +1188,14 @@ pub(crate) fn conforming_pqc_extra(n_outputs: usize) -> Vec<u8> {
 #[cfg(test)]
 /// The `tx_extra` a coinbase with `n` outputs must carry (CEN-I20,
 /// `GENESIS_TX_WIRE_FORMAT.md` §9.6b): exactly `[0x01 pubkey, 0x02 nonce(8),
-/// 0x06 KEM(1120·n), 0x07 leaf(64·n)]` in that order, the PQC pair absent when
+/// 0x0C commitment(32), 0x06 KEM(1120·n), 0x07 leaf(64·n)]` in that order, the
+/// PQC pair absent when
 /// `n == 0`. A coinbase fixture carrying only the I19 pair fails the wire
 /// validator on the grammar before it reaches the property under test.
 pub(crate) fn conforming_coinbase_extra(n_outputs: usize) -> Vec<u8> {
     use shekyl_wire::tx_extra::{
-        self, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES, TX_EXTRA_PUBKEY_LEN,
+        self, COINBASE_NONCE_BYTES, CONFORMING_DRAW_COMMITMENT, HYBRID_KEM_CT_BYTES,
+        TX_EXTRA_PUBKEY_LEN,
     };
     let kem = vec![0x6au8; HYBRID_KEM_CT_BYTES * n_outputs];
     let leaf = if n_outputs == 0 {
@@ -1132,6 +1206,7 @@ pub(crate) fn conforming_coinbase_extra(n_outputs: usize) -> Vec<u8> {
     tx_extra::build_coinbase_extra(
         [0x11; TX_EXTRA_PUBKEY_LEN],
         &[0; COINBASE_NONCE_BYTES],
+        CONFORMING_DRAW_COMMITMENT,
         n_outputs,
         &kem,
         &leaf,
@@ -1297,19 +1372,18 @@ mod tests {
         // FeeRate exposes no public per_weight accessor; verify
         // shape by round-tripping through equality against the
         // documented default constants.
-        assert_eq!(fees.economy, FeeRate::new(5, 1).unwrap());
-        assert_eq!(fees.standard, FeeRate::new(10, 1).unwrap());
-        assert_eq!(fees.priority, FeeRate::new(40, 1).unwrap());
+        assert_eq!(fees.economy, FeeRate::new(5).unwrap());
+        assert_eq!(fees.standard, FeeRate::new(10).unwrap());
+        assert_eq!(fees.priority, FeeRate::new(40).unwrap());
     }
 
     #[tokio::test]
     async fn fee_estimates_override_persists_across_calls() {
         let daemon = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let custom = FeeEstimates {
-            economy: FeeRate::new(7, 1).unwrap(),
-            standard: FeeRate::new(70, 1).unwrap(),
-            priority: FeeRate::new(700, 1).unwrap(),
-            quantization_mask: 1,
+            economy: FeeRate::new(7).unwrap(),
+            standard: FeeRate::new(70).unwrap(),
+            priority: FeeRate::new(700).unwrap(),
         };
         daemon.set_fee_estimates(custom);
         for _ in 0..3 {

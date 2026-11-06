@@ -59,8 +59,8 @@
 //! and the instrument is built to be able to return it**; an instrument that
 //! could only confirm the need for randomness would be assuming its answer.
 
-use crate::rng::RelayRng;
 use crate::schedule::{Millis, NoiseCadence};
+use shekyl_draw_rng::RelayRng;
 
 /// Which inter-emission law a stream draws from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -453,7 +453,7 @@ pub fn simulate_cadence_linkage<R: RelayRng + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rng::SplitMix64;
+    use shekyl_draw_rng::SplitMix64;
 
     /// The assignment really is optimal — checked against brute force.
     ///

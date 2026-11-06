@@ -1,8 +1,12 @@
 # LMDB Schema Reference
 
+**Status: records-was (2026-10-28).** The C++ LMDB store was deleted in the
+DRS-X flip. This file records the schema that store shipped. The Rust
+store's tables are `rust/shekyl-chain-store/src/schema.rs`.
+
 **Last updated:** August 2026
-**DB version:** 15 (schema v15: two tables leave the X-macro — `txs_prunable_tip` and `output_metadata` — with the C++ tx-data prune (2026-09-22); a v14 datadir holds two named DBs a v15 binary never opens and is refused at open; v14: `PL-D3` — the curve-tree leaf's 4th scalar is `CM.x`, the x-coordinate of the output's `0x07` leaf-commitment point, and the `0x07` entry is 64 B per output (`CM ‖ record`); a v13 datadir's leaves and roots were computed from the retired leaf hash and the datadir is refused (`FCMP_SPEND_LINKABILITY.md` §6.2); v13: the `archival_bond` value v6 → v7 gains the 32-byte serving `endpoint` committed at JoinMarket (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`); a v12 datadir's records fail the value's version pin and the datadir is refused; v12: the prune-watermark receipt — `properties` key `archival_prune_watermark_epoch`, the pop floor's source (C2-R1b-Q1c); a v11 datadir pruned without receipts and is refused; v11: `prune_tx_data` retention corrected — the depth pass keeps `txs_prunable_hash` and `txs_pqc_auths`, the pruned-txid operands, when it drops the prunable body; a v10-pruned datadir may lack them and is refused; v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
-**Source:** `src/blockchain_db/lmdb/db_lmdb.cpp`, `src/blockchain_db/lmdb/db_lmdb.h`, `src/blockchain_db/blockchain_db.h`, `src/blockchain_db/shekyl_types.h`
+**DB version:** 16 (schema v16: content, not layout — the transaction id binds the archival length (`SHT-Q2`), so a v15 datadir indexes its transactions under ids no current node computes and is refused at open; v15: two tables leave the X-macro — `txs_prunable_tip` and `output_metadata` — with the C++ tx-data prune (2026-09-22); a v14 datadir holds two named DBs a v15 binary never opens and is refused at open; v14: `PL-D3` — the curve-tree leaf's 4th scalar is `CM.x`, the x-coordinate of the output's `0x07` leaf-commitment point, and the `0x07` entry is 64 B per output (`CM ‖ record`); a v13 datadir's leaves and roots were computed from the retired leaf hash and the datadir is refused (`FCMP_SPEND_LINKABILITY.md` §6.2); v13: the `archival_bond` value v6 → v7 gains the 32-byte serving `endpoint` committed at JoinMarket (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`); a v12 datadir's records fail the value's version pin and the datadir is refused; v12: the prune-watermark receipt — `properties` key `archival_prune_watermark_epoch`, the pop floor's source (C2-R1b-Q1c); a v11 datadir pruned without receipts and is refused; v11: `prune_tx_data` retention corrected — the depth pass keeps `txs_prunable_hash` and `txs_pqc_auths`, the pruned-txid operands, when it drops the prunable body; a v10-pruned datadir may lack them and is refused; v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
+**Source:** the deleted `src/blockchain_db/` tree (`db_lmdb.cpp`, `db_lmdb.h`, `blockchain_db.h`, `shekyl_types.h`), as of the DRS-X flip.
 
 ## Conventions
 
@@ -149,7 +153,7 @@ Offset  Size  Field
 32       8    uint64_t bi_diff_lo (cumulative difficulty, low 64 bits)
 40       8    uint64_t bi_diff_hi (cumulative difficulty, high 64 bits)
 48      32    crypto::hash bi_hash
-80       8    uint64_t bi_cum_rct (cumulative RCT output count)
+80       8    uint64_t bi_cum_rct (this block's RCT output count; the cumulative add was deleted 2026-10-05)
 88       8    uint64_t bi_long_term_block_weight
 ```
 
@@ -206,7 +210,7 @@ PQC authentication data for v3+ transactions (second unprunable segment, between
 | Value | Byte slice `[pqc_auths_offset, unprunable_size)` from the tx blob. Variable length. Only present for non-coinbase transactions with `tx.version >= 3`. |
 | Writers | `add_transaction_data` (conditional), `remove_transaction_data`. Never a discard — this is the second unprunable segment. |
 | Readers | `get_pruned_tx_blob` (concatenates with txs_pruned) |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC (DB v6, `migrate_5_6`) |
+| Introduced | DB v6 (`migrate_5_6`), FCMP++ from genesis |
 
 ### `txs_prunable`
 
@@ -416,8 +420,9 @@ the P0b audit, 2026-09-05.)
 ### `archival_serve_credit`
 
 Affirmative serve-credit pass per `(P_id, shard_id, settlement_epoch, block)`
-— **per CHALLENGE, not per pair-epoch** (`PC-D4`). A pair-epoch holds up to
-`CHALLENGES_PER_PAIR_PER_EPOCH` rows, one per block that challenged it, and
+— **per CHALLENGE, not per pair-epoch** (`PC-D4`). A pair-epoch holds one
+row per block that challenged it (the count rule issues a pair
+`COUNTED_DRAWS`, 3, at its target), and
 consensus counts passes by **enumerating** them: no field anywhere carries a
 tally (`PC-D1`/`PC-D5`).
 
@@ -445,9 +450,9 @@ that are per-pair-epoch by design (`archival_slash_applied`,
 Three-valued settlement verdict per `(P_id, shard_id, settlement_epoch)`
 (`SO-D1`/`SO-D2`). **One row per pair with `issued >= 1`** — a pair the urn
 never reached is recorded by its ABSENCE, which is what makes *absent ⇒ never
-issued* a theorem about the writer rather than an inference. `issued = 0` is
-refused at the boundary (`SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_ZERO`), on both
-the write and the read.
+issued* a theorem about the writer rather than an inference. `issued = 0` has
+no row: `SettlementRow::settle` refuses it (`SettlementRowError::NothingIssued`),
+and `SettlementRow::from_bytes` refuses it on the read.
 
 | Property | Value |
 |---|---|
@@ -455,20 +460,23 @@ the write and the read.
 | Flags | `MDB_CREATE` (composite key; no `INTEGERKEY`) |
 | Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes) |
 | Value | `outcome \|\| passes \|\| issued` (3 bytes) — `0x01` Served, `0x02` Missed, `0x03` NonObservation; `0x00` is deliberately not a live tag |
-| Writers | `set_archival_settlement` — **not wired to production yet** (`SO-D8`); when it lands it runs inside the slash scheduler's per-epoch pass (`SO-D7`), not at a separate epoch-close event |
-| Readers | `get_archival_settlement` |
+| Writers | **None in this store.** `set_archival_settlement` was deleted (`SO-D10e`); settlement is the Rust validator's (`SO-D10`, `ARCHIVAL_SETTLEMENT_WRITER.md` §14), whose writer runs inside the slash scheduler's per-epoch pass (`SO-D7`), not at a separate epoch-close event. It is wired: the Rust store's connect writes the pass's rows. No block path issues a draw yet, so off Fakechain there is nothing for it to settle |
+| Readers | **None in this store.** `get_archival_settlement` was deleted (`SO-D10e`); the Rust store's read is `ChainView::settlement_row` |
 | Revert | `delete_archival_settlement_for_epoch` (reorg crossing a fold — the row is a memoised derivation over final chain state, so it is DELETED and recomputed rather than journalled) |
 | Prune | `delete_archival_settlement_before_epoch`, from `prune_archival_epochs_before` |
 | Encoder | key `shekyl::db::ArchivalPairEpochKey`; **value encoded in Rust only** |
 | Introduced | HF1 (Shekyl genesis) |
 
-**C++ never composes the value.** Rust folds `(passes, issued)` and emits the
-three bytes (`shekyl_archival_settlement_row`), so a row whose outcome
-contradicts its counts is not a state this side can express. The FFI writes
-nothing on any refusal, so a caller that ignored the return code still cannot
-store a fabricated settlement. The 3-byte length is a fixed-size FFI contract
-agreed at compile time on both sides (`SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES`,
-rule 40).
+**C++ never composes the value, and no longer writes or reads it.** The row
+FFI and its length macro were deleted with the C++ writer and reader
+(`SO-D10e`); the revert and the prune run over a table nothing writes, until
+`DEL-008`. The row is `shekyl_types::archival::SettlementRow`
+(`rust/shekyl-types/src/archival/settlement.rs`), and `SettlementRow::settle`
+is the only way to produce its three bytes, so a row whose outcome contradicts
+its counts is not a state that can be expressed. `passes` is counted among
+three draws selected by a beacon
+(`shekyl_archival_retention::settlement_select::settle_pair`): NonObservation
+below 3 issued, Served at 2 passes, `issued` saturating at 255.
 
 **Keyed by `ArchivalPairEpochKey`, not `ArchivalServeCreditKey`.** `SO-D2`
 ruled the two byte-identical so one key could probe both tables; `PC-D4` then
@@ -496,7 +504,7 @@ a Release leaves the row, endpoint included).
 | Flags | `MDB_CREATE` |
 | Key | `P_id[32]` (`P_canonical_id`) |
 | Value | versioned `ArchivalBondValue` blob (v7 at genesis: hybrid pubkey, **`bond_spend_pk`** (GF-1 debit authorizer, gate-4 §4.1), **`endpoint`** (32-byte serving endpoint, `EU-D3`), `E_join`, `bonded_total_atomic`, `holdings_kind`, shard set or CompleteTree sentinel with the index-parallel per-shard add-epochs (v6), bad intervals, claimed settlement epochs, `first_paying_emission_height`; every earlier version is rejected at decode) |
-| Writers | `put_archival_bond_record` (JoinMarket connect), `put_archival_bond_value` (every load-modify-store writer: slash apply/revert, Release, HoldingsUpdate, Reinstate), `remove_archival_bond_record` (JoinMarket pop) |
+| Writers | `put_archival_bond_record` (JoinMarket connect), `put_archival_bond_value` (every load-modify-store writer: slash apply/revert, Release, Reinstate — `HoldingsUpdate`'s two appliers throw, kind REJECTED 2026-09-20), `remove_archival_bond_record` (JoinMarket pop) |
 | Readers | `get_archival_bond_value`, `get_archival_bond_hybrid_pubkey`, `archival_bond_join_epoch`, `archival_bond_good_through`, `archival_bond_holds_shard` |
 | Encoder | `shekyl::db::ArchivalBondValue` in `blockchain_db/shekyl_types.h` |
 | Introduced | HF1 (gate-4 substrate; gate-2 §5.3 steps 2–3 reads) |
@@ -506,7 +514,10 @@ the claimed-epoch set and `first_paying_emission_height`; v5 (`ARCHIVAL_BOND_GAT
 §4.1, 2026-06-16) inserted `bond_spend_pk` — committed at JoinMarket, immutable,
 and bound into the bond-post sig-preimage (gate-4 §3.4.1), so the persisted
 record must carry it; v6 (gate-4 §4.4, HoldingsUpdate) added the per-shard
-add-epochs under the holdings count; v7 (`ARCHIVAL_ENDPOINT_UPDATE.md`
+add-epochs under the holdings count *(carried by the layout; since the kind
+was REJECTED 2026-09-20 every shard's add-epoch equals the join epoch, and
+the column is enumerated for deletion at `PRINCIPAL_STAKE_LIFECYCLE.md`
+§5.3.2 row 7)*; v7 (`ARCHIVAL_ENDPOINT_UPDATE.md`
 `EU-D3`, 2026-09-12) inserted the serving `endpoint` after `bond_spend_pk`.
 Every bump is pre-genesis: no migration, reset the data-dir; `decode` rejects
 any other version byte.
@@ -695,7 +706,8 @@ Per-block revert journal for slash connect / `pop_block` (gate-2 §8).
 ### The four pre-image journals
 
 `archival_emission_claim_log`, `archival_bond_unbond_log`,
-`archival_bond_holdings_update_log`, and `archival_bond_reinstate_log` share
+`archival_bond_holdings_update_log` (empty by construction since the kind
+was REJECTED 2026-09-20 — see its section), and `archival_bond_reinstate_log` share
 the slash log's row layout and the height-keyed journal scaffold in
 `db_lmdb.cpp` (`archival_journal_{next_seq,put,read,delete}`): key
 `BE(block_height) ‖ BE(seq)` (12 bytes; each key type is an alias of
@@ -747,16 +759,25 @@ fields, so the two reverts compose in any order).
 | Writers | `apply_archival_unbond` (append), the revert's clear |
 | Readers | `revert_archival_unbonds_at_height` (reverse-order restore through the Rust pop fold) |
 
-### `archival_bond_holdings_update_log`
+### `archival_bond_holdings_update_log` — kind REJECTED 2026-09-20; table empty by construction, deletion owed
 
-Per-block journal for the HoldingsUpdate connect's record pre-image
-(`ARCHIVAL_BOND_GATE4.md` §4.4, the add/drop grace-tail path). A
-HoldingsUpdate stays `Bonded` (no Exited transition, no clean
-interval-close), so it cannot share the Unbond journal or pop path; its
-connect mutates a strict subset of Unbond's fields, and the pre-image here
-is smaller than the Unbond value by exactly the two never-mutated fields
-(`holdings_kind`, `bad_intervals`) — an honest minimal journal, not the
-Unbond superset reused.
+**Status (2026-10-04):** `HoldingsUpdate` is REJECTED under the immutable-bond
+ruling (`PRINCIPAL_STAKE_LIFECYCLE.md` §5.3; `BondPostKind::from_u8(3)` is
+`InvalidPostKind`). The table is still opened by the X-macro, but no row can
+reach it: both appliers throw (`db_lmdb.cpp:6275`), the journal put helper
+was deleted with the kind (DRS-E4 `ARW-14`), and the revert is a named no-op
+kept for pop order. Removing the table is a layout bump on both stores and
+rides the next DRS layout increment — the row is in `FOLLOWUPS.md`
+(*"Catalogue rows for a REJECTED post kind and a renamed one"*, owner
+`DAEMON_REDB_STORE.md` §7). The description below is the table **as
+designed**, kept so the layout a v13+ datadir still names is readable.
+
+*As designed (gate-4 §4.4, 2026-06):* per-block journal for the HoldingsUpdate
+connect's record pre-image (the add/drop grace-tail path). A HoldingsUpdate
+stayed `Bonded` (no Exited transition, no clean interval-close), so it could
+not share the Unbond journal or pop path; its connect mutated a strict subset
+of Unbond's fields, and the pre-image here was smaller than the Unbond value
+by exactly the two never-mutated fields (`holdings_kind`, `bad_intervals`).
 
 | Property | Value |
 |---|---|
@@ -764,8 +785,8 @@ Unbond superset reused.
 | Flags | `MDB_CREATE` |
 | Key | `BE(block_height) \|\| BE(seq)` (12 bytes) |
 | Value | `ArchivalBondHoldingsUpdateRevertValue` v1, variable: `version[1] \|\| p_id[32] \|\| BE(pre_bonded_total)[8] \|\| BE32(shard_count) \|\| BE(pre_shard_ids[]) \|\| BE(pre_shard_add_epochs[])` (45 + 16·shards bytes; zero `pre_bonded_total` refused both ways) |
-| Writers | `apply_archival_holdings_update_add` / `_drop` via the single-sourced `apply_archival_bond_record_update` scaffold and `put_archival_holdings_update_journal`, the revert's clear |
-| Readers | `revert_archival_holdings_updates_at_height` |
+| Writers | **none** — `apply_archival_holdings_update_add` / `_drop` throw (`db_lmdb.cpp:6275`); the `put_archival_holdings_update_journal` helper and the `apply_archival_bond_record_update` scaffold they wrote through are deleted |
+| Readers | `revert_archival_holdings_updates_at_height` — a named no-op (`db_lmdb.cpp:6289`), kept so the pop order slash → this slot → reinstate stays explicit |
 
 ### `archival_bond_reinstate_log`
 
@@ -846,7 +867,7 @@ Full-chain membership proof tree leaf nodes.
 | Value | 128 bytes — 4 × 32-byte curve scalars forming the leaf tuple |
 | Writers | `grow_curve_tree`, `trim_curve_tree` |
 | Readers | `get_curve_tree_leaf_by_tree_position`, `get_curve_tree_leaf_by_output_index` (double lookup via `output_to_leaf`), leaf iteration for proof generation |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+| Introduced | FCMP++ from genesis |
 
 ### `curve_tree_layers`
 
@@ -860,7 +881,7 @@ Internal hash nodes of the curve tree, organized by layer and chunk.
 | Value | 32 bytes — layer chunk hash |
 | Writers | `grow_curve_tree`, `trim_curve_tree`, `prune_curve_tree_intermediate_layers` |
 | Readers | `get_curve_tree_layer_chunk`, layer iteration |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+| Introduced | FCMP++ from genesis |
 
 ### `curve_tree_meta`
 
@@ -882,7 +903,7 @@ Small key-value store for tree state metadata.
 |---|---|
 | Writers | `grow_curve_tree`, `trim_curve_tree` |
 | Readers | `get_curve_tree_root`, `get_curve_tree_leaf_count`, `get_curve_tree_depth` |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+| Introduced | FCMP++ from genesis |
 
 ### `curve_tree_checkpoints`
 
@@ -906,7 +927,7 @@ Offset  Size  Field
 |---|---|
 | Writers | `save_curve_tree_checkpoint` (every `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` blocks) |
 | Readers | `get_curve_tree_checkpoint` (for rollback), `prune_curve_tree_intermediate_layers` |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+| Introduced | FCMP++ from genesis |
 
 ### `curve_tree_roots`
 
@@ -916,11 +937,11 @@ Per-height curve-tree root hash for fast lookup without deserializing checkpoint
 |---|---|
 | LMDB name | `"curve_tree_roots"` |
 | Flags | `MDB_INTEGERKEY` |
-| Key | `uint64_t` block height (8 bytes) — key *h* holds the tree state **at** height *h*: block *h−1*'s connect writes it as `prev_height + 1` (`blockchain_db.cpp:664`), so it is the anchor CEN-I12 reads for `ref_height = h` and the root block *h*'s header must carry (CEN-B5) |
+| Key | `uint64_t` block height (8 bytes) — key *h* holds the tree state **at** height *h*: block *h−1*'s connect writes it as `prev_height + 1` (`blockchain_db.cpp:612`), so it is the anchor CEN-I12 reads for `ref_height = h` and the root block *h*'s header must carry (CEN-B5) |
 | Value | 32-byte root hash |
-| Writers | `store_curve_tree_root_at_height` (block connect, `src/blockchain_db/blockchain_db.cpp:663`–`:664`) — **on every connect**, whether or not the drain grew the tree: the call is inside the `blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` gate (`:493`, always true) and *outside* the `if (new_output_count > 0)` block that closes at `:650`. The table is therefore **dense from key 1**; **key 0 is never written** (no connect produces it). Deleted on `pop_block` |
-| Readers | `get_curve_tree_root_at_height` — returns an **all-zero** array silently on a missing key (`src/blockchain_db/lmdb/db_lmdb.cpp:9064`–`:9080`, `MDB_NOTFOUND`), which is reachable only for key 0 in a healthy file (`ref_height = 0` is age-selectable while `chain_height ≤ 100`); the zeros decode to the identity point, so a proof anchored at genesis is verified against *O* — consequence-free (the empty tree has no members; forging against *O* is a DL break). Walked and recorded on CEN-I12's CSR row 2026-09-15 (`docs/design/CONSENSUS_RULE_CENSUS.md` §7 #21; S-CHAIN-W SCW-19); the verdict stands |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+| Writers | `store_curve_tree_root_at_height` (block connect, `src/blockchain_db/blockchain_db.cpp`) — **on every connect**, whether or not the drain grew the tree: the call sits in the curve-tree scope that opens at `:434` and *outside* the `if (new_output_count > 0)` block that closes at `:598`. The version gate that used to wrap the scope was removed 2026-10-05; the write was already unconditional. The table is therefore **dense from key 1**; **key 0 is never written** (no connect produces it). Deleted on `pop_block` |
+| Readers | `get_curve_tree_root_at_height` — returns an **all-zero** array silently on a missing key (`src/blockchain_db/lmdb/db_lmdb.cpp`, `MDB_NOTFOUND`), which is reachable only for key 0 in a healthy file (`ref_height = 0` is age-selectable while `chain_height ≤ 100`); the zeros decode to the identity point, so a proof anchored at genesis is verified against *O* — consequence-free (the empty tree has no members; forging against *O* is a DL break). Walked and recorded on CEN-I12's CSR row 2026-09-15 (`docs/design/CONSENSUS_RULE_CENSUS.md` §7 #21; S-CHAIN-W SCW-19); the verdict stands |
+| Introduced | FCMP++ from genesis |
 
 ### `pending_tree_leaves`
 
@@ -935,7 +956,7 @@ Outputs that have been created but not yet matured into the curve tree. Composit
 | Writers | `add_pending_tree_leaf` (block connect), removed by `drain_pending_tree_leaves` |
 | Readers | `drain_pending_tree_leaves` (cursor scan up to current height) |
 | Notes | LMDB's default byte-compare yields canonical `(maturity, output_index)` order. No `DUPSORT` anywhere in curve-tree state — this was changed in DB v7 to fix a consensus-critical bug where `DUPSORT` on leaf bytes caused non-deterministic drain order for outputs sharing the same maturity height. |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC (schema v7) |
+| Introduced | schema v7, FCMP++ from genesis |
 
 ### `pending_tree_drain`
 
@@ -959,7 +980,7 @@ Offset  Size  Field
 | Writers | `drain_pending_tree_leaves` (records what was drained) |
 | Readers | `BlockchainDB::pop_block` (restores entries on rollback) |
 | Notes | `pop_block` range-scans by `DrainKey::prefix(block_height)` to find all entries for the popped block, then restores each to `pending_tree_leaves` and removes the output→leaf mapping. |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC (schema v7) |
+| Introduced | schema v7, FCMP++ from genesis |
 
 ### `block_pending_additions`
 
@@ -1015,22 +1036,26 @@ Bidirectional mapping: tree position → global output index. Inverse of `output
 
 ### `hf_versions`
 
-Per-height hard fork version.
+Declared and opened; nothing writes or reads it. It held the per-height
+hard-fork version until the hard-fork mechanism was deleted (2026-10-08).
+The declaration stays until the redb cutover: the redb store's schema and
+digest domain are defined against this table list, and its own
+`hf_versions` (the rule set in force per height) shares the name
+(`FOLLOWUPS.md`).
 
 | Property | Value |
 |---|---|
 | LMDB name | `"hf_versions"` |
 | Flags | `MDB_INTEGERKEY` |
 | Key | `uint64_t` height (8 bytes) |
-| Value | `uint8_t` hard fork version (1 byte) |
-| Writers | `set_hard_fork_version` (via `TXN_BLOCK_PREFIX`, joins active batch) |
-| Readers | `get_hard_fork_version` |
-| Note | Entries are not removed on block pop (known issue; see `LMDB_WRITE_ATOMICITY_AUDIT.md`). Overwritten on re-add. |
+| Value | `uint8_t` (1 byte) in databases written before 2026-10-08 |
+| Writers | none |
+| Readers | none |
 | Introduced | Genesis (DB v0) |
 
 ### `hf_starting_heights`
 
-Scratch table used during initialization. Dropped after use.
+Never used. Dropped at every writable open; kept declared for the same reason as `hf_versions`.
 
 | Property | Value |
 |---|---|
@@ -1071,7 +1096,9 @@ Offset  Size  Field
                dandelionpp_stem:1, observed_circulating:1 (LIVE since
                2026-08-27; was bf_padding, reserved; before that
                is_forwarding),
-               fcmp_verified:1, origin_zone:2
+               fcmp_verified:1, reserved:2 (was origin_zone; unused
+               since 2026-10-02 so the record stays 192 bytes and
+               fcmp_verification_hash does not move)
 116     32    crypto::hash fcmp_verification_hash
 148     44    uint8_t padding[44]
 ```
@@ -1229,7 +1256,8 @@ v9.
 DB v11: retention semantics, not layout. `prune_tx_data`'s depth pass must
 **keep** `txs_prunable_hash` and `txs_pqc_auths` when it drops the prunable
 body: both are operands of the pruned v3 txid
-(`get_pruned_transaction_hash`), and neither has a hash table of its own.
+(then `get_pruned_transaction_hash`; since `SHT-Q2` the one Rust mixer,
+`shekyl-wire` `transaction/txid.rs`), and neither has a hash table of its own.
 v10 code deleted them, so a v10 datadir that ever ran `--prune-blockchain`
 holds transactions the v11 reader cannot name — the RPC facts export
 answers `INCONSISTENT` for each of them, forever, with no repair path (the
@@ -1274,6 +1302,15 @@ The `tx_prune_next_block` / `last_pruned_tx_data_height` properties are
 retired with the prune. The discard that replaces all of it is S-PRUNE,
 Rust, on the redb store (`DRS_E1_SPRUNE.md`; redb `SCHEMA_VERSION` 9 → 10 in
 the same PR). Pre-genesis: delete and resync.
+
+DB v16: the transaction id (`SHT-Q2`, 2026-10-01) — content, not layout. A
+non-coinbase txid mixes the transaction's archival length
+(`GENESIS_TX_WIRE_FORMAT.md` §11), so every `tx_indices` key and every block's
+transaction-hash list in a v15 datadir names its transactions by ids no
+current node computes: a lookup by the current id misses, and a body served
+under the stored id is refused by the wallet that recomputes it. No table's
+bytes change; only the version pin makes the stale index loud, as v14's did
+for the stale tree. Pre-genesis: delete and resync.
 
 `BlockchainLMDB::migrate` refuses any pre-`VERSION` database with a message
 that tracks the constant, so each bump extends the refusal automatically.

@@ -653,9 +653,9 @@ Two genuinely different shapes were considered:
 Concrete shapes:
 
 ```text
-shekyl-wallet-rpc --uds /run/user/1000/shekyl.sock my.wallet  # daemon
+shekyl-wallet-rpc --rpc-bind uds:///run/user/1000/shekyl.sock  # daemon
 shekyl-cli --rpc-url uds:///run/user/1000/shekyl.sock balance # client
-shekyl-cli transfer ...                                       # one-shot: spawns in-process rpc
+shekyl-cli send ...                                           # one-shot: spawns in-process rpc
 ```
 
 `shekyl-cli` interactive REPL reuses the in-process rpc for the lifetime of the REPL session.

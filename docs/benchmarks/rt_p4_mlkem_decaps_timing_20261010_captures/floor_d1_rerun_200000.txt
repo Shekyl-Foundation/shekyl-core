@@ -1,0 +1,11 @@
+start 2026-10-10T20:23:05Z temp 55504 freq 1800000
+RT-P4 ML-KEM-768 decapsulation timing (fips203)
+arch=aarch64 os=linux samples_per_comparison=200000 calibration=10000 crops=100
+pass: |t| < 4.5 on every real comparison; control: |t| > 10
+comparison=fixed-vs-valid max_abs_t=4.08 median_ns=265445 n0=100042 n1=99958 verdict=no-evidence
+comparison=fixed-vs-invalid max_abs_t=1.74 median_ns=265462 n0=99838 n1=100162 verdict=no-evidence
+comparison=fixed-vs-bitflip max_abs_t=5.38 median_ns=265443 n0=100034 n1=99966 verdict=INCONCLUSIVE
+comparison=valid-vs-invalid max_abs_t=5.30 median_ns=265518 n0=99926 n1=100074 verdict=INCONCLUSIVE
+control=planted-leak fraction=0.005 planted_ns=1328 max_abs_t=494.78 verdict=detected
+result=INCONCLUSIVE worst_real_abs_t=5.38 control_abs_t=494.78
+rc=1 end 2026-10-10T20:31:33Z

@@ -19,6 +19,7 @@ use crate::proofs;
 use crate::queries;
 use crate::receiving;
 use crate::send;
+use crate::shard_view;
 use crate::staking;
 use crate::staking_actions;
 use crate::sync;
@@ -79,6 +80,10 @@ pub async fn dispatch(
         "drain" => staking_actions::drain(tenants, params).await,
         "unstake" => staking_actions::unstake(tenants, params).await,
         "collect_unstaked" => staking_actions::collect_unstaked(tenants, params).await,
+        // WR-Q2: clear the active persona's last staking ending of a kind.
+        "acknowledge_staking_outcome" => {
+            staking_actions::acknowledge_staking_outcome(tenants, params).await
+        }
         // WI-RPC-3 proofs. The `get_*` pair requires an open wallet; the
         // `check_*` pair is WALLET-LESS by contract (a verifier checks
         // someone else's proof against the chain).
@@ -91,6 +96,9 @@ pub async fn dispatch(
         // all its inputs are public and caller-supplied.
         "sign_message" => message_signing::sign_message(tenants, params).await,
         "verify_message" => message_signing::verify_message(tenants, params).await,
+        // SV-D shard view: forwarded to the open wallet's daemon, which
+        // fetches the shard body from a holder and answers the aggregate.
+        "get_shard_view" => shard_view::get_shard_view(tenants, params).await,
         other => Err(WalletRpcError::MethodNotFound(other.to_owned())),
     }
 }

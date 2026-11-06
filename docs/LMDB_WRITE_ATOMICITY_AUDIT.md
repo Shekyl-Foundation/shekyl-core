@@ -87,7 +87,7 @@ were true of their tree):
 | Staking-Specific Write Paths (accrual, claim pool restore, `txin_stake_claim`) | **Dead** — deleted with the claim-era wire; `txin_stake_claim` and `staker_pool_balance` have zero occurrences in `src/` |
 | `get_relayable_transactions` missing-commit fix (Dandelion++ timestamps) | **Alive, fix intact** — the function stands at `tx_pool.cpp:1130` and `lock.commit()` at `:1224` precedes the `m_next_check` update; stem *selection* moved to Rust (`shekyl-relay-privacy`), the txpool bookkeeping and its transaction discipline stayed C++ |
 | `pop_block_from_blockchain` staker-accrual `db_wtxn_guard` fix | **The claim-era write died; the guard survives, load-bearing for a successor** — `db_wtxn_guard` at `blockchain.cpp:896` now wraps the post-pop **burn-total reversal** (`get_block_burn` → `set_total_burned`), preserving exactly the defensive shape the April fix added; see §3 and DRS-W6 |
-| `hf_versions` not cleaned on pop | **Alive, unchanged — re-verified by the write-site census**: the table's only writers are `set_hard_fork_version` and `drop_hard_fork_info`; no pop-side remove exists among the 135 enumerated sites. Settled 2026-09-08 as **DRS-W15** (see §9) |
+| `hf_versions` not cleaned on pop | **UPDATE 2026-10-08:** the hard-fork mechanism is deleted ([`CXX_VERSION_GATES.md`](design/CXX_VERSION_GATES.md) §5). The table has no writer. Was: **Alive, unchanged — re-verified by the write-site census**: the table's only writers are `set_hard_fork_version` and `drop_hard_fork_info`; no pop-side remove exists among the 135 enumerated sites. Settled 2026-09-08 as **DRS-W15** (see §9) |
 | FCMP++ curve tree (grow/trim/pending) | Covered then; re-audited below — the family has since gained `curve_tree_roots`, both output↔leaf maps, `block_pending_additions`, and the segment-freeze hook |
 | `LockedTXN` nesting + silent-commit-failure notes | Still accurate; restated in §4 with a re-enumerated site census |
 
@@ -146,7 +146,7 @@ Ordering at the pin (the funnel every connected block traverses):
 5. **`m_hardfork->add(blk, prev_height)`** (`blockchain_db.cpp:683`) —
    immediately after the block row and before the accrual. It is a state
    transition, not bookkeeping: `HardFork::add` calls
-   `db.set_hard_fork_version(height, …)` (`hardfork.cpp:141`), which writes
+   `db.set_hard_fork_version(height, …)` (`hardfork.cpp:113`), which writes
    `hf_versions` through `TXN_BLOCK_PREFIX` and so joins this block's
    transaction (§1). A port that loses this step loses the fork-version row
    for the height it belongs to.
@@ -454,7 +454,7 @@ observations belong on the record:
 - **it has no production caller.** The symbol resolves only to the
   interface declaration, the `testdb` stub, and this definition — the same
   unwired shape the census recorded for `set_archival_settlement`
-  (CEN-L8). An unwired writer's atomicity is a claim about code nobody
+  (CEN-L8; that writer was since deleted, `SO-D10e`). An unwired writer's atomicity is a claim about code nobody
   runs, which is worth knowing before the Rust store reproduces it.
 
 **`drop_hard_fork_info`** (`:4675`): intended to delete **both** hard-fork
@@ -505,6 +505,9 @@ slash pass rather than at epoch close). An unwired writer's atomicity is
 a claim about code nobody runs, exactly as with
 `correct_block_cumulative_difficulties` above; both are recorded so the
 Rust store ports a *decision* rather than a dormant path.
+**UPDATE 2026-10-08 (`SO-D10e`):** the decision is taken — `set_archival_settlement`
+is deleted, not ported. The C++ store has no settlement writer; the writer is
+the Rust slash pass's (`SO-D10`, `design/ARCHIVAL_SETTLEMENT_WRITER.md`).
 
 **`Blockchain::regtest_inject_archival_serve_credit`** (`blockchain.cpp:5238`):
 a live RPC-reachable writer — `on_inject_archival_serve_credit`
@@ -574,9 +577,13 @@ path that mutates something else and *does* change the digest is a
 v0-scope leak (the txpool exclusion test guards the leak direction).
 
 Archival journals are a **named exclusion** (`DAEMON_REDB_STORE.md`
-§7.1.1). They are not digest-v0 reads. Do not extract S-ARCH, and do
+§7.1.1). They are not digest-v0 reads. ~~Do not extract S-ARCH, and do
 not implement archival apply in `shekyl-chain-store`, until those
-journals are in the digest or carry a replacement KAT.
+journals are in the digest or carry a replacement KAT.~~ *(Retired
+2026-10-01, DRS-E4 commit 6: the archival state is compared by the
+`0x04` archival snapshot paired with every checkpoint, not by this
+digest — §11's archival-families UPDATE has the per-table disposition.
+v0's read set below is unchanged.)*
 
 | Family | Digest read | Write paths that must move the digest | Notes |
 | --- | --- | --- | --- |
@@ -601,7 +608,7 @@ chain height *after* the block. The tx-connect journals key on the block's
 | `archival_epoch_close_log` revert (+ boundary prune floor) | `removed_block_height` | hook at `prev_height + 1` |
 | `archival_emission_claim_log` revert | `removed_block_height − 1` | tx-connect at block index `N` |
 | `archival_bond_unbond_log` revert | `removed_block_height − 1` | tx-connect at `N` |
-| `archival_bond_holdings_update_log` revert | `removed_block_height − 1` | tx-connect at `N` |
+| `archival_bond_holdings_update_log` revert | `removed_block_height − 1` | tx-connect at `N` — *no writer since 2026-09-20 (kind REJECTED; the revert is a named no-op in this slot, `db_lmdb.cpp:6289`)* |
 | `archival_bond_reinstate_log` revert | `removed_block_height − 1` | tx-connect at `N` |
 | `archival_budget_accrual` remove | `removed_block_height − 1` | funnel step 6 at `prev_height` |
 | attestation witness remove | `removed_block_height` | store at key `prev_height` (`archival_attestation_witness_key` adds the +1) |
@@ -688,12 +695,12 @@ the figure was left as a bound; it is no longer a live deferral.)*
 | DRS-W8 | `correct_block_cumulative_difficulties` (`:3034`) aborts explicitly on its size-mismatch guard but not on its loop throws — and there is no stack owner to unwind them: `block_wtxn_start` heap-allocates into `m_write_txn` (`:4311`) and only stop/abort delete and clear it (`:4344`, `:4361`). A loop throw therefore leaves the LMDB write transaction **live** and the member non-null, so the next `block_wtxn_start()` throws `DB_ERROR_TXN_START` and every subsequent block write fails until the process restarts. It also has **no production caller** (§5c) | wart (no partial commit — nothing commits — but a **poisoned writer**, not merely an open transaction; unwired today) | RECORD-AND-SPECIFY: one unwinding path in the Rust store, and a write handle whose lifetime is owned by the scope that opened it rather than by a raw member pointer |
 | DRS-W9 | The connect-side burn pair (`add_block_burn` + `total_burned` increment, `blockchain.cpp:6425`–`:6437`) runs **after** the try whose catches set `m_batch_success = false`. A throw between the two unwinds to `add_new_block`'s outer catch, which sets only `bvc`, so `cleanup_handle_incoming_blocks` still calls `batch_stop()`: the block, its txs and the `block_burn` row commit **without** the aggregate — a partial commit of one logical unit, and the production entry for a too-LOW `total_burned` that DRS-W7 lacked | wart (**the most severe of this set, and still not S-graded**: no consensus arithmetic reads the scalar and no fund-safety consequence follows, and the window needs an LMDB-level write failure — but it can leave a node whose next slash revert trips the `:6362` FATAL underflow, a local halt, and it falsified a PASS this audit had published) | RECORD-AND-SPECIFY, converging with DRS-W6: the burn bookkeeping is core-layer on **both** connect and pop, so neither side inherits the funnel's failure semantics. In the Rust store both belong **inside** the funnel. **The oracle does not catch this (P0e, 2026-09-11):** `total_burned` lives in `properties` (`set_total_burned` writes `m_properties`), and `properties` is **uncovered** by digest v0 (§11) — the digest reads only `blocks`' row count, `block_info.bi_hash`, `spent_keys` and `curve_tree_meta`'s root. A store that suffered this partial commit is **indistinguishable from a healthy one** under the v0 digest, so nothing here may be read as "a regression check would find it" **CLOSED-AT-PORT 2026-09-15 (S-CHAIN-W, `rust/shekyl-chain-store`):** `connect` writes the burn pair in the block's own batch (phase 8 of `store/connect.rs`); a refused connect lands nothing, so the partial-commit window this row describes does not exist on the Rust engine. |
 | DRS-W10 | `open()`'s older-DB exit **commits before it refuses**: `txn.commit()` runs, then `migrate()` throws (`:1819`-ff), so the table creations and the `hf_starting_heights` drop persist on a store the binary just declined to open (§5b) | wart (no partial transaction and no unsound state — the refusal's remedy is delete-and-resync, so nothing survives to be inconsistent; recorded because the shape does not survive a store that *can* migrate) | RECORD-AND-SPECIFY: in the Rust store, an open that fails leaves the store as it found it — structural changes commit only on the path that succeeds |
-| DRS-W11 | `drop_hard_fork_info` (`:4675`) reuses `m_hf_starting_heights`, a handle every writable `open()` has already **closed** — LMDB's `del=1` deletes the database *and* closes the handle (`lmdb.h:1216`–`:1225`; `mdb.c:10970`–`:10973`). The first `mdb_drop` fails and the function throws before reaching the `hf_versions` drop, so the shipped `blockchain_import --drop-hard-fork` cannot do its job. Spec-derived consequence, not observed here: a closed handle's slot may be reused, so a stale member handle can come to name a different table (§5c) | wart (**loud, not silent** — the tool throws `DB_ERROR` rather than dropping the wrong thing, and it is the only other user of the member; graded on that, not on the aliasing path, which nothing in this tree reaches) | RECORD-AND-SPECIFY: in the Rust store, deleting a table **consumes** its handle, so a stale handle is unrepresentable rather than merely unused. Whether `--drop-hard-fork` should work at all is the census/R4 question, not this pass's |
+| DRS-W11 | **UPDATE 2026-10-08:** the hard-fork mechanism is deleted ([`CXX_VERSION_GATES.md`](design/CXX_VERSION_GATES.md) §5). `drop_hard_fork_info` and `blockchain_import --drop-hard-fork` are gone, so the defect below has no site. Was: `drop_hard_fork_info` (`:4675`) reuses `m_hf_starting_heights`, a handle every writable `open()` has already **closed** — LMDB's `del=1` deletes the database *and* closes the handle (`lmdb.h:1216`–`:1225`; `mdb.c:10970`–`:10973`). The first `mdb_drop` fails and the function throws before reaching the `hf_versions` drop, so the shipped `blockchain_import --drop-hard-fork` cannot do its job. Spec-derived consequence, not observed here: a closed handle's slot may be reused, so a stale member handle can come to name a different table (§5c) | wart (**loud, not silent** — the tool throws `DB_ERROR` rather than dropping the wrong thing, and it is the only other user of the member; graded on that, not on the aliasing path, which nothing in this tree reaches) | RECORD-AND-SPECIFY: in the Rust store, deleting a table **consumes** its handle, so a stale handle is unrepresentable rather than merely unused. Whether `--drop-hard-fork` should work at all is the census/R4 question, not this pass's |
 | — | Dead schema-doc row: `properties` key `staker_pool_balance` + both accessors, zero occurrences in `src/` | doc defect | fixed in this PR (`LMDB_SCHEMA.md` row and the Staking-section pointer) |
 | DRS-W12 | Fifteen archival apply/revert hooks on `BlockchainDB` have empty `{}` bodies, so a subclass that forgets one inherits a silent no-op | wart (latent: production 15/15; exposure is test doubles — evidence below) | RECORD-AND-SPECIFY: no default bodies on consensus hooks in the Rust store. C++ `= 0` patch **withdrawn**, not deferred |
 | DRS-W13 | Curve-tree pop reconstructs `TreePosition` as `leaf_count - drained_count + j` because the drain journal never recorded it | wart (latent, correct today by invariant — evidence below) | RECORD-AND-SPECIFY: journal the assigned position; pop reads it back |
 | DRS-W14 | Unbounded probe loops walk archival journal rows until first miss, so the reader holds the writer's density invariant | wart (no unsound state today — evidence below) | RECORD-AND-SPECIFY: range-scan the key prefix; gap-tolerance is a property of the query |
-| DRS-W15 | `hf_versions` rows above the new tip are not deleted on pop, and **one** site reads them (`hardfork.cpp:300`, the file's only above-tip read) | wart (**regraded 2026-09-09**: the read-back is load-bearing *only for the incremental vote window*, and that window is discarded by two of four pop callers and wrong for the other two. It diverges from the authoritative rebuild on two axes — **contents**, masked by the inert table, and **length**, one entry per pop below `window_size` and observable today. No consensus effect: `threshold` is 0) | RECORD-AND-SPECIFY. Forbidden: DIVERGE-by-delete — **conditional**: the obligation survives into Rust only if R4 keeps an incremental window. Drop it and the clause retires, leaving `hf_versions` deletable on pop **CLOSED-AT-PORT 2026-09-15 (S-CHAIN-W, `rust/shekyl-chain-store`):** structural — `hf_versions[h]` is journaled like every other connect write and the reverse replay deletes it on pop; whether an incremental vote window is rebuilt above the tip is still R4's, but no row survives a pop for it to read. |
+| DRS-W15 | **UPDATE 2026-10-08:** the hard-fork mechanism is deleted ([`CXX_VERSION_GATES.md`](design/CXX_VERSION_GATES.md) §5). Nothing writes `hf_versions`, so there are no rows to leave above a popped tip. **UPDATE 2026-10-06:** no site reads `hf_versions` above the tip; the window that did is deleted. Rows above the new tip are still not deleted on pop. `HardFork::add` wrote the scheduled version on connect | wart (**regraded 2026-09-09**: the read-back is load-bearing *only for the incremental vote window*, and that window is discarded by two of four pop callers and wrong for the other two. It diverges from the authoritative rebuild on two axes — **contents**, masked by the inert table, and **length**, one entry per pop below `window_size` and observable today. No consensus effect: `threshold` is 0) | RECORD-AND-SPECIFY. Forbidden: DIVERGE-by-delete — **conditional**: the obligation survives into Rust only if R4 keeps an incremental window. Drop it and the clause retires, leaving `hf_versions` deletable on pop **CLOSED-AT-PORT 2026-09-15 (S-CHAIN-W, `rust/shekyl-chain-store`):** structural — `hf_versions[h]` is journaled like every other connect write and the reverse replay deletes it on pop; whether an incremental vote window is rebuilt above the tip is still R4's, but no row survives a pop for it to read. |
 | DRS-W16 | `remove_block` deletes from `m_cur_blocks` **without positioning it** (`db_lmdb.cpp:1053`), while positioning its two sibling cursors explicitly in the same function. The `mdb_cursor_get(…, MDB_SET)` that positioned it was **removed** by inherited commit `22c0fae47b`, whose subject ("db: store cumulative rct output distribution in the db for speed") is unrelated to block removal. It is correct today only because its **sole** caller reads the top block through the **same** write-cursor member one call earlier (`blockchain_db.cpp:743`), a coupling `remove_block` neither states nor can check | wart (**latent, not reachable in this tree** — one caller, no interleaved `blocks` read. A `blocks` read inserted in that window, or a second caller, makes the delete remove whatever row the cursor last landed on, and `mdb_cursor_del` at a valid-but-wrong position **succeeds**: a torn logical unit, not a crash, since `block_info` and `block_heights` are positioned explicitly) | RECORD-AND-SPECIFY: in the Rust store a delete names its key, so there is no ambient cursor position for a future edit to strand. Restoring the dropped `MDB_SET` is the cheap C++ guard and is **not** taken here |
 | DRS-W17 | `BlockchainLMDB::batch_start` returns `bool`, and two core callers **spin on `false`**: `blockchain.cpp:6553` `while (!(stop_batch = m_db->batch_start(blocks_entry.size(), bytes)))` and `:6743` `while (!m_db->batch_start(1, block_byte_estimate))`; two more (`:624`, `:6314`) call it once. The retry protocol is never exercised in practice because writers are serialized above the store by `m_blockchain_lock` (`CRITICAL_REGION_LOCAL1`, `blockchain.cpp:277`); LMDB's own writer mutex sits below and is never reached by a second thread | wart (**port-boundary divergence, not a C++ defect**: `shekyl-chain-store` refuses a second live batch with a typed `WriteInProgress` that means *contract violated, do not retry* — a concurrency property no state diff can see, the same blind spot as A4's durability flags) | DIVERGE-INTENTIONALLY at the port: the two spin loops must **not** be transliterated to `while begin_batch().is_err()`; serialization stays owned by the core layer, named here so every caller inherits one backoff policy rather than one per caller. No digest exclusion applies — the digest never saw the property — so the replacement KAT is a concurrency test — the **refusal half is delivered** (`store_tests.rs` `a_second_batch_from_another_thread_is_refused_not_queued`: a second thread gets `WriteInProgress` back while the holder is alive, not parked behind it); the **callers' half** — that the two spin loops are ported as a serialized wait above the store, never as a retry on the typed error — is owed with the S-TXN port **CLOSED-AT-PORT 2026-09-15 (S-CHAIN-W, `rust/shekyl-chain-store`):** as specified — `ChainStore::write` refuses a second live batch with `StoreCannot::WriteInProgress`; no spin loop exists to transliterate. |
 
@@ -738,7 +745,7 @@ record and is not restated to cover it.
 **Fifteen** archival apply/revert hooks — fourteen plus
 `process_archival_segment_freezes_at_height` — are declared on `BlockchainDB`
 and defined out-of-line with empty `{}` bodies
-(`src/blockchain_db/blockchain_db.cpp:1725`–`:1810`), so a subclass that
+(`src/blockchain_db/blockchain_db.cpp`), so a subclass that
 forgets one inherits a silent no-op. The contrast is deliberate and one file
 away: `get_archival_last_slash_epoch` (`:1799`) returns `UINT64_MAX` with a
 comment saying the sentinel "fails the release verify closed rather than
@@ -747,13 +754,13 @@ silent-success for fifteen mutators.
 
 `BlockchainLMDB` overrides **15/15**, so no production hook is a no-op today.
 The exposure is the test doubles, and it is **latent** —
-measured at `14aa42074`: `BaseTestDB` (`src/blockchain_db/testdb.h:44`)
+measured at `14aa42074`: `BaseTestDB` (`src/blockchain_db/testdb.h`)
 overrides **0 of 15**, so every double built on it inherits fifteen silent
 no-ops. Of the two that exercise archival paths,
 `ArchivalBondPostIntegrationDB`
-(`tests/unit_tests/archival_bond_post_integration.cpp:100`) overrides
+(`tests/unit_tests/archival_bond_post_integration.cpp`) overrides
 **none**, and `EmissionConnectDB`
-(`tests/unit_tests/archival_emission_connect.cpp:84`) overrides **exactly
+(`tests/unit_tests/archival_emission_connect.cpp`) overrides **exactly
 one** — `apply_archival_emission_claim`, the hook it means to observe — and
 inherits the other fourteen.
 
@@ -784,11 +791,11 @@ rather than by the patch. Rust: no default methods on consensus hooks —
 
 The curve-tree pop reconstructs each drained leaf's `TreePosition`
 arithmetically — `TreePosition tree_pos{leaf_count - drained_count + j}`
-(`src/blockchain_db/blockchain_db.cpp:887`) — because the drain journal never
-recorded it: `drain_entry_t` (`src/blockchain_db/blockchain_db.h:2512`)
+(`src/blockchain_db/blockchain_db.cpp`) — because the drain journal never
+recorded it: `drain_entry_t` (`src/blockchain_db/blockchain_db.h`)
 carries `maturity`, `output` and the 128-byte `leaf`, and no position. The
 forward path *has* the value and drops it, assigning
-`tree_pos{tree_leaf_base + count}` at `src/blockchain_db/lmdb/db_lmdb.cpp:8678`
+`tree_pos{tree_leaf_base + count}` at `src/blockchain_db/lmdb/db_lmdb.cpp`
 and journalling without it.
 
 Latent, **correct today by invariant**: drain-to-tip plus contiguous leaves
@@ -805,7 +812,7 @@ reconstruction for pending keys.
 ### DRS-W14 — dense-seq probe loops
 
 Unbounded probe loops walk archival journal rows until first miss —
-`for (uint32_t seq = 0; ; ++seq)` at `src/blockchain_db/lmdb/db_lmdb.cpp:5443`
+`for (uint32_t seq = 0; ; ++seq)` at `src/blockchain_db/lmdb/db_lmdb.cpp`
 and `:6286`, and the same shape with the counter declared above the loop at
 `:5411` — so the **reader** encodes an invariant the **writer** holds: that
 `seq` is dense with no gaps. Nothing enforces it; the writer's `seq++`
@@ -822,18 +829,22 @@ writer. Applies to the epoch-marker seq on the same footing.
 
 ### DRS-W15 — `hf_versions` read-back on pop
 
-`hf_versions` rows above the new tip are **not deleted on pop**, and exactly
-one site reads them: `db.get_hard_fork_version(height)` at
-`src/cryptonote_basic/hardfork.cpp:300`, inside `HardFork::on_block_popped`
-(`:286`–`:309`). It is the file's **only** above-tip read — the other three
-reads are at or below the tip (`:214` in `reorganize_from_block_height` at
-the new tip block, `:266` in `rescan_from_block_height` at
-`db.height() - 1`, `:357` the public accessor). **The whole redb obligation
-descends from that one line**, so the row's grade has to be about it and not
-about the table in general.
+**UPDATE 2026-10-06:** the vote window is deleted. `on_block_popped` and both
+rescan/reorganize walks are gone, so nothing reads `hf_versions` above the
+tip. `HardFork::add` still wrote the scheduled version at the connecting
+height, and pop did not delete the row. **UPDATE 2026-10-08:** the class is
+deleted and the table has no writer. The read-back this section graded belonged to the window. The
+class, the table and the `hf_versions` rows go in the deletion PR named in
+`docs/FOLLOWUPS.md`. The paragraphs below are the record of that window.
+
+`hf_versions` rows above the new tip were **not deleted on pop**, and exactly
+one site read them: `db.get_hard_fork_version(height)` inside
+`HardFork::on_block_popped`. It was the file's **only** above-tip read.
+**The whole redb obligation descended from that one line**, so the row's grade
+was about it and not about the table in general.
 
 **What the read-back is worth, per caller.** `pop_block_from_blockchain`
-(`src/cryptonote_core/blockchain.cpp:814`) is the only caller of
+(`src/cryptonote_core/blockchain.cpp`) is the only caller of
 `on_block_popped`, always with a literal `1` (`:846`), so the loop runs once
 and the multi-block arm is dead. It has four callers of its own:
 
@@ -1090,7 +1101,7 @@ every row of the table that follows:
 | `archival_alt_attestation_witness` | `store/remove_archival_alt_attestation_witness`; `drop_alt_blocks` | §5 | excluded | excluded |
 | `archival_attestation_witness` | `store/remove_…_at_height`; `delete_…_before_height` (prune) | §2/§3/§5a | excluded | small |
 | `archival_bond` | `put_archival_bond_value` / `remove_archival_bond_record` | §2/§3 | excluded | set-shaped |
-| `archival_bond_holdings_update_log` | journal helpers | §2/§3/§7/§8 | excluded | append-mostly |
+| `archival_bond_holdings_update_log` | journal helpers *(none reachable since 2026-09-20 — kind REJECTED, appliers throw, table empty by construction, so the class below is the design-time grade; deletion owed, `FOLLOWUPS.md`)* | §2/§3/§7/§8 | excluded | append-mostly |
 | `archival_bond_reinstate_log` | journal helpers | §2/§3/§7/§8 | excluded | append-mostly |
 | `archival_bond_unbond_log` | journal helpers (`archival_journal_put/delete`, param dbi) | §2/§3/§7/§8 | excluded | append-mostly |
 | `archival_budget` | epoch-close put; `delete_archival_budget_for_epoch` — the **pop-side** revert (`revert_archival_epoch_close_at_height`, `:8536`); `delete_archival_budget_before_epoch` — the retention prune | §2/§3/§5a | excluded | small |
@@ -1099,7 +1110,7 @@ every row of the table that follows:
 | `archival_epoch_close_log` | `process/revert_archival_epoch_close_at_height` | §2/§3 | excluded | append-mostly |
 | `archival_r_market` | epoch-close put; `delete_archival_r_market_for_epoch` — **pop-side** revert (`:8528`); `delete_archival_r_market_before_epoch` — retention prune | §2/§3/§5a | excluded | small |
 | `archival_serve_credit` | `set/remove_archival_serve_credit_bit`; `delete_archival_serve_credit_before_epoch` (retention prune); FAKECHAIN-fenced RPC injector `regtest_inject_archival_serve_credit` (§5c) | §2/§3/§5a/§5c | excluded | small |
-| `archival_settlement` | `set_archival_settlement` — caller's txn, unwired (CEN-L8); `delete_archival_settlement_for_epoch` — **pop-side**, from `revert_archival_slashes_at_height` (`:6423`), not a prune; `delete_archival_settlement_before_epoch` — retention prune | §3/§5a/§5c | excluded | small |
+| `archival_settlement` | no writer — `set_archival_settlement` was deleted (`SO-D10e`); `delete_archival_settlement_for_epoch` — **pop-side**, from `revert_archival_slashes_at_height` (`:6423`), not a prune; `delete_archival_settlement_before_epoch` — retention prune | §3/§5a/§5c | excluded | small |
 | `archival_shard_segment` | `put_archival_shard_segment`; `revert_archival_segment_freezes`; corruption-test put (§5c) | §2/§3/§5c | excluded | set-shaped |
 | `archival_sigma_work` | epoch-close put; `delete_archival_sigma_work_for_epoch` — **pop-side** revert (`:8529`); `delete_archival_sigma_work_before_epoch` — retention prune | §2/§3/§5a | excluded | small |
 | `archival_slash_applied` | `set/remove_archival_slash_applied` | §2/§3 | excluded | set-shaped |
@@ -1251,13 +1262,48 @@ is the whole justification, and it is a domain claim, not a safety claim.
   KAT that **forces apply/revert to run**. **The obligation is live and unmet
   for all sixteen** (ruled 2026-09-13).
 
+  **UPDATE 2026-10-01 (DRS-E4 commit 6, `DRS_E4_ARCHIVAL_WRITER.md`
+  §3.8.1, `ARW-25`): the §7.1.1 exclusion is retired — the sixteen now have
+  a cross-backend instrument, and it is not digest v0.** The `Digest v0`
+  column in §10 keeps `excluded` for every archival row, because that column
+  states what *v0* sees and v0 is unchanged (P0d's read set, pinned). What
+  changed is the checkpoint: under `TRACE_VERSION 0x01` the `0x02` digest
+  record is paired with a `0x04` **archival snapshot** — the archival state
+  at the covered tip as canonical rows, the C++ walker's reading over LMDB
+  (`src/blockchain_db/lmdb/archival_snapshot.cpp`) against
+  `ReadSnapshot::archival_snapshot()` over redb, compared **row by row** by
+  the grader's snapshot oracle, a divergence naming the family and the key.
+  Per table, the sixteen dispose as: **nine in the snapshot by row** —
+  `archival_bond`, `archival_serve_credit`, `archival_r_market` (non-zero
+  rows), `archival_sigma_work`, `archival_budget`,
+  `archival_attestation_witness`, `archival_slash_log` (epoch markers and
+  the slashed amount projected out), `archival_slash_applied`,
+  `archival_budget_accrual` (as the open epoch's accrued total, zero or one
+  row) — plus the `archival_last_slash_epoch` cell of `properties`;
+  **six dissolved** — the five journals (`archival_bond_holdings_update_log`,
+  `archival_bond_reinstate_log`, `archival_bond_unbond_log`,
+  `archival_emission_claim_log`, `archival_epoch_close_log`) and
+  `archival_shard_segment` are `NOT_PORTED` on the redb side (revert
+  pre-images held by `undo_log`; a cache the fold recomputes — E4 §3.4),
+  so there is no state to compare and the exclusion is recorded in the
+  snapshot's own `Disposition::Excluded` arm, not silently; **one
+  excluded for want of a counterpart** — `archival_settlement`: the Rust
+  slash pass writes it (`SO-D10`) and the C++ writer is deleted
+  (`SO-D10e`), so LMDB holds nothing to compare. The clause
+  that the instrument *watch LMDB run those paths* is what the `0x04`
+  record is: the C++'s own reading, committed as data in every captured
+  trace (E4 commit 7 re-captures the six). The settlement paragraphs below
+  are records-was of the v0-era argument and stay.
+
   This line read "the replacement KAT that rule requires does not exist yet"
   until 2026-09-13, was briefly corrected to record `archival_settlement` as
   **discharged**, and that correction was **wrong**. It is withdrawn here
   rather than quietly reverted, because it was published.
 
   **What the settlement KAT does and does not establish.**
-  [`tests/unit_tests/archival_settlement_table.cpp`](../tests/unit_tests/archival_settlement_table.cpp)
+  `tests/unit_tests/archival_settlement_table.cpp` (deleted under `SO-D10e`,
+  with `set_archival_settlement`; this paragraph and the next describe it as
+  it stood)
   drives its **revert** half through the production hook —
   `revert_archival_slashes_at_height`, which reaches
   `delete_archival_settlement_for_epoch` — after a real
@@ -1766,7 +1812,8 @@ comparator becomes digest-relevant and this row must be revisited.*
    unbounded**. The six genuinely append-only journals
    (`archival_slash_log`, `archival_epoch_close_log`,
    `archival_emission_claim_log`, `archival_bond_unbond_log`,
-   `archival_bond_holdings_update_log`, `archival_bond_reinstate_log`) have no
+   `archival_bond_holdings_update_log` — *empty by construction since
+   2026-09-20, its kind REJECTED* — and `archival_bond_reinstate_log`) have no
    prune and are graded `append-mostly`, not `small`. Three further archival
    tables (`archival_bond`, `archival_slash_applied`,
    `archival_shard_segment`) are live keyed state, not journals, and are

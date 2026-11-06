@@ -1,0 +1,45 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-chain-sync-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chain sync's runtime half: the sync owner task on the session layer's dispatch table, the executor and serving (CS-3)."
+
+[features]
+# A test of another crate asks the owner to publish a sync state. The
+# owner remains the only publisher. Off in every shipped build; shekyl-node
+# enables it from its dev-dependency edge for the follower tests.
+publish-for-test = []
+
+[dependencies]
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"] }
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+shekyl-chain-store = { path = "../shekyl-chain-store" }
+shekyl-chain-sync = { path = "../shekyl-chain-sync" }
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+shekyl-levin = { path = "../shekyl-levin" }
+shekyl-p2p-session = { path = "../shekyl-p2p-session" }
+shekyl-peer-policy = { path = "../shekyl-peer-policy" }
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
+shekyl-runtime = { path = "../shekyl-runtime" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+shekyl-types = { path = "../shekyl-types" }
+shekyl-wire = { path = "../shekyl-wire" }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "sync", "macros"] }
+tracing = "0.1"
+
+[dev-dependencies]
+shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+
+[lints]
+workspace = true

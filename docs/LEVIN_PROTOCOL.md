@@ -33,8 +33,8 @@ deliberately stricter than the C++, the authoritative list is the crate's
 own docs (`rust/shekyl-levin/src/lib.rs`) — kept in one place on purpose.
 Command *bodies* are epee portable_storage. The binary codec is
 `rust/shekyl-portable-storage` (LV-2a, landed). Typed Levin command
-maps in `shekyl-levin` are LV-2b (landed): handshake / timed-sync /
-ping / support-flags, `network_address`, and notifies 2002–2004 /
+maps in `shekyl-levin` are LV-2b (landed): handshake / timed-sync,
+`network_address`, and notifies 2002–2004 /
 2006–2010. Cryptonote blobs stay opaque bytes (`shekyl-wire`). Live
 `shekyld` dual-stack is the `#[ignore]` harness
 `rust/shekyl-levin/tests/dual_stack.rs` (`SHEKYLD_BIN`;
@@ -109,6 +109,10 @@ command being invoked.
  * `B` - Bit is set if this is a the beginning of a [fragmented message](#fragmented-messages).
  * `E` - Bit is set if this is the end of a [fragmented message](#fragmented-messages).
 
+No other bit is defined. A bucket that sets one is refused and the connection
+closed. That includes `0x10`, the compressed-payload bit: Shekyl's Levin has no
+compression (`SHEKYL_P2P_PROTOCOL.md` PWD-T7, rejected 2026-10-19).
+
 ### Version
 A fixed value of `1` as an unsigned 32-bit little endian integer.
 
@@ -182,12 +186,16 @@ For the rebooted chain:
 #### (`1002` Response) Timed Sync
 #### (`1003` Request) Ping
 #### (`1003` Response) Ping
-#### (`1007` Request) Support Flags
-#### (`1007` Response) Support Flags
+#### (`1007`) Support Flags — deleted (2026-10-19)
+
+Command 1007 is refused as unknown, and `basic_node_data` carries no
+`support_flags` word. With compression gone the word negotiated nothing,
+and a field always sent as zero is a sentinel. Capability negotiation, if
+the protocol ever needs one, is designed at the genesis wire freeze
+(`SHEKYL_P2P_PROTOCOL.md` PWD-T7).
 
 Commands 1004–1006 (Stat Info / Network State / Peer ID) do **not**
-exist in Shekyl. `COMMAND_REQUEST_SUPPORT_FLAGS` is
-`P2P_COMMANDS_POOL_BASE + 7`. Do not reintroduce them.
+exist in Shekyl. Do not reintroduce them, or 1007.
 
 ### Cryptonote Protocol Commands
 
@@ -242,7 +250,7 @@ Carries a list of transaction hashes (`CONTAINER_POD_AS_BLOB`). Live in
 by `handle_notify_get_txpool_complement`. Command 2005 was never
 allocated.
 
-Command-body field layouts for 1001 / 1002 / 1003 / 1007 and
+Command-body field layouts for 1001 / 1002 and
 notifies 2002–2004 / 2006–2010 live in `shekyl-levin` (`payload`).
 See `LV2_PORTABLE_STORAGE.md` §5–§6.
 

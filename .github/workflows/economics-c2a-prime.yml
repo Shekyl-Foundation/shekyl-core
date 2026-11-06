@@ -2,14 +2,10 @@
 #
 # Per `docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md` §5.8 (H1–H3) + §7.4 E1:
 #
-# * One build job produces test binaries; three layer jobs run tests in
-#   parallel against a shared artifact (avoids triple redundant builds).
+# * One build job produces the test binary; two layer jobs run tests in
+#   parallel against a shared artifact (avoids redundant builds).
 # * Preflight (JSON oracle + stale-constant grep) is fast and merge-blocking.
 # * Layer jobs fail with pinpoint messages until the 7-base harness registers.
-#
-# Container `--privileged` is required by `tests/create_test_disks.sh` (loop
-# devices for core_tests). Tighten to `--device=/dev/loop-control` +
-# `--cap-add=SYS_ADMIN` if that script's requirements narrow.
 #
 # After 7-base merges, mark all jobs required on `dev` in branch protection.
 
@@ -25,13 +21,11 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened]
     paths: &econ_paths
       - "config/economics_params.json"
       - "cmake/generate_economics_params.py"
       - "src/cryptonote_basic/**"
-      - "src/cryptonote_core/blockchain.cpp"
-      - "src/cryptonote_core/blockchain.h"
       # Conservation-KAT guarded surface. Named by convention, not a
       # frozen file list and not `src/shekyl/**` / `tests/unit_tests/**`:
       # those directories also hold FFI/log/secure_mem headers and
@@ -48,7 +42,6 @@ on:
       - "tests/unit_tests/CMakeLists.txt"
       - "tests/unit_tests/economics*.cpp"
       - "tests/unit_tests/archival_*emission*.cpp"
-      - "tests/core_tests/**"
       - "scripts/ci/run_economics_c2a_prime.sh"
       - ".github/workflows/economics-c2a-prime.yml"
   push:
@@ -69,12 +62,11 @@ env:
   BUILD_DEFAULT_LINUX: >-
     cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON
     -D CMAKE_BUILD_TYPE=Release
-    && cmake --build build --target unit_tests core_tests
+    && cmake --build build --target unit_tests
   APT_INSTALL_LINUX: >-
-    apt -y install build-essential cmake libboost-all-dev miniupnpc
-    graphviz doxygen libunwind8-dev pkg-config libssl-dev
-    libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev
-    protobuf-compiler ccache git curl ripgrep python3
+    apt -y install build-essential cmake libboost-all-dev
+    graphviz doxygen pkg-config libssl-dev
+    libsodium-dev ccache git curl ripgrep python3
   CCACHE_SETTINGS: |
     ccache --max-size=150M
     ccache --set-config=compression=true
@@ -94,7 +86,7 @@ jobs:
         run: scripts/ci/run_economics_c2a_prime.sh preflight
 
   build:
-    name: "Economics C2a′ build (unit_tests + core_tests)"
+    name: "Economics C2a′ build (unit_tests)"
     needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -104,8 +96,6 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
         CCACHE_TEMPDIR: /tmp/.ccache-temp
         CCACHE_DIR: ~/.ccache
-      # create_test_disks.sh sets up loop-backed block devices for core_tests.
-      options: --privileged
     steps:
       - name: set apt conf
         run: |
@@ -136,10 +126,8 @@ jobs:
           path: ~/.ccache
           key: ccache-economics-c2a-build-${{ github.sha }}
           restore-keys: ccache-economics-c2a-build-
-      - name: create dummy disk drives for testing
-        run: tests/create_test_disks.sh >> $GITHUB_ENV
       - uses: ./.github/actions/set-make-job-count
-      - name: build test binaries (unit_tests + core_tests)
+      - name: build test binary (unit_tests)
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{ env.MAKE_JOB_COUNT }}
         run: |
@@ -160,14 +148,13 @@ jobs:
           # working binaries.
           #
           # That does NOT make them self-contained, and this comment previously said it
-          # did. The binaries still need SYSTEM libraries (boost, libunwind, ssl,
+          # did. The binaries still need SYSTEM libraries (boost, ssl,
           # sodium) that the layer jobs install by hand; when one is missing the binary
           # exits 127 at the loader. This step verifies the binaries are PRESENT, which
           # is necessary and not sufficient — the layer jobs prove they RUN, via
           # require_binary_runs in run_economics_c2a_prime.sh.
           required=(
             build/tests/unit_tests/unit_tests
-            build/tests/core_tests/core_tests
           )
           listing="$(tar tzf economics-c2a-build.tar.gz)"
           for path in "${required[@]}"; do
@@ -178,7 +165,7 @@ jobs:
               exit 1
             fi
           done
-          echo "OK: artifact contains statically-linked unit_tests + core_tests binaries"
+          echo "OK: artifact contains the statically-linked unit_tests binary"
           echo "Note: tests/data/ is repo-tracked — layer jobs read it from checkout, not tarball"
       - uses: actions/upload-artifact@v4
         with:
@@ -199,27 +186,14 @@ jobs:
             label: dual-leg per-quantity KAT
             subcommand: layer1
             needs_rust: true
-            needs_disks: false
           - layer: 2
             label: accumulation + cap invariant
             subcommand: layer2
             needs_rust: true
-            needs_disks: false
-          - layer: 3
-            label: pop-replay reorg coupling
-            subcommand: layer3
-            needs_rust: false
-            needs_disks: true
-          - layer: conservation
-            label: archival budget conservation KAT
-            subcommand: conservation
-            needs_rust: false
-            needs_disks: true
     container:
       image: ubuntu:22.04
       env:
         DEBIAN_FRONTEND: noninteractive
-      options: --privileged
     steps:
       - name: set apt conf
         run: |
@@ -241,14 +215,14 @@ jobs:
           # against a Release build and map each entry to its jammy package —
           # a library missing here is not a link error, it is exit 127 at the
           # dynamic loader before main, which the gate reports as "no tests".
-          # libunwind8 / program-options / serialization were absent from this
+          # program-options / serialization were absent from this
           # list from the day the layer jobs landed, which is why every layer
           # gate had reported zero cases (see the "Verify test binaries are
           # runnable" step below, which now asserts this rather than trusting it).
           apt -y install git ripgrep python3 libboost-system1.74.0 libboost-filesystem1.74.0 \
             libboost-thread1.74.0 libboost-chrono1.74.0 libboost-regex1.74.0 \
             libboost-program-options1.74.0 libboost-serialization1.74.0 \
-            libssl3 libsodium23 libprotobuf23 libunwind8
+            libssl3 libsodium23
       - name: install build toolchain for Rust tests
         # curl + ca-certificates: required by the install-Rust step
         # below. They were NEVER installed in this job — the old
@@ -275,9 +249,6 @@ jobs:
           name: economics-c2a-build
       - name: Unpack build tree
         run: tar -xzf economics-c2a-build.tar.gz
-      - name: create dummy disk drives for testing
-        if: matrix.needs_disks
-        run: tests/create_test_disks.sh >> $GITHUB_ENV
       - name: Run C2a′ Layer ${{ matrix.layer }}
         id: layer_run
         env:

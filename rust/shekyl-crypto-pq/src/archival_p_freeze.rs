@@ -3,10 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! ARCHIVAL_P_DERIVE_V1 corpus freeze tripwire.
+//! ARCHIVAL_P_DERIVE_V2 corpus freeze tripwire.
 //!
 //! The pinned SHA-256 digest covers the exact on-disk bytes of
-//! `docs/test_vectors/ARCHIVAL_P_DERIVE_V1/manifest.json` followed by
+//! `docs/test_vectors/ARCHIVAL_P_DERIVE_V2/manifest.json` followed by
 //! `vectors.json` (no separator). Any deliberate corpus rotation must
 //! update both files and this constant via the KAT regenerator.
 //!
@@ -22,20 +22,21 @@ use sha2::{Digest, Sha256};
 use crate::CryptoError;
 
 const MANIFEST_JSON: &str =
-    include_str!("../../../docs/test_vectors/ARCHIVAL_P_DERIVE_V1/manifest.json");
+    include_str!("../../../docs/test_vectors/ARCHIVAL_P_DERIVE_V2/manifest.json");
 const VECTORS_JSON: &str =
-    include_str!("../../../docs/test_vectors/ARCHIVAL_P_DERIVE_V1/vectors.json");
+    include_str!("../../../docs/test_vectors/ARCHIVAL_P_DERIVE_V2/vectors.json");
 
 /// SHA-256 over the concatenated on-disk corpus files (`manifest.json` then
 /// `vectors.json`). Rotated only by a **deliberate corpus change** routed through
-/// the KAT regenerator — either a derivation-version bump (`…-v2`) or an
-/// in-version `ARCHIVAL_P_DERIVE_V1` amendment that adds a frozen label (e.g.
-/// SPIKE-F-4's GF-9 `hs_id` label, `ARCHIVAL_FIREWALL_GATE6.md` §10.13). Never
-/// incidentally: an unexplained change here is corpus drift, which is the
-/// tripwire.
+/// the KAT regenerator — either a derivation-version bump or an in-version
+/// amendment that adds a frozen label and changes no existing vector. `V2` is
+/// a version bump: the labels are `V1`'s, and the HKDF salt moved to
+/// `salt_for(net)`, bound to the network's name with no seed format
+/// (`V3_WALLET_DECISION_LOG.md`, 2026-11-03). Never incidentally: an
+/// unexplained change here is corpus drift, which is the tripwire.
 pub const ARCHIVAL_P_DERIVE_MANIFEST_HASH: [u8; 32] = [
-    0x95, 0xb3, 0x80, 0xb4, 0x2a, 0xbb, 0x30, 0x8f, 0xfa, 0x70, 0x50, 0x69, 0x93, 0x9a, 0xb5, 0x04,
-    0xd7, 0xa6, 0xff, 0x67, 0xd9, 0x36, 0x9a, 0x7f, 0xba, 0x76, 0xc7, 0x75, 0x67, 0xc0, 0x53, 0xcb,
+    0xcb, 0xfa, 0xe2, 0x49, 0xbd, 0x82, 0x47, 0x0d, 0xce, 0x06, 0xdb, 0x29, 0xbf, 0x28, 0xc6, 0x6d,
+    0x6a, 0x2d, 0xa9, 0xe0, 0xc2, 0x3d, 0xc3, 0x5b, 0x41, 0xac, 0x7a, 0x71, 0x2d, 0x25, 0xb9, 0x45,
 ];
 
 /// Recompute the corpus digest from the embedded file bytes.
@@ -65,7 +66,7 @@ pub fn archival_p_derive_manifest_self_check() -> Result<(), CryptoError> {
         // bytes must read bit-identically; printing got/pinned makes that
         // failure self-diagnosing in CI without rebuilding vectors by hand.
         Err(CryptoError::InvalidInput(format!(
-            "ARCHIVAL_P_DERIVE_V1 corpus hash mismatch (manifest/vectors drift): \
+            "ARCHIVAL_P_DERIVE_V2 corpus hash mismatch (manifest/vectors drift): \
              got {}, pinned {}",
             hex32(&got),
             hex32(&ARCHIVAL_P_DERIVE_MANIFEST_HASH),

@@ -132,6 +132,8 @@ pub(crate) use redb_delegated_key;
 /// a height can never be swapped with a tree position, gindex, or leaf
 /// count at a store seam — and so this crate cannot mint a second
 /// `BlockHeight` that is not the vocabulary type (RTN-4).
+use shekyl_fcmp::tree::{leaf_from_chunk_entry, SCALARS_PER_LEAF};
+
 pub use shekyl_types::{
     BlockHash, BlockHeight, CommitmentBytes, CurveTreeRoot, GlobalOutputIndex, OneTimePubkey,
 };
@@ -270,11 +272,29 @@ pub struct LeafEntry {
     /// the membership-path assembler can rebuild the leaf chunk's
     /// compressed `O`/`I`/`C` points (the prover's `Path.leaves`, F6).
     /// The cached `leaf` only holds x-coordinates, which cannot be
-    /// decompressed back to points; `identity` carries the compressed `O`
-    /// and `C` so the assembler derives `I = Hp(O)` and emits a
-    /// [`crate::types::ChunkLeaf`]. Co-located with the entry so it rides
-    /// the drain-order sort without desync.
+    /// decompressed back to points. The circuit tape hashes those
+    /// x-coordinates; `identity` carries the compressed `O` and `C` so the
+    /// assembler derives `I = Hp(O)` and emits a [`crate::types::ChunkLeaf`]
+    /// for the prover API, which still takes points. Co-located with the
+    /// entry so it rides the drain-order sort without desync.
     pub identity: OutputIdentity,
+}
+
+impl LeafEntry {
+    /// `CM.x`, the last scalar of [`Self::leaf`].
+    ///
+    /// [`shekyl_fcmp::tree::construct_leaf`] writes the leaf as
+    /// `O.x ‖ I.x ‖ C.x ‖ CM.x`. Path assembly carries the fourth scalar as
+    /// stored, because a [`ChunkLeaf`] does not hold the `CM` point.
+    #[must_use]
+    pub(crate) fn cm_x(&self) -> [u8; 32] {
+        const SCALAR_LEN: usize = 32;
+        const START: usize = (SCALARS_PER_LEAF - 1) * SCALAR_LEN;
+        const _: () = assert!(START + SCALAR_LEN == 128);
+        let mut scalar = [0u8; SCALAR_LEN];
+        scalar.copy_from_slice(&self.leaf[START..START + SCALAR_LEN]);
+        scalar
+    }
 }
 
 /// One output in a path's Selene leaf chunk — the public per-output tuple
@@ -294,6 +314,34 @@ pub struct ChunkLeaf {
     /// output's PQC leaf commitment (`PL-D3`) — what the prover holds for
     /// every sibling in the chunk.
     pub cm_x: [u8; 32],
+}
+
+impl ChunkLeaf {
+    /// The leaf's four Selene scalars, in hash order: `O.x`, `I.x`, `C.x`,
+    /// `CM.x`.
+    ///
+    /// [`shekyl_fcmp::tree::leaf_from_chunk_entry`] owns the conversion.
+    /// [`shekyl_fcmp::tree::construct_leaf`] does not apply: it takes the
+    /// `CM` point, and a chunk carries `CM.x`. This function splits the
+    /// 128-byte leaf into scalar slots.
+    ///
+    /// `None` when one of the three compressed points does not convert.
+    /// Leaves the tree holds converted at ingest, so `None` means the path
+    /// was built from bytes that never passed admission.
+    #[must_use]
+    pub fn scalars(&self) -> Option<[[u8; 32]; SCALARS_PER_LEAF]> {
+        let leaf = leaf_from_chunk_entry(
+            self.output_key.as_bytes(),
+            &self.key_image_gen,
+            self.commitment.as_bytes(),
+            &self.cm_x,
+        )?;
+        let mut out = [[0u8; 32]; SCALARS_PER_LEAF];
+        for (slot, chunk) in out.iter_mut().zip(leaf.chunks_exact(32)) {
+            slot.copy_from_slice(chunk);
+        }
+        Some(out)
+    }
 }
 
 /// Curve-tree context for one transaction's membership proof, shared by

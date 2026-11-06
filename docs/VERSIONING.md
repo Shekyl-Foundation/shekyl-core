@@ -35,11 +35,16 @@ describes that repo's artifact, nothing more.
 | `rc.N` | Release candidate. No known blocking issues. | Stressnet stable; audit findings addressed. |
 | *(none)* | Stable release. | RC period elapsed without blocking findings. |
 
-Incrementing the counter within a stage (alpha.1 to alpha.2, etc.) is at
-maintainer discretion. The threshold is "enough has changed to warrant a
-new pre-release artifact for testing." In practice: tag a new alpha when
-a testing milestone is reached, or roughly every two weeks if meaningful
-merges have landed. There is no automatic trigger.
+Incrementing the counter within a stage (alpha.1 to alpha.2, etc.) follows
+incompatibility, not the calendar (`RELEASE_PROMOTION.md` §1). Pre-genesis a
+pre-release marks a testnet epoch: a change on `dev` that an already-deployed
+node or client cannot interoperate with (a regenesis, a wire change, a store
+layout change) is what calls for the next tag, so that each such change is
+run on the fleet as its own epoch. The handshake id is derived from the
+genesis block hash, so a regenesis separates the epochs on the wire without a
+second step. Compatible work accumulates on `dev` until the next
+incompatibility; a tag for a testing milestone with no incompatibility is at
+maintainer discretion.
 
 Pre-release identifiers use lowercase with dot-separated numeric
 counters, per SemVer: `3.1.0-alpha.1 < 3.1.0-beta.1 < 3.1.0-rc.1 < 3.1.0`.
@@ -121,7 +126,7 @@ See `00-mission.mdc` for the V4 transition commitment and
 
 | Location | Purpose |
 |----------|---------|
-| `src/cryptonote_config.h` | `SHEKYL_PROTOCOL_VERSION` constant. Authoritative definition. |
+| `rust/shekyl-version/src/lib.rs` | `PROTOCOL_VERSION` constant. Authoritative definition (`SHEKYL_PROTOCOL_VERSION` in `src/cryptonote_config.h` was deleted with the C++ `main`, `DAEMON_CONFIG_CUTOVER.md` DC-Q20). |
 | Daemon `--version` output | Prints `Shekyl vX.Y.Z (protocol 3)`. |
 | `/get_info` RPC response | `protocol_version` field. |
 | P2P handshake | Network peers exchange protocol versions during connection. |
@@ -135,8 +140,8 @@ user-facing source of truth for "can I use component X with component Y?"
 
 | Software | Version | Protocol | Notes |
 |----------|---------|----------|-------|
-| shekyl-core | 3.1.0-alpha.1 | 3 | Reference implementation. |
-| shekyl-gui-wallet | 3.1.0-alpha.2 | requires 3 | Bundles `shekyld` sidecar; auto-start/shutdown. |
+| shekyl-core | 3.1.0-alpha.10 | 3 | Reference implementation. |
+| shekyl-gui-wallet | 3.1.0-alpha.10 | requires 3 | Bundles `shekyld` sidecar; auto-start/shutdown. |
 
 Update this table when shipping new versions. Third-party implementations
 should declare their own protocol compatibility.
@@ -168,8 +173,9 @@ RPC changes, schema migrations) will diverge from the protocol version.
 |------|-------|---------|
 | `cmake/Version.cmake` | `SHEKYL_VERSION_DEFAULT` | `"3.1.0"` |
 | `cmake/GitVersion.cmake` | Tag-derived at build time | `"3.1.0-alpha.1"` |
-| `src/version.cpp.in` | Configured by CMake | `SHEKYL_VERSION`, `SHEKYL_VERSION_TAG` |
-| `src/cryptonote_config.h` | `SHEKYL_PROTOCOL_VERSION` | `3` |
+| `cmake/Version.cmake` | `SHEKYL_VERSION_FULL` | `"3.1.0-release"` |
+| `src/version.cpp.in` | Configured by CMake | `SHEKYL_VERSION`, `SHEKYL_VERSION_TAG`, `SHEKYL_VERSION_FULL` |
+| `rust/shekyl-version/src/lib.rs` | `PROTOCOL_VERSION` | `3` |
 | `rust/Cargo.toml` | `[workspace.package] version` | `"3.1.0"` |
 
 ### shekyl-gui-wallet

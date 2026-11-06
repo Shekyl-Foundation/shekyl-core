@@ -60,7 +60,7 @@
 //   normalized cumulative mass back to a `u64` threshold. Both are confined to
 //   `PoissonTable::new`; the draw path below is integer-only.
 
-use crate::rng::RelayRng;
+use shekyl_draw_rng::RelayRng;
 
 /// Relative-weight cutoff for truncating the upper tail of the table.
 ///
@@ -231,7 +231,7 @@ impl PoissonTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rng::SplitMix64;
+    use shekyl_draw_rng::SplitMix64;
 
     #[test]
     fn thresholds_are_monotonic_and_total() {

@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+"""Assert that the measurement spans never reach a release build.
+
+# Why this gate exists
+
+Rick's ruling of 2026-10-14: the cold-first-contact measurement needs the
+Tor dial and gap deadlines lifted to 120 s, so the distribution is read
+uncensored by the deadlines it is meant to derive. That is a compile-time
+feature on `shekyl-transport-layer` (`measurement-spans`), built only for
+the measurement binary, never a runtime option. A node built with it keeps
+a silent Tor peer for two minutes instead of seconds. Two more crates own a
+feature of the same name for the same build: `shekyl-clearnet` (the step 7
+message-size tap) and `shekyl-relay` (transaction ids on the relay's debug
+lines, which a shipped node's log must not carry: beside a batch's session
+they name the transactions it originated and their first stem hop).
+Nothing in the compiler notices if a release path turns one on; this gate
+does.
+
+# What it asserts
+
+  1. **Subject** — each owner in `OWNERS` declares the feature and its
+     named source file switches on it, and `cmake/BuildRust.cmake` declares
+     the `SHEKYL_MEASUREMENT_SPANS` option default `OFF` and passes every
+     owner's feature only under it, as the `--features` value of
+     `_shekyl_rust_bin_features` on the one cargo line that builds the
+     binaries (`shekyl_rust_bins`). `shekyld` is a cargo binary and
+     nothing links it, so a measurement build leaves no archive for a
+     release build directory to pick up — the target-dir limb the
+     daemon-image build needed is gone with the daemon image (DC-Q23).
+     Without this limb the others pass vacuously (rule 47).
+  2. **No Cargo edge** — no dependency edge of any kind, and no feature of
+     any workspace package (`default` included), enables any owner's. The
+     only way in is the CMake option, on the command line of a measurement
+     build.
+  3. **No release path** — no workflow, release or packaging script turns
+     the option on or names the feature: `.github/`, `contrib/`,
+     `scripts/` (this gate excepted), `Makefile`, `CMakeLists.txt`,
+     `cmake/` outside the one guarded line.
+
+`--selftest` runs limbs 2 and 3 against synthetic inputs, one red case
+each, so the gate shows it can fail.
+"""
+
+import json
+import pathlib
+import re
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+FEATURE = "measurement-spans"
+# Every crate that owns the feature, with the source file that switches on
+# it: the Tor gap, the clearnet message-size tap, the relay's transaction
+# ids on its debug lines. Each is the gate's subject (rule 47).
+OWNERS = {
+    "shekyl-transport-layer": "src/spans.rs",
+    "shekyl-clearnet": "src/sizes.rs",
+    "shekyl-relay": "src/stem_watch.rs",
+}
+OPTION = "SHEKYL_MEASUREMENT_SPANS"
+SELF = pathlib.Path(__file__).resolve()
+SCANNED = [".github", "contrib", "scripts", "Makefile", "CMakeLists.txt", "cmake"]
+
+
+def edge_enablers(metadata):
+    """Every (package, owner, how) in the workspace graph that turns an
+    owner's feature on."""
+    found = []
+    for pkg in metadata["packages"]:
+        for dep in pkg.get("dependencies", []):
+            if dep["name"] in OWNERS and FEATURE in dep.get("features", []):
+                found.append((pkg["name"], dep["name"], f"{dep.get('kind') or 'normal'} edge"))
+        for name, enables in pkg.get("features", {}).items():
+            for item in enables:
+                for owner in OWNERS:
+                    if item in (f"{owner}/{FEATURE}", f"{owner}?/{FEATURE}") or (
+                        pkg["name"] == owner and item == FEATURE
+                    ):
+                        found.append((pkg["name"], owner, f"its feature `{name}`"))
+    return found
+
+
+def release_mentions(files):
+    """(path, line number, text) for every mention outside the guarded line."""
+    hits = []
+    for path, text in files:
+        for n, line in enumerate(text.splitlines(), 1):
+            if FEATURE in line or re.search(rf"-D\s*{OPTION}\s*=\s*(ON|1|TRUE|YES)", line, re.I):
+                if path.endswith("BuildRust.cmake") and guarded(line):
+                    continue
+                if path.endswith("BuildRust.cmake") and line.lstrip().startswith("#"):
+                    continue
+                hits.append((path, n, line.strip()))
+    return hits
+
+
+def guarded(line):
+    return "set(_shekyl_rust_bin_features --features" in line and all(
+        f"{owner}/{FEATURE}" in line for owner in OWNERS
+    )
+
+
+def scanned_files():
+    out = []
+    for entry in SCANNED:
+        base = ROOT / entry
+        paths = [base] if base.is_file() else sorted(p for p in base.rglob("*") if p.is_file())
+        for p in paths:
+            if p.resolve() == SELF:
+                continue
+            try:
+                out.append((str(p.relative_to(ROOT)), p.read_text(encoding="utf-8")))
+            except (UnicodeDecodeError, OSError):
+                continue
+    return out
+
+
+def subject(metadata, fail):
+    for name, switch in OWNERS.items():
+        owner = next((p for p in metadata["packages"] if p["name"] == name), None)
+        if owner is None or FEATURE not in owner.get("features", {}):
+            fail(f"{name} does not declare the `{FEATURE}` feature")
+        source = (ROOT / "rust" / name / switch).read_text(encoding="utf-8")
+        if f'feature = "{FEATURE}"' not in source:
+            fail(f"{name}'s {switch} does not switch on `{FEATURE}`")
+    cmake = (ROOT / "cmake" / "BuildRust.cmake").read_text(encoding="utf-8")
+    if not re.search(rf'option\(\s*{OPTION}\s+"[^"]*"\s+OFF\s*\)', cmake):
+        fail(f"cmake/BuildRust.cmake does not declare option {OPTION} default OFF")
+    if not any(guarded(line) for line in cmake.splitlines()):
+        fail(f"cmake/BuildRust.cmake does not pass every owner's feature under {OPTION}")
+    if not re.search(rf"if\(\s*{OPTION}\s*\)", cmake):
+        fail(f"cmake/BuildRust.cmake does not guard the feature with if({OPTION})")
+
+
+def run(metadata, files):
+    errors = []
+    subject(metadata, errors.append)
+    for pkg, owner, how in edge_enablers(metadata):
+        errors.append(f"{pkg} enables {owner}/{FEATURE} through {how}")
+    for path, n, text in release_mentions(files):
+        errors.append(f"{path}:{n} names the measurement build: {text}")
+    return errors
+
+
+def selftest():
+    for owner in OWNERS:
+        meta = {
+            "packages": [
+                {"name": owner, "features": {FEATURE: [], "default": []}, "dependencies": []},
+                {"name": "shekyld", "features": {}, "dependencies": [{"name": owner, "features": [], "kind": None}]},
+            ]
+        }
+        assert edge_enablers(meta) == [], f"clean graph ({owner})"
+        meta["packages"][1]["dependencies"][0]["features"] = [FEATURE]
+        assert edge_enablers(meta), f"a normal edge enabling {owner}'s feature is red"
+        meta["packages"][1]["dependencies"][0]["features"] = []
+        meta["packages"][0]["features"]["default"] = [FEATURE]
+        assert edge_enablers(meta), f"{owner}'s default enabling it is red"
+        assert release_mentions([("x.sh", f"cargo build --features {owner}/{FEATURE}")]), f"a script naming {owner}'s is red"
+    assert release_mentions([("x.yml", "cmake -B b -DSHEKYL_MEASUREMENT_SPANS=ON")]), "a workflow turning it on is red"
+    every = ",".join(f"{owner}/{FEATURE}" for owner in OWNERS)
+    line = f"        set(_shekyl_rust_bin_features --features {every})"
+    assert not release_mentions([("cmake/BuildRust.cmake", line)]), "the guarded line is allowed"
+    assert guarded(line), "the _shekyl_rust_bin_features line is the guarded one"
+    short = ",".join(f"{owner}/{FEATURE}" for owner in list(OWNERS)[:-1])
+    assert not guarded(f"        set(_shekyl_rust_bin_features --features {short})"), "a line missing an owner is not the guard"
+    assert not guarded(f"    set(_x --features {every})"), "only _shekyl_rust_bin_features is the guard"
+    print("check_measurement_spans selftest: ok")
+
+
+def main():
+    if "--selftest" in sys.argv:
+        selftest()
+        return 0
+    out = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--no-deps", "--locked"],
+        cwd=ROOT / "rust",
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    errors = run(json.loads(out), scanned_files())
+    if errors:
+        print("FAIL: the measurement spans can reach a release build:")
+        for e in errors:
+            print(f"  {e}")
+        return 1
+    names = ", ".join(f"{owner}/{FEATURE}" for owner in OWNERS)
+    print(f"ok: {names} are reachable only through {OPTION} (default OFF)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

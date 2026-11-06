@@ -17,7 +17,12 @@ use shekyl_archival_retention::pass_anchor::{
     PassRequestHeader, PASS_ANCHOR_HASH_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
 };
 use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_BYTES};
+use shekyl_socks::SocksUsername;
 use shekyl_types::BlockHeight;
+
+/// The SOCKS password every read presents. The username is what tells two
+/// reads apart; see [`RequestHeader::socks_credentials`].
+const READ_SOCKS_PASSWORD: &[u8] = b"shekyl-fetch";
 
 // The textual carrier (`serving_route`) and the signed layout (`pass_anchor`)
 // are owned by different crates on purpose; this is where they must agree.
@@ -38,6 +43,12 @@ const _: () = assert!(REQUEST_HEADER_BYTES == PASS_REQUEST_HEADER_LEN);
 /// **Stall retries of the same `P` reuse the same header** (`SF-D6`): the
 /// value is a plain `Copy`, so the caller holds it across attempts rather
 /// than minting a nonce per dial.
+///
+/// **The nonce is the read.** A new read carries a new nonce, for every
+/// caller, and everything that must be one-per-read hangs off it: `P`'s
+/// transcript, and the SOCKS credentials the dial presents
+/// ([`Self::socks_credentials`]). A caller cannot give two reads one circuit
+/// or one read two, because it never chooses the credentials.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RequestHeader(PassRequestHeader);
 
@@ -59,21 +70,52 @@ impl RequestHeader {
 
     /// A header over a caller-chosen nonce.
     ///
-    /// For tests and for callers that persist a header across a process
-    /// restart mid-retry. Production callers minting a *new* header use
-    /// [`Self::fresh`]; a nonce that is not OS-random is a pass record an
-    /// adversary can pre-compute.
+    /// Organic reads mint with [`Self::fresh`]. A challenge supplies the
+    /// nonce `challenge_nonce` derived (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+    /// §5.2): indistinguishable from random until the seed is revealed.
+    /// A nonce that is neither is a pass record an adversary can
+    /// pre-compute.
     #[must_use]
     pub const fn with_nonce(
         nonce: [u8; PASS_NONCE_LEN],
         anchor_height: BlockHeight,
         anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
     ) -> Self {
+        Self::on_stream(
+            shekyl_archival_retention::PassStream::Economy,
+            nonce,
+            anchor_height,
+            anchor_hash,
+        )
+    }
+
+    /// A header over a caller-chosen nonce on `stream`.
+    ///
+    /// Every read but one is an economy read. The support stream's
+    /// challenge (`ARCHIVAL_SUPPORT_DRAW.md` §5) names its stream in the
+    /// header, because `P` signs the bytes it sees and a support receipt
+    /// verifies under the support stream only. The byte is data on the
+    /// header, as the nonce is: the request builder and every move after
+    /// it are the same for either stream.
+    #[must_use]
+    pub const fn on_stream(
+        stream: shekyl_archival_retention::PassStream,
+        nonce: [u8; PASS_NONCE_LEN],
+        anchor_height: BlockHeight,
+        anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
+    ) -> Self {
         Self(PassRequestHeader::from_parts(
+            stream,
             nonce,
             anchor_height,
             anchor_hash,
         ))
+    }
+
+    /// The stream this request names.
+    #[must_use]
+    pub const fn stream(&self) -> shekyl_archival_retention::PassStream {
+        self.0.stream()
     }
 
     /// The nonce — what the pass record carries beside `anchor_height`.
@@ -94,7 +136,34 @@ impl RequestHeader {
         self.0.anchor_hash()
     }
 
-    /// The decoded 72-byte wire layout.
+    /// The SOCKS credentials this read's dials present (`SF-D3`, as ruled
+    /// 2026-10-07): the nonce in lowercase hex as the username, and the
+    /// fixed password [`READ_SOCKS_PASSWORD`].
+    ///
+    /// Tor's `IsolateSOCKSAuth` isolates on the pair, so a username no other
+    /// read presents is a pair no other read presents. `P` cannot tie two
+    /// reads together by the circuit they arrive on. The password is the
+    /// same for every read and carries no isolation: a Tor that compared
+    /// only the password would not separate reads. A stall retry presents
+    /// the header it retries, so it presents the same pair. A retry with a
+    /// fresh anchor keeps the nonce, so it does too.
+    ///
+    /// The pair never leaves this host: SOCKS credentials go to the local
+    /// Tor and no further. That Tor already carries the request, nonce
+    /// included. A local controller subscribed to `STREAM` events can read
+    /// the username there; nothing in this crate logs it, and
+    /// [`SocksUsername`] redacts itself in `Debug`.
+    pub(crate) fn socks_credentials(&self) -> SocksUsername {
+        let mut username = [0u8; 2 * PASS_NONCE_LEN];
+        for (pair, byte) in username.chunks_exact_mut(2).zip(self.nonce()) {
+            pair[0] = HEX[usize::from(byte >> 4)];
+            pair[1] = HEX[usize::from(byte & 0x0f)];
+        }
+        SocksUsername::new(&username, READ_SOCKS_PASSWORD)
+            .expect("a 64-byte username and a short password are in range")
+    }
+
+    /// The decoded 73-byte wire layout.
     #[must_use]
     pub fn to_bytes(&self) -> [u8; PASS_REQUEST_HEADER_LEN] {
         self.0.to_bytes()
@@ -106,15 +175,19 @@ impl RequestHeader {
         encode_request_header(&self.to_bytes())
     }
 
-    /// The 80-byte transcript `P` countersigns for `shard_id`.
+    /// The transcript `P` countersigns for `shard_id` and the digest of the
+    /// bytes it delivered under this header's nonce.
     #[must_use]
     pub fn transcript(
         &self,
         shard_id: u64,
+        delivery_digest: &[u8; shekyl_archival_retention::pass_anchor::PASS_DELIVERY_DIGEST_LEN],
     ) -> [u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-        self.0.transcript(shard_id)
+        self.0.transcript(shard_id, delivery_digest)
     }
 }
+
+const HEX: &[u8; 16] = b"0123456789abcdef";
 
 impl From<PassRequestHeader> for RequestHeader {
     fn from(inner: PassRequestHeader) -> Self {
@@ -141,22 +214,24 @@ mod tests {
             [9; 32],
         );
         let bytes = h.to_bytes();
-        assert_eq!(&bytes[..32], &[7; 32]);
-        assert_eq!(&bytes[32..40], &[8, 7, 6, 5, 4, 3, 2, 1]);
-        assert_eq!(&bytes[40..], &[9; 32]);
+        assert_eq!(bytes[0], 0, "an organic read is an economy draw");
+        assert_eq!(&bytes[1..33], &[7; 32]);
+        assert_eq!(&bytes[33..41], &[8, 7, 6, 5, 4, 3, 2, 1]);
+        assert_eq!(&bytes[41..], &[9; 32]);
         assert_eq!(decode_request_header(&h.wire_value()), Some(bytes));
         assert_eq!(
             PassRequestHeader::from_bytes(&bytes),
-            PassRequestHeader::from(h)
+            Some(PassRequestHeader::from(h))
         );
     }
 
     #[test]
-    fn the_transcript_is_the_header_then_the_shard_id() {
+    fn the_transcript_is_the_header_the_shard_id_then_the_delivery_digest() {
         let h = RequestHeader::with_nonce([1; 32], BlockHeight::from_raw(5), [2; 32]);
-        let t = h.transcript(0x0a0b);
-        assert_eq!(&t[..72], &h.to_bytes());
-        assert_eq!(&t[72..], &[0x0b, 0x0a, 0, 0, 0, 0, 0, 0]);
+        let t = h.transcript(0x0a0b, &[3; 32]);
+        assert_eq!(&t[..73], &h.to_bytes());
+        assert_eq!(&t[73..81], &[0x0b, 0x0a, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(&t[81..], &[3; 32]);
     }
 
     #[test]

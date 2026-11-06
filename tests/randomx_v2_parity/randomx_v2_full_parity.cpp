@@ -113,6 +113,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -124,11 +125,35 @@
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
-#include "cryptonote_core/cryptonote_tx_utils.h"
 
 namespace
 {
   using Hash32 = std::array<uint8_t, 32>;
+
+  int hex_nibble(char c)
+  {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  }
+
+  bool from_hex(const std::string &hex, std::string &out)
+  {
+    if (hex.size() % 2 != 0)
+      return false;
+    out.clear();
+    out.reserve(hex.size() / 2);
+    for (size_t i = 0; i < hex.size(); i += 2)
+    {
+      const int hi = hex_nibble(hex[i]);
+      const int lo = hex_nibble(hex[i + 1]);
+      if (hi < 0 || lo < 0)
+        return false;
+      out.push_back(static_cast<char>((hi << 4) | lo));
+    }
+    return true;
+  }
 
   std::string to_hex(const uint8_t *p, size_t n)
   {
@@ -280,15 +305,55 @@ namespace
     return v;
   }
 
+  // The network table's mainnet genesis transaction (`shekyl_network`,
+  // `rust/shekyl-network/genesis/mainnet.tx.hex`): a production coinbase the
+  // Rust genesis tool writes. The path is CMake's.
+  #ifndef MAINNET_GENESIS_TX_HEX_PATH
+  #define MAINNET_GENESIS_TX_HEX_PATH "rust/shekyl-network/genesis/mainnet.tx.hex"
+  #endif
+  std::string mainnet_genesis_tx_hex()
+  {
+    std::ifstream ifs(MAINNET_GENESIS_TX_HEX_PATH);
+    if (!ifs.good())
+      throw std::runtime_error(std::string("missing the network table's genesis at ") + MAINNET_GENESIS_TX_HEX_PATH);
+    std::string hex;
+    ifs >> hex;
+    return hex;
+  }
+
+  // The mainnet genesis header around the network table's genesis
+  // transaction: what the genesis tool's `genesis_block` assembles, nonce 0
+  // on every network (NETWORK_IDENTITY.md NI-Q1). Genesis is not mined, so
+  // no PoW search runs here.
+  bool generate_genesis_block(cryptonote::block &bl, const std::string &genesis_tx, std::string &err)
+  {
+    bl = {};
+    cryptonote::blobdata tx_bl;
+    if (!from_hex(genesis_tx, tx_bl))
+    {
+      err = "the genesis transaction is not hex";
+      return false;
+    }
+    if (!cryptonote::parse_and_validate_tx_from_blob(tx_bl, bl.miner_tx))
+    {
+      err = "the genesis transaction does not parse";
+      return false;
+    }
+    bl.major_version = CURRENT_BLOCK_MAJOR_VERSION;
+    bl.minor_version = CURRENT_BLOCK_MINOR_VERSION;
+    bl.timestamp = 0;
+    bl.nonce = 0;
+    shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&bl.curve_tree_root));
+    // attestation_root: block_header() defaults to empty_attestation_root().
+    bl.invalidate_hashes();
+    return true;
+  }
+
   bool genesis_case(Case &out, std::string &err)
   {
     cryptonote::block bl{};
-    if (!cryptonote::generate_genesis_block(
-          bl,
-          cryptonote::get_config(cryptonote::MAINNET).GENESIS_TX,
-          cryptonote::get_config(cryptonote::MAINNET).GENESIS_NONCE))
+    if (!generate_genesis_block(bl, mainnet_genesis_tx_hex(), err))
     {
-      err = "generate_genesis_block failed";
       return false;
     }
     crypto::hash genesis_id{};

@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-use super::{CloseResult, ObservedEndpoint, OpenError};
+use super::{AcceptRefusal, CloseResult, LimitStance, ObservedEndpoint, OpenError};
 pub(super) use super::{Direction, Sockets};
 use crate::ban::Ipv4Subnet;
 pub(super) use crate::declaration::ConnectorId;
@@ -32,12 +32,29 @@ fn refused(error: OpenError) -> CloseKind {
 }
 
 #[test]
+fn a_closed_limit_outranks_a_full_one() {
+    assert_eq!(LimitStance::classify(Some(0), 7), LimitStance::Closed);
+    assert_eq!(LimitStance::classify(Some(3), 0), LimitStance::Open);
+    assert_eq!(LimitStance::classify(Some(3), 3), LimitStance::Full);
+    assert_eq!(LimitStance::classify(None, 7), LimitStance::Open);
+    let closed_over_full = LimitStance::prefer(LimitStance::Full, LimitStance::Closed);
+    assert_eq!(
+        closed_over_full.refusal(),
+        Err(AcceptRefusal::InboundClosed)
+    );
+    assert_eq!(
+        LimitStance::prefer(LimitStance::Full, LimitStance::Open).refusal(),
+        Err(AcceptRefusal::FullOrBanned)
+    );
+}
+
+#[test]
 fn a_ceiling_of_zero_admits_nothing_and_an_unbounded_ceiling_does() {
     let sockets = Sockets::new();
     let error = sockets
         .accept_clearnet(ip([10, 0, 0, 1]), InboundCeiling::Bounded(0), now())
         .expect_err("none");
-    assert_eq!(refused(error), CloseKind::AdmissionRefused);
+    assert_eq!(refused(error), CloseKind::InboundNotAccepted);
     assert_eq!(sockets.live(), 0);
     let _open = sockets
         .accept_tor(InboundCeiling::Unbounded(
@@ -60,11 +77,84 @@ fn a_banned_accept_does_not_take_a_slot() {
         .expect_err("banned");
     assert_eq!(refused(error), CloseKind::AdmissionRefused);
     assert_eq!(sockets.live(), 0);
-    assert!(!sockets.is_banned(host, Tick::new(2_000)));
+    assert!(sockets.is_banned(host), "in force until the timer ends it");
+    assert_eq!(sockets.expire_bans(Tick::new(2_000)), None);
+    assert!(!sockets.is_banned(host));
     let _open = sockets
         .accept_clearnet(host, InboundCeiling::Bounded(4), Tick::new(2_000))
         .expect("expired");
     assert_eq!(sockets.live(), 1);
+}
+
+/// A subscriber's ring runs after the table's lock drops, so a ring that
+/// reads the table does not deadlock: a subscription, a ban, an expiry, a
+/// lift and a clear each ring once. Red edit: ring inside
+/// `FeedQueue::post`, under the lock.
+#[test]
+fn a_ban_ring_runs_after_the_table_lock_drops() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let sockets = Sockets::new();
+    let host = ip([10, 0, 0, 5]);
+    assert!(sockets.ban_host_permanent(ip([10, 0, 0, 9])).is_empty());
+    let rings = Arc::new(AtomicUsize::new(0));
+    let probe = sockets.clone();
+    let counted = Arc::clone(&rings);
+    let ring: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        let _ = probe.is_banned(host);
+        counted.fetch_add(1, Ordering::Relaxed);
+    });
+    let (done, finished) = mpsc::channel();
+    let table = sockets.clone();
+    let _driver = thread::spawn(move || {
+        let feed = table.subscribe_bans(ring);
+        drop(table.ban_host(host, Tick::new(2_000), now()));
+        let _next = table.expire_bans(Tick::new(2_000));
+        drop(table.ban_host_permanent(host));
+        assert!(table.lift_host(host));
+        table.clear_bans();
+        done.send(feed.take().len()).expect("the test waits");
+    });
+    let events = finished
+        .recv_timeout(Duration::from_secs(10))
+        .expect("a ring under the table's lock deadlocked on its read");
+    assert_eq!(events, 6, "seed, ban, expiry, ban, lift, clear");
+    assert_eq!(rings.load(Ordering::Relaxed), 6);
+}
+
+/// The ban list's timing owner is told the earliest deadline when it is
+/// installed and each time a new ban becomes the earliest, never a later
+/// one; when its deadline fires, expiry returns the next to arm. Red edit:
+/// tell the owner every timed ban's deadline in `ban_host`.
+#[test]
+fn the_timer_is_told_each_new_earliest_deadline() {
+    let sockets = Sockets::new();
+    let armed: Arc<Mutex<Vec<u64>>> = Arc::default();
+    let recorded = Arc::clone(&armed);
+    assert!(sockets
+        .ban_host(ip([10, 0, 0, 1]), Tick::new(1_500), now())
+        .is_empty());
+    sockets.set_ban_expiry(Arc::new(move |deadline: Tick| {
+        recorded.lock().expect("armed").push(deadline.get());
+    }));
+    sockets.ban_host(ip([10, 0, 0, 2]), Tick::new(1_900), now());
+    sockets.ban_host(ip([10, 0, 0, 3]), Tick::new(1_300), now());
+    let subnet = Ipv4Subnet::new(Ipv4Addr::new(10, 9, 0, 0), 16).expect("prefix");
+    sockets.ban_subnet(subnet, Tick::new(1_100), now());
+    sockets.ban_host_permanent(ip([10, 0, 0, 4]));
+    assert_eq!(*armed.lock().expect("armed"), vec![1_500, 1_300, 1_100]);
+    assert_eq!(
+        sockets.expire_bans(Tick::new(1_100)),
+        Some(Tick::new(1_300))
+    );
+    assert_eq!(
+        sockets.expire_bans(Tick::new(1_500)),
+        Some(Tick::new(1_900))
+    );
+    assert!(sockets.is_banned(ip([10, 0, 0, 2])));
+    assert!(!sockets.is_banned(ip([10, 0, 0, 1])));
 }
 
 #[test]
@@ -76,7 +166,7 @@ fn inbound_held_sums_inbound_rows_and_leaves_outbound_out() {
         .expect("clearnet inbound");
     let _tor = sockets.accept_tor(ceiling).expect("tor inbound");
     let _outbound = sockets
-        .open_clearnet(ip([10, 0, 0, 2]), now())
+        .open_clearnet(ip([10, 0, 0, 2]))
         .expect("clearnet outbound");
     assert_eq!(sockets.inbound_held(), 2);
     assert_eq!(sockets.live(), 3);
@@ -134,6 +224,59 @@ fn an_explicit_zone_cap_bounds_that_connector_when_the_process_ceiling_is_unboun
 }
 
 #[test]
+fn clearing_one_zone_cap_leaves_the_other_connector_closed() {
+    let sockets = Sockets::new();
+    let ceiling = InboundCeiling::Unbounded(UnboundedReason::Unlimited);
+    sockets.set_zone_cap(ConnectorId::Clearnet, Some(0));
+    sockets.set_zone_cap(ConnectorId::Tor, Some(0));
+    sockets.set_zone_cap(ConnectorId::Clearnet, None);
+    let _clearnet = sockets
+        .accept_clearnet(ip([10, 0, 0, 1]), ceiling, now())
+        .expect("clearnet cap released");
+    let tor = sockets.accept_tor(ceiling).expect_err("tor cap remains");
+    assert_eq!(refused(tor), CloseKind::InboundNotAccepted);
+}
+
+#[test]
+fn clearing_every_zone_cap_lets_both_connectors_accept() {
+    let sockets = Sockets::new();
+    let ceiling = InboundCeiling::Unbounded(UnboundedReason::Unlimited);
+    sockets.set_zone_cap(ConnectorId::Clearnet, Some(0));
+    sockets.set_zone_cap(ConnectorId::Tor, Some(0));
+    sockets.clear_zone_caps();
+    let _clearnet = sockets
+        .accept_clearnet(ip([10, 0, 0, 1]), ceiling, now())
+        .expect("clearnet cap released");
+    let _tor = sockets.accept_tor(ceiling).expect("tor cap released");
+}
+
+#[test]
+fn a_zone_cap_of_zero_never_accepts_that_connector() {
+    let sockets = Sockets::new();
+    sockets.set_zone_cap(ConnectorId::Clearnet, Some(0));
+    let ceiling = InboundCeiling::Unbounded(UnboundedReason::Unlimited);
+    let error = sockets
+        .accept_clearnet(ip([10, 0, 0, 1]), ceiling, now())
+        .expect_err("cap is zero");
+    assert_eq!(refused(error), CloseKind::InboundNotAccepted);
+    assert_eq!(sockets.live(), 0);
+    let _tor = sockets.accept_tor(ceiling).expect("tor has no zone cap");
+}
+
+#[test]
+fn a_zero_ceiling_wins_over_a_full_connector_cap() {
+    let sockets = Sockets::new();
+    sockets.set_zone_cap(ConnectorId::Clearnet, Some(1));
+    let _held = sockets
+        .accept_clearnet(ip([10, 0, 0, 1]), InboundCeiling::Bounded(4), now())
+        .expect("under the ceiling");
+    let error = sockets
+        .accept_clearnet(ip([10, 0, 0, 2]), InboundCeiling::Bounded(0), now())
+        .expect_err("ceiling is zero");
+    assert_eq!(refused(error), CloseKind::InboundNotAccepted);
+}
+
+#[test]
 fn a_zone_cap_does_not_raise_the_process_ceiling() {
     let sockets = Sockets::new();
     sockets.set_zone_cap(ConnectorId::Clearnet, Some(2));
@@ -164,9 +307,7 @@ fn outbound_does_not_consume_the_inbound_ceiling() {
         .accept_clearnet(ip([10, 0, 0, 2]), ceiling, now())
         .expect_err("full");
     assert_eq!(refused(error), CloseKind::AdmissionRefused);
-    let _outbound = sockets
-        .open_clearnet(ip([10, 0, 0, 3]), now())
-        .expect("outbound");
+    let _outbound = sockets.open_clearnet(ip([10, 0, 0, 3])).expect("outbound");
     assert_eq!(
         sockets.socket_count(ConnectorId::Clearnet, Direction::Outbound),
         1
@@ -213,7 +354,7 @@ fn a_tor_dial_that_is_not_an_onion_reserves_nothing() {
             port: 18080,
         })
         .expect_err("not an onion");
-    assert_eq!(refused(error), CloseKind::DialFailed);
+    assert_eq!(refused(error), CloseKind::LocalClose);
     assert_eq!(sockets.live(), 0);
     let host = v3_onion_hostname(&[0x22; 32]);
     let _open = sockets
@@ -233,7 +374,7 @@ fn a_new_ban_closes_matching_sockets_once() {
     let inside = sockets
         .accept_clearnet(banned, InboundCeiling::Bounded(8), now())
         .expect("in");
-    let outbound = sockets.open_clearnet(banned, now()).expect("out");
+    let outbound = sockets.open_clearnet(banned).expect("out");
     let kept = sockets
         .accept_clearnet(other, InboundCeiling::Bounded(8), now())
         .expect("other");
@@ -374,9 +515,7 @@ fn churn_of_accepts_and_closes_returns_to_zero() {
 #[test]
 fn dropping_a_clone_keeps_the_reservation_until_the_last_clone_drops() {
     let sockets = Sockets::new();
-    let open = sockets
-        .open_clearnet(ip([10, 0, 0, 8]), now())
-        .expect("open");
+    let open = sockets.open_clearnet(ip([10, 0, 0, 8])).expect("open");
     let id = open.id();
     let kept = open.clone();
     drop(open);
@@ -390,9 +529,7 @@ fn dropping_a_clone_keeps_the_reservation_until_the_last_clone_drops() {
 #[test]
 fn close_on_one_clone_makes_the_other_drop_a_no_op() {
     let sockets = Sockets::new();
-    let open = sockets
-        .open_clearnet(ip([10, 0, 0, 9]), now())
-        .expect("open");
+    let open = sockets.open_clearnet(ip([10, 0, 0, 9])).expect("open");
     let id = open.id();
     let other = open.clone();
     assert_eq!(
@@ -448,7 +585,7 @@ pub(super) fn apply(sockets: &Sockets, open: &mut Vec<super::OpenSocket>, byte: 
             }
         }
         2 => {
-            if let Ok(sock) = sockets.open_clearnet(hosts[usize::from(byte) % hosts.len()], now()) {
+            if let Ok(sock) = sockets.open_clearnet(hosts[usize::from(byte) % hosts.len()]) {
                 open.push(sock);
             }
         }
@@ -483,4 +620,123 @@ pub(super) fn apply(sockets: &Sockets, open: &mut Vec<super::OpenSocket>, byte: 
             }
         }
     }
+}
+
+/// A test shape, not a ruled value: one clearnet accept a second for every
+/// host together, burst two, and one a minute for each host.
+fn rate_gated() -> Sockets {
+    use crate::accept_rate::{AcceptGate, AcceptRate};
+    let gate = AcceptGate::new(
+        AcceptRate {
+            token_every_nanos: 1_000_000_000,
+            burst: 2,
+        },
+        AcceptRate {
+            token_every_nanos: 60_000_000_000,
+            burst: 1,
+        },
+    );
+    Sockets::with_clearnet_gate(gate)
+}
+
+#[test]
+fn an_accept_over_the_rate_is_refused_and_reserves_nothing() {
+    let sockets = rate_gated();
+    let host = ip([10, 0, 0, 1]);
+    let _open = sockets
+        .accept_clearnet(host, InboundCeiling::Bounded(8), now())
+        .expect("the first accept pays");
+    let error = sockets
+        .accept_clearnet(host, InboundCeiling::Bounded(8), now())
+        .expect_err("the host's bucket is empty");
+    assert_eq!(refused(error), CloseKind::AcceptRateExceeded);
+    assert_eq!(sockets.live(), 1);
+    assert_eq!(
+        sockets.socket_count(ConnectorId::Clearnet, Direction::Inbound),
+        1
+    );
+    let _second = sockets
+        .accept_clearnet(ip([10, 0, 0, 2]), InboundCeiling::Bounded(8), now())
+        .expect("another host, inside the connector's burst");
+    let error = sockets
+        .accept_clearnet(ip([10, 0, 0, 3]), InboundCeiling::Bounded(8), now())
+        .expect_err("the connector's burst is spent");
+    assert_eq!(refused(error), CloseKind::AcceptRateExceeded);
+    let refusals = sockets.take_accept_refusals();
+    assert_eq!(
+        (refusals.over_host_rate, refusals.over_connector_rate),
+        (1, 1)
+    );
+    assert_eq!(refusals.over_rate(), 2);
+    assert!(!sockets.take_accept_refusals().any(), "taken once");
+}
+
+#[test]
+fn a_banned_or_ceiling_refused_accept_spends_no_token() {
+    let sockets = rate_gated();
+    let host = ip([10, 0, 0, 1]);
+    assert_eq!(sockets.ban_host(host, Tick::new(2_000), now()).len(), 0);
+    for _ in 0..5 {
+        let error = sockets
+            .accept_clearnet(host, InboundCeiling::Bounded(8), now())
+            .expect_err("banned");
+        assert_eq!(refused(error), CloseKind::AdmissionRefused);
+        let error = sockets
+            .accept_clearnet(ip([10, 0, 0, 2]), InboundCeiling::Bounded(0), now())
+            .expect_err("closed");
+        assert_eq!(refused(error), CloseKind::InboundNotAccepted);
+    }
+    let refusals = sockets.take_accept_refusals();
+    assert_eq!(refusals.full_or_banned, 5, "the bans");
+    assert_eq!(refusals.inbound_closed, 5, "the closed ceiling");
+    assert_eq!(refusals.over_rate(), 0, "neither spent a token");
+    assert!(!sockets.take_accept_refusals().any(), "taken once");
+    let error = sockets
+        .open_clearnet(host)
+        .expect_err("an outbound dial to a banned host");
+    assert_eq!(refused(error), CloseKind::AdmissionRefused);
+    assert!(
+        !sockets.take_accept_refusals().any(),
+        "an outbound ban is not an accept refusal"
+    );
+    let error = sockets
+        .accept_tor(InboundCeiling::Bounded(0))
+        .expect_err("tor closed");
+    assert_eq!(refused(error), CloseKind::InboundNotAccepted);
+    let tor = sockets.take_accept_refusals();
+    assert_eq!(tor.inbound_closed, 1);
+    assert_eq!(tor.over_rate(), 0);
+    let _open = sockets
+        .accept_clearnet(ip([10, 0, 0, 2]), InboundCeiling::Bounded(8), now())
+        .expect("its tokens are all there");
+}
+
+#[test]
+fn tor_accepts_pass_no_rate_gate() {
+    let sockets = rate_gated();
+    for _ in 0..10 {
+        let _open = sockets
+            .accept_tor(InboundCeiling::Bounded(64))
+            .expect("Tor is defended by the onion's proof-of-work, not a limiter");
+    }
+    let refusals = sockets.take_accept_refusals();
+    assert_eq!(refusals.over_rate(), 0);
+    assert!(!refusals.any(), "a Tor accept is not a refusal");
+}
+
+/// A positive ceiling that occupancy has reached is a full table, not a
+/// rate refusal: the second accept spends no token.
+#[test]
+fn a_full_ceiling_is_counted_with_the_bans() {
+    let sockets = Sockets::new();
+    let _open = sockets
+        .accept_clearnet(ip([10, 0, 0, 9]), InboundCeiling::Bounded(1), now())
+        .expect("the one slot");
+    let error = sockets
+        .accept_clearnet(ip([10, 0, 0, 8]), InboundCeiling::Bounded(1), now())
+        .expect_err("full");
+    assert_eq!(refused(error), CloseKind::AdmissionRefused);
+    let refusals = sockets.take_accept_refusals();
+    assert_eq!(refusals.full_or_banned, 1);
+    assert_eq!(refusals.over_rate(), 0, "a full ceiling spends no token");
 }

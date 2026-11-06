@@ -55,7 +55,7 @@
 //! type holds the policy's consequence, not its justification.
 //!
 //! Past `max_age` the reading is [`None`], which is the same answer as
-//! "unreadable" and takes the same path: the shared 404 plus a
+//! "unreadable" and takes the same path: the 503 plus a
 //! `ServeCounters` lookup failure. No new error surface.
 
 use std::sync::{Mutex, PoisonError};
@@ -67,7 +67,7 @@ use shekyl_types::BlockHeight;
 ///
 /// `None` from [`height`](Self::height) means the gate must refuse, and it
 /// means it for three different reasons that the serve loop deliberately
-/// does not distinguish (all three render the identical 404):
+/// does not distinguish (all three render the same 503):
 ///
 /// - nothing has been stamped yet — the wallet has just started serving;
 /// - the daemon last said something that means it is **not following the

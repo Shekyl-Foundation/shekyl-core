@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The 29-byte Levin bucket header (`bucket_head2` in the C++ oracle) and
+//! The 29-byte Levin bucket header (`bucket_head2` in the deleted C++) and
 //! its flag word. Byte layout per `docs/LEVIN_PROTOCOL.md` §Header; all
 //! multi-byte fields are little-endian.
 
@@ -41,8 +41,6 @@ impl Flags {
     pub const BEGIN: Flags = Flags(0x0000_0004);
     /// `E` — last fragment of a fragmented message. `B|E` marks a dummy.
     pub const END: Flags = Flags(0x0000_0008);
-    /// Payload is a zstd frame (Shekyl extension to the inherited protocol).
-    pub const COMPRESSED: Flags = Flags(0x0000_0010);
 
     /// Construct from a raw wire value, preserving unknown bits.
     #[must_use]
@@ -100,7 +98,7 @@ pub struct BucketHead {
     pub expect_response: u8,
     /// Command identifier (e.g. 1001 handshake, 2002 new-transactions).
     pub command: u32,
-    /// Q/S/B/E/COMPRESSED flag word.
+    /// Q/S/B/E flag word.
     pub flags: Flags,
     /// Protocol version; always [`PROTOCOL_VERSION_1`] from conforming peers.
     pub protocol_version: u32,
@@ -195,7 +193,7 @@ mod tests {
             payload_len: 0xDEAD_BEEF,
             expect_response: 1,
             command: 1001,
-            flags: Flags::REQUEST.union(Flags::COMPRESSED),
+            flags: Flags::REQUEST.union(Flags::END),
             protocol_version: PROTOCOL_VERSION_1,
         };
         let bytes = head.write();
@@ -227,5 +225,184 @@ mod tests {
         let mut bytes = BucketHead::make(0, 0, Flags::default(), false).write();
         bytes[0] = 0xFF;
         assert_eq!(BucketHead::read(&bytes), Err(Error::BadSignature));
+    }
+}
+
+/// Which handshake frame a session waits for: the request on a session
+/// the peer opened, the response on one this node dialed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandshakeKind {
+    /// The peer opened the session; its `COMMAND_HANDSHAKE` request ends
+    /// the wait.
+    Request,
+    /// This node dialed; the peer's `COMMAND_HANDSHAKE` response ends it.
+    Response,
+}
+
+impl HandshakeKind {
+    fn matches(self, head: &BucketHead) -> bool {
+        let request = head.flags.contains(Flags::REQUEST);
+        let response = head.flags.contains(Flags::RESPONSE);
+        head.command == crate::COMMAND_HANDSHAKE
+            && match self {
+                Self::Request => request && !response && head.expects_response(),
+                Self::Response => response && !request,
+            }
+    }
+}
+
+/// Whether the peer's first complete handshake frame has arrived, fed the
+/// bytes as they are read. The transport's handshake gap measures the
+/// peer's silence up to this point (Rick, 2026-10-14), so it disarms here
+/// and not on the strand's verdict, which is this node's own work. A frame
+/// is the [`HEADER_SIZE`]-byte header and the `payload_len` bytes it
+/// declares.
+///
+/// Only the handshake frame of the expected [`HandshakeKind`] counts. A
+/// complete frame of any other command is read past: a peer that sends a
+/// timed-sync request, or anything else, and never its handshake stays
+/// under the gap (Copilot on #1056: one such frame had disarmed it, and
+/// the session then held an admission slot with no deadline at all). A
+/// header whose signature is not [`LEVIN_SIGNATURE`] ends the tracking:
+/// the gap stays armed, and the strand closes the connection on the bad
+/// signature as before.
+#[derive(Debug)]
+pub struct HandshakeFrame {
+    kind: HandshakeKind,
+    frames: FrameHeads,
+    complete: bool,
+}
+
+impl HandshakeFrame {
+    /// A tracker of `kind` that has seen no byte.
+    #[must_use]
+    pub fn new(kind: HandshakeKind) -> Self {
+        Self {
+            kind,
+            frames: FrameHeads::new(),
+            complete: false,
+        }
+    }
+
+    /// Feed the next `bytes` read from the peer. Returns whether the
+    /// handshake frame has arrived, now or before; once true it stays true.
+    ///
+    /// The walk stops at that frame. Bytes after it in the same slice are
+    /// not read, which is the gap's old rule: the tracker is finished, and
+    /// a later header in the same read is the strand's.
+    pub fn feed(&mut self, bytes: &[u8]) -> bool {
+        if !self.complete {
+            let kind = self.kind;
+            let complete = &mut self.complete;
+            self.frames.feed(bytes, |head| {
+                if kind.matches(head) {
+                    *complete = true;
+                    AfterFrame::Stop
+                } else {
+                    AfterFrame::Continue
+                }
+            });
+        }
+        self.complete
+    }
+
+    /// Whether the handshake frame has arrived.
+    #[must_use]
+    pub const fn complete(&self) -> bool {
+        self.complete
+    }
+}
+
+/// What the walk does after handing over one complete frame.
+///
+/// [`AfterFrame::Stop`] ends this `feed` call. The unread tail of that
+/// slice is left unread: a caller that stops and then feeds a later slice
+/// is starting at a header boundary only if it passes the tail first.
+/// [`HandshakeFrame`] stops for good, so it never feeds the tail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterFrame {
+    /// Keep walking this slice.
+    Continue,
+    /// This frame is the last one this call should hand over.
+    Stop,
+}
+
+/// A Levin byte stream walked frame by frame, fed the bytes as they come.
+/// Each complete frame, the [`HEADER_SIZE`]-byte header and the
+/// `payload_len` bytes it declares, is handed to the caller with its header
+/// when its last byte arrives. The payload is read past, never kept.
+///
+/// A header that does not read ([`BucketHead::read`]) ends the walk: what
+/// follows a bad signature is not frames, and every later feed is ignored.
+#[derive(Debug)]
+pub struct FrameHeads {
+    head: [u8; HEADER_SIZE],
+    have: usize,
+    /// The frame being read: its header and its body bytes still to come.
+    body: Option<(BucketHead, u64)>,
+    bad: bool,
+}
+
+impl FrameHeads {
+    /// A walk that has seen no byte.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            head: [0; HEADER_SIZE],
+            have: 0,
+            body: None,
+            bad: false,
+        }
+    }
+
+    /// Feed the next `bytes` of the stream. `on_frame` is called once for
+    /// each frame these bytes complete, in stream order. [`AfterFrame::Stop`]
+    /// returns before the rest of `bytes` is read.
+    pub fn feed(&mut self, mut bytes: &[u8], mut on_frame: impl FnMut(&BucketHead) -> AfterFrame) {
+        while !self.bad {
+            let (head, left) = match self.body {
+                Some(body) => body,
+                None => {
+                    let take = (HEADER_SIZE - self.have).min(bytes.len());
+                    self.head[self.have..self.have + take].copy_from_slice(&bytes[..take]);
+                    self.have += take;
+                    bytes = &bytes[take..];
+                    if self.have < HEADER_SIZE {
+                        return;
+                    }
+                    self.have = 0;
+                    match BucketHead::read(&self.head) {
+                        Ok(head) => (head, head.payload_len),
+                        Err(_) => {
+                            self.bad = true;
+                            return;
+                        }
+                    }
+                }
+            };
+            let take = usize::try_from(left).map_or(bytes.len(), |left| left.min(bytes.len()));
+            bytes = &bytes[take..];
+            let left = left.saturating_sub(u64::try_from(take).unwrap_or(left));
+            if left > 0 {
+                self.body = Some((head, left));
+                return;
+            }
+            self.body = None;
+            if on_frame(&head) == AfterFrame::Stop || bytes.is_empty() {
+                return;
+            }
+        }
+    }
+
+    /// Whether a header failed to read, which ended the walk.
+    #[must_use]
+    pub const fn ended(&self) -> bool {
+        self.bad
+    }
+}
+
+impl Default for FrameHeads {
+    fn default() -> Self {
+        Self::new()
     }
 }

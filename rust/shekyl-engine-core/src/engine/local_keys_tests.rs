@@ -736,8 +736,7 @@ fn derive_primary_source_secrets_bundle_byte_identical_against_legacy_chain() {
 #[test]
 #[allow(non_snake_case)]
 fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
-    use rand_core::OsRng;
-    use shekyl_bulletproofs::Bulletproof;
+    use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_curve_io::CompressedPoint;
     use shekyl_curve_primitives::Commitment;
@@ -1057,6 +1056,7 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
         // ── Sign engine path (sole sign call; legacy parallel
         //    sign call removed per the Trim-1 disposition) ───
         let signed_engine = sign_transaction(
+            &shekyl_network::HARNESS_NETWORK_ID,
             signable_tx_hash,
             &engine_inputs,
             &outputs,
@@ -1093,9 +1093,11 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             .collect();
         let bp = Bulletproof::read_plus(&mut signed_engine.bulletproof_plus.as_slice())
             .unwrap_or_else(|e| panic!("bulletproof_plus deserializes ({context}): {e:?}"));
-        let mut rng = OsRng;
         assert!(
-            bp.verify(&mut rng, &bp_commitments),
+            verify_batch(&[BatchEntry {
+                proof: &bp,
+                commitments: &bp_commitments,
+            }]),
             "BP+ verifier must accept engine-signed range proof ({context})"
         );
 
@@ -1122,7 +1124,8 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             &pqc_pk_hashes,
             tree.tree_root.as_bytes(),
             tree.tree_depth,
-            signable_tx_hash.to_bytes(),
+            // The message the proof was made over (the signing envelope §2.2).
+            signed_engine.tx_signable.to_bytes(),
         );
         assert!(
             matches!(result, Ok(true)),
@@ -1183,14 +1186,13 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
 /// the whole-tx payload hash this composition never forms.
 #[test]
 fn join_market_bond_post_signs_and_verifies_through_prover() {
-    use rand_core::OsRng;
     use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
     use shekyl_archival_retention::{
         bond_floor, verify_bond_post_ct_balance, verify_join_market_bond_post, BondCtBalanceError,
         BondPostError, BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
     };
-    use shekyl_bulletproofs::Bulletproof;
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+    use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
+    use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::kem::HybridCiphertext;
     // (the bond vin carries no on-chain signature; surface-A signing over the
@@ -1207,19 +1209,14 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     // Wallet keys fund the transaction; the bond persona `P` is a separate
     // identity that authorizes the post (credit paths sign under P_pubkey).
     let keys = LocalKeys::from_test_seed(TEST_SEED);
-    let p_keys = derive_archival_p_keys(
-        &[0x33u8; MASTER_SEED_BYTES],
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        0,
-    )
-    .expect("derive archival P keys");
+    let p_keys = derive_archival_p_keys(&[0x33u8; MASTER_SEED_BYTES], Network::Mainnet, 0)
+        .expect("derive archival P keys");
 
     let holdings = HoldingsDescriptor {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     assert!(
         floor > 0,
         "bond floor must be positive for the fixture holdings"
@@ -1315,6 +1312,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     // ── Prove: bond_credit rides as the sole output-side cleartext term ─
     let credit_term = built.credit_term();
     let signed = sign_transaction_with_terms(
+        &shekyl_network::HARNESS_NETWORK_ID,
         signable_tx_hash,
         &inputs,
         &outputs,
@@ -1338,6 +1336,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         change_output_index,
     )];
     let self_check_err = sign_transaction_with_terms(
+        &shekyl_network::HARNESS_NETWORK_ID,
         signable_tx_hash,
         &inputs,
         &short_change,
@@ -1376,9 +1375,11 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         .collect();
     let bp = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
         .expect("bulletproof_plus deserializes");
-    let mut rng = OsRng;
     assert!(
-        bp.verify(&mut rng, &bp_commitments),
+        verify_batch(&[BatchEntry {
+            proof: &bp,
+            commitments: &bp_commitments,
+        }]),
         "BP+ verifier must accept the bond-post range proof"
     );
 
@@ -1407,7 +1408,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
                 &pqc_pk_hashes,
                 tree.tree_root.as_bytes(),
                 tree.tree_depth,
-                signable_tx_hash.to_bytes(),
+                signed.tx_signable.to_bytes(),
             ),
             Ok(true)
         ),

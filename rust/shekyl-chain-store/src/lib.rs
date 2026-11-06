@@ -60,10 +60,9 @@
 //!   mismatch at every open.
 //!
 //! Slice B's table names are bijection-pinned against
-//! [`accumulator::TABLE_CLASSES`] **and** against the X-macro
-//! `SHEKYL_LMDB_TABLES` by `scripts/ci/check_redb_schema_bijection.py` —
-//! three surfaces, all 49 mirrored tables, checked in every direction, plus
-//! the Rust-only map for the tables LMDB never had. Codecs for the
+//! [`accumulator::TABLE_CLASSES`] by `scripts/ci/check_redb_schema_bijection.py`:
+//! the Rust definitions in `schema.rs` and `pool/schema.rs` are the
+//! denominator, and the class table names each of them. Codecs for the
 //! remaining tables' values land per surface (S-CHAIN-W onward) and
 //! inherit both that pin and the snapshot gate.
 
@@ -82,7 +81,7 @@
 //! no creditor. What *is* held stable is the contract those modules
 //! describe on disk — `TypeName`s, codec `NAME`s and the row bytes —
 //! pinned by `schemas/*.snap` and the paired `SCHEMA_VERSION` bump
-//! (`DAEMON_REDB_STORE.md` §11.1(b)). `HF_VERSIONS: Coded<RuleSetInForce>`
+//! (`DAEMON_REDB_STORE.md` §11.1(b)). `RULE_SET_IN_FORCE: Coded<RuleSetInForce>`
 //! is the worked example: the Rust type changed with the codec's home,
 //! `shekyl::Coded<rule_set_id>` and the row bytes did not.
 
@@ -90,8 +89,9 @@
 
 pub mod accumulator;
 pub mod apply_policy;
+pub mod archival_snapshot;
 pub mod codec;
-pub mod conformance;
+pub(crate) mod creation;
 pub mod digest_v0;
 pub mod family_set;
 pub mod ids;
@@ -100,6 +100,9 @@ pub mod pool;
 pub mod provenance;
 pub mod schema;
 pub mod store;
+
+#[cfg(test)]
+mod redb_recovery;
 
 pub use ids::{
     AmountIndex, ChunkIndex, LayerChunk, OutputSlot, OutputStorageId, TreeLayer, TxStorageId,

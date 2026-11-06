@@ -27,38 +27,23 @@
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 set(unit_tests_sources
-  account.cpp
   apply_permutation.cpp
-  blockchain_db.cpp
-  block_queue.cpp
   block_reward.cpp
   economics_c2a_prime.cpp
   bulletproofs_plus.cpp
   gap7_bp_bench.cpp
-  checkpoints.cpp
   command_line.cpp
   crypto.cpp
-  daemon_default_data_dir.cpp
-  daemon_rpc_client.cpp
-  daemon_submit_ffi_roundtrip.cpp
-  daemon_submit_shims.cpp
-  db_sync_mode_parse.cpp
   decompose_amount_into_digits.cpp
   device.cpp
   difficulty.cpp
-  epee_levin_protocol_handler_async.cpp
-  seam_endpoint.cpp
-  relay_peer_height.cpp
   epee_serialization.cpp
   epee_utils.cpp
   expect.cpp
   json_serialization.cpp
   get_xtype_from_string.cpp
   keccak.cpp
-  levin.cpp
   logging.cpp
-  long_term_block_weight.cpp
-  lmdb.cpp
   main.cpp
   memwipe.cpp
   mining_parity.cpp
@@ -66,77 +51,30 @@ set(unit_tests_sources
   mtp_boundary.cpp
   mul_div.cpp
   multiexp.cpp
-  net.cpp
-  node_server.cpp
-  notify.cpp
-  output_distribution.cpp
   parse_amount.cpp
-  peer_policy_drop_verdict.cpp
-  peer_policy_block_ingest.cpp
   random.cpp
   rpc_target_wire_contract.cpp
-  rpc_args_daemon_surface.cpp
-  rpc_facts_ffi_roundtrip.cpp
-  rpc_facts_shims.cpp
-  rpc_restricted_gate.cpp
   rolling_median.cpp
-  scaling_2021.cpp
-  seed_epoch.cpp
   serialization.cpp
-  slow_memmem.cpp
   sha256.cpp
-  stall_detection_calibration.cpp
-  stack_trace.cpp
   test_tx_utils.cpp
-  test_peerlist.cpp
-  test_protocol_pack.cpp
   threadpool.cpp
-  hardfork.cpp
   util.cpp
   varint.cpp
   fcmp.cpp
   vercmp.cpp
-  wallet_bip39_residency.cpp
   wipeable_string.cpp
   is_hdd.cpp
   aligned.cpp
-  logical_state_digest.cpp
   archival_credit_wire.cpp
   archival_serve_credit.cpp
-  archival_serve_credit_equivalence.cpp
-  archival_serve_credit_integration.cpp
   archival_bond_post.cpp
-  archival_bond_post_integration.cpp
-  archival_settlement_testdb.cpp
-  archival_attestation_verify.cpp
-  archival_pass_anchor.cpp
   archival_reward_emission.cpp
-  archival_emission_connect.cpp
   archival_emission_ct_balance.cpp
-  archival_segment_freeze.cpp
-  checkpoint_uniformity.cpp
-  fork_choice_vectors.cpp
-  reorg_watermark.cpp
-  sync_orphan_arm.cpp
-  archival_settlement_table.cpp
-  archival_substrate_lmdb.cpp
-  archival_bond_record_v7_corpus.cpp
-  archival_claim_source_rpc.cpp
-  archival_shard_coverage_rpc.cpp
   ct_balance_differential.cpp
-  curve_tree_header_root_check.cpp
-  tx_extra_pqc_field_shape.cpp
-  deferred_insertion.cpp
-  economics_b5_fee_coinbase.cpp
-  economics_tx_volume_window.cpp
   pruned_tx_hash_parity.cpp
+  prunable_digest_parity.cpp
   tx_prunable_region_sole_occupant.cpp
-  pow_longhash_gate.cpp
-  txpool_ref_age.cpp
-  txpool_origin_zone.cpp
-  txpool_relay_timers.cpp
-  relay_category.cpp
-  pending_tree_fuzz.cpp
   )
 
 set(unit_tests_headers
@@ -148,30 +86,15 @@ monero_add_minimal_executable(unit_tests
 target_link_libraries(unit_tests
   PRIVATE
     fcmp
-    cryptonote_protocol
-    cryptonote_core
-    blockchain_db
-    lmdb_lib
-    rpc
-    net
+    cryptonote_basic
     serialization
-    p2p
-    # daemon_rpc_client.cpp exercises src/daemon/rpc_client.h, whose failure
-    # path writes through scoped_message_writer -> rdln::suspend_readline
-    # (same link the daemon carries; empty when built without readline).
-    ${EPEE_READLINE}
-    # Resolves to libshekyl_daemon_image.a (not libshekyl_ffi.a) because of
-    # the SHEKYL_RUST_IMAGE_DAEMON property set below. The daemon image is
-    # the superset (shekyl-ffi + shekyl-daemon-rpc), needed since
-    # daemon_submit_ffi_roundtrip.cpp calls the Rust-side layout twins that
-    # live in shekyl-daemon-rpc. Never name shekyl_ffi literally here — two
-    # Rust archives on one link line is the split-dispatcher regression.
+    epee
+    # The one Rust archive a C++ binary links (libshekyl_ffi.a; the
+    # single-image contract, V3_WALLET_DECISION_LOG.md 2026-06-11). The
+    # daemon's RPC server and its `shekyl_rpc_*` exports are not in it:
+    # they reach shekyld as rlibs of the Rust binary (DC-Q19). The server
+    # stays out of the archive (DAEMON_CONFIG_CUTOVER.md DC-F30).
     ${SHEKYL_FFI_LINK_LIBS}
-    # rpc repeats after the Rust image (same shape as src/daemon): the
-    # daemon image's members import core_rpc_ffi_* / shekyl_submit_*, which
-    # live in rpc — left-to-right static-archive resolution needs a
-    # post-image occurrence.
-    rpc
     version
     ${Boost_CHRONO_LIBRARY}
     ${Boost_THREAD_LIBRARY}
@@ -180,16 +103,6 @@ target_link_libraries(unit_tests
     ${EXTRA_LIBRARIES})
 if(UNIX AND NOT APPLE)
   target_link_libraries(unit_tests PRIVATE pthread dl)
-endif()
-# Select the daemon Rust image for this binary (see the per-binary
-# image-selection comment in cmake/BuildRust.cmake): every occurrence of the
-# Rust archive in the link closure — including copies inherited transitively
-# from cryptonote_core / cryptonote_basic — resolves to the daemon image.
-set_property(TARGET unit_tests PROPERTY SHEKYL_RUST_IMAGE_DAEMON ON)
-if(TARGET shekyl_daemon_image_rust)
-  # Generator-expression-resolved link items do not carry the imported
-  # target's build-order dependency; add the edge explicitly.
-  add_dependencies(unit_tests shekyl_daemon_image_rust)
 endif()
 set_property(TARGET unit_tests
   PROPERTY
@@ -211,37 +124,27 @@ SET_PROPERTY(SOURCE archival_serve_credit_integration.cpp PROPERTY COMPILE_DEFIN
 # of each definition's value (CMake only treats quotes as delimiters at
 # argument start), so the compiler receives -DNAME="/abs/path" and the
 # macro expands to a valid C string literal — verified in build.ninja.
-SET_PROPERTY(SOURCE tx_extra_pqc_field_shape.cpp PROPERTY COMPILE_DEFINITIONS
-  SERVE_CREDIT_TX_PARITY_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/serve_credit_tx_parity_v1.json")
-SET_PROPERTY(SOURCE archival_substrate_lmdb.cpp PROPERTY COMPILE_DEFINITIONS
-  GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json")
-SET_PROPERTY(SOURCE archival_attestation_verify.cpp PROPERTY COMPILE_DEFINITIONS
-  ATTESTATION_V2_PINNED_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_pinned.json")
 SET_PROPERTY(SOURCE archival_bond_record_v7_corpus.cpp PROPERTY COMPILE_DEFINITIONS
   ARCHIVAL_BOND_RECORD_V7_CORPUS_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json")
+# The network table's mainnet genesis transaction, a production coinbase
+# fixture (NETWORK_IDENTITY.md NI-Q3).
+SET_PROPERTY(SOURCE json_serialization.cpp tx_prunable_region_sole_occupant.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+  MAINNET_GENESIS_TX_HEX_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-network/genesis/mainnet.tx.hex")
+# The live-oracle spend (a daemon-accepted FCMP++ spend), the FCMP++ fixture
+# for the JSON round trip.
+SET_PROPERTY(SOURCE json_serialization.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+  LIVE_ORACLE_SPEND_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/live_oracle_spend_v1.json")
 SET_PROPERTY(SOURCE mtp_boundary.cpp PROPERTY COMPILE_DEFINITIONS
   MTP_BOUNDARY_VECTOR_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/MTP_BOUNDARY_V1.json")
-SET_PROPERTY(SOURCE fork_choice_vectors.cpp PROPERTY COMPILE_DEFINITIONS
-  FORK_CHOICE_VECTOR_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/FORK_CHOICE_V1.json")
 SET_PROPERTY(SOURCE pruned_tx_hash_parity.cpp PROPERTY COMPILE_DEFINITIONS
   PRUNED_TX_HASH_PARITY_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/pruned_tx_hash_parity_v1.json"
   LIVE_ORACLE_SPEND_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/live_oracle_spend_v1.json")
-SET_PROPERTY(SOURCE archival_serve_credit_equivalence.cpp PROPERTY COMPILE_DEFINITIONS
-  GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json"
-  SERVE_CREDIT_EQUIVALENCE_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/serve_credit_equivalence_kat_v1.json")
-SET_PROPERTY(SOURCE archival_bond_post_integration.cpp PROPERTY COMPILE_FLAGS
-  -DGATE4_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate4_lifecycle_kat_v1.json\\"")
-SET_PROPERTY(SOURCE archival_emission_connect.cpp PROPERTY COMPILE_FLAGS
-  -DEMISSION_CONNECT_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/emission_connect_kat_v1.json\\"")
-SET_PROPERTY(SOURCE archival_substrate_lmdb.cpp PROPERTY COMPILE_FLAGS
-  -DEMISSION_CONNECT_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/emission_connect_kat_v1.json\\"")
-
+SET_PROPERTY(SOURCE prunable_digest_parity.cpp PROPERTY COMPILE_DEFINITIONS
+  PRUNABLE_DIGEST_PARITY_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/prunable_digest_parity_v1.json"
+  PQC_SIGNING_PREIMAGE_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/pqc_signing_preimage_v1.json")
 SET_PROPERTY(SOURCE memwipe.cpp PROPERTY COMPILE_FLAGS -Ofast)
 
 add_test(
   NAME    unit_tests
   COMMAND unit_tests --data-dir "${TEST_DATA_DIR}")
 
-monero_add_minimal_executable(test_notifier test_notifier.cpp)
-target_link_libraries(test_notifier ${EXTRA_LIBRARIES})
-set_property(TARGET test_notifier PROPERTY FOLDER "tests")

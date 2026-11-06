@@ -31,11 +31,11 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened]
     paths: &paths
       - "rust/shekyl-daemon-rpc/**"
       - "rust/shekyl-rpc-client/**"
       - "rust/shekyl-engine-core/**"
-      - "src/rpc/**"
       - "utils/python-rpc/**"
       - "scripts/ci/check_rpc_route_liveness.sh"
       - ".github/workflows/rpc-route-liveness.yml"

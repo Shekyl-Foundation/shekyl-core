@@ -144,12 +144,18 @@ impl<
         let snapshot = ValidatedFeeEstimates::try_new(raw)?;
         let tree_depth = self.estimate_tree_depth().await;
 
-        let quote_at =
-            |rate| AtomicUnits::from_raw(converge_fee(&rate, n_in, n_out, tree_depth, 0));
+        let quote_at = |rate| {
+            let fee = converge_fee(&rate, n_in, n_out, tree_depth, 0).ok_or(
+                FeeEstimatorError::DaemonResponseInvalid {
+                    reason: "the fee does not fit in u64",
+                },
+            )?;
+            Ok(AtomicUnits::from_raw(fee))
+        };
         Ok(FeeTierQuote {
-            economy_fee: quote_at(snapshot.economy()),
-            standard_fee: quote_at(snapshot.standard()),
-            priority_fee: quote_at(snapshot.priority()),
+            economy_fee: quote_at(snapshot.economy())?,
+            standard_fee: quote_at(snapshot.standard())?,
+            priority_fee: quote_at(snapshot.priority())?,
             tree_depth,
         })
     }

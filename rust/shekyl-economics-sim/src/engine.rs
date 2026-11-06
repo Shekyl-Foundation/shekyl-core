@@ -1,10 +1,15 @@
 use serde::Serialize;
 use shekyl_economics::{
-    burn::{calc_burn_pct_from_activity, compute_burn_split_at},
-    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
+    calc_release_multiplier,
     params::{calc_stake_ratio, EconomicParams, SCALE},
-    split_block_emission, ClosedShardCount, TxVolume,
+    CirculatingSupply, ClosedShardCount,
 };
+use shekyl_units::AtomicUnits;
+
+use crate::baseline::{Baseline, Override, OverrideError};
+use crate::burden::HonestOutputs;
+use crate::chain_cursor::{ChainCursor, ChainStep};
+use crate::fee_model::FeeModel;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct YearSnapshot {
@@ -33,7 +38,6 @@ pub struct ScenarioResult {
     pub years: Vec<YearSnapshot>,
     pub final_supply_emitted_pct: f64,
     pub final_total_burned: f64,
-    pub stuffing_profitable: Option<bool>,
 }
 
 pub struct VolumeSchedule {
@@ -56,23 +60,30 @@ pub struct StakeSchedule {
 /// `block + genesis_height_offset`, so pre-existing history enters through
 /// the offset, not through a separate genesis-shards term.
 ///
-/// Per the pinned build constraint, the derived `stake_ratio` and the burn
-/// input both denominate against the **consensus burn-site circulating**
-/// (prev-block `already_generated`), matching the C4 recorder — not the
-/// modeling loop's emitted-minus-burned gauge.
+/// The derived `stake_ratio` and the burn input both denominate against the
+/// circulating supply the burn reads in consensus: `coins_generated −
+/// total_burned` at parent state ([`net_supply`], FL-R16c). Until ESR-5 this
+/// read gross `already_generated`, after a C++ burn site that no longer
+/// reads it.
 pub struct ArchivalLockModel {
     /// Per-shard-replica bonded collateral (gate-4 §8.1
     /// `ARCHIVAL_BOND_FLOOR_ATOMIC`; pinned 750_000_000).
     pub bond_floor_atomic: u64,
     /// Seated replicas per deep shard (`R_target`; L15 lean ≈ 6).
     pub replicas_per_shard: u64,
-    /// Blocks of chain history per new deep shard. Shard segment geometry
-    /// is **not yet consensus-pinned** (gate-2/3 `ShardId` wire open), so
-    /// this is an explicit model parameter; default arm uses
+    /// Blocks of chain history per new deep shard. The partition is pinned
+    /// by archival **bytes** (`SHT-Q2`: `W` per shard), not blocks, so the
+    /// blocks-per-shard cadence the staking arm sweeps is a traffic-dependent
+    /// model parameter rather than a constant; default arm uses
     /// `SETTLEMENT_EPOCH_BLOCKS` (the staking sim's frontier-growth
     /// cadence), with a denser sensitivity arm. Must be **> 0** — zero has
     /// no model meaning and `locked_atomic` panics on it rather than
     /// silently reporting zero locked supply.
+    ///
+    /// The default is far sparser than the chain: the stage-2 byte fold
+    /// closes a shard about every eleven blocks. A gate-7 lock figure is
+    /// therefore a floor, not an estimate
+    /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §4).
     pub blocks_per_shard: u64,
     /// Bonded archiver population `N_P` (enters the admission arm only;
     /// L11 attractor envelope: lean ≈ 79, thick ≈ 154, fee-era-thin band
@@ -104,85 +115,199 @@ pub struct ScenarioConfig {
     pub sim_years: u64,
     pub volume: VolumeSchedule,
     pub stake: StakeSchedule,
-    pub fee_per_tx: u64,
-    pub initial_emitted_fraction: f64,
+    /// Of the asymptote already emitted when the fold starts, in parts
+    /// per million. The scenario's one input boundary into the ledger:
+    /// [`emitted_at_start`] crosses it in integers.
+    pub initial_emitted_ppm: u32,
     pub genesis_height_offset: u64,
     /// Gate-7 derived-lock model. `None` (all legacy scenarios) leaves the
     /// asserted `StakeSchedule` path byte-identical.
     pub archival_lock: Option<ArchivalLockModel>,
 }
 
+/// One sim run's parameters: the production [`Baseline`], the named
+/// [`Override`]s that depart from it, and the run's fee arm.
+///
+/// The sim holds no production value of its own (ESR-16 completion, ruling
+/// 6). [`Self::default`] is the shipped baseline, read from the three
+/// production accessors; [`Self::with_overrides`] writes a run's overrides
+/// on through each struct's validator, so a refused run fails before any
+/// fold. The folds read [`Self::economic`], [`Self::relay`] and
+/// [`Self::archival`] and call the production functions on them. An
+/// escalation candidate is two economic overrides
+/// ([`crate::escalation::EscalationCurve`]).
+#[derive(Clone, Debug)]
 pub struct SimParams {
-    pub emission_curve_asymptote: u64,
-    pub emission_speed_factor_per_minute: u64,
-    pub final_subsidy_per_minute: u64,
-    pub blocks_per_year: u64,
-    pub tx_volume_baseline: u64,
-    pub release_min: u64,
-    pub release_max: u64,
-    pub burn_base_rate: u64,
-    pub burn_cap: u64,
-    pub staker_pool_share: u64,
-    pub staker_emission_share: u64,
-    pub staker_emission_decay: u64,
+    run: Baseline,
+    overrides: Vec<Override>,
+    /// The run's fee arm: what every scenario charges an ordinary
+    /// transaction (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-1). The sim's
+    /// own input, not a production value.
+    pub fee: FeeModel,
 }
 
 impl Default for SimParams {
     fn default() -> Self {
         Self {
-            emission_curve_asymptote: 4_294_967_296_000_000_000,
-            emission_speed_factor_per_minute: 22,
-            final_subsidy_per_minute: 300_000_000,
-            blocks_per_year: 262_800,
-            tx_volume_baseline: 50,
-            release_min: 800_000,
-            release_max: 1_300_000,
-            burn_base_rate: 500_000,
-            burn_cap: 900_000,
-            // The consensus share (the escalation floor) deps the shipped
-            // config rather than mirroring it: a literal here could drift
-            // from what consensus actually pays (dep-don't-mirror).
-            staker_pool_share: EconomicParams::default().staker_pool_share,
-            staker_emission_share: 150_000,
-            staker_emission_decay: 900_000,
+            run: Baseline::shipped(),
+            overrides: Vec::new(),
+            fee: FeeModel::PRODUCTION_DEFAULT,
         }
     }
 }
 
-const COIN: f64 = 1_000_000_000.0;
+impl SimParams {
+    /// The shipped baseline with `overrides` written on, on the production
+    /// fee arm.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::baseline::OverrideError`]: a field a struct does not have,
+    /// a value its validator refuses, or a path given twice.
+    pub fn with_overrides(overrides: Vec<Override>) -> Result<Self, OverrideError> {
+        Ok(Self {
+            run: Baseline::shipped().with(&overrides)?,
+            overrides,
+            fee: FeeModel::PRODUCTION_DEFAULT,
+        })
+    }
+
+    /// This run with `more` overrides written on, through the same door
+    /// (each struct's validator). A path in `more` replaces the run's
+    /// override on that path: an escalation candidate is the run with its
+    /// two economic fields set to the candidate's values
+    /// ([`crate::escalation::EscalationCurve::on`]), whatever the run set
+    /// them to. A path given twice within `more` is still refused. The fee
+    /// arm is kept.
+    ///
+    /// # Errors
+    ///
+    /// [`OverrideError`], as [`Self::with_overrides`].
+    pub fn with_more(&self, more: Vec<Override>) -> Result<Self, OverrideError> {
+        let replaced: std::collections::BTreeSet<String> =
+            more.iter().map(Override::path).collect();
+        let mut overrides: Vec<Override> = self
+            .overrides
+            .iter()
+            .filter(|o| !replaced.contains(&o.path()))
+            .cloned()
+            .collect();
+        overrides.extend(more);
+        Ok(Self {
+            run: Baseline::shipped().with(&overrides)?,
+            overrides,
+            fee: self.fee,
+        })
+    }
+
+    /// The run's [`EconomicParams`]: the shipped set with the run's
+    /// economic overrides. The one set every fold prices with.
+    #[must_use]
+    pub fn economic(&self) -> &EconomicParams {
+        &self.run.economic
+    }
+
+    /// The run's [`shekyl_economics::RelayPolicy`].
+    #[must_use]
+    pub fn relay(&self) -> &shekyl_economics::RelayPolicy {
+        &self.run.relay
+    }
+
+    /// The run's [`shekyl_archival_retention::ArchivalParams`].
+    #[must_use]
+    pub fn archival(&self) -> &shekyl_archival_retention::ArchivalParams {
+        &self.run.archival
+    }
+
+    /// The run's three structs.
+    #[must_use]
+    pub fn baseline(&self) -> &Baseline {
+        &self.run
+    }
+
+    /// The overrides this run departs from the baseline by, in the order
+    /// given.
+    #[must_use]
+    pub fn overrides(&self) -> &[Override] {
+        &self.overrides
+    }
+
+    /// Blocks in the fold's year: the run's
+    /// [`EconomicParams::blocks_per_year`], the derivation production uses.
+    #[must_use]
+    pub const fn blocks_per_year(&self) -> u64 {
+        self.run.economic.blocks_per_year()
+    }
+
+    /// The parameters of the control arm: the shipped economics with the
+    /// flat fee the §12.13–§12.14 tables were measured on. A declared
+    /// divergence from production, kept so those tables stay reproducible.
+    #[must_use]
+    pub fn section_12_14_control() -> Self {
+        Self {
+            fee: FeeModel::SECTION_12_14_CONTROL,
+            ..Self::default()
+        }
+    }
+}
+
+const COIN: f64 = crate::burden::COIN as f64;
+
+/// The circulating supply the burn reads at a block: `coins_generated −
+/// total_burned` at parent state (FL-R16c, CEN-F17), derived by its one
+/// owner. The folds keep both accumulators in `u128`, and the chain records
+/// them as `u64`, so both are read at the `u64` rail as the folds' other
+/// chain operands are.
+/// One million parts: the scale of a scenario's `initial_emitted_ppm`.
+pub const PPM: u32 = 1_000_000;
+
+/// Coins emitted before a fold's first block: `ppm` millionths of the
+/// asymptote, in the ledger's `u128`. The scenario layer's fraction crosses
+/// into integers here and nowhere else (DQ-2G).
+///
+/// # Panics
+///
+/// A fraction above one is not a point on the curve.
+#[must_use]
+pub(crate) fn emitted_at_start(asymptote: u64, ppm: u32) -> u128 {
+    assert!(
+        ppm <= PPM,
+        "a scenario cannot start past the asymptote: {ppm} ppm"
+    );
+    u128::from(asymptote) * u128::from(ppm) / u128::from(PPM)
+}
+
+pub(crate) fn net_supply(already_generated: u128, total_burned: u128) -> CirculatingSupply {
+    let rail = |amount: u128| AtomicUnits::from_raw(amount.min(u128::from(u64::MAX)) as u64);
+    CirculatingSupply::derive(rail(already_generated), rail(total_burned))
+        .expect("a fold destroys only fees, which never exceed what it emitted")
+}
 
 pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResult {
-    let economic = EconomicParams {
-        release_min: params.release_min,
-        release_max: params.release_max,
-        tx_volume_baseline: params.tx_volume_baseline,
-        burn_base_rate: params.burn_base_rate,
-        burn_cap: params.burn_cap,
-        staker_pool_share: params.staker_pool_share,
-        emission_curve_asymptote: params.emission_curve_asymptote,
-        emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
-        final_subsidy_per_minute: params.final_subsidy_per_minute,
-        daa_target_seconds: EconomicParams::default().daa_target_seconds,
-        // Escalation numerics come from the shipped config: the sim must never
-        // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
-        ..EconomicParams::default()
-    };
+    let economic = params.economic();
 
-    let total_blocks = params.blocks_per_year * config.sim_years;
+    let total_blocks = params.blocks_per_year() * config.sim_years;
 
-    let mut already_generated: u128 =
-        (params.emission_curve_asymptote as f64 * config.initial_emitted_fraction) as u128;
+    let mut already_generated = emitted_at_start(
+        params.economic().emission_curve_asymptote,
+        config.initial_emitted_ppm,
+    );
     let mut total_burned: u128 = 0;
     let mut staker_emission_earned_year: u128 = 0;
     let mut staker_fee_earned_year: u128 = 0;
     let mut year_start_circulating: u128 = 0;
 
     let mut snapshots = Vec::new();
-    let emission_curve_asymptote = params.emission_curve_asymptote as u128;
+    let emission_curve_asymptote = params.economic().emission_curve_asymptote as u128;
+    // Leaves the block's transactions are built against. The fee prices this
+    // count; the block's outputs accrue after it is charged. Burn-split `n`
+    // is a different counter and stays zero in this engine.
+    let mut outputs = HonestOutputs::default();
 
+    let mut chain = ChainCursor::default();
     for block in 0..total_blocks {
-        let year = block / params.blocks_per_year;
-        let block_in_year = block % params.blocks_per_year;
+        let year = block / params.blocks_per_year();
+        let block_in_year = block % params.blocks_per_year();
 
         if block_in_year == 0 {
             staker_emission_earned_year = 0;
@@ -190,89 +315,67 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             year_start_circulating = already_generated.saturating_sub(total_burned);
         }
 
-        let ag = already_generated.min(u64::MAX as u128) as u64;
-        let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
-        let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
-        // Consensus burn-site circulating: prev-block `already_generated`
-        // alone, matching `validate_miner_transaction` / the C4 recorder
-        // (pinned build constraint, STAKER_ARCHIVAL_SIM.md §Iteration-5).
-        let circ_consensus = already_generated.min(u64::MAX as u128) as u64;
+        let priced = chain.price(
+            ChainStep {
+                fold_height: block,
+                chain_height: block + config.genesis_height_offset,
+                demand: (config.volume.get_volume)(block, params.blocks_per_year()),
+                leaves: outputs.leaves(),
+                already_generated,
+                total_burned,
+                closed_shards: ClosedShardCount::ZERO,
+            },
+            params,
+            economic,
+        );
+        // The circulating supply the burn reads (CEN-F17): net of what the
+        // fold has destroyed, at parent state. One operand for both paths.
+        let supply = priced.supply;
+        let circulating = supply.to_raw();
         let (stake_ratio, staked_atomic) = match &config.archival_lock {
             Some(model) => {
                 let locked = model
                     .locked_atomic(block + config.genesis_height_offset)
-                    .min(u128::from(circ_consensus)) as u64;
-                (calc_stake_ratio(locked, circ_consensus), Some(locked))
+                    .min(u128::from(circulating)) as u64;
+                (calc_stake_ratio(locked, circulating), Some(locked))
             }
             None => (
-                (config.stake.get_stake_ratio)(block, params.blocks_per_year, circulating),
+                (config.stake.get_stake_ratio)(block, params.blocks_per_year(), circulating),
                 None,
             ),
         };
 
         let multiplier = calc_release_multiplier(
-            TxVolume::per_block(tx_volume),
-            params.tx_volume_baseline,
-            params.release_min,
-            params.release_max,
+            priced.volume,
+            params.economic().tx_volume_baseline,
+            params.economic().release_min,
+            params.economic().release_max,
         );
+        let burn_pct = priced.burn_pct;
 
-        let effective_reward = effective_emission(ag, TxVolume::per_block(tx_volume), &economic)
-            .expect("sim paid emission stays within the arithmetic domain");
-
-        let emission_share = calc_effective_emission_share(
-            block + config.genesis_height_offset,
-            0,
-            params.staker_emission_share,
-            params.staker_emission_decay,
-            params.blocks_per_year,
-        );
-
-        let (miner_emission, staker_emission) =
-            split_block_emission(effective_reward, emission_share);
-
-        let total_fees_this_block = tx_volume as u128 * config.fee_per_tx as u128;
-        let total_fees = total_fees_this_block.min(u64::MAX as u128) as u64;
-
-        let burn_pct = match (&config.archival_lock, staked_atomic) {
-            // Gate-7 path: the engine-equivalent composition over the
-            // consensus circulating quantity (follows the recorder).
-            (Some(_), Some(_locked)) => calc_burn_pct_from_activity(
-                TxVolume::per_block(tx_volume),
-                params.tx_volume_baseline,
-                circ_consensus,
-                &economic,
-            ),
-            // Legacy path: byte-identical to the pre-gate-7 modeling loop.
-            _ => calc_burn_pct(
-                TxVolume::per_block(tx_volume),
-                params.tx_volume_baseline,
-                circulating,
-                params.emission_curve_asymptote,
-                params.burn_base_rate,
-                params.burn_cap,
-            ),
-        };
+        outputs.accrue(priced.filled.included);
+        let paid_reward = priced.paid_reward();
+        let miner_emission = priced.paid.split.miner_emission;
+        let staker_emission = priced.paid.split.staker_emission;
 
         // Canonical escalated split. This engine has no leaf/corpus trajectory, so
         // n = 0; under the shipped genesis-neutral asymptote that is bit-identical
         // to the flat floor at every n, and after the ceremony this is the honest
-        // "no burden yet" baseline (stage2 threads real n via burden::frozen_shards).
-        let fee_split =
-            compute_burn_split_at(total_fees, burn_pct, ClosedShardCount::ZERO, &economic);
+        // "no burden yet" baseline (stage2 threads real n via burden::closed_shards).
+        let fee_split = priced.paid.fee_burn;
 
-        already_generated += u128::from(effective_reward);
+        already_generated += u128::from(paid_reward);
         total_burned += fee_split.actually_destroyed as u128;
 
         staker_emission_earned_year += staker_emission as u128;
         staker_fee_earned_year += fee_split.staker_pool_amount as u128;
 
-        if block_in_year == params.blocks_per_year - 1 || block == total_blocks - 1 {
+        if block_in_year == params.blocks_per_year() - 1 || block == total_blocks - 1 {
             let circ_now = already_generated.saturating_sub(total_burned) as f64 / COIN;
             let supply_emitted_pct =
                 already_generated as f64 / emission_curve_asymptote as f64 * 100.0;
 
-            let avg_block_reward = effective_reward as f64 / COIN;
+            let avg_block_reward = paid_reward as f64 / COIN;
 
             let staked_amount = match staked_atomic {
                 Some(locked) => locked as f64 / COIN,
@@ -289,7 +392,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 0.0
             };
 
-            let miner_no_share = effective_reward as f64;
+            let miner_no_share = paid_reward as f64;
             let miner_pct = if miner_no_share > 0.0 {
                 miner_emission as f64 / miner_no_share * 100.0
             } else {
@@ -331,7 +434,6 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         final_supply_emitted_pct: already_generated as f64 / emission_curve_asymptote as f64
             * 100.0,
         final_total_burned: total_burned as f64 / COIN,
-        stuffing_profitable: None,
         years: snapshots,
     }
 }
@@ -339,13 +441,29 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 #[cfg(test)]
 mod tests {
     use super::{
-        run_scenario, ArchivalLockModel, ScenarioConfig, SimParams, StakeSchedule, VolumeSchedule,
+        net_supply, run_scenario, ArchivalLockModel, ScenarioConfig, SimParams, StakeSchedule,
+        VolumeSchedule,
     };
+    use crate::baseline::Override;
+
+    /// The supply the folds' burn reads is generated minus burned, read at
+    /// the `u64` rail the chain records both at; equal accumulators net to
+    /// nothing rather than failing.
+    #[test]
+    fn net_supply_is_generated_less_burned_at_the_u64_rail() {
+        assert_eq!(net_supply(1_000, 250).to_raw(), 750);
+        assert_eq!(net_supply(1_000, 1_000).to_raw(), 0);
+        assert_eq!(net_supply(1_000, 0).to_raw(), 1_000);
+        let past_rail = u128::from(u64::MAX) + 5;
+        assert_eq!(net_supply(past_rail, 7).to_raw(), u64::MAX - 7);
+    }
     use serde_json::Value;
+
+    const FLOOR: u64 = shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
 
     fn tiny_lock_model(admission_min_atomic: u64) -> ArchivalLockModel {
         ArchivalLockModel {
-            bond_floor_atomic: 750_000_000,
+            bond_floor_atomic: FLOOR,
             replicas_per_shard: 6,
             blocks_per_shard: 100,
             n_p: 79,
@@ -359,15 +477,15 @@ mod tests {
         assert_eq!(arm_a.locked_atomic(0), 0);
         assert_eq!(arm_a.locked_atomic(99), 0);
         // one shard frozen: floor x replicas
-        assert_eq!(arm_a.locked_atomic(100), 750_000_000u128 * 6);
-        assert_eq!(arm_a.locked_atomic(1_000), 750_000_000u128 * 6 * 10);
+        assert_eq!(arm_a.locked_atomic(100), u128::from(FLOOR) * 6);
+        assert_eq!(arm_a.locked_atomic(1_000), u128::from(FLOOR) * 6 * 10);
 
-        let arm_b = tiny_lock_model(750_000_000);
+        let arm_b = tiny_lock_model(FLOOR);
         // admission term is flat MIN x N_P on top of the bond term
-        assert_eq!(arm_b.locked_atomic(0), 750_000_000u128 * 79);
+        assert_eq!(arm_b.locked_atomic(0), u128::from(FLOOR) * 79);
         assert_eq!(
             arm_b.locked_atomic(100),
-            750_000_000u128 * 6 + 750_000_000u128 * 79
+            u128::from(FLOOR) * 6 + u128::from(FLOOR) * 79
         );
     }
 
@@ -382,8 +500,7 @@ mod tests {
             stake: StakeSchedule {
                 get_stake_ratio: Box::new(|_b, _bpy, _c| 250_000),
             },
-            fee_per_tx: 100_000_000,
-            initial_emitted_fraction: 0.0,
+            initial_emitted_ppm: 0,
             genesis_height_offset: 0,
             archival_lock,
         }
@@ -391,10 +508,13 @@ mod tests {
 
     #[test]
     fn gate7_path_reports_derived_lock_and_legacy_path_omits_it() {
-        let params = SimParams {
-            blocks_per_year: 10_000,
-            ..SimParams::default()
-        };
+        // A one-hour block makes a short year: 365 × 24 = 8 760 blocks.
+        let params =
+            SimParams::with_overrides(vec![
+                Override::parse("economic.daa_target_seconds=3600").expect("well-formed")
+            ])
+            .expect("in band");
+        assert_eq!(params.blocks_per_year(), 8_760);
 
         let legacy = run_scenario(&params, &tiny_config(None));
         let last = legacy.years.last().expect("snapshot");
@@ -405,8 +525,10 @@ mod tests {
         let gate7 = run_scenario(&params, &tiny_config(Some(tiny_lock_model(0))));
         let last = gate7.years.last().expect("snapshot");
         let locked = last.locked_supply_coins.expect("derived lock reported");
-        // snapshot at block 9_999: 99 shards x 6 replicas x 0.75 coin
-        assert!((locked - 445.5).abs() < 1e-6);
+        // snapshot at block 8_759: 87 shards (one per 100 blocks) x 6
+        // replicas x the bond floor
+        let expected = 87.0 * 6.0 * FLOOR as f64 / crate::burden::COIN as f64;
+        assert!((locked - expected).abs() < 1e-6);
         // derived ratio against multi-million-coin circulating is far below
         // the asserted 25%
         assert!(last.stake_ratio_pct < 0.01);
@@ -426,37 +548,130 @@ mod tests {
         let p = SimParams::default();
 
         assert_eq!(
-            p.emission_curve_asymptote,
+            p.economic().emission_curve_asymptote,
             cfg_u64(&cfg, "emission_curve_asymptote")
         );
         assert_eq!(
-            p.emission_speed_factor_per_minute,
-            cfg_u64(&cfg, "emission_speed_factor_per_minute")
+            p.economic().emission_speed_factor_per_block,
+            cfg_u64(&cfg, "emission_speed_factor_per_block")
         );
         assert_eq!(
-            p.final_subsidy_per_minute,
+            p.economic().final_subsidy_per_minute,
             cfg_u64(&cfg, "final_subsidy_per_minute")
         );
-        assert_eq!(p.blocks_per_year, cfg_u64(&cfg, "shekyl_blocks_per_year"));
+        let consensus: Value =
+            serde_json::from_str(include_str!("../../../config/consensus_constants.json"))
+                .expect("consensus_constants.json must be valid JSON");
         assert_eq!(
-            p.tx_volume_baseline,
-            cfg_u64(&cfg, "shekyl_tx_volume_baseline")
-        );
-        assert_eq!(p.release_min, cfg_u64(&cfg, "shekyl_release_min"));
-        assert_eq!(p.release_max, cfg_u64(&cfg, "shekyl_release_max"));
-        assert_eq!(p.burn_base_rate, cfg_u64(&cfg, "shekyl_burn_base_rate"));
-        assert_eq!(p.burn_cap, cfg_u64(&cfg, "shekyl_burn_cap"));
-        assert_eq!(
-            p.staker_pool_share,
-            cfg_u64(&cfg, "shekyl_staker_pool_share")
+            p.blocks_per_year(),
+            shekyl_economics::blocks_per_year(cfg_u64(&consensus, "daa_target_seconds"))
         );
         assert_eq!(
-            p.staker_emission_share,
+            p.economic().staker_emission_share,
             cfg_u64(&cfg, "shekyl_staker_emission_share")
         );
         assert_eq!(
-            p.staker_emission_decay,
+            p.economic().staker_emission_decay,
             cfg_u64(&cfg, "shekyl_staker_emission_decay")
+        );
+        assert_eq!(
+            p.economic().tx_volume_baseline,
+            cfg_u64(&cfg, "shekyl_tx_volume_baseline")
+        );
+        assert_eq!(
+            p.economic().release_min,
+            cfg_u64(&cfg, "shekyl_release_min")
+        );
+        assert_eq!(
+            p.economic().release_max,
+            cfg_u64(&cfg, "shekyl_release_max")
+        );
+        assert_eq!(
+            p.economic().burn_base_rate,
+            cfg_u64(&cfg, "shekyl_burn_base_rate")
+        );
+        assert_eq!(p.economic().burn_cap, cfg_u64(&cfg, "shekyl_burn_cap"));
+        assert_eq!(
+            p.economic().staker_pool_share,
+            cfg_u64(&cfg, "shekyl_staker_pool_share")
+        );
+    }
+
+    /// A replaced knob is the curve the run prices. Untouched fields stay
+    /// shipped, including the escalation the fold does not sweep from here,
+    /// and the production reward function sees the replacement.
+    #[test]
+    fn a_replaced_factor_is_the_curve_the_run_prices() {
+        use shekyl_economics::base_block_reward;
+        use shekyl_economics::params::EconomicParams;
+
+        let shipped = EconomicParams::default();
+        let alternative = shipped.emission_speed_factor_per_block - 1;
+        let run = SimParams::with_overrides(vec![Override::parse(&format!(
+            "economic.emission_speed_factor_per_block={alternative}"
+        ))
+        .expect("well-formed")])
+        .expect("in band");
+        let priced = run.economic();
+        assert_eq!(priced.emission_speed_factor_per_block, alternative);
+        assert_eq!(
+            priced.emission_curve_asymptote,
+            shipped.emission_curve_asymptote
+        );
+        assert_eq!(priced.staker_pool_share, shipped.staker_pool_share);
+        assert_eq!(priced.escalation_knee_n, shipped.escalation_knee_n);
+        assert_eq!(
+            priced.escalation_asymptote_share,
+            shipped.escalation_asymptote_share
+        );
+        let reward = base_block_reward(0, priced).expect("genesis reward on the alternative");
+        assert_eq!(reward, shipped.emission_curve_asymptote >> alternative);
+        let shipped_reward =
+            base_block_reward(0, &shipped).expect("genesis reward on the shipped curve");
+        assert!(reward > shipped_reward);
+    }
+
+    /// A replaced schedule is the share the run prices. The year, the
+    /// initial share and the decay are that schedule's three fields.
+    #[test]
+    fn a_replaced_schedule_is_the_share_the_run_prices() {
+        use shekyl_economics::{EconomicParams, EMISSION_SPLIT_EPOCH};
+
+        let shipped = EconomicParams::default();
+        let quiet =
+            SimParams::with_overrides(vec![
+                Override::parse("economic.staker_emission_share=0").expect("well-formed")
+            ])
+            .expect("in band");
+        let quiet_priced = quiet.economic();
+        assert_eq!(
+            quiet_priced
+                .emission_schedule()
+                .share_at(EMISSION_SPLIT_EPOCH),
+            0
+        );
+        assert!(shipped.emission_schedule().share_at(EMISSION_SPLIT_EPOCH) > 0);
+        assert_eq!(quiet_priced.blocks_per_year(), shipped.blocks_per_year());
+        assert_eq!(
+            quiet_priced.staker_emission_decay,
+            shipped.staker_emission_decay
+        );
+
+        // A one-block year: the DAA target is the whole year.
+        let fast = SimParams::with_overrides(vec![Override::parse(&format!(
+            "economic.daa_target_seconds={}",
+            shekyl_economics::params::SECONDS_PER_YEAR
+        ))
+        .expect("well-formed")])
+        .expect("in band");
+        assert_eq!(fast.blocks_per_year(), 1);
+        assert!(
+            fast.economic()
+                .emission_schedule()
+                .share_at(EMISSION_SPLIT_EPOCH + 1)
+                < shipped
+                    .emission_schedule()
+                    .share_at(EMISSION_SPLIT_EPOCH + 1)
         );
     }
 }

@@ -7,7 +7,7 @@ command maps are LV-2b in `shekyl-levin`. Decision pin:
 Shekyl integers on this format are **little-endian**. Encode order is
 lexicographic (`std::map` / `BTreeMap`). Known-answer tests for the
 codec live in `rust/shekyl-portable-storage/tests/oracle_kats.rs`.
-Handshake / timed-sync / ping / support-flags / `network_address`
+Handshake / timed-sync / `network_address`
 round-trips live in `rust/shekyl-levin/tests/payload_kats.rs`.
 Notify maps (2001–2004 / 2006–2010) live in
 `rust/shekyl-levin/tests/notify_kats.rs` (LV-2b).

@@ -459,6 +459,104 @@ pub fn grow(frontier: &TreeFrontier, leaves: &[TreeLeaf]) -> Result<TreeGrowth, 
     })
 }
 
+/// What SI-5 reads to rebuild a tree's right edge (`DRS_E5_POOL_ALT_PRUNE.md`
+/// §2.3): the leaf positions under layer 0's last chunk, and for every layer
+/// `L ≥ 1` the chunk indices of layer `L − 1` under `L`'s last chunk. The
+/// last index of each `children` range is the chunk rebuilt one layer down,
+/// so a reader fetches every index **but** the last; the rest are full
+/// chunks a pop cannot change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RightEdgeSpan {
+    /// Leaf positions under layer 0's last chunk.
+    pub leaves: core::ops::Range<u64>,
+    /// `children[L − 1]`: the chunk indices of layer `L − 1` that layer `L`'s
+    /// last chunk spans, for `L` in `1..layer_count`.
+    pub children: Vec<core::ops::Range<u64>>,
+}
+
+impl RightEdgeSpan {
+    /// The span of a tree of `leaf_count` leaves; `None` for the empty tree,
+    /// which has no edge to rebuild.
+    #[must_use]
+    pub fn of(leaf_count: u64) -> Option<Self> {
+        if leaf_count == 0 {
+            return None;
+        }
+        let width0 = SELENE_CHUNK_WIDTH as u64;
+        let leaves = ((leaf_count - 1) / width0) * width0..leaf_count;
+        let children = (1..layer_count_for_leaves(leaf_count))
+            .map(|layer| {
+                let below = chunk_count(leaf_count, layer - 1);
+                let width = chunk_width(layer) as u64;
+                ((below - 1) / width) * width..below
+            })
+            .collect();
+        Some(Self { leaves, children })
+    }
+}
+
+/// The tree's right edge rebuilt from its children: each layer's last chunk
+/// hashed from scratch, leaf layer first, every layer above taking the
+/// chunk rebuilt beneath it as its last child and the stored full chunks
+/// before it (SI-5). `leaves` are the leaves in `span.leaves`; `stored[L − 1]`
+/// are the stored hashes of `span.children[L − 1]` **without** its last
+/// index. Returns the rebuilt last chunk per layer, layer 0 first; the last
+/// entry is the root. Hashing a chunk from its layer's `hash_init` at
+/// offset zero equals growing it incrementally (`hash_grow` is additive in
+/// its children), which is what lets a reader check a tree [`grow`] built.
+///
+/// # Errors
+///
+/// [`FrontierFault::Shape`] when the inputs are not the span's sizes;
+/// [`FrontierFault::NotOnCurve`] when a stored hash or a leaf scalar is not
+/// on its layer's curve. Both are properties of stored bytes.
+pub fn rebuild_right_edge(
+    span: &RightEdgeSpan,
+    leaves: &[TreeLeaf],
+    stored: &[Vec<ChunkHash>],
+) -> Result<Vec<ChunkHash>, FrontierFault> {
+    let layers = span.children.len() + 1;
+    let shape = FrontierFault::Shape {
+        layers: stored.len() + 1,
+        expected: u8::try_from(layers).unwrap_or(u8::MAX),
+    };
+    if stored.len() != span.children.len()
+        || u64::try_from(leaves.len()).ok() != Some(span.leaves.end - span.leaves.start)
+    {
+        return Err(shape);
+    }
+    let scalars: Vec<[u8; 32]> = leaves
+        .iter()
+        .flat_map(|leaf| {
+            let bytes = leaf.as_bytes();
+            (0..SCALARS_PER_LEAF).map(move |i| {
+                let mut s = [0u8; 32];
+                s.copy_from_slice(&bytes[i * 32..(i + 1) * 32]);
+                s
+            })
+        })
+        .collect();
+    let leaf_chunk = grow_chunk(0, &init_for(0), 0, &ZERO_SCALAR, &scalars)
+        .ok_or(FrontierFault::NotOnCurve { layer: 0 })?;
+    let mut edge = vec![leaf_chunk];
+    for (index, (range, full)) in span.children.iter().zip(stored).enumerate() {
+        let layer = u8::try_from(index + 1).expect("a tree has fewer than 256 layers");
+        if u64::try_from(full.len()).ok() != Some(range.end - range.start - 1) {
+            return Err(shape);
+        }
+        let below = edge.last().expect("the leaf layer is rebuilt first");
+        let children = full
+            .iter()
+            .chain(core::iter::once(below))
+            .map(|hash| child_scalar(layer, hash).ok_or(FrontierFault::NotOnCurve { layer }))
+            .collect::<Result<Vec<_>, _>>()?;
+        let chunk = grow_chunk(layer, &init_for(layer), 0, &ZERO_SCALAR, &children)
+            .ok_or(FrontierFault::NotOnCurve { layer })?;
+        edge.push(chunk);
+    }
+    Ok(edge)
+}
+
 #[cfg(test)]
 #[path = "tree_growth_tests.rs"]
 mod tree_growth_tests;

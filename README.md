@@ -9,7 +9,6 @@ Portions Copyright (c) 2012-2013 The Cryptonote developers.
   - [Vulnerability response](#vulnerability-response)
   - [Research](#research)
   - [Announcements](#announcements)
-  - [Translations](#translations)
   - [Coverage](#coverage)
   - [Why the name Shekyl](#why-the-name-shekyl)
   - [Introduction](#introduction)
@@ -21,7 +20,6 @@ Portions Copyright (c) 2012-2013 The Cryptonote developers.
   - [Release staging schedule and protocol](#release-staging-schedule-and-protocol)
   - [Compiling Shekyl from source](#compiling-shekyl-from-source)
     - [Dependencies](#dependencies)
-  - [Internationalization](#Internationalization)
   - [Using Tor](#using-tor)
   - [Pruning](#Pruning)
   - [Debugging](#Debugging)
@@ -55,12 +53,6 @@ protocol contracts include:
 ## Announcements
 
 - Major release and security announcements are published via `shekyl.org` and repository release notes.
-
-## Translations
-
-The CLI wallet supports multiple languages. See [README.i18n.md](docs/README.i18n.md)
-for the translation workflow. To contribute translations, open an issue and we
-will coordinate files and review process.
 
 ## Coverage
 
@@ -167,24 +159,16 @@ library archives (`.a`).
 | Dep          | Min. version  | Vendored | Debian/Ubuntu pkg    | Arch pkg     | Void pkg           | Fedora pkg          | Optional | Purpose         |
 | ------------ | ------------- | -------- | -------------------- | ------------ | ------------------ | ------------------- | -------- | --------------- |
 | GCC          | 5             | NO       | `build-essential`    | `base-devel` | `base-devel`       | `gcc`               | NO       |                 |
-| CMake        | 3.5           | NO       | `cmake`              | `cmake`      | `cmake`            | `cmake`             | NO       |                 |
+| CMake        | 3.22          | NO       | `cmake`              | `cmake`      | `cmake`            | `cmake`             | NO       |                 |
 | pkg-config   | any           | NO       | `pkg-config`         | `base-devel` | `base-devel`       | `pkgconf`           | NO       |                 |
 | Boost        | 1.66          | NO       | `libboost-all-dev`   | `boost`      | `boost-devel`      | `boost-devel`       | NO       | C++ libraries   |
 | OpenSSL      | basically any | NO       | `libssl-dev`         | `openssl`    | `openssl-devel`    | `openssl-devel`     | NO       | sha256 sum      |
 | libsodium    | ?             | NO       | `libsodium-dev`      | `libsodium`  | `libsodium-devel`  | `libsodium-devel`   | NO       | cryptography    |
-| libunwind    | any           | NO       | `libunwind8-dev`     | `libunwind`  | `libunwind-devel`  | `libunwind-devel`   | YES      | Stack traces    |
-| liblzma      | any           | NO       | `liblzma-dev`        | `xz`         | `liblzma-devel`    | `xz-devel`          | YES      | For libunwind   |
 | libreadline  | 6.3.0         | NO       | `libreadline6-dev`   | `readline`   | `readline-devel`   | `readline-devel`    | YES      | Input editing   |
 | GTest        | 1.5           | YES      | `libgtest-dev`[1]    | `gtest`      | `gtest-devel`      | `gtest-devel`       | YES      | Test suite      |
 | ccache       | any           | NO       | `ccache`             | `ccache`     | `ccache`           | `ccache`            | YES      | Compil. cache   |
 | Doxygen      | any           | NO       | `doxygen`            | `doxygen`    | `doxygen`          | `doxygen`           | YES      | Documentation   |
 | Graphviz     | any           | NO       | `graphviz`           | `graphviz`   | `graphviz`         | `graphviz`          | YES      | Documentation   |
-| lrelease     | ?             | NO       | `qttools5-dev-tools` | `qt5-tools`  | `qt5-tools`        | `qt5-linguist`      | YES      | Translations    |
-| libhidapi    | ?             | NO       | `libhidapi-dev`      | `hidapi`     | `hidapi-devel`     | `hidapi-devel`      | YES      | Hardware wallet |
-| libusb       | ?             | NO       | `libusb-1.0-0-dev`   | `libusb`     | `libusb-devel`     | `libusbx-devel`     | YES      | Hardware wallet |
-| libprotobuf  | ?             | NO       | `libprotobuf-dev`    | `protobuf`   | `protobuf-devel`   | `protobuf-devel`    | YES      | Hardware wallet |
-| protoc       | ?             | NO       | `protobuf-compiler`  | `protobuf`   | `protobuf`         | `protobuf-compiler` | YES      | Hardware wallet |
-| libudev      | ?             | NO       | `libudev-dev`        | `systemd`    | `eudev-libudev-devel` | `systemd-devel`  | YES      | Hardware wallet |
 
 [1] On Debian/Ubuntu `libgtest-dev` only includes sources and headers. You must
 build the library binary manually. This can be done with the following command `sudo apt-get install libgtest-dev && cd /usr/src/gtest && sudo cmake . && sudo make`
@@ -198,23 +182,23 @@ then:
 Install all dependencies at once on Debian/Ubuntu:
 
 ```
-sudo apt update && sudo apt install build-essential cmake pkg-config libssl-dev libsodium-dev libunwind8-dev liblzma-dev libreadline6-dev qttools5-dev-tools libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler libudev-dev libboost-chrono-dev libboost-date-time-dev libboost-filesystem-dev libboost-locale-dev libboost-program-options-dev libboost-regex-dev libboost-serialization-dev libboost-system-dev libboost-thread-dev python3 ccache doxygen graphviz
+sudo apt update && sudo apt install build-essential cmake pkg-config libssl-dev libsodium-dev libreadline6-dev libboost-chrono-dev libboost-date-time-dev libboost-filesystem-dev libboost-locale-dev libboost-program-options-dev libboost-regex-dev libboost-serialization-dev libboost-system-dev libboost-thread-dev python3 ccache doxygen graphviz
 ```
 
 Install all dependencies at once on Arch:
 ```
-sudo pacman -Syu --needed base-devel cmake boost openssl libsodium libunwind xz readline gtest python3 ccache doxygen graphviz qt5-tools hidapi libusb protobuf systemd
+sudo pacman -Syu --needed base-devel cmake boost openssl libsodium readline gtest python3 ccache doxygen graphviz
 ```
 
 Install all dependencies at once on Fedora:
 ```
-sudo dnf install gcc gcc-c++ cmake pkgconf boost-devel openssl-devel libsodium-devel libunwind-devel xz-devel readline-devel gtest-devel ccache doxygen graphviz qt5-linguist hidapi-devel libusbx-devel protobuf-devel protobuf-compiler systemd-devel
+sudo dnf install gcc gcc-c++ cmake pkgconf boost-devel openssl-devel libsodium-devel readline-devel gtest-devel ccache doxygen graphviz
 ```
 
 Install all dependencies at once on openSUSE:
 
 ```
-sudo zypper ref && sudo zypper in libboost_chrono-devel libboost_date_time-devel libboost_filesystem-devel libboost_locale-devel libboost_program_options-devel libboost_regex-devel libboost_serialization-devel libboost_system-devel libboost_thread-devel libminiupnpc-devel libsodium-devel libunwind-devel cmake doxygen ccache fdupes gcc-c++ libevent-devel libopenssl-devel pkgconf-pkg-config readline-devel xz-devel libqt5-qttools-devel patterns-devel-C-C++-devel_C_C++
+sudo zypper ref && sudo zypper in libboost_chrono-devel libboost_date_time-devel libboost_filesystem-devel libboost_locale-devel libboost_program_options-devel libboost_regex-devel libboost_serialization-devel libboost_system-devel libboost_thread-devel libminiupnpc-devel libsodium-devel cmake doxygen ccache fdupes gcc-c++ libevent-devel libopenssl-devel pkgconf-pkg-config readline-devel patterns-devel-C-C++-devel_C_C++
 ```
 
 Install all dependencies at once on macOS with the provided Brewfile:
@@ -384,7 +368,7 @@ application.
 * Install dependencies for 64-bit Windows:
 
     ```bash
-    pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi
+    pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium
     ```
 
 * Open the MingW shell via the `MinGW-w64-Win64 Shell` shortcut.
@@ -454,7 +438,7 @@ Then you need to increase the data ulimit size to 2GB and try again: `ulimit -d 
 
 ### On NetBSD:
 
-Check that the dependencies are present: `pkg_info -c libexecinfo boost-headers boost-libs protobuf readline libusb1 git-base pkgconf gmake cmake | more`, and install any that are reported missing, using `pkg_add` or from your pkgsrc tree.  Readline is optional but worth having.
+Check that the dependencies are present: `pkg_info -c libexecinfo boost-headers boost-libs readline git-base pkgconf gmake cmake | more`, and install any that are reported missing, using `pkg_add` or from your pkgsrc tree.  Readline is optional but worth having.
 
 Third-party dependencies are usually under `/usr/pkg/`, but if you have a custom setup, adjust the "/usr/pkg" (below) accordingly.
 
@@ -501,14 +485,14 @@ You can also cross-compile static binaries on Linux for Windows and macOS with t
   * Requires: `clang`
 * ```make depends target=aarch64-linux-gnu``` for armv8 binaries.
   * Requires: `g++-aarch64-linux-gnu`
-* ```make depends target=riscv64-linux-gnu``` for RISC V 64 bit binaries.
+* ```make depends target=riscv64-linux-gnu``` for RISC V 64 bit binaries
+  (a source build only: riscv64 is not a shipped target, see `docs/RELEASING.md`).
   * Requires: `g++-riscv64-linux-gnu`
 * ```make depends target=x86_64-unknown-freebsd``` for freebsd binaries.
   * Requires: `clang-8`
-* ```make depends target=aarch64-linux-android``` for 64bit android binaries
 
-32-bit depends targets (`i686-w64-mingw32`, `arm-linux-gnueabihf`,
-`arm-linux-android`) were permanently retired in v3.1.0-alpha.5
+32-bit depends targets (`i686-w64-mingw32`, `arm-linux-gnueabihf`)
+were permanently retired in v3.1.0-alpha.5
 (Chore #3) on PQC constant-time grounds. See `docs/CHANGELOG.md`
 entry "Retired 32-bit build targets".
 
@@ -533,83 +517,61 @@ foreground:
 ./bin/shekyld
 ```
 
-To list all available options, run `./bin/shekyld --help`. Options can be
-specified either on the command line or in a configuration file passed by the
-`--config-file` argument.  To specify an option in the configuration file, add
-a line with the syntax `argumentname=value`, where `argumentname` is the name
-of the argument without the leading dashes, for example, `log-level=1`.
+To list all available options, run `./bin/shekyld --help`; the same table
+is in [docs/EXECUTABLES.md](docs/EXECUTABLES.md). Options can be given on
+the command line or in a configuration file: TOML, each key an option's
+name without the leading dashes (`log-level = "info"`), read from
+`/etc/shekyl/shekyld-<network>.toml` by default or from the file
+`--config-file` names. The network is always given on the command line,
+because it chooses the file. An annotated example of every file option is
+in [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 To run in the background, use your platform's service manager (systemd,
-launchd, or Task Scheduler). See the example systemd unit files under
-`utils/systemd/` and `contrib/packaging/linux/`, and the configuration
-examples under `utils/conf/`; adapt paths and the service user to your
-deployment. The `--detach` / `--pidfile` / `--*-service` flags were
-removed in V3.1 — `shekyld` always runs in the foreground and is
-supervised externally.
-
-If you're on Mac, you may need to add the `--max-concurrency 1` option to
-shekyl-cli, and possibly shekyld, if you get crashes refreshing.
-
-## Internationalization
-
-See [README.i18n.md](docs/README.i18n.md).
+launchd, or Task Scheduler). The shipped systemd unit is
+`contrib/packaging/linux/shekyld.service`, which runs in its own
+`shekyl.slice` beside it (the `.deb` installs both). Adapt paths and the
+service user to your deployment; nothing reads the daemon's stdin unless
+`--console` is given, so a unit needs no flag for that. `shekyld` always
+runs in the foreground and is supervised externally.
 
 ## Using Tor
 
-> There is a new, still experimental, [integration with Tor](docs/ANONYMITY_NETWORKS.md). The
-> feature allows connecting over IPv4 and Tor simultaneously - IPv4 is used for
-> relaying blocks and relaying transactions received by peers whereas Tor is
-> used solely for relaying transactions received over local RPC. This provides
-> privacy and better protection against surrounding node (sybil) attacks.
-
-While Shekyl is not primarily designed as a Tor-integrated stack, it can be used wrapped with torsocks by
-setting the following configuration parameters and environment variables:
-
-* `--p2p-bind-ip 127.0.0.1` on the command line or `p2p-bind-ip=127.0.0.1` in
-  the config file to disable listening for connections on external interfaces.
-* `--no-igd` on the command line or `no-igd=1` in the config file to disable IGD
-  (UPnP port forwarding negotiation), which is pointless with Tor.
-* `TORSOCKS_ALLOW_INBOUND=1` to tell torsocks to allow shekyld to bind to interfaces
-   to accept connections from the wallet. On some Linux systems, torsocks
-   allows binding to localhost by default, so setting this variable is only
-   necessary to allow binding to local LAN/VPN interfaces to allow wallets to
-   connect from remote hosts. On other systems, it may be needed for local wallets
-   as well.
-* Rely on systemd/launchd/Task Scheduler to supervise `shekyld` under
-  torsocks — `--detach` was removed in V3.1 and `shekyld` always runs in
-  the foreground. See the example service files under `utils/systemd/`
-  for details.
-* If you use the wallet with a Tor daemon via the loopback IP (eg, 127.0.0.1:9050),
-  then use `--untrusted-daemon` unless it is your own hidden service.
-
-Example command line to start shekyld through Tor:
+The daemon has a Tor connector of its own; nothing is wrapped in torsocks.
+It is on by default: `tor = managed` runs the bundled Tor (`tor-file`
+names the binary), and the node is reachable over Tor and clearnet both.
+To use a Tor you run instead, name its SOCKS endpoint and, to be reachable
+over Tor, your onion service and the local endpoint it forwards to:
 
 ```bash
-torsocks shekyld --p2p-bind-ip 127.0.0.1 --no-igd
+shekyld --tor operator --tor-socks 127.0.0.1:9050 \
+    --tor-onion <your-onion>.onion:11021 --tor-onion-listen 127.0.0.1:11021
 ```
 
-A helper script is in `contrib/tor/`. It assumes Tor is installed
-already, and runs Tor and the daemon with compatible configuration.
+`--tor off` is clearnet only; `--clearnet off` is Tor only. The same rows
+go in the configuration file. The wallet reaches a daemon's RPC over an
+onion service you run in front of its loopback RPC, through `--proxy`
+(see [docs/proxies.md](docs/proxies.md)); use `--untrusted-daemon` unless
+it is your own.
 
 ### Using Tor on Tails
 
-TAILS ships with a very restrictive set of firewall rules. Therefore, you need
-to add a rule to allow this connection too, in addition to telling torsocks to
-allow inbound connections. Full example:
+TAILS ships with a very restrictive set of firewall rules, so the wallet's
+connection to the daemon's loopback RPC needs a rule of its own:
 
 ```bash
 sudo iptables -I OUTPUT 2 -p tcp -d 127.0.0.1 -m tcp --dport 11029 -j ACCEPT
-torsocks ./shekyld --p2p-bind-ip 127.0.0.1 --no-igd --rpc-bind-ip 127.0.0.1 \
+shekyld --tor operator --tor-socks 127.0.0.1:9050 \
     --data-dir /home/amnesia/Persistent/your/directory/to/the/blockchain
 ```
 
 ## Pruning
 
-Shekyl supports blockchain pruning via the `--prune-blockchain` flag. A pruned
-node can only serve part of the historical chain data to peers but is otherwise
-fully functional. Start the initial sync with `--prune-blockchain` for the
-smallest footprint, or prune an existing chain using the same flag or the
-pruning tool. Chain sizes will be established after mainnet launch.
+There is no pruning option. What a node keeps of the chain is decided by
+the chain store's retention rules, the same for every node
+([docs/design/DRS_E1_SPRUNE.md](docs/design/DRS_E1_SPRUNE.md)), not by a
+flag; a node that kept less than the rules say could not serve its peers
+or verify its own history. Chain sizes will be established after mainnet
+launch.
 
 ## Debugging
 
@@ -681,21 +643,9 @@ You can then run the Shekyl tools normally. Performance will typically halve.
 
 Install valgrind and run as `valgrind /path/to/shekyld`. It will be very slow.
 
-### LMDB
+### Store
 
-Instructions for debugging suspected blockchain corruption as per @HYC
-
-There is an `mdb_stat` command in the LMDB source that can print statistics about the database but it's not routinely built. This can be built with the following command:
-
-```bash
-cd ~/Shekyl/external/db_drivers/liblmdb && make
-```
-
-The output of `mdb_stat -ea <path to blockchain dir>` will indicate inconsistencies in the blocks, block_heights and block_info table.
-
-The output of `mdb_dump -s blocks <path to blockchain dir>` and `mdb_dump -s block_info <path to blockchain dir>` is useful for indicating whether blocks and block_info contain the same keys.
-
-These records are dumped as hex data, where the first line is the key and the second line is the data.
+The daemon's chain store is the Rust store `shekyl-node` opens. `mdb_stat` does not read it.
 
 # Known Issues
 

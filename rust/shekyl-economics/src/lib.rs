@@ -23,9 +23,11 @@ pub mod emission_share;
 pub mod escalation;
 pub mod fee;
 pub mod params;
+pub mod relay_policy;
 pub mod release;
 pub mod reward;
 pub mod supply;
+pub mod tip;
 pub mod volume;
 
 pub use activity::{ActivityInvariantViolation, ActivityMetric};
@@ -39,25 +41,33 @@ pub use burn::{
 pub use digest::{params_digest, DIGEST_FORMAT_VERSION};
 pub use emission::{
     advance_already_generated, base_block_reward, base_emission_at, block_reward_with_penalty,
-    block_weight_limit, effective_emission, emission_speed_factor, paid_block_reward,
-    projected_already_generated, tail_subsidy_per_block, EmissionError,
+    block_weight_limit, effective_emission, neutral_height_reaching, paid_block_reward,
+    penalty_free_weight, projected_already_generated, tail_subsidy_per_block, EmissionError,
+    PrePenaltyEmission,
 };
 pub use emission_share::{
-    calc_effective_emission_share, compute_emission_split, split_block_emission, EmissionSplit,
+    compute_emission_split, emission_share, emission_share_at, split_block_emission,
+    EmissionSchedule, EmissionScheduleError, EmissionSplit, EMISSION_SPLIT_EPOCH,
 };
 pub use escalation::{
     staker_pool_share_at, ClosedShardCount, EscalationParams, EscalationShapeError, ScaledShare,
 };
 pub use fee::{
-    checked_corrected_fee_ladder, checked_relay_fee_floor, corrected_fee_ladder, fee_correction,
-    fee_correction_quantized, hysteresis_fold, hysteresis_settled, hysteresis_step,
-    quantize_pow2_ceil, relay_fee_floor, relay_floor_admits, round_money_up_2, FeeCorrection,
-    FeeLadder, EMISSION_CLAIM_FEE_FLOOR, RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_LOOKBACK,
-    RELAY_FLOOR_WINDOW,
+    checked_corrected_fee_ladder, checked_relay_fee_floor, corrected_fee_ladder,
+    correction_factors_at, fee_correction, fee_correction_at, fee_ladder_from, quantized_fee,
+    relay_fee_floor, relay_floor_admits, relay_floor_from, CorrectionFactors, FeeCorrection,
+    FeeLadder, FeeOperands, EMISSION_CLAIM_FEE_FLOOR, FEE_DECIMAL_PLACES, FEE_QUANTIZATION_MASK,
+    RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_LOOKBACK, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+    RELAY_FLOOR_WINDOW, STANDARD_RUNG_OVER_ECONOMY,
 };
 pub use params::{
-    calc_stake_ratio, EconomicParams, EconomicParamsError, BLOCKS_PER_YEAR, CALIBRATION_GENERATION,
-    EMISSION_CURVE_ASYMPTOTE, FULL_REWARD_ZONE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    blocks_per_year, calc_stake_ratio, economic_params, EconomicParams, EconomicParamsError,
+    BLOCKS_PER_YEAR, CALIBRATION_GENERATION, EMISSION_CURVE_ASYMPTOTE, FULL_REWARD_ZONE,
+    STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+};
+pub use relay_policy::{
+    relay_policy, relay_policy_digest, RelayPolicy, RelayPolicyError, BASIS_POINTS,
+    RELAY_DIGEST_FORMAT_VERSION,
 };
 pub use release::calc_release_multiplier;
 pub use reward::{
@@ -65,4 +75,5 @@ pub use reward::{
     GENESIS_HEIGHT, REPRICING_PASSES,
 };
 pub use supply::{CirculatingSupply, SupplyInvariantViolation};
+pub use tip::{project_at_tip, TipEconomics, TipOperands};
 pub use volume::TxVolume;

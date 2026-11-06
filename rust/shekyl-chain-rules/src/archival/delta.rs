@@ -3,11 +3,14 @@
 
 //! The delta a block's archival transition hands the store (`ARW-Q1`).
 //!
-//! The fields and `new` are visible inside `archival` — the transition and
-//! its siblings build the delta — and private past that module. The doctests on
-//! [`ArchivalDelta`] are the pin. The store writes what it is given.
+//! The fields are visible inside `archival` — the transition and its
+//! siblings build the delta — and private past that module. The doctest on
+//! [`ArchivalDelta`] is the pin. The store writes what it is given.
 
-use shekyl_types::archival::{BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry};
+use shekyl_types::archival::{
+    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, RMarket, SettlementRow,
+    SigmaWorkMilli, SlashLogEntry, SupportSeats,
+};
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
@@ -27,55 +30,47 @@ use shekyl_units::AtomicUnits;
 /// ```compile_fail,E0451
 /// let delta = shekyl_chain_rules::ArchivalDelta {
 ///     records: Vec::new(),
+///     releases: Vec::new(),
 ///     serve_credits: Vec::new(),
+///     settlements: Vec::new(),
+///     support_settlements: Vec::new(),
+///     gathers: Vec::new(),
 ///     slashes: Vec::new(),
 ///     slash_watermark: None,
 ///     accrual: todo!(),
 ///     close: None,
+///     drawable_digest: None,
+///     draws: todo!(),
+///     support_count: todo!(),
 /// };
 /// ```
 ///
-/// and there is no public constructor — the transition is the only site:
-///
-/// ```compile_fail,E0624
-/// let delta = shekyl_chain_rules::ArchivalDelta::new(
-///     Vec::new(),
-///     Vec::new(),
-///     Vec::new(),
-///     None,
-///     todo!(),
-///     None,
-/// );
-/// ```
+/// and there is no constructor at all: the transition builds the value
+/// field by field, inside this module's parent, and is the only site.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchivalDelta {
     pub(super) records: Vec<RecordWrite>,
+    pub(super) releases: Vec<ReleasePreImage>,
     pub(super) serve_credits: Vec<ServeCreditKey>,
+    pub(super) settlements: Vec<Settlement>,
+    /// One support row per complete tree per epoch. Not keyed by shard.
+    pub(super) support_settlements: Vec<SupportSettlement>,
+    pub(super) gathers: Vec<EpochGather>,
     pub(super) slashes: Vec<Slash>,
     pub(super) slash_watermark: Option<SettlementEpoch>,
     pub(super) accrual: Accrual,
     pub(super) close: Option<EpochClose>,
+    pub(super) drawable_digest: Option<DrawableDigestWrite>,
+    /// The draw count of the connecting block. Present at every height,
+    /// including a schedule with no response window, which records zeros.
+    pub(super) draws: BlockDraws,
+    /// The complete trees the connecting block seated on the support
+    /// stream, in persona order. Present at every height; the empty row is
+    /// a block that seated nobody, and a missing row is the hole.
+    pub(super) support_seats: SupportSeats,
 }
 
 impl ArchivalDelta {
-    pub(super) const fn new(
-        records: Vec<RecordWrite>,
-        serve_credits: Vec<ServeCreditKey>,
-        slashes: Vec<Slash>,
-        slash_watermark: Option<SettlementEpoch>,
-        accrual: Accrual,
-        close: Option<EpochClose>,
-    ) -> Self {
-        Self {
-            records,
-            serve_credits,
-            slashes,
-            slash_watermark,
-            accrual,
-            close,
-        }
-    }
-
     /// Every bond record this block changes, in persona-key order, as its
     /// **post-image** — the inserts (JoinMarket) and the updates (Release,
     /// Reinstate, claim, slash). A record no arm touched is not here.
@@ -84,11 +79,51 @@ impl ArchivalDelta {
         &self.records
     }
 
+    /// Every Release this block connects, in block order, each with the
+    /// record as it stood before the Release changed it: what the store
+    /// journals under `(height, persona)` (`archival_release_journal`,
+    /// `SO-D12` increment 2). The post-image is in [`Self::records`].
+    #[must_use]
+    pub fn releases(&self) -> &[ReleasePreImage] {
+        &self.releases
+    }
+
     /// The serve-credit keys this block's transactions earn, in block
     /// order (§3.2 phase 2: each becomes a `Present` under its key).
     #[must_use]
     pub fn serve_credits(&self) -> &[ServeCreditKey] {
         &self.serve_credits
+    }
+
+    /// The settlement rows this block's slash pass derives, by epoch, then
+    /// persona, then shard: one per pair with a counted draw in each epoch
+    /// whose deadline this block passes
+    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` §14). The slashes below were
+    /// decided on these rows and on rows already recorded; the store
+    /// writes them first (`SO-D7`).
+    #[must_use]
+    pub fn settlements(&self) -> &[Settlement] {
+        &self.settlements
+    }
+
+    /// The support rows this block's slash pass derives, by epoch, then
+    /// persona: one per complete tree with a counted draw
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Not keyed by shard.
+    #[must_use]
+    pub fn support_settlements(&self) -> &[SupportSettlement] {
+        &self.support_settlements
+    }
+
+    /// The emission gather of every epoch this block's slash pass settled,
+    /// in epoch order: each epoch's co-holder counts and `Σwork`, folded
+    /// over the pairs its settlement rows say were Served
+    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` §15, `SO-D11`). One per settled
+    /// epoch, whether or not any pair was Served — a zero is written, not
+    /// skipped (`ARW-Q4`), so the epoch's `Σwork` row exists and a claim
+    /// can cite it.
+    #[must_use]
+    pub fn gathers(&self) -> &[EpochGather] {
+        &self.gathers
     }
 
     /// The slashes this block applies, in application order — the order
@@ -118,6 +153,76 @@ impl ArchivalDelta {
     #[must_use]
     pub const fn close(&self) -> Option<&EpochClose> {
         self.close.as_ref()
+    }
+
+    /// The digest of the drawable set of the epoch this block opens, when
+    /// it is an `h_open(E)` — genesis for epoch 0, and the first block of
+    /// every later epoch; `None` at every other height. Taken over the
+    /// state after this block, its slash pass included
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.1, §9.5 check 2).
+    #[must_use]
+    pub const fn drawable_digest(&self) -> Option<&DrawableDigestWrite> {
+        self.drawable_digest.as_ref()
+    }
+
+    /// The draw count of the connecting block (`SO-D12` increment 3).
+    /// Written at every height. `issued_short` is zero until admission.
+    #[must_use]
+    pub const fn draws(&self) -> BlockDraws {
+        self.draws
+    }
+
+    /// The complete trees the connecting block seated on the support
+    /// stream, in persona order (`ARCHIVAL_SUPPORT_DRAW.md` §5; `SO-D12`
+    /// S1). Written at every height. The length is the number of support
+    /// draws the block issued.
+    #[must_use]
+    pub const fn support_seats(&self) -> &SupportSeats {
+        &self.support_seats
+    }
+}
+
+/// One Release's pre-image: the persona's record exactly as it stood before
+/// the Release arm changed it. `Clone` for [`ArchivalDelta`]'s one cloning
+/// caller.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReleasePreImage {
+    pub(super) persona: PCanonicalId,
+    pub(super) record: BondRecord,
+}
+
+impl ReleasePreImage {
+    /// The releasing persona.
+    #[must_use]
+    pub const fn persona(&self) -> &PCanonicalId {
+        &self.persona
+    }
+
+    /// The record before the Release.
+    #[must_use]
+    pub const fn record(&self) -> &BondRecord {
+        &self.record
+    }
+}
+
+/// The digest of one epoch's drawable set, written once, at its open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DrawableDigestWrite {
+    pub(super) epoch: SettlementEpoch,
+    pub(super) digest: DrawableDigest,
+}
+
+impl DrawableDigestWrite {
+    /// The epoch the block opens.
+    #[must_use]
+    pub const fn epoch(&self) -> SettlementEpoch {
+        self.epoch
+    }
+
+    /// `DrawableEpoch::digest` of its drawable set.
+    #[must_use]
+    pub const fn digest(&self) -> DrawableDigest {
+        self.digest
     }
 }
 
@@ -176,6 +281,31 @@ pub struct ServeCreditKey {
     pub epoch: SettlementEpoch,
 }
 
+/// One complete tree's support settlement for one epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupportSettlement {
+    /// The tree settled.
+    pub persona: PCanonicalId,
+    /// The epoch settled.
+    pub epoch: SettlementEpoch,
+    /// What it settled.
+    pub row: SettlementRow,
+}
+
+/// One pair's settlement for one epoch: the `archival_settlement` key and
+/// its row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Settlement {
+    /// The persona settled.
+    pub persona: PCanonicalId,
+    /// The shard settled.
+    pub shard: ShardId,
+    /// The epoch settled.
+    pub epoch: SettlementEpoch,
+    /// What it settled.
+    pub row: SettlementRow,
+}
+
 /// One slash: the log entry and what it burned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Slash {
@@ -197,14 +327,14 @@ pub struct Accrual {
     pub total: AtomicUnits,
 }
 
-/// An epoch's close: the frozen facts the fold produced over the epoch's
-/// snapshot, each insert-once (SI-21). `Clone` for [`ArchivalDelta`]'s one
-/// cloning caller.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// An epoch's close: the budget it freezes, insert-once (SI-21).
+///
+/// The close used to carry the epoch's co-holder counts and `Σwork` as
+/// well. Those are folded over settlement rows, which the slash pass
+/// writes an epoch later, so they ride [`EpochGather`] (`SO-D11`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EpochClose {
     pub(super) epoch: SettlementEpoch,
-    pub(super) r_market: Vec<(ShardId, RMarket)>,
-    pub(super) sigma_work: SigmaWorkMilli,
     pub(super) budget: AtomicUnits,
 }
 
@@ -215,9 +345,35 @@ impl EpochClose {
         self.epoch
     }
 
-    /// Every shard in the close's snapshot with its co-holder count —
-    /// every closed shard, zeros included (`ARW-Q4`), then any shard a
-    /// credit named beyond the closed count, in shard order within each.
+    /// `budget(E)`: the accrual's total at the close (§3.5).
+    #[must_use]
+    pub const fn budget(&self) -> AtomicUnits {
+        self.budget
+    }
+}
+
+/// One settled epoch's emission gather: the facts the slash pass folds
+/// over the epoch's Served pairs, each insert-once and written whole
+/// (SI-21). `Clone` for [`ArchivalDelta`]'s one cloning caller.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EpochGather {
+    pub(super) epoch: SettlementEpoch,
+    pub(super) r_market: Vec<(ShardId, RMarket)>,
+    pub(super) sigma_work: SigmaWorkMilli,
+    pub(super) complete_trees: CompleteTreeSet,
+}
+
+impl EpochGather {
+    /// The epoch gathered.
+    #[must_use]
+    pub const fn epoch(&self) -> SettlementEpoch {
+        self.epoch
+    }
+
+    /// Every shard in the gather's snapshot with its co-holder count —
+    /// every shard closed and final as of the pass, zeros included
+    /// (`ARW-Q4`), then any shard a Served row named beyond those, in
+    /// shard order within each.
     #[must_use]
     pub fn r_market(&self) -> &[(ShardId, RMarket)] {
         &self.r_market
@@ -229,9 +385,12 @@ impl EpochClose {
         self.sigma_work
     }
 
-    /// `budget(E)`: the accrual's total at the close (§3.5).
+    /// The bonds the gather credited at `E` that it excluded from the
+    /// market as complete trees — the flag frozen at the pass, which a
+    /// claim's re-gather reads in place of the record's (`SO-D12h`). The
+    /// empty set is written like any other.
     #[must_use]
-    pub const fn budget(&self) -> AtomicUnits {
-        self.budget
+    pub const fn complete_trees(&self) -> &CompleteTreeSet {
+        &self.complete_trees
     }
 }

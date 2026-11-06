@@ -42,6 +42,7 @@
 //! [`AlarmCondition::ChainProgress`]: shekyl_operator_alarm::AlarmCondition::ChainProgress
 
 mod claim;
+mod outcomes;
 mod serving;
 mod submit;
 
@@ -59,7 +60,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::pscan::cadence::{FixedRateSchedule, ScanSchedule};
 use super::signer::EngineSignerKind;
-use super::stake_engine::serving::{ServingHandle, ServingPosture};
+use super::stake_engine::serving::{ServingHandle, ServingPosture, ServingStatus};
 use super::submit_lifecycle::WatchdogHost;
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
 use super::Engine;
@@ -170,10 +171,11 @@ pub(crate) type ServingSlot = Arc<std::sync::Mutex<Option<ServingHandle>>>;
 pub(crate) type WeakEngine<S, D, L, E, R, P, F> = Weak<RwLock<Engine<S, D, L, E, R, P, F>>>;
 
 /// Leg 4's registered slot (`ENGINE_CADENCE_DRIVER.md` §3 leg 4): the
-/// terminal-reject prune / byte-identical resubmit body is unbuilt —
-/// `docs/FOLLOWUPS.md` "Drain/claim/release dispatch driver —
-/// terminal-reject prune + byte-identical resubmit" (pre-genesis; the
-/// prune half is a security item). The slot is registered **now** so the
+/// byte-identical resubmit body is unbuilt — `docs/FOLLOWUPS.md`
+/// "Drain/claim/release dispatch driver — byte-identical resubmit
+/// remains" (pre-genesis). Its prune half landed as the dispatch tick's
+/// end-date release (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3). The slot is
+/// registered **now** so the
 /// body lands into proven wiring (tick, ordering, isolation) and must not
 /// grow its own timer; it is a STAGED surface with a named consumer
 /// (rule 23), not dead code. Its registration-and-invocation is asserted
@@ -237,20 +239,34 @@ impl CadenceHandle {
         *self.serving.lock().expect("serving slot lock") = Some(handle);
     }
 
+    /// The parked lifecycle's posture and unlowered-thread count, under
+    /// one lock (`SH-3`).
+    ///
+    /// `None` when nothing is parked. A parked lifecycle that has not
+    /// published a posture still returns `Some`, with `posture: None` and
+    /// a real count — zero is a reading, not an absence. The lock is held
+    /// across both reads, so [`Self::adopt_serving`] cannot swap the
+    /// handle between them. A status query never waits on the task.
+    #[must_use]
+    pub fn serving_status(&self) -> Option<ServingStatus> {
+        self.serving
+            .lock()
+            .expect("serving slot lock")
+            .as_ref()
+            .map(ServingHandle::status)
+    }
+
     /// What the parked serving lifecycle is serving right now, or `None`
     /// when no host is parked — or the parked host has died, in which case
     /// the serving-liveness leg restarts it on the next chain advance and
     /// "not serving" is exactly the truth in the interim.
     ///
-    /// A cheap snapshot read (brief lock, watch-channel `borrow`): a status
-    /// query can never stall the thing that serves.
+    /// The posture half of [`Self::serving_status`]. A caller that also
+    /// needs the unlowered count takes that one snapshot; this answer is
+    /// complete on its own for the posture question.
     #[must_use]
     pub fn serving_posture(&self) -> Option<ServingPosture> {
-        self.serving
-            .lock()
-            .expect("serving slot lock")
-            .as_ref()
-            .and_then(ServingHandle::posture)
+        self.serving_status().and_then(|status| status.posture)
     }
 
     /// Fire the cancel token. Idempotent. The task observes it at the next
@@ -337,7 +353,9 @@ where
 /// Complete as of commit 6: leg 1 (submit lifecycle), leg 2 (serving
 /// liveness), the leg-4 slot (terminal-reject, body staged), leg 3
 /// (per-epoch claim) — registered last so every retire-class leg has
-/// already run when it snapshots the funding set.
+/// already run when it snapshots the funding set. The pending-outcomes leg
+/// (WR-Q3) only reads, so its place is free; it sits before leg 3 with the
+/// other non-assembling legs.
 ///
 /// `WalletFile`-specialized because legs 2 and 3's construction sites
 /// (`start_serving_if_staker`, `submit_emission_claim`) are;
@@ -368,6 +386,11 @@ where
             slot: Arc::clone(serving),
         }),
         Box::new(TerminalRejectSlot),
+        Box::new(outcomes::PendingOutcomeLeg {
+            engine: Weak::clone(&engine),
+            alarms: Arc::clone(alarms),
+            logged: Arc::default(),
+        }),
         Box::new(EpochClaimLeg {
             engine,
             daemon_address: daemon_address.to_owned(),

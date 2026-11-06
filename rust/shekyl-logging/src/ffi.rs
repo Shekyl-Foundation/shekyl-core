@@ -142,8 +142,14 @@ pub const SHEKYL_LOG_ERR_NOT_INITIALIZED: i32 = -9;
 pub const SHEKYL_LOG_ERR_INVALID_UTF8: i32 = -10;
 /// Installing the global subscriber failed.
 pub const SHEKYL_LOG_ERR_SUBSCRIBER_INSTALL: i32 = -11;
-/// The tracing forwarder was already installed in this process.
-pub const SHEKYL_LOG_ERR_ALREADY_INSTALLED: i32 = -12;
+// -12 was `SHEKYL_LOG_ERR_ALREADY_INSTALLED`, the return of the C export
+// `shekyl_log_install_tracing_forwarder`, deleted 2026-11-02 with that
+// export (DAEMON_CONFIG_CUTOVER.md DC-F19): the daemon pins the forwarder
+// through [`install_tracing_forwarder`]. The number is not reused.
+/// A sink's writer thread could not be started.
+pub const SHEKYL_LOG_ERR_WRITER_THREAD: i32 = -13;
+/// [`shekyl_log_flush`]'s deadline passed with lines still queued.
+pub const SHEKYL_LOG_ERR_FLUSH_DEADLINE: i32 = -14;
 
 // -----------------------------------------------------------------
 // Global state
@@ -163,11 +169,11 @@ struct FfiState {
 
 static FFI_STATE: OnceLock<Mutex<FfiState>> = OnceLock::new();
 
-/// One-shot pin for `shekyl_log_install_tracing_forwarder`. Flipped
-/// exactly once per process; later calls observe it and return
-/// [`SHEKYL_LOG_ERR_ALREADY_INSTALLED`] so a hot-reload path
-/// (`SIGHUP` re-running `mlog_configure`) can distinguish "first
-/// install" from "already wired" without treating either as failure.
+/// One-shot pin for [`install_tracing_forwarder`]. Flipped exactly once
+/// per process; later calls observe it and return
+/// [`ForwarderError::AlreadyInstalled`], so a re-configure path can
+/// distinguish "first install" from "already wired" without treating
+/// either as failure.
 static FORWARDER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
@@ -369,58 +375,86 @@ pub unsafe extern "C" fn shekyl_log_shutdown() {
     }
 }
 
+/// Wait until every line logged before this call has reached its sink, or
+/// `within_ms` milliseconds pass ([`crate::flush`]). Returns
+/// [`SHEKYL_LOG_OK`] or [`SHEKYL_LOG_ERR_FLUSH_DEADLINE`]; never waits
+/// longer than `within_ms`. With no logger initialized there is nothing
+/// queued, and it returns [`SHEKYL_LOG_OK`].
+///
+/// # Safety
+///
+/// No pointer parameters.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_log_flush(within_ms: u32) -> i32 {
+    match crate::flush(std::time::Duration::from_millis(u64::from(within_ms))) {
+        crate::Flushed::Done => SHEKYL_LOG_OK,
+        crate::Flushed::DeadlinePassed => SHEKYL_LOG_ERR_FLUSH_DEADLINE,
+    }
+}
+
 // -----------------------------------------------------------------
 // Tracing forwarder (single-image verification contract)
 // -----------------------------------------------------------------
 
+/// Why [`install_tracing_forwarder`] did not pin the forwarder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForwarderError {
+    /// No successful `init` preceded the call; the one-shot is not
+    /// consumed, so the caller may retry after init.
+    NotInitialized,
+    /// A successful call already pinned the forwarder in this process.
+    AlreadyInstalled,
+}
+
+impl std::fmt::Display for ForwarderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotInitialized => "no successful logging init preceded the forwarder install",
+            Self::AlreadyInstalled => "the forwarder is already installed in this process",
+        })
+    }
+}
+
+impl std::error::Error for ForwarderError {}
+
 /// Pin the tracing-forwarder call ordering (init first) and install
-/// idempotency as a process-global one-shot.
+/// idempotency as a process-global one-shot. The daemon's `run` calls
+/// this right after [`crate::init`] succeeds (DC-Q22), so C++
+/// `MCLOG`-family calls made from the remnant have a subscriber behind
+/// them from the first one.
 ///
 /// # What this actually does
 ///
-/// Decision log 2026-04-25 named this export a "forwarder install".
-/// The 2026-06-10/2026-06-11 amendments (single-image contract)
-/// supersede the mechanism: there is nothing to forward *between*,
-/// because every binary links exactly one Rust image — this crate is
-/// compiled into `libshekyl_ffi.a` (wallet side) or
-/// `libshekyl_daemon_image.a` (daemon), so the one shared
-/// `tracing-core` dispatcher is common to the `shekyl_log_init_*`
-/// subscriber and every `tracing::*` macro in the image's crate graph.
+/// Decision log 2026-04-25 named this a "forwarder install". The
+/// 2026-06-10/2026-06-11 amendments (single-image contract) supersede the
+/// mechanism: there is nothing to forward *between*, because every binary
+/// links exactly one Rust image — this crate is compiled into
+/// `libshekyl_ffi.a` for the C++ binaries and into the `shekyld` binary's
+/// own dependency graph (DC-Q19), so the one shared `tracing-core`
+/// dispatcher is common to the `shekyl_log_init_*` subscriber and every
+/// `tracing::*` macro in the image's crate graph.
 ///
 /// This function is the runtime half of that contract: it pins the
-/// call-ordering invariant (init first) and gives the C++ caller a
-/// typed success/already/not-initialized signal. The link-time half —
-/// "exactly one `tracing-core` dispatcher in the binary" — cannot be
-/// observed from inside any single Rust image and is enforced by the
-/// post-link `nm` gate on the `daemon` target (one
-/// `GLOBAL_DISPATCH` symbol; see `src/daemon/CMakeLists.txt`).
+/// call-ordering invariant (init first) and gives the caller a typed
+/// success/already/not-initialized signal. The link-time half — "exactly
+/// one `tracing-core` dispatcher in the binary" — cannot be observed from
+/// inside any single Rust image. It holds by the link: `shekyld` is one
+/// cargo build whose graph has the one `tracing-core` `Cargo.lock`
+/// resolves, and each C++ binary links the one `libshekyl_ffi.a`. There is
+/// no C export of this function: no C++ calls it.
 ///
-/// Idempotent: a second call after a successful first returns
-/// [`SHEKYL_LOG_ERR_ALREADY_INSTALLED`]. Calling before a successful
-/// `shekyl_log_init_*` returns [`SHEKYL_LOG_ERR_NOT_INITIALIZED`]
-/// and does *not* consume the one-shot pin — the caller may retry
-/// after init.
+/// # Errors
 ///
-/// # Safety
-///
-/// No pointer parameters, so no pointer-validity obligations.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_log_install_tracing_forwarder() -> i32 {
+/// [`ForwarderError::NotInitialized`] before a successful init;
+/// [`ForwarderError::AlreadyInstalled`] on a repeat call.
+pub fn install_tracing_forwarder() -> Result<(), ForwarderError> {
     if !subscriber_installed() {
-        set_last_error(
-            "shekyl_log_install_tracing_forwarder: no successful \
-             shekyl_log_init_* call preceded this install",
-        );
-        return SHEKYL_LOG_ERR_NOT_INITIALIZED;
+        return Err(ForwarderError::NotInitialized);
     }
     if FORWARDER_INSTALLED.swap(true, Ordering::SeqCst) {
-        set_last_error(
-            "shekyl_log_install_tracing_forwarder: forwarder already \
-             installed in this process",
-        );
-        return SHEKYL_LOG_ERR_ALREADY_INSTALLED;
+        return Err(ForwarderError::AlreadyInstalled);
     }
-    SHEKYL_LOG_OK
+    Ok(())
 }
 
 // -----------------------------------------------------------------
@@ -801,6 +835,30 @@ pub unsafe extern "C" fn shekyl_log_last_error_message(
 // attempt correctly returns `SHEKYL_LOG_ERR_ALREADY_INIT`.
 // -----------------------------------------------------------------
 
+/// Swaps the live filter for `directive` through the handle `init` or the
+/// C init registered, and records the directive so
+/// [`shekyl_log_get_categories`] and the stateful translator read what is
+/// live. The Rust runtime owner ([`crate::subsystem::apply`]) builds the
+/// directive from typed words, so it is always one `EnvFilter` accepts; the
+/// two `Err`s here are a subscriber that was never installed and a reload
+/// layer that is gone, neither of which a daemon reaches after start.
+pub(crate) fn reload_directive(directive: String) -> Result<(), String> {
+    let Some(cell) = FFI_STATE.get() else {
+        return Err("no subscriber is installed".to_owned());
+    };
+    let mut state = cell
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let filter = EnvFilter::try_new(&directive)
+        .map_err(|e| format!("the directive {directive:?} is not a filter: {e}"))?;
+    state
+        .reload_handle
+        .reload(filter)
+        .map_err(|e| format!("the reload layer is gone: {}", reload_error_text(&e)))?;
+    state.current_directive = directive;
+    Ok(())
+}
+
 #[doc(hidden)]
 pub fn __test_only_reset_ffi_state() {
     if let Some(cell) = FFI_STATE.get() {
@@ -877,6 +935,7 @@ fn init_error_to_code(e: &InitError) -> i32 {
         InitError::FilterParse(_) => SHEKYL_LOG_ERR_FILTER_PARSE,
         InitError::SubscriberInstall(_) => SHEKYL_LOG_ERR_SUBSCRIBER_INSTALL,
         InitError::InvalidDirectory(_) => SHEKYL_LOG_ERR_INVALID_DIRECTORY,
+        InitError::WriterThread(_) => SHEKYL_LOG_ERR_WRITER_THREAD,
     }
 }
 

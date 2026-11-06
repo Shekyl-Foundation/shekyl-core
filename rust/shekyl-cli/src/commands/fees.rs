@@ -11,7 +11,7 @@
 //! transactions use canonical fees with no user-facing choice
 //! (`wallet_rpc.yaml` P-lane pin).
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use super::{opt_amount, require_open};
 use crate::outcome::CommandResult;
@@ -37,6 +37,28 @@ pub fn cmd_fee(rpc: &RpcSession, n_inputs: Option<i64>, n_outputs: Option<i64>) 
 
     let shape_in = n_inputs.unwrap_or(2);
     let shape_out = n_outputs.unwrap_or(2);
+
+    // Size/weight for the same shape (fee omitted: floor estimate within
+    // 9 bytes of exact per the contract).
+    let estimate = match rpc.call(
+        "estimate_tx_size_and_weight",
+        json!({ "n_inputs": shape_in, "n_outputs": shape_out }),
+    ) {
+        Ok(est) => est,
+        Err(e) => return Err(rpc.report("Failed to estimate transaction size", &e)),
+    };
+    Ok(json!({
+        "n_inputs": shape_in,
+        "n_outputs": shape_out,
+        "quotes": quotes,
+        "estimate": estimate,
+    }))
+}
+
+pub(crate) fn show_fee(val: &Value) {
+    let shape_in = val.get("n_inputs").and_then(Value::as_i64).unwrap_or(2);
+    let shape_out = val.get("n_outputs").and_then(Value::as_i64).unwrap_or(2);
+    let quotes = val.get("quotes").cloned().unwrap_or(json!({}));
     println!("Fee quotes for a {shape_in}-input, {shape_out}-output transaction:");
 
     let tier = |name: &str| opt_amount(&quotes, name);
@@ -57,24 +79,8 @@ pub fn cmd_fee(rpc: &RpcSession, n_inputs: Option<i64>, n_outputs: Option<i64>) 
         println!("  {label:<9} {} SKL{marker}", tier(field));
     }
 
-    // Size/weight for the same shape (fee omitted: floor estimate within
-    // 9 bytes of exact per the contract).
-    match rpc.call(
-        "estimate_tx_size_and_weight",
-        json!({ "n_inputs": shape_in, "n_outputs": shape_out }),
-    ) {
-        Ok(est) => {
-            let size = est
-                .get("size")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(0);
-            let weight = est
-                .get("weight")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(0);
-            println!("Estimated size: {size} bytes (fee weight {weight})");
-        }
-        Err(e) => return Err(rpc.report("Failed to estimate transaction size", &e)),
-    };
-    Ok(())
+    let est = val.get("estimate").cloned().unwrap_or(json!({}));
+    let size = est.get("size").and_then(Value::as_i64).unwrap_or(0);
+    let weight = est.get("weight").and_then(Value::as_i64).unwrap_or(0);
+    println!("Estimated size: {size} bytes (fee weight {weight})");
 }

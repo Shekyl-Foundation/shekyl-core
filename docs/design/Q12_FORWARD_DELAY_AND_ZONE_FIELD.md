@@ -47,7 +47,7 @@ Verified at source on 2026-08-10, at the pin [`6bc65d2a9`](https://github.com/Sh
 
 ### 2.1 The coupling is at the line, not merely conceptual
 
-[`tx_pool.cpp:310-312`](../../src/cryptonote_core/tx_pool.cpp#L310-L312) draws
+`tx_pool.cpp:310-312` draws
 the delay **only** when `tx_relay == relay_method::forward`:
 
 ```cpp
@@ -87,7 +87,7 @@ open item. **This round decides whether it dies.**
 
 [`cryptonote_core.cpp:1091`](../../src/cryptonote_core/cryptonote_core.cpp#L1091)
 sends the `stem_req` batch — where `forward` entries land — with
-`epee::net_utils::zone::public_` **as a literal**. Not a policy choice: the
+the public-zone enumerator **as a literal**. Not a policy choice: the
 txpool stores no origin zone, and the pool loop runs long after the moment that
 knew it. The coherence branch keys on `send_txs`'s `origin`, whose only
 real-arrival callers are the immediate-relay sites, so it never sees these.
@@ -865,7 +865,7 @@ here rather than left for a reader to assume from "the parts pass".
 
 **The blocker is NOT the pool-insertion fixture, and this paragraph used to say
 it was** (attempted 2026-09-11). `ShimFixture` in
-[`daemon_submit_shims.cpp`](../../tests/unit_tests/daemon_submit_shims.cpp)
+`daemon_submit_shims.cpp`
 already stands up a blockchain, a pool and a test DB, and it is where the tree's
 only `add_tx` call lives. Extending it is a few lines. What stops the test is
 that `add_tx` reaches `check_tx_inputs`, and the fixture's `make_fcmp_shape_tx`
@@ -1131,7 +1131,14 @@ it legible. An origin-classified tally is **strictly more
 disclosive** than what is there now. The extension must inherit that gate, and
 any proposal to move it to the restricted listener answers §55 first.
 
-### Q12-D5a — RULED: once-at-origin. 2026-08-12
+### Q12-D5a — RULED 2026-08-12: once-at-origin — MOOT under Design A (2026-10-01)
+
+> **MOOT under Design A, 2026-10-01.** The one-way absorption this
+> section analysed is per-hop re-rolling composed with coherence that
+> holds a stem on its arrival zone. That coherence is reversed
+> (relay-lane acceptance, criterion 4): after hop 0 the draw is uniform
+> over every outbound edge. The 2026-08-12 ruling stays as the record
+> of the process it analysed. It is not the process that runs.
 
 **The redundancy is the defect.** Per-hop rolling and coherence are two
 mechanisms doing the same job. Coherence says *the zone is decided and held*; a

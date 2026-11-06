@@ -1,0 +1,43 @@
+[package]
+name = "shekyl-miner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The daemon's built-in miner loop (DRS-X DX-Q4): worker threads over the RandomX verifier, a nonce range each, a job board as the template source and a found-block channel as the sink. Staged; the store flip connects it."
+publish = false
+
+# Every dependency is a workspace crate already in the graph; `tracing` is
+# in Cargo.lock through every daemon crate. Rule 17: nothing new.
+[dependencies]
+# The mining address: decoded and held to the daemon's network.
+shekyl-address = { path = "../shekyl-address" }
+# `MinerKeys`, the coinbase recipient the template producer pays.
+shekyl-block-template = { path = "../shekyl-block-template" }
+# The view key's X25519 half of the coinbase KEM target.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# `check_hash` and `Difficulty`: the comparison the validator's D1b makes.
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+# The daemon's one hasher budget (PR2-Q3): a permit per hash, in the
+# miner's class, the lowest.
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+# The longhash: the verifier's cache path, the one RandomX in the daemon.
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
+# One ledger row per worker (D5).
+shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
+# Each worker below the daemon's CPU priority (SH-3).
+shekyl-thread-priority = { path = "../shekyl-thread-priority" }
+shekyl-types = { path = "../shekyl-types" }
+# A job's reward, as the template priced it.
+shekyl-units = { path = "../shekyl-units" }
+shekyl-wire = { path = "../shekyl-wire" }
+tracing = "0.1"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# The address tests' spend key off the curve: the first encoding that does
+# not decompress. The version `shekyl-crypto-pq` pins.
+curve25519-dalek = "4"

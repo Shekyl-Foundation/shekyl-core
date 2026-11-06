@@ -4,6 +4,10 @@
 // BSD-3-Clause
 
 //! Cryptonote notify maps 2002–2004 / 2006–2010 (`cryptonote_protocol_defs.h`).
+//!
+//! 2011–2014 are the chain-sync commands ([`super::sync`]). They are named
+//! here, beside the ids they follow. The C++ ingress does not admit them:
+//! the router hands them to chain sync's owner.
 
 use shekyl_portable_storage::{Section, Value};
 
@@ -14,20 +18,23 @@ use super::PortableMap;
 
 /// `NOTIFY_NEW_TRANSACTIONS`.
 pub const NOTIFY_NEW_TRANSACTIONS: u32 = 2002;
-/// `NOTIFY_REQUEST_GET_OBJECTS`.
-pub const NOTIFY_REQUEST_GET_OBJECTS: u32 = 2003;
-/// `NOTIFY_RESPONSE_GET_OBJECTS`.
-pub const NOTIFY_RESPONSE_GET_OBJECTS: u32 = 2004;
-/// `NOTIFY_REQUEST_CHAIN` — 2005 was never allocated.
-pub const NOTIFY_REQUEST_CHAIN: u32 = 2006;
-/// `NOTIFY_RESPONSE_CHAIN_ENTRY`.
-pub const NOTIFY_RESPONSE_CHAIN_ENTRY: u32 = 2007;
 /// `NOTIFY_NEW_COMPACT_BLOCK`.
 pub const NOTIFY_NEW_COMPACT_BLOCK: u32 = 2008;
 /// `NOTIFY_REQUEST_COMPACT_MISSING_TX`.
 pub const NOTIFY_REQUEST_COMPACT_MISSING_TX: u32 = 2009;
 /// `NOTIFY_GET_TXPOOL_COMPLEMENT`.
 pub const NOTIFY_GET_TXPOOL_COMPLEMENT: u32 = 2010;
+/// Chain-sync header request. The next free id after 2010, a
+/// [`crate::Command`] arm like the rest. 2003, 2004, 2006 and 2007, the
+/// inherited block and chain requests, are retired (CS-5): their ids are
+/// not commands this protocol defines.
+pub const NOTIFY_REQUEST_HEADERS: u32 = 2011;
+/// Chain-sync header response.
+pub const NOTIFY_RESPONSE_HEADERS: u32 = 2012;
+/// Chain-sync body request.
+pub const NOTIFY_REQUEST_BODIES: u32 = 2013;
+/// Chain-sync body response.
+pub const NOTIFY_RESPONSE_BODIES: u32 = 2014;
 
 /// Body of `NOTIFY_NEW_COMPACT_BLOCK` (2008), the sole block-announce command.
 /// Header plus optional tx bodies; omitted txs are fetched via 2009.
@@ -92,150 +99,6 @@ impl PortableMap for NewTransactions {
             txs: get::bytes_array(section, "txs")?,
             padding: get::bytes(section, "_")?.to_vec(),
             dandelionpp_fluff: get::opt_bool(section, "dandelionpp_fluff", true)?,
-        })
-    }
-}
-
-/// `NOTIFY_REQUEST_GET_OBJECTS` body.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RequestGetObjects {
-    /// Block hashes, `CONTAINER_POD_AS_BLOB`.
-    pub blocks: Vec<[u8; HASH_SIZE]>,
-    /// `KV_SERIALIZE_OPT` default false.
-    pub prune: bool,
-}
-
-impl PortableMap for RequestGetObjects {
-    fn to_section(&self) -> Result<Section, Error> {
-        let mut section = Section::new();
-        get::insert_pod_hashes(&mut section, "blocks", &self.blocks);
-        get::insert_opt_bool(&mut section, "prune", self.prune, false);
-        Ok(section)
-    }
-
-    fn from_section(section: &Section) -> Result<Self, Error> {
-        Ok(Self {
-            blocks: get::pod_hashes(section, "blocks")?,
-            prune: get::opt_bool(section, "prune", false)?,
-        })
-    }
-}
-
-/// `NOTIFY_RESPONSE_GET_OBJECTS` body.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResponseGetObjects {
-    /// Requested blocks.
-    pub blocks: Vec<BlockCompleteEntry>,
-    /// Missed hashes, `CONTAINER_POD_AS_BLOB`.
-    pub missed_ids: Vec<[u8; HASH_SIZE]>,
-    /// Advertised chain height.
-    pub current_blockchain_height: u64,
-}
-
-impl PortableMap for ResponseGetObjects {
-    fn to_section(&self) -> Result<Section, Error> {
-        let mut section = Section::new();
-        let mut objs = Vec::with_capacity(self.blocks.len());
-        for block in &self.blocks {
-            objs.push(block.to_section()?);
-        }
-        get::insert_object_array(&mut section, "blocks", objs);
-        get::insert_pod_hashes(&mut section, "missed_ids", &self.missed_ids);
-        section.insert(
-            "current_blockchain_height",
-            Value::UInt64(self.current_blockchain_height),
-        );
-        Ok(section)
-    }
-
-    fn from_section(section: &Section) -> Result<Self, Error> {
-        let blocks = get::object_array(section, "blocks")?
-            .into_iter()
-            .map(BlockCompleteEntry::from_section)
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self {
-            blocks,
-            missed_ids: get::pod_hashes(section, "missed_ids")?,
-            current_blockchain_height: get::u64_val(section, "current_blockchain_height")?,
-        })
-    }
-}
-
-/// `NOTIFY_REQUEST_CHAIN` body.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RequestChain {
-    /// Locator hashes, `CONTAINER_POD_AS_BLOB`.
-    pub block_ids: Vec<[u8; HASH_SIZE]>,
-    /// `KV_SERIALIZE_OPT` default false.
-    pub prune: bool,
-}
-
-impl PortableMap for RequestChain {
-    fn to_section(&self) -> Result<Section, Error> {
-        let mut section = Section::new();
-        get::insert_pod_hashes(&mut section, "block_ids", &self.block_ids);
-        get::insert_opt_bool(&mut section, "prune", self.prune, false);
-        Ok(section)
-    }
-
-    fn from_section(section: &Section) -> Result<Self, Error> {
-        Ok(Self {
-            block_ids: get::pod_hashes(section, "block_ids")?,
-            prune: get::opt_bool(section, "prune", false)?,
-        })
-    }
-}
-
-/// `NOTIFY_RESPONSE_CHAIN_ENTRY` body.
-///
-/// `cumulative_difficulty_top64` is store-always / load-OPT, matching
-/// `CORE_SYNC_DATA`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResponseChainEntry {
-    /// First height in the returned span.
-    pub start_height: u64,
-    /// Peer's chain height.
-    pub total_height: u64,
-    /// Low 64 bits of cumulative difficulty.
-    pub cumulative_difficulty: u64,
-    /// High 64 bits; stored unconditionally.
-    pub cumulative_difficulty_top64: u64,
-    /// Returned hashes, `CONTAINER_POD_AS_BLOB`.
-    pub m_block_ids: Vec<[u8; HASH_SIZE]>,
-    /// Block weights, `CONTAINER_POD_AS_BLOB` of `uint64`.
-    pub m_block_weights: Vec<u64>,
-    /// First block blob (always stored, may be empty).
-    pub first_block: Vec<u8>,
-}
-
-impl PortableMap for ResponseChainEntry {
-    fn to_section(&self) -> Result<Section, Error> {
-        let mut section = Section::new();
-        section.insert("start_height", Value::UInt64(self.start_height));
-        section.insert("total_height", Value::UInt64(self.total_height));
-        section.insert(
-            "cumulative_difficulty",
-            Value::UInt64(self.cumulative_difficulty),
-        );
-        section.insert(
-            "cumulative_difficulty_top64",
-            Value::UInt64(self.cumulative_difficulty_top64),
-        );
-        get::insert_pod_hashes(&mut section, "m_block_ids", &self.m_block_ids);
-        get::insert_pod_u64s(&mut section, "m_block_weights", &self.m_block_weights);
-        section.insert("first_block", Value::Bytes(self.first_block.clone()));
-        Ok(section)
-    }
-
-    fn from_section(section: &Section) -> Result<Self, Error> {
-        Ok(Self {
-            start_height: get::u64_val(section, "start_height")?,
-            total_height: get::u64_val(section, "total_height")?,
-            cumulative_difficulty: get::u64_val(section, "cumulative_difficulty")?,
-            cumulative_difficulty_top64: get::opt_u64(section, "cumulative_difficulty_top64", 0)?,
-            m_block_ids: get::pod_hashes(section, "m_block_ids")?,
-            m_block_weights: get::pod_u64s(section, "m_block_weights")?,
-            first_block: get::bytes(section, "first_block")?.to_vec(),
         })
     }
 }

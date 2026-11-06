@@ -20,11 +20,14 @@
 //! [`HeightAnswers`]. Increment 4 builds those answers in `ring`, from the
 //! segment tier and the snapshot tier; this function does not change.
 
-use super::tests::{coinbase_raw, ingest_outputs_at};
+use super::test_fixtures::{ingest_outputs_at, raw_outputs_at};
 use super::{BlockLeaves, CurveTreeClient, TxLeafInputs};
+use crate::assemble::verify_path_against_its_branches;
 use crate::recon::{assemble_leaf_stream, drained_sorted, root_from_scalars};
-use crate::types::{AssembleInput, BlockHeight, CurveTreeRoot, LeafEntry, ReferenceBlock};
-use crate::ClientError;
+use crate::types::{
+    AssembleInput, BlockHeight, ChunkLeaf, CurveTreeRoot, LeafEntry, ReferenceBlock,
+};
+use crate::{ClientError, PathRootFault};
 use shekyl_consensus::COINBASE_LOCK_WINDOW;
 use shekyl_fcmp::tree::{
     layer_count_for_leaves, HELIOS_CHUNK_WIDTH, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
@@ -371,7 +374,7 @@ fn ingest_through(
                 .ingest_block(BlockLeaves { height, txs: &txs })
                 .unwrap();
         } else {
-            let outs = vec![coinbase_raw(); n];
+            let outs = raw_outputs_at(height.to_raw(), n);
             ingest_outputs_at(client, height.to_raw(), &outs);
         }
     }
@@ -605,6 +608,18 @@ fn height_outside_both_spans_is_uncovered() {
 /// — could be computed once and reused. Inputs inside one chunk would hide
 /// that, because their `leaf_chunk` is the same slice either way. These two
 /// straddle a chunk boundary, so a reused position changes the answer.
+/// Register a batch's inputs, as the curve-tree actor does before it
+/// assembles them. Assembly reads captures only, so an unregistered input is
+/// refused by name rather than rebuilt.
+fn sync_inputs(client: &mut CurveTreeClient, inputs: &[AssembleInput]) {
+    let pairs: Vec<_> = inputs.iter().map(|i| (i.gindex, i.output_key)).collect();
+    let sync = client.sync_owned(&pairs).expect("a live client syncs");
+    assert!(
+        sync.stale.is_empty(),
+        "the fixture's inputs are its own outputs"
+    );
+}
+
 fn two_inputs_in_different_chunks(
     client: &CurveTreeClient,
     cutoff: BlockHeight,
@@ -656,6 +671,7 @@ fn batched_assembly_keeps_each_input_its_own_path() {
     let height = tip;
     let cutoff = height - BlockCount::ONE;
     let (inputs, first, second) = two_inputs_in_different_chunks(&client, cutoff);
+    sync_inputs(&mut client, &inputs);
     let reference = reference_at(&client, height);
 
     let paths = client
@@ -691,6 +707,7 @@ fn a_root_mismatch_refuses_the_whole_batch() {
     let height = tip;
     let cutoff = height - BlockCount::ONE;
     let (inputs, _, _) = two_inputs_in_different_chunks(&client, cutoff);
+    sync_inputs(&mut client, &inputs);
 
     let mut reference = reference_at(&client, height);
     let mut wrong = reference.curve_tree_root.to_bytes();
@@ -710,3 +727,111 @@ fn a_root_mismatch_refuses_the_whole_batch() {
 // live in `ring` so this file stays the examiner and the injected-tier proof
 // that its three verdicts fire.
 mod ring;
+
+// Capture's own passes: what the fold wrote, graded against what assembly
+// builds from the whole tree.
+mod capture;
+mod expected;
+
+// ---------------------------------------------------------------------------
+// CT-6 increment 5 — capture's red-bite lives in `capture`
+// ---------------------------------------------------------------------------
+//
+// `assembly_today_depends_on_every_foreign_leaf` stood here through states 1
+// and 2: it asserted a wrong path, then the §11.6 refusal. State 3 asserts
+// equality with the rebuilt path, which needs distinct leaves and a
+// registered output, so it is
+// `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`.
+// The passes below that assemble on THIS fixture register their inputs
+// first (`sync_inputs`), as the actor does: the rebuild they once exercised
+// is gone, and an unregistered input is refused by name.
+
+/// Membership binds the leaf chunk to the branches.
+///
+/// The branch hash does not take the child as an input. A path that already
+/// folds to its root, with one byte of `CM.x` flipped, must still refuse:
+/// the branches are untouched, so the top hash still equals `tree_root`.
+/// The edit that makes this pass for the wrong reason is deleting the
+/// `contains` check in [`verify_path_against_its_branches`].
+///
+/// A real sibling chunk from this fixture is not the mutation. At this
+/// depth every leaf-chunk node sits in the one Helios branch, so that
+/// splice is a valid path and must be accepted.
+#[test]
+fn a_mutated_leaf_chunk_is_absent_from_its_branch() {
+    let tip = varying_tip();
+    let mut client = CurveTreeClient::new();
+    ingest_through(&mut client, tip, scheduled_outputs);
+    let height = tip;
+    let cutoff = height - BlockCount::ONE;
+    let (inputs, _, _) = two_inputs_in_different_chunks(&client, cutoff);
+    sync_inputs(&mut client, &inputs);
+    let reference = reference_at(&client, height);
+
+    let path = client
+        .assemble_paths(&[inputs[0]], &reference)
+        .expect("assembly with the whole tree present")
+        .pop()
+        .expect("one input yields one path");
+    assert_eq!(
+        verify_path_against_its_branches(&path),
+        Ok(()),
+        "the path assemble just accepted must fold"
+    );
+
+    let mut spliced = path;
+    spliced.leaf_chunk[0].cm_x[0] ^= 0x01;
+    assert_eq!(
+        verify_path_against_its_branches(&spliced),
+        Err(PathRootFault::ChildAbsent),
+        "the folded root is unchanged; only membership can refuse this path"
+    );
+}
+
+/// [`ChunkLeaf::scalars`] reproduces the leaf bytes `construct_leaf` wrote.
+///
+/// `ChunkLeaf::scalars` delegates to `leaf_from_chunk_entry`, the chunk-entry
+/// inverse, because `construct_leaf` takes the `CM` point and a chunk carries
+/// only its x-coordinate. So this compares **two production functions**
+/// rather than a local restatement against one: the leaf bytes
+/// `construct_leaf` wrote at ingest must be exactly what
+/// `leaf_from_chunk_entry` rebuilds from the prover-facing view. They are
+/// written for opposite directions and only agree if both are right, which a
+/// test over a single derivation could not establish.
+#[test]
+fn chunk_leaf_scalars_match_construct_leaf() {
+    let tip = varying_tip();
+    let mut client = CurveTreeClient::new();
+    ingest_through(&mut client, tip, scheduled_outputs);
+    let cutoff = tip - BlockCount::ONE;
+
+    let drained = drained_sorted(&client.entries, cutoff);
+    assert!(!drained.is_empty(), "the fixture must drain some leaves");
+
+    for entry in &drained {
+        let chunk_leaf = ChunkLeaf {
+            output_key: entry.identity.output_key,
+            key_image_gen: shekyl_fcmp::tree::key_image_generator(
+                entry.identity.output_key.as_bytes(),
+            ),
+            commitment: entry
+                .identity
+                .commitment
+                .expect("a drained leaf carries a commitment"),
+            cm_x: entry.cm_x(),
+        };
+        let scalars = chunk_leaf
+            .scalars()
+            .expect("a drained leaf's points convert");
+
+        let mut flat = [0u8; 128];
+        for (slot, scalar) in flat.chunks_exact_mut(32).zip(scalars) {
+            slot.copy_from_slice(&scalar);
+        }
+        assert_eq!(
+            flat, entry.leaf,
+            "ChunkLeaf::scalars drifted from the leaf construct_leaf stored at gindex {:?}",
+            entry.gindex
+        );
+    }
+}

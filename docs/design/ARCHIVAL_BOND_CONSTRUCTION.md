@@ -55,9 +55,11 @@ unbuilt, permanent code.
 
 ### In scope (this design)
 
-- The full architecture for all four `BondPostKind`s (`JoinMarket`, `Reinstate`,
-  `Release`, `HoldingsUpdate`), so the JoinMarket-first implementation does not
-  paint into a corner.
+- The full architecture for the three `BondPostKind`s (`JoinMarket`, `Reinstate`,
+  `Release`), so the JoinMarket-first implementation does not paint into a
+  corner. *(Written for four; `HoldingsUpdate` was **REJECTED 2026-09-20** by the
+  immutable-bond ruling — [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md)
+  §5.3; `BondPostKind::from_u8(3)` is `InvalidPostKind`, PR #808.)*
 - The `archival_p` key-derivation primitive (`P` identity + `bond_spend_pk`),
   which is the genesis-frozen foundation that gates everything.
 - The construct-side data flow, signing, and RCT balance for **JoinMarket**.
@@ -68,11 +70,12 @@ JoinMarket is the only kind with a complete verify counterpart today
 ([`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs)
 `verify_join_market_bond_post`;
 [`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_ct_balance.rs)).
-Reinstate / Release / HoldingsUpdate have wire types
+Reinstate / Release have wire types
 ([`bond_wire.rs`](../../rust/shekyl-archival-retention/src/bond_wire.rs)
 `BondPostKind`) but **no verify implementation** ("V3.0 open"). Their
 construction is **provisional** until paired with the verify-side work -- see
-Section 9.
+Section 9. *(As written this list also named `HoldingsUpdate`; that kind was
+REJECTED 2026-09-20 and has no wire type — §9.)*
 
 ### Non-goals (sequenced dependencies, not this unit)
 
@@ -81,7 +84,8 @@ Section 9.
   and it is named here as a sequenced dependency, not buried as an out-of-scope
   bullet.
 - Off-chain announce/backing-presentation wire (separate gate-6 §7 item).
-- HoldingsUpdate / Reinstate / Release verify-side (their own PRs).
+- Reinstate / Release verify-side (their own PRs; both since landed — §9).
+  `HoldingsUpdate` verify-side was in this list and is REJECTED 2026-09-20.
 
 ## 3. The honest milestone for this unit
 
@@ -361,8 +365,9 @@ credit paths authorize against `P_pubkey`; because the vin rides inside the sign
 `TxPrefix`, that surface-A signature already binds the committed `bond_spend_pk`
 (and every other vin field) — SA-2b retired the separate on-vin
 `signature_preimage`, see `SIGNATURE_ALIGNMENT.md` §2.2. `bond_spend_pk` is
-committed on the record at JoinMarket and authorizes only later debit paths
-(Release, HoldingsUpdate drop) -- not exercised in PR 1.
+committed on the record at JoinMarket and authorizes only the later debit path
+(Release; `HoldingsUpdate` drop was the other until REJECTED 2026-09-20) -- not
+exercised in PR 1.
 
 ### 7.2 Single-sourced, typed-side cleartext balance terms (`shekyl-rct-balance`)
 
@@ -416,8 +421,9 @@ reuses the existing
 path (as `sign_bridge` does for transfers).
 
 **Fee inputs and their source — RATIFIED (2026-07-19, maintainer;
-`V3_WALLET_DECISION_LOG.md` "P-lane fees").** Debit paths (`Release`,
-`HoldingsUpdate` drop) carry fee inputs the same way — every bond post pays
+`V3_WALLET_DECISION_LOG.md` "P-lane fees").** The debit path (`Release`;
+`HoldingsUpdate` drop was ratified alongside and is REJECTED since 2026-09-20)
+carries fee inputs the same way — every bond post pays
 the standard weight-priced floor fee; there is no fee-less class (gate-4
 §3.2 fee note). Three construction rules, all wallet-side:
 
@@ -428,8 +434,9 @@ the standard weight-priced floor fee; there is no fee-less class (gate-4
    type (enforced invariant, not policy). FCMP++ hides the membership either
    way; the type is origin-edge hygiene at the wallet layer, the coin-pool
    sibling of `P`'s dedicated Arti client (§9's transport split).
-2. **Exit-fee reserve.** Mid-life constructors (claim fee inputs, both
-   `HoldingsUpdate` directions, `Reinstate`) never spend the pool below
+2. **Exit-fee reserve.** Mid-life constructors (claim fee inputs and
+   `Reinstate`; both `HoldingsUpdate` directions were in this list until the
+   kind was REJECTED 2026-09-20) never spend the pool below
    `EXIT_FEE_RESERVE_ATOMIC` — a pessimistically-margined weight-priced
    `Release` fee — so the terminal post is always fundable. Spend-time
    invariant only; the cover **draw** is never consulted or narrowed by it
@@ -478,7 +485,7 @@ flowchart LR
 
 `chain` requires **both** PR 2 and CT-5. This unit delivers up to PR 2.
 
-## 9. The other three kinds are provisional
+## 9. The other kinds are provisional — written for three; one is live, one is REJECTED (2026-10-04)
 
 The four-kind architecture is designed here so JoinMarket-first does not paint
 into a corner. **UPDATE 2026-08-26 (PR-P4): `Release` is no longer provisional.**
@@ -492,28 +499,34 @@ submit fact set (2026-08-29), and PR-B's dispatch seam + daemon walk,
 each narrowing without lifting — was **lifted by PR-C (2026-09-03)**:
 `StakeFacade::unstake` drives `Engine::submit_release` from wallet-RPC and
 the CLI, and `collect_unstaked`'s terminal sweep completes the arc
-(reconciliation in `wallet_rpc.yaml`'s PR-C census). **`Reinstate` and `HoldingsUpdate` remain
-provisional** — both have verify arms, neither has a producer — and for them the
+(reconciliation in `wallet_rpc.yaml`'s PR-C census). **`Reinstate` remains
+provisional** — it has a verify arm and no producer — and for it the
 paragraph below stands unchanged: construction is **a hypothesis validated only
 on paper**, **reopenable** when that work begins, and the deferred architecture
-must not be treated as settled before anything exercises it. Each carries its
-named verify-side gap:
+must not be treated as settled before anything exercises it. *(This sentence
+named `HoldingsUpdate` beside `Reinstate` until 2026-09-20; the kind is
+**REJECTED** by the immutable-bond ruling —
+[`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3 — so "the
+other three kinds" in this section's title is two, and one of them is live.)*
+Each carries its named verify-side gap:
 
-**Table re-graded 2026-08-26 (PR-P4).** Every "absent" in the verify column was
-stale: all five arms landed in #303/#307. Kept as a column rather than deleted
-because the *construction* side is still uneven, which is the thing this section
-exists to track.
+**Table re-graded 2026-08-26 (PR-P4); `HoldingsUpdate` rows struck 2026-10-04.**
+Every "absent" in the verify column was stale: all five arms landed in #303/#307.
+Kept as a column rather than deleted because the *construction* side is still
+uneven, which is the thing this section exists to track. The two
+`HoldingsUpdate` arms were deleted with the kind (E4 `ARW-14`); the rows stay so
+the names are not re-minted (rule 23).
 
 | Kind | Auth key (§3.5 step 5) | Verify side today | Construction status |
 | --- | --- | --- | --- |
 | JoinMarket | `P_pubkey` | `verify_join_market_bond_post` | PR 1 (KAT-validated) |
-| HoldingsUpdate add | `P_pubkey` | `verify_holdings_update_add` | provisional — no producer |
-| HoldingsUpdate drop | `bond_spend_pk` | `verify_holdings_update_drop` | provisional — no producer (operator-guide footguns live here) |
-| Reinstate | `P_pubkey` | `verify_reinstate_bond_post` | provisional — no producer |
-| Release | `bond_spend_pk` | `verify_release_bond_post` | PR-P4 — `build_release_vin` (KAT-validated) + `AssembleRelease` (full tx; auth under `bond_spend_pk`). **Built, not reachable:** no RPC method or CLI verb; slice 3's engine walk has landed and did not lift it |
+| ~~HoldingsUpdate add~~ | — | **REJECTED 2026-09-20** — arm deleted; `from_u8(3)` is `InvalidPostKind` | none — holdings change by persona rotation (lifecycle doc §5.3.1) |
+| ~~HoldingsUpdate drop~~ | — | **REJECTED 2026-09-20** — arm deleted | none — the capital-strand footgun widened to the whole bond ([`STAKER_OPERATOR_GUIDE.md`](../STAKER_OPERATOR_GUIDE.md) Footgun 1) |
+| Reinstate | `P_pubkey` | `verify_reinstate_bond_post` (equality `post == current`, zero-money — PR #808) | provisional — no producer |
+| Release | `bond_spend_pk` | `verify_release_bond_post` | PR-P4 — `build_release_vin` (KAT-validated) + `AssembleRelease` (full tx; auth under `bond_spend_pk`). **Reachable (PR-C, 2026-09-03):** `StakeFacade::unstake` and `collect_unstaked`, wallet-RPC and CLI. *Records-was:* "Built, not reachable: no RPC method or CLI verb". |
 
-The `Auth key` column is unchanged and remains correct: `Release` and
-`HoldingsUpdate drop` authorize under the record's committed `bond_spend_pk`,
+The `Auth key` column is unchanged and remains correct: `Release` — the one debit
+kind — authorizes under the record's committed `bond_spend_pk`,
 which consensus pins in `archival_cold_authority_pin` (the composed gate; `requires_cold_authority` selects, `debit_auth_pin` compares) — never the identity key. SA-2b
 moved that key off the vin, not out of the requirement.
 
@@ -649,12 +662,12 @@ conventional).
   *not* a variant on the shared `TxRequest`, which would route bond construction
   through the `LedgerEngine` transfer pipeline and violate §9.6/§10.1. A
   typed-separate request to a separate actor makes cross-assignment
-  unrepresentable. Funding decorrelation defaults from
-  [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §7 (>= 1
-  settlement-epoch spacing; fund-from-earnings ramp).
+  unrepresentable. Funding decorrelation: the bond-post delay is measured
+  from the funding ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q2), and the
+  fund-from-earnings ramp is [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §7's.
 - **Runs the standoff self-cert, not just `draw_entry_gap`.** PR 2 wires
-  `draw_entry_gap` for prep-spend / announce / bond-post separation (600-block
-  window, inversion on) **and** runs `shekyl-standoff`'s `certify_draw` against
+  `draw_entry_gap` for the bond-post delay (one draw on the one chain event;
+  the window is [`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q4's) **and** runs `shekyl-standoff`'s `certify_draw` against
   the wallet's actual CSPRNG. The self-cert is the actionable half of the
   conformance work -- it proves the *shipping wallet's RNG* produces conformant
   draws, not merely that the reference does.
@@ -671,16 +684,14 @@ below are what make that isolation hold rather than merely declare it; they are
 design dispositions for PR 2, not open questions.
 
 **Efficiency -- derivation is CPU-bound; keep it off the async hot path.**
-`derive_archival_p_keys` is dominated by PQ keygen (ML-DSA-65 + ML-KEM-768
-keygen; HKDF and Ed25519 are cheap). A single-`P` wallet is ~1 ms, borderline
-inline. The multi-`P` whale -- the operator this dependability work exists for
--- derives `N` bundles on wallet open; `N` serial keygens run inside an async
-`kameo` handler block the Tokio worker thread (cooperative scheduling, no
-preemption), stalling the whole runtime for tens of ms at open. **Disposition:**
-run derivation on `spawn_blocking`, and since per-slot keygens are independent,
-either parallelize them or derive lazily per-`P` on first use rather than all
-up-front. This keeps a whale's wallet-open from becoming a visible stall and
-keeps the actor responsive to other messages during derivation.
+`derive_archival_p_keys` costs **6.71 ms per slot** on the development host
+(`FN_DSA_HYBRID.md` `FND-25`), of which the receipt key's FN-DSA-1024 keygen
+is 6.03 ms; the ML-DSA-65 and ML-KEM-768 keygens, HKDF and Ed25519 are the
+rest. The floor device is not re-measured for this bundle. A wallet open
+derives one bundle for every bonded slot and every lookahead slot, `k + 3` for
+`k` bonded slots, one after another inside the blocking open call that async
+callers run on `spawn_blocking` (§10.2), so derivation never runs on a Tokio
+worker thread and the actor never derives inside a handler.
 
 **Robustness -- the message protocol stays operation-shaped, never
 key-shaped.** Actor isolation holds *only* if the message API never leaks the
@@ -878,10 +889,8 @@ and sequentially** inside the sync `create` / `open_full` call (staker-only).
 That whole call is the blocking unit async callers already wrap in
 `spawn_blocking` (see the lifecycle module docs), so the keygens are off the
 *async* hot path at that granularity without `assemble()` itself spawning
-anything. Intra-call parallelism across the (small, `k`-bounded) `union` is a
-documented perf follow-up (`docs/FOLLOWUPS.md`), not a correctness concern. This
-is the perf side of the zero-root-exposure trade (privacy/security over
-performance, the correct priority direction).
+anything. This is the perf side of the zero-root-exposure trade
+(privacy/security over performance, the correct priority direction).
 
 **Robustness -- isolate the transport, not just the request (§11.1 Q3).** The
 parallel request type isolates *construction*; the residual gap is the network

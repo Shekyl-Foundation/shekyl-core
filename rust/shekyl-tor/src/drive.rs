@@ -13,22 +13,27 @@
 
 use std::borrow::Cow;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shekyl_capped_stream::{
-    accept_error_is_transient, node_gate, read_capped, write_capped, StreamEnds,
+    accept_error_is_transient, node_gate, read_capped, write_capped, InboundEnd, QueueHold,
+    StreamEnds,
 };
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_socks::{connect as socks_connect, Destination, Isolation, SocksError};
+use shekyl_socks::{connect as socks_connect, Destination, Proxy, ProxyWarn, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick};
 use shekyl_transport_layer::{
-    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, OpenSocket, Sockets,
+    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, DialEnd, OpenError, OpenSocket,
+    Sockets,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
+
+use crate::replies::{reply_end, stream_side_end, Observed};
 
 /// A measured span, in nanoseconds, for the D9 distributions. One line
 /// per connection at each anchor; nothing here changes what the
@@ -37,8 +42,47 @@ fn span_ns(elapsed: Duration) -> u64 {
     u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
 }
 
-/// A Tor channel. `onion` is the dialed host. Inbound has none: the zone
-/// is the address.
+static PROXY_WARN: std::sync::Mutex<ProxyWarn> = std::sync::Mutex::new(ProxyWarn::new());
+
+/// The operator's Tor SOCKS proxy refused the dial's authentication, named
+/// apart from an unavailable proxy so each says its own fact once a minute.
+static AUTH_WARN: std::sync::Mutex<ProxyWarn> = std::sync::Mutex::new(ProxyWarn::new());
+
+/// The proxy refused this node's authentication (`DAEMON_CONFIG_CUTOVER.md`
+/// DC-Q7). It is this node's own proxy failing, as [`proxy_unavailable`] is,
+/// and it names the rows that fix it, never the onion.
+fn proxy_refused_authentication(proxy: &Proxy, error: &SocksError) -> Observed {
+    let due = AUTH_WARN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .due(Instant::now());
+    if let (Some(unnamed), Some(text)) = (due, proxy.authentication_refused(error, "tor-socks")) {
+        tracing::warn!(failed_dials_since_last_warning = unnamed, "{text}");
+    }
+    Observed::ProxyUnavailable
+}
+
+/// This node's own Tor SOCKS proxy failed: the TCP connect to it, or an
+/// exchange it closed without a reply. Its own close kind, not
+/// `LocalClose`: it names the proxy, never the onion.
+fn proxy_unavailable(proxy: SocketAddr, why: &'static str) -> Observed {
+    let due = PROXY_WARN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .due(Instant::now());
+    if let Some(unnamed) = due {
+        tracing::warn!(
+            %proxy,
+            why,
+            failed_dials_since_last_warning = unnamed,
+            "tor's SOCKS proxy is unavailable; dials through it fail until it returns"
+        );
+    }
+    Observed::ProxyUnavailable
+}
+
+/// A Tor channel. `onion` is the dialed host and port. Inbound has none:
+/// the peer's onion is not known at accept.
 ///
 /// `open` is a clone of the reservation the connection task also holds.
 /// `gap` disarms the session deadline. Dropping it ends the wait with
@@ -50,6 +94,18 @@ pub struct Admitted {
     pub onion: Option<(String, u16)>,
 }
 
+/// Where a connected socket is published.
+///
+/// Called on the accept or dial task. `false` means the publisher is gone
+/// and the connector ends the connection as its own failure.
+pub type Publish = Arc<dyn Fn(Admitted) -> bool + Send + Sync>;
+
+/// Publish onto a channel. `false` is a closed receiver.
+#[must_use]
+pub fn publish_on(tx: mpsc::UnboundedSender<Admitted>) -> Publish {
+    Arc::new(move |admitted| tx.send(admitted).is_ok())
+}
+
 pub struct Accept {
     pub stream: TcpStream,
     pub sockets: Sockets,
@@ -57,18 +113,20 @@ pub struct Accept {
     pub gap_within: Tick,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
-    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub admitted: Publish,
 }
 
 pub struct Dial {
     pub address: NetworkAddress,
-    pub proxy: SocketAddr,
+    pub proxy: Proxy,
     pub sockets: Sockets,
     pub dial_within: Tick,
     pub gap_within: Tick,
-    pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
+    /// How the dial ended, stamped by this connector: the first call is the
+    /// dial's failure before the channel, or the session's end after it.
+    pub on_end: Arc<dyn Fn(DialEnd) + Send + Sync>,
     pub send_queue_bytes: usize,
-    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub admitted: Publish,
 }
 
 /// What an accept loop needs besides the socket it just took.
@@ -80,7 +138,7 @@ pub struct Inbound<F> {
     pub gap_within: Tick,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
-    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub admitted: Publish,
     pub backoff: Duration,
 }
 
@@ -141,7 +199,7 @@ where
             return;
         }
     };
-    let cause = run(
+    let end = run(
         stream,
         &engine,
         gap_within,
@@ -151,7 +209,8 @@ where
         None,
     )
     .await;
-    settle(reserved, cause, &on_cause);
+    settle(reserved, end.cause());
+    on_cause(end.cause());
 }
 
 pub async fn dial_one<C>(dial: Dial, engine: Handle<C>)
@@ -164,16 +223,17 @@ where
         sockets,
         dial_within,
         gap_within,
-        on_cause,
+        on_end,
         send_queue_bytes,
         admitted,
     } = dial;
+    // An address this connector cannot dial is this node's own failure.
     let NetworkAddress::Tor { host, port } = &address else {
-        on_cause(CloseCause::new(CloseKind::DialFailed));
+        on_end(Observed::OwnFailure.end());
         return;
     };
-    if let Err(cause) = check_dial(ConnectorId::Tor, &address) {
-        on_cause(cause);
+    if check_dial(ConnectorId::Tor, &address).is_err() {
+        on_end(Observed::OwnFailure.end());
         return;
     }
     let host = host.clone();
@@ -182,35 +242,45 @@ where
     let reserved = match sockets.open_tor(&address) {
         Ok(open) => open,
         Err(OpenError::Refused(cause)) => {
-            on_cause(cause);
+            on_end(Observed::RefusedHere(cause).end());
             return;
         }
         Err(OpenError::Exhausted) => {
-            on_cause(CloseCause::new(CloseKind::DialFailed));
+            on_end(Observed::OwnFailure.end());
             return;
         }
     };
     let Ok(owner) = engine.register(OwnerClass::Transport) else {
-        settle(reserved, CloseCause::new(CloseKind::DialFailed), &on_cause);
+        settle_dial(reserved, Observed::OwnFailure.end(), &on_end);
         return;
     };
     let now = owner.clock().now();
     let deadline = Tick::new(now.get().saturating_add(dial_within.get()));
     if owner.arm(deadline).is_err() {
         ignore(owner.deregister());
-        settle(reserved, CloseCause::new(CloseKind::DialFailed), &on_cause);
+        settle_dial(reserved, Observed::OwnFailure.end(), &on_end);
         return;
     }
+    tracing::debug!(
+        conn = reserved.id().get(),
+        owner = ?owner.id(),
+        armed_at = now.get(),
+        deadline = deadline.get(),
+        "tor dial armed"
+    );
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let connect = async move {
         let dialed = Instant::now();
-        let Ok(mut stream) = TcpStream::connect(proxy).await else {
-            return Err(CloseCause::new(CloseKind::DialFailed));
+        let Ok(mut stream) = TcpStream::connect(proxy.at()).await else {
+            return Err(Ended::Observed(proxy_unavailable(
+                proxy.at(),
+                "the TCP connect to it failed",
+            )));
         };
         let proxy_connect_ns = span_ns(dialed.elapsed());
         match socks_connect(
             &mut stream,
-            Isolation::Principal,
+            proxy.isolation(),
             Destination::Name { host: &host, port },
         )
         .await
@@ -218,16 +288,30 @@ where
             Ok(()) => Ok((stream, proxy_connect_ns, span_ns(dialed.elapsed()))),
             Err(SocksError::Refused { reply }) => {
                 drop(stream.shutdown().await);
-                Err(CloseCause::proxy_refused(u16::from(reply)))
+                if crate::replies::socks_reply_is_our_request(u16::from(reply)) {
+                    tracing::error!(
+                        reply,
+                        "tor socks reply is this node's request, not the onion"
+                    );
+                }
+                Err(Ended::Stamped(reply_end(u16::from(reply))))
             }
-            Err(
-                SocksError::Io(_)
-                | SocksError::Malformed
-                | SocksError::AuthRejected { .. }
-                | SocksError::AuthFailed { .. },
-            ) => {
+            Err(SocksError::Io(_)) => {
                 drop(stream.shutdown().await);
-                Err(CloseCause::new(CloseKind::DialFailed))
+                Err(Ended::Observed(proxy_unavailable(
+                    proxy.at(),
+                    "it closed the SOCKS exchange without a reply",
+                )))
+            }
+            Err(error @ (SocksError::AuthRejected { .. } | SocksError::AuthFailed { .. })) => {
+                drop(stream.shutdown().await);
+                Err(Ended::Observed(proxy_refused_authentication(
+                    &proxy, &error,
+                )))
+            }
+            Err(SocksError::Malformed) => {
+                drop(stream.shutdown().await);
+                Err(Ended::Observed(Observed::ProxyUnavailable))
             }
         }
     };
@@ -235,12 +319,12 @@ where
     let stream = tokio::select! {
         biased;
         result = wake.as_mut() => {
-            let kind = match result {
-                Ok(_) => CloseKind::TransportTimeout,
-                Err(_) => CloseKind::DialFailed,
+            let observed = match result {
+                Ok(_) => Observed::Deadline,
+                Err(_) => Observed::OwnFailure,
             };
             ignore(owner.deregister());
-            settle(reserved, CloseCause::new(kind), &on_cause);
+            settle_dial(reserved, observed.end(), &on_end);
             return;
         }
         result = &mut connect => result,
@@ -256,12 +340,16 @@ where
             );
             stream
         }
-        Err(cause) => {
-            settle(reserved, cause, &on_cause);
+        Err(ended) => {
+            let end = match ended {
+                Ended::Observed(observed) => observed.end(),
+                Ended::Stamped(end) => end,
+            };
+            settle_dial(reserved, end, &on_end);
             return;
         }
     };
-    let cause = run(
+    let end = run(
         stream,
         &engine,
         gap_within,
@@ -271,14 +359,25 @@ where
         Some((onion_host, port)),
     )
     .await;
-    settle(reserved, cause, &on_cause);
+    settle_dial(reserved, end, &on_end);
 }
 
-fn settle(open: OpenSocket, cause: CloseCause, on_cause: &Arc<dyn Fn(CloseCause) + Send + Sync>) {
+/// How the SOCKS exchange failed: an observation of this connector's, or a
+/// reply already stamped from the reply table.
+enum Ended {
+    Observed(Observed),
+    Stamped(DialEnd),
+}
+
+fn settle(open: OpenSocket, cause: CloseCause) {
     match open.close(cause) {
         CloseResult::Recorded(_) | CloseResult::AlreadyClosed => {}
     }
-    on_cause(cause);
+}
+
+fn settle_dial(open: OpenSocket, end: DialEnd, on_end: &Arc<dyn Fn(DialEnd) + Send + Sync>) {
+    settle(open, end.cause());
+    on_end(end);
 }
 
 async fn run<C>(
@@ -287,9 +386,9 @@ async fn run<C>(
     gap_within: Tick,
     send_queue_bytes: usize,
     open: &OpenSocket,
-    admitted: &mpsc::UnboundedSender<Admitted>,
+    admitted: &Publish,
     onion: Option<(String, u16)>,
-) -> CloseCause
+) -> DialEnd
 where
     C: Clock + Clone + Send + Sync + 'static,
 {
@@ -298,14 +397,22 @@ where
     let channel_at = Instant::now();
     let (mut read, mut write) = stream.into_split();
     let Ok(owner) = engine.register(OwnerClass::Transport) else {
-        return CloseCause::new(CloseKind::LocalClose);
+        return Observed::OwnFailure.end();
     };
     let now = owner.clock().now();
     let deadline = Tick::new(now.get().saturating_add(gap_within.get()));
     if owner.arm(deadline).is_err() {
         ignore(owner.deregister());
-        return CloseCause::new(CloseKind::LocalClose);
+        return Observed::OwnFailure.end();
     }
+    tracing::debug!(
+        conn,
+        outbound,
+        owner = ?owner.id(),
+        armed_at = now.get(),
+        deadline = deadline.get(),
+        "tor gap armed"
+    );
 
     let StreamEnds {
         session: bytes,
@@ -315,49 +422,124 @@ where
         inbound,
     } = StreamEnds::open(send_queue_bytes);
     let (gap_tx, mut gap_rx) = oneshot::channel();
-    if admitted
-        .send(Admitted {
-            open: open.clone(),
-            bytes,
-            gap: gap_tx,
-            onion,
-        })
-        .is_err()
-    {
+    let published = admitted(Admitted {
+        open: open.clone(),
+        bytes,
+        gap: gap_tx,
+        onion,
+    });
+    if !published {
         ignore(owner.deregister());
+        let end = Observed::OwnFailure.end();
+        inbound.seal(&hold, end);
         drop(hold);
-        return CloseCause::new(CloseKind::LocalClose);
+        return end;
     }
 
     let overfull_write = Arc::clone(&overfull);
     let gate = node_gate();
     let mut writer = tokio::spawn(async move {
-        write_capped(
+        let mut stall = shekyl_capped_stream::WriteStall::new(conn);
+        // Cold first contact (Rick, 2026-10-13): the dialler's SOCKS success
+        // to its first bytes on the wire, the handshake request. The same
+        // line on the responder is its first reply.
+        let mut first_write = true;
+        let cause = write_capped(
             &mut write,
             &writer_queue,
             &overfull_write,
             &gate,
-            conn,
-            |plain| Ok(Cow::Borrowed(plain)),
+            &mut stall,
+            |plain| {
+                if first_write {
+                    first_write = false;
+                    tracing::debug!(
+                        conn,
+                        outbound,
+                        first_write_ns = span_ns(channel_at.elapsed()),
+                        "tor first bytes written"
+                    );
+                }
+                Ok(Cow::Borrowed(plain))
+            },
         )
-        .await
+        .await;
+        tracing::info!(conn, stall = %stall, "write stall");
+        cause
     });
     let gate = node_gate();
+    let inbound_close = inbound.clone();
+    // Cold first contact: the responder's accept to its first bytes read,
+    // the dialler's handshake request; on the dialler, the first reply.
+    let mut first_read = true;
+    // The gap measures the peer's silence (Rick, 2026-10-14): it ends at
+    // the peer's first complete handshake frame, read here, not at the
+    // strand's verdict, which is this node's own work.
+    let mut handshake = shekyl_levin::HandshakeFrame::new(if outbound {
+        shekyl_levin::HandshakeKind::Response
+    } else {
+        shekyl_levin::HandshakeKind::Request
+    });
+    let frame_in = Arc::new(AtomicBool::new(false));
+    let frame_seen = Arc::clone(&frame_in);
     let read_fut = read_capped(&mut read, inbound, &overfull, &gate, conn, |chunk| {
+        if first_read {
+            first_read = false;
+            tracing::debug!(
+                conn,
+                outbound,
+                first_read_ns = span_ns(channel_at.elapsed()),
+                "tor first bytes read"
+            );
+        }
+        if !handshake.complete() && handshake.feed(chunk) {
+            frame_in.store(true, Ordering::Release);
+            tracing::debug!(
+                conn,
+                outbound,
+                handshake_frame_ns = span_ns(channel_at.elapsed()),
+                "tor handshake frame received; the gap ends"
+            );
+        }
         Ok(vec![chunk.to_vec()])
     });
     tokio::pin!(read_fut);
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let mut hold = Some(hold);
     let mut gap_open = true;
+    let mut gap = shekyl_capped_stream::SilenceGap::new();
+    let mut verdict_open = true;
     loop {
+        // Buffered input first: a frame that arrived before the deadline is
+        // read even when this task resumes after it, and only then is the
+        // gap's wake looked at (`SilenceGap`).
         tokio::select! {
             biased;
-            result = &mut gap_rx, if gap_open => {
-                gap_open = false;
-                ignore(owner.deregister());
+            read_cause = &mut read_fut => {
+                if gap_open {
+                    ignore(owner.deregister());
+                }
+                return stop(
+                    &inbound_close,
+                    hold.take(),
+                    WriteJoin::Pending(&mut writer),
+                    stream_side_end(read_cause),
+                )
+                .await;
+            }
+            result = &mut gap_rx, if verdict_open => {
+                verdict_open = false;
                 if result.is_err() {
-                    return stop(hold.take(), &mut writer, CloseCause::new(CloseKind::LocalClose)).await;
+                    if gap_open {
+                        ignore(owner.deregister());
+                    }
+                    return stop(
+                        &inbound_close,
+                        hold.take(),
+                        WriteJoin::Pending(&mut writer),
+                        DialEnd::local_close_after_channel(),
+                    )
+                    .await;
                 }
                 tracing::info!(
                     conn,
@@ -366,45 +548,90 @@ where
                     "tor session established"
                 );
             }
-            result = wake.as_mut(), if gap_open => {
+            result = std::future::poll_fn(|cx| gap.poll(&frame_seen, wake.as_mut(), cx)), if gap_open => {
+                gap_open = false;
                 ignore(owner.deregister());
-                let kind = match result {
-                    Ok(_) => CloseKind::LevinHandshakeTimeout,
-                    Err(_) => CloseKind::LocalClose,
+                let Some(result) = result else {
+                    continue;
                 };
-                return stop(hold.take(), &mut writer, CloseCause::new(kind)).await;
-            }
-            read_cause = &mut read_fut => {
-                if gap_open {
-                    ignore(owner.deregister());
-                }
-                return stop(hold.take(), &mut writer, read_cause).await;
+                let end = match result {
+                    Ok(_) => DialEnd::levin_handshake_timeout(),
+                    Err(_) => DialEnd::local_close_after_channel(),
+                };
+                return stop(
+                    &inbound_close,
+                    hold.take(),
+                    WriteJoin::Pending(&mut writer),
+                    end,
+                )
+                .await;
             }
             write_end = &mut writer => {
                 if gap_open {
                     ignore(owner.deregister());
                 }
-                drop(hold.take());
-                return match write_end {
-                    Ok(cause) => cause,
-                    Err(_) => CloseCause::new(CloseKind::LocalClose),
+                let end = match write_end {
+                    Ok(cause) => stream_side_end(cause),
+                    Err(_) => DialEnd::local_close_after_channel(),
                 };
+                return stop(&inbound_close, hold.take(), WriteJoin::Finished, end).await;
             }
         }
     }
 }
 
+/// Whether `select` has already polled the writer to completion.
+///
+/// A completed [`tokio::task::JoinHandle`] panics if it is polled again.
+/// [`WriteJoin::Finished`] is that arm. The others still hold a running task.
+enum WriteJoin<'a> {
+    Pending(&'a mut tokio::task::JoinHandle<CloseCause>),
+    Finished,
+}
+
+/// Seal the session. Abort the writer only when this select has not joined it.
+///
+/// `hold` is absent only when a previous arm already took it. The inbound
+/// cause is recorded either way.
 async fn stop(
-    hold: Option<shekyl_capped_stream::QueueHold>,
-    writer: &mut tokio::task::JoinHandle<CloseCause>,
-    cause: CloseCause,
-) -> CloseCause {
+    inbound: &InboundEnd,
+    hold: Option<QueueHold>,
+    writer: WriteJoin<'_>,
+    end: DialEnd,
+) -> DialEnd {
+    if let Some(hold) = hold.as_ref() {
+        inbound.seal(hold, end);
+    } else {
+        inbound.close(end);
+    }
     drop(hold);
-    writer.abort();
-    drop(writer.await);
-    cause
+    if let WriteJoin::Pending(writer) = writer {
+        writer.abort();
+        drop(writer.await);
+    }
+    end
 }
 
 fn ignore<E>(result: Result<(), E>) {
     if let Err(_err) = result {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_joined_writer_is_not_polled_again() {
+        let ends = StreamEnds::open(8);
+        let mut writer = tokio::spawn(async { CloseCause::new(CloseKind::IoError) });
+        let joined = (&mut writer).await.expect("writer joined");
+        let end = stop(
+            &ends.inbound,
+            Some(ends.hold),
+            WriteJoin::Finished,
+            stream_side_end(joined),
+        )
+        .await;
+        assert_eq!(end.cause().kind(), CloseKind::IoError);
+    }
 }

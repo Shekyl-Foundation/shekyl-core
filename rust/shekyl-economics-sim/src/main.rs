@@ -1,21 +1,35 @@
 mod admission;
+mod baseline;
+mod block_space;
 mod budget;
 mod budget_scenarios;
 mod burden;
 mod calibration;
 mod cartel;
-mod challenge_coverage;
+mod chain_cursor;
 mod distribution;
 mod engine;
 mod escalation;
+mod fee_bar;
 mod fee_floor;
+mod fee_horizon;
 mod fee_ladder;
+mod fee_model;
+mod fee_signal;
+mod growth_gate;
+mod median_window;
+mod miner_stuffer;
 mod mn_feasibility;
+mod onset;
 mod population;
 mod proxy;
 mod redistribution;
+mod rng;
+mod secret_draw;
+mod secret_draw_production;
 mod stranding;
 mod swing;
+mod volume_window;
 // The `RecordedChainFixture` recorder is test-substrate only: it
 // generates / verifies `docs/test_vectors/economics/*.json` for the
 // `EconomicsEngine` C4 differential (`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`
@@ -47,10 +61,70 @@ use std::io::Write;
 /// (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.9 disposition-(b) rule-21 reopen;
 /// `budget.rs`): measures how much `budget(E)` swings with tx volume under the
 /// shipped disposition (a) versus the demand-insulated (b) counterfactual.
+///
+/// `--control-flat-fee` runs any fee-consuming mode on the control arm: one
+/// flat fee per transaction, the fee the `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`
+/// §12.13–§12.14 tables were measured on. Without it the run charges the
+/// production ladder (`fee_model.rs`). Every such report names its arm.
+/// The run's overrides: every `--set set.field=value`, in order
+/// (`baseline.rs`). Parsed and applied before any mode runs.
+fn overrides_from_args() -> Result<Vec<baseline::Override>, baseline::OverrideError> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut overrides = Vec::new();
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--set" {
+            let text = args.get(i + 1).map_or("", String::as_str);
+            overrides.push(baseline::Override::parse(text)?);
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    Ok(overrides)
+}
+
+/// Refuse a run and exit before any fold.
+fn refuse(reason: &str) -> ! {
+    eprintln!("shekyl-economics-sim: {reason}");
+    std::process::exit(2);
+}
+
 fn main() {
-    let params = SimParams::default();
+    let control = std::env::args().any(|a| a == "--control-flat-fee");
+    let arm = |mut params: SimParams| {
+        if control {
+            params.fee = SimParams::section_12_14_control().fee;
+        }
+        params
+    };
+    let overrides = overrides_from_args().unwrap_or_else(|e| refuse(&e.to_string()));
+    let params =
+        arm(SimParams::with_overrides(overrides).unwrap_or_else(|e| refuse(&e.to_string())));
+
+    // Every report starts with the baseline's three digests and the run's
+    // overrides (ESR-16 completion, ruling 6).
+    let mut header = String::new();
+    baseline::write_header(&mut header, params.overrides()).expect("String sink is infallible");
+    eprint!("{header}");
+
+    // A sweep cell is a `--stage2` run: it alone prints a cell beside its
+    // baseline. Every other mode reads the shipped baseline, so an override
+    // there would change nothing it prints, or change it with no baseline
+    // beside it.
+    let stage2 = std::env::args().any(|a| a == "--stage2");
+    if !params.overrides().is_empty() && !stage2 {
+        refuse("overrides are read by --stage2 only: it prints a cell beside its baseline");
+    }
+    // An override on a field the mode's report does not read would print
+    // the baseline, which reads as "no effect": refused before the fold.
+    let (mode, reads) = baseline::stage2_reach(control);
+    if let Err(e) = baseline::check_reach(params.overrides(), params.baseline(), mode, reads) {
+        refuse(&e.to_string());
+    }
 
     if std::env::args().any(|a| a == "--fb1c-c2") {
+        eprintln!("{}", params.fee.label());
         run_fb1c_c2(&params);
         return;
     }
@@ -80,20 +154,63 @@ fn main() {
         return;
     }
 
-    if std::env::args().any(|a| a == "--challenge-coverage") {
-        // Fork-1 evidence set (ARCHIVAL_CHALLENGE_MECHANISM.md §7.1/§8):
-        // urn wave-tail exposure, issued-count histograms, capped regime.
-        // The module renders; this binary target performs the writes
-        // (stage2 precedent — JSON to stdout, summary to stderr).
-        let runs = challenge_coverage::evidence_runs();
+    if std::env::args().any(|a| a == "--secret-draw") {
+        // ESR-11's experiment (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.13)
+        // on ESR-13's loop at ESR-11's timing (§5.22): the secret per-block
+        // draw at 0 / 10 / 30 % producer dropout, pairs short of three
+        // issued draws, draws per block, and the failure window
+        // re-checked. JSON to stdout, table to stderr.
+        let report = secret_draw_production::Report {
+            cells: secret_draw_production::esr11_timing_specs()
+                .into_iter()
+                .map(secret_draw_production::cell)
+                .collect(),
+        };
         let mut summary = String::new();
-        challenge_coverage::render_summary(&mut summary, &runs).expect("String sink is infallible");
+        secret_draw_production::render_summary(&mut summary, &report)
+            .expect("String sink is infallible");
         eprint!("{summary}");
-        println!("{}", challenge_coverage::evidence_json(&runs));
+        println!("{}", secret_draw_production::evidence_json(&report));
         return;
     }
 
-    if std::env::args().any(|a| a == "--stage2") {
+    if std::env::args().any(|a| a == "--secret-draw-production") {
+        // ESR-13 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.17): ESR-11's epoch
+        // on production's `draw_count` and `select_draw`, with a block's
+        // draws issued only when its bundle is admitted. Each cell is
+        // reported to stderr as it finishes, with its wall time; then the
+        // table to stderr and JSON to stdout.
+        let started = std::time::Instant::now();
+        let mut report = secret_draw_production::Report { cells: Vec::new() };
+        for pairs in secret_draw::EVIDENCE_PAIRS {
+            for spec in secret_draw_production::evidence_specs(pairs) {
+                let cell_started = std::time::Instant::now();
+                let cell = secret_draw_production::cell(spec);
+                let mut row = String::new();
+                secret_draw_production::render_cell(&mut row, &cell)
+                    .expect("String sink is infallible");
+                eprintln!(
+                    "[{:>7.1} s] {}",
+                    cell_started.elapsed().as_secs_f64(),
+                    row.trim_end()
+                );
+                report.cells.push(cell);
+            }
+        }
+        let mut summary = String::new();
+        secret_draw_production::render_summary(&mut summary, &report)
+            .expect("String sink is infallible");
+        eprint!("\n{summary}");
+        eprintln!(
+            "wall time: {:.1} s, {} seeds per cell on one thread each",
+            started.elapsed().as_secs_f64(),
+            secret_draw::SEEDS
+        );
+        println!("{}", secret_draw_production::evidence_json(&report));
+        return;
+    }
+
+    if stage2 {
         // The I/O boundary lives here, in the binary target: the arm modules
         // *render* into a sink (`fmt::Write`) and `main` performs the write.
         // That keeps each report next to the model it renders — the
@@ -102,7 +219,17 @@ fn main() {
         // construction rather than by exemption.
         let mut narration = String::new();
         stage2::run_stage2(&mut narration, &params).expect("String sink is infallible");
-        eprint!("{narration}");
+        if params.overrides().is_empty() {
+            eprint!("{narration}");
+        } else {
+            let mut baseline_narration = String::new();
+            stage2::run_stage2(&mut baseline_narration, &arm(SimParams::default()))
+                .expect("String sink is infallible");
+            eprint!(
+                "{}",
+                baseline::beside_baseline(&narration, &baseline_narration)
+            );
+        }
         return;
     }
 
@@ -115,6 +242,7 @@ fn main() {
 
     let mut results: Vec<ScenarioResult> = Vec::new();
 
+    eprintln!("{}", params.fee.label());
     for config in configs {
         eprintln!("Running scenario: {} ...", config.name);
         let result = run_scenario(&params, &config);
@@ -143,7 +271,10 @@ fn main() {
     if gate7 {
         eprintln!("\nGate-7 scenario set complete. JSON written to stdout.");
     } else {
-        eprintln!("\nAll 8 scenarios complete. JSON written to stdout.");
+        eprintln!(
+            "\nAll {} scenarios complete. JSON written to stdout.",
+            results.len()
+        );
     }
 }
 

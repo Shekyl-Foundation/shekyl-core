@@ -6,7 +6,7 @@
 //! The slash log as consensus history (DRS-E4 `ARW-Q2`): what one slash took,
 //! for the as-of-height holdings fold.
 
-use crate::{PCanonicalId, SettlementEpoch, ShardId};
+use crate::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 // ---------------------------------------------------------------------------
 // The slash log — consensus history, not a journal (DRS-E4 `ARW-Q2`)
@@ -39,10 +39,11 @@ pub enum SlashedHolding {
 /// `archival_slash_log[(height, seq)]` — one slash the scheduler applied,
 /// as history.
 ///
-/// This is the **one archival journal that is a fact**: the record after a
-/// slash says what is held now, not when a shard left, and the as-of-height
+/// This is an archival journal that is a fact: the record after a slash
+/// says what is held now, not when a shard left, and the as-of-height
 /// question reaches back past the reorg window the undo log covers
-/// (`DRS_E4_ARCHIVAL_WRITER.md` §3.3). What is here is exactly what that
+/// (`DRS_E4_ARCHIVAL_WRITER.md` §3.3). The Release journal
+/// ([`super::ReleasedRecord`]) is the other, for the same reason. What is here is exactly what that
 /// read consumes — who, which shard, which epoch's failure, and what the
 /// slash took. The C++ row also carried the slashed amount and an
 /// epoch-marker row kind; neither has a reader once pop is the undo log's
@@ -59,4 +60,17 @@ pub struct SlashLogEntry {
     pub epoch: SettlementEpoch,
     /// What the slash took from the record's holdings.
     pub holding: SlashedHolding,
+}
+
+/// One slash-log row with the height it was applied at: what the walk that
+/// rebuilds a drawable set reads, since it undoes slashes and Releases in
+/// the order they connected (`SO-D12` increment 2). The holdings fold reads
+/// a persona's entries without heights (A2), because any one qualifying
+/// row answers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoggedSlash {
+    /// The connecting height the slash was applied at.
+    pub height: BlockHeight,
+    /// The slash.
+    pub entry: SlashLogEntry,
 }

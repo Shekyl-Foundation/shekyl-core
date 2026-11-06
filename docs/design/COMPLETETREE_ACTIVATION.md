@@ -59,11 +59,13 @@ at close):
   (`FOUNDATION_GENESIS_IDENTITY_SET.md` §2 factored rule, RULING 2026-07-19).
 - Slash side is live for CompleteTree — not exempt
   (`ARCHIVAL_CHALLENGE_MECHANISM.md` §6, closed 2026-08-07).
-- A foundation record cannot `HoldingsUpdate` — enforced in
-  `bond_post.rs:210-213` (`BondPostError::HoldingsUpdateOnCompleteTree`:
-  a `HoldingsUpdate` whose record kind is not `ShardSetCompact` is
-  refused). `db_lmdb.cpp:5226` restates it in a comment; the rule lives
-  in the Rust verifier.
+- A foundation record's holdings cannot change — and since 2026-09-20
+  **no** record's can: `HoldingsUpdate` is REJECTED under the immutable-bond
+  ruling (`BondPostKind::from_u8(3)` is `InvalidPostKind`;
+  `PRINCIPAL_STAKE_LIFECYCLE.md` §5.3). The CompleteTree-specific refusal
+  this bullet cited (`BondPostError::HoldingsUpdateOnCompleteTree`,
+  `bond_post.rs:210-213` at the time) was deleted with the kind; the
+  property it enforced is now universal rather than CompleteTree's.
 - Empty `ShardSetCompact` is **consensus-invalid** at JoinMarket
   (`bond_post.rs:516-518`; KATs `bond_post_tests.rs:44-51`,
   `rejects_floor_zero_via_empty_shards`). Floor scales per shard and is 0 for

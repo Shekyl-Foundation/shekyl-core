@@ -106,7 +106,11 @@ extern "C" {
 #define SHEKYL_LOG_ERR_NOT_INITIALIZED            -9
 #define SHEKYL_LOG_ERR_INVALID_UTF8              -10
 #define SHEKYL_LOG_ERR_SUBSCRIBER_INSTALL        -11
-#define SHEKYL_LOG_ERR_ALREADY_INSTALLED         -12
+/* -12 was SHEKYL_LOG_ERR_ALREADY_INSTALLED, the return of
+   shekyl_log_install_tracing_forwarder, deleted 2026-11-02 with that export
+   (DAEMON_CONFIG_CUTOVER.md DC-F19). Not reused. */
+#define SHEKYL_LOG_ERR_WRITER_THREAD             -13
+#define SHEKYL_LOG_ERR_FLUSH_DEADLINE            -14
 
 // -----------------------------------------------------------------
 // Init / shutdown
@@ -143,35 +147,21 @@ int32_t shekyl_log_init_file(
     uint64_t max_bytes,
     uint32_t max_files);
 
-/// Flush the non-blocking writer and drop its worker-thread guard.
-/// The subscriber itself remains installed — `tracing`'s global
-/// default has no un-install — so filter and emit calls continue to
-/// function after shutdown, they just write to stderr/the file
-/// without the async buffer. Safe to call multiple times.
+/// Flush every sink's queue (bounded, as `shekyl_log_flush` with the
+/// crate's `FLUSH_WITHIN`) and stop the writer threads. The subscriber
+/// itself remains installed — `tracing`'s global default has no
+/// un-install — so filter and emit calls still work, but a line logged
+/// after shutdown has no writer and is dropped. Safe to call multiple
+/// times.
 void shekyl_log_shutdown(void);
 
-/// Pin the tracing-forwarder call ordering (init first) and install
-/// idempotency as a process-global one-shot.
-///
-/// This call does NOT verify event routing at runtime. Under the
-/// single-Rust-image contract there is nothing to forward between:
-/// `tracing` events from Rust crates linked into this binary reach
-/// the subscriber installed by `shekyl_log_init_*` because every
-/// binary links exactly one Rust image with one tracing dispatcher
-/// (wallet side: libshekyl_ffi.a; daemon: libshekyl_daemon_image.a).
-/// That property is enforced at link time (per-binary image selection
-/// in cmake/BuildRust.cmake plus the post-link nm gate in
-/// src/daemon/CMakeLists.txt), not by this call. See
-/// V3_WALLET_DECISION_LOG.md 2026-04-25 and the 2026-06-10/2026-06-11
-/// single-image amendments.
-///
-/// Call after `mlog_configure` (which runs `shekyl_log_init_*`).
-/// Returns `SHEKYL_LOG_OK` on the first successful install,
-/// `SHEKYL_LOG_ERR_ALREADY_INSTALLED` on repeat calls (benign — the
-/// SIGHUP-style re-configure path lands here), and
-/// `SHEKYL_LOG_ERR_NOT_INITIALIZED` when no successful init preceded
-/// the call (the one-shot is not consumed; retry after init).
-int32_t shekyl_log_install_tracing_forwarder(void);
+/// Wait until every line logged before this call has reached its sink
+/// (each sink's queue written and flushed), or until `within_ms`
+/// milliseconds pass; never longer. Returns `SHEKYL_LOG_OK`, or
+/// `SHEKYL_LOG_ERR_FLUSH_DEADLINE` when lines were still queued at the
+/// deadline. With no logger initialized it returns `SHEKYL_LOG_OK`.
+int32_t shekyl_log_flush(uint32_t within_ms);
+
 
 // -----------------------------------------------------------------
 // Hot path: enabled gate + emit

@@ -14,14 +14,13 @@ use crate::engine::SimParams;
 /// Baseline reference: steady 1× volume — the release multiplier sits at 1.0, so
 /// (a) and (b) coincide except for rounding. Anchors the swing measurements.
 fn baseline(params: &SimParams) -> BudgetScenario {
-    let b = params.tx_volume_baseline;
+    let b = params.economic().tx_volume_baseline;
     BudgetScenario {
         name: "baseline_1x".into(),
         description: "Steady 1x baseline volume over 30 years (release mult = 1.0; a == b)".into(),
         sim_years: 30,
         get_volume: Box::new(move |_blk, _bpy| b),
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
     }
 }
@@ -30,15 +29,14 @@ fn baseline(params: &SimParams) -> BudgetScenario {
 /// The release multiplier pins to its `release_min` floor (0.8×) every block,
 /// so this is the maximum-throttle corner — the worst case (b) could point to.
 fn sustained_low(params: &SimParams) -> BudgetScenario {
-    let b = params.tx_volume_baseline;
+    let b = params.economic().tx_volume_baseline;
     BudgetScenario {
         name: "sustained_low_0.1x".into(),
         description: "Sustained 0.1x baseline for 30 years (release mult pinned to 0.8x floor)"
             .into(),
         sim_years: 30,
         get_volume: Box::new(move |_blk, _bpy| (b as f64 * 0.1) as u64),
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
     }
 }
@@ -49,7 +47,7 @@ fn sustained_low(params: &SimParams) -> BudgetScenario {
 /// gap is at its structural maximum here. (Volume shape mirrors the legacy
 /// `scenario_7_bootstrap`.)
 fn bootstrap(params: &SimParams) -> BudgetScenario {
-    let b = params.tx_volume_baseline;
+    let b = params.economic().tx_volume_baseline;
     BudgetScenario {
         name: "bootstrap_coldstart".into(),
         description: "Genesis cold-start: 0.1/0.2/0.5/1/1.5x over years 0-4 then 1.5x (low volume \
@@ -66,8 +64,7 @@ fn bootstrap(params: &SimParams) -> BudgetScenario {
                 _ => b * 3 / 2,
             }
         }),
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
     }
 }
@@ -76,7 +73,7 @@ fn bootstrap(params: &SimParams) -> BudgetScenario {
 /// *volatility* of the throttle (not just its floor) matters — the bust years
 /// hit the 0.8× floor while the boom years cap at 1.3×.
 fn boom_bust(params: &SimParams) -> BudgetScenario {
-    let b = params.tx_volume_baseline;
+    let b = params.economic().tx_volume_baseline;
     BudgetScenario {
         name: "boom_bust".into(),
         description: "3x volume one year, 0.3x the next, repeating over 20 years".into(),
@@ -89,8 +86,7 @@ fn boom_bust(params: &SimParams) -> BudgetScenario {
                 (b as f64 * 0.3) as u64
             }
         }),
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
     }
 }
@@ -100,7 +96,7 @@ fn boom_bust(params: &SimParams) -> BudgetScenario {
 /// realistic starvation window, deep enough into the decay that the emission
 /// leg is already shrinking.
 fn prolonged_bust(params: &SimParams) -> BudgetScenario {
-    let b = params.tx_volume_baseline;
+    let b = params.economic().tx_volume_baseline;
     BudgetScenario {
         name: "prolonged_bust".into(),
         description: "1x for 5 years then a sustained 0.2x demand collapse for 15 years".into(),
@@ -113,8 +109,7 @@ fn prolonged_bust(params: &SimParams) -> BudgetScenario {
                 (b as f64 * 0.2) as u64
             }
         }),
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
     }
 }
@@ -140,14 +135,13 @@ fn fee_era(params: &SimParams) -> BudgetScenario {
                 _ => 220,
             }
         }),
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.95,
+        initial_emitted_ppm: 950_000,
         // ~year 30 in the configured chain timing. Derived from
         // `blocks_per_year` (not a literal) because the emission-share decay —
         // the quantity this scenario exists to read — is itself computed from
-        // `params.blocks_per_year`; a hardcoded offset would silently
+        // `params.blocks_per_year()`; a hardcoded offset would silently
         // represent a different number of decay-years if the config changed.
-        genesis_height_offset: 30 * params.blocks_per_year,
+        genesis_height_offset: 30 * params.blocks_per_year(),
     }
 }
 

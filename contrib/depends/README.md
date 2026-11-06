@@ -36,7 +36,7 @@ Common `host-platform-triplets` for cross compilation are:
 No other options are needed, the paths are automatically configured.
 
 Note: 32-bit targets (`i686-w64-mingw32`, `arm-linux-gnueabihf`,
-`i686-linux-gnu`, and their Android equivalents) were retired in
+`i686-linux-gnu`) were retired in
 Chore #3 (`v3.1.0-alpha.5`). The root `CMakeLists.txt` refuses to
 configure for any target where `CMAKE_SIZEOF_VOID_P != 8`; see
 `docs/CHANGELOG.md` and `docs/STRUCTURAL_TODO.md` for the PQC

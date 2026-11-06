@@ -20,15 +20,16 @@
 //!   lie. Only the tenant's network binding is read (the same read the
 //!   wallet-less `check_*` proof methods perform).
 //!
-//! # Error taxonomy (SM-R-6, the reason this module exists)
+//! # Error taxonomy (SM-R-6)
 //!
-//! Shape errors are the caller's bug (`-32602`); everything else is an
-//! *answer* with its own code: `-29800` not-from-that-address, `-29801`
-//! corrupted paste, `-29802` unknown scheme. The signature string is
-//! judged **before** the address: its taxonomy (corruption vs. unknown
-//! scheme) is a property of the paste alone. (`-29803` ADDRESS_UNBOUND
-//! was allocated while verification was R6-a-gated and RETIRED unused
-//! when the fork-(ii) layout made every address carry the key.)
+//! The map onto the `-29800` band lives in `shekyl-wallet-contract`.
+//! This module calls [`WalletRpcError::from`] and does not keep a second
+//! copy. Shape errors are the caller's bug (`-32602`); everything else
+//! is an answer: `-29800` not-from-that-address, `-29801` corrupted
+//! paste, `-29802` unknown scheme. The signature string is judged
+//! **before** the address. (`-29803` ADDRESS_UNBOUND was allocated while
+//! verification was R6-a-gated and retired unused when every address
+//! came to carry the key.)
 //!
 //! # The R6-a gate, lifted
 //!
@@ -38,10 +39,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_crypto_pq::message_signing::MessageSigError;
-use shekyl_engine_core::engine::message_signing::{
-    self as engine_signing, SignMessageError, VerifyMessageError,
-};
+use shekyl_engine_core::engine::message_signing as engine_signing;
 
 use crate::error::WalletRpcError;
 use crate::params::parse_required_object;
@@ -83,7 +81,7 @@ pub(crate) async fn sign_message(
     let signature = engine
         .sign_message(p.message.as_bytes())
         .await
-        .map_err(|e| map_sign_error(&e))?;
+        .map_err(WalletRpcError::from)?;
 
     serde_json::to_value(SignMessageResult { signature })
         .map_err(|e| WalletRpcError::InternalError(format!("serialize sign_message: {e}")))
@@ -130,123 +128,16 @@ pub(crate) async fn verify_message(
     })
     .await
     .map_err(|e| WalletRpcError::InternalError(format!("verify_message task failed: {e}")))?
-    .map_err(map_verify_error)?;
+    .map_err(WalletRpcError::from)?;
 
     serde_json::to_value(VerifyMessageResult { verified: Verified })
         .map_err(|e| WalletRpcError::InternalError(format!("serialize verify_message: {e}")))
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-/// Map the engine verify assembly onto the contract codes.
-fn map_verify_error(e: VerifyMessageError) -> WalletRpcError {
-    match e {
-        // SM-R-6: address shape is the caller's bug (`-32602`), never
-        // the proofs-surface `-29100`.
-        VerifyMessageError::InvalidAddress | VerifyMessageError::ClassicalOnly => {
-            WalletRpcError::InvalidParams(e.to_string())
-        }
-        VerifyMessageError::Crypto(inner) => map_sig_error(&inner),
-    }
-}
-
-/// Map the crypto-layer taxonomy onto the contract codes (SM-R-6).
-///
-/// `Malformed` is the caller's bug (`-32602`, shape-first); every other
-/// variant is an answer with its own `-29800`-band code. The sign-side
-/// variants (`InvalidKey` / `Rng`) are unreachable through the verify
-/// path's types but mapped honestly rather than panicked on.
-fn map_sig_error(e: &MessageSigError) -> WalletRpcError {
-    match e {
-        MessageSigError::Malformed(detail) => {
-            WalletRpcError::InvalidParams(format!("malformed signature string: {detail}"))
-        }
-        MessageSigError::UnsupportedScheme(scheme) => {
-            WalletRpcError::MessageSigUnsupportedScheme { scheme: *scheme }
-        }
-        MessageSigError::Corrupted => WalletRpcError::MessageSigCorrupted,
-        MessageSigError::VerifyFailed => WalletRpcError::MessageSigVerifyFailed,
-        MessageSigError::InvalidKey => {
-            WalletRpcError::InternalError("message-signing key material invalid".into())
-        }
-        MessageSigError::Rng => WalletRpcError::InternalError(
-            "the system random number generator failed — try again".into(),
-        ),
-    }
-}
-
-/// Map the Engine sign workflow's refusals onto the contract codes.
-///
-/// Detail-bearing variants are logged server-side and category-only on
-/// the wire (`message()` contract / rule 30).
-fn map_sign_error(e: &SignMessageError) -> WalletRpcError {
-    match e {
-        // Terminal for the session, with its own user action (close and
-        // reopen). Its own code, not `-32603`: the engine gave this
-        // failure its own variant precisely because the remedy differs,
-        // and a client automating the reopen must branch on a code, not
-        // string-match an English sentence (the same ruling that gave
-        // the stake path `-29504`).
-        SignMessageError::WalletSessionEnded => WalletRpcError::WalletSessionEnded,
-        SignMessageError::Key(detail) => {
-            tracing::warn!(detail = %detail, "sign_message key-engine failure");
-            WalletRpcError::InternalError("sign_message key-engine failure".into())
-        }
-        SignMessageError::Crypto(inner) => {
-            tracing::warn!(detail = %inner, "sign_message crypto refusal");
-            map_sig_error(inner)
-        }
-        SignMessageError::Internal(detail) => {
-            tracing::warn!(detail = %detail, "sign_message internal failure");
-            WalletRpcError::InternalError("sign_message internal failure".into())
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::error::WalletRpcErrorCode;
-
-    // ── error mapping (contract code table) ──────────────────────────
-
-    #[test]
-    fn crypto_taxonomy_maps_to_contract_codes() {
-        // Every variant, exact code — the mapping IS the contract.
-        let cases: Vec<(MessageSigError, WalletRpcErrorCode)> = vec![
-            (
-                MessageSigError::Malformed("x"),
-                WalletRpcErrorCode::InvalidParams,
-            ),
-            (
-                MessageSigError::UnsupportedScheme(0x7f),
-                WalletRpcErrorCode::MessageSigUnsupportedScheme,
-            ),
-            (
-                MessageSigError::Corrupted,
-                WalletRpcErrorCode::MessageSigCorrupted,
-            ),
-            (
-                MessageSigError::VerifyFailed,
-                WalletRpcErrorCode::MessageSigVerifyFailed,
-            ),
-            (
-                MessageSigError::InvalidKey,
-                WalletRpcErrorCode::InternalError,
-            ),
-            (MessageSigError::Rng, WalletRpcErrorCode::InternalError),
-        ];
-        for (e, code) in cases {
-            assert_eq!(map_sig_error(&e).code(), code);
-        }
-    }
-
-    #[test]
-    fn unsupported_scheme_data_carries_the_byte() {
-        let err = map_sig_error(&MessageSigError::UnsupportedScheme(0x42));
-        assert_eq!(err.code().as_i32(), -29802);
-        assert_eq!(err.data().expect("data")["scheme"], 0x42);
-    }
 
     #[test]
     fn band_codes_are_the_allocated_values() {
@@ -258,45 +149,6 @@ mod tests {
             WalletRpcErrorCode::MessageSigUnsupportedScheme.as_i32(),
             -29802
         );
-    }
-
-    /// The one sign failure with a different user action (close and
-    /// reopen) keeps its own code on the wire — a client automating the
-    /// remedy branches on `-29006`, never on English prose (rule 82).
-    #[test]
-    fn wallet_session_ended_gets_its_own_code() {
-        let err = map_sign_error(&SignMessageError::WalletSessionEnded);
-        assert_eq!(err.code(), WalletRpcErrorCode::WalletSessionEnded);
-        assert_eq!(err.code().as_i32(), -29006);
-        assert!(
-            err.message().contains("close and reopen"),
-            "the remedy sentence must survive onto the wire: {}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn sign_internal_failures_are_category_only() {
-        let err = map_sign_error(&SignMessageError::Internal(
-            "/home/user/.shekyl/w.wallet: ENOSPC".into(),
-        ));
-        assert_eq!(err.code(), WalletRpcErrorCode::InternalError);
-        assert!(
-            !err.message().contains("/home"),
-            "internal detail must not cross the wire: {}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn address_shape_errors_are_params_not_proofs_codes() {
-        for e in [
-            VerifyMessageError::InvalidAddress,
-            VerifyMessageError::ClassicalOnly,
-        ] {
-            let err = map_verify_error(e);
-            assert_eq!(err.code(), WalletRpcErrorCode::InvalidParams);
-        }
     }
 
     #[test]

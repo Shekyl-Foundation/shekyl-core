@@ -17,19 +17,22 @@
 
 use shekyl_archival_retention::emission_verify::{
     emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
-    emission_vin_verify_claims, AuthVerified, BackingVerified, ClaimantBondRecord,
-    EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError,
+    emission_vin_verify_claims, emission_vin_verify_claims_under, AuthVerified, BackingVerified,
+    ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError,
 };
 use shekyl_archival_retention::CreditPair as Pair;
 use shekyl_archival_retention::{
     as_of_e_served_work, credited_work_milli, epoch_close_height, reward_share_floor,
     sigma_work_milli, ArchivalRewardEmissionVin, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
-    HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardSet, ShardWorkEntry,
-    WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
+    HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, SettlementEpochBlocks,
+    SettlementSchedule, ShardClose, ShardSet, ShardWorkEntry, WorkEpochClaim,
+    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_archival_retention::{EmissionAuthRole, RewardCommit, EMISSION_KAT_SHAPE};
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSecretKey, SignatureScheme};
+use shekyl_types::BlockHeight;
+use shekyl_types::TxSignableHash;
 
 /// Claimed settlement epoch for the base fixture.
 const E: u64 = 5;
@@ -61,25 +64,27 @@ impl Fixture {
             bonds: vec![
                 EpochCloseBond {
                     join_settlement_epoch: shape.join_settlement_epoch,
-                    is_foundation_complete_tree: false,
+                    is_support_complete_tree: false,
                     bad_intervals: &[],
                 },
                 EpochCloseBond {
                     join_settlement_epoch: shape.join_settlement_epoch,
-                    is_foundation_complete_tree: false,
+                    is_support_complete_tree: false,
                     bad_intervals: &[],
                 },
             ],
             shards: vec![
                 EpochCloseShard {
                     shard_id: shape.shard_a,
-                    has_segment: true,
-                    freeze_height: close - shape.shard_a_freeze_offset,
+                    close: ShardClose::ClosedAt(BlockHeight::from_raw(
+                        close - shape.shard_a_freeze_offset,
+                    )),
                 },
                 EpochCloseShard {
                     shard_id: shape.shard_b,
-                    has_segment: true,
-                    freeze_height: close - shape.shard_b_freeze_offset,
+                    close: ShardClose::ClosedAt(BlockHeight::from_raw(
+                        close - shape.shard_b_freeze_offset,
+                    )),
                 },
             ],
             pairs: shape
@@ -270,6 +275,52 @@ fn finalization_boundary() {
     ctx.height = epoch_close_height(E).unwrap() + 1;
     emission_vin_verify_claims(&vin, &ctx.as_context(), &[source(&fx)])
         .expect("accepts at h_close + 1");
+}
+
+/// The same F-E1 boundary under a schedule the caller holds
+/// (`emission_vin_verify_claims_under`, the validator's CEN-J25 form,
+/// `ARW-15`): step 1 reads the **passed** schedule's `h_close(E)`, not the
+/// process latch's. A ten-block epoch puts `h_close(5)` at 60 — a height the
+/// genesis schedule has not closed epoch 0 at — and the verdict flips there
+/// exactly as it does at the genesis `h_close`. The passed-schedule form
+/// under `GENESIS` is byte-for-byte the latched form, so the two cannot
+/// drift on the boundary.
+#[test]
+fn finalization_boundary_under_a_passed_schedule() {
+    let fx = Fixture::new(E);
+    let vin = honest_vin(&fx);
+    let mut ctx = Ctx::accepting(&fx);
+    let short = SettlementSchedule::new(SettlementEpochBlocks::new(10).expect("non-zero"));
+    let short_close = short.close_height(E).expect("no overflow");
+    assert_eq!(short_close, 60);
+    assert!(
+        short_close < epoch_close_height(0).unwrap(),
+        "the short schedule's h_close(E) is below the genesis schedule's first close"
+    );
+
+    ctx.height = short_close;
+    let err = emission_vin_verify_claims_under(short, &vin, &ctx.as_context(), &[source(&fx)])
+        .unwrap_err();
+    assert!(
+        matches!(err, EmissionVerifyError::EpochNotFinalized { epoch, .. } if epoch == E),
+        "at the short schedule's h_close: {err}"
+    );
+
+    ctx.height = short_close + 1;
+    emission_vin_verify_claims_under(short, &vin, &ctx.as_context(), &[source(&fx)])
+        .expect("accepts at the short schedule's h_close + 1");
+
+    // Under `GENESIS`, the passed form is the latched form.
+    ctx.height = epoch_close_height(E).unwrap();
+    let under = emission_vin_verify_claims_under(
+        SettlementSchedule::GENESIS,
+        &vin,
+        &ctx.as_context(),
+        &[source(&fx)],
+    )
+    .unwrap_err();
+    let latched = emission_vin_verify_claims(&vin, &ctx.as_context(), &[source(&fx)]).unwrap_err();
+    assert_eq!(under.to_string(), latched.to_string());
 }
 
 /// §6.6 claim-age boundary: `E` at `C − W` accepts; one epoch older rejects.
@@ -580,7 +631,8 @@ fn backing_rejects_bad_proof() {
     let fx = Fixture::new(E);
     let vin = honest_vin(&fx);
     assert!(matches!(
-        emission_vin_verify_backing(&vin, &[0u8; 32], 3, [0u8; 32]).unwrap_err(),
+        emission_vin_verify_backing(&vin, &[0u8; 32], 3, &TxSignableHash::from_bytes([0u8; 32]))
+            .unwrap_err(),
         EmissionVerifyError::BackingRejected(_)
     ));
 }
@@ -611,14 +663,14 @@ fn source_count_mismatch_rejects() {
 // ---------------------------------------------------------------------------
 
 /// Tx-level auth context shared by builder (signer) and verifier below.
-fn auth_tx_context() -> (Vec<RewardCommit>, [u8; 32]) {
+fn auth_tx_context() -> (Vec<RewardCommit>, TxSignableHash) {
     (
         vec![RewardCommit {
             commitment: [0x71; 32],
             amount_plain: 1_000,
             one_time_key: [0x72; 32],
         }],
-        [0x5F; 32],
+        TxSignableHash::from_bytes([0x5F; 32]),
     )
 }
 
@@ -628,7 +680,7 @@ fn auth_tx_context() -> (Vec<RewardCommit>, [u8; 32]) {
 fn authed_vin(
     fx: &Fixture,
     commits: &[RewardCommit],
-    tx_hash: &[u8; 32],
+    tx_hash: &TxSignableHash,
 ) -> (ArchivalRewardEmissionVin, HybridSecretKey, HybridSecretKey) {
     let scheme = HybridEd25519MlDsa;
     let (p_pk, p_sk) = scheme
@@ -646,7 +698,9 @@ fn authed_vin(
     // (a signature cannot cover itself); the canonical-length placeholders
     // from `honest_vin` keep `validate()` satisfied while the messages are
     // computed, exactly as the wallet builder sequences it.
-    let msgs = vin.auth_msgs(commits, tx_hash).expect("role messages");
+    let msgs = vin
+        .auth_msgs(&testnet(), commits, tx_hash)
+        .expect("role messages");
     vin.auth_backing = scheme
         .sign(
             &b_sk,
@@ -668,6 +722,11 @@ fn authed_vin(
     (vin, p_sk, b_sk)
 }
 
+/// The network the fixture's auths are signed for.
+fn testnet() -> shekyl_network::NetworkId {
+    shekyl_network::Network::Testnet.network_id()
+}
+
 /// Positive path: both hybrid auths verify and the minter yields the sealed
 /// witness — the only production `AuthVerified` constructor.
 #[test]
@@ -676,7 +735,33 @@ fn auth_accepts_honest_dual_signatures() {
     let (commits, tx_hash) = auth_tx_context();
     let (vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
 
-    emission_vin_verify_auth(&vin, &commits, &tx_hash).expect("honest auths accept");
+    emission_vin_verify_auth(&vin, &commits, &tx_hash, &testnet()).expect("honest auths accept");
+}
+
+/// Network binding (`NETWORK_IDENTITY.md` NI-F11): genuine auths signed for
+/// testnet are refused by a verifier on any other network. The message
+/// carries the id itself, so this holds for an emission with no fee input.
+#[test]
+fn auth_rejects_another_networks_signatures() {
+    let fx = Fixture::new(E);
+    let (commits, tx_hash) = auth_tx_context();
+    let (vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
+    for net in shekyl_network::Network::ALL {
+        let verdict = emission_vin_verify_auth(&vin, &commits, &tx_hash, &net.network_id());
+        if net == shekyl_network::Network::Testnet {
+            verdict.expect("the network it was signed for accepts");
+        } else {
+            assert!(
+                matches!(
+                    verdict.unwrap_err(),
+                    EmissionVerifyError::AuthRejected {
+                        role: EmissionAuthRole::Backing
+                    }
+                ),
+                "{net}: a testnet emission must not verify"
+            );
+        }
+    }
 }
 
 /// Role separation: each signature only verifies under its own Q1
@@ -689,7 +774,7 @@ fn auth_rejects_swapped_role_signatures() {
     std::mem::swap(&mut vin.auth_backing, &mut vin.auth_claim);
 
     assert!(matches!(
-        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
+        emission_vin_verify_auth(&vin, &commits, &tx_hash, &testnet()).unwrap_err(),
         EmissionVerifyError::AuthRejected {
             role: EmissionAuthRole::Backing
         }
@@ -705,7 +790,9 @@ fn auth_rejects_claim_signed_by_wrong_key() {
     let (commits, tx_hash) = auth_tx_context();
     let (mut vin, _p_sk, b_sk) = authed_vin(&fx, &commits, &tx_hash);
 
-    let msgs = vin.auth_msgs(&commits, &tx_hash).expect("role messages");
+    let msgs = vin
+        .auth_msgs(&testnet(), &commits, &tx_hash)
+        .expect("role messages");
     vin.auth_claim = HybridEd25519MlDsa
         .sign(
             &b_sk,
@@ -717,7 +804,7 @@ fn auth_rejects_claim_signed_by_wrong_key() {
         .expect("canonical sig");
 
     assert!(matches!(
-        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
+        emission_vin_verify_auth(&vin, &commits, &tx_hash, &testnet()).unwrap_err(),
         EmissionVerifyError::AuthRejected {
             role: EmissionAuthRole::Claim
         }
@@ -736,19 +823,67 @@ fn auth_rejects_tampered_tx_context() {
     let mut swapped_dest = commits.clone();
     swapped_dest[0].one_time_key = [0x73; 32];
     assert!(matches!(
-        emission_vin_verify_auth(&vin, &swapped_dest, &tx_hash).unwrap_err(),
+        emission_vin_verify_auth(&vin, &swapped_dest, &tx_hash, &testnet()).unwrap_err(),
         EmissionVerifyError::AuthRejected {
             role: EmissionAuthRole::Backing
         }
     ));
 
-    let other_tx_hash = [0x60; 32];
+    let other_tx_hash = TxSignableHash::from_bytes([0x60; 32]);
     assert!(matches!(
-        emission_vin_verify_auth(&vin, &commits, &other_tx_hash).unwrap_err(),
+        emission_vin_verify_auth(&vin, &commits, &other_tx_hash, &testnet()).unwrap_err(),
         EmissionVerifyError::AuthRejected {
             role: EmissionAuthRole::Backing
         }
     ));
+}
+
+/// Every byte of the emission input is covered (the signing envelope
+/// §2.2; CEN-J22). CEN-J22 takes the input out of the signable prefix
+/// whole, so nothing but its own two auths signs it: each byte is either a
+/// field both auths sign (fields 1-7 and the backing's wire bytes, field 9)
+/// or one of the two auth signatures, which are verified strictly. Each byte
+/// of an honest input, changed alone, gives bytes that either fail to parse
+/// as one emission input or parse and are refused by the auth check.
+#[test]
+fn auth_refuses_any_changed_byte_of_the_input() {
+    let fx = Fixture::new(E);
+    let (commits, tx_hash) = auth_tx_context();
+    let (vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
+    let wire = vin.serialize().expect("the honest vin encodes");
+
+    let parse_whole = |bytes: &[u8]| {
+        let mut rest = bytes;
+        let parsed = ArchivalRewardEmissionVin::read(&mut rest).ok()?;
+        rest.is_empty().then_some(parsed)
+    };
+    let honest = parse_whole(&wire).expect("the honest bytes parse whole");
+    emission_vin_verify_auth(&honest, &commits, &tx_hash, &testnet())
+        .expect("the honest bytes verify");
+
+    let (mut unparsed, mut refused) = (0usize, 0usize);
+    for at in 0..wire.len() {
+        let mut changed = wire.clone();
+        changed[at] ^= 0x01;
+        match parse_whole(&changed) {
+            None => unparsed += 1,
+            Some(parsed) => {
+                assert!(
+                    emission_vin_verify_auth(&parsed, &commits, &tx_hash, &testnet()).is_err(),
+                    "byte {at} of {} changed and the input still verifies",
+                    wire.len()
+                );
+                refused += 1;
+            }
+        }
+    }
+    assert_eq!(unparsed + refused, wire.len());
+    // Most bytes are payload, so most changes parse and reach the auth check.
+    assert!(
+        refused > wire.len() / 2,
+        "{refused} of {} reached the auth check",
+        wire.len()
+    );
 }
 
 /// Canonical-length-but-malformed bytes (the pre-C-1 placeholder fill) fail
@@ -763,7 +898,7 @@ fn auth_rejects_malformed_hybrid_encodings() {
     let (mut vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
     vin.auth_backing = vec![0x55; SINGLE_SIG_CANONICAL_LEN];
     assert!(matches!(
-        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
+        emission_vin_verify_auth(&vin, &commits, &tx_hash, &testnet()).unwrap_err(),
         EmissionVerifyError::AuthMalformed {
             role: EmissionAuthRole::Backing
         }
@@ -774,7 +909,9 @@ fn auth_rejects_malformed_hybrid_encodings() {
     // the failure isolates to the encoding, not the message.
     let (mut vin, p_sk, b_sk) = authed_vin(&fx, &commits, &tx_hash);
     vin.p_pubkey = vec![0x11; SINGLE_KEY_CANONICAL_LEN];
-    let msgs = vin.auth_msgs(&commits, &tx_hash).expect("role messages");
+    let msgs = vin
+        .auth_msgs(&testnet(), &commits, &tx_hash)
+        .expect("role messages");
     let scheme = HybridEd25519MlDsa;
     vin.auth_backing = scheme
         .sign(
@@ -795,7 +932,7 @@ fn auth_rejects_malformed_hybrid_encodings() {
         .to_canonical_bytes()
         .expect("canonical sig");
     assert!(matches!(
-        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
+        emission_vin_verify_auth(&vin, &commits, &tx_hash, &testnet()).unwrap_err(),
         EmissionVerifyError::AuthMalformed {
             role: EmissionAuthRole::Claim
         }

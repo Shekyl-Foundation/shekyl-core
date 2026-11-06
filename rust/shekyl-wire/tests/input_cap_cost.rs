@@ -22,7 +22,7 @@
 //!   the proof's growth, and the prefix (key image + pseudo-out);
 //! - **verifier time per input**, broken the same way;
 //! - the **implied cap** `(TX_WEIGHT_LIMIT − fixed) / weight_per_input` —
-//!   the input count CEN-H3's weight limit (149 400) already refuses past.
+//!   the input count CEN-H3's weight limit already refuses past.
 //!   If it is below 8 the cap is dead weight; if above, the cap is the
 //!   binding constraint and needs a derivation from a stated verifier
 //!   budget, not a number from RingCT's era. The parser's `MAX_TX_SIZE`
@@ -293,6 +293,7 @@ fn tree_with(
         };
         let txs = [TxLeafInputs {
             is_miner: true,
+            tx_hash: None,
             leaf_entry_blob: Some(blob.as_slice()),
             outputs: outputs.as_slice(),
         }];
@@ -303,6 +304,23 @@ fn tree_with(
             })
             .expect("ingest block");
     }
+    // The wallet tells its tree which outputs are its own, in one batch, as
+    // the engine does: assembly reads what was captured for a registered
+    // output and has no other route. Done here rather than in `measure`, so
+    // the one-off reconciliation is part of building the tree and not of any
+    // spend that is timed.
+    let owned: Vec<_> = spent
+        .iter()
+        .map(|s| {
+            (
+                Gindex::from_raw(s.index),
+                shekyl_curve_tree::OneTimePubkey::from_bytes(s.data.output_key),
+            )
+        })
+        .collect();
+    client
+        .sync_owned(&owned)
+        .expect("register the spendable outputs");
     (client, spent, reference_height)
 }
 
@@ -428,6 +446,7 @@ fn measure(
 
     let started = Instant::now();
     let signed = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         tx_prefix_hash,
         &spend_inputs,
         &outputs,
@@ -469,7 +488,7 @@ fn measure(
             })
             .collect(),
     );
-    let payload_hashes = wire_tx.pqc_signing_payload_hashes();
+    let payload_hashes = wire_tx.pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID);
     assert_eq!(payload_hashes.len(), n, "one payload hash per input");
     let auths = sign_pqc_auths(&payload_hashes, &spend_inputs).expect("Phase-2 PQC auth signing");
     if let Ct::Fcmp { pqc_auths, .. } = &mut wire_tx.ct {
@@ -502,7 +521,8 @@ fn measure(
         &pqc_pk_hashes,
         tree_root.as_bytes(),
         signed.tree_depth,
-        tx_prefix_hash.to_bytes(),
+        // The message the proof was made over (the signing envelope §2.2).
+        signed.tx_signable.to_bytes(),
     )
     .expect("verify must not error");
     let verify_proof = started.elapsed();
@@ -514,7 +534,7 @@ fn measure(
     // The hashing is inside the timer because the validator pays it.
     let started = Instant::now();
     let scheme = HybridEd25519MlDsa;
-    let verifier_hashes = wire_tx.pqc_signing_payload_hashes();
+    let verifier_hashes = wire_tx.pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID);
     for (auth, message) in auths.iter().zip(&verifier_hashes) {
         let pk = HybridPublicKey::from_canonical_bytes(&auth.public_key).expect("key parses");
         let sig = HybridSignature::from_canonical_bytes(&auth.signature).expect("sig parses");
@@ -535,7 +555,13 @@ fn measure(
         .map(|c| CompressedPoint::from(CompressedEdwardsY(*c)))
         .collect();
     let started = Instant::now();
-    assert!(bp.verify(rng, &bp_commitments), "BP+ verifies");
+    assert!(
+        shekyl_bulletproofs::verify_batch(&[shekyl_bulletproofs::BatchEntry {
+            proof: &bp,
+            commitments: &bp_commitments,
+        }]),
+        "BP+ verifies"
+    );
     let verify_bp = started.elapsed();
 
     // ── The wire bytes: the assembled, signed transaction ────────────────
@@ -635,7 +661,7 @@ fn the_input_caps_cost_is_measured_not_inherited() {
         / span;
     let fixed_bytes = first.tx_bytes as f64 - bytes_per_input;
     // Two ceilings, one binding. CEN-H3 refuses a transaction whose weight
-    // exceeds `TX_WEIGHT_LIMIT` (149 400) — that is the consensus bound an
+    // exceeds `TX_WEIGHT_LIMIT` — that is the consensus bound an
     // accepted spend actually meets, and the one the input cap is measured
     // against. `MAX_TX_SIZE` (1 MiB) is the parser's refusal, seven times
     // wider; reported beside it so the two are never confused again (#853

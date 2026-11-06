@@ -37,9 +37,6 @@
 #include <vector>
 
 #include "cryptonote_basic/cryptonote_basic_impl.h"
-#include "cryptonote_basic/cryptonote_format_utils.h"
-#include "cryptonote_core/cryptonote_tx_utils.h"
-#include "crypto/pow_randomx.h"
 #include "cryptonote_config.h"
 #include "shekyl/economics.h"
 #include "shekyl/shekyl_ffi.h"
@@ -47,37 +44,20 @@
 namespace
 {
 
-// Lowercase hex of a 32-byte hash (self-contained; avoids an epee string_tools
-// include for one call site).
-std::string hex32(const crypto::hash& h)
-{
-  static const char digits[] = "0123456789abcdef";
-  std::string s;
-  s.reserve(64);
-  for (size_t i = 0; i < 32; ++i)
-  {
-    const unsigned char b = static_cast<unsigned char>(h.data[i]);
-    s.push_back(digits[b >> 4]);
-    s.push_back(digits[b & 0x0f]);
-  }
-  return s;
-}
-
 TEST(mining_parity, release_multiplier_scales_reward)
 {
   const size_t median_weight = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   const size_t current_block_weight = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   const uint64_t already_generated_coins = 1234567890;
-  const uint8_t version = HF_VERSION_SHEKYL_NG;
 
   uint64_t base_reward = 0;
   uint64_t high_volume_reward = 0;
   uint64_t low_volume_reward = 0;
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, base_reward, version));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, base_reward));
   ASSERT_GT(base_reward, 0u);
 
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, high_volume_reward, version, {SHEKYL_TX_VOLUME_BASELINE * 100, 1}));
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, low_volume_reward, version, {1, 1}));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, high_volume_reward, {SHEKYL_TX_VOLUME_BASELINE * 100, 1}));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, low_volume_reward, {1, 1}));
 
   ASSERT_GT(high_volume_reward, base_reward);
   ASSERT_LT(low_volume_reward, base_reward);
@@ -88,12 +68,11 @@ TEST(mining_parity, reward_multiplier_is_neutral_at_baseline)
   const size_t median_weight = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   const size_t current_block_weight = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   const uint64_t already_generated_coins = 987654321;
-  const uint8_t version = HF_VERSION_SHEKYL_NG;
 
   uint64_t base_reward = 0;
   uint64_t release_reward = 0;
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, base_reward, version));
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, release_reward, version, {SHEKYL_TX_VOLUME_BASELINE, 1}));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, base_reward));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, release_reward, {SHEKYL_TX_VOLUME_BASELINE, 1}));
   ASSERT_EQ(base_reward, release_reward);
 }
 
@@ -108,7 +87,6 @@ TEST(mining_parity, marshal_pins_the_signed_composition_at_the_tail)
   // the status -> bool mapping — are inside the tested surface. Written
   // under the no-test-exists-means-write-the-test rule: this overload
   // crossed with the FL-R12' bundle carrying only directional coverage.
-  const uint8_t version = HF_VERSION_SHEKYL_NG;
   const uint64_t tail = FINAL_SUBSIDY_PER_MINUTE * (SHEKYL_DAA_TARGET_SECONDS / 60);
   const size_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   uint64_t reward = 0;
@@ -116,18 +94,18 @@ TEST(mining_parity, marshal_pins_the_signed_composition_at_the_tail)
   // Tail boundary under dormancy (v = 0 pins M_r at its 0.8 rail), no
   // penalty: the floor pays TAIL whole. The shipped pre-FL-R12' order
   // paid 480000000 here (the multiplier applied to the floored base).
-  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE - tail + 1, reward, version, {}));
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE - tail + 1, reward, {}));
   ASSERT_EQ(reward, tail);
 
   // Past the asymptote with x = 1/2: penalty AFTER the floor => TAIL*3/4.
   // Pre-FL-R12' this state was an error arm (FL-R16a).
-  ASSERT_TRUE(cryptonote::get_block_reward(zone, zone + zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE + tail, reward, version, {}));
+  ASSERT_TRUE(cryptonote::get_block_reward(zone, zone + zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE + tail, reward, {}));
   ASSERT_EQ(reward, tail / 4 * 3);
 
   // Surge rail (M_r at 1.3) at the asymptote: rail-independent TAIL — the
   // axis that separates max(M_r*curve, TAIL) from a floor-inside-the-
   // operand rebuild (FL round 10, T-3).
-  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE, reward, version, {SHEKYL_TX_VOLUME_BASELINE * 100, 1}));
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE, reward, {SHEKYL_TX_VOLUME_BASELINE * 100, 1}));
   ASSERT_EQ(reward, tail);
 
   // Mid-curve dormancy, cross-checked against the DIRECT FFI call: the
@@ -139,7 +117,7 @@ TEST(mining_parity, marshal_pins_the_signed_composition_at_the_tail)
   uint64_t limit = 0;
   ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
             shekyl_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2, 0, 0, &expected, &limit));
-  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2, reward, version, {}));
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2, reward, {}));
   ASSERT_EQ(reward, expected);
 }
 
@@ -154,32 +132,38 @@ TEST(mining_parity, genesis_paid_reward_and_split_are_pinned)
   //
   // Independent literals, derived from the frozen parameters rather than
   // read back from the owner under test: at genesis `curve(0) =
-  // SHEKYL_EMISSION_CURVE_ASYMPTOTE >> esf` = 2 048 000 000 000; an empty volume window
-  // pins `M_r` at its 0.8 rail and the tail floor does not bind, so the paid
-  // pre-penalty quantity is 1 638 400 000 000; the genesis emission share
-  // is 15%, leaving the miner 1 392 640 000 000. A reward-math change
-  // fails this even though the marshal still agrees with itself.
+  // SHEKYL_EMISSION_CURVE_ASYMPTOTE >> esf` = 1 024 000 000 000 at the design's
+  // ESF 22 per block; an empty volume window pins `M_r` at its 0.8 rail and
+  // the tail floor does not bind, so the paid pre-penalty quantity is
+  // 819 200 000 000; the emission share at block 1 is 15%, leaving the miner
+  // 696 320 000 000, and at genesis (height 0) there is no staker share. A reward-math change fails this even though the marshal
+  // still agrees with itself. (Re-derived 2026-10-04; at the per-minute
+  // convention's 21 these were 1 638 400 000 000 and 1 392 640 000 000.)
   uint64_t paid = 0;
   uint64_t limit = 0;
   ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
             shekyl_block_reward(0, 1, 0, /*tx_count_sum=*/0, /*window_blocks=*/0, &paid, &limit));
-  ASSERT_EQ(paid, UINT64_C(1638400000000));
+  ASSERT_EQ(paid, UINT64_C(819200000000));
 
-  const shekyl::EmissionSplit em = shekyl::compute_emission_split(paid, 0, 0);
-  ASSERT_EQ(em.miner_emission, UINT64_C(1392640000000));
+  const shekyl::EmissionSplit em = shekyl::compute_emission_split(paid, 1);
+  ASSERT_EQ(em.miner_emission, UINT64_C(696320000000));
   ASSERT_EQ(em.miner_emission + em.staker_emission, paid);
+
+  const shekyl::EmissionSplit genesis = shekyl::compute_emission_split(paid, 0);
+  ASSERT_EQ(genesis.miner_emission, paid);
+  ASSERT_EQ(genesis.staker_emission, UINT64_C(0));
 }
 
-TEST(mining_parity, randomx_hash_routes_through_v2_ffi)
+TEST(mining_parity, randomx_v2_ffi_reproduces_the_canonical_kat)
 {
-  // Reuse the Phase 3a Hole-1 canonical KAT (tests/randomx_v2_parity/
-  // randomx_v2_full_parity.cpp): seed 0x01..0x20 over a fixed ASCII blob has
-  // this pinned RandomX v2 light-cache hash. The release-gate parity test
-  // anchors the value against the C v2 full dataset; here we assert that
-  // hash_pow_randomx reproduces it, proving the C++ dispatch routes through
-  // the v2 verifier (the same expected value also appears in
-  // randomx_v2_full_parity.cpp's kFrozenKatHashHex — a drift in either
-  // fails both).
+  // The Phase 3a Hole-1 canonical KAT (tests/randomx_v2_parity/
+  // randomx_v2_full_parity.cpp kFrozenKatHashHex, and the miner KAT ctest):
+  // seed 0x01..0x20 over a fixed ASCII blob has this pinned RandomX v2
+  // light-cache hash. The release-gate parity test anchors the value against
+  // the C v2 full dataset; here the verifier this binary links reproduces it
+  // through the export the parity harness calls. The C++ dispatch that used
+  // to sit in front of the export (`hash_pow_randomx`, `get_block_longhash`)
+  // was deleted with the C++ chain: the daemon's PoW is the Rust ingest's.
   static const char* const kCanonicalKatHex =
     "34f8b0179159d837e463c17c8692c106d2d3536f7da325aeefeb3e22a136b651";
 
@@ -196,13 +180,6 @@ TEST(mining_parity, randomx_hash_routes_through_v2_ffi)
     expected[i] = static_cast<uint8_t>(std::stoul(
       std::string(kCanonicalKatHex + 2 * i, 2), nullptr, 16));
 
-  crypto::hash via_dispatch = crypto::null_hash;
-  ASSERT_TRUE(cryptonote::hash_pow_randomx(blob.data(), blob.size(), seed, via_dispatch));
-  ASSERT_EQ(0, std::memcmp(via_dispatch.data, expected.data(), expected.size()));
-
-  // A direct v2 FFI call must produce the same bytes, cross-checking the
-  // verifier is reachable from this binary and the dispatch marshals
-  // its arguments correctly.
   crypto::hash via_ffi = crypto::null_hash;
   ASSERT_EQ(SHEKYL_POW_RANDOMX_V2_OK,
             shekyl_pow_randomx_v2_hash(
@@ -210,133 +187,24 @@ TEST(mining_parity, randomx_hash_routes_through_v2_ffi)
               blob.data(),
               blob.size(),
               reinterpret_cast<uint8_t (*)[32]>(via_ffi.data)));
-  ASSERT_EQ(via_ffi, via_dispatch);
+  ASSERT_EQ(0, std::memcmp(via_ffi.data, expected.data(), expected.size()));
 }
 
-TEST(mining_parity, genesis_identity_is_pow_independent)
-{
-  // RANDOMX_V2_PHASE3_PLAN.md §3.2 / §8.3. The genesis block is mined at
-  // difficulty 1, so find_nonce_for_given_block accepts the very first nonce
-  // tried (GENESIS_NONCE) regardless of which PoW algorithm computes the
-  // longhash, and the block id is Keccak(serialized header) — independent of the
-  // longhash entirely. The RandomX v2 cutover (genesis longhash CryptoNight ->
-  // RandomX, and the calculate_block_hash block-202612 fossil drop in c1611f4be)
-  // therefore cannot move the genesis nonce or id. This also exercises
-  // generate_genesis_block through the v2 verifier — the path Blockchain::init
-  // runs on every daemon boot.
-  //
-  // frozen_id is a regression anchor. If a *legitimate* pre-genesis change to
-  // GENESIS_TX or a header field moves it, set frozen_id to "" to re-capture the
-  // printed value, then re-pin it. Each id is independently anchored by
-  // `geblock block-id --network <net>` (rust/shekyl-genesis-tool), which derives
-  // the same id in pure Rust from config/genesis_recipients.<net>.json; the
-  // mainnet id is also CI-cross-anchored to the height-0 block_hash in
-  // rust/shekyl-wire/tests/vectors/regtest_coinbase_hashes.json (daemon capture
-  // via capture_coinbase.py; see coinbase_hash.rs MAINNET_GENESIS_BLOCK_ID) —
-  // three independent derivations of the same PoW-independent genesis id.
-  struct NetCase
-  {
-    cryptonote::network_type net;
-    const char* name;
-    const char* frozen_id;
-  };
-  const NetCase nets[] = {
-    { cryptonote::MAINNET,  "mainnet",  "16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3" },
-    { cryptonote::TESTNET,  "testnet",  "52425d8da3a90e41ff54780129bdbe9897aa28c3d0a9c80b04b4b5ea35c911d8" },
-    { cryptonote::STAGENET, "stagenet", "65173901b049468133e5f821f668772f13936b1abdff0e2add80ff3b03ccf5f0" },
-  };
-
-  for (const NetCase& nc : nets)
-  {
-    const cryptonote::config_t& cfg = cryptonote::get_config(nc.net);
-    cryptonote::block bl{};
-    ASSERT_TRUE(cryptonote::generate_genesis_block(bl, cfg.GENESIS_TX, cfg.GENESIS_NONCE))
-      << nc.name << ": generate_genesis_block failed";
-    EXPECT_EQ(cfg.GENESIS_NONCE, bl.nonce)
-      << nc.name << ": genesis nonce moved (difficulty-1 invariant broken)";
-
-    crypto::hash id{};
-    ASSERT_TRUE(cryptonote::get_block_hash(bl, id)) << nc.name << ": get_block_hash failed";
-    const std::string got = hex32(id);
-    if (std::string(nc.frozen_id).empty())
-      std::printf("[genesis] %-8s nonce=%u id=%s  (CAPTURE: paste into frozen_id)\n",
-                  nc.name, static_cast<unsigned>(bl.nonce), got.c_str());
-    else
-      EXPECT_EQ(std::string(nc.frozen_id), got) << nc.name << ": genesis block id changed";
-  }
-}
-
-// The coinbase extra has one writer, shekyl_coinbase_extra, and one layout:
-// [0x01 pubkey, 0x02 nonce(8), 0x06 KEM ciphertexts, 0x07 leaf entries] --
-// the coinbase grammar (TXE-Q6'), which geblock (rust/shekyl-genesis-tool)
-// emits for genesis with an all-zero nonce. This test is the cutover's
-// byte-identity proof (TX_EXTRA_RUST_CUTOVER.md §8): read the four fields out
-// of each network's genesis extra through the codec, hand them back to the
-// writer, and require the bytes that come out to be the bytes that went in.
-// A layout drift in either direction -- the writer, or geblock -- fails here,
-// and so does a genesis that the grammar itself would refuse at connect.
-// Complements rust/shekyl-genesis-tool/tests/golden_kat.rs::extra_is_canonical_fixed_point.
-TEST(mining_parity, coinbase_writer_reproduces_the_genesis_extra_byte_for_byte)
-{
-  struct NetCase
-  {
-    cryptonote::network_type net;
-    const char* name;
-  };
-  const NetCase nets[] = {
-    { cryptonote::MAINNET,  "mainnet"  },
-    { cryptonote::TESTNET,  "testnet"  },
-    { cryptonote::STAGENET, "stagenet" },
-  };
-
-  for (const NetCase& nc : nets)
-  {
-    const cryptonote::config_t& cfg = cryptonote::get_config(nc.net);
-    cryptonote::block bl{};
-    ASSERT_TRUE(cryptonote::generate_genesis_block(bl, cfg.GENESIS_TX, cfg.GENESIS_NONCE))
-      << nc.name << ": generate_genesis_block failed";
-    const std::vector<uint8_t>& extra = bl.miner_tx.extra;
-    const size_t n_outputs = bl.miner_tx.vout.size();
-    ASSERT_GT(n_outputs, 0u) << nc.name << ": genesis pays at least one output";
-
-    uint8_t pubkey[32];
-    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_tx_extra_tx_pubkey(extra.data(), extra.size(), pubkey))
-      << nc.name << ": genesis extra carries no 0x01 pubkey";
-    ShekylOwnedBuffer nonce;
-    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_tx_extra_field(extra.data(), extra.size(),
-        SHEKYL_TX_EXTRA_TAG_NONCE, 0, &nonce.buf))
-      << nc.name << ": genesis extra carries no 0x02 nonce";
-    ASSERT_EQ(size_t(SHEKYL_COINBASE_NONCE_BYTES), nonce.size()) << nc.name;
-    EXPECT_TRUE(std::all_of(nonce.data(), nonce.data() + nonce.size(), [](uint8_t b) { return b == 0; }))
-      << nc.name << ": genesis was not nonce-searched; its nonce is zero";
-    ShekylOwnedBuffer kem;
-    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_tx_extra_field(extra.data(), extra.size(),
-        SHEKYL_TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, 0, &kem.buf))
-      << nc.name << ": genesis extra carries no 0x06 KEM field";
-    char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
-    ShekylOwnedBuffer leaf;
-    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_tx_extra_leaf_entries(extra.data(), extra.size(),
-        n_outputs, /*is_coinbase=*/true, &leaf.buf, msg, sizeof(msg)))
-      << nc.name << ": genesis extra fails the coinbase grammar: " << msg;
-    EXPECT_EQ(n_outputs * SHEKYL_HYBRID_KEM_CT_BYTES, kem.size()) << nc.name;
-    EXPECT_EQ(n_outputs * SHEKYL_PQC_LEAF_ENTRY_BYTES, leaf.size()) << nc.name;
-    // Exactly the three fields: a second 0x01 / 0x06 / 0x07 or any other tag
-    // would survive the round trip below only by being dropped, so ask.
-    ShekylOwnedBuffer none;
-    EXPECT_EQ(SHEKYL_TX_EXTRA_ABSENT, shekyl_tx_extra_field(extra.data(), extra.size(),
-        SHEKYL_TX_EXTRA_TAG_PUBKEY, 1, &none.buf)) << nc.name << ": a second 0x01";
-    EXPECT_EQ(SHEKYL_TX_EXTRA_ABSENT, shekyl_tx_extra_field(extra.data(), extra.size(),
-        SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, 0, &none.buf)) << nc.name << ": a 0x0B";
-
-    ShekylOwnedBuffer rebuilt;
-    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_coinbase_extra(pubkey, nonce.data(), kem.data(), kem.size(),
-        leaf.data(), leaf.size(), n_outputs, &rebuilt.buf, msg, sizeof(msg)))
-      << nc.name << ": the writer refused the genesis fields: " << msg;
-    const std::vector<uint8_t> got(rebuilt.data(), rebuilt.data() + rebuilt.size());
-    EXPECT_EQ(extra, got)
-      << nc.name << ": shekyl_coinbase_extra does not reproduce the genesis extra "
-                    "(writer layout vs geblock emit order drift)";
-  }
-}
+// The genesis identity pin is not here. The C++ `generate_genesis_block` was
+// deleted with the C++ chain; every network's genesis lives in the Rust
+// network table (rust/shekyl-network/genesis/), and
+// rust/shekyl-genesis-tool/tests/genesis_table.rs rebuilds each one from its
+// recipients file and holds the table to it.
+//
+// The genesis extra's byte-identity proof is not here. It read the fields
+// out of each network's genesis extra and handed them back to
+// shekyl_coinbase_extra, requiring the same bytes out. Since the 0x0C draw
+// commitment (SO-D12 increment 1) the writer draws its commitment in Rust
+// and takes none from its caller, so C++ has nothing to hand back and the
+// FFI writer cannot reproduce a fixed extra. The proof is in Rust, over the
+// pure writer the FFI wraps and against the table's genesis:
+// rust/shekyl-genesis-tool/tests/genesis_table.rs,
+// the_pure_writer_reproduces_each_pinned_genesis_extra. Deleted here, not
+// kept as a weaker check (rule 15).
 
 } // anonymous namespace

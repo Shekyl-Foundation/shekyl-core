@@ -86,6 +86,56 @@ pub fn encrypt_with_aad(key: &[u8; KEY_SIZE], aad: &[u8], plaintext: &[u8]) -> V
     out
 }
 
+/// Encrypt `plaintext` under a caller-supplied nonce.
+///
+/// Returns `ciphertext || tag` with no nonce prefix: the caller already
+/// holds the nonce (a per-shard salt concatenated with a chunk index in
+/// `shekyl-p-store`) and must not store a second copy that could drift
+/// from the one used to open. Distinct from [`encrypt_with_aad`], which
+/// mints a random nonce and prefixes it.
+#[must_use]
+pub fn seal(
+    key: &[u8; KEY_SIZE],
+    nonce: &[u8; NONCE_SIZE],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Vec<u8> {
+    let cipher = XChaCha20Poly1305::new(key.into());
+    cipher
+        .encrypt(
+            &chacha20poly1305::XNonce::from(*nonce),
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .expect("encryption should never fail with valid key/nonce")
+}
+
+/// Decrypt `ciphertext || tag` produced by [`seal`].
+///
+/// # Errors
+///
+/// [`AeadError::AuthenticationFailed`] if the tag, nonce, or AAD does
+/// not match.
+pub fn open(
+    key: &[u8; KEY_SIZE],
+    nonce: &[u8; NONCE_SIZE],
+    aad: &[u8],
+    sealed: &[u8],
+) -> Result<Vec<u8>, AeadError> {
+    if sealed.len() < TAG_SIZE {
+        return Err(AeadError::AuthenticationFailed);
+    }
+    let cipher = XChaCha20Poly1305::new(key.into());
+    cipher
+        .decrypt(
+            &chacha20poly1305::XNonce::from(*nonce),
+            Payload { msg: sealed, aad },
+        )
+        .map_err(|_| AeadError::AuthenticationFailed)
+}
+
 /// Decrypt `nonce || ciphertext || tag` with XChaCha20-Poly1305 AEAD.
 ///
 /// Returns the plaintext on success, or `AeadError::AuthenticationFailed` if
@@ -253,5 +303,25 @@ mod tests {
         assert_eq!(encrypted.len(), NONCE_SIZE + TAG_SIZE);
         let decrypted = decrypt_with_aad(&key, aad, &encrypted).unwrap();
         assert!(decrypted.is_empty());
+    }
+
+    #[test]
+    fn seal_round_trip_under_a_supplied_nonce() {
+        let key = [0x11u8; KEY_SIZE];
+        let nonce = [0x22u8; NONCE_SIZE];
+        let aad = b"shard-id|chunk";
+        let sealed = seal(&key, &nonce, aad, b"frame-bytes");
+        assert_eq!(open(&key, &nonce, aad, &sealed).unwrap(), b"frame-bytes");
+    }
+
+    #[test]
+    fn seal_rejects_a_reused_nonce_with_different_aad() {
+        let key = [0x11u8; KEY_SIZE];
+        let nonce = [0x22u8; NONCE_SIZE];
+        let sealed = seal(&key, &nonce, b"slot-0", b"frame-bytes");
+        assert_eq!(
+            open(&key, &nonce, b"slot-1", &sealed),
+            Err(AeadError::AuthenticationFailed)
+        );
     }
 }

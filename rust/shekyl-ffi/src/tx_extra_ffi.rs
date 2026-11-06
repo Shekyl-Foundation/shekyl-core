@@ -69,13 +69,19 @@ pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING: i32 = 12;
 pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH: i32 = 13;
 /// Coinbase grammar: more than one `0x02` nonce.
 pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_DUPLICATE: i32 = 14;
-/// Coinbase grammar: a tag outside `[0x01, 0x02, 0x06, 0x07]`.
+/// Coinbase grammar: a tag outside `[0x01, 0x02, 0x0C, 0x06, 0x07]`.
 pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_FOREIGN_TAG: i32 = 15;
 /// Coinbase grammar: the fields are out of canonical order, or the `0x01`
 /// pubkey is missing or duplicated.
 pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT: i32 = 16;
 /// A `0x02` nonce on a non-coinbase transaction.
 pub const SHEKYL_TX_EXTRA_SHAPE_NONCE_OUTSIDE_COINBASE: i32 = 17;
+/// Coinbase grammar: no `0x0C` draw commitment in a coinbase extra.
+pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_DRAW_COMMITMENT_MISSING: i32 = 18;
+/// Coinbase grammar: more than one `0x0C` draw commitment.
+pub const SHEKYL_TX_EXTRA_SHAPE_COINBASE_DRAW_COMMITMENT_DUPLICATE: i32 = 19;
+/// A `0x0C` draw commitment on a non-coinbase transaction.
+pub const SHEKYL_TX_EXTRA_SHAPE_DRAW_COMMITMENT_OUTSIDE_COINBASE: i32 = 20;
 
 /// Buffer size the caller must provide for the message, NUL included. The
 /// longest sentence this type produces is well under half of it; a message
@@ -135,6 +141,15 @@ pub(crate) fn shape_code(err: ExtraShapeError) -> i32 {
         }
         Shape::Coinbase(Grammar::ForeignTag { .. }) => SHEKYL_TX_EXTRA_SHAPE_COINBASE_FOREIGN_TAG,
         Shape::NonceOutsideCoinbase => SHEKYL_TX_EXTRA_SHAPE_NONCE_OUTSIDE_COINBASE,
+        Shape::Coinbase(Grammar::DrawCommitmentMissing) => {
+            SHEKYL_TX_EXTRA_SHAPE_COINBASE_DRAW_COMMITMENT_MISSING
+        }
+        Shape::Coinbase(Grammar::DrawCommitmentDuplicate { .. }) => {
+            SHEKYL_TX_EXTRA_SHAPE_COINBASE_DRAW_COMMITMENT_DUPLICATE
+        }
+        Shape::DrawCommitmentOutsideCoinbase => {
+            SHEKYL_TX_EXTRA_SHAPE_DRAW_COMMITMENT_OUTSIDE_COINBASE
+        }
     }
 }
 

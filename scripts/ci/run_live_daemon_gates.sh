@@ -34,8 +34,12 @@
 #   pr    — ARMED, per-PR in build.yml (each gate <= ~3.5 min, measured
 #           2026-09-08 local Release; sum ~20 min).
 #   slow  — ARMED_SLOW, the nightly live-daemon workflow (depth-3 spend
-#           780 s + emission claim 1122 s measured 2026-09-08 local
-#           Release — too heavy per-PR, still consensus gates).
+#           780 s measured 2026-09-08 local Release, and the two slice-7
+#           gates — too heavy per-PR, still consensus gates; four bonded
+#           walks since the DRS-X flip, two of which close and price an
+#           archival shard with real spends before they stake). The
+#           emission-claim walk is DECIDED_DARK: its serve-credit lever
+#           went with the C++ chain.
 # Both lanes name-check ALL lists, so a rename is caught in every run.
 #
 # PR #660 ruled against a cost tier on the grounds that a nightly tier
@@ -54,6 +58,11 @@ cd "$REPO_ROOT"
 export SHEKYLD_BIN="${SHEKYLD_BIN:-$REPO_ROOT/build/bin/shekyld}"
 test -x "$SHEKYLD_BIN" || {
   echo "FATAL: no shekyld at $SHEKYLD_BIN" >&2
+  exit 1
+}
+export SHEKYL_CLI_BIN="${SHEKYL_CLI_BIN:-$REPO_ROOT/build/bin/shekyl-cli}"
+test -x "$SHEKYL_CLI_BIN" || {
+  echo "FATAL: no shekyl-cli at $SHEKYL_CLI_BIN" >&2
   exit 1
 }
 
@@ -94,13 +103,8 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #   e2e_refresh_scans_coinbase_balance — historical red: RpcError::
 #     InvalidNode("invalid block") before the shekyl-wire parse migration.
 #   e2e_trim_curve_tree_restores_grow_root — sabotage 2026-09-08.
-#   e2e_staker_bond_post_accepted_and_applied — historical red: the PR-4a
-#     daemon-gap tripwire pinned the unimplemented-arm Malformed refusal.
-#   e2e_drain_wire_shape_matches_a_real_transfer — sabotage 2026-09-08.
-#   e2e_release_accepted_and_connected — sabotage 2026-09-08 (as
-#     e2e_unbond_accepted_and_connected, pre Unbond→Release rename).
-#   e2e_unstake_collect_retire_composed_arc — sabotage 2026-09-08.
 #   e2e_arm3_phantom_slot_collected_at_open — sabotage 2026-09-08.
+#     Stays armed: it persists a bond locally and never broadcasts one.
 #   jsonrpc_we_carries_handler_status_through_the_result_envelope — the
 #     result-envelope leg split out of restricted_listener_* by PR #782;
 #     sabotage 2026-09-18 (envelope pointer inverted, panicked there).
@@ -108,45 +112,145 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     (SOK-Q3): red by construction on any tree that routes the method
 #     (dev at 8494f2a27 does); sabotage 2026-09-18 (expected message
 #     inverted, panicked there).
-#   e2e_fcmp_spend_over_depth3_tree (slow) — historical red: CurveTreeIngest
-#     root mismatch pre-fix, confirmed 2026-06-27 (its doc comment).
-#   e2e_emission_claim_accepted_and_applied (slow) — sabotage 2026-09-08.
-#   e2e_cxx_template_fills_to_its_median (slow) — historical red
-#     2026-09-28: its premise (a C++-built block at the limit) failed its
-#     own assertions on the first run; the C++ producer stops at its
-#     fee/penalty equilibrium past the median (CHAIN_RULES_SLICE_7.md §3.5).
-#     Fifty wallet spends into the pool: ~5 min debug, too heavy per-PR.
-#   e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx (slow) —
-#     historical red 2026-09-28: the C++ refused the Rust block at the
-#     bound for its coinbase (the regtest F21 epoch, §3.11), the finding
-#     that fixed the daemon's hard-fork table. Same pool cost as above.
+#   restricted_listener_is_withheld_status_and_capped_by_native_handlers — the
+#     gate armed 2026-09-07 as restricted_listener_applies_request_caps_
+#     through_the_ffi_bridge, renamed in RK-5c commit 4 when its last leg
+#     (/get_info) went native and it stopped saying anything about the
+#     bridge. Sabotage 2026-10-10, daemon rebuilt: the listener's posture
+#     mapped to full disclosure for every caller; panicked at "each listener
+#     must say which it is".
+#   get_info_console_commands_answer_on_the_in_process_arm — RK-5c commit
+#     4: status, diff, version and print_pool_stats on the daemon's own
+#     console. Sabotage 2026-10-10, daemon rebuilt: `diff` cut off from the
+#     native method; panicked at "the in-process diff must name the live
+#     tip" after `status` had passed.
+#   restricted_listener_hides_a_transaction_this_node_has_not_broadcast —
+#     the origin guard anchored on include_sensitive (RK-5c commit 1), two
+#     daemons. Sabotage 2026-10-09, twice, each rebuilding the daemon:
+#     dispatch_json passing nullptr for the origin panicked naming the three
+#     bridged pool routes and not the native one; the native
+#     /get_transactions handler passing `true` for the flag panicked naming
+#     that route alone. ~77 s measured, local Release daemon.
+#   sync::a_dialing_node_hands_its_tip_to_the_peer_it_dials — DX-Q2 item 5 (the
+#     design review's M2): a restarted node's first outbound handshake
+#     carries the tip it read from its store. Two daemons, one restart.
+#     Red check seen 2026-10-29 (the flip's owner, local debug build) with
+#     the tip forwarder disabled in shekyl-node: "the restarted A never
+#     handed B its tip: after 90s: fresh incoming connections on B: []
+#     (wanted one at height Some(21))", 114 s. Green 35 s measured
+#     2026-10-29, local debug build.
 ARMED=(
-  engine::regtest_e2e::restricted_listener_applies_request_caps_through_the_ffi_bridge
-  engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
-  engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm
+  engine::regtest_e2e::origin::restricted_listener_is_withheld_status_and_capped_by_native_handlers
+  # Renamed 2026-11-03 (R8): the words run through shekyl-cli, not the
+  # daemon's stdin. Observed red 2026-11-03 with the genesis assertion
+  # inverted to "NOT-A-COINBASE": panicked at "tx show must locate the
+  # genesis coinbase".
+  engine::regtest_e2e::tx_show_and_chain_spent_answer_through_shekyl_cli
+  # Renamed 2026-11-03 (R8). Observed red 2026-11-03 with the offline
+  # line inverted to "P2P: online": panicked at "sync status must render
+  # the live core's P2P state".
+  engine::regtest_e2e::peer_words_answer_through_shekyl_cli
   engine::regtest_e2e::native_handlers_apply_their_own_request_caps
   engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon
   engine::regtest_e2e::e2e_fcmp_spend_reorg_restores_pool_and_fee
   engine::regtest_e2e::regtest_daemon_spawns_and_mines_to_wallet_address
+  engine::regtest_e2e::a_stops_last_line_reaches_the_log_file
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
+  engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
+  engine::regtest_e2e::jsonrpc_we_carries_handler_status_through_the_result_envelope
+  engine::regtest_e2e::get_output_histogram_stays_unrouted
+  engine::regtest_e2e::origin::restricted_listener_hides_a_transaction_this_node_has_not_broadcast
+  engine::regtest_e2e::origin::restricted_listener_names_a_transaction_this_node_shows
+  # Renamed 2026-11-03 (R8): daemon status, chain difficulty, version and
+  # txpool stats through shekyl-cli. Observed red 2026-11-03 with the
+  # diff assertion inverted to "NOT-THE-TIP": panicked at "the in-process
+  # diff must name the live tip".
+  engine::regtest_e2e::origin::daemon_words_answer_through_shekyl_cli
+  # Renamed 2026-11-04 (NI-R8): dev-rpc is regtest's alone, so the armed
+  # switch is held on regtest; a testnet daemon given it is refused at load.
+  engine::regtest_e2e::the_armed_switch_serves_two_levers_and_knows_no_third
+  engine::regtest_e2e::sync::a_dialing_node_hands_its_tip_to_the_peer_it_dials
+  # Observed red 2026-10-30 on the flip at e4280bfbf5 before the sync-head
+  # fix: the joiner stood at height 21 of 101 (one span) until the deadline.
+  engine::regtest_e2e::sync::a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer
+  # CS-Q2 step 8, the declaration (Rick, 2026-11-01). Observed red
+  # 2026-11-01 on the #1237 head before it (a95bc9afa5): the offline
+  # testnet node posted no template at open, refused mine.not_synced
+  # (no_view); the closed node whose last peer left refused
+  # mine.not_synced. Green 106 s and 49 s, local Release daemon. The
+  # testnet gate mined one block then, real proof of work at the
+  # network's difficulty: 5 s, 123 s and past the 180 s HTTP timeout on
+  # one 2-CPU runner (2026-11-02), so it was split: the testnet half
+  # reads synced and a posted template at open, the regtest half mines
+  # under dev-difficulty.
+  engine::regtest_e2e::sync::an_offline_testnet_node_is_synced_at_open
+  engine::regtest_e2e::sync::an_offline_regtest_node_mines
+  engine::regtest_e2e::sync::a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives
+  # The CS-5 tune-up §2: a block mined by generateblocks and one taken by
+  # submit_block reach the peer by relay. Observed red 2026-11-04 with the
+  # model's relay of a local tip removed: "the peer did not take the block
+  # generateblocks made within 20s". Green 4.4 s, local Release daemon.
+  engine::regtest_e2e::sync::a_block_a_node_mines_reaches_its_peer_by_relay
+)
+
+# Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min
+# measured 2026-09-08; the two slice-7 gates ~5 min each in a debug build,
+# fifty spends apiece). The nightly live-daemon workflow runs these with
+# GATE_LANE=slow. The four bonded walks joined on 2026-10-29, when the Rust
+# daemon first admitted a kind-5 JoinMarket (the DRS-X flip), each
+# observed green on that daemon before it moved here:
+#   e2e_staker_bond_post_accepted_and_applied — the production stake entry
+#     (a complete-tree bond: mine + fund + discover + stake + submit +
+#     confirm), 264 s.
+#   e2e_drain_wire_shape_matches_a_real_transfer — the drain wire shape
+#     over a complete-tree bond, 165 s.
+#   The two market-bond walks stake a compact join onto shard 0, which
+#     CEN-J15 admits only once the shard is closed, final and priced by a
+#     slash pass. Each opens with `close_shard_through_the_daemon` from
+#     the staker wallet it then stakes from: 289 real wallet spends
+#     (10 579 B of archival good apiece, sixteen a block) close the shard,
+#     `reorg_cap` blocks make it final, the wallet's P-scan covers the
+#     fill ahead of the retention prune, and the chain is mined through
+#     the pass that prices it — the daemon's `get_archival_shard_coverage`
+#     is the exit, never arithmetic. That fill is most of each walk's
+#     time (the box's block pace, 1–3 s, sets the rest), and why they are
+#     here rather than per-PR. Observed red on the flip binary 2026-10-29
+#     before the fill existed, each at its first stake (the pool door's
+#     J15 refusal), and green with it, local debug build:
+#     e2e_release_accepted_and_connected — 1 385 s (SEB 32, cap 8).
+#     e2e_unstake_collect_retire_composed_arc — 1 348 s (SEB 8, cap 2;
+#       the 248-block claim window included).
+#   The relay embargo's two live walks (RX-1, Rick 2026-10-29), each
+#   waiting out the origin's 1,148 s retry, so slow lane, not PR lane:
+#     origin::embargo::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
+#       — origin and sink: the first fire has no alternate and fluffs (W3b);
+#       broadcast at 1 148.6 s, mined, 1 230 s, 2026-10-30. Red before the
+#       embargo landed: the origin held its transaction in stem past 600 s
+#       (2026-10-29).
+#     origin::embargo::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
+#       — the origin and three simulated Levin peers (regtest_e2e_peer.rs):
+#       two take its stem slots and swallow stems, one dials in and fluffs
+#       the transaction back. Re-stem to the alternate at 1 148.0 s, disarmed
+#       by the return, no fluff through a second interval, mined; 2 497 s,
+#       2026-10-30. No daemon option drops stems (Rick, 2026-10-29: the
+#       adversary belongs in the test). Red seen 2026-10-30 on a daemon
+#       built to fluff on every fire (the C++ behaviour §14 rejected): the
+#       first fire reached the alternate as a fluff, "the re-stem is a stem".
+ARMED_SLOW=(
+  engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
+  engine::regtest_e2e::e2e_cxx_template_fills_to_its_median
+  engine::regtest_e2e::e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx
   engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
   engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
   engine::regtest_e2e::e2e_release_accepted_and_connected
   engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
-  engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
-  engine::regtest_e2e::jsonrpc_we_carries_handler_status_through_the_result_envelope
-  engine::regtest_e2e::get_output_histogram_stays_unrouted
-)
-
-# Consensus gates too heavy for the per-PR lane (13 + 19 min measured; the
-# two slice-7 gates ~5 min each in a debug build, fifty spends apiece): the
-# nightly live-daemon workflow runs these with GATE_LANE=slow.
-ARMED_SLOW=(
-  engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
-  engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
-  engine::regtest_e2e::e2e_cxx_template_fills_to_its_median
-  engine::regtest_e2e::e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx
+  engine::regtest_e2e::origin::embargo::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
+  engine::regtest_e2e::origin::embargo::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
+  # Observed red 2026-10-30 (the handed-over span removed from the queue
+  # before the door connected it): the joiner stood at one height with the
+  # door reporting no room, as the F-B subjects did at 724 of 762.
+  engine::regtest_e2e::sync::a_node_syncs_fifteen_spans_from_a_peer
 )
 
 # Deliberately never run here, with the reason recorded (rule 23: a decided
@@ -154,8 +258,47 @@ ARMED_SLOW=(
 # name-check below, so the decision cannot rot silently.
 #   generate_ct2_tier_b_fixture — fixture regenerator, not a pass/fail
 #     proposition; run manually when the CT-2 Tier-B scenarios change.
+#   rt_p5::rt_p5_dry_run, rt_p5::rt_p5_registered_run — RT-P5's sizes
+#     part, a registered measurement
+#     (docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md), not a
+#     pass/fail proposition: each writes its trace under RT_P5_OUT and is
+#     run by hand when the registration says. The parser they rely on is
+#     covered by ordinary unit tests in the same module.
+#   e2e_emission_claim_accepted_and_applied — the third market-bond walk.
+#     Dark because serve credit's production path goes live at SO-D12 4b
+#     (Rick, 2026-10-29: no inject lever; test the production path). Its
+#     CEN-J15 darkness is gone: on the flip binary it fills and prices
+#     shard 0, the market bond is admitted and confirmed, and the join
+#     epoch is read back (SEB 128, cap 16), green; its A2 leg calls the
+#     `inject_archival_serve_credit` lever DX-Q3 deleted with the C++
+#     chain. 4b re-subjects A2 to the bundle path and arms it, in the
+#     live-Tor lane (FOLLOWUPS: the emission regtest walk). Prior reds:
+#     sabotage 2026-09-08 (was ARMED_SLOW).
+#   capture_chain_keeps_its_datadir — the DX-Q8 chain generator. One
+#     regtest daemon, data directory kept on drop, the directory asserted
+#     still present. Run by hand with SHEKYLD_BIN before
+#     scripts/bench/capture_kept_chain.py. Not a pass/fail proposition for
+#     this lane: the subject is the keep, and the lane would spend a
+#     daemon start proving a bool. Sibling of generate_ct2_tier_b_fixture.
+#   sync::a_node_and_an_alpha_11_node_refuse_each_other_cleanly — CS-5 §6's
+#     mixed-version refusal: a CS-5 node and a released alpha.11 node,
+#     linked; alpha.11 never takes the chain and both stay up. Needs the
+#     released binary as SHEKYLD_ALPHA11_BIN, which CI does not have; run
+#     by hand before a release that changes the wire.
+#   bench_source::bench_tx_source — the performance budget's transaction
+#     source (DAEMON_REDB_STORE.md §1.3a, PB-S1's pool point). A load
+#     generator driven by scripts/bench/drs_crash.py against a daemon it
+#     did not start (SHEKYL_BENCH_DAEMON_RPC); without that daemon it has
+#     nothing to do. Not a pass/fail proposition: the crash harness judges
+#     the subject, and the source only feeds it.
 DECIDED_DARK=(
+  engine::regtest_e2e::bench_source::bench_tx_source
+  engine::regtest_e2e::capture_chain_keeps_its_datadir
+  engine::regtest_e2e::sync::a_node_and_an_alpha_11_node_refuse_each_other_cleanly
   engine::regtest_e2e::generate_ct2_tier_b_fixture
+  engine::regtest_e2e::rt_p5::rt_p5_dry_run
+  engine::regtest_e2e::rt_p5::rt_p5_registered_run
+  engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
 )
 
 for a in "${ARMED[@]}" "${ARMED_SLOW[@]}" "${DECIDED_DARK[@]}"; do
@@ -228,3 +371,185 @@ for t in "${LANE_GATES[@]}"; do
     exit 1
   }
 done
+
+# shekyl-cli's ignored tests. The lib tests are the §13 words against a
+# live daemon (SHEKYLD_BIN). The wallet-script integration test is dark:
+# it opens a wallet and refreshes, and it is not a console-word gate.
+# Same ratchet as shekyl-levin: every ignored test the binary lists is
+# named here.
+#
+#   section_13_words_answer_a_regtest_daemon — the §13 coverage. Observed
+#     red 2026-11-03 with the height assertion inverted to "0": panicked
+#     at `assertion left == right failed: chain height is the mined height: 4`.
+#   tx_show_reads_the_wallet_or_the_daemon — the wallet-or-daemon report.
+#     Observed red 2026-11-03 with the held-record assertion inverted:
+#     panicked at "the wallet's record stays the report".
+#   a_failed_wallet_read_does_not_ask_the_daemon — a failed wallet read
+#     stops the command. Observed red 2026-11-03 with the request-log
+#     assertion inverted: panicked at "a failed wallet read asked the daemon".
+ARMED_CLI=(
+  tx_show::regtest::tx_show_reads_the_wallet_or_the_daemon
+  tx_show::regtest::a_failed_wallet_read_does_not_ask_the_daemon
+  tx_show::regtest::section_13_words_answer_a_regtest_daemon
+)
+DARK_CLI=(
+  # The wallet script against an offline testnet daemon. Not a §13 word
+  # gate; the three lib tests above are the console coverage.
+  daemon_script_drives_balance_refresh_and_a_refused_send
+)
+
+cargo test -p shekyl-cli --lib -- --list --ignored >"$ignored" 2>&1
+cli_ignored=$(grep -c ': test$' "$ignored" || true)
+[ "${cli_ignored:-0}" -gt 0 ] || {
+  echo "FATAL: shekyl-cli --lib lists no ignored test — the module moved or the enumeration broke" >&2
+  exit 1
+}
+for name in "${ARMED_CLI[@]}"; do
+  grep -qx "$name: test" "$ignored" || {
+    echo "FATAL: listed gate '$name' names no shekyl-cli ignored test — it was renamed or deleted" >&2
+    exit 1
+  }
+done
+if [ "$cli_ignored" -ne "${#ARMED_CLI[@]}" ]; then
+  echo "FATAL: shekyl-cli --lib lists $cli_ignored ignored test(s), but ${#ARMED_CLI[@]} are armed here." >&2
+  echo "A new #[ignore]d lib test must be armed (observe it red first) or decided dark." >&2
+  exit 1
+fi
+
+cargo test -p shekyl-cli --test json_script -- --list --ignored >"$ignored" 2>&1
+script_ignored=$(grep -c ': test$' "$ignored" || true)
+[ "${script_ignored:-0}" -gt 0 ] || {
+  echo "FATAL: shekyl-cli --test json_script lists no ignored test" >&2
+  exit 1
+}
+for name in "${DARK_CLI[@]}"; do
+  grep -qx "$name: test" "$ignored" || {
+    echo "FATAL: decided-dark '$name' names no shekyl-cli ignored test — it was renamed or deleted" >&2
+    exit 1
+  }
+done
+if [ "$script_ignored" -ne "${#DARK_CLI[@]}" ]; then
+  echo "FATAL: shekyl-cli --test json_script lists $script_ignored ignored test(s), but ${#DARK_CLI[@]} are decided dark." >&2
+  exit 1
+fi
+
+# The armed gates that live outside regtest_e2e, as `<test binary>:<name>`
+# in shekyl-levin's integration tests. Same ratchet, per binary: every
+# ignored test the binary lists is on this list, and every name here is
+# listed, so a rename or a new ignored test fails here rather than going
+# dark. PR lane only: each is a short live run.
+#
+#   refused_inbound — the refused-inbound gate (DAEMON_CONFIG_CUTOVER.md
+#     §5.2; Rick, 2026-10-14): the daemon under a lowered soft descriptor
+#     limit derives its inbound ceiling and refuses the peer past it.
+#     Observed red 2026-10-15 by filling one short of the ceiling: the
+#     extra peer was admitted and the test panicked at "must be refused".
+#     Unix only (PWD-B1: Windows has no per-process descriptor limit); this
+#     script runs on Linux.
+#   socks_credentials — the SOCKS username and password ride the dial
+#     (DAEMON_CONFIG_CUTOVER.md DC-Q7; Rick, 2026-10-17): a daemon behind a
+#     SOCKS5 proxy that takes only RFC 1929 presents the configured pair on
+#     the clearnet and the operator-Tor dial, and a refused pair is named by
+#     its rows while the daemon keeps running. Observed red 2026-10-17 with
+#     both dials forced to no-auth: all three timed out with the proxy
+#     seeing only method 0x00. Unix only (the configuration file's mode).
+#   session_black_box — the p2p remnant cutover's evidence
+#     (P2P_3_REMNANT_CUTOVER_BRIEF.md §5; Rick, 2026-11-04): a simulated
+#     peer over a real socket against the shipped daemon, one test per
+#     thing the session layer holds. Each observed red 2026-11-05 against
+#     a daemon built with the guard removed:
+#       an_other_network_handshake_is_dropped_and_the_host_is_not_banned —
+#         the network check made to pass: "must close the socket
+#         unanswered; the wire did Message(Response { command: 1001 ..".
+#       nothing_but_a_handshake_is_accepted_before_it — the connector's
+#         first-frame check, the session's pre-handshake refusal and its
+#         handshake deadline all removed (any one alone still closes the
+#         socket): "a timed sync before the handshake must close the
+#         socket; the wire did Quiet".
+#       a_second_handshake_closes_the_session — the refusal removed:
+#         "a second handshake must close the session" (Quiet).
+#       transactions_are_ignored_while_unsynchronised_and_judged_once_synced
+#         — the unsynchronised branch made to judge: "transactions
+#         received while unsynchronised must be ignored, not judged"; and
+#         2002 swallowed before the owner: "a malformed transaction on a
+#         synced node must sever the session".
+#       the_txpool_complement_is_served — the reply dropped: "must be
+#         served as a 2002; the wire did Quiet".
+#       a_flood_of_notifications_is_read_one_at_a_time_without_growing_memory
+#         — the permit made unlimited and each 2002 kept: "resident set
+#         grew 25040 KiB under a 33554493-byte flood".
+#     The first run against the honest daemon was red too: every clearnet
+#     admission on a Tor-off node ended as the node's own failure, because
+#     the pump that hands admissions to the session layer ended when the
+#     Tor channel (never opened) closed. Fixed in shekyl-p2p's network.rs;
+#     shekyl-p2p's start_stop test holds it at the crate.
+ARMED_LEVIN=(
+  refused_inbound:the_inbound_ceiling_derived_from_the_descriptor_limit_refuses_the_next_peer
+  socks_credentials:the_clearnet_dial_presents_its_pair_and_tunnels_through_the_proxy
+  socks_credentials:a_refused_pair_names_its_rows_and_the_daemon_keeps_running
+  socks_credentials:the_operator_tor_dial_presents_its_pair
+  session_black_box:an_other_network_handshake_is_dropped_and_the_host_is_not_banned
+  session_black_box:nothing_but_a_handshake_is_accepted_before_it
+  session_black_box:a_second_handshake_closes_the_session
+  session_black_box:transactions_are_ignored_while_unsynchronised_and_judged_once_synced
+  session_black_box:the_txpool_complement_is_served
+  session_black_box:a_flood_of_notifications_is_read_one_at_a_time_without_growing_memory
+)
+
+for entry in "${ARMED_LEVIN[@]}"; do
+  binary="${entry%%:*}"
+  name="${entry#*:}"
+  cargo test -p shekyl-levin --test "$binary" -- --list --ignored >"$ignored" 2>&1
+  listed=$(grep -c ': test$' "$ignored" || true)
+  [ "${listed:-0}" -gt 0 ] || {
+    echo "FATAL: shekyl-levin --test $binary lists no ignored test — the binary moved or the enumeration broke" >&2
+    exit 1
+  }
+  grep -qx "$name: test" "$ignored" || {
+    echo "FATAL: listed gate '$entry' names no ignored test — it was renamed or deleted" >&2
+    exit 1
+  }
+  armed_here=$(printf '%s\n' "${ARMED_LEVIN[@]}" | grep -c "^$binary:" || true)
+  if [ "$listed" -ne "$armed_here" ]; then
+    echo "FATAL: shekyl-levin --test $binary lists $listed ignored test(s), but $armed_here are armed here." >&2
+    echo "A new #[ignore]d test in that binary must be armed (observe it red first) or moved." >&2
+    exit 1
+  fi
+done
+
+if [ "$GATE_LANE" = pr ]; then
+  for name in "${ARMED_CLI[@]}"; do
+    set +e
+    cargo test -p shekyl-cli --lib "$name" \
+      -- --ignored --exact --nocapture >"$gate_log" 2>&1
+    status=$?
+    set -e
+    cat "$gate_log"
+    if [ "$status" -ne 0 ]; then
+      echo "FATAL: $name failed" >&2
+      exit "$status"
+    fi
+    grep -qE '^test result: ok\. 1 passed' "$gate_log" || {
+      echo "FATAL: $name selected no test — the filter or the name moved" >&2
+      exit 1
+    }
+  done
+  for entry in "${ARMED_LEVIN[@]}"; do
+    binary="${entry%%:*}"
+    name="${entry#*:}"
+    set +e
+    cargo test -p shekyl-levin --test "$binary" "$name" \
+      -- --ignored --exact --nocapture >"$gate_log" 2>&1
+    status=$?
+    set -e
+    cat "$gate_log"
+    if [ "$status" -ne 0 ]; then
+      echo "FATAL: $entry failed" >&2
+      exit "$status"
+    fi
+    grep -qE '^test result: ok\. 1 passed' "$gate_log" || {
+      echo "FATAL: $entry selected no test — the filter or the name moved" >&2
+      exit 1
+    }
+  done
+fi

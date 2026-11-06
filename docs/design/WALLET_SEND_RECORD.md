@@ -204,10 +204,13 @@ only, never the read path.
   inherits the envelope's guarantees and never leaves it except at
   named, disciplined boundary crossings, which is where the
   disclosure ledger points —
-  - **the RPC wire**: `get_transfers` OUTGOING puts addresses in
-    responses, and the contract permits a TCP listener
-    (`shekyl-wallet-rpc/src/server.rs` `ListenAddr`), not only the
-    0600-UDS spawn path;
+  - **the RPC wire**: `get_transfers` OUTGOING is where stored
+    addresses would leave the envelope (it projects amount, fee, height
+    and state today, no address), and the contract permits a TCP
+    listener (`shekyl-wallet-rpc/src/server.rs` `ListenAddr`), not only
+    the 0600-UDS spawn path. A `stake_in` row has no address to project:
+    it records `SendDestination::OwnPersonaFunding`, and a projection of
+    it names that kind, never a persona key;
   - **process memory** (rules 35/36): zeroize discipline, no `Debug`
     that renders addresses, no path into error strings (the
     WI-RPC-2a precedent that stopped internal errors echoing paths);
@@ -265,7 +268,10 @@ only, never the read path.
 
 - **SJ-DQ-1 — DECIDED at R1 pass 2: full row, addresses stored, no
   knob.** The row records the send the wallet actually made:
-  `recipients[{address, amount}]`, fee, change, heights, state.
+  `recipients[{destination, amount, rid}]`, fee, change, heights,
+  state. The destination is the address the user sent to, or for a
+  `stake_in` the kind `OwnPersonaFunding` (send-journal block version 5):
+  a persona has no address, and the row never holds a persona's keys.
   Settled by C1's envelope frame, not by the §1 table: inside the
   sealed container that already holds the seed and commits to
   `tx_notes`, there is no coherent policy that admits the seed and

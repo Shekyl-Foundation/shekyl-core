@@ -145,6 +145,13 @@
 //! now — and doing it before the removal would buy the seam and pay for it until
 //! the C++ leaves.
 //!
+//! **2026-11-05: the removal happened.** The C++ relay path and its asio
+//! strand left with the C++ p2p host (`P2P_3_REMNANT_CUTOVER_BRIEF.md`). The
+//! relay owner, `shekyl-relay::owner`, is a tokio actor over this crate's
+//! `&mut self` state machines, so the p2p path has one reactor again —
+//! tokio's — and this crate is still a library the owner calls, which is the
+//! shape reason 2 prescribed.
+//!
 //! Cuprate's `net/levin` and `net/epee-encoding` were a genuinely different
 //! question. The levin half is LV-1 (`shekyl-levin`). The epee half is LV-2
 //! (`docs/design/LV2_PORTABLE_STORAGE.md`): first-party `shekyl-portable-storage`,
@@ -160,19 +167,19 @@
 //! `shekyl-stats` and the float-bearing goodness-of-fit machinery. The default
 //! build is the draws and the state machines only.
 
+pub mod basis;
 pub mod derive;
 pub mod geometric;
 pub mod params;
 pub mod poisson;
-pub mod rng;
 pub mod schedule;
 pub mod stem_map;
 pub mod verify_cost;
-pub mod zone;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
 
+pub use basis::{AdmissibleBasis, DerivationMs};
 pub use derive::{
     derive_embargo, full_travel_probability, marginal_preemption_profile, EmbargoDerivation,
 };
@@ -182,7 +189,6 @@ pub use params::{
     MIXED_ELIGIBILITY_PCT_HUNDREDTHS,
 };
 pub use poisson::PoissonTable;
-pub use rng::{bernoulli, bounded_uniform, RelayRng, SplitMix64};
 #[allow(deprecated)]
 pub use schedule::EmbargoDistribution;
 pub use schedule::{
@@ -191,8 +197,7 @@ pub use schedule::{
 };
 pub use stem_map::{ConnectionId, SlotIndex, SourceId, StemMap, StemSetChange};
 pub use verify_cost::{
-    adopted_hop_ms, Provenance, SpecVerifyCost, TreeBasis, VerifyCell, VerifyCostRefusal,
-    ADOPTED_TRANSIT_ASSUMPTION_MS, GENESIS_TREE_DEPTH, MAX_TABLE_DEPTH, MAX_TABLE_INPUTS,
-    SPEC_VERIFY_COST,
+    adopted_hop_ms, transit_ms_for_connector, MeasuredConnector, Provenance, SpecVerifyCost,
+    TreeBasis, VerifyCell, VerifyCostRefusal, ADOPTED_TRANSIT, ADOPTED_TRANSIT_ASSUMPTION_MS,
+    ANON_ZONE_TRANSIT, GENESIS_TREE_DEPTH, MAX_TABLE_DEPTH, MAX_TABLE_INPUTS, SPEC_VERIFY_COST,
 };
-pub use zone::{LinkSecrecy, RelayZone};

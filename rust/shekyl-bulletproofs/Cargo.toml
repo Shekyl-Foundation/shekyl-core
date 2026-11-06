@@ -31,6 +31,15 @@ shekyl-curve-io = { path = "../shekyl-curve-io", version = "0.1", default-featur
 shekyl-curve-generators = { path = "../shekyl-curve-generators", version = "0.4", default-features = false }
 shekyl-curve-primitives = { path = "../shekyl-curve-primitives", version = "0.1", default-features = false }
 
+# The derived-weight batch verify (`derived.rs`, CEN-H19, ruling R3): the
+# weights are a `ChaCha20Rng` seeded by `shekyl_crypto_hash::cshake256_32` over
+# the batch. Both are already workspace dependencies (rand_chacha 0.3.1 is the
+# workspace's deterministic CSPRNG; shekyl-crypto-hash is the one audited
+# keccak/cSHAKE home), so the lockfile gains no package. Optional because
+# shekyl-crypto-hash is a `std` crate: the module and both edges ride `std`.
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash", optional = true }
+rand_chacha = { workspace = true, optional = true }
+
 [build-dependencies]
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 shekyl-curve-generators = { path = "../shekyl-curve-generators", version = "0.4", default-features = false }
@@ -50,6 +59,9 @@ std = [
   "shekyl-curve-io/std",
   "shekyl-curve-generators/std",
   "shekyl-curve-primitives/std",
+
+  "dep:shekyl-crypto-hash",
+  "dep:rand_chacha",
 ]
 compile-time-generators = ["curve25519-dalek/precomputed-tables"]
 default = ["std", "compile-time-generators"]

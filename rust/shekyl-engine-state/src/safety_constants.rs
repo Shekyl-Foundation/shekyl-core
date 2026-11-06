@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Network-scoped wallet safety constants.
+//! The wallet's safety constants: one set, on every network.
 //!
 //! These are the consensus-adjacent defaults a wallet applies when it has
 //! no user override in play. They are the "hardcoded" layer of the
@@ -16,7 +16,7 @@
 //! - Hardcoded constants cannot be persisted and cannot be flipped by any
 //!   GUI control. Source edits and a new release are the only ways to
 //!   change them.
-//! - A small subset of these values (the ones in [`NetworkSafetyConstants`]
+//! - A small subset of these values (the ones in [`WalletSafetyConstants`]
 //!   that correspond to §3.3 of the audit doc) serve as the default the
 //!   `SafetyOverrides` struct overlays on at wallet open. An override is
 //!   ephemeral; it lives only for the current process.
@@ -30,36 +30,35 @@
 //! to a V3 fresh-start wallet and are deliberately absent from this
 //! struct. `70-modular-consensus.mdc` — this module lives in
 //! `shekyl-engine-state` rather than `shekyl-consensus` because
-//! `shekyl-consensus` is scoped to PoW proof validation; per-network
-//! wallet safety policy is wallet-state concern.
+//! `shekyl-consensus` is scoped to PoW proof validation; wallet safety
+//! policy is a wallet-state concern.
+//!
+//! One set on every network (`NETWORK_IDENTITY.md` NI-R4; Rick,
+//! 2026-11-03): no field differs by network, so nothing here takes one.
+//! The reorg depth is the consensus lock window, referenced, not restated:
+//! an output is not spendable until [`shekyl_consensus::DEFAULT_LOCK_WINDOW`]
+//! blocks have passed, so a wallet treating a transfer as final sooner
+//! would report finality the chain does not grant. An override may only
+//! raise it ([`ReorgDepthOverride`]).
 
-use shekyl_address::Network;
 use shekyl_types::{BlockCount, BlockHeight};
 
-/// Per-network wallet safety defaults.
+/// The shallowest reorg depth a wallet uses: the consensus lock window.
+pub const MIN_REORG_DEPTH: BlockCount =
+    BlockCount::from_raw(shekyl_consensus::DEFAULT_LOCK_WINDOW as u64);
+
+/// The wallet's safety defaults, the same on every network.
 ///
 /// Every field is consensus-adjacent: tampering with any of these values
 /// changes how the wallet interprets chain state or which outputs it is
 /// willing to spend from. That is exactly why they are baked into the
 /// binary and not persisted anywhere a non-root attacker could reach.
-///
-/// The struct is `Copy` to make dispatch at call sites cheap. The
-/// reorg-depth override is `Option<BlockCount>`, the same span as
-/// [`Self::max_reorg_depth`], so the overlay is `unwrap_or`:
-///
-/// ```rust,ignore
-/// let base = NetworkSafetyConstants::for_network(network);
-/// let effective_reorg_depth = overrides
-///     .max_reorg_depth
-///     .unwrap_or(base.max_reorg_depth);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct NetworkSafetyConstants {
+pub struct WalletSafetyConstants {
     /// Minimum number of confirmations before the wallet treats a
-    /// transfer as final. Lower values accept a reorg that should be
-    /// rejected; higher values merely delay UX. See
-    /// `docs/WALLET_PREFS.md` §3.3 — this field accepts a CLI-ephemeral
-    /// override (`--max-reorg-depth N`) but is never persisted.
+    /// transfer as final: [`MIN_REORG_DEPTH`]. See `docs/WALLET_PREFS.md`
+    /// §3.3 — a session may raise it ([`ReorgDepthOverride`]) but it is
+    /// never persisted.
     pub max_reorg_depth: BlockCount,
 
     /// Key-reuse mitigation v2 (defensive derivation that hardens the
@@ -84,82 +83,67 @@ pub struct NetworkSafetyConstants {
     pub default_refresh_from_block_height: BlockHeight,
 }
 
-impl NetworkSafetyConstants {
-    /// Mainnet defaults.
-    pub const fn mainnet() -> Self {
-        Self {
-            max_reorg_depth: BlockCount::from_raw(10),
-            key_reuse_mitigation2: true,
-            default_skip_to_height: BlockHeight::ZERO,
-            default_refresh_from_block_height: BlockHeight::ZERO,
-        }
-    }
+impl WalletSafetyConstants {
+    /// The defaults every wallet runs with unless a session override
+    /// replaces one.
+    pub const DEFAULTS: Self = Self {
+        max_reorg_depth: MIN_REORG_DEPTH,
+        key_reuse_mitigation2: true,
+        default_skip_to_height: BlockHeight::ZERO,
+        default_refresh_from_block_height: BlockHeight::ZERO,
+    };
+}
 
-    /// Testnet defaults. A shallower reorg depth speeds up test
-    /// workflows; finality there is an iteration concern, not a fund
-    /// concern.
-    pub const fn testnet() -> Self {
-        Self {
-            max_reorg_depth: BlockCount::from_raw(6),
-            key_reuse_mitigation2: true,
-            default_skip_to_height: BlockHeight::ZERO,
-            default_refresh_from_block_height: BlockHeight::ZERO,
-        }
-    }
+/// A session's reorg depth, raised above the default: never below
+/// [`MIN_REORG_DEPTH`]. More caution is the user's to choose; less means
+/// nothing the chain respects, so it is refused with its reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ReorgDepthOverride(BlockCount);
 
-    /// Stagenet defaults. Stagenet mirrors mainnet parameters because
-    /// its purpose is to exercise the mainnet parameter set against
-    /// non-production value.
-    pub const fn stagenet() -> Self {
-        Self {
-            max_reorg_depth: BlockCount::from_raw(10),
-            key_reuse_mitigation2: true,
-            default_skip_to_height: BlockHeight::ZERO,
-            default_refresh_from_block_height: BlockHeight::ZERO,
-        }
-    }
-
-    /// Dispatch the per-network defaults from a typed `Network`.
+impl ReorgDepthOverride {
+    /// `depth`, if it is at least the lock window.
     ///
-    /// This is the single entry point callers should use; adding a new
-    /// network variant forces this `match` to be extended, which is
-    /// the compile-time guarantee that no network silently runs with
-    /// default-of-defaults.
-    pub const fn for_network(network: Network) -> Self {
-        match network {
-            Network::Mainnet => Self::mainnet(),
-            Network::Testnet => Self::testnet(),
-            Network::Stagenet => Self::stagenet(),
+    /// # Errors
+    ///
+    /// [`ReorgDepthBelowLockWindow`] when `depth` is shallower than
+    /// [`MIN_REORG_DEPTH`].
+    pub const fn new(depth: BlockCount) -> Result<Self, ReorgDepthBelowLockWindow> {
+        if depth.to_raw() < MIN_REORG_DEPTH.to_raw() {
+            return Err(ReorgDepthBelowLockWindow {
+                asked: depth,
+                floor: MIN_REORG_DEPTH,
+            });
         }
+        Ok(Self(depth))
+    }
+
+    /// The depth.
+    pub const fn depth(self) -> BlockCount {
+        self.0
     }
 }
 
-// Compile-time invariants. These catch accidental regressions in the
-// per-network constructors without needing the test harness to run.
+/// A reorg-depth override below the lock window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "a reorg depth of {asked} blocks is below the chain's lock window of {floor}: an output \
+     cannot be spent until {floor} blocks have passed, so a shallower depth would treat a \
+     transfer as final before the chain does; use {floor} or more"
+)]
+pub struct ReorgDepthBelowLockWindow {
+    /// The depth asked for.
+    pub asked: BlockCount,
+    /// The lock window it may not go below.
+    pub floor: BlockCount,
+}
 
 const _: () = assert!(
-    NetworkSafetyConstants::mainnet().key_reuse_mitigation2,
-    "key_reuse_mitigation2 must be true on mainnet",
+    WalletSafetyConstants::DEFAULTS.key_reuse_mitigation2,
+    "key_reuse_mitigation2 must be true",
 );
 const _: () = assert!(
-    NetworkSafetyConstants::testnet().key_reuse_mitigation2,
-    "key_reuse_mitigation2 must be true on testnet",
-);
-const _: () = assert!(
-    NetworkSafetyConstants::stagenet().key_reuse_mitigation2,
-    "key_reuse_mitigation2 must be true on stagenet",
-);
-const _: () = assert!(
-    !NetworkSafetyConstants::mainnet().max_reorg_depth.is_zero(),
-    "max_reorg_depth must be at least 1 on mainnet",
-);
-const _: () = assert!(
-    !NetworkSafetyConstants::testnet().max_reorg_depth.is_zero(),
-    "max_reorg_depth must be at least 1 on testnet",
-);
-const _: () = assert!(
-    !NetworkSafetyConstants::stagenet().max_reorg_depth.is_zero(),
-    "max_reorg_depth must be at least 1 on stagenet",
+    !MIN_REORG_DEPTH.is_zero(),
+    "the reorg depth must be at least 1",
 );
 
 #[cfg(test)]
@@ -167,53 +151,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn for_network_dispatches_each_variant() {
+    fn the_reorg_depth_is_the_consensus_lock_window() {
         assert_eq!(
-            NetworkSafetyConstants::for_network(Network::Mainnet),
-            NetworkSafetyConstants::mainnet(),
-        );
-        assert_eq!(
-            NetworkSafetyConstants::for_network(Network::Testnet),
-            NetworkSafetyConstants::testnet(),
-        );
-        assert_eq!(
-            NetworkSafetyConstants::for_network(Network::Stagenet),
-            NetworkSafetyConstants::stagenet(),
+            WalletSafetyConstants::DEFAULTS.max_reorg_depth.to_raw(),
+            u64::try_from(shekyl_consensus::DEFAULT_LOCK_WINDOW).expect("fits"),
         );
     }
 
     #[test]
-    fn mainnet_and_stagenet_share_reorg_depth() {
+    fn an_override_may_raise_the_depth_and_not_lower_it() {
+        let floor = MIN_REORG_DEPTH;
         assert_eq!(
-            NetworkSafetyConstants::mainnet().max_reorg_depth,
-            NetworkSafetyConstants::stagenet().max_reorg_depth,
-            "stagenet exists to exercise mainnet parameters",
+            ReorgDepthOverride::new(floor).map(ReorgDepthOverride::depth),
+            Ok(floor)
         );
-    }
-
-    #[test]
-    fn testnet_reorg_depth_is_not_mainnet() {
-        assert_ne!(
-            NetworkSafetyConstants::mainnet().max_reorg_depth,
-            NetworkSafetyConstants::testnet().max_reorg_depth,
-            "testnet should be tuned for fast iteration",
+        let deeper = BlockCount::from_raw(floor.to_raw() + 30);
+        assert_eq!(
+            ReorgDepthOverride::new(deeper).map(ReorgDepthOverride::depth),
+            Ok(deeper)
         );
-    }
-
-    #[test]
-    fn import_hint_defaults_are_zero_on_every_network() {
-        for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
-            let k = NetworkSafetyConstants::for_network(net);
-            assert_eq!(k.default_skip_to_height, BlockHeight::ZERO);
-            assert_eq!(k.default_refresh_from_block_height, BlockHeight::ZERO);
+        for shallower in [0, floor.to_raw() - 1] {
+            let asked = BlockCount::from_raw(shallower);
+            let refused = ReorgDepthOverride::new(asked).expect_err("below the lock window");
+            assert_eq!(refused, ReorgDepthBelowLockWindow { asked, floor });
+            assert!(refused.to_string().contains("lock window"), "{refused}");
         }
     }
 
     #[test]
+    fn import_hint_defaults_are_zero() {
+        assert_eq!(
+            WalletSafetyConstants::DEFAULTS.default_skip_to_height,
+            BlockHeight::ZERO
+        );
+        assert_eq!(
+            WalletSafetyConstants::DEFAULTS.default_refresh_from_block_height,
+            BlockHeight::ZERO
+        );
+    }
+
+    #[test]
     fn struct_is_copy_and_hashable() {
-        // Regression guard: callers rely on Copy for cheap dispatch
-        // and on Eq/Hash for use in test assertions and caches.
+        // Regression guard: callers rely on Copy for cheap reads and on
+        // Eq/Hash for use in test assertions and caches.
         fn assert_bounds<T: Copy + Eq + std::hash::Hash + std::fmt::Debug>() {}
-        assert_bounds::<NetworkSafetyConstants>();
+        assert_bounds::<WalletSafetyConstants>();
+        assert_bounds::<ReorgDepthOverride>();
     }
 }

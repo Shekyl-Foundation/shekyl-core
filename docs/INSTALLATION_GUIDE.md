@@ -43,8 +43,7 @@ The dependency matrix is maintained in `README.md` and includes:
 
 - compiler/tooling: GCC, CMake, pkg-config
 - core libs: Boost, OpenSSL, libsodium
-- optional libs/tools: libunwind, readline, gtest, ccache, doxygen/graphviz
-- optional hardware wallet stack: hidapi, libusb, protobuf/protoc, libudev
+- optional libs/tools: readline, gtest, ccache, doxygen/graphviz
 
 ### Rust integration behavior
 
@@ -140,7 +139,7 @@ Open MSYS2 MinGW shell and install toolchain + dependencies (64-bit example):
 pacman -Syu
 pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake \
   mingw-w64-x86_64-boost mingw-w64-x86_64-openssl \
-  mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi
+  mingw-w64-x86_64-libsodium
 ```
 
 Then:
@@ -152,8 +151,8 @@ make release-static-win64
 ```
 
 > **Shekyl is 64-bit only.** 32-bit build targets
-> (`release-static-win32`, `release-static-linux-i686`,
-> `release-static-android-armv7`, and the corresponding `depends`
+> (`release-static-win32`, `release-static-linux-i686`, and the
+> corresponding `depends`
 > triples) were permanently retired in v3.1.0-alpha.5 (Chore #3).
 > The C++-side configure refuses non-64-bit hosts via a top-level
 > `CMAKE_SIZEOF_VOID_P` gate, and the Rust workspace carries three
@@ -175,13 +174,14 @@ make release-static-win64
 
 The current CMake targets produce:
 
-- daemon: `shekyld` (C++)
+- daemon: `shekyld` (a Rust binary, `rust/shekyld`, that links the C++
+  core as a static library; `DAEMON_CONFIG_CUTOVER.md` DC-Q19)
 - CLI wallet: `shekyl-cli` (Rust)
 - wallet RPC: `shekyl-wallet-rpc` (Rust)
 
-The two wallet binaries are built from the Rust workspace by
-`cmake/BuildRust.cmake` as part of the ordinary CMake build — no separate
-`cargo` step is needed, and `cargo` is already a build prerequisite.
+All three are built from the Rust workspace by `cmake/BuildRust.cmake` as
+part of the ordinary CMake build — no separate `cargo` step is needed, and
+`cargo` is already a build prerequisite.
 
 **Platform note.** The wallet binaries are produced for Unix targets
 (Linux, macOS). They are **not built for Windows** — `BuildRust.cmake`
@@ -230,9 +230,14 @@ Start daemon in foreground:
 
 Run the daemon in the background via your platform's service manager
 (systemd on Linux, launchd on macOS, Task Scheduler on Windows). An
-example systemd unit lives at `contrib/packaging/linux/shekyld.service`;
-copy it to `/etc/systemd/system/shekyld.service` and `systemctl enable
---now shekyld`. `--detach`, `--pidfile`, and the Windows `--*-service`
+shipped systemd unit lives at `contrib/packaging/linux/shekyld.service`,
+with `shekyl.slice` beside it; the `.deb` installs both, or copy both to
+`/etc/systemd/system/` and `systemctl enable --now shekyld`. The slice is
+the daemon's own top-level control group, weighed 4:1 against
+`user.slice` under contention, so a daemon that is syncing or verifying
+keeps about 80 % of the CPU while a wallet in a user session serves
+archival shards beside it (the wallet itself is never a system service).
+A daemon started by hand runs in your session and has no slice. `--detach`, `--pidfile`, and the Windows `--*-service`
 flags were removed in V3.1; the daemon now only runs in the foreground
 and is supervised externally. The GUI wallet embeds `shekyld` as a
 Tauri sidecar and does not require a separate service unit.

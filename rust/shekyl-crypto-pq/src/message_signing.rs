@@ -45,7 +45,7 @@
 //! Mnemonic-recoverable by construction; never persisted; the secret half
 //! zeroizes on drop.
 //!
-//! The expand is **scoped by `(network, seed_format)`** exactly as every
+//! The expand is **scoped by `(network)`** exactly as every
 //! other wallet key is (`account::salt_for`), with
 //! [`MSG_SIGN_SEED_DOMAIN`] as the HKDF `info` label. This is the SM-R-4
 //! amendment: the ruling as first drafted put the literal domain in the
@@ -101,27 +101,29 @@ use zeroize::Zeroizing;
 
 use shekyl_address::BoundClassicalSegment;
 
-use crate::account::{salt_for, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_network::envelope::{IdDomain, W64};
+
+use crate::account::{salt_for, Network, MASTER_SEED_BYTES};
 use crate::schnorr;
 use crate::CryptoError;
 
-/// Preimage domain (SM-R-3): the cSHAKE customization string over the
-/// assembled binding input. Doubles as the hybrid binding label — it is
-/// what separates this surface from every other signing transcript.
-pub const MSG_SIGN_DOMAIN: &[u8] = b"shekyl/msg-sign-v1";
-
-/// Message pre-hash domain (SM-R-3): the message is hashed under its own
-/// customization string before entering the preimage.
-pub const MSG_HASH_DOMAIN: &[u8] = b"shekyl/msg-hash-v1";
+/// Preimage domain (SM-R-3; the signing envelope §2.1): the envelope domain
+/// a message signature's preimage is framed under, bound to the network's
+/// id, with fields `[mode, classical_segment, message]`. It is what
+/// separates this surface from every other signing transcript. `-v2`: the
+/// layout version and the id's position moved into the envelope (the
+/// domain string is the only hashed version), and the message is framed
+/// whole where `-v1` pre-hashed it under its own domain.
+pub const MSG_SIGN: IdDomain<3, W64> = IdDomain::new(b"shekyl/msg-sign-v2");
 
 /// Signing-identity derivation label (SM-R-4): the literal, not a
 /// template — rule 30's inventory collision-checks literals. If the
 /// algorithm ever changes it is a new label and a new address version,
 /// since the address commits to the key.
 ///
-/// Used as the HKDF `info`; the salt is `account::salt_for(network,
-/// seed_format)`, the same `(network, format)` scoping every other wallet
-/// key uses (SM-R-4 as amended — see the module docs).
+/// Used as the HKDF `info`; the salt is `account::salt_for(network)`, the
+/// same network scoping every other wallet key uses (SM-R-4 as amended —
+/// see the module docs).
 pub const MSG_SIGN_SEED_DOMAIN: &[u8] = b"shekyl/msg-sign-seed-slh-dsa-192s-v1";
 
 /// Armored-checksum domain (SM-R-5): the 4-byte trailer that lets decode
@@ -132,11 +134,12 @@ pub const MSG_SIG_CHECKSUM_DOMAIN: &[u8] = b"shekyl/msg-sig-ck-v1";
 /// the other domains; distinct from every proof domain).
 pub const MSG_SIGN_OUTER_DOMAIN: &[u8] = b"shekyl/msg-sign-outer-v1";
 
-/// Payload layout version — the same single value appears as the leading
-/// canonical byte and inside the preimage as `sig_format_version`
-/// (SM-R-5 R5-c: one value, two appearances; the armored prefix's `1` is
-/// the separate envelope version).
-pub const MSG_SIG_LAYOUT_VERSION: u8 = 1;
+/// Wire layout version of a decoded message signature. Written as the
+/// leading canonical byte and read at decode; it is not an input to
+/// [`message_preimage`]. The domain string `shekyl/msg-sign-v2` is the
+/// hashed version. The armored prefix's trailing `1` is a separate
+/// envelope version.
+pub const MSG_SIG_LAYOUT_VERSION: u8 = 2;
 
 /// Scheme byte: SLH-DSA-SHA2-192s inner + spend-scalar Schnorr outer,
 /// nested (SM-R-8). Append-only — the **value** is the genesis-frozen
@@ -175,8 +178,10 @@ pub const SLH_192S_SIG_LEN: usize = slh_dsa_sha2_192s::SIG_LEN;
 /// Classical (spend-Schnorr) signature length: `R ‖ s`.
 pub const CLASSICAL_SIG_LEN: usize = schnorr::SIG_LEN;
 
-/// Length of the signing preimage (cSHAKE256-32 output).
-pub const MSG_PREIMAGE_LEN: usize = 32;
+/// Length of the signing preimage: 64 bytes, because SLH-DSA-192s signs it
+/// and a 32-byte digest caps collision resistance at 2^128, below the
+/// scheme's Category 3 (the signing envelope §2.7; `cshake256_64`'s rule).
+pub const MSG_PREIMAGE_LEN: usize = 64;
 
 /// Outer message the classical half signs: `preimage ‖ σ_pq`.
 pub const OUTER_MSG_LEN: usize = MSG_PREIMAGE_LEN + SLH_192S_SIG_LEN;
@@ -192,8 +197,8 @@ pub const MSG_SIG_CANONICAL_LEN: usize =
 
 /// Hard ceiling on the **encoded** armored payload, enforced before any
 /// decoding (SM-R-5 R5-b: bounding decoded output after decode would
-/// allocate an attacker's bytes from a shorter input — the `shekyl-levin`
-/// `decompress_payload` pre-allocation discipline). Covers either
+/// allocate an attacker's bytes from a shorter input — the discipline
+/// `shekyl-levin`'s reader applies to a bucket's declared length). Covers either
 /// parameter set (192s ≈ 21.7 KB, 192f ≈ 47.7 KB encoded) so a pre-freeze
 /// s→f flip does not reopen it.
 pub const MSG_SIG_MAX_ENCODED_LEN: usize = 64 * 1024;
@@ -203,7 +208,7 @@ const _: () = assert!(slh_dsa_sha2_192s::N == SLH_192S_N);
 // 3 + 16224 + 64 + 4 — the ~21.7 KB-encoded blob the round priced.
 const _: () = assert!(MSG_SIG_CANONICAL_LEN == 16_295);
 const _: () = assert!(OUTER_MSG_LEN == MSG_PREIMAGE_LEN + SLH_192S_SIG_LEN);
-const _: () = assert!(MSG_PREIMAGE_LEN == 32);
+const _: () = assert!(MSG_PREIMAGE_LEN == 64);
 
 /// Message-signing errors, split on the SM-R-6 boundary: a *shape* error
 /// is the caller's bug; a *verification failure* is an answer.
@@ -244,7 +249,7 @@ pub enum MessageSigError {
 
 /// Derive the wallet-level SLH-DSA-192s signing identity (SM-R-4 as
 /// amended): one HKDF-SHA512 expand of 72 bytes salted by
-/// `(network, seed_format)` with [`MSG_SIGN_SEED_DOMAIN`] as `info`,
+/// `(network)` with [`MSG_SIGN_SEED_DOMAIN`] as `info`,
 /// sliced in order into `SK.seed ‖ SK.prf ‖ PK.seed`.
 ///
 /// A single expand is ruled explicitly: three separate expands with
@@ -258,10 +263,9 @@ pub enum MessageSigError {
 /// unwrapped.
 pub fn derive_message_signing_identity(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    network: DerivationNetwork,
-    seed_format: SeedFormat,
+    network: Network,
 ) -> Result<(slh_dsa_sha2_192s::PublicKey, slh_dsa_sha2_192s::PrivateKey), CryptoError> {
-    let hk = Hkdf::<Sha512>::new(Some(&salt_for(network, seed_format)), master_seed);
+    let hk = Hkdf::<Sha512>::new(Some(&salt_for(network)), master_seed);
     let mut okm = Zeroizing::new([0u8; MSG_SIGN_IDENTITY_SEED_LEN]);
     hk.expand(MSG_SIGN_SEED_DOMAIN, okm.as_mut())
         .map_err(|_| CryptoError::KeyGenerationFailed("HKDF expand for SLH identity".into()))?;
@@ -271,11 +275,9 @@ pub fn derive_message_signing_identity(
 /// Split a 72-byte identity-seed expansion into the R4-a layout and run
 /// the deterministic keygen: `SK.seed ‖ SK.prf ‖ PK.seed` at `n = 24`
 /// each. The **one** place the slice order exists (SM-R-4 R4-a — a wrong
-/// split silently produces a valid-but-different keypair): the principal
-/// identity above and the per-slot archival-P identity
-/// (`archival_p::derive_p_msg_sign_pk`) both feed it, under their own
-/// HKDF labels.
-pub(crate) fn slh_identity_from_okm(
+/// split silently produces a valid-but-different keypair). Only the
+/// principal identity above has an SLH-DSA key: a persona has none.
+fn slh_identity_from_okm(
     okm: &Zeroizing<[u8; MSG_SIGN_IDENTITY_SEED_LEN]>,
 ) -> (slh_dsa_sha2_192s::PublicKey, slh_dsa_sha2_192s::PrivateKey) {
     let mut sk_seed = Zeroizing::new([0u8; SLH_192S_N]);
@@ -299,47 +301,37 @@ pub(crate) fn slh_identity_from_okm(
 /// Propagates [`derive_message_signing_identity`].
 pub fn derive_message_signing_public_key(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    network: DerivationNetwork,
-    seed_format: SeedFormat,
+    network: Network,
 ) -> Result<[u8; SLH_192S_PK_LEN], CryptoError> {
-    let (pk, _sk) = derive_message_signing_identity(master_seed, network, seed_format)?;
+    let (pk, _sk) = derive_message_signing_identity(master_seed, network)?;
     Ok(pk.into_bytes())
 }
 
-/// Assemble the signing preimage (SM-R-3):
+/// Assemble the signing preimage (SM-R-3; the signing envelope §2.1, §2.6):
 ///
 /// ```text
-/// preimage = cSHAKE256("shekyl/msg-sign-v1",
-///     sig_format_version ‖ network_id ‖ mode ‖
-///     len(classical_segment) as u16 LE ‖ classical_segment ‖
-///     cSHAKE256("shekyl/msg-hash-v1", message))
+/// preimage = frame("shekyl/msg-sign-v2", network_id,
+///                  [u64_le(mode), classical_segment, message])[..64]
 /// ```
 ///
-/// `network_id` is [`DerivationNetwork::as_u8`] rather than the address
-/// network's byte: `Fakechain` shares Mainnet's *address* encoding but
-/// must never share a signing transcript with it, the same reason it
-/// gets its own derivation salt.
+/// 64 bytes: SLH-DSA-192s signs it (the signing envelope §2.7).
 ///
-/// The length prefix makes the framing unambiguous by construction
-/// (R3-b): under fork (ii) the segment is variable-length across address
-/// versions, and unambiguity must not rest on accidental properties.
+/// `network_id` is the network's 16-byte genesis-derived id
+/// ([`Network::network_id`], `NETWORK_IDENTITY.md` NI-F2) at position 0 of
+/// the envelope, the place every network-bound hash puts it. The envelope
+/// frames every field with its length, so the segment, variable-length
+/// across address versions under fork (ii), and the message are
+/// unambiguous by construction (R3-b). The layout version is the domain's
+/// `-v2`; the decoded wire format keeps its own version byte
+/// ([`MSG_SIG_LAYOUT_VERSION`]), which is read, not hashed.
 #[must_use]
 pub fn message_preimage(
-    network: DerivationNetwork,
+    network: Network,
     classical_segment: &[u8],
     message: &[u8],
 ) -> [u8; MSG_PREIMAGE_LEN] {
-    let msg_hash = shekyl_crypto_hash::cshake256_32(MSG_HASH_DOMAIN, message);
-    let mut buf = Vec::with_capacity(MSG_SIG_HEADER_LEN + 2 + classical_segment.len() + 32);
-    buf.push(MSG_SIG_LAYOUT_VERSION);
-    buf.push(network.as_u8());
-    buf.push(MSG_SIG_MODE_SPEND);
-    // CLIPPY: segment lengths are address-segment-sized, far below u16::MAX.
-    #[allow(clippy::cast_possible_truncation)]
-    buf.extend_from_slice(&(classical_segment.len() as u16).to_le_bytes());
-    buf.extend_from_slice(classical_segment);
-    buf.extend_from_slice(&msg_hash);
-    shekyl_crypto_hash::cshake256_32(MSG_SIGN_DOMAIN, &buf)
+    let mode = u64::from(MSG_SIG_MODE_SPEND).to_le_bytes();
+    MSG_SIGN.frame(&network.network_id(), [&mode, classical_segment, message])
 }
 
 /// Sign the outer bytes with the spend **scalar** — see the module-docs
@@ -395,13 +387,12 @@ pub fn outer_bytes(
 ///   which `fips205` reports as its only signing failure mode.
 pub fn sign_message_pq_half(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    network: DerivationNetwork,
-    seed_format: SeedFormat,
+    network: Network,
     segment: &BoundClassicalSegment,
     message: &[u8],
 ) -> Result<([u8; MSG_PREIMAGE_LEN], Box<[u8; SLH_192S_SIG_LEN]>), MessageSigError> {
     let preimage = message_preimage(network, segment.as_bytes(), message);
-    let (_pk, slh_sk) = derive_message_signing_identity(master_seed, network, seed_format)
+    let (_pk, slh_sk) = derive_message_signing_identity(master_seed, network)
         .map_err(|_| MessageSigError::InvalidKey)?;
     // Hedged (`true`): fips205 feeds opt_rand on top of SK.prf, so a bad
     // RNG degrades to the deterministic construction, not to catastrophe
@@ -448,13 +439,11 @@ pub fn assemble_armored(
 pub fn sign_message(
     master_seed: &[u8; MASTER_SEED_BYTES],
     spend_sk: &[u8; 32],
-    network: DerivationNetwork,
-    seed_format: SeedFormat,
+    network: Network,
     segment: &BoundClassicalSegment,
     message: &[u8],
 ) -> Result<String, MessageSigError> {
-    let (preimage, sig_pq) =
-        sign_message_pq_half(master_seed, network, seed_format, segment, message)?;
+    let (preimage, sig_pq) = sign_message_pq_half(master_seed, network, segment, message)?;
     let outer = outer_bytes(&preimage, &sig_pq);
     let sig_cl = sign_outer_with_spend_scalar(spend_sk, outer.as_ref())?;
     Ok(assemble_armored(&sig_pq, &sig_cl))
@@ -613,7 +602,7 @@ impl ArmoredSignature {
 /// parse.
 pub fn verify_message(
     segment: &BoundClassicalSegment,
-    network: DerivationNetwork,
+    network: Network,
     message: &[u8],
     sig: &ArmoredSignature,
 ) -> Result<(), MessageSigError> {
@@ -649,8 +638,7 @@ mod tests {
     use curve25519_dalek::scalar::Scalar;
 
     const SEED: [u8; MASTER_SEED_BYTES] = [0x42u8; MASTER_SEED_BYTES];
-    const NET: DerivationNetwork = DerivationNetwork::Testnet;
-    const FMT: SeedFormat = SeedFormat::Raw32;
+    const NET: Network = Network::Testnet;
     const VIEW_PK: [u8; 32] = [0x77; 32];
     const TEST_EK: [u8; 1184] = [0xCC; 1184];
 
@@ -666,7 +654,7 @@ mod tests {
     }
 
     fn slh_pk() -> [u8; SLH_192S_PK_LEN] {
-        derive_message_signing_public_key(&SEED, NET, FMT).expect("derive")
+        derive_message_signing_public_key(&SEED, NET).expect("derive")
     }
 
     /// The fixture wallet's bound classical segment: the REAL layout,
@@ -694,7 +682,7 @@ mod tests {
     /// unbound keys.
     fn verify_with(
         segment: &BoundClassicalSegment,
-        network: DerivationNetwork,
+        network: Network,
         message: &[u8],
         armored: &str,
     ) -> Result<(), MessageSigError> {
@@ -705,22 +693,34 @@ mod tests {
     /// SM-R-4 R4-a KAT: fixed master seed → fixed public key. Pins the
     /// 72-byte single-expand slice order — a wrong split (or an n=32
     /// reflex) produces a valid-but-DIFFERENT keypair, which only this
-    /// pin catches. Re-pinned with the SM-R-4 `(network, seed_format)`
-    /// amendment.
+    /// pin catches. Re-pinned 2026-11-04 for the salt `name_id ‖ purpose`
+    /// (`NETWORK_IDENTITY.md` NI-R10; the signing envelope §2.6).
+    ///
+    /// Oracle: the key's first 24 bytes are `PK.seed`, bytes 48..72 of the
+    /// expansion, and were recomputed independently with a stdlib RFC 5869
+    /// HKDF-SHA-512 (salt testnet's `name_id` `866a9867…b30a` ‖
+    /// `shekyl-master-derive-v3`, IKM
+    /// `0x42` × 64, info [`MSG_SIGN_SEED_DOMAIN`], L = 72). `PK.root`, the
+    /// last 24, is the keygen's and self-pinned.
     #[test]
     fn identity_derivation_is_pinned() {
-        let pk = derive_message_signing_public_key(&SEED, NET, FMT).expect("derive");
+        let pk = derive_message_signing_public_key(&SEED, NET).expect("derive");
         let hex: String = pk.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(
+            &hex[..48],
+            "1004873ee5b53d9e20aa460c8e21090ca67aae89ccbbc77c",
+            "PK.seed moved — the salt, the domain or the slice order changed"
+        );
+        assert_eq!(
             hex,
-            "60e1eccf69e1a4ea91f829c477517a2f7510c43a2b712ed5093ed1dbcfe393e7\
-             2dac297e6704b20a585f07078c78b8dc",
+            "1004873ee5b53d9e20aa460c8e21090ca67aae89ccbbc77c\
+             a52d39e60622b71d3f680e9fb024abd7a0823fd91a3cfb04",
             "SLH identity derivation moved — seed split, salt or domain changed"
         );
     }
 
-    /// SM-R-4 as amended: the identity is scoped by network **and** by
-    /// seed format, exactly like every other wallet key
+    /// SM-R-4 as amended: the identity is scoped by network, exactly like
+    /// every other wallet key
     /// (`account::same_seed_different_networks_produce_different_scalars`
     /// is the sibling pin). Without this, one seed publishes one 48-byte
     /// public key on mainnet, testnet and stagenet alike — and since that
@@ -728,32 +728,19 @@ mod tests {
     /// address under fork (ii)), it links addresses that were
     /// deliberately made unlinkable.
     #[test]
-    fn identity_is_scoped_by_network_and_seed_format() {
-        let nets = [
-            DerivationNetwork::Mainnet,
-            DerivationNetwork::Testnet,
-            DerivationNetwork::Stagenet,
-            DerivationNetwork::Fakechain,
-        ];
-        let fmts = [SeedFormat::Bip39, SeedFormat::Raw32];
-        // The full cross product — every pair, not a sample.
-        let keys: Vec<((DerivationNetwork, SeedFormat), [u8; SLH_192S_PK_LEN])> = nets
+    fn identity_is_scoped_by_network() {
+        // Every network, not a sample.
+        let keys: Vec<(Network, [u8; SLH_192S_PK_LEN])> = Network::ALL
             .iter()
-            .flat_map(|n| fmts.iter().map(move |f| (*n, *f)))
-            .map(|(n, f)| {
-                (
-                    (n, f),
-                    derive_message_signing_public_key(&SEED, n, f).unwrap(),
-                )
-            })
+            .map(|n| (*n, derive_message_signing_public_key(&SEED, *n).unwrap()))
             .collect();
-        assert_eq!(keys.len(), nets.len() * fmts.len());
+        assert_eq!(keys.len(), Network::ALL.len());
         for (i, (pair_a, a)) in keys.iter().enumerate() {
             for (pair_b, b) in keys.iter().skip(i + 1) {
                 assert_ne!(
                     a, b,
                     "one seed must not yield one message-signing key across \
-                     (network, seed_format) pairs: {pair_a:?} vs {pair_b:?}"
+                     (network) pairs: {pair_a:?} vs {pair_b:?}"
                 );
             }
         }
@@ -765,13 +752,13 @@ mod tests {
     #[test]
     fn preimage_binds_the_network() {
         let seg = test_segment();
-        let a = message_preimage(DerivationNetwork::Mainnet, seg.as_bytes(), b"m");
-        let b = message_preimage(DerivationNetwork::Testnet, seg.as_bytes(), b"m");
-        let c = message_preimage(DerivationNetwork::Fakechain, seg.as_bytes(), b"m");
+        let a = message_preimage(Network::Mainnet, seg.as_bytes(), b"m");
+        let b = message_preimage(Network::Testnet, seg.as_bytes(), b"m");
+        let c = message_preimage(Network::Regtest, seg.as_bytes(), b"m");
         assert_ne!(a, b);
         assert_ne!(
             a, c,
-            "Fakechain shares Mainnet's address encoding, not its transcript"
+            "regtest binds its own preimage, distinct from mainnet"
         );
     }
 
@@ -779,8 +766,7 @@ mod tests {
     #[test]
     fn sign_verify_round_trips() {
         let seg = test_segment();
-        let armored =
-            sign_message(&SEED, &spend_sk(), NET, FMT, &seg, b"hello shekyl").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NET, &seg, b"hello shekyl").expect("sign");
         assert!(armored.starts_with(MSG_SIG_PREFIX));
         assert!(!armored.contains('='), "unpadded is pinned");
         verify_with(&seg, NET, b"hello shekyl", &armored).expect("verify");
@@ -793,14 +779,14 @@ mod tests {
     #[test]
     fn verification_binds_every_input() {
         let seg = test_segment();
-        let armored = sign_message(&SEED, &spend_sk(), NET, FMT, &seg, b"msg").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NET, &seg, b"msg").expect("sign");
         assert_eq!(verify_with(&seg, NET, b"msg", &armored), Ok(()));
         assert_eq!(
             verify_with(&seg, NET, b"msh", &armored),
             Err(MessageSigError::VerifyFailed)
         );
         assert_eq!(
-            verify_with(&seg, DerivationNetwork::Mainnet, b"msg", &armored),
+            verify_with(&seg, Network::Mainnet, b"msg", &armored),
             Err(MessageSigError::VerifyFailed)
         );
         // A different spend key = a different address.
@@ -816,8 +802,7 @@ mod tests {
             Err(MessageSigError::VerifyFailed)
         );
         // A different SLH key = a different address.
-        let other_slh =
-            derive_message_signing_public_key(&[7u8; MASTER_SEED_BYTES], NET, FMT).unwrap();
+        let other_slh = derive_message_signing_public_key(&[7u8; MASTER_SEED_BYTES], NET).unwrap();
         assert_eq!(
             verify_with(
                 &segment_with(&spend_pk(), &other_slh),
@@ -843,7 +828,7 @@ mod tests {
     fn armored_tamper_battery() {
         use base64::Engine as _;
         let seg = test_segment();
-        let armored = sign_message(&SEED, &spend_sk(), NET, FMT, &seg, b"m").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NET, &seg, b"m").expect("sign");
         let verify = |s: &str| verify_with(&seg, NET, b"m", s);
 
         assert_eq!(
@@ -944,6 +929,21 @@ mod tests {
             Err(MessageSigError::Malformed("unknown mode"))
         );
 
+        // A layout-1 signature, from before the preimage bound the network
+        // id (`NETWORK_IDENTITY.md` NI-F2), is intact but not this layout:
+        // it is named as an unknown layout, not read as damage.
+        let mut c = engine
+            .decode(armored.strip_prefix(MSG_SIG_PREFIX).unwrap())
+            .unwrap();
+        c[0] = 1;
+        let body_len = MSG_SIG_CANONICAL_LEN - MSG_SIG_CHECKSUM_LEN;
+        let ck = shekyl_crypto_hash::cshake256_32(MSG_SIG_CHECKSUM_DOMAIN, &c[..body_len]);
+        c[body_len..].copy_from_slice(&ck[..MSG_SIG_CHECKSUM_LEN]);
+        assert_eq!(
+            verify(&format!("{}{}", MSG_SIG_PREFIX, engine.encode(&c))),
+            Err(MessageSigError::Malformed("unknown layout version"))
+        );
+
         // The control that keeps the two assertions above honest: the
         // SAME header bytes flipped WITHOUT recomputing the checksum are
         // damage, and must read as damage. Without this, an
@@ -975,7 +975,7 @@ mod tests {
     #[test]
     fn wrapped_and_padded_whitespace_still_verifies() {
         let seg = test_segment();
-        let armored = sign_message(&SEED, &spend_sk(), NET, FMT, &seg, b"m").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NET, &seg, b"m").expect("sign");
         let wrapped: String = armored
             .as_bytes()
             .chunks(72)
@@ -1014,7 +1014,7 @@ mod tests {
         use base64::Engine as _;
         let engine = &base64::engine::general_purpose::URL_SAFE_NO_PAD;
         let seg = test_segment();
-        let armored = sign_message(&SEED, &spend_sk(), NET, FMT, &seg, b"m").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NET, &seg, b"m").expect("sign");
         let mut c = engine
             .decode(armored.strip_prefix(MSG_SIG_PREFIX).unwrap())
             .unwrap();
@@ -1038,7 +1038,7 @@ mod tests {
         use base64::Engine as _;
         let engine = &base64::engine::general_purpose::URL_SAFE_NO_PAD;
         let seg = test_segment();
-        let armored = sign_message(&SEED, &spend_sk(), NET, FMT, &seg, b"m").expect("sign");
+        let armored = sign_message(&SEED, &spend_sk(), NET, &seg, b"m").expect("sign");
         let mut canonical = engine
             .decode(armored.strip_prefix(MSG_SIG_PREFIX).unwrap())
             .unwrap();
@@ -1046,8 +1046,7 @@ mod tests {
         // Replace σ_pq with a valid signature from a DIFFERENT SLH
         // identity over the same preimage; keep the honest σ_cl.
         let preimage = message_preimage(NET, seg.as_bytes(), b"m");
-        let (_pk2, sk2) =
-            derive_message_signing_identity(&[9u8; MASTER_SEED_BYTES], NET, FMT).unwrap();
+        let (_pk2, sk2) = derive_message_signing_identity(&[9u8; MASTER_SEED_BYTES], NET).unwrap();
         let sig_pq2 = sk2.try_sign(&preimage, b"", true).unwrap();
         canonical[MSG_SIG_HEADER_LEN..MSG_SIG_HEADER_LEN + SLH_192S_SIG_LEN]
             .copy_from_slice(&sig_pq2);
@@ -1068,7 +1067,7 @@ mod tests {
         // no longer matches what either half signed — with keys inline in
         // the address, key substitution and address substitution are the
         // same act, and both invalidate everything.
-        let pk2 = derive_message_signing_public_key(&[9u8; MASTER_SEED_BYTES], NET, FMT).unwrap();
+        let pk2 = derive_message_signing_public_key(&[9u8; MASTER_SEED_BYTES], NET).unwrap();
         assert_eq!(
             verify_with(&segment_with(&spend_pk(), &pk2), NET, b"m", &spliced),
             Err(MessageSigError::VerifyFailed)
@@ -1082,9 +1081,9 @@ mod tests {
     fn nonempty_ctx_signature_is_rejected() {
         let seg = test_segment();
         let preimage = message_preimage(NET, seg.as_bytes(), b"m");
-        let (_pk, sk) = derive_message_signing_identity(&SEED, NET, FMT).unwrap();
+        let (_pk, sk) = derive_message_signing_identity(&SEED, NET).unwrap();
         let sig_pq_bad_ctx = Box::new(
-            sk.try_sign(&preimage, MSG_SIGN_DOMAIN, true)
+            sk.try_sign(&preimage, MSG_SIGN.customization(), true)
                 .expect("sign with wrong ctx"),
         );
 
@@ -1100,12 +1099,11 @@ mod tests {
     }
 
     /// Domain strings are distinct (the collision check the inventory
-    /// relies on) and the preimage is length-prefix framed.
+    /// relies on) and the preimage is length-framed by the envelope.
     #[test]
     fn domains_distinct_and_framing_unambiguous() {
-        let domains: [&[u8]; 5] = [
-            MSG_SIGN_DOMAIN,
-            MSG_HASH_DOMAIN,
+        let domains: [&[u8]; 4] = [
+            MSG_SIGN.customization(),
             MSG_SIGN_SEED_DOMAIN,
             MSG_SIG_CHECKSUM_DOMAIN,
             MSG_SIGN_OUTER_DOMAIN,
@@ -1116,7 +1114,7 @@ mod tests {
             }
         }
         // Length-prefix framing: shifting a byte across the
-        // segment/message-hash boundary changes the preimage.
+        // segment/message boundary changes the preimage.
         let p1 = message_preimage(NET, &[0xAA, 0xBB], b"x");
         let p2 = message_preimage(NET, &[0xAA], b"x");
         assert_ne!(p1, p2);

@@ -39,29 +39,36 @@
 //!
 //! # CEN-G7, G9, G10 — cross-transaction uniqueness of the archival keys
 //!
-//! After the slot loop, beside L1 (`blockchain.cpp:5666–5803`, three
+//! After the slot loop, beside L1 (`blockchain.cpp:5670–5812`, three
 //! passes over every listed body's inputs): no two serve-credit vins with
 //! one `(P, shard, E)` (**G7**, `D-SC-C`), no two emission claims naming one
 //! `(P, E)` — an emission vin claims a *list* of epochs, each a pair
 //! (**G9**), and at most one bond post per `P`, whatever its kind (**G10**).
-//! The decision bodies are `shekyl-archival-retention`'s, the same ones the
-//! C++ calls (`serve_credit_block_unique`, `emission_block_claims_unique`,
-//! `bond_post_block_unique`): one owner, both languages. What this crate
-//! adds is the **locus** — `Locus::Input { slot, input }` at the **second**
-//! occurrence, the vin the colliding key was read from — which the
-//! serve-credit body names by index and the other two do not, so those two
-//! are located by a scan the body's verdict has already licensed. Should the
-//! scan disagree with the body (it cannot; both are set-membership over the
-//! same keys), the refusal falls to `Locus::Block`, never to a panic.
+//! G9's and G10's decision bodies are `shekyl-archival-retention`'s, the
+//! same ones the C++ calls (`emission_block_claims_unique`,
+//! `bond_post_block_unique`): one owner, both languages. G7's is this
+//! module's own set-membership scan (`second_occurrence`) over the parsed
+//! `(P, shard, E)` triples: its retention-crate body was the D-SC-C arm of
+//! the serve-credit C++ mirror, deleted 2026-10-02 (DRS-E4 commit 10d) with
+//! the rest of that mirror — see `docs/FOLLOWUPS.md` "Serve-credit
+//! acceptance (CEN-J8–J10) has no Rust rule". The C++ keeps its own G7
+//! (`blockchain.cpp:5670`), on `ArchivalPairEpochKey`'s big-endian bytes;
+//! this scan is over the same three fields, so the two agree wherever both
+//! parse the vin. What this crate adds for all three is the **locus** —
+//! `Locus::Input { slot, input }` at the **second** occurrence, the vin the
+//! colliding key was read from. Should the scan find no second occurrence
+//! after the body refused (it cannot; both are set-membership over the same
+//! keys), the refusal falls to `Locus::Block`, never to a panic.
 //!
-//! **A vin that does not parse is not this rule's.** The parse of a
-//! serve-credit vin is CEN-J1's row, of an emission vin the emission rows'
-//! (slice 8, pending); until they land, an unparseable archival vin has no
-//! key to collide on and passes G7/G9 — the gap is theirs and the family
-//! pins it there, not here. The C++ reaches these passes only after
+//! **A vin that does not parse is not this rule's.** The parse of an
+//! emission vin is CEN-J19's row (slice 8 row 8, `tx_emission`), of a
+//! serve-credit vin CEN-J1's — a successor row scoped out of slice 8
+//! (§1.2) and still pending; until it lands, an unparseable serve-credit
+//! vin has no key to collide on and passes G7 — the gap is J1's and the
+//! family pins it there, not here. The C++ reaches these passes only after
 //! `check_tx_inputs` has parsed every vin, so it treats a failure here as an
 //! internal inconsistency; the Rust order puts the parse rows in the slot
-//! loop, before this one, and they will refuse first when they exist.
+//! loop, before this one: J19 refuses first, and J1 will when it exists.
 //!
 //! **Deliberately not a rule (ratified 2026-07-12, `blockchain.cpp:5738`):**
 //! a serve-credit response and a Release for the same `P` in one block is
@@ -110,13 +117,14 @@ use std::io::Cursor;
 
 use shekyl_archival_retention::{
     bond_post_block_unique, emission_block_claims_unique, p_canonical_id_from_hybrid_pubkey,
-    serve_credit_block_unique, ArchivalRewardEmissionVin, ArchivalServeCreditResponse,
-    BlockUniqueVerdict,
+    ArchivalServeCreditResponse,
 };
 use shekyl_types::TxHash;
 use shekyl_wire::{Input, Transaction};
 
 use crate::census::CenRow;
+use crate::fault::ViewRead;
+use crate::rules::tx_emission::J19;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use crate::view::ChainView;
@@ -129,17 +137,18 @@ impl Rule for G2 {
     const ROW: CenRow = CenRow::G2;
 }
 
-impl FormRule for G2 {
-    fn check(cx: &FormContext<'_>) -> Verdict<()> {
-        let declared = &cx.candidate.block.transaction_hashes;
-        let carried = &cx.candidate.transactions;
+impl G2 {
+    /// The declared list is the carried list. `form` passes the hashes of
+    /// the carried transactions; `bind_body` passes the hashes of full
+    /// bodies and of skeletons. One comparison.
+    pub(crate) fn listed_match(declared: &[TxHash], carried: &[TxHash]) -> Verdict<()> {
         if declared.len() != carried.len() {
             return Err(InvalidBlock::new(Self::ROW, Locus::Block));
         }
         match declared
             .iter()
             .zip(carried)
-            .position(|(hash, body)| Transaction::hash(body) != *hash)
+            .position(|(declared, carried)| declared != carried)
         {
             None => Ok(()),
             Some(first) => Err(InvalidBlock::new(
@@ -149,6 +158,18 @@ impl FormRule for G2 {
                 },
             )),
         }
+    }
+}
+
+impl FormRule for G2 {
+    fn check(cx: &FormContext<'_>) -> Verdict<()> {
+        let carried: Vec<TxHash> = cx
+            .candidate
+            .transactions
+            .iter()
+            .map(Transaction::hash)
+            .collect();
+        Self::listed_match(&cx.candidate.block.transaction_hashes, &carried)
     }
 }
 
@@ -164,7 +185,7 @@ impl BlockRule for G1 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let mut listed_here: BTreeSet<TxHash> = BTreeSet::new();
         for (n, hash) in cx.candidate().block.transaction_hashes.iter().enumerate() {
             // The intra-block arm first: it costs no read, and a hash that
@@ -186,9 +207,9 @@ impl BlockRule for G1 {
 /// The key one archival input contributes to its block-level uniqueness
 /// pass — what G7, G9 and G10 collide on. `None` for a non-archival input
 /// and for an archival vin that does not parse (the parse is CEN-J1's and
-/// the emission rows' refusal; a vin without a key cannot collide, module
-/// docs). Public so the E2 mutation family can build a duplicate against
-/// the same parse the rules use, rather than a second one.
+/// CEN-J19's refusal; a vin without a key cannot collide, module docs).
+/// Public so the E2 mutation family can build a duplicate against the same
+/// parse the rules use, rather than a second one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArchivalKey {
     /// A serve-credit vin's `(P, shard, E)` — CEN-G7.
@@ -231,12 +252,8 @@ impl ArchivalKey {
                 })
             }
             Input::ArchivalRewardEmission { canonical_bytes } => {
-                // Length-exact, as the FFI extractor parses it.
-                let mut cursor = canonical_bytes.as_slice();
-                let vin = ArchivalRewardEmissionVin::read(&mut cursor).ok()?;
-                if !cursor.is_empty() {
-                    return None;
-                }
+                // CEN-J19's parse — length-exact, as the FFI extractor's.
+                let vin = J19::parse(canonical_bytes)?;
                 Some(Self::Claims {
                     p: *p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey).as_bytes(),
                     epochs: vin.settlement_epochs,
@@ -247,6 +264,66 @@ impl ArchivalKey {
             }),
             Input::Gen(_) | Input::ToKey { .. } => None,
         }
+    }
+}
+
+/// The archival keys of the transactions a block lists so far: CEN-G7,
+/// G9 and G10 asked one transaction at a time, for a block being filled
+/// (the pool's template selection, DRS-E5 PR-b). A block lists what its
+/// filler added, in that order, so [`Self::add`] refusing a transaction is
+/// those rows refusing the block that would list it next — by the same
+/// decision bodies: G9's and G10's from `shekyl-archival-retention`, and
+/// G7's set membership.
+#[derive(Clone, Debug, Default)]
+pub struct BlockArchivalKeys {
+    serve_credits: Vec<ServeCreditKey>,
+    claims: Vec<([u8; 32], u64)>,
+    bond_posts: Vec<[u8; 32]>,
+}
+
+impl BlockArchivalKeys {
+    /// Add `tx`'s archival keys after those already added.
+    ///
+    /// # Errors
+    ///
+    /// The row a block listing `tx` after the transactions already added
+    /// is refused on — G7, G9 or G10, in the order the stage runs them —
+    /// and nothing is added.
+    pub fn add(&mut self, tx: &Transaction) -> Result<(), CenRow> {
+        let keys: Vec<ArchivalKey> = tx
+            .prefix
+            .inputs
+            .iter()
+            .filter_map(ArchivalKey::of)
+            .collect();
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let mut next = self.clone();
+        for key in keys {
+            match key {
+                ArchivalKey::ServeCredit { p, shard, epoch } => {
+                    next.serve_credits.push((p, shard, epoch));
+                }
+                ArchivalKey::Claims { p, epochs } => {
+                    next.claims
+                        .extend(epochs.into_iter().map(|epoch| (p, epoch)));
+                }
+                ArchivalKey::BondPost { p } => next.bond_posts.push(p),
+            }
+        }
+        let mut seen = BTreeSet::new();
+        if !next.serve_credits.iter().all(|key| seen.insert(key)) {
+            return Err(G7::ROW);
+        }
+        if !emission_block_claims_unique(&next.claims) {
+            return Err(G9::ROW);
+        }
+        if !bond_post_block_unique(&next.bond_posts) {
+            return Err(G10::ROW);
+        }
+        *self = next;
+        Ok(())
     }
 }
 
@@ -283,6 +360,10 @@ fn second_occurrence<K: Ord>(keys: &[(Locus, K)]) -> Option<Locus> {
         .map(|(locus, _)| *locus)
 }
 
+/// G7's collision key: `(P, shard, E)` — the three fields the C++'s
+/// `ArchivalPairEpochKey` encodes, as values rather than bytes.
+type ServeCreditKey = ([u8; 32], u64, u64);
+
 /// CEN-G7: no two serve-credit vins in one block carry the same
 /// `(P, shard, E)`.
 pub(crate) struct G7;
@@ -295,21 +376,18 @@ impl BlockRule for G7 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
-        let mut loci = Vec::new();
-        let mut triples = Vec::new();
-        for (locus, item) in listed_inputs(cx) {
-            if let Some(ArchivalKey::ServeCredit { p, shard, epoch }) = ArchivalKey::of(item) {
-                loci.push(locus);
-                triples.push((p, shard, epoch));
-            }
-        }
-        Ok(match serve_credit_block_unique(&triples) {
-            BlockUniqueVerdict::Unique => Ok(()),
-            BlockUniqueVerdict::DuplicateAt { index } => Err(InvalidBlock::new(
-                Self::ROW,
-                loci.get(index).copied().unwrap_or(Locus::Block),
-            )),
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        let triples: Vec<(Locus, ServeCreditKey)> = listed_inputs(cx)
+            .filter_map(|(locus, item)| match ArchivalKey::of(item) {
+                Some(ArchivalKey::ServeCredit { p, shard, epoch }) => {
+                    Some((locus, (p, shard, epoch)))
+                }
+                _ => None,
+            })
+            .collect();
+        Ok(match second_occurrence(&triples) {
+            None => Ok(()),
+            Some(locus) => Err(InvalidBlock::new(Self::ROW, locus)),
         })
     }
 }
@@ -325,7 +403,7 @@ impl BlockRule for G9 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let mut pairs: Vec<(Locus, ([u8; 32], u64))> = Vec::new();
         for (locus, item) in listed_inputs(cx) {
             if let Some(ArchivalKey::Claims { p, epochs }) = ArchivalKey::of(item) {
@@ -355,7 +433,7 @@ impl BlockRule for G10 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let ids: Vec<(Locus, [u8; 32])> = listed_inputs(cx)
             .filter_map(|(locus, item)| match ArchivalKey::of(item) {
                 Some(ArchivalKey::BondPost { p }) => Some((locus, p)),

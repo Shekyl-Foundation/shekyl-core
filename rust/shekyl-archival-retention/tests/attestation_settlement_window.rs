@@ -3,32 +3,35 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! End-to-end: challenge outcome counts → settlement fold → failure window.
+//! End-to-end: settlement row → failure window.
 //!
-//! The unit tests for [`settle_epoch`] and [`failure_window_slashable`] each
-//! live on one side of the settlement/window seam. This test drives the whole
-//! chain — fold each epoch's `(passes, issued)`, project the three-valued
-//! settlement to the window's two-valued observation at the seam (the bridge
-//! the deleted `to_observation` used to be; consumers now own it), drop the
-//! non-observations, and evaluate the assembled window — because that is the
+//! The unit tests for the row and for [`failure_window_slashable`] each live
+//! on one side of the settlement/window seam. This test drives the whole
+//! chain — settle each epoch's row, project its three-valued outcome to the
+//! window's two-valued observation at the seam, drop what is not an
+//! observation, and evaluate the assembled window — because that is the
 //! only place the pruned-epoch hazard (`failure_window.rs` prune
-//! const-assert) actually bites: a pruned or under-issued epoch decays to
-//! `NonObservation`, which must be *dropped* from the window, never counted
-//! as a miss.
+//! const-assert) actually bites: an absent row and a `NonObservation` row
+//! must both be *dropped* from the window, never counted as a miss.
 
 use shekyl_archival_retention::{
-    failure_window_slashable, settle_epoch, BaselineObservation, EpochSettlement, FAILURE_WINDOW_M,
-    FAILURE_WINDOW_N,
+    failure_window_slashable, BaselineObservation, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
 };
+use shekyl_types::archival::{SettlementOutcome, SettlementRow};
 
-/// The settlement/window seam: project the three-valued settlement to the
-/// window's two-valued observation, `None` for a non-observation the window
-/// must not count.
-fn observe(epoch: u64, passes: u32, issued: u32) -> Option<BaselineObservation> {
-    match settle_epoch(passes, issued).expect("test inputs keep passes within issued") {
-        EpochSettlement::Served => Some(BaselineObservation::served(epoch)),
-        EpochSettlement::Missed => Some(BaselineObservation::missed(epoch)),
-        EpochSettlement::NonObservation => None,
+/// The settlement/window seam: project the row's outcome to the window's
+/// two-valued observation. `None` for an epoch the window must not count:
+/// a pair with no issued draw has no row, and a pair with fewer than three
+/// was not observed.
+fn observe(epoch: u64, passes: u8, issued: usize) -> Option<BaselineObservation> {
+    if issued == 0 {
+        return None;
+    }
+    let row = SettlementRow::settle(passes, issued).expect("test inputs are rows");
+    match row.outcome() {
+        SettlementOutcome::Served => Some(BaselineObservation::served(epoch)),
+        SettlementOutcome::Missed => Some(BaselineObservation::missed(epoch)),
+        SettlementOutcome::NonObservation => None,
     }
 }
 
@@ -51,7 +54,10 @@ fn a_full_window_of_missed_epochs_slashes_and_two_of_three_clears() {
         window.push(obs.expect("an observed epoch"));
     }
     assert_eq!(window.len(), usize::try_from(n).unwrap());
-    assert_eq!(failure_window_slashable(&window), Ok(true));
+    assert_eq!(
+        failure_window_slashable(&window, &shekyl_archival_retention::ArchivalParams::SHIPPED),
+        Ok(true)
+    );
 }
 
 #[test]
@@ -66,15 +72,18 @@ fn one_of_three_counts_as_a_miss_the_signal_pass_priority_hid() {
     let window: Vec<BaselineObservation> = (0..n)
         .map(|i| observe(head - i, 1, 3).expect("observed"))
         .collect();
-    assert_eq!(failure_window_slashable(&window), Ok(true));
+    assert_eq!(
+        failure_window_slashable(&window, &shekyl_archival_retention::ArchivalParams::SHIPPED),
+        Ok(true)
+    );
 }
 
 #[test]
 fn under_issued_epochs_decay_to_non_observation_and_do_not_slash() {
     // The hazard, end to end: an archiver with two real Missed epochs and a
-    // long run of under-issued epochs between them — including a 1-pass-of-
-    // 1-issued epoch, which absolute-2 refuses to count as Served OR
-    // Missed. The under-issued epochs are dropped, so the window is just
+    // long run of under-issued epochs between them: no draw issued, one, or
+    // two, none of which is Served or Missed. The under-issued epochs are
+    // dropped, so the window is just
     // the two misses — below m, not slashable. Were NonObservation to
     // collapse to Missed, the window would fill and wrongly slash.
     let n = u64::from(FAILURE_WINDOW_N);
@@ -83,16 +92,19 @@ fn under_issued_epochs_decay_to_non_observation_and_do_not_slash() {
     raw.push(observe(epoch, 0, 3)); // head: a real missed epoch
     epoch -= 1;
     for i in 0..(FAILURE_WINDOW_N + 5) {
-        // Alternate the under-issuance shapes, including the 1-of-1 pass.
-        let (passes, issued) = if i % 2 == 0 { (0, 0) } else { (1, 1) };
-        raw.push(observe(epoch, passes, issued)); // → None, dropped
+        // Cycle the under-issuance shapes: no row, one issued, two issued.
+        let issued = usize::from(u8::try_from(i % 3).expect("below three"));
+        raw.push(observe(epoch, 0, issued)); // → None, dropped
         epoch -= 1;
     }
-    raw.push(observe(epoch, 0, 2)); // one older real missed epoch
+    raw.push(observe(epoch, 0, 3)); // one older real missed epoch
 
     let window: Vec<BaselineObservation> = raw.into_iter().flatten().collect();
     assert_eq!(window.len(), 2, "only the two real observations survive");
-    assert_eq!(failure_window_slashable(&window), Ok(false));
+    assert_eq!(
+        failure_window_slashable(&window, &shekyl_archival_retention::ArchivalParams::SHIPPED),
+        Ok(false)
+    );
 
     // Negative control at genuinely the same epoch positions: re-walk the
     // scenario's own head-down sequence (head 2000 + n + 5, the epochs the
@@ -106,5 +118,11 @@ fn under_issued_epochs_decay_to_non_observation_and_do_not_slash() {
         all_miss.push(observe(e, 0, 3).expect("observed"));
         e -= 1;
     }
-    assert_eq!(failure_window_slashable(&all_miss), Ok(true));
+    assert_eq!(
+        failure_window_slashable(
+            &all_miss,
+            &shekyl_archival_retention::ArchivalParams::SHIPPED
+        ),
+        Ok(true)
+    );
 }

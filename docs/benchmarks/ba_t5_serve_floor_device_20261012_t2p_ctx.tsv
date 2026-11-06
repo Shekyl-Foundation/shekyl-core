@@ -1,0 +1,120 @@
+# CTX utc topology tag key value
+CTX	2026-10-12T16:09:33Z	t2p	before	sched_autogroup_enabled	1
+CTX	2026-10-12T16:09:33Z	t2p	before	cgroup.root.subtree_control	cpu memory pids
+CTX	2026-10-12T16:09:33Z	t2p	before	daemon.cgroup	/user.slice/user-1004.slice/user@1004.service/app.slice/ba-t5-s3-20261012T1608Z.scope
+CTX	2026-10-12T16:09:33Z	t2p	before	daemon.autogroup	/autogroup-18099 nice 0
+CTX	2026-10-12T16:09:33Z	t2p	before	daemon.parent	/user.slice/user-1004.slice/user@1004.service/app.slice
+CTX	2026-10-12T16:09:33Z	t2p	before	daemon.parent.controllers	cpu memory pids
+CTX	2026-10-12T16:09:33Z	t2p	before	daemon.parent.subtree_control	memory pids
+CTX	2026-10-12T16:09:33Z	t2p	before	daemon.cpu.weight	na
+CTX	2026-10-12T16:09:33Z	t2p	before	daemon.cpu_cgroup	/user.slice/user-1004.slice/user@1004.service/app.slice
+CTX	2026-10-12T16:09:33Z	t2p	before	daemon.cpu_cgroup.weight	100
+CTX	2026-10-12T16:09:33Z	t2p	before	serving.cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:09:33Z	t2p	before	serving.autogroup	/autogroup-18046 nice 0
+CTX	2026-10-12T16:09:33Z	t2p	before	serving.parent	/user.slice/user-1004.slice/user@1004.service
+CTX	2026-10-12T16:09:33Z	t2p	before	serving.parent.controllers	cpu memory pids
+CTX	2026-10-12T16:09:33Z	t2p	before	serving.parent.subtree_control	cpu memory pids
+CTX	2026-10-12T16:09:34Z	t2p	before	serving.cpu.weight	100
+CTX	2026-10-12T16:09:34Z	t2p	before	serving.cpu_cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:09:34Z	t2p	before	serving.cpu_cgroup.weight	100
+CTX	2026-10-12T16:09:34Z	t2p	before	resident.cgroup	/system.slice/shekyld-testnet.service
+CTX	2026-10-12T16:10:28Z	t2p	t2p.1.mech8	probe.cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:10:28Z	t2p	t2p.1.mech8	probe.autogroup	/autogroup-18046 nice 0
+CTX	2026-10-12T16:10:28Z	t2p	t2p.1.mech8	probe.parent	/user.slice/user-1004.slice/user@1004.service
+CTX	2026-10-12T16:10:28Z	t2p	t2p.1.mech8	probe.parent.controllers	cpu memory pids
+CTX	2026-10-12T16:10:28Z	t2p	t2p.1.mech8	probe.parent.subtree_control	cpu memory pids
+CTX	2026-10-12T16:10:28Z	t2p	t2p.1.mech8	probe.cpu.weight	100
+CTX	2026-10-12T16:10:28Z	t2p	t2p.1.mech8	probe.cpu_cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:10:28Z	t2p	t2p.1.mech8	probe.cpu_cgroup.weight	100
+CTX	2026-10-12T16:10:30Z	t2p	t2p.1.mech8	probe.threads	ba_t5_floor_pro:0=2 sk-serving-prob:19=38 tokio-rt-worker:0=2
+CTX	2026-10-12T16:11:46Z	t2p	t2p.1.mech64	probe.cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:11:46Z	t2p	t2p.1.mech64	probe.autogroup	/autogroup-18046 nice 0
+CTX	2026-10-12T16:11:46Z	t2p	t2p.1.mech64	probe.parent	/user.slice/user-1004.slice/user@1004.service
+CTX	2026-10-12T16:11:46Z	t2p	t2p.1.mech64	probe.parent.controllers	cpu memory pids
+CTX	2026-10-12T16:11:46Z	t2p	t2p.1.mech64	probe.parent.subtree_control	cpu memory pids
+CTX	2026-10-12T16:11:46Z	t2p	t2p.1.mech64	probe.cpu.weight	100
+CTX	2026-10-12T16:11:46Z	t2p	t2p.1.mech64	probe.cpu_cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:11:46Z	t2p	t2p.1.mech64	probe.cpu_cgroup.weight	100
+CTX	2026-10-12T16:11:48Z	t2p	t2p.1.mech64	probe.threads	ba_t5_floor_pro:0=2 sk-serving-prob:19=66 tokio-rt-worker:0=2
+CTX	2026-10-12T16:12:55Z	t2p	t2p.1.ctrl8	probe.cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:12:55Z	t2p	t2p.1.ctrl8	probe.autogroup	/autogroup-18046 nice 0
+CTX	2026-10-12T16:12:56Z	t2p	t2p.1.ctrl8	probe.parent	/user.slice/user-1004.slice/user@1004.service
+CTX	2026-10-12T16:12:56Z	t2p	t2p.1.ctrl8	probe.parent.controllers	cpu memory pids
+CTX	2026-10-12T16:12:56Z	t2p	t2p.1.ctrl8	probe.parent.subtree_control	cpu memory pids
+CTX	2026-10-12T16:12:56Z	t2p	t2p.1.ctrl8	probe.cpu.weight	100
+CTX	2026-10-12T16:12:56Z	t2p	t2p.1.ctrl8	probe.cpu_cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:12:56Z	t2p	t2p.1.ctrl8	probe.cpu_cgroup.weight	100
+CTX	2026-10-12T16:13:00Z	t2p	t2p.1.ctrl8	probe.threads	ba_t5_floor_pro:0=2 sk-serving-prob:0=41 tokio-rt-worker:0=2
+CTX	2026-10-12T16:16:27Z	t2p	t2p.2.ctrl8	probe.cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:16:27Z	t2p	t2p.2.ctrl8	probe.autogroup	/autogroup-18046 nice 0
+CTX	2026-10-12T16:16:27Z	t2p	t2p.2.ctrl8	probe.parent	/user.slice/user-1004.slice/user@1004.service
+CTX	2026-10-12T16:16:27Z	t2p	t2p.2.ctrl8	probe.parent.controllers	cpu memory pids
+CTX	2026-10-12T16:16:27Z	t2p	t2p.2.ctrl8	probe.parent.subtree_control	cpu memory pids
+CTX	2026-10-12T16:16:27Z	t2p	t2p.2.ctrl8	probe.cpu.weight	100
+CTX	2026-10-12T16:16:27Z	t2p	t2p.2.ctrl8	probe.cpu_cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:16:27Z	t2p	t2p.2.ctrl8	probe.cpu_cgroup.weight	100
+CTX	2026-10-12T16:16:31Z	t2p	t2p.2.ctrl8	probe.threads	ba_t5_floor_pro:0=2 sk-serving-prob:0=39 tokio-rt-worker:0=2
+CTX	2026-10-12T16:19:11Z	t2p	t2p.2.mech8	probe.cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:19:11Z	t2p	t2p.2.mech8	probe.autogroup	/autogroup-18046 nice 0
+CTX	2026-10-12T16:19:11Z	t2p	t2p.2.mech8	probe.parent	/user.slice/user-1004.slice/user@1004.service
+CTX	2026-10-12T16:19:11Z	t2p	t2p.2.mech8	probe.parent.controllers	cpu memory pids
+CTX	2026-10-12T16:19:11Z	t2p	t2p.2.mech8	probe.parent.subtree_control	cpu memory pids
+CTX	2026-10-12T16:19:11Z	t2p	t2p.2.mech8	probe.cpu.weight	100
+CTX	2026-10-12T16:19:11Z	t2p	t2p.2.mech8	probe.cpu_cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:19:11Z	t2p	t2p.2.mech8	probe.cpu_cgroup.weight	100
+CTX	2026-10-12T16:19:12Z	t2p	t2p.2.mech8	probe.threads	ba_t5_floor_pro:0=2 sk-serving-prob:19=34 tokio-rt-worker:0=2
+CTX	2026-10-12T16:20:26Z	t2p	t2p.2.mech64	probe.cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:20:26Z	t2p	t2p.2.mech64	probe.autogroup	/autogroup-18046 nice 0
+CTX	2026-10-12T16:20:26Z	t2p	t2p.2.mech64	probe.parent	/user.slice/user-1004.slice/user@1004.service
+CTX	2026-10-12T16:20:26Z	t2p	t2p.2.mech64	probe.parent.controllers	cpu memory pids
+CTX	2026-10-12T16:20:26Z	t2p	t2p.2.mech64	probe.parent.subtree_control	cpu memory pids
+CTX	2026-10-12T16:20:27Z	t2p	t2p.2.mech64	probe.cpu.weight	100
+CTX	2026-10-12T16:20:27Z	t2p	t2p.2.mech64	probe.cpu_cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:20:27Z	t2p	t2p.2.mech64	probe.cpu_cgroup.weight	100
+CTX	2026-10-12T16:20:29Z	t2p	t2p.2.mech64	probe.threads	ba_t5_floor_pro:0=2 sk-serving-prob:19=66 tokio-rt-worker:0=2
+CTX	2026-10-12T16:22:22Z	t2p	t2p.3.mech64	probe.cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:22:22Z	t2p	t2p.3.mech64	probe.autogroup	/autogroup-18046 nice 0
+CTX	2026-10-12T16:22:22Z	t2p	t2p.3.mech64	probe.parent	/user.slice/user-1004.slice/user@1004.service
+CTX	2026-10-12T16:22:22Z	t2p	t2p.3.mech64	probe.parent.controllers	cpu memory pids
+CTX	2026-10-12T16:22:22Z	t2p	t2p.3.mech64	probe.parent.subtree_control	cpu memory pids
+CTX	2026-10-12T16:22:22Z	t2p	t2p.3.mech64	probe.cpu.weight	100
+CTX	2026-10-12T16:22:22Z	t2p	t2p.3.mech64	probe.cpu_cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:22:22Z	t2p	t2p.3.mech64	probe.cpu_cgroup.weight	100
+CTX	2026-10-12T16:22:25Z	t2p	t2p.3.mech64	probe.threads	ba_t5_floor_pro:0=2 sk-serving-prob:19=66 tokio-rt-worker:0=2
+CTX	2026-10-12T16:23:32Z	t2p	t2p.3.ctrl8	probe.cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:23:32Z	t2p	t2p.3.ctrl8	probe.autogroup	/autogroup-18046 nice 0
+CTX	2026-10-12T16:23:32Z	t2p	t2p.3.ctrl8	probe.parent	/user.slice/user-1004.slice/user@1004.service
+CTX	2026-10-12T16:23:32Z	t2p	t2p.3.ctrl8	probe.parent.controllers	cpu memory pids
+CTX	2026-10-12T16:23:32Z	t2p	t2p.3.ctrl8	probe.parent.subtree_control	cpu memory pids
+CTX	2026-10-12T16:23:32Z	t2p	t2p.3.ctrl8	probe.cpu.weight	100
+CTX	2026-10-12T16:23:32Z	t2p	t2p.3.ctrl8	probe.cpu_cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:23:32Z	t2p	t2p.3.ctrl8	probe.cpu_cgroup.weight	100
+CTX	2026-10-12T16:23:36Z	t2p	t2p.3.ctrl8	probe.threads	ba_t5_floor_pro:0=2 sk-serving-prob:0=40 tokio-rt-worker:0=2
+CTX	2026-10-12T16:26:17Z	t2p	t2p.3.mech8	probe.cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:26:17Z	t2p	t2p.3.mech8	probe.autogroup	/autogroup-18046 nice 0
+CTX	2026-10-12T16:26:18Z	t2p	t2p.3.mech8	probe.parent	/user.slice/user-1004.slice/user@1004.service
+CTX	2026-10-12T16:26:18Z	t2p	t2p.3.mech8	probe.parent.controllers	cpu memory pids
+CTX	2026-10-12T16:26:18Z	t2p	t2p.3.mech8	probe.parent.subtree_control	cpu memory pids
+CTX	2026-10-12T16:26:18Z	t2p	t2p.3.mech8	probe.cpu.weight	100
+CTX	2026-10-12T16:26:18Z	t2p	t2p.3.mech8	probe.cpu_cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:26:18Z	t2p	t2p.3.mech8	probe.cpu_cgroup.weight	100
+CTX	2026-10-12T16:26:19Z	t2p	t2p.3.mech8	probe.threads	ba_t5_floor_pro:0=2 sk-serving-prob:19=33 tokio-rt-worker:0=2
+CTX	2026-10-12T16:27:25Z	t2p	after	sched_autogroup_enabled	1
+CTX	2026-10-12T16:27:25Z	t2p	after	cgroup.root.subtree_control	cpu memory pids
+CTX	2026-10-12T16:27:25Z	t2p	after	daemon.cgroup	/user.slice/user-1004.slice/user@1004.service/app.slice/ba-t5-s3-20261012T1608Z.scope
+CTX	2026-10-12T16:27:25Z	t2p	after	daemon.autogroup	/autogroup-18099 nice 0
+CTX	2026-10-12T16:27:25Z	t2p	after	daemon.parent	/user.slice/user-1004.slice/user@1004.service/app.slice
+CTX	2026-10-12T16:27:25Z	t2p	after	daemon.parent.controllers	cpu memory pids
+CTX	2026-10-12T16:27:25Z	t2p	after	daemon.parent.subtree_control	memory pids
+CTX	2026-10-12T16:27:25Z	t2p	after	daemon.cpu.weight	na
+CTX	2026-10-12T16:27:26Z	t2p	after	daemon.cpu_cgroup	/user.slice/user-1004.slice/user@1004.service/app.slice
+CTX	2026-10-12T16:27:26Z	t2p	after	daemon.cpu_cgroup.weight	100
+CTX	2026-10-12T16:27:26Z	t2p	after	serving.cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:27:26Z	t2p	after	serving.autogroup	/autogroup-18046 nice 0
+CTX	2026-10-12T16:27:26Z	t2p	after	serving.parent	/user.slice/user-1004.slice/user@1004.service
+CTX	2026-10-12T16:27:26Z	t2p	after	serving.parent.controllers	cpu memory pids
+CTX	2026-10-12T16:27:26Z	t2p	after	serving.parent.subtree_control	cpu memory pids
+CTX	2026-10-12T16:27:26Z	t2p	after	serving.cpu.weight	100
+CTX	2026-10-12T16:27:26Z	t2p	after	serving.cpu_cgroup	/user.slice/user-1004.slice/user@1004.service/tmux-spawn-42a6eacd-9e10-4870-8c2c-a2d0672b1073.scope
+CTX	2026-10-12T16:27:26Z	t2p	after	serving.cpu_cgroup.weight	100
+CTX	2026-10-12T16:27:26Z	t2p	after	resident.cgroup	/system.slice/shekyld-testnet.service

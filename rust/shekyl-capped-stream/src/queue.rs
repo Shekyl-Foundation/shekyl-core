@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
-use shekyl_transport_layer::{CloseKind, MessageClass};
+use shekyl_transport_layer::{CloseCause, CloseKind, MessageClass};
 use tokio::sync::Notify;
 
 struct Item {
@@ -50,11 +50,14 @@ struct ByteQueueInner {
 /// closed and empty reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CloseReason {
-    /// An end of the connection closed it: the caller's [`crate::Session`]
-    /// or the connection task's [`crate::QueueHold`] was dropped.
+    /// An end of the connection closed it without naming a cause: the
+    /// caller's [`crate::Session`] or the connection task's
+    /// [`crate::QueueHold`] was dropped.
     Local,
     /// A send did not fit under the cap.
     Overfull,
+    /// The connector closed this end with `cause`.
+    Named(CloseCause),
 }
 
 impl CloseReason {
@@ -64,6 +67,7 @@ impl CloseReason {
         match self {
             Self::Local => CloseKind::LocalClose,
             Self::Overfull => CloseKind::SendQueueFull,
+            Self::Named(cause) => cause.kind(),
         }
     }
 }
@@ -160,6 +164,16 @@ impl ByteQueue {
             .expect("outbound")
             .closed
             .get_or_insert(CloseReason::Local);
+        self.wake();
+    }
+
+    /// Close with the connector's cause. A reason already stored stands.
+    pub(crate) fn close_named(&self, cause: CloseCause) {
+        self.inner
+            .lock()
+            .expect("outbound")
+            .closed
+            .get_or_insert(CloseReason::Named(cause));
         self.wake();
     }
 

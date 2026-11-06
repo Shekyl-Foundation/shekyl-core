@@ -5,10 +5,9 @@
 
 //! Tests for the archival codecs (`codec::archival`): the bond record's round
 //! trip at every genesis-frozen cap, each decode refusal on its own axis,
-//! and the **v7 cross-check** — the C++ `ArchivalBondValue` corpus
-//! (`docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json`, written and asserted
-//! by `tests/unit_tests/archival_bond_record_v7_corpus.cpp`) rebuilt as
-//! [`BondRecord`]s field by field, so the re-specified codec is shown to
+//! and the **v7 cross-check** — the frozen `ArchivalBondValue` corpus
+//! (`docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json`; frozen, no regenerator)
+//! rebuilt as [`BondRecord`]s field by field, so the re-specified codec is shown to
 //! carry the *same record*, not merely to round-trip itself
 //! (`DRS_E1_SARCH.md` §7, ruled on PR #840).
 
@@ -20,12 +19,13 @@ use shekyl_types::archival::{
     BadInterval, HoldingsKind, MAX_ATTESTATION_WITNESS_BYTES, MAX_BOND_BAD_INTERVALS,
     MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
 };
+use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use super::archival::{
-    AttestationWitnessBytes, BondRecord, FirstPayingHeight, HeldShard, Holdings, HoldingsError,
-    RMarket, SigmaWorkMilli, MAX_BOND_KEY_BYTES,
+    AttestationWitnessBytes, BondRecord, CompleteTreeSet, FirstPayingHeight, HeldShard, Holdings,
+    HoldingsError, RMarket, SigmaWorkMilli, SupportSeats, MAX_BOND_KEY_BYTES,
 };
 
 fn invalid(reason: &'static str) -> CodecError {
@@ -39,6 +39,7 @@ fn base() -> BondRecord {
     BondRecord {
         hybrid_pubkey: vec![0x11; 64],
         bond_spend_pk: vec![0x22; 32],
+        receipt_sign_pk: ReceiptSignPk::from_bytes([0x44; RECEIPT_SIGN_PK_LEN]),
         endpoint: [0x33; 32],
         join_settlement_epoch: SettlementEpoch::from_raw(3),
         bonded_total: AtomicUnits::from_raw(5_000_000_000),
@@ -140,7 +141,7 @@ fn every_cap_is_a_refusal_one_past_it_before_any_allocation() {
     let mut bytes = base().encode();
     // base() is a complete tree: its holdings byte is the last of the
     // fixed prefix. Rewrite it to compact + an over-cap count.
-    let kind_at = 4 + 64 + 4 + 32 + 32 + 8 + 8;
+    let kind_at = 4 + 64 + 4 + 32 + RECEIPT_SIGN_PK_LEN + 32 + 8 + 8;
     assert_eq!(bytes[kind_at], HoldingsKind::CompleteTree as u8);
     bytes.truncate(kind_at);
     bytes.push(HoldingsKind::ShardSetCompact as u8);
@@ -178,7 +179,7 @@ fn the_decode_refuses_what_the_type_makes_unrepresentable() {
     // A duplicate shard inside a compact holding — the row a desynced C++
     // writer could have produced — is SI-14's decode-side refusal.
     let mut bytes = base().encode();
-    let kind_at = 4 + 64 + 4 + 32 + 32 + 8 + 8;
+    let kind_at = 4 + 64 + 4 + 32 + RECEIPT_SIGN_PK_LEN + 32 + 8 + 8;
     bytes.truncate(kind_at);
     bytes.push(HoldingsKind::ShardSetCompact as u8);
     bytes.extend_from_slice(&2u32.to_le_bytes());
@@ -333,6 +334,101 @@ fn the_close_row_scalars_are_the_raw_le_word_and_the_witness_refuses_empty() {
     );
 }
 
+/// The frozen complete-tree set (`SO-D12h`): the empty set is written as a
+/// count of zero and read back as a value, and the decode refuses each
+/// shape the type cannot hold — a repeat, a descent, a count past the
+/// bytes, a trailing byte. Red edit: decode through `FromIterator`, which
+/// sorts — the descent then round-trips into a different encoding.
+#[test]
+fn the_complete_tree_set_refuses_an_order_the_type_cannot_hold() {
+    let id = |b: u8| shekyl_types::PCanonicalId::from_bytes([b; 32]);
+    let invalid = |reason: &'static str| CodecError::Invalid {
+        codec: CompleteTreeSet::NAME,
+        reason,
+    };
+    let empty = CompleteTreeSet::default();
+    assert_eq!(empty.encode(), [0, 0, 0, 0]);
+    assert_eq!(CompleteTreeSet::decode(&[0, 0, 0, 0]), Ok(empty));
+    let two = CompleteTreeSet::new(vec![id(1), id(2)]).expect("ascending");
+    assert_eq!(CompleteTreeSet::decode(&two.encode()), Ok(two.clone()));
+
+    let raw = |ids: &[u8]| {
+        let mut out = u32::try_from(ids.len())
+            .expect("fits")
+            .to_le_bytes()
+            .to_vec();
+        for &b in ids {
+            out.extend_from_slice(&[b; 32]);
+        }
+        out
+    };
+    let unordered = invalid("personas are not strictly increasing");
+    assert_eq!(CompleteTreeSet::decode(&raw(&[1, 1])), Err(unordered));
+    assert_eq!(CompleteTreeSet::decode(&raw(&[2, 1])), Err(unordered));
+    let mut short = raw(&[1, 2]);
+    short.truncate(4 + 32);
+    assert_eq!(
+        CompleteTreeSet::decode(&short),
+        Err(invalid(
+            "element count exceeds what the row's bytes can hold"
+        ))
+    );
+    let mut long = two.encode();
+    long.push(0);
+    assert_eq!(
+        CompleteTreeSet::decode(&long),
+        Err(invalid("trailing bytes after the complete-tree set"))
+    );
+}
+
+/// A block's support seats (`SO-D12` S1): the empty row is a count of zero
+/// and reads back as a value, and the decode refuses each shape the type
+/// cannot hold — a repeat, a descent, a count past the bytes, a trailing
+/// byte. Seat `j` is bit `j` of the support bitmap, so an order the type
+/// sorted away would renumber the draws. Red edit: decode through
+/// `FromIterator`, which sorts — the descent then round-trips into a
+/// different encoding.
+#[test]
+fn the_support_seats_refuse_an_order_the_type_cannot_hold() {
+    let id = |b: u8| shekyl_types::PCanonicalId::from_bytes([b; 32]);
+    let invalid = |reason: &'static str| CodecError::Invalid {
+        codec: SupportSeats::NAME,
+        reason,
+    };
+    assert_eq!(SupportSeats::EMPTY.encode(), [0, 0, 0, 0]);
+    assert_eq!(SupportSeats::decode(&[0, 0, 0, 0]), Ok(SupportSeats::EMPTY));
+    let two = SupportSeats::new(vec![id(1), id(2)]).expect("ascending");
+    assert_eq!(SupportSeats::decode(&two.encode()), Ok(two.clone()));
+
+    let raw = |ids: &[u8]| {
+        let mut out = u32::try_from(ids.len())
+            .expect("fits")
+            .to_le_bytes()
+            .to_vec();
+        for &b in ids {
+            out.extend_from_slice(&[b; 32]);
+        }
+        out
+    };
+    let unordered = invalid("personas are not strictly increasing");
+    assert_eq!(SupportSeats::decode(&raw(&[1, 1])), Err(unordered));
+    assert_eq!(SupportSeats::decode(&raw(&[2, 1])), Err(unordered));
+    let mut short = raw(&[1, 2]);
+    short.truncate(4 + 32);
+    assert_eq!(
+        SupportSeats::decode(&short),
+        Err(invalid(
+            "element count exceeds what the row's bytes can hold"
+        ))
+    );
+    let mut long = two.encode();
+    long.push(0);
+    assert_eq!(
+        SupportSeats::decode(&long),
+        Err(invalid("trailing bytes after the support seats"))
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The v7 cross-check
 // ---------------------------------------------------------------------------
@@ -387,6 +483,12 @@ fn record_from_v7_fields(f: &serde_json::Value) -> BondRecord {
     BondRecord {
         hybrid_pubkey: hex_bytes(&f["hybrid_pubkey_hex"]),
         bond_spend_pk: hex_bytes(&f["bond_spend_pk_hex"]),
+        // The C++ `ArchivalBondValue` v7 has no receipt key, so the corpus
+        // has no field to read one from and the test supplies it. It is
+        // outside the comparison: every assertion below is about a field the
+        // C++ decoder read. The check still earns its place — a v7 field
+        // the record or its codec loses fails it exactly as before.
+        receipt_sign_pk: ReceiptSignPk::from_bytes([0x44; RECEIPT_SIGN_PK_LEN]),
         endpoint: hex_bytes(&f["endpoint_hex"])
             .try_into()
             .expect("32-byte endpoint"),
@@ -416,8 +518,8 @@ fn record_from_v7_fields(f: &serde_json::Value) -> BondRecord {
 fn the_v7_corpus_maps_onto_the_record_without_loss() {
     let text = fs::read_to_string(corpus_path()).unwrap_or_else(|e| {
         panic!(
-            "the v7 corpus is missing ({e}); it is written by \
-             tests/unit_tests/archival_bond_record_v7_corpus.cpp with SHEKYL_WRITE_V7_CORPUS=1"
+            "the v7 corpus is missing ({e}); it is frozen and has no regenerator \
+             (docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json)"
         )
     });
     let doc: serde_json::Value = serde_json::from_str(&text).expect("corpus is JSON");
@@ -515,5 +617,76 @@ fn the_v7_corpus_maps_onto_the_record_without_loss() {
     assert!(
         seen_complete && seen_compact && seen_open && seen_clean_close && seen_paid && seen_unpaid,
         "the corpus exercises both holdings kinds, both interval entry kinds and both paid states"
+    );
+}
+
+// ---- the receipt key (layout 25, FN-DSA increment 3) ------------------------
+
+/// The receipt key is 1,837 bytes with **no length prefix**, directly after
+/// `bond_spend_pk` and before the endpoint: the record's bytes are the two
+/// length-prefixed keys, then the key itself, then the endpoint. Two keys
+/// that differ in one byte encode to records that differ in that byte.
+#[test]
+fn the_receipt_key_is_fixed_width_between_bond_spend_pk_and_the_endpoint() {
+    let record = base();
+    let bytes = round_trips(&record);
+    let key_at = 4 + 64 + 4 + 32;
+    assert_eq!(
+        &bytes[key_at..key_at + RECEIPT_SIGN_PK_LEN],
+        &[0x44; RECEIPT_SIGN_PK_LEN][..],
+        "the key follows bond_spend_pk with nothing between"
+    );
+    let endpoint_at = key_at + RECEIPT_SIGN_PK_LEN;
+    assert_eq!(&bytes[endpoint_at..endpoint_at + 32], &[0x33; 32]);
+    // hybrid (4 + 64) ‖ spend (4 + 32) ‖ key ‖ endpoint ‖ epoch ‖ total ‖
+    // kind ‖ two empty counts ‖ the unpaid byte.
+    assert_eq!(
+        bytes.len(),
+        4 + 64 + 4 + 32 + RECEIPT_SIGN_PK_LEN + 32 + 8 + 8 + 1 + 4 + 4 + 1
+    );
+
+    let mut other_key = [0x44; RECEIPT_SIGN_PK_LEN];
+    other_key[RECEIPT_SIGN_PK_LEN - 1] = 0x45;
+    let other = BondRecord {
+        receipt_sign_pk: ReceiptSignPk::from_bytes(other_key),
+        ..base()
+    };
+    let other_bytes = round_trips(&other);
+    let differing: Vec<usize> = (0..bytes.len())
+        .filter(|&i| bytes[i] != other_bytes[i])
+        .collect();
+    assert_eq!(differing, vec![endpoint_at - 1]);
+    assert_eq!(
+        BondRecord::decode(&other_bytes).unwrap().receipt_sign_pk,
+        other.receipt_sign_pk
+    );
+}
+
+/// A record cut anywhere inside the receipt key is refused under the key's
+/// name, and one cut right after it under the endpoint's: the key is
+/// mandatory and exactly its length, so there is no shorter record.
+#[test]
+fn a_record_truncated_in_the_receipt_key_is_refused() {
+    let bytes = base().encode();
+    let key_at = 4 + 64 + 4 + 32;
+    for cut in [key_at, key_at + 1, key_at + RECEIPT_SIGN_PK_LEN - 1] {
+        assert_eq!(
+            BondRecord::decode(&bytes[..cut]),
+            Err(invalid("buffer ends inside the receipt_sign_pk")),
+            "cut at {cut}"
+        );
+    }
+    assert_eq!(
+        BondRecord::decode(&bytes[..key_at + RECEIPT_SIGN_PK_LEN]),
+        Err(invalid("buffer ends inside the endpoint"))
+    );
+    // A record of an earlier layout — no receipt key at all — is not a shorter valid
+    // record: its endpoint and everything after are read as key bytes, and
+    // the buffer ends inside the key.
+    let mut keyless = bytes.clone();
+    keyless.drain(key_at..key_at + RECEIPT_SIGN_PK_LEN);
+    assert_eq!(
+        BondRecord::decode(&keyless),
+        Err(invalid("buffer ends inside the receipt_sign_pk"))
     );
 }

@@ -17,21 +17,34 @@
 use super::*;
 use crate::block::Candidate;
 use crate::fault::FormAttempt;
+use crate::harness::fixture::signed;
 use crate::harness::fixture::{
-    anchored_on, candidate, candidate_on, listed, listed_on, point_at, spend, spendable_chain,
+    self, anchored_on, candidate, candidate_on, listed, listed_on, point, point_at, spend,
+    spendable_chain,
 };
-use crate::harness::{assert_refused, formed_on, infallible, judged, Faulted, MockSubstrate};
+use crate::harness::{
+    assert_refused, defined, expected_target, formed_on, judged, Faulted, MockChain, MockSubstrate,
+};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
-use crate::validate::{form, validate};
+use crate::validate::{form, validate, FormClaims};
 use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind, ShardSet};
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
-use shekyl_types::{BlockHash, KeyImage, PCanonicalId};
+use shekyl_types::{BlockHash, KeyImage};
 use shekyl_wire::{BondPost, BondPostKind, Holdings};
 
-/// Three distinct listed bodies, the header declaring exactly them.
+/// Three distinct listed bodies, the header declaring exactly them. Their
+/// key images are points (CEN-H11), so `form`'s transaction stage admits
+/// them and the stage's verdict is G2's to give.
+/// Three signed bodies: `form` runs the signature sequence (CEN-I17/I18)
+/// at every listed slot since 2026-10-16, so a body it admits is a signed
+/// one. Unanchored — the reference rows are `validate`'s.
 fn three_bodies() -> Candidate {
-    candidate(vec![listed([1; 32]), listed([2; 32]), listed([3; 32])])
+    candidate(vec![
+        signed(listed(point(1))),
+        signed(listed(point(2))),
+        signed(listed(point(3))),
+    ])
 }
 
 fn check(candidate: &Candidate) -> Verdict<()> {
@@ -42,9 +55,14 @@ fn check(candidate: &Candidate) -> Verdict<()> {
 fn form_judges(candidate: Candidate) -> Verdict<RuleCoverage> {
     match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: BlockHash::NULL,
+            target: expected_target(&MockChain::default(), &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        BlockHash::NULL,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => Ok(*formed.coverage()),
@@ -136,7 +154,7 @@ fn judge_on(chain: &crate::harness::MockChain, candidate: Candidate) -> Verdict<
             formed_on(chain, candidate),
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .map(|_valid| ())
     })
@@ -147,9 +165,9 @@ fn check_alone_on<R: BlockRule>(
     chain: &crate::harness::MockChain,
     candidate: &Candidate,
 ) -> Verdict<()> {
-    let formed = formed_on(chain, candidate.clone());
+    let formed = crate::harness::token_for_one_rule(chain, candidate.clone());
     chain.with_view(|view| {
-        infallible(R::check(
+        defined(R::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),
             &view,
         ))
@@ -224,18 +242,15 @@ fn cen_g1_refuses_a_relisted_spend_before_i7_can() {
     // where the recorded one has two, so a different identity) is not on
     // the chain — G1 passes it — and I7 refuses at the input, as before G1
     // existed. The two rows share a trigger and are told apart by this.
-    let respent = candidate_on(
-        &chain,
-        vec![
-            listed_on(&chain, point_at(41)),
-            anchored_on(&chain, spend(point_at(40), 3)),
-        ],
-    );
+    // Listed alone: I7 is the first view-bound row in the slot's sequence,
+    // and a fixture listed ahead of it would be refused at CEN-I13 (slice 6
+    // row 6) before this slot was reached.
+    let respent = candidate_on(&chain, vec![anchored_on(&chain, spend(point_at(40), 3))]);
     assert_refused(
         judge_on(&chain, respent),
         CenRow::I7,
         Locus::Input {
-            slot: TxSlot::Listed(1),
+            slot: TxSlot::Listed(0),
             input: 0,
         },
     );
@@ -315,11 +330,14 @@ fn emission_vin(p_pubkey_fill: u8, epochs: &[u64]) -> Input {
     }
 }
 
-/// A bond post for `P`, of `kind`.
+/// A bond post for the persona tagged `p`, of `kind` — the persona's key
+/// and its recompute (CEN-J11's pair), so what G10 counts is a post the
+/// form rows admit.
 fn bond_post_vin(p: [u8; 32], kind: BondPostKind) -> Input {
+    let who = fixture::persona(p);
     Input::BondPost(Box::new(BondPost {
-        hybrid_public_key: vec![0xb1; SINGLE_KEY_CANONICAL_LEN],
-        p_canonical_id: PCanonicalId::from_bytes(p),
+        hybrid_public_key: who.identity,
+        p_canonical_id: who.id,
         kind,
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: 0,
@@ -429,6 +447,9 @@ fn cen_g10_two_bond_posts_for_one_p_are_refused_whatever_their_kinds() {
     let chain = spendable_chain();
     let join = || BondPostKind::JoinMarket {
         bond_spend_pk: vec![0xb3; SINGLE_KEY_CANONICAL_LEN],
+        receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+            [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+        ),
         endpoint: [0xe0; shekyl_wire::transaction::BOND_POST_ENDPOINT_LEN],
     };
     // Mixed kinds — a JoinMarket and a Release for one P — still two posts.
@@ -461,6 +482,116 @@ fn cen_g10_two_bond_posts_for_one_p_are_refused_whatever_their_kinds() {
     check_alone_on::<G10>(&chain, &block).expect("one bond post per P passes G10");
 }
 
+/// The first body [`BlockArchivalKeys`] refuses when `bodies` are added in
+/// order, with its row.
+fn first_refused_added(bodies: &[Transaction]) -> Option<(usize, CenRow)> {
+    let mut keys = BlockArchivalKeys::default();
+    bodies
+        .iter()
+        .enumerate()
+        .find_map(|(n, tx)| keys.add(tx).err().map(|row| (n, row)))
+}
+
+/// The accumulator a block filler asks is the three rows asked one body at
+/// a time: on the G7, G9 and G10 blocks above it refuses the body the row
+/// refuses, on the row's name, and admits each control block whole. A
+/// refused body adds nothing, so a body after it that collides only with
+/// the refused one is admitted.
+#[test]
+fn the_block_archival_keys_refuse_the_body_the_block_rows_refuse() {
+    let join = || BondPostKind::JoinMarket {
+        bond_spend_pk: vec![0xb3; SINGLE_KEY_CANONICAL_LEN],
+        receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+            [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+        ),
+        endpoint: [0xe0; shekyl_wire::transaction::BOND_POST_ENDPOINT_LEN],
+    };
+    let refused = [
+        (
+            vec![
+                body_with(vec![serve_credit_vin(P1, 7, 11)]),
+                body_with(vec![
+                    serve_credit_vin(P1, 8, 11),
+                    serve_credit_vin(P1, 7, 11),
+                ]),
+            ],
+            CenRow::G7,
+        ),
+        (
+            vec![
+                body_with(vec![emission_vin(0xa1, &[11, 12])]),
+                body_with(vec![emission_vin(0xa1, &[12])]),
+            ],
+            CenRow::G9,
+        ),
+        (
+            vec![
+                body_with(vec![bond_post_vin(P1, join())]),
+                body_with(vec![
+                    bond_post_vin(P2, join()),
+                    bond_post_vin(P1, BondPostKind::Other(2)),
+                ]),
+            ],
+            CenRow::G10,
+        ),
+    ];
+    let chain = spendable_chain();
+    for (bodies, row) in refused {
+        let block = candidate_on(&chain, bodies.clone());
+        let by_row = match row {
+            CenRow::G7 => check_alone_on::<G7>(&chain, &block),
+            CenRow::G9 => check_alone_on::<G9>(&chain, &block),
+            _ => check_alone_on::<G10>(&chain, &block),
+        };
+        let refusal = by_row.expect_err("the block row refuses the block");
+        assert_eq!(refusal.rule, row);
+        assert!(matches!(
+            refusal.locus,
+            Locus::Input {
+                slot: TxSlot::Listed(1),
+                ..
+            }
+        ));
+        assert_eq!(first_refused_added(&bodies), Some((1, row)), "{row:?}");
+    }
+    let admitted = [
+        vec![
+            body_with(vec![serve_credit_vin(P1, 7, 11)]),
+            body_with(vec![
+                serve_credit_vin(P1, 8, 11),
+                serve_credit_vin(P1, 7, 12),
+                serve_credit_vin(P2, 7, 11),
+            ]),
+        ],
+        vec![
+            body_with(vec![emission_vin(0xa1, &[11])]),
+            body_with(vec![emission_vin(0xa1, &[12])]),
+            body_with(vec![emission_vin(0xa2, &[11])]),
+        ],
+        vec![
+            body_with(vec![bond_post_vin(P1, join())]),
+            body_with(vec![bond_post_vin(P2, BondPostKind::Other(2))]),
+        ],
+        vec![listed_on(&chain, point_at(60))],
+    ];
+    for bodies in admitted {
+        assert_eq!(first_refused_added(&bodies), None);
+    }
+    // The refused body's P2 post was not added: P2's own post is admitted.
+    let mut keys = BlockArchivalKeys::default();
+    keys.add(&body_with(vec![bond_post_vin(P1, join())]))
+        .expect("the first post");
+    assert_eq!(
+        keys.add(&body_with(vec![
+            bond_post_vin(P2, join()),
+            bond_post_vin(P1, BondPostKind::Other(2)),
+        ])),
+        Err(CenRow::G10)
+    );
+    keys.add(&body_with(vec![bond_post_vin(P2, join())]))
+        .expect("a refused body adds nothing");
+}
+
 #[test]
 fn the_archival_rows_are_vacuous_on_a_block_of_spends() {
     // The corpus's common case: no archival vin, three rows record and pass.
@@ -478,7 +609,7 @@ fn the_archival_rows_are_vacuous_on_a_block_of_spends() {
 #[test]
 fn cen_g2_refuses_in_form_before_the_identity_is_derived() {
     // Through the stage: the refusal is the stage's verdict, and it is
-    // G2's — B1/B2/B7 pass this header, and the coinbase rows pass its
+    // G2's — B1/B2 pass this header, and the coinbase rows pass its
     // coinbase, so nothing earlier in `judge_form!` claims it.
     let mut reordered = three_bodies();
     reordered.transactions.swap(0, 1);

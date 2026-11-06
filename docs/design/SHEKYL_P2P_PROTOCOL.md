@@ -138,41 +138,41 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 |---|---|---|---|
 | **T1** handshake `Noise_NNhfs…` | **IMPLEMENTED** (as of 2026-09-24) | `rust/shekyl-p2p-transport`: `Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`, messages 1216 and 1152. `--clearnet-transport-encrypt` is the clearnet connector's channel option (`channel_choice`), off by default. The pipe is gone. Levin stays the session. The flip deletes the option | **No** — Rick ruled; the default flip is a later commit |
 | **T2** PW-3 retired, no padding band | NOT IMPLEMENTED | no padding band present or pinned | No — transport cluster |
-| **T3** BOLT-8 rekeying | **IMPLEMENTED** (as of 2026-09-24) | `channel.rs` `REKEY_NONCES = 1000`; each record spends two nonces (encrypted length, then body), so 500 records | No — transport cluster |
+| **T3** BOLT-8 rekeying | **IMPLEMENTED** (as of 2026-09-24) | `shekyl-noise` `direction.rs` `REKEY_NONCES = 1000`; the interim framer spends two nonces per record (encrypted length, then body), so 500 records | No — transport cluster |
 | **T4** `e1` / `ekem1` normative | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` writes `e, e1` then `e, ee, ekem1`; empty payloads | No — transport cluster |
 | **T5** 8-byte prefix stays | **INTERIM** (as of 2026-09-25) | The encrypting path uses `prefix_for` (`prefix.rs`). The plaintext path still starts with `LEVIN_SIGNATURE`. That start is deleted at the flip; it is not a finished wire | n/a |
 | **T6** packet limits derived | NOT IMPLEMENTED | still the inherited `LEVIN_INITIAL/DEFAULT_MAX_PACKET_SIZE` | No — transport cluster |
-| **T7** compression survives | **NO BUILD REQUIRED** | rules the status quo; `COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1` present at `rust/shekyl-levin/src/compress.rs:25,32` | n/a |
-| **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages, `ck` after `ee` and after the KEM mix, both transport keys' rekey (`ck'`, `k'`), and the initial chaining key. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. `prefix.rs` pins `AFBCD4D1FAB98B6D`, `F0B352E8928F8D56`, `5C2942C0F9F98A21` | No — follows T1 |
-| **B1** rate limiting adopted | NOT IMPLEMENTED | the decision names four unguarded invoke handlers; all four still unguarded | No — hardening; does not change the wire |
-| **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
-| **B3** per-command caps | **IMPLEMENTED** | 11-arm `DefinedCommand` table in `rust/shekyl-levin/src/ingress.rs` (2001 and 1003 are unknown dispatch; sole block path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`); handshake 65536 reconstructed; support-flags 4096→256; 2003/2006 hash-list derived; 2007/2008/2009/2010 keep inherited envelopes (4/4/1/4 MiB); 2002/2004 take the packet limit until PWD-B12 / the 2004 byte budget; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
+| **T7** no compression | **IMPLEMENTED** (2026-10-19) | the protocol has no compressor; `FLAGS_DEFINED` (`rust/shekyl-levin/src/ingress.rs`) leaves `0x10` undefined, so a bucket carrying it is refused at ingress on both stacks | n/a |
+| **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages and the record after one rekey in each direction. The transport keys and their rekey (`ck'`, `k'`) are pinned from that transcript's chaining key in `shekyl-noise` (`split_of_the_pinned_chaining_key_rekeys_to_the_pinned_keys`); the initial chaining key is the hash of the protocol name, pinned beside `SymmetricState`. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. The prefix KAT is `prefix_for` of the id derived from each genesis, recorded in `rust/shekyl-node/src/genesis.rs` (`each_genesis_derives_its_recorded_id_and_prefix`; in `shekyl-ffi`'s `network_id_ffi.rs` until 2026-11-05) | No — follows T1 |
+| **B1** rate limiting adopted | **PARTIAL** (as of 2026-11-05): the pre-handshake guard, the invoke correlation and the per-session read permit are held by the session layer; the per-connection token bucket is NOT IMPLEMENTED | **UPDATE 2026-11-05 (the p2p remnant cutover, `P2P_3_REMNANT_CUTOVER_BRIEF.md` §2 rule 2, rule 6).** The four C++ invoke routes and the nine `HANDLE_NOTIFY_T2` entries are deleted with their files; every command now enters through `shekyl-p2p-session`'s one exhaustive `match` over `shekyl-levin`'s `Command`. What that layer holds **by type**: nothing but a 1001 request reaches a session before its handshake (`Established` has no constructor an owner can reach, and every owner handler takes `&Established`); one 1002 outstanding per session, a response with no request a form failure; one unread frame per session (`SESSION_QUEUE_DEPTH = 1`), the owner's `Taken` being the permit to read the next, so a slow owner holds the peer's reads rather than growing memory. What it does **not** hold: a per-connection rate on known commands after the handshake — a peer may still send admitted 2002 batches as fast as the per-session permit cycles. That token bucket is this row's remaining work, and its surface is now one place (the dispatch table), not thirteen. **MEASURED ON A LIVE DAEMON 2026-10-06 — on Windows this is the ONLY inbound bound available, and it is an ADDITION to the p2p Rust migration rather than a transfer.** `InboundCeiling` resolves `NoPerProcessLimit` there (no per-process descriptor quantity exists to read), PWD-I7's per-host cap is deleted, and an unset `--in-peers` is `UINT32_MAX` — so a Windows node has no inbound bound of any kind until this lands, by count, by source address or by rate. **There is no C++ mechanism to port**, so a slice that moves the p2p stack faithfully still lands Windows unbounded; the bound has to be engineered in. See the Windows inbound-bound row in [`FOLLOWUPS.md`](../FOLLOWUPS.md) | No — hardening; does not change the wire |
+| **B2** jitter, scoped by observability | **IMPLEMENTED** (as of 2026-11-05; the `min`/`jitter` split is an `Assumption` awaiting Rick's ruling) | **UPDATE 2026-11-05 (the p2p remnant cutover).** Timed sync is per session: `shekyl-p2p-session` `timing.rs` draws `TIMED_SYNC_MIN + U(0, TIMED_SYNC_JITTER)` = `45 s + U(0, 30 s)` (mean 60 s, the ruled constraint), re-drawn only when that session's own 1002 fires, `0` a valid draw (`the_timed_sync_draw_is_min_plus_a_bounded_jitter_with_the_pwd_b2_mean`, `a_zero_min_and_zero_jitter_draw_zero`). The split's basis is `P2P_3_REMNANT_CUTOVER_BRIEF.md` §7.6 (F2): posed as an `Assumption` under Ruling B, not a derivation. The purely local timers this row left fixed (the idle-peer kick, the standby check, the protocol handler's three) are deleted with the C++ host; the Rust owners' wakes are each a timing-engine owner with its own cadence. *Records-was:* all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
+| **B3** per-command caps | **IMPLEMENTED** | the one 10-arm `Command` enum in `rust/shekyl-levin/src/ingress.rs`, each arm's `payload_cap` applied with the packet limit at ingress (2001, 1003, 1007, 2003, 2004, 2006 and 2007 are unknown dispatch; sole block-announce path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`; sync is 2011–2014, owned by chain sync through the session layer's dispatch table); handshake derived from `DISCLOSE_COUNT`; 2008/2009/2010 keep inherited envelopes (4/1/4 MiB); 2002 takes the packet limit until PWD-B12 | **YES** — with B3a and B4, as one unit |
 | **B3a** unknown input rejected at ingress | **IMPLEMENTED** | `ingress_payload_cap` flag-class discriminator; unknown bits rejected on every bucket; noise/fragment with command 0 admitted; a Q/S-flagged 2001 is unknown input, same class as ping 1003 | **YES** — with B3 and B4, as one unit |
 | **B4** places B3a's ingress check | **IMPLEMENTED** | `shekyl_levin_ingress_admit` + `get_max_bytes(command, flags)` on outer and inner header parse; decompress uses the cached cap; codec still round-trips unknown bits (PWC-A6) | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
-| **B5** `return_code` deleted | **IMPLEMENTED** | field absent from `bucket_head2`; `static_assert(sizeof(bucket_head2) == 29)` in `levin_base.h`; Rust `HEADER_SIZE = 29`; deletion comment at `levin_base.h:73`. `git grep m_return_code contrib/epee` hits that comment only. | **YES** — delete before nodes exist; cheaper than carrying four dead bytes into the Rust rewrite |
-| **B6** one block path | **IMPLEMENTED** | 2001 deleted; 2008 is the sole path. `HANDLE_NOTIFY_T2(NOTIFY_NEW_COMPACT_BLOCK)` at `cryptonote_protocol_handler.h:99`; `relay_block` emits `NOTIFY_NEW_COMPACT_BLOCK::ID` at `.inl:2725`; no `NOTIFY_NEW_BLOCK` handler remains. Identifiers are `COMPACT_*` (ids still 2008/2009). Two-limb test `block_propagation_has_exactly_one_command` refuses 2001 (`LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED`) and still dispatches 2008. | **YES** — landed; do it before nodes exist |
+| **B5** `return_code` deleted | **IMPLEMENTED** | `HEADER_SIZE = 29` in `rust/shekyl-levin/src/header.rs`, the one Levin header codec: flags follow the command, with no `return_code` field. | **YES** — delete before nodes exist; cheaper than carrying four dead bytes into the Rust rewrite |
+| **B6** one block path | **IMPLEMENTED** | 2001 deleted; 2008 is the sole path. Since 2026-11-05 the evidence is Rust's: `Command::NewCompactBlock` is the one block-announce arm of `shekyl-p2p-session`'s dispatch, routed to the sync owner, and `shekyl-levin`'s `Command` has no 2001. *Records-was:* `HANDLE_NOTIFY_T2(NOTIFY_NEW_COMPACT_BLOCK)` at `cryptonote_protocol_handler.h:99`; `relay_block` emits `NOTIFY_NEW_COMPACT_BLOCK::ID` at `.inl:2725`; no `NOTIFY_NEW_BLOCK` handler remains. Identifiers are `COMPACT_*` (ids still 2008/2009). Two-limb test `block_propagation_has_exactly_one_command` refuses 2001 (`LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED`) and still dispatches 2008. | **YES** — landed; do it before nodes exist |
 | **B7** drop only when attributable | **IMPLEMENTED** | typed verdict in `shekyl-peer-policy`; FFI `shekyl_drop_verdict_severs`; `m_no_drop_offense` gone as a field. Three sites (tx relay, announce size, block-sync prepare). UPDATE 2026-09-10: block twin — `BlockIngest` / `bvc.m_outcome`; announce and sync ask `shekyl_block_announce_action` / `shekyl_block_sync_action`, not failed-set-ness. `drop_connections`-by-host and the score floor remain deferred (E9/E5), not this row | **YES** — the typed verdict: "leaving a half-corrected drop path through a testnet is how the sync-arm defect survived" |
 | **B8** delete the undriven timer | **IMPLEMENTED** | #629 deleted `m_bad_peer_checker`, `network_address_old`, `connection_entry_base` | done |
-| **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
-| **B10** delete the back-ping | **IMPLEMENTED** | #643 (`f98de6b30`) deleted `COMMAND_PING` and the whole back-ping; `p2p_protocol_defs.h:235` records it. *Records-was: this sweep first scored it NOT IMPLEMENTED — see the correction note below* | **YES**, and already satisfied |
-| **B11** `sanitize_peerlist` port-0 | **DEFERRED** | named blocker: tor port-0 semantics disputed (`tor_address::unknown()` is port 0) | No — blocked |
-| **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/zone/mod.rs:864` | No — hardening; but see the note below |
-| **I1** no peer identifier on the wire | **IMPLEMENTED** | #643; `p2p_protocol_defs.h:119` records the deletion | done |
+| **B9** same-host outbound cap | **PARTIAL** | mechanism present: the dialer's candidate filter refuses a host that already holds an outbound session (`outbound_hosts`, `rust/shekyl-dialer/src/owner/address.rs`), from #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
+| **B10** delete the back-ping | **IMPLEMENTED** | #643 (`f98de6b30`) deleted `COMMAND_PING` and the whole back-ping; 1003 is no `Command` arm, and `Command::from_wire(1003)` is `None` (`the_command_set_has_ten_arms`, `rust/shekyl-levin/src/ingress.rs`). *Records-was: this sweep first scored it NOT IMPLEMENTED — see the correction note below* | **YES**, and already satisfied |
+| **B11** `sanitize_peerlist` port-0 | **IMPLEMENTED in PR-3 (2026-10-13)** | **RULED 2026-10-11 (Rick).** A network-learned address with port 0 is refused at `admit_gray` on every address type, so `tor_address::unknown()` never enters from the network. The check is `shekyl-peerlist`'s refused set; `sanitize_peerlist` is deleted in the same PR (Rick, 2026-10-13; *records-was* it stays until slice 4, and the status was NOT IMPLEMENTED). *Records-was:* deferred, named blocker the tor port-0 semantics were disputed | No — not an alpha.8 wire item; the check is in flight for PR-3 |
+| **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/graph/mod.rs:864` | No — hardening; but see the note below |
+| **I1** no peer identifier on the wire | **IMPLEMENTED** | #643; `BasicNodeData` carries `network_id` alone (`rust/shekyl-levin/src/payload/types.rs`), and an unknown key decodes ignored | done |
 | **I2** peerlist acceptance restricted | **IMPLEMENTED** | #637 | done |
 | **I3** tenure by address, never serialized | **SUPERSEDED** | its mechanism *was* the anchor list, deleted by #637 (`net_peerlist.cpp:82`, `p2p_protocol_defs.h:76`); body retained as records-was | n/a |
 | **I4** `ρ` / `g_max` | **DEFERRED** | deferred to its own round with the blocker named; parameter ownership unresolved | No — blocked |
 | **I5** Q-10 write-back obligation | **BLOCKED** | discharge gated on I4 | No — blocked |
 | **I6** Shi et al. sub-attacks closed | **N/A** | verification row: closed by rules ruled in I2, no separate artifact | n/a |
-| **I7** per-host **inbound** admission | **DELETED** — the mechanism is removed, not completed | **Deleted 2026-09-22.** `has_too_many_connections`, the `--max-connections-per-ip` descriptor, the `max_connections` member, `HostInboundCap` / `InboundZone` and the four `shekyl_host_inbound_*` FFI exports are all gone; `is_host_limit` is the total-ceiling check and nothing else. The flag is retired by name through `REMOVED_FLAGS` (`src/common/removed_flags.cpp`), so a config carrying it gets a named message rather than a parse error. **Four independent reasons, three of them measurements:** a host is not an operator (no `k` works under CGNAT); PWD-E4's inverted ratio (~3c/address for an attacker, impossible for a CGNAT subscriber); the only measured inbound adversary opens **one** edge per victim, which a cap of 1 admits in full; and the white list is already defended at the **promotion boundary**. The residual job — slots — is the total ceiling six lines above the deleted call. *Records-was: "PARTIAL … the NUMBER is owed to the maintainer" — the number is dissolved by the deletion, and the residual safety bound is derived from the descriptor limit (`InboundCeiling`); a policy ceiling below it is PWD-B1* | **n/a — minted 2026-09-21, after the alpha.8 ruling.** The forward cut is behaviour-preserving and carries no wire change; the NUMBER is owed to the maintainer (I7 §*Owed*) |
+| **I7** per-host **inbound** admission | **DELETED** — the mechanism is removed, not completed | **Deleted 2026-09-22.** `has_too_many_connections`, the `--max-connections-per-ip` descriptor, the `max_connections` member, `HostInboundCap` / `InboundZone` and the four `shekyl_host_inbound_*` FFI exports are all gone; `is_host_limit` is the total-ceiling check and nothing else. The flag is retired by name through `REMOVED_FLAGS` (`src/common/removed_flags.cpp`), so a config carrying it gets a named message rather than a parse error. **Four independent reasons, three of them measurements:** a host is not an operator (no `k` works under CGNAT); PWD-E4's inverted ratio (~3c/address for an attacker, impossible for a CGNAT subscriber); the only measured inbound adversary opens **one** edge per victim, which a cap of 1 admits in full; and the white list is already defended at the **promotion boundary**. The residual job — slots — is the total ceiling six lines above the deleted call. *Records-was: "PARTIAL … the NUMBER is owed to the maintainer" — the number is dissolved by the deletion, and the residual safety bound is derived from the descriptor limit (`InboundCeiling`); there is no policy ceiling below it (`INPUT_GRAMMAR.md` IG-Q40)* | **n/a — minted 2026-09-21, after the alpha.8 ruling.** The forward cut is behaviour-preserving and carries no wire change. **Closed 2026-10-14** (Rick, IG-Q40): the operator inbound cap is deleted, so no number is owed |
 | **I8** *what is this inbound connection to me?* | **OPEN — routed** | minted 2026-09-21 with PWD-I7's re-diagnosis: the accepting-side category `is_same_host` cannot answer. **No code lands here by design** — separating the nouns needs a total ceiling plus an eviction policy with a protection set, and rule 20 makes migrating a subsystem a planning activity with its own round. Tier 1 (local self-classification, no wire) is separable and could land alone | **n/a — not ruled.** The trade (door refusal → eviction preference) is judged right and argued in the row; the protection set must be designed against a named adversary, and must not become a reachability ranking (§80.4's sorting one axis over) |
 | **A1** archival submission path | **NOT RULED** | a question in the dispatch brief with no ruling in this deliverable; the census narrowed it to a falsifiable claim | n/a — unruled decision, not a status |
 | **E1** node determines its own endpoint | NOT IMPLEMENTED | no endpoint-determination mechanism in `src/p2p/` or `shekyl-levin` | **NO — deferred to alpha.9.** Changes what a node *claims* using existing fields, not wire shape; largest of the nine, with no mechanism at all. Until it lands the advertised port stays operator-configured — a known, documented, testnet-acceptable state. *(Sweep proposed Yes.)* |
 | **E2** what verifies a candidate endpoint | NOT IMPLEMENTED | no dial-back, no hairpin, no verification site | **NO — deferred to alpha.9** with E1: *"rushing a dial-back mechanism into a release is how you get the ping-back-as-DoS-amplifier problem."* *(Sweep proposed Yes.)* |
 | **E3** self-dial avoidance | **RULED ELSEWHERE** | not open in this round; substance ruled in the deliverable at `:639` | n/a |
 | **E4** cross-port duplicate avoidance | **RULED ELSEWHERE** | as E3 | n/a |
-| **E5** is §4 discharged by PWD-I1? | **IMPLEMENTED** | discharged: `peerlist_entry_base` carries `adr` + `last_seen` and no `id` (`p2p_protocol_defs.h:58-59`) | done |
-| **E6** `--p2p-external-port` | **IMPLEMENTED** | present in `src/p2p/net_node.cpp` / `net_node.h` | done |
-| **E7** overlay endpoint, two postures | **IMPLEMENTED** (as of 2026-09-09) | the three blocking questions were ruled 2026-09-08 as PWD-E9's ambiguous classes; both postures now live: ephemeral default in `rust/shekyl-tor-control-daemon` (`DaemonTorControl`: managed pinned tor, in-memory key, `ADD_ONION` `DiscardPK`, per-boot `ServiceID`) wired via `shekyl_daemon_tor_start` into `node_server::add_ephemeral_tor_zone` (`src/p2p/net_node.inl`); operator-provisioned `--anonymous-inbound` unchanged and yields-to when configured; opt-out `--no-ephemeral-tor` | done — no wire change (the posture publishes an address; the handshake is untouched) |
+| **E5** is §4 discharged by PWD-I1? | **IMPLEMENTED** | discharged: `PeerlistEntry` carries `adr` and no `id` (`rust/shekyl-levin/src/payload/types.rs`; `last_seen` left the wire too, 2026-10-13, PR-3) | done |
+| **E6** `--p2p-external-port` | **IMPLEMENTED** | the capability is `clearnet-advertise` (`INPUT_GRAMMAR.md` §5, DC-Q10a absorbed the external port), read by `shekyl-p2p` into the dialer's own-address entry (`Dialer::set_own_addresses`). *Records-was:* present in `src/p2p/net_node.cpp` / `net_node.h` (deleted 2026-11-05) | done |
+| **E7** overlay endpoint, two postures | **IMPLEMENTED** (as of 2026-09-09) | **UPDATE 2026-10-17:** the managed Tor is started and stopped by `shekyl-daemon`'s `tor.rs` over `DaemonTorControl` (#1088); the `shekyl_daemon_tor_*` exports and `node_server::add_ephemeral_tor_zone` are deleted (`TOR_SUPERVISOR.md` §9). *Records-was (2026-09-09):* the three blocking questions were ruled 2026-09-08 as PWD-E9's ambiguous classes; both postures lived: ephemeral default in `rust/shekyl-tor-control-daemon` (`DaemonTorControl`: managed pinned tor, in-memory key, `ADD_ONION` `DiscardPK`, per-boot `ServiceID`) wired via `shekyl_daemon_tor_start` into `node_server::add_ephemeral_tor_zone` (`src/p2p/net_node.inl`); operator-provisioned `--anonymous-inbound` unchanged and yields-to when configured; opt-out `--no-ephemeral-tor` | done — no wire change (the posture publishes an address; the handshake is untouched) |
 | **E8** address volatility measurement | **DEFERRED** | external blocker chain, first link now discharged: E7 shipped 2026-09-09, so the measurement finally *has a subject* — the remaining links (fleet runs it, stressed, `T` measured admissibly) stay owed from the Q12-D6a rig | No — blocked |
 | **E9** E7's isolation boundary | **IMPLEMENTED** (as of 2026-09-09) | ruled by Rick 2026-09-08; now structural in the build it constrains: `shekyl-tor-control-daemon` and `shekyl-tor-control-wallet` share only `shekyl-tor-control-client` and never name each other (manifest-checkable); the daemon tor's `DataDirectory` is a unique wiped child of `<daemon-config>/` (`ephemeral-tor-<hex>`), never a wallet path and never reused across boots; the managed launch takes instance identity as parameters, so shared code cannot produce a shared instance; no vanguard state on the daemon side by construction | done — node-local isolation, nothing on the wire |
 
@@ -185,10 +185,11 @@ decision** (see the updates above) — **39** as of those mints:
 | | |
 |---|---|
 | IMPLEMENTED | 14 *(B5 this PR; B3/B3a/B4 #675; B6 #677; B7 #674; E7 and E9 2026-09-09; B8/B10/I1/I2/E5/E6 were already implemented)* |
-| PARTIAL | 2 *(B9 the outbound cap; I7 the inbound one — both are a shipped mechanism whose NUMBER is unruled)* |
-| NOT IMPLEMENTED | 11 |
+| PARTIAL | 1 *(B9 the outbound cap, a shipped mechanism whose NUMBER is unruled)* |
+| CLOSED, no number owed | 1 *(I7, 2026-10-14: the operator inbound cap is deleted)* |
+| NOT IMPLEMENTED | 12 *(the sweep's 11, plus B11 on 2026-10-11. Not a fresh recount of the rows)* |
 | NO BUILD REQUIRED | 2 |
-| DEFERRED | 3 |
+| DEFERRED | 2 *(the sweep's 3, minus B11. I4 and E8 remain. Not a fresh recount of the rows)* |
 | BLOCKED on another row | 1 |
 | RULED ELSEWHERE | 2 |
 | SUPERSEDED | 1 |
@@ -196,13 +197,10 @@ decision** (see the updates above) — **39** as of those mints:
 | never ruled / not ruled | 1 (A1) |
 | OPEN — routed to its own round | 1 *(I8 — minted with no implementation by design; rule 20 makes the eviction subsystem a planning activity)* |
 
-**13 of 39 are ruled and unbuilt** (11 NOT IMPLEMENTED + 2 PARTIAL). **I8 is
+**13 of 39 are ruled and unbuilt** on the sweep's formula (12 NOT IMPLEMENTED + 1 PARTIAL), which now includes B11 and is not a fresh recount. **I8 is
 not among them** — it is not yet ruled, so it is neither built nor unbuilt in
 this figure's sense; it changes the denominator only. Six of those thirteen are
 the transport cluster, which Rick has ruled out of alpha.8.
-*(The label fits twelve of them. **I7 is the inverse case** — mechanism built,
-number unruled — and is counted here only because this figure's stated formula
-is "NOT IMPLEMENTED + PARTIAL". Read it as "not finished", not as "unbuilt".)*
 *(This read 18 at the #665 ruling. E7 and E9 landed 2026-09-09; B7 landed in
 #674; B6 landed in #677; B10 was already implemented and is scored that way
 below; B3/B3a/B4 land here. The figure is re-tallied from the rows, not
@@ -816,7 +814,7 @@ the mechanism, then check the state each consumer writes.
 > **Ruled: the back-ping is deleted. `COMMAND_PING` (1003) is deleted with it.**
 
 **The command falls because the back-ping was its only user** — `try_ping` is
-the sole invoker outside `tests/unit_tests/levin.cpp:2690`, and
+the sole invoker outside line 2690 of `tests/unit_tests/levin.cpp` at `e8838b0095`, and
 `connection_context.cpp:46` merely carries its size limit. **Four p2p commands
 become three** (PWC-B1).
 
@@ -953,13 +951,13 @@ review.
   retired for cause**: no identifier is strictly stronger than an identifier
   pinned to a constant. **`DAEMON_RELAY_PRIVACY.md` §91.4's unlinkability
   composition names the sentinel as one of three composed decisions**, and
-  `rust/shekyl-relay/src/zone/mod.rs:190-199` builds a load-bearing argument on
+  `rust/shekyl-relay/src/graph/mod.rs:190-199` builds a load-bearing argument on
   it. **Both must be re-grounded on "no identifier on the wire" rather than left
   citing a retired mechanism** — the composition gets stronger, but the text
   that states it becomes false.
 - **There is a *third* disclosure surface, and it is the one the enumeration
   nearly missed.** `shekyl_rpc_connection_facts.peer_id`
-  (`src/rpc/rpc_facts_ffi.h:315`, populated at `rpc_facts_ffi.cpp:1050-1056`)
+  (line 315 of `src/rpc/rpc_facts_ffi.h` at `e8838b0095`, populated at `rpc_facts_ffi.cpp` lines 1050 to 1056)
   exposes the **peer's announced id** through `get_connections`. Gossip,
   handshake and RPC are three surfaces, and Rick's finding is precisely that an
   internal need licensed external exposure — so **the retained internal
@@ -1008,7 +1006,14 @@ called one, and the conclusion drawn — that peers should announce a full `IP:p
 endpoint — would have been a regression. Recorded here because the wrong version
 travelled through comments, a queue row and a PR body before it was caught.
 
-**On clearnet the split is correct and must stay.** The peerlist entry's address comes
+**UPDATE 2026-10-09 (Rick, the handshake-address ruling,
+`P2P_3_SLICE_3_DIALER_BRIEF.md`):** after PR-3's cutover `COMMAND_HANDSHAKE`
+carries no address field on any connector; a node's own dialable address is
+one uniform member of that connector's disclosure population, and the
+self-reported port goes with the field. The correction below is records-was
+of the split as it stood on `dev`.
+
+**On clearnet the split is correct and must stay (records-was).** The peerlist entry's address comes
 from the connection; the port is the only self-reported field **because it is the only
 one observation cannot supply**. An outbound dial's source port is an ephemeral NAT
 mapping bound to that one 5-tuple: the peer observes it, but an unsolicited inbound
@@ -1070,12 +1075,12 @@ port is now derived — announced only where a peer could reach us on it, meanin
 supports the back-ping that verifies the claim *and* we accept inbound connections at
 all. **No dedicated advertisement flag remains**, so an admission ruling has no toggle
 to interact with; it inherits a derived value rather than a configured one. Operator
-influence is not gone and should not be described as gone -- `--in-peers` feeds
-`max_in_connection_count`, so an operator still controls the outcome, but by changing the
-node's reachability rather than by asserting an answer that contradicts it.
+influence is not gone and should not be described as gone -- `clearnet-listen` decides
+whether the node accepts inbound at all, so an operator still controls the outcome, but by
+changing the node's reachability rather than by asserting an answer that contradicts it.
 
 Two consequences P2P-3 should carry rather than re-derive. An operator who wants not to
-be advertised refuses inbound (`--in-peers 0`) and the derivation follows; one who wants
+be advertised refuses inbound (`clearnet-listen none`) and the derivation follows; one who wants
 no p2p participation does not run a daemon — the posture the flag nominally served has
 no separate mechanism and needs none. `m_external_port` survives as the single
 operator-supplied value in the announcement, kept because a manual static NAT forward is
@@ -1083,6 +1088,10 @@ not observable by the node and the claim is verified downstream by the peer's ba
 before anything is gossiped.
 
 ### PWD-I2 — peerlist *acceptance* is restricted; disclosure is retained unchanged, and the Shi et al. amplifiers are closed
+
+**The direction clause is RETIRED (Rick, 2026-10-13, PR-3 brief revision 2 §2.5).** Every peerlist exchange is an exchange: a received list is admitted on any session, inbound or outbound, under the limits that bind every session — D3 (at most `DISCLOSE_COUNT`, 12, per message), D-S1 (at most 24 distinct addresses per session in 24 hours), address validity and R4, the foreign-connector rule, random gray eviction, and white only through this node's own drawn dials. *Why:* the direction rule made discovery circular — a node's own address travels only in its own sample, and under the rule that sample was accepted only by peers that had already dialled the node, so a node named to no one could become known only through seeds or `--add-peer`; and the rule cannot be narrowed to "accept only the sender's own entry", because picking that entry out of the sample is what the uniform sample prevents. *What it was against:* Shi et al. §III-A's 250 entries per message, FIFO eviction and no per-connection cap — none survives; what remains, an attacker holding many inbound sessions, is bounded at 24 addresses per session per day and by the inbound ceiling. *Records-was:* the "accept only on connections this node initiated" row below, adopted 2026-09-04 and implemented as `Refusal::InboundSession` in `shekyl-peerlist` (PR-2); deleted in PR-3. **Reopen:** if `DAEMON_RELAY_PRIVACY.md` §99 PM-2a shows gray or outbound occupation beyond the attacker's share of honest addresses, the direction rule returns in some form. The per-connection ceiling stands, as D-S1. The rest of this section is the record of the ruling as made.
+
+**What this node discloses, after PR-3 (the Rust lists, slice 1 brief §5 and §5a).** The reply to a handshake or timed sync is the connector's cached window sample: `min(DISCLOSE_COUNT, population)` drawn uniformly once per 24 hours over white plus this node's own address, served unchanged for the window (D3, F1), and **empty while the connector's white is below `white_diversity_floor` (48)**. **The one ruled exception is `--p2p-disclose-early` (Rick, 2026-10-13, PR-3 brief revision 4 §2.6; #1056 `3603dbace`):** with the flag a connector below the floor still discloses, with a fresh draw on every request and nothing cached, until 24 hours from startup (`P2P_DISCLOSE_EARLY_SPAN_NANOS`) or the first time that connector's white reaches the floor, whichever comes first, and once ended it stays ended for the run. The local operator triggers it, for the network's discovery while it boots; no remote party can set, extend or end it. Its costs are accepted and recorded in the slice 1 brief §5a: a flagged node is recognisable, and a peer that asks repeatedly can enumerate that connector's white, under 48 addresses, while the flag holds. Without the flag, discovery on a network smaller than the floor cannot start: that is what the first §4 run of PR-3 found.
 
 **RULED.** **Disclosure is not reduced — it is retained exactly as it is**, and
 **three changes are made to what this node *accepts*.**
@@ -1330,12 +1339,19 @@ the gray path, and that is the evidence this reroute costs nothing.** *(The
 writer and must add the per-host bound with it. What follows describes only the
 existing promotion path, and is not a claim that the gray path needs no
 change.)*
-`gray_peerlist_housekeeping` (`net_node.inl:3108-3138`, `once_a_time_seconds<60>`
-at `net_node.h:621`) draws a random gray peer, **dials it**, and promotes to
-white via `set_peer_just_seen` only if that outbound handshake succeeds —
-evicting it from gray if it fails. So an inbound peer keeps its whole route to
-white-list membership; **only the free pass is removed**, and it is replaced by
-the verification every other candidate already passes.
+`gray_peerlist_housekeeping` (`net_node.inl:3336`, interval
+`net_node.h:756`, at `f317d979c4`) draws a random gray peer, dials it
+with `just_take_peerlist`, closes, and on success writes white at
+`:3363`. On failure it evicts from gray. *Records-was: this sentence
+cited `net_node.inl:3108-3138` and `net_node.h:621`.* That probe is
+what the C++ does until the dialer deletes the function. The settled
+door is slice 1: a uniform gray draw, then `SessionAccepted` on a
+session this node keeps, or `Confirmed` when outbound is already at
+target and the session is closed. The draw is an arm of the fill. It
+is not a harvest, and it is not this 60 s clock. So an inbound peer
+keeps its whole route to white-list membership; **only the free pass
+is removed**, and it is replaced by the verification every other
+candidate already passes.
 
 **Under the final ruling the peer is not verified at all when it enters gray** —
 PWD-B10 deletes the back-ping, so its advertised port stands unchecked until
@@ -1362,8 +1378,11 @@ random draw per zone per 60 s — not open-ended." **The cadence bounds how ofte
 large.** `get_random_gray_peer` selects uniformly at random from the gray list,
 so for a list of `G` entries the wait for any particular entry is geometric with
 `p = 1/G`: **expected `G` draws, i.e. `G` minutes — about 83 hours at the
-`P2P_LOCAL_GRAY_PEERLIST_LIMIT` of 5,000 — with no upper bound at all.** And
-`gray_peerlist_housekeeping` can skip a cycle entirely: it returns early when
+`P2P_LOCAL_GRAY_PEERLIST_LIMIT` of 5,000 — with no upper bound at all.**
+*Records-was for the settled loop: that wait is the C++ probe, one
+draw per 60 s.* The dialer deletes the interval. Residence time is
+re-derived against the fill before it is quoted as the settled figure.
+The C++ probe can also skip a cycle entirely: it returns early when
 `m_offline` or when `m_exclusive_peers` is non-empty, and `continue`s per zone
 when the payload handler needs new sync connections or the zone has no
 connector. **Producer-side latency is therefore unbounded, and is conceded as
@@ -1415,8 +1434,8 @@ of 1000 still lets one connection cycle the entire white list.
 producer's.** `handle_remote_peerlist` enforces the per-message limit with
 `P2P_MAX_PEERS_IN_HANDSHAKE` (`net_node.inl:2123`), while
 `P2P_DEFAULT_PEERS_IN_HANDSHAKE` is what *this node discloses*
-(`get_peerlist_head`'s depth, `send_peerlist_sz`). **They are both 250 today and
-are independent constants** (`cryptonote_config.h:186-187`), so a ceiling
+(`get_peerlist_head`'s depth, `send_peerlist_sz`). **They were both 250 and
+independent constants** (`cryptonote_config.h:186-187` at this round's pin; both deleted 2026-10-13 with the C++ peerlist — the one number on both sides is `DISCLOSE_COUNT`, 12, in `shekyl-peer-bounds`), so a ceiling
 inheriting the producer default would silently stop matching the acceptance cap
 the moment either moved. **If both survive the rewrite, a gate must assert they
 are equal** — otherwise the inheritance this ceiling relies on is a coincidence,
@@ -1619,21 +1638,29 @@ eclipse resistance — do not let churn rotate this node onto an adversary's
 peers. Under trust-is-earned that risk is not at the *drop* site at all: it is
 at the **selection** site, in what refills the freed slot.
 
-**And the refill order for this case is gray-first, not white-first.**
-`connections_maker` branches on the **total** outgoing count, not the white
-count: below the `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target it
-tries white then gray, but **at or above that target it tries gray then white**.
-A single churn drop from a full outbound set leaves the count above the target,
-so the freed slot normally draws from **gray** — the list fed by gossip and by
-`--add-peer`, and the one an adversary can populate cheaply. An earlier draft of
-this paragraph said "white first, then gray", which is the branch that does
-*not* apply to the case the paragraph is about, and it understated the exposure
-it was routing.
+**And the refill order for this case, in the C++ that is still running,
+is gray-first above the 70% share.** `connections_maker` branches on the
+**total** outgoing count, not the white count: below the
+`P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target it tries white
+then gray, but **at or above that target it tries gray then white**. A
+single churn drop from a full outbound set leaves the count above the
+target, so the freed slot normally draws from **gray** — the list fed by
+gossip and by `--add-peer`, and the one an adversary can populate cheaply.
+An earlier draft of this paragraph said "white first, then gray", which is
+the branch that does not apply to the case the paragraph is about, and it
+understated the exposure it was routing.
+
+That 70% schedule is what the binary does until P2P-3 slice 3 deletes
+`connections_maker`. The settled loop is the dialer brief: exclusive, then
+clearnet priority, then harvest, then `draw_white` up to the connector's
+outbound target, then `draw_gray` only while white is under the refill
+line. *Records-was: the gray-first order above 70% was the input PWD-I4
+and PWD-B9 would derive against.*
 
 Whether an adversary can bias that draw is the `g` bound, owned by
-**PWD-I4 (Q-10)** and **PWD-B9**. It is routed, not unruled — and the
-gray-first order is an input those rounds need, since it is the adversary-
-populated list that fills a churned slot.
+**PWD-I4 (Q-10)** and **PWD-B9**. It is routed, not unruled. PWD-I4
+derives against the dialer loop. The adversary-populated list is still
+gray.
 
 **Encryption of the store is a separate, privacy-shaped mechanism.** Once the
 loader believes nothing on disk, the file's integrity stops mattering; what
@@ -2089,10 +2116,19 @@ original P2P-2 decision set** — the mechanism is inherited Monero-lineage code
 with an inherited default, and it had no row anywhere. Cluster I owns it
 because per-host admission policy is this cluster's subject.
 
-**Status: PARTIAL.** The mechanism is present and, as of this row, Rust-owned.
-The **number** is not ruled — see *Owed to the maintainer* below. This is the
-same split PWD-B9 carries for the outbound cap, and for the same reason: a
-mechanism can ship while its value is still a question.
+**Status: CLOSED 2026-10-14 (Rick).** The per-host mechanism is deleted, and
+no inbound number is owed: the operator inbound cap is deleted
+([`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) IG-Q40,
+[`DAEMON_CONFIG_CUTOVER.md`](DAEMON_CONFIG_CUTOVER.md) §1.1), so the
+descriptor safety bound (`InboundCeiling`) is the only inbound bound. The
+floor-device measurement of 2026-09-22 found 119 idle inbound connections
+costing about 360 KiB in total on the Pi 4, with the daemon's memory peak
+at startup and independent of connection count. Per-session cost under an
+adversary, measured on the Rust path as Ruling B
+([`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §97) requires, is
+PWD-B12's and PWD-B1's. The unbounded cases (Windows, an unlimited or
+unreadable limit, an unreadable count) are PWD-B1's. Which peers keep a
+slot is PWD-I8's.
 
 #### What this row is, in one paragraph
 
@@ -2153,13 +2189,13 @@ PR's own edits shift `net_node.h` and `net_node.inl` below these points.
 
 | Anchor | What is there |
 | --- | --- |
-| `src/p2p/net_node.cpp:191` | `arg_max_connections_per_ip`, default `1` |
-| `src/p2p/net_node.h:449` | `max_connections(1)` in the constructor — the **second** copy of the number |
-| `src/p2p/net_node.inl:678` | assignment from the argument |
-| `src/p2p/net_node.inl:3236` | `has_too_many_connections` |
-| `src/p2p/net_node.inl:3238` | early `return false` for non-public zones |
-| `src/p2p/net_node.inl:3245` | counts `cntxt.m_is_income && is_same_host` |
-| `src/p2p/net_node.inl:241` | called from `is_host_limit` |
+| `src/p2p/net_node.cpp` line 191 (at the pin) | `arg_max_connections_per_ip`, default `1` |
+| `src/p2p/net_node.h` line 449 (at the pin) | `max_connections(1)` in the constructor — the **second** copy of the number |
+| `src/p2p/net_node.inl` line 678 (at `e8838b0095`; deleted since) | assignment from the argument |
+| `net_node.inl:3236` (at this round's pin; deleted since) | `has_too_many_connections` |
+| `net_node.inl:3238` (as above) | early `return false` for non-public zones |
+| `net_node.inl:3245` (as above) | counts `cntxt.m_is_income && is_same_host` |
+| `src/p2p/net_node.inl` line 241 (at `e8838b0095`; deleted since) | called from `is_host_limit` |
 | `contrib/epee/include/net/abstract_tcp_server2.inl:950` | the refusal point, `is_income`-gated |
 | `contrib/epee/include/net/net_utils_base.h:83-84` | ipv4 `is_same_host` is `ip() == other.ip()` only |
 
@@ -2187,7 +2223,7 @@ A future reader will meet `:3238` and read it as a gap. It is not.
 `add_ephemeral_tor_zone` calls `set_default_remote(net::tor_address::unknown())`
 (`net_node.inl:880`), so **every** inbound onion peer presents as the same
 address, and `tor_address::is_same_host` is a `strcmp` of those host strings
-(`src/net/tor_address.cpp:181-184`). An applied cap of 1 would therefore bound
+(lines 181 to 184 of `src/net/tor_address.cpp` at `dc46e903f0`). An applied cap of 1 would therefore bound
 the **entire tor inbound population** at one connection, not bound one host.
 The exemption is the only correct behaviour given what an anonymity zone's
 addresses mean.
@@ -2354,36 +2390,41 @@ revert to describing a degraded path rather than a blocker.
 #### Chain-identity divergence is RULED OUT, with the discriminator named
 
 **Not "untested" — ruled out by two discriminators already present in the
-captured data** (Rick, 2026-09-21; verified at `dev` `059aca264`). Recorded
-because the obvious check ran the wrong way round: the genesis comparison was
-made against the node that *worked*, and a chain-identity mismatch would hide
-in the one that failed.
+captured data** (Rick, 2026-09-21; verified at `dev` `059aca264`; the handler
+pins re-read 2026-10-09, after `top_version` and the pruning seed left
+`CORE_SYNC_DATA`). Recorded because the obvious check ran the wrong way
+round: the genesis comparison was made against the node that *worked*, and a
+chain-identity mismatch would hide in the one that failed.
 
 **Discriminator 1 — `white_list: 0 / gray_list: 0` rules out a genesis fork.**
 A mismatched genesis lets the handshake **complete**; the divergence surfaces
-later, at block validation. The chain, verified:
+later, at block validation. The chain, re-read 2026-10-09:
 
 - peerlist entries arrive **only** through a `COMMAND_HANDSHAKE` response
-  (`net_node.inl:1260`) or a `COMMAND_TIMED_SYNC` response (`:1332`) — both
-  inside the *response* handler, so both require a completed exchange;
-- `process_payload_sync_data` has exactly **two** `return false` paths
-  (`cryptonote_protocol_handler.inl:417` hard-fork-version mismatch, `:428`
-  weird pruning seed) and **neither is genesis-related**. Two nodes on the same
-  binary with different genesis share a hard-fork schedule, so both pass;
-- therefore a genesis-forked peer's handshake completes, `:1260` runs, and its
+  (`src/p2p/net_node.inl` line 1377 (at the pin), `handle_remote_peerlist`) or a
+  `COMMAND_TIMED_SYNC` response (`src/p2p/net_node.inl` line 1461 (at the pin)) — both inside
+  the *response* handler, so both require a completed exchange;
+- `process_payload_sync_data`
+  (`src/cryptonote_protocol/cryptonote_protocol_handler.inl` line 391 at this round's pin; the sync half went at CS-5) returns
+  true on every path. It records the peer's height and top id. It does not
+  compare genesis. `CORE_SYNC_DATA` carries no block version and no pruning
+  seed, so the handshake's "returned false, dropping connection" arms
+  (`net_node.inl:1387` and `:2796` at this round's pin; the outbound arm went with the C++ dial path 2026-10-13, the inbound arm is `src/p2p/net_node.inl` line 1598 (at the pin) today) do not fire;
+- therefore a genesis-forked peer's handshake completes, `:1377` runs, and its
   lists fill.
 
 **The refused node's lists are empty, so no handshake response was ever
 processed.** That is the opposite of the genesis-fork signature.
 
 **Discriminator 2 — the absence of `wrong network` is a POSITIVE result.** A
-`network_id` mismatch is checked at `net_node.inl:1254` and logged at `:1256`
+`network_id` mismatch is checked at `src/p2p/net_node.inl` line 1370 (at the pin) and logged at
+`src/p2p/net_node.inl` line 1372 (at the pin)
 — `"COMMAND_HANDSHAKE Failed, wrong network! … closing connection."` — in the
-**dialing** node's own response handler, at `LOG_WARNING`. **Unlike the per-IP
+**dialing** node's own response handler, at `LOG_WARNING_CC`. **Unlike the per-IP
 refusal, which is visible only on the refusing node**, this one is visible on
 the side that is being refused. Its absence from the refused node's log is
 therefore evidence, not a gap. (The accepting side logs its own variant at
-`:2843`/`:2846`, `WRONG NETWORK AGENT CONNECTED!`, at **`LOG_INFO_CC`** — so the
+`src/p2p/net_node.inl` line 1557 (at the pin) (at this round's pin `:2754` and `:2757`), `WRONG NETWORK AGENT CONNECTED!`, at **`LOG_INFO_CC`** — so the
 two sides do **not** log at the same level, and "loud on both sides" would
 overstate it. The half this discriminator needs is the **refused** side, and
 that is the louder one: `LOG_WARNING_CC`, where the per-IP refusal reaches the
@@ -2817,15 +2858,10 @@ problem solved.
 
 #### Owed to the maintainer — questions, not decisions
 
-1. ~~**The number.**~~ **DISSOLVED 2026-09-21 by the diagnosis above, and this
-   is recorded rather than deleted because the dissolution is the finding.**
-   The question was "what is `k`, and is it derived from an inbound ceiling?".
-   Both halves stop being parameters owed once the nouns are separated: `k`
-   was pricing a quantity that does not answer the admission question, and
-   **the in-peers figure stops being a number to guess and becomes a capacity
-   ceiling whose value follows from the eviction design** — a question with a
-   derivable answer rather than a provisioning guess. *Nothing is owed on this
-   line until PWD-I8's round runs.* What replaces it is question 4.
+1. ~~**The number.**~~ **CLOSED 2026-10-14 (Rick, IG-Q40).** There is no
+   per-host `k` and no operator inbound count: the descriptor safety bound
+   is the only inbound bound, and which peers hold a slot is the eviction
+   design's (PWD-I8, question 4).
 2. **Ratification of the posture: is Tor load-bearing for NAT'd inbound
    reachability?** **As of the correction above, it cannot be** — not because
    of a default, but because `cryptonote_protocol_handler.inl:452` refuses
@@ -2834,13 +2870,15 @@ problem solved.
    changed?* **Tor-by-default cannot carry initial sync while that line
    stands**, so the intended end state is a change to that line, not only to a
    default — which is a larger commitment than "turn Tor on" and should be
-   ratified as one. The other dependencies stand and are named: the four
-   testnet seed onions exist (`Q12_D6A_PEER_DISCOVERY_RUN.md` §9.3) but are
-   deliberately **not** in `get_seed_nodes` per Q12-R2, so Tor is a bootstrap
-   path for operators who hand-configure it and **not yet a default**; Q12-R1
-   is the row that would change that, and §9.3 names a precondition — the
-   hidden-service secret-key backup is a single copy on one machine beside the
-   genesis wallet. **`:452` is out of scope for this row** (different
+   ratified as one. The other dependencies stand and are named: the six
+   testnet seed onions are compiled in `shekyl-dialer`'s `seeds` (Q12-R1,
+   landed 2026-10-21; `Q12_D6A_PEER_DISCOVERY_RUN.md` §9.3) and are the
+   canonical Tor bootstrap. A testnet node does not hand-configure them.
+   Mainnet has no onion seeds yet. *Records-was:* four testnet onions existed
+   and were deliberately not in `get_seed_nodes` per Q12-R2, so Tor bootstrap
+   was hand-configured, and the hidden-service backup was a single copy on
+   one machine. A second copy exists; its location is in `shekyl-dev`.
+   **`:452` is out of scope for this row** (different
    subsystem, different owner) and is flagged, not fixed, here.
 3. **Whether visible refusal is wanted despite the oracle argument.** Rejected
    on analysis here: a reason code before the drop is a co-residency oracle over
@@ -3006,11 +3044,11 @@ Ten bucket-4 `PWC-D` rows. **Ruled / absorbed / deferred must sum to 10.**
 | PWC-D5 (anchor keys; `first_seen` ordering) | **Ruled** | PWD-I3 |
 | PWC-D6 (address-keyed continuity) | **Ruled** | PWD-I3 |
 | PWC-D8 (dual-stack field parity structurally tested only) | **Deferred — named blocker: LV-3.** It is a *test-coverage* gap on the Rust/C++ parity surface, not an identity commitment; it lands when the read side migrates | LV-3 |
-| PWC-D9 (`sanitize_peerlist` IPv4-only port-0) | **Deferred — named blocker: tor port-0 semantics disputed** (`tor_address::unknown()` is port 0), named as such by #587 rather than invented here. **Owner: PWD-B11**, a row minted for it because "cluster B" is not an owner; target pre-genesis, queued in FOLLOWUPS | PWD-B11 |
+| PWC-D9 (`sanitize_peerlist` IPv4-only port-0) | **Ruled 2026-10-11 (Rick).** A network-learned address with port 0 is refused at `admit_gray` on every address type. `tor_address::unknown()` never enters from the network. The check is in flight until slice 1 increment 3 (PR-3); `sanitize_peerlist` stays until slice 4. *Records-was:* deferred, named blocker the tor port-0 semantics were disputed (named by #587). **Owner: PWD-B11**, minted because "cluster B" is not an owner | PWD-B11, slice 1 brief §2 |
 | PWC-D10 (cross-zone peerlist refusal) | **Ruled** — kept unchanged | PWD-I2 |
 | PWC-D11 (back-ping gate to white list) | **Ruled — and the mechanism is now deleted, which supersedes the split this row first recorded.** PWD-I2 ruled the gate's *destination* (gray, not white); PWD-I1's consumer inventory then showed the gate's only job was the whitelist promotion PWD-I2 had just forbidden, so **the back-ping and `COMMAND_PING` are deleted** rather than retained-and-redirected. **PWD-B10** carries the deletion. *An earlier version of this cell left retention "still cluster B's" beside the deletion, giving two verdicts at once; deletion is the single outcome.* | PWD-I1, PWD-I2 → PWD-B10 |
 
-**Sum check: 6 ruled + 2 absorbed + 2 deferred = 10.** ✅
+**Sum check: 7 ruled + 2 absorbed + 1 deferred = 10.** ✅ PWC-D9 moved deferred → ruled on 2026-10-11. PWC-D8 stays the one deferred row (LV-3).
 
 *Row-movement history, kept as history rather than as a second disposition:*
 PWC-D11 began **deferred**, moved to **ruled** when PWD-I2's white-list writer
@@ -3071,8 +3109,9 @@ these states, the word *handshake* is not used unqualified.
 > about the session rides the Levin handshake, on every zone.**
 
 The Levin handshake's content, read at source (`src/p2p/p2p_protocol_defs.h`):
-the request carries `basic_node_data` (`network_id`, the advertised `address`,
-`support_flags`), the chain-sync payload, and the self-detection nonce; the
+the request carries `basic_node_data` (`network_id` alone: the advertised
+`address` and `support_flags` are deleted), the chain-sync payload, and the
+self-detection nonce; the
 response carries `basic_node_data`, the chain-sync payload, and
 `local_peerlist_new`.
 
@@ -3081,12 +3120,13 @@ response carries `basic_node_data`, the chain-sync payload, and
 - **Channel established** — transport state. On clearnet the responder reaches
   it at `Split()` and the initiator on processing message 2; on an overlay it is
   the overlay's stream opening. Only the transport reads it.
-- **Session established** — the Levin handshake has completed. It is
-  `session_established()` on the connection context
-  (`src/cryptonote_basic/connection_context.h:94`; the previous name was
-  `handshake_complete()`). Every p2p and cryptonote consumer reads this one:
-  sync-search, block relay, timed sync, and the relay lane's
-  `on_session_established`.
+- **Session established** — the Levin handshake has completed. It is the
+  `Established` handle (`rust/shekyl-p2p-session/src/handle.rs:256`), the
+  only form in which an owner is handed a session (it was
+  `session_established()` on the connection context, line 92 of
+  `src/p2p/net_node.h` at `e8838b0095`, before the host left in PR #1272;
+  the name before that was `handshake_complete()`). Every owner reads this
+  one: sync-search, block relay, timed sync, and the relay's session set.
 
 A connection between the two states has a channel and no session, and may carry
 exactly one thing: the Levin handshake (PWD-T6).
@@ -3532,24 +3572,41 @@ eight bytes and neither is wrong.
 > - **Output:** bytes `[0..8]` of the 32-byte digest, in digest order, no
 >   re-ordering and no endian conversion.
 
-**The three prefixes, computed rather than promised.** The `NETWORK_ID`
-constants are frozen (`cryptonote_config.h:364`, `:496`, `:507`) and
-`cshake256_32` exists in-tree, so this is a measurement:
+**The network id is the genesis.** The handshake refuses a peer whose id is
+not this node's. What makes another network a different network is its
+genesis block, so the id is that hash:
 
-| Network | `network_id` | Prefix |
-| --- | --- | --- |
-| mainnet | `556CA9708FF91F7A4069DAF3FC55BBBD` | `AFBCD4D1FAB98B6D` |
-| testnet | `78CE055BBBDA7956B9C8A1A2EC1F7672` | `F0B352E8928F8D56` |
-| stagenet | `2D219754A1BD79BA0540FDFB8DC8A4AE` | `5C2942C0F9F98A21` |
+> **`network_id = cSHAKE256(S = "shekyl/p2p-network-id-v1", X = genesis_block_hash)[0..16]`**
+>
+> - **Function:** cSHAKE256 with customization, NIST SP 800-185 semantics.
+>   Mechanism 1 in [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv),
+>   the row beside `shekyl/p2p-wire-prefix-v1`. Customization `S` is the exact
+>   ASCII bytes `shekyl/p2p-network-id-v1`, no NUL, no length prefix.
+> - **Input `X`:** the 32-byte genesis block hash, `genesis_hash_for` in
+>   `shekyl-rpc-types` (the block-0 id, not `GENESIS_TX`). Fakechain's pin is
+>   mainnet's genesis, so fakechain's id is mainnet's until fakechain has a
+>   genesis of its own.
+> - **Output:** bytes `[0..16]` of the 32-byte digest, in digest order.
+> - **`shekyl_network_id(nettype)`** computes this from the pin the daemon
+>   already holds, before any socket opens. C++ states no byte.
+
+**The three prefixes, computed rather than promised.** `prefix_for` of the
+id above is not `const`. Each network's id and prefix are recorded in one
+place, the KAT `each_genesis_derives_its_recorded_id_and_prefix` in
+`rust/shekyl-ffi/src/network_id_ffi.rs`, which checks
+`network_id_from_genesis(genesis_hash_for(net))` and `prefix_for` of that id
+against them. A regenesis moves the hash, both values move, and the KAT fails
+until they are re-recorded with the new genesis. This document does not
+repeat the bytes: it did once, and every regenesis left its copy behind.
 
 **Pairwise distinct — observed, not assumed.** Truncating a 32-byte digest to 8
 bytes cannot *guarantee* distinctness by construction, so the claim "different
 networks get different prefixes" is discharged by computing all three and
 comparing them, with the comparison exercised against a known-identical pair so
-it can be seen to fail. **P2P-3 carries this as a compile-time assertion over
-the network table**, which is what keeps the property true if a `NETWORK_ID`
-ever changes; **if one does pre-genesis, these three values re-derive** and
-PWD-T8's vectors re-mint with them.
+it can be seen to fail. **The KAT in `network_id_ffi.rs` is that comparison.**
+A genesis hash that moves takes the id and the prefix with it, and the KAT
+fails until both columns are re-recorded with the new genesis. PWD-T8's
+vectors re-mint with them.
 
 **The registry row landed with the call site (2026-09-24).** P2P-2 could not
 add it: the domain gate requires a registered literal to have a defining file
@@ -3601,15 +3658,16 @@ been given a responder-side check of its own.
 
 ### PWD-T6 — packet limits are derived per connection state, and the inherited 256 KiB is replaced
 
-**RULED.** One limit per connection state (*Two handshakes*), plus the
-plaintext ceiling, each derived rather than inherited:
+**RULED.** One limit per connection state (*Two handshakes*), each derived
+rather than inherited. There is no separate plaintext ceiling: the protocol has
+no compression (PWD-T7), so a payload is never larger than the bucket that
+carried it:
 
 | State | Limit | Derivation |
 | --- | --- | --- |
 | **Before channel established** — clearnet only | **exactly one first flight, plus its 8-byte prefix** — **1224 B** initiator, **1160 B** responder on the wire, from PWD-T1's **1216**/**1152** Noise-message tables plus PWD-T5's prefix | The only legal bytes are the transport handshake, and it is fixed-size. Anything larger is not a slow peer, it is not a peer |
 | **Channel established, session not yet** — every zone | **PWD-B3's cap for `COMMAND_HANDSHAKE` (1001)** | The only legal message is the Levin handshake, so the largest legitimate message in this state is its cap. On Tor and I2P this is the first limit a connection meets |
 | **Session established** | the largest legitimate message, from PWD-B3's per-command caps | Derived from what the protocol can legitimately send, not from a round number |
-| **Post-decompression** | the plaintext ceiling, above the session-established limit | `compress.rs:64-68` states why: bounding the compressor's *input* by the wire limit would reject exactly the payloads compression exists to bring under it |
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
@@ -3663,7 +3721,7 @@ that is a reason to keep the two **legible**, which the paragraph break above
 does, and not a blocker (rule 22).*
 
 **Not ruled here:** `handshake_interval`, `config_id` and `send_peerlist_sz` are
-also written-and-never-read on that struct, but they are cadence and peerlist
+also written-and-never-read on that struct (`send_peerlist_sz` deleted 2026-10-13 with the C++ peerlist), but they are cadence and peerlist
 questions owned by PWD-B1/PWD-B2 and PWD-I2. Deleting them alongside would be
 this row disposing of another row's subject.
 
@@ -3677,66 +3735,51 @@ parameter owned further down is not a bound"* is the reason to say so plainly in
 derived session-established limit** — a message the protocol must send and the limit
 forbids falsifies the derivation directly.
 
-### PWD-T7 — compression survives, and it is safe here for a stated reason
+### PWD-T7 — the protocol has no compression
 
-**RULED.** zstd stays, before encryption, with its floor and ceiling unchanged
-(`COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1`).
+**REJECTED (Rick, 2026-10-19).** Levin carries no compressed payloads. The
+`0x10` flag bit is undefined, so a bucket carrying it is refused at ingress on
+both stacks (`FLAGS_DEFINED`, `rust/shekyl-levin/src/ingress.rs`), and
+`shekyl-levin`, `shekyl-ffi` and `contrib/epee` carry no codec. The measurement
+is `docs/benchmarks/zstd_ruzstd_levin_20261020.md`.
 
-**Compress-then-encrypt is the CRIME/BREACH shape, and the reason it is safe
-here is specific rather than general.** That attack needs **a secret and
-attacker-influenced data compressed in the same context**, so the adversary can
-observe ciphertext length while varying its own input. **p2p payloads are blocks
-and transactions — public consensus data.** There is **no confidential value of
-any kind** in a compression context, so there is nothing for a length oracle to
-extract.
+The reasons, each sufficient on the blocks and transactions the protocol
+carries:
 
-> **The invariant, stated so it can be checked rather than assumed: no message
-> containing secret or otherwise confidential material — *of any lifetime* — is
-> ever compressed.**
+- **It saved nothing.** libzstd level 1 enlarged all 76 block and transaction
+  payloads measured, so none was ever sent compressed.
+- **The pure-Rust alternative costs more than it saves.** ruzstd's `Fastest`
+  encoder shrank the largest payloads by under 0.6 %, at 18–62 times
+  libzstd's CPU on payloads of 13 KB and more.
+- **Compressing before encrypting is a size side channel.** Compressed length
+  follows content, so a path observer reads what the payload is from its frame
+  size.
+- **It undoes the padding buckets.** Padding quantizes a message's size so an
+  observer cannot read volume from it; compression after padding puts the size
+  back in step with the content.
 
-**"Per-connection" was an earlier and narrower wording, and the narrowing had no
-justification behind it.** CRIME/BREACH turns on a secret being compressed
-beside attacker-influenced data; **the secret's lifetime is irrelevant to the
-attack**. A node-local static value or a reused token is as extractable as a
-session key and is worth *more* once extracted, because it does not expire with
-the connection. The invariant is scoped to **confidentiality**, not to lifetime.
+The one class compression would shrink is the handshake and timed-sync peer
+lists: a full list compresses to 41–58 % of its size, at most about 650 bytes a
+message, a timed sync every 60 s. No send path compressed those commands, so
+that saving needed code that did not exist. Their redundancy is the key names
+the portable-storage encoding repeats in every entry, and the fix for it is a
+compact P2P wire encoding, not a compressor (FOLLOWUPS).
 
-That is true today because no such message exists. **It is written as an
-invariant rather than an observation because the property is a fact about the
-*message set*, and the message set is what future rounds change** — PWD-B3 and
-cluster A both add or alter commands.
+**Reopen if** a message class shows a large measured saving that a compact
+encoding cannot give, and compression for it can be applied without exposing
+its size: after padding into fixed buckets, with no confidential material in
+the compression context.
 
-**And it is stated at the dispatch site, not only here, because an invariant
-enforced by "a reviewer must check this section" is enforced by attention.**
-`try_compress_message` (`rust/shekyl-levin/src/compress.rs`) now carries the
-invariant, its reasoning, and the retreat in its own doc comment — **that is
-where the decision is actually made**, by whoever adds the next message type,
-and they are far more likely to read the function they are calling than the
-design round that ruled it three clusters earlier.
-
-**A doc comment is still not a gate**, and this round series has produced three
-consecutive coverage claims narrower than believed, so the mechanical form is
-queued rather than assumed. Its **named blocker: there is no message
-classification to gate on** — nothing in the tree marks a command as
-secret-carrying, so a check today would be a gate whose subject does not exist
-(§1's discipline, and rule 47's). The classification lands with PWD-B3's command
-table; the gate lands with it.
-
-| Option | Adversary / channel | Verdict |
-| --- | --- | --- |
-| **Compress, then encrypt** | The length-observing path observer | **Adopted** under the invariant above. Block relay is the bandwidth case the chain actually has |
-| Encrypt only | The same | **Refused.** It pays real bandwidth on every block for a leak that requires a secret we do not put in the payload |
-| Compress, then pad to buckets | The same | **Refused as unnecessary here, and recorded as the retreat.** If the invariant above is ever broken, this is the position to move to rather than dropping compression |
-
-**Conceded.** Compressed length still correlates with *content entropy*, so a
-observer learns something coarse — a full block versus a single transaction —
-which the noise/padding path (PWC-A9) masks where it applies and does not mask
-elsewhere. This is arrival metadata, which §1.5 assigns to D++, taxed not
-eliminated.
-
-**Falsifier.** **Reopen if any message is specified that carries confidential
-material of any kind** — the invariant's own trigger, recognisable by inspection of a
-new command rather than by measurement.
+**Support flags are deleted with it (Rick, 2026-10-19).** The only flag a
+Shekyl node advertised was zstd compression (`0x02`; `0x01` was already
+retired). With compression gone the word negotiated nothing, and a field
+always sent as zero is a sentinel. `basic_node_data` carries no
+`support_flags`, the support-flags request (command 1007) is refused as
+unknown dispatch, and the C++ re-ask of a peer that reported zero is gone.
+The RPC `get_connections` and `sync_info` rows lose their `support_flags`
+field, which had no other source. Testnet upgrades all at once. **Any
+capability negotiation the protocol needs is designed at the genesis wire
+freeze**, not carried as a vestigial word.
 
 ### PWD-T8 — Shekyl mints its own KATs, and pins both transport-handshake directions
 
@@ -3811,10 +3854,9 @@ after them because it governs every vector added later:
    directions of the check: a connection opening with another network's prefix
    is **dropped at the framing layer, before any Noise processing**, and one
    opening with this network's prefix **proceeds to the transport handshake**. Its inputs
-   are the three pinned values in PWD-T5 — mainnet `AFBCD4D1FAB98B6D`, testnet
-   `F0B352E8928F8D56`, stagenet `5C2942C0F9F98A21` — so a cross-pair (dial
-   mainnet with the testnet prefix) is a real, runnable case rather than a
-   synthetic one.
+   are the three derived prefixes, as the KAT in `network_id_ffi.rs` records
+   them, so a cross-pair (dial mainnet with the testnet prefix) is a real,
+   runnable case rather than a synthetic one.
 
    > **This vector asserts a *discriminated* early rejection, and that does not
    > violate the rule below.** The rule governs values moved into a **binding**;
@@ -3864,7 +3906,7 @@ self-minted set is no longer the strongest evidence obtainable.
 | PWC-A4 (256 KiB limit until the Levin handshake completes) | **Ruled** — replaced on every zone by the Levin handshake's PWD-B3 cap; clearnet adds a one-flight limit before channel established | PWD-T6 |
 | PWC-A5 (100 MB once a session is established, inherited) | **Ruled** — replaced by a derivation terminating on PWD-B3 | PWD-T6 |
 | PWC-A9 (noise/fragment padding to `noise_size`) | **Absorbed** | PWD-T7 (the padded path is where the length leak is already masked) |
-| PWC-A10 (zstd level 1, floor 256) | **Ruled** — kept, with the no-secret invariant stated | PWD-T7 |
+| PWC-A10 (zstd level 1, floor 256) | **Rejected** — compression removed from the protocol (2026-10-19) | PWD-T7 |
 | PWC-F3 (50 MB dead constant; never-sent `network_config` KV map) | **Ruled** — `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size` and the struct's KV serializer are deleted; the struct keeps its live fields. Decidable *because* PWD-T6 names the authoritative limits; implementation is P2P-3 like every other ruling here, queued in FOLLOWUPS | PWD-T6 |
 
 **Sum check: 6 ruled + 1 absorbed + 1 deferred = 8 rows.** ✅
@@ -3899,13 +3941,10 @@ attention each row deserves (rule 19). It is therefore split into sub-rounds,
 following the consensus lane's R1a/R1b/R1c precedent, and **this one goes
 first because PWD-B3 is a hub rather than merely a blocker.**
 
-> **Four already-ruled commitments terminate on PWD-B3**, one of them in a
+> **Three already-ruled commitments terminate on PWD-B3**, one of them in a
 > merged PR: PWD-T6's session-established limit, PWC-A2's deferral (the bucket
-> header's length field cannot be sized before the caps it must express),
-> PWD-B10's deletion of `COMMAND_PING` — which is *arm 3 of B3's own table* —
-> and PWD-T7's compression gate, whose named blocker is that nothing in the
-> tree classifies a command as confidentiality-bearing. **B3's command table is
-> what resolves that classification.**
+> header's length field cannot be sized before the caps it must express), and
+> PWD-B10's deletion of `COMMAND_PING` — which is *arm 3 of B3's own table*.
 
 **PWD-B6 is in this sub-round because it decides B3's table membership, not
 because it is convenient.** The two block-propagation commands have **byte-
@@ -3924,7 +3963,7 @@ on two surfaces and today gets two different answers:
 | Surface | Unrecognised input | Inherited behaviour |
 | --- | --- | --- |
 | Levin **flag bits** | bits outside the five defined | **preserved verbatim** through the codec (PWC-A6) |
-| Levin **command ids** | any id not in the 13-arm switch | **`std::numeric_limits<size_t>::max()`** — **no *per-command* cap** (`src/cryptonote_basic/connection_context.cpp:68-71`). The global packet limit still binds: the reader takes `min(packet limit, hook(command))` (`rust/shekyl-levin/src/reader.rs:182-185`), so an unknown command is bounded by `DEFAULT_MAX_PACKET_SIZE`, not unbounded. *An earlier version of this row said "no cap at all", which overstates the hazard — the same flattering-error direction §1 warns about, pointed at a defect instead of a defence.* |
+| Levin **command ids** | any id not in the 13-arm switch | **`std::numeric_limits<size_t>::max()`** — **no *per-command* cap** (lines 49 to 50 of `src/cryptonote_basic/connection_context.cpp` at `e8838b0095`). The global packet limit still binds: the reader takes `min(packet limit, hook(command))` (`rust/shekyl-levin/src/reader.rs:182-185`), so an unknown command is bounded by `DEFAULT_MAX_PACKET_SIZE`, not unbounded. *An earlier version of this row said "no cap at all", which overstates the hazard — the same flattering-error direction §1 warns about, pointed at a defect instead of a defence.* |
 
 *Landed 2026-09-09:* a Q/S-flagged command that is not a `DefinedCommand` is
 `Error::UnknownCommand` at ingress; unknown flag bits are `Error::UnknownFlags`
@@ -3968,7 +4007,7 @@ command and exactly what this rule exists to reject.
 | --- | --- | --- |
 | **Reject unrecognised input at ingress** | The peer probing for a permissive path — an unknown command id that falls back to the **global** packet limit instead of a bound sized for what it claims to be, or an undefined flag bit accepted as uninterpreted semantics | **Adopted.** It is the only answer that is the same on both surfaces, and it makes the *defined* set the specification rather than a subset of what is tolerated |
 | Fall back to the global limit (today's command behaviour) | The same | **Refused.** `DEFAULT_MAX_PACKET_SIZE` is a *framing* bound, not a statement about what the message is — using it as the cap for an unknown command means the only thing sizing the buffer is how big a bucket may be, which is precisely the derivation PWD-T6 refused |
-| Accept uninterpreted semantics (today's flag behaviour) | The same | **Refused.** The codec round-trips unknown bits, and **PWC-A6a records that no relay carries them today** — the relay path re-frames rather than forwarding a received header — so this is a *latent* permission, not a live forwarding path. Closing it now costs nothing; leaving it means `COMPRESSED` (0x10) proves the range is one **we allocate from**, and the next Shekyl extension collides with a bit some peer was already permitted to set |
+| Accept uninterpreted semantics (today's flag behaviour) | The same | **Refused.** The codec round-trips unknown bits, and **PWC-A6a records that no relay carries them today** — the relay path re-frames rather than forwarding a received header — so this is a *latent* permission, not a live forwarding path. Closing it now costs nothing; leaving it means the next Shekyl extension collides with a bit some peer was already permitted to set |
 | Ignore-and-drop the field, keep the message | The same | **Refused, and it is the subtle one.** It looks conservative and silently changes the message: a peer that sent `flags = REQUEST\|0x20` believes it sent something this node did not act on, and neither side can tell. **Silent divergence, which rule 71 forbids on the consensus surface and PW-18 dislikes everywhere** |
 | Cap unknown commands at a per-command default | The resource exhauster | **Refused.** A default cap answers "how much of an unknown thing should I buffer", which is a question with no good answer; rejecting answers it with zero |
 
@@ -4067,7 +4106,7 @@ serialized. On receive of a `RESPONSE` bucket the async callback gets
 | --- | --- | --- |
 | **Delete the field** | A peer reading implementation state from a header status; a port that has to carry four bytes nobody consumes | **Adopted.** Pre-genesis, cheaper than carrying the field into the Rust rewrite |
 | Keep, zero, ignore | The same | **Refused.** Four bytes of always-zero is a fingerprint and a lie about a status that is not there |
-| Park a NACK in the flag word | The same | **Refused.** The flag word is framing (Q/S/B/E/COMPRESSED). PWD-B4 rejects unknown bits. A later NACK is a **command body**, not a header `i32` |
+| Park a NACK in the flag word | The same | **Refused.** The flag word is framing (Q/S/B/E). PWD-B4 rejects unknown bits. A later NACK is a **command body**, not a header `i32` |
 
 **Conceded.** There is no header-level "understood, refused, stay up"
 without hanging up or putting the refusal in a reply body. No
@@ -4085,21 +4124,21 @@ stay up" and hang-up plus a reply body cannot.**
 **RULED as a derivation with a named dynamic input, because the honest answer
 is not a table of constants.**
 
-**The inherited table, read at source** (`src/cryptonote_basic/connection_context.cpp:41-71` at ruling; the live table is `rust/shekyl-levin/src/ingress.rs`) —
+**The inherited table, read at source** (`src/cryptonote_basic/connection_context.cpp` lines 41–71 at ruling; the live table is `rust/shekyl-levin/src/ingress.rs`) —
 13 arms, and after PWD-B10 and PWD-B6 it is **11**:
 
 | Command | Inherited cap | Disposition |
 | --- | --- | --- |
-| `COMMAND_HANDSHAKE` (1001) | 65536 | Derived from `P2P_MAX_PEERS_IN_HANDSHAKE` (250) × one peerlist entry + `CORE_SYNC_DATA` |
+| `COMMAND_HANDSHAKE` (1001) | 1415 (*records-was* 65536) | Derived from `DISCLOSE_COUNT` (12) × the entry's pinned in-array encoding (98 bytes: the address alone; `last_seen` left the wire the same day, Rick's ruling) + the pinned fixed part (239 bytes: `basic_node_data`'s network id, `CORE_SYNC_DATA`, the list envelope, the request's nonce; `support_flags` left the wire 2026-10-19); `shekyl-levin/tests/handshake_bounds.rs` pins both (2026-10-13). *Records-was:* `P2P_MAX_PEERS_IN_HANDSHAKE` (250) × a 256-byte over-bound + 1536 |
 | `COMMAND_TIMED_SYNC` (1002) | 65536 | Same derivation as 1001 |
 | `COMMAND_PING` (1003) | 4096 | **Arm deleted** — PWD-B10 |
-| `COMMAND_REQUEST_SUPPORT_FLAGS` (1007) | 4096 | A four-byte reply behind a 4 KiB cap; derive to the field |
+| `COMMAND_REQUEST_SUPPORT_FLAGS` (1007) | 4096 | **Arm deleted** — support flags removed with compression (2026-10-19, PWD-T7) |
 | `NOTIFY_NEW_BLOCK` (2001) | 128 MB | **Arm deleted** — PWD-B6 |
 | `NOTIFY_NEW_TRANSACTIONS` (2002) | 128 MB | **Not derivable yet — there is no relay batch bound.** See below |
-| `NOTIFY_REQUEST_GET_OBJECTS` (2003) | 2 MB | A hash list; derives from its length bound |
-| `NOTIFY_RESPONSE_GET_OBJECTS` (2004) | 128 MB | **Batch-bounded, not single-block** — see below |
-| `NOTIFY_REQUEST_CHAIN` (2006) | 512 kB | A hash list; derives from its length bound |
-| `NOTIFY_RESPONSE_CHAIN_ENTRY` (2007) | 4 MB | A hash list; derives from its length bound |
+| `NOTIFY_REQUEST_GET_OBJECTS` (2003) | 2 MB | **Arm deleted** — retired by chain sync's cutover (CS-5); 2013 replaces it |
+| `NOTIFY_RESPONSE_GET_OBJECTS` (2004) | 128 MB | **Arm deleted** — retired by chain sync's cutover (CS-5); 2014 replaces it |
+| `NOTIFY_REQUEST_CHAIN` (2006) | 512 kB | **Arm deleted** — retired by chain sync's cutover (CS-5); 2011 replaces it |
+| `NOTIFY_RESPONSE_CHAIN_ENTRY` (2007) | 4 MB | **Arm deleted** — retired by chain sync's cutover (CS-5); 2012 replaces it |
 | `NOTIFY_NEW_COMPACT_BLOCK` (2008) | 4 MB | **The dynamic one** — see below |
 | `NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009) | 1 MB | An index list; derives from the block's tx count bound |
 | `NOTIFY_GET_TXPOOL_COMPLEMENT` (2010) | 4 MB | A hash list; derives from the pool bound |
@@ -4107,7 +4146,7 @@ is not a table of constants.**
 > **The block-carrying commands cannot take a static cap, and this is the
 > finding, not a gap in the round.** A block's maximum weight is
 > `m_current_block_cumul_weight_limit` — **dynamic, consensus-derived, and a
-> function of chain state** (`src/cryptonote_core/blockchain.cpp:1846`, `median_weight = m_current_block_cumul_weight_limit / 2` — cited with its symbol so a line drift is detectable by grep). A static number is
+> function of chain state** (`src/cryptonote_core/blockchain.cpp`, `median_weight = m_current_block_cumul_weight_limit / 2` — cited with its symbol so a line drift is detectable by grep). A static number is
 > therefore either **too small**, rejecting a legitimate block during a growth
 > phase and partitioning the node, or **too large**, in which case it is not a
 > bound. The inherited 128 MB is the second.
@@ -4120,10 +4159,10 @@ rather than a release.
 not one.** A `block_complete_entry` is **not** bounded by block weight alone: it
 also carries `attestation_witness`, an opaque blob capped **independently of
 `pruned` and of weight** at `ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` =
-`8 + ARCHIVAL_MAX_ATTESTATION_RECORDS × (ARCHIVAL_ATTESTATION_PASS_NONCE_BYTES + ARCHIVAL_ATTESTATION_PASS_ANCHOR_HEIGHT_BYTES + PQC_HYBRID_SINGLE_SIG_LEN)` = **876,808
-bytes** (v2 since `SF-D8` 2026-09-13, when the per-pass 32-byte nonce and
-8-byte anchor height joined the witness; the figures below are recomputed
-from that; was 866,568)
+`8 + ARCHIVAL_MAX_ATTESTATION_RECORDS × (ARCHIVAL_ATTESTATION_PASS_NONCE_BYTES + ARCHIVAL_ATTESTATION_PASS_ANCHOR_HEIGHT_BYTES + ARCHIVAL_ATTESTATION_PASS_DELIVERY_DIGEST_BYTES + PQC_HYBRID_SINGLE_SIG_LEN)` = **885,000
+bytes** (`8 + 256 × 3,457`; per pass the witness carries `SF-D8`'s 32-byte
+nonce, 8-byte anchor height and 32-byte delivery digest ahead of the
+signature; the figures below are computed from that)
 (`src/cryptonote_config.h`, bounded at the codec by
 `archival_attestation_witness_within_transport_cap`).
 
@@ -4136,7 +4175,7 @@ from that; was 866,568)
 
 > **Corrected 2026-09-04: `entry_max`'s only consumer is 2008.** This block
 > originally gave 2004 `n × entry_max`, and the ruling further down then showed
-> that a cardinality-derived bound **exceeds the plaintext ceiling** and
+> that a cardinality-derived bound **exceeds the session packet limit** and
 > replaced it with a byte budget. **Both forms were left standing**, so a reader
 > could take either. The byte budget governs 2004; `n × entry_max` is retired.
 >
@@ -4159,7 +4198,7 @@ inventing a consensus constant from a p2p round.
 
 > **The witness term dominates at batch size, and that is a design consequence,
 > not a footnote.** At the inherited request bound of 100 blocks, the witness
-> alone contributes 100 × 876,808 ≈ **87.7 MB** — so **PWD-T6's session-established
+> alone contributes 100 × 885,000 = **88.5 MB** — so **PWD-T6's session-established
 > limit is set primarily by the attestation witness, not by block weight.** Any
 > future change to `ARCHIVAL_MAX_ATTESTATION_RECORDS` moves the p2p packet
 > limit with it.
@@ -4167,7 +4206,7 @@ inventing a consensus constant from a p2p round.
 > **`NOTIFY_RESPONSE_GET_OBJECTS` (2004) takes a different bound from
 > `NOTIFY_NEW_COMPACT_BLOCK` (2008), because it is not a single block.** Its
 > payload is `std::vector<block_complete_entry> blocks` plus a `missed_ids`
-> list (`src/cryptonote_protocol/cryptonote_protocol_defs.h:173-190`) — a **sync batch**. A cap sized
+> list (`src/cryptonote_protocol/cryptonote_protocol_defs.h` lines 173–190 at ruling; the struct went with 2004 at CS-5) — a **sync batch**. A cap sized
 > for one block plus a tip-lag margin either rejects legitimate multi-block
 > sync responses or, if widened to fit a batch, hands the single-block announce
 > path a batch-sized bound. *An earlier version of this table gave both
@@ -4176,7 +4215,7 @@ inventing a consensus constant from a p2p round.
 > **Its resource bound is the byte budget; the requested cardinality survives
 > as correctness.** `NOTIFY_REQUEST_GET_OBJECTS` (2003) carries
 > `std::vector<crypto::hash> blocks`
-> (`src/cryptonote_protocol/cryptonote_protocol_defs.h:156-171`), so the
+> (`src/cryptonote_protocol/cryptonote_protocol_defs.h` lines 156–171 at ruling; the struct went with 2003 at CS-5), so the
 > receiver **already knows the count it requested** — *the original form of
 > this passage made that count times the per-block bound the cap; that form
 > is retired by the dated correction above.* What the count still buys, at
@@ -4215,7 +4254,7 @@ own value is owed to sync measurements instead (FOLLOWUPS).*
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
 | **Derive from the receiver's own current weight limit × a fixed margin** | The oversize-block flooder, pre-validation | **Adopted — for the single-block announce (2008), where it is `entry_max`.** The only form that is a real bound at every chain height, and it uses state the receiver already has and the peer cannot influence — §1's fourth check, observation over claim. *Scope narrowed by the 2026-09-04 correction: 2004's batch does NOT take a cardinality multiple of this bound; it takes the byte budget of the Ruled block below* |
-| A static ceiling picked to survive expected growth | The same | **Refused** — for the announce bound this table decides. It is a number that has not yet been questioned (§1's second check); it becomes wrong in one direction or the other and gives no signal when it does. *2004's byte budget (Ruled below) is static but is not this option: it is anchored at the transport's own plaintext ceiling with truncation semantics, and its value is named as owed to sync measurements — not a growth guess standing in for a per-block bound* |
+| A static ceiling picked to survive expected growth | The same | **Refused** — for the announce bound this table decides. It is a number that has not yet been questioned (§1's second check); it becomes wrong in one direction or the other and gives no signal when it does. *2004's byte budget (Ruled below) is static but is not this option: it is anchored at the transport's session packet limit with truncation semantics, and its value is named as owed to sync measurements — not a growth guess standing in for a per-block bound* |
 | Keep 128 MB | The same | **Refused.** It is 32× the compact path's own inherited figure and bounds nothing a node would otherwise reject |
 
 > **Two inputs this round does not have, and the ruling says so rather than
@@ -4225,28 +4264,27 @@ own value is owed to sync measurements instead (FOLLOWUPS).*
 > `Zone::queue_fluff` appends every transaction to each peer's queue and
 > `flush_fluff` releases the whole accumulated batch —
 > `std::mem::take(&mut peer.queued)`, with no cardinality or byte cap
-> (`rust/shekyl-relay/src/zone/mod.rs:814-847`, `:852-880`) — and the receive
+> (`rust/shekyl-relay/src/graph/mod.rs:814-847`, `:852-880`) — and the receive
 > side checks no cardinality either. **So 2002's cap has no derivation input,
 > and until one exists 2002 is not bounded below 2004.** *An earlier version of
 > this table wrote "`CRYPTONOTE_MAX_TX_SIZE` × the relay batch bound" as though
 > that bound existed.* Ruling it is cluster B's own work and belongs with the
 > relay cadence rows (PWD-B1/PWD-B2), not here.
 >
-> **(b) The cardinality-derived batch bound exceeds the plaintext ceiling,
+> **(b) The cardinality-derived batch bound exceeds the session packet limit,
 > which contradicts PWD-T6.** The consensus weight limit **floors** at
 > `2 × get_min_block_weight` = **600,000 bytes**
-> (`src/cryptonote_core/blockchain.cpp:6150-6153` at `dev` `059aca264`; the
+> (`src/cryptonote_core/blockchain.cpp` at `dev` `059aca264`; the
 > median is clamped up to `full_reward_zone` at `:6150-6151` before the
 > doubling at `:6153`. *Re-pinned 2026-09-21: the earlier `:6564-6567` /
 > `:6543` anchors were written against a superseded tree and now land on a
 > blank line and an unrelated statement — substance unchanged, citation
 > refreshed.*). So even at `margin = 1`,
-> `100 × (600,000 + 876,808)` = **147,680,800 bytes**, above
-> `DECOMPRESSED_MAX_SIZE` = 128 MiB = **134,217,728**
-> (`rust/shekyl-levin/src/compress.rs:29`). PWD-T6 requires the plaintext
-> ceiling to sit **above** the session-established limit; this inverts it, so a
-> conforming compressed 2004 could be legal on the wire and rejected after
-> inflation.
+> `100 × (600,000 + 885,000)` = **148,500,000 bytes**, above the session
+> packet limit `DEFAULT_MAX_PACKET_SIZE` = **100,000,000**
+> (`rust/shekyl-levin/src/header.rs`). PWD-T6 requires the session-established
+> limit to admit every legitimate message; this inverts it, so a conforming
+> 2004 could be legal by cardinality and refused at ingress.
 
 **Ruled, because the contradiction forces the shape even though it does not
 fix the number: `NOTIFY_RESPONSE_GET_OBJECTS` is bounded in BYTES, not by
@@ -4278,9 +4316,9 @@ batch**, leaving the requester to ask for the remainder.
 A cardinality bound multiplies two
 independent worst cases (every block at maximum weight *and* maximum witness
 simultaneously), producing a buffer no honest exchange ever fills, and here it
-produces one the decompressor is required to reject.
+produces one ingress is required to refuse.
 
-> **The budget is chosen at or below the plaintext ceiling, so PWD-T6's
+> **The budget is chosen at or below the session packet limit, so PWD-T6's
 > ordering holds by construction rather than by arithmetic that has to be
 > re-checked whenever a consensus constant moves.** The budget's value is
 > **owed**, with the same discipline as `margin`: it is a bandwidth/latency
@@ -4301,29 +4339,8 @@ round owes:**
   *An earlier version of this bullet declared it sized; that was premature, and
   premature-clear is the more expensive direction — nobody re-checks a gate
   that says it is closed.*
-- **PWD-T7's compression gate** gets its classification — **but from the
-  *route*, not from this table, and the difference matters.** *An earlier
-  version of this bullet said "every command in this table carries public
-  consensus data", which is false: `COMMAND_HANDSHAKE` and
-  `COMMAND_TIMED_SYNC` carry peerlists and support flags
-  (`src/p2p/p2p_protocol_defs.h:172-250`) — peer metadata, not consensus data,
-  and peerlist disclosure is a thing PWD-I2 deliberately controls.*
-
-  **The set is empty because of what can reach the compressor, which is a
-  narrower question than what is in the table.** All three call sites finalize
-  as **notifications** — `levin_notify.cpp:437`, and
-  `src/p2p/net_node.inl:2186` / `:2503`, both via `finalize_notify(command)`.
-  **Every p2p command is an *invoke***: `COMMAND_HANDSHAKE`
-  (`net_node.inl:1078`), `COMMAND_TIMED_SYNC` (`:1165`), `COMMAND_PING`
-  (`:2581`) and `COMMAND_REQUEST_SUPPORT_FLAGS` (`:2623`) all go through
-  `async_invoke_remote_command2`, so **they cannot reach the compressor at
-  all** — structurally, not by convention. What remains is the cryptonote
-  notify family, which carries blocks and transactions.
-
-  > **So the confidentiality-bearing set is empty today, and the gate is a
-  > check on the *routes into `try_compress_message`*, not on the command
-  > table.** A gate written against the table would pass while a future
-  > invoke-carried secret was quietly re-routed through a notify.
+- **PWD-T7** needs no classification from this table: the protocol has no
+  compressor (rejected 2026-10-19), so there is no route into one to gate.
 
 **Conceded, and it is a real cost.** A dynamic cap means two nodes at different
 heights admit different maxima, so a node far behind the tip rejects a block a
@@ -4379,7 +4396,7 @@ field must express the largest value the command table can produce, and
 > idle makers** and false of the tree: the relay layer draws fluff delays from
 > `FluffScheduler::memoryless()` — deliberately memoryless rather than the
 > inherited Poisson, which was the F-4 defect — and jitters the noise cadence
-> as `min + U(0, jitter)` (`rust/shekyl-relay/src/zone/mod.rs:315-320`,
+> as `min + U(0, jitter)` (`rust/shekyl-relay/src/graph/mod.rs:315-320`,
 > `:235`). **So this round is not introducing randomised timing to a tree that
 > has none; it is asking why one layer has it and the layer above does not.**
 
@@ -4391,7 +4408,7 @@ an owner if no row names it (rule 22).
 `Zone::queue_fluff` appends **every** transaction to each peer's queue, and
 `flush_fluff` releases the whole accumulation — `std::mem::take(&mut
 peer.queued)` — with no cardinality or byte cap
-(`rust/shekyl-relay/src/zone/mod.rs:814-847`, `:852-880`). The receive side
+(`rust/shekyl-relay/src/graph/mod.rs:814-847`, `:852-880`). The receive side
 checks no cardinality either.
 
 > **Why no census row covers it, which is a finding about the instrument.**
@@ -4410,7 +4427,7 @@ checks no cardinality either.
 
 **Bounding the release does not bound the queue, and the ruling has to say
 both.** `peer.queued` is a bare `Vec<TxBlob>`: `queue_fluff` extends it
-(`rust/shekyl-relay/src/zone/mod.rs:846`) and `flush_fluff` empties it
+(`rust/shekyl-relay/src/graph/mod.rs:846`) and `flush_fluff` empties it
 (`:868`), with **no bound at either end**. If transactions arrive faster than
 one capped batch per flush interval, the remainder simply accumulates — **once
 per destination peer** — so a release-side cap alone converts the flooder's
@@ -4452,10 +4469,22 @@ ordinary traffic rather than catching a flood, and its value is wrong.
 
 ### PWD-B1 — rate limiting: adopted, and it is the mechanism PWD-T5 routed here
 
+**UPDATE 2026-11-05 (the p2p remnant cutover).** The four invoke entry
+points this row names, and the handler files that held them, are deleted.
+Every command enters through `shekyl-p2p-session`'s dispatch table, and the
+part of this row that is about *who may send what, when* is held there by
+type: no command but a 1001 request before the handshake (`Established`
+has no constructor an owner can reach), one 1002 outstanding per session,
+one unread frame per session (`SESSION_QUEUE_DEPTH = 1`). The per-connection
+token bucket on known commands after the handshake is still owed; its one
+surface is now the dispatch `match`, so the frontier below (four handlers,
+nine notify entries) no longer describes where it would go. §0.5 carries
+the PARTIAL status. The text that follows is the ruling as made, at its pin.
+
 **RULED.** PWC-E2 records the absence against an enumerated frontier: **no
 token bucket, no per-peer counter, no minimum interval** guards any of the four
 invoke entry points — `handle_get_support_flags`, `handle_timed_sync`,
-`handle_handshake`, `handle_ping` (`src/p2p/net_node.inl:2170`, `:2646`,
+`handle_handshake`, `handle_ping` (`src/p2p/net_node.inl` lines 2170, 2646,
 `:2695`, `:2794` **as of this round's pin**; PWC-E2 cites the same four at the
 line numbers its own pin had, and the handlers are named here so the next
 drift is greppable rather than silent).
@@ -4481,7 +4510,7 @@ one flight (1224/1160 B), so the *per-connection* buffer is bounded and small.
 > matters is the inbound one — and that is PWC-E11, not PWD-B9.** PWD-B9 is
 > **outbound slot diversity** (`P2P_2_DISPATCH_BRIEF.md:502`), which says
 > nothing about connections a peer opens *to us*. The inbound cap is
-> `has_too_many_connections` (`src/p2p/net_node.inl:3089` **at this round's pin**; PWC-E11 cites `:3083-3105` from its own, and the symbol is named here so the drift is greppable), which filters
+> `has_too_many_connections` (`net_node.inl:3089` **at this round's pin**; deleted since; PWC-E11 cites `:3083-3105` from its own, and the symbol is named here so the drift is greppable), which filters
 > on `cntxt.m_is_income` — and **returns permit for every non-public zone**, so
 > **on Tor there is no inbound per-host cap at all.**
 
@@ -4548,7 +4577,7 @@ and calling it resource exhaustion protection.*
 
 **Scoping the bucket to the four invoke routes would have left the entire
 cryptonote command family unmetered** — all nine `HANDLE_NOTIFY_T2` entries
-(`src/cryptonote_protocol/cryptonote_protocol_handler.h:94-102`), which carry
+(lines 94 to 102 of `src/cryptonote_protocol/cryptonote_protocol_handler.h` at `e8838b0095`), which carry
 the blocks and the transaction batches, i.e. **the large payloads and the
 flood vector PWD-B12 exists to bound.** *A second earlier version made that
 mistake, and it is the same one twice: naming the surface I had been reading
@@ -4569,10 +4598,74 @@ on burst tolerance and on what a throttled peer experiences:
 concrete, observable at the sync path, and the failure that would mean the rate
 was chosen against the wrong traffic.
 
+#### On Windows there is no bound for this to be a refinement of — measured on a live daemon, 2026-10-06
+
+Everywhere else B1 is hardening on top of a derived safety bound. On Windows
+it is the **only** inbound bound available, which makes it an **addition to the
+p2p Rust migration rather than a transfer**: there is no C++ mechanism to port,
+so a slice that moves the stack faithfully still lands Windows unbounded.
+
+**Three absences, not one.** A Windows node today is bounded by nothing:
+
+| route | state |
+| --- | --- |
+| by count | `InboundCeiling` resolves `NoPerProcessLimit` — no per-process descriptor quantity exists to read (200,000 sockets opened in one process, no refusal; the loop stopped at the harness's array cap). An unset `--in-peers` is `UINT32_MAX` in `set_max_in_peers`, so the derived ceiling is the only automatic bound and there is no default beneath it. |
+| by source address | PWD-I7's per-host cap deleted 2026-09-22. |
+| by rate | **this row**, ruled and unbuilt. |
+
+**The warning that reports it does not reach an operator, and it no longer
+names the consequence.** Both measured on `shekyld` built from `e0fb3eaa8`
+(MSVC on a Windows 11 client SKU, Ninja rather than CI's `Visual Studio 18
+2026` generator, which CMake 3.31.6 does not carry), run `--offline` at three
+log settings:
+
+| run | reached p2p init | WARN lines | ceiling warning |
+| --- | --- | --- | --- |
+| default (no `--log-level`) | yes | 3 | **absent** |
+| `--log-level 1` | yes | 4 | present |
+| `--log-level "*:WARNING,global:INFO,net.p2p:WARNING"` | yes | 4 | present |
+
+`net_node.inl` logs under `net.p2p`, and level 0's default category set is
+`*:WARNING` with `net.p2p` explicitly carved down to `FATAL`
+(`contrib/epee/src/mlog.cpp:127`) — so the message is filtered three levels
+below where it is emitted. `daemon` and `blockchain::db::lmdb` WARNs print at
+default in the same run, so WARN is not globally off; the carve-out is
+specific. It predates this use and is still right for suppressing
+per-connection `net.p2p` chatter — startup operator guidance sharing that
+category is the defect, so the remedy is the message's category, not the level.
+
+The arm selected is still `NO_PER_PROCESS_LIMIT` after the connector rework,
+so `001f9e957` moving enforcement to the Rust admission table did not change
+which arm Windows takes.
+
+**And the wording was softened a day after it was deliberately strengthened.**
+`82b275f71` added *“this node will accept inbound peers without limit”*
+on 2026-09-22; `0f2c37d58` removed it on 2026-09-23 during the Rust-decision
+refactor, leaving *“the inbound ceiling is unbounded”*. The softening
+was not argued, and the original reasoning stands: *unbounded* reads as
+generous rather than as absent to anyone without this history.
+
+**Why this is recorded here rather than fixed.** Both remedies — restoring
+the clause, and moving the message to `global` — are changes to C++ the
+migration is replacing, which `20-rust-vs-cpp-policy` makes the exception
+rather than the default. The bound itself is this row's, in Rust.
+
+
 ### PWD-B2 — jitter, and the discriminator is observability
 
+**UPDATE 2026-11-05 (the p2p remnant cutover): IMPLEMENTED.** The one
+observable cadence, timed sync, is a per-session draw in
+`shekyl-p2p-session` (`timing.rs`): `min + U(0, jitter)`, re-drawn only
+when that session's own 1002 fires, `0` a valid draw, exactly the shape
+ruled below. The constants are `TIMED_SYNC_MIN = 45 s` and
+`TIMED_SYNC_JITTER = 30 s`, mean 60 s as this row requires; the split is
+`P2P_3_REMNANT_CUTOVER_BRIEF.md` §7.6's `Assumption` (F2), posed for Rick's
+ruling, not derived here. The shared idle makers this row contrasted with
+are deleted with the C++ host. The text that follows is the ruling as
+made, at its pin.
+
 **RULED.** The five node-server idle makers are fixed-interval
-(`src/p2p/net_node.h:618-622`) and the three protocol-handler timers likewise
+(`src/p2p/net_node.h` lines 444 to 446 (at the pin); five at this round's pin, three since PR-3 deleted the connections maker, the gray housekeeping and the peerlist store, 2026-10-13) and the three protocol-handler timers likewise
 (PWC-E4).
 
 > **Ruled: a cadence a *path* observer can correlate across connections
@@ -4593,7 +4686,7 @@ deadlines, drawn independently**.
 > wake must leave every other entry untouched, because re-drawing on a foreign
 > wake resamples `min + U(0, jitter)` and keeps the minimum, **biasing the
 > effective interval short** — "a privacy defect no count assertion and no
-> goodness-of-fit grade can see" (`rust/shekyl-relay/src/zone/mod.rs:231-236`).
+> goodness-of-fit grade can see" (`rust/shekyl-relay/src/graph/mod.rs:231-236`).
 > **PWD-B2 adopts that rule verbatim**: a connection's deadline is re-drawn
 > only when that connection's own sync fires.
 
@@ -4681,7 +4774,7 @@ its own connection's clock and not from a shared timer.
 > **What the window buys is narrower and more specific: it decorrelates
 > connections established at nearly the same moment.** That is the common case
 > rather than a corner one — `m_connections_maker_interval` runs every second
-> (`src/p2p/net_node.h:619`), so a node coming up opens several outbound
+> (`net_node.h:619` at this round's pin; the C++ connections maker is deleted, 2026-10-13), so a node coming up opens several outbound
 > connections in a tight cluster, and with a degenerate window they would tick
 > together for the life of those connections.
 
@@ -4741,7 +4834,7 @@ mempool acceptance.
 > rules the **p2p consequence** only. It does **not** re-rule the acceptance
 > rules, and it does **not** touch `kept_by_block`'s input-check tolerance —
 > `add_tx` inserts transactions whose input check failed with
-> `fcmp_verified = 0` (`src/cryptonote_core/blockchain.cpp:6068`), contained by
+> `fcmp_verified = 0` (`src/cryptonote_core/blockchain.cpp`), contained by
 > **CEN-M8's hash-gated skip**, which is cited here as already-decided and
 > reasoned about nowhere.
 
@@ -4764,8 +4857,8 @@ decoration:
 
 | Site | What the rejection describes | Universal? | Verdict |
 | --- | --- | --- | --- |
-| **`:257` fee too low** | **Our own state.** The floor is computed by **`get_current_fee_per_byte`** (`src/cryptonote_core/blockchain.cpp:4372-4385`) from `m_current_block_cumul_weight_limit`, `m_db->height()`, `get_block_already_generated_coins(height-1)` and `m_long_term_effective_median_block_weight` — **our chain, at our height** — and `check_fee` (`:4388`) only compares against it | No — **CEN-M3 records there is no consensus fee floor**; it is relay-tier | **No drop.** A peer relaying below *our* floor may be entirely honest on a different valid policy |
-| **`:291` double-spend** | **Our own state.** `have_tx_keyimges_as_spent` takes `m_transactions_lock` **and** `m_blockchain` and tests against our pool and chain (`src/cryptonote_core/tx_pool.cpp:1688-1701`) | No — node-local and **reorg-dependent**; our own view changes underneath us | **No drop.** A tx conflicting in our view can be fine in theirs |
+| **`:257` fee too low** | **Our own state.** The floor is computed by **`get_current_fee_per_byte`** (`src/cryptonote_core/blockchain.cpp`) from `m_current_block_cumul_weight_limit`, `m_db->height()`, `get_block_already_generated_coins(height-1)` and `m_long_term_effective_median_block_weight` — **our chain, at our height** — and `check_fee` (`:4388`) only compares against it | No — **CEN-M3 records there is no consensus fee floor**; it is relay-tier | **No drop.** A peer relaying below *our* floor may be entirely honest on a different valid policy |
+| **`:291` double-spend** | **Our own state.** `have_tx_keyimges_as_spent` takes `m_transactions_lock` **and** `m_blockchain` and tests against our pool and chain (`src/cryptonote_core/tx_pool.cpp`) | No — node-local and **reorg-dependent**; our own view changes underneath us | **No drop.** A tx conflicting in our view can be fine in theirs |
 | **`:267` oversized `tx_extra`** | **The input** — `tx.extra.size()` against a compile-time constant | **No.** The `!kept_by_block` gate says so outright: the same transaction is acceptable inside a block, so this is relay policy | **No drop.** Dropping here punishes configuration divergence |
 | **`:276` non-zero `unlock_time`** | **The input** — `tx.unlock_time` | **No**, for the same reason and by the same gate | **No drop** |
 
@@ -4779,7 +4872,7 @@ severing its neighbours.
 unparseable and structurally invalid transactions **never set the flag**, so
 they fall through
 `if (!m_core.handle_incoming_tx(...) && !tvc.m_no_drop_offense) { drop_connection(...) }`
-(`src/cryptonote_protocol/cryptonote_protocol_handler.inl:909-913`). Nothing
+(`src/cryptonote_protocol/cryptonote_protocol_handler.inl` lines 909–913 at ruling). Nothing
 special-cases them; they drop because the carve-out does not reach them.
 **PWD-B7 states that as a rule** — form failures are context-free, universal,
 and the sender chose to send those bytes — so a future condition is decidable
@@ -4790,12 +4883,12 @@ rather than inheriting whatever the default happens to be.
 > carve-outs, and that set includes our own failures.** Two paths return false
 > with the flag unset while the failure describes **our own state**, not the
 > input: `insert_key_images`' pool-bookkeeping invariant
-> (`src/cryptonote_core/tx_pool.cpp:785-787` — a `CHECK_AND_ASSERT_MES` whose
+> (`src/cryptonote_core/tx_pool.cpp` — a `CHECK_AND_ASSERT_MES` whose
 > message begins "internal error"; reached from `add_tx` at `:337`/`:496`) and
 > `add_tx`'s catch-alls (`:344`, `:506-509` — "internal error: error adding
 > transaction to txpool"). Both fall through the same
 > `!tvc.m_no_drop_offense` gate
-> (`src/cryptonote_protocol/cryptonote_protocol_handler.inl:909-913`) and
+> (`src/cryptonote_protocol/cryptonote_protocol_handler.inl` lines 909–913 at ruling) and
 > disconnect the sender — **our own storage throwing severs an innocent
 > peer**, the exact outcome the rule forbids. The ruling stands; the
 > mechanism does not satisfy it.
@@ -4849,7 +4942,7 @@ rather than inheriting whatever the default happens to be.
 > input-describing, universal — and its drop stands. The size arm
 > (`check_incoming_block_size`, `:542-546`) is **state-describing**: it
 > compares the blob against **our** current weight limit + 100
-> (`src/cryptonote_core/cryptonote_core.cpp:1408-1420`), and the limit a few
+> (`src/cryptonote_core/cryptonote_core.cpp`), and the limit a few
 > heights ahead can legally exceed ours (how fast is the consensus lane's
 > derivation — the same `margin` question, owed above). The false-drop window
 > is narrow in practice — the announce blob is header + tx hashes, far
@@ -4923,24 +5016,30 @@ would mean attributability is the wrong axis rather than a mis-scored site.
 
 #### The inherited `TODO` is answered, not inherited
 
-`// TODO: Investigate why not?` (`src/cryptonote_core/tx_pool.cpp:282`) asks why
+`// TODO: Investigate why not?` (`src/cryptonote_core/tx_pool.cpp`) asks why
 block-borne transactions skip the key-image-spent check. **It is the same
 question for all four conditions**, because all four are `kept_by_block`-gated
 — `:267` and `:276` inline, `:291` by its enclosing `if`, and `:257` by
 short-circuit (`fee_good = kept_by_block || m_blockchain.check_fee(...)`).
 
+The call sites in the answer were re-read after the origin parameter was
+removed, verified at `dev` `736fd998d0`.
+
 > **Answer: there is no peer to punish. That is the whole of it, and it is
 > verified at every call site rather than inferred from one.**
 >
 > `kept_by_block` **is** `(tx_relay == relay_method::block)`
-> (`src/cryptonote_core/tx_pool.cpp:229`), and **every block-owned caller
-> passes `origin = epee::net_utils::zone::invalid`** — the pop path
-> (`src/cryptonote_core/blockchain.cpp:870`), the alt-block pool supplement
-> (`:2347`), the return-taken-transaction path (`:5932`), and the block
-> importer (`src/blockchain_utilities/blockchain_import.cpp:156`), whose own
-> comment says it outright: *"Imported from a block file: nothing arrived over
-> a transport."* **No connection exists to attribute an offense to, so an
-> offense classification has nothing to classify.**
+> (`src/cryptonote_core/tx_pool.cpp`). **No block-owned caller passes a
+> peer-origin parameter.** The pop path
+> (`src/cryptonote_core/blockchain.cpp`), the alt-block pool supplement
+> (`src/cryptonote_core/blockchain.cpp`), the return-taken-transaction
+> path (`src/cryptonote_core/blockchain.cpp`), and the block importer
+> (`src/blockchain_utilities/blockchain_import.cpp`) each pass
+> `relay_method::block` and nothing about a network. **No connection exists
+> to attribute an offense to, so an offense classification has nothing to
+> classify.**
+
+Citations below remain verified at `dev` `059aca264`.
 
 **A leg this row previously rested on was wrong, and it is retracted rather
 than quietly dropped.** It read: *"documented as 'from a previously-verified
@@ -4964,7 +5063,7 @@ describes the common case, not the contract.*
 
 **RULED: `m_bad_peer_checker` is deleted.** `once_a_time_seconds<43>` has
 **exactly one occurrence tree-wide — its declaration**, at
-`src/cryptonote_protocol/cryptonote_protocol_handler.h:189` **at this round's pin** (PWC-E4a cites `:186` from its own; #612 moved it, and the census records stale pointers rather than correcting them silently) — and `on_idle`
+`src/cryptonote_protocol/cryptonote_protocol_handler.h` line 189 **at this round's pin** (PWC-E4a cites `:186` from its own; #612 moved it, and the census records stale pointers rather than correcting them silently) — and `on_idle`
 does not call it (PWC-E4a). A cadence constant no code reads is not a cadence; it reads
 as one to anyone auditing the file, which is the whole cost.
 
@@ -4989,7 +5088,7 @@ Checkable against the requirement, not against a benchmark.
 
 **Two lineage-dead structs go with it, and they are outside the round's gate.**
 `network_address_old` (PWC-F1) and `connection_entry_base`/`connection_entry`
-(PWC-F2, `src/p2p/p2p_protocol_defs.h:115`) have no callers — F1's only references are two lines in
+(PWC-F2, line 115 of `src/p2p/p2p_protocol_defs.h` at `e8838b0095`) have no callers — F1's only references are two lines in
 `debug_utilities/object_sizes.cpp:91-92`, **which must be deleted with it or the
 debug build breaks**. Both are **bucket 3**, not bucket 4, so they do not move
 the 46-row counter; they are ruled here because this is the sub-round that owns
@@ -5002,7 +5101,7 @@ dead surface.
 | PWC-E7 (double-spend is a no-drop offense) | **Ruled** — no drop, and now for a stated reason: it describes our own state | PWD-B7 |
 | PWC-E8 (the three other no-drop classes) | **Ruled** — fee is our-own-state; `tx_extra` and `unlock_time` are non-universal policy | PWD-B7 |
 | PWC-E5 (idle kick 240 s; score floor `DROP_PEERS_ON_SCORE = -2`) | **Deferred — named blocker: both of its inputs are owed by rows this round did not close.** The **score floor** cannot be derived until it is known what increments the score: PWD-B7 decides *which rejections are attributable*, but the tri-state verdict that makes that operational is owed to P2P-3, and PWD-B1's bucket decides what a peer may do before scoring is reached at all — its four parameters are owed too. The **idle kick** is a liveness judgement whose 240 s has never been derived (`pinned-not-re-derived` in the census) and belongs with the cadence work. Target pre-genesis | PWD-B1, PWD-B7's P2P-3 action |
-| PWC-E9 (`drop_connections(address)` severs every connection sharing a host, +5 host-fail) | **Deferred — and the original named blocker was wrong; the corrected one is stronger** (2026-09-04 review finding, verified at source). `is_same_host` does **not** need an IP: `network_address::is_same_host` dispatches to the concrete type (`contrib/epee/src/net_utils_base.cpp:134-135`) and Tor compares hostname strings (`src/net/tor_address.cpp:181-184`). The I2P comparator left with the address type. The real blockers were: **(a)** every inbound anonymity-zone peer is recorded as the zone's `unknown()` sentinel (`src/p2p/net_node.cpp:336`, `:340`) — an inbound anon peer's identity is unlearnable *by design* — so host-keying compared `unknown == unknown` and `drop_connections` would sever **every inbound anon peer at once**; **(b)** even a learnable onion identity is free to mint, so a per-host key prices nothing an adversary pays. **(a) is closed** by `fix/anon-zone-address-keying`: `is_same_host` no longer equates two addresses that name no host, and `drop_connections` returns early on one, so the sweep selects nothing rather than everything. **(b) is untouched and still defers this row** — the sweep is now safe on an anonymity zone, not useful there. Host-keyed severing therefore cannot be ported to anonymity zones for identity-policy reasons, not comparator reasons — it is the same *identity* problem as the anonymity-zone inbound cap (whose absence is `has_too_many_connections`' explicit non-public early return, `src/p2p/net_node.inl:3091-3092`, not a comparator gap), so both re-derive together, count- or work-based | PWD-I4 sub-round |
+| PWC-E9 (`drop_connections(address)` severs every connection sharing a host, +5 host-fail) | **Deferred — and the original named blocker was wrong; the corrected one is stronger** (2026-09-04 review finding, verified at source). `is_same_host` does **not** need an IP: `network_address::is_same_host` dispatches to the concrete type (line 138 of `contrib/epee/src/net_utils_base.cpp` at `dc46e903f0`) and Tor compares hostname strings (lines 181 to 184 of `src/net/tor_address.cpp` at `dc46e903f0`). The I2P comparator left with the address type. The real blockers were: **(a)** every inbound anonymity-zone peer is recorded as the zone's `unknown()` sentinel (`net_node.cpp:336` (at this round's pin; `local_interface_hosts` went with the C++ dial path, 2026-10-13), `:340`) — an inbound anon peer's identity is unlearnable *by design* — so host-keying compared `unknown == unknown` and `drop_connections` would sever **every inbound anon peer at once**; **(b)** even a learnable onion identity is free to mint, so a per-host key prices nothing an adversary pays. **(a) is closed** by `fix/anon-zone-address-keying`: `is_same_host` no longer equates two addresses that name no host, and `drop_connections` returns early on one, so the sweep selects nothing rather than everything. **(b) is untouched and still defers this row** — the sweep is now safe on an anonymity zone, not useful there. Host-keyed severing therefore cannot be ported to anonymity zones for identity-policy reasons, not comparator reasons — it is the same *identity* problem as the anonymity-zone inbound cap (whose absence is `has_too_many_connections`' explicit non-public early return, `net_node.inl:3091-3092` (at this round's pin; deleted since), not a comparator gap), so both re-derive together, count- or work-based | PWD-I4 sub-round |
 | PWC-E4a (the never-driven 43 s timer) | **Ruled** — deleted | PWD-B8 |
 
 **Sum check: 3 ruled + 0 absorbed + 2 deferred = 5 rows.** ✅
@@ -5063,10 +5162,10 @@ Two things make it worse than ordinary dead weight, and both belong in the row:
   hazard the census exists to price.
 - **Two of the dead fields are dead *copies of live constants*, which makes
   them traps rather than merely inert.** The 60-second cadence is driven by
-  `once_a_time_seconds<P2P_DEFAULT_HANDSHAKE_INTERVAL>` (`net_node.h:618`) — a
+  `once_a_time_seconds<P2P_DEFAULT_HANDSHAKE_INTERVAL>` (`src/p2p/net_node.h` line 444 (at the pin)) — a
   **template argument from the constant**, not from the field — and
-  `send_peerlist_sz`'s value is read directly from
-  `P2P_DEFAULT_PEERS_IN_HANDSHAKE` at `net_node.inl:2655`. So an engineer who
+  `send_peerlist_sz`'s value was read directly from
+  `P2P_DEFAULT_PEERS_IN_HANDSHAKE` at `net_node.inl:2655` (both deleted 2026-10-13). So an engineer who
   changed the cadence by editing `m_net_config.handshake_interval` would
   observe **no behavioural change and no compiler complaint**. A dead field
   holding a stale duplicate of a live value is worse than an empty one.

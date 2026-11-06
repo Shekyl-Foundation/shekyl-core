@@ -5,24 +5,45 @@
 
 //! Fixtures for the view-bound 4.I rows landed so far — CEN-I7 through
 //! `tx_against` at the pool's slot and through `validate` at a listed slot,
-//! CEN-L1 through `validate` — and the two 4.I rows held by construction
-//! (I2's falsifier lives here; I3's is `f2_the_wire_admits_one_transaction_version`).
+//! the reference window's edges, the signature sequence — the emission's
+//! reference context (CEN-J21, the same reads under one row), and the two
+//! 4.I rows held by construction (I2's falsifier lives here; I3's is
+//! `f2_the_wire_admits_one_transaction_version`).
+//!
+//! **Refusals only, through the pipeline.** A fixture spend carries a named
+//! key image and a filler membership proof declared at depth 0, so
+//! CEN-I13 refuses it on any `MockChain` view (slice 6 row 6) and CEN-I15
+//! — `form`'s since 2026-10-16, over the caller's reference claim
+//! (`judge_proofs`) — refuses the proof wherever a claim is supplied: no
+//! test here asserts that `tx_against` or `validate` *accepts* a listed
+//! transaction, and a refusal asserted through either is of a row that
+//! runs **before I13** in the sequence (`judge_reference`'s order: I7;
+//! I10, I11, I12; then I13, then the comparison with what `form`
+//! verified). The signature sequence and the verify rows are held on
+//! their functions directly. The acceptances, and every refusal behind a
+//! passing body (CEN-L1), are the ingest driver's on a driven chain:
+//! `shekyl-chain-ingest`'s `scenario_spend_tests` and the mutation family.
 
+use crate::block::{ReferenceClaim, ReferenceClaims, VerifiedReference};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
+use crate::fault::{Corrupt, Fault, FormAttempt, PerHeightRecord, Stale};
 use crate::harness::fixture::{
-    anchored_on, candidate_on, coinbase, listed, listed_on, point, point_at, serve_credit_only,
-    spend, spendable_chain, TWO_G,
+    anchored_on, balanced_emission, candidate_on, coinbase, emission_vin, join_market, listed,
+    listed_on, point, point_at, referencing, serve_credit_only, spend, spendable_chain, TWO_G,
 };
 use crate::harness::{
     assert_refused, credited_to_this_falsifier, defined, formed_on, judged, Faulted, FaultingView,
     MockChain, WithheldRead,
 };
 use crate::rule_set::RuleSet;
+use crate::rules::proofs::judge_proofs;
 use crate::rules::tx::{refused_listed, refused_lone};
-use crate::rules::tx_against::{I11, I17, I18, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE};
-use crate::rules::TxContext;
+use crate::rules::tx_against::{
+    judge_reference, judge_signatures, proof_reference, I11, I13, I17, I18, I7,
+    REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE,
+};
+use crate::rules::{run_tx_against, TxContext};
 use crate::trust::Trust;
 use crate::validate::{tx_against, validate};
 use crate::verdict::{Locus, TxSlot};
@@ -66,18 +87,25 @@ fn reference_window_is_the_json_authoritys() {
 // ---- CEN-I7 -------------------------------------------------------------
 
 /// A spend of a key image the chain has recorded is refused on I7 at the
-/// pool's slot; the same body with a fresh image passes and records the
-/// row. Both through `tx_against`, the entry point the pool calls.
+/// pool's slot, through `tx_against`, the entry point the pool calls; the
+/// same body with a fresh image passes the row and records it. The passing
+/// half is held on the row itself: a fixture spend does not pass
+/// `tx_against` whole, since CEN-I13 refuses it on any view (slice 6 row
+/// 6), and I7 recorded through the whole sequence is the ingest driver's
+/// (`scenario_spend_tests`, `Mined::judged_by`).
 #[test]
 fn i7_a_spent_key_image_is_refused_and_a_fresh_one_records() {
     let chain = spendable_chain().with_key_image(KeyImage::from_bytes(KI));
     chain.with_view(|view| {
         assert_refused(
-            defined(tx_against(
+            judged(tx_against(
                 &listed_on(&chain, KI),
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                None,
+                FormAttempt::FIRST,
             )),
             CenRow::I7,
             Locus::Input {
@@ -85,14 +113,14 @@ fn i7_a_spent_key_image_is_refused_and_a_fresh_one_records() {
                 input: 0,
             },
         );
-        let fresh = defined(tx_against(
-            &listed_on(&chain, point(10)),
-            TxSlot::Lone,
-            &view,
-            &RuleSet::GENESIS,
-        ))
-        .expect("an unspent image passes");
-        assert!(fresh.contains(CenRow::I7));
+        let fresh = listed_on(&chain, point(10));
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx = TxContext::derive(&fresh, TxSlot::Lone, &mut coverage)
+            .expect("a spend classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
+        let Ok(verdict) = run_tx_against::<I7, _, _>(&cx, &view, &mut coverage);
+        verdict.expect("an unspent image passes");
+        assert!(coverage.contains(CenRow::I7));
     });
 }
 
@@ -100,25 +128,23 @@ fn i7_a_spent_key_image_is_refused_and_a_fresh_one_records() {
 /// `tx_against` the slot it is judging, so the refusal is written at
 /// `Listed(n)` — the transaction's position, not the pool's — and nothing
 /// re-homes it afterwards (`Locus::rehome` went with slice 6 commit 4).
+/// The spent body is the block's only listing: a fixture ahead of it would
+/// be refused at CEN-I13 (slice 6 row 6) before this slot was reached, so
+/// `Listed(0)` is the slot the fixture can be refused at — and it is still
+/// a listed slot, not `Lone`, which is the discrimination. The refusal at
+/// a later slot, behind a body that passes, is `shekyl-chain-ingest`'s
+/// `scenario_spend_tests` (a respend listed second, I7 at `Listed(1)`).
 #[test]
 fn i7_at_a_listed_slot_the_refusal_names_the_slot() {
     let chain = spendable_chain().with_key_image(KeyImage::from_bytes(point(11)));
     chain.with_view(|view| {
-        let block = candidate_on(
-            &chain,
-            vec![listed_on(&chain, point(10)), listed_on(&chain, point(11))],
-        );
+        let block = candidate_on(&chain, vec![listed_on(&chain, point(11))]);
         let formed = formed_on(&chain, block);
         assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
-            )),
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
             CenRow::I7,
             Locus::Input {
-                slot: TxSlot::Listed(1),
+                slot: TxSlot::Listed(0),
                 input: 0,
             },
         );
@@ -166,7 +192,15 @@ fn i7_looks_up_an_archival_shapes_funding_spend_too() {
         .expect("the funding image is an input");
     chain.with_view(|view| {
         assert_refused(
-            defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+            judged(tx_against(
+                &tx,
+                TxSlot::Lone,
+                &view,
+                &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                None,
+                FormAttempt::FIRST,
+            )),
             CenRow::I7,
             Locus::Input {
                 slot: TxSlot::Lone,
@@ -190,13 +224,8 @@ fn i7_is_vacuous_on_the_coinbase() {
     let chain = MockChain::default();
     chain.with_view(|view| {
         let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("a block of one coinbase");
+        let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .expect("a block of one coinbase");
         assert!(valid.coverage().contains(CenRow::I7));
         assert!(valid.coverage().contains(CenRow::L1));
     });
@@ -208,98 +237,35 @@ fn i7_is_vacuous_on_the_coinbase() {
 fn i7_propagates_a_view_fault() {
     let view = FaultingView::default();
     assert_eq!(
-        tx_against(&listed(KI), TxSlot::Lone, &view, &RuleSet::GENESIS)
-            .expect_err("the view faulted"),
-        ViewRead::View(Faulted)
+        tx_against(
+            &listed(KI),
+            TxSlot::Lone,
+            &view,
+            &RuleSet::GENESIS,
+            &shekyl_network::HARNESS_NETWORK_ID,
+            None,
+            FormAttempt::FIRST
+        )
+        .expect_err("the view faulted"),
+        Fault::View(Faulted)
     );
 }
 
 // ---- CEN-L1 -------------------------------------------------------------
-
-/// Two listed transactions spending one key image — each admissible on its
-/// own, since the chain has neither — are refused on L1 at the **second**
-/// occurrence, naming the slot and the input. Without this row the block
-/// would pass `validate` and meet the store's fatal SI-1 at connect.
-#[test]
-fn l1_a_key_image_twice_across_a_blocks_transactions_is_refused_at_the_second() {
-    let chain = spendable_chain();
-    chain.with_view(|view| {
-        // Distinct transactions (different outputs) over the same image.
-        let first = listed_on(&chain, KI);
-        let mut second = anchored_on(&chain, spend(KI, 3));
-        second.prefix.extra = crate::harness::fixture::pqc_extra(3);
-        let block = candidate_on(&chain, vec![first, second]);
-        let formed = formed_on(&chain, block);
-        assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
-            )),
-            CenRow::L1,
-            Locus::Input {
-                slot: TxSlot::Listed(1),
-                input: 0,
-            },
-        );
-    });
-}
-
-/// L1 runs after every slot has passed: a block whose second transaction
-/// fails a per-transaction row is refused on that row, not on L1, even
-/// when the images collide — the C++'s `add_spent_key` is the last check
-/// too.
-#[test]
-fn l1_runs_after_the_per_transaction_rows() {
-    let chain = spendable_chain();
-    chain.with_view(|view| {
-        let first = listed_on(&chain, KI);
-        let mut second = listed_on(&chain, KI);
-        // The second transaction fails H15 (a `Null` CT off the coinbase).
-        second.ct = Ct::Null(CtBase {
-            enc_amounts: vec![[0x11; 9]; 2],
-            enc_labels: vec![[0x22; 9]; 2],
-            commitments: vec![TWO_G; 2],
-        });
-        let formed = formed_on(&chain, candidate_on(&chain, vec![first, second]));
-        assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
-            )),
-            CenRow::H15,
-            Locus::Tx {
-                slot: TxSlot::Listed(1),
-            },
-        );
-    });
-}
-
-/// A block of distinct spends passes and records L1.
-#[test]
-fn l1_distinct_images_pass_and_record() {
-    let chain = spendable_chain();
-    chain.with_view(|view| {
-        let formed = formed_on(
-            &chain,
-            candidate_on(
-                &chain,
-                vec![listed_on(&chain, point(10)), listed_on(&chain, point(11))],
-            ),
-        );
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("distinct images");
-        assert!(valid.coverage().contains(CenRow::L1));
-    });
-}
+//
+// L1 is a block rule over the listed transactions, run after every slot has
+// passed `tx_form` and `tx_against`. Its every witness therefore needs a
+// first body that passes the whole per-slot sequence — a real spend, since
+// a fixture spend is refused at CEN-I13 on any `MockChain` view (slice 6
+// row 6) — so the row's three tests are `shekyl-chain-ingest`'s
+// `scenario_spend_tests`, on a driven chain: two distinct spends connect
+// and record L1; a second transaction over the first's key image (a twin
+// at another fee: a different body, the same image, each admissible alone)
+// is refused L1 at `Listed(1)`, input 0; and a second transaction that
+// fails a per-transaction row (its prefix moved under its proof: I15)
+// is refused on that row at `Listed(1)`, not on L1 — the C++'s
+// `add_spent_key` is the last check too. Until slice 6 row 6 the three were
+// here, over fixtures; what moved is the witness, not the row.
 
 // ---- CEN-I10, I11, I12 -------------------------------------------------
 //
@@ -387,11 +353,14 @@ fn i10_refuses_an_unrecorded_reference() {
     let chain = spendable_chain();
     chain.with_view(|view| {
         assert_refused(
-            defined(tx_against(
+            judged(tx_against(
                 &listed(KI),
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                None,
+                FormAttempt::FIRST,
             )),
             CenRow::I10,
             Locus::Tx { slot: TxSlot::Lone },
@@ -402,18 +371,31 @@ fn i10_refuses_an_unrecorded_reference() {
 /// The reference rows are the regular spend's: a serve-credit-only body has
 /// no reference to look up, and the three are recorded vacuous, as the
 /// coinbase's are (`validate_tests::tx_entry_points_record_the_landed_rows`).
+///
+/// Called as the sequence, not through `tx_against`: since E6 slice 8 row
+/// 3 a serve credit over the mock is refused on CEN-J4 (`MockChain` holds
+/// no bonds by policy), so the whole-stage call no longer reaches the
+/// reference rows. The witness for a credit *through* `tx_against` is a
+/// driven chain that posted the bond (`shekyl-chain-ingest`).
 #[test]
 fn i10_i11_i12_are_vacuous_on_a_serve_credit() {
     let chain = spendable_chain();
+    let credit = serve_credit_only([0x5e; 32]);
     chain.with_view(|view| {
-        let coverage = defined(tx_against(
-            &serve_credit_only([0x5e; 32]),
-            TxSlot::Lone,
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx = TxContext::derive(&credit, TxSlot::Lone, &mut coverage)
+            .expect("a serve-credit-only body classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
+        let context = judged(judge_reference(
+            &cx,
             &view,
-            &RuleSet::GENESIS,
+            None,
+            FormAttempt::FIRST,
+            &mut coverage,
         ))
         .expect("a serve credit has no reference to judge");
-        for row in [CenRow::I10, CenRow::I11, CenRow::I12] {
+        assert_eq!(context, None, "no context: nothing verifies against one");
+        for row in [CenRow::I10, CenRow::I11, CenRow::I12, CenRow::J21] {
             assert!(coverage.contains(row), "{row} recorded vacuous");
         }
     });
@@ -421,9 +403,9 @@ fn i10_i11_i12_are_vacuous_on_a_serve_credit() {
 
 /// I12 reads the anchor at a height I10 just found recorded; a view that
 /// answers `AboveTip` there has a hole below its tip. That is a store
-/// invariant observed broken — `ViewRead::Corrupt(HoleBelowTip)`, the
+/// invariant observed broken — `Fault::Corrupt(HoleBelowTip)`, the
 /// class that halts the writer — never a verdict, and the reason
-/// `tx_against`'s fault is a `ViewRead`. A driven chain cannot produce this
+/// `tx_against`'s fault is a `Fault`. A driven chain cannot produce this
 /// (SI-4 keeps every root below the tip recorded), which is what makes it
 /// the mock's to witness.
 #[test]
@@ -435,12 +417,455 @@ fn i12_a_missing_root_at_the_reference_height_is_corrupt_not_a_verdict() {
     chain.with_view(|inner| {
         let view = inner.withholding(WithheldRead::RootAt(BlockHeight::ZERO));
         assert_eq!(
-            tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS),
-            Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
+            tx_against(
+                &tx,
+                TxSlot::Lone,
+                &view,
+                &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                None,
+                FormAttempt::FIRST
+            ),
+            Err(Fault::Corrupt(Corrupt::HoleBelowTip {
                 at: BlockHeight::ZERO,
                 record: PerHeightRecord::CurveTreeRoot,
             }))
         );
+    });
+}
+
+// ---- CEN-J21 (I13) ------------------------------------------------------
+//
+// The emission's reference context is the spend's reads under one row, so
+// the mock's share is the same three things: the predicates (`I13::admits`
+// over two depths; the window is I11's, pinned above), absence (an
+// unrecorded hash, a reference the window refuses, a body with no
+// declared depth), and the two holes below the tip (the root, the leaf
+// count the depth is a function of). These chains plant no tree
+// (`MockChain::push`, never `push_tree`), so every recorded height's depth
+// is 0, no declared depth is admitted, and an anchored emission here is
+// J21's refusal, not its pass. The pass is the driver's: an assembled
+// claim's declared depth is the tree's at its reference
+// (`scenario_emission_tests`), and the context it yields is what the
+// emission's proof rows verify against.
+
+/// `I13::admits`: `[1, depth]`, closed at both ends; nothing is admitted
+/// against an empty tree.
+#[test]
+fn i13_admits_a_declared_depth_in_one_through_the_depth_at_the_reference() {
+    assert!(!I13::admits(0, 5), "a zero depth names no tree");
+    assert!(I13::admits(1, 5));
+    assert!(I13::admits(5, 5), "the depth at the reference itself");
+    assert!(!I13::admits(6, 5), "one layer more than the reference held");
+    assert!(!I13::admits(1, 0), "the empty tree holds no proof");
+    assert!(!I13::admits(u64::from(u8::MAX) + 1, u8::MAX), "beyond a u8");
+}
+
+/// A fee-bearing emission with a parseable vin, unanchored.
+fn emission(key_image: [u8; 32]) -> Transaction {
+    let Input::ArchivalRewardEmission { canonical_bytes } = emission_vin(0x13, &[1]) else {
+        unreachable!("emission_vin builds an emission input");
+    };
+    balanced_emission(key_image, canonical_bytes, 5)
+}
+
+/// J21 refuses at the transaction: the reference no chain holds (I10's
+/// read), and a reference the window refuses (I11's — the tip itself,
+/// zero blocks old). The refusal row is J21 on an emission, where the
+/// spend's would be I10 or I11.
+#[test]
+fn j21_refuses_an_unrecorded_reference_and_one_the_window_refuses() {
+    let chain = spendable_chain();
+    let tip = chain.tip().expect("a spendable chain has a tip").hash;
+    chain.with_view(|view| {
+        for tx in [emission(KI), referencing(emission(KI), tip)] {
+            assert_refused(
+                judged(tx_against(
+                    &tx,
+                    TxSlot::Lone,
+                    &view,
+                    &RuleSet::GENESIS,
+                    &shekyl_network::HARNESS_NETWORK_ID,
+                    None,
+                    FormAttempt::FIRST,
+                )),
+                CenRow::J21,
+                Locus::Tx { slot: TxSlot::Lone },
+            );
+        }
+    });
+}
+
+/// An anchored emission whose declared depth the tree at the reference
+/// does not hold — here, any depth, against the mock's empty tree — is
+/// J21's refusal; so is a body with no prunable region to declare one.
+#[test]
+fn j21_refuses_a_declared_depth_the_reference_does_not_hold() {
+    let chain = spendable_chain();
+    let anchored = anchored_on(&chain, emission(KI));
+    let mut declared_one = anchored.clone();
+    let mut pruned = anchored.clone();
+    match (&mut declared_one.ct, &mut pruned.ct) {
+        (
+            Ct::Fcmp {
+                prunable: Some(p), ..
+            },
+            Ct::Fcmp { prunable, .. },
+        ) => {
+            p.tree_depth = 1;
+            *prunable = None;
+        }
+        _ => unreachable!("an emission is an Fcmp ct with a prunable region"),
+    }
+    chain.with_view(|view| {
+        for tx in [anchored, declared_one, pruned] {
+            let mut coverage = RuleCoverage::EMPTY;
+            let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+                .expect("an emission classifies")
+                .on_network(crate::HARNESS_NETWORK_ID);
+            assert_refused(
+                judged(judge_reference(
+                    &cx,
+                    &view,
+                    None,
+                    FormAttempt::FIRST,
+                    &mut coverage,
+                )),
+                CenRow::J21,
+                Locus::Tx { slot: TxSlot::Lone },
+            );
+            assert!(
+                !coverage.contains(CenRow::J21),
+                "a refused row is not recorded"
+            );
+        }
+    });
+}
+
+/// J21's two per-height reads at a height I10 just found recorded: a view
+/// that answers `AboveTip` for either has a hole below its tip — the
+/// `Corrupt` class, over the record that was missing, never a verdict.
+#[test]
+fn j21_a_missing_root_or_leaf_count_at_the_reference_is_corrupt_not_a_verdict() {
+    let chain = spendable_chain();
+    // Anchored on genesis (`newest_admissible_reference` of the connecting
+    // height), so genesis's rows are the ones withheld.
+    let tx = anchored_on(&chain, emission(KI));
+    for (withheld, record) in [
+        (
+            WithheldRead::RootAt(BlockHeight::ZERO),
+            PerHeightRecord::CurveTreeRoot,
+        ),
+        (
+            WithheldRead::LeafCountAt(BlockHeight::ZERO),
+            PerHeightRecord::LeafCount,
+        ),
+    ] {
+        chain.with_view(|inner| {
+            let view = inner.withholding(withheld);
+            assert_eq!(
+                tx_against(
+                    &tx,
+                    TxSlot::Lone,
+                    &view,
+                    &RuleSet::GENESIS,
+                    &shekyl_network::HARNESS_NETWORK_ID,
+                    None,
+                    FormAttempt::FIRST
+                ),
+                Err(Fault::Corrupt(Corrupt::HoleBelowTip {
+                    at: BlockHeight::ZERO,
+                    record,
+                }))
+            );
+        });
+    }
+}
+
+// ---- CEN-J27 (I10–I13 + I15 on the bond post) ---------------------------
+//
+// The bond post's funding half is the spend's reads and verify under one
+// row, so the mock's share is J21's above — absence (an unrecorded
+// reference, one the window refuses, a body with no declared depth) and a
+// declared depth the tree at the reference does not hold — plus the one
+// step J21 has no verify for here: over a **planted** tree whose depth the
+// body declares, the context is yielded and the fixture's filler proof is
+// refused, the row not recorded. Called as the sequence, not through
+// `tx_against`: `judge_bond_post` runs first on this class, and a
+// fixture join reaches it signed only through `anchored_on`; the order's
+// witness through the pipeline — J27 after the post rows, on a join they
+// admit — is `tx_bond_tests`'. The pass is the driver's: a posted bond's
+// proof over the tree it spends from (`scenario_join_tests`), and the
+// moved-prefix refusal beside it.
+
+/// A fixture join, unanchored.
+fn join() -> Transaction {
+    join_market(KI, [0x6a; 32])
+}
+
+/// J27 refuses at the transaction: the reference no chain holds (I10's
+/// read) and a reference the window refuses (I11's), each under J27 on a
+/// bond post where the spend's would be I10 or I11; and nothing recorded.
+#[test]
+fn j27_refuses_an_unrecorded_reference_and_one_the_window_refuses() {
+    let chain = spendable_chain();
+    let tip = chain.tip().expect("a spendable chain has a tip").hash;
+    chain.with_view(|view| {
+        for tx in [join(), referencing(join(), tip)] {
+            let mut coverage = RuleCoverage::EMPTY;
+            let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+                .expect("a bond post classifies")
+                .on_network(crate::HARNESS_NETWORK_ID);
+            assert_refused(
+                judged(judge_reference(
+                    &cx,
+                    &view,
+                    None,
+                    FormAttempt::FIRST,
+                    &mut coverage,
+                )),
+                CenRow::J27,
+                Locus::Tx { slot: TxSlot::Lone },
+            );
+            assert!(
+                !coverage.contains(CenRow::J27),
+                "a refused row is not recorded"
+            );
+        }
+    });
+}
+
+/// An anchored join whose declared depth the tree at the reference does
+/// not hold — any depth, against the mock's empty tree — is J27's
+/// refusal; so is a body with no prunable region to declare one. The
+/// spend-arm rows and J21 are recorded vacuous beside the refusal.
+#[test]
+fn j27_refuses_a_declared_depth_the_reference_does_not_hold() {
+    let chain = spendable_chain();
+    let anchored = anchored_on(&chain, join());
+    let mut declared_one = anchored.clone();
+    let mut pruned = anchored.clone();
+    match (&mut declared_one.ct, &mut pruned.ct) {
+        (
+            Ct::Fcmp {
+                prunable: Some(p), ..
+            },
+            Ct::Fcmp { prunable, .. },
+        ) => {
+            p.tree_depth = 1;
+            *prunable = None;
+        }
+        _ => unreachable!("a bond post is an Fcmp ct with a prunable region"),
+    }
+    chain.with_view(|view| {
+        for tx in [anchored, declared_one, pruned] {
+            let mut coverage = RuleCoverage::EMPTY;
+            let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+                .expect("a bond post classifies")
+                .on_network(crate::HARNESS_NETWORK_ID);
+            assert_refused(
+                judged(judge_reference(
+                    &cx,
+                    &view,
+                    None,
+                    FormAttempt::FIRST,
+                    &mut coverage,
+                )),
+                CenRow::J27,
+                Locus::Tx { slot: TxSlot::Lone },
+            );
+            assert!(
+                !coverage.contains(CenRow::J27),
+                "a refused row is not recorded"
+            );
+            // I15 is `form`'s (`judge_proofs`, 2026-10-16), recorded there.
+            for row in [
+                CenRow::I10,
+                CenRow::I11,
+                CenRow::I12,
+                CenRow::I13,
+                CenRow::J21,
+            ] {
+                assert!(
+                    coverage.contains(row),
+                    "{row} recorded vacuous on a bond post"
+                );
+            }
+        }
+    });
+}
+
+/// A chain whose tree **at height 1** is planted at depth 1: genesis's
+/// tree is the empty one on every mock (`trees[0]`), so the chain is one
+/// block longer than the spendable one and a spend listed on its tip
+/// references height 1, the tree pushed with block 0. Three leaves: one
+/// layer-0 chunk under a single root layer — depth 1
+/// (`harness_probe_tests::the_tree_travels_with_the_root_it_was_pushed_with`).
+fn planted_chain() -> MockChain {
+    use crate::harness::fixture::{recorded_with_work, root};
+    use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
+    let planted = 3;
+    (0..=REFERENCE_BLOCK_MIN_AGE.to_raw()).fold(MockChain::default(), |chain, h| {
+        let block = recorded_with_work(
+            1_000 + h * 120,
+            CumulativeDifficulty::from_raw(u128::from(h + 1) * GENESIS_DIFFICULTY),
+        );
+        let root = root(u8::try_from(h % 250).expect("fits") + 1);
+        if h == 0 {
+            chain.push_tree(block, root, planted)
+        } else {
+            chain.push(block, root)
+        }
+    })
+}
+
+/// A join at declared depth 1, anchored on [`planted_chain`].
+fn planted_join(chain: &MockChain) -> Transaction {
+    let mut tx = join();
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut tx.ct
+    {
+        p.tree_depth = 1;
+    }
+    anchored_on(chain, tx)
+}
+
+/// The claim an honest driver makes for `tx`'s reference on `chain`: its
+/// height and the chain's root at that height (CEN-I12's anchor).
+fn honest_claim(chain: &MockChain, tx: &Transaction) -> (shekyl_types::BlockHash, ReferenceClaim) {
+    use crate::view::ChainView;
+    let reference = proof_reference(tx).expect("an anchored body names a reference");
+    let claim = chain.with_view(|view| {
+        let height = crate::harness::infallible(view.height_of(&reference))
+            .expect("anchored on a recorded block");
+        match crate::harness::infallible(view.root_at(height)) {
+            crate::view::AtHeight::Recorded(root) => ReferenceClaim { height, root },
+            crate::view::AtHeight::AboveTip => unreachable!("the reference is below the tip"),
+        }
+    });
+    (reference, claim)
+}
+
+/// The verify, apart from the reads: a join anchored on a chain whose
+/// tree **at the reference** is planted at the depth the body declares
+/// passes every step of the sequence in `validate` — the context is
+/// yielded — and in `form` is refused on J27 over its filler proof against
+/// the honest claim, the row not recorded: the steps alone are not the
+/// row, and the verify is `judge_proofs`' (2026-10-16), never
+/// `judge_reference`'s.
+#[test]
+fn j27_refuses_a_proof_the_yielded_context_does_not_verify() {
+    use super::{reference_context, BOND_POST_REFERENCE};
+
+    let chain = planted_chain();
+    let tx = planted_join(&chain);
+    let (reference, claim) = honest_claim(&chain, &tx);
+    chain.with_view(|view| {
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+            .expect("a bond post classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
+        let mut steps = RuleCoverage::EMPTY;
+        let context = defined(reference_context(
+            &cx,
+            &view,
+            BOND_POST_REFERENCE,
+            &mut steps,
+        ))
+        .expect("every step of the sequence passes over the planted tree");
+        assert_eq!(
+            (context.ref_height, context.anchor, context.tree_depth),
+            (BlockHeight::from_raw(1), claim.root, 1),
+            "the context is yielded: the reference at height 1, its root, depth 1"
+        );
+        let claims: ReferenceClaims = [(reference, claim)].into_iter().collect();
+        assert_refused(
+            judge_proofs(&cx, &claims, &mut coverage),
+            CenRow::J27,
+            Locus::Tx { slot: TxSlot::Lone },
+        );
+        assert!(
+            !coverage.contains(CenRow::J27),
+            "a refused row is not recorded, though its steps passed"
+        );
+    });
+}
+
+/// CEN-I12's comparison (2026-10-16): the context the chain yields for a
+/// reference against what `form` verified under. No claim at all — the
+/// driver never claimed a reference the chain holds in the window — is
+/// [`Stale::Reference`] with the chain's context as `expected`, never a
+/// verdict and never a second verify; so is a claim for the right height
+/// at another root. The driver's retry is bounded as the seed's is.
+#[test]
+fn i12_a_claim_the_chain_does_not_yield_is_stale_not_a_verdict() {
+    let chain = planted_chain();
+    let tx = planted_join(&chain);
+    let (reference, expected) = honest_claim(&chain, &tx);
+    let other_root = ReferenceClaim {
+        height: expected.height,
+        root: shekyl_types::CurveTreeRoot::from_bytes([0xd1; 32]),
+    };
+    assert_ne!(other_root, expected, "the wrong claim must be wrong");
+    chain.with_view(|view| {
+        for (name, verified) in [
+            ("no claim", None),
+            (
+                "another root",
+                Some(VerifiedReference {
+                    reference,
+                    claim: other_root,
+                }),
+            ),
+        ] {
+            let mut coverage = RuleCoverage::EMPTY;
+            let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+                .expect("a bond post classifies")
+                .on_network(crate::HARNESS_NETWORK_ID);
+            match judge_reference(&cx, &view, verified, FormAttempt::FIRST, &mut coverage) {
+                Err(Fault::Stale(Stale::Reference {
+                    slot,
+                    reference: named,
+                    claims,
+                    retry,
+                })) => {
+                    assert_eq!(slot, TxSlot::Lone, "{name}");
+                    assert_eq!(named, reference, "{name}");
+                    assert_eq!(claims.claimed, verified.map(|v| v.claim), "{name}");
+                    assert_eq!(claims.expected, expected, "{name}");
+                    assert_eq!(
+                        retry,
+                        crate::fault::Retry::Again(FormAttempt::FIRST.next_for_tests()),
+                        "{name}"
+                    );
+                }
+                other => panic!("{name}: expected Stale::Reference, got {other:?}"),
+            }
+            assert!(
+                !coverage.contains(CenRow::J27),
+                "{name}: a stale claim records nothing"
+            );
+        }
+        // The honest claim: the comparison agrees and the context is
+        // yielded with the row's steps recorded.
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+            .expect("a bond post classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
+        let context = judged(judge_reference(
+            &cx,
+            &view,
+            Some(VerifiedReference {
+                reference,
+                claim: expected,
+            }),
+            FormAttempt::FIRST,
+            &mut coverage,
+        ))
+        .expect("the honest claim agrees with the chain");
+        assert_eq!(context.map(|c| c.anchor), Some(expected.root));
+        assert!(coverage.contains(CenRow::J27), "the reads are recorded");
     });
 }
 
@@ -451,26 +876,28 @@ fn i12_a_missing_root_at_the_reference_height_is_corrupt_not_a_verdict() {
 /// input, and the row is recorded at the derivation. The bytes themselves
 /// are the wire KAT's subject (`pqc_signing_preimage_kat.rs`, eight
 /// daemon-accepted shapes); this holds only that the validator reads that
-/// derivation and no other.
+/// derivation and no other. The row recorded through the whole sequence
+/// is the ingest driver's (`scenario_spend_tests`, `Mined::judged_by`): a
+/// fixture spend does not pass `tx_against` whole (CEN-I13; slice 6 row 6).
 #[test]
 fn i17_derives_the_wires_signing_preimage_and_records_the_row() {
     let chain = spendable_chain();
     let tx = listed_on(&chain, KI);
     let mut coverage = RuleCoverage::EMPTY;
-    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("a spend classifies");
+    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+        .expect("a spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     let hashes = I17::signed_hashes(&cx, &mut coverage);
-    assert_eq!(hashes, tx.pqc_signing_payload_hashes());
+    assert_eq!(
+        hashes,
+        tx.pqc_signing_payload_hashes(&crate::HARNESS_NETWORK_ID)
+    );
     assert_eq!(
         hashes.len(),
         tx.prefix.inputs.len(),
         "one preimage per input"
     );
     assert!(coverage.contains(CenRow::I17));
-    chain.with_view(|view| {
-        let against = defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS))
-            .expect("an anchored spend passes");
-        assert!(against.contains(CenRow::I17), "recorded through tx_against");
-    });
 }
 
 /// The serve-credit form has no signing preimage — not because it is
@@ -480,8 +907,8 @@ fn i17_derives_the_wires_signing_preimage_and_records_the_row() {
 ///
 /// 1. **It does not reach for J10's object.** The derivation is bound to
 ///    the class, not to the record: corrupting every byte of the pass record
-///    changes nothing — still zero hashes, still admitted through
-///    `tx_against`. A derivation that read the record would move.
+///    changes nothing — still zero hashes, still admitted through the
+///    signature sequence. A derivation that read the record would move.
 /// 2. **Zero-yield is exactly the classes with no `pqc_auths` by
 ///    construction** — the serve credit and the coinbase — never an in-scope
 ///    class that happened to produce nothing: a spend yields one per input.
@@ -510,7 +937,8 @@ fn i17_reads_none_of_a_serve_credits_pass_record_and_yields_only_where_pqc_auths
     for (name, tx) in [("intact", &intact), ("corrupt record", &corrupt)] {
         let mut coverage = RuleCoverage::EMPTY;
         let cx = TxContext::derive(tx, TxSlot::Lone, &mut coverage)
-            .expect("a serve-credit-only body classifies");
+            .expect("a serve-credit-only body classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
         assert!(
             matches!(cx.class, crate::rules::tx::TxClass::ServeCreditOnly { .. }),
             "{name}: the class the zero-yield follows from"
@@ -523,23 +951,30 @@ fn i17_reads_none_of_a_serve_credits_pass_record_and_yields_only_where_pqc_auths
             coverage.contains(CenRow::I17),
             "{name}: recorded vacuous, not absent"
         );
-        chain.with_view(|view| {
-            defined(tx_against(tx, TxSlot::Lone, &view, &RuleSet::GENESIS)).unwrap_or_else(
-                |refused| panic!("{name}: admitted regardless of the record; refused {refused:?}"),
-            );
+        // The signature sequence, run as `tx_against` runs it, admits the
+        // body regardless of the record. It is called directly: on a chain
+        // with no record for the persona, `tx_against` refuses the intact
+        // body on J4 before I17 is reached (slice 8 row 3), and that
+        // refusal is the bond state's, not this row's.
+        judge_signatures(&cx, &mut coverage).unwrap_or_else(|refused| {
+            panic!("{name}: admitted regardless of the record; refused {refused:?}")
         });
     }
     // (2): the coinbase is the other body with no `pqc_auths`; a spend yields
     // one hash per input, so an empty yield can only be one of the two.
     let mut coverage = RuleCoverage::EMPTY;
     let cb = coinbase(1);
-    let cx = TxContext::derive(&cb, TxSlot::Miner, &mut coverage).expect("a coinbase classifies");
+    let cx = TxContext::derive(&cb, TxSlot::Miner, &mut coverage)
+        .expect("a coinbase classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     assert!(
         I17::signed_hashes(&cx, &mut coverage).is_empty(),
         "the coinbase yields nothing"
     );
     let spend = listed_on(&chain, KI);
-    let cx = TxContext::derive(&spend, TxSlot::Lone, &mut coverage).expect("a spend classifies");
+    let cx = TxContext::derive(&spend, TxSlot::Lone, &mut coverage)
+        .expect("a spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     assert_eq!(
         I17::signed_hashes(&cx, &mut coverage).len(),
         spend.prefix.inputs.len(),
@@ -551,7 +986,10 @@ fn i17_reads_none_of_a_serve_credits_pass_record_and_yields_only_where_pqc_auths
 
 /// The fixture substrate is signed (`fixture::signed`, at `anchored_at`):
 /// an anchored spend's every slot verifies through the body the daemon
-/// and K13 call, and `tx_against` records I18 beside I17.
+/// and K13 call, and the signature sequence records I18 beside I17. The
+/// row recorded through `tx_against` whole is the ingest driver's
+/// (`scenario_spend_tests`, `scenario_join_tests`): a fixture spend does
+/// not pass the sequence whole (CEN-I13; slice 6 row 6).
 #[test]
 fn i18_an_anchored_spends_signatures_verify_and_the_row_is_recorded() {
     let chain = spendable_chain();
@@ -559,7 +997,10 @@ fn i18_an_anchored_spends_signatures_verify_and_the_row_is_recorded() {
     let Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
         panic!("a spend is Fcmp");
     };
-    for (auth, hash) in pqc_auths.iter().zip(tx.pqc_signing_payload_hashes()) {
+    for (auth, hash) in pqc_auths
+        .iter()
+        .zip(tx.pqc_signing_payload_hashes(&crate::HARNESS_NETWORK_ID))
+    {
         shekyl_crypto_pq::signature::verify_pqc_auth(
             auth.scheme_id,
             &auth.hybrid_public_key,
@@ -568,18 +1009,22 @@ fn i18_an_anchored_spends_signatures_verify_and_the_row_is_recorded() {
         )
         .expect("the fixture's slot verifies through the shared body");
     }
-    chain.with_view(|view| {
-        let against = defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS))
-            .expect("a signed, anchored spend passes");
-        assert!(against.contains(CenRow::I18), "recorded through tx_against");
-    });
+    let mut coverage = RuleCoverage::EMPTY;
+    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+        .expect("a spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
+    judge_signatures(&cx, &mut coverage).expect("a signed spend's signatures verify");
+    assert!(coverage.contains(CenRow::I17));
+    assert!(coverage.contains(CenRow::I18), "recorded by the sequence");
 }
 
 /// One flipped byte in one input's signature refuses **that input** under
-/// I18 — the E2 driver's `ForgedSignature` place — and the rows before it
-/// (I7, the reference sequence, I17) have already passed: the refusal is
-/// the signature's, not an earlier row's. The row itself stays unrecorded
-/// on that refusal.
+/// I18 — the E2 driver's `ForgedSignature` place. The row itself stays
+/// unrecorded on that refusal. Held on the signature sequence: in
+/// `tx_against` the sequence is the last, and a fixture spend is refused
+/// at CEN-I13 before reaching it (slice 6 row 6); that the rows before I18
+/// pass a real spend and this one refuses it at the input, through the
+/// whole pipeline, is `Mutation::ForgedSignature`'s.
 #[test]
 fn i18_refuses_a_forged_signature_at_its_input() {
     let chain = spendable_chain();
@@ -603,21 +1048,28 @@ fn i18_refuses_a_forged_signature_at_its_input() {
         .hybrid_signature
         .last_mut()
         .expect("a signature") ^= 0x01;
-    chain.with_view(|view| {
-        assert_refused(
-            defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
-            CenRow::I18,
-            Locus::Input {
-                slot: TxSlot::Lone,
-                input: 1,
-            },
-        );
-    });
-    // Both refusal arms leave the row unrecorded. `tx_against` drops its
-    // coverage with the verdict, so the contract is held on `I18::check`.
     let mut coverage = RuleCoverage::EMPTY;
-    let cx =
-        TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("the forged spend classifies");
+    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+        .expect("the forged spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
+    assert_refused(
+        judge_signatures(&cx, &mut coverage),
+        CenRow::I18,
+        Locus::Input {
+            slot: TxSlot::Lone,
+            input: 1,
+        },
+    );
+    // Both refusal arms leave the row unrecorded; the second is held on
+    // `I18::check`, the sequence having no hash list to misshape.
+    assert!(
+        !coverage.contains(CenRow::I18),
+        "a signature that does not verify does not record the row"
+    );
+    let mut coverage = RuleCoverage::EMPTY;
+    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+        .expect("the forged spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     let hashes = I17::signed_hashes(&cx, &mut coverage);
     assert!(I18::check(&cx, &hashes, &mut coverage).is_err());
     assert!(
@@ -626,7 +1078,9 @@ fn i18_refuses_a_forged_signature_at_its_input() {
     );
     let mut coverage = RuleCoverage::EMPTY;
     let intact = listed_on(&chain, KI);
-    let cx = TxContext::derive(&intact, TxSlot::Lone, &mut coverage).expect("a spend classifies");
+    let cx = TxContext::derive(&intact, TxSlot::Lone, &mut coverage)
+        .expect("a spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     assert!(I18::check(&cx, &[], &mut coverage).is_err());
     assert!(
         !coverage.contains(CenRow::I18),
@@ -639,22 +1093,27 @@ fn i18_refuses_a_forged_signature_at_its_input() {
 /// reads) changes the pruned segment every slot's message binds, so a
 /// standing signature no longer verifies: refused at input 0, the first
 /// slot judged. This is the binding I17 exists for, witnessed from the
-/// verifying side.
+/// verifying side. Held on the signature sequence, as the forged case is;
+/// through the whole pipeline, on a real spend, the same body-moved
+/// shape is `shekyl-chain-ingest`'s `scenario_spend_tests` (listed behind
+/// a twin of itself, so that I18 and not L1 is seen to refuse it).
 #[test]
 fn i18_refuses_a_signature_over_a_body_that_has_since_changed() {
     let chain = spendable_chain();
     let mut tx = listed_on(&chain, KI);
     tx.prefix.unlock_time += 1;
-    chain.with_view(|view| {
-        assert_refused(
-            defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
-            CenRow::I18,
-            Locus::Input {
-                slot: TxSlot::Lone,
-                input: 0,
-            },
-        );
-    });
+    let mut coverage = RuleCoverage::EMPTY;
+    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+        .expect("a spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
+    assert_refused(
+        judge_signatures(&cx, &mut coverage),
+        CenRow::I18,
+        Locus::Input {
+            slot: TxSlot::Lone,
+            input: 0,
+        },
+    );
 }
 
 /// The boundary row 8 pinned before this row started: on the serve-credit
@@ -664,9 +1123,12 @@ fn i18_refuses_a_signature_over_a_body_that_has_since_changed() {
 /// verifier that reached for J10's object would refuse a corrupt one; this
 /// is the falsifier for "does not reach". Recorded vacuous, not absent
 /// (slice 5 Q2), as the I17 test on the same body explains.
+///
+/// Called as the signature sequence, not through `tx_against`, for the
+/// reason the I10–I12 test above gives: over the mock a credit is CEN-J4's
+/// refusal first, and this test's subject is the row after it.
 #[test]
 fn i18_is_vacuous_on_a_serve_credit_and_does_not_reach_for_its_countersignature() {
-    let chain = spendable_chain();
     let mut corrupt = serve_credit_only([0x5e; 32]);
     match &mut corrupt.prefix.inputs[0] {
         Input::ServeCredit { canonical_bytes } => {
@@ -676,14 +1138,113 @@ fn i18_is_vacuous_on_a_serve_credit_and_does_not_reach_for_its_countersignature(
         }
         other => panic!("a serve-credit fixture carries a serve-credit input, not {other:?}"),
     }
-    chain.with_view(|view| {
-        let coverage = defined(tx_against(&corrupt, TxSlot::Lone, &view, &RuleSet::GENESIS))
-            .expect("J10's object is not this row's; the verdict does not move");
+    let mut coverage = RuleCoverage::EMPTY;
+    let cx = TxContext::derive(&corrupt, TxSlot::Lone, &mut coverage)
+        .expect("a serve-credit-only body classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
+    judge_signatures(&cx, &mut coverage)
+        .expect("J10's object is not this row's; the verdict does not move");
+    assert!(
+        coverage.contains(CenRow::I18),
+        "recorded vacuous, not absent"
+    );
+}
+
+// ---- the receipt key under the identity signature (FN-DSA increment 3) ----
+
+/// The receipt key a JoinMarket commits is **signed for by the identity
+/// key**: it rides the signed prefix, so the bond post's slot — the
+/// identity key's (CEN-J13's credit arm), verified by CEN-I18 over CEN-I17's
+/// preimage — covers every byte of it (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+/// §6.3, "the identity key's signature on the JoinMarket post binds it").
+/// No new signature and no new check: the existing one refuses.
+///
+/// The fixture join commits its persona's receipt key and is signed at
+/// anchoring, so the identity signature is over the key. It verifies; then
+/// **one flipped bit of the receipt key**, in the Ed25519 half and in the
+/// FN-DSA half, with nothing re-signed, is refused under I18. This is the
+/// signature's coverage, on the sequence that verifies it — CEN-J28 is
+/// `tx_form`'s, and a substituted key that *does* parse is exactly the
+/// case this row, and only this row, refuses.
+///
+/// Red edit: drop `receipt_sign_pk` from `BondPost::write` in
+/// `shekyl-wire` (so the signed prefix no longer carries it) and the
+/// flipped posts verify.
+#[test]
+fn i18_the_identity_signature_covers_the_join_markets_receipt_key() {
+    use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
+    use shekyl_wire::transaction::BondPostKind;
+
+    fn receipt_key_of(tx: &mut Transaction) -> (usize, &mut ReceiptSignPk) {
+        tx.prefix
+            .inputs
+            .iter_mut()
+            .enumerate()
+            .find_map(|(index, item)| match item {
+                Input::BondPost(post) => match &mut post.kind {
+                    BondPostKind::JoinMarket {
+                        receipt_sign_pk, ..
+                    } => Some((index, receipt_sign_pk)),
+                    BondPostKind::Other(_) => None,
+                },
+                _ => None,
+            })
+            .expect("the join commits a receipt key")
+    }
+
+    let chain = spendable_chain();
+    let signed = anchored_on(&chain, join());
+
+    let mut coverage = RuleCoverage::EMPTY;
+    let cx = TxContext::derive(&signed, TxSlot::Lone, &mut coverage)
+        .expect("a join classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
+    judge_signatures(&cx, &mut coverage)
+        .expect("the identity key signed the post it posted, receipt key included");
+    assert!(coverage.contains(CenRow::I18));
+
+    // Byte 8 is the first of the Ed25519 half, the last byte is in the
+    // FN-DSA half (the canonical encoding's layout).
+    for at in [8usize, RECEIPT_SIGN_PK_LEN - 1] {
+        let mut tampered = signed.clone();
+        let (post_input, key) = receipt_key_of(&mut tampered);
+        let mut bytes = *key.as_bytes();
+        bytes[at] ^= 0x01;
+        *key = ReceiptSignPk::from_bytes(bytes);
+        assert_ne!(tampered, signed);
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx = TxContext::derive(&tampered, TxSlot::Lone, &mut coverage)
+            .expect("the tampered join classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
+        // Every slot's message binds the whole prefix, so the first slot
+        // judged refuses; the post's own slot is held separately below.
+        let refused = judge_signatures(&cx, &mut coverage).expect_err("a moved receipt key");
+        assert_eq!(refused.rule, CenRow::I18, "byte {at}");
+        assert!(!coverage.contains(CenRow::I18), "byte {at}");
+
+        // The post's own slot — the identity key's — no longer verifies
+        // over the body that carries the moved key, and did over the
+        // signed one.
+        let slot_verifies = |tx: &Transaction| {
+            let Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
+                panic!("a join is Fcmp");
+            };
+            let auth = &pqc_auths[post_input];
+            let hash = tx.pqc_signing_payload_hashes(&crate::HARNESS_NETWORK_ID)[post_input];
+            shekyl_crypto_pq::signature::verify_pqc_auth(
+                auth.scheme_id,
+                &auth.hybrid_public_key,
+                &auth.hybrid_signature,
+                hash.as_bytes(),
+            )
+            .is_ok()
+        };
+        assert!(slot_verifies(&signed), "byte {at}: the signed post's slot");
         assert!(
-            coverage.contains(CenRow::I18),
-            "recorded vacuous, not absent"
+            !slot_verifies(&tampered),
+            "byte {at}: the tampered post's slot"
         );
-    });
+    }
 }
 
 // ---- CEN-I2, by construction ------------------------------------------
@@ -732,4 +1293,102 @@ fn i2_the_wire_admits_two_ct_types_and_h15_refuses_null_off_the_coinbase() {
     // And on the coinbase `Null` is the shape (F3): the type set has no
     // third member for either slot to reach.
     let _ = coinbase(1);
+}
+
+/// The pool door's four no-anchor exits each end in a refusal, never in
+/// `Fault::Stale` (the review of #1102, S8). The door claims every
+/// reference the chain records in CEN-I11's window
+/// (`ReferenceClaims::for_transaction`), so `judge_proofs` yields `None`
+/// only when a reference row refuses before the comparison: a reference the
+/// chain does not record (I10), a body with no prunable region, a declared
+/// depth of zero, and one a `u8` does not hold (I13). Each case is the
+/// door's path less the signatures: the claims read as the door reads
+/// them, `judge_proofs` over them, `tx_against` with what it yields. A
+/// `Stale` here would be a crafted transaction misreported as a node fault.
+#[test]
+fn the_doors_no_anchor_exits_each_end_in_a_refusal() {
+    let chain = spendable_chain();
+    let anchored = anchored_on(&chain, listed(KI));
+    let with_prunable = |edit: fn(&mut Option<shekyl_wire::transaction::Prunable>)| {
+        let mut tx = anchored.clone();
+        match &mut tx.ct {
+            Ct::Fcmp { prunable, .. } => edit(prunable),
+            Ct::Null(_) => unreachable!("a spend is an Fcmp ct"),
+        }
+        tx
+    };
+    let exits: [(&str, Transaction, CenRow); 4] = [
+        ("no claim", listed(KI), CenRow::I10),
+        (
+            "no prunable region",
+            with_prunable(|p| *p = None),
+            CenRow::I13,
+        ),
+        (
+            "depth zero",
+            with_prunable(|p| p.as_mut().expect("a prunable region").tree_depth = 0),
+            CenRow::I13,
+        ),
+        (
+            "depth past a u8",
+            with_prunable(|p| {
+                p.as_mut().expect("a prunable region").tree_depth = u64::from(u8::MAX) + 1;
+            }),
+            CenRow::I13,
+        ),
+    ];
+    chain.with_view(|view| {
+        use crate::view::{HeaderView, Tip};
+        let connecting = Tip::connecting_height(view.tip().expect("tip").as_ref());
+        for (name, tx, row) in exits {
+            let claims = ReferenceClaims::for_transaction(&view, connecting, &tx).expect("claims");
+            let mut coverage = RuleCoverage::EMPTY;
+            let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+                .expect("a spend")
+                .on_network(crate::HARNESS_NETWORK_ID);
+            let proven = judge_proofs(&cx, &claims, &mut coverage)
+                .unwrap_or_else(|r| panic!("{name}: the proof exit, not a refusal: {r:?}"));
+            assert_eq!(proven, None, "{name}: no anchor");
+            match tx_against(
+                &tx,
+                TxSlot::Lone,
+                &view,
+                &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                proven,
+                FormAttempt::FIRST,
+            ) {
+                Ok(Err(refused)) => assert_eq!(refused.rule, row, "{name}"),
+                other => panic!("{name}: a refusal, never a fault: {other:?}"),
+            }
+        }
+    });
+    // The control: a spend anchored inside the window, at a depth the tree
+    // holds, is claimed and reaches the verify — this fixture's proof is
+    // refused there — and never exits with `None`, which over a recorded,
+    // in-window reference would end in the `Stale`.
+    let planted = planted_chain();
+    let mut in_window = listed(KI);
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut in_window.ct
+    {
+        p.tree_depth = 1;
+    }
+    let in_window = anchored_on(&planted, in_window);
+    planted.with_view(|view| {
+        use crate::view::{HeaderView, Tip};
+        let connecting = Tip::connecting_height(view.tip().expect("tip").as_ref());
+        let claims =
+            ReferenceClaims::for_transaction(&view, connecting, &in_window).expect("claims");
+        assert_eq!(claims.len(), 1, "the window claims it");
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx = TxContext::derive(&in_window, TxSlot::Lone, &mut coverage)
+            .expect("a spend")
+            .on_network(crate::HARNESS_NETWORK_ID);
+        assert!(
+            !matches!(judge_proofs(&cx, &claims, &mut coverage), Ok(None)),
+            "a claimed reference is verified, not skipped"
+        );
+    });
 }

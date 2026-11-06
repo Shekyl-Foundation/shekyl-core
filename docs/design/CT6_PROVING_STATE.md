@@ -213,11 +213,13 @@ The brief asked this round to propose an ownership-neutral delta shape because
 bonded serving obligation — not membership paths for proving. **So the
 two-consumer advance is not established.**
 
-This does **not** dissolve the concern, it relocates it: §6.3.3 states the
+This does **not** dissolve the concern, it relocates it: §6.3.3 stated the
 identity-split discipline (*"the frontier advance is public and identity-free;
-path capture is a per-identity filter over the same public stream"*) as the
-answer to `WSS-13`-in-a-new-location. That discipline stands and this round
-inherits it. What F5 left narrower — whether `P` proves its own outputs at
+path capture is a per-identity filter over the same public stream"* — wording
+§6.3.3 carried until it was **re-derived 2026-09-30**, after `Q5` removed its
+premise) as the answer to `WSS-13`-in-a-new-location. The *public,
+identity-free advance* half stands and this round inherits it; the
+*per-identity* half is what the dissolution below took the subject out of. What F5 left narrower — whether `P` proves its own outputs at
 all, and therefore whether a second capture side exists to build — was carried
 as **CT-6 Q5** and is **CLOSED by dissolution (2026-09-22, §5)**: `P` proves
 nothing as a distinct actor, so there is no second capture side and the
@@ -259,7 +261,7 @@ round's fixed points, each inherited from a verified source.
 | **C3** | A snapshot at `h` reproduces `drained_leaf_count_at(drained_through(h))`; root and depth stay pinned to that one `n` | F4; CT-5c Q1 |
 | **C4** | Every horizon **is** `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` read from the JSON authority. No second literal | F2 |
 | **C5** | Reference-height selection is `select_reference_height` / `two_sided_reference_height`, unchanged | F1 |
-| **C6** | The frontier advance is **public and identity-free**; path capture is a per-identity filter over it. No component sees two identities' ownership. **`identity-free` is a claim about the bytes, never about access**: that the content reveals no ownership does not make the file carrying it shared, and a design that reads public content out of another identity's sealed file is `WSS-13` relocated, not C6 satisfied | §6.3.3 |
+| **C6** | The frontier advance is **public and identity-free**; path capture filters it to the wallet's own outputs. **`identity-free` is a claim about the bytes, never about access**: that the content reveals no ownership does not make the file carrying it shared, and a design that reads public content out of another identity's sealed file is `WSS-13` relocated, not C6 satisfied. **Amended 2026-09-30 — the clause read *"a per-identity filter"* and *"no component sees two identities' ownership"*.** `Q5`'s dissolution (2026-09-22) established there is no second proving consumer, and records in its own row that *"C6's second capture side is not built"* — so that half has **no subject**, not a smaller one. The bytes-vs-access half is untouched and is the part that survives, because it governs **persistence** (`Q3`) rather than the number of capture sides | §6.3.3 |
 | **C7** | A reorg deeper than the horizon **refuses**; it never silently produces a wrong tree, and it says so as a rule-82 failure mode (the remedy is a full resync: remove the `.curvetree` file and then clear scan history; neither alone lifts the refusal). **BUILT 2026-09-30 (increment 5).** The horizon is `W` = `FINALITY_DEPTH_BLOCKS`, not the ring's `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`: between the two a rollback is past the snapshot tier and still repairable by folding, so the bound is `> W`. The seats are the producer's fork walk and the ingest backstop (`engine::reorg_finality`), **not** `LeafStore::rollback_to_fork` — the store must perform a deep truncation correctly (F9; the replica generator depends on it), and the policy is about whether a wallet refresh may ask. The walk confirms a fork only when a stored hash matches inside `W`; a short record on a tall chain is not a confirmed fork. Rule-82 copy reaches the caller as `ResyncRequired` (`-29211`, contract 0.10.0; `-29204` is `REFRESH_CANCELLED`) carrying the depth, `W`, and whether the depth was measured. A rescan reports the same code with `history_cleared`, rather than the server-side log `internal_detail` would have left the remedy in | §6.3.4 row 1 |
 | **C8** | Everything here is derived-from-canon: recovery is **refuse-and-resync**, never a migration. Persistence is a cache | `WSS` R3 |
 | **C9** | The graded quantity is §6.3.4 rows 2 and 3, on rule 76's floor, by the landed `shekyl-wss-q1b-bench` harness | §6.3.4; `WSS_Q1B_BENCH_SPEC.md` |
@@ -306,7 +308,7 @@ have re-imported the dependency this round exists outside of.
 | **2** | **The C1 oracle, height-keyed.** At every fixture height `h`, root, depth, and drained-leaf count equal `assemble_leaf_stream` + `root_from_scalars` over the leaves drained through `h - 1`. That cutoff is written in the test, not read from `drained_through`. Depth is graded at the two leaf counts where `layer_count_for_leaves` steps (`0`, and `SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH`). **Q2 examiner armed here, graded at increment 4:** `examine_tier_readings` compares a `TierReading` (root and depth) per tier. `TierCoverage::OutsideSpan` is the only non-answer; a tier error has no variant to hide in. Agreeing overlap is success, a root or depth mismatch is `Disagree`, and a height in neither `HeightSpan` is `Uncovered`. The 2026-09-23 decision-log row records why the examiner is armed before its tiers exist | §6.3.4 row 4; Q2 | Q2 (**ruled**); Q1's *shape* only — its constants are not inputs to the oracle |
 | **3** | **Per-transaction reconstruction reuse.** `drained`/`layers` once per tx, `gindex → drain-position` index | **Closeout (a)** — F3b | 2 |
 | **4** | **The snapshot ring + advance — BUILT (§10).** One dense ring over the reorg horizon, total by construction (`Q1` RULED 2026-09-28, §9) — no tiers, no spacing, no eviction. `shekyl_curve_tree::frontier::Frontier` advances inside `ingest_block`; the ring is the `frontier_snapshots` table of the wallet's own `LeafStore`, written and evicted in the block's own transaction; `root_and_depth_at` reads it for in-horizon heights and falls through to `root_at_count` elsewhere. `per_block_advance_worst_case_s` is **re-derived from the built advance** (Q4). The increment-2 examiner grades the real segment tier against the real snapshot tier, **unmodified** | **Closeout (b)** — F3a | 2, 3; Q2, Q3 (**ruled**); **`Q1` RULED by derivation (§9); `Q4` pre-registered with its re-point as a landing condition** — the gate is open |
-| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture not started** — it has no code anywhere, and §6.3.3 still describes *"two private capture sides"*, which `Q5`'s dissolution contradicts, so that sentence is reconciled before anything is built against it | §6.3.3; C7 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
+| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is BUILT** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. **The capture mechanism is BUILT** (PR #945): the fold captures every chunk that closes over a registered output, reconciliation backfills what a late registration is owed, and assembly reads captures and the frontier snapshot without touching `entries` — `assembly_today_depends_on_every_foreign_leaf` is at **state 3 of 3** as `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`. **The registrant is BUILT** (PR #966, its own by rule 19) and **the rebuild is deleted**: the curve-tree actor registers a spend's inputs in the same handler invocation that assembles them, and the refresh's ingest offers everything the wallet will hold once it has merged — ledger, the persona's funding outputs, and that result's own detections — between its rollback and its first fold, so a found output is captured as it folds and a resume is a mass late registration, cheap because a held pair is `AlreadyHeld` — §11.12. **Registration at construction is BUILT** (the PR after #966): the persona's pending records already hold its unconfirmed transactions, so their outputs are named to the tree by `(tx_hash, vout, O)` and registered as their block folds — §11.13. `assemble_paths` has no fallback; an unregistered input is refused by name. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
 | **6** | **Re-grade rows 2 and 3** on the amortized form, same harness, same rig — **and it is also `Q4`'s only seat.** Increment 4 re-derived the advance field and measured it off-rig; a fraction of cadence computed anywhere but the pinned Pi 4 is a property of the machine that computed it (rule 76). The blocker is the board, not the code | §6.3.4; Q4 | 4 |
 | **7** | **`.curvetree` retirement** | `WSS-18` | **P-store lane** (Q6) |
 
@@ -754,3 +756,1151 @@ reader the examiner consumes has no such check, and the weld is asserted against
 directly — a snapshot over a count on the far side of a layer step must report
 that count's depth. Recorded here rather than left as a green that proves less
 than it looks like it does.
+
+## 11 — Increment 5's capture half: the instrument, before the subject
+
+`C7` is increment 5's other half and is built (§4, row C7). This section is the
+capture half, and what it records is an **instrument**, not capture. Capture has
+no code yet. The instrument came first deliberately: capture's claim is a
+*quantitative* one, and a claim graded by a criterion first seen after the
+change has been fitted to the curve it is meant to judge.
+
+### 11.1 Nothing measured the subject
+
+`assemble_paths` had never been timed. The spend-edge rig proves against
+**synthesized** paths (`shekyl-wss-q1b-bench`'s `fixture::synth_sparse_path`),
+so assembly is bypassed and its cost was unmeasured — which also means
+"today's slope is the evidence for capture" was, until now, an argument with no
+measurement behind it. `shekyl-wss-q1b-bench`'s `assembleedge` module and
+`assemble_edge` bin drive the real, store-backed `CurveTreeClient`.
+
+### 11.2 The cost is O(chain), and every neighbouring figure is windowed
+
+This is the finding, and it corrects a line in production:
+
+> `assemble.rs`: "…`n` the drained leaf count (765 600 at the graded worst
+> case)."
+
+765 600 is `worst_case_window_leaves` — the **725-block replay window**, about
+one day of chain at a 120 s target. Assembly is not bounded by it.
+`CurveTreeClient::entries` is append-only (`extend` on ingest, replaced
+wholesale only by a rollback's rebuild, never `retain`ed, `drain`ed or
+`truncate`d); `rebuild_from_store` reloads the **whole** drained set; and a
+resume from a store whose frozen segments were pruned is refused outright
+(`ClientError::ResumeFromPrunedStore`, `F5`) rather than resumed from a partial
+one. Every drained leaf since genesis is in memory, and every spend rebuilds
+every layer over all of them.
+
+**Measured 2026-10-02**
+(`docs/benchmarks/wss-q1b/assemble_edge_20261002T052942Z.json`). The per-leaf
+cost is **flat at 220–221 µs across every arm**, which is the signature of a
+pure linear term:
+
+| arm | `n` | depth | `k` | s/call | µs/leaf |
+| --- | --- | --- | --- | --- | --- |
+| `rung_below` | 467 856 | 4 | 2 | 103.43 | 221.1 |
+| `rung_floor` | 467 857 | 5 | 2 | 102.91 | 220.0 |
+| `rung_top` | 765 600 | 5 | 2 | 169.36 | 221.2 |
+| `input_cap` | 765 600 | 5 | 8 | 168.86 | 220.6 |
+
+**The cost is `n`, and almost nothing else.** Three readings say so:
+
+- **Linear in `n`.** The population ratio across the same-rung pair is
+  `1.6364`; the cost ratio is `1.6457` — **0.57 % from perfect linearity**.
+  The criterion read `SameRungSlope` at 64.6 % against its 10 % bound, which
+  is the expected pre-capture reading and now a measured one.
+- **Depth costs nothing measurable.** The cross-rung pair differs by **one
+  leaf** and one whole layer, and by `0.995×` in cost. Isolating depth from
+  population was the point of choosing a rung floor and its predecessor, and
+  the layer term does not survive it.
+- **`k` is lost in `n`.** Raising the owned count from 2 to `MAX_INPUTS` at a
+  fixed population costs **−0.30 %** — cheaper, i.e. inside the noise. That is
+  `#842`'s `n + k` measured for the first time, and it says `k` is not a term
+  at this scale.
+
+**Dated note (registrant PR).** Everything above is the record of the
+*rebuild* era: `assemble_paths` no longer rebuilds, so the per-spend figures
+in this section describe a cost the wallet no longer pays. A spend whose
+inputs were registered by the refresh assembles from captures; one whose
+inputs were never registered pays one reconciliation at the actor (span-
+bounded, §11.10), never the chain. The instrument now times the capture
+path, and the figure it owes is increment 6's graded run on the floor.
+
+### What the control covers, and what it does not
+
+**This is an observational before-figure, not an attested one.** The record's
+`rig.attested` reads `["not requested"]`, and the word *attested* in this
+project means the rule-76 rig pins, which this run neither requested nor
+carries. The claim was overstated when this section first landed and is
+corrected here.
+
+What the run does establish:
+
+- **every series converged** — each arm was internally stable across its own
+  timing window, and `stopped_because` says `converged` for all four;
+- **the board was stable at the close** — `rung_top` was re-timed back to back
+  on the same client, diverging **0.7 %** against a 5 % bound.
+
+What it does **not** establish is the comparability of samples taken hours
+apart. The arms are timed in sequence across 3 h 38 m, and the control brackets
+only the last of them. So the same-rung, cross-rung and `k` readings rest on
+*uncontrolled* between-arm stability. The design makes that deliberate rather
+than accidental: a control spanning the arms would mean holding `rung_top`'s
+client resident while `rung_floor` is timed, which is the residency bias §11.5
+records two discarded runs for.
+
+There is a bracket that escapes that trade, and **increment 6 should carry it**:
+re-time a *small* fixed arm — the depth-4 rung floor is 25 993 leaves, a few
+seconds a call — between every measured arm. Same `assemble_paths` work, so one
+sensitivity profile; a working set around 3 % of the top arm's, so the
+residency it reintroduces is not the residency that biased those runs. That
+brackets each compared sample for minutes, not hours. It is what would turn a
+reading like this one into a controlled one, and it is the control a *graded*
+capture figure will need.
+
+Corroboration, flagged as such: per-leaf cost agrees to **0.5 %** across four
+arms measured hours apart, which a materially drifting board would be unlikely
+to produce. That is **not** an independent control — per-leaf constancy is the
+proposition under test, so a drifting board and a non-linear cost could in
+principle compensate. It is weak evidence pointing the same way, not a
+substitute for the bracket.
+
+### Whose seconds these are
+
+**221 µs/leaf is the staker-class x86 host's figure, and nothing else's.**
+The host *role* is named beside every number below — rule 37 keeps the host
+itself in `shekyl-dev` — because this project uses *floor* for the Pi (rule
+76), and `min_leaves_for_depth(6)` is also called a rung **floor**. An
+unqualified "floor" beside a duration invites a reader to merge a staker
+measurement with a floor-device one. They are different numbers on different
+hardware.
+
+Projecting each per-leaf rate at 760 320 leaves/day:
+
+| assembly population | `n` | staker-class x86 (observed, 221 µs/leaf) | floor device, projected (509 µs/leaf) |
+| --- | --- | --- | --- |
+| replay window, ~1 day of chain | 765 600 | **169 s** (measured) | ~6.5 min |
+| `min_leaves_for_depth(6)`, ~23 days | 17 778 529 | ~65 min | ~2.5 h |
+| one year of chain | 277 516 800 | ~17 h | ~39 h |
+
+The staker column is the **observed before-figure**. The floor-device column is
+a **projection and only that**: 509 µs/leaf is `537.59 ms` ÷ `1 056`
+leaves/block, the per-block replay rate §9 already carries, and no Pi has run
+this instrument. It is here to size the gap, not to grade anything.
+
+**Increment 6 does not owe a Pi measurement of today's cost.** Rule 76 pins a
+*graded* figure to the floor device, and what increment 6 grades is capture —
+the form that replaces this one. Measuring O(chain) on the Pi would spend half
+a day of a contended host to price code that is being deleted.
+
+These numbers are **worse** than the ~102 µs/leaf this section previously
+carried. That came from a busy dev box with no control at all; this host is
+slower, and is a **virtualised** x86 guest (`QEMU Virtual
+CPU`), so the constant stays machine-specific. What travels between hosts is
+the **shape** — flat per-leaf cost, therefore linear in chain length — and the
+mission argument rests on the shape, not the constant. A 2.3× spread between
+two x86 hosts changes no conclusion that "linear fails at some chain age"
+already supports.
+
+**Provenance caveat on this record.** Its `environment.git_revision` reads
+`1ab4664cb`, one commit behind the binary that produced it. The binary was
+cross-built from the tree that became `11a0c8451` while that change was still
+uncommitted, and Cargo reused the cached build-script output — a `.rs` edit is
+not one of the files `build.rs` watches — so the stamp is both stale *and*
+missing its `-dirty` suffix. `build.rs` anticipates "a clean revision behind a
+dirty prover" for *dependency* edits and names runtime capture as the
+mitigation, but `AssembleEdgeRecord` carries only the build-time stamp. The
+delta `1ab4664cb..11a0c8451` is confined to `bin/assemble_edge.rs`'s
+plan-resolution wiring and does not touch the measured path, and the deployed
+binary was confirmed to carry that change behaviourally (both modes refused an
+unrepresentable `--rung`). The measurement stands; the stamp is wrong, and
+`FOLLOWUPS.md` carries the remedy.
+
+**This is a mission-hierarchy failure, not a budget miss.** Commitment 3 — the
+system must outlast the team — is the binding one: a cost linear in chain
+length fails it at *some* chain age whatever the present budget says, so the
+remedy cannot be a faster board. That is the argument for capture, and it is
+stronger than the slope framing this increment was opened under.
+
+It also means **"worst case" cannot be derived here.** It is a ruling about how
+old a chain the wallet must still be able to spend on. Until that is ruled, no
+plan in the instrument is the graded plan: `plan_at_replay_window` is named for
+what it measures, `plan_at_depth` establishes shape on a cheap rung, and
+`AssembleEdgeRecord::plan` says which ran. **Blocked on that ruling (rule 22).**
+
+### 11.3 Three depths, which are not one
+
+A conflation worth keeping separate, because it already produced a wrong
+reading once in this session:
+
+| axis | value | what it is |
+| --- | --- | --- |
+| rate model | `GRADED_TREE_DEPTH` = 6 | what a path's proof weight is priced at, which fixes a block's leaf rate |
+| replay window | 5 | the depth of the tree 765 600 leaves makes — and it is 5 at every model depth 3…7, since the leaf rate moves 4.5 % across them while a rung needs 38× |
+| the chain | grows | what the curve tree actually is; it crosses `min_leaves_for_depth(6)` after ~23 days, so `GRADED_TREE_DEPTH`'s stated band is satisfied in weeks and its rule-21 reopener was never unsatisfiable |
+
+Two set relations are pinned by test so the conflation cannot return: the
+window's leaf count stays strictly below the floor of the rung the rate model
+names, and no plan may sit at or above it.
+
+### 11.4 The criterion, fixed in advance
+
+Flat does not mean one constant across every depth — a deeper path may cost
+one more layer's walk — so the criterion has two halves:
+
+- **within a depth rung**, cost constant within noise however much `n` grows;
+- **across a rung boundary**, the deeper arm costs no more than one layer's
+  work, within the same tolerance. The check is a ceiling. A cheaper step
+  still passes, and that pass is not evidence the step matched
+  `expected_cross_rung_ratio`. The model treats every layer as the same cost.
+
+The populations are chosen so both are observable, and derived from the
+production ladder rather than restated: the cross-rung pair differs by **one
+leaf** (a rung floor and its predecessor), which isolates the layer step from
+the population term entirely, and the same-rung pair separates ≥ 1.5×, where a
+linear term shows as ≥ 50 % against a 10 % bound.
+
+`expected_cross_rung_ratio` is a **uniform-layer model** and says so: Selene
+nodes are 38 wide and Helios 18, so the true step is in chunk work. It is right
+for *this* question, where the hypotheses differ by orders of magnitude, and
+explicitly **not** good enough to grade a passing capture — increment 6 must
+widen the bound or derive from `chunk_width`. Named blocker.
+
+### 11.5 What this round does not establish
+
+- **No graded figure.** The board control times `rung_top` twice, back to
+  back, on the same client, after every other arm has been measured and its
+  rig dropped. Both timings are then the only resident population, so
+  whatever separates them is the board. The control does not span the earlier
+  arms: holding the top client across them would time `rung_floor` beside the
+  larger working set and shrink the same-rung spread toward `Flat`. The first
+  shape run **diverged 69.1 % against a 5 % bound and was discarded**, with
+  the arms showing why it had to be (one *more* leaf came out 38 % faster;
+  `k = 8` came out cheaper than `k = 2`). The dev box is shared (rule 38), so a
+  figure-producing run is a claimed-host activity; §11.2's figure came from a
+  claimed, idle staker-class x86 host. **It is an *observational*
+  before-figure** — `rig.attested` reads `not requested`, and the control
+  brackets only the last arm, so between-arm comparability is uncontrolled
+  (§11.2 states the scope and the cheap bracket that would close it). It is
+  not a graded figure either: grading means a budget on the rule-76 rig, and
+  there is no budget for this form because capture replaces it — what
+  increment 6 grades is capture, on the floor device. Two further runs were discarded before the kept one, both for the
+  same cause: the **harness** differed between two samples that are only
+  comparable if it does not, first by holding every arm's rig at once and then
+  by timing `rung_top` alone against `rung_floor` beside it. Neither is
+  detectable by the board control, because the control is part of what moved.
+- **The integrity gate's verdict.** The rig takes its reference root from the
+  client, so `assemble_paths`'s root gate is green by construction; the rig
+  measures what it costs, never whether it is right. Root agreement is graded
+  in-crate by the height-keyed C1 oracle (`client::ct6_oracle`, increments 2
+  and 4) against a replay oracle this crate cannot reach — `entries` is
+  `pub(crate)`, `store::ops` is private, the oracle is `#[cfg(test)]`. Widening
+  any of them would publish a second root mechanism a production caller could
+  gate against, which `assemble.rs` rules out by design. What the rig does
+  assert is its own subject (rule 47): the client drained exactly the
+  population fed, and reports the depth that count implies.
+
+### 11.6 The gate did not cover the path material — and now does
+
+**Current state:** `assemble_paths` refuses a path that does not commit to
+the root it claims, with `ClientError::PathRootMismatch`. The refusing step
+is `PathRootFault`: `ChildAbsent` when the leaf's scalar is missing from its
+parent branch, `RootDisagrees` when the folded root is not the claimed root.
+The check runs for every assembled path.
+
+**What it closed, in the past tense it belongs in.** Building §11.5's red-bite
+turned up the gap. With `entries` reduced to the owned leaf alone,
+`assemble_paths` *did not refuse*: it returned a path whose `tree_root` was
+the real consensus root while every branch below it came from a one-leaf tree
+— a leaf chunk of 1 under a root committing to 44.
+
+The red-bite therefore has **three states**. The gate moved it to the second:
+it asserts `PathRootFault::RootDisagrees`. Capture moved it to the third.
+`capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`
+asserts the path equals the full-tree path. The chunk-length witnesses of the
+pre-gate failure were removed with the gate: the call no longer returns a
+path to measure. State 3's edit was that equality.
+
+The cause was that the two mechanisms never met. The gate is
+`root_and_depth_at`: it checks the reference's root and supplies the depth
+both routes stamp on `tree_depth`. The branches come from the capture
+table and the frontier snapshot — the one route; an unregistered input is
+refused by name since the registrant landed (§11.12). `tree_root` is copied from the gated reference, so the gate's
+answers do not see the branches. The docstring that said the paths came from
+"the same `layers` that gate approved" was withdrawn 2026-10-01.
+
+**The check that closes it is not a comparison of two store reads.**
+`root_and_depth_at` answers both root and depth from the store tier, so
+comparing it against `tree_root` compares the store with itself and leaves the
+branches unchecked — which is the thing that can actually drift. The sound form
+**recomputes the root from the path's own branches** (an `O(depth)` hash walk)
+and refuses on disagreement. That verifies the artifact, so it catches every way
+the branches can diverge rather than the one case a test happened to construct.
+
+**Built as the capture build's first production commit.**
+`verify_path_against_its_branches` runs after each path is assembled. It
+hashes the leaf chunk to a Selene point, then at each layer requires that
+point's converted scalar to be **present in the branch** before hashing the
+branch to the next point, and finally compares against `TreeContext::tree_root`.
+The membership step is what binds the path to *this* leaf — without it, a
+correct root over another leaf's branches would pass. Those two refusals are
+`PathRootFault::ChildAbsent` and `PathRootFault::RootDisagrees`. Each node is
+hashed with `shekyl-fcmp`'s `hash_grow_*` at offset 0 from the layer's init
+point, the same call `try_build_layers` makes per node. The fold is
+path-shaped, so it is not a call to `try_build_layers`, and it is the only
+such fold: the assembly KAT does not carry a second copy. Cost is `O(depth)`.
+
+The gap it closes was *latent*:
+`entries` is append-only and a pruned-store resume is refused (`F5`), so
+production never assembles from a truncated set. It is *live* now that capture
+is a second branch source — captured chunks plus a frontier snapshot — whose
+mutual consistency is exactly what can drift. So this is **capture's
+integrity gate**, and it landed as the first production commit of that build,
+policing the source it exists for.
+
+Threat model, kept proportionate: **no funds are at risk.** An inconsistent path
+yields a proof that fails after ~6 s of proving on the floor device, or a
+malformed transaction the daemon rejects. That is a rule-82 failure-clarity cost
+plus a small behavioural tell — proportionate to a cheap check, not to a round
+of its own.
+
+### 11.7 A reading is withheld from a run that cannot support one
+
+`LoadControl` already says a non-quiet run "cannot claim its figure is a
+property of the work rather than of the machine" — which is precisely the claim
+a grade makes. The record nevertheless serialized a `FlatnessGrade`
+unconditionally, so a contaminated run could have reported **`Flat`**: the one
+reading capture is trying to earn, handed over by a moving board.
+
+The record carries one `FlatnessReading`: the same-rung spread, the cross-rung
+ratio, the expected ceiling, and a `FlatnessOutcome` — `Graded(..)`, or
+`Withheld(BoardNotQuiet | SeriesUnconverged)`, with the reason part of the value
+(rule 82). `read_flatness` fills all four, so the published ratio is the ratio
+the criterion judged, including the zero-arm guard. Withholding the judgment
+is not withholding the data: the numbers and every series stay in the record,
+which is what lets a later reader re-judge the run rather than take a verdict's
+word.
+
+This is deliberately **not** `Verdict::Ungraded`. `Verdict` answers *did the
+figure meet its budget on the pinned rig*, and its `Ungraded` means "measured
+somewhere else"; this answers *does the cost track `n`*, and withholds for
+contamination rather than provenance. Two questions with different inputs, so
+two types — collapsing them would give `Ungraded` a second meaning.
+
+One related correction: the `k` arm's field was an **absolute** spread, so a
+`MAX_INPUTS` arm that came in *cheaper* — which the discarded run's did — was
+reported as a 70 % *cost*, inverting `#842`'s `n + k` finding. It is now a
+signed change, and a negative value reads as what it is: the `k` term lost in
+the noise of `n`.
+
+### 11.8 The capture table, as a reader dumping it will find it
+
+`captured_chunks` is **plaintext on purpose** (RULED by Rick, 2026-10-02):
+nothing but testnet exists to expose, and a bug in capture's reorg behaviour
+is far cheaper to find in a readable table than behind a seal. Sealed
+persistence is PR3, and `FOLLOWUPS.md` carries the row that retires this
+table before genesis — **deleted, not migrated** (rule 15), testnet wallets
+resync. That row is a *tracked promise with a grep surface*, not an
+enforcement: the FOLLOWUPS gates check a row's target, owner and prose, never
+its discharge.
+
+**No nettype branch exists or may be added.** A table that refused on mainnet
+would be `nettype` selecting a code path on `rust/**`, which rule 71 forbids —
+and it would defeat the reason for plaintext, since testnet would then never
+exercise the persistence mainnet ships.
+
+| | |
+| --- | --- |
+| key | `TreePositionKey` — the leaf position at which the chunk **closed** |
+| value | `layer u8 ‖ len u32le ‖ bytes`, repeated |
+| schema | `SCHEMA_VERSION` 6 → **7** |
+
+**Why the key is `end_leaf`.** A chunk's identity is `(layer, index)`, but
+that pair does not fit a `u64` — at layer 0 the index reaches ~`1.0e17`
+against the `2^56` a packed `(u8, u56)` leaves — and every other key in this
+store is a `u64` newtype. `end_leaf` is *derivable* from what a reader has
+(for an owned leaf at `p` and layer `L`, the chunk is `p / outputs_per_node(L)`
+and ends at `(index + 1) * outputs_per_node(L) - 1`), so a spend-time lookup
+stays a direct key read. And truncation becomes the **same**
+`delete_pos_keys_batched(start)` call every other position-keyed table uses,
+in the ring's own transaction — one undo path literally, not by analogy.
+
+**Two value shapes, and `I` is not stored.** The `layer` byte says which:
+
+| layer | contents | size |
+| --- | --- | --- |
+| `0` | the leaf chunk's siblings as **identities**: `O ‖ C ‖ CM.x`, 96 B each | 38 × 96 = **3 648 B** stored |
+| `>= 1` | the node chunk as the frontier folded it, 32 B per child | 18 × 32 = 576 B (Helios) or 38 × 32 = **1 216 B** (Selene) |
+
+Layer 0 is identities rather than the frontier's scalars because the path
+types still take compressed points (`Path::leaves`, `ChunkLeaf`,
+`ProveInputLeafChunk.leaf_outputs`), and `O.x` is a one-way projection of
+`O`. The circuit does not — **ANSWERED 2026-10-06**: `Circuit::first_layer`
+membership-tests `{O.x, I.x, C.x, CM.x}` against a branch tape that
+`flatten_leaves` fills with x-coordinates only (§11.11). The prover API
+still consumes four fields per sibling (`O`, `I`, `C`, `CM.x` — 128 B, the
+leaf term in row 4's 9 024 B path figure), but **`I` is not stored**: it is
+`Hp(O)`, derived at assembly, until that API carries the four scalars the
+tape already hashes. A stored copy of a recomputable value is a second copy
+that can disagree, and the re-derivation is one hash-to-point per sibling
+against ~6 s of proving.
+
+A fold cascade closes several layers on one leaf; those chunks share a key,
+because they became final at one instant and a rollback un-finalizes them at
+one instant.
+
+**Writes merge by layer; they do not replace.** They do not always arrive
+together, and the coordinates are shared: layer-0 chunk 17 and layer-1 chunk 0
+both end at leaf **683**. So an output discovered *late*, whose layer-0 chunk
+ends there, would silently erase another output's layer-1 chunk already at that
+key. A first revision replaced, on the reasoning that the chunk set is a
+property of the leaf count — it is not: it is a property of the leaf count
+**and of which outputs are owned**, and ownership can be learned after the
+fold, which is precisely what the backfill does.
+
+Re-offering identical bytes is a **no-op**, so reconciliation may recompute
+freely. Offering *different* bytes for one `(end_leaf, layer)` is refused with
+`StoreError::ConflictingCapture`: a chunk's contents are fixed by the leaves
+under it, so one coordinate has one correct value, and two sources disagreeing
+is the condition a capture exists to be trusted against rather than a merge to
+resolve in either direction.
+
+**Cross-reference note.** `CURVE_TREE_STORE_SHAPES.md` §3 enumerates the
+store's tables *at the CTS round's own pin*, where `SCHEMA_VERSION` was 5.
+This table arrived after it. Neither document is wrong; the enumeration is
+dated, and it is not edited here because rewriting a pinned list would make
+the pin a fiction.
+
+### 11.9 The client side: ownership is registered, and the fold writes
+
+Capture rides the **fold**, and a chunk folds once. That single sentence
+settles the whole shape of this side.
+
+**Ownership is registered, never derived.** `CurveTreeClient` sees every
+output on the chain and cannot tell which are the wallet's — that is the
+scanner's knowledge, and putting it here would mean either a second view-key
+consumer or a guess. So `register_owned(gindex, output_key)` is the input —
+the index and the one-time key, because a `gindex` alone is a name that a
+reorg can hand to a different output — and it returns what the call *bought*:
+
+| | |
+| --- | --- |
+| `OwnedRegistration::BeforeDrain` | the leaf has not drained; every chunk over it is captured as the fold closes it |
+| `OwnedRegistration::AfterDrain` | the leaf had drained; chunks that already closed are **owed to reconciliation**, and no future fold reports them |
+
+The two are not cosmetic. A late registration that returned `()` would read
+exactly like a working one, and the thing it silently did not do is the thing
+capture exists for. An unseen `gindex` is `BeforeDrain`, not an error: the
+scanner may identify an output from a block this client has not ingested, and
+the registry is matched at each leaf's own drain, so an early registration
+simply works.
+
+**The registry does not persist.** `resume` starts empty. A copy of the
+wallet's output list kept here would be the copy that rots when the two
+diverge; the wallet re-registers what it holds. The consequence is stated
+rather than hidden: after every resume, each held output is `AfterDrain`, and
+what that leaves owed is reconciliation's whole job.
+
+**Positions come from the fold, because the fold is the one instrument.** A
+leaf's position is its index in drain order, which is what the frontier counts
+as it pushes. `ingest_block` resolves this block's owned positions before the
+advance — a chunk closing here may hold a leaf draining in the same block —
+and commits them beside the frontier. Resolving a position a second way, from
+the maturity index, would be a second instrument over one field with no
+cross-check between them.
+
+**A rollback keeps the registry and cuts the positions.** Opposite failure
+directions, so both are asserted. Losing the registry stops capture for every
+held output after the first reorg, silently, because the fold finds nothing
+registered. Keeping a position past the cut leaves a coordinate that now names
+a *different* leaf, so a chunk holding nothing of the wallet's reads as owned.
+Truncation deletes `range(start..)` and shifts nothing, so a surviving leaf
+keeps its position and a removed one re-resolves when it re-drains:
+`owned_positions.retain(|p| p < surviving_leaf_count)`, the same coordinate
+`FoldedChunk::end_leaf` is compared against (§11.8).
+
+One case a registry keyed on `gindex` alone does not cover: a reorg past the
+owned output's *creation*, not merely its drain. `gindex` is re-derived from
+the replayed block sequence, so on the new chain that number may name a
+different output. That registry keeps the number and captures the stranger's
+chunks — an **over-capture**. That is the failure the `(gindex, O)` pair
+below closed. It was never a wrong proof: assembly resolves by `gindex` and
+refuses a leaf that does not carry the expected `(output_key, commitment)`
+(`ClientError::IdentityMismatch`). The wallet's rescan rebinds the
+registration. The reorg red-bite is
+`a_reorg_past_creation_retires_the_registration_and_rebinds_it`.
+
+**A `gindex` is a name, not an identity — and that is the whole lesson.**
+Three rules tried to work out, *after* a rollback, which output a number used
+to point to. Each failed differently, and the pattern is the finding:
+
+*Candidate 1 — `gindex >= surviving_leaf_count`.* The tempting tidy-up: the
+same inequality on the same quantity as the positions. It mixes units.
+`surviving_leaf_count` counts drained **positions**, while a `gindex` is a
+global output index that skips values consumed by leaf-ineligible outputs
+(`types.rs`, `LeafEntry::gindex`). `a_gindex_is_not_a_position` builds a block
+with a `TargetKind::Other` output and shows a valid leaf whose `gindex` equals
+the drained count.
+
+*Candidate 2 — `gindex < next_gindex && !entries.contains(gindex)`.* This one
+typechecks. Its first clause protects a registration for an output the scanner
+found in a block this client has not ingested, which sits above `next_gindex`.
+It is **inert**: a rollback removes the chain's *tail*, and
+`rebuild_from_store` sets `next_gindex` to `entries.last() + 1` over the
+survivors, so every removed output lands inside the band that clause protects.
+Substituting it fails the same passes as performing no trim at all —
+`a_removed_gindex_sits_above_the_rebuilt_next_gindex`.
+
+*Candidate 3 — the set difference on `gindex` alone, taken across the
+rollback.* Correct for a removed output, and it **misses rebinding**: a
+rollback that gives the gindex to a *different* output leaves it present, so
+the difference sees nothing gone.
+
+*And the case none of them could reach.* A registration made **before** this
+client ingests the output's creation block is not in the held set at all, so
+no cross-the-rollback rule touches it — correctly, because until the fork it
+was a legitimate registration for a block not yet seen. If the reorg goes past
+that creation, the arriving chain can hand the gindex to another output, and a
+registry keyed on the number marks a stranger's leaf as owned. Nothing
+financial breaks (spending is driven by the wallet's ledger, which never holds
+it) but the registry and the plaintext capture table would be wrong and
+nothing would correct them.
+
+**So the registration carries `(gindex, O)`, and ownership is tested by
+identity.** `O` is a one-time key, so the pair names one specific output. A
+leaf is owned only if the registry holds *its* key at *its* gindex, which
+makes the rebinding case impossible by construction rather than detectable
+afterwards. Registration refuses a key the client disagrees with
+(`ClientError::RegistrationIdentityMismatch`) — the same inter-component
+invariant `IdentityMismatch` guards at assembly, raised at registration rather
+than at the spend that needed the capture — and a re-registration *replaces*,
+so a rescan rebinds a gindex with no separate retraction.
+
+**Inherited by the registrant.** `RegistrationIdentityMismatch` is raised in
+**normal operation**: a caller whose view is still the pre-reorg chain offers
+the old key for a gindex that now names a different output, and the client
+correctly refuses it — exactly what happened to the first draft of the reorg
+red-bite below. The caller that can be behind is the **ledger**, not the
+persona scan: the tree's ingest is acknowledged before the ledger's merge
+commits, so a merge that loses its race leaves the tree on the new chain and
+the ledger — and any spend selected from it — on the old one. (The persona
+scan is behind by construction rather than by accident: it sweeps only
+blocks `ARCHIVAL_REORG_DEPTH_BLOCKS` behind the tip and treats them as final,
+so a pair it seals is rebound only by a reorg deeper than that. The tree's
+own window, `FINALITY_DEPTH_BLOCKS`, is one lock window wider, so such a
+reorg is not unrepresentable — and the verdict it would get is this one.)
+The registrant classifies it as *the caller's view is stale* and nothing
+else: the batch form `sync_owned`
+collects such pairs in `OwnershipSync::stale`, registers the rest, reconciles
+once if anything is owed, poisons nothing, and the rescan re-offers the right
+key.
+
+Two tests grade it, at two layers. The client's
+`a_batch_registers_reconciles_once_and_reports_stale_pairs` offers a wrong key
+by hand: reported, still reported on a re-offer, and the right key then
+accepted and reconciled. That shows the verdict; it does not show a reorg.
+The actor's
+`a_view_behind_a_reorg_is_reported_stale_and_recovers_on_the_rescan` does: a
+chain is ingested and its outputs registered, the tree is rolled back to the
+fork and a different chain ingested over the same gindexes, and then, through
+the handle, (1) the old pair is reported stale *alone* — the pair below the
+fork in the same batch is still held; (2) a spend of the old pair is refused
+`OutputNotRegistered`, which the re-anchor classifier maps to reselection;
+(3) the rescan's pair registers, and its reconciliation rebuilds **exactly**
+the one leaf chunk the reorg replaced; (4) both outputs assemble against the
+new root. The equality in (3) is the witness that nothing was left behind:
+with the rollback's capture truncation removed, the old chain's row answers
+for that chunk and the figure reads 0, which is how that mutation fails the
+test.
+
+The engine's refresh never sees a stale pair as an error — it is logged with
+a count — which is also why it adds no `RefreshError` variant and so no
+wallet-RPC contract bump. The re-anchor classifier keeps the variant in the
+reselection family, as #945 placed it: the caller's view is stale, a rescan
+re-registers against the chain it now sees, and discarding the selection is
+what that rescan does.
+
+The rollback trim stays, but it is now **cleanup, not correctness**: it keeps
+the registry from accumulating dead rows, and it is the candidate-3 difference
+widened to the pair, so it catches rebinding too. Correctness is the identity
+test, and `an_early_registration_does_not_claim_a_strangers_output` is where
+that is graded — the one case the trim cannot reach, and the mutation that
+reverts ownership to `gindex` alone fails exactly it.
+
+**And the rebinding is what the reorg red-bite checks.** Retiring a stale
+registration is half the claim; the other half is that what replaces it is
+right. `a_reorg_past_creation_retires_the_registration_and_rebinds_it` forks
+below the output's creation, re-ingests a *different* chain so the same gindex
+names a different output, refuses a re-offer of the **old** key, re-registers
+with the new one as a rescan would, and compares the capture against the path
+`assemble_paths` builds from the post-reorg tree.
+
+### 11.10 Reconciliation is the backfill, and the list of its causes is short
+
+A capture that is **due and missing** is a late registration, whatever made it
+late, so `reconcile_captures` is one mechanism rather than a repair beside a
+backfill.
+
+**Two triggers, not four.** The working list carried four, and two of them do
+not survive grounding:
+
+| cause | status |
+| --- | --- |
+| **Resume** — the registry does not persist, so every held output returns `AfterDrain` | **real, and the mass case** |
+| **Late discovery** — the scanner identifies an output after its chunks closed, including a lagging scan | **real** |
+| A pre-capture (`SCHEMA_VERSION` 6) store opened by this binary | **unreachable.** The version cell is a strict equality check; such a store is refused at open and re-synced, not migrated |
+| A crash between a fold and its capture | **unreachable.** Captures ride the block's own transaction beside the leaves and the ring snapshot, so the two commit together or neither does |
+
+Recorded as a correction rather than silently dropped, because the four-case
+list is the kind of thing a later reader re-inherits from a summary.
+
+**Due is the same one comparison.** A chunk over owned position `p` at layer
+`L` ends at `(p / outputs_per_node(L) + 1) * outputs_per_node(L) - 1`, and it
+is due exactly when that end is **strictly below** the drained leaf count —
+the same `end_leaf < surviving_leaf_count` a rollback applies and the table is
+keyed on (§11.8). One quantity, three readers.
+
+That strictness is a fencepost, and it was shown to be load-bearing the hard
+way: `<=` instead of `<` passed every other pass in the file, because the
+fixture drains a whole number of chunks and so never puts a chunk's end *at*
+the drained count. `an_unclosed_chunk_is_not_due` is the boundary, at both
+shapes — one leaf short of a layer-0 chunk, and one short of a layer-1 node —
+because they fail differently. Layer 0 reads past the end of the drained
+entries; layer 1's node slice stays in bounds and would write a **wrong**
+chunk silently.
+
+**It also checks the fold.** The owned positions are recomputed from
+`drained_sorted` — the order assembly resolves against — rather than trusted
+from `owned_positions`, which the fold wrote leaf by leaf. The recomputed set
+must *contain* every held position, and is a superset because it also covers
+registrations the fold never saw. A held position it does not produce is
+`ClientError::OwnedPositionDrift`, not a silent overwrite: two orders over one
+field with no comparison between them is how a wrong coordinate survives, and
+a capture keyed on the wrong leaf is a path that fails after the prover has
+run.
+
+**The oracle is the fold, not assembly.** Reconciliation and assembly both go
+through `drained_sorted` + `build_layers`, so comparing them compares a
+function with itself. The fold is the independent producer: it writes from the
+store's committed rows plus the block in hand, while reconciliation rebuilds
+the layer stack from `entries`. `a_reconciled_row_equals_the_folded_one`
+registers early on one client and late on another and requires the rows to be
+**byte-equal**.
+
+**And the cascade rule gets its end-to-end bite.** Leaf 0's layer-1 node and
+leaf 683's layer-0 chunk both end at leaf 683, with different owners. Leaf 0
+is registered early so the fold writes layer 1; leaf 683 is registered late so
+reconciliation writes layer 0 at the same key. Replacing instead of merging
+drops leaf 0's branch, and
+`a_late_layer_zero_capture_does_not_erase_a_folded_layer_one` is what notices
+— the hazard §11.8 names, now exercised through both producers rather than at
+the store alone.
+
+**Cost: lazy, and bounded by what is missing.** Due coordinates are
+arithmetic, so the call first asks the table what it already holds — one read
+per distinct `end_leaf`, no hashing. On a normal resume every due chunk is
+present, and that is the whole cost: `O(owned × depth)` reads and
+`leaves_rebuilt == 0`. Only a **missing** chunk is rebuilt, and only from the
+leaves under it — 38 at layer 0, 684 at layer 1. The bound is the chunk's own
+span, never the chain's length.
+
+Above layer 0 the children are rebuilt rather than read, because the store
+holds leaves and captures, not interior nodes. `build_layers` over an aligned
+span reproduces the real tree's nodes within it: `outputs_per_node(L)` is
+`outputs_per_node(L - 1) · chunk_width(L)`, so the grouping is the one the
+whole-tree build would have made.
+
+**This is a correction, and the reason it matters is the arc's own.** A first
+revision rebuilt the entire layer stack before comparing anything against the
+table, then wrote the difference — so "only the delta is written" held for the
+writes and not for the work. Since the registry does not persist, **a resume is
+a call to this**, which put §11.2's figures — ~65 min at
+`min_leaves_for_depth(6)` on the staker-class host, ~2.5 h projected on the
+floor device — on every wallet open, where they hurt more than at spend, a
+spend being a deliberate act and opening a wallet not. That is precisely the
+cost capture exists to remove. It was recorded here as a population
+reconciliation *inherits*; it is not inherited, because nothing requires the
+rebuild when the captures are already there, and on a normal resume they are.
+
+The cost is a **reported field** rather than an implementation detail for that
+reason: a pass asserting only "wrote nothing" passes the rebuilding revision
+unchanged. `reconciling_twice_rebuilds_nothing_the_second_time` asserts
+`leaves_rebuilt` is exactly the missing chunks' spans — an equality, not
+"fewer than the chain", because at this fixture's size a layer-1 span *is*
+most of the tree, so an inequality would measure the fixture rather than the
+bound — and `a_resume_with_nothing_owed_hashes_nothing` is where it reaches
+zero.
+
+**Span-bounded is not the same as cheap, and the worst case belongs here
+beside the zero.** A missing chunk's rebuild scales with its *layer*, because
+that is what its span is:
+
+| missing chunk at layer | leaves rebuilt | at §11.2's observed rate |
+| --- | --- | --- |
+| 0 | 38 | negligible |
+| 1 | 684 | ~0.2 s |
+| 2 | 25 992 | ~6 s |
+| 3 | 467 856 | ~1.7 min |
+| 4 | 17 778 528 | ~65 min |
+
+The seconds are the **assembly** rate (221 µs/leaf) used as a proxy; assembly
+does more per leaf than this rebuild does, so they are an upper bound on the
+hashing and are quoted to an order, not a figure. The leaf counts are exact —
+`outputs_per_node(layer)`.
+
+So a late registration under a long-finalized high-layer chunk can still cost
+tens of minutes, the same order as the old per-spend figure. It is bounded by
+the chunk rather than the chain — a chunk's span does not grow once it has
+closed, while the chain does. But it is the worst case that remains, and
+"span-bounded" should not be read as "cheap".
+
+**How often depends on whose output it is.** For the principal it is rare:
+ownership has to be learned long after the fact for a *high* chunk to be the
+missing one, and §11.12 registers a detection before its leaf folds. For the
+persona it was the **only** case until §11.13, because the persona's scan
+learns of every output about 710 blocks after it drained; it is now the case
+for the outputs the wallet did not build (anything a third party sends to
+the persona's public address), for the stake-in (§11.13 names why), and for
+the restart window §11.13 states. An earlier revision of this paragraph said
+"it is rare" without the qualifier, and was written before anyone had asked
+when the persona's scan runs.
+
+What stays `O(n)` is `drained_sorted`, for the positions and the drift check.
+It is a sort, not a hash, and it goes with `entries` at increment 7.
+
+One pass serves every late registration. That is why `register_owned` does
+not resolve positions itself, and why a caller registers everything it holds
+and then reconciles **once**. Every chunk is computed before the write opens
+and the whole batch commits in one transaction, so a failure part-way leaves
+the store untouched. Only the delta is written: a reconcile with nothing owed
+opens no write transaction, which is the steady state and is pinned by
+`reconciling_twice_rebuilds_nothing_the_second_time`.
+
+The resolved positions then **become** the fold's. Without that the backfill
+would be a one-shot — the chunks already closed get written and every chunk
+closing afterwards is missed, leaving the leaf silently unprotected from the
+backfill onward. `reconciliation_resolves_the_position_so_the_fold_continues`
+grows the fixture to the chunk count that closes a layer-1 node after the
+reconcile, because that is the only way to observe it.
+
+### 11.12 The registrant: two sites, one batch call, no fallback
+
+**Where ownership enters the tree.** Two sites, both through one client call,
+`sync_owned(&[(gindex, O)])`, which registers what it can, reconciles **once**
+iff anything was owed, and reports — not refuses — the pairs whose key the
+tree disagrees with.
+
+| site | when | what it buys |
+| --- | --- | --- |
+| the refresh's ingest (`merge::curve_tree_ingest_scan_result`) | every refresh, between the ingest's rollback and its first fold, with everything the wallet will hold once this refresh has merged (`Engine::owned_outputs`) | **registration before the leaf folds**, so the chunk is captured as it closes and nothing is rebuilt; and **resume as a mass late registration** — the registry does not persist, so the first refresh after open is one reconcile (zero hashing when the captures are there) and every later one is all `AlreadyHeld` |
+| the curve-tree actor's `AssembleTx` handler | before every assembly, in the same handler invocation (E1: no ingest or rollback interleaves) | **the capture path is total.** A spend's inputs already carry `(gindex, O)`; the handler registers them and then assembles. Whatever reached the actor — a spend, a claim, a bond, a release — assembles from captures, whether the refresh registered it earlier or not. A held pair is `AlreadyHeld` and costs a map lookup |
+
+**Why inside the ingest, and why at that point.** One scan result spans
+everything from the ledger's height to the tip (`local_refresh.rs`:
+`scan_start = synced_height + 1`, `scan_end = chain_tip.next_height()`), and a
+leaf drains one lock window (`DEFAULT_LOCK_WINDOW`, 10 blocks) after its
+block. So any result longer than the lock window carries outputs that are
+*found and drained inside it* — a wallet that was offline for a day, or one
+being restored, sees almost nothing else. This PR's first revision registered
+after the ingest (what the ledger held) and again after the merge (what the
+merge inserted). That is right for a wallet sitting at the tip and late for
+every output in a catch-up: the fold had already passed them, so each one was
+`AfterDrain` and its chunks were rebuilt by §11.10's table — on the one path
+every restore takes.
+
+The registration is now a step of the ingest, and each side of where it sits
+is load-bearing:
+
+- **after the rollback**, because a reorg rebinds gindexes. Offered before
+  it, the new chain's pair is compared with the old chain's leaf at that
+  gindex, reported stale and dropped;
+- **before the first fold**, for the reason above;
+- **inside the recovery wrapper**, because a rebuilt client starts with
+  an empty registry: the retry re-offers the set before it folds the rest of
+  the range. This is also what the earlier ordering rule — "register after
+  the recovering ingest, so a poisoned client has been rebuilt" — was for. A
+  poisoned client fails this call with the same recoverable fault the
+  ingest's own calls raise, and the ordering that rule asked for would have
+  let a rebuilt client fold the whole range unregistered. *Records-was
+  (until 2026-11-02):* recovery was an engine-side respawn of the actor;
+  it is now an in-place rebuild inside it (`CURVE_TREE_CLIENT.md` §11),
+  with the same empty registry and the same placement.
+
+Since the placement is only visible in what the registration *cost*, the
+ingest returns the `OwnershipSync` it got. The first draft of the tests below
+probed the tree after the ingest and passed with the registration moved back
+behind the fold — by then the late path had reconciled, and "held and
+served" was true either way. They assert on the returned report instead:
+`before_drain == 1`, no reconciliation.
+
+**What is offered.** Everything the wallet will hold once this result has
+merged, from three sources:
+
+1. the ledger's unspent transfers **below the result's range**. A row at or
+   above the range start is one this result re-derives — the range starts at
+   the fork on a reorg and one past the ledger's height otherwise — so
+   offering it would register a pair the merge is about to rewind;
+2. the persona's held funding outputs (below);
+3. what the result detected, less what it also saw spent. These are not in
+   the ledger yet, because the merge follows the ingest, and they are the
+   outputs the fold is about to reach.
+
+Source 3 means an output is named twice — from the detection, then from its
+ledger row on every later refresh — by two derivations over two types.
+`merge::tests::a_detection_and_its_ledger_row_name_one_pair` holds them
+equal; nothing else would notice them drift, and the registry is keyed on
+the pair.
+
+**The persona's outputs, and why its scan has no site.** The staking
+persona's funding outputs live in its sealed scan state and never enter the
+ledger, and the drain, the claim, the release and the bond-post spend them
+through the same actor. Before this section's second revision nothing
+offered them: the tree first heard of a persona output when the drain's own
+`AssembleTx` registered it, which put the whole late-registration rebuild
+inside the persona's exit.
+
+The obvious site — the persona scan registers each output as it finds it —
+does not do what it appears to. That scan sweeps only blocks
+`ARCHIVAL_REORG_DEPTH_BLOCKS` (720) behind the tip (`pscan/start.rs`), and a
+leaf drains 10 blocks after its block, so the scan learns of an output about
+**710 blocks after it drained**. A registration made there is late too. It
+would also not survive a restart: the registry is not persisted and the scan
+names each output once. So the refresh carries them, from the seal, on every
+pass.
+
+**For an output registered this way the first registration is late by
+construction**, and what it costs is §11.10's table read at the chunks that
+closed in the meantime. Since §11.13 that is the fallback, not the normal
+path: it is what an output pays when the wallet did not build the
+transaction that created it, when it is the stake-in, or when the wallet
+restarted between that transaction's mining and the scan's confirmation —
+§11.13 lists the three. The outputs of the transactions the persona builds
+are registered as their block folds and pay none of it.
+The bound is the trail, not the output's age: registered at the first
+refresh after the scan sealed it, the output is under whatever closed in
+roughly 710 blocks, and every chunk closing afterwards is captured by the
+fold. At §10's worst-case leaf rate (1 056 leaves/block) that window is about
+750 000 leaves — past a layer-3 span (467 856), so layers 0–3 are missing and
+the rebuild is of the order of the table's layer-3 row, once per layer-3
+chunk rather than once per output; and it reaches a layer-4 span
+(17 778 528) for the outputs within 750 000 leaves of one's end, about one in
+twenty-four. On a lightly loaded chain the same arithmetic gives
+proportionally less. None of it is in the drain any more, and none of it
+grows with how long the persona held the output. The dependency this creates
+on the store's leaf rows is §11.11's persona leaf-row reader.
+
+An unreadable persona seal is **read as empty and reported** — the opposite
+of every staking read, deliberately. Those reads decide what the wallet tells
+its user it holds, so they fail closed. This one decides only when captures
+are written, and the `AssembleTx` handler still registers a spend's inputs;
+failing would stop the principal's refresh on the state of the persona's
+file. But reading it as empty also puts the persona back on the spend-time
+registration this section exists to remove, silently, so the state is
+carried out of the read (`OwnedSet::persona_seal_unreadable`) and the refresh
+raises `RefreshDiagnostic::PersonaSealUnreadable` for it — the consequence,
+named, on the engine's diagnostic surface. The cause reaches the user
+through the staking read, which opens the same file the same way and fails
+closed on it; the test asserts both on one fixture. The diagnostic surface's
+only production sink today is the tracing projection, so the event is typed
+and testable but is not yet something a wallet UI renders.
+
+One conversion, `ownership::p_assemble_input`, now turns a funding record
+into the tree's types. The four persona spend paths each carried a copy;
+they call it, and the registration pair is its first two fields, so what
+the persona registers and what it spends cannot differ.
+
+**The persona's rows are in the plaintext table from the refresh after
+discovery**, where before they appeared at its spend. Same table, same §11.8
+ruling, same retirement row, and the same home afterwards: Q3 governs *the
+wallet's single proving state*, which is what Q5's dissolution established
+there is, and rules that path sets ride the sealed file. The persona's
+captures are part of that one proving state — not a second home, any more
+than the principal's are. The retirement row used to say the path set rides
+"the wallet's own ledger", which is narrower than the ruling it carries out
+and does not hold the persona's outputs; it now names the sealed proving
+state Q3 names (RULED by Rick, 2026-10-05, on the review's reading of the
+row).
+
+**And the rebuild is deleted.** #945's dispatch comment promised the registrant
+PR would retire the fallback, and the first site is what makes that honest
+rather than a tense change: with registration only at refresh, a wallet that
+opened and spent before its first refresh would have taken the `O(chain)`
+rebuild through a door nothing closed. Now `assemble_paths` has one path.
+An input with no resolved position is refused by name —
+`OutputNotRegistered` if the pair is not held (a direct caller that skipped
+the sync, or a pair the sync reported stale), `OutputNotDrained` if it is
+held and simply has not drained yet. The three oracle passes that exercised
+the rebuild register their inputs first, as the actor does. The reference
+derivation the state-3 oracle compares against lives in the test module as
+`rebuilt_path`, built from the tree primitives — where a reference derivation
+belongs once production stops doing it.
+
+**`AlreadyHeld` is the third state, and it is what makes a per-refresh
+re-offer free.** A re-offer of a held pair is `AfterDrain` only when the leaf
+has drained *and* its position is not resolved — "held" and "served" diverged,
+and the captures are owed. Otherwise it is `AlreadyHeld` and triggers nothing.
+`a_re_offer_after_a_rollback_is_already_held_and_already_captured` grades the
+one case where that could go wrong: a rollback past the drain trims the
+position but keeps the pair, the re-drain's fold re-resolves it and writes the
+chunks, and the re-offer is held *with the captures present* — asserted on the
+rows, not the verdict, because the verdict alone would also come from a rule
+that never reconciled.
+
+**Unspent only**, in all three sources: the ledger's flag, the seal's own
+pruning of spent funding records, and the result's observed key images.
+Capture serves spending, and a spent output's chunks are plaintext rows for
+nothing. The set is offered every refresh, so an output a reorg makes
+unspent again is picked up when its flag flips.
+
+**What the instrument times now.** `shekyl-wss-q1b-bench`'s `assemble_once`
+timed the rebuild through #931; it now registers the rig's inputs outside the
+timed call (the one-off reconcile is the cost of building the fixture, not the
+subject) and times the capture path alone — the quantity §11.4's criterion
+was pre-registered for. §11.2's before-figure stays as the record of the
+rebuild era; it is not a number the rig can still produce.
+
+**Where this is graded.** Client: the batch's four verdicts and the stale
+report; the rollback re-offer above; a resumed mass registration reconciling
+once then `AlreadyHeld`; an unregistered input refused by name. Actor:
+`SyncOwned` round-trips; `AssembleTx` registers before it assembles — pinned
+by an unregistered input on an empty tree refusing as *not drained*, which
+only the handler's own sync can produce; and §11.9's stale view across a real
+rollback. Engine, in `ownership::tests`, each named for what it holds and
+each failed by the mutation beside it:
+
+| test | mutation that fails it |
+| --- | --- |
+| `an_output_found_and_drained_within_one_scan_result_is_captured_as_it_folds` | the registration moved behind the fold (`after_drain` reads 1) |
+| `a_reorged_result_registers_against_the_chain_it_keeps` | the registration moved ahead of the rollback (the new pair is reported stale) |
+| `a_rebuilt_client_is_re_offered_the_set_before_it_folds` (named `a_respawned_actor_…` until 2026-11-02) | the recovery retry offering nothing |
+| `a_detection_spent_within_the_same_result_is_not_registered` | the spent filter removed |
+| `a_ledger_row_the_result_supersedes_is_not_offered_from_the_ledger` | the range filter removed; the result's observed spends ignored |
+| `refresh::start_refresh_integration_tests::refresh_registers_a_found_output_before_the_fold_reaches_it` | the refresh task handing the ingest an empty set |
+| `a_persona_funding_output_is_registered_by_the_refresh_not_by_its_spend` | the persona's set left out of the offer |
+| `an_undecodable_persona_seal_is_offered_without_and_reported` | the unreadable-seal arm made to fail; the report firing regardless; the unreadable state dropped before it reaches the set |
+
+The last row is the production refresh itself: a chain that pays the
+wallet at height 2 and runs on past the lock window, scanned by the real
+scanner in one result, leaves the output held with nothing owed — the task
+built the set from the result's own detections and the ingest registered
+it before the fold reached its leaf. The engine-level rows drive
+`ingest_scan_result_into_curve_tree`, which builds its own set; only this
+row sees what `run_refresh_task` hands over.
+
+"Unspent" is read against the result as well as the ledger's flag: a row
+the merge has not yet flagged, or a detection, whose key image the result
+saw spent is left out. The result's key images are every input in its
+range, unfiltered, so the wallet's own key images are collected once and the
+result's list walked once against them — linear in the result, not the
+product of the two.
+
+The persona test is the one that carries the claim above: registered by a
+refresh, the output rebuilds **exactly** its one closed leaf chunk
+(`leaves_rebuilt == 38`); two more chunks then drain, closing its layer-1
+chunk; and the sync the handler makes at the spend finds it held with no
+reconciliation, after which the path assembles from a layer-1 chunk nobody
+was asked to write. Over the consistent ledger-and-tree fixture in
+`transfer_pending_tx_tests`, a registration pass reconciles once, a re-offer
+is held, and a spend assembles through the actor from captures with no
+rebuild to fall back to; the real-proof builds there run through the syncing
+handler as well.
+
+### 11.13 Registration at construction: the outputs the wallet built
+
+**The persona's outputs are known before the chain carries them.** Every
+output the persona receives in normal operation is created by a transaction
+this wallet built — the bond post's change, a claim's mint, a release's
+return, a drain's change — and the wallet knows each one's key `O` the moment
+it builds it. What it does not know is the gindex, which exists only once
+the block is mined and ingested. So the registration is made in two halves:
+the wallet names the output ahead of time, and the tree's ingest completes
+the pair at the one moment both halves are known and the leaf has not yet
+drained. Every chunk over it is then captured by the fold, and §11.12's
+structurally-late path is no longer the persona's normal path.
+
+**The record already existed.** `PendingBondPost`, `PendingEmissionClaim`,
+`PendingDrain` and `PendingRelease` each carry the full signed transaction
+bytes, sealed on the StakeEngine's side before the first send
+(persist-before-dispatch), and retired only on the persona scan's evidence
+that the transaction confirmed — `remove_confirmed` for a post,
+`remove_settled` for the rest — which is the archival reorg depth after
+mining, when the outputs appear in the scan seal as funding records. So the
+expectation's lifetime *is* the record's: it is derived from the live records
+on every refresh (`Engine::persona_expected_outputs`, from
+`expected_outputs_of` over each record's bytes), offered to the tree as a
+whole set that **replaces** the last one, and disappears when its record
+does, by which time the funding record names the same output by its pair.
+Nothing new is persisted, no schema moves, and the persona's keys stay
+inside the StakeEngine: the engine reads bytes the persona sealed, not
+secrets. Every output of each transaction is offered rather than a chosen
+subset, because all of them are this wallet's — the persona's, or the
+principal's for a drain's payment, which the principal's own scan also
+finds; a pair offered twice is one pair.
+
+**Match on the transaction, not the key.** A key is public the moment its
+transaction is relayed. Matching by `O` alone, someone who copied one of our
+keys into an output of their own, mined first, would take the registration:
+the identity check passes, because the key is the same, and the wallet's
+real output — at another gindex — would be left to the late path. Bounded
+damage, but exactly the cost this mechanism exists to remove, and an
+outsider could trigger it at will. So the expectation is
+`(tx_hash, vout, O)` (`ExpectedOutput`); `TxLeafInputs` carries the block's
+transaction hash beside its outputs; and `CurveTreeClient::ingest_block`
+looks each transaction up by hash, confirms the key at that `vout`, and
+registers the pair at the gindex `collect_block_leaves` assigned.
+`match_expected_outputs` reads that assignment; it does not count vouts
+a second time. A transaction hash is the block feed's, not the
+wallet's, so a hash that resolves to a different key is **counted and
+skipped**, never an error (`expected_output_mismatches`): a feed that
+mislabels can cost the wallet an early registration and nothing else. A
+`vout` the transaction does not have is treated the same way.
+
+**The hash is optional on the type and mandatory in use.** The daemon-side
+replica and the fixtures serve no expectations and pass `None`. A producer
+that passes `None` while expectations are live would make every expected
+output a late registration without a trace, so the ingest refuses the block
+(`ClientError::TxHashMissing`), with nothing applied. The engine's one
+producer (`curve_tree_decode::decode_block_leaves`) always supplies it —
+the block's listed hash for a body, computed for the coinbase.
+
+**Where it sits.** The expectations ride the same registration step as the
+pairs (`ownership::curve_tree_offer`): inside the ingest, after its
+rollback, before its first fold, inside the recovery wrapper — for §11.12's
+reasons, and one more: a rollback leaves the expectations in place, so a
+transaction mined again on the other fork is matched again at its new
+gindex (`a_re_mined_transaction_is_matched_again_after_a_rollback`).
+
+**What stays late, stated.**
+
+- *Outputs the wallet did not build.* Anything paid to the persona's
+  payment keys by a transaction the persona did not build
+  (`ExternalTransfer`) has no record here and is registered from the scan
+  seal, as before.
+- *The stake-in.* It is an ordinary principal transfer, and the principal's
+  send journal keeps recipients and inputs, not the transaction's bytes or
+  output keys. Its key is derivable — the retained transaction secret plus
+  the persona's payment keys — but that is a principal-side record of a persona
+  output, a placement question of its own; it stays on the seal path and
+  `FOLLOWUPS.md` carries the row. One output per funding, spent by the bond
+  post that sweeps it.
+- *A restart between mining and the scan seal.* `entries` hold no
+  transaction hashes, so an expectation set after its block has already
+  folded cannot be matched, and the output waits for the scan seal — up to
+  about 720 blocks of closures, the same cost as §11.12's. Not papered over
+  by matching on keys over `entries` (that reopens the copied-key case at
+  the one place it is exploitable), and not by asking the daemon for the
+  transaction by hash from the principal's refresh (a by-hash query is a
+  persona-interest signal at the daemon, which is a firewall question).
+
+**Where this is graded.** Client, `ct6_oracle::expected`: registered at
+ingest and nothing owed at the spend; the copied key in another transaction
+not registered (fails with the match made on the key alone); a key the
+transaction does not carry counted and skipped; the re-mined transaction
+matched again after a rollback; a hash-less transaction refused under live
+expectations and accepted without; a new set replacing the old; and a block
+the ingest then refuses leaving no mismatch counted — the match is read-only
+and the ingest applies its result with the rest of the block's effect, so a
+refused block retried does not count one mislabelled transaction twice
+(fails with the count applied before the commit). Engine,
+`ownership::tests`: the sealed pending transaction's outputs are the offer,
+registered as its block folds and held with nothing owed at the spend
+(fails with the offer's expectations dropped); a retired record withdraws
+its expectations; unparseable bytes expect nothing.
+
+### 11.11 What capture still does not do
+
+**One FOLLOWUPS row keeps its rationale here, not in the queue (rule 95).**
+The sibling-points question is answered on the layer-0 row in §11.8: the
+path types take points, and the circuit tape does not.
+
+*The sibling-points read (rule 30) — ANSWERED 2026-10-06, off
+`rust/shekyl-oxide/crypto/fcmps`.* The pins:
+
+- `Circuit::first_layer` opens the *spent* output's `O`, `I`, `C` and `CM`
+  as full points, then `tuple_member_of_list` over `{O.x, I.x, C.x, CM.x}`
+  and `branch`. `branch` is vector-commitment tape. No sibling y-coordinate
+  is a variable in it.
+- `flatten_leaves` writes `to_xy(leaf.O).0`, `to_xy(leaf.I).0`,
+  `to_xy(leaf.C).0` and `cm_x`. `Fcmp::prove` writes the same four scalars
+  when the root branch is the leaves.
+- Three uses of a sibling point sit outside the tape.
+  `Path::opening_matches_chunk` compares each leaf with the spent output to
+  find it in the chunk. `Branches::new` compares whole leaf vectors when
+  several inputs share a leaves-only root, and that equality is the point,
+  sign included. `Output::new` refuses an identity point, which has no
+  affine x.
+- `verify_path_against_its_branches` hashes the chunk from x-coordinates,
+  after `ChunkLeaf::scalars` projects the points. `PL-D3` stores a sibling's
+  `CM` as `cm_x` because the leaf scalar is x and the opening point exists
+  only for the spent output; this reading agrees with that. The signer
+  (`prove_input_from_spend`) matches `(output_key, commitment)` and then
+  `cm_x`, and forwards the three compressed points. It is a carrier the
+  prover-API round has to change.
+
+That round is its own change in the vendored proof crate (rule 30). The
+pinned vector is built through `Branches::new`, including a leaves-only
+root — the only arm that compares sibling points — and the proof it produces
+verifies against today's verifier. The statement is the same tape, so it
+should, and "should" is what the vector is for. Today's `Branches::new`
+compares whole points. If that round reconstructs them from x-coordinates
+and two inputs decompress to opposite signs, it returns `None` before a
+proof exists. The carriers that still name three points per sibling are
+`Path::leaves`, `ProveInputLeafChunk`, `ProveInput`, the signer's
+`LeafEntry`, and the FFI and multisig carriers. The verifier, the wire and
+consensus are untouched. The spent output's four points stay full points;
+the wallet has them.
+
+The open leaf chunk's scalars are already in the snapshot.
+`Frontier::encode` writes `leaf_chunk`. Nothing returns them:
+`open_branches` hashes that chunk into the parent and yields only the
+layers above the leaves, and the open layer-0 path is `leaf_chunk_at`'s
+ranged read of leaf rows. Retiring that read is an accessor for the field
+the snapshot already persists. It has no caller until the prover API
+carries x-coordinates, so it is not added here.
+
+*The identity account before `entries` retires (increment 7).* Retiring
+`entries` needs each of these identities supplied or refused.
+
+- **Open leaf chunk.** A path whose owned leaf sits in the open leaf chunk
+  at the reference height needs that chunk's sibling points as the prover
+  API stands. The anchor is `tip - REF_ANCHOR_AGE`, a tail of a few chunks,
+  read today as at most `SELENE_CHUNK_WIDTH - 1` leaf rows. Kept until the
+  prover API carries x-coordinates and the accessor above exists.
+- **Owned positions.** Reconciliation recomputes come from `drained_sorted`
+  over `entries` (§11.10). Without `entries`, those come from the store.
+- **Registration key.** Registration is bound to `(gindex, O)`. The check
+  that a registered pair is the output the client holds reads `O` from the
+  entry's identity (`held_output`, a lookup in `entries` by gindex,
+  including leaves that have not drained). This is the point read for the
+  binding rather than for the prover API. The tree's leaf holds `O.x`.
+  Whether the binding can be made on `O.x` — the wallet can project its own
+  key — or the point has to be kept is this reader's to settle.
+- **Persona leaf rows.** Not a reader of `entries`. The persona's
+  registration is late for every output the wallet did not build (§11.12,
+  narrowed by §11.13). Its rebuild reads the store's drained leaf rows over
+  the missing chunk's span (`read_drained_range`), so it survives retirement
+  of the in-memory vector as it stands, and it stops working the day those
+  rows are pruned below a chunk a persona output has yet to be registered
+  under.
+  Whatever increment 7 does to the leaf rows has to keep them for the
+  persona scan's trail plus its catch-up, or give the persona a way to name
+  its outputs before they drain.
+
+Two limits the oracle does not cover, named so a later commit does not
+inherit them silently. The fixture's depth puts only layer 1 under a closed
+chunk. A layer-2 chunk needs 25 992 leaves, so the state-3 passes grade a
+captured branch at layer 1 and open branches at layers 1 and 2. That covers
+both parities and both sources, and it does not cover a *captured* Selene
+layer.
+
+**A fixture-wide blind spot, found by the mutation sweep and wider than
+capture.** `coinbase_raw()` gives every output the Ed25519 basepoint as *both*
+`O` and `C`, and it has twenty call sites. Every oracle built on it
+distinguishes leaves only by `cm_x`, which `leaf_blob` seeds by **in-block
+index** — so leaves at the same index in different blocks are identical too.
+Permutations are therefore invisible to those passes: sibling order, `O`/`C`
+swaps, and **drain order**, which is consensus-critical, since reordering
+identical leaves produces the same root. This is a test blind spot over
+consensus-adjacent code, not a defect in the code under test, and the fix is
+the generator rather than the tests — a seeded helper already sits beside it.
+Its own change, not this one's.

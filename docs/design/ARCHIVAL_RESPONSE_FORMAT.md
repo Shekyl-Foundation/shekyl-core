@@ -19,32 +19,40 @@ request a held decoy and file the signature as a pass for an unheld
 target. `SF-D8` RULED 2026-09-13 (amended twice later the same day; the
 second amendment is what landed) that `P` gates `anchor_height` against
 its own height ±`L` and signs the **decoded** 72 bytes ‖ `shard_id_le[8]`
-under a new versioned domain; the v1 nonce-only message is not reused;
-the pass record carries the 32-byte random and the 8-byte anchor height;
+‖ `D[32]` — `D` a nonce-salted cSHAKE256 digest of the response body
+ahead of the signature (added 2026-10-04) — under a versioned domain
+(`…-scheme-v3`; the v1 nonce-only and v2 digest-less messages are not
+reused); the pass record carries the 32-byte random, the 8-byte anchor
+height and the 32-byte `D`;
 admission requires `anchor_height ∈ [h − 720 − L, h − 720]` for validated
 predecessor `h`, rebuilds the transcript with the connecting chain's hash
 at that height, and refuses every pass record while `h < 720 + L` (724).
-`verify_pass_countersignature` is amended to that v2 message by (a0): the
+`verify_pass_countersignature` verifies that message: the
 verify context carries `predecessor_height` and the `L + 1` anchor hashes
-(`anchor_hashes_ptr/len`, sized through `shekyl_archival_pass_anchor_window`)
+(`anchor_hashes_ptr/len`, sized through `shekyl_archival_pass_anchor_window` (deleted, `DEL-008`))
 and no longer carries `cb_out_key`, `cb_out_key_readable`, or
 `prev_block_hash`; verdict codes 8 (`CBKEY_UNREADABLE`) and 12
 (`PREVHASH_UNPOPULATED`) are RETIRED, never reused; 13, 14, 15 are minted
 for the malformed table, out-of-window anchor, and below-threshold cases;
-the prunable witness entry is `nonce[32] ‖ anchor_height_le[8] ‖
+the prunable witness entry is `nonce[32] ‖ anchor_height_le[8] ‖ D[32] ‖
 HybridSignature`. The challenge
 tuple and `cb_out_key` are not in the fetch signature: the fetch proves
 `P` served, not which miner asked. `SF-D8` also ruled the carrier: the
-HTTP body is a fixed-length outer envelope holding the canonical
-`HybridSignature`, followed by the unchanged `RF-D4` frame; response
-headers stay exactly `content-type` and `content-length`, which covers
-envelope plus frame. The 2026-08-21 status above remains the record of
-what landed, not a claim that the v2 message or the envelope is
-implemented. **The `RF-D4` section below is left as the CLOSED record
-of the inner frame; where it calls that frame the whole body ("no
-envelope", `served response :=`) it is superseded in scope by `SF-D8`
-and is rewritten by the implementation PR that lands the envelope.**
-Each superseded line carries its own marker.
+HTTP body is the shard body followed by a fixed-length outer envelope
+holding the canonical `HybridSignature`, last because it covers a digest
+of everything ahead of it; response headers stay exactly `content-type`
+and `content-length`, which covers envelope plus body. *(Records-was: on
+2026-09-13 the body ahead of the envelope was "the unchanged `RF-D4`
+frame"; the `SF-D8` amendment of 2026-10-08 replaced it with the
+`SHT-Q2` tx-range body framed per transaction in
+`shekyl_wire::shard_frame`, and the serve loop now writes the provider's
+bytes unframed — `ServedFrameHeader` is deleted.)* The 2026-08-21 status
+above remains the record of what landed then; the message and the
+envelope landed with `SF`. **The `RF-D4` section below is left as the
+CLOSED record of the retired inner frame; where it calls that frame the
+whole body ("no envelope", `served response :=`) it is superseded in
+scope by `SF-D8`, and where it describes the frame itself it is
+RETIRED 2026-10-08.** Each superseded line carries its own marker.
 
 *(This line read "implementation pending" until 2026-08-23. It was stale from
 2026-08-21, when PR #522 merged: the doc led the PR per this round's own
@@ -113,7 +121,7 @@ ruling, and it was wrong in a way that produced a test of the wrong claim. See
 | 1 | **Leaf chunk is pruned-side by construction** | RULED | `ARCHIVAL_PASS_RECORD_CARRIER.md` CR-D2 |
 | 2 | **Reserved padding field; no padding scheme** | RULED 2026-08-08 (TJ-H) | `ARCHIVAL_CHALLENGE_MECHANISM.md:1065` |
 | 3 | **Nonce anchor = `cb_out_key` of block `h`** | RULED 2026-08-10 (fork 2 closed) | `ARCHIVAL_CHALLENGE_MECHANISM.md:40-43` |
-| 4 | **`r` deleted**; nonce `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` — **as the countersignature message, SUPERSEDED 2026-09-13 by `SF-D8`** (requester-random `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`, anchor at `tip − 720`; verifier LANDED by (a0)) | **RULED 2026-08-10** — `RF-D3` resolved, see §2 | `ARCHIVAL_CHALLENGE_MECHANISM.md:48`, `:820-850` |
+| 4 | **`r` deleted**; nonce `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` — **as the countersignature message, SUPERSEDED 2026-09-13 by `SF-D8`** (requester-random `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ D[32]`, anchor at `tip − 720`, `D` the nonce-salted delivery digest) | **RULED 2026-08-10** — `RF-D3` resolved, see §2 | `ARCHIVAL_CHALLENGE_MECHANISM.md:48`, `:820-850` |
 | 5 | **`CR-F2`'s `prefix_hash` / tx-id change** | priced, **lands here** | `ARCHIVAL_PASS_RECORD_CARRIER.md` CR-F2 |
 
 ### 1.1 The carrier's answer, which this format must express
@@ -787,7 +795,7 @@ checking explicitly on any future field change rather than discovering it after
 a bulk regeneration.
 
 **Landed 2026-08-20, and the FFI confirmed the premise before a line changed.**
-`shekyl_archival_verify_serve_credit_vin` already received the registry's
+`shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`) already received the registry's
 `R_k` from C++ (`ctx.registry_segment_subroot_rk`, populated at
 `blockchain.cpp:5455`) and **compared the wire value against it**; it likewise
 checked the wire leaf index against `challenge_leaf_index`. Both checks could
@@ -854,7 +862,7 @@ migration would ever have.
 | `txin_archival_serve_credit_response` | nine typed fields, C++ codec | `std::vector<uint8_t> canonical_bytes` (tag included), transport guard only |
 | pruned half | — | `CtSigPrunable::serve_credit_pruned: vector<vector<uint8_t>>`, one opaque record per serve-credit vin, each length-prefixed |
 | `(P, shard, E)` for DB bits, pool keys, block-unique keys | field reads at four sites | one helper, `get_archival_serve_credit_key`, over `shekyl_archival_serve_credit_extract` — given the **tagged blob whole**, as the emission extract is; C++ never slices the tag off, and an empty blob is a wire error, not a null-pointer error (review, 2026-08-21) |
-| challenge leaf index | read off the vin | `shekyl_archival_challenge_leaf_index` (RF-D6) |
+| challenge leaf index | read off the vin | `shekyl_archival_challenge_leaf_index` (deleted, `DEL-008`) (RF-D6) |
 | admission | C++ path-bound checks + typed re-serialisation into the FFI | `shekyl_archival_verify_serve_credit_vin(kept, pruned, ctx)` — every structural bound is the Rust parser's |
 | JSON / boost archives | field-by-field | the blob, as for the emission vin |
 
@@ -989,7 +997,8 @@ both callers, so they do not name the assignment. Signing them without the
 parsed route id still lets a witness request a held decoy and file the
 signature as a pass for an unheld target. `SF-D8` therefore binds the header
 to the server-parsed shard id (`nonce ‖ anchor_height ‖ anchor_hash ‖
-shard_id`, RULED 2026-09-13, LANDED by (a0)). The
+shard_id`, RULED 2026-09-13; the message ends in the delivery digest `D`
+since 2026-10-04). The
 opening still destroys indistinguishability because its preimage is not
 opaque: it names a leaf.
 
@@ -1255,22 +1264,23 @@ round a check passed while measuring the wrong thing — the `CTTypeNull`-only
 tripwire arm, the equivalence test above, and the `cargo check` that missed a
 clippy-only lint.
 
-**Rule 47, again.** `archival_serve_credit_equivalence.cpp` is a cross-language
-equivalence test *for this exact shape* that asserts consensus **verdicts** over
+**Rule 47, again.** `archival_serve_credit_equivalence.cpp` (deleted with its
+mirror 2026-10-02, DRS-E4 commit 10d) was a cross-language
+equivalence test *for this exact shape* that asserted consensus **verdicts** over
 a JSON fixture and never full-tx bytes — so it could not detect a byte
 divergence in the thing it is named for. The gate did not assert its own
 subject. The byte-parity arm is owed regardless of how the rest of `A` lands.
 
 ---
 
-### `RF-D4` — artifact B, the served payload — INNER FRAME; SCOPE SUPERSEDED 2026-09-13 by `SF-D8`
+### `RF-D4` — artifact B, the served payload — INNER FRAME; SCOPE SUPERSEDED 2026-09-13 by `SF-D8`; FRAME RETIRED 2026-10-08 (`SF-D8` amendment, `SHT-Q2`)
 
 **At round open (2026-08-18) there was no format.** `shekyl-p-serve` streamed
 a raw `FrozenSegmentBody` — a flat concatenation of leaf bytes — with
 `content-length = (end − next) · LEAF_BYTES` (`redb_backend.rs:363-365`). No
 envelope, no fields. *(Records-was: the state this section set out to fix.
 Since 2026-09-13 `SF-D8` places a fixed-length `HybridSignature` envelope
-ahead of the frame this section defines; that envelope is ruled, not landed.)*
+after the frame this section defines, as the response's last bytes.)*
 
 **`content-length` cannot be TJ-H's reserved header**, for three reasons:
 
@@ -1286,8 +1296,8 @@ ahead of the frame this section defines; that envelope is ruled, not landed.)*
 
 **Draft: one length field, ahead of the body.** *(SCOPE SUPERSEDED
 2026-09-13: this grammar is the **inner frame**, not the whole HTTP body.
-Per `SF-D8` the body is `HybridSignature ‖ <this frame>`; the frame's bytes
-are unchanged. Rewritten by the implementation PR.)*
+Per `SF-D8` the body is `<this frame> ‖ HybridSignature`; the frame's bytes
+are unchanged.)*
 
 ```text
 inner frame     := leaf_count  varint    (≤ leaves_per_segment = 25 992)
@@ -1296,7 +1306,7 @@ inner frame     := leaf_count  varint    (≤ leaves_per_segment = 25 992)
                  ‖ padding_bytes         (padding_len, exactly)
 
 hashed against R_k: segment_bytes ONLY
-HTTP body (SF-D8, 2026-09-13; message half LANDED (a0), this envelope lands with SF (a)) := HybridSignature ‖ inner frame
+HTTP body (SF-D8) := inner frame ‖ HybridSignature
 ```
 
 **`varint` names one encoding, and this document has to say which.** It is the
@@ -1393,7 +1403,11 @@ oversized declaration *before* draining it — the check would arrive after the
 bytes did. The self-delimiting frame is what makes the bound a pre-allocation
 test rather than a post-hoc complaint.
 
-**Implemented 2026-08-20 — `shekyl_curve_tree::served_frame::ServedFrameHeader`.**
+**Implemented 2026-08-20 — `shekyl_curve_tree::served_frame::ServedFrameHeader`.
+RETIRED 2026-10-08: the module is deleted; the body ahead of the envelope
+is `shekyl_wire::shard_frame` per `SF-D8` as amended, and `shekyl-p-serve`
+writes the provider's bytes without a frame of its own. What follows is
+the record of the leaf-segment frame as it shipped.**
 
 **Where it lives, and why not with the server.** The encoder is in the serving
 path; the decoder will be in a fetcher that does not exist yet. Putting the codec
@@ -1424,6 +1438,9 @@ the leading header and a decision needing leaf bytes could not be made in time.
 A scheme requiring one is a format change, not an implementation detail — the
 same move as the *validated-predecessor* constraint on `RF-D5`'s nonce term, and
 for the same reason: an invariant held by circumstance has no name and no test.
+The same field carries `SF-D8`'s recomputation constraint
+(`ARCHIVAL_SHARD_FETCH.md`): a later holder of the shard must be able to
+rebuild the padded frame from the shard and the pass record.
 
 **`RF-D7`'s bound is unforgettable rather than merely documented.** Both checks
 run inside `ServedFrameHeader::read`, before it returns, so **the only way to

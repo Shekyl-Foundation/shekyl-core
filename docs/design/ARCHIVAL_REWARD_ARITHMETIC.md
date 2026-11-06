@@ -9,12 +9,12 @@
 |-----------|----------|------|
 | `reward_arithmetic` | `rust/shekyl-archival-retention/src/reward_arithmetic.rs` | Integer `Curve`, `g(age)`, scarcity, `Σwork` helpers — **no `f64`** (`#![deny(clippy::float_arithmetic)]`) |
 | `consensus_state` | `rust/shekyl-archival-retention/src/consensus_state.rs` | Pure `R_market` / `good_through` / `shard_age` / epoch-timing replay + `epoch_close_compute` (whole-epoch aggregation) |
-| FFI | `shekyl_archival_epoch_close_compute` (+ `good_through`, `epoch_close_due`, `prune_below_epoch` helpers) | C++ epoch-close sweep: gather rows → one coarse compute call → store results |
+| FFI | `shekyl_archival_epoch_close_compute` (deleted, `DEL-008`) (+ `good_through`, `epoch_close_due`, `prune_below_epoch` helpers) | C++ epoch-close sweep: gather rows → one coarse compute call → store results |
 
 **Boundary (PR 123):** all consensus arithmetic — market membership, scarcity,
 curve, shard age, `R_market` / `Σwork` aggregation — lives in
 `shekyl-archival-retention` and crosses the FFI as a single
-`shekyl_archival_epoch_close_compute` call. The C++ LMDB layer
+`shekyl_archival_epoch_close_compute` (deleted, `DEL-008`) call. The C++ LMDB layer
 (`process_archival_epoch_close_at_height`) is a storage adapter: it reads
 serve-credit / bond / segment rows, marshals them, and persists the returned
 `R_market` and `Σwork` values. Fine-grained arithmetic FFI exports

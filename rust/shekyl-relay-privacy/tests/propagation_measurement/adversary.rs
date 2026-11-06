@@ -9,10 +9,11 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
 use shekyl_relay_privacy::{
-    derive_embargo, full_travel_probability, DelayFamily, EmbargoTimer, GeometricTable, SplitMix64,
+    derive_embargo, full_travel_probability, DelayFamily, EmbargoTimer, GeometricTable,
 };
 
 /// **Q-8, made decidable.** The preemption profile — *who* fluffs early, not
@@ -328,7 +329,9 @@ fn first_spy_precision_rises_with_spy_fraction() {
                 nodes: 512,
                 peers: 8,
                 reach: FloodReach::EveryPeer,
-                transit_ms: shekyl_relay_privacy::conformance::transit_for(FloodReach::EveryPeer),
+                transit_ms: shekyl_relay_privacy::conformance::transit_for(
+                    shekyl_relay_privacy::MeasuredConnector::Clearnet,
+                ),
             },
             20,
             DelayFamily::Geometric,

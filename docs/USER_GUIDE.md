@@ -71,14 +71,6 @@ Use the CLI tools when you want to:
 | `shekyld` | Full node daemon -- connects to the network, syncs the chain, relays transactions |
 | `shekyl-cli` | Interactive command-line wallet |
 | `shekyl-wallet-rpc` | Wallet RPC server for programmatic access |
-| `shekyl-gen-ssl-cert` | Generate self-signed SSL certificates for RPC |
-| `shekyl-blockchain-import` | Import blockchain from a file |
-| `shekyl-blockchain-export` | Export blockchain to a file |
-| `shekyl-mdb-copy` | Compact a stopped daemon's database |
-| `shekyl-blockchain-stats` | Print blockchain statistics |
-| `shekyl-blockchain-ancestry` | Trace transaction ancestry chains |
-| `shekyl-blockchain-depth` | Compute minimum chain depth for outputs |
-| `shekyl-blockchain-usage` | Histogram of output reuse as ring members (legacy) |
 
 ### Getting the binaries
 
@@ -106,7 +98,24 @@ blockchain from peers. The default locations are:
 
 - **Linux:** `~/.shekyl/`
 - **macOS:** `~/.shekyl/`
-- **Windows:** `C:\ProgramData\shekyl\`
+- **Windows:** `%LOCALAPPDATA%\Shekyl\` (the per-account root; a service install uses `%ProgramData%\shekyl\`)
+
+To check a configuration without starting, add `--config-verify` to the
+command you would start with, run as the account that will run the daemon:
+
+```bash
+./shekyld --network testnet --config-verify
+```
+
+It reads the configuration file and every flag exactly as a start would,
+checks that the account could create the data directory and the log file,
+reads the network marker, judges the development levers and the managed
+Tor's pin, and exits: 0 when a start would accept, with the account
+checked and the effective configuration on standard output; 2 when a
+start would refuse, with the same typed refusals on standard error. It
+creates nothing, takes no lock and joins no network, so it can run while
+the daemon is up. A port already in use and Tor's bootstrap are outside
+its verdict.
 
 Initial sync takes several hours depending on your hardware and network. You
 will see log lines showing block height, download rate, and verification
@@ -114,67 +123,220 @@ progress. Let it run until you see "SYNCHRONIZED OK" in the output.
 
 ### Configuration file
 
-Instead of passing flags on the command line, you can write them in a config
-file. The syntax is `optionname=value`, one per line. Boolean flags use
-`optionname=1`.
+Instead of passing options on the command line, you can write them in a
+configuration file. The file is TOML; each key is an option's name, spelled
+as on the command line without the leading dashes, and a switch is `true`
+or `false`. The daemon reads `/etc/shekyl/shekyld-<network>.toml` by
+default (`shekyld-mainnet.toml` on mainnet; on Windows the file sits in the
+daemon's root), and `--config-file /path/to/file.toml` names another. The
+network itself is always given on the command line, because it chooses the
+file. A file that anyone but root and the daemon's account can write is
+refused.
 
-```
-# shekyld.conf
-data-dir=/var/lib/shekyl
-log-file=/var/log/shekyl/shekyld.log
-log-level=0
-# RPC defaults to loopback. For your own wallet on another machine you
-# control, bind a view-only second listener (not a public remote node):
-# rpc-restricted-bind-port=11030
-```
+A file that holds a SOCKS username or password is read only by root, by
+the daemon's account, and by the daemon's group while that account is the
+group's only member (a service install keeps the file `root:shekyl`
+`0640`). The check reads the accounts the system enumerates, so accounts
+from a directory service that does not list its accounts are not seen by
+it: keep the daemon's group a local group.
 
-Load a config file with `--config-file /path/to/shekyld.conf`. See
-[`utils/conf/shekyld.conf`](../utils/conf/shekyld.conf) for a minimal
-example.
+<!-- shekyld-example: begin -->
+# shekyld configuration file. Every key is an option's name, spelled
+# as on the command line without the leading dashes. The network is
+# always given on the command line, because it chooses the file.
+# Every line below is commented out: uncomment one to set it.
 
-### Key daemon flags
+# The data directory. An explicit path is used as given.
+# Default: the daemon's root and the network's subdirectory.
+# data-dir = "/path"
 
-**Data and logging**
+# The log file.
+# Default: the daemon's root, logs/shekyld-<network>.log.
+# log-file = "/path"
 
-| Flag | Description |
-|------|-------------|
-| `--data-dir <path>` | Override the blockchain data directory |
-| `--log-file <path>` | Write logs to a specific file |
-| `--log-level <0-4>` | Verbosity: 0 = minimal, 4 = trace |
-| `--max-log-file-size <bytes>` | Rotate logs when they exceed this size (default 104857600) |
-| `--max-log-files <n>` | Number of rotated log files to keep |
+# The log level: error, warn, info, debug or trace.
+# log-level = "warn"
 
-**Synchronization and storage**
+# A log level for one subsystem, as subsystem=level; `none` is no
+# overrides.
+# log-category = "none"
 
-| Flag | Description |
-|------|-------------|
-| `--db-sync-mode <mode>` | LMDB sync mode: `safe`, `fast`, `fastest` |
-| `--block-sync-size <n>` | Number of blocks per sync batch |
+# The disk the log may use, live file and archives together.
+# log-size-max = "1GiB"
 
-**RPC**
+# The clearnet connector.
+# clearnet = "on"
 
-| Flag | Description |
-|------|-------------|
-| `--rpc-bind-port <port>` | HTTP RPC listen port (default: 11029 mainnet); Axum is the sole transport |
-| `--rpc-bind-ip <addr>` | Bind address for RPC (default: 127.0.0.1). IPv4 or IPv6 (`::1`). Loopback only: a wildcard (`0.0.0.0`, `::`) is refused, and so is a network address — the daemon RPC has no authentication. `--rpc-use-ipv6` also binds `--rpc-bind-ipv6-address` (default `::1`) on the same start. Another machine of yours reaches this node through its onion service |
-| `--restricted-rpc` | Disable admin endpoints on the main listener (view-only for *your* wallet; not a public remote node) |
-| `--rpc-restricted-bind-port <port>` | Second view-only listener for a wallet you operate |
-| `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |
+# The Tor connector: a managed Tor, the operator's own Tor, or off.
+# tor = "managed"
 
-shekyld does **not** accept `--rpc-login` or `--rpc-ssl*` (inbound RPC is
-plaintext). Use loopback locally; for remote access prefer an onion service
-or a reverse proxy. Wallet-RPC retains login/SSL flags for its own listener.
+# The operator's Tor SOCKS endpoint; required with tor = operator.
+# tor-socks = "127.0.0.1:11029"
 
-**Peer-to-peer**
+# The SOCKS username for tor-socks.
+# tor-socks-username = "<secret>"
 
-| Flag | Description |
-|------|-------------|
-| `--p2p-bind-port <port>` | P2P listen port (default: 11021 mainnet) |
-| `--out-peers <n>` | Maximum outbound peer connections |
-| `--in-peers <n>` | Maximum inbound peer connections |
-| `--add-peer <host:port>` | Manually add a peer |
-| `--add-priority-node <host:port>` | Peer that is always maintained |
-| `--ban-list <path>` | File of banned IP addresses |
+# The SOCKS password for tor-socks.
+# tor-socks-password = "<secret>"
+
+# This node's onion service and virtual port, on the operator's Tor.
+# tor-onion = "<56 characters>.onion:11021"
+
+# The local endpoint the operator's Tor forwards tor-onion to; required
+# with it.
+# tor-onion-listen = "127.0.0.1:11029"
+
+# The managed Tor binary; tor = managed only. It is verified against the
+# pin wherever it is.
+# Default: tor/tor beside the executable, else the version-exact bundle directory under /opt/shekyl/ on Unix.
+# tor-file = "/path"
+
+# A SOCKS proxy for clearnet dials.
+# clearnet-socks = "127.0.0.1:11029"
+
+# The SOCKS username for clearnet-socks.
+# clearnet-socks-username = "<secret>"
+
+# The SOCKS password for clearnet-socks.
+# clearnet-socks-password = "<secret>"
+
+# The clearnet listen endpoints; `none` is dial-only on clearnet.
+# Default: 0.0.0.0 and the network's p2p port.
+# clearnet-listen = ["127.0.0.1:11029"]
+
+# The clearnet endpoints peers can reach this node at; at most one per
+# address family.
+# clearnet-advertise = ["<public-address>:11021"]
+
+# Accept peers at private addresses, for a private test network.
+# p2p-local = true
+
+# Peers to connect to, by IP or onion.
+# p2p-peer = "none"
+
+# The only peers to connect to; non-empty declares a closed network.
+# p2p-closed-peer = "none"
+
+# Disclose known peers and this node's address below the white-diversity
+# floor, for bootstrapping a small network.
+# p2p-disclose-early = true
+
+# A file of addresses to refuse, one per line.
+# p2p-ban-file = "/path"
+
+# The upload rate limit, or `unlimited`.
+# p2p-upload-max = "unlimited"
+
+# The download rate limit, or `unlimited`.
+# p2p-download-max = "unlimited"
+
+# A command to run on a new block, with {height} and {hash}.
+# notify-block = ["/path/to/command", "{height}"]
+
+# A command to run on a reorganization, with {split-height}, {height},
+# {added} and {removed}.
+# notify-reorg = ["/path/to/command", "{split-height}"]
+
+# A command to run on a block-rate warning, with {window}, {observed} and
+# {expected}.
+# notify-block-rate = ["/path/to/command", "{window}"]
+
+# Start the miner at start, to mine-address.
+# mine = "off"
+
+# The address the miner pays.
+# mine-address = "<address>"
+
+# The mining thread count, or `auto`.
+# mine-threads = "auto"
+
+# The plaintext full-access listeners, loopback only; `none` is no admin
+# listener.
+# Default: 127.0.0.1 and the network's rpc port.
+# rpc-admin-listen = ["127.0.0.1:11029"]
+
+# The plaintext view listeners, loopback only.
+# rpc-view-listen = "none"
+
+# Web origins allowed to call the RPC; `none` denies all. `*` is refused.
+# rpc-cors-origin = "none"
+
+# The RPC connection cap.
+# rpc-connections-max = 25
+<!-- shekyld-example: end -->
+
+Every option's name, kind and default is in `shekyld --help`.
+
+### Daemon options
+
+Generated from the daemon's table (`INPUT_GRAMMAR.md` IG-9); `shekyld
+--help` prints the same rows. "Where" says whether an option is given on
+the command line, in the configuration file, or either; "Runtime" says
+whether `option_set` changes it while the daemon runs.
+
+<!-- shekyld-options: begin -->
+| Option | Kind | Default | Where | Runtime | Description |
+|--------|------|---------|-------|---------|-------------|
+| `help` | switch | — | command line | no | Print the options and exit. |
+| `version` | switch | — | command line | no | Print the version and the operating system, and exit. |
+| `config-verify` | switch | — | command line | no | Check the configuration as a start would and exit without starting: nothing is created, no lock is taken and no network is joined. Prints the account checked and the effective configuration; a refusal is start's own. |
+| `network` | `mainnet` / `testnet` / `stagenet` / `regtest` | `mainnet` | command line | no | The network to run: mainnet, testnet, stagenet or regtest. Chooses the configuration file. |
+| `config-file` | absolute path | /etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows | command line | no | The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused. |
+| `data-dir` | absolute path | the daemon's root and the network's subdirectory | both | no | The data directory. An explicit path is used as given. |
+| `log-file` | absolute path | the daemon's root, logs/shekyld-<network>.log | both | no | The log file. |
+| `log-level` | `error` / `warn` / `info` / `debug` / `trace` | `warn` | both | yes | The log level: error, warn, info, debug or trace. |
+| `log-category` | map to `error` / `warn` / `info` / `debug` / `trace` | `none` | both | yes | A log level for one subsystem, as subsystem=level; `none` is no overrides. |
+| `log-size-max` | bytes, such as `512MiB` (at least 1) | `1GiB` | both | no | The disk the log may use, live file and archives together. |
+| `clearnet` | `on` / `off` | `on` | both | no | The clearnet connector. |
+| `tor` | `managed` / `operator` / `off` | `managed` | both | no | The Tor connector: a managed Tor, the operator's own Tor, or off. |
+| `tor-socks` | IP endpoint (`address:port`) | — | both | no | The operator's Tor SOCKS endpoint; required with tor = operator. |
+| `tor-socks-username` | secret (file only, never shown) | — | file | no | The SOCKS username for tor-socks. |
+| `tor-socks-password` | secret (file only, never shown) | — | file | no | The SOCKS password for tor-socks. |
+| `tor-onion` | v3 onion with a port | — | both | no | This node's onion service and virtual port, on the operator's Tor. |
+| `tor-onion-listen` | IP endpoint (`address:port`) | — | both | no | The local endpoint the operator's Tor forwards tor-onion to; required with it. |
+| `tor-file` | absolute path | tor/tor beside the executable, else the version-exact bundle directory under /opt/shekyl/ on Unix | both | no | The managed Tor binary; tor = managed only. It is verified against the pin wherever it is. |
+| `clearnet-socks` | IP endpoint (`address:port`) | — | both | no | A SOCKS proxy for clearnet dials. |
+| `clearnet-socks-username` | secret (file only, never shown) | — | file | no | The SOCKS username for clearnet-socks. |
+| `clearnet-socks-password` | secret (file only, never shown) | — | file | no | The SOCKS password for clearnet-socks. |
+| `clearnet-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 0.0.0.0 and the network's p2p port | both | no | The clearnet listen endpoints; `none` is dial-only on clearnet. |
+| `clearnet-advertise` | list of IP endpoint (`address:port`) (`none` for empty) | — | both | no | The clearnet endpoints peers can reach this node at; at most one per address family. |
+| `p2p-local` | switch | — | both | no | Accept peers at private addresses, for a private test network. |
+| `p2p-peer` | list of IP endpoint or v3 onion with a port (`none` for empty) | `none` | both | no | Peers to connect to, by IP or onion. |
+| `p2p-closed-peer` | list of IP endpoint or v3 onion with a port (`none` for empty) | `none` | both | no | The only peers to connect to; non-empty declares a closed network. |
+| `p2p-disclose-early` | switch | — | both | no | Disclose known peers and this node's address below the white-diversity floor, for bootstrapping a small network. |
+| `p2p-ban-file` | absolute path | — | both | no | A file of addresses to refuse, one per line. |
+| `p2p-upload-max` | rate, such as `1MiB/s` (at least 1), or `unlimited` | `unlimited` | both | yes | The upload rate limit, or `unlimited`. |
+| `p2p-download-max` | rate, such as `1MiB/s` (at least 1), or `unlimited` | `unlimited` | both | yes | The download rate limit, or `unlimited`. |
+| `notify-block` | command (an array of words; placeholders `{height}`, `{hash}`) | — | file | no | A command to run on a new block, with {height} and {hash}. |
+| `notify-reorg` | command (an array of words; placeholders `{split-height}`, `{height}`, `{added}`, `{removed}`) | — | file | no | A command to run on a reorganization, with {split-height}, {height}, {added} and {removed}. |
+| `notify-block-rate` | command (an array of words; placeholders `{window}`, `{observed}`, `{expected}`) | — | file | no | A command to run on a block-rate warning, with {window}, {observed} and {expected}. |
+| `mine` | `on` / `off` | `off` | both | no | Start the miner at start, to mine-address. |
+| `mine-address` | Shekyl address | — | both | no | The address the miner pays. |
+| `mine-threads` | integer ≥ 1, or `auto` | `auto` | both | no | The mining thread count, or `auto`. |
+| `rpc-admin-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 127.0.0.1 and the network's rpc port | both | no | The plaintext full-access listeners, loopback only; `none` is no admin listener. |
+| `rpc-view-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only. |
+| `rpc-cors-origin` | list of web origin (`none` for empty) | `none` | both | no | Web origins allowed to call the RPC; `none` denies all. `*` is refused. |
+| `rpc-connections-max` | integer ≥ 1 | `25` | both | no | The RPC connection cap. |
+<!-- development rows, live on the named networks only and not in --help: dev-clearnet-encrypt (testnet, stagenet, regtest); dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-rpc (regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->
+<!-- shekyld-options: end -->
+
+The daemon's RPC takes no login and no TLS: inbound RPC is plaintext, on
+loopback only. A machine of yours elsewhere reaches it through a Tor onion
+service you run in front of that loopback RPC (see "Connecting to a daemon").
+Do not publish this RPC through a reverse proxy. The proxy would hand the
+plaintext, with no login, to whoever can reach it.
+Wallet-RPC has login and TLS options for its own listener.
+
+The authenticated channel (`docs/design/RPC_CHANNEL.md` §1) is not what
+`shekyld` serves today. When the channel is served, run it where no path
+can read the connection's opening: on this machine, the local socket;
+between your machines, a tunnel that ends on the daemon's host, such as
+host-to-host WireGuard, or an onion service whose forward to the daemon
+stays on that host. Any other path is your choice and is strongly
+discouraged. An observer who can read an opening can replay it and keep
+the node busy refusing new ones. That denial of service belongs to the
+future channel. It is not a property of today's loopback RPC, and
+`shekyld` does not detect which path you chose.
 
 **Background operation**
 
@@ -182,88 +344,42 @@ or a reverse proxy. Wallet-RPC retains login/SSL flags for its own listener.
 manager for background operation (systemd on Linux, launchd on macOS,
 Task Scheduler on Windows); the GUI wallet supervises its own bundled
 `shekyld` via the Tauri sidecar. An example systemd unit lives at
-`contrib/packaging/linux/shekyld.service`. The `--detach`, `--pidfile`,
-and `--*-service` flags were removed in V3.1.
+`contrib/packaging/linux/shekyld.service`. Nothing reads the daemon's
+stdin unless `--console` is given, so a unit needs no flag for that.
 
-| Flag | Description |
-|------|-------------|
-| `--non-interactive` | Disable the interactive console (required under a service manager) |
+**Crash dumps**
 
-### Interactive console
+`shekyld` hardens itself before it reads an argument: on every Unix it
+writes no core file whatever the system's limit, and on Linux and
+FreeBSD a process that is not root cannot attach a debugger to it. A
+fault ends it by the signal; a stack overflow prints the runtime's
+message and ends it by `SIGABRT` (on FreeBSD by `SIGSEGV` without the
+message). On Windows it raises no fault dialog and ends itself before
+Windows Error Reporting is consulted: a fault or a stack overflow exits
+with the exception's code (`0xC0000005`, `0xC00000FD`), a panic with
+`0xC0000409`, and none of them writes a dump or a report, whatever the
+machine's policy (shown on a machine with a `LocalDumps` policy in
+force, 2026-11-02). The installer also excludes `shekyld.exe` from
+Windows Error Reporting's reporting, as a backstop for the failures the
+process cannot route itself — an allocation failure, heap corruption the
+system detects, a C++ stack check. In the same run those fail-fast exits
+wrote no dump either while the daemon's own error mode stood; the
+backstop is for the case it does not. It does not reach a **LocalDumps**
+policy: on a machine where
+`HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps`
+is set (by Group Policy or by hand), Windows can still write a memory
+dump of one of *those* failures to that policy's folder (by default
+`%LOCALAPPDATA%\CrashDumps`). If you run the daemon on such a machine,
+treat that folder as you treat the data directory: a dump holds the
+process's memory, and while the daemon holds no wallet keys, it does
+hold its onion service's secret key, its peer list and its mining
+address.
 
-When `shekyld` is running in the foreground, you get an interactive console.
-Type `help` to list all commands. The most useful ones, grouped by purpose:
+### Commands
 
-The same commands work from a second shell against a running daemon —
-`shekyld status`, `shekyld exit` — over its local RPC port (pass
-`--rpc-bind-port` / `--testnet` if the daemon is not on the defaults). The
-exit status is `0` when the daemon answered, `1` when the command is unknown
-or the request failed (daemon not running, connection refused, error reply),
-so scripts can check it without parsing the output.
-
-**Status and information**
-
-| Command | Description |
-|---------|-------------|
-| `status` | One-line summary: height, net hash, connections, sync state |
-| `print_height` | Current blockchain height |
-| `diff` | Current mining difficulty |
-| `sync_info` | Detailed sync and peer download state |
-| `hard_fork_info` | Current and upcoming hard fork versions |
-| `version` | Daemon version string |
-
-**Mining**
-
-| Command | Description |
-|---------|-------------|
-| `start_mining <addr> [threads]` | Start the built-in CPU miner |
-| `stop_mining` | Stop mining |
-| `mining_status` | Current mining state, hash rate, address |
-| `show_hr` / `hide_hr` | Toggle real-time hash rate display |
-
-**Network and peers**
-
-| Command | Description |
-|---------|-------------|
-| `print_pl` | Full peer list |
-| `print_pl_stats` | Peer list statistics |
-| `print_cn` | Active connections with data transfer stats |
-| `print_net_stats` | Aggregate network bandwidth |
-| `bans` | List all banned peers |
-| `ban <ip> [seconds]` | Ban a peer |
-| `unban <ip>` | Remove a ban |
-| `limit_up <kB/s>` / `limit_down <kB/s>` | Set bandwidth limits |
-| `out_peers <n>` / `in_peers <n>` | Adjust peer count at runtime |
-
-**Chain inspection**
-
-| Command | Description |
-|---------|-------------|
-| `print_bc <start> [end]` | Print block headers in a range |
-| `print_block <height or hash>` | Print a single block's details |
-| `print_tx <txid>` | Print transaction details |
-| `is_key_image_spent <key_image>` | Check if a key image is spent |
-| `print_pool` | Full transaction pool |
-| `print_pool_sh` | Transaction pool (short format) |
-| `print_pool_stats` | Pool statistics |
-| `alt_chain_info` | Show alternative chain branches |
-| `bc_dyn_stats <last_n>` | Dynamic block stats for recent blocks |
-| `print_coinbase_tx_sum <start> <count>` | Sum of coinbase outputs in a range |
-
-**Maintenance**
-
-| Command | Description |
-|---------|-------------|
-| `save` | Force a blockchain save |
-| `flush_txpool [txid]` | Remove transaction(s) from the pool |
-| `flush_cache [bad-txs\|bad-blocks]` | Clear internal caches |
-| `pop_blocks <n>` | Roll back the last N blocks |
-
-**Exit**
-
-| Command | Description |
-|---------|-------------|
-| `stop_daemon` / `exit` | Gracefully shut down |
+`shekyld` takes options. A bare word is refused. Daemon commands — chain
+height, a transaction, mining, stopping the daemon — are `shekyl-cli`
+words, against the daemon this wallet is using.
 
 ---
 
@@ -359,7 +475,7 @@ By default the wallet connects to a daemon on this machine, at the RPC
 port for the selected network (`127.0.0.1:11029` on mainnet; `--testnet`
 and `--stagenet` pick the matching port automatically). If no daemon is
 answering there, the wallet says so when it starts and names the command
-that would fix it (`shekyld --testnet`, and the port it answers on).
+that would fix it (`shekyld --network testnet`, and the port it answers on).
 
 `shekyld` serves RPC on loopback only, so a node of yours on another
 machine is reached through a Tor onion service you run in front of its
@@ -546,9 +662,8 @@ There are **no duration tiers, no lock period, no claim transactions, and no
 minimum stake** — those belonged to an earlier claim-based design that was
 retired before genesis. Your principal stays yours the whole time; the bond
 is an honesty anchor (slashable for misbehavior), not a custody transfer.
-When you are done staking, `stake exit` posts the permanent exit and
-`stake collect` returns the released collateral to your balance (PR-C,
-2026-09-03).
+When you are done staking, `stake release` posts the permanent release and
+`stake collect` returns the released collateral to your balance.
 
 For the economic model, see
 [`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md) §Component 3–4 and the canonical
@@ -595,13 +710,25 @@ The full staking surface is live in interactive `shekyl-cli` (type
 - **Principal movement:** `stake add <amount>` adds funds to the staking
   balance; `stake available` shows what can move back; `stake return <amount>`
   moves it back (fee and destination are automatic).
-- **Exit:** `stake exit` posts the permanent exit and `stake collect`
-  returns the released collateral, each with the irreversibility
-  confirmation the exit warrants (PR-C).
+- **Release:** `stake release` posts the permanent release and `stake collect`
+  returns the released collateral. `stake exit` and `unstake` name `stake release`
+  and do not run. The wallet-rpc method is still `unstake`.
+- **Work in progress and endings:** `stake` also lists each stake, reward
+  claim, return or release still in progress, and how each last ended if it
+  did not complete. A node can refuse one; it is then never sent again, and
+  its funds stay set aside until the height `stake` shows, because only the
+  chain can say whether it was mined. If it was not, the funds come back on
+  their own after that height, with nothing to do and no fee. Once you have
+  read the endings `stake` showed, `stake acknowledge <stake|claim|return|release>`
+  clears those of that kind; an ending that arrives later stays until you
+  have seen it. A stake whose set-aside funds were all spent without the
+  stake confirming is kept, not withdrawn, and the wallet raises an alarm:
+  check its logs.
 
 **Wallet RPC** exposes the same verbs (`stake`, `get_staked_balance`,
 `get_staked_outputs`, `staking_info`, `stake_in`, `drain`,
-`get_drain_balance`, `unstake`, `collect_unstaked`); reward-related reads
+`get_drain_balance`, `unstake`, `collect_unstaked`,
+`acknowledge_staking_outcome`); reward-related reads
 never conflate bonded principal with received rewards. **The desktop GUI**
 exposes staker activation directly.
 
@@ -633,14 +760,6 @@ built for another coin (including stock Monero XMRig) will not produce
 blocks this network accepts. `shekyl-cli mine start` prints that
 reminder when the built-in miner starts.
 
-### From the daemon console
-
-```
-start_mining <address> [threads]
-stop_mining
-mining_status
-```
-
 ### From the wallet
 
 ```
@@ -650,36 +769,58 @@ mainnet> mine status         # active/idle, threads, hash rate
 mainnet> mine stop
 ```
 
-`start_mining`, `stop_mining`, and `mining_status` name the new lines and
-do not run. The daemon console, above, still uses those words.
+`start_mining`, `stop_mining`, and `mining_status` name the lines above and
+do not run. Mining on a running daemon is `mine start`, `mine stop` and
+`mine status` in `shekyl-cli`.
 
 These commands **control** mining on the connected daemon — the daemon
 still does the hashing (no RandomX runs in the wallet process), and the
 daemon owns the mining threads, so mining keeps running after you close
-the CLI. Rewards pay to the open wallet's address automatically; you never
-paste an address the way the daemon-console form requires.
+the CLI. Rewards pay the daemon's `mine-address`. The shell sends only
+the thread count; you do not pass an address.
 
-`mine` requires an open wallet, the unrestricted RPC listener, and a
-daemon on the same network as the CLI. The silent default is a daemon
-on this machine — the recommended posture. A remote `--daemon-address`
-(for example a node on your own network) is allowed: `mine start`
-reminds you that mining control is admin RPC, then continues. If the
-daemon is still syncing, `mine start` refuses — the daemon will not
+`mine` does not require an open wallet. It does require the unrestricted
+RPC listener and a daemon on the same network as the CLI. The silent
+default is a daemon on this machine. A remote `--daemon-address` is
+allowed: `mine start` reminds you that mining will run on that machine's
+CPU, then continues.
+If the daemon is still syncing, `mine start` refuses — the daemon will not
 mine until it has caught up.
 
-### Background mining
+### Mining from start
 
-Launch the daemon with background mining flags:
+To mine from the moment the daemon starts, turn the miner on and give it
+the address it pays; `mine-threads` is the thread count (`auto`, the
+default, is one per core, and a count above the machine's is refused
+before the daemon starts):
 
 ```bash
-./shekyld --bg-mining-enable \
-    --bg-mining-idle-threshold 90 \
-    --bg-mining-min-idle-interval 10 \
-    --start-mining <address> --mining-threads 2
+./shekyld --mine on --mine-address <address> --mine-threads 2
 ```
 
-Background mining runs at the lowest CPU priority and pauses when system
-utilisation exceeds the idle threshold.
+The same rows go in the configuration file. `mine-address` alone starts
+nothing: the daemon holds the address for `start_mining` (or
+`shekyl-cli mine start`) to use later. `mine = on` without an address is
+refused before the daemon starts. The start-up configuration line shows
+the address shortened to its first and last eight characters.
+
+The miner mines only on a chain the node knows to be synced. A node that
+is alone on its network with `clearnet` or `tor` on has no view of that
+network and never counts itself synced: the start announces `mining: the
+miner waits for a view of the network …`, `mining_status` reports
+`no_template` with `mine.not_synced` (`no_view`), and the height does not
+move. That is the rule, not a fault. To mine alone — a fresh regtest, a
+single-machine test — declare it: turn both connectors off,
+
+```bash
+./shekyld --network regtest --clearnet off --tor off \
+  --mine on --mine-address <address>
+```
+
+or name the whole network with `p2p-closed-peer`, which counts the node
+synced while none of its named peers is up. `dev-sync` is not this lever:
+it only stops the node asking peers for blocks, and a node with a
+connector on still has a network it could be behind.
 
 ### The 60-block lock
 
@@ -778,24 +919,21 @@ link your IP address to your transactions. I2P is not a network this
 daemon dials. Regular block sync and peer communication still uses IPv4
 to resist Sybil attacks.
 
-### Daemon: outbound transaction proxy
+### Daemon: Tor
+
+The Tor connector is on by default: `tor = managed` runs the bundled Tor
+(`tor-file` names the binary). To use a Tor you run, name its SOCKS
+endpoint and, to be reachable over Tor, your onion service and the local
+endpoint it forwards to:
 
 ```bash
-./shekyld --tx-proxy tor,127.0.0.1:9050
+./shekyld --tor operator --tor-socks 127.0.0.1:9050 \
+    --tor-onion <your-onion>.onion:11021 --tor-onion-listen 127.0.0.1:11021
 ```
 
-Omit the outbound count to use the default. An explicit count below 12 is
-refused at start (the relay-embargo floor). For Tor-zone *cover*, that
-SocksPort must be the non-exit relay process — see [TOR_RELAY.md](TOR_RELAY.md)
-— not a second client Tor.
-
-### Daemon: inbound hidden service
-
-To receive connections over Tor:
-
-```bash
-./shekyld --anonymous-inbound <your-onion>.onion:11021,127.0.0.1:11021,25
-```
+`--tor off` is clearnet only. For Tor-zone *cover*, that SocksPort must be
+the non-exit relay process — see [TOR_RELAY.md](TOR_RELAY.md) — not a
+second client Tor.
 
 ### Wallet through Tor
 
@@ -827,17 +965,18 @@ operator sees what it asks for — true of your own node too; see
 
 Shekyl runs four networks. Use the right one for your purpose:
 
-| Network | Flag | P2P Port | RPC Port | Use |
-|---------|------|----------|----------|-----|
+| Network | Daemon | P2P Port | RPC Port | Use |
+|---------|--------|----------|----------|-----|
 | Mainnet | *(default)* | 11021 | 11029 | Production -- real money |
-| Testnet | `--testnet` | 12021 | 12029 | Protocol experiments |
-| Stagenet | `--stagenet` | 13021 | 13029 | Integration testing (exchange, wallet) |
-| Fakechain | `--regtest` | n/a | n/a | Local deterministic testing |
+| Testnet | `--network testnet` | 12021 | 12029 | Protocol experiments |
+| Stagenet | `--network stagenet` | 13021 | 13029 | Integration testing (exchange, wallet) |
+| Regtest | `--network regtest` | n/a | n/a | Local deterministic testing |
 
-Both the daemon and wallet must be started with the same network flag:
+Both the daemon and wallet must be started on the same network (the
+wallet's `--testnet` / `--stagenet` are shorthand for `--network …`):
 
 ```bash
-./shekyld --testnet
+./shekyld --network testnet
 ./shekyl-cli --testnet
 ```
 
@@ -948,7 +1087,8 @@ contract's `x-shekyl-method-registry`):
 - **Staking:** `stake` (activation), `get_staked_balance`,
   `get_staked_outputs`, `staking_info` (reads); `stake_in`, `drain`,
   `get_drain_balance` (WI-RPC-5); `unstake` and `collect_unstaked` (the
-  composed exit, PR-C). There is no `claim` RPC — emission claims are
+  composed exit, PR-C); `acknowledge_staking_outcome` (clears an ending
+  `staking_info` reports). There is no `claim` RPC — emission claims are
   engine-side automation, and that name is rejected, not reserved.
 - **Proofs and signing:** `get_tx_proof`, `check_tx_proof`,
   `get_reserve_proof`, `check_reserve_proof`, `sign_message`,
@@ -963,89 +1103,6 @@ in the contract so they cannot be silently re-minted.
 
 For the full RPC reference, see the wallet-RPC contract
 [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml).
-
----
-
-## Blockchain Utilities
-
-These standalone tools operate directly on the blockchain database. Stop
-`shekyld` before using them (they need exclusive access to the LMDB files).
-
-### `shekyl-blockchain-import`
-
-Import a blockchain file (from `blockchain-export` or a trusted source):
-
-```bash
-./shekyl-blockchain-import --input-file blockchain.raw --batch-size 5000
-```
-
-Use `--dangerous-unverified-import` only with files you trust completely --
-it skips all verification for speed.
-
-### `shekyl-blockchain-export`
-
-Export the blockchain to a portable file:
-
-```bash
-./shekyl-blockchain-export --output-file blockchain.raw
-./shekyl-blockchain-export --output-file partial.raw --block-start 0 --block-stop 100000
-```
-
-### `shekyl-mdb-copy`
-
-The stripe engine (`--prune-blockchain`) was deleted 2026-09-21 (`PDM-Q7`).
-No daemon path discards tx bodies today: the C++ depth-based discard was
-deleted 2026-09-22 as well, and the uniform discard is the unbuilt S-PRUNE
-skeleton (`docs/design/DRS_E1_SPRUNE.md`). `shekyl-mdb-copy` reclaims free pages the
-store already holds. Stop `shekyld` and compact the database:
-
-```bash
-mkdir /path/to/compacted
-./shekyl-mdb-copy -c ~/.shekyl/lmdb /path/to/compacted/
-```
-
-then replace the old `lmdb` directory with the compacted copy (you
-temporarily need disk space for both). The destination directory must
-already exist and be empty, and the tool must run as the user that owns
-the data directory — the copy opens the database read-only but still
-needs write access to the source's reader-lock file (`lock.mdb`, created
-if missing), and a `sudo` run leaves the compacted copy root-owned, so
-the daemon cannot use it after the swap. Always pass both paths: with
-the destination omitted, the tool streams the entire database to
-standard output.
-
-Note that pruning removes only transaction proof and PQC-auth data;
-curve-tree leaf data is not prunable and grows with the chain.
-
-### `shekyl-blockchain-stats`
-
-Print statistics about the blockchain:
-
-```bash
-./shekyl-blockchain-stats --with-emission --with-fees --with-diff
-```
-
-Additional flags: `--with-inputs`, `--with-outputs`, `--with-hours`.
-
-### Other utilities
-
-| Tool | Purpose |
-|------|---------|
-| `shekyl-blockchain-ancestry` | Trace the input ancestry of a transaction |
-| `shekyl-blockchain-depth` | Compute minimum chain depth for an output or transaction |
-| `shekyl-blockchain-usage` | Histogram of output reuse as ring members (legacy) |
-
-All tools accept `--data-dir`, `--testnet`, `--stagenet`, and
-`--log-level` flags.
-
-> **Note:** `shekyl-blockchain-ancestry`, `shekyl-blockchain-depth`, and
-> `shekyl-blockchain-usage` all analyze spend-graph relationships that FCMP++
-> transactions do not reveal (a spend never discloses which output it
-> consumes, and inputs carry no ring-member references). They have no
-> substrate on Shekyl chain data and are scheduled for a deletion audit (see
-> `docs/EXECUTABLES.md` and `docs/FOLLOWUPS.md`;
-> `shekyl-blockchain-prune-known-spent-data` was already deleted under that
-> audit).
 
 ---
 
@@ -1094,8 +1151,10 @@ prompts for the current password, then the new one twice.
 
 ### Daemon won't sync
 
-- **Firewall:** Ensure port 11021 (P2P) is open for inbound connections, or
-  use `--out-peers` to increase outbound connections.
+- **Firewall:** Ensure port 11021 (P2P) is open for inbound connections.
+  The outbound count is a protocol constant, not an option: a node that
+  takes no inbound still syncs over the peers it dials. The daemon's
+  "p2p inbound state" log line says how many inbound connections it holds.
 - **Disk space:** A full node needs ~50 GB. There is no pruning flag. The
   stripe engine was deleted 2026-09-21 (`PDM-Q7`); uniform archival discard
   has not landed (S-PRUNE, `docs/design/DRS_E1_SPRUNE.md`).
@@ -1266,7 +1325,7 @@ Behavior changes to be aware of when upgrading:
 | **Block** | A bundle of transactions added to the blockchain roughly every 2 minutes. |
 | **Block height** | The sequential number of a block, starting from 0. |
 | **Block reward** | New SKL created and given to the miner who finds a valid block. |
-| **Config file** | A text file (`shekyld.conf`) containing daemon options in `name=value` format, loaded with `--config-file`. |
+| **Config file** | A TOML file (`/etc/shekyl/shekyld-<network>.toml` by default) holding daemon options under their command-line names, or another file named with `--config-file`. |
 | **Console** | The interactive command prompt inside `shekyld` when running in foreground mode. |
 | **Daemon** | The background program (`shekyld`) that connects to the Shekyl network and maintains the blockchain. |
 | **Difficulty** | A measure of how hard mining puzzles are. Adjusts automatically to target ~2-minute blocks. |
@@ -1295,8 +1354,8 @@ Behavior changes to be aware of when upgrading:
   [USER_GUIDE.md](https://github.com/Shekyl-Foundation/shekyl-gui-wallet/blob/main/docs/USER_GUIDE.md)
   covers the same features from the graphical interface.
 - **Source code:** [shekyl-core on GitHub](https://github.com/Shekyl-Foundation/shekyl-core)
-- **Built-in help:** Run `shekyld --help`, `shekyl-cli --help`, or
-  type `help` inside any interactive console.
+- **Built-in help:** Run `shekyld --help` or `shekyl-cli --help`. Daemon
+  commands are `shekyl-cli` words.
 
 ---
 

@@ -435,7 +435,13 @@ impl ReplyFramer {
                     });
                 }
                 Some(_) => {}
-                None => self.status = Some(status),
+                None => {
+                    self.status = Some(status);
+                    // An event is held to the ordinary cap whatever command is in
+                    // flight. Its first line was charged before its status was
+                    // known, possibly under a bulk allowance, so check it again now.
+                    self.charge_reply_bytes(0)?;
+                }
             }
 
             match bytes[3] {
@@ -460,8 +466,17 @@ impl ReplyFramer {
     /// inserts, so the running total conservatively bounds the buffered reply
     /// memory — closing the hole where a folded `\n` (e.g. a flood of empty data
     /// lines) would otherwise go uncounted.
+    ///
+    /// A `650` event never gets the bulk allowance. The allowance is granted to the
+    /// command on the wire, and an event is not its reply: an event held in the
+    /// event queue is at most [`ORDINARY_REPLY_BYTES`], which is what the queue's
+    /// memory bound is stated in.
     fn charge_reply_bytes(&mut self, n: usize) -> Result<(), FramingError> {
-        let limit = self.budget.limit();
+        let limit = if self.status == Some(ASYNC_EVENT_STATUS) {
+            ORDINARY_REPLY_BYTES.min(self.budget.limit())
+        } else {
+            self.budget.limit()
+        };
         self.reply_bytes = self.reply_bytes.saturating_add(n);
         if self.reply_bytes > limit {
             return Err(FramingError::ReplyTooLarge { limit });
@@ -827,6 +842,53 @@ mod tests {
             Err(FramingError::ReplyTooLarge {
                 limit: ORDINARY_REPLY_BYTES,
             }),
+        );
+    }
+
+    /// An event never rides the bulk allowance: while `GETINFO ns/all` is on the
+    /// wire, a `650` larger than the ordinary cap is still refused, in one line or
+    /// spread over several, while the command's own reply may use the allowance.
+    /// The event queue's memory bound (`EVENT_QUEUE_EVENTS` times the ordinary
+    /// cap) rests on this.
+    #[test]
+    fn an_event_is_held_to_the_ordinary_cap_while_the_bulk_allowance_is_armed() {
+        let body = "x".repeat(ORDINARY_REPLY_BYTES + 1);
+        let half = "x".repeat(ORDINARY_REPLY_BYTES / 2 + 1);
+        for event in [
+            format!("650 {body}\r\n"),
+            format!("650-{half}\r\n650-{half}\r\n650 OK\r\n"),
+        ] {
+            let mut framer = ReplyFramer::new();
+            framer.budget().arm_bulk();
+            framer.push_bytes(event.as_bytes());
+            assert_eq!(
+                framer.next_reply(),
+                Err(FramingError::ReplyTooLarge {
+                    limit: ORDINARY_REPLY_BYTES,
+                }),
+                "an event over the ordinary cap is refused while armed",
+            );
+        }
+
+        let mut framer = ReplyFramer::new();
+        framer.budget().arm_bulk();
+        framer.push_bytes(format!("650 NOTICE small\r\n250-{body}\r\n250 OK\r\n").as_bytes());
+        assert_eq!(
+            framer
+                .next_reply()
+                .expect("frames")
+                .expect("the event")
+                .status(),
+            650
+        );
+        assert_eq!(
+            framer
+                .next_reply()
+                .expect("armed")
+                .expect("the bulk reply")
+                .status(),
+            250,
+            "the command's own reply still has the allowance"
         );
     }
 

@@ -54,15 +54,6 @@ compile_error!(
      before attempting to revert this gate."
 );
 
-// Stabilized v1 account-derivation FFI surface. See `account_ffi.rs` for
-// per-function docs and the fail-closed / out-pointer / pinned-size
-// disciplines. The legacy `shekyl_kem_keypair_generate` and
-// `shekyl_seed_derive_{spend,view,ml_kem}` FFIs in this file remain for
-// the duration of the wallet-account-rewire slice; they are replaced by
-// `shekyl_account_*` callers and removed once C++ no longer references
-// them.
-pub mod account_ffi;
-
 // LWMA-1 difficulty-adjustment FFI export. Wraps `shekyl_difficulty::
 // lwma1_next` in a C-ABI surface using the `ShekylU128` two-u64
 // decomposition per `DAA_LWMA1.md` §6.1. Consumed by the Phase 2
@@ -74,18 +65,11 @@ pub mod difficulty_ffi;
 // production LMDB; the hasher is shekyl-chain-store.
 pub mod chain_digest_ffi;
 
-// DRS-E2 trace writer: the C++ LMDB exporter's one door. Facts records and
-// digest checkpoints, written and hashed in Rust (`shekyl-chain-ingest`);
-// the exporter and this surface die with the daemon at cutover.
-pub mod e2_trace_ffi;
-
 // RandomX v2 light-cache PoW verification FFI. Wraps `shekyl_pow_randomx`
-// (`compute_hash` + `CacheStore`) in a C-ABI surface — the consensus
-// PoW hash (`shekyl_pow_randomx_v2_hash`) plus the canonical-seedhash
-// pin/eager-derive entry point (`shekyl_pow_randomx_v2_set_canonical`).
-// Replaces the inherited C RandomX v1 path (`crypto::rx_slow_hash` /
-// `rx_set_main_seedhash`) on the daemon block-verification boundary per
-// `docs/design/RANDOMX_V2_PHASE3_PLAN.md`.
+// (`compute_hash` + `CacheStore`) in a C-ABI surface: the consensus PoW
+// hash (`shekyl_pow_randomx_v2_hash`) for the C++ parity gates. The
+// daemon's PoW is the Rust ingest's, and the seed-epoch schedule is
+// `shekyl_difficulty::seed_epoch`'s.
 pub mod pow_randomx_ffi;
 
 // Curve-tree replica FFI: an ephemeral `shekyl_curve_tree::CurveTreeClient`
@@ -107,67 +91,21 @@ pub mod tx_extra_ffi;
 // replacement, one call per site.
 pub mod tx_extra_codec_ffi;
 
-// The PQC signing preimage (CHAIN_RULES_SLICE_6.md §5 commit 7, Q7 (c)):
-// shekyl-wire derives every input's signed hash; the daemon verifies against
-// it. Replaces the C++ assembly in tx_pqc_verify.cpp, one call per tx.
-pub mod tx_signing_ffi;
+// The transaction id (ARCHIVAL_SHARD_COUNT_CUTOVER.md SHT-Q2): shekyl-wire
+// mixes — hashing the segments and measuring the archival length the id
+// binds — and the daemon's calculate_transaction_hash serializes and cuts.
+// One mixer; the C++ one is deleted.
+pub mod txid_ffi;
 
 // Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §10).
 pub mod archival_ffi;
-// D3/R3 bond-admission viability (kept separate so archival_ffi does not keep
-// absorbing every archival surface).
-pub mod archival_admission_ffi;
 
 // General CT cleartext-balance verification FFI (`GENESIS_TX_WIRE_FORMAT.md` §2.3).
 pub mod ct_balance_ffi;
 
-// Production OsRng → RelayRng adapter shared by the relay FFI seams.
-mod secure_relay_rng;
-
-// Dandelion++ embargo / propagation-timeout FFI — RP-4
-// (`DAEMON_RELAY_PRIVACY.md` §17). Stem-map exports retired at RP-3a; the zone
-// owns a `StemMap` directly (`relay_zone_ffi`).
-pub mod dandelionpp_ffi;
-
-// Live relay zone FFI — RP-3a (`DAEMON_RELAY_PRIVACY.md` §18). The C++
-// `levin::notify` forwards here; `Effect` is dispatched in Rust via per-variant
-// callbacks so no enum tag crosses the boundary (§18.4a).
-pub mod relay_zone_ffi;
-
-// Levin payload compression FFI (IMPLEMENTATION_INDEX LV row). The C++
-// `epee::levin` compression path is a marshaling shim over these exports;
-// the Rust-pinned libzstd is the single zstd implementation in the binary.
-pub mod levin_ffi;
-
-// Inbound descriptor ceiling (PWD-I7). One call: Rust probes the process
-// and returns the admission decision. C++ passes reservations only.
-pub mod inbound_ceiling_ffi;
-
-// The p2p seam. C++ posts onto the connection strand. Rust records the
-// cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
-pub mod seam_ffi;
-
-// The socketless asio executor. One ledger row. The floor check is
-// ExecutorBudget::above_floor; this module does not reimplement it.
-pub mod executor_ffi;
-
-// Zone listen and dial. The seam stays connector-agnostic; this module is
-// where clearnet and Tor meet it.
-pub mod zone_ffi;
-
-// Peer-attribution drop rule FFI — PWD-B7 (`SHEKYL_P2P_PROTOCOL.md`). The
-// classification is recorded by C++ as an opaque byte on the verification
-// context; whether that byte severs a connection is decided only here.
-pub mod peer_policy_ffi;
-
-// Daemon ephemeral-onion FFI — PWD-E7 piece 3
-// (`P2P_2_ENDPOINT_ROUND.md` PWD-E7/E9). `node_server::init` obtains the
-// per-boot overlay inbound (managed tor, in-memory key, DiscardPK) here.
-pub mod daemon_tor_ffi;
-
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
-// `shekyl_log_install_tracing_forwarder`, …) are compiled into
+// `shekyl_log_set_categories`, …) are compiled into
 // `libshekyl_ffi.a`. Every wallet-side binary then links exactly one
 // Rust archive whose single `tracing-core` GLOBAL_DISPATCH is shared by
 // the C++-installed subscriber and every `tracing::*` call site in this
@@ -177,6 +115,11 @@ pub mod daemon_tor_ffi;
 // contract).
 pub use shekyl_logging;
 
+// The RPC server (`shekyl-daemon-rpc`) is not re-exported: it imports C++
+// symbols from `rpc`, and a member of this archive can be pulled into any
+// C++ binary by a shared monomorphization (DAEMON_CONFIG_CUTOVER.md
+// DC-F26, corrected by DC-F30).
+
 // Legacy monofile FFI surface (split from the former body of this file).
 // Domain modules keep #[no_mangle] symbols; this root only wires and re-exports.
 mod economics_ffi;
@@ -184,8 +127,6 @@ mod legacy_core;
 mod legacy_curve_tree;
 mod legacy_fcmp;
 mod legacy_frost;
-mod legacy_kem;
-mod legacy_proofs;
 mod legacy_tx;
 mod legacy_types;
 mod legacy_util;
@@ -200,10 +141,6 @@ pub use legacy_curve_tree::*;
 pub use legacy_fcmp::*;
 #[allow(unused_imports)]
 pub use legacy_frost::*;
-#[allow(unused_imports)]
-pub use legacy_kem::*;
-#[allow(unused_imports)]
-pub use legacy_proofs::*;
 #[allow(unused_imports)]
 pub use legacy_tx::*;
 #[allow(unused_imports)]

@@ -36,8 +36,6 @@ set(TEST_DATA_DIR "${CMAKE_CURRENT_LIST_DIR}/data")
 
 if (WIN32 AND STATIC)
   add_definitions(-DSTATICLIB)
-  # miniupnp changed their static define
-  add_definitions(-DMINIUPNP_STATICLIB)
 endif ()
 
 find_package(GTest)
@@ -68,13 +66,11 @@ file(COPY data DESTINATION .) # Copy data directory from source root to build ro
 if (CMAKE_BUILD_TYPE STREQUAL "fuzz" OR OSSFUZZ)
   add_subdirectory(fuzz)
 else ()
-  add_subdirectory(core_tests)
   add_subdirectory(fuzz)
   add_subdirectory(crypto)
   add_subdirectory(performance_tests)
   add_subdirectory(unit_tests)
   add_subdirectory(difficulty)
-  add_subdirectory(block_weight)
   add_subdirectory(hash)
   # Phase 3a Hole-1 gate (RANDOMX_V2_PHASE3_PLAN.md §7): the C full-dataset
   # vs Rust light-cache PoW parity harness. Needs the imported
@@ -88,9 +84,6 @@ else ()
   endif()
 endif()
 
-
-# add_subdirectory(daemon_tests)
-
 set(hash_targets_sources
   hash-target.cpp)
 
@@ -101,7 +94,7 @@ monero_add_minimal_executable(hash-target-tests
   ${hash_targets_headers})
 target_link_libraries(hash-target-tests
   PRIVATE
-    cryptonote_core)
+    cryptonote_basic)
 set_property(TARGET hash-target-tests
   PROPERTY
     FOLDER "${folder}")
@@ -214,9 +207,7 @@ add_test(NAME wallet-crypto-bench COMMAND shekyl-wallet-crypto-bench)
 
 
 set(enabled_tests
-    core_tests
     difficulty
-    block_weight
     hash
     performance_tests
     fuzz

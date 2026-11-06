@@ -39,15 +39,10 @@ class Daemon(object):
         self.port = port
         self.rpc = JSONRPC('{protocol}://{host}:{port}'.format(protocol=protocol, host=host, port=port if port else base+idx))
 
-    def getblocktemplate(self, address, prev_block = "", client = ""):
+    def getblocktemplate(self):
         getblocktemplate = {
             'method': 'getblocktemplate',
-            'params': {
-                'client': client,
-                'wallet_address': address,
-                'reserve_size' : 8,
-                'prev_block' : prev_block,
-            },
+            'params': {},
             'jsonrpc': '2.0', 
             'id': '0'
         }
@@ -88,10 +83,10 @@ class Daemon(object):
     def submitblock(self, block):
         submitblock = {
             'method': 'submitblock',
-            'params': [ block ],    
-            'jsonrpc': '2.0', 
+            'params': { 'body': block },
+            'jsonrpc': '2.0',
             'id': '0'
-        }    
+        }
         return self.rpc.send_json_rpc_request(submitblock)
     submit_block = submitblock
 
@@ -191,28 +186,13 @@ class Daemon(object):
         return self.rpc.send_json_rpc_request(get_info)
     getinfo = get_info
 
-    def hard_fork_info(self, version = None):
-        params = {}
-        if version is not None:
-            params['version'] = version
-        hard_fork_info = {
-            'method': 'hard_fork_info',
-            'params': params,
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(hard_fork_info)
-
-    def generateblocks(self, address, blocks=1, prev_block = "", starting_nonce = 0):
+    def generateblocks(self, blocks=1):
         generateblocks = {
             'method': 'generateblocks',
             'params': {
-                'amount_of_blocks' : blocks,
-                'wallet_address': address,
-                'prev_block': prev_block,
-                'starting_nonce': starting_nonce,
+                'count': blocks,
             },
-            'jsonrpc': '2.0', 
+            'jsonrpc': '2.0',
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(generateblocks)
@@ -232,12 +212,9 @@ class Daemon(object):
         }
         return self.rpc.send_request("/pop_blocks", pop_blocks)
 
-    def start_mining(self, miner_address, threads_count = 0, do_background_mining = False, ignore_battery = False):
+    def start_mining(self, threads_count = "auto"):
         start_mining = {
-            'miner_address' : miner_address,
-            'threads_count' : threads_count,
-            'do_background_mining' : do_background_mining,
-            'ignore_battery' : ignore_battery,
+            'threads' : threads_count,
         }
         return self.rpc.send_request('/start_mining', start_mining)
 
@@ -369,17 +346,28 @@ class Daemon(object):
         }
         return self.rpc.send_json_rpc_request(get_output_distribution)
 
-    def set_log_level(self, level):
-        set_log_level = {
-            'level': level,
+    def option_set(self, options):
+        """`option_set`: `options` is a list of (name, value-text) pairs in
+        the input grammar's syntax (RPC_CHANNEL.md 6.4); all or nothing."""
+        option_set = {
+            'method': 'option_set',
+            'params': {
+                'options': [{'name': name, 'value': value} for (name, value) in options],
+            },
+            'jsonrpc': '2.0',
+            'id': '0'
         }
-        return self.rpc.send_request('/set_log_level', set_log_level)
+        return self.rpc.send_json_rpc_request(option_set)
 
-    def set_log_categories(self, categories = ''):
-        set_log_categories = {
-            'categories': categories,
+    def option_show(self, names = None):
+        """`option_show`: every row the caller may see, or the named rows."""
+        option_show = {
+            'method': 'option_show',
+            'params': {} if names is None else {'names': names},
+            'jsonrpc': '2.0',
+            'id': '0'
         }
-        return self.rpc.send_request('/set_log_categories', set_log_categories)
+        return self.rpc.send_json_rpc_request(option_show)
 
     def get_alt_blocks_hashes(self, client = ""):
         get_alt_blocks_hashes = {
@@ -441,18 +429,6 @@ class Daemon(object):
         get_net_stats = {
         }
         return self.rpc.send_request('/get_net_stats', get_net_stats)
-
-    def get_limit(self):
-        get_limit = {
-        }
-        return self.rpc.send_request('/get_limit', get_limit)
-
-    def set_limit(self, limit_down, limit_up):
-        set_limit = {
-            'limit_down': limit_down,
-            'limit_up': limit_up,
-        }
-        return self.rpc.send_request('/set_limit', set_limit)
 
     def out_peers(self, out_peers):
         out_peers = {

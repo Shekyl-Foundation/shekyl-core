@@ -41,6 +41,23 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+_SCRIPTS = Path(__file__).resolve().parents[4] / "scripts"
+sys.path.insert(0, str(_SCRIPTS))
+import armed_lever  # noqa: E402
+
+_RECIPIENTS = (
+    Path(__file__).resolve().parents[3]
+    / "shekyl-wire"
+    / "tests"
+    / "vectors"
+    / "regtest_mining_recipients.json"
+)
+
+
+def mining_address() -> str:
+    with open(_RECIPIENTS, encoding="utf-8") as fh:
+        return json.load(fh)["recipients"][0]["address"]
+
 # Consensus windows (mirror shekyl-curve-tree::recon constants).
 COINBASE_LOCK = 60
 SPENDABLE_AGE = 10
@@ -55,19 +72,6 @@ DEEP_POP = 70   # >= COINBASE_LOCK+1: trims already-drained leaves (§6 trim bra
 DEEP_REGEN = 72
 SHALLOW_POP = 5  # < COINBASE_LOCK+1: pops only pending coinbases (§6 no-mutation branch)
 SHALLOW_REGEN = 7
-
-# Genesis treasury address (regtest accepts the mainnet genesis address
-# for generateblocks; coinbase outputs land in the curve tree identically).
-# The recipients file lives in this repo's `config/` (the genesis tool's
-# source of truth), not in the retired `shekyl-dev` tooling tree.
-GENESIS_RECIPIENTS = (
-    Path(__file__).resolve().parents[4] / "config/genesis_recipients.mainnet.json"
-)
-
-
-def load_miner_address() -> str:
-    data = json.loads(GENESIS_RECIPIENTS.read_text())
-    return data["recipients"][0]["address"]
 
 
 class Daemon:
@@ -87,17 +91,26 @@ class Daemon:
         self.proc = subprocess.Popen(
             [
                 self.binary,
-                "--regtest",
-                "--offline",
-                "--non-interactive",
-                "--fixed-difficulty",
+                "--network",
+                "regtest",
+                "--clearnet",
+                "off",
+                "--tor",
+                "off",
+                "--dev-difficulty",
                 "1",
+                # generateblocks and pop_blocks are armed test levers.
+                armed_lever.FLAG,
+                "--mine-address",
+                mining_address(),
                 "--data-dir",
                 self.workdir,
-                "--rpc-bind-port",
-                str(self.port),
+                "--log-file",
+                os.path.join(self.workdir, "shekyld.log"),
+                "--rpc-admin-listen",
+                f"127.0.0.1:{self.port}",
                 "--log-level",
-                "0",
+                "warn",
             ],
             stdout=self.log,
             stderr=subprocess.STDOUT,
@@ -105,10 +118,17 @@ class Daemon:
         # Wait for RPC readiness.
         for _ in range(60):
             try:
-                if self.json_rpc("get_info").get("status") == "OK":
-                    return
+                ready = self.json_rpc("get_info").get("status") == "OK"
             except Exception:
-                time.sleep(0.5)
+                ready = False
+            if ready:
+                if not armed_lever.announced_since(self.log.name, 0):
+                    raise RuntimeError(
+                        f"the daemon did not announce {armed_lever.ANNOUNCEMENT!r} "
+                        f"at start; see {self.log.name}"
+                    )
+                return
+            time.sleep(0.5)
         raise RuntimeError("daemon RPC did not become ready")
 
     def stop(self) -> None:
@@ -150,9 +170,9 @@ class Daemon:
     def height(self) -> int:
         return self.json_rpc("get_info")["height"]
 
-    def generate(self, n: int, address: str) -> None:
+    def generate(self, n: int) -> None:
         self.json_rpc(
-            "generateblocks", {"amount_of_blocks": n, "wallet_address": address}
+            "generateblocks", {"count": n}
         )
 
     def pop(self, n: int) -> None:
@@ -220,6 +240,9 @@ def extract_leaf_hash_blob(extra: bytes) -> bytes:
         elif tag == 0x05:  # PQC ownership: varint count + count×{u8,u8,[32]}
             count, pos = _read_varint(extra, pos)
             pos += count * (1 + 1 + 32)
+        elif tag == 0x0C:  # draw commitment: 32 bytes, no length prefix
+            # (`shekyl-wire` `TX_EXTRA_TAG_DRAW_COMMITMENT`; in every coinbase)
+            pos += 32
         elif tag in blob_tags:
             length, pos = _read_varint(extra, pos)
             payload = extra[pos : pos + length]
@@ -278,7 +301,6 @@ def main() -> int:
     ap.add_argument("--out", required=True, help="fixture JSON output path")
     args = ap.parse_args()
 
-    address = load_miner_address()
     daemon = Daemon(os.path.abspath(args.daemon), args.port)
     chains = []
     try:
@@ -287,19 +309,19 @@ def main() -> int:
 
         # MAIN: empty window 0..=60, first founder drain at 61, segment freeze.
         print(f"mining MAIN to height {MAIN_TIP}")
-        daemon.generate(MAIN_TIP - (daemon.height() - 1), address)
+        daemon.generate(MAIN_TIP - (daemon.height() - 1))
         chains.append(record_chain(daemon, "main"))
 
         # DEEP reorg: trims already-drained leaves (§6 trim branch).
         print(f"deep reorg: pop {DEEP_POP}, regen {DEEP_REGEN}")
         daemon.pop(DEEP_POP)
-        daemon.generate(DEEP_REGEN, address)
+        daemon.generate(DEEP_REGEN)
         chains.append(record_chain(daemon, "reorg_deep"))
 
         # SHALLOW reorg: pops only pending coinbases (§6 no-mutation branch).
         print(f"shallow reorg: pop {SHALLOW_POP}, regen {SHALLOW_REGEN}")
         daemon.pop(SHALLOW_POP)
-        daemon.generate(SHALLOW_REGEN, address)
+        daemon.generate(SHALLOW_REGEN)
         chains.append(record_chain(daemon, "reorg_shallow"))
     finally:
         daemon.stop()

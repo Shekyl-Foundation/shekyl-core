@@ -513,6 +513,14 @@ reason). The gate-7 wiring must follow the recorder, not the modeling loop: the 
 re-priced burn trajectory diverges from what consensus will compute and the close
 criteria read a sim artifact instead of the chain's arithmetic.
 
+**Superseded (2026-10-03).** The constraint above records what the burn site read
+on 2026-06-11. Consensus has since moved to the net quantity: circulating supply is
+`coins_generated − total_burned` at parent state (FL-R16c; CEN-F17), derived by
+`shekyl_economics::CirculatingSupply::derive` in both validators. Its reason, *follow
+what consensus computes*, therefore now points the other way. ESR-5 moved the gate-7
+path and the recorder to the net quantity
+([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md) §5.9).
+
 **Inputs — all already pinned (which is why this is buildable now):** `bond_rate* = 0.75`
 (iteration-2 fine sweep); `ARCHIVAL_BOND_FLOOR` (gate-4 §8.1); `W = 26`, `SEB = 10_000`
 (timing cluster — claim cadence bounds in-flight unclaimed value, a second-order term the
@@ -3441,7 +3449,7 @@ worked byte sweep at the pinned cadence (`SETTLEMENT_EPOCH_BLOCKS = 10_000`,
 | Constant | Value |
 |----------|-------|
 | `MAX_CLAIM_AGE_W` (`W`) | **26** settlement epochs (~361 d) |
-| `RETENTION_HORIZON_BLOCKS` | **420_000** blocks (~583 d retention floor) |
+| deepest retention (`W + 1`, `EpochFloor::<Claimable>`) | **27** settlement epochs (~375 d) |
 | `ARCHIVAL_REORG_DEPTH_BLOCKS` | **720** blocks (~24 h processable reorg) |
 | `RELEASE_COOLDOWN_EPOCHS` | **2** |
 | `SLASH_GRACE_EPOCHS` | **1** (one `SEB` by construction; T-A16 margin; *was `CHALLENGE_RESOLUTION_BLOCKS = 10_000` until 2026-09-30*) |
@@ -3640,7 +3648,8 @@ but four things bound the result; the first two change the meaning, not just the
 - **The 600 is *per seam*; the symmetric ±600 envelope is the entry seam only.** The entry standoff
   (announce↔bond) is order-symmetric and inversion-eligible: ±600 around the bond-post, 1200-block
   adversary search width, 600-block max entry latency (caveat geometry above). The **exit seam**
-  (terminal drain, and now the *recurring* partial-release `HoldingsUpdate`) is a **separate standoff
+  (terminal drain — and, as written, "the *recurring* partial-release `HoldingsUpdate`", a kind
+  REJECTED 2026-09-20; the exit seam is now whole-bond `Release` only) is a **separate standoff
   with its own envelope and its own latency budget** — and it differs structurally on two axes:
   (i) it is **one-sided** (no inversion: collateral is not spendable before the **20_000-block
   release cooldown**, so the drain cannot precede the release), so a 600-block exit window buys a
@@ -3662,7 +3671,25 @@ but four things bound the result; the first two change the meaning, not just the
   and (b) **leaning on the inversion** (the proven thin-regime lever, finding 3). Neither widens the
   window; both stay off the economic axis.
 
-## L18 — `HoldingsUpdate` release-cooldown freeze (R-3 reconciliation, 2026-06-16)
+## L18 — `HoldingsUpdate` release-cooldown freeze (R-3 reconciliation, 2026-06-16) — SUBJECT REJECTED 2026-09-20; records-was
+
+*(UPDATE 2026-10-04 — this layer's subject no longer exists. `HoldingsUpdate` was
+REJECTED 2026-09-20 under the immutable-bond ruling
+([`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §5.3; `from_u8(3)`
+is `InvalidPostKind`, PR #808): a bond's holdings are fixed at post and change
+only by persona rotation — whole-bond `Release` plus a new `JoinMarket`. The
+friction this layer modelled — freed collateral frozen for `RELEASE_COOLDOWN` —
+survives in a stronger form (a rotation freezes the **whole** bond's collateral,
+and a pure shrink pays the full cooldown, §5.3.3 of the lifecycle doc), so the
+layer's conclusion that `r_target_deep` need not rise is a lower bound on the
+friction now in force rather than a measurement of it. Its mechanism — in-place
+per-shard add/drop with per-shard escrow (`sim/model.rs:356-372`,
+`sim/agent.rs:131-151`, the `holdingsupdate_cooldown` axis) — is the
+`ECONOMICS_SIM_PRODUCTION_REBASE.md` D2 divergence; the sim has not been
+re-based on rotation. The economics question the ruling leaves open is a
+different one and is carried in `FOLLOWUPS.md`: the pull latency for a freshly
+frozen shard when no operator can add it incrementally. Everything below is
+kept as the record of what was measured and why, under its own date.)*
 
 **Why.** `HoldingsUpdate` (voluntary partial-release / reinstate) is promoted to genesis
 (V3.0). The prior layers modeled mobility as *frictionless* re-allocation: an actor
@@ -4901,7 +4928,7 @@ the sim.
 |---|---|---|
 | epoch | 10,000 blocks × 120 s = **13.9 days** | `settlement_epoch_blocks`, `daa_target_seconds` (`config/consensus_constants.json`) |
 | shard bytes | 200 × 19.6 KB = **3.92 MB** | a 2-input, 2-output single-sig spend's good from code constants (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.1: 10,778 B of authorizations + 8,128 B FCMP++ at 8 layers + ~643 B BP+ + 64 B pseudo-outs). Not the 16.7 KB/tx that sized `T = 200`, an estimate made before the domain ruling |
-| reads per (P, shard) per epoch | **3** whole-shard reads | `CHALLENGES_PER_PAIR_PER_EPOCH = 3` (`ARCHIVAL_CHALLENGE_MECHANISM.md`). Organic and band-2 serving are **excluded**: there is no authority for them (`SHT-5`), so `c` is a lower bound on that leg |
+| reads per (P, shard) per epoch | **3** whole-shard reads | `COUNTED_DRAWS = 3`, the draws the count rule issues a pair at its target (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §3, §4.3). Organic and band-2 serving are **excluded**: there is no authority for them (`SHT-5`), so `c` is a lower bound on that leg |
 | storage, floor device | $145/TB portable SSD over 36 months = **$4.03/TB-month** | [cheapestssd.com, portable SSDs by $/TB, September 2026](https://cheapestssd.com/portable-ssd/) (SanDisk Extreme 2 TB at $145/TB); rule 76's floor is a Pi 4 with attached storage |
 | storage, rented | Hetzner Storage Box €3.20 ≈ **$3.70/TB-month**, traffic included; Backblaze B2 **$6.95/TB-month** | [Hetzner Storage Box review, 2026](https://hiltonsoftware.co/tools/hetzner-storage); [Backblaze B2 pricing](https://www.backblaze.com/cloud-storage/pricing) |
 | egress | home flat-rate **$0 marginal**; AWS **$0.09/GB** (first 10 TB) | [EgressCost.com, AWS data transfer out](https://egresscost.com/aws/data-transfer-pricing/) |

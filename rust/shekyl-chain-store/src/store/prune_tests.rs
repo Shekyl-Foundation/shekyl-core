@@ -10,49 +10,82 @@
 //! Shards are cut by archival length (`SHT-Q2`): `W` is a production
 //! constant, three million bytes, so a shard closes only after three
 //! million bytes of prunable and `pqc_auths` segments. The chains here list
-//! spends whose archival length the fixture sets exactly ([`sized_spend`]:
-//! the opaque `fcmp_proof` padded, which no landed rule verifies), and run
-//! under a 100-block epoch with a 50-block undo retention, or a 10-block
-//! epoch with a 3-block retention (`Horizons::new`, the regtest knob — the
-//! production pair would need ten thousand blocks per boundary). The
-//! expected partition is computed by [`Model`], a separate derivation from
-//! the lengths the fixture asked for. The fixtures in `connect_fixtures`
-//! bound their heights to a `u8`, so this module carries its own header for
-//! long chains, with the same shape.
+//! **serve credits** whose archival length the fixture sets exactly
+//! ([`sized_credit`]: the credit's pruned pass record padded — the one
+//! archival region no landed rule reads; CEN-J8/J9/J10, Slice C's verifier,
+//! will, and the padding is recorded as debt against them in
+//! `docs/FOLLOWUPS.md`, "Padded serve-credit records in the store's prune
+//! and bench tests"). Each credit names a persona a [`Sized::Join`] opened
+//! in an earlier block (CEN-J4). *Records-was:* until the CEN-I13 flip the
+//! bodies were fixture spends with the opaque `fcmp_proof` padded; I13
+//! refuses a spend whose declared depth is not the chain's, and a padded
+//! proof is nothing I15 verifies, so the free variable moved to the one
+//! region still opaque. Since CEN-J27 the join is a **real** one too — a
+//! spend of a matured coinbase funding the bond, built over the chain by
+//! `connect_fixtures::Grown` — so every chain here opens with [`BASE`]
+//! coinbase-only blocks, enough for the join's coinbase to mature, and
+//! each listed height sits `BASE` above where it sat; every storage id
+//! is `BASE` above its old number and every archival total is unchanged
+//! (a coinbase carries no archival good). The chains run under a 100-block
+//! epoch with a 50-block undo retention, or a 10-block epoch with a
+//! 3-block retention (`Horizons::new`, the regtest knob — the production
+//! pair would need ten thousand blocks per boundary). The expected
+//! partition is computed by [`Model`], a separate derivation from the
+//! lengths the fixture asked for.
+//!
+//! The last section is the slash log's retirement (`SLK-Q1`,
+//! `DRS_E4_SLASH_LOG_ROUND.md`): a `10 / 5` pair whose window
+//! ([`WINDOW`], derived from [`SlashLogFloor::window`]) a chain of empty
+//! blocks crosses, rows planted on both sides of the first floor, the read
+//! that asserts the floor (SI-26), a pop across the boundary, a store
+//! whose undo retention is deeper than the cap (`SLK-2`), and a session
+//! that stubs `SlashLog` and therefore deletes none (`ARW-9`).
+
+// A whole-file test module: the parent gates it with `#[cfg(test)]`, and
+// this self-declaration is what the debug-macro lint keys on — the
+// `#[ignore]`d boundary test prints its measurement (bodies, close
+// height, wall time) for the nightly lane to read, which is its job, not a
+// debug leftover.
+#![cfg(test)]
 
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{Candidate, FakechainSchedule, RuleSet};
-use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, SHARD_LENGTH};
+use shekyl_chain_rules::{
+    BlockDrawsFloor, Candidate, CappedEpoch, EpochFloor, ReleaseJournalFloor, RuleSet,
+    SlashLogFloor,
+};
+use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, ShardId, SHARD_LENGTH};
 use shekyl_wire::{Ct, Transaction};
 
+use super::archival_read_tests::{persona, plant, plant_slash, record, slash_entry};
 use super::connect_fixtures::{
-    anchor, batch_root_going_into, candidate, candidate_over, judge_under, root_going_into, spend,
+    at, candidate, candidate_over, judge_under, root_going_into, serve_credit, spends, Grown,
+    Listed, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
 use crate::codec::{
     Canonical, PropertyCell, PropertyCellBytes, Raw, SettlementEpochBlocks, UndoLogFloorCell,
 };
-use crate::ids::TxStorageId;
-use crate::schema::{BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN, UNDO_LOG};
+use crate::ids::{SlashLogTuple, TxStorageId};
+use crate::schema::{ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN, UNDO_LOG};
 
 const SEB: u64 = 100;
 const RETENTION: u64 = 50;
-/// The Fakechain rule set this schedule runs: the genesis rules under a
+/// The levered rule set this schedule runs: the genesis rules under a
 /// 100-block epoch with a reorg cap that fits the retention (SCW-7) — a
 /// regtest wanting a 50-block retention gets a rule set whose cap is at
 /// most 50, not a store field the validator defers to (PR #861 review),
 /// and one whose epoch is the store's, or `connect` refuses it (SCW-2,
 /// `ARW-15`).
-const RULES: RuleSet = RuleSet::fakechain(None, pair(SEB, RETENTION));
+const RULES: RuleSet = RuleSet::GENESIS.with_levers(None, pair(SEB, RETENTION));
 
 /// A `(SEB, cap)` pair at compile time; a bad one is a compile error.
-const fn pair(seb: u64, cap: u64) -> FakechainSchedule {
+const fn pair(seb: u64, cap: u64) -> CappedEpoch {
     let Some(epoch) = SettlementEpochBlocks::new(seb) else {
         panic!("a zero epoch");
     };
-    match FakechainSchedule::new(epoch, BlockCount::from_raw(cap)) {
+    match CappedEpoch::new(epoch, BlockCount::from_raw(cap)) {
         Ok(pair) => pair,
         Err(_) => panic!("the cap is not inside the epoch"),
     }
@@ -79,14 +112,49 @@ fn candidate_on(
     candidate_over(root_going_into(store, height), height, previous, listed)
 }
 
-/// A chain under construction: the hashes so far, and the listed
-/// transactions to hand each height.
+/// The coinbase-only prefix every sized chain here opens with, and the
+/// shift of every listed height, boundary, floor and storage id against
+/// the tables as they were written when the join was a fixture body.
+///
+/// A join is a spend ([`Listed::Join`]), so the first height that can
+/// list one is [`FIRST_SPEND_HEIGHT`] (66: the coinbase it spends must
+/// have matured). The tables below list their first join five blocks into
+/// the chain and are read under two schedules — a 100-block epoch and a
+/// 10-block one — so the shift is the smallest multiple of both epochs
+/// past 66: `BASE = 100`, and the join sits at `BASE + 5`. Shifting by a
+/// multiple of each epoch keeps every height's offset inside its epoch, so
+/// each boundary moves by exactly one epoch under the 100-block schedule
+/// and ten under the 10-block one, and the discard calendar reads the
+/// same one epoch (ten epochs) later. Shifting by a coinbase-only prefix
+/// keeps every archival total — a coinbase writes no length row — and
+/// raises every storage id by exactly `BASE`, one coinbase per prefix
+/// height.
+const BASE: u64 = 100;
+const _: () = assert!(
+    BASE > FIRST_SPEND_HEIGHT,
+    "a join spends a matured coinbase"
+);
+const _: () = assert!(
+    BASE.is_multiple_of(SEB) && BASE.is_multiple_of(SHORT_SEB),
+    "the shift keeps every height's offset inside its epoch under both schedules"
+);
+
+/// A chain under construction: the blocks so far ([`Grown`], which builds
+/// each join's spend over the chain as it stands), and the listed
+/// transactions handed each height.
 struct Builder {
-    hashes: Vec<BlockHash>,
+    grown: Grown,
     listed: Vec<Vec<Transaction>>,
     /// The archival length each listed transaction was **asked** for, per
-    /// height — the model's input, never re-measured off the bodies.
+    /// height — the model's input, never re-measured off the bodies. A
+    /// join's is [`JOIN_LEN`], the chain's own, pinned once.
     lens: Vec<Vec<u64>>,
+    /// The height at which each slot's persona joined, if a connected
+    /// block listed its join: a credit in slot `i` at a later height needs
+    /// it (CEN-J4 reads the record off the view the block is judged
+    /// against, which a join in the same block has not yet written), and
+    /// names the epoch after the join's (CEN-J5, [`credit_epoch`]).
+    joined: Vec<Option<u64>>,
     /// The rule set every block is judged under and handed to `connect`.
     rules: RuleSet,
 }
@@ -98,49 +166,120 @@ impl Builder {
 
     fn under(rules: RuleSet) -> Self {
         Self {
-            hashes: Vec::new(),
+            grown: Grown::new(),
             listed: Vec::new(),
             lens: Vec::new(),
+            joined: Vec::new(),
             rules,
         }
     }
 
-    /// [`Self::connect`] with each height's spends given by their archival
-    /// lengths: `spec(h)` lists them, and `salt` keeps the key images of two
-    /// chains over the same heights apart.
+    /// Each connected block's hash — the priced block's identity.
+    fn hashes(&self) -> &[BlockHash] {
+        &self.grown.hashes
+    }
+
+    /// [`Self::connect`] with each height's bodies given by [`Sized`]:
+    /// `spec(h)` lists them slot by slot, and `salt` keeps the credits of
+    /// two chains over the same heights apart (a credit's record head —
+    /// two identical credits would be one txid). A join takes no salt: it
+    /// spends a coinbase of the chain it is built over, and two chains that
+    /// agree below it list the same join (its proof is memoised by the
+    /// reference block's hash, `Grown::spend_posting`, so the two builds
+    /// are one body).
     fn connect_sized(
         &mut self,
         store: &ChainStore,
         from: u64,
         to: u64,
         salt: u64,
-        spec: impl Fn(u64) -> Vec<u64>,
+        spec: impl Fn(u64) -> Vec<Sized>,
     ) -> Vec<Connected> {
-        let txs: Vec<Vec<Transaction>> = (from..=to)
-            .map(|h| {
-                spec(h)
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, len)| sized_spend(key_of(salt, h, i), len))
-                    .collect()
-            })
-            .collect();
+        let mut joined = self.joined.clone();
+        let mut entries: Vec<Vec<Listed>> = Vec::new();
+        let mut lens: Vec<Vec<u64>> = Vec::new();
+        let mut joins: Vec<Vec<usize>> = Vec::new();
+        for h in from..=to {
+            let listed = spec(h);
+            let mut here = Vec::new();
+            let bodies = listed
+                .iter()
+                .enumerate()
+                .map(|(i, body)| match *body {
+                    Sized::Join => {
+                        assert!(
+                            joined.get(i).is_none_or(Option::is_none),
+                            "height {h} slot {i}: the slot's persona already joined (CEN-J14)"
+                        );
+                        if joined.len() <= i {
+                            joined.resize(i + 1, None);
+                        }
+                        joined[i] = Some(h);
+                        here.push(i);
+                        Listed::Join {
+                            slot: u32::try_from(i).expect("a slot index"),
+                        }
+                    }
+                    Sized::Credit(len) => {
+                        let opened = joined.get(i).copied().flatten().filter(|&at| at < h);
+                        let Some(opened) = opened else {
+                            panic!(
+                                "height {h} slot {i}: a credit needs its persona's join in an \
+                                 earlier block (CEN-J4)"
+                            );
+                        };
+                        Listed::Body(sized_credit(
+                            key_of(salt, h, i),
+                            i,
+                            len,
+                            credit_epoch(&self.rules, opened),
+                        ))
+                    }
+                })
+                .collect();
+            entries.push(bodies);
+            lens.push(listed.iter().map(|body| body.len()).collect());
+            joins.push(here);
+        }
         let out = self.connect(store, from, to, |h| {
-            txs[usize::try_from(h - from).expect("fits")].clone()
+            entries[usize::try_from(h - from).expect("fits")].clone()
         });
-        let at = self.lens.len() - (txs.len());
-        for (i, h) in (from..=to).enumerate() {
-            self.lens[at + i] = spec(h);
+        let first = self.lens.len() - entries.len();
+        for (i, lens) in lens.into_iter().enumerate() {
+            self.lens[first + i] = lens;
+        }
+        self.joined = joined;
+        // The model's input is the store's: a join's length is the chain's
+        // own, read off the body the block listed.
+        for (h, slots) in (from..=to).zip(joins) {
+            for i in slots {
+                assert_eq!(
+                    self.listed[at(BlockHeight::from_raw(h))][i]
+                        .archival_len()
+                        .to_raw(),
+                    JOIN_LEN,
+                    "height {h} slot {i}: the chain's join length moved — re-derive every \
+                     table in this module"
+                );
+            }
         }
         out
     }
 
-    /// Forget the top `n` heights after popping them from the store.
+    /// Forget the top `n` heights after popping them from the store: the
+    /// chain record pops with them ([`Grown::pop`]), and a persona whose
+    /// join was at a popped height has not joined.
     fn forget(&mut self, n: usize) {
         for _ in 0..n {
-            self.hashes.pop();
+            self.grown.pop();
             self.listed.pop();
             self.lens.pop();
+        }
+        let height = self.grown.height().to_raw();
+        for slot in &mut self.joined {
+            if slot.is_some_and(|at| at >= height) {
+                *slot = None;
+            }
         }
     }
 
@@ -152,35 +291,35 @@ impl Builder {
     }
 
     /// Connect heights `from..=to` in one batch, handing `listed(h)` at each;
-    /// returns each connect's outcome. Every listed transaction is
-    /// **anchored** on the chain as built (`connect_fixtures::anchor`: a
-    /// recorded reference inside CEN-I11's window, and its slots signed), so
-    /// a caller lists bare `spend`s and reads them back through
-    /// [`Self::listed`].
+    /// returns each connect's outcome. Every entry is **realised** on the
+    /// chain as built ([`Grown::realise`]: a join is a spend of a matured
+    /// coinbase carrying the persona's post, proved over the tree as it
+    /// stands; a body is anchored — a credit has no reference and is
+    /// listed as given), so a caller lists entries and reads the bodies
+    /// back through [`Self::listed`]. Genesis is endowed
+    /// ([`super::connect_fixtures::endow_genesis`]) so its coinbase is one a join can spend.
     fn connect(
         &mut self,
         store: &ChainStore,
         from: u64,
         to: u64,
-        listed: impl Fn(u64) -> Vec<Transaction>,
+        listed: impl Fn(u64) -> Vec<Listed>,
     ) -> Vec<Connected> {
         let out: Result<Vec<Connected>, TestErr> = store.write(|batch| {
             let view = batch.chain_view();
             let mut out = Vec::new();
             for h in from..=to {
-                let previous = self.hashes.last().copied().unwrap_or(BlockHash::NULL);
-                let txs: Vec<Transaction> = listed(h)
-                    .into_iter()
-                    .map(|tx| anchor(&self.hashes, h, tx))
-                    .collect();
-                let root = batch_root_going_into(&view, h)?;
-                let cand = candidate_over(root, h, previous, txs.clone());
+                assert_eq!(
+                    self.grown.height().to_raw(),
+                    h,
+                    "the chain connects in height order"
+                );
+                let txs = self.grown.realise(&listed(h));
                 // The identity is the priced block's (`judge_under`).
-                let judged = judge_under(&view, cand, &self.rules)?;
-                self.hashes.push(judged.block().hash());
-                // A bare listing records no asked-for lengths: its spends are
-                // the fixture's small ones, and `connect_sized` overwrites
-                // this with the spec it built from.
+                let judged = self.grown.judge_listing(&view, &self.rules, &txs)?;
+                // A bare listing records no asked-for lengths;
+                // `connect_sized` overwrites them with the spec it built
+                // from.
                 self.lens.push(vec![u64::MAX; txs.len()]);
                 self.listed.push(txs);
                 out.push(batch.connect(judged, self.rules)?);
@@ -191,30 +330,128 @@ impl Builder {
     }
 }
 
-/// A key image no other spend in these chains draws: `k·G` for a `k` built
-/// from the chain's salt, the height and the position.
+/// The settlement epoch a credit names for a persona that joined at
+/// height `joined` under `rules`: the first CEN-J5 admits, the join's
+/// epoch plus one (`serve_credit_epoch_ok`; CEN-J6 bounds nothing above it
+/// for a record with no bad interval, and the credit window, CEN-J7, is
+/// Slice C's).
+fn credit_epoch(rules: &RuleSet, joined: u64) -> u64 {
+    rules.settlement_schedule().epoch_at_height(joined) + 1
+}
+
+/// A key no other credit in these chains draws, built from the chain's
+/// salt, the height and the slot: a credit's pass record opens with its
+/// bytes.
 fn key_of(salt: u64, height: u64, index: usize) -> u64 {
     1_000 + salt * 1_000_000 + height * 8 + u64::try_from(index).expect("fits")
 }
 
-/// Where the probe anchors a candidate: any height with a reference beneath
-/// it, over a chain of null hashes. Anchoring signs the `pqc_auths` slots,
-/// which is why the length is measured after it.
-const PROBE_HEIGHT: u64 = 20;
-
-fn anchored(tx: &Transaction) -> Transaction {
-    let hashes = [BlockHash::NULL; 21];
-    anchor(&hashes, PROBE_HEIGHT, tx.clone())
+/// What a sized height lists, slot by slot. Slot `i`'s persona is the
+/// spender harness's `Persona::at(i)`: a `Join` there opens it, a `Credit`
+/// there names it. Two slots is the widest listing here, and two credits
+/// in one block must name two personas (CEN-G7, one `(P, shard, E)` per
+/// block).
+#[derive(Clone, Copy)]
+enum Sized {
+    /// The slot's persona joins ([`Listed::Join`]: a real spend of a
+    /// matured coinbase funding a complete-tree `JoinMarket` post, judged
+    /// as a spend under CEN-J27): the record a credit in a **later** block
+    /// names (CEN-J4). Its archival length is the chain's, [`JOIN_LEN`],
+    /// not a free variable.
+    Join,
+    /// A serve credit for the slot's persona whose archival length is
+    /// exactly this ([`sized_credit`]).
+    Credit(u64),
 }
 
-/// A spend whose archival length is exactly `len` once anchored and signed
-/// as the builder will: [`fixture::spend`] with its opaque `fcmp_proof`
-/// padded until the length is `len`. No landed rule verifies the proof's
-/// bytes, so its length is the fixture's free variable.
-fn sized_spend(key: u64, len: u64) -> Transaction {
-    let mut tx = fixture::spend(fixture::point_at(key), 2);
+impl Sized {
+    /// The archival length the model takes for this body.
+    const fn len(self) -> u64 {
+        match self {
+            Self::Join => JOIN_LEN,
+            Self::Credit(len) => len,
+        }
+    }
+}
+
+const fn credit(len: u64) -> Sized {
+    Sized::Credit(len)
+}
+
+/// The archival length of a [`Sized::Join`] as the chain lists it —
+/// `|pqc_auths| + |prunable|` of a real spend of one coinbase, two outputs
+/// back to the miner, with the complete-tree post riding it: two signed
+/// slots, the FCMP++ proof over the tree at `BASE + 5` and the outputs'
+/// range proof — pinned here and read off the chain once
+/// ([`the_join_length_the_model_assumes_is_the_chains`]), and checked at
+/// every join `connect_sized` lists. The specs are derived from it: a join
+/// stands where a 100 000-byte spend stood before the CEN-I13 flip, and
+/// the four credits after it give the shortfall back ([`repaid`]) so every
+/// running total from the fourth credit on is unchanged. The length is a
+/// function of the tree the proof is made over, which is the same under
+/// both schedules: `BASE + 5` coinbase-only blocks and nothing else.
+const JOIN_LEN: u64 = 15_968;
+
+/// The join's shortfall against the 100 000-byte spend it replaced, split
+/// over the four credits that follow it: each carries a quarter over
+/// 100 000, and the first carries the remainder too, so the four give back
+/// exactly `100 000 − JOIN_LEN` whatever the join's parity.
+const SHORTFALL: u64 = 100_000 - JOIN_LEN;
+const GIVEBACK: u64 = SHORTFALL / 4;
+const REMAINDER: u64 = SHORTFALL % 4;
+const _: () = assert!(
+    4 * GIVEBACK + REMAINDER == SHORTFALL,
+    "the four credits give back the whole shortfall"
+);
+
+/// The credit `k` blocks after a join (`k` in `1..=4`), carrying its share
+/// of the join's shortfall over 100 000 bytes.
+const fn repaid(k: u64) -> Sized {
+    assert!(1 <= k && k <= 4, "four credits give the shortfall back");
+    credit(100_000 + GIVEBACK + if k == 1 { REMAINDER } else { 0 })
+}
+const _: () = assert!(
+    repaid(1).len() + repaid(2).len() + repaid(3).len() + repaid(4).len() == 400_000 + SHORTFALL,
+    "a join and its four credits total what five 100 000-byte spends did"
+);
+
+#[test]
+fn the_join_length_the_model_assumes_is_the_chains() {
+    let path = tmp("prune-join-len");
+    let store = short_store(&path);
+    let mut b = Builder::under(SHORT);
+    b.connect_sized(&store, 0, BASE + 5, 0, |h| {
+        if h == BASE + 5 {
+            vec![Sized::Join]
+        } else {
+            Vec::new()
+        }
+    });
+    assert_eq!(
+        b.listed[at(BlockHeight::from_raw(BASE + 5))][0]
+            .archival_len()
+            .to_raw(),
+        JOIN_LEN,
+        "the chain's join length moved — re-derive every table in this module"
+    );
+    cleanup(&path);
+}
+
+/// A serve credit for slot `slot`'s persona, in `settlement_epoch`, whose
+/// archival length is exactly `len`: [`serve_credit`] with its one pruned
+/// pass record padded until the length is `len`. The record opens with
+/// `key`'s bytes so no two credits in these chains are one txid. **The
+/// record is what CEN-J8/J9/J10 will verify** (Slice C); until they land
+/// its bytes are the fixture's free variable, and the debt is recorded
+/// against them (`docs/FOLLOWUPS.md`, "Padded serve-credit records in the
+/// store's prune and bench tests"). A credit has no reference and no
+/// `pqc_auths` (CEN-H20), so anchoring leaves it as it is and the length
+/// is read off the body itself.
+fn sized_credit(key: u64, slot: usize, len: u64, settlement_epoch: u64) -> Transaction {
+    let mut tx = serve_credit(u32::try_from(slot).expect("a slot index"), settlement_epoch);
+    let head = key.to_le_bytes();
     let mut pad: u64 = 1;
-    // The proof's length prefix is a varint, so a pad change can move the
+    // The record's length prefix is a varint, so a pad change can move the
     // total by one more byte than asked; two corrections always land a
     // length this far from a width edge.
     for _ in 0..4 {
@@ -223,41 +460,44 @@ fn sized_spend(key: u64, len: u64) -> Transaction {
             ..
         } = &mut tx.ct
         else {
-            unreachable!("fixture::spend with outputs carries a prunable region");
+            unreachable!("fixture::serve_credit_only carries its RF-D1 region");
         };
-        prunable.fcmp_proof = vec![0xF0; usize::try_from(pad).expect("fits")];
-        let got = anchored(&tx).archival_len().to_raw();
+        let mut record = head.to_vec();
+        record.resize(head.len() + usize::try_from(pad).expect("fits"), 0xA5);
+        prunable.serve_credit_pruned = vec![record];
+        let got = tx.archival_len().to_raw();
         if got == len {
             return tx;
         }
         pad = (pad + len)
             .checked_sub(got)
-            .expect("the asked length is above the unpadded spend's");
+            .expect("the asked length is above the unpadded credit's");
     }
     panic!("no padding lands archival length {len}");
 }
 
-/// The spend with the largest archival length CEN-H3 admits: its weight is
-/// exactly [`fixture::max_tx_weight`]. The segments that are not archival
-/// (prefix, base) and the Bp+ clawback do not move with the proof's
-/// length, so the gap to the bound is all archival.
-fn max_spend(key: u64) -> (Transaction, u64) {
+/// The archival length of the credit with the largest archival length
+/// CEN-H3 admits: its weight is exactly [`fixture::max_tx_weight`]. A
+/// credit's weight is its serialized length (no Bp+ clawback: no outputs),
+/// and the prefix does not move with the record's length, so the gap to the
+/// bound is all archival. One probe, shared by the specs that list the
+/// maximal credit — the ten-block schedule's, so the probe names the epoch
+/// a credit there names ([`credit_epoch`] of a join at `BASE + 5`): the
+/// epoch is a varint in the prefix, so its width is part of the weight.
+/// The per-record ceiling (`ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES`,
+/// 1 053 185) is a decode bound the H3 weight bound sits far under.
+fn max_len() -> u64 {
+    let epoch = credit_epoch(&SHORT, BASE + 5);
     let base: u64 = 100_000;
-    let weight = anchored(&sized_spend(key, base)).weight();
+    let weight = sized_credit(1, 0, base, epoch).weight();
     let len = base
         + u64::try_from(fixture::max_tx_weight() - weight).expect("under the bound at the base");
-    let tx = sized_spend(key, len);
     assert_eq!(
-        anchored(&tx).weight(),
+        sized_credit(1, 0, len, epoch).weight(),
         fixture::max_tx_weight(),
-        "the maximal spend sits exactly on CEN-H3's bound"
+        "the maximal credit sits exactly on CEN-H3's bound"
     );
-    (tx, len)
-}
-
-/// The archival length of [`max_spend`] — one probe, shared by the specs.
-fn max_len() -> u64 {
-    max_spend(1).1
+    len
 }
 
 /// `SHT-Q2` computed the slow way, from the lengths the fixture asked for:
@@ -379,12 +619,22 @@ fn prunable_state(store: &ChainStore, id: u64) -> Option<bool> {
     match store
         .begin_read()
         .expect("read")
-        .tx_prunable(TxStorageId::from_raw(id))
+        .tx_archival_good(TxStorageId::from_raw(id))
         .expect("read")
     {
-        AtIndex::Recorded(Prunable::Retained(_)) => Some(true),
-        AtIndex::Recorded(Prunable::Discarded) => Some(false),
+        AtIndex::Recorded(ArchivalGood::Retained { .. }) => Some(true),
+        AtIndex::Recorded(ArchivalGood::Discarded) => Some(false),
         AtIndex::BeyondCount => None,
+    }
+}
+
+/// The archival good of the recorded transaction `hash` — one read, so a
+/// prune that took the prunable region and not the `pqc_auths` region (or
+/// the reverse) is SI-42 here, not a `Discarded` that hides the half.
+fn good_of(snap: &ReadSnapshot<'_>, record: &TxRecord) -> ArchivalGood {
+    match snap.tx_archival_good(record.location.id).expect("read") {
+        AtIndex::Recorded(good) => good,
+        AtIndex::BeyondCount => panic!("a recorded id is within the count"),
     }
 }
 
@@ -414,89 +664,131 @@ fn tip(store: &ChainStore) -> u64 {
         .to_raw()
 }
 
-/// The spends of the 100-block chain: thirty 100 000-byte spends at heights
-/// 5–34 fill shard 0 to exactly `W` (it closes at 34), and one more at 250
-/// opens shard 1, which has not closed by 300.
-fn spec_300(h: u64) -> Vec<u64> {
-    match h {
-        5..=34 | 250 => vec![100_000],
+/// The bodies of the 100-block chain, one per height at `BASE + 5` to
+/// `BASE + 34` and `BASE + 250`: slot 0's join at `BASE + 5` (the join
+/// spends genesis's coinbase, the lowest matured), then credits for it.
+/// Thirty bodies at heights `BASE + 5` to `BASE + 34` total exactly `W` —
+/// `JOIN_LEN + (400 000 + SHORTFALL) + 25·100 000 = 3 000 000` — so shard 0
+/// closes at `BASE + 34`, in epoch 1, as it closed at 34 in epoch 0 when
+/// the chain had no prefix; the running total is the old one from the
+/// fourth credit on. One more credit at `BASE + 250` opens shard 1, which
+/// has not closed by `BASE + 300`.
+fn spec_300(h: u64) -> Vec<Sized> {
+    match h.checked_sub(BASE) {
+        Some(5) => vec![Sized::Join],
+        Some(k @ 6..=9) => vec![repaid(k - 5)],
+        Some(10..=34 | 250) => vec![credit(100_000)],
         _ => Vec::new(),
     }
 }
 
-/// The chain every test here starts from: heights `0..=300` under a
-/// 100-block epoch, listed by [`spec_300`]. Storage ids: one coinbase at each
-/// of 0–4 (ids 0–4), a coinbase and a spend at each of 5–34 (ids 5–64),
-/// coinbases from 35 (id 65 on), block 250's spend is id 281.
+/// The chain every test here starts from: heights `0..=BASE + 300` under
+/// a 100-block epoch, listed by [`spec_300`]. Storage ids: one coinbase at
+/// each of `0..=BASE + 4` (ids `0..=BASE + 4`), a coinbase and a body at
+/// each of `BASE + 5` to `BASE + 34` (ids `BASE + 5` to `BASE + 64`),
+/// coinbases from `BASE + 35` (id `BASE + 65` on), block `BASE + 250`'s
+/// credit is id `BASE + 281` — every id its old number plus `BASE`, one
+/// coinbase per prefix block. The two boundaries handed back are the ones
+/// that discard: shard 0 closes in epoch 1, so the epoch-2 boundary at
+/// 200 names nothing (`close_epoch + 2 ≤ e` fails) and the epoch-3 and
+/// epoch-4 boundaries at 300 and 400 name shard 0, as the epoch-2 and
+/// epoch-3 boundaries did at 200 and 300 over the unshifted chain.
 fn chain_to_300(path: &std::path::Path) -> (ChainStore, Builder, Connected, Connected) {
     let store =
         ChainStore::with_horizons(path, ApplyPolicy::default(), horizons()).expect("create");
     let mut b = Builder::new();
-    b.connect_sized(&store, 0, 199, 0, spec_300);
-    let at_200 = b.connect_sized(&store, 200, 200, 0, spec_300).remove(0);
-    b.connect_sized(&store, 201, 299, 0, spec_300);
-    let at_300 = b.connect_sized(&store, 300, 300, 0, spec_300).remove(0);
-    (store, b, at_200, at_300)
+    let to_299 = b.connect_sized(&store, 0, BASE + 199, 0, spec_300);
+    assert_eq!(
+        to_299[at(BlockHeight::from_raw(200))]
+            .pruned
+            .expect("a boundary")
+            .shards(),
+        0..0,
+        "epoch 2's boundary discards nothing: shard 0 closed in epoch 1"
+    );
+    let at_300 = b
+        .connect_sized(&store, BASE + 200, BASE + 200, 0, spec_300)
+        .remove(0);
+    b.connect_sized(&store, BASE + 201, BASE + 299, 0, spec_300);
+    let at_400 = b
+        .connect_sized(&store, BASE + 300, BASE + 300, 0, spec_300)
+        .remove(0);
+    (store, b, at_300, at_400)
 }
 
 #[test]
 fn the_boundary_batch_discards_closed_shards_and_retires_undo_rows() {
     let path = tmp("prune-boundary");
-    let (store, b, at_200, at_300) = chain_to_300(&path);
+    let (store, b, at_300, at_400) = chain_to_300(&path);
 
-    // Epoch 2's boundary: shard 0 closed at 34 (the running total reached
-    // `W` there), inside `[0, 100)`, so `D(2)` is shard 0; the undo floor
-    // rises to 200 − 50.
-    let pruned_200 = at_200.pruned.expect("a boundary");
-    assert_eq!(pruned_200.shards(), 0..1, "D(2) is shard 0");
-    assert_eq!(pruned_200.undo_floor, BlockHeight::from_raw(150));
-
-    // Epoch 3's boundary: `[0, 200)` names shard 0 again — already empty —
-    // and shard 1 has not closed.
+    // Epoch 3's boundary: shard 0 closed at `BASE + 34` (the running total
+    // reached `W` there), inside `[100, 200)`, so `D(3)` is shard 0; the
+    // undo floor rises to 300 − 50.
     let pruned_300 = at_300.pruned.expect("a boundary");
     assert_eq!(pruned_300.shards(), 0..1, "D(3) is shard 0");
     assert_eq!(pruned_300.undo_floor, BlockHeight::from_raw(250));
 
+    // Epoch 4's boundary: `[100, 300)` names shard 0 again — already empty —
+    // and shard 1 has not closed.
+    let pruned_400 = at_400.pruned.expect("a boundary");
+    assert_eq!(pruned_400.shards(), 0..1, "D(4) is shard 0");
+    assert_eq!(pruned_400.undo_floor, BlockHeight::from_raw(350));
+
     // Shard 0's bodies are gone — every transaction starting below `W`, the
     // coinbases among them — and shard 1's are held; the hash rows stand (a
-    // read answers *discarded*, never a fault). Id 65 is block 35's
-    // coinbase, the first transaction starting at `W`.
-    for id in [0, 5, 6, 64] {
+    // read answers *discarded*, never a fault). Id `BASE + 65` is block
+    // `BASE + 35`'s coinbase, the first transaction starting at `W`.
+    for id in [0, BASE + 5, BASE + 6, BASE + 64] {
         assert_eq!(prunable_state(&store, id), Some(false), "id {id} discarded");
     }
-    for id in [65, 66, 281, 300] {
+    for id in [BASE + 65, BASE + 66, BASE + 281, BASE + 300] {
         assert_eq!(prunable_state(&store, id), Some(true), "id {id} retained");
     }
-    assert_eq!(body_states(&store), not(&b.model().discarded(SEB, 300)));
+    assert_eq!(
+        body_states(&store),
+        not(&b.model().discarded(SEB, BASE + 300))
+    );
     {
         let snap = store.begin_read().expect("read");
-        // The spends as listed — anchored and signed by the builder — not
-        // the bare fixture, whose hash they no longer share.
+        // Block `BASE + 5`'s join as listed — the spend the chain built. A
+        // join is 4-part, so it has the pqc region the prune discards by
+        // shard.
         let early = snap
-            .tx_record(&b.listed[5][0].hash())
+            .tx_record(&b.listed[at(BlockHeight::from_raw(BASE + 5))][0].hash())
             .expect("read")
             .expect("recorded");
         assert_eq!(
-            early.pqc_auths,
-            Some(PqcAuths::Discarded),
-            "shard 0's pqc region went with it"
+            good_of(&snap, &early),
+            ArchivalGood::Discarded,
+            "shard 0's pqc region went with its prunable one"
         );
         assert!(early.pqc_auth_hash.is_some(), "the hash row is permanent");
+        // Block `BASE + 250`'s credit is 3-part (CEN-H20): no pqc region to
+        // hold or discard; its archival good is the prunable region alone,
+        // held (id `BASE + 281` above).
         let late = snap
-            .tx_record(&b.listed[250][0].hash())
+            .tx_record(&b.listed[at(BlockHeight::from_raw(BASE + 250))][0].hash())
             .expect("read")
             .expect("recorded");
         assert!(
-            matches!(late.pqc_auths, Some(PqcAuths::Retained(_))),
-            "shard 1 is held"
+            matches!(
+                good_of(&snap, &late),
+                ArchivalGood::Retained {
+                    pqc_auths: None,
+                    ..
+                }
+            ),
+            "a credit carries no pqc region"
         );
+        assert_eq!(late.pqc_auth_hash, None, "and no hash row for one");
+        assert_eq!(late.archival_len.to_raw(), 100_000, "as asked");
     }
 
     // The undo journal keeps exactly `[floor, tip]`.
-    assert_eq!(undo_floor_cell(&store), Some(250));
+    assert_eq!(undo_floor_cell(&store), Some(350));
     let rows = undo_rows(&store);
-    assert_eq!(rows.first(), Some(&250));
-    assert_eq!(rows.last(), Some(&300));
+    assert_eq!(rows.first(), Some(&350));
+    assert_eq!(rows.last(), Some(&(BASE + 300)));
     assert_eq!(rows.len(), 51);
     assert!(store.connect_state().is_live());
     cleanup(&path);
@@ -505,6 +797,159 @@ fn the_boundary_batch_discards_closed_shards_and_retires_undo_rows() {
 /// Retained-ness from the model's discarded-ness.
 fn not(discarded: &[bool]) -> Vec<bool> {
     discarded.iter().map(|d| !d).collect()
+}
+
+/// The boundary test above with every archival byte a real spend: the
+/// padded serve-credit records are the unit lane's stand-in for a shard's
+/// bytes (slice 6 row 8 ruling, a1), and this is the deletion-correctness
+/// test that gets valid bytes instead (a3) — the same discard set, undo
+/// floor, body states and pqc-region outcome, read off a chain of
+/// `MAX_INPUTS`-input spends ([`Grown::spend_many`]) run through both
+/// boundaries that name shard 0 (`close_epoch + 2` and `+ 3`).
+///
+/// `#[ignore]`d: proving fifty-four 8-input spends is minutes — 140 s in
+/// release, 714 s in debug on the measuring box — not a unit test's budget. **The lane that runs it is `.github/workflows/nightly.yml`,
+/// job `store-ignored`, on the 03:00 UTC daily schedule**, which lists the
+/// crate's ignored set and refuses to pass unless this test's name is in
+/// it (rule 47). An `#[ignore]`d test no scheduled lane invokes is a
+/// deleted test with a comment on it; that lane exists because the
+/// crate's two `#[ignore]`d benches had none, and `slash_scan_bench`'s
+/// default persona count overran epoch 0 with nobody running it to see.
+///
+/// The a1 arithmetic, asserted rather than restated: a shard closes in at
+/// least `⌈W / max_tx_weight⌉` bodies, since no body is heavier than H3's
+/// bound — **21** at the shipped `W` and `max_tx_weight()`, each
+/// needing its own (P, shard, E) triple under G7. Not 3: the 1 053 185-byte
+/// per-record ceiling is a decode bound, and a body of that size fails H3.
+#[test]
+#[ignore = "54 real 8-input spends to a shard boundary: ~140 s release, ~12 min debug; the nightly lane (nightly.yml `store-ignored`, 03:00 UTC daily) runs it"]
+fn the_boundary_batch_discards_closed_shards_on_real_spends() {
+    use std::time::Instant;
+
+    let path = tmp("prune-boundary-real");
+    let store =
+        ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("create");
+    let inputs = shekyl_fcmp::MAX_INPUTS;
+    let w = SHARD_LENGTH.to_raw();
+    let fewest_bodies = w.div_ceil(u64::try_from(fixture::max_tx_weight()).expect("fits"));
+    assert_eq!(
+        fewest_bodies, 21,
+        "⌈W / max_tx_weight⌉ at the pinned constants"
+    );
+
+    let mut grown = Grown::new();
+    let mut lens: Vec<Vec<u64>> = Vec::new();
+    // Fee taken from the matured coinbase. Not a consensus figure:
+    // the chain only needs a fee that coinbase can pay.
+    const SPEND_FEE: u64 = 1_000;
+    let mut built_spends: Vec<Transaction> = Vec::new();
+    let mut close: Option<u64> = None;
+    let mut boundaries: Vec<(u64, Vec<u64>, u64)> = Vec::new();
+    let started = Instant::now();
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        loop {
+            let h = grown.height().to_raw();
+            if close.is_some_and(|c| h > (c / SEB + 3) * SEB) {
+                break;
+            }
+            // As many spends as the matured coinbases allow until shard 0
+            // closes; coinbase-only blocks from there to the second boundary
+            // that names it.
+            let mut txs = Vec::new();
+            // One `Spends` entry is `MAX_INPUTS` coinbases. Entries accrue
+            // until the measured archival length crosses `W`, which the
+            // loop cannot know before the body exists.
+            while close.is_none() && grown.matured().len() >= inputs * (txs.len() + 1) {
+                let tx = grown.stage(&spends(inputs, SPEND_FEE));
+                assert!(
+                    tx.weight() <= fixture::max_tx_weight(),
+                    "an {inputs}-input spend sits under H3's bound"
+                );
+                txs.push(tx);
+                let total: u64 = lens.iter().flatten().sum::<u64>()
+                    + txs.iter().map(|t| t.archival_len().to_raw()).sum::<u64>();
+                if total >= w {
+                    close = Some(h);
+                }
+            }
+            lens.push(txs.iter().map(|t| t.archival_len().to_raw()).collect());
+            let judged = grown.judge_listing(&view, &RULES, &txs)?;
+            built_spends.extend(txs);
+            let connected = batch.connect(judged, RULES)?;
+            if let Some(pruned) = connected.pruned {
+                boundaries.push((h, pruned.shards().collect(), pruned.undo_floor.to_raw()));
+            }
+        }
+        Ok(())
+    });
+    out.expect("connects");
+    let model = Model { lens };
+    let close = close.expect("shard 0 closed");
+    let tip = grown.height().to_raw() - 1;
+    eprintln!(
+        "prune-boundary-real: {} spends of {inputs} inputs (first archival_len {}, weight {}) \
+         closed shard 0 at h={close}; ran to h={tip} through the boundaries at {:?} in {:?}",
+        built_spends.len(),
+        built_spends[0].archival_len().to_raw(),
+        built_spends[0].weight(),
+        boundaries.iter().map(|b| b.0).collect::<Vec<_>>(),
+        started.elapsed()
+    );
+
+    // The model's close height is the store's, and the chain used at least
+    // the fewest bodies any chain can.
+    assert_eq!(model.close_height(0), Some(close));
+    assert!(built_spends.len() >= usize::try_from(fewest_bodies).expect("fits"));
+    assert_eq!(model.close_height(1), None, "shard 1 never closed");
+
+    // Every boundary from epoch 2 on ran, each discarding what the calendar
+    // names — nothing until `close_epoch + 2`, shard 0 at `+ 2` and `+ 3` —
+    // and each retiring undo rows to `boundary − RETENTION`.
+    let close_epoch = close / SEB;
+    let expected: Vec<(u64, Vec<u64>, u64)> = (2..=close_epoch + 3)
+        .map(|e| (e * SEB, model.discards_at(SEB, e), e * SEB - RETENTION))
+        .collect();
+    assert_eq!(boundaries, expected);
+    assert_eq!(
+        boundaries.iter().filter(|b| b.1 == [0]).count(),
+        2,
+        "two boundaries named shard 0"
+    );
+
+    // Shard 0's bodies are gone — every spend, and every coinbase starting
+    // below `W` — and the coinbases from `W` on are held; the hash rows
+    // stand.
+    assert_eq!(body_states(&store), not(&model.discarded(SEB, tip)));
+    let ids_0 = model.ids_of(0);
+    assert!(ids_0.contains(&0), "genesis's coinbase opens shard 0");
+    assert!(
+        ids_0.end < u64::try_from(model.shard_of_id().len()).expect("fits"),
+        "shard 1 has ids"
+    );
+    assert_eq!(prunable_state(&store, ids_0.end - 1), Some(false));
+    assert_eq!(prunable_state(&store, ids_0.end), Some(true));
+    {
+        let snap = store.begin_read().expect("read");
+        for spend in [&built_spends[0], built_spends.last().expect("a spend")] {
+            let record = snap
+                .tx_record(&spend.hash())
+                .expect("read")
+                .expect("recorded");
+            assert_eq!(good_of(&snap, &record), ArchivalGood::Discarded);
+            assert!(record.pqc_auth_hash.is_some(), "the hash row is permanent");
+            assert_eq!(record.archival_len.to_raw(), spend.archival_len().to_raw());
+        }
+    }
+
+    // The undo journal keeps exactly `[floor, tip]`.
+    let floor = (close_epoch + 3) * SEB - RETENTION;
+    assert_eq!(undo_floor_cell(&store), Some(floor));
+    let rows = undo_rows(&store);
+    assert_eq!((rows.first(), rows.last()), (Some(&floor), Some(&tip)));
+    assert_eq!(rows.len(), usize::try_from(RETENTION + 1).expect("fits"));
+    assert!(store.connect_state().is_live());
+    cleanup(&path);
 }
 
 #[test]
@@ -531,19 +976,19 @@ fn epochs_zero_and_one_run_no_batch() {
 fn a_pop_below_the_undo_floor_is_a_refusal_not_si6() {
     let path = tmp("prune-pop-floor");
     let (store, _b, _, _) = chain_to_300(&path);
-    // 300 down to 250 have rows: fifty-one pops land.
-    for expected in (250..=300).rev() {
+    // 400 down to 350 have rows: fifty-one pops land.
+    for expected in (350..=BASE + 300).rev() {
         let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
         assert_eq!(out.map(|p| p.height.to_raw()), Ok(expected));
     }
-    assert_eq!(tip(&store), 249);
+    assert_eq!(tip(&store), 349);
     let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
     assert_eq!(
         out,
         Err(TestErr::Store(
             StoreError::from(StoreCannot::PopBelowFloor {
-                tip: 249,
-                floor: 250
+                tip: 349,
+                floor: 350
             })
             .to_string()
         )),
@@ -563,16 +1008,19 @@ fn the_hook_is_idempotent_across_a_boundary_reorg() {
     let before = (undo_floor_cell(&store), undo_rows(&store));
 
     let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
-    assert_eq!(out.map(|p| p.height.to_raw()), Ok(300));
+    assert_eq!(out.map(|p| p.height.to_raw()), Ok(BASE + 300));
     b.forget(1);
-    // A different block at 300: the spend makes its hash differ.
-    let again = b.connect(&store, 300, 300, |_| vec![spend(3, 2)]).remove(0);
+    // A different block at 400: a small credit (slot 0's persona joined at
+    // `BASE + 5`) makes its hash differ.
+    let again = b
+        .connect_sized(&store, BASE + 300, BASE + 300, 0, |_| vec![credit(1_000)])
+        .remove(0);
     let pruned = again.pruned.expect("the boundary fires again");
-    assert_eq!(pruned.shards(), 0..1, "the same D(3), already empty");
-    assert_eq!(pruned.undo_floor, BlockHeight::from_raw(250), "monotone");
+    assert_eq!(pruned.shards(), 0..1, "the same D(4), already empty");
+    assert_eq!(pruned.undo_floor, BlockHeight::from_raw(350), "monotone");
     assert_eq!((undo_floor_cell(&store), undo_rows(&store)), before);
     assert_eq!(prunable_state(&store, 0), Some(false));
-    assert_eq!(prunable_state(&store, 65), Some(true));
+    assert_eq!(prunable_state(&store, BASE + 65), Some(true));
     cleanup(&path);
 }
 
@@ -586,37 +1034,43 @@ fn h_scarce_is_the_last_discarded_shards_close_height() {
     type Edges = (Option<u64>, Option<u64>, Option<u64>);
     let out: Result<Edges, TestErr> = store.write(|batch| {
         Ok((
-            batch.h_scarce(150)?,
             batch.h_scarce(250)?,
-            batch.h_scarce(300)?,
+            batch.h_scarce(350)?,
+            batch.h_scarce(BASE + 300)?,
         ))
     });
     let (e1, e2, e3) = out.expect("reads");
     assert_eq!(
         store.begin_read().expect("read").h_scarce().expect("read"),
-        Some(BlockHeight::from_raw(34)),
+        Some(BlockHeight::from_raw(BASE + 34)),
         "the snapshot's read at the recorded tip agrees"
     );
-    assert_eq!(e1, None, "epoch 1: nothing can have discarded");
-    // Shard 0's running total reaches `W` at height 34, whose spend ends
-    // exactly on it.
-    assert_eq!(e2, Some(34), "epoch 2: shard 0 closed at height 34");
-    assert_eq!(e3, Some(34), "epoch 3: still shard 0, shard 1 is open");
+    // Shard 0 closed in epoch 1, so the first epoch that can have
+    // discarded it is 3 (`close_epoch + 2 ≤ E`).
+    assert_eq!(e1, None, "epoch 2: nothing can have discarded");
+    // Shard 0's running total reaches `W` at height `BASE + 34`, whose
+    // credit ends exactly on it.
+    assert_eq!(e2, Some(BASE + 34), "epoch 3: shard 0 closed at BASE + 34");
+    assert_eq!(
+        e3,
+        Some(BASE + 34),
+        "epoch 4: still shard 0, shard 1 is open"
+    );
     let model = b.model();
     assert_eq!(
         (e1, e2, e3),
         (
-            model.h_scarce(SEB, 150),
             model.h_scarce(SEB, 250),
-            model.h_scarce(SEB, 300)
+            model.h_scarce(SEB, 350),
+            model.h_scarce(SEB, BASE + 300)
         )
     );
     cleanup(&path);
 }
 
-/// The Fakechain set for the ten-block schedule the `SHT-Q2` boundary and
+/// The levered set for the ten-block schedule the `SHT-Q2` boundary and
 /// SI-13 / SI-24 tests run.
-const SHORT: RuleSet = RuleSet::fakechain(None, pair(SHORT_SEB, 3));
+const SHORT: RuleSet = RuleSet::GENESIS.with_levers(None, pair(SHORT_SEB, 3));
 
 /// The ten-block schedule's epoch.
 const SHORT_SEB: u64 = 10;
@@ -634,28 +1088,46 @@ fn short_store(path: &std::path::Path) -> ChainStore {
     ChainStore::with_horizons(path, ApplyPolicy::default(), short_horizons()).expect("open")
 }
 
-/// The ten-block chain's spends, `max` the [`max_spend`] length:
+/// The ten-block chain's bodies, two slots wide, `max` the [`max_len`]
+/// length; every height below is `BASE` above the one written. Block
+/// `BASE + 5` opens both slots' personas (two joins, spending genesis's
+/// coinbase and block 1's — `BASE + 5 − 66 + 1 = 40` have matured); blocks
+/// `BASE + 6` to `BASE + 9` give back the two joins' shortfall —
+/// `2·(100 000 − JOIN_LEN) = 2·SHORTFALL` — so the running total through
+/// `BASE + 9` is `1 000 000`, the same as when every body was a
+/// 100 000-byte spend, and every total below is the one it was:
 ///
-/// | Heights | Spends | Running total through the last | |
+/// | Heights (`BASE +`) | Bodies | Running total through the last | |
 /// | --- | --- | --- | --- |
-/// | 5–19 | 2 × 100 000 | 3 000 000 = `W` | shard 0 closes at 19, exactly on the boundary |
+/// | 5 | 2 joins | 2 × `JOIN_LEN` | |
+/// | 6–9 | 2 × [`repaid`] | 1 000 000 | |
+/// | 10–19 | 2 × 100 000 | 3 000 000 = `W` | shard 0 closes at `BASE + 19`, exactly on the boundary |
 /// | 20 | 1 × 100 000 | 3 100 000 | starts **exactly at** `W`: shard 1 |
 /// | 21–34 | 2 × 100 000 | 5 900 000 | |
-/// | 35 | 1 × `max` | 5 900 000 + `max` | starts in shard 1, ends past `2·W`: shard 1 closes at 35 |
-/// | 36–46 | 2 × 140 000 | 8 980 000 + `max` | shard 2 closes at 46 |
+/// | 35 | 1 × `max` | 5 900 000 + `max` | starts in shard 1, ends past `2·W`: shard 1 closes at `BASE + 35` |
+/// | 36–46 | 2 × 140 000 | 8 980 000 + `max` | shard 2 closes at `BASE + 46` |
 ///
-/// Storage ids: blocks 0–4 one each (0–4); 5–19 three each (block 19:
-/// 47–49); block 20: 50, 51; 21–34 three each (block 34: 91–93); block 35:
-/// 94 and the maximal spend 95; block 36's coinbase is 96.
+/// Storage ids, each `BASE` above the unshifted chain's: blocks `0` to
+/// `BASE + 4` one each (`0` to `BASE + 4`); `BASE + 5` to `BASE + 19`
+/// three each (block `BASE + 19`: `BASE + 47` to `BASE + 49`); block
+/// `BASE + 20`: `BASE + 50`, `BASE + 51`; `BASE + 21` to `BASE + 34` three
+/// each (block `BASE + 34`: `BASE + 91` to `BASE + 93`); block `BASE + 35`:
+/// `BASE + 94` and the maximal credit `BASE + 95`; block `BASE + 36`'s
+/// coinbase is `BASE + 96`.
 ///
-/// Boundaries every ten blocks: `D(3)` at 30 is shard 0, `D(5)` at 50
-/// shard 1, `D(6)` at 60 shards 1 **and** 2 — two boundaries in one batch.
-fn short_spec(max: u64) -> impl Fn(u64) -> Vec<u64> {
-    move |h| match h {
-        5..=19 | 21..=34 => vec![100_000, 100_000],
-        20 => vec![100_000],
-        35 => vec![max],
-        36..=46 => vec![140_000, 140_000],
+/// Boundaries every ten blocks, each ten epochs after the one written
+/// (`BASE` is ten epochs): shard 0 closes in epoch 11, so `D(13)` at
+/// `BASE + 30` is shard 0; shard 1 closes in epoch 13, so `D(15)` at
+/// `BASE + 50` is shard 1; shard 2 closes in epoch 14, so `D(16)` at
+/// `BASE + 60` is shards 1 **and** 2 — two boundaries in one batch.
+fn short_spec(max: u64) -> impl Fn(u64) -> Vec<Sized> {
+    move |h| match h.checked_sub(BASE) {
+        Some(5) => vec![Sized::Join, Sized::Join],
+        Some(k @ 6..=9) => vec![repaid(k - 5); 2],
+        Some(10..=19 | 21..=34) => vec![credit(100_000); 2],
+        Some(20) => vec![credit(100_000)],
+        Some(35) => vec![credit(max)],
+        Some(36..=46) => vec![credit(140_000); 2],
         _ => Vec::new(),
     }
 }
@@ -668,7 +1140,7 @@ fn the_store_records_each_length_and_the_running_total() {
     let path = tmp("prune-lengths");
     let store = short_store(&path);
     let mut b = Builder::under(SHORT);
-    b.connect_sized(&store, 0, 21, 0, short_spec(0));
+    b.connect_sized(&store, 0, BASE + 21, 0, short_spec(0));
     let model = b.model();
     {
         let snap = store.begin_read().expect("read");
@@ -698,27 +1170,71 @@ fn the_store_records_each_length_and_the_running_total() {
                 .expect("decodes");
             assert_eq!(info.cumulative_archival_len.to_raw(), through, "height {h}");
         }
-        // Through 21: `W`, block 20's spend, block 21's two.
+        // Through `BASE + 21`: `W`, block `BASE + 20`'s credit, block
+        // `BASE + 21`'s two — the prefix's coinbases add nothing.
         assert_eq!(through, 3_300_000);
     }
     cleanup(&path);
 }
 
+/// Shard 0 has closed by `BASE + 21` (`through == 3_300_000`, `W` is
+/// 3_000_000) and shard 1 is the open shard. The fold is the indexed cell,
+/// not a scan from genesis.
+#[test]
+fn a_closed_shard_is_the_indexed_fold_and_the_next_is_open() {
+    let path = tmp("shard-fold");
+    let store = short_store(&path);
+    let mut b = Builder::under(SHORT);
+    b.connect_sized(&store, 0, BASE + 21, 0, short_spec(0));
+    let snap = store.begin_read().expect("read");
+    match snap.shard_fold(ShardId::from_raw(0)).expect("shard 0") {
+        ShardFold::Closed(rows) => {
+            assert!(
+                !rows.txs.is_empty(),
+                "a closed shard names its transactions"
+            );
+            assert_eq!(rows.cum_before_first, ArchivalLength::ZERO);
+            let sum: u64 = rows.txs.iter().map(|tx| tx.archival_len.to_raw()).sum();
+            assert!(
+                sum >= SHARD_LENGTH.to_raw(),
+                "in-domain lengths close the shard, summed {sum}"
+            );
+            assert!(rows.last >= rows.first);
+        }
+        ShardFold::Open { .. } => panic!("shard 0 is closed through BASE + 21"),
+    }
+    match snap.shard_fold(ShardId::from_raw(1)).expect("shard 1") {
+        ShardFold::Open {
+            open_shard,
+            archival_through_tip,
+        } => {
+            assert_eq!(open_shard, ShardId::from_raw(1));
+            assert_eq!(archival_through_tip, ArchivalLength::from_raw(3_300_000));
+        }
+        ShardFold::Closed(_) => panic!("shard 1 is still open through BASE + 21"),
+    }
+    drop(snap);
+    cleanup(&path);
+}
+
 /// Scope 4 (a): a transaction starting **exactly** at `k·W` opens shard
-/// `k`. Block 19's spends end on `W`; block 20's coinbase and spend start
-/// on it. `D(3)` discards the first and keeps the second.
+/// `k`. Block `BASE + 19`'s credits end on `W`; block `BASE + 20`'s
+/// coinbase and credit start on it. `D(13)` discards the first and keeps
+/// the second.
 #[test]
 fn a_transaction_starting_exactly_at_k_w_opens_shard_k() {
     let path = tmp("prune-exact-kw");
     let store = short_store(&path);
     let mut b = Builder::under(SHORT);
-    let out = b.connect_sized(&store, 0, 30, 0, short_spec(0));
-    let pruned = out[30].pruned.expect("a boundary");
-    assert_eq!(pruned.shards(), 0..1, "D(3) is shard 0");
-    for id in [47, 48, 49] {
+    let out = b.connect_sized(&store, 0, BASE + 30, 0, short_spec(0));
+    let pruned = out[at(BlockHeight::from_raw(BASE + 30))]
+        .pruned
+        .expect("a boundary");
+    assert_eq!(pruned.shards(), 0..1, "D(13) is shard 0");
+    for id in [BASE + 47, BASE + 48, BASE + 49] {
         assert_eq!(prunable_state(&store, id), Some(false), "id {id}: below W");
     }
-    for id in [50, 51] {
+    for id in [BASE + 50, BASE + 51] {
         assert_eq!(
             prunable_state(&store, id),
             Some(true),
@@ -726,7 +1242,11 @@ fn a_transaction_starting_exactly_at_k_w_opens_shard_k() {
         );
     }
     let snap = store.begin_read().expect("read");
-    assert_eq!(snap.shard_storage_ids(0..1).expect("read"), 0..50);
+    assert_eq!(
+        snap.shard_storage_ids(0..1).expect("read"),
+        0..BASE + 50,
+        "the prefix's coinbases are shard 0's too"
+    );
     assert_eq!(
         snap.shard_storage_ids(0..1).expect("read"),
         b.model().ids_of(0)
@@ -734,7 +1254,7 @@ fn a_transaction_starting_exactly_at_k_w_opens_shard_k() {
     drop(snap);
     assert_eq!(
         body_states(&store),
-        not(&b.model().discarded(SHORT_SEB, 30))
+        not(&b.model().discarded(SHORT_SEB, BASE + 30))
     );
     cleanup(&path);
 }
@@ -748,51 +1268,56 @@ fn a_maximal_transaction_straddling_a_boundary_belongs_to_the_shard_it_starts_in
     let store = short_store(&path);
     let max = max_len();
     let mut b = Builder::under(SHORT);
-    let out = b.connect_sized(&store, 0, 50, 0, short_spec(max));
+    let out = b.connect_sized(&store, 0, BASE + 50, 0, short_spec(max));
     let model = b.model();
     // It starts at 5 900 000 and ends past 6 000 000.
-    let (_, start, len) = model.txs()[95];
+    let (_, start, len) = model.txs()[at(BlockHeight::from_raw(BASE + 95))];
     assert_eq!((start, len), (5_900_000, max));
     assert!(
         start < 2 * Model::W && start + len > 2 * Model::W,
         "it straddles 2·W"
     );
-    let pruned = out[50].pruned.expect("a boundary");
-    assert_eq!(pruned.shards(), 1..2, "D(5) is shard 1");
+    let pruned = out[at(BlockHeight::from_raw(BASE + 50))]
+        .pruned
+        .expect("a boundary");
+    assert_eq!(pruned.shards(), 1..2, "D(15) is shard 1");
     assert_eq!(
-        prunable_state(&store, 95),
+        prunable_state(&store, BASE + 95),
         Some(false),
         "discarded with shard 1"
     );
     assert_eq!(
-        prunable_state(&store, 96),
+        prunable_state(&store, BASE + 96),
         Some(true),
-        "block 36 opens shard 2"
+        "block BASE + 36 opens shard 2"
     );
-    let out: Result<Option<u64>, TestErr> = store.write(|batch| Ok(batch.h_scarce(50)?));
+    let out: Result<Option<u64>, TestErr> = store.write(|batch| Ok(batch.h_scarce(BASE + 50)?));
     assert_eq!(
         out,
-        Ok(Some(35)),
-        "shard 1 closed at the maximal spend's height"
+        Ok(Some(BASE + 35)),
+        "shard 1 closed at the maximal credit's height"
     );
-    assert_eq!(body_states(&store), not(&model.discarded(SHORT_SEB, 50)));
+    assert_eq!(
+        body_states(&store),
+        not(&model.discarded(SHORT_SEB, BASE + 50))
+    );
     cleanup(&path);
 }
 
 /// Scope 4 (c): two shards closing inside one boundary's window are one
-/// batch — `D(6)` is shards 1 and 2, contiguous ids — and every boundary
-/// from 20 to 70 matches the model: the discard set, every id's body, and
-/// `h_scarce`.
+/// batch — `D(16)` is shards 1 and 2, contiguous ids — and every boundary
+/// from `BASE + 20` to `BASE + 70` matches the model: the discard set,
+/// every id's body, and `h_scarce`.
 #[test]
 fn consecutive_boundaries_and_every_batch_match_the_model() {
     let path = tmp("prune-consecutive");
     let store = short_store(&path);
     let max = max_len();
     let mut b = Builder::under(SHORT);
-    b.connect_sized(&store, 0, 19, 0, short_spec(max));
-    for boundary in (20..=70).step_by(10) {
+    b.connect_sized(&store, 0, BASE + 19, 0, short_spec(max));
+    for boundary in (BASE + 20..=BASE + 70).step_by(10) {
         let from = boundary - 9;
-        let out = b.connect_sized(&store, from.max(20), boundary, 0, short_spec(max));
+        let out = b.connect_sized(&store, from.max(BASE + 20), boundary, 0, short_spec(max));
         let pruned = out.last().expect("connected").pruned.expect("a boundary");
         let model = b.model();
         let expected = model.discards_at(SHORT_SEB, boundary / SHORT_SEB);
@@ -822,9 +1347,13 @@ fn consecutive_boundaries_and_every_batch_match_the_model() {
             model.close_height(1),
             model.close_height(2)
         ),
-        (Some(19), Some(35), Some(46))
+        (Some(BASE + 19), Some(BASE + 35), Some(BASE + 46))
     );
-    assert_eq!(model.discards_at(SHORT_SEB, 6), vec![1, 2], "consecutive");
+    assert_eq!(
+        model.discards_at(SHORT_SEB, (BASE + 60) / SHORT_SEB),
+        vec![1, 2],
+        "consecutive"
+    );
     cleanup(&path);
 }
 
@@ -837,28 +1366,33 @@ fn consecutive_boundaries_and_every_batch_match_the_model() {
 fn a_reorg_back_across_a_shard_boundary_is_the_new_branchs_partition() {
     let max = max_len();
     let spec = short_spec(max);
-    // The new branch: shard 2 closes at 47 instead of 46.
-    let branch = |h: u64| match h {
-        46 => vec![100_000],
-        47 => vec![100_000, 100_000],
+    // The new branch: shard 2 closes at `BASE + 47` instead of `BASE + 46`.
+    let branch = |h: u64| match h.checked_sub(BASE) {
+        Some(46) => vec![credit(100_000)],
+        Some(47) => vec![credit(100_000); 2],
         _ => Vec::new(),
     };
 
     let path = tmp("prune-reorg");
     let store = short_store(&path);
     let mut b = Builder::under(SHORT);
-    b.connect_sized(&store, 0, 48, 0, &spec);
-    assert_eq!(b.model().close_height(2), Some(46));
-    // Pop 48, 47, 46: the running total drops back below 3·W.
-    for expected in [48, 47, 46] {
+    b.connect_sized(&store, 0, BASE + 48, 0, &spec);
+    assert_eq!(b.model().close_height(2), Some(BASE + 46));
+    // Pop `BASE + 48`, `+ 47`, `+ 46`: the running total drops back below
+    // `3·W`.
+    for expected in [BASE + 48, BASE + 47, BASE + 46] {
         let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
         assert_eq!(out.map(|p| p.height.to_raw()), Ok(expected));
     }
     b.forget(3);
     assert_eq!(b.model().close_height(2), None, "shard 2 is open again");
     let mut reorged = Vec::new();
-    for boundary in [50, 60, 70] {
-        let from = if boundary == 50 { 46 } else { boundary - 9 };
+    for boundary in [BASE + 50, BASE + 60, BASE + 70] {
+        let from = if boundary == BASE + 50 {
+            BASE + 46
+        } else {
+            boundary - 9
+        };
         let out = b.connect_sized(&store, from, boundary, 1, branch);
         reorged.push(out.last().expect("connected").pruned.expect("a boundary"));
     }
@@ -868,28 +1402,38 @@ fn a_reorg_back_across_a_shard_boundary_is_the_new_branchs_partition() {
     let fresh_path = tmp("prune-reorg-fresh");
     let fresh = short_store(&fresh_path);
     let mut f = Builder::under(SHORT);
-    f.connect_sized(&fresh, 0, 45, 0, &spec);
+    f.connect_sized(&fresh, 0, BASE + 45, 0, &spec);
     let mut straight = Vec::new();
-    for boundary in [50, 60, 70] {
-        let from = if boundary == 50 { 46 } else { boundary - 9 };
+    for boundary in [BASE + 50, BASE + 60, BASE + 70] {
+        let from = if boundary == BASE + 50 {
+            BASE + 46
+        } else {
+            boundary - 9
+        };
         let out = f.connect_sized(&fresh, from, boundary, 1, branch);
         straight.push(out.last().expect("connected").pruned.expect("a boundary"));
     }
-    assert_eq!(b.hashes, f.hashes, "the same chain");
+    // One chain: the two builds list the same joins (memoised by the
+    // reference block's hash, which the two chains share below the joins)
+    // and the same salted credits.
+    assert_eq!(b.hashes(), f.hashes(), "the same chain");
     assert_eq!(reorged, straight, "the same discard sets and floors");
     assert_eq!(reorged_states, body_states(&fresh), "the same bodies");
     assert_eq!(
         reorged_scarce,
         fresh.begin_read().expect("read").h_scarce().expect("read")
     );
-    assert_eq!(f.model().close_height(2), Some(47));
+    assert_eq!(f.model().close_height(2), Some(BASE + 47));
     assert_eq!(
         reorged[2].shards(),
         2..3,
-        "D(7) is the new branch's shard 2"
+        "D(17) is the new branch's shard 2"
     );
-    assert_eq!(reorged_scarce, Some(BlockHeight::from_raw(47)));
-    assert_eq!(reorged_states, not(&f.model().discarded(SHORT_SEB, 70)));
+    assert_eq!(reorged_scarce, Some(BlockHeight::from_raw(BASE + 47)));
+    assert_eq!(
+        reorged_states,
+        not(&f.model().discarded(SHORT_SEB, BASE + 70))
+    );
     cleanup(&path);
     cleanup(&fresh_path);
 }
@@ -905,7 +1449,7 @@ fn pruned_and_unpruned_stores_place_every_shard_alike() {
     let store = short_store(&path);
     let max = max_len();
     let mut b = Builder::under(SHORT);
-    b.connect_sized(&store, 0, 59, 0, short_spec(max));
+    b.connect_sized(&store, 0, BASE + 59, 0, short_spec(max));
     let ranges = |store: &ChainStore| -> Vec<core::ops::Range<u64>> {
         let snap = store.begin_read().expect("read");
         (0..3)
@@ -918,14 +1462,14 @@ fn pruned_and_unpruned_stores_place_every_shard_alike() {
         shard_2
             .clone()
             .all(|id| prunable_state(&store, id) == Some(true)),
-        "shard 2 is held before 60"
+        "shard 2 is held before BASE + 60"
     );
-    b.connect_sized(&store, 60, 60, 0, short_spec(max));
+    b.connect_sized(&store, BASE + 60, BASE + 60, 0, short_spec(max));
     assert!(
         shard_2
             .clone()
             .all(|id| prunable_state(&store, id) == Some(false)),
-        "and discarded at 60, or this test compares two unpruned stores"
+        "and discarded at BASE + 60, or this test compares two unpruned stores"
     );
     assert_eq!(
         ranges(&store),
@@ -940,25 +1484,26 @@ fn pruned_and_unpruned_stores_place_every_shard_alike() {
     cleanup(&path);
 }
 
-/// Build the ten-block chain to `to` and close the store, for a raw plant.
-/// The corruption tests do not need the exact maximal spend, so height 35
-/// lists a 140 000-byte one and skips the probe.
+/// Build the ten-block chain to `BASE + to` and close the store, for a raw
+/// plant. The corruption tests do not need the exact maximal credit, so
+/// height `BASE + 35` lists a 140 000-byte one and skips the probe.
 fn short_chain_to(path: &std::path::Path, to: u64) -> Builder {
     let store = short_store(path);
     let mut b = Builder::under(SHORT);
-    b.connect_sized(&store, 0, to, 0, short_spec(140_000));
+    b.connect_sized(&store, 0, BASE + to, 0, short_spec(140_000));
     b
 }
 
-/// Connect `height` on the reopened ten-block store with no listed spend.
+/// Connect `BASE + height` on the reopened ten-block store with nothing
+/// listed.
 fn connect_short(
     path: &std::path::Path,
     b: &Builder,
     height: u64,
 ) -> (ChainStore, Result<Connected, TestErr>) {
     let store = short_store(path);
-    let previous = b.hashes.last().copied().expect("parent");
-    let cand = candidate_on(&store, height, previous, Vec::new());
+    let previous = b.hashes().last().copied().expect("parent");
+    let cand = candidate_on(&store, BASE + height, previous, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge_under(&view, cand, &SHORT)?, SHORT)?)
@@ -967,27 +1512,29 @@ fn connect_short(
 }
 
 /// A later `block_info` row whose listed total is below an earlier one's is
-/// SI-13. The boundary at 30 walks block 19 to find where shard 1 opens; a
-/// decrease there must not commit the boundary with `D(E)` skipped.
+/// SI-13. The boundary at `BASE + 30` walks block `BASE + 19` to find
+/// where shard 1 opens; a decrease there must not commit the boundary with
+/// `D(E)` skipped. The listed fold counts listed bodies only, so the
+/// prefix's coinbases leave every count the one it was.
 #[test]
 fn a_decreasing_listed_total_refuses_the_boundary() {
     let path = tmp("prune-monotone");
     let b = short_chain_to(&path, 29);
-    // Listed through 18: 14 blocks of two spends.
-    plant_listed(&path, 19, 28 - 5);
+    // Listed through `BASE + 18`: 14 blocks of two bodies.
+    plant_listed(&path, BASE + 19, 28 - 5);
     let (store, out) = connect_short(&path, &b, 30);
     assert!(
         out.is_err(),
         "the boundary does not commit over a decreasing total"
     );
-    assert_eq!(tip(&store), 29);
+    assert_eq!(tip(&store), BASE + 29);
     assert_eq!(
         store.connect_state(),
         ConnectState::Halted {
-            at_height: BlockHeight::from_raw(30),
+            at_height: BlockHeight::from_raw(BASE + 30),
             row: StoreInvariant::FoldNotMonotone {
                 cell: "block_info.cumulative_tx_count",
-                height: 19,
+                height: BASE + 19,
             },
         }
     );
@@ -995,51 +1542,52 @@ fn a_decreasing_listed_total_refuses_the_boundary() {
 }
 
 /// The decrease the coinbase term can mask: listed `28 → 27` from height
-/// 18 to 19 derives to storage ids `47 → 47` — an empty block, not an
-/// inverted one. SI-13 is a property of the listed fold and is checked on
-/// the raw samples (Copilot, PR #861).
+/// `BASE + 18` to `BASE + 19` derives to storage ids `BASE + 47 → BASE +
+/// 47` — an empty block, not an inverted one. SI-13 is a property of the
+/// listed fold and is checked on the raw samples (Copilot, PR #861).
 #[test]
 fn a_decrease_smaller_than_the_coinbase_term_still_refuses_the_boundary() {
     let path = tmp("prune-monotone-masked");
     let b = short_chain_to(&path, 29);
-    plant_listed(&path, 19, 27);
+    plant_listed(&path, BASE + 19, 27);
     let (store, out) = connect_short(&path, &b, 30);
     assert!(
         out.is_err(),
-        "47 → 47 in storage ids hides 28 → 27 in the fold"
+        "BASE + 47 → BASE + 47 in storage ids hides 28 → 27 in the fold"
     );
-    assert_eq!(tip(&store), 29);
+    assert_eq!(tip(&store), BASE + 29);
     assert_eq!(
         store.connect_state(),
         ConnectState::Halted {
-            at_height: BlockHeight::from_raw(30),
+            at_height: BlockHeight::from_raw(BASE + 30),
             row: StoreInvariant::FoldNotMonotone {
                 cell: "block_info.cumulative_tx_count",
-                height: 19,
+                height: BASE + 19,
             },
         }
     );
     cleanup(&path);
 }
 
-/// SI-13 on the archival fold: `D(4)` at 40 samples `C(10)` and `C(30)` —
-/// rows 9 and 29 — and row 29 zeroed is below row 9. The fault names the
-/// row that decreased, as the listed fold's does.
+/// SI-13 on the archival fold: `D(14)` at `BASE + 40` samples `C(BASE +
+/// 10)` and `C(BASE + 30)` — rows `BASE + 9` and `BASE + 29` — and row
+/// `BASE + 29` zeroed is below row `BASE + 9`. The fault names the row
+/// that decreased, as the listed fold's does.
 #[test]
 fn a_decreasing_archival_total_refuses_the_boundary() {
     let path = tmp("prune-archival-monotone");
     let b = short_chain_to(&path, 39);
-    plant_archival(&path, 29, 0);
+    plant_archival(&path, BASE + 29, 0);
     let (store, out) = connect_short(&path, &b, 40);
     assert!(out.is_err());
-    assert_eq!(tip(&store), 39);
+    assert_eq!(tip(&store), BASE + 39);
     assert_eq!(
         store.connect_state(),
         ConnectState::Halted {
-            at_height: BlockHeight::from_raw(40),
+            at_height: BlockHeight::from_raw(BASE + 40),
             row: StoreInvariant::FoldNotMonotone {
                 cell: "block_info.cumulative_archival_len",
-                height: 29,
+                height: BASE + 29,
             },
         }
     );
@@ -1047,19 +1595,21 @@ fn a_decreasing_archival_total_refuses_the_boundary() {
 }
 
 /// SI-13 across the whole run the boundary reads, not at its samples
-/// (Copilot, PR #910). Cells 13–16 are raised together by 900 000 with
-/// their length rows untouched: each shifted cell still equals its parent
-/// plus its rows, so SI-24 holds at every block inside the run, and the
-/// fold now reaches `W` twice — at 15 (`2 900 000 → 3 100 000`, a second,
-/// spurious crossing) and at 19. The endpoints `C(0)` and `C(20)` are
-/// true. A search that trusts monotonicity can settle on 15 and place
-/// shard 1's first id inside block 15. The boundary at 30 must halt on the
-/// decrease at 17 (`3 300 000 → 2 600 000`) instead, before any discard.
+/// (Copilot, PR #910). Cells `BASE + 13` to `BASE + 16` are raised
+/// together by 900 000 with their length rows untouched: each shifted cell
+/// still equals its parent plus its rows, so SI-24 holds at every block
+/// inside the run, and the fold now reaches `W` twice — at `BASE + 15`
+/// (`2 900 000 → 3 100 000`, a second, spurious crossing) and at `BASE +
+/// 19`. The endpoints `C(BASE)` and `C(BASE + 20)` are true. A search that
+/// trusts monotonicity can settle on `BASE + 15` and place shard 1's first
+/// id inside that block. The boundary at `BASE + 30` must halt on the
+/// decrease at `BASE + 17` (`3 300 000 → 2 600 000`) instead, before any
+/// discard.
 #[test]
 fn a_shifted_run_between_two_samples_refuses_the_boundary() {
     let path = tmp("prune-archival-run");
     let b = short_chain_to(&path, 29);
-    for height in 13..=16 {
+    for height in BASE + 13..=BASE + 16 {
         plant_info(&path, height, |info| {
             info.cumulative_archival_len =
                 ArchivalLength::from_raw(info.cumulative_archival_len.to_raw() + 900_000);
@@ -1067,14 +1617,14 @@ fn a_shifted_run_between_two_samples_refuses_the_boundary() {
     }
     let (store, out) = connect_short(&path, &b, 30);
     assert!(out.is_err(), "the boundary does not commit over the run");
-    assert_eq!(tip(&store), 29);
+    assert_eq!(tip(&store), BASE + 29);
     assert_eq!(
         store.connect_state(),
         ConnectState::Halted {
-            at_height: BlockHeight::from_raw(30),
+            at_height: BlockHeight::from_raw(BASE + 30),
             row: StoreInvariant::FoldNotMonotone {
                 cell: "block_info.cumulative_archival_len",
-                height: 17,
+                height: BASE + 17,
             },
         }
     );
@@ -1088,16 +1638,18 @@ fn a_shifted_run_between_two_samples_refuses_the_boundary() {
 /// SI-24 at every block the descent passes (Copilot, PR #910): a shift
 /// that starts at one block and persists through `hi` keeps the fold
 /// monotone everywhere and agrees with the rows at every block above its
-/// start. Cells 25–39 are raised by 1 200 000, rows untouched, so `C(30)`
-/// reads 6 100 000 instead of 4 900 000 and `D(4)` at 40 would name shards
-/// `0..2` — discarding blocks 20–29, which are in shard 1, still open. The
-/// descent checks block 25 against its parent: `3 900 000 + 200 000 =
-/// 4 100 000` against a cell of 5 300 000, before anything is discarded.
+/// start. Cells `BASE + 25` to `BASE + 39` are raised by 1 200 000, rows
+/// untouched, so `C(BASE + 30)` reads 6 100 000 instead of 4 900 000 and
+/// `D(14)` at `BASE + 40` would name shards `0..2` — discarding blocks
+/// `BASE + 20` to `BASE + 29`, which are in shard 1, still open. The
+/// descent checks block `BASE + 25` against its parent: `3 900 000 +
+/// 200 000 = 4 100 000` against a cell of 5 300 000, before anything is
+/// discarded.
 #[test]
 fn a_shift_that_persists_through_the_window_refuses_the_boundary() {
     let path = tmp("prune-archival-persist");
     let b = short_chain_to(&path, 39);
-    for height in 25..=39 {
+    for height in BASE + 25..=BASE + 39 {
         plant_info(&path, height, |info| {
             info.cumulative_archival_len =
                 ArchivalLength::from_raw(info.cumulative_archival_len.to_raw() + 1_200_000);
@@ -1105,52 +1657,56 @@ fn a_shift_that_persists_through_the_window_refuses_the_boundary() {
     }
     let (store, out) = connect_short(&path, &b, 40);
     assert!(out.is_err(), "the boundary does not commit over the shift");
-    assert_eq!(tip(&store), 39);
+    assert_eq!(tip(&store), BASE + 39);
     assert_eq!(
         store.connect_state(),
         ConnectState::Halted {
-            at_height: BlockHeight::from_raw(40),
+            at_height: BlockHeight::from_raw(BASE + 40),
             row: StoreInvariant::ArchivalLengthsDisagree {
-                height: 25,
+                height: BASE + 25,
                 rows: 4_100_000,
                 cell: 5_300_000,
             },
         }
     );
-    // Blocks 20–29: ids 50–78, shard 1.
-    for id in 50..79 {
+    // Blocks `BASE + 20` to `BASE + 29`: ids `BASE + 50` to `BASE + 78`,
+    // shard 1.
+    for id in BASE + 50..BASE + 79 {
         assert_eq!(prunable_state(&store, id), Some(true), "id {id} is held");
     }
     cleanup(&path);
 }
 
-/// SI-24: the boundary at 30 sums block 19's length rows to place `W`, and
-/// a row that no longer adds up to the block's cell refuses the boundary
-/// rather than place it by numbers the fold does not support.
+/// SI-24: the boundary at `BASE + 30` sums block `BASE + 19`'s length rows
+/// to place `W`, and a row that no longer adds up to the block's cell
+/// refuses the boundary rather than place it by numbers the fold does not
+/// support.
 #[test]
 fn a_length_row_that_disagrees_with_the_fold_refuses_the_boundary() {
     let path = tmp("prune-archival-rows");
     let b = short_chain_to(&path, 29);
-    // Id 48 is block 19's first spend.
+    // Id `BASE + 48` is block `BASE + 19`'s first credit.
     {
         let db = redb::Database::open(&path).expect("open raw");
         let txn = db.begin_write().expect("write");
         {
             let mut table = txn.open_table(TXS_ARCHIVAL_LEN).expect("table");
             let encoded = ArchivalLength::from_raw(99_999).encoded();
-            table.insert(48u64, encoded.as_encoded()).expect("plant");
+            table
+                .insert(BASE + 48, encoded.as_encoded())
+                .expect("plant");
         }
         txn.commit().expect("commit");
     }
     let (store, out) = connect_short(&path, &b, 30);
     assert!(out.is_err());
-    assert_eq!(tip(&store), 29);
+    assert_eq!(tip(&store), BASE + 29);
     assert_eq!(
         store.connect_state(),
         ConnectState::Halted {
-            at_height: BlockHeight::from_raw(30),
+            at_height: BlockHeight::from_raw(BASE + 30),
             row: StoreInvariant::ArchivalLengthsDisagree {
-                height: 19,
+                height: BASE + 19,
                 rows: 2_999_999,
                 cell: 3_000_000,
             },
@@ -1257,46 +1813,8 @@ fn a_malformed_undo_floor_cell_poisons_the_batch() {
 fn a_journal_whose_first_row_is_not_the_floor_is_si6_at_pop_and_at_the_boundary() {
     let path = tmp("prune-floor-mismatch");
     let (store, _b, _, _) = chain_to_300(&path);
-    // Rows [250, 300] stand and the cell says 250. Remove row 250 by hand.
-    drop(store);
-    {
-        let db = redb::Database::open(&path).expect("open raw");
-        let txn = db.begin_write().expect("write");
-        {
-            let mut table = txn.open_table(UNDO_LOG).expect("undo_log");
-            table
-                .remove(250u64)
-                .expect("remove")
-                .expect("row 250 stood");
-        }
-        txn.commit().expect("commit");
-    }
-    let store =
-        ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("reopen");
-    let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
-    assert_eq!(
-        out,
-        Err(TestErr::Store(
-            StoreError::from(StoreInvariant::UndoLogIncoherent {
-                height: 300,
-                fault: UndoFault::FloorMismatch {
-                    first: 251,
-                    floor: 250
-                },
-            })
-            .to_string()
-        )),
-        "the cell and the table disagree: SI-6, not a capability limit"
-    );
-    assert!(!store.connect_state().is_live(), "the writer halts on SI-6");
-    cleanup(&path);
-
-    // The same gap, met by the boundary batch: connect to 399 under a
-    // clean journal, open the gap at the floor that 400 will establish
-    // (350), then connect 400.
-    let path = tmp("prune-floor-mismatch-boundary");
-    let (store, mut b2, _, _) = chain_to_300(&path);
-    b2.connect(&store, 301, 399, |_| Vec::new());
+    // Rows [350, BASE + 300] stand and the cell says 350. Remove row 350 by
+    // hand.
     drop(store);
     {
         let db = redb::Database::open(&path).expect("open raw");
@@ -1312,8 +1830,47 @@ fn a_journal_whose_first_row_is_not_the_floor_is_si6_at_pop_and_at_the_boundary(
     }
     let store =
         ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("reopen");
-    let previous = *b2.hashes.last().expect("399 connected");
-    let cand = candidate_on(&store, 400, previous, Vec::new());
+    let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
+    assert_eq!(
+        out,
+        Err(TestErr::Store(
+            StoreError::from(StoreInvariant::UndoLogIncoherent {
+                height: BASE + 300,
+                fault: UndoFault::FloorMismatch {
+                    first: 351,
+                    floor: 350
+                },
+            })
+            .to_string()
+        )),
+        "the cell and the table disagree: SI-6, not a capability limit"
+    );
+    assert!(!store.connect_state().is_live(), "the writer halts on SI-6");
+    cleanup(&path);
+
+    // The same gap, met by the boundary batch: connect to `BASE + 399`
+    // under a clean journal, open the gap at the floor that `BASE + 400`
+    // will establish (450), then connect `BASE + 400`.
+    let path = tmp("prune-floor-mismatch-boundary");
+    let (store, mut b2, _, _) = chain_to_300(&path);
+    b2.connect(&store, BASE + 301, BASE + 399, |_| Vec::new());
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut table = txn.open_table(UNDO_LOG).expect("undo_log");
+            table
+                .remove(450u64)
+                .expect("remove")
+                .expect("row 450 stood");
+        }
+        txn.commit().expect("commit");
+    }
+    let store =
+        ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("reopen");
+    let previous = *b2.hashes().last().expect("BASE + 399 connected");
+    let cand = candidate_on(&store, BASE + 400, previous, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge_under(&view, cand, &RULES)?, RULES)?)
@@ -1322,17 +1879,21 @@ fn a_journal_whose_first_row_is_not_the_floor_is_si6_at_pop_and_at_the_boundary(
         out,
         Err(TestErr::Store(
             StoreError::from(StoreInvariant::UndoLogIncoherent {
-                height: 400,
+                height: BASE + 400,
                 fault: UndoFault::FloorMismatch {
-                    first: 351,
-                    floor: 350
+                    first: 451,
+                    floor: 450
                 },
             })
             .to_string()
         )),
         "the retire leaves a first key that is not the floor: SI-6"
     );
-    assert_eq!(tip(&store), 399, "the boundary block did not connect");
+    assert_eq!(
+        tip(&store),
+        BASE + 399,
+        "the boundary block did not connect"
+    );
     assert!(!store.connect_state().is_live());
     cleanup(&path);
 }
@@ -1402,7 +1963,7 @@ fn a_retention_below_the_in_force_cap_is_refused_at_open_and_at_connect() {
 /// open refused the same mismatch against the epoch the caller named.
 #[test]
 fn a_set_naming_another_epoch_is_refused_at_connect() {
-    let other = RuleSet::fakechain(None, pair(200, RETENTION));
+    let other = RuleSet::GENESIS.with_levers(None, pair(200, RETENTION));
     assert_eq!(other.reorg_cap(), RULES.reorg_cap(), "the cap is covered");
     let path = tmp("prune-epoch-at-connect");
     let store =
@@ -1427,7 +1988,7 @@ fn a_set_naming_another_epoch_is_refused_at_connect() {
 }
 
 /// `Horizons::under` is the set's own pair read back: the genesis set gives
-/// the production horizons, and a Fakechain set under a shortened schedule
+/// the production horizons, and a levered set under a shortened schedule
 /// gives horizons `connect` accepts under that set — the one way a replay
 /// driver and a test open a store, off the set rather than off a second
 /// copy of its numbers.
@@ -1438,7 +1999,7 @@ fn horizons_under_a_set_are_the_ones_its_connect_accepts() {
         Horizons::under(&RuleSet::GENESIS),
         Horizons::production(epoch),
     );
-    let short = RuleSet::fakechain(None, pair(512, 64));
+    let short = RuleSet::GENESIS.with_levers(None, pair(512, 64));
     let under = Horizons::under(&short).expect("a well-formed pair");
     assert_eq!(
         under.epoch(),
@@ -1457,8 +2018,8 @@ fn horizons_under_a_set_are_the_ones_its_connect_accepts() {
 /// the digests it reads are the ones **recorded at ingest**. The store keeps both
 /// permanently — `txs_prunable_hash` and `txs_pqc_auth_hash` — and a prune
 /// deletes the *regions*, never the rows. So a node that has discarded a shard
-/// must still place its transactions **inside** the domain, exactly as an
-/// archival node does.
+/// must still place its transactions **inside** the domain, exactly as it did
+/// while it held them.
 ///
 /// The hazard this pins is the opposite: recomputing the digests from a pruned
 /// body yields `keccak256("")` and no component, which would place a node's own
@@ -1475,11 +2036,12 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
     let store =
         ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("create");
     let mut b = Builder::new();
-    // A mixed chain ([`spec_300`] to 200): spends filling shard 0 (discarded
-    // at the epoch-2 boundary) and empty blocks — the coinbase-only case —
-    // everywhere else, those from 35 in shard 1 (retained). Recorded at 199,
+    // A mixed chain ([`spec_300`] to `BASE + 200`): a join (4-part) and
+    // credits (3-part) filling shard 0 (discarded at the epoch-3 boundary)
+    // and empty blocks — the coinbase-only case — everywhere else, those
+    // from `BASE + 35` in shard 1 (retained). Recorded at `BASE + 199`,
     // before the first discard.
-    b.connect_sized(&store, 0, 199, 0, spec_300);
+    b.connect_sized(&store, 0, BASE + 199, 0, spec_300);
 
     let count = store.begin_read().expect("read").tx_count().expect("count");
     let before: Vec<Option<bool>> = (0..count).map(|id| good_state(&store, id)).collect();
@@ -1500,39 +2062,41 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
                 assert_eq!(
                     good_state(&store, record.location.id.to_raw()),
                     Some(true),
-                    "a listed spend carries archival good"
+                    "a listed join or credit carries archival good"
                 );
             }
         }
     }
 
     // The boundary that discards shard 0.
-    let at_200 = b.connect_sized(&store, 200, 200, 0, spec_300).remove(0);
+    let at_300 = b
+        .connect_sized(&store, BASE + 200, BASE + 200, 0, spec_300)
+        .remove(0);
     assert_eq!(
-        at_200.pruned.expect("a boundary").shards(),
+        at_300.pruned.expect("a boundary").shards(),
         0..1,
-        "D(2) is shard 0"
+        "D(3) is shard 0"
     );
     assert_eq!(
-        prunable_state(&store, 6),
+        prunable_state(&store, BASE + 6),
         Some(false),
-        "the spend at block 5 must actually be discarded, or this test proves nothing"
+        "the join at block BASE + 5 must actually be discarded, or this test proves nothing"
     );
 
-    // Leg (f): every answer is unchanged, the discarded spend included.
+    // Leg (f): every answer is unchanged, the discarded bodies included.
     let after: Vec<Option<bool>> = (0..count).map(|id| good_state(&store, id)).collect();
     assert_eq!(
         before, after,
-        "the domain answer moved across a prune — pruned and archival nodes would \
-         disagree on shard boundaries"
+        "the domain answer moved across a prune — nodes either side of the boundary \
+         would disagree on shard boundaries"
     );
     assert_eq!(
-        good_state(&store, 6),
+        good_state(&store, BASE + 6),
         Some(true),
-        "a DISCARDED spend is still in the domain: its rows outlive its regions"
+        "a DISCARDED join is still in the domain: its rows outlive its regions"
     );
     assert_eq!(
-        good_state(&store, 5),
+        good_state(&store, BASE + 5),
         Some(false),
         "a coinbase is outside the domain, before and after"
     );
@@ -1542,12 +2106,12 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
     {
         let snap = store.begin_read().expect("read");
         let discarded = snap
-            .tx_record(&b.listed[5][0].hash())
+            .tx_record(&b.listed[at(BlockHeight::from_raw(BASE + 5))][0].hash())
             .expect("read")
             .expect("recorded");
         assert_eq!(
-            discarded.pqc_auths,
-            Some(PqcAuths::Discarded),
+            good_of(&snap, &discarded),
+            ArchivalGood::Discarded,
             "the region went with the shard"
         );
         assert!(
@@ -1563,5 +2127,918 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
         );
     }
 
+    cleanup(&path);
+}
+
+/// **`SHT-Q1` leg (f) for the serve-credit form, named.** The test above
+/// compares the whole vector, and since the CEN-I13 flip its bodies are
+/// credits already; its last assertion states that a 3-part transaction
+/// with a region stays in the domain on its `txs_prunable_hash` row alone.
+/// This pins that for one credit by name: one block behind its join, in
+/// shard 0, carried through the boundary that discards shard 0.
+///
+/// It is also `SHT-9`'s falsifier. A credit with no prunable region — the
+/// shape CEN-H20 admitted until it required `RF-D1`'s — connected and then
+/// halted the store on SI-7 at `tx_spendable_age`, ten heights later. This
+/// one is connected two hundred heights before the chain ends.
+#[test]
+fn a_connected_serve_credit_stays_in_the_domain_across_a_prune() {
+    let path = tmp("prune-domain-serve-credit");
+    let store =
+        ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("create");
+    let mut b = Builder::new();
+    // Shard 0 is the join at height `BASE + 5` and a small credit at
+    // `BASE + 6` (one block behind the record it names, as CEN-J4 reads
+    // it), then thirty 100 000-byte credits at `BASE + 7` to `BASE + 36`:
+    // past `W` with the pair's bytes added, so the shard closes inside that
+    // run and the epoch-3 boundary discards it.
+    let spec = |h: u64| match h.checked_sub(BASE) {
+        Some(5) => vec![Sized::Join],
+        Some(6) => vec![credit(1_000)],
+        Some(7..=36) => vec![credit(100_000)],
+        _ => Vec::new(),
+    };
+    b.connect_sized(&store, 0, BASE + 199, 0, spec);
+
+    let credit_hash = b.listed[at(BlockHeight::from_raw(BASE + 6))][0].hash();
+    let id_of = |hash: &shekyl_types::TxHash| {
+        store
+            .begin_read()
+            .expect("read")
+            .tx_record(hash)
+            .expect("read")
+            .expect("recorded")
+            .location
+            .id
+            .to_raw()
+    };
+    let credit = id_of(&credit_hash);
+    assert!(
+        matches!(
+            b.listed[at(BlockHeight::from_raw(BASE + 6))][0].ct,
+            Ct::Fcmp {
+                prunable: Some(_),
+                ..
+            }
+        ),
+        "the credit carries its RF-D1 region"
+    );
+    assert_eq!(
+        good_state(&store, credit),
+        Some(true),
+        "a connected serve credit carries archival good"
+    );
+    assert_eq!(prunable_state(&store, credit), Some(true), "not yet pruned");
+
+    // The boundary that discards shard 0.
+    let at_300 = b
+        .connect_sized(&store, BASE + 200, BASE + 200, 0, spec)
+        .remove(0);
+    assert_eq!(
+        at_300.pruned.expect("a boundary").shards(),
+        0..1,
+        "D(3) is shard 0"
+    );
+    assert_eq!(
+        prunable_state(&store, credit),
+        Some(false),
+        "the credit's region must actually be discarded, or this test proves nothing"
+    );
+    assert_eq!(
+        good_state(&store, credit),
+        Some(true),
+        "a DISCARDED serve credit is still in the domain: its row outlives its region"
+    );
+    let record = store
+        .begin_read()
+        .expect("read")
+        .tx_record(&credit_hash)
+        .expect("read")
+        .expect("recorded");
+    assert_eq!(
+        record.pqc_auth_hash, None,
+        "a serve credit has no pqc_auths"
+    );
+    assert_ne!(
+        record.prunable_hash,
+        shekyl_wire::empty_region_prunable_hash(),
+        "its prunable hash row records the region it had"
+    );
+
+    cleanup(&path);
+}
+
+// ---------------------------------------------------------------------------
+// The slash log's retirement (`SLK-Q1`): a window the unit lane can cross
+// ---------------------------------------------------------------------------
+
+/// `SEB 10 / cap 5`: the pair whose window — `(k + n)·SEB + cap`,
+/// [`SlashLogFloor::window`] — a chain of empty blocks crosses in the unit
+/// lane (`DRS_E4_SLASH_LOG_ROUND.md` §1.1, build commit 3: "window 145").
+/// Nothing below spells the expression again: the chain's length, the
+/// floor and the heights planted around it are all read off the window.
+const WINDOW_SEB: u64 = 10;
+const WINDOW_CAP: u64 = 5;
+const WINDOW_RULES: RuleSet = RuleSet::GENESIS.with_levers(None, pair(WINDOW_SEB, WINDOW_CAP));
+/// The window under the pair, in blocks.
+const WINDOW: u64 = match SlashLogFloor::window(
+    WINDOW_RULES.settlement_schedule().blocks(),
+    WINDOW_RULES.reorg_cap(),
+) {
+    Some(window) => window.to_raw(),
+    None => panic!("the window fits"),
+};
+/// The first boundary with a floor: the first multiple of `SEB` at or past
+/// the window. The boundary before it has none.
+const FIRST_FLOORED_BOUNDARY: u64 = WINDOW.div_ceil(WINDOW_SEB) * WINDOW_SEB;
+/// The floor at that boundary: the rows planted below are retired there,
+/// the rows planted at and above it kept.
+const FIRST_FLOOR: u64 = FIRST_FLOORED_BOUNDARY - WINDOW;
+const _: () = assert!(
+    FIRST_FLOOR > 2 && FIRST_FLOOR + 1 < FIRST_FLOORED_BOUNDARY - WINDOW_CAP,
+    "the planted heights sit on both sides of the floor and under the undo floor"
+);
+
+/// The floor the batch at `boundary` derives, as the rule set states it.
+fn floor_at(boundary: u64) -> SlashLogFloor {
+    SlashLogFloor::under(
+        BlockHeight::from_raw(boundary),
+        WINDOW_RULES.settlement_schedule().blocks(),
+        WINDOW_RULES.reorg_cap(),
+    )
+}
+
+/// A store under the pair with the given undo retention — the cap, or
+/// deeper for `SLK-2`'s falsifier.
+fn window_store(path: &std::path::Path, retention: u64) -> ChainStore {
+    let horizons = Horizons::new(
+        WINDOW_RULES.settlement_schedule().blocks(),
+        BlockCount::from_raw(retention),
+        WINDOW_RULES.reorg_cap(),
+    )
+    .expect("cap ≤ retention < epoch");
+    ChainStore::with_horizons(path, ApplyPolicy::default(), horizons).expect("open")
+}
+
+/// Empty blocks to height `to` under the pair, with slot 0's persona
+/// joining at `join_at` so a block at the boundary can list a credit (a
+/// listing an empty-body chain can realise, and one that hashes the
+/// re-connected block apart from the popped one). The store is closed on
+/// return, for a raw plant; the connects are returned for the boundaries'
+/// `Pruned`.
+fn window_chain_to(
+    path: &std::path::Path,
+    retention: u64,
+    to: u64,
+    join_at: u64,
+) -> (Builder, Vec<Connected>) {
+    let store = window_store(path, retention);
+    let mut b = Builder::under(WINDOW_RULES);
+    let connects = b.connect_sized(&store, 0, to, 0, move |h| {
+        if h == join_at {
+            vec![Sized::Join]
+        } else {
+            Vec::new()
+        }
+    });
+    (b, connects)
+}
+
+/// Every `archival_slash_log` key, in table order.
+fn slash_rows(store: &ChainStore) -> Vec<SlashLogTuple> {
+    let snap = store.begin_read().expect("read");
+    let table = snap.open_table(ARCHIVAL_SLASH_LOG).expect("table");
+    table
+        .range::<SlashLogTuple>(..)
+        .expect("range")
+        .map(|item| item.expect("row").0.value())
+        .collect()
+}
+
+/// The window is the round's: the first boundary with a floor is the one
+/// the pre-flight tabled, and the boundary before it has none — in the
+/// rule set's expression and in the store's `Pruned`.
+#[test]
+fn the_window_is_the_rounds_and_the_boundary_before_it_has_no_floor() {
+    assert_eq!(WINDOW, 145, "SEB 10 / cap 5: (k + n)·10 + 5");
+    assert_eq!(FIRST_FLOORED_BOUNDARY, 150);
+    assert_eq!(FIRST_FLOOR, 5);
+    assert_eq!(
+        floor_at(FIRST_FLOORED_BOUNDARY - WINDOW_SEB),
+        SlashLogFloor::NONE
+    );
+    assert_eq!(
+        floor_at(FIRST_FLOORED_BOUNDARY).height(),
+        Some(BlockHeight::from_raw(FIRST_FLOOR)),
+        "the first floor is the boundary less the window"
+    );
+
+    let path = tmp("slk-window");
+    let (_, connects) = window_chain_to(
+        &path,
+        WINDOW_CAP,
+        FIRST_FLOORED_BOUNDARY - 1,
+        FIRST_FLOORED_BOUNDARY - WINDOW_SEB,
+    );
+    let boundaries: Vec<(u64, SlashLogFloor)> = connects
+        .iter()
+        .filter_map(|c| c.pruned.map(|p| (c.height.to_raw(), p.slash_floor)))
+        .collect();
+    assert_eq!(
+        boundaries,
+        (super::prune::FIRST_PRUNING_EPOCH..FIRST_FLOORED_BOUNDARY / WINDOW_SEB)
+            .map(|e| (e * WINDOW_SEB, SlashLogFloor::NONE))
+            .collect::<Vec<_>>(),
+        "every boundary under the window ran, and none had a floor"
+    );
+    cleanup(&path);
+}
+
+/// The first enforcement of `journal_horizon` (`PDM-Q-F19`): at the first
+/// boundary with a floor, rows below it are gone and rows at and above it
+/// stay; the batch reports the floor it used; the one reader asserts the
+/// same floor (SI-26) — a read starting at the floor is sound and returns
+/// the kept rows, a read starting one below is the fault, with the asked
+/// height and the floor in it. Then a pop across the boundary and a
+/// different block reconnected at it: the pop restores nothing (the
+/// retirement is not journaled, like the body discards), and the batch
+/// re-derives the same floor and deletes the same, already empty, range.
+/// Both connects run the slash pass with that floor in hand; it never
+/// trips the arm, because every height it can ask about is inside the
+/// settling epoch, `(k + 1)` epochs below the connecting height, while the
+/// floor is `(k + n)` epochs and a cap below it (the margin;
+/// `slash.rs`, `slashed_after`). On this chain the pass has no draw to
+/// read for, so the margin is stated, not exercised; the bench witness
+/// exercises the read with a floor in hand.
+///
+/// **The check's falsifier:** delete the SI-26 arm in
+/// `archival_reads::slash_log_after` and the `unwrap_err` below panics on
+/// an `Ok` of two rows — the read would return the rows above the retired
+/// range as if they were the log. Delete `retire_slash_rows` and the first
+/// `slash_rows` assertion fails with the planted rows intact.
+#[test]
+fn the_boundary_retires_slash_rows_below_the_floor_and_the_read_asserts_it() {
+    let path = tmp("slk-retire");
+    let boundary = FIRST_FLOORED_BOUNDARY;
+    let floor = FIRST_FLOOR;
+    let (mut b, _) = window_chain_to(&path, WINDOW_CAP, boundary - 1, boundary - WINDOW_SEB);
+
+    // Rows two below, one below (two personas), at, and one above the floor.
+    let p = persona(0x51);
+    let q = persona(0x52);
+    plant(&path, |txn| {
+        plant_slash(txn, floor - 2, 0, &slash_entry(&p, 0, 1, 1));
+        plant_slash(txn, floor - 1, 0, &slash_entry(&p, 0, 1, 1));
+        plant_slash(txn, floor - 1, 1, &slash_entry(&q, 0, 1, 1));
+        plant_slash(txn, floor, 0, &slash_entry(&p, 0, 1, 1));
+        plant_slash(txn, floor + 1, 0, &slash_entry(&p, 0, 1, 1));
+    });
+    let kept = vec![(floor, 0), (floor + 1, 0)];
+
+    let store = window_store(&path, WINDOW_CAP);
+    let first = b
+        .connect_sized(&store, boundary, boundary, 0, |_| Vec::new())
+        .remove(0);
+    let pruned = first.pruned.expect("the first floored boundary");
+    assert_eq!(pruned.slash_floor, floor_at(boundary));
+    assert_eq!(
+        pruned.slash_floor.height(),
+        Some(BlockHeight::from_raw(floor))
+    );
+    assert_eq!(
+        slash_rows(&store),
+        kept,
+        "below the floor gone, at and above it kept"
+    );
+
+    // The read, with the floor the batch used.
+    let snap = store.begin_read().expect("read");
+    let from_the_floor = snap
+        .slash_log_after(&p, BlockHeight::from_raw(floor - 1), pruned.slash_floor)
+        .expect("a read starting at the floor is sound");
+    assert_eq!(from_the_floor.len(), 2, "both kept rows are {p:?}'s");
+    let err = snap
+        .slash_log_after(&p, BlockHeight::from_raw(floor - 2), pruned.slash_floor)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            StoreError::InvariantViolated(StoreInvariant::SlashLogReadBelowFloor {
+                asked,
+                floor: at
+            }) if asked == BlockHeight::from_raw(floor - 2) && at == BlockHeight::from_raw(floor)
+        ),
+        "a read starting below the floor is SI-26, not an empty prefix: {err}"
+    );
+    drop(snap);
+
+    // Across the boundary and back, on another block: the re-connected one
+    // lists the credit the join opened, so it hashes apart from the popped
+    // one.
+    let popped_hash = *b.hashes().last().expect("the boundary's block");
+    let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
+    assert_eq!(out.map(|popped| popped.height.to_raw()), Ok(boundary));
+    b.forget(1);
+    assert_eq!(
+        slash_rows(&store),
+        kept,
+        "a pop restores no retired row: the retirement is not journaled"
+    );
+    let again = b
+        .connect_sized(&store, boundary, boundary, 0, |_| vec![credit(1_000)])
+        .remove(0);
+    assert_ne!(
+        *b.hashes().last().expect("re-connected"),
+        popped_hash,
+        "a different block at the boundary"
+    );
+    assert_eq!(
+        again.pruned.expect("the boundary fires again").slash_floor,
+        pruned.slash_floor,
+        "the same expression at the same height"
+    );
+    assert_eq!(slash_rows(&store), kept, "the same, already empty, range");
+    cleanup(&path);
+}
+
+/// A boundary past the first slash floor: the Release journal retires
+/// at the settling family's horizon, and drawable digests retire below
+/// that family's epoch floor, at the same height.
+const DIGEST_RETIRING_BOUNDARY: u64 = FIRST_FLOORED_BOUNDARY + 2 * WINDOW_SEB;
+
+/// **The Release journal and the drawable digests retire with the settling
+/// family** (`SO-D12h`): at a floored boundary, journal rows at or below
+/// `h_open` of the oldest kept settling epoch are gone and rows above it
+/// stay, and the journal's reader asserts that height (SI-28). Drawable
+/// digests retire below the same family's epoch floor. Both horizons sit
+/// inside the slash log's floor.
+///
+/// **Falsifiers:** delete `retire_release_rows` and the journal assertion
+/// fails with the planted rows intact; delete the drawable-digest arm of
+/// `retire_epoch_rows` and the digest assertion fails with the epochs below
+/// the settling floor still present; delete the SI-28 arm in
+/// `archival_reads::release_journal_after` and the `unwrap_err` panics on an
+/// `Ok`.
+#[test]
+fn the_boundary_retires_release_rows_and_settled_digests_below_the_floor() {
+    let path = tmp("release-retire");
+    let boundary = DIGEST_RETIRING_BOUNDARY;
+    let schedule = WINDOW_RULES.settlement_schedule();
+    let slash = floor_at(boundary)
+        .height()
+        .expect("a floored boundary")
+        .to_raw();
+    let settling = epoch_floors_at(boundary).settling;
+    let journal = ReleaseJournalFloor::of(settling, schedule);
+    let floor = journal
+        .height()
+        .expect("the settling family has retired an epoch")
+        .to_raw();
+    assert!(
+        floor > slash,
+        "the journal horizon is inside the slash log's floor"
+    );
+    let first_kept = settling
+        .kept_from()
+        .expect("the settling floor is above zero")
+        .to_raw();
+    assert_eq!(
+        floor,
+        schedule.open_height(first_kept) + 1,
+        "the journal keeps rows strictly above the oldest kept epoch's open"
+    );
+    let (mut b, _) = window_chain_to(&path, WINDOW_CAP, boundary - 1, boundary - WINDOW_SEB);
+
+    // A pre-image one below, at, and one above the floor.
+    let p = persona(0x61);
+    plant(&path, |txn| {
+        let mut journal = txn
+            .open_table(crate::schema::ARCHIVAL_RELEASE_JOURNAL)
+            .expect("t");
+        for h in [floor - 1, floor, floor + 1] {
+            journal
+                .insert(
+                    crate::ids::ReleaseJournalKey::new(BlockHeight::from_raw(h), p).key(),
+                    record().encoded().as_encoded(),
+                )
+                .expect("insert");
+        }
+    });
+    let digests = |store: &ChainStore| -> Vec<u64> {
+        let snap = store.begin_read().expect("read");
+        let table = snap
+            .open_table(crate::schema::ARCHIVAL_DRAWABLE_DIGEST)
+            .expect("table");
+        table
+            .range::<u64>(..)
+            .expect("range")
+            .map(|item| item.expect("row").0.value())
+            .collect()
+    };
+    let store = window_store(&path, WINDOW_CAP);
+    let opened = schedule.epoch_at_height(boundary - 1);
+    let already_kept = epoch_floors_at(boundary - WINDOW_SEB)
+        .settling
+        .kept_from()
+        .expect("the previous boundary retired drawable digests")
+        .to_raw();
+    assert_eq!(
+        digests(&store),
+        (already_kept..=opened).collect::<Vec<_>>(),
+        "earlier boundaries retired below their settling floor; later opens remain"
+    );
+
+    assert!(
+        b.connect_sized(&store, boundary, boundary, 0, |_| Vec::new())
+            .remove(0)
+            .pruned
+            .is_some(),
+        "a floored boundary"
+    );
+    let snap = store.begin_read().expect("read");
+    let kept = snap
+        .release_journal_after(BlockHeight::from_raw(floor - 1), journal)
+        .expect("a read starting at the floor is sound");
+    assert_eq!(
+        kept.iter().map(|r| r.height.to_raw()).collect::<Vec<_>>(),
+        [floor, floor + 1],
+        "below the floor gone, at and above it kept"
+    );
+    let err = snap
+        .release_journal_after(BlockHeight::from_raw(floor - 2), journal)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            StoreError::InvariantViolated(StoreInvariant::ReleaseJournalReadBelowFloor {
+                asked,
+                floor: at
+            }) if asked == BlockHeight::from_raw(floor - 2) && at == BlockHeight::from_raw(floor)
+        ),
+        "a read starting below the floor is SI-28: {err}"
+    );
+    drop(snap);
+    assert_eq!(
+        digests(&store),
+        (first_kept..=schedule.epoch_at_height(boundary)).collect::<Vec<_>>(),
+        "drawable digests retire below the settling floor; the epoch at it stays"
+    );
+    cleanup(&path);
+}
+
+/// A session that stubs `SlashLog` does not retire it (`ARW-9`). The
+/// boundary still runs — bodies and the undo journal are not that family —
+/// and reports no slash floor, because none was enforced. The planted rows
+/// below the floor stay. Opening the table would delete rows the session
+/// was told not to apply; refusing the connect would stop the session at
+/// the first floored epoch.
+#[test]
+fn a_stubbed_slash_log_is_not_retired_at_the_boundary() {
+    let path = tmp("slk-stub-retire");
+    let boundary = FIRST_FLOORED_BOUNDARY;
+    let floor = FIRST_FLOOR;
+    let (mut b, _) = window_chain_to(&path, WINDOW_CAP, boundary - 1, boundary - WINDOW_SEB);
+    let p = persona(0x54);
+    plant(&path, |txn| {
+        plant_slash(txn, floor - 1, 0, &slash_entry(&p, 0, 1, 1));
+        plant_slash(txn, floor, 0, &slash_entry(&p, 0, 1, 1));
+    });
+    let planted = vec![(floor - 1, 0), (floor, 0)];
+
+    let policy = ApplyPolicy::stubbed(&[crate::apply_policy::ArchivalFamily::SlashLog])
+        .expect("a named family");
+    let horizons = Horizons::new(
+        WINDOW_RULES.settlement_schedule().blocks(),
+        BlockCount::from_raw(WINDOW_CAP),
+        WINDOW_RULES.reorg_cap(),
+    )
+    .expect("cap ≤ retention < epoch");
+    let store = ChainStore::with_horizons(&path, policy, horizons).expect("reopen stubbed");
+    let connected = b
+        .connect_sized(&store, boundary, boundary, 0, |_| Vec::new())
+        .remove(0);
+    assert_eq!(
+        connected
+            .pruned
+            .expect("the boundary still runs")
+            .slash_floor,
+        SlashLogFloor::NONE,
+        "a skipped apply enforced no floor"
+    );
+    assert_eq!(
+        slash_rows(&store),
+        planted,
+        "rows below the floor stay when the family is stubbed"
+    );
+    cleanup(&path);
+}
+
+/// `SLK-2`'s falsifier: the floor is the rule set's cap, not the store's
+/// retention. A store opened with `undo_retention` deeper than the cap
+/// moves its undo floor by the difference and the slash floor not at all —
+/// rows a retention-derived floor would have kept are retired. One value
+/// was doing two jobs; this is the seam where they are two.
+#[test]
+fn a_deeper_undo_retention_moves_the_undo_floor_and_not_the_slash_floor() {
+    let path = tmp("slk-retention");
+    let boundary = FIRST_FLOORED_BOUNDARY;
+    let floor = FIRST_FLOOR;
+    let deeper = WINDOW_CAP + 2;
+    assert!(deeper < WINDOW_SEB, "inside the epoch, so the store opens");
+    let (mut b, _) = window_chain_to(&path, deeper, boundary - 1, boundary - WINDOW_SEB);
+
+    // The rows a floor that followed the retention would keep: at
+    // `floor − 2` and `floor − 1`, which `boundary − (window + 2)` sits
+    // below.
+    let p = persona(0x53);
+    plant(&path, |txn| {
+        plant_slash(txn, floor - 2, 0, &slash_entry(&p, 0, 1, 1));
+        plant_slash(txn, floor - 1, 0, &slash_entry(&p, 0, 1, 1));
+        plant_slash(txn, floor, 0, &slash_entry(&p, 0, 1, 1));
+    });
+
+    let store = window_store(&path, deeper);
+    let pruned = b
+        .connect_sized(&store, boundary, boundary, 0, |_| Vec::new())
+        .remove(0)
+        .pruned
+        .expect("a boundary");
+    assert_eq!(
+        pruned.undo_floor,
+        BlockHeight::from_raw(boundary - deeper),
+        "the retention is the undo floor's"
+    );
+    assert_eq!(
+        pruned.slash_floor,
+        floor_at(boundary),
+        "and not the slash floor's: the cap is the rule set's"
+    );
+    assert_eq!(slash_rows(&store), vec![(floor, 0)]);
+    cleanup(&path);
+}
+
+// ---------------------------------------------------------------------------
+// The per-epoch retirement (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`)
+// ---------------------------------------------------------------------------
+
+/// The boundary whose batch first retires a claimable row under the window
+/// pair: `(B − 1) − W = 2`. Every family's floor is above zero there.
+const EPOCH_RETIRING_BOUNDARY: u64 = (shekyl_archival_retention::MAX_CLAIM_AGE_W + 3) * WINDOW_SEB;
+
+/// Each family's floor at that boundary, as the rule set states it.
+fn epoch_floors_at(boundary: u64) -> super::prune::EpochFloors {
+    let at = BlockHeight::from_raw(boundary);
+    let schedule = WINDOW_RULES.settlement_schedule();
+    super::prune::EpochFloors {
+        claimable: EpochFloor::at_boundary(at, schedule),
+        settling: EpochFloor::at_boundary(at, schedule),
+        pricing: EpochFloor::at_boundary(at, schedule),
+        draws: BlockDrawsFloor::retired_by(schedule.epoch_at_height(boundary), schedule),
+    }
+}
+
+/// The epochs a `u64`-keyed table holds, ascending.
+fn epochs_of<V: redb::Value + 'static>(
+    store: &ChainStore,
+    table: redb::TableDefinition<'static, u64, V>,
+) -> Vec<u64> {
+    let snap = store.begin_read().expect("read");
+    let table = snap.open_table(table).expect("table");
+    table
+        .range::<u64>(..)
+        .expect("range")
+        .map(|item| item.expect("row").0.value())
+        .collect()
+}
+
+/// The epochs `archival_settlement`, `archival_slash_applied`,
+/// `archival_issued_draw` and `archival_r_market` hold, each ascending.
+fn keyed_epochs(store: &ChainStore) -> [Vec<u64>; 4] {
+    let snap = store.begin_read().expect("read");
+    let mut settlement: Vec<u64> = snap
+        .open_table(crate::schema::ARCHIVAL_SETTLEMENT)
+        .expect("table")
+        .iter()
+        .expect("iter")
+        .map(|item| item.expect("row").0.value().2)
+        .collect();
+    let mut applied: Vec<u64> = snap
+        .open_table(crate::schema::ARCHIVAL_SLASH_APPLIED)
+        .expect("table")
+        .iter()
+        .expect("iter")
+        .map(|item| item.expect("row").0.value().2)
+        .collect();
+    let mut issued: Vec<u64> = snap
+        .open_table(crate::schema::ARCHIVAL_ISSUED_DRAW)
+        .expect("table")
+        .iter()
+        .expect("iter")
+        .map(|item| item.expect("row").0.value().0)
+        .collect();
+    let mut priced: Vec<u64> = snap
+        .open_table(crate::schema::ARCHIVAL_R_MARKET)
+        .expect("table")
+        .iter()
+        .expect("iter")
+        .map(|item| item.expect("row").0.value().1)
+        .collect();
+    for v in [&mut settlement, &mut applied, &mut issued, &mut priced] {
+        v.sort_unstable();
+    }
+    [settlement, applied, issued, priced]
+}
+
+/// Each per-epoch table retires at its family's floor (`SO-D12h`, §17): at
+/// the first boundary that retires a claimable row, every family loses the
+/// epochs below its floor and keeps the one at it. The rows the chain's
+/// own passes and closes wrote (`Σwork`, the complete-tree sets, the
+/// budgets) start at the claimable floor afterwards; the rows planted on
+/// either side of each floor keep only the side at or above it. A read
+/// below a family's floor is SI-32, with the table and both epochs in it;
+/// a read at the floor answers. Then a pop across the boundary and a
+/// different block reconnected: nothing comes back (the retirement is not
+/// journaled), and the batch re-derives the same floors.
+///
+/// **Falsifiers:** delete `retire_epoch_rows` and the first table assertion
+/// fails with every row intact; delete the `kept` check in
+/// `archival_reads` and the reads below the floor answer `None` or empty —
+/// "never written" for rows that were.
+#[test]
+fn each_per_epoch_table_retires_at_its_familys_floor_and_the_read_asserts_it() {
+    use crate::codec::{IssuedDigest, IssuedDraw, Present, RMarket, SettlementRow};
+    use crate::ids::{IssuedDrawKey, SettlementKey, SlashAppliedKey};
+    use crate::schema::{
+        ARCHIVAL_BUDGET, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
+        ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK,
+        ARCHIVAL_SLASH_APPLIED,
+    };
+    use shekyl_types::archival::DrawableDigest;
+    use shekyl_types::SettlementEpoch;
+
+    let path = tmp("epoch-retire");
+    let boundary = EPOCH_RETIRING_BOUNDARY;
+    let floors = epoch_floors_at(boundary);
+    let raw = |f: Option<SettlementEpoch>| f.expect("a floor above zero").to_raw();
+    let (claim, settle, price) = (
+        raw(floors.claimable.kept_from()),
+        raw(floors.settling.kept_from()),
+        raw(floors.pricing.kept_from()),
+    );
+    assert_eq!((claim, settle, price), (2, 27, 26), "W = 26, k = 1, B = 29");
+    let (mut b, _) = window_chain_to(&path, WINDOW_CAP, boundary - 1, boundary - WINDOW_SEB);
+
+    let p = persona(0x61);
+    let s0 = ShardId::from_raw(0);
+    let e = SettlementEpoch::from_raw;
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_SETTLEMENT).expect("t");
+        for epoch in [claim - 1, claim] {
+            t.insert(
+                SettlementKey::new(p, s0, e(epoch)).key(),
+                SettlementRow::settle(2, 3)
+                    .expect("a row")
+                    .encoded()
+                    .as_encoded(),
+            )
+            .expect("insert");
+        }
+        let mut t = txn.open_table(ARCHIVAL_SLASH_APPLIED).expect("t");
+        for epoch in [settle - 1, settle] {
+            t.insert(SlashAppliedKey::new(p, s0, e(epoch)).key(), Present)
+                .expect("insert");
+        }
+        let mut t = txn.open_table(ARCHIVAL_ISSUED_DRAW).expect("t");
+        for epoch in [settle - 1, settle] {
+            let draw = IssuedDraw {
+                revealed_at: BlockHeight::from_raw(1),
+                passed: true,
+            };
+            t.insert(
+                IssuedDrawKey::new(e(epoch), p, s0, BlockHeight::ZERO, 0).key(),
+                draw.encoded().as_encoded(),
+            )
+            .expect("insert");
+        }
+        let mut t = txn.open_table(ARCHIVAL_ISSUED_DIGEST).expect("t");
+        for epoch in [settle - 1, settle] {
+            t.insert(epoch, IssuedDigest::ZERO.encoded().as_encoded())
+                .expect("insert");
+        }
+        let mut t = txn.open_table(ARCHIVAL_DRAWABLE_DIGEST).expect("t");
+        for epoch in [settle - 1, settle] {
+            t.insert(
+                epoch,
+                DrawableDigest::from_bytes([7; 32]).encoded().as_encoded(),
+            )
+            .expect("insert");
+        }
+        let mut t = txn.open_table(ARCHIVAL_R_MARKET).expect("t");
+        for epoch in [price - 1, price] {
+            t.insert((0, epoch), RMarket::from_raw(1).encoded().as_encoded())
+                .expect("insert");
+        }
+    });
+
+    let store = window_store(&path, WINDOW_CAP);
+    let before = epochs_of(&store, ARCHIVAL_SIGMA_WORK);
+    assert_eq!(
+        before.first(),
+        Some(&(claim - 1)),
+        "every pass wrote its Σwork, and the boundary before retired below claim − 1"
+    );
+    let first = b
+        .connect_sized(&store, boundary, boundary, 0, |_| Vec::new())
+        .remove(0);
+    let pruned = first.pruned.expect("a boundary");
+    assert_eq!(
+        pruned.epochs, floors,
+        "the batch's floors are the rule set's"
+    );
+
+    let retained = |store: &ChainStore| {
+        (
+            epochs_of(store, ARCHIVAL_SIGMA_WORK),
+            epochs_of(store, ARCHIVAL_COMPLETE_TREES),
+            epochs_of(store, ARCHIVAL_BUDGET),
+            epochs_of(store, ARCHIVAL_ISSUED_DIGEST),
+            epochs_of(store, ARCHIVAL_DRAWABLE_DIGEST),
+            keyed_epochs(store),
+        )
+    };
+    let after = retained(&store);
+    assert_eq!(
+        after.0.first(),
+        Some(&claim),
+        "Σwork kept from the claimable floor"
+    );
+    assert_eq!(
+        after.0,
+        before[1..],
+        "exactly the one epoch below the floor went"
+    );
+    assert_eq!(after.1, after.0, "a complete-tree set beside every Σwork");
+    assert_eq!(
+        after.2.first(),
+        Some(&claim),
+        "budgets kept from the claimable floor"
+    );
+    assert_eq!(after.3, vec![settle]);
+    assert_eq!(
+        after.4,
+        (settle..=WINDOW_RULES.settlement_schedule().epoch_at_height(boundary)).collect::<Vec<_>>(),
+        "the chain's opens at or above the settling floor stay; the planted epoch below it does not"
+    );
+    assert_eq!(
+        after.5,
+        [vec![claim], vec![settle], vec![settle], vec![price]],
+        "settlement, slash-applied, issued draws, R_market: each at its floor"
+    );
+
+    // The reads, with the floors the batch used.
+    let snap = store.begin_read().expect("read");
+    let below = |err: StoreError, table: &str, asked: u64, floor: u64| {
+        assert!(
+            matches!(
+                err,
+                StoreError::InvariantViolated(StoreInvariant::EpochReadBelowFloor {
+                    table: t, asked: a, floor: f
+                }) if t == table && a == e(asked) && f == e(floor)
+            ),
+            "{table} at {asked} is SI-32, not an absent row: {err}"
+        );
+    };
+    assert!(snap
+        .sigma_work(e(claim), floors.claimable)
+        .expect("at the floor")
+        .is_some());
+    below(
+        snap.sigma_work(e(claim - 1), floors.claimable).unwrap_err(),
+        "archival_sigma_work",
+        claim - 1,
+        claim,
+    );
+    below(
+        snap.complete_trees(e(claim - 1), floors.claimable)
+            .unwrap_err(),
+        "archival_complete_trees",
+        claim - 1,
+        claim,
+    );
+    below(
+        snap.settlement_row(&p, s0, e(claim - 1), floors.claimable)
+            .unwrap_err(),
+        "archival_settlement",
+        claim - 1,
+        claim,
+    );
+    assert_eq!(
+        snap.issued_draws(e(settle), floors.settling)
+            .expect("at the floor")
+            .len(),
+        1
+    );
+    below(
+        snap.issued_draws(e(settle - 1), floors.settling)
+            .unwrap_err(),
+        "archival_issued_draw",
+        settle - 1,
+        settle,
+    );
+    below(
+        snap.issued_digest(e(settle - 1), floors.settling)
+            .unwrap_err(),
+        "archival_issued_digest",
+        settle - 1,
+        settle,
+    );
+    below(
+        snap.slash_applied(&p, s0, e(settle - 1), floors.settling)
+            .unwrap_err(),
+        "archival_slash_applied",
+        settle - 1,
+        settle,
+    );
+    assert_eq!(
+        snap.r_market(s0, e(price), floors.pricing)
+            .expect("at the floor"),
+        Some(RMarket::from_raw(1))
+    );
+    below(
+        snap.r_market(s0, e(price - 1), floors.pricing).unwrap_err(),
+        "archival_r_market",
+        price - 1,
+        price,
+    );
+    drop(snap);
+
+    // Across the boundary and back, on another block.
+    let popped_hash = *b.hashes().last().expect("the boundary's block");
+    let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
+    assert_eq!(out.map(|popped| popped.height.to_raw()), Ok(boundary));
+    b.forget(1);
+    // Retirement is not journaled. The boundary block's own open writes
+    // its epoch's drawable digest through the journal, and pop removes
+    // that insert. Nothing the batch retired comes back.
+    let mut popped_rows = after.clone();
+    let opened_here = WINDOW_RULES.settlement_schedule().epoch_at_height(boundary);
+    assert_eq!(popped_rows.4.pop(), Some(opened_here));
+    assert_eq!(
+        retained(&store),
+        popped_rows,
+        "pop undoes the boundary's digest and restores no retired row"
+    );
+    let again = b
+        .connect_sized(&store, boundary, boundary, 0, |_| vec![credit(1_000)])
+        .remove(0);
+    assert_ne!(*b.hashes().last().expect("re-connected"), popped_hash);
+    assert_eq!(
+        again.pruned.expect("the boundary fires again").epochs,
+        floors
+    );
+    assert_eq!(retained(&store), after, "the same, already empty, ranges");
+    cleanup(&path);
+}
+
+/// A session that stubs a per-epoch table's family does not retire it
+/// (`ARW-9`), as the slash log: `R_market` planted below its floor stays
+/// under a stubbed `RMarket`, while the families the session applies are
+/// retired as ever.
+#[test]
+fn a_stubbed_per_epoch_family_is_not_retired_at_the_boundary() {
+    use crate::codec::RMarket;
+    use crate::schema::{ARCHIVAL_R_MARKET, ARCHIVAL_SIGMA_WORK};
+
+    let path = tmp("epoch-retire-stub");
+    let boundary = EPOCH_RETIRING_BOUNDARY;
+    let floors = epoch_floors_at(boundary);
+    let price = floors.pricing.kept_from().expect("a floor").to_raw();
+    let claim = floors.claimable.kept_from().expect("a floor").to_raw();
+    let (mut b, _) = window_chain_to(&path, WINDOW_CAP, boundary - 1, boundary - WINDOW_SEB);
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_R_MARKET).expect("t");
+        t.insert((0, price - 1), RMarket::from_raw(1).encoded().as_encoded())
+            .expect("insert");
+    });
+    let policy = ApplyPolicy::stubbed(&[crate::apply_policy::ArchivalFamily::RMarket])
+        .expect("a named family");
+    let horizons = Horizons::new(
+        WINDOW_RULES.settlement_schedule().blocks(),
+        BlockCount::from_raw(WINDOW_CAP),
+        WINDOW_RULES.reorg_cap(),
+    )
+    .expect("cap ≤ retention < epoch");
+    let store = ChainStore::with_horizons(&path, policy, horizons).expect("reopen stubbed");
+    b.connect_sized(&store, boundary, boundary, 0, |_| Vec::new());
+    assert_eq!(
+        keyed_epochs(&store)[3],
+        vec![price - 1],
+        "a stubbed family's rows below its floor stay"
+    );
+    assert_eq!(
+        epochs_of(&store, ARCHIVAL_SIGMA_WORK).first(),
+        Some(&claim),
+        "an applied family is retired"
+    );
     cleanup(&path);
 }

@@ -45,81 +45,16 @@ namespace hw {
             device_default(const device_default &device) = delete;
             device_default& operator=(const device_default &device) = delete;
 
-            explicit operator bool() const override { return false; };
-
-             /* ======================================================================= */
-            /*                              SETUP/TEARDOWN                             */
-            /* ======================================================================= */
             bool set_name(const std::string &name) override;
             const std::string get_name() const override;
 
-            bool init(void) override;
-            bool release() override;
-
-            bool connect(void) override;
-            bool disconnect() override;
- 
-            bool set_mode(device_mode mode) override;
-
-            device_type get_type() const override {return device_type::SOFTWARE;};
-
-            /* ======================================================================= */
-            /*  LOCKER                                                                 */
-            /* ======================================================================= */ 
-            void lock(void)  override;
-            void unlock(void) override;
-            bool try_lock(void) override;
-            
-            /* ======================================================================= */
-            /*                             WALLET & ADDRESS                            */
-            /* ======================================================================= */
-            bool  get_public_address(cryptonote::account_public_address &pubkey) override;
-            bool  get_secret_keys(crypto::secret_key &viewkey , crypto::secret_key &spendkey) override;
- 
-            /* ======================================================================= */
-            /*                               SUB ADDRESS                               */
-            /* ======================================================================= */
-            crypto::public_key  get_subaddress_spend_public_key(const cryptonote::account_keys& keys, const cryptonote::subaddress_index& index) override;
-            std::vector<crypto::public_key>  get_subaddress_spend_public_keys(const cryptonote::account_keys &keys, uint32_t account, uint32_t begin, uint32_t end) override;
-            cryptonote::account_public_address  get_subaddress(const cryptonote::account_keys& keys, const cryptonote::subaddress_index &index) override;
-            crypto::secret_key  get_subaddress_secret_key(const crypto::secret_key &sec, const cryptonote::subaddress_index &index) override;
-
-            /* ======================================================================= */
-            /*                            DERIVATION & KEY                             */
-            /* ======================================================================= */
-            bool  verify_keys(const crypto::secret_key &secret_key, const crypto::public_key &public_key)  override;
             bool  scalarmultKey(ct::key & aP, const ct::key &P, const ct::key &a) override;
             bool  scalarmultBase(ct::key &aG, const ct::key &a) override;
             bool  sc_secret_add(crypto::secret_key &r, const crypto::secret_key &a, const crypto::secret_key &b) override;
             crypto::secret_key  generate_keys(crypto::public_key &pub, crypto::secret_key &sec, const crypto::secret_key& recovery_key = crypto::secret_key(), bool recover = false) override;
             bool  generate_key_derivation(const crypto::public_key &pub, const crypto::secret_key &sec, crypto::key_derivation &derivation) override;
-            bool  conceal_derivation(crypto::key_derivation &derivation, const crypto::public_key &tx_pub_key, const crypto::key_derivation &main_derivation) override;
             bool  secret_key_to_public_key(const crypto::secret_key &sec, crypto::public_key &pub) override;
             bool  generate_key_image(const crypto::public_key &pub, const crypto::secret_key &sec, crypto::key_image &image) override;
-
-            /* ======================================================================= */
-            /*                               TRANSACTION                               */
-            /* ======================================================================= */
-
-            // generate_tx_proof removed (KEM-based proofs in Rust)
-
-            bool  open_tx(crypto::secret_key &tx_key) override;
-            void get_transaction_prefix_hash(const cryptonote::transaction_prefix& tx, crypto::hash& h) override;
-
-            bool  encrypt_payment_id(crypto::hash8 &payment_id, const crypto::public_key &public_key, const crypto::secret_key &secret_key) override;
-
-
-            bool  tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size, const ct::keyV &hashes, const ct::ctkeyV &outPk, ct::key &prehash) override;
-            bool  tx_prepare(const ct::key &H, const ct::key &xx, ct::key &a, ct::key &aG, ct::key &aHP, ct::key &rvII) override;
-            bool  tx_prepare(ct::key &a, ct::key &aG) override;
-            bool  tx_hash(const ct::keyV &long_message, ct::key &c) override;
-            bool  tx_sign(const ct::key &c, const ct::keyV &xx, const ct::keyV &alpha, const size_t rows, const size_t dsRows, ct::keyV &ss) override;
-
-            bool fcmp_prepare(const ct::key &tree_root, uint8_t tree_depth) override;
-            bool fcmp_proof_start(size_t num_inputs) override;
-            bool fcmp_proof_add_input(const ct::key &key_image, const std::vector<uint8_t> &tree_path) override;
-
-            bool  close_tx(void) override;
         };
 
     }

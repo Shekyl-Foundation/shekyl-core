@@ -284,6 +284,8 @@ mod tests {
             outputs: vec![],
             pscan_synced_height: None,
             recovery_pending_reopen: false,
+            in_flight: vec![],
+            outcomes: vec![],
         };
         assert!(degrade_or_loud(Ok(view)).unwrap().is_some());
         let unreadable = StakingReadError::File(shekyl_engine_file::WalletFileError::Io(

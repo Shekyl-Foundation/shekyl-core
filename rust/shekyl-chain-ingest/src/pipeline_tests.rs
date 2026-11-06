@@ -14,15 +14,15 @@ use kameo::error::SendError;
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{
-    form, Candidate, CenRow, FormAttempt, InvalidBlock, Locus, Retry, RuleSet, StructurallyValid,
-    Verdict,
+    form, Candidate, CenRow, FormAttempt, FormClaims, InvalidBlock, Locus, ReferenceClaims, Retry,
+    RuleSet, StructurallyValid, Verdict,
 };
 use shekyl_chain_store::codec::{BlockInfo, Canonical, Present};
 use shekyl_chain_store::lmdb_order::LmdbHashKey;
 use shekyl_chain_store::schema::{BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS};
 use shekyl_chain_store::store::{ConnectState, StoreError, StoreInvariant};
 use shekyl_difficulty::{CumulativeDifficulty, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
-use shekyl_types::{BlockHash, CurveTreeRoot};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, HashAt, RunEnd, RunFault};
@@ -32,18 +32,15 @@ use crate::pipeline::{run, Checkpoint, PipelineConfig, PipelineFault};
 use crate::schedule::ChainRules;
 use crate::sequencer::SequenceError;
 use crate::source::{IngestEvent, SequenceNo, Sequenced};
-use crate::test_support::{anchor, at};
 use crate::test_support::{
-    block_with_nonce, chain, cleanup, corpus_from, corpus_of, corpus_of_reorg, expected_state, h,
-    key_image, open_store, reorg, reward_for, spend, tmp, trace_of, Family, GrownTree,
-    JoinedConnector, Scripted, FIRST_SPEND_HEIGHT,
+    at, bare_chain, block_with_nonce, chain, cleanup, corpus_from, corpus_of, corpus_of_reorg,
+    expected_state, h, key_image, open_store, reorg, reorg_of, spent_keys_of, tmp, trace_of,
+    Family, GrownTree, JoinedConnector, Scripted, FIRST_SPEND_HEIGHT,
 };
 
 /// Regtest without a fixed target: the genesis rules at every height.
-const GENESIS_RULES: ChainRules = ChainRules::Regtest {
-    fixed_difficulty: None,
-    schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
-};
+const GENESIS_RULES: ChainRules =
+    ChainRules::harness_regtest(None, shekyl_chain_rules::CappedEpoch::PRODUCTION);
 
 fn nz(n: usize) -> NonZeroUsize {
     NonZeroUsize::new(n).expect("non-zero")
@@ -55,6 +52,7 @@ fn cfg(window: usize) -> PipelineConfig {
     PipelineConfig {
         window: nz(window),
         hashers: nz(2),
+        digest_each_commit: false,
     }
 }
 
@@ -63,17 +61,41 @@ fn substrate() -> Arc<MockSubstrate> {
 }
 
 /// Form one candidate at `height` under GENESIS with the mock substrate,
-/// claiming `seed`.
+/// claiming `seed` and the target the production ledger derives over the
+/// candidate's parents (`parents`, oldest first, from height 0).
 fn formed(
     height: u64,
     candidate: Candidate,
     seed: BlockHash,
+    parents: &[&shekyl_wire::Block],
 ) -> (shekyl_types::BlockHeight, Verdict<StructurallyValid>) {
+    let mut ledger = crate::target::TargetLedger::new();
+    for (at, parent) in parents.iter().enumerate() {
+        let at = h(u64::try_from(at).expect("small"));
+        let target = ledger
+            .claim(at, &RuleSet::GENESIS)
+            .expect("consistent")
+            .expect("a target");
+        ledger.extend(at, parent, target).expect("consistent");
+    }
+    let target = ledger
+        .claim(h(height), &RuleSet::GENESIS)
+        .expect("consistent")
+        .expect("a target");
+    let references = match ReferenceClaims::from_headers(&ledger, h(height), &candidate) {
+        Ok(references) => references,
+        Err(never) => match never {},
+    };
     let verdict = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed,
+            target,
+            references: &references,
+            network: shekyl_network::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        seed,
         FormAttempt::FIRST,
     )
     .expect("mock substrate forms");
@@ -114,10 +136,10 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     // connector is spawned on the reopened store and meets the hole.
     {
         let first = JoinedConnector::spawn(ConnectorArgs {
-            store: open_store(&path),
+            store: open_store(&path).into(),
             rules: GENESIS_RULES,
         });
-        let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
+        let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
         let applied = first
             .actor
             .ask(Apply(vec![(h0, f0)]))
@@ -138,12 +160,17 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
         txn.commit().expect("commit");
     }
     let joined = JoinedConnector::spawn(ConnectorArgs {
-        store: open_store(&path),
+        store: open_store(&path).into(),
         rules: GENESIS_RULES,
     });
     let connector = joined.actor.clone();
 
-    let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let err = connector
         .ask(Apply(vec![(h1, f1)]))
         .await
@@ -155,7 +182,12 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
 
     // Over: the same message again is refused with the recorded end, and
     // so is a rewind — the latch is the writer's, not each handler's.
-    let (h1b, f1b) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1b, f1b) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let again = connector
         .ask(Apply(vec![(h1b, f1b)]))
         .await
@@ -207,7 +239,12 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     assert!(!connector.is_alive());
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(!connector.is_alive(), "nothing revived the actor");
-    let (h1c, f1c) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1c, f1c) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     assert!(matches!(
         connector
             .ask(Apply(vec![(h1c, f1c)]))
@@ -227,6 +264,93 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
 }
 
 // ------------------------------------------------------------ the run
+
+/// An `Inject` under a public network's rules is refused at the connector
+/// before the store is asked (DRS-E4 §3.8 item 3: the out-of-band write
+/// has one producer, the regtest injector, and no public chain carries
+/// one) — and the refusal is not a halt: the writer answers afterwards.
+/// The regtest path, with a bonded persona, is
+/// `scenario_archival_tests::an_injected_serve_credit_lands_at_the_tip_and_is_one_snapshot_row`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_inject_off_regtest_is_refused_before_the_store_is_asked() {
+    let path = tmp("connector-inject-off-regtest");
+    let rules = ChainRules::new(
+        shekyl_network::Network::Testnet,
+        None,
+        shekyl_chain_rules::CappedEpoch::PRODUCTION,
+    )
+    .expect("no lever");
+    let joined = JoinedConnector::spawn(ConnectorArgs {
+        store: open_store(&path).into(),
+        rules,
+    });
+    let credit = crate::source::ServeCredit {
+        persona: shekyl_types::PCanonicalId::from_bytes([0x51; 32]),
+        shard: shekyl_types::ShardId::from_raw(7),
+        epoch: shekyl_types::SettlementEpoch::from_raw(1),
+    };
+    let refused = joined
+        .actor
+        .ask(crate::connector::Inject(credit))
+        .await
+        .expect_err("regtest-only");
+    assert!(
+        matches!(
+            refused,
+            SendError::HandlerError(RunFault::InjectNotPermitted {
+                credit: named,
+                network: under,
+            }) if named == credit && under == rules.network()
+        ),
+        "{refused:?}"
+    );
+    // The store was never asked (an empty chain would have been
+    // `ChainEmpty`, a different refusal), and the connector is not over.
+    joined.actor.ask(Digest).await.expect("the writer is up");
+    joined.stop_and_join().await;
+    cleanup(&path);
+}
+
+/// The draw-issue door is regtest-only as `Inject` is, refused at the
+/// connector before the store is asked, and the refusal is not a halt.
+/// The regtest path is `archival_slash_tests`' levered chain.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_issue_of_draws_off_regtest_is_refused_before_the_store_is_asked() {
+    let path = tmp("connector-issue-off-regtest");
+    let rules = ChainRules::new(
+        shekyl_network::Network::Testnet,
+        None,
+        shekyl_chain_rules::CappedEpoch::PRODUCTION,
+    )
+    .expect("no lever");
+    let joined = JoinedConnector::spawn(ConnectorArgs {
+        store: open_store(&path).into(),
+        rules,
+    });
+    let epoch = shekyl_types::SettlementEpoch::from_raw(1);
+    let refused = joined
+        .actor
+        .ask(crate::connector::IssueDraws {
+            epoch,
+            draws: Vec::new(),
+            digest: shekyl_types::archival::IssuedDigest::ZERO,
+        })
+        .await
+        .expect_err("regtest-only");
+    assert!(
+        matches!(
+            refused,
+            SendError::HandlerError(RunFault::IssueNotPermitted {
+                epoch: named,
+                network: under,
+            }) if named == epoch && under == rules.network()
+        ),
+        "{refused:?}"
+    );
+    joined.actor.ask(Digest).await.expect("the writer is up");
+    joined.stop_and_join().await;
+    cleanup(&path);
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_checkpoint() {
@@ -263,7 +387,7 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
     // expectation, and both equal the state computed from the chain.
     let Checkpoint { at, ours, theirs } = report.checkpoint.expect("covered-tip checkpoint");
     assert_eq!(at, h(4));
-    assert_eq!(ours, theirs, "redb and the LMDB-shaped checkpoint agree");
+    assert_eq!(ours, theirs, "redb and the baseline checkpoint agree");
     assert_eq!(ours, expected_state(&chain));
     // The measurement carries the concurrency it was taken under.
     assert_eq!(
@@ -275,6 +399,61 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
     cleanup(&path);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_one_block_window_records_the_store_digest_at_every_height() {
+    let path = tmp("pipeline-height-digests");
+    let chain = chain(5);
+    let bytes = corpus_of(&chain);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut config = cfg(1);
+    config.digest_each_commit = true;
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        Arc::new(crate::trace::Trace::empty()),
+        config,
+    )
+    .await
+    .expect("the corpus replays one block per commit");
+    let block_heights: Vec<BlockHeight> = report.digests.keys().copied().collect();
+    assert_eq!(block_heights, vec![h(0), h(1), h(2), h(3), h(4)]);
+    assert_eq!(
+        report.digests[&h(4)],
+        expected_state(&chain),
+        "the last row is the store's digest of the whole chain"
+    );
+    cleanup(&path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_wider_commit_refuses_to_invent_a_digest_per_height() {
+    let path = tmp("pipeline-digest-window");
+    let chain = chain(5);
+    let bytes = corpus_of(&chain);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut config = cfg(2);
+    config.digest_each_commit = true;
+    let fault = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        Arc::new(crate::trace::Trace::empty()),
+        config,
+    )
+    .await
+    .expect_err("two blocks in one commit have one digest");
+    assert!(
+        matches!(fault, PipelineFault::DigestWindow { connected: 2 }),
+        "{fault:?}"
+    );
+    cleanup(&path);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     // RD-Q5: the retry path exists (the fault carries Retry::Again(2)) and
@@ -283,13 +462,18 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     let path = tmp("connector-stale-seed");
     let chain = chain(2);
     let connector = Connector::spawn(ConnectorArgs {
-        store: open_store(&path),
+        store: open_store(&path).into(),
         rules: GENESIS_RULES,
     });
-    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
+    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
     let wrong = BlockHash::from_bytes([0xee; 32]);
-    let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), wrong);
+    let (h1, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        wrong,
+        &[&chain[0].0],
+    );
     let err = connector
         .ask(Apply(vec![(h1, f1)]))
         .await
@@ -311,8 +495,13 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     let again = connector.ask(Digest).await;
     assert!(again.is_ok(), "reads are unaffected");
     // The writer stays up: a later Apply with the store's seed connects.
-    // Replay treats StaleSeed as run-ending; E3 re-forms on this actor.
-    let (h1b, f1b) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    // Replay treats StaleSeed as run-ending; DRS-X re-forms on this actor.
+    let (h1b, f1b) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let applied = connector
         .ask(Apply(vec![(h1b, f1b)]))
         .await
@@ -334,12 +523,17 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
     let path = tmp("connector-height-claim");
     let chain = chain(2);
     let connector = Connector::spawn(ConnectorArgs {
-        store: open_store(&path),
+        store: open_store(&path).into(),
         rules: GENESIS_RULES,
     });
-    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
+    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
-    let (_, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (_, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let err = connector
         .ask(Apply(vec![(h(5), f1)]))
         .await
@@ -356,7 +550,12 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
     }
     // Nothing connected under the claim, and the writer stays up: the same
     // block under its real height connects.
-    let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let applied = connector
         .ask(Apply(vec![(h1, f1)]))
         .await
@@ -371,14 +570,14 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
     // A verdict is data on Applied. The writer does not go Over, so a
-    // later Apply at the same height can still run (E3 / mutation family).
+    // later Apply at the same height can still run (DRS-X / mutation family).
     let path = tmp("connector-refusal");
     let chain = chain(2);
     let connector = Connector::spawn(ConnectorArgs {
-        store: open_store(&path),
+        store: open_store(&path).into(),
         rules: GENESIS_RULES,
     });
-    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
+    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
     let refused = InvalidBlock::new(CenRow::A1, Locus::Block);
     let applied = connector
@@ -388,7 +587,12 @@ async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
     assert_eq!(applied.refused, Some((h(1), refused)));
     assert!(applied.connected.is_empty());
     connector.ask(Digest).await.expect("writer is up");
-    let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let applied = connector
         .ask(Apply(vec![(h1, f1)]))
         .await
@@ -440,11 +644,6 @@ async fn a_refusal_ends_the_run_and_is_a_disagreement_the_report_names() {
         report.disagreements().collect::<Vec<_>>(),
         vec![crate::pipeline::Disagreement::Refused { height, verdict }]
     );
-    assert_eq!(
-        report.observations().refused,
-        Some(("CEN-A2", h(2))),
-        "derived from the report, not written beside it"
-    );
     cleanup(&path);
 }
 
@@ -457,7 +656,10 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
     let path = tmp("pipeline-corrupt");
     let n = shekyl_difficulty::N;
     let n_us = usize::try_from(n).expect("N is small");
-    let chain = chain(n + 2);
+    // The subject is the planted work decrease, not the bodies: a chain
+    // listing nothing, long enough that block 50 is inside D4's window of
+    // `N` at block `N + 1`.
+    let chain = bare_chain(n + 2);
     let trace = Arc::new(trace_of(&chain, false));
     let first = corpus_of(&chain[..=n_us]);
     let mut source = CorpusReader::open(std::io::Cursor::new(&first)).expect("open");
@@ -475,25 +677,7 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
     assert_eq!(report.connected.len(), n_us + 1);
 
     // Plant: block_info[50].cumulative_difficulty below block 49's.
-    {
-        let db = redb::Database::open(&path).expect("open raw");
-        let txn = db.begin_write().expect("write");
-        {
-            let mut infos = txn.open_table(BLOCK_INFO).expect("t");
-            let mut row: BlockInfo = infos
-                .get(50u64)
-                .expect("g")
-                .expect("row")
-                .value()
-                .decode()
-                .expect("decodes");
-            row.cumulative_difficulty = CumulativeDifficulty::from_raw(1);
-            infos
-                .insert(50u64, row.encoded().as_encoded())
-                .expect("plant");
-        }
-        txn.commit().expect("commit");
-    }
+    plant_work(&path, h(50), 1);
 
     // The next block, through the pipeline, from a store that already holds
     // the chain (the seed claim asks the store for block 0).
@@ -526,6 +710,199 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
         Some(h(n)),
         "block N + 1 did not land"
     );
+    cleanup(&path);
+}
+
+/// Rewrite `block_info[height].cumulative_difficulty` in the store at
+/// `path`, the way the SI-10 test plants its decrease.
+fn plant_work(path: &std::path::Path, height: shekyl_types::BlockHeight, work: u128) {
+    let db = redb::Database::open(path).expect("open raw");
+    let txn = db.begin_write().expect("write");
+    {
+        let mut infos = txn.open_table(BLOCK_INFO).expect("t");
+        let mut row: BlockInfo = infos
+            .get(height.to_raw())
+            .expect("g")
+            .expect("row")
+            .value()
+            .decode()
+            .expect("decodes");
+        row.cumulative_difficulty = CumulativeDifficulty::from_raw(work);
+        infos
+            .insert(height.to_raw(), row.encoded().as_encoded())
+            .expect("plant");
+    }
+    txn.commit().expect("commit");
+}
+
+/// A store whose tip records work that the next target cannot be added to
+/// (`u128::MAX`): the sequencer's ledger observes the overflow while
+/// recording the next block's claim. It does not panic and does not form
+/// the block. With nothing in flight, the writer re-derives at its own next
+/// height, observes the same overflow and halts through `refuse_corrupt`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_overflowing_parent_halts_the_writer_on_its_own_observation() {
+    let path = tmp("pipeline-overflow");
+    let chain = bare_chain(4);
+    let trace = Arc::new(trace_of(&chain, false));
+    let first = corpus_of(&chain[..3]);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&first)).expect("open");
+    run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        Arc::clone(&trace),
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the first three blocks replay");
+    plant_work(&path, h(2), u128::MAX);
+
+    let rest = corpus_from(h(3), &chain[3..]);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&rest)).expect("open");
+    let err = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect_err("the writer observes the overflow");
+    match err {
+        PipelineFault::Connector(RunFault::Store(StoreError::InvariantViolated(
+            StoreInvariant::FoldOverflow { cell },
+        ))) => assert_eq!(cell, "block_info.cumulative_difficulty"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        tip_of(&path).map(|t| t.0),
+        Some(h(2)),
+        "block 3 did not land"
+    );
+    cleanup(&path);
+}
+
+/// CEN-D6 on the claim itself, with another block behind it. `N + 1`
+/// blocks six target solvetimes apart, each recording one unit of work,
+/// make LWMA-1 derive zero for the next block (the rules crate's
+/// `cen_d6_a_slow_window_of_minimal_work_derives_zero_and_refuses_the_block`
+/// window). The sequencer emits that refusal as block `N + 1`'s verdict
+/// without forming it. It reads nothing more, so block `N + 2` — whose
+/// claim would need the unformed block's header — never asks the store for
+/// it, and the refusal reaches the writer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_zero_derived_target_is_refused_and_the_next_extend_does_not_strand_it() {
+    let path = tmp("pipeline-d6-claim");
+    let n = shekyl_difficulty::N;
+    let n_us = usize::try_from(n).expect("N is small");
+    let spacing = 6 * shekyl_difficulty::T_SECONDS;
+    // Ends before the mock clock, so CEN-C1 admits every block.
+    let start = MockSubstrate::CLOCK.to_raw() - (n + 4) * spacing;
+    let mut growing = crate::test_support::Growing::new();
+    for _ in 0..n + 3 {
+        growing.extend_with(Vec::new(), |root, height, previous, txs, reward| {
+            let mut block = block_with_nonce(root, height, previous, txs, reward, 7);
+            block.header.timestamp = start + height * spacing;
+            block
+        });
+    }
+    let chain = growing.finish();
+    let trace = Arc::new(trace_of(&chain, false));
+    let first = corpus_of(&chain[..=n_us]);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&first)).expect("open");
+    run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        Arc::clone(&trace),
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the first N + 1 blocks replay");
+    // One unit of work per block: a conforming window (SI-10 holds), slow.
+    for height in 0..=n {
+        plant_work(&path, h(height), u128::from(height) + 1);
+    }
+
+    let rest = corpus_from(h(n + 1), &chain[n_us + 1..]);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&rest)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("a refusal is a verdict, not a fault");
+    let (at, refused) = report.refused.expect("block N + 1 is refused");
+    assert_eq!(at, h(n + 1));
+    assert_eq!(refused.rule, CenRow::D6);
+    assert_eq!(refused.locus, Locus::Block);
+    assert_eq!(
+        tip_of(&path).map(|t| t.0),
+        Some(h(n)),
+        "nothing past N landed"
+    );
+    cleanup(&path);
+}
+
+/// `ObserveTarget` judges only the height the store connects at next. A
+/// height above it is a driver defect (`HeightClaim`) and halts nothing:
+/// the writer cannot see that window, and an unseen height is not a hole.
+/// At its own next height over a consistent store it replies `Ok`, and the
+/// writer stays up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_writer_observes_a_target_only_at_its_own_next_height() {
+    let path = tmp("connector-observe-target");
+    let chain = bare_chain(3);
+    let trace = Arc::new(trace_of(&chain, false));
+    let corpus = corpus_of(&chain);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&corpus)).expect("open");
+    run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("three blocks replay");
+    let joined = JoinedConnector::spawn(ConnectorArgs {
+        store: open_store(&path).into(),
+        rules: GENESIS_RULES,
+    });
+    let ahead = joined
+        .actor
+        .ask(crate::connector::ObserveTarget { height: h(5) })
+        .await
+        .expect_err("a height past the store's next is refused");
+    assert!(
+        matches!(
+            ahead,
+            SendError::HandlerError(RunFault::HeightClaim { claimed, connecting })
+                if claimed == h(5) && connecting == h(3)
+        ),
+        "{ahead:?}"
+    );
+    joined
+        .actor
+        .ask(crate::connector::ObserveTarget { height: h(3) })
+        .await
+        .expect("a consistent window at the store's next height");
+    joined.actor.ask(Digest).await.expect("the writer is up");
+    joined.stop_and_join().await;
     cleanup(&path);
 }
 
@@ -614,76 +991,32 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
     // RD-Q13: Extend 0, 1, 2; Rewind { to: 1 }; Extend 2' (another nonce);
     // Extend 3 on 2'. The rewind is a barrier — 2' is formed only after the
     // pop committed — and the fork's blocks chain onto the rewound tip.
-    // Heights are relative to CEN-I11's first spend height `f`: main runs
+    // Heights are relative to the first spend height `f`: main runs
     // through `f + 1`, the rewind is to `f`, and the fork is `(f + 1)'` and
-    // `f + 2` — every block that lists a spend sits where consensus admits
-    // one, and each fork spend is anchored on the fork's own chain.
+    // `f + 2` — every block that lists a spend sits where a coinbase has
+    // matured for it. The popped block `f + 1` spent block 1's coinbase;
+    // the fork's `(f + 1)'` spends it again at the fork's fee (the pop
+    // un-spent it — `reorg_of` docs), and `f + 2` spends block 2's.
     let path = tmp("pipeline-rewind");
     let f = FIRST_SPEND_HEIGHT;
-    let main = chain(f + 2);
-    let main_hashes: Vec<BlockHash> = main.iter().map(|(b, _)| b.hash()).collect();
-    let fork_spend = |hashes: &[BlockHash], height: u64| {
-        anchor(hashes, height, spend(key_image(Family::Fork, height)))
-    };
-    let mut fork_hashes = main_hashes[..=at(f)].to_vec();
-    // The fork's tree is the main chain's through `f`, then its own.
-    let mut fork_tree = GrownTree::over(&main[..=at(f)]);
-    let fork_a_spend = fork_spend(&fork_hashes, f + 1);
-    let root_a = fork_tree.root_going_into(f + 1);
-    let fork_a = block_with_nonce(
-        root_a,
-        f + 1,
-        main_hashes[at(f)],
-        core::slice::from_ref(&fork_a_spend),
-        reward_for(
-            &fork_tree,
-            root_a,
-            f + 1,
-            main_hashes[at(f)],
-            core::slice::from_ref(&fork_a_spend),
-        ),
-        99,
-    );
+    let r = reorg(f + 2, f, 2);
+    let main_hashes: Vec<BlockHash> = r.main.iter().map(|(b, _)| b.hash()).collect();
+    let (fork_a, fork_b) = (&r.after[at(f + 1)].0, &r.after[at(f + 2)].0);
     assert_ne!(fork_a.hash(), main_hashes[at(f + 1)]);
-    fork_hashes.push(fork_a.hash());
-    fork_tree.push(&fork_a, core::slice::from_ref(&fork_a_spend));
-    let fork_b_spend = fork_spend(&fork_hashes, f + 2);
-    let root_b = fork_tree.root_going_into(f + 2);
-    let fork_b = block_with_nonce(
-        root_b,
-        f + 2,
-        fork_a.hash(),
-        core::slice::from_ref(&fork_b_spend),
-        reward_for(
-            &fork_tree,
-            root_b,
-            f + 2,
-            fork_a.hash(),
-            core::slice::from_ref(&fork_b_spend),
-        ),
-        7,
-    );
     // Facts for every height (the fork reuses height `f + 1`'s facts: same
-    // root_after by construction). The fork spends its own family's key
-    // images — reusing the main chain's would be the double spend CEN-I7
-    // refuses.
-    let mut trace_chain: Vec<_> = main[..=at(f)].to_vec();
-    trace_chain.push((fork_a.clone(), vec![fork_a_spend.clone()]));
-    trace_chain.push((fork_b.clone(), vec![fork_b_spend.clone()]));
-    let trace = Arc::new(trace_of(&trace_chain, true));
-    let mut events: Vec<IngestEvent> = main
+    // root_after by construction).
+    let trace = Arc::new(trace_of(&r.after, true));
+    let mut events: Vec<IngestEvent> = r
+        .main
         .iter()
         .map(|(b, txs)| IngestEvent::Extend(Box::new(candidate(b, txs))))
         .collect();
     events.push(IngestEvent::Rewind { to: h(f) });
-    events.push(IngestEvent::Extend(Box::new(candidate(
-        &fork_a,
-        &[fork_a_spend],
-    ))));
-    events.push(IngestEvent::Extend(Box::new(candidate(
-        &fork_b,
-        &[fork_b_spend],
-    ))));
+    events.extend(
+        r.after[at(f + 1)..]
+            .iter()
+            .map(|(b, txs)| IngestEvent::Extend(Box::new(candidate(b, txs)))),
+    );
     let mut source = Scripted::new(events);
     let report = run(
         &mut source,
@@ -696,6 +1029,7 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
     )
     .await
     .expect("the scripted reorg replays");
+    // Main's tip was `f + 1`; the rewind is to `f`: one block popped.
     assert_eq!(report.popped(), 1);
     let connected: Vec<(u64, BlockHash)> = report
         .connected
@@ -714,7 +1048,7 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
     // fork's tip).
     let Checkpoint { ours, theirs, .. } = report.checkpoint.expect("covered-tip checkpoint");
     assert_eq!(ours, theirs);
-    assert_eq!(ours, expected_state(&trace_chain));
+    assert_eq!(ours, expected_state(&r.after));
     assert_eq!(tip_of(&path), Some((h(f + 2), fork_b.hash())));
     cleanup(&path);
 }
@@ -726,10 +1060,14 @@ async fn a_rewind_across_a_seed_epoch_step_claims_the_seed_from_the_store() {
     // then forms 2112' whose seed height is 0 — a height the ledger no
     // longer holds and the store does. A depth-two reorg at every epoch
     // rollover is routine on a live chain; this run must not end with
-    // SeedUnknown. Main 0..=2113, rewind to 2111, fork 2112'..=2114'.
+    // SeedUnknown. Main 0..=2113, rewind to 2111, fork 2112'..=2114'. The
+    // subject is the seed claim, not the bodies: the main chain lists
+    // nothing (two thousand real spends would prove nothing more about the
+    // ledger); the fork's three blocks spend the coinbases matured for
+    // them, as any fork's do.
     let path = tmp("pipeline-rewind-epoch");
     let boundary = SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG + 1; // 2113
-    let r = reorg(boundary + 1, boundary - 2, 3);
+    let r = reorg_of(bare_chain(boundary + 1), boundary - 2, 3);
     let trace = Arc::new(trace_of(&r.after, true));
     let bytes = corpus_of_reorg(&r);
     let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
@@ -743,19 +1081,23 @@ async fn a_rewind_across_a_seed_epoch_step_claims_the_seed_from_the_store() {
         PipelineConfig {
             window: PipelineConfig::DEFAULT_WINDOW,
             hashers: nz(4),
+            digest_each_commit: false,
         },
     )
     .await
     .expect("the rewind across the epoch step replays");
     assert_eq!(report.switches.len(), 1);
+    // Main's tip was `boundary`; the rewind is to `boundary − 2`: two popped.
     assert_eq!(
         (report.switches[0].to, report.switches[0].popped),
         (h(boundary - 2), 2)
     );
+    // Every main block connected once, then the fork's three.
     assert_eq!(
         report.connected.len(),
         usize::try_from(boundary + 1 + 3).expect("small")
     );
+    // The fork's tip: `boundary − 2 + 3`.
     let Checkpoint { at, ours, theirs } = report.checkpoint.expect("covered-tip checkpoint");
     assert_eq!(at, h(boundary + 1));
     assert_eq!(ours, theirs, "the fork's tip matches its own trace");
@@ -770,17 +1112,36 @@ async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
     // compared against the fork's rows; once the rewind pops them, those
     // results are not comparisons against anything and are retracted, and
     // the re-extension compares the canonical blocks afresh (DRS-E3 CTW-5,
-    // #878 review). Main 0..=34 with two-output spends; rewind to 21; fork
-    // 22..=35 with three-output spends, so from 32 on (block 22's outputs
-    // maturing) the two trees differ — the premise is asserted, not assumed.
+    // #878 review).
+    //
+    // The shape, from the chain's own law. The first block that lists a
+    // spend is `f`; the rewind is to `f − 1`, so the first fork block
+    // `f'` spends the coinbase main's `f` spent, at the fork's fee: a
+    // different body, different outputs. Those outputs enter the tree
+    // when they mature — `tx_spendable_age` blocks on, at `f + age` — so
+    // the two trees agree through `f + age − 1` and differ from `f + age`.
+    // Main runs one block past that divergence (`main_len = f + age + 1`)
+    // so a retained comparison at a popped height would have been one the
+    // trees disagree on; the fork reaches one block past main's tip.
     let path = tmp("pipeline-rewind-roots");
-    let r = reorg(35, 21, 14);
+    let f = FIRST_SPEND_HEIGHT;
+    let to = f - 1;
+    let age = RuleSet::GENESIS.tx_spendable_age().to_raw();
+    let diverges_at = f + age;
+    let main_len = diverges_at + 1;
+    let fork_len = age + 2;
+    let r = reorg(main_len, to, fork_len);
     let main_tree = GrownTree::over(&r.main);
     let fork_tree = GrownTree::over(&r.after);
+    assert_eq!(
+        main_tree.root_after(h(diverges_at - 1)),
+        fork_tree.root_after(h(diverges_at - 1)),
+        "below the fork's first matured outputs the two trees are one"
+    );
     assert_ne!(
-        main_tree.root_after(33),
-        fork_tree.root_after(33),
-        "the fixture's fork grows a different tree past the fork point"
+        main_tree.root_after(h(diverges_at)),
+        fork_tree.root_after(h(diverges_at)),
+        "the fixture's fork grows a different tree once its outputs mature"
     );
     let trace = Arc::new(trace_of(&r.after, true));
     let bytes = corpus_of_reorg(&r);
@@ -796,9 +1157,12 @@ async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
     )
     .await
     .expect("the reorg replays");
-    assert_eq!(report.popped(), 13, "22..=34 popped");
-    // 36 canonical heights compared — not 36 + 13: the popped heights'
-    // results are gone, the re-extended ones replaced them.
+    // Main's tip was `f + age`; the rewind is to `f − 1`: `f..=f + age`
+    // popped, `age + 1` blocks.
+    assert_eq!(report.popped(), age + 1, "{f}..={diverges_at} popped");
+    // Every canonical height compared once — not that plus the popped:
+    // the popped heights' results are gone, the re-extended ones
+    // replaced them.
     assert_eq!(report.roots.compared(), r.after.len() as u64);
     assert_eq!(report.roots.diverged().count(), 0, "{:?}", report.roots);
     // The weights oracle (CEN-G6/G6b) keeps the same discipline: the
@@ -815,7 +1179,7 @@ async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
         report.emission
     );
     assert_eq!(report.disagreements().count(), 0);
-    assert!(report.observations().roots.diverged_at.is_empty());
+    assert_eq!(report.roots.diverged().count(), 0);
     let Checkpoint { ours, theirs, .. } = report.checkpoint.expect("covered-tip checkpoint");
     assert_eq!(ours, theirs);
     cleanup(&path);
@@ -823,7 +1187,8 @@ async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
-    // RD-Q7 through the pipeline: `--fixed-difficulty 7` → RuleSet::fakechain(7)
+    // RD-Q7 through the pipeline: `--fixed-difficulty 7` →
+    // `RuleSet::GENESIS.with_levers(Some(7), CappedEpoch::PRODUCTION)`
     // in force at every height, formed and validated under the same set,
     // and connect accepts it (RD-F13's repair) while the CEN-B3 belt lands
     // GENESIS's id. Cumulative work climbs by the fixed target per block.
@@ -832,10 +1197,10 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
     let trace = Arc::new(trace_of(&chain, false));
     let bytes = corpus_of(&chain);
     let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
-    let rules = ChainRules::Regtest {
-        fixed_difficulty: std::num::NonZeroU128::new(7),
-        schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
-    };
+    let rules = ChainRules::harness_regtest(
+        std::num::NonZeroU128::new(7),
+        shekyl_chain_rules::CappedEpoch::PRODUCTION,
+    );
     let report = run(
         &mut source,
         substrate(),
@@ -864,93 +1229,18 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_replayed_run_grades_its_exercised_rows_correct_with_every_component_real() {
-    // RD-Q6 through the pipeline: the observations the run emits, graded
-    // against a register in the extractor's shape. Every row the landed
-    // rules exercised grades AcceptedAsCorrect on the verdict clause; the
-    // producers of passed-through facts are Borrowed on the component clause
-    // whatever their verdict; the digest matched, so the rest are real.
-    use crate::grader::{
-        grade_run, ComponentEvidence, GradedAcceptance, Register, VerdictEvidence,
-    };
-    let path = tmp("pipeline-grade");
-    let chain = chain(4);
-    let trace = Arc::new(trace_of(&chain, true));
-    let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
-    let report = run(
-        &mut source,
-        substrate(),
-        Arc::new(Metrics::new()),
-        GENESIS_RULES,
-        open_store(&path),
-        trace,
-        PipelineConfig::default(),
-    )
-    .await
-    .expect("replays");
-    let obs = report.observations();
-    assert!(!obs.exercised.is_empty(), "the landed rules ran");
-    assert_eq!(obs.digest_identical, Some(true));
-
-    // A register naming every exercised row CHECKED-CONFORMANT, plus the
-    // root producers as the register has them.
-    let mut rows: Vec<String> = obs
-        .exercised
-        .iter()
-        .map(|id| format!("{{\"id\": \"{id}\", \"state\": \"CHECKED-CONFORMANT\"}}"))
-        .collect();
-    for extra in ["CEN-G6", "CEN-I12"] {
-        if !obs.exercised.contains(extra) {
-            rows.push(format!(
-                "{{\"id\": \"{extra}\", \"state\": \"CHECKED-CONFORMANT\"}}"
-            ));
-        }
-    }
-    let json = format!(
-        "{{\"schema_version\": \"shekyl_e2_register_v1\", \"rows\": [{}], \"unrecorded_ratified\": []}}",
-        rows.join(",")
-    );
-    let register = Register::from_json(&json).expect("register");
-    let graded = grade_run(&register, &obs);
-    assert!(graded.passes(), "{:?}", graded.unadjudicated);
-    assert!(graded.refusal.is_none());
-    for row in &graded.rows {
-        if obs.exercised.contains(row.id.as_str()) {
-            assert_eq!(
-                row.verdict,
-                VerdictEvidence::Exercised { agreed: true },
-                "{}",
-                row.id
-            );
-            assert_eq!(
-                row.verdict_acceptance,
-                Some(GradedAcceptance::AcceptedAsCorrect),
-                "{}",
-                row.id
-            );
-        }
-        // No row borrows since wave B: every component is the replay's own.
-        assert_eq!(
-            row.component,
-            ComponentEvidence::Real { identical: true },
-            "{}",
-            row.id
-        );
-    }
-    assert_eq!(graded.derived_and_conformant, obs.exercised.len());
-    cleanup(&path);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_the_switch() {
-    // §3.8 / RD-Q13 through the real Source: main 0..=4, rewind to 1,
-    // fork 2'..=5'. The digest after the switch is the state at 1 exactly as
-    // it was when 1 was first the tip (pop symmetry through the actor); the
-    // trace checkpoint at the fork's tip (5, beyond every pre-switch tip)
+    // §3.8 / RD-Q13 through the real Source, over blocks that spend. With
+    // `f` the first spend height: main `0..=f + 3`, rewind to `f`, fork
+    // `(f + 1)'..=(f + 4)'` — the popped blocks each spent a coinbase, and
+    // the fork's re-spend them at its fee. The digest after the switch is
+    // the state at `f` exactly as it was when `f` was first the tip (pop
+    // symmetry through the actor, spent keys included); the trace
+    // checkpoint at the fork's tip (`f + 4`, beyond every pre-switch tip)
     // MATCHes the fork's state.
     let path = tmp("pipeline-reorg-family");
-    let r = reorg(5, 1, 4);
+    let f = FIRST_SPEND_HEIGHT;
+    let r = reorg(f + 4, f, 4);
     let trace = Arc::new(trace_of(&r.after, true));
     let bytes = corpus_of_reorg(&r);
     let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
@@ -965,33 +1255,55 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
     )
     .await
     .expect("the reorg replays");
-    assert_eq!(report.popped(), 3, "blocks 2, 3, 4 popped");
+    // Main's tip was `f + 3`; the rewind is to `f`: `f + 1..=f + 3` popped.
+    assert_eq!(report.popped(), 3, "blocks {}..={} popped", f + 1, f + 3);
     assert_eq!(report.switches.len(), 1);
     let sw = &report.switches[0];
-    assert_eq!((sw.to, sw.popped), (h(1), 3));
+    assert_eq!((sw.to, sw.popped), (h(f), 3));
     assert_eq!(
         sw.digest,
-        expected_state(&r.main[..=1]),
-        "pop restored the state at 1"
+        expected_state(&r.main[..=at(f)]),
+        "pop restored the state at {f}"
     );
+    // Every main block once, then the fork's four from `f + 1`.
     let connected: Vec<u64> = report.connected.iter().map(|(hh, _)| hh.to_raw()).collect();
-    assert_eq!(connected, [0, 1, 2, 3, 4, 2, 3, 4, 5]);
+    let expected: Vec<u64> = (0..=f + 3).chain(f + 1..=f + 4).collect();
+    assert_eq!(connected, expected);
     let Checkpoint { at, ours, theirs } = report.checkpoint.expect("covered-tip checkpoint");
-    assert_eq!(at, h(5));
+    assert_eq!(at, h(f + 4));
     assert_eq!(ours, theirs, "the fork's tip matches its own trace");
     assert_eq!(ours, expected_state(&r.after));
-    assert_eq!(report.observations().digest_identical, Some(true));
+    // The checkpoint's other encoding (ARW-25): the redb archival rows
+    // against the trace's `0x04` record, at the same height, row for row.
+    let archival = report
+        .archival
+        .as_ref()
+        .expect("archival rows at the checkpoint");
+    assert_eq!(archival.at, h(f + 4));
+    assert!(
+        archival.identical(),
+        "{:?}",
+        archival.diff.diverged().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        archival.diff.rows_equal(),
+        u64::try_from(
+            GrownTree::over(&r.after)
+                .archival_snapshot_after(h(f + 4))
+                .row_count()
+        )
+        .expect("fits"),
+        "every row the fixture accrued was compared"
+    );
     cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
+async fn a_wrong_checkpoint_goes_red_and_the_run_names_it() {
     // The comparator's negative control on the expectation side (rule 47):
-    // a trace whose checkpoint is anything but the chain's state DIVERGEs,
-    // the report names the disagreement, and the grade fails every
-    // CHECKED-CONFORMANT row on the component clause. The store side's
-    // controls — one mutation per digested family — follow.
-    use crate::grader::{grade_run, Clause, GradedAcceptance, Register};
+    // a trace whose checkpoint is anything but the chain's state DIVERGEs
+    // and the report names the disagreement. The store side's controls —
+    // one mutation per digested family — follow.
     use crate::trace::{Trace, TraceWriter};
     let path = tmp("pipeline-negative-control");
     let chain = chain(3);
@@ -1003,15 +1315,17 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
                 h(hh),
                 &crate::test_support::facts_at(
                     hh,
-                    tree.root_after(hh),
-                    tree.weights_of(hh),
-                    tree.median_for(hh),
-                    tree.coins_generated_at(hh),
+                    tree.root_after(h(hh)),
+                    tree.weights_of(h(hh)),
+                    tree.median_for(h(hh)),
+                    tree.coins_generated_at(h(hh)),
                 ),
             )
             .expect("facts");
         }
         w.push_checkpoint(&[0xEE; 32]).expect("a wrong checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(h(2)))
+            .expect("the true archival rows: this control is the digest's alone");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -1026,30 +1340,12 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
         PipelineConfig::default(),
     )
     .await
-    .expect("the run itself completes; the verdict is the grader's");
+    .expect("the run itself completes; the disagreement is in the report");
     let checkpoint = report.checkpoint.expect("covered-tip checkpoint");
     assert!(!checkpoint.identical(), "DIVERGE");
     assert_eq!(
         report.disagreements().collect::<Vec<_>>(),
         vec![crate::pipeline::Disagreement::Diverged { at: h(2) }]
-    );
-    let obs = report.observations();
-    assert_eq!(obs.digest_identical, Some(false));
-    let register = Register::from_json(
-        r#"{"schema_version":"shekyl_e2_register_v1","rows":[{"id":"CEN-A1","state":"CHECKED-CONFORMANT"}],"unrecorded_ratified":[]}"#,
-    )
-    .expect("register");
-    let graded = grade_run(&register, &obs);
-    assert!(!graded.passes());
-    assert_eq!(
-        (
-            graded.unadjudicated[0].clause,
-            graded.unadjudicated[0].acceptance
-        ),
-        (
-            Clause::Component,
-            GradedAcceptance::FailedConformantDiffered
-        )
     );
     cleanup(&path);
 }
@@ -1060,9 +1356,8 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
     // whose recorded `root_after` at one interior height is not what the
     // validator derives DIVERGEs at that height — with the checkpoint
     // still matching, because the digest carries only the *live* root —
-    // and the observation folds it in so a graded run does not pass. This
-    // is exactly the disagreement the covered-tip checkpoint cannot see.
-    use crate::grader::{grade_run, Register};
+    // and the report names it. This is exactly the disagreement the
+    // covered-tip checkpoint cannot see.
     use crate::pipeline::Disagreement;
     use crate::trace::{Trace, TraceWriter};
     use shekyl_types::CurveTreeRoot;
@@ -1073,21 +1368,27 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
     let trace = {
         let mut w = TraceWriter::new(Vec::new()).expect("header");
         for hh in 0..3u64 {
-            let root = if hh == 1 { wrong } else { tree.root_after(hh) };
+            let root = if hh == 1 {
+                wrong
+            } else {
+                tree.root_after(h(hh))
+            };
             w.push_facts(
                 h(hh),
                 &crate::test_support::facts_at(
                     hh,
                     root,
-                    tree.weights_of(hh),
-                    tree.median_for(hh),
-                    tree.coins_generated_at(hh),
+                    tree.weights_of(h(hh)),
+                    tree.median_for(h(hh)),
+                    tree.coins_generated_at(h(hh)),
                 ),
             )
             .expect("facts");
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(h(2)))
+            .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -1102,7 +1403,7 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
         PipelineConfig::default(),
     )
     .await
-    .expect("the run itself completes; the verdict is the grader's");
+    .expect("the run itself completes; the disagreement is in the report");
     assert!(
         report.checkpoint.expect("covered tip").identical(),
         "the tip digest agrees: the interior root is invisible to it"
@@ -1116,32 +1417,13 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
         report.roots.diverged().copied().collect::<Vec<_>>(),
         vec![crate::pipeline::RootDivergence {
             at: h(1),
-            ours: tree.root_after(1),
+            ours: tree.root_after(h(1)),
             theirs: wrong,
         }]
     );
     assert_eq!(
         report.disagreements().collect::<Vec<_>>(),
         vec![Disagreement::RootDiverged { at: h(1) }]
-    );
-    let obs = report.observations();
-    assert_eq!(
-        obs.digest_identical,
-        Some(true),
-        "the checkpoint matched; the interior root is the oracle's fact"
-    );
-    assert_eq!(obs.roots.compared, 3);
-    assert_eq!(obs.roots.diverged_at, vec![h(1)]);
-    let register = Register::from_json(
-        r#"{"schema_version":"shekyl_e2_register_v1","rows":[{"id":"CEN-B5","state":"CHECKED-CONFORMANT"}],"unrecorded_ratified":[]}"#,
-    )
-    .expect("register");
-    let graded = grade_run(&register, &obs);
-    assert!(!graded.passes(), "the oracle fails the graded run");
-    assert_eq!(graded.root_oracle.diverged_at, vec![h(1)]);
-    assert!(
-        graded.unadjudicated.is_empty(),
-        "the digest clause stays agreed"
     );
     cleanup(&path);
 }
@@ -1160,25 +1442,31 @@ async fn a_wrong_recorded_median_at_one_height_goes_red_and_names_the_height() {
     let path = tmp("pipeline-weights-oracle-control");
     let chain = chain(3);
     let tree = GrownTree::over(&chain);
-    let wrong = LongTermWeight::from_raw(tree.median_for(1).to_raw() + 1);
+    let wrong = LongTermWeight::from_raw(tree.median_for(h(1)).to_raw() + 1);
     let trace = {
         let mut w = TraceWriter::new(Vec::new()).expect("header");
         for hh in 0..3u64 {
-            let median = if hh == 1 { wrong } else { tree.median_for(hh) };
+            let median = if hh == 1 {
+                wrong
+            } else {
+                tree.median_for(h(hh))
+            };
             w.push_facts(
                 h(hh),
                 &crate::test_support::facts_at(
                     hh,
-                    tree.root_after(hh),
-                    tree.weights_of(hh),
+                    tree.root_after(h(hh)),
+                    tree.weights_of(h(hh)),
                     median,
-                    tree.coins_generated_at(hh),
+                    tree.coins_generated_at(h(hh)),
                 ),
             )
             .expect("facts");
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(h(2)))
+            .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -1204,18 +1492,18 @@ async fn a_wrong_recorded_median_at_one_height_goes_red_and_names_the_height() {
         3,
         "every connected height compared"
     );
-    let ours = tree.weights_of(1);
+    let ours = tree.weights_of(h(1));
     assert_eq!(
         report.weights.diverged().copied().collect::<Vec<_>>(),
         vec![WeightDivergence {
             at: h(1),
             ours: shekyl_chain_rules::Weights {
                 medians: shekyl_chain_rules::EffectiveMedian {
-                    long_term_effective_median: tree.median_for(1),
+                    long_term_effective_median: tree.median_for(h(1)),
                     // A young, light chain: the effective median is the
                     // zone, as the long-term one is.
                     effective_median: shekyl_types::BlockWeight::from_raw(
-                        tree.median_for(1).to_raw()
+                        tree.median_for(h(1)).to_raw()
                     ),
                 },
                 weight: ours.weight,
@@ -1248,22 +1536,22 @@ async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_heigh
     let path = tmp("pipeline-emission-oracle-control");
     let chain = chain(3);
     let tree = GrownTree::over(&chain);
-    let wrong = AtomicUnits::from_raw(tree.coins_generated_at(2).to_raw() + 1);
+    let wrong = AtomicUnits::from_raw(tree.coins_generated_at(h(2)).to_raw() + 1);
     let trace = {
         let mut w = TraceWriter::new(Vec::new()).expect("header");
         for hh in 0..3u64 {
             let coins = if hh == 2 {
                 wrong
             } else {
-                tree.coins_generated_at(hh)
+                tree.coins_generated_at(h(hh))
             };
             w.push_facts(
                 h(hh),
                 &crate::test_support::facts_at(
                     hh,
-                    tree.root_after(hh),
-                    tree.weights_of(hh),
-                    tree.median_for(hh),
+                    tree.root_after(h(hh)),
+                    tree.weights_of(h(hh)),
+                    tree.median_for(h(hh)),
                     coins,
                 ),
             )
@@ -1271,6 +1559,8 @@ async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_heigh
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(h(2)))
+            .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -1298,11 +1588,14 @@ async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_heigh
     assert_eq!(diverged.len(), 1);
     assert_eq!(diverged[0].at, h(2));
     assert_eq!(diverged[0].theirs.coins_generated, wrong);
-    assert_eq!(diverged[0].ours.coins_generated, tree.coins_generated_at(2));
+    assert_eq!(
+        diverged[0].ours.coins_generated,
+        tree.coins_generated_at(h(2))
+    );
     // The verdict's chain: the paid reward is what advanced the parent.
     assert_eq!(
         diverged[0].ours.coins_generated.to_raw(),
-        tree.coins_generated_at(1).to_raw() + diverged[0].ours.paid.to_raw()
+        tree.coins_generated_at(h(1)).to_raw() + diverged[0].ours.paid.to_raw()
     );
     assert_eq!(
         report.disagreements().collect::<Vec<_>>(),
@@ -1330,10 +1623,10 @@ async fn a_wrong_recorded_burn_at_one_height_goes_red_and_names_the_height() {
         for hh in 0..3u64 {
             let mut facts: Facts = crate::test_support::facts_at(
                 hh,
-                tree.root_after(hh),
-                tree.weights_of(hh),
-                tree.median_for(hh),
-                tree.coins_generated_at(hh),
+                tree.root_after(h(hh)),
+                tree.weights_of(h(hh)),
+                tree.median_for(h(hh)),
+                tree.coins_generated_at(h(hh)),
             );
             if hh == 2 {
                 facts.burned = AtomicUnits::from_raw(1);
@@ -1342,6 +1635,8 @@ async fn a_wrong_recorded_burn_at_one_height_goes_red_and_names_the_height() {
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(h(2)))
+            .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
@@ -1389,9 +1684,12 @@ const CONTROL_LEN: u64 = FIRST_SPEND_HEIGHT + 1;
 /// The control chain's spend height — its tip.
 const CONTROL_SPEND: u64 = FIRST_SPEND_HEIGHT;
 
+/// `mutate` receives the chain beside the transaction: the spent-key
+/// control reads the key image the chain's one spend carries off the chain
+/// itself, not from a fixture table.
 async fn digest_after_replay_and_mutation(
     name: &str,
-    mutate: impl FnOnce(&redb::WriteTransaction),
+    mutate: impl FnOnce(&redb::WriteTransaction, &[(shekyl_wire::Block, Vec<shekyl_wire::Transaction>)]),
 ) -> (crate::trace::Digest, crate::trace::Digest) {
     let path = tmp(name);
     let chain = chain(CONTROL_LEN);
@@ -1414,7 +1712,7 @@ async fn digest_after_replay_and_mutation(
     {
         let db = redb::Database::open(&path).expect("open raw");
         let txn = db.begin_write().expect("write");
-        mutate(&txn);
+        mutate(&txn, &chain);
         txn.commit().expect("commit");
     }
     let reopened = open_store(&path);
@@ -1430,7 +1728,7 @@ async fn digest_after_replay_and_mutation(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_flipped_block_hash_row_moves_the_digest_off_the_checkpoint() {
-    let (expected, after) = digest_after_replay_and_mutation("control-block-info", |txn| {
+    let (expected, after) = digest_after_replay_and_mutation("control-block-info", |txn, _| {
         let mut infos = txn.open_table(BLOCK_INFO).expect("t");
         let mut row: BlockInfo = infos
             .get(2u64)
@@ -1452,18 +1750,25 @@ async fn a_flipped_block_hash_row_moves_the_digest_off_the_checkpoint() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_dropped_spent_key_row_moves_the_digest_off_the_checkpoint() {
-    let (expected, after) = digest_after_replay_and_mutation("control-spent-keys", |txn| {
+    let (expected, after) = digest_after_replay_and_mutation("control-spent-keys", |txn, chain| {
         let mut spent = txn.open_table(SPENT_KEYS).expect("t");
+        // The chain's one spend is at its tip, `CONTROL_SPEND`: the key
+        // image its body carries is the row to drop.
+        let spent_keys = spent_keys_of(chain);
+        let [spent_at_tip] = spent_keys.as_slice() else {
+            panic!(
+                "the control chain spends once, at {CONTROL_SPEND}; found {}",
+                spent_keys.len()
+            );
+        };
         let removed = spent
-            .remove(LmdbHashKey::from_bytes(key_image(
-                Family::Main,
-                CONTROL_SPEND,
-            )))
+            .remove(LmdbHashKey::from_bytes(*spent_at_tip))
             .expect("remove")
             .is_some();
         assert!(removed, "the row was there to drop");
-        // And a foreign member the chain never spent, so the set differs
-        // even for a comparator that counted rows.
+        // And a foreign member the chain never spent (a fixture point, no
+        // output's image), so the set differs even for a comparator that
+        // counted rows.
         spent
             .insert(
                 LmdbHashKey::from_bytes(key_image(Family::Fork, CONTROL_SPEND)),
@@ -1477,7 +1782,7 @@ async fn a_dropped_spent_key_row_moves_the_digest_off_the_checkpoint() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_rewritten_live_root_row_moves_the_digest_off_the_checkpoint() {
-    let (expected, after) = digest_after_replay_and_mutation("control-live-root", |txn| {
+    let (expected, after) = digest_after_replay_and_mutation("control-live-root", |txn, _| {
         let mut roots = txn.open_table(CURVE_TREE_ROOTS).expect("t");
         // The live root is the row at tip + 1.
         roots

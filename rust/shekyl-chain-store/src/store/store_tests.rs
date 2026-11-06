@@ -86,6 +86,20 @@ pub(super) fn probe_val(store: &ChainStore, k: &str) -> Option<u64> {
     table.get(k).expect("get").map(|g| g.value())
 }
 
+/// Regtest's row's permit for the serve-credit replay write (NI-R6).
+pub(super) fn inject_permit() -> shekyl_network::Permit {
+    shekyl_network::Network::Regtest
+        .permit(shekyl_network::Lever::InjectServeCredit)
+        .expect("regtest's row permits it")
+}
+
+/// Regtest's row's permit for the issued-draws replay write (NI-R6).
+pub(super) fn issue_permit() -> shekyl_network::Permit {
+    shekyl_network::Network::Regtest
+        .permit(shekyl_network::Lever::IssueDraws)
+        .expect("regtest's row permits it")
+}
+
 pub(super) fn tmp(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
@@ -125,9 +139,9 @@ fn an_empty_stub_is_refused_at_open() {
 fn declared_commit_policy_constants_are_pinned() {
     // A4: explicit, not by omission. THIS BITES AGAINST: lowering DURABILITY,
     // turning TWO_PHASE_COMMIT off, or shrinking CACHE_SIZE in the consts.
-    // IT DOES NOT COVER: the consts being APPLIED. redb 4.1.0 has no getter
-    // for durability or two-phase commit (only setters, transactions.rs:1269
-    // and :1326), so nothing can read the applied value back; an earlier
+    // IT DOES NOT COVER: the consts being APPLIED. redb 4.4.0 has no getter
+    // for durability or two-phase commit (only setters, transactions.rs:1504
+    // and :1573), so nothing can read the applied value back; an earlier
     // draft copied the consts into the batch and asserted the copy, which
     // compared each const with itself. Deleting the set_* calls in arm_write
     // leaves this green. Application is proven only by `write` arming its
@@ -579,22 +593,175 @@ fn open_read_only_refuses_a_store_that_does_not_exist() {
 
 #[test]
 fn an_existing_file_that_is_not_a_store_is_refused_untouched() {
-    // The reopen arm must never initialize: an empty file at the path --
-    // left by another process, or the shape a path removed between
-    // `create_new`'s AlreadyExists and the open would take under an
-    // open-or-create -- is refused as-is. Were the arm `create`, redb would
-    // turn it into a headerless database, `verify` would refuse that, and
-    // the file would stay behind for every later open to refuse.
+    // A file at the path with bytes that are not a store, and not a
+    // creation the engine started (its magic slot is written), is refused
+    // as-is and never initialized.
     let path = tmp("not-a-store");
-    std::fs::write(&path, b"").expect("empty file");
+    let bytes: &[u8] = b"this is not a redb file, and it is somebody's";
+    std::fs::write(&path, bytes).expect("foreign file");
     assert!(matches!(
         ChainStore::with_apply_policy(&path, ApplyPolicy::Full, EPOCH),
         Err(StoreError::Engine(EngineError::Open(_)))
     ));
     assert_eq!(
-        std::fs::metadata(&path).expect("still present").len(),
-        0,
-        "the reopen arm initialized a file it did not create"
+        std::fs::read(&path).expect("still present"),
+        bytes,
+        "the reopen arm touched a file that is not a creation of its own"
     );
     cleanup(&path);
+}
+
+/// The two shapes a power loss leaves before the engine has finished
+/// initializing the file: empty (a cut right after `create_new`) and the
+/// header the engine flushes before its magic (redb writes the magic
+/// last). Each is a creation nothing was committed to: the next open
+/// moves it aside, never deleting it, creates a fresh store, and reports
+/// where it went (`crate::creation`; PB-S2's first replay, 2026-11-01,
+/// found the second shape refusing a node's every later start). Red edit:
+/// drop the `set_aside_unfinished_init` arm from `open_at`.
+#[test]
+fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
+    for (label, bytes) in [
+        ("empty-at-path", Vec::new()),
+        ("magic-unwritten", crate::creation::pre_magic_image()),
+    ] {
+        let path = tmp(label);
+        std::fs::write(&path, &bytes).expect("the unfinished file");
+        let (store, cut) = open_at(
+            &path,
+            ApplyPolicy::Full,
+            production_horizons(),
+            GenesisAdmission::Unpinned,
+        )
+        .unwrap_or_else(|e| panic!("{label}: created: {e:?}"));
+        let Some(CutShort::Uninitialized { to }) = cut else {
+            panic!("{label}: {cut:?}");
+        };
+        assert_eq!(
+            std::fs::read(&to).expect("aside"),
+            bytes,
+            "{label}: kept aside"
+        );
+        assert!(
+            crate::creation::creation_lock_path(&path).is_file(),
+            "{label}: the path lock stays"
+        );
+        drop(store);
+        let (_store, cut) = open_at(
+            &path,
+            ApplyPolicy::Full,
+            production_horizons(),
+            GenesisAdmission::Unpinned,
+        )
+        .unwrap_or_else(|e| panic!("{label}: reopens: {e:?}"));
+        assert!(cut.is_none(), "{label}: an ordinary reopen");
+        cleanup(&path);
+        drop(std::fs::remove_file(&to));
+    }
+}
+
+/// Two opens of one empty file finish it once. The creation lock holds
+/// the second until the first's store exists, so the second is
+/// `DatabaseAlreadyOpen` while that store lives, and a later open is
+/// ordinary. Exactly one aside file, holding the original bytes. Red
+/// edit: drop [`PathGuard`](crate::creation::PathGuard) from `open_at`.
+#[test]
+fn two_openers_of_one_unfinished_file_finish_it_once() {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    let path = tmp("two-openers");
+    std::fs::write(&path, b"").expect("empty");
+    let go = Arc::new(Barrier::new(2));
+    let spawn = |path: std::path::PathBuf, go: Arc<Barrier>| {
+        thread::spawn(move || {
+            go.wait();
+            open_at(
+                &path,
+                ApplyPolicy::Full,
+                production_horizons(),
+                GenesisAdmission::Unpinned,
+            )
+        })
+    };
+    let left = spawn(path.clone(), Arc::clone(&go));
+    let right = spawn(path.clone(), go);
+    let results = [left.join().expect("left"), right.join().expect("right")];
+    let mut finished = 0;
+    let mut busy = 0;
+    let mut aside = None;
+    for result in results {
+        match result {
+            Ok((store, Some(CutShort::Uninitialized { to }))) => {
+                finished += 1;
+                aside = Some(to);
+                drop(store);
+            }
+            Err(StoreError::Engine(EngineError::Open(
+                redb::DatabaseError::DatabaseAlreadyOpen,
+            ))) => busy += 1,
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+    assert_eq!((finished, busy), (1, 1), "one finish, one live writer");
+    let to = aside.expect("the aside");
+    assert_eq!(
+        std::fs::read(&to).expect("aside"),
+        b"",
+        "the original empty file"
+    );
+    let (_store, cut) = open_at(
+        &path,
+        ApplyPolicy::Full,
+        production_horizons(),
+        GenesisAdmission::Unpinned,
+    )
+    .expect("reopen");
+    assert!(cut.is_none(), "the file is a store now");
+    cleanup(&path);
+    drop(std::fs::remove_file(&to));
+}
+
+/// A zero-filled file of the initialization length, and a young store
+/// whose magic was cleared, are the two files a length bound would move
+/// aside. Both stay, byte for byte. Red edit: accept a clear magic slot
+/// at [`ENGINE_INIT_LEN`](crate::creation::ENGINE_INIT_LEN).
+#[test]
+fn a_file_that_only_looks_unfinished_is_refused_untouched() {
+    let zeroed = tmp("zeroed-init");
+    let zeros = vec![0u8; usize::try_from(crate::creation::ENGINE_INIT_LEN).unwrap()];
+    std::fs::write(&zeroed, &zeros).expect("zeros");
+
+    let cleared = tmp("magic-cleared");
+    {
+        let db = redb::Database::create(&cleared).expect("young store");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut table = txn.open_table(PROBE).expect("table");
+            table.insert("k", 1u64).expect("row");
+        }
+        txn.commit().expect("commit");
+    }
+    let mut punched = std::fs::read(&cleared).expect("bytes");
+    assert_eq!(punched.len() as u64, crate::creation::ENGINE_INIT_LEN);
+    punched[..9].fill(0);
+    std::fs::write(&cleared, &punched).expect("cleared magic");
+
+    for (path, bytes) in [(&zeroed, zeros.as_slice()), (&cleared, punched.as_slice())] {
+        assert!(
+            matches!(
+                ChainStore::with_apply_policy(path, ApplyPolicy::Full, EPOCH),
+                Err(StoreError::Engine(EngineError::Open(_)))
+            ),
+            "{}",
+            path.display()
+        );
+        assert_eq!(
+            std::fs::read(path).expect("kept"),
+            bytes,
+            "{}",
+            path.display()
+        );
+        cleanup(path);
+    }
 }

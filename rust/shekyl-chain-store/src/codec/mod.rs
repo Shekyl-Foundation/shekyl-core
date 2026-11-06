@@ -18,7 +18,7 @@
 //!
 //! # The trait is shared; the obligation is not
 //!
-//! [`Canonical`], [`CodecError`], [`exact`] and the four value shapes live
+//! [`Canonical`], [`CodecError`], [`exact`] and the three value shapes live
 //! in `shekyl-store-codec`, which both stores reach, together with the
 //! codecs for types neither store owns — the scalars and the
 //! `shekyl-types` / `shekyl-units` vocabulary. The orphan rule decides
@@ -46,9 +46,11 @@
 //! # The gate
 //!
 //! Every `impl Canonical` in this crate has a committed fixture snapshot
-//! under `rust/shekyl-chain-store/schemas/`, asserted by the
-//! `codec_snapshot` tests in [`snapshot_tests`](self) and paired against
-//! [`SCHEMA_VERSION`] by `.github/workflows/schema-snapshot.yml` — which
+//! under `rust/shekyl-chain-store/schemas/` (the pool file's under
+//! `pool_schemas/`), asserted by the `codec_snapshot` tests in
+//! [`snapshot_tests`](self) and paired against [`SCHEMA_VERSION`] (the
+//! pool file's against its own `POOL_SCHEMA_VERSION`, `SPL-Q8`) by
+//! `.github/workflows/schema-snapshot.yml` — which
 //! also triggers on `rust/shekyl-store-codec/**`, because the moved
 //! codecs' fixtures are still committed here and their bytes are still the
 //! digest's fold input. That is the rule-42 ratchet §11.1(e) recorded as
@@ -56,8 +58,10 @@
 
 mod alt;
 mod archival;
+mod bundle;
 mod chain;
 mod curve;
+mod degraded;
 mod evidence;
 mod pool;
 mod primitives;
@@ -82,28 +86,30 @@ mod pool_tests;
 #[path = "alt_tests.rs"]
 mod alt_tests;
 
-pub use alt::{AltBlock, AltBlockError, AltBlockFacts};
+pub use alt::{AltBlock, AltBlockError, AltBlockFacts, AltBodies};
 pub use archival::{
-    AttestationWitnessBytes, BondRecord, FirstPayingHeight, HeldShard, HeldShards, Holdings,
-    HoldingsError, RMarket, SigmaWorkMilli, SlashLogEntry, SlashedHolding, MAX_BOND_KEY_BYTES,
+    AttestationWitnessBytes, BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest,
+    FirstPayingHeight, HeldShard, HeldShards, Holdings, HoldingsError, IssuedDigest, IssuedDraw,
+    RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, SupportCount,
+    SupportIssued, SupportSeats, MAX_BOND_KEY_BYTES,
 };
+pub use bundle::{QueuedBody, QueuedBundle};
 pub(crate) use chain::stored_timelock;
 pub use chain::{
-    BlockBody, BlockInfo, OutKey, OutTx, RuleSetInForce, TxIndex, TxOutputIndices,
+    BlockBody, BlockInfo, OutKey, OutTx, RecordedPow, RuleSetInForce, TxIndex, TxOutputIndices,
     TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
 };
 pub use curve::{CurveTreeState, LayerHash, LeafCount, TreeDepth};
+pub use degraded::FollowingDegraded;
 pub use evidence::CoverageGaps;
-pub use pool::{
-    ArrivedPhase, BlockRef, Origin, OriginatedPhase, PoolRecord, Readiness, RelayRefusal,
-    RelayState, Responsibility,
-};
+pub use pool::{PoolRecord, ReceivedHour};
 #[cfg(test)]
 pub(crate) use property::ProbeCell;
 pub use property::{
     ApplyPolicyCell, ArchivalLastSlashEpochCell, CellScope, ChainState, CoverageGapsCell,
-    EngineLocal, PropertyCell, PropertyCellBytes, PropertyCellSpec, SchemaVersionCell, Scope,
-    SettlementEpochBlocksCell, TotalBurnedCell, UndoLogFloorCell, PROPERTY_CELLS,
+    EngineLocal, FollowingDegradedCell, PropertyCell, PropertyCellBytes, PropertyCellSpec,
+    SchemaVersionCell, Scope, SettlementEpochBlocksCell, TotalBurnedCell, UndoLogFloorCell,
+    PROPERTY_CELLS,
 };
 pub use schema_version::{SchemaVersion, SCHEMA_VERSION};
 pub use settlement_epoch::SettlementEpochBlocks;
@@ -112,8 +118,7 @@ pub use undo::{post_image, UndoEntry, UndoLog, POST_IMAGE_DST};
 // The shared contract, re-exported at its existing path: `crate::codec::X`
 // resolves for every caller it did before the move.
 pub use shekyl_store_codec::{
-    exact, Blob, BlobKind, Canonical, CodecError, Coded, Encoded, EncodedBuf, NoRow, Present, Raw,
-    Unshaped,
+    exact, Blob, BlobKind, Canonical, CodecError, Coded, Encoded, EncodedBuf, Present, Raw,
 };
 
 /// Name arbitrary bytes as a row of a `Coded<V>` table **without** going

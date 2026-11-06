@@ -107,14 +107,13 @@ pub extern "C" fn shekyl_compute_burn_split(
 ///
 /// Thin FFI over the canonical Rust entry
 /// [`shekyl_economics::compute_burn_split_at`]. `frozen_segment_count` is the
-/// burden operand `n` as the C++ validator has it — its frozen J-segment
-/// count (`shekyl_archival_frozen_segment_count`, `archival_ffi::schedule`),
-/// read **at parent-block state** (M3-1 cached-counter drift class) and
-/// wrapped as [`shekyl_economics::ClosedShardCount`] here, the one marshalling
-/// site. The Rust validator's `n` is the closed archival-shard count
-/// (`shekyl_chain_rules::closed_shards_before`); LMDB keeps no archival fold,
-/// so the C++ cannot take it, and the divergence is CEN-L10's — ruled,
-/// bit-identical while the escalation ships flat, closed at cutover.
+/// burden operand `n`. The C++ validator used to pass its frozen
+/// J-segment count (the closed archival-shard count the caller reads from the fold,
+/// `shekyl_chain_rules::closed_shards_before`), read at
+/// parent-block state. That caller is deleted. The Rust validator's `n`
+/// is the closed archival-shard count
+/// (`shekyl_chain_rules::closed_shards_before`). The divergence is
+/// CEN-L10's, ruled, bit-identical while the escalation ships flat.
 /// Numerics stay in shipped `EconomicParams`.
 ///
 /// **The share cannot reach `miner_fee_income`** (§12.11.1 Leg 1). At the
@@ -126,12 +125,12 @@ pub extern "C" fn shekyl_compute_burn_split_escalated(
     burn_pct: u64,
     frozen_segment_count: u64,
 ) -> ShekylBurnSplit {
-    use shekyl_economics::{compute_burn_split_at, ClosedShardCount, EconomicParams};
+    use shekyl_economics::{compute_burn_split_at, ClosedShardCount};
     burn_split_to_c(compute_burn_split_at(
         total_fees,
         burn_pct,
         ClosedShardCount::new(frozen_segment_count),
-        &EconomicParams::default(),
+        shekyl_economics::economic_params(),
     ))
 }
 
@@ -172,7 +171,7 @@ pub unsafe extern "C" fn shekyl_compute_fee_burn(
     frozen_segment_count: u64,
     out: *mut ShekylBurnSplit,
 ) -> i32 {
-    use shekyl_economics::{compute_fee_burn, ClosedShardCount, EconomicParams, TxVolume};
+    use shekyl_economics::{compute_fee_burn, ClosedShardCount, TxVolume};
     if out.is_null() {
         return SHEKYL_ECONOMICS_NULL_OUT;
     }
@@ -184,7 +183,7 @@ pub unsafe extern "C" fn shekyl_compute_fee_burn(
         TxVolume::window(tx_count_sum, window_blocks),
         supply,
         ClosedShardCount::new(frozen_segment_count),
-        &EconomicParams::default(),
+        shekyl_economics::economic_params(),
     );
     // SAFETY: non-null per the check above; the caller guarantees writability.
     unsafe { out.write(burn_split_to_c(split)) };
@@ -208,7 +207,7 @@ pub unsafe extern "C" fn shekyl_calc_burn_pct_at(
     total_burned: u64,
     out_pct: *mut u64,
 ) -> i32 {
-    use shekyl_economics::{calc_burn_pct_at, EconomicParams, TxVolume};
+    use shekyl_economics::{calc_burn_pct_at, TxVolume};
     if out_pct.is_null() {
         return SHEKYL_ECONOMICS_NULL_OUT;
     }
@@ -218,7 +217,7 @@ pub unsafe extern "C" fn shekyl_calc_burn_pct_at(
     let pct = calc_burn_pct_at(
         TxVolume::window(tx_count_sum, window_blocks),
         supply,
-        &EconomicParams::default(),
+        shekyl_economics::economic_params(),
     );
     // SAFETY: non-null per the check above.
     unsafe { out_pct.write(pct) };
@@ -240,16 +239,13 @@ fn circulating_supply(
 /// slice 4 precursor §3.1 S4/S6). The zero-emission arm and the
 /// share→split composition that the C++ shim `economics.h` used to own are
 /// `shekyl_economics::compute_emission_split`'s; the three constants it
-/// marshaled are that crate's. `genesis_ng_height` is CEN-F21's epoch (1 on
-/// every shipped network). Infallible.
+/// marshaled and CEN-F21's epoch are that crate's. Infallible.
 #[no_mangle]
 pub extern "C" fn shekyl_compute_emission_split(
     block_emission: u64,
     current_height: u64,
-    genesis_ng_height: u64,
 ) -> ShekylEmissionSplit {
-    let split =
-        shekyl_economics::compute_emission_split(block_emission, current_height, genesis_ng_height);
+    let split = shekyl_economics::compute_emission_split(block_emission, current_height);
     ShekylEmissionSplit {
         miner_emission: split.miner_emission,
         staker_emission: split.staker_emission,
@@ -263,10 +259,10 @@ pub extern "C" fn shekyl_compute_emission_split(
 /// [`shekyl_compute_burn_split_escalated`].
 #[no_mangle]
 pub extern "C" fn shekyl_staker_pool_share_at(frozen_segment_count: u64) -> u64 {
-    use shekyl_economics::{staker_pool_share_at, ClosedShardCount, EconomicParams};
+    use shekyl_economics::{staker_pool_share_at, ClosedShardCount};
     staker_pool_share_at(
         ClosedShardCount::new(frozen_segment_count),
-        &EconomicParams::default().escalation(),
+        &shekyl_economics::economic_params().escalation(),
     )
     .to_raw()
 }
@@ -280,7 +276,7 @@ pub extern "C" fn shekyl_staker_pool_share_at(frozen_segment_count: u64) -> u64 
 /// applies after the release multiplier (see `shekyl_block_reward`).
 #[no_mangle]
 pub extern "C" fn shekyl_base_block_reward(already_generated_coins: u64) -> u64 {
-    let params = shekyl_economics::params::EconomicParams::default();
+    let params = shekyl_economics::economic_params().clone();
     // The only residual error is a tail-subsidy overflow that canonical
     // params never trigger; fall back to 0 deterministically.
     shekyl_economics::base_block_reward(already_generated_coins, &params).unwrap_or(0)
@@ -295,10 +291,15 @@ pub extern "C" fn shekyl_effective_block_weight_median(
     long_term_effective: u64,
     short_term_median: u64,
 ) -> u64 {
-    shekyl_economics::effective_median(long_term_effective, short_term_median)
+    shekyl_economics::effective_median(
+        long_term_effective,
+        short_term_median,
+        shekyl_economics::economic_params(),
+    )
 }
 
-/// Bound a block's long-term-median contribution to `[LTEM/1.7, LTEM·1.7]`.
+/// Bound a block's long-term-median contribution to `[LTEM/c, LTEM·c]`, `c`
+/// the shipped long-term clamp (1.7).
 /// Cannot fail. C++ gathers `LTEM`; this is the bound
 /// `get_next_long_term_block_weight` consumes.
 #[no_mangle]
@@ -306,7 +307,11 @@ pub extern "C" fn shekyl_long_term_block_weight(
     long_term_effective: u64,
     block_weight: u64,
 ) -> u64 {
-    shekyl_economics::long_term_weight(long_term_effective, block_weight)
+    shekyl_economics::long_term_weight(
+        long_term_effective,
+        block_weight,
+        shekyl_economics::economic_params(),
+    )
 }
 
 /// Status: reward computed. `out_reward` and `out_weight_limit` are written.
@@ -366,7 +371,7 @@ pub unsafe extern "C" fn shekyl_block_reward(
     if out_reward.is_null() || out_weight_limit.is_null() {
         return SHEKYL_BLOCK_REWARD_INVALID;
     }
-    let params = shekyl_economics::params::EconomicParams::default();
+    let params = shekyl_economics::economic_params().clone();
 
     // Written on every path, including rejection: the caller logs the limit it
     // was rejected against, and it must come from the same clamp that made the
@@ -406,7 +411,7 @@ pub extern "C" fn shekyl_fee_correction(
     sigma_scaled: u64,
     burn_pct_scaled: u64,
 ) -> u64 {
-    let params = shekyl_economics::params::EconomicParams::default();
+    let params = shekyl_economics::economic_params().clone();
     shekyl_economics::fee_correction(
         shekyl_economics::TxVolume::window(tx_count_sum, window_blocks),
         sigma_scaled,
@@ -416,25 +421,25 @@ pub extern "C" fn shekyl_fee_correction(
     .as_scaled()
 }
 
-/// Lookback depth `G`. Rust is the owner; C++ sizes the ring from this.
+/// Lookback depth `G` of the shipped relay policy. Rust is the owner;
+/// C++ sizes the ring from this.
 #[no_mangle]
 pub extern "C" fn shekyl_relay_floor_lookback() -> u64 {
-    shekyl_economics::RELAY_FLOOR_LOOKBACK as u64
-}
-
-/// Admission slack in basis points. Rust is the owner; pinned at zero.
-#[no_mangle]
-pub extern "C" fn shekyl_relay_admission_slack_bp() -> u32 {
-    shekyl_economics::RELAY_ADMISSION_SLACK_BP
+    shekyl_economics::relay_policy().lookback
 }
 
 /// Three-slot ladder `[economy, standard, priority]`. Economy **is** the
-/// relay floor at the same operands. The penalty-free zone is
+/// relay floor at the same operands. `w_ref` is
+/// [`shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT`], not an argument —
+/// the same move the lattice and the slack made on
+/// [`shekyl_relay_floor_admits`]. The penalty-free zone is
 /// [`shekyl_economics::EconomicParams::full_reward_zone`], not an argument.
 /// Writes three `u64`s.
 ///
 /// Returns `0` written, `-1` null `out_fees`, `-2` scalars outside the
-/// `u128` domain (rule 40: refuse rather than abort).
+/// `u128` domain (rule 40: refuse rather than abort). A `w_ref` of `0` that
+/// still overflows priority's `2·R·C` is a scalar-domain case: this boundary
+/// does not take a weight.
 ///
 /// # Safety
 ///
@@ -443,20 +448,20 @@ pub extern "C" fn shekyl_relay_admission_slack_bp() -> u32 {
 pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     base_reward: u64,
     median: u64,
-    ref_tx_weight: u64,
     c_scaled: u64,
     out_fees: *mut u64,
 ) -> i32 {
     if out_fees.is_null() {
         return -1;
     }
-    let params = shekyl_economics::EconomicParams::default();
+    let params = shekyl_economics::economic_params().clone();
     let Some(ladder) = shekyl_economics::checked_corrected_fee_ladder(
         base_reward,
         median,
-        ref_tx_weight,
+        shekyl_economics::relay_policy().ref_tx_weight,
         shekyl_economics::FeeCorrection::from_scaled(c_scaled),
         &params,
+        shekyl_economics::relay_policy(),
     ) else {
         return -2;
     };
@@ -469,7 +474,9 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
 }
 
 /// Relay floor `F = R·C·w_ref/M²`, floored at 1. Same function as the
-/// ladder's economy rung. The penalty-free zone is
+/// ladder's economy rung. `w_ref` is
+/// [`shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT`], not an argument.
+/// The penalty-free zone is
 /// [`shekyl_economics::EconomicParams::full_reward_zone`], not an argument.
 /// Returns `0` written, `-1` null, `-2` out of domain.
 ///
@@ -480,18 +487,17 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
 pub unsafe extern "C" fn shekyl_relay_fee_floor(
     base_reward: u64,
     median: u64,
-    ref_tx_weight: u64,
     c_scaled: u64,
     out_floor: *mut u64,
 ) -> i32 {
     if out_floor.is_null() {
         return -1;
     }
-    let params = shekyl_economics::EconomicParams::default();
+    let params = shekyl_economics::economic_params().clone();
     let Some(floor) = shekyl_economics::checked_relay_fee_floor(
         base_reward,
         median,
-        ref_tx_weight,
+        shekyl_economics::relay_policy().ref_tx_weight,
         shekyl_economics::FeeCorrection::from_scaled(c_scaled),
         &params,
     ) else {
@@ -502,7 +508,11 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
     0
 }
 
-/// Admit iff `fee >= mask_round_up(weight · min(floors)) − slack`.
+/// Admit iff `fee ≥ quantized_fee(weight, min(floors))`
+/// ([`shekyl_economics::relay_floor_admits`]). The fee lattice
+/// (`FEE_QUANTIZATION_MASK`) and the admission slack
+/// (`RELAY_ADMISSION_SLACK_BP`) are the predicate's own constants; C++
+/// passes what only it holds.
 ///
 /// `floors` is at most [`shekyl_economics::RELAY_FLOOR_WINDOW`] values;
 /// a longer window is refused (`-1`). Empty refuses. Returns `1` / `0` /
@@ -516,12 +526,12 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
 pub unsafe extern "C" fn shekyl_relay_floor_admits(
     fee: u64,
     weight: u64,
-    mask: u64,
     floors: *const u64,
     floors_len: usize,
-    slack_bp: u32,
 ) -> i32 {
-    if floors_len > shekyl_economics::RELAY_FLOOR_WINDOW {
+    // The window is the policy's lookback plus the tip itself.
+    let window_len = shekyl_economics::relay_policy().lookback.saturating_add(1);
+    if u64::try_from(floors_len).map_or(true, |len| len > window_len) {
         return -1;
     }
     // SAFETY: caller contract matches the seam — `floors` addresses
@@ -529,9 +539,7 @@ pub unsafe extern "C" fn shekyl_relay_floor_admits(
     let Some(window) = (unsafe { slice_from_typed_ptr(floors, floors_len) }) else {
         return -1;
     };
-    i32::from(shekyl_economics::relay_floor_admits(
-        fee, weight, mask, window, slack_bp,
-    ))
+    i32::from(shekyl_economics::relay_floor_admits(fee, weight, window))
 }
 
 /// Advance `already_generated_coins` by a block reward.
@@ -550,24 +558,13 @@ pub extern "C" fn shekyl_advance_already_generated(
 
 // ─── Emission Share (Component 4) ───────────────────────────────────────────
 
-/// Calculate the effective staker emission share at a given block height.
-///
-/// Returns fixed-point SCALE value (e.g., 150_000 = 15%).
+/// The staker emission share in force at `height`, in SCALE units
+/// (150_000 = 15%). `shekyl_economics::emission_share_at`: zero at genesis,
+/// the shipped share decayed from block 1 after it. The epoch and the three
+/// share constants are that crate's, not arguments.
 #[no_mangle]
-pub extern "C" fn shekyl_calc_emission_share(
-    current_height: u64,
-    genesis_height: u64,
-    initial_share: u64,
-    annual_decay: u64,
-    blocks_per_year: u64,
-) -> u64 {
-    shekyl_economics::emission_share::calc_effective_emission_share(
-        current_height,
-        genesis_height,
-        initial_share,
-        annual_decay,
-        blocks_per_year,
-    )
+pub extern "C" fn shekyl_emission_share_at(height: u64) -> u64 {
+    shekyl_economics::emission_share_at(height)
 }
 
 #[no_mangle]

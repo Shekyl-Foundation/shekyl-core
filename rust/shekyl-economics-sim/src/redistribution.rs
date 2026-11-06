@@ -30,9 +30,10 @@
 
 use std::fmt;
 
-use shekyl_archival_retention::{reward_share_floor, ARCHIVAL_BOND_FLOOR_ATOMIC};
+use shekyl_archival_retention::reward_share_floor;
 
 use crate::burden::{COIN, OPP_COST_RATE_BAND, SHARD_BYTES};
+use crate::engine::SimParams;
 use crate::proxy::{epochs_per_year, STORAGE_FIAT_PER_BYTE_YEAR};
 use crate::stranding::{Scoring, ARCHIVER_CLASSES};
 
@@ -58,6 +59,10 @@ pub struct Cell {
 
 /// The crossed population. Size and holding-scarcity are treated as independent,
 /// so a cell's weight is the product of its two marginals.
+/// A scarce holder: a shard replicated at most this many times. The W6
+/// quantum's population, named once.
+const SCARCE_R_MAX: u64 = 50;
+
 #[must_use]
 pub fn population() -> Vec<Cell> {
     let mut cells = Vec::new();
@@ -96,10 +101,15 @@ pub struct CellOutcome {
 /// epoch. `fiat_per_skl` converts the fiat storage leg; the bond leg is
 /// SKL-denominated and price-independent (F-G).
 #[must_use]
-pub fn marginal_cost_skl_per_epoch(shards: u64, opp_rate: f64, fiat_per_skl: f64) -> f64 {
-    let epy = epochs_per_year();
+pub fn marginal_cost_skl_per_epoch(
+    shards: u64,
+    opp_rate: f64,
+    fiat_per_skl: f64,
+    run: &SimParams,
+) -> f64 {
+    let epy = epochs_per_year(run);
     let bond_skl =
-        (u128::from(ARCHIVAL_BOND_FLOOR_ATOMIC) * u128::from(shards)) as f64 / COIN as f64;
+        (u128::from(run.archival().bond_floor_atomic) * u128::from(shards)) as f64 / COIN as f64;
     let bond_leg = bond_skl * opp_rate / epy;
     let storage_fiat = shards as f64 * SHARD_BYTES * STORAGE_FIAT_PER_BYTE_YEAR / epy;
     bond_leg + storage_fiat / fiat_per_skl
@@ -115,13 +125,14 @@ pub fn score(
     scoring: Scoring,
     opp_rate: f64,
     fiat_per_skl: f64,
+    run: &SimParams,
 ) -> Vec<CellOutcome> {
     let cells = population();
     // Σwork over the whole population — the denominator D1 changes.
     let mut sigma: u128 = 0;
     let mut work: Vec<u64> = Vec::with_capacity(cells.len());
     for c in &cells {
-        let w = scoring.work_milli(c.shards, c.r_market);
+        let w = scoring.work_milli(c.shards, c.r_market, run);
         work.push(w);
         let count = (c.frac * archivers as f64) as u128;
         sigma += u128::from(w) * count;
@@ -139,7 +150,7 @@ pub fn score(
             } else {
                 (reward as f64 * count) / budget_atomic as f64
             };
-            let cost_skl = marginal_cost_skl_per_epoch(cell.shards, opp_rate, fiat_per_skl);
+            let cost_skl = marginal_cost_skl_per_epoch(cell.shards, opp_rate, fiat_per_skl, run);
             CellOutcome {
                 cell,
                 work_milli: w,
@@ -172,12 +183,20 @@ pub fn a2_report(
     budget_per_epoch: u64,
     archivers: u64,
     label: &str,
+    run: &SimParams,
 ) -> fmt::Result {
     // Binding case for the flag: highest opportunity-cost rate (F-G), mid price.
     let opp = OPP_COST_RATE_BAND[OPP_COST_RATE_BAND.len() - 1];
     let price = 0.10;
-    let pre = score(budget_per_epoch, archivers, Scoring::PreD1, opp, price);
-    let post = score(budget_per_epoch, archivers, Scoring::PostD1, opp, price);
+    let pre = score(budget_per_epoch, archivers, Scoring::PreD1, opp, price, run);
+    let post = score(
+        budget_per_epoch,
+        archivers,
+        Scoring::PostD1,
+        opp,
+        price,
+        run,
+    );
 
     writeln!(
         out,
@@ -211,13 +230,16 @@ pub fn a2_report(
             if b.margin_skl >= 0.0 { "ok" } else { "UNDER" },
         )?;
     }
-    let s_pre = scarce_share(&pre, 50);
-    let s_post = scarce_share(&post, 50);
+    let s_pre = scarce_share(&pre, SCARCE_R_MAX);
+    let s_post = scarce_share(&post, SCARCE_R_MAX);
     let stranded: Vec<&CellOutcome> = post.iter().filter(|o| o.margin_skl < 0.0).collect();
-    let scarce_stranded = stranded.iter().filter(|o| o.cell.r_market <= 50).count();
+    let scarce_stranded = stranded
+        .iter()
+        .filter(|o| o.cell.r_market <= SCARCE_R_MAX)
+        .count();
     writeln!(
         out,
-        "  -> Scarce-holder (r<=50) aggregate share: PRE-D1 {SP:.4} -> POST-D1 {SO:.4}\n\
+        "  -> Scarce-holder (r<={SR}) aggregate share: PRE-D1 {SP:.4} -> POST-D1 {SO:.4}\n\
          (dilution {D:.2}% of their former share — the W6 quantum, DESCRIPTIVE).\n\
          Cells under water post-D1: {N} of {T} ({SS} of them scarce-holders).\n\
          FLAG: {FLAG}",
@@ -236,6 +258,7 @@ pub fn a2_report(
         } else {
             "no scarce holder stranded below marginal cost"
         },
+        SR = SCARCE_R_MAX,
     )?;
 
     Ok(())
@@ -261,8 +284,22 @@ mod tests {
     fn pre_d1_zeroes_the_past_cliff_cohort_and_post_d1_pays_it() {
         // The W6 mechanism, made executable: the r=3000 band is a structural zero
         // pre-D1 (floor(1000/3000) = 0 per shard) and earns post-D1.
-        let pre = score(BUDGET, ARCHIVERS, Scoring::PreD1, 0.05, 0.10);
-        let post = score(BUDGET, ARCHIVERS, Scoring::PostD1, 0.05, 0.10);
+        let pre = score(
+            BUDGET,
+            ARCHIVERS,
+            Scoring::PreD1,
+            0.05,
+            0.10,
+            &SimParams::default(),
+        );
+        let post = score(
+            BUDGET,
+            ARCHIVERS,
+            Scoring::PostD1,
+            0.05,
+            0.10,
+            &SimParams::default(),
+        );
         let past_cliff_pre: u64 = pre
             .iter()
             .filter(|o| o.cell.r_market == 3_000)
@@ -281,10 +318,24 @@ mod tests {
     fn d1_dilutes_scarce_holders_which_is_exactly_w6() {
         // W6's claim: bringing ex-zeros into Σwork shrinks incumbents' shares. The
         // arm is DESCRIPTIVE, so this pins the direction, not a threshold.
-        let pre = score(BUDGET, ARCHIVERS, Scoring::PreD1, 0.05, 0.10);
-        let post = score(BUDGET, ARCHIVERS, Scoring::PostD1, 0.05, 0.10);
-        let s_pre = scarce_share(&pre, 50);
-        let s_post = scarce_share(&post, 50);
+        let pre = score(
+            BUDGET,
+            ARCHIVERS,
+            Scoring::PreD1,
+            0.05,
+            0.10,
+            &SimParams::default(),
+        );
+        let post = score(
+            BUDGET,
+            ARCHIVERS,
+            Scoring::PostD1,
+            0.05,
+            0.10,
+            &SimParams::default(),
+        );
+        let s_pre = scarce_share(&pre, SCARCE_R_MAX);
+        let s_post = scarce_share(&post, SCARCE_R_MAX);
         assert!(
             s_post < s_pre,
             "D1 must dilute scarce holders: pre={s_pre} post={s_post}"
@@ -301,6 +352,7 @@ mod tests {
             Scoring::PostD1,
             OPP_COST_RATE_BAND[0],
             0.10,
+            &SimParams::default(),
         );
         let hi = score(
             BUDGET,
@@ -308,6 +360,7 @@ mod tests {
             Scoring::PostD1,
             OPP_COST_RATE_BAND[2],
             0.10,
+            &SimParams::default(),
         );
         for (a, b) in lo.iter().zip(hi.iter()) {
             assert!(b.margin_skl <= a.margin_skl + 1e-12);

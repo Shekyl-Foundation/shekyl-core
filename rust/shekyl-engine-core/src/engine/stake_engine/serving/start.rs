@@ -5,9 +5,10 @@
 
 //! `Engine::start_serving_if_staker` — the construction site.
 
-use shekyl_p_host::{DaemonTipCache, NoResidentKey, PersonaServing};
+use shekyl_p_host::{DaemonTipCache, PersonaServing};
 
 use super::daemon_tip;
+use super::pass_key::ResidentPassKey;
 use super::task::{
     spawn_serving_task, ServingConfig, CLAIM_SOURCE_TIMEOUT, SERVING_MAX_STREAMS,
     SERVING_VIRTUAL_PORT,
@@ -173,6 +174,14 @@ where
             return Ok(None);
         };
 
+        // The serving host reads bodies by message to the body store's
+        // owning actor, chunk by chunk, through a weak reference: it holds
+        // neither the store nor its key (`WSS-Q13`; `CURVE_TREE_CLIENT.md`
+        // §11.1). An empty store answers 404 until fill (`WSS-Q4`) lands.
+        // Pin-release erase asks the same owner (`WSS-Q8`).
+        let bodies: std::sync::Arc<dyn shekyl_p_host::HeldShardSource> =
+            std::sync::Arc::new(stake.bodies.reads());
+
         // Claim only once we know we will start a host. An idle staker must
         // not occupy the slot; a second start after activation must.
         let slot_guard = {
@@ -209,7 +218,7 @@ where
         //
         // Both timings come off the block target, which is already
         // single-sourced here for the staleness bound below.
-        let block_target = shekyl_economics::EconomicParams::default().daa_target_seconds;
+        let block_target = shekyl_economics::economic_params().daa_target_seconds;
         let tip = std::sync::Arc::new(DaemonTipCache::new(daemon_tip::tip_max_age(block_target)));
         // The refresher's own first tick fires immediately, but nothing orders
         // it against this function returning. This read does: the cache is
@@ -227,6 +236,7 @@ where
             curve_tree,
             claim_rpc,
             p_id.to_bytes(),
+            stake.bodies.clone(),
         );
 
         Ok(Some(spawn_serving_task(
@@ -237,17 +247,17 @@ where
                 max_streams: SERVING_MAX_STREAMS,
                 // The `SF-D13` countersignature key is the persona's
                 // `hybrid_sign_sk`, which lives inside the stake actor under
-                // Model D and crosses into the serving role only as a signing
-                // capability — the SH-2 remainder
-                // (`ARCHIVAL_SHARD_FETCH.md` §"out of scope"). Until that
-                // capability is wired the host refuses to sign: every fetch
-                // is the identical 404, counted under `sign_failures`, and
-                // no unsigned shard is ever served.
-                key: std::sync::Arc::new(NoResidentKey),
+                // Model D. What crosses into the serving role is not the key
+                // but a per-shard signing round-trip to the actor, over a
+                // weak handle bound to the slot active at this start
+                // (`pass_key`). The actor going away is the pre-flight 503
+                // (`sign_failures`); no unsigned shard is ever served.
+                key: ResidentPassKey::new(&stake, active.p_slot),
                 // The anchor gate reads the daemon's tip, not the principal's
                 // scan (`WSS-24`). The refresher spawned above keeps it
                 // stamped and exits with the last reader.
                 tip,
+                bodies,
             },
             pinner,
             std::sync::Arc::new(shekyl_operator_alarm::OperatorAlarms::new()),
@@ -285,8 +295,8 @@ mod tests {
         crate::engine::test_support::non_staker_engine(7)
     }
 
-    fn staker_engine(slot: u32) -> (TempDir, Engine<SoloSigner>) {
-        crate::engine::test_support::staker_engine(slot, 7)
+    async fn staker_engine(slot: u32) -> (TempDir, Engine<SoloSigner>) {
+        crate::engine::test_support::staker_engine(slot, 7).await
     }
 
     async fn activate(engine: &Engine<SoloSigner>, slot: u32) {
@@ -310,7 +320,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn an_idle_staker_gets_no_host_and_does_not_claim_the_slot() {
-        let (_tmp, engine) = staker_engine(3);
+        let (_tmp, engine) = staker_engine(3).await;
         let arc = Arc::new(RwLock::new(engine));
         let started =
             Engine::<SoloSigner>::start_serving_if_staker(arc.clone(), "http://127.0.0.1:1")
@@ -328,7 +338,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_remote_daemon_is_refused_rather_than_served_over_the_principal() {
-        let (_tmp, engine) = staker_engine(3);
+        let (_tmp, engine) = staker_engine(3).await;
         activate(&engine, 3).await;
         let arc = Arc::new(RwLock::new(engine));
         let Err(err) =
@@ -356,7 +366,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_second_start_is_already_running_while_the_first_host_is_held() {
-        let (_tmp, engine) = staker_engine(3);
+        let (_tmp, engine) = staker_engine(3).await;
         activate(&engine, 3).await;
         let arc = Arc::new(RwLock::new(engine));
         let first =

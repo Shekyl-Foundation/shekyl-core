@@ -21,12 +21,13 @@ use crate::params::{parse_optional_object, parse_required_object, require_empty_
 use crate::project::{
     attribution_matches, get_balance_result, outgoing_block_height, outgoing_transfer_state,
     outgoing_transfer_view, parse_lookup_id, transfer_state, transfer_view, TransferLookupId,
+    LOOKUP_ID_GRAMMAR,
 };
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
-    capability_mode_str, GetHeightResult, GetPrimaryAddressResult, GetStakedBalanceResult,
-    GetTransferByIdResult, GetTransfersResult, GetWalletInfoResult, ReceiveAttributionFilter,
-    StakingInfoResult, TransferDirection, TransferState, TransferView,
+    capability_mode_str, GetHeightResult, GetPrimaryAddressResult, GetTransferByIdResult,
+    GetTransfersResult, GetWalletInfoResult, ReceiveAttributionFilter, TransferDirection,
+    TransferState, TransferView,
 };
 
 /// Optional filters for `get_transfers`.
@@ -230,11 +231,12 @@ pub(crate) async fn get_wallet_info(
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "get_wallet_info")?;
 
-    // The serving posture rides out of this same tenant-lock block: it is
+    // The serving snapshot rides out of this same tenant-lock block: it is
     // the embedder's fact (the handle is parked here, not on the engine),
     // and taking it now means the tenant lock is never re-entered under the
-    // engine guard below.
-    let (name, shared, serving_posture) = {
+    // engine guard below. One read: posture and the unlowered count are
+    // the same lifecycle.
+    let (name, shared, serving) = {
         let state = tenants.lock().await;
         let name = state
             .tenant
@@ -242,7 +244,7 @@ pub(crate) async fn get_wallet_info(
             .ok_or(WalletRpcError::WalletNotOpen)?
             .to_owned();
         let engine = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
-        (name, engine, state.tenant.serving_posture())
+        (name, engine, state.tenant.serving_status())
     };
 
     let (identity, balance, staking, wallet_height, restore_height, daemon) = {
@@ -253,8 +255,7 @@ pub(crate) async fn get_wallet_info(
         // stay coherent with the balance summary under ONE ledger guard.
         let snapshot = tokio::task::block_in_place(|| {
             engine.stake().balance_snapshot_with(|wallet| {
-                let wallet_height =
-                    i64::try_from(wallet.ledger.height().to_raw()).unwrap_or(i64::MAX);
+                let wallet_height = crate::project::wallet_height(&wallet.ledger);
                 let restore_height = i64::try_from(wallet.sync_state.restore_from_height.to_raw())
                     .unwrap_or(i64::MAX);
                 (wallet_height, restore_height)
@@ -262,6 +263,7 @@ pub(crate) async fn get_wallet_info(
         })
         .map_err(crate::staking::map_balance_view)?;
         let (wallet_height, restore_height) = snapshot.extra;
+        let wallet_height = wallet_height?;
         let staking_view = snapshot.staking;
 
         let address = engine
@@ -269,12 +271,7 @@ pub(crate) async fn get_wallet_info(
             .encode()
             .map_err(|e| WalletRpcError::InternalError(format!("encode address: {e}")))?;
         let capability = capability_mode_str(engine.capability()).to_owned();
-        let network = match engine.network() {
-            shekyl_engine_core::Network::Mainnet => "MAINNET",
-            shekyl_engine_core::Network::Testnet => "TESTNET",
-            shekyl_engine_core::Network::Stagenet => "STAGENET",
-        }
-        .to_owned();
+        let network = crate::types::network_wire(engine.network()).to_owned();
 
         // WI-RPC-5: the one-glance balance projects its staking fields from
         // the same authoritative view the staking block reads — the two
@@ -283,20 +280,8 @@ pub(crate) async fn get_wallet_info(
         // staking fields and the `staking` block absent while the wallet's
         // identity/height/liquid facts stay served.
         let balance = get_balance_result(&snapshot.view);
-        let staking = staking_view.map(|staking_view| StakingInfoResult {
-            staking_enabled: staking_view.staking_enabled,
-            balance: GetStakedBalanceResult {
-                bonded_principal_confirmed: staking_view.balance.bonded_principal_confirmed.into(),
-                bonded_principal_pending: staking_view.balance.bonded_principal_pending.into(),
-                rewards_received_unspent: staking_view.balance.rewards_received_unspent.into(),
-            },
-            staked_output_count: i64::try_from(staking_view.outputs.len()).unwrap_or(i64::MAX),
-            pscan_synced_height: staking_view
-                .pscan_synced_height
-                .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
-            recovery_pending_reopen: staking_view.recovery_pending_reopen,
-            posture: crate::staking::posture_str(serving_posture),
-        });
+        let staking = staking_view
+            .map(|staking_view| crate::staking::staking_info_result(&staking_view, serving));
 
         let daemon = engine.daemon().clone();
 
@@ -371,13 +356,8 @@ pub(crate) async fn get_transfer_by_id(
     // never have emitted is a malformed request, and answering it with
     // "unknown transfer" would tell a user whose send does exist that
     // it does not (rule 82).
-    let lookup = parse_lookup_id(&p.id).ok_or_else(|| {
-        WalletRpcError::InvalidParams(
-            "id must be `{tx_hash}:{output_index}` for a receive, or a bare 64 \
-             lowercase-hex `{tx_hash}` for a send"
-                .into(),
-        )
-    })?;
+    let lookup = parse_lookup_id(&p.id)
+        .ok_or_else(|| WalletRpcError::InvalidParams(LOOKUP_ID_GRAMMAR.to_owned()))?;
 
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
@@ -420,8 +400,7 @@ pub(crate) async fn get_height(
     let shared = require_open_engine(tenants).await?;
     let (wallet_height, daemon) = {
         let engine = shared.read().await;
-        let wallet_height =
-            i64::try_from(engine.ledger().ledger.height().to_raw()).unwrap_or(i64::MAX);
+        let wallet_height = crate::project::wallet_height(&engine.ledger().ledger)?;
         (wallet_height, engine.daemon().clone())
     };
 
@@ -457,7 +436,9 @@ mod tests {
                     dispatched_at_height: shekyl_types::BlockHeight::from_raw(100),
                     fee: 700,
                     recipients: vec![SendRecipient {
-                        address: "shekyl1a".to_owned(),
+                        destination: shekyl_engine_state::SendDestination::Address(
+                            "shekyl1a".to_owned(),
+                        ),
                         amount: 3_500,
                         rid: None,
                     }],
@@ -677,12 +658,12 @@ mod tests {
         let row = block.rows.get_mut(&[0x05; 32]).expect("row");
         row.recipients = vec![
             SendRecipient {
-                address: "shekyl1a".to_owned(),
+                destination: shekyl_engine_state::SendDestination::Address("shekyl1a".to_owned()),
                 amount: u64::MAX,
                 rid: None,
             },
             SendRecipient {
-                address: "shekyl1b".to_owned(),
+                destination: shekyl_engine_state::SendDestination::Address("shekyl1b".to_owned()),
                 amount: 1,
                 rid: None,
             },

@@ -36,6 +36,7 @@
 
 import os
 import re
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -88,10 +89,33 @@ def load_allowlist() -> tuple[set, set]:
     return exact, suffixes
 
 
+def ignored_dirs() -> set[str]:
+    """Directories under docs/ that git ignores (build trees such as
+    docs/formal/checkct/.build/, which hold vendored toolchain sources with
+    their own dead links). CI never has them; a developer who ran a harness
+    setup does, and the gate must read the same tree in both places."""
+    out = subprocess.run(
+        ["git", "ls-files", "-oi", "--exclude-standard", "--directory", "docs"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if out.returncode != 0:
+        return set()
+    return {
+        os.path.normpath(os.path.join(ROOT, line.rstrip("/")))
+        for line in out.stdout.splitlines()
+        if line.strip()
+    }
+
+
 def main() -> int:
     exact, suffixes = load_allowlist()
+    skip = ignored_dirs()
     dead = []
-    for dirpath, _dirs, files in os.walk(DOCS):
+    for dirpath, dirs, files in os.walk(DOCS):
+        dirs[:] = [d for d in dirs if os.path.normpath(os.path.join(dirpath, d)) not in skip]
         for f in sorted(files):
             if not f.endswith(".md"):
                 continue

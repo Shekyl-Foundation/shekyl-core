@@ -161,6 +161,7 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         };
         let txs = [TxLeafInputs {
             is_miner: true,
+            tx_hash: None,
             leaf_entry_blob: Some(blob.as_slice()),
             outputs: outputs.as_slice(),
         }];
@@ -198,15 +199,19 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         curve_tree_root: tree_root,
         block_hash: BlockHash::from_bytes([0xAB; 32]),
     };
+    let target = AssembleInput {
+        gindex: Gindex::from_raw(spent_index),
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+        commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(spent.commitment),
+    };
+    // The wallet tells its tree which output is its own before it asks for
+    // the path, as the engine's curve-tree actor does: assembly reads what
+    // was captured for a registered output and has no other route.
+    client
+        .sync_owned(&[(target.gindex, target.output_key)])
+        .expect("register the spent output");
     let path = client
-        .assemble_path(
-            &AssembleInput {
-                gindex: Gindex::from_raw(spent_index),
-                output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
-                commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(spent.commitment),
-            },
-            &reference,
-        )
+        .assemble_path(&target, &reference)
         .expect("assemble membership path");
     let leaf_chunk: Vec<LeafEntry> = path
         .leaf_chunk
@@ -252,10 +257,15 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     let pqc_auths = sign_pqc_auths(
         // A stand-in message: the prefix hash's bytes, not the §1.1 per-input
         // payload (`phase1_payload_hashes`). These auths are never verified
-        // here; `.to_bytes()` then `SigningPayloadHash::from_bytes` is the
-        // deliberate, visible un-typing and re-typing — both newtypes refuse
-        // the silent form (RTN-7 Q3), which is why a stand-in has to say so.
-        &[SigningPayloadHash::from_bytes(tx_prefix_hash.to_bytes())],
+        // here. The prefix hash's 32 bytes, zero-extended to the 64 a signed
+        // hash carries (the signing envelope §2.7), re-typed visibly: both
+        // newtypes refuse the silent form (RTN-7 Q3), which is why a stand-in
+        // has to say so.
+        &[SigningPayloadHash::from_bytes({
+            let mut wide = [0u8; 64];
+            wide[..32].copy_from_slice(tx_prefix_hash.as_bytes());
+            wide
+        })],
         std::slice::from_ref(&spend_input),
     )
     .expect("PQC auth signing");

@@ -8,15 +8,13 @@
 //! is [`Corrupt`](crate::Corrupt) — bytes no conforming store holds.
 
 use shekyl_archival_retention::{
-    claimed_epochs_check_and_set, reinstate_connect, release_connect, BondPostKind as PostKind,
-    ReinstateConnectError, ReleaseConnectError,
+    claimed_epochs_check_and_set, reinstate_connect, release_connect, ReinstateConnectError,
+    ReleaseConnectError,
 };
-use shekyl_types::archival::{BondRecord, FirstPayingHeight, HeldShard, Holdings};
+use shekyl_types::archival::{BondRecord, FirstPayingHeight, HeldShard, Holdings, ReceiptSignPk};
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::transaction::{
-    BondPost, BondPostKind as WireKind, Holdings as WireHoldings, Input,
-};
+use shekyl_wire::transaction::{BondPost, Holdings as WireHoldings, Input};
 
 use crate::fault::{RecordInvariant, ViewRead};
 use crate::rules::body::ArchivalKey;
@@ -24,7 +22,9 @@ use crate::rules::Rule;
 use crate::verdict::{refused, Locus, Verdict};
 use crate::view::ChainView;
 
-use super::{emptied, record_invariant, Post, RecordWriteKind, ServeCreditKey, L7};
+use super::{
+    emptied, record_invariant, BondArm, Post, RecordWriteKind, ReleasePreImage, ServeCreditKey, L7,
+};
 
 impl super::Transition {
     // ---- phase 2: the transactions' arms ---------------------------------
@@ -46,8 +46,10 @@ impl super::Transition {
                     return refused(L7::ROW, locus);
                 };
                 let persona = PCanonicalId::from_bytes(p);
-                // The persona must have a record (CEN-J4's rule; SI-15 is
-                // the store's belt beneath it).
+                // The persona must have a record. CEN-J4 refuses this at
+                // `tx_against`, before the fold, against the view alone;
+                // this arm is the fold's belt beneath it (it also sees the
+                // block's own joins), and SI-15 is the store's beneath both.
                 if self.post(view, persona)?.is_none() {
                     return refused(L7::ROW, locus);
                 }
@@ -58,19 +60,20 @@ impl super::Transition {
                 });
                 Ok(Ok(()))
             }
-            Input::BondPost(post) => match &post.kind {
-                WireKind::JoinMarket {
+            // [`BondArm::of`] is the classifier `judge_bond_post` uses too,
+            // so the sequence and the fold cannot disagree about the arm.
+            // `None` is a post no arm names. The sequence refuses it under
+            // L7 before the fold; this arm is the belt beneath that.
+            Input::BondPost(post) => match BondArm::of(post) {
+                Some(BondArm::JoinMarket {
+                    post,
                     bond_spend_pk,
+                    receipt_sign_pk,
                     endpoint,
-                } => self.join(view, post, bond_spend_pk, *endpoint, locus),
-                WireKind::Other(kind) => match PostKind::from_u8(*kind) {
-                    Ok(PostKind::Release) => self.release(view, post, locus),
-                    Ok(PostKind::Reinstate) => self.reinstate(view, post, locus),
-                    // `Other(0)` cannot come off the wire (the decoder
-                    // reads 0 as `JoinMarket`); an unknown kind is a post
-                    // no fold applies.
-                    Ok(PostKind::JoinMarket) | Err(_) => refused(L7::ROW, locus),
-                },
+                }) => self.join(view, post, bond_spend_pk, receipt_sign_pk, endpoint, locus),
+                Some(BondArm::Release { post }) => self.release(view, post, locus),
+                Some(BondArm::Reinstate { post }) => self.reinstate(view, post, locus),
+                None => refused(L7::ROW, locus),
             },
             Input::ArchivalRewardEmission { .. } => {
                 let Some(ArchivalKey::Claims { p, epochs }) = ArchivalKey::of(input) else {
@@ -84,11 +87,17 @@ impl super::Transition {
     /// JoinMarket (`db_lmdb.cpp` `apply_archival_bond_post`, the join arm):
     /// a new record joining at the open epoch, every held shard added at
     /// that epoch, no claims, no first-paying height.
+    ///
+    /// The receipt key the post commits (`FN_DSA_HYBRID.md` §8) is copied
+    /// into the record byte for byte — CEN-J28 has judged it a key. This
+    /// is the only arm that writes `receipt_sign_pk`: [`Self::release`] and
+    /// [`Self::reinstate`] mutate the record in place and do not name it.
     fn join<'id, V: ChainView<'id>>(
         &mut self,
         view: &V,
         post: &BondPost,
         bond_spend_pk: &[u8],
+        receipt_sign_pk: &ReceiptSignPk,
         endpoint: [u8; 32],
         locus: Locus,
     ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
@@ -119,6 +128,7 @@ impl super::Transition {
         let record = BondRecord {
             hybrid_pubkey: post.hybrid_public_key.clone(),
             bond_spend_pk: bond_spend_pk.to_vec(),
+            receipt_sign_pk: receipt_sign_pk.clone(),
             endpoint,
             join_settlement_epoch: self.epoch,
             bonded_total: AtomicUnits::from_raw(post.bonded_total_atomic),
@@ -150,6 +160,7 @@ impl super::Transition {
         let Some(current) = self.post(view, persona)? else {
             return refused(L7::ROW, locus);
         };
+        let pre_image = current.record.clone();
         let record = &mut current.record;
         let held = match &record.holdings {
             Holdings::CompleteTree => 0,
@@ -180,6 +191,12 @@ impl super::Transition {
         record.holdings = emptied();
         record.bad_intervals.push(connect.interval_close);
         current.touch();
+        // The record as it stood before this arm: what the walk that
+        // rebuilds an epoch's drawable set restores (`SO-D12b`).
+        self.releases.push(ReleasePreImage {
+            persona,
+            record: pre_image,
+        });
         Ok(Ok(()))
     }
 
@@ -213,6 +230,7 @@ impl super::Transition {
             &record.bad_intervals,
             post_ids,
             epoch,
+            shekyl_archival_retention::archival_params(),
         ) {
             Ok(connect) => connect,
             Err(
@@ -271,7 +289,12 @@ impl super::Transition {
             .map(|e| e.to_raw())
             .collect::<Vec<_>>();
         for &epoch in epochs {
-            match claimed_epochs_check_and_set(&mut set, epoch, current_settled) {
+            match claimed_epochs_check_and_set(
+                &mut set,
+                epoch,
+                current_settled,
+                shekyl_archival_retention::archival_params(),
+            ) {
                 Ok(true) => {}
                 // Already claimed (a dedup breach past CEN-J25) or not
                 // claimable (unsettled or expired): never a soft skip.

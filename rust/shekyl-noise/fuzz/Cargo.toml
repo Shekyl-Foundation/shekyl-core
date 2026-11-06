@@ -1,0 +1,21 @@
+[package]
+name = "shekyl-noise-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shekyl-noise = { path = ".." }
+
+[[bin]]
+name = "fuzz_classed_opener"
+path = "fuzz_targets/fuzz_classed_opener.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

@@ -8,9 +8,10 @@ use crate::engine::emission_source::{
 };
 use shekyl_archival_retention::{
     as_of_e_served_work, epoch_close_height, settlement_epoch_at_height, sigma_work_milli,
-    CreditPair, EpochCloseShard, HoldingsDescriptor, HoldingsKind, ShardSet, EMISSION_KAT_SHAPE,
+    CreditPair, EpochCloseShard, HoldingsDescriptor, HoldingsKind, ShardClose, ShardSet,
+    EMISSION_KAT_SHAPE,
 };
-use shekyl_types::ChainCount;
+use shekyl_types::{BlockHeight, ChainCount};
 
 pub(crate) const BUDGET: u64 = 1_000_000;
 pub(crate) const SHARD_A: u64 = EMISSION_KAT_SHAPE.shard_a;
@@ -31,25 +32,27 @@ pub(crate) fn snapshot(epoch: u64) -> EpochSnapshot {
         bonds: vec![
             BondRow {
                 join_settlement_epoch: shape.join_settlement_epoch,
-                is_foundation_complete_tree: false,
+                is_support_complete_tree: false,
                 bad_intervals: vec![],
             },
             BondRow {
                 join_settlement_epoch: shape.join_settlement_epoch,
-                is_foundation_complete_tree: false,
+                is_support_complete_tree: false,
                 bad_intervals: vec![],
             },
         ],
         shards: vec![
             EpochCloseShard {
                 shard_id: shape.shard_a,
-                has_segment: true,
-                freeze_height: close - shape.shard_a_freeze_offset,
+                close: ShardClose::ClosedAt(BlockHeight::from_raw(
+                    close - shape.shard_a_freeze_offset,
+                )),
             },
             EpochCloseShard {
                 shard_id: shape.shard_b,
-                has_segment: true,
-                freeze_height: close - shape.shard_b_freeze_offset,
+                close: ShardClose::ClosedAt(BlockHeight::from_raw(
+                    close - shape.shard_b_freeze_offset,
+                )),
             },
         ],
         credit_pairs: shape
@@ -193,8 +196,8 @@ pub(crate) fn epoch_json(e: &EpochSnapshot) -> serde_json::Value {
                 b.join_settlement_epoch.into(),
             );
             bond.insert(
-                "is_foundation_complete_tree".into(),
-                b.is_foundation_complete_tree.into(),
+                "is_support_complete_tree".into(),
+                b.is_support_complete_tree.into(),
             );
             let flat: Vec<u64> = b
                 .bad_intervals
@@ -210,10 +213,11 @@ pub(crate) fn epoch_json(e: &EpochSnapshot) -> serde_json::Value {
         .shards
         .iter()
         .map(|s| {
+            let wire = s.close.to_wire();
             serde_json::json!({
                 "shard_id": s.shard_id,
-                "freeze_height": s.freeze_height,
-                "has_segment": s.has_segment,
+                "freeze_height": wire.freeze_height,
+                "has_segment": wire.has_segment,
             })
         })
         .collect();

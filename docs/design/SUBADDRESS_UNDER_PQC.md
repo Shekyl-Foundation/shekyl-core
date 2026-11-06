@@ -1609,8 +1609,9 @@ walkthroughs **cannot** detect violations of these rules.
   `TRANSACTION_CREATE_FAKE` device mode; **that function was deleted 2026-08-22
   and nothing replaced the check.** No live exposure follows — the stub's zeros
   are placeholders that `construct_tx_with_tx_key` overwrites from
-  `v3_rct_data`, on a branch that is always taken pre-genesis
-  (`HF_VERSION_FCMP_PLUS_PLUS_PQC` is 1 and Shekyl is v3-from-genesis) — but
+  `v3_rct_data`, on a branch that was always taken pre-genesis
+  (`HF_VERSION_FCMP_PLUS_PLUS_PQC` was 1; the macro was removed 2026-10-05
+  and the encapsulation it gated runs unconditionally) — but
   the *window* is real and the invariant now rests on that overwrite rather
   than on any assertion. Tracked in `FOLLOWUPS.md`, where the fix named is a
   type whose only constructor is the encryption, so an unencrypted label is

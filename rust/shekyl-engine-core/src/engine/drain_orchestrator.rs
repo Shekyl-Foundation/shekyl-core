@@ -57,7 +57,7 @@
 
 use std::collections::BTreeSet;
 
-use shekyl_curve_tree::{AssembleInput, Gindex};
+use shekyl_curve_tree::AssembleInput;
 use shekyl_engine_state::pscan_state::{PFundingOutputRecord, PScanState};
 use shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC;
 use shekyl_tx_builder::{LeafEntry, TreeContext};
@@ -304,13 +304,13 @@ struct DrainOperands {
 
 /// The maturity predicate the projection and the balance surface share: a
 /// record is provable (spendable) once its leaf is in the curve tree at the
-/// reference height — the `spendable_height <= reference_height` rule the
-/// backing/claim paths apply (a record whose leaf is not yet in the tree has no
+/// reference height — [`in_tree_at_reference`](shekyl_curve_tree::in_tree_at_reference),
+/// the rule the backing/claim paths apply (a record whose leaf is not yet in the tree has no
 /// membership path and cannot be spent). Reads only `spendable_height`, a
 /// maturity axis and never a reward-sequence coordinate, so applying it outside
 /// the projection discloses nothing the aggregate scalar doesn't already.
 fn is_mature(record: &PFundingOutputRecord, reference_height: BlockHeight) -> bool {
-    record.spendable_height <= reference_height
+    shekyl_curve_tree::in_tree_at_reference(record.spendable_height, reference_height)
 }
 
 /// Project `P`'s persisted funding records into the drain operands: drop
@@ -486,8 +486,8 @@ pub(crate) enum DrainOrchestrationError {
     #[error(transparent)]
     Plan(#[from] DrainError),
     /// A curve-tree handle call failed while assembling membership paths (a
-    /// client refusal or a stopped actor) — terminal until the engine
-    /// respawns the actor, or a resync for a lagging-ingest refusal.
+    /// client refusal or a stopped actor) — a stopped actor is terminal for
+    /// the session; a lagging-ingest refusal clears on a resync.
     #[error("curve tree unavailable or refused: {0:?}")]
     Tree(CurveTreeHandleError),
     /// The path assembly returned a set that does not match the selection
@@ -616,6 +616,10 @@ pub(crate) struct OrchestratedDrain {
     pub assembled: AssembledDrain,
     /// What this drain moved.
     pub moved: DrainMoved,
+    /// The FCMP++ reference height every input's membership path was proved
+    /// against; the seam seals it on the pending record, whose end date it
+    /// sets (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3).
+    pub reference_height: shekyl_types::BlockHeight,
 }
 
 /// The exit-fee reserve a drain of a persona in this liveness state must leave
@@ -864,11 +868,7 @@ pub(crate) async fn orchestrate_drain(
     //    leaf chunk + layers).
     let assemble_inputs: Vec<AssembleInput> = selected
         .iter()
-        .map(|r| AssembleInput {
-            gindex: Gindex::from_raw(r.gindex.to_raw()),
-            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(r.output_key),
-            commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(r.commitment),
-        })
+        .map(crate::engine::ownership::p_assemble_input)
         .collect();
     let paths = ctx
         .tree
@@ -927,7 +927,11 @@ pub(crate) async fn orchestrate_drain(
             fee: ctx.fee,
         })
         .await?;
-    Ok(OrchestratedDrain { assembled, moved })
+    Ok(OrchestratedDrain {
+        assembled,
+        moved,
+        reference_height,
+    })
 }
 
 #[cfg(test)]

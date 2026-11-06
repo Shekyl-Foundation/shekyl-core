@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import statistics
 import sys
 import time
@@ -103,7 +104,9 @@ class NodeMetrics:
     curve_tree_root: str = ""
     curve_tree_depth: int = 0
     leaf_count: int = 0
-    tx_pool_size: int = 0
+    # None when the node reports its pool retired (`pool_retired`): no count,
+    # which is not an empty pool.
+    tx_pool_size: int | None = 0
     difficulty: int = 0
     block_validation_times_ms: list[float] = field(default_factory=list)
     error: str | None = None
@@ -132,14 +135,44 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+_WIDE_HEX = re.compile(r"0x[0-9a-fA-F]{1,32}")
+
+
+def parse_wide_hex(text: object) -> int:
+    """Parse the daemon's 128-bit hex rendering: `0x`, then 1 to 32 hex digits.
+
+    Strict, as the daemon's own reader is: no sign, no missing prefix, nothing
+    but hex digits, and no more digits than a 128-bit value holds. `int(x, 16)`
+    alone would accept `+ff`, `0X1f`, underscores and surrounding whitespace.
+    """
+    if not isinstance(text, str) or _WIDE_HEX.fullmatch(text) is None:
+        raise ValueError(f"not a 0x-hex 128-bit value: {text!r}")
+    return int(text[2:], 16)
+
+
 def collect_node_metrics(daemon: DaemonRPC) -> NodeMetrics:
     """Poll a single node for current metrics."""
     m = NodeMetrics(url=daemon.url)
     try:
         info = daemon.get_info()
-        m.height = info.get("height", 0)
-        m.difficulty = info.get("difficulty", 0)
-        m.tx_pool_size = info.get("tx_pool_size", 0)
+        # Required: a reply without a height is not a get_info reply, and
+        # reading that as height 0 would report a node at an empty chain.
+        m.height = info["height"]
+        # The whole 128-bit difficulty, from the one name get_info carries
+        # it under. Required, and read strictly: a missing key or a string
+        # that is not `0x` hex is an error, never a difficulty of 0.
+        m.difficulty = parse_wide_hex(info["wide_difficulty"])
+        # The entries the node has broadcast: one quantity whoever asks, so
+        # it compares across nodes. Required: a reply without it is not a
+        # get_info reply, and reading that as an empty pool would hide it.
+        # A node that retired its pool (its pool file faulted) says so and
+        # answers null: kept as None, never read as zero.
+        retired = info.get("pool_retired", False)
+        m.tx_pool_size = info["tx_pool_size"]
+        if (m.tx_pool_size is None) != retired:
+            raise ValueError(
+                f"tx_pool_size {m.tx_pool_size!r} disagrees with pool_retired {retired!r}"
+            )
 
         tree = daemon.get_curve_tree_info()
         m.curve_tree_root = tree.get("root", "")
@@ -229,7 +262,7 @@ def print_status_table(metrics: list[NodeMetrics]) -> None:
             m.height,
             m.leaf_count,
             root_short,
-            m.tx_pool_size,
+            "retired" if m.tx_pool_size is None else m.tx_pool_size,
             status,
         ])
 

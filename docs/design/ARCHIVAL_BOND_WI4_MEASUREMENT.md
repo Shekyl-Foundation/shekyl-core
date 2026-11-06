@@ -797,11 +797,15 @@ valid** (positive `P(link)=0.996 ≥ 0.80`; negative `P(link)=0.102`,
 > `DEFAULT_ENTRY_GAP_WINDOW = 600` was derived as a multi-event horizon over a
 > pipeline whose second event this retirement deleted, so its derivation is
 > void. The surviving justification target is the off-chain-anchored adversary
-> above, whose anchor precision is **unquantifiable in principle** (it is how
-> well someone who knows the principal can pin `t0` — off-chain, unmeasurable
-> by any chain or testnet instrument; the F-D5/F-W3 benefit-side shape). The
-> value therefore holds at `600` as a **provisional sentinel with the decision
-> rule frozen now**: it re-derives only on (a) a measurable off-chain
+> above. For someone who knows the principal and pins `t0` off-chain, the
+> anchor precision is **unquantifiable in principle** (unmeasurable by any chain
+> or testnet instrument; the F-D5/F-W3 benefit-side shape). **The measurable
+> case is the network-origin observer of the principal's funding transfer:** it
+> sees the transfer leave the principal and learns its block, so its anchor
+> precision is one block ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q1, ruled
+> 2026-10-16). That is trigger (a) below, and the re-derivation is that
+> round's BD-Q4. Until BD-Q4 rules, the value holds at `600` as a
+> **provisional sentinel with the decision rule frozen now**: it re-derives only on (a) a measurable off-chain
 > anchor-precision model arriving, or (b) a pure cost-side (latency) decision,
 > which *is* derivable. The window is wallet-side, golden-vector-pinned, not
 > consensus: a change is a wallet release plus a golden re-freeze, not a fork.

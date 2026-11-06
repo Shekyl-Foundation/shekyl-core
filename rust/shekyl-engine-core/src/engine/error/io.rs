@@ -37,6 +37,15 @@ pub enum IoError {
         detail: String,
     },
 
+    /// `P`'s serving body store (`.pstore`) would not open. `detail` is
+    /// the store's own diagnosis, for the log only — it can name local
+    /// paths, so it never reaches a wire.
+    #[error("persona body store open failed: {detail}")]
+    PStore {
+        /// The store's diagnosis, for the log.
+        detail: String,
+    },
+
     /// A daemon RPC failed. `fault` is what the failure means for the
     /// remedy, classified where it was raised ([`RpcError::fault`]);
     /// `detail` is the failure's own rendering, for the log. It can carry

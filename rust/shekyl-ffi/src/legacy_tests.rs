@@ -104,8 +104,8 @@ fn test_release_multiplier_ffi() {
 }
 
 // ---- PR-E1: reward-emission membership-only primitives ----
-// (The per-auth hybrid gate FFI was retired: C-1 verifies auth via the coarse
-// shekyl_emission_vin_verify, whose Rust body emission_vin_verify_auth pins the
+// (The per-auth hybrid gate FFI was retired, and the coarse C-1 verify FFI went
+// with `DEL-008`; the Rust body emission_vin_verify_auth pins the
 // leaf-gate-first order and per-role domains — see emission_verify_kat.rs.)
 
 /// The census `d-12` split crosses the FFI: a PQC key-scalar count that
@@ -385,18 +385,6 @@ fn test_burn_split_ffi() {
 }
 
 #[test]
-fn test_emission_share_genesis() {
-    let share = shekyl_calc_emission_share(0, 0, 150_000, 900_000, 262_800);
-    assert_eq!(share, 150_000);
-}
-
-#[test]
-fn test_emission_share_year_1() {
-    let share = shekyl_calc_emission_share(262_800, 0, 150_000, 900_000, 262_800);
-    assert_eq!(share, 135_000);
-}
-
-#[test]
 fn test_emission_split_ffi() {
     let split = shekyl_split_block_emission(1_000_000_000, 150_000);
     assert_eq!(split.staker_emission, 150_000_000);
@@ -445,20 +433,20 @@ fn test_burn_pct_ffi_matches_rust_impl() {
     }
 }
 
+/// The share at the boundary is the crate's: zero at genesis, the shipped
+/// share at block 1, decayed after it.
 #[test]
-fn test_emission_share_ffi_matches_rust_impl() {
-    let cases = [
-        (0u64, 0u64, 150_000u64, 900_000u64, 262_800u64),
-        (262_800, 0, 150_000, 900_000, 262_800),
-        (2 * 262_800, 0, 150_000, 900_000, 262_800),
-        (10 * 262_800, 0, 150_000, 900_000, 262_800),
-    ];
-    for (height, genesis, initial, decay, bpy) in cases {
-        let ffi = shekyl_calc_emission_share(height, genesis, initial, decay, bpy);
-        let direct = shekyl_economics::emission_share::calc_effective_emission_share(
-            height, genesis, initial, decay, bpy,
+fn emission_share_at_ffi_matches_the_crate() {
+    assert_eq!(shekyl_emission_share_at(0), 0);
+    assert_eq!(
+        shekyl_emission_share_at(1),
+        shekyl_economics::STAKER_EMISSION_SHARE
+    );
+    for height in [0u64, 1, 2, 262_800, 262_801, 10 * 262_800, 3_000_000] {
+        assert_eq!(
+            shekyl_emission_share_at(height),
+            shekyl_economics::emission_share_at(height)
         );
-        assert_eq!(ffi, direct);
     }
 }
 
@@ -1101,7 +1089,7 @@ fn effective_block_weight_median_matches_the_crate() {
     for st in [0, zone / 10, zone, zone * 2, zone * 100, u64::MAX] {
         assert_eq!(
             shekyl_effective_block_weight_median(zone, st),
-            shekyl_economics::effective_median(zone, st),
+            shekyl_economics::effective_median(zone, st, shekyl_economics::economic_params()),
             "st={st}"
         );
     }
@@ -1117,7 +1105,7 @@ fn long_term_block_weight_matches_the_crate() {
     for w in [0, zone / 10, zone, zone * 2, 1_000_000, u64::MAX] {
         assert_eq!(
             shekyl_long_term_block_weight(zone, w),
-            shekyl_economics::long_term_weight(zone, w),
+            shekyl_economics::long_term_weight(zone, w, shekyl_economics::economic_params()),
             "w={w}"
         );
     }
@@ -1137,7 +1125,6 @@ fn corrected_fee_ladder_null_out_returns_minus_one() {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
             ZONE,
-            3_000,
             shekyl_economics::params::SCALE,
             std::ptr::null_mut(),
         )
@@ -1151,21 +1138,19 @@ fn corrected_fee_ladder_null_out_returns_minus_one() {
 #[test]
 fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
     let mut fees = [SENTINEL; 3];
-    for (base, median, w, c) in [
-        (u64::MAX, u64::MAX, u64::MAX, u64::MAX),
-        (u64::MAX, ZONE, 3_000, u64::MAX),
-        (u64::MAX, ZONE, u64::MAX, 1_000_000),
-        (1, u64::MAX, 3_000, 1_000_000),
-        // Priority is `2·R·C` and does not carry `w_ref`: a zero `w_ref`
-        // zeroes every other product, so a domain check written against a
-        // `w_ref`-bearing product would miss this overflow.
-        (u64::MAX, ZONE, 0, u64::MAX),
+    // `w_ref` is the Rust constant at this boundary. The zero-weight case
+    // that still overflows priority's `2·R·C` stays on the scalar
+    // (`the_domain_covers_each_rung_separately`): it cannot be named here.
+    for (base, median, c) in [
+        (u64::MAX, u64::MAX, u64::MAX),
+        (u64::MAX, ZONE, u64::MAX),
+        (1, u64::MAX, shekyl_economics::params::SCALE),
     ] {
-        let st = unsafe { shekyl_corrected_fee_ladder(base, median, w, c, fees.as_mut_ptr()) };
+        let st = unsafe { shekyl_corrected_fee_ladder(base, median, c, fees.as_mut_ptr()) };
         assert_eq!(
             st, -2,
             "out-of-domain scalars must be refused, not computed \
-             (base={base}, median={median}, w={w}, c={c})"
+             (base={base}, median={median}, c={c})"
         );
         assert_eq!(fees, [SENTINEL; 3], "a refused call must not write");
     }
@@ -1174,7 +1159,6 @@ fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
             ZONE,
-            3_000,
             shekyl_economics::params::SCALE,
             fees.as_mut_ptr(),
         )
@@ -1186,28 +1170,53 @@ fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
 #[test]
 fn corrected_fee_ladder_marshals_the_heritage_vector() {
     let mut fees = [SENTINEL; 3];
-    let st = unsafe {
-        shekyl_corrected_fee_ladder(
-            10_000_000_000,
-            ZONE,
-            3_000,
-            shekyl_economics::params::SCALE,
-            fees.as_mut_ptr(),
-        )
-    };
+    let c = shekyl_economics::params::SCALE;
+    let st = unsafe { shekyl_corrected_fee_ladder(10_000_000_000, ZONE, c, fees.as_mut_ptr()) };
     assert_eq!(st, 0);
     assert_eq!(fees, [333, 1332, 66_666]);
+    let mut floor = SENTINEL;
+    let st = unsafe { shekyl_relay_fee_floor(10_000_000_000, ZONE, c, &raw mut floor) };
+    assert_eq!(st, 0);
+    assert_eq!(floor, fees[0], "the floor FFI is the ladder's economy rung");
+    let st = unsafe { shekyl_relay_fee_floor(10_000_000_000, ZONE, c, std::ptr::null_mut()) };
+    assert_eq!(st, -1);
 }
 
 #[test]
-fn relay_constants_cross_the_abi_from_the_rust_owner() {
+fn the_lookback_crosses_the_abi_from_the_rust_owner() {
     assert_eq!(
         shekyl_relay_floor_lookback(),
         u64::try_from(shekyl_economics::RELAY_FLOOR_LOOKBACK).expect("G fits u64")
     );
+}
+
+/// The admission predicate at the boundary is the crate's: the lattice and
+/// the slack are its own constants, so C++ passes the fee, the weight and
+/// the window and nothing else.
+#[test]
+fn relay_floor_admits_ffi_is_the_crates_predicate_on_the_lattice() {
+    let floors = [333u64, 340, 350];
+    let weight = 11_097u64;
+    // 11 097 × 333 = 3 695 301 → 3 696 000 on the lattice.
+    let needed = shekyl_economics::quantized_fee(weight, 333).expect("fits");
+    assert_eq!(needed, 3_696_000);
+    let admits = |fee: u64| unsafe { shekyl_relay_floor_admits(fee, weight, floors.as_ptr(), 3) };
+    assert_eq!(admits(needed), 1);
+    assert_eq!(admits(needed - 1), 0);
     assert_eq!(
-        shekyl_relay_admission_slack_bp(),
-        shekyl_economics::RELAY_ADMISSION_SLACK_BP
+        admits(weight * 333),
+        0,
+        "the raw product is below the lattice step"
+    );
+    assert_eq!(
+        unsafe { shekyl_relay_floor_admits(u64::MAX, 1, floors.as_ptr(), 7) },
+        -1,
+        "a window longer than G + 1 is refused"
+    );
+    assert_eq!(
+        unsafe { shekyl_relay_floor_admits(u64::MAX, 1, core::ptr::null(), 0) },
+        0,
+        "an empty window refuses"
     );
 }
 
@@ -1314,11 +1323,12 @@ fn calc_burn_pct_at_ffi_matches_the_crate() {
 fn compute_emission_split_ffi_matches_the_crate() {
     for (emission, height) in [
         (0u64, 5u64),
+        (1_638_400_000_000, 0),
         (1_638_400_000_000, 1),
         (1_000_000_000, 3_000_000),
     ] {
-        let ffi = shekyl_compute_emission_split(emission, height, 1);
-        let want = shekyl_economics::compute_emission_split(emission, height, 1);
+        let ffi = shekyl_compute_emission_split(emission, height);
+        let want = shekyl_economics::compute_emission_split(emission, height);
         assert_eq!(ffi.miner_emission, want.miner_emission);
         assert_eq!(ffi.staker_emission, want.staker_emission);
     }

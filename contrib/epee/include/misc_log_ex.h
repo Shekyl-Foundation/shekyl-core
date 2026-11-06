@@ -80,7 +80,7 @@
 // single symbol with mismatched layouts (observed: `munmap_chunk():
 // invalid pointer` during `mlog_set_categories` teardown). Direct users
 // of `el::base::Writer` in production code — perf_timer.cpp,
-// stack_trace.cpp, cryptonote_protocol_handler.inl — are edited to
+// cryptonote_protocol_handler.inl — are edited to
 // route through `shekyl_log_emit` directly instead.
 #ifndef EASYLOGGINGPP_H
 

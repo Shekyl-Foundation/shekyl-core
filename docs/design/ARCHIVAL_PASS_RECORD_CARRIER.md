@@ -44,8 +44,8 @@ dense tag `0x02`, and is **read by consensus**:
 | [`cryptonote_basic.h:278-301`](../../src/cryptonote_basic/cryptonote_basic.h#L278-L301) | the struct + its `BEGIN_SERIALIZE_OBJECT` |
 | [`cryptonote_basic.h:334`](../../src/cryptonote_basic/cryptonote_basic.h#L334) | in `txin_v` |
 | [`cryptonote_basic.h:989`](../../src/cryptonote_basic/cryptonote_basic.h#L989) *(tag scheme)* | `VARIANT_TAG(binary_archive, …, 0x02)` |
-| [`blockchain_db.cpp:265-268`](../../src/blockchain_db/blockchain_db.cpp#L265-L268) | `set_archival_serve_credit_bit(p_canonical_id, shard_id, settlement_epoch)` |
-| [`blockchain_db.cpp:816-818`](../../src/blockchain_db/blockchain_db.cpp#L816-L818) | the removal/unwind twin |
+| `blockchain_db.cpp:265-268` | `set_archival_serve_credit_bit(p_canonical_id, shard_id, settlement_epoch)` |
+| `blockchain_db.cpp:816-818` | the removal/unwind twin |
 | `json_object.cpp:402,460,615,631` | JSON codecs both directions |
 
 So **"is the pass record a vin?" answers *yes, already*** — and the round's
@@ -84,7 +84,7 @@ sized, one auth per input, which is what a per-record countersignature is"* —
 is the right *shape*, and the slot is nonetheless **carved out** for exactly
 this tx class:
 
-- [`blockchain.cpp:3726`](../../src/cryptonote_core/blockchain.cpp#L3726) —
+- `blockchain.cpp:3726` —
   `if (!is_archival_serve_credit_only && tx.pqc_auths.size() != num_inputs)`.
   A pure serve-credit-response tx is **exempted from the count check**.
 - [`cryptonote_basic.h:620-621`](../../src/cryptonote_basic/cryptonote_basic.h#L620-L621)
@@ -104,11 +104,11 @@ if (is_archival_serve_credit_only) {
       " must not carry pqc_auths (signature is on the vin)");
 ```
 
-So [`:3726`](../../src/cryptonote_core/blockchain.cpp#L3726) is **not an
+So `:3726` is **not an
 exemption from a rule — it is a substitution of a stricter one.** The generic
 rule is *one auth per input*; serve-credit's rule is *zero auths, ever*. The
 count check is skipped **because** the emptiness check supersedes it.
-[`:3630`](../../src/cryptonote_core/blockchain.cpp#L3630) completes the picture,
+`:3630` completes the picture,
 skipping the whole spend-verification arm for these txs — *"non-spending
 archival vins; hybrid signature lives on the vin (gate-2 §5)"*.
 
@@ -150,6 +150,16 @@ ordinary transaction (§2 step 4) and the guard needs no change.
 ---
 
 ## 1. The invariant this round must not break, which nothing currently protects
+
+> **UPDATE 2026-10-02.** The second path described below no longer exists.
+> `calculate_transaction_prunable_hash` hands the blob's tail to Rust
+> (`shekyl_tx_prunable_hash`) and has no re-serialize path, so the two cannot
+> diverge. This section is the round's reasoning as ruled on 2026-08-18, kept as
+> written, and its line links point at the code of that date. The invariant
+> stands for a different reason: the region's other reader, `shekyl-wire`, parses
+> a `Prunable` and nothing after it, so the ruling in §3.1 — inside
+> `serialize_ctsig_prunable`, never appended — is unchanged, and
+> `tx_prunable_region_sole_occupant.cpp` still guards it.
 
 [`calculate_transaction_prunable_hash`](../../src/cryptonote_basic/cryptonote_format_utils.cpp#L1135)
 computes the prunable-region hash two ways:

@@ -31,8 +31,8 @@ coinbase). Anything else is a consensus error, not a compatibility branch.
 
 - When you encounter `if (version < N)` or `if (hf_version < N)` for any
   Monero-era hard fork, **delete the dead branch** rather than maintaining
-  it. Shekyl's minimum hard fork version is 1; checks below that are dead
-  code.
+  it. Shekyl's block version is 1 and there is no hard-fork mechanism
+  (deleted 2026-10-08): a comparison against a fork number is dead code.
 - Tests that exercise only Monero-era behavior are deleted or rewritten
   against Shekyl's HF1+ rules.
 - Do **not** import Monero upstream changes that add backward-compatibility

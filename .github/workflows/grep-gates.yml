@@ -42,6 +42,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened]
   push:
     branches: [dev, main]
 
@@ -127,6 +128,43 @@ jobs:
           # workflow edit.
           run_one "Workflow files parse and are well-formed" \
             python3 scripts/ci/check_workflows_parse.py
+          # A pull_request trigger filtered on branches does not run while a
+          # PR's base is another branch. That is how #1254 and #1259 merged
+          # with CodeQL and the doc gates never started. The `edited` type
+          # is refused too: it ran every workflow on each PR body edit with
+          # every job skipped, and the newest check run per name is the one
+          # the PR reports (#1264, #1267). This job has no path filter, so a
+          # workflow edit cannot hide from it.
+          run_one "pull_request triggers run on every base and only on code" \
+            python3 scripts/ci/check_pr_event_triggers.py
+          # A setup step that fetches with a depth would make a developer's
+          # shared clone shallow when the steps are run locally; it carries
+          # the GITHUB_ACTIONS guard, and this holds every such step to it.
+          run_one "A depth-changing fetch runs only under GitHub Actions (selftest)" \
+            python3 scripts/ci/check_workflow_fetch_guard.py --selftest
+          run_one "A depth-changing fetch runs only under GitHub Actions" \
+            python3 scripts/ci/check_workflow_fetch_guard.py
+
+          # The production-shape clippy step in rust-audit-test.yml must name
+          # exactly the TEST_ONLY owners. It parses that workflow, so it lives
+          # here beside the workflow parser: this job installs PyYAML, and the
+          # rust-audit container does not. The features script stays a
+          # cargo-metadata gate. `--selftest` first, so a renamed step with no
+          # fixture cannot pass as nothing to grade (rule 47).
+          run_one "Production-lint lane names every TEST_ONLY owner (selftest)" \
+            python3 scripts/ci/check_production_lint_lane.py --selftest
+          run_one "Production-lint lane names every TEST_ONLY owner" \
+            python3 scripts/ci/check_production_lint_lane.py
+
+          # Each connector declares its dial numbers in one profile
+          # (shekyl_transport_layer::dial_profile); the dialer and the peer
+          # list read it and hold no per-connector arms. `--selftest` plants
+          # an arm and requires a failure, and the gate fails when it cannot
+          # find the dialer's or the peer list's source (rule 47).
+          run_one "No per-connector arms in the dialer or the peer list (selftest)" \
+            python3 scripts/ci/check_connector_profile_arms.py --selftest
+          run_one "No per-connector arms in the dialer or the peer list" \
+            python3 scripts/ci/check_connector_profile_arms.py
 
           # A job-level `if:` is evaluated before the matrix expands, so a
           # skipped matrix job cannot emit its per-leg check names. When those
@@ -139,6 +177,15 @@ jobs:
 
           run_one "SA-3b: domain-registry" \
             scripts/ci/domain_registry_gate.sh
+          # RT-O22 (RT-W9 step 6): the toolchain, the decapsulation closure
+          # of fips203, and every recognised code-generation setting agree
+          # with what RT-P4 was measured on. Anything unrecognised fails on
+          # its own and is not also a re-run. Its self-test first, so a
+          # broken reader cannot pass the real check.
+          run_one "RT-P4 standing check: self-test" \
+            python3 scripts/ci/check_rt_p4_standing.py --selftest
+          run_one "RT-P4 standing check" \
+            python3 scripts/ci/check_rt_p4_standing.py
           run_one "Consensus-invariants" \
             scripts/ci/check_consensus_invariants.sh
           # PDM-Q7: the stripe engine and its pruning_seed wire field are
@@ -170,41 +217,150 @@ jobs:
             python3 scripts/ci/check_p_fetch_dep_cut.py --selftest
           run_one "SF-D4: shard-fetch dependency cut" \
             python3 scripts/ci/check_p_fetch_dep_cut.py
-          # SHT-Q2: the shard partition reads an archival length the txid
-          # does not yet bind (the mixer term is held on the FOLLOWUPS
-          # "Build SHT-Q2" row). Until it does, every production
-          # `ArchivalLength` is measured on the bytes or read back from the
-          # store, and `connect.rs` is the row's only writer — a supplied
-          # length would seat an unbound value under a consensus partition.
-          # The gate fails asking to be deleted once the mixer binds it.
-          run_one "SHT-Q2: archival-length origin selftest" \
-            python3 scripts/ci/check_archival_len_source.py --selftest
-          run_one "SHT-Q2: archival length measured, never supplied" \
-            python3 scripts/ci/check_archival_len_source.py
-          run_one "Rule 71: nettype selects data, not control flow" \
-            scripts/ci/check_network_uniformity.sh
+          # ARW-Q16 (c): a block index and a block count are both `u64` and
+          # differ by one everywhere they meet; HEIGHT_SEMANTICS.md C2/C7
+          # was review-borne on the daemon-store and archival surface, and
+          # three one-apart defects landed there in three days. Exact-hit
+          # grandfather of the sites that exist, ceiling that only lowers,
+          # so the next instance is CI's finding. Selftest first (rule 47).
+          run_one "ARW-Q16: inland height gate selftest" \
+            python3 scripts/ci/check_inland_height_u64.py --selftest
+          run_one "ARW-Q16: no new bare-u64 height on the archival surface" \
+            python3 scripts/ci/check_inland_height_u64.py
+          run_one "Rule 71: the network selects data, not control flow (selftest)" \
+            python3 scripts/ci/check_network_uniformity.py --selftest
+          run_one "Rule 71: the network selects data, not control flow" \
+            python3 scripts/ci/check_network_uniformity.py
           run_one "Ignored tests carry their reason in the attribute" \
             scripts/ci/check_ignore_reasons.sh
-          # PWD-B7: a rejection describing OUR chain must classify itself, or
-          # the caller's coarser verdict severs a peer whose transaction is
-          # merely in conflict with our view. The one residual the typed
-          # verdict left open, made mechanical rather than remembered.
-          run_one "PWD-B7: double-spend rejections classify themselves" \
-            python3 scripts/ci/check_drop_verdict_classification.py
           run_one "PoW test-seam containment (CEN-D2)" \
             scripts/ci/check_pow_test_seam.sh
+          # DX-Q3 Q4: the node's template draws its coinbase secret and its
+          # draw commitment from the OS (the commitment through the witness
+          # ring); the scenario's reproducible values stay in test code.
+          run_one "The template's secrets are the OS's (DX-Q3 Q4)" \
+            scripts/ci/check_template_secrets.sh
+          # SO-D12 increment 4c: the witness ring's seeds and keys, and the
+          # challenge nonces, reach no log and no derived Debug. The
+          # selftest first, so a scan that reads nothing cannot pass.
+          run_one "The bundle producer's secrets reach no log (selftest)" \
+            python3 scripts/ci/check_bundle_producer_secrets.py --selftest
+          run_one "The bundle producer's secrets reach no log" \
+            python3 scripts/ci/check_bundle_producer_secrets.py
           run_one "RandomX symbol-isolation negatives (rule 50)" \
             scripts/ci/test_check_randomx_symbol_isolation.sh
-          run_one "LV-1: levin wire-constant parity" \
-            ./scripts/ci/check_levin_constant_parity.sh
           run_one "C++ clamp-ban (address-freeze)" \
             bash scripts/lint_cpp_clamp_ban.sh
-          run_one "Carrier dev-flag stays hidden and default-off" \
-            scripts/ci/check_carrier_flag_hidden.sh
           run_one "§94: transit provenance marker outlives its constant" \
             scripts/ci/check_transit_marker.sh
           run_one "No unbounded blob dump in a log line" \
             python3 scripts/ci/check_log_blob_dumps.py
+          # A blocking wait armed on the wall clock lasts as long as the clock
+          # is set back: the daemon's stop hung a day after a backward clock
+          # change (TOR_SUPERVISOR.md §7). The selftest plants each banned
+          # token, including one after a non-UTF-8 byte, and requires the
+          # scan to fail. An unreadable file and a missing root fail too.
+          run_one "No wall-clock blocking wait in the C++ (selftest)" \
+            python3 scripts/ci/check_wall_clock_waits.py --selftest
+          run_one "No wall-clock blocking wait in the C++" \
+            python3 scripts/ci/check_wall_clock_waits.py
+          # Every version comparison and hard-fork table call in the C++ has
+          # a classified row, in both directions: Shekyl's block version is 1,
+          # so a gate on another number selects one arm forever, and the
+          # reward-aware template fill sat dead behind one. No path filter
+          # here, so a new gate in any file is seen.
+          run_one "C++ version gates match their inventory" \
+            python3 scripts/ci/check_cxx_version_gates.py
+          run_one "C++ version-gate inventory self-test" \
+            python3 scripts/ci/test_check_cxx_version_gates.py
+          # FN-DSA is pre-standard: the five `fn-dsa*` crates are pinned exact
+          # and locked at one version, and a genesis release (a tag with no
+          # pre-release suffix) is refused on a pre-1.0 lock. Here the gate
+          # asserts its subject and reports; the refusal is armed in the
+          # tag-triggered release workflow.
+          run_one "fn-dsa is pinned exact, at one version (genesis gate)" \
+            python3 scripts/ci/check_fn_dsa_genesis_gate.py
+          run_one "fn-dsa genesis gate self-test" \
+            python3 scripts/ci/check_fn_dsa_genesis_gate.py --selftest
+          # TB-4/TB-9: every host a gitian descriptor builds has one Tor
+          # disposition in config/tor_pins.json, and the records that restate
+          # the pin (the tor-pin-verify default, the release checklist) agree
+          # with it. build.rs refuses a target with no row, but only on a
+          # target somebody compiles; this moves that to the pull request.
+          run_one "Tor pin: every built host has one disposition" \
+            python3 scripts/ci/check_tor_pin_targets.py
+          # The packaging job's own refusals, each bitten red: an edited
+          # tarball digest, an edited file digest, a planted file, a planted
+          # glibc-hwcaps directory, a full extracted bundle.
+          run_one "Tor pin gates self-test" \
+            python3 scripts/ci/test_tor_pin_gates.py
+          # tor-pin-verify retries a live step once, and only when every
+          # failure in it is a Tor bootstrap timeout. The cases that must
+          # not retry (a pin mismatch, any other failure) are held here.
+          run_one "Tor live-test retry rule self-test" \
+            scripts/ci/test_run_live_tor_tests.sh
+          # The release-time frozen-tuple gate refuses a cut whose consensus
+          # surface moved with the testnet genesis unchanged. It runs against
+          # a previous tag at a cut, so this lane holds its rule instead.
+          run_one "Frozen-tuple gate self-test" \
+            python3 scripts/ci/test_check_frozen_tuple.py
+          # A staging flag names a deadline release; the release-time gate
+          # refuses a cut at or past it while the flag exists (NI-R9 as
+          # amended 2026-11-04). It runs at a cut, so this lane holds its
+          # rule: precedence, refusal and an unreadable table failing.
+          run_one "Staging-deadline gate self-test" \
+            python3 scripts/release/check_staging_deadlines.py --selftest
+          # The same gate over the real table, at a tag below every
+          # deadline: a table it can no longer read fails here, per pull
+          # request, not first at a cut.
+          run_one "Staging-deadline gate reads the table" \
+            python3 scripts/release/check_staging_deadlines.py v0.0.1
+          # The domain-binding ratchet must be empty at v3.1.0 (the signing
+          # envelope §2.5, ruled 2026-11-05); the release-time gate refuses
+          # a cut at or past it with rows left. Its rule and its read of
+          # the real file run here, per pull request.
+          run_one "Binding-ratchet gate self-test" \
+            python3 scripts/release/check_binding_ratchet.py --selftest
+          run_one "Binding-ratchet gate reads the ratchet" \
+            python3 scripts/release/check_binding_ratchet.py v0.0.1
+          # TOR_SUPERVISOR.md §4.7: on Windows the managed tor inherits its
+          # control socket inside a window the spawn lock keeps private.
+          # Every Rust spawn in a crate whose image launches a managed tor
+          # takes the lock. A crate that merely links the client does not:
+          # the socket is not in its address space. A build script is its
+          # own process. `--selftest` first (rule 47).
+          run_one "Spawn sites take the spawn lock (selftest)" \
+            python3 scripts/ci/check_spawn_sites_take_the_lock.py --selftest
+          run_one "Spawn sites take the spawn lock" \
+            python3 scripts/ci/check_spawn_sites_take_the_lock.py
+          # DAEMON_CONFIG_CUTOVER.md §2.10: a child of the daemon's image
+          # inherits stdio and nothing else. C++ in that process opens
+          # descriptors without close-on-exec, so every production spawn in
+          # the same watched crates marks the rest in its pre_exec
+          # (shekyl-tor-control-client's `inherit`). `--selftest` first.
+          run_one "Spawn children inherit stdio only (selftest)" \
+            python3 scripts/ci/check_spawn_children_inherit_stdio_only.py --selftest
+          run_one "Spawn children inherit stdio only" \
+            python3 scripts/ci/check_spawn_children_inherit_stdio_only.py
+          # DRS-X: a regtest spawn that calls generateblocks or pop_blocks
+          # arms dev-rpc and checks this spawn's announcement. The sentence
+          # has three owners and they agree. `--selftest` first (rule 47).
+          run_one "Armed lever: log check" \
+            python3 scripts/test_armed_lever.py
+          run_one "Armed lever: launcher gate selftest" \
+            python3 scripts/ci/check_armed_lever_launchers.py --selftest
+          run_one "Armed lever: every regtest lever spawn arms the row" \
+            python3 scripts/ci/check_armed_lever_launchers.py
+
+          # ESR-14 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.20): the economics
+          # sim's fold files form chain quantities in production's integers
+          # (DQ-2G); a float-to-integer cast in one of them is a float that
+          # reached a chain quantity. `--selftest` first, so a reader that
+          # misses a pattern cannot pass as nothing found (rule 47).
+          run_one "Economics sim: no float reaches an integer in a fold file (selftest)" \
+            python3 scripts/ci/check_sim_integer_seams.py --selftest
+          run_one "Economics sim: no float reaches an integer in a fold file" \
+            python3 scripts/ci/check_sim_integer_seams.py
 
           grep_absent "C++ residue: no shekyl_y" \
             grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h'
@@ -217,24 +373,9 @@ jobs:
           grep_absent "C++ residue: no HASH_KEY_TXPROOF" \
             grep -rn 'HASH_KEY_TXPROOF' --include='*.cpp' --include='*.h' src/ tests/
 
-          echo "::group::C++ residue: no ecdhEncode/ecdhDecode outside Ledger"
-          matches=$(grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/) && rc=0 || rc=$?
-          if [ "$rc" -gt 1 ]; then
-            echo "FAIL: ecdh grep errored (rc=$rc)"
-            failed=1
-          else
-            outside=$(printf '%s' "$matches" | grep -v device_ledger) && frc=0 || frc=$?
-            if [ "$frc" -gt 1 ]; then
-              echo "FAIL: ecdh filter errored (rc=$frc)"
-              failed=1
-            elif [ -n "$outside" ]; then
-              echo "$outside"
-              echo "FAIL: ecdhEncode/ecdhDecode used outside Ledger gate"
-              failed=1
-            else
-              echo "PASS: no ecdhEncode/ecdhDecode outside Ledger"
-            fi
-          fi
-          echo "::endgroup::"
+          # The Ledger exemption is gone with the backend. A filter that
+          # dropped device_ledger hits would stay green if that tree came back.
+          grep_absent "C++ residue: no ecdhEncode/ecdhDecode" \
+            grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/
 
           exit "${failed}"

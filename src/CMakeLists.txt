@@ -30,8 +30,6 @@
 
 if (WIN32 OR STATIC)
   add_definitions(-DSTATICLIB)
-  # miniupnp changed their static define
-  add_definitions(-DMINIUPNP_STATICLIB)
 endif ()
 
 function (monero_private_headers group)
@@ -46,17 +44,6 @@ function (monero_install_headers subdir)
     DESTINATION "include/${subdir}"
     COMPONENT   development)
 endfunction ()
-
-function (enable_stack_trace target)
-  if(STACK_TRACE)
-    set_property(TARGET ${target}
-      APPEND PROPERTY COMPILE_DEFINITIONS "STACK_TRACE")
-    if (STATIC AND NOT MSVC)
-      set_property(TARGET "${target}"
-        APPEND PROPERTY LINK_FLAGS "-Wl,--wrap=__cxa_throw")
-    endif()
-  endif()
-endfunction()
 
 function (shekyl_add_executable name)
   source_group("${name}"
@@ -74,37 +61,18 @@ function (shekyl_add_executable name)
   set_property(TARGET "${name}"
     PROPERTY
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-  enable_stack_trace("${name}")
-  
   monero_set_target_no_relink("${name}")
   monero_set_target_strip    ("${name}")
 endfunction ()
 
-include(Version)
 monero_add_library(version SOURCES ${CMAKE_BINARY_DIR}/version.cpp DEPENDS genversion)
 
 add_subdirectory(common)
 add_subdirectory(crypto)
 add_subdirectory(fcmp)
-add_subdirectory(checkpoints)
 add_subdirectory(cryptonote_basic)
-add_subdirectory(cryptonote_core)
-add_subdirectory(lmdb)
-add_subdirectory(net)
-add_subdirectory(hardforks)
-add_subdirectory(blockchain_db)
-add_subdirectory(rpc)
 if(NOT IOS)
   add_subdirectory(serialization)
-endif()
-if(NOT IOS)
-  add_subdirectory(p2p)
-endif()
-add_subdirectory(cryptonote_protocol)
-if(NOT IOS)
-  add_subdirectory(gen_ssl_cert)
-  add_subdirectory(daemon)
-  add_subdirectory(blockchain_utilities)
 endif()
 
 if(BUILD_DEBUG_UTILITIES)

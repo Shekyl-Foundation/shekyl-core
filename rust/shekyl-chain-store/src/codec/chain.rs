@@ -66,9 +66,9 @@ pub(crate) fn stored_timelock(raw: u64) -> Timelock {
 /// `ConnectFacts`). The two counts are storage counts the store does
 /// maintain. `rct_outputs` is **this block's** RCT output count, not a
 /// running total: LMDB's `bi_cum_rct` is set to `num_rct_outs`
-/// (`db_lmdb.cpp:1006`) and the `major_version >= 4` arm that would add the
-/// parent's value is the dead Monero-v4 dispatch CEN-L15 rules "delete, do
-/// not port" (live major is 1); the field name follows what the bytes hold.
+/// (`db_lmdb.cpp:1019`) and nothing adds the parent's value. The Monero-v4
+/// arm that would have is deleted from the C++ and was never ported
+/// (CEN-L15); the field name follows what the bytes hold.
 /// `cumulative_tx_count` **is** a running total — the parent's plus this
 /// block's listed transactions, `checked_add` under SI-8 — because that is
 /// the read `get_tx_volume_window` needs in O(1). `cumulative_archival_len`
@@ -98,7 +98,7 @@ pub struct BlockInfo {
     /// The long-term weight median **in force for** this block — the
     /// median over the recorded blocks *below* it, the operand it was
     /// validated and fee-floored against, before its own weight enters the
-    /// window (SCR-19; `relay_floor_ring.cpp:196`–`:200`). Passed through
+    /// window (SCR-19). Passed through
     /// (`ConnectFacts::long_term_effective_median`), never derived here. A
     /// median of long-term weights is a long-term weight, so the same
     /// newtype; `cumulative_tx_count` is a count, like `rct_outputs`.
@@ -146,6 +146,55 @@ impl Canonical for BlockInfo {
             cumulative_tx_count: le_u64(&b[88..96]),
             long_term_effective_median: LongTermWeight::from_raw(le_u64(&b[96..104])),
             cumulative_archival_len: ArchivalLength::from_raw(le_u64(&b[104..112])),
+        })
+    }
+}
+
+/// `block_pow[h]` and the alt row's PoW field — the proof-of-work hash this
+/// node computed for a block under the seed it was claimed under, and that
+/// the verdict carrying it accepted (`ProvenPow`; `DRS_E5_POOL_ALT_PRUNE.md`
+/// 2026-10-15 ruling 3). A derived fact recorded beside the block, as its
+/// cumulative difficulty is, so a switch re-judges a block this node already
+/// hashed without hashing it again. 64 bytes: `seed ‖ pow`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordedPow {
+    /// The seed the hash was computed under (CEN-D3).
+    pub seed: BlockHash,
+    /// RandomX over the block's PoW preimage under `seed` (CEN-D2).
+    pub pow: shekyl_types::PowHash,
+}
+
+impl RecordedPow {
+    /// The row for a verdict's PoW.
+    #[must_use]
+    pub const fn of(proven: shekyl_chain_rules::ProvenPow) -> Self {
+        Self {
+            seed: proven.seed(),
+            pow: proven.pow(),
+        }
+    }
+
+    /// The row read back, as the rules crate's value.
+    #[must_use]
+    pub const fn proven(self) -> shekyl_chain_rules::ProvenPow {
+        shekyl_chain_rules::ProvenPow::recorded(self.seed, self.pow)
+    }
+}
+
+impl Canonical for RecordedPow {
+    const NAME: &'static str = "recorded_pow";
+    const FIXED_WIDTH: Option<usize> = Some(64);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.seed.as_bytes());
+        out.extend_from_slice(self.pow.as_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let b = exact::<64>(Self::NAME, bytes)?;
+        Ok(Self {
+            seed: BlockHash::from_bytes(b[0..32].try_into().expect("32-byte slice")),
+            pow: shekyl_types::PowHash::from_bytes(b[32..64].try_into().expect("32-byte slice")),
         })
     }
 }
@@ -306,7 +355,7 @@ fn le_u64(b: &[u8]) -> u64 {
 // crate must not depend on.
 // ---------------------------------------------------------------------------
 
-/// `hf_versions[height]` — the rule set in force at a height (CEN-B3's
+/// `rule_set_in_force[height]` — the rule set in force at a height (CEN-B3's
 /// belt), as a value this crate owns. The rules crate's id, stored as its
 /// raw `u8`.
 ///
@@ -319,7 +368,7 @@ fn le_u64(b: &[u8]) -> u64 {
 /// crate neither home may reach gets the one named adapter
 /// (`CURVE_TREE_STORE_SHAPES.md` CTS-Q6).
 ///
-/// `NAME` stays `"rule_set_id"`, so `hf_versions`' value `TypeName` is the
+/// `NAME` stays `"rule_set_id"`, so `rule_set_in_force`'s value `TypeName` is the
 /// `shekyl::Coded<rule_set_id>` it already was and the committed
 /// `rule_set_id.snap` fixtures do not move: the adapter names the codec's
 /// home, not a new layout.
@@ -526,7 +575,7 @@ mod tests {
     }
 
     /// `RuleSetInForce` is a home for the codec, not a layout: the bytes
-    /// are the id's raw `u8`, and `NAME` is what `hf_versions`' value
+    /// are the id's raw `u8`, and `NAME` is what `rule_set_in_force`'s value
     /// `TypeName` and `rule_set_id.snap` were already written against.
     #[test]
     fn rule_set_in_force_is_the_ids_raw_byte_under_the_unmoved_name() {

@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! D12's cause table. One enum. The C header is a projection of it.
+//! D12's cause table. One enum.
 
 /// Where a cause may be recorded. `LocalClose` applies in every phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,8 +29,8 @@ enum PhaseClass {
 }
 
 macro_rules! close_kinds {
-    ($(($disc:literal, $name:ident, $phase:ident, $c_name:literal),)*) => {
-        /// The D12 discriminant. Fieldless so the header can name each one.
+    ($(($disc:literal, $name:ident, $phase:ident),)*) => {
+        /// The D12 discriminant.
         #[repr(u8)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum CloseKind {
@@ -46,9 +46,12 @@ macro_rules! close_kinds {
                 }
             }
 
-            pub const fn c_name(self) -> &'static str {
-                match self {
-                    $(Self::$name => $c_name,)*
+            /// The discriminant, or `None` when `code` is not in the table.
+            #[must_use]
+            pub const fn from_code(code: u8) -> Option<Self> {
+                match code {
+                    $($disc => Some(Self::$name),)*
+                    _ => None,
                 }
             }
 
@@ -74,47 +77,41 @@ macro_rules! close_kinds {
     };
 }
 
+// What each kind is evidence of is not here: the connector that observed
+// the close stamps a `DialFailure` beside it (`failure.rs`,
+// `DIALER_OUTAGE_EVIDENCE.md` §2.2). This table is what the log names.
 close_kinds! {
-    (1, PrefixMismatch, BeforeChannel, "SHEKYL_CLOSE_PREFIX_MISMATCH"),
-    (2, TransportHandshakeFailed, BeforeChannel, "SHEKYL_CLOSE_TRANSPORT_HANDSHAKE_FAILED"),
-    (3, TransportTimeout, BeforeChannel, "SHEKYL_CLOSE_TRANSPORT_TIMEOUT"),
-    (4, AdmissionRefused, BeforeChannel, "SHEKYL_CLOSE_ADMISSION_REFUSED"),
-    (5, DialFailed, BeforeChannel, "SHEKYL_CLOSE_DIAL_FAILED"),
-    (6, ProxyRefused, BeforeChannel, "SHEKYL_CLOSE_PROXY_REFUSED"),
-    (7, LevinHandshakeTimeout, Gap, "SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT"),
-    (8, LevinHandshakeRejected, Gap, "SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED"),
-    (9, PeerClosed, ChannelExists, "SHEKYL_CLOSE_PEER_CLOSED"),
-    (10, RecordRejected, ChannelExists, "SHEKYL_CLOSE_RECORD_REJECTED"),
-    (11, SessionRefused, ChannelExists, "SHEKYL_CLOSE_SESSION_REFUSED"),
-    (12, IoError, ChannelExists, "SHEKYL_CLOSE_IO_ERROR"),
-    (13, SendQueueFull, ChannelExists, "SHEKYL_CLOSE_SEND_QUEUE_FULL"),
-    (14, LocalClose, Every, "SHEKYL_CLOSE_LOCAL_CLOSE"),
+    (1, PrefixMismatch, BeforeChannel),
+    (2, TransportHandshakeFailed, BeforeChannel),
+    (3, TransportTimeout, BeforeChannel),
+    (4, AdmissionRefused, BeforeChannel),
+    (5, DialFailed, BeforeChannel),
+    (6, ProxyRefused, BeforeChannel),
+    (7, LevinHandshakeTimeout, Gap),
+    (8, LevinHandshakeRejected, Gap),
+    (9, PeerClosed, ChannelExists),
+    (10, RecordRejected, ChannelExists),
+    (11, SessionRefused, ChannelExists),
+    (12, IoError, ChannelExists),
+    (13, SendQueueFull, ChannelExists),
+    (14, LocalClose, Every),
+    (15, InboundNotAccepted, BeforeChannel),
+    (16, ProxyUnavailable, BeforeChannel),
+    (17, AcceptRateExceeded, BeforeChannel),
+    // The session layer's two (P2P_3_REMNANT_CUTOVER_BRIEF.md §7.4, §7.6):
+    // a handshake whose network id is not ours is dropped, never banned;
+    // an invoke whose response did not arrive within INVOKE_TIMEOUT.
+    (18, NetworkMismatch, Gap),
+    (19, InvokeTimeout, ChannelExists),
 }
 
 /// One close cause. `reply_code` is the overlay reply for
 /// [`CloseKind::ProxyRefused`] and zero for every other kind.
-///
-/// `repr(C)` is the layout `shekyl_close_cause` projects. The header's
-/// size and field offsets are these constants, so a Rust layout change
-/// and a C typedef that no longer matches both fail.
-#[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CloseCause {
     kind: CloseKind,
     reply_code: u16,
 }
-
-const CLOSE_CAUSE_SIZE: usize = 4;
-const CLOSE_CAUSE_ALIGN: usize = 2;
-const CLOSE_CAUSE_KIND_OFFSET: usize = 0;
-const CLOSE_CAUSE_REPLY_OFFSET: usize = 2;
-
-const _: () = {
-    assert!(std::mem::size_of::<CloseCause>() == CLOSE_CAUSE_SIZE);
-    assert!(std::mem::align_of::<CloseCause>() == CLOSE_CAUSE_ALIGN);
-    assert!(std::mem::offset_of!(CloseCause, kind) == CLOSE_CAUSE_KIND_OFFSET);
-    assert!(std::mem::offset_of!(CloseCause, reply_code) == CLOSE_CAUSE_REPLY_OFFSET);
-};
 
 impl CloseCause {
     /// A cause other than [`CloseKind::ProxyRefused`].
@@ -133,8 +130,10 @@ impl CloseCause {
         }
     }
 
-    /// `ProxyRefused` with the overlay's reply code. An unreachable onion
-    /// is this cause.
+    /// `ProxyRefused` with the overlay's reply code. What the reply is
+    /// evidence of is the connector's stamping (the Tor connector's
+    /// `stamp_reply`); this crate holds no SOCKS knowledge. An unreachable
+    /// onion is this cause.
     #[must_use]
     pub const fn proxy_refused(reply_code: u16) -> Self {
         Self {
@@ -154,73 +153,9 @@ impl CloseCause {
     }
 }
 
-const HEADER_PREAMBLE: &str = "\
-// Copyright (c) 2026, The Shekyl Foundation
-//
-// All rights reserved.
-// BSD-3-Clause
-//
-// Generated from shekyl_transport_layer::CloseKind. Do not edit.
-// The Rust enum is the cause table. This header is the projection
-// shekyl_ffi.h includes. A test fails if the two differ.
-
-#ifndef SHEKYL_CLOSE_CAUSE_H
-#define SHEKYL_CLOSE_CAUSE_H
-
-#include <stddef.h>
-#include <stdint.h>
-
-/* One close cause. reply_code is the overlay reply for
-   SHEKYL_CLOSE_PROXY_REFUSED and zero for every other kind.
-   The size and offsets below are CloseCause's. */
-typedef struct shekyl_close_cause {
-    uint8_t kind;
-    uint16_t reply_code;
-} shekyl_close_cause;
-
-";
-
-/// The C header `shekyl_ffi.h` includes. Discriminants come from
-/// [`CloseKind::ALL`]. Size and offsets come from [`CloseCause`].
-#[must_use]
-pub fn c_header() -> String {
-    let mut out = String::from(HEADER_PREAMBLE);
-    use std::fmt::Write as _;
-    writeln!(
-        out,
-        "\
-#if defined(__cplusplus)
-static_assert(sizeof(shekyl_close_cause) == {CLOSE_CAUSE_SIZE}, \"close cause size\");
-static_assert(offsetof(shekyl_close_cause, kind) == {CLOSE_CAUSE_KIND_OFFSET}, \"close cause kind\");
-static_assert(offsetof(shekyl_close_cause, reply_code) == {CLOSE_CAUSE_REPLY_OFFSET}, \"close cause reply_code\");
-#else
-_Static_assert(sizeof(shekyl_close_cause) == {CLOSE_CAUSE_SIZE}, \"close cause size\");
-_Static_assert(offsetof(shekyl_close_cause, kind) == {CLOSE_CAUSE_KIND_OFFSET}, \"close cause kind\");
-_Static_assert(offsetof(shekyl_close_cause, reply_code) == {CLOSE_CAUSE_REPLY_OFFSET}, \"close cause reply_code\");
-#endif
-",
-    )
-    .expect("header write");
-    for kind in CloseKind::ALL {
-        writeln!(out, "#define {} {}", kind.c_name(), kind.code()).expect("header write");
-    }
-    out.push_str("#endif\n");
-    out
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{c_header, CloseCause, CloseKind, Phase};
-
-    #[test]
-    fn the_header_is_the_enum() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../src/shekyl/close_cause.h"
-        );
-        let header = std::fs::read_to_string(path).expect("close cause header");
-        assert_eq!(header, c_header());
-    }
+    use super::{CloseCause, CloseKind, Phase};
 
     #[test]
     fn each_cause_sits_in_its_d12_row() {
@@ -232,6 +167,9 @@ mod tests {
             CloseKind::DialFailed,
             CloseKind::ProxyRefused,
             CloseKind::LocalClose,
+            CloseKind::InboundNotAccepted,
+            CloseKind::ProxyUnavailable,
+            CloseKind::AcceptRateExceeded,
         ];
         let gap = [
             CloseKind::LevinHandshakeTimeout,
@@ -242,6 +180,8 @@ mod tests {
             CloseKind::IoError,
             CloseKind::SendQueueFull,
             CloseKind::LocalClose,
+            CloseKind::NetworkMismatch,
+            CloseKind::InvokeTimeout,
         ];
         let after = [
             CloseKind::PeerClosed,
@@ -250,6 +190,7 @@ mod tests {
             CloseKind::IoError,
             CloseKind::SendQueueFull,
             CloseKind::LocalClose,
+            CloseKind::InvokeTimeout,
         ];
         assert_eq!(kinds_in(Phase::BeforeChannel), before);
         assert_eq!(kinds_in(Phase::Gap), gap);

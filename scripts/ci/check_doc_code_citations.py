@@ -18,7 +18,7 @@
 # required to be true now. Resolving those against HEAD fails correctly
 # written rows and teaches authors to re-anchor pinned records, which is the
 # opposite of what the pin is for. The failure is not hypothetical: C0 renames
-# `shekyl_archival_debit_auth_pin` -> `shekyl_archival_cold_authority_pin`, so
+# `debit_auth_pin` -> `cold_authority_pin`, so
 # every row citing the old name is correct at its pin and resolves to nothing
 # at HEAD. Moving from line numbers to symbols does not escape the pin
 # problem; it only makes the failure louder.

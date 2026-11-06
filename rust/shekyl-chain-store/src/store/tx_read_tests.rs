@@ -13,9 +13,9 @@ use shekyl_types::{BlockHash, BlockHeight, PqcAuthHash, PrunableHash, TxHash};
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
-    connect_chain_anchored, credited, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
+    body, connect_chain_anchored, credited, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
-use super::error::{CellFault, StoreError, StoreInvariant};
+use super::error::{CellFault, HeldRegion, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, EPOCH};
 use super::*;
 use crate::codec::{stored_timelock, Canonical, Coded, Raw, TxIndex, TxPrunedSegment};
@@ -32,29 +32,33 @@ fn hash_of(tx: &Transaction) -> TxHash {
 }
 
 /// The spendable prefix, then the first admissible spend block listing
-/// three bodies: the join that opens a record, the 3-part serve credit on
-/// it (a serve-credit-only transaction — no `pqc_auths` by rule, CEN-H20;
-/// since DRS-E4 commit 4 it connects only behind its record, CEN-L7, so
-/// it sits in the spend block rather than at height 1), and a spend, which
-/// carries per-input `pqc_auths` and is 4-part. Coinbases at every height,
-/// so the dense id space is `0..TX_COUNT`: the coinbases through the spend
-/// block, then the join, the serve credit, the spend.
+/// the join that opens a record (a real spend of genesis's coinbase, the
+/// one matured for that block, funding the bond), then the spend block
+/// listing two bodies: the 3-part serve credit on that record (a
+/// serve-credit-only transaction — no `pqc_auths` by rule, CEN-H20; it
+/// connects only behind its record, CEN-L7 / CEN-J4, read off the view
+/// before the block, so it sits one block above the join rather than
+/// beside it or at height 1), and a real spend (of block 1's coinbase,
+/// the one matured for the spend block and spent by none), which carries
+/// per-input `pqc_auths` and is 4-part. Coinbases at every height, so the
+/// dense id space is `0..TX_COUNT`: the coinbases and the join through the
+/// spend block's coinbase, then the serve credit, the spend.
 fn tx_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>, Transaction, Transaction) {
     let store = ChainStore::create(path, EPOCH).expect("create");
-    let [join, plain] = credited(10, [0x5e; 32]);
-    let listing = spendable_prefix(&[vec![join, plain.clone(), spend(15, 2)]]);
-    // The spend as connected — anchored on the chain — is the one the reads
+    let (join, plain) = credited(10);
+    let listing = spendable_prefix(vec![vec![join], vec![body(plain.clone()), spend()]]);
+    // The spend as connected — built on the chain — is the one the reads
     // are asked about by hash.
-    let (hashes, mut anchored) = connect_chain_anchored(&store, &listing);
-    let with_pqc = anchored
+    let (grown, mut connected) = connect_chain_anchored(&store, &listing);
+    let with_pqc = connected
         .pop()
         .and_then(|mut block| block.pop())
         .expect("the last block lists the spend");
-    (store, hashes, plain, with_pqc)
+    (store, grown.hashes, plain, with_pqc)
 }
 
-/// The height [`tx_chain`]'s spend block sits at.
-const SPEND_HEIGHT: u64 = FIRST_SPEND_HEIGHT;
+/// The height [`tx_chain`]'s spend block sits at: one above the join's.
+const SPEND_HEIGHT: u64 = FIRST_SPEND_HEIGHT + 1;
 /// [`tx_chain`]'s dense id count: one coinbase per height through the
 /// spend block, the join, the serve credit, the spend.
 const TX_COUNT: u64 = SPEND_HEIGHT + 1 + 3;
@@ -118,11 +122,11 @@ fn tx_count_is_the_dense_id_space_coinbases_included() {
     // Every id below the count has a location reachable by hash; the count
     // is the authority the by-id reads bound against (T4, T5).
     assert_eq!(
-        snap.tx_prunable(id(TX_COUNT)).expect("read"),
+        snap.tx_archival_good(id(TX_COUNT)).expect("read"),
         AtIndex::BeyondCount
     );
     assert!(matches!(
-        snap.tx_prunable(id(TX_COUNT - 1)).expect("read"),
+        snap.tx_archival_good(id(TX_COUNT - 1)).expect("read"),
         AtIndex::Recorded(_)
     ));
     cleanup(&path);
@@ -145,27 +149,30 @@ fn tx_record_carries_the_permanent_half_and_recomposes_the_wire_bytes() {
         let segments = tx.write_segments().expect("segments");
         assert_eq!(record.prunable_hash, parts.prunable_hash);
         assert_eq!(record.pqc_auth_hash, parts.pqc_auth_hash);
+        assert_eq!(record.pruned.clone().into_wire_bytes(), segments.pruned);
+        // The skeleton is the record's permanent half as the wire carries
+        // it, and rebinds to the txid the block names (SB-Q2).
+        let skeleton = record.skeleton_of();
+        assert_eq!(skeleton.unprunable, segments.pruned);
+        assert_eq!(skeleton.txid().expect("binds"), parts.hash);
+        // T3 + T4 compose to `get_tx_blob`'s `pruned ‖ pqc_auths ‖ prunable`
+        // (STX-8), which is the transaction as the wire carries it.
+        let AtIndex::Recorded(ArchivalGood::Retained {
+            prunable,
+            pqc_auths,
+        }) = snap.tx_archival_good(record.location.id).expect("read")
+        else {
+            panic!("a freshly connected transaction's good is retained");
+        };
         assert_eq!(
-            record.pqc_auths.is_some(),
+            pqc_auths.is_some(),
             parts.pqc_auth_hash.is_some(),
             "§7.7 leg (ii): the pqc_auths region is present iff the txid is 4-part"
         );
-        assert!(
-            !matches!(record.pqc_auths, Some(PqcAuths::Discarded)),
-            "a freshly connected 4-part transaction's pqc_auths region is retained"
-        );
-        assert_eq!(record.pruned.clone().into_wire_bytes(), segments.pruned);
-        // T3 + T4 compose to `get_tx_blob`'s `pruned ‖ pqc_auths ‖ prunable`
-        // (STX-8), which is the transaction as the wire carries it.
-        let AtIndex::Recorded(Prunable::Retained(prunable)) =
-            snap.tx_prunable(record.location.id).expect("read")
-        else {
-            panic!("a freshly connected transaction's region is retained");
-        };
         assert_eq!(prunable.clone().into_wire_bytes(), segments.prunable);
         let mut wire = Vec::new();
         tx.write(&mut wire).expect("write");
-        assert_eq!(record.wire_bytes(prunable), Some(wire));
+        assert_eq!(record.wire_bytes(&prunable, pqc_auths.as_ref()), wire);
     }
     assert_eq!(
         snap.tx_record(&TxHash::from_bytes([0xee; 32]))
@@ -207,7 +214,7 @@ fn a_recorded_transaction_missing_its_prunable_hash_row_is_si7_not_a_log_line() 
         .expect_err("a permanent row is missing");
     assert!(is_si7_absent(&err, "txs_prunable_hash"), "got {err:?}");
     let err = snap
-        .tx_prunable(tx_id)
+        .tx_archival_good(tx_id)
         .expect_err("T4 refuses the same file");
     assert!(is_si7_absent(&err, "txs_prunable_hash"), "got {err:?}");
     assert_eq!(store.connect_state(), ConnectState::Live);
@@ -215,7 +222,7 @@ fn a_recorded_transaction_missing_its_prunable_hash_row_is_si7_not_a_log_line() 
 }
 
 #[test]
-fn a_pqc_auth_hash_row_without_its_segment_is_discarded_and_a_segment_without_its_row_is_si7() {
+fn a_half_held_archival_good_is_si42_and_a_pqc_segment_without_its_row_is_si7() {
     let path = tmp("tx-record-pqc-pair");
     let (store, _, _, with_pqc) = tx_chain(&path);
     let hash = hash_of(&with_pqc);
@@ -238,24 +245,84 @@ fn a_pqc_auth_hash_row_without_its_segment_is_discarded_and_a_segment_without_it
     }
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().expect("read");
-    // Hash row present, segment absent: §7.7 leg (iii)'s one state — the
-    // retention prune discards `pqc_auths` by shard (DRS-E1 S-PRUNE), so
-    // this is *discarded*, never a fault, and the wire cannot be recomposed
-    // from this node.
+    // The pqc hash row says 4-part, the prunable region is held, the pqc
+    // region is not: a **half** of the archival good. S-PRUNE deletes both
+    // tables over one id range, so no write path produces this; it is
+    // SI-42, not a `Discarded` that would hide the disagreement (SB-Q2).
+    // The permanent half (T3) still answers.
     let record = snap.tx_record(&hash).expect("read").expect("recorded");
-    assert_eq!(record.pqc_auths, Some(PqcAuths::Discarded));
-    let AtIndex::Recorded(Prunable::Retained(prunable)) =
-        snap.tx_prunable(record.location.id).expect("read")
-    else {
-        panic!("the prunable region was not touched");
-    };
-    assert_eq!(
-        record.wire_bytes(prunable),
-        None,
-        "a discarded region has no wire bytes here"
+    assert!(record.pqc_auth_hash.is_some(), "the hash row is permanent");
+    let err = snap
+        .tx_archival_good(record.location.id)
+        .expect_err("a half-held good is a store fault");
+    assert!(
+        matches!(
+            err,
+            StoreError::InvariantViolated(StoreInvariant::ArchivalGoodHalfHeld {
+                id,
+                held: HeldRegion::Prunable
+            }) if id == tx_id
+        ),
+        "got {err:?}"
     );
-    // The reverse disagreement — a segment with no hash row — is SI-7:
-    // the hash rows are permanent and nothing may delete one.
+    assert!(err.to_string().contains("SI-42"), "{err}");
+    // The reverse half — the pqc region held, the prunable one not — is
+    // the same fault, naming the other region.
+    drop(snap);
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut segments = txn.open_table(crate::schema::TXS_PQC_AUTHS).expect("t");
+            let bytes = with_pqc.write_segments().expect("segments").pqc_auths;
+            segments
+                .insert(
+                    tx_id.to_raw(),
+                    crate::codec::Raw::<crate::codec::TxPqcAuthsSegment>::new(&bytes),
+                )
+                .expect("restore");
+            let mut prunable = txn.open_table(TXS_PRUNABLE).expect("t");
+            prunable.remove(tx_id.to_raw()).expect("remove");
+        }
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().expect("read");
+    let err = snap
+        .tx_archival_good(tx_id)
+        .expect_err("the other half is the same fault");
+    assert!(
+        matches!(
+            err,
+            StoreError::InvariantViolated(StoreInvariant::ArchivalGoodHalfHeld {
+                held: HeldRegion::PqcAuths,
+                ..
+            })
+        ),
+        "got {err:?}"
+    );
+    // Both regions gone, hash rows kept, is §7.7 leg (iii)'s one state —
+    // `Discarded`, what the retention prune leaves (DRS-E1 S-PRUNE).
+    drop(snap);
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut segments = txn.open_table(crate::schema::TXS_PQC_AUTHS).expect("t");
+            segments.remove(tx_id.to_raw()).expect("remove");
+        }
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().expect("read");
+    assert_eq!(
+        snap.tx_archival_good(tx_id).expect("read"),
+        AtIndex::Recorded(ArchivalGood::Discarded)
+    );
+    // A segment with no hash row is SI-7, on T4: the hash rows are
+    // permanent and nothing may delete one (§7.7 leg (ii)).
     drop(snap);
     drop(store);
     {
@@ -264,13 +331,24 @@ fn a_pqc_auth_hash_row_without_its_segment_is_discarded_and_a_segment_without_it
         {
             let mut hashes = txn.open_table(TXS_PQC_AUTH_HASH).expect("t");
             hashes.remove(tx_id.to_raw()).expect("remove");
-            // Restore the segment so only the hash row is missing.
+            // Restore both segments so only the hash row is missing.
+            let segments_of = with_pqc.write_segments().expect("segments");
             let mut segments = txn.open_table(crate::schema::TXS_PQC_AUTHS).expect("t");
-            let bytes = with_pqc.write_segments().expect("segments").pqc_auths;
             segments
                 .insert(
                     tx_id.to_raw(),
-                    crate::codec::Raw::<crate::codec::TxPqcAuthsSegment>::new(&bytes),
+                    crate::codec::Raw::<crate::codec::TxPqcAuthsSegment>::new(
+                        &segments_of.pqc_auths,
+                    ),
+                )
+                .expect("plant");
+            let mut prunable = txn.open_table(TXS_PRUNABLE).expect("t");
+            prunable
+                .insert(
+                    tx_id.to_raw(),
+                    crate::codec::Raw::<crate::codec::TxPrunableSegment>::new(
+                        &segments_of.prunable,
+                    ),
                 )
                 .expect("plant");
         }
@@ -278,8 +356,12 @@ fn a_pqc_auth_hash_row_without_its_segment_is_discarded_and_a_segment_without_it
     }
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().expect("read");
+    assert!(
+        snap.tx_record(&hash).expect("read").is_some(),
+        "T3 reads the hash rows and does not see the segment"
+    );
     let err = snap
-        .tx_record(&hash)
+        .tx_archival_good(tx_id)
         .expect_err("segment without its hash row");
     assert!(is_si7_absent(&err, "txs_pqc_auth_hash"), "got {err:?}");
     cleanup(&path);
@@ -288,8 +370,7 @@ fn a_pqc_auth_hash_row_without_its_segment_is_discarded_and_a_segment_without_it
 // ---------------------------------------------------------------------- T4
 
 #[test]
-fn tx_prunable_is_retained_below_the_count_beyond_count_at_it_and_discarded_when_the_segment_is_gone(
-) {
+fn tx_archival_good_is_retained_below_the_count_beyond_count_at_it_and_discarded_when_gone() {
     let path = tmp("tx-prunable");
     let (store, _, plain, _) = tx_chain(&path);
     let count = store.begin_read().expect("read").tx_count().expect("read");
@@ -305,8 +386,8 @@ fn tx_prunable_is_retained_below_the_count_beyond_count_at_it_and_discarded_when
         for raw in 0..count {
             assert!(
                 matches!(
-                    snap.tx_prunable(id(raw)).expect("read"),
-                    AtIndex::Recorded(Prunable::Retained(_))
+                    snap.tx_archival_good(id(raw)).expect("read"),
+                    AtIndex::Recorded(ArchivalGood::Retained { .. })
                 ),
                 "id {raw}: a freshly connected transaction's region is held"
             );
@@ -314,11 +395,11 @@ fn tx_prunable_is_retained_below_the_count_beyond_count_at_it_and_discarded_when
         // Bound first: a forged or stale id is invalid input, not corruption
         // (round 4) — `BeyondCount`, and no row is read.
         assert_eq!(
-            snap.tx_prunable(id(count)).expect("read"),
+            snap.tx_archival_good(id(count)).expect("read"),
             AtIndex::BeyondCount
         );
         assert_eq!(
-            snap.tx_prunable(id(u64::MAX)).expect("read"),
+            snap.tx_archival_good(id(u64::MAX)).expect("read"),
             AtIndex::BeyondCount
         );
     }
@@ -338,8 +419,8 @@ fn tx_prunable_is_retained_below_the_count_beyond_count_at_it_and_discarded_when
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().expect("read");
     assert_eq!(
-        snap.tx_prunable(plain_id).expect("read"),
-        AtIndex::Recorded(Prunable::Discarded)
+        snap.tx_archival_good(plain_id).expect("read"),
+        AtIndex::Recorded(ArchivalGood::Discarded)
     );
     // The permanent half is unaffected: T3 still answers, with the hash the
     // client needs to verify bytes fetched from an archiver.
@@ -501,7 +582,10 @@ fn a_missing_primary_row_below_the_count_is_si9_on_every_by_id_read_whatever_the
         "the hole is below the (now shorter) count, so the bound admits it"
     );
     for (name, err) in [
-        ("T4", snap.tx_prunable(plain_id).expect_err("primary hole")),
+        (
+            "T4",
+            snap.tx_archival_good(plain_id).expect_err("primary hole"),
+        ),
         (
             "T5",
             snap.tx_output_indices(plain_id).expect_err("primary hole"),
@@ -580,7 +664,7 @@ fn an_index_id_at_or_past_the_count_is_si9_on_every_hash_read_even_with_a_stray_
         );
     }
     assert_eq!(
-        snap.tx_prunable(planted_id).expect("read"),
+        snap.tx_archival_good(planted_id).expect("read"),
         AtIndex::BeyondCount,
         "by id, past the count is invalid input, not a served stray primary"
     );
@@ -622,11 +706,18 @@ fn no_read_projection_hands_out_unlock_time() {
         let TxRecord {
             location,
             pruned,
-            pqc_auths,
             prunable_hash,
             pqc_auth_hash,
+            archival_len,
         } = rec;
-        (location, pruned, pqc_auths, prunable_hash, pqc_auth_hash)
+        (location, pruned, prunable_hash, pqc_auth_hash, archival_len)
+    };
+    let _ = |good: ArchivalGood| match good {
+        ArchivalGood::Retained {
+            prunable,
+            pqc_auths,
+        } => Some((prunable, pqc_auths)),
+        ArchivalGood::Discarded => None,
     };
 }
 
@@ -634,7 +725,7 @@ fn no_read_projection_hands_out_unlock_time() {
 fn the_hash_rows_cannot_hold_a_malformed_digest_so_undecodable_is_unreachable_by_construction() {
     // PR #800 review round 3 asked T4 to decode the hash row, as T3 does,
     // so a malformed row is SI-7 `Undecodable` on both. Both now read it
-    // through one reader (`tx_reads::hash_row`) — but the fault the review
+    // through one reader (`tx_reads::coded_row`) — but the fault the review
     // feared cannot be planted: the codecs are fixed-width 32 and the
     // engine refuses a row of any other width at write time
     // (`redb` asserts the width in `append`), and a 32-byte row *is* a

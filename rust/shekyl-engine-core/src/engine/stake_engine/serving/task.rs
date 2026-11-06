@@ -10,11 +10,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_operator_alarm::disk::{apply as report_disk, DiskObservation};
+use shekyl_operator_alarm::serve_health::{apply as report_health, ServeHealthObservation};
 use shekyl_operator_alarm::serve_set::{apply as report, ServeSetObservation};
 use shekyl_operator_alarm::OperatorAlarms;
 use shekyl_p_host::{
-    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, ServeObligation,
-    ServeSetPinner, StalenessBound,
+    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, PriorityFailures,
+    ServeCounters, ServeObligation, ServeSetPinner, StalenessBound,
 };
 use shekyl_tor_control_wallet::service::WalletTorControlConfig;
 use tokio::sync::watch;
@@ -22,6 +23,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::disk::{spawn_disk_probe, DISK_HEADROOM_WARN_BYTES};
+use super::health::spawn_health_probe;
 
 use crate::engine::refresh_slot::SlotGuard;
 use crate::engine::stake_timing::{
@@ -130,14 +132,39 @@ impl ServingConfig {
 ///
 /// **Do not reconstruct this from the store's prune-disabled flag.** That
 /// flag is one-way and survives Release (Q-5's named residue), so a former
-/// foundation node would report `FoundationCompleteTree` forever — a
+/// foundation node would report `SupportCompleteTree` forever — a
 /// retention fact misread as a posture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServingPosture {
     /// Ordinary market staking: the record's explicit shard list.
     Market,
     /// The Foundation whole-corpus backstop: the frozen prefix.
-    FoundationCompleteTree,
+    SupportCompleteTree,
+}
+
+/// One read of a parked serving lifecycle (`SH-3`).
+///
+/// Posture and the unlowered-thread count belong to one lifecycle. A
+/// restart swaps the handle under the cadence slot lock, and reading the
+/// two through two locks can pair one lifecycle's posture with another's
+/// count. [`ServingHandle::status`] is that pair. The caller that parks
+/// the handle holds the slot lock across the read, so the swap cannot
+/// land between the fields.
+///
+/// `posture` is `None` while the lifecycle is parked but has not published
+/// an obligation: the launch standoff, a failed start, teardown. The count
+/// is a reading whenever the lifecycle exists, and zero means every live
+/// serving thread was lowered. Absence of this value is the only "no
+/// lifecycle" answer, and it is the same absence the wire uses for both
+/// fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServingStatus {
+    /// What this persona is obligated to serve, or `None` while nothing
+    /// has been published yet.
+    pub posture: Option<ServingPosture>,
+    /// Serving threads of this lifecycle at normal priority because
+    /// lowering failed. Zero is a reading.
+    pub priority_not_lowered: u32,
 }
 
 /// A running serving lifecycle: the cancel token plus the task's join handle.
@@ -155,9 +182,25 @@ pub struct ServingHandle {
     join: Option<JoinHandle<()>>,
     alarms: Arc<OperatorAlarms>,
     posture: watch::Receiver<Option<ServingPosture>>,
+    priority_failures: PriorityFailures,
 }
 
 impl ServingHandle {
+    /// Serving-runtime threads currently at normal priority because the
+    /// OS refused to lower them (`SH-3`, `ARCHIVAL_CHALLENGE_MECHANISM.md`
+    /// §9.8): the call's result for the threads that are still running,
+    /// and nothing more. A thread that has exited leaves the count. Zero
+    /// on every supported platform; a non-zero count is the one thing the
+    /// operator is shown when the platform refused, beside the one warning
+    /// this task logs per host (the host itself, on `P`'s serving path,
+    /// logs nothing — `WSS-20`). It does not say whether the lowering
+    /// yields CPU to the daemon. Born with this handle, so it reads after a
+    /// failed start too.
+    #[must_use]
+    pub fn priority_not_lowered(&self) -> u32 {
+        self.priority_failures.count()
+    }
+
     /// The operator alarm board this lifecycle reports through.
     ///
     /// **Held here because this is what the embedder holds.** The board's
@@ -193,6 +236,20 @@ impl ServingHandle {
     #[must_use]
     pub fn posture(&self) -> Option<ServingPosture> {
         *self.posture.borrow()
+    }
+
+    /// Posture and unlowered count together.
+    ///
+    /// The two reads are this handle's watch and its counter. They are one
+    /// lifecycle by construction: this value is the lifecycle. The slot
+    /// that parks the handle is what a caller holds when a restart must
+    /// not swap the lifecycle between the two reads.
+    #[must_use]
+    pub fn status(&self) -> ServingStatus {
+        ServingStatus {
+            posture: self.posture(),
+            priority_not_lowered: self.priority_not_lowered(),
+        }
     }
 
     /// Whether the serving task is still running.
@@ -257,6 +314,10 @@ where
     // established what it serves, so the standoff window reads "not
     // serving" — which it is.
     let (posture_tx, posture_rx) = watch::channel(None);
+    // Born here, beside the handle the embedder reads, and handed to the
+    // host: the count of serving threads the platform would not lower is
+    // readable whether or not the host ever started (SH-3).
+    let priority_failures = PriorityFailures::new();
     let join = tokio::spawn(run_serving_task(
         tor,
         serving,
@@ -268,6 +329,7 @@ where
         ServingSetup {
             config,
             store_fs_path,
+            priority_failures: priority_failures.clone(),
         },
         cancel_token.clone(),
         slot_guard,
@@ -277,6 +339,7 @@ where
         cancel_token,
         join: Some(join),
         alarms,
+        priority_failures,
     }
 }
 
@@ -309,6 +372,9 @@ struct ServingSetup {
     /// different mount, and the disk that matters is the one the
     /// corpus lands on.
     store_fs_path: PathBuf,
+    /// The handle's counter of serving threads the platform would not
+    /// lower, handed to the host at start (SH-3).
+    priority_failures: PriorityFailures,
 }
 
 async fn run_serving_task<P>(
@@ -329,13 +395,15 @@ async fn run_serving_task<P>(
     let ServingSetup {
         config,
         store_fs_path,
+        priority_failures,
     } = setup;
-    // Both conditions are watched from the moment the task exists, so a
-    // wallet sitting in the launch standoff reads "not serving yet"
+    // All three conditions are watched from the moment the task exists, so
+    // a wallet sitting in the launch standoff reads "not serving yet"
     // rather than reading nothing at all — including when start fails
     // or cancel fires before the host is up.
     report(&alarms, ServeSetObservation::NotServing);
     report_disk(&alarms, DiskObservation::NotServing);
+    report_health(&alarms, ServeHealthObservation::NotServing);
 
     let delay = draw_serving_launch_delay(config.launch_window, &mut OsRngGapAdapter);
     tokio::select! {
@@ -346,9 +414,20 @@ async fn run_serving_task<P>(
 
     // `start_host` has already reported why it failed, and every reason it
     // gives up on is one this task cannot retry (its inputs are consumed).
-    let Some(host) = start_host(tor, serving, pinner, &alarms).await else {
+    let Some(host) = start_host(tor, serving, pinner, &alarms, &priority_failures).await else {
         return;
     };
+    // The one warning per host when the OS refused to lower a serving
+    // thread (SH-3, rule 82). Own task, for the reason the health probe is
+    // one: the refresh below awaits the store actor with no timeout, and a
+    // refusal during that wait is the case the line exists for. The counter
+    // wakes this task; the loop does not poll. Spawned here, before the
+    // rest of setup, so a refusal recorded while the pool was built — the
+    // build is synchronous, before `start`'s first await — is already
+    // waiting and is said on the first poll. A start that failed returned
+    // above and does not warn. The host itself logs nothing (WSS-20). This
+    // task carries no span, so the warning task does not enter one.
+    let priority_warning = spawn_priority_warning(priority_failures, cancel.clone());
 
     // OA-1's tor producer attaches to *this* host's supervisor, so the transport
     // conditions are on the board for as long as the host is.
@@ -370,53 +449,109 @@ async fn run_serving_task<P>(
     // which an operator reads "not serving" while the onion is published —
     // which is precisely the misreading this channel exists to prevent, and it
     // would have lasted a full refresh cadence. Read rather than refresh:
-    // `start` just pinned, so a refresh here would be a redundant actor round
-    // trip to re-derive what the witness already holds.
-    report(&alarms, read(&host, bound));
+    // `start` just pinned, so a refresh here would re-pin and re-derive what
+    // the witness already holds.
+    //
+    // The read is an actor round trip with no timeout, same as a refresh, so
+    // it stays under `cancel`. A store that stops answering after the host
+    // is up must not hold `ServingHandle::shutdown` open. Dropping the read
+    // leaves the witness `start` already installed. The probes below are
+    // not spawned until the read returns, so a cancel during it tears down
+    // only the host, the posture translator, and the priority warning.
+    let mut health = None;
+    let mut disk = None;
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => {}
+        observation = read(&host, bound) => {
+            report(&alarms, observation);
 
-    // Own task: the probe is not a serve-set reading, and a wedged
-    // refresh must not also silence the volume check. First reading is
-    // immediate, so the board is not unwatched for a full cadence.
-    let disk = spawn_disk_probe(
-        store_fs_path,
-        DISK_HEADROOM_WARN_BYTES,
-        config.refresh_cadence,
-        Arc::clone(&alarms),
-        cancel.clone(),
-    );
+            // TJ-D's operator surface (`SF-D6`): the host's serve counters, windowed
+            // per cadence so the board answers "is the key refusing *now*". Own
+            // task, sampling through the host's detached reader rather than through
+            // `&host`: the loop below awaits `refresh` for as long as the store
+            // actor takes (only `cancel` interrupts it), and a key that starts
+            // refusing while a refresh is wedged on that actor is exactly the
+            // reading this row exists to carry. First reading is
+            // immediate, so a published onion never sits `NotServing` for a cadence.
+            let counters = host.counter_reader();
+            health = Some(spawn_health_probe(
+                move || ServeCounters::read(&counters),
+                config.refresh_cadence,
+                Arc::clone(&alarms),
+                cancel.clone(),
+            ));
 
-    let mut ticker = tokio::time::interval(config.refresh_cadence);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // The first tick completes immediately, and the line above already reported
-    // that state; consume it so the loop starts one cadence out.
-    ticker.tick().await;
+            // Own task: the probe is not a serve-set reading, and a wedged
+            // refresh must not also silence the volume check. First reading is
+            // immediate, so the board is not unwatched for a full cadence.
+            disk = Some(spawn_disk_probe(
+                store_fs_path,
+                DISK_HEADROOM_WARN_BYTES,
+                config.refresh_cadence,
+                Arc::clone(&alarms),
+                cancel.clone(),
+            ));
 
-    loop {
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => break,
-            _ = ticker.tick() => {}
+            let mut ticker = tokio::time::interval(config.refresh_cadence);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // The first tick completes immediately, and the line above already reported
+            // that state; consume it so the loop starts one cadence out.
+            ticker.tick().await;
+
+            loop {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    _ = ticker.tick() => {}
+                }
+
+                // The refresh is an actor round trip with no timeout, so it stays
+                // under `cancel` too: a refresh wedged on the store actor must not
+                // hold `ServingHandle::shutdown` open. Dropping it mid-flight is
+                // safe — `PersonaServingHost::refresh` swaps the witness only after
+                // the pin returns, so an abandoned attempt leaves the previous pins
+                // in place, and the teardown below reports `NotServing` over
+                // whatever this tick would have said.
+                let observation = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    observation = observe(&host, bound) => observation,
+                };
+                report(&alarms, observation);
+                // Re-read after every refresh so a host whose obligation *arm*
+                // changes is not stuck on the start snapshot. The type is the
+                // arm, not the size — a growing prefix does not change what we
+                // publish.
+                publish_posture(&serving_posture, &host);
+            }
         }
-
-        report(&alarms, observe(&host, bound).await);
-        // Re-read after every refresh so a host whose obligation *arm*
-        // changes is not stuck on the start snapshot. The type is the
-        // arm, not the size — a growing prefix does not change what we
-        // publish.
-        publish_posture(&serving_posture, &host);
     }
 
     // Ordered teardown: tor first, then the listener (§9.7 item 4).
+    // Reached whether the post-start read finished or cancel won it.
     host.shutdown().await;
     posture.abort();
-    // Drain the probe before disarming: a late measured reading must
-    // not overwrite `NotServing` after the host is gone.
-    let _disk = disk.await;
+    // Drain the probes that were spawned, and the priority warning, before
+    // disarming. A late measured reading must not overwrite `NotServing`
+    // after the host is gone, and a warning already woken must be said
+    // before this task returns — dropping the join handle would detach it.
+    // Cancel has already fired; the warning task prefers a ready refusal
+    // over that cancel, so the line is not lost on the way out. A cancel
+    // during the post-start read never spawned the probes.
+    if let Some(disk) = disk {
+        let _disk = disk.await;
+    }
+    if let Some(health) = health {
+        let _health = health.await;
+    }
+    let _priority_warning = priority_warning.await;
     // Nothing is watched once the host is gone. Disarm rather than clear: a
     // closed wallet is not a healthy serve-set, and a live pruned-bytes report
     // stays live because nothing observed it fixed.
     report(&alarms, ServeSetObservation::NotServing);
     report_disk(&alarms, DiskObservation::NotServing);
+    report_health(&alarms, ServeHealthObservation::NotServing);
     // The posture, by contrast, IS cleared: it is a statement about what is
     // being served, and after teardown nothing is. Leaving the last value
     // would have `staking_info` report a posture for a host that has
@@ -444,7 +579,7 @@ fn publish_posture<P>(
     let pinned = host.pinned_serve_set();
     let posture = match pinned.serve_set().obligation() {
         ServeObligation::ShardList(_) => ServingPosture::Market,
-        ServeObligation::CompleteTreePrefix { .. } => ServingPosture::FoundationCompleteTree,
+        ServeObligation::CompleteTreePrefix { .. } => ServingPosture::SupportCompleteTree,
     };
     let _sent = serving_posture.send(Some(posture));
 }
@@ -465,7 +600,7 @@ where
             },
         };
     }
-    read(host, bound)
+    read(host, bound).await
 }
 
 /// Read the current witness without refreshing.
@@ -473,13 +608,14 @@ where
 /// Split from [`observe`] for the post-start report: the host has just pinned,
 /// so the state is known and a refresh would only re-derive it. Keeping the two
 /// separate is also what stops "report the current state" from silently
-/// acquiring a network round trip later.
-fn read<P>(host: &PersonaServingHost<P>, bound: StalenessBound) -> ServeSetObservation
+/// acquiring a network round trip later. Its reads are of the local store,
+/// through the curve-tree actor.
+async fn read<P>(host: &PersonaServingHost<P>, bound: StalenessBound) -> ServeSetObservation
 where
     P: ServeSetPinner,
 {
     let pinned = host.pinned_serve_set();
-    match caught_up(&pinned) {
+    match caught_up(host, &pinned).await {
         Some(false) => return ServeSetObservation::CatchingUp,
         // The store could not be read at all. That is a refresh-side fault, not
         // a reason to report health.
@@ -491,7 +627,7 @@ where
         Some(true) => {}
     }
 
-    match host.staleness(bound) {
+    match host.staleness(bound).await {
         Ok(staleness) => ServeSetObservation::Refreshed {
             staleness,
             already_pruned: count(pinned.already_pruned().len()),
@@ -507,6 +643,40 @@ where
 /// bigger problems than the width of this counter.
 fn count(members: usize) -> u32 {
     u32::try_from(members).unwrap_or(u32::MAX)
+}
+
+/// Say the one priority warning, then return.
+///
+/// The refusal arm is first and the select is biased. Teardown fires
+/// `cancel` and then awaits this task; when both are ready, the refusal
+/// is the line the operator gets. A cancel that won that race would drop
+/// it. No cause, and a fired cancel, returns without a line.
+fn spawn_priority_warning(failures: PriorityFailures, cancel: CancellationToken) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        tokio::select! {
+            biased;
+            cause = failures.until_first_refusal() => {
+                let line = priority_refusal_line(&cause);
+                tracing::warn!("{line}");
+            }
+            () = cancel.cancelled() => {}
+        }
+    })
+}
+
+/// The one warning a host gets when the OS refused to lower a serving
+/// thread's CPU priority.
+///
+/// Names the first cause the platform gave and where the count is, and
+/// says serving continues — the operator's next action is to read the
+/// count, not to restart anything (rule 82). Said once: the counter keeps
+/// that cause and wakes this one task.
+fn priority_refusal_line(cause: &str) -> String {
+    format!(
+        "the OS refused to lower a serving thread's CPU priority ({cause}); it serves at normal \
+         priority, and the count of such threads is on the serving status as \
+         serving_priority_not_lowered"
+    )
 }
 
 /// Start the host, reporting whichever condition prevented it.
@@ -528,11 +698,12 @@ async fn start_host<P>(
     serving: PersonaServing,
     pinner: P,
     alarms: &OperatorAlarms,
+    priority_failures: &PriorityFailures,
 ) -> Option<PersonaServingHost<P>>
 where
     P: ServeSetPinner + Send + Sync + 'static,
 {
-    match PersonaServingHost::start(tor, serving, pinner).await {
+    match PersonaServingHost::start(tor, serving, pinner, priority_failures).await {
         Ok(host) => Some(host),
         Err(HostError::Pin(PinError::MembersAlreadyPruned { shard_ids })) => {
             // Terminal by the store's own contract: chain replay, not retry.
@@ -563,17 +734,32 @@ where
 /// Whether the wallet has ingested close enough to the chain for the staleness
 /// bound to mean anything. `None` when the store could not be read.
 ///
-/// Both operands come off the witness: `as_of_height` is the chain height the
-/// bond record was read at, `sync_tip_height` is what this wallet has ingested.
-fn caught_up(pinned: &PinnedServeSet) -> Option<bool> {
+/// `as_of_height` is the chain height the bond record was read at, off the
+/// witness; the ingest tip is what this wallet has ingested, read from the
+/// served store through the host's pinner.
+async fn caught_up<P: ServeSetPinner>(
+    host: &PersonaServingHost<P>,
+    pinned: &PinnedServeSet,
+) -> Option<bool> {
     let chain = pinned.serve_set().as_of_height().to_raw();
-    let ingested = pinned.reader().sync_tip_height().ok()?.to_raw();
+    let ingested = host.ingested_tip().await.ok()?.to_raw();
     Some(chain.saturating_sub(ingested) <= CAUGHT_UP_SLACK_BLOCKS)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_priority_refusal_line_names_the_cause_and_where_the_count_is() {
+        let cause = "this platform has no per-thread priority under normal scheduling";
+        let line = priority_refusal_line(cause);
+        assert!(
+            line.contains("no per-thread priority under normal scheduling"),
+            "{line}"
+        );
+        assert!(line.contains("serving_priority_not_lowered"), "{line}");
+    }
 
     /// The bound is derived from the cadence and the chain's block target, not
     /// picked — so a change to either moves it, and a mis-wired zero target is
@@ -615,361 +801,5 @@ mod tests {
 }
 
 #[cfg(test)]
-mod lifecycle_tests {
-    use super::*;
-    use shekyl_curve_tree::{BlockHeight, LeafStore, ServingReader};
-    use shekyl_operator_alarm::{AlarmCondition, Arming, ConditionState, DisarmedReason};
-    use shekyl_p_host::PinReport as HostPinReport;
-    use shekyl_tor_control_wallet::service::OnionIdentity;
-
-    use crate::engine::refresh::RefreshSlot;
-
-    /// A pinner over a real (empty) store. An empty serve-set is a legitimate
-    /// production state — a released persona reports exactly this — so the
-    /// lifecycle can be driven end to end without fabricating segments.
-    struct EmptySetPinner {
-        store: Arc<LeafStore>,
-        fail: bool,
-    }
-
-    impl ServeSetPinner for EmptySetPinner {
-        async fn pin_serve_set(&self) -> Result<HostPinReport, String> {
-            if self.fail {
-                return Err("pinner is down".into());
-            }
-            Ok(HostPinReport {
-                set: shekyl_p_host::ReportedSet::ShardList {
-                    shard_ids: Vec::new(),
-                    outcomes: Vec::new(),
-                },
-                as_of_height: BlockHeight::from_raw(0),
-                reader: ServingReader::new(Arc::clone(&self.store)),
-            })
-        }
-    }
-
-    fn pinner(fail: bool) -> EmptySetPinner {
-        EmptySetPinner {
-            store: Arc::new(LeafStore::open_ephemeral().expect("store")),
-            fail,
-        }
-    }
-
-    /// A tor config whose binary cannot pass the hash gate. `start` returns as
-    /// soon as the supervisor is spawned (it does not await readiness), so this
-    /// drives a *successful* host start without a real tor.
-    fn churning_tor(dir: &tempfile::TempDir) -> WalletTorControlConfig {
-        let bogus = dir.path().join("not-tor");
-        std::fs::write(&bogus, b"not a tor binary").expect("write");
-        WalletTorControlConfig {
-            binary: shekyl_tor_control_wallet::service::TorBinarySource::At(bogus),
-            data_dir: dir.path().join("data"),
-            events: shekyl_tor_control_wallet::service::EventSink::unsubscribed(),
-            policy: shekyl_tor_control_wallet::service::SupervisorPolicy::default(),
-            disable_network: true,
-            posture: shekyl_tor_control_wallet::service::ServingPosture::Client,
-        }
-    }
-
-    fn serving_identity() -> PersonaServing {
-        PersonaServing {
-            identity: OnionIdentity::from_hs_id_seed(&[7u8; 32]),
-            virtual_port: SERVING_VIRTUAL_PORT,
-            max_streams: SERVING_MAX_STREAMS,
-            key: std::sync::Arc::new(shekyl_p_host::NoResidentKey),
-            // Stamped, so these lifecycle cases exercise a persona whose
-            // gate can answer. What the gate does with an unstamped cache is
-            // `signer`'s and `daemon_tip`'s to assert, not this suite's.
-            tip: {
-                let tip = std::sync::Arc::new(shekyl_p_host::DaemonTipCache::new(
-                    Duration::from_secs(3_600),
-                ));
-                tip.stamp_synced(BlockHeight::from_raw(9_000));
-                tip
-            },
-        }
-    }
-
-    /// No standoff and a cadence far longer than the test: the board must be
-    /// correct on the strength of the post-start report alone, never because a
-    /// refresh tick rescued it.
-    fn immediate() -> ServingConfig {
-        ServingConfig {
-            launch_window: Duration::ZERO,
-            refresh_cadence: Duration::from_secs(3_600),
-            staleness_bound: StalenessBound::blocks(10),
-        }
-    }
-
-    /// A path that exists on the test machine's filesystem — the probe
-    /// must resolve rather than report `Unreadable` and muddy what the
-    /// lifecycle cases assert about the serve-set.
-    fn store_path() -> PathBuf {
-        std::env::temp_dir()
-    }
-
-    fn claim() -> SlotGuard {
-        RefreshSlot::new()
-            .try_claim()
-            .expect("fresh slot is claimable")
-    }
-
-    async fn settle_until(
-        alarms: &OperatorAlarms,
-        want: impl Fn(&shekyl_operator_alarm::AlarmBoard) -> bool,
-    ) -> bool {
-        for _ in 0..200 {
-            if want(&alarms.board()) {
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        false
-    }
-
-    /// The board must not read "not serving" while the onion is live.
-    ///
-    /// Without the post-start report the board keeps the standoff's
-    /// `NotServing` until the first refresh tick — up to a full cadence of an
-    /// operator being told the persona is down while it is published. The
-    /// cadence here is an hour, so only the immediate report can satisfy this.
-    #[tokio::test]
-    async fn the_board_stops_saying_not_serving_as_soon_as_the_host_is_up() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let alarms = Arc::new(OperatorAlarms::new());
-        let handle = spawn_serving_task(
-            churning_tor(&dir),
-            serving_identity(),
-            pinner(false),
-            Arc::clone(&alarms),
-            immediate(),
-            store_path(),
-            claim(),
-        );
-
-        // `is_some_and`, not `!=`: the row does not exist until the spawned
-        // task's first write, and `None != Some(..)` is *true* — so a `!=`
-        // predicate is satisfied by the board being empty, before anything has
-        // happened at all. That version passed with the post-start report
-        // deleted, which is the definition of a test that proves nothing.
-        let armed = settle_until(&alarms, |b| {
-            b.condition(AlarmCondition::ServeSetIntegrity)
-                .map(ConditionState::arming)
-                .is_some_and(|a| a != Arming::Disarmed(DisarmedReason::NotServing))
-        })
-        .await;
-        assert!(
-            armed,
-            "the serve-set row still reads as a stopped transport after the host \
-             started; nothing would correct it for a whole refresh cadence",
-        );
-        handle.shutdown().await;
-    }
-
-    /// **The posture snapshot is the live serving truth, and absent before
-    /// anything is served.** The empty-set pinner reports the list arm, so a
-    /// started host publishes `Market`; before start and after shutdown the
-    /// answer is `None`, which the surfaces render "not serving".
-    ///
-    /// The `None`-after-shutdown half is the one that earns its keep: a
-    /// snapshot left at its last value would have `staking_info` report a
-    /// posture for a host that has stopped — the same false-healthy reading
-    /// the alarm board refuses on every other condition.
-    #[tokio::test]
-    async fn the_posture_snapshot_tracks_the_host_and_clears_on_shutdown() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let alarms = Arc::new(OperatorAlarms::new());
-        let handle = spawn_serving_task(
-            churning_tor(&dir),
-            serving_identity(),
-            pinner(false),
-            Arc::clone(&alarms),
-            immediate(),
-            store_path(),
-            claim(),
-        );
-
-        // Published once the host has actually pinned — never before, so the
-        // standoff window cannot claim a posture it has not established.
-        let mut published = None;
-        for _ in 0..200 {
-            if let Some(p) = handle.posture() {
-                published = Some(p);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert_eq!(
-            published,
-            Some(ServingPosture::Market),
-            "an empty ShardSetCompact obligation is the market arm — not \
-             the corpus, and not absent"
-        );
-
-        // `shutdown` consumes the handle, so the receiver is cloned first —
-        // otherwise the clearing half of this test's name could only be
-        // *asserted in a comment*, which is how a test ends up proving less
-        // than it claims. The channel outlives the sender, so a clone still
-        // reads the task's final write.
-        let after_shutdown = handle.posture.clone();
-        handle.shutdown().await;
-        assert_eq!(
-            *after_shutdown.borrow(),
-            None,
-            "teardown must clear the posture: a snapshot left at its last \
-             value would have `staking_info` report a posture for a host \
-             that has stopped"
-        );
-    }
-
-    /// The disk probe reports against a real filesystem and reaches the
-    /// board: a started host arms `ServingDiskHeadroom` rather than leaving
-    /// it unobserved. The first reading is immediate — this uses the
-    /// hour-long `immediate()` cadence so a pass cannot be a refresh tick
-    /// rescuing a hitchhiked probe. The threshold arithmetic itself is
-    /// `shekyl-operator-alarm`'s (`disk::tests`); what only this layer can
-    /// prove is that the reading is taken at all and lands on the board.
-    #[tokio::test]
-    async fn a_started_host_observes_disk_headroom() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let alarms = Arc::new(OperatorAlarms::new());
-        let handle = spawn_serving_task(
-            churning_tor(&dir),
-            serving_identity(),
-            pinner(false),
-            Arc::clone(&alarms),
-            immediate(),
-            store_path(),
-            claim(),
-        );
-
-        let observed = settle_until(&alarms, |b| {
-            b.condition(AlarmCondition::ServingDiskHeadroom)
-                .map(ConditionState::arming)
-                .is_some_and(|a| a == Arming::Armed)
-        })
-        .await;
-        assert!(
-            observed,
-            "the serving task never reported disk headroom; the condition \
-             has no row, which renders as unwatched"
-        );
-        handle.shutdown().await;
-        assert_eq!(
-            alarms
-                .board()
-                .condition(AlarmCondition::ServingDiskHeadroom)
-                .map(ConditionState::arming),
-            Some(Arming::Disarmed(DisarmedReason::NotServing)),
-            "teardown must disarm the volume check: a host that has \
-             stopped is not a healthy disk"
-        );
-    }
-
-    /// An unreadable path degrades to *disarmed*, and the serving task keeps
-    /// running. A broken disk probe must never take down a healthy server —
-    /// the diagnostic is subordinate to the obligation it reports on.
-    #[tokio::test]
-    async fn an_unreadable_disk_path_disarms_without_killing_the_task() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let alarms = Arc::new(OperatorAlarms::new());
-        let handle = spawn_serving_task(
-            churning_tor(&dir),
-            serving_identity(),
-            pinner(false),
-            Arc::clone(&alarms),
-            immediate(),
-            dir.path().join("no-such-directory"),
-            claim(),
-        );
-
-        let disarmed = settle_until(&alarms, |b| {
-            b.condition(AlarmCondition::ServingDiskHeadroom)
-                .map(ConditionState::arming)
-                .is_some_and(|a| a == Arming::Disarmed(DisarmedReason::DiskUnreadable))
-        })
-        .await;
-        assert!(
-            disarmed,
-            "an unreadable path must read as unknown headroom, never as \
-             healthy and never as an alarm"
-        );
-        // The serve-set side is still being reported, which is the proof the
-        // task survived the failed probe rather than unwinding on it.
-        assert!(
-            alarms
-                .board()
-                .condition(AlarmCondition::ServeSetIntegrity)
-                .is_some(),
-            "the serving task must keep serving through a broken disk probe"
-        );
-        handle.shutdown().await;
-    }
-
-    /// The channel is reachable. Without this the whole of OA-1 is write-only
-    /// in production: alarms are raised onto a board nothing can subscribe to.
-    #[tokio::test]
-    async fn the_handle_exposes_the_board_it_reports_through() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let alarms = Arc::new(OperatorAlarms::new());
-        let handle = spawn_serving_task(
-            churning_tor(&dir),
-            serving_identity(),
-            pinner(false),
-            Arc::clone(&alarms),
-            immediate(),
-            store_path(),
-            claim(),
-        );
-
-        // The embedder's only reference is the handle.
-        let from_handle = handle.alarms();
-        let seen = {
-            let board = from_handle.subscribe();
-            let b = board.borrow().clone();
-            b.conditions().count()
-        };
-        assert!(
-            seen > 0 || settle_until(&from_handle, |b| b.conditions().count() > 0).await,
-            "the handle's board must be the one the task writes to",
-        );
-        handle.shutdown().await;
-    }
-
-    /// A start failure is reported *and* the handle still comes back, so the
-    /// embedder can render why rather than seeing a wallet that silently is
-    /// not serving.
-    #[tokio::test]
-    async fn a_failed_start_lands_on_the_board_reachable_from_the_handle() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let alarms = Arc::new(OperatorAlarms::new());
-        let handle = spawn_serving_task(
-            churning_tor(&dir),
-            serving_identity(),
-            pinner(true),
-            Arc::clone(&alarms),
-            immediate(),
-            store_path(),
-            claim(),
-        );
-
-        let reported = settle_until(&handle.alarms(), |b| {
-            b.condition(AlarmCondition::ServeSetIntegrity)
-                .and_then(ConditionState::live)
-                .is_some()
-        })
-        .await;
-        assert!(reported, "a pinner that is down must reach the operator");
-        assert_eq!(
-            handle
-                .alarms()
-                .board()
-                .condition(AlarmCondition::ServingDiskHeadroom)
-                .map(ConditionState::arming),
-            Some(Arming::Disarmed(DisarmedReason::NotServing)),
-            "a host that never started still watches the volume row — \
-             unwatched would look like the probe was never wired"
-        );
-        handle.shutdown().await;
-    }
-}
+#[path = "task_lifecycle.rs"]
+mod lifecycle_tests;

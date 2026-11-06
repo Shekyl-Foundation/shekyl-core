@@ -18,7 +18,7 @@
 //! |---|---|
 //! | Serve-set drifts from the consensus bond record → own node prunes bonded bytes → slash (§9.6 item 4) | [`ServeSet`] has no public constructor; the pinner reports it |
 //! | Serving starts before the pins are applied | [`PersonaServingHost::start`] takes a pinner and acquires the witness itself |
-//! | Pins land on one store while another is served | The witness carries its own reader; `start` takes no store argument |
+//! | Pins land on one store while another is served | The witness carries its store's identity and refuses a reading of any other; `start` takes no store argument |
 //! | Loopback endpoint rebinds under an unchanged onion mapping → published address answers nothing | The host binds once and owns the endpoint for its life |
 //! | A serving persona runs on vanguards-lite | `ServingPosture::Serving` carries the onion *and* `Managed` as one value |
 //! | Teardown leaves a live descriptor at a closed port | [`PersonaServingHost::shutdown`] stops tor before the listener |
@@ -39,10 +39,10 @@
 //! instance. Nothing in this path crosses the FFI boundary.
 //!
 //! What the host can hold is deliberately narrow — an expanded
-//! `OnionIdentity`, a read-only `ServingReader` (via the live pin
-//! witness), and the one [`ServeSetPinner`] taken at start. No seed, no
-//! bond spend authority, no store write handle of its own: pinning writes
-//! go through the pinner to the curve-tree actor. §7.2(iii)'s custody
+//! `OnionIdentity`, the live pin witness, and the one [`ServeSetPinner`]
+//! taken at start. No seed, no bond spend authority, no handle on the
+//! curve-tree store at all: pinning writes and the witness's reads go
+//! through the pinner to the curve-tree actor, the store's one owner. §7.2(iii)'s custody
 //! boundary is *which secret crosses into the serving side*, and here it
 //! is enforced by the types of the inputs; see [`PersonaServingHost`] for
 //! the assumption that framing carries when the serving side is
@@ -55,11 +55,12 @@
 //! status line, header set, route) is `RF-R1`
 //! (`docs/design/ARCHIVAL_SERVING_ROUTE.md`), not a format-round candidate;
 //! §9.5's exclusion of it from that round stands. The response *payload* is
-//! no longer open: `RF-D4` ruled it on 2026-08-20 and `shekyl-p-serve` emits
-//! the frame (`shekyl_curve_tree::served_frame`). Nothing in this crate
-//! reads or writes it — the host wires lifecycle, not bytes — but "the
-//! response wire format is undecided" has stopped being true and should not
-//! be repeated from here. Calling [`PersonaServingHost::refresh`] from the P-scan
+//! no longer open: it is the `shekyl_wire::shard_frame` body over the
+//! shard's archival good (`SF-D8` amendment 2026-10-08), which the
+//! provider holds and `shekyl-p-serve` streams unframed. Nothing in this
+//! crate reads or writes it — the host wires lifecycle, not bytes — but
+//! "the response wire format is undecided" has stopped being true and
+//! should not be repeated from here. Calling [`PersonaServingHost::refresh`] from the P-scan
 //! sweep is the wiring slice's job (SH-2b), on the crate that owns the
 //! claim-source decode and the curve-tree actor; this crate owns the
 //! refresh *behaviour* and the seam ([`ServeSetPinner`]) the sweep plugs
@@ -80,14 +81,22 @@
 
 pub mod daemon_tip;
 pub mod host;
+pub mod runtime;
 pub mod serve_set;
 pub mod signer;
 
 pub use daemon_tip::DaemonTipCache;
 pub use host::{HostError, PersonaServing, PersonaServingHost, ServeCounters};
+pub use runtime::{PriorityFailures, SERVING_BLOCKING, SERVING_WORKERS};
 pub use serve_set::{
     PinError, PinReport, PinnedServeSet, ReportedSet, ServeObligation, ServeSet, ServeSetPinner,
-    Staleness, StalenessBound,
+    Staleness, StalenessBound, StoreFacts, StoreIdentity,
 };
-pub use shekyl_p_serve::PassKey;
-pub use signer::NoResidentKey;
+pub use shekyl_p_serve::{
+    sign_pass_transcript, sign_receipt_transcript, HeldShardSource, PassKey, ProviderError,
+    ServeCounterReader, SignRefused, IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
+};
+#[cfg(any(test, feature = "test-signer"))]
+pub use signer::signer_over_tip;
+#[cfg(any(test, feature = "test-signer"))]
+pub use signer::{signer_at_synced_tip, RefusingKey};

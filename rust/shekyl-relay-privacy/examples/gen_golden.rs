@@ -14,10 +14,8 @@
 //! deliberate friction is that you still have to paste them: a vector that
 //! rewrote itself would pass forever and pin nothing.
 
-use shekyl_relay_privacy::{
-    bounded_uniform, DandelionParams, EpochScheduler, GeometricTable, PoissonTable, RelayRng,
-    SplitMix64,
-};
+use shekyl_draw_rng::{bounded_uniform, RelayRng, SplitMix64};
+use shekyl_relay_privacy::{DandelionParams, EpochScheduler, GeometricTable, PoissonTable};
 
 fn main() {
     println!("// Paste into tests/golden_vector.rs, and explain what moved.\n");

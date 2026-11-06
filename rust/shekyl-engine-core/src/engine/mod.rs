@@ -342,6 +342,7 @@ pub mod merge;
 pub mod message_signing;
 pub mod network;
 pub mod output_selector;
+pub(crate) mod ownership;
 pub mod payment_requests;
 pub mod pending;
 /// Pending-post family coordination: the seal write lock + the foreground
@@ -359,7 +360,7 @@ pub mod refresh;
 pub(crate) mod refresh_slot;
 /// Track-2 end-to-end FAKECHAIN regtest (C++↔Rust FCMP++ verify parity). Spawns
 /// a real `shekyld --regtest` and drives the production [`Engine`] against it;
-/// all tests are `#[ignore]`d and require `SHEKYLD_BIN`.
+/// every live-daemon test is `#[ignore]`d and requires `SHEKYLD_BIN`.
 #[cfg(test)]
 mod regtest_e2e;
 /// Finality comparison shared by the producer fork walk and curve-tree ingest.
@@ -401,6 +402,7 @@ pub mod unstake_facade;
 /// The `submit_release` dispatch seam (PR-P4): seal a `PendingRelease`, then
 /// the persona-transport choke point; driven by `StakeFacade::unstake` (PR-C).
 pub(crate) mod release_dispatch;
+pub mod staking_outcomes;
 pub mod staking_read;
 /// `docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3: the submit lifecycle
 /// driver — the wallet-side actor that lifts the [`submit_watchdog`]
@@ -412,7 +414,7 @@ pub mod staking_read;
 pub(crate) mod submit_lifecycle;
 /// PR-4 (`docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3): the submit
 /// watchdog's pure decision kernel — F14-lock-keyed held tracking, the
-/// privacy-tiered escape ladder with presence branching, health-context
+/// privacy-tiered escape ladder with presence branching, daemon-health
 /// gating, and the F35 horizon bound. Driven by [`submit_lifecycle`].
 pub(crate) mod submit_watchdog;
 /// CT-5c: production no longer uses synthetic membership vectors — the signer
@@ -436,7 +438,7 @@ mod tx_weight_kat;
 pub mod view_material;
 
 pub use capability::Capability;
-pub use daemon::{DaemonClient, DaemonExpectation, FakechainPolicy};
+pub use daemon::{DaemonClient, DaemonExpectation};
 pub use diagnostics::{
     BuildErrorKind, BuildRequestSummary, DaemonOp, DiagnosticSink, DiscardReason, MalformedKind,
     NoopDiagnosticSink, PendingTxDiagnostic, ProtocolErrorKind, RefreshDiagnostic, SuppressedClass,
@@ -475,7 +477,8 @@ pub use output_selector::{
 };
 pub use pending::{
     FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
-    SubmitOutcome, TxHash, TxRecipient, TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
+    SubmitOutcome, TxDestination, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
+    DEFAULT_RESERVATION_TTL,
 };
 // The P-scan lifecycle surface (WI-1): handle + start error + cadence default,
 // re-exported so embedders holding the `PScanHandle` (the module keeps the
@@ -504,7 +507,12 @@ pub use signer::MultisigSignerV2;
 pub use signer::{
     EngineSignerKind, LocalSigner, SignedTransfer, Signer, SoloSigner, TransferSigningContext,
 };
-pub use staking_read::{StakedBalance, StakedOutput, StakingReadError, StakingReadView};
+pub use staking_outcomes::{
+    AcknowledgeOutcomeError, InFlightRecord, InFlightState, ReportedOutcome,
+};
+pub use staking_read::{
+    StakedBalance, StakedOutput, StakingLedgerSnapshot, StakingReadError, StakingReadView,
+};
 pub use unstake_facade::{CollectOutcome, CollectUnstakedError, UnstakeError, UnstakeOutcome};
 pub use view_material::ViewMaterial;
 
@@ -634,11 +642,14 @@ pub struct Engine<
     /// which owns the FCMP++ [`CurveTreeClient`](shekyl_curve_tree::CurveTreeClient)
     /// — the `redb`-backed leaf store living beside the wallet files (CT-5,
     /// `docs/design/CT5_ENGINE_WIRING.md` §3.1). Opened and spawned in
-    /// [`assemble`](Self::assemble); its `Drop` (last handle clone going away)
-    /// stops the actor and closes the store on engine close. Unlike `key` the
-    /// curve tree carries **no secret** (public on-chain material only), so the
-    /// actor has no `on_stop` zeroization; durability is per-ingest, not
-    /// at-close, so the async actor shutdown loses nothing.
+    /// [`assemble`](Self::assemble); [`Engine::release`] stops the actor and
+    /// awaits it, and the actor drops the store in `on_stop`, so the file is
+    /// closed when the release returns (`CURVE_TREE_CLIENT.md` §11). Unlike
+    /// `key` the curve tree carries **no secret** (public on-chain material
+    /// only); durability is per-ingest, not at-close. *Premise refuted
+    /// (2026-11-02):* this said the handle's drop closed the store on engine
+    /// close and that the unawaited shutdown lost nothing; it lost the file
+    /// lock's release, which a reopen then raced.
     //
     // The handle is read on the merge ingest path (`handle.ingest` /
     // `rollback_to_fork`, CT-5a commits 4–5) and the spend-gate cursor read, so

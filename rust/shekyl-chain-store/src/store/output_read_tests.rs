@@ -7,12 +7,13 @@
 //! `output_reads.rs` so the surface's tests live with its body.
 
 use redb::ReadableTable;
-use shekyl_types::{BlockHash, BlockHeight, KeyImage};
+use shekyl_types::{BlockHeight, KeyImage};
 
 use shekyl_chain_rules::RuleSet;
 
 use super::connect_fixtures::{
-    at, candidate, connect_chain, judge, spend, spend_at, spendable_prefix, FIRST_SPEND_HEIGHT,
+    connect_chain, connect_chain_anchored, height_maturing, judge, key_images, output_of,
+    prefix_to, spend, spendable_prefix, Grown, FIRST_SPEND_HEIGHT,
 };
 use super::error::{StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
@@ -21,6 +22,7 @@ use crate::codec::Canonical;
 use crate::ids::OutputSlot;
 use crate::schema::OUTPUT_AMOUNTS;
 use shekyl_chain_rules::harness::fixture;
+use shekyl_wire::Transaction;
 
 fn h(raw: u64) -> BlockHeight {
     BlockHeight::from_raw(raw)
@@ -35,11 +37,18 @@ fn gi(raw: u64) -> shekyl_types::GlobalOutputIndex {
 /// output. Global indices run in block / tx / vout order: one miner output
 /// per height up to and including the spend block's, then the spend's two
 /// vouts ([`SPEND_VOUT_0`], `+ 1`), then the last miner's ([`LAST_MINER`]);
-/// [`OUTPUT_COUNT`] in all.
-fn output_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>) {
+/// [`OUTPUT_COUNT`] in all. Returns the spend as connected, for the reads
+/// that must know what it put at those two indices.
+fn output_chain(path: &std::path::Path) -> (ChainStore, Grown, Transaction) {
     let store = ChainStore::create(path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)], vec![]]));
-    (store, hashes)
+    let (grown, mut connected) =
+        connect_chain_anchored(&store, &spendable_prefix(vec![vec![spend()], vec![]]));
+    connected.pop();
+    let the_spend = connected
+        .pop()
+        .and_then(|mut block| block.pop())
+        .expect("the spend block lists the spend");
+    (store, grown, the_spend)
 }
 
 /// The height [`output_chain`]'s spend sits at.
@@ -52,32 +61,54 @@ const LAST_MINER: u64 = SPEND_VOUT_0 + 2;
 /// How many outputs [`output_chain`] records.
 const OUTPUT_COUNT: u64 = LAST_MINER + 1;
 
+/// The key images every listed body of `connected` carries, in listing
+/// order — the set the chain spent, read off the bodies as connected.
+fn spent_images(connected: &[Vec<Transaction>]) -> Vec<[u8; 32]> {
+    connected.iter().flatten().flat_map(key_images).collect()
+}
+
+/// A curve point no spend here carries — a well-formed image the chain did
+/// not spend, as distinct from `[0xEE; 32]`, which is not a point at all
+/// (membership is a byte question here, not a rule). Asserted against the
+/// connected set rather than assumed: the spender derives its images.
+fn unspent_point(spent: &[[u8; 32]]) -> [u8; 32] {
+    let point = fixture::point(16);
+    assert!(
+        !spent.contains(&point),
+        "the probe point is not a spent image"
+    );
+    point
+}
+
 // ------------------------------------------------------------ S-OUT-KI K1
 
 #[test]
 fn has_key_image_is_true_for_a_spent_image_and_false_otherwise_on_one_snapshot() {
     let path = tmp("read-has-key-image");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(
+    // Two blocks spending: the first finds genesis's coinbase matured, the
+    // second block 1's — one more matures per block above the first.
+    let (_, connected) = connect_chain_anchored(
         &store,
-        &spendable_prefix(&[vec![spend(9, 2)], vec![spend(15, 2)]]),
+        &spendable_prefix(vec![vec![spend()], vec![spend()]]),
     );
+    let spent = spent_images(&connected);
+    assert_eq!(spent.len(), 2, "one spend per listed block");
     let snap = store.begin_read().expect("read");
     // N calls on one snapshot are the batch form `has_key_images` was
     // (SOK-3): every answer is against the same committed state.
-    // The spent images are the fixtures' by name; the unspent ones are a
-    // table point no fixture used and a non-point (membership is a byte
-    // question here, not a rule).
-    for (image, spent) in [
-        (fixture::point(9), true),
-        (fixture::point(15), true),
-        (fixture::point(16), false),
+    // The spent images are the connected spends'; the unspent ones are a
+    // point no spend carries and a non-point.
+    for (image, is_spent) in [
+        (spent[0], true),
+        (spent[1], true),
+        (unspent_point(&spent), false),
         ([0xEE; 32], false),
     ] {
         assert_eq!(
             snap.has_key_image(&KeyImage::from_bytes(image))
                 .expect("read"),
-            spent,
+            is_spent,
             "key image {image:02x?}: membership is exact, `bool` is the shape"
         );
     }
@@ -88,9 +119,10 @@ fn has_key_image_is_true_for_a_spent_image_and_false_otherwise_on_one_snapshot()
 fn has_key_image_on_the_snapshot_and_in_the_batch_are_one_body() {
     let path = tmp("read-has-key-image-two-readers");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
+    let (_, connected) = connect_chain_anchored(&store, &spendable_prefix(vec![vec![spend()]]));
+    let spent = spent_images(&connected);
     let snap = store.begin_read().expect("read");
-    let images = [fixture::point(9), fixture::point(16)];
+    let images = [spent[0], unspent_point(&spent)];
     let from_snapshot: Vec<bool> = images
         .iter()
         .map(|b| snap.has_key_image(&KeyImage::from_bytes(*b)).expect("read"))
@@ -119,9 +151,15 @@ fn has_key_image_on_the_snapshot_and_in_the_batch_are_one_body() {
 fn key_images_yields_exactly_the_connected_set() {
     let path = tmp("read-key-images");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(
+    // A block listing two spends needs two coinbases matured for it —
+    // `height_maturing(2)`, one above the first spending height — and the
+    // block after it finds the third.
+    let (_, connected) = connect_chain_anchored(
         &store,
-        &spendable_prefix(&[vec![spend(9, 2), spend(16, 2)], vec![spend(15, 2)]]),
+        &prefix_to(
+            height_maturing(2),
+            vec![vec![spend(), spend()], vec![spend()]],
+        ),
     );
     let snap = store.begin_read().expect("read");
     let mut scanned: Vec<[u8; 32]> = snap
@@ -130,7 +168,8 @@ fn key_images_yields_exactly_the_connected_set() {
         .map(|r| r.expect("item").to_bytes())
         .collect();
     scanned.sort_unstable();
-    let mut expected = vec![fixture::point(9), fixture::point(16), fixture::point(15)];
+    let mut expected = spent_images(&connected);
+    assert_eq!(expected.len(), 3, "three spends listed");
     expected.sort_unstable();
     assert_eq!(
         scanned, expected,
@@ -157,15 +196,13 @@ fn key_images_on_an_empty_chain_is_an_empty_scan_not_an_error() {
 fn a_snapshot_sees_one_committed_state_across_a_concurrent_connect() {
     let path = tmp("read-key-images-snapshot-isolation");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
+    let mut grown = connect_chain(&store, &spendable_prefix(vec![vec![spend()]]));
     let snap = store.begin_read().expect("read");
-    // Connect another spend after the snapshot was taken.
-    let next = FIRST_SPEND_HEIGHT + 1;
-    let cand = candidate(
-        next,
-        hashes[at(FIRST_SPEND_HEIGHT)],
-        vec![spend_at(&hashes, next, 15, 2)],
-    );
+    // Connect another spend after the snapshot was taken: the next block's,
+    // of the coinbase that matured for it (block 1's), built over the
+    // committed chain and carrying the root the store recorded going in.
+    let cand = grown.next(&store, &[spend()]);
+    let later = key_images(&cand.transactions[0])[0];
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         batch.connect(judge(&view, cand)?, RuleSet::GENESIS)?;
@@ -176,13 +213,13 @@ fn a_snapshot_sees_one_committed_state_across_a_concurrent_connect() {
     // the C++'s "no getheight + gethash(height-1)" hazard is the handle's
     // shape here, not a warning in prose.
     assert!(!snap
-        .has_key_image(&KeyImage::from_bytes(fixture::point(15)))
+        .has_key_image(&KeyImage::from_bytes(later))
         .expect("read"));
     assert_eq!(snap.key_images().expect("open").count(), 1);
     // A fresh snapshot sees both.
     let fresh = store.begin_read().expect("read");
     assert!(fresh
-        .has_key_image(&KeyImage::from_bytes(fixture::point(15)))
+        .has_key_image(&KeyImage::from_bytes(later))
         .expect("read"));
     assert_eq!(fresh.key_images().expect("open").count(), 2);
     cleanup(&path);
@@ -193,29 +230,35 @@ fn a_snapshot_sees_one_committed_state_across_a_concurrent_connect() {
 #[test]
 fn output_is_recorded_at_every_index_below_the_count_and_beyond_count_from_it() {
     let path = tmp("read-output");
-    let (store, _) = output_chain(&path);
+    let (store, grown, the_spend) = output_chain(&path);
     let snap = store.begin_read().expect("read");
 
     // Index 0: genesis's miner output, stored under amount 0 with the
-    // ct-base commitment, unlock = height + 60 (fixture).
+    // ct-base commitment, unlock = height + 60 (fixture). The key and the
+    // commitment are read off the coinbase the chain connected at genesis
+    // (as judged: the fixture's endowed genesis, which pricing leaves as
+    // built) — the harness miner's output is derived, not a named point.
+    let genesis =
+        fixture::paid(&grown.block(h(0)).miner_transaction).expect("a coinbase with an output");
     assert_eq!(
         snap.output(gi(0)).expect("read"),
         AtIndex::Recorded(RecordedOutput {
-            pubkey: shekyl_types::OneTimePubkey::from_bytes(fixture::G),
-            commitment: shekyl_types::CommitmentBytes::from_bytes(fixture::TWO_G),
+            pubkey: shekyl_types::OneTimePubkey::from_bytes(genesis.key),
+            commitment: shekyl_types::CommitmentBytes::from_bytes(genesis.commitment),
             height: h(0),
         })
     );
     // The spend's second vout, recorded at the spend height. The expected
-    // key and mask are the fixture's by name — `spend(_, 2)` keys its
-    // outputs `point(1), point(2)` and masks them `point(2), point(3)` — so
-    // this pins the store's read to the fixture's construction, never to a
-    // literal that would follow whatever the code produced.
+    // key and commitment are read off the spend as the chain connected it
+    // — the spender's derived output, which no literal could name — so
+    // this pins the store's read to the connected body, never to a figure
+    // that would follow whatever the code produced.
+    let (key, commitment) = output_of(&the_spend, 1);
     assert_eq!(
         snap.output(gi(SPEND_VOUT_0 + 1)).expect("read"),
         AtIndex::Recorded(RecordedOutput {
-            pubkey: shekyl_types::OneTimePubkey::from_bytes(fixture::point(2)),
-            commitment: shekyl_types::CommitmentBytes::from_bytes(fixture::point(3)),
+            pubkey: shekyl_types::OneTimePubkey::from_bytes(key),
+            commitment: shekyl_types::CommitmentBytes::from_bytes(commitment),
             height: h(SPEND_HEIGHT),
         })
     );
@@ -239,7 +282,8 @@ fn output_is_recorded_at_every_index_below_the_count_and_beyond_count_from_it() 
 #[test]
 fn output_origin_is_the_global_read_and_agrees_with_output_on_every_index() {
     let path = tmp("read-output-origin");
-    let (store, hashes) = output_chain(&path);
+    let (store, grown, _) = output_chain(&path);
+    let hashes = grown.hashes;
     let snap = store.begin_read().expect("read");
     // The spend produced two consecutive indices as vouts 0 and 1.
     let AtIndex::Recorded(origin) = snap.output_origin(gi(SPEND_VOUT_0)).expect("read") else {
@@ -286,7 +330,7 @@ fn output_origin_is_the_global_read_and_agrees_with_output_on_every_index() {
 #[test]
 fn a_hole_below_the_output_count_is_si9_not_beyond_count() {
     let path = tmp("read-output-hole");
-    let (store, _) = output_chain(&path);
+    let (store, _, _) = output_chain(&path);
     drop(store);
     // Plant the hole through the raw engine: remove the spend's first vout
     // from `output_amounts`, leaving `output_txs`' count where it was.
@@ -334,7 +378,7 @@ fn a_row_whose_output_id_disagrees_with_its_slot_is_si9_not_served() {
     // can still hold it, and serving it would hand out the wrong output
     // under a global index. O1 validates the join where it decodes.
     let path = tmp("read-output-join-mismatch");
-    let (store, _) = output_chain(&path);
+    let (store, _, _) = output_chain(&path);
     drop(store);
     {
         let db = redb::Database::open(&path).expect("open raw");
@@ -381,7 +425,7 @@ fn a_stray_row_at_or_beyond_the_count_is_beyond_count_not_served() {
     // row planted at the count in `output_amounts` is not `Recorded` — the
     // reads never look past the count.
     let path = tmp("read-output-stray");
-    let (store, _) = output_chain(&path);
+    let (store, _, _) = output_chain(&path);
     drop(store);
     {
         let db = redb::Database::open(&path).expect("open raw");
@@ -423,7 +467,7 @@ fn a_missing_output_txs_row_below_the_count_is_si9_whatever_output_amounts_holds
     // a hole in it at `i` is SI-9 even when `output_amounts[(0, i)]` is
     // present and well-formed.
     let path = tmp("read-output-primary-hole");
-    let (store, _) = output_chain(&path);
+    let (store, _, _) = output_chain(&path);
     drop(store);
     {
         let db = redb::Database::open(&path).expect("open raw");

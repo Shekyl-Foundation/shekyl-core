@@ -1,0 +1,160 @@
+{
+  "schema_version": 3,
+  "measurement": "path assembly — CurveTreeClient::assemble_paths across leaf populations",
+  "grading": "baseline — capture is unbuilt, so a same-rung slope is the EXPECTED reading and is the evidence for why capture must exist. The criterion carried here was fixed before capture existed; CT-6 increment 6 re-grades these same arms against it. A cross-rung pass is a ceiling (no dearer than one layer), not evidence the step matched the uniform-layer model. The integrity gate's verdict is green by construction (the reference root is taken from the client); root agreement is graded in-crate by shekyl-curve-tree's client::ct6_oracle, not here.",
+  "environment": {
+    "arch": "x86_64",
+    "pointer_width_bits": 64,
+    "total_ram_bytes": 16696668160,
+    "cpu_model": "QEMU Virtual CPU version 2.5+",
+    "kernel": "6.8.0-142-generic",
+    "git_revision": "1ab4664cb"
+  },
+  "rig": {
+    "grading": false,
+    "enforced": [
+      "not requested"
+    ],
+    "attested": [
+      "not requested"
+    ]
+  },
+  "call_site": "shekyl-curve-tree/src/assemble.rs — CurveTreeClient::assemble_paths, reached from the CT-5c send path once per spend",
+  "plan": "ReplayWindow",
+  "plan_note": "REPLAY WINDOW — 725 blocks, about one day of chain. NOT the graded assembly population: assembly's n is the whole chain, so a graded figure is a ruling about chain age rather than a measurement. These seconds are a one-day-old chain's.",
+  "criterion": {
+    "same_rung_tolerance_pct": 10.0,
+    "cross_rung_tolerance_pct": 10.0
+  },
+  "arms": [
+    {
+      "role": "rung_below",
+      "leaf_count": 467856,
+      "depth": 4,
+      "owned_inputs": 2,
+      "series": {
+        "iterations_s": [
+          102.378762472,
+          103.43305524,
+          103.834385253,
+          102.843347737,
+          103.417844959,
+          104.790828605
+        ],
+        "median_s": 103.42545009950001,
+        "p95_s": 104.790828605,
+        "converged": true,
+        "stopped_because": "converged",
+        "tolerance_pct": 5.0,
+        "warmup_iterations": 1,
+        "min_conditioning_seconds": 60.0
+      }
+    },
+    {
+      "role": "rung_floor",
+      "leaf_count": 467857,
+      "depth": 5,
+      "owned_inputs": 2,
+      "series": {
+        "iterations_s": [
+          103.972152768,
+          102.528754477,
+          106.07391435,
+          102.837168127,
+          102.931127209,
+          102.893676522
+        ],
+        "median_s": 102.9124018655,
+        "p95_s": 106.07391435,
+        "converged": true,
+        "stopped_because": "converged",
+        "tolerance_pct": 5.0,
+        "warmup_iterations": 1,
+        "min_conditioning_seconds": 60.0
+      }
+    },
+    {
+      "role": "rung_top",
+      "leaf_count": 765600,
+      "depth": 5,
+      "owned_inputs": 2,
+      "series": {
+        "iterations_s": [
+          169.666685203,
+          170.134913656,
+          169.059641666,
+          169.833250845,
+          168.647541874,
+          167.708907809
+        ],
+        "median_s": 169.3631634345,
+        "p95_s": 170.134913656,
+        "converged": true,
+        "stopped_because": "converged",
+        "tolerance_pct": 5.0,
+        "warmup_iterations": 1,
+        "min_conditioning_seconds": 60.0
+      }
+    },
+    {
+      "role": "input_cap",
+      "leaf_count": 765600,
+      "depth": 5,
+      "owned_inputs": 8,
+      "series": {
+        "iterations_s": [
+          168.794156092,
+          169.240133851,
+          168.93186189,
+          170.635140126,
+          168.564657162,
+          168.503252411
+        ],
+        "median_s": 168.86300899100002,
+        "p95_s": 170.635140126,
+        "converged": true,
+        "stopped_because": "converged",
+        "tolerance_pct": 5.0,
+        "warmup_iterations": 1,
+        "min_conditioning_seconds": 60.0
+      }
+    }
+  ],
+  "input_cap_change_pct": -0.29531477380258164,
+  "reading": {
+    "same_rung_spread_pct": 64.57021735293293,
+    "cross_rung_ratio": 0.9950394391950536,
+    "cross_rung_expected": 1.25,
+    "outcome": {
+      "Graded": {
+        "SameRungSlope": {
+          "spread_pct": 64.57021735293293,
+          "tolerance_pct": 10.0
+        }
+      }
+    }
+  },
+  "load_control": {
+    "max_divergence_pct": 0.7219682841342868,
+    "tolerance_pct": 5.0,
+    "quiet": true,
+    "controls": 1
+  },
+  "control_series": {
+    "iterations_s": [
+      170.641278233,
+      171.321795337,
+      168.806013503,
+      168.364327606,
+      170.703185485,
+      170.530545285
+    ],
+    "median_s": 170.585911759,
+    "p95_s": 171.321795337,
+    "converged": true,
+    "stopped_because": "converged",
+    "tolerance_pct": 5.0,
+    "warmup_iterations": 1,
+    "min_conditioning_seconds": 60.0
+  }
+}

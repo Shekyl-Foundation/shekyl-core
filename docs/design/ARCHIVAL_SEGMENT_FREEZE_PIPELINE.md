@@ -1,21 +1,26 @@
 # Segment-freeze pipeline — the production writer for `m_archival_shard_segment`
 
-**Status: RETIRED BY RULING (2026-09-18, `PDM-Q12`) — live in code until
-E4 / S-ARCH.** The specification below remains live consensus until the code
-is deleted; it is no longer a plan for anything to be built. Archive-or-contract
+**Status: RETIRED BY RULING (2026-09-18, `PDM-Q12`) — its code deleted at the
+flip (`DEL-008`'s Rust half, shekyl-core #1212, 2026-10-31; the C++ half with the
+flip's `DX-Q3` deletions).** The specification below is no longer live consensus
+and is not a plan for anything to be built; what remains in code is the
+`SEGMENT_LEAF_COUNT` pin and the two challenge-path helpers held for SO-D12 4b
+(`shekyl-archival-retention/src/segment_freeze.rs`). Archive-or-contract
 (rule 95) is owned by [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) and lands
 with that round's deletion increment. The original round-1 status is retained
 at its own heading below. See the retirement notice that follows.
 
-> **⚠️ RETIRED BY RULING (2026-09-18, `PDM-Q12`) — LIVE IN CODE UNTIL
-> E4 / S-ARCH.** The pipeline this document specifies is retired by
-> `PDM-Q12` ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md));
-> read the ruling there for the argument — it is not restated here.
-> **"Retired by ruling" and "retired in code" are different states, and this
-> is the first:** the C++ half dies at `DRS-E*` under `PDM-Q-S0`, the Rust
-> half at **E4 / S-ARCH** with the serve-credit verifier's re-key (`PDM-Q6`
-> item 4, row 1). Until then O-1…O-3 and the first-crossing rule below remain
-> **live consensus** and this document remains their specification.
+> **⚠️ RETIRED BY RULING (2026-09-18, `PDM-Q12`) AND DELETED IN CODE AT THE
+> FLIP (#1212, 2026-10-31, `DEL-008`).** The pipeline this document specifies
+> is retired by `PDM-Q12`
+> ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)); read
+> the ruling there for the argument — it is not restated here. Both halves
+> went with the flip — the C++ freeze pipeline and the Rust it held live
+> (the freeze half of `segment_freeze.rs`, `challenge.rs` and `path.rs`),
+> `DEL-008` in `DAEMON_REDB_STORE.md` §12. O-1…O-3 and the first-crossing
+> rule below are **not consensus**: nothing in the tree computes a frozen
+> segment, and the serve-credit verifier that replaces the leaf preimage is
+> SO-D8 Slice C's (`PDM-Q6` item 4, row 1; `ARCHIVAL_SERVE_CREDIT_SPEC.md`).
 >
 > **One consumer the retirement does not name**, recorded so it is not lost
 > with the pipeline: the wallet-side store's `root_at_count` reads
@@ -235,9 +240,10 @@ argument.
 ### 4.1 Connect hook
 
 In `BlockchainDB::add_block` (`blockchain_db.cpp`), inside the
-existing `HF_VERSION_FCMP_PLUS_PLUS_PQC` block, **immediately after
-`grow_curve_tree` and before `process_archival_epoch_close_at_height`**
-(ordering is load-bearing: a segment completed at height `H` must be
+curve-tree scope that runs on every connect (`:434`–`:613`) and inside
+`if (new_output_count > 0)` (`:587`–`:598`), **immediately after
+`grow_curve_tree` and before `process_archival_epoch_close_at_height`
+(`:652`)** (ordering is load-bearing: a segment completed at height `H` must be
 countable by an epoch close at `H` — M1 §1.1 takes the count "inside
 the same write transaction that performs the close" with
 `freeze_height ≤ H_close` inclusive):
@@ -362,7 +368,7 @@ same predicate independently fork at the boundary. Per
   `frozen_segment_count(leaf_count: u64) -> u64` next to the gate
   predicate it feeds, with `SEGMENT_LEAF_COUNT` as a crate constant
   (§5.2).
-- `shekyl-ffi` exports `shekyl_archival_frozen_segment_count`.
+- `shekyl-ffi` exports `shekyl_archival_frozen_segment_count` (deleted, `DEL-008`).
 - C++ **never performs the division inline** — both hooks call the
   FFI. The tripwire (§8) refuses `/ SEGMENT_LEAF_COUNT` and
   `% SEGMENT_LEAF_COUNT` spellings in `src/`.
@@ -509,7 +515,7 @@ not needed — no provisional constants):
    `frozen_segment_count` + leaf-chunk-bounds helpers with unit
    tests (boundary: `(k+1)·E − 1`, `(k+1)·E`, multi-segment jumps,
    0).
-2. **FFI:** `shekyl_archival_frozen_segment_count` (+ chunk-bounds
+2. **FFI:** `shekyl_archival_frozen_segment_count` (deleted, `DEL-008`) (+ chunk-bounds
    export), `cbindgen`/header regen.
 3. **Writer:** `process_archival_segment_freezes_at_height` +
    `revert_archival_segment_freezes` in `db_lmdb`, wired into

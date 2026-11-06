@@ -21,8 +21,21 @@ env:
     ccache --set-config=compression=true
 
 jobs:
+  # No genesis on a pre-standard FN-DSA (ARCHIVAL_SERVE_CREDIT_SPEC.md §11).
+  # Any tag that is not a recognised pre-release is the genesis release
+  # (RELEASE_PROMOTION.md); on such a tag this fails while `fn-dsa` is locked
+  # below 1.0, and every build job below waits on it.
+  fn-dsa-genesis-gate:
+    name: fn-dsa genesis gate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Refuse a genesis release on a pre-1.0 fn-dsa
+        run: python3 scripts/ci/check_fn_dsa_genesis_gate.py --release-tag "$GITHUB_REF_NAME"
+
   build-linux:
     name: Linux x86_64
+    needs: fn-dsa-genesis-gate
     runs-on: ubuntu-22.04
     env:
       DEBIAN_FRONTEND: noninteractive
@@ -38,8 +51,6 @@ jobs:
             build-essential cmake pkg-config git ccache \
             libboost-all-dev libssl-dev libzmq3-dev \
             libsodium-dev libreadline-dev \
-            libhidapi-dev libusb-1.0-0-dev libudev-dev \
-            libprotobuf-dev protobuf-compiler \
             libgtest-dev libnorm-dev libpgm-dev \
             nettle-dev libgmp-dev libevent-dev \
             libunwind-dev liblzma-dev \
@@ -80,9 +91,6 @@ jobs:
           cp build/release/bin/shekyl-cli "${RELEASE_DIR}/" 2>/dev/null || true
           cp build/release/bin/shekyl-wallet-rpc "${RELEASE_DIR}/" 2>/dev/null || true
           cp build/release/bin/shekyl-gen-trusted-multisig "${RELEASE_DIR}/" 2>/dev/null || true
-          cp build/release/bin/shekyl-blockchain-import "${RELEASE_DIR}/" 2>/dev/null || true
-          cp build/release/bin/shekyl-blockchain-export "${RELEASE_DIR}/" 2>/dev/null || true
-          cp build/release/bin/shekyl-mdb-copy "${RELEASE_DIR}/" 2>/dev/null || true
           tar -czf "${RELEASE_DIR}.tar.gz" "${RELEASE_DIR}"
 
       - name: Package .deb
@@ -136,6 +144,7 @@ jobs:
 
   build-windows:
     name: Windows x64
+    needs: fn-dsa-genesis-gate
     runs-on: ubuntu-22.04
     container:
       image: ubuntu:22.04
@@ -227,6 +236,7 @@ jobs:
 
   build-cross:
     name: ${{ matrix.platform.name }}
+    needs: fn-dsa-genesis-gate
     runs-on: ubuntu-22.04
     container:
       image: ubuntu:22.04
@@ -324,8 +334,7 @@ jobs:
           BIN_DIR="build/${{ matrix.platform.host }}/release/bin"
           mkdir -p "${RELEASE_DIR}"
           for bin in shekyld shekyl-cli shekyl-wallet-rpc \
-                     shekyl-gen-trusted-multisig shekyl-blockchain-import \
-                     shekyl-blockchain-export shekyl-mdb-copy; do
+                     shekyl-gen-trusted-multisig; do
             cp "${BIN_DIR}/${bin}" "${RELEASE_DIR}/" 2>/dev/null || true
           done
           tar -czf "${RELEASE_DIR}.tar.gz" "${RELEASE_DIR}"
@@ -391,6 +400,7 @@ jobs:
 
   source-archive:
     name: Source archive
+    needs: fn-dsa-genesis-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

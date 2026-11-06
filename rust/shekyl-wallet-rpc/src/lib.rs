@@ -34,6 +34,7 @@ pub mod queries;
 pub mod receiving;
 pub mod send;
 pub mod server;
+pub mod shard_view;
 pub mod staking;
 pub mod staking_actions;
 pub mod sync;
@@ -50,12 +51,17 @@ pub use server::{
 // spawned server binds to without a direct shekyl-engine-core dependency.
 pub use shekyl_engine_core::Network;
 // Part of the `stake_in` contract surface: the funded transfer carries
-// `amount + cover` with the cover strictly under this bound. Clients that
-// disclose the debit before confirmation (the CLI does; wrappers should)
-// render the bound from this constant, never a hardcoded twin.
-pub use shekyl_engine_core::COVER_RUNG_ATOMIC;
+// `amount + cover` with the cover strictly under
+// `archival_params().bond_floor_atomic`. Clients that disclose the debit
+// before confirmation (the CLI does; wrappers should) render the bound from
+// it, never a hardcoded twin.
+pub use shekyl_engine_core::archival_params;
 pub use tenant::{DaemonEndpoint, SharedEngine, Tenant, TenantState};
 pub use types::{GetVersionResult, JsonRpcRequest, JsonRpcResponse, WalletHandle, API_VERSION};
 
-/// Crate / binary semver (`CARGO_PKG_VERSION`).
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The release version `shekyl-wallet-rpc` and `shekyl-cli` print, the
+/// daemon's string (`3.1.0-alpha.11-release`): `shekyl_version::VERSION_FULL`,
+/// read from the one home of the build identity, `cmake/Version.cmake`
+/// (DC-Q20). A bare `cargo build` cannot name its release and says so with
+/// `-unknown` rather than passing the crate's `3.1.0` off as one.
+pub const VERSION: &str = shekyl_version::VERSION_FULL;

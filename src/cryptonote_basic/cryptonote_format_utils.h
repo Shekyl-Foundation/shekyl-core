@@ -31,7 +31,6 @@
 #pragma once
 #include "blobdatatype.h"
 #include "cryptonote_basic_impl.h"
-#include "account.h"
 #include "subaddress_index.h"
 #include "include_base_utils.h"
 #include "crypto/crypto.h"
@@ -47,8 +46,6 @@ namespace epee
 namespace cryptonote
 {
   //---------------------------------------------------------------
-  void get_transaction_prefix_hash(const transaction_prefix& tx, crypto::hash& h, hw::device &hwdev);
-  crypto::hash get_transaction_prefix_hash(const transaction_prefix& tx, hw::device &hwdev);
   void get_transaction_prefix_hash(const transaction_prefix& tx, crypto::hash& h);
   crypto::hash get_transaction_prefix_hash(const transaction_prefix& tx);
   bool parse_and_validate_tx_prefix_from_blob(const blobdata_ref& tx_blob, transaction_prefix& tx);
@@ -77,7 +74,8 @@ namespace cryptonote
   /// exactly one 0x06 of 1120·n bytes and one 0x07 of 64·n bytes when n > 0,
   /// neither when n == 0, every 0x07 entry an admissible point — plus the
   /// closed coinbase grammar on a coinbase (TXE-Q6': exactly
-  /// [0x01, 0x02(8), 0x06, 0x07]) and no 0x02 off it; and tx_extra must
+  /// [0x01, 0x02(8), 0x0C(32), 0x06, 0x07]) and no 0x02 or 0x0C off it; and
+  /// tx_extra must
   /// parse. The rule lives in shekyl-wire (`check_tx_extra_shape`) and is
   /// applied over the codec's own parse through shekyl_tx_extra_shape_of —
   /// the daemon hands over bytes and is_coinbase, never a second reading of
@@ -103,7 +101,6 @@ namespace cryptonote
   bool calculate_transaction_prunable_hash(const transaction& t, const cryptonote::blobdata_ref *blob, crypto::hash& res);
   crypto::hash get_transaction_prunable_hash(const transaction& t, const cryptonote::blobdata_ref *blob = NULL);
   bool calculate_transaction_hash(const transaction& t, crypto::hash& res, size_t* blob_size);
-  crypto::hash get_pruned_transaction_hash(const transaction& t, const crypto::hash &pruned_data_hash);
 
   blobdata get_block_hashing_blob(const block& b);
   bool calculate_block_hash(const block& b, crypto::hash& res);
@@ -242,8 +239,10 @@ namespace cryptonote
   //---------------------------------------------------------------
   blobdata block_to_blob(const block& b);
   bool block_to_blob(const block& b, blobdata& b_blob);
-  blobdata tx_to_blob(const transaction& b);
-  bool tx_to_blob(const transaction& b, blobdata& b_blob);
+  // The bytes of `tx`, and whether the serializer accepted them. A refusal
+  // leaves a fragment in `b_blob`; the bool is the only way to tell. Callers
+  // read it (`[[nodiscard]]`), and record the length only on acceptance.
+  [[nodiscard]] bool tx_to_blob(const transaction& b, blobdata& b_blob);
   void get_tx_tree_hash(const std::vector<crypto::hash>& tx_hashes, crypto::hash& h);
   crypto::hash get_tx_tree_hash(const std::vector<crypto::hash>& tx_hashes);
   crypto::hash get_tx_tree_hash(const block& b);

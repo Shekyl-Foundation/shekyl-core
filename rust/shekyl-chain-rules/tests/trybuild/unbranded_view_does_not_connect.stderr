@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/trybuild/unbranded_view_does_not_connect.rs:24:24
+   |
+24 |         connect(&view, valid); // ChainValid<Evil> ≠ ChainValid<View>
+   |         -------        ^^^^^ expected `ChainValid<'_, Stub<Brand<'_>>>`, found `ChainValid<'_, Stub<()>>`
+   |         |
+   |         arguments to this function are incorrect
+   |
+   = note: expected struct `ChainValid<'_, Stub<Brand<'_>>>`
+              found struct `ChainValid<'_, Stub<()>>`
+note: function defined here
+  --> tests/trybuild/stub_view.rs
+   |
+   | pub fn connect<'id>(_view: &View<'id>, _valid: ChainValid<'id, View<'id>>) {}
+   |        ^^^^^^^                         ----------------------------------

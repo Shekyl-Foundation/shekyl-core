@@ -30,8 +30,12 @@ pub(crate) mod scalar_vector;
 pub(crate) mod core;
 
 pub(crate) mod batch_verifier;
-pub use batch_verifier::BatchVerifier;
-use batch_verifier::BulletproofsPlusBatchVerifier;
+use batch_verifier::BatchVerifier;
+
+#[cfg(feature = "std")]
+mod derived;
+#[cfg(feature = "std")]
+pub use derived::{batch_weights_seed, verify_batch, BatchEntry, BATCH_WEIGHTS_CUSTOMIZATION};
 
 pub(crate) mod plus;
 use crate::plus::{
@@ -134,35 +138,6 @@ impl Bulletproof {
     ))
     }
 
-    /// Verify the given Bulletproof(+).
-    #[must_use]
-    pub fn verify<R: RngCore + CryptoRng>(
-        &self,
-        rng: &mut R,
-        commitments: &[CompressedPoint],
-    ) -> bool {
-        let Some(commitments) = commitments
-            .iter()
-            .map(CompressedPoint::decompress)
-            .collect::<Option<Vec<_>>>()
-        else {
-            return false;
-        };
-
-        match self {
-            Bulletproof::Plus(bp) => {
-                let mut verifier = BulletproofsPlusBatchVerifier::default();
-                let Some(statement) = PlusStatement::new(&commitments) else {
-                    return false;
-                };
-                if !statement.verify(rng, &mut verifier, bp.clone()) {
-                    return false;
-                }
-                verifier.verify()
-            }
-        }
-    }
-
     /// Accumulate the verification for the given Bulletproof(+) into the specified BatchVerifier.
     ///
     /// Returns false if the Bulletproof(+) isn't sane, leaving the BatchVerifier in an undefined
@@ -171,8 +146,15 @@ impl Bulletproof {
     /// Returns true if the Bulletproof(+) is sane, regardless of its validity.
     ///
     /// The BatchVerifier must have its verification function executed to actually verify this proof.
+    ///
+    /// Crate-private: the weights `rng` draws are the batch's soundness, so the
+    /// only caller is [`verify_batch`], which derives them from the batch
+    /// (ruling R3). An `OsRng` verify is not a public surface. Without `std`
+    /// there is no `verify_batch` (its cSHAKE is a `std` crate), so nothing
+    /// verifies.
     #[must_use]
-    pub fn batch_verify<R: RngCore + CryptoRng>(
+    #[cfg_attr(not(feature = "std"), allow(dead_code))]
+    pub(crate) fn batch_verify<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
         verifier: &mut BatchVerifier,

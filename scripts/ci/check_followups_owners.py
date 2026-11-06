@@ -73,8 +73,33 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # The grandfather list's length ratchet. Lower it as rows gain owners; raise
 # it only at a merge that lands rows predating the gate, and say so in the
 # commit. History: 338 at the gate's birth (2026-09-20); 340 at the merge
-# with #792/#800 (three pre-gate rows: two new, one re-titled).
-GRANDFATHER_CEILING = 323
+# with #792/#800 (three pre-gate rows: two new, one re-titled); 317 on
+# 2026-10-01 when five grandfathered rows closed (the stub, the
+# target_height sentinel, the Ledger sources, the fcmp fuzz build, and
+# the false test-only-builder claim); 316 on 2026-10-10 (PWD-I2 gained an
+# owner); 315 on 2026-10-11 (the port-0 row gained an owner); 309 on
+# 2026-10-11 when the two alt-chain attestation rows closed by dissolution
+# (DRS-E5 `E5-Q4`); 308 the same day when the alt-chain supply-accumulation
+# row closed with the field it described deleted (DRS-E5 a4, CEN-K8); 307
+# on 2026-10-12 at the merge of those two lanes, the list's length; 305
+# on 2026-10-13 when the fee-and-weight owner (dev) and the F-7 owner
+# (this lane) landed together, the list's length; 299 on 2026-10-17 when
+# the dispatch-driver row gained an owner (#1109) and dev's own burn-down
+# merged with it, the list's length; 296 on 2026-10-18 when the
+# claim-source, serde-default and dual-list rows took RPC_WIRE.md as owner
+# (the KV doc's retirement, #1116) and merged with dev's, the list's length;
+# 295 on 2026-10-19 when the PWD-T7 compression-gate row went with
+# compression itself (#1134), the list's length; 294 on 2026-11-01 when the
+# store's dead-table rows closed with the tables (layout 34); 288 the same
+# day when the docs sweep's closed rows (the C++ template fill, the
+# C++-anchored gates, `bi_cum_rct`) merged with it, the list's length;
+# 285 on 2026-11-03 when CS-5's two rows (the 2004 continuation closed as
+# built, the bucket-length row given an owner) merged with dev's
+# unbond-journal close (#1237), the list's length; 284 on 2026-11-05 when
+# the truncated credit-wire headline (already re-filed under the
+# attestation-ordering row) went with the C++ file it linked (the p2p
+# remnant cutover), the list's length.
+GRANDFATHER_CEILING = 284
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

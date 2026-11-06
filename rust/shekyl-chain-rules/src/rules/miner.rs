@@ -17,10 +17,14 @@
 //! # Two kinds of row
 //!
 //! **Predicates** — F1, F3, F7, F9, F10 are stateless ([`FormRule`]); F4,
-//! F5, F6 read the connecting height ([`BlockRule`]). The height is
-//! **caller-derived** — `cx.connecting`, from the view's tip — and never
-//! `Input::Gen`'s claim: F5 is the one row that *reads* the claim, and it
-//! compares it to the view's height (census F4 note: "spoof closed by F5").
+//! F5, F6 read the coinbase and the connecting height
+//! ([`CoinbaseRule`](crate::rules::CoinbaseRule)). The alt tier still
+//! judges them: it holds the formed block. The header-only path does not,
+//! because a [`HeaderContext`](crate::rules::HeaderContext) is not a
+//! [`BlockContext`]. The height is **caller-derived** —
+//! `cx.connecting`, from the view's tip — and never `Input::Gen`'s claim:
+//! F5 is the one row that *reads* the claim, and it compares it to the
+//! view's height (census F4 note: "spoof closed by F5").
 //!
 //! **Definitions** — F13 (the base subsidy), F15 (the release-modulated
 //! emission), F20 (the volume window) and F11 (genesis accepts its
@@ -40,7 +44,8 @@
 //! F2 (the wire admits one transaction version) and F8 (one output tag)
 //! are falsified in `miner_tests`. F19 (parent state is the view's brand)
 //! is falsified by the `compile_fail` doctests on `validate`. F21 is
-//! [`EMISSION_SPLIT_EPOCH`].
+//! [`shekyl_economics::EMISSION_SPLIT_EPOCH`], compile-pinned from the
+//! census and falsified by `the_staker_share_starts_at_block_one`.
 //!
 //! # What is not here
 //!
@@ -51,11 +56,9 @@
 //! parent state ([`closed_shards_before`]): the shards of `W` archival
 //! bytes the parent chain's fold has filled (`SHT-Q2`;
 //! `ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q6 item 4; DRS-E4 `ARW-Q6`). The
-//! C++ template still reads its own partition — the curve tree's frozen
-//! J-segment count (`Blockchain::parent_frozen_segment_count`), the
-//! divergence CEN-L10 rules deliberate: the LMDB store keeps no archival
-//! fold, the escalation ships flat so the split is bit-identical, and the
-//! C++ is deleted at cutover rather than taught a second fold. The
+//! C++ template read its own partition — the curve tree's frozen
+//! J-segment count — the divergence CEN-L10 rules deliberate. That
+//! reader was deleted with the C++ chain (bucket 3, 2026-10-28). The
 //! arithmetic bodies for all of them are Rust already (`shekyl-economics`,
 //! adopted by the slice-4 precursor).
 //!
@@ -68,13 +71,11 @@
 //! with a parameter the penalty reads, and the lift belongs to the slice
 //! that needs it (rule 21 — no pre-provisioned field without a consumer).
 
-use std::sync::OnceLock;
-
 use shekyl_ct_balance::{check_commitment_masks, check_output_keys, MaskSubject};
 use shekyl_economics::params::TX_VOLUME_WINDOW;
 use shekyl_economics::{
-    base_block_reward, effective_emission, tail_subsidy_per_block, CirculatingSupply,
-    ClosedShardCount, EconomicParams, TxVolume,
+    base_block_reward, economic_params, effective_emission, CirculatingSupply, ClosedShardCount,
+    EconomicParams, TxVolume,
 };
 use shekyl_types::{shard_of, BlockHeight};
 use shekyl_units::AtomicUnits;
@@ -85,48 +86,21 @@ use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault, ViewRead};
 use crate::rules::{recorded, BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
-use crate::view::ChainView;
+use crate::view::{ChainView, HeaderView};
 
 /// The refusal locus of every 4.F predicate: the miner transaction.
 const MINER: Locus = Locus::Tx {
     slot: TxSlot::Miner,
 };
 
-/// The economic parameters the 4.F derivations price with: the
-/// build-generated set (`config/economics_params.json` →
-/// `EconomicParams::default()`), resolved once and checked once — a set
-/// whose tail subsidy does not fit cannot price any block, and stops here
-/// rather than in a rule (module docs). See the module docs for why this
-/// is not a `RuleSet` field yet.
+/// The economic parameters the 4.F derivations price with.
+///
+/// The one accessor is [`economic_params`]: it resolves the shipped set
+/// once and checks that the tail subsidy fits. This is not a `RuleSet`
+/// field (module docs).
 pub(crate) fn economics() -> &'static EconomicParams {
-    static PARAMS: OnceLock<EconomicParams> = OnceLock::new();
-    PARAMS.get_or_init(|| {
-        let params = EconomicParams::default();
-        assert!(
-            tail_subsidy_per_block(&params).is_ok(),
-            "config/economics_params.json: final_subsidy_per_minute × (daa_target_seconds / 60) \
-             does not fit u64 — the tail subsidy cannot be priced"
-        );
-        params
-    })
+    economic_params()
 }
-
-/// CEN-F21: the height the staker share's decay is measured from
-/// (`genesis_ng_height`). One on every issued chain — the C++ returns the
-/// one-row hardfork table's height, and
-/// `the_emission_split_epoch_is_the_hardfork_tables_first_row` pins this
-/// constant to those three tables.
-///
-/// CEN-F16 passes it to `shekyl_economics::compute_emission_split`
-/// (`rules::reward::judge_emission`, slice 7 commit 5). It
-/// becomes a [`crate::RuleSet`] field when a schedule step names a different
-/// epoch. Until then a field would be copied into every rule-set mismatch
-/// and no row would read it.
-///
-/// Public since E6 slice 6 for the same one reason as [`tx_volume_window`]:
-/// the producer's split (`shekyl-block-template`) is priced at the epoch
-/// the validator will judge, read here, not restated.
-pub const EMISSION_SPLIT_EPOCH: BlockHeight = BlockHeight::from_raw(1);
 
 // ---------------------------------------------------------------------------
 // Stateless predicates (form)
@@ -276,17 +250,14 @@ impl Rule for F4 {
     const ROW: CenRow = CenRow::F4;
 }
 
-impl BlockRule for F4 {
-    fn check<'id, V: ChainView<'id>>(
-        cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+impl crate::rules::CoinbaseRule for F4 {
+    fn check<'id, H: HeaderView<'id>>(cx: &BlockContext<'_>, _view: &H) -> Verdict<()> {
         if cx.connecting.is_zero()
             || cx.candidate().block.miner_transaction.prefix.outputs.len() == 1
         {
-            Ok(Ok(()))
+            Ok(())
         } else {
-            Ok(Err(InvalidBlock::new(Self::ROW, MINER)))
+            Err(InvalidBlock::new(Self::ROW, MINER))
         }
     }
 }
@@ -302,11 +273,8 @@ impl Rule for F5 {
     const ROW: CenRow = CenRow::F5;
 }
 
-impl BlockRule for F5 {
-    fn check<'id, V: ChainView<'id>>(
-        cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+impl crate::rules::CoinbaseRule for F5 {
+    fn check<'id, H: HeaderView<'id>>(cx: &BlockContext<'_>, _view: &H) -> Verdict<()> {
         match cx
             .candidate()
             .block
@@ -315,8 +283,8 @@ impl BlockRule for F5 {
             .inputs
             .as_slice()
         {
-            [Input::Gen(claimed)] if *claimed == cx.connecting.to_raw() => Ok(Ok(())),
-            _ => Ok(Err(InvalidBlock::new(Self::ROW, MINER))),
+            [Input::Gen(claimed)] if *claimed == cx.connecting.to_raw() => Ok(()),
+            _ => Err(InvalidBlock::new(Self::ROW, MINER)),
         }
     }
 }
@@ -332,18 +300,42 @@ impl Rule for F6 {
     const ROW: CenRow = CenRow::F6;
 }
 
+impl BlockRule for F4 {
+    fn check<'id, V: ChainView<'id>>(
+        cx: &BlockContext<'_>,
+        view: &V,
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        Ok(<Self as crate::rules::CoinbaseRule>::check(cx, view))
+    }
+}
+
+impl BlockRule for F5 {
+    fn check<'id, V: ChainView<'id>>(
+        cx: &BlockContext<'_>,
+        view: &V,
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        Ok(<Self as crate::rules::CoinbaseRule>::check(cx, view))
+    }
+}
+
 impl BlockRule for F6 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+        view: &V,
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        Ok(<Self as crate::rules::CoinbaseRule>::check(cx, view))
+    }
+}
+
+impl crate::rules::CoinbaseRule for F6 {
+    fn check<'id, H: HeaderView<'id>>(cx: &BlockContext<'_>, _view: &H) -> Verdict<()> {
         let window = cx.formed.rule_set().mined_money_unlock_window().to_raw();
         let expected = cx.connecting.to_raw().checked_add(window);
         let unlock = cx.candidate().block.miner_transaction.prefix.unlock_time;
         if expected == Some(unlock) {
-            Ok(Ok(()))
+            Ok(())
         } else {
-            Ok(Err(InvalidBlock::new(Self::ROW, MINER)))
+            Err(InvalidBlock::new(Self::ROW, MINER))
         }
     }
 }
@@ -676,32 +668,86 @@ pub fn tx_volume_window<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
 ) -> Result<TxVolume, ViewRead<V::Fault>> {
-    let h = connecting.to_raw();
-    let Some(parent) = h.checked_sub(1) else {
+    let span = tx_volume_span(connecting);
+    let Some(upper_at) = span.upper else {
         return Ok(TxVolume::window(0, 0));
     };
-    let blocks = h.min(TX_VOLUME_WINDOW);
-    let prefix_sum = |at: u64| -> Result<u64, ViewRead<V::Fault>> {
-        Ok(recorded(view, BlockHeight::from_raw(at))?.cumulative_tx_count)
+    let prefix_sum = |at: BlockHeight| -> Result<u64, ViewRead<V::Fault>> {
+        Ok(recorded(view, at)?.cumulative_tx_count)
     };
-    let upper = prefix_sum(parent)?;
+    let upper = prefix_sum(upper_at)?;
+    let lower = match span.lower {
+        None => 0,
+        Some(at) => prefix_sum(at)?,
+    };
+    span.volume(upper, lower)
+        .ok_or(ViewRead::Corrupt(Corrupt::TxCountNotMonotone {
+            at: upper_at,
+        }))
+}
+
+/// Where CEN-F20's window lies at a connecting height: how many blocks it
+/// spans and whose prefix sums it subtracts. [`tx_volume_window`] is this
+/// plus two reads of the store; [`tx_volume_span`] is the definition
+/// without the store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TxVolumeSpan {
+    /// Blocks in the window: `min(h, W)`, `0` at genesis.
+    pub blocks: u64,
+    /// The height whose prefix sum is the upper term, `h − 1`; `None` at
+    /// genesis, where the window is empty.
+    pub upper: Option<BlockHeight>,
+    /// The height whose prefix sum is the lower term, `h − n − 1`; `None`
+    /// when the window reaches genesis and the lower term is `0`.
+    pub lower: Option<BlockHeight>,
+}
+
+impl TxVolumeSpan {
+    /// The operand from the prefix sums read at [`Self::upper`] and
+    /// [`Self::lower`], `0` for an absent term. `None` when the upper sum
+    /// is below the lower.
+    ///
+    /// A prefix sum is non-decreasing along a conforming chain (the store
+    /// folds it under SI-8). A decrease is not a small window, it is a
+    /// record that does not hold what it claims — a fault for the caller to
+    /// raise, never a saturated zero that `calc_release_multiplier` would
+    /// price as a dormant chain.
+    #[must_use]
+    pub fn volume(self, upper_sum: u64, lower_sum: u64) -> Option<TxVolume> {
+        upper_sum
+            .checked_sub(lower_sum)
+            .map(|sum| TxVolume::window(sum, self.blocks))
+    }
+}
+
+/// [`TxVolumeSpan`] at `connecting`: `n = min(h, W)` blocks, `[h − n, h − 1]`.
+#[must_use]
+pub fn tx_volume_span(connecting: BlockHeight) -> TxVolumeSpan {
+    tx_volume_span_of::<TX_VOLUME_WINDOW>(connecting)
+}
+
+/// [`tx_volume_span`] at a window length. Production passes
+/// [`TX_VOLUME_WINDOW`]. EUP-5's window-length stress builds another
+/// (`ECONOMICS_SIM_PHASE0.md`, the const-generic window).
+#[must_use]
+pub fn tx_volume_span_of<const W: u64>(connecting: BlockHeight) -> TxVolumeSpan {
+    let h = connecting.to_raw();
+    let Some(parent) = h.checked_sub(1) else {
+        return TxVolumeSpan {
+            blocks: 0,
+            upper: None,
+            lower: None,
+        };
+    };
+    let blocks = h.min(W);
     // `h >= blocks`, so `h - blocks` is the first height in the window;
-    // its predecessor's prefix sum is the lower term, `0` when the
+    // its predecessor's prefix sum is the lower term, absent when the
     // window starts at genesis.
     let first_in_window = h - blocks;
-    let lower = match first_in_window.checked_sub(1) {
-        None => 0,
-        Some(before) => prefix_sum(before)?,
-    };
-    // A prefix sum is non-decreasing along a conforming chain (the store
-    // folds it under SI-8). A decrease is not a small window, it is a
-    // store that does not hold what it claims — a fault, never a saturated
-    // zero that `calc_release_multiplier` would price as a dormant chain.
-    match upper.checked_sub(lower) {
-        Some(sum) => Ok(TxVolume::window(sum, blocks)),
-        None => Err(ViewRead::Corrupt(Corrupt::TxCountNotMonotone {
-            at: BlockHeight::from_raw(parent),
-        })),
+    TxVolumeSpan {
+        blocks,
+        upper: Some(BlockHeight::from_raw(parent)),
+        lower: first_in_window.checked_sub(1).map(BlockHeight::from_raw),
     }
 }
 

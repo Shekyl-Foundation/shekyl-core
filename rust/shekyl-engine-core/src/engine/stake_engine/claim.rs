@@ -15,14 +15,14 @@ use shekyl_archival_retention::{
     emission_vin_verify_auth, emission_vin_verify_backing, ArchivalRewardEmissionVin,
     MembershipOnlyBacking, RewardCommit,
 };
-use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
-    phase1_payload_hashes, prove_backing_membership, sign_pqc_auths, sign_transaction_with_terms,
-    tx_prefix_hash_from_parts_with_extra, InputTerm, PqcAuth, TreeContext, WireEncodeInput,
+    open_spend, prove_backing_membership, sign_transaction_with_terms,
+    tx_prefix_hash_from_parts_with_extra, tx_signable_for, AuthSlots, InputTerm, SpendLayout,
+    TreeContext,
 };
 use shekyl_types::GlobalOutputIndex;
 use shekyl_units::AtomicUnits;
@@ -84,6 +84,29 @@ pub(crate) struct AssembleEmissionClaim {
     /// `assemble_claims` takes its size budget — so the gate is testable
     /// at exact boundaries without scaling the differential fixtures.
     pub fee_floor: u64,
+    /// Where the transaction key comes from — fresh from the OS in every
+    /// production send; a caller-chosen key only in the byte-identity test.
+    pub tx_key: TxKeyDraw,
+}
+
+/// Where [`AssembleEmissionClaim`] draws the transaction key that seeds
+/// the three vouts' KEM encapsulations and the tx pubkey.
+///
+/// The key is the one input to the assembly that is neither derived from
+/// the persona's bundle nor read from the operands, so it is the one thing
+/// two assemblies of the same claim must share before their bytes can be
+/// compared. `shekyl-chain-ingest`'s `emission_assembly` takes its key as
+/// an argument for that reason; this enum is the handler's side of the
+/// same seam. The `Fixed` arm is compiled only under `cfg(test)` — a
+/// shipping build has one arm, and the sole production sender (the claim
+/// orchestrator) passes it.
+pub(crate) enum TxKeyDraw {
+    /// Fresh from the OS CSPRNG (`rand_core::OsRng`).
+    Fresh,
+    /// The caller's key, so a second assembly can draw the same one
+    /// (`CHAIN_RULES_SLICE_8.md` §5 row 7, Q3's byte-identity pin).
+    #[cfg(test)]
+    Fixed(Zeroizing<[u8; 32]>),
 }
 
 /// Reply of [`AssembleEmissionClaim`]: the persona-bound wire bytes (minted
@@ -181,8 +204,15 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // ordered reward-commit set is "non-zero wire amounts, in vout
         // order" — exactly the reward vout here, so the auth digest binds
         // one commit.
-        let mut tx_key_secret = Zeroizing::new([0u8; 32]);
-        rand_core::OsRng.fill_bytes(tx_key_secret.as_mut());
+        let tx_key_secret: Zeroizing<[u8; 32]> = match msg.tx_key {
+            TxKeyDraw::Fresh => {
+                let mut drawn = Zeroizing::new([0u8; 32]);
+                rand_core::OsRng.fill_bytes(drawn.as_mut());
+                drawn
+            }
+            #[cfg(test)]
+            TxKeyDraw::Fixed(fixed) => fixed,
+        };
         let tx_pubkey = &Scalar::from_bytes_mod_order(*tx_key_secret) * ED25519_BASEPOINT_TABLE;
 
         let mut reward_commit: Option<RewardCommit> = None;
@@ -238,7 +268,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // erases exactly that entry — leaving these key images, these
         // outputs (loud amount included), and this extra: byte-identical to
         // the vin-less prefix hashed here.
-        let signable_tx_hash = tx_prefix_hash_from_parts_with_extra(
+        let signable_prefix = tx_prefix_hash_from_parts_with_extra(
             &key_images,
             &[],
             &output_keys,
@@ -247,6 +277,17 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             &tx_extra,
         )
         .map_err(|e| BondAssemblyError::build("signable hash", e))?;
+        // The transaction's one network-bound message (the signing envelope
+        // §2.2): this prefix and the base the outputs commit, framed under
+        // the engine's network id. The backing proof, both auths and every
+        // fee input's SAL prove over it.
+        let tx_signable = tx_signable_for(
+            &self.network,
+            signable_prefix,
+            AtomicUnits::from_raw(fee),
+            &msg.tree_ctx.reference_block,
+            &output_infos,
+        );
 
         // ── Step 10: backing spend input (membership-only; no key image).
         // The parts are re-derived from the designation's own record — the
@@ -280,15 +321,16 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // copy.
         let tree = msg.tree_ctx.clone();
         let membership = tokio::task::spawn_blocking(move || {
-            prove_backing_membership(&backing_spend, &tree, signable_tx_hash)
+            prove_backing_membership(&backing_spend, &tree, tx_signable)
         })
         .await
         .map_err(|e| BondAssemblyError::build("membership proving offload join", e))?
         .map_err(|e| BondAssemblyError::build("membership proving", e))?;
 
         // ── Step 12: the vin, with placeholder auths at canonical length
-        // (the auth digest spans fields 1–6 + tx context, never the auth
-        // legs themselves, so the placeholders don't poison it).
+        // (the auth digest spans every vin byte but the auth legs, the
+        // backing proof included, so the proof is in place first and the
+        // placeholders don't poison it).
         let hybrid_pk_bytes = keys
             .hybrid_sign_pk
             .to_canonical_bytes()
@@ -315,11 +357,10 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // (the proof opens the backing leaf to that key's point, verified at
         // emission_verify.rs — NOT P's identity key); Auth-P
         // signs with P's identity hybrid key (the daemon derives the vin's
-        // p_canonical_id from it, blockchain.cpp:3783 id-equality).
+        // p_canonical_id from it, blockchain.cpp:3783 id-equality). Both
+        // messages start with the engine's network id (NI-F11).
         let auth_msgs = vin
-            // `shekyl-archival-retention` takes the signable hash as bytes
-            // (RTN-7 §3.2 boundary).
-            .auth_msgs(&reward_commits, signable_tx_hash.as_bytes())
+            .auth_msgs(&self.network, &reward_commits, &tx_signable)
             .map_err(|e| BondAssemblyError::build("auth binding message", e))?;
         let auth_b = sign_pqc_auth_for_output(
             &backing_combined,
@@ -352,22 +393,13 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             .to_canonical_bytes()
             .map_err(|e| BondAssemblyError::build("claim auth encoding", e))?;
 
-        // ── Step 14: the completed vin joins the prefix; FULL prefix hash.
+        // ── Step 14: the completed vin joins the prefix as an extra input.
         let emission_input = Input::ArchivalRewardEmission {
             canonical_bytes: vin
                 .serialize()
                 .map_err(|e| BondAssemblyError::build("emission vin encoding", e))?,
         };
         let extra_inputs = vec![emission_input];
-        let prefix_hash = tx_prefix_hash_from_parts_with_extra(
-            &key_images,
-            &extra_inputs,
-            &output_keys,
-            &output_amounts,
-            &view_tags,
-            &tx_extra,
-        )
-        .map_err(|e| BondAssemblyError::build("prefix hash", e))?;
 
         // ── Step 15: fee-side proving (Bp+ over all three vouts, loud one
         // included, + FCMP over the fee spends) with `total_reward` as the
@@ -386,9 +418,13 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         let outputs_for_prove = output_infos;
         let tree = msg.tree_ctx.clone();
         let reward_term = InputTerm::new(AtomicUnits::from_raw(total_reward));
+        let network_id = self.network;
         let (signed, spend_inputs, vin) = tokio::task::spawn_blocking(move || {
             let signed = sign_transaction_with_terms(
-                prefix_hash,
+                &network_id,
+                // J22's prefix: the signer frames the same tx_signable the
+                // backing proof and the auths were made over.
+                signable_prefix,
                 &spend_inputs,
                 &outputs_for_prove,
                 AtomicUnits::from_raw(fee),
@@ -403,7 +439,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
                 &vin,
                 tree.tree_root.as_bytes(),
                 tree.tree_depth,
-                signable_tx_hash.to_bytes(),
+                &tx_signable,
             ) {
                 tracing::error!(error = %e, "emission self-check: backing verification failed");
                 return Err(StakeEngineError::EmissionClaim(
@@ -431,82 +467,29 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             .into());
         }
 
-        let bulletproof = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
-            .map_err(|e| BondAssemblyError::build("bulletproof parse", e))?;
-
-        // ── Step 16: assemble the wire input; pqc_auths carries one slot
-        // per prefix input — the fee spend slots (output-derived keys) then
-        // the emission slot (P's identity key: the daemon derives the vin's
-        // p_canonical_id from this slot's pubkey, id-equality at
-        // blockchain.cpp:3783).
-        let mut wire = WireEncodeInput {
-            key_images,
-            extra_inputs,
-            output_amounts,
-            output_keys,
-            view_tags,
-            tx_extra,
-            fee,
-            enc_amounts: signed.enc_amounts,
-            enc_labels: signed.enc_labels,
-            out_commitments: signed.commitments,
-            pseudo_outs: signed.pseudo_outs,
-            bulletproof,
-            reference_block: signed.reference_block,
-            fcmp_proof: signed.fcmp_proof,
-            // Placeholder auths at real pubkeys (the phase-1 payload hash
-            // reads them); the fee-slot pubkeys MOVE in — nothing reads
-            // `pqc_pubkeys` again (`sign_pqc_auths` re-derives per input).
-            pqc_auths: pqc_pubkeys
-                .into_iter()
-                .map(|pk| PqcAuth {
-                    auth_version: 1,
-                    signature: Vec::new(),
-                    public_key: pk,
-                })
-                .chain(std::iter::once(PqcAuth {
-                    auth_version: 1,
-                    signature: Vec::new(),
-                    public_key: hybrid_pk_bytes.clone(),
-                }))
-                .collect(),
-            fcmp_layers: signed.tree_depth,
-        };
-
-        // ── Step 17: PQC auth completion (fast; inline). Fee slots sign
-        // with output-derived keys; the emission slot signs with P's
-        // `hybrid_sign_sk` (CB-2: derived bundle, no seed re-borrow).
-        let payload_hashes = phase1_payload_hashes(&wire)
-            .map_err(|e| BondAssemblyError::build("phase1 payload hash", e))?;
-        if payload_hashes.len() != spend_inputs.len() + 1 {
-            return Err(BondAssemblyError::build(
-                "phase1 payload hash",
-                format!(
-                    "expected {} payload hashes, got {}",
-                    spend_inputs.len() + 1,
-                    payload_hashes.len()
-                ),
-            )
-            .into());
-        }
-        let mut pqc_auths = sign_pqc_auths(&payload_hashes[..spend_inputs.len()], &spend_inputs)
-            .map_err(|e| BondAssemblyError::build("pqc auth signing", e))?;
-        let emission_payload_hash = payload_hashes[spend_inputs.len()];
-        let emission_sig = HybridEd25519MlDsa
-            .sign(
-                &keys.hybrid_sign_sk,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-                emission_payload_hash.as_bytes(),
-            )
-            .map_err(|e| BondAssemblyError::build("emission pqc auth signing", e))?;
-        pqc_auths.push(PqcAuth {
-            auth_version: 1,
-            signature: emission_sig
-                .to_canonical_bytes()
-                .map_err(|e| BondAssemblyError::build("emission pqc auth encoding", e))?,
-            public_key: hybrid_pk_bytes,
-        });
-        wire.pqc_auths = pqc_auths;
+        // ── Step 16–17: open the spend. Fee slots sign with output-derived
+        // keys inside `open_spend`; the emission slot (P's identity key —
+        // the daemon derives the vin's p_canonical_id from this slot's
+        // pubkey) stays open until it is signed below.
+        let open = open_spend(
+            signed,
+            &spend_inputs,
+            SpendLayout {
+                key_images,
+                extra_inputs,
+                output_amounts,
+                output_keys,
+                view_tags,
+                tx_extra,
+                fee,
+                slots: AuthSlots {
+                    spend: pqc_pubkeys,
+                    extra: vec![hybrid_pk_bytes],
+                },
+            },
+            &self.network,
+        )
+        .map_err(|e| BondAssemblyError::build("open spend", e))?;
         drop(spend_inputs); // secrets end here; nothing below needs them
 
         // ── Step 18: remaining self-check legs (fast; inline). Claims leg:
@@ -514,11 +497,33 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // source. Auth leg: both role signatures over the recomputed
         // binding messages (cause-blind on refusal, CB-5).
         self_check_claims(&ops.source, &vin, total_reward)?;
-        if let Err(e) = emission_vin_verify_auth(&vin, &reward_commits, signable_tx_hash.as_bytes())
+        if let Err(e) = emission_vin_verify_auth(&vin, &reward_commits, &tx_signable, &self.network)
         {
             tracing::error!(error = %e, "emission self-check: auth verification failed");
             return Err(EmissionClaimError::SelfCheckFailed.into());
         }
+
+        // The emission slot signs with P's `hybrid_sign_sk` (CB-2: derived
+        // bundle, no seed re-borrow) over the payload hash phase 1 bound
+        // to the identity key.
+        let emission_sig = {
+            let emission_payload = open
+                .sole_extra_payload()
+                .map_err(|e| BondAssemblyError::build("emission slot payload", e))?;
+            HybridEd25519MlDsa
+                .sign(
+                    &keys.hybrid_sign_sk,
+                    shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+                    emission_payload.as_bytes(),
+                )
+                .map_err(|e| BondAssemblyError::build("emission pqc auth signing", e))?
+        };
+        let emission_sig_bytes = emission_sig
+            .to_canonical_bytes()
+            .map_err(|e| BondAssemblyError::build("emission pqc auth encoding", e))?;
+        let wire = open
+            .seal(vec![emission_sig_bytes])
+            .map_err(|e| BondAssemblyError::build("seal spend", e))?;
 
         // ── Step 19: encode + mint at the P-1 site. ──────────────────────
         let bound_tx = finalize_bond_tx(persona, &wire)?;

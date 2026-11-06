@@ -10,6 +10,7 @@
 //! 20 000. Heights below are chosen against that and nothing else.
 
 use super::*;
+use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 
 use shekyl_types::ChainCount;
 
@@ -26,7 +27,6 @@ use crate::engine::test_support::test_block_hash_at;
 fn view_at(tip: u64) -> AnchoredView {
     let synced = SyncedChainFacts::new(
         ChainCount::from_raw(tip + 1),
-        0,
         true,
         BlockHash::from_bytes(test_block_hash_at(tip)),
     )

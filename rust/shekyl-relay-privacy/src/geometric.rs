@@ -48,7 +48,7 @@
 )]
 // ^ Confined to table construction; the draw path is integer-only.
 
-use crate::rng::RelayRng;
+use shekyl_draw_rng::RelayRng;
 
 /// Relative-weight cutoff for truncating the geometric tail.
 ///
@@ -221,7 +221,7 @@ impl GeometricTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rng::SplitMix64;
+    use shekyl_draw_rng::SplitMix64;
 
     #[test]
     fn thresholds_are_monotonic_and_total() {

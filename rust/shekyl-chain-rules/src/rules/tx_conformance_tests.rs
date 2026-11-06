@@ -73,13 +73,17 @@
 use crate::block::Candidate;
 use crate::census::{CenRow, PolicyRow, RowStatus};
 use crate::fault::FormAttempt;
-use crate::harness::fixture::{candidate_on, recorded, repriced, root};
-use crate::harness::{assert_refused, expected_seed, judged, Faulted, MockChain, MockSubstrate};
-use crate::rule_set::RuleSet;
+use crate::harness::expected_references;
+use crate::harness::fixture::{candidate_on, paying_its_floor, recorded, repriced, root};
+use crate::harness::{
+    assert_refused, expected_seed, expected_target, judged, Faulted, MockChain, MockSubstrate,
+};
+use crate::policy::policy_form;
+use crate::rule_set::{AdmissionPolicy, RuleSet};
 use crate::trust::Trust;
-use crate::validate::{form, tx_form, validate};
+use crate::validate::{form, tx_form, validate, FormClaims};
 use crate::verdict::{ChainValid, Locus, TxSlot, Verdict};
-use shekyl_wire::Transaction;
+use shekyl_wire::{Ct, Transaction};
 
 #[path = "tx_conformance_trips.rs"]
 mod trips;
@@ -363,6 +367,11 @@ const SITES: &[Site] = &[
         j12_short_bond_spend_pk,
         "CEN-J12: JoinMarket commits a canonical-length `bond_spend_pk`",
     ),
+    parse(
+        "bond_post post_kind 0 is the retired keyless JoinMarket",
+        Face::Read,
+        "the keyless JoinMarket's byte is retired (2026-10-12): read as `Other(0)` its coupled fields would be taken for the holdings, so the byte has no decoding. CEN-J28 has no arm in this table since the receipt key became a fixed-length typed field — a JoinMarket without a key, or with one of another length, is unrepresentable in memory and refused by `read_len_prefix_exact` on the wire; the row judges the key's content, which the twin does not read",
+    ),
     invariant(
         "BondPostKind::Other must not use the JoinMarket tag\"",
         Face::Memory,
@@ -427,6 +436,16 @@ const SITES: &[Site] = &[
         "trailing byte(s) after transaction",
         CenRow::H23,
         "exact consumption: a blob that does not parse cleanly is not a transaction — H23's byte face, by construction",
+    ),
+    read_rule(
+        "pruned segment {} exceeds {MAX_TX_SIZE}",
+        CenRow::H1,
+        "the size cap before the pruned parse; the full blob's cap is the arm above",
+    ),
+    read_rule(
+        "trailing byte(s) after the pruned segment",
+        CenRow::H23,
+        "exact consumption of the pruned segment: bytes after the base are not the segment",
     ),
     // -- `validate_context_free_pruned` --------------------------------------
     rule(
@@ -674,11 +693,17 @@ fn one_block() -> MockChain {
 
 /// Both stages against `chain`; the mock never faults.
 fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
+    let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        expected_seed(chain),
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -686,13 +711,8 @@ fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
         Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
     };
     chain.with_view(|view| {
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .map(|_valid: ChainValid<_>| ())
+        judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .map(|_valid: ChainValid<_>| ())
     })
 }
 
@@ -760,10 +780,26 @@ fn hold_to_registry(row: CenRow, verdict: Verdict<()>, tx: &Transaction, locus: 
             // Nothing to hold to yet. When the row flips, the arm above runs
             // and demands the refusal — no pin to update.
         }
-        RowStatus::HeldByCxx => {
-            panic!("{row} is held by the C++; a wire arm keyed to it is a classification error")
+        RowStatus::HeldByStore => {
+            panic!("{row} is held by the store; a wire arm keyed to it is a classification error")
         }
     }
+}
+
+/// A policy arm's trip is refused by `policy_form` on the arm's own row —
+/// the pool's side of the twin's divergence (DRS-E5 PR-b b1). The trip pays
+/// its own requirement at a floor of one ([`paying_its_floor`]), so CEN-M3
+/// does not answer for a later row in census order.
+fn hold_to_policy(row: PolicyRow, tx: &Transaction) {
+    const FLOORS: [u64; 1] = [1];
+    let paid = paying_its_floor(tx, FLOORS[0]);
+    assert_eq!(
+        policy_form(&paid, &AdmissionPolicy::GENESIS, &FLOORS)
+            .err()
+            .map(|refused| refused.rule),
+        Some(row),
+        "a policy arm's trip is refused by policy_form on its row"
+    );
 }
 
 fn run(site: &Site) {
@@ -772,6 +808,9 @@ fn run(site: &Site) {
         Trip::Lone(build, expect) => {
             let tx = build();
             twin_refuses_on(site, &tx);
+            if let Arm::Policy(row) = site.arm {
+                hold_to_policy(row, &tx);
+            }
             let verdict = tx_form(&tx, TxSlot::Lone, &RuleSet::GENESIS).map(|_| ());
             match (site.arm, expect) {
                 (Arm::Rule(row), Expect::FromRegistry) => {
@@ -853,11 +892,14 @@ fn every_refusal_arm_of_the_twin_is_classified() {
     let invariant = count(|a| matches!(a, Arm::Invariant));
     assert_eq!(
         (parse, rule, policy, invariant),
-        (16, 40, 1, 5),
+        (17, 42, 1, 5),
         "the four counts (parse, rule, policy, invariant) moved — re-derive them, do not re-pin \
-         (records-was: (15, 38, 1, 5) over the 59 `Err(` sites, before the key was widened)"
+         (records-was: (15, 38, 1, 5) over the 59 `Err(` sites, before the key was widened; \
+         (16, 40, 1, 5) over 62 until 2026-10-12, when the retired keyless JoinMarket byte \
+         gained its parse refusal; (17, 40, 1, 5) over 63 until the pruned-segment reader; \
+         (17, 44, 1, 5) over 67 while the pruned reader repeated the version and ct-type arms)"
     );
-    assert_eq!(parse + rule + policy + invariant, 62);
+    assert_eq!(parse + rule + policy + invariant, 65);
 }
 
 /// Shape: a trip is a rule or a policy arm's; a rule arm without one is a
@@ -950,6 +992,47 @@ fn the_i19_sites_nonce_rendering_is_i19_at_both_sites() {
             CenRow::I19,
             Locus::Tx { slot },
         );
+    }
+}
+
+/// The H20 site's other clauses. The twin's serve-credit shape check is one
+/// site, keyed in [`SITES`] to one trip (a `pqc_auth`), so its other clauses
+/// were held to nothing. Two of them concern the prunable region: a body
+/// with **no region**, and one whose pass-record count is not the
+/// serve-credit vin count. The twin refused both while `tx_form` admitted
+/// them (`SHT-9`: the live C++ refuses them, and the store cannot hold the
+/// first). This holds both: the twin refuses each with the shape message,
+/// and `tx_form` refuses the first on H20 (the region is the shape) and the
+/// second on J2 (the census row that names the count), at both slots.
+#[test]
+fn the_h20_sites_other_clauses_are_refused_on_their_rows() {
+    let base = || crate::harness::fixture::serve_credit_only([0x77; 32]);
+    let mut no_region = base();
+    let mut miscounted = base();
+    if let Ct::Fcmp { prunable, .. } = &mut no_region.ct {
+        *prunable = None;
+    }
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut miscounted.ct
+    {
+        p.serve_credit_pruned.push(p.serve_credit_pruned[0].clone());
+    }
+    for (body, row) in [(&no_region, CenRow::H20), (&miscounted, CenRow::J2)] {
+        let err = body
+            .validate()
+            .expect_err("the twin refuses the serve-credit shape");
+        assert!(
+            err.to_string().contains("serve_credit tx must be fee-only"),
+            "the twin refused on another arm: {err}"
+        );
+        for slot in [TxSlot::Lone, TxSlot::Listed(0)] {
+            assert_refused(
+                tx_form(body, slot, &RuleSet::GENESIS).map(|_| ()),
+                row,
+                Locus::Tx { slot },
+            );
+        }
     }
 }
 

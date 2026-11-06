@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `shekyl_emission_vin_verify` — the PR-E3 fail-fast verify body
+//! The PR-E3 fail-fast emission verify body, once behind a coarse FFI crossing (deleted, `DEL-008`)
 //! (`REWARD_EMISSION_VIN_PLAN.md` §7.1 / PR-E3;
 //! `REWARD_EMISSION_E3_GATING_ROUND.md` §3 item 3).
 //!
@@ -40,8 +40,8 @@
 
 use crate::claimed_epochs::{claim_window_floor, claimed_epochs_contains};
 use crate::consensus_state::{
-    as_of_e_served_work, credited_work_milli, epoch_close_height, settlement_epoch_at_height,
-    shard_contribution_micro, CreditIndexOutOfRange, EpochCloseInputs, ServedWork,
+    as_of_e_served_work, credited_work_milli, shard_contribution_micro, CreditIndexOutOfRange,
+    EpochCloseInputs, ServedWork, SettlementSchedule,
 };
 use crate::emission_wire::{ArchivalRewardEmissionVin, EmissionAuthRole, RewardCommit, WireError};
 use crate::reward_arithmetic::reward_share_floor;
@@ -50,6 +50,8 @@ use shekyl_crypto_pq::signature::{
 };
 use shekyl_fcmp::proof::{verify_membership_only, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
+use shekyl_network::NetworkId;
+use shekyl_types::TxSignableHash;
 use thiserror::Error;
 
 /// Rejection reasons for the §7.1 verify body. Every variant is a consensus
@@ -413,13 +415,41 @@ pub fn claimant_reward_share(
     })
 }
 
-/// §7.1 steps 1–5 over the frozen as-of-`E` sources.
+/// §7.1 steps 1–5 over the frozen as-of-`E` sources, under the
+/// **process-latched** schedule ([`SettlementSchedule::effective`]) — the
+/// form for callers that hold no rule set: the daemon's submit verifier,
+/// the FFI shim, the wallet's claim builder, the KATs.
+/// [`emission_vin_verify_claims_under`] is the body; this is that body
+/// under the latch, the [`EpochCloseInputs::verify_view`] /
+/// [`EpochCloseInputs::under_schedule`] pairing.
 ///
 /// `epoch_sources` must be aligned 1:1 with `vin.settlement_epochs` (the C++
 /// shim marshals one item-2 snapshot per claimed epoch; a missing finalized
 /// `Σwork(E)` row means the shim never reaches this call). Fail-fast in step
 /// order; the set is never mutated (step 3 is the WS-2 read-only layer).
 pub fn emission_vin_verify_claims(
+    vin: &ArchivalRewardEmissionVin,
+    ctx: &EmissionVerifyContext<'_>,
+    epoch_sources: &[EmissionEpochSource<'_>],
+) -> Result<ClaimsVerified, EmissionVerifyError> {
+    emission_vin_verify_claims_under(SettlementSchedule::effective(), vin, ctx, epoch_sources)
+}
+
+/// §7.1 steps 1–5 over the frozen as-of-`E` sources, under `schedule`.
+///
+/// The schedule decides step 1 alone — which epoch `current_block_height`
+/// sits in and where each claimed epoch's close was processed. A caller
+/// that holds a rule set (the validator's CEN-J25) passes that set's
+/// schedule, so a chain captured under a shortened regtest epoch replays
+/// under a rule set naming that epoch, in any process, with no latch armed
+/// (`ARW-15`). Everything after step 1 reads `ctx` and `epoch_sources`
+/// only; the per-epoch `inputs` already carry their own
+/// `settlement_epoch_blocks`, taken from the same schedule by the caller
+/// that built them.
+///
+/// Alignment and fail-fast order as [`emission_vin_verify_claims`].
+pub fn emission_vin_verify_claims_under(
+    schedule: SettlementSchedule,
     vin: &ArchivalRewardEmissionVin,
     ctx: &EmissionVerifyContext<'_>,
     epoch_sources: &[EmissionEpochSource<'_>],
@@ -464,11 +494,12 @@ pub fn emission_vin_verify_claims(
     // the tighter boundary (the F-E1 KAT pins reject-at-`h_close`,
     // accept-at-`h_close + 1`), so the same-block close/claim race is
     // foreclosed structurally.
-    let current_settled = settlement_epoch_at_height(ctx.current_block_height);
-    let window_floor = claim_window_floor(current_settled);
+    let current_settled = schedule.epoch_at_height(ctx.current_block_height);
+    let window_floor = claim_window_floor(current_settled, crate::archival_params());
     for &epoch in &vin.settlement_epochs {
-        let finalized =
-            epoch_close_height(epoch).is_some_and(|h_close| ctx.current_block_height > h_close);
+        let finalized = schedule
+            .close_height(epoch)
+            .is_some_and(|h_close| ctx.current_block_height > h_close);
         if !finalized {
             return Err(EmissionVerifyError::EpochNotFinalized {
                 epoch,
@@ -660,7 +691,7 @@ pub fn emission_vin_verify_backing(
     vin: &ArchivalRewardEmissionVin,
     tree_root: &[u8; 32],
     tree_depth: u8,
-    signable_tx_hash: [u8; 32],
+    tx_signable: &TxSignableHash,
 ) -> Result<BackingVerified, EmissionVerifyError> {
     let backing = &vin.backing;
 
@@ -675,7 +706,9 @@ pub fn emission_vin_verify_backing(
         &[PqcKeyScalar::from_pqc_public_key(&backing.backing_pubkey)],
         tree_root,
         tree_depth,
-        signable_tx_hash,
+        // The transaction's one network-bound message (the signing envelope
+        // §2.2): the backing proof proves over it like every SAL.
+        tx_signable.to_bytes(),
     )?;
     if !ok {
         return Err(EmissionVerifyError::BackingRejected(
@@ -708,15 +741,19 @@ pub fn emission_vin_verify_backing(
 /// R1.A posture — Auth-P has no membership-proof classical fallback, so an
 /// ML-DSA-only auth would be a single point of cryptographic failure.
 ///
-/// `reward_commits` and `signable_tx_hash` are the same tx-level context the
+/// `reward_commits` and `tx_signable` are the same tx-level context the
 /// wallet builder signed over; a destination swap or cross-tx replay changes
-/// the recomputed message and both signatures reject.
+/// the recomputed message and both signatures reject. `network_id` is the
+/// verifying node's (its trust's, `NETWORK_IDENTITY.md` NI-F11): an emission
+/// signed for another network recomputes to another message and is refused
+/// here, whatever proofs the transaction carries.
 pub fn emission_vin_verify_auth(
     vin: &ArchivalRewardEmissionVin,
     reward_commits: &[RewardCommit],
-    signable_tx_hash: &[u8; 32],
+    tx_signable: &TxSignableHash,
+    network_id: &NetworkId,
 ) -> Result<AuthVerified, EmissionVerifyError> {
-    let msgs = vin.auth_msgs(reward_commits, signable_tx_hash)?;
+    let msgs = vin.auth_msgs(network_id, reward_commits, tx_signable)?;
 
     // Auth-B: the key's leaf binding is step 6's in-circuit opening (PL-D3).
     verify_hybrid_auth(

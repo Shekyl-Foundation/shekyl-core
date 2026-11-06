@@ -63,25 +63,12 @@ namespace cryptonote {
     return h;
   }
 
-  static uint8_t nettype_to_ffi_network(network_type nettype)
-  {
-    switch (nettype)
-    {
-      case MAINNET: case FAKECHAIN: return 0;
-      case TESTNET:  return 1;
-      case STAGENET: return 2;
-      default:       return 0;
-    }
-  }
-
   /************************************************************************/
   /* Cryptonote helper functions                                          */
   /************************************************************************/
   //-----------------------------------------------------------------------------------------------
-  size_t get_min_block_weight(uint8_t /* version */)
+  size_t get_min_block_weight()
   {
-    // Shekyl activates all hard-fork features from genesis (HF1).
-    // The legacy Monero version ladder (ZONE_V1, ZONE_V2) is unused.
     return CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   }
   //-----------------------------------------------------------------------------------------------
@@ -90,17 +77,17 @@ namespace cryptonote {
     return CRYPTONOTE_MAX_TX_SIZE;
   }
   //-----------------------------------------------------------------------------------------------
-  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version) {
+  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward) {
     // The M_r-NEUTRAL view: baseline volume pins the release multiplier at
     // exactly 1, so this equals the pre-FL-R12' unmodulated reward
     // bit-for-bit for every state at or below the emission-curve asymptote.
     // Production consumers are the fee/relay floors that must not track
     // demand (CEN-M3's held machinery); everything reward-paying calls the
     // volume-aware overload below.
-    return get_block_reward(median_weight, current_block_weight, already_generated_coins, reward, version, shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1});
+    return get_block_reward(median_weight, current_block_weight, already_generated_coins, reward, shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1});
   }
   //-----------------------------------------------------------------------------------------------
-  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version, shekyl::tx_volume_window tx_volume)
+  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, shekyl::tx_volume_window tx_volume)
   {
     // Marshaling shim for THE one owner of the paid reward
     // (shekyl-economics `paid_block_reward`, FL-R12' signed composition):
@@ -165,39 +152,6 @@ namespace cryptonote {
     reward = computed;
     return true;
   }
-  //------------------------------------------------------------------------------------
-  std::string get_account_address_as_str(
-      network_type nettype
-    , bool /* subaddress -- ignored, Shekyl uses standard addresses only */
-    , account_public_address const & adr
-    )
-  {
-    // Struct-only re-encode is gone: `account_public_address` does not
-    // carry `msg_sign_pk`, and we will not thicken the C++ struct to
-    // hold a field the Rust address crate owns (rule 20). Live daemon
-    // paths retain the caller's original encoded string (miner
-    // start/status). Wallet-owned encode of *this* account is
-    // `account_base::get_public_address_str` (blob-derived pk, same
-    // `shekyl_address_encode` the mining RPC/FFI already call). Remaining
-    // wallet2 display callers that only have a destination struct are
-    // the Phase-5 deletion surface — they get an empty string, not a
-    // theatrical FFI call that cannot succeed.
-    (void)nettype;
-    (void)adr;
-    LOG_PRINT_L0("get_account_address_as_str: cannot encode from account_public_address (no msg_sign_pk); pass the original address string");
-    return {};
-  }
-  //-----------------------------------------------------------------------
-  // Shekyl has no integrated (payment-id) addresses; this is a compatibility
-  // alias — prefer get_account_address_as_str for new code.
-  std::string get_account_integrated_address_as_str(
-      network_type nettype
-    , account_public_address const & adr
-    , crypto::hash8 const & /* payment_id -- ignored, Shekyl has no integrated addresses */
-    )
-  {
-    return get_account_address_as_str(nettype, false, adr);
-  }
   //-----------------------------------------------------------------------
   bool is_coinbase(const transaction& tx)
   {
@@ -206,103 +160,6 @@ namespace cryptonote {
 
     if(!std::holds_alternative<txin_gen>(tx.vin[0]))
       return false;
-
-    return true;
-  }
-  //-----------------------------------------------------------------------
-  bool get_account_address_from_str(
-      address_parse_info& info
-    , network_type nettype
-    , std::string const & str
-    )
-  {
-    uint8_t network_out = 0;
-    uint8_t spend_key[32] = {};
-    uint8_t view_key[32] = {};
-
-    ShekylBuffer ml_kem_buf = shekyl_address_decode(
-        str.c_str(), &network_out, spend_key, view_key);
-
-    if (ml_kem_buf.ptr == nullptr)
-    {
-      LOG_PRINT_L2("Invalid Bech32m address format");
-      return false;
-    }
-
-    uint8_t expected_net = nettype_to_ffi_network(nettype);
-    if (network_out != expected_net)
-    {
-      LOG_PRINT_L1("Address network mismatch: address belongs to network "
-          << (int)network_out << ", expected " << (int)expected_net);
-      if (ml_kem_buf.len > 0)
-        shekyl_buffer_free(ml_kem_buf.ptr, ml_kem_buf.len);
-      return false;
-    }
-
-    memcpy(&info.address.m_spend_public_key, spend_key, 32);
-    memcpy(&info.address.m_view_public_key, view_key, 32);
-
-    if (ml_kem_buf.len > 0)
-    {
-      // Derive X25519 public key from Ed25519 view key via Edwards→Montgomery map.
-      // m_pqc_public_key layout: X25519_pub[32] || ML-KEM_ek[1184] = 1216 bytes.
-      // Canonical assembler: this function. See account_public_address field comment.
-      uint8_t x25519_pk[32];
-      if (!shekyl_view_pub_to_x25519_pub(
-              reinterpret_cast<const uint8_t*>(&info.address.m_view_public_key), x25519_pk))
-      {
-        LOG_PRINT_L1("Failed to derive X25519 public key from view key");
-        shekyl_buffer_free(ml_kem_buf.ptr, ml_kem_buf.len);
-        return false;
-      }
-
-      info.address.m_pqc_public_key.clear();
-      info.address.m_pqc_public_key.reserve(SHEKYL_X25519_PK_BYTES + ml_kem_buf.len);
-      info.address.m_pqc_public_key.insert(
-          info.address.m_pqc_public_key.end(), x25519_pk, x25519_pk + SHEKYL_X25519_PK_BYTES);
-      info.address.m_pqc_public_key.insert(
-          info.address.m_pqc_public_key.end(), ml_kem_buf.ptr, ml_kem_buf.ptr + ml_kem_buf.len);
-      shekyl_buffer_free(ml_kem_buf.ptr, ml_kem_buf.len);
-
-      CHECK_AND_ASSERT_MES(info.address.m_pqc_public_key.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES,
-        false, "m_pqc_public_key assembly error: expected " << SHEKYL_PQC_PUBLIC_KEY_BYTES
-        << " bytes, got " << info.address.m_pqc_public_key.size());
-
-      // Post-assembly tripwire. Delegates to the authoritative Rust check
-      // (X25519 prefix is the Edwards→Montgomery image of view_pub; ML-KEM
-      // suffix is a well-formed FIPS-203 encapsulation key). If this fails
-      // the decoded bytes look syntactically valid but the triple is not a
-      // legal canonical address, so we must not hand it to the wallet.
-      //
-      // Argument order: pqc_public_key (1216 B) first, view_pub (32 B)
-      // second — matches the Rust definition. The original landing of this
-      // call site (commit 0092a8da1) had the order reversed, which let
-      // every decode trip the FIPS-203 well-formedness check on garbage
-      // bytes; the 14 `uri.*` regressions were the symptom.
-      if (!shekyl_account_public_address_check(
-              info.address.m_pqc_public_key.data(),
-              reinterpret_cast<const uint8_t*>(&info.address.m_view_public_key)))
-      {
-        LOG_PRINT_L1("Address failed v1 canonical invariant check (view_pub ↔ "
-                     "X25519 prefix or malformed ML-KEM-768 encapsulation key)");
-        return false;
-      }
-    }
-    else
-    {
-      info.address.m_pqc_public_key.clear();
-    }
-
-    info.is_subaddress = false;
-    info.has_payment_id = false;
-    memset(&info.payment_id, 0, sizeof(info.payment_id));
-
-    if (!crypto::check_key(info.address.m_spend_public_key) ||
-        !crypto::check_key(info.address.m_view_public_key))
-    {
-      LOG_PRINT_L1("Failed to validate address keys");
-      return false;
-    }
 
     return true;
   }

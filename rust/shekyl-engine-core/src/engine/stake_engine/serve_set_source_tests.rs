@@ -21,9 +21,20 @@ use shekyl_archival_retention::{
     settlement_epoch_at_height, HoldingsDescriptor, HoldingsKind, ShardSet,
 };
 use shekyl_curve_tree::{CurveTreeClient, PostureDeclaration, SegmentPin};
+use shekyl_p_store::{BodyStore, StoreKey};
 use shekyl_rpc_client::{Rpc, RpcError};
-use shekyl_types::ChainCount;
+use shekyl_types::{ChainCount, ShardId};
 use std::sync::Arc;
+
+use super::BodyStoreHandle;
+
+/// The production owner, over an ephemeral store. The pinner's tests erase
+/// through it, the same message the wallet sends.
+fn test_bodies() -> BodyStoreHandle {
+    BodyStoreHandle::spawn(
+        BodyStore::open_ephemeral(StoreKey::from_bytes([0x5a; 32])).expect("ephemeral body store"),
+    )
+}
 
 /// A daemon serving one canned claim-source reply through the real
 /// `json_rpc_call` envelope (only the transport is canned, so the decode
@@ -55,19 +66,25 @@ impl Rpc for ClaimSourceDaemon {
             .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_owned))
             .is_some_and(|m| m == "get_info");
         let result = if is_get_info {
-            serde_json::json!({
-                "height": self.0.get("chain_height").and_then(serde_json::Value::as_u64)
-                    .expect("the fixture source carries a chain height"),
-                "target_height": 0,
-                "synchronized": true,
-                "top_block_hash": hex::encode(test_block_hash_at(
-                    self.0.get("chain_height").and_then(serde_json::Value::as_u64)
+            crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+                chain_count: shekyl_types::ChainCount::from_raw(
+                    self.0
+                        .get("chain_height")
+                        .and_then(serde_json::Value::as_u64)
+                        .expect("the fixture source carries a chain height"),
+                ),
+                target_height: None,
+                synchronized: true,
+                top_hash: shekyl_types::BlockHash::from_bytes(test_block_hash_at(
+                    self.0
+                        .get("chain_height")
+                        .and_then(serde_json::Value::as_u64)
                         .expect("the fixture source carries a chain height")
                         .saturating_sub(1),
                 )),
-                "outgoing_connections_count": 8,
-                "incoming_connections_count": 0,
-            })
+                has_peers: true,
+            }
+            .to_value()
         } else {
             (*self.0).clone()
         };
@@ -178,7 +195,7 @@ fn handle_with_frozen_segment() -> (tempfile::TempDir, CurveTreeHandle) {
 /// **The production pinner's own KAT.** Every `shekyl-p-host` test drives
 /// a test-side pinner, so the mapping this function performs — record →
 /// `shard_ids`, `chain_height` → `as_of_height`, actor round trip →
-/// outcomes + reader — is the one part of the seam no host-side test can
+/// outcomes + store — is the one part of the seam no host-side test can
 /// reach. Without this it could be wrong in any of those four places
 /// while the whole suite stayed green.
 // The gate's pure semantics — the two-epoch window, the returning-shard
@@ -191,7 +208,12 @@ fn handle_with_frozen_segment() -> (tempfile::TempDir, CurveTreeHandle) {
 #[tokio::test]
 async fn the_report_is_derived_from_the_connected_record() {
     let (_dir, curve_tree) = handle();
-    let pinner = EngineServeSetPinner::new(curve_tree, daemon(30_001, Some(vec![4, 9])), [7; 32]);
+    let pinner = EngineServeSetPinner::new(
+        curve_tree,
+        daemon(30_001, Some(vec![4, 9])),
+        [7; 32],
+        test_bodies(),
+    );
 
     let report = pinner.pin_serve_set().await.expect("pin");
 
@@ -235,7 +257,8 @@ async fn the_report_is_derived_from_the_connected_record() {
 #[tokio::test]
 async fn an_released_persona_reports_the_empty_set_rather_than_failing() {
     let (_dir, curve_tree) = handle();
-    let pinner = EngineServeSetPinner::new(curve_tree, daemon(30_001, None), [7; 32]);
+    let pinner =
+        EngineServeSetPinner::new(curve_tree, daemon(30_001, None), [7; 32], test_bodies());
 
     let report = pinner
         .pin_serve_set()
@@ -280,6 +303,7 @@ async fn complete_tree_reports_the_prefix_while_an_empty_shard_set_reports_the_e
         curve_tree_a,
         daemon_of_kind(30_001, Some(Vec::new()), HoldingsKind::CompleteTree),
         [7; 32],
+        test_bodies(),
     );
     let report = complete_tree
         .pin_serve_set()
@@ -312,6 +336,7 @@ async fn complete_tree_reports_the_prefix_while_an_empty_shard_set_reports_the_e
         curve_tree_b,
         daemon_of_kind(30_001, Some(Vec::new()), HoldingsKind::ShardSetCompact),
         [7; 32],
+        test_bodies(),
     );
     let report = owes_nothing
         .pin_serve_set()
@@ -348,6 +373,7 @@ async fn the_prefix_reports_the_store_cursor_and_redeclares_quietly() {
         curve_tree,
         daemon_of_kind(30_001, Some(Vec::new()), HoldingsKind::CompleteTree),
         [7; 32],
+        test_bodies(),
     );
 
     let first = pinner.pin_serve_set().await.expect("first report");
@@ -389,27 +415,51 @@ async fn the_prefix_reports_the_store_cursor_and_redeclares_quietly() {
 #[tokio::test]
 async fn an_empty_chain_stamps_height_zero() {
     let (_dir, curve_tree) = handle();
-    let pinner = EngineServeSetPinner::new(curve_tree, daemon(0, None), [7; 32]);
+    let pinner = EngineServeSetPinner::new(curve_tree, daemon(0, None), [7; 32], test_bodies());
 
     let report = pinner.pin_serve_set().await.expect("pin");
     assert_eq!(report.as_of_height, BlockHeight::from_raw(0));
 }
 
-/// The reader that comes back must be a handle on the store the pins
-/// landed in — the trait contract `PinnedServeSet::refreshed` enforces
-/// with `same_store`. One actor `ask` returns both, so they cannot
-/// diverge; this pins that they do not.
+/// Every report and reading must name the store the pins landed in — the
+/// trait contract `PinnedServeSet` enforces with `PinnerStoreMismatch`.
+/// The name is the curve-tree actor's, so it holds across pins, readings
+/// and an in-place recovery, and a pinner over another store names another.
 #[tokio::test]
-async fn the_reader_is_the_store_the_pins_landed_in() {
+async fn every_report_and_reading_names_the_store_the_pins_landed_in() {
     let (_dir, curve_tree) = handle();
-    let pinner = EngineServeSetPinner::new(curve_tree, daemon(30_001, Some(vec![1])), [7; 32]);
+    let pinner = EngineServeSetPinner::new(
+        curve_tree.clone(),
+        daemon(30_001, Some(vec![1])),
+        [7; 32],
+        test_bodies(),
+    );
 
     let first = pinner.pin_serve_set().await.expect("pin");
-    let second = pinner.pin_serve_set().await.expect("pin again");
+    let facts = pinner.store_facts(vec![1]).await.expect("read");
+    let (scanned, _) = pinner.pruned_frozen_segments().await.expect("scan");
+    curve_tree.poison_for_test().await;
+    curve_tree.recover().await.expect("rebuild in place");
+    let after_recovery = pinner.pin_serve_set().await.expect("pin after recovery");
 
+    assert_eq!(facts.store, first.store, "a reading names the pins' store");
+    assert_eq!(scanned, first.store, "so does the integrity scan");
+    assert_eq!(
+        after_recovery.store, first.store,
+        "an in-place recovery keeps the store, so it keeps its name"
+    );
     assert!(
-        first.reader.same_store(&second.reader),
-        "two pins through one handle are two pins in one store"
+        facts.members_missing_pins.is_empty(),
+        "the reading is of the store the pin went into"
+    );
+
+    let (_other_dir, other) = handle();
+    let other_pinner =
+        EngineServeSetPinner::new(other, daemon(30_001, Some(vec![1])), [7; 32], test_bodies());
+    assert_ne!(
+        other_pinner.pin_serve_set().await.expect("pin").store,
+        first.store,
+        "a pinner over another store names another store"
     );
 }
 
@@ -444,9 +494,9 @@ async fn pins_in_store(curve_tree: &CurveTreeHandle) -> Vec<u64> {
 /// advances the cursor and the claim source reads it, matching production
 /// order (health first, then the record).
 ///
-/// `target_height` is the sync dial: a non-zero value above the answering
-/// height is a daemon that says it is still catching up; `0` is the info
-/// surface's "synchronized" convention.
+/// `synchronized` is the sync dial: the daemon's own flag. A daemon that is
+/// still catching up also reports a target far above its height, as a real
+/// one would; nothing decides on that number.
 /// One refresh's worth of daemon: the tip it answers at and what the bond
 /// record says at that tip.
 #[derive(Clone)]
@@ -501,17 +551,17 @@ struct ScheduledDaemon {
     cursor: Arc<std::sync::atomic::AtomicUsize>,
     /// The step the current refresh answers from, written by `get_info`.
     current: Arc<std::sync::Mutex<usize>>,
-    /// `0` means synchronized; anything else is the climbing target.
-    target_height: u64,
+    /// The daemon's flag.
+    synchronized: bool,
 }
 
 impl ScheduledDaemon {
-    fn new(schedule: Vec<Step>, target_height: u64) -> Self {
+    fn new(schedule: Vec<Step>, synchronized: bool) -> Self {
         Self {
             schedule: Arc::new(schedule),
             cursor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             current: Arc::new(std::sync::Mutex::new(0)),
-            target_height,
+            synchronized,
         }
     }
 
@@ -554,16 +604,14 @@ impl Rpc for ScheduledDaemon {
             // claim source below reports, because both come off one
             // `db.height()` read on the daemon.
             let tip = self.step().tip;
-            serde_json::json!({
-                "height": tip + 1,
-                "target_height": self.target_height,
-                // A resyncing daemon says so outright; the heights are
-                // the second half of the same statement.
-                "synchronized": self.target_height == 0,
-                "top_block_hash": hex::encode(test_block_hash_at(tip)),
-                "outgoing_connections_count": 8,
-                "incoming_connections_count": 0,
-            })
+            crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+                chain_count: shekyl_types::ChainCount::from_raw(tip + 1),
+                target_height: (!self.synchronized).then_some(1_000_000),
+                synchronized: self.synchronized,
+                top_hash: shekyl_types::BlockHash::from_bytes(test_block_hash_at(tip)),
+                has_peers: true,
+            }
+            .to_value()
         } else {
             // `chain_height` is a COUNT; the schedule is expressed in
             // tips, so the record answers one more than the tip — the
@@ -631,8 +679,8 @@ fn compact_climb(owed: &[u64]) -> Vec<Step> {
 async fn a_resyncing_daemon_releases_nothing_and_observes_no_absence() {
     let (_dir, curve_tree) = handle();
     // Owes shard 1 only; shard 9 is held from an older record.
-    let rpc = ScheduledDaemon::new(compact_climb(&[1]), 1_000_000);
-    let pinner = EngineServeSetPinner::new(curve_tree, rpc, [7; 32]);
+    let rpc = ScheduledDaemon::new(compact_climb(&[1]), false);
+    let pinner = EngineServeSetPinner::new(curve_tree, rpc, [7; 32], test_bodies());
 
     // Seed the store's pin view with both shards, so 9 is retained-but-
     // not-owed for every step of the climb.
@@ -677,8 +725,11 @@ async fn a_resyncing_daemon_releases_nothing_and_observes_no_absence() {
 #[tokio::test]
 async fn the_same_climb_synchronized_still_releases_at_the_second_epoch_open() {
     let (_dir, curve_tree) = handle();
-    let rpc = ScheduledDaemon::new(compact_climb(&[1]), 0);
-    let pinner = EngineServeSetPinner::new(curve_tree, rpc, [7; 32]);
+    let rpc = ScheduledDaemon::new(compact_climb(&[1]), true);
+    let bodies = test_bodies();
+    bodies.put_for_test(ShardId::from_raw(9), b"departed").await;
+    bodies.put_for_test(ShardId::from_raw(1), b"owed").await;
+    let pinner = EngineServeSetPinner::new(curve_tree, rpc, [7; 32], bodies.clone());
 
     pinner
         .curve_tree
@@ -693,6 +744,14 @@ async fn the_same_climb_synchronized_still_releases_at_the_second_epoch_open() {
         pinner.pin_serve_set().await.expect("refresh");
         assert_eq!(pins_in_store(&pinner.curve_tree).await, expected_pins);
     }
+    assert!(
+        bodies.open_for_test(ShardId::from_raw(9)).await.is_none(),
+        "the released shard's body row is erased with the pin"
+    );
+    assert!(
+        bodies.open_for_test(ShardId::from_raw(1)).await.is_some(),
+        "the owed shard's body row stays"
+    );
 }
 
 /// **A `CompleteTree` epoch is observed, not skipped.** Shard 9 is
@@ -719,8 +778,8 @@ async fn a_complete_tree_epoch_forgets_the_absence_clock_before_it() {
         Step::compact(40_000, &[1]),
     ];
     let expected_pins: [&[u64]; 5] = [&[1, 9], &[1, 9], &[1, 9], &[1, 9], &[1]];
-    let rpc = ScheduledDaemon::new(schedule, 0);
-    let pinner = EngineServeSetPinner::new(curve_tree, rpc, [7; 32]);
+    let rpc = ScheduledDaemon::new(schedule, true);
+    let pinner = EngineServeSetPinner::new(curve_tree, rpc, [7; 32], test_bodies());
     pinner
         .curve_tree
         .pin_serve_set(vec![1, 9], Vec::new())
@@ -763,7 +822,12 @@ async fn a_rollback_refresh_leaves_the_ledger_empty_and_the_next_observation_sta
         Step::compact(40_000, &[1]),
     ];
     let expected_pins: [&[u64]; 5] = [&[1, 9], &[1, 9], &[1, 9], &[1, 9], &[1]];
-    let pinner = EngineServeSetPinner::new(curve_tree, ScheduledDaemon::new(schedule, 0), [7; 32]);
+    let pinner = EngineServeSetPinner::new(
+        curve_tree,
+        ScheduledDaemon::new(schedule, true),
+        [7; 32],
+        test_bodies(),
+    );
     pinner
         .curve_tree
         .pin_serve_set(vec![1, 9], Vec::new())

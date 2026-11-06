@@ -35,8 +35,9 @@ transcribed and **re-verified at source 2026-08-14** (crate manifests +
 | ML-KEM-768 | `fips203 =0.4.3` (**exact**) | Output encryption / address `ek` (hybrid KEM with X25519) | No external audit. Exact-pinned: the crate's internal `DummyRng { fill_bytes = unimplemented!() }` pattern makes silent minor-version drift a panic hazard (rationale at the pin) |
 | ML-DSA-65 | `fips204 =0.4.6` (**exact**) | PQ half of `HybridEd25519MlDsa` (all six §2 surfaces); per-persona archival signing key | No external audit. Same exact-pin rationale |
 | SLH-DSA-192s | `fips205 =0.4.1` (**exact**) | Wallet message signing (SM round; the last Module-LWE/SIS-**uncorrelated** signature surface) and the ratified address-v2 48-byte pk field | No external audit; **ACVP cross-check KATs vendored in our own `test_vectors/`** (NIST ACVP-Server `a7f283cdc`), which forecloses the unfixable nonconforming-keygen branch |
+| FN-DSA-1024 | `fn-dsa =0.4.0` with `fn-dsa-comm`, `-kgen`, `-sign`, `-vrfy` (**exact**, all five) | PQ half of `HybridEd25519FnDsa` (hybrid scheme 3). Each archival persona derives a receipt key under it (`ArchivalPKeys::receipt_sign_pk`). **Nothing signs with it yet**: the serve-credit receipt and the witness's carrier signature move onto it in later changes | No external audit. **Pre-standard**: FIPS 206 is not final, and a genesis-tagged build on a pre-1.0 crate is refused (`check_fn_dsa_genesis_gate.py`). Dependency record: [`design/FN_DSA_HYBRID.md`](design/FN_DSA_HYBRID.md) §2 |
 | Ed25519 | `ed25519-dalek 2.2.0` / `curve25519-dalek` | Classical half of every hybrid signature; the **house Schnorr** (`crate::schnorr`, raw spend scalar — dalek `SigningKey` structurally cannot sign for it) for reserve proofs and the message-signing outer half | RustCrypto/dalek lineage (community-audited upstream); house Schnorr is ours, hedged-nonce |
-| cSHAKE256 | `sha3 0.10` | Every domain-separated derivation/preimage (mechanism 1 of §3; 27 domains) | RustCrypto audited lineage |
+| cSHAKE256 | `sha3 0.10` | Every domain-separated derivation/preimage (mechanism 1 of §3; 53 domains) | RustCrypto audited lineage |
 | Keccak-256 | `sha3 0.10` (`shekyl_crypto_hash::keccak256`; single implementation, empty-input KAT pins byte-identity; C ABI export keeps the `shekyl_cn_fast_hash` name) | Consensus content identity (txid / block / leaf / fingerprint) — **identity, never separation** (`keccak=identity, cSHAKE=separation`) | Same |
 | SHA-512, Blake2b512 | `sha2` / `blake2 0.10` | HKDF backbone (mech 2); Blake2b DSTs incl. `DOMAIN_PQC_LEAF` (mech 4) | Same |
 | Bulletproof+ / FCMP++ curve stack | Vendored, manifest-gated (`check_vendored_crypto_manifest.sh`, 59 files) | Range proofs; membership + SAL | **The known non-PQ surface — see §4** |
@@ -53,10 +54,34 @@ structural close is a deliberate **two-policy split**, owned by
   never become nonce reuse; dead RNG must never become a crash loop). The
   DLEQ nonce (F-1, the one bare `Scalar::random` the audit found protecting a
   full spend scalar) now binds every challenge input through this seam.
-- **Key material — fail-loud:** master seeds, transaction keys, and keygen
-  draw `OsRng` directly at their call sites and panic/error on entropy
-  failure — a key silently minted from a degraded source is the worse
-  outcome, so this path deliberately does **not** route through the hedge.
+- **Key material — fail-loud:** a key minted from a degraded source is the
+  worse outcome, so this path does not use the hedge. Inside
+  `shekyl-crypto-pq` the draw is the crate-private `key_material32`:
+  32 fresh bytes, or an error, never zeros. Callers outside this crate
+  still draw `OsRng` and handle the error at the site (`stake_engine`'s
+  `try_fill_bytes` preflight).
+
+Hybrid scheme 3 (2026-10-09) sits on both sides of that split and adds no
+third policy. FN-DSA's signer takes a generic RNG and draws through
+`fill_bytes`, which cannot report failure; it is handed `HedgedOsRng`, the
+fail-safe policy as an adapter, and the crate itself mixes the signing key
+and the message into every draw. A fresh scheme-3 key takes its seeds from
+`key_material32`, which is fail-loud. The seeded entries that pin vectors
+and benches are behind `test-utils`.
+
+**Seeded key generation has one stream (2026-10-10; the cipher has lived on
+the heap since 2026-10-11).** A key that must come back from the wallet seed
+is generated from `seeded_rng::SeededRng`, a ChaCha20 stream over 32 seed
+bytes: ML-DSA-65 per-output and persona keys, the ML-KEM-768 address key,
+the FN-DSA-1024 receipt key. It is the stream
+`rand_chacha::ChaCha20Rng::from_seed` gives, which those keys were frozen
+on. The cipher lives on the heap: a move of the generator copies a pointer,
+and drop wipes the cipher there. `ChaCha20Legacy::new` still returns the
+cipher by value, so that one constructor temporary is not wiped
+(`FN_DSA_HYBRID.md` `FND-14`). It is deterministic by construction and is
+not an entropy source; the verdict above, that no deterministic seed is
+reachable from a path that should draw fresh randomness, is unchanged,
+because its only production callers are the three re-derivations.
 
 F-1..F-8 dispositions all landed in PR-SA-1 (F-7's test-keygen gating rode
 PR-SA-2 with the trait rewrite, as recorded); the per-finding table stays in
@@ -84,7 +109,7 @@ close):
 | B | Archival bond-post vin | **rides surface A** (SA-2b ruling: the whole-tx hash binds the vin type tag, cross-role replay structurally foreclosed; the parked dedicated preimage S1 was **deleted**) | as A | as A |
 | C | Emission auth — claim | `stake_engine/claim.rs` | `emission_verify` claim leg | `shekyl/archival-emission-claim-scheme-v1` |
 | D | Emission auth — backing | `stake_engine/claim.rs` (Auth-B) | `emission_verify` backing leg (the §5 surface-2 triple) | `shekyl/archival-emission-backing-scheme-v1` |
-| E | Attestation countersignature | no in-repo signer yet (`shekyl-p-serve`, `SF` (a)) | `attestation_wire` | `shekyl/archival-attestation-scheme-v2` (v1 retired 2026-09-13, `SF-D8`) |
+| E | Attestation countersignature | no in-repo signer yet (`shekyl-p-serve`, `SF` (a)) | `attestation_wire` | `shekyl/archival-attestation-scheme-v3` (v1 retired 2026-09-13, v2 retired 2026-10-04, `SF-D8`) |
 | F | Serve-credit response | no in-repo signer | `serve_credit` | `shekyl/archival-serve-credit-scheme-v1` |
 
 The pinned-positive KAT battery (`PQC_HYBRID_V2_KAT.json`: one verified
@@ -110,20 +135,21 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (dated snapshot, 2026-09-13, incl. the SF-D8 attestation-nonce retirement): 96 distinct production domain strings across the five mechanisms —
-97 registered, including the SHA3-256 micro-bucket.** The `shekyl/`-prefix lens saw ~28 — a 3.3× undercount, which is the
+**Census (dated snapshot, 2026-11-04, counted from the TSV's production rows): 126 registered rows across the five mechanisms —
+131 including the two micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
 measure of the blind spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below
-sums to 97: the five mechanisms 96, plus the 1-entry micro-bucket.) **This table is a
+sums to 131: the five mechanisms 126, plus the two micro-buckets, 1 + 4.) **This table is a
 snapshot, not the checked copy** — the per-mechanism counts are pinned once, against
 the parsed TSV rows, in `domain_registry.rs::PRODUCTION_PINS`; when the registry
 legitimately changes, that pin fails and this table is refreshed with a new as-of
 date. SA-3c moved `snapshot-id` from mechanism 5 to mechanism 1 (cn_fast_hash →
 cSHAKE); the total was unchanged (one domain recategorized, not added). The
-2026-08-15 refresh adds one mechanism-2 info label:
-`shekyl-archival-p-msg-sign-slh-dsa-192s-v1`, the persona's SLH-DSA-192s
-message-signing identity — the seventh archival-P per-slot label, forced
-by the fork-(ii) address layout making `msg_sign_pk` a mandatory field of
-every address (persona receive addresses included, for uniformity). The
+2026-08-15 refresh added one mechanism-2 info label,
+`shekyl-archival-p-msg-sign-slh-dsa-192s-v1` (the persona's SLH-DSA-192s
+key), which the 2026-10-18 refresh below removes. The
+2026-10-10 refresh adds two more: `shekyl-archival-p-receipt-ed25519-v1` and
+`shekyl-archival-p-receipt-fn-dsa-1024-v1`, the seeds of the persona's
+receipt key (hybrid scheme 3), the eighth and ninth archival-P labels. The
 2026-09-10 refresh adds three mechanism-1 customizations for digest v0:
 `shekyl/chain-digest/v0`, `shekyl/chain-digest/v0/chain`,
 `shekyl/chain-digest/v0/spent-elem`. The 2026-09-13 refresh **removes** one
@@ -137,28 +163,110 @@ re-versioned to `-v2` in the same change; a rename, not a count change. The
 `shekyl/chain-store/undo-log/post-image-v1`, the chain store's undo-entry
 post-image digest (S-CHAIN-W, DRS-E1 increment 3) — and brings the table's
 mechanism-1 count current with `PRODUCTION_PINS` (30), which the 2026-09-10
-and 2026-09-13 refreshes had moved without editing the row below.
+and 2026-09-13 refreshes had moved without editing the row below. The
+2026-10-04 refresh adds one mechanism-1 customization,
+`shekyl/archival-pass-delivery-digest-v1` (`SF-D8`'s delivery digest),
+re-versions the attestation signing-scheme domain to `-v3` (a rename, not a
+count change), and recounts every row of the table from the TSV, so each
+equals its `PRODUCTION_PINS` entry (live + frozen). The 2026-10-08
+refresh adds two mechanism-1 customizations for settlement:
+`shekyl/archival-settlement-select-v1` (which three of a pair's issued
+draws count) and `shekyl/archival-issued-index-v1` (one issued draw's term
+in its epoch's digest), and one for the shard view,
+`shekyl/archival-shard-view-hash-v1` (`SV-D1`'s view hash of a `W`-byte
+shard, over its archival bytes). The 2026-10-09 refresh adds two more, the
+scheme domains of hybrid scheme 3: `shekyl/archival-receipt-scheme-v1` and
+`shekyl/archival-witness-carrier-scheme-v1`. Neither has a signer yet. The
+2026-10-10 refresh adds four mechanism-1 customizations for Slice C's secret
+draw: `shekyl/archival-draw-v1`, `shekyl/archival-draw-commit-v1`,
+`shekyl/archival-challenge-nonce-v1`, and
+`shekyl/archival-serve-credit-batch-v1` (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+§4, §5.2, §7.3), and two for P's W-shard body store:
+`shekyl/p-store-aead-v1` and `shekyl/p-store-slot-v1`. The open-time
+key check is an AEAD cell under the derived key, not a third
+customization. The same day's later edit removes
+`shekyl/archival-challenge-assignment-v1`: the public urn is deleted,
+and that label had no production caller. The RT-W8 refresh of the same date adds the
+RPC channel's three: two mechanism-1 customizations,
+`shekyl/rpc-rendezvous-name-v1` and `shekyl/rpc-static-fingerprint-v1`, and
+one label in a new one-entry mechanism 7, `shekyl/rpc-channel-v1`, whose own
+bytes are mixed into the channel's Noise handshake as its prologue. The
+2026-10-11 recount is that RT-W8 census plus the two mechanism-2 receipt
+infos named above. The 2026-10-12 refresh adds four mechanism-1
+customizations for the serve-credit bundle (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+§6.2, §7.3): `shekyl/archival-witness-bundle-scheme-v1`, the scheme domain
+of the witness's signature over the bundle commitment under hybrid scheme
+3; `shekyl/archival-serve-credit-bundle-v1`, the bundle commitment the
+witness signs; `shekyl/archival-bundle-prunable-v1`, the hash of a bundle's
+prunable bytes that its reference carries; and
+`shekyl/archival-bundle-root-v1`, the header root over a block's bundle
+references. All four are staged: their one reader is the pure bundle
+verifier in `shekyl-chain-rules`, which no connect path calls yet.
+`shekyl/archival-serve-credit-batch-v1` and
+`shekyl/archival-witness-carrier-scheme-v1` stay registered beside them.
+The 2026-10-17 refresh adds four more mechanism-1 customizations. Three
+are the batch-verification weights of 2026-10-15 (ruling R3), which moved
+the pin without refreshing this table: `shekyl/bp-plus-batch-weights-v1`
+for Bulletproofs+ (CEN-H19), and `shekyl/fcmp-pp-batch-weights-v1` and
+`shekyl/fcmp-membership-only-batch-weights-v1` for the two FCMP++
+verifies. The fourth is `shekyl/archival-drawable-epoch-v1`, the digest of
+an epoch's drawable set that the settlement writer writes at the epoch's
+open and checks at its settlement (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5
+check 2; `SO-D12` increment 2). It is a local store check, never read by a
+consensus rule. The 2026-11-01 refresh replaces it with
+`shekyl/archival-drawable-epoch-v2`, one function and one site: the
+digest now also covers the archive width and the support stream's
+members with their receipt keys (`SO-D12q`), so the encoding changed and
+the version moved with it (rule 30). The 2026-11-04/05 refresh is the
+signing envelope (`NETWORK_IDENTITY.md` §2.4.1, NI-R17): every
+network-bound mechanism-1 domain is framed through one function, and the
+rows are `shekyl/network-name-v1`, `shekyl/tx-signable-v1`,
+`shekyl/fcmp-spend-signing-v2` (the hash every hybrid spend signature is
+over, 64 bytes), `shekyl/msg-sign-v2` (`shekyl/msg-hash-v1` retired), the
+four proof frames `shekyl/tx-proof-{outbound,inbound}-v1`,
+`shekyl/reserve-proof-message-v1` and `shekyl/reserve-proof-dleq-context-v1`,
+`shekyl/multisig-address-v3`,
+`shekyl/archival-emission-auth-{backing,claim}-v4` and
+`shekyl/archival-serve-credit-bundle-v2` (the bundle commitment, now
+64 bytes under the network's id; `-v1` goes). No row is kept retired
+before genesis (Rick, 2026-11-05): `shekyl/archival-serve-credit-batch-v1`,
+`shekyl/archival-witness-carrier-scheme-v1` and the test-only
+`shekyl/archival-serve-challenge-leaf-v1` are deleted with their code.
+
+The 2026-10-18 refresh removes one mechanism-2 info label,
+`shekyl-archival-p-msg-sign-slh-dsa-192s-v1`: a persona has no address, so
+nothing needs its SLH-DSA key and the bundle no longer derives it
+(`FN_DSA_HYBRID.md` `FND-25`). The same refresh recounts every row from the
+TSV.
+
+The 2026-11-04 refresh adds one mechanism-1 row, `shekyl/network-name-v1`
+(`name_id`, the network name's 16-byte binding), and moves the mechanism-2
+salt label from `shekyl-master-derive-v2-` to `shekyl-master-derive-v3`, the
+salt being `name_id ‖ purpose` (`NETWORK_IDENTITY.md`; the signing envelope
+§2.6, Rick's ruling of 2026-11-04).
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
-| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 30 | 0 |
-| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 8 salts + 34 infos | 0 |
+| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 56 | 0 |
+| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 7 salts + 37 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
-| 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 9 | 0 |
+| 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 8 | 0 |
 | 5 — keccak / schnorr challenge DST | schnorr domain; `keccak256(..)` hash-to-point/scalar prefix | 14 | 8 |
 | 6 — SHA3-256 direct-prefix (micro-bucket) | prefix fed straight to `Sha3_256` | 1 | 0 |
+| 7 — Noise prologue label (micro-bucket) | a label's own bytes mixed into a Noise handshake hash as prologue | 4 | 0 |
 
 Distinctness identity is per-mechanism; mechanism 2 is keyed by `(salt, info)`, since
-three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused across two
-derivations that differ only by salt — legitimately distinct, not a collision.
+three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused by the wallet
+derivation and the harness fixture wallet's test-only derivation, which differ only by
+salt — legitimately distinct, not a collision.
 
-**Frozen vs. live.** 11 of the 96 are **frozen-inherited** (mech-3: the FROST
+**Frozen vs. live.** 11 of the 130 are **frozen-inherited** (mech-3: the FROST
 ciphersuite id/context and the SAL-multisig transcript root; mech-5: the FCMP++
 generator and Bulletproof(+) DSTs). Frozen strings are byte-identical to the
 un-vendored upstream, are pinned by derived-output KATs, and are **rule-93
 carve-outs** (a rebrand sweep skips them) — enumerated with per-seam consequences in
 [`FROZEN_DOMAIN_SEPARATORS.md`](FROZEN_DOMAIN_SEPARATORS.md), and the CI gate
-cross-checks that every frozen row still has its entry there. The remaining 86 are
+cross-checks that every frozen row still has its entry there. The remaining 118 are
 Shekyl-authored **live** strings: still byte-load-bearing, but ours to version (mint
 a `…-v2` alongside a migration, never edit `…-v1` in place — SIGNATURE_ALIGNMENT §5).
 
@@ -195,6 +303,15 @@ exclusions and the sub-label rule are stated in the TSV header.
   `shekyl-fcmp-proofs`); and a frozen-doc cross-check (every frozen-inherited row has
   its entry in `FROZEN_DOMAIN_SEPARATORS.md`). Anchored on the mechanism call site /
   registered literal, never the `shekyl/` prefix.
+- **Binding gate** — `rust/shekyl-crypto-pq/tests/domain_binding.rs`: every production
+  row's `binding`, `width` and `role` columns (`NETWORK_IDENTITY.md` §2.4.1), held to
+  the code by parsing it: `id`/`name` cSHAKE rows are `IdDomain`/`NameDomain` constants
+  of that kind and width, HKDF `name` rows sit beside `salt_for`, both Noise prologues
+  come from a `&NetworkId`, `input:<type>` sites take the type, `local` is refused on
+  authenticity evidence, `derived:` names a census rule, `enclosed-by` stays off
+  Shekyl-owned rows, signed content is 64 bytes, and no retired label is reused. Rows
+  it cannot hold yet are in `docs/design/DOMAIN_BINDING_RATCHET.tsv`, which only
+  shrinks and must be empty at v3.1.0.
 
 **Honest scope — completeness for mech 2/4/5/6 is a review duty.** The gate catches
 drift and deletion of *registered* domains, and additions on always-domain entry

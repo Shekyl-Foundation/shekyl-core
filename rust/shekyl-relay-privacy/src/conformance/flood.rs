@@ -11,29 +11,32 @@
 // ^ Goodness-of-fit grading / simulation is float math over sample counts.
 //   Diagnostic-only and excluded from the default build.
 
-use crate::rng::{bounded_uniform, RelayRng};
 use crate::schedule::{DelayFamily, DelayTable};
+use shekyl_draw_rng::{bounded_uniform, RelayRng};
 
 use super::util::usize_from;
 
-/// Which edges a fluffing node relays across — the instrument's model of the
-/// relay crate's `FluffReach` (`shekyl-relay`; this crate deliberately does
-/// not depend on it, so the mirroring is by name and test, not by type).
+/// Which edges a fluffing node relays across.
 ///
-/// **Added at F-7 (§26).** The instrument previously inserted every edge in
-/// *both* directions, so it modelled `EveryPeer` **by construction** and had
-/// no way to express `OutboundOnly` — which is exactly *"traverse only the
-/// edges I initiated"*, a directed graph. `fluff_return_ms` was measured under
-/// the symmetric build and is fed to the embargo derivation for **every**
-/// transport, so on an anonymity zone (outbound-only fluff) the input is
-/// measured on a rule that configuration does not use.
+/// Production fluff is [`FloodReach::EveryPeer`] on every connector. D7
+/// (outbound-only fluff on a non-public zone) was deleted 2026-10-02, and
+/// `FluffReach` left the relay with it. [`FloodReach::OutboundOnly`] stays
+/// as the instrument: the shipped `fluff_return_ms` of 3250 ms was measured
+/// on that directed graph, and it is the longer direction, so the constant
+/// stays until the production graph is remeasured.
+///
+/// Transit is not this enum. A flood names a
+/// [`crate::verify_cost::MeasuredConnector`] beside its reach, so a Tor
+/// link at production reach is expressible and a directed graph at clearnet
+/// latency is too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FloodReach {
-    /// Relay to every peer, initiated or not — the clearnet rule. Undirected.
+    /// Relay to every peer, initiated or not. Production, on every connector.
+    /// Undirected: effective degree is ~`2 × peers`.
     EveryPeer,
-    /// Relay only across edges this node initiated — the Tor rule.
+    /// Relay only across edges this node initiated. The retired D7 graph.
     /// Directed: first passage is strictly slower, because a node has
-    /// `peers` usable out-edges rather than ~`2 × peers`, *and* paths must
+    /// `peers` usable out-edges rather than ~`2 × peers`, and paths must
     /// respect direction.
     OutboundOnly,
 }
@@ -110,68 +113,60 @@ pub struct FloodParams {
     pub transit_ms: u64,
 }
 
-/// The transit assumption that goes with a reach, so the two cannot be set to
-/// different link classes.
+/// The transit assumption for one connector.
 ///
-/// `FluffReach::OutboundOnly` is set from `nzone != public_` in production, so
-/// the reach **is** the link class: deriving transit from it removes the one
-/// incoherent combination (an anonymity reach at clearnet latency) that §91.6
-/// says invalidates a derivation while still looking reasonable.
+/// Reach does not select it. Production fluff is [`FloodReach::EveryPeer`]
+/// at this connector's row; the retired D7 derivation is
+/// [`FloodReach::OutboundOnly`] at [`crate::verify_cost::MeasuredConnector::Tor`]. Both are
+/// legal. Deriving transit from the reach made the second the only way to
+/// name Tor, which is the weld this function used to be.
 ///
 /// **Derived from the cost model's constants, never re-typed.** An earlier
 /// revision spelled these as literals (`50`, `1_625`) beside doc text naming
 /// the constants — a duplicate that drifts the instant either assumption is
 /// adjusted, leaving the flood simulating a network the derivation has stopped
-/// describing. That is F-7's failure mode one layer down, and the fix is to
-/// delete the duplicate rather than keep it synchronized.
+/// describing. Both rows are assumptions (§97); the instrument simulates
+/// under them and does not measure them.
 #[must_use]
-pub fn transit_for(reach: FloodReach) -> u64 {
-    // Both constants are finite, positive and far below 2^53; the cast cannot
-    // truncate meaningfully or lose a sign.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    match reach {
-        FloodReach::EveryPeer => crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS as u64,
-        FloodReach::OutboundOnly => crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS as u64,
-    }
+pub fn transit_for(connector: crate::verify_cost::MeasuredConnector) -> u64 {
+    u64::from(crate::verify_cost::transit_ms_for_connector(connector).ms())
 }
 
 #[cfg(test)]
 mod transit_for_tests {
-    use super::{transit_for, FloodReach};
+    use super::transit_for;
+    use crate::verify_cost::MeasuredConnector;
 
-    /// The pairing is the point: an anonymity reach at clearnet latency is the
-    /// combination §91.6 says invalidates a derivation while looking
-    /// reasonable. Pinned against the cost model's own constants so this fails
-    /// if the two are ever separated again.
+    /// The row is the connector's, not the reach's. Production Tor is
+    /// [`super::FloodReach::EveryPeer`] at Tor's transit, and that pairing
+    /// has to be spellable.
     #[test]
-    fn transit_tracks_the_cost_model_not_a_literal() {
+    fn transit_tracks_the_connector_not_the_reach() {
         assert_eq!(
-            transit_for(FloodReach::EveryPeer),
-            crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS as u64
+            transit_for(MeasuredConnector::Clearnet),
+            u64::from(crate::verify_cost::ADOPTED_TRANSIT.ms())
         );
         assert_eq!(
-            transit_for(FloodReach::OutboundOnly),
-            crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS as u64
+            transit_for(MeasuredConnector::Tor),
+            u64::from(crate::verify_cost::ANON_ZONE_TRANSIT.ms())
         );
-        // And they must differ, or the link-class split is decorative.
-        assert!(transit_for(FloodReach::OutboundOnly) > transit_for(FloodReach::EveryPeer));
+        assert!(transit_for(MeasuredConnector::Tor) > transit_for(MeasuredConnector::Clearnet));
     }
 }
 
 /* `Default` was REMOVED with the transit field (§91.6). Its whole affordance
 was filling fields the caller did not think about, and the field the caller
-must not skip is the one that says which network this flood runs on. A
+must not skip is the one that says which connector this flood runs on. A
 default transit would have re-created, behind a shorter spelling, the exact
 omission that invalidated an `F′` derivation. Callers name all four fields.
 
-The two shipped pairings, so `reach` and `transit_ms` are not set to
-different link classes by accident:
+Reach and transit are independent:
 
-  clearnet  -> FloodReach::EveryPeer    + ADOPTED_TRANSIT_ASSUMPTION_MS  (50)
-  anonymity -> FloodReach::OutboundOnly + ANON_ZONE_TRANSIT_ASSUMPTION_MS (1625)
+  production, any connector -> FloodReach::EveryPeer + that connector's transit
+  retired D7 derivation      -> FloodReach::OutboundOnly + MeasuredConnector::Tor
 
-(`FluffReach::OutboundOnly` is set from `nzone != public_` in production, so
-the reach IS the link class; the transit must agree with it.) */
+The 3250 ms constant was measured on the second line. It is not the
+production reach. */
 
 /// First-passage statistics for a fluff flood, in milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -205,6 +200,91 @@ pub struct FloodSummary {
 /// point of the convergence check is to stop reporting differences the
 /// instrument cannot resolve.
 pub const FLOOD_TICK_MS: u64 = 250;
+
+/// One hop of a flood whose links do not share a transit.
+///
+/// The uniform instruments store a bare neighbour and add
+/// [`FloodParams::transit_ms`] at arrival. A two-class graph (hidden edges
+/// at the anonymity transit, clearnet edges at the clearnet transit) cannot:
+/// the transit is a property of the link. [`passage_times`] is the one
+/// shortest-path both shapes use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClassedHop {
+    /// Neighbour reached by this hop.
+    pub to: usize,
+    /// Transit added on top of the flush-scheduler draw, in milliseconds.
+    pub transit_ms: u64,
+}
+
+/// Shortest-path first arrival at every node, source at time 0.
+///
+/// Unreached nodes stay `u64::MAX`. The delay draw is the flush scheduler;
+/// `transit_ms` is the link, so two classes do not collapse into one number.
+fn passage_times<R, F>(
+    nodes: usize,
+    edges: &[Vec<ClassedHop>],
+    rng: &mut R,
+    delay_ms: &mut F,
+) -> Vec<u64>
+where
+    R: RelayRng + ?Sized,
+    F: FnMut(&mut R) -> u64,
+{
+    let mut best = vec![u64::MAX; nodes];
+    let mut frontier = std::collections::BinaryHeap::new();
+    best[0] = 0;
+    frontier.push(std::cmp::Reverse((0_u64, 0_usize)));
+    while let Some(std::cmp::Reverse((at, node))) = frontier.pop() {
+        if at > best[node] {
+            continue;
+        }
+        for hop in &edges[node] {
+            let arrival = at
+                .saturating_add(delay_ms(rng))
+                .saturating_add(hop.transit_ms);
+            if arrival < best[hop.to] {
+                best[hop.to] = arrival;
+                frontier.push(std::cmp::Reverse((arrival, hop.to)));
+            }
+        }
+    }
+    best
+}
+
+fn adjacency_with_transit(adjacency: &[Vec<usize>], transit_ms: u64) -> Vec<Vec<ClassedHop>> {
+    adjacency
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|&to| ClassedHop { to, transit_ms })
+                .collect()
+        })
+        .collect()
+}
+
+fn summarize_arrivals(mut arrivals: Vec<u64>) -> FloodSummary {
+    arrivals.sort_unstable();
+    let samples = arrivals.len();
+    let unreached = arrivals
+        .iter()
+        .rev()
+        .take_while(|t| **t == u64::MAX)
+        .count();
+    let reached = samples - unreached;
+    assert!(
+        reached > 0,
+        "flood reached no node — check the topology inputs"
+    );
+    let mean_ms = arrivals[..reached].iter().map(|t| *t as f64).sum::<f64>() / reached as f64;
+    let idx = |q: f64| arrivals[(((samples as f64) * q) as usize).min(samples - 1)];
+    FloodSummary {
+        samples,
+        unreached,
+        mean_ms,
+        p50_ms: idx(0.50),
+        p90_ms: idx(0.90),
+    }
+}
 
 /// Build the flood adjacency shared by the instruments below: each node
 /// initiates `peers` *distinct* non-self edges (redraw on a self-hit or a
@@ -316,11 +396,12 @@ pub fn simulate_fluff_return<R: RelayRng + ?Sized>(
 ///    `degrees[v]` does not thin the edges pointed *at* `v` and does not slow
 ///    `v`'s own return at all.
 ///
-/// The split exists **only because the fluff rule is outbound-only**. Under
-/// [`FloodReach::EveryPeer`] the receiver relays back over the link it did not
-/// initiate, in-degree and out-degree collapse into one quantity, and the
-/// intuition is sound. F-7 chose `OutboundOnly`; an `EveryPeer` intuition
-/// applied to it is what produced the wrong sentence.
+/// The split exists **only on [`FloodReach::OutboundOnly`]**, the retired D7
+/// graph this instrument still measures. Under [`FloodReach::EveryPeer`] —
+/// production, on every connector — the receiver relays back over the link
+/// it did not initiate, in-degree and out-degree collapse into one quantity,
+/// and the intuition is sound. F-7 chose `OutboundOnly`; an `EveryPeer`
+/// intuition applied to that retired graph is what produced the wrong sentence.
 ///
 /// Measuring a node's own return therefore needs an instrument this builder
 /// does not provide: `degrees` parameterizes only *outgoing* draws, so no
@@ -362,59 +443,61 @@ pub fn simulate_fluff_return_mixed<R: RelayRng + ?Sized>(
     );
 
     let table = DelayTable::build(mean_quarter_secs, family);
-    let draw_ms = |rng: &mut R| -> u64 { table.draw(rng).saturating_mul(FLOOD_TICK_MS) };
+    let mut draw_ms = |rng: &mut R| -> u64 { table.draw(rng).saturating_mul(FLOOD_TICK_MS) };
 
     let mut arrivals: Vec<u64> = Vec::with_capacity(trials * flood.nodes);
 
     for _ in 0..trials {
         let adjacency = build_adjacency_from_degrees(degrees, flood.reach, rng);
-
-        let mut best = vec![u64::MAX; flood.nodes];
-        let mut frontier = std::collections::BinaryHeap::new();
-        best[0] = 0;
-        frontier.push(std::cmp::Reverse((0_u64, 0_usize)));
-        while let Some(std::cmp::Reverse((at, node))) = frontier.pop() {
-            if at > best[node] {
-                continue;
-            }
-            for &next in &adjacency[node] {
-                // Flush-scheduler delay PLUS this link class's transit (§91.6).
-                let arrival = at
-                    .saturating_add(draw_ms(rng))
-                    .saturating_add(flood.transit_ms);
-                if arrival < best[next] {
-                    best[next] = arrival;
-                    frontier.push(std::cmp::Reverse((arrival, next)));
-                }
-            }
-        }
-
+        let edges = adjacency_with_transit(&adjacency, flood.transit_ms);
+        let best = passage_times(flood.nodes, &edges, rng, &mut draw_ms);
         // Unreached nodes stay in as `u64::MAX` — see `FloodSummary::unreached`.
         arrivals.extend(best.iter().skip(1).copied());
     }
 
-    arrivals.sort_unstable();
-    let samples = arrivals.len();
-    let unreached = arrivals
-        .iter()
-        .rev()
-        .take_while(|t| **t == u64::MAX)
-        .count();
-    let reached = samples - unreached;
-    assert!(
-        reached > 0,
-        "flood reached no node — check the topology inputs"
-    );
-    let mean_ms = arrivals[..reached].iter().map(|t| *t as f64).sum::<f64>() / reached as f64;
-    let idx = |q: f64| arrivals[(((samples as f64) * q) as usize).min(samples - 1)];
+    summarize_arrivals(arrivals)
+}
 
-    FloodSummary {
-        samples,
-        unreached,
-        mean_ms,
-        p50_ms: idx(0.50),
-        p90_ms: idx(0.90),
+/// [`simulate_fluff_return_mixed`] on a graph whose links do not share a transit.
+///
+/// `build` returns one [`ClassedHop`] adjacency per trial, `nodes` rows.
+/// The shortest path is [`passage_times`], the same one the uniform flood
+/// uses. A reading that needs seeds to agree goes through
+/// [`converged_fluff_return_classed`].
+///
+/// # Panics
+///
+/// Panics if `trials` is zero, `nodes` is under two, or a built adjacency
+/// does not have `nodes` rows.
+#[must_use]
+pub fn simulate_fluff_return_classed<R, B>(
+    nodes: usize,
+    mean_quarter_secs: u32,
+    family: DelayFamily,
+    trials: usize,
+    rng: &mut R,
+    mut build: B,
+) -> FloodSummary
+where
+    R: RelayRng + ?Sized,
+    B: FnMut(&mut R) -> Vec<Vec<ClassedHop>>,
+{
+    assert!(trials > 0, "simulation needs at least one trial");
+    assert!(nodes >= 2, "a flood needs at least two nodes");
+    let table = DelayTable::build(mean_quarter_secs, family);
+    let mut draw_ms = |rng: &mut R| -> u64 { table.draw(rng).saturating_mul(FLOOD_TICK_MS) };
+    let mut arrivals: Vec<u64> = Vec::with_capacity(trials * nodes);
+    for _ in 0..trials {
+        let edges = build(rng);
+        assert!(
+            edges.len() == nodes,
+            "classed adjacency must name every node: got {}, nodes {nodes}",
+            edges.len()
+        );
+        let best = passage_times(nodes, &edges, rng, &mut draw_ms);
+        arrivals.extend(best.iter().skip(1).copied());
     }
+    summarize_arrivals(arrivals)
 }
 
 /// First-spy source-attribution precision in the fluff (diffusion) phase.
@@ -678,6 +761,63 @@ where
     R: RelayRng,
     F: FnMut(u64) -> R,
 {
+    converge_p90(seeds, budget, |seed, trials| {
+        let mut rng = make_rng(seed);
+        simulate_fluff_return_mixed(flood, degrees, mean_quarter_secs, family, trials, &mut rng)
+            .p90_ms
+    })
+}
+
+/// [`simulate_fluff_return_classed`] through [`converge_p90`].
+///
+/// An unconverged reading is [`Err`]. The closure rebuilds its graph from
+/// `make_rng(seed)` at each rung, so the ladder stays nested the way
+/// [`converged_fluff_return_mixed`] is.
+pub fn converged_fluff_return_classed<R, F, B>(
+    nodes: usize,
+    mean_quarter_secs: u32,
+    family: DelayFamily,
+    seeds: &[u64],
+    budget: ConvergenceBudget,
+    mut make_rng: F,
+    mut build: B,
+) -> Result<Converged, ConvergenceRefusal>
+where
+    R: RelayRng,
+    F: FnMut(u64) -> R,
+    B: FnMut(&mut R) -> Vec<Vec<ClassedHop>>,
+{
+    converge_p90(seeds, budget, |seed, trials| {
+        let mut rng = make_rng(seed);
+        simulate_fluff_return_classed(
+            nodes,
+            mean_quarter_secs,
+            family,
+            trials,
+            &mut rng,
+            &mut build,
+        )
+        .p90_ms
+    })
+}
+
+/// Escalate `reading(seed, trials)` until the seeds agree, or refuse.
+///
+/// This is the ladder inside [`converged_fluff_return_mixed`]. A caller that
+/// measures a different graph uses the same refusal: a spread past the
+/// budget is not a number, and a stranded p90 (`u64::MAX`) is not a number.
+///
+/// # Panics
+///
+/// Panics if fewer than two seeds are given, or if the budget is degenerate.
+pub fn converge_p90<F>(
+    seeds: &[u64],
+    budget: ConvergenceBudget,
+    mut reading: F,
+) -> Result<Converged, ConvergenceRefusal>
+where
+    F: FnMut(u64, usize) -> u64,
+{
     assert!(
         seeds.len() >= 2,
         "convergence needs at least two seeds — one reading has no spread to check"
@@ -692,21 +832,7 @@ where
 
     let mut trials = budget.start_trials;
     loop {
-        let readings_ms: Vec<u64> = seeds
-            .iter()
-            .map(|seed| {
-                let mut rng = make_rng(*seed);
-                simulate_fluff_return_mixed(
-                    flood,
-                    degrees,
-                    mean_quarter_secs,
-                    family,
-                    trials,
-                    &mut rng,
-                )
-                .p90_ms
-            })
-            .collect();
+        let readings_ms: Vec<u64> = seeds.iter().map(|seed| reading(*seed, trials)).collect();
 
         let seeds_stranded = readings_ms.iter().filter(|p| **p == u64::MAX).count();
         if seeds_stranded > 0 {
@@ -717,8 +843,6 @@ where
             });
         }
 
-        // Unwraps are total: `seeds.len() >= 2` is asserted above, so the
-        // iterator is non-empty.
         let hi = *readings_ms.iter().max().unwrap();
         let lo = *readings_ms.iter().min().unwrap();
         let spread_ms = hi - lo;
@@ -740,12 +864,6 @@ where
                 readings_ms,
             });
         }
-        // `saturating_mul`, not `*`: the loop only reaches here with
-        // `trials < max_trials`, so doubling overflows exactly when a caller
-        // passes `max_trials > usize::MAX / 2`. In release that wraps to a
-        // SMALL trial count, which never reaches `max_trials` — an infinite
-        // ladder rather than a refusal, which is the one outcome this type
-        // must not have.
         trials = trials.saturating_mul(2).min(budget.max_trials);
     }
 }

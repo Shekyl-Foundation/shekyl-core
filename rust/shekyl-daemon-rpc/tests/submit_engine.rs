@@ -47,7 +47,7 @@ fn base_facts() -> SubmitFacts {
 }
 
 fn rejected(cause: RejectCause) -> SubmitVerdict {
-    SubmitVerdict::Rejected { cause }
+    SubmitVerdict::Rejected { cause, row: None }
 }
 
 // ── Phase A short-circuit ───────────────────────────────────────────────
@@ -200,7 +200,7 @@ fn weight_over_limit_rejects_malformed() {
     // (C++ order: Rule 4 weight precedes add_tx's fee check).
     let mut facts = base_facts();
     facts.weight_limit = 100;
-    facts.fee_per_byte = u64::MAX; // fee would also fail: weight must win
+    facts.fee_floor_window = Some(vec![u64::MAX]); // the fee would also fail: weight must win
     let (engine, _shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
@@ -212,7 +212,7 @@ fn weight_over_limit_rejects_malformed() {
 #[test]
 fn fee_below_floor_rejects_fee_too_low() {
     let mut facts = base_facts();
-    facts.fee_per_byte = 1_000_000; // floor far above the 1e6 fixture fee
+    facts.fee_floor_window = Some(vec![1_000_000]);
     let (engine, shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
@@ -224,6 +224,41 @@ fn fee_below_floor_rejects_fee_too_low() {
         "fee gate precedes the crypto battery"
     );
     assert_eq!(shim.commit_count(), 0);
+}
+
+#[test]
+fn a_fee_short_of_the_tip_floor_is_refused_before_the_commit() {
+    // The band FL-R23 deleted: a fee within 2 % below the tip floor's
+    // requirement. Phase C admitted it, the commit's zero-slack window
+    // refused it, and the `Raced` came back with no premise to classify,
+    // answered HTTP 500. The commit is scripted to do exactly that again;
+    // the fee must stop at Phase C, so the commit is never reached.
+    let parsed = parse_submission(&spend_hex()).expect("fixture spend parses");
+    let fee_per_byte = parsed.fee / parsed.weight + 1;
+    let needed = shekyl_economics::quantized_fee(parsed.weight, fee_per_byte).expect("in range");
+    assert!(
+        parsed.fee < needed && (needed - parsed.fee) * 50 <= needed,
+        "fixture fee {} must sit within 2 % below {needed}",
+        parsed.fee
+    );
+    let mut facts = admitting_facts(&parsed);
+    facts.fee_floor_window = Some(vec![fee_per_byte]);
+    let raced_unchanged = CommitOutcome::Raced(Box::new(facts.clone()));
+    let (engine, shim, verifier) = engine(facts, raced_unchanged);
+    assert_eq!(
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
+        rejected(RejectCause::FeeTooLow)
+    );
+    assert_eq!(
+        verifier.call_count(),
+        0,
+        "fee gate precedes the crypto battery"
+    );
+    assert_eq!(
+        shim.commit_count(),
+        0,
+        "a short fee never reaches the commit"
+    );
 }
 
 #[test]
@@ -316,6 +351,51 @@ fn pruned_on_insert_rejects_fee_too_low() {
 }
 
 #[test]
+fn a_chain_row_refused_at_commit_is_a_consensus_rule_rejection_naming_the_row() {
+    // R-B (Rick, 2026-10-29): the door judged a chain-bound row the engine's
+    // verifier does not; the answer is a verdict, not a fault, and the row
+    // rides as the reply's diagnostic parameter.
+    let facts = base_facts();
+    let (engine, shim, _verifier) = engine(
+        facts.clone(),
+        CommitOutcome::ChainRefused {
+            row: shekyl_chain_rules::CenRow::J15,
+            fresh: Box::new(facts),
+        },
+    );
+    assert_eq!(
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
+        SubmitVerdict::Rejected {
+            cause: RejectCause::ConsensusRule,
+            row: Some("CEN-J15".to_owned()),
+        }
+    );
+    assert_eq!(shim.relay_count(), 0, "a refused tx must not be nudged");
+}
+
+#[test]
+fn a_premise_that_moved_under_a_chain_row_refusal_outranks_the_row() {
+    // The door refuses a double spend as a chain row (CEN-I7); the engine
+    // answers it as the race it is, in the same most-terminal-first order
+    // and with the same concealment a `Raced` gets, never as the row.
+    let facts = base_facts();
+    let mut fresh = facts.clone();
+    fresh.key_image_conflicts = vec![KeyImageConflict::Other, KeyImageConflict::Free];
+    let refused = CommitOutcome::ChainRefused {
+        row: shekyl_chain_rules::CenRow::I7,
+        fresh: Box::new(fresh),
+    };
+    for caller in [SubmitCaller::Owner, SubmitCaller::Foreign] {
+        let (under_test, _shim, _verifier) = engine(facts.clone(), refused.clone());
+        assert_eq!(
+            under_test.submit(&spend_hex(), caller).unwrap(),
+            rejected(RejectCause::DoubleSpendConflict),
+            "a public conflict is told to every caller ({caller:?})"
+        );
+    }
+}
+
+#[test]
 fn internal_fault_is_a_fault_not_a_verdict() {
     let (engine, shim, _verifier) = engine(base_facts(), CommitOutcome::InternalFault);
     assert_eq!(
@@ -334,6 +414,10 @@ fn snapshot_fault_is_a_fault_not_a_verdict() {
     // transport Err arm, never as a verdict — and verification never runs.
     struct FaultingShim;
     impl shekyl_daemon_rpc::submit::SubmitStateShim for FaultingShim {
+        fn network_id(&self) -> shekyl_network::NetworkId {
+            shekyl_network::HARNESS_NETWORK_ID
+        }
+
         fn snapshot_facts(
             &self,
             _txid: &shekyl_types::TxHash,
@@ -381,7 +465,7 @@ fn raced_in_chain_wins_over_every_other_premise() {
     fresh.in_chain = Some(BlockHeight::from_raw(201));
     fresh.key_image_conflicts = vec![KeyImageConflict::Other, KeyImageConflict::Free];
     fresh.reference = None;
-    fresh.fee_per_byte = u64::MAX;
+    fresh.fee_floor_window = Some(vec![u64::MAX]);
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
@@ -403,6 +487,112 @@ fn raced_in_pool_classifies_already_in_pool() {
     );
 }
 
+/// B2 (the review of #1102): a conflict against a spender this node holds
+/// in its stem phase is disclosed to the owner tier and answered to a
+/// foreign caller exactly as a fresh accept — so the public endpoint is no
+/// map of the stem graph. A public spender's conflict is disclosed to both.
+#[test]
+fn an_embargoed_conflict_is_the_owners_alone() {
+    let raced = |conflict| {
+        let submit = |caller| {
+            let mut fresh = base_facts();
+            fresh.key_image_conflicts = vec![conflict, KeyImageConflict::Free];
+            let (engine, _shim, _verifier) =
+                engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
+            engine.submit(&spend_hex(), caller).unwrap()
+        };
+        (submit(SubmitCaller::Owner), submit(SubmitCaller::Foreign))
+    };
+    let conflict = SubmitVerdict::Rejected {
+        cause: RejectCause::DoubleSpendConflict,
+        row: None,
+    };
+    assert_eq!(
+        raced(KeyImageConflict::Embargoed),
+        (conflict.clone(), SubmitVerdict::Accepted),
+        "the stem spender is concealed from a foreign caller"
+    );
+    assert_eq!(
+        raced(KeyImageConflict::Other),
+        (conflict.clone(), conflict),
+        "a public spender is not"
+    );
+}
+
+/// A concealed answer is the fresh answer under every public change
+/// (Copilot, #1102). Under the same change to the public state — nothing,
+/// a drifted reference, a moved fee floor, a pool full at this rate — a
+/// foreign caller gets one verdict whether this node holds the hidden
+/// transaction (a stem spender of the same image, or these very bytes in
+/// their stem phase) or not. Without it, the commit itself answers: it
+/// commits, races on the moved premise, or is pruned on insert. The owner
+/// tier is still told the truth.
+#[test]
+fn a_concealed_answer_is_the_fresh_answer_under_every_public_change() {
+    type Change = fn(&mut SubmitFacts);
+    let changes: [(&str, Change); 4] = [
+        ("nothing moved", |_| {}),
+        ("the reference drifted", |f| f.reference = None),
+        ("the fee floor rose", |f| {
+            f.fee_floor_window = Some(vec![u64::MAX]);
+        }),
+        ("the pool is full at this rate", |f| {
+            f.pool_refuses_for_room = Some(true);
+        }),
+    ];
+    let submit = |phase_b: SubmitFacts, outcome: CommitOutcome, caller| {
+        let (engine, _shim, _verifier) = engine(phase_b, outcome);
+        engine.submit(&spend_hex(), caller).unwrap()
+    };
+    for (what, change) in changes {
+        // Without the hidden transaction: the commit's own answer.
+        let mut moved = base_facts();
+        change(&mut moved);
+        let fresh = if moved == base_facts() {
+            CommitOutcome::Committed
+        } else if moved.pool_refuses_for_room == Some(true) {
+            CommitOutcome::PrunedOnInsert
+        } else {
+            CommitOutcome::Raced(Box::new(moved.clone()))
+        };
+        let absent = submit(base_facts(), fresh, SubmitCaller::Foreign);
+
+        // A stem spender of the same image: the commit races on it.
+        let mut conflict = moved.clone();
+        conflict.key_image_conflicts = vec![KeyImageConflict::Embargoed, KeyImageConflict::Free];
+        let raced = || CommitOutcome::Raced(Box::new(conflict.clone()));
+        assert_eq!(
+            submit(base_facts(), raced(), SubmitCaller::Foreign),
+            absent,
+            "{what}: a stem spender is concealed as the fresh answer"
+        );
+        assert_eq!(
+            submit(base_facts(), raced(), SubmitCaller::Owner),
+            rejected(RejectCause::DoubleSpendConflict),
+            "{what}: the owner is told the conflict"
+        );
+
+        // These bytes, held in their stem phase: Phase B sees them, and the
+        // commit races on the duplicate.
+        let mut held = base_facts();
+        held.in_pool = true;
+        let mut duplicate = moved.clone();
+        duplicate.in_pool = true;
+        duplicate.key_image_conflicts = vec![KeyImageConflict::OwnTx; 2];
+        let raced = || CommitOutcome::Raced(Box::new(duplicate.clone()));
+        assert_eq!(
+            submit(held.clone(), raced(), SubmitCaller::Foreign),
+            absent,
+            "{what}: a stem duplicate is concealed as the fresh answer"
+        );
+        assert_eq!(
+            submit(held, raced(), SubmitCaller::Owner),
+            SubmitVerdict::AlreadyInPool,
+            "{what}: the owner is told the duplicate"
+        );
+    }
+}
+
 #[test]
 fn raced_key_image_conflict_beats_stale_root() {
     // Competing spend AND root drift in the same race window: the terminal
@@ -411,7 +601,7 @@ fn raced_key_image_conflict_beats_stale_root() {
     let mut fresh = base_facts();
     fresh.key_image_conflicts = vec![KeyImageConflict::Free, KeyImageConflict::Other];
     fresh.reference = None;
-    fresh.fee_per_byte = u64::MAX;
+    fresh.fee_floor_window = Some(vec![u64::MAX]);
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
@@ -479,7 +669,7 @@ fn raced_fee_floor_rise_classifies_fee_too_low() {
     // F34: the floor moved during Phase C with everything else stable —
     // the exact zombie-Accepted shape the redesign abolishes.
     let mut fresh = base_facts();
-    fresh.fee_per_byte = 1_000_000;
+    fresh.fee_floor_window = Some(vec![1_000_000]);
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
@@ -633,6 +823,7 @@ fn emission_claim_slot_race_classifies_double_spend_conflict() {
     facts.emission = Some(shekyl_daemon_rpc::submit::EmissionFacts {
         bond: None,
         snapshots: Vec::new(),
+        schedule: shekyl_archival_retention::SettlementSchedule::GENESIS,
     });
     let mut fresh = facts.clone();
     fresh.emission_claim_conflict = Some(true);
@@ -643,8 +834,58 @@ fn emission_claim_slot_race_classifies_double_spend_conflict() {
             .submit(&hexify(&tx), SubmitCaller::Owner)
             .expect("no engine fault"),
         SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+            cause: RejectCause::DoubleSpendConflict,
+            row: None,
         },
     );
     assert_eq!(shim.relay_count(), 0, "raced ⇒ no relay nudge");
+}
+
+/// S5 (the review of #1102): given the relay floor window, the engine's fee
+/// gate is CEN-M3's own predicate, `relay_floor_admits` — so the engine and
+/// the pool's door give one transaction one fee verdict. A fee of exactly
+/// the requirement at the window's minimum is accepted; one lattice step
+/// below it is `FeeTooLow`. Without the window (the C++ shim) the gate
+/// admits on the tip floor alone, and that tip refuses the same fee.
+#[test]
+fn with_the_window_the_engines_fee_gate_is_the_doors() {
+    use shekyl_economics::{quantized_fee, relay_floor_admits, FEE_QUANTIZATION_MASK};
+
+    let (low, tip) = (1_000, 2_000);
+    let floors = vec![tip, low, tip];
+    let weight_of = |fee| {
+        parse_submission(&hexify(&spend_tx(fee)))
+            .expect("parses")
+            .weight
+    };
+    // A fee in the varint width the requirement will have (2^21..2^28).
+    let weight = weight_of(10_000_000);
+    let exact = quantized_fee(weight, low).expect("priced");
+    assert_eq!(
+        weight_of(exact),
+        weight,
+        "the fee's varint keeps the weight"
+    );
+    let below = exact - (FEE_QUANTIZATION_MASK + 1);
+    assert_eq!(weight_of(below), weight);
+
+    let verdict = |fee, window: Option<Vec<u64>>| {
+        let hex = hexify(&spend_tx(fee));
+        let mut facts = admitting_facts(&parse_submission(&hex).expect("parses"));
+        facts.fee_floor_window = window;
+        let (engine, _shim, _verifier) = engine(facts, CommitOutcome::Committed);
+        engine.submit(&hex, SubmitCaller::Owner).unwrap()
+    };
+    let too_low = SubmitVerdict::Rejected {
+        cause: RejectCause::FeeTooLow,
+        row: None,
+    };
+    assert!(relay_floor_admits(exact, weight, &floors));
+    assert_eq!(
+        verdict(exact, Some(floors.clone())),
+        SubmitVerdict::Accepted
+    );
+    assert!(!relay_floor_admits(below, weight, &floors));
+    assert_eq!(verdict(below, Some(floors)), too_low.clone());
+    assert_eq!(verdict(exact, None), too_low, "the tip rule refuses it");
 }

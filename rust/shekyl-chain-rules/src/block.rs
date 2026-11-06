@@ -8,11 +8,13 @@
 //! typed [`ValidatedBlock`] coming out inside a `ChainValid`.
 
 use core::fmt;
+use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_network::NetworkId;
 use shekyl_types::archival::AttestationWitness;
 use shekyl_types::{
-    BlockHash, CurveTreeRoot, PowHash, PqcAuthHash, PrunableHash, Timestamp, TxHash,
+    BlockHash, BlockHeight, CurveTreeRoot, PowHash, PqcAuthHash, PrunableHash, Timestamp, TxHash,
 };
 
 use shekyl_wire::{Block, BlockHeader, Transaction};
@@ -25,6 +27,8 @@ use crate::rule_set::{RuleSet, RuleSetId};
 use crate::rules::block_weight::Weights;
 use crate::rules::difficulty::Target;
 use crate::rules::reward::PaidEmission;
+use crate::verdict::TxSlot;
+use crate::view::{AtHeight, HeaderView};
 
 /// A transaction's identities, derived once (CEN-B6) beside its body.
 ///
@@ -33,7 +37,8 @@ use crate::rules::reward::PaidEmission;
 /// `PDM-Q-F26`) and the digest of the prunable region (its fourth, S-CHAIN-W
 /// SCW-10) — the values the chain store records as `txs_pqc_auth_hash` and
 /// `txs_prunable_hash` so a node that keeps only the skeleton can still
-/// reconstruct the txid it accepted (`Transaction::hash_with_supplied_components`).
+/// reconstruct the txid it accepted (`Transaction::hash_with_supplied_components`,
+/// with the archival length the store measured at connect, `txs_archival_len`).
 /// All three come from the same `validate`, copied from
 /// [`Transaction::txid_parts`] so no consumer re-hashes a body and the store
 /// never derives a consensus-visible value (C2-R8 Q4).
@@ -109,13 +114,27 @@ pub struct Candidate {
     /// The attestation witness carried beside the block — **not in it**
     /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.2 phase 5): the C++ sync wire's
     /// `block_complete_entry::attestation_witness`, `None` for an empty
-    /// attestation set. CEN-B4's operand; until B4 lands in `validate` the
-    /// verdict carries it through unjudged and the store records it under
-    /// B4's coverage gap.
+    /// attestation set. CEN-B4's operand (`rules::attestation`, E6 slice 8
+    /// row 10): `None` is judged as the empty set against the header's
+    /// `attestation_root`, `Some` as the recompute over the coinbase's kept
+    /// headers and every record's countersignature; the verdict carries it
+    /// to the store, which records it at the block's height.
     pub attestation_witness: Option<AttestationWitness>,
 }
 
 impl Candidate {
+    /// Every distinct `reference_block` the listed bodies name — the
+    /// references a caller claims to `form` ([`ReferenceClaims`]). The
+    /// miner transaction names none (CEN-H15: a coinbase carries no
+    /// membership proof), so a coinbase-only block names nothing.
+    #[must_use]
+    pub fn proof_references(&self) -> BTreeSet<BlockHash> {
+        self.transactions
+            .iter()
+            .filter_map(crate::rules::tx_against::proof_reference)
+            .collect()
+    }
+
     /// Assemble a candidate from the block as received and the listed
     /// bodies, in listed order, with no attestation witness — the shape of
     /// every block whose attestation set is empty, which is every block a
@@ -152,14 +171,28 @@ impl Candidate {
 /// * `rule_set` — the rules the caller **claimed** were in force, as the
 ///   set itself (not only its id). `validate` compares with `PartialEq`
 ///   and returns [`Stale::RuleSet`](crate::Stale::RuleSet) on a mismatch.
-///   The id alone is not the set: a Fakechain `Fixed` target reuses
+///   The id alone is not the set: a levered `Fixed` target reuses
 ///   `RuleSetId::GENESIS` (Q10), so two sets at the same id can differ.
+/// * `network` — the network id the caller bound every signature and proof
+///   under (NI-Q4). `validate` compares it with `trust.network_id()` and
+///   returns [`Stale::Network`](crate::Stale::Network) on a mismatch, then
+///   judges emission auths under the id the token carries.
 /// * `seed` — the block id the caller **claimed** sits at the seed height
 ///   (CEN-D3). `validate` verifies it against the committing view and
 ///   returns [`Stale::Seed`](crate::Stale::Seed) on a mismatch.
+/// * `target` — the difficulty the caller **claimed** CEN-D4 derives for
+///   the connecting height, a function of the headers below it alone.
+///   `form` judges CEN-D1 against it, before any body work, so a block
+///   short of its proof-of-work costs RandomX and nothing more. `validate`
+///   and `alt_against` derive D4 over their view and return
+///   [`Stale::Target`](crate::Stale::Target) on a mismatch.
 /// * `pow` — the RandomX longhash under that seed (CEN-D2), computed here
 ///   because it is the most expensive call in the validator and this stage
 ///   runs outside the write transaction.
+/// * `coverage` — every stateless row, the transactions' included: `form`
+///   runs `tx_form` at the miner slot and every listed slot, and CEN-H19's
+///   batch over the listed proofs, so the view-bound stage judges only what
+///   reads the chain.
 /// * `judged_at` — the wall clock at `form`. **This makes the verdict
 ///   time-dependent**: a `StructurallyValid`, and the `ChainValid` minted
 ///   from it, is no longer a pure function of `(candidate, view, rule_set)`.
@@ -179,11 +212,10 @@ impl Candidate {
 /// let forged = StructurallyValid {
 ///     candidate: todo!(),
 ///     rule_set: todo!(),
+///     network: todo!(),
 ///     coverage: todo!(),
-///     judged_at: todo!(),
-///     seed: todo!(),
-///     pow: todo!(),
-///     attempt: todo!(),
+///     facts: todo!(),
+///     references: todo!(),
 /// };
 /// ```
 ///
@@ -192,40 +224,61 @@ impl Candidate {
 pub struct StructurallyValid {
     candidate: Candidate,
     rule_set: RuleSet,
+    /// The network id `form` bound signatures and proofs under.
+    network: NetworkId,
     coverage: RuleCoverage,
-    judged_at: Timestamp,
-    hash: BlockHash,
-    seed: BlockHash,
-    pow: PowHash,
-    attempt: FormAttempt,
+    /// Header, identity, clock, seed, target, attempt and the longhash.
+    /// The accessors read this; the claims are not stored a second time.
+    facts: crate::header_facts::HeaderFacts<crate::header_facts::Proven>,
+    /// Per listed slot, what its proof was verified against — `None` for a
+    /// slot with nothing to verify or no claim to verify it under.
+    references: Vec<Option<VerifiedReference>>,
 }
 
 impl StructurallyValid {
     /// Called by `form` once every stateless rule has passed, and nowhere
     /// else.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "one field per stateless-stage output; a builder would let a caller omit one"
-    )]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         candidate: Candidate,
         rule_set: RuleSet,
+        network: NetworkId,
         coverage: RuleCoverage,
-        judged_at: Timestamp,
-        hash: BlockHash,
-        seed: BlockHash,
-        pow: PowHash,
-        attempt: FormAttempt,
+        facts: crate::header_facts::HeaderFacts<crate::header_facts::Proven>,
+        references: Vec<Option<VerifiedReference>>,
     ) -> Self {
         Self {
             candidate,
             rule_set,
+            network,
             coverage,
-            judged_at,
-            hash,
-            seed,
-            pow,
-            attempt,
+            facts,
+            references,
+        }
+    }
+
+    /// The network id `form` bound signatures and proofs under. `validate`
+    /// checks it against the trust's id before any emission auth reads it.
+    #[must_use]
+    pub const fn network_id(&self) -> NetworkId {
+        self.network
+    }
+
+    /// The header facts `form` established, including the longhash.
+    pub(crate) const fn facts(
+        &self,
+    ) -> &crate::header_facts::HeaderFacts<crate::header_facts::Proven> {
+        &self.facts
+    }
+
+    /// What the listed transaction at `slot` had its proof verified
+    /// against in `form`, if anything: `None` at the miner slot, at a slot
+    /// with no proof, and at a slot whose reference the caller did not
+    /// claim.
+    #[must_use]
+    pub fn verified_reference(&self, slot: TxSlot) -> Option<VerifiedReference> {
+        match slot {
+            TxSlot::Listed(n) => self.references.get(n).copied().flatten(),
+            TxSlot::Miner | TxSlot::Lone => None,
         }
     }
 
@@ -243,7 +296,7 @@ impl StructurallyValid {
     }
 
     /// The id of the set `form` judged under. What the store persists;
-    /// not a proxy for set equality (a Fakechain `Fixed` target reuses
+    /// not a proxy for set equality (a levered `Fixed` target reuses
     /// [`RuleSetId::GENESIS`](crate::RuleSetId::GENESIS)).
     #[must_use]
     pub const fn rule_set_id(&self) -> RuleSetId {
@@ -260,7 +313,7 @@ impl StructurallyValid {
     /// judged against. See the type's docs on time-dependence.
     #[must_use]
     pub const fn judged_at(&self) -> Timestamp {
-        self.judged_at
+        self.facts.judged_at()
     }
 
     /// The block's identity (CEN-B6), derived once by `form` — stateless,
@@ -270,27 +323,35 @@ impl StructurallyValid {
     /// nothing derives the identity a second time.
     #[must_use]
     pub const fn hash(&self) -> BlockHash {
-        self.hash
+        self.facts.identity()
     }
 
     /// The seed the caller claimed for CEN-D3 — verified, not trusted, by
     /// `validate`.
     #[must_use]
     pub const fn seed(&self) -> BlockHash {
-        self.seed
+        self.facts.seed()
+    }
+
+    /// The target the caller claimed and `form` judged CEN-D1 against.
+    /// `validate` and `alt_against` derive CEN-D4 over their view and
+    /// return [`Stale::Target`](crate::Stale::Target) on a mismatch.
+    #[must_use]
+    pub const fn target(&self) -> Target {
+        self.facts.target()
     }
 
     /// The longhash under the claimed seed (CEN-D2) — what CEN-D1 compares
     /// against the target once the seed is verified.
     #[must_use]
     pub const fn pow(&self) -> PowHash {
-        self.pow
+        self.facts.proof().longhash()
     }
 
     /// Which attempt at `form` produced this.
     #[must_use]
     pub const fn attempt(&self) -> FormAttempt {
-        self.attempt
+        self.facts.attempt()
     }
 
     /// Hand the candidate and the stateless coverage to the view-bound
@@ -305,14 +366,12 @@ impl fmt::Debug for StructurallyValid {
     // block body is kilobytes and a failing assertion wants the token's claims.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StructurallyValid")
-            .field("hash", &self.hash)
-            .field("transactions", &self.candidate.transactions.len())
+            .field("candidate", &self.candidate.transactions.len())
             .field("rule_set", &self.rule_set)
+            .field("network", &self.network)
             .field("coverage", &self.coverage)
-            .field("judged_at", &self.judged_at)
-            .field("seed", &self.seed)
-            .field("pow", &self.pow)
-            .field("attempt", &self.attempt)
+            .field("facts", &self.facts)
+            .field("references", &self.references)
             .finish()
     }
 }
@@ -344,6 +403,8 @@ impl fmt::Debug for StructurallyValid {
 ///     weights: todo!(),
 ///     emission: todo!(),
 ///     archival: todo!(),
+///     attestation_witness: todo!(),
+///     pow: todo!(),
 /// };
 /// ```
 #[derive(Debug, PartialEq, Eq)]
@@ -384,13 +445,228 @@ pub struct ValidatedBlock {
     /// future validity and the store computes none of it: `connect` writes
     /// each part through its handle.
     archival: ArchivalDelta,
-    /// The candidate's attestation-witness sidecar, carried through
-    /// **unjudged**: CEN-B4 is the rule over it and has not landed in
-    /// `validate`, so `connect` records it under B4's coverage gap
-    /// (`Provenance::coverage_gaps`) — a statement that a row in force was
-    /// not evaluated, which is the true claim about these bytes
-    /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.2 phase 5, UPDATE 2026-09-29).
+    /// The candidate's attestation-witness sidecar, judged by CEN-B4
+    /// (`rules::attestation`, E6 slice 8 row 10) and carried through for
+    /// `connect` to record at the block's height
+    /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.2 phase 5). Bytes a verdict holds
+    /// have passed B4: the empty set against the mined root when `None`,
+    /// the recompute and every countersignature when `Some`.
     attestation_witness: Option<AttestationWitness>,
+    /// The PoW `form` computed under its seed, accepted by this verdict
+    /// (CEN-D1/D2/D3). `connect` records it beside the block.
+    pow: ProvenPow,
+}
+
+/// What a caller claims the chain holds at one `reference_block` — the
+/// block's recorded height and the curve-tree root **at** that height
+/// (CEN-I12's anchor). CEN-B5 holds every connected block's header
+/// `curve_tree_root` to `root_at(height)`, so the root at a reference is a
+/// fact of the header chain, and a caller that keeps the header chain ahead
+/// of connect (the ingest driver's target ledger, the switch's stitched
+/// view) can claim it the way it claims the seed and the target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReferenceClaim {
+    /// The reference block's height on the chain the block connects onto.
+    pub height: BlockHeight,
+    /// The curve-tree root at that height — the anchor the proof was built
+    /// over.
+    pub root: CurveTreeRoot,
+}
+
+/// The claims `form` is handed for a block: one per distinct
+/// `reference_block` hash its transactions name (`CHAIN_RULES_CRATE.md`
+/// §4.6, the third claim). A reference with no claim is not verified in
+/// `form`; `validate` then either refuses it on CEN-I10/I11 or, when those
+/// pass, faults [`Stale::Reference`](crate::Stale::Reference) — there is no
+/// second verify site.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReferenceClaims {
+    claims: BTreeMap<BlockHash, ReferenceClaim>,
+}
+
+impl ReferenceClaims {
+    /// No claims: every proof-bearing transaction is left for `validate`
+    /// to fault.
+    pub const EMPTY: Self = Self {
+        claims: BTreeMap::new(),
+    };
+
+    /// Claim `(height, root)` for the block `reference` names.
+    pub fn insert(&mut self, reference: BlockHash, height: BlockHeight, root: CurveTreeRoot) {
+        self.claims
+            .insert(reference, ReferenceClaim { height, root });
+    }
+
+    /// The claim for `reference`, if the caller made one.
+    #[must_use]
+    pub fn get(&self, reference: &BlockHash) -> Option<ReferenceClaim> {
+        self.claims.get(reference).copied()
+    }
+
+    /// The claims for `candidate` from a lookup by identity: one per
+    /// reference the listed bodies name ([`Candidate::proof_references`])
+    /// that `lookup` answers. A reference it does not answer is not
+    /// claimed. The shape for a caller holding its chain by hash — a
+    /// switch plan's header map, a test's mock chain.
+    #[must_use]
+    pub fn gather(
+        candidate: &Candidate,
+        mut lookup: impl FnMut(&BlockHash) -> Option<ReferenceClaim>,
+    ) -> Self {
+        candidate
+            .proof_references()
+            .into_iter()
+            .filter_map(|reference| lookup(&reference).map(|claim| (reference, claim)))
+            .collect()
+    }
+
+    /// The claims for `candidate`, connecting at `connecting`, read off
+    /// `view`'s headers across CEN-I11's window
+    /// ([`admissible_references`](crate::admissible_references)): each
+    /// header in the window whose identity a listed body names is claimed
+    /// at its height with its header's `curve_tree_root` — the root at
+    /// that height by CEN-B5, so a header chain is a chain of anchors. A
+    /// block naming no reference reads nothing. A reference the window
+    /// does not hold is not claimed, and `validate` refuses it on
+    /// CEN-I10/I11 rather than faulting `Stale::Reference`.
+    ///
+    /// The production shape: the ingest driver's ledger ahead of connect,
+    /// the switch's stitched view.
+    ///
+    /// # Errors
+    ///
+    /// The view's own fault; a window height the view answers `AboveTip`
+    /// for is left unclaimed, not reported — `validate` names what is
+    /// wrong with it.
+    pub fn from_headers<'id, V: HeaderView<'id>>(
+        view: &V,
+        connecting: BlockHeight,
+        candidate: &Candidate,
+    ) -> Result<Self, V::Fault> {
+        Self::named_in_window(view, connecting, &candidate.proof_references())
+    }
+
+    /// The claim for one transaction at `connecting` — the pool door's
+    /// (DRS-E5 PR-b, `DRS_E5_POOL_ALT_PRUNE.md` §2.2): the reference it
+    /// names, read off `view`'s headers across CEN-I11's window exactly as
+    /// [`Self::from_headers`] reads a block's, so a transaction is judged
+    /// against the claim a block carrying it would be. A transaction naming
+    /// no reference reads nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::from_headers`].
+    pub fn for_transaction<'id, V: HeaderView<'id>>(
+        view: &V,
+        connecting: BlockHeight,
+        tx: &Transaction,
+    ) -> Result<Self, V::Fault> {
+        let named: BTreeSet<BlockHash> = crate::rules::tx_against::proof_reference(tx)
+            .into_iter()
+            .collect();
+        Self::named_in_window(view, connecting, &named)
+    }
+
+    /// Claim every header in CEN-I11's window at `connecting` whose identity
+    /// is in `named`, at its height with its `curve_tree_root`.
+    fn named_in_window<'id, V: HeaderView<'id>>(
+        view: &V,
+        connecting: BlockHeight,
+        named: &BTreeSet<BlockHash>,
+    ) -> Result<Self, V::Fault> {
+        if named.is_empty() {
+            return Ok(Self::EMPTY);
+        }
+        let Some((oldest, newest)) = crate::rules::tx_against::admissible_references(connecting)
+        else {
+            return Ok(Self::EMPTY);
+        };
+        let mut claims = Self::EMPTY;
+        for raw in oldest.to_raw()..=newest.to_raw() {
+            let height = BlockHeight::from_raw(raw);
+            let AtHeight::Recorded(record) = view.header_at(height)? else {
+                continue;
+            };
+            if named.contains(&record.hash) {
+                claims.insert(record.hash, height, record.header.curve_tree_root);
+            }
+        }
+        Ok(claims)
+    }
+
+    /// How many references are claimed.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.claims.len()
+    }
+
+    /// Whether no reference is claimed.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.claims.is_empty()
+    }
+}
+
+impl FromIterator<(BlockHash, ReferenceClaim)> for ReferenceClaims {
+    fn from_iter<I: IntoIterator<Item = (BlockHash, ReferenceClaim)>>(iter: I) -> Self {
+        Self {
+            claims: iter.into_iter().collect(),
+        }
+    }
+}
+
+/// What one transaction's proof was verified against in `form`: the
+/// reference it names and the claim it was verified under. Carried on the
+/// [`StructurallyValid`] token per listed slot; `validate` compares it with
+/// the context the chain yields (CEN-I10's height, CEN-I12's anchor) and
+/// faults on a disagreement rather than verifying again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VerifiedReference {
+    /// The `reference_block` the transaction names.
+    pub reference: BlockHash,
+    /// The claim the proof verified against.
+    pub claim: ReferenceClaim,
+}
+
+/// The proof-of-work hash this node computed for a block (CEN-D2) under
+/// the seed it was claimed and checked under (CEN-D3), and that the
+/// verdict carrying it accepted (CEN-D1). A derived fact, recorded beside
+/// the block as its cumulative difficulty is (`DRS_E5_POOL_ALT_PRUNE.md`,
+/// 2026-10-15 ruling 3), so a switch can re-judge a block this node
+/// already hashed without hashing it again. Only `form` produces one; a
+/// verdict carries it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProvenPow {
+    seed: BlockHash,
+    pow: PowHash,
+}
+
+impl ProvenPow {
+    /// What `form` computed: the hash under the seed it was claimed under.
+    pub(crate) const fn computed(seed: BlockHash, pow: PowHash) -> Self {
+        Self { seed, pow }
+    }
+
+    /// The seed the hash was computed under.
+    #[must_use]
+    pub const fn seed(&self) -> BlockHash {
+        self.seed
+    }
+
+    /// The RandomX longhash of the block's PoW preimage under [`Self::seed`].
+    #[must_use]
+    pub const fn pow(&self) -> PowHash {
+        self.pow
+    }
+
+    /// The pair as a store reads it back: a recorded fact this node wrote.
+    /// Not a proof — a substrate that answers from it is trusting its own
+    /// store, under the store-integrity belts the recorded cumulative
+    /// difficulty sits under.
+    #[must_use]
+    pub const fn recorded(seed: BlockHash, pow: PowHash) -> Self {
+        Self { seed, pow }
+    }
 }
 
 /// What `validate` derived for a block beyond its bytes — the values a
@@ -412,6 +688,8 @@ pub(crate) struct Derived {
     pub(crate) emission: PaidEmission,
     /// The archival transition (DRS-E4, CEN-L7).
     pub(crate) archival: ArchivalDelta,
+    /// The PoW `form` computed, under the seed D3 checked (CEN-D1/D2).
+    pub(crate) pow: ProvenPow,
 }
 
 impl ValidatedBlock {
@@ -444,6 +722,7 @@ impl ValidatedBlock {
             weights,
             emission,
             archival,
+            pow,
         } = derived;
         Self {
             hash,
@@ -461,12 +740,19 @@ impl ValidatedBlock {
             emission,
             archival,
             attestation_witness,
+            pow,
         }
     }
 
-    /// The candidate's attestation-witness sidecar, unjudged (the field's
-    /// docs). `connect` writes `archival_attestation_witness[h]` from it
-    /// when `Some`; `None` writes no row.
+    /// The PoW this verdict accepted, under its seed (CEN-D1/D2/D3).
+    #[must_use]
+    pub const fn pow(&self) -> ProvenPow {
+        self.pow
+    }
+
+    /// The candidate's attestation-witness sidecar, as CEN-B4 judged it
+    /// (the field's docs). `connect` writes `archival_attestation_witness[h]`
+    /// from it when `Some`; `None` writes no row.
     #[must_use]
     pub const fn attestation_witness(&self) -> Option<&AttestationWitness> {
         self.attestation_witness.as_ref()

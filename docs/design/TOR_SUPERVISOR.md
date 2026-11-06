@@ -1,0 +1,1629 @@
+# The managed Tor supervisor — the link under the Tor connector
+
+**Status: RULED 2026-10-15 — ratified as a whole by Rick. Increments 1, 2, 3
+and 3b of §12 are implemented. Increment 1 is the link the dialer reads
+(#1092). Increment 2 is the control client's groundwork (#1091). Increment 3
+is the supervisor: sans-IO core, timing-engine driver, respawn, and the
+managed route published only from `Running`. `TSR-M2` is recorded
+(2026-10-22, the floor device); the driver's base stays 1 s and its cap
+stays 60 s. `TSR-M8` is recorded (Windows and macOS, §10): only Windows
+counts a sleep in `Instant`, and the supervisor counts awake time on every
+platform (§5, "Resumed from suspend").
+Increment 3b is the public directory cache (`TSR-Q8`). Increment 4 is the
+probe of this node's own onion and the link's inbound facet (#1220).
+Increment 5's route publishing is absorbed into increment 3 (2026-10-22).
+Increment 6 is not.** The C++ managed-Tor path and the
+`shekyl_daemon_tor_*` exports are deleted (§9; Rick, 2026-10-17). Increment 6
+is the supervisor's acceptance, and it remains open. Every question is ruled:
+`TSR-Q1` to `TSR-Q4`
+and `TSR-Q6` on 2026-10-14, `TSR-Q5` and `TSR-Q7` on 2026-10-15, `TSR-Q8` and
+`TSR-Q9` on 2026-10-19. The brief was the
+daemon-configuration lane's, carrying Rick's rulings of 2026-10-14; those and
+the rulings on this round's questions are §1. Implementation follows §12's
+increments, after §10's pre-flight measurements and the prerequisites
+`TSR-F12` (DC-F12) and `TSR-F17` (#1083).
+Identifier families (registered at birth, rule 94): `TSR-F1…TSR-FN` findings,
+`TSR-Q1…TSR-QN` questions, `TSR-M1…TSR-MN` the measurements that set every
+bound. Rule 26 is cited: the round changes a process lifecycle every connector
+depends on, an FFI boundary, and the threat posture of the node's Tor identity.
+
+**Read at:** `shekyl-core` `dev` `bd444b715`, the merge of PR-3 (#1056),
+which carries the dialer this design binds to. Every code anchor is rooted
+(`rust/…`, `src/…`) and current at ratification. An anchor into #1066, still
+open, names the PR beside the path. Tor's control specification is the torspec book's *Commands* and
+*Replies* chapters, cited by section name.
+
+This round amends, and restates none of (each amended at ratification,
+2026-10-15):
+[`P2P_2_ENDPOINT_ROUND.md`](P2P_2_ENDPOINT_ROUND.md) PWD-E7's seam rows
+"Restart" and "tor control unavailable" (`:605-606`);
+[`TOR_BUNDLE_DISTRIBUTION.md`](TOR_BUNDLE_DISTRIBUTION.md) `TB-3`; PWD-E7's
+*Tor is the onion key's only holder* (`DiscardPK` custody), which `TSR-Q1`
+reverses for the life of a boot; and the no-respawn disposition in `rust/shekyl-tor-control-daemon/src/lib.rs:40-46`.
+
+---
+
+## 0. What "integrated" means here
+
+The managed Tor is not a service beside the P2P stack. It is the **link**
+under one connector. The connector system already has every seam a supervisor
+needs, so the supervisor adds no path around it:
+
+| The supervisor needs to… | The seam that already exists (PR-3, #1056) | What changes |
+| --- | --- | --- |
+| tell dials where to go | `Connectors::dial_tor` reads the Tor link's route at each dial (`TSR-F1`, `rust/shekyl-p2p/src/dial.rs:173-176`) | the supervisor becomes the link's publisher |
+| stop the dialer drawing while Tor is down | `Dialer::choose` plans, then draws (`rust/shekyl-dialer/src/owner/mod.rs:574-601`, the draw at `:685-686`) | the plan reads the connector's link before it draws; the owner loop parks on the link |
+| learn whether outbound works | every dial ends in a `CloseCause` that keeps the SOCKS reply (`CloseCause::proxy_refused`, `rust/shekyl-transport-layer/src/cause.rs:133-151`) | each outcome is also evidence to the supervisor; no separate client probe |
+| prove the onion is reachable end to end | the self-connection nonce: an inbound handshake carrying a nonce this node put in flight on this zone is recognised and dropped (`NonceTake::SelfConnection`, `rust/shekyl-p2p-session/src/session.rs:384-390`) | a probe nonce kind; the probe is a dialer dial of our own onion |
+| tell peers our address | `Dialer::set_own_addresses` (`rust/shekyl-dialer/src/owner/mod.rs:237`) → the partition's own member of the disclosure sample (`rust/shekyl-peerlist/src/partition.rs:521-535`) | called once per boot: the onion does not change at a respawn (`TSR-Q1`) |
+| keep inbound working across a respawn | the forward listener is bound by the network on loopback, not by Tor (`Network::bind_tor`, `rust/shekyl-p2p/src/network.rs:421-423`) | nothing: a republished onion targets the same port |
+
+The relay is deliberately absent from that table; see `TSR-F9`.
+
+## 1. Rulings this round is built on (Rick, 2026-10-14)
+
+| Ruling | Content |
+| --- | --- |
+| Supervisor | One Rust owner holds the managed Tor's state; its inputs are the child, Tor's status and descriptor events, and an end-to-end probe of our own onion; *usable* is defined by the probe; every other component reads this owner and none reads Tor state on its own |
+| Start is iteration one | No separate bootstrap-failure path; capped backoff from the first launch; never gives up. While Tor is down, a Tor-only node and a node with clearnet on behave as the posture table (`TSR-Q10`, `TSR-Q11`) |
+| Respawn (as amended by `TSR-Q1` and `TSR-Q3`) | On a process fault (§4.4): reap; the `DataDirectory` and the onion are kept; republish the same onion; the connector parks and resumes on the new route; each death and recovery announced; a crash loop reaches the cap loudly. Backoff with resume for an operator's Tor |
+| Teardown (as amended by `TSR-Q1`) | One routine for stop and respawn: close the owning control connection, wait within `SHUTDOWN_GRACE` (5 s), kill and reap. `SIGTERM` and `DEL_ONION` dropped. The directory's disposition follows why it ran: at boot end it is tombstone-renamed **after** the reap, deleted off the runtime under a bound, and swept at the next start; at a respawn it is kept |
+| Launch (as amended by `TSR-Q7`) | Tor starts with `__OwningControllerFD`: an inherited socket that is already an authenticated, owning control connection (§4.7) |
+| Disk | `AvoidDiskWrites 1` on every platform; no memory-backed `DataDirectory` |
+| Requirements | The brief's items 3 to 7 (operator-fixable states, one log stream, suspend and resume, floor-device bounds, Windows first-class) are requirements of this round |
+| Acceptance | §7's matrix on Linux, Windows and macOS, then a seven-day soak on each, a Pi 4 as the Linux host. Nothing is called "24/7" before that |
+| `TSR-Q1`: a respawn is a repair | The `DataDirectory` is kept across respawns within a boot, so guards and the consensus cache survive. The daemon holds the hs-id seed for the boot in secure memory (rules 35, 36) and republishes the **same** onion; `ADD_ONION` still sends `Flags=DiscardPK`, since Tor need not hand back a key we hold. After a run of consecutive launch failures on a kept directory, the next launch uses a fresh one; the run length is set from `TSR-M2`'s failure distribution, not chosen |
+| `TSR-Q2`: guards are per boot | Guards do not persist across boots, as today; the public directory cache does (`TSR-Q8`). Persisting them gains no reduction in expected exposure: a hostile guard exposes *f*·*B* boots in expectation either way, and persistence changes only the spread; the harm is per boot. It costs a guard file on disk and lets one hostile guard link every boot's onion. The one real re-roll attack, forcing respawns, is closed by `TSR-Q1` |
+| `TSR-Q3`: remedy by cause | §4.4, with the SOCKS reply classification of §4.2: only a process fault respawns |
+| `TSR-Q4`: Tor status in RPC | The `health` grant (`RPC_CHANNEL.md` §6.1, in the `view` preset) carries one boolean, as `has_peers` does: an outbound session hides this node's address now, the class part of the relay's hop-0 verdict. The pin part, whether this node's own transaction leaves now, is `OwnTx`'s under the `status` grant: it moves when the node's own-edge peers disconnect, which a `health` caller must not be able to watch (`GS-Q3`, review 2026-10-23). State, cause, since and the respawn count are `status` fields; `TSR-Q12` (2026-10-20) lists every one, and the RW round names them. Tor's state and timing stay off `health` (§8, "Link the RPC endpoint to the onion") |
+| `TSR-Q5`: one probe per descriptor upload round (2026-10-15) | The `HS_DESC UPLOADED` events of one upload round are coalesced into one trigger, and after a jittered delay the probe runs once (§4.5). Outside a round, a republish when no round has begun within the descriptor's lifetime, and one probe after a clock jump while Running; each probe also asks the round's directories (Rick, 2026-10-31, §4.5 "Overdue", "The directory check") |
+| `TSR-Q7`: `__OwningControllerFD` on every platform (2026-10-15) | The launch hands Tor one end of a connected socket pair as its owning control connection; no control port, port file, cookie, `TAKEOWNERSHIP` or `RESETCONF` (§4.7) |
+| `TSR-Q8`: the public directory cache persists across boots (Rick, 2026-10-19) | The daemon keeps Tor's public directory cache across boots; guards, keys and the onion stay per boot. A daemon-owned cache directory (mode 0700) holds `cached-microdesc-consensus`, `cached-microdescs`, `cached-microdescs.new` and `cached-certs`. At launch, only those exact names are copied into the fresh per-boot `DataDirectory`, each a regular file, never reached through a symlink, and under a size limit. At a clean stop the same names are copied back; after a crash the previous cache stays as it was. `state`, keys, `lock` and every other file are never kept, and Tor is never pointed at the cache directory itself. The per-boot rule becomes: nothing identity-bearing (guards, keys, the onion) joins one boot to the next. Why: a node that bootstraps cold at every boot looks to its directory guard like a new install each time, and with a cache it looks like every other Tor client; each restart stops loading the fallback mirrors and directory authorities; and the cold-bootstrap tail, which is directory fetching (§10, `TSR-M1`), goes. What a consensus-diff request reveals, roughly how long the node was offline, adds little to a directory guard that already sees the node's address. Tor verifies the whole cache itself, so a bad cache costs one cold boot and cannot steer path selection. `tor-pin-verify`'s live tests start from a seeded cache, and one cold-start test remains. The step-8 removal (§12, increment 3) stands: a first install, and a boot after a long time offline, are still cold |
+| `TSR-Q9`: the managed Tor looks like every other Tor client (Rick, 2026-10-19) | Every choice the supervisor makes about Tor's behaviour is tested against this, increment 3's included. It bears on `TSR-M6`'s open question, how to keep a crash before Tor's first `state` write from re-picking guards. Of the two answers, `AvoidDiskWrites 0` until that first write is the more ordinary behaviour, because a stock client writes its `state` promptly, and Rick expects it to be chosen. The other, counting respawns before that write, changes nothing Tor does. Increment 3 settles it with evidence, including whether switching `AvoidDiskWrites` on the owning connection after the first write is reliable |
+| `TSR-Q10`: a managed Tor that is absent or fails is announced, never refused (Rick, 2026-10-19) | The daemon starts. A pin failure does not execute the binary (`TSR-F6`). What the node does, which `OwnTx` applies, and which `ManagedTorFix` values the message offers, is the posture table in this section. Health is false meanwhile (`TSR-Q4`). A failed start is a Process cause (§4.4), not this row. TB-2 matches this row |
+| `TSR-Q11`: no automatic fallback (Rick, 2026-10-20) | A fallback that gives up privacy happens only by the operator's own act: whoever can block or break the node's Tor would otherwise choose its transport. The `Clearnet::Off` row of the posture table is that rule. `ClearnetOn` and `ClearnetOnly` are the operator's act, and the node does not apply them |
+| `TSR-Q12`: the operator sees the reason through RPC (Rick, 2026-10-20) | The `status` grant (`RPC_CHANNEL.md` §6.1; outside the `view` preset, so the node's own CLI and GUI) carries: the posture, which is the `tor` and `clearnet` settings; the Tor state, as §4.3's projection (Restarting, Restarting (held), Bootstrapping, Usable, Degraded); the cause, as a typed §5 value, and that cause's detail, not English text; since when, and the respawn count; whether the node is syncing, and over what; `OwnTx`, from the posture table; and the fixes that apply, as `ManagedTorFix` values from the posture table. Cause advice and those fixes are typed values, never sentences: clock, directory, file-limit and upgrade advice are the cause's detail, not `ManagedTorFix` variants. The `health` grant keeps `TSR-Q4`'s one boolean: Tor's state and timing would let an outsider tie the RPC endpoint to the onion's lifetime (§8). One rendering: a single Rust function in a shared crate turns the typed values into words, under rule 81; `shekyl-cli` uses it, the GUI uses it or its exact strings, and the daemon's posture log line renders from it, so the log and both clients say the same thing. The wallet's send flow reads `OwnTx` from Status before broadcasting, as the posture table defines. Health is not that signal. Who builds what: increment 3 exposes all of it as one typed read and renders the posture line from the same values (§12); the RW round ([`RPC_WIRE.md`](RPC_WIRE.md)) names the Status and Health fields. The GUI's daemon, running as the same user, is RT-15's owner case, and no leg carries that grant yet: `RPC_CHANNEL.md` RT-15's owner-only socket or pipe is RT-W10's to build and is not authorized (§13), so the sidecar reaches Status over the owning connection the GUI launches it with (`GS-Q1`, Rick 2026-10-22; core increment `GS-C3`, the GUI sync lane), and RT-W10's leg follows for every other same-user client. A GUI pointed at a service-mode daemon, another user's or another machine's goes over the channel and sees Status only if its enrolment grants it; the plaintext loopback listener carries only the `view` preset, which has no Status; `shekyl-cli` and `shekyl-gui-wallet` display it, the GUI's item tracked in that repository |
+| `TSR-Q13`: polling, and typed values on the wire (Rick, 2026-10-20) | Clients read Status on their normal refresh: state changes are rare and already announced in the log. Pushed events wait until the RW round has a subscription mechanism. The wire carries typed causes, their detail, `OwnTx`, and `ManagedTorFix` values, never sentences: sentences would be reworded differently by each client and could not be translated, while typed values keep the meaning fixed and leave the words to the one renderer (`TSR-Q12`) |
+| `TSR-Q14`: Tor does Tor (Rick, 2026-10-25) | The managed Tor's own judgment governs everything Tor already does: circuits, path selection, guard and network liveness, retries. The supervisor reads Tor's statements and reports them; it never infers a Tor-domain verdict from its own traffic. Our evidence covers only what Tor cannot see: our process, our control connection, and our own onion's reachability. Consistent with it: the liveness sample (a wedged process is ours), backoff and respawn (ours), and `SocksTimeout`, `ExtendedErrors` and `IsolateSOCKSAuth` (configuring Tor, not replacing it). Withdrawn under it: an External verdict from this node's dial replies, and counting `CIRC`/`ORCONN` events. The probe (§4.5) answers one question, whether the node is reachable at its own onion, and grows into no circuit-health monitor |
+| `TSR-Q6`: the private-network cases | Best effort, not a gate. The private network is chutney or a hand-built `TestingTorNetwork` from the pinned bundle, at the implementer's choice; it runs §7's two cases if it can be made to work, is never a latency source, and its absence blocks nothing |
+
+### Posture while the managed Tor is down — RULED 2026-10-20 (`TSR-Q10`, `TSR-Q11`)
+
+The daemon starts. Two facts stay separate. A pin failure does not execute
+the binary: discovery found nothing, or the pin gate refused the spawn, and
+no spawn is attempted (`TSR-F6`, §4.4 Install). A start that fails after a
+good pin is a Process cause (§4.4). It is announced the same way, and it is
+not an install cause.
+
+What the node does is fixed by the connector settings. The message offers
+`ManagedTorFix` values. Increment 3 defines that enum next to the typed
+Status read (§12). Each variant names a `Tor` or `Clearnet` setting from
+`shekyl-daemon-config`; the enum is not a config key and not a second way
+to set those types. The wire carries the variant. One renderer turns it
+into words (`TSR-Q13`).
+
+| `ManagedTorFix` | The settings it names |
+| --- | --- |
+| `RestoreManaged` | Stay `Tor::Managed`. Restore the pinned bundle, or set `tor-file` to a bundle that passes the pin |
+| `Operator` | `Tor::Operator`. Bridges are this route, not a managed-Tor option |
+| `ClearnetOn` | `Clearnet::On`, and Tor stays `Tor::Managed` |
+| `ClearnetOnly` | `Tor::Off` and `Clearnet::On` |
+
+`Tor::Off` with `Clearnet::Off` is offline. The message does not offer that pair.
+
+`OwnTx` is what happens to the node's own transactions. Increment 3 defines
+that enum next to `ManagedTorFix` and the typed Status read (§12). It
+projects the relay's hop-0 verdict for a local origin and the connector
+settings (`GS-Q3`, Rick 2026-10-22). Health is that verdict's class part, an
+outbound session hides this node's address now; `OwnTx` adds the pin part,
+so Health can be true while `OwnTx` is `Held` (`RPC_CHANNEL.md` §6.1). It is
+not a config key. The
+wire carries the variant (`TSR-Q13`). The send flow reads it from Status.
+A caller whose preset has no Status does not receive it, and Health false
+is not a hold. `OwnTx::Held` is the transaction. The Tor state Restarting
+(held) is the spawn waiting out the cap (§4.3).
+
+| `OwnTx` | When | The send |
+| --- | --- | --- |
+| `AddressHiding` | `OriginVerdict::Routable`: a local origin leaves on a session that hides this node's address (`GS-Q3`). Health is true (`TSR-Q4`) | Broadcasts over that connector |
+| `Held` | The verdict is not `Routable` and Tor is `Tor::Managed` or `Tor::Operator`. Health is false (`Absent`), or true (`Connected`) while the pin is exhausted: the pin stays off `health` (`RPC_CHANNEL.md` §6.1) | Reported held, not sent. Stays off clearnet (`TSR-Q11`) |
+| `ClearnetOnly` | `Tor::Off` and `Clearnet::On` | Broadcasts over clearnet. Health stays false |
+| `Offline` | `Tor::Off` and `Clearnet::Off` | Not sent |
+
+| Connectors, managed Tor down | What the node does | Fixes offered |
+| --- | --- | --- |
+| `Clearnet::On` | Syncs over clearnet. `OwnTx` is `Held`. Health is false. Announces once per backoff cap | `RestoreManaged`, `Operator`, `ClearnetOnly` |
+| `Clearnet::Off` | Waits for Tor. Syncs nothing. `OwnTx` is `Held`. Does not set `Clearnet::On`: whoever can block or break the node's Tor would otherwise choose its transport (`TSR-Q11`). Health is false. Announces once per backoff cap | `RestoreManaged`, `Operator`, `ClearnetOn`, `ClearnetOnly` |
+
+The link being usable is not Health (`GS-Q3`, the GUI sync lane's `GS-F3`):
+after a Tor boot the link is usable before any address-hiding peer has
+handshaken, and the relay holds a local origin until one has. The relay
+publishes `OriginVerdict` after every session change, epoch rebuild and plan
+(`Network::origin_verdict`, `rust/shekyl-p2p/src/network.rs:541`, the relay's watch);
+the supervisor folds `Input::AddressHidingOrigin`. Health is
+`hides_address`, every state but `Absent`. `OwnTx` reads `Routable`. A
+recovery is said at once, a loss once under the announcement cap. The link
+stays the phase (§4.3) and `Syncing.tor`.
+
+Clearnet-only is the operator's `ClearnetOnly` act, never a default
+(`TSR-Q11`). The node warns on every boot. TB-1 states the consequence,
+including that the link is unencrypted until the Noise flip. The send in
+that posture is `OwnTx::ClearnetOnly`.
+
+`TSR-F9` and `TSR-F10` propose amending parts of the brief's rulings; each
+says which and why.
+
+## 2. What the code does today
+
+| Fact | Anchor |
+| --- | --- |
+| The supervisor starts with the daemon and step 8 does not wait for Tor. A process fault respawns into the kept data directory; the onion seed is held for the boot. There is no bootstrap deadline | `rust/shekyl-daemon/src/run.rs` `supervise` (its `tor::begin`); `rust/shekyl-daemon/src/tor/mod.rs` `Drive::spawn` (the kept directory) and `drive` (the seed, minted once); `rust/shekyl-tor-control-client/src/supervisor/core/mod.rs` `Policy` (no bootstrap deadline among its fields) |
+| A managed Tor's death takes that incarnation's route down and the supervisor respawns. A shutdown takes an installed route down and does not announce. An operator's Tor is not watched here | `rust/shekyl-ffi/src/zone_ffi.rs` `publish_tor_down`; `rust/shekyl-daemon/src/tor/mod.rs` |
+| The supervisor sends one `SETEVENTS` and reads the parsed events. Bootstrap readiness is still the actor's `GETINFO` poll | `rust/shekyl-tor-control-client/src/control/events.rs` `Command::supervisor_events`; `rust/shekyl-tor-control-client/src/control/actor.rs` `bootstrap_poll_loop` |
+| The event sink holds `EVENT_QUEUE_EVENTS` (256); an event past it is dropped and counted, and the read loop never waits (`TSR-F2`) | `rust/shekyl-tor-control-client/src/control/actor.rs` `EVENT_QUEUE_EVENTS`, `EventSink` |
+| Death has two signals: a watcher waits on the child beside the control connection's end, and either stops the actor (`TSR-F16`) | `rust/shekyl-tor-control-client/src/control/actor.rs` `watch_child` and the `ChildExited` handler |
+| Teardown is `DEL_ONION`, `SIGTERM`, 5 s, `SIGKILL`, reap, synchronous wipe | `rust/shekyl-tor-control-client/src/control/actor.rs` `SHUTDOWN_GRACE`, `shut_down`, `request_graceful_stop`, `kill_and_reap`; `rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs` `teardown` |
+| The managed tor inherits its owning control connection (`__OwningControllerFD`); it opens no control port and writes no cookie. The launch surface is a closed, tested option list | `rust/shekyl-tor-control-client/src/control/launch.rs` `managed_tor_command`, `tor_end`, and its test `launch_option_names` |
+| `SocksPort` is `auto ExtendedErrors`, so onion failures come back as `0xF0`–`0xF7` | `rust/shekyl-tor-control-client/src/control/actor.rs` `SocksPort` (`Auto` renders `auto ExtendedErrors`) |
+| The pin is checked before every spawn, including a respawn | `rust/shekyl-daemon/src/tor/mod.rs` `pin` |
+| The wallet's supervisor re-verifies the pin at every spawn, never gives up, and publishes the SOCKS route as data on a watch, read at use time | `rust/shekyl-tor-control-wallet/src/service.rs` module documentation, `WalletTorControl::posture` and `current_socks` |
+| The dialer checks the connector's readiness before it draws (`TSR-F1`); a failed dial is the judge's to decide, and leaves the lists only on proof of misbehaviour (`Verdict::Drop`), otherwise it is counted or excused | `rust/shekyl-dialer/src/owner/mod.rs` `Dialer::choose` (`readiness` first); `rust/shekyl-peerlist/src/peerlist.rs` `Peerlist::apply` (`DialOutcome::DialFailed`) |
+| The Tor owner loop wakes every 0.5–1.5 s | `rust/shekyl-transport-layer/src/profile.rs` `WAKE`, drawn by `rust/shekyl-dialer/src/pace.rs` `next_wake_nanos` |
+| Our onion reaches peers only as one uniform member of the disclosure sample; the sample is fixed for its window | `src/p2p/net_node.inl` lines 1896 to 1904 (at `d26148535e`); `rust/shekyl-peerlist/src/partition/disclose.rs` `disclosure_population` (F1, Rick 2026-10-09) |
+| `get_info` Health is told to every caller; counts belong to Status | `rust/shekyl-rpc-types/src/info.rs` `InfoHealth` |
+
+## 3. Findings
+
+Severity-ordered. Each names who owns the fix.
+
+**TSR-F1 (high; P2P lane). A down link erodes the gray list at the wake
+rate.** `choose` draws before `attempt` checks for a tip, a network id or a
+proxy. Every such attempt is `DialFailed(LocalClose)`, and the ruled list
+transition drops the drawn address. Two live cases on `dev`: (i) every
+connector, at every start, until the core publishes a tip; (ii) the Tor
+connector after the managed Tor dies, because the proxy stays installed at a
+dead port and the loop keeps drawing, about one gray onion per second for the
+rest of the boot, including every address the address file restored. The
+supervisor makes case (ii) routine, so it is closed first. **Proposed fix,
+without touching the list rule:** the preconditions are part of the plan. No
+draw happens unless the connector's link is usable and the tip and network id
+are known; while the link is down the owner loop waits on the link's change,
+not on a timer. A local failure that races the link's fall cools one address
+for one rung per incident: a `DialFailed` whose cause proves no misbehaviour
+cools its address on gray, and only proof drops it (the gray lifecycle, Rick,
+2026-10-24; the dialer brief, "The fill"). *Records-was (Rick, 2026-10-16,
+#1092): the drop stayed, costing one draw per incident; implication decided the
+failed-address memory, not list membership, and on clearnet nothing implicated,
+so the drop was what cleared dead hosts.*
+
+**TSR-F2 (high; Tor lane). Subscribing to events makes the sink a memory
+channel an outsider can fill.** `EventSink` wraps an unbounded `mpsc`. Once
+`NOTICE`/`WARN` and status events flow, a burst of Tor warnings grows the
+daemon's heap without bound, and anyone who can make Tor log can cause the
+burst, including a peer misbehaving at our onion. The sink becomes bounded with
+counted drops, and the count is itself reported, matching #1069 (every sink is
+queued, and a log call never blocks).
+
+**TSR-F3 (medium; brief correction). The event inputs are misfiled and
+incomplete.** In the control specification's Status events, `CLOCK_SKEW`,
+`DANGEROUS_VERSION`, `CLOCK_JUMPED`, `DIR_ALL_UNREACHABLE` and
+`TOO_MANY_CONNECTIONS` are `STATUS_GENERAL`, not `STATUS_CLIENT`.
+`CIRCUIT_ESTABLISHED` fires only when Tor "changed its mind", and
+`CIRCUIT_NOT_ESTABLISHED` implements only `REASON=CLOCK_JUMPED`, so "no
+circuit" cannot be read from `STATUS_CLIENT`. Missing from the brief and
+needed: `NETWORK_LIVENESS UP|DOWN` and the `BOOTSTRAP` problem form (`WARNING=`,
+`REASON=`, `COUNT=`, `RECOMMENDATION=`), which is where "outbound blocked"
+appears. Consequence: *usable* rests on dial evidence (§4.5), and events name
+causes.
+
+**TSR-F4 (medium; brief correction). "DNS failure" is not a state of this
+Tor.** An onion-only client resolves no names, and bootstrap dials directory
+authorities and fallbacks by address; IG-Q6 already removed hostnames from peer
+endpoints. The operator-facing cases are "outbound to Tor is blocked"
+(`BOOTSTRAP` warn with a connection `REASON`, `NETWORK_LIVENESS DOWN`) and "no
+directory is reachable" (`DIR_ALL_UNREACHABLE`).
+
+**TSR-F5 (medium; brief correction). A wall-clock jump is the wrong suspend
+detector.** It also fires on NTP steps and manual changes, and misses a suspend
+on a correct clock. For the managed posture Tor says so itself: `CLOCK_JUMPED
+TIME=` is emitted when Tor "spent enough time without CPU cycles that it has
+closed all its circuits". The timing engine's clock does not advance across a
+suspend on Linux (`rust/shekyl-timing-engine/src/lib.rs:98-104`); macOS and Windows are measured (`TSR-M8`). For the operator posture
+(no control port), compare a suspend-inclusive clock with the monotonic one; a
+growing difference is suspended time.
+
+**TSR-F6 (medium; Tor lane). A respawn through a held witness re-runs a binary
+verified hours earlier.** The wallet closed this gap (`service.rs:17-22`): the
+daemon re-runs discovery and the pin gate at every spawn. A failed pin at
+respawn does not spawn that binary, and the daemon still starts (the posture
+table, `TSR-Q10`): the state is `InstallDefect`, retry at the cap.
+
+**TSR-F7 (medium; brief correction). A fixed bootstrap deadline plus a fresh
+directory can never converge on a slow link.** If bootstrap needs longer than
+the deadline, each respawn discards the partial consensus and starts again.
+Bootstrap is never killed: neither on elapsed time nor on stalled progress
+(Rick, 2026-10-19, §4.4). In the pre-flight every stalled bootstrap ended on
+its own, none reaching the harness's 600 s limit (§10, `TSR-M1`). The kept directory
+(`TSR-Q1`) and the public directory cache (`TSR-Q8`) remove most of the rest. PR-3's cold-first-contact run A (fresh data
+directory per sample, pinned 15.0.24 bundle, the measurement host) had 5 of 100
+managed Tors not bootstrapped within 120 s, with nothing in the log
+(`docs/benchmarks/p2p_tor_gap_cold_20261014.md`; `docs/FOLLOWUPS.md`, the
+row "A managed Tor that does not bootstrap leaves the node silent").
+
+**TSR-F8 (low; config lane). `SHEKYL_TOR_BINARY` is an environment input**
+(`rust/shekyl-tor-control-client/src/binary.rs:491`); IG-13 allows no
+environment input. It becomes a config key or goes.
+
+**TSR-F9 (design; amends the ruling's "hop-0 subscribes"). The relay does not
+subscribe to the supervisor.** Hop 0 draws from sessions whose connector
+declares `address_hidden_from_peer` (ruled 2026-10-01; stem candidates come
+from the session registry). When Tor is down there are no such sessions and
+hop 0 holds; when it returns, sessions return. A second input would be a second
+source for one fact, and the two disagree in the window where the link is
+usable but no session exists yet. The supervisor's job toward the relay is to
+*explain* a hold (posture line, RPC), not to gate it. One consequence moves
+from open review point to required: a dead own-edge is replaced by a fresh draw
+when a hidden-address session exists again (review of `0fe22d39f`, "relay:
+draw the own-edge from the hidden-address pool").
+
+**TSR-F10 (design; amends the ruling's "resumes on the new SOCKS address").
+The dialer never sees a SOCKS address.** The dialer is policy; it reads one
+fact, whether this connector can dial now. The route is the connector's, read
+at each dial, as the wallet already does (`service.rs:36-42`: read at use
+time, never cached).
+
+**TSR-F11 (medium; Tor lane). Today's only death notice is invisible at the
+default log level** (§2). Every state change of §4.3 is an announcement in
+IG-14's sense: it reaches the log and standard error whatever the level. A
+state change is said when it happens; the once-per-cap limit (§4.4) applies
+only to repeats of the same cause.
+
+**TSR-F12 (high; daemon-configuration lane, a prerequisite). The daemon cannot
+reap its own children while `tools::spawn` ignores `SIGCHLD`.**
+`signal(SIGCHLD, SIG_IGN)` makes the kernel reap every child, the managed Tor
+included: tokio's wait fails with `ECHILD` on Linux and never completes on
+macOS and FreeBSD. Respawn needs the reap. DC-F12's fix ("the Rust runner reaps
+its own children and never changes a signal disposition") lands first
+(`docs/design/DAEMON_CONFIG_CUTOVER.md` line 800 (#1066)).
+
+**TSR-F13 (medium; daemon-configuration and P2P lanes). The stop is slow, and
+the dialer outlives Tor.** PR-3's rerun measured the managed Tor's teardown at
+p50 0.1 s, p90 20.5 s, max 54.9 s over 99 stops; `REAP_TIMEOUT` (15 s) bounds
+the graceful stop and reap, and nothing bounds `kill()` or the wipe. The dialer
+is stopped after that teardown and redials through the dying proxy (up to 56
+`LocalClose` dials in one stop) (`docs/FOLLOWUPS.md`, the row "A daemon stop is
+slow, partly unbounded, and silent while it waits"). The
+ruled teardown (§4.7) takes the wipe off the stop path; the dialer stops before
+the Tor teardown. The brief's "stopped in step 9 in parallel with the core
+stop" holds only after the dialer stop; #1066's step 9 is sequential today.
+
+**TSR-F14 (low; Tor lane). The start sweep removes directories only.**
+`data_dir.rs` matches the `ephemeral-tor-` prefix and removes with
+`remove_dir_all`, which leaves a plain file. The kept log (§4.10) and anything
+else the routine leaves beside the directory are named under that prefix, and
+the sweep removes files as well as directories.
+
+**TSR-F15 (medium; TB lane). macOS has a managed Tor; §7's macOS cases are
+the supervisor's acceptance tests there.** Both macOS rows are pinned at
+15.0.26 (TB-11, Rick 2026-10-23), with the Developer ID-signed `tor` and
+`libevent` as what ships (`TOR_BUNDLE_DISTRIBUTION.md` §4). TB-11's launch
+test on both platforms is `tor-pin-verify`: its Windows entry and its two
+macOS entries, which run the live tests on the exact signed bytes. §7's
+Windows and macOS cases are the supervisor's acceptance tests, not the pin's
+gate.
+Windows run of 2026-10-15 (the Windows development host): the pinned
+`tor.exe` imports 21 libraries, all the operating system's (8 System32
+libraries and 13 UCRT apisets), with no delay-loads; the pin's `imports`
+list is that set, re-derived from the 15.0.25 `tor.exe`.
+
+**TSR-F16 (medium; Tor lane). A leaked copy of Tor's socket end hides Tor's
+death.** Measured on Windows (case C6b, 2026-10-15): with the handle leaked
+into a concurrent child, killing Tor left our read on the owning socket blocked
+for 30.3 s, until that child exited. EOF on the owning socket is therefore
+never the sole death signal: the supervisor also waits on Tor's process (the
+reap on Unix, the process handle on Windows). That is §4.2's "child exited"
+input, which §2 records as missing today. Both inputs stay, and either one is
+a process fault. Tor holds its own end inheritable, so a child Tor spawned (a
+pluggable transport) could inherit it; that is moot while bridges are out of
+scope (§5), and it reopens with them. Reproduced on Linux (2026-10-15, the
+pinned 15.0.24 `linux-x86_64` bundle): Tor's end carries no close-on-exec flag
+inside Tor (`fdinfo` flags `04002`); with a copy leaked into a concurrent child
+that lived 5 s, the wait on Tor's process returned within 12 ms of the kill and
+our read saw EOF only after 5.0 s; a concurrent spawn that was not handed the
+socket held neither end, and EOF followed the kill within 7 ms.
+
+**TSR-F17 (high; Tor lane; fixed in its own change).** Two defects in landed
+launch code, found by the same Windows run: the default torrc is not
+foreclosed, so a `torrc` in Tor's default location is read; and the cleared
+environment (TB-7) kills `tor.exe`, which needs `SystemRoot`. Both are fixed by
+the launcher fix, a separate change, #1083; this round depends on it.
+§4.7's launch passes `--torrc-file` (`-f`'s long form) and `--defaults-torrc`, each naming an
+empty file, and on Windows sets `SystemRoot` from the operating system, never
+from our environment. **On Linux the default location is world-writable.** The
+pinned Linux bundle's compiled-in defaults sit under `/var/tmp/dist/tor/`: with
+no `-f`, Tor reads `/var/tmp/dist/tor/etc/tor/torrc` and `torrc-defaults`, and
+`/var/tmp` is writable by every local user, so any of them can supply our
+Tor's configuration. With `-f` and `--defaults-torrc` foreclosed, Tor still
+tries to open `GeoIPFile` and `GeoIPv6File` at their compiled-in defaults,
+`/var/tmp/dist/tor/share/tor/geoip` and `geoip6`, and would parse a file
+planted there. The launch therefore also passes `GeoIPFile` and `GeoIPv6File`,
+each naming the empty file; with them, Tor opens only that file (measured
+2026-10-15). This joins the launcher fix's scope.
+
+## 4. Design
+
+### 4.1 The link
+
+A connector-generic value in `shekyl-transport-layer`, published by whoever
+owns the connector's route and read by everyone else:
+
+```text
+Link {
+    incarnation: u64,          // bumps on every new route
+    route: Option<Route>,      // Tor: the SOCKS address; None while there is none
+    outbound: Facet,           // can this node open streams through it
+    inbound: InboundFacet,     // can peers reach this node's address through it
+}
+Facet        = Unknown | Usable { since } | Down { cause, since }
+InboundFacet = NotOffered | Publishing | Reachable { evidence_at } | Unreachable { cause, since }
+```
+
+Two facets, because they are two facts with two consumers. A Tor-only node
+whose onion is unreachable can still originate (hop 0 needs outbound only);
+collapsing them into one *usable* would hold transactions that could go.
+`NotOffered` covers a posture with no onion (an operator Tor without
+`tor-onion`).
+
+One source per fact:
+
+| Fact | Owner | Readers |
+| --- | --- | --- |
+| route | the supervisor (managed) or configuration (`tor-socks`, operator) | the connector, at each dial |
+| outbound facet | the supervisor | the dialer's plan; the posture line; RPC |
+| inbound facet | the supervisor | the posture line; RPC |
+| own onion | the supervisor | `Dialer::set_own_addresses` (the peerlist's own member) |
+| hidden-address sessions | the hub's board | the relay (hop 0) |
+
+The supervisor publishes the inbound facet for the route's incarnation
+(`Links::publish_inbound`). It never bumps the incarnation or touches the
+outbound facet, and it calls no link watcher: the watchers are the
+dialer's, which parks on link changes, and inbound never reaches the
+dialer (`TSR-F9`). A new route keeps whether an onion is offered and drops
+the evidence, so a respawned Tor's onion is `Publishing` until its own
+probe arrives. An operator's Tor reads `NotOffered` until its probe through
+`tor-onion` lands (§4.9).
+
+Clearnet's link is constant (`route = direct`; both facets follow the
+transport layer). A proxied clearnet connector (`clearnet-socks`) has the same
+shape as an operator Tor; that is noted for the clearnet lane, not designed
+here.
+
+### 4.2 Inputs
+
+| Input | Source | Effect |
+| --- | --- | --- |
+| child exited | a wait on Tor's process: the reap on Unix, the process handle on Windows (`TSR-F16`) | process fault |
+| control connection EOF, desync, or a reply past the reply bound (awake time: a bound found expired more than `control::RESUMED_AFTER` late was a sleep, and starts again, §5 "Resumed from suspend") | the control actor; while Running, a liveness sample every 30 s (provisional, `Policy::alive_every`) gives the bound a question to time out on, since a wedged Tor sends no event and closes nothing | process fault (a wedged Tor is a dead Tor) |
+| `BOOTSTRAP PROGRESS=` | `STATUS_CLIENT` | progress: the phase and when it was reached, which §5 shows; never a fault |
+| `BOOTSTRAP` with `WARNING`/`REASON` and `RECOMMENDATION=warn` | `STATUS_CLIENT` | named external cause (outbound blocked and kin). Tor sends `warn` from the tenth problem at a phase, so a few refused connections at startup raise nothing |
+| `ENOUGH_DIR_INFO` / `NOT_ENOUGH_DIR_INFO` | `STATUS_CLIENT` | outbound facet cause |
+| `NETWORK_LIVENESS UP/DOWN` | `NETWORK_LIVENESS` | external cause on or off: `UP` clears `ExternalBlocked` and `DirectoryUnreachable`, the causes about reaching the network (`TSR-Q14`); no other kind |
+| `CIRCUIT_NOT_ESTABLISHED REASON=` / `CIRCUIT_ESTABLISHED` | `STATUS_CLIENT` | `NOT_ESTABLISHED`: `REASON=DIR_ALL_UNREACHABLE` is the directory cause, `CLOCK_JUMPED` is the general event's, any other reason or none is the blocked link. `ESTABLISHED` clears as `NETWORK_LIVENESS UP` does |
+| `network-liveness`, `status/circuit-established` | `Input::NetworkView`, from the liveness sample's `GETINFO` while Running. The driver omits both keys unless the phase is Running; the core also ignores a view folded before Running | Tor's current view, read even when Tor sends no event (`TSR-Q14`): `network-liveness=down` names the blocked link when nothing else is named; both `Reported::Yes` clears it. `Reported::Unknown` says nothing. `status/circuit-established=0` is display only: Tor drops its circuits on purpose after a clock jump and says why (`CLOCK_JUMPED`), and the sample after a resume named a block that was not there (§7, the VM suspend of 2026-10-30), while in the refuse block of 2026-10-25 Tor reported a circuit established throughout (Rick, 2026-10-30) |
+| `CLOCK_SKEW SKEW=` | `STATUS_GENERAL` | named cause with the offset; the source is unauthenticated, so the message says Tor reports it, never "your clock is wrong" |
+| Tor's log text: "Received a bad CERTS cell: At least one certificate expired." and "Certificate already expired." / "Certificate not yet valid." "Either their clock is set wrong, or your clock is wrong."; and a `BOOTSTRAP` problem with `REASON=DONE` and a `HOSTID` | `WARN`/`NOTICE` log events; `STATUS_CLIENT` | the certificates' clock cause (§5, "Certificates out of date"; Rick, 2026-10-30), named only when, within `Policy::clock_evidence_within` (60 s), Tor logged a certificate line at least three times **and** its `DONE` problems named at least three distinct relays. A wrong clock makes every relay's certificate look out of date, and one relay presenting a bad certificate is one relay. The certificate line names no relay (`torcert.c`), so the relays come from the problems: `DONE` means the TLS handshake completed and Tor closed the connection, which a blocked network cannot produce. Tor logs the certificate lines at `warn` only for a directory authority's handshake (protocol-warn, `info` by default, for any other relay, `channeltls.c`), so the lines heard come from authorities. **This is the one place Tor's free log text is read**: `TSR-Q14` applied to free text on purpose. The strings are pinned by `the_certificate_lines_are_tors_own_text` (`supervisor/events.rs`) and re-checked at every re-pin (`RELEASE_CHECKLIST.md`). While the evidence stands, a blocked link from the same problems keeps the clock cause; fewer leaves the blocked link's wording, which names the clock first |
+| `CLOCK_JUMPED TIME=` | `STATUS_GENERAL` | resume: re-evaluate now (Tor closed its circuits) |
+| `consensus/valid-after`, and the wall time | `Input::ConsensusClock`, at each liveness sample while Bootstrapping or Running: a `GETINFO` of its own, since before Tor holds a consensus the key fails and one failing key fails the whole command (`control_getinfo.c:1760`); the driver reads the wall time beside it and passes both as values | this computer's clock named (§4.5, "The clock"): the wall time behind `valid-after` by more than §10 `TSR-M13` (360 s). Only behind counts. Nothing legitimate makes a consensus from the future, and a majority of the directory authorities signed this one, so only this machine's clock can trip it; a consensus older than the clock is a node that was offline. Cleared at the first sample inside the tolerance |
+| `DANGEROUS_VERSION` | `STATUS_GENERAL` | announcement; a release question, not a runtime fault |
+| `DIR_ALL_UNREACHABLE` | `STATUS_GENERAL` | named external cause |
+| `TOO_MANY_CONNECTIONS` | `STATUS_GENERAL` | named local cause (the open-file limit), with the count |
+| `HS_DESC UPLOAD` / `UPLOADED` / `FAILED REASON=` for our address | `HS_DESC`, coalesced into rounds by `UploadRounds` (`TSR-Q5`) | the end of a round in which an upload succeeded schedules the round's probe (§4.5). A round in which more than half of its uploads ended `FAILED REASON=UPLOAD_REJECTED` is refused: those directories hold a copy numbered above this one (tor 0.4.9.14 `hs_cache.c:185`), the facet says so, and nothing is republished (§4.5, "Refused rounds"). The share is taken over every upload the round began, unfinished ones included: a refusal comes back within seconds, so an unfinished upload is unknown, not refused. A round with no upload that succeeded, refused or not, is not Service-class evidence: Tor retries its own uploads. One `FAILED` in a round that also succeeded is not evidence (`TSR-M7` saw 1 of 13). A sink that dropped events ends the open round, so the next can trigger |
+| `HS_DESC_CONTENT` for our address | `HS_DESC_CONTENT` | the directory check's answer (§4.5): the copy one directory returned to a fetch, and its `revision-counter`. Tor sends it right after `HS_DESC RECEIVED` for every copy it decoded (`hs_client.c:1685-1689`), also one its client cache then discards for a lower counter (`hs_cache.c:837-842`), so each directory's own copy is seen |
+| `NOTICE` / `WARN` / `ERR` | log events | the `tor` log category (§4.10) |
+| every Tor dial's outcome | the connector's dial path → the dialer's tally (`TorLinkTally`, through `Network::tor_link_tally`, `rust/shekyl-p2p/src/network.rs:612`) → the supervisor | display only, never a cause (`TSR-Q14`). The tally carries the dialer judge's last sign that the Tor link worked (`last_sign_of_life`, a tick on the process clock; `DIALER_OUTAGE_EVIDENCE.md` §6): a stream that opened, or a byte any Tor session received, inbound included; never a session merely held, the probe, or Tor's own network judgment. The supervisor's span runs from that instant or from Tor last reaching Running, whichever is later; a resume restarts it from the wake. While Tor is Running and names nothing, the span reaches `Policy::quiet_after`, and a Tor dial has failed since the last sign of life (that failure is `last_unopened_at` on the same clock, the instant the dialer counted it; the watch keeps only the latest tally), the posture line says "Nothing has come through Tor for N: no connection has opened, and no peer has sent anything.", once, with no fix. `quiet_after` is the managed Tor's `SocksTimeout` plus the Tor connector's judging bracket δ (105 s + 15 s = 120 s), both the connector's own declarations: by then a dial started at the last sign of life has used Tor's retries and its bracket has closed empty, so the judge has excused it as the link's, and the operator is told the fact the dialer acted on. A live session keeps the line off (the 60 s timed sync shows life inside 120 s); a held session that sends nothing does not. The tally already in the cell when the supervisor starts watching is `Input::DialBaseline`: its failures are not folded. A respawn does not re-seed; `opened` is monotonic for the process |
+| a stream accepted at our forward listener | the Tor connector's inbound accept (`Network::spawn_tor_accept`, `rust/shekyl-p2p/src/network.rs:461`) | display evidence only (posture line, RPC): a peer fetched the descriptor and completed introduction and rendezvous. Once its handshake has finished, the row is a Tor session: a byte it receives is the judge's sign of life, so the quiet line does not stand while it talks. A handshake still open is not a session: the probe of this node's own onion is dropped before the session is established, so it occupies the board's row count and never corroborates (§4.5; `DIALER_OUTAGE_EVIDENCE.md` §3.3). It is not a dial: `opened` and `unopened` stay. It neither arms nor defers the probe |
+| a probe nonce arrived | the inbound handshake's one nonce lookup (`NonceTake::Probe`, `rust/shekyl-p2p-session/src/session.rs:391`), through `Network::probe_arrivals` (`rust/shekyl-p2p/src/network.rs:606`) | inbound evidence: `Reachable`, when it names the probe in flight and the handshake took the nonce before that probe's bound (§4.5). The evidence time is that take, so a fold that runs later does not move it. A nonce taken at or after the bound is not evidence, and the deadline still misses the probe |
+
+Tor's own warning when it numbers a descriptor on a clock that went back,
+`set_descriptor_revision_counter: Non-fatal assertion now >= srv_start
+failed` (`hs_service.c:3215-3270`), is not read: the consensus comparison
+names the same clock first, from a value rather than free text. It is
+corroboration in the logs. In the clock VM run of 2026-11-01 it fired at each
+descriptor rebuild after the clock went back, 37 times, each followed by
+`rev_counter < CRYPTO_OPE_ERROR failed`, and Tor sent no `CLOCK_SKEW`
+(shekyl-dev `data/tsr-acceptance/2026-11-01-linux-vm-clock/`).
+
+A SOCKS reply to an onion dial says less than it seems to. Measured on a
+healthy link (shekyl-dev `data/tsr-acceptance/2026-10-25-socks-reply-sources`):
+a live service whose target port refuses answers `0x01` within a second,
+every time; one whose target blackholes answers `0x06` at `SocksTimeout`;
+an onion with no descriptor answers `0xF0`, or `0x06` when the fetch runs
+long; a dead service with a published descriptor answers `0xF2`; and real
+peers that are down answer `0x06`. A blocked link answers `0x06` too (§7,
+case A on 2026-10-25). So no reply is a verdict on the link, which only
+Tor can judge (`TSR-Q14`). Each reply is stamped with what it is evidence
+of by the Tor connector's `stamp_reply` (`shekyl-tor/src/replies.rs`;
+`DIALER_OUTAGE_EVIDENCE.md` §3.2, `OE-D4`, the source of record for this
+table), and the dialer's judge decides: a Destination reply counts at
+once, a Local one never counts, and an Uncertain one counts only inside a
+closed bracket (§3.3). *Records-was: the address memory,
+`implicates_address`; then the marks, `proxy_reply_marks`, until #1235.*
+
+| Reply | Evidence (§3.2) | Goes to |
+| --- | --- | --- |
+| `0x00` | — | a stream opened: a sign of life for the judge and the posture line |
+| `0x01`, `0x04`, `0x05`, `0xF0`, `0xF1`, `0xF2` | `0x05`, `0xF1`: Destination; `0x01`, `0x04`, `0xF0`, `0xF2`: Uncertain | the judge (`DIALER_OUTAGE_EVIDENCE.md` §3.2). *Records-was:* until #1235 all six named the destination and went to the lists as a failed test (the gray lifecycle, 2026-10-24); `0x01` is Uncertain: Tor sends it for many endings (`reasons.c:109-155`), and a circuit destroyed after the stream joins it comes back as a plain `0x01` (`connection_edge.c:400-411`). `0x01` is final. A live service whose target port refuses answers it (measured, above), and the blocked link of 2026-10-25 answered `0x06`, not `0x01` (§7, case A). Tor's source does not make `0x01` rendezvous-only, so its finality rests on that measurement. `0x04`, `0xF0` and `0xF2` are worth a retry within the test while they come inside the window. At or after it each is Tor's own timeout: with `ExtendedErrors` on, Tor answers an expired onion stream with the code it last recorded on it (Tor 0.4.9.14 `src/core/or/connection_edge.c:3894`), `0xF0` after a descriptor fetch came back not found and Tor tried another directory (`src/feature/hs/hs_client.c:1725`), so it is final within the test like `0x06`; the short floor series saw `0xF0` at 104 to 110 s (2026-10-26). `0x05` and `0xF1` are final. None proves misbehaviour, so the address cools (2 min, doubling to 1 h) and is never dropped for them. **Residual** (`LV3_CONNECTION_OBJECT.md:1829`; `IMPLEMENTATION_INDEX.md:798`): an attacker on the directories responsible for a target's key can force reply `0x04`, and with `ExtendedErrors` on it forces `0xF0` (descriptor not found) instead; either fails one test and buys one rung of the cooldown. That attacker already makes the onion unreachable for everyone, and our cooldown only reflects it. **Residual, seen in the refuse block of 2026-10-25 (§7):** a descriptor fetch that cannot leave this machine also answers `0xF0`, so a blocked link cools the address it was dialing one rung; after the unblock that address waits out its first rung (2 min) while the others are dialed. *Records-was: the address memory, 240 s doubling to an hour, `shekyl-dialer/src/memory.rs`* |
+| `0x02`, `0x03`, `0x06`; our SOCKS port refusing or closing without a reply (`ProxyUnavailable`) | `0x02`, `0x06`: Uncertain; `0x03` and `ProxyUnavailable`: Local | the judge, never a link verdict. `0x06` does not name the destination: a blocked link answers it for every peer. Before `SocksTimeout` it is worth a retry within the test (a lost circuit, or the service's own connect timing out). From the earliest `SocksTimeout` can expire, measured over the attempt's own run, it is final within the test, and the address cools as normal: **Tor retried inside its own window** (Rick, 2026-10-26). Tor counts a stream's age in whole seconds (`time(NULL)` against a `time_t` stamp, `src/core/or/connection_edge.c:1194`, `:1210`), so a 105 s timeout's `0x06` can arrive from 104 s; the floor device saw one at 104.97 s (2026-10-26), and the dialer reads the window from 104 s (`SocksTimeout::earliest_expiry`). In Tor 0.4.9.14 `0x06` is the stream-end reason `TIMEOUT` (`src/core/or/reasons.c:128`), set when `SocksTimeout` runs out on an onion stream (`src/core/or/connection_edge.c:1222`, `:1250`) or when the service's connect to its target times out, which Tor does not retry on an onion stream (`src/core/or/relay.c:892`); inside the window Tor moves to another introduction point (`src/feature/hs/hs_client.c:1246`) and refetches the descriptor from another directory (`:1717`, `:1739`, `:1758`). Its stamping is `Retry::AgainInsideWindow`, as the dial deadline's own `TransportTimeout` and every other reply worth a retry are, and the dialer reads it against the attempt's run time. **Residual, seen in the refuse block of 2026-10-25 (§7; shekyl-dev `data/tsr-acceptance/2026-10-25-linux-tsr-q14`):** on a silently blocked link every Tor attempt ends at `0x06` at 105–106 s and Tor states nothing about its network, so each attempt is final and its address cools; with five in flight the candidates the dialer reaches cool within minutes, and a redrawn one climbs a rung. Bounded by the dialer's judge (`DIALER_OUTAGE_EVIDENCE.md` §3.3, §3.4; #1235): `0x06` is uncertain evidence, so a failure with no sign of life on the link within δ before it and after it is excused. It neither climbs nor demotes white; an address with no counted failure waits its outage retry (10–15 s) and one with counted failures holds its rung, and at the unblock the first sign of life clears the excusals of addresses with no counted failure. *Records-was:* until #1235 a quiet stretch bounded it (Rick, 2026-10-26), which needed 13 unopened attempts and 364.5 s and never engaged on the floor device |
+| `0xF3`, `0xF7` | Uncertain | the judge, and worth a retry within the test while they come inside the window; at or after it, Tor's own timeout reported with the code it recorded (`src/feature/hs/hs_client.c:1209`, `:1235`), final within the test. They are not a rate and not a link verdict |
+| `0x07`, `0x08`, `0xF4`, `0xF5`, `0xF6` | `0x07`, `0x08`: Local (this node's own request); `0xF4`, `0xF5`, `0xF6`: Destination (the onion's own descriptor demands client authorization, or Tor cannot parse the name, which is validated before the dial) | the defect log at error, and the judge; never a link verdict |
+
+What a Tor dial's close tells the supervisor is one fact, how far it got
+(`Reached`, stamped by the connector with its `DialFailure`): whether a
+stream opened before the close. A proxy reply is before the stream, and so
+is any close of this node's own before one opened; each is an unopened
+dial. *Records-was:* until #1235 this read the close kind's D12 phase
+(`CloseCause::opened_a_stream`), which counted this node's own close as no
+dial at all. The dialer counts opened and unopened dial attempts,
+each when it ends, including a failed attempt whose test goes on to a
+retry (revision 4 of the in-flight bound, Rick 2026-10-26), and the
+sessions it holds: outbound ones it kept, and inbound handshakes that
+have finished. A handshake still open is not a session.
+A payload refusal is a kept session the payload owner declined, not
+another opened dial. An inbound session whose handshake has finished is a
+session and not a dial. The supervisor reads those counts and the judge's
+last sign of life for the posture line, never an address or a reply code.
+A session that talks means Tor carries traffic, so dials to dead or
+refusing onions say nothing while one does: the testnet case, two live
+seeds talking and four dead ones redialed. A session merely held is no
+such sign.
+A process fault comes only from the process and the control connection.
+
+The supervisor sends one `SETEVENTS STATUS_GENERAL STATUS_CLIENT HS_DESC
+HS_DESC_CONTENT NETWORK_LIVENESS NOTICE WARN ERR` as its first command, and nothing else sends
+`SETEVENTS` on that connection. SP-T0 §3b withdrew a `STATUS_CLIENT`
+subscription for the wallet because `SETEVENTS` is "a shared, replace-not-add
+resource the consumer also uses"; on the daemon the supervisor is the only
+reader, so it is the only writer, and the objection does not arise. The
+retraction stands for the wallet. A sans-IO parser beside `stream.rs` reads
+each event, pinned by known-answer tests and tolerant of unknown actions,
+arguments and order, as the specification requires.
+
+### 4.3 State
+
+Per incarnation: `Absent { attempt, next_at } → Launching → Bootstrapping {
+progress, last_progress_at } → Running → Stopping`. The brief's four names are
+a projection of that phase and the two facets, which is what the posture line
+and the Status read (`TSR-Q12`) show:
+
+| Shown | When |
+| --- | --- |
+| **Restarting** | phase is `Absent`, `Launching`, or `Stopping` for a respawn |
+| **Restarting (held)** | phase is `Absent` and no spawn is attempted before the cap, because a precondition of the spawn failed: the pin gate, no Tor found, or the data directory unusable (§5) |
+| **Bootstrapping** | phase is `Bootstrapping` |
+| **Usable** | `Running`, outbound `Usable`, inbound `NotOffered`, `Publishing` or `Reachable` |
+| **Degraded** (cause) | `Running` and either facet is down, the facet and its cause named |
+
+`Publishing` shows as Usable: Usable is the outbound link, and an onion not
+yet proven is not one found unreachable. The inbound cause is carried in
+the Status's inbound facet, beside the outbound cause and never in its
+place: a blocked link and an unreachable onion can stand together. What the
+node syncs over, and the backoff's usable cap (§4.4), read the outbound
+facet, so an unreachable onion changes neither.
+
+### 4.4 Remedies by cause
+
+Ruled (`TSR-Q3`): the remedy is chosen by cause class. A respawn fixes only
+faults in the Tor process, so only those respawn:
+
+| Class | Causes | Remedy |
+| --- | --- | --- |
+| External | Tor's own statements only (`TSR-Q14`): outbound blocked, `NETWORK_LIVENESS DOWN`, `CIRCUIT_NOT_ESTABLISHED`, the sampled view (§4.2), `DIR_ALL_UNREACHABLE`, clock skew | none but waiting; Tor retries itself; announce with the fix; **never respawn** |
+| Service | a probe that does not complete within the §10 `TSR-M2` bound (60 s) while outbound is usable, twice, the second after `HSFETCH`, or a directory check that misses twice (§4.5); and the overdue upload (§4.5). A round's failed uploads are not this: Tor retries its own uploads, and a refused round is the clock's. One `HS_DESC UPLOADED` round can leave that dial unfinished until the next round (`TSR-Q5`, §4.5). The 2026-10-22 miss returned no SOCKS reply by the bound, and the nonce was never sent | republish on the running Tor: `DEL_ONION`, then `ADD_ONION` with the held seed, the same onion. Tor answers `550` (address collision) to an `ADD_ONION` for a service it still holds, so the delete comes first; its `552` (no such service) is no failure. Escalate to Process only if the control command itself fails. Not while a republish cannot help (the clock named, or the latest round refused), and no sooner than the republish backoff allows (§4.5) |
+| Process | child exit; control EOF or desync; reply past bound; outbound dead past a bound with no external cause standing; a bootstrap stranded by a clock jump (§5, "Stranded after a clock jump"): Tor reported `CLOCK_JUMPED`, then neither the percent nor the bytes moved for the bound, so its retries sit on the clock that was wrong; a slow mirror always has bytes arriving (Rick, 2026-10-30) | respawn |
+| Install | pin fails at spawn, or discovery finds nothing (`TSR-F6`) | no spawn, so the binary is not executed; the daemon starts (the posture table); announce; retry at the cap |
+| Local resource | data directory unwritable or out of space (a fresh spawn sweeps leftover per-boot directories, then checks; a directory kept for an in-boot respawn is not swept); `TOO_MANY_CONNECTIONS` | no spawn (or, for the open-file limit, no respawn); announce; retry at the cap |
+
+A stalled bootstrap is not a cause in any class (Rick, 2026-10-19). In the
+pre-flight's 300 cold runs every stall ended on its own, with no problem event
+and nothing in Tor's log while it waited. Sampling Tor's CPU and sockets through
+150 more showed what the wait is: Tor idle on its CPU, and in nearly every case
+mid-transfer from a slow directory source (§10, `TSR-M1`). A respawn would have
+discarded a transfer already megabytes in. The supervisor shows the phase and how long Tor has
+been in it (§5) and waits.
+
+Backoff applies to respawns and to Install and Local-resource retries; it never
+gives up and reaches its cap with a loud announcement, repeated once per cap
+interval and never more often (ruled). The once-per-cap limit is on repeats
+of one announcement: a state change (a death, a refused binary, a recovery)
+is a new fact and is said at once (`TSR-F11`); only its repeats wait for the
+cap. The announcement key is the shown state and the cause's kind; a change
+of detail within a kind is a repeat (Rick, 2026-10-24). A detail that would
+change the operator's fix is a different kind, so such a cause splits its
+variant rather than keying on the payload. The backoff starts again from its base after the outbound facet has
+been usable for one full cap (Rick, 2026-10-24): tied to the cap rather than a
+new constant, so a crash rate that keeps the backoff pinned without the reset
+still keeps it pinned, and an adversary who can crash Tor gains no faster
+re-roll of the respawn cadence. A cap already served is kept when the facet
+leaves usable before the fault, so a block after that cap still restarts the
+backoff. Time spent blocked does not itself serve the cap.
+
+### 4.5 The probe
+
+The self-dial is the supervisor's **dial of our own onion** through the
+managed Tor's SOCKS port, carrying a handshake whose nonce is minted as a
+probe nonce (`Dialer::mint_probe`). It is not a peer dial: it bypasses
+`choose`, touches no list, no attempt count, no failure memory and no
+target, is not counted in the in-flight bound or the Tor tally, and so
+never moves the quiet line. It holds one descriptor while in flight, which
+the daemon reserves for a managed Tor. The inbound path already recognises
+our own nonce and drops the session; the nonce set holds both kinds in one
+map, so the C++ caller keeps its one lookup and its `!= 0` drop (no C++
+change), and `shekyl_dial_take_handshake_nonce` answers 2 for a probe. The
+supervisor hears the arrival, named by the probe's mint tick and by the
+process time the handshake took the nonce. It is evidence when that time is
+before the probe's bound; a fold that runs later does not move it, and a
+nonce taken at or after the bound leaves the probe in flight so the deadline
+still misses it. One from a probe it gave up on, or from before a respawn,
+is stale. Arrival proves
+descriptor, introduction, rendezvous, the forward listener and the Levin
+accept, end to end; it cannot be forged by anyone who has not seen the
+nonce, and only our own Tor carries it. A self-connection nonce matches
+only on its own connector, because a peer is handed it. A probe nonce is
+never handed to a peer, so one presented on another connector is found,
+logged as this node's defect, dropped, and never evidence.
+
+An in-process consumer reads the managed route at each use and never
+caches it (`TSR-F10`). The publication record lives on the network's Tor
+link (`TorLink`, `rust/shekyl-p2p/src/tor.rs:53`), beside the operator's
+proxy and never in its place, and dies with the network. It answers only while the Tor link is usable on the route the
+managed Tor published, so an operator's Tor, a fallen route, or a route
+from before a respawn is not a route. There are two readers.
+`Network::managed_socks` (`rust/shekyl-p2p/src/network.rs:656`) is the address alone. The
+settlement fetch takes that: each of its reads presents credentials from
+its own nonce (`SF-D3`), a fresh circuit per read, apart from the other
+reads, from the peer dials, and from the probe. `managed_route` is that
+same address presented with the caller's own fixed isolation pair and
+nothing else, never the operator's pair (DC-Q7). The probe is that
+reader. Its pair is a random per-boot username minted from the OS CSPRNG
+beside the onion seed and held with it (`IsolationPair`, wiped on drop,
+redacted in `Debug`). Tor isolates streams by SOCKS credentials
+(`IsolateSOCKSAuth`, its default), so the probe's circuits are its own,
+apart from the peer dials, which offer no authentication. Isolation
+separates circuits; it cannot change what the guard sees (below).
+
+What the probe's own dial sees, a SOCKS reply or a close, is logged and
+moves nothing (`TSR-Q14`). The probe answers one question, whether this node
+is reachable at its own onion; it never sets or clears an outbound or
+network cause. No probe runs while the outbound facet is not usable, while
+the onion is owed, during a stop, or while one is in flight, and a probe
+whose bound passes while outbound is not usable is dropped without a
+verdict.
+
+**What fires it (`TSR-Q5`, ruled 2026-10-15): one probe per descriptor
+upload round.** Tor re-uploads our descriptor on its own schedule, every 60 to
+120 minutes at random (`HS_SERVICE_NEXT_UPLOAD_TIME_MIN` and `_MAX`,
+lines 34 and 36 of Tor's own `hs_service.h`, in its `feature/hs` directory, at tags `tor-0.4.9.13` and `tor-0.4.9.14`), and at once when it
+picks new introduction points, when the proof-of-work effort changes, or when
+the HSDir ring changes. Each upload reaches us as `HS_DESC UPLOADED`, one per
+HSDir. The events of one round are coalesced into one trigger (Rick,
+2026-10-29): **the round's end, or 60 s after its first upload, whichever
+comes first**. The first upload means one HSDir has the descriptor, and
+the probe's own fetch picks its own HSDir, which may not have it yet
+(`0xF0`), so the probe waits for the round. Most rounds end on their own
+in 7 to 12 s and keep that trigger; a round still open 60 s after its
+first upload (five times the longest round measured to end, §10) has had
+time to reach most directories, and its hung uploads do not hold the
+probe until the next round. A probe whose directory still lacks the
+descriptor is the two-miss rule's to recover (below). Then, after a delay
+drawn uniformly from 15 to 60 s (a CSPRNG draw the driver supplies; §10
+records the range), the probe runs once; a round that ends after its wait
+has run out adds no second probe.
+
+**A round that never ends is counted, not hidden.** One still open five
+minutes after it began (uploads with neither `UPLOADED` nor `FAILED`) is
+counted in Status (`stuck_upload_rounds`, telemetry, never a cause) and
+said once at debug with the event sink's drop count. The driver then ends
+it in the coalescer: a round in which no upload ever ended cannot be told
+from its own late uploads by the next round's `UPLOAD` alone, and would
+absorb it. If the soak confirms such rounds with no events lost on our
+side, they are Tor's own behaviour and go with the blackhole-block data to
+the Tor Project. The
+delay keeps a hostile HSDir from seeing "upload, then an immediate fetch of
+the same descriptor" as a self-probe signature. There is no deadline of our
+own and no evidence-age bookkeeping: inbound accepts are display evidence
+only, and a round's failed uploads are not Service-class evidence (§4.4).
+
+**The onion is unreachable after two consecutive probe misses, the second
+preceded by `HSFETCH`** (Rick, 2026-10-29). One miss is not a verdict: a
+single probe can miss on a healthy Tor, and after a miss the same Tor's
+client state for its own address can carry the miss into the next probe
+(§10, `TSR-M3`). So a probe that has not arrived by the §10 bound is
+followed by `HSFETCH` of this node's own onion, which refreshes Tor's client
+view of that one address and touches no other stream (`TSR-Q14`: Tor does
+Tor), and by one more probe after a fresh delay from the same range. Its
+miss is the Service-class verdict, and the republish it asks for waits on
+the backoff (below); its arrival is `Reachable`, and the facet was never
+down. A round that ends meanwhile adds no probe. The fetch
+reports itself as `HS_DESC` `REQUESTED`, `RECEIVED` and `FAILED` for our
+address; the round coalescer counts only the upload actions. Both an
+upload's `FAILED` and a fetch's carry the descriptor id (tor 0.4.9.14
+`dirclient.c:2815`, `hs_client.c:1719`); an upload ends only as `UPLOADED`,
+`FAILED REASON=UPLOAD_REJECTED` or `FAILED REASON=UNEXPECTED`
+(`dirclient.c:2803-2827`). One line has one consumer. `UPLOAD_REJECTED` is
+the round's even when no upload is open, and then it closes nothing.
+`UNEXPECTED` is the round's only while an upload of that descriptor is open
+to that directory; otherwise it is a fetch's and says nothing about whether
+the directory holds the descriptor. A `FAILED` that names no descriptor is
+the round's as well: a fetch's failure names the descriptor it asked for.
+`NOT_FOUND` and any other `FAILED` that names a descriptor are the directory
+check's, and a failed fetch never ends a round. `SIGNAL NEWNYM` would also clear the
+client state, but it purges Tor's client state for every onion and moves
+every new peer stream onto new circuits, and is not used. The bound is not
+a respawn. The floor-device soak measures both miss rates; if the
+second-miss rate is near zero, the rule is settled.
+
+**Overdue: a republish outside a round (Rick, 2026-10-31).** Tor gives the
+descriptor a 3 h lifetime (`HS_DESC_DEFAULT_LIFETIME`, line 30 of Tor's
+`hs_descriptor.h` in its `feature/hs` directory at `tor-0.4.9.14`, set at
+`hs_service.c:1942`) and schedules its next upload on the wall clock
+(`hs_service.c:3321`). When a clock that ran fast is corrected (by NTP, or
+by hand), the clock is right and Tor's upload schedule sits a day out: Tor
+has broken its own lifetime, and repairing that is not second-guessing Tor.
+
+- **The upload is overdue.** No round has begun within the descriptor's
+  lifetime (`Policy::descriptor_lifetime`) of the last round's first upload.
+  The onion is published again from the held seed (`DEL_ONION`, then
+  `ADD_ONION`, `Action::RepublishOnion`), which forces a fresh upload, and
+  that round's probe judges the facet. Inbound is not marked down: nothing
+  shows peers cannot reach the onion yet. A refused republish is a process
+  fault, as the Service remedy's is. The lifetime is counted on the
+  supervisor's clock (awake time; a resume restarts it from the wake, §5),
+  and is disarmed while a round is open. A round that ends with no upload
+  leaves the old anchor standing, so the republish can be due at once. The
+  next lifetime counts from the republish, from the moment it is handed to
+  the driver, including one the overdue check did not ask for, so the
+  previous descriptor's remaining life does not judge it. No upload ever
+  having succeeded still starts that count. A hand-over the driver then
+  does not send puts the anchor back. One that brings no round does not
+  ask again at every tick; a republish still waiting for its round a whole
+  lifetime later never got one, which is its failed judgment, and the
+  backoff holds the next. Only an upload shows how old the descriptor is,
+  so no probe's arrival moves the anchor. Not while a republish cannot help
+  (below): the overdue check then stands down and says nothing.
+- **Why not a probe at the lifetime.** The VM run of 2026-10-31 (§7) probed
+  at 3 h and the probe arrived: a directory serves a descriptor without
+  checking its age (`hs_cache.c:233`) and drops expired ones only at a
+  cache cleanup every 30 minutes (`hs_cache.c:350`, `mainloop.c:2064`), so a
+  descriptor fades out between 3 h and 3 h 30 min, and a probe at 3 h nearly
+  always passes.
+- **Tor reported a clock jump while Running.** One probe
+  (`Action::ProbeAfterJump`), only while Running with no probe scheduled, in
+  flight or being refetched. The driver says so at info and answers with a
+  CSPRNG draw (`Input::JumpProbeDrawn`); the probe then waits the usual 15
+  to 60 s and takes the same path as a round's: a miss is followed by
+  `HSFETCH`, a second probe, then a republish. The suppression rules are
+  unchanged, and the probe stays outside the dial tally and the in-flight
+  bound (`TSR-Q14`).
+
+**The directory check (Rick, 2026-10-31).** The rendezvous probe never
+fetches from the directories: this node's Tor answers it from its own copy
+of the descriptor, which a client keeps until the next time period (tor
+0.4.9.14 `hs_cache.c:618`). So the probe alone cannot see a directory lose
+the descriptor, even on a correct clock. With each probe, the check also
+asks each directory the latest round's `HS_DESC UPLOADED` events named, one
+`HSFETCH <onion> SERVER=<directory>` each (`Action::FetchFromDirectory`;
+one per command because Tor refuses the whole command, 552, at the first
+`SERVER` missing from its consensus). `HSFETCH` ignores the client cache and
+fetches from each named directory (`control_cmd.c:1464-1494`,
+`hs_client.c:504-507`); with no `SERVER` it asks one directory at random
+from the responsible set (`hs_client.c:480-493`), which is the refetch after
+a first miss. Tor's answers are its own statements: the copy a directory
+returned, as `HS_DESC_CONTENT` once it decoded (`hs_client.c:1685-1689`),
+and `FAILED REASON=NOT_FOUND` when that directory does not have it.
+
+- **The copy must be ours (Rick, 2026-11-01).** A directory counts as
+  holding the descriptor only when its copy's `revision-counter` is ours,
+  read with the check from `GETINFO hs/service/desc/id/<onion>`
+  (`control_getinfo.c:569`; `Input::DirectoriesDrawn`'s `ours`). Any other
+  counter is a stale copy and a miss for that directory: below ours, a later
+  upload never reached it; above ours, it is a copy numbered on a clock that
+  has since gone back, which the directory keeps serving and refuses to
+  replace. A copy with no readable counter is excluded. That key gives the
+  service's `desc_current` only (`hs_service.c:4222-4242`). A client asks
+  for the current time period's descriptor (`hs_client.c:232`), and from the
+  period's start to the next shared-random run, 12:00 to 00:00 UTC on the
+  public network, that is the service's `desc_next`
+  (`hs_service.c:2127-2139`), whose counter no control command gives. So
+  ours carries its blinded key, read from the signing-key certificate's
+  signed-with-key extension (`hs_service.c:1794-1796`), and only a copy of
+  that descriptor is compared; a copy of the other counts by being there.
+  Comparing every copy with `desc_current` made a healthy node miss twice
+  and republish at 17:00Z on 2026-11-01 (§7). `GETINFO hs/client/desc/id`
+  cannot answer this: the client cache holds one copy and discards a fetched
+  one with a lower counter (`hs_cache.c:837-842`), so it cannot say which
+  directory held what; `HS_DESC_CONTENT` carries each directory's copy.
+  Without our own counter (Tor gave no descriptor) the check counts nothing
+  and the probe alone decides.
+
+- **Which directories count.** The check is the fetches it has sent. A
+  line for any other directory, and an answer that arrives before the
+  send, is not evidence: the rendezvous probe and the unscoped refetch are
+  answered from this node's own cache and from a directory this check did
+  not choose. A round uploads the current period's descriptor and the next
+  period's to different directories. Each upload's directory is kept with
+  the descriptor its `UPLOAD` named (`UploadRounds::directories`). Once a
+  sent fetch's `REQUESTED` names the descriptor Tor's client asks for, a
+  directory whose upload was a different descriptor is excluded, including
+  one not yet sent. Other `FAILED` reasons, and a command Tor refuses, say
+  nothing about the descriptor and are excluded. The draw is part of the
+  check: until the driver folds the list the verdict waits, including after
+  the probe is already in hand. No list, because the check was dropped, is
+  not an empty list and decides nothing.
+- **The verdict.** Reachable needs both: the descriptor at more than half of
+  the counted directories (§10 `TSR-M12`), and the rendezvous probe
+  arriving. Anything else is a miss, into the two-miss rule above; a second
+  miss in which the probe arrived is `DescriptorNotFound`, one in which it
+  did not, `ProbeTimedOut`. A check that counts no directory (the list is
+  empty, or every upload it reached was a descriptor no client asks for)
+  is decided by the probe alone and said once at info
+  (`Action::DirectoriesUnmatched`), not a miss: it is the signature of
+  uploads under a key no client asks for, and a republish would not change
+  it. Outbound dropping while the check is open discards it, as a probe in
+  flight is dropped at its bound: no refetch, and no inbound verdict.
+- **Timing.** Each fetch draws its own 15 to 60 s delay
+  (`Input::DirectoriesDrawn`, one CSPRNG draw per directory). Its answer
+  window is `Policy::probe_within` from the moment Tor accepts that
+  `HSFETCH` (`250`, `Input::DirectoryFetchAccepted`). The send arms a
+  provisional window, so a command that is never accepted still ends. The
+  window is the supervisor's wait for the `HS_DESC` line on the control
+  connection. It is not the connector's dial deadline, not Tor's SOCKS
+  timeout, and not the dialer's outage backoff
+  ([`DIALER_OUTAGE_EVIDENCE_BRIEF.md`](DIALER_OUTAGE_EVIDENCE_BRIEF.md)).
+  A fetch at every directory straight after each upload is the signature
+  this section's jitter exists to hide.
+- **It runs through this node's own Tor, so it shares this node's clock.** A
+  descriptor this node uploaded under a key a correct-clock client would not
+  ask for is found by these fetches as well. The clock is named from the
+  consensus instead (below); what the check sees of a clock that went back
+  is the stale copy its counter comparison counts as a miss.
+
+**The clock (Rick, 2026-11-01).** Tor numbers each descriptor with the
+seconds since the start of the shared-random run it uses, from its own
+clock (`hs_service.c:3215-3270`), and a directory refuses a counter that is
+not above the copy it holds (`hs_cache.c:185`). With this computer's clock
+behind, every upload is refused and the directories keep serving the copy
+from before, until it expires; Tor itself says nothing about its clock (the
+VM run of 2026-11-01: no `CLOCK_SKEW` and 283 `UPLOAD_REJECTED`). So at each
+liveness sample, Bootstrapping or Running, the consensus's `valid-after` is
+compared with this machine's wall time (§4.2). Behind it by more than §10
+`TSR-M13` names the clock: inbound is `Unreachable` with `ClockBehind`, said
+as "This computer's clock is at least N behind the Tor network's. Others may
+not be able to reach this node. Check this computer's date and time.", N
+being `valid-after` minus the wall time, a lower bound. Outbound and `OwnTx`
+are unchanged: outbound carried traffic throughout that run. A new Tor keeps
+it, since its uploads come from the same clock. The first sample inside the
+tolerance clears it, and nothing else is done: Tor's next rebuild takes a
+counter above anything the directories hold, and the overdue rule covers a
+schedule that stalled. The facet is then unknown until a probe judges it.
+
+**Refused rounds.** A round in which more than half of the uploads were
+refused (§4.2) is the clock's signature even when the clock reads inside
+the tolerance: inbound is `Unreachable` with `UploadsRefused`, said as "The
+Tor network is not accepting this node's address right now. Others may not
+be able to reach this node." A round in which an upload succeeded, and which
+was not refused, clears it, and its probe judges the facet. A round in which
+no upload succeeded leaves refused uploads standing: it is not a round of
+uploads, and Tor retries its own.
+
+**No republish while it cannot help.** While the clock is named, or the
+latest round was refused, nothing is republished: a republish replaces the
+introduction points, and the directories go on advertising the old ones
+(the VM run's 36 republishes, each tearing down the points the served copy
+named, so every stranger's dial failed at introduction). The overdue check
+stands down, and no probe is scheduled or judged: the facet already says
+what a probe could not change, and a probe's verdict would overwrite it.
+Standing down does not move the descriptor's lifetime anchor, so a check
+that came due while a republish could not help runs when one can. A
+remedial republish already handed to the driver is not sent once standing
+down; the anchor it moved is put back, and a hold it cleared stays due
+when a republish can help. A probe or directory fetch already handed over
+is dropped, and the open round can still schedule its probe once standing
+down has cleared.
+A republish has two triggers only: the overdue upload and the two-miss
+rule.
+
+**Republish backoff.** A republish waits for its own round to end and its
+probe, with the directory check, to judge it; a second ask meanwhile is
+owed, not sent. A failed judgment (the two-miss rule again, a round with no
+upload, a refused round, or no round within a lifetime) holds the next
+republish for the current wait, which then doubles, from §10 `TSR-M14`
+(300 s) up to the descriptor's lifetime (3 h). A confirmed Reachable resets
+it. While a republish is waiting for its own round, only that round's probe
+confirms it; an older probe, or the probe after a clock jump, can still find
+the onion reachable and does not clear the republish's wait. A republish
+owed while held runs when the hold ends. The gap stood with
+a correct clock too: two misses republished at once, every time.
+
+**Stated costs.** A failure Tor does not notice, and that causes no re-upload,
+is caught at the next scheduled upload, at most two hours later; when no
+upload comes, the overdue republish forces one at the descriptor's lifetime.
+The cadence and the lifetime are Tor implementation constants, not
+specification: the re-pin procedure (`RELEASE_CHECKLIST.md`, "Bundled Tor pin
+current") re-checks both on every re-pin. The seven-day soak is the evidence
+on whether the two-hour window matters.
+
+Its timeout is not the dialer's 9.1 s Tor dial deadline:
+26 of 100 cold dials on the measurement host exceeded it in PR-3's run A.
+Residual, stated and accepted (Rick, 2026-10-23): our guard carries both
+ends of the probe's rendezvous, since one Tor process draws one guard set
+([`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) SPIKE-F-12);
+a guard that watches circuit shapes can correlate the probe's client
+rendezvous with the service's, and learns this client hosts an onion, which
+service-side circuit shapes already tell it. The only removal is a second
+Tor, which is worse. The isolation pair does not change it.
+
+That a Tor client can reach an onion hosted by the same Tor is the
+expectation; `TSR-M3` verifies it before anything depends on it.
+
+### 4.6 The dialer
+
+- `choose` reads the connector's outbound facet, the tip and the network id
+  **before** it draws (`TSR-F1`). `dial`, the named draw, reads the same three
+  before it draws. The owner loop draws through `choose`.
+- While the facet is not `Usable`, the owner loop waits on the link, not on its
+  wake timer.
+- A Tor dial's outcome goes to the lists by §4.2's reply table, and to the
+  supervisor as display only: whether a stream opened, and the sessions
+  held (`TSR-Q14`). This node's own defect is never evidence.
+- After a respawn the white list is intact (peers' onions did not change), so
+  recovery is white re-contact, not discovery.
+
+### 4.7 Launch and teardown
+
+Launch (`TSR-Q7`, ruled 2026-10-15): Tor starts with `__OwningControllerFD`
+naming its end of a connected socket pair. Tor treats that socket as an owning
+control connection that is already authenticated, so the launch has no
+`ControlPort auto`, no port file, no cookie authentication, no `TAKEOWNERSHIP`
+and no `RESETCONF`, and no window between spawn and ownership. Parent death
+closes the socket, which covers what `__OwningControllerProcess` was for.
+Measured on Windows (2026-10-15): the inherited socket answered `GETINFO
+version` (`250-version=0.4.9.13`) with no `AUTHENTICATE` sent; Tor opened no
+control port of its own (`net/listeners/control` empty); closing our end
+exited Tor in about 20 ms (C4); and the parent's `abort()` exited Tor cleanly
+through the same path (C5).
+
+- **Unix:** a `socketpair`. Tor's end is marked inheritable in the child only,
+  in `pre_exec` (clearing `FD_CLOEXEC`), so no concurrent spawn can inherit it.
+  The parent's copy keeps close-on-exec, and is closed before the spawn returns.
+- **Windows:** a connected loopback pair. The parent's copy of tor's end is
+  inheritable only inside the spawn lock, and that copy is closed before the
+  lock is released, including when the spawn fails. Closing the handle is what
+  ends the window: a failed inherit-bit clear still drops the socket while the
+  lock is held, so the bit cannot outlive the guard.
+  Every other Rust spawn in a process that itself launches a managed tor takes
+  the same lock. A process that does not launch tor does not. The socket is not
+  in its address space.
+  `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` would name the handles one `CreateProcess`
+  may inherit. It would not stop a different `CreateProcess` in this process,
+  still passing `bInheritHandles` and still omitting a list, from inheriting a
+  handle that is inheritable at that moment. The lock is that closure.
+  Stabilising the list in `std` does not retire it. The C++ `tools::spawn`
+  residual (DC-F12) stays outside the lock until that lane is gone.
+
+The launch also passes `--torrc-file`, `--defaults-torrc`, `GeoIPFile` and
+`GeoIPv6File`, each naming an empty file, and on Windows sets `SystemRoot`
+from the operating system (`TSR-F17`).
+
+Measured on Linux (2026-10-15, x86_64, the pinned 15.0.24 bundle staged to its
+four pinned files, cleared environment with the loader path only): the
+inherited socket answered `GETINFO version` (`250-version=0.4.9.13`) with no
+`AUTHENTICATE`; `net/listeners/control` was empty; `config-file` and
+`config-defaults-file` named the empty file; over three runs, closing our end
+exited Tor in 2–19 ms (C4) and a parent's `abort()` left Tor gone within
+6–28 ms of the parent's reap (C5). The harness is
+`scripts/tor/validate_owning_fd_launch.py` in the Foundation's development
+repository: it verifies the staged files against `config/tor_pins.json`
+first, and runs on Linux and macOS. macOS is measured with it once a host is
+set up.
+`AvoidDiskWrites 1` and these join the closed option list, whose test fails
+first, which is its purpose. Discovery and the pin gate run at every spawn
+(`TSR-F6`).
+
+The daemon's launch also passes `SocksTimeout`, 15 s inside the Tor dial
+deadline (`TOR_DIAL_WITHIN_NANOS`, 120 s, so 105 s; typed as
+`SocksTimeout::Below`, set from that constant, never a second number). Tor's
+default equals the deadline, so a dial on a blocked link ended as Tor's
+`0x06` or as the deadline's own timeout by race (§7, case A on 2026-10-25),
+and the two classes count differently (§4.2). Inside it, Tor's reply always
+comes first. Tor applies it locally; nothing on the network changes
+(`TSR-Q9`). The wallet's tor keeps Tor's default. It joins the closed list
+with its test (`the_managed_launch_surface_is_the_typed_options`).
+
+Teardown, as ruled: close the owning control connection (Tor exits on its
+close and, in the specification's words, "does not wait a while for circuits
+to close"), wait within `SHUTDOWN_GRACE`, kill (`TerminateProcess` on
+Windows), reap. The routine is one; the directory's disposition follows from
+why it ran. At a respawn the directory is kept (`TSR-Q1`), and after the run
+of consecutive launch failures §1 names the next launch takes a fresh one. At
+boot end it is renamed to a tombstone in the same parent (one metadata
+operation, after the reap, so on Windows no Tor handle holds a file inside
+it), handed to a blocking task that deletes it under the bound `TSR-M10`
+sets, and swept at the next start. If the rename fails (a scanner holding a file
+on Windows), the directory stays under its live name and the next start's
+sweep removes it, with the failure logged. What a respawned Tor reads is the kept directory's `state`; when Tor first
+writes it, and what a kill loses, is `TSR-M6`.
+
+The public directory cache (`TSR-Q8`) is the one thing that outlives a boot.
+The daemon owns a cache directory (mode 0700) beside the per-boot ones. At
+launch into a **fresh** directory, the launch copies in
+`cached-microdesc-consensus`, `cached-microdescs`, `cached-microdescs.new` and
+`cached-certs`, and nothing else, refusing any that is not a regular file,
+that is reached through a symlink, or that is over its size limit; a refused or
+missing file means that file starts cold. A respawn into the kept directory
+copies nothing, because the directory already holds what this boot's Tor
+fetched. At a clean stop, after the reap and before the tombstone rename, the
+same four names are copied back, each written to a temporary name and renamed
+over the old one, so a stop interrupted midway leaves either the old file or
+the new one. A crash copies nothing back, and the previous cache stays. Tor's
+`DataDirectory` is never the cache directory. The directory is
+`tor-directory-cache`, which is not a name the per-boot sweep removes. The
+limits are Tor 0.4.9.14's own, not a multiple of a measured size:
+`MAX_DIR_DL_SIZE` (`(1<<24)-1`, in `src/feature/dirclient/dirclient.c`) is the
+largest directory object Tor will download, and the consensus and certificate
+files are twice that. The microdescriptor store and journal are eight times
+that, because Tor appends every microdescriptor and rebuilds the store only
+every 30 minutes (`CLEAN_CACHES_INTERVAL`), once the journal is at least
+16 KiB and larger than half the store (`should_rebuild_md_cache`). Copy and
+save read the opened file: a symlink, anything that is not a regular file, or
+a file over its limit counts as missing and is not truncated. The copy into
+the fresh directory is not synced: Tor reads the files at startup, and a
+failed launch wipes the directory. The sync is the save's, before its rename. On Windows the
+cache directory is created with an owner-only access list.
+
+### 4.8 Identity across a respawn
+
+The onion does not change across a respawn (`TSR-Q1`): the daemon republishes
+it from the seed it holds for the boot. Nothing is republished to the peer
+lists, and the brief's item 8 (identity churn on each respawn) is deleted.
+
+### 4.9 Operator posture
+
+No child and no control port. The route comes from configuration. Outbound
+evidence comes from dial outcomes only. While outbound is down, the recovery
+probe is a white re-contact at the backoff cadence (a failed white re-contact
+leaves white unchanged, so the probe costs the lists nothing); with no white, a
+seed. Inbound with `tor-onion` uses the same probe nonce through the operator's
+Tor to the operator's onion. With `tor = off` there is no supervisor.
+
+### 4.10 Log stream
+
+`SETEVENTS` adds `NOTICE WARN ERR` beside the status and descriptor events;
+they enter the daemon's log under `tor` through the bounded sink (`TSR-F2`).
+The previous incarnation's file log is kept until the next start sweep (ruled):
+it moves out of the `DataDirectory` to `ephemeral-tor-<id>.log` in the parent,
+under the sweep's prefix (`TSR-F14`), so a crash loop keeps the last dead
+incarnation's evidence and no Tor log survives into another boot's run. The
+pinned Tor writes no onion address at `notice` or `info` (measured for the
+wallet, `WALLET_SIDE_STORE.md:634`); the daemon's instance is re-measured once
+(`TSR-M9`).
+
+### 4.11 Runtime and timers
+
+The daemon has one scheduler (Rick, 2026-10-13). Backoff, probe and evidence
+bounds are timing-engine deadlines on one owner. The control actor
+runs on a runtime built where every runtime is built; the daemon's Tor crate
+builds none of its own. The policy core is written
+sans-IO (events in, actions and the next deadline out), so it is testable on
+`ManualClock` and the wallet could adopt it later. The wallet's supervisor is
+not changed in this round. Where both need the same arithmetic (backoff, the
+failure classes), that code lives in `shekyl-tor-control-client`, which both
+already name; PWD-E9 forbids sharing an instance, not a library.
+
+One 30 s deadline (provisional, `Policy::alive_every`) does two jobs, and
+they are different actions. While Running it is `Action::Sample`: one
+`GETINFO` on the owning control connection. With the driver's 30 s reply
+bound, a wedged Tor is a process fault within about a minute. A command
+already in flight, such as `SETCONF AvoidDiskWrites=1`, holds the queue for
+its own bound before that sample starts. While bootstrapping it is
+`Action::SayProgress`, logged as news. It is not `Action::Announce`. A named
+cause keeps the cadence of its own events, and an origin-hold stays a
+posture warning. The line names the percent, how long that percent has held,
+and the bytes Tor read over a window that slides with every sample: it opens
+on the newest sample at least `alive_every` old (the oldest, until there is
+one) and runs to the moment the line is read, so its span is longer when a
+control ask held the driver. The line begins at the first progress deadline
+and from then on is current at every directory sample (`sample_every`,
+5 s), so a client polling Status reads it to within one sample, while the
+log says it once per deadline. `traffic/read` rides the directory sample.
+A count that moves backwards starts the window again.
+
+Beside the line, Status carries the bootstrap's pace (Rick, 2026-10-24), a
+typed word for a client to show: `Advancing` when the percent moved within
+the window, `SlowButNormal` when it held and bytes arrived (a slow directory
+mirror, normal), `Stalled` when a full window of samples brought nothing.
+No word when the evidence cannot tell: no count, or less than a full window
+of nothing. The pace is a description, never a cause. It stands beside the
+cause, never instead of it, and the renderer composes both: a bootstrap
+that stalls while Tor reports outbound blocked says the cause, its fix, and
+the stall, so a client reading only the pace cannot hide the fix. The actor's bootstrap poll, every
+500 ms, is `Input::BootstrapNoted`: the percent moves, and the sample
+deadline does not. A notice that reset the sample would say "Nothing
+arrived" through a download the sample never counted. Every ask goes over
+the owning control connection only. The Tor connector reads the published
+route and is not on this path (`TSR-Q9`).
+
+A stop that arrives while a control ask waits drops the ask and folds
+shutdown. The asks are the directory sample, the `SETCONF`, an onion
+republish, and the `SETEVENTS` subscription once the child is up. The fork
+itself is not dropped. `SHUTDOWN_GRACE` (5 s, then the kill) still bounds
+the teardown. The 2026-10-23 run stopped in 5.2 s with Tor frozen.
+
+### 4.12 C++
+
+Nothing is added to C++. The probe reuses the existing self-detection call. The
+route moves from the FFI-installed `tor_proxy` to the published link inside
+Rust. The C++ managed-Tor path is gone: the daemon-configuration cutover
+deleted `add_ephemeral_tor_zone` and `check_ephemeral_tor_liveness`, and the
+four `shekyl_daemon_tor_*` exports, their header declarations and the blocking
+facade they wrapped are deleted (Rick, 2026-10-17; §9). The Rust `main()` starts
+and stops the managed Tor (#1088).
+
+## 5. Rule-82 states
+
+Each row is one typed cause the Status read carries (`TSR-Q12`). The cause's
+detail is typed data: the skew in seconds, the file the pin rejected,
+whether the data directory is not writable or out of space, the open-file
+limit and the count, and, when a restart repeats, the last exit. The
+"Rendered from the cause" column is the one renderer's words for that cause
+and its detail (`TSR-Q13`). `ManagedTorFix` is a separate field, the
+connector acts from the posture table, and only a row where the managed Tor
+is down carries any. Clock, directory, file-limit and upgrade advice are
+that detail, not variants of `ManagedTorFix`.
+
+| State | Source | Shown as | Rendered from the cause | `ManagedTorFix` | Remedy |
+| --- | --- | --- | --- | --- | --- |
+| Outbound blocked | `BOOTSTRAP` warn with a `REASON` other than `CLOCK_SKEW`, `NETWORK_LIVENESS DOWN`, `CIRCUIT_NOT_ESTABLISHED`, or `Input::NetworkView` reporting `network-liveness=down` while Running (§4.2) | Degraded (outbound) | this machine cannot reach the Tor network; check this computer's date and time, then the firewall or network. The clock comes first: a wrong clock stops every handshake, Tor may name nothing more specific than the handshake (`DONE`, §7, the clock-ahead VM run of 2026-10-30), the date takes ten seconds to check, and NTP is unauthenticated, so a path attacker can move it. Bridges are `Operator`, not a managed-Tor option | none | wait |
+| No directory reachable | `DIR_ALL_UNREACHABLE` | Degraded (outbound) | as above | none | wait |
+| Clock skew | `CLOCK_SKEW SKEW=±s`. A `BOOTSTRAP` problem whose `REASON` is `CLOCK_SKEW` comes with it and names nothing else: mapped to the blocked link, it overwrote this cause at every problem (§7, the clock-behind VM run of 2026-10-30) | Degraded (outbound) | the clock is off by the reported seconds; check time sync | none | wait |
+| Certificates out of date | §4.2's certificate lines, three or more, and `DONE` handshake problems naming three or more distinct relays, within `Policy::clock_evidence_within` (60 s), during a bootstrap. A measured `CLOCK_SKEW` stays named in its place | Degraded (outbound) | Tor reports that this computer's date or time looks wrong, so it cannot connect; check this computer's date and time | none | wait |
+| Waiting on the Tor directory | the last `BOOTSTRAP PROGRESS` phase and when it was reached | Bootstrapping (the phase, and since when); the pace beside it (§4.11) | none; Tor is fetching the network's directory, and a slow mirror can hold it for minutes. With the pace: advancing, slow but normal, or stalled, with the bytes over the window | none | wait |
+| Resumed from suspend | `CLOCK_JUMPED`; and, on every platform, a wait the driver was in that returned more than `control::RESUMED_AFTER` (10 s) past the deadline it was armed with: the loop's wait, whatever woke it, or `ask_timed`. At a wake the dialer's timers fire too, so a dial result can be ready with the late timer and win the loop's order; the wait is classified, not the branch (Rick, 2026-10-31). A control event already queued when the timer fires is folded before that deadline; the timer still wins the wait, so an event that arrives later cannot hold the deadline off. Time inside a bounded ask is awake: a deadline left behind while that ask ran is overdue work, not a sleep. The driver folds `Input::Resumed` before what the wait returned (Rick, 2026-10-30) | Bootstrapping, briefly | none | none | re-evaluate now: one sample at once, and on `CLOCK_JUMPED` while Running one probe (§4.5, "Overdue"). Windows count awake time: on that late timer the bootstrap's stall window and the stranded check's byte mark, the probe's bound (a scheduled probe waits at least `probe_after_min` from the wake), the quiet stretch, an open round's waits and the descriptor's lifetime start again from the wake, and the sample and liveness cadences re-arm from it, so nothing that came due in the sleep fires. The reply bound uses the same lateness in `control::ask_timed`: a bound found expired that late starts again, the same reply is awaited, and the lateness is reported so the driver folds `Input::Resumed` before it. A respawn backoff and a repeated announcement are left as they are. `Instant` counts through a sleep on Windows and stops on Linux and macOS (`TSR-M8`), so a waited timer is late on Windows and not on the other two; the windows follow the timer on all three. A sleep that ends within 10 s of a deadline is not seen; it adds at most that to a window |
+| Stranded after a clock jump | `CLOCK_JUMPED` during the bootstrap, then neither the percent nor a known `traffic/read` moving for `Policy::jump_stall_after` (5 min), judged at a sample (a count Tor did not give is unknown, not a stall) | Restarting | Tor stopped making progress after this computer's clock changed, and is being started again | none | respawn into the kept directory (§4.4) |
+| Onion unreachable | two consecutive probes past their bound, the second after `HSFETCH`, or a directory check that misses twice (§4.5) | Degraded (inbound) | peers cannot reach this node through Tor right now, and its address is being published again; no fix, after the outbound cause and its fix when one stands | none | republish (`DEL_ONION`, then `ADD_ONION`) when the backoff allows; a refused republish is a process fault |
+| Clock behind the network | `consensus/valid-after` ahead of the wall time by more than `TSR-M13` (360 s), at a liveness sample, Bootstrapping or Running (§4.2) | Degraded (inbound) | this computer's clock is at least N behind the Tor network's; others may not be able to reach this node; check this computer's date and time (N from `Status::clock_behind`) | none | none: no republish and no probe until it clears |
+| Uploads refused | a round in which more than half of the uploads ended `UPLOAD_REJECTED` (§4.2) | Degraded (inbound) | the Tor network is not accepting this node's address right now; others may not be able to reach this node | none | none: no republish and no probe until a round in which an upload succeeded is not refused |
+| Tor exited or wedged | exit, EOF, reply bound | Restarting | none unless repeated; then the count and the last exit, and where the previous log is | none | respawn |
+| Tor install defect | the pin gate at spawn | Restarting (held) | the file that failed the pin. The binary is not executed | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
+| No Tor installed | discovery finding nothing | Restarting (held) | none was found. `tor-file` may name a bundle that passes the pin | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
+| Data directory unusable | the pre-spawn check | Restarting (held) | the path is not writable, or out of space: the path, the free space and what Tor needs (its write headroom, 32 MiB from §10's microdescriptor set, plus the bytes the directory-cache copy would write when the spawn takes a fresh directory) | none | retry at the cap |
+| Open-file limit reached | `TOO_MANY_CONNECTIONS` | Degraded | the limit and the count; raise it, in the platform's terms | none | wait; retry at the cap |
+| Tor version flagged | `DANGEROUS_VERSION` | announcement | upgrade Shekyl when a release re-pins Tor (TB-10), never Tor itself | none | none |
+
+A fresh spawn sweeps leftover per-boot directories before that space check.
+A directory kept for an in-boot respawn wears the leftover name, so the sweep
+runs only after that directory has been dropped. The cache figure is the bytes
+the copy would write: the four public names, each a regular file within its
+limit. A staging partial is already on the disk the probe reads. A file over
+its limit is refused whole, so it adds nothing.
+
+Rule 81 applies to every message: the words name what the operator sees and
+can do, not Tor's vocabulary. While the managed Tor is not running, the
+renderer composes this row's words with the `ManagedTorFix` values the
+posture table offers (`TSR-Q10`). It says "clearnet-only" only for the
+operator's `ClearnetOnly` act. Bridges are `ManagedTorFix::Operator`.
+
+## 6. Rejected alternatives
+
+Every question of this round is ruled (§1).
+
+### Ruled out (Rick, 2026-10-14 and 2026-10-15)
+
+- **A new identity per respawn** (fresh directory and fresh onion): a guard
+  re-roll on demand for whoever can cause a respawn, a livelock on a slow
+  link (`TSR-F7`), and churn in every peer's lists.
+- **Guards persisted across boots:** no reduction in expected exposure; a
+  guard file on disk, and one hostile guard linking every boot's onion.
+- **Respawn on a degradation bound:** a respawn fixes only process faults, and
+  hands the cause of any other degradation a re-roll.
+- **Tor state, since and count in Health:** links an RPC endpoint to the
+  onion's lifetime.
+- **A probe on a deadline of our own** (evidence age): bookkeeping that Tor's
+  upload rounds make unnecessary.
+- **`__OwningControllerProcess`, `TAKEOWNERSHIP` and `RESETCONF`:** a
+  control port, a cookie and a window between spawn and ownership, all of
+  which the inherited owning socket removes.
+
+## 7. Acceptance
+
+Linux, Windows, macOS; the Pi 4 is the Linux host for the soak. Each case
+asserts the announced transitions, the recovery, the RPC fields, **and that the
+gray list is unchanged by the outage**. TB-11's launch test is
+`tor-pin-verify`'s Windows and macOS entries; on both platforms these cases
+are the supervisor's acceptance tests (`TSR-F15`). The respawn case runs in
+the Windows CI job beside the boot-and-stop smoke test (#1072), and in
+`tor-pin-verify`'s macOS entries.
+
+**Linux run, 2026-10-23** (the development workstation, `shekyld` from `dev`
+`34397ac08` with the pinned bundle beside it, testnet, a managed Tor):
+
+- **Cold start:** Tor bootstrapped in 314 s, past the old 300 s deadline, and
+  the route and onion were published within a second of 100 %.
+- **Kill the Tor child:** route withdrawn at once, Tor respawned with its
+  directory kept, the route back and the same onion republished 5 s after
+  the kill.
+- **Wedged Tor:** undetected for five minutes. In steady Running nothing asked
+  Tor anything, so the reply bound never armed. The liveness sample (§4.11)
+  is the fix; with it, the route was withdrawn 70 s after `SIGSTOP` (the pending
+  `SETCONF` held the queue for its own bound), and Tor respawned with the
+  same onion 3 s later.
+- **Daemon stop:** one stop path, Tor torn down 0.33 s after `SIGTERM`, no
+  orphan, the per-boot directory swept, the directory cache saved.
+- **Seeded start:** the next boot had Tor up 4.1 s after start, with a new
+  per-boot onion.
+- **Seen, not a case:** during the five-minute cold bootstrap the daemon's
+  log said only that the dialer waits; nothing named Tor's progress. The
+  progress line (§4.11) fixes it.
+- **Stop while Tor is frozen,** with the fix: `SIGTERM` six seconds into a
+  liveness sample's wait stopped the daemon 5.2 s later (the teardown's
+  grace), with no fault recovery first.
+
+**Linux run, 2026-10-24** (the same workstation, #1170's build; `pasta` and
+`unshare` namespaces, no root):
+
+- **Outbound blocked while Running (10 min):** no respawn; dials resumed 5 s
+  after the unblock; **nothing announced** while blocked. Tor sent no
+  `NETWORK_LIVENESS DOWN` (connects failed at once and Tor's liveness reads
+  circuit-build timeouts), and §4.2's dial-outcome input was not wired.
+  Under `TSR-Q14` the dials stay display: Tor's statements, now including
+  `CIRCUIT_NOT_ESTABLISHED` and the sampled `network-liveness` and
+  `status/circuit-established`, name the cause, and when Tor says nothing
+  the posture line states only that no Tor connection is open or opening.
+- **Tor down at start, restored address file:** the cause announced, no
+  respawn, all six onion entries in gray through the outage.
+- **Disk filled while Running, then a kill:** the respawn into the kept
+  directory came up in 3 s; a respawn needs no new space.
+- **Boot on a full disk:** held, then the retry launched Tor anyway (no space
+  check), which stuck at 40 % until killed. The pre-spawn space check above
+  is the fix.
+- **Crash loop:** backoff 1, 2, 4, 8, 16, 32, 60, 60 s; never gave up;
+  recovered. A death right after a recovery waited a minute to be said; the
+  backoff never reset. Both fixed as §4.4 now says.
+- **Binary replaced on disk:** the running Tor unaffected; after its death
+  nothing unverified spawned and the refusal named its fixes; restoring the
+  file recovered at the next retry.
+- **Slow link:** needs `tc`; run on the floor device (below).
+
+**Re-run, 2026-10-24** (the fixes' build, 4f90d40b7):
+
+- **Boot on a full disk:** held at once with the path, 16.4 kB free and
+  69.7 MB needed (headroom plus the directory cache); no Tor launched. After
+  the space was freed, the retry at the cap brought Tor up in 3 s.
+- **Crash loop:** four quick deaths took the backoff to 8 s. A repeat of the
+  same cause waited for the cap; each change was said within 15 ms. A death
+  after 70 s of usable outbound respawned after 1.2 s (the backoff started
+  again). A death 5 s after a recovery respawned after 2.2 s (no reset
+  inside a cap).
+
+**Refuse block under `TSR-Q14`, 2026-10-25** (#1188's build; the default
+route deleted for 10 minutes, so every connect fails at once):
+
+- **What Tor said:** nothing. No `NETWORK_LIVENESS`, no
+  `CIRCUIT_NOT_ESTABLISHED`, no bootstrap problem, and its sampled view
+  stayed `network-liveness=up`, `status/circuit-established=1` throughout.
+- **What the operator saw:** the neutral line only, 4 min 28 s into the
+  block ("No connection through Tor is open, and none has opened in 5 min
+  23 s"). No cause, no respawn.
+- **Dials:** every Tor dial in the block ended at Tor's `0x06` at 105–106 s,
+  never at the dial deadline; the first got `0xF0`, the descriptor fetch
+  failing locally. A dial opened 6 s after the unblock.
+- **A silent drop** cannot be made with `pasta`; it ran on the floor device
+  with `tc` (below), and Tor was silent there too.
+
+**Clock skew and suspend, a Linux VM, 2026-10-30** (a throwaway KVM guest,
+Debian 13; `shekyld` at `176b9d751` with the pinned 15.0.25; testnet,
+clearnet off; shekyl-dev `data/tsr-acceptance/2026-10-30-linux-vm-clock/`):
+
+- **A day ahead:** Tor bootstrapped cold in about 19 s and stated nothing
+  about its clock; no cause was named. The node synced testnet through
+  Tor, and the first probe in a real daemon arrived through the C++
+  inbound handshake in 8.2 s.
+- **Three days ahead:** Tor stated only handshake failures (`DONE`); its
+  log said "Received a bad CERTS cell: At least one certificate expired."
+  with no relay named. The blocked link's words told the operator to
+  check the firewall; they now put the clock first, and three such lines
+  with three relays' closed handshakes name the clock (§5, "Certificates
+  out of date"). After the clock was
+  set back, Tor reported the jump, moved from 14 % to 15 %, and sat with
+  no connection for 25 minutes; a respawn into the kept directory
+  bootstrapped in 7 s. That case is now a Process fault (§4.4,
+  "Stranded after a clock jump").
+- **Three days behind:** Tor named the skew outright (`CLOCK_SKEW
+  SKEW=-259200` and `REASON=CLOCK_SKEW` problems). The supervisor named
+  the clock, and the problem's `warn` overwrote it with the blocked link
+  at every problem; a `CLOCK_SKEW` reason no longer does.
+- **Suspend, five minutes in S3:** Tor reported the clock jumped 305 s
+  forward and rebuilt its circuits in 7 s; no respawn and no late reply.
+  The sample after the jump read no circuit and named a block for those
+  7 s, in a sentence that also said Tor carried the traffic. "No circuit"
+  no longer names a block, and the renderer no longer says the link
+  carries traffic beside a cause that says it cannot.
+- **Set back a day while Running:** Tor reported the 86 399 s backward
+  jump, rebuilt its circuits in 1.6 s, and carried the traffic for the
+  next 4 h 40 min with no respawn and no cause. A backward jump while
+  Running needs no stranded trigger of its own. Tor's next descriptor
+  upload came 4 h 39 min after the jump, against its 60 to 120 min
+  cadence: it was scheduled on the clock that ran ahead. The probe
+  follows rounds, so the inbound facet rested on the evidence from before
+  the jump until then; the next probe arrived.
+- **Set back a day while Running, with the probe at the lifetime,
+  2026-10-31** (#1232 at `d1501ac1a`; shekyl-dev
+  `data/tsr-acceptance/2026-10-31-linux-vm-overdue/`): the jump's probe ran
+  18 s after Tor reported the jump and arrived. The lifetime check fired 3 h
+  after the last upload, and its probe arrived too: a fresh client on a
+  correct clock still connected at 3 h 15 min and got `0xF0` (not found)
+  from 3 h 27 min to the end of the watch, the directories' 30-minute
+  cleanup (§4.5, "Overdue"). That is why the check publishes the onion
+  again instead of probing. From 3 h 27 min the onion stayed unreachable to
+  that client after two uploads made on the clock a day behind, while every
+  probe this node ran arrived: the cause is the clock investigation's (§4.5,
+  "The directory check").
+- **Set back a day while Running, then set right, under the clock ruling,
+  2026-11-01** (#1249 at `dcad16f7c`; shekyl-dev
+  `data/tsr-acceptance/2026-11-01-linux-vm-clock-ruling/`).
+  - The node was Reachable on its first probe at 17:29:33. The directory
+    check counted copies of `desc_next` by presence (§4.5).
+  - The clock was set back at 17:31:12. In the same second the node said
+    "This computer's clock is at least 23 h 28 min behind the Tor
+    network's. Others may not be able to reach this node. Check this
+    computer's date and time.", with inbound `Unreachable(ClockBehind)`.
+  - For the next 4 h there was no republish, no probe and no overdue. A
+    stranger on a correct clock connected at every try until 21:00. It got
+    `0xF0` from 21:10, when the copy expired at the directories' cleanup,
+    not `0xF2`: no introduction point was torn down.
+  - The clock was set right at 21:32:50. The name cleared at once, the
+    next round's upload was accepted at 21:33:01, Reachable followed at
+    21:33:59, and the stranger connected again from 21:40.
+  - Earlier the same day, on a correct clock at 17:00Z, the check had
+    compared every copy with `desc_current`. It missed twice and the node
+    republished, with the next republish held 300 s by the backoff. That
+    is the finding behind §4.5's "The copy must be ours".
+  - A round of eight `UPLOAD_REJECTED` at 19:47 stayed open five minutes:
+    the coalescer read an upload's `FAILED`, which carries the descriptor
+    id, as a fetch's (§4.5, the two-miss rule's paragraph). This run's
+    facet stood on the clock throughout.
+- **Seen in the stop path, not this round's:** the C++ remnant's
+  teardown threw `std::out_of_range` from `on_connection_close` on most
+  stops, caught. Its FOLLOWUPS row closed with the remnant
+  (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §3; the stop now ends with the Rust
+  node's close, timed in the log).
+- **The stop after a clock set back (2026-11-01, shekyl-dev
+  `data/tsr-acceptance/2026-11-01-linux-vm-stops/`).** Every stop that
+  never exited on the VM followed a backward change of the wall clock
+  while the daemon ran. The stop was polled through
+  `epee::misc_utils::sleep_no_w`, a 100 ms sleep to a deadline on the wall
+  clock, and `Daemon::run` joined that poller: with the clock a day back,
+  the poll slept a day. The hung threads waited in `futex` with
+  `FUTEX_CLOCK_REALTIME`. Now the stop signals the one daemon `run` has
+  registered, and that registration is dropped on every exit before the
+  daemon is destroyed. No thread under `src/` or `contrib/` sleeps until a
+  wall-clock deadline: `scripts/ci/check_wall_clock_waits.py` fails on
+  `sleep_no_w`, `get_system_time`, `deadline_timer`, and `timed_wait`.
+  Elapsed-time comparisons still read `universal_time` (FOLLOWUPS); a clock
+  set back stalls those comparisons and does not block a thread. On the VM,
+  before: 3 untouched stops exited in 3.1 to 12.0 s and 3 of 3 after the
+  clock was set back a day hung past 120 s. After: 3 untouched stops took
+  1.0 to 2.0 s and 5 of 5 set-back stops 1.0 to 4.0 s, inside the unit's
+  90 s stop timeout.
+
+**Slow link and silent drop, the floor device, 2026-10-31** (Pi 4, Ubuntu
+26.04.1 aarch64; `shekyld` built natively at `ffb7259051`, the build the
+seven-day soak runs, whose supervisor, Tor crates and dialer are unchanged
+in the merged #1222; the pinned 16.0a14 aarch64 bundle; testnet, clearnet
+off; faults on a network namespace's link only; shekyl-dev
+`data/tsr-acceptance/2026-10-31-pi-floor/`):
+
+- **Baseline:** a cold bootstrap took 9 s and about 2.0 MB.
+- **Slow link, 40 kbit both ways, cold start:** bootstrap took 548 s, past
+  the old 300 s, with no respawn and no Tor warning. Tor's percentage held
+  for 3 min 1 s on the consensus and 3 min 35 s on relay descriptors; every
+  30 s the operator saw the percentage, the bytes that arrived, and "a slow
+  directory mirror can hold this for minutes". A slow bootstrap is not a
+  fault in any class (`TSR-F7`), so no slower rate needs its own run.
+- **Silent drop, 10 minutes while Running and synced:** Tor stated nothing
+  about its network (no `NETWORK_LIVENESS`, no `CIRCUIT_NOT_ESTABLISHED`,
+  no warning); its only lines were "Rend stream is 105 seconds late" as
+  each dial reached `SocksTimeout`. Every session closed 2 min 10 s in;
+  the neutral line came at 5 min 41 s; no respawn. Twelve dials in the
+  block, all ending at Tor's `0x06` at 105 s. Traffic was carried again
+  2 min 44 s after the unblock: every candidate was waiting out its first
+  cooldown. With the refuse block this is the data for a Tor Project
+  report.
+- **The lists through the drop:** no address was lost, but all six white
+  entries were demoted to gray during the block and returned 10 minutes
+  after it. The quiet guard never engaged (it needs 13 unopened attempts
+  on Tor; the block made 12), so each failed white test demoted. That is
+  the dialer lane's, in its outage-evidence round (Rick, 2026-10-31); this
+  supervisor's behaviour is unchanged.
+- **Stops:** both exited 1.1 s after `SIGTERM`, one after 67 minutes
+  including the drop.
+
+| Case | Expected | Apparatus |
+| --- | --- | --- |
+| kill the Tor child | respawn; the same onion republished; the dialer resumes; no draws while down | a kill by PID (`kill -9`, `taskkill /F`) |
+| block outbound, then unblock | Degraded (outbound, blocked); **no respawn**; Usable on unblock | Linux: an unprivileged network namespace; Windows: a firewall rule (CI runners are administrators); macOS: a `pf` anchor under `sudo` |
+| skew the clock | the clock message with the offset; no respawn | a VM or container with its own clock: Linux time namespaces do not offset the real-time clock, and TB-7's cleared environment refuses `LD_PRELOAD`-based fakes |
+| fill the data directory's disk | the named state; no spawn while full; recovery when space returns | Linux: a small `tmpfs` in an unprivileged mount namespace; macOS: a small `hdiutil` image; Windows: a small VHD |
+| descriptor upload fails | no verdict from the uploads: Tor retries them, and the next probe judges the facet; respawn only if a control command fails | the private Tor network with its HSDirs stopped, best effort (`TSR-Q6`); not an acceptance gate if it cannot be built |
+| this computer's clock set back a day while Running | named within one liveness sample (Degraded, inbound, the clock's line); no republish; outsiders reach the onion until the copy from before expires. Set right: it clears, the next upload is accepted, outsiders reach the onion again | the clock VM with a correct-clock outside watcher (Rick, 2026-11-01) |
+| introduction flood with PoW | inbound may degrade; **no respawn**; guards unchanged | the private Tor network, best effort (`TSR-Q6`); not an acceptance gate if it cannot be built |
+| crash-looping binary | the backoff cap; the loud announcement; never gives up | a test binary that exits at once, through the test-only unchecked witness |
+| binary replaced on disk, then the child killed | `InstallDefect`; nothing unverified spawns | replace a pinned file between spawns |
+| wedged Tor (stopped process) | the reply bound; respawn | `SIGSTOP`; a suspended process on Windows |
+| slow link (rate-limited) | bootstrap completes past the old 300 s; no kill while progress advances | a rate limit on the namespace's link |
+| suspend and resume | `CLOCK_JUMPED` handled; no respawn unless a process fault follows | a laptop or VM suspend |
+| daemon stop under each trigger | the one stop path; the dialer stopped before Tor; teardown within its bound; the tombstone swept at the next start | each platform's stop signals and console events, the SCM stop on Windows, and `SIGKILL` of the daemon (the owner window) |
+| Tor down at start with a restored address file | gray intact when Tor comes up | start with outbound blocked |
+
+Then the seven-day soak per platform, the posture line and the RPC fields as
+the record. PR-3's hundred-stop rig is not an acceptance basis.
+
+## 8. Threat-model addenda (rule 26 A3)
+
+| Objective | How | Route |
+| --- | --- | --- |
+| Re-roll our guard on demand | cause respawns from outside (introduction flood, descriptor refusal) so each draws fresh guards | §4.4; `TSR-Q1` (ruled): the directory, and its guards, are kept across a respawn; `TSR-M6` sizes the window before Tor's first `state` write |
+| Exhaust the daemon's memory through Tor | make Tor log in bursts | `TSR-F2`: bounded sink, counted drops |
+| Read the probe as a signature | a hostile HSDir sees an upload followed at once by a fetch of the same descriptor; the guard sees both ends of the self-dial | §4.5: one probe per upload round, after a jittered delay, and outside a round only after a clock jump, after the same delay; the guard residual is stated |
+| Link the RPC endpoint to the onion | read respawn timestamps and counts over RPC; or hold `health` while being the node's own edge, and watch the boolean on one's own disconnect | `TSR-Q4` (ruled): the `health` grant carries one boolean, the class part of the relay's verdict; the pin part is `status`'s (`OwnTx`) |
+| Plant in the parent directory | a symlink named under the sweep's prefix | `std::fs::remove_dir_all` does not follow a symlink; the parent is daemon-owned and the `DataDirectory` 0700; a test plants a symlink to an outside directory and asserts the target survives |
+| Outlive the daemon | the daemon dies, including under `panic = "abort"` | parent death closes the owning socket (C5, measured 2026-10-15); §7's `SIGKILL` case |
+| Hide Tor's death | hold a copy of Tor's socket end, so our read never sees EOF | `TSR-F16`: the supervisor also waits on Tor's process; the Windows inheritance window admits no other spawn (§4.7) |
+| Learn the onion from the log | Tor's log events in the daemon's log | `TSR-M9`; Tor's `SafeLogging` stays at its default |
+
+## 9. What this deletes
+
+| Deleted | Where | Replaced by |
+| --- | --- | --- |
+| The no-respawn disposition | `rust/shekyl-tor-control-daemon/src/lib.rs:40-46` | §4.4 |
+| `DEL_ONION` on stop (the daemon's path; the wallet keeps its own) | `rust/shekyl-tor-control-client/src/control/actor.rs:1042-1052` | §4.7 |
+| `SIGTERM` in the managed shutdown | `rust/shekyl-tor-control-client/src/control/actor.rs:889-908` | §4.7 |
+| The per-publish seed, minted and dropped inside `publish` so that Tor is the key's only holder | `rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs:298-304` | the boot's seed in secure memory, republished on each respawn (`TSR-Q1`) |
+| The synchronous wipe in teardown and on drop | `rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs:431-439`; `data_dir.rs` `wipe`, `Drop` | the tombstone (§4.7) |
+| `EventSink::unsubscribed()` on the daemon's path | `rust/shekyl-daemon/src/tor/mod.rs:282` | §4.2 |
+| The zone host's Tor route and the managed Tor's death edge | `zone_ffi::start_tor`, `zone_ffi::dial_through_tor`, `zone_ffi::watch_managed_tor` (`TSR-F1`) | the supervisor publishes the link (§4.1) |
+| The control port, its port file, cookie authentication and `TAKEOWNERSHIP` on the daemon's managed launch (the wallet's attached posture keeps its authentication) | gone from the managed launch (`rust/shekyl-tor-control-client/src/control/launch.rs:203-204`); the attached handshake stays (`rust/shekyl-tor-control-client/src/control/actor.rs:1068-1076`) | the inherited owning socket (`TSR-Q7`, §4.7) |
+| The C++ start, liveness poll and teardown, and their FFI exports | **Deleted.** `src/p2p/net_node.inl` lines 756 to 810 and 1209 to 1232 (at `d26148535e`) by the daemon-configuration cutover's commit (c); the four `shekyl_daemon_tor_*` exports with their `shekyl_ffi.h` declarations, `daemon_tor_ffi.rs` and the crate's `blocking.rs` (Rick, 2026-10-17, `DAEMON_CONFIG_CUTOVER.md` residue item 5) | the Rust `main()` starts and stops the managed Tor (#1088); the supervisor replaces that start |
+
+## 10. Bounds to measure (FOLLOWUPS rows)
+
+Each on the Pi 4, which sets the value (rule 76), and on one x86 host as a
+diagnostic. No figure is set before its row lands. The pre-flight rows were
+measured on 2026-10-19 on the floor device (Pi 4, Ubuntu 26.04.1 aarch64) with
+tor 0.4.9.14 (16.0a14), launched as `TSR-Q7` rules (an inherited owning control
+socket, the torrc and GeoIP defaults foreclosed, a cleared environment,
+`AvoidDiskWrites 1`), and beside it on an x86 dev box with tor 0.4.9.14
+(15.0.25) as the diagnostic. The raw rows, the harness revision and each
+run's conditions are in `shekyl-dev`, `data/tsr-preflight/2026-10-19*/`.
+
+| Row | Measures | Sets |
+| --- | --- | --- |
+| `TSR-M1` | bootstrap time, cold directory and kept directory. **Measured 2026-10-19.** Cold, n=100: p50 11.3 s, p90 17.0 s, p99 127.1 s, max 380.8 s; 1 run over 300 s. Kept, n=30: p50 3.54 s, max 3.81 s (a respawn into its kept directory, `TSR-Q1`). x86: cold max 42.7 s, kept max 2.36 s. **Where the cold tail comes from** (300 more cold runs with each phase's time, 03:38Z to 06:45Z): of the 31 over 60 s, 26 spent their time loading relay descriptors and 5 loading the consensus; circuits took a median 0.86 s, as in fast runs. A slow run sits at one directory percentage, often for about five minutes, with nothing in Tor's log, and then completes; none reached the 600 s limit. Tor raised a `BOOTSTRAP` problem event in 1 of the 31, a `NOROUTE` at its first relay that it passed within 3 s, long before its stall. In 6 of the 31 Tor re-sent a status event during the stall, so its event loop was running; the other 25 show nothing either way. **The tail is not one machine's, and its size moves over time**: the x86 host on the same office network had no cold run over 43 s in 100 from 03:16Z to 03:35Z on 2026-10-19, but 4 of 10 over 60 s (max 145.1 s) at 14:14Z on 2026-10-20, while 3 % of the floor device's runs were over 60 s in the record and 9 % in the tail run. What holds it, from 150 more cold runs sampling Tor's CPU and sockets: in the 17 clean runs over 60 s Tor used at most 3 s of CPU per stall, and in 16 of them one connection was moving directory data throughout, 0.2 to 8.7 MB at a median 79 KB/s (the percentage holds while a large batch arrives). A slow cold bootstrap is a slow directory source, with Tor waiting on it; one run waited on a connection that moved nothing. | §5's Bootstrapping display, not a bound: no bootstrap is given up (`TSR-F7`), and a stalled one is not a fault in any class (§4.4; Rick, 2026-10-19). A stalled directory fetch usually raises no problem event, so problem events alone cannot carry §5's operator message for it. Because the tail is directory fetching, the kept directory cache (`TSR-Q8`) removes most of it |
+| `TSR-M2` | respawn to outbound usable, and to inbound reachable. **Measured 2026-10-22** on the floor device (tor 0.4.9.14, n=10; the supervisor's repair — close the owning connection, wait up to 5 s, kill what is still alive — against the pinned Tor; the daemon binary was not in the path). Raw rows in `shekyl-dev`, `data/tsr-m2/2026-10-22-floor/`. Reap on the close: 0.064 s, and the grace kill was 0 of 10. Outbound usable (bootstrap 100 and a SOCKS listener): p50 2.65 s, max 2.93 s. Descriptor upload: p50 4.63 s, max 5.34 s. Inbound reachable (the same onion republished and one probe nonce arrived): 9 of 10, p50 14.86 s, max 26.44 s. The miss (`probe_code` -4) was a SOCKS CONNECT that returned no reply by 60 s. The nonce was never sent, so the dial had not completed and it was not a rendezvous that reached the service. The nine successes are a different case: p50 14.86 s, max 26.44 s. Guards were the same 20 across the early kill and every respawn. `SETCONF AvoidDiskWrites=1` returned 250 and left the SOCKS listener unchanged. No launch failed, so this run does not size the fresh-directory run length | the backoff base and cap, and the probe bound. The base stays 1 s: it is the pause before the next spawn, and the repair above is the spawn itself. The cap stays 60 s: it is the crash-loop ceiling and the announcement gap, and a repair that reaches inbound in 15 to 26 s sees two or three of those intervals. The probe bound is 60 s (§4.4 Service), with the successful inbound returns beside it: p50 14.86 s, max 26.44 s, 9 of 10 |
+| `TSR-M3` | self-probe latency, and that it works at all. **Measured 2026-10-19**: 40 of 40 succeeded, the probe nonce arriving each time; p50 2.35 s, p90 7.39 s, max 12.29 s. x86: 40 of 40, max 46.15 s, with five probes in one cluster at 42.9 to 46.1 s. Those probes offered no SOCKS authentication; the shipped probe presents its own isolation pair, which puts it on rendezvous circuits of its own. Its latency under that isolation is re-recorded with the floor-device soak (increment 6). **x86 diagnostic, 2026-10-29** (tor 0.4.9.13, the isolated probe; shekyl-dev `data/tsr-acceptance/2026-10-29-probe-x86/`): the first probe after a first publish answered `0xF0` (descriptor not found) although the round's uploads had ended; after a republish, 3 of 4 follow-up probes arrived without `SIGNAL NEWNYM` (the miss right after that `0xF0`) and 4 of 4 with it, at 6.6 to 30.7 s. A single probe soon after a publish can miss on a healthy Tor, and after a miss the same Tor's client state for its own onion can carry it into the next probe. `TSR-M3` above probed after a 300 s upload window; `TSR-M2`, probing at the first `UPLOADED`, missed 1 in 10. That is why one miss is not a verdict (§4.5): the second probe follows `HSFETCH`. The live tests follow the same rule and allow at most one republish; needing more is a finding. Under the rule, on the same x86 box: after a deleted onion was restored, the first probe and the probe after `HSFETCH` both missed, and the probe after one republish arrived (n=1, the case most likely to leave client state behind); each probe's own descriptor fetch showed as `REQUESTED` and `RECEIVED` between rounds, and no round counted them | the probe's delay range and timeout. A timeout below about 46 s would have failed the x86 cluster's probes, each of which succeeded, so the bound is `TSR-M2`'s 60 s. **The trigger is the round's end or 60 s after its first upload** (`Policy::round_wait`), whichever comes first; outside a round, a clock jump while Running (§4.5, "Overdue"). **The 60 s is derived, not chosen**: rounds that ended took 7 to 12 s on the x86 diagnostic (shekyl-dev `data/tsr-acceptance/2026-10-29-probe-x86`), and five times the longest is 60 s; the soak re-measures round durations, and the wait follows them. A fresh publish's first round took 103.8 s there, and `tor-pin-verify` on five platforms saw rounds still open at 300 s with no events dropped (runs 40989973358 and 40992104909, mostly a fresh publish's first round): those are counted as stuck at `Policy::round_stuck_after` (300 s, where they were found) and the soak records how often. **The delay range is 15 to 60 s after the trigger** (`Policy::probe_after_min`, `probe_after_max`), drawn uniformly, and the same range again after the refetch that follows a miss; the 15 s floor covers the descriptor's arrival at the directory the probe's own fetch asks. The spread keeps a directory from seeing the upload followed at once by a fetch of the same descriptor (§4.5). The arrival rate over the soak is recorded with it, as both miss rates: the first probe's, and the second's after the refetch |
+| `TSR-M4` | Tor's resident memory at 12 outbound plus inbound load, default and set `MaxMemInQueues`. **Measured 2026-10-19 at Tor's default**, under a synthetic load (no fleet daemon could supply one; Rick, 2026-10-19): 12 outbound and 12 inbound rendezvous streams, each carrying 512 bytes every 10 s, for an hour. Resident memory **91.0 MiB**, flat once the streams were up; idle baselines 85.7 and 92.3 MiB. x86: 82.5 MiB. A set `MaxMemInQueues` was not measured | `MaxMemInQueues` |
+| `TSR-M5` | Tor's file descriptors at load; the limit the child inherits. **Measured 2026-10-19** under `TSR-M4`'s load: **36 to 38** open; soft limit 524288 as launched; idle 13 to 15 | the descriptor budget |
+| `TSR-M6` | when Tor first writes `state` after bootstrap under `AvoidDiskWrites 1`, and whether a kill loses guard changes made since. **Measured 2026-10-19**: the first write came 603.8 s and 601.9 s after bootstrap, then about every 610 s. A clean exit saved all 20 guards; a kill wrote nothing at exit, leaving the last periodic write's 20. x86: 602.1 and 603.7 s. A Tor killed before its first write leaves a respawn to sample new guards: that window is the re-roll still open to an attacker who can crash Tor early | whether the kept directory needs more than `TSR-Q1` gives it |
+| `TSR-M7` | descriptor upload time after `ADD_ONION` and after a republish. **Measured 2026-10-19**: the first `UPLOADED` 4.43 s after `ADD_ONION`, 3.53 s after a respawn into the kept directory republished the held key; 1 of 13 uploads in the republish round failed, the case `TSR-Q5`'s rounds absorb. x86: 3.11 and 4.58 s | the upload bound |
+| `TSR-M8` | the monotonic clock across suspend on Windows and macOS (both measured). **Windows, measured 2026-10-30** (Rick's laptop, bare metal, Windows 11 23H2 build 22631.7652; Modern Standby, the only sleep its firmware offers; one run, on mains; shekyl-dev `data/tsr-m8/2026-10-30-windows/`): `std::time::Instant` (`QueryPerformanceCounter`) kept counting through a 206.5 s standby, and wall and monotonic time agreed to 30.5 µs across it, with no step over the run. So on Windows every deadline armed before a sleep comes due at once on wake, and a window that included the sleep would misfire: a reply outstanding at the sleep would be late, a stall window held across it past its bound, a probe in flight past its own. The supervisor therefore counts awake time on every platform (§5, "Resumed from suspend"; Rick, 2026-10-30): a timer it was waiting on that fires more than 10 s late is a resume, and every window starts again from the wake. A deadline left late because the driver was inside another ask is overdue work, not a resume. On Linux `Instant` is `CLOCK_MONOTONIC`, which stops during suspend: a timer the driver was waiting on is not late, and the windows stay where they stood (the VM suspend of 2026-10-30, §7). Not covered on Windows: S3 (absent there), hibernate, a standby long enough to fall into hibernate, battery. **macOS, measured 2026-10-31** (the Foundation's macOS build host, a Mac mini M2 Pro, macOS 27.0.1; on mains; the same program; shekyl-dev `data/tsr-m8/2026-10-31-macos/`): `Instant` stopped during a 302 s sleep (`pmset sleepnow`, woken by a scheduled RTC alarm): wall time advanced 301.747 s and `Instant` 1.007 s. macOS behaves as Linux does: a waited timer is not late, and the windows stay where they stood. Not covered on macOS: battery, standby (off on that host), Intel Macs | suspend handling |
+| `TSR-M9` | no onion address in the daemon Tor's log events at `notice`. **Measured 2026-10-19**: 0 of 36 `NOTICE`/`WARN`/`ERR` events carried one, across a publish, 40 probes and a republish. x86: 0 of 33 | the log category |
+| `TSR-M10` | the delete time of a used `DataDirectory` on the floor device's storage. **Measured 2026-10-19**: 100 used cold directories, p50 11 ms, max 13 ms each. x86: max 7 ms | the tombstone delete bound |
+| `TSR-M12` | the directory check's threshold. **Derived 2026-10-31** from tor 0.4.9.14's defaults: each descriptor is stored at `HS_DEFAULT_HSDIR_N_REPLICAS` (2) times `HS_DEFAULT_HSDIR_SPREAD_STORE` (4) directories, 8 (lines 112 and 114 of Tor's `hs_common.h` in its `feature/hs` directory); both are consensus parameters (`hsdir_n_replicas`, `hsdir_spread_store`), not constants, and a client asks up to `HS_DEFAULT_HSDIR_SPREAD_FETCH` (3) per replica (line 116) and stops at the first that has it. The VM run of 2026-11-01 uploaded each of its two descriptors to 8 directories, 16 uploads in all, so a check counts about 8. A strict majority must hold the descriptor: one hostile directory that withholds it, or any number up to half, cannot make the check a miss on its own, so cannot drive a republish loop; a descriptor gone from more than half is gone from most of the directories a client would ask | the directory check's verdict (§4.5): found more than half of counted |
+| `TSR-M13` | how far behind the consensus this computer's clock may be before it is named. **Derived 2026-11-01** from tor 0.4.9.14's defaults: the authorities publish a consensus `V3AuthDistDelay` (5 minutes, `config.c:713`) before its `valid-after`, so a correct clock can hold one up to 5 minutes early, and Tor's own early-consensus notice allows 60 s on top (`EARLY_CONSENSUS_NOTICE_SKEW`, `networkstatus.c:1891-1899`). 360 s; NTP's slop is far inside it, and the clock run's day is far outside. `V3AuthDistDelay` is an authority setting, re-checked at every re-pin | `Policy::clock_behind_after` (§4.5, "The clock") |
+| `TSR-M14` | the republish backoff's base. **Derived 2026-11-01**: one judgment's worst case, so no republish lands inside the previous one's: the round's wait (60 s, `TSR-M3`), the probe's longest delay (60 s) and bound (60 s, `TSR-M2`), then the refetch's probe, its delay (60 s) and bound (60 s): 300 s. It doubles at each failed judgment up to the descriptor's lifetime (3 h, `HS_DESC_DEFAULT_LIFETIME`) and resets on a confirmed Reachable | `Policy::republish_after` (§4.5, "Republish backoff") |
+| `TSR-M11` | on Windows, whether a killed and reaped `tor.exe` has released its `DataDirectory` files (`lock`, `state`, `tor.log`) when the reap returns. **Measured 2026-10-16** (Windows 11 23H2, Defender real-time protection on; the pinned 15.0.24 `tor.exe`, launched as #1083 does): 0 failures in 400, by kill and by owner-close, each followed at once by the tombstone rename and by a recursive delete. Every file is released by the time `WaitForSingleObject` returns | a respawn into the kept directory (`TSR-Q1`) and the tombstone rename (§4.7) do not wait for the directory's files once the reap has returned |
+| `TSR-M15` | a managed-Tor daemon's idle cost on the floor device, after the driver-spin fix (§4.2: a closed channel leaves the wait). **Measured 2026-11-06** (a native build at `f904a87694`; testnet, clearnet off, managed Tor from the 16.0a14 bundle, tor 0.4.9.14; each thread's CPU read from `/proc/<pid>/task/*/stat` before and after the window; shekyl-dev `data/tsr-spin/2026-11-06-floor/`). The onion was Reachable 61 s after start. Over 300 s, `shekyld-signals` used 0.00 % of a core and `shekyl-timing` 0.01 % (0.00 % and 0.02 % over the first 60 s). The whole daemon used 0.05 % and Tor 0.65 %. Resident memory: the daemon 580 MiB, Tor 38 MiB. Load average 4.5, with the soak's unfixed daemon and the host's fleet node running beside it. dev's testnet genesis is not the alpha.11 fleet's, so the node had no peers: its outbound Tor dials connected, and it synced nothing. The fault does not depend on peers, because the bootstrap watch closes when Tor reports Ready. **Repeated at `f67380dc54`** (the same branch with dev merged), 300 s that began 31 s after start and so took in the onion going Reachable 44 s into the window: 0.01 % and 0.01 %, the daemon 0.07 %, Tor 0.89 %. **Before the fix**, the same two threads on the soak's daemon (`ffb7259051`, synced, with peers) used 99.3 % and 75.6 % over one minute, 2026-11-05 20:49:19Z | the idle a managed-Tor daemon is held to: `shekyld-signals` and `shekyl-timing` each under 2 % of a core over a minute |
+
+**`TSR-M6`, what is established (2026-10-16; mechanisms from an x86 diagnostic
+and the floor device's dry run; the floor's timings, 2026-10-19, are in the
+table).** Under
+`AvoidDiskWrites 1` Tor defers its periodic `state` write: none within 240 s of
+bootstrap while it reported 20 entry guards; with `AvoidDiskWrites 0` it wrote
+them within 34 s. Every clean exit saves `state` with every guard, under either
+setting: `SIGTERM`, `SIGNAL SHUTDOWN`, and the end of the owning connection
+(Tor's `lost_owning_controller` raises `SIGTERM`, and `tor_cleanup` saves
+`state`; measured at 0.1 s to exit). A kill does not. So the teardown §4.7
+rules keeps a live Tor's guards in its kept directory, and the re-roll this row
+measures is a Tor that crashes before its deferred write: the respawn then
+samples new guards. The same exit-time save explains the macOS run's leftover
+temporary directories holding only `state`: kameo 0.20's
+`ActorRef::wait_for_shutdown` returns when the mailbox closes, before the run
+loop calls `on_stop` and reaps Tor, so a test's `TempDir` could drop while Tor
+was still saving on its way out. The client's live tests now wait for the reap
+before the drop.
+
+The Windows and Linux stop-path figures (closing our end, and the parent's
+`abort()`, each exiting Tor within about 20 ms; C4, C5) are evidence for the
+stop path, not a bound.
+
+**Pre-flight (rule 26).** `TSR-M1`, `TSR-M3` to `TSR-M7`, `TSR-M9` and
+`TSR-M10` need only today's managed Tor and a SOCKS self-dial, and are measured
+before increment 3 (§12), the first increment whose code uses a bound they set;
+increment 2 uses none. They were taken on 2026-10-19, after the re-pin, on the Tor that ships
+(0.4.9.14), the Pi 4 setting each value (the table above); `TSR-M11` is measured
+(above). `TSR-M2` is measured (2026-10-22, above). `TSR-M8` is measured on
+Windows (2026-10-30) and macOS (2026-10-31, §10).
+
+**Seeded start (`TSR-Q8`), measured on an x86 dev box 2026-10-19 and
+2026-10-20** (tor 0.4.9.14; raw rows in `shekyl-dev`,
+`data/tsr-q8q9/2026-10-19-x86/`). A seed minutes old, n=20: p50 2.38 s, max
+3.31 s, against a cold arm p50 11.03 s, max 24.94 s. The same seed at about
+3 h (n=10, 2026-10-19 17:06Z): p50 2.38 s, max 2.77 s. At about 24 h (n=10,
+2026-10-20 14:14Z): p50 2.39 s, max 2.87 s. **The floor device, 2026-10-22,
+with the copy fsynced** (tor 0.4.9.14, n=10, 35,555,271 bytes on the SD card;
+raw rows in `shekyl-dev`, `data/tsr-q8q9/2026-10-22-floor/`). Copy: p50 2.10 s,
+max 5.18 s. Bootstrap after the copy: p50 3.84 s, max 4.13 s. The start with
+the copy included: p50 6.01 s, max 8.98 s. Against the cold median of 11.3 s
+the gain is in the median and in the tail (`TSR-M1`'s cold p99 was 127 s).
+That copy synced every byte before Tor was spawned. The launch path does not.
+**The floor device, 2026-10-22, with the copy not synced** (tor 0.4.9.14,
+n=10, 35,079,292 bytes on the SD card; raw rows in `shekyl-dev`,
+`data/tsr-q8q9/2026-10-22-floor-nosync/`). Copy: p50 0.041 s, max 0.063 s.
+Bootstrap after the copy: p50 3.85 s, max 4.02 s. The start with the copy
+included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
+20.95 s. This is the launch-path cost: the copy is not synced.
+
+## 11. Interfaces
+
+- **P2P:** `TSR-F1` (plan preconditions, the owner loop parks on the
+  link) lands before the supervisor; the probe nonce kind in the nonce set; the
+  own-edge redraw (`TSR-F9`); the dialer stops before the Tor teardown
+  (`TSR-F13`).
+- **Daemon configuration (#1066):** starts the supervisor at step 6 and stops
+  it at step 9, after the dialer; step 8 does not wait for Tor, since the
+  connector starts parked on the link, which also removes the SCM start's
+  dependence on bootstrap time; `tor = managed | operator | off` is the
+  supervisor's input; `tor-socks` is the operator route; `TSR-F8`; DC-F12 is a
+  prerequisite (`TSR-F12`).
+- **RPC:** `TSR-Q4` (ruled): one Health boolean, an outbound session hides
+  this node's address now, every `OriginVerdict` but `Absent`. The pin is
+  `OwnTx` under `status`. `TSR-Q12` lists the `status` grant's fields, as
+  typed values (`TSR-Q13`). The RW round names the Status and Health fields.
+  No leg carries Status to the GUI yet: RT-15's socket or pipe is RT-W10's,
+  not authorized; the sidecar reaches Status over the owning connection it
+  is launched with (`GS-Q1`; core increment `GS-C3`).
+- **TB:** TB-11's launch test is `tor-pin-verify`'s Windows and macOS
+  entries; §7's cases on both platforms are the supervisor's acceptance
+  tests (`TSR-F15`).
+- **Relay:** the hop-0 verdict for a local origin (`shekyl-relay`
+  `Relay::origin_verdict`: `Absent`, `Connected`, or `Routable`,
+  `DAEMON_RELAY_PRIVACY.md` §98.12) is the supervisor's input for Health and
+  `OwnTx` (`GS-Q3`). The link is not.
+- **Wallet and clients:** the send flow reads `OwnTx` from Status before
+  broadcasting (§1). `Held` is reported held, not sent. `ClearnetOnly` is
+  sent over clearnet and is not reported held, and Health stays false.
+  `Offline` is not sent. Health is not this signal. Falsify by a managed Tor
+  that is down, reported held, and by `Tor::Off` with `Clearnet::On`, sent
+  with Health false. `shekyl-cli` and the GUI show Status through the one
+  renderer (`TSR-Q12`). The wallet's own Tor can adopt the sans-IO core,
+  under the constraints below.
+
+### 11.1 The wallet's Tor on the shared core (Rick, 2026-10-24)
+
+The wallet lane moves `shekyl-tor-control-wallet` onto this core in the week
+of 2026-10-26. Today that supervisor reports only `Connecting { progress }`
+and still kills a bootstrap at 300 s. The core will serve several Tor
+instances, the daemon's, the principal's and each persona's, so it is the
+place where identity domains could leak into each other. These constraints
+are fixed before the work starts:
+
+- **One instance per identity domain, and no state shared between
+  instances.** Each instance has its own Tor process, data directory,
+  guards, onion seed and SOCKS isolation username. The core is shared as
+  code, never as an instance ([`P2P_2_ENDPOINT_ROUND.md`](P2P_2_ENDPOINT_ROUND.md)
+  `PWD-E9`).
+- **No directory cache is shared across domains.** The cache's content is
+  public, but sharing it links the domains in two ways. Both Tors would ask
+  their directory guards for diffs from the same consensus, so the
+  "offline since" signal would match. The file times on disk would also tie
+  their activity together. Each domain keeps one cache of its own.
+- **Status and logs never join domains.** A posture line or a Status read
+  that names a persona's onion beside the principal's, or reports both Tors
+  in one record, links them for anyone who reads the log or the RPC. Each
+  domain reports on its own. A persona's onion never appears in the
+  daemon's or the principal's log stream.
+- **Backoff and respawn timing stay per instance.** An observer could tie
+  two domains together by timing if one domain's Tor dying triggered
+  another's respawn, or if they shared a backoff schedule.
+
+## 12. Increments (rule 26)
+
+1. P2P lane: `TSR-F1`. The link replaces the zone host's `tor_proxy` slot
+   here (Rick's TSR-F1 brief, 2026-10-16): the zone host publishes it, the
+   managed Tor's death edge takes it down, and the connector reads its route
+   from it. The daemon watches only the Tor it manages
+   (`DaemonTorControl::death`), and the down names the incarnation installed
+   when the watch began. An exit and a shutdown both take the link down;
+   only an exit is reported. **Implemented** (#1092).
+2. Control client: the bounded sink; parsers for `STATUS_GENERAL`,
+   `STATUS_CLIENT`, `NETWORK_LIVENESS`, `HS_DESC` and log events; the launch
+   recipe and `AvoidDiskWrites` in the closed list; the process wait as the
+   second death signal. **Implemented** (#1091).
+3. The supervisor core (sans-IO) and its timing-engine driver; the pin gate per
+   spawn; the respawn routine per the `TSR-Q1`/`TSR-Q2` rulings. **Implemented.**
+   Step 8 does not wait for Tor (`rust/shekyl-daemon/src/run.rs` `supervise`), and the
+   300 s bootstrap deadline is gone. A managed route exists only as
+   `ManagedRunning`, built on the transition into `Running`
+   (`rust/shekyl-tor-control-client/src/supervisor/core/mod.rs` `ManagedRunning`). The public
+   directory cache is increment 3b, not this one. `ManagedTorFix`, `OwnTx`
+   and the one typed read and renderer are `shekyl-tor-control-client`'s
+   `supervisor` module. `TSR-M2` is recorded (2026-10-22); the driver's base
+   stays 1 s and its cap stays 60 s. `TSR-M8` (the monotonic clock across
+   suspend) is recorded on Windows and macOS (§10). Health and `OwnTx` project the relay's
+   hop-0 verdict (`OriginVerdict`), folded as `Input::AddressHidingOrigin`
+   (`GS-Q3`, the GUI sync lane's `GS-C1`); the link is the phase and
+   `Syncing.tor`.
+3b. The public directory cache (`TSR-Q8`, §4.7). **Implemented.** At launch
+   into a fresh directory the daemon copies `cached-microdesc-consensus`,
+   `cached-microdescs`, `cached-microdescs.new` and `cached-certs`, each only
+   when the opened file is a regular file under Tor's own size limit, and
+   never by hard link. A clean stop after bootstrap writes them back by
+   renaming a temporary over the previous file. A crash writes nothing back.
+   The cache directory is `tor-directory-cache`, outside the per-boot sweep.
+   `tor-pin-verify` seeds its later live tests from that job's one cold boot.
+4. The probe nonce and the probe. **Implemented** (#1220). The link's
+   inbound facet; the probe kind in the nonce set; one probe per upload
+   round, 15 to 60 s after the round ends or 60 s after its first upload,
+   whichever is first, bound 60 s; a round open five minutes counted as
+   stuck in Status and ended in the coalescer; on a miss `HSFETCH`
+   and one more probe, and unreachable only after two misses in a row; its
+   own isolation pair; the Service remedy as `DEL_ONION` then `ADD_ONION`;
+   `HS_DESC` coalesced into rounds in the driver, counting only upload
+   actions. Its live cases run in
+   `tor-pin-verify`'s daemon-crate step: a cold start reachable on a circuit
+   of its own, a respawn reachable again on the same onion, and a deleted
+   onion missed and restored.
+5. Absorbed into increment 3 (2026-10-22): the supervisor is the Tor link's
+   publisher. The zone host still publishes an operator Tor from configuration.
+   A managed route is `ManagedRunning` only.
+6. Acceptance of the supervisor. The C++ deletions this increment used to
+   sequence after acceptance are already cut (§9; Rick, 2026-10-17): the four
+   `shekyl_daemon_tor_*` exports, their `shekyl_ffi.h` declarations,
+   `daemon_tor_ffi.rs` and the blocking facade. **Linux (§7):** cold start,
+   kill, wedge (after the liveness-sample fix), stop and seeded start pass
+   (2026-10-23); outbound blocked (refused, under `TSR-Q14`), disk full at
+   boot and while running, crash loop, binary replaced and Tor down at start
+   pass (2026-10-24 and 2026-10-25, after their fixes). Clock skew and
+   suspend ran on a VM (2026-10-30; `TSR-M8` measured on Windows and
+   macOS) and their findings are fixed; the slow link and a silent drop
+   (under `TSR-Q14`) pass on the floor device (2026-10-31). Open: the VM
+   cases on a build with the fixes, the Windows and macOS runs
+   (`TSR-F15`), and the
+   floor-device soak, running since 2026-10-31 at `ffb7259051`, which also
+   records the probe's latency under its isolation pair and its arrival
+   rate.
+
+## 13. Review denominator
+
+Read for this round, at the pins above: the three Tor crates' public surfaces;
+`actor.rs`'s launch, handshake, shutdown, event routing and readiness poll; the
+wallet supervisor's loop and policy; `ephemeral/`, `data_dir.rs`,
+`blocking.rs`; `daemon_tor_ffi.rs`; `net_node.inl`'s managed-Tor start,
+liveness poll, teardown, self-connection check and announced address;
+`mlog.cpp`'s default categories; the dialer's `choose`, `plan_wake`,
+`exchange`, pace and memory, the peerlist's outcome transition and disclosure population,
+the zone host's proxy slot and `cause.rs`'s attribution; #1066's §2.2 and
+DC-F12; PWD-E7, PWD-E9, TB-1 to TB-13, SP-T0 §3b and §3c; `RPC_CHANNEL.md`
+§6.1; `INPUT_GRAMMAR.md` IG-13, IG-14 and its Tor rows; the control
+specification's `TAKEOWNERSHIP`, `__OwningControllerProcess`,
+`__OwningControllerFD`, Status, `HS_DESC`, `NETWORK_LIVENESS` and `LOG`
+sections. Every rooted `dev` anchor (`rust/…`, `src/…`) is under
+`check_doc_claims.py`'s dead-citation ratchet, and every one was re-read at
+ratification on `dev` after #1056's merge; the #1066 anchor and the
+continuation forms (`:1306-1313`) were read by hand.
+Examined and found nothing to change: the pin gate and TB-7's launch
+environment; the `shekyl-socks` client, which keeps the reply byte the
+evidence attribution needs. Not examined, and next round's scope: the Windows
+and macOS process and filesystem behaviour this design assumes (rename after
+reap, kill semantics), which only §7 can settle (the monotonic clock across
+suspend is settled, `TSR-M8`); and the wallet's Tor under the same standard, which is
+outside this brief.

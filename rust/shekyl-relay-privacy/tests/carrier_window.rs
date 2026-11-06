@@ -4,9 +4,12 @@
 
 //! The carrier's two derived sizes, checked against the facts they derive from.
 //!
-//! [`carrier::WINDOW_BYTES`] and [`carrier::MAX_FRAGMENTS`] are constants in a
-//! crate whose default build is deliberately dependency-free, so neither can be
-//! *computed* where it lives. This file is where they are **enforced** instead,
+//! [`carrier::WINDOW_BYTES`] and [`carrier::MAX_FRAGMENTS`] are constants in
+//! `shekyl-relay-privacy`, whose default build depends only on
+//! `shekyl-draw-rng`. The size facts live in `shekyl-tx-weight`,
+//! `shekyl-levin`, and `shekyl-fcmp`, which that default build does not link,
+//! so neither constant can be *computed* where it lives. This file is where
+//! they are **enforced** instead,
 //! and enforcement is the stronger form: a proof-size change reds a test that
 //! names the constant, where a computed value would absorb the change and
 //! silently move the window.
@@ -26,7 +29,6 @@
 use shekyl_fcmp::MAX_INPUTS;
 use shekyl_levin::{notify, NewTransactions, PortableMap as _, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay_privacy::params::{carrier, inherited};
-use shekyl_relay_privacy::zone::RelayZone;
 use shekyl_tx_weight::{
     predict_size_and_weight, InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
 };
@@ -239,35 +241,32 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
     assert_eq!(checked, 4, "the in-tree surface is the four §85.3 pins");
 }
 
-/// The zone count behind the ceiling is COUNTED, and the peak is derived.
+/// The substitution-cover ceiling is the open-link count, and the peak is
+/// derived.
 ///
-/// `CEILING_ZONES` used to be a literal `2` — a hand-copy of an answer that
-/// lives in `RelayZone::is_encrypted`, which made the ceiling's build-break
-/// claim false: a third encrypted zone would have raised the real bandwidth
-/// while the constant, and therefore the assert, stayed put.
+/// `CEILING_ZONES` is the open-link count, not a count of encrypted
+/// networks. Tor is encrypted and takes no envelope. `shekyl-relay`
+/// asserts the constant equals its open-link walk; this crate cannot
+/// import `ConnectorId`, so the number is pinned here. Equating the two
+/// would bill Tor and omit clearnet the day those counts diverge.
 ///
-/// What edit reds this: encrypting `RelayZone::Public`, or adding another
-/// encrypted network, moves the count off 1. The peak pin moves with it.
-/// The compile-time ceiling assert fires when the product exceeds the
-/// signed cap, which a third encrypted network does.
+/// What edit reds this: a second open link moves the count off 1. The peak
+/// pin moves with it. The compile-time ceiling assert fires when the
+/// product exceeds the signed cap.
 #[test]
-fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
-    let counted = RelayZone::ALL.iter().filter(|z| z.is_encrypted()).count();
+fn the_ceiling_counts_open_links_and_states_its_peak() {
     assert_eq!(
-        carrier::CEILING_ZONES as usize,
-        counted,
-        "CEILING_ZONES must equal the number of encrypted zones, not a \
-         transcription of today's answer"
+        carrier::CEILING_ZONES,
+        1,
+        "clearnet — a new open link is a ceiling change"
     );
-    assert_eq!(counted, 1, "Tor — a change here is a ceiling change");
-
     // The peak is an UPPER BOUND, so it rounds up. Asserted against today's
     // sustained rate scaled by mean/min, rather than a re-derivation of the
     // same division the constant performs, because the defect this replaces
     // was a floor that published a "peak" the emitter exceeds — small, and
     // in the one direction a sizing figure must not err. The signed cap is
-    // not that rate: Tor sustains half of it, and scaling the cap publishes
-    // a peak no emitter reaches.
+    // not that rate: one open link sustains half of it, and scaling the cap
+    // publishes a peak no emitter reaches.
     let sustained = u64::from(carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC)
         * u64::from(carrier::CEILING_ZONES)
         * inherited::NOISE_CHANNELS as u64;
@@ -307,14 +306,15 @@ fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
         4_096,
         "axis 2's rig spec quotes this as the sustained circuit load"
     );
-    // Tor sustains half the signed cap. The cap was ruled for two encrypted
-    // networks and was not lowered when one left, so equality would be the
-    // stale claim. The factor of two is that ruling, pinned here so neither
-    // a new network nor a re-ruled cap can pass in silence.
+    // One open link sustains half the signed cap. The cap was ruled for two
+    // networks and was not lowered when the count became the open-link
+    // count, so equality would be the stale claim. The factor of two is
+    // that ruling, pinned here so neither a new open link nor a re-ruled
+    // cap can pass in silence.
     assert_eq!(
         sustained * 2,
         u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC),
-        "the signed cap is the two-network ruling. Tor sustains half of \
-         it. Adding an encrypted network, or re-ruling the cap, moves this."
+        "the signed cap is the two-network ruling. One open link sustains \
+         half of it. Adding an open link, or re-ruling the cap, moves this."
     );
 }

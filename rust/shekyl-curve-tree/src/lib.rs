@@ -59,28 +59,29 @@ pub mod frontier;
 pub mod recon;
 pub mod reference;
 pub mod segment;
-pub mod served_frame;
 pub mod serving_route;
 pub mod store;
 pub mod types;
 
+pub use assemble::PathRootFault;
 pub use client::{
-    BlockLeaves, ClientError, CurveTreeClient, RawOutput, TxLeafInputs, WriterRecovery,
+    BlockLeaves, CaptureReconciliation, ClientError, CurveTreeClient, ExpectedOutput,
+    OwnedRegistration, OwnershipSync, RawOutput, TxLeafInputs,
 };
 pub use reference::{
-    proof_expired, proof_submittable, reference_block_age, select_reference_height,
-    should_reanchor, two_sided_reference_height, TwoSidedRefusal, PROOF_VALIDITY_HORIZON,
-    REBUILD_AT, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE, REF_ANCHOR_AGE,
+    blocks_until_in_tree, drained_through, in_tree_at_reference, proof_expired, proof_submittable,
+    reference_block_age, select_reference_height, should_reanchor, two_sided_reference_height,
+    TwoSidedRefusal, PROOF_VALIDITY_HORIZON, REBUILD_AT, REFERENCE_BLOCK_MAX_AGE,
+    REFERENCE_BLOCK_MIN_AGE, REF_ANCHOR_AGE,
 };
 pub use segment::{
     leaves_per_segment, outputs_per_node, segment_freeze_eligible, SegmentId,
     FINALITY_DEPTH_BLOCKS, LEAF_BYTES, REORG_HASH_WINDOW_BLOCKS,
     SEGMENT_FREEZE_REORG_MARGIN_BLOCKS, SEGMENT_LAYER_J, SPENDABLE_AGE_BLOCKS,
 };
-pub use served_frame::{ServedFrameError, ServedFrameField, ServedFrameHeader};
 pub use store::{
-    mixed_composition_root, recompute_segment_r_k, FrozenSegmentBody, FrozenSegmentRecord,
-    LeafStore, MixedRootError, PostureDeclaration, SegmentPin, ServingReader, StoreError,
+    mixed_composition_root, recompute_segment_r_k, CapturedChunk, FrozenSegmentBody,
+    FrozenSegmentRecord, LeafStore, MixedRootError, PostureDeclaration, SegmentPin, StoreError,
     StoreOpenFault,
 };
 pub use types::{

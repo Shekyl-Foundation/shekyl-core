@@ -5,8 +5,9 @@
 `scripts/ci/check_test_only_features.py`'s governance-trigger limb). This
 file carries the source audit; the FOLLOWUPS row carries one sentence and a
 link (rule 95). Owner: the lane that lands F-7's structural gate — **not**
-S-TX. Every `file:line` below was read at `dev` `090f2e8f2`–`6c41bf820`;
-re-verify before acting on one.
+S-TX. The `file:line` cites in §2.1 and §5 were re-read on 2026-10-14;
+the rest were read at `dev` `090f2e8f2`–`6c41bf820`. Re-verify before
+acting on one.
 
 ## 1. The row this record serves
 
@@ -16,11 +17,13 @@ re-verify before acting on one.
 
 ### 2.1 Shape (a) — present in the archive via feature unification
 
-`sign_with_ml_dsa_seed` (deterministic PQ half from a fixed seed — precisely the symbol a production daemon should not link) sits in `shekyl-crypto-pq`'s `#[cfg(any(test, feature = "test-utils"))]` block (`rust/shekyl-crypto-pq/src/signature.rs:450`); `shekyl-ffi` enables the feature on a normal edge (`rust/shekyl-ffi/Cargo.toml:32`), so unification compiles it into the shipped archive, reachable from every Rust crate in that graph, not exported over C. *The remedy as written — separate test-only archive or cmake feature — addresses exactly this.* 
+`sign_with_ml_dsa_seed` (deterministic PQ half from a fixed seed — precisely the symbol a production daemon should not link) sits in `shekyl-crypto-pq`'s `#[cfg(any(test, feature = "test-utils"))]` block (`rust/shekyl-crypto-pq/src/signature.rs:399`); `shekyl-ffi` enables the feature on a normal edge (`rust/shekyl-ffi/Cargo.toml:32`), so unification compiles it into the shipped archive, reachable from every Rust crate in that graph, not exported over C. *The remedy as written — separate test-only archive or cmake feature — addresses exactly this.* 
 
 ### 2.2 Shape (b) — unconditional export, unconditional header
 
-`shekyl_pqc_keypair_generate` and `shekyl_pqc_sign_multisig_participant` are `#[no_mangle] pub extern "C"` with **no `cfg` at all** (`rust/shekyl-ffi/src/legacy_core.rs:69`–`70`, `:169`–`170`), declared unconditionally in the production header (`src/shekyl/shekyl_ffi.h:170`, `:196`); the guard at all four sites is the sentence *do not call from production*. So they are **reachable from any C++ that includes the header**, and *a separate test-only archive does not remove them*: nothing about them is conditional, they compile into whichever archive the crate produces and the header still declares them. The `shekyl_curve_tree_replica_*` family this row already names is the same shape (`rust/shekyl-ffi/src/curve_tree_replica_ffi.rs:113`, `:129`, `:177`, `:264` — no `cfg`). The fix for (b) is a different one, and it is this lane's to choose: `cfg` the export **and** its header declaration together; or delete the export and give the C++ tests (`tests/unit_tests/fcmp.cpp:441`, the one caller of the keypair generator) a *derived* keypair; or move the declarations into a test-only header the production build does not ship. 
+`shekyl_pqc_keypair_generate` and `shekyl_pqc_sign_multisig_participant` are `#[no_mangle] pub extern "C"` with **no `cfg` at all** (`rust/shekyl-ffi/src/legacy_core.rs:69`–`70`, `:169`–`170`), declared unconditionally in the production header (`src/shekyl/shekyl_ffi.h:170`, `:196`); the guard at all four sites is the sentence *do not call from production*. So they are **reachable from any C++ that includes the header**, and *a separate test-only archive does not remove them*: nothing about them is conditional, they compile into whichever archive the crate produces and the header still declares them. The `shekyl_curve_tree_replica_*` family this row already names is the same shape (`rust/shekyl-ffi/src/curve_tree_replica_ffi.rs:113`, `:129`, `:177`, `:264` — no `cfg`). The fix for (b) is a different one, and it is this lane's to choose: `cfg` the export **and** its header declaration together; or delete the export and give the C++ tests (`tests/unit_tests/fcmp.cpp`, five sites: 441, 488, 544, 748, 753) a *derived* keypair; or move the declarations into a test-only header the production build does not ship. 
+
+**A ninth, after the sweep: `shekyl_test_coinbase_extra`** (`rust/shekyl-ffi/src/tx_extra_codec_ffi.rs:395`; `src/shekyl/shekyl_ffi.h:906`). Shape (b): unconditional, declared in the production header. Its callers are C++ tests (`tests/core_tests/chaingen.cpp`, `tests/unit_tests/archival_lmdb_test_helpers.h`), so `cfg(test)` cannot gate it: those tests link the archive `cargo build -p shekyl-ffi` produces, which never sets `cfg(test)`. It writes the fixture draw commitment (`CONFORMING_DRAW_COMMITMENT`), a value anyone can guess, so a production call would put a guessable commitment in a coinbase. Until this gate lands, `scripts/ci/check_template_secrets.sh` holds the value to that one function and its tests, and `src/` to no caller.
 
 ### 2.3 Common to both — the `nm` gate
 
@@ -30,7 +33,7 @@ Two remedies to choose, not one; a reader sent to F-7 by the manifest comment sh
 
 ## 3. The `nm` gate's precondition: a derived symbol list
 
-The six symbols above were found two at a time by two people looking at unrelated things, which is a reasonable prior that the list is not finished — and a sweep run 2026-09-19 confirmed it. Method: every `pub (unsafe) extern "C" fn` under `rust/shekyl-ffi/src` (**286**, not the ~60 a per-file count suggests), cross-referenced against (i) a `#[cfg]` on the export, (ii) a declaration in `src/shekyl/*.h`, (iii) a test-only marker in its own doc comment (*do not call from production* / *test-support* / *test-only* / *not for production use*), and (iv) a production caller — **in this repo under `src/` outside `tests/`, and in every consuming repo**, because the FFI is consumed outside this tree (SOK-Q7's enumeration checked GUI, mobile and web for exactly this reason) and an export with no caller in `shekyl-core/src` may have one a deletion would break. Enumeration for the eight, run 2026-09-19: `shekyl-gui-wallet` @`9c2a378` **0 hits**, and — checked on the **resolved graph**, not the manifest, because unification operates on the graph (`check_chain_rules_no_store.sh`'s lesson): `cargo tree --locked -e normal,build,dev --target all -i shekyl-ffi` in `src-tauri/` answers *"package ID specification `shekyl-ffi` did not match any packages"* (the negative outcome, distinguished from an error by its message), and `-i shekyl-crypto-pq -f '{p} features=[{f}]'` resolves the crate with **`features=[]`** — so `test-utils` is not unified into the GUI build and `sign_with_ml_dsa_seed` does not exist there; the direct `shekyl-crypto-pq` edge at `src-tauri/Cargo.toml:39` is why, and the tree is what shows it. `shekyl-mobile-wallet` @`2a21ed6` **0 hits** by grep, but the graph-level claim is **unverifiable at this pin**: its manifest resolves no graph — `src-tauri/Cargo.toml:51` points `shekyl-rpc` at `shekyl-core/rust/shekyl-oxide/shekyl-oxide/rpc`, a path that does not exist at current core, so `cargo tree` fails before resolving. The manifest-level facts (`:24` "No `shekyl-ffi`"; `:50` the direct `shekyl-crypto-pq` edge) stand as *intent* only. That stale path dependency is the mobile lane's finding, not F-7's; F-7 sizes shape (a) as daemon-only on the GUI's graph and mobile's intent, and re-runs the tree check for mobile once its manifest resolves; `shekyl-web` @`e31c9eb` **0 hits**, no FFI at all; `shekyl-dev` @`6262b4d` 3 hits, all plan prose. The no-header case (`shekyl_ml_kem_chacha_seed_trace`) therefore has no self-declaring caller in any consuming repo either — the absence of a header was evidence about this repo's intent, and the enumeration is what makes it evidence about callers. **Re-run the enumeration at deletion time**; a consumer added between now and then is the falsifier. Results: the doc-marker discriminator (iii) finds **four** — the PQC pair, plus two new: `shekyl_ml_kem_chacha_seed_trace` (`rust/shekyl-ffi/src/account_ffi.rs:512`; unconditional; **declared in no header** — present in the archive and callable by any extern declaration; exposes the ML-KEM SHA3→ChaCha seed intermediary for Tier-2 KATs) and `shekyl_test_conforming_pqc_leaf_entry` (`rust/shekyl-ffi/src/tx_extra_ffi.rs:216`; unconditional; `shekyl_ffi.h:1380`; called only from `tests/unit_tests/pqc_spend_fixture.h:75`). And (iii) **misses the replica family**: its test-only-ness is stated once in the module doc ("the C++ test generator (`tests/core_tests/chaingen.cpp`) drives"), not per export, and `blockchain.cpp:5576` names it only in a comment. So the doc comment is a signal, not the discriminator — a sweep by comment finds what commenters wrote. **The derived discriminator is (iv):** an unconditional export with no production caller *in this repo or any consuming repo* is remedy (b)'s subject by construction, whatever its comment says; (iii) and the module-doc marker are corroboration. Remedy (b)'s subject is therefore **at least eight** (PQC pair, replica four, seed trace, conforming leaf entry) and the `nm` gate seeds from re-running the sweep, asserts the derived list is non-empty (rule 47), and is red on any listed symbol in a shipped binary. Also observed, not classified here: 17 exports *are* `cfg`-gated (`legacy_frost.rs`' sixteen under `feature = "multisig"`, `legacy_tx.rs:372`) and declared in no header — conditional, so remedy (a)'s class if the feature is test-shaped; F-7 categorizes them with the rest.
+The six symbols above were found two at a time by two people looking at unrelated things, which is a reasonable prior that the list is not finished — and a sweep run 2026-09-19 confirmed it. Method: every `pub (unsafe) extern "C" fn` under `rust/shekyl-ffi/src` (**286**, not the ~60 a per-file count suggests), cross-referenced against (i) a `#[cfg]` on the export, (ii) a declaration in `src/shekyl/*.h`, (iii) a test-only marker in its own doc comment (*do not call from production* / *test-support* / *test-only* / *not for production use*), and (iv) a production caller — **in this repo under `src/` outside `tests/`, and in every consuming repo**, because the FFI is consumed outside this tree (SOK-Q7's enumeration checked GUI, mobile and web for exactly this reason) and an export with no caller in `shekyl-core/src` may have one a deletion would break. Enumeration for the eight, run 2026-09-19: `shekyl-gui-wallet` @`9c2a378` **0 hits**, and — checked on the **resolved graph**, not the manifest, because unification operates on the graph (`check_chain_rules_no_store.sh`'s lesson): `cargo tree --locked -e normal,build,dev --target all -i shekyl-ffi` in `src-tauri/` answers *"package ID specification `shekyl-ffi` did not match any packages"* (the negative outcome, distinguished from an error by its message), and `-i shekyl-crypto-pq -f '{p} features=[{f}]'` resolves the crate with **`features=[]`** — so `test-utils` is not unified into the GUI build and `sign_with_ml_dsa_seed` does not exist there; the direct `shekyl-crypto-pq` edge at `src-tauri/Cargo.toml:39` is why, and the tree is what shows it. `shekyl-mobile-wallet` @`2a21ed6` **0 hits** by grep, but the graph-level claim is **unverifiable at this pin**: its manifest resolves no graph — `src-tauri/Cargo.toml:51` points `shekyl-rpc` at `shekyl-core/rust/shekyl-oxide/shekyl-oxide/rpc`, a path that does not exist at current core, so `cargo tree` fails before resolving. The manifest-level facts (`:24` "No `shekyl-ffi`"; `:50` the direct `shekyl-crypto-pq` edge) stand as *intent* only. That stale path dependency is the mobile lane's finding, not F-7's; F-7 sizes shape (a) as daemon-only on the GUI's graph and mobile's intent, and re-runs the tree check for mobile once its manifest resolves; `shekyl-web` @`e31c9eb` **0 hits**, no FFI at all; `shekyl-dev` @`6262b4d` 3 hits, all plan prose. The no-header case (`shekyl_ml_kem_chacha_seed_trace`) therefore has no self-declaring caller in any consuming repo either — the absence of a header was evidence about this repo's intent, and the enumeration is what makes it evidence about callers. **Re-run the enumeration at deletion time**; a consumer added between now and then is the falsifier. Results: the doc-marker discriminator (iii) finds **four** — the PQC pair, plus two new: `shekyl_ml_kem_chacha_seed_trace` (`rust/shekyl-ffi/src/account_ffi.rs`, deleted with the C++ account under `NETWORK_IDENTITY.md` NI-R7; unconditional; **declared in no header** — present in the archive and callable by any extern declaration; exposes the ML-KEM SHA3→ChaCha seed intermediary for Tier-2 KATs) and `shekyl_test_conforming_pqc_leaf_entry` (`rust/shekyl-ffi/src/tx_extra_ffi.rs:216`; unconditional; `shekyl_ffi.h:1380`; called only from `tests/unit_tests/pqc_spend_fixture.h:75`). And (iii) **misses the replica family**: its test-only-ness is stated once in the module doc ("the C++ test generator (`tests/core_tests/chaingen.cpp`) drives"), not per export, and `blockchain.cpp:5576` names it only in a comment. So the doc comment is a signal, not the discriminator — a sweep by comment finds what commenters wrote. **The derived discriminator is (iv):** an unconditional export with no production caller *in this repo or any consuming repo* is remedy (b)'s subject by construction, whatever its comment says; (iii) and the module-doc marker are corroboration. Remedy (b)'s subject is therefore **at least eight** (PQC pair, replica four, seed trace, conforming leaf entry) and the `nm` gate seeds from re-running the sweep, asserts the derived list is non-empty (rule 47), and is red on any listed symbol in a shipped binary. Also observed, not classified here: 17 exports *are* `cfg`-gated (`legacy_frost.rs`' sixteen under `feature = "multisig"`, `legacy_tx.rs:372`) and declared in no header — conditional, so remedy (a)'s class if the feature is test-shaped; F-7 categorizes them with the rest.
 
 ## 4. Forwarded enablement (found 2026-09-19 on PR #786 round 4)
 
@@ -43,8 +46,57 @@ routes — `shekyl-ffi`'s direct edge and `p-serve`'s forward — and remedy (a)
 must close both. `check_test_only_features.py` counts forwarded activations as
 enablements since that round, which is how this was seen.
 
-## 5. Decision log
+## 5. Seams that mutate key material (2026-10-12; priority raised by ruling)
+
+Ruled 2026-10-12 on PR #1049: *"Raise FOLLOWUPS F-7's priority (the seams
+that mutate key material ship with shekyl-ffi)."* The row is now
+`pre-genesis, priority 1`. What the ruling rests on, with every `file:line`
+re-read on 2026-10-14:
+
+**The edge.** `shekyl-ffi` enables `shekyl-crypto-pq/test-utils` on a
+**normal** dependency edge (`rust/shekyl-ffi/Cargo.toml:32`, under
+`[dependencies]`, which opens at line 23; the crate is a `staticlib`,
+line 17). `cargo tree -p shekyl-ffi -e features,normal -i shekyl-crypto-pq`
+prints `shekyl-crypto-pq feature "test-utils"`. So every item behind
+`#[cfg(any(test, feature = "test-utils"))]` in `shekyl-crypto-pq` is
+compiled into the archive cmake links into every binary. This is shape (a)
+(§2.1): present in the archive, reachable from any Rust in that graph, not
+exported over C.
+
+**The instances.** Shape (a) was recorded for seams that *produce*
+signatures or keys. It now also holds a seam that *writes into a secret
+key*:
+
+| Seam | Where | What it does |
+| --- | --- | --- |
+| `FnDsaHybridSecretKey::corrupt_fn_dsa_half_for_tests` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs:246` (added by PR #1049) | Overwrites the header byte of a receipt secret key's FN-DSA half in place, making the key undecodable. Reads no key byte out |
+| `HybridEd25519FnDsa::sign_with_rng_seed` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs:387` | Sign with the FN-DSA half's draw taken from a caller-chosen seed: a deterministic Falcon signature, the thing two of which over one hashed point leak the key (`FN_DSA_HYBRID.md` §2) |
+| `FnDsaHybridSigner::sign_with_rng_seed` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid/signer.rs:186` | The same deterministic sign, over the key decoded once and held |
+| `HybridEd25519MlDsa::sign_with_ml_dsa_seed` | `rust/shekyl-crypto-pq/src/signature.rs:424` | Already §2.1's example |
+
+**What "ships" means here, exactly.** These are compiled into
+`libshekyl_ffi.a`. None is `extern "C"` and no export names one, so C++
+cannot call them, and no Rust in the shipped graph calls them. Whether
+their code survives into a final linked binary is the linker's
+section-collection, which nothing asserts — that is §2.3's `nm` gate, and
+these mangled symbols join its list.
+
+**What does not reach `shekyl-ffi`.** `shekyl-p-serve`'s `test-signer`
+feature (which forwards `test-utils`, §4) is not in `shekyl-ffi`'s
+dependency graph: `cargo tree -p shekyl-ffi -e normal` names neither
+`shekyl-p-serve` nor `shekyl-p-host`. PR #1049's `TestReceiptKeySigner`
+is behind `test-signer` and so rides §4's forwarded route into the crates
+that enable it on a normal edge, not this one.
+
+**Why the priority moved.** A deterministic-signing seam is misuse-prone.
+A seam that edits a secret key in place is a different kind of thing to
+have compiled beside the keys it could edit, and the only thing between it
+and a production caller is its name.
+
+## 6. Decision log
 
 | Date | Entry |
 |---|---|
 | 2026-09-19 | Record opened by PR #786 to hold the audit the FOLLOWUPS row had grown into (rule 95: a row is one sentence, a link and a target). Content moved verbatim from the row's 2026-09-19 UPDATE, restructured under headings; the forwarded path (§4) added the same day. |
+| 2026-10-12 | Priority raised to `pre-genesis, priority 1` by ruling on PR #1049; §5 added with the feature-edge evidence and the key-mutating instance that PR introduced (`corrupt_fn_dsa_half_for_tests`). The remedy (§2) is unchanged and is still not this PR's. |
+| 2026-10-24 | `shekyl_test_coinbase_extra` added to §2.2 as a ninth shape-(b) export (DRS-X PR 3c). The template-secrets gate is narrowed to it in the meantime; the structural remedy is still this record's. |

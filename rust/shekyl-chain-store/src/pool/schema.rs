@@ -72,7 +72,8 @@ pub const POOL_HEADER: TableDefinition<&str, Blob<PropertyCellBytes>> =
 
 /// Every table the pool file defines, one [`TableSpec`] each, in
 /// declaration order — the pool file's catalogue, pinned by
-/// `schemas/pool_tables.snap` under the crate's `SCHEMA_VERSION`.
+/// `pool_schemas/pool_tables.snap` under the pool file's own
+/// [`POOL_SCHEMA_VERSION`](super::POOL_SCHEMA_VERSION).
 #[must_use]
 pub fn catalogue() -> Vec<TableSpec> {
     fn spec<K: redb::Key + 'static, V: Value + 'static>(

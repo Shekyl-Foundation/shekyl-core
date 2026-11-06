@@ -10,14 +10,29 @@ include!(concat!(
     "/archival_bond_floor_generated.rs"
 ));
 
+/// The archival reorg depth `D_max` (`PDM-Q11`). Its one Rust source is
+/// [`shekyl_types::ARCHIVAL_REORG_DEPTH_BLOCKS`] (ESR-16 completion, ruling 3);
+/// re-exported here so this crate's readers name it where its neighbours live.
+pub use shekyl_types::ARCHIVAL_REORG_DEPTH_BLOCKS;
+
+// The pass anchor's genesis reject threshold is `depth + lag`, so the sum must
+// compute. Neither is near `u64::MAX`; the assert keeps a re-pin honest.
+const _: () = assert!(
+    ARCHIVAL_REORG_DEPTH_BLOCKS
+        .checked_add(ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS)
+        .is_some(),
+    "archival_reorg_depth_blocks + archival_attestation_anchor_lag_blocks fits u64"
+);
+
 use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, MAX_HOLDINGS_SHARDS};
 
-/// Minimum bonded collateral for `holdings` at join-Market (gate-4 §3.2 `== bond_floor` pin).
+/// Minimum bonded collateral for `holdings` at join-Market (gate-4 §3.2 `== bond_floor` pin),
+/// at `params`' floor.
 ///
 /// Returns `0` when holdings are structurally invalid (empty shard set, count overflow).
 #[must_use]
-pub fn bond_floor(holdings: &HoldingsDescriptor) -> u64 {
-    bond_floor_of(holdings.kind, holdings.shard_ids.len())
+pub fn bond_floor(holdings: &HoldingsDescriptor, params: &crate::ArchivalParams) -> u64 {
+    bond_floor_of(holdings.kind, holdings.shard_ids.len(), params)
 }
 
 /// [`bond_floor`] from the holdings' `(kind, shard count)` alone — the floor
@@ -25,22 +40,25 @@ pub fn bond_floor(holdings: &HoldingsDescriptor) -> u64 {
 /// `Release` connect fold, whose C++ caller need not marshal the record's
 /// shard-id array across the FFI) shares the one implementation.
 #[must_use]
-pub fn bond_floor_of(kind: HoldingsKind, shard_count: usize) -> u64 {
+pub fn bond_floor_of(
+    kind: HoldingsKind,
+    shard_count: usize,
+    params: &crate::ArchivalParams,
+) -> u64 {
     if kind == HoldingsKind::CompleteTree {
-        return ARCHIVAL_BOND_FLOOR_ATOMIC;
+        return params.bond_floor_atomic;
     }
     if shard_count == 0 || shard_count > MAX_HOLDINGS_SHARDS {
         return 0;
     }
-    ARCHIVAL_BOND_FLOOR_ATOMIC
+    params
+        .bond_floor_atomic
         .checked_mul(shard_count as u64)
         .unwrap_or(0)
 }
 
-const _: () = assert!(
-    ARCHIVAL_BOND_FLOOR_ATOMIC == 750_000_000,
-    "ARCHIVAL_BOND_FLOOR_ATOMIC diverged from gate-4 pin"
-);
+// The gate-4 pin (750 000 000) is a test on the shipped set
+// (`params.rs`, `the_shipped_bond_floor_is_the_gate4_pin`).
 
 #[cfg(test)]
 mod tests {
@@ -54,7 +72,10 @@ mod tests {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![1, 2, 3]).unwrap(),
         };
-        assert_eq!(bond_floor(&holdings), 3 * ARCHIVAL_BOND_FLOOR_ATOMIC);
+        assert_eq!(
+            bond_floor(&holdings, &crate::ArchivalParams::SHIPPED),
+            3 * ARCHIVAL_BOND_FLOOR_ATOMIC
+        );
     }
 
     #[test]
@@ -63,7 +84,10 @@ mod tests {
             kind: HoldingsKind::CompleteTree,
             shard_ids: ShardSet::empty(),
         };
-        assert_eq!(bond_floor(&holdings), ARCHIVAL_BOND_FLOOR_ATOMIC);
+        assert_eq!(
+            bond_floor(&holdings, &crate::ArchivalParams::SHIPPED),
+            ARCHIVAL_BOND_FLOOR_ATOMIC
+        );
     }
 
     #[test]
@@ -72,6 +96,6 @@ mod tests {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::empty(),
         };
-        assert_eq!(bond_floor(&holdings), 0);
+        assert_eq!(bond_floor(&holdings, &crate::ArchivalParams::SHIPPED), 0);
     }
 }

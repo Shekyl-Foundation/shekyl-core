@@ -28,7 +28,7 @@
 //!
 //! - **`bonded_principal_confirmed`** — Σ [`ARCHIVAL_BOND_FLOOR_ATOMIC`] over
 //!   distinct personas with a confirmed JoinMarket bond post
-//!   ([`PScanState::bond_post_matches`], `post_kind == 0`) that are neither
+//!   ([`PScanState::bond_post_matches`], `is_join_market_post_kind`) that are neither
 //!   pending-release nor retired. The bond principal is the consensus bond
 //!   floor by construction (the WI-2 assemble path bonds exactly the floor).
 //! - **`bonded_principal_pending`** — the same floor over in-flight posts in
@@ -54,11 +54,10 @@ use shekyl_types::ChainCount;
 use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 use shekyl_units::AtomicUnits;
 
-use crate::consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
-
 use super::local_ledger::LocalLedger;
 use super::signer::EngineSignerKind;
-use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngine};
+use super::staking_outcomes::{self, InFlightRecord, ReportedOutcome};
+use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
 use super::Engine;
 
 /// Staked-balance breakdown (WI-RPC-1 DECISION default). See the module docs
@@ -145,11 +144,17 @@ pub struct StakingReadView {
     /// the surface that tells the embedder to say so (rule 82) instead of
     /// leaving a wallet that claims staker-hood but cannot stake.
     pub recovery_pending_reopen: bool,
+    /// Every live pending record and where it stands, judged at the wallet
+    /// ledger's synced tip (WR-Q1).
+    pub in_flight: Vec<InFlightRecord>,
+    /// The last ending per record kind and persona (WR-Q2).
+    pub outcomes: Vec<ReportedOutcome>,
 }
 
 impl std::fmt::Debug for StakingReadView {
-    /// Redacts the output rows (contents *and* count — the count alone is
-    /// `P`-activity volume); the balance totals render like any balance.
+    /// Redacts the output rows, the in-flight records and the outcomes
+    /// (contents *and* counts — a count alone is `P`-activity volume); the
+    /// balance totals render like any balance.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StakingReadView")
             .field("staking_enabled", &self.staking_enabled)
@@ -157,8 +162,25 @@ impl std::fmt::Debug for StakingReadView {
             .field("outputs", &"<redacted funding-history>")
             .field("pscan_synced_height", &self.pscan_synced_height)
             .field("recovery_pending_reopen", &self.recovery_pending_reopen)
+            .field("in_flight", &"<redacted pending-posts>")
+            .field("outcomes", &"<redacted outcomes>")
             .finish()
     }
+}
+
+/// The ledger facts a staking read takes under the ledger guard, so a caller
+/// that already holds the guard can snapshot them, drop it, and read the
+/// seals without nesting a second `ledger.read()`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StakingLedgerSnapshot {
+    /// `StakingBlock::staking_enabled`.
+    pub staking_enabled: bool,
+    /// Whether bond watch adopted a slot this session
+    /// ([`StakingReadView::recovery_pending_reopen`]).
+    pub recovery_pending_reopen: bool,
+    /// The wallet ledger's synced tip, inclusive: the clock `in_flight`'s
+    /// `Expired` is judged by (WR-Q1).
+    pub ledger_tip: BlockHeight,
 }
 
 /// Why the staking read view could not be produced. Fail-closed by design:
@@ -182,7 +204,7 @@ pub enum StakingReadError {
 /// separated from the sealed-file plumbing so the semantics are unit-testable
 /// against constructed states (including the pin-2 hint-divergence KAT).
 /// The **live-bond set**: distinct personas with a confirmed JoinMarket bond
-/// post (`post_kind == 0`) that are neither pending-release nor durably
+/// post (`is_join_market_post_kind`) that are neither pending-release nor durably
 /// retired — the set the SP-6 reconcile evidence supports. The single
 /// derivation both the WI-RPC-1 balance and the `unstake` slot resolution
 /// read, so "who still holds a live bond" cannot drift between the query
@@ -191,7 +213,7 @@ pub(crate) fn live_bonded_personas(state: &PScanState) -> BTreeSet<PCanonicalId>
     let mut live: BTreeSet<PCanonicalId> = state
         .bond_post_matches()
         .iter()
-        .filter(|m| m.post_kind == 0)
+        .filter(|m| shekyl_wire::transaction::is_join_market_post_kind(m.post_kind))
         .map(|m| m.p_canonical_id)
         .collect();
     for released in state.pending_releases().keys() {
@@ -207,7 +229,8 @@ pub(crate) fn staked_balance_from_records(
     pscan: Option<&PScanState>,
     pending: Option<&PendingPostBlock>,
 ) -> Result<StakedBalance, StakingReadError> {
-    // Distinct personas with a confirmed JoinMarket bond post (`post_kind == 0`)
+    // Distinct personas with a confirmed JoinMarket bond post
+    // (`is_join_market_post_kind`)
     // observed on-chain. This is the single source both principal legs derive
     // from: the live subset (below) is the confirmed principal, and membership
     // here is exactly what disqualifies an in-flight post from the *pending*
@@ -222,7 +245,7 @@ pub(crate) fn staked_balance_from_records(
         Some(state) => state
             .bond_post_matches()
             .iter()
-            .filter(|m| m.post_kind == 0)
+            .filter(|m| shekyl_wire::transaction::is_join_market_post_kind(m.post_kind))
             .map(|m| m.p_canonical_id)
             .collect(),
     };
@@ -269,13 +292,14 @@ pub(crate) fn staked_balance_from_records(
     })
 }
 
-/// `count × ARCHIVAL_BOND_FLOOR_ATOMIC`, checked. The bond principal per
+/// `count × bond floor` (the shipped archival set's), checked. The bond principal per
 /// post is the consensus bond floor by construction (the WI-2 assemble path
 /// bonds exactly the floor); a count large enough to overflow is corrupt
 /// state and fails closed.
 fn principal_for_bond_count(count: usize) -> Result<AtomicUnits, StakingReadError> {
     let count = u64::try_from(count).map_err(|_| StakingReadError::Overflow)?;
-    ARCHIVAL_BOND_FLOOR_ATOMIC
+    shekyl_archival_retention::archival_params()
+        .bond_floor_atomic
         .checked_mul(count)
         .map(AtomicUnits::from_raw)
         .ok_or(StakingReadError::Overflow)
@@ -296,6 +320,44 @@ fn staked_outputs_from_state(state: &PScanState) -> Vec<StakedOutput> {
             confirmed: true,
         })
         .collect()
+}
+
+// `F = WalletFile`, any ledger: the two sealed sibling files raw, for the
+// cadence driver's outcome leg (its legs are generic over the ledger) and the
+// exit resolutions.
+#[allow(private_bounds)]
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        L: LedgerEngine,
+        E: EconomicsEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine,
+    > Engine<S, D, L, E, R, P, shekyl_engine_file::WalletFile>
+{
+    /// Open the two sealed sibling files raw — the decoded [`PScanState`] and
+    /// [`PendingPostBlock`] — for consumers that need the **sets** rather
+    /// than the aggregated view (the `unstake_facade` resolutions and the
+    /// cadence driver's outcome leg, whose legs are generic over the ledger).
+    /// Same fail-closed posture as the staking read view: an absent seal is
+    /// the ordinary empty case; a corrupt or version-mismatched one errors.
+    /// A plain read, not the dispatch seams' generation-coherent basis —
+    /// callers that only *propose* on it must leave every race to the seam's
+    /// seal admission.
+    pub(crate) fn sealed_staking_records(
+        &self,
+    ) -> Result<(Option<PScanState>, Option<PendingPostBlock>), StakingReadError> {
+        let wrap_key = self.state_wrap_key().as_bytes();
+        let pscan = match self.persistence.open_pscan_state(wrap_key)? {
+            Some(body) => Some(PScanState::from_postcard_bytes(&body)?),
+            None => None,
+        };
+        let pending = match self.persistence.open_pending_posts(wrap_key)? {
+            Some(body) => Some(PendingPostBlock::from_postcard_bytes(&body)?),
+            None => None,
+        };
+        Ok((pscan, pending))
+    }
 }
 
 // `F = WalletFile` specialization: the sealed `.wallet.pscan` /
@@ -320,29 +382,6 @@ impl<
         self.ledger.read().recovery_pending_reopen()
     }
 
-    /// Open the two sealed sibling files raw — the decoded [`PScanState`] and
-    /// [`PendingPostBlock`] — for consumers that need the **sets** rather
-    /// than the aggregated view (the `unstake_facade` resolutions). Same
-    /// fail-closed posture as [`Self::staking_read_view`]: an absent seal is
-    /// the ordinary empty case; a corrupt or version-mismatched one errors.
-    /// A plain read, not the dispatch seams' generation-coherent basis —
-    /// callers that only *propose* on it must leave every race to the seam's
-    /// seal admission.
-    pub(crate) fn exit_seal_snapshot(
-        &self,
-    ) -> Result<(Option<PScanState>, Option<PendingPostBlock>), StakingReadError> {
-        let wrap_key = self.state_wrap_key().as_bytes();
-        let pscan = match self.persistence.open_pscan_state(wrap_key)? {
-            Some(body) => Some(PScanState::from_postcard_bytes(&body)?),
-            None => None,
-        };
-        let pending = match self.persistence.open_pending_posts(wrap_key)? {
-            Some(body) => Some(PendingPostBlock::from_postcard_bytes(&body)?),
-            None => None,
-        };
-        Ok((pscan, pending))
-    }
-
     /// Ledger facts under one read guard, then the sealed staking read.
     ///
     /// `under_guard` runs while the guard is held, so its result is coherent
@@ -357,15 +396,18 @@ impl<
         &self,
         under_guard: impl FnOnce(&WalletLedger) -> T,
     ) -> (T, Result<StakingReadView, StakingReadError>) {
-        let (staking_enabled, recovery_pending_reopen, extra) = {
+        let (snapshot, extra) = {
             let guard = self.ledger.read();
             (
-                guard.ledger.staking.staking_enabled,
-                guard.recovery_pending_reopen(),
+                StakingLedgerSnapshot {
+                    staking_enabled: guard.ledger.staking.staking_enabled,
+                    recovery_pending_reopen: guard.recovery_pending_reopen(),
+                    ledger_tip: guard.ledger.ledger.height(),
+                },
                 under_guard(&guard.ledger),
             )
         };
-        let view = self.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen);
+        let view = self.staking_read_view_with_snapshot(snapshot);
         (extra, view)
     }
 
@@ -415,9 +457,13 @@ impl<
     /// money-sum overflow.
     pub fn staking_read_view_with_snapshot(
         &self,
-        staking_enabled: bool,
-        recovery_pending_reopen: bool,
+        snapshot: StakingLedgerSnapshot,
     ) -> Result<StakingReadView, StakingReadError> {
+        let StakingLedgerSnapshot {
+            staking_enabled,
+            recovery_pending_reopen,
+            ledger_tip,
+        } = snapshot;
         // No key copy: the region-2 wrap key is borrowed straight from its
         // owner for the two seal opens (same shape as `pscan/start.rs`'s
         // `with_persistence_read`).
@@ -437,6 +483,16 @@ impl<
             .map(staked_outputs_from_state)
             .unwrap_or_default();
         let pscan_synced_height = pscan.as_ref().map(PScanState::synced_height);
+        let (in_flight, outcomes) = pending.as_ref().map_or_else(
+            || (Vec::new(), Vec::new()),
+            |block| {
+                let scan = staking_outcomes::FundingScan::from_seal(pscan.as_ref());
+                (
+                    staking_outcomes::in_flight(block, ledger_tip, scan.evidence()),
+                    staking_outcomes::outcomes(block),
+                )
+            },
+        );
 
         Ok(StakingReadView {
             staking_enabled,
@@ -444,6 +500,8 @@ impl<
             outputs,
             pscan_synced_height,
             recovery_pending_reopen,
+            in_flight,
+            outcomes,
         })
     }
 }
@@ -451,6 +509,7 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
 
     use std::collections::BTreeMap;
 
@@ -465,6 +524,9 @@ mod tests {
     fn persona(b: u8) -> PCanonicalId {
         PCanonicalId::from_bytes([b; 32])
     }
+
+    /// The JoinMarket's wire byte, as the extractor records it.
+    const JOIN: u8 = shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET;
 
     fn bond_match(id: u8, kind: u8) -> BondPostRecord {
         BondPostRecord {
@@ -522,6 +584,8 @@ mod tests {
             anchor_t0: ChainCount::from_raw(1),
             funding_gindexes: Vec::new(),
             state: PendingPostState::Pending,
+            reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+            terminal: None,
         }
     }
 
@@ -547,11 +611,11 @@ mod tests {
         }];
         let s = state(
             vec![
-                bond_match(1, 0), // live
-                bond_match(1, 0), // duplicate of live — counted once
-                bond_match(2, 2), // non-JoinMarket kind — excluded
-                bond_match(3, 0), // pending release — excluded
-                bond_match(4, 0), // retired — excluded
+                bond_match(1, JOIN), // live
+                bond_match(1, JOIN), // duplicate of live — counted once
+                bond_match(2, 2),    // non-JoinMarket kind — excluded
+                bond_match(3, JOIN), // pending release — excluded
+                bond_match(4, JOIN), // retired — excluded
             ],
             releases,
             retired,
@@ -582,7 +646,7 @@ mod tests {
     }
 
     /// Reconcile-window disjointness: a bond whose post has confirmed on-chain
-    /// (a `post_kind == 0` match in the pscan seal) but whose `PendingPostBlock`
+    /// (a JoinMarket match in the pscan seal) but whose `PendingPostBlock`
     /// record is still live (the removal-ordering GC bridge) is counted as
     /// confirmed **only** — never in both legs. A distinct persona with an
     /// in-flight post but no match yet still counts as pending.
@@ -590,7 +654,7 @@ mod tests {
     fn confirmed_bond_not_double_counted_as_pending() {
         // pscan: persona 1's bond has confirmed on-chain.
         let s = state(
-            vec![bond_match(1, 0)],
+            vec![bond_match(1, JOIN)],
             BTreeMap::new(),
             Vec::new(),
             Vec::new(),
@@ -614,6 +678,52 @@ mod tests {
         );
     }
 
+    /// A confirmed JoinMarket — a match recorded with the JoinMarket's wire
+    /// byte, 5, what the wallet's own builder emits — is a live bond, in
+    /// the live set and in the balance. A match recorded with the retired
+    /// keyless byte (0), a Release (2) or a refused byte (3, 4) is no bond.
+    ///
+    /// Red edit: filter `m.post_kind == 0` in `live_bonded_personas` or
+    /// `staked_balance_from_records` — the byte a JoinMarket had before the
+    /// receipt key became mandatory — and the wallet's bond vanishes from
+    /// the live set, or is reported as pending beside its own confirmation.
+    #[test]
+    fn a_join_market_match_is_a_confirmed_live_bond_and_byte_0_is_not() {
+        let floor = AtomicUnits::from_raw(ARCHIVAL_BOND_FLOOR_ATOMIC);
+        let of_kind = |kind: u8| {
+            state(
+                vec![bond_match(1, kind)],
+                BTreeMap::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+        };
+        let mut block = PendingPostBlock::empty();
+        let g = block.generation();
+        assert_eq!(block.seal_post(pending_post(1), g), SealAdmission::Admit);
+
+        assert_eq!(JOIN, 5);
+        let s = of_kind(JOIN);
+        assert_eq!(live_bonded_personas(&s), BTreeSet::from([persona(1)]));
+        let b = staked_balance_from_records(Some(&s), Some(&block)).expect("balance");
+        assert_eq!(b.bonded_principal_confirmed, floor);
+        assert_eq!(
+            b.bonded_principal_pending,
+            AtomicUnits::ZERO,
+            "the confirmed bond is not also pending"
+        );
+        for kind in [0u8, 1, 2, 3, 4, 6] {
+            let s = of_kind(kind);
+            assert!(live_bonded_personas(&s).is_empty(), "post_kind {kind}");
+            let b = staked_balance_from_records(Some(&s), Some(&block)).expect("balance");
+            assert_eq!(
+                b.bonded_principal_confirmed,
+                AtomicUnits::ZERO,
+                "post_kind {kind}"
+            );
+        }
+    }
+
     /// A bond that has confirmed **and** entered pending-release within the
     /// reconcile window is excluded from pending (keyed on the raw match set,
     /// not the live set) — it counts in neither leg, not as phantom pending.
@@ -621,7 +731,7 @@ mod tests {
     fn confirmed_then_releasing_post_is_not_pending() {
         let mut releases = BTreeMap::new();
         releases.insert(persona(1), SettlementEpoch::from_raw(9));
-        let s = state(vec![bond_match(1, 0)], releases, Vec::new(), Vec::new());
+        let s = state(vec![bond_match(1, JOIN)], releases, Vec::new(), Vec::new());
         let mut block = PendingPostBlock::empty();
         let g = block.generation();
         assert_eq!(block.seal_post(pending_post(1), g), SealAdmission::Admit);
@@ -677,7 +787,7 @@ mod tests {
 
         // …but the authoritative evidence supports exactly one live bond.
         let s = state(
-            vec![bond_match(1, 0)],
+            vec![bond_match(1, JOIN)],
             BTreeMap::new(),
             Vec::new(),
             Vec::new(),
@@ -744,11 +854,28 @@ mod tests {
             outputs: outs,
             pscan_synced_height: Some(BlockHeight::from_raw(5_000)),
             recovery_pending_reopen: false,
+            in_flight: vec![InFlightRecord {
+                kind: shekyl_engine_state::pending_post_block::RecordKind::Post,
+                state: super::super::staking_outcomes::InFlightState::Pending,
+                sends: None,
+            }],
+            outcomes: vec![ReportedOutcome {
+                kind: shekyl_engine_state::pending_post_block::RecordKind::Drain,
+                outcome: shekyl_engine_state::pending_post_block::OutcomeKind::Expired,
+                at_height: BlockHeight::from_raw(5_001),
+                sent: true,
+            }],
         };
         let rendered = format!("{view:?}");
         assert!(
             rendered.contains("<redacted funding-history>") && !rendered.contains("StakedOutput"),
             "the view must redact output contents and count: {rendered}"
+        );
+        assert!(
+            !rendered.contains("InFlightRecord")
+                && !rendered.contains("ReportedOutcome")
+                && !rendered.contains("5001"),
+            "the view must redact in-flight records and outcomes, counts included: {rendered}"
         );
     }
 }

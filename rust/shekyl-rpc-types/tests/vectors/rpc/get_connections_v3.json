@@ -20,8 +20,7 @@
       "recv_idle_time": 2,
       "send_count": 338,
       "send_idle_time": 3,
-      "state": "normal",
-      "support_flags": 3
+      "state": "normal"
     }
   ],
   "status": "OK"

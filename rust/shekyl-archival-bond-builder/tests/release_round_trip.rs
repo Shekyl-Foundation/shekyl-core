@@ -44,7 +44,7 @@ use shekyl_archival_retention::{
     bond_floor, verify_bond_post_ct_balance, verify_release_bond_post, ArchivalBondPostVin,
     BondPostError, BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
 };
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
 use shekyl_ct_balance::amount_commitment;
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
@@ -54,13 +54,8 @@ const BONDED: u64 = 3 * 750_000_000;
 
 /// The witness, as `build_release_vin` returns it.
 fn built() -> ReleaseVin {
-    let keys = derive_archival_p_keys(
-        &[0x5B; MASTER_SEED_BYTES],
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
-        0,
-    )
-    .expect("derive archival P keys");
+    let keys = derive_archival_p_keys(&[0x5B; MASTER_SEED_BYTES], Network::Regtest, 0)
+        .expect("derive archival P keys");
     build_release_vin(keys.bond_post_keys(), BONDED).expect("build Release vin")
 }
 
@@ -113,12 +108,14 @@ fn post_kind_is_load_bearing() {
         v.hybrid_public_key.clone(),
         v.p_canonical_id,
         vec![0xE5; shekyl_archival_retention::HYBRID_PUBKEY_CANONICAL_BYTES],
+        shekyl_archival_retention::ReceiptSignPk::from_bytes(
+            [0x5C; shekyl_archival_retention::RECEIPT_SIGN_PK_LEN],
+        ),
         [0xEE; shekyl_archival_retention::ENDPOINT_BYTES],
         shekyl_archival_retention::HoldingsDescriptor {
             kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
             shard_ids: shekyl_archival_retention::ShardSet::empty(),
         },
-        0,
         0,
     );
     assert!(matches!(verify(&v), Err(BondPostError::PostKindNotRelease)));
@@ -147,7 +144,10 @@ fn holdings_must_be_empty_not_merely_floor_zero() {
     };
     // Non-empty holdings have a non-zero floor, so this trips the floor
     // equality first; zero the floor operand to reach the holdings guard.
-    assert_ne!(bond_floor(&v.holdings), 0);
+    assert_ne!(
+        bond_floor(&v.holdings, shekyl_archival_retention::archival_params()),
+        0
+    );
     assert!(matches!(
         verify(&v),
         Err(BondPostError::ReleaseFloorMismatch)
@@ -167,7 +167,7 @@ fn a_non_zero_post_connect_total_is_not_a_full_exit() {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![4]).expect("one shard"),
     };
-    let floor = bond_floor(&v.holdings);
+    let floor = bond_floor(&v.holdings, shekyl_archival_retention::archival_params());
     assert_ne!(
         floor, 0,
         "premise: a non-empty descriptor has a non-zero floor"
@@ -197,13 +197,8 @@ fn the_debit_must_be_the_whole_balance() {
 /// loudly to the person who asked for it.
 #[test]
 fn nothing_to_release_is_refused_at_assembly_not_at_the_chain() {
-    let keys = derive_archival_p_keys(
-        &[0x5B; MASTER_SEED_BYTES],
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
-        0,
-    )
-    .expect("derive archival P keys");
+    let keys = derive_archival_p_keys(&[0x5B; MASTER_SEED_BYTES], Network::Regtest, 0)
+        .expect("derive archival P keys");
     assert!(matches!(
         build_release_vin(keys.bond_post_keys(), 0),
         Err(BondBuildError::NothingToRelease)

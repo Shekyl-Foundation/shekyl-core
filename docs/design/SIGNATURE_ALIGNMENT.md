@@ -47,13 +47,13 @@ as a security property.
 | Site | Op | Signed input | Structural domain? |
 |---|---|---|---|
 | ~~`shekyl-archival-bond-builder` S1 on-vin sign~~ | — | — | **Deleted in SA-2b** (§2.2): bond vin rides generic surface-A `pqc_auths` (see `stake_engine/bond.rs` bond-slot row). Live census = eight sites below |
-| `shekyl-archival-retention/src/attestation_wire.rs` (`verify_pass_countersignature`) | verify | `pass_countersignature_message(header[72], shard_id)` — decoded `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` | **no** — bare transcript; scheme domain `shekyl/archival-attestation-scheme-v2` is supplied to `verify` (row E of §5) |
+| `shekyl-archival-retention/src/attestation_wire.rs` (`verify_pass_countersignature`) | verify | `pass_countersignature_message(header[72], shard_id, delivery_digest)` — decoded `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]` | **no** — bare transcript; scheme domain `shekyl/archival-attestation-scheme-v3` is supplied to `verify` (row E of §5) |
 | `shekyl-crypto-pq/src/output.rs:991` | sign | caller's `message` (`sign_pqc_auth_for_output`) | **no** — bare |
 | `shekyl-engine-core/…/stake_engine/bond.rs:313` | sign | `bond_payload_hash` | **no** — bare hash |
 | `shekyl-engine-core/…/stake_engine/claim.rs:337,484` | sign | claim / emission payload hash | **no** — bare hash |
 | `shekyl-ffi/src/legacy_core.rs:157` (`shekyl_pqc_sign`) | sign | raw FFI `message` | **no** — bare, arbitrary |
 | `shekyl-ffi/src/legacy_fcmp.rs:734` | verify | FFI `msg` | **no** — bare |
-| `shekyl-ffi/src/archival_ffi/serve_credit.rs:117` | verify | `response.signature_preimage()` | yes — `shekyl/archival-serve-credit-response-v1` |
+| `shekyl-ffi/src/archival_ffi/serve_credit.rs` (the verify export deleted, `DEL-008`; the preimage is `shekyl-archival-retention`'s) | verify | `response.signature_preimage()` | yes — `shekyl/archival-serve-credit-response-v1` |
 | `shekyl-daemon-rpc/src/submit/verifier.rs:885,901` | verify | `payload_hash` (consensus) | **no** — bare hash |
 | `shekyl-archival-retention/src/emission_verify.rs:764` | verify | `msg` | **no** — bare |
 
@@ -69,12 +69,17 @@ message signed under scheme 1 and scheme 2 has **identical signing input**
 - `shekyl_pqc_sign` has **no production C++ caller** — all callers are in
   `tests/unit_tests/fcmp.cpp`. Production C++ never signs and never holds a
   hybrid secret key outside tests (rule 36 holds).
-- The one production consumer is verify-only and on consensus:
-  `src/cryptonote_core/tx_pqc_verify.cpp:148` passes `scheme_id` as a
-  *dispatch parameter* (it never enters the signed bytes) and the message is
-  the input's 32-byte signed hash — since 2026-09-25 (E6 slice 6 commit 7)
-  derived by `shekyl-wire` through `shekyl_tx_pqc_signing_payload_hashes`,
-  no longer a `get_blob_hash` over a C++-assembled payload.
+- The one production consumer is verify-only and on consensus: the Rust
+  verifier's `verify_pqc_auth_slot` (`rust/shekyl-daemon-rpc/src/submit/verifier.rs`).
+  The C++ `tx_pqc_verify.cpp:148` at this row's era (deleted with the C++
+  chain in DRS-X) passed `scheme_id` as a *dispatch parameter* to
+  `shekyl_pqc_verify`, and the message was the input's 32-byte signed hash —
+  since 2026-09-25 (E6 slice 6 commit 7) derived by `shekyl-wire` through
+  `shekyl_tx_pqc_signing_payload_hashes`, no longer a `get_blob_hash` over a
+  C++-assembled payload. That preimage covers the auth's header
+  (`auth_version ‖ scheme_id ‖ flags ‖ len ‖ pk`; `shekyl-wire`
+  `transaction.rs`), so the scheme is bound by the signature even though the
+  verifier reads it as a discriminant.
 - Consequence for SA-R-2: the fix at this boundary is the rule-40 move — the
   Rust export becomes context-specific and **owns its domain constant**; C++
   never carries a domain string it could get wrong.
@@ -322,7 +327,7 @@ not by which was less work.
 | B | Archival bond-post vin (rides surface A) | bond slot signs surface-A hash (`bond.rs:313`) | submit verifier / C++ `tx_pqc_verify` (as surface A) | **`shekyl/pqc-auth-tx-v1`** (same as A). Slot-preimage choice **resolved in SA-2b: generic wins**; S1 + `signature_preimage` + `SCHEME_DOMAIN_BOND_POST` deleted (§2.2) |
 | C | Emission auth — claim | `claim.rs` claim | emission_verify claim leg | `shekyl/archival-emission-claim-scheme-v1` |
 | D | Emission auth — backing | `claim.rs` backing (`sign_pqc_auth_for_output`) | emission_verify backing leg | `shekyl/archival-emission-backing-scheme-v1` |
-| E | Attestation countersignature | `shekyl-p-serve` (signer lands with `SF` (a); none in-repo at ratification) | `verify_pass_countersignature` ← C++ | `shekyl/archival-attestation-scheme-v2` — **v1 RETIRED 2026-09-13** by `SF-D8` (a0): the message became `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` (the decoded request header ‖ route id), so the string moved with it (`CRYPTO_DOMAIN_REGISTRY.tsv`); no v1 signature was ever produced |
+| E | Attestation countersignature | `shekyl-p-serve` (signer lands with `SF` (a); none in-repo at ratification) | `verify_pass_countersignature` ← C++ | `shekyl/archival-attestation-scheme-v3` — **v1 RETIRED 2026-09-13** by `SF-D8` (a0), when the message became the decoded request header ‖ route id; **v2 RETIRED 2026-10-04**, when it gained the nonce-salted delivery digest: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]`. The string moves with the message (`CRYPTO_DOMAIN_REGISTRY.tsv`); no chain carried a v1 or v2 signature |
 | F | Serve-credit response | none in-repo | serve_credit (F1) | `shekyl/archival-serve-credit-scheme-v1` (assignable unilaterally) |
 
 Distinct `…-scheme-vN` per surface (SA-R-2 principle; every surface is at
@@ -338,7 +343,7 @@ former C++/Rust differential pair is now a captured KAT,
 assignable now with the KAT writer the only lockstep. E's was assignable the
 same way until `SF-D8` (a0) landed its verifier and armed pinned vector
 (2026-09-13); the string is now pinned by
-`attestation_pass_countersignature_v2_pinned.json` and
+`attestation_pass_countersignature_v3_pinned.json` and
 moves only with a regeneration recorded in the decision log.
 
 ### Census corrections folded as facts

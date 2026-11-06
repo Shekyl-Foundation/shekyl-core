@@ -103,7 +103,7 @@ from its **bond**, not from sharing a host.
 | **SPIKE-F-18** | **PoW-enabled ≠ PoW-active.** Below escalation the service advertises **no `pow-params` at all** and honest clients solve **nothing** — enabling the defense costs a quiescent persona zero, and is invisible until actually attacked | MEDIUM | **CONFIRMED (measured)** (§19a) |
 | **SPIKE-F-19** | **The fixed 3,326,976-byte payload is a guard→persona confirmation oracle.** A guard-holding adversary confirms *which* `.onion` its circuit carries by fetching the shard on demand (public + free + fixed-size = the signature is the payload). Turns the literature's "expensive" active-confirmation step nearly free. **Wire-format property ⇒ freezes at genesis** | HIGH | **TJ-B, not spike** (§20); recorded so it cannot drift past the §9.4 freeze |
 | **SPIKE-F-14** | §6a's three inbound protections are all **per-connection**; **nothing bounds aggregate load**, and `MaxStreams` is per-*circuit* so it does not either. A ~100-byte request returns ~3.33 MB — **~33 000× egress amplification** | **HIGH** (general, every `P`) | **CONFIRMED (source)** — both levers now built (§16) |
-| **SPIKE-F-15** | **PoW effort is adaptive (AIMD), so the DoS defense and the §8.3 margin are coupled — not independent as this report first recorded them.** `D*` was measured with PoW **disabled**; under escalation honest miners pay solve time and the distribution shifts toward the deadline | MEDIUM | **CONFIRMED (spec + measured on `dev`)** — immaterial at measured effort, **ceiling unmeasured** (§17) |
+| **SPIKE-F-15** | **PoW effort is adaptive (AIMD), so the DoS defense and the §8.3 margin are coupled — not independent as this report first recorded them.** `D*` was measured with PoW **disabled**; under escalation honest miners pay solve time and the distribution shifts toward the deadline | MEDIUM | **CONFIRMED (spec + measured on `dev`)** — immaterial at measured effort, **ceiling unmeasured** (§17); at effort 0 on a size ladder, no measurable cost on any judged statistic, sign unresolved (§19b, 2026-10-02) |
 | **SPIKE-F-7** | D4's payload is a **cost, not a blocker**: ~5 h of one-time regtest mining plus a batched extraction | INFO | **REFUTED as a halt** |
 
 Two charter halt conditions were pre-registered as likely and **neither fired**:
@@ -227,9 +227,15 @@ And `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` DQ-T0.7 (decided 2026-07-02), on the
 
 An earlier revision of this document suggested a "torrc-surface review" could
 settle whether config alone suffices. **That suggestion is withdrawn: the design
-refuses to have such a surface.** `actor.rs` passes six typed options
-(`DataDirectory`, `ControlPort auto`, `ControlPortWriteToFile`,
-`CookieAuthentication`, `SocksPort`, `Log`, plus test-only `DisableNetwork`) and
+refuses to have such a surface.** `control/launch.rs` passes five typed options
+(`DataDirectory`, `__OwningControllerFD` naming tor's end of the inherited
+control connection, `AvoidDiskWrites`, `SocksPort`, `Log`, plus test-only
+`DisableNetwork`).
+It also names every file tor would otherwise find by itself (`--torrc-file`,
+`--defaults-torrc`, `--GeoIPFile`, `--GeoIPv6File`) as one zero-length file in the
+`DataDirectory`. Leaving those out is not enough: tor then reads its compiled-in
+defaults, which for the pinned Linux bundle sit under `/var/tmp/dist/tor/`,
+creatable by any local account. `launch.rs` also
 states why a free-form flag list is excluded — it can smuggle the safety
 invariants open "directly, or indirectly via `-f <torrc>` / `+Option` append /
 `--defaults-torrc`, which no denylist reliably covers." Future customization
@@ -768,6 +774,12 @@ confirmed they served what the client leg believed it fetched.
 > tables above without this note, and go in the (c) record, not here.
 > `live_apparatus` passed over real Tor on the re-based rig in 110 s
 > (three bootstraps, header sent, bodies verified under each persona's key).
+
+**Amendment 2026-10-07.** The re-based rig's warm arm is no longer the
+circuit reuse that paragraph describes. Each fetch mints a nonce and
+presents it as the SOCKS username, so the arm times a new rendezvous
+circuit and no `NEWNYM`. The 2026-09-16 row in §12.3 records the run
+that reused the circuit.
 
 ```bash
 # 1. Mine a regtest chain past the shard-0 leaf range (~5 h at ~0.69 s/block).
@@ -1430,6 +1442,33 @@ zero; and the one residual (solve-time at the clamp) is measured by solving at a
 fixed effort, not by a flood.
 
 ---
+
+## 19b. SPIKE-F-15 at zero effort, measured: no measurable PoW cost on a size ladder; sign unresolved (2026-10-02)
+
+The `SPIKE-F-15` row records `D*` as measured with PoW disabled. The W₂ PoW comparison
+([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §4.1a, read in
+§10.5) measured both postures inside one 24-hour window: four personas, PoW off, on,
+off, on, three object sizes, 955 fetches per posture, every fetch on fresh circuits.
+The verdicts were fixed before the run (bootstrap interval of on − off against a
+margin of 3 points on completion and 10 % on a percentile).
+
+- **No measurable PoW cost on any of the nine judged statistics; the sign is
+  unresolved** (the finding as the design owner ruled it,
+  `ARCHIVAL_SHARD_T_DERIVATION.md` §10.6). None is materially worse with PoW on. On eight, the interval excludes a cost larger than
+  the margin. On the ninth, p90 for the 0.83 MB object, it does not (6.8 s faster to
+  4.8 s slower, against ±2.0 s): a cost there is neither shown nor ruled out.
+- **One is material in PoW's favour:** p90 for the 3.33 MB object, 49.2 s off against
+  27.5 s on (difference −21.7 s, 95 % interval −29.6 to −5.7 s, margin ±4.9 s).
+- **Unattributed.** A posture is two onions in one window and an observation records
+  no persona, so posture is not separable from circuit placement. Two PoW-off days
+  differ by more than the postures do on eight of the nine statistics, every one but
+  this p90. "PoW helps" is not a finding. §19a already gives
+  the reason PoW itself should make no difference here: at effort 0 the descriptor
+  carries no `pow-params`, so the client does nothing PoW-specific.
+
+What this supports is the quiescent case on real object sizes: with PoW on, no
+material cost to a fetch was detected. What it does not touch is the row's open half — the
+distribution **under escalation** — which this run never provoked.
 
 ## 20. SPIKE-F-19 — the fixed payload size is a guard→persona confirmation oracle (TJ-B)
 

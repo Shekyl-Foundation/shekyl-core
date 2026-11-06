@@ -42,10 +42,8 @@
 //! `[u8; 32]` fields had) but not `ZeroizeOnDrop` (which would conflict
 //! with `Copy`).
 //!
-//! All five wrappers are `#[repr(transparent)]` so the bit-for-bit
-//! FFI layout invariant between [`crate::account::AllKeysBlob`] and
-//! `shekyl_ffi::ShekylAllKeysBlob` is preserved (asserted by the
-//! latter's `size_of::<...>()` test).
+//! All five wrappers are `#[repr(transparent)]`: each has exactly its
+//! inner array's layout.
 
 use std::fmt;
 
@@ -87,10 +85,7 @@ use crate::kem::ML_KEM_768_DK_LEN;
 /// # FFI layout invariant
 ///
 /// `#[repr(transparent)]` guarantees `ViewSecret` has identical
-/// memory layout to its inner `[u8; 32]`. This preserves the
-/// bit-for-bit compatibility invariant between
-/// [`crate::account::AllKeysBlob`] and `shekyl_ffi::ShekylAllKeysBlob`
-/// asserted at the latter's `size_of::<...>()` test.
+/// memory layout to its inner `[u8; 32]`.
 #[repr(transparent)]
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct ViewSecret([u8; 32]);
@@ -145,10 +140,7 @@ impl ViewSecret {
 /// # FFI layout invariant
 ///
 /// `#[repr(transparent)]` guarantees `SpendSecret` has identical
-/// memory layout to its inner `[u8; 32]`. This preserves the
-/// bit-for-bit compatibility invariant between
-/// [`crate::account::AllKeysBlob`] and `shekyl_ffi::ShekylAllKeysBlob`
-/// asserted at the latter's `size_of::<...>()` test.
+/// memory layout to its inner `[u8; 32]`.
 #[repr(transparent)]
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct SpendSecret([u8; 32]);
@@ -206,9 +198,6 @@ impl SpendSecret {
 ///
 /// `#[repr(transparent)]` guarantees `MlKem768DecapKey` has
 /// identical memory layout to its inner `[u8; ML_KEM_768_DK_LEN]`.
-/// This preserves the bit-for-bit compatibility invariant between
-/// [`crate::account::AllKeysBlob`] and `shekyl_ffi::ShekylAllKeysBlob`
-/// asserted at the latter's `size_of::<...>()` test.
 #[repr(transparent)]
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct MlKem768DecapKey([u8; ML_KEM_768_DK_LEN]);
@@ -312,8 +301,7 @@ impl MlKem768DecapKey {
 /// # FFI layout invariant
 ///
 /// `#[repr(transparent)]` guarantees identical memory layout to
-/// the inner `[u8; 32]`, preserving the bit-for-bit invariant
-/// against `shekyl_ffi::ShekylAllKeysBlob`.
+/// the inner `[u8; 32]`.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Zeroize)]
 pub struct SpendPublicKey([u8; 32]);
@@ -368,8 +356,7 @@ impl fmt::Debug for SpendPublicKey {
 ///
 /// # FFI layout invariant
 ///
-/// `#[repr(transparent)]` preserves the bit-for-bit invariant
-/// against `shekyl_ffi::ShekylAllKeysBlob`.
+/// `#[repr(transparent)]` gives it exactly the inner array's layout.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Zeroize)]
 pub struct ViewPublicKey([u8; 32]);

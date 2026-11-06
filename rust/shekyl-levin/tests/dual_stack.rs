@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Live Rust Levin client ↔ C++ `shekyld` (`LV2_PORTABLE_STORAGE.md` §12 step 4).
+//! Live Rust Levin client ↔ a running `shekyld` (`LV2_PORTABLE_STORAGE.md` §12 step 4).
 //!
 //! Proves the LV-2b maps round-trip on the real wire. Does **not** rewire
 //! daemon emit/recv (that is LV-3). `#[ignore]`d: requires `SHEKYLD_BIN`.
@@ -14,27 +14,31 @@
 //!   cargo test -p shekyl-levin --test dual_stack -- --ignored --nocapture
 //! ```
 //!
-//! `--offline` skips the p2p bind (`net_node.inl`); this harness uses
-//! `--p2p-bind-ip 127.0.0.1` plus `--out-peers 0`. `--regtest` (FAKECHAIN)
-//! speaks mainnet `NETWORK_ID` (`cryptonote_config.h` `get_config`).
+//! The daemon is started on the regtest network with a loopback
+//! `clearnet-listen` and Tor off; the handshake speaks the id derived from
+//! regtest's own genesis pin (NI-Q8). Since 2026-11-05 the daemon's p2p side
+//! is the Rust session layer (`shekyl-p2p-session`), so this is a
+//! Rust-to-Rust walk over the same wire the C++ host once answered; the wire
+//! is unchanged.
 
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use shekyl_levin::{
-    invoke, response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest,
-    HandshakeResponse, NetworkAddress, PortableMap, Received, SupportFlags, SupportFlagsRequest,
-    SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE,
-    COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
+    invoke, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, HandshakeResponse,
+    PortableMap, Received, TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE,
+    COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
 
-/// `config::NETWORK_ID` — FAKECHAIN (`--regtest`) uses mainnet id.
-const MAINNET_NETWORK_ID: [u8; 16] = [
-    0x55, 0x6C, 0xA9, 0x70, 0x8F, 0xF9, 0x1F, 0x7A, 0x40, 0x69, 0xDA, 0xF3, 0xFC, 0x55, 0xBB, 0xBD,
-];
+/// Regtest (`--network regtest`) derives its id from its own genesis pin.
+fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
+    shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
+        shekyl_rpc_types::Network::Regtest,
+    ))
+}
 
 struct Daemon {
     child: Child,
@@ -53,8 +57,7 @@ impl Daemon {
                  --test dual_stack -- --ignored"
             ),
         };
-        let rpc_port = free_port();
-        let p2p_port = free_port();
+        let [rpc_port, p2p_port] = distinct_ports();
         let data_dir = std::env::temp_dir().join(format!("shekyl-lv2b-dual-{p2p_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
@@ -62,25 +65,22 @@ impl Daemon {
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
         let child = Command::new(&bin)
             .args([
-                "--regtest",
-                "--non-interactive",
-                "--no-igd",
-                "--out-peers",
-                "0",
-                "--fixed-difficulty",
+                "--network",
+                "regtest",
+                "--tor",
+                "off",
+                "--dev-difficulty",
                 "1",
-                "--p2p-bind-ip",
-                "127.0.0.1",
-                "--p2p-bind-port",
-                &p2p_port.to_string(),
-                "--rpc-bind-ip",
-                "127.0.0.1",
-                "--rpc-bind-port",
-                &rpc_port.to_string(),
+                "--clearnet-listen",
+                &format!("127.0.0.1:{p2p_port}"),
+                "--rpc-admin-listen",
+                &format!("127.0.0.1:{rpc_port}"),
                 "--data-dir",
                 data_dir.to_str().expect("utf8 data dir"),
+                "--log-file",
+                &data_dir.join("shekyld.log").display().to_string(),
                 "--log-level",
-                "0",
+                "warn",
             ])
             .stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
@@ -138,9 +138,34 @@ impl Drop for Daemon {
     }
 }
 
+/// Probes of port 0 before the test gives up. Same bound as `live_daemon`.
+const PORT_PROBES: usize = 64;
+
 fn free_port() -> u16 {
     let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
     l.local_addr().expect("local_addr").port()
+}
+
+/// A free port that is none of `taken`. Two probes of port 0 can be one
+/// port, and the daemon then cannot bind both listeners.
+fn free_port_excluding(taken: &[u16]) -> u16 {
+    for _ in 0..PORT_PROBES {
+        let port = free_port();
+        if !taken.contains(&port) {
+            return port;
+        }
+    }
+    panic!("could not obtain a port distinct from {taken:?}");
+}
+
+/// `N` ports, each different.
+fn distinct_ports<const N: usize>() -> [u16; N] {
+    let mut ports = [0u16; N];
+    for i in 0..N {
+        let port = free_port_excluding(&ports[..i]);
+        ports[i] = port;
+    }
+    ports
 }
 
 fn wait_tcp(p2p_port: u16, deadline: Instant) {
@@ -190,29 +215,6 @@ fn get_info(rpc_port: u16) -> Result<ChainTip, String> {
     let top_id =
         json_hex32(json, "top_block_hash").ok_or_else(|| format!("no top_block_hash in {json}"))?;
     Ok(ChainTip { height, top_id })
-}
-
-/// The raw `/get_peer_list` body — string matching is all the pin needs, and
-/// it keeps the harness free of a JSON dependency.
-fn get_peer_list(rpc_port: u16) -> Result<String, String> {
-    let mut stream = TcpStream::connect(("127.0.0.1", rpc_port)).map_err(|e| e.to_string())?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .map_err(|e| e.to_string())?;
-    let req = format!(
-        "POST /get_peer_list HTTP/1.1\r\nHost: 127.0.0.1:{rpc_port}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
-    );
-    stream
-        .write_all(req.as_bytes())
-        .map_err(|e| e.to_string())?;
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&buf);
-    // The whole body: an empty peer list omits both list keys entirely, and
-    // that is a legitimate state for this pin (a loopback-derived entry is
-    // refused by `is_host_allowed`), so requiring a key here would fail the
-    // test on the daemon behaving correctly.
-    Ok(text.split("\r\n\r\n").nth(1).unwrap_or(&text).to_owned())
 }
 
 fn json_u64(body: &str, key: &str) -> Option<u64> {
@@ -298,17 +300,6 @@ impl Session {
         loop {
             match self.next_message() {
                 Received::Response { command, payload } if command == want => return payload,
-                Received::Request { command, payload }
-                    if command == COMMAND_REQUEST_SUPPORT_FLAGS =>
-                {
-                    SupportFlagsRequest::load(&payload).expect("support-flags request");
-                    let body = SupportFlagsResponse {
-                        support_flags: SupportFlags::ADVERTISED,
-                    }
-                    .store()
-                    .expect("store support-flags");
-                    self.send(&response(COMMAND_REQUEST_SUPPORT_FLAGS, &body));
-                }
                 Received::Notification { command, .. } => {
                     // Fresh regtest may still emit cryptonote notifies; maps
                     // under test here are the invoke/response commands.
@@ -362,48 +353,31 @@ fn rust_client_handshakes_with_shekyld() {
     let tip = get_info(daemon.rpc_port).expect("get_info after ready");
 
     let mut session = Session::connect(daemon.p2p_port, daemon.log_path());
-    // The Q1 pin, live and cross-stack: advertise a LYING host half with a
-    // real port. The daemon must record socket-host:advertised-port in GRAY
-    // and never the advertised host — an announcement proves nothing.
-    let advertised_port: u16 = 28_099;
+    // The handshake carries no address on any connector (ruled 2026-10-09):
+    // there is no advertised host or port for the daemon to record.
     let req = HandshakeRequest {
         node_data: BasicNodeData {
-            network_id: MAINNET_NETWORK_ID,
-            address: NetworkAddress::Ipv4 {
-                ip: Ipv4Addr::new(9, 9, 9, 9),
-                port: advertised_port,
-            },
-            support_flags: SupportFlags::ADVERTISED,
+            network_id: regtest_network_id(),
         },
+        // The daemon's own chain as a claim: under `dev-difficulty=1` every
+        // block's work is 1, so the work is the block count. Chain sync's
+        // owner closes a session whose claim has less work than blocks
+        // (`PayloadRefused::Work`).
         payload_data: CoreSyncData {
             current_height: tip.height,
-            cumulative_difficulty: 0,
+            cumulative_difficulty: tip.height,
             cumulative_difficulty_top64: 0,
             top_id: tip.top_id,
-            top_version: 0,
         },
         nonce: CLIENT_NONCE,
     };
     let payload = session.invoke_map(COMMAND_HANDSHAKE, &req);
     let hs = HandshakeResponse::load(&payload).expect("decode handshake response");
-    assert_eq!(hs.node_data.network_id, MAINNET_NETWORK_ID);
+    assert_eq!(hs.node_data.network_id, regtest_network_id());
     assert_eq!(hs.payload_data.current_height, tip.height);
     assert_eq!(hs.payload_data.top_id, tip.top_id);
 
     session.reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
-
-    // The NEGATIVE limb, live and cross-stack: a lying advertised host is
-    // never adopted. The positive limb (observed host + advertised port IS
-    // what gets derived) cannot be observed here and is not asserted --
-    // `peerlist_manager::is_host_allowed` refuses loopback unconditionally,
-    // so a loopback-bound test daemon discards the derived entry before any
-    // readout can see it. That limb is
-    // `node_server.an_advert_contributes_its_port_and_never_its_host`.
-    let peers = get_peer_list(daemon.rpc_port).expect("get_peer_list after handshake");
-    assert!(
-        !peers.contains("9.9.9.9"),
-        "the advertised host was adopted; only the port is admissible: {peers}"
-    );
 
     let payload = session.invoke_map(
         COMMAND_TIMED_SYNC,
@@ -414,8 +388,4 @@ fn rust_client_handshakes_with_shekyld() {
     let ts = TimedSyncResponse::load(&payload).expect("decode timed-sync");
     assert_eq!(ts.payload_data.top_id, tip.top_id);
     assert_eq!(ts.payload_data.current_height, tip.height);
-
-    let payload = session.invoke_map(COMMAND_REQUEST_SUPPORT_FLAGS, &SupportFlagsRequest);
-    let flags = SupportFlagsResponse::load(&payload).expect("decode support-flags");
-    assert_eq!(flags.support_flags, SupportFlags::ADVERTISED);
 }

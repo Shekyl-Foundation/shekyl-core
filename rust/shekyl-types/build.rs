@@ -8,7 +8,7 @@
 //! generator (`cmake/generate_consensus_constants.py`) and the other
 //! per-crate build scripts read, so the two languages cannot drift.
 //!
-//! Two keys are emitted here. `archival_shard_length_bytes` is the `W` of the
+//! Three keys are emitted here. `archival_shard_length_bytes` is the `W` of the
 //! archival shard partition (`shekyl_types::SHARD_LENGTH`; `SHT-Q2`, RULED
 //! 2026-09-29): shards are cut by archival length. It lives in the JSON rather than as a
 //! literal because every other numeric on the Round-2 re-pin gate
@@ -59,6 +59,11 @@ fn main() {
 
     let shard_length_bytes = get_u64(&map, "archival_shard_length_bytes", &config_path);
     let max_holdings_shards = get_u64(&map, "archival_max_holdings_shards", &config_path);
+    // The archival reorg depth (`archival_reorg_depth_blocks`): its one Rust
+    // source (ESR-16 completion, ruling 3). `shekyl-curve-tree` (the segment
+    // freeze margin) and `shekyl-archival-retention` (the bond window, the
+    // pass anchor) read it from here rather than generating their own copy.
+    let reorg_depth_blocks = get_u64(&map, "archival_reorg_depth_blocks", &config_path);
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
     let out_file = out_dir.join("consensus_constants_generated.rs");
@@ -73,7 +78,8 @@ fn main() {
          //\n\
          // Single source of truth: `config/consensus_constants.json`.\n\
          const ARCHIVAL_SHARD_LENGTH_BYTES: u64 = {shard_length_bytes};\n\
-         const ARCHIVAL_MAX_HOLDINGS_SHARDS: usize = {max_holdings_shards};\n"
+         const ARCHIVAL_MAX_HOLDINGS_SHARDS: usize = {max_holdings_shards};\n\
+         const GENERATED_ARCHIVAL_REORG_DEPTH_BLOCKS: u64 = {reorg_depth_blocks};\n"
     );
     fs::write(&out_file, output)
         .unwrap_or_else(|e| panic!("failed to write {}: {e}", out_file.display()));

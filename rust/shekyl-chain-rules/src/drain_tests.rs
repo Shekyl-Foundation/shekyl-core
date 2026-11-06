@@ -11,12 +11,13 @@ use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, TxHash,
 };
 
-use super::{drain, sources, DrainSources};
+use super::{drain, sources, tree_after, DrainSources};
 use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::tree_growth::TreeFrontier;
 use crate::view::{
-    AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock, RecordedWeights, Tip,
+    AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, LeafSource, RecordedBlock,
+    RecordedWeights, Tip,
 };
 
 fn h(height: u64) -> BlockHeight {
@@ -60,13 +61,34 @@ fn the_sources_are_the_two_maturity_windows_back() {
 /// A view that answers `outputs_at` from a closure and has an empty tree.
 struct OutputsOnly<F: Fn(BlockHeight) -> AtHeight<BlockOutputs>>(F);
 
-impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> ChainView<'id> for OutputsOnly<F> {
+impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> HeaderView<'id> for OutputsOnly<F> {
     type Fault = Infallible;
+    fn tip(&self) -> Result<Option<Tip>, Infallible> {
+        Ok(None)
+    }
+    fn header_at(&self, _: BlockHeight) -> Result<AtHeight<HeaderRecord>, Infallible> {
+        Ok(AtHeight::AboveTip)
+    }
+}
+
+impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> ChainView<'id> for OutputsOnly<F> {
     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> {
         Ok(false)
     }
     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
         Ok(shekyl_units::AtomicUnits::ZERO)
+    }
+    fn long_term_effective_median_at(
+        &self,
+        _: BlockHeight,
+    ) -> Result<AtHeight<shekyl_types::LongTermWeight>, Infallible> {
+        Ok(AtHeight::AboveTip)
+    }
+    fn burned_through(
+        &self,
+        _: BlockHeight,
+    ) -> Result<AtHeight<shekyl_units::AtomicUnits>, Infallible> {
+        Ok(AtHeight::AboveTip)
     }
     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
         Ok(AtHeight::AboveTip)
@@ -86,9 +108,6 @@ impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> ChainView<'id> for Outpu
     }
     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
         Ok(AtHeight::Recorded(CurveTreeRoot::EMPTY))
-    }
-    fn tip(&self) -> Result<Option<Tip>, Infallible> {
-        Ok(None)
     }
     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
         Ok(TreeFrontier::EMPTY)
@@ -188,6 +207,52 @@ fn a_bad_leaf_commitment_names_that_point() {
     );
 }
 
+/// CEN-L11's commitment arm: a recorded output whose amount commitment is
+/// not a point the leaf builder can encode halts the drain, naming that
+/// point, rather than drop the output or mint a root over it. A block
+/// carrying such an output never connects: CEN-H17 refuses a commitment that
+/// is not a canonical prime-order point at the transaction
+/// (`h17_trivial_or_invalid_or_miscounted_masks_are_refused`). So the only
+/// way one reaches the drain is a store that no longer conforms, and the
+/// verdict halts. The bytes are the C++ case's `0xCC` fill.
+///
+/// Supersedes `archival_substrate_lmdb`'s
+/// `cen_l11_refuses_commitment_the_leaf_builder_cannot_encode` (at
+/// `eb5be7767`), with the admission half held by H17.
+///
+/// Red edit: let `construct_leaf` read an undecodable commitment as zero
+/// (`unwrap_or([0; 32])` in place of `ok_or(LeafInput::Commitment)?` in
+/// `shekyl-fcmp`'s `tree.rs`) — the drain grows the tree over it.
+#[test]
+fn a_bad_amount_commitment_names_that_point() {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as G;
+    use curve25519_dalek::scalar::Scalar;
+    let point = |k: u64| (Scalar::from(k) * G).compress().to_bytes();
+    let source = LeafSource {
+        output: GlobalOutputIndex::from_raw(5),
+        key: point(1),
+        commitment: [0xCC; 32],
+        pqc_leaf_commitment: point(3),
+    };
+    let view = OutputsOnly(move |height| {
+        if height == h(90) {
+            AtHeight::Recorded(BlockOutputs {
+                coinbase: Vec::new(),
+                listed: vec![source],
+            })
+        } else {
+            AtHeight::Recorded(BlockOutputs::default())
+        }
+    });
+    assert_eq!(
+        drain(&view, h(100), &RuleSet::GENESIS),
+        Err(ViewRead::Corrupt(Corrupt::LeafNotConstructible {
+            output: GlobalOutputIndex::from_raw(5),
+            input: shekyl_fcmp::LeafInput::Commitment,
+        }))
+    );
+}
+
 #[test]
 fn real_points_grow_the_tree_from_empty() {
     use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as G;
@@ -232,4 +297,95 @@ fn real_points_grow_the_tree_from_empty() {
     assert_eq!(drained.growth().leaves_appended, 3);
     assert_ne!(drained.growth().root, CurveTreeRoot::EMPTY);
     assert_eq!(drained.growth().depth, 1);
+}
+
+/// A recorded output at `i` whose points are real, so its leaf constructs.
+fn real_source(i: u64) -> LeafSource {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as G;
+    use curve25519_dalek::scalar::Scalar;
+    let point = |k: u64| (Scalar::from(k) * G).compress().to_bytes();
+    LeafSource {
+        output: GlobalOutputIndex::from_raw(i),
+        key: point(i * 3 + 1),
+        commitment: point(i * 3 + 2),
+        pqc_leaf_commitment: point(i * 3 + 3),
+    }
+}
+
+/// CEN-L11's falsifier: every accepted output becomes a leaf. Growth has
+/// no rule type (E3 Round 1, the module docs); the row binds because
+/// CEN-B5 judges the next header's root against the root [`tree_after`]
+/// derives, and that root is a function of every output the block
+/// recorded. A drain that left one out would be a different root, which
+/// B5 refuses at the next block.
+#[test]
+fn l11_an_accepted_output_left_out_of_the_tree_is_a_different_root() {
+    let listed: Vec<LeafSource> = (1..=3).map(real_source).collect();
+    let at = |outputs: Vec<LeafSource>| {
+        OutputsOnly(move |height| {
+            AtHeight::Recorded(if height == h(90) {
+                BlockOutputs {
+                    coinbase: Vec::new(),
+                    listed: outputs.clone(),
+                }
+            } else {
+                BlockOutputs::default()
+            })
+        })
+    };
+    let (root, drained) =
+        tree_after(&at(listed.clone()), h(100), &RuleSet::GENESIS).expect("drains");
+    let drained = drained.expect("grows");
+    assert_eq!(
+        drained
+            .drained()
+            .iter()
+            .map(|row| row.output)
+            .collect::<Vec<_>>(),
+        listed.iter().map(|s| s.output).collect::<Vec<_>>(),
+        "every recorded output is drained, in order"
+    );
+    for dropped in 0..listed.len() {
+        let mut fewer = listed.clone();
+        fewer.remove(dropped);
+        let (short, _) = tree_after(&at(fewer), h(100), &RuleSet::GENESIS).expect("drains");
+        assert_ne!(short, root, "dropping output {dropped} must move the root");
+    }
+}
+
+/// CEN-L12's falsifier: maturity is deferred insertion. A coinbase
+/// output recorded at `h` joins the tree when `h + 60` connects and a
+/// listed output when `h + 10` does — at no earlier height and at no
+/// other — and the drain reads nothing else (no `unlock_time`).
+#[test]
+fn l12_a_coinbase_leaf_joins_at_sixty_and_a_listed_leaf_at_ten_and_neither_earlier() {
+    const RECORDED: u64 = 100;
+    let view = OutputsOnly(|height| {
+        AtHeight::Recorded(if height == h(RECORDED) {
+            BlockOutputs {
+                coinbase: vec![real_source(0)],
+                listed: vec![real_source(1)],
+            }
+        } else {
+            BlockOutputs::default()
+        })
+    });
+    for connecting in RECORDED..=RECORDED + 70 {
+        let drained: Vec<GlobalOutputIndex> = drain(&view, h(connecting), &RuleSet::GENESIS)
+            .expect("drains")
+            .map(|d| d.drained().iter().map(|row| row.output).collect())
+            .unwrap_or_default();
+        let coinbase = connecting == RECORDED + 60;
+        let listed = connecting == RECORDED + 10;
+        assert_eq!(
+            drained.contains(&GlobalOutputIndex::from_raw(0)),
+            coinbase,
+            "coinbase leaf at {connecting}"
+        );
+        assert_eq!(
+            drained.contains(&GlobalOutputIndex::from_raw(1)),
+            listed,
+            "listed leaf at {connecting}"
+        );
+    }
 }

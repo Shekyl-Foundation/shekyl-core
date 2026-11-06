@@ -44,6 +44,7 @@ pub(crate) mod block_source;
 pub(crate) mod cadence;
 pub(crate) mod cover_discovery;
 pub(crate) mod dispatch;
+pub(crate) mod end_date;
 pub(crate) mod exhaustiveness;
 pub(crate) mod persona_scanner;
 pub(crate) mod reconcile;

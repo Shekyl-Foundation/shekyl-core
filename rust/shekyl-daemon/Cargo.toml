@@ -1,0 +1,68 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-daemon"
+description = "The daemon's sequence behind the Rust binary's main(): the parse, the lock and marker, logging, the announcements, the node and its network, the one signal owner, the RPC and the managed Tor (DAEMON_CONFIG_CUTOVER.md §2.2, P2P_3_REMNANT_CUTOVER_BRIEF.md §2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+shekyl-options = { path = "../shekyl-options" }
+shekyl-logging = { path = "../shekyl-logging" }
+# The RPC owner, started on the node's handles.
+shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
+# The one Node (DRS-X N1): the store, ingest, the pool, chain sync and the
+# network built from the plan.
+shekyl-node = { path = "../shekyl-node" }
+# The network's types and the Tor supervisor's verbs on it.
+shekyl-p2p = { path = "../shekyl-p2p" }
+# The platform probes, the process hardening and the panic hook.
+shekyl-process = { path = "../shekyl-process" }
+# The settlement schedule the daemon arms and the seed-epoch pins the
+# daemon's rows are judged against (`levers`).
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+# The build identity and the protocol version, from the one home (DC-Q20).
+shekyl-version = { path = "../shekyl-version" }
+shekyl-socks = { path = "../shekyl-socks" }
+# The one runtime constructor (D14); the signal owner runs on it.
+shekyl-runtime = { path = "../shekyl-runtime" }
+# The managed Tor's owner (§2.2 steps 6, 8, 9) and its binary discovery.
+shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+tokio = { version = "1", default-features = false, features = ["signal", "macros", "sync", "rt"] }
+tracing = "0.1"
+
+# `GetSystemWindowsDirectoryW` for the notify command's `SystemRoot`
+# (`notify::run`). The same read the managed Tor's launch makes, from the
+# same crate; Linux has no such variable to set.
+[target.'cfg(windows)'.dependencies]
+shekyl-win-sec = { path = "../shekyl-win-sec" }
+
+[dev-dependencies]
+tempfile = "3"
+# The reservation test mines through a parsed address. The address crate
+# owns that grammar.
+shekyl-address = { path = "../shekyl-address" }
+# The driver's stop-vs-ask race is tested on tokio's paused clock.
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time", "test-util"] }
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+# The notify driver's tests build chain tips.
+shekyl-types = { path = "../shekyl-types" }
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+
+[target.'cfg(unix)'.dev-dependencies]
+# The notify tests plant a descriptor without close-on-exec.
+rustix = { version = "1", features = ["fs"] }
+
+[lints]
+workspace = true

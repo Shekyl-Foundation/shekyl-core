@@ -1,5 +1,7 @@
 # Daemon Relay Privacy — correcting and porting the Dandelion++ timing layer
 
+**Status:** LIVING — Round 3 dispositioned (scored ledger below the relay-lane acceptance).
+
 **Goal statement (§31, 2026-07-31): NON-ENUMERABILITY.** Dandelion Theorem 2
 floors any policy at `D_OPT ≥ p²`, `R_OPT ≥ p`, so *invisibility against the
 peer adversary was never reachable* — the available residual is that **the
@@ -36,7 +38,7 @@ embargo is provisioned from the defective `F`.** Historical form: **Read F-6 at
 deployment (configuration B) runs neither Dandelion++ nor the embargo** — the
 arc's entire output is bypassed on the deployment a privacy-motivated user
 selects, and two live §6 claims are false there. That outranks the cadence
-work — as does **F-7** (§26) — **CLOSED 2026-08-01, §44: `fluff_return_ms = 3250` landed with the re-derived 190 s embargo and the measured set re-recorded**; Corollary 5.1 puts configuration B's ranking on a literature footing (§28.5): `F = 2250` was an undirected/`EveryPeer`
+work — as does **F-7** (§26) — **CLOSED 2026-08-01, §44: `fluff_return_ms = 3250` landed with the re-derived 190 s embargo and the measured set re-recorded** (*records-was, 2026-10-08, §95.3 and §96 item 2: 3250 is the transit-free degree-12 reading and stays provisional; a composition whose return with per-connector transit exceeds it is not approvable*); Corollary 5.1 puts configuration B's ranking on a literature footing (§28.5): `F = 2250` was an undirected/`EveryPeer`
 measurement fed to the embargo derivation for *every* transport, so
 configuration C's embargo is under-provisioned in the direction the policy
 itself calls a privacy loss. **Q-12 is registered and live** (§22.2). The measurement that motivates this document landed alongside it
@@ -91,13 +93,11 @@ membership-proof successor untouched.
 
 ## Relay-lane acceptance — RULED 2026-10-01
 
-Ruled so LV-3 and the zone-enum pull request do not choose shapes this
-lane then has to undo. The C++ that is still in the tree is the
-counterexample. Items 2 and 3 of the post-#909 pull request (the stem
-registry, then the `:832` reduction and the `Including transaction`
-move) are the first two of these criteria that land. The rest stay
-with this lane. The zone-enum change and this lane agree on criterion
-4 before either of those two lands.
+Ruled so LV-3 and the zone-enum deletion do not choose shapes this
+lane then has to undo. UPDATE 2026-10-01: the ledger print, the stem
+registry, and the ingress reduction landed in #922. Criterion 4 is
+restated below for the deletion that follows. Criteria 5–7 stay with
+this lane.
 
 1. **One owner, one interface.** `shekyl-relay` already holds the
    epoch, the stem map, the fluff walk, and the embargo derivation.
@@ -116,36 +116,117 @@ with this lane. The zone-enum change and this lane agree on criterion
    pool needs from Dandelion++. The bit is owned by the relay and read
    by the pool. `relay_method` on the pool entry
    (`tx_pool.cpp`, `blockchain_db.h`) is the relay state machine stored
-   beside the coins. The two-bit `origin_zone` field is the zone
-   enum's numeric identity (`enums.h`, discriminant 2 unused so `tor`
-   stays 3). When that enum goes, the field is deleted with it. It is
-   not renumbered into a network id. `address_type` (`ipv4 = 1`,
+   beside the coins. **UPDATE 2026-10-02:** the two `origin_zone` bits
+   are unused (`src/blockchain_db/blockchain_db.h`). They stay so
+   the record stays 192 bytes, and they are not a connector id.
+   `NetZone` stays the zone-parameterized embargo class, not a pool
+   field; discriminant 2 is unused so `tor` stays 3. `address_type`
+   (`ipv4 = 1`,
    `ipv6 = 2`, `tor = 4`) stays the peerlist's wire discriminant. The
    session's network is an attribute of the session.
 
 3. **Stem candidates come from the session registry.** Outbound,
    uniform, without replacement, once per epoch (Dandelion++ §4.5).
-   The registry is `Zone::contexts` (`shekyl-relay` `zone/mod.rs`),
-   filled at session-established with direction. `get_out_connections`
-   (`levin_notify.cpp:194`) still snapshots the Levin registry and
-   keeps `state_normal`. That function goes. `get_out_connections_count`
-   does not: it answers whether a zone has an outbound peer
-   (`levin_notify.cpp:1610`) and trims the public-zone cap
-   (`net_node.inl:3305`). A falsifier of `rg get_out_connections` would
-   delete the count with the draw.
+   The registry is the relay's session map, filled at
+   session-established with direction. Landed in #922:
+   `get_out_connections(` is gone. `get_out_connections_count` stays:
+   it answers whether a connector has an outbound peer and trims the
+   public cap (`net_node.inl:3133`). A falsifier of
+   `rg get_out_connections` would delete the count with the draw.
 
-4. **One Dandelion++ instance. Network is an edge attribute.** The
-   anonymity graph is every outbound edge this node has. A policy such
-   as "a Tor-originated transaction stems only on Tor edges" is a
-   named rule on edge selection inside that one instance. It is not a
-   second relay engine that sees half the graph. `make_relay_zone`
-   (`levin_notify.cpp:311`) still builds one zone per network and sets
-   `SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY` for every non-public zone.
-   The zone-enum pull request and this lane agree on this criterion
-   before either lands. Deleting the four zone switches
-   (`cryptonote_protocol_handler.inl:433` and `:2519`,
-   `net_node.inl:2813`, `levin_notify.cpp:321`) does not by itself
-   make one instance.
+4. **One Dandelion++ instance. The network is a property of an edge.**
+   UPDATE 2026-10-01. It is read at three named points, and it is never
+   a property of the relay.
+
+   One relay. Its session map is every established session, each
+   carrying its connector beside its direction. One stem map covers
+   every outbound session whose connector has a measured transit. One
+   epoch and one role are drawn. One fluff reaches every session
+   except the source.
+
+   - **Hop 0.** The relay is told at construction which connectors are
+     configured. The bit is whether any of them declares
+     `address_hidden_from_peer` as yes. A local origin on a node with
+     that bit is `OwnEdge`, drawn only from sessions whose own connector
+     declares the same, or `NoOwnEdge` when that pool is empty.
+     `NoOwnEdge` does not refresh the stem map and does not fluff.
+     A local origin with no hidden-address connector uses the stem map,
+     so the first hop is a slot. After hop 0 the draw is uniform over
+     every outbound edge. The clearnet route byte is retired with the
+     one relay.
+     **UPDATE 2026-10-07 (Rick).** The address-hiding outbound target is
+     `MIN_PROVISIONED_OUT_PEERS` (12), the degree the fluff measurement
+     was taken at. The own-edge is one uniform draw from that pool.
+     Dandelion++ §4.3 Algorithm 2 uses "4-regular" for the anonymity
+     graph's expected degree: two outbound edges plus about two inbound.
+     Those relays are drawn from the node's P2P outbound edges (η = 8
+     in the paper's simulations). `HOP0_OUTBOUND_TARGET` (4) read the
+     degree as the pool size, so the own-edge was drawn from a third of
+     the pool the analysis assumes. *Records-was: a pool of 4.* The
+     chance an attacker holds the whole pool is `p_h^h`, as the dialer
+     brief records it. *Records-was: `p^k`. At `p = 0.3` that is about
+     0.8% for `k = 4` and about `5×10⁻⁷` for `k = 12`.*
+     The dialer opens 12 onion circuits on the managed Tor. The
+     assignment at `net_node.inl:984` stays until the dialer deletes
+     it; it reads `shekyl_relay_zone_min_provisioned_out_peers()`.
+     *Records-was: the assignment was cited at `:926`.* Clearnet keeps
+     its own degree.
+     The graph is connector-agnostic. Measured transit and cover class
+     are declaration cells. The relay reads them through
+     `declaration(connector.column())`, as it already reads
+     `address_hidden_from_peer`. It does not match `ConnectorId`.
+     An unassessed transit is not a stem edge. Adding a connector is
+     one variant, one declaration column, and that connector's crate.
+     `shekyl-relay` (`src/graph`) does not change.
+   - **Embargo.** The stem watch records the connector the stem was
+     forwarded on, and the observation window is that connector's
+     measured transit, matched on `ConnectorId`: clearnet is
+     `ADOPTED_TRANSIT_ASSUMPTION_MS` (50), Tor is
+     `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (1 625). A connector with no
+     measurement is not a stem edge. Per transaction, not per relay.
+   - **Cover.** `CoverClass` is the ruling, not `link_encrypted` and not
+     `address_hidden_from_peer`. An open link (clearnet) may run the
+     substitution carrier when it is requested. Tor is volume cover: no
+     envelope, and a stem or an own-edge leaves immediately. On an open
+     link the unrestricted origin is a stem slot, so it is slot-aligned
+     with that channel. No cover on Tor by ruling; on cover-bearing
+     links the own-edge is slot-aligned.
+
+   UPDATE 2026-10-02. Role, epoch, fluff, and ingress do not read the
+   connector. Stem selection reads it twice: hop 0 reads the
+   declaration, and a connector with no measured transit is not a stem
+   edge. `FluffReach`, the zone-route token, and the origin roll are
+   deleted. Fluff is this relay's fanout. Hop 0 is the construction bit
+   above. The pool embargo is the connector the stem was forwarded on;
+   an unnamed connector draws the longest measured transit. The stem
+   floor is one note per connector, and the tally row carries that
+   connector. D7, outbound-fluff-only on a non-public zone, is deleted.
+   The carrier development flag stays, default off. `make_relay`
+   (`levin_notify.cpp:259`) sets the noise flag from that opt-in and
+   does not scan encryption cells. `Relay::new` refuses the flag when
+   no configured connector is an open link.
+
+   `m_network_zones` is keyed by connector identity (clearnet 0, tor 1).
+   The two handshake registrations pass the connector the seam observed
+   for that session, and the session bookkeeping (port announcement,
+   which peerlist a handshake appends to, the outbound cap trim) looks
+   that connector up. The old zone type is gone. `address_type` stays,
+   and discriminant 2 is not reused.
+   Listener, advertised address, seeds, peerlist, and inbound cap stay
+   per connector. Collapsing those into one session table is LV-3. The
+   protocol handler does not branch on the connector: a session syncs,
+   relays blocks, and takes transactions the same way whatever carried
+   it. The clearnet-only gates are gone: chain sync and compact-block
+   relay. (The support-flags request, also once clearnet-only, is
+   deleted with compression, 2026-10-19.) A session established before
+   the relay exists logs at error and is not registered.
+
+   `NETWORK_ID` is a handshake value, not a relay field. It is the
+   first 16 bytes of `cSHAKE256(S = "shekyl/p2p-network-id-v1",
+   X = genesis_block_hash)`, and the wire prefix is `prefix_for` of
+   that id. `shekyl_network_id` computes it from the genesis hash this
+   build already pins; C++ states no byte. A regenesis rotates the id
+   because the hash moves. The harness goldens keep their synthetic id.
 
 5. **Embargo is a deadline in the timing engine.** `OwnerClass::Relay`
    already exists (`shekyl-timing-engine`). The embargo is one
@@ -156,19 +237,43 @@ with this lane. The zone-enum change and this lane agree on criterion
 6. **Ingress gates are the relay's, decided in Rust.** After the
    `:832` reduction and LV-3, notify dispatch is Rust and the relay
    makes the ingress call with its own causes (`NotSynced`,
-   `UnknownSession`, `Duplicate`), logged after the decision. Today
-   `Including transaction` is logged at
-   `cryptonote_protocol_handler.inl:822` and
-   `m_state != state_normal` returns at `:832`, before the transaction
-   is accepted. `is_synchronized()` already answers whether the node
-   can validate it.
+   `UnknownSession`, `Duplicate`), logged after the decision. The
+   reduction landed in #922: only `state_before_handshake` is dropped,
+   and the log is a second pass that says the transaction was accepted
+   for admission. Moving that decision into Rust is what this
+   criterion still owes. `is_synchronized()` already answers whether
+   the node can validate it.
 
 7. **The measurements are inputs.** The hop distribution (transit,
-   verify, and admission, split), the transactions-per-epoch bound
-   against graph learning, and `record_stem_observation` feed the
-   embargo and the epoch length. They are taken against the head that
-   contains the stem-registry draw, not against the C++ filter they
-   replace.
+   verify, and admission, split) and `record_stem_observation` feed
+   the embargo. They are taken against the head that contains the
+   stem-registry draw, not against the C++ filter they replace. The
+   transactions-per-epoch bound is derived below.
+
+   **Transactions per epoch (2026-10-03).** Sharma–Gosain–Diaz §VII-A
+   reconstruct about 98.5% of a static privacy subgraph from about 100
+   transactions relayed per honest node. That figure is cumulative over
+   a static subgraph, and one epoch is the window for this bound only
+   because the stem map is redrawn each epoch, so observations of the
+   previous map do not help learn the new one — the stem-map inference
+   §VII-A reconstructs — while which nodes exist, their degrees, and
+   the hidden outbound sessions' membership survive the redraw and are outside
+   this bound. The count is stem arrivals at one honest node during
+   one epoch, not the network origination rate.
+
+   The epoch is `DandelionParams::inherited`: `min_epoch_secs` 600 plus
+   `epoch_jitter_secs` drawn uniformly from 0 to 30. Mean length 615 s.
+   100 arrivals in 615 s is a stem-arrival rate of 100/615 per second
+   at one honest node.
+
+   That count is the reopen. When a measured epoch shows 100 or more
+   stem arrivals at an honest node, the epoch is too long and must
+   shorten. Each transaction visits λ honest nodes in stem, and those
+   visits are spread over N honest nodes, so arrivals at one node per
+   second are R·λ/N. The network origination rate that produces 100
+   arrivals in a mean epoch is `R = 100·N / (λ·615)` transactions per
+   second. λ is the hop distribution and is not measured. Until it is,
+   the reopen is the count, not a guessed network rate.
 
 **Not consensus.** Every quantity in this document is node-local relay policy.
 Nodes running different delays do not fork, no rule reads these values, and
@@ -189,7 +294,8 @@ none of this is genesis-blocking. It is being fixed before ship because it is
 > `tests/unit_tests/txpool_relay_timers.cpp` (`TEST(relay_deadline,
 > an_out_of_range_draw_saturates_forward_never_backward)`,
 > `is_monotonic_in_the_draw`, `zero_draw_still_never_lands_in_the_past`) and
-> across `rust/shekyl-relay-privacy/` (`poisson.rs`, `geometric.rs`, `rng.rs`).
+> across `rust/shekyl-relay-privacy/` (`poisson.rs`, `geometric.rs`) and
+> `rust/shekyl-draw-rng/` (the RNG seam, moved out of that crate 2026-10-12).
 >
 > Dating the section is the whole remedy, and deliberately so: no sentence below
 > is edited, because deciding which of §0's findings the port has since closed is
@@ -203,7 +309,7 @@ resolve against git history, `git log --follow -- src/net/dandelionpp.cpp`),
 the epoch/stem/fluff orchestration in
 [`src/cryptonote_protocol/levin_notify.cpp`](../../src/cryptonote_protocol/levin_notify.cpp),
 and the stem embargo in
-[`src/cryptonote_core/tx_pool.cpp`](../../src/cryptonote_core/tx_pool.cpp).
+`src/cryptonote_core/tx_pool.cpp`.
 The routing is sound. The *timing* — which is the entire privacy mechanism —
 is not, and was never tested.
 
@@ -218,9 +324,9 @@ Four defects, each verified against source and measured:
 
 | # | Defect | Site | Severity |
 | --- | --- | --- | --- |
-| **F-1** | The embargo constant does not follow from its own stated derivation | [`tx_pool.cpp:66-87`](../../src/cryptonote_core/tx_pool.cpp#L66-L87) | Medium — wrong value |
-| **F-2** | The embargo is drawn from a Poisson; its derivation assumes an exponential. At these means the timer is near-deterministic and effectively never fires | [`tx_pool.cpp:1031`](../../src/cryptonote_core/tx_pool.cpp#L1031), `duration.h` *(header deleted whole by the memoryless rewrite, PR #431, commit [`071a7cc5e`](https://github.com/Shekyl-Foundation/shekyl-core/commit/071a7cc5e))* | **High — mechanism absent** |
-| **F-3** | The closed form substitutes `E[K]` into an expression in `K(K-1)`; stem length is geometric, so it under-provisions at every fluff probability | [`tx_pool.cpp:66-87`](../../src/cryptonote_core/tx_pool.cpp#L66-L87) | Medium — no constant correction fixes it |
+| **F-1** | The embargo constant does not follow from its own stated derivation | `tx_pool.cpp:66-87` | Medium — wrong value |
+| **F-2** | The embargo is drawn from a Poisson; its derivation assumes an exponential. At these means the timer is near-deterministic and effectively never fires | `tx_pool.cpp:1031`, `duration.h` *(header deleted whole by the memoryless rewrite, PR #431, commit [`071a7cc5e`](https://github.com/Shekyl-Foundation/shekyl-core/commit/071a7cc5e))* | **High — mechanism absent** |
+| **F-3** | The closed form substitutes `E[K]` into an expression in `K(K-1)`; stem length is geometric, so it under-provisions at every fluff probability | `tx_pool.cpp:66-87` | Medium — no constant correction fixes it |
 | **F-4** | The **fluff delay** has the same distribution defect as F-2, on the timer every node applies to every transaction | [`levin_notify.cpp:75-90`](../../src/cryptonote_protocol/levin_notify.cpp#L75-L90), [`:439-440`](../../src/cryptonote_protocol/levin_notify.cpp#L439-L440) | **High — mechanism degraded** |
 | **F-5** | Because of F-4, the fluff flood itself is ~7× slower than it needs to be — first passage to an arbitrary node takes ~13.75 s (p90) instead of ~2.25 s. A throughput consequence of the same defect, and it feeds back into the embargo derivation | same as F-4 | **High — network-wide latency** |
 
@@ -558,8 +664,8 @@ against the latency cost for Shekyl's expected topology.
 ### D-7 — the port seam
 
 Rust decides *when* and *to whom*. C++ keeps *how to serialize and send*:
-epee binary serialization, the 1024-byte padding walk, levin framing,
-fragmentation and compression. This workspace has no epee or levin
+epee binary serialization, the 1024-byte padding walk, levin framing and
+fragmentation. This workspace has no epee or levin
 implementation and building one is a separate multi-thousand-line project
 (§8).
 
@@ -575,8 +681,11 @@ loops for no gain.
 ## 2. What lands where
 
 **RP-1 (landed, this PR).** `rust/shekyl-relay-privacy` — the measurement
-instrument and the corrected primitives. Links nothing, replaces nothing,
-changes no daemon behaviour.
+instrument and the corrected primitives. At landing it linked nothing,
+replaced nothing, and changed no daemon behaviour. Since 2026-10-12 the
+default build's one dependency is `shekyl-draw-rng`, which itself links
+nothing. The `conformance` feature on this crate is still the float grader
+and still pulls `shekyl-stats`.
 
 | module | contents |
 | --- | --- |
@@ -584,7 +693,7 @@ changes no daemon behaviour.
 | `derive.rs` | The exact survival equation and the bisection solve (D-2) |
 | `poisson.rs` | Frozen integer inverse-CDF replacing `std::poisson_distribution` |
 | `geometric.rs` | The memoryless draw (D-1, D-3) |
-| `rng.rs` | `RelayRng` seam; unbiased rejection sampler |
+| `shekyl-draw-rng` (its own crate since 2026-10-12; *records-was* `rng.rs`) | `RelayRng` seam; unbiased rejection sampler. The seeded `SplitMix64` compiles only under `cfg(any(test, feature = "splitmix"))` |
 | `stem_map.rs` | Port of `connection_map`, `nil_uuid` sentinel replaced by `Option` in its three distinct roles |
 | `schedule.rs` | Epoch / fluff / embargo / noise state machines (D-7) |
 | `conformance.rs` | Feature-gated grades, the propagation simulator, the inversion instrument |
@@ -658,8 +767,8 @@ comparison, the existing daemon-submit boundary is 754 lines of C++ shim plus
 | Black-hole recovery scales as `M/(j+1)` | `black_hole_recovery_scales_with_holder_count` | Round 1 ✅ |
 | Black-hole attribution leak is mean-invariant; passive races are non-leaky | `black_hole_attack_leak_is_mean_invariant` | Round 2 ✅ |
 | First-spy diffusion precision π₀ | `first_spy_precision_rises_with_spy_fraction` | Round 2 ✅ |
-| Clearnet↔Tor delta: supernode observer collapses on Tor | `tor_collapses_the_supernode_diffusion_observer` | Round 2 (transport) ✅ |
-| Clearnet passive channel is real, mean-dependent, zero on Tor | `passive_clearnet_leak_is_mean_dependent_and_zero_on_tor` | Round 3 (ε lever) ✅ |
+| Production fluff: an inbound supernode observes it (EveryPeer, every connector). The retired D7 graph is the arm that sees nothing | `an_inbound_supernode_observes_a_production_fluff` | updated 2026-10-02 |
+| Production passive channel is mean-dependent; the retired D7 graph leaks nothing on that inbound edge | `every_peer_passive_leak_falls_with_the_embargo` | updated 2026-10-02 |
 | ≤0.3% worst-case exposure reachable via reshape, not embargo-lengthening | `origin_exposure_meets_target_via_reshape_not_embargo` | Round 3 (levers) ✅ |
 | Origin always stems (unit stem at q=100%) | `always_fluffing_gives_a_unit_stem_the_origin_still_holds` | Round 2 (RD-4) ✅ |
 | Frozen reference vectors, cross-architecture | `tests/golden_vector.rs` | RP-1 ✅ |
@@ -721,7 +830,7 @@ The relay-privacy adversary is a **P2P-network-layer observer of the origin
 daemon's peer traffic** — a peer, a set of sybil peers, or a passive network
 observer — reached only through the P2P interface, never the RPC one. Its
 visibility of a node's *fluff* is gated by transport, at
-[`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/zone/mod.rs#L521-L526):
+[`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/graph/mod.rs#L521-L526):
 
 ```text
 // When i2p/tor, only fluff to outbound connections
@@ -790,6 +899,12 @@ than one from a clearnet origin.
 > gap could have produced it. The measurements below remain valid and useful —
 > they quantify what Tor buys against the *passive* supernode adversary — but
 > they are no longer what the recommendation waits on.
+>
+> **SUPERSEDED 2026-10-02 (D7).** Outbound-only fluff is deleted. Production
+> fluff is `EveryPeer` on every connector, so an inbound supernode observes
+> the diffusion on Tor as on clearnet. The zero rows in the tables below are
+> the retired graph, not a current Tor property. Connector transit does not
+> select the edge set.
 
 The original framing, retained because the measurement programme it sets up is
 unchanged: Tor was **not** frozen as the principal default, pending the
@@ -805,23 +920,23 @@ on Tor." What it can do is **measure both configurations** and let the
 `simulate_transport_observation` measures exactly the delta the §6.3 source fact
 produces, for the paper's primary adversary — a supernode that opens cheap
 *inbound* edges to a fraction of honest nodes and runs the first-spy estimator
-(512 nodes, 12 peers, `tor_collapses_the_supernode_diffusion_observer`; re-measured
+(512 nodes, 12 peers, `an_inbound_supernode_observes_a_production_fluff`; the retired-graph rows were `tor_collapses_the_supernode_diffusion_observer`, re-measured
 at the §69.2 `peers` pin — §70.2):
 
 | supernode reach | transport | fluff observed | first-spy π₀ |
 | --- | --- | --- | --- |
 | dials 5 % | clearnet | 1.0000 | 0.0978 |
-| dials 5 % | **Tor/I2P** | **0.0000** | **0.000** |
+| dials 5 % | **Tor/I2P — RETIRED D7, not production** | **0.0000** | **0.000** |
 | dials 10 % | clearnet | 1.0000 | 0.1760 |
-| dials 10 % | **Tor/I2P** | **0.0000** | **0.000** |
+| dials 10 % | **Tor/I2P — RETIRED D7, not production** | **0.0000** | **0.000** |
 | dials 30 % | clearnet | 1.0000 | 0.4228 |
-| dials 30 % | **Tor/I2P** | **0.0000** | **0.000** |
+| dials 30 % | **Tor/I2P — RETIRED D7, not production** | **0.0000** | **0.000** |
 
 The delta is stark and structural: a clearnet supernode observes **every** fluff
 and attributes the source with the paper's first-spy precision (rising with its
 reach to ~0.42 at a 30 % attack); the same supernode over Tor observes
 **nothing**, because fluff never traverses its inbound edges
-([`zone/mod.rs:521`](../../rust/shekyl-relay/src/zone/mod.rs#L521)).
+([`zone/mod.rs:521`](../../rust/shekyl-relay/src/graph/mod.rs#L521)).
 That collapse is the measured additional security of the Tor configuration.
 
 **Honest scope of the Tor benefit.** It collapses the *passive*
@@ -834,7 +949,7 @@ the cheap inbound supernode; the black-hole channel is unchanged, and remains
 the reason the mechanism itself (embargo distribution + Q-8a reshape) must be
 correct regardless of transport.**
 
-### 6.6 The clearnet passive channel is real, mean-dependent, and zero on Tor
+### 6.6 The passive channel is real and mean-dependent — Tor's structural zero is RETIRED D7 (2026-10-02)
 
 `simulate_transport_observation` (§6.5) measures the *diffusion-phase* supernode
 — what it learns from watching natural fluff. `simulate_passive_neighbor_leak`
@@ -842,7 +957,7 @@ measures the *embargo-phase* leak the same inbound supernode gets: when a
 stem-prefix node's embargo fires before it is disarmed, a supernode neighbouring
 that node catches the early fluff and attributes the source to a prefix member.
 Measured (supernode reach φ = 0.10,
-`passive_clearnet_leak_is_mean_dependent_and_zero_on_tor`):
+`every_peer_passive_leak_falls_with_the_embargo`; the zero row is the retired graph):
 
 | embargo mean | transport | leak rate | origin share of leaks |
 | --- | --- | --- | --- |
@@ -855,7 +970,7 @@ Measured (supernode reach φ = 0.10,
 | 144 s (adopted **until F-7**; now 190 s, see banner) | clearnet | 0.0114 | 0.20 |
 | 300 s | clearnet | 0.0056 | 0.20 |
 | 500 s | clearnet | 0.0032 | 0.20 |
-| *any* | **Tor/I2P** | **0.0000** | — |
+| *any* | **Tor/I2P — RETIRED D7, not production** | **0.0000** | — |
 
 Two properties, both load-bearing for Round 3:
 
@@ -908,7 +1023,7 @@ leak = P(preempt)  ×  neighbour(supernode reach)  ×  origin-attribution
 
 - **Embargo mean** sets `P(preempt)` — mean-dependent, the lever moved by RD-1/RD-4.
 - **Fluff-return `F`** sets the disarm window `h·hop + F`
-  ([`tx_pool.cpp` `now + embargo_duration()`](../../src/cryptonote_core/tx_pool.cpp#L1053)):
+  (`tx_pool.cpp` `now + embargo_duration()`):
   a larger `F` gives every prefix embargo longer to fire, so it pushes the leak
   **opposite** to the embargo mean. And `F` is downstream of F-4 — the memoryless
   fix made the return flood ~7× faster (F-5) — so **F-4 was a second, independent
@@ -1909,7 +2024,7 @@ structurally — not by simulation.** The candidate was a passive out-neighbour:
 spy that receives a prefix node's *forced fluff* by neighbouring it, whose leak
 (unlike the black-hole's) would *scale down* with the embargo mean and so reopen
 `ε` as a live lever. Whether that observable exists is decided entirely by who a
-fluff reaches, and [`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/zone/mod.rs#L521-L526)
+fluff reaches, and [`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/graph/mod.rs#L521-L526)
 settles it (§6.3): on the public zone fluff reaches inbound peers, so an
 inbound sybil *does* see it — the observable is **real on clearnet**; on I2P/Tor
 fluff is outbound-only, so an inbound sybil sees nothing — the observable is
@@ -2033,7 +2148,7 @@ reasons — *and a refuted one I record so it is not re-argued*:
 > [`stem_map.rs`](../../rust/shekyl-relay-privacy/src/stem_map/mod.rs), the cached
 > `in_mapping_[source]` is its `inbound` map, and the caller that would choose
 > the alternate is `Zone::plan_relay` in
-> [`zone.rs`](../../rust/shekyl-relay/src/zone/mod.rs). **The line numbers below are
+> [`zone.rs`](../../rust/shekyl-relay/src/graph/mod.rs). **The line numbers below are
 > kept as written** — they record what was verified at the time, and rewriting
 > them would silently re-attribute that verification to code nobody checked.
 > RP-2b re-grounds against the Rust source.
@@ -2141,7 +2256,7 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 - **Coupling note — the outbound structure read on two channels (net, don't
   double-count).** Two *distinct* source facts both flow from the origin's use of
   outbound connections: fluff is outbound-only on Tor
-  ([zone/mod.rs:521](../../rust/shekyl-relay/src/zone/mod.rs#L521)),
+  ([zone/mod.rs:521](../../rust/shekyl-relay/src/graph/mod.rs#L521)),
   which makes the inbound passive supernode structurally absent (§6.3, reshape's
   *friend*); and the stem pool is the outbound set
   (dandelionpp.cpp:103,
@@ -2227,7 +2342,7 @@ plus 2 anchors** (`P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT = 70`,
 `P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT = 2`) — **records-was: the anchor
 constant and mechanism were deleted 2026-09-06, so the 2-anchor share is gone.
 Selection is otherwise unchanged and the `g` derivation must be grounded on
-what remains: `connections_maker` is still white-first up to the 70 % target,
+what remains (*records-was*, before PR-3 deleted `connections_maker` 2026-10-13; the Rust dialer's fill rules replace this paragraph): `connections_maker` is still white-first up to the 70 % target,
 then gray for the remainder. The two-class ordering did NOT collapse into a
 single pool — only the anchor-reserved share disappeared. See the STALE note
 above** — and the white list
@@ -2484,7 +2599,7 @@ mechanism* of §12.9, under which the broadcast disappears as a consequence.
 *Reconciliation with §6.5/§6.6 (verified at source; those sections are already
 pushed):* they model the **fluff phase's** inbound observability — the
 *channel-observer* axis — transport-gated at
-[zone/mod.rs:521](../../rust/shekyl-relay/src/zone/mod.rs#L521)
+[zone/mod.rs:521](../../rust/shekyl-relay/src/graph/mod.rs#L521)
 (`fluff_notify` runs per-zone; on Tor it fluffs outbound-only). That is a *different
 phase and a different axis* from stem occupancy, so §6.5's "Tor collapses the
 inbound supernode" is correct **for the channel-observer axis** and must not be read
@@ -3123,13 +3238,13 @@ reshape stops being a lever we weigh and becomes the mechanism.
 
 On embargo expiry the stem transaction is **promoted to fluff**.
 `get_relayable_transactions` returns the expired tx tagged with its own relay
-method — `stem` ([tx_pool.cpp:998](../../src/cryptonote_core/tx_pool.cpp#L998)) —
+method — `stem` (tx_pool.cpp:998) —
 and `cryptonote_core` then buckets `stem` into `public_req`
 ([:1075-1076](../../src/cryptonote_core/cryptonote_core.cpp#L1075)) and relays
 `public_req` with **`relay_method::fluff`**
 ([:1087](../../src/cryptonote_core/cryptonote_core.cpp#L1087)). The loop-detection
 twin does the same on receiving a stemmed tx back
-([tx_pool.cpp:296](../../src/cryptonote_core/tx_pool.cpp#L296)). So the mechanism's
+(tx_pool.cpp:296). So the mechanism's
 answer to "I didn't see my tx return" is **fluff it** — and that fluff *is* C3.
 (This also confirms the crate's instruments modelled the right event: preemption
 = a fluff, not a silent re-stem.)
@@ -3268,7 +3383,7 @@ timescales are stacked in a narrow band.
 ### 15.2 The block-inclusion path is clean (verified)
 
 A mined tx is dropped from the pool via `remove_txpool_tx`
-([blockchain.cpp:7053](../../src/cryptonote_core/blockchain.cpp#L7053), the
+(blockchain.cpp:7053, the
 block-connect path), and the embargo lives in that pool entry's
 `meta.last_relayed_time`, which `get_relayable_transactions` only reads for
 pool-resident txes — so a mined tx **cannot** fire a stale embargo. And the margin
@@ -3619,14 +3734,14 @@ mirror image — and sets the precedent this round follows (below). The rest hol
 | Anchor | At source |
 | --- | --- |
 | The 39 s constant | `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE` (`cryptonote_config.h`) |
-| The F-1 ghost, in prose | the derivation comment, [tx_pool.cpp:66–86](../../src/cryptonote_core/tx_pool.cpp#L66) — its own formula over `k=5, ep=0.10, hop=175 ms` gives **16.61 s**; 39 s reproduces only under `log10` for `ln` |
-| The F-2 draw | `crypto::random_poisson_seconds embargo_duration{…}` ([tx_pool.cpp:1031](../../src/cryptonote_core/tx_pool.cpp#L1031)), applied at [:1053](../../src/cryptonote_core/tx_pool.cpp#L1053) |
+| The F-1 ghost, in prose | the derivation comment, tx_pool.cpp:66–86 — its own formula over `k=5, ep=0.10, hop=175 ms` gives **16.61 s**; 39 s reproduces only under `log10` for `ln` |
+| The F-2 draw | `crypto::random_poisson_seconds embargo_duration{…}` (tx_pool.cpp:1031), applied at :1053 |
 | The wallet consumer | `tx_propagation_timeout = EMBARGO_AVERAGE * 3/2` (the deleted `wallet2.cpp`) — second consumer of the constant; on expiry marks the transfer failed and un-spends key images |
-| The other timer | `MIN_RELAY_TIME = 300` ([tx_pool.cpp:94](../../src/cryptonote_core/tx_pool.cpp#L94)) |
+| The other timer | `MIN_RELAY_TIME = 300` (tx_pool.cpp:94) |
 | The Rust primitive | `EmbargoTimer::{adopted, inherited, geometric_with_tick, …}` (`schedule.rs`) — already landed, unmoved |
 
 `crypto::random_poisson_seconds` has exactly **two** users, both in `tx_pool.cpp`:
-the embargo (removed here) and the `forward` delay ([:307](../../src/cryptonote_core/tx_pool.cpp#L307)).
+the embargo (removed here) and the `forward` delay (:307).
 The forward delay is out of RP-4's scope; it is the last consumer of that header
 and a candidate for a later round, named here so it is not forgotten.
 
@@ -3639,7 +3754,7 @@ answers them — which is the point of re-censusing before building.
   drops a duplicate stem receipt silently, a loop is a self-inflicted black hole
   recovered only at embargo latency… needs a `tx_pool.cpp` duplicate-stem-receipt
   check **before RP-4**." It does not drop it:
-  [tx_pool.cpp:295–296](../../src/cryptonote_core/tx_pool.cpp#L295) converts a
+  tx_pool.cpp:295–296 converts a
   stem receipt for a tx already in `dandelionpp_stem` state to **fluff** — the
   Dandelion++ prototype behaviour the item asks for. The loop-black-hole failure
   mode does not exist, and RP-4 is therefore unblocked. (This mattered more after
@@ -3650,7 +3765,7 @@ answers them — which is the point of re-censusing before building.
   (300 s), where at 39 s it did not, so "a black-holed origin's first
   `MIN_RELAY_TIME` re-relay and its embargo recovery can now cross." At the seam
   they cannot: the relay loop dispatches on relay *method*
-  ([tx_pool.cpp:969–987](../../src/cryptonote_core/tx_pool.cpp#L969)) —
+  (tx_pool.cpp:969–987) —
   `stem`/`forward` are gated **solely** by `last_relayed_time > now` (which for an
   embargoed tx *is* the embargo deadline, a future timestamp), while
   `get_relay_delay`/`MIN_RELAY_TIME` gates only `local`/`fluff`/`block`. The two
@@ -3680,15 +3795,16 @@ holds per-epoch, per-connection state; the embargo distribution is node-local
 process-wide `OnceLock` (the tables are immutable once built) and the same
 `OsRng` the map FFI uses:
 
-> **Signature updated 2026-08-08 (§89.2).** The draw takes a zone byte, and the
-> `OnceLock` holds one timer per *parameter class* rather than one for the
-> process — `DandelionParams::adopted_class` owns that partition. This row is
+> **Signature updated 2026-10-07.** The zone-byte draw is deleted. The live
+> draw is the forwarded connector's measured transit. *Records-was
+> 2026-08-08 (§89.2):* the draw took a zone byte and
+> `DandelionParams::adopted_class` partitioned the timers. This row is
 > the live inventory for the seam; §64.4's "takes no arguments" is the
 > superseded state.
 
 | C++ call site | FFI |
 | --- | --- |
-| `embargo_duration()` per stem tx ([tx_pool.cpp](../../src/cryptonote_core/tx_pool.cpp)) | `shekyl_dandelionpp_embargo_draw_seconds(zone: u8) -> u64` |
+| `embargo_duration()` per stem tx (tx_pool.cpp) | `shekyl_dandelionpp_embargo_draw_seconds_for_connector(connector: u8) -> u64` |
 | `tx_propagation_timeout` in `wallet2` (the deleted `wallet2.cpp`) | `shekyl_dandelionpp_propagation_timeout_seconds() -> u64` |
 
 `crypto::random_poisson_seconds embargo_duration{…}` and the
@@ -4113,8 +4229,8 @@ peers notified where five belonged. It reads like a delivery detail and is a
 privacy rule: on a hidden service an inbound peer is a stranger who dialled us,
 so relaying to it hands a transaction to a peer this node never chose — the exact
 sybil exposure i2p/tor is standing in for now that Dandelion++ stemming is off.
-It is now `FluffReach::OutboundOnly`, a zone-lifetime policy in Rust, with a test
-asserting *who* received the batch plus a public-zone negative control.
+**SUPERSEDED 2026-10-02.** That restoration was `FluffReach::OutboundOnly`.
+D7 deleted the rule: a fluff reaches every session, and the type is gone.
 
 **But §18.4b's map could not have predicted it, and that is the lesson.** The map
 is organised by the behaviours the port *knew it was moving*; the outbound-only
@@ -4328,7 +4444,7 @@ where does the fact live now."**
 | G-3 | Stem pool is all synced outbound, anchors included | `get_out_connections:142-159` | **holds** | `:186-192` |
 | G-4 | ~~Anchor admission is any successful outbound handshake~~ | ~~`net_node.inl:1347`~~ | **NO LONGER HOLDS — mechanism deleted 2026-09-06** | The anchor list, its admission and its dial arm were removed whole; there is no anchor admission to verify. See the STALE note in §12.11 |
 | G-4 | ~~On reconnect the 2 anchor slots fill first~~ | ~~`net_node.inl:1820`~~ | **NO LONGER HOLDS — mechanism deleted 2026-09-06** | No anchor slots exist. Refill is white-first to the 70 % target, then gray |
-| §12.6 | Fluff is transport-gated: on Tor it fluffs outbound-only | `fluff_notify` `:448` | **holds — moved languages** | `FluffReach::OutboundOnly` (`zone/mod.rs`). RP-3a dropped this rule and the eight `private_*` gtests caught it; restored with `a_private_zone_fluffs_only_to_outbound_peers` |
+| §12.6 | Fluff is transport-gated: on Tor it fluffs outbound-only | `fluff_notify` `:448` | **NO LONGER HOLDS — D7 deleted 2026-10-02** | Fluff reaches every session. `FluffReach` is gone. The retired directed graph remains an instrument in `shekyl-relay-privacy` (`FloodReach::OutboundOnly`) and is not production |
 | — | `send_noise` pads every channel to a constant rate on its own timer | `:663` | **holds** | `:780`, `:811` |
 
 **Two findings from the census, neither of which is a line-number update.**
@@ -4871,7 +4987,7 @@ would need a different shape. Three ingredients, all present today:
 
 | Ingredient | Site | Survives the inversion |
 | --- | --- | --- |
-| ground truth from the owning structure | `Zone::stem_slots() -> &[Option<ConnectionId>]` ([`zone/mod.rs:464`](../../rust/shekyl-relay/src/zone/mod.rs#L464)) | yes — the inversion does not touch `map.slots()` |
+| ground truth from the owning structure | `Zone::stem_slots() -> &[Option<ConnectionId>]` ([`zone/mod.rs:464`](../../rust/shekyl-relay/src/graph/mod.rs#L464)) | yes — the inversion does not touch `map.slots()` |
 | emission capture in a test | `rec_slots` ([`tests.rs:33`](../../rust/shekyl-ffi/src/relay_zone_ffi/tests.rs#L33)), a supplied `extern "C"` collector | yes — a `rec_covert_send` is the same pattern |
 | deterministic time | `shekyl_relay_zone_poll(handle, now_ms, …)` | yes — "channel comes due" is driven, not awaited |
 
@@ -5814,7 +5930,7 @@ capability, per §20.9) starts from the literature, untouched by any of this.
   `CRYPTONOTE_NOISE_BYTES = 3 KiB` (no Rust representation; C++-owned payload
   size) and `CRYPTONOTE_NOISE_CHANNELS = 2` (Rust-mirrored and
   construction-refusing at
-  [`zone/mod.rs:256`](../../rust/shekyl-relay/src/zone/mod.rs#L256)) join the
+  [`zone/mod.rs:256`](../../rust/shekyl-relay/src/graph/mod.rs#L256)) join the
   Q-11 ledger. The aggregate is ≈ 2 × 3072 B / 12.5 s ≈ **491 B/s per noise
   zone**, and a rate target trades bytes against interval — a derivation
   scoped to intervals alone can only see one axis, with the other bound by
@@ -5831,7 +5947,7 @@ capability, per §20.9) starts from the literature, untouched by any of this.
 
 ### 22.2 Q-12 — the forward-delay draw: registered, and live by its own criterion (a)
 
-[`tx_pool.cpp:311`](../../src/cryptonote_core/tx_pool.cpp#L311) draws the
+`tx_pool.cpp:311` draws the
 i2p/tor→clearnet forwarding delay as
 `crypto::random_poisson_seconds{22 s}` — Poisson, σ ≈ 4.7 s, **not
 memoryless**: the F-2/F-4 family signature, under a mean whose stated design
@@ -6065,10 +6181,10 @@ Traced by call graph, and the trace is decisive rather than suggestive:
    — on a noise zone, `relay_method::stem` is demoted to `relay_method::local`
    *before* `on_transactions_relayed`, under the comment *"do not put into
    stempool embargo"*.
-2. [`blockchain_db.cpp`](../../src/blockchain_db/blockchain_db.cpp) — `local`
+2. `blockchain_db.cpp` — `local`
    sets `is_local = 1`; `dandelionpp_stem` is a **different case arm** and
    stays `0`.
-3. [`tx_pool.cpp:1054`](../../src/cryptonote_core/tx_pool.cpp#L1054) — the
+3. `tx_pool.cpp:1054` — the
    derived embargo arms **only** under `if (meta.dandelionpp_stem)`.
 
 **So a transaction sent over the covert channel never arms the backstop this
@@ -6129,7 +6245,7 @@ against T?"* rather than *"what does the lineage do?"*.
 
 **What survives — and it is stronger than what it replaces. (b), verified at
 source.**
-[`CovertSchedule::due_one`](../../rust/shekyl-relay/src/zone/mod.rs#L171)
+[`CovertSchedule::due_one`](../../rust/shekyl-relay/src/graph/mod.rs#L171)
 re-arms from **`now`**, not from the elapsed deadline. Its own comment states
 the trade — *"phase may lag; rate does not"* — and that decomposition is
 correct **against load**, which is the only case it was evaluated against.
@@ -6263,7 +6379,7 @@ Three statements of the same rule, in increasing strength:
 
 1. **Inherited C++** ([`levin_notify.cpp:1054-1058`](../../src/cryptonote_protocol/levin_notify.cpp#L1054-L1058))
    — *anonymity networks provide sybil protection*.
-2. **Our Rust doc** ([`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/zone/mod.rs#L521-L526))
+2. **Our Rust doc** ([`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/graph/mod.rs#L521-L526))
    — selection-based: an inbound peer is a stranger who dialled us; only
    outbound are ones we chose.
 3. **Correct, and it subsumes both** — on an anonymity network **inbound peer
@@ -6366,7 +6482,7 @@ as an open question for the §6 round, not decided here.
 The inherited claim ([`levin_notify.cpp:1060-1062`](../../src/cryptonote_protocol/levin_notify.cpp#L1060-L1062))
 is that Dandelion++ over I2P/Tor needs *"the mempool/stempool to know the zone
 a tx originated from."* Checked: `txpool_tx_meta_t`
-([`blockchain_db.h:177-206`](../../src/blockchain_db/blockchain_db.h#L177-L206))
+(`blockchain_db.h:177-206`)
 has **no zone field**, so the claim is accurate *as a description*. It is
 **false as a statement of feasibility**: the struct carried `bf_padding : 2`
 at the time —
@@ -7435,8 +7551,8 @@ mode is itself a candidate design, the control does double duty — rare, and to
 be taken when it appears.)*
 
 **3. The perturbation drives production, with zero test-only code.**
-[`Zone::covert_deadline()`](../../rust/shekyl-relay/src/zone/mod.rs#L284) and
-[`Zone::due_covert_channel(now, rng)`](../../rust/shekyl-relay/src/zone/mod.rs#L292)
+[`Zone::covert_deadline()`](../../rust/shekyl-relay/src/graph/mod.rs#L284) and
+[`Zone::due_covert_channel(now, rng)`](../../rust/shekyl-relay/src/graph/mod.rs#L292)
 both take `now` as a **parameter** (verified). **A stall is simply not calling
 `due_covert_channel` across a range of `now` and then resuming** — which
 reproduces the re-arm-from-`now` semantics **because it is that code path.**
@@ -7518,7 +7634,7 @@ alone.**
 ### 33.2 §12.11 reads an oracle that production does not wire
 
 **Verified at source today:** `PeerFluff`
-([`zone/mod.rs:41-53`](../../rust/shekyl-relay/src/zone/mod.rs#L41-L53))
+([`zone/mod.rs:41-53`](../../rust/shekyl-relay/src/graph/mod.rs#L41-L53))
 carries **`queued` and `direction` — nothing else.** A grep for `disarm` across
 `rust/` and `src/` returns only *derivation* (`derive.rs`), *doc comments*
 (`params.rs`) and *simulation* (`conformance/stem.rs`) — **no production code
@@ -9098,7 +9214,11 @@ more margin than at 144 s.
 
 **Closes F-7** — measured (§40.1: a degree effect), derived (§40.2), landed,
 re-baselined, and §14 restated. Configuration C's embargo is now provisioned
-from the fluff rule it actually uses.
+from the fluff rule it actually uses. *Records-was, 2026-10-08: the 3250 ms
+input this close used is the transit-free degree-12 reading. §95.3 holds it
+as the provisional fail-safe, and §96 item 2 re-derives it on production
+`EveryPeer` with per-connector transit. The degree floor in §45 still holds
+for the transit-free instrument.*
 
 **Leaves, unchanged in order:** mean outbound connection lifetime (F-8's
 convergence check — independent, cheapest); the tx-hash plumbing (§39.6's
@@ -9113,7 +9233,9 @@ and Unit 2 with its substrate.
 ### 45.1 The finding
 
 §44.3's worst-zone argument holds because 3250 ms is the worst case — **at
-usable degree ≥ 12.** Verified at source: a default zone gets
+usable degree ≥ 12.** *Records-was, 2026-10-08: "worst case" here is the
+transit-free instrument. Tor transit on the return is open (§95.3, §96
+item 2); the 190 s derivation is not rewritten by that opening.* Verified at source: a default zone gets
 `P2P_DEFAULT_CONNECTIONS_COUNT = 12` outbound (`set_max_out_peers` with
 `max == -1`, `net_node.inl:2683`), so the pin is correct **for the default
 deployment**. But `--tx-proxy <zone>,<addr>,N` sets the count directly with no
@@ -9505,9 +9627,9 @@ first successful probe fluffs it and closes the window for everyone.
 
 **The discriminator's fix cost went up, and a cheaper fix appeared.** Both
 structural facts — `relay_category::broadcasted` excluding stem
-([`blockchain_db.h:116`](../../src/blockchain_db/blockchain_db.h#L116)) and
+(`blockchain_db.h:116`) and
 `add_tx` taking no peer
-([`tx_pool.cpp:376`](../../src/cryptonote_core/tx_pool.cpp#L376)) — say the
+(`tx_pool.cpp:376`) — say the
 **incoming path drops identity, exactly as it dropped the hash (§48)**. Third
 instance of one shape. So the peer discriminator needs a signature change
 *through the incoming path*, not a comparison at the decision site.
@@ -11184,15 +11306,15 @@ sections have been reasoning about **does not exist and never did.**
 `zone_->nzone == public_`.** On i2p/tor, `stem`, `forward` and `local` fall
 through the `case` labels into the **`fluff`** arm:
 
-- `src/cryptonote_protocol/levin_notify.cpp:1222` — the `nzone == public_`
-  gate around the D++ dispatch; `:1231` — the `/* fallthrough */` into
-  `relay_fluff`.
-- `tests/unit_tests/levin.cpp:1536-1582`
-  (`levin_notify.private_stem_without_padding`) asserts it: a `stem` send on a
+- line 1222 of `src/cryptonote_protocol/levin_notify.cpp` at `e8838b0095` — the
+  `nzone == public_` gate around the D++ dispatch; 1231 — the
+  `/* fallthrough */` into `relay_fluff`.
+- lines 1536 to 1582 of `tests/unit_tests/levin.cpp` at `e8838b0095`
+  (`levin_notify.private_stem_without_padding`) asserted it: a `stem` send on a
   private zone reaches **every** outbound peer (5 of 10 connections), each
   notification carries `dandelionpp_fluff == true`, and the local txpool is
   told `relay_method::stem` — so the embargo arms.
-- `tests/unit_tests/levin.cpp:1588` names it in an inherited comment:
+- line 1588 of `tests/unit_tests/levin.cpp` at `e8838b0095` named it in an inherited comment:
   *"private mode always uses fluff but marked as stem."*
 
 `relay_fluff` → `shekyl_relay_zone_queue_fluff` is a **scheduled per-peer
@@ -11580,7 +11702,7 @@ embargo cannot currently be per-zone**:
 
 - `shekyl_dandelionpp_embargo_draw_seconds()` (`dandelionpp_ffi.rs:95`) takes
   **no arguments** — there is no zone to pass.
-- `tx_pool.cpp` carries **no** `epee::net_utils::zone` reference at all; the
+- `tx_pool.cpp` carries **no** zone-type reference at all; the
   arm site (`:1058`) is zone-blind.
 
 This is exactly the dependency the inherited comment names at
@@ -11677,11 +11799,11 @@ file. The mismatch is a stale checkout, not a disputed fact.
 
 | anchor | content that locates it |
 | --- | --- |
-| `:936` | `if (covert_enabled \|\| zone == epee::net_utils::zone::public_)` |
+| `:936` | `if (covert_enabled \|\| zone ==` the public-zone enumerator) |
 | `:974-977` | `void notify::new_out_connection()` + its `covert_enabled` early return |
 | `:807`, `:827` | `make_payload_send_txs(*zone_->p2p, …, zone_->pad_txs, false)` |
 | `:561` | `make_payload_send_txs(*z.p2p, …, z.pad_txs, true)` |
-| `:1222` | `if (zone_->nzone == epee::net_utils::zone::public_)` |
+| `:1222` | `if (zone_->nzone ==` the public-zone enumerator) |
 
 > **A line number is a coordinate in one checkout; the content is the claim.**
 > `params.rs`'s numbers moved in this arc's own PR #397, which is exactly how
@@ -12201,7 +12323,7 @@ REST handler, and none of the sixteen admin REST paths appear in
 
 §69.2 pinned `FloodParams::peers` 8 → 12 and updated §67.2 and §28.4. It did
 not touch **§6.5**, whose table is the recorded output of
-`tor_collapses_the_supernode_diffusion_observer` — a test that consumes
+`tor_collapses_the_supernode_diffusion_observer` (renamed `an_inbound_supernode_observes_a_production_fluff`) — a test that consumed
 `FloodParams::default()`. The pin therefore re-parameterised that measurement
 silently, and every assertion in it got *easier* at higher degree
 (`observed_fraction > 0.9`, a structural-zero Tor arm, a monotonicity arm), so
@@ -12267,7 +12389,7 @@ two doc comments saying so.
 | §55.2's three false claims | **amended on the record** (superseded note, not a rewrite) |
 | `handler_for` totality → compile time | **done (§70.1)** — `Endpoint`-keyed table, exhaustive match, no wildcard; the startup panic is now `error[E0004]`, and the specification tests green untouched across the change |
 | `state.restricted` at the one call site | **open, named at the site** — needs an `AppState`, which links `core_rpc_ffi_*`; the only route-table property still resting on review |
-| `propagation_measurement` wall-clock | **accepted, and measured so it is visible**: `tor_collapses_the_supernode_diffusion_observer` runs **143–236 s** debug on the reference box across two runs (the spread is machine load, not variance in the instrument — the π₀ figures are bit-identical, the draws being seeded), and the whole suite runs in CI's default workspace pass because the crate's own dev-dependency self-enables `conformance` — so a `required-features` gate on the `[[test]]` would gate nothing. The two real remedies both cost more than the wall-clock: cutting trial counts edits a measurement instrument for CI convenience, and moving the suite behind a non-auto feature relocates the cost without removing it. Recorded rather than trimmed |
+| `propagation_measurement` wall-clock | **accepted, and measured so it is visible**: `an_inbound_supernode_observes_a_production_fluff` (formerly `tor_collapses_the_supernode_diffusion_observer`) ran **143–236 s** debug on the reference box across two runs of the old body (the spread is machine load, not variance in the instrument — the π₀ figures are bit-identical, the draws being seeded), and the whole suite runs in CI's default workspace pass because the crate's own dev-dependency self-enables `conformance` — so a `required-features` gate on the `[[test]]` would gate nothing. The two real remedies both cost more than the wall-clock: cutting trial counts edits a measurement instrument for CI convenience, and moving the suite behind a non-auto feature relocates the cost without removing it. Recorded rather than trimmed |
 | `hop` quantile policy | decided (§66); clearnet measurement still outstanding |
 | F′ reverse-parity readouts | unblocked; three readouts in §67.2's order |
 
@@ -13077,7 +13199,7 @@ permissive one.
 all:**
 
 > *"A mined tx is dropped from the pool via `remove_txpool_tx`
-> ([blockchain.cpp:7053](../../src/cryptonote_core/blockchain.cpp#L7053), the
+> (blockchain.cpp:7053, the
 > block-connect path), and the embargo lives in that pool entry's
 > `meta.last_relayed_time`, which `get_relayable_transactions` only reads for
 > pool-resident txes — so a mined tx **cannot** fire a stale embargo."*
@@ -14004,7 +14126,19 @@ Recomputed at `q = 20` — the anon zone's value, verified unchanged:
 The decision stands. What changes is that it arrives with a bill §64 had not
 priced, because §63.2's margin was computed on the posture being retired.
 
-### 89.2 The embargo is per-zone — and F-7's precedent does not transfer
+### 89.2 The embargo is per-zone — SUPERSEDED 2026-10-01; the zone-keyed export is records-was 2026-10-07
+
+> **Records-was 2026-10-07.** `shekyl_dandelionpp_embargo_draw_seconds(zone)`
+> is deleted, with `RelayZone`, `adopted_for(RelayZone)`, `adopted_class`
+> and `CLASS_REPRESENTATIVES`. The live draw is
+> `shekyl_dandelionpp_embargo_draw_seconds_for_connector`
+> (`tx_pool.cpp:1277`), from the forwarded connector's measured transit.
+>
+> **SUPERSEDED 2026-10-01.** The premise that a stem stays on the zone
+> it arrived on is reversed. One relay draws after hop 0 over every
+> outbound edge, and the embargo reads the measured transit of the edge
+> that stem was forwarded on. The argument below is the record of the
+> ruling it replaced.
 
 > **Two amendments from §89.8, neither retracting the decision.** (a) The
 > well-definedness argument below leans on coherence keeping a stem on one
@@ -14014,8 +14148,9 @@ priced, because §63.2's margin was computed on the posture being retired.
 > hop. Current liveness of that premise is the checklist at §89.8.4, not
 > restated here. (b) The mechanism is landed. Whether it draws on i2p/tor is
 > the same checklist. Clearnet draws through it on every stem. The back-out of
-> the persisted zone field stands and is reconfirmed by §89.8.3 — and by the
-> draw site itself, which already takes `zone` as a parameter.
+> the persisted zone field stands and is reconfirmed by §89.8.3.
+> *Records-was 2026-10-07:* the draw site took `zone`. It takes the
+> connector.
 
 The tempting move is F-7's: provision one global at the worst zone, as
 `fluff_return_ms = 3250` already does. **It does not apply here, by this arc's
@@ -14462,7 +14597,7 @@ load-bearing. On the shipped path it is **false**, and not merely untested:
 The `forward` transaction from §89.8.1 waits out its delay in the pool and
 re-emerges through `core::relay_txpool_transactions`, which maps
 `case relay_method::forward: stem_req` (`cryptonote_core.cpp:1069-1071`) and
-dispatches `stem_req` at **`epee::net_utils::zone::public_`** with a nil source
+dispatches `stem_req` at **the public-zone enumerator** with a nil source
 (`:1091`). Origin `public_` cannot cohere and a nil source cannot re-roll, so
 the remaining hops of that stem run on **clearnet**.
 
@@ -14583,7 +14718,9 @@ unbounded wait turned a red assertion into a CI job timeout with no test named.
 >    field on the finding that the txpool does not need to remember the zone,
 >    only to be told it. That holds at the embargo draw: `set_relayed` takes
 >    `zone` beside `tx_relay` and calls
->    `shekyl_dandelionpp_embargo_draw_seconds(zone)`; every
+>    `shekyl_dandelionpp_embargo_draw_seconds(zone)` (*records-was
+>    2026-10-07; the live call is
+>    `shekyl_dandelionpp_embargo_draw_seconds_for_connector`*); every
 >    `on_transactions_relayed` site has `zone_->nzone` in scope. Q12-D2
 >    reconfirmed it. Missing-only-the-draw is the cheapest outcome that was
 >    worth checking, and it is the state of the *input*.
@@ -14954,9 +15091,12 @@ not a working posture — not by ruling, but by routing.**
 
 ### 91.2 Design A is adopted
 
-**Tor-only is a supported posture. It is not the default.** Seed hosts run
-dual-network and are knowingly linkable, which costs nothing: long-running
-public infrastructure whose onion is discoverable anyway.
+**Tor-only is a supported posture. It is not the default.**
+**UPDATE 2026-10-08 (Rick): supported is not recommended.**
+Recommending Tor-only is rejected until the six carriers in §96
+close. Seed hosts run dual-network and are knowingly linkable, which
+costs nothing: long-running public infrastructure whose onion is
+discoverable anyway.
 
 > **Disambiguation added 2026-09-01 — this sentence is *not* in tension with the
 > Tor-default ruling, and the distinction is easy to lose.** §6.5 now records
@@ -15143,7 +15283,7 @@ decisions none of which was made for it:**
 > field and this row still names `ANON_ZONE_SENTINEL_PEER_ID = 1`, the check
 > resolves against a mechanism that is gone, and the honest answer — *the leg is
 > now unconditional* — is unavailable from the text. The same note is owed to
-> `rust/shekyl-relay/src/zone/mod.rs`, whose §91.4 argument cites the sentinel
+> `rust/shekyl-relay/src/graph/mod.rs`, whose §91.4 argument cites the sentinel
 > by name.
 >
 > **Nothing about A changes.** The leg is currently satisfied by the sentinel and
@@ -15545,7 +15685,10 @@ adopted anonymity timer is **1148 s**
 (`shekyl_dandelionpp_origin_retry_interval_seconds`).
 
 That is a constant with a live provenance rather than a point inside a bracket:
-if `alpha` moves the interval follows, instead of decoupling silently. Same
+if `alpha` moves the interval follows, instead of decoupling silently. It stays
+fixed at 1148 s through the DRS-X flip and the rebuild, and is revisited after
+the rebuild against the Rust relay as built (Rick, 2026-10-30; owner RD, the
+FOLLOWUPS row *Revisit the origin's first retry*). Same
 shape as §94.8's argument for deriving rather than choosing, and it removes the
 self-invented bar this arc has been bitten by twice.
 
@@ -15693,7 +15836,7 @@ anonymity zone's embargo (§91.6).
 reconstructing, and states it more strongly: *"on an anonymity network inbound
 peer identity is free to mint… it is that you can never establish you have more
 than one distinct one. Effective inbound anonymity set ≈ 1 against anyone willing
-to generate keys."* It names `rust/shekyl-relay/src/zone/mod.rs`'s
+to generate keys."* It names `rust/shekyl-relay/src/graph/mod.rs`'s
 `FluffReach::OutboundOnly` doc as the load-bearing misattribution — **the exact
 site corrected two rounds later**, without the connection being made at the time.
 Cross-referenced here so the next reader gets it in one hop.
@@ -15736,37 +15879,33 @@ over noise networks"*, and then broadcast the result to **every** channel,
 which is the opposite of what a stem is. **Deleted, not repaired** (§2.9 step
 4): with the premise gone there was nothing left to fix.
 
-### 93.2 Noise runs only on an encrypted network
+### 93.2 Cover follows the open link — SUPERSEDED the encryption predicate, 2026-10-02
 
-What noise buys is concealment of **packet sizing**, and sizing is the only
-thing left for a network observer to read once the link is encrypted. On a
-cleartext link that observer reads the contents outright, so padding the sizes
-conceals nothing and the bandwidth is spent for no privacy.
+**Current.** `CoverClass` decides, not `RelayZone::is_encrypted` and not
+`link_encrypted`. An open link (clearnet) may run the substitution carrier
+when the development flag asks for it: requesting the carrier means the
+NNhfs pipe encrypts and covers that link. Tor is volume cover
+([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md)): no envelope, and a stem
+or an own-edge leaves immediately. `Relay::new` refuses the flag when no
+configured connector is an open link, rather than silently running
+carrier-off. The FFI maps that refusal to null. `is_encrypted` stays the
+wire-observer cell. It does not select the carrier.
 
-**The binding property is encryption, not anonymity, and not reach.** The three
-coincide for the current zone set only because ordinary internet traffic is not
-encrypted. **If we ever encrypt ordinary internet traffic it gets noise too** —
-that is a live expectation, not a hypothetical carve-out, and it is why the
-predicate is named for the property that actually decides.
+**Records-was (2026-08).** Noise was refused on a cleartext link because
+padding was argued to conceal nothing a cleartext observer could not
+already read, and `RelayZone::is_encrypted` was named the single site that
+would change when clearnet's answer changed. The refusal still lives in
+`Relay::new` rather than at the FFI edge, and the two errors stay
+distinct. What changed is the question: the open link, not the encryption
+cell.
 
-Enforced as a refusal at `Zone::new` rather than a silent downgrade to
-carrier-off: a node configured for a protection it is not receiving is the
-failure worth being loud about, and a silent downgrade is indistinguishable
-from working. It lives in `Zone::new` rather than at the FFI edge because the
-daemon Rust cutover makes Rust the in-process caller, and an edge check is one
-it would route straight around. `LinkSecrecy` is constructed only from a
-`RelayZone` (`LinkSecrecy::of`) — there is no `Encrypted` variant a caller
-can mint beside the wrong reach — and `Zone::new` returns `Result<_, ZoneNewError>`
-so the two refusals (noise on cleartext; wrong channel count) stay distinct.
-The FFI maps both to null. `RelayZone::is_encrypted` is the single site
-that changes when the clearnet answer changes.
-
-**One consequence landed immediately:** ten Rust fixtures had been building
-noise zones on `FluffReach::EveryPeer` — a configuration production cannot
-hold — and an FFI test asserted that outbound-only fluff plus noise on the
-*clearnet* zone builds. It does not, and §25.5 keeps outbound-only fluff on
-clearnet open as a real configuration in its own right. Reach had been standing
-in for encryption, which is the collapse in miniature.
+**Records-was (2026-08), one consequence of that predicate:** ten Rust
+fixtures had been building noise zones on `FluffReach::EveryPeer` — a
+configuration production cannot hold — and an FFI test asserted that
+outbound-only fluff plus noise on the clearnet zone builds. Under the
+encryption predicate it did not. That predicate is superseded above:
+clearnet is the open link, and noise requested there does build.
+`FluffReach` is deleted. Reach had been standing in for encryption.
 
 ### 93.3 On the vocabulary itself
 
@@ -16546,3 +16685,1283 @@ goes red if the model, the message size, or the floor rate drifts the term towar
 the hop — and it already fired once, catching the draft's <0.1 % claim (true only
 on the wrong rate; the honest worst case is 0.96 %).
 
+## 95. Outbound composition — APPROVED 2026-10-08
+
+**APPROVED 2026-10-08 (Rick).** This section is the simulation plan.
+The hidden-address pool and the total outbound degree are lower
+limits. The operating point above those limits, and any ceiling, are
+not chosen by this approval. The ceiling comes from resources and is
+named when a run is ruled. No constant is added. The instruments are
+`conformance::composition` (the two-class graph, `walk_originated`, and
+the spy and capture folds) and `conformance::epoch_traffic`, behind the
+`conformance` feature. The default build does not contain them. No
+production constant moves. *Records-was (2026-10-08): "`own_edge()`
+stays until the relay lane takes the stem-slot ruling" — PR-1 (#1018,
+§98) took it and deleted the function.*
+
+**RULED 2026-10-08 (Rick).** An own transaction rides a stem slot.
+The origin's own send is always a stem, and each relay forwards with
+probability `1 − q`. That is about `1/q − 1` relayed sends per
+originated transaction. *Records-was, the plan's first draft: the
+own-edge was described as a hidden session pinned for the epoch,
+without saying that send is a stem.* Tor-only is not a recommended
+posture. §96 is the gate.
+
+The floors, which are the hard edges of the sweep:
+
+- Total outbound `h + c` is at least `MIN_PROVISIONED_OUT_PEERS` (12,
+  `params.rs`). That is the fail-safe's measured range: `fluff_return_ms
+  = 3250` is the p90 first passage at degree 12, and below that degree
+  the passage exceeds the provisioned value.
+- Hidden outbound `h` is at least the same 12. That is the own-edge
+  capture cost. One draw of the pool is `p_h` raised to `h`. Reading 3
+  measures the same capture over epochs, with churn and refill.
+
+`h` is the hidden-address outbound count. `c` is the clearnet outbound
+count. `f` is the fraction of nodes that publish an onion. `p` is the
+network-wide spy fraction. `p_h` is the spy share among the onion
+publishers a hidden edge is drawn from. `q` is not a spy share. It is
+the fluff probability, 20% (`fluff_probability_pct`), in the paper and
+in `derive.rs`. Expected stem length is `1/q`
+(`DandelionParams::expected_stem_length`), 5 at that 20%. The
+first-spy test prints its spy fraction as `f`, and §12.6's `f` is the
+network adversary fraction. The letters here are the sweep's.
+
+Until the simulation is ruled, the dialer keeps a target of 12. That
+number is the floor, carried as the interim. The hard cap on `dev`
+is `src/p2p/net_node.inl` lines 984–985: `hidden_out` is
+`shekyl_relay_zone_min_provisioned_out_peers()` (12), and
+`max_out_connection_count` is that `hidden_out`. The dialer deletes
+the assignment and keeps 12 until this simulation is ruled
+([`P2P_3_SLICE_3_DIALER_BRIEF.md`](P2P_3_SLICE_3_DIALER_BRIEF.md)).
+*Records-was: the cap was described as an unmerged relay branch at
+`net_node.inl:939`, and at pin `d93074d1c4` that assignment was
+`shekyl_hop0_outbound_target` (4). Line 939 is the ephemeral-Tor
+error path.*
+
+### 95.1 Instruments that already exist
+
+Read on `dev` at `7f7109dc7e`. Each one answers a different question.
+None of them takes a hidden count and a clearnet count as two link
+classes.
+
+**Flood and convergence.** `simulate_fluff_return` and
+`simulate_fluff_return_mixed` (`rust/shekyl-relay-privacy/src/conformance/flood.rs`)
+report mean, p50, and p90 first passage. The mixed form takes a
+per-node out-degree vector and one `transit_ms`. It does not take
+hidden edges at one transit and clearnet edges at another.
+`converged_fluff_return_mixed` re-runs independent seeds and refuses a
+reading they do not agree on (`tests/flood_convergence.rs`). Those
+tests pin the refusal, not the value 3250. The shipped topology in
+that file is `OutboundOnly`, 512 nodes, degree 12, Tor transit.
+`f7_directed.rs` compares `EveryPeer` with `OutboundOnly` at 8, 12, and
+16 peers and asserts the directed arm is slower; it does not assert
+the level. `flood_transit_reconciliation.rs` records that the shipped
+3250 ms is the transit-less reading, and that adding transit moves the
+level without reordering the degree argument. `d9_floor_locality.rs`
+asks whether a below-floor node harms itself or the network; the
+builder still cannot thin the edges pointed at one node. Production
+fluff is `EveryPeer` on every connector. The 3250 ms figure stays the
+fail-safe input because the directed graph is the longer one and has
+not been remeasured.
+
+**First-spy precision.** `simulate_diffusion_first_spy` walks one
+uniform graph at one degree and one transit. Spies are a Bernoulli
+draw on every node except the source. It reports precision
+(predecessor is the source, among floods a spy observed), the observed
+count, and the mean hop count. It does not report recall, and it does
+not raise the spy share among onion-publishing nodes. The test
+`first_spy_precision_rises_with_spy_fraction`
+(`tests/propagation_measurement/adversary.rs`) runs 512 nodes, 8
+peers, `EveryPeer`, clearnet transit, at spy fractions 0.05, 0.10, and
+0.20, and asserts precision rises. `simulate_transport_observation`
+(`conformance/transport.rs`) is the other first-spy reading: a
+supernode that dials inbound and is dialed by none. Its
+`observed_fraction` is how often that supernode sees the fluff, and
+its `first_spy_precision` is attribution on those inbound edges. The
+test in `tests/propagation_measurement/transport.rs` asserts that
+precision rises with the dial fraction. Neither instrument separates
+originated traffic from relayed traffic, and neither biases the spy
+share toward onion candidates.
+
+**W3 / ProxyMark slot occupancy.** `simulate_two_slot_occupancy`
+(`conformance/selection.rs`) is `P(both outbound stem slots
+adversarial)` at an outbound share `g` and a pool `D_out`. The §12.6
+table is that function at `D_out = 12`. It measures `W3(g)` and does
+not bound `g`. It is one draw; churn is
+`simulate_induced_churn_exposure` (`InducedChurnExposure`), which is
+higher under a refill. ProxyMark is the attack named in §6.9 and
+§12.6. There is no separate ProxyMark simulator. This occupancy is the
+two stem slots drawn from every outbound session. Reading 3's
+capture is the hidden outbound sessions over epochs, using this churn instrument's
+refill, and the one-draw `p_h^h` is that reading's reference.
+`simulate_epsilon_greedy_selection` is the §12.11
+selection reading and is not this sweep. `tests/hop_sensitivity.rs`
+moves the embargo hop against transit and is not this sweep.
+
+### 95.2 The proposal grid — SUPERSEDED by the §95.3 sweep
+
+Points for review, not crate constants. A point is dropped when `h < 12`
+or `h + c < 12`. The report shows those drops, so the edge is visible.
+Totals in this proposal sat around 12–24. Sixteen was one illustration,
+not a chosen total. §95.3 is the sweep that was run: `h` at 12, 14
+and 16, `c` from 0 to 16 in steps of 2, traffic at `f = 1`. Fractions
+below 1 are the inbound stress only. First spy was run at `p = 0.20`
+and at `p_h` from `p = 0.30`, not at 0.05 or 0.10.
+
+| `h` | `c` | total | why it was proposed — not the §95.3 run |
+| --- | --- | --- | --- |
+| 12 | 0 | 12 | both floors, hidden only — proposal, not the run |
+| 12 | 4 | 16 | hidden at the floor, total 16 — proposal, not the run |
+| 16 | 0 | 16 | hidden at 16, clearnet absent — proposal, not the run |
+| 12 | 8 | 20 | hidden at the floor, total 20 — proposal, not the run |
+| 16 | 4 | 20 | both above the floor — proposal, not the run |
+| 12 | 12 | 24 | hidden at the floor, total 24 — proposal, not the run |
+| 16 | 8 | 24 | both above the floor — proposal, not the run |
+| 24 | 0 | 24 | hidden at the top of the range — proposal, not the run |
+
+Onion-publishing fraction `f` at 1, 1/2, and 1/4 on each kept point.
+Network spy fraction `p` at 0.05, 0.10, and 0.20, the fractions the
+first-spy test already runs. A second arm sets the spy share among
+onion-publishing nodes to twice `p`, capped at 1, and leaves every
+other node at `p`.
+
+Five readings, each compared across that grid. None of them writes
+`fluff_return_ms`, `MIN_PROVISIONED_OUT_PEERS`, or a new outbound
+constant.
+
+1. **First-spy precision and recall, originated transactions.** One
+   trial is one transaction this node originates. Precision is the
+   fraction of observed trials whose first spy's predecessor is the
+   origin. Recall is the fraction of trials a spy observes at all.
+   Both arms: spies at `p` everywhere, and spies at the higher share
+   among onion candidates. The uniform `simulate_diffusion_first_spy`
+   reading is the control, not the result. The result is the two-class
+   graph: each node initiates `h` hidden edges and `c` clearnet edges.
+2. **Originated-versus-relayed skew on the sender's own link.** The
+   attacker's count is every stem that sender puts on the link during
+   the epoch: its originated transactions, and the stems it relays onto
+   the same peer. `h / (h + c)` is how a relay drawn from all outbound
+   sessions would spread. It is not the posterior. A single-transaction
+   walk that counts a relay only when the path revisits the pin is not
+   the posterior either. The epoch tally is §95.3.
+3. **Full capture of the hidden outbound sessions.** At the spy share of
+   the onion dial candidates `p_h` (not `q`: `q` is the fluff
+   probability), the chance every hidden session is a spy is `p_h^h`.
+   Report that number, and check it by drawing the sessions. `simulate_two_slot_occupancy` stays the
+   stem-slot residual at its own `D_out`. This proposal leaves `STEMS`
+   and the §12.6 table where they are.
+4. **Fluff return at the mixed composition, against 3250 ms.** p90
+   first passage on the two-class graph, `EveryPeer`, hidden edges at
+   the anonymity transit and clearnet edges at the clearnet transit,
+   taken through `converged_fluff_return_mixed`'s budget so a single
+   seed cannot become a level. The comparison is the shipped 3250 ms
+   fail-safe input. The reading does not replace that constant.
+   `simulate_fluff_return_mixed` cannot produce it: one `transit_ms`
+   covers every edge.
+5. **Hidden inbound load per published onion.** If each node opens `h`
+   hidden edges uniformly among the `f` fraction that publish, the
+   mean inbound degree of a published onion is `h / f`. Report that
+   mean. A uniform draw checks it. No new load constant.
+
+What a ruled result would be allowed to choose is the operating point:
+one `(h, c)` on or above the floors. It would not choose the ceiling,
+and it would not move `fluff_return_ms` inside the same change. A
+reading that wants a new fail-safe input is a later re-derivation,
+named as such, because §90 already requires `F′` and its dependents
+to move together.
+
+### 95.3 The sweep, run 2026-10-07 — (h, 0) is a measured case, RULED 2026-10-08
+
+**RULED 2026-10-08 (Rick).** Every `(h, 0)` point, including `(12, 0)`,
+is a measured case. It is not a headline recommendation. Tor-only is
+that shape, and it is not a recommended posture. The gate is §96.
+No operating point is chosen. The interim composition is hidden 12
+and clearnet 12. Clearnet's configured default is already
+`P2P_DEFAULT_OUT_PEERS` (12). The address-hiding outbound target is
+already `MIN_PROVISIONED_OUT_PEERS` (12), assigned at
+`net_node.inl:984–985`. *Records-was: the Tor zone's cap was
+`HOP0_OUTBOUND_TARGET` (4).* This measurement does not move either
+constant.
+The `(12, 4)` proposal is withdrawn. A total of 16 was an
+illustration, not a candidate.
+
+**Acceptance.** A point is approvable only when its fluff return,
+measured with real per-connector transit, does not exceed the input
+the embargo uses. `fluff_return_ms = 3250` is provisional pending
+the operational test in §96 item 2, so the system can be built and
+tested. It is not that approval.
+
+The origin's own send is a stem slot under `HiddenStemSlot`, **the
+routing the relay ships** (PR-1, #1018, `ed87cc03cd`; §98): one slot
+drawn from the hidden outbound sessions, the other from the remaining
+outbound sessions, and the local source pinned on the hidden slot's
+peer with one alternate from the same sessions (D-PR1-1 (c′)). When
+every outbound session is hidden, both slots are the paper's draw and
+the local source is an ordinary stem-map pin. Relays still forward
+with probability `1 − q`. *Records-was (2026-10-08): "`own_edge()` is
+not that routing. This change does not delete it." — the separate draw
+was deleted by PR-1.*
+
+**Epoch tally, 2026-10-08.** Every node originates once per epoch.
+Each node keeps a `StemMap` for that epoch. The epoch tally and the
+first-spy estimators fold one walk, `walk_originated`. Its length is
+`walk_stem`. A hop onto a node that already forwarded is fluff in the
+live pool, so that hop is not a delivery. The posterior is deliveries
+on a directed edge:
+originated sends plus relayed sends onto that same peer. 48 nodes,
+20 epochs, `f = 1`. `f ≈ 1` is the normal case: a node publishes a
+per-boot onion and accepts Tor inbound (`add_ephemeral_tor_zone`,
+PWD-E7). `f = 0.1`–`0.5` are opt-out and failure stress, not the
+operating point.
+
+*Records-was, the 2026-10-07 single-path instrument: all-clearnet
+own-edge posterior 0.91, and `HiddenOwnEdge` 0.92–0.94.* That count
+credited a relay only when one transaction's path revisited the pin.
+The epoch tally is the attacker's view.
+
+`HiddenStemSlot` own-edge posterior, re-read on the shared cut at 48
+nodes and 20 epochs (seed `0x5950_0000 + 16h + c`), sat at 0.61–0.64.
+The measured case `(12, 0)` was 0.64 (0.57 relayed stems per
+originated send; 0.33 of those edges carried any relay). `(12, 4)`
+was 0.61. *Records-was, the walk that counted the closing hop:
+0.52–0.56, with `(12, 0)` at 0.54 and `(12, 4)` at 0.56.* Clearnet
+posterior was 0: the local source stays on the hidden slot. The
+hidden-class posterior rose with clearnet, 0.27 at `(12, 0)` and
+0.39 at `(12, 12)`, because fewer relays land on hidden edges.
+*Records-was, same earlier walk: 0.20 and 0.30.*
+
+`HiddenOwnEdge`, today's separate draw, is the residual of ProxyMark's
+root cause. The own-edge is not a stem slot, so most epochs it carries
+no relayed traffic. At `(12, 0)` the posterior was 0.82 and 0.12 of
+edges carried a relay. With clearnet added it sat at 0.85–0.89, and
+the carrying fraction fell to 0.06–0.08. The link looks originated
+because nothing else is scheduled onto it. *Records-was, the walk
+that counted the closing hop: 0.73 at `(12, 0)`, and 0.80–0.88 with
+clearnet, carrying 0.05–0.08.*
+
+The split baseline still reproduces ProxyMark's certainty: hidden
+posterior 1, clearnet posterior 0, own-edge posterior 1. The
+all-clearnet baseline, the paper's graph, gives an own-edge
+posterior of 0.64 on the instrument's 32-node draw (12 epochs, seed
+`0xC1_EA`). The 0.91 figure does not survive the epoch tally. A node
+forwards each transaction once: a cycle is not a second relayed
+arrival. *Records-was: that 32-node draw read 0.62 while the epoch
+walk counted the closing hop.*
+
+A sender with inbound degree 0 relays nothing, so every stem it sends
+is originated, on either routing. The unit test strips inbound to one
+node and reads posterior 1. At `h ≥ 12` and `f = 1` the grid had no
+such sender.
+
+A sender that originates much more than it relays sits closer to
+posterior 1 on any routing, as in Dandelion++. One node originating
+eight stems an epoch, and the others once, read 1.00 on its own-edge
+against 0.56 for the rest (`HiddenStemSlot`, `h = c = 12`, 32 nodes,
+8 epochs, seed `0x4E_11`). *Records-was, before the shared cut: 0.54
+for the rest.*
+
+**2×2, 512 nodes, `OutboundOnly` in every cell.** Transit-free against
+per-connector transit (hidden 1625 ms, clearnet 50 ms). The shipped
+degree-12 graph with Tor transit on every edge is unconverged: four
+seeds at 16 trials read 12000–12500 ms, every one above 3250. The
+provisional input omits Tor transit on the return path. That is a
+§90 question for every node with Tor sessions today: `F′` and its
+dependents move together, and this change does not move them. The
+transit-free cell, on the provenance seed and 24 trials, is 3250 ms.
+
+*Records-was, 128-node `EveryPeer` with mixed transit: `(12, 0)`
+7375 ms, `(12, 4)` 4050 ms, `(12, 12)` 1550 ms.* Those cells mixed
+reach with transit. The sweep below holds reach at `OutboundOnly`.
+
+**Sweep. Nothing is chosen.** `h` at 12, 14 and 16; `c` from 0 to 16
+in steps of 2. Posterior is `HiddenStemSlot`, 40 nodes, 6 epochs,
+`f = 1`, seed `0xE0C4 + 20h + c`. Own-edge posterior, re-read on the
+shared cut, sat between 0.58 and 0.67. Hidden-class posterior rose
+with `c`, about 0.25–0.27 at `c = 0` and about 0.39–0.42 at `c = 16`.
+*Records-was, the walk that counted the closing hop: own-edge
+0.50–0.61, hidden-class about 0.21 at `c = 0` and 0.30–0.34 at
+`c = 16`.* A cell whose seeds did not agree within 250 ms at 16
+trials is refused, not given a ratio. Of the per-connector cells that
+converged, these exceed 3250: `(12, 8)` 5400, `(12, 12)` 3750,
+`(14, 6)` 6275, `(14, 8)` 5275, `(14, 10)` 4500, `(14, 12)` 3850,
+`(16, 0)` 10500, `(16, 4)` 7225, `(16, 6)` 6125. These converged at
+or under 3250 and are still not chosen: `(14, 14)` 3075, `(14, 16)`
+2850, `(16, 16)` 2900. The interim `(12, 12)` is in the exceeding
+list.
+
+Resource cost of a point, expectation not a draw. Tor circuits the
+node opens: `h`. Outbound sockets: `h + c`. Hidden inbound per
+published onion: `h / f`, so `h` at `f = 1`, `2h` at `0.5`, `4h` at
+`0.25`, `10h` at `0.1`. At `f = 0.1` and `h = 12` one graph of 400
+nodes had mean 120, p90 130, max 134. `f = 1` is the normal case.
+
+**Class-aware first spy.** A clearnet arrival from a sender that has
+a hidden session is certainly relayed, so the estimator does not name
+that sender as the origin. On `h = 12`, `c = 8`, 32 nodes, 200 trials.
+Under `HiddenStemSlot` at `p = 0.20`, blind precision 0.42 and recall
+0.21, aware precision 0.53 and the same recall. At `p_h` from
+`p = 0.30`, blind precision 0.69 and recall 0.59, aware precision
+0.76 and the same recall. The gain is precision: false names on
+clearnet edges are dropped, and the true origin's hop is hidden so
+the correct names stay. Under the paper's uniform hop 0 the same
+estimator loses: precision 0.39 to 0.31 at `p = 0.20` (recall 0.17
+to 0.09), and 0.70 to 0.45 at the enriched share (recall 0.61 to
+0.32), because hop 0 can be clearnet and the rule then exonerates
+the origin. `HiddenStemSlot` makes a clearnet arrival exonerating
+rather than identifying. The attack on the origin moves to the onion
+candidate share, which is why §96 item 3 carries this routing's cost.
+Spy labels are drawn once per node per trial, and the origin is not
+a spy. The stem stops when it returns to a node that already
+forwarded it: the live pool switches that duplicate to fluff. The
+epoch tally folds this same walk. The spy digits above are unchanged
+by that sharing: this estimator already stopped on the revisit.
+*Records-was:* a walk that continued past the revisit read blind
+precision 0.29 and aware precision 0.38 at `p = 0.20`.
+
+Separately, eight of 32 nodes initiate no hidden session. Of 420
+clearnet arrivals, 199 had a clearnet-only sender. A clearnet arrival
+by itself marks its sender clearnet-only less than half the time,
+because relays use clearnet too. The aware estimator named 32
+clearnet predecessors as the origin, and every clearnet predecessor
+it named was clearnet-only. That is the class of the node named,
+which follows from the routing rule; it is not precision against
+clearnet-only origins, and that is unmeasured. That measurement is
+its own `FOLLOWUPS.md` line.
+
+**Cross-connector linkage, not built.** Hypothesis: a spy holding
+both a Tor session and a clearnet session to one node can link that
+node's circuit to its IP from which fluff copy arrives first. The
+transit gap is 1625 − 50 = 1575 ms. The per-peer flush is a geometric
+draw with mean 5 s, so one pair's order is often the flush, not the
+connector. The hypothesis is that many fluffs still beat that noise.
+It is falsified when a pairing of the two arrival streams does no
+better than the unpaired chance rate, at the number of fluffs one
+epoch actually delivers. No estimator is in this change.
+
+A third connector (I2P) is not modelled. It would add a transit and
+an inbound pool. The local source would remain the hidden stem slot.
+
+## 96. Tor-only posture gate — RULED 2026-10-08, not recommended
+
+**Rejection.** Tor-only is not a recommended posture. The substrate
+is §95 as approved this day: own transactions ride a stem slot, the
+floors are lower limits, and `(h, 0)` is a measured case. §91.2
+already keeps Tor-only off the default. This section is the
+recommendation, which is a separate question. Recommending it now
+would treat a measured corner as a posture.
+
+**Reopening.** Tor-only becomes eligible for a recommendation when
+all six items below are closed. Eligibility is a ruling recorded in
+this section. It is not a silent change of the default, and closing
+one item does not close the gate.
+
+**Re-evaluation.** The ruling that recommends Tor-only, or that
+keeps the rejection, is made here, against the six closed carriers.
+No new identifier family.
+
+Each item is open. Its carrier is the only thing that closes it.
+
+1. **Stem-slot routing — CLOSED 2026-10-09 (PR-1, #1018,
+   `ed87cc03cd`).** Own transactions ride a stem slot, as ruled in
+   §95: the origin's own send is always a stem, and each relay forwards
+   with probability `1 − q`. The landed §95.3 states that the origin's
+   own send is a stem slot under the routing the relay ships
+   (`HiddenStemSlot`, `graph/hidden_slot.rs`). Closing this item does
+   not recommend Tor-only. *Posed:* rejected as a basis for recommending
+   Tor-only until the relay lane confirmed that routing; carrier the
+   relay lane after #1004; closes when #1004 is on `dev` and the landed
+   §95.3 states the sentence above.
+   **PM-2b against this routing (2026-10-10, §99).** Height bias,
+   the paper's TC-II: the relay has no height input — a session enters
+   the stem candidate set through `on_session_established(id,
+   direction, connector)` and `stem_candidate` keeps an outbound
+   session whose transit is assessed (`graph/mod.rs`). The C++ stem
+   set is the zone's established outbound sessions with no height
+   filter (`levin_notify.cpp:867` to `:869`).
+   `stem_candidates_are_established_outbound_sessions_with_an_assessed_transit`
+   (`graph/hidden_slot_tests.rs`) builds that partition exactly: an
+   outbound session that hides the address is in the hidden class, in
+   connection-id order; an outbound session that does not is in the
+   rest; an inbound session is absent; an outbound session whose
+   transit is not assessed is absent. **TC-II is closed by construction
+   (Rick, 2026-10-09):** there is no height input for a falsified
+   height to bias. The paper's 15.3 % raised to 35.7 % has nothing
+   here to move. Recorded under §99's benchmark framing, not as a pass.
+2. **The operational replacement for the provisional 3250 ms.**
+   The simulation in §95.3 is not this closure: it shows the
+   transit-free input is short once Tor transit is on the return
+   path, and it does not move the constant. **What is measured:** the
+   p90 first passage of a fluff flood back to the originating node,
+   on the running testnet, timed at the peers that receive it. One
+   arm is a node whose return path crosses Tor. One arm is a clearnet
+   peer of that node. The flush delay stays the production draw; the
+   test does not subtract a modelled transit. **Where:** a testnet
+   node that publishes an onion, and one clearnet peer it is connected
+   to. Not a host under a quiet claim. **On the Rust path, after RD
+   (Ruling B, §97, 2026-10-08):** the fluff and the flush are C++
+   (`levin_notify.cpp`) until RD lands, and a p90 taken while they are
+   is a `CppPath` reading. It does not close this item, and nothing is
+   derived from it. **UPDATE 2026-11-05 (the cutover's fleet run,
+   shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** the
+   first Rust-path reading of a fluff's return to its origin exists:
+   on the Tor leg (origin and fluffing node both Tor-only), n=31 of 40,
+   p50 6.3 s, p90 10.8 s, max 11.2 s; on the clearnet leg n=20 of 40,
+   p50 6.8 s, p90 9.9 s. It is a three-node regtest fleet under a quiet
+   claim, the fluffing node's embargo is in the span, and the pairing
+   is by order within the submit cadence (it reads low), so it is not
+   this item's measurement and does not close it; it is recorded as
+   `RustPath`, and it is above 3250 ms. **What moves the input:** if
+   the measured Tor-return p90 exceeds 3250 ms, the provisional value
+   is short and `F′` moves with its dependents in one later change
+   (§90). If that p90 is at or under 3250 ms, the value stays for
+   that path. A simulated cell under 3250 does not confirm it.
+   **Carrier:** this item. **Closes when** that measurement is
+   recorded here with the two p90s and the input has either moved
+   under §90 or been confirmed for the Tor return. **Re-evaluation:**
+   the dated record of those two p90s. **Deferred on this item, not
+   its closure.** Re-deriving `fluff_return_ms` with Tor transit on
+   the return path and production `EveryPeer` reach waits for the
+   next relay-privacy round. Blocked on the Rust cutover — falsify
+   by a converged 512-node `EveryPeer` per-connector reading, which
+   reopens that round. 3250 stays provisional pending the operational
+   test above. The one-liner is in `FOLLOWUPS.md`.
+3. **Onion-candidate flooding defence.** A hidden edge is drawn from
+   publishers an attacker can supply. `HiddenStemSlot` moves the
+   first-spy attack onto that share: a clearnet arrival exonerates
+   a sender who also has a hidden session, so the origin is sought
+   among onion candidates (§95.3). This item carries that cost.
+   **Carrier:** P2P-3 slice 1, and the ProxyMark reproduction (§99).
+   **Stays open and tracked (Rick, 2026-10-09)** against PM-2a (§99:
+   connection occupation, the paper's attacker and metric — 7–11 of 12
+   hidden outbound after restarts, 8–10 of 10 within about 20 minutes
+   under periodic replacement), per profile, recording our result
+   against the paper's and against blind chance at the §97 knobs in
+   effect. D-S1's per-session intake cap (slice 1 brief §5c) is read
+   off the same run: time for an attacker to fill gray and the
+   resulting `p_h`, per connector. **Closes when** Rick decides it
+   from the results; no threshold is fixed in advance. **Re-evaluation:**
+   the PM-2a row's dated status. *Records-was, both 2026-10-09: "closes
+   on the PM-2a reproduction" with a threshold to be set; and before
+   that, closed when slice 1 had landed, the C++ peer lists gone
+   (`m_peers_white` / `peerlist_manager` absent from `src/p2p`) and the
+   uniform draw within a connector the dial source.*
+4. **TRC-1.** On Tor, wire-observer resistance is operator relay
+   volume, and that measurement is not finished. **Carrier:**
+   TRC-1 (`TOR_COVER_POSTURE.md` §8, the FOLLOWUPS row). **Test
+   (Rick, 2026-10-09):** the ProxyMark step 3 reproduction (§99,
+   PM-3, Level 3: the message-rate watermark recovered at a malicious
+   guard; the paper's bar is 100 % precision with 93.8 % recall for
+   onion-service nodes and 91.4 % for Tor-client nodes) is this item's
+   test. **Closes when** that row's falsifier is met:
+   carried traffic at ordinary operator scale is measured, PM-3 has
+   run against it, and the row is removed, or the ruling reopens
+   because originated cells stayed distinguishable. **Re-evaluation:**
+   the TRC-1 index row's next dated status.
+5. **Onion inbound capacity against a ceiling.** Reading 5's tail is
+   `h / f` and above, and no inbound ceiling is ruled against it.
+   **Carrier:** the #1004 follow-up ruling. **Closes when** a dated
+   ruling in this document sets the inbound ceiling against that
+   load, or records that no ceiling is added and why. **Re-evaluation:**
+   that ruling, not #1004's measurement by itself.
+6. **The Rust dialer — CLOSED 2026-10-13 by PR-3 (#1056), with its own sentence: the dialer owns outbound targets (`shekyl_dialer_set_out_peers`, `shekyl_dialer_out_target`; the C++ mirror is unwritten) and the brief's deletion `rg` commands for the C++ dial path return nothing, both at `4b2c6227ec`; the index row re-evaluates at the merge.** *Records-was:* Outbound targets are still the C++ cap the
+   dialer brief takes over. **Carrier:** P2P-3 slice 3. **Closes
+   when** the dialer owns outbound targets on `dev` and the brief's
+   deletion `rg` commands for the C++ dial path return nothing.
+   **Re-evaluation:** the slice 3 index row, after the brief's review
+   has closed and the slice has landed. Closing the brief's review
+   is not this item.
+
+## 97. The measurement-basis register — RULED 2026-10-08 (Ruling B)
+
+**Ruling B (Rick, 2026-10-08).** Nothing derived while C++ is in the
+path is valid for Rust. Timing and pathway numbers measured or derived
+with C++ in the path are re-done on the Rust path. The reference is the
+model, not the C++: the C++ carries defects that distort timing (dials
+on the two-worker io pool; the post-handshake cause race), so "behaves
+like the C++" is not the test.
+
+Every timing value a derivation consumes is one of three bases,
+weakest first, and the code carries the label as `AdmissibleBasis`
+(`shekyl-relay-privacy/src/basis.rs`):
+
+- **Assumption** — never measured. Written down and labelled as written
+  down. `Assessment::Assessed` on a D7 cell means someone wrote the
+  number down; it does not mean measured.
+- **Model** — a conformance output, a property of a rule. Not re-run.
+  It transfers to Rust when a conformance test shows the Rust code
+  implements that rule.
+- **RustPath** — measured on the Rust path.
+
+A C++-path reading is not a basis `DerivationMs` can carry. Naming
+`AdmissibleBasis::CppPath` does not compile (`compile_fail,E0599`).
+The register still uses the word **CppPath** for a row that was
+measured or derived with C++ in the path: that row is re-measured on
+the Rust path before anything is derived from it. The type refuses
+the value; the prose records the debt.
+
+**When it is re-done.** **UPDATE 2026-11-05 (the p2p remnant cutover,
+`P2P_3_REMNANT_CUTOVER_BRIEF.md`, RC-Q3/RC-Q4):** RD and the timing-engine
+bridge are landed; stem forwarding, fluff, the flush and the embargo run in
+`shekyl-relay`'s owner on the Rust `Driver`, and `levin_notify.cpp` is
+deleted with the C++ host. Every `CppPath` row below can now be measured
+on the Rust path; the fleet run that fills its `RustPath` cells is the
+cutover PR's evidence step (brief §5), and until a row carries one its
+basis stays as written. **The run was made 2026-11-05** (three legs on
+the x86 fleet hosts: clearnet, Tor, clearnet with the carrier; the
+record is shekyl-dev `infrastructure/captures/p2p-remnant/README.md`),
+and the `hop` scheduling term, the realised flush, the realised carrier
+cadence and the clearnet connector spans each carry a dated `RustPath`
+reading below, with §96 item 2's return p90 read beside them. Each is a
+reading, not an adoption: no constant moved, the floor device was not in
+the run, and the re-derivations stay §94.10's. The run also found a
+relay-owner stall on the origin host that pauses the carrier (the
+`hop` and carrier rows); it is reported, not ruled. *Records-was:* The slice 3 cutover (PR-3) moves
+dialing only. Stem forwarding, fluff, the flush and the embargo stay in C++
+(`levin_notify.cpp`) until **RD**. So dial pacing and handshake timing
+are measured after PR-3; privacy timing is measured once, after RD.
+Measuring either on the C++ path now produces a number this register
+would label `CppPath` and nothing could consume. RD closes only when
+every `CppPath` row below that touches relay timing has a `RustPath`
+measurement (`P2P_3_IMPLEMENTATION_ROUND.md` §4.2).
+
+This section mints no identifier family. A value whose basis cannot be
+established from its provenance is `Assumption`, with the reason in the
+row. Pins below were read at `98fbd20acb`.
+
+| Value | Where it lives | Basis | What consumes it | Re-measured when, where |
+| --- | --- | --- | --- | --- |
+| Tor dial retry waits: 5 s + U(0, 5 s) before attempt 2, 20 s + U(0, 10 s) before attempt 3; clearnet makes one attempt for gray and two for white (one redial before a white address demotes, Rick 2026-10-26) | Each connector's dial profile, `shekyl-transport-layer` `dial_profile(connector)`: `.retry_waits` and `.attempts` (the dial profile, Rick 2026-10-27); the retry ladder, `shekyl-dialer/src/pace.rs` (the gray-lifecycle PR, Rick 2026-10-24) | **Assumption.** Starting values, written down; re-derived from testnet runs on the Rust path | The dialer's retry scheduler: when a retry-worthy failure is dialed again within one test | After the gray-lifecycle PR, on testnet: the distribution of attempt-2 and attempt-3 successes against the waits |
+| Gray cooldown: 2 min after the first failed test, doubling per consecutive failed test, capped at 1 h, each with U(0, 50%) jitter. A failure the dialer's judge excuses neither climbs nor descends: an address with counted failures cools at its current rung, one with none waits the connector's outage retry (`DIALER_OUTAGE_EVIDENCE.md` §3.4) | Each connector's dial profile, `shekyl-transport-layer` `dial_profile(connector).cooldown` (the dial profile, Rick 2026-10-27); the ladder, `shekyl-peerlist` `cooldown_nanos` (the gray-lifecycle PR, Rick 2026-10-24); the verdict, `shekyl-dialer/src/judge.rs` and `owner/judging.rs` (`DIALER_OUTAGE_EVIDENCE.md`, #1235) | **Assumption.** Starting values, written down. What the cap means: a dead address costs each node at most about 24 failed tests a day once it reaches the cap (a Tor test is up to three attempts); a failure with no sign of life on the link is excused instead, and never climbs. *Records-was, SUPERSEDED by the judge (#1235):* **the quiet threshold, Derived** (the dial profile, Rick 2026-10-27), on the floor device, at ε = 10⁻³: K is the smallest k with `p_fail^k < ε` at the half-dead fraction, and S is at least one window and the time K attempts take at the connector's bound and pace, computed in the profile (`QuietThreshold::derive`): `ceil(K / bound)` rounds, each up to the connector's dial deadline and its longest wake gap (1.5 s), so S follows if any of them moves. Clearnet (shekyl-dev data `dial-profile/2026-10-27-clearnet-pfail`): 0 of 283 attempts to live peers failed. With no failure observed the estimate is read at its bound: the 95 % upper bound of `q_live` is about 1.1 % (the rule of three), so `p_fail` = 0.505 and K = 11 (the point estimate, 0.5, gives 10); S: eleven rounds at bound 1, each up to the 1.415 s deadline and a 1.5 s wake, 32.065 s. **What the series can and cannot show:** the rig dialed the testnet fleet, our own hosts, from the floor device across internet paths (connects took 18 to 247 ms, none local), on a quiet network. The internet's live-failure rate is higher, with NAT, firewalls and churn, so `q_live` here is a floor for the open network's. **Re-derived from** the testnet fleet's clearnet live-dial outcomes after alpha.11. Tor (`inflight-bound/2026-10-26-final-head`): 189 of 336 attempts failed at half dead, `p_fail` 0.5625, so K = 13; S: thirteen attempts at bound 5 are three rounds, each up to the 120 s dial deadline and a 1.5 s wake, 364.5 s; every full-window reply seen (104 to 113 s) is inside the deadline. A false quiet needed the node to hold nothing, which is the isolated node the wargame accepts. #1235 deleted K, S and `QuietThreshold::derive` with the guard; the posture line's `quiet_after` is now Tor's `SocksTimeout` plus δ (`TOR_SUPERVISOR.md` §4.2) | The lists: a failed test that proves no misbehaviour cools the address instead of dropping it; the dialer cannot draw a cooling address | After the gray-lifecycle PR, on testnet: how often a cooled address succeeds at its first retest, by rung of the ladder |
+| Failure-judging bracket δ, 15 s on Tor and 15 s on clearnet, each its own (`OE-D5`, `OE-D7` ruled 2026-10-31; built by #1235) | Each connector's `DialProfile.judging.bracket_nanos` in `shekyl-transport-layer/src/profile.rs` (`TOR_BRACKET_NANOS`, `CLEARNET_BRACKET_NANOS`); read by the dialer's judge | **Assumption**, per connector (Rick, 2026-10-31). Basis on both: the 60 s mean timed sync (`shekyl-p2p-session/src/timing.rs`, `TIMED_SYNC_MIN` 45 s + U(0, `TIMED_SYNC_JITTER` 30 s), PWD-B2; *records-was* `P2P_DEFAULT_HANDSHAKE_INTERVAL`, `src/cryptonote_config.h:193`, deleted 2026-11-05) gives each session about two received messages a minute. **Tor** counts any session and every stream opening (the one guard link); **clearnet** counts outbound sessions only. Prediction under an assumed independent Poisson arrival on each counted session (`DIALER_OUTAGE_EVIDENCE.md` §3.5): one δ-interval is empty with `p = exp(−n · δ / 30 s)`, and the two-sided bracket excuses a healthy link's Uncertain failure with `1 − (1 − p)²`, about 0.50 % at 12 sessions, 9.7 % at 6, 60 % at 2. Re-derived if the timed-sync interval moves. *Records-was: labelled Derived, with the one-sided 0.25 %* | The judge's bracketed corroboration: an Uncertain failure counts only with a sign of life within δ before and within δ after it | The floor-device live runs (`DIALER_OUTAGE_EVIDENCE_BRIEF.md` §7): the fraction of Uncertain failures excused on a healthy link at target, per connector |
+| Excusal retry `outage_retry`, 10 s + U(0, 5 s) on Tor and 10 s + U(0, 5 s) on clearnet, each its own (`OE-D6`, `OE-D7` ruled 2026-10-31; built by #1235) | Each connector's `DialProfile.judging.outage_retry` (`TOR_OUTAGE_RETRY`, `CLEARNET_OUTAGE_RETRY`) | **Assumption**, per connector (Rick, 2026-10-31). An address cooldown, not a recovery bound: how long an excused address with no counted failure waits before it is eligible again; an address with counted failures keeps its rung (hold the rung, `DIALER_OUTAGE_EVIDENCE.md` §3.4). Eligible means drawable when a slot is free. **Tor** basis: under the slot turnover, `window / bound` (21 s at today's 105 s window; the build checks only the deadline's 24 s, necessary not sufficient). **Clearnet** basis: caps redials of an unproven address at one per 10–15 s; the build checks that the shortest retry outlasts one fill round. Recovery after an unblock is a measurement: on clearnet the design bounds the first redial of an excused address at about δ + 15 s plus one dial; on Tor the first redial waits for a slot, and the unblock-to-first-open time is a Pi measurement (brief §7). *Records-was: "recovery after an unblock is at most 15 s plus one dial" on both* | The peer list's excusal of an address with no counted failure; the first sign of life clears it | The floor-device live runs: blackhole recovery time, per connector |
+| Clearnet transit, 50 ms | `verify_cost.rs` `ADOPTED_TRANSIT_ASSUMPTION_MS` and its typed twin `ADOPTED_TRANSIT`; the D7 clearnet column's `transit_ms` (`declaration.rs`) | **Assumption.** §21's "at least 50 ms if crossing an ocean", carried forward labelled at §86.2. Never measured on either path | `adopted_hop_ms` (the clearnet `hop`, 175 ms), the clearnet embargo table (`EmbargoTimer::adopted`, mean 190 s), the flood instrument's clearnet row (`conformance::flood::transit_for`) | After RD, on the Rust path: a quantile, not a mean (§86.2), clearnet to clearnet on an established connection, from a floor-representative connection (§94.6) |
+| Tor transit, 1625 ms | `verify_cost.rs` `ANON_ZONE_TRANSIT_ASSUMPTION_MS` and `ANON_ZONE_TRANSIT`; the D7 Tor column's `transit_ms` | **Assumption.** §63.2's "ten times clearnet" upper bound, taken on faith (§89.5). §94's 2026-08 readings (per-session pooled p90 403.8 to 710.9 ms across the day, 590.6 ms interpolated at the modal shape, §94.10 and §94.5) are **RustPath** readings of the network term, taken by `shekyl-tor-transit-spike` over public Tor with no relay in the path; they are recorded, not adopted, because the tail above the measured 8.4 to 16.6 KB span is unmeasured (§94.5) and the re-derivation is §94.10's two-commit procedure | The Tor `hop` (1750 ms) and embargo table; `longest_transit` and through it `shekyl_dandelionpp_origin_retry_interval_seconds` and `shekyl_dandelionpp_propagation_timeout_seconds`; the flood instrument's Tor row | After RD, on the Rust path, under §94's pre-registration: onion-to-onion rendezvous on an established connection, the floor-representative host, at least 8 h of spread for the diurnal swing, the tail shape included |
+| `hop` scheduling term, 0 | `verify_cost.rs` `adopted_hop_ms` doc; §71.3's composition `hop = transit + verification + scheduling`; §94.7 and §94.9 | **RustPath reading recorded, value not yet adopted (as of 2026-11-05).** The constant still carries 0 as a stated omission; adopting a term is §94.10's two-commit procedure, not this reading. **UPDATE 2026-11-05 (the cutover's fleet run, shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** the timing engine's `Relay`-class lateness is D5's leg 4 on the Rust `Driver`; read over three legs (clearnet, Tor, clearnet with the carrier) on x86 fleet hosts, not the floor device. Decision-to-fire delay on an idle owner (a 4 vCPU cloud host): max 0.206 ms over 22 fires, 0.330 ms over 39, 1.264 ms over 410 (8 of them over 1 ms); on a busy lab host: max 2.27 ms over 83 (31 over 1 ms), 1.95 ms over 39, 12.3 ms over 335 (104 over 1 ms, none over 100 ms). Fire-to-report-back at most 2.7 ms anywhere. **One outlier class:** the origin under the carrier recorded wakes 14.2 s and 26.2 s late (6 over 100 ms of 277) while the sessions' and discovery's classes stayed under 11 ms — the relay owner alone was blocked, coincident with the submit path's check-and-commit outliers on that host's rotational store (7.5–42.7 s against a normal 0.4–1 s); the shared lock is not identified and is reported with the record, not fixed. A floor-device reading is still owed before a term is derived. | `time_between_hop_ms`, through the omission | The floor-device reading of the same instrument, then §94.10's two-commit procedure. |
+| Verification floor: 124.5 ms (1 input, genesis), 399.2 ms (8, genesis); 143.3 and 791.9 ms at depth 7 | `verify_cost.rs` `SPEC_VERIFY_COST`, cells at `:349` to `:353` | **RustPath.** The Rust verifier on the Pi 4 (`Provenance::MeasuredPi4`, §85.3). The depth-7 cells are `TreeBasis::SynthesizedProjection`, a prior against a synthesized tree (§81.2), and 44 of the 48 cells are unpopulated in-tree (FOLLOWUPS, "populate the 48-cell Pi verification surface") | `adopted_hop_ms` (the modal cell is the hop's floor) | Not by RD. §81.3's schedule: re-measure on the spec machine against the actual tree as depth grows, the projection as the prior |
+| `time_between_hop_ms`, 175 ms clearnet, 1750 ms Tor | `params.rs` `DandelionParams::adopted_for_transit_ms`; the field is a `DerivationMs` | **Derived**: RustPath verification plus Assumption transit, plus the CppPath scheduling term above as an omission. `adopted_hop_ms_with_transit` returns a `DerivationMs` with the weakest of its inputs (`AdmissibleBasis`: Assumption, then Model, then RustPath; `VERIFICATION_FLOOR_BASIS` is RustPath), so the adopted hop reads `Assumption`. Outside the crate a value is built only by `assumption`, `model`, or `rust_path`; `derive` is crate-private, held by a `compile_fail,E0624` doctest. `DandelionParams::inherited` stores `INHERITED_HOP` (175 ms, `DerivationMs::assumption`) directly. **UPDATE 2026-11-05:** the scheduling term has its first Rust-path reading (the row above); the adopted hop still reads `Assumption` because nothing was re-derived — the cutover PR records, it does not adopt | `EmbargoTimer::adopted` | Re-derived by §94.10's two-commit procedure (input first, pins second) once the scheduling term's floor-device reading is in |
+| `fluff_return_ms`, 3250 ms | `params.rs` `FLUFF_RETURN` (`DerivationMs::model`) | **Model.** F-7's transit-free p90 first passage at degree 12, `FloodReach::OutboundOnly`, provisional under §96 item 2. The C++ transports the flush today, but the number is the instrument's, not a reading of that transport. The value carries the basis | The embargo derivation (`F′`); `ADOPTED_PROPAGATION_TIMEOUT_SECS` | Not re-run as a model. Its operational replacement is §96 item 2, on the Rust path after RD (a Tor-return arm and a clearnet peer). The model re-run with `EveryPeer` reach and Tor transit is the FOLLOWUPS row that item names |
+| Flush averages: `FLUFF_AVERAGE_IN_SECS` 5, `FLUFF_AVERAGE_OUT_QUARTER_SECS` 10, `FLUFF_AVERAGE_IN_QUARTER_SECS` 20 | `params.rs:597` to `:603` | **Assumption** for the parameters: inherited from the paper's implementation, never derived for Shekyl. The **realised** flush distribution (decision to bytes on the wire) is implementation timing, **RustPath since 2026-11-05 (fleet hosts, not the floor device).** **UPDATE 2026-11-05 (shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** on the Rust path the realised flush is the drawn delay plus the `Relay`-class wake delay (the `hop` row: ≤ 0.33 ms idle, ≤ 2.3 ms on a busy lab host without the carrier) plus the transport's write, read at session close as the write-stall histogram with `in_flight_at_close=0` on every session: lab-local sessions finished writes under 4 ms (max 1.1–3.9 ms); the cloud host's inbound sessions across the public internet carried a 17–57 ms tail (2^24–2^25 ns bins, four writes). The implementation adds milliseconds to averages drawn in seconds; a full realised-versus-drawn distribution was not taken (the fluff lines carry no draw). | `FluffScheduler` (`DandelionParams::inherited`), the flood model's flush draw | The parameters are parameters and are not measured. The realised distribution's floor-device reading, with the draw logged beside the write, when the parameters are derived |
+| Dandelion++ epoch: `CRYPTONOTE_DANDELIONPP_MIN_EPOCH` 10 min, `EPOCH_RANGE` 30 s, `STEMS` 2 | `shekyl-relay/src/owner/actor.rs` `RelayConfig::inherited` (`stems` 2, `min_epoch_secs` 600, `epoch_jitter_secs` 30); mirrored by `DandelionParams::inherited`. *Records-was:* `src/cryptonote_config.h:115` to `:117`, read by `public_zone_params()` in `levin_notify.cpp`, deleted 2026-11-05 | **Assumption.** The paper's parameters, inherited. Epoch length is a privacy parameter (§23), not a reading | `EpochScheduler`, `StemMap` width | Not measured. Reopened by a design round, not by a run |
+| Embargo tick, `DEFAULT_EMBARGO_TICK_MILLIS` 250 | `schedule.rs:435` | **Assumption.** A discretisation choice argued on instant preemption; §94.10 says the step-density argument is its own round | `derive_embargo` | Not a measurement. §94.10's tick round |
+| `ADOPTED_PROPAGATION_TIMEOUT_SECS`, 2297 s | `schedule.rs:473` | **Derived** from the Tor transit row, the hop row and `fluff_return_ms`: the longest transit's 1-in-100 survival quantile | `shekyl_dandelionpp_propagation_timeout_seconds` (the wallet's wait) | Moves with its inputs, pins second (§94.10) |
+| `INHERITED_EMBARGO_SECS`, 39 s | `params.rs:486` | **Assumption.** The inherited daemon's `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE`, kept as the records-was the tests pin against | Tests only: `adopted_params_change_provenance_not_behaviour` and the FFI's "not the inherited 39 s" assertion. No production consumer | Not measured; it is the number F-1 replaced |
+| Carrier cadence: `NOISE_MIN_DELAY_MS` 3333, `NOISE_DELAY_JITTER_MS` 3334, `MEAN_CADENCE_MS` 5000 | `params/carrier.rs:136`, `:178`, `:189` | **Derived** from the 16 KiB/s bandwidth ceiling, which is a ruling (`COVER_TRAFFIC_RESTORATION.md` §2.8, §3.1), so **Assumption**-based. The realised cadence is **RustPath since 2026-11-05 (fleet hosts, `--dev-relay-cover`, clearnet only).** **UPDATE 2026-11-05 (shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** the relay owner transports each window; the written lines carry timestamp and size only. On a lab host with two open links: 275 windows, gaps per channel n=273 min 3340 p50 5078 p90 6334 max 6663 ms against the drawn 3333 + U(0, 3334) ms (min 3333, mean 5000, max 6667) — the realised cadence is the drawn one end to end; every window 20 480 bytes. On the origin host: 258 windows, gaps n=256 with the same body (min 3339 p50 5083 p90 6466 ms) and two gaps of 28.3 and 32.3 s on both channels at once — the relay-owner stall in the `hop` row, during which the carrier is silent: **an observable timing event on the cover link**, reported with the record. Two things the run also shows: the carrier refuses a Tor-only node (`NoiseWithoutOpenLink`: Tor is volume cover), so no Tor cadence exists to read; and an embargo reshape is written as a direct 2002 outside the windows (`Effect::Stem` → `send_batch`), a non-cadenced write on the link, raised as a design question, not ruled. | `NoiseCadence`, the carrier schedule, behind `set_carrier_development` (off in every shipped build) | §3.1c's budget-versus-actual reading on the floor device, development flag only; and whichever ruling the stall and the reshape questions get |
+| Connector deadlines (`shekyl-transport-layer::spans`; *records-was* `transport_spans` in C++, moved 2026-10-13): clearnet dial 1.415 s, handshake 1.426 s, gap 1.430 s; Tor dial 120 s, gap 37.4 s | `rust/shekyl-transport-layer/src/spans.rs:52` to `:81`; D9 (`P2P_TRANSPORT_LAYER.md`, 2026-09-30); clearnet from `docs/benchmarks/p2p_cutover_crossbuild_20260929.md`, Tor from `docs/benchmarks/p2p_tor_gap_cold_20261014.md` | **Clearnet: CppPath for the adopted values; a RustPath reading recorded 2026-11-05, outside D9's conditions.** **UPDATE 2026-11-05 (shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** the Rust dialer's spans over twelve clearnet dials (two dialers, two targets each, three legs; lab-local and lab-to-cloud across the public internet, x86 hosts): connect 2.3–39.8 ms, handshake 2.0–35.2 ms, dial-to-established 4.3–65.1 ms, every one under the 1.415 s / 1.426 s deadlines by a wide margin. Twelve samples on fleet hosts are not D9's measurement conditions (the floor device, the stated RTT ceiling), so the values stand as written. *Records-was:* **Clearnet: CppPath.** The distributions were taken with the C++ dial path in front (`idle_worker` on the two-worker io pool, the starvation defect the dialer brief records) and the C++ Levin handshake inside the gap. The 700 ms GEO-satellite RTT ceiling in the clearnet form is an **Assumption**, stated. **Tor: RustPath** (`TOR_SPANS_BASIS`; Rick, 2026-10-14): cold first contact on the Rust dialer, 189 sessions pooled from two responders. The dial is bounded by Tor's own SOCKS timeout, where the distribution is censored; the gap is twice the pooled p99, 18.69 s, rounded up. Reopen at 500 pooled Rust-path samples. **Ruled 2026-10-08 (Rick):** each connector's gap is the outbound handshake's only clock, armed by the connector | The connector's armed deadlines (`shekyl_zone_params`), the shutdown wait; the dialer's handshake clock | Clearnet: after PR-3, on the Rust dialer, under D9's measurement conditions; into this register. Tor: at 500 pooled Rust-path samples |
+| Levin invoke timer: the session layer's `INVOKE_TIMEOUT`, 120 s, for a 1002 request's response (`shekyl-p2p-session/src/timing.rs`, brief §7.6). *Records-was:* `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT` 5000 ms, `src/cryptonote_config.h:199`, armed at `net_node.inl:1414` inside `do_handshake_with_peer` and at `:2696` inside `try_get_support_flags` — deleted 2026-11-05 with the C++ host | `timing.rs`; one timing engine wakes it | **Assumption.** The Levin handler's `LEVIN_DEFAULT_TIMEOUT_PRECONDITION`, kept as written. **Not the dialer's clock (Rick, 2026-10-08):** the outbound handshake's only clock is each connector's transport gap, the D9 row above; an inbound handshake is held by the connector profile's `handshake_within` | The session's outstanding 1002 request | Not re-measured; it is a ceiling on a reply, not a pacing value. Support flags are not invoked (the capability is carried in the handshake) |
+| Dial wake spacing | Each connector's dial profile, `shekyl-transport-layer` `dial_profile(connector).wake` (the dial profile, Rick 2026-10-27), drawn by `shekyl-dialer/src/pace.rs` `next_wake_nanos`. **R3 (Rick, 2026-10-12):** `0.5 s + U(0, 1.0 s)`, mean 1 s, PWD-B2's bounded-uniform shape, drawn per dial (`P2P_3_SLICE_3_DIALER_BRIEF.md`, the fill). *Records-was:* ruled 2026-09-25 as a jittered per-dial wake with no number; before the Rust dialer, the C++ `m_connections_maker_interval` idle maker and the 60 s housekeeping timer | **Assumption.** The shape and the number are ruled; neither is measured | The fill (dialer brief) | After PR-3, on the Rust dialer: dial pacing, into this register |
+| In-flight dial bound: Tor 5, clearnet 1 | Each connector's dial profile, `rust/shekyl-transport-layer/src/profile.rs` `dial_profile(connector).in_flight_bound` (the dial profile, Rick 2026-10-27); each dial attempt a task on the transport runtime (the dialer in-flight bound, revision 2, Rick 2026-10-25); a Tor attempt that fails at or after the managed Tor's `SocksTimeout` is final within its test (revision 4, Rick 2026-10-26) | **Measured** (Tor), the floor device, 2026-10-26, on #1190's merged head (`d22ac70aa`): at half dead bound 5's median fill is 508 s over 5 samples, inside the 600 s horizon (bound 1, 1064 s); refill after a Tor respawn 126 s over 3 (bound 1, 928 s) (`docs/benchmarks/p2p_tor_inflight_bound_20261025.md`, the short series; nine full-window `0xF0` replies were still retried then, fixed on #1203, so the medians are slightly long). **Derived** 2026-10-25, restated 2026-10-26, the same record, with half the draws dead, on the full-window-final lifecycle (a dead attempt modelled at the 120 s dial deadline; the managed Tor answers at its 105 s `SocksTimeout`, from 104 s to a few seconds past, always inside 120 s, so the times are an upper bound): five is the smallest bound whose median fill of the 12-session Tor target is within one stem epoch (`min_epoch_secs` 600): 523 s, four 597 s. The record's three-column table is the evidence: one attempt per test gives the same answer (517 s), and three attempts with a waiting `Keep` holding its place meets no horizon (a plateau at about 1,585 s). The half: two attacker sessions at the intake cap (2 × 24) plant as many onions as an honest pool at the diversity floor (48). Dial times: the 189 cold-contact sessions of the 2026-10-14 rerun. Past six the fill stops improving: a dead pending `Keep` holds its target place for its window. **Two regimes, recorded and not changed.** On a large network the bound sets the fill time. On a small one the white diversity floor does: with 64 onions in gray, floor run 1 filled in 258 s at bound 5 against 190 s at bound 1, because the extra slots drew gray down, white stayed under its floor of 48, and the fill rule confirmed rather than kept (one sample: 15 keeps, 45 confirms). That is the floor building white diversity first, as designed. **Fingerprint (`TSR-Q9`).** A stock Tor client's cap on circuits under construction, `MaxClientCircuitsPending` (default 32), counts only general and descriptor-fetch circuits (`CIRCUIT_PURPOSE_COUNTS_TOWARDS_MAXPENDING`), not introduction or rendezvous circuits; the Tor 0.4.9.14 files and lines are in the record. Five connects hold at most five descriptor fetches pending, under a sixth of that cap. **Dead-onion stalling.** A planted dead onion holds one slot and one target place for about 105 s, until Tor's `0x06`, then cools: 2 min, doubling to 1 h, with U(0, 50%) jitter. Holding all five slots for an hour takes 5 × 3,600 / 105 ≈ 171 draws, every one a plant, so the plants must be nearly all of the drawable pool; that share is the binding cost. While the node holds any session the ladder climbs: at the 1 h cap a plant is drawable at most once an hour, so about 170 plants at the cap, planted once: 8 attacker sessions at the intake cap (24 per session per 24 h). With no sign of life on Tor (`DIALER_OUTAGE_EVIDENCE.md` §3.3) a plant's failure is excused and waits the outage retry, 10–15 s, so a plant is redrawn about every 2 min (its 105 s and the retry) and about six plants hold the hour (5 × 117.5 / 105); the node then reaches nothing already, and every honest onion in gray cycles the same way. *Records-was, SUPERSEDED (#1235):* under the quiet stretch a plant was redrawn every first step, about 4 to 5 min, and about 13 held the hour. At bound one, a fifth as many plants held the whole connector. **Assumption** (clearnet): one, the 2026-10-08 interim; a clearnet dial ends within 1.4 s. *Records-was: one dial per connector, unmeasured, and the loop thread sat inside each dial, so no second dial could start* | The fill (`plan`); the descriptor reservation adds each connector's bound to its target | A floor-device fill at half dead past one stem epoch at bound 5, or a dead share argued above one half |
+| Clearnet accept rates: the connector's bucket one token every 100 ms, a burst of 20; the host's (an IPv4 address, or an IPv6 /64) one token every 6 s, a burst of 3 | `rust/shekyl-transport-layer/src/accept_rate.rs` `CLEARNET_CONNECTOR_RATE`, `CLEARNET_HOST_RATE`, read by `accept_bound(Clearnet)` beside the declaration (rule 71); the mechanism is `AcceptGate`, checked at accept before any cryptography (`P2P_TRANSPORT_LAYER.md` D10.3) | **Assumption** (Rick, 2026-10-31), written ahead of the measurement. **CPU:** at the full connector rate the responder spends about 0.7 % of a floor-device core (10 handshakes a second at 684.5 µs, C5, `docs/benchmarks/p2p_c5_pi4_20260926T005507Z.txt`), which proposes a CPU budget of about 1 % of a core. **Linger:** with the clearnet handshake span (1.426 s) the linger cap is 20 + ⌊1.426 s / 100 ms⌋ = 34 descriptors, reserved beside the inbound ceiling (D10.2). **Honest arrivals:** about two hundred times below the connector rate. **Per host:** the burst holds a dial and a white redial from one peer, and a few nodes behind one NAT. Several nodes on one machine reach each other from one loopback host and share its bucket | `AcceptGate` per connector and per host (`Sockets::accept_clearnet`); the linger cap (`linger_cap`, `clearnet_linger_descriptors`) and through it the daemon's descriptor reservation (`reserved_descriptors`) | The step 7 record's item 6 (`NOISE_STEP7_EVALUATION_BRIEF.md`): the flood measured against this limiter on the floor device, in two configurations; the rates and the CPU budget are re-derived from it and ruled |
+| D5 thread budgets: transport `workers` 2, `blocking` 1 | `rust/shekyl-transport-layer/src/spans.rs` `WORKERS`, `BLOCKING`, read by `shekyl-p2p`'s `network.rs` into the transport runtime; D5 (`P2P_TRANSPORT_LAYER.md`). *Records-was:* `net_node.inl:3411` to `:3412`, and `executor_workers` 2 at `:1236` for the asio executor pool, deleted 2026-11-05 with the C++ host; there is no second pool | **Assumption.** Each is a placeholder "the run record replaces". None of D5's four legs is recorded on the floor device. **UPDATE 2026-11-05:** leg 4's instrument (the timing engine's per-class lateness) has fleet-host readings in shekyl-dev `infrastructure/captures/p2p-remnant/README.md` (the `hop` row above); legs 1 to 3 are not read | The transport runtime `shekyl-p2p` builds | D5's legs on the floor device, all on the Rust path since the cutover: legs 1 to 3 time the transport; leg 4 times the Rust `Driver` (the timing engine), the interim asio executor it was to run on first being gone |
+| `DISCLOSE_COUNT`, 12 | `shekyl-peer-bounds/src/lib.rs` `DISCLOSE_COUNT`, re-exported by `shekyl-peerlist` and read by `shekyl-levin`'s handshake frame bound (PR-3, 2026-10-13); the C++ `P2P_DEFAULT_PEERS_IN_HANDSHAKE` / `P2P_MAX_PEERS_IN_HANDSHAKE` are deleted | **Assumption** (D3, Rick 2026-10-09). A protocol constant, the same on every node and every connector; the number is the interim outbound target carried over, not a derivation | The cached disclosure sample (size and the receiver limit), the per-session intake cap below, the white floor below | After PR-3, on the Rust path: from intake diversity, honest fill, and per-reply exposure (slice 1 brief §2); into this register |
+| Per-session gray intake cap, `2 × DISCLOSE_COUNT` = 24 distinct addresses in any 24-hour span | `shekyl-peerlist/src/lib.rs` `SESSION_INTAKE_CAP`, derived from `DISCLOSE_COUNT`; `INTAKE_SPAN_NANOS` beside it | **Assumption** (D-S1, Rick 2026-10-09). Twice the sample so an honest peer's cached sample cannot reach it; the multiple is not derived | `admit_gray`'s refusal (`PeerlistRefused`), inbound and outbound sessions alike | After PR-3, on the Rust path, with §96 item 3's instrument: time for an attacker to fill gray and the resulting `p_h`, per connector |
+| White diversity floor, `INTERIM_WHITE_DIVERSITY_MULTIPLE` (4) `× DISCLOSE_COUNT` = 48 | `shekyl-peerlist/src/lib.rs` `white_diversity_floor()`; the slice 1 brief §2 and the dialer brief's composition table | **Assumption.** R5 (Rick, 2026-10-12): the floor stays 48. The multiple 4 is the interim stand-in for the floor (slice 1 brief, 2026-10-08) | Disclosure (nothing is disclosed below the floor), the refill trigger | After PR-3, on the Rust path: from draw diversity and the candidate filters (slice 1 brief §2) |
+| `P2P_DISCLOSE_EARLY_SPAN_NANOS`, 24 h | `shekyl-peerlist/src/lib.rs`; the flag's state per partition in `partition.rs` (`DiscloseEarly`); the slice 1 brief §5a | **Ruled, 2026-10-13** (Rick, PR-3 brief revision 4 §2.6): how long `--p2p-disclose-early` lets a connector disclose below the floor, from the moment the flag reaches the lists at startup; its own constant, not `DISCLOSE_WINDOW_NANOS`, though both are a day; a restart starts it again | Disclosure under the flag; the flag also ends when white reaches the floor | Not a measurement: a ruled span. Reopen with the floor's derivation if the day proves wrong for a bootstrap |
+| White refill line, floor `+ DISCLOSE_COUNT` = 60 | `shekyl-peerlist/src/lib.rs` `WHITE_REFILL_LINE` | **Assumption** (D-PR2-2, RULED Rick 2026-10-09: refill line = floor + `DISCLOSE_COUNT` = 60). The shape is ruled (refill starts above the floor, slice 1 brief §2); the headroom of one sample is the interim the derivation replaces | The refill trigger slice 3's fill reads | After PR-3, on the Rust path, with the floor |
+| Per-source gray share — FOLDED (D-PR2-1, RULED Rick 2026-10-09) | No constant. The share is folded into D-S1's per-session cap (the row above); the reconnect throttle registered in `P2P_TRANSPORT_LAYER.md` covers the host case; Tor stays a residual there | **Folded**, not a basis of its own. *Records-was: an intake limit so one sender cannot fill gray, distinct from the per-session cap, "the crate PR names it; this brief does not pick the number"* | `admit_gray` | After PR-3, on the Rust path, with `DISCLOSE_COUNT`'s derivation |
+
+*Records-was, folded here from `FOLLOWUPS.md` 2026-10-08:* a row asked
+for a derivation check that `fluff_return_ms` equals the max over
+measured zones. That check was zone-keyed, and it would have asserted
+that a provisional, transit-free model value equals a transit, encoding
+the provisional number as truth. §96 item 2 carries what that row
+wanted: the operational replacement for 3250 ms, on the Rust path.
+
+## 98. PR-1 pre-flight — `HiddenStemSlot` in `shekyl-relay` (Round 0, 2026-10-09)
+
+**Status: OPEN — implementation landed on `feat/hidden-stem-slot`
+(#1018, `ed87cc03cd`); D-PR1-2 and the structure ruled 2026-10-09,
+D-PR1-1 ruled (c) and revised to (c′) the same day on 98.10's table
+(98.4). Closes as record when #1018 merges.** Rule 26 is cited: this is the substrate
+re-check between the §95 ruling and PR-1's first production commit.
+The governing design is §95.3's `HiddenStemSlot` paragraph, §96 item 1,
+and `TOR_COVER_POSTURE.md`'s 2026-10-08 UPDATE. Lines were read on `dev`
+at `bf6d277efe` (after #1011). PR-1 is Ruling B class 1: the §95.3
+posteriors are model results, and this PR transfers the rule they
+measured into production; nothing is re-run. PR-1 mints no identifier
+family.
+
+### 98.1 The rule, instrument beside production (B4)
+
+| | the instrument (`conformance/composition/mod.rs`) | production after PR-1 (`shekyl-relay/src/graph/`) |
+| --- | --- | --- |
+| mixed outbound sessions, hidden connector configured | `mixed_hidden_slot` (`:534` to `:559`): `pick_edge` over the hidden edges (`:467` to `:473`), one uniform pick from the rest, `StemMap::new(slots, width, rng)`, then `stem_for_among(None, &[hidden_id], rng)`. That pin is the slot peer alone. The instrument does not call `new_with_reserved_slot` or `route_local_origin`, and it does not run (c′) | `rebuild_stems` builds `StemMap<ReservedSlot>` through `new_with_reserved_slot`: slot 0 is uniform over the address-hiding sessions, the other slots uniform over the remainder. The local source is `route_local_origin`. Its primary is slot 0's peer when the class contains it, otherwise an address-hiding peer already occupying a later slot; the pin then freezes `stems − 1` alternates drawn from the class live at that moment (D-PR1-1 (c′)), including sessions the map has not slotted. On a fresh epoch the primary peer is uniform over the hidden class, which is the peer the instrument records, and that is what §95.3 counts. The alternate walk, the stranded slot, and fill-before-walk are production-only: 98.10 measures the walk's exposure, and the relay and stem-map tests lock the route |
+| all outbound hidden | `paper_map` (`:525` to `:531`): `StemMap::new` over every outbound session, local source `stem_for(None)`, recorded at map build. That is a load-balanced slot, not slot 0, and it is not (c′) | `new_with_reserved_slot` over the class with an empty rest. The primary is slot 0's peer even after a relayed source has unbalanced the slots; `stem_for(None)` would have moved. On a fresh map both primaries are uniform over the class, which is what §95.3 counts |
+| no hidden connector | `paper_map` | unchanged: `plan_relay`'s existing `stem_for` arm (`mod.rs:974` to `:978`), plan `Stem` |
+| hidden connector, no hidden outbound session | `hidden.is_empty()` takes the paper branch; the instrument has no "hidden connector with no hidden session" node | production holds: `NoOwnEdge`. The instrument never models this state, so nothing is transferred for it (coverage statement, 98.5) |
+
+The instrument and production agree on the first-hop peer for one
+origination on a fresh epoch. They do not share a call, and the
+instrument is left on the draws above so the §95.3 posteriors stay the
+transferred model results (98.2). Where the candidate orderings differ
+(the instrument orders edges by row, production by connection id), a
+same-seed test is not available and the distributional test in 98.6 is
+the pin for that primary. It does not pin (c′).
+
+### 98.2 Substrate re-check (A2) — every row read at `bf6d277efe`
+
+| Claim in the plan | Where | Holds? |
+| --- | --- | --- |
+| The separate draw is `own_edge()`, uniform over hidden-address outbound sessions, stored in `hop0_edge`, with `hop0_peer_live` | `graph/own_edge.rs:34` to `:70`; field `graph/mod.rs:447`, init `:542`, cleared in `rebuild_stems` `:859`, called from `plan_relay` `:940` | yes. 71-line module; the deletion surface is the module, the field, and the three sites |
+| `RelayPlan::OwnEdge` / `NoOwnEdge` are the plan kinds, FFI codes 4 and 5 | `graph/mod.rs:267`, `:273`; `shekyl_ffi.h:3400`, `:3402`; mapped at `relay_zone_ffi/mod.rs:1272` to `:1278` | yes. PR-1 keeps both kinds and both codes; the FFI file is not edited |
+| `OWN_EDGE` is one send recording `local`, terminal on write failure; `STEM` re-plans then fluffs | `levin_notify.cpp:1269` to `:1283` (`OWN_EDGE`), `:1260` to `:1268` (`NO_OWN_EDGE`), `:1431` on, `fluff_and_record` `:1516` to `:1520` | yes. Planning a local origin as `Stem` would fluff it on a clear link after a failed hidden write and record `stem` not `local`; that is why the kind is kept. `levin_notify.cpp` is a shrink row of the freeze gate and is not edited |
+| `rebuild_stems` is class-blind `StemMap::new`; `update_stems` is class-blind `StemMap::update` | `graph/mod.rs:854` to `:860`; `:834` to `:840`; `StemMap::new` `stem_map/mod.rs:178` to `:209`, `update` `:216` to `:283` | yes. `update` backfills any empty slot from any candidate not in use; a class-aware refill needs an API this PR adds (98.3) |
+| `stem_for_among` restricts the first pin to `allowed` and later walks that frozen set; exhaustion is `None`, re-drawn at the epoch | `stem_map/mod.rs:362` to `:372`, `resolve_pin` `:379` on; the W3c argument at `:330` to `:343` | yes. For a relayed source this is the ruled behaviour. For the local source it is decision D-PR1-1 |
+| Production stem width is 2 | `CRYPTONOTE_DANDELIONPP_STEMS` `src/cryptonote_config.h:115`; `public_zone_params` `levin_notify.cpp:206` to `:209`; noise requires `stems == NOISE_CHANNELS` (`graph/mod.rs:511`) | yes (B6: value read at the line). Width 1 is reachable only from tests |
+| The hidden outbound sessions' target is 12 | `MIN_PROVISIONED_OUT_PEERS` `params.rs:203` | yes (B6) |
+| The carrier: `OwnEdge` leaves on the ordinary connection; a `Stem` on an open link with noise on is its slot's channel | `carrier_for` `graph/mod.rs:1176` to `:1206` | yes. Unchanged by PR-1: a hidden slot's peer is on Tor, where `noise_destination` is false |
+| Stem candidates are outbound sessions with an assessed transit; `hides_address` reads the declaration | `stem_candidate` `graph/mod.rs:786` to `:790`, `outbound_ids` `:798` to `:804`, `hides_address` `:101`, `any_hides_address_from_peer` `:117` | yes |
+| The measurements PR-1 transfers | §95.3: `HiddenStemSlot` own-edge posterior 0.61 to 0.64 at 48 nodes and 20 epochs; the all-clearnet baseline 0.64; `HiddenOwnEdge` (today's draw) 0.82 at `(12, 0)` | model results (Ruling B class 1); transferred by 98.6's distributional test, not re-run |
+| Docs that describe the separate draw as current | `TOR_COVER_POSTURE.md:36` to `:49` (records-was as of 2026-10-08, with the UPDATE below it at `:50` to `:64`); `TOR_RELAY.md:48` to `:51` ("the pool an originated transaction rotates over"); the dialer brief `:66` to `:71` ("`own_edge` and `NoOwnEdge` stay on `dev` until the relay lane lands §95.3"); §95.3 `:16894` ("`own_edge()` is not that routing. This change does not delete it") | each is corrected in PR-1's docs commit; §96 item 1 closes with the sentence it names |
+
+### 98.3 What PR-1 changes, and what it does not
+
+**Deleted:** `graph/own_edge.rs`; the `hop0_edge` field; `hop0_peer_live`.
+
+**Added in `shekyl-relay-privacy::stem_map`, each with a production
+caller in `shekyl-relay` (B3):** a *reserved slot*, as a type.
+`StemMap<UniformSlots>` is the paper's map (`new`, `update`).
+`StemMap<ReservedSlot>` keeps slot 0 for a class the caller names at
+construction and at every merge (`new_with_reserved_slot`,
+`update_with_reserved`, `route_local_origin`). The wrong merge does not
+compile. The two merges share the departed-peer pass and the slot
+backfill. Slot 0's fill — the local pin's next unslotted candidate, else
+a uniform draw from the class — lives only on `StemMap<ReservedSlot>`.
+The paper's `update` has no class and does not read the local pin. The
+map never learns what the class is (structure ruling,
+98.4). The constructor draws slot 0 uniformly from the reserved class
+(empty when the class is empty) and the other slots uniformly from
+everything not yet slotted. The merge's hidden-slot fill refills an
+empty slot 0 from the reserved class only — the local pin's next live
+candidate first, else a uniform draw, else nothing — and the other slots
+as today. `route_local_origin` is the local source's one entry. It
+merges when slot 0's peer is in neither live list, or slot 0 is
+empty and an unslotted class member exists, or the local pin's current
+hop has left the class, and then it pins or walks. A hop that is still
+in the class, in the stranded state, does not merge.
+The pin list is drawn there: slot 0's peer when the class contains it,
+otherwise an address-hiding peer occupying another slot, then
+`stems − 1` alternates drawn uniformly from the class live at that
+moment, frozen by `pin_over`. `resolve_pin` is the one walk, and the
+fill runs before the walk inside `route_local_origin`, so the relay
+cannot sequence them the other way. `pin_over` and `stem_for_among`
+stay. The first freezes a supplied list; the second is how a relayed
+source, and the composition instrument, restrict a pin. Every source's
+pin has `stems` candidates; a relayed source's are the slot peers, the
+local source's are the slot-0 peer and its drawn alternates, and the
+walk is one function.
+
+**Changed in `shekyl-relay::graph`:** the epoch stores `EpochMap`,
+uniform or reserved. That variant is the only record of the mode; there
+is no flag beside the map. `rebuild_stems` partitions `outbound_ids()`
+by `address_hidden_from_peer` and, when a hidden connector is
+configured, builds the reserved variant; `update_stems` merges the same
+partition; `plan_relay`'s hidden-origin arm calls `route_local_origin`
+and returns `OwnEdge` or `NoOwnEdge`. The relay names the class. It does
+not sequence the merge and the walk. A close does not merge; the next
+outbound handshake does (`Relay::on_session_established`). No field names
+the hidden slot: it is slot 0 by construction. **The local primary may
+sit in a slot other than 0**
+(Rick, 2026-10-09): it is slot 0's peer when slot 0 holds one, otherwise
+an address-hiding peer occupying another slot, drawn uniformly when
+several do. The reason is that peers are never moved between slots — a
+move would re-point every relayed source pinned on the moved peer's
+slot index in the covert-channel binding (§20.3) and change the live
+set for no routing reason — so when the class-blind draw has put an
+address-hiding session in slot 1 and slot 0's peer dies before the
+origin has pinned, the hidden-slot fill finds no *unslotted*
+address-hiding session, slot 0 stays empty, and the origin pins on the
+survivor where it sits. For the same reason the route merges when
+slot 0's peer is not in the live partition, or slot 0 is empty and an
+unslotted address-hiding session exists, or the pin's current hop has
+left the class. That merge releases the hop and slots the pin's next
+unslotted candidate before the walk; walking first would return the
+departed hop and leave the cursor there. In the stranded state, while
+the current hop is still in the class, the merge does not run and
+nothing moves. The class's state (`HiddenClass`: `Empty`, `One`,
+`Several`) is reported when it changes, first at the first epoch
+rebuild (`HiddenClassWatch` in `hidden_slot.rs`). Until that rebuild
+the watch is unarmed: the dialer's opening sessions are not a report.
+One is the class-of-one rotation report (`hop-0 edge cannot rotate`),
+a warning. Empty is a warning that a transaction this node originates
+has no address-hiding session to leave on. A return to several is
+noted as the session count. The three lines name the class. They do
+not say an origin pin has resumed: a pin whose frozen set is exhausted
+stays `NoOwnEdge` until the epoch ends (§98.5). A rebuild that finds
+the state unchanged reports nothing. `Relay::new` refuses `stems < 2` with a hidden connector (a new
+`RelayNewError` variant; the FFI already maps every variant to a null
+handle). No connector is named anywhere in either crate's production
+code; the gate of 98.4 holds that.
+
+**Kept:** both plan kinds, both FFI codes, `carrier_for`,
+`plan_relay_with_refresh`'s rule that `OwnEdge`/`NoOwnEdge` do not
+refresh, the no-hidden-connector path, every C++ arm. No edit to
+`levin_notify.cpp`, `shekyl_ffi.h`, or `relay_zone_ffi` — a diff there
+is the sign the plan kind was not kept.
+
+**Churn rules (each a test in 98.6; rules 1 to 3 are D-PR1-1 (c′) and
+D-PR1-2 (i) as ruled):**
+
+1. The local source is an ordinary `StemMap` source under W3c whose
+   allowed set is the outbound sessions whose declaration hides the
+   address. Its first pin, made at first origination, freezes `stems`
+   candidates: slot 0's peer, then `stems − 1` alternates (one at
+   production width) drawn uniformly from the address-hiding sessions
+   live at that moment. An origination that finds no hidden session
+   makes no pin; the next one may. It never resolves with plain
+   `stem_for(None)`, which after a merge can land on the clearnet slot.
+2. When the slot's peer drops, slot 0 is refilled with the live
+   alternate. A session opened after the pin never serves it this epoch.
+   Once the frozen set is exhausted, slot 0 refills uniformly from the
+   hidden class for the relayed sources, and the local plan is
+   `NoOwnEdge` until the epoch ends; it never takes a clearnet slot.
+3. A hidden session that arrives while slot 0 is empty fills it at the
+   next merge (`update_stems`), not at the next epoch. Nothing in the
+   substrate forces the epoch: `update` already runs on every outbound
+   handshake and on a stem-send failure (`graph/mod.rs:820` to `:823`).
+   While slot 0 is empty, relayed sources route over the other slot and
+   no pinned relayed source moves.
+4. Relayed sources pin over both slots as before; W3c is unchanged.
+
+### 98.4 Decisions — RULED (Rick, 2026-10-09)
+
+**D-PR1-1 — RULED (c′), revising (c) the same day.** Every source's
+frozen set has `stems` candidates. For the local source those are the
+hidden slot's peer plus `stems − 1` alternates (one at production
+width), drawn uniformly from the address-hiding sessions live at its
+first pin. When the slot's peer drops, the hidden slot is refilled with
+the live alternate. Once the frozen set is exhausted, the local plan is
+`NoOwnEdge` until the epoch ends. Relayed sources are unchanged. The
+rule is the same for every source; only the local source's allowed set
+differs, keyed on `address_hidden_from_peer`. Measured in 98.10: exposure
+at most `stems / H` at every `k` and every flood, under targeted and
+random churn.
+
+*(c) as first ruled — WITHDRAWN 2026-10-09 (records-was).* The local
+source's first pin froze every address-hiding session live at that
+moment, the hidden slot's peer first and the rest shuffled; a drop
+walked to the next live frozen candidate; a session opened after the pin
+never served it. Withdrawn on 98.10's table: targeted drops walk the
+origin onto the adversary, 1.00 at `k = 11`. Neither posed option was
+taken either: (a) held on the first drop; (b) re-rolled on every drop
+over sessions the adversary can enrich between drops.
+
+**D-PR1-2 — RULED (i).** The hidden slot stays empty until a hidden
+session fills it at the next merge.
+
+**Structure — RULED.** Tor is a connector, not a Dandelion++ variant.
+The rule lives in `StemMap`'s generic API and `rebuild_stems`, keyed
+only on `address_hidden_from_peer`. No connector name appears in
+`shekyl-relay` or `shekyl-relay-privacy` production code;
+`scripts/ci/check_relay_connector_agnostic.py` widens to any
+`ConnectorId::` variant outside `#[cfg(test)]` code, over both crates.
+No C++ is edited; the freeze gate already holds `levin_notify.cpp`.
+
+*Posed (records-was, 2026-10-09), kept for the reasoning the ruling
+answered:*
+
+**D-PR1-1 as posed — the local source after a mid-epoch hidden-slot
+refill.** Under W3c a pinned source whose frozen set is exhausted reads `None`
+until the epoch redraws (`stem_map/mod.rs:330` to `:343`). Applied to
+the local source, the origin holds (`NoOwnEdge`) for the rest of the
+epoch after its hidden peer drops, even though rule 3 has refilled the
+slot. (a) Hold: the adversary who can drop the origin's hidden peer buys
+no re-roll inside the epoch; the cost is originations held up to an
+epoch after one Tor circuit fails. (b) Follow the slot: the refill drops
+the local source's pin and the next origination first-pins onto the new
+hidden peer; `own_edge()` replaced a dead edge the same way at the time
+(`own_edge.rs:35` to `:52`, since deleted), §95's capture reading is per-epoch and
+already counts one draw per epoch per node, and the extra rolls an
+adversary can buy are bounded by how many of the origin's hidden peers
+it can make drop, which the dialer refills to 12.
+Recommended (b) at the time. Rules 2 and 3 read that way ("while no
+hidden session is available"), and rule 4 scoped W3c to relayed
+sources. Ruled (c), above.
+
+**D-PR1-2 as posed — the hidden slot when the epoch opens with no
+hidden session.** (i) Reserve it: the hidden slot stays empty until a hidden
+session arrives and fills it at the merge; relayed traffic routes over
+one slot meanwhile, and no pinned relayed source is re-pointed. (ii)
+Fill both slots from the rest and, on a hidden arrival, evict one: that
+re-points every relayed source pinned on the evicted slot, which W3c
+forbids. (iii) Wait for the epoch: rule 3 says not to.
+Recommended (i): no hidden outbound session under a hidden connector is a boot
+transient once the dialer keeps 12 (the dialer brief's wargame: hidden
+sessions open one at a time, and the first fills the slot), and (i) is
+the only option that keeps both W3c and rule 3. Ruled (i), above.
+
+### 98.5 Coverage statements (rule 50)
+
+- *Hidden connector configured, no hidden outbound session.* Production holds
+  (`NoOwnEdge`). The instrument's `hidden.is_empty()` branch is the
+  no-hidden-connector node and uses the paper's draw; production never
+  takes that branch while a hidden connector is configured. No §95.3
+  figure covers this state; it is a liveness state, not a privacy one.
+- *Stem width 1 with a hidden connector.* Refused at `Relay::new`. The
+  instrument's width is the slot count it built (`:550`), two in every
+  run; width 1 is not a production configuration
+  (`CRYPTONOTE_DANDELIONPP_STEMS` is 2 and noise pins it).
+- *The all-hidden node.* The paper's draw by the same code path; §95.3's
+  `(h, 0)` row is its measurement.
+- *A node originating at boot with one hidden session up.* Its frozen
+  set is one: that session, with no alternate to draw. If it drops, the
+  local source holds (`NoOwnEdge`) until the epoch ends, however many
+  hidden sessions the dialer opens afterwards (rule 2: a session opened
+  after the pin never serves it this epoch). Slot 0 refills from those
+  sessions for relayed traffic. The class-of-one rotation report names
+  the state when it is entered, and the return to several names the
+  session count. Neither line says the held origin has resumed.
+
+### 98.6 Tests, named by property
+
+- a local origin is never planned onto a session whose connector does
+  not hide the address: across epochs, mid-epoch churn of the hidden
+  slot, loss of every hidden session (`NoOwnEdge`), and their return;
+- relayed sources reach both slots over epochs;
+- the slot draw is uniform over the hidden outbound sessions and the other slot
+  uniform over the rest (chi-square over 200 rebuilds,
+  `four_hidden_peers_share_the_hidden_slot`, `edge.rs`; *records-was:*
+  the shape `four_hidden_peers_share_the_own_edge` used before PR-1
+  rewrote it), the distributional pin of `mixed_hidden_slot`;
+- an all-hidden node and a no-hidden-connector node reduce to the
+  paper's draw;
+- a hidden session arriving mid-epoch fills the empty hidden slot at the
+  next merge and no pinned relayed source moves (D-PR1-2 (i));
+- the local source's frozen set (D-PR1-1 (c′)): its pin is slot 0's
+  peer and one alternate drawn uniformly from the other address-hiding
+  sessions; after the slot's peer drops, slot 0 holds the live alternate
+  and the origin rides it; a session opened after the pin never serves
+  the origin this epoch; after the alternate drops too the origin holds
+  (`NoOwnEdge`) while relayed sources route over the refilled slot; an
+  alternate that dropped first leaves the pin exhausted at the primary's
+  drop; a boot pin over one session holds after that session drops
+  (98.5); an origination that finds no hidden session makes no pin;
+- at stem width `NOISE_CHANNELS + 1` (noise off; a hidden connector
+  allows it): a departed hop that is not slot 0 walks to the remaining
+  frozen alternate, and a live hop does not fill an empty later slot
+  (`a_departed_hop_off_slot_zero_walks_to_the_frozen_alternate`,
+  `a_live_hop_leaves_an_empty_later_slot_empty`);
+- the stranded state: an all-hidden two-session map whose slot 0 dies
+  before the local pin leaves the survivor in slot 1 (`stem_map`); in
+  that state the origin plans `OwnEdge(survivor)`, not `NoOwnEdge`, and
+  no merge runs at origination (relay); a mixed node in the same state,
+  its only hidden session in slot 1 beside a clearnet peer, also plans
+  `OwnEdge` (relay);
+- the connector gate's selftest fails a `ConnectorId::` variant in
+  production code of either crate;
+- `Relay::new` refuses width 1 with a hidden connector;
+- the existing Rust own-edge tests are rewritten against the slot, not
+  deleted, where the property they named survives: the distributional
+  and carrier tests stay in `edge.rs`, the pin walk is
+  `hidden_slot_tests.rs`, and `synthetic.rs` keeps its column case;
+- the C++ fixtures stay green unchanged:
+  `hidden_connector_with_only_tcp_originates_nothing`
+  (`levin.cpp:1425`), `private_local_without_padding` and
+  `private_local_with_padding` (`:880`, `:890`),
+  `unsynchronised_node_originates_no_stem` (`:1397`),
+  `a_carried_clearnet_origin_is_recorded_stem` (`:3260`).
+
+### 98.7 Threat-model addenda (A3)
+
+1. *Induced churn as a re-roll lever, with a flooded gray list.* An
+   adversary floods onion candidates into gray so that each refill the
+   dialer makes is its own with rising probability, then drops the
+   origin's hidden peer to force a new draw. Under (b) each drop is one
+   roll over sessions the flood enriches; under (c′) a session opened
+   after the pin never serves the origin, so the flood buys nothing
+   against a pinned source, and what drops can reach is the `stems`
+   frozen candidates: exposure at most `stems / H`. Resolved by D-PR1-1
+   (c′); measured in 98.10.
+2. *A spy as the only hidden peer.* With one hidden outbound session,
+   every origination rides the spy, every epoch; the rotation report
+   names it and the dialer keeps the sessions at 12. Absorbed: the
+   report stays, at rebuild.
+3. *A clearnet peer as the local origin's first hop.* The failure
+   `HiddenStemSlot` exists to prevent. Rules 1 and 2 and the first test in
+   98.6; `stem_for_among` makes a non-allowed peer not a candidate
+   rather than a filtered result.
+4. *A failed hidden write fluffed on a clear link.* Prevented by keeping
+   the `OwnEdge` kind and the C++ `OWN_EDGE` arm's terminal failure
+   (`levin_notify.cpp:1283` to `:1284`). The test is the C++ fixture, not
+   a Rust assertion.
+5. *A relayed source re-pointed by the hidden arrival.* D-PR1-2 (ii)
+   would do it; (i) does not. Resolved by D-PR1-2 (i).
+6. *A forced hold every epoch — residual.* An adversary who knows the
+   origin's current honest hidden hop can drop it and then the
+   alternate, `stems` drops, and the origin holds (`NoOwnEdge`) until
+   the epoch ends; repeated each epoch, that is a liveness cost (the
+   origin's own transactions wait, up to an epoch at a time), not a
+   privacy one. Bounded by the same assumption as 98.10's targeted rows:
+   the adversary must know which Tor session is the origin's current
+   hop, which Tor is built to hide; under random churn the hold needs
+   both frozen candidates to be hit by chance. Carried as a residual;
+   its measurement is 98.10's `held` column.
+
+### 98.8 Commit plan (B5: every commit builds)
+
+Each commit is pushed to #1018 as it is made. Commits 4 and 5 were
+inserted when (c) was withdrawn; commits 6 to 8 are 4 to 6 of the plan
+as first written.
+
+1. `relay: record the PR-1 rulings in §98` — landed `f99890dd99`.
+2. `relay-privacy: measure the local source under induced churn` — the
+   instrument of 98.10 beside `simulate_induced_churn_exposure`, its
+   pinned test, and the table recorded here. Stopped the PR: (c) was
+   not clearly better than (b). Landed `8ac87fc22a`.
+3. `ci: the relay connector gate covers every variant and both crates`
+   — the structure ruling's gate, with its selftest. Landed
+   `e715d56431`.
+4. `relay: revise D-PR1-1 to (c′) in §98` — landed `353256f295`.
+5. `relay-privacy: (c′) and random-churn arms in the hidden-slot
+   instrument` — the (c′) arm with exposure and held share, pinned at
+   `stems / H`; a random-churn mode; the worst-case statement; the
+   table of 98.10 re-recorded under both. Landed `1b18a87c7f`.
+6. `relay-privacy: stem_map gains a reserved slot` — the API of 98.3
+   with its unit tests; no caller in that commit, named there as the
+   next commit's consumer (rule 22). Landed `ddeecebef9`.
+7. `relay: a local origin rides the hidden stem slot` — `rebuild_stems`,
+   `update_stems`, `plan_relay`, the refusal; `own_edge.rs`,
+   `hop0_edge`, `hop0_peer_live` deleted in the same commit; the tests
+   of 98.6; the C++ fixtures green through the daemon build. Landed
+   `ed87cc03cd`.
+8. `docs: HiddenStemSlot is the routing the relay ships` — §95.3's
+   sentence, §96 item 1 closed, `TOR_COVER_POSTURE.md` and
+   `TOR_RELAY.md` corrected, the dialer brief's "stay on `dev`" sentence
+   to records-was, `params.rs:211` "own-edge pool", the RP index row,
+   the CHANGELOG, this section's status; and the vocabulary fixed once
+   (98.11, Rick 2026-10-09). Landed `4bc4ad7380`, with the ledger
+   hearing `4bbb8dd4b4`.
+9. `relay: the origin's primary may sit in a slot other than 0` — the
+   pre-merge-review fix (Rick, 2026-10-09): the stranded state above,
+   its three tests, and the merge condition narrowed so the stranded
+   state does not merge on every origination.
+
+Gates per commit: `cargo fmt --check`; `cargo clippy -p
+shekyl-relay-privacy -- -D warnings` (the lib as a dependant sees it),
+the F-6 lane's command, and `--all-targets --all-features` on the two
+crates; their tests; the C++ `levin_notify` fixtures through the daemon
+build; the freeze gate (`levin_notify.cpp` is a shrink row; this PR adds
+no line to it).
+
+### 98.10 Measured — the local source under induced churn: (a), (b), (c), (c′)
+
+`simulate_hidden_slot_churn_exposure` (`conformance/selection.rs`), pinned
+by `hidden_slot_churn_frozen_stems_exposure_is_bounded_by_stems_over_h`
+(`tests/propagation_measurement/selection.rs`). `H = 12`
+(`MIN_PROVISIONED_OUT_PEERS`), `stems = 2`, one adversarial hidden session
+at pin time (`g = 1/12`), 200k trials per cell, every arm on the same
+trial. Every dropped session is replaced by the dialer from the dial
+candidates before the merge, and the replacement is the adversary's with
+probability *flood*; "ambient" is *flood* `= g`, no flood. Exposure is
+`P(the local source is ever routed to an adversarial hidden hop)` within
+the epoch; *held* is the share of trials whose pin was exhausted by the
+`k`-th drop, so the origin held (`NoOwnEdge`) until the epoch ended.
+
+The arms: **(a)** the slot peer alone (posed); **(b)** follow the refilled
+slot (posed); **(c)** the full freeze over every hidden outbound session
+(ruled, then withdrawn on this table); **(c′)** the slot peer plus one
+alternate drawn uniformly from the other hidden outbound sessions at the
+pin (ruled). (c′) is the reserved map's `route_local_origin`: the trial
+builds `StemMap<ReservedSlot>` with slot 0 fixed as the shared primary
+and walks that map. The table below is the run recorded when (c′) was
+the model's own walk; the cells are not re-derived here.
+
+Two churns. **Targeted:** the origin's current honest hidden hop drops at
+every step. This adversary knows which of the origin's Tor sessions is
+carrying its stem right now — the link Tor is built to hide — so the
+targeted rows are a **worst-case bound**, not an expected exposure.
+**Random:** a uniformly random live hidden session drops at every step;
+the drop lands on the origin's hop with probability `1 / H`.
+
+**Targeted churn** (`k = 0` is 0.083 in every arm; omitted):
+
+| flood | `k` | (a) slot | (b) follow | (c) all | (c′) stems | (c′) held |
+| --- | --- | --- | --- | --- | --- | --- |
+| ambient | 1 | 0.084 | 0.167 | 0.168 | 0.168 | 0 |
+| ambient | 2 | 0.084 | 0.248 | 0.249 | 0.166 | 0.834 |
+| ambient | 4 | 0.083 | 0.395 | 0.419 | 0.167 | 0.833 |
+| ambient | 8 | 0.084 | 0.636 | 0.750 | 0.167 | 0.834 |
+| ambient | 11 | 0.083 | 0.761 | **1.000** | 0.166 | 0.834 |
+| 1/4 | 2 | 0.084 | 0.281 | 0.250 | 0.166 | 0.834 |
+| 1/4 | 8 | 0.083 | 0.779 | 0.750 | 0.165 | 0.835 |
+| 1/4 | 11 | 0.083 | 0.898 | **1.000** | 0.165 | 0.835 |
+| 1/2 | 2 | 0.085 | 0.329 | 0.250 | 0.167 | 0.833 |
+| 1/2 | 4 | 0.083 | **0.592** | 0.415 | 0.165 | 0.835 |
+| 1/2 | 8 | 0.083 | **0.909** | 0.750 | 0.165 | 0.835 |
+| 1/2 | 11 | 0.083 | 0.980 | **1.000** | 0.167 | 0.834 |
+| 9/10 | 2 | 0.083 | 0.409 | 0.249 | 0.165 | 0.835 |
+| 9/10 | 4 | 0.083 | **0.744** | 0.417 | 0.167 | 0.833 |
+| 9/10 | 8 | 0.084 | **0.990** | 0.750 | 0.168 | 0.832 |
+| 9/10 | 11 | 0.083 | 1.000 | **1.000** | 0.166 | 0.835 |
+
+**Random churn:**
+
+| flood | `k` | (a) slot | (a) held | (b) follow | (c) all | (c′) stems | (c′) held |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ambient | 2 | 0.083 | 0.159 | 0.097 | 0.097 | 0.096 | 0.014 |
+| ambient | 4 | 0.083 | 0.297 | 0.111 | 0.112 | 0.105 | 0.071 |
+| ambient | 8 | 0.083 | 0.501 | 0.136 | 0.139 | 0.115 | 0.237 |
+| ambient | 11 | 0.083 | 0.613 | 0.155 | 0.159 | 0.118 | 0.365 |
+| 1/4 | 4 | 0.084 | 0.294 | 0.120 | 0.111 | 0.105 | 0.070 |
+| 1/4 | 11 | 0.084 | 0.617 | 0.206 | 0.160 | 0.120 | 0.369 |
+| 1/2 | 4 | 0.085 | 0.294 | 0.137 | 0.112 | 0.106 | 0.070 |
+| 1/2 | 8 | 0.084 | 0.501 | 0.213 | 0.139 | 0.116 | 0.233 |
+| 1/2 | 11 | 0.083 | 0.615 | 0.278 | 0.159 | 0.119 | 0.367 |
+| 9/10 | 4 | 0.084 | 0.294 | 0.159 | 0.112 | 0.106 | 0.070 |
+| 9/10 | 8 | 0.083 | 0.501 | **0.281** | 0.139 | 0.115 | 0.236 |
+| 9/10 | 11 | 0.082 | 0.616 | **0.381** | 0.157 | 0.118 | 0.366 |
+
+**Reading.**
+
+- *(c′) is bounded.* Its exposure is `P(any of the stems frozen candidates
+  is adversarial) = 1 − C(H − a, stems) / C(H, stems)`, which is
+  `stems / H = 0.167` at `a = 1`; measured within 0.002 of it at every
+  flood under targeted churn from `k = 1`, and below it under random
+  churn. **Pinned** at every cell, both churns: the flood buys nothing
+  against a pinned source, and drops buy at most the one alternate. This
+  is the ruling's property.
+- *(c) was withdrawn on the targeted rows.* A without-replacement walk
+  over every hidden outbound session is `(k + 1) / H` at every flood and
+  **certain at `k = H − 1`**: the walk consumes every honest frozen
+  candidate and the adversary's session never drops.
+- *(b) compounds with the flood.* Under targeted churn it exceeds (c) at
+  `k` 1 to 8 once a quarter of the dial candidates are the adversary's
+  (0.59 against 0.42 at four drops and 0.91 against 0.75 at eight with
+  half; 0.74 and 0.99 at nine tenths), and sits below (c) with no flood.
+  Under random churn it is the only arm the flood moves: 0.16 at `k = 11`
+  ambient, 0.38 at nine tenths. (c′) at the same cell is 0.12 at every
+  flood.
+- *The price of (c′) is the hold.* Under targeted churn the origin holds
+  in 0.834 of trials from `k = 2`: both frozen candidates were honest and
+  both were dropped. That is 98.7's residual 6 — a liveness cost an
+  adversary pays `stems` targeted drops per epoch for, under the same
+  assumption as these rows. Under random churn the hold is 0.014 at two
+  drops and 0.37 at eleven, against (a)'s 0.16 and 0.61.
+- *(a)* is the floor, `g`, and holds on its first drop: 0.917 of trials
+  at every `k ≥ 1` targeted, `k / H` random.
+
+**Stop condition (98.8 commit 2) — resolved.** (c) was not clearly better
+than (b) and the PR paused; Rick withdrew (c) and ruled (c′) (98.4). The
+PR continues at 98.8 commit 6.
+
+### 98.11 Vocabulary — five layers, one name each (Rick, 2026-10-09)
+
+The documents reused "candidate" and "pool" across layers: in the
+dialer brief a *candidate* was an address being considered for
+dialling, in `StemMap` a peer in a source's pin; the "hidden pool" was
+the Tor sessions while `p_h`, the "onion-candidate share", was the
+adversary's share of onion addresses in the lists. Fixed once, here and
+in the dialer brief:
+
+| # | Layer | What it holds | Size (interim) | Lifetime | Owner |
+| --- | --- | --- | --- | --- | --- |
+| 1 | **Gray list** — *dial candidates* | Every address this node has heard of: gossip, inbound peers, `--add-peer`, reload from disk. Hypotheses. | up to 5000 per connector | until evicted | slice 1 (peerlist) |
+| 2 | **White list** — *dial candidates* | Addresses this node itself dialled and confirmed. The only way in is our own dial. | floor ≈ 48, cap 1000, per connector | 24 h without contact, then back to gray | slice 1 |
+| 3 | **Outbound sessions** | Live connections the dialer keeps open, drawn from white (re-contact) or gray (promotion). The address-hiding subset is the **hidden outbound sessions**. | 12 hidden + 12 clearnet | while the connection lasts | slice 3 (dialer) |
+| 4 | **Stem slots** | Two of the outbound sessions, drawn by the relay each epoch as next hops for stem traffic. The **hidden slot** is slot 0, reserved for the hidden outbound sessions. | 2 | one epoch (~10 min) | relay (`StemMap`) |
+| 5 | **Pin** (`Pin` in code) | Per source: the peers that source may use this epoch, fixed when it first sends (W3c). The local source's is the hidden slot's peer plus one alternate. | 2 | one epoch, per source | relay (`StemMap`) |
+
+The pin is four layers below the white list. White is "addresses I have
+proven exist", over days; the pin is "which of my current next hops
+this source may use", over the next ten minutes. The flooding adversary
+of 98.10 enters at layer 1; an address reaches layer 2 only through this
+node's own successful dial, layer 3 only when the dialer draws it to
+replace a dropped session, and never layer 5 within the epoch it
+arrived: that is what freezing at layer 5 says, and what D-PR1-1 asked.
+
+### 98.9 Round denominator
+
+Examined and yielding nothing: `relay_zone_ffi/mod.rs` (the plan mapping
+is total over the enum and no code moves); `shekyl_ffi.h:3390` to
+`:3402` (the codes are unchanged); `carrier_for` (no hidden peer is a
+noise destination); `plan_relay_with_refresh` (the two plans already do
+not refresh); the measurement ledger (no timing constant moves);
+channel binding (`graph/mod.rs:1176` to `:1206`, `driver/mod.rs:231`):
+channel `i` follows slot `i`, and a hidden peer is never a noise
+destination (`:575` to `:582`), so a mixed node's cover rides channel 1
+alone once slot 0 is reserved — the state the class-blind draw already
+produced whenever it slotted a hidden peer, now the steady one, and §20.3
+volume cover on the hidden link is unchanged. Not
+examined: `shekyl-tor` and the connector crates, which PR-1 does not
+touch; the dialer's view of the hidden outbound sessions, which is PR-3's.
+
+### 98.12 The class as a published verdict (`GS-Q3`, 2026-10-23)
+
+The hidden class and the origin pin are the fact the posture reads
+(`TOR_SUPERVISOR.md` posture table, `GS-Q3`). `Relay::origin_verdict` reads
+`StemMap::local_origin_leaves` without committing a route. That read is the
+decision `StemMap::route_local_origin` commits, so the published value is the
+next plan's outcome.
+
+The verdict is three states. `Absent`: no outbound session hides this node's
+address, or the epoch does not reserve a slot. `Connected`: one does, and a
+local origin does not leave on it. `Routable`: a local origin leaves on one.
+Health is every state but `Absent` (`TSR-Q4`). `Routable` is `OwnTx` under the
+`status` grant. The pin stays off `health` (`RPC_CHANNEL.md` §6.1): it moves
+when this node's own-edge peers disconnect, and a peer holding `health` while
+being the own edge would otherwise watch the boolean flip on its own
+disconnect.
+
+The production zone's publish writes the verdict to `shekyl-ffi`
+`origin_verdict` after every session change, epoch rebuild and plan. The
+managed-Tor supervisor folds it as one `Input::AddressHidingOrigin`. The
+`HiddenClassWatch` log lines (§98.5) are unchanged and are not this read: the
+watch is silent before the first rebuild and reports the class alone, not the
+pin.
+
+## 99. ProxyMark reproduction — a progress benchmark, REGISTERED 2026-10-09 (PM-1…PM-3)
+
+**Status: OPEN — registered; PM-2b is closed by construction (#1022,
+`stem_candidates_are_established_outbound_sessions_with_an_assessed_transit`,
+recorded under §96 item 1); PM-1, PM-2a and PM-3 have not run. Not a
+gate (Rick, 2026-10-09).** The
+paper is `2607.07062v1_TOR_Deanonymizing.pdf` (arXiv 2607.07062,
+"ProxyMark"; referenced from `P2P_2_REQUIREMENTS_REGISTER.md` PW-15 and
+`TOR_COVER_POSTURE.md`; the PDF is not in this repository and the
+author list is not transcribed here). It deanonymised Monero nodes
+behind Tor in three stages (its §III-D, §IV-C): **TC-I** occupying the
+target's outgoing Tor connections; **TC-II** advertising falsified
+fresh block heights so the occupied peers are picked as the proxies;
+**TC-III** injecting a timing watermark as a peer that a malicious
+guard recovers on the circuit and binds to the source. A fourth step
+precedes them in this reproduction, because Shekyl's peerlist redesign
+changes its answer: **identity** — the node's own onion was the last
+entry of its timed-sync replies, recovered at 100 % precision and
+100 % recall.
+
+Each stage has its own answer. The open stages are measured, and this
+section does not assert them (rule 47). **TC-II** is closed by
+construction: stem candidacy is an outbound session with an assessed
+transit, and a peer-asserted height never reaches the map (§95.3,
+`stem_candidate`). The partition test names who is in the candidate set. **TC-I** stays open with §96
+item 3. Occupying the hidden outbound sessions is the attack PM-2a
+runs, against the §97 assumptions in effect: `DISCLOSE_COUNT` 12
+against the paper's 250 per reply, random rather than
+first-in-first-out gray eviction, and the per-session intake cap. Rick
+decides closure from those results. The hidden stem slot (§95.3) names
+which hidden outbound session an origin uses; how many of those
+sessions an attacker holds is PM-2a's number. The handshake-address
+ruling removes the self-entry the paper's identity step used, and PM-1
+measures the sample that remains. **TC-III** is a Tor-layer threat
+(TRC-1), open with §96 item 4 until PM-3 has run. **This section mints
+`PM-1…PM-3`** (rule 94; registered in `IMPLEMENTATION_INDEX.md` §2);
+PM-2 splits into 2a and 2b, the paper's TC-I and TC-II.
+
+### 99.1 The benchmark's job
+
+The reproduction tells us whether we are beating the paper, whether a
+change has made things worse, and which knob to turn next. It is not a
+pass/fail gate, and no threshold is fixed in advance. Three reference
+points per step and profile:
+
+| Reference | What it is | What it is for |
+| --- | --- | --- |
+| **The paper's result** | What ProxyMark achieved against Monero | The bar to beat. Below it we are making progress; at or above it we are not |
+| **Our last recorded result** | The value measured at the previous run | The regression check. A change that makes this worse beyond noise is a design decision undoing an earlier gain |
+| **Blind chance** | What a guessing attacker gets | The ideal. The gap between it and our result is the remaining room for tuning |
+
+**Profiles.** Every step runs against **Profile A**, the desktop
+wallet — a node that restarts: the paper's "after restarts" case,
+measured shortly after start — and **Profile B**, the always-on node —
+steady state: the paper's "periodic replacement" case. Each has a
+**persistent-onion sensitivity row** beside the per-boot default
+(PWD-E7), because step 1's answer and TC-I's refill rate both move
+with the onion mode.
+
+**Tuning.** The knobs are the values §97 labels `Assumption`:
+`DISCLOSE_COUNT`, the per-session intake cap (`2 × DISCLOSE_COUNT`),
+the white floor and the refill line, the clearnet reconnect throttle
+(`P2P_TRANSPORT_LAYER.md`, registered, not built), and whether the
+onion is per-boot or persistent. Each run records those values in
+effect beside its results, so the numbers say which knob moves
+exposure. Profile A and Profile B will likely point at different knobs.
+**The reproduction is thereby the derivation §97 has been waiting
+for:** its rows for those values are re-derived from these results on
+the Rust path, not from a model run against the C++.
+
+**Regression.** The conformance version (Level 1, 99.4) runs in CI,
+records its numbers per profile and step in the measurement ledger
+(`docs/benchmarks/measurement_ledger.toml`, as tracked captures in the
+`BENCHMARK_ALIGNMENT.md` set the comparator already reads), and fails
+the run when a recorded result gets worse beyond noise — the mechanism
+the ledger already uses for timing. Testnet runs (Level 2) are recorded
+at milestones beside the conformance numbers, so the model and the
+network can be seen to agree or not.
+
+**§96 item 3 stays open**, tracked against PM-2a per profile. Rick
+decides closure from the results; a number fixed now would be a guess.
+
+### 99.2 The paper's attacker, and ours
+
+The paper's TC-I attacker, against Monero's peerlist as it then stood:
+**5,000 onion addresses** (the paper scaled to 500, with gray 500 and
+white 100 — Monero's caps are 5,000 and 1,000); **250 addresses per
+reply** (`P2P_DEFAULT_PEERS_IN_HANDSHAKE`); **first-in-first-out gray
+eviction**, so a flood pushes the honest entries out in order;
+**delayed replies**, served to keep the newly pushed addresses alive
+longer under that first-in-first-out eviction; and, under periodic
+replacement, **one peer dropped every 101 s** to force a refill from
+the flooded list.
+
+The same attacker against Shekyl meets, at the knobs above: 12
+addresses per reply and at most 24 distinct per session per day (so a
+flood of 5,000 needs hundreds of sessions to our onion, each of which
+costs proof-of-work only while the onion service is under load — the
+flood itself is what raises the price); random eviction over a gray
+list of 5,000,
+so the flood's share of gray is its share of the admitted addresses,
+not its recency; and a white list the flood reaches only through this
+node's own confirmed dials (slice 1 §2). PM-2a measures what that buys.
+
+### 99.3 The steps
+
+Cells: *paper* is the bar; *ours* is our last recorded result, with
+the §97 values in effect and the commit it was taken at; *blind* is
+the ideal. "—" is not yet run. Profiles are A (restart), B (steady
+state); P (persistent onion) is the sensitivity row.
+
+| Step | What it reproduces | Where it runs (level, 99.4) | Paper | Ours | Blind chance |
+| --- | --- | --- | --- | --- | --- |
+| **PM-1** identity | A requester polling the node's cached disclosure sample tries to name the node's own address or onion. The paper's step: the node's own onion was the last entry of each timed-sync reply (the `outgoing_to_same_zone` insertion, `net_node.inl:2730`); under the handshake-address ruling the own address is one uniform member of the sample with no position, and nothing is disclosed below the floor | Level 1 on the `shekyl-peerlist` sample instrument; Level 2 after PR-3 with per-boot and persistent onions, shortly after restart (A) and in steady state (B). Decides PWD-E7 | **100 % precision, 100 % recall** | A: — · B: — · P: — | One uniform guess among the disclosure population: `1 / (|W| + 1)` per guess; a sample of 12 contains the own address with probability `12 / (|W| + 1)` |
+| **PM-2a** connection occupation (TC-I) | Adversarial occupation of the 12 hidden outbound sessions over time, plus time to fill, under the attacker of 99.2 at the §97 knobs; D-S1's intake cap and the resulting `p_h` per connector are read off the same run | Level 1 on the `shekyl-peerlist` model plus the relay's hidden-slot draw (`simulate_two_slot_occupancy`, `simulate_hidden_slot_churn_exposure` extended with gray intake under D-S1 and the uniform white draw); Level 2 after PR-3 against the live dialer. **§96 item 3 is tracked here.** A clearnet variant with a many-address adversary (one `/24`, and many prefixes) is the reopen check for the dialer brief's no-subnet-grouping ruling (Rick, 2026-10-11): occupation beyond the attacker's share of honest addresses reopens it | **A: 7–11 of 12** hidden outbound occupied after restarts · **B: 8–10 of 10** within about 20 minutes under periodic replacement | A: — · B: — · P: — | The attacker's uniform share of white times 12, and a fill time set by the dialer's honest refill rate, not by its flood |
+| **PM-2b** height bias (TC-II) | Whether a peer advertising falsified fresh block heights gains stem or first-hop selection | Level 1 on the merged relay (`shekyl-relay`): stem candidacy is outbound plus an assessed transit; no height reaches the map (`graph/mod.rs` `stem_candidate`, `on_session_established`). The partition is `graph/hidden_slot_tests.rs` (#1022) | **Proxy selection raised from 15.3 % to 35.7 %** with one occupied connection | **Closed by construction** (§96 item 1): no height input exists. The candidate partition is exactly the established outbound sessions with an assessed transit (`stem_candidates_are_established_outbound_sessions_with_an_assessed_transit`). Profile-independent: no knob moves it | The attacker's uniform share of the hidden outbound sessions. One occupied connection of 12 is 1/12. A falsified height does not move that share: the relay never reads one |
+| **PM-3** watermarking (TC-III) | A message-rate watermark injected by a peer and recovered on the circuit by a malicious guard, bound to the source | Level 3: a documented procedure under TRC-1 (`TOR_COVER_POSTURE.md` §8), after RD, against operator relay volume, run at milestones. **§96 item 4's test** | **100 % precision, 93.8 % recall** for onion-service nodes; **100 % precision, 91.4 % recall** for Tor-client nodes | A: — · B: — · P: — | The guard's base rate: the target's share of the circuits it carries, with no recall from the signal |
+
+### 99.4 The harness — three levels (stretch goal, Rick, 2026-10-09)
+
+The reproduction is built to run repeatedly. Each level is registered
+here with its blocker and its falsifier (rule 22); none is built in
+#1018.
+
+**Level 1 — conformance.** Grows out of PR-2's instruments
+(`shekyl-peerlist::conformance`, #1021; `shekyl-relay-privacy::conformance`;
+`shekyl-relay` `graph/hidden_slot_tests.rs`, #1022). Runs in CI on changes to
+the peerlist and relay crates (`rust/shekyl-peerlist`,
+`rust/shekyl-relay`, `rust/shekyl-relay-privacy`) or to a §97
+`Assumption` value, plus a weekly scheduled run. Results go to the
+measurement ledger per step and profile with the §97 values in effect;
+a regression beyond noise fails the run. *Blocked on* #1021 landing
+(its instruments are the model) — *falsify by* a workflow under
+`.github/workflows/` whose `paths:` name those three crates and whose
+`schedule:` is weekly, and PM rows in `measurement_ledger.toml` keyed
+by step and profile. Owner: this section and the PM family.
+
+**Level 2 — scripted testnet.** An ancillary PR after PR-3 (the Rust
+dialer is what the attacker's flood is run against): one script for
+setup, run, collection and teardown; **roles, not hosts**, in
+`shekyl-core` (rule 37: the target, the attacker fleet, the observer),
+with host claims in `shekyl-dev` (rule 38, `infrastructure/USAGE.md`);
+an **isolated network id only** — the attacker fleet refuses to start on
+any other network; results recorded beside Level 1's. *Blocked on*
+PR-3 — *falsify by* the script in `scripts/` and a results file beside
+the Level 1 captures, and a refusal test that the fleet does not start
+on mainnet's, testnet's or stagenet's network id. Owner: this section
+and the PM family.
+
+**Level 3 — the PM-3 protocol.** A documented procedure under TRC-1,
+run at milestones: the watermark injected by a peer we control, the
+guard we control, recovery attempted against the relay's carried
+volume, precision and recall recorded. *Blocked on* RD and TRC-1's
+measurement (`TOR_COVER_POSTURE.md` §8) — *falsify by* the procedure
+written into that section and its first recorded run. Owner: TRC-1's
+row and this section.

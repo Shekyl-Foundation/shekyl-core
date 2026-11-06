@@ -1,3 +1,4 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
 # Copyright (c) 2014-2022, The Monero Project
 #
 # All rights reserved.
@@ -37,7 +38,11 @@ if (IOS)
     INCLUDE(CmakeLists_IOS.txt)
 endif()
 
-cmake_minimum_required(VERSION 3.5)
+# 3.22: raised from 3.5 for Corrosion (DAEMON_CONFIG_CUTOVER.md DC-Q23),
+# which went with the last C++ archive in the daemon's link; the floor
+# stays, since every policy is now at 3.22's NEW behaviour and
+# cmake/MsvcStaticRuntime.cmake already handles CMP0091 either way.
+cmake_minimum_required(VERSION 3.22)
 message(STATUS "CMake version ${CMAKE_VERSION}")
 
 # CMake 4.x compatibility
@@ -53,7 +58,32 @@ if(POLICY CMP0167)
   cmake_policy(SET CMP0167 NEW)  # use Boost's own cmake config instead of deprecated FindBoost
 endif()
 
+# Shekyl ships nothing on Android. Called twice because the two ways a
+# configure becomes Android are visible at different moments:
+#   - `-DCMAKE_SYSTEM_NAME=Android` and `-DANDROID=TRUE` are set before
+#     project(), and project() would otherwise enter Platform/Android
+#     and search for an NDK.
+#   - A toolchain file is read during project(). Its ANDROID or system
+#     name is visible only once project() returns, which is also when
+#     an installed NDK would let configure succeed.
+# Reopen only when a release decision names an Android product and a CI
+# host that builds it. That decision deletes this macro and both calls
+# in the same change as the host recipe. See docs/CHANGELOG.md, "the
+# Android target is removed".
+macro(shekyl_refuse_android_target)
+  if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
+    message(FATAL_ERROR
+      "Shekyl refuses to configure for Android "
+      "(CMAKE_SYSTEM_NAME='${CMAKE_SYSTEM_NAME}', ANDROID='${ANDROID}'). "
+      "Shekyl ships nothing on Android. "
+      "See docs/CHANGELOG.md, \"the Android target is removed\".")
+  endif()
+endmacro()
+shekyl_refuse_android_target()
+
 project(shekyl)
+
+shekyl_refuse_android_target()
 
 # ---------------------------------------------------------------------------
 # 64-bit-only gate — Chore #3, v3.1.0-alpha.5 (Tripwire D).
@@ -331,7 +361,7 @@ function(forbid_undefined_symbols)
     file(MAKE_DIRECTORY "${TEST_PROJECT}")
     file(WRITE "${TEST_PROJECT}/CMakeLists.txt"
       [=[
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.22)
 project(test)
 option(EXPECT_SUCCESS "" ON)
 file(WRITE "${CMAKE_SOURCE_DIR}/incorrect_source.cpp" "void undefined_symbol(); void symbol() { undefined_symbol(); }")
@@ -487,7 +517,6 @@ if(NOT MANUAL_SUBMODULES)
     endfunction ()
     
     message(STATUS "Checking submodules")
-    check_submodule(external/miniupnp)
     check_submodule(external/rapidjson)
     # external/randomx (tevador v1) is a gitlink-only pin for the
     # restated v1 fallback (RANDOMX_V1_FALLBACK.md). Nothing in
@@ -524,13 +553,6 @@ option(BUILD_TESTS "Build tests." OFF)
 # pinned external/randomx-v2 submodule and exposes the
 # shekyl_randomx_v2 IMPORTED static-library target.
 # See docs/design/RANDOMX_V2_PHASE1_PLAN.md §§2.3, 3.3, 3.4.
-# DRS-E2 trace exporter (docs/design/DRS_E2_REPLAY_DRIVER.md §3.9): a
-# harvest shim that walks LMDB and hands bytes to the Rust trace writer.
-# OFF by default — the daemon build does not need it, and it is deleted in
-# the same commit that deletes the daemon (§1.3).
-option(BUILD_E2_TRACE_EXPORT
-  "Build shekyl-e2-trace-export, the DRS-E2 LMDB→trace harvest shim (default OFF)."
-  OFF)
 
 option(BUILD_RANDOMX_V2_MINER_LIB
   "Build RandomX v2 C reference library out-of-tree (differential harness / Hole-1 only; default OFF). Production PoW is the Rust verifier."
@@ -603,7 +625,7 @@ if(OSSFUZZ)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DOSSFUZZ")
 endif()
 
-# Check if we're on FreeBSD so we can exclude the local miniupnpc (it should be installed from ports instead)
+# Check if we're on FreeBSD.
 # CMAKE_SYSTEM_NAME checks are commonly known, but specifically taken from libsdl's CMakeLists
 if(CMAKE_SYSTEM_NAME MATCHES "kFreeBSD.*|FreeBSD")
   set(FREEBSD TRUE)
@@ -642,13 +664,13 @@ option(STATIC "Link libraries statically" ${DEFAULT_STATIC})
 # object, so each .so embeds its own copy of the Rust image — its own
 # tracing dispatcher and its own copy of every Rust `static` — next to the
 # executable's image. That violates the single-Rust-image contract
-# (V3_WALLET_DECISION_LOG.md 2026-06-11 / 2026-09-10) in a way the
-# post-link nm gate in src/daemon/CMakeLists.txt cannot see, because the
-# duplicates live in the .so files rather than in the binary it inspects.
-# Observed: a Debug shekyld whose Blockchain::init armed the regtest
-# settlement-epoch schedule in libcryptonote_core.so's copy while the RPC
-# submit verifier read the executable's unarmed copy and refused every
-# emission claim as not-yet-finalized under the genesis schedule.
+# (V3_WALLET_DECISION_LOG.md 2026-06-11 / 2026-09-10) in a way no
+# post-link inspection of the binary can see, because the duplicates live
+# in the .so files. Observed (while the daemon still linked C++): a Debug
+# shekyld whose Blockchain::init armed the regtest settlement-epoch
+# schedule in libcryptonote_core.so's copy while the RPC submit verifier
+# read the executable's unarmed copy and refused every emission claim as
+# not-yet-finalized under the genesis schedule.
 if(BUILD_SHARED_LIBS)
   message(FATAL_ERROR "BUILD_SHARED_LIBS=ON is not supported: shared internal libraries each embed a separate copy of the Rust image and split its process-global state (single-Rust-image contract, V3_WALLET_DECISION_LOG.md 2026-09-10). Configure without -DBUILD_SHARED_LIBS.")
 endif()
@@ -673,62 +695,6 @@ if(SANITIZE)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
   endif()
-endif()
-
-# Set default blockchain storage location:
-# memory was the default in Cryptonote before Monero implemented LMDB, it still works but is unnecessary.
-# set(DATABASE memory)
-set(DATABASE lmdb)
-message(STATUS "Using LMDB as default DB type")
-set(BLOCKCHAIN_DB DB_LMDB)
-add_definitions("-DDEFAULT_DB_TYPE=\"lmdb\"")
-add_definitions("-DBLOCKCHAIN_DB=${BLOCKCHAIN_DB}")
-
-# Can't install hook in static build on OSX, because OSX linker does not support --wrap
-# On ARM, having libunwind package (with .so's only) installed breaks static link.
-# Historical note: the vendored easylogging++ tree used to supply
-# `el::base::debug::StackTrace()` as a libunwind-free backend for
-# targets like MSVC / MinGW / Android. It was retired in Chore #2 of
-# the shekyl-logging migration (see `docs/CHANGELOG.md`), so those
-# targets no longer install a stack-tracing hook by default;
-# `src/common/stack_trace.cpp` emits a `"<stack trace capture not
-# implemented on this target>"` placeholder instead, and a dedicated
-# Rust unwind-helper crate is the follow-up.
-if (APPLE)
-  set(DEFAULT_STACK_TRACE OFF)
-  set(LIBUNWIND_LIBRARIES "")
-elseif (DEPENDS AND NOT LINUX)
-  set(DEFAULT_STACK_TRACE OFF)
-  set(LIBUNWIND_LIBRARIES "")
-elseif (ARM)
-  set(DEFAULT_STACK_TRACE OFF)
-  set(LIBUNWIND_LIBRARIES "")
-else()
-  find_package(Libunwind)
-  if(LIBUNWIND_FOUND)
-    set(DEFAULT_STACK_TRACE ON)
-    set(STACK_TRACE_LIB "libunwind") # for diag output only
-  else()
-    # No libunwind: still allow enabling the `__cxa_throw` crash hook
-    # so the placeholder path in `src/common/stack_trace.cpp` gets
-    # exercised. The walker itself is short-circuited to a single
-    # "<stack trace capture not implemented on this target>" line
-    # until the Rust unwind-helper crate lands.
-    set(DEFAULT_STACK_TRACE ON)
-    set(STACK_TRACE_LIB "placeholder") # for diag output only
-    set(LIBUNWIND_LIBRARIES "")
-  endif()
-endif()
-
-option(STACK_TRACE "Install a hook that dumps stack on exception" ${DEFAULT_STACK_TRACE})
-
-if(STACK_TRACE)
-  message(STATUS "Stack trace on exception enabled (using ${STACK_TRACE_LIB})")
-  if(LIBUNWIND_FOUND)
-    add_definitions(-DHAVE_LIBUNWIND=1)
-  endif()
-else()
-  message(STATUS "Stack trace on exception disabled")
 endif()
 
 if (UNIX AND NOT APPLE)
@@ -758,9 +724,6 @@ find_package(OpenSSL REQUIRED)
 message(STATUS "Using OpenSSL include dir at ${OPENSSL_INCLUDE_DIR}")
 include_directories(${OPENSSL_INCLUDE_DIR})
 
-# No system-libzstd detection: Levin p2p compression is provided by the
-# Rust image (shekyl_levin_* FFI; the vendored, pinned libzstd inside
-# libshekyl_ffi.a / libshekyl_daemon_image.a is the binary's single zstd).
 if(STATIC AND NOT IOS)
   if(UNIX)
     set(OPENSSL_LIBRARIES "${OPENSSL_LIBRARIES};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")
@@ -769,14 +732,6 @@ endif()
 
 if (WIN32)
   list(APPEND OPENSSL_LIBRARIES ws2_32 crypt32)
-endif()
-
-option(USE_HW_DEVICE "Build with hardware wallet support (Ledger). Disabled in V3 -- see docs/HARDWARE_WALLETS.md" OFF)
-if(USE_HW_DEVICE)
-  find_package(HIDAPI)
-else()
-  message(STATUS "Hardware wallet support disabled (USE_HW_DEVICE=OFF) -- see docs/HARDWARE_WALLETS.md")
-  set(HIDAPI_FOUND FALSE)
 endif()
 
 add_definition_if_library_exists(c memset_s "string.h" HAVE_MEMSET_S)
@@ -885,17 +840,6 @@ function (monero_add_library_with_deps)
     PRIVATE $<TARGET_PROPERTY:${MONERO_ADD_LIBRARY_NAME},INTERFACE_COMPILE_DEFINITIONS>)
 endfunction ()
 
-# Generate header for embedded translations
-# Generate header for embedded translations, use target toolchain if depends, otherwise use the
-# lrelease and lupdate binaries from the host
-include(ExternalProject)
-ExternalProject_Add(generate_translations_header
-  SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/translations"
-  BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/translations"
-  STAMP_DIR ${LRELEASE_PATH}
-  CMAKE_ARGS -DLRELEASE_PATH=${LRELEASE_PATH}
-  INSTALL_COMMAND ${CMAKE_COMMAND} -E echo "")
-include_directories("${CMAKE_CURRENT_BINARY_DIR}/translations")
 # Git-free randomx-v2 populate check. Must not call check_submodule
 # (that function exists only inside if(NOT MANUAL_SUBMODULES)/if(GIT_FOUND)).
 # BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS auto-flips miner-lib ON above,
@@ -920,35 +864,20 @@ if(BUILD_RANDOMX_V2_MINER_LIB)
       "not the happy path, and does not skip this populate check.")
   endif()
 endif()
+# Before external/. The runtime property is copied when a target is created.
+if(MSVC)
+  include(MsvcStaticRuntime)
+endif()
 add_subdirectory(external)
 
-# Final setup for liblmdb
-include_directories(${LMDB_INCLUDE})
-
-# Final setup for libunwind
-include_directories(${LIBUNWIND_INCLUDE})
-link_directories(${LIBUNWIND_LIBRARY_DIRS})
-
-# Final setup for hid
-if (HIDAPI_FOUND) 
-  message(STATUS "Using HIDAPI include dir at ${HIDAPI_INCLUDE_DIR}")
-  add_definitions(-DHAVE_HIDAPI)
-  include_directories(${HIDAPI_INCLUDE_DIR})
-  link_directories(${LIBHIDAPI_LIBRARY_DIRS})
-else()
-  message(STATUS "Could not find HIDAPI")
-endif()
-
 if(MSVC)
-  add_definitions("/bigobj /MP /FS /W3 /GS- /D_CRT_SECURE_NO_WARNINGS /wd4996 /wd4345 /D_WIN32_WINNT=0x0600 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DGTEST_HAS_TR1_TUPLE=0 /FIinline_c.h /D__SSE4_1__ /Zc:preprocessor")
+  # No `/GS-`: the compiler's stack-buffer security checks stay on in every
+  # C++ object (DAEMON_CONFIG_CUTOVER.md DC-Q21, §3.8 of the Rust-binary
+  # PR). The flag was inherited; nothing measured a need for it.
+  add_definitions("/bigobj /MP /FS /W3 /D_CRT_SECURE_NO_WARNINGS /wd4996 /wd4345 /D_WIN32_WINNT=0x0600 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DGTEST_HAS_TR1_TUPLE=0 /FIinline_c.h /D__SSE4_1__ /Zc:preprocessor")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FIiso646.h")
   # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /Dinline=__inline")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:10485760")
-  if(STATIC)
-    foreach(VAR CMAKE_C_FLAGS_DEBUG CMAKE_CXX_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE CMAKE_CXX_FLAGS_RELEASE)
-      string(REPLACE "/MD" "/MT" ${VAR} "${${VAR}}")
-    endforeach()
-  endif()
   include_directories(SYSTEM src/platform/msc)
 else()
   include(TestCXXAcceptsFlag)
@@ -1028,23 +957,13 @@ else()
     set(USE_LTO_DEFAULT false)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,10485760")
     # Pin the Windows API tier to Vista (0x0600) on 64-bit MinGW so
-    # MinGW-w64's `<winioctl.h>` exposes the Vista+ declarations its
-    # own headers gate on `_WIN32_WINNT` (chiefly
-    # `FSCTL_SET_COMPRESSION`, used by `disable_ntfs_compression` in
-    # `src/blockchain_db/lmdb/db_lmdb.cpp`). 32-bit MinGW was retired
-    # in Chore #3 (v3.1.0-alpha.5) — the root `CMakeLists.txt`
+    # MinGW-w64's headers expose the Vista+ declarations they gate on
+    # `_WIN32_WINNT`. 32-bit MinGW was retired in Chore #3
+    # (v3.1.0-alpha.5) — the root `CMakeLists.txt`
     # `CMAKE_SIZEOF_VOID_P` gate above refuses any i686 configure.
-    #
-    # The tier pin is *one* of two independent mechanisms that keep
-    # that symbol visible on MinGW — the other, living in
-    # `src/blockchain_db/lmdb/db_lmdb.cpp`, is a `#ifndef
-    # FSCTL_SET_COMPRESSION` / manual-define fallback that covers the
-    # *separate* case where MinGW's `<winioctl.h>` closes the
-    # `_FILESYSTEMFSCTL_` guard early under certain include orders
-    # (so the symbol isn't declared regardless of the API tier). The
-    # API-tier pin and the source-side fallback cover different root
-    # causes and are both necessary on the toolchain mixes we ship;
-    # keep them in sync and do not collapse one into the other.
+    # The chain-store file that needed the compression-control
+    # declaration was deleted with the C++ store. The tier pin stays
+    # for the headers this build still includes.
     add_definitions(-DWINVER=0x0600 -D_WIN32_WINNT=0x0600)
   endif()
   set(C_WARNINGS "-Waggregate-return -Wnested-externs -Wold-style-definition -Wstrict-prototypes")
@@ -1229,8 +1148,7 @@ else()
   endif(ARM)
 
   # random crash on startup when asan is on if pie is enabled
-  if(NOT SANITIZE AND (ANDROID AND NOT BUILD_GUI_DEPS STREQUAL "ON" OR IOS))
-    #From Android 5: "only position independent executables (PIE) are supported" 
+  if(NOT SANITIZE AND IOS)
     message(STATUS "Enabling PIE executable")
     set(PIC_FLAG "")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIE")
@@ -1304,7 +1222,7 @@ if(STATIC)
   endif()
 
   set(Boost_USE_STATIC_LIBS ON)
-  if(MINGW OR ANDROID)
+  if(MINGW)
     set(Boost_USE_STATIC_RUNTIME ON)
   endif()
 endif()
@@ -1435,7 +1353,7 @@ if(MINGW)
     set(ICU_LIBRARIES ${ICUIO_LIBRARIES} ${ICUIN_LIBRARIES} ${ICUUC_LIBRARIES} ${ICUDT_LIBRARIES} ${ICUTU_LIBRARIES} ${ICONV_LIBRARIES})
     set(CMAKE_FIND_LIBRARY_SUFFIXES ${OLD_LIB_SUFFIXES})
   endif()
-elseif(APPLE OR OPENBSD OR ANDROID)
+elseif(APPLE OR OPENBSD)
   set(EXTRA_LIBRARIES "")
 elseif(FREEBSD)
   set(EXTRA_LIBRARIES execinfo)
@@ -1450,24 +1368,6 @@ elseif(NOT MSVC AND NOT DEPENDS)
 endif()
 
 list(APPEND EXTRA_LIBRARIES ${CMAKE_DL_LIBS})
-
-if (HIDAPI_FOUND OR LibUSB_COMPILE_TEST_PASSED)
-  if (APPLE)
-    if(DEPENDS)
-      list(APPEND EXTRA_LIBRARIES "-framework Foundation -framework AppKit -framework IOKit")
-    else()
-      find_library(COREFOUNDATION CoreFoundation)
-      find_library(APPKIT AppKit)
-      find_library(IOKIT IOKit)
-      list(APPEND EXTRA_LIBRARIES ${APPKIT})
-      list(APPEND EXTRA_LIBRARIES ${IOKIT})
-      list(APPEND EXTRA_LIBRARIES ${COREFOUNDATION})
-    endif()
-  endif()
-  if (WIN32)
-    list(APPEND EXTRA_LIBRARIES setupapi)
-  endif()
-endif()
 
 option(USE_READLINE "Build with GNU readline support." ON)
 if(USE_READLINE AND NOT DEPENDS)
@@ -1490,11 +1390,6 @@ elseif(USE_READLINE AND DEPENDS AND NOT MINGW)
   set(EPEE_READLINE epee_readline)
 endif()
 
-if(ANDROID)
-  set(ATOMIC libatomic.a)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=user-defined-warnings")
-endif()
-
 find_library(SODIUM_LIBRARY NAMES sodium libsodium)
 if(SODIUM_LIBRARY)
   find_path(SODIUM_INCLUDE_PATH sodium/crypto_verify_32.h)
@@ -1507,6 +1402,7 @@ if(SODIUM_LIBRARY)
 endif()
 
 include(external/supercop/functions.cmake) # place after setting flags and before src directory inclusion
+include(Version) # before BuildRust: the Rust wallet binaries carry the same version string
 include(BuildRust) # Build Shekyl Rust workspace (PQ crypto, modular consensus, FFI)
 add_subdirectory(contrib)
 add_subdirectory(src)

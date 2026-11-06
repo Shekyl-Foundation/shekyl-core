@@ -1,0 +1,188 @@
+{
+    "schema": "shekyl_e4_fixture_inputs_v1",
+    "fixture": "slash_scheduler_slashes_sustained_absence_at_m_of_n",
+    "source": "tests/unit_tests/archival_substrate_lmdb.cpp",
+    "schedule": {
+        "settlement_epoch_blocks": 10000,
+        "slash_deadline_height_by_epoch": {
+            "0": 19999,
+            "1": 29999,
+            "2": 39999,
+            "3": 49999,
+            "4": 59999,
+            "5": 69999,
+            "6": 79999,
+            "7": 89999,
+            "8": 99999,
+            "9": 109999,
+            "10": 119999,
+            "11": 129999
+        },
+        "fold_height_operand": "block count after the connect (prev_height + 1); an epoch's slashes fold at the first count above its deadline, so the slash log row for epoch E is keyed slash_deadline_height(E) + 1",
+        "slash_log_height_by_epoch": {
+            "0": 20000,
+            "1": 30000,
+            "2": 40000,
+            "3": 50000,
+            "4": 60000,
+            "5": 70000,
+            "6": 80000,
+            "7": 90000,
+            "8": 100000,
+            "9": 110000,
+            "10": 120000,
+            "11": 130000
+        }
+    },
+    "failure_window": {
+        "m": 11,
+        "n": 13,
+        "serve_budget": 2
+    },
+    "bond_floor_atomic": 750000000,
+    "total_bonded_atomic_seeded": 3000000000,
+    "personas": [
+        {
+            "id": "7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d",
+            "role": "answers no baseline: slashed at the m-th observed miss",
+            "seed": {
+                "hybrid_pubkey": "0a",
+                "bond_spend_pk": "",
+                "endpoint": "0000000000000000000000000000000000000000000000000000000000000000",
+                "join_settlement_epoch": 0,
+                "bonded_total_atomic": 1500000000,
+                "holdings_kind": "shard_set",
+                "holdings": [
+                    {
+                        "shard": 7,
+                        "add_epoch": 0
+                    }
+                ]
+            }
+        },
+        {
+            "id": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e",
+            "role": "answers every baseline through epoch m: untouched",
+            "seed": {
+                "hybrid_pubkey": "0a",
+                "bond_spend_pk": "",
+                "endpoint": "0000000000000000000000000000000000000000000000000000000000000000",
+                "join_settlement_epoch": 0,
+                "bonded_total_atomic": 1500000000,
+                "holdings_kind": "shard_set",
+                "holdings": [
+                    {
+                        "shard": 7,
+                        "add_epoch": 0
+                    }
+                ]
+            }
+        }
+    ],
+    "serve_passes": [
+        {
+            "persona": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e",
+            "shard": 7,
+            "epoch": 1,
+            "height": 1000
+        },
+        {
+            "persona": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e",
+            "shard": 7,
+            "epoch": 2,
+            "height": 1000
+        },
+        {
+            "persona": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e",
+            "shard": 7,
+            "epoch": 3,
+            "height": 1000
+        },
+        {
+            "persona": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e",
+            "shard": 7,
+            "epoch": 4,
+            "height": 1000
+        },
+        {
+            "persona": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e",
+            "shard": 7,
+            "epoch": 5,
+            "height": 1000
+        },
+        {
+            "persona": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e",
+            "shard": 7,
+            "epoch": 6,
+            "height": 1000
+        },
+        {
+            "persona": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e",
+            "shard": 7,
+            "epoch": 7,
+            "height": 1000
+        },
+        {
+            "persona": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e",
+            "shard": 7,
+            "epoch": 8,
+            "height": 1000
+        },
+        {
+            "persona": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e",
+            "shard": 7,
+            "epoch": 9,
+            "height": 1000
+        },
+        {
+            "persona": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e",
+            "shard": 7,
+            "epoch": 10,
+            "height": 1000
+        },
+        {
+            "persona": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e",
+            "shard": 7,
+            "epoch": 11,
+            "height": 1000
+        }
+    ],
+    "chain": {
+        "blocks": "minimal miner-only blocks (append_minimal_blocks), no outputs, no transactions",
+        "accrual_per_block": 0,
+        "block_count": 130001,
+        "tip_height": 130000,
+        "waypoints": [
+            {
+                "after_height": 120000,
+                "asserted": "m-1 observed misses absorbed: p_miss intact, nothing burned, last_slash_epoch = m-1"
+            },
+            {
+                "after_height": 130000,
+                "asserted": "the m-th miss slashes p_miss: shard 7 erased, one floor burned, one open bad interval from epoch m"
+            }
+        ]
+    },
+    "expected": {
+        "slashed_persona": "7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d",
+        "absorbed_epoch": 10,
+        "slash_epoch": 11,
+        "last_slash_epoch": 11,
+        "total_burned": 750000000
+    },
+    "bond_comparison": {
+        "identity_fields": [
+            "hybrid_pubkey",
+            "bond_spend_pk",
+            "endpoint"
+        ],
+        "state_fields": [
+            "join_settlement_epoch",
+            "bonded_total",
+            "holdings",
+            "bad_intervals",
+            "claimed_settlement_epochs",
+            "first_paying_emission_height"
+        ]
+    }
+}

@@ -3,13 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `record-goldens EPEE_HOST DIR`
+//! `record-goldens DIR`
 //!
-//! Run every seed against the epee host and write the parity scope:
-//! wire bytes and the session outcome, one peer file and one host file
-//! per seed. Events and a send-over suffix past the script's handshake
-//! response are not written. The six deferred invariants are not in a
-//! transcript.
+//! Run every seed against the seam and write the parity scope: wire bytes
+//! and the session outcome, one peer file and one host file per seed.
+//! Events and a send-over suffix past the script's handshake response are
+//! not written. The six deferred invariants are not in a transcript.
+//!
+//! The epee host is deleted (D13). This re-records the goldens after a
+//! ruled wire change, in the same pull request, with the ruling cited; the
+//! diff of the committed files is the review. *Records-was:*
+//! `record-goldens EPEE_HOST DIR`, against the epee host.
 
 use std::env;
 use std::path::PathBuf;
@@ -27,16 +31,11 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), shekyl_p2p_harness::Error> {
     let mut args = env::args().skip(1);
-    let epee = args
-        .next()
-        .ok_or_else(|| shekyl_p2p_harness::Error::new("usage: record-goldens EPEE_HOST DIR"))?;
     let dir = args
         .next()
-        .ok_or_else(|| shekyl_p2p_harness::Error::new("usage: record-goldens EPEE_HOST DIR"))?;
+        .ok_or_else(|| shekyl_p2p_harness::Error::new("usage: record-goldens DIR"))?;
     if args.next().is_some() {
-        return Err(shekyl_p2p_harness::Error::new(
-            "usage: record-goldens EPEE_HOST DIR",
-        ));
+        return Err(shekyl_p2p_harness::Error::new("usage: record-goldens DIR"));
     }
-    shekyl_p2p_harness::record_goldens(&PathBuf::from(epee), &PathBuf::from(dir))
+    shekyl_p2p_harness::record_goldens_from_seam(&PathBuf::from(dir))
 }

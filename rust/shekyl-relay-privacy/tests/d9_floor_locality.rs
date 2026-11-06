@@ -43,12 +43,12 @@
 // ^ Node counts and millisecond means widen to f64 for the ratios reported
 //   below. Every value involved is far below 2^53.
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::conformance::{
     simulate_fluff_return_mixed, FloodParams, FloodReach, FloodSummary,
 };
 use shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS;
 use shekyl_relay_privacy::schedule::DelayFamily;
-use shekyl_relay_privacy::SplitMix64;
 
 const NODES: usize = 60;
 const TRIALS: usize = 400;
@@ -77,7 +77,7 @@ fn measure(degrees: &[usize]) -> f64 {
                 peers: floor(),
                 reach: FloodReach::OutboundOnly,
                 transit_ms: shekyl_relay_privacy::conformance::transit_for(
-                    FloodReach::OutboundOnly,
+                    shekyl_relay_privacy::MeasuredConnector::Tor,
                 ),
             },
             degrees,
@@ -190,7 +190,9 @@ fn uniform_is_the_mixed_form_at_a_constant_degree() {
         nodes: 24,
         peers: floor(),
         reach: FloodReach::OutboundOnly,
-        transit_ms: shekyl_relay_privacy::conformance::transit_for(FloodReach::OutboundOnly),
+        transit_ms: shekyl_relay_privacy::conformance::transit_for(
+            shekyl_relay_privacy::MeasuredConnector::Tor,
+        ),
     };
     let degrees = vec![floor(); params.nodes];
 

@@ -4,26 +4,26 @@
 // BSD-3-Clause
 
 //! `connect` takes the in-force [`RuleSet`](shekyl_chain_rules::RuleSet) by
-//! value (DRS-E2 RD-Q10). Fakechain `Fixed` reuses `RuleSetId::GENESIS`, so
+//! value (DRS-E2 RD-Q10). levered `Fixed` reuses `RuleSetId::GENESIS`, so
 //! these two tests pin that the belt compares sets, not ids.
 
-use shekyl_chain_rules::{form, validate, FormAttempt, RuleSet, RuleSetId, Trust};
+use shekyl_chain_rules::{form, validate, FormAttempt, FormClaims, RuleSet, RuleSetId, Trust};
 use shekyl_types::BlockHash;
 
-use super::connect_fixtures::{candidate, FixtureSubstrate};
+use super::connect_fixtures::{candidate, expected_target, FixtureSubstrate};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::RuleSetInForce;
-use crate::schema::HF_VERSIONS;
+use crate::schema::RULE_SET_IN_FORCE;
 
 #[test]
 fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
     // RD-F13: with `in_force: RuleSetId`, no id resolved to a `Fixed` set and
-    // a Fakechain verdict could never connect. The caller now hands the set
+    // a levered verdict could never connect. The caller now hands the set
     // itself (RD-Q10), and the path exists.
-    let seven = RuleSet::fakechain(
+    let seven = RuleSet::GENESIS.with_levers(
         core::num::NonZeroU128::new(7),
-        shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+        shekyl_chain_rules::CappedEpoch::PRODUCTION,
     );
     let path = tmp("connect-fakechain-in-force");
     let store = ChainStore::create(&path, EPOCH).expect("create");
@@ -32,26 +32,31 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
         let cand = candidate(0, BlockHash::NULL, Vec::new());
         let formed = match form(
             cand,
-            &seven,
+            &FormClaims {
+                rule_set: &seven,
+                seed: BlockHash::NULL,
+                target: expected_target(&view, &seven).expect("the view answers"),
+                references: &shekyl_chain_rules::ReferenceClaims::EMPTY,
+                network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+            },
             &FixtureSubstrate,
-            BlockHash::NULL,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,
             other => panic!("stateless stage: {other:?}"),
         };
-        let valid = match validate(formed, &view, &seven, &Trust::UNANCHORED) {
+        let valid = match validate(formed, &view, &seven, &Trust::UNPINNED) {
             Ok(Ok(valid)) => valid,
             other => panic!("view stage: {other:?}"),
         };
         Ok(batch.connect(valid, seven)?)
     });
-    out.expect("a Fakechain verdict connects under the Fakechain set");
+    out.expect("a levered verdict connects under the levered set");
     // The CEN-B3 belt recorded the id — which is GENESIS's, and is not the
     // set (the caveat at the belt).
     let snap = store.begin_read().expect("read");
     let recorded: RuleSetInForce = snap
-        .open_table(HF_VERSIONS)
+        .open_table(RULE_SET_IN_FORCE)
         .expect("sealed")
         .get(0u64)
         .expect("read")
@@ -66,12 +71,12 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
 
 #[test]
 fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
-    // Same id, different set: `fakechain(7)` reuses `RuleSetId::GENESIS`.
+    // Same id, different set: `with_levers(Some(7), …)` reuses `RuleSetId::GENESIS`.
     // An id-only check would accept the fixed-target work as public-network
     // GENESIS work; compared by value, `connect` refuses.
-    let seven = RuleSet::fakechain(
+    let seven = RuleSet::GENESIS.with_levers(
         core::num::NonZeroU128::new(7),
-        shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+        shekyl_chain_rules::CappedEpoch::PRODUCTION,
     );
     let path = tmp("connect-fakechain");
     let store = ChainStore::create(&path, EPOCH).expect("create");
@@ -80,15 +85,20 @@ fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
         let cand = candidate(0, BlockHash::NULL, Vec::new());
         let formed = match form(
             cand,
-            &seven,
+            &FormClaims {
+                rule_set: &seven,
+                seed: BlockHash::NULL,
+                target: expected_target(&view, &seven).expect("the view answers"),
+                references: &shekyl_chain_rules::ReferenceClaims::EMPTY,
+                network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+            },
             &FixtureSubstrate,
-            BlockHash::NULL,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,
             other => panic!("stateless stage: {other:?}"),
         };
-        let valid = match validate(formed, &view, &seven, &Trust::UNANCHORED) {
+        let valid = match validate(formed, &view, &seven, &Trust::UNPINNED) {
             Ok(Ok(valid)) => valid,
             other => panic!("view stage: {other:?}"),
         };

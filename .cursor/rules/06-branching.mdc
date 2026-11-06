@@ -102,17 +102,13 @@ is auditable mechanically against the criteria, not by precedent.
 ## The merge queue tests the merge result
 
 `dev` merges through GitHub's merge queue. A PR's CI runs on the PR's own
-head merged onto the `dev` of the moment it was pushed; the queue reruns the
-required checks on the **actual merge result** just before it lands. That
-is the only check that sees a *semantic* conflict — two PRs each green
-alone, broken together — and four landed in one month before the queue
-(#771×#772 on the schema bump, #853×#858 on the alt fixtures and I1,
-#878×#880 twice, on `placeholder_root_after` and `ConnectFacts.root_after`),
-each caught by a person reading `dev` after the fact, with `dev`'s test
-targets not compiling in between. The mechanism is the workflows'
-`merge_group:` trigger (every PR gate carries one; a gate that runs on the
-PR but not on the group has a hole exactly where this class lives) plus the
-`dev` ruleset. Consequences:
+head merged onto the `dev` of the moment it was pushed. The queue reruns
+the required checks on the **actual merge result** just before it lands.
+That is the only check that sees a semantic conflict: two PRs each green
+alone, broken together. The mechanism is the workflows' `merge_group:`
+trigger — every PR gate carries one; a gate that runs on the PR but not
+on the group has a hole exactly where this class lives — plus the `dev`
+ruleset. Consequences:
 
 - **A stacked PR cannot enter the queue until its base merges and it
   re-targets `dev`.** That was already the discipline; the queue makes it

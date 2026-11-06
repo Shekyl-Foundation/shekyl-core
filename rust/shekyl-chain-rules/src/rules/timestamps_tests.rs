@@ -12,15 +12,16 @@
 use super::*;
 use crate::block::Candidate;
 use crate::fault::{Corrupt, FormAttempt};
+use crate::harness::expected_references;
 use crate::harness::fixture::{candidate_on, recorded, root};
 use crate::harness::{
-    assert_refused, boundary_pair, expected_seed, formed_on, judged, Faulted, FaultingView,
-    MockChain, MockSubstrate, WithheldRead,
+    assert_refused, boundary_pair, expected_seed, expected_target, formed_on, judged, Faulted,
+    FaultingView, MockChain, MockSubstrate, WithheldRead,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, BlockRule};
 use crate::trust::Trust;
-use crate::validate::{form, validate};
+use crate::validate::{form, validate, FormClaims};
 use crate::verdict::{ChainValid, Locus};
 use crate::Target;
 use shekyl_types::BlockHash;
@@ -56,15 +57,21 @@ fn candidate_at(chain: &MockChain, timestamp: u64) -> Candidate {
 
 /// Both stages over `chain` with the substrate's clock at `clock`.
 fn judge_at(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> {
+    let references = expected_references(chain, &candidate);
     let substrate = MockSubstrate {
         clock: Timestamp::from_raw(clock),
         ..MockSubstrate::default()
     };
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        expected_seed(chain),
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -72,27 +79,28 @@ fn judge_at(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> 
         Err(Faulted) => unreachable!("the mock substrate never faults"),
     };
     chain.with_view(|view| {
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .map(|_valid: ChainValid<_>| ())
+        judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .map(|_valid: ChainValid<_>| ())
     })
 }
 
 /// One rule alone, with the window C3 derives for `chain`.
 fn check_alone<R: BlockRule>(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> {
+    let references = expected_references(chain, &candidate);
     let substrate = MockSubstrate {
         clock: Timestamp::from_raw(clock),
         ..MockSubstrate::default()
     };
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        expected_seed(chain),
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -101,13 +109,13 @@ fn check_alone<R: BlockRule>(chain: &MockChain, candidate: Candidate, clock: u64
         let mut coverage = RuleCoverage::EMPTY;
         let connecting = BlockHeight::from_raw(chain.tip().map_or(0, |t| t.height.to_raw() + 1));
         let window = windowed(C3::window(&view, connecting, &mut coverage));
-        crate::harness::infallible(R::check(
+        crate::harness::defined(R::check(
             &BlockContext::new(
                 &formed,
                 chain.tip(),
                 window,
                 Target::GENESIS_BLOCK,
-                &Trust::UNANCHORED,
+                &Trust::UNPINNED,
             ),
             &view,
         ))
@@ -296,28 +304,38 @@ fn a_hole_below_the_tip_is_the_halting_fault_not_a_panic() {
     // argued from SI-7. A view that breaks SI-7 now yields
     // `Corrupt::HoleBelowTip` at the height that was not recorded — the
     // class the connector halts the writer on — and the candidate is
-    // neither refused nor admitted.
+    // neither refused nor admitted. The window is a header read (DRS-E5
+    // `E5-14`), so the hole is the header record's, and withholding the
+    // block record alone leaves the window answerable.
     let chain = chain_with(&[100, 220, 340, 460]);
     let hole = BlockHeight::from_raw(2);
     chain.with_view(|inner| {
         let view = inner.withholding(WithheldRead::BlockAt(hole));
         let mut coverage = RuleCoverage::EMPTY;
+        assert!(
+            C3::window(&view, BlockHeight::from_raw(4), &mut coverage).is_ok(),
+            "C3 reads header facts; a withheld block record is not its hole"
+        );
+    });
+    chain.with_view(|inner| {
+        let view = inner.withholding(WithheldRead::HeaderAt(hole));
+        let mut coverage = RuleCoverage::EMPTY;
         assert_eq!(
             C3::window(&view, BlockHeight::from_raw(4), &mut coverage),
             Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
                 at: hole,
-                record: crate::fault::PerHeightRecord::Block,
+                record: crate::fault::PerHeightRecord::Header,
             }))
         );
         // Through the stage: the same fault, in `Fault`'s clothing.
         let formed = formed_on(&chain, candidate_at(&chain, 500));
-        let outcome = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED);
+        let outcome = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED);
         assert!(
             matches!(
                 outcome,
                 Err(crate::fault::Fault::Corrupt(Corrupt::HoleBelowTip {
                     at,
-                    record: crate::fault::PerHeightRecord::Block,
+                    record: crate::fault::PerHeightRecord::Header,
                 })) if at == hole
             ),
             "{outcome:?}"
@@ -325,12 +343,12 @@ fn a_hole_below_the_tip_is_the_halting_fault_not_a_panic() {
     });
     // The producer's read of the same operand reports the same fault.
     chain.with_view(|inner| {
-        let view = inner.withholding(WithheldRead::BlockAt(hole));
+        let view = inner.withholding(WithheldRead::HeaderAt(hole));
         assert_eq!(
             mtp_median_at(&view, BlockHeight::from_raw(4)),
             Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
                 at: hole,
-                record: crate::fault::PerHeightRecord::Block,
+                record: crate::fault::PerHeightRecord::Header,
             }))
         );
     });
@@ -350,21 +368,21 @@ fn at_genesis_all_three_rows_record_as_applied_and_refuse_nothing() {
     };
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: BlockHash::NULL,
+            target: expected_target(&chain, &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        BlockHash::NULL,
         FormAttempt::FIRST,
     )
     .expect("no fault")
     .expect("passes the stateless stage");
     chain.with_view(|view| {
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("genesis is exempt from both timestamp legs");
+        let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .expect("genesis is exempt from both timestamp legs");
         for row in [CenRow::C1, CenRow::C2, CenRow::C3] {
             assert!(valid.coverage().contains(row), "{row} recorded at genesis");
         }
@@ -390,7 +408,7 @@ fn a_well_formed_candidate_covers_the_timestamp_rows() {
             formed_on(&chain, candidate_at(&chain, CLOCK)),
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("passes");
         for row in [CenRow::C1, CenRow::C2, CenRow::C3] {

@@ -112,29 +112,6 @@ namespace tools
 #endif
   };
 
-  /*! \brief Returns the default data directory.
-   *
-   * \details Windows < Vista: C:\\Documents and Settings\\Username\\Application Data\\CRYPTONOTE_NAME
-   *
-   * Windows >= Vista: C:\\Users\\Username\\AppData\\Roaming\\CRYPTONOTE_NAME
-   *
-   * Mac: ~/Library/Application Support/CRYPTONOTE_NAME
-   *
-   * Unix: ~/.CRYPTONOTE_NAME
-   */
-  std::string get_default_data_dir();
-
-#ifdef WIN32
-  /**
-   * @brief 
-   *
-   * @param nfolder
-   * @param iscreate
-   *
-   * @return 
-   */
-  std::string get_special_folder_path(int nfolder, bool iscreate);
-#endif
 
   /*! \brief Returns the OS version string
    *
@@ -266,8 +243,6 @@ namespace tools
   std::string input_line_win();
 #endif
 
-  void closefrom(int fd);
-
   std::string get_human_readable_timestamp(uint64_t ts);
 
   std::string get_human_readable_timespan(uint64_t seconds);
@@ -277,6 +252,4 @@ namespace tools
   void clear_screen();
 
   std::vector<std::pair<std::string, size_t>> split_string_by_width(const std::string &s, size_t columns);
-
-  uint64_t cumulative_block_sync_weight(cryptonote::network_type nettype, uint64_t start_block, uint64_t num_blocks);
 }

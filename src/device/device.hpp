@@ -34,207 +34,33 @@
 #include "cryptonote_config.h"
 
 
-// Ledger disabled in V3: two-component output keys + KEM derivation require
-// firmware changes that don't exist yet. See docs/HARDWARE_WALLETS.md.
-#ifndef USE_DEVICE_LEDGER
-#define USE_DEVICE_LEDGER 0
-#endif
-
-#if !defined(HAVE_HIDAPI) 
-#undef  USE_DEVICE_LEDGER
-#define USE_DEVICE_LEDGER 0
-#endif
-
-#if USE_DEVICE_LEDGER
-#define WITH_DEVICE_LEDGER
-#endif
-
-// forward declaration needed because this header is included by headers in libcryptonote_basic which depends on libdevice
-namespace cryptonote
-{
-    struct account_public_address;
-    struct account_keys;
-    struct subaddress_index;
-    struct keypair;
-    class transaction_prefix;
-}
+// Hardware-wallet backends are not in this tree. See docs/HARDWARE_WALLETS.md.
 
 namespace hw {
-    namespace {
-        //device funcion not supported
-        #define dfns()  \
-           throw std::runtime_error(std::string("device function not supported: ")+ std::string(__FUNCTION__) + \
-                                    std::string(" (device.hpp line ")+std::to_string(__LINE__)+std::string(").")); \
-           return false;
-    }
 
-    class device_progress {
-    public:
-      virtual double progress() const { return 0; }
-      virtual bool indeterminate() const { return false; }
-    };
-
-    class i_device_callback {
-    public:
-        virtual void on_button_request(uint64_t code=0) {}
-        virtual void on_button_pressed() {}
-        virtual std::optional<epee::wipeable_string> on_pin_request() { return std::nullopt; }
-        virtual std::optional<epee::wipeable_string> on_passphrase_request(bool & on_device) { on_device = true; return std::nullopt; }
-        virtual void on_progress(const device_progress& event) {}
-        virtual ~i_device_callback() = default;
-    };
-
+    // Software key helper. Hardware onboarding, transaction sessions, and the
+    // FCMP offload hooks left with the Ledger and Trezor backends
+    // (docs/HARDWARE_WALLETS.md). Miner-transaction key generation and the
+    // device unit tests call what remains.
     class device {
     protected:
         std::string  name;
 
     public:
 
-        device(): mode(NONE)  {}
-        virtual ~device()   {}
+        device() {}
+        virtual ~device() {}
 
-        explicit virtual operator bool() const = 0;
-        enum device_mode {
-            NONE,
-            TRANSACTION_CREATE_REAL,
-            TRANSACTION_CREATE_FAKE,
-            TRANSACTION_PARSE
-        };
-        enum device_type
-        {
-          SOFTWARE = 0,
-          LEDGER = 1,
-          TREZOR = 2
-        };
-
-
-        enum device_protocol_t {
-            PROTOCOL_DEFAULT,
-            PROTOCOL_PROXY,     // Originally defined by Ledger
-            PROTOCOL_COLD,      // Originally defined by Trezor
-        };
-
-        /* ======================================================================= */
-        /*                              SETUP/TEARDOWN                             */
-        /* ======================================================================= */
         virtual bool set_name(const std::string &name) = 0;
         virtual const std::string get_name() const = 0;
 
-        virtual  bool init(void) = 0;
-        virtual bool release() = 0;
-
-        virtual bool connect(void) = 0;
-        virtual bool disconnect(void) = 0;
-
-        virtual bool set_mode(device_mode mode) { this->mode = mode; return true; }
-        virtual device_mode get_mode() const { return mode; }
-
-        virtual device_type get_type() const = 0;
-
-        virtual device_protocol_t device_protocol() const { return PROTOCOL_DEFAULT; };
-        virtual void set_callback(i_device_callback * callback) {};
-        virtual void set_derivation_path(const std::string &derivation_path) {};
-
-        virtual void set_pin(const epee::wipeable_string & pin) {}
-        virtual void set_passphrase(const epee::wipeable_string & passphrase) {}
-
-        /* ======================================================================= */
-        /*  LOCKER                                                                 */
-        /* ======================================================================= */ 
-        virtual void lock(void) = 0;
-        virtual void unlock(void) = 0;
-        virtual bool try_lock(void) = 0;
-
-
-        /* ======================================================================= */
-        /*                             WALLET & ADDRESS                            */
-        /* ======================================================================= */
-        virtual bool  get_public_address(cryptonote::account_public_address &pubkey) = 0;
-        virtual bool  get_secret_keys(crypto::secret_key &viewkey , crypto::secret_key &spendkey)  = 0;
-
-        /* ======================================================================= */
-        /*                               SUB ADDRESS                               */
-        /* ======================================================================= */
-        virtual crypto::public_key  get_subaddress_spend_public_key(const cryptonote::account_keys& keys, const cryptonote::subaddress_index& index) = 0;
-        virtual std::vector<crypto::public_key>  get_subaddress_spend_public_keys(const cryptonote::account_keys &keys, uint32_t account, uint32_t begin, uint32_t end) = 0;
-        virtual cryptonote::account_public_address  get_subaddress(const cryptonote::account_keys& keys, const cryptonote::subaddress_index &index) = 0;
-        virtual crypto::secret_key  get_subaddress_secret_key(const crypto::secret_key &sec, const cryptonote::subaddress_index &index) = 0;
-
-        /* ======================================================================= */
-        /*                            DERIVATION & KEY                             */
-        /* ======================================================================= */
-        virtual bool  verify_keys(const crypto::secret_key &secret_key, const crypto::public_key &public_key) = 0;
         virtual bool  scalarmultKey(ct::key & aP, const ct::key &P, const ct::key &a) = 0;
         virtual bool  scalarmultBase(ct::key &aG, const ct::key &a) = 0;
         virtual bool  sc_secret_add( crypto::secret_key &r, const crypto::secret_key &a, const crypto::secret_key &b) = 0;
         virtual crypto::secret_key  generate_keys(crypto::public_key &pub, crypto::secret_key &sec, const crypto::secret_key& recovery_key = crypto::secret_key(), bool recover = false) = 0;
         virtual bool  generate_key_derivation(const crypto::public_key &pub, const crypto::secret_key &sec, crypto::key_derivation &derivation) = 0;
-        virtual bool  conceal_derivation(crypto::key_derivation &derivation, const crypto::public_key &tx_pub_key, const crypto::key_derivation &main_derivation) = 0;
         virtual bool  secret_key_to_public_key(const crypto::secret_key &sec, crypto::public_key &pub) = 0;
         virtual bool  generate_key_image(const crypto::public_key &pub, const crypto::secret_key &sec, crypto::key_image &image) = 0;
-        // alternative prototypes available in libfcmp
-        ct::key scalarmultKey(const ct::key &P, const ct::key &a)
-        {
-            ct::key aP;
-            scalarmultKey(aP, P, a);
-            return aP;
-        }
-
-        ct::key scalarmultBase(const ct::key &a)
-        {
-            ct::key aG;
-            scalarmultBase(aG, a);
-            return aG;
-        }
-
-        /* ======================================================================= */
-        /*                               TRANSACTION                               */
-        /* ======================================================================= */
-
-        // generate_tx_proof removed (KEM-based proofs in Rust)
-
-        virtual bool  open_tx(crypto::secret_key &tx_key) = 0;
-
-        virtual void get_transaction_prefix_hash(const cryptonote::transaction_prefix& tx, crypto::hash& h) = 0;
-        
-        virtual bool  encrypt_payment_id(crypto::hash8 &payment_id, const crypto::public_key &public_key, const crypto::secret_key &secret_key) = 0;
-        bool  decrypt_payment_id(crypto::hash8 &payment_id, const crypto::public_key &public_key, const crypto::secret_key &secret_key)
-        {
-            // Encryption and decryption are the same operation (xor with a key)
-            return encrypt_payment_id(payment_id, public_key, secret_key);
-        }
-
-
-        virtual bool  tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size, const ct::keyV &hashes, const ct::ctkeyV &outPk, ct::key &prehash) = 0;
-        virtual bool  tx_prepare(const ct::key &H, const ct::key &xx, ct::key &a, ct::key &aG, ct::key &aHP, ct::key &rvII) = 0;
-        virtual bool  tx_prepare(ct::key &a, ct::key &aG) = 0;
-        virtual bool  tx_hash(const ct::keyV &long_message, ct::key &c) = 0;
-        virtual bool  tx_sign(const ct::key &c, const ct::keyV &xx, const ct::keyV &alpha, const size_t rows, const size_t dsRows, ct::keyV &ss) = 0;
-
-        /* ======================================================================= */
-        /*                                 FCMP++                                  */
-        /* ======================================================================= */
-        virtual bool fcmp_prepare(const ct::key &tree_root, uint8_t tree_depth) { return false; }
-        virtual bool fcmp_proof_start(size_t num_inputs) { return false; }
-        virtual bool fcmp_proof_add_input(const ct::key &key_image, const std::vector<uint8_t> &tree_path) { return false; }
-
-        virtual bool  close_tx(void) = 0;
-
-        virtual bool  has_ki_cold_sync(void) const { return false; }
-        virtual bool  has_tx_cold_sign(void) const { return false; }
-        virtual bool  has_ki_live_refresh(void) const { return true; }
-        virtual void  computing_key_images(bool started) {};
-        virtual void  set_network_type(cryptonote::network_type network_type) { }
-        virtual void  display_address(const cryptonote::subaddress_index& index, const std::optional<crypto::hash8> &payment_id) {}
-
-    protected:
-        device_mode mode;
-    } ;
-
-    struct reset_mode {
-        device& hwref;
-        reset_mode(hw::device& dev) : hwref(dev) { }
-        ~reset_mode() { hwref.set_mode(hw::device::NONE);}
     };
 
     class device_registry {

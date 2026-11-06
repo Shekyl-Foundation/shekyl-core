@@ -163,7 +163,7 @@ while read -r host an as cn cs; do
       if [ $cn -gt 0 ]; then
         $FLEET_ROOT/gen_host_configs.sh $FLEET_ROOT/etc clearnet $cn $cs >/dev/null 2>&1 || exit 1
       fi
-      printf 'confs=%s torrcs=%s' \"\$(ls $FLEET_ROOT/etc/node-*.conf 2>/dev/null | wc -l)\" \\
+      printf 'confs=%s torrcs=%s' \"\$(ls $FLEET_ROOT/etc/node-*.toml 2>/dev/null | wc -l)\" \\
                                   \"\$(ls $FLEET_ROOT/etc/tor-*.torrc 2>/dev/null | wc -l)\"")
     want=$((an + cn))
     echo "$out"
@@ -243,21 +243,23 @@ while read -r host an as cn cs; do
         hn=$FLEET_ROOT/tor/\$i/hs/hostname
         [ -e \"\$hn\" ] || continue
         anonin=\$(( $PORT_BASE + i*10 + 2 ))
-        grep -q '^anonymous-inbound=' $FLEET_ROOT/etc/node-\$i.conf || \\
-          echo \"anonymous-inbound=\$(cat \$hn):$VPORT,127.0.0.1:\$anonin\" >> $FLEET_ROOT/etc/node-\$i.conf
+        grep -q '^tor-onion =' $FLEET_ROOT/etc/node-\$i.toml || {
+          echo \"tor-onion = \\\"\$(cat \$hn):$VPORT\\\"\" >> $FLEET_ROOT/etc/node-\$i.toml
+          echo \"tor-onion-listen = \\\"127.0.0.1:\$anonin\\\"\" >> $FLEET_ROOT/etc/node-\$i.toml
+        }
       done
       d=0
-      for cf in $FLEET_ROOT/etc/node-*.conf; do
+      for cf in $FLEET_ROOT/etc/node-*.toml; do
         [ -e \"\$cf\" ] || continue
-        i=\$(basename \"\$cf\" .conf); i=\${i#node-}
-        nohup setsid $BIN --config-file \"\$cf\" --non-interactive \\
+        i=\$(basename \"\$cf\" .toml); i=\${i#node-}
+        nohup setsid $BIN --network stagenet --config-file \"\$cf\" \\
           >$FLEET_ROOT/log/node-\$i.out 2>&1 </dev/null &
         d=\$((d+1))
         sleep $START_STAGGER
       done
       sleep 15
       alive=0
-      for cf in $FLEET_ROOT/etc/node-*.conf; do
+      for cf in $FLEET_ROOT/etc/node-*.toml; do
         [ -e \"\$cf\" ] || continue
         [ \"\$(count_proc \$(basename $BIN) \"\$cf\")\" -ge 1 ] && alive=\$((alive+1))
       done
@@ -286,17 +288,18 @@ while read -r host an as cn cs; do
       $PROC_COUNT
       # Strip first, so a re-run is idempotent rather than accumulating a denser
       # graph than the design specifies.
-      for cf in $FLEET_ROOT/etc/node-*.conf; do
+      for cf in $FLEET_ROOT/etc/node-*.toml; do
         [ -e \"\$cf\" ] || continue
-        sed -i '/^add-peer=/d' \"\$cf\"
+        sed -i '/^p2p-peer =/d' \"\$cf\"
       done
       wrote=0
       while IFS=\$'\t' read -r i peers; do
         [ -n \"\${i:-}\" ] || continue
-        [ -e $FLEET_ROOT/etc/node-\$i.conf ] || { echo \"NO-CONFIG-\$i\"; continue; }
-        IFS=, ; for p in \$peers; do
-          echo \"add-peer=\$p:$VPORT\" >> $FLEET_ROOT/etc/node-\$i.conf
+        [ -e $FLEET_ROOT/etc/node-\$i.toml ] || { echo \"NO-CONFIG-\$i\"; continue; }
+        list=\"\"; IFS=, ; for p in \$peers; do
+          list=\"\${list:+\$list, }\\\"\$p:$VPORT\\\"\"
         done ; unset IFS
+        echo \"p2p-peer = [\$list]\" >> $FLEET_ROOT/etc/node-\$i.toml
         wrote=\$((wrote+1))
       done <<'MAP'
 $map
@@ -307,17 +310,17 @@ MAP
         sleep 2
       done
       d=0
-      for cf in $FLEET_ROOT/etc/node-*.conf; do
+      for cf in $FLEET_ROOT/etc/node-*.toml; do
         [ -e \"\$cf\" ] || continue
-        i=\$(basename \"\$cf\" .conf); i=\${i#node-}
-        nohup setsid $BIN --config-file \"\$cf\" --non-interactive \\
+        i=\$(basename \"\$cf\" .toml); i=\${i#node-}
+        nohup setsid $BIN --network stagenet --config-file \"\$cf\" \\
           >$FLEET_ROOT/log/node-\$i.out 2>&1 </dev/null &
         d=\$((d+1))
         sleep $START_STAGGER
       done
       sleep 15
       alive=0
-      for cf in $FLEET_ROOT/etc/node-*.conf; do
+      for cf in $FLEET_ROOT/etc/node-*.toml; do
         [ -e \"\$cf\" ] || continue
         [ \"\$(count_proc \$(basename $BIN) \"\$cf\")\" -ge 1 ] && alive=\$((alive+1))
       done
@@ -333,11 +336,11 @@ MAP
   status)
     out=$(remote "$host" "
       $PROC_COUNT
-      want=\$(ls $FLEET_ROOT/etc/node-*.conf 2>/dev/null | wc -l)
+      want=\$(ls $FLEET_ROOT/etc/node-*.toml 2>/dev/null | wc -l)
       dead=''; alive=0
-      for cf in $FLEET_ROOT/etc/node-*.conf; do
+      for cf in $FLEET_ROOT/etc/node-*.toml; do
         [ -e \"\$cf\" ] || continue
-        i=\$(basename \"\$cf\" .conf); i=\${i#node-}
+        i=\$(basename \"\$cf\" .toml); i=\${i#node-}
         if [ \"\$(count_proc \$(basename $BIN) \"\$cf\")\" -ge 1 ]; then
           alive=\$((alive+1))
         else

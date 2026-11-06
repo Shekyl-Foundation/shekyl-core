@@ -1,3 +1,4 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
 # Copyright (c) 2014-2022, The Monero Project
 #
 # All rights reserved.
@@ -26,8 +27,6 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-ANDROID_STANDALONE_TOOLCHAIN_PATH ?= /usr/local/toolchain
-
 dotgit=$(shell ls -d .git/config)
 ifneq ($(dotgit), .git/config)
   USE_SINGLE_BUILDDIR=1
@@ -48,7 +47,7 @@ all: release-all
 
 depends:
 	cd contrib/depends && $(MAKE) HOST=$(target) && cd ../.. && mkdir -p build/$(target)/release
-	cd build/$(target)/release && USE_DEVICE_TREZOR_MANDATORY=1 cmake -DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/contrib/depends/$(target)/share/toolchain.cmake ../../.. && $(MAKE)
+	cd build/$(target)/release && cmake -DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/contrib/depends/$(target)/share/toolchain.cmake ../../.. && $(MAKE)
 
 cmake-debug:
 	mkdir -p $(builddir)/debug
@@ -64,10 +63,6 @@ debug-test:
 debug-test-asan:
 	mkdir -p $(builddir)/debug
 	cd $(builddir)/debug && cmake -D BUILD_TESTS=ON -D SANITIZE=ON -D CMAKE_BUILD_TYPE=Debug $(topdir) &&  $(MAKE) && $(MAKE) test
-
-debug-test-trezor:
-	mkdir -p $(builddir)/debug
-	cd $(builddir)/debug && cmake -D BUILD_TESTS=ON -D TREZOR_DEBUG=ON -D CMAKE_BUILD_TYPE=Debug $(topdir) &&  $(MAKE) && $(MAKE) test
 
 debug-all:
 	mkdir -p $(builddir)/debug
@@ -98,7 +93,7 @@ release-all:
 
 release-seed:
 	mkdir -p $(builddir)/release
-	cd $(builddir)/release && cmake -D CMAKE_BUILD_TYPE=Release -D ARCH="x86-64" -D USE_HW_DEVICE=OFF -D BUILD_TESTS=OFF $(topdir) && $(MAKE)
+	cd $(builddir)/release && cmake -D CMAKE_BUILD_TYPE=Release -D ARCH="x86-64" -D BUILD_TESTS=OFF $(topdir) && $(MAKE)
 
 release-static:
 	mkdir -p $(builddir)/release
@@ -109,11 +104,6 @@ coverage:
 	cd $(builddir)/debug && cmake -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Debug -D COVERAGE=ON $(topdir) && $(MAKE) && $(MAKE) test
 
 # Targets for specific prebuilt builds which will be advertised for updates by their build tag
-
-release-static-android-armv8:
-	mkdir -p $(builddir)/release/translations
-	cd $(builddir)/release/translations && cmake $(topdir)/../translations && $(MAKE)
-	cd $(builddir)/release && CC=aarch64-linux-android-clang CXX=aarch64-linux-android-clang++ cmake -D BUILD_TESTS=OFF -D ARCH="armv8-a" -D STATIC=ON -D CMAKE_BUILD_TYPE=Release -D ANDROID=true -D BUILD_TAG="android-armv8" -D CMAKE_SYSTEM_NAME="Android" -D CMAKE_ANDROID_STANDALONE_TOOLCHAIN="${ANDROID_STANDALONE_TOOLCHAIN_PATH}" -D CMAKE_ANDROID_ARCH_ABI="arm64-v8a" $(topdir) && $(MAKE)
 
 release-static-linux-armv8:
 	mkdir -p $(builddir)/release

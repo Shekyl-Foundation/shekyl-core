@@ -13,8 +13,12 @@ use crate::params::{EconomicParams, SCALE};
 /// `[h, h+G]`.
 ///
 /// Derived from the hot-session quote-to-broadcast gap (0–2) + the network
-/// height spread at relay (2) + one block of slack.
-pub const RELAY_FLOOR_LOOKBACK: usize = 5;
+/// height spread at relay (2) + one block of slack. Generated from
+/// `config/relay_policy.json` `relay_floor_lookback`; the shipped
+/// [`crate::RelayPolicy`]'s.
+// CLIPPY: cast_possible_truncation — the depth is 5; usize is at least 32 bits.
+#[allow(clippy::cast_possible_truncation)]
+pub const RELAY_FLOOR_LOOKBACK: usize = crate::params::GENERATED_RELAY_FLOOR_LOOKBACK as usize;
 
 /// `G + 1` — the ring / FFI window length.
 pub const RELAY_FLOOR_WINDOW: usize = RELAY_FLOOR_LOOKBACK + 1;
@@ -22,7 +26,11 @@ pub const RELAY_FLOOR_WINDOW: usize = RELAY_FLOOR_LOOKBACK + 1;
 /// Admission slack, basis points. Pinned at zero: the lookback closes the
 /// quote-to-broadcast gap exactly. Re-introducing a buffer is this constant
 /// and its KAT. What makes zero safe is `shekyl-tx-weight`'s weight gate.
-pub const RELAY_ADMISSION_SLACK_BP: u32 = 0;
+/// Generated from `config/relay_policy.json` `relay_admission_slack_bp`.
+// CLIPPY: cast_possible_truncation — the build script refuses a value
+// that does not fit u32.
+#[allow(clippy::cast_possible_truncation)]
+pub const RELAY_ADMISSION_SLACK_BP: u32 = crate::params::GENERATED_RELAY_ADMISSION_SLACK_BP as u32;
 
 /// Fee median `M` every rung and the relay floor divide by.
 ///
@@ -34,8 +42,7 @@ pub(super) fn clamped_median(median: u64, params: &EconomicParams) -> u64 {
 /// `F = R·C·w_ref/M²`, floored at 1. `None` only outside the `u128` domain.
 ///
 /// Raw `C`, no rounding. `max(1)` is kept: a zero floor admits everything,
-/// and `get_current_fee_per_byte`'s contract that `0` is the
-/// block-reward-failure arm is load-bearing at the C++ call site.
+/// and a failed block reward is not an admission.
 #[must_use]
 pub fn checked_relay_fee_floor(
     base_reward: u64,
@@ -65,38 +72,34 @@ pub fn relay_fee_floor(
     checked_relay_fee_floor(base_reward, median, ref_tx_weight, c, params).unwrap_or(u64::MAX)
 }
 
-/// Admit iff `fee >= mask_round_up(weight · min(floors))` less `slack_bp`
-/// basis points.
+/// Admit on the shipped [`crate::RelayPolicy`] from [`crate::relay_policy()`]:
+/// `fee` against [`crate::RelayPolicy::admits`].
 ///
 /// `floors` is the `(h′−G ..= h′)` window; only the minimum is read, so
 /// order carries no meaning. A short window is stricter, never looser.
-/// Empty `floors` refuses: no floor is not a floor of zero.
+/// Empty `floors` refuses: no floor is not a floor of zero. A requirement
+/// that leaves `u64` refuses: no fee can state it. A fold that varies
+/// the lattice or the slack calls [`crate::RelayPolicy::admits`] on its
+/// own policy.
 ///
 /// Reopening (rule 21): FL-R23 reopens if any operand with a per-block
 /// response enters `F` — a fast term would be amplified by the window
 /// for `G` blocks.
 #[must_use]
-pub fn relay_floor_admits(fee: u64, weight: u64, mask: u64, floors: &[u64], slack_bp: u32) -> bool {
-    let Some(&min_floor) = floors.iter().min() else {
-        return false;
-    };
-    let mask = u128::from(mask.max(1));
-    let needed = {
-        let raw = u128::from(weight) * u128::from(min_floor);
-        raw.div_ceil(mask) * mask
-    };
-    let threshold = needed - needed * u128::from(slack_bp) / 10_000;
-    u128::from(fee) >= threshold
+pub fn relay_floor_admits(fee: u64, weight: u64, floors: &[u64]) -> bool {
+    crate::relay_policy().admits(fee, weight, floors)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::quantization::{quantized_fee, FEE_QUANTIZATION_MASK};
     use super::*;
+    use crate::RelayPolicy;
+    use crate::RELAY_FLOOR_REFERENCE_TX_WEIGHT as W_REF;
 
     #[test]
     fn relay_floor_matches_the_migrated_heritage_grid() {
         const COIN: u64 = 1_000_000_000;
-        const W_REF: u64 = 3_000;
         let params = EconomicParams::default();
         let zone = params.full_reward_zone;
 
@@ -157,21 +160,13 @@ mod tests {
     fn a_fee_at_the_floor_exactly_is_admitted() {
         let floor = 333u64;
         let weight = 11_097u64;
-        let exact = weight * floor;
-        assert!(relay_floor_admits(
-            exact,
-            weight,
-            1,
-            &[floor],
-            RELAY_ADMISSION_SLACK_BP
-        ));
-        assert!(!relay_floor_admits(
-            exact - 1,
-            weight,
-            1,
-            &[floor],
-            RELAY_ADMISSION_SLACK_BP
-        ));
+        // `weight · floor` = 3 695 301 is not on the lattice; the
+        // requirement is the next step up.
+        let needed = 3_696_000u64;
+        assert_eq!(quantized_fee(weight, floor), Some(needed));
+        assert!(relay_floor_admits(needed, weight, &[floor]));
+        assert!(!relay_floor_admits(needed - 1, weight, &[floor]));
+        assert!(!relay_floor_admits(weight * floor, weight, &[floor]));
     }
 
     #[test]
@@ -184,14 +179,8 @@ mod tests {
         let newest = *window.last().expect("window is non-empty");
         assert!(newest > oldest, "the fixture must actually rise");
 
-        assert!(relay_floor_admits(weight * oldest, weight, 1, &window, 0));
-        assert!(!relay_floor_admits(
-            weight * oldest,
-            weight,
-            1,
-            &[newest],
-            0
-        ));
+        assert!(relay_floor_admits(weight * oldest, weight, &window));
+        assert!(!relay_floor_admits(weight * oldest, weight, &[newest]));
     }
 
     #[test]
@@ -202,8 +191,8 @@ mod tests {
             let partial = &full[..cut];
             for fee_per_weight in 100..=145u64 {
                 let fee = weight * fee_per_weight;
-                let full_admits = relay_floor_admits(fee, weight, 1, &full, 0);
-                let partial_admits = relay_floor_admits(fee, weight, 1, partial, 0);
+                let full_admits = relay_floor_admits(fee, weight, &full);
+                let partial_admits = relay_floor_admits(fee, weight, partial);
                 assert!(
                     !partial_admits || full_admits,
                     "a {cut}-entry window admitted a fee the full window refused"
@@ -211,33 +200,47 @@ mod tests {
             }
         }
         let fee = weight * 115;
-        assert!(relay_floor_admits(fee, weight, 1, &full, 0));
-        assert!(!relay_floor_admits(fee, weight, 1, &full[..1], 0));
+        assert!(relay_floor_admits(fee, weight, &full));
+        assert!(!relay_floor_admits(fee, weight, &full[..1]));
     }
 
     #[test]
     fn an_empty_window_refuses_everything() {
-        assert!(!relay_floor_admits(u64::MAX, 1, 1, &[], 0));
-        assert!(!relay_floor_admits(0, 0, 1, &[], 0));
+        assert!(!relay_floor_admits(u64::MAX, 1, &[]));
+        assert!(!relay_floor_admits(0, 0, &[]));
     }
 
     #[test]
-    fn the_requirement_is_rounded_up_to_the_mask() {
+    fn the_requirement_is_rounded_up_to_the_lattice() {
         let weight = 10u64;
         let floor = 7u64;
-        assert!(relay_floor_admits(70, weight, 1, &[floor], 0));
-        assert!(!relay_floor_admits(70, weight, 100, &[floor], 0));
-        assert!(!relay_floor_admits(99, weight, 100, &[floor], 0));
-        assert!(relay_floor_admits(100, weight, 100, &[floor], 0));
-        assert!(relay_floor_admits(70, weight, 0, &[floor], 0));
+        assert_eq!(FEE_QUANTIZATION_MASK, 1_000);
+        assert!(!relay_floor_admits(70, weight, &[floor]));
+        assert!(!relay_floor_admits(999, weight, &[floor]));
+        assert!(relay_floor_admits(1_000, weight, &[floor]));
+    }
+
+    #[test]
+    fn an_unrepresentable_requirement_refuses() {
+        assert!(!relay_floor_admits(u64::MAX, u64::MAX, &[2]));
+        assert!(!relay_floor_admits(u64::MAX, u64::MAX, &[1]));
     }
 
     #[test]
     fn slack_lowers_the_requirement_when_it_is_not_zero() {
         let weight = 1_000u64;
         let floor = 100u64;
-        assert!(!relay_floor_admits(99_000, weight, 1, &[floor], 0));
-        assert!(relay_floor_admits(98_000, weight, 1, &[floor], 200));
-        assert!(!relay_floor_admits(97_999, weight, 1, &[floor], 200));
+        let slack = RelayPolicy {
+            admission_slack_bp: 200,
+            ..RelayPolicy::SHIPPED
+        };
+        assert!(!RelayPolicy::SHIPPED.admits(99_000, weight, &[floor]));
+        assert!(slack.admits(98_000, weight, &[floor]));
+        assert!(!slack.admits(97_999, weight, &[floor]));
+        assert!(
+            relay_floor_admits(100_000, weight, &[floor])
+                && !relay_floor_admits(99_999, weight, &[floor]),
+            "the shipped predicate runs at zero slack"
+        );
     }
 }

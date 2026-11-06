@@ -68,8 +68,9 @@ use crate::engine::pending::TxHash;
 ///
 /// # Per-tier `FeeRate`
 ///
-/// `FeeRate` is the `shekyl_rpc_client::FeeRate` (per-weight cost + rounding
-/// mask) returned by [`Rpc::get_fee_rate`]. The three tier fields on
+/// `FeeRate` is the `shekyl_rpc_client::FeeRate` (a per-weight cost; the
+/// fee lattice it is rounded to is `shekyl_economics::FEE_QUANTIZATION_MASK`,
+/// a constant) returned by [`Rpc::get_fee_rate`]. The three tier fields on
 /// this struct correspond one-to-one with the three non-`Custom`
 /// `FeePriority` variants; resolving a `FeePriority` to a `FeeRate`
 /// is a structural projection rather than a fresh daemon call.
@@ -79,13 +80,9 @@ use crate::engine::pending::TxHash;
 /// Per `PHASE_2A_SEND_PATH.md` §3.3, the whole snapshot derives from
 /// **one** `get_fee_estimate` JSON-RPC call (not three per-tier
 /// `get_fee_rate` calls): the response's fee array maps to the three
-/// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`2`) and
-/// its single `quantization_mask` is stored once on
-/// [`Self::quantization_mask`]. This guarantees the
-/// tier band and the
-/// [`Custom`](super::super::FeePriority::Custom) feerate's rounding
-/// mask all derive from the same daemon view, with no tier-vs-tier
-/// skew from interleaved calls.
+/// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`2`). This
+/// guarantees the tier band derives from one daemon view, with no
+/// tier-vs-tier skew from interleaved calls.
 ///
 /// [`docs/V3_WALLET_DECISION_LOG.md`]: ../../../../../docs/V3_WALLET_DECISION_LOG.md
 #[non_exhaustive]
@@ -107,15 +104,6 @@ pub struct FeeEstimates {
     /// the fastest tier short of fee-spiking, targeting next-block
     /// inclusion under normal mempool conditions.
     pub priority: FeeRate,
-
-    /// The daemon's fee-rounding `quantization_mask` for this
-    /// snapshot, carried **once** so a
-    /// [`Custom`](super::super::FeePriority::Custom) feerate can be
-    /// constructed against the same daemon view as the tier band
-    /// (`FeeRate::new(rate, quantization_mask)`, §3.3). Identical to
-    /// the `mask` already embedded in each tier `FeeRate`; surfaced
-    /// here so the `Custom` path does not need a fresh daemon call.
-    pub quantization_mask: u64,
 }
 
 /// Outcome of a daemon transaction submission via
@@ -209,44 +197,48 @@ pub(crate) enum TxSubmitOutcome {
         /// Why the daemon refused the transaction. Dispositions per
         /// §2.5 are applied by the orchestrator.
         cause: shekyl_rpc_client::RejectCause,
+        /// The consensus row that refused, for `ConsensusRule`: the reply's
+        /// diagnostic parameter, carried to the user's sentence. `None` for
+        /// every other cause, and for a row this wallet cannot carry whole.
+        row: Option<crate::engine::error::CenRowName>,
     },
 }
 
-/// Daemon health facts consumed by the §5.3 watchdog escape ladder.
+/// Daemon health facts the wallet reads from `get_info`.
 ///
-/// A contract-accurate projection of the daemon's existing `get_info`
-/// surface — the summed connection count, the daemon's current height,
-/// and its network-estimated target height — carrying **no new RPC
-/// method** (`DAEMON_SUBMIT_VERDICT.md` §5.2 item 3). The wallet-side
-/// liveness kernel maps this into its
-/// [`DaemonHealthContext`](super::super::submit_watchdog::DaemonHealthContext);
-/// the split keeps this RPC-transport trait free of any liveness-policy
-/// type (the kernel depends on the trait, never the reverse).
+/// Whether the daemon has a peer it can relay through, its chain height,
+/// and whether it is synchronized. No new RPC
+/// (`DAEMON_SUBMIT_VERDICT.md` §5.2 item 3). The submit ladder takes this
+/// struct. A second copy would be free to grow a different reading of the
+/// same reply, which is the split [`SyncedChainFacts`] exists to forbid
+/// (`WSS-Q14`).
 ///
 /// # Trust classification (§7.2)
 ///
 /// Trusted under the own-daemon V3.0 deployment model; **untrusted**
-/// under the multi-daemon reopen. The damage cap is the ladder's rung 2:
-/// health context can only *delay* escalation, never authorize a
-/// rebuild.
+/// under the multi-daemon reopen — a lying "I'm healthy" makes the wallet
+/// wait on a non-propagating transaction, and a lying sync height flips
+/// backoff at will. The damage cap is the ladder's rung 2: these facts
+/// can only delay escalation, never authorize a rebuild.
+///
+/// [`SyncedChainFacts`]: super::super::daemon::synced_chain_facts::SyncedChainFacts
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DaemonHealth {
-    /// Outgoing + incoming connection count.
-    pub connections: u64,
+    /// Whether the daemon runs P2P, and when it does, whether it has a peer
+    /// it can relay through: `get_info`'s Health (`offline`, `has_peers`).
+    /// Not a count, and not derived from one: the counts are Status, which
+    /// a daemon may withhold. An offline daemon is a state of its own, not
+    /// a daemon with no peers (Rick, 2026-10-14).
+    pub p2p: shekyl_rpc_types::HealthP2p,
     /// The daemon's current chain height.
     pub height: u64,
-    /// The daemon's network-estimated target height (`0` when synced —
-    /// the info surface's convention).
-    pub target_height: u64,
-    /// The daemon's own `synchronized` flag (`core_rpc_server.cpp:248`,
-    /// from `check_core_ready()`).
+    /// The daemon's own `synchronized` flag: the protocol's predicate, as
+    /// `get_info` reports it, and the wallet's one source for whether the
+    /// daemon has caught up.
     ///
-    /// **Not decoration on top of the heights.** A daemon that has just
-    /// started with no peers reports `target_height == 0` *and*
-    /// `synchronized == false`: the height comparison alone reads that as
-    /// synced, at a genesis-adjacent height. That is the rebuilt-database
-    /// case `WSS-25` is about, so both halves are required —
-    /// `SyncedChainFacts` is where the two are combined.
+    /// The daemon's target height is deliberately not here. It comes from
+    /// heights peers claim, so the wallet decides nothing on it
+    /// (`daemon/synced_chain_facts.rs`, module docs).
     pub synchronized: bool,
 }
 
@@ -309,48 +301,22 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     ///
     /// # Default implementation
     ///
-    /// The **single override point** for scannable-block fetching: the two
-    /// body-form wrappers below are provided methods that delegate here, so
-    /// an implementor (the Stage-4 `ActorRef<DaemonActor>` mailbox route,
-    /// the test `TestDaemon`'s synthetic chains) overrides ONE method and
-    /// both forms follow — the override-both-in-lockstep hazard of two
-    /// independent defaults is unrepresentable. The default delegates to
-    /// the in-crate native fetch (`engine::block_fetch`). Trait method
-    /// signatures do not change across the swap-in (§7).
-    fn fetch_scannable_block_in_form(
-        &self,
-        number: usize,
-        form: crate::engine::block_fetch::TxBodyForm,
-    ) -> impl std::future::Future<Output = Result<ScannableBlock, RpcError>> + Send {
-        crate::engine::block_fetch::fetch_scannable_block_with_form(self, number, form)
-    }
-
-    /// [`Self::fetch_scannable_block_in_form`] in the **pruned** body form —
-    /// the refresh path (no per-body hash gate; the pruned form is the
-    /// bandwidth-cheap one). Provided; override
-    /// [`Self::fetch_scannable_block_in_form`] instead.
+    /// The **single override point** for scannable-block fetching, and the
+    /// one body form (`SB-Q2`): every non-miner transaction arrives as a
+    /// skeleton bound to its txid (`shekyl_wire::BoundTx`), which refresh,
+    /// the proofs workflow and the P-scan all consume — the P-scan's SP-6
+    /// exhaustiveness gate (`pscan::exhaustiveness`) reads each body's
+    /// bound identity, so no whole-body form exists for it to need. An
+    /// implementor (the Stage-4 `ActorRef<DaemonActor>` mailbox route, the
+    /// test `TestDaemon`'s synthetic chains) overrides this one method. The
+    /// default delegates to the in-crate native fetch
+    /// (`engine::block_fetch`). Trait method signatures do not change across
+    /// the swap-in (§7).
     fn fetch_scannable_block(
         &self,
         number: usize,
     ) -> impl std::future::Future<Output = Result<ScannableBlock, RpcError>> + Send {
-        self.fetch_scannable_block_in_form(number, crate::engine::block_fetch::TxBodyForm::Pruned)
-    }
-
-    /// [`Self::fetch_scannable_block_in_form`] in the **full** (unpruned)
-    /// body form, so each transaction re-hashes to its committed hash.
-    ///
-    /// This is the form the P-scan's SP-6 exhaustiveness gate consumes
-    /// (`pscan::exhaustiveness`): the gate recomputes every body's hash from
-    /// received material, and a storage-pruned FCMP++ spend hashes with the
-    /// null prunable component — so a pruned fetch can never satisfy the gate
-    /// on a spend-bearing block, and the scan would halt there as a
-    /// forged-absence refusal. Provided; override
-    /// [`Self::fetch_scannable_block_in_form`] instead.
-    fn fetch_scannable_block_full(
-        &self,
-        number: usize,
-    ) -> impl std::future::Future<Output = Result<ScannableBlock, RpcError>> + Send {
-        self.fetch_scannable_block_in_form(number, crate::engine::block_fetch::TxBodyForm::Full)
+        crate::engine::block_fetch::default_fetch_scannable_block(self, number)
     }
 
     /// Atomically snapshot the daemon's fee-rate estimate at each
@@ -414,8 +380,8 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     ) -> impl std::future::Future<Output = Result<TxSubmitOutcome, Self::Error>> + Send;
 
     /// Snapshot the daemon's health facts for the §5.3 watchdog escape
-    /// ladder (§5.2 item 3): the summed connection count and the
-    /// sync position, which distinguish "tx stuck" from "daemon has no
+    /// ladder (§5.2 item 3): whether the daemon has peers and its sync
+    /// position, which distinguish "tx stuck" from "daemon has no
     /// peers to relay to" and "daemon is behind." One `get_info` read;
     /// **no new RPC method** — the fields already exist on the info
     /// surface the wallet queries for network verification.

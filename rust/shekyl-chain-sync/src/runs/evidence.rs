@@ -1,0 +1,384 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The long-run slot, a challenge of that slot, and the one evidence
+//! check. Each is a mode of one peer. The coordinator draws the check.
+//! The transition lives here.
+
+use std::time::Instant;
+
+use shekyl_chain_rules::{seed_height, RuleSet};
+use shekyl_difficulty::{CumulativeDifficulty, MTP_WINDOW_USIZE, N_USIZE};
+use shekyl_draw_rng::RelayRng;
+use shekyl_types::{BlockCount, BlockHeight};
+
+use super::fork_depth;
+use crate::model::{draw_one, AlarmWrite, Command, Evidence, HashClass, Sync};
+use crate::peer::Run;
+use crate::ALARM_RETRY;
+
+impl<K, R> Sync<K, R>
+where
+    K: Copy + Ord + std::hash::Hash + std::fmt::Debug,
+    R: Fn(BlockHeight) -> RuleSet,
+{
+    /// A refused latch write. The evidence is already held, so this does
+    /// not read the chain: a store fault must not leave the retry unarmed.
+    /// `Idle` is the only state that accepts new evidence, and a retry
+    /// that never arms never leaves `Refused`.
+    pub fn alarm_refused(&mut self, now: Instant, out: &mut Vec<Command<K>>) {
+        if let AlarmWrite::InFlight(evidence) = self.alarm_write {
+            self.alarm_write = AlarmWrite::Refused(evidence);
+            out.push(Command::ArmAlarmRetry {
+                deadline: now + ALARM_RETRY,
+            });
+        }
+    }
+
+    /// The retry of a refused latch write. Raises the same evidence.
+    /// No chain read, for the same reason as [`Self::alarm_refused`].
+    pub fn alarm_retry(&mut self, out: &mut Vec<Command<K>>) {
+        if let AlarmWrite::Refused(evidence) = self.alarm_write {
+            self.raise_alarm(evidence, out);
+        }
+    }
+
+    /// The latch watch's report. The watch is the store's answer, so this
+    /// does not read the chain: a store fault must not leave a write that
+    /// landed in flight, where nothing retries it and the model still
+    /// reads the latch clear.
+    pub fn latch_reported(&mut self, set: bool) {
+        self.alarm = set;
+        if set {
+            self.alarm_write = AlarmWrite::Written;
+        }
+    }
+
+    /// Ask for the latch write with `evidence`. It is in flight until the
+    /// latch watch reports it set or the owner reports it refused.
+    pub(crate) fn raise_alarm(&mut self, evidence: Evidence, out: &mut Vec<Command<K>>) {
+        out.push(Command::RaiseAlarm {
+            fork_at: evidence.fork_at,
+            tip: evidence.tip,
+            work: evidence.work,
+        });
+        self.alarm_write = AlarmWrite::InFlight(evidence);
+    }
+
+    pub(crate) fn alarm_from_tree(&mut self, out: &mut Vec<Command<K>>) {
+        if self.alarm_write != AlarmWrite::Idle {
+            return;
+        }
+        let Some(local) = self.local else {
+            return;
+        };
+        let cap = self.cap();
+        let Some(height) = local.height else {
+            return;
+        };
+        // Only a tip heavier than the local chain can raise it, heaviest
+        // first: the evidence names the heaviest chain past the cap.
+        let past_cap = self
+            .tree
+            .tips_heavier_than(local.work)
+            .find_map(|(hash, work)| {
+                self.tree
+                    .placement(hash)
+                    .filter(|placed| fork_depth(Some(height), placed.fork) > cap)
+                    .map(|placed| (hash, work, placed.fork))
+            });
+        let Some((tip, work, fork_at)) = past_cap else {
+            return;
+        };
+        self.raise_alarm(Evidence { fork_at, tip, work }, out);
+        self.tree.mark_invalid(tip);
+    }
+
+    pub(super) fn evidence_alarm(&mut self, session: K, out: &mut Vec<Command<K>>) {
+        let Some(run) = self.peers.get(&session).and_then(|s| s.run.as_ref()) else {
+            return;
+        };
+        if !run.is_evidence() {
+            return;
+        }
+        let Some(work) = run
+            .chain
+            .checked
+            .get(run.chain.proven.saturating_sub(1))
+            .map(|c| c.work)
+        else {
+            return;
+        };
+        let local = self
+            .local
+            .map(|l| l.work)
+            .unwrap_or(CumulativeDifficulty::ZERO);
+        if work > local && self.alarm_write == AlarmWrite::Idle {
+            let evidence = Evidence {
+                fork_at: run.chain.parent_height,
+                tip: run.chain.checked[run.chain.proven - 1].hash,
+                work,
+            };
+            self.raise_alarm(evidence, out);
+            self.drop_run(session);
+        }
+    }
+
+    pub(super) fn note_evidence(&mut self, session: K) {
+        let Some(state) = self.peers.get_mut(&session) else {
+            return;
+        };
+        if self.alarm || !state.evidence.available() {
+            return;
+        }
+        let local = self
+            .local
+            .map(|l| l.work)
+            .unwrap_or(CumulativeDifficulty::ZERO);
+        let heavier = state
+            .run
+            .as_ref()
+            .and_then(|run| run.chain.checked.last())
+            .is_some_and(|c| c.work > local);
+        if heavier {
+            if let Some(run) = state.run.as_mut() {
+                run.nominate();
+            }
+        }
+    }
+
+    /// Whether a draw could run now: the latch is unset, no check runs,
+    /// and a candidate waits.
+    fn draw_waits(&self) -> bool {
+        !self.alarm
+            && self.evidence_holder().is_none()
+            && self.peers.values().any(|state| {
+                state.evidence.available() && state.run.as_ref().is_some_and(Run::is_candidate)
+            })
+    }
+
+    /// After a header response: a wake for the draw it did not run, when
+    /// one would run and none is armed ([`Command::ArmDraw`]). At the
+    /// session's declared transit from now.
+    pub(crate) fn arm_draw(&mut self, session: K, now: Instant, out: &mut Vec<Command<K>>) {
+        if self.draw_wake.is_some() || !self.draw_waits() {
+            return;
+        }
+        let Some(transit) = self.peers.get(&session).map(|peer| peer.transit) else {
+            return;
+        };
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        self.draw_wake = Some(id);
+        out.push(Command::ArmDraw {
+            session,
+            id,
+            deadline: now.checked_add(transit).unwrap_or(now),
+        });
+    }
+
+    /// One evidence check, drawn uniformly from the waiting candidates.
+    /// Nothing is drawn while the latch is set, or while a check runs.
+    pub(crate) fn start_evidence(
+        &mut self,
+        rng: &mut impl RelayRng,
+        now: Instant,
+        out: &mut Vec<Command<K>>,
+    ) {
+        if self.alarm || self.evidence_holder().is_some() {
+            return;
+        }
+        let candidates: Vec<K> = self
+            .peers
+            .iter()
+            .filter(|(_, state)| {
+                state.evidence.available() && state.run.as_ref().is_some_and(Run::is_candidate)
+            })
+            .map(|(session, _)| *session)
+            .collect();
+        let Some(session) = draw_one(rng, &candidates) else {
+            return;
+        };
+        if let Some(state) = self.peers.get_mut(&session) {
+            state.evidence = crate::peer::EvidenceDraw::Spent;
+            if let Some(run) = state.run.as_mut() {
+                run.begin_evidence();
+            }
+        }
+        let omits = self
+            .peers
+            .get(&session)
+            .and_then(|peer| peer.run.as_ref())
+            .is_some_and(Run::omits_fork);
+        let fetching = self
+            .peers
+            .get(&session)
+            .is_some_and(|peer| peer.follow_up.is_some());
+        if omits {
+            // The in-flight response still extends the suffix. That
+            // response discards it and asks from the fork.
+            if !fetching {
+                self.refetch_evidence(session, now, out);
+            }
+            return;
+        }
+        self.plan_proof(session, HashClass::Evidence, out);
+    }
+
+    /// The evidence window does not begin at the fork. Drop it and ask
+    /// for the headers from the parent the run extends.
+    pub(super) fn refetch_evidence(&mut self, session: K, now: Instant, out: &mut Vec<Command<K>>) {
+        let Some((parent, parent_height)) = self
+            .peers
+            .get(&session)
+            .and_then(|peer| peer.run.as_ref())
+            .map(|run| (run.chain.parent, run.chain.parent_height))
+        else {
+            return;
+        };
+        if self
+            .peers
+            .get(&session)
+            .is_some_and(|peer| peer.follow_up.is_some())
+        {
+            return;
+        }
+        if let Some(run) = self
+            .peers
+            .get_mut(&session)
+            .and_then(|peer| peer.run.as_mut())
+        {
+            run.chain.checked.clear();
+            run.chain.proven = 0;
+        }
+        self.follow_up(session, (parent_height, parent), now, out);
+    }
+
+    pub(super) fn past_bound(&self, session: K, cap: BlockCount) -> bool {
+        let Some(run) = self.peers.get(&session).and_then(|s| s.run.as_ref()) else {
+            return false;
+        };
+        let depth = fork_depth(
+            self.local.and_then(|local| local.height),
+            run.chain.parent_height,
+        );
+        let bound = depth.to_raw().saturating_add(cap.to_raw());
+        // Trimmed runs no longer hold every header. The bound is on the
+        // height the run has reached, which the window still names.
+        let reached = run
+            .chain
+            .checked
+            .last()
+            .map(|c| {
+                c.height
+                    .to_raw()
+                    .saturating_sub(run.chain.parent_height.to_raw())
+            })
+            .unwrap_or(0);
+        reached > bound
+    }
+
+    /// A past-cap run keeps the window the branch view reads: the LWMA
+    /// window, the median, and the seed headers those heights name.
+    pub(super) fn trim_window(&mut self, session: K) {
+        let Some(run) = self.peers.get_mut(&session).and_then(|s| s.run.as_mut()) else {
+            return;
+        };
+        if !run.past_cap() || run.is_evidence() {
+            return;
+        }
+        let tail = N_USIZE.max(MTP_WINDOW_USIZE).saturating_add(1);
+        if run.chain.checked.len() <= tail {
+            return;
+        }
+        let mut from = run.chain.checked.len() - tail;
+        let seeds: Vec<BlockHeight> = run.chain.checked[from..]
+            .iter()
+            .filter_map(|c| seed_height(c.height))
+            .collect();
+        for seed in seeds {
+            if let Some(idx) = run.chain.index_at(seed) {
+                from = from.min(idx);
+            }
+        }
+        if from == 0 {
+            return;
+        }
+        run.chain.checked.drain(..from);
+        run.chain.proven = run.chain.proven.saturating_sub(from);
+    }
+
+    pub(super) fn settle_challenge(&mut self, session: K) {
+        let ready = self
+            .peers
+            .get(&session)
+            .and_then(|s| s.run.as_ref())
+            .is_some_and(|run| {
+                run.is_challenging()
+                    && run.chain.proven > 0
+                    && run.chain.proven >= run.chain.checked.len()
+            });
+        if !ready {
+            return;
+        }
+        let frontier = self
+            .peers
+            .get(&session)
+            .and_then(|s| s.run.as_ref())
+            .and_then(|run| run.chain.checked.get(run.chain.proven - 1))
+            .map(|c| (c.height, c.work));
+        let Some((height, work)) = frontier else {
+            return;
+        };
+        let holder = self.slot_holder().filter(|holder| *holder != session);
+        let holder_work = holder.and_then(|holder| {
+            self.peers
+                .get(&holder)
+                .and_then(|s| s.run.as_ref())
+                .and_then(|run| {
+                    run.chain
+                        .index_at(height)
+                        .filter(|index| *index < run.chain.proven)
+                        .map(|index| run.chain.checked[index].work)
+                })
+        });
+        let take = holder_work.is_none_or(|held| work > held);
+        if !take {
+            if let Some(state) = self.peers.get_mut(&session) {
+                state.draw.quiet();
+                state.run = None;
+            }
+            return;
+        }
+        if let Some(holder) = holder {
+            let cap_headers = usize::try_from(self.cap().to_raw()).unwrap_or(1);
+            if let Some(state) = self.peers.get_mut(&holder) {
+                if let Some(run) = state.run.as_mut() {
+                    run.release_slot();
+                    run.chain.checked.truncate(cap_headers);
+                    run.chain.proven = run.chain.proven.min(run.chain.checked.len());
+                }
+            }
+        }
+        if let Some(run) = self.peers.get_mut(&session).and_then(|s| s.run.as_mut()) {
+            run.enter_slot();
+        }
+    }
+
+    pub(super) fn consider_slot(&mut self, session: K, out: &mut Vec<Command<K>>) {
+        // The first run to fill its budget takes the slot by verifying
+        // its prefix. A later run verifies its own prefix first; the
+        // comparison is that verified work, at its frontier height.
+        let vacant = self.slot_holder().is_none();
+        if let Some(run) = self.peers.get_mut(&session).and_then(|s| s.run.as_mut()) {
+            if vacant {
+                run.enter_slot();
+            } else {
+                run.enter_challenge();
+            }
+        }
+        self.plan_proof(session, HashClass::HeaderPow, out);
+    }
+}

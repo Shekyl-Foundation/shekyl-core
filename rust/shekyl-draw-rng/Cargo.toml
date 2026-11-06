@@ -1,0 +1,27 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-draw-rng"
+description = "The RNG seam the daemon's draws are generic over, and the unbiased integer draws built on it. Dependency-free. The seeded reference generator compiles only for tests and the splitmix feature."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = []
+# Compiles `SplitMix64`, the seeded reference generator. It is not a CSPRNG.
+# Enable this from a `[dev-dependencies]` edge only: a production draw from
+# `SplitMix64` then does not compile, because the type does not exist in a
+# build without the feature. `scripts/ci/check_test_only_features.py` holds
+# the feature to dev edges (its `TEST_ONLY` row). Named for the generator,
+# not `conformance`: that word is the float grader on the crates that draw.
+splitmix = []
+
+[lints]
+workspace = true

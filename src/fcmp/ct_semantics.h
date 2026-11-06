@@ -58,11 +58,6 @@ extern "C" {
 #define DP(x)
 #endif
 
-namespace hw {
-    class device;
-}
-
-
 namespace ct {
 
     bool verCtSemanticsSimple(const CtSig & rv);
@@ -77,7 +72,10 @@ namespace ct {
     // inputs are optional: the FCMP++ proof is present iff fee_input_count > 0
     // (REWARD_EMISSION_E3_GATING_ROUND.md §9.5 item 4).
     bool verCtSemanticsEmission(const CtSig &rv, uint64_t total_reward, size_t fee_input_count);
-    key get_tx_prehash(const CtSig &rv, hw::device &hwdev);
+    // Transcript hash of the message, the CtSig base (enc_labels included),
+    // and the Bulletproof+ points. No caller yet: consensus rejection of a
+    // tampered base is the unwired check (SUBADDRESS_UNDER_PQC.md §5.7.11).
+    key get_tx_prehash(const CtSig &rv);
 }
 #endif  /* CT_SEMANTICS_H */
 

@@ -79,8 +79,8 @@ use shekyl_types::{BlockHeight, TxHash};
 use super::diagnostics::{PendingTxDiagnostic, WatchdogAlarmReason, WatchdogProbeOutcome};
 use super::local_pending_tx::RescanRequest;
 use super::submit_watchdog::{
-    apply_probe_outcome, escape_ladder_step, AlarmReason, DaemonHealthContext, HeldSubmit,
-    ProbeDisposition, ProbeOutcome, WatchdogConfig, WatchdogStep,
+    apply_probe_outcome, escape_ladder_step, AlarmReason, HeldSubmit, ProbeDisposition,
+    ProbeOutcome, WatchdogConfig, WatchdogStep,
 };
 use super::traits::{DaemonEngine, DaemonHealth, TxSubmitOutcome};
 
@@ -271,9 +271,8 @@ impl SubmitLifecycleDriver {
         // A failed health round-trip is not a verdict (§7.2): without
         // health facts the ladder cannot separate "tx stuck" from
         // "daemon behind / peerless", so make no decision this tick.
-        let health = match daemon.get_health().await {
-            Ok(h) => health_context(h),
-            Err(_) => return,
+        let Ok(health) = daemon.get_health().await else {
+            return;
         };
 
         let synced = host.synced_height().to_raw();
@@ -421,7 +420,7 @@ impl SubmitLifecycleDriver {
         daemon: &D,
         held: HeldSubmit,
         synced: u64,
-        health: DaemonHealthContext,
+        health: DaemonHealth,
     ) {
         match escape_ladder_step(&held, synced, health, self.config) {
             WatchdogStep::Wait(_) => {}
@@ -555,12 +554,13 @@ fn classify_probe(outcome: TxSubmitOutcome) -> ProbeVerdict {
         TxSubmitOutcome::AlreadyInChain { .. } => {
             ProbeVerdict::Kernel(ProbeOutcome::ConfirmedInChain)
         }
-        TxSubmitOutcome::Rejected { cause } => match cause {
+        TxSubmitOutcome::Rejected { cause, .. } => match cause {
             // Terminal: under single-egress a definite terminal verdict
             // proves the bytes are in neither pool nor chain (§7.1).
             RejectCause::Malformed
             | RejectCause::FeeTooLow
             | RejectCause::DoubleSpendConflict
+            | RejectCause::ConsensusRule
             | RejectCause::Unrecognized => ProbeVerdict::Kernel(ProbeOutcome::RejectedTerminal),
             // Retryable: needs a fresh reference — a human-authorized
             // rebuild, not an automatic one.
@@ -578,10 +578,11 @@ fn probe_trace(outcome: TxSubmitOutcome) -> WatchdogProbeOutcome {
         TxSubmitOutcome::Submitted { .. } => WatchdogProbeOutcome::ReofferedAfterAbsence,
         TxSubmitOutcome::AlreadyInPool { .. } => WatchdogProbeOutcome::PresentInPool,
         TxSubmitOutcome::AlreadyInChain { .. } => WatchdogProbeOutcome::ConfirmedInChain,
-        TxSubmitOutcome::Rejected { cause } => match cause {
+        TxSubmitOutcome::Rejected { cause, .. } => match cause {
             RejectCause::Malformed
             | RejectCause::FeeTooLow
             | RejectCause::DoubleSpendConflict
+            | RejectCause::ConsensusRule
             | RejectCause::Unrecognized => WatchdogProbeOutcome::RejectedTerminal,
             RejectCause::StaleRoot
             | RejectCause::ReferenceTooRecent
@@ -598,18 +599,7 @@ fn project_alarm(reason: AlarmReason) -> WatchdogAlarmReason {
             WatchdogAlarmReason::PresentButUnconfirmedPastHorizon
         }
         AlarmReason::DaemonPeerless => WatchdogAlarmReason::DaemonPeerless,
-    }
-}
-
-/// Map the daemon [`DaemonHealth`] facts into the kernel's
-/// [`DaemonHealthContext`] (the RPC-transport type never depends on the
-/// liveness-policy type; the driver bridges).
-fn health_context(health: DaemonHealth) -> DaemonHealthContext {
-    DaemonHealthContext {
-        connections: health.connections,
-        height: health.height,
-        target_height: health.target_height,
-        synchronized: health.synchronized,
+        AlarmReason::DaemonOffline => WatchdogAlarmReason::DaemonOffline,
     }
 }
 

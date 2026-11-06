@@ -18,6 +18,7 @@ on:
     # `.github/workflows/weekly-os.yml`.
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened]
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
@@ -44,7 +45,7 @@ env:
   # "stdbool.h file not found" otherwise). GitHub-hosted runners ship clang,
   # which is why the Rust workflow never needed this; these jobs run in bare
   # ubuntu containers, which do not.
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl clang libclang-dev'
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev graphviz doxygen pkg-config libssl-dev libsodium-dev ccache git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -97,34 +98,12 @@ jobs:
           fi
           head="${{ github.sha }}"
 
-          # Any failure below leaves docs_only=false -> everything runs.
-          files=""
-          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
-            files="$(git diff --name-only "$base" "$head" 2>/dev/null || true)"
-          fi
-
-          if [ -z "$files" ]; then
-            echo "scope: no computable file list -- running everything (fail-closed)"
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          docs_only=true
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            # The domain registry lives under docs/ but IS a code input:
-            # shekyl-crypto-pq's tests/domain_registry.rs include_str!s it, so a
-            # TSV-only change must still run the Rust suite. Carve-out preserved
-            # from rust-audit-test.yml's own `paths` list.
-            case "$f" in
-              docs/design/CRYPTO_DOMAIN_REGISTRY.tsv) docs_only=false; break ;;
-              docs/*|*/README.md|README.md) ;;
-              *) docs_only=false; break ;;
-            esac
-          done <<< "$files"
-
-          echo "scope: docs_only=$docs_only over $(printf '%s' "$files" | wc -l) changed file(s)"
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          # The classifier is scripts/ci/change_scope.py: it fails closed
+          # (docs_only=false) on anything it cannot decide, and a crash of the
+          # script itself also writes false, so a broken scope runs everything
+          # rather than skipping the jobs that need this one.
+          python3 scripts/ci/change_scope.py --base "$base" --head "$head" \
+            || echo "docs_only=false" >> "$GITHUB_OUTPUT"
 
   lint-rust-debug-macros:
     name: 'Lint: no debug macros in production Rust'
@@ -260,10 +239,7 @@ jobs:
         run: |
           brew uninstall cmake
           brew update
-          # No system zstd: Levin compression is the Rust-pinned vendored
-          # libzstd inside the linked shekyl image (PR #411). Installing a
-          # host libzstd would reintroduce the dual-lib story we deleted.
-          brew install --quiet cmake boost hidapi openssl libpgm miniupnpc libunwind-headers protobuf abseil ccache
+          brew install --quiet cmake boost openssl libpgm ccache
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
       - uses: dtolnay/rust-toolchain@1.94.0
@@ -271,6 +247,17 @@ jobs:
         run: |
           ${{env.CCACHE_SETTINGS}}
           make -j${{env.MAKE_JOB_COUNT}}
+      # The Mach-O half of the hardening gate (MH_PIE, no executable stack,
+      # no LC_RPATH) on the three staged Rust binaries; otool is Xcode's.
+      # The Makefile's build directory carries the OS and the branch name
+      # (`build/Darwin/<branch>/release`), so the staged directory is found,
+      # and the gate itself fails on a path that is not a file.
+      - name: binary hardening on the staged binaries (otool)
+        run: |
+          staged=$(find build -type f -name shekyld -path '*/release/bin/*' -print -quit)
+          if [ -z "$staged" ]; then echo "no staged shekyld under build/" >&2; exit 1; fi
+          bindir=$(dirname "$staged")
+          scripts/ci/check_binary_hardening.sh "$bindir/shekyld" "$bindir/shekyl-cli" "$bindir/shekyl-wallet-rpc"
 
   # Windows MSYS2 and Arch Linux moved to `.github/workflows/weekly-os.yml`.
   # PR Windows coverage is the MSVC daemon job below (the only runner that
@@ -376,6 +363,25 @@ jobs:
         if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         shell: bash
         run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
+      # The hardening the link flags claim, read off the staged ELF binaries
+      # (PIE, non-executable stack, full RELRO, no run path). The three are
+      # Rust binaries built by one cargo invocation; no CMake flag list
+      # reaches them, so the result is what is asserted. readelf is binutils.
+      - name: binary hardening on the staged binaries (readelf)
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: bash
+        run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc
+      # The cutover's outcome (P2P_3_REMNANT_CUTOVER_BRIEF.md §1; Rick,
+      # 2026-11-05): the staged shekyld needs no C++ runtime and carries none
+      # of our C++'s symbols, and no Rust extern block imports a C-linkage
+      # name declared under src/. Selftest first, so a gate that cannot
+      # fail is caught before it passes.
+      - name: the daemon is Rust alone (no C++ in its link, no Rust import of our C)
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: bash
+        run: |
+          python3 scripts/ci/check_rust_only_daemon.py --selftest
+          python3 scripts/ci/check_rust_only_daemon.py build/bin/shekyld
       - name: live-daemon gates
         if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         # `shell: bash` like the CTest-artifact step below, and for the same
@@ -390,7 +396,7 @@ jobs:
       # (CMakeLists.txt refuses BUILD_SHARED_LIBS), so test binaries are
       # statically linked against in-tree libraries and the tar can drop
       # *.o / *.a / CMakeFiles.
-      # They still need SYSTEM libraries (boost, ssl, sodium, unwind)
+      # They still need SYSTEM libraries (boost, ssl, sodium)
       # that the test job installs. CMake bakes absolute paths into
       # CTestTestfile.cmake; both jobs use container ubuntu:24.04 +
       # actions/checkout, so github.workspace is `/__w/shekyl-core/shekyl-core`
@@ -545,6 +551,127 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --locked --no-deps --lib -p shekyl-win-sec
 
+      # TB-7 part 2 on Windows. This is the only job that compiles this
+      # crate's Windows code, so clippy for it lives here too.
+      #
+      # `the_managed_launch_environment_is_exact` reads `Command::get_envs`,
+      # which lists variables the builder set and cannot see `env_clear`.
+      # The proof that the child inherits nothing else, and that `SystemRoot`
+      # is `GetSystemWindowsDirectoryW` rather than the parent's value, is
+      # `managed_tor_child_inherits_no_environment`: it re-executes with a
+      # poisoned `SystemRoot` and reads the environment the shim received.
+      #
+      # `--exact` plus "1 passed": a renamed test matches nothing and cargo
+      # exits 0, which is not a pass.
+      - name: "TB-7: clippy -D warnings (shekyl-tor-control-client, Windows)"
+        shell: pwsh
+        working-directory: rust
+        run: cargo clippy --locked -p shekyl-tor-control-client --all-targets -- -D warnings
+
+      - name: "TB-7: the managed launch environment pair list"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          # As in the WP-W5 step below: a non-zero cargo exit must reach
+          # $LASTEXITCODE and the printed output, not end the block first.
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p shekyl-tor-control-client --lib -- control::launch::tests::the_managed_launch_environment_is_exact --exact *> tb7-env.out
+          $rc = $LASTEXITCODE
+          Get-Content tb7-env.out
+          if ($rc -ne 0) { exit $rc }
+          if (-not (Select-String -Path tb7-env.out -Pattern 'test result: ok\. 1 passed' -Quiet)) {
+            Write-Error "the TB-7 environment pair-list test did not run"
+            exit 1
+          }
+
+      - name: "TB-7: the managed tor inherits no environment"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p shekyl-tor-control-client --lib -- control::launch::tests::managed_tor_child_inherits_no_environment --exact *> tb7-inherit.out
+          $rc = $LASTEXITCODE
+          Get-Content tb7-inherit.out
+          if ($rc -ne 0) { exit $rc }
+          if (-not (Select-String -Path tb7-inherit.out -Pattern 'test result: ok\. 1 passed' -Quiet)) {
+            Write-Error "the TB-7 inheritance test did not run"
+            exit 1
+          }
+
+      # TSR-Q7 on Windows: the launch module's tests compiled for Windows,
+      # among them the loopback control pair (`ControlPair::new`, which
+      # accepts only its own connect) and the spawn that marks tor's end
+      # inheritable under the spawn lock (the environment test above spawns
+      # through it). Floor = the module's Windows test count (6), so a test
+      # that is cfg'd away or renamed fails here instead of passing as
+      # nothing run.
+      - name: "TSR-Q7: the launch module's tests (Windows)"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p shekyl-tor-control-client --lib -- control::launch::tests:: *> tsr-q7-launch.out
+          $rc = $LASTEXITCODE
+          Get-Content tsr-q7-launch.out
+          if ($rc -ne 0) { exit $rc }
+          $passed = Select-String -Path tsr-q7-launch.out -Pattern 'test result: ok\. (\d+) passed' | ForEach-Object { [int]$_.Matches[0].Groups[1].Value } | Select-Object -First 1
+          if (-not $passed -or $passed -lt 6) {
+            Write-Error "the launch module ran $passed tests on Windows; the floor is 6"
+            exit 1
+          }
+
+      # DC-F39 / DC-F40 / DC-F42 (DAEMON_CONFIG_CUTOVER.md §11): the daemon
+      # crates' tests on MSVC, the RPC crate among them (review 3 §3). Nothing ran them here before, and the first Windows
+      # run found a lib test that did not link (link.exe resolves every
+      # symbol an object references before it discards anything, where GNU
+      # ld and lld drop the unreferenced ones) and nine tests whose fixtures
+      # assumed `/` paths and LF line ends. BLOCKING, with a floor per lib
+      # test binary so a crate whose tests were cfg'd away or filtered out
+      # fails here instead of passing as nothing run (rule 47). shekyl-process's
+      # `dc_q21_a_fault_ends_with_its_code` writes a scratch per-application
+      # `LocalDumps` policy under HKLM for its own binary (DC-F44) and so
+      # needs an elevated session, which this runner is; it refuses with the
+      # reason, never skips, when it is not.
+      - name: "DC-F39: the daemon crates' tests link and pass on MSVC"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-ffi -p shekyl-process --no-fail-fast *> daemon-crates.out
+          $rc = $LASTEXITCODE
+          Get-Content daemon-crates.out
+          if ($rc -ne 0) { exit $rc }
+          # A floor is per test binary, keyed by its name under deps\. The
+          # libs are the crates' own; shekyl-process's lib tests are all Unix
+          # (core limits, dumpable, procctl), so its Windows floor is the
+          # integration test that faults a child under hardening, which moved
+          # here from shekyl-ffi with the code. Windows counts at the p2p
+          # cutover (2026-11-05): options 31, daemon 44, daemon-config 63,
+          # daemon-rpc 180, ffi 97, dc_q21_a_fault_ends_with_its_code 4. The
+          # cutover deleted the seam-facts and p2p halves of daemon-rpc and
+          # ffi; shekyl-cli, which took daemon-rpc's console tests (R8), is
+          # covered by the Rust workspace job, not this MSVC link step.
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 170; 'shekyl_ffi-' = 80; 'dc_q21_a_fault_ends_with_its_code-' = 4 }
+          $lines = Get-Content daemon-crates.out
+          foreach ($binary in $floors.Keys) {
+            $at = ($lines | Select-String -Pattern ("Running .*\\deps\\" + [regex]::Escape($binary)) | Select-Object -First 1).LineNumber
+            if (-not $at) { Write-Error "no test binary ran for $binary"; exit 1 }
+            # This binary's own block: up to the next binary's Running line
+            # or cargo's Doc-tests header, so a missing result is never read
+            # off what follows. Case-sensitive: Select-String ignores case by
+            # default, and libtest's own "running N tests" line is the
+            # block's second.
+            $next = ($lines[$at..($lines.Length - 1)] | Select-String -CaseSensitive -Pattern '^\s*(Running|Doc-tests) ' | Select-Object -First 1).LineNumber
+            $end = if ($next) { $at + $next - 2 } else { $lines.Length - 1 }
+            $result = $lines[$at..$end] | Select-String -Pattern 'test result: ok\. (\d+) passed' | Select-Object -First 1
+            if (-not $result) { Write-Error "no passing result line in the $binary tests"; exit 1 }
+            $passed = [int]$result.Matches[0].Groups[1].Value
+            if ($passed -lt $floors[$binary]) {
+              Write-Error "the $binary tests passed $passed on Windows; the floor is $($floors[$binary])"
+              exit 1
+            }
+          }
+
       # The pre-registered probes (docs/design/WINDOWS_WALLET_PROBE_SHEET.md).
       # BLOCKING, and that is the point of writing them down first: each probe
       # carries a prediction made before any Windows machine ran it, and the
@@ -673,7 +800,7 @@ jobs:
         env:
           VCPKG_BINARY_SOURCES: clear;files,C:\vcpkg\archives,readwrite
         run: |
-          vcpkg install --triplet x64-windows-static --overlay-ports="${{ github.workspace }}/vcpkg-overlay/ports" boost openssl libsodium libusb lmdb
+          vcpkg install --triplet x64-windows-static --overlay-ports="${{ github.workspace }}/vcpkg-overlay/ports" boost openssl libsodium
       - name: save vcpkg cache
         if: steps.vcpkg-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
@@ -691,9 +818,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DSTATIC=ON `
             -DBUILD_SHARED_LIBS=OFF `
-            -DBUILD_TESTS=OFF `
-            -DSTACK_TRACE=OFF `
-            -DUSE_DEVICE_TREZOR=OFF `
+            -DBUILD_TESTS=ON `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
       # Daemon only. The C++ wallet stack was deleted at Phase 5, and the
@@ -704,96 +829,45 @@ jobs:
       # WP-W5 of that design round owns renaming this job back.
       - name: build daemon
         shell: pwsh
+        # The link gate is the script: shekyld exists, and the link log
+        # has no LNK4098. The importer, mdb_copy and core_tests are gone
+        # with the C++ chain.
         run: |
-          # mdb_copy rides along (one vendored C file): the daemon's prune
-          # warning names shekyl-mdb-copy, so its MSVC compile-fit is gated
-          # here rather than discovered by the first Windows operator.
-          cmake --build build --config Release --target daemon mdb_copy --parallel 2
-      - name: smoke-test daemonizer removal
+          pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage link
+      # The PE half of the hardening gate on the linked daemon: PE32+ and
+      # DllCharacteristics with DYNAMIC_BASE, HIGH_ENTROPY_VA and NX_COMPAT
+      # (DAEMON_CONFIG_CUTOVER.md DC-Q21). The runner image's LLVM supplies
+      # llvm-readobj; the script also reads dumpbin's shape inside a
+      # developer shell. `/GS` leaves no header mark and is not read here.
+      - name: binary hardening on the linked daemon (PE headers)
+        shell: bash
+        run: scripts/ci/check_binary_hardening.sh build/bin/Release/shekyld.exe
+      - name: smoke-test daemon boot and stop
         shell: pwsh
-        # After the V3.1 daemonizer removal, shekyld.exe must (a) link
-        # cleanly on MSVC without the src/daemonizer/ subsystem, (b) run
-        # without invoking the removed POSIX fork() / Windows SCM code
-        # paths, and (c) intercept the retired CLI flags via
-        # src/common/removed_flags.{h,cpp}.
+        # The daemon's runtime gate on Windows: boot the built shekyld.exe
+        # offline on regtest with a fresh data directory and a free RPC port,
+        # wait until it answers get_info, ask it to stop over RPC, and assert
+        # it exits 0 within a timeout having created its chain store
+        # (scripts/ci/daemon_boot_stop_smoke.ps1, which asserts each of its
+        # subjects: rule 47).
         #
-        # The removed-flag assertions cover shekyld alone. They used to
-        # cover the C++ wallet-rpc too, but that binary is deleted (its
-        # name and install slot went to the Rust shekyl-wallet-rpc in the
-        # C1/C2 cutover). They cannot transfer to the Rust binary: the
-        # migration message they grep for comes from
-        # src/common/removed_flags.{h,cpp}, and clap answers "unexpected
-        # argument" instead. The shim's wallet-side caller
-        # (src/wallet/wallet_args.cpp) was deleted with wallet2 at Phase 5,
-        # so shekyld is now the shim's only caller.
+        # It replaces the daemonizer-removal smoke test (Rick, 2026-10-14).
+        # That step re-proved the link the build step already proves,
+        # asserted that a deleted code path did nothing, and pinned the
+        # removed_flags shim the daemon-configuration cutover deletes
+        # (DAEMON_CONFIG_CUTOVER.md, DC-Q4); its --help check returned
+        # before the logger was initialised, so it exercised less than its
+        # comment claimed.
         #
-        # No wallet binary is checked on Windows because none is built
-        # there — `BuildRust.cmake` skips them, tracked in docs/FOLLOWUPS.md
-        # under "Rust wallet stack: no Windows support". Not because the
-        # stack is Unix-only: that stopped being true on 2026-08-25, when
-        # both binaries were observed compiling and linking for
-        # x86_64-pc-windows-msvc with their end-to-end tests passing. What
-        # is unverified is the CMake path, staging, install and archive
-        # layout, so WP-W5 removes the gate deliberately rather than as a
-        # side effect. This job is the daemon's MSVC gate until then. --help
-        # exits 0 after printing the option list, which exercises the full
-        # argument-parsing + logger-init path without waiting on a network
-        # port. --detach is expected to exit nonzero with the V3.1
-        # migration message; grepping the message pins the shim so a
-        # future regression ("unknown option --detach") fails CI loudly
-        # rather than shipping as a user-visible downgrade. The checks
-        # are intentionally Windows-only because POSIX fork / Windows SCM
-        # behaviors diverge at exactly this boundary.
+        # The cutover extends this job on the same daemon: the Rust main()
+        # and its one stop path; a second daemon on the same data directory
+        # refused by the lock; a config directory whose access list grants
+        # Users write refused with exit 2; another network's data directory
+        # refused by the marker; and a daemon in its own process group sent
+        # Ctrl-Break takes its one stop path (Rick, 2026-10-22). RT-W14 later
+        # adds a service-manager case (install, start, SERVICE_RUNNING, stop).
         run: |
-          # Native invocations go through `cmd /c` rather than PowerShell's `&`
-          # operator. The previous two iterations of this step hit PowerShell
-          # gotchas (array-vs-scalar -notmatch on 2>&1 output, then
-          # $PSNativeCommandUseErrorActionPreference turning expected-nonzero
-          # exits into terminating errors before $LASTEXITCODE could be read).
-          # cmd.exe has none of that behavior — exit code is just the exit
-          # code, stderr merges to the file via `2>&1` without any ErrorRecord
-          # elevation. PowerShell is reduced to "inspect $LASTEXITCODE" and
-          # "Select-String on a file," which are the well-behaved parts.
-          $ErrorActionPreference = 'Stop'
-          $daemon = 'build\bin\Release\shekyld.exe'
-
-          function Assert-HelpOk([string]$exe, [string]$label) {
-            cmd /c "`"$exe`" --help > NUL 2>&1"
-            if ($LASTEXITCODE -ne 0) {
-              throw "$label --help failed with exit $LASTEXITCODE"
-            }
-          }
-
-          function Assert-RemovedFlag([string]$exe, [string]$label, [string]$flag) {
-            $outFile = New-TemporaryFile
-            try {
-              cmd /c "`"$exe`" $flag > `"$outFile`" 2>&1"
-              $exit = $LASTEXITCODE
-              $out  = Get-Content -Raw -LiteralPath $outFile
-              if ($exit -eq 0) {
-                throw "$label $flag unexpectedly succeeded; output: $out"
-              }
-              if ($out -notmatch 'was removed in V3\.1') {
-                throw "$label $flag did not produce the V3.1 migration message; output: $out"
-              }
-            } finally {
-              Remove-Item -LiteralPath $outFile -ErrorAction SilentlyContinue
-            }
-          }
-
-          Assert-HelpOk $daemon 'shekyld'
-          Assert-RemovedFlag $daemon 'shekyld' '--detach'
-
-          # Both Assert-RemovedFlag calls deliberately leave $LASTEXITCODE
-          # nonzero — that's exactly what we're asserting on. GitHub Actions'
-          # pwsh shell wrapper is literally:
-          #     pwsh -Command ". '$script'; if (Test-Path variable:\LASTEXITCODE) { exit $LASTEXITCODE }"
-          # so a script that returns successfully but leaves $LASTEXITCODE=1
-          # behind (from the last native command) gets miscategorized as a
-          # failed step. Reset explicitly. Any earlier failure fires `throw`
-          # inside the Assert-* helpers, which aborts before we get here, so
-          # this only runs on genuine success.
-          exit 0
+          pwsh -NoProfile -File scripts/ci/daemon_boot_stop_smoke.ps1 -Daemon 'build\bin\Release\shekyld.exe'
 
   source-archive:
     name: "source archive"

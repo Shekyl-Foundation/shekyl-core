@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use shekyl_archival_retention::MAX_CLAIM_AGE_W;
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::kem::HybridKemPublicKey;
 use shekyl_engine_state::pscan_cursor::PScanCursor;
@@ -26,14 +26,14 @@ use shekyl_scanner::ScannableBlock;
 use shekyl_units::AtomicUnits;
 
 use crate::engine::pscan::scan_step::BondPostMatch;
+use crate::engine::stake_engine::test_fixtures::ephemeral_body_store;
 use crate::engine::stake_engine::{PSlot, StakeEngineHandle};
 use crate::engine::test_support::{make_synthetic_block, TestDaemon, DEFAULT_TEST_SEED};
 
 const SEED: [u8; MASTER_SEED_BYTES] = [0x33u8; MASTER_SEED_BYTES];
 
 fn persona(slot: u32) -> ArchivalPKeys {
-    derive_archival_p_keys(&SEED, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
-        .expect("derive persona")
+    derive_archival_p_keys(&SEED, Network::Mainnet, slot).expect("derive persona")
 }
 
 fn canonical_id(p: &ArchivalPKeys) -> PCanonicalId {
@@ -80,7 +80,7 @@ fn chain(len: usize, recipient_blocks: &[(usize, ScannableBlock)]) -> Vec<Scanna
         sb.block.transaction_hashes = sb
             .transactions
             .iter()
-            .map(shekyl_wire::Transaction::hash)
+            .map(shekyl_wire::BoundTx::txid)
             .collect();
         sb.block.header.previous = prev;
         prev = sb.block.hash();
@@ -129,7 +129,7 @@ fn spawn_stake(bonded: &[u32]) -> StakeEngineHandle {
         .map(|&s| (PSlot::from_raw(s), persona(s)))
         .collect();
     let bonded: BTreeSet<PSlot> = bonded.iter().map(|&s| PSlot::from_raw(s)).collect();
-    StakeEngineHandle::spawn(bundles, bonded, None)
+    StakeEngineHandle::spawn(bundles, bonded, None, ephemeral_body_store(), [0; 16])
 }
 
 /// A tiny test horizon so a sweep needs only a few real blocks.
@@ -341,7 +341,7 @@ fn record_releases_records_only_release_posts() {
         &[BondPostMatch {
             height: BlockHeight::from_raw(1),
             p_canonical_id: canonical_id(&p),
-            post_kind: 0, // JoinMarket
+            post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET, // JoinMarket
         }],
     );
     assert!(accrual2.pending_releases().is_empty());

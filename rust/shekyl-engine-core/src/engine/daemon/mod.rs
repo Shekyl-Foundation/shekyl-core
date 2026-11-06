@@ -68,15 +68,9 @@ use shekyl_wire::Transaction;
 use crate::engine::traits::{DaemonEngine, DaemonHealth, FeeEstimates, TxSubmitOutcome};
 use crate::engine::transaction_submitter::submit_outcome_from_verdict;
 
-// One owner for the grace-block horizon: the constant lives in
-// `shekyl-rpc-client` (a first-class workspace crate since the
-// un-vendoring — the old "not re-exporting vendored internals"
-// rationale for a local copy no longer applies).
-use shekyl_rpc_client::GRACE_BLOCKS_FOR_FEE_ESTIMATE;
-
 /// Map a daemon `get_fee_estimate` reply onto the three-tier
-/// [`FeeEstimates`] snapshot, deriving every tier and the rounding mask
-/// from this **one** response.
+/// [`FeeEstimates`] snapshot, deriving every tier from this **one**
+/// response.
 ///
 /// Parses through [`GetFeeEstimateResponse`] so a wire-arity change is a
 /// type error here rather than a local JSON destructure the shared
@@ -84,18 +78,15 @@ use shekyl_rpc_client::GRACE_BLOCKS_FOR_FEE_ESTIMATE;
 /// / [`FeeTier::High`] — one slot each, `[economy, standard, priority]`.
 ///
 /// A missing `fees` array is malformed, not a legacy scalar to synthesize
-/// from: Shekyl genesis is already 2021-scaling, and the invented
-/// `×1 / ×5 / ×1000` band is gone.
+/// tiers from: the daemon serves the three-rung ladder from genesis.
 fn fee_estimates_from_reply(reply: &GetFeeEstimateResponse) -> Result<FeeEstimates, RpcError> {
     if !reply.status.is_ok() {
         return Err(RpcError::InvalidFee);
     }
-    let mask = reply.quantization_mask;
     Ok(FeeEstimates {
-        economy: FeeRate::new(reply.fees.get(FeeTier::Low), mask)?,
-        standard: FeeRate::new(reply.fees.get(FeeTier::Normal), mask)?,
-        priority: FeeRate::new(reply.fees.get(FeeTier::High), mask)?,
-        quantization_mask: mask,
+        economy: FeeRate::new(reply.fees.get(FeeTier::Low))?,
+        standard: FeeRate::new(reply.fees.get(FeeTier::Normal))?,
+        priority: FeeRate::new(reply.fees.get(FeeTier::High))?,
     })
 }
 
@@ -109,55 +100,17 @@ fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
 ///
 /// Cross-cutting lock 5 (`WALLET_REWRITE_PLAN.md` :216): the daemon's
 /// network is verified before any wallet operation. Comparison itself lives
-/// in [`shekyl_rpc_types::IdentityExpectation`]; this type is the wallet
-/// mapping (`shekyl_address::Network` has no `Fakechain`).
+/// in [`shekyl_rpc_types::IdentityExpectation`]: the daemon's network is the
+/// wallet's, on every network (`NETWORK_IDENTITY.md` NI-Q8).
 #[derive(Debug, Clone)]
 pub struct DaemonExpectation {
     /// The network this wallet is bound to.
     pub network: shekyl_address::Network,
-    /// Whether a `fakechain` daemon is acceptable.
-    pub fakechain: FakechainPolicy,
-}
-
-/// Whether a wallet may run against a `shekyld --regtest` daemon (`VC-D6`).
-///
-/// **Typed, defaulted to `Refuse`, and armed only in-process by the regtest
-/// harness and by tests. There is no operator flag and none ships** (`VC-R3`).
-/// A `fakechain` daemon takes mainnet's configuration
-/// (`cryptonote_config.h:562`), so it reports mainnet's genesis hash, mainnet's
-/// constants digest and the same RPC version: three of the four axes are blind
-/// to it by construction and `nettype` is the only one that can see it. A
-/// shipped flag would therefore be a documented off-switch for the sole
-/// defence against a mainnet wallet scanning a regtest chain with real
-/// addresses. The asymmetry decides it — no flag costs a rare workflow some
-/// friction; the flag costs the defence.
-///
-/// Reopening criterion: a *named* operator task that requires it, at which
-/// point the surface is derived from that task rather than provisioned ahead
-/// of it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FakechainPolicy {
-    /// A daemon reporting `fakechain` is refused. The default, and the only
-    /// value any shipped path selects.
-    #[default]
-    Refuse,
-    /// A `fakechain` daemon is accepted. Set by `regtest_e2e` and by tests.
-    Accept,
 }
 
 impl DaemonExpectation {
     fn pins(&self) -> shekyl_rpc_types::IdentityExpectation {
-        let network = match self.network {
-            shekyl_address::Network::Mainnet => shekyl_rpc_types::DaemonNetwork::Mainnet,
-            shekyl_address::Network::Testnet => shekyl_rpc_types::DaemonNetwork::Testnet,
-            shekyl_address::Network::Stagenet => shekyl_rpc_types::DaemonNetwork::Stagenet,
-        };
-        match self.fakechain {
-            FakechainPolicy::Refuse => shekyl_rpc_types::IdentityExpectation::exact(network),
-            FakechainPolicy::Accept => {
-                shekyl_rpc_types::IdentityExpectation::exact_or_fakechain(network)
-            }
-        }
+        shekyl_rpc_types::IdentityExpectation::exact(self.network)
     }
 }
 
@@ -243,11 +196,21 @@ impl DaemonClient {
         &self,
         expected: &DaemonExpectation,
     ) -> Result<(), HandshakeFail> {
-        let reply = fetch_get_version(&self.inner).await?;
+        let result = fetch_get_version(&self.inner).await?;
+        // One read for every client (`RK-D25`): the version first, then the
+        // strict decode, then the rest of the tuple.
         expected
             .pins()
-            .check(&reply)
-            .map_err(HandshakeFail::Mismatch)
+            .read(&result)
+            .map(|_| ())
+            .map_err(|refusal| {
+                if let Some(evidence) = &refusal.evidence {
+                    // The daemon's own text: logged here, not carried in the
+                    // mismatch, which stays a fixed-size value.
+                    tracing::warn!(%evidence, "daemon get_version reply unreadable");
+                }
+                HandshakeFail::Mismatch(refusal.mismatch)
+            })
     }
 
     /// Fetch the block at `number` as a [`ScannableBlock`] via the native
@@ -273,12 +236,14 @@ enum HandshakeFail {
     Mismatch(shekyl_rpc_types::IdentityMismatch),
 }
 
-/// Fetch `get_version` without going through [`DaemonClient::post`] (that
-/// would recurse into the handshake). A JSON-RPC **error** object is
-/// transport — the daemon is reachable but not ready — not a wire mismatch.
-async fn fetch_get_version(
-    inner: &HttpRpc,
-) -> Result<shekyl_rpc_types::GetVersionResponse, HandshakeFail> {
+/// Fetch `get_version`'s `result`, undecoded, without going through
+/// [`DaemonClient::post`] (that would recurse into the handshake). A
+/// JSON-RPC **error** object is transport — the daemon is reachable but not
+/// ready — not a wire mismatch.
+///
+/// The result is returned as it arrived because decoding it is
+/// `IdentityExpectation::read`'s: the version is read before anything else.
+async fn fetch_get_version(inner: &HttpRpc) -> Result<Value, HandshakeFail> {
     let body = serde_json::to_vec(&json!({
         "jsonrpc": "2.0",
         "id": 0,
@@ -300,15 +265,15 @@ async fn fetch_get_version(
             format!("get_version: {message}"),
         )));
     }
-    let result = envelope
+    envelope
         .get("result")
-        .ok_or_else(|| unreadable_reply("malformed get_version reply: no result"))?;
-    serde_json::from_value(result.clone()).map_err(unreadable_reply)
+        .cloned()
+        .ok_or_else(|| unreadable_reply("malformed get_version reply: no result"))
 }
 
-/// A `get_version` reply this build cannot read. What failed to parse is the
-/// daemon's text: it goes to the log here and is not carried in the
-/// mismatch, which stays a fixed-size value.
+/// A `get_version` response with no JSON-RPC envelope this build can read.
+/// What failed to parse is the daemon's text: it goes to the log here and is
+/// not carried in the mismatch, which stays a fixed-size value.
 fn unreadable_reply(evidence: impl std::fmt::Display) -> HandshakeFail {
     tracing::warn!(%evidence, "daemon get_version reply unreadable");
     HandshakeFail::Mismatch(shekyl_rpc_types::IdentityMismatch::unreadable())
@@ -341,18 +306,16 @@ impl DaemonEngine for DaemonClient {
     ///
     /// Issues **one** `get_fee_estimate` JSON-RPC call and maps its
     /// response onto all three non-`Custom`
-    /// [`FeePriority`](super::FeePriority) tiers plus the snapshot
-    /// `quantization_mask` via [`GetFeeEstimateResponse`] — not three
+    /// [`FeePriority`](super::FeePriority) tiers via
+    /// [`GetFeeEstimateResponse`] — not three
     /// per-tier [`Rpc::get_fee_rate`] calls, so the tier band carries no
     /// tier-vs-tier skew from interleaved reads.
     fn get_fee_estimates(&self) -> impl Send + Future<Output = Result<FeeEstimates, Self::Error>> {
         async move {
-            let reply: GetFeeEstimateResponse = self
-                .json_rpc_call(
-                    "get_fee_estimate",
-                    Some(json!({ "grace_blocks": GRACE_BLOCKS_FOR_FEE_ESTIMATE })),
-                )
-                .await?;
+            // No parameters: the ladder is a function of chain state alone
+            // (FL-R20, FL-R26; wire 3.57).
+            let reply: GetFeeEstimateResponse =
+                self.json_rpc_call("get_fee_estimate", None).await?;
             fee_estimates_from_reply(&reply)
         }
     }
@@ -396,6 +359,7 @@ impl DaemonEngine for DaemonClient {
                     );
                     return Ok(TxSubmitOutcome::Rejected {
                         cause: RejectCause::Malformed,
+                        row: None,
                     });
                 }
             };
@@ -410,8 +374,8 @@ impl DaemonEngine for DaemonClient {
     /// Snapshot daemon health via **one** `get_info` JSON-RPC read
     /// (§5.2 item 3). Identity is already gated at [`Rpc::post`].
     ///
-    /// The summed outgoing/incoming connection counts and the sync
-    /// position feed the §5.3 escape ladder's health gate.
+    /// Whether the daemon has peers and whether it is synchronized feed the
+    /// §5.3 escape ladder's health gate.
     ///
     /// The response decode lives in
     /// [`health_from_get_info`](synced_chain_facts::health_from_get_info)
@@ -422,8 +386,9 @@ impl DaemonEngine for DaemonClient {
     /// defensive-parsing rationale moved with it.
     fn get_health(&self) -> impl Send + Future<Output = Result<DaemonHealth, Self::Error>> {
         async move {
-            let info: Value = self.json_rpc_call("get_info", None).await?;
-            Ok(synced_chain_facts::health_from_get_info(&info)?)
+            let info: shekyl_rpc_types::GetInfoResponse =
+                self.json_rpc_call("get_info", None).await?;
+            Ok(synced_chain_facts::health_from_get_info(&info))
         }
     }
 }
@@ -484,12 +449,11 @@ mod tests {
             version: shekyl_rpc_types::CORE_RPC_VERSION,
             release: false,
             current_height: 1,
-            target_height: 0,
-            hard_forks: vec![],
+            target_height: shekyl_rpc_types::Nullable::NULL,
             consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
-            nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
+            nettype: shekyl_rpc_types::Network::Mainnet,
             genesis_hash: shekyl_rpc_types::HashHex::from_bytes(
-                shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::DaemonNetwork::Mainnet),
+                shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::Network::Mainnet),
             ),
         };
         edit(&mut reply);
@@ -506,7 +470,6 @@ mod tests {
     fn mainnet_expectation() -> DaemonExpectation {
         DaemonExpectation {
             network: shekyl_address::Network::Mainnet,
-            fakechain: FakechainPolicy::Refuse,
         }
     }
 
@@ -607,15 +570,15 @@ mod tests {
         // JSON for every network, so a testnet daemon from this same tree
         // carries the SAME digest and the SAME RPC version.
         let err = first_request_error(
-            version_reply(|r| r.nettype = shekyl_rpc_types::DaemonNetwork::Testnet),
+            version_reply(|r| r.nettype = shekyl_rpc_types::Network::Testnet),
             mainnet_expectation(),
         )
         .await;
         assert_eq!(
             refused_on(&err),
             shekyl_rpc_types::IdentityMismatch::Network {
-                ours: shekyl_rpc_types::DaemonNetwork::Mainnet,
-                theirs: shekyl_rpc_types::DaemonNetwork::Testnet,
+                ours: shekyl_rpc_types::Network::Mainnet,
+                theirs: shekyl_rpc_types::Network::Testnet,
             }
         );
         let out = err.to_string();
@@ -626,54 +589,82 @@ mod tests {
         );
     }
 
+    /// NI-Q8: a regtest daemon is a network like the others. A mainnet
+    /// wallet refuses it on the network axis; a regtest wallet takes it.
     #[tokio::test]
-    async fn a_fakechain_daemon_is_refused_by_default_and_accepted_only_when_armed() {
-        let fakechain =
-            || version_reply(|r| r.nettype = shekyl_rpc_types::DaemonNetwork::Fakechain);
-
-        // Default: refused. This is the shipped behaviour, and there is no
-        // operator flag that changes it (VC-R3).
-        let err = first_request_error(fakechain(), mainnet_expectation()).await;
+    async fn a_regtest_daemon_is_refused_by_mainnet_and_taken_by_regtest() {
+        let regtest = || {
+            version_reply(|r| {
+                r.nettype = shekyl_rpc_types::Network::Regtest;
+                r.genesis_hash = shekyl_rpc_types::HashHex::from_bytes(
+                    shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::Network::Regtest),
+                );
+            })
+        };
+        let err = first_request_error(regtest(), mainnet_expectation()).await;
         assert!(matches!(
             refused_on(&err),
             shekyl_rpc_types::IdentityMismatch::Network { .. }
         ));
-
-        // Armed in-process, as the regtest harness does.
         let client = client_for(
-            fakechain(),
+            regtest(),
             DaemonExpectation {
-                network: shekyl_address::Network::Mainnet,
-                fakechain: FakechainPolicy::Accept,
+                network: shekyl_address::Network::Regtest,
             },
         )
         .await;
         assert!(
             client.ensure_identity().await.is_ok(),
-            "the harness must be able to run against its own regtest daemon"
+            "a regtest wallet runs against a regtest daemon"
         );
     }
 
     #[tokio::test]
     async fn a_get_version_that_does_not_parse_is_reported_as_a_wire_mismatch() {
-        // VC-D16: the tuple fields are strict, so a daemon whose get_version
-        // shape moved fails deserialization before any axis is read. That IS
-        // the wire axis disagreeing and the operator must be told so.
+        // VC-D16: a reply with no readable version, and one that claims this
+        // build's version and then answers in another shape, are the wire
+        // axis disagreeing, and the operator must be told so.
+        for result in [
+            json!({"status": "OK"}),
+            json!({"status": "OK", "version": shekyl_rpc_types::CORE_RPC_VERSION}),
+        ] {
+            let err = first_request_error(
+                json!({"jsonrpc": "2.0", "id": "0", "result": result}).to_string(),
+                mainnet_expectation(),
+            )
+            .await;
+            assert_eq!(
+                refused_on(&err),
+                shekyl_rpc_types::IdentityMismatch::unreadable()
+            );
+            let out = err.to_string();
+            assert!(out.contains("does not match the RPC contract"), "{out}");
+            assert!(
+                out.contains("cannot be named here"),
+                "it must say the daemon's version is unavailable rather than guess: {out}"
+            );
+        }
+    }
+
+    /// The version is read before the rest (RK-Q11): a daemon of another
+    /// RPC version answers in a shape this build cannot decode, and is
+    /// still named. Before, this was the unreadable case above.
+    #[tokio::test]
+    async fn a_daemon_of_another_version_is_named_though_its_reply_does_not_decode() {
         let err = first_request_error(
-            json!({"jsonrpc": "2.0", "id": "0", "result": {"status": "OK", "version": 1}})
-                .to_string(),
+            json!({"jsonrpc": "2.0", "id": "0", "result": {
+                "version": 1, "a_member_this_build_has_never_heard_of": true,
+            }})
+            .to_string(),
             mainnet_expectation(),
         )
         .await;
         assert_eq!(
             refused_on(&err),
-            shekyl_rpc_types::IdentityMismatch::unreadable()
-        );
-        let out = err.to_string();
-        assert!(out.contains("does not match the RPC contract"), "{out}");
-        assert!(
-            out.contains("cannot be named here"),
-            "it must say the daemon's version is unavailable rather than guess: {out}"
+            shekyl_rpc_types::IdentityMismatch::Wire {
+                ours: shekyl_rpc_types::CORE_RPC_VERSION,
+                theirs: 1,
+            }
         );
     }
 
@@ -782,20 +773,17 @@ mod tests {
         );
     }
 
-    /// Tiers map Low/Normal/High onto `[economy, standard, priority]`,
-    /// and the shared `quantization_mask` lands on the snapshot.
+    /// Tiers map Low/Normal/High onto `[economy, standard, priority]`.
     #[test]
     fn fee_estimates_array_maps_the_three_priced_tiers() {
         let result = json!({
             "status": "OK",
             "fees": [100u64, 200, 400],
-            "quantization_mask": 8u64,
         });
         let est = fee_estimates_from_value(&result).expect("well-formed fee array");
-        assert_eq!(est.economy, FeeRate::new(100, 8).unwrap());
-        assert_eq!(est.standard, FeeRate::new(200, 8).unwrap());
-        assert_eq!(est.priority, FeeRate::new(400, 8).unwrap());
-        assert_eq!(est.quantization_mask, 8);
+        assert_eq!(est.economy, FeeRate::new(100).unwrap());
+        assert_eq!(est.standard, FeeRate::new(200).unwrap());
+        assert_eq!(est.priority, FeeRate::new(400).unwrap());
         assert_ne!(est.economy, est.priority);
     }
 
@@ -804,8 +792,8 @@ mod tests {
     #[test]
     fn fee_estimates_refuses_a_scalar_only_reply() {
         for reply in [
-            json!({"status": "OK", "fee": 10u64, "quantization_mask": 4u64}),
-            json!({"status": "OK", "fees": null, "fee": 10u64, "quantization_mask": 4u64}),
+            json!({"status": "OK", "fee": 10u64}),
+            json!({"status": "OK", "fees": null, "fee": 10u64}),
         ] {
             assert!(
                 matches!(fee_estimates_from_value(&reply), Err(RpcError::InvalidFee)),
@@ -819,7 +807,6 @@ mod tests {
         let result = json!({
             "status": "BUSY",
             "fees": [100u64, 200, 400],
-            "quantization_mask": 8u64,
         });
         assert!(matches!(
             fee_estimates_from_value(&result),
@@ -841,7 +828,6 @@ mod tests {
             let result = json!({
                 "status": "OK",
                 "fees": fees,
-                "quantization_mask": 8u64,
             });
             assert!(
                 matches!(fee_estimates_from_value(&result), Err(RpcError::InvalidFee)),
@@ -858,7 +844,6 @@ mod tests {
             "status": "OK",
             "fees": "oops",
             "fee": 10u64,
-            "quantization_mask": 8u64,
         });
         assert!(matches!(
             fee_estimates_from_value(&result),
@@ -866,27 +851,16 @@ mod tests {
         ));
     }
 
-    /// Absent `quantization_mask` is the wire default (`OPT(1)`), matching
-    /// [`GetFeeEstimateResponse`].
+    /// A reply still carrying the retired `quantization_mask` is refused:
+    /// the lattice is `shekyl_economics::FEE_QUANTIZATION_MASK`, a
+    /// constant the wallet and the daemon share, and a daemon that still
+    /// serves one is a daemon this wallet does not read a lattice from.
     #[test]
-    fn fee_estimates_absent_mask_is_the_wire_default() {
+    fn fee_estimates_refuses_a_reply_carrying_the_retired_mask() {
         let result = json!({
             "status": "OK",
             "fees": [100u64, 200, 400],
-        });
-        let est = fee_estimates_from_value(&result).expect("mask OPT(1)");
-        assert_eq!(est.quantization_mask, 1);
-        assert_eq!(est.priority, FeeRate::new(400, 1).unwrap());
-    }
-
-    /// `quantization_mask == 0` would make `FeeRate::new` reject; the
-    /// mapping surfaces that as `InvalidFee` rather than panicking.
-    #[test]
-    fn fee_estimates_rejects_zero_mask() {
-        let result = json!({
-            "status": "OK",
-            "fees": [100u64, 200, 400],
-            "quantization_mask": 0u64,
+            "quantization_mask": 8u64,
         });
         assert!(matches!(
             fee_estimates_from_value(&result),

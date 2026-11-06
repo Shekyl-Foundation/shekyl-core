@@ -84,13 +84,12 @@ scalar_u64! {
     /// (`SHT-Q2`, RULED 2026-09-29). Stored as a skeleton row, never
     /// declared or signed. A coinbase's is zero.
     ///
-    /// **The txid binding is pending.** A full body's length is fixed by its
-    /// bytes, which the txid already binds through the prunable hash; a
-    /// pruned form carries that hash but not the bytes, so its length is
-    /// bound by nothing until the txid gains the length term the ruling
-    /// names. That term is held on the ruling for how a pruned form supplies
-    /// the length (`ARCHIVAL_SHARD_T_DERIVATION.md` §8.6, the FOLLOWUPS
-    /// "Build SHT-Q2" row).
+    /// **The txid binds it.** The length is a word of the txid's preimage
+    /// (`shekyl-wire` `transaction/txid.rs`), so a transaction cannot keep its
+    /// id under another length. A full body's is measured from its bytes; a
+    /// pruned form, which holds the hash of those bytes but not the bytes, is
+    /// handed the length — the store's row, or a daemon reply's field — and
+    /// the id recomputed over it is what checks it.
     ///
     /// A distinct type because the partition it drives used to be a
     /// transaction count, and a `u64` would let a count, a storage id and a
@@ -175,6 +174,24 @@ const _: () = assert!(
     "a compact holdings set holds at least one shard"
 );
 
+/// The archival reorg depth `D_max` in blocks (`PDM-Q11`): how far behind the
+/// tip the chain is still treated as reorg-able. A segment freezes, a bond's
+/// assembly window closes and a pass anchors only below it, so a segment
+/// frozen and served inside a depth the rest of the system re-orgs was the
+/// hazard this one value prevents.
+///
+/// Sourced from `config/consensus_constants.json`
+/// (`archival_reorg_depth_blocks`, via this crate's `build.rs`); this is its
+/// one Rust home. `shekyl-curve-tree` (`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`)
+/// and `shekyl-archival-retention` (`ARCHIVAL_REORG_DEPTH_BLOCKS`) read it
+/// here. Structural, not swept (ESR-16 completion, ruling 3).
+pub const ARCHIVAL_REORG_DEPTH_BLOCKS: u64 = GENERATED_ARCHIVAL_REORG_DEPTH_BLOCKS;
+
+const _: () = assert!(
+    ARCHIVAL_REORG_DEPTH_BLOCKS > 0,
+    "a positive reorg depth: a zero margin freezes the tip"
+);
+
 /// Storage ids issued through `height` inclusive.
 ///
 /// `listed` is `cumulative_tx_count` at that height: non-coinbase
@@ -230,6 +247,10 @@ pub const ATTESTATION_WITNESS_NONCE_LEN: usize = 32;
 /// Anchor height on one witness entry.
 pub const ATTESTATION_WITNESS_ANCHOR_LEN: usize = 8;
 
+/// Delivery digest on one witness entry: the digest of the response `P`
+/// signed for, which admission cannot recompute.
+pub const ATTESTATION_WITNESS_DIGEST_LEN: usize = 32;
+
 /// One hybrid signature on a witness entry. Twin of
 /// `HybridSignature::CANONICAL_LEN` and `PQC_HYBRID_SINGLE_SIG_LEN`; both
 /// const-assert equality, so this factor cannot drift from the signature.
@@ -237,7 +258,7 @@ pub const ATTESTATION_WITNESS_SIGNATURE_LEN: usize = 3385;
 
 /// Exact maximum of a canonical attestation witness:
 /// count prefix, then [`MAX_ATTESTATION_RECORDS`] entries of
-/// nonce ‖ anchor height ‖ signature.
+/// nonce ‖ anchor height ‖ delivery digest ‖ signature.
 ///
 /// The retention crate derives the same product from
 /// `HybridSignature::CANONICAL_LEN` and const-asserts equality. The daemon
@@ -247,6 +268,7 @@ pub const MAX_ATTESTATION_WITNESS_BYTES: usize = ATTESTATION_WITNESS_COUNT_LEN
     + MAX_ATTESTATION_RECORDS
         * (ATTESTATION_WITNESS_NONCE_LEN
             + ATTESTATION_WITNESS_ANCHOR_LEN
+            + ATTESTATION_WITNESS_DIGEST_LEN
             + ATTESTATION_WITNESS_SIGNATURE_LEN);
 
 /// A block's attestation witness as it travels beside the block — the
@@ -260,7 +282,10 @@ pub const MAX_ATTESTATION_WITNESS_BYTES: usize = ATTESTATION_WITNESS_COUNT_LEN
 /// witness** — `Option<AttestationWitness>::None` — never an empty one, so
 /// the daemon store's rule that an empty witness is no row rather than an
 /// empty row (`blockchain_db.cpp:669–671`) holds by the type, and a reader
-/// that finds a row knows it has bytes to parse. Judged by CEN-B4
+/// that finds a row knows it has bytes to parse. The wire codec gives the
+/// empty set no bytes and refuses a zero count
+/// (`attestation_wire::WitnessError::ZeroCount`), so `Some` of a zero-count
+/// blob is refused by CEN-B4, never recorded. Judged by CEN-B4
 /// (`verify_block_attestation`); until that row lands in `validate` the
 /// bytes are carried and recorded under a coverage gap, not judged
 /// (DRS-E4 `DRS_E4_ARCHIVAL_WRITER.md` §3.2 phase 5).
@@ -584,7 +609,7 @@ impl BadInterval {
 /// instance of the module's placement argument): the daemon store **pins**
 /// it in its header at create and refuses a session under another value
 /// (S-CHAIN-W SCW-2); the rule set **carries** it — the genesis constant on
-/// every issued set, the regtest lever's value on a Fakechain set — so the
+/// every issued set, the regtest lever's value on a levered set — so the
 /// validator derives epochs, closes and slash deadlines from the rules in
 /// force and never from a process's environment (rule 71: nettype selects
 /// data, never control flow); and `shekyl-archival-retention` **computes**
@@ -621,15 +646,27 @@ impl core::fmt::Display for SettlementEpochBlocks {
 }
 
 mod bond;
+mod release;
 mod serve;
+mod settlement;
 mod slash;
+mod view;
 
 pub use bond::{
-    BondRecord, FirstPayingHeight, HeldShard, HeldShards, Holdings, HoldingsError, RMarket,
-    SigmaWorkMilli, MAX_BOND_KEY_BYTES,
+    BondRecord, CompleteTreeSet, CompleteTreeSetError, FirstPayingHeight, HeldShard, HeldShards,
+    Holdings, HoldingsError, RMarket, ReceiptSignPk, SigmaWorkMilli, MAX_BOND_KEY_BYTES,
+    RECEIPT_SIGN_PK_LEN,
 };
+pub use release::ReleasedRecord;
 pub use serve::{PassCount, ServedShard};
-pub use slash::{SlashLogEntry, SlashedHolding};
+pub use settlement::{
+    BlockDraws, DrawCommitment, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw,
+    SettlementOutcome, SettlementRow, SettlementRowError, SupportCount, SupportIssued,
+    SupportSeats, SupportSeatsError, BLOCK_DRAWS_LEN, COUNTED_DRAWS, DRAWABLE_DIGEST_LEN,
+    DRAW_COMMITMENT_LEN, ISSUED_DIGEST_LEN, SERVE_THRESHOLD_PASSES, SETTLEMENT_ROW_LEN,
+};
+pub use slash::{LoggedSlash, SlashLogEntry, SlashedHolding};
+pub use view::ShardView;
 
 #[cfg(test)]
 mod tests {

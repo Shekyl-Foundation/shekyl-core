@@ -1,0 +1,17 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-peer-bounds"
+description = "The peer-list protocol constants two layers read: the disclosure count the lists send and admit, and the frame layer bounds a handshake by. Dependency-free, so the frame layer does not depend on the lists."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true

@@ -1,0 +1,32 @@
+error[E0624]: method `record` is private
+  --> tests/trybuild/an_unfiltered_read_is_the_relay_views.rs:10:18
+   |
+10 |     let _ = pool.record(txid);
+   |                  ^^^^^^ private method
+   |
+  ::: src/pool.rs
+   |
+   |     pub(crate) fn record(&self, txid: &TxHash) -> Option<PoolRecord> {
+   |     ---------------------------------------------------------------- private method defined here
+
+error[E0624]: method `key_images` is private
+  --> tests/trybuild/an_unfiltered_read_is_the_relay_views.rs:11:18
+   |
+11 |     let _ = pool.key_images();
+   |                  ^^^^^^^^^^ private method
+   |
+  ::: src/pool.rs
+   |
+   |     pub(crate) fn key_images(&self) -> &KeyImages {
+   |     --------------------------------------------- private method defined here
+
+error[E0624]: method `len` is private
+  --> tests/trybuild/an_unfiltered_read_is_the_relay_views.rs:12:18
+   |
+12 |     let _ = pool.len();
+   |                  ^^^ private method
+   |
+  ::: src/pool.rs
+   |
+   |     pub(crate) fn len(&self) -> usize {
+   |     --------------------------------- private method defined here

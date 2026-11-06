@@ -24,7 +24,8 @@ pub type Verdict<T> = Result<T, InvalidBlock>;
 
 /// Invariant in `'id`: neither shrinks nor grows, so a value branded with
 /// one transaction's lifetime is not a value branded with any other's.
-type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
+/// Shared with [`crate::AltValid`]: both verdicts are branded the same way.
+pub(crate) type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 
 /// A block judged valid under one rule set against one view of one
 /// transaction.
@@ -109,7 +110,7 @@ impl<'id, V: ChainView<'id>> ChainValid<'id, V> {
     }
 
     /// The rule set the block was judged under — the set, not only its
-    /// id. A Fakechain `Fixed` target reuses [`RuleSetId::GENESIS`], so
+    /// id. A levered `Fixed` target reuses [`RuleSetId::GENESIS`], so
     /// `connect` compares this with the issued set `in_force` names.
     #[must_use]
     pub const fn rule_set(&self) -> RuleSet {
@@ -117,7 +118,7 @@ impl<'id, V: ChainView<'id>> ChainValid<'id, V> {
     }
 
     /// The id of the set the block was judged under. What the store
-    /// persists as `hf_versions`; not a proxy for set equality.
+    /// persists as `rule_set_in_force`; not a proxy for set equality.
     #[must_use]
     pub const fn rule_set_id(&self) -> RuleSetId {
         self.rule_set.id()

@@ -17,8 +17,9 @@ const CANDIDATE_BLEND: BlendMode = BlendMode::Difference;
 
 /// Rendering-spec version stamped into every recipe. Ruling A pins spec
 /// versions as chain data (a shard renders under the spec active at its
-/// creation height); until Stage 5 supplies creation heights a single
-/// version exists, and this stamp is what a future comparison keys on.
+/// close height, which every production view carries as `close_height`,
+/// `SV-D5`); while a single version exists there is nothing to select
+/// between, and this stamp is what a future comparison keys on.
 const SPEC_VERSION: &str = "candidate.v1";
 
 #[derive(Clone, Debug, Serialize, PartialEq)]

@@ -39,16 +39,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{normalize_seed, MASTER_SEED_BYTES, SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::kem::HybridKemPublicKey;
 use shekyl_scanner::bench_fixtures::{
-    build_typical_case_scannable_block, scannable_block_for_recipient,
+    bound, build_typical_case_scannable_block, fixture_prunable, scannable_block_for_recipient,
 };
 use shekyl_scanner::ScannableBlock;
 use shekyl_types::{BlockHash, BlockHeight, PSlot};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::Input;
+use shekyl_wire::Ct;
 
 use crate::engine::bond_assembly::{
     sweep_funding_outputs, SpentRecordsDurablyPruned, SweepOverflowPolicy,
@@ -84,11 +85,18 @@ pub struct Arm1FireReport {
     pub sweep_refuses_after_prune: bool,
 }
 
-const SEED: [u8; MASTER_SEED_BYTES] = [0x5Au8; MASTER_SEED_BYTES];
+/// The harness wallet's seed.
+const SEED: [u8; SEED_BYTES] = [0x5Au8; SEED_BYTES];
 const SLOT: u32 = 0;
 
+/// The master seed the wallet derives from [`SEED`]: every key, the
+/// personas included, expands from it.
+fn master_seed() -> zeroize::Zeroizing<[u8; MASTER_SEED_BYTES]> {
+    normalize_seed(&SEED)
+}
+
 fn persona() -> Result<ArchivalPKeys, String> {
-    derive_archival_p_keys(&SEED, DerivationNetwork::Fakechain, SeedFormat::Raw32, SLOT)
+    derive_archival_p_keys(&master_seed(), Network::Regtest, SLOT)
         .map_err(|e| format!("derive persona: {e}"))
 }
 
@@ -109,7 +117,7 @@ fn chain(mut block: ScannableBlock, previous: BlockHash) -> ScannableBlock {
     block.block.transaction_hashes = block
         .transactions
         .iter()
-        .map(shekyl_wire::transaction::Transaction::hash)
+        .map(shekyl_wire::BoundTx::txid)
         .collect();
     block
 }
@@ -118,11 +126,18 @@ fn chain(mut block: ScannableBlock, previous: BlockHash) -> ScannableBlock {
 /// input) — the on-chain spend of the watched output.
 fn spend_block(key_image: [u8; 32]) -> ScannableBlock {
     let mut block = build_typical_case_scannable_block(1);
-    block.transactions[0].prefix.inputs.push(Input::ToKey {
+    let mut tx = block.transactions.remove(0).into_tx();
+    tx.prefix.inputs.push(Input::ToKey {
         amount: 0,
         key_offsets: Vec::new(),
         key_image,
     });
+    // The body came out of a binding without its prunable region; it takes
+    // one sized to its two spend inputs before it is bound again.
+    if let Ct::Fcmp { prunable, .. } = &mut tx.ct {
+        *prunable = Some(fixture_prunable(2));
+    }
+    block.transactions.insert(0, bound(&tx));
     block
 }
 
@@ -147,10 +162,19 @@ fn expected_key_image(keys: &ArchivalPKeys, m: &FundingOutputMatch) -> Result<[u
 fn spawn_actor() -> Result<StakeEngineHandle, String> {
     let keys = persona()?;
     let slot = PSlot::from_raw(SLOT);
+    // `test_fixtures` is `cfg(test)`, and this harness is `not(test)`
+    // (Guard 1). The store is empty: the fire path does not serve.
+    let bodies =
+        shekyl_p_store::BodyStore::open_ephemeral(shekyl_p_store::StoreKey::from_bytes([0x5a; 32]))
+            .map_err(|e| e.to_string())?;
+    // The fire lane scans; it assembles no spend, so no signature is made
+    // under this id.
     Ok(StakeEngineHandle::spawn(
         BTreeMap::from([(slot, keys)]),
         BTreeSet::from([slot]),
         Some(slot),
+        bodies,
+        [0; 16],
     ))
 }
 
@@ -285,15 +309,12 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
     // Explicit production-shape construction (the RPC/CLI construction path,
     // not the cfg(test) convenience — which does not exist in this
     // compilation). Minimum-wall-clock KDF so the lane runs under a debug
-    // build; Stagenet+Bip39 is a permitted pair.
+    // build.
     let params = EngineCreateParams {
         base_path: &base,
         credentials: &creds,
         network: Network::Stagenet,
-        capability: CapabilityInput::Full {
-            master_seed_64: &SEED,
-            seed_format: SeedFormat::Bip39,
-        },
+        capability: CapabilityInput::Full { seed: &SEED },
         creation_timestamp: 0,
         restore_height_hint: 0,
         kdf: KdfParams {
@@ -308,6 +329,7 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
     Engine::<SoloSigner>::create(params, dummy_daemon().await?)
         .map_err(|e| format!("create: {e}"))?
         .close(&creds)
+        .await
         .map_err(|e| format!("close create: {e}"))?;
     let opened = Engine::<SoloSigner>::open_full(
         &base,
@@ -321,7 +343,10 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
     opened
         .persist_bond_record(PSlot::from_raw(SLOT))
         .map_err(|e| format!("persist: {e}"))?;
-    opened.close(&creds).map_err(|e| format!("close: {e}"))?;
+    opened
+        .close(&creds)
+        .await
+        .map_err(|e| format!("close: {e}"))?;
 
     // Control: no sealed scan evidence yet — every verdict is
     // `OutsideCovered`, so the reopen must KEEP the slot (and spawn the
@@ -341,21 +366,17 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
     } && control.has_stake_engine();
     control
         .close(&creds)
+        .await
         .map_err(|e| format!("close control: {e}"))?;
 
     // Build confirmed-absence evidence through the production path: scan a
     // chained fixture range (no bond posts anywhere) with the persona's real
     // scanner, then seal it with the production pscan seal.
-    // The WALLET's persona (same seed, the wallet's own network/format pair)
-    // — the derive-equivalence discipline: one primitive, the wallet's
+    // The WALLET's persona (same seed, the wallet's own network) — the
+    // derive-equivalence discipline: one primitive, the wallet's
     // parameters.
-    let keys = derive_archival_p_keys(
-        &SEED,
-        crate::engine::lifecycle::network_to_derivation(network),
-        SeedFormat::Bip39,
-        SLOT,
-    )
-    .map_err(|e| format!("derive wallet persona: {e}"))?;
+    let keys = derive_archival_p_keys(&master_seed(), network, SLOT)
+        .map_err(|e| format!("derive wallet persona: {e}"))?;
     let scanner = crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona(&keys)
         .map_err(|e| format!("scanner: {e}"))?;
     let b0 = chain(build_typical_case_scannable_block(1), BlockHash::NULL);
@@ -418,7 +439,10 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
         )
     };
     let reverted_to_non_staker = reverted && !after.has_stake_engine();
-    after.close(&creds).map_err(|e| format!("close: {e}"))?;
+    after
+        .close(&creds)
+        .await
+        .map_err(|e| format!("close: {e}"))?;
 
     Ok(Arm3FireReport {
         unscanned_slot_survived,

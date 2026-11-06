@@ -3,12 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The trace artifact: the LMDB-only facts and one digest checkpoint
-//! (`DRS_E2_REPLAY_DRIVER.md` §3.9, RD-Q2, RD-F18).
+//! The trace artifact: the facts, one checkpoint, and the archival
+//! snapshot's rows (`DRS_E2_REPLAY_DRIVER.md` §3.9, RD-Q2, RD-F18;
+//! `DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`).
 //!
-//! Produced by **one** C++ exporter walking LMDB and handing bytes across
-//! the FFI to [`TraceWriter`] — the whole of that C++ dies with the daemon
-//! (§1.3). Rust-minted and versioned (RD-F9), fixed layout, little-endian.
+//! The C++ LMDB exporter and the FFI it wrote through are gone with the
+//! daemon store (the harvest shim, §1.3). [`TraceWriter`] is the format
+//! the replay still reads. Rust-minted and versioned (RD-F9), fixed
+//! layout, little-endian.
 //!
 //! ```text
 //! header      magic "SHKTRAC\0" ‖ version u8 ‖ reserved[7] = 0
@@ -16,20 +18,45 @@
 //!                  ‖ burned u64 ‖ root_after[32] ‖ long_term_effective_median u64
 //!                  ‖ cumulative_difficulty u128                       (88 bytes after height)
 //! checkpoint  0x02 ‖ height u64 ‖ digest[32]                          (32 bytes after height)
+//! snapshot    0x04 ‖ height u64 ‖ for each of the ten archival families, in
+//!                  §3.8.1's order: n_rows u64 ‖ (len u32 ‖ row bytes)*   (80 bytes after height
+//!                                                                         when every family is empty)
 //! trailer     0xFF ‖ facts u64 ‖ checkpoints u64
 //! ```
 //!
 //! At most one checkpoint, at the **covered tip** (the last facts row):
-//! LMDB's spent set is tip-only (RD-F18), so a checkpoint at any other
-//! height would pair a past chain with the present set. The writer takes
-//! no height — it uses the last facts row — and refuses a second one and
-//! any facts after it. The on-disk height is that tip, so a reader can
-//! still name the expectation.
+//! the logical-state digest's spent set is the tip's (RD-F18), so a
+//! checkpoint at any other height would pair a past chain with the present
+//! set. The writer takes no height — it uses the last facts row — and
+//! refuses a second one and any facts after it. The on-disk height is that
+//! tip, so a reader can still name the expectation.
+//!
+//! # The checkpoint's two encodings (version `0x01`)
+//!
+//! The `0x02` record is the v0 digest — the chain / spent-set / curve-root
+//! state, unchanged. The `0x04` record is the **archival snapshot**
+//! (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1): the archival state at the same
+//! tip as canonical rows, ten positional families, which the replay
+//! compares row by row rather than through a hash (`ARW-25`: at one
+//! checkpoint per chain a diff names the family and the key a hash would
+//! only say differed). Under `TRACE_VERSION` `0x01` the two records are
+//! one checkpoint: a trace carrying the `0x02` record carries the `0x04`
+//! record at the same height, the writer refuses a `finish` with one and
+//! not the other ([`TraceFault::MissingSnapshot`]) and the reader refuses
+//! the file. An empty archival state is a `0x04` record of ten zero
+//! counts, never an omitted record.
+//!
+//! The reader accepts [`TRACE_VERSION`] alone. The `0x00` layout — no
+//! `0x04` record — was readable through DRS-E4 commit 6 while the six
+//! committed corpus traces still carried it; commit 7 re-captured them and
+//! the arm went with the last file that needed it (rule 15). A trace with
+//! a checkpoint and no snapshot is now a defect of the file, not a
+//! version.
 //!
 //! # The two doors (RD-Q2, RULED)
 //!
-//! A trace is read through exactly two typed doors, and the types are the
-//! grader's law:
+//! A trace is read through exactly two typed doors, and the types keep a
+//! comparison input from becoming a connect input:
 //!
 //! - [`Trace::borrow`] yields [`Borrowed<Facts>`] — the recorded values as
 //!   **comparison inputs** for the replay's oracles (roots, weights, the
@@ -40,23 +67,24 @@
 //!   NOT-PARITY-EVIDENCE while any came this way (§5). The last such fact
 //!   became the verdict's on 2026-09-29, and the conversion went with the
 //!   type; `borrow` feeds the oracles alone.
-//! - [`Trace::expect`] yields [`Expected<Digest>`] for the **grader
-//!   only**: the LMDB side's logical-state digest at a checkpoint. It is
+//! - [`Trace::expect`] yields [`Expected<Digest>`] for the comparison
+//!   alone: the baseline's logical-state digest at a checkpoint. It is
 //!   deliberately not convertible into anything `connect` accepts.
+//!   [`Trace::archival_snapshot`] is the same door for the archival rows:
+//!   `Expected<&ArchivalSnapshot>`, the comparison's partner and nothing a
+//!   connect can read.
 //!
-//! A grader that read a borrowed fact as evidence, or a connect that read an
+//! A replay that read a borrowed fact as evidence, or a connect that read an
 //! expectation as a fact, is a type error, not a review catch.
 //!
-//! # Checkpoints are computed in Rust
+//! # Checkpoints are the store's own digest
 //!
-//! The exporter asks the daemon's own LMDB digest walker
-//! (`BlockchainLMDB::logical_state_digest_v0`, one read snapshot across
-//! the three families) and hands the writer the finished 32 bytes through
-//! [`TraceWriter::push_checkpoint`]. That walker hashes through the FFI
-//! with `digest_v0` — the same function the redb read
-//! (`ReadSnapshot::logical_state_digest_v0`, commit 2) applies to its own
-//! families. The C++ never hashes; the two sides cannot have hashed
-//! differently. The checkpoint is the **outer** digest only: the redb read
+//! [`crate::rebaseline`] reads `logical_state_digest_v0` off the store a
+//! run left and hands the writer the finished 32 bytes through
+//! [`TraceWriter::push_checkpoint`]. That read hashes with `digest_v0`,
+//! the same function a later replay's `ReadSnapshot::logical_state_digest_v0`
+//! applies to its own families, so the two sides cannot have hashed
+//! differently. The checkpoint is the **outer** digest only: the read
 //! returns no components, so a DIVERGE names the height and not the
 //! family; if a real chain ever diverges, widening both sides to carry the
 //! three components is the diagnosis step (rule 21 reopener: the first
@@ -65,25 +93,31 @@
 //! # Reserved
 //!
 //! Tag `0x03` (**Verdict**, the mutation family, §3.8) is refused as
-//! [`TraceFault::ReservedTag`] until that family lands.
+//! [`TraceFault::ReservedTag`]: the family landed with its verdicts as
+//! code and the byte stays reserved so it is not re-minted (rule 23) —
+//! the archival snapshot is `0x04` for that reason.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::ops::RangeInclusive;
 
+use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFault};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight};
 use shekyl_units::AtomicUnits;
 
 /// The file's first eight bytes.
 pub const TRACE_MAGIC: [u8; 8] = *b"SHKTRAC\0";
-/// The layout this module reads and writes; bumped on any change.
-pub const TRACE_VERSION: u8 = 0x00;
+/// The layout this module writes and the only one it reads; bumped on any
+/// change. `0x01` added the archival snapshot record (DRS-E4 commit 6);
+/// `0x00`, the layout without it, is no longer read (commit 7).
+pub const TRACE_VERSION: u8 = 0x01;
 
 mod tag {
     pub const FACTS: u8 = 0x01;
     pub const CHECKPOINT: u8 = 0x02;
     pub const RESERVED_VERDICT: u8 = 0x03;
+    pub const ARCHIVAL_SNAPSHOT: u8 = 0x04;
     pub const TRAILER: u8 = 0xFF;
 }
 
@@ -132,8 +166,8 @@ pub enum TraceFault {
     /// The file does not start with [`TRACE_MAGIC`].
     #[error("not a trace: bad magic")]
     BadMagic,
-    /// A version this reader does not know.
-    #[error("trace version {found} is not {TRACE_VERSION}")]
+    /// A version other than [`TRACE_VERSION`].
+    #[error("trace version {found}: this reader accepts {TRACE_VERSION}")]
     UnsupportedVersion {
         /// The version byte found.
         found: u8,
@@ -189,6 +223,39 @@ pub enum TraceFault {
         /// The facts height that arrived too late.
         height: u64,
     },
+    /// An archival snapshot with no checkpoint to pair with: the two
+    /// records are one checkpoint's two encodings, and the digest's
+    /// `0x02` record names the height the snapshot is anchored at.
+    #[error("archival snapshot has no checkpoint to pair with")]
+    UnanchoredSnapshot,
+    /// An archival snapshot naming a height other than the checkpoint's.
+    #[error("archival snapshot at height {height} is not the checkpoint's tip {tip}")]
+    SnapshotNotTip {
+        /// The snapshot's height.
+        height: u64,
+        /// The checkpoint's height.
+        tip: u64,
+    },
+    /// A second archival snapshot: a trace carries one, with the checkpoint.
+    #[error("a second archival snapshot (the first was at height {height})")]
+    DuplicateSnapshot {
+        /// The height of the snapshot already recorded.
+        height: u64,
+    },
+    /// A checkpoint with no archival snapshot beside it — §3.8.1: an empty
+    /// archival state is a record of ten zero counts, never an omitted
+    /// record.
+    #[error(
+        "the checkpoint at height {height} has no archival snapshot; \
+         a trace carries both or neither"
+    )]
+    MissingSnapshot {
+        /// The checkpoint's height.
+        height: u64,
+    },
+    /// The snapshot's rows could not be read back as §3.8.1 rows.
+    #[error("archival snapshot: {0}")]
+    Snapshot(#[from] SnapshotFault),
     /// The trailer's counts disagree with the records read.
     #[error("trace trailer disagrees with the records: {what}")]
     TrailerMismatch {
@@ -205,35 +272,34 @@ pub enum TraceFault {
     TrailingBytes,
 }
 
-/// The five passed-through facts for one height, plus the two values LMDB
-/// recorded that Rust now derives and the replay holds it to (§3.4): the
-/// accumulator D4 reads (SI-10's observer) and the root after the drain
-/// (DRS-E3's oracle, CTW-5).
+/// The facts one height's store rows recorded, which a later replay holds
+/// its own derivation to (§3.4): the weights, the accumulator D4 reads
+/// (SI-10's observer), the burn, and the root after the drain (DRS-E3's
+/// oracle, CTW-5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Facts {
-    /// `block_info.bi_weight`.
+    /// The block's weight.
     pub weight: BlockWeight,
-    /// `block_info.bi_long_term_block_weight`.
+    /// The block's long-term weight.
     pub long_term_weight: LongTermWeight,
-    /// `block_info.bi_coins`.
+    /// Coins generated through this block.
     pub coins_generated: AtomicUnits,
-    /// `block_burn[h]`, zero when the row is absent.
+    /// The amount this block destroyed, zero when the row records none.
     pub burned: AtomicUnits,
-    /// `curve_tree_roots[h + 1]` — the root the C++ grower left after this
+    /// `curve_tree_roots[h + 1]` — the root the store recorded after this
     /// block's drain. **Not passed through** since DRS-E3: `validate`
     /// derives the root and `connect` records the verdict's. Kept in the
-    /// record as the comparison input for the derived-vs-trace oracle
+    /// record as the comparison input for the derived-vs-baseline oracle
     /// (`DRS_E3_CURVE_WRITER.md` §3.8, CTW-5), and read by CEN-B5 through
     /// the next captured header regardless.
     pub root_after: CurveTreeRoot,
     /// The long-term effective median in force for the block (S-CHAIN-R
-    /// A1, SCR-19). LMDB stores no such row: the exporter re-derives it
-    /// over the recorded long-term weights with the daemon's own rolling
-    /// median, exactly as `add_block` did; the weights oracle compares the
-    /// verdict's (CEN-G6) against it.
+    /// A1, SCR-19). The store records the median the block was judged
+    /// under; the weights oracle compares the verdict's (CEN-G6) against it.
     pub long_term_effective_median: LongTermWeight,
-    /// `block_info.bi_diff` — the accumulator D4 reads; recorded so the
-    /// SI-10 observer has the LMDB value to compare against.
+    /// Cumulative difficulty through this block — the accumulator D4 reads,
+    /// recorded so the SI-10 observer has the baseline's value to compare
+    /// against.
     pub cumulative_difficulty: CumulativeDifficulty,
 }
 
@@ -280,21 +346,21 @@ pub struct Borrowed<T>(T);
 
 impl<T> Borrowed<T> {
     /// The value, for a reader that must see it (a log, an artifact).
-    /// Not for the grader: an expectation comes through [`Trace::expect`].
+    /// Not an expectation: that comes through [`Trace::expect`].
     #[must_use]
     pub const fn value(&self) -> &T {
         &self.0
     }
 }
 
-/// A checkpoint read through the `expect` door: the LMDB side's logical
-/// state after a height, for the grader alone. Not convertible into a
+/// A checkpoint read through the `expect` door: the baseline's logical
+/// state after a height, for the comparison alone. Not convertible into a
 /// connect input.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Expected<T>(T);
 
 impl<T> Expected<T> {
-    /// The expectation, for the grader.
+    /// The expectation, for the comparison.
     #[must_use]
     pub const fn value(&self) -> &T {
         &self.0
@@ -305,7 +371,7 @@ impl<T> Expected<T> {
 // Writer
 // ---------------------------------------------------------------------------
 
-/// Writes a trace as the exporter hands facts and families across.
+/// Writes a trace as the caller hands facts and the checkpoint across.
 #[derive(Debug)]
 pub struct TraceWriter<W: Write> {
     out: W,
@@ -316,6 +382,9 @@ pub struct TraceWriter<W: Write> {
     facts: u64,
     /// The covered-tip height of the one checkpoint, once written.
     checkpointed: Option<u64>,
+    /// The height of the one archival snapshot, once written — the
+    /// checkpoint's.
+    snapshotted: Option<u64>,
 }
 
 impl<W: Write> TraceWriter<W> {
@@ -334,6 +403,7 @@ impl<W: Write> TraceWriter<W> {
             covered: None,
             facts: 0,
             checkpointed: None,
+            snapshotted: None,
         })
     }
 
@@ -366,10 +436,9 @@ impl<W: Write> TraceWriter<W> {
         Ok(())
     }
 
-    /// The logical state after the covered tip — the LMDB walker's digest
-    /// (module docs), or a redb-side state being recorded as an expectation
-    /// when re-baselining from Rust after cutover. Written at the last facts
-    /// height.
+    /// The logical state after the covered tip — the store's
+    /// `logical_state_digest_v0` (module docs), recorded as the expectation
+    /// a later replay compares. Written at the last facts height.
     ///
     /// # Errors
     ///
@@ -390,12 +459,42 @@ impl<W: Write> TraceWriter<W> {
         Ok(())
     }
 
+    /// The archival state at the checkpoint's height, as §3.8.1's rows —
+    /// the store's `archival_snapshot`. Written after
+    /// [`push_checkpoint`](Self::push_checkpoint), at its
+    /// height: the two records are one checkpoint's two encodings.
+    ///
+    /// # Errors
+    ///
+    /// [`TraceFault::UnanchoredSnapshot`] before a checkpoint,
+    /// [`TraceFault::DuplicateSnapshot`]; I/O.
+    pub fn push_archival_snapshot(
+        &mut self,
+        snapshot: &ArchivalSnapshot,
+    ) -> Result<(), TraceFault> {
+        let Some(h) = self.checkpointed else {
+            return Err(TraceFault::UnanchoredSnapshot);
+        };
+        if let Some(first) = self.snapshotted {
+            return Err(TraceFault::DuplicateSnapshot { height: first });
+        }
+        self.out.write_all(&[tag::ARCHIVAL_SNAPSHOT])?;
+        self.out.write_all(&h.to_le_bytes())?;
+        snapshot.write_body(&mut self.out)?;
+        self.snapshotted = Some(h);
+        Ok(())
+    }
+
     /// Write the trailer and hand the sink back.
     ///
     /// # Errors
     ///
-    /// I/O.
+    /// [`TraceFault::MissingSnapshot`] when a checkpoint was written and
+    /// its archival snapshot was not; I/O.
     pub fn finish(mut self) -> Result<W, TraceFault> {
+        if let (Some(height), None) = (self.checkpointed, self.snapshotted) {
+            return Err(TraceFault::MissingSnapshot { height });
+        }
         self.out.write_all(&[tag::TRAILER])?;
         self.out.write_all(&self.facts.to_le_bytes())?;
         let n_checkpoints = u64::from(self.checkpointed.is_some());
@@ -416,6 +515,8 @@ pub struct Trace {
     facts: BTreeMap<u64, Facts>,
     /// At most one, at the covered tip.
     checkpoint: Option<(u64, Digest)>,
+    /// With the checkpoint, at its height: `Some` iff `checkpoint` is.
+    snapshot: Option<(u64, ArchivalSnapshot)>,
 }
 
 fn read_u64<R: Read>(r: &mut R) -> Result<u64, io::Error> {
@@ -432,6 +533,19 @@ fn successor(last: u64) -> Result<u64, TraceFault> {
 }
 
 impl Trace {
+    /// A trace that carries nothing to compare: no facts, no checkpoint.
+    /// A run over it connects and records, and every oracle reads
+    /// *not compared* — the run [`crate::rebaseline::trace_of`] writes a
+    /// baseline from.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            facts: BTreeMap::new(),
+            checkpoint: None,
+            snapshot: None,
+        }
+    }
+
     /// Read and check a whole trace.
     ///
     /// # Errors
@@ -443,16 +557,16 @@ impl Trace {
         if head[header::MAGIC] != TRACE_MAGIC {
             return Err(TraceFault::BadMagic);
         }
-        if head[header::VERSION] != TRACE_VERSION {
-            return Err(TraceFault::UnsupportedVersion {
-                found: head[header::VERSION],
-            });
+        let version = head[header::VERSION];
+        if version != TRACE_VERSION {
+            return Err(TraceFault::UnsupportedVersion { found: version });
         }
         if head[header::RESERVED].iter().any(|&b| b != 0) {
             return Err(TraceFault::ReservedNonZero);
         }
         let mut facts = BTreeMap::new();
         let mut checkpoint: Option<(u64, Digest)> = None;
+        let mut snapshot: Option<(u64, ArchivalSnapshot)> = None;
         let mut last_height: Option<u64> = None;
         loop {
             let mut t = [0u8; 1];
@@ -489,6 +603,19 @@ impl Trace {
                     }
                     checkpoint = Some((h, state));
                 }
+                tag::ARCHIVAL_SNAPSHOT => {
+                    let h = read_u64(&mut input)?;
+                    let Some((tip, _)) = checkpoint else {
+                        return Err(TraceFault::UnanchoredSnapshot);
+                    };
+                    if h != tip {
+                        return Err(TraceFault::SnapshotNotTip { height: h, tip });
+                    }
+                    if let Some((first, _)) = &snapshot {
+                        return Err(TraceFault::DuplicateSnapshot { height: *first });
+                    }
+                    snapshot = Some((h, ArchivalSnapshot::read_body(&mut input)?));
+                }
                 tag::TRAILER => {
                     let n_facts = read_u64(&mut input)?;
                     let n_checkpoints = read_u64(&mut input)?;
@@ -505,6 +632,9 @@ impl Trace {
                         if h != tip {
                             return Err(TraceFault::CheckpointNotTip { height: h, tip });
                         }
+                        if snapshot.is_none() {
+                            return Err(TraceFault::MissingSnapshot { height: h });
+                        }
                     }
                     // The trailer ends a trace: one probe byte tells a
                     // clean end from bytes written past it.
@@ -512,7 +642,11 @@ impl Trace {
                     if input.read(&mut probe)? != 0 {
                         return Err(TraceFault::TrailingBytes);
                     }
-                    return Ok(Self { facts, checkpoint });
+                    return Ok(Self {
+                        facts,
+                        checkpoint,
+                        snapshot,
+                    });
                 }
                 tag::RESERVED_VERDICT => return Err(TraceFault::ReservedTag(t[0])),
                 other => return Err(TraceFault::UnknownTag(other)),
@@ -520,15 +654,16 @@ impl Trace {
         }
     }
 
-    /// The `borrow` door: the facts `connect` needs at `height`, as
-    /// passed-through. `None` where the trace does not reach.
+    /// The `borrow` door: the baseline's facts at `height`, as comparison
+    /// inputs. `None` where the trace does not reach.
     #[must_use]
     pub fn borrow(&self, height: BlockHeight) -> Option<Borrowed<Facts>> {
         self.facts.get(&height.to_raw()).copied().map(Borrowed)
     }
 
-    /// The `expect` door: the LMDB logical state after `height`, for the
-    /// grader. `None` where that height is not the covered-tip checkpoint.
+    /// The `expect` door: the baseline's logical state after `height`, for
+    /// the comparison. `None` where that height is not the covered-tip
+    /// checkpoint.
     #[must_use]
     pub fn expect(&self, height: BlockHeight) -> Option<Expected<Digest>> {
         match self.checkpoint {
@@ -542,6 +677,16 @@ impl Trace {
     pub fn checkpoint(&self) -> Option<(BlockHeight, Expected<Digest>)> {
         self.checkpoint
             .map(|(h, d)| (BlockHeight::from_raw(h), Expected(d)))
+    }
+
+    /// The checkpoint's other encoding: the archival state after the
+    /// covered tip as §3.8.1's rows, for the comparison. `None` exactly when
+    /// the trace carries no checkpoint.
+    #[must_use]
+    pub fn archival_snapshot(&self) -> Option<(BlockHeight, Expected<&ArchivalSnapshot>)> {
+        self.snapshot
+            .as_ref()
+            .map(|(h, s)| (BlockHeight::from_raw(*h), Expected(s)))
     }
 
     /// The heights this trace has facts for, as an inclusive range; `None`

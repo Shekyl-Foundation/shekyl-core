@@ -22,15 +22,16 @@
 //! D4 is not a predicate on the candidate: nothing about a candidate fails
 //! "what is the next difficulty". It is a **definition** in B6's shape
 //! (slice 1 Q5): derived once per validation at [`D4::target`], recorded
-//! there, and carried on the verdict — D1 compares against it, and the
+//! there, and carried on the verdict. `form` judged CEN-D1 against the
+//! caller's claim of this target; a mismatch here is `Stale::Target`. The
 //! store persists the cumulative work it implies (Q5) so `connect` derives
 //! `cumulative_difficulty` instead of being handed it.
 //!
 //! D6 — *"a zero next-block difficulty rejects the block"* — is held **by
 //! the type**: [`Target`] wraps [`NonZeroU128`], the one `Difficulty` →
 //! [`Target`] edge is [`D6::mint`], and every already-valid target
-//! (genesis-block `1`, Fakechain `Fixed`) records the row through
-//! [`D6::record`] so a Fakechain verdict can mint.
+//! (genesis-block `1`, levered `Fixed`) records the row through
+//! [`D6::record`] so a levered verdict can mint.
 //!
 //! **What zero at the mint IS (premise refuted 2026-09-20, DRS-E2 RD-F17).**
 //! Slice 2 wrote zero as a corrupt-view fault on the premise that LWMA-1
@@ -51,7 +52,9 @@
 //!
 //! # The window is the view's
 //!
-//! `N + 1` point reads of [`ChainView::block_at`] per block. The C++ caches
+//! `N + 1` point reads of [`HeaderView::header_at`] per block — header
+//! facts only (timestamp and work), so an unexecuted alt chain answers them
+//! (DRS-E5 `E5-14`). The C++ caches
 //! the window on the `Blockchain` object ("ND: Speedup"); this crate does
 //! not, deliberately: a windowed read is a reopening with E2's replay
 //! number attached, not a pre-provision (rule 21; slice 2 §3).
@@ -66,15 +69,15 @@ use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault};
 use crate::rule_set::{DifficultyRule, RuleSet};
-use crate::rules::{recorded, Rule};
+use crate::rules::{recorded_header, Rule};
 use crate::verdict::{InvalidBlock, Locus, Verdict};
-use crate::view::ChainView;
+use crate::view::HeaderView;
 
 /// The difficulty a candidate must satisfy, **non-zero by construction**
 /// (CEN-D6). The inner type is [`NonZeroU128`]: a zero target cannot be
 /// assembled, only refused — `D6::mint` is the one `Difficulty` →
 /// [`Target`] edge, and every path that already has a `Target` (genesis
-/// block, Fakechain `Fixed`) still records CEN-D6 through
+/// block, levered `Fixed`) still records CEN-D6 through
 /// [`D6::record`](D6::record) so coverage is complete under every rule
 /// set. No public constructor and no `From<Difficulty>`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -104,8 +107,16 @@ impl Target {
         Difficulty::from_raw(self.0.get())
     }
 
-    /// A fixed target for a Fakechain rule set (`RuleSet::fakechain`,
-    /// CEN-D7). Non-zero by the argument's type.
+    /// A target at `difficulty` that no header chain derived, for a test
+    /// that needs a claim the headers refute (`Stale::Target`).
+    #[cfg(any(test, feature = "harness"))]
+    #[must_use]
+    pub const fn for_tests(difficulty: NonZeroU128) -> Self {
+        Self::fixed(difficulty)
+    }
+
+    /// A fixed target (`RuleSet::with_levers`, CEN-D7). Non-zero by the
+    /// argument's type.
     pub(crate) const fn fixed(fixed: NonZeroU128) -> Self {
         Self(fixed)
     }
@@ -131,6 +142,50 @@ impl fmt::Display for Target {
     }
 }
 
+/// The target CEN-D4 derives for a block connecting at `connecting`, over
+/// `view`'s headers below it: what a caller claims to
+/// [`form`](crate::form). The one derivation — `validate` and `alt_against`
+/// verify the claim by running it again over their view — so the claim and
+/// the check cannot spell the difficulty algorithm differently (the
+/// [`seed_height`](crate::seed_height) precedent).
+///
+/// `Ok(Err(refused))` is CEN-D6: the algorithm derived zero, which
+/// `validate` refuses on the same headers; a caller has no target to claim
+/// and that refusal is the block's verdict.
+///
+/// # Errors
+///
+/// The view's fault, or [`Fault::Corrupt`] on a hole below the parent or a
+/// non-monotone cumulative difficulty.
+pub fn target_claim<'id, H: HeaderView<'id>>(
+    view: &H,
+    connecting: BlockHeight,
+    rule_set: &RuleSet,
+) -> Result<Verdict<Target>, Fault<H::Fault>> {
+    // The derivation records D4/D6/D7 as it runs; a claim records nothing.
+    let mut unrecorded = RuleCoverage::EMPTY;
+    D4::target(view, connecting, rule_set, &mut unrecorded)
+}
+
+/// The work through a block connecting at `connecting` under `target`: the
+/// parent's cumulative difficulty on `view` plus the target — D4's own
+/// step (`validate` records it on the verdict). A caller that keeps a
+/// header chain ahead of connect (the ingest driver's target ledger)
+/// extends it with this, so its next [`target_claim`] reads the work the
+/// validator will record, not a second spelling of the sum.
+///
+/// # Errors
+///
+/// The view's fault; [`Fault::Corrupt`] on a hole at the parent or an
+/// overflow (SI-10's belt).
+pub fn cumulative_difficulty_after<'id, H: HeaderView<'id>>(
+    view: &H,
+    connecting: BlockHeight,
+    target: Target,
+) -> Result<CumulativeDifficulty, Fault<H::Fault>> {
+    D4::cumulative_after(view, connecting, target)
+}
+
 /// CEN-D6: a zero next-block difficulty rejects the block. Held by the
 /// [`Target`] type: this is its one constructor.
 pub(crate) struct D6;
@@ -142,7 +197,7 @@ impl Rule for D6 {
 impl D6 {
     /// Record this row against an already-valid [`Target`]. Every path
     /// that produces a target for a verdict — LWMA-1, genesis-block `1`,
-    /// Fakechain `Fixed` — goes through here, so `covers_landed` cannot
+    /// levered `Fixed` — goes through here, so `covers_landed` cannot
     /// depend on which arm D4 took.
     pub(crate) fn record(target: Target, coverage: &mut RuleCoverage) -> Target {
         coverage.insert(Self::ROW);
@@ -184,12 +239,12 @@ impl D4 {
     /// target for block **1** given a tip at 0; block 0 itself has no tip,
     /// the DAA is not consulted, and its target is
     /// [`Target::GENESIS_BLOCK`] — `1`, under every rule set.
-    pub(crate) fn target<'id, V: ChainView<'id>>(
-        view: &V,
+    pub(crate) fn target<'id, H: HeaderView<'id>>(
+        view: &H,
         connecting: BlockHeight,
         rule_set: &RuleSet,
         coverage: &mut RuleCoverage,
-    ) -> Result<Verdict<Target>, Fault<V::Fault>> {
+    ) -> Result<Verdict<Target>, Fault<H::Fault>> {
         coverage.insert(Self::ROW);
         if let Some(fixed) = D7::fixed_target(rule_set, connecting, coverage) {
             return Ok(Ok(D6::record(fixed, coverage)));
@@ -224,10 +279,10 @@ impl D4 {
     /// it). Cumulative difficulty is checked **strictly increasing** as it
     /// is read (SI-10 observed from this side: equal adjacent work is as
     /// corrupt as a decrease — every target is at least one).
-    fn window<'id, V: ChainView<'id>>(
-        view: &V,
+    fn window<'id, H: HeaderView<'id>>(
+        view: &H,
         chain_height: BlockHeight,
-    ) -> Result<Window, Fault<V::Fault>> {
+    ) -> Result<Window, Fault<H::Fault>> {
         let n = u64::try_from(N_USIZE).expect("N fits u64");
         let mut window = Window::default();
         if chain_height.to_raw() < n {
@@ -237,17 +292,17 @@ impl D4 {
         let mut previous: Option<CumulativeDifficulty> = None;
         for h in first..=chain_height.to_raw() {
             let height = BlockHeight::from_raw(h);
-            let block = recorded(view, height)?;
-            if previous.is_some_and(|p| block.cumulative_difficulty <= p) {
+            let record = recorded_header(view, height)?;
+            if previous.is_some_and(|p| record.cumulative_difficulty <= p) {
                 return Err(Fault::Corrupt(Corrupt::CumulativeDifficultyNotMonotone {
                     at: height,
                 }));
             }
-            previous = Some(block.cumulative_difficulty);
+            previous = Some(record.cumulative_difficulty);
             window
                 .timestamps
-                .push(Timestamp::from_raw(block.header.timestamp));
-            window.work.push(block.cumulative_difficulty);
+                .push(Timestamp::from_raw(record.header.timestamp));
+            window.work.push(record.cumulative_difficulty);
         }
         Ok(window)
     }
@@ -256,14 +311,14 @@ impl D4 {
     /// with `target`: the parent's plus the target (`ZERO` plus the target
     /// at genesis). What the store persists as `block_info.cumulative_
     /// difficulty` (Q5: the validator computes, the store records).
-    pub(crate) fn cumulative_after<'id, V: ChainView<'id>>(
-        view: &V,
+    pub(crate) fn cumulative_after<'id, H: HeaderView<'id>>(
+        view: &H,
         connecting: BlockHeight,
         target: Target,
-    ) -> Result<CumulativeDifficulty, Fault<V::Fault>> {
+    ) -> Result<CumulativeDifficulty, Fault<H::Fault>> {
         let parent = match connecting.to_raw().checked_sub(1) {
             None => CumulativeDifficulty::ZERO,
-            Some(h) => recorded(view, BlockHeight::from_raw(h))?.cumulative_difficulty,
+            Some(h) => recorded_header(view, BlockHeight::from_raw(h))?.cumulative_difficulty,
         };
         parent
             .to_raw()
@@ -276,10 +331,11 @@ impl D4 {
 /// CEN-D7: `--fixed-difficulty` overrides the DAA on regtest, height 0
 /// forced to 1.
 ///
-/// Ported as **data on a Fakechain rule set** (`DifficultyRule::Fixed`,
-/// `RuleSet::fakechain`; slice 2 §4.5, arm (d)), not as a flag the validator
-/// consults: no override path exists on any nettype other than Fakechain,
-/// by type. The row is *evaluated* on every block — is the target
+/// Ported as **data on a levered rule set** (`DifficultyRule::Fixed`,
+/// `RuleSet::with_levers`; slice 2 §4.5, arm (d)), not as a flag the validator
+/// consults. The issued-set path cannot name `Fixed`. Which network may
+/// pull the lever is its row's `permits`, checked by `ChainRules::new`.
+/// The row is *evaluated* on every block — is the target
 /// overridden here? — and records either way, so coverage is complete under
 /// every rule set; under an issued set the answer is always "no".
 pub(crate) struct D7;

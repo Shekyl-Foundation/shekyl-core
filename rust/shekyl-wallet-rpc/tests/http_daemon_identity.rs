@@ -23,8 +23,8 @@ use serde_json::{json, Value};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
 use shekyl_rpc_types::{
-    genesis_hash_for, DaemonNetwork, GetVersionResponse, HashHex, RpcStatus,
-    CONSENSUS_CONSTANTS_DIGEST_HASH, CORE_RPC_VERSION,
+    genesis_hash_for, GetVersionResponse, HashHex, RpcStatus, CONSENSUS_CONSTANTS_DIGEST_HASH,
+    CORE_RPC_VERSION,
 };
 use shekyl_wallet_rpc::auth::AuthConfig;
 use shekyl_wallet_rpc::server::{build_router, AppState};
@@ -34,7 +34,7 @@ use tokio::sync::Notify;
 use tower::ServiceExt;
 
 /// The network the wallet RPC under test serves.
-const SERVED: DaemonNetwork = DaemonNetwork::Stagenet;
+const SERVED: Network = Network::Stagenet;
 
 /// A port nothing listens on: the "no answer" control.
 const SILENT_DAEMON: &str = "http://127.0.0.1:1";
@@ -47,8 +47,7 @@ fn version_reply(edit: impl FnOnce(&mut GetVersionResponse)) -> String {
         version: CORE_RPC_VERSION,
         release: false,
         current_height: 1,
-        target_height: 0,
-        hard_forks: vec![],
+        target_height: shekyl_rpc_types::Nullable::NULL,
         consensus_constants_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
         nettype: SERVED,
         genesis_hash: HashHex::from_bytes(genesis_hash_for(SERVED)),
@@ -147,8 +146,8 @@ async fn refresh_error(daemon_address: String) -> Value {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_daemon_on_another_network_names_both_networks() {
     let error = refresh_error(fake_daemon(version_reply(|r| {
-        r.nettype = DaemonNetwork::Mainnet;
-        r.genesis_hash = HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Mainnet));
+        r.nettype = Network::Mainnet;
+        r.genesis_hash = HashHex::from_bytes(genesis_hash_for(Network::Mainnet));
     })))
     .await;
     assert_eq!(error["code"], -29207, "{error}");
@@ -184,10 +183,27 @@ async fn a_daemon_on_another_chain_is_not_an_outage() {
     assert_eq!(error["data"]["network"], "stagenet", "{error}");
 }
 
+/// The version is read before the rest (RK-Q11): a daemon of another RPC
+/// version answers in a shape this build cannot decode, and is still named.
+/// Before, this was the unreadable case below.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_daemon_of_another_version_is_named_though_its_reply_does_not_decode() {
+    let error = refresh_error(fake_daemon(
+        json!({"jsonrpc": "2.0", "id": "0", "result": {
+            "version": 1, "a_member_this_build_has_never_heard_of": true,
+        }})
+        .to_string(),
+    ))
+    .await;
+    assert_eq!(error["code"], -29205, "{error}");
+    assert_eq!(error["data"]["daemon_version"], "0.1", "{error}");
+    assert_eq!(error["data"]["update"], "daemon", "{error}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unreadable_version_reply_says_the_version_cannot_be_named() {
     let error = refresh_error(fake_daemon(
-        json!({"jsonrpc": "2.0", "id": "0", "result": {"status": "OK", "version": 1}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": "0", "result": {"status": "OK"}}).to_string(),
     ))
     .await;
     assert_eq!(error["code"], -29205, "{error}");

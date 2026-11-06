@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 use super::*;
-use crate::rng::SplitMix64;
+use shekyl_draw_rng::SplitMix64;
 
 fn ids(n: u8) -> Vec<ConnectionId> {
     (0..n)

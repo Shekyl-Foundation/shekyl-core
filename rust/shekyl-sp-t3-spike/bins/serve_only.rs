@@ -113,9 +113,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("ANCHOR_HEIGHT={APPARATUS_ANCHOR_HEIGHT}");
     println!("ANCHOR_HASH_HEX={}", hex(&APPARATUS_ANCHOR_HASH));
     println!("PAYLOAD_BYTES={len}");
-    // The number a remote reader should compare a fetched body against. Not
-    // PAYLOAD_BYTES: since RF-D4 the body leads with a frame header, and the
-    // apparatus derives the framed length through the production contract.
+    // The number a remote reader should compare a fetched body against,
+    // derived by the apparatus through the production serving contract
+    // rather than restated from PAYLOAD_BYTES.
     println!("BODY_BYTES={}", app.expected_body_len());
     eprintln!(
         "reachable after {:.1} s; holding. Ctrl-C to stop.",

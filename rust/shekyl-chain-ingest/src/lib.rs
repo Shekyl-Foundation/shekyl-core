@@ -9,17 +9,20 @@
 //!
 //! ```text
 //! Source ──► Form (N workers) ──► Sequencer ──► Validate+Connect ──► Sinks
-//! (corpus │  (stateless; real     (restore the  (one actor; owns    (digest/grader,
-//!  now,   │   RandomX per worker)  source order; the ChainStore;     checkpoint,
-//!  p2p at │                        Rewind is a   one write closure   metrics)
-//!  E3)    │                        barrier)      per handler)
+//! (corpus │  (stateless; real     (restore the  (one actor; owns    (checkpoint,
+//!  now,   │   RandomX per worker)  source order; the ChainStore;     metrics)
+//!  p2p at │                        Rewind is a   one write closure
+//!  DRS-X) │                        barrier)      per handler)
 //! ```
 //!
-//! DRS-E2's replay driver is this pipeline with a corpus [`Source`] and a
-//! grader sink; E3's cutover swaps the source for the p2p feed and drops the
-//! grader. There is no second connect path — a harness that admitted blocks
-//! through code production never runs is the C++ defect (`core_tests` /
-//! `chaingen`) this crate exists not to reproduce.
+//! DRS-E2's replay driver is this pipeline with a corpus [`Source`]. The
+//! trace a replay compares against is the Rust baseline [`rebaseline`]
+//! writes from a previous run of the same chain (`DAEMON_REDB_STORE.md`
+//! §12.1): a refusal, or a derived value that differs, is a change in what
+//! this pipeline decides. The store flip (DRS-X) swaps the source for the
+//! p2p feed. There is no second connect path — a harness that admitted
+//! blocks through code production never runs is the C++ defect
+//! (`core_tests` / `chaingen`) this crate exists not to reproduce.
 //!
 //! # What lives here
 //!
@@ -32,10 +35,11 @@
 //!   **verifies** completeness against each header (RD-F15) and whose
 //!   reader re-verifies on every record. Network-shaped only; the trace is
 //!   a different artifact with a different door (RD-Q2).
-//! - [`trace`] — the LMDB-only facts and one digest checkpoint at the
-//!   covered tip (RD-F18), with typed [`trace::Borrowed`] / [`trace::Expected`]
-//!   doors. This is the harvest artifact `shekyl-ffi` compiles; the pipeline
-//!   stages sit behind the `pipeline` feature so the daemon image does not
+//! - [`trace`] — one facts record per height and one digest checkpoint at
+//!   the covered tip (RD-F18), with typed [`trace::Borrowed`] /
+//!   [`trace::Expected`] doors. [`rebaseline`] writes that artifact from
+//!   the store a run left; `shekyl-ffi` compiles the writer. The pipeline
+//!   stages sit behind the `pipeline` feature so the daemon binary does not
 //!   pull the replay driver to write a trace.
 //! - [`substrate`] — the production [`Substrate`](shekyl_chain_rules::Substrate):
 //!   RandomX verification through `shekyl-pow-randomx`'s cache path and the
@@ -50,9 +54,17 @@
 //!   (`CHAIN_RULES_SLICE_6.md` §5.3). It has no feature flag of its own and
 //!   nothing outside this crate's tests can reach it — by design: a driver
 //!   that shipped would be a second producer.
+//! - [`emission_assembly`] — the one exception to that sentence, and a
+//!   narrow one: the driver's emission-claim assembly (E6 slice 8 row 7,
+//!   Q3), compiled under `cfg(test)` **or** the `harness` feature. The
+//!   feature exists for one consumer — `shekyl-engine-core`'s byte-identity
+//!   test, which holds this assembly and the engine handler's to the same
+//!   bytes — and `check_test_only_features.py` registers it TEST_ONLY: no
+//!   feature of this crate enables it, and every enabler is a
+//!   `[dev-dependencies]` edge, so no shipping build carries it either.
 //!
 //! Form is `shekyl_chain_rules::form`. The sequencer, the validate+connect
-//! actor, the grader and the replay driver live behind `feature = "pipeline"`.
+//! actor and the replay driver live behind `feature = "pipeline"`.
 //!
 //! # What this crate never does
 //!
@@ -66,23 +78,90 @@
 
 #![deny(unsafe_code)]
 
+/// What an arrival costs, and who pays: the door's checks before parse.
+#[cfg(feature = "pipeline")]
+pub mod admission;
+/// Admitted draws on a scenario chain (`SO-D12` 4b preparation). The
+/// economy chains mine through here: a driver-held witness, every draw
+/// filed as a pass, the next block admitting the bundle.
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod admitted_draws;
+/// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 2 (a)): the corpus's
+/// archival inputs, enumerated both ways.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_corpus_tests;
+/// The first spendable height and the refusal shape the archival driver
+/// tests share.
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod archival_driver;
+/// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 4): a mismatched hint is
+/// CEN-J11, and a Release signed by the wrong key is CEN-J13.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_hint_tests;
+/// DRS-X PR 3e (e2): every block that changes archival state, popped and
+/// connected again, the store compared at each step.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_pop_roundtrip_tests;
+/// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 rows 3 and 5): one levered
+/// slash chain, J5 through the Release, a phase at a time.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_slash_tests;
+/// DRS-E4 §3.8 item 2: the archival oracle's sufficiency stamp — census
+/// and stub halves over the captured corpus.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_sufficiency_tests;
 #[cfg(test)]
 mod artifact_tests;
 /// E6 slice 7 commit 2 (a): the CEN-G2 measurement through the driver —
 /// pins today's gap; flips when G2 lands (commit 6).
 #[cfg(all(test, feature = "pipeline"))]
 mod body_pairing_tests;
+/// The bundle producer's task: the producer's state machine driven by the
+/// connector's tip and the fetch path (`SO-D12` increment 4c).
+#[cfg(feature = "producer")]
+pub mod bundle_producer;
+#[cfg(all(test, feature = "producer"))]
+mod bundle_producer_gate_tests;
+#[cfg(all(test, feature = "producer"))]
+mod bundle_producer_tests;
+/// Where an arrival goes, and the claims it is formed under.
+/// The two RandomX seeds an arrival may hash under.
+#[cfg(feature = "pipeline")]
+mod cache_window;
+/// The scenario driver that round-trips a connect, and the prune a pop is
+/// held to. The pop tests and the levered slash chain connect through it.
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod chain_drive;
+#[cfg(feature = "pipeline")]
+mod chain_facts;
 #[cfg(feature = "pipeline")]
 pub mod connector;
 pub mod corpus;
+/// E6 slice 8 PR-b (`CHAIN_RULES_SLICE_8.md` §5 row 7, Q3): the driver's
+/// emission claim, assembled as the engine handler assembles it. Reachable
+/// under `harness` for the byte-identity pin alone (crate docs).
+#[cfg(any(test, feature = "harness"))]
+pub mod emission_assembly;
 #[cfg(feature = "fetch")]
 pub mod fetch;
+/// The tip follower: the seed window, then the pool, then the miner's job.
 #[cfg(feature = "pipeline")]
-pub mod grader;
-pub mod metrics;
-pub mod mutation;
+pub mod follower;
+/// `SO-D12h`: the frozen-membership chain through the claim window. The
+/// emission test and the pop test each connect the claim.
 #[cfg(all(test, feature = "pipeline"))]
-mod mutation_bodies;
+mod frozen_membership;
+#[cfg(all(test, feature = "pipeline"))]
+mod header_path_tests;
+/// The logical-state digest at a tip, and at every height of a
+/// one-commit-per-block baseline.
+#[cfg(feature = "pipeline")]
+pub mod height_digests;
+pub mod metrics;
+/// The Rust miner loop over scenario chains (DRS-X PR 3, DX-Q4).
+#[cfg(all(test, feature = "pipeline"))]
+mod miner_tests;
+pub mod mutation;
 #[cfg(all(test, feature = "pipeline"))]
 #[path = "mutation_tests.rs"]
 mod mutation_tests;
@@ -90,22 +169,92 @@ mod mutation_tests;
 pub mod pipeline;
 #[cfg(all(test, feature = "pipeline"))]
 mod pipeline_tests;
+/// Step 1 of a switch: the blocks a plan names, formed off the actor.
+#[cfg(feature = "pipeline")]
+pub mod plan_form;
+/// DRS-E5 PR-b (`DRS_E5_POOL_ALT_PRUNE.md` §2.2): the pool door held to
+/// the validator over real spends, and the pool's own rows over them.
+#[cfg(all(test, feature = "pipeline"))]
+mod pool_block_tests;
+#[cfg(all(test, feature = "pipeline"))]
+mod pool_door_tests;
+#[cfg(all(test, feature = "pipeline"))]
+mod pool_restart_tests;
+#[cfg(all(test, feature = "pipeline"))]
+mod pool_submit_tests;
+/// The E2 corpus re-baselined from Rust: a store's chain written as the
+/// trace a replay must reproduce (`DAEMON_REDB_STORE.md` §12.1).
+#[cfg(feature = "pipeline")]
+pub mod rebaseline;
+/// Seats in the arrival window.
+#[cfg(feature = "pipeline")]
+mod room;
+#[cfg(feature = "pipeline")]
+pub mod router;
+/// The RPC's store-backed facts over the scenario chain and the captured
+/// chains (DRS-X PR 3, `DRS_X_STORE_FLIP.md` DX-Q3).
+#[cfg(all(test, feature = "pipeline"))]
+mod rpc_store_facts_tests;
+/// The store flip's native read handlers over scenario chains (DRS-X
+/// PR 3, `DRS_X_STORE_FLIP.md` DX-Q3).
+#[cfg(all(test, feature = "pipeline"))]
+mod rpc_store_reads_tests;
 #[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod scenario;
 #[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod scenario_archival;
 #[cfg(all(test, feature = "pipeline"))]
 mod scenario_archival_tests;
+/// E6 slice 8 PR-b (`CHAIN_RULES_SLICE_8.md` §5 row 7): one emission claim
+/// the driver assembles, `validate` admits, pinned. Live lane.
 #[cfg(all(test, feature = "pipeline"))]
-pub(crate) mod scenario_spend;
+mod scenario_emission_tests;
+/// The compact-join scenario that `scenario_archival_tests` describes.
+/// Its own module so that file stays the single-block arms.
+#[cfg(all(test, feature = "pipeline"))]
+mod scenario_join_tests;
+/// E6 slice 8 PR-b (`CHAIN_RULES_SLICE_8.md` §5 row 6): the `close_shard()`
+/// step — real spends until a shard closes, then the wait for CEN-J15's
+/// finality and price. Live lane.
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod scenario_shard;
+/// Slice 6 row 6 (`CHAIN_RULES_SLICE_6.md` §5): real spends through the
+/// stack — the acceptances and the refusals behind an accepted body that
+/// the rules crate's fixtures cannot witness once CEN-I13 runs on the
+/// spend class. Default lane.
+#[cfg(all(test, feature = "pipeline"))]
+mod scenario_spend_tests;
 #[cfg(feature = "pipeline")]
 pub mod schedule;
 #[cfg(feature = "pipeline")]
 pub mod seed;
 #[cfg(feature = "pipeline")]
 pub mod sequencer;
+/// The live arrival path: one door, the router, the connector.
+#[cfg(feature = "pipeline")]
+pub mod service;
+/// The fetch scheduler's store-backed facts (`SV-D9`), read by the shard
+/// view and the bundle producer.
+#[cfg(feature = "producer")]
+pub mod shard_facts;
+pub mod snapshot_json;
 pub mod source;
 pub mod substrate;
+/// DRS-E5 a5 (`DRS_E5_POOL_ALT_PRUNE.md` §2.3): the switch through the
+/// production stack — two drivers, two branches, the store that switched
+/// held to the store that connected the winner directly.
+#[cfg(all(test, feature = "pipeline"))]
+mod switch_tests;
+/// DRS-E5 a6: the switch at the genesis cap, timed (ignored lane).
+#[cfg(all(test, feature = "pipeline"))]
+mod switch_timing_tests;
+#[cfg(all(test, feature = "pipeline"))]
+mod sync_wire_tests;
+#[cfg(feature = "pipeline")]
+pub mod target;
+/// The node's one block template, built by the tip follower on one snapshot.
+#[cfg(feature = "pipeline")]
+mod template;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod trace;
@@ -114,14 +263,15 @@ mod vectors_tests;
 
 #[cfg(feature = "pipeline")]
 pub use connector::{
-    Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Rewind, Rewound, RunEnd,
-    RunFault, TemplateFacts,
+    AltBlocksHeld, Applied, Apply, ChainFacts, ChainTip, Connector, ConnectorArgs, Digest, HashAt,
+    Inject, Injected, IssueDraws, OfferAlt, Offered, PlanMismatchReason, PlannedBlock,
+    PlannedDemotion, PlannedPromotion, PopBeyondReorgCap, PopBlocks, RaiseAlarm, RefusePromotion,
+    Reorganize, Rewind, Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan, Switched, TableRows,
+    TemplateFacts, TipChanged, WatchDeepReorg, WatchLatch, WatchTip,
 };
-pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
+pub use corpus::{CorpusFault, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]
 pub use fetch::{fetch_corpus, FetchFault};
-#[cfg(feature = "pipeline")]
-pub use grader::{grade_run, GradedRefusal, GradedRun, Observations, Register};
 pub use metrics::{Concurrency, Metrics, MetricsArtifact};
 pub use mutation::{Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Pow, Unmutable};
 #[cfg(feature = "pipeline")]
@@ -129,11 +279,13 @@ pub use pipeline::{
     run, Checkpoint, Disagreement, PipelineConfig, PipelineFault, RunReport, Switch,
 };
 #[cfg(feature = "pipeline")]
-pub use schedule::{Chain, ChainRules, RegtestLever, RegtestLeverRefused};
+pub use schedule::{ChainRules, LeverRefused};
 #[cfg(feature = "pipeline")]
 pub use seed::{SeedClaim, SeedLedger};
 #[cfg(feature = "pipeline")]
 pub use sequencer::{SequenceError, Sequencer};
-pub use source::{IngestEvent, SequenceNo, Sequenced, Source};
+pub use source::{
+    IngestEvent, Injection, InjectionParseError, SequenceNo, Sequenced, ServeCredit, Source,
+};
 pub use substrate::{ProductionSubstrate, SubstrateFault};
 pub use trace::{Facts, Trace, TraceFault, TraceWriter};

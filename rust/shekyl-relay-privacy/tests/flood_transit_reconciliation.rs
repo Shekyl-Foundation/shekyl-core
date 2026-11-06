@@ -53,14 +53,16 @@
 //! whoever hits it — the `noise_stem` hazard, where a green test defends the
 //! behaviour a ruling contradicts.
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::conformance::{
     simulate_fluff_return, transit_for, FloodParams, FloodReach,
 };
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::DelayFamily;
-use shekyl_relay_privacy::SplitMix64;
+use shekyl_relay_privacy::MeasuredConnector;
 
-/// The topology the shipped constant names: OutboundOnly at usable degree 12.
+/// The graph the shipped 3250 ms was measured on: retired D7, degree 12.
+/// Production reach is `EveryPeer`; this directed graph is the longer one.
 const BINDING_PEERS: usize = 12;
 const NODES: usize = 512;
 const TRIALS: usize = 24;
@@ -102,9 +104,7 @@ fn ratio(a: u64, b: u64) -> f64 {
 /// stops being interpretable.
 #[test]
 fn the_shipped_fluff_return_is_the_transit_less_reading() {
-    let shipped = u64::from(
-        DandelionParams::adopted_for(shekyl_relay_privacy::RelayZone::Tor).fluff_return_ms,
-    );
+    let shipped = u64::from(DandelionParams::adopted().fluff_return_ms.ms());
     let transit_less = p90_at(0);
     assert_eq!(
         transit_less, shipped,
@@ -129,9 +129,7 @@ fn the_shipped_fluff_return_is_the_transit_less_reading() {
 /// forecloses it.
 #[test]
 fn every_sampled_transit_exceeds_the_shipped_fluff_return() {
-    let shipped = u64::from(
-        DandelionParams::adopted_for(shekyl_relay_privacy::RelayZone::Tor).fluff_return_ms,
-    );
+    let shipped = u64::from(DandelionParams::adopted().fluff_return_ms.ms());
     println!("\n  transit_ms |  p90_ms | vs shipped {shipped}");
     println!("  -----------+---------+------------");
     let mut prev = 0_u64;
@@ -159,9 +157,9 @@ fn every_sampled_transit_exceeds_the_shipped_fluff_return() {
 
     // Production's own transit for this reach, so the row that ships is in the
     // record beside the sweep.
-    let shipped_assumption = p90_at(transit_for(FloodReach::OutboundOnly));
+    let shipped_assumption = p90_at(transit_for(MeasuredConnector::Tor));
     println!(
-        "\n  at transit_for(OutboundOnly): p90 = {shipped_assumption} ms  ({:.1}x shipped)",
+        "\n  at Tor transit, OutboundOnly: p90 = {shipped_assumption} ms  ({:.1}x shipped)",
         ratio(shipped_assumption, shipped)
     );
     println!("  NOT a candidate value: it is the 1625 ms ASSUMPTION amplified through");

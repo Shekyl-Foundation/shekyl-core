@@ -1,0 +1,10 @@
+# The shipped toolchain the latest constant-time measurement covers.
+# scripts/ci/check_checkct_toolchain.py fails when rust/rust-toolchain.toml
+# names another channel: a toolchain bump re-runs docs/formal/checkct and
+# updates this file in the same PR (rust/rust-toolchain.toml, bump policy).
+rust_toolchain_channel = "1.94.0"
+# How it was covered: the shipped channel's LLVM line (21.1.8) was measured
+# through nightly-2025-12-04 (LLVM 21.1.5), the last nightly on that line,
+# because cargo-checkct's drivers need -Zbuild-std.
+measured_through = "nightly-2025-12-04"
+measured_on = "2026-10-24"

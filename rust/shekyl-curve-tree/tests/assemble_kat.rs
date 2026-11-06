@@ -3,39 +3,36 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! CT-4 membership-path assembly KAT (Tier A): an assembled path's branches,
-//! re-hashed bottom-up, reproduce the consensus header root.
+//! CT-4 membership-path assembly KAT (Tier A): an assembled path against the
+//! consensus header root.
 //!
 //! Reuses the CT-2 Tier-A oracle (`tests/fixtures/ct2_tier_a.json`). For a
-//! drained coinbase output it builds the [`shekyl_curve_tree::AssembledPath`]
-//! via the production [`CurveTreeClient::assemble_path`], then **independently**
-//! recomputes the root by `hash_grow`-ing each branch chunk (not `build_layers`,
-//! which `assemble_path` uses internally) and asserts:
+//! drained coinbase output it builds the path via
+//! [`CurveTreeClient::assemble_path`]. The reference root is the fixture's
+//! header root. `assemble_path` folds the path's own branches onto that root
+//! before returning ([`shekyl_curve_tree::PathRootFault`]), so a path that
+//! comes back has already hashed to the header. This file does not carry a
+//! second copy of that fold.
 //!
-//! - the recomputed root byte-equals the recorded consensus `curve_tree_root`;
+//! What it still pins, against that header:
+//!
 //! - the C3 invariant `c1_layers.len() + c2_layers.len() + 1 == tree_depth`;
-//! - the leaf chunk, hashed to its Selene node, appears (as its x-coordinate)
-//!   in the first Helios branch — closing the loop between `leaf_chunk` and the
-//!   branch layers.
+//! - `tree_root` is the header root, and `reference_block` is the
+//!   caller-supplied block hash;
+//! - the target output is present in its leaf chunk.
 //!
-//! This pins the FCMP++ `Path` layout (`prover/mod.rs`: C1 = Selene, C2 =
-//! Helios; odd tree layers → `c2_layers`, even internal layers → `c1_layers`;
-//! full child chunks; root point excluded) against a real header root, the
-//! same way the CT-2 KAT pins reconstruction.
+//! The FCMP++ `Path` layout (`prover/mod.rs`: C1 = Selene, C2 = Helios; odd
+//! tree layers → `c2_layers`, even internal layers → `c1_layers`; full child
+//! chunks; root point excluded) is what the production fold walks. The
+//! membership link inside that fold is pinned in `client::ct6_oracle`.
 
 use serde_json::Value;
 use shekyl_curve_tree::{
-    AssembleInput, AssembledPath, BlockHash, BlockHeight, BlockLeaves, ChunkLeaf, CommitmentBytes,
-    CurveTreeClient, CurveTreeRoot, Gindex, OneTimePubkey, RawOutput, ReferenceBlock, TargetKind,
-    TxLeafInputs,
-};
-use shekyl_fcmp::tree::{
-    ed25519_point_to_selene_scalar, hash_grow_helios, hash_grow_selene, helios_hash_init,
-    layer_is_selene, selene_hash_init, selene_point_to_helios_scalar,
+    AssembleInput, BlockHash, BlockHeight, BlockLeaves, CommitmentBytes, CurveTreeClient,
+    CurveTreeRoot, Gindex, OneTimePubkey, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
 
 const FIXTURE: &str = include_str!("fixtures/ct2_tier_a.json");
-const ZERO: [u8; 32] = [0u8; 32];
 
 fn decode_hex(s: &str) -> Vec<u8> {
     assert!(s.len().is_multiple_of(2), "odd-length hex: {s}");
@@ -117,6 +114,7 @@ fn client_over(blocks: &[Block]) -> CurveTreeClient {
     for blk in blocks {
         let txs = [TxLeafInputs {
             is_miner: true,
+            tx_hash: None,
             leaf_entry_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
@@ -161,41 +159,23 @@ fn coinbase_input(blocks: &[Block], target_height: u64) -> AssembleInput {
     }
 }
 
-/// Hash a leaf chunk's outputs to its Selene leaf-node point, mirroring
-/// `construct_leaf`'s scalar layout (`O.x, I.x, C.x, h_pqc` per output).
-fn leaf_node_point(chunk: &[ChunkLeaf]) -> [u8; 32] {
-    let mut scalars = Vec::with_capacity(chunk.len() * 4);
-    for cl in chunk {
-        scalars.push(ed25519_point_to_selene_scalar(cl.output_key.as_bytes()).expect("O.x"));
-        scalars.push(ed25519_point_to_selene_scalar(&cl.key_image_gen).expect("I.x"));
-        scalars.push(ed25519_point_to_selene_scalar(cl.commitment.as_bytes()).expect("C.x"));
-        scalars.push(cl.cm_x);
-    }
-    hash_grow_selene(&selene_hash_init(), 0, &ZERO, &scalars).expect("leaf node")
+/// Assemble `target`'s path at `reference` and pin the layout the fold does
+/// not cover.
+///
+/// `assemble_path` has already folded the branches onto `reference`'s header
+/// root, so a returned path committed to that root.
+/// Register `inputs` with the client, as the curve-tree actor does before it
+/// assembles a batch. Assembly reads captures only — there is no rebuild —
+/// so a direct caller registers first or is refused by name.
+fn register(client: &mut CurveTreeClient, inputs: &[AssembleInput]) {
+    let pairs: Vec<_> = inputs.iter().map(|i| (i.gindex, i.output_key)).collect();
+    let sync = client.sync_owned(&pairs).expect("a live client syncs");
+    assert!(
+        sync.stale.is_empty(),
+        "the fixture's inputs are its own outputs"
+    );
 }
 
-/// Re-hash each branch chunk bottom-up; the topmost branch is the root's
-/// children, so its hash is the root. Independent of `build_layers` (uses the
-/// raw `hash_grow` primitives), so agreement with the consensus root is a
-/// genuine cross-check of the branch extraction, not a tautology.
-fn recompute_root(path: &AssembledPath) -> [u8; 32] {
-    let mut c1 = path.c1_layers.iter();
-    let mut c2 = path.c2_layers.iter();
-    let mut root = None;
-    for layer in 1..path.tree.tree_depth {
-        let point = if layer_is_selene(layer) {
-            let chunk = c1.next().expect("c1 branch for an even (Selene) layer");
-            hash_grow_selene(&selene_hash_init(), 0, &ZERO, chunk).expect("selene node")
-        } else {
-            let chunk = c2.next().expect("c2 branch for an odd (Helios) layer");
-            hash_grow_helios(&helios_hash_init(), 0, &ZERO, chunk).expect("helios node")
-        };
-        root = Some(point);
-    }
-    root.expect("a non-empty path has at least one branch")
-}
-
-/// Assemble `target`'s path at `reference` and run all three checks.
 fn check_path(client: &CurveTreeClient, target: &AssembleInput, reference: &ReferenceBlock) {
     let path = client
         .assemble_path(target, reference)
@@ -209,13 +189,9 @@ fn check_path(client: &CurveTreeClient, target: &AssembleInput, reference: &Refe
     );
     assert!(path.tree.tree_depth >= 2, "non-empty tree is depth >= 2");
 
-    // The branches re-hash to the consensus root.
-    assert_eq!(
-        recompute_root(&path),
-        reference.curve_tree_root.to_bytes(),
-        "recomputed root must equal the consensus header root at height {}",
-        reference.height.to_raw(),
-    );
+    // The fold compared the branches to `tree_root`. This checks that value
+    // is the header root the reference carried, not some other root the
+    // fold was willing to accept.
     assert_eq!(path.tree.tree_root, reference.curve_tree_root);
 
     // The caller-supplied block hash is threaded verbatim into the tree
@@ -226,15 +202,6 @@ fn check_path(client: &CurveTreeClient, target: &AssembleInput, reference: &Refe
     assert_eq!(
         path.tree.reference_block, reference.block_hash,
         "assembled path must echo the caller-supplied ReferenceBlock::block_hash",
-    );
-
-    // Leaf chunk ↔ first branch consistency: the leaf node's x-coordinate is
-    // one of the Helios branch's children.
-    let leaf_x = selene_point_to_helios_scalar(&leaf_node_point(&path.leaf_chunk))
-        .expect("leaf node x-coordinate");
-    assert!(
-        path.c2_layers[0].contains(&leaf_x),
-        "the leaf node must appear in the first (Helios) branch",
     );
 
     // The resolved output is actually present in the returned leaf chunk.
@@ -249,7 +216,7 @@ fn check_path(client: &CurveTreeClient, target: &AssembleInput, reference: &Refe
 #[test]
 fn assembled_path_recomputes_to_consensus_root() {
     let blocks = main_chain();
-    let client = client_over(&blocks);
+    let mut client = client_over(&blocks);
 
     let tip = blocks.last().expect("non-empty chain");
     // Distinctive, non-zero, and distinct from the root so the round-trip
@@ -274,6 +241,7 @@ fn assembled_path_recomputes_to_consensus_root() {
 
     for target_height in [0u64, mid, last_drained] {
         let target = coinbase_input(&blocks, target_height);
+        register(&mut client, &[target]);
         check_path(&client, &target, &reference);
     }
 }
@@ -281,7 +249,7 @@ fn assembled_path_recomputes_to_consensus_root() {
 #[test]
 fn assemble_path_rejects_undrained_output() {
     let blocks = main_chain();
-    let client = client_over(&blocks);
+    let mut client = client_over(&blocks);
 
     let tip = blocks.last().expect("non-empty chain");
     let reference = ReferenceBlock {
@@ -292,8 +260,11 @@ fn assemble_path_rejects_undrained_output() {
 
     // The tip's own coinbase has not matured (let alone drained) at the tip, so
     // its gindex is not among the drained leaves at the reference: a lookup
-    // miss, not a bad path.
+    // miss, not a bad path. Registered — the wallet owns it — but with no
+    // resolved position yet, which is exactly what "not drained" means on
+    // the capture path.
     let undrained = coinbase_input(&blocks, tip.height);
+    register(&mut client, &[undrained]);
     match client.assemble_path(&undrained, &reference) {
         Err(shekyl_curve_tree::ClientError::OutputNotDrained { gindex, output_key }) => {
             assert_eq!(gindex, undrained.gindex);
@@ -328,7 +299,7 @@ fn assemble_path_rejects_root_mismatch() {
 #[test]
 fn assemble_path_rejects_identity_mismatch() {
     let blocks = main_chain();
-    let client = client_over(&blocks);
+    let mut client = client_over(&blocks);
 
     let tip = blocks.last().expect("non-empty chain");
     let reference = ReferenceBlock {
@@ -342,6 +313,9 @@ fn assemble_path_rejects_identity_mismatch() {
     // check rejects it (X3 — the tree-vs-scanner numbering-desync guard).
     let last_drained = reference.height.to_raw().saturating_sub(61);
     let mut tampered = coinbase_input(&blocks, last_drained);
+    // Registered with the REAL key — the registry is right; it is the
+    // caller's input that disagrees, which is the X3 guard's case.
+    register(&mut client, &[tampered]);
     let real_key = tampered.output_key;
     tampered.output_key = OneTimePubkey::from_bytes([0x99u8; 32]);
     assert_ne!(tampered.output_key, real_key, "tamper must change the key");

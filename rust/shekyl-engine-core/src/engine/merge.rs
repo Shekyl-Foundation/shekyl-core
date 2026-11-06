@@ -77,7 +77,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
-use shekyl_curve_tree::{ClientError, REORG_HASH_WINDOW_BLOCKS};
+use shekyl_curve_tree::{ClientError, OwnershipSync, REORG_HASH_WINDOW_BLOCKS};
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
@@ -91,6 +91,7 @@ use crate::{
         curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError},
         curve_tree_decode,
         local_ledger::LocalLedger,
+        ownership::{curve_tree_offer, OwnedSet},
         reorg_finality::{overlap_disagreed, overlap_record_ended, rollback_past_finality},
         traits::{DaemonEngine, LedgerEngine},
         CurveTreeIngestFault, Engine, EngineSignerKind, RefreshError,
@@ -354,23 +355,31 @@ impl<
     pub(crate) async fn ingest_scan_result_into_curve_tree(
         &self,
         result: &mut ScanResult,
-    ) -> Result<(), RefreshError> {
+    ) -> Result<OwnershipSync, RefreshError> {
         let producer_leaves = index_block_leaves(std::mem::take(&mut result.block_leaves))?;
-        curve_tree_ingest_scan_result(&self.curve_tree, &self.daemon, result, &producer_leaves)
-            .await
+        let owned = self.owned_outputs(result);
+        curve_tree_ingest_scan_result(
+            &self.curve_tree,
+            &self.daemon,
+            result,
+            &producer_leaves,
+            &owned,
+        )
+        .await
     }
 
-    /// Ingest a scan result into the curve tree, healing a single fail-stop /
-    /// poison with a resume-over-held-store respawn-and-retry (R1-Q4, §3.3 happy path).
+    /// Ingest a scan result into the curve tree, healing a single poisoned
+    /// client with an in-place rebuild and one retry (§3.3 happy path).
     ///
     /// It drains `result.block_leaves` once into an `Arc`-shared, height-keyed
-    /// map and delegates to `curve_tree_ingest_scan_result_with_respawn`. On
-    /// a respawn-eligible failure ([`RefreshError::CurveTreeIngest`] whose
-    /// fault is [`CurveTreeIngestFault::recoverable_by_respawn`]) that helper reopens the actor via
-    /// [`CurveTreeHandle::respawn`](super::curve_tree_actor::CurveTreeHandle::respawn)
+    /// map and delegates to `curve_tree_ingest_scan_result_with_recovery`. On
+    /// a rebuild-eligible failure ([`RefreshError::CurveTreeIngest`] whose
+    /// fault is [`CurveTreeIngestFault::recoverable_by_rebuild`]) that helper asks the actor to
+    /// rebuild its client in place
+    /// ([`CurveTreeHandle::recover`](super::curve_tree_actor::CurveTreeHandle::recover))
     /// and re-runs the cursor-driven ingest **once** against the *same* drained
-    /// leaves (the `Arc` map is retained across the retry, R1-Q4). The retry is
-    /// correct because the resumed client rebuilds from the persisted store
+    /// leaves (the `Arc` map is retained across the retry). The retry is
+    /// correct because the rebuilt client resumes from the persisted store
     /// cursor (D2): the loop skips already-ingested heights and continues from
     /// the tree's own tip, so a re-run never double-ingests. Re-invoking
     /// [`ingest_scan_result_into_curve_tree`](Self::ingest_scan_result_into_curve_tree)
@@ -381,51 +390,51 @@ impl<
     /// transient persistence hiccup from a deterministically-corrupt store —
     /// which would otherwise livelock reopen → poison → reopen (O3-sub) — is
     /// CT-5d, coupled to the existing refresh retry/cancel budget (O6). Here a
-    /// respawn whose retry also fails surfaces terminally, and a non-recoverable
-    /// failure passes straight through without a respawn.
+    /// rebuild whose retry also fails surfaces terminally, and a non-recoverable
+    /// failure passes straight through without a rebuild.
     ///
     /// This is the curve-tree ingest entry point the refresh path calls; the
     /// inner [`ingest_scan_result_into_curve_tree`](Self::ingest_scan_result_into_curve_tree)
     /// stays `pub(crate)` for the tests that drive the bare ingest/rollback
     /// pre-pass.
-    pub(crate) async fn ingest_scan_result_with_respawn(
+    pub(crate) async fn ingest_scan_result_with_recovery(
         &self,
         result: &mut ScanResult,
-    ) -> Result<(), RefreshError> {
+    ) -> Result<OwnershipSync, RefreshError> {
         let producer_leaves = index_block_leaves(std::mem::take(&mut result.block_leaves))?;
-        curve_tree_ingest_scan_result_with_respawn(
+        let owned = self.owned_outputs(result);
+        curve_tree_ingest_scan_result_with_recovery(
             &self.curve_tree,
             &self.daemon,
             result,
             &producer_leaves,
+            &owned,
         )
         .await
     }
 }
 
 /// Collapse a [`CurveTreeHandleError`] into a
-/// [`RefreshError::CurveTreeIngest`], classifying whether a drop-and-reopen
-/// respawn (R1-Q4) can heal it:
+/// [`RefreshError::CurveTreeIngest`], classifying which fault an in-place
+/// rebuild heals:
 ///
-/// - A fail-stopped actor ([`CurveTreeHandleError::Unavailable`]) and a
-///   poisoned client ([`ClientError::Poisoned`] — whose own documented
-///   recovery is "drop this object and resume over the same store") are
-///   respawn-recoverable ([`CurveTreeIngestFault::recoverable_by_respawn`]):
-///   [`Engine::ingest_scan_result_with_respawn`]
-///   respawns the actor and retries the cursor-driven ingest once, which
-///   resumes from the held store's persisted tip (D2).
+/// - [`ClientError::Poisoned`] is [`CurveTreeIngestFault::recoverable_by_rebuild`]:
+///   ingest asks the actor to rebuild the client over the store it holds and
+///   retries once from the persisted tip (D2).
+/// - A stopped actor ([`CurveTreeHandleError::Unavailable`]) is terminal: the
+///   actor is not restarted (`curve_tree_actor` module docs).
 /// - Every other client error (e.g.
 ///   [`ClientError::NonConsecutiveBlockHeight`], a producer-contract or
-///   store-state fault) is not: a reopen resumes the same cursor and
+///   store-state fault) is not: a rebuild resumes the same cursor and
 ///   reproduces it, so it surfaces terminally rather than livelocking a retry.
-fn map_curve_tree_handle_error(err: &CurveTreeHandleError) -> RefreshError {
+pub(super) fn map_curve_tree_handle_error(err: &CurveTreeHandleError) -> RefreshError {
     match err {
         CurveTreeHandleError::Unavailable => CurveTreeIngestFault::ActorUnavailable.into(),
         CurveTreeHandleError::Client(ClientError::Poisoned) => {
             CurveTreeIngestFault::ClientPoisoned.into()
         }
         // §3.3 (CT-5b, O5): the reconstructed root diverged from the consensus
-        // header-committed root. Terminal — a respawn re-derives the same root
+        // header-committed root. Terminal — a rebuild re-derives the same root
         // from the same store, so it reproduces the mismatch rather than
         // healing it. Distinct context so an auditor reads the lying-daemon DoS
         // apart from a generic client rejection.
@@ -439,24 +448,24 @@ fn map_curve_tree_handle_error(err: &CurveTreeHandleError) -> RefreshError {
 /// Ingest a scan result into the curve tree from cloned deps — lets the async
 /// refresh task drop the engine `RwLock` read guard before the long-running
 /// backfill fetches and per-height actor round-trips.
-pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits::DaemonEngine>(
+pub(super) async fn curve_tree_ingest_scan_result_with_recovery<D: super::traits::DaemonEngine>(
     curve_tree: &CurveTreeHandle,
     daemon: &D,
     result: &ScanResult,
     producer_leaves: &BTreeMap<BlockHeight, Arc<Vec<OwnedTxLeaves>>>,
-) -> Result<(), RefreshError> {
-    match curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await {
-        Ok(()) => Ok(()),
-        Err(RefreshError::CurveTreeIngest { fault }) if fault.recoverable_by_respawn() => {
-            // Engine-side respawn (clause 2): runs after the failed `ask`
-            // returned, never inside a handler under the engine guard.
+    owned: &OwnedSet,
+) -> Result<OwnershipSync, RefreshError> {
+    match curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves, owned).await {
+        Err(RefreshError::CurveTreeIngest { fault }) if fault.recoverable_by_rebuild() => {
+            // Sent after the failed `ask` returned (clause 2); the rebuild
+            // itself runs inside the actor, over the store it owns.
             curve_tree
-                .respawn()
+                .recover()
                 .await
-                .map_err(|_| CurveTreeIngestFault::RespawnFailed)?;
-            curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves).await
+                .map_err(|_| CurveTreeIngestFault::RebuildFailed)?;
+            curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves, owned).await
         }
-        Err(other) => Err(other),
+        other => other,
     }
 }
 
@@ -583,7 +592,8 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     daemon: &D,
     result: &ScanResult,
     producer_leaves: &BTreeMap<BlockHeight, Arc<Vec<OwnedTxLeaves>>>,
-) -> Result<(), RefreshError> {
+    owned: &OwnedSet,
+) -> Result<OwnershipSync, RefreshError> {
     // Range well-formedness (O5/O2). This pre-pass runs *before* the ledger
     // merge's own `end >= start` check (`apply_scan_result_to_state`), so guard
     // the same property here: an inverted range would otherwise drive
@@ -651,6 +661,10 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     // up and leave it in place.
     reconcile_overlapping_tree(curve_tree, &producer_roots, range_start, range_end).await?;
 
+    // Ownership: after any rollback, before the first fold (`ownership.rs`).
+    // Returned, because what it cost is the only evidence of when it ran.
+    let ownership = curve_tree_offer(curve_tree, owned).await?;
+
     loop {
         let tip = curve_tree
             .ingested_tip_height()
@@ -693,9 +707,9 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
             // Producer range: reuse the materialized leaves (no re-fetch).
             // `Arc::clone` is a refcount bump, not a deep copy, and crucially
             // RETAINS the map entry: if this height's `ingest` `ask` fails
-            // with a respawn-recoverable error, `*_with_respawn` re-runs this
-            // loop after the respawn and must find the same leaves again
-            // (R1-Q4). Heights already persisted are skipped by the cursor, so
+            // with a rebuild-recoverable error, `*_with_recovery` re-runs this
+            // loop after the rebuild and must find the same leaves again.
+            // Heights already persisted are skipped by the cursor, so
             // a retained entry is never re-ingested — it just drops with the
             // map at end of the (batch-bounded) producer range.
             let leaves = producer_leaves
@@ -721,7 +735,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         // §3.3 ingest-time integrity verify (CT-5b, O5 lying-daemon defense).
         // The root the tree reconstructs for `next` must byte-equal the
         // consensus header-committed root. A mismatch is the inconsistent liar
-        // (bad leaves, honest header): fail loudly and terminally — a respawn
+        // (bad leaves, honest header): fail loudly and terminally — a rebuild
         // re-derives the same root, so it is not recoverable — never advancing
         // the ledger past tree state we cannot reproduce (O2/ack-before-commit;
         // the merge runs only after this pre-pass returns `Ok`). The consistent
@@ -732,7 +746,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
             .await
             .map_err(|e| map_curve_tree_handle_error(&e))?;
     }
-    Ok(())
+    Ok(ownership)
 }
 
 /// Merge body shared between [`Engine::apply_scan_result`] and the

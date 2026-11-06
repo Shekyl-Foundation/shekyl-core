@@ -1,6 +1,7 @@
 # Tor cover posture — relay contribution, not a protocol carrier
 
-**Status: LIVING CONTRACT.** RULED 2026-09-04, recorded 2026-09-12. Identifier
+**Status: LIVING CONTRACT.** RULED 2026-09-04, recorded 2026-09-12.
+UPDATE 2026-10-08: own transactions ride a stem slot (§1). Identifier
 family `TRC-1…TRC-n` (index row registered at birth per rule 94 §1). Decision
 authority: Rick. This document records a decision that was reached in design
 conversation and never written; the ruling is not new, its record is.
@@ -34,6 +35,38 @@ Three consequences follow immediately:
 
 - **Stems go out over the ordinary connection, immediately.** No fixed slots, no
   waiting for the next cadence tick.
+- **Two draws.** Relayed stems draw uniformly over every outbound session.
+  The own-edge draws uniformly over the hidden-address outbound sessions.
+  Both re-draw per epoch. A hidden-address pool of one is a degraded state
+  the node reports (`hop-0 edge cannot rotate`), not a configuration it
+  accepts quietly. **UPDATE 2026-10-07:** that pool's target is
+  `MIN_PROVISIONED_OUT_PEERS` (12). The warning is a pool of one, and it
+  does not name a target. *Records-was: the managed Tor zone opens
+  `HOP0_OUTBOUND_TARGET` (4) outbound connections so that pool has the
+  paper's degree to rotate over.*
+  `--out-peers` does not change the address-hiding target. A live own-edge is not
+  re-pointed; a dead one is replaced from the peers still up. No cover
+  on Tor by ruling; on cover-bearing links the own-edge is slot-aligned.
+  Tor's cover class is `Volume`. That ruling is unmeasured, pending TRC-1.
+  *Records-was as of 2026-10-08: this bullet is what the code does today.
+  The ruling below removes the separate draw.*
+- **UPDATE 2026-10-08 (Rick). Own transactions ride a stem slot.** A node's
+  originated transactions take one of its Dandelion++ stem slots, which also
+  carries relayed traffic, per Dandelion++ §4 ("along the same outbound edge
+  in the anonymity graph"). When the node has hidden-address sessions, one
+  stem slot is drawn uniformly from them, the other uniformly from all
+  outbound except that one, and the local source maps to the hidden slot.
+  Inbound sources map as the stem map does. When every outbound session is
+  hidden, this is the paper's rule unchanged. `own_edge()` as a separate
+  draw sends originated traffic on a link that carries no relayed traffic,
+  which is ProxyMark's root cause
+  (`DAEMON_RELAY_PRIVACY.md` §95.3). The confirming measurement is that
+  section. **UPDATE 2026-10-09:** PR-1 (#1018) shipped it: slot 0 is
+  reserved for the hidden outbound sessions, the local source pins on
+  its peer plus one alternate (`DAEMON_RELAY_PRIVACY.md` §98, D-PR1-1
+  (c′)), and `own_edge()` is deleted. *Records-was: "The relay lane's
+  deletion of `own_edge()` waits on review of the run; it is not in the
+  measurement change."*
 - **Every fixed-slot artifact stops having a subject on this zone** —
   fragmentation, `MAX_FRAGMENTS`, epoch-miss arithmetic, the in-flight
   remainder, the length leak, the empty-message wedge.
@@ -260,8 +293,11 @@ managed Tor stays client-only; do not add relay flags to it.
 
 **A second Tor process for the daemon's SOCKS/onion, as cover.** Rejected as a
 cover configuration. Originated cells then travel that client's own OR
-connections. The default managed ephemeral Tor is that second process;
-`--tx-proxy` / `--anonymous-inbound` against the operator relay yields it.
+connections. The default managed ephemeral Tor is that second process.
+`--anonymous-inbound` against the operator relay yields it.
+`--tx-proxy` names that relay's SOCKS and does not: the per-boot
+onion still publishes on the managed Tor. `--no-ephemeral-tor` is
+what turns the publish off.
 This is not a new ruling — it is the §3 mixing claim stated so "separate
 process" cannot be read as a sidecar client Tor.
 
@@ -291,3 +327,13 @@ Discharged in the 2026-09-12 recording change that landed this document.
   claim, not a new ruling.
 - [`FOLLOWUPS.md`](../FOLLOWUPS.md): one pre-genesis row for the §8 measurement,
   blocker named as the falsifier chain's first link.
+
+## 10. A complete-tree fetch can show a holding set — reported 2026-10-22
+
+`ARCHIVAL_SUPPORT_DRAW.md` §8. Each read builds its own circuit
+(`SF-D3`). Nothing spreads the fetches of one new holding over time or
+across sources, so a complete-tree server asked for many shards of that
+holding sees the set. A later bond for the same set is the link the
+bond-post delay is there to break. Reported to that round
+(`ARCHIVAL_BOND_POST_DELAY.md` §6.1). Not fixed here. BD-Q4's window
+width is still open.

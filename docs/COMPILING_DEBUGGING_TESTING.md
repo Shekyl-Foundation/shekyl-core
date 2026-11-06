@@ -130,8 +130,7 @@ static libraries.
 cmake -S . -B build\msvc-release -G "Visual Studio 18 2026" -A x64 ^
   -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake ^
   -DVCPKG_TARGET_TRIPLET=x64-windows-static ^
-  -DCMAKE_BUILD_TYPE=Release ^
-  -DUSE_DEVICE_TREZOR=OFF
+  -DCMAKE_BUILD_TYPE=Release
 cmake --build build\msvc-release --config Release --parallel
 ```
 
@@ -281,8 +280,10 @@ Coinbase transactions also use version 3 (unified with regular txs). Key differe
 - Transaction construction helpers produce v3 with `use_view_tags=true`
 - Coinbase outputs are indexed under `amount=0` for correct RCT spending
 - Balance verification in callbacks uses RCT ecdhInfo decryption
-- Economic constants (`TESTS_DEFAULT_FEE`, `FIRST_BLOCK_REWARD`) are
-  calibrated for Shekyl's `COIN = 10^9` and `EMISSION_SPEED_FACTOR = 21`
+- Economic constants (`TESTS_DEFAULT_FEE`) are calibrated for Shekyl's
+  `COIN = 10^9` and the emission curve's factor of 22 per block
+  (`emission_speed_factor_per_block`; the per-minute convention that ran 21
+  per block was retired 2026-10-04)
 - Several legacy tests incompatible with HF1-from-genesis are disabled
   (see `chaingen_main.cpp` comments)
 
@@ -290,13 +291,58 @@ Currently 80 tests are enabled and passing (including the re-enabled
 `gen_block_reward` test whose reward verification was rewritten to use
 Shekyl's four-component economics formula).
 
+## Running a source build with Tor
+
+A release archive carries the pinned Tor bundle in `tor/` beside the
+binaries. A source build does not, so a `shekyld` you compiled starts
+clearnet-only and warns that no Tor was found. To give it one, stage the
+pinned bundle into the build's `bin/tor/`:
+
+```bash
+# x86_64 Linux; use aarch64-linux-gnu on an arm64 host.
+python3 scripts/release/tor_bundle.py stage --host x86_64-linux-gnu \
+  --sources ~/.cache/shekyl-tor --dest build/bin/tor --licenses build/bin/tor-licenses
+```
+
+`stage` downloads the tarball named in `config/tor_pins.json` if
+`--sources` does not hold it, refuses it unless its SHA-256 is the pinned
+one, and extracts only the files the pin lists. The daemon then finds
+`tor/tor` beside itself.
+
+`--tor-file /path/to/tor` (or `tor-file` in the configuration file) names
+where the daemon looks; nothing is read from the environment. It does not
+relax what it checks. The path must name the `tor` inside a directory
+that holds **exactly** the pinned files:
+
+- **Pointing it at a full extracted Expert Bundle is refused.** That
+  directory also holds `pluggable_transports/`, and the daemon refuses a
+  tor directory with anything in it that is not pinned. The loader is
+  pointed at that directory, so anything in it could be loaded. Stage the
+  bundle as above and point the variable at the staged `tor`.
+- A distribution's `tor` (`/usr/bin/tor`) is refused: it is a different
+  build and its directory is not the bundle.
+- There is no `PATH` lookup.
+
+The managed tor is started with an empty environment plus, on Linux,
+`LD_LIBRARY_PATH` set to its own directory. A variable exported in your
+shell does not reach it.
+
+To run without Tor on purpose, pass `--tor off`. The lifecycle tests take
+any tor through `SHEKYL_TEST_TOR_BINARY`, which bypasses the pin and exists
+only in test builds.
+
+The managed tor is pinned for Linux (x86_64, aarch64), Windows (x86_64) and
+macOS (x86_64, aarch64); `config/tor_pins.json` is the list. FreeBSD and
+riscv64 Linux have none, because the Tor Project publishes no Expert Bundle
+for them (`docs/design/TOR_BUNDLE_DISTRIBUTION.md` §5). There the daemon says
+so at start. Run your own Tor and set `tor = operator` with `tor-socks`, and
+`tor-onion` with `tor-onion-listen` for inbound.
+
 ## Seed node build (lean daemon)
 
-`make release-seed` builds only the daemon (`shekyld`) with hardware wallet
-support disabled (`-DUSE_HW_DEVICE=OFF`) and `ARCH=x86-64` (portable x86_64).
-This eliminates HIDAPI, protobuf, and libusb as runtime dependencies -- libraries
-a seed node never needs -- and ensures the binary runs on any x86_64 host
-regardless of CPU generation (no AVX/SSE4.x required).
+`make release-seed` builds only the daemon (`shekyld`) with `ARCH=x86-64`
+(portable x86_64), so it runs on any x86_64 host regardless of CPU
+generation (no AVX/SSE4.x required).
 
 ```bash
 make release-seed
@@ -310,9 +356,8 @@ Equivalent manual cmake invocation:
 cmake -S . -B build/seed-release \
   -DCMAKE_BUILD_TYPE=Release \
   -DARCH="x86-64" \
-  -DUSE_HW_DEVICE=OFF \
   -DBUILD_TESTS=OFF
-cmake --build build/seed-release --target daemon -- -j"$(nproc)"
+cmake --build build/seed-release --target shekyl_rust_bins -- -j"$(nproc)"
 ```
 
 If you previously configured the same build directory with a different `ARCH`
@@ -324,8 +369,6 @@ CMake cache values cannot leak architecture-specific flags.
 - Boost (chrono, date-time, filesystem, program-options, regex, serialization,
   system, thread)
 - OpenSSL, libsodium, readline
-
-No HIDAPI, protobuf, or libusb packages are required on the target machine.
 
 See `shekyl-dev/docs/SEED_NODE_DEPLOYMENT.md` for full deployment instructions.
 
@@ -360,7 +403,7 @@ cmake --build build/testnet-release --target all -- -j"$(nproc)"
 Daemon only:
 
 ```bash
-cmake --build build/testnet-release --target daemon -- -j"$(nproc)"
+cmake --build build/testnet-release --target shekyl_rust_bins -- -j"$(nproc)"
 ```
 
 Wallet CLI and wallet RPC (both Rust, one CMake target since the C1/C2
@@ -379,18 +422,11 @@ cargo build -p shekyl-cli -p shekyl-wallet-rpc --release
 Primary C++ test binaries:
 
 ```bash
-cmake --build build/testnet-release --target unit_tests core_tests -- -j"$(nproc)"
-```
-
-Useful utilities:
-
-```bash
-cmake --build build/testnet-release --target \
-  blockchain_export blockchain_import blockchain_stats gen_multisig -- -j"$(nproc)"
+cmake --build build/testnet-release --target unit_tests -- -j"$(nproc)"
 ```
 
 Note: if your environment reports an issue with the aggregate `tests` meta-target,
-build `unit_tests` and `core_tests` directly as shown above.
+build `unit_tests` directly as shown above.
 
 ### 4) Verify available targets in your build dir
 
@@ -405,7 +441,7 @@ Common fix sequence for stale/generated artifacts:
 ```bash
 rm -rf build/testnet-release
 cmake -S . -B build/testnet-release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
-cmake --build build/testnet-release --target daemon -- -j"$(nproc)"
+cmake --build build/testnet-release --target shekyl_rust_bins -- -j"$(nproc)"
 ```
 
 ### 6) Testnet launch sanity command (runtime, not build)

@@ -47,10 +47,8 @@ public:
     if (!single_tx_test_base::init())
       return false;
 
-    account_keys bob_keys = m_bob.get_keys();
-
     crypto::key_derivation recv_derivation;
-    crypto::generate_key_derivation(m_tx_pub_key, bob_keys.m_view_secret_key, recv_derivation);
+    crypto::generate_key_derivation(m_tx_pub_key, m_bob_view_sec, recv_derivation);
 
     // Inline derivation_to_scalar: Hs(derivation || varint(0))
     crypto::ec_scalar hs_scalar;
@@ -65,7 +63,7 @@ public:
     ge_p3 point1;
     ge_scalarmult_base(&point1, reinterpret_cast<const unsigned char*>(&hs_scalar));
     ge_p3 point2;
-    ge_frombytes_vartime(&point2, reinterpret_cast<const unsigned char*>(&bob_keys.m_account_address.m_spend_public_key));
+    ge_frombytes_vartime(&point2, reinterpret_cast<const unsigned char*>(&m_bob_spend_pub));
     ge_cached point2c;
     ge_p3_to_cached(&point2c, &point2);
     ge_p1p1 sum;
@@ -77,7 +75,7 @@ public:
     // derive_secret_key: hs_scalar + spend_secret_key
     sc_add(reinterpret_cast<unsigned char*>(&m_in_ephemeral.sec),
            reinterpret_cast<const unsigned char*>(&hs_scalar),
-           reinterpret_cast<const unsigned char*>(&bob_keys.m_spend_secret_key));
+           reinterpret_cast<const unsigned char*>(&m_bob_spend_sec));
 
     return true;
   }

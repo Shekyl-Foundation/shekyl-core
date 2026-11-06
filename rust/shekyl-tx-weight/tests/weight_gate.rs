@@ -6,7 +6,7 @@
 //! **The weight gate** (`FEE_LADDER_DERIVATION.md` §11.6 PR B item 3).
 //!
 //! `predict_weight` prices a transaction the wallet has not built yet. Until
-//! FL-R20 that prediction had a 2% cushion under it: `check_fee` admitted at
+//! FL-R20 that prediction had a 2% cushion: admission allowed
 //! `needed - needed/50`, so a one-byte prediction error cost nothing. FL-R23
 //! pins `RELAY_ADMISSION_SLACK_BP = 0`, and at zero slack a one-byte error on
 //! any shape is a hard bounce — one the lookback-min admission cannot absorb,
@@ -42,6 +42,12 @@
 //! This file therefore asserts the **assembly**: given a correct proof size,
 //! does every other field of the predictor match the bytes the builder emits.
 //!
+//! The same grid pins [`shekyl_tx_weight::predict_archival_len`] against
+//! `Transaction::archival_len()` — the `|pqc_auths| + |prunable|` the shard
+//! partition folds (SHT-Q2). It is the weight predictor's archival half over
+//! the same fields, so it is gated here, on the same built bytes, rather than
+//! in a second file with a second assembly.
+//!
 //! # Coverage boundary, stated rather than implied
 //!
 //! `predict_weight`'s `tree_depth` is the FCMP++ **layer count** `L`; the wire
@@ -57,7 +63,8 @@ use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{encode_final_tx, PqcAuth, WireEncodeInput};
 use shekyl_tx_weight::{
-    fcmp_proof_size, predict_weight, InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
+    fcmp_proof_size, predict_archival_len, predict_weight, InputCount, OutputCount, MAX_OUTPUTS,
+    MAX_TREE_DEPTH,
 };
 use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN};
 use shekyl_wire::Transaction;
@@ -76,11 +83,20 @@ fn filler(i: usize, tag: u8) -> u8 {
     u8::try_from(i).expect("index is bounded by MAX_INPUTS / MAX_OUTPUTS") ^ tag
 }
 
-/// `EncryptedOutputField` has no byte constructor outside its `Deserialize`
-/// impl, deliberately (a test-only one could not be gated out of the
-/// production archive). Same route the builder's own fixtures take.
+/// `EncryptedOutputField` has no byte constructor, deliberately (a test-only
+/// one could not be gated out of the production archive): a real output's
+/// field, built in process by `construct_output`, the builder's fixtures' route.
 fn enc_field() -> EncryptedOutputField {
-    serde_json::from_str("\"000000000000000000\"").expect("fixture hex is valid")
+    use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
+    let (pk, _sk) = HybridX25519MlKem
+        .keypair_generate()
+        .expect("a KEM keypair generates");
+    let spend = curve25519_dalek::constants::ED25519_BASEPOINT_POINT
+        .compress()
+        .to_bytes();
+    shekyl_crypto_pq::output::construct_output(&[9u8; 32], &pk.x25519, &pk.ml_kem, &spend, 1, 0)
+        .expect("an output constructs")
+        .enc_amount_wire()
 }
 
 /// A real Bp+ over `n_out` commitments. Proving is the one genuinely slow part
@@ -110,9 +126,17 @@ fn transfer_extra(n_out: usize) -> Vec<u8> {
     e.serialize()
 }
 
+/// What the gate reads off a built transaction: its canonical `weight()` and
+/// its `archival_len()`, both from the one re-parsed body.
+#[derive(Debug, PartialEq, Eq)]
+struct Built {
+    weight: usize,
+    archival_len: usize,
+}
+
 /// Assemble the transaction the builder would produce for this shape and
-/// return its canonical `weight()`.
-fn built_weight(n_in: usize, n_out: usize, layers: u8, fee: u64, bp: &Bulletproof) -> usize {
+/// return its canonical `weight()` and `archival_len()`.
+fn built(n_in: usize, n_out: usize, layers: u8, fee: u64, bp: &Bulletproof) -> Built {
     let input = WireEncodeInput {
         key_images: (0..n_in).map(|i| [filler(i, 0x00); 32]).collect(),
         extra_inputs: Vec::new(),
@@ -141,18 +165,22 @@ fn built_weight(n_in: usize, n_out: usize, layers: u8, fee: u64, bp: &Bulletproo
     };
 
     let bytes = encode_final_tx(&input).expect("the builder must encode every in-range shape");
-    Transaction::from_bytes(&bytes)
-        .expect("the builder's own bytes must re-parse")
-        .weight()
+    let tx = Transaction::from_bytes(&bytes).expect("the builder's own bytes must re-parse");
+    Built {
+        weight: tx.weight(),
+        archival_len: usize::try_from(tx.archival_len().to_raw())
+            .expect("a built transaction's archival length fits usize"),
+    }
 }
 
-/// Every `n_in x n_out x L` the builder can produce, asserted exactly.
+/// Every `n_in x n_out x L` the builder can produce, asserted exactly — the
+/// weight, and the archival length on the same bytes.
 ///
 /// `n_out` spans both sides of every power-of-two Bp+ clawback boundary
 /// (1, 2 | 3, 4 | 5..8 | 9..16), which is the term most likely to drift: the
 /// clawback is zero at `n_padded <= 2` and steps at each doubling.
 #[test]
-fn predict_weight_equals_built_weight_over_the_shape_space() {
+fn predict_weight_and_archival_len_equal_built_over_the_shape_space() {
     let bps: Vec<Bulletproof> = (1..=MAX_OUTPUTS).map(bulletproof_for).collect();
     let mut checked = 0usize;
 
@@ -160,17 +188,24 @@ fn predict_weight_equals_built_weight_over_the_shape_space() {
         for n_out in 1..=MAX_OUTPUTS {
             for layers in 2..=MAX_TREE_DEPTH {
                 let fee = 1_000_000u64;
-                let predicted = predict_weight(
-                    InputCount::clamped(n_in),
-                    OutputCount::clamped(n_out),
-                    layers,
-                    fee,
-                );
-                let built = built_weight(n_in, n_out, layers, fee, &bps[n_out - 1]);
+                let predicted = Built {
+                    weight: predict_weight(
+                        InputCount::clamped(n_in),
+                        OutputCount::clamped(n_out),
+                        layers,
+                        fee,
+                    ),
+                    archival_len: predict_archival_len(
+                        InputCount::clamped(n_in),
+                        OutputCount::clamped(n_out),
+                        layers,
+                    ),
+                };
+                let built = built(n_in, n_out, layers, fee, &bps[n_out - 1]);
                 assert_eq!(
                     predicted, built,
-                    "weight mismatch at n_in={n_in} n_out={n_out} L={layers} fee={fee}: \
-                     predicted {predicted}, built {built}"
+                    "mismatch at n_in={n_in} n_out={n_out} L={layers} fee={fee}: \
+                     predicted {predicted:?}, built {built:?}"
                 );
                 checked += 1;
             }
@@ -213,7 +248,7 @@ fn predict_weight_equals_built_weight_across_every_fee_varint_boundary() {
                 layers,
                 fee,
             );
-            let built = built_weight(n_in, n_out, layers, fee, &bps[n_out - 1]);
+            let built = built(n_in, n_out, layers, fee, &bps[n_out - 1]).weight;
             assert_eq!(
                 predicted, built,
                 "weight mismatch at n_in={n_in} n_out={n_out} L={layers} fee={fee}: \

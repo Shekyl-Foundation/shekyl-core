@@ -137,15 +137,16 @@ fn fcmp_spend_round_trips_self_consistently() {
 #[test]
 fn pruned_fcmp_spend_round_trips_and_ingests() {
     use shekyl_wire::PrunedError;
-    // The daemon's pruned fetch (`get_transactions prune:true`) keeps the consensus
-    // pqc_auths but drops the prunable proof (cryptonote_basic.h:523 gates
-    // `rctsig_prunable` on `!pruned`, while pqc_auths at :491-517 are written
-    // regardless). `Ct::read`'s EOF-after-pqc_auths tail must parse this
-    // storage-pruned full-spend form so the wallet can scan spend blocks on refresh
-    // (`get_transactions prune:true` → `parse_pruned_tx`); the pruned-safe ingestion
-    // validator must accept it; and `into_full()` — the one boundary to consensus
-    // code that needs the proof — must still reject it, so a pruned spend can never
-    // reach a verifier. Regression for the refresh-over-spends gap Track 2 surfaced.
+    // The `serialize_base` framing keeps the consensus pqc_auths but drops the
+    // prunable proof (cryptonote_basic.h:523 gates `rctsig_prunable` on
+    // `!pruned`, while pqc_auths at :491-517 are written regardless).
+    // `Ct::read`'s EOF-after-pqc_auths tail must parse it; the pruned-safe
+    // ingestion validator must accept it; and `into_full()` — the one boundary
+    // to consensus code that needs the proof — must still reject it, so a body
+    // without its proof can never reach a verifier. The daemon's pruned fetch
+    // serves the skeleton, not this framing (`SB-Q2`; the wallet binds it in
+    // `parse_tx_batch`), but the `into_full()` refusal is the same for both.
+    // Regression for the refresh-over-spends gap Track 2 surfaced.
     let mut tx = synthetic_spend();
     match &mut tx.ct {
         Ct::Fcmp { prunable, .. } => *prunable = None,
@@ -253,9 +254,9 @@ fn serve_credit_txid_has_no_pqc_component() {
     let tx = serve_credit_tx(2);
     assert_eq!(tx.pqc_auth_hash(), None, "serve-credit hashes 3-part");
     assert_eq!(
-        tx.hash_with_supplied_components(None, tx.prunable_hash()),
+        tx.hash_with_supplied_components(None, tx.prunable_hash(), tx.archival_len()),
         tx.hash(),
-        "3-part reconstruction from the stored prunable digest alone"
+        "reconstruction from the stored prunable digest and archival length alone"
     );
 }
 
@@ -356,8 +357,10 @@ fn fcmp_spend_rejects_oversized_pqc_blob() {
 
 #[test]
 fn synthetic_spend_hash_preimage_is_pinned() {
-    // Regression guard for the 4-part FCMP++ spend hash (§11):
-    //   keccak256( H(prefix) ‖ H(base) ‖ H(varint(N)·pqc_auths) ‖ H(prunable) ).
+    // Regression guard for the FCMP++ spend hash (§11; `SHT-Q2`):
+    //   keccak256( H(prefix) ‖ H(base) ‖ H(varint(N)·pqc_auths) ‖ H(prunable) ‖ len ),
+    // where `len` is the archival length as a 32-byte word (the `u64`
+    // little-endian, then zeros).
     // Cross-language parity for this arm is pinned struct-derived in
     // `pruned_tx_hash_parity.rs` (C++ leg: `pruned_tx_hash_parity.cpp`); the
     // daemon-captured sibling is `live_oracle_spend_identity_matches_the_accepted_bytes`
@@ -374,7 +377,7 @@ fn synthetic_spend_hash_preimage_is_pinned() {
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(
-        h, "687b75959bcc7f1acc261a49213e8a0f47862cb6bffa9d21443437e3ae853b6e",
+        h, "75da682cf46cfb828414f69448c414a0230b57323b093b511ccaa20bf3cd27d6",
         "synthetic FCMP++ spend hash preimage drifted (see the §11 note above)"
     );
 }
@@ -420,16 +423,18 @@ fn synthetic_spend_prefix_hash_is_pinned() {
 
 #[test]
 fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
-    // Per-input PQC signing preimage (§1.1): payload(i) = pruned ‖ prunable_hash ‖
-    // header(i) ‖ key_hashes, then keccak256. The captured KAT
-    // (`pqc_signing_preimage_kat.rs`) holds the derivation to the specification's
-    // output over real transactions; this pins one synthetic body against drift.
+    // Per-input PQC signing hash (§1.1; the signing envelope §2.2):
+    // frame("shekyl/fcmp-spend-signing-v2", id, [tx_signable, header(i),
+    // key_hashes, prunable_hash]) on the harness id. The captured KAT
+    // (`pqc_signing_preimage_kat.rs`) holds the derivation to an independent
+    // oracle over real transactions; this pins one synthetic body against drift.
     let tx = synthetic_spend();
-    let hashes = tx.pqc_signing_payload_hashes();
+    let hashes = tx.pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID);
     assert_eq!(hashes.len(), 1, "one PQC signing hash per input");
     assert_eq!(
         hashes[0].to_string(),
-        "00862ce5178bfeadcdc99aa34618950d47f3c318843addc168843fb067e4a23a",
+        "faf54a6b311ad25cab1ab1efdfabc3b6656700b5507b82561b5c68dcd5b95224\
+         8a85f1488924ae78ab35f8848dec05919932a04ac5630478d38a594cc52c3854",
         "FCMP++ PQC signing preimage drifted (§1.1)"
     );
     // Structural: the fee is bound into the preimage (it lives in ct_base_blob), so
@@ -440,7 +445,7 @@ fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
     }
     assert_ne!(
         hashes,
-        fee_changed.pqc_signing_payload_hashes(),
+        fee_changed.pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID),
         "fee must be bound into the PQC signing preimage"
     );
 }
@@ -461,7 +466,9 @@ fn pqc_signing_payload_hashes_empty_for_non_spend() {
         pqc_auths.clear();
     }
     assert!(
-        fee_only.pqc_signing_payload_hashes().is_empty(),
+        fee_only
+            .pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID)
+            .is_empty(),
         "fee-only (no prunable) yields no signing hashes"
     );
 
@@ -472,7 +479,9 @@ fn pqc_signing_payload_hashes_empty_for_non_spend() {
         commitments: Vec::new(),
     });
     assert!(
-        null_ct.pqc_signing_payload_hashes().is_empty(),
+        null_ct
+            .pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID)
+            .is_empty(),
         "Null ct yields no signing hashes"
     );
 }

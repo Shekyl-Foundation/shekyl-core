@@ -14,66 +14,80 @@
 //! measures them.
 //!
 //! **The binding input is a flood, not organic growth.** A W9 stuffer is the
-//! fastest `n` can physically move — it buys leaves at the block-weight ceiling —
-//! so the honest worst case for a no-controller constraint is the **adversarial**
-//! slew, not the scenario trajectories. If per-epoch `Δshare` is invisible even
-//! under a sustained flood at the surge ceiling, §6.1's negative constraint is
-//! vindicated end-to-end.
+//! fastest `n` can physically move — it buys archival bytes at the block-weight
+//! ceiling — so the honest worst case for a no-controller constraint is the
+//! **adversarial** slew, not the scenario trajectories. If per-epoch `Δshare` is
+//! invisible even under a sustained flood at the surge ceiling, §6.1's negative
+//! constraint is vindicated end-to-end.
 //!
 //! **Reorg reversibility.** Monotonicity holds *in the canonical chain*; a reorg
-//! can un-freeze shards. `ARCHIVAL_REORG_DEPTH_BLOCKS` bounds how far back that
+//! can re-open shards. `ARCHIVAL_REORG_DEPTH_BLOCKS` bounds how far back that
 //! reaches, so it bounds the only down-swing that exists.
 
 use std::fmt;
 
-use shekyl_archival_retention::SEGMENT_LEAF_COUNT;
+use shekyl_types::SHARD_LENGTH;
 
+use crate::burden::honest_leaves_at_closed_shards;
 use crate::calibration::{
-    leaf_stuffer_cost_per_shard_atomic, stuffer_tx_fee_atomic, tree_depth_for_leaves,
-    FEE_PER_BYTE_ATOMIC,
+    self, required_price, stuffer_campaign, tree_depth_for_leaves, PerByteRate,
 };
-use crate::escalation::{family, EscalationCurve, SHARE_SCALE};
+use crate::engine::SimParams;
+use crate::escalation::{EscalationCurve, SHARE_SCALE};
+use crate::stage2::AdmissionAtShards;
 
-/// Long-term block-weight median floor — the penalty-free zone.
-pub const BLOCK_WEIGHT_FLOOR: u64 = shekyl_economics::FULL_REWARD_ZONE;
+pub use shekyl_economics::blocks_to_surge_saturation;
 
-pub use shekyl_economics::{blocks_to_surge_saturation, BLOCK_WEIGHT_SURGE_FACTOR};
-
-/// Saturated effective median: `S ·` the penalty-free zone.
-pub const BLOCK_WEIGHT_PENALTY_FREE: u64 = BLOCK_WEIGHT_FLOOR * BLOCK_WEIGHT_SURGE_FACTOR;
-
-/// The legal per-block ceiling: `2 ×` the effective median. Using it costs the
-/// miner-reward penalty, so a flooder pays for the extra capacity twice (fees and
-/// penalty compensation) — but it is available, and it is **double** what a
-/// penalty-free model predicts.
-pub const BLOCK_WEIGHT_MAX: u64 = BLOCK_WEIGHT_PENALTY_FREE * 2;
-
-/// Settlement epoch length, blocks (`SETTLEMENT_EPOCH_BLOCKS`).
-pub const EPOCH_BLOCKS: u64 = 10_000;
-
-/// Reorg depth bound, blocks (`ARCHIVAL_REORG_DEPTH_BLOCKS`) — the reach of the
-/// only down-swing the operand admits.
-pub const REORG_DEPTH_BLOCKS: u64 = 720;
-
-/// Outputs the stuffer can land in one block at `block_weight` — the physical
-/// leaf-minting ceiling. Uses the **production** predictor's weight for the
-/// 1-in/16-out shape (recovered from its min-fee, which is `weight × FEE_PER_BYTE`).
+/// Saturated effective median: the validator's clamp
+/// ([`shekyl_economics::effective_median`]) with the short-term median past
+/// its ceiling, `S ·` the penalty-free zone.
 #[must_use]
-pub fn max_outputs_per_block(block_weight: u64, n_shards: u64) -> u64 {
-    let depth = tree_depth_for_leaves(n_shards.max(1).saturating_mul(SEGMENT_LEAF_COUNT));
-    let tx_weight = stuffer_tx_fee_atomic(depth) / FEE_PER_BYTE_ATOMIC;
-    if tx_weight == 0 {
-        return 0;
-    }
-    (block_weight / tx_weight).saturating_mul(crate::calibration::STUFFER_OUTPUTS_PER_TX)
+pub fn block_weight_penalty_free(run: &SimParams) -> u64 {
+    // The long-term median floored at the run's penalty-free zone.
+    let economic = run.economic();
+    shekyl_economics::effective_median(economic.full_reward_zone, u64::MAX, economic)
 }
 
-/// Shards a flood can freeze over `blocks` at `block_weight` — the max slew of the
-/// D2 operand. Integer throughout.
+/// The legal per-block ceiling at that median
+/// ([`shekyl_economics::block_weight_limit`]). Using it costs the
+/// miner-reward penalty, so a flooder pays for the extra capacity twice (fees
+/// and penalty compensation) — but it is available, and it is **double** what
+/// a penalty-free model predicts.
 #[must_use]
-pub fn max_shards_per_window(blocks: u64, block_weight: u64, n_shards: u64) -> u64 {
-    let outputs = max_outputs_per_block(block_weight, n_shards).saturating_mul(blocks);
-    outputs / SEGMENT_LEAF_COUNT
+pub fn block_weight_max(run: &SimParams) -> u64 {
+    shekyl_economics::block_weight_limit(block_weight_penalty_free(run), run.economic())
+}
+
+/// Reorg depth bound, blocks — the reach of the only down-swing the operand
+/// admits.
+pub const REORG_DEPTH_BLOCKS: u64 = shekyl_archival_retention::ARCHIVAL_REORG_DEPTH_BLOCKS;
+
+/// Archival bytes a flood can land in one block at `block_weight` when the
+/// chain has closed `n_shards` — the physical ceiling on the fold, searched
+/// over every shape the builder accepts
+/// ([`calibration::max_archival_bytes_per_block`]: whole transactions in a
+/// finite block, so the cheapest-per-byte shape is not always the one that
+/// lands the most); depth from the honest chain at `n_shards`. `rate` is
+/// what the flood pays per byte: it enters only through the fee's varint,
+/// which is a byte or two of each transaction's weight.
+#[must_use]
+pub fn max_archival_bytes_per_block(block_weight: u64, n_shards: u64, rate: PerByteRate) -> u64 {
+    let depth = tree_depth_for_leaves(honest_leaves_at_closed_shards(n_shards.max(1)));
+    calibration::max_archival_bytes_per_block(block_weight, depth, rate)
+}
+
+/// Shards a flood can close over `blocks` at `block_weight` — the max slew of
+/// the D2 operand: the bytes the flood lands, through the partition's unit `W`.
+/// Integer throughout.
+#[must_use]
+pub fn max_shards_per_window(
+    blocks: u64,
+    block_weight: u64,
+    n_shards: u64,
+    rate: PerByteRate,
+) -> u64 {
+    let bytes = max_archival_bytes_per_block(block_weight, n_shards, rate).saturating_mul(blocks);
+    bytes / SHARD_LENGTH.to_raw()
 }
 
 /// `Δshare` (fixed-point `SHARE_SCALE`) a jump from `n` to `n + delta` produces
@@ -94,13 +108,41 @@ pub fn delta_share(curve: &EscalationCurve, n: u64, delta: u64) -> u64 {
 /// ```
 ///
 /// At `B = 2M` this is **exactly zero** — the miner forfeits the *entire* block
-/// reward — so a flooder at the ceiling must compensate `base_reward` per block or
-/// no rational miner includes the flood. Over an epoch that is
-/// `base_reward × EPOCH_BLOCKS`, which **dwarfs the stuffing fees**.
+/// reward — so a flooder at the ceiling must compensate it per block or no
+/// rational miner includes the flood. The forfeit is the caller's, measured on
+/// the owner ([`forfeit_at_the_ceiling`]); over an epoch it is
+/// `forfeit × EPOCH_BLOCKS`, which **dwarfs the stuffing fees**.
 #[must_use]
-pub fn penalty_compensation_skl_per_epoch(base_block_reward_atomic: u64) -> f64 {
-    // reward at B = 2M is 0 ⇒ full base_reward forfeited, every block.
-    (u128::from(base_block_reward_atomic) * u128::from(EPOCH_BLOCKS)) as f64 / 1.0e9
+pub fn penalty_compensation_skl_per_epoch(forfeit_per_block_atomic: u64, run: &SimParams) -> f64 {
+    (u128::from(forfeit_per_block_atomic) * u128::from(run.archival().settlement_epoch_blocks))
+        as f64
+        / crate::burden::COIN as f64
+}
+
+/// What a block at the legal ceiling forfeits at a supply of
+/// `already_generated` and baseline volume: the paid emission less the
+/// penalised reward at [`block_weight_max`] over [`block_weight_penalty_free`]
+/// — the penalty's own arithmetic, not the closed form above.
+#[must_use]
+pub fn forfeit_at_the_ceiling(
+    already_generated: u64,
+    params: &shekyl_economics::EconomicParams,
+    run: &SimParams,
+) -> u64 {
+    let emission = shekyl_economics::PrePenaltyEmission::of(
+        already_generated,
+        shekyl_economics::TxVolume::per_block(params.tx_volume_baseline),
+        params,
+    )
+    .expect("a mid-chain supply is priced");
+    let at_ceiling = emission
+        .penalised(
+            block_weight_penalty_free(run),
+            block_weight_max(run),
+            params,
+        )
+        .expect("the ceiling is within twice the median");
+    emission.to_raw() - at_ceiling
 }
 
 /// A6 report: the slew ceiling, per-epoch `Δshare` under a sustained flood, and
@@ -109,33 +151,32 @@ pub fn penalty_compensation_skl_per_epoch(base_block_reward_atomic: u64) -> f64 
 pub fn a6_report(
     out: &mut impl fmt::Write,
     n_samples: &[u64],
-    base_block_reward_atomic: u64,
+    forfeit_per_block_atomic: u64,
+    admission: &AdmissionAtShards,
+    run: &SimParams,
 ) -> fmt::Result {
-    let curve = family()
-        .iter()
-        .max_by_key(|c| c.asymptote)
-        .copied()
-        .unwrap_or_else(crate::escalation::flat_25);
-    let surge = BLOCK_WEIGHT_PENALTY_FREE;
+    let curve = crate::escalation::steepest(run);
+    let surge = block_weight_penalty_free(run);
     writeln!(
         out,
         "\nA6 — swing / band width (§12.2): the empirical check on §6.0's STRUCTURAL claim\n\
          that the operand cannot swing (monotone + slow + no controller ⇒ W8 armed by\n\
          operand). Binding input is a W9 FLOOD, not organic growth — a stuffer buying\n\
-         leaves at the block-weight ceiling is the fastest n can physically move.\n\
+         archival bytes at the block-weight ceiling is the fastest n can physically move.\n\
          Ceiling: {FLOOR} B/block floor x{SURGE} surge = {SU} B, reached after\n\
          ~{SAT} blocks of sustained flood ({SATPCT:.1}% of an epoch); epoch = {EB} blocks;\n\
          reorg reach = {RD} blocks. Curve = steepest candidate (asymptote {A:.0}%,\n\
          knee {K}) — a cliff would surface there first.",
-        FLOOR = BLOCK_WEIGHT_FLOOR,
-        SURGE = BLOCK_WEIGHT_SURGE_FACTOR,
+        FLOOR = run.economic().full_reward_zone,
+        SURGE = run.economic().block_weight_surge_factor,
         SU = surge,
-        SAT = blocks_to_surge_saturation(BLOCK_WEIGHT_SURGE_FACTOR),
-        SATPCT = blocks_to_surge_saturation(BLOCK_WEIGHT_SURGE_FACTOR) as f64 * 100.0
-            / EPOCH_BLOCKS as f64,
-        EB = EPOCH_BLOCKS,
+        SAT = blocks_to_surge_saturation(run.economic().block_weight_surge_factor),
+        SATPCT = blocks_to_surge_saturation(run.economic().block_weight_surge_factor) as f64
+            * 100.0
+            / run.archival().settlement_epoch_blocks as f64,
+        EB = run.archival().settlement_epoch_blocks,
         RD = REORG_DEPTH_BLOCKS,
-        A = curve.asymptote as f64 / 10_000.0,
+        A = curve.asymptote as f64 / (SHARE_SCALE as f64 / 100.0),
         K = curve.knee_shards,
     )?;
     writeln!(
@@ -146,17 +187,28 @@ pub fn a6_report(
     let mut worst_epoch_pts = 0.0_f64;
     let mut worst_reorg_pts = 0.0_f64;
     let mut worst_dn = 0u64;
+    let mut worst_dn_at_n = 0u64;
     let mut worst_pen_pts = 0.0_f64;
     for &n in n_samples {
-        let dn_epoch = max_shards_per_window(EPOCH_BLOCKS, surge, n);
-        let dn_pen = max_shards_per_window(EPOCH_BLOCKS, BLOCK_WEIGHT_MAX, n);
-        let dn_reorg = max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n);
+        let rate = admission.at(n);
+        let dn_epoch =
+            max_shards_per_window(run.archival().settlement_epoch_blocks, surge, n, rate);
+        let dn_pen = max_shards_per_window(
+            run.archival().settlement_epoch_blocks,
+            block_weight_max(run),
+            n,
+            rate,
+        );
+        let dn_reorg = max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n, rate);
         let ds_epoch = delta_share(&curve, n, dn_epoch);
         let ds_reorg = delta_share(&curve, n, dn_reorg);
         let pts = ds_epoch as f64 / SHARE_SCALE as f64 * 100.0;
         worst_epoch_pts = worst_epoch_pts.max(pts);
         worst_reorg_pts = worst_reorg_pts.max(ds_reorg as f64 / SHARE_SCALE as f64 * 100.0);
-        worst_dn = worst_dn.max(dn_pen);
+        if dn_pen > worst_dn {
+            worst_dn = dn_pen;
+            worst_dn_at_n = n;
+        }
         worst_pen_pts =
             worst_pen_pts.max(delta_share(&curve, n, dn_pen) as f64 / SHARE_SCALE as f64 * 100.0);
         writeln!(
@@ -176,7 +228,7 @@ pub fn a6_report(
          settlement epoch when an adversary floods at the surge ceiling for the whole\n\
          epoch — the worst case for §6.0's no-swing claim. Worst observed: {W:.4} points.\n\
          The reorg column bounds the only DOWN-swing that exists (monotonicity holds in\n\
-         the canonical chain; a reorg can un-freeze at most {RD} blocks' worth).\n\
+         the canonical chain; a reorg can re-open at most {RD} blocks' worth).\n\
          VERDICT: {V}",
         W = worst_epoch_pts,
         RD = REORG_DEPTH_BLOCKS,
@@ -195,7 +247,7 @@ pub fn a6_report(
          (b) ADVERSARIAL SLEW RATE (economic) — {W:.4} pts/epoch penalty-free, {WP:.4}\n\
              pts/epoch if the flooder also compensates the miner penalty (the legal 2x\n\
              limit). MEASURED against blockchain.cpp's ArticMine algorithm, not derived —\n\
-             the ceiling a flood can force at maximum effort, early-chain. A rate, not a cliff,\n\
+             the ceiling a flood can force at maximum effort. A rate, not a cliff,\n\
              and it is bounded, monotone and one-directional — but it is NOT invisible,\n\
              which is the honest correction to a purely structural reading of §6.0.\n\
              It is also PRICED, and the legal-limit price is dominated by a term that is\n\
@@ -210,9 +262,14 @@ pub fn a6_report(
         RDP = worst_reorg_pts,
         W = worst_epoch_pts,
         WP = worst_pen_pts,
-        C = worst_dn as f64
-            * (leaf_stuffer_cost_per_shard_atomic(SEGMENT_LEAF_COUNT) as f64 / 1.0e9),
-        P = penalty_compensation_skl_per_epoch(base_block_reward_atomic),
+        C = required_price(stuffer_campaign(
+            honest_leaves_at_closed_shards(worst_dn_at_n),
+            worst_dn,
+            admission.at(worst_dn_at_n),
+        ))
+        .cost_atomic as f64
+            / crate::burden::COIN as f64,
+        P = penalty_compensation_skl_per_epoch(forfeit_per_block_atomic, run),
     )?;
 
     Ok(())
@@ -221,16 +278,40 @@ pub fn a6_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::escalation::family;
+
+    /// The flood's rate reaches the ceiling only through the fee's varint, so
+    /// these structural tests take one representative rate: the control arm's.
+    const RATE: PerByteRate = crate::fee_model::SECTION_12_13_ADMISSION_RATE;
 
     #[test]
-    fn flood_ceiling_is_finite_and_depth_sensitive() {
-        let surge = BLOCK_WEIGHT_PENALTY_FREE;
-        let early = max_shards_per_window(EPOCH_BLOCKS, surge, 1_000);
-        let late = max_shards_per_window(EPOCH_BLOCKS, surge, 5_000_000);
+    fn flood_ceiling_is_finite_and_nearly_depth_flat() {
+        let surge = block_weight_penalty_free(&SimParams::default());
+        let early = max_shards_per_window(
+            SimParams::default().archival().settlement_epoch_blocks,
+            surge,
+            1_000,
+            RATE,
+        );
+        let late = max_shards_per_window(
+            SimParams::default().archival().settlement_epoch_blocks,
+            surge,
+            5_000_000,
+            RATE,
+        );
         assert!(early > 0, "a flood must be able to move n at all");
-        // Deeper trees ⇒ heavier proofs ⇒ fewer leaves per block, so the ceiling
-        // falls as the chain grows: the operand gets HARDER to move over time.
-        assert!(late <= early, "slew ceiling must not rise with chain depth");
+        // Byte-keyed, the ceiling is `B × (archival/weight) / W` per block: the
+        // weight the flooder pays for and the archival bytes the operand counts
+        // both grow with the FCMP proof, so depth moves the ratio, not the
+        // ceiling, and only by a few percent (measured 2026-10-01: −4 % from
+        // depth 1 to 6, with integer tx-per-block rounding making the sign
+        // depth-local). The leaf era's "harder to move over time" was a
+        // lever; here it is noise. Pinned as a bound, not a direction.
+        let (lo, hi) = (early.min(late), early.max(late));
+        assert!(
+            hi * 90 <= lo * 100,
+            "depth moves the ceiling by >10%: {early} vs {late}"
+        );
     }
 
     #[test]
@@ -240,12 +321,8 @@ mod tests {
         // adversarial slew RATE is a reported quantity for the freeze decision
         // (see `a6_report`), not a pass/fail gate. What must hold structurally:
         // the share never decreases, and no single shard causes a jump.
-        let curve = family()
-            .iter()
-            .max_by_key(|c| c.asymptote)
-            .copied()
-            .unwrap();
-        let surge = BLOCK_WEIGHT_PENALTY_FREE;
+        let curve = crate::escalation::steepest(&SimParams::default());
+        let surge = block_weight_penalty_free(&SimParams::default());
         for &n in &[0u64, 1_000, 25_000, 100_000, 250_000] {
             // Monotone: the share never falls as n rises.
             assert!(curve.share(n + 1) >= curve.share(n), "monotone at n={n}");
@@ -257,7 +334,12 @@ mod tests {
                 "single-shard jump at n={n}: {step}"
             );
             // The adversarial slew is finite and reported, not gated here.
-            let dn = max_shards_per_window(EPOCH_BLOCKS, surge, n.max(1));
+            let dn = max_shards_per_window(
+                SimParams::default().archival().settlement_epoch_blocks,
+                surge,
+                n.max(1),
+                RATE,
+            );
             assert!(dn > 0 && delta_share(&curve, n, dn) < SHARE_SCALE);
         }
     }
@@ -266,12 +348,59 @@ mod tests {
     fn reorg_bound_is_a_strict_subset_of_the_epoch_bound() {
         // The only down-swing reaches at most REORG_DEPTH_BLOCKS, which is a small
         // fraction of an epoch — so reversibility cannot exceed the up-slew.
-        let surge = BLOCK_WEIGHT_PENALTY_FREE;
-        const _: () = assert!(REORG_DEPTH_BLOCKS < EPOCH_BLOCKS);
+        let surge = block_weight_penalty_free(&SimParams::default());
+        let epoch_blocks = SimParams::default().archival().settlement_epoch_blocks;
+        assert!(REORG_DEPTH_BLOCKS < epoch_blocks);
         let n = 50_000;
         assert!(
-            max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n)
-                <= max_shards_per_window(EPOCH_BLOCKS, surge, n)
+            max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n, RATE,)
+                <= max_shards_per_window(
+                    SimParams::default().archival().settlement_epoch_blocks,
+                    surge,
+                    n,
+                    RATE,
+                )
         );
+    }
+
+    /// A6 gates the band on its worst slew, and `steepest()` picks that member
+    /// by an ordering (top asymptote, smallest knee). This holds the ordering
+    /// to the quantity: over the preview corpora the report samples, the
+    /// member it picks moves the share at least as far as every other member.
+    /// A future candidate whose smallest knee is not the worst slew fails
+    /// here instead of passing the gate on the wrong member.
+    #[test]
+    fn the_steepest_member_has_the_worst_slew_in_the_band() {
+        let surge = block_weight_penalty_free(&SimParams::default());
+        let worst = |curve: &EscalationCurve| -> u64 {
+            crate::stage2::ESCALATION_PREVIEW_N
+                .iter()
+                .map(|&n| {
+                    delta_share(
+                        curve,
+                        n,
+                        max_shards_per_window(
+                            SimParams::default().archival().settlement_epoch_blocks,
+                            surge,
+                            n,
+                            RATE,
+                        ),
+                    )
+                })
+                .max()
+                .unwrap_or(0)
+        };
+        let bar = worst(&crate::escalation::steepest(&SimParams::default()));
+        assert!(bar > 0, "the steepest member must move the share at all");
+        for curve in family(&SimParams::default()) {
+            assert!(
+                worst(&curve) <= bar,
+                "a member ranked flatter slews more: asymptote {} knee {} moves {} against {}",
+                curve.asymptote,
+                curve.knee_shards,
+                worst(&curve),
+                bar
+            );
+        }
     }
 }

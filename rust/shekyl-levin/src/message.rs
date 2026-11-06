@@ -4,8 +4,8 @@
 // BSD-3-Clause
 
 //! Whole-message builders for the request / response / notification flows.
-//! Each mirrors one `message_writer::finalize_*` shape from the C++ oracle
-//! (`contrib/epee/src/levin_base.cpp`): header first, opaque payload after.
+//! Each is one `finalize_*` shape of the deleted C++ `message_writer`:
+//! header first, opaque payload after.
 
 use crate::header::{BucketHead, Flags, HEADER_SIZE};
 

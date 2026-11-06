@@ -7,19 +7,24 @@ amendment); (c) LANDED 2026-09-16 — `N = 8` pinned (PR #746).**
 Round 1 opened 2026-09-12, grounded `dev@ba4b3c73a`. Every `SF-D`
 question is disposed: `SF-D2`, `SF-D3`, `SF-D4`, `SF-D6`, `SF-D7`,
 `SF-D10`, `SF-D13` RULED; `SF-D5` RULED and amended with the request
-carrier; `SF-D8` RULED (signed message and response carrier); `SF-D9`
+carrier; `SF-D8` RULED (signed message and response carrier; AMENDED
+2026-10-04 — the message ends in a nonce-salted digest of the delivered
+response, under the v3 scheme domain); `SF-D9`
 done; `SF-D11` WITHDRAWN; `SF-D12` a corollary of `SF-D10`. **The
 rule-26 halt is lifted:** implementation may begin, in the landing
 sequence §9.1 fixes (2026-09-13): (a0) the v2 pass-countersignature
 verifier alone → (a) serve side → (b) `shekyl-p-fetch` → (c) W₂ then
 `N`. This file stays in `docs/design/` because it still owns named
 residue — `L` (`SF-D8`; `archival_attestation_anchor_lag_blocks = 4`
-PROVISIONAL; drop-to-3 is a candidate, not a pin), Sub-PR 2
-(`PDM-Q6`), and SH-2. The integer `N` (`SF-D7`;
+PROVISIONAL until the Round-2 testnet gate pins it with `W`; it holds
+on the 2026-10-02 per-byte re-derivation, which withdrew the drop-to-3
+candidate, and `SF-D6`'s retry budget is 2 retries, ruled the same
+day), Sub-PR 2
+(`PDM-Q6`). SH-2 LANDED 2026-10-06. The integer `N` (`SF-D7`;
 `shekyl_p_fetch::MAX_INFLIGHT = 8`) and the W₂ measurement are
 discharged. Archives to `docs/completed/` when this file owns no named
 residue (the "when (c) pins `N`" criterion expired 2026-09-16: `N` is
-pinned and `L` / Sub-PR 2 / SH-2 remain). Organic draw bound `k`
+pinned and `L` / Sub-PR 2 remain). Organic draw bound `k`
 is `TJ-D`'s, not this PR's.
 Identifier family `SF-` (index row `SF-D1…SF-Dn`, registered at
 birth per rule 94 §1). Process per
@@ -30,8 +35,8 @@ implementation record.
 
 This round specifies the **client** side of the archival serving route:
 a daemon fetching `GET /shard/{id}` from a P-served `.onion`. The server
-half exists (`shekyl-p-serve` + `shekyl-p-host`, built-unwired at SH-1/
-SH-2); the inner frame and path are ruled (`RF-D4` frame, `RF-R1`
+half exists (`shekyl-p-serve` + `shekyl-p-host`, wired through SH-1/
+SH-2, the resident key landing 2026-10-06); the inner frame and path are ruled (`RF-D4` frame, `RF-R1`
 route); discovery is ruled (`EU-D1`, `EU-D3`, `EU-D4` — the
 JoinMarket-endpoint design; the rest of the `EU-` round was REJECTED
 2026-09-13 with kind 4, see §4). Timeout/retry is
@@ -43,16 +48,20 @@ later the same day — the second amendment is the one that landed: both
 callers send requester-random bytes plus a **chain anchor**
 `anchor_height ‖ anchor_hash` at `tip − archival_reorg_depth_blocks`;
 `P` gates `anchor_height` against its own height (±`L`) and signs the
-decoded 72-byte header ‖ `shard_id_le[8]`; admission looks the anchor
-hash up on the connecting chain inside `[h−720−L, h−720]`; the
+decoded 72-byte header ‖ `shard_id_le[8]` ‖ a nonce-salted digest of the
+delivered response (the digest term AMENDED 2026-10-04); admission looks
+the anchor hash up on the connecting chain inside `[h−720−L, h−720]`; the
 challenge tuple and `cb_out_key` are not in the fetch signature; the
-response body is an outer binary envelope carrying the canonical
-`HybridSignature` followed by the unchanged `RF-D4` frame) — the
+response body is the shard body (`shekyl_wire::shard_frame` since the
+2026-10-08 amendment) followed by an outer binary envelope of the bound
+scheme's width — the live binding carries the canonical `HybridSignature`
+at `IDENTITY_ENVELOPE_LEN` (3,385), and the receipt width is staged and
+not selected (AMENDED 2026-10-13)) — the
 things an implementer would otherwise have decided silently at the
 keyboard. Crate home is `SF-D4` (RULED). Virt-port is `SF-D5` (RULED:
 80, home `shekyl-curve-tree`). Outbound SOCKS reuse is `SF-D2`. SOCKS
-isolation is `SF-D3` (unauthenticated, no isolation flags; circuit
-assignment is Tor's).
+isolation is `SF-D3` (fresh credentials per read, so a circuit per
+read; no isolation flags).
 
 **Grep-surface conventions.** A withdrawn *identifier* is current
 information: keep `SF-D11` WITHDRAWN in the heading and in §4, so a
@@ -88,8 +97,8 @@ round is — is the **daemon client of those contracts**.
   request line and HTTP status/headers. Neither owns timeout, retry, or
   dial grammar. `SF-D5` amends the request with the required nonce;
   `SF-D8` rules the response envelope. How the daemon uses Tor outbound
-  is `SF-D2`. SOCKS isolation is `SF-D3` (unauthenticated, no isolation
-  flags).
+  is `SF-D2`. SOCKS isolation is `SF-D3` (fresh credentials per read, no
+  isolation flags).
 - **The topology flipped.** `EU-D1` rules: the daemon is the client; no
   wallet talks to a wallet; the fetcher is a daemon Rust subsystem
   beside `shekyl-daemon-rpc` (process locality, not crate membership —
@@ -146,20 +155,20 @@ inherited as "the client waits."
 | Pin | Where | What it fixes |
 | --- | --- | --- |
 | Serve route | `rust/shekyl-p-serve/src/serve.rs:57` — `ROUTE_PREFIX = "/shard/"` | The path the client dials (`RF-R1`) |
-| Served body | `rust/shekyl-curve-tree/src/served_frame.rs:274` — `ServedFrameHeader::read` | Frame parse incl. the `RF-D7` padding bound, enforced before the lengths are obtainable |
+| Served body | `rust/shekyl-curve-tree/src/served_frame.rs@f317d979c:282` — `ServedFrameHeader::read` — **RETIRED 2026-10-08** (module deleted; the body is `shekyl_wire::shard_frame`, `SF-D8` amendment) | Frame parse incl. the `RF-D7` padding bound, enforced before the lengths are obtainable (as pinned 2026-09-12) |
 | Content-verify function | `rust/shekyl-curve-tree/src/store/ops.rs:139` — `recompute_segment_r_k(&[[u8; 128]]) -> Result<[u8; 32], _>` | Content-authentication half only; today its only non-store caller is `p-serve/tests/store_axis.rs` — no production fetcher |
 | Serve virt port | `rust/shekyl-engine-core/src/engine/stake_engine/serving/task.rs:52` — `pub(crate) SERVING_VIRTUAL_PORT = 80`; `:58` — `SERVING_MAX_STREAMS = 8` | **Number RULED 80** (`SF-D5`). `MAX_STREAMS` stays SPIKE-PIN. **Home** is `shekyl-curve-tree` (`SF-D4`); this `pub(crate)` is the current location, not the home — the implementation PR moves the declaration |
 | Challenge deadline | `rust/shekyl-archival-retention/src/constants.rs:147` — `CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` | The consensus clock the challenge caller answers to (`SF-D6`) |
-| Wallet-side isolation precedent | `rust/shekyl-p-transport/src/lib.rs:134` — `derive_socks_user(&PCanonicalId)` per-P `IsolateSOCKSAuth` | P↔principal firewall on the **wallet** Tor instance. `SF-D3` RULED: do not copy it onto the daemon fetcher |
-| Overlay SOCKS credentials | `src/net/socks.cpp:246–271` — empty `userinfo` emits SOCKS5 no-auth | What overlay P2P presents on the managed instance. `SF-D3` matches it |
-| Daemon `SocksPort` flags | `rust/shekyl-tor-control-client/src/control/actor.rs:859` — `--SocksPort` with `SocksPort::Auto`; no `Isolate*` flags on the spawn | Tor's own defaults apply. `SF-D3`: this client sets none |
-| Daemon Tor today | SOCKS is discovered (`rust/shekyl-tor-control-daemon/src/ephemeral.rs:18` crate-doc; `:240` — `GETINFO net/listeners/socks`) and consumed (`src/p2p/net_node.inl:878` — `zone.m_connect = &socks_connect`; `:879` — `zone.m_proxy_address`). Default posture is inbound onion **plus** SOCKS outbound on the tor zone. `--tx-proxy` / `--anonymous-inbound` yield the managed instance (`net_node.inl:815–819`) | `SF-D2` RULED: reuse **this** zone proxy. Object of reuse is the zone's SOCKS, not always `DaemonTorControl`. Does not re-rule PWD-E7 |
-| Discovery | `EU-D3`/`EU-D4` — endpoint = raw 32-byte Ed25519 key on the bond record; witness reads it from the drawable snapshot at epoch open, joined by `p_id` (`DrawablePair`, `rust/shekyl-archival-retention/src/challenge_assignment.rs:71`). **Producer RULED 2026-09-16 (SO-D8 Q3):** `DrawableSet::at_epoch_open` (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §7.4) | `SF-D5`'s input: key → onion is derivation, not lookup. `SF-D10` reads the holder set of `s` from the same snapshot |
+| Wallet-side isolation precedent | `rust/shekyl-p-transport/src/lib.rs:134` — `derive_socks_user(&PCanonicalId)` per-P `IsolateSOCKSAuth` | P↔principal firewall on the **wallet** Tor instance. A per-`P` credential would put every read of one persona on one circuit, which is what `SF-D3` now prevents; the daemon's credentials are per read |
+| Overlay SOCKS credentials | `Network::publish_managed_running` in `rust/shekyl-p2p/src/network.rs` hands the Tor connector `Proxy::unauthenticated`: SOCKS5 no-auth | What overlay P2P presents on the managed instance. The fetch path no longer matches it: `SF-D3` presents credentials per read |
+| Daemon `SocksPort` flags | `rust/shekyl-tor-control-client/src/control/actor.rs:900` — `--SocksPort` with `SocksPort::Auto`; no `Isolate*` flags on the spawn | Tor's own defaults apply, `IsolateSOCKSAuth` among them, which is what `SF-D3`'s per-read credentials rely on. This client sets no flags |
+| Daemon Tor today | SOCKS is discovered (`rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs:6` crate-doc; `rust/shekyl-daemon/src/tor/mod.rs:761-770` — `GETINFO net/listeners/socks`) and consumed (`src/p2p/net_node.inl` lines 883–884 at `d09bf3ef0b` — `zone.m_connect = &socks_connect`, `zone.m_proxy_address`; *records-was:* `b00e61bbd5` deleted `socks_connect`). Default posture is inbound onion **plus** SOCKS outbound on the tor zone. `--tx-proxy` / `--anonymous-inbound` yield the managed instance (`src/p2p/net_node.inl` lines 815–819 at `565096e3fb`; *records-was:* `409762e066` deleted the branch) | `SF-D2` RULED: reuse **this** zone proxy. Object of reuse is the zone's SOCKS, not always `DaemonTorControl`. Does not re-rule PWD-E7 |
+| Discovery | `EU-D3`/`EU-D4` — endpoint = raw 32-byte Ed25519 key on the bond record; witness reads it from the drawable snapshot at epoch open, joined by `p_id` (`DrawablePair`, `rust/shekyl-archival-retention/src/drawable_pair.rs`). **Producer RULED 2026-09-16 (SO-D8 Q3):** the epoch's drawable set as of its open, built by `shekyl-chain-rules` as a `DrawableEpoch` (`drawable_epoch_walked_back`, `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §7.4, `ARCHIVAL_SETTLEMENT_WRITER.md` §16.10) | `SF-D5`'s input: key → onion is derivation, not lookup. `SF-D10` reads the holder set of `s` from the same snapshot |
 | Derived assignment | [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) §2: assignment for block *h* is a pure function of *h*−1's hash over the epoch-open drawable set. Public at *h*−1's publication; every node including `P` computes it identically. Witness = producer. Window = `CHALLENGE_RESPONSE_BLOCKS`. *(The v1 block-bound `attestation_nonce = H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` was deleted with `SF-D8` (a0), 2026-09-13.)* | Assignment stays derived. **It does not go on the fetch.** Both callers send requester-random bytes plus their own chain anchor at `tip − 720` (height and hash; `SF-D5` as amended). Nothing derived from the assignment is a request field |
 | Request parse | `rust/shekyl-p-serve/src/serve.rs:558–560` — `path.strip_prefix(ROUTE_PREFIX)` then `parse::<u64>()`; comment: "Exact decimal id — no path suffix, no query string" | The request unit is a whole shard (`§4`) |
 | Segment size | `rust/shekyl-curve-tree/src/segment.rs` — `LEAF_BYTES`; `shekyl_fcmp::tree::leaves_per_segment()` (re-exported there) | Honest-holder egress of a challenge fetch: one full segment (`leaves_per_segment() × LEAF_BYTES`) |
 | Serving ↔ fetching Tor | `PWD-E9` ([`P2P_2_ENDPOINT_ROUND.md`](P2P_2_ENDPOINT_ROUND.md) §PWD-E9): daemon gets its own tor path, no crossover to the archival-serving persona; launch path takes instance identity as a parameter. Implemented 2026-09-09 (`DaemonTorControl`, `shekyl-tor-control-daemon`) | Closed. Constrains `SF-D2` (RULED): reuse is the **daemon zone's** SOCKS, never the serving persona's |
-| Intro-layer PoW | `rust/shekyl-tor-control-wallet/src/onion_service.rs:146–148` — `HiddenServicePoW` defaults **on**; `rust/shekyl-tor-control-client/src/control/onion.rs:272–292` — PoW throttles rendezvous **arrival**, not egress; over onion the body transfer is symmetric (flow control). `control/actor.rs:1725–1754` — live `ADD_ONION` with PoW. Measurement: [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) SPIKE-F-15/17/18, §19/§19a | Threat-3 pin: intro flooding is priced; not general Tor lore |
+| Intro-layer PoW | `rust/shekyl-tor-control-wallet/src/onion_service.rs:146–148` — `HiddenServicePoW` defaults **on**; `rust/shekyl-tor-control-client/src/control/onion.rs:272–292` — PoW throttles rendezvous **arrival**, not egress; over onion the body transfer is symmetric (flow control). `control/actor.rs:2007–2037` — live `ADD_ONION` with PoW. Measurement: [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) SPIKE-F-15/17/18, §19/§19a | Threat-3 pin: intro flooding is priced; not general Tor lore |
 
 ## 4. Already closed — do not re-litigate
 
@@ -172,20 +181,20 @@ inherited as "the client waits."
 | Endpoint = raw 32-byte Ed25519; address is display form; discovery is a chain read at the epoch-open drawable snapshot | `EU-D3`, `EU-D4` |
 | Onions are enumerable (every `JoinMarket` publishes one; public is its normal state); the serve-side limiter (`shekyl-p-serve::serve::MAX_INFLIGHT`, SPIKE-PIN-2) is load-bearing. **`EU-D6` REJECTED 2026-09-13** as a rotation-rate argument; the enumerability fact and the limiter survive on their own code anchors, not on `EU-D6` |
 | **`EndpointUpdate` (kind 4) REJECTED 2026-09-13** — a bonded persona's endpoint never changes; the endpoint is mandatory on `JoinMarket`, non-zero by consensus, immutable for the record's life (`EU-D3` narrowed). A new address is a new persona via Release + fresh `JoinMarket`. `EU-D2`, `EU-D5`…`EU-D13` rejected with it. Consequence for this round: "no endpoint on record" is unrepresentable, so `SF-D6`'s no-endpoint non-row collapses (see `SF-D6`), and `SF-D13`'s "onion key may rotate" reason is refuted (see `SF-D13`) | `EU` §1, §5 |
-| `GET /shard/{id}`; identical 404s for every non-servable outcome; only content-type + content-length on the response; hand-rolled HTTP/1.1 | `RF-R1` |
-| **Request-header amendment RULED 2026-09-13 (second amendment; verifier half LANDED by (a0); serve half and client LANDED by (a)+(b): header `shekyl-pass-request`, value lowercase hex of the 72 bytes, `serving_route::{REQUEST_HEADER_NAME, encode_request_header, decode_request_header}`):** exactly one named header is required and decodes canonically to 72 bytes `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` — fresh random for every request, both callers, plus a chain anchor at `tip − archival_reorg_depth_blocks` (720): the height and the requester's own block hash at it. `P` applies one pre-sign gate, `anchor_height ∈ [p − 720 − L, p − 720 + L]` with `p` its own height and `L = archival_attestation_anchor_lag_blocks` (4, PROVISIONAL), else the identical 404. Missing, malformed, duplicate, wrong-length, or out-of-gate values are the same identical complete-head 404. All other request headers remain ignored. Exact header spelling and canonical textual encoding land code-plus-tests first under `RF-R1`'s transcription discipline, then the living contract records them in the same implementation PR. `P` signs the **decoded** 72 bytes, never the textual form | `SF-D5` amendment; verifier (a0) `#734`; serve-side carrier is the `shekyl-p-serve` PR (a) |
+| `GET /shard/{id}`; one bare 400 for every invalid request, decided ahead of the shard lookup; one bare 404 for a valid request whose shard is not held, and for nothing else; one bare 503 for a fault of `P`'s own; a refusal trailer in the signature's place when the signer fails after the body; only content-type + content-length on the response; hand-rolled HTTP/1.1 | `RF-R1`; 400 RULED 2026-10-05; 503 and trailer RULED 2026-10-06 |
+| **Request-header amendment RULED 2026-09-13 (second amendment; verifier half LANDED by (a0); serve half and client LANDED by (a)+(b): header `shekyl-pass-request`, value lowercase hex of the 72 bytes, `serving_route::{REQUEST_HEADER_NAME, encode_request_header, decode_request_header}`):** exactly one named header is required and decodes canonically to 72 bytes `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` — fresh random for every request, both callers, plus a chain anchor at `tip − archival_reorg_depth_blocks` (720): the height and the requester's own block hash at it. `P` applies one pre-sign gate, `anchor_height ∈ [p − 720 − L, p − 720 + L]` with `p` its own height and `L = archival_attestation_anchor_lag_blocks` (4, PROVISIONAL), else the bare 400. Missing, malformed, duplicate, wrong-length, or out-of-gate values are the same bare complete-head 400, decided before the shard lookup (RULED 2026-10-05; these were the shared 404 before). All other request headers remain ignored. Exact header spelling and canonical textual encoding land code-plus-tests first under `RF-R1`'s transcription discipline, then the living contract records them in the same implementation PR. `P` signs the **decoded** 72 bytes, never the textual form | `SF-D5` amendment; verifier (a0) `#734`; serve-side carrier is the `shekyl-p-serve` PR (a) |
 | **Request unit is a whole shard.** `{id}` is an exact decimal `u64`; no suffix, no query string (`RF-R1` request grammar; `serve.rs:558–560` parses exactly that). There is no leaf addressing. The challenge caller fetches the full segment and verifies `R_k` — that is the TJ §9 topology working as designed (the honest holder's egress is the cost being measured). There is no leaf to extract locally (`RF-D8` retracted the opening). `RF-R1`'s reopening clause permits "an additional path that suffixes `/shard/`" if a later request contract is needed; that suffix is exactly where a leaf-addressed challenge fetch would enter, and it is the natural optimization for anyone looking at ~3.33 MB per challenge. **`SF-D1` holds that door shut:** any future suffix path must be usable by both callers, or it is a second path by another name | `RF-R1`; `SF-D1` |
 | **Serving and fetching do not share a Tor instance.** `PWD-E9` (RULED 2026-09-08, implemented 2026-09-09): the daemon gets its own tor path with no crossover to the archival-serving persona; the launch path takes instance identity as a parameter, so sharing the code cannot produce a shared instance. The ratified §7 guard residual splits one application's identities; E9 forbids two applications sharing one instance, and the ephemeral/durable asymmetry makes the crossover strictly worse. **`SF-D11` withdrawn** — asked in this round, then closed by reading `PWD-E9` | `PWD-E9` |
 | **Fetch outbound reuses the tor zone's existing SOCKS, unconditionally.** No second Tor process. No manufactured SOCKS reopen. The object of reuse is the **zone proxy** (`zone.m_proxy_address` / `socks_connect`), not always `DaemonTorControl` — `--tx-proxy` / `--anonymous-inbound` already yield the managed instance and still leave a tor-zone SOCKS. The daemon image passes that `SocketAddr` into `shekyl-p-fetch`; the crate does not discover SOCKS. PWD-E7 is not re-ruled. Shared-instance residual (P2P ↔ archival-fetch on one process) is accepted (§7 threat 4) and is the `SF-D3` ruling, not a leftover | `SF-D2` RULED 2026-09-12 |
-| **Unauthenticated SOCKS, no isolation flags.** The fetch client presents no SOCKS credentials and sets no isolation flags on the zone proxy. Circuit assignment is Tor's, per its own defaults — this is not a one-circuit guarantee. Fetches then share circuits with overlay P2P (no credentials on the same SOCKS); that blending is a consequence, not a cover mechanism. Cover is TRC's subject | `SF-D3` RULED 2026-09-12 |
+| **Fresh SOCKS credentials per read, no isolation flags.** Every read, for every caller, presents a username and password no other read presents; Tor's default `IsolateSOCKSAuth` gives each pair its own circuit, so no two reads share one. Stall retries inside a read present the same pair. No Tor configuration changes | `SF-D3` RULED 2026-09-12; **REOPENED and RULED 2026-10-07** |
 | **The virtual port is 80**, a shared constant both sides read from `shekyl-curve-tree` (`SF-D4` named the home). Today's `SERVING_VIRTUAL_PORT` is `pub(crate)` in `shekyl-engine-core` (`serving/task.rs:52`) — the current location, not the home; the implementation PR moves it. Two `80`s that happen to agree are still not the ratification — this row is the number; the implementation PR puts one constant in `shekyl-curve-tree` and both sides read it. **Request amendment:** same `GET /shard/{id}`, one required header decoding to `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`, no path token, query string, or body; every production call uses it | `SF-D5` RULED 2026-09-12; AMENDED 2026-09-13 (×2) |
 | **Timeout / miss / retry taxonomy.** One table, two caller columns. Per-attempt handling is the client's (`SF-D1`); the axis is whom the scheduler names next and what exhaustion means. Organic draw bound `k` is the fill scheduler's (`TJ-D`), not the fetch crate's (`client-need` on remaining-empty or `k`). No-endpoint on the bond record is unrepresentable (`EU-D3` narrowed 2026-09-13), so the former filter / pre-dial non-row is void. 404 is a completed exchange (immediate miss), not a retry. Over-capacity silent close is stall-class (`RF-R1`), not a 404. Any other complete-head is malformed. Stall retries of that `P` reuse the same 72-byte header. `content-length` above `signature_envelope_len + max framed_len()` is refused from the HTTP headers; otherwise it must equal `signature_envelope_len + framed_len()`, known after fixed metadata but before segment bytes. The envelope is a fixed-width slice, then parsed. Parse, root-mismatch, and bad-countersignature remain typed separately. Reopen if W₂ retry budget and `CHALLENGE_RESPONSE_BLOCKS` cannot coexist | `SF-D6` RULED 2026-09-12; AMENDED 2026-09-13 |
-| **One fixed client in-flight cap `N`, one shared admission path, no caller differentiation.** Challenge and organic use the same client code, admission, and request; no priority, reservation, caller tag, or second entry point. The API is `fetch(&FetchTarget, &header, verifier)` — **AMENDED 2026-09-13, implemented 2026-09-14:** the target is typed (`ServingEndpoint`, `HybridPublicKey`, `u64`); expected content is the per-call `ContentVerify` hole, caller-supplied from local chain state, never from a response; schedulers name `P`; the HTTP path names only `s`. `N` slots, no unbounded buffer: a scheduler waits for a slot. `N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`). Not organic draw cap `k` and not a function of `D`. SP-T3 re-base / W₂ owns the upper bound as min(circuit-churn, memory); the implementation PR owns the lower-bound judgement. Reopen if capped reconstruct throughput falls below TJ-D's chain-growth requirement, or wait-for-a-slot plus transfer approaches `CHALLENGE_RESPONSE_BLOCKS` | `SF-D7` RULED 2026-09-12; AMENDED 2026-09-13 |
+| **One fixed client in-flight cap `N`, one shared admission path, no caller differentiation.** Challenge and organic use the same client code, admission, and request; no priority, reservation, caller tag, or second entry point. The API is `fetch(&FetchTarget, &header, verifier)` — **AMENDED 2026-09-13, implemented 2026-09-14:** the target is typed (`ServingEndpoint`, `HybridPublicKey`, `u64`); expected content is the per-call `ContentVerify` hole, caller-supplied from local chain state, never from a response; schedulers name `P`; the HTTP path names only `s`. `N` slots, no unbounded buffer: a scheduler waits for a slot. `N` is also bounded by memory on the Pi 4 floor: it is at most the widest `N` for which `N` times one fetch's peak fits the floor's fetch memory, the peak being one transaction (at most `MAX_TX_SIZE`) with its parse and envelope under per-tx streaming verification (re-keyed from `N × SHARD_BYTES`, whose premise — the client materialising a segment to verify `R_k` — `PDM-Q6` retired; amendment 2026-10-03, `SHT-3`). Not organic draw cap `k` and not a function of `D`. SP-T3 re-base / W₂ owns the upper bound as min(circuit-churn, memory); the implementation PR owns the lower-bound judgement. Reopen if capped reconstruct throughput falls below TJ-D's chain-growth requirement, or wait-for-a-slot plus transfer approaches `CHALLENGE_RESPONSE_BLOCKS` | `SF-D7` RULED 2026-09-12; AMENDED 2026-09-13; memory premise re-keyed 2026-10-03 (`SHT-3`) |
 | **Organic selection is a uniform memoryless draw** over the drawable holder set of shard `s`, performed by the organic scheduler, not by `shekyl-p-fetch`. Per-need exclusion is scratch, not memory. The fetch client forms no opinions — it is given a destination | `SF-D10` RULED; `SF-D12` corollary |
-| **Countersign with the bond record's hybrid identity key**, `BondPost.hybrid_public_key`, both Ed25519 and ML-DSA legs. This rules the key, not the message (the message is `SF-D8`'s). This is not the onion key and never the cold `bond_spend_pk`. `shekyl-p-serve` holds no key material: `PServeEndpoint` takes a signer callback; tests inject a test key; SH-2 wires the persona secret. The onion endpoint is authenticated by the Tor rendezvous and bound beside the identity key on P's authorized bond record; the response signature proves the live responder also controls P's identity key | `SF-D13` RULED 2026-09-13 |
-| **The signed message is the decoded header ‖ `shard_id_le[8]`: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`** (80 bytes) — requester-random, the requester's chain anchor at `tip − 720`, then the `u64` `P` parsed from `/shard/{id}`, under `shekyl/archival-attestation-scheme-v2` (the v1 nonce-only domain is retired). The challenge tuple and `cb_out_key` are not in this message: the fetch proves `P` served, not which miner asked. `shard_id` stops a decoy-route signature being filed as a pass for a different shard. The pass record **carries** `nonce` and `anchor_height` (neither is recomputable); admission rebuilds the transcript with the connecting chain's hash at `anchor_height`, requires `anchor_height ∈ [h − 720 − L, h − 720]` with `h` the validated predecessor, and refuses every pass record while `h < 720 + L` (724). Domain string, fixture, and boundary KATs (723/724) LANDED 2026-09-13 by (a0) | `SF-D8` message half RULED 2026-09-13; AMENDED 2026-09-13 (×2); LANDED (a0) |
-| **Inner frame:** `ServedFrameHeader` (leaf_count ‖ padding_len ‖ segment ‖ padding); codec owned by `shekyl-curve-tree`; write-zero read-anything. `RF-D4` itself carries no countersignature and is unchanged | `RF-D4`, `RF-D7` |
-| **Response carrier:** the HTTP body is an outer binary envelope carrying the canonical `HybridSignature` (both legs, fixed length), followed by the unchanged `RF-D4` frame. HTTP response headers stay exactly `content-type` and `content-length`; `content-length` covers envelope plus frame. No signature leg is text-encoded into a header. Verification happens inside the fetch call; the client returns verified-or-refused, never raw bytes | `SF-D8` carrier RULED 2026-09-13 |
+| **Countersign with the bond record's hybrid identity key**, `BondPost.hybrid_public_key`, both Ed25519 and ML-DSA legs. This rules the key, not the message (the message is `SF-D8`'s). This is not the onion key and never the cold `bond_spend_pk`. `shekyl-p-serve` holds no key material: `PServeEndpoint` takes a signer callback; tests inject a test key; SH-2 wires the persona secret (LANDED 2026-10-06, `SH2_RESIDENT_KEY_AUDIT.md`: in-actor sign, weak handle). The onion endpoint is authenticated by the Tor rendezvous and bound beside the identity key on P's authorized bond record; the response signature proves the live responder also controls P's identity key | `SF-D13` RULED 2026-09-13 |
+| **The signed message is the decoded header ‖ `shard_id_le[8]` ‖ the delivery digest: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ D[32]`** (112 bytes) — requester-random, the requester's chain anchor at `tip − 720`, the `u64` `P` parsed from `/shard/{id}`, then `D = cSHAKE256("shekyl/archival-pass-delivery-digest-v1", nonce ‖ framed)[..32]` over the exact response body ahead of the signature, under `shekyl/archival-attestation-scheme-v3` (the v1 nonce-only and v2 digest-less domains are retired). The challenge tuple and `cb_out_key` are not in this message: the fetch proves `P` served, not which miner asked. `shard_id` stops a decoy-route signature being filed as a pass for a different shard; `D` commits the signature to the bytes delivered under this nonce. The pass record **carries** `nonce`, `anchor_height` and `D` (none is recomputable at admission); admission rebuilds the transcript with the connecting chain's hash at `anchor_height`, requires `anchor_height ∈ [h − 720 − L, h − 720]` with `h` the validated predecessor, and refuses every pass record while `h < 720 + L` (724). Domain string, fixture, and boundary KATs (723/724) LANDED 2026-09-13 by (a0); the `D` term and the v3 domain RULED and LANDED 2026-10-04 | `SF-D8` message half RULED 2026-09-13; AMENDED 2026-09-13 (×2), 2026-10-04; LANDED |
+| **Inner frame — RETIRED 2026-10-08:** `ServedFrameHeader` (leaf_count ‖ padding_len ‖ segment ‖ padding), codec owned by `shekyl-curve-tree`, is deleted; the body ahead of the envelope is the `SHT-Q2` tx-range body framed per transaction in `shekyl_wire::shard_frame`, and the serve loop writes the provider's bytes unframed (`SF-D8` amendment 2026-10-08) | `RF-D4` (retired), `SF-D8` |
+| **Response carrier:** the HTTP body is the shard body (`shekyl_wire::shard_frame` since the 2026-10-08 amendment; ~~the unchanged `RF-D4` frame~~), then an outer binary envelope of the bound scheme's canonical width as the response's **last** bytes. The live binding carries the canonical `HybridSignature` (both legs, `IDENTITY_ENVELOPE_LEN` = 3,385). The receipt scheme's width (1,356) is staged and not selected (AMENDED 2026-10-13). The signature covers a digest of everything ahead of it. HTTP response headers stay exactly `content-type` and `content-length`; `content-length` covers the body plus that envelope. No signature leg is text-encoded into a header. Verification happens inside the fetch call; the client returns verified-or-refused, never raw bytes | `SF-D8` carrier RULED 2026-09-13; AMENDED 2026-10-04; AMENDED 2026-10-13 |
 | Padding field reserved, no scheme; TJ-H mitigation at the Tor layer (vanguards on the **wallet** serve path) | TJ-H (ruled 2026-08-08) |
 | Server bind `127.0.0.1:0`; reachability is `ADD_ONION` | `RF-R1`, `shekyl-p-host` |
 | SP-T3's numbers measured persona→persona and must re-base daemon→wallet before promotion | `EU-D1` consequence 4 |
@@ -210,7 +219,18 @@ freeze-row `R_k` is consensus metadata, not a body, and is not a local
 shortcut around fetch. Answering from bytes this node already holds
 (staker set, or a prior view-cache) is still this scheduler, not a second
 protocol. The HTTP request names only the shard; the destination is whom
-the scheduler named, not a caller tag on the wire.
+the scheduler named, not a caller tag on the wire. **UPDATE 2026-10-08
+(`SV-D1`, `SV-D2` RULED; [`SHARD_VIEW_FETCH.md`](SHARD_VIEW_FETCH.md)):**
+the view caller's answer is built from the body this fetch verified — its
+`shard_hash` is a cSHAKE256 fold over the archival bytes (prunable regions
+and `pqc_auths`) folded by the verifying pass itself, one transaction
+resident (`SV-D8`), so a node without the body cannot answer and a
+skeleton-only answer is rejected for the view. The response's `shard_hash`
+*was* `R_k` (the retired partition's root) until this update; the fold is
+the definition for `W`-byte shards. A closed shard's aggregate is cached
+keyed on its close height and that block's hash; the open tip shard is a
+typed refusal (`SV-D5`). The view caller lands with the Sub-PR 2 scheduler
+(§9.1 row), not before it.
 
 Reopen if a storage-only pruned-daemon path is shown to exercise the
 serve endpoint end to end without a fetch client. (Also if `EU-D1` or
@@ -240,17 +260,17 @@ either.
 ### `SF-D2` — daemon Tor outbound posture — RULED 2026-09-12
 
 Reuse the tor zone's existing SOCKS, unconditionally. No second Tor
-process. No manufactured SOCKS reopen. Unauthenticated SOCKS, no
+process. No manufactured SOCKS reopen. Credentials per read, no
 isolation flags (`SF-D3`).
 
 The round-open premise that `shekyl-tor-control-daemon` exposes no
 SOCKS consumer was **false of the implementation** (SUPERSEDED
-2026-09-12). SOCKS is discovered (`ephemeral.rs:18` crate-doc; `:240`
+2026-09-12). SOCKS is discovered (`ephemeral/mod.rs:6` crate-doc; `tor/mod.rs:768`
 `GETINFO net/listeners/socks`) and consumed
 (`net_node.inl:878` `zone.m_connect = &socks_connect`; `:879`
 `zone.m_proxy_address`). Default posture is inbound onion **plus**
 SOCKS outbound on the tor zone. `--tx-proxy` / `--anonymous-inbound`
-yield the managed instance (`net_node.inl:815–819`) and still leave a
+yield the managed instance (`src/p2p/net_node.inl` lines 815–819 at `565096e3fb`; *records-was:* `409762e066` deleted the branch) and still leave a
 tor-zone SOCKS.
 
 The object of reuse is the **zone proxy**, not always
@@ -259,7 +279,7 @@ this question (`PWD-E9` / `SF-D11` withdrawn). The residual this
 question actually owns is shared-instance correlation of overlay P2P and
 archival-fetch on one process (§7 threat 4, named next to `EU-D1` /
 SPIKE-F-12). That residual is accepted: guards are per-process.
-`SF-D3` does not cut it with credentials or isolation flags, and a
+`SF-D3`'s per-read credentials separate circuits, not guards, and a
 second Tor is a second failure domain and a second version to
 supervise on the Pi 4 floor (rule 76). `--no-ephemeral-tor` with no
 `--tx-proxy` leaves no tor zone and no SOCKS: refuse-at-construction,
@@ -277,72 +297,93 @@ is still that address, not a second lookup.
   shows the accepted residual is worse than a second Tor process at
   the Pi 4 floor.
 
-### `SF-D3` — SOCKS isolation posture — RULED 2026-09-12
+### `SF-D3` — SOCKS isolation posture — REOPENED and RULED 2026-10-07
 
-The fetch client opens **unauthenticated SOCKS** to the zone's proxy
-and **sets no isolation flags**. Circuit assignment is Tor's, per its
-own defaults. Any blending with overlay traffic is a **consequence,
-not a cover mechanism** — cover is TRC's subject.
+**Every read presents SOCKS credentials of its own.** The fetch client
+dials the zone's proxy with a SOCKS5 username and password that no other
+read presents. `IsolateSOCKSAuth` is on by default in Tor, so each
+distinct pair gets its own circuit: a read rides a rendezvous circuit no
+other read is on. The client sets no isolation flags and changes no Tor
+configuration.
 
-What "no extra isolation" means (and does not). `IsolateSOCKSAuth` is
-on by default, but an unauthenticated SOCKS connection has nothing to
-isolate on, so streams fall together — which is what overlay P2P does
-today (`src/net/socks.cpp:246–271` emits SOCKS5 no-auth when
-`userinfo` is empty; `socks_connect_internal` presents none).
-`IsolateClientAddr` and `IsolateDestAddr`/`IsolateDestPort` are
-separate flags with their own defaults. Destination-based isolation
-would split circuits per onion regardless of client credentials. The
-daemon spawn does not pass those flags (`--SocksPort` is
-`SocksPort::Auto` only, `actor.rs:859`). So the ruling is the
-**client contract**: no SOCKS credentials, no isolation flags. It
-does **not** guarantee one circuit. An implementer who reads it as a
-one-circuit guarantee will write a test asserting that — do not.
+- **For every caller.** This is the request layer's, under the
+  one-machinery rule ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §5.1). A caller
+  does not choose or see the credentials.
+- **Inside one read they do not change.** `SF-D6`'s stall retries repeat
+  the header and present the same pair; so does the retry after a 400,
+  which keeps the nonce.
+- **How it is held.** The credentials are a function of the read's nonce
+  (`RequestHeader::socks_credentials`, `shekyl-p-fetch`): the nonce in
+  hex as the username, and a fixed password. A new read has a new nonce
+  and so new credentials; a retried header has the same. The nonce is
+  the username so that isolation does not depend on which of the two
+  fields a given Tor compares.
+- **Where the credentials can be seen.** They go to the local Tor and no
+  further, and that Tor already carries the request with its nonce. The
+  one other place is that Tor's control port: `STREAM` events carry
+  `SOCKS_USERNAME` and `SOCKS_PASSWORD`, so a local controller subscribed
+  to them sees nonces. That is software on the reader's own machine. A
+  nonce does not mark a read as a challenge without the seed, and after
+  the reveal a challenge's nonces are public. Neither `shekyl-p-fetch`
+  nor the control client logs the fields: `shekyl-p-fetch` has no
+  logging, `SocksUsername` and the control client's `ControlReply` redact
+  themselves in `Debug`, and no production code subscribes to `STREAM`.
+- **Shown against a real Tor.** The stub tests show what the client
+  presents, not what Tor does with it. `shekyl-sp-t3-spike`'s
+  `read_isolation` test reads the client Tor's control port over real
+  rendezvous circuits: two reads of one shard ride different circuits,
+  and a stall retry inside one read stays on its circuit. It is
+  `#[ignore]`d behind the pinned Tor binary. Run on 2026-10-07 against
+  Tor 0.4.9.11: both held in every run that reached the comparison, and
+  new credentials caused no second descriptor fetch
+  ([`sfd3_read_isolation_20261007.md`](../benchmarks/sfd3_read_isolation_20261007.md)).
+- **Only username/password is offered.** The dial uses
+  `Isolation::Persona` (`shekyl-socks`). That variant offers method
+  `0x02` and nothing else, so a proxy that selects "no authentication"
+  fails the handshake before CONNECT instead of putting the read on a
+  shared circuit. The bytes are the read's, from
+  `RequestHeader::socks_credentials`. The variant is the handshake, not
+  a second one: a per-read circuit is which bytes the header derives.
+- **Tests.** Two reads of one shard present different credentials; the
+  retries inside one read present the same
+  (`shekyl-p-fetch`, `client_tests.rs`).
+- **An operator's own Tor.** This works on any stock Tor. An operator who
+  points the daemon at a `SocksPort` of their own must not disable
+  `IsolateSOCKSAuth` on it.
 
-Direct consequence, stated rather than inferred. Fetches will then
-share circuits with overlay P2P: no credentials on the same SOCKS,
-`IsolateSOCKSAuth` has nothing to split on. That is where blending
-actually happens, which is why it is a side effect. Cover is TRC's
-subject, obtained from relay volume. This row does not claim blending
-as a privacy benefit — that argument is TRC's owed measurement. No
-protocol carrier is minted; [`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md)
-§1.6 is not this client's to trigger.
+**Why it was reopened (rule 21).** The 2026-09-12 ruling was
+unauthenticated SOCKS with no isolation flags, on the premise that
+fetches would then share circuits with overlay P2P. For an onion
+destination that premise is false: a connection to an onion uses a
+rendezvous circuit to that onion only, and overlay P2P never dials a
+persona's serving onion. So nothing blended. What unauthenticated SOCKS
+did do is put every read one daemon sends to one persona on one
+rendezvous circuit, kept alive from its last use. `P` could then link a
+producer's reads to each other, a re-read to the read that failed, and
+reads across blocks.
 
-Contention (so it is not re-derived as a reason to isolate). A
-~3.33 MB shard transfer sharing a circuit with P2P contends with
-block and transaction propagation on that circuit's window. At any
-plausible throughput that is seconds against a 120 s block target
-(`SHEKYL_DAA_TARGET_SECONDS`), and nowhere near the 16.7-hour
-challenge deadline (`CHALLENGE_RESPONSE_BLOCKS = 500`). Miner-seconds
-observation, not a reason to isolate.
+**What it costs**, as the ruling states it, none of it measured
+(`BA-T31`): about 1 to 5 seconds of circuit setup per read; a higher
+first-try failure rate, offset by the reads of a draw becoming
+independent; proof of work paid per read against a flooded onion; and
+slower organic bulk reads.
 
-The wallet's per-`P` `IsolateSOCKSAuth` (`derive_socks_user`) is a
-different job: P↔principal firewall on the **wallet** Tor instance.
-Do not copy it onto the daemon fetcher. There is no second identity
-on this SOCKS to firewall (`PWD-E9`).
+**What it reopens downstream.** `SF-D7`'s in-flight cap was sized with
+"no per-fetch circuit build" as a premise. That premise is gone: every
+read builds a circuit, and circuit-build cost is again an input to the
+cap. The cap is unmeasured either way.
 
-The round-open concern that one SOCKS identity lets a guard see the
-fetch set was **false of the mechanism** (SUPERSEDED 2026-09-12). A
-guard sees that this IP uses Tor, plus circuit-build timing and
-volume. It does not see `.onion` destinations, HTTP paths, or which
-fetches are challenges. Assignment is on-chain (`SF-D10`).
+**What stands from 2026-09-12.** No second identity shares this SOCKS, so
+there is nothing to firewall here (`PWD-E9`); the wallet's per-`P`
+credential is a different job on a different Tor. A guard sees that this
+address uses Tor, with circuit-build timing and volume; it does not see
+onion destinations, HTTP paths, or which fetches are challenges. Per-read
+circuits do not change the guard: they share it.
 
-`SF-D1`'s "isolation key both callers can compute" is discharged by
-there being no key. Minting a caller-shaped SOCKS credential later is
-a second path and a reopen of `SF-D1`, not of this contract.
-
-What this closes. `SF-D7`'s in-flight cap loses its isolation-cost
-input: no per-fetch circuit build, so circuit-build cost does not
-force coarser granularity. The cap is how many concurrent transfers
-the client should have outstanding. `SF-D6` cannot be a
-distinguishable challenge pattern *via isolation shape*, because
-there is no isolation shape. Retry-policy-is-a-property-of-the-client
-still stands on its own.
-
-- **Reopen if:** a second identity (principal / wallet traffic) is
-  shown to share this daemon SOCKS — that is the wallet firewall
-  case, and it is a different process today (`PWD-E9`). Not reopened
-  by wanting more blending, by a test that one circuit is shared, or
-  by the cover-traffic restoration series.
+- **Reopen if:** a measured run shows per-read circuits cost more than
+  the linkage they remove is worth — a first-try failure rate that pushes
+  the unread share past the failure window's boundary (`BA-T31`), or
+  proof of work per read that an honest producer cannot pay.
 
 ### `SF-D4` — crate home — RULED 2026-09-12
 
@@ -412,8 +453,9 @@ Refused homes (graph, not FFI):
 - `shekyl-archival-retention` — consensus assignment / Merkle verify.
 - `shekyl-chain-store` — storage; the fill scheduler *calls* fetch.
 - `shekyl-curve-tree` — codec; network I/O stays out.
-- `shekyl-shard-source` — GUI fixture seam toward Stage 5
-  `ArchivalEngine`; wrong side.
+- `shekyl-shard-source` — the GUI's fixture-only preview source (its
+  `ArchivalShardSource` stub deleted 2026-10-08; live views are the
+  wallet contract's `get_shard_view`); wrong side.
 - A module of a future `shekyl-daemon` — that crate does not exist.
 
 - **Reopen if:** at implementation, the client turns out to be a thin
@@ -429,8 +471,8 @@ Refused homes (graph, not FFI):
 Reconstruct the v3 onion address from the 32-byte Ed25519 key
 (`EU-D3`: the address is display form; the key is the record). SOCKS
 CONNECT through the zone proxy that `SF-D2` reuses, to `onion:80`,
-then the `RF-R1` GET. Unauthenticated SOCKS, no isolation flags
-(`SF-D3`). No caller-specific path token (`SF-D1`), no query string,
+then the `RF-R1` GET. The dial presents the read's own SOCKS
+credentials (`SF-D3`). No caller-specific path token (`SF-D1`), no query string,
 and no request body.
 
 **Request-header amendment (RULED 2026-09-13; AMENDED twice later the
@@ -503,9 +545,9 @@ name matched case-insensitively, value strict), pinned by
 `request_header_parsing_is_http_lenient_and_value_strict` and recorded
 in [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md) in the same
 change. This is a concrete carrier, not permission for more fields.
-Missing, duplicate, malformed, or wrong-length values are a
-complete-head miss and render the same byte-identical 404 as every
-other non-servable outcome. All other request headers remain ignored.
+Missing, duplicate, malformed, or wrong-length values are an invalid
+request and render the same byte-identical 400 as every other one
+(RULED 2026-10-05). All other request headers remain ignored.
 
 **The only semantic request fields.** The 72-byte header is the only
 recognized caller-supplied field other than the selected shard id.
@@ -548,7 +590,8 @@ deadline. W₂ is **not** this round's to pin — it is a measurement over
 *shape*.
 
 Per-attempt handling is a property of the client (`SF-D1`), identical
-for both callers. Isolation cannot distinguish them (`SF-D3`). The
+for both callers. Isolation cannot distinguish them: both get a circuit
+per read (`SF-D3`). The
 only axis that may differ is **whom the scheduler names next**, and
 **what exhaustion means**.
 
@@ -589,7 +632,7 @@ refusal, not a retry of an address the witness never had.
   qualifier is now always true and is kept only as a record of the
   split it used to make.
 
-**Length.** `ServedFrameHeader::framed_len()` declares the **inner
+**Length** *(records-was; `ServedFrameHeader` RETIRED 2026-10-08 — the declared length is now the provider's `ShardBody::len()`, and the client's ceiling is `ExpectedShard::max_response_len()`).* `ServedFrameHeader::framed_len()` declares the **inner
 frame** (header + `leaf_count × LEAF_BYTES` + `padding_len`), never
 frozen `SHARD_BYTES = 3,326,976` as the whole HTTP body size. That
 constant is the **segment**. `SF-D8` (RULED) puts a returned-signature
@@ -609,7 +652,7 @@ ambiguous between a padding variant and a fault.
 HTTP `content-length` and the decoded outer-envelope-plus-frame length
 **must agree**. Disagreement is malformed, not truncation.
 
-**Pre-read cap.** A hostile `Content-Length: 2^63` is refused **from
+**Pre-read cap** *(the bound below is records-was: since 2026-10-08 it is `ExpectedShard::max_response_len()`, derived from the range's `txid_parts`).* A hostile `Content-Length: 2^63` is refused **from
 the HTTP headers**, before any body byte, if it exceeds
 `signature_envelope_len + max framed_len()` (`RF-D7`'s padding cap,
 already enforced inside `ServedFrameHeader::read`). That is a
@@ -630,14 +673,47 @@ challenge side it means bounded retries of **that** `P` inside the
 deadline — and retrying a `P` that is deliberately truncating spends
 the deadline on an outcome that will not change.
 
-**404 is a response, not transport.** `RF-R1` makes every non-servable
-outcome one identical 404, so the client cannot tell never-held from
-dropped from refusing — that is the reason **not to distinguish**.
+**404 is a response, not transport.** `RF-R1` makes every valid request
+for a shard `P` does not hold one identical 404, and since 2026-10-06
+nothing else is one: a fault of `P`'s own is the 503 below.
 The reason **not to retry** the assigned `P` is separate: a clean
 404 is a completed HTTP exchange in which `P` answered and the
 answer was "no." Truncation can be a dead circuit; a 404 cannot.
 Challenge: immediate **miss**. Organic: exclude, draw next (a
 different `P` may hold `s`).
+
+**400 is a response too, and it is about the request (RULED
+2026-10-05).** `P` judges the request before it looks up the shard, so a
+400 says nothing about holdings. From this client the route and the
+header encoding are fixed, so in practice it means the anchor fell
+outside `P`'s gate, and clock or chain skew on either side can do that.
+The first 400 is therefore neither a miss nor `P`'s failure: the caller
+names the same `P` **once** more with a header built from a freshly
+derived anchor. A fresh nonce is safe, because no signature came back
+for the old one. A second 400 is a failed read: `P`'s gate sits within
+±`L` of `P`'s own height, so a `P` that refuses a fresh anchor is itself
+out of step. The client does not retry — the anchor is the caller's,
+from chain state — so the once-count is the scheduler's, and
+`FetchError::next_move` is the rule it reads.
+
+**503 is `P` saying it cannot serve (RULED 2026-10-06).** A held shard
+never answers 404. A store that fails to open the shard, a tip `P` cannot
+read, and a persona with no resident key all answer one bare 503, which
+does not say which. It is a completed answer and it is `P`'s failure: a
+failed read, no retry of that `P` (`FetchError::Unavailable`).
+
+**`P` states a late failure; the client never infers one (RULED
+2026-10-06).** `P` signs after it sends. If the signer fails then, `P`
+writes the refusal trailer where the signature goes, so the 200 is its
+full declared length (`FetchError::Unsigned`: a failed read, no retry).
+A body that stops short of `content-length` is a stall **at every
+offset**, the frame's end included. The reason is who can do what on the
+circuit. A relay can count bytes against a public frame length and cut a
+good response exactly where the signature would begin, and guard pinning
+puts the same relay on every retry, so a client that read that cut as
+`P` declining to sign would let one relay fail an honest `P` at every
+challenge. A relay cannot write into an onion-service stream, so the
+trailer can only come from `P`.
 
 **W₂ measurement input (not a taxonomy change).** The challenge-side
 bounded-retry budget (timeout / stall / truncation / intro failure,
@@ -645,6 +721,19 @@ against the assigned `P`) must be small enough that a truncating
 `P` cannot consume `CHALLENGE_RESPONSE_BLOCKS`. The W₂ re-base will
 not surface this on its own: a truncating `P` looks like weather.
 The number the measurement produces has to satisfy this requirement.
+
+**The number, 2026-10-02: 2 retries (three attempts).** Ruled on the
+W₂ size ladder (`ARCHIVAL_SHARD_T_DERIVATION.md` §10.7), by this rule:
+the largest count whose retried read completes inside `L`'s 240 s
+fetch span at p99 on the worst day measured, and whose longest possible
+read is not past `L`'s six-minute line. It satisfies the requirement
+above with room: a `P` that truncates every attempt costs the witness
+3 × 120 s, three blocks of `CHALLENGE_RESPONSE_BLOCKS`' 500. It applies
+to stall-class retries of the assigned `P` only; the organic draw bound
+`k` is still `TJ-D`'s. `shekyl-p-fetch` does not retry, so the number
+is the input of the callers that will, and is a constant when they are
+built. *Reopens:* a measured day whose two-retry p99 is past 240 s
+makes it 1.
 
 **Organic exclusion**, once, for every "exclude" below: `SF-D10`
 scratch on the organic scheduler — without replacement inside this
@@ -674,15 +763,33 @@ an implementation.
 | Outcome | Challenge (assigned `P`) | Organic (`SF-D10` draw) |
 | --- | --- | --- |
 | Circuit timeout / HTTP stall / SOCKS CONNECT or intro failure / over-capacity silent close (endpoint *was* on the record). `RF-R1`: over-capacity arrivals are closed with **no HTTP bytes**, not a 404 | Stall-class: bounded retries of **that** `P` inside the deadline, then **miss** | Stall-class: same per-attempt retries; then exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
-| Body short of agreed `N` (truncated transfer) | Stall-class | Stall-class |
+| Body short of agreed `N` (truncated transfer), at any offset — the frame's end included | Stall-class | Stall-class |
 | Body long of agreed `N` (overlength) | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | `content-length` > `signature_envelope_len + max framed_len()` (refused from the HTTP headers, before any body byte) **or** `content-length` ≠ `signature_envelope_len + framed_len()` (known after the frame header, before segment bytes) | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
-| Identical 404 (`RF-R1`) | **Miss.** Completed exchange; `P` answered "no." Do not retry **that** `P`. Identical 404s are why the client must not distinguish *which* "no" | Exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
-| Complete-head that is not `200` with exactly `content-type` + `content-length`, and not the identical 404 (`301`, `500`, extra headers, wrong content-type) | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Identical 404 (`RF-R1`): valid request, shard not held | **Miss.** Completed exchange; `P` answered "no." Do not retry **that** `P`. Identical 404s are why the client must not distinguish *which* "no" | Exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Identical 400 (`RF-R1`): `P` judged the request invalid — from this client, an anchor outside `P`'s gate. `Rejected` | First: **one** retry of **that** `P` with a freshly derived anchor (new header), inside the deadline. Second: failed read → **miss** | First: one retry of that `P` with a freshly derived anchor. Second: failed read; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Identical 503 (`RF-R1`): `P` cannot serve through its own fault (store, tip, or no resident key). `Unavailable` | Failed read → **miss**. Completed exchange; no retry of that `P` | Failed read: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| `200` of full declared length whose envelope is the refusal trailer (`serving_route::is_refusal_trailer`). `Unsigned` | Failed read → **miss**. `P` served and says it did not sign; completed response, so no retry of that `P`. The body is discarded unverified | Failed read: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Complete-head that is not `200`, `400`, `404` or `503` with exactly `content-type` + `content-length` (`301`, `500`, extra headers, wrong content-type), or a `400`/`404`/`503` declaring a body | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | Malformed response envelope / frame | Malformed → **miss**. Logged (`SF-D12`); not a selection input | Malformed: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | `R_k` mismatch | Root-mismatch → **miss**. Typed and logged (`SF-D8`, `SF-D12`); not a selection input | Root-mismatch: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
-| Countersignature invalid for `SF-D8`'s ruled `header[72] ‖ shard_id` transcript under P's bond-record hybrid identity key | Bad-countersignature → **miss**. Typed and logged (`SF-D8`, `SF-D12`); completed response, so no retry of that `P` | Bad-countersignature: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Countersignature invalid for `SF-D8`'s ruled `header[72] ‖ shard_id ‖ D` transcript under P's bond-record hybrid identity key | Bad-countersignature → **miss**. Typed and logged (`SF-D8`, `SF-D12`); completed response, so no retry of that `P` | Bad-countersignature: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 
+- **Above this table, for a challenge (2026-10-07):** "miss" in the
+  challenge column is the outcome of one read. Under the secret draw the
+  witness reads a draw again, later, when a read ends stall-class, up to
+  three reads in all; a completed exchange stays final
+  ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §5.3).
+  The two-retry budget below a read is unchanged, and so is its header:
+  stall retries inside a read repeat it. Every new read carries a fresh
+  nonce, and with it fresh SOCKS credentials, for every caller
+  (specification §5.2; `SF-D3`).
+- **One request machinery (ruled 2026-10-07; specification §5.1).** The
+  rule `SF-D7` states for this client — one admission path, no caller
+  differentiation — holds for the whole request layer: header format,
+  envelope handling, stall retries, timeouts and outcome classification
+  are the same for a challenge and an organic read, and the entry point
+  takes a caller-built header and no caller kind.
 - **Amendment 2026-09-13:** the last three rows split parse failure,
   `R_k` mismatch, and bad countersignature into distinct verdicts.
   Their scheduler consequence is intentionally the same; their typed
@@ -699,9 +806,9 @@ an implementation.
   the block that finally carries it.
 - **Constraint:** retries must not become a distinguishable challenge
   pattern — the retry policy is a property of the client, not of the
-  caller. Isolation shape is no longer a way to violate that:
-  `SF-D3` RULED there is none (D3 dependency discharged on this
-  axis; the constraint still stands on its own).
+  caller. Isolation shape is not a way to violate that: `SF-D3` gives
+  every read of every caller the same shape, a circuit of its own (the
+  constraint still stands on its own).
 - **Reopen if:** the W₂ re-base shows the retry budget and the
   consensus deadline cannot coexist. No host qualifier — the challenge
   caller is a miner (producer of block *h*); the Pi 4 floor is a
@@ -725,10 +832,10 @@ client has outstanding. A challenge fetch is one shard against
 `CHALLENGE_RESPONSE_BLOCKS` (~16.7 h). The challenge caller's organic
 load is its own chain-store fill, not a function of `D`.
 
-`SF-D3` discharged the isolation-cost input. The lean had hedged on
-circuit-build cost forcing coarser granularity; with no per-fetch
-circuit build there is no such cost. The cap is purely how many
-concurrent transfers the client should have outstanding.
+Circuit-build cost is an input to this cap again. As first ruled,
+`SF-D3` had no per-fetch circuit build; since 2026-10-07 every read builds
+a rendezvous circuit, and how many builds a floor device can have
+outstanding is not measured (`BA-T31`).
 
 **Two shapes, one cap.** A miner reads speculatively while building on
 *h*; if it wins *h*+1 it carries the attestations. Challenge fetches
@@ -759,15 +866,11 @@ Pi: its binding constraint is uplink and Tor circuit throughput, not
 its ability to track a handful of outstanding transfers. A
 floor-derived number is adequate for both, for different reasons.
 
-**The client materialises the segment.** `recompute_segment_r_k`
-takes `&[[u8; 128]]`. `SF-D8` returns verified-or-refused, so the
-in-flight body is resident until verify finishes. The server streams
-chunks so `MAX_INFLIGHT` is not `N × 3.33 MB` on the serve side; the
-client cannot. `N` is therefore also a memory cap:
-`N × SHARD_BYTES` must fit the Pi 4 floor. Copying the server's
-placeholder 64 is 213 MB resident and is refused for the same reason
-the server refused to materialise. The SP-T3 / W₂ upper bound is the
-**min** of circuit-churn and this memory cap.
+**Memory — WITHDRAWN premise (2026-10-03, `SHT-3`).** The ruling sized a
+memory leg on the client materialising a segment to verify `R_k`, so that
+`N × SHARD_BYTES` had to fit the Pi 4 floor; the server's placeholder 64 was
+refused at 213 MB on that ground. `R_k` is retired, nothing materialises a
+segment, and the leg is restated in the amendment below.
 
 **No unbounded buffer.** "Shared queue" is one admission path, not a
 list of thousands of pending shards. There are `N` in-flight slots.
@@ -780,9 +883,11 @@ not an internal queue the challenge caller sits behind.
 `N`, one shared admission path, `fetch(&FetchTarget, &header)` for
 both callers — target typed per the 2026-09-13 amendment below). Caller-blind is the HTTP request, not the API:
 the path is `/shard/{id}`; the scheduler supplies the destination.
-"Small fixed" is not a number. The range: bounded above by the **min** of (what a Pi 4's Tor client
-handles without circuit churn — SP-T3 re-base / W₂ over this topology)
-and (`N × SHARD_BYTES` on that same floor); bounded below by enough
+"Small fixed" is not a number. The range: bounded above by the **min** of two
+widths — the widest `N` a Pi 4's Tor client handles without circuit churn
+(SP-T3 re-base / W₂ over this topology), and the widest `N` whose in-flight
+memory fits that same floor (`N` times one fetch's peak, one transaction, since
+the amendment of 2026-10-03; `N × SHARD_BYTES` at ruling); bounded below by enough
 parallelism that reconstruct is not serialised one shard at a time.
 The lower endpoint is the implementation PR's own judgement: that PR
 records why its chosen parallelism is acceptable for fill throughput;
@@ -813,6 +918,48 @@ All four rows valid; circuit-failure 0.0 / 1.0 / 0.0 / 0.0 %; p50
 `min(largest non-churning width, Pi 4 memory)` = 8 (memory does not
 bind). 16 was not measured. The constant's doc carries the reopen
 criteria (`SF-D7`) and the `PDM-Q6` re-derive.
+
+**AMENDMENT 2026-10-03 — the memory term's premise (`SHT-3`).** The ruling
+sized the memory half of `N`'s upper bound on the client materialising a
+segment to verify `R_k`. `PDM-Q6` retired that premise: `R_k` is gone
+(item 4), the read is still whole-shard (`SF-D1`), and content is verified
+per transaction against the retained hash rows, aborting on the first miss
+(item 5; `ARCHIVAL_PRUNED_DAEMON_MODE.md`, `SF-D7`'s row in its downstream
+table). So the memory leg of `N`'s upper bound is **the widest `N` for which
+`N` times one fetch's peak fits the floor's fetch memory**. Under item 5 one
+fetch's peak is one transaction: its serialized bytes (at most
+`shekyl_wire::transaction::MAX_TX_SIZE`, 1 MB), its decoded form while it is
+checked, the signature envelope and the read buffer. Every part of that is per
+fetch, so all of it scales with `N`. `N × MAX_TX_SIZE` (8 MB at `N = 8`) is
+only the serialized term; the per-fetch peak is a small multiple of
+`MAX_TX_SIZE`, and it does not grow with the shard length `W`. The leg is taken
+with the circuit-churn width as their minimum, as before.
+
+- **That design is not built: it needs a verify seam that streams.**
+  `ContentVerify::verify(shard_id, body: &[u8])` is handed the whole body. A
+  per-transaction verifier plugged into it — fetch Sub-PR 2 as its FOLLOWUPS
+  row was written, before item 5 — checks each transaction but still holds the
+  whole shard's bytes per fetch. Item 5's bound needs the client to verify
+  **as it reads**; the Sub-PR 2 row now says so.
+- **It also needs a response ceiling that `W` cannot give.** `SF-D6` refuses a
+  hostile `content-length` from the headers, before any body byte, against
+  `max_body_bytes()`. Streaming removes whole-body residency, not that need. A
+  tx-range body's length is not bounded by `W`: `W` counts archival bytes only
+  (the prunable region and `pqc_auths`), and every transaction in the range
+  also carries its prefix and base. So Sub-PR 2 has to state a valid maximum
+  response length, or frame each transaction under its own bound; otherwise the
+  client either refuses valid shards or drops the hostile-length protection.
+  The Sub-PR 2 row says so too.
+- **What ships today buffers more than the ruled design.** `shekyl-p-fetch`
+  reads each body whole into a `Vec<u8>` bounded by `max_body_bytes()`, which
+  is still the leaf figure, so its resident worst case at `N = 8` is about
+  53 MB. None of these figures binds on the floor, and none moves `N`.
+- **No memory bound on `W` comes from the ruled design.** Under item 5 a fetch
+  holds one transaction whatever the shard length. Today's client does hold
+  whole responses, but of the leaf unit, bounded by the leaf-figure
+  `max_body_bytes()` rather than by `W`; Sub-PR 2's row requires the tx-range
+  unit to arrive with the streaming seam, so no buffered client of a `W`-sized
+  body is planned (`ARCHIVAL_SHARD_T_DERIVATION.md`, `SHT-3`).
 
 **AMENDMENT 2026-09-13 — the fetch target is typed, caller-supplied,
 and read from local chain state.** `fetch(destination, shard_id,
@@ -866,6 +1013,8 @@ hole per call.
 
 ### `SF-D13` — countersigning key — RULED 2026-09-13
 
+> **Live, and replaced at the FN-DSA integration (rule 21 reopening, 2026-10-07).** The text below describes the code as it is: the identity key countersigns. The ruled form is a separate receipt key, Ed25519 + FN-DSA-1024, derived from the wallet master seed when the engine is assembled and carried in the bond record beside the identity key ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §6.2, §6.3). The identity key is unchanged and still defines `p_canonical_id`.
+
 The countersignature uses P's stable **hybrid identity key** from the
 bond record (`shekyl_wire::BondPost.hybrid_public_key`), both Ed25519
 and ML-DSA legs. This ruling does not invent a second key field.
@@ -878,10 +1027,24 @@ returns the canonical `HybridSignature` over the `SF-D8` transcript.
 Loopback tests inject a test key. Production composition
 (`shekyl-p-host` / SH-2) passes the persona hybrid signing secret.
 The callback (`shekyl_p_serve::PassSigner`; `shekyl_p_host::{PassKey,
-HostSigner, NoResidentKey}`) and the envelope LANDED by (a); SH-2
-wires the live secret — until then `engine-core` binds `NoResidentKey`
-and every serve is a counted sign refusal. The unsigned HTTP half is not a
-substitute for a countersigned loopback test.
+HostSigner}`) and the envelope LANDED by (a). **UPDATE 2026-10-06: SH-2
+LANDED** ([`SH2_RESIDENT_KEY_AUDIT.md`](../completed/SH2_RESIDENT_KEY_AUDIT.md)) —
+`engine-core` binds `ResidentPassKey`, which signs *inside* the stake
+actor (`SignPassTranscript`) with the held persona's `hybrid_sign_sk`
+through a weak actor handle; the secret never leaves the actor, and
+`PassKey::ready` is actor liveness. The placeholder `NoResidentKey` is
+deleted (`RefusingKey` survives as a test fixture on the dev-only
+`test-signer` edge). The countersigned loopback test the sentence below
+asks for is `engine-core`'s `serving::round_trip_tests`: the resident
+key behind a real `PServeEndpoint`, fetched by the real `PFetchClient`,
+verified under the bond identity. The unsigned HTTP half is not a
+substitute for a countersigned loopback test. *The receipt key (Slice C
+Round 0 ruling, 2026-10-07):* the bond record carries a **separate
+FN-DSA-1024 receipt key**, and the identity stays ML-DSA-65. A second
+capability, `ResidentReceiptKey`, signs with it in the same in-actor
+shape, behind the same weak handle and loopback harness. It is built and
+not selected: `ResidentPassKey` is what the serving task holds.
+Selection is owned by `FN_DSA_HYBRID.md` §9.4.
 
 **Named residency: the serving host becomes a hot signer.** Every
 read now costs a hybrid signature with `P`'s identity secret, so that
@@ -895,7 +1058,10 @@ persona), but it is a residency the serving task
 does not have today: `shekyl-p-serve` was built never to hold a secret.
 It is named here so the implementation PR and SH-2 design the
 residency rather than discover it the first time the serve path needs
-to sign.
+to sign. **Designed 2026-10-06 (SH-2):** the residency is the stake
+actor's existing one — the same `hybrid_sign_sk` already signs
+`PQC_AUTH_TX` and `EMISSION_CLAIM` there — and the serving role holds a
+weak handle, not a second copy (`SH2_RESIDENT_KEY_AUDIT.md` §3 Q1/Q2).
 
 **Second named input: a height, not a chain (added with the `SF-D5`
 second amendment, 2026-09-13).** The `P`-side anchor gate needs `P`'s
@@ -919,7 +1085,7 @@ test and does not in release). Not an environment variable a deployed
 
 This ruling selects the **key only**. The signed transcript is
 `SF-D8`'s — `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖
-shard_id_le[8]`, LANDED by (a0) in `verify_pass_countersignature`
+shard_id_le[8] ‖ D[32]`, verified by `verify_pass_countersignature`
 (`shekyl-archival-retention/src/attestation_wire.rs`, transcript in
 `pass_anchor.rs`). The v1 nonce-only message that function verified
 before (a0) is RETIRED: caller-supplied opaque nonces invalidated its
@@ -958,18 +1124,22 @@ not remove it.
 
 ### `SF-D8` — returned signature and verify seam — RULED 2026-09-13
 
+> **Specification:** what `P` signs and the delivery digest are this section's and stand. How a receipt is admitted on chain is [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §5, §7.2 and §9.1: the nonce is bound to `(h, j)`, the record carries `j` in place of the nonce, and admission checks no bound on the anchor (`SCS-P7`). The admission window below (`[h − 720 − L, h − 720]` on the including block's predecessor) is live code, and is deleted with the implementation, with its reason, in the specification's §11.1.
+
 The original `R_k`-only lean was incomplete. The fetcher's output is a
 **typed result both callers consume**, produced only after all three
 checks:
 
 1. parse the returned response envelope and inner frame
-   (`ServedFrameHeader::read`);
+   (`ServedFrameHeader::read`) — *RETIRED 2026-10-08; the parse is
+   `shekyl_wire::shard_frame` per transaction, streamed*;
 2. recompute `R_k` (`recompute_segment_r_k`) and compare it with the
    daemon's local `FrozenSegmentRecord`;
 3. verify P's hybrid countersignature under `SF-D13` against the ruled
    transcript `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖
-   shard_id_le[8]` — the decoded 72-byte header this request sent,
-   followed by the `u64` this request asked for.
+   shard_id_le[8] ‖ D[32]` — the decoded 72-byte header this request
+   sent, the `u64` this request asked for, and the delivery digest
+   recomputed from the bytes received.
 
 No store handle exists at verify time (TJ-F liveness). The two
 verification refusals are distinct typed errors — `RootMismatch` and
@@ -1018,21 +1188,62 @@ Appending the server-parsed shard id makes that signature fail for
 P+witness; that residual remains priced by the ruled 2-of-3 quadratic.
 
 **Signed message — RULED 2026-09-13; AMENDED twice later the same
-day (second amendment current).** `P` signs one fixed,
+day; AMENDED 2026-10-04 (current).** `P` signs one fixed,
 domain-separated encoding of
-`nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`
-(80 bytes), where the first 72 bytes are the **decoded** header in
+`nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ D[32]`
+(112 bytes), where the first 72 bytes are the **decoded** header in
 canonical binary exactly as received — never the header's textual
-form — and `shard_id` is the exact `u64` `P` parsed from this
-request's `/shard/{id}`. Both signature legs cover that message. The
-fetch client reconstructs it from the header it sent and the shard id
-it requested; it never reads those values back from the response.
+form — `shard_id` is the exact `u64` `P` parsed from this
+request's `/shard/{id}`, and `D` is the **delivery digest**:
 
-The pass record **carries** the 32-byte `nonce` and the 8-byte
-`anchor_height` — the random cannot be recomputed from chain terms and
-the height is the requester's choice inside a window, so neither is
-derivable at admission. That reverses the credit-wire line that the
-nonce is not stored (+40 bytes per witness entry versus v1). The
+```text
+D = cSHAKE256(N = "", S = "shekyl/archival-pass-delivery-digest-v1",
+              X = nonce[32] ‖ framed)[..32]
+```
+
+with `framed` the exact response body ahead of the signature — since
+2026-10-08 the `shard_frame` body bytes as sent (~~the `ServedFrameHeader`
+bytes, the payload and the padding~~; `pass_delivery_digest(nonce, body)`). Both
+signature legs cover that message. The fetch client reconstructs the
+first 80 bytes from the header it sent and the shard id it requested,
+and recomputes `D` from the bytes it received; it never reads any of
+those values back from the response.
+
+**What the signature claims.** That `P` delivered these bytes in answer
+to this request. The nonce salts the digest, so `D` is not a function of
+the shard alone: it cannot be published, precomputed for a shard, or
+lifted from one read into another. The signature does **not** claim that
+`P` stores the bytes — a `P` that relays them from elsewhere signs the
+same thing, and that residual is topology's to price
+(`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §9.4 (ii)–(iii)). Every
+response is hashed the same way whoever asked, so a challenge read stays
+indistinguishable from an organic one.
+
+**What the record leaves behind.** The pass record carries `nonce` and
+`D`. While `RF-D4` writers emit `padding_len == 0`, the framed body is
+the canonical header for the shard's leaf count followed by the shard,
+so anyone who later holds the shard recomputes `D` for a recorded pass.
+A recorded `D` that does not match is evidence that `P` signed for bytes
+that were not the shard, and it lasts as long as the record. `D` is a
+flat hash of that whole body. That hash is the byte check: a matching
+`D` takes the framed bytes under this nonce. A hash of a precomputable
+summary — a root of chunk hashes — can be signed from the summary
+alone, and a later holder of the shard who recomputes it finds a match
+and cannot tell the bytes were gone. A padding scheme keeps the
+property only when that reader can rebuild the padded frame from the
+shard and the pass record. Padding fixed by the pre-read inputs (leaf
+count and shard id, never the leaves — `padding_len` is encoded before
+the store read) is recomputable from the shard. Any other padding keeps
+the property only when the pass record carries its exact bytes.
+
+The pass record **carries** the 32-byte `nonce`, the 8-byte
+`anchor_height` and the 32-byte `D` — the random cannot be recomputed
+from chain terms, the height is the requester's choice inside a window,
+and the validator does not hold the delivered bytes, so none is
+derivable at admission (72 bytes per witness entry ahead of the
+signature). `D` is checked by the signature, not recomputed: the
+validator learns that `P` signed for a delivery under this nonce, and
+the fetch client is the party that compared `D` to bytes. The
 **anchor hash is not carried**: admission reads it from the
 **connecting chain** at `anchor_height`, which is exactly what makes a
 fabricated hash fail. Admission of a challenge pass in a block whose
@@ -1067,7 +1278,7 @@ reorg-sensitive and re-introduces honest fork misses; higher lengthens
 the collusive pre-signing lead — plus the `PDM-Q11` `D_max` gate as a
 consumer. `L` is the new `archival_attestation_anchor_lag_blocks`
 **= 4, PROVISIONAL**, `build.rs`-enforced `≥ 2`, read by Rust; C++
-sizes the window through `shekyl_archival_pass_anchor_window` and holds
+sizes the window through `shekyl_archival_pass_anchor_window` (deleted, `DEL-008`) and holds
 no copy. The verifier reads the generated constants, never a third
 literal.
 
@@ -1093,6 +1304,27 @@ soak p99 = 86.06 s; both under 120 s. Verdict: DROP-TO-3 CANDIDATE —
 necessary, not sufficient. Seven attempts of the cold p99 fit under
 six minutes. `L` stays 4 until fetch-plus-retry exists (`SF-D6` /
 TJ-D). Soak p99 does not walk the candidate back and does not pin.
+
+**W₂ 2026-10-02 (size ladder; `ARCHIVAL_SHARD_T_DERIVATION.md` §10.6):**
+the span is restated **per byte**, on the worse of the days measured, as
+the design owner ruled. At the governing percentile a fetch takes
+12.09 s + bytes / 71,606 B/s: **56.1 s** for the heaviest shard at
+`W = 3,000,000 B` (3,149,400 B). That replaces "~20 s for 3.33 MB"
+above, which was a burst floor. One attempt and one retry of the largest
+served object, each ending at 120 s, complete by **149.7 s at p99** and
+fail outright in 4.0 % of reads. Verdict: **`L = 4` holds** — over two
+minutes, so the drop-to-3 candidate is withdrawn; under six, so the
+retry budget is not shown too generous.
+
+**`SF-D6`'s retry budget, 2026-10-02: 2 retries**
+(`ARCHIVAL_SHARD_T_DERIVATION.md` §10.7). On the same day a read of
+three attempts completes by **190.4 s at p99**, inside the two blocks.
+The measurement does not bound the count: a fourth attempt's p99 is
+202.9 s, also inside. The six-minute line above does. Three attempts
+of 120 s are exactly six minutes, so a budget of 2 cannot cross it on
+any day, and `L` is never asked to absorb the budget. A read that runs
+all three attempts to the deadline has used three of `L`'s four blocks;
+at p99 it has used under two.
 
 **Residuals, recorded rather than inherited:**
 
@@ -1139,17 +1371,20 @@ existence property (`P` signs blind, so nothing stops a lone witness
 pre-fetching for any future height), and exact equality misses every
 honest fetch that spans a block boundary.
 
-*LANDED 2026-09-13 by the §9.1 (a0) PR.* Domain string
-`shekyl/archival-attestation-scheme-v2` (`SCHEME_DOMAIN_ATTESTATION`,
-`shekyl-crypto-pq/src/signature.rs`; v1 retired in
+*LANDED 2026-09-13 by the §9.1 (a0) PR; the delivery digest and the v3
+domain LANDED 2026-10-04.* Domain string
+`shekyl/archival-attestation-scheme-v3` (`SCHEME_DOMAIN_ATTESTATION`,
+`shekyl-crypto-pq/src/signature.rs`; v1 and v2 retired in
 `CRYPTO_DOMAIN_REGISTRY.tsv`, the `archival-attestation-nonce-v1`
 cSHAKE customization deleted with `attestation_nonce()`). Helper home
 `shekyl-archival-retention::pass_anchor::pass_countersignature_message`
-over `pass_request_header_bytes`; `PassRecord` carries
-`nonce: [u8; 32]` and `anchor_height: u64`; the prunable witness entry
-is `nonce[32] ‖ anchor_height_le[8] ‖ HybridSignature[3385]` and
-`attestation_root` commits to `header ‖ nonce ‖ anchor_height ‖
-signature`. Verifier input is `predecessor_height` plus the connecting
+over `pass_request_header_bytes`, with `pass_delivery_digest` /
+`PassDeliveryHasher` beside it (customization
+`shekyl/archival-pass-delivery-digest-v1`); `PassRecord` carries
+`nonce: [u8; 32]`, `anchor_height: u64` and `delivery_digest: [u8; 32]`;
+the prunable witness entry is `nonce[32] ‖ anchor_height_le[8] ‖ D[32] ‖
+HybridSignature[3385]` and `attestation_root` commits to `header ‖
+nonce ‖ anchor_height ‖ D ‖ signature`. Verifier input is `predecessor_height` plus the connecting
 chain's `L + 1` anchor hashes for `[h − 720 − L, h − 720]`
 (`ShekylArchivalAttestationVerifyCtx.anchor_hashes_ptr/len`, filled by
 `Blockchain::fill_pass_anchor_window` from the main chain or the alt
@@ -1157,37 +1392,81 @@ chain above the fork point; `cb_out_key`, `cb_out_key_readable`,
 `prev_block_hash` removed; verdicts 8 and 12 RETIRED; new verdicts 13
 `MALFORMED_ANCHOR_TABLE`, 14 `ANCHOR_OUT_OF_WINDOW`, 15
 `BELOW_ANCHOR_THRESHOLD`; C++ sizes the table via
-`shekyl_archival_pass_anchor_window`). Witness cap
-`ATTESTATION_WITNESS_MAX_BYTES = 876 808` (+40/entry versus v1),
+`shekyl_archival_pass_anchor_window` (deleted, `DEL-008`)). Witness cap
+`ATTESTATION_WITNESS_MAX_BYTES = 885 000` (`8 + 256 × 3 457`),
 Rust-authoritative, C++ asserted equal. Pinned vector (rule-50 tier 3, a
 drift tripwire — the hand-computed header/transcript concatenations are the
 KATs): a deterministic fixture
-(`tests/fixtures/attestation_pass_countersignature_v2_pinned.json`, keys
+(`tests/fixtures/attestation_pass_countersignature_v3_pinned.json`, keys
 from `derive_archival_p_keys` at a pinned seed, a deterministic
-`pinned_chain_hash` window) shared by the Rust, FFI, and C++ tests,
-regenerated under the armed regenerator with the decision-log entry of
-2026-09-13. The `P`-side gate and header parse are (a)'s.
+`pinned_chain_hash` window, a pinned `framed` body and its digest)
+shared by the Rust, FFI, and C++ tests, regenerated under the armed
+regenerator with the decision-log entry of 2026-10-04. The digest has
+its own independent pins (computed outside the crate) in
+`tests/attestation_wire_kat.rs`. The `P`-side gate and header parse are (a)'s.
 
-**Response carrier — RULED 2026-09-13; LANDED by (a)+(b)
-(`SIGNATURE_ENVELOPE_LEN` on both ends).** `RF-D4`'s
+**Response carrier — RULED 2026-09-13; AMENDED 2026-10-04 (the digest)
+and 2026-10-13 (the envelope's width is the bound scheme's); LANDED.**
+`RF-D4`'s
 `ServedFrameHeader` contains only `leaf_count` and `padding_len` and
 the pre-(a) HTTP response carried no countersignature, so the signature
 needed a home that is neither the inner frame nor a header:
 
-- **Carrier:** the HTTP body is an outer binary response envelope
-  carrying the canonical `HybridSignature` (both legs, the fixed
-  canonical length from `shekyl-crypto-pq`), followed by the existing
-  `ServedFrameHeader` and segment bytes. The HTTP response headers stay
+- **Carrier:** the HTTP body is the shard body (since 2026-10-08
+  `shekyl_wire::shard_frame`; ~~the existing `ServedFrameHeader` and
+  segment bytes~~), followed by an outer binary response envelope carrying
+  the canonical signature of the scheme the target is bound to, at that
+  scheme's canonical length, as the response's **last** bytes. The width
+  is `PassVerifyingKey::ENVELOPE_LEN` on the fetch side and `W` on
+  `PassSigner<W>` on the serve side. **AMENDED 2026-10-13:** the live
+  binding, on both ends, is the identity scheme — `HybridSignature`,
+  `IDENTITY_ENVELOPE_LEN = HybridSignature::CANONICAL_LEN` (3,385). The
+  receipt scheme's width (`RECEIPT_ENVELOPE_LEN`, 1,356,
+  `FnDsaHybridSignature`) is built and **STAGED**; no production target
+  or endpoint is bound at it ([`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) §9).
+  The single global `SIGNATURE_ENVELOPE_LEN` is gone. A response is one
+  scheme, decided by the key's type; nothing reads the bytes to choose.
+- **The envelope closes the body because the signature covers it.**
+  `D` is a digest of every byte ahead of the envelope, so the signature
+  is the last thing `P` can send. `P` reads the shard **once**: it
+  hashes each chunk as it sends it, then finishes `D`, signs, and
+  appends the signature (RULED 2026-10-05). The signed bytes are the
+  sent bytes by construction, and no more than one chunk of the shard is
+  resident, so the in-flight ceiling keeps its memory bound. Signing
+  comes after the body, so a signer fault there cannot change the
+  status: `P` writes the refusal trailer in the signature's place
+  (RULED 2026-10-06), the response is its full declared length, and the
+  client classifies it as a failed read (`Unsigned`). A persona that
+  knows before the first byte that it has no key answers 503 and sends
+  no shard. A response that stops short, anywhere, is a stall. The
+  client refuses a response whose recomputed `D` does not verify
+  (`BadCountersignature`); a signature placed anywhere but last is
+  refused as that or as a malformed envelope. Tests:
+  `the_countersignature_is_released_only_after_the_whole_frame`,
+  `a_signer_that_fails_after_the_body_closes_it_with_the_refusal_trailer`,
+  `a_persona_with_no_key_answers_503_and_sends_no_shard`
+  (`shekyl-p-serve`);
+  `garbage_with_a_valid_signature_appended_is_refused`,
+  `a_signature_sent_ahead_of_the_body_is_refused`,
+  `a_body_closed_with_the_refusal_trailer_is_a_failed_read`,
+  `a_good_response_cut_exactly_at_the_frames_end_is_a_stall`
+  (`shekyl-p-fetch`).
+  The HTTP response headers stay
   exactly `content-type` and `content-length`; no signature leg is
   text-encoded into a header — a 3,309-byte ML-DSA leg does not belong
-  in one. The inner `RF-D4` frame is byte-for-byte unchanged, and
-  `content-length` covers envelope plus frame (this is the
-  `signature_envelope_len + framed_len()` equality `SF-D6` already
-  checks). Because the signature length is fixed, the envelope adds no
-  length field and the frame offset is a constant. The client **reads
-  exactly `signature_envelope_len` bytes, then parses**. It does not
-  stream-parse `HybridSignature` by trusting the inner `u32` length
-  fields. The serve crate obtains the signature from the `SF-D13`
+  in one. ~~The inner `RF-D4` frame is byte-for-byte unchanged~~
+  (retired 2026-10-08; the body is `shekyl_wire::shard_frame`), and
+  `content-length` covers the body plus the bound scheme's envelope.
+  Because that length is fixed by the scheme, the envelope adds no
+  length field and its offset is `content-length` minus the scheme's
+  envelope width. The client **reads exactly `content-length` bytes and
+  takes the last `K::ENVELOPE_LEN` bytes as the envelope**
+  (`PassVerifyingKey`). On the live binding that width is
+  `IDENTITY_ENVELOPE_LEN` (3,385) and the bytes parse as a
+  `HybridSignature`. It does not stream-parse the signature by trusting
+  inner length fields, and it does not try a second scheme: a response
+  of the other width fails this key's checks. The serve crate obtains
+  the signature from the `SF-D13`
   callback; it does not load the secret.
 - **Verify placement:** inside the fetch call. The client returns only
   verified-or-refused, never raw bytes — a raw-bytes return invites a
@@ -1201,6 +1480,115 @@ needed a home that is neither the inner frame nor a header:
 
 Whether a verify failure is remembered is `SF-D12`: it is not a
 selection input. It is logged (`SF-D12`).
+
+**AMENDMENT 2026-10-08 — the body is the archival good, framed per
+transaction, and the verify seam streams (fetch Sub-PR 2; `SV-D8`).**
+The `RF-D4` carrier (`ServedFrameHeader` ‖ segment ‖ padding) and the
+`&[u8]` `ContentVerify` hole above are **records-was**: both are deleted
+by this amendment's landing, on both ends. The 2026-10-03 `SF-D7`
+amendment asked for a response ceiling `W` could not give because a
+tx-range body "also carries its prefix and base"; this amendment answers
+by not sending them.
+
+- **Unit: the archival good only.** The body of `/shard/{k}` is, for
+  each in-domain transaction of `[b_k, b_{k+1})` in storage order, its
+  `pqc_auths` segment and its prunable region — exactly the two rows a
+  body store holds (`txs_pqc_auths`, `txs_prunable`) and a pruned node
+  lacks (`SHT-Q1`, `SHT-Q2`). The prefix and base travel on no body:
+  every node keeps them as the skeleton, so sending them would spend
+  `P`'s bandwidth on bytes the requester already has and put the
+  response length outside `W`'s reach. With the archival good alone,
+  `Σ archival_len` over the range is a skeleton-derived figure the
+  requester knows **before the dial**, and the response length is exact
+  up to varint widths.
+- **Frame** — `shekyl_wire::shard_frame`, the one codec both ends read
+  (`SF-D4`: shared, not mirrored; `shekyl-wire` joins the client's
+  positive dependency limb in `check_p_fetch_dep_cut.py`):
+
+  ```text
+  version:  u8 = 1
+  tx_count: varint
+  per transaction, range order:
+    pqc_auth_count: varint
+    pqc_auths_len:  varint
+    prunable_len:   varint
+    pqc_auths bytes ‖ prunable bytes
+  ```
+
+  No txid, no digest, no shard id on the wire: order is the range's
+  and identity is the requester's expectation. Anything `P` could put
+  there would be a claim about the body (`RF-D6`). The varints are the
+  canonical `shekyl-wire` LEB128 (`varint.rs`), at most ten bytes each.
+  The three varints lead the entry's bytes so the lengths are held
+  against the row before a segment byte is read (next item); an
+  interleaved layout (`len ‖ bytes ‖ len ‖ bytes`) would have put the
+  first segment resident before the second length was known.
+- **An expectation replaces the hole.** The entry point is
+  `fetch(&FetchTarget, &RequestHeader, &ExpectedShard, Arc<dyn TxSink>)`.
+  `FetchTarget` is now `{ endpoint, verifying_key }` — the shard moved
+  to the expectation, so one value names it. `ExpectedShard
+  { shard_id: ShardId, txs: Vec<TxidParts> }` is built by the caller
+  from skeleton rows (txid, `txs_pqc_auth_hash`, `txs_prunable_hash`,
+  `txs_archival_len`) and the cumulative archival length before the
+  range; its constructor refuses an empty range, an entry that carries
+  no archival good (`carries_archival_good`), an entry whose
+  cumulative-before falls outside shard `k` (`shard_of`), and a range
+  that does not close the shard (`PDM-Q-F32`'s boundary pair, checked
+  as far as the range alone can check it; that `b_k − 1` lies in shard
+  `k − 1` is the caller's fold). The `ContentVerify` trait is gone: the
+  one content check is the retained rows, so it is the client's, not a
+  caller's.
+- **Per-transaction verify, one resident (`PDM-Q6` item 5).** For each
+  entry the client reads the three varints, refuses unless
+  `pqc_auths_len + prunable_len == archival_len` (and `pqc_auths_len == 0`
+  when the row is `None`) **before** a segment byte is read, reads the
+  two segments, and on the blocking pool checks
+  `pqc_auth_hash_of(count, pqc_auths)` and `prunable_hash_of(prunable)`
+  against the rows (`shekyl_wire::shard_frame::check_components`), folds
+  the entry into the `SV-D1` view hash (`ShardViewHasher`) and hands the
+  verified components to the caller's `TxSink` (the organic caller's
+  store write; the challenge and view callers discard). The entry is
+  then dropped. The delivery digest `D` folds every body byte as it is
+  read (`PassDeliveryHasher`), frame bytes included.
+- **Refusal order keeps `SF-D6`'s meaning.** A content mismatch is
+  remembered, the remaining body is drained into `D` and discarded, the
+  envelope is read, and the countersignature is verified; the fetch is
+  `ContentRefused` only if the signature verifies and
+  `BadCountersignature` otherwise — so `ContentRefused` stays evidence
+  that *this* `P` answered *this* request with those bytes. Components
+  handed to the sink before a refusal are correct by the rows whoever
+  sent them; the signature decides `P`'s credit, not the bytes' truth.
+  The refusal trailer is still read before any verification
+  (`Unsigned`).
+- **Ceiling.** `ExpectedShard::max_response_len::<K>()` is the frame
+  ceiling (`frame_len_ceiling`: `1 + 10 + Σ (archival_len_i + 3·10)`)
+  plus that target's scheme's envelope width
+  (`PassVerifyingKey::ENVELOPE_LEN`). The constructor checks the frame
+  ceiling against the wider of the two schemes, so either scheme's
+  `max_response_len` fits. The live width is `IDENTITY_ENVELOPE_LEN`
+  (3,385). The receipt width (`RECEIPT_ENVELOPE_LEN`, 1,356) is staged
+  and not what a production target asks for (AMENDED 2026-10-13).
+  Exactness is still enforced by the read (a frame that does not end at
+  `content-length` minus the envelope is `Malformed`). `SF-D7`'s memory
+  leg is as the 2026-10-03 amendment states it: `N` times one entry's
+  peak.
+- **Result.** `VerifiedShard { shard_id, delivery_digest, signature,
+  view_hash, tx_count, archival_len }` — no body. The pass record reads
+  the first three; the view reads the next three; the organic caller
+  already has what it wanted through the sink.
+- **Serve side, same amendment.** `shekyl-p-serve` writes
+  `content-length = body.len() + envelope` and streams the provider's
+  bytes unframed: the serving loop is unit-agnostic, and the `RF-D4`
+  frame header it used to prepend is deleted with
+  `shekyl_curve_tree::served_frame`. The leaf `StoreShardProvider`
+  still exists until the wallet lane's store rebuild (`WSS-`) replaces
+  it; its raw segment bytes satisfy no `ExpectedShard`, so a fetch
+  against today's wallet is a grammar refusal (`Malformed::Frame`: the
+  first leaf byte is not the frame's version byte) or, where that byte
+  happens to match, `ContentRefused` — never `Miss`. Named in
+  `SHARD_VIEW_FETCH.md` §4 as the interim state, and the reason no
+  consumer may read either refusal as evidence against `P` until `WSS`
+  lands.
 
 ### `SF-D9` — `RF-R1` heading correction
 
@@ -1216,7 +1604,7 @@ not a parenthetical in the living contract.
 ### `SF-D10` — organic selection — RULED 2026-09-12
 
 Uniform memoryless draw over the holder set of shard `s`, read from the
-drawable snapshot (`DrawableSet::at_epoch_open`, SO-D8 Q3 RULED 2026-09-16),
+drawable set as of the epoch's open (`drawable_epoch_walked_back`, SO-D8 Q3 RULED 2026-09-16),
 performed by the **organic scheduler**. Per-need
 exclusion permitted. No persistent state. `shekyl-p-fetch` does not
 draw; it is given a destination.
@@ -1332,10 +1720,8 @@ Named attacker objectives this round's rulings are evaluated against:
    (`SF-D12`); it is logged.
 2. **Guard sees the fetch set — SUPERSEDED 2026-09-12 (`SF-D3`).**
    An entry guard does not see onion destinations, HTTP paths, or the
-   challenge schedule (on-chain). The client presents no SOCKS
-   credentials and sets no isolation flags; circuit assignment is
-   Tor's. Sharing circuits with overlay P2P is a consequence of that
-   contract, not a leak isolation would cut. See `SF-D3`.
+   challenge schedule (on-chain). Per-read credentials give each read
+   its own circuit through the same guard. See `SF-D3`.
 3. **Slash-by-denial over onion — not a client-owned weapon, and not a
    handoff.** The serve-side limiter is load-bearing
    (`shekyl-p-serve::serve::MAX_INFLIGHT`; `EU-D6` is REJECTED but the
@@ -1369,7 +1755,7 @@ Named attacker objectives this round's rulings are evaluated against:
    (`onion_service.rs:146–148` defaults on; `control/onion.rs:272–292`
    throttles the rendezvous-request queue, not egress, and the body
    transfer is symmetric under flow control;
-   `control/actor.rs:1725–1754` live `ADD_ONION` with PoW). Recollection is
+   `control/actor.rs:2007–2037` live `ADD_ONION` with PoW). Recollection is
    grounded in [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md)
    SPIKE-F-15/17/18, not general Tor lore. Once a rendezvous is
    established, a whole-shard GET is ~3.33 MB. Over Tor the response
@@ -1419,9 +1805,9 @@ Named attacker objectives this round's rulings are evaluated against:
    load; they do not own the slash.
 4. **Shared-instance P2P + archival (accepted, `SF-D2`/`SF-D3`).**
    Overlay P2P and archival fetches share the daemon's Tor instance
-   and therefore its entry guards. Fetches then share circuits with
-   overlay P2P (no credentials on the same SOCKS) — a consequence, not
-   a one-circuit guarantee. A guard-level observer sees Tor use, not
+   and therefore its entry guards. They do not share circuits: a fetch
+   rides a rendezvous circuit to one persona's onion, built for that
+   read. A guard-level observer sees Tor use, not
    fetch interest. Accepted-by-construction on one process (guards are
    per-process). Serving↔fetching (persona ↔ principal) is closed by
    `PWD-E9` (`SF-D11` withdrawn). Blending with overlay volume is a
@@ -1457,12 +1843,14 @@ Named attacker objectives this round's rulings are evaluated against:
   (`onion_service.rs`, `control/actor.rs`, SP-T3 SPIKE-F-15/17/18) —
   already owned; not this client. SPIKE-PIN-1/2 stay where `SF-D7`
   left them.
-- SH-2 remainder (the wallet actually constructing
+- ~~SH-2 remainder (the wallet actually constructing
   `PersonaServingHost` and passing the persona hybrid signing secret
-  into the `SF-D13` callback) — a named blocker for *production*
-  countersignature and for end-to-end onion integration. Loopback
-  tests of the envelope inject a test key; they do not wait on SH-2.
-  Loopback of the unsigned HTTP half is not that test.
+  into the `SF-D13` callback)~~ — **LANDED 2026-10-06**
+  ([`SH2_RESIDENT_KEY_AUDIT.md`](../completed/SH2_RESIDENT_KEY_AUDIT.md)): production
+  countersignature is wired (`ResidentPassKey`, in-actor sign). What this
+  did **not** close is end-to-end *onion* integration — the first real
+  descriptor publish is still the `IMPLEMENTATION_INDEX.md` SH-2b-2
+  residue, and the proving test here is loopback.
 - The endpoint field on the vin (EU's B+C1 slice).
 - Availability-level teaching-to-the-test (serve during windows,
   refuse outside them). Coverage math as a function of `D` on
@@ -1478,9 +1866,8 @@ codec `shekyl-curve-tree`, shared not mirrored; virt-port home
 `shekyl-curve-tree`; dep-cut gate owed at implementation; not
 `shekyl-p-transport`),
 daemon Tor posture (`SF-D2` RULED: reuse the tor zone's SOCKS;
-`SF-D3` RULED: unauthenticated SOCKS, no isolation flags; circuit
-assignment is Tor's; blending with overlay is a consequence, not a
-cover mechanism — cover is TRC's subject; serving↔fetching already
+`SF-D3` RULED: SOCKS credentials per read, no isolation flags, a
+circuit per read; cover is TRC's subject; serving↔fetching already
 `PWD-E9`),
 dial grammar (key → onion:80, the
 port a shared constant both sides read from `shekyl-curve-tree`,
@@ -1505,12 +1892,13 @@ pinned by the implementation PR from SP-T3's upper bound and its own
 lower-bound throughput judgement), the stable bond-record hybrid
 identity signing key (`SF-D13`: callback into `PServeEndpoint`; crate
 holds no secret; the host also supplies `P`'s height), the signed
-message `header[72] ‖ shard_id_le[8]` under
-`shekyl/archival-attestation-scheme-v2` (challenge tuple not in the
-fetch; pass record carries the random and the anchor height; admission
+message `header[72] ‖ shard_id_le[8] ‖ D[32]` under
+`shekyl/archival-attestation-scheme-v3` (challenge tuple not in the
+fetch; pass record carries the random, the anchor height and the
+delivery digest; admission
 looks the anchor hash up on the connecting chain inside
 `[h − 720 − L, h − 720]`), the outer
-fixed-length signature envelope ahead of the unchanged `RF-D4` frame,
+fixed-length signature envelope after the unchanged `RF-D4` frame,
 and the verified-or-refused typed fetch result (`SF-D8` RULED), and
 one organic
 selection rule, on the scheduler not the fetch crate: uniform
@@ -1534,7 +1922,8 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   PR number recorded in the index row at merge).
   `verify_pass_countersignature` re-anchored to
   `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`
-  under the new versioned domain string, taking the connecting chain's
+  under the v2 domain string (the message gained `D[32]` and the domain
+  moved to v3 on 2026-10-04), taking the connecting chain's
   anchor window across the FFI (one indexed lookup; alt-chain fill
   above the fork point; genesis threshold 724 with KATs at 723/724),
   constants single-sourced from `consensus_constants.json`
@@ -1548,11 +1937,12 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   anything depends on it.
 - **(a) serve side — BUILT 2026-09-13 (commits `0ed3e11e0`,
   `1a0ea3e90`, `64a81697a` of the sub-PR 1 branch).** `RF-R1` header parse (one required header
-  decoding to the 72 bytes, same identical 404 on
-  absence/malformation/out-of-gate), the `P`-side anchor gate ±`L`
+  decoding to the 72 bytes; absence, malformation and out-of-gate were
+  the shared 404 as built and are the bare 400 since 2026-10-05), the `P`-side anchor gate ±`L`
   against the host-supplied height, signing over the **decoded**
   bytes, the fixed-length
-  `HybridSignature` envelope ahead of the unchanged `RF-D4` frame, the
+  `HybridSignature` envelope closing the body after the unchanged
+  `RF-D4` frame, the
   `PServeEndpoint` signer callback with the armed test-key affordance
   (`SF-D13`), and the `RF-R1` living-contract update. Its loopback KAT
   verifies against the verifier (a0) already merged.
@@ -1600,9 +1990,15 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   still not fetch-plus-retry. `archival_attestation_anchor_lag_blocks`
   stays 4. No further tests required for (c).
 
+  **Amendment 2026-10-07.** That warm column is the run as made: the
+  client then presented no per-fetch SOCKS credentials, so the circuit
+  was reused. The rig now mints a nonce per fetch and presents it as
+  the SOCKS username, and the warm arm's label says a circuit per read
+  with no `NEWNYM`. A re-run is not this column.
+
 The round doc stays in `docs/design/` while `L` is PROVISIONAL and
-Sub-PR 2 / SH-2 remain (the "archive when (c) lands" criterion
-expired 2026-09-16).
+Sub-PR 2 remains (the "archive when (c) lands" criterion expired
+2026-09-16; SH-2 landed 2026-10-06).
 
 ## 10. What this round did not find
 
@@ -1610,7 +2006,7 @@ Surfaces examined that did not yield a further disposition:
 
 - A non-default virt-port as an anti-enumeration lever (`SF-D5`
   reopen only).
-- Copying `IsolateSOCKSAuth` onto the daemon fetcher (`SF-D3`).
+- Copying the wallet's per-`P` SOCKS credential onto the daemon fetcher (`SF-D3`: the daemon's are per read).
 - A second Tor process (`SF-D2`).
 - Verify-failure as a selection input (`SF-D12`).
 - A leaf-addressed suffix as a Round-1 path (`SF-D1` holds that door

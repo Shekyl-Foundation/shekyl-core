@@ -1,0 +1,29 @@
+{
+  "height": 1234567,
+  "peers": [
+    {
+      "address": "192.0.2.7:18080",
+      "body_requests": [
+        {
+          "age_ms": 1500,
+          "count": 20,
+          "due_in_ms": 1022500,
+          "planned_bytes": 8388608,
+          "start_height": 1234568
+        }
+      ],
+      "claimed_height": 1234600,
+      "connection_id": "151c232a31383f464d545b626970777e",
+      "header_request": {
+        "age_ms": 250,
+        "due_in_ms": 257750
+      },
+      "mode": "reachable",
+      "rate": 4096
+    }
+  ],
+  "stalled": false,
+  "state": "behind",
+  "status": "OK",
+  "target_height": 1234600
+}

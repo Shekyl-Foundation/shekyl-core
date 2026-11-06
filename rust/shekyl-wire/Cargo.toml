@@ -12,6 +12,9 @@ build = "build.rs"
 serde_json.workspace = true
 
 [dependencies]
+# The network id the spend signature's hash binds (NETWORK_IDENTITY.md
+# NI-Q4).
+shekyl-network = { path = "../shekyl-network" }
 # Consensus original Keccak-256 (`shekyl_crypto_hash::keccak256`; 0x01 padding;
 # byte-identical to C++ `cn_fast_hash`). Single source for tx/block hash identities.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
@@ -24,6 +27,22 @@ shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 # pitfall `RAW_TYPE_NEWTYPE_MIGRATION.md` §6 exists to close. `TxHash` for
 # `hash()` itself is that plan's PR C.
 shekyl-types = { path = "../shekyl-types" }
+# `BpPlus::to_bulletproof`: the one wire-to-verifier reassembly of a Bp+, read
+# by every Shekyl verifier (CEN-H19's fold in shekyl-chain-rules, the submit
+# engine's N8 leg). Moved here from shekyl-daemon-rpc so a third verifier
+# cannot grow a third copy. Its deps are the curve crates this one already
+# reaches (shekyl-curve-generators) plus shekyl-curve-io/-primitives,
+# shekyl-crypto-hash and rand_chacha — no edge back to this crate.
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+
+[features]
+# `BoundTx::whole` / `BoundTx::modify`: a fixture's whole body bound to the
+# identity it hashes to itself. Production binds through `SkeletonTx::bind`
+# alone (`SB-Q2`), so the whole-body constructor is gated out of every
+# production build. TEST_ONLY (check_test_only_features.py): enabled from
+# dev edges alone (the scanner's, the engine's, the ingest's), never
+# forwarded by another crate's feature.
+test-fixtures = []
 
 [dev-dependencies]
 # Test-only: load the captured oracle hash vectors so the JSON is the single source
@@ -54,7 +73,6 @@ shekyl-consensus = { path = "../shekyl-consensus" }
 # Consensus checks composed alongside FCMP membership: CT cleartext balance
 # (`sum(pseudoOuts) == sum(outPk) + fee*H`) and Bp+ range-proof verification.
 shekyl-ct-balance = { path = "../shekyl-ct-balance" }
-shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 rand_core = { version = "0.6", features = ["std"] }

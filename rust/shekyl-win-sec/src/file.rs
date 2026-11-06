@@ -34,7 +34,7 @@ use std::path::Path;
 
 use windows_sys::Win32::Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE,
+    CreateDirectoryW, CreateFileW, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE,
 };
 
 use crate::sddl::{OwnerOnlyDescriptor, SddlError};
@@ -110,6 +110,32 @@ pub fn create_owner_only_file(path: &Path) -> Result<File, FileCreateError> {
     }
     // SAFETY: a fresh, valid, owned handle; `File` closes it exactly once.
     Ok(unsafe { File::from_raw_handle(handle) })
+}
+
+/// Create `path` as a directory, owner-only from its first instant, refusing
+/// an existing entry.
+///
+/// The descriptor is [`OwnerOnlyDescriptor::private_file`]: one ACE for the
+/// user SID, protected, which is what `0700` means for a directory that has
+/// to still be readable at the next logon. `CreateDirectoryW` applies it
+/// during the create, so there is no window in which the directory exists
+/// under the default DACL.
+pub fn create_owner_only_dir(path: &Path) -> Result<(), FileCreateError> {
+    let owner = current_user_sid()?;
+    let descriptor = OwnerOnlyDescriptor::private_file(&owner)?;
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `wide` is NUL-terminated and outlives the call;
+    // `descriptor.attributes_ptr()` is valid for as long as `descriptor` is,
+    // which is past the call; `CreateDirectoryW` reads both only during the call.
+    let ok = unsafe { CreateDirectoryW(wide.as_ptr(), descriptor.attributes_ptr()) };
+    if ok == 0 {
+        return Err(FileCreateError::Create(io::Error::last_os_error()));
+    }
+    Ok(())
 }
 
 /// The owner SID of an open file, read back off the handle (P-16).

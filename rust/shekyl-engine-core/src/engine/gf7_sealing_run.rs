@@ -70,7 +70,7 @@ use super::pscan::dispatch::{DispatchConfig, PendingPostStore, PendingSealStore}
 use super::pscan::start::{
     pending_post_store_for_engine, PScanHandle, SealingRunOverrides, DEFAULT_PSCAN_CADENCE,
 };
-use super::regtest_e2e::{persona_address, staker_wallet, try_generate_blocks, RegtestDaemon};
+use super::regtest_e2e::{staker_wallet, try_generate_blocks, RegtestDaemon};
 use super::{Engine, SoloSigner};
 
 // ---------------------------------------------------------------------------
@@ -252,10 +252,10 @@ fn wallet_seed(
     arm_tag: u64,
     run: usize,
     wallet: usize,
-) -> [u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES] {
+) -> [u8; shekyl_crypto_pq::account::SEED_BYTES] {
     let mut state =
         0x6766_375f_7365_616c ^ (arm_tag << 48) ^ (ordinal(run) << 16) ^ ordinal(wallet);
-    let mut seed = [0u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let mut seed = [0u8; shekyl_crypto_pq::account::SEED_BYTES];
     for chunk in seed.chunks_mut(8) {
         let v = splitmix64(&mut state).to_le_bytes();
         chunk.copy_from_slice(&v[..chunk.len()]);
@@ -295,6 +295,8 @@ fn synthetic_post(persona: PCanonicalId, slot: usize, round: usize) -> PendingBo
         anchor_t0: ChainCount::from_raw(0),
         funding_gindexes: Vec::new(),
         state: PendingPostState::Pending,
+        reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+        terminal: None,
     }
 }
 
@@ -530,8 +532,9 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
         artifact.display()
     );
 
+    // Mined to a wallet no run opens: `start()` spawns with a dummy
+    // `--mine-address` (N2), so coinbase reaches no arm's wallet.
     let daemon = RegtestDaemon::start().await;
-    let miner_address = persona_address(&wallet_seed(0xff, 0, 0), 0);
 
     // Pre-mine once (≈ 30 min): past `tip − 720` every sweep does real fetch
     // work (§19.8.2 chain row).
@@ -539,7 +542,7 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
     let mut mined = 0u64;
     while mined < PREMINE_BLOCKS {
         let batch = MINE_BATCH_BLOCKS.min(PREMINE_BLOCKS - mined);
-        daemon.generate_blocks(batch, &miner_address).await;
+        daemon.generate_blocks(batch).await;
         mined += batch;
     }
     eprintln!(
@@ -560,12 +563,11 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
         shekyl_rpc_transport::HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
             .await
             .expect("miner rpc");
-    let miner_addr_bg = miner_address.clone();
     let miner = tokio::spawn(async move {
         let mut consecutive_failures = 0u32;
         loop {
             tokio::time::sleep(BACKGROUND_MINE_INTERVAL).await;
-            match try_generate_blocks(&miner_rpc, 1, &miner_addr_bg).await {
+            match try_generate_blocks(&miner_rpc, 1).await {
                 Ok(_) => consecutive_failures = 0,
                 Err(e) => {
                     consecutive_failures += 1;

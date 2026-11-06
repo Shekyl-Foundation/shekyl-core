@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/trybuild/alt_verdict_does_not_cross_views.rs:28:23
+   |
+28 |     insert_into_store(judged_elsewhere());
+   |     ----------------- ^^^^^^^^^^^^^^^^^^ expected `AltValid<'_, StoreAlt>`, found `AltValid<'_, OtherAlt>`
+   |     |
+   |     arguments to this function are incorrect
+   |
+   = note: expected struct `AltValid<'static, StoreAlt>`
+              found struct `AltValid<'static, OtherAlt>`
+note: function defined here
+  --> tests/trybuild/alt_verdict_does_not_cross_views.rs:19:4
+   |
+19 | fn insert_into_store(_: AltValid<'static, StoreAlt>) {}
+   |    ^^^^^^^^^^^^^^^^^ ------------------------------

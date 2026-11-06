@@ -26,20 +26,15 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! Rust daemon RPC server — Axum replacement for epee's HTTP server.
+//! The daemon's RPC server: Axum over the node's handles.
 //!
-//! Native methods live in [`methods`] over [`chain_facts`]. C++ still serves
-//! the methods this crate has not taken (`core_rpc_server::on_*`); this crate
-//! owns HTTP, dispatch, restricted-mode, and every method the KV cutover has
-//! moved.
+//! Native methods live in [`methods`] over [`chain_facts`]; every read
+//! reaches the node through [`handles::Handles`], the p2p facts included.
+//! This crate owns HTTP, dispatch, restricted mode and every method.
+//! [`run::start`] binds and serves the configured section.
 
-// This crate's `tracing::*` events reach the C++-installed subscriber
-// because the daemon links exactly one Rust image
-// (`rust/shekyl-daemon-image`, which combines this crate with
-// `shekyl-ffi`'s logging surface into one archive with one
-// `tracing-core` dispatcher). See V3_WALLET_DECISION_LOG.md
-// (single-image contract, 2026-06-11 amendment).
-
+pub mod authority;
+pub mod ban_methods;
 pub mod bind;
 pub mod chain_facts;
 
@@ -83,14 +78,26 @@ pub mod consensus {
 }
 
 pub mod conn_limit;
-pub mod console;
 pub mod core;
-pub mod ctl_client;
-pub mod ffi;
-pub mod ffi_exports;
 pub mod handlers;
+pub mod handles;
+pub mod hash_budget;
+pub mod info;
+pub mod info_facts;
+mod listener_http;
 pub mod methods;
 pub mod middleware;
+pub mod mining_facts;
+pub mod mining_methods;
+pub mod node_methods;
+pub mod options;
+pub mod pool_methods;
+pub mod read_facts;
+pub mod read_methods;
+pub mod run;
 pub mod server;
+pub mod shard_view;
+pub mod store_facts;
 pub mod submit;
+pub mod sync_facts;
 pub mod types;

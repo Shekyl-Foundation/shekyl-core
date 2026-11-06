@@ -14,10 +14,13 @@
 //! with the gap as one arm of the wait. Onion-service proof-of-work and
 //! `MaxStreams` are the accept bound. This crate does not add another.
 //!
-//! `--tx-proxy` and `--anonymous-inbound` stay parsed in C++. They arrive
-//! here as [`Config`]. A bind failure returns before a listener exists,
-//! which is the zone not being inserted. The 60-second Tor liveness poll
-//! in `idle_worker` is a timing-table item and is not this connector's.
+//! The operator's Tor is configured in Rust (`shekyl-daemon-config`,
+//! `INPUT_GRAMMAR.md` IG-Q18): `tor-socks` is the SOCKS endpoint outbound
+//! dials through, and `tor-onion` with `tor-onion-listen` is the operator's
+//! own onion and the local endpoint its Tor forwards to. A bind failure
+//! returns before a listener exists, so nothing is left listening.
+//! Whether the managed Tor is alive is the managed-Tor supervisor's
+//! liveness sample (`TOR_SUPERVISOR.md` §4.11), not this connector's.
 
 #![deny(unsafe_code)]
 
@@ -29,25 +32,33 @@ use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::Pool;
 use shekyl_timing_engine::{Clock, Handle, Tick};
-use shekyl_transport_layer::{CloseCause, CloseKind, Sockets};
+use shekyl_transport_layer::{CloseCause, CloseKind, DialEnd, Sockets};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 mod drive;
 mod publish;
+mod replies;
 
 pub use publish::{publish_forward, publish_with_control, InboundPosture, PublishFault};
+pub use replies::{
+    refused, reply_end, socks_reply_is_our_request, stamp_reply, stamp_stream_end, Observed,
+};
 
-pub use drive::{accept_inbound, accept_one, dial_one, Accept, Admitted, Dial, Inbound};
+pub use drive::{
+    accept_inbound, accept_one, dial_one, publish_on, Accept, Admitted, Dial, Inbound, Publish,
+};
 
 /// Caller inputs. The dial span, the gap span, and the send-queue byte
 /// cap are unmeasured until a measurement names them.
 pub struct Config {
-    /// The operator's SOCKS5 proxy. Outbound dials go here.
-    pub proxy: SocketAddr,
-    /// Binds from `--anonymous-inbound`. These are the operator's onions.
-    /// They are not a [`ForwardAddr`], so [`publish_forward`] cannot name them.
-    pub anonymous_inbound: Vec<OperatorInbound>,
+    /// The SOCKS5 proxy outbound dials go through, with the pair it asks
+    /// for, if any.
+    pub proxy: shekyl_socks::Proxy,
+    /// The local binds of the operator's own onions (`tor-onion-listen`).
+    /// The operator's Tor published them; they are not a [`ForwardAddr`], so
+    /// [`publish_forward`] cannot name them.
+    pub operator_onion_binds: Vec<OperatorInbound>,
     pub ceiling: InboundCeiling,
     /// Covers the SOCKS exchange, circuit build, and rendezvous.
     pub dial_within: Tick,
@@ -127,8 +138,17 @@ impl Session {
     }
 
     /// The next bytes off the stream. `None` means the reader stopped.
+    /// [`Self::close_cause`] is why.
     pub async fn recv(&mut self) -> Option<Vec<u8>> {
         self.bytes.recv().await
+    }
+
+    /// The cause the connector stored when it closed this stream.
+    ///
+    /// [`CloseKind::PeerClosed`] only when the reader saw end-of-file.
+    #[must_use]
+    pub fn close_cause(&self) -> CloseCause {
+        self.bytes.close_cause()
     }
 
     /// Queue bytes up to the caller's cap. A buffer that does not fit is
@@ -163,7 +183,7 @@ pub struct Listener<C: Clock + Clone> {
     pub sessions: mpsc::UnboundedReceiver<Session>,
     engine: Handle<C>,
     sockets: Sockets,
-    proxy: SocketAddr,
+    proxy: shekyl_socks::Proxy,
     dial_within: Tick,
     gap_within: Tick,
     send_queue_bytes: usize,
@@ -205,13 +225,16 @@ where
     pub fn dial(&self, address: NetworkAddress) {
         let dial = Dial {
             address,
-            proxy: self.proxy,
+            proxy: self.proxy.clone(),
             sockets: self.sockets.clone(),
             dial_within: self.dial_within,
             gap_within: self.gap_within,
-            on_cause: Arc::clone(&self.on_cause),
+            on_end: {
+                let on_cause = Arc::clone(&self.on_cause);
+                Arc::new(move |end: DialEnd| on_cause(end.cause()))
+            },
             send_queue_bytes: self.send_queue_bytes,
-            admitted: self.admitted_tx.clone(),
+            admitted: publish_on(self.admitted_tx.clone()),
         };
         let engine = self.engine.clone();
         self.handle.spawn(dial_one(dial, engine));
@@ -226,14 +249,14 @@ impl<C: Clock + Clone> Drop for Listener<C> {
     }
 }
 
-/// Bind the loopback forward target and any anonymous-inbound addresses.
+/// Bind the loopback forward target and the operator's onion binds.
 ///
 /// `sockets` is the process-wide admission table. Clones share it, and
 /// the ceiling counts every connector on that table. This function keeps
 /// a clone and does not mint a table.
 ///
 /// One failed bind drops the listeners that succeeded and returns the
-/// error. The caller does not insert the zone. An accepted socket is
+/// error. Nothing is left listening. An accepted socket is
 /// handed to admission directly. There is no queue of sockets ahead of
 /// that check.
 pub fn listen<C>(
@@ -246,7 +269,7 @@ where
     C: Clock + Clone + Send + Sync + 'static,
 {
     let handle = pool.handle().clone();
-    let (forward_listener, extras) = pool.block_on(bind_all(&config.anonymous_inbound))?;
+    let (forward_listener, extras) = pool.block_on(bind_all(&config.operator_onion_binds))?;
     let forward = ForwardAddr::from_bound(forward_listener.local_addr()?)?;
     let mut extra_addrs = Vec::with_capacity(extras.len());
     for listener in &extras {
@@ -259,7 +282,7 @@ where
     let admitted_keep = admitted_tx.clone();
     let on_cause_keep = Arc::clone(&config.on_cause);
     let shutdown_timeout = config.shutdown_timeout;
-    let proxy = config.proxy;
+    let proxy = config.proxy.clone();
     let dial_within = config.dial_within;
     let gap_within = config.gap_within;
     let send_queue_bytes = config.send_queue_bytes;
@@ -284,7 +307,7 @@ where
             gap_within,
             on_cause: Arc::clone(&on_cause),
             send_queue_bytes,
-            admitted: admitted_tx.clone(),
+            admitted: publish_on(admitted_tx.clone()),
             backoff,
         };
         let engine = engine.clone();
@@ -320,430 +343,5 @@ async fn bind_all(extra: &[OperatorInbound]) -> std::io::Result<(TcpListener, Ve
 }
 
 #[cfg(test)]
-mod tests {
-    use std::io::{Read, Write};
-    use std::net::{Ipv4Addr, SocketAddr, TcpStream as StdStream};
-    use std::num::NonZeroUsize;
-    use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
-
-    use shekyl_net_address::NetworkAddress;
-    use shekyl_onion_v3::v3_onion_hostname;
-    use shekyl_peer_policy::InboundCeiling;
-    use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
-    use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
-    use shekyl_transport_layer::{CloseCause, CloseKind, ConnectorId, Direction, Sockets};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{TcpListener, TcpStream};
-
-    use super::{listen, Config, Listener, OperatorInbound};
-
-    fn nz(n: usize) -> NonZeroUsize {
-        NonZeroUsize::new(n).expect("nonzero")
-    }
-
-    fn budget() -> RuntimeBudget {
-        RuntimeBudget {
-            workers: nz(2),
-            blocking: nz(1),
-        }
-    }
-
-    fn name() -> ThreadName {
-        ThreadName::new("sk-tor").expect("name")
-    }
-
-    struct Recorded {
-        sink: Arc<dyn Fn(CloseCause) + Send + Sync>,
-        seen: Arc<Mutex<Vec<CloseCause>>>,
-    }
-
-    fn causes() -> Recorded {
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let record = Arc::clone(&seen);
-        let sink: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(move |cause| {
-            record.lock().expect("causes").push(cause);
-        });
-        Recorded { sink, seen }
-    }
-
-    fn config(
-        proxy: SocketAddr,
-        inbound: Vec<SocketAddr>,
-        ceiling: InboundCeiling,
-        dial: Tick,
-        gap: Tick,
-        on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
-    ) -> Config {
-        Config {
-            proxy,
-            anonymous_inbound: inbound.into_iter().map(OperatorInbound::new).collect(),
-            ceiling,
-            dial_within: dial,
-            gap_within: gap,
-            send_queue_bytes: 64,
-            accept_backoff: Duration::from_millis(1),
-            shutdown_timeout: Duration::from_millis(50),
-            on_cause,
-        }
-    }
-
-    fn start(
-        proxy: SocketAddr,
-        ceiling: InboundCeiling,
-        gap: Tick,
-    ) -> (
-        EngineService<MonotonicClock>,
-        Listener<MonotonicClock>,
-        Arc<Mutex<Vec<CloseCause>>>,
-    ) {
-        let engine = EngineService::start(MonotonicClock::new());
-        let pool = runtime(budget(), &name()).expect("runtime");
-        let recorded = causes();
-        let listener = listen(
-            pool,
-            &engine.handle(),
-            &Sockets::new(),
-            &config(
-                proxy,
-                Vec::new(),
-                ceiling,
-                Tick::new(5_000_000_000),
-                gap,
-                recorded.sink,
-            ),
-        )
-        .expect("listen");
-        (engine, listener, recorded.seen)
-    }
-
-    fn onion() -> NetworkAddress {
-        NetworkAddress::Tor {
-            host: v3_onion_hostname(&[0x11; 32]),
-            port: 18081,
-        }
-    }
-
-    fn wait_kind(seen: &Mutex<Vec<CloseCause>>, kind: CloseKind) -> CloseCause {
-        let start = Instant::now();
-        loop {
-            if let Some(cause) = seen
-                .lock()
-                .expect("causes")
-                .iter()
-                .copied()
-                .find(|cause| cause.kind() == kind)
-            {
-                return cause;
-            }
-            assert!(start.elapsed() < Duration::from_secs(2), "cause {kind:?}");
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    }
-
-    #[test]
-    fn an_ip_address_is_not_dialed() {
-        let proxy = SocketAddr::from((Ipv4Addr::LOCALHOST, 1));
-        let (engine, listener, seen) =
-            start(proxy, InboundCeiling::Bounded(4), Tick::new(5_000_000_000));
-        listener.dial(NetworkAddress::Ipv4 {
-            ip: Ipv4Addr::LOCALHOST,
-            port: 18080,
-        });
-        let cause = wait_kind(&seen, CloseKind::DialFailed);
-        assert_eq!(cause.reply_code(), 0);
-        listener.shutdown();
-        drop(engine);
-    }
-
-    #[test]
-    fn a_failed_anonymous_bind_does_not_leave_a_listener() {
-        let engine = EngineService::start(MonotonicClock::new());
-        let pool = runtime(budget(), &name()).expect("runtime");
-        let held =
-            std::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).expect("hold");
-        let taken = held.local_addr().expect("addr");
-        let recorded = causes();
-        let result = listen(
-            pool,
-            &engine.handle(),
-            &Sockets::new(),
-            &config(
-                SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
-                vec![taken],
-                InboundCeiling::Bounded(4),
-                Tick::new(5_000_000_000),
-                Tick::new(5_000_000_000),
-                recorded.sink,
-            ),
-        );
-        assert!(result.is_err());
-        drop(held);
-        drop(engine);
-    }
-
-    #[test]
-    fn bytes_pass_through_the_socks_dial() {
-        let engine = EngineService::start(MonotonicClock::new());
-        let pool = runtime(budget(), &name()).expect("runtime");
-        let recorded = causes();
-        let runtime_handle = pool.handle().clone();
-        let (proxy_port, got) = runtime_handle.block_on(async {
-            let dest = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-                .await
-                .expect("dest");
-            let dest_port = dest.local_addr().expect("addr").port();
-            let proxy = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-                .await
-                .expect("proxy");
-            let proxy_port = proxy.local_addr().expect("addr").port();
-            let got = tokio::spawn(async move {
-                let (mut sock, _) = dest.accept().await.expect("accept");
-                let mut buf = [0u8; 3];
-                sock.read_exact(&mut buf).await.expect("read");
-                sock.write_all(b"in").await.expect("write");
-                buf
-            });
-            tokio::spawn(async move {
-                let (mut sock, _) = proxy.accept().await.expect("proxy");
-                let mut greeting = [0u8; 3];
-                sock.read_exact(&mut greeting).await.expect("greet");
-                sock.write_all(&[0x05, 0x00]).await.expect("method");
-                let mut head = [0u8; 5];
-                sock.read_exact(&mut head).await.expect("head");
-                assert_eq!(head[3], 0x03);
-                let len = usize::from(head[4]);
-                let mut name = vec![0u8; len + 2];
-                sock.read_exact(&mut name).await.expect("name");
-                let mut upstream =
-                    TcpStream::connect(SocketAddr::from((Ipv4Addr::LOCALHOST, dest_port)))
-                        .await
-                        .expect("upstream");
-                sock.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
-                    .await
-                    .expect("reply");
-                match tokio::io::copy_bidirectional(&mut sock, &mut upstream).await {
-                    Ok(_) | Err(_) => {}
-                }
-            });
-            (proxy_port, got)
-        });
-        let mut listener = listen(
-            pool,
-            &engine.handle(),
-            &Sockets::new(),
-            &config(
-                SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port)),
-                Vec::new(),
-                InboundCeiling::Bounded(4),
-                Tick::new(5_000_000_000),
-                Tick::new(5_000_000_000),
-                recorded.sink,
-            ),
-        )
-        .expect("listen");
-        listener.dial(onion());
-        let handle = listener.runtime_handle().clone();
-        let mut session = handle.block_on(next_session(&mut listener.sessions));
-        session.try_send(b"out".to_vec()).expect("send");
-        assert_eq!(handle.block_on(got).expect("joined"), *b"out");
-        let got = handle.block_on(session.recv()).expect("inbound");
-        assert_eq!(got, b"in");
-        listener.shutdown();
-        drop(engine);
-    }
-
-    #[test]
-    fn a_socks_refusal_keeps_the_reply_byte() {
-        let engine = EngineService::start(MonotonicClock::new());
-        let pool = runtime(budget(), &name()).expect("runtime");
-        let recorded = causes();
-        let handle_pool = pool.handle().clone();
-        let proxy_port = handle_pool.block_on(async {
-            let proxy = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-                .await
-                .expect("proxy");
-            let port = proxy.local_addr().expect("addr").port();
-            tokio::spawn(async move {
-                let (mut sock, _) = proxy.accept().await.expect("accept");
-                let mut greeting = [0u8; 3];
-                sock.read_exact(&mut greeting).await.expect("greet");
-                sock.write_all(&[0x05, 0x00]).await.expect("method");
-                let mut head = [0u8; 5];
-                sock.read_exact(&mut head).await.expect("head");
-                let len = usize::from(head[4]);
-                let mut rest = vec![0u8; len + 2];
-                sock.read_exact(&mut rest).await.expect("rest");
-                sock.write_all(&[0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
-                    .await
-                    .expect("reply");
-            });
-            port
-        });
-        let listener = listen(
-            pool,
-            &engine.handle(),
-            &Sockets::new(),
-            &config(
-                SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port)),
-                Vec::new(),
-                InboundCeiling::Bounded(4),
-                Tick::new(5_000_000_000),
-                Tick::new(5_000_000_000),
-                recorded.sink,
-            ),
-        )
-        .expect("listen");
-        listener.dial(onion());
-        let cause = wait_kind(&recorded.seen, CloseKind::ProxyRefused);
-        assert_eq!(cause.reply_code(), 0x05);
-        listener.shutdown();
-        drop(engine);
-    }
-
-    #[test]
-    fn inbound_bytes_are_the_socket_bytes_and_the_gap_closes_an_unestablished_session() {
-        let (engine, mut listener, seen) = start(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
-            InboundCeiling::Bounded(4),
-            Tick::new(400_000_000),
-        );
-        let mut client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
-        client.set_read_timeout(Some(Duration::from_secs(2))).ok();
-        client.write_all(b"levin").expect("write");
-        let handle = listener.runtime_handle().clone();
-        let mut session = handle.block_on(next_session(&mut listener.sessions));
-        let got = handle.block_on(session.recv()).expect("bytes");
-        assert_eq!(got, b"levin");
-        session.try_send(b"out".to_vec()).expect("send");
-        let mut buf = [0u8; 3];
-        client.read_exact(&mut buf).expect("read");
-        assert_eq!(&buf, b"out");
-        let cause = wait_kind(&seen, CloseKind::LevinHandshakeTimeout);
-        assert_eq!(cause.kind(), CloseKind::LevinHandshakeTimeout);
-        listener.shutdown();
-        drop(engine);
-    }
-
-    #[test]
-    fn session_established_disarms_the_gap() {
-        let (engine, mut listener, seen) = start(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
-            InboundCeiling::Bounded(4),
-            Tick::new(1_000_000_000),
-        );
-        let mut client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
-        client
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .expect("timeout");
-        client
-            .set_write_timeout(Some(Duration::from_secs(2)))
-            .expect("timeout");
-        let handle = listener.runtime_handle().clone();
-        let mut session = handle.block_on(next_session(&mut listener.sessions));
-        session.session_established();
-        std::thread::sleep(Duration::from_millis(1_500));
-        assert!(
-            seen.lock()
-                .expect("causes")
-                .iter()
-                .all(|cause| cause.kind() != CloseKind::LevinHandshakeTimeout),
-            "the gap fired after the session was established"
-        );
-        client.write_all(b"still").expect("write");
-        let got = handle.block_on(session.recv()).expect("bytes");
-        assert_eq!(got, b"still");
-        listener.shutdown();
-        drop(engine);
-    }
-
-    #[test]
-    fn a_name_that_is_not_onion_v3_is_not_dialed() {
-        let (engine, listener, seen) = start(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
-            InboundCeiling::Bounded(4),
-            Tick::new(5_000_000_000),
-        );
-        listener.dial(NetworkAddress::Tor {
-            host: "not-a-v3-name.onion".into(),
-            port: 18081,
-        });
-        let cause = wait_kind(&seen, CloseKind::DialFailed);
-        assert_eq!(cause.reply_code(), 0);
-        listener.shutdown();
-        drop(engine);
-    }
-
-    #[test]
-    fn dropping_an_unestablished_session_releases_the_slot() {
-        let engine = EngineService::start(MonotonicClock::new());
-        let pool = runtime(budget(), &name()).expect("runtime");
-        let recorded = causes();
-        let sockets = Sockets::new();
-        let mut listener = listen(
-            pool,
-            &engine.handle(),
-            &sockets,
-            &config(
-                SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
-                Vec::new(),
-                InboundCeiling::Bounded(4),
-                Tick::new(5_000_000_000),
-                Tick::new(30_000_000_000),
-                recorded.sink,
-            ),
-        )
-        .expect("listen");
-        assert!(listener.forward_addr().socket().ip().is_loopback());
-        let client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
-        let handle = listener.runtime_handle().clone();
-        let session = handle.block_on(next_session(&mut listener.sessions));
-        drop(session);
-        let cause = wait_kind(&recorded.seen, CloseKind::LocalClose);
-        assert_eq!(cause.kind(), CloseKind::LocalClose);
-        assert_eq!(
-            sockets.socket_count(ConnectorId::Tor, Direction::Inbound),
-            0
-        );
-        drop(client);
-        listener.shutdown();
-        drop(engine);
-    }
-
-    #[test]
-    fn a_send_that_does_not_fit_closes_the_connection() {
-        let engine = EngineService::start(MonotonicClock::new());
-        let pool = runtime(budget(), &name()).expect("runtime");
-        let recorded = causes();
-        let mut capped = config(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
-            Vec::new(),
-            InboundCeiling::Bounded(4),
-            Tick::new(5_000_000_000),
-            Tick::new(30_000_000_000),
-            recorded.sink,
-        );
-        capped.send_queue_bytes = 0;
-        let mut listener =
-            listen(pool, &engine.handle(), &Sockets::new(), &capped).expect("listen");
-        let client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
-        let handle = listener.runtime_handle().clone();
-        let session = handle.block_on(next_session(&mut listener.sessions));
-        let rejected = session.try_send(b"x".to_vec()).expect_err("over cap");
-        assert_eq!(rejected, CloseKind::SendQueueFull);
-        let cause = wait_kind(&recorded.seen, CloseKind::SendQueueFull);
-        assert_eq!(cause.kind(), CloseKind::SendQueueFull);
-        drop(client);
-        listener.shutdown();
-        drop(engine);
-    }
-
-    async fn next_session(
-        sessions: &mut tokio::sync::mpsc::UnboundedReceiver<super::Session>,
-    ) -> super::Session {
-        tokio::time::timeout(Duration::from_secs(2), sessions.recv())
-            .await
-            .expect("session wait")
-            .expect("session")
-    }
-}
+#[path = "listener_tests.rs"]
+mod tests;

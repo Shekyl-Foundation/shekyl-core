@@ -24,7 +24,7 @@ Disagreement between the documents is census material, not a defect to
 reconcile in this PR.
 **Process:** docs-only. Enumeration by call graph from the named
 acceptance entry points (RK-census convention:
-[`DAEMON_RPC_KV_CUTOVER.md`](../design/DAEMON_RPC_KV_CUTOVER.md) §2).
+[`DAEMON_RPC_KV_CUTOVER.md`](DAEMON_RPC_KV_CUTOVER.md) §2).
 **Decision authority:** Rick.
 **Mission hierarchy** ([`00-mission`](../../.cursor/rules/00-mission.mdc)):
 this is longevity work — a Rust rewrite of consensus cannot start from

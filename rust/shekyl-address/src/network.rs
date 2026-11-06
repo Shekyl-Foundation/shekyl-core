@@ -3,137 +3,39 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Network types and HRP lookup tables for Shekyl address encoding.
+//! HRP lookups over the network table (`shekyl_network`).
+//!
+//! The network type and every network's prefixes live in one table
+//! (`docs/design/NETWORK_IDENTITY.md`, NI-Q3); this module reads them for
+//! address encoding and decoding.
 
-use std::fmt;
-use std::str::FromStr;
+pub use shekyl_network::Network;
 
-/// Shekyl network type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Network {
-    Mainnet,
-    Testnet,
-    Stagenet,
-}
-
-impl Network {
-    /// The daemon's default RPC port on this network — what a wallet dials
-    /// when no `--daemon-address` is given. The numbers are the C++
-    /// daemon's (`src/cryptonote_config.h`, `RPC_DEFAULT_PORT` per
-    /// network); a test in this module pins them to that header, so the
-    /// wallet cannot drift from the daemon it is for.
-    #[must_use]
-    pub const fn daemon_rpc_port(self) -> u16 {
-        match self {
-            Network::Mainnet => 11029,
-            Network::Testnet => 12029,
-            Network::Stagenet => 13029,
-        }
-    }
-
-    /// Numeric discriminant used across FFI (0=mainnet, 1=testnet, 2=stagenet).
-    pub fn as_u8(self) -> u8 {
-        match self {
-            Network::Mainnet => 0,
-            Network::Testnet => 1,
-            Network::Stagenet => 2,
-        }
-    }
-
-    /// Convert from FFI discriminant.
-    pub fn from_u8(v: u8) -> Option<Self> {
-        match v {
-            0 => Some(Network::Mainnet),
-            1 => Some(Network::Testnet),
-            2 => Some(Network::Stagenet),
-            _ => None,
-        }
-    }
-
-    /// Canonical lowercase network name (`"mainnet"` / `"testnet"` / `"stagenet"`).
-    ///
-    /// Used in filenames, recipients-file fields, CLI output, and any other
-    /// place that needs a `'static` string rather than [`Display`]'s
-    /// formatting path.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Network::Mainnet => "mainnet",
-            Network::Testnet => "testnet",
-            Network::Stagenet => "stagenet",
-        }
-    }
-}
-
-impl fmt::Display for Network {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for Network {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "mainnet" => Ok(Network::Mainnet),
-            "testnet" => Ok(Network::Testnet),
-            "stagenet" => Ok(Network::Stagenet),
-            _ => Err(format!(
-                "unknown network '{s}' -- expected mainnet, testnet, or stagenet"
-            )),
-        }
-    }
-}
-
-// --- HRP lookup tables ---
+// --- HRP lookups ---
 
 /// Classical address HRP for a given network.
+#[must_use]
 pub fn classical_hrp(net: Network) -> &'static str {
-    match net {
-        Network::Mainnet => "shekyl",
-        Network::Testnet => "tshekyl",
-        Network::Stagenet => "sshekyl",
-    }
+    net.prefixes().classical
 }
 
 /// PQC segment A HRP for a given network.
+#[must_use]
 pub fn pqc_a_hrp(net: Network) -> &'static str {
-    match net {
-        Network::Mainnet => "skpq",
-        Network::Testnet => "tskpq",
-        Network::Stagenet => "sskpq",
-    }
+    net.prefixes().pqc_a
 }
 
 /// PQC segment B HRP for a given network.
+#[must_use]
 pub fn pqc_b_hrp(net: Network) -> &'static str {
-    match net {
-        Network::Mainnet => "skpq2",
-        Network::Testnet => "tskpq2",
-        Network::Stagenet => "sskpq2",
-    }
+    net.prefixes().pqc_b
 }
 
 /// Multisig address HRP for a given network (PQC_MULTISIG.md SS6.1).
+#[must_use]
 pub fn multisig_hrp(net: Network) -> &'static str {
-    match net {
-        Network::Mainnet => "shekyl1m",
-        Network::Testnet => "shekyltest1m",
-        Network::Stagenet => "sshekyl1m",
-    }
+    net.prefixes().multisig
 }
-
-/// All known HRPs mapped to (Network, AddressKind).
-const ALL_HRPS: &[(&str, Network, AddressKind)] = &[
-    ("shekyl", Network::Mainnet, AddressKind::SingleSig),
-    ("tshekyl", Network::Testnet, AddressKind::SingleSig),
-    ("sshekyl", Network::Stagenet, AddressKind::SingleSig),
-    ("shekyl1m", Network::Mainnet, AddressKind::Multisig),
-    ("shekyltest1m", Network::Testnet, AddressKind::Multisig),
-    ("sshekyl1m", Network::Stagenet, AddressKind::Multisig),
-];
 
 /// Distinguishes single-sig from multisig addresses at the HRP level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -143,21 +45,30 @@ pub enum AddressKind {
 }
 
 /// Infer the network from a classical (single-sig) segment HRP string.
+/// HRPs compare case-insensitively, as Bech32m defines them.
+#[must_use]
 pub fn network_from_hrp(hrp: &str) -> Option<Network> {
-    let lower = hrp.to_lowercase();
-    ALL_HRPS
-        .iter()
-        .find(|(h, _, kind)| *h == lower.as_str() && *kind == AddressKind::SingleSig)
-        .map(|(_, net, _)| *net)
+    match network_and_kind_from_hrp(hrp) {
+        Some((net, AddressKind::SingleSig)) => Some(net),
+        _ => None,
+    }
 }
 
-/// Infer the network and address kind from any known HRP string.
+/// Infer the network and address kind from a segment-head HRP: a
+/// classical (single-sig) or multisig prefix.
+#[must_use]
 pub fn network_and_kind_from_hrp(hrp: &str) -> Option<(Network, AddressKind)> {
     let lower = hrp.to_lowercase();
-    ALL_HRPS
-        .iter()
-        .find(|(h, _, _)| *h == lower.as_str())
-        .map(|(_, net, kind)| (*net, *kind))
+    Network::ALL.into_iter().find_map(|net| {
+        let prefixes = net.prefixes();
+        if prefixes.classical == lower {
+            Some((net, AddressKind::SingleSig))
+        } else if prefixes.multisig == lower {
+            Some((net, AddressKind::Multisig))
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]
@@ -165,124 +76,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn roundtrip_u8() {
-        for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
-            assert_eq!(Network::from_u8(net.as_u8()), Some(net));
-        }
-        assert_eq!(Network::from_u8(3), None);
-        assert_eq!(Network::from_u8(255), None);
-    }
-
-    #[test]
-    fn display_fromstr_roundtrip() {
-        for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
-            let s = net.to_string();
-            assert_eq!(s, net.as_str());
-            let parsed: Network = s.parse().unwrap();
-            assert_eq!(parsed, net);
-        }
-    }
-
-    #[test]
-    fn fromstr_case_insensitive() {
-        assert_eq!("MAINNET".parse::<Network>().unwrap(), Network::Mainnet);
-        assert_eq!("Testnet".parse::<Network>().unwrap(), Network::Testnet);
-    }
-
-    #[test]
-    fn fromstr_invalid() {
-        assert!("devnet".parse::<Network>().is_err());
-    }
-
-    #[test]
-    fn hrp_lookup_all_distinct() {
-        let nets = [Network::Mainnet, Network::Testnet, Network::Stagenet];
-        for i in 0..nets.len() {
-            for j in (i + 1)..nets.len() {
-                assert_ne!(classical_hrp(nets[i]), classical_hrp(nets[j]));
-                assert_ne!(pqc_a_hrp(nets[i]), pqc_a_hrp(nets[j]));
-                assert_ne!(pqc_b_hrp(nets[i]), pqc_b_hrp(nets[j]));
-                assert_ne!(multisig_hrp(nets[i]), multisig_hrp(nets[j]));
-            }
-        }
-    }
-
-    #[test]
     fn multisig_hrp_distinct_from_single_sig() {
-        for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
+        for net in Network::ALL {
             assert_ne!(classical_hrp(net), multisig_hrp(net));
         }
     }
 
     #[test]
     fn network_from_hrp_works() {
-        assert_eq!(network_from_hrp("shekyl"), Some(Network::Mainnet));
-        assert_eq!(network_from_hrp("tshekyl"), Some(Network::Testnet));
-        assert_eq!(network_from_hrp("sshekyl"), Some(Network::Stagenet));
-        assert_eq!(network_from_hrp("SHEKYL"), Some(Network::Mainnet));
+        for net in Network::ALL {
+            assert_eq!(network_from_hrp(classical_hrp(net)), Some(net));
+            assert_eq!(
+                network_from_hrp(&classical_hrp(net).to_uppercase()),
+                Some(net)
+            );
+            assert_eq!(
+                network_from_hrp(multisig_hrp(net)),
+                None,
+                "multisig HRP not returned by single-sig lookup"
+            );
+        }
+        assert_eq!(network_from_hrp("rshekyl"), Some(Network::Regtest));
         assert_eq!(network_from_hrp("bitcoin"), None);
-        assert_eq!(
-            network_from_hrp("shekyl1m"),
-            None,
-            "multisig HRP not returned by single-sig lookup"
-        );
     }
 
     #[test]
     fn network_and_kind_from_hrp_works() {
-        assert_eq!(
-            network_and_kind_from_hrp("shekyl"),
-            Some((Network::Mainnet, AddressKind::SingleSig))
-        );
-        assert_eq!(
-            network_and_kind_from_hrp("shekyl1m"),
-            Some((Network::Mainnet, AddressKind::Multisig))
-        );
-        assert_eq!(
-            network_and_kind_from_hrp("shekyltest1m"),
-            Some((Network::Testnet, AddressKind::Multisig))
-        );
+        for net in Network::ALL {
+            assert_eq!(
+                network_and_kind_from_hrp(classical_hrp(net)),
+                Some((net, AddressKind::SingleSig))
+            );
+            assert_eq!(
+                network_and_kind_from_hrp(multisig_hrp(net)),
+                Some((net, AddressKind::Multisig))
+            );
+        }
         assert_eq!(network_and_kind_from_hrp("bitcoin"), None);
-    }
-
-    /// The daemon's ports are declared once, in C++ (`cryptonote_config.h`,
-    /// `RPC_DEFAULT_PORT` in the `config`, `config::testnet` and
-    /// `config::stagenet` namespaces, in that order); `daemon_rpc_port` is
-    /// the wallet-side twin and this pin is what makes a twin safe. The edit
-    /// that turns it red is changing a port on either side alone.
-    #[test]
-    fn daemon_rpc_ports_match_the_daemon_header() {
-        let header =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/cryptonote_config.h");
-        let text = std::fs::read_to_string(&header)
-            .unwrap_or_else(|e| panic!("{}: {e}", header.display()));
-        // Every line that *assigns* RPC_DEFAULT_PORT, whatever the spacing
-        // and whatever follows the `;`. Lines that only name the constant —
-        // the struct field declaration and the initialisers that read it —
-        // have no `=` on the left of the name and are skipped, so this
-        // collects declarations and not references.
-        let declared: Vec<u16> = text
-            .lines()
-            .filter_map(|line| {
-                let (lhs, rhs) = line.split_once('=')?;
-                if !lhs.contains("RPC_DEFAULT_PORT") {
-                    return None;
-                }
-                rhs.split(';').next()?.trim().parse::<u16>().ok()
-            })
-            .collect();
         assert_eq!(
-            declared,
-            vec![
-                Network::Mainnet.daemon_rpc_port(),
-                Network::Testnet.daemon_rpc_port(),
-                Network::Stagenet.daemon_rpc_port(),
-            ],
-            "the header declares {declared:?} in order (mainnet, testnet, \
-             stagenet). A different value is drift: fix whichever side is \
-             wrong. A different *count* means the header gained or lost a \
-             network, which this table and `Network` have to gain or lose \
-             with it — the wallet cannot dial a network it cannot name."
+            network_and_kind_from_hrp("skpq"),
+            None,
+            "a PQC segment HRP heads no address"
         );
     }
 }

@@ -217,7 +217,9 @@ The armed settlement-epoch override for the W-lapse rides whichever lands last.
 `DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 now pins the UB rows and the native battery
 dispatches `verify_release_bond_post`, so `/submit_transaction` **accepts** a
 well-formed `Release`. `Reinstate` and `HoldingsUpdate` fact sets remain
-deliberately unbuilt (rule 21: no producer) and are not on arm #2's trigger
+deliberately unbuilt (rule 21: no producer) *[since 2026-09-20 only
+`Reinstate`'s is a fact set at all — `HoldingsUpdate` is REJECTED, kind byte 3
+refused at decode]* and are not on arm #2's trigger
 path, so the blocker is discharged for everything arm #2 needs. **Still
 blocking: the wallet-side release entry** — the dispatch seam exists as of PR-B
 (`Engine::submit_release`, `pub(crate)`, and the daemon walk has produced a

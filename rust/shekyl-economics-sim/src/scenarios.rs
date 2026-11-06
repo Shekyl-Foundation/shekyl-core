@@ -1,5 +1,4 @@
 use crate::engine::{ArchivalLockModel, ScenarioConfig, SimParams, StakeSchedule, VolumeSchedule};
-use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS};
 
 fn default_stake_schedule() -> StakeSchedule {
     StakeSchedule {
@@ -18,25 +17,28 @@ fn default_stake_schedule() -> StakeSchedule {
     }
 }
 
+/// Name of the steady baseline. The growth gate selects its year table by
+/// this, and [`all_scenarios`] lists that scenario first.
+pub const BASELINE_STEADY_STATE: &str = "baseline_steady_state";
+
 pub fn scenario_1_baseline(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
-        name: "baseline_steady_state".into(),
+        name: BASELINE_STEADY_STATE.into(),
         description: "Constant moderate transaction volume (1x baseline) over 10 years".into(),
         sim_years: 10,
         volume: VolumeSchedule {
             get_volume: Box::new(move |_block, _bpy| baseline),
         },
         stake: default_stake_schedule(),
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
 }
 
 pub fn scenario_2_boom_bust(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
         name: "boom_bust_cycle".into(),
         description: "3x volume for 1 year, then 0.3x for 1 year, repeating over 10 years".into(),
@@ -52,15 +54,14 @@ pub fn scenario_2_boom_bust(params: &SimParams) -> ScenarioConfig {
             }),
         },
         stake: default_stake_schedule(),
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
 }
 
 pub fn scenario_3_sustained_growth(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
         name: "sustained_growth".into(),
         description: "Volume increasing 20% per year for 20 years".into(),
@@ -73,15 +74,14 @@ pub fn scenario_3_sustained_growth(params: &SimParams) -> ScenarioConfig {
             }),
         },
         stake: default_stake_schedule(),
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
 }
 
 pub fn scenario_4_stuffing_attack(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
         name: "stuffing_attack".into(),
         description: "20% hash power miner generating 5x fake volume for 30 days (blocks 0-21600), then normal".into(),
@@ -99,15 +99,14 @@ pub fn scenario_4_stuffing_attack(params: &SimParams) -> ScenarioConfig {
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 200_000),
         },
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
 }
 
 pub fn scenario_5_stake_concentration(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
         name: "stake_concentration".into(),
         description: "Single entity staking 30% of supply throughout 10 years".into(),
@@ -118,18 +117,17 @@ pub fn scenario_5_stake_concentration(params: &SimParams) -> ScenarioConfig {
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 300_000),
         },
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
 }
 
 pub fn scenario_6_mass_unstaking(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
         name: "mass_unstaking".into(),
-        description: "80% of stakers unlock within one epoch (~35 days) at year 3".into(),
+        description: "80% of stakers unlock within 25,000 blocks (~35 days) at year 3".into(),
         sim_years: 5,
         volume: VolumeSchedule {
             get_volume: Box::new(move |_block, _bpy| baseline),
@@ -151,15 +149,14 @@ pub fn scenario_6_mass_unstaking(params: &SimParams) -> ScenarioConfig {
                 }
             }),
         },
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
 }
 
 pub fn scenario_7_bootstrap(params: &SimParams) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
         name: "chain_bootstrap".into(),
         description:
@@ -190,8 +187,7 @@ pub fn scenario_7_bootstrap(params: &SimParams) -> ScenarioConfig {
                 }
             }),
         },
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
@@ -217,28 +213,41 @@ pub fn scenario_8_late_tail(params: &SimParams) -> ScenarioConfig {
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 400_000),
         },
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.95,
+        initial_emitted_ppm: 950_000,
         // ~year 30 in the configured chain timing (derived, not a literal —
         // byte-identical at the default 262_800; see `fee_era` in
         // budget_scenarios.rs for the drift rationale).
-        genesis_height_offset: 30 * params.blocks_per_year,
+        genesis_height_offset: 30 * params.blocks_per_year(),
         archival_lock: None,
     }
 }
 
+/// Scenario 9's tail traffic, in transactions per block — the "low activity"
+/// half of its name. Named so the A1 report can state the regime the binding
+/// opportunity-cost rate is being asserted over.
+pub const SCENARIO_9_TAIL_TX_PER_BLOCK: u64 = 15;
+
 /// Scenario 9 — high history / low activity (§11.2, the missing sim quadrant):
 /// large `n`, low *current* volume, the post-boom settled chain. An early boom
-/// (years 0–20, ~250 tx/block) accretes ~120k shards, then a long low-activity
-/// tail (years 20–60, 15 tx/block). Run to **60 years** so the emission leg is
-/// exhausted (`0.9^60 ≈ 0.002` of the initial staker-emission share, and most
-/// supply emitted) — the only regime where the fee leg is the primary budget and
-/// escalation is decisive (A1's binding case; F-G). None of scenarios 1–8 reach
-/// it (`scenario_8` is high-history but *busy* and only 5 years long).
+/// (years 0–20, ~250 tx/block) accretes the shard corpus (~4.9 M byte shards
+/// at 60 y), then a long low-activity tail (years 20–60,
+/// [`SCENARIO_9_TAIL_TX_PER_BLOCK`] tx/block). Run to **60 years** so the
+/// **staker** emission leg has decayed to ≈ 0.002 of its initial share
+/// (`0.9^60`), the regime where the fee leg is the stakers' primary budget
+/// and escalation is decisive (A1's binding case; F-G). None of scenarios
+/// 1–8 reach it (`scenario_8` is high-history but *busy* and only 5 years
+/// long).
+///
+/// The curve itself is not near its tail in this run: at 22 per block it has
+/// emitted ≈ 97.7 % by year 60, still mints ≈ 24 SKL/block, and reaches the
+/// 0.6 SKL/block floor near year 119. The scenario was sized when the code
+/// ran 21 per block (≈ 1 SKL/block at year 60, the floor from ≈ year 64).
+/// Its purpose is the fee era, so its horizon is to follow the tail out,
+/// with the assessment's run set (`ECONOMY_UMBRELLA_PLAN.md` §4.1).
 pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConfig {
     ScenarioConfig {
         name: "high_history_low_activity".into(),
-        description: "post-boom settled chain: ~120k shards accreted in an early boom, then a low-activity fee-era tail over 60 years (emission exhausted) — the §11.2 quadrant where escalation is decisive".into(),
+        description: "post-boom settled chain: a large shard corpus accreted in an early boom, then a low-activity tail over 60 years (the staker emission leg decayed to ~0.002 of its share; the curve still mints ~24 SKL/block at year 60) — the §11.2 quadrant where escalation is decisive".into(),
         sim_years: 60,
         volume: VolumeSchedule {
             get_volume: Box::new(|block, blocks_per_year| {
@@ -249,15 +258,14 @@ pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConf
                     5..=14 => 250,
                     15..=19 => 120,
                     // Long low-activity tail: few txs, thin fee leg.
-                    _ => 15,
+                    _ => SCENARIO_9_TAIL_TX_PER_BLOCK,
                 }
             }),
         },
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 400_000),
         },
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
@@ -309,7 +317,7 @@ fn gate7_scenario(
     volume_growth: bool,
     model: ArchivalLockModel,
 ) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     let get_volume: Box<dyn Fn(u64, u64) -> u64> = if volume_growth {
         // Scenario-3 shape (20%/yr) stretched over the mining era: burn
         // sensitivity read under volume stress.
@@ -330,8 +338,7 @@ fn gate7_scenario(
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 0),
         },
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: Some(model),
     }
@@ -342,9 +349,10 @@ fn lock_model(
     blocks_per_shard: u64,
     n_p: u64,
     admission_min: u64,
+    run: &SimParams,
 ) -> ArchivalLockModel {
     ArchivalLockModel {
-        bond_floor_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
+        bond_floor_atomic: run.archival().bond_floor_atomic,
         replicas_per_shard: replicas,
         blocks_per_shard,
         n_p,
@@ -360,7 +368,7 @@ fn gate7_asserted_comparator(
     volume_growth: bool,
     name: &str,
 ) -> ScenarioConfig {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     let get_volume: Box<dyn Fn(u64, u64) -> u64> = if volume_growth {
         Box::new(move |block, blocks_per_year| {
             let year = block / blocks_per_year;
@@ -377,16 +385,16 @@ fn gate7_asserted_comparator(
         sim_years: GATE7_YEARS,
         volume: VolumeSchedule { get_volume },
         stake: default_stake_schedule(),
-        fee_per_tx: 100_000_000,
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
 }
 
 pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
-    let seb = SETTLEMENT_EPOCH_BLOCKS;
-    let floor = ARCHIVAL_BOND_FLOOR_ATOMIC;
+    let seb = params.archival().settlement_epoch_blocks;
+    let floor = params.archival().bond_floor_atomic;
+    let floor_coins = floor as f64 / crate::burden::COIN as f64;
     vec![
         // Arm A (bonds-only) across the N_P envelope.
         gate7_scenario(
@@ -394,21 +402,21 @@ pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
             "gate7_bonds_only_lean",
             "Arm A bonds-only; lean attractor (N_P=79, R=6, shard per SEB)",
             false,
-            lock_model(R_FULL, seb, NP_LEAN, 0),
+            lock_model(R_FULL, seb, NP_LEAN, 0, params),
         ),
         gate7_scenario(
             params,
             "gate7_bonds_only_thick",
             "Arm A bonds-only; thick population (N_P=154, R=6)",
             false,
-            lock_model(R_FULL, seb, NP_THICK, 0),
+            lock_model(R_FULL, seb, NP_THICK, 0, params),
         ),
         gate7_scenario(
             params,
             "gate7_bonds_only_thin",
             "Arm A bonds-only; fee-era-thinned (N_P=40, R=4 partial deep coverage)",
             false,
-            lock_model(R_THIN, seb, NP_THIN, 0),
+            lock_model(R_THIN, seb, NP_THIN, 0, params),
         ),
         // Shard-geometry sensitivity: geometry is not consensus-pinned, so
         // show the read is robust to a 10x denser shard cadence.
@@ -417,30 +425,39 @@ pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
             "gate7_bonds_only_lean_dense_shards",
             "Arm A bonds-only; 10x denser shard geometry (shard per 1_000 blocks)",
             false,
-            lock_model(R_FULL, seb / 10, NP_LEAN, 0),
+            lock_model(R_FULL, seb / 10, NP_LEAN, 0, params),
         ),
         // Arm B (hard admission lock) MIN grid, order-of-magnitude around the
         // bond floor, lean population.
         gate7_scenario(
             params,
             "gate7_admission_min_1x_lean",
-            "Arm B hard lock; ADMISSION_MIN = 1x bond floor (0.75 coin) x N_P=79",
+            &format!(
+                "Arm B hard lock; ADMISSION_MIN = 1x bond floor ({} coin) x N_P=79",
+                floor_coins
+            ),
             false,
-            lock_model(R_FULL, seb, NP_LEAN, floor),
+            lock_model(R_FULL, seb, NP_LEAN, floor, params),
         ),
         gate7_scenario(
             params,
             "gate7_admission_min_100x_lean",
-            "Arm B hard lock; ADMISSION_MIN = 100x bond floor (75 coins) x N_P=79",
+            &format!(
+                "Arm B hard lock; ADMISSION_MIN = 100x bond floor ({} coins) x N_P=79",
+                floor_coins * 100.0
+            ),
             false,
-            lock_model(R_FULL, seb, NP_LEAN, floor * 100),
+            lock_model(R_FULL, seb, NP_LEAN, floor * 100, params),
         ),
         gate7_scenario(
             params,
             "gate7_admission_min_10000x_lean",
-            "Arm B hard lock; ADMISSION_MIN = 10_000x bond floor (7_500 coins) x N_P=79",
+            &format!(
+                "Arm B hard lock; ADMISSION_MIN = 10_000x bond floor ({} coins) x N_P=79",
+                floor_coins * 10_000.0
+            ),
             false,
-            lock_model(R_FULL, seb, NP_LEAN, floor * 10_000),
+            lock_model(R_FULL, seb, NP_LEAN, floor * 10_000, params),
         ),
         // Volume-stress reads (burn gauge under load) for arm A and the
         // largest arm-B MIN.
@@ -449,17 +466,41 @@ pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
             "gate7_bonds_only_lean_growth",
             "Arm A bonds-only; lean; 20%/yr volume growth (burn under load)",
             true,
-            lock_model(R_FULL, seb, NP_LEAN, 0),
+            lock_model(R_FULL, seb, NP_LEAN, 0, params),
         ),
         gate7_scenario(
             params,
             "gate7_admission_min_10000x_lean_growth",
             "Arm B 10_000x MIN; lean; 20%/yr volume growth",
             true,
-            lock_model(R_FULL, seb, NP_LEAN, floor * 10_000),
+            lock_model(R_FULL, seb, NP_LEAN, floor * 10_000, params),
         ),
         // Comparators: the assumption being re-priced.
         gate7_asserted_comparator(params, false, "gate7_comparator_asserted_stake"),
         gate7_asserted_comparator(params, true, "gate7_comparator_asserted_stake_growth"),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The gate-7 lock the design quotes (`ECONOMY_EXPLAINED.md`, 117 coins),
+    /// held by no test until Phase 0: the lean bonds-only arm at the end of
+    /// year 1 locks 26 shards' bonds at six replicas and 0.75 SKL a shard.
+    /// The lock model is a floor on the lock, not an estimate
+    /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §4).
+    #[test]
+    fn the_lean_bonds_only_lock_is_117_coins_at_the_end_of_year_one() {
+        let params = SimParams::default();
+        let lean = gate7_scenarios(&params)
+            .into_iter()
+            .find(|c| c.name == "gate7_bonds_only_lean")
+            .expect("the lean arm");
+        let lock = lean.archival_lock.expect("gate-7 runs the lock model");
+        assert_eq!(
+            lock.locked_atomic(params.blocks_per_year()),
+            117 * u128::from(crate::burden::COIN)
+        );
+    }
 }

@@ -144,7 +144,9 @@ dispatcher):
 >   (single-source projection of the engine's `predict_weight` byte model
 >   and fee-converge fixpoint).
 > - **Staking reads:** `get_staked_balance`, `get_staked_outputs`,
->   `staking_info` (authoritative staking read view). The exit actions
+>   `staking_info` (authoritative staking read view, including the
+>   records in flight and their endings; `acknowledge_staking_outcome`
+>   clears an ending). The exit actions
 >   `unstake` / `collect_unstaked` shipped with PR-C (2026-09-03);
 >   `claim_rewards` is REJECTED, not pending (emission claims are
 >   engine-side).

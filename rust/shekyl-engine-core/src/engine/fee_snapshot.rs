@@ -110,7 +110,7 @@ impl FeeSnapshotSource for FixedFeeSnapshotSource {
 
 #[cfg(test)]
 mod tests {
-    use shekyl_rpc_client::{DaemonFault, DaemonNetwork, IdentityMismatch, RpcError};
+    use shekyl_rpc_client::{DaemonFault, IdentityMismatch, Network, RpcError};
 
     use super::*;
 
@@ -120,8 +120,8 @@ mod tests {
     #[test]
     fn a_failed_fee_query_is_classified_by_its_fault_not_its_text() {
         let wrong_network = IdentityMismatch::Network {
-            ours: DaemonNetwork::Mainnet,
-            theirs: DaemonNetwork::Testnet,
+            ours: Network::Mainnet,
+            theirs: Network::Testnet,
         };
         for (err, fault) in [
             (

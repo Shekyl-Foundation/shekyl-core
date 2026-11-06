@@ -1,0 +1,31 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-p-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "P's serving body store: chunk-sealed shard_frame bodies keyed by shard (WSS-Q1(a), WALLET_SIDE_STORE.md §6.2 / §6.6)"
+publish = false
+
+[dependencies]
+redb = { workspace = true }
+# Per-chunk XChaCha20-Poly1305 under a caller-supplied nonce (salt ‖ index).
+shekyl-chacha = { path = "../shekyl-chacha" }
+# Slot keys are cSHAKE256 over the store key, so a stolen file does not
+# name the shards it holds (WSS-18).
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+shekyl-types = { path = "../shekyl-types" }
+zeroize = { workspace = true }
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

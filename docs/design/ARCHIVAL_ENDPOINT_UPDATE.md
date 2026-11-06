@@ -121,8 +121,9 @@ carries it.
 **Presence.** Present iff `post_kind == JoinMarket` — the same condition as
 `bond_spend_pk`, so the two fields share one coupling branch in `write` /
 `read_payload`. A `JoinMarket` vin without an endpoint, or a `Release` /
-`Reinstate` / `HoldingsUpdate` vin with one, is unrepresentable on the wire, the
-same idiom as the amount arms. An all-zero endpoint on `JoinMarket` is refused
+`Reinstate` vin with one, is unrepresentable on the wire, the
+same idiom as the amount arms *(the list also named `HoldingsUpdate`; that
+kind is REJECTED 2026-09-20 and byte 3 is refused at decode)*. An all-zero endpoint on `JoinMarket` is refused
 by consensus on both sides, because the daemon's flat vin struct represents
 "absent" as the zero key and cannot tell the two apart.
 
@@ -147,7 +148,9 @@ pin 1's canonical order). The pair is the sort key; the endpoint is **not** a
 field on it — it joins through the bond record by `p_id`, one lookup, at the
 moment the drawable set is snapshotted. A `JoinMarket` that connects
 mid-epoch is record-effect at connect and mechanism-effect at the next epoch
-open, exactly as `HoldingsUpdate` is.
+open — the rule Pin 5 stated for every activation (as written: "exactly as
+`HoldingsUpdate` is"; that kind is REJECTED 2026-09-20, and `JoinMarket` is
+now the only activation event, `PRINCIPAL_STAKE_LIFECYCLE.md` §5.3.2 row 2).
 
 Stated here rather than left to whoever writes the fetcher, because the
 alternative — the fetcher walking the record's post history — is the design a

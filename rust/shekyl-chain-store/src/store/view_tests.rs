@@ -11,7 +11,9 @@
 //! poison path.
 
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, Fault, RuleSet, Trust};
+use shekyl_chain_rules::{
+    validate, AtHeight, Candidate, ChainView, Fault, HeaderView, RuleSet, Trust,
+};
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
@@ -21,7 +23,8 @@ use super::*;
 use crate::codec::{forged, BlockBody, BlockInfo, Canonical, CodecError, LeafCount, Present, Raw};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
-    BLOCKS, BLOCK_INFO, CURVE_TREE_LEAF_COUNTS, CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG,
+    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_DRAWABLE_DIGEST, BLOCKS, BLOCK_INFO, CURVE_TREE_LEAF_COUNTS,
+    CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG,
 };
 
 /// The store's fault is the only outer arm these tests expect; the
@@ -105,6 +108,38 @@ fn record_leaf_count(batch: &WriteBatch<'_, '_>, key: u64) -> Result<(), StoreEr
     batch
         .open_insert_table(CURVE_TREE_LEAF_COUNTS, PROBE_ROW)?
         .insert(key, LeafCount::from_raw(0).encoded().as_encoded())
+}
+
+/// The zero draw row a connect writes, and epoch 0's empty digest. The
+/// count of the next block reads both.
+fn record_draw_row(batch: &WriteBatch<'_, '_>, height: BlockHeight) -> Result<(), StoreError> {
+    let row = shekyl_types::archival::BlockDraws {
+        count: 0,
+        carry: 0,
+        shortfall: 0,
+        issued_short: 0,
+        revealed: false,
+    };
+    batch
+        .open_insert_table(ARCHIVAL_BLOCK_DRAWS, PROBE_ROW)?
+        .insert(height.to_raw(), row.encoded().as_encoded())
+}
+
+fn record_empty_digest(batch: &WriteBatch<'_, '_>) -> Result<(), StoreError> {
+    let digest = shekyl_chain_rules::DrawableEpoch::new(
+        shekyl_types::SettlementEpoch::from_raw(0),
+        None,
+        Vec::<(
+            shekyl_types::PCanonicalId,
+            shekyl_types::archival::ReceiptSignPk,
+        )>::new(),
+        [],
+    )
+    .expect("an empty set")
+    .digest();
+    batch
+        .open_insert_table(ARCHIVAL_DRAWABLE_DIGEST, PROBE_ROW)?
+        .insert(0, digest.encoded().as_encoded())
 }
 
 #[test]
@@ -195,8 +230,13 @@ fn tip_is_none_on_an_empty_chain_and_the_last_recorded_identity_after() {
             panic!("the tip's height is recorded");
         };
         assert_eq!(
-            recorded.hash, tip.hash,
+            recorded.header.hash, tip.hash,
             "tip() and block_at(tip.height) name one block"
+        );
+        assert_eq!(
+            view.header_at(tip.height)?,
+            AtHeight::Recorded(recorded.header),
+            "header_at is block_at's header projection (E5-13)"
         );
         Ok(())
     });
@@ -262,8 +302,8 @@ fn block_at_returns_the_identity_and_the_header_parsed_from_the_recorded_blob() 
         let AtHeight::Recorded(recorded) = view.block_at(BlockHeight::ZERO)? else {
             panic!("block 0 is recorded");
         };
-        assert_eq!(recorded.hash, blk.hash());
-        assert_eq!(recorded.header, blk.header);
+        assert_eq!(recorded.header.hash, blk.hash());
+        assert_eq!(recorded.header.header, blk.header);
         assert_eq!(
             view.block_at(BlockHeight::from_raw(1))?,
             AtHeight::AboveTip,
@@ -378,6 +418,8 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         record_block(batch, 0, &genesis)?;
         record_root(batch, 1, 0xaa)?;
         record_leaf_count(batch, 1)?;
+        record_draw_row(batch, BlockHeight::from_raw(0))?;
+        record_empty_digest(batch)?;
         let view = batch.chain_view();
         // A verdict minted against this batch's view, over a view that
         // already contains block 0. Since E6 slice 1 the rules READ the view:
@@ -386,16 +428,20 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         // passes only if the projection shows it block 0 and the root block
         // 0 left. The title's claim is now the verdict, not just the type.
         // Since wave B the coinbase must also pay what the block owes
-        // (CEN-F18), priced against the same view.
+        // (CEN-F18), priced against the same view; since slice 8 row 10 a
+        // candidate with no witness is judged against the empty set's root
+        // (CEN-B4), so the placeholder root is replaced for this one too.
         let mut b1 = block(1, 1_060);
         b1.header.previous = genesis.hash();
         b1.header.curve_tree_root = CurveTreeRoot::from_bytes([0xaa; 32]);
+        b1.header.attestation_root =
+            AttestationRoot::from_bytes(shekyl_archival_retention::empty_attestation_root());
         let b1 = priced(&view, Candidate::new(b1, Vec::new()))?;
         let valid = validate(
             formed(&view, b1)?,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         )
         .map_err(view_fault)?
         .expect("block 1 built on block 0 satisfies every landed rule");
@@ -410,7 +456,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
             formed(&view, Candidate::new(orphan, Vec::new()))?,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         )
         .map_err(view_fault)?
         else {
@@ -423,7 +469,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         let AtHeight::Recorded(recorded) = view.block_at(BlockHeight::ZERO)? else {
             panic!("block 0 is visible to the second block's validation");
         };
-        assert_eq!(recorded.hash, genesis.hash());
+        assert_eq!(recorded.header.hash, genesis.hash());
         Ok(())
     });
     assert_eq!(out, Ok(()));
@@ -542,7 +588,7 @@ fn a_block_info_row_with_no_blocks_row_is_si7() {
 #[test]
 fn the_read_transaction_body_agrees_with_the_batch_body() {
     use super::chain_reads;
-    use shekyl_chain_rules::RecordedBlock;
+    use shekyl_chain_rules::{HeaderRecord, RecordedBlock};
     let path = tmp("view-chain-reads-agree");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let blk0 = block(0, 1_000);
@@ -574,9 +620,11 @@ fn the_read_transaction_body_agrees_with_the_batch_body() {
             assert_eq!(
                 batch_tip_block,
                 AtHeight::Recorded(RecordedBlock {
-                    hash: info.hash,
-                    header: body.header,
-                    cumulative_difficulty: info.cumulative_difficulty,
+                    header: HeaderRecord {
+                        hash: info.hash,
+                        header: body.header,
+                        cumulative_difficulty: info.cumulative_difficulty,
+                    },
                     coins_generated: info.coins_generated,
                     cumulative_tx_count: info.cumulative_tx_count,
                     cumulative_archival_len: info.cumulative_archival_len,
@@ -661,8 +709,8 @@ fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
 }
 
 /// §11.1(f): a `Coded<V>` table reports `V::FIXED_WIDTH` to the engine, and
-/// the engine **asserts** it in `LeafBuilder::append` (redb 4.1
-/// `btree_base.rs`) — a panic that poisons the transaction lock. So the
+/// the engine **asserts** it in `LeafBuilder::append` (redb 4.4
+/// `btree_base.rs:1191`) — a panic that poisons the transaction lock. So the
 /// scenario this test used to pin — `block_info[tip]` rewritten to 87 bytes,
 /// then SI-7 `Undecodable` on every classified read (the PR #764 review's
 /// case) — has **no representable instance**: the bytes never reach the
@@ -712,7 +760,7 @@ fn a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table() {
         else {
             panic!("height 1 is recorded");
         };
-        assert_eq!(recorded.hash, block(1, 1_060).hash());
+        assert_eq!(recorded.header.hash, block(1, 1_060).hash());
         Ok(())
     });
     assert_eq!(out, Ok(()), "the recorded rows are as they were");

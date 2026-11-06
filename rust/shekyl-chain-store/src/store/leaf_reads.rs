@@ -78,6 +78,32 @@ pub(super) fn frontier<T: ReadTables>(txn: &T) -> Result<TreeFrontier, ReadFault
     })
 }
 
+/// The stored hashes of layer `layer`'s chunks at `chunks`, in order — the
+/// full children SI-5 rebuilds a last chunk from (`edge.rs`). Every chunk
+/// below a layer's count is stored (CTW-8: the grow inserts a new chunk and
+/// overwrites the last one; nothing deletes a full one), so an absent row
+/// is SI-7 on the layer table.
+pub(super) fn layer_chunks<T: ReadTables>(
+    txn: &T,
+    layer: u8,
+    chunks: core::ops::Range<u64>,
+) -> Result<Vec<[u8; 32]>, ReadFault> {
+    let layers = txn.table(CURVE_TREE_LAYERS)?;
+    let mut out = Vec::with_capacity(usize::try_from(chunks.end - chunks.start).unwrap_or(0));
+    for chunk in chunks {
+        let key = LayerChunk::new(TreeLayer::from_raw(layer), ChunkIndex::from_raw(chunk)).key();
+        let Some(guard) = layers.get(key)? else {
+            return Err(absent(LAYERS));
+        };
+        let hash = guard
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(LAYERS, cause))?;
+        out.push(*hash.as_bytes());
+    }
+    Ok(out)
+}
+
 /// The leaf count going into block `height` (module docs).
 pub(super) fn leaf_count_at<T: ReadTables>(
     txn: &T,
@@ -121,15 +147,20 @@ pub(super) fn outputs_at<T: ReadTables>(
             // recorded (SI-3's other direction); its absence is a hole.
             return Err(absent("tx_indices"));
         };
-        let tx = Transaction::read(&mut record.pruned.as_bytes())
+        let tx = Transaction::read(&mut record.pruned.wire_bytes())
             .map_err(|_| pruned_invalid("pruned segment does not decode"))?;
         // Bind the body to the identity the block names: the skeleton plus
-        // the recorded component digests must hash back to `hash`
-        // (`PDM-Q-F26`'s reconstruct-from-stored-digest), or a mis-keyed
-        // `txs_pruned` row could lend another transaction's outputs and
-        // `0x07` points to this one's leaves while every later check —
-        // index height, `output_txs` ownership — still passed.
-        if tx.hash_with_supplied_components(record.pqc_auth_hash, record.prunable_hash) != *hash {
+        // the recorded component digests and archival length must hash back
+        // to `hash` (`PDM-Q-F26`'s reconstruct-from-stored-rows; `SHT-Q2`),
+        // or a mis-keyed `txs_pruned` row could lend another transaction's
+        // outputs and `0x07` points to this one's leaves while every later
+        // check — index height, `output_txs` ownership — still passed.
+        let rebuilt = tx.hash_with_supplied_components(
+            record.pqc_auth_hash,
+            record.prunable_hash,
+            record.archival_len,
+        );
+        if rebuilt != *hash {
             return Err(pruned_invalid(
                 "the pruned segment is not the transaction the block names",
             ));

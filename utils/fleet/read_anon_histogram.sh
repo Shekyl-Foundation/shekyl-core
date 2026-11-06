@@ -6,8 +6,7 @@
 # candidates. Neither substitutes for the other.
 #
 # `connection_info` already carries `incoming` and `address_type`, and
-# `address_type` 4 is Tor (`enums.h`).
-# (contrib/epee/include/net/enums.h:39-46).
+# `address_type` 4 is Tor (`ADDRESS_TYPE_TOR`, rust/shekyl-p2p/src/facts.rs).
 #
 # ---------------------------------------------------------------------------
 # Why two series (Q12, §11.9)

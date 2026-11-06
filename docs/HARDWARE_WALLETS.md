@@ -13,8 +13,14 @@ Hardware wallet backends are not supported in Shekyl V3.
   the backend from the archive tags / Monero lineage rather than reviving
   the deleted tree wholesale, since the wallet stack it integrated against
   (`wallet2`) is also gone.
-- **Ledger**: the dormant backend under `src/device/` remains in-tree,
-  disabled. The CMake option `USE_HW_DEVICE` defaults to `OFF`.
+- **Ledger**: the dormant backend (`src/device/device_ledger.*`,
+  `device_io_hid.*`, `cmake/FindHIDAPI.cmake`, `USE_HW_DEVICE`) is
+  **deleted** (2026-10-01). It compiled only behind `USE_DEVICE_LEDGER`,
+  which defaulted to 0 and `#error`d if turned on. Turning a flag on to a
+  1,600-line Monero APDU client is not a hardware wallet. **Reopen
+  criterion**: a device ships firmware for the V4 primitives below;
+  reintroduce a backend then, against the Rust wallet, not by restoring
+  this tree.
 
 ### Rationale
 
@@ -44,16 +50,13 @@ hardware wallet firmware:
 
 ### Build Behavior
 
-- `USE_HW_DEVICE=OFF` (default): HIDAPI is not searched and Ledger sources are
-  not compiled.
+There is no hardware-wallet build arm. HIDAPI is not searched, and the
+depends build does not fetch hidapi, libusb, protobuf, or udev. The software
+device (`device_default`) is the key helper the daemon links. It does not
+carry hardware onboarding or FCMP offload stubs.
 
-- `USE_DEVICE_LEDGER` in `src/device/device.hpp` defaults to `0` as a
-  belt-and-suspenders guard even if `HAVE_HIDAPI` is somehow defined.
-
-- The Trezor backend is deleted entirely (see above); there is no Trezor
-  build arm. The `external/trezor-common` submodule was removed earlier for
-  the same reason. Re-add both from the Trezor upstream if/when support
-  returns (see V4 roadmap below).
+The Trezor and Ledger backends are both deleted (see above). Reintroduce one
+when the reopen criterion is met, rather than restoring the deleted tree.
 
 ### V4 Roadmap
 

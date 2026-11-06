@@ -22,10 +22,11 @@
 //!
 //! Hoisted from `shekyl-engine-core` (§12.3 D-1) so the wallet fee path **and**
 //! `shekyl-economics-sim`'s W9 stuffer arm share one single-sourced weight model
-//! rather than a replicated byte formula. The **fee-rate** layer
-//! (`FeeRate`/`FeeDirective`/fee convergence) stays in engine-core — this crate
-//! is weight only, so its dependency surface is just the wire layout + proof
-//! sizes ({`shekyl-wire`, `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-curve-io`}),
+//! rather than a replicated byte formula. The fee loop is
+//! [`converge_weight_fee_by`]: the caller supplies the pricer, so the lattice
+//! stays out of this crate. [`converge_weight_fee`] is that loop with the
+//! unrounded product. The dependency surface stays the wire layout + proof sizes
+//! ({`shekyl-wire`, `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-curve-io`}),
 //! no RPC or wallet types. The FCMP proof-size KAT's *validation* against real
 //! synthetic-tree measurements stays in engine-core (where the measurement
 //! machinery lives) and calls the `pub` [`fcmp_proof_size`] here.
@@ -304,6 +305,103 @@ pub fn predict_weight(n_in: InputCount, n_out: OutputCount, tree_depth: u8, fee:
     .sum()
 }
 
+/// Bytes in the longest `u64` varint. [`varint_len`]`(u64::MAX)` is this;
+/// the test beside [`converge_weight_fee`] pins the equality, so a wider
+/// encoding has to move the iteration bound with it.
+const U64_VARINT_BYTES_MAX: usize = 10;
+
+/// Passes [`converge_weight_fee_by`] may take. A pass that is not yet the
+/// fixed point changes `varint_len(fee)`, and a `u64` has at most
+/// [`U64_VARINT_BYTES_MAX`] such lengths. One further pass is the agreement
+/// check, so the loop returns by equality rather than by exhaustion.
+const WEIGHT_FEE_FIXPOINT_PASSES: usize = U64_VARINT_BYTES_MAX + 1;
+
+/// The one fee loop. `price` maps a weight to the fee that weight is charged,
+/// and the fee comes back as the weight's next argument because the wire
+/// carries `varint(fee)`.
+///
+/// The pricer belongs to the caller. This crate does not round: the wallet
+/// passes the lattice, and an unrounded product is [`converge_weight_fee`].
+/// A `None` from the pricer, or a weight that does not fit in `u64`, is
+/// `None`. The loop returns when two passes agree. Running out of passes is
+/// unreachable for a monotone pricer — each disagreeing pass consumes one
+/// varint length — and is a `debug_assert`, then `None`, never a guessed fee.
+#[must_use]
+pub fn converge_weight_fee_by(
+    n_in: InputCount,
+    n_out: OutputCount,
+    tree_depth: u8,
+    seed: u64,
+    price: impl Fn(u64) -> Option<u64>,
+) -> Option<u64> {
+    let mut fee = seed;
+    for _ in 0..WEIGHT_FEE_FIXPOINT_PASSES {
+        let weight = u64::try_from(predict_weight(n_in, n_out, tree_depth, fee)).ok()?;
+        let next = price(weight)?;
+        if next == fee {
+            return Some(fee);
+        }
+        fee = next;
+    }
+    debug_assert!(
+        false,
+        "fee fixed point did not agree within {WEIGHT_FEE_FIXPOINT_PASSES} passes"
+    );
+    None
+}
+
+/// Unrounded fee fixed point: `fee = rate_per_weight × weight(fee)`, from a
+/// seed of 0. `None` when the product does not fit in `u64`.
+///
+/// The lattice is not applied here. A caller that pays what the wallet pays
+/// passes its lattice pricer to [`converge_weight_fee_by`] instead of
+/// rounding this result afterwards.
+#[must_use]
+pub fn converge_weight_fee(
+    rate_per_weight: u64,
+    n_in: InputCount,
+    n_out: OutputCount,
+    tree_depth: u8,
+) -> Option<u64> {
+    converge_weight_fee_by(n_in, n_out, tree_depth, 0, |weight| {
+        weight.checked_mul(rate_per_weight)
+    })
+}
+
+/// The **archival length** of the tx the builder would produce from these
+/// counts: `|pqc_auths| + |prunable|` — the two segments a prune discards and
+/// the bytes that count toward a shard's `W`
+/// (`shekyl_wire::TxSegments::archival_len`, SHT-Q2). The partial sum of
+/// [`predict_weight`]'s field list from the per-input PQC auths through
+/// `pseudoOuts`, so a built spend's `Transaction::archival_len()` equals this
+/// without constructing the transaction — pinned beside the weight parity in
+/// this crate's tests and over the builder's whole shape space in
+/// `tests/weight_gate.rs`.
+///
+/// Independent of the fee (the fee varint is in the pruned segment) and of
+/// the Bp+ clawback (a fee-weight term, not bytes). This is the one place the
+/// per-transaction archival length is predicted from a shape; the economics
+/// sim's archival-burden model reads it here rather than carrying a bytes-per-
+/// transaction mean (DQ-2G dep-don't-mirror; `ARCHIVAL_SHARD_COUNT_CUTOVER.md`
+/// §D, the `SHARD_BYTES` row).
+#[must_use]
+pub fn predict_archival_len(n_in: InputCount, n_out: OutputCount, tree_depth: u8) -> usize {
+    let fcmp = fcmp_proof_size(n_in, tree_depth);
+    let bp = bp_plus_weight(n_out);
+    let n_in = n_in.get();
+    [
+        n_in * pqc_auth_weight(),          // the `pqc_auths` segment
+        varint_len(1u64),                  // prunable nbp
+        bp,                                // bulletproof+
+        varint_len(u64::from(tree_depth)), // tree_depth
+        varint_len(fcmp as u64),           // fcmp_proof length prefix
+        fcmp,                              // fcmp_proof body
+        n_in * PSEUDO_OUT_LEN,             // pseudoOuts
+    ]
+    .into_iter()
+    .sum()
+}
+
 /// Serialized byte size **and** fee weight for the tx the builder would produce
 /// from these counts, as one `(size, weight)` pair.
 ///
@@ -387,6 +485,41 @@ mod tests {
         let w3 = predict_weight(InputCount::clamped(1), OutputCount::clamped(2), 1, 1_000);
         assert!(w2 > w1);
         assert!(w3 > w1);
+    }
+
+    /// The returned fee is `rate × weight(fee)`, and two passes from zero are
+    /// not that point when the second product crosses a varint boundary.
+    ///
+    /// `24_184` is the wallet's pinned rate. After the weight model moved
+    /// (PL-D3) that rate settles in two passes, so it witnesses agreement
+    /// with the wallet's mask-1 absolute and nothing about the bound. `23_840`
+    /// is the neighbour that still has one varint length left after two
+    /// passes: the shortfall is exactly one byte of rate.
+    #[test]
+    fn converge_weight_fee_is_the_varint_fixed_point() {
+        assert_eq!(varint_len(u64::MAX), U64_VARINT_BYTES_MAX);
+        let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
+
+        let fixed = |rate: u64| {
+            let fee = converge_weight_fee(rate, n_in, n_out, depth).expect("the product fits");
+            let weight = u64::try_from(predict_weight(n_in, n_out, depth, fee)).unwrap();
+            assert_eq!(fee, weight.checked_mul(rate).unwrap(), "rate {rate}");
+            fee
+        };
+        assert_eq!(fixed(24_184), 272_336_024);
+
+        let rate = 23_840u64;
+        let mut two_passes = 0u64;
+        for _ in 0..2 {
+            let weight = u64::try_from(predict_weight(n_in, n_out, depth, two_passes)).unwrap();
+            two_passes = weight.checked_mul(rate).unwrap();
+        }
+        let fee = fixed(rate);
+        assert_eq!(
+            fee - two_passes,
+            rate,
+            "two passes {two_passes} undershoot {fee} by one varint byte of rate"
+        );
     }
 
     #[test]
@@ -522,12 +655,19 @@ mod tests {
                 tx.serialized_len(),
                 "predict_size_and_weight size ≠ wire serialized_len for n_in={n_in} n_out={n_out}"
             );
+            assert_eq!(
+                predict_archival_len(InputCount::clamped(n_in), OutputCount::clamped(n_out), depth),
+                usize::try_from(tx.archival_len().to_raw()).expect("archival length fits usize"),
+                "predict_archival_len ≠ wire archival_len for n_in={n_in} n_out={n_out} depth={depth}"
+            );
         }
     }
 }
 
 #[cfg(test)]
 mod marginal_input_weight_pin {
+    use super::*;
+
     /// The dust boundary's marginal-input weight, pinned so any weight-model
     /// movement is a loud, reviewed change to the dust bar. The second
     /// assertion records the 2026-08-16 retirement fact: the provisional
@@ -536,13 +676,26 @@ mod marginal_input_weight_pin {
     /// "simplification" back to a proofless constant must fail here.
     #[test]
     fn marginal_input_weight_is_pinned() {
-        let w = super::marginal_input_weight_at_d_ref();
+        let w = marginal_input_weight_at_d_ref();
         // 9136 → 9008 with PL-D3 (2026-09-14): the opening leg replaces the
         // per-input extra-scalar branch, so the marginal input weight fell.
         assert_eq!(w, 9008, "weight-model movement changes the dust boundary");
         assert!(
             w > 3457,
             "the marginal weight must exceed the retired proofless stub"
+        );
+    }
+
+    /// A product that does not fit is `None`. Restoring `saturating_mul`
+    /// makes this return `Some(u64::MAX)`.
+    #[test]
+    fn an_unrepresentable_product_is_not_a_fee() {
+        let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
+        assert_eq!(converge_weight_fee(u64::MAX, n_in, n_out, depth), None);
+        assert_eq!(
+            converge_weight_fee_by(n_in, n_out, depth, 0, |_| None),
+            None,
+            "a pricer refusal propagates"
         );
     }
 }

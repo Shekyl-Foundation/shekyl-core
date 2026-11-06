@@ -44,8 +44,9 @@
 //!   **count** after this block connects, and every schedule test is
 //!   written against it: an epoch's slashes fold when
 //!   `count > deadline(E)`; an epoch closes when
-//!   `schedule.close_due_at_height(count)`; the close's
-//!   `close_block_height` is `count`. This module keeps that convention
+//!   `schedule.close_due_at_height(count)`; an epoch's
+//!   `close_block_height`, which its gather reads ages at, is the `count`
+//!   of its close. This module keeps that convention
 //!   and names it `count` (= `connecting + 1`) so a reader does not mistake
 //!   it for the connecting height. The retention crate's own docs sometimes
 //!   say "connecting"; the operand is the count.
@@ -55,13 +56,19 @@
 //!   carries — never off the process-latched free functions
 //!   (`settlement_epoch_at_height`, …), which are the daemon's and the
 //!   FFI's entry points. The validator reads no environment; a chain
-//!   captured under a shortened regtest epoch replays under a Fakechain
+//!   captured under a shortened regtest epoch replays under a levered
 //!   set naming that epoch, in any process.
-//! - **Zero is a value** (`ARW-Q4`, §3.6). The close writes an `RMarket`
-//!   for **every closed shard**, zeros included; the C++ skipped zeros on
-//!   the same screen it wrote a zero budget row *because* zero must be
-//!   distinguishable. A6's `None` then means exactly "this epoch did not
-//!   close with this shard in it".
+//! - **Zero is a value** (`ARW-Q4`, §3.6). The gather writes an `RMarket`
+//!   for **every shard of its universe**, zeros included; the C++ skipped
+//!   zeros on the same screen it wrote a zero budget row *because* zero
+//!   must be distinguishable. A6's `None` then means exactly "this epoch
+//!   was not gathered with this shard in it".
+//! - **The close freezes the budget; the slash pass gathers** (`SO-D11`,
+//!   `ARCHIVAL_SETTLEMENT_WRITER.md` §15). An epoch's co-holder counts and
+//!   `Σwork` are folded over its settlement rows, which the slash pass
+//!   writes an epoch after the close, so that pass computes them
+//!   ([`EpochGather`]) over the pairs settled Served and the shards closed
+//!   and final. The C++ gathers at the close on any pass.
 //! - **One accrual row per epoch** (`ARW-Q3`, §3.5). The C++ wrote a row
 //!   per block and range-summed at the close. Here the delta carries the
 //!   open epoch's **post-image total** — what `archival_budget_accruing[E]`
@@ -75,7 +82,12 @@
 //!   cumulative archival fold reaches the shard's end, a binary search
 //!   over that fold (`DRS_E4_ARCHIVAL_WRITER.md` §3.7). SI-13, enforced
 //!   when the store connects each block, keeps the fold non-decreasing,
-//!   and under it the landing height is the close.
+//!   and under it the landing height is the close. [`shard_close`] wraps
+//!   it as `g(age)`'s operand against a [`ClosedUniverse`]: `ClosedAt(height)`
+//!   below the count that read returned, `Open` at or beyond it. The count
+//!   and the parent it was read through are one value, so a caller cannot
+//!   name a different universe than the fold (`SHT-Q1` falsifier (i);
+//!   `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F).
 //! - **The stale eligibility copy is deliberate.** The C++ slash scan
 //!   judged every shard of a record against the record *as the epoch's
 //!   scan began* while applying each slash to the live row, so an offline
@@ -88,36 +100,64 @@
 //! # Order
 //!
 //! Listed transactions in block order, inputs in transaction order, then
-//! the accrual, then the slash scan (every epoch whose deadline `count`
-//! passes, ascending; records in persona-key order), then the close. The
-//! store writes the delta in the same order (§3.2 phase 2 and phase 9), so
+//! the accrual, then the slash pass (every epoch whose deadline `count`
+//! passes, ascending: settle, slash in persona-key order, gather), then
+//! the close, then the drawable digest of an epoch this block opens,
+//! then the count: one draw row at the connecting height, zero when the
+//! schedule has no response window. The
+//! store writes the delta in the same order (§3.2 phase 2 and phase 9,
+//! the digest and the draw row last), so
 //! the slash log's per-height sequence and every record's post-image are
 //! functions of the view and the block, not of anything the store chose.
 
+mod admission;
+mod arm;
+mod bundle;
 mod close;
+mod count;
 mod delta;
+mod drawable;
 mod inputs;
+mod memo;
 mod slash;
+mod support_seats;
 
-pub(crate) use close::accrue;
-pub use close::shard_close_height;
-pub use delta::{
-    Accrual, ArchivalDelta, EpochClose, RecordWrite, RecordWriteKind, ServeCreditKey, Slash,
+pub use admission::{admission_plan, AdmissionPlan, AdmissionPlanFault, EpochIssues};
+pub(crate) use arm::BondArm;
+pub use bundle::{
+    check_section, check_section_until_switch, draw_targets, fill_section, judge_bundles,
+    open_body, open_reference, seats_with_carry, verify_bundle, AdmissionFault, Admitted,
+    BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, DrawOrigin,
+    DrawTargets, Drawn, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
+    SupportCarry, SupportSeat, WindowClosed,
 };
+pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
+pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
+pub use count::remember_window_epochs;
+pub(crate) use count::CountMemo;
+pub(crate) use count::L17;
+pub use delta::{
+    Accrual, ArchivalDelta, DrawableDigestWrite, EpochClose, EpochGather, RecordWrite,
+    RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash, SupportSettlement,
+};
+pub use drawable::{drawable_epoch_walked_back, WALK_BACK_EPOCHS};
+pub use memo::DrawableMemo;
 pub(crate) use slash::apply_slash;
+pub use support_seats::scheduled_seats;
 
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 use shekyl_archival_retention::SettlementSchedule;
-use shekyl_types::archival::{BondRecord, Holdings, PassCount};
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::archival::{BondRecord, Holdings, SettlementRow};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::block::Candidate;
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, RecordInvariant, ViewRead};
+use crate::reorg::SlashLogFloor;
 use crate::rule_set::RuleSet;
 use crate::rules::Rule;
 use crate::verdict::{Locus, TxSlot, Verdict};
@@ -127,6 +167,10 @@ use crate::view::ChainView;
 /// the C++ hooks refused with a `throw` — a bond post, serve credit or
 /// claim the folds cannot apply to the recorded state — this rule refuses
 /// as a block, at the input's locus.
+///
+/// An unnamed bond-post kind is this row in `judge_bond_post` as well, at
+/// the post's vin, so `tx_against` alone refuses it. The fold's arm stays
+/// the belt for a transition caller that did not run that sequence.
 pub(crate) struct L7;
 
 impl Rule for L7 {
@@ -141,19 +185,29 @@ impl Rule for L7 {
 /// challenge seals, which epoch's deadline `count` passes, whether this
 /// block closes one — is `rule_set.settlement_schedule()`'s (`ARW-15`):
 /// the validator never reads the process-latched schedule the daemon arms.
+/// The slash log's retirement floor the pass reads under is the same
+/// set's — its schedule and its `reorg_cap` ([`SlashLogFloor`], `SLK-Q1`,
+/// `SLK-2`): the horizon is a consensus expression, and this is the
+/// consensus side.
 ///
 /// `Ok(Ok(delta))` records CEN-L7 in `coverage`. `Ok(Err(_))` is a refusal
 /// at an input's locus. `Err(_)` is the view's fault or a [`Corrupt`]
-/// state the folds exposed.
+/// state the folds exposed. `count_memo` is the connecting block's hash
+/// and the memo keyed by it.
 pub(crate) fn transition<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
     rule_set: &RuleSet,
     candidate: &Candidate,
     accrual: AtomicUnits,
+    count_memo: &mut count::CountMemo<'_>,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<ArchivalDelta>, ViewRead<V::Fault>> {
-    let mut transition = Transition::new(connecting, rule_set.settlement_schedule());
+    let mut transition = Transition::new(
+        connecting,
+        rule_set.settlement_schedule(),
+        rule_set.reorg_cap(),
+    );
     for (n, tx) in candidate.transactions.iter().enumerate() {
         for (i, input) in tx.prefix.inputs.iter().enumerate() {
             let locus = Locus::Input {
@@ -167,9 +221,23 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
     }
     let accrued = transition.accrue(view, accrual)?;
     transition.scan_slashes(view)?;
-    let close = transition.close(view, accrued)?;
+    let close = transition.close(accrued);
+    let opened = transition.drawable_at_open(view)?;
+    let drawable_digest = opened.as_ref().map(|(write, _)| *write);
+    let (draws, support_seats) = transition.block_draws(
+        view,
+        opened.as_ref().map(|(_, drawable)| drawable),
+        count_memo,
+        coverage,
+    )?;
     coverage.insert(L7::ROW);
-    Ok(Ok(transition.into_delta(accrued, close)))
+    Ok(Ok(transition.into_delta(
+        accrued,
+        close,
+        drawable_digest,
+        draws,
+        support_seats,
+    )))
 }
 
 /// A compact holding with no shards — the Release's and the complete-tree
@@ -203,32 +271,69 @@ struct Transition {
     /// The rule set's epoch geometry — every `H_open` / `H_close` /
     /// deadline / close-due read below is this one's.
     schedule: SettlementSchedule,
+    /// The slash log's retirement floor at `connecting` under this
+    /// transition's schedule and `reorg_cap` — the same cap the gather
+    /// uses. The operand every A2 read hands the store (SI-26).
+    slash_floor: SlashLogFloor,
     /// The epoch `connecting` sits in — the open epoch; the JoinMarket's
     /// join epoch and add epoch; the claim's `current_settled`.
     epoch: SettlementEpoch,
     posts: BTreeMap<PCanonicalId, Post>,
+    /// Each Release's pre-image, in block order: what the Release journal
+    /// keeps of it.
+    releases: Vec<ReleasePreImage>,
     serve_credits: Vec<ServeCreditKey>,
+    /// The rows this block's slash pass has settled, keyed in the order
+    /// the delta carries them: epoch, then persona, then shard.
+    settled: BTreeMap<(SettlementEpoch, PCanonicalId, ShardId), SettlementRow>,
+    /// One support row per tree per epoch. Not keyed by shard.
+    support_settled: BTreeMap<(SettlementEpoch, PCanonicalId), SettlementRow>,
+    /// The emission gather of each epoch the pass has settled, in epoch
+    /// order.
+    gathers: Vec<EpochGather>,
+    /// The in-force reorg cap: what makes a closed shard final, and so
+    /// part of the gather's universe.
+    reorg_cap: BlockCount,
     slashes: Vec<Slash>,
     slash_watermark: Option<SettlementEpoch>,
 }
 
 impl Transition {
-    fn new(connecting: BlockHeight, schedule: SettlementSchedule) -> Self {
+    fn new(connecting: BlockHeight, schedule: SettlementSchedule, reorg_cap: BlockCount) -> Self {
         Self {
             connecting,
             schedule,
+            slash_floor: SlashLogFloor::under(connecting, schedule.blocks(), reorg_cap),
             epoch: SettlementEpoch::from_raw(schedule.epoch_at_height(connecting.to_raw())),
             posts: BTreeMap::new(),
+            releases: Vec::new(),
             serve_credits: Vec::new(),
+            settled: BTreeMap::new(),
+            support_settled: BTreeMap::new(),
+            gathers: Vec::new(),
+            reorg_cap,
             slashes: Vec::new(),
             slash_watermark: None,
         }
     }
 
     /// The block count once this block connects — the C++ hooks' operand
-    /// (module docs, *The count operand*).
-    fn count(&self) -> u64 {
-        self.connecting.to_raw().saturating_add(1)
+    /// (module docs, *The count operand*), typed as the count it is
+    /// ([`ChainCount::with_tip`] of the connecting block, `ARW-Q16` (a)):
+    /// the schedule comparisons take it through `to_raw()` at their `u64`
+    /// edge (Phase 2g's), and nothing here can hand it to a reader that
+    /// wants the connecting height. `None` from the bridge is a connecting
+    /// height of `u64::MAX`, which no chain this crate judges reaches.
+    fn count(&self) -> ChainCount {
+        ChainCount::with_tip(self.connecting).expect("a connecting height below u64::MAX")
+    }
+
+    /// A per-epoch family's floor at this block (`EpochFloor`, SI-32): the
+    /// oldest epoch the pass may ask the family for. The pass reads the
+    /// settling family for the epoch it settles and the claimable family
+    /// back to the failure window's bound, both at their floors exactly.
+    fn floor<F: crate::EpochFamily>(&self) -> crate::EpochFloor<F> {
+        crate::EpochFloor::under(self.connecting, self.schedule)
     }
 
     /// `persona`'s working copy, read from the view on first touch;
@@ -281,29 +386,54 @@ impl Transition {
             .collect())
     }
 
-    /// Whether `(persona, shard, epoch)` has a pass — recorded, or earned
-    /// by this block (the C++ wrote the block's credits before the scan
-    /// read them).
-    fn passed<'id, V: ChainView<'id>>(
-        &self,
+    /// Derivation 1 of the drawable set (`drawable.rs`): at the first
+    /// block of an epoch, the digest of `D(E)` over the state this block
+    /// leaves, its slash pass included — every record as merged with this
+    /// block's post-images. `None` at every other height.
+    ///
+    /// Runs after the close, as the last read of the transition, so every
+    /// arm that changes a record has run. Genesis opens epoch 0 and writes
+    /// the empty set's digest: no bond joins before epoch 0.
+    fn drawable_at_open<'id, V: ChainView<'id>>(
+        &mut self,
         view: &V,
-        persona: PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<bool, ViewRead<V::Fault>> {
-        if self
-            .serve_credits
-            .iter()
-            .any(|k| k.persona == persona && k.shard == shard && k.epoch == epoch)
-        {
-            return Ok(true);
+    ) -> Result<
+        Option<(
+            DrawableDigestWrite,
+            shekyl_archival_retention::DrawableEpoch,
+        )>,
+        ViewRead<V::Fault>,
+    > {
+        let h_open = self.schedule.open_height(self.epoch.to_raw());
+        if self.connecting.to_raw() != h_open {
+            return Ok(None);
         }
-        view.pass_count(&persona, shard, epoch)
-            .map(PassCount::any)
-            .map_err(ViewRead::View)
+        let epoch = self.epoch;
+        let final_count = drawable::final_count_at_open(view, self.connecting, self.reorg_cap)?;
+        let records = self.merged(view)?;
+        let drawable = drawable::drawable_epoch_at_open(
+            epoch,
+            records.iter().map(|(persona, record)| (persona, record)),
+            final_count,
+        )
+        .map_err(|why| ViewRead::Corrupt(Corrupt::DrawableEpoch { epoch, why }))?;
+        Ok(Some((
+            DrawableDigestWrite {
+                epoch,
+                digest: drawable.digest(),
+            },
+            drawable,
+        )))
     }
 
-    fn into_delta(self, accrual: Accrual, close: Option<EpochClose>) -> ArchivalDelta {
+    fn into_delta(
+        self,
+        accrual: Accrual,
+        close: Option<EpochClose>,
+        drawable_digest: Option<DrawableDigestWrite>,
+        draws: shekyl_types::archival::BlockDraws,
+        support_seats: shekyl_types::archival::SupportSeats,
+    ) -> ArchivalDelta {
         let records = self
             .posts
             .into_iter()
@@ -315,14 +445,40 @@ impl Transition {
                 })
             })
             .collect();
-        ArchivalDelta::new(
+        let settlements = self
+            .settled
+            .into_iter()
+            .map(|((epoch, persona, shard), row)| Settlement {
+                persona,
+                shard,
+                epoch,
+                row,
+            })
+            .collect();
+        let support_settlements = self
+            .support_settled
+            .into_iter()
+            .map(|((epoch, persona), row)| SupportSettlement {
+                persona,
+                epoch,
+                row,
+            })
+            .collect();
+        ArchivalDelta {
             records,
-            self.serve_credits,
-            self.slashes,
-            self.slash_watermark,
+            releases: self.releases,
+            serve_credits: self.serve_credits,
+            settlements,
+            support_settlements,
+            gathers: self.gathers,
+            slashes: self.slashes,
+            slash_watermark: self.slash_watermark,
             accrual,
             close,
-        )
+            drawable_digest,
+            draws,
+            support_seats,
+        }
     }
 }
 

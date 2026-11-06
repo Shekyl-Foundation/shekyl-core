@@ -36,7 +36,10 @@
 # a `.bak` that proved reversible exactly once.
 # ---------------------------------------------------------------------------
 #
-# Usage: check_chain_db_compatible.sh <shekyld-binary> <config-file>
+# Usage: check_chain_db_compatible.sh <shekyld-binary> <network> <config-file>
+#
+# The network is a command-line-only row (INPUT_GRAMMAR.md §5), so the
+# probe names it beside the file, as the unit does.
 #
 # Exit:  0  usable      — the daemon ran (existing database opened, or a fresh
 #                         one created). Nothing to do.
@@ -46,12 +49,12 @@
 
 set -euo pipefail
 
-if [ "$#" -ne 2 ]; then
-  echo "usage: $0 <shekyld-binary> <config-file>" >&2
+if [ "$#" -ne 3 ]; then
+  echo "usage: $0 <shekyld-binary> <network> <config-file>" >&2
   exit 2
 fi
 
-DAEMON="$1"; CONFIG="$2"
+DAEMON="$1"; NETWORK="$2"; CONFIG="$3"
 PROBE_SECONDS="${PROBE_SECONDS:-45}"
 
 [ -x "$DAEMON" ] || { echo "REFUSE: $DAEMON is not executable" >&2; exit 2; }
@@ -61,8 +64,8 @@ command -v timeout >/dev/null || { echo "REFUSE: coreutils 'timeout' not found" 
 PROBE_LOG="$(mktemp)"
 trap 'rm -f "$PROBE_LOG"' EXIT
 set +e
-timeout "$PROBE_SECONDS" "$DAEMON" --config-file "$CONFIG" --non-interactive \
-  --log-file "$PROBE_LOG" --log-level 0 >>"$PROBE_LOG" 2>&1
+timeout "$PROBE_SECONDS" "$DAEMON" --network "$NETWORK" --config-file "$CONFIG" \
+  --log-file "$PROBE_LOG" --log-level warn >>"$PROBE_LOG" 2>&1
 PROBE_RC=$?
 set -e
 

@@ -1,0 +1,111 @@
+start 2026-10-10T20:31:36Z temp 57939
+RT-P4 ML-KEM-768 decapsulation timing (fips203)
+arch=aarch64 os=linux samples_per_comparison=1000000 calibration=10000 crops=100
+pass: |t| < 4.5 on every real comparison; control: |t| > 10
+  block_end=50000 raw_mean0=265991 raw_mean1=265999 raw_diff=-8 raw_t=-0.14 mid_n0=10685 mid_n1=11704 mid_mean0=262533 mid_mean1=262497 mid_diff=35.7 mid_t=17.19
+  block_end=100000 raw_mean0=266044 raw_mean1=266029 raw_diff=15 raw_t=0.27 mid_n0=10383 mid_n1=11153 mid_mean0=262548 mid_mean1=262511 mid_diff=37.5 mid_t=18.98
+  block_end=150000 raw_mean0=266045 raw_mean1=266000 raw_diff=45 raw_t=0.80 mid_n0=10752 mid_n1=11442 mid_mean0=262541 mid_mean1=262503 mid_diff=38.7 mid_t=19.64
+  block_end=200000 raw_mean0=266102 raw_mean1=265979 raw_diff=123 raw_t=2.10 mid_n0=10441 mid_n1=11171 mid_mean0=262538 mid_mean1=262498 mid_diff=40.1 mid_t=18.92
+  block_end=250000 raw_mean0=266073 raw_mean1=266071 raw_diff=2 raw_t=0.03 mid_n0=9913 mid_n1=10568 mid_mean0=262549 mid_mean1=262510 mid_diff=39.0 mid_t=19.11
+  block_end=300000 raw_mean0=266045 raw_mean1=265987 raw_diff=57 raw_t=1.03 mid_n0=10452 mid_n1=11214 mid_mean0=262524 mid_mean1=262488 mid_diff=36.3 mid_t=17.15
+  block_end=350000 raw_mean0=266055 raw_mean1=266050 raw_diff=5 raw_t=0.08 mid_n0=9943 mid_n1=10903 mid_mean0=262546 mid_mean1=262512 mid_diff=34.3 mid_t=16.90
+  block_end=400000 raw_mean0=266022 raw_mean1=265975 raw_diff=47 raw_t=0.85 mid_n0=10665 mid_n1=11338 mid_mean0=262522 mid_mean1=262481 mid_diff=40.8 mid_t=19.29
+  block_end=450000 raw_mean0=267407 raw_mean1=267456 raw_diff=-50 raw_t=-0.52 mid_n0=10105 mid_n1=10614 mid_mean0=262524 mid_mean1=262487 mid_diff=37.2 mid_t=17.17
+  block_end=500000 raw_mean0=266102 raw_mean1=266076 raw_diff=26 raw_t=0.47 mid_n0=9306 mid_n1=10017 mid_mean0=262571 mid_mean1=262533 mid_diff=38.2 mid_t=19.53
+  block_end=550000 raw_mean0=266143 raw_mean1=266081 raw_diff=62 raw_t=1.11 mid_n0=8988 mid_n1=9910 mid_mean0=262577 mid_mean1=262543 mid_diff=33.9 mid_t=17.75
+  block_end=600000 raw_mean0=268650 raw_mean1=268482 raw_diff=169 raw_t=1.45 mid_n0=8408 mid_n1=9256 mid_mean0=262561 mid_mean1=262522 mid_diff=39.1 mid_t=18.39
+  block_end=650000 raw_mean0=266711 raw_mean1=266627 raw_diff=84 raw_t=1.13 mid_n0=9710 mid_n1=10381 mid_mean0=262543 mid_mean1=262505 mid_diff=38.1 mid_t=17.61
+  block_end=700000 raw_mean0=266231 raw_mean1=266173 raw_diff=58 raw_t=0.96 mid_n0=10427 mid_n1=11081 mid_mean0=262537 mid_mean1=262500 mid_diff=36.7 mid_t=18.15
+  block_end=750000 raw_mean0=266144 raw_mean1=266206 raw_diff=-62 raw_t=-1.01 mid_n0=11058 mid_n1=11502 mid_mean0=262520 mid_mean1=262489 mid_diff=30.6 mid_t=15.02
+  block_end=800000 raw_mean0=266194 raw_mean1=266015 raw_diff=179 raw_t=3.04 mid_n0=10679 mid_n1=11722 mid_mean0=262526 mid_mean1=262487 mid_diff=39.2 mid_t=19.03
+  block_end=850000 raw_mean0=267483 raw_mean1=267473 raw_diff=10 raw_t=0.10 mid_n0=9475 mid_n1=9987 mid_mean0=262546 mid_mean1=262512 mid_diff=34.3 mid_t=15.69
+  block_end=900000 raw_mean0=266184 raw_mean1=266119 raw_diff=65 raw_t=1.11 mid_n0=9823 mid_n1=10759 mid_mean0=262551 mid_mean1=262520 mid_diff=30.9 mid_t=14.96
+  block_end=950000 raw_mean0=266112 raw_mean1=266070 raw_diff=42 raw_t=0.73 mid_n0=10344 mid_n1=11022 mid_mean0=262537 mid_mean1=262498 mid_diff=38.9 mid_t=18.86
+  block_end=1000000 raw_mean0=266139 raw_mean1=266058 raw_diff=81 raw_t=1.39 mid_n0=10493 mid_n1=11225 mid_mean0=262534 mid_mean1=262496 mid_diff=38.1 mid_t=18.35
+comparison=fixed-vs-valid max_abs_t=79.09 median_ns=262777 n0=499521 n1=500479 verdict=LEAK
+  block_end=50000 raw_mean0=266203 raw_mean1=266254 raw_diff=-51 raw_t=-0.86 mid_n0=10940 mid_n1=10474 mid_mean0=262605 mid_mean1=262605 mid_diff=0.0 mid_t=0.02
+  block_end=100000 raw_mean0=266175 raw_mean1=266158 raw_diff=17 raw_t=0.29 mid_n0=11263 mid_n1=10964 mid_mean0=262578 mid_mean1=262576 mid_diff=1.5 mid_t=0.74
+  block_end=150000 raw_mean0=266150 raw_mean1=266207 raw_diff=-57 raw_t=-0.97 mid_n0=11079 mid_n1=10809 mid_mean0=262590 mid_mean1=262593 mid_diff=-3.8 mid_t=-1.91
+  block_end=200000 raw_mean0=266190 raw_mean1=266078 raw_diff=112 raw_t=1.91 mid_n0=11278 mid_n1=11173 mid_mean0=262578 mid_mean1=262578 mid_diff=0.5 mid_t=0.24
+  block_end=250000 raw_mean0=266120 raw_mean1=266110 raw_diff=10 raw_t=0.18 mid_n0=11831 mid_n1=11832 mid_mean0=262543 mid_mean1=262542 mid_diff=0.5 mid_t=0.23
+  block_end=300000 raw_mean0=266070 raw_mean1=266109 raw_diff=-39 raw_t=-0.68 mid_n0=11689 mid_n1=11352 mid_mean0=262553 mid_mean1=262554 mid_diff=-1.6 mid_t=-0.73
+  block_end=350000 raw_mean0=266115 raw_mean1=266116 raw_diff=-1 raw_t=-0.02 mid_n0=11650 mid_n1=11471 mid_mean0=262556 mid_mean1=262560 mid_diff=-4.3 mid_t=-2.05
+  block_end=400000 raw_mean0=266145 raw_mean1=266128 raw_diff=16 raw_t=0.28 mid_n0=11361 mid_n1=10985 mid_mean0=262572 mid_mean1=262574 mid_diff=-2.5 mid_t=-1.23
+  block_end=450000 raw_mean0=266131 raw_mean1=266208 raw_diff=-77 raw_t=-1.24 mid_n0=11476 mid_n1=11179 mid_mean0=262560 mid_mean1=262562 mid_diff=-2.2 mid_t=-1.04
+  block_end=500000 raw_mean0=266226 raw_mean1=266106 raw_diff=120 raw_t=2.06 mid_n0=10736 mid_n1=10631 mid_mean0=262596 mid_mean1=262598 mid_diff=-1.5 mid_t=-0.75
+  block_end=550000 raw_mean0=266155 raw_mean1=266245 raw_diff=-89 raw_t=-1.49 mid_n0=11626 mid_n1=11061 mid_mean0=262565 mid_mean1=262568 mid_diff=-2.3 mid_t=-1.10
+  block_end=600000 raw_mean0=266133 raw_mean1=266228 raw_diff=-96 raw_t=-1.64 mid_n0=11357 mid_n1=11082 mid_mean0=262577 mid_mean1=262577 mid_diff=0.1 mid_t=0.03
+  block_end=650000 raw_mean0=266133 raw_mean1=266132 raw_diff=1 raw_t=0.02 mid_n0=11504 mid_n1=11559 mid_mean0=262560 mid_mean1=262561 mid_diff=-1.1 mid_t=-0.49
+  block_end=700000 raw_mean0=266102 raw_mean1=266034 raw_diff=68 raw_t=1.17 mid_n0=12146 mid_n1=12116 mid_mean0=262531 mid_mean1=262528 mid_diff=2.7 mid_t=1.18
+  block_end=750000 raw_mean0=266090 raw_mean1=266038 raw_diff=52 raw_t=0.91 mid_n0=12110 mid_n1=11830 mid_mean0=262527 mid_mean1=262532 mid_diff=-5.1 mid_t=-2.25
+  block_end=800000 raw_mean0=266144 raw_mean1=266071 raw_diff=74 raw_t=1.28 mid_n0=11736 mid_n1=11626 mid_mean0=262554 mid_mean1=262556 mid_diff=-2.2 mid_t=-1.03
+  block_end=850000 raw_mean0=266127 raw_mean1=266211 raw_diff=-84 raw_t=-1.45 mid_n0=10849 mid_n1=10497 mid_mean0=262597 mid_mean1=262598 mid_diff=-0.9 mid_t=-0.47
+  block_end=900000 raw_mean0=266112 raw_mean1=266087 raw_diff=25 raw_t=0.42 mid_n0=11886 mid_n1=11734 mid_mean0=262547 mid_mean1=262549 mid_diff=-2.0 mid_t=-0.93
+  block_end=950000 raw_mean0=266131 raw_mean1=266090 raw_diff=41 raw_t=0.73 mid_n0=11335 mid_n1=11060 mid_mean0=262569 mid_mean1=262575 mid_diff=-6.1 mid_t=-2.93
+  block_end=1000000 raw_mean0=266076 raw_mean1=266112 raw_diff=-36 raw_t=-0.62 mid_n0=11715 mid_n1=11630 mid_mean0=262545 mid_mean1=262544 mid_diff=0.8 mid_t=0.38
+comparison=fixed-vs-invalid max_abs_t=11.35 median_ns=262851 n0=500483 n1=499517 verdict=LEAK
+  block_end=50000 raw_mean0=266098 raw_mean1=266096 raw_diff=3 raw_t=0.04 mid_n0=12056 mid_n1=11846 mid_mean0=262552 mid_mean1=262553 mid_diff=-0.9 mid_t=-0.42
+  block_end=100000 raw_mean0=266160 raw_mean1=266102 raw_diff=58 raw_t=0.95 mid_n0=12262 mid_n1=12116 mid_mean0=262542 mid_mean1=262543 mid_diff=-0.4 mid_t=-0.18
+  block_end=150000 raw_mean0=266545 raw_mean1=266526 raw_diff=20 raw_t=0.28 mid_n0=11337 mid_n1=11228 mid_mean0=262560 mid_mean1=262563 mid_diff=-2.7 mid_t=-1.16
+  block_end=200000 raw_mean0=267112 raw_mean1=267053 raw_diff=59 raw_t=0.66 mid_n0=10791 mid_n1=10682 mid_mean0=262589 mid_mean1=262590 mid_diff=-0.7 mid_t=-0.33
+  block_end=250000 raw_mean0=267446 raw_mean1=267403 raw_diff=43 raw_t=0.48 mid_n0=9976 mid_n1=9584 mid_mean0=262619 mid_mean1=262624 mid_diff=-4.9 mid_t=-2.37
+  block_end=300000 raw_mean0=266152 raw_mean1=266104 raw_diff=48 raw_t=0.82 mid_n0=11643 mid_n1=11723 mid_mean0=262563 mid_mean1=262569 mid_diff=-5.2 mid_t=-2.43
+  block_end=350000 raw_mean0=266168 raw_mean1=266125 raw_diff=43 raw_t=0.73 mid_n0=11696 mid_n1=11523 mid_mean0=262565 mid_mean1=262566 mid_diff=-1.2 mid_t=-0.55
+  block_end=400000 raw_mean0=266185 raw_mean1=266093 raw_diff=93 raw_t=1.62 mid_n0=11420 mid_n1=11224 mid_mean0=262584 mid_mean1=262584 mid_diff=-0.2 mid_t=-0.08
+  block_end=450000 raw_mean0=266149 raw_mean1=266159 raw_diff=-10 raw_t=-0.18 mid_n0=11591 mid_n1=10984 mid_mean0=262576 mid_mean1=262578 mid_diff=-1.6 mid_t=-0.72
+  block_end=500000 raw_mean0=266156 raw_mean1=266192 raw_diff=-36 raw_t=-0.62 mid_n0=11358 mid_n1=10995 mid_mean0=262593 mid_mean1=262594 mid_diff=-1.6 mid_t=-0.80
+  block_end=550000 raw_mean0=266078 raw_mean1=266088 raw_diff=-10 raw_t=-0.18 mid_n0=12309 mid_n1=12134 mid_mean0=262542 mid_mean1=262542 mid_diff=-0.5 mid_t=-0.21
+  block_end=600000 raw_mean0=266138 raw_mean1=266105 raw_diff=33 raw_t=0.57 mid_n0=11802 mid_n1=11770 mid_mean0=262566 mid_mean1=262569 mid_diff=-3.4 mid_t=-1.57
+  block_end=650000 raw_mean0=266136 raw_mean1=266069 raw_diff=67 raw_t=1.16 mid_n0=12201 mid_n1=12148 mid_mean0=262556 mid_mean1=262558 mid_diff=-1.8 mid_t=-0.83
+  block_end=700000 raw_mean0=266178 raw_mean1=266205 raw_diff=-26 raw_t=-0.43 mid_n0=11726 mid_n1=11623 mid_mean0=262559 mid_mean1=262562 mid_diff=-2.7 mid_t=-1.15
+  block_end=750000 raw_mean0=266099 raw_mean1=266180 raw_diff=-81 raw_t=-1.39 mid_n0=11437 mid_n1=11126 mid_mean0=262580 mid_mean1=262582 mid_diff=-2.8 mid_t=-1.35
+  block_end=800000 raw_mean0=266094 raw_mean1=266159 raw_diff=-65 raw_t=-1.10 mid_n0=11952 mid_n1=11546 mid_mean0=262560 mid_mean1=262561 mid_diff=-1.2 mid_t=-0.55
+  block_end=850000 raw_mean0=266000 raw_mean1=265991 raw_diff=9 raw_t=0.16 mid_n0=12921 mid_n1=12748 mid_mean0=262500 mid_mean1=262507 mid_diff=-6.2 mid_t=-2.56
+  block_end=900000 raw_mean0=265897 raw_mean1=266058 raw_diff=-161 raw_t=-2.79 mid_n0=13476 mid_n1=13366 mid_mean0=262484 mid_mean1=262484 mid_diff=0.1 mid_t=0.04
+  block_end=950000 raw_mean0=266141 raw_mean1=266072 raw_diff=69 raw_t=1.19 mid_n0=11795 mid_n1=11853 mid_mean0=262556 mid_mean1=262558 mid_diff=-2.5 mid_t=-1.09
+  block_end=1000000 raw_mean0=266094 raw_mean1=266056 raw_diff=38 raw_t=0.65 mid_n0=11932 mid_n1=11938 mid_mean0=262546 mid_mean1=262551 mid_diff=-5.7 mid_t=-2.55
+comparison=fixed-vs-bitflip max_abs_t=8.19 median_ns=262852 n0=500478 n1=499522 verdict=INCONCLUSIVE
+  block_end=50000 raw_mean0=266003 raw_mean1=266078 raw_diff=-75 raw_t=-1.29 mid_n0=12519 mid_n1=11789 mid_mean0=262477 mid_mean1=262513 mid_diff=-36.1 mid_t=-14.57
+  block_end=100000 raw_mean0=266034 raw_mean1=266161 raw_diff=-127 raw_t=-2.20 mid_n0=11707 mid_n1=10844 mid_mean0=262523 mid_mean1=262566 mid_diff=-43.2 mid_t=-19.18
+  block_end=150000 raw_mean0=266085 raw_mean1=266168 raw_diff=-83 raw_t=-1.37 mid_n0=11966 mid_n1=10993 mid_mean0=262514 mid_mean1=262557 mid_diff=-42.2 mid_t=-19.22
+  block_end=200000 raw_mean0=266118 raw_mean1=266215 raw_diff=-97 raw_t=-1.68 mid_n0=11130 mid_n1=10220 mid_mean0=262563 mid_mean1=262600 mid_diff=-36.8 mid_t=-18.43
+  block_end=250000 raw_mean0=266174 raw_mean1=266215 raw_diff=-41 raw_t=-0.70 mid_n0=10449 mid_n1=9544 mid_mean0=262579 mid_mean1=262609 mid_diff=-30.7 mid_t=-14.81
+  block_end=300000 raw_mean0=267452 raw_mean1=267624 raw_diff=-172 raw_t=-1.76 mid_n0=10137 mid_n1=9422 mid_mean0=262540 mid_mean1=262576 mid_diff=-35.3 mid_t=-15.76
+  block_end=350000 raw_mean0=266162 raw_mean1=266218 raw_diff=-56 raw_t=-0.94 mid_n0=11189 mid_n1=10375 mid_mean0=262556 mid_mean1=262593 mid_diff=-37.0 mid_t=-18.30
+  block_end=400000 raw_mean0=266144 raw_mean1=266067 raw_diff=77 raw_t=1.30 mid_n0=12029 mid_n1=11324 mid_mean0=262511 mid_mean1=262550 mid_diff=-39.0 mid_t=-18.10
+  block_end=450000 raw_mean0=266027 raw_mean1=266213 raw_diff=-186 raw_t=-3.18 mid_n0=11723 mid_n1=10837 mid_mean0=262534 mid_mean1=262576 mid_diff=-41.9 mid_t=-20.09
+  block_end=500000 raw_mean0=266079 raw_mean1=266134 raw_diff=-55 raw_t=-0.94 mid_n0=11689 mid_n1=10919 mid_mean0=262542 mid_mean1=262584 mid_diff=-42.1 mid_t=-20.75
+  block_end=550000 raw_mean0=266137 raw_mean1=266221 raw_diff=-85 raw_t=-1.42 mid_n0=11821 mid_n1=10833 mid_mean0=262532 mid_mean1=262573 mid_diff=-41.5 mid_t=-19.39
+  block_end=600000 raw_mean0=266041 raw_mean1=266149 raw_diff=-108 raw_t=-1.86 mid_n0=11979 mid_n1=11135 mid_mean0=262521 mid_mean1=262566 mid_diff=-44.8 mid_t=-20.55
+  block_end=650000 raw_mean0=266099 raw_mean1=266090 raw_diff=9 raw_t=0.15 mid_n0=12093 mid_n1=11224 mid_mean0=262527 mid_mean1=262570 mid_diff=-43.2 mid_t=-20.48
+  block_end=700000 raw_mean0=266088 raw_mean1=266122 raw_diff=-34 raw_t=-0.59 mid_n0=11659 mid_n1=10949 mid_mean0=262532 mid_mean1=262573 mid_diff=-41.1 mid_t=-18.84
+  block_end=750000 raw_mean0=266196 raw_mean1=266252 raw_diff=-57 raw_t=-0.89 mid_n0=11468 mid_n1=10608 mid_mean0=262546 mid_mean1=262583 mid_diff=-36.0 mid_t=-17.37
+  block_end=800000 raw_mean0=266121 raw_mean1=266189 raw_diff=-68 raw_t=-1.15 mid_n0=11085 mid_n1=10173 mid_mean0=262560 mid_mean1=262597 mid_diff=-36.6 mid_t=-17.88
+  block_end=850000 raw_mean0=266090 raw_mean1=266196 raw_diff=-106 raw_t=-1.81 mid_n0=11388 mid_n1=10588 mid_mean0=262537 mid_mean1=262579 mid_diff=-41.9 mid_t=-19.69
+  block_end=900000 raw_mean0=266031 raw_mean1=266124 raw_diff=-93 raw_t=-1.60 mid_n0=11944 mid_n1=11170 mid_mean0=262498 mid_mean1=262543 mid_diff=-45.0 mid_t=-19.80
+  block_end=950000 raw_mean0=267394 raw_mean1=267470 raw_diff=-76 raw_t=-0.80 mid_n0=11171 mid_n1=10281 mid_mean0=262532 mid_mean1=262571 mid_diff=-38.6 mid_t=-17.94
+  block_end=1000000 raw_mean0=266045 raw_mean1=266221 raw_diff=-176 raw_t=-3.01 mid_n0=11547 mid_n1=10479 mid_mean0=262551 mid_mean1=262593 mid_diff=-42.1 mid_t=-20.86
+comparison=valid-vs-invalid max_abs_t=82.34 median_ns=262833 n0=499020 n1=500980 verdict=LEAK
+  block_end=50000 raw_mean0=266134 raw_mean1=267491 raw_diff=-1356 raw_t=-23.46 mid_n0=18108 mid_n1=4782 mid_mean0=262818 mid_mean1=263774 mid_diff=-955.6 mid_t=-337.15
+  block_end=100000 raw_mean0=266148 raw_mean1=267409 raw_diff=-1261 raw_t=-21.74 mid_n0=17930 mid_n1=6629 mid_mean0=262759 mid_mean1=263747 mid_diff=-987.8 mid_t=-342.07
+  block_end=150000 raw_mean0=266148 raw_mean1=267467 raw_diff=-1319 raw_t=-22.97 mid_n0=17791 mid_n1=5583 mid_mean0=262791 mid_mean1=263755 mid_diff=-963.6 mid_t=-333.17
+  block_end=200000 raw_mean0=266091 raw_mean1=267385 raw_diff=-1295 raw_t=-22.44 mid_n0=18075 mid_n1=6711 mid_mean0=262752 mid_mean1=263743 mid_diff=-991.3 mid_t=-349.15
+  block_end=250000 raw_mean0=266104 raw_mean1=267438 raw_diff=-1334 raw_t=-23.03 mid_n0=18147 mid_n1=6130 mid_mean0=262767 mid_mean1=263752 mid_diff=-985.3 mid_t=-341.93
+  block_end=300000 raw_mean0=266194 raw_mean1=267437 raw_diff=-1244 raw_t=-21.56 mid_n0=18054 mid_n1=4699 mid_mean0=262819 mid_mean1=263769 mid_diff=-950.4 mid_t=-331.49
+  block_end=350000 raw_mean0=266090 raw_mean1=267302 raw_diff=-1211 raw_t=-20.81 mid_n0=18061 mid_n1=7948 mid_mean0=262688 mid_mean1=263706 mid_diff=-1018.4 mid_t=-342.10
+  block_end=400000 raw_mean0=266051 raw_mean1=267431 raw_diff=-1381 raw_t=-23.84 mid_n0=18151 mid_n1=6467 mid_mean0=262746 mid_mean1=263733 mid_diff=-987.6 mid_t=-340.15
+  block_end=450000 raw_mean0=266142 raw_mean1=267492 raw_diff=-1349 raw_t=-23.02 mid_n0=18080 mid_n1=4994 mid_mean0=262811 mid_mean1=263766 mid_diff=-954.5 mid_t=-333.89
+  block_end=500000 raw_mean0=266077 raw_mean1=267446 raw_diff=-1369 raw_t=-23.30 mid_n0=18104 mid_n1=6833 mid_mean0=262731 mid_mean1=263733 mid_diff=-1002.0 mid_t=-344.30
+  block_end=550000 raw_mean0=266144 raw_mean1=267519 raw_diff=-1375 raw_t=-23.75 mid_n0=18048 mid_n1=4553 mid_mean0=262816 mid_mean1=263778 mid_diff=-961.8 mid_t=-347.77
+  block_end=600000 raw_mean0=266079 raw_mean1=267492 raw_diff=-1413 raw_t=-24.25 mid_n0=18281 mid_n1=5706 mid_mean0=262779 mid_mean1=263759 mid_diff=-980.0 mid_t=-347.84
+  block_end=650000 raw_mean0=266121 raw_mean1=267376 raw_diff=-1255 raw_t=-21.69 mid_n0=17831 mid_n1=6070 mid_mean0=262768 mid_mean1=263744 mid_diff=-975.1 mid_t=-332.48
+  block_end=700000 raw_mean0=266174 raw_mean1=267502 raw_diff=-1328 raw_t=-22.81 mid_n0=18145 mid_n1=4803 mid_mean0=262817 mid_mean1=263767 mid_diff=-949.8 mid_t=-332.32
+  block_end=750000 raw_mean0=266176 raw_mean1=267399 raw_diff=-1223 raw_t=-20.90 mid_n0=18102 mid_n1=6101 mid_mean0=262776 mid_mean1=263749 mid_diff=-973.3 mid_t=-337.90
+  block_end=800000 raw_mean0=266141 raw_mean1=267483 raw_diff=-1342 raw_t=-23.08 mid_n0=17888 mid_n1=5207 mid_mean0=262805 mid_mean1=263761 mid_diff=-956.0 mid_t=-334.52
+  block_end=850000 raw_mean0=266249 raw_mean1=267603 raw_diff=-1354 raw_t=-21.54 mid_n0=18022 mid_n1=5180 mid_mean0=262807 mid_mean1=263766 mid_diff=-959.3 mid_t=-338.68
+  block_end=900000 raw_mean0=266100 raw_mean1=267471 raw_diff=-1371 raw_t=-23.43 mid_n0=18228 mid_n1=6146 mid_mean0=262769 mid_mean1=263748 mid_diff=-979.5 mid_t=-341.12
+  block_end=950000 raw_mean0=266181 raw_mean1=267532 raw_diff=-1352 raw_t=-22.45 mid_n0=18013 mid_n1=4397 mid_mean0=262831 mid_mean1=263772 mid_diff=-940.5 mid_t=-326.25
+  block_end=1000000 raw_mean0=266127 raw_mean1=267477 raw_diff=-1351 raw_t=-23.02 mid_n0=18126 mid_n1=5524 mid_mean0=262779 mid_mean1=263759 mid_diff=-980.0 mid_t=-345.07
+control=planted-leak fraction=0.005 planted_ns=1314 max_abs_t=1631.69 verdict=detected
+result=FAIL worst_real_abs_t=82.34 control_abs_t=1631.69
+rc=1 end 2026-10-10T21:12:00Z temp 59887

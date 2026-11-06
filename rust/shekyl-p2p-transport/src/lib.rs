@@ -14,7 +14,6 @@
 //! the Noise layer's public record path. The D11 fuzz targets call those
 //! same methods. This crate stays the Noise layer.
 
-mod aead;
 mod channel;
 mod noise;
 mod prefix;
@@ -30,8 +29,7 @@ pub use noise::{
     PROTOCOL_NAME,
 };
 pub use prefix::{
-    prefix_for, NetworkId, MAINNET_PREFIX, PREFIX_LEN, STAGENET_PREFIX, TESTNET_PREFIX,
-    WIRE_PREFIX_DST,
+    network_id_from_genesis, prefix_for, NetworkId, NETWORK_ID_DST, PREFIX_LEN, WIRE_PREFIX_DST,
 };
 
 /// Wire size of the initiator's first flight, prefix included.

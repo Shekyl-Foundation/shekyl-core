@@ -19,11 +19,12 @@ use shekyl_p2p_transport::{
     prefix_for, Established, Initiator, Responder, SendHalf, MESSAGE1_LEN, MESSAGE2_LEN, PREFIX_LEN,
 };
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick, WakeWait};
-use shekyl_transport_layer::{CloseKind, LinkDirection, MessageClass};
+use shekyl_transport_layer::{LinkDirection, MessageClass};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::seam::SeamRecv;
+use crate::stamping::Observed;
 use crate::HandshakeTally;
 
 /// A measured span, in nanoseconds. One field on the line that owns the
@@ -52,18 +53,25 @@ pub(crate) async fn noise_handshake<C>(
     tally: &Arc<HandshakeTally>,
     setup: &mut Option<tokio::sync::oneshot::Sender<Setup>>,
     conn: u64,
-) -> Result<SeamRecv, CloseKind>
+) -> Result<SeamRecv, Observed>
 where
     C: Clock + Clone + Send + 'static,
 {
     let owner = engine
         .register(OwnerClass::Transport)
-        .map_err(|_| CloseKind::TransportHandshakeFailed)?;
+        .map_err(|_| Observed::HandshakeOwnFailure)?;
     let now = owner.clock().now();
     let deadline = Tick::new(now.get().saturating_add(handshake_within.get()));
     owner
         .arm(deadline)
-        .map_err(|_| CloseKind::TransportHandshakeFailed)?;
+        .map_err(|_| Observed::HandshakeOwnFailure)?;
+    tracing::debug!(
+        conn,
+        owner = ?owner.id(),
+        armed_at = now.get(),
+        deadline = deadline.get(),
+        "clearnet handshake armed"
+    );
     let fired = Arc::new(AtomicBool::new(false));
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let mut prefix = [0u8; PREFIX_LEN];
@@ -74,7 +82,7 @@ where
     }
     if prefix != prefix_for(network_id) {
         ignore(owner.deregister());
-        return Err(CloseKind::PrefixMismatch);
+        return Err(Observed::PrefixMismatch);
     }
     let mut message1 = vec![0u8; MESSAGE1_LEN];
     if let Err(kind) = read_or_wake(read, &mut message1, &mut wake, &fired, conn).await {
@@ -85,7 +93,7 @@ where
     if fired.load(Ordering::Acquire) {
         tally.skip();
         ignore(owner.deregister());
-        return Err(CloseKind::TransportTimeout);
+        return Err(Observed::HandshakeDeadline);
     }
     tally.queue();
     let queued = Instant::now();
@@ -111,10 +119,9 @@ where
     ignore(owner.deregister());
     let (send, recv, flight, spans) = match job {
         Ok(Ok(done)) if !fired.load(Ordering::Acquire) => done,
-        Ok(Ok(_) | Err(SkipOrFail::Skipped)) => return Err(CloseKind::TransportTimeout),
-        Ok(Err(SkipOrFail::Failed)) | Err(_) => {
-            return Err(CloseKind::TransportHandshakeFailed);
-        }
+        Ok(Ok(_) | Err(SkipOrFail::Skipped)) => return Err(Observed::HandshakeDeadline),
+        Ok(Err(SkipOrFail::Unverified)) => return Err(Observed::HandshakeUnverified),
+        Ok(Err(SkipOrFail::Own)) | Err(_) => return Err(Observed::HandshakeOwnFailure),
     };
     tracing::info!(
         conn,
@@ -123,10 +130,10 @@ where
         "clearnet responder handshake computed"
     );
     let Some(setup) = setup.take() else {
-        return Err(CloseKind::LocalClose);
+        return Err(Observed::OwnFailure);
     };
     if setup.send(Setup::Noise { flight, send }).is_err() {
-        return Err(CloseKind::LocalClose);
+        return Err(Observed::OwnFailure);
     }
     Ok(recv)
 }
@@ -139,18 +146,25 @@ pub(crate) async fn initiator_handshake<C>(
     handshake_within: Tick,
     tally: &Arc<HandshakeTally>,
     conn: u64,
-) -> Result<(OwnedWriteHalf, SendHalf, SeamRecv), CloseKind>
+) -> Result<(OwnedWriteHalf, SendHalf, SeamRecv), Observed>
 where
     C: Clock + Clone + Send + 'static,
 {
     let owner = engine
         .register(OwnerClass::Transport)
-        .map_err(|_| CloseKind::TransportHandshakeFailed)?;
+        .map_err(|_| Observed::HandshakeOwnFailure)?;
     let now = owner.clock().now();
     let deadline = Tick::new(now.get().saturating_add(handshake_within.get()));
     owner
         .arm(deadline)
-        .map_err(|_| CloseKind::TransportHandshakeFailed)?;
+        .map_err(|_| Observed::HandshakeOwnFailure)?;
+    tracing::debug!(
+        conn,
+        owner = ?owner.id(),
+        armed_at = now.get(),
+        deadline = deadline.get(),
+        "clearnet handshake armed"
+    );
     let fired = Arc::new(AtomicBool::new(false));
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     tally.queue();
@@ -167,18 +181,18 @@ where
         Ok(Ok(_) | Err(SkipOrFail::Skipped)) => {
             ignore(owner.deregister());
             drop(write.shutdown().await);
-            return Err(CloseKind::TransportTimeout);
+            return Err(Observed::HandshakeDeadline);
         }
-        Ok(Err(SkipOrFail::Failed)) => {
+        Ok(Err(SkipOrFail::Unverified | SkipOrFail::Own)) => {
             ignore(owner.deregister());
             drop(write.shutdown().await);
-            return Err(CloseKind::TransportHandshakeFailed);
+            return Err(Observed::HandshakeOwnFailure);
         }
         Err(_) => {
             ignore(owner.deregister());
             tally.dequeue();
             drop(write.shutdown().await);
-            return Err(CloseKind::TransportHandshakeFailed);
+            return Err(Observed::HandshakeOwnFailure);
         }
     };
     let mut flight = Vec::with_capacity(PREFIX_LEN + message1.len());
@@ -201,9 +215,9 @@ where
         ignore(owner.deregister());
         drop(write.shutdown().await);
         return Err(if fired.load(Ordering::Acquire) {
-            CloseKind::TransportTimeout
+            Observed::HandshakeDeadline
         } else {
-            CloseKind::TransportHandshakeFailed
+            Observed::HandshakeBroken
         });
     }
     tracing::info!(
@@ -223,7 +237,7 @@ where
     if prefix != prefix_for(&network_id) {
         ignore(owner.deregister());
         drop(write.shutdown().await);
-        return Err(CloseKind::PrefixMismatch);
+        return Err(Observed::PrefixMismatch);
     }
     let mut message2 = vec![0u8; MESSAGE2_LEN];
     if let Err(kind) = read_or_wake(read, &mut message2, &mut wake, &fired, conn).await {
@@ -236,7 +250,7 @@ where
         tally.skip();
         ignore(owner.deregister());
         drop(write.shutdown().await);
-        return Err(CloseKind::TransportTimeout);
+        return Err(Observed::HandshakeDeadline);
     }
     tally.queue();
     let tally_job = Arc::clone(tally);
@@ -250,11 +264,15 @@ where
         Ok(Ok(done)) if !fired.load(Ordering::Acquire) => done,
         Ok(Ok(_) | Err(SkipOrFail::Skipped)) => {
             drop(write.shutdown().await);
-            return Err(CloseKind::TransportTimeout);
+            return Err(Observed::HandshakeDeadline);
         }
-        Ok(Err(SkipOrFail::Failed)) | Err(_) => {
+        Ok(Err(SkipOrFail::Unverified)) => {
             drop(write.shutdown().await);
-            return Err(CloseKind::TransportHandshakeFailed);
+            return Err(Observed::HandshakeUnverified);
+        }
+        Ok(Err(SkipOrFail::Own)) | Err(_) => {
+            drop(write.shutdown().await);
+            return Err(Observed::HandshakeOwnFailure);
         }
     };
     Ok((write, send, recv))
@@ -292,15 +310,18 @@ fn ignore<E>(result: Result<(), E>) {
     if let Err(_err) = result {}
 }
 
-fn note_skip(tally: &HandshakeTally, kind: CloseKind) {
-    if kind == CloseKind::TransportTimeout {
+fn note_skip(tally: &HandshakeTally, observed: Observed) {
+    if observed == Observed::HandshakeDeadline {
         tally.skip();
     }
 }
 
+/// Why a handshake job did not finish: the deadline had already fired, the
+/// peer's message did not verify, or this node's own step failed.
 enum SkipOrFail {
     Skipped,
-    Failed,
+    Unverified,
+    Own,
 }
 
 fn handshake_job(
@@ -320,8 +341,8 @@ fn handshake_job(
     let result = (|| {
         let ready = Responder::new(&network_id)
             .read_message1(message1)
-            .map_err(|_| SkipOrFail::Failed)?;
-        let (established, message2) = ready.write_message2().map_err(|_| SkipOrFail::Failed)?;
+            .map_err(|_| SkipOrFail::Unverified)?;
+        let (established, message2) = ready.write_message2().map_err(|_| SkipOrFail::Own)?;
         Ok((established, message2))
     })();
     tally.dequeue();
@@ -379,7 +400,7 @@ fn initiator_job(
         }
         Err(_) => {
             tally.dequeue();
-            Err(SkipOrFail::Failed)
+            Err(SkipOrFail::Own)
         }
     }
 }
@@ -397,7 +418,7 @@ fn finish_initiator(
     }
     let established = initiator
         .read_message2(message2)
-        .map_err(|_| SkipOrFail::Failed);
+        .map_err(|_| SkipOrFail::Unverified);
     tally.dequeue();
     let established = established?;
     tally.compute();
@@ -437,7 +458,7 @@ async fn read_or_wake<C: Clock>(
     wake: &mut Pin<&mut WakeWait<'_, C>>,
     fired: &AtomicBool,
     conn: u64,
-) -> Result<(), CloseKind> {
+) -> Result<(), Observed> {
     let gate = node_gate();
     tokio::select! {
         biased;
@@ -447,7 +468,7 @@ async fn read_or_wake<C: Clock>(
                 Ok(_) | Err(_) => {}
             }
             gate.leave(LinkDirection::Down, conn);
-            Err(CloseKind::TransportTimeout)
+            Err(Observed::HandshakeDeadline)
         }
         result = read_budgeted(read, buf, conn) => result,
     }
@@ -459,7 +480,7 @@ async fn read_budgeted(
     read: &mut OwnedReadHalf,
     buf: &mut [u8],
     conn: u64,
-) -> Result<(), CloseKind> {
+) -> Result<(), Observed> {
     let gate = node_gate();
     let mut filled = 0usize;
     while filled < buf.len() {
@@ -479,7 +500,7 @@ async fn read_budgeted(
         let end = filled + grant.min(buf.len() - filled);
         if read.read_exact(&mut buf[filled..end]).await.is_err() {
             gate.refund(LinkDirection::Down, conn, grant as u64, true);
-            return Err(CloseKind::TransportHandshakeFailed);
+            return Err(Observed::HandshakeBroken);
         }
         let got = end - filled;
         if got < grant {

@@ -1,0 +1,22 @@
+(* Copyright (c) 2026, The Shekyl Foundation
+ *
+ * All rights reserved.
+ * BSD-3-Clause
+ *
+ * EncryptAndHash and DecryptAndHash, as one letfun each. They abbreviate
+ * `aead` then `mixh`, which lib/noise.pvl declares. NNhfs loads this file
+ * after lib/noise.pvl and lib/broken.pvl.
+ *
+ * hybridXK does not load it. A letfun is a function the attacker can
+ * apply, and hybridXK's pattern writes `aead` and `mixh` itself rather
+ * than calling these names.
+ *)
+
+letfun eah(k: key, n: bitstring, h: bitstring, m: bitstring) =
+  let ct = aead(k, n, h, m) in (ct, mixh(h, ct)).
+
+(* DecryptAndHash: the plaintext and h'. Fails as `adec` fails, so a
+   `let (m, h') = dah(...) in P else Q` takes Q on a ciphertext that does not
+   open under this key, nonce and transcript. *)
+letfun dah(k: key, n: bitstring, h: bitstring, ct: bitstring) =
+  let m = adec(k, n, h, ct) in (m, mixh(h, ct)).

@@ -1,0 +1,114 @@
+head ba46774463f254d5774451eac33a1a823c60b944
+binary_sha256 735105f404999f4309b0f9a85a2702e40752c4bd62f1b853904b9c6350211600
+rustc rustc 1.94.0 (4a4ef493e 2026-03-02)
+kernel 7.0.0-1020-raspi
+== conditions at start
+time 2026-10-11T00:22:41Z
+load 3.93 2.29 1.11
+governor ondemand
+cur_freq 1800000
+temp_millic 59887
+vcgencmd_get_throttled: Can't open device file: /dev/vcio
+rpi_volt_in0_lcrit_alarm 0 (rpi_volt)
+total_trans 5029725
+time_in_state: 600000 101038014;700000 3661952;800000 494485;900000 268886;1000000 141162;1100000 112560;1200000 220294;1300000 164423;1400000 123943;1500000 130489;1600000 108090;1700000 95810;1800000 7560617;
+== run
+RT-P4 ML-KEM-768 decapsulation timing (fips203), inputs prepared before the loop
+arch=aarch64 os=linux samples_per_comparison=1000000 calibration=10000 crops=100 inputs=registered
+pass: |t| < 4.5 on every real comparison; null comparisons: |t| < 4.5; control: |t| > 10
+  quantile=1 class0=262759 class1=262758 diff=1
+  quantile=5 class0=262851 class1=262851 diff=0
+  quantile=10 class0=262889 class1=262889 diff=0
+  quantile=25 class0=262999 class1=262999 diff=0
+  quantile=50 class0=263222 class1=263222 diff=0
+  quantile=75 class0=269907 class1=269925 diff=-18
+  quantile=90 class0=280869 class1=280925 diff=-56
+  quantile=95 class0=281833 class1=281851 diff=-18
+  quantile=99 class0=284444 class1=284500 diff=-56
+  crop=raw n0=499545 n1=500455 mean0=266663.7 mean1=266683.5 diff=-19.7 t=-1.33
+  max_at_crop=raw
+comparison=fixed-vs-valid max_abs_t=1.33 median_ns=263221 n0=499545 n1=500455 verdict=no-evidence
+  quantile=1 class0=262851 class1=262851 diff=0
+  quantile=5 class0=262962 class1=262962 diff=0
+  quantile=10 class0=263055 class1=263055 diff=0
+  quantile=25 class0=263259 class1=263259 diff=0
+  quantile=50 class0=263647 class1=263647 diff=0
+  quantile=75 class0=270258 class1=270222 diff=36
+  quantile=90 class0=281203 class1=281128 diff=75
+  quantile=95 class0=282333 class1=282314 diff=19
+  quantile=99 class0=284388 class1=284407 diff=-19
+  crop=raw n0=499434 n1=500566 mean0=266958.7 mean1=266947.3 diff=11.4 t=0.79
+  max_at_crop=5 cutoff=263277 n0=128904 n1=129154 diff=0.9 t=1.89
+comparison=fixed-vs-invalid max_abs_t=1.89 median_ns=263536 n0=499434 n1=500566 verdict=no-evidence
+  quantile=1 class0=262036 class1=262036 diff=0
+  quantile=5 class0=262129 class1=262129 diff=0
+  quantile=10 class0=262184 class1=262184 diff=0
+  quantile=25 class0=262277 class1=262277 diff=0
+  quantile=50 class0=262481 class1=262481 diff=0
+  quantile=75 class0=269370 class1=269370 diff=0
+  quantile=90 class0=280221 class1=280184 diff=37
+  quantile=95 class0=281536 class1=281536 diff=0
+  quantile=99 class0=283611 class1=283870 diff=-259
+  crop=raw n0=498225 n1=501775 mean0=265966.2 mean1=265967.1 diff=-0.8 t=-0.06
+  max_at_crop=10 cutoff=262648 n0=283347 n1=284884 diff=1.1 t=3.00
+comparison=fixed-vs-bitflip max_abs_t=3.00 median_ns=262574 n0=498225 n1=501775 verdict=no-evidence
+  quantile=1 class0=262018 class1=262018 diff=0
+  quantile=5 class0=262129 class1=262129 diff=0
+  quantile=10 class0=262184 class1=262184 diff=0
+  quantile=25 class0=262277 class1=262277 diff=0
+  quantile=50 class0=262481 class1=262481 diff=0
+  quantile=75 class0=269388 class1=269388 diff=0
+  quantile=90 class0=280259 class1=280259 diff=0
+  quantile=95 class0=281573 class1=281573 diff=0
+  quantile=99 class0=283925 class1=284111 diff=-186
+  crop=raw n0=500011 n1=499989 mean0=265985.0 mean1=265991.8 diff=-6.8 t=-0.46
+  max_at_crop=13 cutoff=262888 n0=311383 n1=311437 diff=-0.8 t=-1.65
+comparison=valid-vs-invalid max_abs_t=1.65 median_ns=262518 n0=500011 n1=499989 verdict=no-evidence
+  quantile=1 class0=262037 class1=262037 diff=0
+  quantile=5 class0=262129 class1=262129 diff=0
+  quantile=10 class0=262184 class1=262184 diff=0
+  quantile=25 class0=262277 class1=262277 diff=0
+  quantile=50 class0=262480 class1=262480 diff=0
+  quantile=75 class0=269351 class1=269370 diff=-19
+  quantile=90 class0=280055 class1=280129 diff=-74
+  quantile=95 class0=281499 class1=281499 diff=0
+  quantile=99 class0=283758 class1=283425 diff=333
+  crop=raw n0=500041 n1=499959 mean0=265929.8 mean1=265939.9 diff=-10.1 t=-0.70
+  max_at_crop=79 cutoff=284369 n0=495348 n1=495511 diff=-26.8 t=-2.27
+null=invalid-vs-invalid max_abs_t=2.27 median_ns=262499 n0=500041 n1=499959 verdict=no-evidence
+  quantile=1 class0=262036 class1=262036 diff=0
+  quantile=5 class0=262129 class1=262129 diff=0
+  quantile=10 class0=262184 class1=262184 diff=0
+  quantile=25 class0=262277 class1=262277 diff=0
+  quantile=50 class0=262481 class1=262481 diff=0
+  quantile=75 class0=269333 class1=269388 diff=-55
+  quantile=90 class0=280165 class1=280222 diff=-57
+  quantile=95 class0=281518 class1=281518 diff=0
+  quantile=99 class0=283722 class1=283758 diff=-36
+  crop=raw n0=499595 n1=500405 mean0=265952.4 mean1=265978.7 diff=-26.2 t=-1.80
+  max_at_crop=42 cutoff=281351 n0=468093 n1=469020 diff=-34.3 t=-3.63
+null=valid-vs-valid max_abs_t=3.63 median_ns=262388 n0=499595 n1=500405 verdict=no-evidence
+  quantile=1 class0=261592 class1=262870 diff=-1278
+  quantile=5 class0=261777 class1=263055 diff=-1278
+  quantile=10 class0=261851 class1=263129 diff=-1278
+  quantile=25 class0=262000 class1=263277 diff=-1277
+  quantile=50 class0=262333 class1=263610 diff=-1277
+  quantile=75 class0=269055 class1=270351 diff=-1296
+  quantile=90 class0=279832 class1=281147 diff=-1315
+  quantile=95 class0=281296 class1=282555 diff=-1259
+  quantile=99 class0=283573 class1=284814 diff=-1241
+  crop=raw n0=500576 n1=499424 mean0=265713.8 mean1=267004.6 diff=-1290.8 t=-87.50
+  max_at_crop=8 cutoff=263388 n0=340032 n1=170158 diff=-1012.9 t=-1520.00
+control=planted-leak fraction=0.005 planted_ns=1312 max_abs_t=1520.00 verdict=detected
+result=PASS worst_real_abs_t=3.00 worst_null_abs_t=3.63 control_abs_t=1520.00
+rc=0
+== conditions at end
+time 2026-10-11T01:01:40Z
+load 1.00 1.04 1.03
+governor ondemand
+cur_freq 1800000
+temp_millic 58426
+vcgencmd_get_throttled: Can't open device file: /dev/vcio
+rpi_volt_in0_lcrit_alarm 0 (rpi_volt)
+total_trans 5029846
+time_in_state: 600000 101038014;700000 3661952;800000 494485;900000 268886;1000000 141162;1100000 112560;1200000 220305;1300000 164425;1400000 123945;1500000 130504;1600000 108091;1700000 95811;1800000 7794515;

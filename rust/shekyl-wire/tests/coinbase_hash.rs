@@ -16,8 +16,8 @@
 //! `vectors/capture_coinbase.py`. Regenerate the JSON and the `*.block` blobs
 //! together; nothing here is hand-copied, so the vectors can't drift out of sync.
 //!
-//! Genesis (h0) is deterministic and equals `mining_parity`'s mainnet genesis
-//! id (CI-enforced below); h1/h2 are mined regtest blocks.
+//! Genesis (h0) is deterministic and equals regtest's genesis in the network
+//! table (enforced below); h1/h2 are mined regtest blocks.
 //!
 //! Empty-set invariant: every captured height (no pass records yet) must carry
 //! `empty_attestation_root()` — live-derived from `shekyl-archival-retention`, not
@@ -31,20 +31,20 @@
 //! `regtest_mining_fixture_is_in_the_current_address_encoding` below, not asserted
 //! here: this sentence was true when written, went false when the address encoding
 //! gained `msg_sign_pk`, and no test noticed for as long as none of them decoded
-//! the file. Note h0 **is** the mainnet genesis
-//! (regtest shares `GENESIS_TX`), so any genesis re-pin requires re-capturing this
-//! corpus.
+//! the file. Note h0 **is** regtest's genesis, so a regtest genesis re-pin
+//! requires re-capturing this corpus.
 
 use shekyl_archival_retention::empty_attestation_root;
 use shekyl_types::AttestationRoot;
 use shekyl_wire::Block;
 
-/// Published mainnet genesis block id (`docs/GENESIS_ALLOCATIONS.md`,
-/// `mining_parity` frozen_id for MAINNET). h0 of this corpus must equal it:
-/// regtest shares mainnet `GENESIS_TX`, so the live-daemon capture and the C++
-/// `generate_genesis_block` path are two independent derivations of one id.
-const MAINNET_GENESIS_BLOCK_ID: &str =
-    "16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3";
+/// Regtest's genesis block id, from the network table (`shekyl-network`,
+/// `NETWORK_IDENTITY.md` NI-Q8). h0 of this corpus must equal it: the
+/// live-daemon capture and the genesis tool's rebuild (`geblock verify`) are
+/// two independent derivations of one id.
+fn regtest_genesis_block_id() -> String {
+    hex32(shekyl_address::Network::Regtest.genesis().hash())
+}
 
 fn hex32(bytes: impl AsRef<[u8]>) -> String {
     let mut s = String::with_capacity(64);
@@ -98,12 +98,13 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
             "height {height}: attestation_root must be empty_attestation_root(), not null_hash"
         );
         if height == 0 {
-            // Cross-anchor: daemon-captured h0 must equal the published mainnet
-            // genesis id that mining_parity freezes independently via C++.
+            // Cross-anchor: daemon-captured h0 must equal regtest's genesis
+            // in the network table.
             assert_eq!(
-                block_hash, MAINNET_GENESIS_BLOCK_ID,
-                "height 0 block_hash must equal the published mainnet genesis id \
-                 (mining_parity MAINNET frozen_id / GENESIS_ALLOCATIONS.md)"
+                block_hash,
+                regtest_genesis_block_id(),
+                "height 0 block_hash must equal regtest's genesis id in the network table \
+                 (GENESIS_ALLOCATIONS.md)"
             );
         }
     }
@@ -117,8 +118,8 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
 /// daemon is stricter on both counts — `construct_miner_tx`
 /// (`src/cryptonote_core/cryptonote_tx_utils.cpp:183`) refuses a miner address
 /// whose PQC public key is empty ("v3 requires per-output KEM encapsulation")
-/// and then checks its exact length, and the FAKECHAIN daemon parses the
-/// Mainnet HRP because fakechain mirrors Mainnet address encoding.
+/// and then checks its exact length, and the regtest daemon parses regtest's
+/// own prefixes.
 ///
 /// So a fixture could satisfy a bare `decode` and still make `capture_coinbase.py`
 /// fail — the assertion would have been weaker than the guarantee it advertised,
@@ -126,8 +127,8 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
 fn accept_mining_recipient(encoded: &str) -> Result<(), String> {
     use shekyl_address::{Network, ShekylAddress};
 
-    let addr = ShekylAddress::decode_for_network(encoded, Network::Mainnet)
-        .map_err(|e| format!("does not decode as a Mainnet address: {e:?}"))?;
+    let addr = ShekylAddress::decode_for_network(encoded, Network::Regtest)
+        .map_err(|e| format!("does not decode as a regtest address: {e:?}"))?;
     if !addr.has_pqc_segment() {
         return Err(
             "decodes, but carries no PQC segment — `construct_miner_tx` \
@@ -163,7 +164,7 @@ fn accept_mining_recipient(encoded: &str) -> Result<(), String> {
 #[test]
 fn regtest_mining_fixture_is_in_the_current_address_encoding() {
     use shekyl_address::Network;
-    use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
+    use shekyl_crypto_pq::account::account_from_seed;
 
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("vectors/regtest_mining_recipients.json"))
@@ -185,10 +186,10 @@ fn regtest_mining_fixture_is_in_the_current_address_encoding() {
     // satisfy every check below while the documented command regenerated
     // something else. The seed is the emitter's; if the two ever diverge this
     // assertion fails loudly rather than the corpus drifting.
-    let (_seed, blob) = generate_account_from_raw_seed(&[0x11u8; 32], DerivationNetwork::Fakechain)
-        .expect("derive fakechain account");
+    let (_seed, blob) =
+        account_from_seed(&[0x11u8; 32], Network::Regtest).expect("derive regtest account");
     let emitted = blob
-        .to_address(Network::Mainnet)
+        .to_address(Network::Regtest)
         .encode()
         .expect("encode address");
     assert_eq!(
@@ -222,7 +223,7 @@ fn regtest_mining_fixture_is_in_the_current_address_encoding() {
 #[test]
 fn the_mining_recipient_predicate_refuses_what_the_daemon_refuses() {
     use shekyl_address::{Network, ShekylAddress};
-    use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
+    use shekyl_crypto_pq::account::account_from_seed;
 
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("vectors/regtest_mining_recipients.json"))
@@ -253,9 +254,8 @@ fn the_mining_recipient_predicate_refuses_what_the_daemon_refuses() {
     assert!(err.contains("PQC segment"), "wrong refusal reason: {err}");
 
     // Wrong network: the same account encoded for Testnet. The HRP differs, so
-    // the FAKECHAIN daemon (which parses Mainnet HRPs) would not accept it.
-    let (_seed, blob) = generate_account_from_raw_seed(&[0x11u8; 32], DerivationNetwork::Fakechain)
-        .expect("derive account");
+    // the regtest daemon (which parses regtest's prefixes) would not accept it.
+    let (_seed, blob) = account_from_seed(&[0x11u8; 32], Network::Regtest).expect("derive account");
     let testnet = blob
         .to_address(Network::Testnet)
         .encode()
@@ -265,5 +265,5 @@ fn the_mining_recipient_predicate_refuses_what_the_daemon_refuses() {
         "precondition: a bare decode accepts any network's address"
     );
     let err = accept_mining_recipient(&testnet).expect_err("must be refused");
-    assert!(err.contains("Mainnet"), "wrong refusal reason: {err}");
+    assert!(err.contains("regtest"), "wrong refusal reason: {err}");
 }

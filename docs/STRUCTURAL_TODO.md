@@ -220,7 +220,7 @@ the narrow side:
 | --- | --- | --- |
 | `external/db_drivers/liblmdb/CMakeLists.txt:49` | `MDB_VL32` when `ARCH_WIDTH == 32` | **Consensus-adjacent storage.** Materially different blockchain-storage path, never exercised by any CI runner. Sync against live block data on any 32-bit target hits this code first. Delete with Chore #3. |
 | `src/crypto/slow-hash.c:374, 421` | SUPERSEDED 2026-09-15: file **DELETED** with Phase 4 CryptoNight removal | **CLOSED.** Consensus-adjacent 32-bit PoW fallback no longer exists. |
-| `src/blockchain_utilities/blockchain_import.cpp:64` | `#if ARCH_WIDTH != 32` branches default `db_batch_size` | Recoverability UX. 32-bit users bootstrapping hit an untested batch-size path; failure mode is silent (slow import, no crash). Delete with Chore #3. |
+| `src/blockchain_utilities/blockchain_import.cpp` | `#if ARCH_WIDTH != 32` branches default `db_batch_size` | Recoverability UX. 32-bit users bootstrapping hit an untested batch-size path; failure mode is silent (slow import, no crash). Delete with Chore #3. |
 | `CMakeLists.txt:1352` | `libatomic` link pulled on `Clang AND ARCH_WIDTH==32 AND !IOS AND !FREEBSD` | Build-only, untested. Delete with Chore #3 as dead scaffolding. |
 | `tests/hash/main.cpp` / `src/crypto/variant2_int_sqrt.h` | SUPERSEDED: CN variant-2 integer-sqrt test **DELETED** with the Phase 4 follow-on cleanup | **CLOSED.** No remaining inverted coverage of a deleted PoW helper. |
 | `contrib/depends/packages/{boost,openssl}.mk` | Separate `i686_mingw32` / `x86_64_mingw32` config variants | Build-only; parallel config paths, one CI runner. Delete the `i686_mingw32` variants under Chore #3. |
@@ -298,7 +298,7 @@ question.
     `tests/hash/main.cpp` was **DELETED** with the Phase 4 follow-on
     (the remaining hash tests are keccak / tree-hash, not CryptoNight).
   - Delete the `#if ARCH_WIDTH != 32` default-`db_batch_size`
-    branch in `src/blockchain_utilities/blockchain_import.cpp:64`
+    branch in `src/blockchain_utilities/blockchain_import.cpp`
     (collapse to the 64-bit default).
   - Delete the Clang + `ARCH_WIDTH==32` `libatomic` pull at
     `CMakeLists.txt` (L1357–L1360 on current `dev`; line numbers
@@ -343,8 +343,10 @@ question.
   A systematic pass over every `#if`, `#ifdef`, CMake `if()`, and
   Makefile conditional that gates on a platform predicate that
   *still exists* after Chore #3 — principally `__APPLE__`,
-  `__ANDROID__`, `_MSC_VER`, `__FreeBSD__`, `BSD`, `__linux__`,
+  `_MSC_VER`, `__FreeBSD__`, `BSD`, `__linux__`,
   plus any residual host-triple patterns in `contrib/depends/`.
+  `__ANDROID__` does not: the Android build target is deleted
+  (2026-10-19).
   Produces a coverage report with three columns — site, claimed
   platform, CI-covered y/n — and classifies each row as **delete**
   (platform not actually claimed), **CI add** (claimed and about
@@ -571,12 +573,9 @@ asserted a ring component that does not exist.
 The pinned trigger was `wallet2.cpp` retirement; `wallet2` was **deleted**
 outright in the Phase-5 lane (`src/wallet/` is gone), firing it in V3.0.
 
-**Still owed:** `fill_construct_tx_rct_stub`, the last legacy construction
-stand-in. It is a **deletion** target, not a rename target, so the sweep left
-its name alone — it is now the only `Rct`-spelled identifier deliberately
-surviving under `src/fcmp/`. Its sibling `genRctFcmpPlusPlus` was deleted
-2026-08-22 (it had no caller); this one is blocked on the C++ test-construction
-harness that still reaches it. Tracked in `docs/FOLLOWUPS.md` (V3.0).
+**Closed 2026-10-01:** `fill_construct_tx_rct_stub` has no remaining symbol.
+It was a deletion target, not a rename target. Its sibling
+`genRctFcmpPlusPlus` was deleted 2026-08-22. Neither is under `src/fcmp/`.
 
 **Deception observed (April 2026):** during the `chore/cxx-logging-
 consolidation` work we nearly shipped a `make ringct` comment in the

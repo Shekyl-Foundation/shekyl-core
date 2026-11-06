@@ -6,16 +6,15 @@
 //! Deterministic epoch challenge replay per
 //! [`ARCHIVAL_RETENTION_GATE2.md`](../../docs/design/ARCHIVAL_RETENTION_GATE2.md) §3.3–§3.4.
 //!
-//! **Mechanism status (2026-08-11, corrected 2026-08-23):** the fire-beacon
+//! **Mechanism status (2026-08-11, corrected 2026-10-10):** the fire-beacon
 //! shape this module implements (`H_seal`/`H_fire`, one challenge per
-//! pair-epoch) is **superseded by derived assignment** for *deciding which
-//! pairs get challenged* — `ARCHIVAL_CHALLENGE_MECHANISM.md` §2, implemented
-//! in [`crate::challenge_assignment`]: `assignment(h)` seeds from
-//! `block_hash(h−1)`, issues `CHALLENGES_PER_PAIR_PER_EPOCH = 3` per
-//! pair-epoch, and needs no seal lag. This module is **not dead code**: it is
-//! the live serve-credit admission path (through `shekyl-ffi` into
-//! `blockchain.cpp`'s serve-credit gate and `db_lmdb.cpp`'s slash-eligibility
-//! consumer).
+//! pair-epoch) is superseded by the secret draw
+//! (`ARCHIVAL_SERVE_CREDIT_SPEC.md`). The public urn that was the interim
+//! assignment is deleted. This module is still the live serve-credit
+//! admission path (through `shekyl-ffi` into `blockchain.cpp`'s
+//! serve-credit gate and `db_lmdb.cpp`'s slash-eligibility consumer) until
+//! that draw's admission replaces it. Receipt signing under scheme 3 is
+//! the FN-DSA lane's increment, not this deletion.
 //!
 //! # The leaf-opening half IS deletion-bound — `RF-D8` (i) RETRACTED 2026-08-26
 //!
@@ -78,12 +77,6 @@ use crate::hash::cshake256_32;
 /// migrate; the bump exists so **one label never names two functions**, which is
 /// the failure a second implementation would hit and not notice.
 pub const CHALLENGE_LEAF_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-challenge-leaf-v2";
-
-/// The retired `-v1` label, kept **only** so the negative control in this
-/// module's tests can assert the new derivation does not reproduce the old
-/// one. It has no caller outside those tests and must never acquire one.
-#[cfg(test)]
-const CHALLENGE_LEAF_CUSTOMIZATION_V1_RETIRED: &[u8] = b"shekyl/archival-serve-challenge-leaf-v1";
 
 /// cSHAKE256 customization for fire-time beacon (§3.4).
 pub const CHALLENGE_FIRE_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-challenge-fire-v1";
@@ -292,41 +285,6 @@ mod tests {
         assert_eq!(
             challenge_leaf_index(&p, 9, 4, &h, SEGMENT_LEAF_COUNT),
             challenge_leaf_index(&p, 9, 4, &h, SEGMENT_LEAF_COUNT)
-        );
-    }
-
-    /// **The negative control on the domain separator.**
-    ///
-    /// A domain separator that ships is a consensus fact — it is the one
-    /// irreversible item in this round, and "it compiled and the tests passed"
-    /// cannot distinguish a correct derivation from a differently-wrong one.
-    /// So this asserts the new label does not reproduce the old one on the
-    /// same preimage: if someone reverts `-v2` to `-v1`, or a second
-    /// implementation keeps the retired label, this fails rather than
-    /// silently agreeing on a different function.
-    #[test]
-    fn the_v2_label_does_not_reproduce_the_retired_v1_derivation() {
-        let p = [0x33u8; 32];
-        let h = [0x77u8; 32];
-
-        let mut input = Vec::with_capacity(32 + 8 + 8 + 32);
-        input.extend_from_slice(&p);
-        input.extend_from_slice(&9u64.to_le_bytes());
-        input.extend_from_slice(&4u64.to_le_bytes());
-        input.extend_from_slice(&h);
-
-        let under_v2 = cshake256_32(CHALLENGE_LEAF_CUSTOMIZATION, &input);
-        let under_v1 = cshake256_32(CHALLENGE_LEAF_CUSTOMIZATION_V1_RETIRED, &input);
-
-        assert_ne!(
-            under_v2, under_v1,
-            "the -v2 label reproduced the -v1 derivation on the same preimage: the \
-             separator is not separating, so two implementations could disagree \
-             about which function a single label names"
-        );
-        assert_eq!(
-            CHALLENGE_LEAF_CUSTOMIZATION, b"shekyl/archival-serve-challenge-leaf-v2",
-            "the shipped label is a consensus fact; changing it is a re-pin, not an edit"
         );
     }
 

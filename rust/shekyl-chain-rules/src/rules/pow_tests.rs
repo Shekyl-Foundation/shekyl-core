@@ -12,10 +12,12 @@
 use super::*;
 use crate::fault::{FormAttempt, Retry};
 use crate::harness::fixture::{candidate_on, chain_of};
-use crate::harness::{assert_refused, expected_seed, judged, Faulted, MockChain, MockSubstrate};
+use crate::harness::{
+    assert_refused, expected_seed, expected_target, judged, Faulted, MockChain, MockSubstrate,
+};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
-use crate::validate::{form, validate};
+use crate::validate::{form, validate, FormClaims};
 use crate::verdict::ChainValid;
 use crate::view::AtHeight;
 use shekyl_difficulty::{check_hash, Difficulty, GENESIS_DIFFICULTY};
@@ -28,13 +30,24 @@ fn judge_with(
     attempt: FormAttempt,
 ) -> Result<Verdict<()>, Fault<core::convert::Infallible>> {
     let candidate = candidate_on(chain, Vec::new());
-    let formed = match form(candidate, &RuleSet::GENESIS, substrate, seed, attempt) {
+    let formed = match form(
+        candidate,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed,
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
+        substrate,
+        attempt,
+    ) {
         Ok(Ok(formed)) => formed,
         Ok(Err(refused)) => return Ok(Err(refused)),
         Err(Faulted) => unreachable!("the mock substrate never faults here"),
     };
     chain.with_view(|view| {
-        validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+        validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)
             .map(|v| v.map(|_valid: ChainValid<_>| ()))
     })
 }
@@ -114,9 +127,14 @@ fn cen_d2_the_longhash_is_computed_in_form_over_the_pow_blob_under_the_seed() {
     let expected_len = candidate.block.pow_blob().len() as u64;
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed,
+            target: expected_target(&chain, &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        seed,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -144,9 +162,14 @@ fn cen_d2_a_verifier_that_cannot_compute_is_a_fault_not_a_verdict() {
     };
     let result = form(
         candidate_on(&MockChain::default(), Vec::new()),
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: BlockHash::NULL,
+            target: expected_target(&MockChain::default(), &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        BlockHash::NULL,
         FormAttempt::FIRST,
     );
     assert!(matches!(result, Err(Faulted)), "unproven, not disproven");
@@ -180,8 +203,8 @@ fn cen_d3_the_seed_is_block_zero_through_the_first_epoch_and_lag() {
         );
         let seed = expected_seed(&chain);
         let at_seed_height = chain.with_view(|view| {
-            match crate::harness::infallible(view.block_at(BlockHeight::from_raw(seed_height))) {
-                AtHeight::Recorded(block) => block.hash,
+            match crate::harness::infallible(view.header_at(BlockHeight::from_raw(seed_height))) {
+                AtHeight::Recorded(record) => record.hash,
                 AtHeight::AboveTip => panic!("recorded"),
             }
         });
@@ -242,21 +265,21 @@ fn cen_d3_records_and_the_pow_rows_cover_on_a_passing_block() {
     let candidate = candidate_on(&chain, Vec::new());
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed,
+            target: expected_target(&chain, &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        seed,
         FormAttempt::FIRST,
     )
     .expect("no fault")
     .expect("passes");
     chain.with_view(|view| {
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("passes");
+        let valid =
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)).expect("passes");
         for row in [CenRow::D1, CenRow::D1b, CenRow::D2, CenRow::D3] {
             assert!(valid.coverage().contains(row), "{row}");
         }

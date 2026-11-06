@@ -123,9 +123,9 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
             root: fx.tree_root,
             tree_depth: fx.lmdb_depth,
         }),
-        fee_per_byte: 1,
-        fee_quantization_mask: 1,
-        weight_limit: 149_400,
+        fee_floor_window: Some(vec![1]),
+        pool_refuses_for_room: None,
+        weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT).unwrap(),
         // Reference age 6: ≥ FCMP_REFERENCE_BLOCK_MIN_AGE (5), well under
         // the max (100).
         chain_height: ChainCount::from_raw(fx.reference_height + 6),
@@ -137,9 +137,13 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
     }
 }
 
+/// The network these fixtures are signed and verified on: any id, the
+/// same on both sides (`NETWORK_IDENTITY.md` NI-Q4).
+const NETWORK: shekyl_network::NetworkId = shekyl_network::HARNESS_NETWORK_ID;
+
 fn verify(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyFailure> {
     DaemonTxVerifier
-        .verify(parsed, facts)
+        .verify(parsed, facts, &NETWORK)
         .map_err(|e| e.cause())
 }
 
@@ -330,6 +334,7 @@ fn build_funding_setup() -> FundingSetup {
         };
         let txs = [TxLeafInputs {
             is_miner: true,
+            tx_hash: None,
             leaf_entry_blob: Some(blob.as_slice()),
             outputs: outputs.as_slice(),
         }];
@@ -368,6 +373,12 @@ fn build_funding_setup() -> FundingSetup {
         output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
         commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(spent.commitment),
     };
+    // The wallet tells its tree which output is its own before it asks for
+    // the path, as the engine's curve-tree actor does: assembly reads what
+    // was captured for a registered output and has no other route.
+    client
+        .sync_owned(&[(target.gindex, target.output_key)])
+        .expect("register the spent output");
     let path = client
         .assemble_path(&target, &reference)
         .expect("assemble membership path");
@@ -474,6 +485,7 @@ fn build_fixture() -> SpendFixture {
         &submit_fixtures::conforming_pqc_extra(2),
     );
     let signed = sign_transaction(
+        &NETWORK,
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
         &outputs,
@@ -515,7 +527,8 @@ fn build_fixture() -> SpendFixture {
         }],
         fcmp_layers: signed.tree_depth,
     };
-    let payload_hashes = phase1_payload_hashes(&wire_input).expect("phase-1 payload hashes");
+    let payload_hashes =
+        phase1_payload_hashes(&wire_input, &NETWORK).expect("phase-1 payload hashes");
     let pqc_auths = sign_pqc_auths(&payload_hashes, std::slice::from_ref(&spend_input))
         .expect("phase-2 PQC auth signing");
     wire_input.pqc_auths = pqc_auths;
@@ -557,7 +570,7 @@ struct BondFixture {
 static BOND_FIXTURE: OnceLock<BondFixture> = OnceLock::new();
 
 fn bond_fixture() -> &'static BondFixture {
-    BOND_FIXTURE.get_or_init(build_bond_fixture)
+    BOND_FIXTURE.get_or_init(|| build_bond_fixture(None))
 }
 
 /// Facts under which the bond fixture is fully admissible: the spend
@@ -577,10 +590,14 @@ fn bond_mutated(f: impl FnOnce(&mut Transaction)) -> ParsedSubmission {
     reparse(&tx)
 }
 
-fn build_bond_fixture() -> BondFixture {
+/// Build the bond fixture. `receipt` replaces the receipt key its
+/// JoinMarket commits; `None` commits the persona's own derived key, the
+/// valid post. A replacement is committed under the identity signature like
+/// any other field, so every other leg of the battery still holds.
+fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -> BondFixture {
     use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+    use shekyl_crypto_pq::account::Network;
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
     use shekyl_tx_builder::{sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra};
@@ -594,8 +611,7 @@ fn build_bond_fixture() -> BondFixture {
     // ── P identity + holdings (CompleteTree: floor = the flat constant) ──
     let p_keys = derive_archival_p_keys(
         &[0x5B; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
+        Network::Regtest,
         0,
     )
     .expect("derive archival P keys");
@@ -603,7 +619,7 @@ fn build_bond_fixture() -> BondFixture {
         kind: HoldingsKind::CompleteTree,
         shard_ids: ShardSet::empty(),
     };
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     assert!(
         floor > 0 && INPUT_AMOUNT > floor + FEE,
         "fixture funding covers the bond"
@@ -653,6 +669,8 @@ fn build_bond_fixture() -> BondFixture {
         p_canonical_id: shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey(&p_pubkey),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: bond_spend_pk.clone(),
+            receipt_sign_pk: receipt
+                .map_or_else(|| p_keys.receipt_sign_pk.to_receipt_sign_pk(), Clone::clone),
             endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
@@ -690,6 +708,7 @@ fn build_bond_fixture() -> BondFixture {
 
     // ── Prove: the bond credit rides as the sole output-side term ────────
     let signed = sign_transaction_with_terms(
+        &NETWORK,
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
         &outputs,
@@ -733,7 +752,8 @@ fn build_bond_fixture() -> BondFixture {
         ],
         fcmp_layers: signed.tree_depth,
     };
-    let payload_hashes = phase1_payload_hashes(&wire_input).expect("phase-1 payload hashes");
+    let payload_hashes =
+        phase1_payload_hashes(&wire_input, &NETWORK).expect("phase-1 payload hashes");
     assert_eq!(payload_hashes.len(), 2, "one hash per pqc_auths slot");
     let mut pqc_auths = sign_pqc_auths(&payload_hashes[..1], std::slice::from_ref(&spend_input))
         .expect("phase-2 PQC auth signing (funding slot)");
@@ -821,7 +841,7 @@ fn a_malformed_reject_names_its_leg() {
         base.commitments[0] = identity;
     });
     let err = DaemonTxVerifier
-        .verify(&parsed, &admitting_facts(fixture()))
+        .verify(&parsed, &admitting_facts(fixture()), &NETWORK)
         .expect_err("a trivial output commitment must be refused");
     assert_eq!(err.cause(), VerifyFailure::Malformed);
     assert!(
@@ -1048,9 +1068,9 @@ fn non_spend_kinds_refuse_loudly() {
         in_chain: None,
         key_image_conflicts: Vec::new(),
         reference: None,
-        fee_per_byte: 1,
-        fee_quantization_mask: 1,
-        weight_limit: 149_400,
+        fee_floor_window: Some(vec![1]),
+        pool_refuses_for_room: None,
+        weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT).unwrap(),
         chain_height: ChainCount::from_raw(200),
         bond_record_exists: None,
         bond_record_bonded_total: None,
@@ -1143,7 +1163,8 @@ fn bond_race_at_commit_classifies_double_spend_conflict() {
             .submit(&fx.hex, SubmitCaller::Owner)
             .expect("no engine fault"),
         SubmitVerdict::Rejected {
-            cause: shekyl_rpc_types::RejectCause::DoubleSpendConflict
+            cause: shekyl_rpc_types::RejectCause::DoubleSpendConflict,
+            row: None,
         },
         "a bond-post block landing during Phase C must classify DoubleSpendConflict"
     );
@@ -1167,6 +1188,33 @@ fn missing_bond_record_fact_is_a_shim_contract_fault() {
         "a bond-post snapshot without the BP3 fact must fault loudly"
     );
     assert_eq!(shim.commit_count(), 0, "no commit after a contract fault");
+}
+
+#[test]
+fn bond_receipt_key_that_is_not_a_key_is_rejected() {
+    // BP6, the submit battery's copy of CEN-J28: a JoinMarket whose
+    // receipt key does not parse as a scheme-3 key would be admitted,
+    // relayed, and make every block that includes it invalid. The fixture
+    // is built and signed whole around the all-zero key, so the identity
+    // signature, the proofs and every other BP leg hold and the refusal is
+    // the receipt-key check's alone: without it this post is `Ok`.
+    let fx = build_bond_fixture(Some(&shekyl_types::archival::ReceiptSignPk::from_bytes(
+        [0u8; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+    )));
+    assert_eq!(
+        verify(&fx.parsed, &bond_admitting_facts()),
+        Err(VerifyFailure::Malformed),
+        "a receipt key that is not a key must be Malformed (BP6)"
+    );
+    // Malformed, not the claim-slot conflict: the key is judged before the
+    // record fact is consulted.
+    let mut taken = bond_admitting_facts();
+    taken.bond_record_exists = Some(true);
+    assert_eq!(
+        verify(&fx.parsed, &taken),
+        Err(VerifyFailure::Malformed),
+        "the receipt key is judged before BP3"
+    );
 }
 
 #[test]
@@ -1242,7 +1290,7 @@ fn bond_spend_pk_swap_after_signing_is_rejected() {
     // the key-swap-at-join foreclosure (GENESIS_TX_WIRE_FORMAT.md, security-
     // critical) would rest on no test at all.
     let fx = bond_fixture();
-    let baseline = fx.parsed.tx.pqc_signing_payload_hashes();
+    let baseline = fx.parsed.tx.pqc_signing_payload_hashes(&NETWORK);
     let mut swapped = fx.parsed.tx.clone();
     for input in &mut swapped.prefix.inputs {
         if let shekyl_wire::transaction::Input::BondPost(bp) = input {
@@ -1254,7 +1302,7 @@ fn bond_spend_pk_swap_after_signing_is_rejected() {
             bond_spend_pk[0] ^= 0x01;
         }
     }
-    let moved = swapped.pqc_signing_payload_hashes();
+    let moved = swapped.pqc_signing_payload_hashes(&NETWORK);
     assert_eq!(baseline.len(), moved.len(), "slot count unchanged");
     assert_ne!(
         baseline[1], moved[1],
@@ -1479,7 +1527,7 @@ fn release_admitting_facts() -> SubmitFacts {
 
 fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     use shekyl_archival_bond_builder::{build_release_vin, verify_debit_funding};
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+    use shekyl_crypto_pq::account::Network;
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
     use shekyl_tx_builder::{sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra};
@@ -1492,18 +1540,19 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
 
     let p_keys = derive_archival_p_keys(
         &[0x5B; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
+        Network::Regtest,
         0,
     )
     .expect("derive archival P keys");
 
     // The record being exited holds the flat CompleteTree floor.
-    let record_bonded_total =
-        shekyl_archival_retention::bond_floor(&shekyl_archival_retention::HoldingsDescriptor {
+    let record_bonded_total = shekyl_archival_retention::bond_floor(
+        &shekyl_archival_retention::HoldingsDescriptor {
             kind: shekyl_archival_retention::HoldingsKind::CompleteTree,
             shard_ids: shekyl_archival_retention::ShardSet::empty(),
-        });
+        },
+        shekyl_archival_retention::archival_params(),
+    );
     assert!(record_bonded_total > 0, "the exited record is funded");
 
     let built = build_release_vin(p_keys.bond_post_keys(), record_bonded_total)
@@ -1583,6 +1632,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     .expect("prefix hash with the release input");
 
     let signed = sign_transaction_with_terms(
+        &NETWORK,
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
         &outputs,
@@ -1633,7 +1683,8 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
         ],
         fcmp_layers: signed.tree_depth,
     };
-    let payload_hashes = phase1_payload_hashes(&wire_input).expect("phase-1 payload hashes");
+    let payload_hashes =
+        phase1_payload_hashes(&wire_input, &NETWORK).expect("phase-1 payload hashes");
     let mut pqc_auths = sign_pqc_auths(&payload_hashes[..1], std::slice::from_ref(&spend_input))
         .expect("phase-2 PQC auth signing (funding slot)");
     let slot_sk = match auth_key {
@@ -2046,7 +2097,8 @@ fn a_forged_debit_signature_never_reaches_the_fact_gather() {
     assert_eq!(
         verdict,
         SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed
+            cause: RejectCause::Malformed,
+            row: None,
         },
         "a bond slot whose signature does not verify is malformed"
     );
@@ -2197,7 +2249,8 @@ fn a_malleated_funding_signature_never_reaches_the_fact_gather() {
     assert_eq!(
         verdict,
         SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed
+            cause: RejectCause::Malformed,
+            row: None,
         },
         "a slot whose signature does not verify is malformed"
     );
@@ -2233,7 +2286,8 @@ fn a_vin_the_static_guards_doom_never_reaches_the_fact_gather() {
     assert_eq!(
         verdict,
         SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed
+            cause: RejectCause::Malformed,
+            row: None,
         },
         "UB9's static guards refuse a nonzero bond_credit on a Release"
     );
@@ -2270,7 +2324,8 @@ fn a_valid_signature_by_the_wrong_key_still_reaches_the_gather() {
     assert_eq!(
         verdict,
         SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed
+            cause: RejectCause::Malformed,
+            row: None,
         },
         "UB3 refuses an identity-key debit"
     );
@@ -2327,7 +2382,8 @@ fn a_competing_release_that_exits_the_record_is_a_terminal_conflict() {
     assert_eq!(
         verdict,
         SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+            cause: RejectCause::DoubleSpendConflict,
+            row: None,
         },
         "an exit that consumed the balance is terminal for these bytes"
     );
@@ -2353,7 +2409,8 @@ fn a_balance_that_moved_under_the_debit_is_also_terminal() {
             .submit(&fx.hex, SubmitCaller::Owner)
             .expect("no engine fault"),
         SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+            cause: RejectCause::DoubleSpendConflict,
+            row: None,
         },
         "a debit that no longer matches the record's total is unconnectable"
     );
@@ -2380,7 +2437,8 @@ fn an_release_against_a_vanished_record_is_terminal_not_a_fault() {
             .submit(&fx.hex, SubmitCaller::Owner)
             .expect("absence must classify, not fault"),
         SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+            cause: RejectCause::DoubleSpendConflict,
+            row: None,
         },
         "a vanished record is a moved slot"
     );

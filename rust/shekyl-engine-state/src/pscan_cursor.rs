@@ -48,6 +48,11 @@ use crate::error::WalletLedgerError;
 /// task that writes it is not yet wired into the lifecycle).
 pub const PSCAN_CURSOR_VERSION: u32 = 2;
 
+/// Diagnostic name of this block. The outer [`crate::pscan_state::PScanState`]
+/// gate uses [`crate::pscan_state::PSCAN_STATE_BLOCK`]; a mismatch here is a
+/// different refusal and must not be reported as that file's format.
+pub const PSCAN_CURSOR_BLOCK: &str = "pscan_cursor";
+
 /// `P`'s single authoritative durable scan frontier (SP-2).
 ///
 /// Distinct from `BlockchainTip` by construction. The `version` is always
@@ -128,14 +133,14 @@ impl PScanCursor {
         // carries no framing, so a stale blob decoded under the current
         // declaration fails as corruption before any post-decode check can
         // name the version. The gate reads only the leading varint.
-        crate::version_gate::gate_leading_version(bytes, "pscan_cursor", PSCAN_CURSOR_VERSION)?;
+        crate::version_gate::gate_leading_version(bytes, PSCAN_CURSOR_BLOCK, PSCAN_CURSOR_VERSION)?;
         Ok(postcard::from_bytes(bytes)?)
     }
 
     /// Version gate. Called automatically by [`Self::from_postcard_bytes`];
     /// exposed so a future composite loader can fan out the same check.
     pub fn check_version(&self) -> Result<(), WalletLedgerError> {
-        crate::version_gate::gate_version(self.version, "pscan_cursor", PSCAN_CURSOR_VERSION)
+        crate::version_gate::gate_version(self.version, PSCAN_CURSOR_BLOCK, PSCAN_CURSOR_VERSION)
     }
 }
 
@@ -199,7 +204,7 @@ mod tests {
                 file,
                 binary,
             }) => {
-                assert_eq!(block, "pscan_cursor");
+                assert_eq!(block, PSCAN_CURSOR_BLOCK);
                 assert_eq!(file, PSCAN_CURSOR_VERSION + 1);
                 assert_eq!(binary, PSCAN_CURSOR_VERSION);
             }

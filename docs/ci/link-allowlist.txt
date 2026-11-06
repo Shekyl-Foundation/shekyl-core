@@ -27,3 +27,46 @@ docs/completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md:../../rust/shekyl-engine-core/s
 docs/FOLLOWUPS.md:rust/... # the followup entry describing this rot class quotes the broken pattern
 docs/FOLLOWUPS.md:docs/... # the followup entry describing this rot class quotes the broken pattern
 docs/FOLLOWUPS.md:../` # prose example of the fix idiom in the same followup entry
+docs/design/DAEMON_CONFIG_CUTOVER.md:../../src/rpc/core_rpc_server.cpp # deleted with the store flip; the rows record the pre-flip RPC server
+docs/design/DAEMON_RELAY_PRIVACY.md:../../src/rpc/daemon_submit_ffi.cpp # deleted with the store flip; §6 anchors the pre-flip submit path
+docs/design/RPC_CHANNEL.md:../../src/rpc/core_rpc_server.cpp # deleted with the store flip; the drift note cites the pre-flip listener
+
+# The p2p remnant cutover (2026-11-05, P2P_3_REMNANT_CUTOVER_BRIEF.md §3) deleted the C++ host; the dated rounds below cite it as it was.
+docs/design/DAEMON_CONFIG_CUTOVER_AUDIT.md:../../src/p2p/net_node.inl # dated audit (DC); cites the C++ host as of the audit; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/DAEMON_CONFIG_CUTOVER.md:../../rust/shekyl-daemon-rpc/src/ffi_exports.rs # DC rounds and census tables cite the C++ host and the pre-cutover FFI as of their ruling; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/DAEMON_CONFIG_CUTOVER.md:../../src/cryptonote_core/cryptonote_core.cpp # DC rounds and census tables cite the C++ host and the pre-cutover FFI as of their ruling; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/DAEMON_CONFIG_CUTOVER.md:../../src/daemon/daemon.cpp # DC rounds and census tables cite the C++ host and the pre-cutover FFI as of their ruling; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/DAEMON_CONFIG_CUTOVER.md:../../src/p2p/net_node.h # DC rounds and census tables cite the C++ host and the pre-cutover FFI as of their ruling; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/DAEMON_CONFIG_CUTOVER.md:../../src/p2p/net_node.inl # DC rounds and census tables cite the C++ host and the pre-cutover FFI as of their ruling; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/DAEMON_CONFIG_CUTOVER.md:../../src/rpc/core_rpc_ffi.cpp # DC rounds and census tables cite the C++ host and the pre-cutover FFI as of their ruling; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/DAEMON_RELAY_PRIVACY.md:../../rust/shekyl-ffi/src/relay_zone_ffi/tests.rs # relay rounds derive from the C++ relay path as of their ruling; the file was deleted 2026-11-05 by the p2p remnant cutover and the relay owner is shekyl-relay (rule 91)
+docs/design/DAEMON_RELAY_PRIVACY.md:../../src/cryptonote_core/cryptonote_core.cpp # relay rounds derive from the C++ relay path as of their ruling; the file was deleted 2026-11-05 by the p2p remnant cutover and the relay owner is shekyl-relay (rule 91)
+docs/design/DAEMON_RELAY_PRIVACY.md:../../src/cryptonote_protocol/cryptonote_protocol_defs.h # relay rounds derive from the C++ relay path as of their ruling; the file was deleted 2026-11-05 by the p2p remnant cutover and the relay owner is shekyl-relay (rule 91)
+docs/design/DAEMON_RELAY_PRIVACY.md:../../src/cryptonote_protocol/levin_notify.cpp # relay rounds derive from the C++ relay path as of their ruling; the file was deleted 2026-11-05 by the p2p remnant cutover and the relay owner is shekyl-relay (rule 91)
+docs/design/DAEMON_RELAY_PRIVACY.md:../../src/p2p/net_node.h # relay rounds derive from the C++ relay path as of their ruling; the file was deleted 2026-11-05 by the p2p remnant cutover and the relay owner is shekyl-relay (rule 91)
+docs/design/DAEMON_RELAY_PRIVACY.md:../../src/p2p/net_node.inl # relay rounds derive from the C++ relay path as of their ruling; the file was deleted 2026-11-05 by the p2p remnant cutover and the relay owner is shekyl-relay (rule 91)
+docs/design/DAEMON_RELAY_PRIVACY.md:../../tests/unit_tests/levin.cpp # relay rounds derive from the C++ relay path as of their ruling; the file was deleted 2026-11-05 by the p2p remnant cutover and the relay owner is shekyl-relay (rule 91)
+docs/design/LV2_PORTABLE_STORAGE.md:../../contrib/epee/include/net/net_utils_base.h # LV-2b names the C++ maps it ported; deleted 2026-11-05 by the p2p remnant cutover, shekyl-levin is the one reader and writer (rule 91)
+docs/design/LV2_PORTABLE_STORAGE.md:../../src/cryptonote_protocol/cryptonote_protocol_defs.h # LV-2b names the C++ maps it ported; deleted 2026-11-05 by the p2p remnant cutover, shekyl-levin is the one reader and writer (rule 91)
+docs/design/LV2_PORTABLE_STORAGE.md:../../src/p2p/p2p_protocol_defs.h # LV-2b names the C++ maps it ported; deleted 2026-11-05 by the p2p remnant cutover, shekyl-levin is the one reader and writer (rule 91)
+docs/design/LV3_CONNECTION_OBJECT.md:../../src/cryptonote_core/cryptonote_core.cpp # closed design round (2026-09-21) deriving from the C++ connection object; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/LV3_CONNECTION_OBJECT.md:../../src/cryptonote_protocol/cryptonote_protocol_handler.inl # closed design round (2026-09-21) deriving from the C++ connection object; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/LV3_CONNECTION_OBJECT.md:../../src/p2p/net_node.cpp # closed design round (2026-09-21) deriving from the C++ connection object; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/LV3_CONNECTION_OBJECT.md:../../src/p2p/net_node.inl # closed design round (2026-09-21) deriving from the C++ connection object; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/P2P_3_IMPLEMENTATION_ROUND.md:../../src/cryptonote_core/cryptonote_core.cpp # slice rows cite the C++ host the slices replaced; deleted 2026-11-05 by the p2p remnant cutover, which closes the round (rule 91)
+docs/design/P2P_3_IMPLEMENTATION_ROUND.md:../../src/cryptonote_protocol/cryptonote_protocol_handler.inl # slice rows cite the C++ host the slices replaced; deleted 2026-11-05 by the p2p remnant cutover, which closes the round (rule 91)
+docs/design/P2P_3_IMPLEMENTATION_ROUND.md:../../src/p2p/net_node.h # slice rows cite the C++ host the slices replaced; deleted 2026-11-05 by the p2p remnant cutover, which closes the round (rule 91)
+docs/design/P2P_3_IMPLEMENTATION_ROUND.md:../../src/p2p/net_node.inl # slice rows cite the C++ host the slices replaced; deleted 2026-11-05 by the p2p remnant cutover, which closes the round (rule 91)
+docs/design/Q12_D6A_PEER_DISCOVERY_RUN.md:../../contrib/epee/include/net/enums.h#L39-L46 # dated run records (2026-08) cite the C++ host and FFI they instrumented; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/Q12_D6A_PEER_DISCOVERY_RUN.md:../../src/net/tor_address.h#L71 # dated run records (2026-08) cite the C++ host and FFI they instrumented; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/Q12_D6A_PEER_DISCOVERY_RUN.md:../../rust/shekyl-ffi/src/relay_zone_ffi/mod.rs # dated run records (2026-08) cite the C++ host and FFI they instrumented; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/Q12_D6A_PEER_DISCOVERY_RUN.md:../../src/cryptonote_core/cryptonote_core.cpp # dated run records (2026-08) cite the C++ host and FFI they instrumented; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/Q12_D6A_PEER_DISCOVERY_RUN.md:../../src/cryptonote_protocol/cryptonote_protocol_defs.h # dated run records (2026-08) cite the C++ host and FFI they instrumented; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/Q12_D6A_PEER_DISCOVERY_RUN.md:../../src/p2p/net_node.cpp # dated run records (2026-08) cite the C++ host and FFI they instrumented; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/Q12_D6A_PEER_DISCOVERY_RUN.md:../../src/p2p/net_node.h # dated run records (2026-08) cite the C++ host and FFI they instrumented; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/Q12_D6A_PEER_DISCOVERY_RUN.md:../../src/p2p/net_node.inl # dated run records (2026-08) cite the C++ host and FFI they instrumented; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/Q12_FORWARD_DELAY_AND_ZONE_FIELD.md:../../src/cryptonote_core/cryptonote_core.cpp # LANDED record (2026-08-13) cites the C++ sites it changed; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/Q12_FORWARD_DELAY_AND_ZONE_FIELD.md:../../src/cryptonote_protocol/cryptonote_protocol_handler.inl # LANDED record (2026-08-13) cites the C++ sites it changed; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/RPC_CHANNEL.md:../../src/daemon/daemon.cpp # R0 drift note cites the pre-cutover daemon and listener; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/RPC_CHANNEL.md:../../src/p2p/net_node.cpp # R0 drift note cites the pre-cutover daemon and listener; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
+docs/design/RPC_TRANSPORT_POSTURE.md:../../src/daemon/daemon.cpp # cites the pre-cutover daemon at a pinned sha; deleted 2026-11-05 by the p2p remnant cutover (rule 91)

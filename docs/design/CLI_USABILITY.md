@@ -53,15 +53,13 @@ does not run RandomX") is unchanged and this doc re-pins it:
 
 - **Doing** — RandomX threads, block templates, block submission — stays
   in `shekyld`. `shekyl-cli` gains no hashing code, ever.
-- **Controlling** — `start` / `stop` / `status` with this wallet's
-  payout address — is a CLI adaptor over the daemon's `AdminOnly`
-  path RPCs, the same class of work `chain_health` already does through
-  the independent `DaemonClient`
+- **Controlling** — `start` / `stop` / `status` — is a CLI adaptor over
+  the daemon's `AdminOnly` path RPCs, the same class of work
+  `chain_health` already does through the independent `DaemonClient`
   ([`../../rust/shekyl-cli/src/daemon.rs`](../../rust/shekyl-cli/src/daemon.rs)).
-  The silent default is a loopback daemon (the recommended posture). A
-  named remote `--daemon-address` is a valid advanced configuration
-  (a node on the same network boundary, for example); the CLI reminds,
-  it does not refuse.
+  The silent default is a loopback daemon. A named remote
+  `--daemon-address` is a valid configuration; `mine start` reminds
+  that mining will run on that machine's CPU, and does not refuse.
 - `wallet_rpc.yaml` gains **no** mining methods: control is daemon RPC,
   not a spend/scan concern, and the wallet-RPC server never proxies it.
   Parity rows 72/74 (`start_mining_for_rpc` / `stop_mining_for_rpc`)
@@ -69,15 +67,15 @@ does not run RandomX") is unchanged and this doc re-pins it:
 
 Prior-art shape (taken deliberately): Bitcoin Core's `-generate` is a
 client-side composition (`getnewaddress` + `generatetoaddress`); Monero's
-wallet `start_mining [threads]` tells `monerod` to mine. We compose
-`get_primary_address` + daemon `/start_mining` the same way.
+wallet `start_mining [threads]` tells `monerod` to mine. Shekyl does not
+compose a wallet address into the request (IG-Q21, Rick 2026-11-03). The
+shell sends the thread count. The daemon mines to its `mine-address`.
 
 ```mermaid
 flowchart LR
-  repl["shekyl-cli REPL"] --> addr["wallet-rpc get_primary_address"]
-  repl --> mine["DaemonClient POST /start_mining"]
+  repl["shekyl-cli REPL"] --> mine["DaemonClient POST /start_mining"]
   mine --> shekyld["shekyld miner threads"]
-  shekyld --> coinbase["coinbase to wallet address"]
+  shekyld --> coinbase["coinbase to mine-address"]
 ```
 
 ## 2. Work items
@@ -92,7 +90,7 @@ flowchart LR
 - Connection flags (`--network`, `--testnet`, `--stagenet`,
   `--daemon-address`, `--engine-dir`/`--wallet-dir`,
   `--engine-file`/`--wallet`, `--rpc-url`, `--proxy`,
-  `--daemon-ca-cert`, `--debug`) become clap **global** arguments, so
+  `--debug`) become clap **global** arguments, so
   `shekyl-cli create miner --testnet` works (previously flags after the
   subcommand failed to parse).
 - The wallet directory defaults to `~/.shekyl/wallets/<network>/`
@@ -132,12 +130,12 @@ handlers `/start_mining`, `/stop_mining`, `/mining_status`
 
 REPL verbs:
 
-- `mine start [threads|auto]` — payout address from this wallet's
-  `get_primary_address`; default and `auto` threads =
+- `mine start [threads|auto]` — default and `auto` threads =
   `min(available_parallelism, 4)` (a wallet convenience default, not a
   tuned miner — operators who care pass a count or use `shekyld`
-  directly). Sends `do_background_mining: false`,
-  `ignore_battery: false`.
+  directly). Sends the thread count. The daemon mines to its
+  `mine-address`. The daemon has no background mining (deleted with
+  the daemon-configuration cutover).
 - `mine stop`.
 - `mine status` — active/idle, threads, hash rate in H/s, payout
   address (short form per CU-4), difficulty. The daemon's
@@ -147,18 +145,18 @@ REPL verbs:
   (CU-7, 2026-09-26). Each diagnoses and names `mine start`,
   `mine stop`, or `mine status`.
 
+The mine words do not require an open wallet. The wallet does not
+supply the payout address (IG-Q21, Rick 2026-11-03).
+
 Gates, all fail-closed before any daemon call:
 
-1. **Wallet open** — `mine start` needs a payout address; without an
-   open wallet the refusal names `open` / `create`. (`mine stop` /
-   `mine status` also require it for symmetry: mining verbs are wallet
-   verbs here; the daemon console is the wallet-less path.)
+1. **Network match** — `get_version`'s identity against this CLI's
+   network, read before `get_info`.
 2. **Loopback is the silent default, not a force.** The default
    `--daemon-address` is this machine. A non-loopback endpoint is a
-   valid advanced configuration (a node on the same network boundary,
-   for example). `mine start` reminds the operator that mining control
-   is admin RPC and that a local daemon is the recommended posture,
-   then continues. Classification uses the canonical
+   valid configuration. `mine start` reminds the operator that mining
+   will run on that machine's CPU, then continues. It does not refuse.
+   Classification uses the canonical
    `network_posture::is_loopback_host` (not a substring check).
 3. **Unrestricted RPC** — a restricted listener refuses admin RPCs;
    the CLI surfaces that as "restricted RPC" copy (§4), not a raw
@@ -194,10 +192,10 @@ Enumerated here before code (rule 82); each path says what to run next.
 | # | Failure | Where caught | Copy says |
 |---|---|---|---|
 | F1 | Daemon down / connection refused | `mine`, `chain_health`, `status`, startup disclosure | The network-matched daemon invocation: `shekyld` / `shekyld --testnet` / `shekyld --stagenet` and the port it would answer on |
-| F2 | Wrong network vs daemon (wallet testnet, daemon mainnet) | `mine start` preflight (`get_info` nettype vs `--network`) | Name both networks and the flag to fix (restart CLI or daemon with the matching flag) |
+| F2 | Wrong network vs daemon (wallet testnet, daemon mainnet) | `mine start` preflight: `get_version`'s identity vs `--network`, read before `get_info` (RK-Q6; the same read refuses a daemon on another RPC version, rule set or genesis) | Name both networks and the flag to fix (restart CLI or daemon with the matching flag) |
 | F3 | Restricted RPC | `mine *` | "The daemon's RPC listener is restricted (view-only); mining control needs the unrestricted RPC listener" |
-| F4 | Remote (non-loopback) daemon | `mine start` | Reminder that the recommended posture is a local daemon; **does not refuse**. A named remote endpoint (own-network node, etc.) is a valid advanced configuration. Startup already discloses non-loopback (RT-W7). |
-| F5 | No wallet open | `mine *` (and existing `require_open` sites) | `open <name>` / `create <name>` |
+| F4 | Remote (non-loopback) daemon | `mine start` | Reminder that mining will run on that machine's CPU; **does not refuse**. Startup already discloses a remote daemon (RT-W7). |
+| F5 | No wallet open | commands that read the wallet (`require_open`). The mine words do not require one (IG-Q21, Rick 2026-11-03) | `open <name>` / `create <name>` |
 | F6 | Already mining | `mine start` | Current thread count + `mine stop` first (daemon reports the state; the CLI relays it, no error tone) |
 | F7 | Daemon not synced | `mine start` | Refuse with height copy. The daemon will not mine until it is caught up (`CHECK_CORE_READY` / `BUSY`); there is no confirmation that can succeed. |
 | F8 | retired `start_mining` / `stop_mining` / `mining_status`, or a partial `mine` (CU-7, 2026-09-26: the retired line does not run) | parser | Diagnostic naming `mine start [threads]`, `mine stop`, or `mine status`; never bare "Unknown command" |
@@ -215,8 +213,9 @@ Enumerated here before code (rule 82); each path says what to run next.
   `WALLET_REWRITE_PLAN.md` hard-cut bullets, `CLI_PARITY_MATRIX.md`
   rows 71/73 (→ Covered, with the doing-stays-daemon note),
   [`../EXECUTABLES.md`](../EXECUTABLES.md).
-- `shekyld`'s mining console remains documented as the path for
-  operators already on the node (and the only path with no wallet).
+- `shekyld`'s mining configuration remains the path for an operator
+  who starts the miner with the daemon. `shekyl-cli`'s mine words do
+  not require a wallet.
 
 ## 3. Out of scope (named, with reopen shape)
 
@@ -249,3 +248,51 @@ run. CompleteTree is the hidden startup flag `--complete-tree-foundation`,
 not `stake foundation`. `shard list all` reads `get_archival_shard_coverage`.
 `stake join` names shard ids and does not post until wallet-RPC `stake`
 accepts a shard set.
+
+## 6. Scripting and the release verb (2026-10-04)
+
+`--json` prints one object per command and does not print the human
+lines. A success is `{"ok":true,"command":"...","result":{...}}`. A
+failure is `{"ok":false,"command":"...","error":{"code":N,"message":"..."}}`
+and the process exits 1. `error.data` is present when the server sent
+it. Seeds and passwords are removed at every depth. `shekyl-cli create
+--seed-out` is still the only way a script receives a seed, and the
+JSON result names that path. A failed `create` or `restore` uses that
+same command name and, when the server refused, the wallet-RPC code.
+A failure before any command (the session never started, the script
+file could not be read) is `command` `session` or `script`.
+
+`version` always reports `cli_version`. When wallet-RPC cannot be
+asked, the command still succeeds and `wallet_rpc_error` carries the
+reason. `status` and `balance` remain the checks that stop a script.
+
+`--script FILE` runs the file as one wallet session. A one-shot is the
+same words as the prompt, after the global flags: `shekyl-cli --json
+balance`. The shell's quoting is the token boundary, so
+`address --out "/tmp/my address.txt"` keeps the space. A prompt line
+still splits on whitespace. `--script` does not combine with a
+subcommand. `help` is the prompt command; `--help` is the invocation
+summary.
+
+Both are non-interactive: `--yes` is honored, and a money move without
+it fails without reading the next line. The refusal says that nothing
+was sent. An interactive terminal still ignores `--yes` and prompts.
+Narration (the summary before that prompt, the release warning, progress
+such as `Refreshing...`) is on stdout for a person and on stderr when
+that person asked for JSON. A script omits it, including a human
+`--script` that is not `--json`. A generated payment or reserve proof's
+disclosure is not narration: it prints after the proof on stdout for a
+person, and on stderr whenever stdout is JSON, including for a script.
+Prompt `wallet create` / `wallet restore` refuse under
+`--json`, because the one-time seed is shown on stdout and stdout is
+the JSON transcript. `wallet open` and `wallet password` refuse in a
+script: the password prompt would read the script. Open with
+`--wallet` and `--password-file` instead.
+
+`--complete-tree-foundation` prints its terms on stderr when stdout is
+JSON, and its result is an envelope named `complete-tree-foundation`.
+
+The terminal bond exit is `stake release`. `stake exit` and `unstake`
+are retired spellings that name `stake release` and do not run. The
+wallet-rpc method underneath remains `unstake`. `stake collect` is the
+later sweep of collateral that release already freed.

@@ -1,7 +1,8 @@
 name: ci/gh-actions/depends-aarch64-kats
 
-# ARM v8 qemu KATs for the three cross-arch-deterministic primitives
-# (reward-arithmetic, standoff integer golden vector, archival_p derive).
+# ARM v8 qemu KATs for the four cross-arch-deterministic primitives
+# (reward-arithmetic, standoff integer golden vector, archival_p derive,
+# the FN-DSA hybrid signature).
 # Extracted from depends.yml so a wallet-only PR does not stand up the
 # six-target `make depends` matrix (~124 billed minutes) to run these.
 #
@@ -18,11 +19,18 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened]
     paths:
       - 'rust/shekyl-archival-retention/**'
       - 'rust/shekyl-standoff/**'
       - 'rust/shekyl-crypto-pq/**'
+      # Scheme 3's preimage is `cshake256_64` from this crate
+      # (`hybrid_combiner::preimage`). A change here moves the signed bytes
+      # on every architecture; the aarch64 KAT is the pin that they match.
+      - 'rust/shekyl-crypto-hash/**'
       - 'rust/Cargo.lock'
+      # The FN-DSA fixture the crypto-pq KAT reads lives outside the crate.
+      - 'docs/test_vectors/FN_DSA_HYBRID_V1_KAT.json'
       - '.github/workflows/depends-aarch64-kats.yml'
   workflow_dispatch:
 
@@ -92,11 +100,23 @@ jobs:
         # `archival_p` is the third cross-arch-deterministic primitive (after
         # reward-arithmetic and the standoff draw). A divergent bit on aarch64
         # means an ARM-phone user cannot recover their own bond, so the
-        # ARCHIVAL_P_DERIVE_V1 KAT (+ corpus freeze self-check) must run under
+        # ARCHIVAL_P_DERIVE_V2 KAT (+ corpus freeze self-check) must run under
         # qemu, not just compile. Scoped to the KAT binary so the slow
         # ML-KEM/ML-DSA keygen path runs only for the pinned vectors; the
         # p_canonical_id cross-check is exercised via the
         # shekyl-archival-retention run above (it depends on archival_p).
         cargo test --locked -p shekyl-crypto-pq \
           --target aarch64-unknown-linux-gnu \
-          --test kat_archival_p_derive_v1
+          --test kat_archival_p_derive_v2
+        # The FN-DSA hybrid (scheme 3) is the fourth. Its key generation and
+        # verification are integer-only and must agree across architectures;
+        # its signing uses hardware f64, and a deterministic Falcon signer
+        # that rounds differently on two machines can emit two signatures
+        # over one hashed point. The same fixture the x86_64 workspace test
+        # reads is reproduced here byte for byte, signing included. qemu's
+        # floating point is a software IEEE-754 model: this shows the aarch64
+        # code path computes the same values, not what a physical core does
+        # (docs/design/FN_DSA_HYBRID.md §3).
+        cargo test --locked -p shekyl-crypto-pq \
+          --target aarch64-unknown-linux-gnu \
+          --test kat_fn_dsa_hybrid_v1

@@ -78,7 +78,7 @@ namespace cryptonote
     crypto::hash hash;
   };
 
-  // outputs <= HF_VERSION_VIEW_TAGS
+  // an output with no view tag: the wire still parses it, admission refuses it
   struct txout_to_key
   {
     txout_to_key() { }
@@ -86,7 +86,7 @@ namespace cryptonote
     crypto::public_key key;
   };
 
-  // outputs >= HF_VERSION_VIEW_TAGS
+  // an output with a view tag: the one form admitted
   struct txout_to_tagged_key
   {
     txout_to_tagged_key() { }
@@ -256,8 +256,8 @@ namespace cryptonote
   // owns the layout, the parse and every structural bound. C++ never reads
   // inside: the three fields consensus indexes by -- (P, shard, E) -- come
   // through `shekyl_archival_serve_credit_extract` (the tagged blob, whole),
-  // and admission verifies through `shekyl_archival_verify_serve_credit_vin`
-  // with this vin's pruned record (CtSig.p.serve_credit_pruned[i]) alongside.
+  // and admission's verify (the C++ one went with `DEL-008`; the Rust rule is CEN-J8–J10) reads
+  // this vin's pruned record (CtSig.p.serve_credit_pruned[i]) alongside it.
   //
   // This used to be a typed struct with nine fields. Two of those were values
   // the verifier derives (RF-D6), one more was the challenged leaf the
@@ -350,7 +350,7 @@ namespace cryptonote
   // consensus and is consumed by three sites that MUST agree on what a given tx
   // is — check_tx_inputs (CT dispatch), check_tx_outputs (the v3
   // zero-plaintext-vout carve-out for emission reward vouts), and
-  // ver_non_input_consensus (RCT semantics) — so the predicate lives here once
+  // the deleted C++ RCT-semantics dispatch — so the predicate lives here once
   // (REWARD_EMISSION_E3_GATING_ROUND.md §2.2 / §9.5). Do not re-open-code it: a
   // second copy that drifts splits validators on whether a tx is an emission tx.
   enum class archival_tx_kind { none, serve_credit_only, bond_post, emission };
@@ -860,7 +860,7 @@ namespace cryptonote
   struct block_header
   {
     uint8_t major_version;
-    uint8_t minor_version;  // now used as a voting mechanism, rather than how this particular block is built
+    uint8_t minor_version;  // reserved at CURRENT_BLOCK_MINOR_VERSION (CEN-B2); not a vote
     uint64_t timestamp;
     crypto::hash  prev_id;
     uint32_t nonce;
@@ -926,7 +926,7 @@ namespace cryptonote
     crypto::public_key m_view_public_key;
     // Invariant: 1216 bytes = X25519_pub[0..32] || ML-KEM-768_ek[32..1216].
     // X25519_pub is derived from m_view_public_key via Edwards→Montgomery map.
-    // Canonical assemblers: get_account_address_from_str, generate_pqc_key_material.
+    // Addresses are encoded and decoded in Rust (`shekyl-address`).
     // See SHEKYL_PQC_PUBLIC_KEY_BYTES in shekyl_ffi.h.
     std::vector<uint8_t> m_pqc_public_key;
 

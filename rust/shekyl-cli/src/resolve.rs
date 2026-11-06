@@ -51,6 +51,157 @@ impl RequestFilter {
     }
 }
 
+/// A block named by its hash or by its height. A 64-character hex string is
+/// the hash; anything else that is a `u64` is the height.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockRef {
+    /// 64 lowercase hexadecimal characters.
+    Hash(String),
+    /// A chain height.
+    Height(u64),
+}
+
+/// One daemon word (`INPUT_GRAMMAR.md` §13), with its arguments already
+/// checked. The renderer is called with this value; it does not parse again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum View {
+    /// `chain height`.
+    ChainHeight,
+    /// `chain difficulty`.
+    ChainDifficulty,
+    /// `chain stats --last`.
+    ChainStats {
+        /// How many recent blocks the summary covers.
+        last: u64,
+    },
+    /// `chain alt`.
+    ChainAlt,
+    /// `chain spent <key-image>`. `hash` is 64 lowercase hex characters.
+    ChainSpent {
+        /// The key image.
+        hash: String,
+    },
+    /// `block show <hash|height>`.
+    BlockShow(BlockRef),
+    /// `block header list --from --to`, inclusive heights, `from` not after `to`.
+    BlockHeaderList {
+        /// First height.
+        from: u64,
+        /// Last height.
+        to: u64,
+    },
+    /// `peer list`. Neither switch means both lists.
+    PeerList {
+        /// Include the white list.
+        white: bool,
+        /// Include the gray list.
+        gray: bool,
+        /// Per-list cap. `None` is the whole list.
+        max: Option<u64>,
+    },
+    /// `peer stats`.
+    PeerStats,
+    /// `peer connections`.
+    PeerConnections,
+    /// `p2p stats`.
+    P2pStats,
+    /// `sync status`.
+    SyncStatus,
+    /// `daemon status`.
+    DaemonStatus,
+    /// `txpool stats`.
+    TxpoolStats,
+    /// `chain coinbase sum --from --to`.
+    ChainCoinbaseSum {
+        /// First height.
+        from: u64,
+        /// Last height.
+        to: u64,
+    },
+    /// `tx relay <id>`.
+    TxRelay {
+        /// The transaction id.
+        hash: String,
+    },
+    /// `txpool list [--short]`.
+    TxpoolList {
+        /// Hashes only.
+        short: bool,
+    },
+    /// `txpool flush [id]`. `None` flushes the pool.
+    TxpoolFlush {
+        /// One transaction, or the whole pool.
+        id: Option<String>,
+    },
+    /// `ban list`.
+    BanList,
+    /// `ban add`. `duration` is seconds.
+    BanAdd {
+        /// The host, or an IPv4 subnet.
+        ip: String,
+        /// How long, when the ban is not until lifted.
+        duration: Option<u64>,
+    },
+    /// `ban remove`.
+    BanRemove {
+        /// The host.
+        ip: String,
+    },
+    /// `ban show`.
+    BanShow {
+        /// The host.
+        ip: String,
+    },
+    /// `option set`.
+    OptionSet {
+        /// The option name.
+        name: String,
+        /// The value text.
+        value: String,
+    },
+    /// `option show`.
+    OptionShow {
+        /// One row, or every row the caller may see.
+        name: Option<String>,
+    },
+    /// `daemon stop`.
+    DaemonStop,
+}
+
+impl View {
+    /// The word, for the command's displayed name.
+    #[must_use]
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::ChainHeight => "chain height",
+            Self::ChainDifficulty => "chain difficulty",
+            Self::ChainStats { .. } => "chain stats",
+            Self::ChainAlt => "chain alt",
+            Self::ChainSpent { .. } => "chain spent",
+            Self::BlockShow(_) => "block show",
+            Self::BlockHeaderList { .. } => "block header list",
+            Self::PeerList { .. } => "peer list",
+            Self::PeerStats => "peer stats",
+            Self::PeerConnections => "peer connections",
+            Self::P2pStats => "p2p stats",
+            Self::SyncStatus => "sync status",
+            Self::DaemonStatus => "daemon status",
+            Self::TxpoolStats => "txpool stats",
+            Self::ChainCoinbaseSum { .. } => "chain coinbase sum",
+            Self::TxRelay { .. } => "tx relay",
+            Self::TxpoolList { .. } => "txpool list",
+            Self::TxpoolFlush { .. } => "txpool flush",
+            Self::BanList => "ban list",
+            Self::BanAdd { .. } => "ban add",
+            Self::BanRemove { .. } => "ban remove",
+            Self::BanShow { .. } => "ban show",
+            Self::OptionSet { .. } => "option set",
+            Self::OptionShow { .. } => "option show",
+            Self::DaemonStop => "daemon stop",
+        }
+    }
+}
+
 /// A fully-resolved command ready for execution.
 #[derive(Debug)]
 pub enum ResolvedCommand {
@@ -102,6 +253,8 @@ pub enum ResolvedCommand {
     },
     ShowTransfer {
         txid: String,
+        /// Fetch the serialized bytes from the daemon.
+        body: bool,
     },
     GetTxNote {
         txid: String,
@@ -124,7 +277,7 @@ pub enum ResolvedCommand {
         label: String,
         /// Invoice expiry as wall-clock Unix seconds (`Timestamp`, RTN-6).
         /// Accepts an absolute unix timestamp or a relative duration
-        /// (`1h`, `30m`, `7d`) resolved at parse time. The JSON-RPC wire
+        /// (`1h`, `5min`, `7d`) resolved at parse time. The JSON-RPC wire
         /// still carries a raw integer.
         expiry: Option<Timestamp>,
     },
@@ -183,13 +336,23 @@ pub enum ResolvedCommand {
     CollectUnstaked {
         yes: bool,
     },
+    /// `acknowledge_staking_outcome` — clear the active persona's last
+    /// ending of one kind. `kind` is the wire value.
+    AcknowledgeStakingOutcome {
+        kind: &'static str,
+    },
     ShardListAll,
     ShardListMine,
     ShardShow {
         shard_id: u64,
     },
+    /// `shard fetch <id> [--png <path>] [--size <n>]`: the shard's view
+    /// through the wallet's daemon (a real fetch), optionally rendered to
+    /// a new PNG. `size` without `png` is refused at parse.
     ShardFetch {
         shard_id: u64,
+        png: Option<String>,
+        size: Option<u32>,
     },
 
     // -- Fees (WI-RPC-1) --
@@ -199,6 +362,8 @@ pub enum ResolvedCommand {
     },
 
     ChainHealth,
+    /// A daemon word (`INPUT_GRAMMAR.md` §13). The arguments are typed.
+    Daemon(View),
 
     // -- Proofs (WI-RPC-3 surface) --
     GetTxProof {
@@ -417,8 +582,9 @@ pub(crate) fn unix_now() -> Timestamp {
     )
 }
 
-/// Absolute unix seconds, or a relative duration (`30s`/`5m`/`1h`/`7d`)
+/// Absolute unix seconds, or an IG-6 duration (`30s`/`5min`/`1h`/`7d`)
 /// added to `now`. Invoice expiry is wall-clock, not block height (RTN-6).
+/// `5m` is refused: the unit is `min`.
 pub(crate) fn parse_invoice_expiry(raw: &str, now: Timestamp) -> Option<Timestamp> {
     if let Ok(secs) = raw.parse::<u64>() {
         // A bare integer below INVOICE_UNIX_FLOOR is a height-shaped
@@ -426,26 +592,26 @@ pub(crate) fn parse_invoice_expiry(raw: &str, now: Timestamp) -> Option<Timestam
         // it rather than minting a 1970 timestamp.
         return Timestamp::from_invoice_unix(secs);
     }
-    let duration = parse_duration_secs(raw)?;
+    let duration = parse_ig6_duration_secs(raw).ok()?;
     now.checked_add_secs(duration)
 }
 
-fn parse_duration_secs(raw: &str) -> Option<u64> {
-    let raw = raw.trim();
-    let (last_idx, unit) = raw.char_indices().next_back()?;
-    if last_idx == 0 {
-        return None;
-    }
-    let digits = raw.get(..last_idx)?;
-    let n: u64 = digits.parse().ok()?;
-    let mul = match unit {
-        's' => 1,
-        'm' => 60,
-        'h' => 3600,
-        'd' => 86400,
-        _ => return None,
+/// An IG-6 duration, in whole seconds. `ms` rounds up to the next second.
+pub(crate) fn parse_ig6_duration_secs(raw: &str) -> Result<u64, String> {
+    const DURATION: shekyl_options::Kind = shekyl_options::Kind::Quantity {
+        dimension: shekyl_options::Dimension::Duration,
+        min: 0,
+        keywords: &[],
     };
-    n.checked_mul(mul)
+    match DURATION.parse_text(raw.trim()) {
+        Ok(shekyl_options::Value::Duration(duration)) => {
+            let millis = u64::try_from(duration.as_millis())
+                .map_err(|_| format!("{raw:?} is not a duration"))?;
+            Ok(millis.div_ceil(1000))
+        }
+        Err(fault) => Err(fault.at("--duration", shekyl_options::Source::Cli).render()),
+        Ok(_) => Err(format!("{raw:?} is not a duration")),
+    }
 }
 
 /// Construct a formatted parse-time [`ResolvedCommand::Diagnostic`].

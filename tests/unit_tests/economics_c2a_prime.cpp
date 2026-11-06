@@ -58,7 +58,7 @@ TEST(EconomicsC2aPrime, Layer1SubsidyBaseCallPathMatchesFfiPrimitive) {
   for (const uint64_t already_generated : grid) {
     uint64_t cpp_reward = 0;
     ASSERT_TRUE(get_block_reward(
-        0, kStandardBlockWeight, already_generated, cpp_reward, 1));
+        0, kStandardBlockWeight, already_generated, cpp_reward));
     const uint64_t rust_base = shekyl_base_block_reward(already_generated);
     EXPECT_EQ(cpp_reward, rust_base) << "already_generated=" << already_generated;
   }
@@ -74,7 +74,6 @@ TEST(EconomicsC2aPrime, Layer1SubsidyWithReleaseCallPathMatchesFfiPrimitives) {
         kStandardBlockWeight,
         already_generated,
         cpp_reward,
-        1,
         shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1}));
 
     // FL-R12': the release multiplier composes INSIDE the one owner
@@ -99,19 +98,17 @@ TEST(EconomicsC2aPrime, Layer1PerQuantityCallPathComposesSplitAndCoinbase) {
     // Q_subsidy → Q_full_emission (release applied at empty-block volume 0).
     uint64_t q_full = 0;
     ASSERT_TRUE(get_block_reward(
-        0, kStandardBlockWeight, ag, q_full, 1, /*tx_volume=*/{}));
+        0, kStandardBlockWeight, ag, q_full, /*tx_volume=*/{}));
 
     for (const uint64_t height : height_grid) {
       // Q_miner_base / Q_staker_emission via the production split.
       const shekyl::EmissionSplit split =
-          shekyl::compute_emission_split(q_full, height, /*genesis_ng_height=*/0);
+          shekyl::compute_emission_split(q_full, height);
       const uint64_t q_miner_base = split.miner_emission;
       const uint64_t q_staker_emission = split.staker_emission;
 
       // Cross-check against the Rust FFI primitives the helper wraps.
-      const uint64_t share = shekyl_calc_emission_share(
-          height, 0, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY,
-          SHEKYL_BLOCKS_PER_YEAR);
+      const uint64_t share = shekyl_emission_share_at(height);
       const ShekylEmissionSplit rust_split =
           shekyl_split_block_emission(q_full, share);
       EXPECT_EQ(q_miner_base, rust_split.miner_emission)
@@ -153,7 +150,6 @@ TEST(EconomicsC2aPrime, Layer2FullEmissionAccumulationCallPathMatchesFfiPrimitiv
         kStandardBlockWeight,
         ag_cpp,
         q_sub,
-        1,
         shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1}));
 
     // FL-R12': multiplier inside the one owner; 1 at baseline.
@@ -176,10 +172,10 @@ TEST(EconomicsC2aPrime, Layer2MinerOnlyAccumulationDiffersFromFullEmission) {
   for (unsigned height = 1; height <= 100; ++height) {
     uint64_t q_sub = 0;
     ASSERT_TRUE(get_block_reward(
-        0, kStandardBlockWeight, ag_full, q_sub, 1, shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1}));
+        0, kStandardBlockWeight, ag_full, q_sub, shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1}));
 
     const shekyl::EmissionSplit split =
-        shekyl::compute_emission_split(q_sub, height, 0);
+        shekyl::compute_emission_split(q_sub, height);
 
     ag_full = std::min<uint64_t>(SHEKYL_EMISSION_CURVE_ASYMPTOTE, ag_full + q_sub);
     ag_miner = std::min<uint64_t>(SHEKYL_EMISSION_CURVE_ASYMPTOTE, ag_miner + split.miner_emission);
@@ -210,13 +206,15 @@ TEST(EconomicsC2aPrime, Layer2MinerOnlyAccumulationDiffersFromFullEmission) {
 //
 // DERIVATION (two independent sources, required to agree). The expected values
 // were computed in arbitrary-precision integer arithmetic from the documented
-// formula — base = max((SHEKYL_EMISSION_CURVE_ASYMPTOTE - ag) >> esf, tail) with esf = 21 and
-// tail = 600000000 for the 120 s DAA target, then
+// formula — base = max((SHEKYL_EMISSION_CURVE_ASYMPTOTE - ag) >> esf, tail) with esf = 22 (per
+// block, the design's) and tail = 600000000 for the 120 s DAA target, then
 // reward = base * (2m - c) * c / m / m — and are asserted here against the
 // C++ implementation. They are NOT transcribed from C++ output: if the
 // derivation and the implementation disagree, this test fails, which is the
-// point. `base(0) = 2048000000000` cross-checks the value already used as a
-// grid operand in the tests above.
+// point. Re-minted 2026-10-04 when the factor became per block: the same
+// derivation reproduces every esf = 21 value it replaced, and base(0) is now
+// 1024000000000. The ag operand 2048000000000 is the old base(0), kept as a
+// grid point.
 //
 // WHAT DISCRIMINATES. The 128-bit intermediate is the real target: for the
 // 2100000-median rows, base * multiplicand is ~6.8e24, far past u64, so a port
@@ -240,81 +238,81 @@ struct WeightPenaltyVector {
 };
 
 constexpr WeightPenaltyVector kWeightPenaltyVectors[] = {
-    {0, 150000, UINT64_C(0), true, UINT64_C(2048000000000)},
-    {0, 150000, UINT64_C(2048000000000), true, UINT64_C(2047999023437)},
-    {0, 150000, UINT64_C(2756434948434199641), true, UINT64_C(733629392416)},
-    {0, 300000, UINT64_C(0), true, UINT64_C(2048000000000)},
-    {0, 300000, UINT64_C(2048000000000), true, UINT64_C(2047999023437)},
-    {0, 300000, UINT64_C(2756434948434199641), true, UINT64_C(733629392416)},
-    {0, 300001, UINT64_C(0), true, UINT64_C(2047999999977)},
-    {0, 300001, UINT64_C(2048000000000), true, UINT64_C(2047999023414)},
-    {0, 300001, UINT64_C(2756434948434199641), true, UINT64_C(733629392407)},
-    {0, 337500, UINT64_C(0), true, UINT64_C(2016000000000)},
-    {0, 337500, UINT64_C(2048000000000), true, UINT64_C(2015999038695)},
-    {0, 337500, UINT64_C(2756434948434199641), true, UINT64_C(722166433159)},
-    {0, 450000, UINT64_C(0), true, UINT64_C(1536000000000)},
-    {0, 450000, UINT64_C(2048000000000), true, UINT64_C(1535999267577)},
-    {0, 450000, UINT64_C(2756434948434199641), true, UINT64_C(550222044312)},
-    {0, 562500, UINT64_C(0), true, UINT64_C(480000000000)},
-    {0, 562500, UINT64_C(2048000000000), true, UINT64_C(479999771118)},
-    {0, 562500, UINT64_C(2756434948434199641), true, UINT64_C(171944388847)},
-    {0, 599999, UINT64_C(0), true, UINT64_C(13653310)},
-    {0, 599999, UINT64_C(2048000000000), true, UINT64_C(13653304)},
-    {0, 599999, UINT64_C(2756434948434199641), true, UINT64_C(4890854)},
+    {0, 150000, UINT64_C(0), true, UINT64_C(1024000000000)},
+    {0, 150000, UINT64_C(2048000000000), true, UINT64_C(1023999511718)},
+    {0, 150000, UINT64_C(2756434948434199641), true, UINT64_C(366814696208)},
+    {0, 300000, UINT64_C(0), true, UINT64_C(1024000000000)},
+    {0, 300000, UINT64_C(2048000000000), true, UINT64_C(1023999511718)},
+    {0, 300000, UINT64_C(2756434948434199641), true, UINT64_C(366814696208)},
+    {0, 300001, UINT64_C(0), true, UINT64_C(1023999999988)},
+    {0, 300001, UINT64_C(2048000000000), true, UINT64_C(1023999511706)},
+    {0, 300001, UINT64_C(2756434948434199641), true, UINT64_C(366814696203)},
+    {0, 337500, UINT64_C(0), true, UINT64_C(1008000000000)},
+    {0, 337500, UINT64_C(2048000000000), true, UINT64_C(1007999519347)},
+    {0, 337500, UINT64_C(2756434948434199641), true, UINT64_C(361083216579)},
+    {0, 450000, UINT64_C(0), true, UINT64_C(768000000000)},
+    {0, 450000, UINT64_C(2048000000000), true, UINT64_C(767999633788)},
+    {0, 450000, UINT64_C(2756434948434199641), true, UINT64_C(275111022156)},
+    {0, 562500, UINT64_C(0), true, UINT64_C(240000000000)},
+    {0, 562500, UINT64_C(2048000000000), true, UINT64_C(239999885558)},
+    {0, 562500, UINT64_C(2756434948434199641), true, UINT64_C(85972194423)},
+    {0, 599999, UINT64_C(0), true, UINT64_C(6826655)},
+    {0, 599999, UINT64_C(2048000000000), true, UINT64_C(6826652)},
+    {0, 599999, UINT64_C(2756434948434199641), true, UINT64_C(2445427)},
     {0, 600000, UINT64_C(0), true, UINT64_C(0)},
     {0, 600000, UINT64_C(2048000000000), true, UINT64_C(0)},
     {0, 600000, UINT64_C(2756434948434199641), true, UINT64_C(0)},
     {0, 600001, UINT64_C(0), false, UINT64_C(0)},
     {0, 600001, UINT64_C(2048000000000), false, UINT64_C(0)},
     {0, 600001, UINT64_C(2756434948434199641), false, UINT64_C(0)},
-    {300000, 150000, UINT64_C(0), true, UINT64_C(2048000000000)},
-    {300000, 150000, UINT64_C(2048000000000), true, UINT64_C(2047999023437)},
-    {300000, 150000, UINT64_C(2756434948434199641), true, UINT64_C(733629392416)},
-    {300000, 300000, UINT64_C(0), true, UINT64_C(2048000000000)},
-    {300000, 300000, UINT64_C(2048000000000), true, UINT64_C(2047999023437)},
-    {300000, 300000, UINT64_C(2756434948434199641), true, UINT64_C(733629392416)},
-    {300000, 300001, UINT64_C(0), true, UINT64_C(2047999999977)},
-    {300000, 300001, UINT64_C(2048000000000), true, UINT64_C(2047999023414)},
-    {300000, 300001, UINT64_C(2756434948434199641), true, UINT64_C(733629392407)},
-    {300000, 337500, UINT64_C(0), true, UINT64_C(2016000000000)},
-    {300000, 337500, UINT64_C(2048000000000), true, UINT64_C(2015999038695)},
-    {300000, 337500, UINT64_C(2756434948434199641), true, UINT64_C(722166433159)},
-    {300000, 450000, UINT64_C(0), true, UINT64_C(1536000000000)},
-    {300000, 450000, UINT64_C(2048000000000), true, UINT64_C(1535999267577)},
-    {300000, 450000, UINT64_C(2756434948434199641), true, UINT64_C(550222044312)},
-    {300000, 562500, UINT64_C(0), true, UINT64_C(480000000000)},
-    {300000, 562500, UINT64_C(2048000000000), true, UINT64_C(479999771118)},
-    {300000, 562500, UINT64_C(2756434948434199641), true, UINT64_C(171944388847)},
-    {300000, 599999, UINT64_C(0), true, UINT64_C(13653310)},
-    {300000, 599999, UINT64_C(2048000000000), true, UINT64_C(13653304)},
-    {300000, 599999, UINT64_C(2756434948434199641), true, UINT64_C(4890854)},
+    {300000, 150000, UINT64_C(0), true, UINT64_C(1024000000000)},
+    {300000, 150000, UINT64_C(2048000000000), true, UINT64_C(1023999511718)},
+    {300000, 150000, UINT64_C(2756434948434199641), true, UINT64_C(366814696208)},
+    {300000, 300000, UINT64_C(0), true, UINT64_C(1024000000000)},
+    {300000, 300000, UINT64_C(2048000000000), true, UINT64_C(1023999511718)},
+    {300000, 300000, UINT64_C(2756434948434199641), true, UINT64_C(366814696208)},
+    {300000, 300001, UINT64_C(0), true, UINT64_C(1023999999988)},
+    {300000, 300001, UINT64_C(2048000000000), true, UINT64_C(1023999511706)},
+    {300000, 300001, UINT64_C(2756434948434199641), true, UINT64_C(366814696203)},
+    {300000, 337500, UINT64_C(0), true, UINT64_C(1008000000000)},
+    {300000, 337500, UINT64_C(2048000000000), true, UINT64_C(1007999519347)},
+    {300000, 337500, UINT64_C(2756434948434199641), true, UINT64_C(361083216579)},
+    {300000, 450000, UINT64_C(0), true, UINT64_C(768000000000)},
+    {300000, 450000, UINT64_C(2048000000000), true, UINT64_C(767999633788)},
+    {300000, 450000, UINT64_C(2756434948434199641), true, UINT64_C(275111022156)},
+    {300000, 562500, UINT64_C(0), true, UINT64_C(240000000000)},
+    {300000, 562500, UINT64_C(2048000000000), true, UINT64_C(239999885558)},
+    {300000, 562500, UINT64_C(2756434948434199641), true, UINT64_C(85972194423)},
+    {300000, 599999, UINT64_C(0), true, UINT64_C(6826655)},
+    {300000, 599999, UINT64_C(2048000000000), true, UINT64_C(6826652)},
+    {300000, 599999, UINT64_C(2756434948434199641), true, UINT64_C(2445427)},
     {300000, 600000, UINT64_C(0), true, UINT64_C(0)},
     {300000, 600000, UINT64_C(2048000000000), true, UINT64_C(0)},
     {300000, 600000, UINT64_C(2756434948434199641), true, UINT64_C(0)},
     {300000, 600001, UINT64_C(0), false, UINT64_C(0)},
     {300000, 600001, UINT64_C(2048000000000), false, UINT64_C(0)},
     {300000, 600001, UINT64_C(2756434948434199641), false, UINT64_C(0)},
-    {2100000, 1050000, UINT64_C(0), true, UINT64_C(2048000000000)},
-    {2100000, 1050000, UINT64_C(2048000000000), true, UINT64_C(2047999023437)},
-    {2100000, 1050000, UINT64_C(2756434948434199641), true, UINT64_C(733629392416)},
-    {2100000, 2100000, UINT64_C(0), true, UINT64_C(2048000000000)},
-    {2100000, 2100000, UINT64_C(2048000000000), true, UINT64_C(2047999023437)},
-    {2100000, 2100000, UINT64_C(2756434948434199641), true, UINT64_C(733629392416)},
-    {2100000, 2100001, UINT64_C(0), true, UINT64_C(2047999999999)},
-    {2100000, 2100001, UINT64_C(2048000000000), true, UINT64_C(2047999023436)},
-    {2100000, 2100001, UINT64_C(2756434948434199641), true, UINT64_C(733629392415)},
-    {2100000, 2362500, UINT64_C(0), true, UINT64_C(2016000000000)},
-    {2100000, 2362500, UINT64_C(2048000000000), true, UINT64_C(2015999038695)},
-    {2100000, 2362500, UINT64_C(2756434948434199641), true, UINT64_C(722166433159)},
-    {2100000, 3150000, UINT64_C(0), true, UINT64_C(1536000000000)},
-    {2100000, 3150000, UINT64_C(2048000000000), true, UINT64_C(1535999267577)},
-    {2100000, 3150000, UINT64_C(2756434948434199641), true, UINT64_C(550222044312)},
-    {2100000, 3937500, UINT64_C(0), true, UINT64_C(480000000000)},
-    {2100000, 3937500, UINT64_C(2048000000000), true, UINT64_C(479999771118)},
-    {2100000, 3937500, UINT64_C(2756434948434199641), true, UINT64_C(171944388847)},
-    {2100000, 4199999, UINT64_C(0), true, UINT64_C(1950475)},
-    {2100000, 4199999, UINT64_C(2048000000000), true, UINT64_C(1950474)},
-    {2100000, 4199999, UINT64_C(2756434948434199641), true, UINT64_C(698694)},
+    {2100000, 1050000, UINT64_C(0), true, UINT64_C(1024000000000)},
+    {2100000, 1050000, UINT64_C(2048000000000), true, UINT64_C(1023999511718)},
+    {2100000, 1050000, UINT64_C(2756434948434199641), true, UINT64_C(366814696208)},
+    {2100000, 2100000, UINT64_C(0), true, UINT64_C(1024000000000)},
+    {2100000, 2100000, UINT64_C(2048000000000), true, UINT64_C(1023999511718)},
+    {2100000, 2100000, UINT64_C(2756434948434199641), true, UINT64_C(366814696208)},
+    {2100000, 2100001, UINT64_C(0), true, UINT64_C(1023999999999)},
+    {2100000, 2100001, UINT64_C(2048000000000), true, UINT64_C(1023999511717)},
+    {2100000, 2100001, UINT64_C(2756434948434199641), true, UINT64_C(366814696207)},
+    {2100000, 2362500, UINT64_C(0), true, UINT64_C(1008000000000)},
+    {2100000, 2362500, UINT64_C(2048000000000), true, UINT64_C(1007999519347)},
+    {2100000, 2362500, UINT64_C(2756434948434199641), true, UINT64_C(361083216579)},
+    {2100000, 3150000, UINT64_C(0), true, UINT64_C(768000000000)},
+    {2100000, 3150000, UINT64_C(2048000000000), true, UINT64_C(767999633788)},
+    {2100000, 3150000, UINT64_C(2756434948434199641), true, UINT64_C(275111022156)},
+    {2100000, 3937500, UINT64_C(0), true, UINT64_C(240000000000)},
+    {2100000, 3937500, UINT64_C(2048000000000), true, UINT64_C(239999885558)},
+    {2100000, 3937500, UINT64_C(2756434948434199641), true, UINT64_C(85972194423)},
+    {2100000, 4199999, UINT64_C(0), true, UINT64_C(975237)},
+    {2100000, 4199999, UINT64_C(2048000000000), true, UINT64_C(975237)},
+    {2100000, 4199999, UINT64_C(2756434948434199641), true, UINT64_C(349347)},
     {2100000, 4200000, UINT64_C(0), true, UINT64_C(0)},
     {2100000, 4200000, UINT64_C(2048000000000), true, UINT64_C(0)},
     {2100000, 4200000, UINT64_C(2756434948434199641), true, UINT64_C(0)},
@@ -330,7 +328,7 @@ TEST(EconomicsC2aPrime, Layer1WeightPenaltyPinnedVectors) {
     for (const WeightPenaltyVector& v : kWeightPenaltyVectors) {
         uint64_t reward = UINT64_MAX;
         const bool ok = get_block_reward(
-            v.median_weight, v.current_block_weight, v.already_generated_coins, reward, 1);
+            v.median_weight, v.current_block_weight, v.already_generated_coins, reward);
 
         ASSERT_EQ(ok, v.expect_ok)
             << "median=" << v.median_weight << " current=" << v.current_block_weight

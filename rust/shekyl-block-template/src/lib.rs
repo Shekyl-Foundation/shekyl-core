@@ -39,8 +39,8 @@
 //!   [`shekyl_economics::price_emission`] owes the miner — the penalised
 //!   emission's miner leg plus the miner's share of the listed fees
 //!   (CEN-F18), whole at genesis (CEN-G13). The `extra` is
-//!   the coinbase grammar's one layout (CEN-I20): pubkey, nonce, one KEM
-//!   blob, one leaf blob.
+//!   the coinbase grammar's one layout (CEN-I20): pubkey, nonce, the
+//!   `0x0C` draw commitment, one KEM blob, one leaf blob.
 //! - **Body.** `transaction_hashes` are the listed bodies' identities, in
 //!   the order listed (CEN-A3/A4); the weight the reward was penalised at
 //!   is the weight the block carries, coinbase included (CEN-F14's
@@ -78,8 +78,12 @@
 //! holds the dependency closure to that. It does not **mine**: PoW is the
 //! miner's (the nonce search over the returned block), and difficulty is
 //! CEN-D4's — a template does not know the target and does not need to.
-//! It does not **select** transactions: which bodies to list is mempool
-//! policy, and policy is not consensus.
+//! It holds no **pool**: which bodies are offered, and in what order, is
+//! the mempool's. The selection decision it owns is [`Fill`], the ruled
+//! reward-aware policy: admit a body only when listing it does not lower
+//! the gross coinbase. That rule is policy, not consensus, and it is the
+//! only fill the node runs: the inherited scan (one body could cross the
+//! median, then the scan ended) left with the C++ pool at the DRS-X flip.
 //!
 //! # How it is tested, by design
 //!
@@ -106,10 +110,14 @@ use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::block::{Block, BlockHeader};
+use shekyl_wire::block::{Block, BlockHeader, HEADER_MINOR_VERSION};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
-use shekyl_wire::tx_extra::{self, CoinbaseBuildError, COINBASE_NONCE_BYTES};
+use shekyl_wire::tx_extra::{self, CoinbaseBuildError, DrawCommitment, COINBASE_NONCE_BYTES};
 use zeroize::Zeroizing;
+
+mod fill;
+
+pub use fill::Fill;
 
 /// The keys a coinbase output is paid to: the miner's Edwards spend key
 /// and the two halves of the hybrid KEM encapsulation target.
@@ -141,8 +149,6 @@ pub struct EmissionOperands {
     /// Closed transaction-shard count for the burn escalation (CEN-F17),
     /// read at parent state by `shekyl_chain_rules::closed_shards_before`.
     pub closed_shards: ClosedShardCount,
-    /// The height the staker share's decay is measured from (CEN-F21).
-    pub emission_split_epoch: BlockHeight,
 }
 
 /// Everything a template is a function of. Pure: two contexts with the same
@@ -161,10 +167,11 @@ pub struct TemplateContext<'a> {
     pub curve_tree_root: CurveTreeRoot,
     /// The archival attestation root the header carries.
     pub attestation_root: AttestationRoot,
-    /// Header version pair — CEN-B1 reads the major.
+    /// The header's `major_version` — the version the rule set in force
+    /// admits (CEN-B1). The other version byte is not the producer's to
+    /// choose: every template carries
+    /// [`shekyl_wire::block::HEADER_MINOR_VERSION`] (CEN-B2).
     pub major_version: u8,
-    /// Header minor version.
-    pub minor_version: u8,
     /// The producer's clock; the header's timestamp is no earlier.
     pub now: Timestamp,
     /// The median timestamp CEN-C2 will compare against:
@@ -188,6 +195,12 @@ pub struct TemplateContext<'a> {
     pub tx_key_secret: Zeroizing<[u8; 32]>,
     /// The `0x02` nonce field's bytes (a pool's extra-nonce slot).
     pub extra_nonce: [u8; COINBASE_NONCE_BYTES],
+    /// The `0x0C` field: the producer's commitment to this block's witness
+    /// key and draw seed (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.2). The
+    /// caller's, like the transaction secret: this crate draws no
+    /// randomness and holds neither secret, so a template stays a function
+    /// of its context.
+    pub draw_commitment: DrawCommitment,
     /// The bodies to list, in block order. Each must carry a fee
     /// (`Ct::Fcmp`): a coinbase-shaped body cannot be listed.
     pub listed: &'a [Transaction],
@@ -203,7 +216,6 @@ impl fmt::Debug for TemplateContext<'_> {
             .field("curve_tree_root", &self.curve_tree_root)
             .field("attestation_root", &self.attestation_root)
             .field("major_version", &self.major_version)
-            .field("minor_version", &self.minor_version)
             .field("now", &self.now)
             .field("median_timestamp", &self.median_timestamp)
             .field("unlock_window", &self.unlock_window)
@@ -212,6 +224,7 @@ impl fmt::Debug for TemplateContext<'_> {
             .field("miner", &self.miner)
             .field("tx_key_secret", &"[redacted]")
             .field("extra_nonce", &self.extra_nonce)
+            .field("draw_commitment", &self.draw_commitment)
             .field("listed", &self.listed.len())
             .finish()
     }
@@ -338,14 +351,22 @@ pub const MAX_REPRICING_PASSES: usize = REPRICING_PASSES;
 /// Build the template for `cx`. See the crate documentation for what the
 /// result satisfies by construction.
 ///
+/// The listing is the caller's, and the template carries every transaction
+/// in it. A block whose weight, coinbase included, passes twice the median
+/// is [`TemplateError::Emission`] of [`EmissionError::BlockTooBig`]. The
+/// fill's bound is twice the median less the coinbase weight it was given.
+/// A listing at the reserve stays inside the limit: a real coinbase weighs
+/// at most the reserve, so the amount's varint cannot push it over.
+///
 /// # Errors
 ///
 /// A [`TemplateError`] when an operand cannot be priced or a body cannot be
 /// listed; never on a consensus question — those are the validator's.
 pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
-    let total_fees = listed_fees(cx.listed)?;
-    let tx_hashes: Vec<TxHash> = cx.listed.iter().map(Transaction::hash).collect();
-    let bodies_weight = cx.listed.iter().try_fold(0u64, |acc, tx| {
+    let listed = cx.listed;
+    let total_fees = listed_fees(listed)?;
+    let tx_hashes: Vec<TxHash> = listed.iter().map(Transaction::hash).collect();
+    let bodies_weight = listed.iter().try_fold(0u64, |acc, tx| {
         acc.checked_add(weight_of(tx)?)
             .ok_or(TemplateError::WeightOverflow)
     })?;
@@ -392,7 +413,7 @@ pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
     let block = Block {
         header: BlockHeader {
             major_version: cx.major_version,
-            minor_version: cx.minor_version,
+            minor_version: HEADER_MINOR_VERSION,
             timestamp: template_timestamp(cx.now, cx.median_timestamp)?,
             previous: cx.previous,
             nonce: 0,
@@ -405,7 +426,7 @@ pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
 
     Ok(Template {
         block,
-        transactions: cx.listed.to_vec(),
+        transactions: listed.to_vec(),
         block_weight,
         block_reward: paid.block_reward,
         miner_emission: paid.miner_emission,
@@ -517,7 +538,6 @@ fn price_and_pay(
         total_fees: total_fees.to_raw(),
         supply,
         closed_shards: e.closed_shards,
-        split_epoch: e.emission_split_epoch.to_raw(),
         params: cx.params,
     })
     .map_err(reward_error)?;
@@ -565,6 +585,7 @@ fn coinbase(cx: &TemplateContext<'_>, amount: u64) -> Result<Transaction, Templa
     let extra = tx_extra::build_coinbase_extra(
         tx_pubkey(&cx.tx_key_secret),
         &cx.extra_nonce,
+        cx.draw_commitment,
         1,
         &kem_blob,
         &leaf_blob,

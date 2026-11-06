@@ -12,8 +12,8 @@
 //!
 //! # Feed / pull, one message at a time
 //!
-//! [`BucketReader::feed`] only buffers bytes; **all** parsing, fragment
-//! reassembly, and decompression happen in [`BucketReader::next_message`],
+//! [`BucketReader::feed`] only buffers bytes; **all** parsing and fragment
+//! reassembly happen in [`BucketReader::next_message`],
 //! which advances the state machine by exactly one bucket per delivered
 //! message and hands ownership of that message straight to the caller.
 //!
@@ -22,9 +22,9 @@
 //! payload is live at a time and a message that has already been dispatched
 //! survives a later bucket in the same read turning out to be malformed.
 //! A reader that returned a `Vec` of everything one read completed would
-//! break both properties — it would hold every inflated payload of the read
-//! simultaneously (a compression bomb multiplier the C++ does not have) and
-//! it would discard already-decoded messages on the error path.
+//! break both properties — it would hold every payload of the read
+//! simultaneously and it would discard already-decoded messages on the
+//! error path.
 //!
 //! ```text
 //! reader.feed(&socket_bytes)?;
@@ -40,7 +40,7 @@
 //!   `min(packet limit, per-command cap)` after the PWD-B3a flag-class
 //!   discriminator ([`crate::ingress_payload_cap`]): unknown flag bits are
 //!   rejected; a Q/S-flagged bucket whose command is not a
-//!   [`crate::DefinedCommand`] is rejected; a noise/fragment bucket (neither
+//!   [`crate::Command`] is rejected; a noise/fragment bucket (neither
 //!   Q nor S) is bounded only by the packet limit, so cover traffic with
 //!   command 0 is not treated as an unknown command. The packet limit is
 //!   256 KiB before the handshake and 100 MB after (the caller raises it
@@ -52,8 +52,6 @@
 //!   the reassembled bytes must open with an inner Levin header, which
 //!   becomes the message; reassembled inner messages are never recursively
 //!   reassembled;
-//! - a `COMPRESSED` payload is inflated before delivery and the flag
-//!   cleared (an error without the `zstd` feature — feature-off path);
 //! - classification: `S` + protocol version 1 → [`Received::Response`];
 //!   otherwise `Expect Response` non-zero → [`Received::Request`], zero →
 //!   [`Received::Notification`]. The version checked is the **logical
@@ -64,7 +62,6 @@
 //! docs ([`crate`]) carry the single authoritative divergence census; the
 //! sites below point at it by name rather than restating it.
 
-use crate::compress::decompress_payload;
 use crate::error::Error;
 use crate::header::{
     signature_matches, BucketHead, Flags, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE, PROTOCOL_VERSION_1,
@@ -78,7 +75,7 @@ pub enum Received {
     Notification {
         /// Command identifier.
         command: u32,
-        /// Opaque payload bytes (decompressed if the bucket was compressed).
+        /// Opaque payload bytes.
         payload: Vec<u8>,
     },
     /// Request that expects a response with the same command number.
@@ -202,10 +199,8 @@ impl BucketReader {
     /// out of bytes already consumed or a burst of buckets is O(n²). The
     /// proportional trigger below bounds each drain's memmove by the bytes
     /// consumed since the previous one, making a stream amortized O(n) for
-    /// any feed size. (The oracle's `epee::net_utils::buffer::erase`,
-    /// `contrib/epee/include/net/buffer.h`, only advances an offset and
-    /// resets storage when the buffer is fully consumed — the fully-consumed
-    /// branch here is that case.)
+    /// any feed size. A fully consumed buffer resets its storage instead of
+    /// moving an empty tail.
     fn compact(&mut self) {
         if self.read_pos == 0 {
             return;
@@ -338,7 +333,7 @@ impl BucketReader {
         head: BucketHead,
         body: core::ops::Range<usize>,
     ) -> Result<Option<Received>, Error> {
-        let (mut head, payload) = if head.flags.intersects(Flags::REQUEST.union(Flags::RESPONSE)) {
+        let (head, payload) = if head.flags.intersects(Flags::REQUEST.union(Flags::RESPONSE)) {
             (head, self.cache[body].to_vec())
         } else {
             match self.absorb_noise_or_fragment(&head, body)? {
@@ -347,28 +342,12 @@ impl BucketReader {
             }
         };
 
-        // COMPRESSED: inflate before delivery, clear the flag (C++ unsets
-        // LEVIN_PACKET_COMPRESSED on m_current_head after a successful
-        // inflate; Received does not expose flags, but the local head stays
-        // consistent with the oracle and the doc comment).
-        //
-        // Divergence "post-inflate limit": the *inflated* size is bounded by
-        // the same limit the header was checked against, so the delivered
-        // payload can never exceed the packet limit this reader documents.
-        let payload = if head.flags.contains(Flags::COMPRESSED) {
-            let inflated = decompress_payload(&payload, self.limit_for(head.command, head.flags)?)?;
-            head.flags = head.flags.difference(Flags::COMPRESSED);
-            inflated
-        } else {
-            payload
-        };
-
         Ok(Some(classify(&head, payload)))
     }
 
     /// Noise / fragment class handler. `None` = dummy or non-final fragment
     /// (nothing to deliver yet). `Some` = a complete logical message ready
-    /// for decompression + classification.
+    /// for classification.
     fn absorb_noise_or_fragment(
         &mut self,
         head: &BucketHead,
@@ -435,7 +414,7 @@ impl BucketReader {
     }
 }
 
-/// Classify a fully-parsed, decompressed logical message.
+/// Classify a fully-parsed logical message.
 ///
 /// Divergence "logical-header classification": the version is taken from this
 /// header (the delivered logical message), not from a sticky outer-header

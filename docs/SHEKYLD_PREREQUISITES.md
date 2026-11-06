@@ -36,43 +36,47 @@ fee_policy_version daemon-side exposure`.
 
 ### Verdict: PRESENT — usable, with V3-specific caveats
 
-`shekyld` inherits Monero's `FAKECHAIN` network type, the `--regtest`
-CLI flag, the `generateblocks` JSON-RPC method, and the
-`--fixed-difficulty` knob. A Rust integration-test harness can spawn
+`shekyld` has a regtest network (`--network regtest`), the
+`generateblocks` JSON-RPC method, and a fixed-difficulty
+lever (the `dev-difficulty` row, regtest only). A Rust integration-test harness can spawn
 `shekyld` and drive an end-to-end transfer cycle without waiting for
 real-network PoW, but several Shekyl-genesis differences mean the
 regtest path is **not** a free pass on V3 consensus rules.
 
 ### What works today
 
-**Network type.** `FAKECHAIN` is a first-class enum variant alongside
-`MAINNET` / `TESTNET` / `STAGENET`
-(`src/cryptonote_config.h:297–305`). When constructed, `FAKECHAIN`
-borrows mainnet constants for genesis, ports, and network id
-(`src/cryptonote_config.h:338–343`).
+**Network type.** Regtest is a network like the others
+(`NETWORK_IDENTITY.md` NI-Q8): a row of the network table with its own
+genesis, network id, address prefixes and ports
+(`rust/shekyl-network/src/lib.rs:570-579`). It shares no constant with
+mainnet. The daemon is all Rust (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §1):
+there is no C++ core and no second copy of the table.
 
-**CLI activation.** Passing `--regtest` to `shekyld` sets
-`m_nettype = FAKECHAIN` (`src/cryptonote_core/cryptonote_core.cpp:472–475`).
-The flag is mutually exclusive with `--testnet` / `--stagenet`
-(`src/daemon/main.cpp:267–273, 329–330`). Companion flags:
+**CLI activation.** `--network regtest` selects `Network::Regtest`; the
+daemon builds the node from that row — the chain rules
+(`rust/shekyl-node/src/lib.rs:911`), the network identity and the p2p
+plan (`rust/shekyl-daemon/src/run.rs:101`, `:303`). The `network` row
+takes one word, so no second network can be named. Companion rows:
 
-- `--fixed-difficulty <N>` — pin difficulty to a constant. Default `0`
-  means "use adaptive difficulty," so for instant-mining the harness
-  must pass `--fixed-difficulty 1` (or another small value)
-  (`src/cryptonote_core/blockchain.cpp:895–897, 1263–1265`).
-- `--keep-fakechain` — preserve LMDB across runs; without it, the DB
-  is wiped each launch (`src/cryptonote_core/cryptonote_core.cpp:531–538`).
-- `--offline` — disable peer dialing (recommended for hermetic tests).
+- `--dev-difficulty <N>` — pin difficulty to a constant. Unset means
+  "use adaptive difficulty," so for instant-mining the harness must pass
+  `--dev-difficulty 1` (or another small value); the lever is data on
+  the rule set, `DifficultyRule::Fixed`
+  (`rust/shekyl-chain-rules/src/rule_set.rs:433-446`).
+- `--clearnet off --tor off` — no listener and no dial (recommended for
+  hermetic tests). The store persists across runs in the data directory;
+  a fresh chain is a fresh directory.
 
 **On-demand block generation.** The JSON-RPC method `generateblocks`
-exists (`src/rpc/core_rpc_server.h:153`,
+exists (`src/rpc/core_rpc_server.h`,
 `src/rpc/core_rpc_server.cpp:2234–2305`). It loops
 `getblocktemplate` → `find_nonce_for_given_block` (RandomX longhash) →
-`submitblock` for the requested count. The handler refuses with
-`CORE_RPC_ERROR_CODE_REGTEST_REQUIRED` outside `FAKECHAIN`
-(`src/rpc/core_rpc_server.cpp:2242–2246`), and the RPC map gates it on
-`!m_restricted` (`src/rpc/core_rpc_server.h:153`), so the integration
-harness must connect to an unrestricted RPC port.
+`submitblock` for the requested count. It is an armed test lever
+(`RPC_CHANNEL.md` §6.1): served on the admin listener only, and only
+when the daemon starts with `--dev-rpc`, which it announces in its log.
+Without the switch the RPC layer refuses it on every network, so the
+integration harness starts the daemon with `--dev-rpc` and connects to
+the admin listener.
 
 **Proof-of-life tests.** The Python functional tests that
 historically demonstrated `--regtest` + `generateblocks` invocation
@@ -92,22 +96,20 @@ per [`FOLLOWUPS.md`](./FOLLOWUPS.md) V3.1
 
 ```bash
 shekyld \
-  --regtest \
-  --offline \
-  --fixed-difficulty 1 \
+  --network regtest \
+  --clearnet off --tor off \
+  --dev-difficulty 1 \
   --data-dir /tmp/shekyl-regtest-XXXX \
-  --rpc-bind-port 28081 \
-  --p2p-bind-port 28080 \
-  --no-zmq
+  --log-file /tmp/shekyl-regtest-XXXX/shekyld.log \
+  --rpc-admin-listen 127.0.0.1:28081
 ```
 
-Use `--keep-fakechain` if you want the chain to persist across daemon
-restarts within a single test run.
+The chain persists across daemon restarts in the data directory.
 
 ### V3-specific caveats
 
 **FCMP++ tx-type enforcement is bypassed on `FAKECHAIN`.**
-`src/cryptonote_core/blockchain.cpp:3403–3434` wraps the
+`src/cryptonote_core/blockchain.cpp` wraps the
 `CTTypeFcmpPlusPlusPqc` enforcement, version bounds, and input-count
 limits in `if (m_nettype != network_type::FAKECHAIN) { ... }`. Regtest
 will accept legacy/test-generator txs that would be rejected on
@@ -131,7 +133,7 @@ verification reads `m_db->get_curve_tree_root_at_height` as before, so
 header coherence and proof anchoring are now both exercised on regtest.
 
 **FCMP++ reference-block age rules still run.**
-`src/cryptonote_core/blockchain.cpp:3801–3855` is **not** wrapped in a
+`src/cryptonote_core/blockchain.cpp` is **not** wrapped in a
 `FAKECHAIN` skip. V3 spends must reference a curve-tree root from a
 sufficiently-aged block, in regtest just as on mainnet. The harness
 must therefore mine enough blocks before constructing test transfers
@@ -139,7 +141,7 @@ for the curve-tree state to be valid; "spawn daemon, build tx
 immediately" will fail validation.
 
 **PoW is not bypassed.** `check_hash` runs in the block path
-(`src/cryptonote_core/blockchain.cpp:4445–4451`). With
+(`src/cryptonote_core/blockchain.cpp`). With
 `--fixed-difficulty 1` the work is trivial (microseconds per block on
 modern hardware), but the path is exercised. There is no separate
 "skip PoW" toggle.
@@ -160,11 +162,11 @@ difficulty uses an external miner over this node's `get_block_template`
 / `submitblock` RPC — a miner that speaks another coin's template
 dialect will not produce accepted blocks.
 
-**Regtest hard-fork table.**
-`src/cryptonote_core/cryptonote_core.cpp:674–678` defines
-`regtest_hard_forks` to force HF1 at height 0, then jump to the latest
-mainnet HF version at height 1. Regtest activates V3 rules from the
-first non-genesis block.
+**Regtest block version.**
+Regtest uses the same constants as the issued networks:
+`CURRENT_BLOCK_MAJOR_VERSION` (1) and `CURRENT_BLOCK_MINOR_VERSION` (0)
+at every height. There is no fork table and no height at which the
+rules change (`design/CXX_VERSION_GATES.md` §5).
 
 ### Pre-existing harness gaps (not blocking, but worth filing)
 
@@ -198,6 +200,15 @@ daemon bugs that need fixing first.
 ---
 
 ## 2. `get_fee_estimate(s)` daemon RPC (Phase 2a prerequisite)
+
+*This section records the Phase 0 audit at its date (2026-04-25), against
+the C++ handler and epee structs it quotes. The method is served by Rust
+now, and its current shape is `shekyl-rpc-types`'s `GetFeeEstimateRequest`
+(no parameters) and `GetFeeEstimateResponse` (`status` and a three-slot
+`fees`), at `CORE_RPC_VERSION` 3.57. Of what the audit describes below,
+the scalar `fee` is gone, and so are the fourth slot, `grace_blocks` and
+`quantization_mask` ([`FEE_LADDER_DERIVATION.md`](design/FEE_LADDER_DERIVATION.md)
+FL-R25, FL-R26 and FL-R27).*
 
 ### Verdict: PRESENT — singular `get_fee_estimate`, positional 4-slot fee vector, no name-keyed buckets
 
@@ -233,16 +244,16 @@ struct COMMAND_RPC_GET_BASE_FEE_ESTIMATE
 
 Internal C++ name: `COMMAND_RPC_GET_BASE_FEE_ESTIMATE` /
 `on_get_base_fee_estimate`. JSON-RPC method name on the wire:
-`get_fee_estimate` (`src/rpc/core_rpc_server.h:173–174`).
+`get_fee_estimate` (`core_rpc_server.h`, lines 173 to 174 at the audit's tree; served by Rust since).
 
 ### Filling logic
 
-`src/rpc/core_rpc_server.cpp:2987–3008`. Because Shekyl's
-`HF_VERSION_2021_SCALING` is `1` (i.e., Shekyl genesis is already in
-the post-2021-scaling regime — confirmed in `cryptonote_config.h`),
-the `fees` vector is **always** populated with the three priced tiers
-by `get_dynamic_base_fee_estimate_2021_scaling`. The legacy
-single-`fee` branch is dead code on Shekyl from genesis.
+`rust/shekyl-daemon-rpc/src/methods.rs:1063-1072`. The version gate that
+once chose a legacy single-`fee` branch is deleted. The handler always
+fills `fees` with the three priced tiers of the ladder the chain rules
+derive at the connecting height (`fee_ladder_at`,
+`rust/shekyl-daemon-rpc/src/store_facts.rs:532-543`); the array type
+admits no other length.
 
 **Wallet-side consequence (2026-08-17, PR #490; arity FL-R25).** The
 wallet no longer accepts a scalar-only reply. It previously synthesized
@@ -337,9 +348,8 @@ lock is *not* applied — honest 2021-scaling `Fh/Fl` exceeds 10×.
 `shekyld` does not expose a fee policy version in any form. There is
 no `fee_version` field on `get_fee_estimate`'s response, no
 `fee_policy_id` on `get_info`, and no separate `get_fee_policy_version`
-RPC. The closest available signals are the daemon binary version
-(`get_version` JSON-RPC) and the consensus hard-fork metadata
-(`hard_fork_info` JSON-RPC), neither of which is a fee-rules epoch.
+RPC. The closest available signal is the daemon binary version
+(`get_version` JSON-RPC), which is not a fee-rules epoch.
 
 ### Evidence of absence
 
@@ -350,7 +360,7 @@ RPC. The closest available signals are the daemon binary version
 field.
 
 **`get_info` response:** the struct at
-`src/rpc/core_rpc_server_commands_defs.h:676–778` contains height,
+`src/rpc/core_rpc_server_commands_defs.h` contains height,
 difficulty, daemon version, protocol version, Shekyl-NG economics
 fields, peer counts. No `fee_version` / `fee_policy_id`.
 
@@ -459,7 +469,7 @@ wallet cannot reactively detect the recoverable stale-root case.
 ### Evidence of absence
 
 **Validation sets only the generic flag.** Reference-block age/identity
-validation in `src/cryptonote_core/blockchain.cpp:3801–3855` (the FCMP++
+validation in `src/cryptonote_core/blockchain.cpp` (the FCMP++
 reference-block rules, **not** wrapped in a `FAKECHAIN` skip per §1) detects
 the staleness conditions as **distinct** points — not-found (`:3803`),
 too-recent (`:3811`), too-old (`:3822`), depth-out-of-range (`:3846`) — but
@@ -470,13 +480,15 @@ already exists; only the flag is missing — surfacing the signal is
 mechanical, not a verification rewrite.)
 
 **The RPC reply collapses it.** `on_send_raw_transaction`
-(`src/rpc/core_rpc_server.cpp:1334–1368`) maps the verification context to
+(`core_rpc_server.cpp`, lines 1334 to 1368 at the audit's tree; the handler
+is gone with the C++ submit path, `DAEMON_SUBMIT_VERDICT.md`) maps the
+verification context to
 the reply: it sets dedicated booleans only for `double_spend`, `invalid_input`,
 `invalid_output`, `too_big`, `overspend`, `fee_too_low`, `too_few_outputs`,
 `tx_extra_too_big`, and `nonzero_unlock_time`. A generic
 `m_verifivation_failed` (which a stale root produces) yields
 `status == "Failed"` with **no flag set and an empty `reason`** — the specific
-cause is only `LOG_PRINT_L0`'d server-side (line 1361), never propagated to
+cause is only logged server-side, never propagated to
 the client.
 
 ### Why this matters and why it is deferrable

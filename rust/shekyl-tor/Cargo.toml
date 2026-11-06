@@ -15,6 +15,8 @@ publish = false
 
 [dependencies]
 shekyl-capped-stream = { path = "../shekyl-capped-stream" }
+# The first complete Levin frame ends the handshake gap (2026-10-14).
+shekyl-levin = { path = "../shekyl-levin" }
 shekyl-net-address = { path = "../shekyl-net-address" }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-runtime = { path = "../shekyl-runtime" }

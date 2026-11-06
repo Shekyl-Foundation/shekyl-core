@@ -13,15 +13,22 @@
 //! "no authentication". [`Isolation::Persona`] offers only
 //! username/password, and a proxy that selects anything else fails the
 //! handshake before CONNECT. Offering both would let the proxy drop the
-//! persona onto the principal's circuits with no error.
+//! stream onto the principal's circuits with no error.
+//! [`accept_userpass`] is that greeting's other half: it accepts only the
+//! one method [`Isolation::Persona`] offers.
 //!
 //! This crate does not derive a persona username. The caller supplies the
 //! bytes. [`SocksUsername`] redacts them in `Debug` and wipes its copies
 //! on drop.
+//!
+//! [`Proxy`] is a proxy's address bound to the pair it asks for, if any: a
+//! daemon dialing through its operator's own proxy presents the operator's
+//! pair there and nowhere else (`DAEMON_CONFIG_CUTOVER.md` DC-Q7).
 
 #![deny(unsafe_code)]
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use zeroize::Zeroizing;
@@ -30,6 +37,10 @@ const VERSION: u8 = 0x05;
 const NO_AUTH: u8 = 0x00;
 const USER_PASS: u8 = 0x02;
 const USERPASS_VERSION: u8 = 0x01;
+/// RFC 1929: any non-zero status is failure. Empty usernames use this one.
+const USERPASS_FAILURE: u8 = 0x01;
+/// RFC 1928: no offered method is acceptable.
+const NO_ACCEPTABLE: u8 = 0xFF;
 const CONNECT: u8 = 0x01;
 const ATYP_V4: u8 = 0x01;
 const ATYP_NAME: u8 = 0x03;
@@ -41,28 +52,39 @@ const SUCCEEDED: u8 = 0x00;
 /// There is no default. A forgotten argument does not compile, so it
 /// cannot land in the principal's namespace by omission.
 pub enum Isolation<'a> {
-    /// No SOCKS authentication. The principal's traffic, and the daemon's.
+    /// No SOCKS authentication. The principal's traffic, and the daemon's
+    /// overlay.
     Principal,
-    /// Username/password only. The username is the caller's.
+    /// Username/password only. The caller supplies the bytes.
+    ///
+    /// The daemon's operator pair to its operator's own proxy rides this
+    /// variant too ([`Proxy`]): the wire is the same, and which circuit a
+    /// pair selects is the proxy's.
+    ///
+    /// One handshake for every authenticated dial. A per-read circuit is
+    /// which bytes the caller presents, not a second variant: Tor isolates
+    /// on the pair, and two callers that present the same pair share a
+    /// circuit.
     Persona(&'a SocksUsername),
 }
 
 /// RFC 1929 username and password bytes.
 ///
-/// An empty username is refused. That value is the principal's no-auth
-/// circuit, and a persona must not be able to name it. The password may
-/// be empty; RFC 1929 allows that. Fixed width and the derivation live
-/// with the caller.
+/// Each is 1 to 255 bytes, as RFC 1929's message carries them (§2:
+/// `UNAME` and `PASSWD` are "1 to 255"). An empty username would also be
+/// the principal's no-auth circuit, which a persona must not be able to
+/// name. Fixed width and the derivation live with the caller.
 pub struct SocksUsername {
     username: Zeroizing<Vec<u8>>,
     password: Zeroizing<Vec<u8>>,
 }
 
 impl SocksUsername {
-    /// Copy `username` and `password`. Longer than 255 bytes, or an empty
-    /// username, is [`SocksError::Malformed`].
+    /// Copy `username` and `password`. Either empty or longer than 255
+    /// bytes is [`SocksError::Malformed`].
     pub fn new(username: &[u8], password: &[u8]) -> Result<Self, SocksError> {
-        if username.is_empty() || username.len() > 255 || password.len() > 255 {
+        let carried = |field: &[u8]| (1..=255).contains(&field.len());
+        if !carried(username) || !carried(password) {
             return Err(SocksError::Malformed);
         }
         Ok(Self {
@@ -75,6 +97,150 @@ impl SocksUsername {
 impl core::fmt::Debug for SocksUsername {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("SocksUsername(<redacted>)")
+    }
+}
+
+/// A SOCKS5 proxy to dial through, and the RFC 1929 pair it asks for.
+///
+/// The pair is bound to the address: [`Proxy::isolation`] presents it on a
+/// dial to this proxy and on no other, so a pair given for one proxy cannot
+/// reach another. Without a pair the dial offers no authentication. Cloned
+/// per dial; the pair is shared, not copied.
+#[derive(Clone)]
+pub struct Proxy {
+    at: SocketAddr,
+    pair: Option<Arc<SocksUsername>>,
+}
+
+impl Proxy {
+    /// A proxy that asks for no authentication.
+    #[must_use]
+    pub fn unauthenticated(at: SocketAddr) -> Self {
+        Self { at, pair: None }
+    }
+
+    /// A proxy that asks for `pair`.
+    #[must_use]
+    pub fn authenticated(at: SocketAddr, pair: SocksUsername) -> Self {
+        Self {
+            at,
+            pair: Some(Arc::new(pair)),
+        }
+    }
+
+    /// A proxy that asks for a pair the caller holds for its own purpose,
+    /// and presents again on each use. The pair is shared, not copied: a
+    /// fixed per-boot isolation username (`TOR_SUPERVISOR.md` §4.5) is
+    /// minted once and read here at every dial.
+    #[must_use]
+    pub fn authenticated_shared(at: SocketAddr, pair: Arc<SocksUsername>) -> Self {
+        Self {
+            at,
+            pair: Some(pair),
+        }
+    }
+
+    /// The proxy's address.
+    #[must_use]
+    pub fn at(&self) -> SocketAddr {
+        self.at
+    }
+
+    /// Whether a pair is presented.
+    #[must_use]
+    pub fn authenticates(&self) -> bool {
+        self.pair.is_some()
+    }
+
+    /// The one method a dial to this proxy offers: its pair, or none.
+    #[must_use]
+    pub fn isolation(&self) -> Isolation<'_> {
+        match &self.pair {
+            Some(pair) => Isolation::Persona(pair),
+            None => Isolation::Principal,
+        }
+    }
+}
+
+impl Proxy {
+    /// What to tell the operator when this proxy refused the dial's
+    /// authentication, or `None` when `error` is not about authentication.
+    /// `option` is the row that names this proxy (`clearnet-socks`,
+    /// `tor-socks`); its `-username` and `-password` rows are the pair.
+    #[must_use]
+    pub fn authentication_refused(&self, error: &SocksError, option: &str) -> Option<String> {
+        let at = self.at;
+        let pair = format!("`{option}-username` and `{option}-password`");
+        match error {
+            SocksError::AuthFailed { .. } => Some(format!(
+                "the SOCKS proxy at {at} refused this node's username and password \
+                 ({pair}); dials through it fail until they match"
+            )),
+            SocksError::AuthRejected { selected } if self.authenticates() => Some(format!(
+                "the SOCKS proxy at {at} does not take a username and password \
+                 (it selected method {selected:#04x}); remove {pair}"
+            )),
+            SocksError::AuthRejected { selected } => Some(format!(
+                "the SOCKS proxy at {at} asks for authentication this node does not \
+                 send (it selected method {selected:#04x}); if it takes a username and \
+                 password, set {pair}"
+            )),
+            SocksError::Io(_) | SocksError::Refused { .. } | SocksError::Malformed => None,
+        }
+    }
+}
+
+/// How often a failing SOCKS proxy is named in the log: once a minute at
+/// most, never once per dial (Rick, 2026-10-14). A dead or refusing proxy
+/// fails every dial in turn, and a line per dial would bury the one fact.
+pub const PROXY_WARN_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// When a failing proxy was last named, and how many failures went
+/// unnamed since. One per kind of failure a connector reports.
+pub struct ProxyWarn {
+    last: Option<std::time::Instant>,
+    unnamed: u64,
+}
+
+impl ProxyWarn {
+    /// Nothing named yet: the first failure is due.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            last: None,
+            unnamed: 0,
+        }
+    }
+
+    /// `Some(unnamed)` when a warning is due at `now`, with the failures
+    /// since the last one; `None` while the last is under a minute old.
+    pub fn due(&mut self, now: std::time::Instant) -> Option<u64> {
+        match self.last {
+            Some(last) if now.saturating_duration_since(last) < PROXY_WARN_EVERY => {
+                self.unnamed = self.unnamed.saturating_add(1);
+                None
+            }
+            _ => {
+                self.last = Some(now);
+                Some(std::mem::take(&mut self.unnamed))
+            }
+        }
+    }
+}
+
+impl Default for ProxyWarn {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl core::fmt::Debug for Proxy {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Proxy")
+            .field("at", &self.at)
+            // `SocksUsername`'s own `Debug` redacts both halves.
+            .field("pair", &self.pair)
+            .finish()
     }
 }
 
@@ -214,6 +380,120 @@ where
     Ok(())
 }
 
+/// The RFC 1929 username and password a client presented to
+/// [`accept_userpass`].
+///
+/// Both halves are wiped on drop. [`Debug`] redacts them, as
+/// [`SocksUsername`] does.
+pub struct PresentedCredentials {
+    username: Zeroizing<Vec<u8>>,
+    password: Zeroizing<Vec<u8>>,
+}
+
+impl PresentedCredentials {
+    /// The username the client sent.
+    #[must_use]
+    pub fn username(&self) -> &[u8] {
+        &self.username
+    }
+
+    /// The password the client sent.
+    #[must_use]
+    pub fn password(&self) -> &[u8] {
+        &self.password
+    }
+}
+
+impl core::fmt::Debug for PresentedCredentials {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PresentedCredentials(<redacted>)")
+    }
+}
+
+/// Accept the greeting [`Isolation::Persona`] sends, and return the pair.
+///
+/// The client must offer exactly username/password. A greeting that is not
+/// SOCKS5, or that offers any other method list, is answered with "no
+/// acceptable method" and [`SocksError::Malformed`], so a stand-in cannot
+/// select "no authentication" and put the dial on a shared circuit. An empty
+/// username or password is refused the same way [`SocksUsername::new`]
+/// refuses to build one, with the RFC 1929 failure status. On success the stream sits at the
+/// CONNECT request. The returned bytes are wiped on drop, including when the
+/// username is refused after they have been read.
+///
+/// # Errors
+///
+/// [`SocksError::Io`] when the stream fails. [`SocksError::Malformed`] when
+/// the greeting is not that one method, the RFC 1929 message is not version
+/// 1, or the username or the password is empty.
+pub async fn accept_userpass<S>(stream: &mut S) -> Result<PresentedCredentials, SocksError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut greeting = [0u8; 2];
+    stream
+        .read_exact(&mut greeting)
+        .await
+        .map_err(SocksError::Io)?;
+    if greeting[0] != VERSION {
+        return refuse_greeting(stream).await;
+    }
+    let mut methods = vec![0u8; usize::from(greeting[1])];
+    stream
+        .read_exact(&mut methods)
+        .await
+        .map_err(SocksError::Io)?;
+    if methods != [USER_PASS] {
+        return refuse_greeting(stream).await;
+    }
+    stream
+        .write_all(&[VERSION, USER_PASS])
+        .await
+        .map_err(SocksError::Io)?;
+
+    let mut head = [0u8; 2];
+    stream.read_exact(&mut head).await.map_err(SocksError::Io)?;
+    if head[0] != USERPASS_VERSION {
+        return Err(SocksError::Malformed);
+    }
+    let mut username = Zeroizing::new(vec![0u8; usize::from(head[1])]);
+    stream
+        .read_exact(&mut username)
+        .await
+        .map_err(SocksError::Io)?;
+    let mut plen = [0u8; 1];
+    stream.read_exact(&mut plen).await.map_err(SocksError::Io)?;
+    let mut password = Zeroizing::new(vec![0u8; usize::from(plen[0])]);
+    stream
+        .read_exact(&mut password)
+        .await
+        .map_err(SocksError::Io)?;
+    if username.is_empty() || password.is_empty() {
+        stream
+            .write_all(&[USERPASS_VERSION, USERPASS_FAILURE])
+            .await
+            .map_err(SocksError::Io)?;
+        return Err(SocksError::Malformed);
+    }
+    stream
+        .write_all(&[USERPASS_VERSION, SUCCEEDED])
+        .await
+        .map_err(SocksError::Io)?;
+    Ok(PresentedCredentials { username, password })
+}
+
+/// RFC 1928 "no acceptable method", then [`SocksError::Malformed`].
+async fn refuse_greeting<S>(stream: &mut S) -> Result<PresentedCredentials, SocksError>
+where
+    S: AsyncWrite + Unpin,
+{
+    stream
+        .write_all(&[VERSION, NO_ACCEPTABLE])
+        .await
+        .map_err(SocksError::Io)?;
+    Err(SocksError::Malformed)
+}
+
 fn request(dest: &Destination<'_>) -> Result<Vec<u8>, SocksError> {
     let mut out = vec![VERSION, CONNECT, 0];
     match dest {
@@ -260,7 +540,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{connect, Destination, Isolation, SocksError, SocksUsername};
+    use super::{
+        accept_userpass, connect, Destination, Isolation, Proxy, ProxyWarn, SocksError,
+        SocksUsername, PROXY_WARN_EVERY,
+    };
     use std::net::{Ipv4Addr, SocketAddr};
     use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
 
@@ -380,6 +663,83 @@ mod tests {
         ));
     }
 
+    /// RFC 1929 §2: `PASSWD` is 1 to 255 bytes, as `UNAME` is.
+    #[test]
+    fn each_half_is_one_to_255_bytes() {
+        assert!(matches!(
+            SocksUsername::new(b"u", b""),
+            Err(SocksError::Malformed)
+        ));
+        assert!(matches!(
+            SocksUsername::new(&[b'u'; 256], b"p"),
+            Err(SocksError::Malformed)
+        ));
+        assert!(matches!(
+            SocksUsername::new(b"u", &[b'p'; 256]),
+            Err(SocksError::Malformed)
+        ));
+        assert!(SocksUsername::new(&[b'u'; 255], &[b'p'; 255]).is_ok());
+    }
+
+    /// The proxy is named on its first failure, then not again for a
+    /// minute however many dials fail, and the next warning counts them.
+    #[test]
+    fn a_failing_proxy_is_named_once_a_minute_with_the_dials_in_between() {
+        let start = std::time::Instant::now();
+        let mut warn = ProxyWarn::new();
+        assert_eq!(warn.due(start), Some(0));
+        for i in 1..=50u32 {
+            let at = start + PROXY_WARN_EVERY * i / 51;
+            assert_eq!(warn.due(at), None, "dial {i} within the minute");
+        }
+        assert_eq!(warn.due(start + PROXY_WARN_EVERY), Some(50));
+        assert_eq!(warn.due(start + PROXY_WARN_EVERY * 3 / 2), None);
+    }
+
+    #[test]
+    fn a_refused_pair_names_the_rows_to_fix_and_never_the_pair() {
+        let at = SocketAddr::from(([127, 0, 0, 1], 1080));
+        let proxy = Proxy::authenticated(at, SocksUsername::new(b"op", b"hunter2").unwrap());
+        let failed = proxy
+            .authentication_refused(&SocksError::AuthFailed { status: 1 }, "clearnet-socks")
+            .expect("an authentication refusal");
+        assert!(failed.contains("`clearnet-socks-username` and `clearnet-socks-password`"));
+        assert!(
+            !failed.contains("hunter2") && !failed.contains("op)"),
+            "{failed}"
+        );
+        let unwanted = proxy
+            .authentication_refused(&SocksError::AuthRejected { selected: 0 }, "tor-socks")
+            .expect("an authentication refusal");
+        assert!(
+            unwanted.contains("remove `tor-socks-username`"),
+            "{unwanted}"
+        );
+        let wanted = Proxy::unauthenticated(at)
+            .authentication_refused(&SocksError::AuthRejected { selected: 2 }, "tor-socks")
+            .expect("an authentication refusal");
+        assert!(wanted.contains("set `tor-socks-username`"), "{wanted}");
+        assert!(proxy
+            .authentication_refused(&SocksError::Refused { reply: 5 }, "tor-socks")
+            .is_none());
+    }
+
+    #[test]
+    fn a_proxy_presents_its_pair_and_debug_shows_neither_half() {
+        let at = SocketAddr::from(([127, 0, 0, 1], 1080));
+        let bare = Proxy::unauthenticated(at);
+        assert!(matches!(bare.isolation(), Isolation::Principal));
+        let pair = SocksUsername::new(b"operator", b"hunter2").unwrap();
+        let proxy = Proxy::authenticated(at, pair);
+        assert_eq!(proxy.at(), at);
+        assert!(matches!(proxy.isolation(), Isolation::Persona(_)));
+        let shown = format!("{proxy:?}");
+        assert!(
+            !shown.contains("operator") && !shown.contains("hunter2"),
+            "{shown}"
+        );
+    }
+
     #[test]
     fn debug_redacts_the_username() {
         let user = SocksUsername::new(b"persona-user-secret", b"shekyl-p").unwrap();
@@ -424,6 +784,81 @@ mod tests {
         .await
         .unwrap();
         peer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn accept_userpass_returns_the_pair_a_persona_presents() {
+        let user = SocksUsername::new(b"shekyl-fetch", b"one-read").unwrap();
+        let (mut client, mut server) = duplex(64);
+        let peer = tokio::spawn(async move {
+            let presented = accept_userpass(&mut server).await.unwrap();
+            let rendered = format!("{presented:?}");
+            assert!(!rendered.contains("shekyl-fetch"));
+            assert!(!rendered.contains("one-read"));
+            let pair = (presented.username().to_vec(), presented.password().to_vec());
+            let mut request = [0u8; 10];
+            server.read_exact(&mut request).await.unwrap();
+            server
+                .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                .await
+                .unwrap();
+            pair
+        });
+        connect(
+            &mut client,
+            Isolation::Persona(&user),
+            Destination::Ip(v4()),
+        )
+        .await
+        .unwrap();
+        let (name, pass) = peer.await.unwrap();
+        assert_eq!(name, b"shekyl-fetch");
+        assert_eq!(pass, b"one-read");
+    }
+
+    #[tokio::test]
+    async fn accept_userpass_refuses_no_auth_and_a_mixed_greeting() {
+        let (mut client, mut server) = duplex(64);
+        let peer = tokio::spawn(async move { accept_userpass(&mut server).await.unwrap_err() });
+        let err = connect(&mut client, Isolation::Principal, Destination::Ip(v4()))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SocksError::AuthRejected { selected: 0xFF }));
+        assert!(matches!(peer.await.unwrap(), SocksError::Malformed));
+
+        let (mut client, mut server) = duplex(64);
+        let peer = tokio::spawn(async move { accept_userpass(&mut server).await.unwrap_err() });
+        client.write_all(&[0x05, 2, 0x00, 0x02]).await.unwrap();
+        let mut chosen = [0u8; 2];
+        client.read_exact(&mut chosen).await.unwrap();
+        assert_eq!(chosen, [0x05, 0xFF]);
+        assert!(matches!(peer.await.unwrap(), SocksError::Malformed));
+    }
+
+    #[tokio::test]
+    async fn accept_userpass_refuses_a_foreign_version() {
+        let (mut client, mut server) = duplex(64);
+        let peer = tokio::spawn(async move { accept_userpass(&mut server).await.unwrap_err() });
+        client.write_all(&[0x04, 1, 0x02]).await.unwrap();
+        let mut chosen = [0u8; 2];
+        client.read_exact(&mut chosen).await.unwrap();
+        assert_eq!(chosen, [0x05, 0xFF]);
+        assert!(matches!(peer.await.unwrap(), SocksError::Malformed));
+    }
+
+    #[tokio::test]
+    async fn accept_userpass_refuses_an_empty_username() {
+        let (mut client, mut server) = duplex(64);
+        let peer = tokio::spawn(async move { accept_userpass(&mut server).await.unwrap_err() });
+        client.write_all(&[0x05, 1, 0x02]).await.unwrap();
+        let mut chosen = [0u8; 2];
+        client.read_exact(&mut chosen).await.unwrap();
+        assert_eq!(chosen, [0x05, 0x02]);
+        client.write_all(&[0x01, 0, 0]).await.unwrap();
+        let mut status = [0u8; 2];
+        client.read_exact(&mut status).await.unwrap();
+        assert_eq!(status, [0x01, 0x01]);
+        assert!(matches!(peer.await.unwrap(), SocksError::Malformed));
     }
 
     #[tokio::test]

@@ -30,7 +30,7 @@ mod set;
 mod staleness;
 mod witness;
 
-pub use report::{PinError, PinReport, ReportedSet, ServeSetPinner};
+pub use report::{PinError, PinReport, ReportedSet, ServeSetPinner, StoreFacts, StoreIdentity};
 pub use set::{ServeObligation, ServeSet};
 pub use staleness::{Staleness, StalenessBound};
 pub use witness::PinnedServeSet;

@@ -97,7 +97,7 @@ namespace
       catch (...) { return false; }
     }
 
-    key get_tx_prehash(const CtSig &rv, hw::device &hwdev)
+    key get_tx_prehash(const CtSig &rv)
     {
       keyV hashes;
       hashes.reserve(3);
@@ -108,7 +108,6 @@ namespace
       binary_archive<true> ba(ss);
       const size_t inputs = rv.p.pseudoOuts.size();
       const size_t outputs = rv.enc_amounts.size();
-      key prehash;
       CHECK_AND_ASSERT_THROW_MES(const_cast<CtSig&>(rv).serialize_ctsig_base(ba, inputs, outputs),
           "Failed to serialize CtSigBase");
       cryptonote::get_blob_hash(ss.str(), h);
@@ -131,8 +130,7 @@ namespace
           kv.push_back(p.R[n]);
       }
       hashes.push_back(cn_fast_hash(kv));
-      hwdev.tx_prehash(ss.str(), inputs, outputs, hashes, rv.outPk, prehash);
-      return  prehash;
+      return cn_fast_hash(hashes);
     }
 
     //ver FCMP++ simple

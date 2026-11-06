@@ -73,7 +73,11 @@ if ! python3 "$here/strip_c_comments.py" --self-test >/dev/null; then
 fi
 
 MINT_PATTERN='reward_P|archival.*emission.*mint|mint.*archival.*reward'
-MINT_ROOTS=(src/fcmp src/cryptonote_core)
+# The C++ that could have carried a mint path: src/fcmp is what is left of it
+# since the C++ block-connect host (src/cryptonote_core) was deleted on
+# 2026-11-05 with the p2p remnant cutover; connect is Rust's
+# (rust/shekyl-chain-rules), outside this C++-only grep.
+MINT_ROOTS=(src/fcmp)
 
 # Negative controls for comment handling (rule 50). A regression here is a
 # silent green on the tree: refuse to judge until these hold.
@@ -160,94 +164,6 @@ if [[ -n "$NONFIXED_HITS" ]]; then
   echo "  (pure-integer contract underwrites cross-arch bit-identity; see gate comment)" >&2
   printf '%s\n' "$NONFIXED_HITS" >&2
   FAIL=1
-fi
-
-# Staker-inflow accrual operand tripwire (F-B1b / F-B1c-c2, gating round
-# §9.9). The accrual block in handle_block_to_main_chain must:
-#
-#   - split verify's base_reward, with NO second get_block_reward call — a
-#     second call reintroduces the c2 operand drift (an unmodulated staker
-#     leg, re-mintable through emission claims once accrued into
-#     budget(E): an inflation surface);
-#   - read NO tip-relative get_current_version() and NO table-only
-#     get_ideal_version(h), which respectively resurrect F-B1b's boundary
-#     off-by-one under API-convention drift and ignore the vote threshold.
-#
-# F-B1b's operand discipline is RETIRED, and this comment previously said the
-# opposite. It read: "the version still feeds compute_emission_split /
-# compute_fee_burn, so the operand discipline is unchanged." That is no longer
-# true — those helpers take no version at all. Their hf_version gate compared
-# against a constant of 1 on a chain whose only fork entry is version 1, so it
-# could never be taken, and the gate went with the parameters that fed it.
-#
-# So there is no version operand here to take from the right place, and this
-# gate no longer demands bl.major_version be present — demanding it would force
-# a dead local back into consensus code to satisfy a tripwire, which is rule 15
-# backwards. What survives is narrower and still real:
-#
-#   * the F-B1c-c2 rule below (no second get_block_reward) is UNTOUCHED — it
-#     guards an inflation surface, not a version;
-#   * the two banned version reads stay banned, as a REINTRODUCTION guard. If
-#     version-dependence ever returns to this block, bl.major_version is still
-#     the only correct source, and whoever adds it should revisit this gate
-#     rather than discover F-B1b again.
-#
-# The block is extracted by its comment anchor and its m_db->add_block
-# terminator; comments are then stripped before the checks (the block's own
-# comments name the banned symbols as warnings, and a `/* */`-disabled
-# compute_emission_split would otherwise still satisfy the positive anchors).
-# The positive presence checks fail loudly if the anchors drift, so a refactor
-# that moves the block cannot silently retire the gate.
-BLOCKCHAIN_CPP="src/cryptonote_core/blockchain.cpp"
-if [[ ! -f "$BLOCKCHAIN_CPP" ]]; then
-  echo "FAIL: $BLOCKCHAIN_CPP not found — accrual tripwire cannot enforce its contract" >&2
-  echo "  (if the file moved, update BLOCKCHAIN_CPP in this gate; do not let it pass silently)" >&2
-  exit 2
-fi
-ACCRUAL_BLOCK="$(awk '/Staker-inflow accrual \(ARCHIVAL_BUDGET_SCHEDULE/,/m_db->add_block\(/' "$BLOCKCHAIN_CPP")"
-if [[ -z "$ACCRUAL_BLOCK" ]]; then
-  echo "FAIL: staker-inflow accrual block not found in $BLOCKCHAIN_CPP" >&2
-  echo "  (if the anchors moved, update this tripwire; do not let it pass silently)" >&2
-  FAIL=1
-else
-  accrual_tmp=$(mktemp)
-  printf '%s\n' "$ACCRUAL_BLOCK" > "$accrual_tmp"
-  ACCRUAL_CODE=$(code_only "$accrual_tmp") || {
-    rm -f "$accrual_tmp"
-    echo "FATAL: comment stripper failed on the extracted accrual block" >&2
-    exit 2
-  }
-  rm -f "$accrual_tmp"
-
-  hits=$(printf '%s' "$ACCRUAL_CODE" | scan -n 'get_block_reward')
-  if [[ -n "$hits" ]]; then
-    echo "FAIL: get_block_reward call inside the staker-inflow accrual block" >&2
-    echo "  (the split operand is verify's base_reward; a second reward computation" >&2
-    echo "   reintroduces the F-B1c-c2 operand drift — see gating round §9.9)" >&2
-    printf '%s\n' "$hits" >&2
-    FAIL=1
-  fi
-  hits=$(printf '%s' "$ACCRUAL_CODE" | scan -n 'get_current_version|get_ideal_version\(')
-  if [[ -n "$hits" ]]; then
-    echo "FAIL: tip-relative or table-only version read inside the accrual block" >&2
-    echo "  (the version operand is bl.major_version — the block's own consensus-checked" >&2
-    echo "   version; see F-B1b in gating round §9.9)" >&2
-    printf '%s\n' "$hits" >&2
-    FAIL=1
-  fi
-  # Anchors are the three symbols that MAKE this the accrual block: both legs
-  # of the staker inflow and the variable they sum into. Anchoring on an
-  # operand instead was the flaw the hf_version deletion exposed — an anchor
-  # must be something the block cannot lose without ceasing to be itself, or
-  # the tripwire fires on correct refactors and gets weakened to shut it up.
-  for anchor in 'compute_emission_split' 'compute_fee_burn' 'archival_budget_accrual'; do
-    if [[ -z "$(printf '%s' "$ACCRUAL_CODE" | scan "$anchor")" ]]; then
-      echo "FAIL: accrual-block anchor '${anchor}' not found in the extracted block" >&2
-      echo "  Either the block moved (re-anchor this tripwire to it), or a leg of the" >&2
-      echo "  staker inflow was removed (that is a consensus change — justify it)." >&2
-      FAIL=1
-    fi
-  done
 fi
 
 # Mint gate: no live emission vin crediting outputs (provisional bands).

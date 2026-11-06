@@ -25,20 +25,26 @@
 //! against the persona **strictly above** `h` (A2, `slash_log_after`). The
 //! judgement over them is consensus arithmetic, which is this crate's (E4
 //! commit 2, the `SAR-Q7` staged pair). The C++ stays live until the
-//! cutover; the LMDB as-of-height cases (`archival_substrate_lmdb.cpp:1674–
-//! 1893`) are this module's tests.
+//! cutover; the as-of-height cases are this module's tests.
 //!
 //! # Three sources, one answer
 //!
-//! Holdings at `h` are the **post-connect** state of block `h`. Under
+//! Holdings at `h` are the **post-connect** state of block `h`. They only
+//! shrink (slash) since the immutable-bond ruling (2026-09-20,
+//! `PRINCIPAL_STAKE_LIFECYCLE.md` §5.3): a shard joins at `JoinMarket` or
+//! never, so a compact record's per-shard add epoch is its join epoch and
+//! "held at tip" reaches back exactly that far. The bound below is written
+//! against the add epoch rather than the join epoch because the record
+//! field is per shard and a slash's log row carries the add epoch of the
+//! tenure it ended; it degenerates to the join epoch, and is the add-epoch
+//! substrate enumerated at §5.3.2 row 7. *(As written: "Under
 //! `HoldingsUpdate` they grow (add) as well as shrink (drop, slash), so
-//! "held at tip" does not reach back to join — it reaches back to the
-//! shard's latest **add**, and a slash's log row carries the add epoch of
-//! the tenure it ended so a *previous* tenure reconstructs the same way:
+//! 'held at tip' … reaches back to the shard's latest **add**". That kind
+//! is REJECTED; there is no later add and no voluntary drop.)*
 //!
 //! - **Held at tip, complete tree** ⇒ held at every height. A foundation
-//!   record cannot `HoldingsUpdate`, and every caller's record-epoch gating
-//!   puts the fire height after join.
+//!   record's holdings cannot change, and every caller's record-epoch
+//!   gating puts the fire height after join.
 //! - **Held at tip, compact** ⇒ held for every height in epochs **strictly
 //!   after** the shard's add epoch. The add connected at an unknown height
 //!   *within* its epoch, so holding is epoch-guaranteed only from the next
@@ -132,8 +138,7 @@ fn removed_holding(entry: &SlashLogEntry, shard: ShardId, at_epoch: SettlementEp
 
 #[cfg(test)]
 mod tests {
-    //! The LMDB as-of-height cases (`archival_substrate_lmdb.cpp:1674–1893`),
-    //! as the fold over the two reads: the log is a `(height, entry)` list
+    //! The as-of-height cases, as the fold over the two reads: the log is a `(height, entry)` list
     //! and `after(h)` is A2's contract — rows strictly above `h` — applied
     //! in the test, so what is asserted is the composition the C++ fused.
     //! The `slash_revert_*` cases beside them are pop-revert tests, which
@@ -166,13 +171,13 @@ mod tests {
     }
 
     /// The first height of epoch `e` under [`SCHEDULE`] — the C++ fixture's
-    /// `shekyl_archival_epoch_open_height`.
+    /// epoch-open FFI (deleted, `DEL-008`).
     fn open(e: u64) -> BlockHeight {
         h(SCHEDULE.open_height(e))
     }
 
     /// Epoch `e`'s last block under [`SCHEDULE`], `(e + 1)·SEB − 1` — the
-    /// C++ fixture's `shekyl_archival_epoch_last_block`, one below the
+    /// C++ fixture's epoch-last-block FFI (deleted, `DEL-008`), one below the
     /// close-*processing* height `consensus_state::epoch_close_height`
     /// names.
     fn last(e: u64) -> BlockHeight {
@@ -187,6 +192,9 @@ mod tests {
         BondRecord {
             hybrid_pubkey: vec![0x0a; 64],
             bond_spend_pk: vec![0x0b; 32],
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x0c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0; 32],
             join_settlement_epoch: epoch(2),
             bonded_total: AtomicUnits::from_raw(2),
@@ -240,8 +248,7 @@ mod tests {
         holds_shard_at(SCHEDULE, record, shard(s), at, &log.after(at))
     }
 
-    /// `holds_shard_honors_at_height_across_slash_removal` (:1697). Add
-    /// epoch 2 for both shards, so held heights start at epoch 3's open;
+    /// Held across a slash's removal. Add epoch 2 for both shards, so held heights start at epoch 3's open;
     /// shard 7 is slashed mid-epoch 3 and its tenure is erased from the
     /// record, the log row carrying the add epoch it ended.
     #[test]
@@ -294,11 +301,14 @@ mod tests {
         assert!(!held(&record, &log, 42, h(slash_height - 1)));
     }
 
-    /// `holds_shard_bounds_added_shard_by_its_add_epoch` (:1756), the
-    /// `HoldingsUpdate`-add case: joined at epoch 2 with shard 7, shard 9
-    /// added at epoch 5 — held from its *own* add epoch's close, not from
-    /// join, so a fire height before or inside the add epoch reads
-    /// not-held and no unjust slash or add-epoch credit is possible.
+    /// A shard added after join is bounded by its own add epoch: a record
+    /// whose shard 9 carries add epoch 5 against a join at epoch 2 — held
+    /// from its *own* add epoch's close, not from join, so a fire height
+    /// before or inside the add epoch reads not-held and no unjust slash
+    /// or add-epoch credit is possible. No connect path produces such a
+    /// record since `HoldingsUpdate` was REJECTED (2026-09-20); the test
+    /// pins the bound's per-shard reading of the field, which is what a
+    /// slash log row relies on.
     #[test]
     fn an_added_shard_is_held_only_from_the_epoch_after_its_add() {
         let record = record(compact(&[(7, 2), (9, 5)]));
@@ -315,7 +325,7 @@ mod tests {
         assert!(!held(&record, &log, 9, open(3)));
     }
 
-    /// `holds_shard_reconstructs_complete_tree_demotion` (:1787): the slash
+    /// A demoted complete tree is reconstructed: the slash
     /// cleared *every* holding, so the pre-image held every shard —
     /// including ones the row does not name. The row's holding kind is
     /// what tells a demoted complete tree from a compact bond that lost its

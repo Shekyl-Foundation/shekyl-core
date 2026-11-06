@@ -92,11 +92,12 @@
 // an integer millisecond reading. Same disposition as `d9_alpha.rs`.
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_draw_rng::SplitMix64;
+use shekyl_relay_privacy::basis::DerivationMs;
 use shekyl_relay_privacy::conformance::{
     converged_fluff_return_mixed, ConvergenceBudget, FloodParams, FloodReach, FLOOD_TICK_MS,
 };
 use shekyl_relay_privacy::schedule::DelayFamily;
-use shekyl_relay_privacy::SplitMix64;
 
 /// `f7_directed.rs`'s inputs, so this runs on the measurement it governs.
 const MEAN_QUARTER_SECS: u32 = 20;
@@ -138,7 +139,9 @@ fn shipped_topology() -> FloodParams {
         // set to the floor so the struct does not misdescribe the run.
         peers: FLOOR,
         reach: FloodReach::OutboundOnly,
-        transit_ms: shekyl_relay_privacy::conformance::transit_for(FloodReach::OutboundOnly),
+        transit_ms: shekyl_relay_privacy::conformance::transit_for(
+            shekyl_relay_privacy::MeasuredConnector::Tor,
+        ),
     }
 }
 
@@ -360,9 +363,10 @@ fn dependents_at_each_candidate_boundary() {
     use shekyl_relay_privacy::schedule::{
         EmbargoTimer, ADOPTED_PROPAGATION_TIMEOUT_SECS, PROPAGATION_FALSE_FAIL_ONE_IN,
     };
-    // No `RelayZone` import: every zone this test touches now comes from
-    // `CLASS_REPRESENTATIVES` itself, so there is no way to name a zone the
-    // measured columns did not come from.
+    use shekyl_relay_privacy::verify_cost::{ADOPTED_TRANSIT, ANON_ZONE_TRANSIT};
+    // The two columns are the two shipped transit assumptions. A third
+    // assumption is a new constant and a new column, not a silent extra
+    // class in an array.
 
     /// `DIFFICULTY_TARGET` — the block interval §44/§15 reconcile against.
     const BLOCK_INTERVAL_SECS: u32 = 120;
@@ -383,37 +387,26 @@ fn dependents_at_each_candidate_boundary() {
         (12_375, "S91 A: anon transit, beta = 0"),
         (13_625, "S91 A: anon transit, beta* = p90"),
     ] {
-        // **The two classes are DESTRUCTURED, not indexed — the pattern is the
-        // pin.** §89.2 splits the adopted parameter sets into exactly two
-        // transit classes, and this test is binary all the way down: two named
-        // columns, a pairwise comparison between them, and a calibration
-        // against the two embargo constants the FFI pins. Sizing a container to
-        // `CLASS_REPRESENTATIVES.len()` would let a third class compile and
-        // then silently vanish from the table — a loud failure traded for a
-        // quiet omission. This pattern instead fails to COMPILE if the set ever
-        // grows, which is the signal to rewrite the test rather than widen it.
-        let [clearnet_zone, anon_zone] = DandelionParams::CLASS_REPRESENTATIVES;
-        let embargo_secs = |zone| {
+        let embargo_secs = |transit: DerivationMs| {
             EmbargoTimer::adopted(&DandelionParams {
-                fluff_return_ms: f_prime,
-                ..DandelionParams::adopted_for(zone)
+                fluff_return_ms: DerivationMs::model(f_prime),
+                ..DandelionParams::adopted_for_transit_ms(transit)
             })
             .mean_secs()
         };
-        let clearnet = embargo_secs(clearnet_zone);
-        let anon = embargo_secs(anon_zone);
+        let clearnet = embargo_secs(ADOPTED_TRANSIT);
+        let anon = embargo_secs(ANON_ZONE_TRANSIT);
 
-        // The wallet wait is taken over the WORST zone, per §89.2 — picked from
-        // the representatives just measured rather than re-named independently,
-        // so the wait can never be drawn from a zone the columns did not read.
-        let worst_zone = if anon >= clearnet {
-            anon_zone
+        // The wallet wait is the longer of the two declared transits.
+        // *Records-was:* §89.2 took it over the worst `RelayZone`.
+        let worst_transit = if anon >= clearnet {
+            ANON_ZONE_TRANSIT
         } else {
-            clearnet_zone
+            ADOPTED_TRANSIT
         };
         let wait = EmbargoTimer::adopted(&DandelionParams {
-            fluff_return_ms: f_prime,
-            ..DandelionParams::adopted_for(worst_zone)
+            fluff_return_ms: DerivationMs::model(f_prime),
+            ..DandelionParams::adopted_for_transit_ms(worst_transit)
         })
         .judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
         let crossings = clearnet / BLOCK_INTERVAL_SECS;
@@ -421,16 +414,14 @@ fn dependents_at_each_candidate_boundary() {
             "  {f_prime:5}   {region:26}   {clearnet:8} s   {anon:4} s   {wait:8} s   {crossings:5}"
         );
 
-        // The anonymity zone takes the longer hop (§89.2's per-zone split, the
-        // ONLY term that differs between the two parameter sets), so its solve
-        // must exceed clearnet's at every candidate. Equal values would mean
-        // `adopted_for` stopped distinguishing the classes and the whole
-        // two-column table is one column printed twice.
+        // The longer measured transit takes the longer hop. Equal values
+        // would mean the two transit assumptions stopped distinguishing
+        // the columns and the table is one column printed twice.
         assert!(
             anon > clearnet,
             "the anonymity embargo ({anon} s) must exceed clearnet's ({clearnet} s) at \
-             F' = {f_prime}: the zones differ only in transit class, and a tie means \
-             `adopted_for` is no longer splitting them"
+             F' = {f_prime}: the columns differ only in measured transit, and a tie \
+             means the two assumptions are no longer splitting them"
         );
         // The wallet wait is a 1-in-N SURVIVAL quantile of the worst zone's
         // table, so it cannot come in at or under that table's mean.
@@ -456,12 +447,12 @@ fn dependents_at_each_candidate_boundary() {
     );
     assert_eq!(
         shipped_clear, 190,
-        "the shipped clearnet embargo is pinned at 190 s (dandelionpp_ffi.rs); this \
+        "the shipped clearnet embargo is pinned at 190 s (EmbargoTimer::adopted); this \
          derivation gives {shipped_clear} s"
     );
     assert_eq!(
         shipped_anon, 499,
-        "the shipped anonymity embargo is pinned at 499 s (dandelionpp_ffi.rs); this \
+        "the shipped anonymity embargo is pinned at 499 s (EmbargoTimer::adopted); this \
          derivation gives {shipped_anon} s"
     );
     assert_eq!(
@@ -665,12 +656,10 @@ fn the_step_is_not_a_degraded_source_artifact() {
 /// axis.
 #[test]
 fn leak_at_each_candidate_region() {
-    use shekyl_relay_privacy::conformance::{simulate_passive_neighbor_leak, Transport};
+    use shekyl_relay_privacy::conformance::{simulate_passive_neighbor_leak, FloodReach};
     use shekyl_relay_privacy::derive::derive_embargo;
     use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
     use shekyl_relay_privacy::schedule::{EmbargoTimer, DEFAULT_EMBARGO_TICK_MILLIS};
-    use shekyl_relay_privacy::zone::RelayZone;
-
     // **Trials are matched to the claim each row makes, not set uniformly.**
     // Uniform 1e6 across every row cost ~20 s in a debug CI test to buy
     // precision on rows whose claims are qualitative, which is budget spent
@@ -682,9 +671,10 @@ fn leak_at_each_candidate_region() {
     // the tolerance below a real bound instead of a restatement of the sampling
     // error. This one does not move.
     const CANDIDATE_TRIALS: usize = 1_000_000;
-    // The anonymity rows assert a STRUCTURAL zero (§6.6: fluff never traverses
-    // the supernode's inbound edges). Any nonzero reading is a defect whatever
-    // the count, so precision buys nothing — this is not a statistical claim.
+    // The retired D7 graph (OutboundOnly) asserts a structural zero: fluff
+    // never traverses the supernode's inbound edges. Production reach is
+    // EveryPeer, measured in the column above. Any nonzero reading on the
+    // retired graph is a defect whatever the count.
     const STRUCTURAL_TRIALS: usize = 100_000;
     // The sensitivity control demonstrates a ~14x separation; at p ~ 0.06 that
     // is some eighty standard errors at this count. Raising it would not make
@@ -698,14 +688,14 @@ fn leak_at_each_candidate_region() {
     const NOISE_3SIGMA: f64 = 3.2e-4;
 
     println!("\n  §6.6 passive inbound-supernode leak at each candidate (phi = {PHI})");
-    println!("  F' ms   clearnet E   leak rate   origin share   tor leak");
+    println!("  F' ms   embargo      leak rate   origin share   retired-graph leak");
     println!("  -----   ----------   ---------   ------------   --------");
 
     let mut rows = Vec::new();
     for f_prime in [3_250_u32, 3_500, 4_500, 4_750, 5_000] {
         let params = DandelionParams {
-            fluff_return_ms: f_prime,
-            ..DandelionParams::adopted_for(RelayZone::Public)
+            fluff_return_ms: DerivationMs::model(f_prime),
+            ..DandelionParams::adopted()
         };
         let e = EmbargoTimer::adopted(&params);
         let mut cr = SplitMix64::new(0x1EA4_0000 + u64::from(f_prime));
@@ -713,7 +703,7 @@ fn leak_at_each_candidate_region() {
             &params,
             &e,
             PHI,
-            Transport::Clearnet,
+            FloodReach::EveryPeer,
             CANDIDATE_TRIALS,
             &mut cr,
         );
@@ -722,7 +712,7 @@ fn leak_at_each_candidate_region() {
             &params,
             &e,
             PHI,
-            Transport::Anonymity,
+            FloodReach::OutboundOnly,
             STRUCTURAL_TRIALS,
             &mut tr,
         );
@@ -737,7 +727,7 @@ fn leak_at_each_candidate_region() {
         // assumed to survive the re-baselining.
         assert!(
             t.leak_rate < 1e-12,
-            "the anonymity-zone leak must be structurally zero at F' = {f_prime}, got {}",
+            "the retired OutboundOnly graph must leak nothing at F' = {f_prime}, got {}",
             t.leak_rate
         );
         rows.push((f_prime, c.leak_rate));
@@ -774,13 +764,13 @@ fn leak_at_each_candidate_region() {
         let ticks = u32::try_from(u64::from(secs) * 1000 / DEFAULT_EMBARGO_TICK_MILLIS)
             .expect("control embargo in ticks must fit u32");
         let e = EmbargoTimer::geometric_from_ticks(ticks, DEFAULT_EMBARGO_TICK_MILLIS);
-        let params = DandelionParams::adopted_for(RelayZone::Public);
+        let params = DandelionParams::adopted();
         let mut r = SplitMix64::new(0x0C0C_7201 ^ u64::from(secs));
         simulate_passive_neighbor_leak(
             &params,
             &e,
             PHI,
-            Transport::Clearnet,
+            FloodReach::EveryPeer,
             CONTROL_TRIALS,
             &mut r,
         )
@@ -828,8 +818,8 @@ fn leak_at_each_candidate_region() {
     // column a reading against the wrong embargo.
     for (f_prime, _) in &rows {
         let p = DandelionParams {
-            fluff_return_ms: *f_prime,
-            ..DandelionParams::adopted_for(RelayZone::Public)
+            fluff_return_ms: DerivationMs::model(*f_prime),
+            ..DandelionParams::adopted()
         };
         let d = derive_embargo(
             &p,
@@ -862,8 +852,6 @@ fn alpha_degradation_when_the_network_leaves_the_region() {
     use shekyl_relay_privacy::full_travel_probability;
     use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
     use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
-    use shekyl_relay_privacy::zone::RelayZone;
-
     // Read from the instrument, never restated: `sweep`'s doc records what a
     // copy of these pairs cost the last time one was kept here.
     let rows = sweep(shipped_topology());
@@ -876,10 +864,11 @@ fn alpha_degradation_when_the_network_leaves_the_region() {
             .expect("every candidate boundary is a swept row")
     };
 
-    #[allow(clippy::cast_possible_truncation)]
     let params_at = |f_prime: u64| DandelionParams {
-        fluff_return_ms: f_prime as u32,
-        ..DandelionParams::adopted_for(RelayZone::Public)
+        fluff_return_ms: DerivationMs::model(
+            u32::try_from(f_prime).expect("F' is a whole millisecond count"),
+        ),
+        ..DandelionParams::adopted()
     };
 
     for beta_star in [0.250_f64, 1.0 / 3.0, 0.500] {

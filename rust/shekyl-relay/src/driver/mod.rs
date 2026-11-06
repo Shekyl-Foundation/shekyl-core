@@ -34,13 +34,11 @@
 //! (§20.3). Commands (`update_stems`, connection events) mutate and return
 //! nothing; every effect leaves through [`Driver::poll`] or a force hook.
 
-use shekyl_relay_privacy::rng::RelayRng;
+use shekyl_draw_rng::RelayRng;
 use shekyl_relay_privacy::schedule::Millis;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
-#[cfg(test)]
-use crate::zone::FluffReach;
-use crate::zone::{TxBlob, Zone};
+use crate::graph::{Relay, TxBlob};
 
 /// Work the driver produced that the caller must perform.
 ///
@@ -116,6 +114,22 @@ pub enum Effect {
         /// Channel index. Positional: channel `i` follows stem slot `i`.
         channel: usize,
     },
+    /// Stem these blobs to `peer` on the ordinary wire: an embargo's reshape
+    /// to the alternate (§12.2), or a held origin's first send (RX-2). The
+    /// bytes are the transaction's own; no relay or retry state rides them
+    /// (§12.2 item 5).
+    Stem {
+        /// The successor.
+        peer: ConnectionId,
+        /// The transaction blobs.
+        blobs: Vec<TxBlob>,
+    },
+    /// The zone fluffed these transactions as the last resort, or saw them
+    /// circulate: the pool's shown bit is set for each (criterion 2, Q9).
+    Published {
+        /// The transactions, by hash.
+        txs: Vec<crate::TxId>,
+    },
 }
 
 /// Owns a zone and runs its scheduled steps.
@@ -126,29 +140,29 @@ pub enum Effect {
 /// daemon's force-step hooks honest rather than a test-only shortcut.
 #[derive(Debug)]
 pub struct Driver {
-    zone: Zone,
+    zone: Relay,
 }
 
 impl Driver {
     /// Take ownership of a zone.
-    pub fn new(zone: Zone) -> Self {
+    pub fn new(zone: Relay) -> Self {
         Self { zone }
     }
 
     /// The zone, for commands that arrive from outside (connection events,
     /// transactions offered for relay).
-    pub fn zone_mut(&mut self) -> &mut Zone {
+    pub fn zone_mut(&mut self) -> &mut Relay {
         &mut self.zone
     }
 
     /// The zone, for reads.
-    pub fn zone(&self) -> &Zone {
+    pub fn zone(&self) -> &Relay {
         &self.zone
     }
 
     /// When the driver next has work — the earliest of the epoch boundary,
-    /// any pending fluff batch, any noise channel, and any in-flight stem
-    /// observation.
+    /// any pending fluff batch, any noise channel, any in-flight stem
+    /// observation (each one an embargo), and any held origin's next plan.
     ///
     /// **Derived on every call, never cached.** A stored copy would be a second
     /// owner of a fact the schedulers already hold, and it would go stale the
@@ -165,7 +179,7 @@ impl Driver {
         // noise channel keeps its own deadline in the zone; this only asks
         // which is earliest. That distinction is the whole of CV-3: the shared
         // wake is what makes a resample-on-foreign-wake bug *reachable*, so the
-        // re-arm stays in `Zone::due_noise_channel`, which touches only the
+        // re-arm stays in `Relay::due_noise_channel`, which touches only the
         // single channel that actually fired. Stem observation is the same
         // shape: per-tx deadlines live in `StemWatch`; this only folds the min.
         let mut wake = self.zone.epoch_deadline();
@@ -178,33 +192,27 @@ impl Driver {
         if let Some(stem) = self.zone.stem_observation_deadline() {
             wake = wake.min(stem);
         }
+        if let Some(unsent) = self.zone.unsent_deadline() {
+            wake = wake.min(unsent);
+        }
         wake
     }
 
     /// Run every step due at `now` and return the resulting work.
     ///
-    /// `gather_outbound` yields the caller's current outbound connection set —
-    /// the driver does not reach for it, because the p2p connection table is
-    /// asio's to own (§18.5). It is a **thunk, not a slice**, because the set is
-    /// needed *only* at an epoch boundary, where the stem map is rebuilt; a plain
-    /// fluff-release wake — the common case — must not pay to gather it. So the
-    /// closure is called at most once, and only inside the epoch branch below.
-    /// The branch that decides this is the zone's own `epoch_deadline`, evaluated
-    /// exactly here: the caller never holds a copy of it to decide for itself.
-    pub fn poll<R: RelayRng + ?Sized>(
-        &mut self,
-        now: Millis,
-        gather_outbound: impl FnOnce() -> Vec<ConnectionId>,
-        rng: &mut R,
-    ) -> Vec<Effect> {
+    /// The stem set at an epoch boundary is the zone's established outbound
+    /// sessions. A fluff-release wake does not rebuild it. The branch that
+    /// decides this is the zone's own `epoch_deadline`, evaluated exactly
+    /// here: the caller never holds a copy of it to decide for itself.
+    pub fn poll<R: RelayRng + ?Sized>(&mut self, now: Millis, rng: &mut R) -> Vec<Effect> {
         let mut effects = Vec::new();
 
-        // Epoch first: a rollover re-draws the role and the stem set, and the
-        // fluff release below should observe the new epoch, not the old one.
-        // Only here is `gather_outbound` invoked — a fluff-only wake skips it.
+        // Epoch first: a rollover re-draws the role and the stem set from
+        // the session registry, and the fluff release below should observe
+        // the new epoch, not the old one.
         if now >= self.zone.epoch_deadline() {
             self.zone.start_epoch(now, rng);
-            self.zone.rebuild_stems(gather_outbound(), rng);
+            self.zone.rebuild_stems(rng);
         }
 
         // Stem observations resolve here: a deadline passed with no re-arrival
@@ -213,12 +221,23 @@ impl Driver {
         // to. The earliest pending deadline is folded into `next_wake`, so the
         // asio timer actually fires for these — not only when fluff/epoch
         // happen to wake first.
-        // The count is discarded **intentionally, pending a consumer** — the
-        // selection tier that reads these tallies is §12.11 and is not built.
-        // Said here because a production call with a dropped return is
-        // otherwise indistinguishable from rot at the next census, which is
-        // the same note the noise machinery carries.
-        let _resolved = self.zone.expire_stem_observations(now);
+        // A silence is an embargo that fired: the zone re-stems to the
+        // alternate or fluffs (§12.2, §14.7). Then every held origin that is
+        // due is planned again (RX-2). The tallies the silences also feed are
+        // §12.11's, whose selection consumer is not built.
+        let fired = self.zone.fire_embargoes(now, rng);
+        let unsent = self.zone.due_unsent(now, rng);
+        let mut published = fired.published;
+        published.extend(unsent.published);
+        for (peer, blob) in fired.stems.into_iter().chain(unsent.stems) {
+            effects.push(Effect::Stem {
+                peer,
+                blobs: vec![blob],
+            });
+        }
+        if !published.is_empty() {
+            effects.push(Effect::Published { txs: published });
+        }
 
         for (peer, blobs) in self.zone.flush_fluff(now, false) {
             effects.push(Effect::Fluff { peer, blobs });
@@ -240,7 +259,13 @@ impl Driver {
         // carries the clear instead — see [`Effect::NoiseUnbind`].
         if let Some(channel) = self.zone.due_noise_channel(now, rng) {
             match self.zone.stem_slots().get(channel).copied().flatten() {
-                Some(peer) => effects.push(Effect::NoiseSend { channel, peer }),
+                Some(peer) if self.zone.noise_destination(peer) => {
+                    effects.push(Effect::NoiseSend { channel, peer });
+                }
+                // A volume-cover peer is not a noise destination. The channel
+                // stays armed for a later open-link occupant. An empty slot
+                // still unbinds.
+                Some(_) => {}
                 None => effects.push(Effect::NoiseUnbind { channel }),
             }
         }
@@ -261,14 +286,9 @@ impl Driver {
     }
 
     /// Start a new epoch immediately — what `run_epoch()` drives.
-    pub fn force_epoch<R: RelayRng + ?Sized>(
-        &mut self,
-        now: Millis,
-        outbound: &[ConnectionId],
-        rng: &mut R,
-    ) {
+    pub fn force_epoch<R: RelayRng + ?Sized>(&mut self, now: Millis, rng: &mut R) {
         self.zone.start_epoch(now, rng);
-        self.zone.rebuild_stems(outbound.to_vec(), rng);
+        self.zone.rebuild_stems(rng);
     }
 }
 

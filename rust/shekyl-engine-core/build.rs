@@ -64,8 +64,6 @@ fn main() {
             config_path.display()
         )
     });
-    let archival_bond_floor = get_u64(&map, "archival_bond_floor_atomic", &config_path);
-
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
     let out_file = out_dir.join("consensus_constants_generated.rs");
 
@@ -77,8 +75,7 @@ fn main() {
          // the same JSON by `cmake/generate_consensus_constants.py`.\n\
          pub const FCMP_REFERENCE_BLOCK_MIN_AGE: u64 = {min_age};\n\
          pub const FCMP_REFERENCE_BLOCK_MAX_AGE: u64 = {max_age};\n\
-         pub const CT_TYPE_FCMP_PLUS_PLUS_PQC: u8 = {ct_type};\n\
-         pub const ARCHIVAL_BOND_FLOOR_ATOMIC: u64 = {archival_bond_floor};\n",
+         pub const CT_TYPE_FCMP_PLUS_PLUS_PQC: u8 = {ct_type};\n",
     );
 
     fs::write(&out_file, output).expect("failed writing generated consensus constants");

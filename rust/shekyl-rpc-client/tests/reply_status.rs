@@ -5,18 +5,19 @@
 
 //! A non-OK reply status is a refusal, whatever the rest of the reply holds.
 //!
-//! **This is the trap the daemon side of RK-5b was changed to avoid, caught
-//! on the side that was not changed.** The C++ `CHECK_CORE_READY()` answered
-//! `status = BUSY` with a *default-constructed* `block_header`, and
-//! `get_hardfork_version` read `major_version` straight through — reporting
-//! fork version 0 for a syncing node. The daemon in this tree now refuses
-//! with `CORE_BUSY` instead, which arrives as a JSON-RPC error.
+//! **This is the trap the daemon side of RK-5b was changed to avoid, held on
+//! the side that reads the reply.** The C++ `CHECK_CORE_READY()` answered
+//! `status = BUSY` with a *default-constructed* `block_header`, so a client
+//! that read a header field straight through reported zeros for a syncing
+//! node — for `get_block_hash`, a block hash of 32 zero bytes. The daemon in
+//! this tree refuses with `CORE_BUSY` instead, which arrives as a JSON-RPC
+//! error.
 //!
 //! That fixed the producer. It did not fix this: the wallet talks to whatever
 //! daemon it is pointed at, including an older build that still answers
 //! `BUSY` with zeros. **Fixing the producer and trusting every peer to be the
-//! fixed producer is not a fix**, and a review round found this method still
-//! reading the header without looking at the status beside it.
+//! fixed producer is not a fix**, so the client checks the status beside
+//! every header it reads.
 //!
 //! The double implements only `post`, because that is the trait's one
 //! required method — everything else is a default. No async runtime: the
@@ -71,37 +72,41 @@ impl Rpc for CannedDaemon {
 /// fixture through the wire type rather than by hand. This goes one better
 /// and uses the **oracle capture**: the same bytes the daemon's parity suite
 /// reads, so an OK case that stops resembling a real reply fails here too.
-const CAPTURED_OK: &str =
-    include_str!("../../shekyl-rpc-types/tests/vectors/rpc/get_last_block_header_v1.json");
+const CAPTURED_OK: &str = include_str!(
+    "../../shekyl-rpc-types/tests/vectors/rpc/get_block_header_by_height_full_v1.json"
+);
 
 fn reply_with_status(status: &str) -> String {
-    let mut reply: shekyl_rpc_types::GetLastBlockHeaderResponse =
+    let mut reply: shekyl_rpc_types::GetBlockHeaderByHeightResponse =
         serde_json::from_str(CAPTURED_OK).expect("the captured reply parses");
     reply.status = shekyl_rpc_types::RpcStatus(status.to_owned());
     // The C++ shape: BUSY beside a header nobody filled in.
     if status != shekyl_rpc_types::RpcStatus::OK {
-        reply.block_header.major_version = 0;
+        reply.block_header.hash = shekyl_rpc_types::HashHex::from_bytes([0; 32]);
     }
     serde_json::to_string(&reply).expect("the wire type serializes")
 }
 
 /// A `BUSY` reply carrying a zero-filled header is refused, not read.
 #[test]
-fn a_busy_last_block_header_is_not_read_as_fork_version_zero() {
+fn a_busy_block_header_is_not_read_as_the_zero_hash() {
     let busy = CannedDaemon(reply_with_status(shekyl_rpc_types::RpcStatus::BUSY));
-    let out = block_on(busy.get_hardfork_version());
+    let out = block_on(busy.get_block_hash(0));
     assert!(
         matches!(&out, Err(RpcError::InvalidNode(reason)) if reason.contains("BUSY")),
-        "a BUSY node must be refused, not read as version 0: {out:?}"
+        "a BUSY node must be refused, not read as the zero hash: {out:?}"
     );
 
     // The OK path still answers, so this is not a test that only knows how to
-    // refuse — and the version it answers with is the capture's own.
-    let expected: shekyl_rpc_types::GetLastBlockHeaderResponse =
+    // refuse — and the hash it answers with is the capture's own.
+    let expected: shekyl_rpc_types::GetBlockHeaderByHeightResponse =
         serde_json::from_str(CAPTURED_OK).expect("the captured reply parses");
     let ok = CannedDaemon(reply_with_status(shekyl_rpc_types::RpcStatus::OK));
-    assert_eq!(
-        block_on(ok.get_hardfork_version()).expect("an OK reply"),
-        expected.block_header.major_version
+    let hash = block_on(ok.get_block_hash(0)).expect("an OK reply");
+    assert_eq!(hash, expected.block_header.hash.to_bytes());
+    assert_ne!(
+        hash, [0; 32],
+        "the capture's hash is not the zero the BUSY case carries, or the \
+         refusal above would be indistinguishable from a read"
     );
 }

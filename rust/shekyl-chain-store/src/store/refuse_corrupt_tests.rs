@@ -7,7 +7,7 @@
 //! DRS-E2 RD-Q4). Own file so `connect_tests` stays the write-set and belt
 //! suite rather than growing past the 1k line.
 
-use shekyl_chain_rules::{ChainView, FrontierFault, LeafInput, RuleSet};
+use shekyl_chain_rules::{FrontierFault, HeaderView, LeafInput, RuleSet};
 use shekyl_types::{BlockHeight, GlobalOutputIndex, ShardId};
 
 use super::connect_fixtures::{candidate, connect_chain, judge};
@@ -54,7 +54,7 @@ fn a_corrupt_seen_by_the_validator_poisons_the_batch_and_halts_the_writer() {
     // reaches the tables.
     let again: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let tip = ChainView::tip(&view)?.expect("two blocks").hash;
+        let tip = HeaderView::tip(&view)?.expect("two blocks").hash;
         let cand = candidate(2, tip, Vec::new());
         Ok(batch.connect(judge(&view, cand)?, RuleSet::GENESIS)?)
     });
@@ -224,12 +224,68 @@ fn a_hole_below_the_tip_seen_by_the_validator_is_si7_and_halts_the_writer() {
     // the tables.
     let again: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let tip = ChainView::tip(&view)?.expect("two blocks").hash;
+        let tip = HeaderView::tip(&view)?.expect("two blocks").hash;
         let cand = candidate(2, tip, Vec::new());
         Ok(batch.connect(judge(&view, cand)?, RuleSet::GENESIS)?)
     });
     assert!(again.is_err(), "the writer stays halted: {again:?}");
     cleanup(&path);
+}
+
+/// A relay floor the arithmetic cannot price is SI-7 on the `block_info`
+/// row that held the median, and the halt names that row's height. The
+/// batch's connecting height is the next block, not the bad row: a window
+/// read can fault an earlier `block_info` (FL PR C).
+#[test]
+fn an_unpriceable_relay_floor_keeps_the_rows_height_on_si7() {
+    let path = tmp("connect-refuse-corrupt-relay-floor");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[Vec::new(), Vec::new()]);
+    let at = BlockHeight::from_raw(7);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::RelayFloorUnpriceable {
+                at,
+                operands: relay_floor_operands(at),
+            })
+            .into())
+    });
+    let row = StoreInvariant::CellCorrupt {
+        key: "block_info",
+        fault: CellFault::OutsideDomain {
+            at: at.to_raw(),
+            codec: "long_term_effective_median",
+            reason: "the median leaves the relay floor's arithmetic domain",
+        },
+    };
+    expect_row(&out, row);
+    assert_eq!(row.row(), 7, "still SI-7");
+    assert!(core::error::Error::source(&row).is_none());
+    let shown = row.to_string();
+    assert!(shown.contains("outside its domain at height 7"), "{shown}");
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(2),
+            row,
+        }
+    );
+    cleanup(&path);
+}
+
+fn relay_floor_operands(at: BlockHeight) -> shekyl_economics::FeeOperands {
+    shekyl_economics::FeeOperands {
+        height: at.to_raw(),
+        parent_coins_generated: 0,
+        supply: shekyl_economics::CirculatingSupply::derive(
+            shekyl_units::AtomicUnits::ZERO,
+            shekyl_units::AtomicUnits::ZERO,
+        )
+        .expect("nothing generated, nothing burned"),
+        tx_volume: shekyl_economics::TxVolume::per_block(0),
+        long_term_effective_median: 0,
+    }
 }
 
 /// The same class, the other record. CEN-I12's root read and the producer's
@@ -437,6 +493,34 @@ fn a_bond_record_the_folds_refuse_is_si7_on_archival_bond() {
     cleanup(&path);
 }
 
+/// A bond record whose hybrid key is not canonical
+/// (`Corrupt::BondHybridKeyMalformed`) is SI-7 on `archival_bond`: the
+/// cell decoded far enough to name a persona, and the key bytes are ones
+/// admission cannot have written.
+#[test]
+fn a_bond_whose_hybrid_key_is_not_canonical_is_si7_on_archival_bond() {
+    let path = tmp("connect-refuse-corrupt-bond-key");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::BondHybridKeyMalformed {
+                persona: shekyl_types::PCanonicalId::from_bytes([0xa1; 32]),
+            })
+            .into())
+    });
+    let row = StoreInvariant::CellCorrupt {
+        key: "archival_bond",
+        fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+            codec: "bond_record",
+            reason: "the hybrid public key is not canonical",
+        }),
+    };
+    expect_row(&out, row);
+    assert_eq!(row.row(), 7);
+    cleanup(&path);
+}
+
 /// The accruing budget overflowing (`Corrupt::AccrualOverflow`, CEN-L8's
 /// overflow clause) is SI-8 on `archival_budget_accruing`, observed by
 /// the validator that computes the post-image (`ARW-Q1`).
@@ -460,6 +544,80 @@ fn an_accrual_overflow_is_the_fold_overflow_belt_on_budget_accruing() {
     cleanup(&path);
 }
 
+/// A claim's re-gather that finds `Σwork(E)` and no frozen complete-tree
+/// set (`Corrupt::CompleteTreesAbsent`) is SI-31's absent half. The pass
+/// writes the two in one write set, so no driven chain holds the state —
+/// exemption 3 — and the mapping is the arm's witness.
+#[test]
+fn a_settled_epoch_without_its_complete_tree_set_is_si31() {
+    use crate::store::FrozenFault;
+    let path = tmp("connect-refuse-corrupt-complete-trees");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let epoch = shekyl_types::SettlementEpoch::from_raw(4);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::CompleteTreesAbsent { epoch })
+            .into())
+    });
+    let row = StoreInvariant::CompleteTreesNotFrozen {
+        epoch,
+        observed: FrozenFault::Absent,
+    };
+    expect_row(&out, row);
+    assert_eq!(row.row(), 31);
+    cleanup(&path);
+}
+
+/// Settlement's integrity checks that the validator observes
+/// (`Corrupt::SettlementIntegrity`) are SI-25, each under its own fault:
+/// the index not folding to its digest, the fold counting more passes
+/// than draws it selected, the support fold counting more passes for a
+/// tree than support draws it was issued, and the settlement beacon not
+/// recorded strictly below the connecting height. The pass-count arms have
+/// no store state behind them —
+/// it is a defect of the fold — so this mapping is its only witness. The
+/// beacon arm is unreachable on a schedule whose grace covers the response
+/// window, and the mapping is what keeps a re-pin from settling nothing.
+#[test]
+fn a_settlement_integrity_fault_is_si25_under_the_check_it_failed() {
+    use shekyl_chain_rules::SettlementCheck;
+    let epoch = shekyl_types::SettlementEpoch::from_raw(3);
+    let persona = shekyl_types::PCanonicalId::from_bytes([0xa1; 32]);
+    let shard = shekyl_types::ShardId::from_raw(7);
+    for (check, observed) in [
+        (
+            SettlementCheck::IssuedIndexDigest,
+            SettlementFault::IndexDrift,
+        ),
+        (
+            SettlementCheck::PassesExceedCounted { persona, shard },
+            SettlementFault::PassesExceedCounted { persona, shard },
+        ),
+        (
+            SettlementCheck::SupportPassesExceedCounted { persona },
+            SettlementFault::SupportPassesExceedCounted { persona },
+        ),
+        (
+            SettlementCheck::BeaconNotRecorded,
+            SettlementFault::BeaconNotRecorded,
+        ),
+    ] {
+        let path = tmp("connect-refuse-corrupt-settlement");
+        let store = ChainStore::create(&path, EPOCH).expect("create");
+        let out: Result<(), TestErr> = store.write(|batch| {
+            let _view = batch.chain_view();
+            Err(batch
+                .refuse_corrupt(shekyl_chain_rules::Corrupt::SettlementIntegrity { epoch, check })
+                .into())
+        });
+        let row = StoreInvariant::SettlementNotSound { epoch, observed };
+        expect_row(&out, row);
+        assert_eq!(row.row(), 25);
+        cleanup(&path);
+    }
+}
+
 /// A producer read opens a batch and aborts it. The slot is released —
 /// `inspect` is not `write`.
 #[test]
@@ -468,7 +626,7 @@ fn inspect_aborts_so_a_later_write_still_runs() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let out: Result<Option<BlockHeight>, TestErr> = store.inspect(|batch| {
         let view = batch.chain_view();
-        Ok(ChainView::tip(&view)?.map(|t| t.height))
+        Ok(HeaderView::tip(&view)?.map(|t| t.height))
     });
     assert_eq!(out.expect("inspect"), None);
     let again: Result<(), TestErr> = store.write(|_batch| Ok(()));

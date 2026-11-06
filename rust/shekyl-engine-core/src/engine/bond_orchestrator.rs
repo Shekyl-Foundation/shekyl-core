@@ -17,7 +17,7 @@ use std::sync::Arc;
 use super::local_ledger::LocalLedger;
 use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
 use shekyl_curve_tree::{
-    select_reference_height, should_reanchor, AssembleInput, BlockHash, CurveTreeRoot, Gindex,
+    select_reference_height, should_reanchor, AssembleInput, BlockHash, CurveTreeRoot,
     ReferenceBlock,
 };
 use shekyl_engine_file::WalletFile;
@@ -277,7 +277,7 @@ pub enum StakePosture {
     /// deleted in the same change that made this arm opt-in, so no code
     /// state ever existed where an ordinary staker silently owed the
     /// corpus.
-    FoundationCompleteTree,
+    SupportCompleteTree,
 }
 
 /// First-stake refusal/failure taxonomy (rule 82;
@@ -394,7 +394,7 @@ pub enum FirstStakeError {
     /// be assembled.
     ///
     /// **Not** an invitation to pass
-    /// [`StakePosture::FoundationCompleteTree`] instead: that posture is a
+    /// [`StakePosture::SupportCompleteTree`] instead: that posture is a
     /// permanent, non-earning, unbounded-storage obligation, and choosing
     /// it to route around this refusal is precisely the mistake D-4's
     /// warning gate exists to prevent.
@@ -416,14 +416,14 @@ impl StakePosture {
     /// (`bond_post.rs`, floor-zero protection) — so the alternative to
     /// this refusal is not a smaller bond, it is an invalid one.
     ///
-    /// [`StakePosture::FoundationCompleteTree`] is the whole-corpus
+    /// [`StakePosture::SupportCompleteTree`] is the whole-corpus
     /// backstop: `CompleteTree` carries no shard list by wire rule
     /// (`BondPostError::CompleteTreeWithShardIds`), so the empty set
     /// here is the obligation's *encoding*, not its size.
     pub(crate) fn holdings(self) -> Result<HoldingsDescriptor, FirstStakeError> {
         match self {
             Self::Market => Err(FirstStakeError::NoShardsAvailable),
-            Self::FoundationCompleteTree => Ok(HoldingsDescriptor {
+            Self::SupportCompleteTree => Ok(HoldingsDescriptor {
                 kind: HoldingsKind::CompleteTree,
                 shard_ids: ShardSet::empty(),
             }),
@@ -595,13 +595,11 @@ where
         let assemble_inputs: Vec<AssembleInput> = selection
             .records
             .iter()
-            .map(|r| AssembleInput {
-                gindex: Gindex::from_raw(r.gindex.to_raw()),
-                output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(r.output_key),
-                commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(r.commitment),
-            })
+            .map(crate::engine::ownership::p_assemble_input)
             .collect();
 
+        // The height the post is proved against: its end date (WR-Q3).
+        let reference_height = reference.height;
         let paths = curve_tree
             .assemble_tx(reference, assemble_inputs)
             .await
@@ -672,6 +670,8 @@ where
             anchor_t0,
             funding_gindexes: assembled.funding_gindexes.clone(),
             state: PendingPostState::Pending,
+            reference_height,
+            terminal: None,
         };
         let admission = store
             .mutate(|block| {
@@ -756,7 +756,10 @@ where
             .map(|s| s.funding_outputs().to_vec())
             .unwrap_or_default();
 
-        let floor = AtomicUnits::from_raw(bond_floor(holdings));
+        let floor = AtomicUnits::from_raw(bond_floor(
+            holdings,
+            shekyl_archival_retention::archival_params(),
+        ));
         // Align with the wire builder / retention verifier: a zero floor is
         // structurally invalid holdings, not a sweep-to-empty success that
         // would later index an empty `paths` vector. Typed refusal before

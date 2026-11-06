@@ -432,7 +432,7 @@ version bumps" without naming which version was the error a reviewer caught.
 | 1 | `challenge.rs::challenge_leaf_index` | preimage gains `block_hash(h−1)`; separator → `-v2` |
 | 2 | `wire.rs::signature_preimage` | **VERIFIED** — takes the derived index as an operand, so it binds the block through it; no signature over a transported value |
 | 3 | `serve_credit.rs` (FFI) | derives the index with the block hash it is validating; verifies the opening against it |
-| 4 | `shekyl_ffi.h` + `check_archival_serve_credit_input` | `shekyl_archival_challenge_leaf_index` signature widens by the hash |
+| 4 | `shekyl_ffi.h` + `check_archival_serve_credit_input` | `shekyl_archival_challenge_leaf_index` (deleted, `DEL-008`) signature widens by the hash |
 | 5 | **`m_archival_serve_credit` key 48 → 56 B** | append `BE(block_height)`; every existing offset unchanged (§3.4.1) |
 | 6 | old-vin dedup | **stays PAIR-EPOCH** (`archival_serve_credit_pass_count > 0`) until the assignment cutover — the exact-get would be vacuous; see the corrected `PC-D7` |
 | 6c | SCE-1 within-block pass | **stays pair-epoch too** — the block is common-mode inside one block, so widening adds no discrimination; bytes pinned by the equivalence fixture |
@@ -574,7 +574,9 @@ serving two granularities because their shapes happened to coincide.
 with **`ArchivalPairEpochKey`** now. This paragraph read "they need their own
 48-byte key type once that key widens", which was the state while #554 was
 unmerged and became a false outstanding action the moment the conversion
-landed.
+landed. **UPDATE 2026-10-08 (`SO-D10e`):** `set_archival_settlement` and
+`get_archival_settlement` are deleted; the two deletes remain and still key
+with `ArchivalPairEpochKey`.
 
 The follow-through recurred on **every** merge from #554 — four times, the last
 in a schema document rather than in code — because each settlement accessor is

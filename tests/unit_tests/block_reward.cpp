@@ -47,15 +47,17 @@ namespace
   };
 
   #define TEST_ALREADY_GENERATED_COINS(already_generated_coins, expected_reward)                              \
-    m_block_not_too_big = get_block_reward(0, current_block_weight, already_generated_coins, m_block_reward,1); \
+    m_block_not_too_big = get_block_reward(0, current_block_weight, already_generated_coins, m_block_reward); \
     ASSERT_TRUE(m_block_not_too_big);                                                                         \
     ASSERT_EQ(m_block_reward, expected_reward);
 
   TEST_F(block_reward_and_already_generated_coins, handles_first_values)
   {
-    TEST_ALREADY_GENERATED_COINS(0, UINT64_C(2048000000000));
-    TEST_ALREADY_GENERATED_COINS(m_block_reward, UINT64_C(2047999023437));
-    TEST_ALREADY_GENERATED_COINS(UINT64_C(2756434948434199641), UINT64_C(733629392416));
+    // The design's curve, ESF 22 per block: (SHEKYL_EMISSION_CURVE_ASYMPTOTE - ag) >> 22.
+    // Re-derived 2026-10-04 (were 2048000000000, 2047999023437, 733629392416 at 21).
+    TEST_ALREADY_GENERATED_COINS(0, UINT64_C(1024000000000));
+    TEST_ALREADY_GENERATED_COINS(m_block_reward, UINT64_C(1023999755859));
+    TEST_ALREADY_GENERATED_COINS(UINT64_C(2756434948434199641), UINT64_C(366814696208));
   }
 
   TEST_F(block_reward_and_already_generated_coins, correctly_steps_from_2_to_1)
@@ -80,14 +82,14 @@ namespace
   protected:
     virtual void SetUp()
     {
-      m_block_not_too_big = get_block_reward(0, 0, already_generated_coins, m_standard_block_reward, 1);
+      m_block_not_too_big = get_block_reward(0, 0, already_generated_coins, m_standard_block_reward);
       ASSERT_TRUE(m_block_not_too_big);
       ASSERT_LT(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, m_standard_block_reward);
     }
 
     void do_test(size_t median_block_weight, size_t current_block_weight)
     {
-      m_block_not_too_big = get_block_reward(median_block_weight, current_block_weight, already_generated_coins, m_block_reward, 1);
+      m_block_not_too_big = get_block_reward(median_block_weight, current_block_weight, already_generated_coins, m_block_reward);
     }
 
     static const uint64_t already_generated_coins = 0;
@@ -153,14 +155,14 @@ namespace
 
       m_last_block_weights_median = 7 * CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
 
-      m_block_not_too_big = get_block_reward(epee::misc_utils::median(m_last_block_weights), 0, already_generated_coins, m_standard_block_reward, 1);
+      m_block_not_too_big = get_block_reward(epee::misc_utils::median(m_last_block_weights), 0, already_generated_coins, m_standard_block_reward);
       ASSERT_TRUE(m_block_not_too_big);
       ASSERT_LT(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, m_standard_block_reward);
     }
 
     void do_test(size_t current_block_weight)
     {
-      m_block_not_too_big = get_block_reward(epee::misc_utils::median(m_last_block_weights), current_block_weight, already_generated_coins, m_block_reward, 1);
+      m_block_not_too_big = get_block_reward(epee::misc_utils::median(m_last_block_weights), current_block_weight, already_generated_coins, m_block_reward);
     }
 
     static const uint64_t already_generated_coins = 0;

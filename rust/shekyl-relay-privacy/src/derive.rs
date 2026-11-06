@@ -149,12 +149,12 @@ pub fn full_travel_probability(params: &DandelionParams, mean_ticks: u32, tick_m
     let p = 1.0 / (f64::from(mean_ticks) + 1.0);
     let timer_survives = 1.0 - p; // P(a geometric timer outlives one tick)
 
-    let hop_ms = u64::from(params.time_between_hop_ms);
+    let hop_ms = u64::from(params.time_between_hop_ms.ms());
 
     // RD-1: every stem node except the emitter must also outlast the fluff
     // flood's return trip, because that is when its embargo is actually
     // disarmed. See `DandelionParams::fluff_return_ms`.
-    let return_ms = u64::from(params.fluff_return_ms);
+    let return_ms = u64::from(params.fluff_return_ms.ms());
 
     // RD-4: the origin always stems its own transaction (`levin_notify.cpp:560`
     // routes a node's own tx into the stem regardless of its epoch fluff role;
@@ -324,6 +324,11 @@ pub fn derive_embargo(
 /// the input value and its provenance in a commit that moves **no** derived
 /// constant, then moves the pins in a second commit whose diff is entirely
 /// mechanical. `DAEMON_RELAY_PRIVACY.md` §94.10.
+///
+/// A sensitivity probe, so it is built only with the `conformance` feature
+/// (the crate's own tests enable it): stepping a derived hop by a bare
+/// number is not something a shipped build does.
+#[cfg(any(test, feature = "conformance"))]
 #[must_use]
 pub fn next_embargo_step(
     params: &DandelionParams,
@@ -334,7 +339,7 @@ pub fn next_embargo_step(
     let here = derive_embargo(params, tick_millis, target)?.mean_secs();
     for d in 1..=search_ms {
         let probe = DandelionParams {
-            time_between_hop_ms: params.time_between_hop_ms.checked_add(d)?,
+            time_between_hop_ms: params.time_between_hop_ms.checked_add_ms(d)?,
             ..*params
         };
         let there = derive_embargo(&probe, tick_millis, target)?.mean_secs();
@@ -390,8 +395,8 @@ pub fn marginal_preemption_profile(
     let stem_survives = 1.0 - q;
     let p = 1.0 / (f64::from(mean_ticks) + 1.0);
     let timer_survives = 1.0 - p;
-    let hop_ms = u64::from(params.time_between_hop_ms);
-    let return_ms = u64::from(params.fluff_return_ms);
+    let hop_ms = u64::from(params.time_between_hop_ms.ms());
+    let return_ms = u64::from(params.fluff_return_ms.ms());
 
     // RD-4: stem length is geometric on {1, 2, …} (the origin always stems), so
     // P(stem = h) = (1-q)^{h-1} · q and separation `i` exists iff h ≥ i+1, with
@@ -529,7 +534,7 @@ mod tests {
     fn a_longer_hop_needs_a_longer_embargo() {
         let base = DandelionParams::inherited();
         let slow = DandelionParams {
-            time_between_hop_ms: 500,
+            time_between_hop_ms: base.time_between_hop_ms.derived(500),
             ..base
         };
         let a = derive_embargo(&base, DEFAULT_EMBARGO_TICK_MILLIS, 0.90).expect("reachable");
@@ -615,8 +620,9 @@ mod tests {
         let tick = DEFAULT_EMBARGO_TICK_MILLIS;
         let p_hazard = 1.0 / (f64::from(mean) + 1.0);
         // S(1) = ceil((hop + F)/tick), the origin's only slack.
-        let slack = (u64::from(params.time_between_hop_ms) + u64::from(params.fluff_return_ms))
-            .div_ceil(tick);
+        let slack = (u64::from(params.time_between_hop_ms.ms())
+            + u64::from(params.fluff_return_ms.ms()))
+        .div_ceil(tick);
         let expected = (1.0 - p_hazard).powi(i32::try_from(slack).unwrap());
         let got = full_travel_probability(&params, mean, tick);
         assert!(

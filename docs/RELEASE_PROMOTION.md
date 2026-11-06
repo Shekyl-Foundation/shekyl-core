@@ -24,8 +24,12 @@ Companion docs: `RELEASING.md` (tag → CI → artifact mechanics),
   consensus changes). Review happens at the `feature → dev` boundary.
 - `main` advances **only** by promoting a tagged release. No feature work, no
   independent commits land on `main`.
-- Each release is cut on a `release-vX.Y` branch off a **frozen `dev` SHA**.
-  After the cut, only critical fixes are backported to the release branch.
+- Each release is cut from a **frozen `dev` SHA**. Through `beta.N` the
+  promotion is a pull request from `dev` to `main` (§4): a pre-release is
+  superseded by the next incompatibility on `dev`, so the next pre-release is
+  cheaper than a backport to this one. A `release-vX.Y` branch, with only
+  critical fixes backported to it, starts at `rc.1`, when backports become
+  plausible.
 - The `dev → main` diff size is irrelevant: every commit in it was reviewed when
   it landed on `dev`. Promotion is a release event, not a re-review.
 - Cadence is **feature-driven**, mapped to testnet milestones, not a calendar
@@ -87,13 +91,35 @@ Single remote: `origin` → `Shekyl-Foundation/shekyl-core`, default branch
 then tag** (avoids the "tag not on the default branch" trap that
 `RELEASING.md` warns about).
 
-1. **Quiesce `dev`.** Halt agent landings. Record the frozen SHA:
-   `git rev-parse origin/dev`. Everything below references this SHA.
+1. **Freeze.** The changelog cut (`RELEASING.md` step 1) is the last pull
+   request the release waits on, and its merge commit is the frozen SHA:
+   `git rev-parse origin/dev` right after it merges. Everything below
+   references this SHA. `dev` stays open: the release ships from a branch
+   cut at the SHA (step 3), so a later merge into `dev` goes to the next
+   release. A pull request that merges after the changelog cut but before
+   the freeze ships in this release while its entry sits under
+   `[Unreleased]`; move the entry into the release's section in one more
+   pull request, whose merge is then the frozen SHA.
 2. **Pre-flight at the frozen SHA:**
    - [ ] CI green on the SHA (fmt + clippy `-D warnings` + full test suite).
    - [ ] `Cargo.lock` and vendored-dep state are exactly the green-on-`dev`
          state (reproducible-build inputs must match what was reviewed).
    - [ ] **Frozen-tuple diff-check** (highest severity — see §6).
+   - [ ] **Staging deadlines:** `python3 scripts/release/check_staging_deadlines.py <tag>`
+         with the tag this cut will carry. A staging flag
+         (`NETWORK_IDENTITY.md` NI-R9) names a deadline release
+         (`Staging::deadline`, `rust/shekyl-network/src/lib.rs`), and the
+         gate refuses a cut at or past it while the flag still exists. The
+         remedy is the flag's exit, by its owner, or a re-ruled deadline
+         with its reason recorded beside it; there is no command-line
+         exemption.
+   - [ ] **Binding ratchet:** `python3 scripts/release/check_binding_ratchet.py <tag>`
+         with the tag this cut will carry. The ratchet
+         (`docs/design/DOMAIN_BINDING_RATCHET.tsv`) lists the domain rows the
+         binding gate cannot yet hold to their network binding
+         (`NETWORK_IDENTITY.md` §2.4.1), and it must be empty at v3.1.0: the
+         gate refuses a cut at or past that release with any row left. The
+         remedy is fixing the row's site; there is no command-line exemption.
    - [ ] **Gitian dry-run gate** — dispatch the gitian workflow against the
          frozen SHA and confirm **all four platforms** (Linux/Windows/FreeBSD/macOS)
          build green *before* the cut/promote/tag:
@@ -109,23 +135,66 @@ then tag** (avoids the "tag not on the default branch" trap that
          This gate is why `v3.1.0-alpha.6`'s post-tag gitian failure (a rustup
          toolchain race in the descriptors) forced a bump to `alpha.7`; running it
          here would have caught it pre-tag. Only proceed once green.
-3. **Cut the release branch:** `git switch -c release-v3.0 <frozen-SHA>`.
-4. **Stabilize on the release branch.** Run `RELEASE_CHECKLIST.md` gates
-   applicable to a testnet rehearsal (PQC spec frozen, reproducible-build inputs
-   documented, testnet fork + verification, etc.). Only critical fixes land here.
-5. **Promote to `main`** via **signed merge** of `release-v3.0` into `main`, so
-   `main`'s history shows discrete, signed release points. Do not fast-forward
-   away the merge record.
-6. **Sign the tag** on the `main` HEAD with the `main` key:
-   `git tag -s v3.0.0-RC1 -m "Shekyl v3.0.0-RC1 (rehearsal)"`.
-7. **Push `main`, then the tag,** to `origin`. Before pushing the tag, confirm
-   its commit is an ancestor of `origin/main`:
-   `git merge-base --is-ancestor v3.0.0-RC1 origin/main`.
+         Dispatch it with `package_dry_run` checked. The four platform builds
+         then feed the package job, which builds the `.deb`, the `.rpm`, the
+         Windows installer, the source archive and `SHA256SUMS`, checks the
+         Tor bundle inside each unpacked package, and stops before
+         publishing. Without that input the package job is skipped on a
+         dispatch, and packaging is first exercised by the real tag.
+   - [ ] **Economics on the release branch:**
+         `gh workflow run economics-c2a-prime.yml --ref release-vX.Y.Z`. Its
+         concurrency group cancels the run a pull request into `main` starts,
+         so the dispatch is the run that counts.
+   - [ ] **Commit statuses for every dispatched run.** A dispatched run is
+         attached to no pull request, so the promotion pull request shows only
+         its own checks and looks green while the dry run is still building.
+         Post a pending status on the frozen SHA as each run starts, and its
+         result when it ends:
+         `gh api -X POST repos/<owner>/<repo>/statuses/<frozen-SHA> -f state=pending -f context=release/gitian-dry-run -f target_url=<run URL>`
+         (and `release/economics`).
+3. **Cut `release-vX.Y.Z` at the frozen SHA and open the promotion pull
+   request** from that branch to `main`, titled `Release: vX.Y.Z`. Never
+   promote from `dev` itself: the pull request's head would be `dev`, so `dev`
+   could take no merge until the release shipped. The branch must be cut from
+   a commit in `dev`, so that every commit the promotion carries was judged
+   there. The build and test workflows run on pull requests and on pushes to `main`,
+   not on pushes to `dev`, so this pull request is the first full run on the
+   frozen SHA against `main`. To see a gate that only fails against `main`
+   before the freeze, open a draft rehearsal pull request from a branch at
+   `dev`'s head and close it once read.
+4. **Stabilize.** Run the `RELEASE_CHECKLIST.md` gates applicable to a testnet
+   rehearsal (PQC spec frozen, reproducible-build inputs documented, testnet
+   fork + verification, etc.). A fix lands on `dev` through its own pull
+   request, and its merge is the new frozen SHA: repeat step 2 on it.
+5. **Promote to `main`** by merging that pull request with a **merge commit**,
+   so `main`'s history shows discrete release points. Never squash, rebase or
+   fast-forward: the merge commit is the branch-topology release marker. Its
+   tree must equal the frozen SHA's tree. The merge's push to `main` runs the
+   grep gates again; a gate that only fails against `main` shows there. (The
+   dial-path freeze, whose base-relative verdict needed a release exemption
+   here, was deleted with the C++ dial path on 2026-11-05.) The step 11 pull
+   request's head is `main`, so the push's result shows there too.
+6. **Sign the tag** on that merge commit with the Foundation signing subkey
+   (`6914D74823DDA8DC`), by the ceremony in `SIGNING.md`
+   §"Release-tag signing ceremony". The merge happened on the remote, so the
+   ceremony fetches first and names the commit it tags; a local `main` or a
+   stale `origin/main` is the previous release's commit. `git verify-tag`
+   before anything is pushed.
+7. **Push the tag** to `origin` (`main` is already there: the merge happened on
+   the remote). Before pushing, confirm the tag's commit is an ancestor of
+   `origin/main`: `git merge-base --is-ancestor vX.Y.Z origin/main`.
 8. **Reproducible build.** Tag push triggers CI/Gitian/Guix; confirm the hashes
    match a second independent build (see §5).
-9. **Sign artifacts** (`SHA256SUMS`, `hashes.txt.sig`).
+9. **Sign artifacts** (`SHA256SUMS`, `hashes.txt.sig`): the manifest ceremony
+   in `SIGNING.md`, run by the release owner once the release job has
+   published.
 10. **Post-promotion verification:** tag resolves on `origin`; published artifact
     hashes match the signed sums; `main` HEAD is signed and verifies.
+11. **Merge `main` back into `dev`** (Rick, 2026-10-26): a pull request from
+    `main` to `dev`, merged with a merge commit, so `main`'s promotion merge
+    commit is an ancestor of `dev` before the next cut. Its tree equals the
+    frozen SHA's, so the merge brings in no content. Then archive-tag and
+    delete `release-vX.Y.Z`.
 
 ---
 
@@ -159,12 +228,51 @@ the candidate SHA:
 
 - [ ] `config::testnet::GENESIS_TX`
 - [ ] `config::testnet::GENESIS_NONCE`
-- [ ] `config::testnet::NETWORK_ID`
-- [ ] testnet hardfork table (including the genesis HF height)
+- [ ] handshake id: `shekyl_network_id(TESTNET)`, derived from the genesis block hash (`cSHAKE256`, domain `shekyl/p2p-network-id-v1`). The header does not carry the bytes. Diff the genesis tx and nonce above, and confirm the recorded testnet KAT.
 - [ ] generated economics constants from `config/economics_params.json`
 
 If **any** changed → re-run the rehearsal from clean datadirs per
 `TESTNET_REHEARSAL_CHECKLIST.md` before this candidate can become a release.
+
+**The other direction is a gate, and it is scripted:**
+
+```bash
+python3 scripts/release/check_frozen_tuple.py <previous-tag> <frozen-SHA>
+```
+
+It fails when the consensus surface moved since the previous tag and the
+testnet genesis hash did not. Two builds with one genesis share a network id:
+they find each other, connect, reject each other's blocks and ban each other.
+That is what a cut from `dev` after `v3.1.0-alpha.9` would have shipped: the
+rule that reserved the header's minor version made every block the alpha.9
+fleet had mined invalid, and the genesis, and so the id, was unchanged.
+
+The remedy is one integer. Move `config::testnet::GENESIS_NONCE` and re-record
+what follows from it, in one change:
+
+- [ ] the nonce in `src/cryptonote_config.h`;
+- [ ] the block id, from `cargo run -p shekyl-genesis-tool -- block-id --network testnet`,
+      in `rust/shekyl-rpc-types/src/identity.rs` (`TESTNET_GENESIS`),
+      `rust/shekyl-chain-rules/src/genesis_pin.rs` (`GenesisPin::TESTNET`, a
+      byte array, so a search for the hex string does not find it),
+      `tests/unit_tests/mining_parity.cpp` and `docs/GENESIS_ALLOCATIONS.md`;
+- [ ] the id and prefix in `rust/shekyl-network/src/tests.rs`'s `RECORDED`, which
+      fails and prints the new bytes until they are recorded, and the same
+      two values in the table in `docs/design/SHEKYL_P2P_PROTOCOL.md`.
+
+Each of these is held by a test, so a pin left behind fails: run
+`cargo test --workspace --no-fail-fast` to see all of them at once, since a
+plain run stops at the first crate that fails.
+
+The genesis transaction, the recipients files and the other networks do not
+change. "The consensus surface moved" is read from the reviewed constants
+digest and from the captured replay chains; either moving is enough, and the
+script's header says why both are read.
+
+A rotated id partitions the old fleet from the new at the handshake. It does
+not remove the reason to stop the whole fleet before starting any of it on
+the new build: an old node that keeps dialing a new one is scored and banned
+for a day, as the `v3.1.0-alpha.9` changelog records.
 
 Also pin the deterministic artifacts per `GENESIS_TRANSPARENCY.md`: block 0 hash,
 block 0 blob, block 0 miner-tx hash, daemon version + git commit, startup tuple.
@@ -181,22 +289,21 @@ each before the genesis freeze — after it, these are immutable.**
 |---|---|---|
 | Tag | `v3.0.0-RCn` (pre-release) | first non-pre-release tag |
 | Frozen tuple | `config::testnet::*` | `config::mainnet::*` |
-| **Genesis HF number** | testnet artifact (`HF_VERSION_SHEKYL_NG = 17`) | **one canonical number, reconciled across code + `UPGRADE_POLICY.md` + HF table** |
-| Lead time before activation | accelerated | ≥ 4 weeks (`UPGRADE_POLICY.md`); 72 h floor for emergency forks |
+| Block version | `CURRENT_BLOCK_MAJOR_VERSION` 1 and `CURRENT_BLOCK_MINOR_VERSION` 0 | the same constants. There is no per-network fork number |
 | Snapshot allocation | none | per `GENESIS_TRANSPARENCY.md` decision |
 
-**Pre-freeze blocker:** the genesis HF number must be made canonical in one
-authority doc and every `hf_version >=` gate before mainnet. It is currently
-ambiguous (`UPGRADE_POLICY.md` says HF1; code uses 17). This is the one item
-with a hard, irreversible deadline.
+Block version is the constant 1.0 on every network. The hard-fork table is
+deleted, so there is no fork number, vote, or activation height to freeze.
+A later consensus change is a design document before any code
+(`design/CXX_VERSION_GATES.md` §5, `UPGRADE_POLICY.md`).
 
 ---
 
 ## 8. Failure / rollback
 
 If a rehearsal release is bad, move the tag per the `RELEASING.md` procedure
-(`git tag -d`, delete on `origin`, recreate on the corrected commit, re-push
-`main` then tag). If a frozen-tuple element was wrong, the network must be
+(`git tag -d`, delete on `origin`, fetch, recreate on the corrected merge
+commit, push the tag). If a frozen-tuple element was wrong, the network must be
 re-rehearsed from clean datadirs — a moved tag does not unfork a started network.
 
 Post-mortem any guardrail that failed to hold, within the rehearsal record, so

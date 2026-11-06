@@ -124,6 +124,7 @@ on:
   # path filter `merge_group` would discard; its cost per group is minutes
   # the class it would catch does not pay for.
   pull_request:
+    types: [opened, synchronize, reopened]
     paths:
       - 'rust/shekyl-randomx-differential/**'
       - 'rust/randomx-v2-sys/**'
@@ -1075,7 +1076,7 @@ jobs:
     #
     # Unlike structural-validate (which builds only the C reference
     # out-of-band), this job needs the parent CMake project — the parity
-    # harness links cryptonote_core + the Rust FFI — so it mirrors
+    # harness links cryptonote_basic + the Rust FFI — so it mirrors
     # build.yml's Ubuntu container recipe (apt list + pinned-Rust install
     # + ccache). CMake must stay single-config here (default Makefiles /
     # Ninja with an explicit CMAKE_BUILD_TYPE): external/CMakeLists.txt
@@ -1130,7 +1131,7 @@ jobs:
         run: apt update
       - name: install build dependencies
         # Mirrors build.yml APT_INSTALL_LINUX.
-        run: apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl
+        run: apt -y install build-essential cmake libboost-all-dev graphviz doxygen pkg-config libssl-dev libsodium-dev ccache git curl
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
@@ -1156,7 +1157,7 @@ jobs:
           ccache --max-size=150M
           ccache --set-config=compression=true
           cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release -D BUILD_RANDOMX_V2_MINER_LIB=ON
-          cmake --build build --target daemon randomx-v2-full-parity randomx-v2-miner-kat
+          cmake --build build --target shekyl_rust_bins randomx-v2-full-parity randomx-v2-miner-kat
       - name: symbol isolation on linked daemon (nm)
         run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
       - name: generate parity corpus

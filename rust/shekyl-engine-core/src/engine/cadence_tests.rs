@@ -315,6 +315,7 @@ async fn production_legs_are_registered_and_invoked_each_tick() {
         "submit-lifecycle",
         "serving-liveness",
         "terminal-reject",
+        "pending-outcomes",
         "epoch-claim",
     ] {
         assert!(
@@ -324,11 +325,12 @@ async fn production_legs_are_registered_and_invoked_each_tick() {
     }
     // Fire order is the §3 retire-before-assemble registration order.
     assert_eq!(
-        fired[..4],
+        fired[..5],
         [
             ("submit-lifecycle", 1),
             ("serving-liveness", 1),
             ("terminal-reject", 1),
+            ("pending-outcomes", 1),
             ("epoch-claim", 1)
         ],
         "registration order must be preserved per tick"
@@ -467,7 +469,7 @@ async fn eventually(mut probe: impl FnMut() -> bool, what: &str) {
 /// restarts it after the running task dies mid-session.
 #[tokio::test(flavor = "multi_thread")]
 async fn serving_liveness_leg_starts_and_restarts_a_dead_serving_task() {
-    let (_tmp, engine) = crate::engine::test_support::staker_engine(3, 11);
+    let (_tmp, engine) = crate::engine::test_support::staker_engine(3, 11).await;
     crate::engine::test_support::activate_persona(&engine, 3).await;
     let arc = Arc::new(RwLock::new(engine));
 
@@ -592,7 +594,10 @@ fn claim_classify_maps_the_refusal_taxonomy() {
 #[test]
 fn claim_complete_forfeits_only_expired_missing_epochs() {
     let settled = 1_000;
-    let floor = shekyl_archival_retention::claim_window_floor(settled);
+    let floor = shekyl_archival_retention::claim_window_floor(
+        settled,
+        shekyl_archival_retention::archival_params(),
+    );
     assert!(floor > 1, "test needs room below the claim window");
     let expired = floor - 1;
     let unexpired = settled - 1;
@@ -710,7 +715,7 @@ fn claim_fault_threshold_raises_and_complete_clears() {
 /// (`ForegroundHold`, mapped to a yield by the classify test above).
 #[tokio::test(flavor = "multi_thread")]
 async fn claim_leg_yields_while_user_work_is_in_flight() {
-    let (_tmp, engine) = crate::engine::test_support::staker_engine(3, 13);
+    let (_tmp, engine) = crate::engine::test_support::staker_engine(3, 13).await;
     crate::engine::test_support::activate_persona(&engine, 3).await;
     let pending_gate = engine.pending_gate.clone();
     let arc = Arc::new(RwLock::new(engine));
@@ -760,7 +765,7 @@ async fn claim_leg_yields_while_user_work_is_in_flight() {
 /// within the epoch. A faulted fire does retry on the next advance.
 #[tokio::test(flavor = "multi_thread")]
 async fn claim_leg_evaluates_once_per_settled_epoch() {
-    let (_tmp, engine) = crate::engine::test_support::staker_engine(3, 17);
+    let (_tmp, engine) = crate::engine::test_support::staker_engine(3, 17).await;
     crate::engine::test_support::activate_persona(&engine, 3).await;
     let arc = Arc::new(RwLock::new(engine));
 

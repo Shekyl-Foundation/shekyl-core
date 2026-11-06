@@ -1,0 +1,192 @@
+Excerpts of `dumpbin /disasm` (Microsoft COFF/PE Dumper 14.51.36260.0) of the laptop's registered
+binary, rt_p4_decaps_timing.exe, x86_64-pc-windows-msvc,
+sha256 1077f646ff95044995c39e39fa5bd5af9908a59f823afe5a6e6f76ab3d81bd28.
+Full listing: 3,194,028 bytes, 51,637 lines, sha256 95ad5e80c3269fc238b69c57e644d8ab7cf98db0cb48bdedda302c7fcf36daaa.
+As sent by the agent on that machine; the full listing stayed on the machine. These are the passages the
+x86 code reading in rt_p4_mlkem_decaps_timing_20261011.md quotes or rests on, not the whole of what was read.
+
+===== ml_kem_decaps_internal: the ciphertext comparison loop and the derivation of the choice
+  00000001400099CD: B3 01              mov         bl,1
+  00000001400099CF: 31 C0              xor         eax,eax
+  00000001400099E0: 4C 8D 70 01        lea         r14,[rax+1]
+  00000001400099E4: 0F B6 0C 07        movzx       ecx,byte ptr [rdi+rax]
+  00000001400099E8: 3A 8C 04 D8 00 00  cmp         cl,byte ptr [rsp+rax+0D8h]
+  00000001400099EF: 0F 94 C1           sete        cl
+  00000001400099F2: E8 69 FD FF FF     call        _ZN6subtle9black_box17h4fbdf9dc7424b7e1E
+  00000001400099F7: 20 C3              and         bl,al
+  00000001400099F9: 4C 89 F0           mov         rax,r14
+  00000001400099FC: 49 81 FE 40 04 00  cmp         r14,440h
+  0000000140009A03: 75 DB              jne         00000001400099E0
+  0000000140009A05: 89 D9              mov         ecx,ebx
+  0000000140009A07: E8 54 FD FF FF     call        _ZN6subtle9black_box17h4fbdf9dc7424b7e1E
+  0000000140009A0C: F6 D0              not         al
+  0000000140009A0E: 24 01              and         al,1
+  0000000140009A10: 89 C1              mov         ecx,eax
+  0000000140009A12: E8 49 FD FF FF     call        _ZN6subtle9black_box17h4fbdf9dc7424b7e1E
+  0000000140009A17: 48 8D 8C 24 90 00  lea         rcx,[rsp+90h]
+  0000000140009A1F: 48 8D 54 24 50     lea         rdx,[rsp+50h]
+  0000000140009A24: 41 89 C0           mov         r8d,eax
+  0000000140009A27: E8 44 FD FF FF     call        0000000140009770
+
+===== ml_kem_decaps_internal: its seven conditional jumps
+  0000000140009805: jbe  0000000140009A5E   after  cmp r8,47Fh    (slice bound; target calls slice_index_fail)
+  0000000140009812: jbe  0000000140009A71   after  cmp r8,91Fh    (slice bound)
+  000000014000981F: jbe  0000000140009A87   after  cmp r8,93Fh    (slice bound)
+  000000014000982C: jbe  0000000140009A9D   after  cmp r8,95Fh    (slice bound)
+  0000000140009871: jne  0000000140009887   after  call k_pke_decrypt ; cmp byte ptr [rsp+0D8h],1   (Result discriminant)
+  00000001400099BE: je   00000001400099CD   after  call k_pke_encrypt ; test rax,rax                (Result)
+  0000000140009A03: jne  00000001400099E0   after  cmp r14,440h   (the comparison loop's counter)
+
+===== the conditional select (entry 0000000140009770; no symbol of its own in the listing), in full
+  0000000140009770: 48 83 EC 28        sub         rsp,28h
+  0000000140009774: 41 F6 D8           neg         r8b
+  0000000140009777: 70 52              jo          00000001400097CB
+  0000000140009779: F3 0F 6F 02        movdqu      xmm0,xmmword ptr [rdx]
+  000000014000977D: 41 0F B6 C0        movzx       eax,r8b
+  0000000140009781: 66 0F 6E C8        movd        xmm1,eax
+  0000000140009785: 66 0F 60 C9        punpcklbw   xmm1,xmm1
+  0000000140009789: F2 0F 70 C9 00     pshuflw     xmm1,xmm1,0
+  000000014000978E: 66 0F 70 C9 44     pshufd      xmm1,xmm1,44h
+  0000000140009793: F3 0F 6F 11        movdqu      xmm2,xmmword ptr [rcx]
+  0000000140009797: F3 0F 6F 59 10     movdqu      xmm3,xmmword ptr [rcx+10h]
+  000000014000979C: 66 0F 6F E1        movdqa      xmm4,xmm1
+  00000001400097A0: 66 0F DF E2        pandn       xmm4,xmm2
+  00000001400097A4: 66 0F DB C1        pand        xmm0,xmm1
+  00000001400097A8: 66 0F EB C4        por         xmm0,xmm4
+  00000001400097AC: F3 0F 7F 01        movdqu      xmmword ptr [rcx],xmm0
+  00000001400097B0: F3 0F 6F 42 10     movdqu      xmm0,xmmword ptr [rdx+10h]
+  00000001400097B5: 66 0F DB C1        pand        xmm0,xmm1
+  00000001400097B9: 66 0F DF CB        pandn       xmm1,xmm3
+  00000001400097BD: 66 0F EB C8        por         xmm1,xmm0
+  00000001400097C1: F3 0F 7F 49 10     movdqu      xmmword ptr [rcx+10h],xmm1
+  00000001400097C6: 48 83 C4 28        add         rsp,28h
+  00000001400097CA: C3                 ret
+
+===== ntt: the division and what feeds it
+       000000014000A35E: mov   qword ptr [rsp+30h],80h
+       000000014000A367: mov   qword ptr [rsp+38h],40h
+       000000014000A370: mov   qword ptr [rsp+40h],20h
+       000000014000A379: mov   qword ptr [rsp+48h],10h
+       000000014000A382: mov   qword ptr [rsp+50h],8
+       000000014000A38B: mov   qword ptr [rsp+58h],4
+       000000014000A394: mov   qword ptr [rsp+60h],2
+       000000014000A39D: mov   r8d,1
+       000000014000A3A3: xor   r9d,r9d
+       000000014000A3A6: jmp   000000014000A3BD
+       000000014000A3B0: inc   r9
+       000000014000A3B3: cmp   r9,7
+       000000014000A3B7: je    000000014000A4F8
+       000000014000A3BD: mov   r11,qword ptr [rsp+r9*8+30h]
+       000000014000A3C2: test  r11,r11
+       000000014000A3C5: js    000000014000A576
+       000000014000A3CB: je    000000014000A50C
+       000000014000A3D1: lea   rdi,[r11+r11]
+       000000014000A3D5: cmp   rdi,100h
+       000000014000A3DC: ja    000000014000A3F0
+       000000014000A3DE: mov   eax,100h
+       000000014000A3E3: xor   edx,edx
+       000000014000A3E5: div   eax,edi
+       000000014000A3E7: jmp   000000014000A3F7
+
+===== ntt_inv: the division and what feeds it
+       000000014000A5B8: mov   qword ptr [rsp+40h],2
+       000000014000A5C1: mov   qword ptr [rsp+48h],4
+       000000014000A5CA: mov   qword ptr [rsp+50h],8
+       000000014000A5D3: mov   qword ptr [rsp+58h],10h
+       000000014000A5DC: mov   qword ptr [rsp+60h],20h
+       000000014000A5E5: mov   qword ptr [rsp+68h],40h
+       000000014000A5EE: mov   qword ptr [rsp+70h],80h
+       000000014000A5F7: mov   r8d,7Fh
+       000000014000A5FD: xor   r9d,r9d
+       000000014000A607: jmp   000000014000A61D
+       000000014000A610: inc   r9
+       000000014000A613: cmp   r9,7
+       000000014000A617: je    000000014000A754
+       000000014000A61D: mov   r11,qword ptr [rsp+r9*8+40h]
+       000000014000A622: test  r11,r11
+       000000014000A625: js    000000014000A869
+       000000014000A62B: je    000000014000A7F7
+       000000014000A631: lea   rdi,[r11+r11]
+       000000014000A635: cmp   rdi,100h
+       000000014000A63C: ja    000000014000A650
+       000000014000A63E: mov   eax,100h
+       000000014000A643: xor   edx,edx
+       000000014000A645: div   eax,edi
+       000000014000A647: jmp   000000014000A657
+
+===== byte_decode (the standalone symbol): the range-check loop and its two exits
+  0000000140009B92: 0F 42 C2           cmovb       eax,edx
+  0000000140009B95: B9 06 00 00 00     mov         ecx,6
+  0000000140009BA0: 48 81 F9 06 02 00  cmp         rcx,206h
+  0000000140009BA7: 74 41              je          0000000140009BEA
+  0000000140009BA9: 0F B7 54 0C 22     movzx       edx,word ptr [rsp+rcx+22h]
+  0000000140009BAE: 39 D0              cmp         eax,edx
+  0000000140009BB0: 76 1F              jbe         0000000140009BD1
+  0000000140009BB2: 0F B7 54 0C 24     movzx       edx,word ptr [rsp+rcx+24h]
+  0000000140009BB7: 39 D0              cmp         eax,edx
+  0000000140009BB9: 76 16              jbe         0000000140009BD1
+  0000000140009BBB: 0F B7 54 0C 26     movzx       edx,word ptr [rsp+rcx+26h]
+  0000000140009BC0: 39 D0              cmp         eax,edx
+  0000000140009BC2: 76 0D              jbe         0000000140009BD1
+  0000000140009BC4: 0F B7 54 0C 28     movzx       edx,word ptr [rsp+rcx+28h]
+  0000000140009BC9: 48 83 C1 08        add         rcx,8
+  0000000140009BCD: 39 D0              cmp         eax,edx
+  0000000140009BCF: 77 CF              ja          0000000140009BA0
+  0000000140009BD1: 48 8D 05 60 57 02  lea         rax,[...]            ; error string
+  0000000140009BDC: 48 C7 46 10 1C 00  mov         qword ptr [rsi+10h],1Ch
+  0000000140009BE4: 66 B8 01 00        mov         ax,1                 ; Err
+  0000000140009BE8: EB 16              jmp         0000000140009C00
+  0000000140009BEA: 48 8D 4E 02        lea         rcx,[rsi+2]          ; all 256 in range
+  0000000140009BF3: 41 B8 00 02 00 00  mov         r8d,200h
+  0000000140009BF9: E8 A7 28 02 00     call        memcpy
+  0000000140009BFE: 31 C0              xor         eax,eax              ; Ok
+
+===== the range checks as inlined into decrypt and re-encrypt: the bound is an immediate
+k_pke_decrypt, d = 12 (bound q = 3329 = 0D01h), at 14000C74F and again at 14000CC64:
+  000000014000C746  je  -> 000000014000C7A8   prev: cmp rax,206h
+  000000014000C74F  ja  -> 000000014000C770   prev: cmp word ptr [rsp+rax+2Ah],0D00h
+  000000014000C758  ja  -> 000000014000C770   prev: cmp word ptr [rsp+rax+2Ch],0D00h
+  000000014000C761  ja  -> 000000014000C770   prev: cmp word ptr [rsp+rax+2Eh],0D00h
+  000000014000C76E  jb  -> 000000014000C740   prev: cmp word ptr [rsp+rax+30h],0D01h | lea rax,[rax+8]
+k_pke_encrypt (the body decapsulation calls), d = 12, at 14000D026, 14000D242 and 14000E269 (same shape),
+and d = 1 (bound 2):
+  000000014000E5AD  je  -> 000000014000E5F0   prev: mov eax,6 | cmp rax,206h
+  000000014000E5B8  ja  -> 000000014000D050   prev: cmp word ptr [rsp+rax+0E4Ah],1
+  000000014000E5C7  ja  -> 000000014000D050   prev: cmp word ptr [rsp+rax+0E4Ch],1
+  000000014000E5D6  ja  -> 000000014000D050   prev: cmp word ptr [rsp+rax+0E4Eh],1
+  000000014000E5E9  jb  -> 000000014000E5A7   prev: cmp word ptr [rsp+rax+0E50h],2 | lea rax,[rax+8]
+No comparison against 400h (d = 10) or 10h (d = 4) appears on the ciphertext decodes.
+
+===== counts, by the agent's script (conditional jump = j.. except jmp; cmov/set; div/idiv)
+   insns  condj  cmov/set  div  function
+    1689     84         8    0  k_pke_encrypt (the body decapsulation calls)
+    1356     50         6    0  k_pke_encrypt (the other body)
+    1044     30         6    0  k_pke_key_gen
+     725     43         4    0  k_pke_decrypt
+     478      9        46    0  sample_ntt
+     380      3         0    0  keccak::p1600
+     223      4         0    0  mul_mat_vec
+     221      4         0    0  mul_mat_t_vec
+     197     14         2    0  sample_poly_cbd
+     188      7         0    0  helpers::g
+     177      3         0    0  dot_t_prod
+     163     17         1    1  ntt_inv
+     149      0         0    0  prf
+     147      0         0    0  prf
+     147      7         1    0  ml_kem_decaps_internal
+     146      2         0    0  helpers::h
+     139      0         0    0  helpers::j
+     133      0         0    0  xof
+     132     14         1    1  ntt
+     130      4         0    0  encaps_from_seed
+     122     15         1    0  byte_decode
+     110      7         0    0  sample_ntt (second body)
+      86      5         2    0  multiply_ntts
+      58      0         0    0  keygen_from_seed
+      33      0         0    0  SharedSecretKey::zeroize
+      31      1         0    0  subtle::black_box (the listing attributes the select's 23 instructions to it)
+      26      0         0    0  Sha3State::drop
+      21      1         0    0  CipherText::into_bytes
+      16      1         0    0  DummyRng::try_fill_bytes
+      13      0         0    0  try_decaps
+    8480    325        78    2  total, 30 functions

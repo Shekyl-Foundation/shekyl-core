@@ -6,8 +6,12 @@
 //! JoinMarket bond-post semantic verify (gate-4 §3.2–3.5).
 //!
 //! Structural bounds (hybrid pubkey length) and `P_canonical_id` hint checks stay
-//! in C++ consensus glue; this module covers post-kind, holdings, term rigidity,
-//! floor equality, and record-existence (via `record_exists` from LMDB).
+//! in C++ consensus glue; this module covers post-kind, the JoinMarket's endpoint,
+//! holdings, term rigidity, floor equality, and record-existence
+//! (via `record_exists` from LMDB). The receipt key is not this module's:
+//! CEN-J28 and the pool's credit arm both call
+//! `FnDsaHybridPublicKey::from_receipt_sign_pk`, and this verifier does not
+//! read the key.
 //!
 //! Two rules here are about the transaction or the block rather than the vin, so
 //! they sit outside the per-kind verifiers as free predicates:
@@ -200,7 +204,12 @@ pub fn verify_reinstate_bond_post(
     // belt: a floor-drifted record would otherwise let this tx verify and then
     // FATAL-abort every node at block connect. Verify rejects the tx; the fold's
     // belt stays for verify-bypassing callers.
-    if bond_floor_of(record_holdings_kind, record_held_shard_ids.len()) != current_bonded {
+    if bond_floor_of(
+        record_holdings_kind,
+        record_held_shard_ids.len(),
+        crate::archival_params(),
+    ) != current_bonded
+    {
         return Err(BondPostError::ReinstateRecordFloorBroken);
     }
     // Zero-money: no debit, no credit, bonded_total unchanged (equals the
@@ -222,6 +231,7 @@ pub fn verify_reinstate_bond_post(
 /// the next challenge), but the **all-zero key is refused**: the bond record
 /// stores "no endpoint" as the zero key and cannot tell the two apart, so a
 /// zero key would connect as a bonded persona that advertises nothing.
+/// The receipt key is not judged here (CEN-J28, and the pool's credit arm).
 pub fn verify_join_market_bond_post(
     vin: &ArchivalBondPostVin,
     record_exists: bool,
@@ -251,7 +261,7 @@ pub fn verify_join_market_bond_post(
         return Err(BondPostError::BondDebitNonzero);
     }
 
-    let floor = bond_floor(&vin.holdings);
+    let floor = bond_floor(&vin.holdings, crate::archival_params());
     if floor == 0 {
         return Err(BondPostError::BondFloorZero);
     }
@@ -334,7 +344,7 @@ pub fn release_vin_statics(vin: &ArchivalBondPostVin) -> Result<(), BondPostErro
     }
 
     // Step-4 floor equality on the vin's post-connect state (§3.5 debit-path note).
-    let floor = bond_floor(&vin.holdings);
+    let floor = bond_floor(&vin.holdings, crate::archival_params());
     // A full Release ends at the canonical empty holdings, whose floor is 0. But
     // `bond_floor` also returns 0 for a structurally-invalid (oversize) shard set,
     // so a floor-0 descriptor that still carries shards is not an exit — reject it
@@ -397,7 +407,11 @@ pub fn verify_release_bond_post(
 
     // Release cooldown: the grace window past the last served epoch must have
     // elapsed (gate-4 §4.3; the Gate-6 F-D3/F-D4 gate).
-    if !release_cooldown_elapsed(last_served_epoch, current_settlement_epoch) {
+    if !release_cooldown_elapsed(
+        last_served_epoch,
+        current_settlement_epoch,
+        crate::archival_params(),
+    ) {
         return Err(BondPostError::CooldownNotElapsed);
     }
 
@@ -420,11 +434,15 @@ pub fn verify_release_bond_post(
 /// `(P, E)` pass's sibling,
 /// [`emission_block_claims_unique`](crate::claimed_epochs::emission_block_claims_unique)).
 ///
-/// Per-tx verify runs against pre-block DB state, so every same-`P` same-block
-/// pair — JoinMarket+JoinMarket (double `total_bonded_atomic` credit),
-/// Release+Release (double debit), JoinMarket+Release, Reinstate+Reinstate —
-/// passes per-tx verify independently; each
-/// pair interacts through the per-`P` record and the global counter, and the
+/// Per-tx verify runs against pre-block DB state, so a same-`P` same-block
+/// pair of one kind — JoinMarket+JoinMarket (double `total_bonded_atomic`
+/// credit), Release+Release (double debit), Reinstate+Reinstate — passes
+/// per-tx verify independently. A JoinMarket+Release pair does **not**: the
+/// Release reads no record pre-block and refuses `RecordMissing` before this
+/// pass runs, in the C++ and the Rust validator alike (*every* same-`P` pair
+/// was the claim here until 2026-10-04, when E6 slice 8 row 5 drove the pair
+/// and the per-tx verify refused it first). Each pair that does pass
+/// interacts through the per-`P` record and the global counter, and the
 /// §4.5 conservation audit is **not** a backstop (a double-credit doubles both
 /// sides of `total_bonded == Σ bonded_P` consistently, so it passes on corrupt
 /// state). This pass — run once per block over every bond-post vin's

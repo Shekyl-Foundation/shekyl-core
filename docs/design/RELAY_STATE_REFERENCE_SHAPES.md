@@ -30,7 +30,7 @@ silently rolled back on every invocation — Dandelion++ timing state was never
 durable. Classified as a privacy regression (origin-disclosure class), not a
 consensus or fund-safety bug ([`CHANGELOG.md`](../CHANGELOG.md), the
 "Dandelion++ relay timestamp rollback" entry; the fix is the `lock.commit()`
-at `src/cryptonote_core/tx_pool.cpp:1232`, re-verified intact by
+at `src/cryptonote_core/tx_pool.cpp`, re-verified intact by
 [`LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md), the
 `get_relayable_transactions` row).
 
@@ -95,7 +95,7 @@ misplaced.
 **The audit, at source (`DRS_E1_SPOOL.md` SPL-17).** The Zone holds
 per-**connection** and per-**epoch** state and returns a plan per call; it
 holds **no per-transaction** relay fact and its own doc refuses to
-(`shekyl-relay/src/zone/mod.rs:594–597`: *"retaining a per-transaction outcome
+(`shekyl-relay/src/graph/mod.rs:594–597`: *"retaining a per-transaction outcome
 for a consumer to poll would put a second copy of a fact the txpool already
 owns beside the txpool"*). `EmbargoTimer` owns the **distribution**; the pool
 stamps the drawn **deadline** (`tx_pool.cpp:1298`). `StemWatch` holds a
@@ -138,22 +138,21 @@ arrival — intended for the *behaviour* (§92.4: "past that point the pin's
 sign flips") but it takes the *fact* with it. "Has it been broadcast" and "did
 we originate it" cannot be asked separately.
 
-**The correct shape.** Three lifetimes, not one enum value.
-`DRS_E1_SPOOL.md` `SPL-Q9` poses provenance (permanent; the store refuses an
-update that changes it), phase (the ratchet — how it is travelling now — with
-the pin that an originated entry never walks to `Stem`/`Fluff` and yields to
-`Block`), and responsibility (`Armed` / `Disarmed`, originated entries only;
-F-10's verdict writes `Disarmed`). **As built (2026-09-24, review on the
-increment):** those three are one `RelayState`. The phase enum is chosen by
-the provenance — `OriginatedPhase` is `Held | Block`, `ArrivedPhase` is
-`Stem | Fluff | Block` — so the forbidden pairs have no value, and
-responsibility is a field of the originated arm only. Permanence compares
-`RelayState::origin()` (originated, or arrived over a zone), not the whole
-state, so a phase step or a disarm is not an origin change. `upgrade` is the
-strict forward step; an update stores a new phase only when it is that step
-or the same phase. The disarm *timer* is the Zone's; the pool holds no timer.
-The byte enum `RelayMethod` stays what it is — the FFI seam's word for an
-arrival class or a routing plan — and is derived at the seam, not persisted.
+**The correct shape.** Three lifetimes, not one enum value, and none of
+them on the pool record (DX-F6, 2026-10-16; `DRS_E5_POOL_ALT_PRUNE.md`
+§2.2). Provenance, phase and responsibility are the relay's: stem, fluff,
+embargo and the arrival connector are relay decisions, and
+`Responsibility` (`Armed` / `Disarmed`, originated transactions only,
+F-10's verdict writes `Disarmed` and nothing re-arms it) lives in
+`shekyl-relay`'s `stem_watch.rs`, keyed by transaction hash beside the
+stem watch whose verdict disarms it. The pool record carries the one fact
+the pool reads — whether the transaction is public yet (D++ acceptance
+criterion 2) — written by the relay's fluff event, and by a block carrying
+the transaction (a block has published it; a pool that kept it hidden
+would be a possession oracle), and never cleared.
+The disarm *timer* is the Zone's; the pool holds no timer. The byte enum
+`RelayMethod` stays what it is — the FFI seam's word for an arrival class
+or a routing plan — and is never persisted.
 
 **Drift looks like.** A single `RelayMethod` field that callers mutate to
 record progress — `local` → `fluff` on first relay. One variable carrying
@@ -166,7 +165,7 @@ this section and `DRS_E1_SPOOL.md` SPL-18; §92.4 carries a pointer here.
 
 ## 4. SPL-14 — no relay state is reachable by fall-through
 
-**The finding.** `src/blockchain_db/blockchain_db.h:126–130`, in a comment
+**The finding.** `src/blockchain_db/blockchain_db.h`, in a comment
 justifying a different decision: *"a zeroed record decodes to `fluff`, NOT
 `none` (`get_relay_method` falls through state 0 to the `fluff` return)."*
 An unreadable or zeroed relay byte resolves to the broadcast-to-everyone
@@ -185,7 +184,7 @@ that says *fluff*.
   reaches `Fluff` but its own.*
 - `None` stays a legal, unreachable, non-relayable member with a one-line
   reason at the variant — it survives because the enum is byte-pinned at the
-  FFI seam (`shekyl-relay/src/zone_route.rs:46–50`), not because it guards
+  FFI seam (`shekyl-relay/src/graph/mod.rs:122–128`), not because it guards
   anything, and a mechanical cleanup that deleted it would shift every
   discriminant under that pin. It is not a field of the pool record (§3).
 
@@ -260,7 +259,7 @@ implements first.)*
 
 **Drift looks like.** A white list that accepts an inbound peer after a
 back-ping (the inbound-derived endpoint is routed to **gray** at
-`src/p2p/net_node.inl:2925`, `append_with_peer_gray`, with `last_seen = 0` —
+`net_node.inl:2925` at this document's pin (`append_with_peer_gray` went with the C++ peerlist, 2026-10-13), with `last_seen = 0` —
 "an unverified claim has never been seen"); anchors persisted as a separate
 trusted file; a `PeerEntry` with a trust or score field; promotion implemented
 as a copy so an address is in both lists.
@@ -284,9 +283,9 @@ decoder refuse rather than default. `AtHeight<T>` and `AtIndex<T>`
 (`store/read.rs:81` — an empty chain is a value, not `UINT64_MAX`),
 `CurveTreeState::EMPTY` written by the seal (`codec/curve.rs:144` — absence
 is SI-7, never a default), `Option<RMarket>` where the C++ returned `0`
-(`DRS_E1_SARCH.md` SAR-8), `RelayZone::from_ffi_u8` provisioning an
-out-of-range byte as the *worst* case rather than masking it to clearnet
-(`shekyl-relay-privacy/src/zone.rs:68`), and the sentinel removal in
+(`DRS_E1_SARCH.md` SAR-8), an unknown connector byte drawing the longest
+measured transit rather than the shortest
+(`rust/shekyl-ffi/src/dandelionpp_ffi.rs`, `embargo_for_connector`), and the sentinel removal in
 `stem_map` are all the same move. (The review named `TreeAfter`,
 `SegmentAvailability` and `Tip::Empty`; none exists on this tree by those
 names, so the list above is the verified one.)

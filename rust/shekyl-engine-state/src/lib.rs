@@ -72,10 +72,12 @@ pub use pending_post_block::{
     PendingBondPost, PendingDrain, PendingEmissionClaim, PendingPostBlock, PendingPostState,
     PendingRelease, PENDING_POST_VERSION,
 };
-pub use safety_constants::NetworkSafetyConstants;
+pub use safety_constants::{
+    ReorgDepthBelowLockWindow, ReorgDepthOverride, WalletSafetyConstants, MIN_REORG_DEPTH,
+};
 pub use send_journal_block::{
-    AbandonEdge, InFlightSpendLocks, SendInputRef, SendJournalBlock, SendRecipient, SendRecord,
-    SendState, SEND_JOURNAL_BLOCK_VERSION,
+    AbandonEdge, InFlightSpendLocks, SendDestination, SendInputRef, SendJournalBlock,
+    SendRecipient, SendRecord, SendState, SEND_JOURNAL_BLOCK_VERSION,
 };
 pub use staking_block::{StakingBlock, STAKING_BLOCK_VERSION};
 pub use sync_state_block::{SyncStateBlock, SYNC_STATE_BLOCK_VERSION};

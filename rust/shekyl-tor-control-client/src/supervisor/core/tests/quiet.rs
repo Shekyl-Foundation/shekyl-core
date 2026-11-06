@@ -1,0 +1,424 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The quiet line and Tor's sampled network view (`TSR-Q14`).
+//!
+//! Dial replies are display. Tor's own statements name the cause.
+
+use std::time::Duration;
+
+use super::super::super::posture::{render, Cause, Shown};
+use super::super::{duration_ns, Action, Core, DialTally, Input, Step};
+use super::{announces, managed, policy, reach_usable, socks, spawns, takes_down};
+use crate::control::{NetworkView, Reported};
+
+/// A tally of `unopened` failed Tor dials since the `opened`-th opened one,
+/// with `held` sessions, and no sign of life from the judge.
+fn dials(opened: u64, unopened: u32, held: u32) -> Input {
+    lived(opened, unopened, held, None)
+}
+
+/// [`dials`], with the judge's last sign of life at `life`.
+fn lived(opened: u64, unopened: u32, held: u32, life: Option<u64>) -> Input {
+    Input::DialEvidence(DialTally {
+        opened,
+        unopened,
+        held,
+        last_sign_of_life: life,
+        last_unopened_at: None,
+    })
+}
+
+fn secs(seconds: u64) -> u64 {
+    duration_ns(Duration::from_secs(seconds))
+}
+
+/// A sampled view. Unknown is not a negative.
+fn tor_says(liveness: Reported, circuits: Reported) -> Input {
+    Input::NetworkView(NetworkView { liveness, circuits })
+}
+
+/// Run every deadline up to and including `until`, answering each liveness
+/// sample as a Tor that has not reported its network, so nothing but the
+/// evidence under test can move the core. Returns every step taken.
+fn run_until(core: &mut Core, until: u64) -> Vec<Step> {
+    let mut steps = Vec::new();
+    while let Some(due) = core.deadline().filter(|due| *due <= until) {
+        let step = core.on_deadline(due);
+        if step.actions.contains(&Action::Sample) {
+            steps.push(core.on(tor_says(Reported::Unknown, Reported::Unknown), due));
+        }
+        steps.push(step);
+    }
+    steps
+}
+
+fn faults(steps: &[Step]) -> bool {
+    steps.iter().any(|step| {
+        spawns(step)
+            || takes_down(step)
+            || step
+                .actions
+                .iter()
+                .any(|action| matches!(action, Action::CheckPin))
+    })
+}
+
+fn says_progress(steps: &[Step]) -> usize {
+    steps
+        .iter()
+        .flat_map(|step| &step.actions)
+        .filter(|action| matches!(action, Action::SayProgress))
+        .count()
+}
+
+/// `TSR-Q14` (Rick, 2026-10-25): this node's own dial replies are never a
+/// link verdict. Ten minutes of failed Tor dials, with no session held and
+/// Tor saying nothing about its network, is a neutral line said once, and
+/// no cause, no announcement, no respawn. A planted onion answers `0x01` at
+/// will and a blackholing one `0x06` (shekyl-dev
+/// `data/tsr-acceptance/2026-10-25-socks-reply-sources`), so a cause from
+/// dials would let anyone make the node tell its operator it cannot reach
+/// Tor. Routing the tally to a cause fails the first half; dropping it
+/// fails the line. Every deadline runs; all 150 samples are answered.
+#[test]
+fn ten_minutes_of_failed_dials_are_a_neutral_line_never_a_cause() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    let mut steps = Vec::new();
+    let mut unopened = 0;
+    let mut at = 0;
+    while at < duration_ns(Duration::from_secs(600)) {
+        at += duration_ns(Duration::from_secs(5));
+        steps.extend(run_until(&mut core, at));
+        unopened += 1;
+        steps.push(core.on(dials(0, unopened, 0), at));
+    }
+    let samples = steps
+        .iter()
+        .filter(|step| step.actions.contains(&Action::Sample))
+        .count();
+    // One liveness sample per `alive_every` while Running: 600 s / 4 s.
+    assert_eq!(samples, 150, "the liveness samples ran");
+    assert!(!faults(&steps), "no respawn, no takedown, no pin check");
+    assert_eq!(
+        steps.iter().map(announces).sum::<usize>(),
+        0,
+        "nothing announced"
+    );
+    assert_eq!(says_progress(&steps), 1, "the line is said once");
+    let status = core.status();
+    assert_eq!(status.cause, Cause::None);
+    assert_eq!(status.shown, Shown::Usable);
+    assert_eq!(status.respawn_count, 0);
+    assert!(status.tor_quiet.is_some());
+    let text = render(&status);
+    assert!(text.contains("Nothing has come through Tor for"), "{text}");
+    assert!(!text.contains("cannot reach"), "{text}");
+}
+
+/// **The line runs from the judge's last sign of life**
+/// (`DIALER_OUTAGE_EVIDENCE.md` §6): a byte a session received, or a stream
+/// that opened, starts the span again; with a Tor dial failed after it, the
+/// line stands `quiet_after` later and not before. The testnet case, two
+/// live seeds talking while four dead ones are redialed, is a byte every
+/// timed sync, so no line. Reading the opened count instead of the judge's
+/// instant fails the byte half.
+#[test]
+fn the_line_runs_from_the_judges_last_sign_of_life() {
+    let after = duration_ns(policy().quiet_after);
+    for (opened, life) in [(0, secs(30)), (1, secs(40))] {
+        let (mut core, _) = Core::start(policy(), managed(true), 0);
+        reach_usable(&mut core);
+        core.on(dials(0, 1, 0), secs(1));
+        core.on(lived(opened, 0, 0, Some(life)), life);
+        core.on(lived(opened, 1, 0, Some(life)), life + secs(1));
+        core.on(lived(opened, 1, 0, Some(life)), life + after - 1);
+        assert_eq!(core.status().tor_quiet, None, "{opened}: inside the span");
+        let step = core.on(lived(opened, 1, 0, Some(life)), life + after);
+        assert_eq!(says_progress(&[step]), 1, "{opened}: said once");
+        assert_eq!(core.status().tor_quiet, Some(policy().quiet_after));
+    }
+}
+
+/// **A held session that sends nothing does not keep the line away**: a
+/// session merely held is not a sign of life (§3.3). On the floor device's
+/// blackhole the idle sessions sat open for minutes, and the line said
+/// nothing. Keeping the held condition fails this.
+#[test]
+fn a_held_session_that_sends_nothing_does_not_keep_the_line_away() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    core.on(dials(3, 1, 2), secs(5));
+    let step = core.on(dials(3, 2, 2), duration_ns(policy().quiet_after));
+    assert_eq!(says_progress(&[step]), 1, "two sessions held, silent");
+    assert!(core.status().tor_quiet.is_some());
+}
+
+/// **No failed dial since the last sign of life, no line**: the line states
+/// the fact the dialer acted on, an excused failure, so a span with no Tor
+/// dial failed in it says nothing however long it is. A failure before the
+/// sign of life is not one. Reading "some dial failed, ever" fails this.
+#[test]
+fn the_line_needs_a_failed_dial_since_the_last_sign_of_life() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    let after = duration_ns(policy().quiet_after);
+    core.on(dials(0, 1, 0), secs(10));
+    core.on(lived(0, 1, 0, Some(secs(20))), secs(20));
+    core.on(lived(0, 1, 0, Some(secs(20))), secs(20) + 2 * after);
+    assert_eq!(core.status().tor_quiet, None, "no failure since the byte");
+    let late = secs(20) + 2 * after + 1;
+    let step = core.on(lived(0, 2, 0, Some(secs(20))), late);
+    assert_eq!(says_progress(&[step]), 1, "a dial failed since");
+    assert!(core.status().tor_quiet.is_some());
+}
+
+/// **A coalesced failure-then-life is still a failure before the byte.**
+/// The watch keeps only the latest tally, so a dial that failed at 10 s
+/// and a byte at 20 s can arrive as one tally at 21 s. The failure is
+/// dated when the dialer counted it. Dating it at arrival puts it after
+/// the byte, and the line stands once the span has elapsed.
+#[test]
+fn a_coalesced_failure_then_life_is_not_a_failure_since_the_byte() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    let after = duration_ns(policy().quiet_after);
+    let failed_at = secs(10);
+    let life = secs(20);
+    let tally = DialTally {
+        opened: 0,
+        unopened: 1,
+        held: 0,
+        last_sign_of_life: Some(life),
+        last_unopened_at: Some(failed_at),
+    };
+    core.on(Input::DialEvidence(tally), secs(21));
+    assert_eq!(core.status().tor_quiet, None);
+    core.on(Input::DialEvidence(tally), life + after);
+    assert_eq!(
+        core.status().tor_quiet,
+        None,
+        "the failure ended before the byte"
+    );
+}
+
+/// **The sentence says what the judge observed**, neutral and with no fix
+/// (`TSR-Q14`): nothing has come through Tor for the span, no connection
+/// has opened and no peer has sent anything. A sentence that names a cause
+/// or offers a fix fails this.
+#[test]
+fn the_quiet_sentence_says_what_the_judge_observed() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    core.on(dials(0, 1, 0), secs(1));
+    core.on(dials(0, 2, 0), secs(80));
+    let text = render(&core.status());
+    assert!(
+        text.contains(
+            "Nothing has come through Tor for 1 min 20 s: no connection has opened, and no peer has sent anything."
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("cannot reach"), "{text}");
+}
+
+/// **The span starts at the later of the judge's last sign of life and
+/// Running**: failures and life from before a Tor reached Running do not
+/// make the line stand for the new Tor at once. Starting the span at the
+/// sign of life alone fails this.
+#[test]
+fn the_quiet_stretch_starts_when_a_tor_reaches_running() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    core.on(
+        lived(0, 9, 0, Some(secs(50))),
+        duration_ns(Duration::from_secs(100)),
+    );
+    let at = duration_ns(Duration::from_secs(100));
+    core.on(Input::PinAccepted, at);
+    core.on(Input::Spawned, at);
+    core.on(
+        Input::DirectorySample {
+            progress: Some(100),
+            socks: Some(socks()),
+            read: None,
+        },
+        at,
+    );
+    core.on(Input::BootstrapComplete, at);
+    core.on(Input::RouteInstalled, at);
+    core.on(lived(0, 10, 0, Some(secs(50))), at + 1);
+    assert_eq!(core.status().tor_quiet, None);
+    core.on(
+        lived(0, 11, 0, Some(secs(50))),
+        at + duration_ns(policy().quiet_after),
+    );
+    assert!(core.status().tor_quiet.is_some());
+}
+
+/// Dials counted before this supervisor watched are the baseline, not an
+/// open. Seeding them after Running, at a later instant, leaves the stretch
+/// clock on the transition into Running. Folding that same tally as evidence
+/// would move the clock to the seed and the line would not stand yet.
+#[test]
+fn a_tally_from_before_this_tor_does_not_count_as_an_open() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    let quiet = duration_ns(policy().quiet_after);
+    core.on(
+        Input::DialBaseline(DialTally {
+            opened: 4,
+            unopened: 2,
+            held: 0,
+            last_sign_of_life: None,
+            last_unopened_at: None,
+        }),
+        1,
+    );
+    let step = core.on(dials(4, 3, 0), quiet);
+    assert_eq!(
+        says_progress(&[step]),
+        1,
+        "no new open, so the stretch stands"
+    );
+    assert!(core.status().tor_quiet.is_some());
+    core.on(lived(5, 1, 0, Some(quiet + 1)), quiet + 1);
+    assert_eq!(
+        core.status().tor_quiet,
+        None,
+        "an open on this Tor is a sign of life"
+    );
+}
+
+/// Tor's own view (`TSR-Q14`) governs even when Tor sends no event: its
+/// liveness verdict `down` names the blocked link at once; both affirmative
+/// answers clear it at once. Unknown says nothing, and neither does "no
+/// circuit established", which is display only. During a bootstrap no
+/// circuit is built yet, and a view folded then is not a statement.
+/// *Changed by the VM clock findings (2026-10-30):* "no circuit" named the
+/// blocked link, and after a resume, when Tor drops its circuits on
+/// purpose, that was a false alarm.
+#[test]
+fn tors_sampled_view_names_and_clears_a_blocked_link_only_while_running() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    core.on(Input::PinAccepted, 0);
+    core.on(Input::Spawned, 0);
+    let step = core.on(tor_says(Reported::Yes, Reported::No), 1);
+    assert_eq!(announces(&step), 0);
+    assert_eq!(
+        core.status().cause,
+        Cause::None,
+        "bootstrapping: no circuit yet"
+    );
+
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    assert_eq!(
+        announces(&core.on(tor_says(Reported::Unknown, Reported::Unknown), 1)),
+        0
+    );
+    let step = core.on(tor_says(Reported::No, Reported::Unknown), 2);
+    assert_eq!(announces(&step), 1, "said at once");
+    assert_eq!(core.status().cause, Cause::ExternalBlocked);
+    assert_eq!(core.status().shown, Shown::Degraded);
+    assert_eq!(
+        announces(&core.on(tor_says(Reported::Yes, Reported::Unknown), 3)),
+        0
+    );
+    assert_eq!(core.status().cause, Cause::ExternalBlocked, "a circuit too");
+    let step = core.on(tor_says(Reported::Yes, Reported::Yes), 4);
+    assert_eq!(announces(&step), 1, "the recovery is said at once");
+    assert_eq!(core.status().cause, Cause::None);
+    let step = core.on(tor_says(Reported::Yes, Reported::No), 5);
+    assert_eq!(announces(&step), 0);
+    assert_eq!(
+        core.status().cause,
+        Cause::None,
+        "no circuit is not Tor saying its network is down"
+    );
+}
+
+/// **After a resume, no circuit is not a block** (the VM suspend of
+/// 2026-10-30). Tor drops its circuits on a clock jump and says so; the
+/// sample after it reads `circuit-established=0` with liveness up. That
+/// named the blocked link and said "cannot reach the Tor network" for the
+/// seconds Tor took to rebuild. Reading "no circuit" as "blocked" again
+/// fails this.
+#[test]
+fn the_sample_after_a_clock_jump_names_no_block() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    core.on(Input::ClockJumped, 10);
+    let step = core.on(tor_says(Reported::Yes, Reported::No), 11);
+    assert_eq!(announces(&step), 0, "nothing is said");
+    assert_eq!(core.status().cause, Cause::None);
+    assert!(!render(&core.status()).contains("cannot reach"));
+    core.on(tor_says(Reported::Yes, Reported::Yes), 18);
+    assert_eq!(core.status().cause, Cause::None);
+}
+
+/// "Process only when the control connection also fails" (Rick): a blocked
+/// link does not stop a control failure from being a process fault.
+#[test]
+fn a_blocked_link_still_respawns_when_the_control_connection_fails() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    core.on(Input::ExternalBlocked, 1);
+    core.on(Input::ControlEnded, 2);
+    assert!(matches!(core.status().cause, Cause::Died { .. }));
+    assert_eq!(core.status().shown, Shown::Restarting);
+    let due = core.deadline().expect("the respawn wait");
+    let step = core.on_deadline(due);
+    assert!(
+        step.actions.contains(&Action::CheckPin),
+        "{:?}",
+        step.actions
+    );
+}
+
+/// Tor saying it reaches its network clears what is about reaching the
+/// network, which nothing did while Tor ran: a blocked link and an
+/// unreachable directory. The open-file limit and a clock report are not
+/// the network and keep their own evidence.
+#[test]
+fn tor_reaching_its_network_clears_the_network_causes_only() {
+    for named in [Input::ExternalBlocked, Input::DirectoryUnreachable] {
+        let (mut core, _) = Core::start(policy(), managed(true), 0);
+        reach_usable(&mut core);
+        core.on(named, 1);
+        assert_eq!(core.status().shown, Shown::Degraded);
+        let step = core.on(Input::ExternalCleared, 2);
+        assert_eq!(announces(&step), 1, "the recovery is said at once");
+        assert_eq!(core.status().cause, Cause::None);
+        assert_eq!(core.status().shown, Shown::Usable);
+    }
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    core.on(Input::TooManyFiles { open: 1024 }, 3);
+    let step = core.on(Input::ExternalCleared, 4);
+    assert_eq!(announces(&step), 0);
+    assert_eq!(core.status().cause, Cause::TooManyFiles { open: 1024 });
+}
+
+/// The line reads whether dials failed, never how many (the dialer lane's
+/// #1190 keeps up to five Tor dials in flight): five failures landing at
+/// once leave the posture exactly where one does, and the count reaches no
+/// one, since Status carries only the stretch.
+#[test]
+fn the_line_reads_whether_dials_failed_not_how_many() {
+    let late = duration_ns(policy().quiet_after) + 1;
+    let mut seen = Vec::new();
+    for unopened in [1, 5] {
+        let (mut core, _) = Core::start(policy(), managed(true), 0);
+        reach_usable(&mut core);
+        let step = core.on(dials(0, unopened, 0), late);
+        seen.push((says_progress(&[step]), core.status()));
+    }
+    assert_eq!(
+        seen[0], seen[1],
+        "one failure and five are the same posture"
+    );
+    assert!(seen[0].1.tor_quiet.is_some());
+}

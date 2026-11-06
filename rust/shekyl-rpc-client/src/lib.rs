@@ -14,7 +14,6 @@
 use core::{fmt::Debug, future::Future, num::NonZeroU64};
 use std_shims::{
     alloc::format,
-    io,
     string::{String, ToString},
     vec,
     vec::Vec,
@@ -25,21 +24,9 @@ use zeroize::Zeroize;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use shekyl_curve_io::*;
 use shekyl_rpc_types::core_rpc_version_string;
 use shekyl_types::ChainCount;
-// Number of blocks the fee estimate will be valid for
-// https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c
-//   /src/wallet/wallet2.cpp#L121
-/// Grace-block horizon for the daemon's `get_fee_estimate` JSON-RPC:
-/// the daemon estimates a rate expected to stay above the relay floor
-/// for this many blocks. `pub` because this crate is the single owner
-/// of the value (inherited from wallet2's constant of the same intent);
-/// `shekyl-engine-core`'s snapshot path imports it rather than keeping
-/// a shadow copy that could drift.
-pub const GRACE_BLOCKS_FOR_FEE_ESTIMATE: u64 = 10;
 
-/// Phase 2a canonical dust threshold (§3.10.2).
 pub mod tx_fee;
 
 /// An error from the RPC.
@@ -57,6 +44,11 @@ pub enum RpcError {
     /// Requested transactions weren't found.
     #[error("transactions not found")]
     TransactionsNotFound(Vec<[u8; 32]>),
+    /// Requested transactions are not in the daemon's chain, and its pool
+    /// cannot be read until it restarts (`unavailable_tx`): whether they
+    /// exist has no answer from this daemon. Not "not found".
+    #[error("transactions unavailable: not in the daemon's chain, and its pool is retired")]
+    TransactionsUnavailable(Vec<[u8; 32]>),
     /// The transaction was pruned.
     ///
     /// Pruned transactions are not supported at this time.
@@ -134,7 +126,9 @@ impl RpcError {
     #[must_use]
     pub const fn fault(&self) -> DaemonFault {
         match self {
-            Self::ConnectionError(_) => DaemonFault::Unreachable,
+            // A lookup the daemon could not make is one it did not answer:
+            // retry once it has restarted, or ask another daemon.
+            Self::ConnectionError(_) | Self::TransactionsUnavailable(_) => DaemonFault::Unreachable,
             Self::IdentityMismatch(mismatch) => DaemonFault::Identity(*mismatch),
             Self::InvalidNode(_)
             | Self::TransactionsNotFound(_)
@@ -148,9 +142,9 @@ impl RpcError {
 
 /// This wallet's wording of an identity refusal, one sentence per axis.
 ///
-/// The console words the same verdict its own way
-/// (`shekyl-daemon-rpc`'s `console_identity_message`); the axes themselves
-/// are compared once, in [`shekyl_rpc_types::IdentityExpectation::check`].
+/// The shell words the same verdict its own way
+/// (`shekyl-cli`'s `identity_line`); the axes themselves are compared once,
+/// in [`shekyl_rpc_types::IdentityExpectation::read`].
 fn identity_refusal(mismatch: &IdentityMismatch) -> String {
     match *mismatch {
         IdentityMismatch::Wire { ours, theirs } => {
@@ -200,104 +194,51 @@ fn identity_refusal(mismatch: &IdentityMismatch) -> String {
     }
 }
 
-/// A struct containing a fee rate.
+/// A fee rate: atomic units per weight unit.
 ///
-/// The fee rate is defined as a per-weight cost, along with a mask for rounding purposes.
+/// A fee from a rate is `weight × per_weight` rounded up to the fee lattice
+/// ([`shekyl_economics::FEE_QUANTIZATION_MASK`], the daemon's admission
+/// lattice); the arithmetic is [`tx_fee::fee_from_weight`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
 pub struct FeeRate {
     /// The fee per-weight of the transaction.
     per_weight: u64,
-    /// The mask to round with.
-    mask: u64,
 }
 
 impl FeeRate {
-    /// Construct a fee rate whose non-zero invariants the caller's own
-    /// types already carry.
+    /// Construct a fee rate whose non-zero invariant the caller's own type
+    /// already carries.
     ///
-    /// Total, so a caller holding the proof — a `Custom` rate that
-    /// arrived as [`NonZeroU64`], against the mask of an
-    /// already-validated snapshot — gets no unreachable error arm to
-    /// misclassify. [`Self::new`] is the fallible edge, for the bare
-    /// `u64` fields that come off the daemon wire.
+    /// Total, so a caller holding the proof — a `Custom` rate that arrived
+    /// as [`NonZeroU64`] — gets no unreachable error arm to misclassify.
+    /// [`Self::new`] is the fallible edge, for the bare `u64` that comes
+    /// off the daemon wire.
     #[must_use]
-    pub const fn from_nonzero(per_weight: NonZeroU64, mask: NonZeroU64) -> FeeRate {
+    pub const fn from_nonzero(per_weight: NonZeroU64) -> FeeRate {
         FeeRate {
             per_weight: per_weight.get(),
-            mask: mask.get(),
         }
     }
 
-    /// Construct a new fee rate, rejecting a zero rate or zero mask.
-    pub fn new(per_weight: u64, mask: u64) -> Result<FeeRate, RpcError> {
-        match (NonZeroU64::new(per_weight), NonZeroU64::new(mask)) {
-            (Some(per_weight), Some(mask)) => Ok(Self::from_nonzero(per_weight, mask)),
-            _ => Err(RpcError::InvalidFee),
+    /// Construct a new fee rate, rejecting a zero rate.
+    pub fn new(per_weight: u64) -> Result<FeeRate, RpcError> {
+        match NonZeroU64::new(per_weight) {
+            Some(per_weight) => Ok(Self::from_nonzero(per_weight)),
+            None => Err(RpcError::InvalidFee),
         }
     }
 
-    /// Atomic units charged per weight unit, before mask rounding.
+    /// Atomic units charged per weight unit, before lattice rounding.
     #[must_use]
     pub fn per_weight(&self) -> u64 {
         self.per_weight
     }
 
-    /// Quantization mask the fee is rounded up to.
+    /// The fee for `weight`: [`tx_fee::fee_from_weight`], which fails
+    /// closed at `u64::MAX` on overflow rather than panicking.
     #[must_use]
-    pub fn mask(&self) -> u64 {
-        self.mask
-    }
-
-    /// Write the FeeRate.
-    ///
-    /// This is not a Monero protocol defined struct, and this is accordingly not a Monero protocol
-    /// defined serialization.
-    pub fn write(&self, w: &mut impl io::Write) -> io::Result<()> {
-        w.write_all(&self.per_weight.to_le_bytes())?;
-        w.write_all(&self.mask.to_le_bytes())
-    }
-
-    /// Serialize the FeeRate to a `Vec<u8>`.
-    ///
-    /// This is not a Monero protocol defined struct, and this is accordingly not a Monero protocol
-    /// defined serialization.
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut res = Vec::with_capacity(16);
-        self.write(&mut res)
-            .expect("write failed but <Vec as io::Write> doesn't fail");
-        res
-    }
-
-    /// Read a FeeRate.
-    ///
-    /// This is not a Monero protocol defined struct, and this is accordingly not a Monero protocol
-    /// defined serialization.
-    pub fn read(r: &mut impl io::Read) -> io::Result<FeeRate> {
-        let per_weight = read_u64(r)?;
-        let mask = read_u64(r)?;
-        FeeRate::new(per_weight, mask).map_err(io::Error::other)
-    }
-
-    /// Calculate the fee to use from the weight.
-    ///
-    /// This function may panic upon overflow.
     pub fn calculate_fee_from_weight(&self, weight: usize) -> u64 {
-        let fee = self.per_weight
-            * u64::try_from(weight).expect("couldn't convert weight (usize) to u64");
-        let fee = fee.div_ceil(self.mask) * self.mask;
-        debug_assert_eq!(
-            Some(weight),
-            self.calculate_weight_from_fee(fee),
-            "Miscalculated weight from fee"
-        );
-        fee
-    }
-
-    /// Calculate the weight from the fee.
-    ///
-    /// Returns `None` if the weight would not fit within a `usize`.
-    pub fn calculate_weight_from_fee(&self, fee: u64) -> Option<usize> {
-        usize::try_from(fee / self.per_weight).ok()
+        tx_fee::fee_from_weight(self, weight)
     }
 }
 
@@ -352,14 +293,29 @@ struct JsonRpcResponse<T> {
     result: T,
 }
 
-fn rpc_hex(value: &str) -> Result<Vec<u8>, RpcError> {
-    hex::decode(value).map_err(|_| RpcError::InvalidNode("expected hex wasn't hex".to_string()))
+/// A JSON-RPC `error` member the daemon answered with: the method ran and
+/// refused, with a code the caller is meant to branch on.
+///
+/// [`Rpc::json_rpc_call`] folds this into [`RpcError::InvalidNode`] with
+/// the raw body as text, which is right for the calls that have no
+/// refusal to read (a missing `result` *is* a protocol fault there). A
+/// method whose refusals are part of its contract — `request_archival_shard`'s
+/// open / unavailable / absent codes — reads them through
+/// [`Rpc::json_rpc_call_or_refusal`] and gets this value instead.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct JsonRpcRefusal {
+    /// The daemon's error code (`CORE_RPC_ERROR_CODE_*`).
+    pub code: i64,
+    /// The daemon's message. Daemon RPC messages are secret-free by
+    /// contract; a wallet may show them, never parse them.
+    pub message: String,
 }
 
-fn hash_hex(hash: &str) -> Result<[u8; 32], RpcError> {
-    rpc_hex(hash)?
-        .try_into()
-        .map_err(|_| RpcError::InvalidNode("hash wasn't 32-bytes".to_string()))
+/// The full envelope, for the calls that read `error` as an answer.
+#[derive(Debug, Deserialize)]
+struct JsonRpcEnvelope<T> {
+    result: Option<T>,
+    error: Option<JsonRpcRefusal>,
 }
 
 // The submit wire contract is defined once in `shekyl-rpc-types`
@@ -374,7 +330,7 @@ pub use shekyl_rpc_types::{RejectCause, SubmitTransactionRequest, SubmitVerdict}
 // The identity verdict [`RpcError::IdentityMismatch`] and
 // [`DaemonFault::Identity`] carry, with the types inside it, for the same
 // reason: a consumer that names the verdict reaches it through this crate.
-pub use shekyl_rpc_types::{DaemonNetwork, HashHex, IdentityAxis, IdentityMismatch};
+pub use shekyl_rpc_types::{HashHex, IdentityAxis, IdentityMismatch, Network};
 
 /// The HTTP `Content-Type` a daemon route expects: EPEE binary routes (`*.bin`,
 /// e.g. `get_o_indexes.bin`, `get_blocks_by_height.bin`) are
@@ -467,6 +423,42 @@ pub trait Rpc: Sync + Clone {
         }
     }
 
+    /// A JSON-RPC call whose `error` member is an answer, not a fault.
+    ///
+    /// `Ok(Ok(response))` is a `result`; `Ok(Err(refusal))` is the daemon's
+    /// typed refusal, code and message intact; `Err(_)` is the transport or
+    /// a body that is neither (no `result` and no `error`, or both). Use this
+    /// for a method whose refusal codes the caller maps onto its own
+    /// contract; [`Rpc::json_rpc_call`] is for the methods where any
+    /// non-`result` reply is a protocol fault.
+    fn json_rpc_call_or_refusal<Response: DeserializeOwned + Debug>(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> impl Send + Future<Output = Result<Result<Response, JsonRpcRefusal>, RpcError>> {
+        async move {
+            let mut req = json!({ "jsonrpc": "2.0", "id": 0, "method": method });
+            if let Some(params) = params {
+                req.as_object_mut()
+                    .expect("accessing object as object failed?")
+                    .insert("params".into(), params);
+            }
+            let envelope = self
+                .rpc_call::<_, JsonRpcEnvelope<Response>>("json_rpc", Some(req))
+                .await?;
+            match (envelope.result, envelope.error) {
+                (Some(result), None) => Ok(Ok(result)),
+                (None, Some(refusal)) => Ok(Err(refusal)),
+                (Some(_), Some(_)) => Err(RpcError::InvalidNode(
+                    "JSON-RPC reply carried both result and error".to_string(),
+                )),
+                (None, None) => Err(RpcError::InvalidNode(
+                    "JSON-RPC reply carried neither result nor error".to_string(),
+                )),
+            }
+        }
+    }
+
     /// Perform a binary call to the specified route with the provided parameters.
     fn bin_call(
         &self,
@@ -474,41 +466,6 @@ pub trait Rpc: Sync + Clone {
         params: Vec<u8>,
     ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
         async move { self.post(route, params).await }
-    }
-
-    /// Get the active blockchain protocol version.
-    ///
-    /// This is specifically the major version within the most recent block header.
-    fn get_hardfork_version(&self) -> impl Send + Future<Output = Result<u8, RpcError>> {
-        async move {
-            // The shared wire type, for the reason `get_fee_rate` gives: a
-            // locally-declared reply struct is invisible to the daemon's
-            // oracle vectors and parity tests, which is how a removed field
-            // reached a runtime parse failure once already. This one read a
-            // two-field subset, so it would not have *broken* — it would have
-            // kept working while quietly disagreeing about what a header is.
-            let reply: shekyl_rpc_types::GetLastBlockHeaderResponse =
-                self.json_rpc_call("get_last_block_header", None).await?;
-            // **A non-OK status is a refusal, whatever the header holds**, and
-            // this is the exact trap that made the daemon side of this slice
-            // refuse rather than answer `BUSY`: `CHECK_CORE_READY()` returned
-            // `status = BUSY` with a *default-constructed* header, and reading
-            // `major_version` straight through reported fork version 0.
-            //
-            // The daemon this ships with no longer does that — it refuses with
-            // `CORE_BUSY`, which arrives here as a JSON-RPC error. This guard
-            // is for every *other* daemon: an older build, or one this wallet
-            // was merely pointed at. Fixing the producer and trusting every
-            // peer to be the fixed producer is not a fix. Same shape as
-            // `get_height` and `get_block_hash` below.
-            if !reply.status.is_ok() {
-                return Err(RpcError::InvalidNode(format!(
-                    "get_last_block_header returned status {}",
-                    reply.status.0
-                )));
-            }
-            Ok(reply.block_header.major_version)
-        }
     }
 
     /// Get the height of the Shekyl blockchain.
@@ -582,6 +539,17 @@ pub trait Rpc: Sync + Clone {
                     Some(json!({ "height": number })),
                 )
                 .await?;
+            // **A non-OK status is a refusal, whatever the header holds.**
+            // The C++ `CHECK_CORE_READY()` answered `status = BUSY` beside a
+            // *default-constructed* header, and reading the hash straight
+            // through would report 32 zero bytes for a syncing node.
+            //
+            // The daemon this ships with refuses with `CORE_BUSY`, which
+            // arrives here as a JSON-RPC error. This guard is for every
+            // *other* daemon: an older build, or one this wallet was merely
+            // pointed at. Fixing the producer and trusting every peer to be
+            // the fixed producer is not a fix. Pinned by
+            // `tests/reply_status.rs`.
             if !reply.status.is_ok() {
                 return Err(RpcError::InvalidNode(format!(
                     "get_block_header_by_height refused: {}",
@@ -619,12 +587,10 @@ pub trait Rpc: Sync + Clone {
             // cannot skew", and a hand-rolled duplicate is how the skew got
             // in. Reading the shared type makes the next wire change a
             // compile error here.
-            let res: shekyl_rpc_types::GetFeeEstimateResponse = self
-                .json_rpc_call(
-                    "get_fee_estimate",
-                    Some(json!({ "grace_blocks": GRACE_BLOCKS_FOR_FEE_ESTIMATE })),
-                )
-                .await?;
+            // No parameters: the ladder is a function of chain state alone
+            // (FL-R20, FL-R26; wire 3.57).
+            let res: shekyl_rpc_types::GetFeeEstimateResponse =
+                self.json_rpc_call("get_fee_estimate", None).await?;
 
             if !res.status.is_ok() {
                 Err(RpcError::InvalidFee)?;
@@ -637,7 +603,7 @@ pub trait Rpc: Sync + Clone {
             // so "no tiers" is unrepresentable rather than merely
             // unreachable (rule 60). It also carried the only unchecked
             // multiply in this function, on a daemon-supplied number.
-            FeeRate::new(res.fees.get(fee_tier_for(priority)), res.quantization_mask)
+            FeeRate::new(res.fees.get(fee_tier_for(priority)))
         }
     }
 
@@ -681,37 +647,34 @@ pub trait Rpc: Sync + Clone {
         }
     }
 
-    /// Generate blocks, with the specified address receiving the block reward.
+    /// Generate `block_count` blocks. The daemon pays its configured
+    /// mining address. `address` is not on the wire (N2).
     ///
-    /// Returns the hashes of the generated blocks and the last block's number.
+    /// The count is the chain's block count, the same quantity
+    /// [`Self::get_height`] returns: the tip's height plus one.
     fn generate_blocks(
         &self,
         address: &str,
         block_count: usize,
-    ) -> impl Send + Future<Output = Result<(Vec<[u8; 32]>, usize), RpcError>> {
-        let address = String::from(address);
+    ) -> impl Send + Future<Output = Result<(Vec<[u8; 32]>, ChainCount), RpcError>> {
+        let _ = address;
         async move {
-            #[derive(Debug, Deserialize)]
-            struct BlocksResponse {
-                blocks: Vec<String>,
-                height: usize,
-            }
-
-            let res = self
-                .json_rpc_call::<BlocksResponse>(
+            let reply = self
+                .json_rpc_call::<shekyl_rpc_types::mining::GenerateBlocksResponse>(
                     "generateblocks",
                     Some(json!({
-                      "wallet_address": address,
-                      "amount_of_blocks": block_count
+                      "count": block_count
                     })),
                 )
                 .await?;
-
-            let mut blocks = Vec::with_capacity(res.blocks.len());
-            for block in res.blocks {
-                blocks.push(hash_hex(&block)?);
+            if !reply.status.is_ok() {
+                return Err(RpcError::InvalidNode(format!(
+                    "generateblocks refused: {}",
+                    reply.status.0
+                )));
             }
-            Ok((blocks, res.height))
+            let blocks = reply.blocks.iter().map(|block| block.to_bytes()).collect();
+            Ok((blocks, ChainCount::from_raw(reply.height)))
         }
     }
 
@@ -748,7 +711,7 @@ pub trait Rpc: Sync + Clone {
 #[cfg(test)]
 mod tests {
     use super::{
-        fee_tier_for, DaemonFault, DaemonNetwork, FeePriority, HashHex, IdentityMismatch, RpcError,
+        fee_tier_for, DaemonFault, FeePriority, HashHex, IdentityMismatch, Network, RpcError,
     };
     use shekyl_rpc_types::FeeTier;
 
@@ -757,8 +720,8 @@ mod tests {
     #[test]
     fn every_failure_is_classified_by_its_remedy() {
         let wrong_network = IdentityMismatch::Network {
-            ours: DaemonNetwork::Mainnet,
-            theirs: DaemonNetwork::Testnet,
+            ours: Network::Mainnet,
+            theirs: Network::Testnet,
         };
         for (err, fault) in [
             (
@@ -773,6 +736,10 @@ mod tests {
             (
                 RpcError::TransactionsNotFound(vec![[0; 32]]),
                 DaemonFault::Protocol,
+            ),
+            (
+                RpcError::TransactionsUnavailable(vec![[0; 32]]),
+                DaemonFault::Unreachable,
             ),
             (RpcError::PrunedTransaction, DaemonFault::Protocol),
             (RpcError::InvalidTransaction([0; 32]), DaemonFault::Protocol),
@@ -820,8 +787,8 @@ mod tests {
             ),
             (
                 IdentityMismatch::Network {
-                    ours: DaemonNetwork::Mainnet,
-                    theirs: DaemonNetwork::Testnet,
+                    ours: Network::Mainnet,
+                    theirs: Network::Testnet,
                 },
                 &["network mismatch:", "the daemon runs testnet"][..],
             ),
@@ -829,7 +796,7 @@ mod tests {
                 IdentityMismatch::Genesis {
                     ours: digest(3),
                     theirs: digest(4),
-                    network: DaemonNetwork::Mainnet,
+                    network: Network::Mainnet,
                 },
                 &["genesis block mismatch:", "different chain"][..],
             ),

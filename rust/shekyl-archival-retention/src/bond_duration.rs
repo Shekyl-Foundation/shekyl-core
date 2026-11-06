@@ -3,39 +3,38 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Per-shard retention-commitment horizon `bond_duration(age)` (gate-4 §4.4;
-//! `ARCHIVAL_TIMING_CONSTANTS.md` §1; `PHASE_2B_FSM_RETOOL.md` P2B-7 Pin 3 / P2B-8 Q3).
+//! Integer retention horizon `bond_duration(age)`: epochs from a
+//! [`ShardAgeAtAdd`].
 //!
-//! A held shard is **ineligible for voluntary `HoldingsUpdate`-drop** until its
-//! retention-commitment horizon elapses:
+//! **No production caller.** Only this file's tests call [`bond_duration`].
+//! The staking sim has its own `bond_duration` and does not call this one.
+//! Delete the function, or keep it as the frozen integer artifact of that
+//! model: enumerated, not ruled, at `PRINCIPAL_STAKE_LIFECYCLE.md` §5.3.2
+//! row 8. The age-realization invariant below stays either way, because the
+//! reward path consumes `shard_age_milli`.
 //!
-//! ```text
-//! drop-eligible(s)  ⇔  current_epoch − add_epoch(s)  ≥  bond_duration(ShardAgeAtAdd(s))
-//! ```
-//!
-//! Both operands are powered by the **one** v3.0 per-shard add-epoch record field
-//! (the "two dependencies are one" collapse): the tenure LHS is
-//! `current_epoch − add_epoch`, and the age inside `bond_duration` is derived from
-//! the same `add_epoch` (plus the shard's segment freeze height).
+//! *Records-was:* the function gated voluntary `HoldingsUpdate`-drop
+//! eligibility, `current_epoch − add_epoch ≥ bond_duration(ShardAgeAtAdd)`.
+//! That kind is REJECTED 2026-09-20. The formula is not a present consensus
+//! check. Both operands were read from the one per-shard add-epoch field.
 //!
 //! ## The age-realization invariant (GENESIS-FROZEN)
 //!
 //! The `age ∈ [0,1]` here is the **same age normalization the reward curve
 //! consumes**, realized as [`shard_age_milli`](crate::consensus_state::shard_age_milli)
 //! (relative tree-depth fraction, milli-scaled to `[0, WORK_MILLI_SCALE]`). The sim
-//! feeds one age variable into both the scarcity/reward curve and the retention lock
-//! (`agent.rs`), and consensus already realizes that age as `shard_age_milli` in the
-//! reward path — so retention uses the same realization; forking a separate age
-//! would split a normalization the sim never split.
+//! feeds one age variable into both the scarcity/reward curve and its own retention
+//! lock (`agent.rs`). The reward path already realizes that age as `shard_age_milli`.
+//! These constraints say what [`ShardAgeAtAdd`] can express. They do not describe
+//! a live drop check.
 //!
 //! Two consensus properties are made **unrepresentable at the type**, not
 //! tested-against:
 //!
-//! - **Reference time is age-at-ADD, not age-at-drop.** The sim arms the lock only
-//!   on fresh acquisition and counts it down (`agent.rs:275-280`), so the horizon is
-//!   fixed at acquisition. [`ShardAgeAtAdd`] can only be constructed from the add
-//!   epoch, so evaluating at drop time (a rising target as the shard ages) cannot be
-//!   expressed.
+//! - **Reference time is age-at-add.** The sim arms its lock only on fresh
+//!   acquisition and counts it down (`agent.rs:275-280`), so the horizon is fixed
+//!   at acquisition. [`ShardAgeAtAdd`] can only be constructed from the add epoch,
+//!   so a later age (a rising target as the shard ages) cannot be expressed.
 //! - **The close reference is `H_close(add_epoch)`, not a raw within-epoch height.**
 //!   The reward path feeds `shard_age_milli` the settlement-close height, and its
 //!   `floor((close − freeze)/SEB)` numerator shifts by an epoch-unit depending on
@@ -43,10 +42,10 @@
 //!   `close = H_close(add_epoch) = (add_epoch + 1)·SEB` itself, so a raw block height
 //!   cannot be passed — one normalization, shared with reward, by construction.
 //!
-//! The counting-down↔fixed-threshold equivalence is exact: the sim's lock
-//! (`bond_duration(age)` at add, decrementing) reaches zero at `add_epoch + D`; the
-//! consensus predicate `current_epoch − add_epoch ≥ D` fires at `add_epoch + D` — the
-//! same epoch, no drift.
+//! *Records-was, the equivalence the drop check relied on:* the sim's lock
+//! (`bond_duration(age)` at add, decrementing) reaches zero at `add_epoch + D`,
+//! and `current_epoch − add_epoch ≥ D` fires at the same epoch. No verify reads
+//! that predicate now.
 //!
 //! ## `bond_duration` is the frozen artifact; the sim's f64 is the model
 //!
@@ -62,7 +61,8 @@
 //! WORK_MILLI_SCALE)` has no integer solution), so the sweep passes clean; the KAT is
 //! the tripwire if a constant re-pin ever introduces one.
 
-use crate::bond_floor::{BOND_DURATION_AGE_SCALE, BOND_DURATION_BASE_EPOCHS};
+use shekyl_types::BlockHeight;
+
 use crate::consensus_state::{epoch_close_height, shard_age_milli};
 use crate::constants::effective_settlement_epoch_blocks;
 use crate::reward_arithmetic::WORK_MILLI_SCALE;
@@ -120,7 +120,11 @@ impl ShardAgeAtAdd {
         let age_milli = if freeze_height >= close {
             WORK_MILLI_SCALE
         } else {
-            shard_age_milli(close, freeze_height, seb)
+            shard_age_milli(
+                BlockHeight::from_raw(close),
+                BlockHeight::from_raw(freeze_height),
+                seb,
+            )
         };
         Self { age_milli }
     }
@@ -137,15 +141,16 @@ impl ShardAgeAtAdd {
 /// GENESIS-FROZEN consensus formula, integer-canonical (see the module docs):
 /// `d = base·(1 + scale·age)` with `age = age_milli / WORK_MILLI_SCALE`, computed in
 /// exact integer milli as `base·(WORK_MILLI_SCALE + scale·age_milli)`, rounded
-/// half-up, floored at 1.
+/// half-up, floored at 1. `base` and `scale` are `params`'.
 #[must_use]
-pub fn bond_duration(age: ShardAgeAtAdd) -> u64 {
+pub fn bond_duration(age: ShardAgeAtAdd, params: &crate::ArchivalParams) -> u64 {
     let den = WORK_MILLI_SCALE;
     // base·(den + scale·age_milli): exact integer, no float. Saturating guards a
     // pathological re-pin; the genesis 4/4 values keep this far below u64::MAX for
     // age_milli ∈ [0, den].
-    let scaled = BOND_DURATION_BASE_EPOCHS
-        .saturating_mul(den.saturating_add(BOND_DURATION_AGE_SCALE.saturating_mul(age.age_milli)));
+    let scaled = params.bond_duration_base_epochs.saturating_mul(
+        den.saturating_add(params.bond_duration_age_scale.saturating_mul(age.age_milli)),
+    );
     // Round half up: (scaled + den/2) / den — matches f64 round-half-away-from-zero
     // for the non-negative values here. Floored at 1 so any deep shard commits.
     let rounded = scaled.saturating_add(den / 2) / den;
@@ -155,6 +160,7 @@ pub fn bond_duration(age: ShardAgeAtAdd) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bond_floor::{BOND_DURATION_AGE_SCALE, BOND_DURATION_BASE_EPOCHS};
     use crate::constants::effective_settlement_epoch_blocks;
 
     // Construct a raw age for the pure-formula sweeps (bypasses `from_add`; the
@@ -174,16 +180,22 @@ mod tests {
     #[test]
     fn bond_duration_endpoints_and_midpoint() {
         // age 0 → BASE (youngest-deep minimum); age 1 → BASE·(1+SCALE); age 0.5 → BASE·(1+SCALE/2).
-        assert_eq!(bond_duration(age(0)), 4);
-        assert_eq!(bond_duration(age(WORK_MILLI_SCALE)), 20);
-        assert_eq!(bond_duration(age(WORK_MILLI_SCALE / 2)), 12);
+        assert_eq!(bond_duration(age(0), &crate::ArchivalParams::SHIPPED), 4);
+        assert_eq!(
+            bond_duration(age(WORK_MILLI_SCALE), &crate::ArchivalParams::SHIPPED),
+            20
+        );
+        assert_eq!(
+            bond_duration(age(WORK_MILLI_SCALE / 2), &crate::ArchivalParams::SHIPPED),
+            12
+        );
     }
 
     #[test]
     fn bond_duration_is_monotone_nondecreasing_in_age() {
         let mut prev = 0;
         for m in 0..=WORK_MILLI_SCALE {
-            let d = bond_duration(age(m));
+            let d = bond_duration(age(m), &crate::ArchivalParams::SHIPPED);
             assert!(d >= prev, "non-monotone at age_milli={m}: {d} < {prev}");
             prev = d;
         }
@@ -193,7 +205,7 @@ mod tests {
     fn bond_duration_floored_at_one() {
         // Even a degenerate near-zero base commits for at least one epoch.
         // (Uses the real constants; the floor is unconditional in the formula.)
-        assert!(bond_duration(age(0)) >= 1);
+        assert!(bond_duration(age(0), &crate::ArchivalParams::SHIPPED) >= 1);
     }
 
     /// F2 parity: the integer artifact must equal the sim's f64 model over the full
@@ -217,7 +229,7 @@ mod tests {
         for m in 0..=WORK_MILLI_SCALE {
             let a = m as f64 / den;
             let sim = (base * (1.0 + scale * a)).round().max(1.0) as u64;
-            let got = bond_duration(age(m));
+            let got = bond_duration(age(m), &crate::ArchivalParams::SHIPPED);
             assert_eq!(
                 got, sim,
                 "F2 divergence at age_milli={m}: integer {got} vs sim f64 {sim} — \
@@ -236,7 +248,11 @@ mod tests {
         let add_epoch = 3u64;
         let freeze_height = 5_000u64;
         let close = (add_epoch + 1) * seb;
-        let expected = shard_age_milli(close, freeze_height, seb);
+        let expected = shard_age_milli(
+            BlockHeight::from_raw(close),
+            BlockHeight::from_raw(freeze_height),
+            seb,
+        );
         assert_eq!(
             ShardAgeAtAdd::from_add(add_epoch, freeze_height).age_milli(),
             expected
@@ -250,7 +266,7 @@ mod tests {
         // reward path's "genesis-band shard is oldest" (shard_age_milli KAT).
         let a = ShardAgeAtAdd::from_add(10, 0);
         assert_eq!(a.age_milli(), WORK_MILLI_SCALE);
-        assert_eq!(bond_duration(a), 20);
+        assert_eq!(bond_duration(a, &crate::ArchivalParams::SHIPPED), 20);
     }
 
     #[test]
@@ -262,7 +278,7 @@ mod tests {
         let close = (add_epoch + 1) * seb;
         let a = ShardAgeAtAdd::from_add(add_epoch, close - 1);
         assert_eq!(a.age_milli(), 0);
-        assert_eq!(bond_duration(a), 4);
+        assert_eq!(bond_duration(a, &crate::ArchivalParams::SHIPPED), 4);
     }
 
     #[test]
@@ -278,10 +294,20 @@ mod tests {
         for freeze in [close, close + 1, close + 10 * seb] {
             let a = ShardAgeAtAdd::from_add(add_epoch, freeze);
             assert_eq!(a.age_milli(), WORK_MILLI_SCALE, "freeze={freeze}");
-            assert_eq!(bond_duration(a), 20, "freeze={freeze}");
+            assert_eq!(
+                bond_duration(a, &crate::ArchivalParams::SHIPPED),
+                20,
+                "freeze={freeze}"
+            );
         }
         // The C++ sentinel corner (no freeze row → 0) is the genesis-band arm,
         // already the oldest age — the two corners agree at 20.
-        assert_eq!(bond_duration(ShardAgeAtAdd::from_add(add_epoch, 0)), 20);
+        assert_eq!(
+            bond_duration(
+                ShardAgeAtAdd::from_add(add_epoch, 0),
+                &crate::ArchivalParams::SHIPPED
+            ),
+            20
+        );
     }
 }

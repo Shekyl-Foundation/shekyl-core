@@ -64,45 +64,81 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod archival;
+pub mod archival_reads;
+pub mod bans;
 pub mod bin_commands;
 pub mod chain;
+pub mod chain_reads;
 pub mod consensus_digest;
+pub mod errors;
 pub mod hash;
 pub mod headers;
+pub mod hex128;
 pub mod identity;
+pub mod info;
+pub mod methods;
+pub mod mining;
+pub mod nullable;
+pub mod options;
 pub mod p2p;
+pub mod pool;
 pub mod transactions;
+pub use archival::{
+    RequestArchivalShardRequest, RequestArchivalShardResponse, ARCHIVAL_SHARD_REFUSAL_CODES,
+    CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN, CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
+    CORE_RPC_ERROR_CODE_CONFIG_REFUSED,
+};
+pub use archival_reads::{
+    ClaimBondRow, ClaimCreditPair, ClaimEpochSnapshot, ClaimShardRow,
+    GetArchivalEmissionClaimSourceRequest, GetArchivalEmissionClaimSourceResponse,
+    GetArchivalShardCoverageResponse, ShardCoverageRow,
+};
 pub use bin_commands::{
-    BinError, BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
-    GetOIndexesResponse,
+    BinError, BlockEntry, BlockTx, BlockTxSkeleton, GetBlocksByHeightRequest,
+    GetBlocksByHeightResponse, GetOIndexesRequest, GetOIndexesResponse,
 };
 pub use chain::{
     core_rpc_version_string, BlockHeader, ConnectState, GetBlockCountResponse, GetBlockHashParams,
     GetBlockHeaderByHeightRequest, GetBlockHeaderByHeightResponse, GetBlockRequest,
-    GetBlockResponse, GetHeightResponse, GetVersionResponse, HardForkEntry, RestErrorEnvelope,
-    RpcStatus, StoreInvariantRow, CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE,
+    GetBlockResponse, GetHeightResponse, GetVersionResponse, RestErrorEnvelope, RpcStatus,
+    StatusKind, StoreInvariantRow, CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE,
     CORE_RPC_ERROR_CODE_CORE_BUSY, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
     CORE_RPC_ERROR_CODE_RESTRICTED, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
     CORE_RPC_ERROR_CODE_WRONG_PARAM, CORE_RPC_VERSION, CORE_RPC_VERSION_MAJOR,
     CORE_RPC_VERSION_MINOR,
 };
-pub use consensus_digest::{
-    DaemonNetwork, CONSENSUS_CONSTANTS_DIGEST, CONSENSUS_CONSTANTS_DIGEST_HASH,
+pub use chain_reads::{
+    AltChainInfo, CalcPowRequest, GetAltBlocksHashesResponse, GetAlternateChainsResponse,
+    GetCoinbaseTxSumRequest, GetCoinbaseTxSumResponse, GetCurveTreeCheckpointRequest,
+    GetCurveTreeCheckpointResponse, GetCurveTreeInfoResponse, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
+    CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
 };
+pub use consensus_digest::{Network, CONSENSUS_CONSTANTS_DIGEST, CONSENSUS_CONSTANTS_DIGEST_HASH};
 pub use hash::{HashHex, HashHexError};
 pub use headers::{
     BlockHeaderSlot, FeeTier, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
     GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
     GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
-    HardForkInfoRequest, HardForkInfoResponse,
 };
-pub use identity::{genesis_hash_for, IdentityAxis, IdentityExpectation, IdentityMismatch};
+pub use hex128::{HexU128, HexU128Error};
+pub use identity::{
+    daemon_rpc_version, genesis_hash_for, IdentityAxis, IdentityExpectation, IdentityMismatch,
+    IdentityRefusal, VersionUnreadable,
+};
+pub use info::{
+    GetInfoResponse, GetInfoShapeError, HealthP2p, Hidden, InfoChain, InfoEconomics, InfoHealth,
+    InfoHost, InfoIdentity, InfoP2p, InfoPeers, InfoPool, InfoStatus, StatusConnections,
+};
+pub use nullable::Nullable;
 pub use p2p::{
-    ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
-    GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,
+    ChainSyncState, ConnectionInfo, GetConnectionsResponse, GetNetStatsResponse,
+    GetPeerListRequest, GetPeerListResponse, P2pReply, P2pRunningReply, Peer, StemConnector,
+    StemFloor, StemTallies, StemTallyRow, SyncBodyRequest, SyncHeaderRequest, SyncInfoPeer,
+    SyncInfoResponse, SyncMode,
 };
 pub use transactions::{
-    GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
+    ArchivedTx, GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
     IsKeyImageSpentResponse, KeyImageStatus, KeyImageStatusError, TxEntry, TxEntryError,
     TxLocation,
 };
@@ -172,6 +208,12 @@ pub enum SubmitVerdict {
     Rejected {
         /// Why the transaction was refused.
         cause: RejectCause,
+        /// The consensus row that refused, for [`RejectCause::ConsensusRule`]
+        /// (`"CEN-J15"`): the reply's diagnostic parameter, so the wallet can
+        /// say why. Absent for every other cause, and absent on the wire
+        /// then (the frozen corpus of the other causes is unchanged).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        row: Option<String>,
     },
 }
 
@@ -217,9 +259,22 @@ pub enum RejectCause {
     /// Reference block hash unknown to this daemon (typically: daemon not
     /// yet synced to it). Sync-gated retry (§2.5).
     ReferenceNotFound,
+    /// A consensus row refused the transaction against this chain when the
+    /// pool committed it: a chain-bound row the verifier does not judge
+    /// (CEN-J15, a compact join onto a shard that is not closed, final and
+    /// priced, is the first). Terminal: the bytes are sound and the chain
+    /// decides; the wallet releases, holds the record to its end date
+    /// (BD-Q3 Rule 2) and tells its user the row, which rides as
+    /// [`SubmitVerdict::Rejected`]'s `row`. Added at 3.63 (the flip; Rick,
+    /// 2026-10-29): before it the daemon answered an internal fault and the
+    /// wallet resent a post the chain refuses every time.
+    ConsensusRule,
     /// Forward-compat catch-all: a cause this client build does not know.
     /// Deserialize-side only — a daemon never authors it. Disposition per
     /// §2.5: release + one-shot rebuild (the F28 loop-breaker applies).
+    /// A pre-flip daemon's `join_market_unsupported` (its C++ commit step
+    /// could not hold a JoinMarket bond post; the cause left the set at
+    /// 3.63) reads as this.
     #[serde(other)]
     Unrecognized,
 }

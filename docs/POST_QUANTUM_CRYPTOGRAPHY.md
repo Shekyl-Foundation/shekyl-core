@@ -1204,7 +1204,7 @@ discrete-log sound until V4 (`PL-D2`,
 
 ### v3 Rollout Notes
 
-- `HF_VERSION_SHEKYL_NG` (`1`) gates `TransactionV3` validation behavior.
+- The admitted transaction version is `CURRENT_TRANSACTION_VERSION` (3), from genesis. There is no fork gate.
 - Coinbase transactions have no `pqc_auths` entries (coinbase is not a v3 spend).
 - Nodes, wallets, and indexers should budget for ~5.3KB extra auth material per
   user transaction (before other serialization overhead).

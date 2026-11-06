@@ -302,8 +302,8 @@ residual, `FCMP_SPEND_LINKABILITY.md` §13).
 
 Coinbase transactions do not carry `pqc_auths` (no real inputs to sign).
 Coinbase outputs still need a distinct per-output leaf commitment in the curve
-tree. When `hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` and the miner
-address includes a PQC encapsulation key, `construct_miner_tx` performs the same
+tree. When the miner address includes a PQC encapsulation key,
+`construct_miner_tx` performs the same
 hybrid KEM encapsulation **to the miner’s own address** for each coinbase
 output as a transfer would: one 1120-byte hybrid ciphertext per output in the
 `0x06` blob, standard HKDF per-output derivation, shared secret wiped after
@@ -889,23 +889,25 @@ the secret key — no secret material is returned.
 
 ### Wallet Restore from Seed
 
-Key derivation follows the frozen v1 pipeline implemented in
-`rust/shekyl-crypto-pq/src/account.rs` (the single source of truth; see
-the crate docstring for the full diagram and the
-`docs/V3_WALLET_DECISION_LOG.md` key-signature freeze entry for the
-rationale). In outline:
+Key derivation is implemented in `rust/shekyl-crypto-pq/src/account.rs`
+(the single source of truth; see the crate docstring for the full
+diagram, and [`NETWORK_IDENTITY.md`](design/NETWORK_IDENTITY.md) NI-R7 and
+NI-R10 for the rulings). It is pinned by the `ADDRESS_DERIVATION_V3`
+vector suite and its independent oracle. In outline:
 
 ```text
-seed input            mainnet/stagenet: BIP-39 24-word mnemonic
-                        (NFKD, PBKDF2-HMAC-SHA512 @ 2048 iters -> 64 B;
-                         passphrase opt-in, defaults to empty)
-                      testnet/fakechain: raw 32-byte seed
+seed                = 32 random bytes, on every network: the wallet's
+                      one secret, shown to the user as BIP-39's 24 words
+                      (the words spell the bytes; no PBKDF2 step, no
+                      passphrase)
 
 master_seed_64      = HKDF-SHA-512(salt="shekyl-seed-normalize-v1",
-                                   ikm=seed-input output, L=64)
-                      (the only secret the wallet file persists)
+                                   ikm=seed, L=64)
 
-salt                = "shekyl-master-derive-v1-<network>-<format>"
+name_id             = cSHAKE256(S="shekyl/network-name-v1",
+                                X=tag)[..16]
+                      (tag = the network's name, "shekyl/<network>")
+salt                = name_id || "shekyl-master-derive-v3"
 spend_wide          = HKDF-SHA-512(salt, ikm=master_seed_64,
                                    info="shekyl-ed25519-spend", L=64)
 view_wide           = HKDF-SHA-512(salt, ikm=master_seed_64,
@@ -914,26 +916,21 @@ d_z                 = HKDF-SHA-512(salt, ikm=master_seed_64,
                                    info="shekyl-ml-kem-768",    L=64)
 
 spend_sk, view_sk   = Scalar::from_bytes_mod_order_wide(...)   (unclamped)
-ml_kem_768 (ek,dk)  = keygen(ChaCha20Rng::from_seed(
+ml_kem_768 (ek,dk)  = keygen(SeededRng::from_seed(
                         SHA3-256("shekyl-mlkem-chacha-seed" || d_z)))
+                      (those bytes are what ChaCha20Rng::from_seed produces)
 ```
 
-All key material — classical and PQC — is therefore a pure function of
-the master seed, the network, and the seed format. On wallet open the
-full keypair set is rederived from `master_seed_64` via
-`shekyl_account_rederive`, and the recomputed classical address is
-checked against the wallet file's expected-address bytes (see
-`docs/WALLET_FILE_FORMAT_V1.md` for the failure taxonomy).
+All key material, classical and PQC, is therefore a pure function of
+the seed and the network's name. The wallet file stores the 32-byte
+seed (`docs/WALLET_FILE_FORMAT_V1.md` §2.2); every open rederives the
+full key set from it and checks the recomputed classical address
+against the file's expected-address bytes.
 
 On restore, the wallet re-scans the chain for owned outputs. Per-output
 PQC shared secrets are recomputed during the scan by decapsulating with
 the account-level ML-KEM decapsulation key; nothing per-output needs to
-be present in the wallet file for restore to succeed. (The legacy C++
-`wallet2` scan path still caches a per-output combined shared secret in
-`transfer_details` as an implementation detail; that cache — and
-`wallet2.cpp` itself — is a deletion target at Phase 5 of
-`docs/design/WALLET_REWRITE_PLAN.md` and is not part of this
-specification.)
+be present in the wallet file for restore to succeed.
 
 ---
 
@@ -1275,7 +1272,6 @@ Do not reintroduce them. Archival emission is a different vin
 | `HYBRID_KEM_CT_BYTES` | 1120 (32 + 1088) | `shekyl-wire/src/tx_extra.rs` (`SHEKYL_HYBRID_KEM_CT_BYTES` in `shekyl_ffi.h`) |
 | `PQC_LEAF_ENTRY_LEN` | 64 (`CM ‖ record` per output, `PL-D3`) | `shekyl-wire/src/tx_extra.rs` (`SHEKYL_PQC_LEAF_ENTRY_BYTES` in `shekyl_ffi.h`) |
 | `COINBASE_NONCE_BYTES` | 8 (coinbase `0x02`, fixed; `TXE-Q6′`, `CEN-I20`) | `shekyl-wire/src/tx_extra.rs` (`SHEKYL_COINBASE_NONCE_BYTES`) |
-| `HF_VERSION_FCMP_PLUS_PLUS_PQC` | 1 | `cryptonote_config.h` |
 
 ---
 
@@ -1302,7 +1298,7 @@ Do not reintroduce them. Archival emission is a different vin
 | `get_curve_tree_checkpoint` RPC | **Done** | `core_rpc_server.cpp` |
 | CI: Rust workspace + FCMP crate build | **Done** | `.github/workflows/build.yml` |
 | CI: Determinism check + Bech32m tests | **Done** | `.github/workflows/build.yml` |
-| Hardware device FCMP++ stubs | **Done** | `device.hpp`, `device_default.cpp`, `device_ledger.cpp` |
+| Hardware device FCMP++ stubs | **Deleted 2026-10-01** | `docs/HARDWARE_WALLETS.md` (the software device remains) |
 | Trezor protocol legacy RCT removal | **Done** | `protocol.cpp`, `protocol.hpp` |
 | Legacy RCT stripping (types 1-6, all structs, all src/) | **Done** | `ct_types.h/cpp`, `ct_semantics.h/cpp`, all consumers |
 | Non-plus Bulletproof code removal | **Done** | `bulletproofs.h`, `bulletproofs.cc` |
@@ -1359,11 +1355,11 @@ Do not reintroduce them. Archival emission is a different vin
 | Rust unit test suite (proof, tree, leaf, kem, address, derivation) | **Done** | `rust/shekyl-fcmp/src/`, `rust/shekyl-crypto-pq/src/` |
 | C++ unit tests (FCMP++ specific) | **Done** | `tests/unit_tests/fcmp.cpp` |
 | PQC rederivation benchmark (criterion) | **Done** | `rust/shekyl-crypto-pq/benches/pqc_rederivation.rs` |
-| CLSAG device interface removal | **Done** | `device.hpp`, `device_default.cpp/hpp`, `device_ledger.cpp/hpp` |
+| CLSAG device interface removal | **Done**; Ledger sources deleted 2026-10-01 | `device.hpp`, `device_default.cpp/hpp` |
 | `get_outs`/`get_outs.bin` RPC removal | **Done** | `core_rpc_server.h/cpp`, `core_rpc_ffi.cpp`, `shekyl-daemon-rpc` |
 | Dead HF constant cleanup (mixin, CLSAG, etc.) | **Done** | `cryptonote_config.h` |
-| Zstd Levin P2P compression | **Done** | `levin_base.h/cpp`, `levin_compression.h/cpp`, `net_node.inl` |
-| `P2P_SUPPORT_FLAG_ZSTD_COMPRESSION` handshake flag | **Done** | `cryptonote_config.h` (0x02) |
+| Levin P2P compression | **Removed** (2026-10-19, `SHEKYL_P2P_PROTOCOL.md` PWD-T7) | — |
+| Handshake support flags | **Removed** (2026-10-19, `SHEKYL_P2P_PROTOCOL.md` PWD-T7) | — |
 | Stake-claim rollback: watermark + pool-balance restoration | **Done** | `blockchain_db.cpp` (`remove_transaction`) |
 | Txpool `txin_stake_claim` key-image handling (6 functions) | **Done** | `tx_pool.cpp` |
 | `get_inputs_money_amount` / `check_inputs_overflow` stake-claim support | **Done** | `cryptonote_format_utils.cpp` |
@@ -1845,8 +1841,9 @@ serialized immediately after `enc_amounts` and before `outPk`:
   harmless, since `0x00…00 XOR k_label[..8]` is uniform and §5.7.10 holds for
   it exactly as for the sentinel. What the guard was aimed at is a path that
   writes the field **without encrypting it at all**
-  (`fill_construct_tx_rct_stub` value-initialises `enc_labels` and never calls
-  the label encryption), which puts a literal `00×9` on the wire, identical
+  (`fill_construct_tx_rct_stub`, since deleted, value-initialised `enc_labels`
+  and never called the label encryption), which put a literal `00×9` on the
+  wire, identical
   across every output, with `label_tag` zero where a derived tag is uniform.
 
   The Rust signing path *used to* carry the same shape: `enc_label` was a plain

@@ -29,7 +29,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 use shekyl_address::ShekylAddress;
-use shekyl_engine_core::engine::proofs::{self, CheckedReserveProof, CheckedTxProof, ProofsError};
+use shekyl_engine_core::engine::proofs::{self, CheckedReserveProof, CheckedTxProof};
 use shekyl_engine_core::Network;
 use shekyl_types::TxHash;
 
@@ -99,7 +99,7 @@ pub(crate) async fn get_tx_proof(
     let generated = engine
         .get_tx_proof(TxHash::from_bytes(txid), &address, &p.message)
         .await
-        .map_err(map_proofs_error)?;
+        .map_err(WalletRpcError::from)?;
 
     let result = GetTxProofResult {
         proof: generated.proof,
@@ -132,7 +132,7 @@ pub(crate) async fn get_reserve_proof(
     let generated = engine
         .get_reserve_proof(amount, &p.message)
         .await
-        .map_err(map_proofs_error)?;
+        .map_err(WalletRpcError::from)?;
 
     let result = GetReserveProofResult {
         proof: generated.proof,
@@ -157,7 +157,7 @@ pub(crate) async fn check_tx_proof(
 
     let checked = proofs::check_tx_proof(&daemon, txid, &address, &p.message, &p.proof)
         .await
-        .map_err(map_walletless_error)?;
+        .map_err(WalletRpcError::from)?;
 
     let result = match checked {
         CheckedTxProof::Invalid => CheckTxProofResult {
@@ -207,7 +207,7 @@ pub(crate) async fn check_reserve_proof(
 
     let checked = proofs::check_reserve_proof(&daemon, &address, &p.message, &p.proof)
         .await
-        .map_err(map_walletless_error)?;
+        .map_err(WalletRpcError::from)?;
 
     let result = match checked {
         CheckedReserveProof::Invalid => CheckReserveProofResult {
@@ -250,7 +250,9 @@ async fn network_and_daemon(
 /// The error message is stable and never echoes the client string.
 fn parse_txid(s: &str) -> Result<[u8; 32], WalletRpcError> {
     parse_hex32(s).ok_or_else(|| {
-        WalletRpcError::InvalidParams("txid must be 64 lowercase hex characters".into())
+        WalletRpcError::InvalidParams(
+            shekyl_wallet_contract::canonical_hex::invalid_hex32_message("txid"),
+        )
     })
 }
 
@@ -272,63 +274,6 @@ fn decode_proof_address(s: &str, network: Network) -> Result<ShekylAddress, Wall
         return Err(WalletRpcError::InvalidRecipient);
     }
     Ok(address)
-}
-
-/// Map [`ProofsError`] onto the contract's error codes for the
-/// open-wallet generation methods. Every wallet is FULL (rule 23), so
-/// there is no capability-shaped refusal; the mapping is the wallet-less
-/// taxonomy.
-fn map_proofs_error(e: ProofsError) -> WalletRpcError {
-    map_walletless_error(e)
-}
-
-/// Map [`ProofsError`] onto the contract's error codes for the
-/// wallet-less check methods.
-///
-/// Detail-bearing variants log server-side and return the stable
-/// client message — the framing detail can echo client-controlled
-/// bytes and `message()` is the most-logged surface.
-fn map_walletless_error(e: ProofsError) -> WalletRpcError {
-    match e {
-        ProofsError::Malformed(detail) => {
-            tracing::warn!(detail = %detail, "proof rejected as malformed");
-            WalletRpcError::ProofMalformed
-        }
-        ProofsError::TxSecretUnavailable => WalletRpcError::ProofTxSecretUnavailable,
-        ProofsError::NoProvableOutputs(detail) => {
-            tracing::info!(detail = %detail, "proof request had no provable outputs");
-            WalletRpcError::ProofNoProvableOutputs
-        }
-        ProofsError::TxNotFound(txid) => {
-            tracing::info!(txid = %txid, "proof-named tx unknown to the daemon");
-            WalletRpcError::ProofTxNotFound
-        }
-        ProofsError::TxUnconfirmed(txid) => {
-            tracing::info!(txid = %txid, "reserve locator names a pooled (unconfirmed) tx");
-            WalletRpcError::ProofTxUnconfirmed
-        }
-        ProofsError::DaemonSyncing => {
-            tracing::info!("proof verification refused: daemon is syncing");
-            WalletRpcError::ProofDaemonSyncing
-        }
-        ProofsError::InvalidRecipient => WalletRpcError::InvalidRecipient,
-        ProofsError::AmountOverflow => {
-            WalletRpcError::InternalError("proof amount sum overflow".into())
-        }
-        ProofsError::Daemon(e) => crate::error::from_daemon_rpc_error(&e),
-        ProofsError::Key(detail) => {
-            tracing::warn!(detail = %detail, "proof key-engine failure");
-            WalletRpcError::InternalError("proof key-engine failure".into())
-        }
-        ProofsError::Generate(detail) => {
-            tracing::warn!(detail = %detail, "proof generation failure");
-            WalletRpcError::InternalError("proof generation failure".into())
-        }
-        ProofsError::Encoding(detail) => {
-            tracing::warn!(detail = %detail, "proof encoding failure");
-            WalletRpcError::InternalError("proof encoding failure".into())
-        }
-    }
 }
 
 #[cfg(test)]
@@ -408,69 +353,6 @@ mod tests {
         let err = decode_proof_address("not-an-address", shekyl_address::Network::Stagenet)
             .expect_err("garbage");
         assert_eq!(err.code(), WalletRpcErrorCode::InvalidRecipient);
-    }
-
-    // ── error mapping (contract code table) ──────────────────────────
-
-    #[test]
-    fn proofs_errors_map_to_contract_codes() {
-        let cases: Vec<(ProofsError, WalletRpcErrorCode)> = vec![
-            (
-                ProofsError::Malformed("x".into()),
-                WalletRpcErrorCode::ProofMalformed,
-            ),
-            (
-                ProofsError::TxSecretUnavailable,
-                WalletRpcErrorCode::ProofTxSecretUnavailable,
-            ),
-            (
-                ProofsError::NoProvableOutputs("x".into()),
-                WalletRpcErrorCode::ProofNoProvableOutputs,
-            ),
-            (
-                ProofsError::TxNotFound("ab".repeat(32)),
-                WalletRpcErrorCode::ProofTxNotFound,
-            ),
-            (
-                ProofsError::TxUnconfirmed("cd".repeat(32)),
-                WalletRpcErrorCode::ProofTxUnconfirmed,
-            ),
-            (
-                ProofsError::DaemonSyncing,
-                WalletRpcErrorCode::ProofDaemonSyncing,
-            ),
-            (
-                ProofsError::InvalidRecipient,
-                WalletRpcErrorCode::InvalidRecipient,
-            ),
-            (
-                ProofsError::AmountOverflow,
-                WalletRpcErrorCode::InternalError,
-            ),
-        ];
-        for (e, code) in cases {
-            assert_eq!(map_walletless_error(e).code(), code);
-        }
-    }
-
-    #[test]
-    fn malformed_message_is_stable_and_detail_free() {
-        // The framing detail can echo client bytes (the HRP); the wire
-        // message must not carry it.
-        let err = map_walletless_error(ProofsError::Malformed(
-            "wrong HRP 'attacker-controlled'".into(),
-        ));
-        assert_eq!(err.message(), "proof string malformed");
-    }
-
-    #[test]
-    fn daemon_syncing_names_the_retry_and_the_code() {
-        let err = map_walletless_error(ProofsError::DaemonSyncing);
-        assert_eq!(
-            err.message(),
-            "daemon is syncing; retry proof verification once it has caught up"
-        );
-        assert_eq!(err.code().as_i32(), -29305);
     }
 
     // ── get_reserve_proof params surface ─────────────────────────────

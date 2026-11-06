@@ -152,6 +152,8 @@ impl AdvanceRig {
                 &[],
                 BlockHeight::from_raw(self.height),
                 &snapshot,
+                // The advance measures the ring, not capture.
+                &[],
             )
             .expect("ring commit");
         self.height += 1;

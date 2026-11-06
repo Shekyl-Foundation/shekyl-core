@@ -23,13 +23,19 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_engine_core::{Engine, ServingPosture, SoloSigner, StakedOutput, StakingReadView};
+use shekyl_engine_core::{
+    Engine, InFlightRecord, InFlightState, ReportedOutcome, ServingPosture, ServingStatus,
+    SoloSigner, StakedOutput, StakingReadView,
+};
+use shekyl_engine_state::pending_post_block::{OutcomeKind, RecordKind};
+use shekyl_types::BlockHeight;
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, require_empty_object};
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
-    GetStakedBalanceResult, GetStakedOutputsResult, StakedOutputView, StakingInfoResult,
+    GetStakedBalanceResult, GetStakedOutputsResult, InFlightEntry, StakedOutputView,
+    StakingInfoResult, StakingOutcomeEntry,
 };
 
 /// Params for `get_staked_outputs`.
@@ -69,18 +75,8 @@ pub(crate) async fn staking_info(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "staking_info")?;
-    let (view, posture) = read_view_with_posture(tenants).await?;
-    let result = StakingInfoResult {
-        staking_enabled: view.staking_enabled,
-        balance: balance_result(&view),
-        staked_output_count: i64::try_from(view.outputs.len()).unwrap_or(i64::MAX),
-        pscan_synced_height: view
-            .pscan_synced_height
-            .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
-        recovery_pending_reopen: view.recovery_pending_reopen,
-        posture: posture_str(posture),
-    };
-    serde_json::to_value(result)
+    let (view, serving) = read_view_with_serving(tenants).await?;
+    serde_json::to_value(staking_info_result(&view, serving))
         .map_err(|e| WalletRpcError::InternalError(format!("serialize staking_info: {e}")))
 }
 
@@ -151,23 +147,40 @@ async fn read_view(
     read_view_under_guard(&engine)
 }
 
-/// Like [`read_view`], but also snapshots the parked host's posture
-/// under the tenant lock — before the engine guard, never nested.
+/// Like [`read_view`], but also snapshots the parked lifecycle under the
+/// tenant lock — before the engine guard, never nested.
 ///
-/// The posture is the embedder's fact (`Tenant::serving_posture`); it
+/// The snapshot is the embedder's fact (`Tenant::serving_status`); it
 /// does not belong on [`StakingReadView`]. Assembled here so
 /// `staking_info` can project it without stuffing an embedder snapshot
-/// into the engine's sealed-state aggregation.
-async fn read_view_with_posture(
+/// into the engine's sealed-state aggregation. One value: a restart
+/// cannot pair one lifecycle's posture with another's count.
+async fn read_view_with_serving(
     tenants: &tokio::sync::Mutex<TenantState>,
-) -> Result<(StakingReadView, Option<ServingPosture>), WalletRpcError> {
-    let (shared, posture) = {
+) -> Result<(StakingReadView, Option<ServingStatus>), WalletRpcError> {
+    let (shared, serving) = {
         let state = tenants.lock().await;
         let shared = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
-        (shared, state.tenant.serving_posture())
+        (shared, state.tenant.serving_status())
     };
     let engine = shared.read().await;
-    Ok((read_view_under_guard(&engine)?, posture))
+    Ok((read_view_under_guard(&engine)?, serving))
+}
+
+/// The wire pair from one [`ServingStatus`].
+///
+/// The count is absent exactly when no lifecycle is parked, the same
+/// absence as a missing posture from a missing lifecycle. A parked
+/// lifecycle that has not published a posture still carries a count, and
+/// zero is that reading.
+pub(crate) fn serving_wire(status: Option<ServingStatus>) -> (Option<String>, Option<u32>) {
+    match status {
+        None => (None, None),
+        Some(status) => (
+            posture_str(status.posture),
+            Some(status.priority_not_lowered),
+        ),
+    }
 }
 
 /// The wire spelling of a serving posture — the contract's values,
@@ -176,8 +189,86 @@ async fn read_view_with_posture(
 pub(crate) fn posture_str(posture: Option<ServingPosture>) -> Option<String> {
     match posture {
         Some(ServingPosture::Market) => Some("market".to_owned()),
-        Some(ServingPosture::FoundationCompleteTree) => Some("foundation_complete_tree".to_owned()),
+        Some(ServingPosture::SupportCompleteTree) => Some("support_complete_tree".to_owned()),
         None => None,
+    }
+}
+
+/// The `staking_info` block, projected once for both methods that carry it
+/// (`staking_info` and `get_wallet_info`), so the two cannot disagree.
+pub(crate) fn staking_info_result(
+    view: &StakingReadView,
+    serving: Option<ServingStatus>,
+) -> StakingInfoResult {
+    let (posture, serving_priority_not_lowered) = serving_wire(serving);
+    StakingInfoResult {
+        staking_enabled: view.staking_enabled,
+        balance: balance_result(view),
+        staked_output_count: i64::try_from(view.outputs.len()).unwrap_or(i64::MAX),
+        pscan_synced_height: view.pscan_synced_height.map(height_wire).into(),
+        recovery_pending_reopen: view.recovery_pending_reopen,
+        in_flight: view.in_flight.iter().map(in_flight_entry).collect(),
+        outcomes: view.outcomes.iter().map(outcome_entry).collect(),
+        posture: posture.into(),
+        serving_priority_not_lowered: serving_priority_not_lowered.into(),
+    }
+}
+
+fn height_wire(h: BlockHeight) -> i64 {
+    i64::try_from(h.to_raw()).unwrap_or(i64::MAX)
+}
+
+/// The wire name of a record kind. The exit is `exit` on the wire, as the
+/// user calls it, not the `Release` the record is named for.
+pub(crate) fn kind_wire(kind: RecordKind) -> &'static str {
+    match kind {
+        RecordKind::Post => "stake",
+        RecordKind::Claim => "claim",
+        RecordKind::Drain => "drain",
+        RecordKind::Release => "exit",
+    }
+}
+
+fn in_flight_entry(r: &InFlightRecord) -> InFlightEntry {
+    let (state, funds_return_at) = match r.state {
+        InFlightState::Pending => ("pending", None),
+        InFlightState::Dispatched => ("dispatched", None),
+        InFlightState::Refused {
+            funds_return_at, ..
+        } => ("refused", Some(funds_return_at)),
+        InFlightState::Expired {
+            funds_return_at, ..
+        } => ("expired", Some(funds_return_at)),
+        InFlightState::Held => ("held", None),
+    };
+    InFlightEntry {
+        kind: kind_wire(r.kind).to_owned(),
+        state: state.to_owned(),
+        dispatched_at_height: r.sends.map(|s| height_wire(s.first_at_height)).into(),
+        attempts: r.sends.map_or(0, |s| s.attempts),
+        funds_return_at: funds_return_at.map(height_wire).into(),
+        reason: r.state.reason().into(),
+    }
+}
+
+fn outcome_entry(o: &ReportedOutcome) -> StakingOutcomeEntry {
+    let outcome = match o.outcome {
+        OutcomeKind::Rejected(_) => "rejected",
+        OutcomeKind::Expired => "expired",
+        OutcomeKind::EndedUnconfirmed(_) => "ended_unconfirmed",
+        OutcomeKind::SpentElsewhere => "spent_elsewhere",
+    };
+    StakingOutcomeEntry {
+        kind: kind_wire(o.kind).to_owned(),
+        outcome: outcome.to_owned(),
+        reason: o.reason(),
+        at_height: height_wire(o.at_height),
+        funds: if o.returned_funds() {
+            "returned"
+        } else {
+            "none_held"
+        }
+        .to_owned(),
     }
 }
 
@@ -210,10 +301,30 @@ mod tests {
             Some("market")
         );
         assert_eq!(
-            posture_str(Some(ServingPosture::FoundationCompleteTree)).as_deref(),
-            Some("foundation_complete_tree")
+            posture_str(Some(ServingPosture::SupportCompleteTree)).as_deref(),
+            Some("support_complete_tree")
         );
         assert_eq!(posture_str(None), None);
+    }
+
+    #[test]
+    fn serving_wire_is_absent_only_when_no_lifecycle_is_parked() {
+        assert_eq!(serving_wire(None), (None, None));
+        assert_eq!(
+            serving_wire(Some(ServingStatus {
+                posture: None,
+                priority_not_lowered: 0,
+            })),
+            (None, Some(0)),
+            "a parked lifecycle that has not published a posture still has a count"
+        );
+        assert_eq!(
+            serving_wire(Some(ServingStatus {
+                posture: Some(ServingPosture::Market),
+                priority_not_lowered: 3,
+            })),
+            (Some("market".to_owned()), Some(3))
+        );
     }
 
     #[test]

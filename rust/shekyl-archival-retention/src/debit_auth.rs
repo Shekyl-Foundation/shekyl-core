@@ -32,8 +32,8 @@
 //! ([`ColdAuthorityError::NotAColdAuthorityPost`]) before the keys are
 //! compared, so a matching pair does not rescue an arm/predicate disagreement.
 //! `scripts/ci/check_debit_auth_single_source.sh` catches an arm that forgets
-//! the call. C++ reaches the composed gate as
-//! `shekyl_archival_cold_authority_pin`; the Rust submit battery calls it
+//! the call. The C++ reached the composed gate through an FFI deleted by
+//! `DEL-008`; the Rust submit battery calls it
 //! natively (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 row UB3).
 
 use thiserror::Error;
@@ -102,6 +102,8 @@ pub fn debit_auth_pin(
 pub fn requires_cold_authority(post_kind: BondPostKind, _bond_debit: u64) -> bool {
     match post_kind {
         BondPostKind::Release => true,
+        // A JoinMarket authorizes with the identity key; the receipt key it
+        // carries is committed, never an authorizer.
         BondPostKind::JoinMarket | BondPostKind::Reinstate => false,
     }
 }

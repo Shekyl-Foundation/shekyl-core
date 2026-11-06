@@ -21,16 +21,19 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use shekyl_p_fetch::{FetchTarget, ServingEndpoint};
-use shekyl_p_serve::{PServeEndpoint, PassSigner, ShardBody, TestKeySigner};
-use shekyl_sp_t3_spike::fixture::{FixtureShardProvider, LEAF_BYTES};
+use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_p_fetch::{ExpectedShard, FetchTarget, ServingEndpoint};
+use shekyl_p_serve::{PServeEndpoint, PassSigner, TestKeySigner, IDENTITY_ENVELOPE_LEN};
+use shekyl_socks::accept_userpass;
+use shekyl_sp_t3_spike::fixture::{FixtureShardProvider, FramedObject, LEAF_BYTES};
 use shekyl_sp_t3_spike::harness::{ClientLeg, APPARATUS_OWN_HEIGHT};
 use shekyl_sp_t3_spike::measure::FailureKind;
 use shekyl_types::BlockHeight;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-/// SOCKS5 no-auth proxy that forwards every CONNECT to `target`.
+/// SOCKS5 proxy that accepts the username/password the client presents
+/// and forwards every CONNECT to `target`.
 async fn socks_forward(target: SocketAddr) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind proxy");
     let proxy = listener.local_addr().expect("addr");
@@ -40,11 +43,7 @@ async fn socks_forward(target: SocketAddr) -> SocketAddr {
                 return;
             };
             tokio::spawn(async move {
-                let mut greeting = [0u8; 2];
-                client.read_exact(&mut greeting).await.ok()?;
-                let mut methods = vec![0u8; usize::from(greeting[1])];
-                client.read_exact(&mut methods).await.ok()?;
-                client.write_all(&[5, 0]).await.ok()?;
+                accept_userpass(&mut client).await.ok()?;
                 let mut req = [0u8; 4];
                 client.read_exact(&mut req).await.ok()?;
                 // The production client always sends ATYP=DOMAIN with the
@@ -84,7 +83,7 @@ fn payload() -> Arc<[u8]> {
 async fn persona(signer: Arc<TestKeySigner>) -> (PServeEndpoint, SocketAddr) {
     let ep = PServeEndpoint::bind(
         Arc::new(FixtureShardProvider::new(payload())),
-        signer as Arc<dyn PassSigner>,
+        signer as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
     )
     .await
     .expect("bind endpoint");
@@ -92,12 +91,16 @@ async fn persona(signer: Arc<TestKeySigner>) -> (PServeEndpoint, SocketAddr) {
     (ep, proxy)
 }
 
-fn target_for(signer: &TestKeySigner) -> FetchTarget {
+fn target_for(signer: &TestKeySigner) -> FetchTarget<HybridPublicKey> {
     FetchTarget {
         endpoint: ServingEndpoint::from_record_bytes([0x42; 32]),
         verifying_key: signer.public_key().clone(),
-        shard_id: 0,
     }
+}
+
+/// What the leg expects of the payload served as shard 0.
+fn expectation() -> ExpectedShard {
+    FramedObject::new(&payload()).expectation(0)
 }
 
 #[tokio::test]
@@ -109,17 +112,14 @@ async fn apparatus_anchor_passes_the_gate_and_the_body_verifies() {
     let leg = ClientLeg::new(proxy, 1);
 
     let len = leg
-        .fetch_once(0, &target_for(&signer))
+        .fetch_once(0, &target_for(&signer), &expectation())
         .await
         .expect("the apparatus anchor must pass P's height gate and verify");
 
-    // The length the apparatus would derive at bring-up, through the same
-    // contract the endpoint writes with.
-    let expected = ShardBody::flat(payload())
-        .expect("four whole leaves")
-        .header()
-        .framed_len();
-    assert_eq!(u64::try_from(len).expect("fits"), expected);
+    // The archival length the client verified out of the frame is the
+    // payload's, the figure the apparatus derives at bring-up from the
+    // same object the endpoint serves.
+    assert_eq!(len, payload().len());
     assert_eq!(ep.served_count(), 1);
 }
 
@@ -127,7 +127,7 @@ async fn apparatus_anchor_passes_the_gate_and_the_body_verifies() {
 async fn a_persona_at_a_far_height_is_refused_not_blamed_on_tor() {
     // A `P` whose own height is a day past the apparatus's anchors sees an
     // anchor outside `[own − 720 − L, own − 720 + L]` and renders the
-    // identical 404. The client leg must class that as `Refused`: it is a
+    // bare 400. The client leg must class that as `Refused`: it is a
     // completed exchange, and the rig — not the network — is what is wrong.
     let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(
         APPARATUS_OWN_HEIGHT + 720,
@@ -135,10 +135,12 @@ async fn a_persona_at_a_far_height_is_refused_not_blamed_on_tor() {
     let (ep, proxy) = persona(Arc::clone(&signer)).await;
     let leg = ClientLeg::new(proxy, 1);
 
-    let outcome = leg.fetch_once(0, &target_for(&signer)).await;
+    let outcome = leg
+        .fetch_once(0, &target_for(&signer), &expectation())
+        .await;
 
     assert_eq!(outcome, Err(FailureKind::Refused));
-    assert_eq!(ep.served_count(), 0, "the identical 404 is not a serve");
+    assert_eq!(ep.served_count(), 0, "a 400 is not a serve");
 }
 
 #[tokio::test]
@@ -153,7 +155,7 @@ async fn a_body_under_the_wrong_key_is_refused() {
     let (_ep, proxy) = persona(signer).await;
     let leg = ClientLeg::new(proxy, 1);
 
-    let outcome = leg.fetch_once(0, &target_for(&other)).await;
+    let outcome = leg.fetch_once(0, &target_for(&other), &expectation()).await;
 
     assert_eq!(outcome, Err(FailureKind::Refused));
 }

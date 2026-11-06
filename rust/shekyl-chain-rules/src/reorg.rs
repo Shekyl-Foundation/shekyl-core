@@ -3,15 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `D_max`, the consensus reorg cap (`PDM-Q11`) — **the genesis rule set's
+//! `D_max`, the reorg cap (`PDM-Q11`) — **the genesis rule set's
 //! value**; the cap in force is `RuleSet::reorg_cap` — and the journal
 //! horizon derived from it (`PDM-Q-F19`).
 //!
 //! # One number, three derivations
 //!
 //! `PDM-Q11` (RULED 2026-09-17, `ARCHIVAL_PRUNED_DAEMON_MODE.md`) froze the
-//! *shape* — a detectability boundary, home `CEN-E2` (`is_alternative_block_allowed`
-//! above the checkpoint) — and pinned the *numeric* **PROVISIONAL** on the
+//! *shape* as a detectability boundary. S1 (2026-11-03) rejected the
+//! consensus row that would have refused an alternative past it (CEN-E2):
+//! the cap is the switch's local limit (`PopBeyondReorgCap`) and the floor
+//! under undo retention, not a verdict. The *numeric* is **PROVISIONAL** on the
 //! `bond_duration` precedent. Three surfaces derive from it: F10's discard
 //! predicate (now the epoch calendar, `DRS_E1_SPRUNE.md` §2), F19's journal
 //! horizon ([`journal_horizon`]), and the store's undo-log retention
@@ -28,8 +30,9 @@
 //! requester anchors so an admitted pass survives any legal reorg, owner
 //! E4 / pass admission (`SF-D8`, `pass_anchor.rs`
 //! `PASS_ANCHOR_DEPTH_BLOCKS`), requirement *depth ≥ cap (+ L)* — and it is
-//! the **reorg cap**, owner consensus (`PDM-Q11`, `CEN-E2`), a
-//! detectability boundary on Q11's own requirement. The value was tuned
+//! the **reorg cap**, the switch's local limit and the retention floor
+//! (`PDM-Q11`; CEN-E2 rejected), a detectability boundary on Q11's own
+//! requirement. The value was tuned
 //! for the first job (the key predates Q11; its comment names the cap as a
 //! consumer), so the two are not one number by rationale: the depth's
 //! requirement is `≥ cap`, not `= cap`. The split — the depth on its own
@@ -46,18 +49,17 @@
 //! The retention prune's pop floor (`DRS_E1_SPRUNE.md` §7) is a belt
 //! *because* the undo floor `tip − D_max` sits strictly above the body
 //! horizon's `h_scarce + 1`, and that ordering is exactly
-//! `SETTLEMENT_EPOCH_BLOCKS > D_max`. Asserted at compile time on the
-//! production constants. The cap is rule-set data (`RuleSet::reorg_cap`;
-//! `GENESIS` carries this constant, a Fakechain set names its own), and
+//! `SETTLEMENT_EPOCH_BLOCKS > D_max`. `ArchivalParams::validate` holds it,
+//! and the shipped set is asserted to pass it at compile time. The cap is rule-set data (`RuleSet::reorg_cap`;
+//! `GENESIS` carries this constant, a levered set names its own), and
 //! the store's undo retention is boxed between them — at least the
 //! in-force set's cap, strictly inside the session's epoch — at open and at
 //! every connect, so a regtest that shortens the epoch runs a rule set
 //! whose cap fits (rule 71: nettype selects data, the data satisfies the
 //! same invariant).
 
-use shekyl_archival_retention::{
-    ARCHIVAL_REORG_DEPTH_BLOCKS, FAILURE_WINDOW_N, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
-};
+use shekyl_archival_retention::{archival_params, ARCHIVAL_REORG_DEPTH_BLOCKS, SLASH_GRACE_EPOCHS};
+use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockCount, BlockHeight};
 
 /// The genesis rule set's reorg cap: the deepest reorganisation a node on
@@ -69,11 +71,9 @@ use shekyl_types::{BlockCount, BlockHeight};
 /// `SEB > D_max` assertion below.
 pub const D_MAX: BlockCount = BlockCount::from_raw(ARCHIVAL_REORG_DEPTH_BLOCKS);
 
-const _: () = assert!(
-    SETTLEMENT_EPOCH_BLOCKS > D_MAX.to_raw(),
-    "SETTLEMENT_EPOCH_BLOCKS <= D_MAX: the retention prune's undo floor (tip - D_max) would not \
-     sit above the body horizon (DRS_E1_SPRUNE.md §3, §7); re-pin one with the other"
-);
+// `SETTLEMENT_EPOCH_BLOCKS > D_MAX` is `ArchivalParams::validate`'s
+// (`EpochNotPastReorg`; DRS_E1_SPRUNE.md §3, §7), and the shipped set is
+// const-asserted to pass it.
 
 const _: () = assert!(
     D_MAX.to_raw() > 0,
@@ -87,14 +87,80 @@ const _: () = assert!(
 /// and reorg cap**.
 ///
 /// Minted here because `D_max` lives here and `k`, `n` and `SEB` live in
-/// `shekyl-archival-retention`; consumed by S-ARCH's journal writers when
-/// they land (they have no Rust writer yet). `shekyl_archival_failure_window_params`
-/// is *not* this — it returns the m-of-n `(m, n, serve_budget)`. A session
-/// running a shortened schedule (the store's `Horizons`) uses
-/// [`journal_horizon_under`] with its own pair.
+/// `shekyl-archival-retention`. Of the seven journals only the slash log
+/// survived as a table (the other six dissolved into `undo_log`, which
+/// S-PRUNE retires at `D_max`), and its two sites take the expression as
+/// a [`SlashLogFloor`] under the rule set in hand: the slash pass's read
+/// (`SLK-Q1`, SI-26) and the boundary batch's retirement. This production
+/// form is the expression on the genesis pair for documentation and tests;
+/// the retention crate's failure-window params accessor is *not* this — it returns the
+/// m-of-n `(m, n, serve_budget)`.
 #[must_use]
 pub fn journal_horizon(tip: BlockHeight) -> Option<BlockHeight> {
-    journal_horizon_under(tip, SETTLEMENT_EPOCH_BLOCKS, D_MAX)
+    journal_horizon_under(tip, archival_params().settlement_epoch_blocks, D_MAX)
+}
+
+/// The slash log's retirement floor at a tip, under a schedule and a reorg
+/// cap: rows **at or above** it are retained, rows below it may be retired
+/// (`PDM-Q-F19`; `DRS_E4_SLASH_LOG_ROUND.md` `SLK-Q1`). `None` while the
+/// chain is shorter than the window — no row has aged out yet.
+///
+/// The value of [`journal_horizon_under`], typed so the two sites that hold
+/// it cannot take a bare height for it (`05-system-thinking`: a quantity
+/// two crates need is a type). Both sites compute it from the **rule set in
+/// hand** — the pass from the set the archival transition runs, the prune
+/// from the set `connect` holds — never from a store setting (`SLK-2`: the
+/// horizon is a consensus expression; everything it reads comes from the
+/// consensus side). The store compares against it and does not source it.
+///
+/// The pass computes it at the connecting height, the floor this connect's
+/// own boundary would retire below; the retirement that actually ran is at
+/// the last boundary at or below it, whose floor is no higher, so the
+/// read's check is at least as strict as what the table has undergone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SlashLogFloor(Option<BlockHeight>);
+
+impl SlashLogFloor {
+    /// No row retired: the floor of a chain shorter than the window, and
+    /// of a read whose table no prune has touched.
+    pub const NONE: Self = Self(None);
+
+    /// The floor at `tip` under `epoch_blocks` per epoch and `reorg_cap`:
+    /// `tip − ((k + n)·SEB + reorg_cap)`.
+    #[must_use]
+    pub fn under(
+        tip: BlockHeight,
+        epoch_blocks: SettlementEpochBlocks,
+        reorg_cap: BlockCount,
+    ) -> Self {
+        Self(journal_horizon_under(tip, epoch_blocks.get(), reorg_cap))
+    }
+
+    /// The window under a pair: how far below the tip a row must sit to be
+    /// retired, `(k + n)·SEB + reorg_cap`. The first boundary with a floor
+    /// is the first at or past it; a test that must cross the window
+    /// derives its chain's length from this rather than restating the
+    /// expression (`SLK-5`). `None` only if the product overflows. Const,
+    /// so a chain's length can be placed against the window where its
+    /// constants are declared.
+    #[must_use]
+    pub const fn window(
+        epoch_blocks: SettlementEpochBlocks,
+        reorg_cap: BlockCount,
+    ) -> Option<BlockCount> {
+        match window_blocks(epoch_blocks.get(), reorg_cap) {
+            Some(window) => Some(BlockCount::from_raw(window)),
+            None => None,
+        }
+    }
+
+    /// The lowest retained height, or `None` while nothing is retired.
+    /// The store builds the retired key range from this height and refuses
+    /// a scan whose start lies in it (SI-26).
+    #[must_use]
+    pub const fn height(self) -> Option<BlockHeight> {
+        self.0
+    }
 }
 
 /// [`journal_horizon`] under a session's schedule: `tip − ((k + n)·SEB +
@@ -110,16 +176,28 @@ pub fn journal_horizon_under(
     epoch_blocks: u64,
     reorg_cap: BlockCount,
 ) -> Option<BlockHeight> {
-    let window = SLASH_GRACE_EPOCHS
-        .checked_add(u64::from(FAILURE_WINDOW_N))?
-        .checked_mul(epoch_blocks)?
-        .checked_add(reorg_cap.to_raw())?;
+    let window = window_blocks(epoch_blocks, reorg_cap)?;
     tip.to_raw().checked_sub(window).map(BlockHeight::from_raw)
+}
+
+/// `(k + n)·SEB + reorg_cap`, the one place the expression is spelled.
+/// `u64::from` would be the idiomatic widening of `n` but is not `const`.
+#[allow(clippy::cast_lossless)]
+const fn window_blocks(epoch_blocks: u64, reorg_cap: BlockCount) -> Option<u64> {
+    let Some(epochs) = SLASH_GRACE_EPOCHS.checked_add(archival_params().failure_window_n as u64)
+    else {
+        return None;
+    };
+    let Some(blocks) = epochs.checked_mul(epoch_blocks) else {
+        return None;
+    };
+    blocks.checked_add(reorg_cap.to_raw())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_archival_retention::{FAILURE_WINDOW_N, SETTLEMENT_EPOCH_BLOCKS};
 
     #[test]
     fn the_cap_is_the_anchor_depth_and_below_the_epoch() {
@@ -171,6 +249,33 @@ mod tests {
             ),
             journal_horizon(BlockHeight::from_raw(short + 3)),
             "the production pair is the one-argument form"
+        );
+    }
+
+    #[test]
+    fn the_floor_is_the_horizon_typed() {
+        let epoch = SettlementEpochBlocks::new(100).expect("non-zero");
+        let cap = BlockCount::from_raw(50);
+        let short = (SLASH_GRACE_EPOCHS + u64::from(FAILURE_WINDOW_N)) * 100 + 50;
+        assert_eq!(
+            SlashLogFloor::window(epoch, cap),
+            Some(BlockCount::from_raw(short)),
+            "the window a test derives its length from is the floor's own"
+        );
+        // Under the window: no floor — the same answer as the constant for
+        // a table no prune has touched.
+        let none = SlashLogFloor::under(BlockHeight::from_raw(short - 1), epoch, cap);
+        assert_eq!(none, SlashLogFloor::NONE);
+        assert_eq!(none.height(), None);
+        // At the window + 3 the floor is 3. Which rows that keeps is the
+        // store key's range (`SlashLogKey::below`), not a second comparison
+        // on this height.
+        let floor = SlashLogFloor::under(BlockHeight::from_raw(short + 3), epoch, cap);
+        assert_eq!(floor.height(), Some(BlockHeight::from_raw(3)));
+        assert_eq!(
+            floor.height(),
+            journal_horizon_under(BlockHeight::from_raw(short + 3), 100, cap),
+            "the type carries the function's value, not a second expression"
         );
     }
 }

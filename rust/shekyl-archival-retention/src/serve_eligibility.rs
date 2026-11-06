@@ -43,6 +43,21 @@ mod tests {
         assert!(serve_credit_epoch_ok(4, 3));
     }
 
+    /// CEN-J5's epoch-below-join arm. An epoch before the join is refused
+    /// as the join epoch is; the first eligible epoch is the one after. A
+    /// predicate that answered only "not the join epoch" (`!=`) would admit
+    /// the epoch below: that is the arm this pins (the C++
+    /// `serve_credit_epoch_ok_ffi_boundary` case's `(0, 1)` row).
+    #[test]
+    fn an_epoch_below_the_join_is_refused() {
+        assert!(!serve_credit_epoch_ok(0, 1), "below the join epoch");
+        assert!(!serve_credit_epoch_ok(1, 1), "the join epoch itself");
+        assert!(
+            serve_credit_epoch_ok(2, 1),
+            "E_first, the epoch after the join"
+        );
+    }
+
     #[test]
     fn no_e_first_when_join_epoch_is_u64_max() {
         assert!(!serve_credit_epoch_ok(u64::MAX, u64::MAX));

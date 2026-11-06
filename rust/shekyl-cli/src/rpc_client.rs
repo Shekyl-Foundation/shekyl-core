@@ -128,6 +128,10 @@ pub struct RpcSession {
     hosted: Option<Hosted>,
     next_id: Cell<u64>,
     open_wallet: RefCell<Option<String>>,
+    /// The newest staking ending this session has shown, per wire kind: the
+    /// default height `stake acknowledge` clears through, so an ending
+    /// written after the owner last looked is never cleared unseen.
+    shown_endings: RefCell<std::collections::BTreeMap<String, u64>>,
     /// When set, RPC error reports include the structured `error.data`.
     pub debug: bool,
 }
@@ -313,6 +317,7 @@ impl RpcSession {
             }),
             next_id: Cell::new(1),
             open_wallet: RefCell::new(None),
+            shown_endings: RefCell::new(std::collections::BTreeMap::new()),
             debug,
         })
     }
@@ -338,6 +343,7 @@ impl RpcSession {
             hosted: None,
             next_id: Cell::new(1),
             open_wallet: RefCell::new(None),
+            shown_endings: RefCell::new(std::collections::BTreeMap::new()),
             debug,
         };
         // A remote server may already have a wallet open (opened by the
@@ -387,11 +393,43 @@ impl RpcSession {
     /// Record that `name` is now the open wallet.
     pub fn set_open(&self, name: &str) {
         *self.open_wallet.borrow_mut() = Some(name.to_owned());
+        self.shown_endings.borrow_mut().clear();
     }
 
     /// Record that no wallet is open.
     pub fn set_closed(&self) {
         *self.open_wallet.borrow_mut() = None;
+        self.shown_endings.borrow_mut().clear();
+    }
+
+    /// Record that an ending of `kind` written at `at_height` was shown.
+    /// Keeps the newest per kind; another wallet's heights never carry over
+    /// (opening or closing a wallet forgets them).
+    pub fn note_shown_ending(&self, kind: &str, at_height: u64) {
+        let mut shown = self.shown_endings.borrow_mut();
+        let entry = shown.entry(kind.to_owned()).or_insert(at_height);
+        *entry = (*entry).max(at_height);
+    }
+
+    /// The newest ending of `kind` this session has shown, if any.
+    pub fn shown_ending_height(&self, kind: &str) -> Option<u64> {
+        self.shown_endings.borrow().get(kind).copied()
+    }
+
+    /// A session that never dials: for tests of session-side state.
+    #[cfg(test)]
+    pub(crate) fn offline_for_test() -> Self {
+        Self {
+            transport: Transport::Http {
+                url: "http://127.0.0.1:9".to_owned(),
+                agent: build_http_agent(None).expect("agent"),
+            },
+            hosted: None,
+            next_id: Cell::new(1),
+            open_wallet: RefCell::new(None),
+            shown_endings: RefCell::new(std::collections::BTreeMap::new()),
+            debug: false,
+        }
     }
 
     /// Perform a JSON-RPC call and return the `result` value.
@@ -462,23 +500,24 @@ impl RpcSession {
             .ok_or_else(|| RpcError::Transport("response missing 'result'".into()))
     }
 
-    /// Print an RPC failure to stderr.
+    /// Record an RPC failure for the printer.
     ///
-    /// Server messages are stable and secret-free by contract; `--debug`
-    /// additionally shows `error.data`. The returned value is what the
-    /// caller puts in `Err`, so a script stops. Dropping it is a warning.
+    /// Server messages are stable and secret-free by contract. `--debug`
+    /// shows `error.data` when the printer runs in human mode. The returned
+    /// value is what the caller puts in `Err`, so a script stops. Dropping
+    /// it is a warning.
     #[must_use = "reporting an RPC error fails the command"]
     pub fn report(&self, context: &str, err: &RpcError) -> crate::outcome::CommandFailed {
-        eprintln!("{context}: {err}");
-        if self.debug {
-            if let RpcError::Rpc {
-                data: Some(data), ..
-            } = err
-            {
-                eprintln!("[DEBUG] error.data = {data}");
-            }
+        let code = err.code().unwrap_or(crate::outcome::TRANSPORT);
+        let data = match err {
+            RpcError::Rpc { data, .. } => data.clone(),
+            RpcError::Transport(_) => None,
+        };
+        crate::outcome::CommandFailed {
+            code,
+            message: format!("{context}: {err}"),
+            data,
         }
-        crate::outcome::CommandFailed
     }
 
     /// Shut the session down: close any open wallet (best effort) and stop
@@ -878,7 +917,8 @@ mod tests {
     fn no_secret_ever_travels_through_a_json_value() {
         // Every file that sends a secret-bearing request. A new one must be
         // added here; the FOLLOWUPS entry undercounted precisely because no
-        // such list existed.
+        // such list existed. Startup holds the password and hands it to the
+        // command layer; the request is built in the files below.
         let senders = [
             (
                 "commands/lifecycle.rs",
@@ -886,7 +926,6 @@ mod tests {
             ),
             ("commands/staking.rs", include_str!("commands/staking.rs")),
             ("commands/scripted.rs", include_str!("commands/scripted.rs")),
-            ("main.rs", include_str!("main.rs")),
         ];
 
         // `change_password` carries two secrets under two keys, which is why a

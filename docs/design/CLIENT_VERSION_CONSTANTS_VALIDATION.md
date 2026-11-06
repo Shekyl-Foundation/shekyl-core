@@ -25,7 +25,7 @@ lands this document (rule 94). `VC-D*` are dispositions of this round;
 `VC-1`…`VC-4` are the implementation slices §4 names. Neighbours checked:
 `CV-` (cover traffic) is taken and is a different family; `VC-`, `CDG-` and
 `HS-` were free at the anchor.
-**Parent:** [`DAEMON_RPC_KV_CUTOVER.md`](DAEMON_RPC_KV_CUTOVER.md) §7, the
+**Parent:** [`DAEMON_RPC_KV_CUTOVER.md`](../completed/DAEMON_RPC_KV_CUTOVER.md) §7, the
 2026-09-04 rows that found both facts below and named this round without
 building it.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
@@ -67,13 +67,13 @@ grep -rn "CORE_RPC_VERSION" rust/ src/ tests/ utils/ \
 
 | Hits | What they are |
 | --- | --- |
-| 1 | The producer: `rust/shekyl-daemon-rpc/src/methods.rs:129` fills `GetVersionResponse.version`. |
+| 1 | The producer: `rust/shekyl-daemon-rpc/src/methods.rs:130` fills `GetVersionResponse.version`. |
 | 2 | The producer's own unit test (`methods.rs:1852`, `:1873`) asserts the reply carries the constant. |
 | 4 | The constant's definition: `rust/shekyl-rpc-types/src/chain.rs:44`, `:80`, `:81`, `:82` (major, minor, the packing formula). |
 | 4 | The constant's pins: `chain.rs:383–386` (packed value, packing expression, major, minor — the 2026-09-04 merge-safety fix). |
 | 11 | The oracle-vector parity and chain-delta tests in `rust/shekyl-rpc-types/tests/rpc_parity.rs`. |
-| 2 | The re-export, `rust/shekyl-rpc-types/src/lib.rs:82–83`. |
-| 7 | Comments and doc comments (`chain.rs:41`, `:45`, `:338`, `:367`; `headers.rs:16`; `src/rpc/core_rpc_server_commands_defs.h:84`, `:89`). |
+| 2 | The re-export, `rust/shekyl-rpc-types/src/lib.rs:87–88`. |
+| 7 | Comments and doc comments (`chain.rs:41`, `:45`, `:338`, `:367`; `headers.rs:16`; `src/rpc/core_rpc_server_commands_defs.h`, `:89`). |
 
 **Zero hits compare the constant to a value that came off the wire.** Not
 `shekyl-daemon-rpc/src/console/` (the `shekyld <command>` arm), not
@@ -88,7 +88,7 @@ whose `get_version.version` is not this build's packed `CORE_RPC_VERSION`.
 ### 0.2 `get_info.nettype` is read by nobody either — and a plan lock says it is
 
 The C++ `on_get_info` fills `nettype` as one of `"mainnet"`, `"testnet"`,
-`"stagenet"`, `"fakechain"` (`src/rpc/core_rpc_server.cpp:237`). No Rust
+`"stagenet"`, `"fakechain"` (`src/rpc/core_rpc_server.cpp`). No Rust
 client reads it: `grep -rn nettype rust/shekyl-engine-core/src
 rust/shekyl-wallet-rpc/src rust/shekyl-cli/src rust/shekyl-daemon-rpc/src/console`
 returns nothing outside tests. `rust/shekyl-rpc-types` has no `nettype`
@@ -234,10 +234,12 @@ four after `VC-D12`):
 The genesis axis was added when `VC-D12`'s first draft excluded the
 `genesis_recipients.*.json` files from the digest on the ground that "the
 genesis block hash already commits to them" — and the steering lane checked
-whether anything compares that hash. Nothing does: no Rust pin of a genesis
-hash exists and no client reads block 0's hash. The daemon pins
-`GENESIS_TX` / `GENESIS_NONCE` per network in `src/cryptonote_config.h:368`
-(and `:500`, `:511`); the client side has never held the answer. So the
+whether anything compares that hash. Nothing did (at `e8838b0095`): no Rust
+pin of a genesis hash existed and no client read block 0's hash. The daemon
+pinned `GENESIS_TX` / `GENESIS_NONCE` per network at line 368 of
+`src/cryptonote_config.h` (and 500, 511) at that tree; the per-network pin
+is now `Genesis` in `rust/shekyl-network/src/genesis.rs:18-22` (network
+identity PR 1, #1264). The client side has never held the answer. So the
 axis joins the tuple rather than serving as an excuse — and it is carried in
 `get_version` with the other three (`VC-R2`, ruled 2026-09-07), not on a
 second call. Genesis does not replace network: `FAKECHAIN` takes
@@ -498,10 +500,10 @@ un-revised number wearing a different face.
 **`VC-R17` splits the seam instead of managing the churn.** The identity facts
 go in their own POD: `ChainTipFactsFfi` does not move, so its layout twins,
 its `_test_fill` / `_rust_fill` seeded indices and its offset pins do not move
-either. The precedent is already in the header — `shekyl_rpc_fee_grace_blocks_max`,
-and `shekyl_rpc_peerlist_limits` (`ffi.rs:741`, `:776`) are narrow exports for
-facts with no business in a bigger POD (`shekyl_rpc_span_pruning_seed` was a
-third until the stripe engine's deletion, 2026-09-21).
+either. The precedent is already in the header — `shekyl_rpc_peerlist_limits`
+(`ffi.rs:741`, `:776`) is a narrow export for facts with no business in a
+bigger POD (`shekyl_rpc_span_pruning_seed` was another until the stripe
+engine's deletion, 2026-09-21).
 `nettype` and the genesis hash are process-lifetime constants — fixed at
 daemon start and per network — while the tip POD's contract is "what the chain
 tip looks like right now"; five of its six callers want a tip and one wants
@@ -555,6 +557,17 @@ non-zero without rendering the command. The one exemption is **`version`
 itself**: its job is to show the operator what they are talking to, so it
 renders both sides and the verdict rather than refusing — it *is* the
 handshake, made visible.
+
+**As built (RK-5c commit 6, `DAEMON_RPC_KV_GET_INFO.md` RK-Q11 / RK-D25).**
+Both arms read the daemon's RPC version before they decode the rest of
+`get_version`, through one function, so a daemon of another version is named
+with both versions even though its reply does not decode. `version` uses the
+same function and skips the rest of the handshake. When the RPC versions
+differ it prints both and which side is older, and fails, because the
+daemon's software version lives in a `get_info` reply of another shape.
+When they agree it prints the daemon's software version. Showing the other
+three axes and the verdict from `version` is still owed to the console's
+retirement slice.
 
 Rejected: an override flag to render anyway. A console that renders
 statistics from a chain it has just proved is not this build's chain prints
@@ -817,7 +830,8 @@ against a client/daemon mismatch" is currently *nothing*.
 before this PR merges; canonical form `v2`, one re-pin — built.** The file
 settled it: `economics_params.json` carries `money_supply`,
 `final_subsidy_per_minute: 300000000` and
-`emission_speed_factor_per_minute: 22` — genesis-frozen emission constants,
+`emission_speed_factor_per_minute: 22` (since 2026-10-04
+`emission_speed_factor_per_block: 22`, read per block) — genesis-frozen emission constants,
 and the final subsidy *is* the perpetual tail Rick signed in `FL-R12′`
 (0.3 SKL/min × 2 min/block = the 0.6/block rail). "A digest pinning
 `consensus_constants.json` while leaving the emission curve's own authority
@@ -850,7 +864,7 @@ derived explicitly in `DESIGN_CONCEPTS.md` as `(60/2) × 24 × 365`, eight
 code sites. `FA-6_VIEW_TAG_ML_KEM.md` :695 derives its key-rotation horizon
 on 365.25: `N_blocks = ⌊(5 × 365.25 × 86400) / T_block⌋ = 1,314,900`, which
 is 262,980 blocks/year *implied* — that literal appears nowhere in the tree.
-(The other 365.25 sites, `console/mod.rs:837` and `util.cpp:1096`, format
+(The other 365.25 sites, `console/mod.rs:842` and `util.cpp:1096`, format
 human-readable durations and are out of scope.) The gap is 180 blocks a
 year, 900 over FA-6's five-year window. The question is not which constant
 wins but whether a rotation horizon derived on a different year length than
@@ -929,18 +943,22 @@ with a named owner, not an assumption.
 **The per-key membership grade (`VC-R19`), because "integer authority" was
 doing the work of a decision one level up.** `VC-R11` closed that move for the
 *type* of values; the same move survived at the choice of *keys*, which were
-ingested wholesale. All eighteen economics keys were walked. The grade is
+ingested wholesale. All eighteen economics keys were walked, and the two archival keys of
+`consensus_constants.json` that are provisional-until-testnet are graded beside them
+(2026-10-03). The grade is
 recorded so §3.7 is checkable by a reviewer rather than aspirational:
 
 | Key(s) | Does a different value make a different chain? |
 | --- | --- |
-| `emission_curve_asymptote`, `emission_speed_factor_per_minute`, `final_subsidy_per_minute` | **Yes** — the emission curve and the perpetual tail (`FL-R12′`) |
+| `emission_curve_asymptote`, `emission_speed_factor_per_block`, `final_subsidy_per_minute` | **Yes** — the emission curve and the perpetual tail (`FL-R12′`) |
 | `coin` | **Yes** — the atomic-unit denominator |
 | `display_decimal_point` | **Yes, but only through a coupling that was nowhere written down** — see below |
 | `shekyl_fixed_point_scale` | **Yes** — the denominator every ppm share is read against |
 | `shekyl_staker_pool_share`, `shekyl_staker_emission_share`, `shekyl_staker_emission_decay`, `shekyl_blocks_per_year` | **Yes** — the staker split and its decay (`calc_effective_emission_share`) |
 | `shekyl_burn_base_rate`, `shekyl_burn_cap`, `shekyl_tx_volume_baseline`, `shekyl_tx_volume_window` | **Yes** — burn rate and the window it is measured over |
 | `shekyl_escalation_asymptote_share`, `shekyl_escalation_knee_n`, `shekyl_release_min`, `shekyl_release_max` | **Yes** — D2 escalation; provisional-until-testnet, and §3.12 already rules that a change detector is *supposed* to move on them |
+| `archival_shard_length_bytes` (`W = 3,000,000 B`) | **Yes** — the shard partition: which shard every transaction belongs to (`SHT-Q2`). Provisional-until-testnet, pinned at the Round-2 testnet gate together with `L` ([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §11). **Reopens** if a measured window's single-attempt miss interval at the heaviest shard has its upper bound above 0.30 (the `p_attempt` bound, §10.6 item 1), or if `U1a` or `U1b`, re-measured at the gate, binds (§10.5, §10.8) |
+| `archival_attestation_anchor_lag_blocks` (`L = 4`) | **Yes** — the pass-anchor admission window. Provisional-until-testnet, pinned at the Round-2 testnet gate together with `W` (same §11; `ARCHIVAL_SHARD_FETCH.md` `SF-D8`). **Reopens** on its own falsifier, re-measured at the gate: a p99 fetch-plus-retry under two minutes drops it to 3; one over six tightens `SF-D6`'s retry budget (2 retries) and never raises `L` (§10.6 item 3, §10.7) |
 
 **`display_decimal_point` is the one that needed the walk.** On its own it is
 a rendering convention, and a rendering convention does not make a different
@@ -1110,7 +1128,10 @@ carries `#[serde(default)]` on `current_height`, `target_height` and
 `hard_forks` (`chain.rs:351`, `:355`, `:359`), because the C++ side omits
 them via `KV_SERIALIZE_OPT` and the oracle vectors depend on that. Those are
 not tuple fields. The requirement is per-field on the identity tuple, not a
-sweep of the struct — the wider `#[serde(default)]` audit remains its own
+sweep of the struct. (Since `CORE_RPC_VERSION` 3.46 no member of the struct
+defaults: `hard_forks` is gone, `current_height` is always present, and
+`target_height` is required and may be `null`,
+`DAEMON_RPC_KV_GET_INFO.md` RK-Q7.) The wider `#[serde(default)]` audit remains its own
 FOLLOWUPS pass.
 
 ### 3.15 `VC-D15` — a refusal names the stale side only where a side *is* older
@@ -1186,7 +1207,7 @@ and `mining_parity.genesis_identity_is_pow_independent` (mainnet/fakechain
 `e623214c…`, testnet `7cbb8529…`, stagenet `82ccf335…`). Handshake compares
 those ids — `get_block_id_by_height(0)` / `geblock block-id` — not
 `GENESIS_TX`. `GENESIS_PINS_ARE_PLACEHOLDERS` is deleted; [`genesis_hash_for`](../../rust/shekyl-rpc-types/src/identity.rs)
-and [`IdentityExpectation::check`](../../rust/shekyl-rpc-types/src/identity.rs)
+and [`IdentityExpectation::read`](../../rust/shekyl-rpc-types/src/identity.rs) (named `check` until RK-5c commit 6, when it took over the decode so the version is read first)
 refuse a foreign block 0. Wallet and console do not each hold a copy.
 Reminting genesis updates `GENESIS_TX` / nonce, the frozen-id surfaces, and
 these pins in the same change.

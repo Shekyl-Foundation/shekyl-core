@@ -110,9 +110,12 @@ impl ExtraField {
             }
             TxExtraField::PqcKemCiphertext(data) => Some(ExtraField::PqcKemCiphertext(data)),
             TxExtraField::PqcLeafEntries(data) => Some(ExtraField::PqcLeafEntries(data)),
+            // The coinbase's draw commitment is the validator's and the
+            // challenger's; a scan reads no output from it.
             TxExtraField::PqcViewTagHints(_)
             | TxExtraField::PqcSpendAuthPubkeys(_)
-            | TxExtraField::ArchivalAttestation(_) => None,
+            | TxExtraField::ArchivalAttestation(_)
+            | TxExtraField::DrawCommitment(_) => None,
         }
     }
 

@@ -121,9 +121,10 @@ where
     L: LedgerEngine + Stage1LedgerSpendableAccess,
 {
     async fn build(&self, request: TxRequest) -> Result<PendingTx, SendError> {
-        // Refusals that need no network and no permit run first: an
-        // empty recipient list or an unechoable rid is a malformed
-        // request (`TxRequest::check_recipients`), and a tripped
+        // Refusals that need the wallet's network but no daemon and no
+        // permit run first. An empty list, an address that cannot be
+        // paid, or an unechoable rid is a malformed request
+        // (`TxRequest::check_recipients`), and a tripped
         // F28/F37 loop breaker exists precisely to refuse *fast*
         // (§2.5 — the alarm was raised at trip time and only operator
         // acknowledgment re-enables building). Queueing either behind a
@@ -131,7 +132,7 @@ where
         // breaker cost a full build's latency per refused attempt, and
         // would make the sync `Engine::build_pending_tx` wrapper report
         // permit contention (`BuildInvariant`) instead of the real error.
-        if let Err(err) = request.check_recipients() {
+        if let Err(err) = request.check_recipients(self.network) {
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
                 PendingTxDiagnostic::BuildFailed {

@@ -34,7 +34,7 @@ use shekyl_rpc_types::{
 use shekyl_scanner::extra::Extra;
 use shekyl_wire::{Ct, Transaction};
 
-use super::block_fetch::{parse_tx_batch, refuse_unless_ok, TxBodyForm, TXS_PER_REQUEST};
+use super::block_fetch::{parse_tx_batch, refuse_unless_ok, TXS_PER_REQUEST};
 use super::daemon::synced_chain_facts::{fetch_synced_chain_facts, SyncedChainFacts};
 use super::proofs::ProofsError;
 use shekyl_types::{BlockHash, TxHash};
@@ -60,18 +60,18 @@ pub(crate) enum TxChainState {
     },
 }
 
-/// A proof-relevant tx fetched from the daemon: the parsed pruned body
-/// plus where the daemon found it.
+/// A proof-relevant tx fetched from the daemon: the body of the skeleton
+/// bound to the requested txid, plus where the daemon found it.
 pub(crate) struct FetchedTx {
     pub(crate) tx: Transaction,
     pub(crate) state: TxChainState,
 }
 
-/// Fetch one tx by hash in the **pruned** body form (everything the
+/// Fetch one tx by hash as the skeleton it is (`SB-Q2`): everything the
 /// proof verifications need — output keys, commitments, encrypted
-/// amounts, `tx_extra` KEM ciphertexts — lives in the pruned section,
-/// and pruned fetches work against storage-pruned daemons). Reuses
-/// `block_fetch`'s adversarial-daemon parse/association checks.
+/// amounts, `tx_extra` KEM ciphertexts — lives in the pruned segment,
+/// and the skeleton is served for every transaction, whatever its
+/// shard's state. Reuses `block_fetch`'s adversarial-daemon binding.
 pub(crate) async fn fetch_proof_tx<R: Rpc>(
     rpc: &R,
     txid: [u8; 32],
@@ -83,9 +83,7 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
             Some(
                 serde_json::to_value(GetTransactionsRequest {
                     txs_hashes: vec![txid_hex],
-                    decode_as_json: false,
                     prune: true,
-                    split: false,
                 })
                 .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
             ),
@@ -100,12 +98,17 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
     if !resp.missed_tx.is_empty() {
         return Err(ProofsError::TxNotFound(hex::encode(txid)));
     }
+    // The daemon could not look in its pool: no answer, not "not found".
+    if !resp.unavailable_tx.is_empty() {
+        return Err(ProofsError::Daemon(RpcError::TransactionsUnavailable(
+            vec![txid],
+        )));
+    }
 
-    let txs = &resp.txs;
     // Where it was found comes from the arm, not from two independently
     // optional fields: `block_height` cannot be read off a pooled entry
     // because a pooled entry does not carry one.
-    let state = match txs.first().map(|t| &t.location) {
+    let state = match resp.txs.first().map(|t| &t.location) {
         Some(TxLocation::Mined {
             block_height,
             confirmations,
@@ -122,11 +125,12 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
 
     // Proof payloads carry txids as bytes (their own format); the typed world
     // starts at the batch parser.
-    let mut parsed = parse_tx_batch(&[TxHash::from_bytes(txid)], txs, TxBodyForm::Pruned)
-        .map_err(ProofsError::Daemon)?;
+    let mut parsed =
+        parse_tx_batch(&[TxHash::from_bytes(txid)], &resp).map_err(ProofsError::Daemon)?;
     let tx = parsed
         .pop()
-        .expect("parse_tx_batch returns exactly one tx per requested hash");
+        .expect("parse_tx_batch returns exactly one tx per requested hash")
+        .into_tx();
 
     Ok(FetchedTx { tx, state })
 }
@@ -167,9 +171,7 @@ async fn fetch_proof_txs<R: Rpc>(
                 Some(
                     serde_json::to_value(GetTransactionsRequest {
                         txs_hashes: hashes_hex,
-                        decode_as_json: false,
                         prune: true,
-                        split: false,
                     })
                     .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
                 ),
@@ -192,6 +194,15 @@ async fn fetch_proof_txs<R: Rpc>(
                 .collect();
             return Err(tx_not_found_in_request_order(batch, &missed_hashes));
         }
+        if !resp.unavailable_tx.is_empty() {
+            return Err(ProofsError::Daemon(RpcError::TransactionsUnavailable(
+                resp.unavailable_tx
+                    .iter()
+                    .copied()
+                    .map(shekyl_rpc_types::HashHex::to_bytes)
+                    .collect(),
+            )));
+        }
         // Refuse pooled entries before parsing. `resp.txs` is indexed by
         // request position (RK-4c's export), so `batch[i]` names the tx the
         // verifier asked about at slot `i` — the honest name for the error.
@@ -211,7 +222,10 @@ async fn fetch_proof_txs<R: Rpc>(
         }
         let typed: Vec<TxHash> = batch.iter().copied().map(TxHash::from_bytes).collect();
         bodies.extend(
-            parse_tx_batch(&typed, &resp.txs, TxBodyForm::Pruned).map_err(ProofsError::Daemon)?,
+            parse_tx_batch(&typed, &resp)
+                .map_err(ProofsError::Daemon)?
+                .into_iter()
+                .map(shekyl_wire::BoundTx::into_tx),
         );
     }
     Ok(bodies)
@@ -522,11 +536,10 @@ mod witness_admission {
     fn witness_at(count: u64) -> SyncedChainFacts {
         SyncedChainFacts::new(
             ChainCount::from_raw(count),
-            0,
             true,
             BlockHash::from_bytes([0x11; 32]),
         )
-        .expect("target 0 with the flag set is synchronized")
+        .expect("the flag set is synchronized")
     }
 
     /// Bites against rejecting an equal gather. Does not cover the sync

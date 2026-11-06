@@ -1,16 +1,30 @@
-//! Shard data-source abstraction for the wallet's shard view.
+//! Fixture shard source for the wallet's **preview** gallery.
 //!
-//! The GUI lists shards and renders each one's deterministic identity visual
-//! (candidate.v1, see `shekyl-shard-visual`). *Which* shards exist and their
-//! aggregate statistics come from a [`ShardSource`]. Today the only
-//! implementation is [`FixtureShardSource`], backed by the regime fixtures in
-//! `shekyl_shard_visual::fixtures`. When `ArchivalEngine` (Stage 5, V3.x) lands
-//! it provides an [`ArchivalShardSource`] reading live frozen segments; only
-//! the source swaps — the wire types ([`ShardSummary`], [`ShardRenderHandle`])
-//! and the renderer (`shekyl_shard_visual::render_candidate_png`) stay fixed.
+//! The GUI renders each shard's deterministic identity visual (candidate.v1,
+//! see `shekyl-shard-visual`) from a [`ShardAggregate`]. This crate's
+//! [`ShardSource`] answers *which* shards a preview can show and the
+//! aggregate for each, from the regime fixtures in
+//! `shekyl_shard_visual::fixtures` ([`FixtureShardSource`]). It is the
+//! pre-archival seam and nothing else.
+//!
+//! **Live shards do not come through this trait.** A real shard's aggregate
+//! is answered by the wallet contract's `get_shard_view`
+//! (`shekyl-wallet-contract::shard_view`, `SHARD_VIEW_FETCH.md` SV-D): the
+//! wallet's daemon fetches the body from a holder, folds the view hash
+//! (SV-D1) and returns the counts. Enumerating live shards is not a list of
+//! aggregates either — each one costs a fetch — but a count from the chain
+//! view. `shekyl_chain_rules::closed_shards_through` at a height is the
+//! closed set `0..n`: shard `k` holds the transactions whose fold-before
+//! lies in `[k·W, (k+1)·W)` and is closed once the fold has reached
+//! `(k+1)·W`. `closed_shards_before` is that count at the parent of a
+//! connecting block. The `ArchivalShardSource` stub this crate once
+//! carried for that role is deleted (rule 23: a refusing stub behind a
+//! feature flag is a deferral wearing code), and its premise — that a
+//! source reconstructs aggregates from a local archival registry — is
+//! refuted: a viewer holds no bytes a daemon can read, so it asks one.
 //!
 //! See `docs/V3_SHARD_VISUALIZATION.md` and the GUI's
-//! `docs/SHARD_PREVIEW_CUTOVER.md` for the cutover contract.
+//! `docs/SHARD_PREVIEW_CUTOVER.md`.
 
 use std::sync::LazyLock;
 
@@ -137,8 +151,10 @@ impl ShardRenderHandle {
 /// Source of the shard list and per-shard aggregate lookup.
 ///
 /// The renderer is *not* part of this trait — it lives in
-/// `shekyl_shard_visual` and is the same across every implementation, so the
-/// Stage 5 cutover is a trait-impl swap, not a render rewrite.
+/// `shekyl_shard_visual` and is the same for every input. Live shards do
+/// not come through this trait at all: they are the wallet contract's
+/// `get_shard_view` (`SV-D`), whose aggregate feeds the same renderer.
+/// This trait is the fixture preview's seam only.
 pub trait ShardSource {
     /// List every shard visible to this source.
     fn list_shards(&self) -> Result<Vec<ShardSummary>, ShardSourceError>;
@@ -167,7 +183,8 @@ static FIXTURE_SUMMARIES: LazyLock<Vec<ShardSummary>> = LazyLock::new(|| {
 
 /// Fixture-backed source: the regime fixtures shipped in `shekyl-shard-visual`.
 ///
-/// This is the pre-ArchivalEngine implementation the wallet uses today.
+/// The only implementation. It backs the GUI's illustrative preview; it is
+/// not a stand-in for a live source, and it retires with the preview.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FixtureShardSource;
 
@@ -187,8 +204,11 @@ impl ShardSource for FixtureShardSource {
         // `shard_hash` is authoritative: a handle whose hash disagrees with the
         // resolved aggregate is stale and rejected, never rendered under the
         // wrong hash (2026-07-10 decision-log entry). Always passes on fixtures
-        // (their hashes are static); the guard is the contract Stage 5's
-        // mutable `ArchivalShardSource` must honor.
+        // (their hashes are static). A live view is the same key. Viewers tell
+        // two views of one id apart by `(shard_id, shard_hash)`
+        // (`SHARD_VIEW_FETCH.md` SV-D5, amended 2026-10-09). `close_height`
+        // places the shard and pins the spec version; a same-height reorg
+        // leaves it and moves the hash.
         if summary.aggregate.shard_hash != handle.shard_hash {
             return Err(ShardSourceError::StaleHandle {
                 shard_id: handle.shard_id,
@@ -197,38 +217,6 @@ impl ShardSource for FixtureShardSource {
             });
         }
         Ok(summary.aggregate.clone())
-    }
-}
-
-/// Stage 5 ArchivalEngine-backed source — **seam stub**.
-///
-/// When `ArchivalEngine` lands it enumerates frozen shard segments from the
-/// archival registry and reconstructs each [`ShardAggregate`] from chain data.
-/// The three cutover steps are enumerated in
-/// `shekyl-gui-wallet/docs/SHARD_PREVIEW_CUTOVER.md`; this type is the swap
-/// point. Gated behind the `archival` feature so it does not affect the
-/// fixtures build.
-#[cfg(feature = "archival")]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ArchivalShardSource;
-
-#[cfg(feature = "archival")]
-impl ShardSource for ArchivalShardSource {
-    fn list_shards(&self) -> Result<Vec<ShardSummary>, ShardSourceError> {
-        // Stage 5: enumerate frozen segments from the archival registry.
-        Err(ShardSourceError::Backend(
-            "ArchivalShardSource not yet implemented (Stage 5)".into(),
-        ))
-    }
-
-    fn aggregate_for(
-        &self,
-        _handle: &ShardRenderHandle,
-    ) -> Result<ShardAggregate, ShardSourceError> {
-        // Stage 5: reconstruct the aggregate from the frozen segment row.
-        Err(ShardSourceError::Backend(
-            "ArchivalShardSource not yet implemented (Stage 5)".into(),
-        ))
     }
 }
 

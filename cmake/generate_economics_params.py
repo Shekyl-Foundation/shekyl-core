@@ -9,7 +9,6 @@ KEYS = [
     "emission_curve_asymptote",
     "coin",
     "display_decimal_point",
-    "emission_speed_factor_per_minute",
     "final_subsidy_per_minute",
     "shekyl_fixed_point_scale",
     "shekyl_release_min",
@@ -20,8 +19,11 @@ KEYS = [
     "shekyl_burn_cap",
     "shekyl_staker_emission_share",
     "shekyl_staker_emission_decay",
-    "shekyl_blocks_per_year",
 ]
+
+# Same derivation as Rust `blocks_per_year`: 365 days of seconds, integer
+# division by the consensus DAA target. Not a second key in the economics file.
+SECONDS_PER_YEAR = 365 * 86_400
 
 
 def main() -> int:
@@ -40,6 +42,22 @@ def main() -> int:
         print(f"missing keys: {', '.join(missing)}", file=sys.stderr)
         return 1
 
+    consensus_path = in_path.parent / "consensus_constants.json"
+    try:
+        with consensus_path.open("r", encoding="utf-8") as fh:
+            consensus = json.load(fh)
+    except OSError as err:
+        print(f"cannot read {consensus_path}: {err}", file=sys.stderr)
+        return 1
+    daa = consensus.get("daa_target_seconds")
+    if isinstance(daa, bool) or not isinstance(daa, int) or daa <= 0:
+        print(
+            f"{consensus_path}: daa_target_seconds must be a positive integer",
+            file=sys.stderr,
+        )
+        return 1
+    blocks_per_year = SECONDS_PER_YEAR // daa
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     content = f"""// Auto-generated from {in_path}
 // Do not edit manually.
@@ -48,7 +66,6 @@ def main() -> int:
 #define SHEKYL_EMISSION_CURVE_ASYMPTOTE                 UINT64_C({data["emission_curve_asymptote"]})
 #define COIN                                            ((uint64_t){data["coin"]})
 #define CRYPTONOTE_DISPLAY_DECIMAL_POINT                {data["display_decimal_point"]}
-#define EMISSION_SPEED_FACTOR_PER_MINUTE                ({data["emission_speed_factor_per_minute"]})
 #define FINAL_SUBSIDY_PER_MINUTE                        ((uint64_t){data["final_subsidy_per_minute"]})
 
 #define SHEKYL_FIXED_POINT_SCALE                        UINT64_C({data["shekyl_fixed_point_scale"]})
@@ -60,7 +77,9 @@ def main() -> int:
 #define SHEKYL_BURN_CAP                                 UINT64_C({data["shekyl_burn_cap"]})
 #define SHEKYL_STAKER_EMISSION_SHARE                    UINT64_C({data["shekyl_staker_emission_share"]})
 #define SHEKYL_STAKER_EMISSION_DECAY                    UINT64_C({data["shekyl_staker_emission_decay"]})
-#define SHEKYL_BLOCKS_PER_YEAR                          UINT64_C({data["shekyl_blocks_per_year"]})
+// Year length is (365 * 86400) / daa_target_seconds from consensus_constants.json,
+// integer division. The same derivation as Rust blocks_per_year.
+#define SHEKYL_BLOCKS_PER_YEAR                          UINT64_C({blocks_per_year})
 """
     out_path.write_text(content, encoding="utf-8")
     return 0

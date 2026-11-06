@@ -25,9 +25,14 @@
 //!
 //! This module is not a rule. It refuses nothing about the candidate block
 //! — a drain is decided by the chain, not by the block being connected —
-//! and it has no census row, because growth is an operand that F17, I12,
-//! I13 and I15 read, not a rule (E3 Round 1: `Provenance::passed_through`
-//! is its instrument). What it can raise is `Corrupt`: a recorded output
+//! and no rule type is registered for it, because growth is an operand that
+//! F17, I12, I13 and I15 read, not a rule (E3 Round 1:
+//! `Provenance::passed_through` is its instrument). The two census rows on
+//! growth, CEN-L11 (every accepted output becomes a leaf) and CEN-L12 (at
+//! h+60 for a coinbase output, h+10 otherwise), are held **by construction**
+//! over [`tree_after`]: CEN-B5 judges the next header's root against this
+//! derivation, so a drain that broke either is another root, refused there
+//! (`census.rs`). What it can raise is `Corrupt`: a recorded output
 //! whose points do not decompress, or a tree the view describes
 //! inconsistently, is a store that no longer conforms, and the verdict
 //! halts rather than mint a root over it (C2-R8 principle 3: the root is a

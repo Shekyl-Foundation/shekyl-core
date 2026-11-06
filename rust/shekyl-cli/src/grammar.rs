@@ -13,28 +13,51 @@
 use crate::catalog::{self, split_flags, usage, CommandId, Split, Walk};
 use crate::resolve::{
     diag, parse_flag_str, parse_invoice_expiry, raw_remainder, reject_removed_command,
-    reject_removed_flags, unix_now, FeePriority, FlagValue, RequestFilter, ResolvedCommand,
+    reject_removed_flags, unix_now, BlockRef, FeePriority, FlagValue, RequestFilter,
+    ResolvedCommand, View,
 };
 
-/// Parse one line. Empty input is an unknown command with an empty name,
-/// which the prompt loop never submits.
-pub fn parse(input: &str) -> ResolvedCommand {
-    let tokens: Vec<&str> = input.split_whitespace().collect();
+/// How a free-form tail is recovered.
+///
+/// A line keeps the spacing between words: `sign hello  world` is one
+/// message with two spaces. Argv words already have shell boundaries, and
+/// one word may contain spaces because the shell quoted it.
+#[derive(Clone, Copy)]
+enum Tail<'a> {
+    Line(&'a str),
+    Argv(&'a [&'a str]),
+}
+
+/// Parse one prompt, script, or pipe line. Empty input is an unknown
+/// command with an empty name, which the prompt loop never submits.
+pub fn parse(line: &str) -> ResolvedCommand {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    parse_words(&tokens, Tail::Line(line))
+}
+
+/// Parse one-shot argv. The shell has already split the words, so joining
+/// them and splitting the line again would throw away a quoted space.
+pub fn parse_argv(argv: &[String]) -> ResolvedCommand {
+    let tokens: Vec<&str> = argv.iter().map(String::as_str).collect();
+    parse_words(&tokens, Tail::Argv(&tokens))
+}
+
+fn parse_words(tokens: &[&str], tail: Tail<'_>) -> ResolvedCommand {
     if tokens.is_empty() {
         return ResolvedCommand::Unknown { cmd: String::new() };
     }
     if let Some(msg) = reject_removed_command(tokens[0], &tokens[1..]) {
         return diag(msg);
     }
-    if let Some(msg) = catalog::retired_message(&tokens) {
+    if let Some(msg) = catalog::retired_message(tokens) {
         return diag(msg);
     }
-    match catalog::walk(&tokens) {
+    match catalog::walk(tokens) {
         Walk::Ready { id, rest } => {
-            if let Some(msg) = removed_flag_in_options(id, &tokens) {
+            if let Some(msg) = removed_flag_in_options(id, tokens) {
                 return diag(msg);
             }
-            parse_ready(id, input, rest)
+            parse_ready(id, tail, rest)
         }
         Walk::NeedVerb { id } => diag(catalog::need_verb(id)),
         Walk::UnknownVerb { id, word } => diag(catalog::unknown_verb(id, word)),
@@ -63,8 +86,18 @@ fn removed_flag_in_options(id: CommandId, tokens: &[&str]) -> Option<String> {
     None
 }
 
+fn message_after(tail: Tail<'_>, skip: usize) -> Option<String> {
+    match tail {
+        Tail::Line(line) => raw_remainder(line, skip).map(str::to_owned),
+        Tail::Argv(tokens) => {
+            let rest = tokens.get(skip..).filter(|rest| !rest.is_empty())?;
+            Some(rest.join(" "))
+        }
+    }
+}
+
 #[allow(clippy::enum_glob_use)]
-fn parse_ready(id: CommandId, input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     use CommandId::*;
     match id {
         Help => parse_help(args),
@@ -72,6 +105,37 @@ fn parse_ready(id: CommandId, input: &str, args: &[&str]) -> ResolvedCommand {
         Balance => bare(id, args, ResolvedCommand::Balance),
         Status => bare(id, args, ResolvedCommand::Status),
         Chain => bare(id, args, ResolvedCommand::ChainHealth),
+        ChainHeight => bare(id, args, ResolvedCommand::Daemon(View::ChainHeight)),
+        ChainDifficulty => bare(id, args, ResolvedCommand::Daemon(View::ChainDifficulty)),
+        ChainStats => parse_chain_stats(args),
+        ChainAlt => bare(id, args, ResolvedCommand::Daemon(View::ChainAlt)),
+        ChainSpent => one_word(id, args, parse_chain_spent),
+        ChainCoinbaseSum => parse_header_span(CommandId::ChainCoinbaseSum, args, |from, to| {
+            View::ChainCoinbaseSum { from, to }
+        }),
+        BlockShow => one_word(id, args, parse_block_show),
+        BlockHeaderList => parse_header_list(args),
+        PeerList => parse_peer_list(args),
+        PeerStats => bare(id, args, ResolvedCommand::Daemon(View::PeerStats)),
+        PeerConnections => bare(id, args, ResolvedCommand::Daemon(View::PeerConnections)),
+        P2pStats => bare(id, args, ResolvedCommand::Daemon(View::P2pStats)),
+        SyncStatus => bare(id, args, ResolvedCommand::Daemon(View::SyncStatus)),
+        DaemonStatus => bare(id, args, ResolvedCommand::Daemon(View::DaemonStatus)),
+        TxpoolStats => bare(id, args, ResolvedCommand::Daemon(View::TxpoolStats)),
+        TxpoolList => parse_txpool_list(args),
+        TxpoolFlush => parse_txpool_flush(args),
+        BanList => bare(id, args, ResolvedCommand::Daemon(View::BanList)),
+        BanAdd => parse_ban_add(args),
+        BanRemove => one_word(id, args, |ip| {
+            parse_host(ip, View::BanRemove { ip: ip.to_owned() })
+        }),
+        BanShow => one_word(id, args, |ip| {
+            parse_host(ip, View::BanShow { ip: ip.to_owned() })
+        }),
+        OptionSet => parse_option_set(args),
+        OptionShow => parse_option_show(args),
+        DaemonStop => bare(id, args, ResolvedCommand::Daemon(View::DaemonStop)),
+        TxRelay => one_word(id, args, parse_tx_relay),
         Version => bare(id, args, ResolvedCommand::Version),
         Wallet => bare(id, args, ResolvedCommand::Wallet),
         Stake => bare(id, args, ResolvedCommand::Stake),
@@ -90,10 +154,8 @@ fn parse_ready(id: CommandId, input: &str, args: &[&str]) -> ResolvedCommand {
         Fee => parse_fee(args),
         Send => parse_send(args),
         TxList => parse_tx_list(args),
-        TxShow => one_word(id, args, |txid| ResolvedCommand::ShowTransfer {
-            txid: txid.to_string(),
-        }),
-        TxNote => parse_tx_note(input, args),
+        TxShow => parse_tx_show(id, args),
+        TxNote => parse_tx_note(tail, args),
         TxAbandon => one_word(id, args, |txid| ResolvedCommand::Abandon {
             txid: txid.to_string(),
         }),
@@ -114,30 +176,227 @@ fn parse_ready(id: CommandId, input: &str, args: &[&str]) -> ResolvedCommand {
             amount,
             yes,
         }),
-        StakeExit => parse_yes_only(id, args, |yes| ResolvedCommand::Unstake { yes }),
+        StakeRelease => parse_yes_only(id, args, |yes| ResolvedCommand::Unstake { yes }),
         StakeCollect => parse_yes_only(id, args, |yes| ResolvedCommand::CollectUnstaked { yes }),
         StakeJoin => parse_stake_join(args),
+        StakeAcknowledge => one_word(id, args, parse_stake_acknowledge),
         ShardListAll => bare(id, args, ResolvedCommand::ShardListAll),
         ShardListMine => bare(id, args, ResolvedCommand::ShardListMine),
         ShardShow => one_id(id, args, |shard_id| ResolvedCommand::ShardShow { shard_id }),
-        ShardFetch => one_id(id, args, |shard_id| ResolvedCommand::ShardFetch {
-            shard_id,
-        }),
+        ShardFetch => parse_shard_fetch(args),
         MineStart => parse_mine_start(args),
         MineStop => bare(id, args, ResolvedCommand::MineStop),
         MineStatus => bare(id, args, ResolvedCommand::MineStatus),
-        ProvePayment => parse_prove_payment(input, args),
-        ProveReserve => parse_prove_reserve(input, args),
-        CheckPayment => parse_check_payment(input, args),
-        CheckReserve => parse_check_reserve(input, args),
-        Sign => parse_sign(input),
-        Verify => parse_verify(input, args),
+        ProvePayment => parse_prove_payment(tail, args),
+        ProveReserve => parse_prove_reserve(tail, args),
+        CheckPayment => parse_check_payment(tail, args),
+        CheckReserve => parse_check_reserve(tail, args),
+        Sign => parse_sign(tail),
+        Verify => parse_verify(tail, args),
         // Subjects. `walk` asks for a verb before this match; the arm keeps
         // the match exhaustive if that ever changes.
-        Tx | Request | Uri | Shard | ShardList | Mine | Prove | Check => {
+        Tx | Request | Uri | Shard | ShardList | Mine | Prove | Check | Block | BlockHeader
+        | Peer | P2p | Sync | Daemon | Txpool | ChainCoinbase | Ban | Option => {
             diag(catalog::need_verb(id))
         }
     }
+}
+
+/// 64 hexadecimal characters, [`shekyl_options::Kind::Hash`] (IG-Q23).
+fn parse_hash(word: &str) -> Result<String, String> {
+    match shekyl_options::Kind::Hash.parse_text(word) {
+        Ok(shekyl_options::Value::Hash(hash)) => Ok(hash),
+        _ => Err(format!("{word:?} is not a hash")),
+    }
+}
+
+/// A height or a count: a `u64`, with no sign.
+fn parse_u64(name: &str, word: &str) -> Result<u64, String> {
+    word.parse::<u64>()
+        .map_err(|_| format!("{name} takes an integer"))
+}
+
+fn parse_chain_stats(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::ChainStats, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::ChainStats));
+    }
+    let Some(value) = split.value("--last") else {
+        return diag(usage(CommandId::ChainStats));
+    };
+    match parse_u64("--last", value) {
+        Ok(last) => ResolvedCommand::Daemon(View::ChainStats { last }),
+        Err(message) => diag(message),
+    }
+}
+
+fn parse_chain_spent(word: &str) -> ResolvedCommand {
+    match parse_hash(word) {
+        Ok(hash) => ResolvedCommand::Daemon(View::ChainSpent { hash }),
+        Err(_) => diag(format!("{word:?} is not a hash")),
+    }
+}
+
+fn parse_block_show(word: &str) -> ResolvedCommand {
+    if word.len() == 64 {
+        return match parse_hash(word) {
+            Ok(hash) => ResolvedCommand::Daemon(View::BlockShow(BlockRef::Hash(hash))),
+            Err(_) => diag(format!("{word:?} is not a block hash or a height")),
+        };
+    }
+    match parse_u64("block show", word) {
+        Ok(height) => ResolvedCommand::Daemon(View::BlockShow(BlockRef::Height(height))),
+        Err(_) => diag(format!("{word:?} is not a block hash or a height")),
+    }
+}
+
+fn parse_header_list(args: &[&str]) -> ResolvedCommand {
+    parse_header_span(CommandId::BlockHeaderList, args, |from, to| {
+        View::BlockHeaderList { from, to }
+    })
+}
+
+fn parse_header_span(
+    id: CommandId,
+    args: &[&str],
+    build: impl FnOnce(u64, u64) -> View,
+) -> ResolvedCommand {
+    let split = match flags(id, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(id));
+    }
+    let (Some(from), Some(to)) = (split.value("--from"), split.value("--to")) else {
+        return diag(usage(id));
+    };
+    let from = match parse_u64("--from", from) {
+        Ok(height) => height,
+        Err(message) => return diag(message),
+    };
+    let to = match parse_u64("--to", to) {
+        Ok(height) => height,
+        Err(message) => return diag(message),
+    };
+    if from > to {
+        return diag("--from is after --to".to_owned());
+    }
+    ResolvedCommand::Daemon(build(from, to))
+}
+
+fn parse_tx_relay(word: &str) -> ResolvedCommand {
+    match parse_hash(word) {
+        Ok(hash) => ResolvedCommand::Daemon(View::TxRelay { hash }),
+        Err(_) => diag(format!("{word:?} is not a hash")),
+    }
+}
+
+fn parse_txpool_list(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::TxpoolList, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::TxpoolList));
+    }
+    ResolvedCommand::Daemon(View::TxpoolList {
+        short: split.has("--short"),
+    })
+}
+
+fn parse_txpool_flush(args: &[&str]) -> ResolvedCommand {
+    match args {
+        [] => ResolvedCommand::Daemon(View::TxpoolFlush { id: None }),
+        [word] => match parse_hash(word) {
+            Ok(hash) => ResolvedCommand::Daemon(View::TxpoolFlush { id: Some(hash) }),
+            Err(_) => diag(format!("{word:?} is not a hash")),
+        },
+        _ => diag(usage(CommandId::TxpoolFlush)),
+    }
+}
+
+fn parse_host(word: &str, view: View) -> ResolvedCommand {
+    if host_token(word) {
+        ResolvedCommand::Daemon(view)
+    } else {
+        diag(format!("{word:?} is not an IP address"))
+    }
+}
+
+fn host_token(word: &str) -> bool {
+    word.parse::<std::net::IpAddr>().is_ok()
+}
+
+fn parse_ban_add(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::BanAdd, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    let [ip] = split.positional.as_slice() else {
+        return diag(usage(CommandId::BanAdd));
+    };
+    if !host_token(ip) {
+        return diag(format!("{ip:?} is not an IP address"));
+    }
+    let duration = match split.value("--duration") {
+        None => None,
+        Some(value) => match crate::resolve::parse_ig6_duration_secs(value) {
+            Ok(seconds) => Some(seconds),
+            Err(message) => return diag(message),
+        },
+    };
+    ResolvedCommand::Daemon(View::BanAdd {
+        ip: (*ip).to_owned(),
+        duration,
+    })
+}
+
+fn parse_option_set(args: &[&str]) -> ResolvedCommand {
+    match args {
+        [name, value] => ResolvedCommand::Daemon(View::OptionSet {
+            name: (*name).to_owned(),
+            value: (*value).to_owned(),
+        }),
+        _ => diag(usage(CommandId::OptionSet)),
+    }
+}
+
+fn parse_option_show(args: &[&str]) -> ResolvedCommand {
+    match args {
+        [] => ResolvedCommand::Daemon(View::OptionShow { name: None }),
+        [name] => ResolvedCommand::Daemon(View::OptionShow {
+            name: Some((*name).to_owned()),
+        }),
+        _ => diag(usage(CommandId::OptionShow)),
+    }
+}
+
+fn parse_peer_list(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::PeerList, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::PeerList));
+    }
+    let mut white = split.has("--white");
+    let mut gray = split.has("--gray");
+    if !white && !gray {
+        white = true;
+        gray = true;
+    }
+    let max = match split.value("--max") {
+        Some(value) => match parse_u64("--max", value) {
+            Ok(max) => Some(max),
+            Err(message) => return diag(message),
+        },
+        None => None,
+    };
+    ResolvedCommand::Daemon(View::PeerList { white, gray, max })
 }
 
 fn bare(id: CommandId, args: &[&str], command: ResolvedCommand) -> ResolvedCommand {
@@ -222,6 +481,48 @@ fn parse_address(args: &[&str]) -> ResolvedCommand {
     ResolvedCommand::Address { full, out }
 }
 
+fn parse_shard_fetch(args: &[&str]) -> ResolvedCommand {
+    let id = CommandId::ShardFetch;
+    let split = match flags(id, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    let shard_id = match split.positional.as_slice() {
+        [raw] => match raw.parse::<u64>() {
+            Ok(shard_id) => shard_id,
+            Err(_) => return diag(format!("{}: {raw:?} is not a shard id", usage(id))),
+        },
+        _ => return diag(usage(id)),
+    };
+    let png = split.value("--png").map(str::to_owned);
+    // The edge length is judged here, before the command runs: a size the
+    // renderer would refuse must not cost the daemon a fetch first.
+    let size = match split.value("--size") {
+        None => None,
+        Some(raw) => match raw.parse::<u32>() {
+            Ok(size) => {
+                if let Err(e) = shekyl_shard_visual::check_render_size(size) {
+                    return diag(format!("shard fetch: --size {e}"));
+                }
+                Some(size)
+            }
+            Err(_) => {
+                return diag(format!(
+                    "shard fetch: --size expects a pixel edge length, got {raw:?}"
+                ))
+            }
+        },
+    };
+    if size.is_some() && png.is_none() {
+        return diag("shard fetch: --size needs --png <path>; nothing is drawn without it");
+    }
+    ResolvedCommand::ShardFetch {
+        shard_id,
+        png,
+        size,
+    }
+}
+
 fn parse_fee(args: &[&str]) -> ResolvedCommand {
     let split = match flags(CommandId::Fee, args) {
         Ok(split) => split,
@@ -280,6 +581,20 @@ fn parse_send(args: &[&str]) -> ResolvedCommand {
     }
 }
 
+fn parse_tx_show(id: CommandId, args: &[&str]) -> ResolvedCommand {
+    let split = match flags(id, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    match split.positional.as_slice() {
+        [txid] => ResolvedCommand::ShowTransfer {
+            txid: (*txid).to_string(),
+            body: split.has("--body"),
+        },
+        _ => diag(usage(id)),
+    }
+}
+
 fn parse_tx_list(args: &[&str]) -> ResolvedCommand {
     let split = match flags(CommandId::TxList, args) {
         Ok(split) => split,
@@ -304,15 +619,15 @@ fn parse_tx_list(args: &[&str]) -> ResolvedCommand {
     }
 }
 
-fn parse_tx_note(input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_tx_note(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     match args {
         [txid] => ResolvedCommand::GetTxNote {
             txid: (*txid).to_string(),
         },
-        [txid, ..] => match raw_remainder(input, 3) {
+        [txid, ..] => match message_after(tail, 3) {
             Some(note) => ResolvedCommand::SetTxNote {
                 txid: (*txid).to_string(),
-                note: note.to_string(),
+                note,
             },
             None => diag(usage(CommandId::TxNote)),
         },
@@ -327,13 +642,13 @@ fn parse_request_new(args: &[&str]) -> ResolvedCommand {
             Some(ts) => Some(ts),
             None => {
                 return diag(format!(
-                    "request new: --expiry expects unix seconds or a duration (1h, 30m, 7d), got {raw:?}"
+                    "request new: --expiry expects unix seconds or a duration (1h, 5min, 7d), got {raw:?}"
                 ));
             }
         },
         FlagValue::Invalid(raw) => {
             return diag(format!(
-                "request new: --expiry expects unix seconds or a duration (1h, 30m, 7d), got {raw:?}"
+                "request new: --expiry expects unix seconds or a duration (1h, 5min, 7d), got {raw:?}"
             ));
         }
     };
@@ -463,6 +778,23 @@ fn parse_stake_join(args: &[&str]) -> ResolvedCommand {
     ResolvedCommand::StakeJoin { shard_ids: ids }
 }
 
+/// The word a person types for each kind of ending, as `stake status`
+/// renders it, onto the wire kind. The user never sees `drain` or `exit`.
+fn parse_stake_acknowledge(word: &str) -> ResolvedCommand {
+    let kind = match word {
+        "stake" => "stake",
+        "claim" => "claim",
+        "return" => "drain",
+        "release" => "exit",
+        other => {
+            return diag(format!(
+                "stake acknowledge: {other:?} is not one of stake, claim, return, release"
+            ))
+        }
+    };
+    ResolvedCommand::AcknowledgeStakingOutcome { kind }
+}
+
 fn parse_mine_start(args: &[&str]) -> ResolvedCommand {
     let threads = match args {
         [] | ["auto"] => None,
@@ -479,7 +811,7 @@ fn parse_mine_start(args: &[&str]) -> ResolvedCommand {
     ResolvedCommand::MineStart { threads }
 }
 
-fn parse_prove_payment(input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_prove_payment(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     if let Some(message) = refuse_flag("prove", args) {
         return diag(message);
     }
@@ -487,14 +819,14 @@ fn parse_prove_payment(input: &str, args: &[&str]) -> ResolvedCommand {
         ResolvedCommand::GetTxProof {
             txid: args[0].to_string(),
             address: args[1].to_string(),
-            message: raw_remainder(input, 4).map(str::to_owned),
+            message: message_after(tail, 4),
         }
     } else {
         diag(usage(CommandId::ProvePayment))
     }
 }
 
-fn parse_prove_reserve(input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_prove_reserve(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     if let Some(message) = refuse_flag("prove", args) {
         return diag(message);
     }
@@ -502,11 +834,11 @@ fn parse_prove_reserve(input: &str, args: &[&str]) -> ResolvedCommand {
         Some(first) => match crate::commands::parse_amount(first) {
             Some(amount) => ResolvedCommand::GetReserveProof {
                 amount: Some(amount),
-                message: raw_remainder(input, 3).map(str::to_owned),
+                message: message_after(tail, 3),
             },
             None => ResolvedCommand::GetReserveProof {
                 amount: None,
-                message: raw_remainder(input, 2).map(str::to_owned),
+                message: message_after(tail, 2),
             },
         },
         None => ResolvedCommand::GetReserveProof {
@@ -516,7 +848,7 @@ fn parse_prove_reserve(input: &str, args: &[&str]) -> ResolvedCommand {
     }
 }
 
-fn parse_check_payment(input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_check_payment(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     if let Some(message) = refuse_flag("check", args) {
         return diag(message);
     }
@@ -525,14 +857,14 @@ fn parse_check_payment(input: &str, args: &[&str]) -> ResolvedCommand {
             txid: args[0].to_string(),
             address: args[1].to_string(),
             proof: args[2].to_string(),
-            message: raw_remainder(input, 5).map(str::to_owned),
+            message: message_after(tail, 5),
         }
     } else {
         diag(usage(CommandId::CheckPayment))
     }
 }
 
-fn parse_check_reserve(input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_check_reserve(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     if let Some(message) = refuse_flag("check", args) {
         return diag(message);
     }
@@ -540,7 +872,7 @@ fn parse_check_reserve(input: &str, args: &[&str]) -> ResolvedCommand {
         ResolvedCommand::CheckReserveProof {
             address: args[0].to_string(),
             proof: args[1].to_string(),
-            message: raw_remainder(input, 4).map(str::to_owned),
+            message: message_after(tail, 4),
         }
     } else {
         diag(usage(CommandId::CheckReserve))
@@ -555,24 +887,22 @@ fn refuse_flag(verb: &str, args: &[&str]) -> Option<String> {
     })
 }
 
-fn parse_sign(input: &str) -> ResolvedCommand {
-    match raw_remainder(input, 1) {
-        Some(message) => ResolvedCommand::Sign {
-            message: message.to_string(),
-        },
+fn parse_sign(tail: Tail<'_>) -> ResolvedCommand {
+    match message_after(tail, 1) {
+        Some(message) => ResolvedCommand::Sign { message },
         None => diag(usage(CommandId::Sign)),
     }
 }
 
-fn parse_verify(input: &str, args: &[&str]) -> ResolvedCommand {
+fn parse_verify(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
     if args.len() < 3 {
         return diag(usage(CommandId::Verify));
     }
-    match raw_remainder(input, 3) {
+    match message_after(tail, 3) {
         Some(message) => ResolvedCommand::Verify {
             address: args[0].to_string(),
             signature: args[1].to_string(),
-            message: message.to_string(),
+            message,
         },
         None => diag(usage(CommandId::Verify)),
     }
@@ -581,6 +911,56 @@ fn parse_verify(input: &str, args: &[&str]) -> ResolvedCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tx_show_takes_the_id_and_an_optional_body() {
+        match parse("tx show abcdef --body") {
+            ResolvedCommand::ShowTransfer { txid, body } => {
+                assert_eq!(txid, "abcdef");
+                assert!(body);
+            }
+            other => panic!("expected tx show, got {other:?}"),
+        }
+        match parse("tx show --body abcdef") {
+            ResolvedCommand::ShowTransfer { txid, body } => {
+                assert_eq!(txid, "abcdef");
+                assert!(body);
+            }
+            other => panic!("expected the flag before the id, got {other:?}"),
+        }
+        match parse("tx show abcdef") {
+            ResolvedCommand::ShowTransfer { body, .. } => assert!(!body),
+            other => panic!("expected tx show without --body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_daemon_word_keeps_the_renderers_path_and_chain_alone_stays_the_wallet() {
+        match parse("chain") {
+            ResolvedCommand::ChainHealth => {}
+            other => panic!("bare chain is the wallet's report, got {other:?}"),
+        }
+        match parse("chain height") {
+            ResolvedCommand::Daemon(View::ChainHeight) => {}
+            other => panic!("expected chain height, got {other:?}"),
+        }
+        match parse("block header list --to 3 --from 1") {
+            ResolvedCommand::Daemon(View::BlockHeaderList { from: 1, to: 3 }) => {}
+            other => panic!("expected the header list, got {other:?}"),
+        }
+        match parse("peer list --max 4") {
+            ResolvedCommand::Daemon(View::PeerList {
+                white: true,
+                gray: true,
+                max: Some(4),
+            }) => {}
+            other => panic!("expected peer list, got {other:?}"),
+        }
+        match parse("chain stats") {
+            ResolvedCommand::Diagnostic { .. } => {}
+            other => panic!("chain stats needs --last, got {other:?}"),
+        }
+    }
 
     #[test]
     fn transfer_retires_to_send() {
@@ -621,6 +1001,35 @@ mod tests {
         ));
     }
 
+    /// The person types the words `stake status` shows; the wire kind is
+    /// the server's. A slot or an unknown word is refused at parse.
+    #[test]
+    fn stake_acknowledge_maps_the_typed_word_to_the_wire_kind() {
+        for (word, kind) in [
+            ("stake", "stake"),
+            ("claim", "claim"),
+            ("return", "drain"),
+            ("release", "exit"),
+        ] {
+            match parse(&format!("stake acknowledge {word}")) {
+                ResolvedCommand::AcknowledgeStakingOutcome { kind: got } => {
+                    assert_eq!(got, kind, "{word}")
+                }
+                other => panic!("{word}: {other:?}"),
+            }
+        }
+        for line in [
+            "stake acknowledge",
+            "stake acknowledge drain",
+            "stake acknowledge stake 0",
+        ] {
+            assert!(
+                matches!(parse(line), ResolvedCommand::Diagnostic { .. }),
+                "{line}"
+            );
+        }
+    }
+
     #[test]
     fn stake_bare_is_a_read_and_join_names_ids() {
         assert!(matches!(parse("stake"), ResolvedCommand::Stake));
@@ -638,6 +1047,22 @@ mod tests {
             parse("stake join 4 --yes"),
             ResolvedCommand::Diagnostic { .. }
         ));
+        assert!(matches!(
+            parse("stake release --yes"),
+            ResolvedCommand::Unstake { yes: true }
+        ));
+        match parse("stake exit") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("stake release"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse("unstake") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("stake release"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
         match parse("stake foundation") {
             ResolvedCommand::Diagnostic { message } => {
                 assert!(message.contains("startup flag"), "{message}");
@@ -662,6 +1087,62 @@ mod tests {
         assert!(matches!(
             parse("shard list mine"),
             ResolvedCommand::ShardListMine
+        ));
+    }
+
+    #[test]
+    fn shard_fetch_takes_an_id_and_draws_only_when_asked() {
+        assert!(matches!(
+            parse("shard fetch 7"),
+            ResolvedCommand::ShardFetch {
+                shard_id: 7,
+                png: None,
+                size: None,
+            }
+        ));
+        match parse("shard fetch 7 --png out.png --size 256") {
+            ResolvedCommand::ShardFetch {
+                shard_id,
+                png,
+                size,
+            } => {
+                assert_eq!(shard_id, 7);
+                assert_eq!(png.as_deref(), Some("out.png"));
+                assert_eq!(size, Some(256));
+            }
+            other => panic!("{other:?}"),
+        }
+        // A size without a file to draw into is a contradiction, not a
+        // default.
+        match parse("shard fetch 7 --size 256") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("--png"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+        // A size the renderer would refuse is refused here, before the
+        // daemon is asked to fetch anything.
+        for raw in ["0", "4097"] {
+            match parse(&format!("shard fetch 7 --png out.png --size {raw}")) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(message.contains("invalid render size"), "{message}");
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        match parse("shard fetch seven") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("not a shard id"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            parse("shard fetch 7 --png out.png --size big"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+        assert!(matches!(
+            parse("shard fetch"),
+            ResolvedCommand::Diagnostic { .. }
         ));
     }
 
@@ -812,6 +1293,25 @@ mod tests {
             ResolvedCommand::Diagnostic { message } => {
                 assert!(message.contains("removed flag"), "{message}");
             }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn one_shot_words_keep_a_space_the_shell_quoted() {
+        match parse_argv(&[
+            "address".to_owned(),
+            "--out".to_owned(),
+            "/tmp/my address.txt".to_owned(),
+        ]) {
+            ResolvedCommand::Address { full, out } => {
+                assert!(!full);
+                assert_eq!(out.as_deref(), Some("/tmp/my address.txt"));
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse_argv(&["sign".to_owned(), "hello  world".to_owned()]) {
+            ResolvedCommand::Sign { message } => assert_eq!(message, "hello  world"),
             other => panic!("{other:?}"),
         }
     }

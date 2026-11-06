@@ -1,0 +1,77 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The candidate filter (dialer brief, "The candidate filter").
+//!
+//! Before a draw, an address is a candidate or it is skipped. Every kept
+//! row of the brief's table is one variant of [`Skip`]. Three rows are not
+//! here because they are not dial-time checks: address validity is the
+//! peer lists' rule at the door; a ban bars every seat it covers on the
+//! lists when its event arrives, so a barred seat is never drawn
+//! ([`shekyl_peerlist::Peerlist::ban`], Rick 2026-10-31); and "one
+//! candidate per host" is how the lists draw
+//! ([`shekyl_peerlist::Peerlist::draw_gray_where`]).
+//!
+//! There is no subnet grouping and no last-seen weighting (ruled
+//! 2026-10-11). The draw over the candidates is uniform.
+
+use std::collections::BTreeSet;
+
+use shekyl_peerlist::{Host, NetworkAddress};
+
+use crate::attempts::Attempts;
+
+/// Why an address is not a dial candidate at this wake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Skip {
+    /// It is this node's own address. A dial to ourselves is not a peer.
+    OwnAddress,
+    /// A session to this exact address already exists, in either
+    /// direction.
+    InUse,
+    /// This node already has an outbound session, or a pending attempt,
+    /// to this host on another port. One outbound session per host.
+    HostHasOutbound,
+    /// It is a pending attempt or a kept session of the dialer's own.
+    Pending,
+}
+
+/// What the filter reads, for one connector at one wake.
+pub struct CandidateFilter<'a> {
+    /// This node's own dialable addresses on the connector.
+    pub own: &'a [NetworkAddress],
+    /// The address of every live session on the connector, inbound and
+    /// outbound.
+    pub sessions: &'a BTreeSet<NetworkAddress>,
+    /// The host of every outbound session on the connector.
+    pub outbound_hosts: &'a BTreeSet<Host>,
+    /// The dialer's pending attempts and kept sessions.
+    pub attempts: &'a Attempts,
+}
+
+impl CandidateFilter<'_> {
+    /// `Ok` when `address` may be drawn, or the first reason it may not.
+    pub fn check(&self, address: &NetworkAddress) -> Result<(), Skip> {
+        if self.own.contains(address) {
+            return Err(Skip::OwnAddress);
+        }
+        if self.attempts.holds(address) {
+            return Err(Skip::Pending);
+        }
+        if self.sessions.contains(address) {
+            return Err(Skip::InUse);
+        }
+        let host = address.host();
+        if self.outbound_hosts.contains(&host) || self.attempts.holds_host(&host) {
+            return Err(Skip::HostHasOutbound);
+        }
+        Ok(())
+    }
+
+    /// Whether `address` may be drawn.
+    pub fn admits(&self, address: &NetworkAddress) -> bool {
+        self.check(address).is_ok()
+    }
+}

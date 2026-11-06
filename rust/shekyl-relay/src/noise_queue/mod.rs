@@ -10,7 +10,7 @@
 //! the Rust port of C++'s `send_noise` / `queue_covert_notify` /
 //! `clear_channel`.
 //!
-//! # CV-4: why this is its own module and not a field of [`crate::Zone`]
+//! # CV-4: why this is its own module and not a field of [`crate::Relay`]
 //!
 //! **The noise schedule must carry no information about whether real traffic
 //! is pending** (§20.2). A cadence that reacts to queue depth is a timing
@@ -19,7 +19,7 @@
 //!
 //! Before the cutover that separation was enforced by an accident of the
 //! C++/Rust split — the queue lived in `levin_notify.cpp` and Rust had no
-//! handle to it. **That was never the mechanism**, only friction: `Zone`
+//! handle to it. **That was never the mechanism**, only friction: `Relay`
 //! already owns the *fluff* queue, so the rule is narrower — *the noise
 //! scheduler does not see the noise queue* — and once both halves are Rust it
 //! has to hold in types. `cv4_the_cadence_does_not_depend_on_queue_depth` is
@@ -402,7 +402,7 @@ impl NoiseQueues {
         // CV-1's cap, enforced where work is ACCEPTED rather than only where a
         // zone is CONSTRUCTED.
         //
-        // `Zone::new` checks that an epoch affords `MAX_FRAGMENTS` windows, so
+        // `Relay::new` checks that an epoch affords `MAX_FRAGMENTS` windows, so
         // a configuration is validated against that many worst-case sends. But
         // nothing stopped a longer message being enqueued into it: the length
         // check above admits any whole multiple of the window, so a six-window

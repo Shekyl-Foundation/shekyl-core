@@ -42,7 +42,8 @@ use std::fmt;
 use serde_json::{json, Value};
 use shekyl_archival_retention::{
     settlement_epoch_at_height, BadInterval, ClaimantBondRecord, CreditPair, EmissionEpochSource,
-    EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, ShardSet,
+    EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
+    ShardClose, ShardCloseWire, ShardSet,
 };
 use shekyl_rpc_client::{Rpc, RpcError};
 
@@ -80,7 +81,7 @@ pub enum EmissionSourceError {
 #[derive(Debug, Clone)]
 pub struct BondRow {
     pub join_settlement_epoch: u64,
-    pub is_foundation_complete_tree: bool,
+    pub is_support_complete_tree: bool,
     pub bad_intervals: Vec<BadInterval>,
 }
 
@@ -292,7 +293,7 @@ impl EpochSnapshot {
             .iter()
             .map(|b| EpochCloseBond {
                 join_settlement_epoch: b.join_settlement_epoch,
-                is_foundation_complete_tree: b.is_foundation_complete_tree,
+                is_support_complete_tree: b.is_support_complete_tree,
                 bad_intervals: &b.bad_intervals,
             })
             .collect()
@@ -396,7 +397,7 @@ fn decode_bond_row(v: &Value) -> Result<BondRow, EmissionSourceError> {
         .collect();
     Ok(BondRow {
         join_settlement_epoch: req_u64(v, "join_settlement_epoch")?,
-        is_foundation_complete_tree: req_bool(v, "is_foundation_complete_tree")?,
+        is_support_complete_tree: req_bool(v, "is_support_complete_tree")?,
         bad_intervals,
     })
 }
@@ -409,10 +410,15 @@ fn decode_epoch(v: &Value) -> Result<EpochSnapshot, EmissionSourceError> {
     let shards = opt_array(v, "shards")?
         .iter()
         .map(|s| {
+            // The daemon RPC carries the C++ LMDB validator's segment-keyed
+            // pair (CEN-L10). The JSON keys are its; [`ShardClose::from_wire`]
+            // is the fold.
             Ok(EpochCloseShard {
                 shard_id: req_u64(s, "shard_id")?,
-                freeze_height: req_u64(s, "freeze_height")?,
-                has_segment: req_bool(s, "has_segment")?,
+                close: ShardClose::from_wire(ShardCloseWire {
+                    has_segment: req_bool(s, "has_segment")?,
+                    freeze_height: req_u64(s, "freeze_height")?,
+                }),
             })
         })
         .collect::<Result<Vec<_>, EmissionSourceError>>()?;
@@ -684,7 +690,6 @@ impl VouchedClaimSource {
     pub(crate) fn for_test(source: EmissionClaimSource) -> Self {
         let facts = crate::engine::daemon::synced_chain_facts::SyncedChainFacts::new(
             source.chain_height,
-            0,
             true,
             shekyl_types::BlockHash::from_bytes(crate::engine::test_support::test_block_hash_at(
                 source.chain_height.to_raw().saturating_sub(1),

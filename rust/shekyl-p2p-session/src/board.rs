@@ -1,0 +1,227 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The rows a reader may see.
+//!
+//! The session layer is the only writer. It publishes a new [`Board`] when
+//! a row arrives, finishes its handshake, or closes. A reader holds one
+//! board. A later publish does not change that board.
+//!
+//! The live table is a hash map, keyed by admission id. Publish copies
+//! the open rows and sorts that copy. The sort is the admission order a
+//! reader sees. The hash map is the lookup.
+//!
+//! This is not the session. A reader that needs a fact asks the board.
+//! It does not borrow the row the session task is writing. Support flags
+//! and the pull relationship are not on the board: a blank field here
+//! would be a second context. A peer's claims are not on it either: the
+//! sync payload of a handshake or a timed sync goes to the sync owner,
+//! which judges it (brief §7.2, F4); the board carries what this node
+//! observed, not what the peer asserted.
+//!
+//! Republishing copies the slice. An accept flood against a large inbound
+//! cap is O(N) per accept, so O(N²) across the flood. The readers' guarantee
+//! is that cost. D5's thread-budget flood leg is what measures it; that
+//! measurement is the reopen, not a reason to publish a mutable row.
+
+use std::sync::Arc;
+
+use shekyl_transport_layer::{ConnectorId, Direction, SocketId};
+
+use crate::endpoint::Endpoint;
+
+/// One session on a [`Board`].
+///
+/// The endpoint is the address, the connector, and the direction. Those
+/// three are one fact, observed when the row was admitted, and they do
+/// not change. `established` is the handshake, and it is a different fact:
+/// a dial occupies its direction before the handshake finishes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Row {
+    id: SocketId,
+    endpoint: Endpoint,
+    established: bool,
+    /// Unix seconds, taken when the row was admitted.
+    started_unix: u64,
+    /// Monotonic milliseconds at admission, on the byte-stamp clock.
+    /// The stall check uses this until a byte arrives. It does not change,
+    /// so a later publish copies the same value.
+    started_mono: u64,
+}
+
+impl Row {
+    /// The admission id.
+    #[must_use]
+    pub const fn id(self) -> SocketId {
+        self.id
+    }
+
+    /// The endpoint observed when the row was admitted.
+    #[must_use]
+    pub const fn endpoint(self) -> Endpoint {
+        self.endpoint
+    }
+
+    /// The connector that carried this session.
+    #[must_use]
+    pub const fn connector(self) -> ConnectorId {
+        self.endpoint.connector()
+    }
+
+    /// Accepted or dialed.
+    #[must_use]
+    pub const fn direction(self) -> Direction {
+        self.endpoint.direction()
+    }
+
+    /// The Levin handshake has finished.
+    #[must_use]
+    pub const fn established(self) -> bool {
+        self.established
+    }
+
+    /// Unix seconds at admission.
+    #[must_use]
+    pub const fn started_unix(self) -> u64 {
+        self.started_unix
+    }
+
+    /// Monotonic milliseconds at admission, on the byte-stamp clock.
+    #[must_use]
+    pub const fn started_mono(self) -> u64 {
+        self.started_mono
+    }
+
+    pub(crate) const fn new(
+        id: SocketId,
+        endpoint: Endpoint,
+        established: bool,
+        started_unix: u64,
+        started_mono: u64,
+    ) -> Self {
+        Self {
+            id,
+            endpoint,
+            established,
+            started_unix,
+            started_mono,
+        }
+    }
+}
+
+/// Rows at one moment, ordered by admission id.
+///
+/// Cloning clones the `Arc`. The slice does not change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Board {
+    rows: Arc<[Row]>,
+}
+
+impl Board {
+    /// Sort `rows` by admission id. The layer's table is a hash map, so the
+    /// order is applied here, on the copy a reader holds.
+    pub(crate) fn from_rows(mut rows: Vec<Row>) -> Self {
+        rows.sort_by_key(|row| row.id.get());
+        debug_assert!(rows.is_sorted_by_key(|row| row.id.get()));
+        Self {
+            rows: Arc::from(rows),
+        }
+    }
+
+    /// No rows.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            rows: Arc::from([]),
+        }
+    }
+
+    /// Every open row, in admission-id order.
+    #[must_use]
+    pub fn rows(&self) -> &[Row] {
+        &self.rows
+    }
+
+    /// The row with this id, if it was on this board.
+    #[must_use]
+    pub fn get(&self, id: SocketId) -> Option<&Row> {
+        self.rows
+            .binary_search_by_key(&id.get(), |row| row.id.get())
+            .ok()
+            .map(|index| &self.rows[index])
+    }
+
+    /// How many rows this board carries.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Whether this board carries no row.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// Rows of this connector and direction, handshake or not.
+    ///
+    /// The handshake flag is not part of this count. A dial in flight
+    /// still occupies an outbound slot, so a connector's dial cap reads
+    /// [`Direction::Outbound`] for that connector. `established` is a
+    /// separate fact on the row. A count of established rows would let
+    /// the node dial past the cap while handshakes are outstanding.
+    #[must_use]
+    pub fn count(&self, connector: ConnectorId, direction: Direction) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| row.connector() == connector && row.direction() == direction)
+            .count()
+    }
+
+    /// Rows of this connector and direction whose handshake has finished.
+    ///
+    /// This is a session. [`Self::count`] includes a handshake still open,
+    /// which a dial cap needs and a quiet line does not. The probe of this
+    /// node's own onion is dropped in that handshake, so it occupies
+    /// [`Self::count`] and not a session (`TOR_SUPERVISOR.md` §4.5).
+    #[must_use]
+    pub fn established_sessions(&self, connector: ConnectorId, direction: Direction) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| {
+                row.established() && row.connector() == connector && row.direction() == direction
+            })
+            .count()
+    }
+
+    /// Rows in `direction` that have finished the handshake, on every
+    /// connector.
+    ///
+    /// The count of this node's sessions, as it reports them: a row before
+    /// its handshake cannot relay, and an inbound one costs whoever opened
+    /// it almost nothing, so a count that included them could be inflated
+    /// from outside. It is not a dial cap; [`Self::count`] is, and reads the
+    /// rows this one leaves out.
+    #[must_use]
+    pub fn established_count(&self, direction: Direction) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| row.established() && row.direction() == direction)
+            .count()
+    }
+
+    /// Rows in `direction` on every connector, handshake or not.
+    ///
+    /// This is [`Self::count`] summed across [`ConnectorId::ALL`]. A
+    /// connector that is not in that list is not a row this board can hold.
+    #[must_use]
+    pub fn direction_count(&self, direction: Direction) -> usize {
+        ConnectorId::ALL
+            .iter()
+            .copied()
+            .map(|connector| self.count(connector, direction))
+            .sum()
+    }
+}

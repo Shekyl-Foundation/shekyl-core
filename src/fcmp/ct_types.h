@@ -303,8 +303,8 @@ namespace ct {
         // RF-D1: the PRUNED half of each serve-credit pass record, one per
         // serve-credit vin in vin order, each an opaque blob (branch layers +
         // ML-DSA leg) whose only parser is shekyl-archival-retention::wire.
-        // Inside the prunable region -- never appended after it -- so both
-        // paths of calculate_transaction_prunable_hash see it by construction
+        // Inside the prunable region -- never appended after it -- so the
+        // region stays exactly what serialize_ctsig_prunable writes
         // (tests/unit_tests/tx_prunable_region_sole_occupant.cpp).
         std::vector<std::vector<uint8_t>> serve_credit_pruned;
 
@@ -327,8 +327,8 @@ namespace ct {
         // pseudo-out (blockchain.cpp / tx_verification_utils.cpp pin
         // `pseudoOuts.size() == num_spend`); for a pure spend the two counts
         // coincide. `serve_credit_inputs` likewise sizes the pruned pass-record
-        // array (RF-D1). Callers compute both subsets (cryptonote_basic.h
-        // transaction serializer, tx_pqc_verify.cpp, get_transaction_prunable_hash).
+        // array (RF-D1). The caller computes both subsets (cryptonote_basic.h
+        // transaction serializer).
         template<bool W, template <bool> class Archive>
         bool serialize_ctsig_prunable(Archive<W> &ar, uint8_t type, size_t inputs, size_t serve_credit_inputs, size_t outputs)
         {

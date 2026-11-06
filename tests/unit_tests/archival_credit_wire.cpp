@@ -42,7 +42,6 @@
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
-#include "blockchain_utilities/bootstrap_serialization.h"
 #include "serialization/binary_archive.h"
 #include "serialization/binary_utils.h"
 #include "serialization/string.h"
@@ -123,6 +122,10 @@ void raw_field(std::vector<uint8_t>& extra, uint8_t tag, const std::string& payl
   extra.insert(extra.end(), payload.begin(), payload.end());
 }
 
+// One kept attestation header's length (shekyl-archival-retention's
+// `ATTESTATION_HEADER_LEN`): a payload size for the codec reads below.
+constexpr std::size_t kRecordBytes = 49;
+
 void pubkey_field(std::vector<uint8_t>& extra, uint8_t fill)
 {
   extra.push_back(SHEKYL_TX_EXTRA_TAG_PUBKEY);
@@ -136,11 +139,12 @@ void pubkey_field(std::vector<uint8_t>& extra, uint8_t fill)
 // it is the amendment its producer will bring).
 TEST(archival_credit_wire, tx_extra_attestation_reads_back_through_the_codec)
 {
-  // 3 canonical headers (ARCHIVAL_ATTESTATION_HEADER_BYTES each), distinct per record.
+  // 3 header-sized records, distinct per record. The codec reads the field
+  // by tag and does not parse the records.
   std::string blob;
   for (uint8_t i = 0; i < 3; ++i)
-    blob.append(config::ARCHIVAL_ATTESTATION_HEADER_BYTES, static_cast<char>(0x10 + i));
-  ASSERT_EQ(blob.size(), 3 * config::ARCHIVAL_ATTESTATION_HEADER_BYTES);
+    blob.append(kRecordBytes, static_cast<char>(0x10 + i));
+  ASSERT_EQ(blob.size(), 3 * kRecordBytes);
 
   // pubkey then attestation, and attestation then pubkey: the read is by tag.
   for (bool attestation_first : {false, true})
@@ -182,7 +186,7 @@ TEST(archival_credit_wire, attestation_reader_splits_absent_from_unreadable)
 
   // An attestation tag followed by an unparseable tail -> false: the tag's bytes must NOT be
   // returned as if the extra were well-formed.
-  std::string records(config::ARCHIVAL_ATTESTATION_HEADER_BYTES, '\x10');
+  std::string records(kRecordBytes, '\x10');
   std::vector<uint8_t> malformed;
   raw_field(malformed, SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, records);
   malformed.push_back(0xFE);  // truncated/unknown trailing field -> the extra does not parse
@@ -191,93 +195,6 @@ TEST(archival_credit_wire, attestation_reader_splits_absent_from_unreadable)
   ASSERT_TRUE(blob.empty());
   ASSERT_EQ(SHEKYL_TX_EXTRA_MALFORMED, shekyl_tx_extra_field(malformed.data(), malformed.size(),
       SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, 0, &field.buf));
-}
-
-// The header length matches the Rust canonical record; the record cap is pinned.
-TEST(archival_credit_wire, attestation_cap_constants)
-{
-  static_assert(config::ARCHIVAL_ATTESTATION_HEADER_BYTES == 49,
-                "must match shekyl-archival-retention ATTESTATION_HEADER_LEN");
-  ASSERT_EQ(config::ARCHIVAL_MAX_ATTESTATION_RECORDS, 256u);
-}
-
-// Credit-wire CW-1b-iv cross-language gate. The block-hash differential is structurally blind to the attestation
-// witness (it is not in the block blob), so the real check on this surface is that C++ config
-// agrees with the Rust authority exposed via FFI. Constant equality catches C++-side drift from
-// the genesis-frozen Rust values; the >= catches a coarse cap that would reject what Rust admits.
-TEST(archival_credit_wire, attestation_constants_match_rust_ffi_authority)
-{
-  EXPECT_EQ(static_cast<uint64_t>(config::ARCHIVAL_MAX_ATTESTATION_RECORDS),
-            shekyl_archival_max_attestation_records());
-  EXPECT_EQ(static_cast<uint64_t>(config::ARCHIVAL_ATTESTATION_HEADER_BYTES),
-            shekyl_archival_attestation_header_bytes());
-  // LOAD-BEARING, and equality is the point. BELOW Rust's exact maximum, C++ would reject on the
-  // wire a witness Rust admits — a consensus split. ABOVE it, the surplus is free padding an
-  // attacker may send on every block. C++ derives its cap from the same operands, so this asserts
-  // both directions at once against the Rust authority, never a C++ mirror of it.
-  EXPECT_EQ(static_cast<uint64_t>(config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES),
-            shekyl_archival_attestation_witness_max_bytes())
-      << "the C++ witness cap must be exactly Rust's canonical maximum: below it C++ rejects a "
-         "witness Rust admits, above it every block carries free attacker padding";
-}
-
-// Bootstrap export/import must carry the witness, or a node built from blocks.dat
-// holds none for any block it imported: it can serve no witness to its IBD peers
-// and, after the cutover, cannot re-drive their admission. The field is exercised
-// through the real bootstrap::block_package codec — the one blockchain_export
-// writes and blockchain_import reads — not a stand-in.
-TEST(archival_credit_wire, bootstrap_block_package_round_trips_the_attestation_witness)
-{
-  const std::string witness(1000, '\x5a');
-
-  cryptonote::bootstrap::block_package in{};
-  in.block = cryptonote::block{};
-  in.block_weight = 1234;
-  in.cumulative_difficulty = 5678;
-  in.coins_generated = 91011;
-  in.attestation_witness = witness;
-
-  const std::string blob = cryptonote::t_serializable_object_to_blob(in);
-
-  cryptonote::bootstrap::block_package out{};
-  ASSERT_TRUE(::serialization::parse_binary(blob, out));
-  EXPECT_EQ(out.attestation_witness, witness);
-  // Not vacuous: the surrounding fields survived too, so this is the real record
-  // shape and not a partially-parsed one.
-  EXPECT_EQ(out.block_weight, 1234u);
-  EXPECT_EQ(out.coins_generated, 91011u);
-
-  // An empty witness (interim / all-miss block, or one past the retention horizon)
-  // round-trips as empty rather than failing the parse.
-  cryptonote::bootstrap::block_package empty_in = in;
-  empty_in.attestation_witness.clear();
-  cryptonote::bootstrap::block_package empty_out{};
-  ASSERT_TRUE(::serialization::parse_binary(cryptonote::t_serializable_object_to_blob(empty_in), empty_out));
-  EXPECT_TRUE(empty_out.attestation_witness.empty());
-}
-
-// A bootstrap file is an untrusted input too, so block_package bounds its own blob
-// the way block_complete_entry's KV map does — the importer is not the guard.
-TEST(archival_credit_wire, bootstrap_block_package_refuses_an_oversized_attestation_witness)
-{
-  cryptonote::bootstrap::block_package in{};
-  in.block = cryptonote::block{};
-  in.attestation_witness.assign(config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES + 1, '\x5a');
-
-  std::string blob;
-  cryptonote::bootstrap::block_package out{};
-  const bool stored = ::serialization::dump_binary(in, blob);
-  const bool parsed = stored && ::serialization::parse_binary(blob, out);
-  EXPECT_FALSE(parsed) << "an oversized witness parsed out of a bootstrap chunk";
-
-  // Control: exactly at the cap is admitted, so the refusal above is the bound and
-  // not a blanket failure of the codec on large blobs.
-  cryptonote::bootstrap::block_package at_cap_in = in;
-  at_cap_in.attestation_witness.assign(config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES, '\x5a');
-  cryptonote::bootstrap::block_package at_cap_out{};
-  ASSERT_TRUE(::serialization::parse_binary(cryptonote::t_serializable_object_to_blob(at_cap_in), at_cap_out));
-  EXPECT_EQ(at_cap_out.attestation_witness.size(),
-            config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES);
 }
 
 // ── Cross-language grammar parity for the 0x0B tag ──────────────────────────

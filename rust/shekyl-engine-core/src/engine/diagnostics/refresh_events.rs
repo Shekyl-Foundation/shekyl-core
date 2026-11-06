@@ -155,6 +155,11 @@ pub enum ProtocolErrorKind {
     /// its own so a stream that ever shows one reads "wrong daemon", not
     /// "bad envelope".
     IdentityMismatch,
+
+    /// The daemon could not say whether it holds transactions a block
+    /// lists: they are not in its chain and its pool is retired until it
+    /// restarts. Retry, or another daemon; not an inconsistent envelope.
+    TransactionsUnavailable,
 }
 
 /// Bounded enumeration of the [`RefreshDiagnostic`] classes that
@@ -314,4 +319,20 @@ pub enum RefreshDiagnostic {
         /// The class whose events are being suppressed.
         class: SuppressedClass,
     },
+
+    /// One of the staking persona's seals — its scan state or its pending
+    /// transactions — could not be read when the refresh gathered what to
+    /// register with the curve tree (`engine/ownership.rs`).
+    ///
+    /// The refresh goes on without the persona's funding outputs, or
+    /// without the outputs it expects from its unconfirmed transactions,
+    /// so those are registered later — at the scan seal or at the spend —
+    /// at the late path's cost. This event is that consequence, named: the cause is the
+    /// seal's, and the wallet's staking read reports it to the user by
+    /// failing closed on the same file.
+    ///
+    /// Emitted by the orchestrator, at most once per merge attempt, so it
+    /// is outside the producer's per-block emission budget. It carries no
+    /// payload: there is nothing about an unreadable file to bucket.
+    PersonaSealUnreadable,
 }

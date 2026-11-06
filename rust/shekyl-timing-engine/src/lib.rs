@@ -149,11 +149,25 @@ pub enum OwnerClass {
     Discovery,
     Housekeeping,
     Interim,
+    /// Chain sync's request deadlines (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q8).
+    Sync,
 }
 
-const CLASS_COUNT: usize = 7;
+const CLASS_COUNT: usize = 8;
 
 impl OwnerClass {
+    /// Every class, in index order: what a periodic lateness report walks.
+    pub const ALL: [Self; CLASS_COUNT] = [
+        Self::Relay,
+        Self::Transport,
+        Self::TimedSync,
+        Self::Peerlist,
+        Self::Discovery,
+        Self::Housekeeping,
+        Self::Interim,
+        Self::Sync,
+    ];
+
     const fn index(self) -> usize {
         match self {
             Self::Relay => 0,
@@ -163,19 +177,21 @@ impl OwnerClass {
             Self::Discovery => 4,
             Self::Housekeeping => 5,
             Self::Interim => 6,
+            Self::Sync => 7,
         }
     }
 
     #[cfg(test)]
     fn from_index(index: u8) -> Self {
-        match index % 7 {
+        match index % 8 {
             0 => Self::Relay,
             1 => Self::Transport,
             2 => Self::TimedSync,
             3 => Self::Peerlist,
             4 => Self::Discovery,
             5 => Self::Housekeeping,
-            _ => Self::Interim,
+            6 => Self::Interim,
+            _ => Self::Sync,
         }
     }
 }

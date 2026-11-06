@@ -28,7 +28,7 @@ use super::traits::key::FeeDirective;
 // predict_size_and_weight}` and the `kat_*` tests below resolve unchanged — the
 // move is invisible to every caller (§12.3 D-1 constraint).
 pub(crate) use shekyl_tx_weight::{
-    predict_size_and_weight, predict_weight, InputCount, OutputCount,
+    converge_weight_fee_by, predict_size_and_weight, predict_weight, InputCount, OutputCount,
 };
 
 // ── FEE-RATE LAYER (weight model lives in shekyl-tx-weight) ──────────────────
@@ -49,19 +49,17 @@ pub(crate) fn dust_threshold_for_rate(rate: &FeeRate) -> u64 {
 /// the caller's band — the snapshot's economy floor below, and above
 /// it exactly the [`absolute_fee_rate_cap()`] every named tier obeys.
 ///
-/// There is deliberately no `Custom`-only relative ceiling. One
-/// anchored on economy (the shipped "100× economy") banned the
-/// snapshot's own Priority rate: on the pinned KAT row
-/// `(333, 1332, 66_666)` it refused `Custom(66_666)` as the caller's
-/// error while `FeePriority::Priority` succeeded at that identical
-/// rate. Economy is the market *floor* and honest 2021-scaling
-/// `Fh / Fl` reaches 1077×, so no economy multiple can separate
-/// "user typo" from "honest top tier" — the same reason the 10×
-/// named-tier lock was withdrawn.
+/// There is deliberately no `Custom`-only relative ceiling. Economy is
+/// the market *floor*, and the honest priority / economy ratio is
+/// `2M/w_ref` — 200× at the zone (the pinned KAT row
+/// `(333, 1332, 66_666)`), growing with the median — so no economy
+/// multiple can separate "user typo" from "honest top tier": one would
+/// refuse `Custom(66_666)` as the caller's error while
+/// `FeePriority::Priority` succeeds at that identical rate.
 ///
 /// Snapshot well-formedness lives in
 /// [`ValidatedFeeEstimates::try_new`] — this function must not
-/// re-litigate it, or Custom dies when honest `Fh / Fl` is large.
+/// re-litigate it, or Custom dies when the honest ratio is large.
 pub(crate) fn fee_rate_for_priority(
     priority: super::fee_estimator::FeePriority,
     snapshot: &ValidatedFeeEstimates,
@@ -73,74 +71,47 @@ pub(crate) fn fee_rate_for_priority(
         FeePriority::Standard => Ok(snapshot.standard()),
         FeePriority::Priority => Ok(snapshot.priority()),
         FeePriority::Custom(rate) => {
-            // Total: the caller's rate arrived as `NonZeroU64` and the
-            // validated snapshot carries its mask's non-zero proof.
-            let custom = FeeRate::from_nonzero(rate, snapshot.quantization_mask());
+            // Total: the caller's rate arrived as `NonZeroU64`.
+            let custom = FeeRate::from_nonzero(rate);
 
-            // The two bounds read DIFFERENT quantities, deliberately,
-            // because they ask different questions of the same rate.
-            //
-            // Floor — raw `per_weight`. "Does this undercut the
-            // daemon's cheapest tier?" is a per-weight question: mask
-            // rounding dominates only at tiny weights, and at a real
-            // transaction's weight the raw rate is what is charged.
-            // Reading the floor at weight 1 would collapse the
-            // comparison — under a 10,000 mask every rate in `1..=10_000`
-            // quantizes to the same 10,000 charge, so a weight-1 floor
-            // would admit a rate of 1 against an economy tier of 333 and
-            // then undercut it at every weight that matters.
+            // Both bounds read the per-weight rate. Floor: "does this
+            // undercut the daemon's cheapest tier?" Ceiling: "is this
+            // above anything an honest daemon could quote?" — the same
+            // comparison `ValidatedFeeEstimates::try_new` makes on every
+            // named tier. The lattice a fee is rounded up to is a shared
+            // constant, not a daemon input, so there is no second
+            // quantity to read.
             if custom.per_weight() < snapshot.economy().per_weight() {
                 return Err(FeeEstimatorError::CustomFeeOutOfRange(
                     CustomFeeBand::BelowEconomyFloor,
                 ));
             }
-            // Ceiling — EFFECTIVE weight-1 charge, the same quantity
-            // `ValidatedFeeEstimates::try_new` caps on every named tier.
-            // "What is the most this can cost per weight?" is maximized
-            // exactly where mask rounding dominates, so weight 1 is the
-            // conservative read for a ceiling and the collapse above is
-            // the property that makes it one. An overflow is above any
-            // finite cap, so it lands in this band rather than inventing
-            // a class for arithmetic.
-            match tx_fee::try_fee_from_weight(&custom, 1) {
-                Some(one) if one <= absolute_fee_rate_cap() => Ok(custom),
-                _ => Err(FeeEstimatorError::CustomFeeOutOfRange(
+            if custom.per_weight() > absolute_fee_rate_cap() {
+                return Err(FeeEstimatorError::CustomFeeOutOfRange(
                     CustomFeeBand::AboveAbsoluteCap,
-                )),
+                ));
             }
+            Ok(custom)
         }
     }
 }
 
-/// Quantized fee from structural weight (non-panicking on daemon-derived rates).
+/// Fee from structural weight on the lattice (non-panicking on daemon-derived rates).
 #[must_use]
 pub(crate) fn fee_from_weight(rate: &FeeRate, weight: usize) -> u64 {
     tx_fee::fee_from_weight(rate, weight)
 }
 
-/// Iteration bound for [`converge_fee`], and why it is never reached.
-///
-/// If a pass leaves `varint_len(fee)` unchanged it leaves the *weight*
-/// unchanged, so the next pass returns the same fee — that pass was already
-/// the fixed point. Every non-fixed pass therefore consumes one of the ten
-/// varint lengths a `u64` can take, which bounds the iteration at ten
-/// regardless of rate or shape. The bound is one more than that, so the loop
-/// always exits by agreement rather than by exhaustion.
-const MAX_FEE_FIXPOINT_PASSES: usize = 11;
-
 /// Fee fixpoint for one output-count variant (§3.3 / §3.10.1).
 ///
-/// The fee is an **argument** to the weight predictor, not just its product:
-/// the wire carries `varint(fee)`, so `fee = rate x weight(fee)` is a fixed
-/// point. Iterating from a seed at or below it converges monotonically (both
-/// `predict_weight` and [`fee_from_weight`] are non-decreasing), and the
-/// bound above says how fast.
+/// The body is [`converge_weight_fee_by`] with the lattice pricer
+/// `quantized_fee`. `None` is a fee that does not fit in `u64`; it is not a
+/// number, and it is not the unbuildable with-change sentinel.
 ///
-/// Returning before the fixed point under-pays by one varint byte's worth of
-/// rate for a fee that has just crossed a `2^(7k)` boundary. That was
-/// invisible while relay admission carried a percentage buffer; under FL-R20
-/// / FL-R23 it is a hard bounce, and not one the lookback-min can absorb,
-/// because the shortfall is structural rather than temporal.
+/// A non-zero seed is the with-change call, which starts from the no-change
+/// fee. That seed is at or below this variant's least fixed point; a higher
+/// seed would stick above it. The check runs in debug, where a second
+/// convergence from zero is the least point.
 #[must_use]
 pub(crate) fn converge_fee(
     rate: &FeeRate,
@@ -148,22 +119,18 @@ pub(crate) fn converge_fee(
     n_out: OutputCount,
     tree_depth: u8,
     initial_fee: u64,
-) -> u64 {
-    let mut fee = initial_fee;
-    for _ in 0..MAX_FEE_FIXPOINT_PASSES {
-        let next = fee_from_weight(rate, predict_weight(n_in, n_out, tree_depth, fee));
-        if next == fee {
-            return fee;
-        }
-        fee = next;
+) -> Option<u64> {
+    let per_weight = rate.per_weight();
+    let price = |weight: u64| shekyl_economics::quantized_fee(weight, per_weight);
+    let fee = converge_weight_fee_by(n_in, n_out, tree_depth, initial_fee, price)?;
+    if initial_fee != 0 {
+        let least = converge_weight_fee_by(n_in, n_out, tree_depth, 0, price)?;
+        debug_assert!(
+            initial_fee <= least && fee == least,
+            "seed {initial_fee} is above the least fixed point {least}"
+        );
     }
-    // Unreachable per `MAX_FEE_FIXPOINT_PASSES`. Settling on the conservative
-    // side costs one predictor call in a branch that never runs, and is the
-    // difference between a fee that over-pays and one that bounces.
-    fee.max(fee_from_weight(
-        rate,
-        predict_weight(n_in, n_out, tree_depth, fee),
-    ))
+    Some(fee)
 }
 
 /// Populate [`FeeDirective`] for the selected input count and payment outputs `N`.
@@ -172,9 +139,9 @@ pub(crate) fn build_fee_directive(
     n_in: InputCount,
     payment_output_count: OutputCount,
     tree_depth: u8,
-) -> FeeDirective {
+) -> Option<FeeDirective> {
     let n_no_change = payment_output_count;
-    let fee_no_change = converge_fee(rate, n_in, n_no_change, tree_depth, 0);
+    let fee_no_change = converge_fee(rate, n_in, n_no_change, tree_depth, 0)?;
 
     // With-change adds one output. At the output limit a change output would exceed
     // MAX_OUTPUTS, so that variant is *unbuildable* (tx-builder would reject it with
@@ -183,19 +150,20 @@ pub(crate) fn build_fee_directive(
     // pick it and instead falls through to the buildable no-change variant — rather
     // than selecting a change output that fails validation. `clamped` returning a
     // value below the requested `+1` is exactly the "at the limit" signal.
+    // That sentinel is not an overflow: overflow is `None` from this function.
     let with_change_request = payment_output_count.get() + 1; // <= MAX_OUTPUTS + 1, no overflow
     let n_with_change = OutputCount::clamped(with_change_request);
     let fee_with_change = if n_with_change.get() < with_change_request {
         u64::MAX
     } else {
-        converge_fee(rate, n_in, n_with_change, tree_depth, fee_no_change)
+        converge_fee(rate, n_in, n_with_change, tree_depth, fee_no_change)?
     };
 
-    FeeDirective {
+    Some(FeeDirective {
         fee_no_change,
         fee_with_change,
         dust_threshold: dust_threshold_for_rate(rate),
-    }
+    })
 }
 
 /// Fee charged for the no-change variant (orchestrator picks variant in 2a-3).
@@ -281,18 +249,19 @@ mod tests {
     /// deliberately rather than absorb a regression.
     #[test]
     fn converge_fee_reaches_the_fee_varint_fixed_point() {
-        let rate = FeeRate::new(24_184, 1).unwrap();
+        let rate = FeeRate::new(24_184).unwrap();
         let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
 
-        let fee = converge_fee(&rate, n_in, n_out, depth, 0);
-        // 268_466_584 → 272_336_024 with PL-D3 (2026-09-14): the 64-byte 0x07
-        // entry and the opening leg move the (1,1,depth 1) weight.
-        assert_eq!(fee, 272_336_024, "the fee-varint fixed point for this rate");
+        let fee = converge_fee(&rate, n_in, n_out, depth, 0).expect("the fee fits");
+        // The (1,1,depth 1) weight at this rate prices just over 2^28, so
+        // the varint grows from four bytes to five; the fixed point is that
+        // product rounded up to the fee lattice (`FEE_QUANTIZATION_MASK`).
+        assert_eq!(fee, 272_337_000, "the fee-varint fixed point for this rate");
+        assert_eq!(fee % shekyl_economics::FEE_QUANTIZATION_MASK, 0);
 
         // The defining property, stated on its own axis: the returned fee is
-        // what its own predicted weight prices. Two passes return 268_442_400,
-        // which prices at 268_466_584 — short by one varint byte's worth of
-        // rate (24_184 atomic units).
+        // what its own predicted weight prices. A fee returned one pass
+        // early prices one varint byte's worth of rate short.
         assert_eq!(
             fee_from_weight(&rate, predict_weight(n_in, n_out, depth, fee)),
             fee,
@@ -308,7 +277,7 @@ mod tests {
     /// path charges is a defect regardless of which one is larger.
     #[test]
     fn converge_fee_is_independent_of_its_seed() {
-        let rate = FeeRate::new(24_184, 1).unwrap();
+        let rate = FeeRate::new(24_184).unwrap();
         let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
         let warm = fee_from_weight(&rate, predict_weight(n_in, n_out, depth, 0));
         assert_eq!(
@@ -351,10 +320,12 @@ mod tests {
                     let centre = (1u64 << bits) / w0;
                     for delta in -8i64..=8 {
                         let pw = centre.saturating_add_signed(delta);
-                        let Ok(rate) = FeeRate::new(pw, mask) else {
+                        let Ok(rate) = FeeRate::new(pw) else {
                             continue;
                         };
-                        let fee = converge_fee(&rate, n_in, n_out, depth, 0);
+                        let Some(fee) = converge_fee(&rate, n_in, n_out, depth, 0) else {
+                            continue;
+                        };
                         let priced =
                             fee_from_weight(&rate, predict_weight(n_in, n_out, depth, fee));
                         assert_eq!(
@@ -377,9 +348,10 @@ mod tests {
 
     #[test]
     fn with_change_is_impossible_at_the_output_limit() {
-        let rate = FeeRate::new(10, 1).unwrap();
+        let rate = FeeRate::new(10).unwrap();
         // Below the limit: with-change is a real, finite fee.
-        let below = build_fee_directive(&rate, InputCount::clamped(1), OutputCount::clamped(2), 1);
+        let below = build_fee_directive(&rate, InputCount::clamped(1), OutputCount::clamped(2), 1)
+            .expect("the fee fits");
         assert!(below.fee_no_change > 0);
         assert!(below.fee_with_change > 0 && below.fee_with_change < u64::MAX);
         assert!(
@@ -396,13 +368,31 @@ mod tests {
             InputCount::clamped(1),
             OutputCount::clamped(usize::MAX),
             1,
-        );
+        )
+        .expect("the no-change fee fits");
         assert!(at_limit.fee_no_change > 0 && at_limit.fee_no_change < u64::MAX);
         assert_eq!(
             at_limit.fee_with_change,
             u64::MAX,
             "with-change unselectable at the limit"
         );
+        assert!(
+            at_limit.fee_no_change != u64::MAX,
+            "overflow is not the unbuildable sentinel"
+        );
+    }
+
+    /// A seed above the least fixed point sticks there. The with-change
+    /// call must not pass one. Red: seed that call from `2 × fee_no_change`.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "least fixed point")]
+    fn a_seed_above_the_least_fixed_point_is_refused() {
+        let rate = FeeRate::new(24_184).unwrap();
+        let (n_in, n_out) = (InputCount::clamped(1), OutputCount::clamped(2));
+        let least = converge_fee(&rate, n_in, n_out, 1, 0).unwrap();
+        let refused = converge_fee(&rate, n_in, n_out, 1, least.saturating_mul(2));
+        panic!("seed above {least} was accepted as {refused:?}");
     }
 
     /// Custom-rate refusals are the CALLER's error class
@@ -422,10 +412,9 @@ mod tests {
 
         let validated = |e: u64, s: u64, p: u64| {
             ValidatedFeeEstimates::try_new(FeeEstimates {
-                economy: FeeRate::new(e, 1).expect("economy"),
-                standard: FeeRate::new(s, 1).expect("standard"),
-                priority: FeeRate::new(p, 1).expect("priority"),
-                quantization_mask: 1,
+                economy: FeeRate::new(e).expect("economy"),
+                standard: FeeRate::new(s).expect("standard"),
+                priority: FeeRate::new(p).expect("priority"),
             })
             .expect("named tiers inside the snapshot ceiling")
         };
@@ -444,34 +433,6 @@ mod tests {
         fee_rate_for_priority(FeePriority::Custom(at_floor), &snapshot)
             .expect("the economy floor itself is payable");
 
-        // The floor reads the RAW rate and the ceiling the EFFECTIVE
-        // weight-1 charge. Under a large mask that distinction is the
-        // whole guard: every rate in `1..=10_000` quantizes to the same
-        // 10,000 charge at weight 1, so a floor read there would admit a
-        // rate of 1 against an economy tier of 333 — and then undercut
-        // it at every weight a real transaction has.
-        let masked = ValidatedFeeEstimates::try_new(FeeEstimates {
-            economy: FeeRate::new(333, 10_000).expect("economy"),
-            standard: FeeRate::new(1_332, 10_000).expect("standard"),
-            priority: FeeRate::new(66_666, 10_000).expect("priority"),
-            quantization_mask: 10_000,
-        })
-        .expect("KAT row under an honest 10k mask");
-        assert_eq!(
-            tx_fee::try_fee_from_weight(&FeeRate::new(1, 10_000).expect("rate"), 1),
-            tx_fee::try_fee_from_weight(&masked.economy(), 1),
-            "the weight-1 charges are indistinguishable — this is why the floor is not read there"
-        );
-        let undercut = NonZeroU64::new(1).expect("nonzero");
-        match fee_rate_for_priority(FeePriority::Custom(undercut), &masked) {
-            Err(FeeEstimatorError::CustomFeeOutOfRange(CustomFeeBand::BelowEconomyFloor)) => {}
-            other => panic!("a rate 340x under economy must be refused, got: {other:?}"),
-        }
-        // The masked snapshot's own Priority tier is still reachable.
-        let top = NonZeroU64::new(66_666).expect("nonzero");
-        fee_rate_for_priority(FeePriority::Custom(top), &masked)
-            .expect("Custom reaches Priority under a mask too");
-
         let wide = validated(2_000, 2_000, 2_000);
         let cap = absolute_fee_rate_cap();
         let over_abs = NonZeroU64::new(cap + 1).expect("nonzero");
@@ -484,12 +445,11 @@ mod tests {
             .expect("exactly the absolute cap is payable");
     }
 
-    /// The withdrawn ceiling's exact vector: a `Custom` rate that the
-    /// snapshot's OWN `Priority` tier already charges must resolve. The
-    /// shipped "100× economy" band refused this as the *caller's*
-    /// error (`-32602`) while `FeePriority::Priority` returned the same
-    /// rate successfully — the wallet told the user their parameter was
-    /// invalid for asking to pay what the daemon was quoting.
+    /// A `Custom` rate that the snapshot's OWN `Priority` tier already
+    /// charges must resolve. An economy-anchored band would refuse it as
+    /// the *caller's* error (`-32602`) while `FeePriority::Priority`
+    /// returns the same rate — telling the user their parameter is
+    /// invalid for asking to pay what the daemon is quoting.
     ///
     /// This bites against an economy-anchored ceiling returning; it
     /// does NOT cover the absolute cap (that is the test above).
@@ -503,17 +463,16 @@ mod tests {
 
         let validated = |e: u64, s: u64, p: u64| {
             ValidatedFeeEstimates::try_new(FeeEstimates {
-                economy: FeeRate::new(e, 1).expect("economy"),
-                standard: FeeRate::new(s, 1).expect("standard"),
-                priority: FeeRate::new(p, 1).expect("priority"),
-                quantization_mask: 1,
+                economy: FeeRate::new(e).expect("economy"),
+                standard: FeeRate::new(s).expect("standard"),
+                priority: FeeRate::new(p).expect("priority"),
             })
             .expect("named tiers inside the snapshot ceiling")
         };
 
-        // Served 2021-scaling KAT rows, at their own Priority rate and just
-        // above it ("priority, plus a little" — the ask the old band
-        // made inexpressible).
+        // Served-ladder KAT rows, at their own Priority rate and just above
+        // it ("priority, plus a little" — the ask an economy-anchored band
+        // would make inexpressible).
         for (e, s, p) in [(333, 1332, 66_666), (13, 52, 13_333)] {
             let snapshot = validated(e, s, p);
             let named = fee_rate_for_priority(FeePriority::Priority, &snapshot)

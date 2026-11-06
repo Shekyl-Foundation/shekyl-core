@@ -60,16 +60,12 @@ use std::path::Path;
 /// endorsement: raw `from_raw_parts` sites each hand-own the byte-bound
 /// precondition, and the pins exist so their number can only shrink.
 const BASELINE: &[(&str, usize, usize)] = &[
-    ("account_ffi.rs", 7, 0),
-    ("archival_admission_ffi.rs", 3, 0),
-    ("archival_ffi/attestation.rs", 6, 2),
-    ("archival_ffi/bond.rs", 2, 0),
+    // RETIRED (NI-R7, 2026-11-03): `account_ffi.rs` was deleted with the
+    // C++ account class it served; no wallet key material crosses the FFI.
+    // with_capacity 2 -> 1 (2026-10-06): the admission body moved to
+    // shekyl-archival-retention::attestation_admission (E6 slice 8 row 10
+    // c1); the header-parse buffer went with it. The file is the shim.
     ("archival_ffi/ct_balance.rs", 1, 0),
-    ("archival_ffi/emission.rs", 9, 3),
-    ("archival_ffi/epoch_close.rs", 6, 3),
-    ("archival_ffi/schedule.rs", 4, 0),
-    ("archival_ffi/serve_credit.rs", 3, 1),
-    ("archival_ffi/tests.rs", 0, 3),
     ("ct_balance_ffi.rs", 5, 0),
     // 2 -> 3 (2026-09-01): shekyl_difficulty_check_timestamp_rule reads the
     // <= 11-element u64 MTP window — the C2-R3 rule crossing (consensus rule
@@ -92,24 +88,21 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // Tightened so the win cannot grow back.
     ("legacy_fcmp.rs", 1, 5),
     ("legacy_frost.rs", 2, 3),
-    ("legacy_proofs.rs", 4, 0),
     ("legacy_tests.rs", 3, 0),
-    // 2 -> 1 with_capacity: the wallet-cache envelope export was the other
-    // reserve, and it left with the callerless cache FFI. The remaining
-    // reserve is the collapsed-sign input vec.
-    ("legacy_tx.rs", 1, 1),
-    ("levin_ffi.rs", 4, 0),
+    // 2 -> 1 -> 0 with_capacity: the wallet-cache envelope export left with
+    // the callerless cache FFI, and the collapsed-sign input vec with the
+    // wallet's C++ signing exports (the signing envelope, #1266). What
+    // remains is the witness-header writer's one borrow.
+    ("legacy_tx.rs", 1, 0),
+    // RETIRED (P2P_3_REMNANT_CUTOVER_BRIEF.md §3): `levin_ffi.rs` and
+    // `relay_zone_ffi/` left with the C++ p2p host. The Levin reader and the
+    // relay zone are reached as Rust crates now, with no `extern "C"` edge.
     ("pow_randomx_ffi.rs", 1, 0),
     // Curve-tree replica (test-generator surface, 2026-09-05): one typed-slice
     // borrow of the caller-owned tx / output arrays (`borrow<T>`, which
     // re-owns the isize::MAX byte bound); byte reads go through
     // `slice_from_ptr`, and there are no raw reserves.
     ("curve_tree_replica_ffi.rs", 1, 0),
-    // 5 -> 3: `read_ids` and `read_tx_ids` moved onto `slice_from_ptr`, which
-    // owns the `isize::MAX` bound `from_raw_parts` requires at the language
-    // level (PR #498 review). Tightened so the win cannot grow back.
-    ("relay_zone_ffi/mod.rs", 3, 1),
-    ("relay_zone_ffi/tests.rs", 4, 0),
 ];
 
 fn scan(dir: &Path, src_root: &Path, counts: &mut BTreeMap<String, (usize, usize)>) {

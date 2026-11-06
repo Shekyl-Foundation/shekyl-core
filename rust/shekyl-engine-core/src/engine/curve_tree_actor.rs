@@ -44,33 +44,41 @@
 //!    only `Args` plus a [`WeakActorRef`] (no engine state), so any field that
 //!    needed engine state would have to enter through `Args` and break that
 //!    bound.
-//! 2. Respawn-on-poison (R1-Q4) runs **engine-side, after the failed `ask`
-//!    returns** (CT-5a §3.1 / commit 5) — never inside a handler awaited under
-//!    the guard.
+//! 2. Recovery from a poisoned client runs **inside the actor**, as the
+//!    [`Recover`] message: it rebuilds the client from the store the actor
+//!    already owns and touches nothing else, so no handler ever reaches back
+//!    for engine state. The engine sends it after the failed `ask` returns,
+//!    never from inside a handler awaited under the guard.
 //!
 //! Corollary: *the curve-tree actor never acquires the engine lock; the engine
 //! may hold its lock across a curve-tree `ask`.*
+//!
+//! # One owner, and its stop is awaited
+//!
+//! The actor owns the client, and with it the redb file, outright
+//! (`CURVE_TREE_CLIENT.md` §11, ruled 2026-11-02; the wallet's actor rule,
+//! `V3_WALLET_DECISION_LOG.md` 2026-04-27). Nothing outside it holds the
+//! store. [`CurveTreeHandle::shutdown`] stops the actor and awaits
+//! `wait_for_shutdown_result`, and [`Actor::on_stop`] drops the client. In
+//! `kameo` 0.20.0 that result is set only after `on_stop` returns
+//! (`src/actor/spawn.rs`), so when the await returns, the file is closed and
+//! a reopen succeeds at once. `wait_for_shutdown` is not enough: it waits for
+//! the mailbox to close, which happens *before* `on_stop` runs.
 //!
 //! # Fail-stop, not supervised
 //!
 //! A panic in a handler runs [`Actor::on_panic`], which returns
 //! [`ControlFlow::Break`] so the actor stops rather than restarts. After a
 //! stop, every [`CurveTreeHandle`] call collapses the kameo transport failure
-//! into [`CurveTreeHandleError::Unavailable`]; the engine's R1-Q4 respawn
-//! ([`CurveTreeHandle::respawn`]: drop the dead client and resume a writer
-//! over the same open store) is the recovery, and it runs engine-side per
-//! clause 2. Because the handle wraps
-//! a **shared swappable cell** ([`Arc`]`<`[`Mutex`]`<ActorRef>>`), the respawn
-//! swaps the fresh actor in for **every** clone of the handle at once — the
-//! engine's field and the [`LocalPendingTx`](super::local_pending_tx) spend-gate
-//! clone alike — so recovery is whole, not a partial heal that leaves the spend
-//! path bound to the dead actor.
+//! into [`CurveTreeHandleError::Unavailable`], terminal for the session, as
+//! [`KeyActor`]'s is. The workspace builds with `panic = "abort"`, so in a
+//! release a handler panic ends the process. The recoverable fault is a
+//! poisoned client, which [`Recover`] heals in place.
 //!
 //! [`docs/design/CT5_ENGINE_WIRING.md`]: ../../../../../docs/design/CT5_ENGINE_WIRING.md
 
 use std::ops::ControlFlow;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
 use kameo::error::{ActorStopReason, Infallible, PanicError, SendError};
@@ -78,7 +86,7 @@ use kameo::message::{Context, Message};
 
 use shekyl_curve_tree::{
     AssembleInput, AssembledPath, BlockHeight, BlockLeaves, ClientError, CurveTreeClient,
-    PostureDeclaration, ReferenceBlock, SegmentPin, ServingReader, TxLeafInputs, WriterRecovery,
+    PostureDeclaration, ReferenceBlock, SegmentPin, TxLeafInputs,
 };
 
 use crate::scan::OwnedTxLeaves;
@@ -102,7 +110,20 @@ pub(crate) struct CurveTreeActor {
     /// It holds no `Engine` / `EngineHandle` / engine-lock reference. See the
     /// module docs; the invariant is mechanically guarded by
     /// [`tests::actor_constructed_from_only_the_client`].
-    client: CurveTreeClient,
+    ///
+    /// `Some` for the actor's whole life; [`Actor::on_stop`] takes it, so the
+    /// store closes before the stop can be observed (module docs).
+    client: Option<CurveTreeClient>,
+}
+
+impl CurveTreeActor {
+    /// The client, for a handler. kameo runs no handler after `on_stop`, the
+    /// only place it is taken, so a handler always finds it.
+    fn client(&mut self) -> &mut CurveTreeClient {
+        self.client
+            .as_mut()
+            .expect("kameo runs no handler after on_stop, which alone takes the client")
+    }
 }
 
 impl Actor for CurveTreeActor {
@@ -115,14 +136,15 @@ impl Actor for CurveTreeActor {
         client: CurveTreeClient,
         _actor_ref: ActorRef<Self>,
     ) -> Result<Self, Self::Error> {
-        Ok(Self { client })
+        Ok(Self {
+            client: Some(client),
+        })
     }
 
     /// Fail-stop on panic. This is the kameo default, overridden explicitly so
     /// the no-restart posture is locked at the type layer rather than inherited
     /// from a framework default that could change under a dependency bump. The
-    /// engine-side R1-Q4 respawn (clause 2) is the recovery, not a supervisor
-    /// restart.
+    /// actor does not restart; see the module docs.
     async fn on_panic(
         &mut self,
         _actor_ref: WeakActorRef<Self>,
@@ -131,9 +153,19 @@ impl Actor for CurveTreeActor {
         Ok(ControlFlow::Break(ActorStopReason::Panicked(err)))
     }
 
-    // No `on_stop`: the curve-tree client carries no secret bytes (contrast
-    // `KeyActor::on_stop`, which wipes `AllKeysBlob`). The redb database flushes
-    // and closes through `CurveTreeClient`'s own `Drop` at task-end.
+    /// Drop the client here, not with the actor value: kameo drops the value
+    /// after the shutdown result is set, and sets it after `on_stop`
+    /// returns, so this is what makes [`CurveTreeHandle::shutdown`]'s await
+    /// mean the redb file is closed. No zeroization: the client carries no secret bytes
+    /// (contrast `KeyActor::on_stop`, which wipes `AllKeysBlob`).
+    async fn on_stop(
+        &mut self,
+        _actor_ref: WeakActorRef<Self>,
+        _reason: ActorStopReason,
+    ) -> Result<(), Self::Error> {
+        drop(self.client.take());
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -148,10 +180,10 @@ pub(crate) struct IngestBlock {
     pub height: BlockHeight,
     /// The block's transactions in block order (coinbase first). Carried
     /// behind an `Arc` so the cursor-driven ingest driver can hand the actor
-    /// a height's leaves while *retaining* its own reference: a
-    /// respawn-recoverable `ask` failure (actor fail-stop / poison) consumes
-    /// this message, but the driver's `Arc` survives for the
-    /// respawn-and-retry resend (R1-Q4) — no deep clone, no lost leaf set.
+    /// a height's leaves while *retaining* its own reference: a failed `ask`
+    /// on a poisoned client consumes this message, but the driver's `Arc`
+    /// survives for the recover-and-retry resend ([`Recover`]) — no deep
+    /// clone, no lost leaf set.
     pub txs: Arc<Vec<OwnedTxLeaves>>,
 }
 
@@ -180,17 +212,24 @@ pub(crate) struct RollbackToFork {
 /// this message.
 pub(crate) struct IngestedTipHeight;
 
+/// Actor message rebuilding a poisoned client in place, over the store the
+/// actor owns ([`CurveTreeClient::rebuild`]). The recovery
+/// [`CurveTreeIngestFault::ClientPoisoned`](super::error::CurveTreeIngestFault::ClientPoisoned)
+/// names; it never reopens the file and never mints a second writer. The
+/// rebuilt client holds no output registrations, so the engine's retry
+/// re-offers them, as after a fresh open.
+pub(crate) struct Recover;
+
 /// Actor message for the persona serving host's pin (SH-2): pin every shard
-/// in `shard_ids` and hand back a read-only handle on the store they landed
-/// in.
+/// in `shard_ids`, release `release_ids`, and report the pin set after.
 ///
-/// **Both halves in one message, deliberately.** `shekyl-p-host`'s
-/// `ServeSetPinner` contract is that the reader it receives is a handle on
-/// the store the pins were written to; splitting this into a pin call and a
-/// separate reader call would let the two answer about different clients
-/// if the actor were ever rebound onto a different store. One `ask`, one
-/// client, one answer. Respawn itself does not rebind the store: the
-/// handle keeps the `Arc` and resumes the writer over it.
+/// **The store the pins landed in is this actor's.** `shekyl-p-host`'s
+/// `ServeSetPinner` contract is that the report names the store the pins
+/// were written to, and every later reading names it too. This actor owns
+/// one store for its life ([`CurveTreeHandle::store_identity`]); an
+/// in-place rebuild resumes over that store and keeps the actor, so the
+/// pins and every later [`ReadStoreFacts`] through the same handle are
+/// about the same store. No handle on the store leaves the actor.
 ///
 /// The pin is a **store write**, which is why it lives here at all: the
 /// actor's message loop is what serializes writes on the single-writer redb
@@ -222,8 +261,6 @@ pub(crate) struct PinServeSet {
 pub(crate) struct PinServeSetReply {
     /// Per-member pin outcome, paired with its shard id, in caller order.
     pub outcomes: Vec<(u64, SegmentPin)>,
-    /// A reader on the store the pins landed in.
-    pub reader: ServingReader,
     /// Every shard id pinned in the store *after* this reconcile.
     pub pinned_now: Vec<u64>,
     /// How many pins this reconcile actually removed.
@@ -231,8 +268,8 @@ pub(crate) struct PinServeSetReply {
 }
 
 /// Actor message for the **CompleteTree prefix** serve-set: declare the
-/// prune-disabled posture, then read the freeze cursor and take a reader —
-/// one message, in that order (`COMPLETETREE_ACTIVATION.md` D-1/D-5, RR-2).
+/// prune-disabled posture, then read the freeze cursor — one message, in
+/// that order (`COMPLETETREE_ACTIVATION.md` D-1/D-5, RR-2).
 ///
 /// The corpus sibling of [`PinServeSet`], and deliberately a **separate
 /// message rather than a mode flag on it**: the two arms take and return
@@ -261,8 +298,8 @@ pub(crate) struct PinServeSetReply {
 /// that already governs every other write on this actor.
 pub(crate) struct PinCompleteTreePrefix;
 
-/// What [`PinCompleteTreePrefix`] reports: the declaration answer, the
-/// prefix length it vouches for, and a reader on the store both came from.
+/// What [`PinCompleteTreePrefix`] reports: the declaration answer and the
+/// prefix length it vouches for.
 pub(crate) struct PinCompleteTreePrefixReply {
     /// What the store found when this call declared the posture —
     /// `NewlyDeclared` from an already-serving wallet is the evidence a
@@ -271,9 +308,37 @@ pub(crate) struct PinCompleteTreePrefixReply {
     pub declaration: PostureDeclaration,
     /// The burial-gated freeze cursor: the obligation is `[0, frozen_count)`.
     pub frozen_count: u64,
-    /// A reader on the store the declaration landed in.
-    pub reader: ServingReader,
 }
+
+/// Actor message reading what the serving host's witness checks, in one
+/// handler invocation so the readings describe one moment of the store:
+/// the ingest tip, the posture flag, the freeze cursor, and which members
+/// of `claimed` have lost their pin rows.
+///
+/// These are the reads a `ServingReader` used to make from beside the
+/// actor (*records-was, until 2026-11-02*); asked by message, nothing
+/// outside the actor holds the store open (`CURVE_TREE_CLIENT.md` §11).
+pub(crate) struct ReadStoreFacts {
+    /// The members whose pin rows to check.
+    pub claimed: Vec<u64>,
+}
+
+/// What [`ReadStoreFacts`] reads.
+pub(crate) struct StoreFactsReply {
+    /// The store's ingest tip.
+    pub sync_tip_height: BlockHeight,
+    /// Whether the prune-disabled posture is declared.
+    pub prune_disabled: bool,
+    /// The burial-gated freeze cursor.
+    pub next_freeze_seg: u64,
+    /// The members of `claimed` whose pin row is gone.
+    pub members_missing_pins: Vec<u64>,
+}
+
+/// Actor message for the corpus integrity scan: the frozen segments the
+/// store has already pruned. O(D); the witness asks for it only where its
+/// policy runs the scan.
+pub(crate) struct ScanPrunedFrozenSegments;
 
 /// Actor message for the §3.3 ingest-time integrity verify (CT-5b): reconstruct
 /// the curve-tree root at `height` and require it to byte-equal the consensus
@@ -350,11 +415,12 @@ impl Message<IngestBlock> for CurveTreeActor {
             .iter()
             .map(|tx| TxLeafInputs {
                 is_miner: tx.is_miner,
+                tx_hash: Some(tx.tx_hash),
                 leaf_entry_blob: tx.leaf_entry_blob.as_deref(),
                 outputs: tx.outputs.as_slice(),
             })
             .collect();
-        self.client.ingest_block(BlockLeaves {
+        self.client().ingest_block(BlockLeaves {
             height: msg.height,
             txs: &txs,
         })
@@ -375,16 +441,15 @@ impl Message<PinServeSet> for CurveTreeActor {
         // refresh still owes is unpinned and prunable. Pinning first makes the
         // only reachable transient an *extra* pin, which fails toward
         // retention. Same asymmetry §9.7 item 5 rules for the verbs themselves.
-        let outcomes = self.client.pin_serve_set(&msg.shard_ids)?;
+        let outcomes = self.client().pin_serve_set(&msg.shard_ids)?;
         let released = if msg.release_ids.is_empty() {
             0
         } else {
-            self.client.release_pins(&msg.release_ids)?
+            self.client().release_pins(&msg.release_ids)?
         };
         Ok(PinServeSetReply {
             outcomes,
-            reader: self.client.serving_reader(),
-            pinned_now: self.client.pinned_shard_ids()?,
+            pinned_now: self.client().pinned_shard_ids()?,
             released,
         })
     }
@@ -401,13 +466,42 @@ impl Message<PinCompleteTreePrefix> for CurveTreeActor {
         // **Declare before read, always** — see the message doc. The
         // declaration is idempotent and one-way, so re-declaring costs an
         // MVCC read in the steady state and the durable write happens once.
-        let declaration = self.client.set_prune_disabled()?;
-        let frozen_count = self.client.next_freeze_seg()?;
+        let declaration = self.client().set_prune_disabled()?;
+        let frozen_count = self.client().next_freeze_seg()?;
         Ok(PinCompleteTreePrefixReply {
             declaration,
             frozen_count,
-            reader: self.client.serving_reader(),
         })
+    }
+}
+
+impl Message<ReadStoreFacts> for CurveTreeActor {
+    type Reply = Result<StoreFactsReply, ClientError>;
+
+    async fn handle(
+        &mut self,
+        msg: ReadStoreFacts,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let client = self.client();
+        Ok(StoreFactsReply {
+            sync_tip_height: client.sync_tip_height()?,
+            prune_disabled: client.prune_disabled()?,
+            next_freeze_seg: client.next_freeze_seg()?,
+            members_missing_pins: client.members_missing_pins(&msg.claimed)?,
+        })
+    }
+}
+
+impl Message<ScanPrunedFrozenSegments> for CurveTreeActor {
+    type Reply = Result<Vec<u64>, ClientError>;
+
+    async fn handle(
+        &mut self,
+        _msg: ScanPrunedFrozenSegments,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.client().pruned_frozen_segments()
     }
 }
 
@@ -419,7 +513,7 @@ impl Message<RollbackToFork> for CurveTreeActor {
         msg: RollbackToFork,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.client.rollback_to_fork(msg.fork_height)
+        self.client().rollback_to_fork(msg.fork_height)
     }
 }
 
@@ -432,7 +526,37 @@ impl Message<IngestedTipHeight> for CurveTreeActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         // Infallible cursor read; wrapped in `Ok` only for collapse uniformity.
-        Ok(self.client.ingested_tip_height())
+        Ok(self.client().ingested_tip_height())
+    }
+}
+
+/// Test-only message behind [`CurveTreeHandle::poison_for_test`].
+#[cfg(test)]
+pub(crate) struct PoisonForTest;
+
+#[cfg(test)]
+impl Message<PoisonForTest> for CurveTreeActor {
+    type Reply = Result<(), ClientError>;
+
+    async fn handle(
+        &mut self,
+        _msg: PoisonForTest,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.client().test_tamper_poison();
+        Ok(())
+    }
+}
+
+impl Message<Recover> for CurveTreeActor {
+    type Reply = Result<(), ClientError>;
+
+    async fn handle(
+        &mut self,
+        _msg: Recover,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.client().rebuild()
     }
 }
 
@@ -448,7 +572,7 @@ impl Message<VerifyRoot> for CurveTreeActor {
         // root the ingest path carries (no `block_hash` at ingest). A store
         // error from `root_at` (e.g. `Poisoned`) propagates as-is; only a
         // genuine divergence becomes `RootMismatch`.
-        let got = self.client.root_at(msg.height)?;
+        let got = self.client().root_at(msg.height)?;
         if got == msg.expected_root {
             Ok(())
         } else {
@@ -469,7 +593,7 @@ impl Message<RootAndDepthAt> for CurveTreeActor {
         msg: RootAndDepthAt,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.client
+        self.client()
             .root_and_depth_at(msg.height)
             .map(|(root, depth)| (root.to_bytes(), depth))
     }
@@ -496,12 +620,92 @@ impl Message<AssembleTx> for CurveTreeActor {
                 max: shekyl_tx_builder::MAX_INPUTS,
             });
         }
+        // The capture path is total, and this is where that is made so: the
+        // batch's inputs are registered in the SAME handler invocation that
+        // assembles them, so no ingest or rollback interleaves (E1) and no
+        // input reaches `assemble_paths` unregistered — whether the wallet's
+        // refresh registered it earlier or not, and whichever orchestrator is
+        // asking (spend, claim, bond, release). A re-offer of a held pair is
+        // `AlreadyHeld` and costs a map lookup; an input owed captures is
+        // reconciled here, once. A stale pair — the client holds a different
+        // output at that gindex — is left unregistered and the assembly then
+        // refuses it by name, which is the caller's stale view surfacing as
+        // `OutputNotRegistered` rather than as a wrong-leaf proof.
+        let pairs: Vec<(shekyl_curve_tree::Gindex, shekyl_curve_tree::OneTimePubkey)> = msg
+            .inputs
+            .iter()
+            .map(|input| (input.gindex, input.output_key))
+            .collect();
+        let sync = self.client().sync_owned(&pairs)?;
+        if !sync.stale.is_empty() {
+            tracing::warn!(
+                stale = sync.stale.len(),
+                "assemble: inputs whose key disagrees with the tree; the caller's \
+                 view is behind the chain and the assembly will refuse them"
+            );
+        }
         // One handler invocation = one snapshot: every path is assembled
         // against the same `reference` with no ingest/rollback interleave (E1).
-        // `assemble_paths` reconstructs the tree once for the batch rather than
-        // once per input (`CT-6` increment 3), so the shared snapshot is now a
+        // `assemble_paths` reads each input's captures and the snapshot at
+        // the reference (`CT-6` increment 5), so the shared snapshot is a
         // property of the values as well as of the `reference`.
-        self.client.assemble_paths(&msg.inputs, &msg.reference)
+        self.client().assemble_paths(&msg.inputs, &msg.reference)
+    }
+}
+
+/// Register a batch of owned outputs, reconciling once if any is owed.
+///
+/// The wallet's refresh sends everything it holds on every pass — a resume
+/// is a mass late registration, and the registry does not persist — and the
+/// scan's newly inserted transfers after each merge. See
+/// [`CurveTreeClient::sync_owned`] for the per-pair verdicts and why a stale
+/// pair is reported rather than fatal.
+pub(crate) struct SyncOwned {
+    /// `(gindex, O)` per output; the pair, because a gindex is a name a
+    /// reorg re-derives and `O` is the identity that survives it.
+    pub(crate) outputs: Vec<(shekyl_curve_tree::Gindex, shekyl_curve_tree::OneTimePubkey)>,
+}
+
+impl Message<SyncOwned> for CurveTreeActor {
+    type Reply = Result<shekyl_curve_tree::OwnershipSync, ClientError>;
+
+    async fn handle(
+        &mut self,
+        msg: SyncOwned,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.client().sync_owned(&msg.outputs)
+    }
+}
+
+/// Replace the outputs the wallet expects and register the pairs it already
+/// holds, in that order, inside one handler invocation.
+///
+/// The refresh offers both between its rollback and its first fold. Two asks
+/// would let an ingest run after the expectations were set and before the
+/// pairs were registered. One invocation is the actor's atomicity, the same
+/// one [`AssembleTx`] uses for a spend's inputs. Expectations are set even
+/// when `outputs` is empty: clearing the set is itself the offer.
+pub(crate) struct OfferOwned {
+    /// `(tx_hash, vout, O)` per output the wallet built and has not yet seen
+    /// mined. Replaces the previous set
+    /// ([`CurveTreeClient::set_expected_outputs`]).
+    pub(crate) expected: Vec<shekyl_curve_tree::ExpectedOutput>,
+    /// `(gindex, O)` per output already held. Registered after the
+    /// expectations ([`CurveTreeClient::sync_owned`]).
+    pub(crate) outputs: Vec<(shekyl_curve_tree::Gindex, shekyl_curve_tree::OneTimePubkey)>,
+}
+
+impl Message<OfferOwned> for CurveTreeActor {
+    type Reply = Result<shekyl_curve_tree::OwnershipSync, ClientError>;
+
+    async fn handle(
+        &mut self,
+        msg: OfferOwned,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.client().set_expected_outputs(&msg.expected)?;
+        self.client().sync_owned(&msg.outputs)
     }
 }
 
@@ -515,8 +719,8 @@ impl Message<AssembleTx> for CurveTreeActor {
 /// collapse: a handler error carries the real [`ClientError`] the client
 /// returned (e.g. [`ClientError::NonConsecutiveBlockHeight`],
 /// [`ClientError::Poisoned`]); every other `ask` transport failure maps to
-/// [`Unavailable`](CurveTreeHandleError::Unavailable), which is terminal until
-/// the engine-side R1-Q4 respawn (clause 2).
+/// [`Unavailable`](CurveTreeHandleError::Unavailable), which is terminal for
+/// the session.
 #[derive(Debug)]
 pub(crate) enum CurveTreeHandleError {
     /// The client returned an error inside the handler.
@@ -527,9 +731,8 @@ pub(crate) enum CurveTreeHandleError {
     /// for match exhaustiveness but is unreachable on the awaiting `ask` path:
     /// the `ask` future applies backpressure by blocking the sender until
     /// capacity frees rather than returning `MailboxFull` (mirrors the
-    /// [`key_actor`](super::key_actor) §4.4 T4 note). Every case is
-    /// `recoverable_by_respawn` and terminal until the engine respawns the
-    /// actor.
+    /// [`key_actor`](super::key_actor) §4.4 T4 note). Terminal: a stopped
+    /// actor is not restarted (module docs).
     Unavailable,
 }
 
@@ -545,75 +748,23 @@ fn collapse_send_error<M>(err: SendError<M, ClientError>) -> CurveTreeHandleErro
 }
 
 /// `Clone` handle the orchestrator holds in place of an inline `CurveTreeClient`
-/// field. Wraps the actor's [`ActorRef`] in a **shared swappable cell** (§3.1).
-/// It is `pub(crate)` and never exported to the RPC tier.
+/// field: the actor's [`ActorRef`], and nothing else. It is `pub(crate)` and
+/// never exported to the RPC tier.
 ///
-/// # Why a shared cell, not a bare [`ActorRef`] clone
-///
-/// The R1-Q4 respawn ([`CurveTreeHandle::respawn`]) drops the dead actor and
-/// resumes a writer over the **same** open store. If the handle were a bare
-/// [`ActorRef`] clone, the respawn could only replace the *one* field it
-/// was called through (the engine's `curve_tree`); every other clone —
-/// notably the [`LocalPendingTx`](super::local_pending_tx) spend-gate
-/// clone — would keep pointing at the dead actor and fail every call
-/// forever. That is a *partial heal*: refresh recovers, spends silently
-/// stay broken. Wrapping the `ActorRef` in an [`Arc`]`<`[`Mutex`]`<…>>`
-/// makes the respawn swap the fresh actor in for **all** clones at once,
-/// so recovery is whole. The mutex is held only to clone or replace the
-/// inner `ActorRef` (never across an `.await`).
-/// Upper bound on how long [`CurveTreeHandle::respawn`] retries the reopen
-/// while the prior actor's redb single-writer lock is released. Past this the
-/// reopen error is surfaced (genuinely corrupt or externally-held store). See
-/// the `respawn` "Reopen-after-shutdown race" note for why a grace window is
-/// needed at all.
-const REOPEN_LOCK_RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-/// Poll interval for the [`CurveTreeHandle::respawn`] reopen retry.
-const REOPEN_LOCK_RELEASE_POLL: std::time::Duration = std::time::Duration::from_millis(2);
-
-/// Open the store at `path`, polling **only** while the redb single-writer lock
-/// is still held by a just-dropped actor
-/// ([`ClientError::is_already_open`](shekyl_curve_tree::ClientError::is_already_open)
-/// — `redb::DatabaseAlreadyOpen`). The `close → reopen` / respawn drop lag clears
-/// within the [`REOPEN_LOCK_RELEASE_TIMEOUT`] grace window; **any other error**
-/// (corruption, schema, permission) — or the window expiring — surfaces
-/// immediately, since waiting cannot make a standing failure openable.
-///
-/// `async` so the caller cooperates with the runtime that has to run the prior
-/// actor's drop: [`CurveTreeHandle::respawn`] awaits it directly; the sync
-/// [`CurveTreeHandle::open_and_spawn`] drives it under
-/// [`block_in_place`](tokio::task::block_in_place) so the worker is released
-/// while it waits.
-async fn open_polling_lock_release(path: &Path) -> Result<CurveTreeClient, ClientError> {
-    let deadline = std::time::Instant::now() + REOPEN_LOCK_RELEASE_TIMEOUT;
-    loop {
-        match CurveTreeClient::open(path) {
-            Ok(client) => return Ok(client),
-            // Lock still held by a not-yet-dropped handle: bounded poll-retry.
-            Err(e) if e.is_already_open() && std::time::Instant::now() < deadline => {
-                tokio::time::sleep(REOPEN_LOCK_RELEASE_POLL).await;
-            }
-            // Non-transient, or the grace window expired — surface it.
-            Err(e) => return Err(e),
-        }
-    }
-}
-
+/// A clone is a mailbox address, not a share of the store: every clone (the
+/// engine's field, the [`LocalPendingTx`](super::local_pending_tx) spend-gate
+/// clone, the stake engine's pinner) reaches the one actor, and the store
+/// closes when that actor stops, however many clones are alive. Recovery
+/// from a poisoned client happens inside the actor ([`Self::recover`]), so
+/// no clone ever needs repointing. *Records-was (until 2026-11-02):* the
+/// handle wrapped the `ActorRef` in a shared swappable cell and carried a
+/// `WriterRecovery` (a share of the store), so that an engine-side respawn
+/// could resume a writer over the same store and swap the fresh actor in for
+/// every clone.
 #[derive(Clone)]
 pub(crate) struct CurveTreeHandle {
-    /// Shared, swappable strong reference to the curve-tree actor's mailbox.
-    /// All clones of this handle share the one cell, so [`Self::respawn`]
-    /// propagates the fresh actor to every holder. `ActorRef` is
-    /// `Clone + Send + Sync`; the [`Mutex`] guard is never held across `.await`.
-    actor: Arc<Mutex<ActorRef<CurveTreeActor>>>,
-    /// Authority to rebuild the writer over the store the actor writes,
-    /// taken once at spawn and outliving every actor incarnation.
-    ///
-    /// A [`WriterRecovery`] rather than a [`ServingReader`]: both name the
-    /// same open database, but only this one is a write capability, and the
-    /// reader is `Clone`d out to the persona serving crates. Recovering from
-    /// the reader would have made every one of those copies able to mint a
-    /// second writer beside the actor — see [`WriterRecovery`].
-    recovery: WriterRecovery,
+    /// The actor's mailbox.
+    actor: ActorRef<CurveTreeActor>,
 }
 
 impl CurveTreeHandle {
@@ -632,17 +783,14 @@ impl CurveTreeHandle {
     ///
     /// Panics if called with no ambient Tokio runtime; the message names the fix.
     pub(crate) fn spawn(client: CurveTreeClient) -> Self {
-        let recovery = client.writer_recovery();
         Self {
-            actor: Arc::new(Mutex::new(Self::spawn_actor(client))),
-            recovery,
+            actor: Self::spawn_actor(client),
         }
     }
 
     /// Spawn the actor task over `client`, asserting an ambient runtime first.
-    /// The single actor-spawning chokepoint shared by [`Self::spawn`] (initial
-    /// open) and [`Self::respawn`] (R1-Q4 resume), so the require-ambient
-    /// contract holds on both paths.
+    /// The single actor-spawning chokepoint, so the require-ambient contract
+    /// holds wherever a handle is made.
     ///
     /// # Panics
     ///
@@ -660,140 +808,48 @@ impl CurveTreeHandle {
         CurveTreeActor::spawn(client)
     }
 
-    /// Snapshot the current actor reference. Locks the shared cell only long
-    /// enough to clone the (cheap, `Arc`-backed) [`ActorRef`], so the guard is
-    /// never held across the subsequent `.await` — the lock-ordering discipline
-    /// that keeps the curve-tree path deadlock-free (§3.1).
-    ///
-    /// A poisoned mutex means a prior panic while the lock was held; recover the
-    /// inner [`ActorRef`] so respawn can still swap in a fresh actor rather than
-    /// taking down the wallet process on the next ingest.
-    fn actor_ref(&self) -> ActorRef<CurveTreeActor> {
-        self.actor
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+    /// The actor's mailbox, for one `ask`.
+    fn actor_ref(&self) -> &ActorRef<CurveTreeActor> {
+        &self.actor
     }
 
-    /// Open (or create + resume) the persistent [`CurveTreeClient`] at `path`
-    /// and spawn the actor over it — the single open-then-spawn entry point.
+    /// Rebuild a poisoned client in place, inside the actor ([`Recover`]).
+    /// The engine sends it after a failed `ask` returned
+    /// [`ClientError::Poisoned`], then retries. The file is not reopened and
+    /// no second writer exists at any point; the actor and every clone of this
+    /// handle stay as they were.
     ///
-    /// [`CurveTreeClient::open`] resumes from the store's contents with **no
-    /// genesis replay** (`CT3_SYNC.md` §3.1 / R1-Q2), so this is cheap on an
-    /// already-synced store. The fail-stop *respawn* half of R1-Q4 is
-    /// [`Self::respawn`], which resumes a writer over this handle's store
-    /// and swaps the fresh actor into the existing shared cell rather than
-    /// minting a new handle.
+    /// # Errors
     ///
-    /// `assemble` uses this for the initial open: `path` is the curve-tree store
-    /// sibling of the wallet files
-    /// ([`curve_tree_store_path_from`](shekyl_engine_file::paths::curve_tree_store_path_from)).
-    ///
-    /// # Panics
-    ///
-    /// Panics if called with no ambient Tokio runtime (see [`Self::spawn`]).
-    ///
-    /// If — and **only** if — the reopen-race contention path below is taken on a
-    /// **current-thread** runtime, [`block_in_place`](tokio::task::block_in_place)
-    /// panics loudly. That is the deliberate *panic-not-deadlock* signal: the lock
-    /// can only free once the prior actor's drop runs, which a single-threaded
-    /// runtime cannot do while this call blocks waiting for it. Production
-    /// wallet-open runs on the multi-thread runtime — the same stance as
-    /// `spawn_stake_engine_if_staker`'s conformance self-cert wait. Uncontended
-    /// opens (every fresh `create`) never reach it.
-    pub(crate) fn open_and_spawn(path: impl AsRef<Path>) -> Result<Self, ClientError> {
-        let path = path.as_ref();
-        // Reopen-after-shutdown race (the same one [`Self::respawn`] documents):
-        // a just-closed wallet's actor may not have released the redb
-        // single-writer lock yet, because kameo drops the actor value — and its
-        // [`CurveTreeClient`] — *after* `wait_for_shutdown` resolves. A fresh
-        // open immediately after a close (`close` → `open_full`) therefore races
-        // that drop and hits `redb::DatabaseAlreadyOpen`.
-        //
-        // The first attempt is synchronous and runtime-free, so every
-        // *uncontended* open — which includes all fresh `create`s — succeeds here
-        // and keeps working on a current-thread runtime. Only the
-        // `DatabaseAlreadyOpen` contention case has to *wait* for the prior
-        // actor's drop, which runs on the ambient runtime: release this worker
-        // with `block_in_place` so that drop can progress, then drive the bounded
-        // async poll (mirrors `spawn_stake_engine_if_staker`). Any *other* open
-        // error is not transient — surface it immediately rather than spinning.
-        match CurveTreeClient::open(path) {
-            Ok(client) => Ok(Self::spawn(client)),
-            Err(e) if e.is_already_open() => {
-                let handle = tokio::runtime::Handle::current();
-                let client = tokio::task::block_in_place(|| {
-                    handle.block_on(open_polling_lock_release(path))
-                })?;
-                Ok(Self::spawn(client))
-            }
-            Err(e) => Err(e),
+    /// [`CurveTreeHandleError::Client`] when the store no longer resumes
+    /// (pruned or corrupt), and [`CurveTreeHandleError::Unavailable`] on a
+    /// stopped actor.
+    pub(crate) async fn recover(&self) -> Result<(), CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(Recover)
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Stop the actor and wait until its `on_stop` has run. When this returns
+    /// the client has been dropped and the redb file is closed, so the store
+    /// can be reopened at once, by this process or another. Messages already
+    /// queued are handled first (a graceful stop);
+    /// an `ask` sent afterwards, through any clone, is
+    /// [`CurveTreeHandleError::Unavailable`]. Idempotent: on an actor that
+    /// has already stopped, it returns once the stop has completed.
+    pub(crate) async fn shutdown(&self) {
+        // `stop_gracefully` errs only when the actor is no longer running,
+        // which is a stop already under way; the wait below covers both.
+        if let Err(not_running) = self.actor.stop_gracefully().await {
+            tracing::debug!(?not_running, "curve-tree actor already stopping");
         }
-    }
-
-    /// Drop the dead actor and resume a writer over **this handle's store** —
-    /// the engine-side R1-Q4 respawn body (§3.3), run engine-side after a
-    /// failed `ask` returns (clause 2), never inside a handler under the
-    /// engine guard.
-    ///
-    /// Recovery rebuilds in-memory client state from the store this handle
-    /// already holds ([`WriterRecovery::resume`]). It does
-    /// **not** reopen the file. A serving host's [`ServingReader`] is a
-    /// clone of the same `Arc`; a path-reopen would be
-    /// `DatabaseAlreadyOpen` for the host's life, and a successful reopen
-    /// would be a *different* store — pins landing there would not cover
-    /// the bytes the host is serving.
-    ///
-    /// Steps:
-    ///
-    /// 1. [`ActorRef::kill`] the current actor (idempotent on an
-    ///    already-fail-stopped one) and [`ActorRef::wait_for_shutdown`].
-    /// 2. Resume a writer over [`Self`]'s store and spawn a fresh actor.
-    /// 3. Swap the fresh [`ActorRef`] into the shared cell, so this handle
-    ///    **and every clone** observe the new actor.
-    ///
-    /// Returns the resume error (a pruned or corrupt store). The caller
-    /// decides recovery: the engine's single respawn-and-retry is
-    /// [`Engine::ingest_scan_result_with_respawn`](super::Engine::ingest_scan_result_with_respawn);
-    /// the bounded-retry-then-surface escalation that distinguishes a
-    /// transient hiccup from a permanently corrupt store (O3-sub) is CT-5d.
-    ///
-    /// The close→reopen race that [`Self::open_and_spawn`] still polls for
-    /// is a *wallet* close/open race (a previous process still holding the
-    /// file). It is not a respawn concern: respawn never closes the file.
-    ///
-    /// # Rests on refresh single-flight
-    ///
-    /// Step 2 mints a writer and step 1 is what retires the old one, so two
-    /// respawns interleaving would leave two live clients on one store, each
-    /// with its own in-memory tree state. Nothing *here* prevents that: this
-    /// handle is `Clone`, and two clones would read the same dead actor out of
-    /// the shared cell and both proceed.
-    ///
-    /// What prevents it is the caller. The only production reach is
-    /// [`curve_tree_ingest_scan_result_with_respawn`](super::merge::curve_tree_ingest_scan_result_with_respawn),
-    /// and both of its call sites run inside a held
-    /// [`SlotGuard`](super::refresh::SlotGuard) — the engine's `RefreshSlot`
-    /// admits one refresh per engine and returns `AlreadyRunning` otherwise.
-    ///
-    /// This is recorded rather than enforced because a lease here would be
-    /// machinery guarding a path that cannot currently be walked. A future
-    /// respawn caller outside that slot is the thing that changes the answer,
-    /// and it must bring its own mutual exclusion — re-checking the cell after
-    /// acquiring it, so the loser adopts the winner's actor instead of minting
-    /// a second writer.
-    pub(crate) async fn respawn(&self) -> Result<(), ClientError> {
-        let old = self.actor_ref();
-        old.kill();
-        old.wait_for_shutdown().await;
-
-        let client = self.recovery.resume()?;
-        let fresh = Self::spawn_actor(client);
-        *self
-            .actor
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = fresh;
-        Ok(())
+        // `wait_for_shutdown_result`, not `wait_for_shutdown`: the latter
+        // resolves when the mailbox closes, before `on_stop` has dropped the
+        // client (module docs).
+        if let Err(hook) = self.actor.wait_for_shutdown_result().await {
+            tracing::warn!(?hook, "the curve-tree actor's stop hook failed");
+        }
     }
 
     /// Ingest one block's leaves at `height` (must equal the client's ingested
@@ -837,8 +893,8 @@ impl CurveTreeHandle {
             .map_err(collapse_send_error)
     }
 
-    /// Pin a persona's serve-set and take a reader on the store it landed in
-    /// (SH-2) — see [`PinServeSet`] for why both come back together.
+    /// Pin a persona's serve-set (SH-2) in this actor's store — see
+    /// [`PinServeSet`].
     ///
     /// # Errors
     ///
@@ -855,6 +911,44 @@ impl CurveTreeHandle {
                 shard_ids,
                 release_ids,
             })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Which store this handle's actor owns: the actor's id, fixed for its
+    /// life. An in-place rebuild keeps the actor and the store; a new store
+    /// would be a new actor. The serving host's witness checks every report
+    /// and reading against it.
+    pub(crate) fn store_identity(&self) -> u64 {
+        self.actor.id().sequence_id()
+    }
+
+    /// Read the store facts the serving host's witness checks — see
+    /// [`ReadStoreFacts`].
+    ///
+    /// # Errors
+    ///
+    /// [`CurveTreeHandleError::Client`] wrapping a store fault, and
+    /// [`CurveTreeHandleError::Unavailable`] on a stopped actor.
+    pub(crate) async fn store_facts(
+        &self,
+        claimed: Vec<u64>,
+    ) -> Result<StoreFactsReply, CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(ReadStoreFacts { claimed })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Run the corpus integrity scan — see [`ScanPrunedFrozenSegments`].
+    ///
+    /// # Errors
+    ///
+    /// [`CurveTreeHandleError::Client`] wrapping a store fault, and
+    /// [`CurveTreeHandleError::Unavailable`] on a stopped actor.
+    pub(crate) async fn pruned_frozen_segments(&self) -> Result<Vec<u64>, CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(ScanPrunedFrozenSegments)
             .await
             .map_err(collapse_send_error)
     }
@@ -900,14 +994,23 @@ impl CurveTreeHandle {
     /// Test-only: stop the underlying actor and wait for its task to end,
     /// simulating a fail-stop (the `on_panic → Break` path) without a real
     /// panic. After this returns the actor is gone and every handle call
-    /// collapses to [`CurveTreeHandleError::Unavailable`] until a
-    /// [`Self::respawn`]. The [`WriterRecovery`] stays on the handle, so
-    /// resume does not wait for the file lock.
+    /// collapses to [`CurveTreeHandleError::Unavailable`], for good.
     #[cfg(test)]
     pub(crate) async fn kill_and_wait_for_test(&self) {
         let actor = self.actor_ref();
         actor.kill();
         actor.wait_for_shutdown().await;
+    }
+
+    /// Test-only: poison the actor's client, as a post-commit rollback
+    /// failure would, so [`Self::recover`] can be driven.
+    #[cfg(test)]
+    pub(crate) async fn poison_for_test(&self) {
+        self.actor_ref()
+            .ask(PoisonForTest)
+            .await
+            .map_err(collapse_send_error)
+            .expect("the actor is running");
     }
 
     /// Read the reconstructed root **and** depth at `height`
@@ -947,214 +1050,47 @@ impl CurveTreeHandle {
             .await
             .map_err(collapse_send_error)
     }
-}
 
-// ---------------------------------------------------------------------------
-// Tests (CT-5a commit 1: scaffold + message protocol + structural invariant)
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    //! CT-5a commit-1 contract tests for [`CurveTreeActor`] / [`CurveTreeHandle`].
-    //! These pin the actor scaffold and message protocol; the behavioral
-    //! ingest / rollback KATs (root-matches-the-CT-2-oracle, reorg, respawn)
-    //! land in later commits where the real `ScannableBlock → BlockLeaves`
-    //! decode and fixtures exist.
-
-    use super::*;
-
-    use tempfile::TempDir;
-
-    /// Open a fresh, empty [`CurveTreeClient`] over a tempdir-backed store.
-    fn fresh_client() -> (TempDir, CurveTreeClient) {
-        let dir = TempDir::new().expect("tempdir");
-        let client = CurveTreeClient::open(dir.path().join("curve_tree.redb"))
-            .expect("open fresh curve-tree client");
-        (dir, client)
+    /// Replace the expected outputs and register the held pairs, in that
+    /// order, in one round-trip ([`OfferOwned`]).
+    pub(crate) async fn offer_owned(
+        &self,
+        expected: Vec<shekyl_curve_tree::ExpectedOutput>,
+        outputs: Vec<(shekyl_curve_tree::Gindex, shekyl_curve_tree::OneTimePubkey)>,
+    ) -> Result<shekyl_curve_tree::OwnershipSync, CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(OfferOwned { expected, outputs })
+            .await
+            .map_err(collapse_send_error)
     }
 
-    /// **Lock-ordering clause 1 (§3.1 / E2), enforced mechanically.** The
-    /// actor's only construction input is the [`CurveTreeClient`]: `on_start`
-    /// receives exactly [`Actor::Args`] plus a [`WeakActorRef`] (no engine
-    /// state), so pinning `Args = CurveTreeClient` makes "reach back for engine
-    /// state" a compile error — a field that needed engine state would have to
-    /// enter through `Args` and break this bound. A future "let the actor read
-    /// engine config for X" change fails to compile here, on this rule, rather
-    /// than passing tests until a deadlock interleaving in production.
-    #[test]
-    fn actor_constructed_from_only_the_client() {
-        fn assert_args_is_client<A: Actor<Args = CurveTreeClient>>() {}
-        assert_args_is_client::<CurveTreeActor>();
-    }
-
-    /// kameo requires the actor and its messages to be `Send`. (The replies are
-    /// `Result<(), ClientError>`; `ClientError: Send` is exercised by the
-    /// `ask` round-trips in later commits.)
-    #[test]
-    fn actor_and_messages_are_send() {
-        fn assert_send<T: Send>() {}
-        assert_send::<CurveTreeActor>();
-        assert_send::<IngestBlock>();
-        assert_send::<RollbackToFork>();
-        assert_send::<IngestedTipHeight>();
-        assert_send::<VerifyRoot>();
-        assert_send::<RootAndDepthAt>();
-        assert_send::<AssembleTx>();
-        assert_send::<PinServeSet>();
-        assert_send::<PinCompleteTreePrefix>();
-        assert_send::<OwnedTxLeaves>();
-    }
-
-    /// Require-ambient spawn contract: with no ambient Tokio runtime,
-    /// [`CurveTreeHandle::spawn`] panics with the contract message before any
-    /// actor task is scheduled. A plain `#[test]` precisely because it must run
-    /// with no ambient runtime.
-    #[test]
-    #[should_panic(expected = "requires an ambient Tokio runtime")]
-    fn spawn_without_ambient_runtime_panics() {
-        let (_dir, client) = fresh_client();
-        let _handle = CurveTreeHandle::spawn(client);
-    }
-
-    /// The actor spawns over a fresh client and is alive on an ambient runtime.
-    #[tokio::test]
-    async fn spawns_and_is_alive() {
-        let (_dir, client) = fresh_client();
-        let handle = CurveTreeHandle::spawn(client);
-        assert!(handle.actor_ref().is_alive(), "actor is alive after spawn");
-    }
-
-    /// **R1-Q4 respawn happy path + shared-cell propagation (O3, §3.3).** The
-    /// load-bearing KAT for commit 5: a fail-stopped actor is healed by
-    /// [`CurveTreeHandle::respawn`], which (a) resumes a writer over the
-    /// same open store (D2 resume-from-store, no genesis replay, no file
-    /// reopen), and (b) swaps the fresh actor into the **shared cell** so a
-    /// clone taken *before* the respawn — modelling the
-    /// [`LocalPendingTx`](super::super::local_pending_tx) spend-gate clone —
-    /// observes the new actor too. Without the shared cell the clone would
-    /// keep pointing at the dead actor and fail forever (the partial-heal
-    /// hazard this handle shape forecloses).
+    /// Register owned outputs with the tree, reconciling once if any is owed,
+    /// without replacing the expectation set ([`SyncOwned`]).
     ///
-    /// Blocks are empty-leaf (no coinbase) — accepted by `ingest_block`, which
-    /// advances the height cursor regardless of leaf count; the same shape the
-    /// merge-path reorg KAT relies on. Behavioral leaf/root correctness is the
-    /// CT-2-oracle KAT (commit 6) / Tier-B completeness (CT-5c), not here.
-    #[tokio::test]
-    async fn respawn_resumes_from_store_and_propagates_to_clones() {
-        let dir = TempDir::new().expect("tempdir");
-        let path = dir.path().join("curve_tree.redb");
-        let client = CurveTreeClient::open(&path).expect("open fresh client");
-        let handle = CurveTreeHandle::spawn(client);
-
-        // Ingest empty blocks 0..=2 → persisted cursor at height 2.
-        for h in 0..=2 {
-            handle
-                .ingest(BlockHeight::from_raw(h), Arc::new(Vec::new()))
-                .await
-                .expect("ingest empty block");
-        }
-        assert_eq!(
-            handle.ingested_tip_height().await.expect("cursor read"),
-            Some(BlockHeight::from_raw(2)),
-            "three consecutive ingests leave the cursor at height 2"
-        );
-
-        // A clone taken BEFORE the respawn — the spend-gate-clone analogue.
-        let clone = handle.clone();
-
-        // Simulate the fail-stop: both the original and the pre-respawn clone
-        // now collapse to Unavailable (they share the one — now dead — actor).
-        handle.kill_and_wait_for_test().await;
-        assert!(
-            matches!(
-                handle.ingested_tip_height().await,
-                Err(CurveTreeHandleError::Unavailable)
-            ),
-            "a fail-stopped actor makes the original handle Unavailable"
-        );
-        assert!(
-            matches!(
-                clone.ingested_tip_height().await,
-                Err(CurveTreeHandleError::Unavailable)
-            ),
-            "the pre-respawn clone shares the dead actor and is Unavailable too"
-        );
-
-        // Respawn via the original handle: same store Arc, fresh writer.
-        handle
-            .respawn()
+    /// The refresh uses [`Self::offer_owned`]. This is the entry that leaves
+    /// the expectation set in place. Its callers are `cfg(test)`; the lib
+    /// target does not compile them.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "pair registration that must not replace expectations; its callers are cfg(test)"
+        )
+    )]
+    pub(crate) async fn sync_owned(
+        &self,
+        outputs: Vec<(shekyl_curve_tree::Gindex, shekyl_curve_tree::OneTimePubkey)>,
+    ) -> Result<shekyl_curve_tree::OwnershipSync, CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(SyncOwned { outputs })
             .await
-            .expect("respawn resumes over the held store");
-
-        // (a) resume-from-store: the persisted cursor survived the fail-stop.
-        assert_eq!(
-            handle.ingested_tip_height().await.expect("cursor read"),
-            Some(BlockHeight::from_raw(2)),
-            "respawn resumes from the persisted store cursor (no genesis replay)"
-        );
-        // (b) propagation: the clone taken before the respawn observes the
-        // fresh actor through the shared cell — whole heal, not partial.
-        assert_eq!(
-            clone.ingested_tip_height().await.expect("cursor read"),
-            Some(BlockHeight::from_raw(2)),
-            "the pre-respawn clone observes the respawned actor via the shared cell"
-        );
-        // And ingest resumes at cursor+1 through the clone.
-        clone
-            .ingest(BlockHeight::from_raw(3), Arc::new(Vec::new()))
-            .await
-            .expect("ingest resumes at cursor+1 after respawn");
-        assert_eq!(
-            handle.ingested_tip_height().await.expect("cursor read"),
-            Some(BlockHeight::from_raw(3)),
-            "post-respawn ingest advances the shared cursor seen by every clone"
-        );
-    }
-
-    /// Respawn must keep the store a serving host would hold. This bites
-    /// against a path-reopen (different `Arc`, and `DatabaseAlreadyOpen`
-    /// once a host is live); it does NOT cover cursor resume or clone
-    /// propagation (`respawn_resumes_from_store_and_propagates_to_clones`).
-    #[tokio::test]
-    async fn respawn_keeps_the_store_a_serving_reader_holds() {
-        let (_dir, client) = fresh_client();
-        let handle = CurveTreeHandle::spawn(client);
-
-        let before = handle
-            .pin_serve_set(Vec::new(), Vec::new())
-            .await
-            .expect("pin before respawn")
-            .reader;
-
-        handle.kill_and_wait_for_test().await;
-        handle.respawn().await.expect("respawn");
-
-        let after = handle
-            .pin_serve_set(Vec::new(), Vec::new())
-            .await
-            .expect("pin after respawn")
-            .reader;
-
-        assert!(
-            before.same_store(&after),
-            "respawn must resume over the same open store a serving host holds"
-        );
-    }
-
-    /// Cursor-read `ask` round-trip on a fresh client returns `None` — the
-    /// `BlockHeight::from_raw(0)` resume point for a from-genesis ingest (D2). This pins
-    /// the transport + reply type + collapse for [`IngestedTipHeight`]; the
-    /// non-`None` (post-ingest, post-rollback) cursor behavior is proven at the
-    /// client level (`ingested_tip_height_getter_tracks_cursor`) and exercised
-    /// end-to-end once the merge-driven ingest fixtures land.
-    #[tokio::test]
-    async fn cursor_read_on_fresh_client_is_none() {
-        let (_dir, client) = fresh_client();
-        let handle = CurveTreeHandle::spawn(client);
-        let tip = handle
-            .ingested_tip_height()
-            .await
-            .expect("cursor read on a live actor");
-        assert_eq!(tip, None, "a fresh client has no ingested tip");
+            .map_err(collapse_send_error)
     }
 }
+
+// The actor's contract tests live beside this file, as `merge.rs`'s do: the
+// production half is the actor, its messages and the handle, and keeping the
+// tests in it had pushed the file past the engine's god-file line.
+#[cfg(test)]
+#[path = "curve_tree_actor_tests.rs"]
+mod tests;

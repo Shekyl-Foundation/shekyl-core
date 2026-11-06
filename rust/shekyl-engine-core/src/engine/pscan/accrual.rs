@@ -642,14 +642,14 @@ impl PScanAccrual {
         &self,
     ) -> std::collections::BTreeSet<PCanonicalId> {
         // `m.post_kind` is the wire byte the extractor recorded (`post_kind_byte`
-        // in `scan_step`), so compare against the wire crate's own JoinMarket
-        // constant — the *same* definition that produced the byte. Comparing to an
-        // unrelated `archival_retention::BondPostKind::JoinMarket as u8` would only
-        // coincidentally agree (both map to 0 today) and could silently diverge if
-        // either enum were reordered.
+        // in `scan_step`), so ask the wire crate's own JoinMarket predicate —
+        // the *same* definition that produced the byte. Comparing to an
+        // unrelated `archival_retention::BondPostKind::JoinMarket as u8` would
+        // only coincidentally agree and could silently diverge if either enum
+        // were reordered.
         self.bond_post_matches
             .iter()
-            .filter(|m| m.post_kind == shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET)
+            .filter(|m| shekyl_wire::transaction::is_join_market_post_kind(m.post_kind))
             .map(|m| m.p_canonical_id)
             .collect()
     }

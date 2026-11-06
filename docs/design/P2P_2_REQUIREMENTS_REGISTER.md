@@ -371,7 +371,7 @@ traffic is always protocol-added and never operator-optional, the
 persona-serving transport lane (`ARCHIVAL_FIREWALL_GATE6.md` exists on
 `dev`; the transport doc's exact filename wasn't located this session —
 search for the "SP-T serving-loop arc" the index references), and the SH
-serving-host arc (`SH-1…SH-2`, IMPLEMENTATION_INDEX — moved serving to the
+serving-host arc (`SH-1…SH-3`, IMPLEMENTATION_INDEX — moved serving to the
 far side of a custody boundary, may or may not also cover submission).
 **Deferred to P2P-1 as census work, not resolved here.**
 

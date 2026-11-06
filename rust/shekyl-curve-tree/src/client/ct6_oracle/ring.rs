@@ -12,7 +12,7 @@
 //! of the answers: the segment tier is the landed CT-1 composition and the
 //! snapshot tier is the ring.
 
-use super::super::tests::{coinbase_raw, ingest_outputs_at};
+use super::super::test_fixtures::{ingest_outputs_at, raw_outputs_at};
 use super::super::{BlockLeaves, CurveTreeClient, TxLeafInputs};
 use super::{
     examine_tier_readings, ingest_through, layer_step_leaf_count, lock_count, outputs_of,
@@ -400,7 +400,7 @@ fn an_in_horizon_rollback_restores_the_fork_heights_snapshot() {
     );
 
     let next = fork + BlockCount::ONE;
-    let outs = vec![coinbase_raw(); scheduled_outputs(next)];
+    let outs = raw_outputs_at(next.to_raw(), scheduled_outputs(next));
     if outs.is_empty() {
         let txs: Vec<TxLeafInputs<'_>> = Vec::new();
         client
@@ -430,7 +430,7 @@ fn a_rollback_and_replay_reproduces_the_uninterrupted_chain() {
     rolled.rollback_to_fork(fork).expect("rollback");
     let mut height = fork + BlockCount::ONE;
     while height <= tip {
-        let outs = vec![coinbase_raw(); scheduled_outputs(height)];
+        let outs = raw_outputs_at(height.to_raw(), scheduled_outputs(height));
         if outs.is_empty() {
             let txs: Vec<TxLeafInputs<'_>> = Vec::new();
             rolled

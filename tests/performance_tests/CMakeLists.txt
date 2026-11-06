@@ -50,7 +50,8 @@ monero_add_minimal_executable(performance_tests
   ${performance_tests_headers})
 target_link_libraries(performance_tests
   PRIVATE
-    cryptonote_core
+    cryptonote_basic
+    fcmp
     common
     cncrypto
     epee

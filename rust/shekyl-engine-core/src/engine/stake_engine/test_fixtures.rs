@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::output::construct_output;
 use shekyl_curve_generators::biased_hash_to_point;
@@ -23,17 +23,19 @@ pub(crate) const TEST_SEED: [u8; MASTER_SEED_BYTES] = [0x33u8; MASTER_SEED_BYTES
 /// One tx-key for every fixture output (outputs differ by index).
 pub(crate) const FIXTURE_TX_KEY: [u8; 32] = [0x5Au8; 32];
 
-/// Derive a persona bundle for `p_slot` on mainnet/bip39 (a permitted pair).
+/// Derive a persona bundle for `p_slot` on mainnet.
 /// Re-derivable on demand because `ArchivalPKeys` is `!Clone` and derivation
 /// is deterministic — each spawn gets its own freshly-derived bundle.
 pub(crate) fn derive_bundle(p_slot: u32) -> ArchivalPKeys {
-    derive_archival_p_keys(
-        &TEST_SEED,
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        p_slot,
-    )
-    .expect("oracle derivation succeeds for mainnet/bip39")
+    derive_archival_p_keys(&TEST_SEED, Network::Mainnet, p_slot)
+        .expect("oracle derivation succeeds on mainnet")
+}
+
+/// An in-memory body store for a spawned stake actor. The actor owns the
+/// writer; a fixture that only needs the actor never puts a shard in it.
+pub(crate) fn ephemeral_body_store() -> shekyl_p_store::BodyStore {
+    shekyl_p_store::BodyStore::open_ephemeral(shekyl_p_store::StoreKey::from_bytes([0x5a; 32]))
+        .expect("ephemeral body store")
 }
 
 /// Spawn a handle over a pre-derived derive-forward set: `held` slots, of
@@ -44,7 +46,13 @@ pub(crate) fn spawn_over(held: &[u32], bonded: &[u32], active: Option<u32>) -> S
         .map(|&s| (PSlot::from_raw(s), derive_bundle(s)))
         .collect();
     let bonded: BTreeSet<PSlot> = bonded.iter().map(|&s| PSlot::from_raw(s)).collect();
-    StakeEngineHandle::spawn(bundles, bonded, active.map(PSlot::from_raw))
+    StakeEngineHandle::spawn(
+        bundles,
+        bonded,
+        active.map(PSlot::from_raw),
+        ephemeral_body_store(),
+        shekyl_network::HARNESS_NETWORK_ID,
+    )
 }
 
 /// A REAL P-paid output for `keys`: a funding record carrying the

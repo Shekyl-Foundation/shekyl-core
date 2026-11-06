@@ -9,7 +9,8 @@
 //! join-adjusted scarcity and expected-profit and orders the list.
 //! Presentation only — every frozen shard remains legal (SL-D8 reading 1).
 
-use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
+use shekyl_types::BlockHeight;
+
 use crate::consensus_state::shard_age_milli;
 use crate::constants::effective_settlement_epoch_blocks;
 use crate::reward_arithmetic::{reward_share_floor, scarcity_micro, work_milli_from_micro};
@@ -39,11 +40,15 @@ pub struct ShardCoverageOut {
 /// `r_market == 0` scores 0, so the picker must count the operator's own
 /// future seat (`SL-D4`).
 #[must_use]
-pub fn join_scarcity_micro(bonded_count: u64, age_milli: u64) -> u64 {
+pub fn join_scarcity_micro(
+    bonded_count: u64,
+    age_milli: u64,
+    params: &crate::ArchivalParams,
+) -> u64 {
     scarcity_micro(
         bonded_count.saturating_add(1),
         age_milli,
-        ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+        params.reward_age_weight_milli,
     )
 }
 
@@ -60,11 +65,14 @@ pub fn order_shard_coverage(
     in_rows: &[ShardCoverageIn],
 ) -> Vec<ShardCoverageOut> {
     let seb = effective_settlement_epoch_blocks();
+    // The rows and the tip arrive as the FFI's bare `u64` heights
+    // (grandfathered, `check_inland_height_u64.py`); they decode here, once.
+    let judged_at = BlockHeight::from_raw(tip_height);
     let mut out: Vec<ShardCoverageOut> = in_rows
         .iter()
         .map(|row| {
-            let age = shard_age_milli(tip_height, row.freeze_height, seb);
-            let join = join_scarcity_micro(row.bonded_count, age);
+            let age = shard_age_milli(judged_at, BlockHeight::from_raw(row.freeze_height), seb);
+            let join = join_scarcity_micro(row.bonded_count, age, crate::archival_params());
             let expected = if sigma_work_milli == 0 {
                 0
             } else {
@@ -91,6 +99,7 @@ pub fn order_shard_coverage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 
     fn row(shard_id: u64, bonded_count: u64, freeze_height: u64) -> ShardCoverageIn {
         ShardCoverageIn {
@@ -103,9 +112,13 @@ mod tests {
 
     #[test]
     fn join_scarcity_matches_bonded_plus_one() {
-        let age = shard_age_milli(50_000, 1_000, effective_settlement_epoch_blocks());
+        let age = shard_age_milli(
+            BlockHeight::from_raw(50_000),
+            BlockHeight::from_raw(1_000),
+            effective_settlement_epoch_blocks(),
+        );
         assert_eq!(
-            join_scarcity_micro(3, age),
+            join_scarcity_micro(3, age, &crate::ArchivalParams::SHIPPED),
             scarcity_micro(4, age, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI)
         );
     }

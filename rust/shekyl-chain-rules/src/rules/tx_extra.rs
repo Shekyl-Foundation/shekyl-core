@@ -63,10 +63,10 @@ fn fields(cx: &TxContext<'_>) -> Option<Vec<TxExtraField>> {
 /// (`prevalidate_miner_transaction` runs the same adapter).
 ///
 /// On a listed transaction the subject is [`ExtraSubject::General`], which
-/// also refuses a `0x02` nonce — the clause the census files under I20 and
-/// the C++ emits here (module docs). On the coinbase the grammar is I20's,
-/// so this rule checks the PQC fields alone and leaves the nonce and the
-/// pubkey to it.
+/// also refuses a `0x02` nonce and a `0x0C` draw commitment — the clause
+/// the census files under I20 and the C++ emits here (module docs). On the
+/// coinbase the grammar is I20's, so this rule checks the PQC fields alone
+/// and leaves the pubkey, the nonce and the commitment to it.
 pub(crate) struct I19;
 
 impl Rule for I19 {
@@ -96,14 +96,16 @@ impl TxRule for I19 {
 }
 
 /// CEN-I20: the coinbase's `extra` is exactly `[0x01 pubkey(32), 0x02
-/// nonce(8), 0x06 KEM(1120·n), 0x07 leaf(64·n)]` in that order for
-/// `n = vout.len() > 0`, exactly the first two when `n == 0`, and nothing
-/// else (`TXE-Q6′`, ruled 2026-09-23; `check_coinbase_extra_shape`). The
-/// whitelist is the rule, so an addition is a consensus amendment.
+/// nonce(8), 0x0C draw commitment(32), 0x06 KEM(1120·n), 0x07 leaf(64·n)]`
+/// in that order for `n = vout.len() > 0`, exactly the first three when
+/// `n == 0`, and nothing else (`TXE-Q6′`, ruled 2026-09-23; amended
+/// 2026-10-10, `SO-D12i`; `check_coinbase_extra_shape`). The whitelist is
+/// the rule, so an addition is a consensus amendment. The commitment's
+/// bytes are not judged: every 32-byte value is a commitment.
 ///
 /// Judged at `Miner` and nowhere else — [`TxScope::Coinbase`]'s pin: a
-/// coinbase-shaped body at `Lone` is not this rule's to admit (its nonce is
-/// refused by I19's `General` subject; its `Gen` input by the non-coinbase
+/// coinbase-shaped body at `Lone` is not this rule's to admit (its nonce
+/// and its draw commitment are refused by I19's `General` subject; its `Gen` input by the non-coinbase
 /// rows), and a non-coinbase body at `Miner` is refused here for lacking the
 /// grammar, whatever its inputs say.
 pub(crate) struct I20;

@@ -7,28 +7,6 @@
 //! [`ARCHIVAL_RETENTION_GATE2.md`](../../docs/design/ARCHIVAL_RETENTION_GATE2.md) §3.1
 //! and [`ARCHIVAL_TIMING_CONSTANTS.md`](../../docs/design/ARCHIVAL_TIMING_CONSTANTS.md).
 
-/// λ_target — derived challenges issued per `(P, shard)` pair per settlement
-/// epoch. Ruled `3` by the 2-of-3 nesting
-/// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §3): the inner majority settles one
-/// epoch's serve-credit bit, and §3 carries its derivation (liar containment
-/// `3f²(1−f)+f³`, honest survival `a²(3−2a)`, the unanimity rejection, and the
-/// free-rider deterrent `n·I − S`).
-///
-/// **Per *pair*, not per block.** The urn issues `λ·D/E` draws in each block
-/// (`D` = drawable pairs, `E` = `SETTLEMENT_EPOCH_BLOCKS`); that per-block
-/// count is *derived* by [`crate::challenge_assignment`], never pinned. This
-/// constant is the coverage target [`crate::ChallengeUrn::new`] **reads**
-/// (Q4, 2026-09-17); [`crate::assign_epoch`] feeds that constructor, so it
-/// is not a parameter a caller supplies, and the urn and the settlement
-/// threshold below cannot be given different values.
-///
-/// Jointly pinned with [`crate::SERVE_THRESHOLD_PASSES`] — 2-of-3 is one
-/// decision, and `attestation.rs` const-asserts the two properties that make
-/// it one: the threshold must be reachable, and it must be a strict majority.
-/// Re-pinning either requires re-running §3's derivation, the `(m, n)` window
-/// re-pin, and the economics-sim arithmetic that scales with it.
-pub const CHALLENGES_PER_PAIR_PER_EPOCH: u32 = 3;
-
 /// `k` — the slash grace after `H_close`, **in settlement epochs**: the
 /// slash fold for epoch `E` runs at the first block strictly above
 /// `H_slash_deadline(E) = last_block(E) + k·SEB = last_block(E + k)`
@@ -47,7 +25,7 @@ pub const CHALLENGES_PER_PAIR_PER_EPOCH: u32 = 3;
 /// What this replaces: `CHALLENGE_RESOLUTION_BLOCKS = 10_000`, a
 /// block-denominated pin equal to `SETTLEMENT_EPOCH_BLOCKS` by coincidence
 /// (two independent numbers, one of which a re-pin could move alone) and —
-/// the live defect — **not** carried by the Fakechain schedule lever: under
+/// the live defect — **not** carried by the settlement-epoch lever: under
 /// `SEB = 100` the grace stayed ten thousand blocks, a hundred epochs, so
 /// every slash the regtest regime reached was reached under a relationship
 /// production never has. Written as the multiple, the relationship is
@@ -201,48 +179,14 @@ pub const W2_MIN_DEFENSIBLE_BLOCKS: u64 = 200;
 /// Upper edge of the W₂ band — see [`W2_MIN_DEFENSIBLE_BLOCKS`].
 pub const W2_MAX_DEFENSIBLE_BLOCKS: u64 = 500;
 
-// Keep the doc's "one twentieth of a settlement epoch" literally true. Integer
-// division would silently truncate if `SETTLEMENT_EPOCH_BLOCKS` were ever
-// re-pinned to a non-multiple, leaving the prose claiming a fraction the value
-// is not. Compile-time, so a re-pin cannot land it quietly.
-const _: () = assert!(
-    SETTLEMENT_EPOCH_BLOCKS.is_multiple_of(W2_EPOCH_DIVISOR),
-    "SETTLEMENT_EPOCH_BLOCKS is not a multiple of W2_EPOCH_DIVISOR: CHALLENGE_RESPONSE_BLOCKS \
-     would truncate and no longer be the fraction of an epoch its doc claims; re-pin the \
-     divisor deliberately rather than inheriting a rounded value"
-);
-
-// The one that defends the *ruling* rather than the arithmetic. Divisibility
-// keeps the prose true; this keeps the value inside the band the ruling was
-// made over. A re-pin of `SETTLEMENT_EPOCH_BLOCKS` alone would otherwise carry
-// W₂ out of that band while every claim about it still read as current —
-// `SEB = 100_000` divides evenly and yields 5_000, which no part of the ruling
-// covers.
-const _: () = assert!(
-    CHALLENGE_RESPONSE_BLOCKS >= W2_MIN_DEFENSIBLE_BLOCKS
-        && CHALLENGE_RESPONSE_BLOCKS <= W2_MAX_DEFENSIBLE_BLOCKS,
-    "CHALLENGE_RESPONSE_BLOCKS is outside the band the W2 ruling was made over; a change \
-     to SETTLEMENT_EPOCH_BLOCKS has carried W2 with it. Re-run the ruling (no surviving \
-     upper bound; hard lower bound) before widening the band"
-);
-
-// The slash fold for epoch E must not run before the response window of E's
-// last-issued challenge closes, or in-flight responses read as misses. The fold
-// runs strictly above the deadline (`failure_window.rs`), so `>=` is exact.
-// This is the production pin: grace `k · SEB` against the genesis window.
-// A schedule whose epoch is shorter than `W2_EPOCH_DIVISOR` has no window
-// (`challenge_response_blocks` is `None`); that case is the lever test.
-// `k · divisor ≥ 1` stays true while the division yields 0, so it does not
-// say the window exists.
-const _: () = assert!(
-    SLASH_GRACE_EPOCHS * SETTLEMENT_EPOCH_BLOCKS >= CHALLENGE_RESPONSE_BLOCKS,
-    "the production slash grace (k * SEB) is shorter than the genesis \
-     challenge-response window, so the fold for an epoch would run before \
-     the response window of its last-issued challenge closes"
-);
+// The epoch's couplings to W₂ — a multiple of the divisor, W₂ inside the
+// ruled band, the grace covering W₂ — are `ArchivalParams::validate`'s, and
+// the shipped set is const-asserted to pass it (`params.rs`). A re-pin of the
+// epoch that carries W₂ out of the band stops the build there.
 
 /// Global settlement-epoch boundary (`ARCHIVAL_TIMING_CONSTANTS.md` §1).
-pub const SETTLEMENT_EPOCH_BLOCKS: u64 = 10_000;
+/// Generated from `config/consensus_constants.json` `settlement_epoch_blocks`.
+pub use crate::bond_floor::SETTLEMENT_EPOCH_BLOCKS;
 
 use crate::bond_floor::ARCHIVAL_REORG_DEPTH_BLOCKS;
 
@@ -281,7 +225,7 @@ pub enum SettlementEpochOverrideError {
         "SHEKYL_SETTLEMENT_EPOCH_BLOCKS={raw:?} is not a valid override: expected an \
          integer in {floor}..={max} (strictly above the reorg cap of {reorg_cap}; lower \
          SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS with the epoch); fix the value or unset the variable",
-        max = SETTLEMENT_EPOCH_BLOCKS
+        max = crate::archival_params().settlement_epoch_blocks
     )]
     Invalid {
         /// The rejected raw value, named so the refusal is diagnosable.
@@ -331,8 +275,9 @@ pub enum SettlementEpochOverrideError {
 /// cap's: `SEB > D_max` is an invariant of every valid configuration on
 /// every nettype (`ARCHIVAL_PRUNED_DAEMON_MODE.md` Q2, rule 71), so a
 /// regtest that shortens the epoch below the production cap lowers the
-/// cap lever with it — the Fakechain rule set the daemon runs names that
-/// cap (`shekyl_chain_rules::RuleSet::fakechain`).
+/// cap lever with it. The node's rule set names that cap through
+/// `CappedEpoch` (`RuleSet::with_levers`); this parser is the latch's
+/// own check for callers that hold no rule set.
 pub fn parse_settlement_epoch_override(
     raw: Option<&str>,
     reorg_cap: u64,
@@ -342,7 +287,9 @@ pub fn parse_settlement_epoch_override(
     };
     let floor = settlement_epoch_override_floor(reorg_cap);
     match raw.trim().parse::<u64>() {
-        Ok(v) if (floor..=SETTLEMENT_EPOCH_BLOCKS).contains(&v) => Ok(Some(v)),
+        Ok(v) if (floor..=crate::archival_params().settlement_epoch_blocks).contains(&v) => {
+            Ok(Some(v))
+        }
         _ => Err(SettlementEpochOverrideError::Invalid {
             raw: raw.to_string(),
             floor,
@@ -391,7 +338,7 @@ fn raw_reorg_cap_override() -> Option<String> {
 
 fn latch_unarmed() -> &'static EffectiveSchedule {
     EFFECTIVE.get_or_init(|| EffectiveSchedule {
-        blocks: SETTLEMENT_EPOCH_BLOCKS,
+        blocks: crate::archival_params().settlement_epoch_blocks,
         reorg_cap: ARCHIVAL_REORG_DEPTH_BLOCKS,
         ignored_override: raw_override().is_some() || raw_reorg_cap_override().is_some(),
     })
@@ -413,9 +360,10 @@ fn latch_unarmed() -> &'static EffectiveSchedule {
 /// schedule no matter what the environment says, so a leaked
 /// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` (shared systemd template, container
 /// base layer) cannot silently mis-epoch wallet state or fork a public
-/// node. The daemon arms only on FAKECHAIN, behind its own fail-closed
-/// startup gate (`Blockchain::init`, next to the seed-epoch gate);
-/// unarmed consumers surface the ignored lever via
+/// node. The Rust daemon arms this latch from its dev rows at startup
+/// (`arm_settlement_schedule`), before any epoch arithmetic. The node's
+/// rule set does not read the latch: `schedule_of` builds a `CappedEpoch`
+/// from those same rows. Unarmed consumers surface an ignored lever via
 /// [`settlement_epoch_override_ignored`].
 #[must_use]
 pub fn effective_settlement_epoch_blocks() -> u64 {
@@ -425,14 +373,13 @@ pub fn effective_settlement_epoch_blocks() -> u64 {
 /// The effective reorg cap: the genesis-pinned
 /// [`ARCHIVAL_REORG_DEPTH_BLOCKS`] (`D_max`, `PDM-Q11`), or — only in a
 /// process that armed — the validated `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`
-/// override. **This is the cap the daemon's Fakechain rule set names**
-/// (`shekyl_chain_rules::RuleSet::fakechain(fixed, schedule)`, the
-/// schedule a `FakechainSchedule` pair of this and
-/// [`effective_settlement_epoch_blocks`], DRS-E4 `ARW-15`): the rule set
-/// is the consensus home of the cap and the store's undo retention is
-/// constrained by it (S-CHAIN-W SCW-7); this accessor is where a levered
-/// daemon reads the value it hands that constructor. Same read-once,
-/// armed-only semantics as [`effective_settlement_epoch_blocks`].
+/// override. The consensus home of the cap is the rule set
+/// (`CappedEpoch`, `RuleSet::with_levers`, DRS-E4 `ARW-15`): the node's
+/// `schedule_of` builds that pair from the daemon's dev rows, and the
+/// store's undo retention is constrained by the set (S-CHAIN-W SCW-7).
+/// This accessor is the same number for a caller that holds no rule set.
+/// Same read-once, armed-only semantics as
+/// [`effective_settlement_epoch_blocks`].
 #[must_use]
 pub fn effective_archival_reorg_depth_blocks() -> u64 {
     latch_unarmed().reorg_cap
@@ -440,8 +387,8 @@ pub fn effective_archival_reorg_depth_blocks() -> u64 {
 
 /// Arm the regtest schedule levers — `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and
 /// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` — for a **regtest context**: the
-/// daemon's FAKECHAIN startup path, or a wallet-side regtest harness whose
-/// epoch arithmetic must match a short-epoch regtest daemon. Must run at
+/// daemon's startup arm, or a wallet-side regtest harness whose epoch
+/// arithmetic must match a short-epoch regtest daemon. Must run at
 /// process startup, before any epoch arithmetic: arming after the schedule
 /// latched is a typed refusal ([`SettlementEpochOverrideError::ArmedTooLate`]),
 /// as is an invalid value ([`SettlementEpochOverrideError::Invalid`],
@@ -455,7 +402,7 @@ pub fn arm_settlement_epoch_override_for_regtest() -> Result<u64, SettlementEpoc
     let reorg_cap = parse_reorg_cap_override(raw_reorg_cap_override().as_deref())?
         .unwrap_or(ARCHIVAL_REORG_DEPTH_BLOCKS);
     let target = parse_settlement_epoch_override(raw_override().as_deref(), reorg_cap)?
-        .unwrap_or(SETTLEMENT_EPOCH_BLOCKS);
+        .unwrap_or(crate::archival_params().settlement_epoch_blocks);
     let latched = EFFECTIVE.get_or_init(|| EffectiveSchedule {
         blocks: target,
         reorg_cap,
@@ -469,20 +416,72 @@ pub fn arm_settlement_epoch_override_for_regtest() -> Result<u64, SettlementEpoc
     Ok(latched.blocks)
 }
 
-/// True iff the effective schedule differs from the genesis default
-/// (i.e. an **armed** `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` or
-/// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` override is active). Drives the
-/// daemon's loud fakechain warning.
-#[must_use]
-pub fn settlement_epoch_blocks_overridden() -> bool {
-    effective_settlement_epoch_blocks() != SETTLEMENT_EPOCH_BLOCKS
-        || effective_archival_reorg_depth_blocks() != ARCHIVAL_REORG_DEPTH_BLOCKS
-}
-
 /// True iff a regtest schedule lever is set but this process never armed —
 /// the override is being deliberately ignored. Unarmed consumers (the
 /// wallet's stake-engine spawn) surface this loudly once so the
 /// leaked-environment case is diagnosable instead of silent.
+/// Arms the schedule from typed values, the daemon's path
+/// (`DAEMON_CONFIG_CUTOVER.md` §4.2: `dev-settlement-epoch-blocks` and
+/// `dev-archival-reorg-depth`, read from the configuration's section and
+/// never from the environment). The same ranges as the string parsers,
+/// the same latch, the same refusals; `None` is the genesis pin.
+///
+/// # Errors
+/// [`SettlementEpochOverrideError`]: a value outside its range, or a
+/// schedule already latched before this ran.
+pub fn arm_settlement_epoch_override(
+    blocks: Option<u64>,
+    reorg_cap: Option<u64>,
+) -> Result<u64, SettlementEpochOverrideError> {
+    let (target, reorg_cap) = check_settlement_epoch_override(blocks, reorg_cap)?;
+    let latched = EFFECTIVE.get_or_init(|| EffectiveSchedule {
+        blocks: target,
+        reorg_cap,
+        ignored_override: false,
+    });
+    if latched.blocks != target || latched.reorg_cap != reorg_cap {
+        return Err(SettlementEpochOverrideError::ArmedTooLate {
+            latched: latched.blocks,
+        });
+    }
+    Ok(latched.blocks)
+}
+
+/// The effective `(epoch length, reorg cap)` the typed values name, or
+/// the refusal, with nothing latched: the daemon's configuration check
+/// calls this (`INPUT_GRAMMAR.md` IG-Q59), and
+/// [`arm_settlement_epoch_override`] calls it before it latches, so the
+/// ranges are written once. `None` is the genesis pin.
+///
+/// # Errors
+/// [`SettlementEpochOverrideError::InvalidReorgCap`] and
+/// [`SettlementEpochOverrideError::Invalid`]; never `ArmedTooLate`.
+pub fn check_settlement_epoch_override(
+    blocks: Option<u64>,
+    reorg_cap: Option<u64>,
+) -> Result<(u64, u64), SettlementEpochOverrideError> {
+    let reorg_cap = match reorg_cap {
+        Some(v) if (1..=ARCHIVAL_REORG_DEPTH_BLOCKS).contains(&v) => v,
+        Some(v) => {
+            return Err(SettlementEpochOverrideError::InvalidReorgCap { raw: v.to_string() })
+        }
+        None => ARCHIVAL_REORG_DEPTH_BLOCKS,
+    };
+    let floor = settlement_epoch_override_floor(reorg_cap);
+    let target = match blocks {
+        Some(v) if (floor..=crate::archival_params().settlement_epoch_blocks).contains(&v) => v,
+        Some(v) => {
+            return Err(SettlementEpochOverrideError::Invalid {
+                raw: v.to_string(),
+                floor,
+                reorg_cap,
+            })
+        }
+        None => crate::archival_params().settlement_epoch_blocks,
+    };
+    Ok((target, reorg_cap))
+}
+
 #[must_use]
 pub fn settlement_epoch_override_ignored() -> bool {
     latch_unarmed().ignored_override
@@ -584,7 +583,6 @@ mod tests {
             effective_archival_reorg_depth_blocks(),
             ARCHIVAL_REORG_DEPTH_BLOCKS
         );
-        assert!(!settlement_epoch_blocks_overridden());
         assert!(!settlement_epoch_override_ignored());
         assert_eq!(
             arm_settlement_epoch_override_for_regtest(),

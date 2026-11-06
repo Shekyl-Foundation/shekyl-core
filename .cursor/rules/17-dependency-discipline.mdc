@@ -144,42 +144,12 @@ for the dependency line, confirm the feature is listed in the
 `features = [...]` array, and confirm the feature is
 load-bearing by reading the gated impl in the crate source.
 
-## The motivating example
-
-The cSHAKE256 implementation choice for `STAGE_1_PR_3_KEY_ENGINE.md`
-§7.12 is the recurrence pattern this rule was written against.
-Three dependency-discipline failures surfaced before the
-correct disposition was reached:
-
-1. **Initial recommendation: `tiny-keccak` for cSHAKE.** Cited
-   because `tiny_keccak::CShake` exists and matches the
-   SP 800-185 surface. Verification at source: `tiny-keccak`'s
-   inner `KeccakState` is private, has no `Zeroize` impl, no
-   `Drop` impl, and no public `reset()` method. The wipe-on-drop
-   property required by `35-secure-memory.mdc` is absent;
-   satisfying the property under `tiny-keccak` would require
-   `unsafe` transmute against a private type's layout.
-   Recommendation withdrawn.
-
-2. **Counter-recommendation: `sha3` doesn't expose cSHAKE256.**
-   Cited because the assistant's recall of `sha3`'s public
-   surface emphasized SHA-3 + SHAKE, not cSHAKE. Verification
-   at source: `sha3 = "0.10"` does expose `CShake256`
-   directly with the SP 800-185 idiomatic API
-   (`CShake256::new(customization)` matching the
-   non-NIST-application case). Recommendation reversed.
-
-3. **Workspace-state assumption: needs a new dependency.**
-   Cited because the recommendation framed `sha3` as "should be
-   added." Verification at source: `sha3 = "0.10"` is already a
-   workspace dependency via `shekyl-crypto-pq`'s ML-KEM
-   bindings; no new direct dependency is needed, only enabling
-   the `zeroize` feature flag on the existing import.
-
-Each failure was an instance of recommending without verifying.
-The correct disposition (cSHAKE256 via `sha3` + `zeroize`
-feature) is the disposition that emerges from applying this
-rule's protocol from the start.
+The three misses this protocol exists to catch, in one recommendation:
+the crate's public type matches the spec and its private state has no
+wipe path; recall of the crate's surface omits an API the pinned version
+does expose; the crate is described as a new dependency when the
+workspace already pins it and only a feature flag is missing. Verify
+each claim at the source above before the recommendation is written.
 
 ## When the discipline relaxes
 
@@ -204,34 +174,9 @@ landing without re-verifying.
 
 ## Related rules
 
-- **`00-mission.mdc`** — priority hierarchy. The
-  dependency-discipline rule operates within priority-1
-  (security) constraints; recommendations whose security
-  property fails verification are rejected per the hierarchy.
-- **`16-architectural-inheritance.mdc`** — discipline-application
-  cadence. The dependency-discipline rule is one application
-  of the broader principle that internal consistency is
-  necessary but not sufficient; what the recommendation
-  delivers against the threat model is the load-bearing
-  question.
-- **`20-rust-vs-cpp-policy.mdc`** — Rust if any of: touches a
-  secret. The dependency-discipline rule's strongest application
-  is in the secret-touching surfaces this policy directs to
-  Rust.
-- **`25-rust-architecture.mdc`** — workspace dependency
-  governance. The dependency-discipline rule operates within
-  this rule's framing for how dependencies are added,
-  versioned, and feature-gated.
-- **`30-cryptography.mdc`** — constant-time-or-explicit-rejection
-  rule and PQC-primitive selection guidance. The
-  dependency-discipline rule's property-existence check is the
-  operational form of these rules' selection criteria.
-- **`35-secure-memory.mdc`** — wipe-on-drop / `Zeroize`
-  discipline. The dependency-discipline rule's
-  `Zeroize`-verification is the operational form of this
-  rule's structural-memwipe requirement.
-- **`36-secret-locality.mdc`** — Rust owns secrets at the
-  C++/Rust boundary. The dependency-discipline rule extends to
-  which-Rust-crate-owns-secrets, since a crate that holds
-  secret-bearing intermediate state is a secret-locality
-  participant by transitivity.
+`00-mission.mdc` rejects a recommendation whose security property fails
+verification. `20-rust-vs-cpp-policy.mdc` sends secret-touching use to
+Rust, which is where this check is strongest. `25-rust-architecture.mdc`
+governs how a dependency is added. `30-cryptography.mdc`,
+`35-secure-memory.mdc`, and `36-secret-locality.mdc` are the properties
+the source check has to find, not assume.

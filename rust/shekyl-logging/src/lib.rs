@@ -13,6 +13,9 @@
 //!
 //! - One env var — `SHEKYL_LOG` — controls filter directives. `RUST_LOG` is
 //!   intentionally not honored in release builds (see [`filter`]).
+//! - Stderr is coloured only when it is a terminal and `NO_COLOR` is unset
+//!   or empty. The file sink is never coloured. `NO_COLOR` changes
+//!   rendering, which is the environment read IG-13 permits.
 //! - File sinks are optional, per-binary, and POSIX-mode `0600` on the
 //!   active file at init time (see [`config::FileSink`] for the
 //!   rotation caveat).
@@ -39,6 +42,38 @@
 //! interesting work. Binding it to `_` or letting it drop at a `;` defeats
 //! the purpose. See the guard's own docs for the defense hierarchy.
 //!
+//! # Every sink is queued
+//!
+//! Every sink, stderr included, sits behind a bounded queue with its own
+//! writer thread (`log-stderr`, `log-file`), so a log call never waits on
+//! a sink. A full queue drops and counts. A write the sink refuses is
+//! counted. A flush is counted only when that `flush` returns an error.
+//! The writer thread reports the counts in one line once the sink takes
+//! writes again; a summary the sink refuses stays pending and is not itself
+//! a failed flush. What that leaves, on the record (Rick's review
+//! of #1069, 2026-10-14):
+//!
+//! - **Flushing and shutdown.** [`flush`] waits until every line logged
+//!   before the call has reached its sink, or until its deadline, and
+//!   never longer; a full queue is retried, never waited on. A process
+//!   about to exit calls it last, and so does a test that reads what a
+//!   sink wrote. Dropping the [`LoggerGuard`] flushes the same way within
+//!   [`FLUSH_WITHIN`] and stops the writers. Lines still queued at the
+//!   deadline are lost. A sink still stalled at that point can hold the
+//!   process's exit anyway: a writer thread inside a write the kernel
+//!   cannot interrupt (a stalled disk) keeps the process from exiting, and
+//!   anything else writing to the same stalled stderr blocks with it. The
+//!   service manager's stop timeout is the bound.
+//! - **Before init.** The FFI's pre-init passthrough (WARNING and above,
+//!   straight to stderr; see [`ffi`]) stays synchronous: a stalled stderr
+//!   blocks those calls. It serves only the lines logged before the
+//!   subscriber is installed.
+//! - **The bound is lines, not bytes.** [`SINK_QUEUE_LINES`] counts lines,
+//!   so a queue of long lines holds more memory than the figure suggests.
+//! - **The thread ledger does not count them.** This crate spawns the two
+//!   writer threads with `std::thread`, not through `shekyl-thread-ledger`,
+//!   so the daemon's ledger print leaves them out.
+//!
 //! # Quick-start
 //!
 //! ```no_run
@@ -59,19 +94,29 @@
 pub mod config;
 pub mod ffi;
 pub mod filter;
+pub mod subsystem;
 
 mod appender;
+mod colour;
 mod legacy;
+mod queue;
 
+pub use queue::{flush, Flushed, FLUSH_WITHIN, SINK_QUEUE_LINES};
+
+#[doc(hidden)]
+pub use colour::LineColour;
 pub use config::{Config, FileSink, Rotation};
+pub use ffi::{install_tracing_forwarder, ForwarderError};
 pub use filter::{
     directives_from_legacy_categories, FilterError, TranslationReport, SHEKYL_LOG_ENV,
 };
 
+use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use colour::NoColor;
+
 use thiserror::Error;
-use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
@@ -93,7 +138,7 @@ use tracing_subscriber::Registry;
 /// it was installed from Rust or from C.
 pub(crate) static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// Whether [`install_subscriber_inner`] has successfully called `try_init`.
+/// Whether [`install_reserved`] has successfully called `try_init`.
 ///
 /// Set only after `try_init` returns Ok, and never cleared —
 /// `set_global_default` has no uninstall. FFI emit, enabled, and the
@@ -148,13 +193,17 @@ pub(crate) type FilterReloadHandle = reload::Handle<EnvFilter, Registry>;
 #[must_use = "dropping LoggerGuard without binding flushes buffered events \
               and may silently lose logs; bind to a named local such as `_guard`"]
 pub struct LoggerGuard {
-    // `Option` because stderr-only configs have no worker thread; the
-    // guard is still `#[must_use]` to keep the type-level discipline
-    // uniform regardless of which sinks the caller chose. `pub(crate)`
-    // so the FFI path in [`crate::ffi`] can build a guard when the C
-    // caller owns the init — it holds the guard in global state and
-    // drops it on `shekyl_log_shutdown`.
-    pub(crate) _worker_guard: Option<WorkerGuard>,
+    // One field per sink. Drop flushes that sink's queue. The fields are
+    // never read: moving a guard out would take the writer thread out of
+    // the value that shuts it down. `pub(crate)` so the FFI path in
+    // [`crate::ffi`] can hold the guard and drop it on
+    // `shekyl_log_shutdown`.
+    /// stderr's writer thread. stderr is always queued.
+    #[allow(dead_code)]
+    pub(crate) stderr: queue::SinkGuard,
+    /// The file sink's writer thread, when a file sink is configured.
+    #[allow(dead_code)]
+    pub(crate) file: Option<queue::SinkGuard>,
 }
 
 /// Errors returned from [`init`].
@@ -189,6 +238,10 @@ pub enum InitError {
     /// directory, etc.).
     #[error("invalid file-sink directory: {0}")]
     InvalidDirectory(std::path::PathBuf),
+
+    /// A sink's writer thread could not be started.
+    #[error("failed to start a log writer thread: {0}")]
+    WriterThread(#[source] std::io::Error),
 }
 
 /// Install the global [`tracing`] subscriber described by `config`.
@@ -211,11 +264,34 @@ pub fn init(config: Config) -> Result<LoggerGuard, InitError> {
 }
 
 /// Install the subscriber and hand back both the guard *and* the
-/// reload handle. Reservation ([`INITIALIZED`]) and successful
-/// install ([`SUBSCRIBER_INSTALLED`]) are coordinated here so both
-/// [`init`] and the FFI path stay in lockstep.
+/// reload handle. [`init`], the FFI path, and the test hook all enter
+/// through [`install_reserved`], so the reservation ([`INITIALIZED`])
+/// and the successful install ([`SUBSCRIBER_INSTALLED`]) stay one protocol.
+///
+/// Stderr's colour is [`LineColour::stderr`] on this process's stderr.
+/// The test hook passes its own [`LineColour`]: a stand-in writer is not
+/// that stderr.
 pub(crate) fn install_subscriber(
     config: Config,
+) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
+    let stderr = std::io::stderr();
+    let colour = LineColour::stderr(stderr.is_terminal(), NoColor::from_env());
+    install_reserved(config, stderr, queue::SINK_QUEUE_LINES, colour)
+}
+
+/// Reserve the process subscriber, then install `config` with `stderr`
+/// queued at `lines`, rendering stderr as `colour`.
+///
+/// One reservation for every caller. A failed attempt clears
+/// [`INITIALIZED`] so a later call can retry. Success leaves the
+/// reservation set for the process lifetime and flips
+/// [`SUBSCRIBER_INSTALLED`], so emit, enabled, and the forwarder stop
+/// using the pre-init stderr passthrough.
+fn install_reserved<W: std::io::Write + Send + 'static>(
+    config: Config,
+    stderr: W,
+    lines: usize,
+    colour: LineColour,
 ) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
     if INITIALIZED
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -224,12 +300,7 @@ pub(crate) fn install_subscriber(
         return Err(InitError::AlreadyInitialized);
     }
 
-    // Release the reservation on hard failure so a follow-up init
-    // with a fixed config can succeed. On success the reservation
-    // stays set for the process lifetime *and* we flip
-    // `SUBSCRIBER_INSTALLED` so emit/enabled/forwarder stop using
-    // the pre-init stderr passthrough.
-    let result = install_subscriber_inner(config);
+    let result = install_subscriber_with_stderr(config, stderr, lines, colour);
     if result.is_err() {
         INITIALIZED.store(false, Ordering::SeqCst);
     } else {
@@ -238,50 +309,94 @@ pub(crate) fn install_subscriber(
     result
 }
 
-fn install_subscriber_inner(
+/// The subscriber itself. `stderr` is the stderr sink. Every sink is
+/// queued at `lines`. Production passes the process's `stderr` and
+/// [`SINK_QUEUE_LINES`]; the never-blocks test passes a sink that stalls.
+///
+/// `colour` is how stderr's lines render. [`LineColour::ansi`] is the
+/// flag the stderr layer takes, so `NO_COLOR` is applied once in
+/// [`LineColour::stderr`] and the layer does not read it again. The file
+/// sink is [`LineColour::Plain`].
+fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
     config: Config,
+    stderr: W,
+    lines: usize,
+    colour: LineColour,
 ) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
-    let filter = filter::resolve_env_filter(config.fallback_default)
-        .map_err(|e| InitError::FilterParse(e.to_string()))?;
+    let filter = match &config.directive {
+        Some(directive) => EnvFilter::try_new(directive),
+        None => filter::resolve_env_filter(config.fallback_default),
+    }
+    .map_err(|e| InitError::FilterParse(e.to_string()))?;
 
     // Wrap the resolved `EnvFilter` in a reload layer so later
     // `shekyl_log_set_categories` calls from C (via the FFI) can
     // swap filters without tearing the subscriber down.
     let (reloadable_filter, reload_handle) = reload::Layer::new(filter);
 
-    let stderr_layer = fmt::layer().with_writer(std::io::stderr);
+    // Queued like every sink: a log call never waits on stderr. The
+    // line's fields are unchanged; colour is the `colour` argument.
+    let (stderr_writer, stderr_guard) =
+        queue::queued(stderr, queue::Sink::Stderr, lines).map_err(InitError::WriterThread)?;
+    let mut producers = vec![stderr_writer.clone()];
+    let stderr_layer = fmt::layer()
+        .with_writer(stderr_writer)
+        .with_ansi(colour.ansi());
 
-    if let Some(file_sink) = config.file_sink {
-        let (non_blocking, worker_guard) = appender::open(&file_sink)?;
-        let file_layer = fmt::layer().with_writer(non_blocking).with_ansi(false);
-
-        tracing_subscriber::registry()
-            .with(reloadable_filter)
-            .with(stderr_layer)
-            .with(file_layer)
-            .try_init()
-            .map_err(|e| InitError::SubscriberInstall(e.to_string()))?;
-
-        Ok((
-            LoggerGuard {
-                _worker_guard: Some(worker_guard),
-            },
-            reload_handle,
-        ))
+    let (file_layer, file_guard) = if let Some(file_sink) = config.file_sink {
+        let (writer, guard) = appender::open(&file_sink, lines)?;
+        producers.push(writer.clone());
+        (
+            Some(
+                fmt::layer()
+                    .with_writer(writer)
+                    .with_ansi(LineColour::Plain.ansi()),
+            ),
+            Some(guard),
+        )
     } else {
-        tracing_subscriber::registry()
-            .with(reloadable_filter)
-            .with(stderr_layer)
-            .try_init()
-            .map_err(|e| InitError::SubscriberInstall(e.to_string()))?;
+        (None, None)
+    };
 
-        Ok((
-            LoggerGuard {
-                _worker_guard: None,
-            },
-            reload_handle,
-        ))
-    }
+    tracing_subscriber::registry()
+        .with(reloadable_filter)
+        .with(stderr_layer)
+        .with(file_layer)
+        .try_init()
+        .map_err(|e| InitError::SubscriberInstall(e.to_string()))?;
+    queue::install(producers);
+
+    Ok((
+        LoggerGuard {
+            stderr: stderr_guard,
+            file: file_guard,
+        },
+        reload_handle,
+    ))
+}
+
+/// Test-only hook: [`init`] with `stderr` standing in for the process's
+/// stderr and every sink's queue at `lines`, so a test can stall the sink
+/// and watch the queue drop and report instead of blocking the caller.
+///
+/// `colour` is the stand-in's rendering. Production asks [`LineColour`]
+/// whether the process stderr is a terminal and whether `NO_COLOR` is
+/// inactive. A stand-in is not that stderr, and [`std::io::IsTerminal`]
+/// cannot be implemented for an in-memory sink, so the test passes the
+/// [`LineColour`] it is asserting.
+///
+/// Enters through [`install_reserved`], the same reservation as [`init`]
+/// and the FFI path.
+#[doc(hidden)]
+pub fn __test_only_init_with_stderr<W: std::io::Write + Send + 'static>(
+    config: Config,
+    stderr: W,
+    lines: usize,
+    colour: LineColour,
+) -> Result<LoggerGuard, InitError> {
+    let (guard, reload_handle) = install_reserved(config, stderr, lines, colour)?;
+    ffi::__register_reload_handle(reload_handle);
+    Ok(guard)
 }
 
 /// Test-only hook: raise the reservation flag without installing a subscriber.

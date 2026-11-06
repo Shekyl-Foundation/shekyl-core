@@ -3,26 +3,23 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The relay vocabulary two crates need — DRS-E1 S-POOL (`DRS_E1_SPOOL.md`
-//! §3.4, `SPL-Q6` RULED 2026-09-24).
+//! The relay seam's words — DRS-E1 S-POOL (`DRS_E1_SPOOL.md` §3.4,
+//! `SPL-Q6` RULED 2026-09-24).
 //!
-//! [`RelayMethod`] and [`NetZone`] were born in `shekyl-relay::zone_route`
-//! as the FFI seam's words: an arrival class handed in, a routing plan
-//! handed out, each byte-pinned to the C++ enum it mirrors
-//! (`cryptonote::relay_method`, `epee::net_utils::zone`). The daemon's pool
-//! store needs the same words and cannot take `shekyl-relay` — a relay
-//! scheduler with an async driver — as a dependency, so they live here and
-//! `shekyl-relay` re-exports them (rule 18: a word two crates need lives
-//! below both; `SCU-Q2`, `SAR-Q2`).
+//! [`RelayMethod`] and [`NetZone`] are the FFI seam's words. The pool does
+//! not read either (DX-F6, 2026-10-16): its record carries one relay fact,
+//! whether the transaction is public yet, and the relay owns the rest.
+//! Their Rust reader is `shekyl-relay`, whose `graph` module pins
+//! [`RelayMethod`]'s bytes; [`NetZone`]'s pins sit on this type. They live
+//! at this path because the C++ side of the byte contract names it
+//! (`src/cryptonote_protocol/enums.h:64–80`), and they leave with the C++
+//! relay at the DRS-X flip.
 //!
 //! # What these enums are, and are not
 //!
-//! They are the **seam's** vocabulary. The pool *record* does not persist a
-//! `RelayMethod`: `DAEMON_RELAY_PRIVACY.md` §92.4 unbundled `Local` into
-//! provenance (permanent), re-broadcast responsibility (disarmed by
-//! observation) and a class, and the record carries those as three fields
-//! with three lifetimes (`shekyl-chain-store::pool`, `SPL-Q9`); the seam
-//! derives the byte from them where C++ still speaks it (SPL-18).
+//! They are the **seam's** vocabulary, and nothing persists them. There is
+//! no Rust `relay_category`: a pool that knows only "public yet" has no
+//! category to apply to a [`RelayMethod`].
 //!
 //! # `None` survives because the enum is shared
 //!
@@ -50,18 +47,16 @@
 /// **by value and test, not by include**: the C++ side `static_assert`s each
 /// variant's byte against this contract at the FFI seam, so a renumbering on
 /// either side is a compile error there rather than a silent remap here.
-/// `shekyl-relay::zone_route` carries the Rust-side `const` pins.
+/// `shekyl-relay::graph` carries the Rust-side `const` pins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum RelayMethod {
     /// Received via RPC with `do_not_relay` set. **Unreachable in Shekyl**
-    /// (no such RPC); kept because the byte contract is shared. Matches no
-    /// relay category but `All`.
+    /// (no such RPC); kept because the byte contract is shared.
     None = 0,
     /// Originated by this node; trying to send over Tor. The class that
     /// routes the txpool backstop to fail-closed rather than `public_req`.
-    /// At the seam only — the record spells it
-    /// `RelayState::Originated { phase: Held, .. }` (§92.4).
+    /// At the seam only; no pool record carries a method (DX-F6).
     Local = 1,
     /// Received/sent using Dandelion++ stem.
     Stem = 2,
@@ -93,69 +88,31 @@ impl RelayMethod {
     pub const fn to_byte(self) -> u8 {
         self as u8
     }
-
-    /// The C++ `matches_category` table (`blockchain_db.cpp:51–96`),
-    /// transcribed exhaustively on both operands — no `default`, so a new
-    /// member of either enum is a compile error here, as `-Werror=switch`
-    /// makes it there.
-    ///
-    /// `Broadcasted` is "the network already knows": `Block` or `Fluff`,
-    /// nothing earlier — the leaking direction, so `None`, `Local` and `Stem`
-    /// are named in the `false` arm rather than left to a fallback.
-    /// `Relayable` is every method but `None`. `All` is every method.
-    #[must_use]
-    pub const fn matches(self, category: RelayCategory) -> bool {
-        match category {
-            RelayCategory::All => true,
-            RelayCategory::Relayable => !matches!(self, Self::None),
-            RelayCategory::Broadcasted => match self {
-                Self::None | Self::Local | Self::Stem => false,
-                Self::Block | Self::Fluff => true,
-            },
-        }
-    }
 }
 
-/// The pool's visibility classes — C++ `relay_category`
-/// (`src/blockchain_db/blockchain_db.h:114–141`). A **classifier's
-/// operand**, applied by the pool to a [`RelayMethod`]; the store never
-/// applies it (`DRS_E1_SPOOL.md` §3.3).
+/// The network class the zone-parameterized embargo still names. Not a
+/// connector id, and not a route: the one relay does not read this byte.
+/// The C++ `netzone_*` constants pin the same bytes.
 ///
-/// Three members. `relay_category::legacy` (`broadcasted` + `none`) was
-/// deleted from the C++ on 2026-08-24 as having no referent in a
-/// pre-genesis coin (`DAEMON_RELAY_PRIVACY.md` §93.4) and is **not** minted
-/// here. Never serialized, never crosses the FFI, so no byte pin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RelayCategory {
-    /// Public: received via a block or fluff. What a peer may learn we hold.
-    Broadcasted,
-    /// Every method but `None`.
-    Relayable,
-    /// Everything in the pool.
-    All,
-}
-
-/// The network zone a transaction arrived on (or, for originated traffic, the
-/// zone the origination roll chose). Mirrors `epee::net_utils::zone` by value
-/// and `static_assert`, same contract discipline as [`RelayMethod`].
-///
-/// `Invalid == 0` is load-bearing on the C++ side: a pool record written
-/// before the zone field existed carries zero there and decodes to "origin
-/// unknown" with no migration (`blockchain_db.cpp`, `set_origin_zone`'s
-/// `static_assert`). The Rust pool record has no such history, but the pin
-/// is the seam's and stays.
+/// `Invalid == 0` is the seam pin with `cryptonote::netzone_invalid`.
+/// The pool record does not store an arrival zone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum NetZone {
-    /// No zone — for originated traffic this is the roll saying "take
-    /// anonymity", resolved by the caller's own zone map, fail-closed; for
-    /// an arrival, "origin unknown".
+    /// Unknown byte. The origination roll that used this value is retired.
+    /// The zone-parameterized embargo still draws its long window here.
     Invalid = 0,
     /// The clear internet.
     Public = 1,
     /// Tor. Discriminant 2 is unused so this value stays 3.
     Tor = 3,
 }
+
+const _: () = {
+    assert!(NetZone::Invalid as u8 == 0);
+    assert!(NetZone::Public as u8 == 1);
+    assert!(NetZone::Tor as u8 == 3);
+};
 
 impl NetZone {
     /// Byte-contract decode; `None` on an unknown byte. Exhaustive: a fifth
@@ -209,7 +166,6 @@ mod tests {
         // In particular the C++ "all-clear ⇒ fluff" state does not exist:
         // byte 0 is `None`, and `None` is not broadcasted.
         assert_eq!(RelayMethod::from_byte(0), Some(RelayMethod::None));
-        assert!(!RelayMethod::None.matches(RelayCategory::Broadcasted));
     }
 
     #[test]
@@ -223,26 +179,5 @@ mod tests {
         assert!(NetZone::Tor.is_anonymity());
         assert!(!NetZone::Public.is_anonymity());
         assert!(!NetZone::Invalid.is_anonymity());
-    }
-
-    /// The C++ `matches_category` table, row for row
-    /// (`blockchain_db.cpp:51–96`; pinned there by
-    /// `tests/unit_tests/relay_category.cpp`).
-    #[test]
-    fn matches_is_the_cxx_table() {
-        use RelayCategory::{All, Broadcasted, Relayable};
-        use RelayMethod::{Block, Fluff, Local, None, Stem};
-        let table = [
-            (None, false, false, true),
-            (Local, false, true, true),
-            (Stem, false, true, true),
-            (Fluff, true, true, true),
-            (Block, true, true, true),
-        ];
-        for (m, broadcasted, relayable, all) in table {
-            assert_eq!(m.matches(Broadcasted), broadcasted, "{m:?} broadcasted");
-            assert_eq!(m.matches(Relayable), relayable, "{m:?} relayable");
-            assert_eq!(m.matches(All), all, "{m:?} all");
-        }
     }
 }

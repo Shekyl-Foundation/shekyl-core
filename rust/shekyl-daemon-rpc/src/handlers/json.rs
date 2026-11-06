@@ -26,39 +26,25 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! Handlers for JSON REST endpoints (MAP_URI_AUTO_JON2 family).
+//! Handlers for JSON REST endpoints.
 //!
-//! Each handler is a thin async wrapper that offloads the blocking C++ FFI call
-//! to a Tokio blocking thread.
+//! A handler reads the store, the pool, or the sync-half facts. A name
+//! with no row is not a route.
 
+use crate::authority::Authority;
+use crate::methods::RpcFault;
 use crate::server::AppState;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use axum::Extension;
 use std::sync::Arc;
-
-/// Offload one blocking C++ JSON dispatch; `None` on FFI failure.
-async fn dispatch_json_raw(
-    state: &Arc<AppState>,
-    uri: &'static str,
-    body: String,
-) -> Option<String> {
-    let core = state.core.clone();
-    tokio::task::spawn_blocking(move || core.json_endpoint(uri, &body))
-        .await
-        .ok()
-        .flatten()
-}
 
 fn json_ok(body: String) -> (StatusCode, [(&'static str, &'static str); 1], String) {
     (StatusCode::OK, [("content-type", "application/json")], body)
 }
 
-fn json_dispatch_error() -> (StatusCode, [(&'static str, &'static str); 1], String) {
-    json_error("FFI dispatch failed")
-}
-
-/// The REST error envelope with a reason that names what actually failed —
+/// The REST error envelope with a reason that names what actually failed.
 /// a natively-served method never fails for "FFI dispatch" reasons.
 fn json_error(reason: &str) -> (StatusCode, [(&'static str, &'static str); 1], String) {
     let envelope = shekyl_rpc_types::RestErrorEnvelope {
@@ -72,58 +58,76 @@ fn json_error(reason: &str) -> (StatusCode, [(&'static str, &'static str); 1], S
     )
 }
 
-async fn dispatch_json(state: Arc<AppState>, uri: &'static str, body: String) -> impl IntoResponse {
-    match dispatch_json_raw(&state, uri, body).await {
-        Some(json) => json_ok(json),
-        None => json_dispatch_error(),
+/// A method failure, on every surface, is the JSON-RPC error object
+/// (RW-Q3). Success is the method's own JSON.
+fn rest_value<T: serde::Serialize>(
+    value: Result<T, shekyl_rpc_types::errors::RpcError>,
+) -> axum::response::Response {
+    match value {
+        Ok(value) => match serde_json::to_string(&value) {
+            Ok(json) => json_ok(json).into_response(),
+            Err(e) => {
+                tracing::warn!(?e, "reply could not be encoded");
+                json_error("reply could not be encoded").into_response()
+            }
+        },
+        Err(error) => (
+            StatusCode::OK,
+            [("content-type", "application/json")],
+            serde_json::to_string(&crate::authority::refusal(serde_json::Value::Null, &error))
+                .expect("an error serializes"),
+        )
+            .into_response(),
     }
 }
 
-/// Overwrite `rpc_connections_count` in a `get_info` body with the live count
-/// from the connection tracker — Rust owns the count; the C++ handler writes a
-/// literal 0 (`on_get_info`, since RK-5a deleted the accessor that had been
-/// returning one). Restricted RPC discloses 0,
-/// matching the C++ policy for the peer/connection fields, so the tracker value
-/// is only injected on the unrestricted listener. Any parse failure returns the
-/// body unchanged rather than dropping the response.
-fn fill_rpc_connections_count(json: String, restricted: bool, count: u64) -> String {
-    if restricted {
-        return json;
-    }
-    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&json) else {
-        return json;
+fn rest_params<T: serde::de::DeserializeOwned>(
+    body: &str,
+) -> Result<T, shekyl_rpc_types::errors::RpcError> {
+    use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
+    let value = if body.trim().is_empty() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str(body).map_err(|e| {
+            RpcError::new(
+                ErrorClass::BadParams,
+                Diagnostic::new("rpc.bad_params", format!("the request is not JSON: {e}")),
+            )
+        })?
     };
-    let Some(obj) = value.as_object_mut() else {
-        return json;
-    };
-    obj.insert("rpc_connections_count".to_owned(), count.into());
-    serde_json::to_string(&value).unwrap_or(json)
+    serde_json::from_value(value).map_err(|e| {
+        RpcError::new(
+            ErrorClass::BadParams,
+            Diagnostic::new(
+                "rpc.bad_params",
+                format!("the request was not accepted: {e}"),
+            ),
+        )
+    })
 }
 
-macro_rules! json_handler {
-    ($fn_name:ident, $uri:expr) => {
-        pub async fn $fn_name(
-            State(state): State<Arc<AppState>>,
-            body: String,
-        ) -> impl IntoResponse {
-            dispatch_json(state, $uri, body).await
+async fn rest_blocking<T, F>(f: F) -> axum::response::Response
+where
+    T: serde::Serialize + Send + 'static,
+    F: FnOnce() -> Result<T, shekyl_rpc_types::errors::RpcError> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(result) => rest_value(result).into_response(),
+        Err(e) => {
+            tracing::warn!(?e, "handler task did not complete");
+            json_error("handler task did not complete").into_response()
         }
-    };
+    }
 }
-
-// Unrestricted endpoints
 
 /// `/get_height` (alias `/getheight`) — served natively (RK-1,
-/// `docs/design/DAEMON_RPC_KV_CUTOVER.md`): the body is ignored, as the C++
+/// `docs/completed/DAEMON_RPC_KV_CUTOVER.md`): the body is ignored, as the C++
 /// handler ignored its empty request struct. A facts fault answers with the
 /// same envelope a failed FFI dispatch does.
 pub async fn get_height(State(state): State<Arc<AppState>>, _body: String) -> impl IntoResponse {
-    let core = state.core.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let facts = crate::chain_facts::FfiChainFacts::new(core);
-        crate::methods::get_height(&facts)
-    })
-    .await;
+    let chain = Arc::clone(&state.handles.chain);
+    let result =
+        tokio::task::spawn_blocking(move || crate::methods::get_height(chain.as_ref())).await;
     match result {
         Ok(Ok(reply)) => match serde_json::to_string(&reply) {
             Ok(json) => json_ok(json),
@@ -142,282 +146,195 @@ pub async fn get_height(State(state): State<Arc<AppState>>, _body: String) -> im
         }
     }
 }
-/// What can go wrong inside `get_transactions`' blocking section: the facts
-/// shim refused, or the daemon could not render a body it had just read out of
-/// its own store. Distinct because they are distinct answers to the caller.
-enum TxFault {
-    Facts(i32),
-    Render(crate::methods::RenderFailed),
-}
-
-/// `GET|POST /get_transactions` (alias `/gettransactions`) — served natively
-/// (RK-4c). The gather is one FFI call answering per request slot; the
-/// `(split, prune, decode_as_json)` matrix and both refusals are Rust's.
-///
-/// `state.restricted` decides two things the C++ could not, because the bridge
-/// passed a null `ctx` until #570: the request cap, and whether the pool read
-/// may disclose a transaction the node has not broadcast.
+/// `GET|POST /get_transactions` (alias `/gettransactions`) over the store
+/// and the pool: the skeleton under `prune`, else the whole body with a
+/// discarded one answered `archived` (`SB-Q2`).
 pub async fn get_transactions(
     State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
     body: String,
-) -> impl IntoResponse {
-    let request: shekyl_rpc_types::GetTransactionsRequest = if body.trim().is_empty() {
-        shekyl_rpc_types::GetTransactionsRequest::default()
-    } else {
-        match serde_json::from_str(&body) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::debug!(?e, "get_transactions: malformed request");
-                return json_error("request could not be decoded");
-            }
-        }
+) -> axum::response::Response {
+    let request = match rest_params(body.as_str()) {
+        Ok(request) => request,
+        Err(error) => return rest_value::<shekyl_rpc_types::GetTransactionsResponse>(Err(error)),
     };
-    let restricted = state.restricted;
-    if restricted && request.txs_hashes.len() > crate::methods::RESTRICTED_TRANSACTIONS_COUNT {
-        return json_ok(status_only(
-            "Too many transactions requested in restricted mode",
-        ));
-    }
-    let ids = match crate::methods::parse_request_hashes(
-        &request.txs_hashes,
-        crate::methods::TX_PARSE_FAILED,
-    ) {
-        Ok(ids) => ids,
-        Err(status) => return json_ok(status_only(&status)),
-    };
-    let core = state.core.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        // `!restricted` is the pool's sensitivity flag: false withholds a
-        // transaction that is not `relay_category::broadcasted` (§2.2).
-        let (slots, chain_height) = core
-            .transactions(&ids, !restricted)
-            .map_err(TxFault::Facts)?;
-        // A rendering the daemon cannot produce fails the request rather than
-        // answering OK with an empty `as_json`, which is what the C++ did and
-        // is the only answer a caller can act on.
-        crate::methods::project_transactions(
-            &request,
-            &ids,
-            &slots,
-            chain_height,
-            |blob, pruned| core.tx_to_json(blob, pruned),
-        )
-        .map_err(TxFault::Render)
-    })
-    .await;
-    match result {
-        Ok(Ok(reply)) => match serde_json::to_string(&reply) {
-            Ok(json) => json_ok(json),
-            Err(e) => {
-                tracing::warn!(?e, "get_transactions: reply could not be encoded");
-                json_error("reply could not be encoded")
-            }
-        },
-        Ok(Err(TxFault::Facts(rc))) => {
-            tracing::warn!(rc, "get_transactions: facts unavailable");
-            json_error("transaction facts unavailable")
-        }
-        Ok(Err(TxFault::Render(f))) => {
-            tracing::warn!(txid = %f.txid, code = f.code, "get_transactions: tx could not be rendered");
-            json_error("transaction could not be decoded to json")
-        }
-        Err(e) => {
-            tracing::warn!(?e, "get_transactions: handler task did not complete");
-            json_error("handler did not complete")
-        }
-    }
+    let chain = Arc::clone(&state.handles.chain);
+    let host = authority.host();
+    rest_blocking(move || crate::read_methods::get_transactions(chain.as_ref(), &request, host))
+        .await
 }
 
-/// `GET|POST /is_key_image_spent` — served natively (RK-4c).
+/// `GET|POST /is_key_image_spent` over the store and the pool.
 pub async fn is_key_image_spent(
     State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
     body: String,
 ) -> impl IntoResponse {
-    let request: shekyl_rpc_types::IsKeyImageSpentRequest = if body.trim().is_empty() {
-        shekyl_rpc_types::IsKeyImageSpentRequest::default()
-    } else {
-        match serde_json::from_str(&body) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::debug!(?e, "is_key_image_spent: malformed request");
-                return json_error("request could not be decoded");
-            }
+    let request = match rest_params::<shekyl_rpc_types::IsKeyImageSpentRequest>(body.as_str()) {
+        Ok(request) => request,
+        Err(error) => return rest_value::<shekyl_rpc_types::IsKeyImageSpentResponse>(Err(error)),
+    };
+    let chain = Arc::clone(&state.handles.chain);
+    let host = authority.host();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::read_methods::is_key_image_spent(chain.as_ref(), &request, host)
+    })
+    .await;
+    render("is_key_image_spent", "key image facts unavailable", result).into_response()
+}
+
+pub async fn get_alt_blocks_hashes(
+    State(state): State<Arc<AppState>>,
+    _body: String,
+) -> impl IntoResponse {
+    let chain = Arc::clone(&state.handles.chain);
+    let result = tokio::task::spawn_blocking(move || {
+        crate::read_methods::get_alt_blocks_hashes(chain.as_ref())
+    })
+    .await;
+    render("get_alt_blocks_hashes", "chain facts unavailable", result)
+}
+
+pub async fn get_transaction_pool(
+    State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
+    _body: String,
+) -> impl IntoResponse {
+    let pool = Arc::clone(&state.handles.pool);
+    let host = authority.host();
+    rest_blocking(move || {
+        crate::pool_methods::get_transaction_pool(
+            pool.as_ref(),
+            crate::pool_methods::scope_for(host),
+        )
+    })
+    .await
+}
+
+pub async fn get_transaction_pool_hashes(
+    State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
+    _body: String,
+) -> impl IntoResponse {
+    let pool = Arc::clone(&state.handles.pool);
+    let host = authority.host();
+    rest_blocking(move || {
+        crate::pool_methods::get_transaction_pool_hashes(
+            pool.as_ref(),
+            crate::pool_methods::scope_for(host),
+        )
+    })
+    .await
+}
+
+pub async fn get_transaction_pool_stats(
+    State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
+    _body: String,
+) -> impl IntoResponse {
+    let pool = Arc::clone(&state.handles.pool);
+    let host = authority.host();
+    rest_blocking(move || {
+        crate::pool_methods::get_transaction_pool_stats(
+            pool.as_ref(),
+            crate::pool_methods::scope_for(host),
+        )
+    })
+    .await
+}
+
+/// `/get_info` (alias `/getinfo`) — served natively (RK-5c,
+/// `docs/design/DAEMON_RPC_KV_GET_INFO.md`). The body is ignored, as the C++
+/// handler ignored its empty request struct.
+///
+/// The listener's posture becomes a [`crate::info::Disclosure`], and the
+/// method reads only the parts that disclosure shows (RK-D24). This server's
+/// own connection count is the transport's to supply; it is a Status field.
+pub async fn get_info(
+    State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
+    _body: String,
+) -> impl IntoResponse {
+    let chain = Arc::clone(&state.handles.chain);
+    let disclosure = authority.disclosure();
+    let rpc_connections = state.conn_tracker.active_total();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::info::get_info(chain.as_ref(), disclosure, rpc_connections)
+    })
+    .await;
+    render("get_info", "node facts unavailable", result)
+}
+
+/// `/start_mining { threads }`: the built-in miner, on the node's address
+/// (N2). A request that names an address is not this method's.
+pub async fn start_mining(
+    State(state): State<Arc<AppState>>,
+    _authority: Extension<Authority>,
+    body: String,
+) -> impl IntoResponse {
+    let request = match rest_params(body.as_str()) {
+        Ok(request) => request,
+        Err(error) => {
+            return rest_value::<shekyl_rpc_types::mining::StatusOnlyResponse>(Err(error))
+                .into_response()
         }
     };
-    if state.restricted
-        && request.key_images.len() > crate::methods::RESTRICTED_SPENT_KEY_IMAGES_COUNT
-    {
-        return json_ok(status_only(
-            "Too many key images queried in restricted mode",
-        ));
-    }
-    let ids = match crate::methods::parse_request_hashes(
-        &request.key_images,
-        crate::methods::KI_PARSE_FAILED,
-    ) {
-        Ok(ids) => ids,
-        Err(status) => return json_ok(status_only(&status)),
+    let mining = Arc::clone(&state.handles.mining);
+    rest_value(crate::mining_methods::start_mining(&mining, request).await).into_response()
+}
+
+pub async fn stop_mining(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mining = Arc::clone(&state.handles.mining);
+    rest_value(crate::mining_methods::stop_mining(&mining).await).into_response()
+}
+
+pub async fn mining_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mining = Arc::clone(&state.handles.mining);
+    rest_blocking(move || crate::mining_methods::mining_status(mining.as_ref())).await
+}
+
+/// `/stop_daemon`: ask the node to stop. The reply is sent before it goes.
+pub async fn stop_daemon(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let stop = Arc::clone(&state.handles.stop);
+    rest_blocking(move || crate::node_methods::stop_daemon(stop.as_ref())).await
+}
+
+/// `/pop_blocks { nblocks }`, behind the armed gate the request layer already
+/// applied. The token is read again here so the door cannot be called without it.
+pub async fn pop_blocks(
+    State(state): State<Arc<AppState>>,
+    Extension(authority): Extension<Authority>,
+    body: String,
+) -> impl IntoResponse {
+    let request = match rest_params(body.as_str()) {
+        Ok(request) => request,
+        Err(error) => {
+            return rest_value::<shekyl_rpc_types::mining::PopBlocksResponse>(Err(error))
+                .into_response()
+        }
     };
-    let core = state.core.clone();
-    let result = tokio::task::spawn_blocking(move || core.key_images_spent(&ids)).await;
-    match result {
-        Ok(Ok(status)) => {
-            let mut spent_status = Vec::with_capacity(status.len());
-            for s in status {
-                match shekyl_rpc_types::KeyImageStatus::try_from(s) {
-                    Ok(v) => spent_status.push(v),
-                    Err(e) => {
-                        tracing::warn!(%e, "is_key_image_spent: shim returned an unknown status");
-                        return json_error("key image facts unavailable");
-                    }
-                }
-            }
-            let reply = shekyl_rpc_types::IsKeyImageSpentResponse {
-                status: shekyl_rpc_types::RpcStatus::ok(),
-                spent_status,
-            };
-            match serde_json::to_string(&reply) {
-                Ok(json) => json_ok(json),
-                Err(e) => {
-                    tracing::warn!(?e, "is_key_image_spent: reply could not be encoded");
-                    json_error("reply could not be encoded")
-                }
-            }
+    let Some(row) = shekyl_rpc_types::methods::rest_path("/pop_blocks") else {
+        return json_error("pop_blocks has no row").into_response();
+    };
+    let armed = match shekyl_rpc_types::methods::admit_armed(row, authority.armed_switch()) {
+        Ok(armed) => armed,
+        Err(error) => {
+            return rest_value::<shekyl_rpc_types::mining::PopBlocksResponse>(Err(error))
+                .into_response()
         }
-        Ok(Err(rc)) => {
-            tracing::warn!(rc, "is_key_image_spent: facts unavailable");
-            json_error("key image facts unavailable")
-        }
-        Err(e) => {
-            tracing::warn!(?e, "is_key_image_spent: handler task did not complete");
-            json_error("handler did not complete")
-        }
-    }
+    };
+    let door = Arc::clone(&state.handles.door);
+    rest_value(crate::mining_methods::pop_blocks(door.as_ref(), armed, request).await)
+        .into_response()
 }
-
-/// A refusal body: HTTP 200 carrying a non-OK `status` and nothing else, which
-/// is the shape the C++ answered these two routes' refusals with and the shape
-/// the `refusal` oracle vector pins.
-fn status_only(message: &str) -> String {
-    serde_json::json!({ "status": message }).to_string()
-}
-
-json_handler!(get_alt_blocks_hashes, "/get_alt_blocks_hashes");
-json_handler!(get_transaction_pool, "/get_transaction_pool");
-json_handler!(get_transaction_pool_hashes, "/get_transaction_pool_hashes");
-json_handler!(get_transaction_pool_stats, "/get_transaction_pool_stats");
-json_handler!(get_limit, "/get_limit");
-
-/// `get_info` is not a thin passthrough: it injects the live
-/// `rpc_connections_count` from the Rust connection tracker (both the
-/// `/get_info` and `/getinfo` routes dispatch here).
-pub async fn get_info(State(state): State<Arc<AppState>>, body: String) -> impl IntoResponse {
-    match dispatch_json_raw(&state, "/get_info", body).await {
-        Some(json) => json_ok(fill_rpc_connections_count(
-            json,
-            state.restricted,
-            state.conn_tracker.active_total(),
-        )),
-        None => json_dispatch_error(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    /// The two ways to omit every field must ask the same question. They did
-    /// not on the C++ bridge, and that split had a live consumer.
-    #[test]
-    fn bodyless_and_empty_object_are_the_same_peer_list_request() {
-        let from_empty_object: shekyl_rpc_types::GetPeerListRequest =
-            serde_json::from_str("{}").expect("an empty object is a valid request");
-        let bodyless = shekyl_rpc_types::GetPeerListRequest::default();
-        assert_eq!(
-            from_empty_object, bodyless,
-            "however a caller omits the fields, it is asking one question"
-        );
-        assert!(
-            bodyless.public_only,
-            "and that question is the declared OPT default, not the \
-             value-initialized zero the old bridge fell back to"
-        );
-        assert!(!bodyless.include_blocked);
-    }
-    use super::{fill_rpc_connections_count, json_error};
-
-    /// A native method's failure names its own cause in the envelope —
-    /// never "FFI dispatch failed", which it cannot be.
-    #[test]
-    fn native_error_envelope_names_the_cause() {
-        let (status, _, body) = json_error("chain facts unavailable");
-        assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
-        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["status"], "ERROR");
-        assert_eq!(v["error"], "chain facts unavailable");
-    }
-
-    #[test]
-    fn fills_live_count_when_unrestricted() {
-        let out = fill_rpc_connections_count(
-            r#"{"status":"OK","rpc_connections_count":0}"#.to_string(),
-            false,
-            7,
-        );
-        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(v["rpc_connections_count"], 7);
-        assert_eq!(v["status"], "OK");
-    }
-
-    #[test]
-    fn adds_the_field_when_absent() {
-        let out = fill_rpc_connections_count(r#"{"status":"OK"}"#.to_string(), false, 3);
-        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(v["rpc_connections_count"], 3);
-    }
-
-    #[test]
-    fn restricted_leaves_the_body_verbatim() {
-        let body = r#"{"rpc_connections_count":0}"#.to_string();
-        assert_eq!(fill_rpc_connections_count(body.clone(), true, 9), body);
-    }
-
-    #[test]
-    fn non_object_or_unparseable_bodies_pass_through() {
-        assert_eq!(
-            fill_rpc_connections_count("not json".to_string(), false, 5),
-            "not json"
-        );
-        assert_eq!(
-            fill_rpc_connections_count("[1,2,3]".to_string(), false, 5),
-            "[1,2,3]"
-        );
-    }
-}
-
-// Restricted-only endpoints (restriction enforced at route registration)
-json_handler!(start_mining, "/start_mining");
-json_handler!(stop_mining, "/stop_mining");
-json_handler!(mining_status, "/mining_status");
-json_handler!(save_bc, "/save_bc");
-json_handler!(set_log_hash_rate, "/set_log_hash_rate");
-json_handler!(set_log_level, "/set_log_level");
-json_handler!(set_log_categories, "/set_log_categories");
-json_handler!(stop_daemon, "/stop_daemon");
-json_handler!(set_limit, "/set_limit");
-json_handler!(out_peers, "/out_peers");
-json_handler!(in_peers, "/in_peers");
-json_handler!(pop_blocks, "/pop_blocks");
 
 /// `/get_net_stats` — process start plus the global throttle counters
 /// (RK-5a). Admin-only; the route table is what enforces that.
 pub async fn get_net_stats(State(state): State<Arc<AppState>>, _body: String) -> impl IntoResponse {
-    let core = state.core.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let facts = crate::chain_facts::FfiP2pFacts::new(core);
-        crate::methods::get_net_stats(&facts)
-    })
-    .await;
-    render("get_net_stats", result)
+    let facts = Arc::clone(&state.handles.p2p);
+    let result =
+        tokio::task::spawn_blocking(move || crate::methods::get_net_stats(facts.as_ref())).await;
+    render("get_net_stats", "p2p facts unavailable", result)
 }
 
 /// `/get_peer_list` — the white and gray peerlists (RK-5a). Admin-only.
@@ -448,18 +365,18 @@ pub async fn get_peer_list(State(state): State<Arc<AppState>>, body: String) -> 
             }
         }
     };
-    let core = state.core.clone();
+    let facts = Arc::clone(&state.handles.p2p);
     let result = tokio::task::spawn_blocking(move || {
-        let facts = crate::chain_facts::FfiP2pFacts::new(core);
-        crate::methods::get_peer_list(&request, &facts)
+        crate::methods::get_peer_list(&request, facts.as_ref())
     })
     .await;
-    render("get_peer_list", result)
+    render("get_peer_list", "p2p facts unavailable", result)
 }
 
 /// The three-way match every native REST handler above ends in, written once.
 fn render<T: serde::Serialize>(
     method: &'static str,
+    unavailable: &'static str,
     result: Result<Result<T, crate::methods::RpcFault>, tokio::task::JoinError>,
 ) -> (StatusCode, [(&'static str, &'static str); 1], String) {
     match result {
@@ -470,9 +387,20 @@ fn render<T: serde::Serialize>(
                 json_error("reply could not be encoded")
             }
         },
+        // A store that contradicts itself is reported in its own words:
+        // which invariant, and with what numbers. The handler logged it.
+        Ok(Err(RpcFault::Store(store))) => json_error(&store.to_string()),
+        // A bound or a field the connection may not ask for. The class is
+        // the code; HTTP 200 carries the error object (RW-Q3).
+        Ok(Err(RpcFault::Refused(refusal))) => (
+            StatusCode::OK,
+            [("content-type", "application/json")],
+            serde_json::to_string(&refusal.to_json_rpc(serde_json::Value::Null))
+                .expect("a refusal serializes"),
+        ),
         Ok(Err(fault)) => {
             tracing::warn!(?fault, method, "facts unavailable");
-            json_error("p2p facts unavailable")
+            json_error(unavailable)
         }
         Err(e) => {
             tracing::warn!(?e, method, "handler task did not complete");
@@ -483,44 +411,101 @@ fn render<T: serde::Serialize>(
 
 /// `/get_stem_tallies` — per-successor relay outcome counts (§55).
 ///
-/// **Admin-only (unrestricted listener), and the reason belongs here rather
-/// than in the route table.** In daemon RPC terms: `restricted` is the
-/// *public* limited listener; this route is selected only when
-/// `!restricted` via `server::served_paths`. This endpoint *is* the
+/// **Host-only data (`RPC_CHANNEL.md` §6.1, RT-O9.3), and the reason
+/// belongs here rather than in the method table.** This endpoint *is* the
 /// anonymity graph: which peers this node stems to, and how each has
 /// behaved. Sharma Appendix B spends 50–100 probes per node to reconstruct
-/// exactly that, so serving it on the public listener hands over — for free
-/// and with better fidelity — what an attacker otherwise pays for. **It is
-/// not "just counters": the peer set is the sensitive part, and the counts
-/// merely make it legible.** If anyone later proposes moving this onto the
-/// restricted (public) set, that is the argument to answer first.
+/// exactly that, so serving it to anyone but the host's administrator hands
+/// over — for free and with better fidelity — what an attacker otherwise
+/// pays for. **It is not "just counters": the peer set is the sensitive
+/// part, and the counts merely make it legible.** If anyone later proposes
+/// moving it into a grant, that is the argument to answer first.
 ///
 /// Raw counts, matching the relay layer's own refusal to pre-compute a rate:
 /// the consumer of this endpoint is a human tuning `n_min`, `cut` and
 /// `cooldown`, and a rate would pick the accumulator's memory policy for
 /// them.
 ///
-/// # The gate lives in the route table (§69, §70)
+/// # The gate is the method table's policy
 ///
-/// This route's `Visibility::AdminOnly` row in `server::ROUTES` is the privacy
-/// fact; `server::served_routes` applies `restricted`; `server::assemble`
-/// registers exactly that, and [`crate::server::build_router`] is
-/// `assemble` plus layers. The gate is asserted **on the assembled router**:
-/// a dummy-handler build of the real table answers 200 for this path when
-/// unrestricted and 404 when restricted, and the specification the assertions
-/// run against is written out independently of the route table, so a path
-/// *moved* between listeners fails rather than silently changing the oracle.
-/// A daemon fixture is not owed: the property is route-table selection, and
-/// naming this handler from a test would pull `core_rpc_ffi_*` into the lib
-/// test binary.
+/// The row's policy is `HostOnly`, and the request layer
+/// (`crate::authority::stamp`) refuses this path to every connection that is
+/// not the host's administrator before the handler runs. The gate is asserted
+/// on the assembled router, against a specification written out
+/// independently of the table, so a row moved into a grant fails rather than
+/// silently changing the oracle.
 pub async fn get_stem_tallies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let core = state.core.clone();
-    match tokio::task::spawn_blocking(move || core.stem_tallies())
-        .await
-        .ok()
-        .flatten()
-    {
-        Some(body) => json_ok(body),
-        None => json_dispatch_error(),
+    let facts = Arc::clone(&state.handles.p2p);
+    let result =
+        tokio::task::spawn_blocking(move || crate::methods::get_stem_tallies(facts.as_ref())).await;
+    render("get_stem_tallies", "p2p facts unavailable", result)
+}
+
+#[cfg(test)]
+mod tests {
+
+    /// The two ways to omit every field must ask the same question. They did
+    /// not on the C++ bridge, and that split had a live consumer.
+    #[test]
+    fn bodyless_and_empty_object_are_the_same_peer_list_request() {
+        let from_empty_object: shekyl_rpc_types::GetPeerListRequest =
+            serde_json::from_str("{}").expect("an empty object is a valid request");
+        let bodyless = shekyl_rpc_types::GetPeerListRequest::default();
+        assert_eq!(
+            from_empty_object, bodyless,
+            "however a caller omits the fields, it is asking one question"
+        );
+        assert!(
+            bodyless.public_only,
+            "and that question is the declared OPT default, not the \
+             value-initialized zero the old bridge fell back to"
+        );
+        assert!(!bodyless.include_blocked);
+    }
+    use super::json_error;
+
+    /// A native method's failure names its own cause in the envelope —
+    /// never "FFI dispatch failed", which it cannot be.
+    #[test]
+    fn a_store_fault_is_rendered_in_its_own_words() {
+        use super::render;
+        use crate::methods::{RpcFault, StoreFault};
+        use shekyl_types::ChainCount;
+        use shekyl_units::AtomicUnits;
+
+        let store = StoreFault::SupplyInvariant {
+            coins_generated: AtomicUnits::from_raw(1_000),
+            total_burned: AtomicUnits::from_raw(1_001),
+            chain_height: ChainCount::from_raw(77),
+        };
+        let (status, _, body) = render::<shekyl_rpc_types::GetInfoResponse>(
+            "get_info",
+            "node facts unavailable",
+            Ok(Err(RpcFault::Store(store))),
+        );
+        assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["status"], "ERROR");
+        assert_eq!(v["error"], store.to_string());
+
+        // A facts code beside it is still the method's generic line.
+        let (_, _, body) = render::<shekyl_rpc_types::GetInfoResponse>(
+            "get_info",
+            "node facts unavailable",
+            Ok(Err(RpcFault::Facts(
+                crate::chain_facts::FactsFault::Inconsistent,
+            ))),
+        );
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["error"], "node facts unavailable");
+    }
+
+    #[test]
+    fn native_error_envelope_names_the_cause() {
+        let (status, _, body) = json_error("chain facts unavailable");
+        assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["status"], "ERROR");
+        assert_eq!(v["error"], "chain facts unavailable");
     }
 }
