@@ -4424,6 +4424,7 @@ version = "3.1.0"
 dependencies = [
  "proptest",
  "serde_json",
+ "sha2",
  "shekyl-types",
 ]
 
