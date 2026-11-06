@@ -32,7 +32,7 @@ use core::cmp::Ordering;
 use shekyl_block_template::Fill;
 use shekyl_chain_rules::{admissible_references, EffectiveMedian};
 use shekyl_curve_tree::select_reference_height;
-use shekyl_mempool::policy::{eviction_order, make_room, template_order, trim_to, FeeRate, Limits};
+use shekyl_mempool::policy::{make_room, template_order, trim_to, FeeRate, Limits};
 use shekyl_types::BlockHeight;
 use shekyl_wire::transaction::COINBASE_RESERVE;
 
@@ -172,7 +172,8 @@ fn pro_rata(counts: &[u64], k: u64) -> Vec<u64> {
 
 /// The pool's order: the template's ([`template_order`]), then the lighter,
 /// then the cheaper, then build order. Eviction's order is this one's groups
-/// read backwards ([`eviction_order`] reverses the template's rate and hour).
+/// read backwards: [`eviction_order`](shekyl_mempool::policy::eviction_order)
+/// reverses the template's rate and hour.
 fn template_cmp(a: &Cohort, b: &Cohort) -> Ordering {
     template_order(a.key(), b.key())
         .then(a.weight.cmp(&b.weight))
