@@ -34,10 +34,10 @@
 //! count refreshes when a Tor handshake finishes or a Tor session closes.
 //! An inbound session is not a dial.
 //!
-//! The dialer is the session layer's peers owner ([`PeerOwner`]): the layer
-//! asks it for the list a handshake or timed sync discloses, hands it the
-//! lists peers send, and tells it when a session is established or closed.
-//! The two reference each other for the life of the process: the layer is
+//! The [`peers`] module is the session layer's peers owner: the layer asks
+//! it for the list a handshake or timed sync discloses, hands it the lists
+//! peers send, and tells it when a session is established or closed. The
+//! two reference each other for the life of the process: the layer is
 //! built with the dialer among its owners, then attached to the dialer
 //! ([`Dialer::attach`]), which dials through it afterwards.
 
@@ -45,6 +45,7 @@ mod address;
 mod flight;
 mod handshake;
 mod judging;
+mod peers;
 mod ready;
 mod recovery;
 mod tor_tally;
@@ -57,8 +58,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
 use shekyl_draw_rng::RelayRng;
-use shekyl_levin::PeerlistEntry;
-use shekyl_p2p_session::{Board, Endpoint, Established, PeerOwner, SessionFacts, SessionLayer};
+use shekyl_p2p_session::{Board, SessionLayer};
 use shekyl_peerlist::{
     dial_profile, white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, ListName,
     NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick, Verdict,
@@ -82,7 +82,8 @@ use crate::pace::{attempts_per_test, next_wake_nanos, retry_wait_nanos};
 use crate::store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};
 
 /// The random numbers the owner's own calls draw: the hooks the session
-/// layer calls ([`PeerOwner`]) carry no generator of the caller's.
+/// layer calls ([`shekyl_p2p_session::PeerOwner`]) carry no generator of
+/// the caller's.
 pub type OwnerRng = Box<dyn RelayRng + Send>;
 
 /// The state the owner loops and the FFI calls share.
@@ -578,7 +579,8 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
     /// still in the handshake, a confirm dial, or an inbound Tor session,
     /// which has no list address. The board is not read: the held count
     /// uses the inbound rows last read by [`Self::note_inbound_tor`], which
-    /// the layer's close hook ([`PeerOwner::on_closed`]) calls first.
+    /// the layer's close hook ([`shekyl_p2p_session::PeerOwner::on_closed`])
+    /// calls first.
     pub fn session_closed<R: RelayRng + ?Sized>(&self, id: SocketId, end: DialEnd, rng: &mut R) {
         let now = self.now();
         let mut shared = self.shared();
@@ -979,51 +981,5 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
         };
         drop(shared);
         Some((address, aim))
-    }
-}
-
-impl<C: Clock + Clone + Send + Sync + 'static> PeerOwner for Dialer<C> {
-    /// The list this node discloses on `connector`, less the addresses it
-    /// holds a kept session to (the lists' own rule).
-    fn disclosure(&self, connector: ConnectorId) -> Vec<PeerlistEntry> {
-        let now = self.now();
-        let mut rng = self.rng.lock().expect("dialer rng");
-        let mut shared = self.shared();
-        let mut kept = shared.kept_addresses(connector);
-        shared
-            .lists
-            .disclose(connector, now, &mut kept, &mut **rng)
-            .into_iter()
-            .map(|adr| PeerlistEntry { adr })
-            .collect()
-    }
-
-    /// A list a peer sent on an established session. The lists admit or
-    /// refuse it; a refusal closes the session.
-    fn list_received(&self, session: &Established, list: Vec<PeerlistEntry>) {
-        let addresses: Vec<NetworkAddress> = list.into_iter().map(|entry| entry.adr).collect();
-        self.admit_on_established(session, &addresses);
-    }
-
-    /// An inbound Tor session finished its handshake: it is held.
-    fn on_established(&self, session: &Established) {
-        if *session.endpoint() == Endpoint::TorInbound {
-            self.note_inbound_tor();
-        }
-    }
-
-    /// A session closed. The board no longer holds its row; the inbound
-    /// rows are re-read before the close is applied. The lists forget the
-    /// session's intake ledger: socket ids never repeat, so a ledger left
-    /// behind is a row for the life of the process.
-    fn on_closed(&self, facts: &SessionFacts, end: DialEnd) {
-        self.shared()
-            .lists
-            .forget_session(facts.connector(), session_of(facts.id));
-        if facts.endpoint == Endpoint::TorInbound {
-            self.note_inbound_tor();
-        }
-        let mut rng = self.rng.lock().expect("dialer rng");
-        self.session_closed(facts.id, end, &mut **rng);
     }
 }
