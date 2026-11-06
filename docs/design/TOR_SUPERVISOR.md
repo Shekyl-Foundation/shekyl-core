@@ -157,20 +157,20 @@ says which and why.
 
 | Fact | Anchor |
 | --- | --- |
-| The supervisor starts with the daemon and step 8 does not wait for Tor. A process fault respawns into the kept data directory; the onion seed is held for the boot. There is no bootstrap deadline | `rust/shekyl-daemon/src/run.rs:333`; `rust/shekyl-daemon/src/tor/mod.rs:352`; `rust/shekyl-daemon/src/tor/mod.rs:680`; `rust/shekyl-tor-control-client/src/supervisor/core/mod.rs:87` |
+| The supervisor starts with the daemon and step 8 does not wait for Tor. A process fault respawns into the kept data directory; the onion seed is held for the boot. There is no bootstrap deadline | `rust/shekyl-daemon/src/run.rs` `supervise` (its `tor::begin`); `rust/shekyl-daemon/src/tor/mod.rs` `Drive::spawn` (the kept directory) and `drive` (the seed, minted once); `rust/shekyl-tor-control-client/src/supervisor/core/mod.rs` `Policy` (no bootstrap deadline among its fields) |
 | A managed Tor's death takes that incarnation's route down and the supervisor respawns. A shutdown takes an installed route down and does not announce. An operator's Tor is not watched here | `rust/shekyl-ffi/src/zone_ffi.rs` `publish_tor_down`; `rust/shekyl-daemon/src/tor/mod.rs` |
-| The supervisor sends one `SETEVENTS` and reads the parsed events. Bootstrap readiness is still the actor's `GETINFO` poll | `rust/shekyl-tor-control-client/src/control/events.rs:59`; `rust/shekyl-daemon/src/tor/mod.rs` |
-| The event sink holds `EVENT_QUEUE_EVENTS` (256); an event past it is dropped and counted, and the read loop never waits (`TSR-F2`) | `rust/shekyl-tor-control-client/src/control/actor.rs:273` |
-| Death has two signals: a watcher waits on the child beside the control connection's end, and either stops the actor (`TSR-F16`) | `rust/shekyl-tor-control-client/src/control/actor.rs:823`, `:1384`, `:1432`, `:1447` |
-| Teardown is `DEL_ONION`, `SIGTERM`, 5 s, `SIGKILL`, reap, synchronous wipe | `rust/shekyl-tor-control-client/src/control/actor.rs:102`, `:889`, `:1042`; `rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs:431-439` |
-| The managed tor inherits its owning control connection (`__OwningControllerFD`); it opens no control port and writes no cookie. The launch surface is a closed, tested option list | `rust/shekyl-tor-control-client/src/control/launch.rs:185`, `:393`, `:1126` |
-| `SocksPort` is `auto ExtendedErrors`, so onion failures come back as `0xF0`–`0xF7` | `rust/shekyl-tor-control-client/src/control/actor.rs:614` |
+| The supervisor sends one `SETEVENTS` and reads the parsed events. Bootstrap readiness is still the actor's `GETINFO` poll | `rust/shekyl-tor-control-client/src/control/events.rs` `Command::supervisor_events`; `rust/shekyl-tor-control-client/src/control/actor.rs` `bootstrap_poll_loop` |
+| The event sink holds `EVENT_QUEUE_EVENTS` (256); an event past it is dropped and counted, and the read loop never waits (`TSR-F2`) | `rust/shekyl-tor-control-client/src/control/actor.rs` `EVENT_QUEUE_EVENTS`, `EventSink` |
+| Death has two signals: a watcher waits on the child beside the control connection's end, and either stops the actor (`TSR-F16`) | `rust/shekyl-tor-control-client/src/control/actor.rs` `watch_child` and the `ChildExited` handler |
+| Teardown is `DEL_ONION`, `SIGTERM`, 5 s, `SIGKILL`, reap, synchronous wipe | `rust/shekyl-tor-control-client/src/control/actor.rs` `SHUTDOWN_GRACE`, `shut_down`, `request_graceful_stop`, `kill_and_reap`; `rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs` `teardown` |
+| The managed tor inherits its owning control connection (`__OwningControllerFD`); it opens no control port and writes no cookie. The launch surface is a closed, tested option list | `rust/shekyl-tor-control-client/src/control/launch.rs` `managed_tor_command`, `tor_end`, and its test `launch_option_names` |
+| `SocksPort` is `auto ExtendedErrors`, so onion failures come back as `0xF0`–`0xF7` | `rust/shekyl-tor-control-client/src/control/actor.rs` `SocksPort` (`Auto` renders `auto ExtendedErrors`) |
 | The pin is checked before every spawn, including a respawn | `rust/shekyl-daemon/src/tor/mod.rs` `pin` |
-| The wallet's supervisor re-verifies the pin at every spawn, never gives up, and publishes the SOCKS route as data on a watch, read at use time | `rust/shekyl-tor-control-wallet/src/service.rs:6-45`, `:289-303` |
-| The dialer draws a gray address, then checks whether it can dial at all; a `DialFailed` of any cause drops the outstanding gray draw | `rust/shekyl-dialer/src/owner/mod.rs:685-686`, then `rust/shekyl-dialer/src/owner/handshake.rs:53-71`; `rust/shekyl-peerlist/src/peerlist.rs:529-531` and `rust/shekyl-peerlist/src/partition.rs:326-331` |
-| The Tor owner loop wakes every 0.5–1.5 s | `rust/shekyl-dialer/src/pace.rs:18-23` |
-| Our onion reaches peers only as one uniform member of the disclosure sample; the sample is fixed for its window | `src/p2p/net_node.inl` lines 1896 to 1904 (at `d26148535e`); `rust/shekyl-peerlist/src/partition.rs:537-546` (F1, Rick 2026-10-09) |
-| `get_info` Health is told to every caller; counts belong to Status | `rust/shekyl-rpc-types/src/info.rs:117-121` |
+| The wallet's supervisor re-verifies the pin at every spawn, never gives up, and publishes the SOCKS route as data on a watch, read at use time | `rust/shekyl-tor-control-wallet/src/service.rs` module documentation, `WalletTorControl::posture` and `current_socks` |
+| The dialer checks the connector's readiness before it draws (`TSR-F1`); a failed dial is the judge's to decide, and leaves the lists only on proof of misbehaviour (`Verdict::Drop`), otherwise it is counted or excused | `rust/shekyl-dialer/src/owner/mod.rs` `Dialer::choose` (`readiness` first); `rust/shekyl-peerlist/src/peerlist.rs` `Peerlist::apply` (`DialOutcome::DialFailed`) |
+| The Tor owner loop wakes every 0.5–1.5 s | `rust/shekyl-transport-layer/src/profile.rs` `WAKE`, drawn by `rust/shekyl-dialer/src/pace.rs` `next_wake_nanos` |
+| Our onion reaches peers only as one uniform member of the disclosure sample; the sample is fixed for its window | `src/p2p/net_node.inl` lines 1896 to 1904 (at `d26148535e`); `rust/shekyl-peerlist/src/partition/disclose.rs` `disclosure_population` (F1, Rick 2026-10-09) |
+| `get_info` Health is told to every caller; counts belong to Status | `rust/shekyl-rpc-types/src/info.rs` `InfoHealth` |
 
 ## 3. Findings
 

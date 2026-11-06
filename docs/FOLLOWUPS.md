@@ -1166,10 +1166,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §10 (`TSR-M4`)
   - Target: pre-genesis
 
-- **Measure respawn time and the clock across suspend (`TSR-M2`, `TSR-M8`) on the supervisor's implementation branch, before its PR leaves draft.** Respawn to outbound usable and to inbound reachable on the Pi 4, which sets the backoff base and cap; whether the monotonic clock advances across a suspend on Windows and macOS. Falsify by: both rows of `TOR_SUPERVISOR.md` §10 carry measured values, and the constants land in the commit that records them.
-  - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §10 (`TSR-M2`, `TSR-M8`)
-  - Target: pre-genesis
-
 - **Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.** **Its inputs changed 2026-09-06: the anchor mechanism is deleted, so the `k ≤ 1` anchor-backed-connection cap this sub-round was to derive against no longer exists — there are no anchor-backed connections at all.** Selection is otherwise unchanged until the dialer lands. *Records-was, and what the C++ still does:* `connections_maker` is **white-first up to the `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target, then gray for the remainder**, and gray-first once the count is at or above that share. The anchor-reserved share is already gone. The derivation input is the dialer fill in [`P2P_3_SLICE_3_DIALER_BRIEF.md`](design/P2P_3_SLICE_3_DIALER_BRIEF.md): exclusive, then clearnet priority, then harvest, then `draw_white` up to the connector's outbound target, then `draw_gray` only while white is under the refill line, one dial per jittered wake. Blocker: it must derive against that settled loop, so it follows the dialer rather than preceding it — the "fixed anchor behaviour" this once waited on no longer exists to be fixed; reopening criterion and the §12.10/§7 reconciliation it must carry are in the owning doc — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I4, PWD-I5
   - Target: pre-genesis
 
