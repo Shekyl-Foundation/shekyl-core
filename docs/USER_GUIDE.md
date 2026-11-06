@@ -6,6 +6,10 @@ prefer a graphical interface, see the
 instead -- both guides share the same section structure so you can
 cross-reference equivalent features.
 
+Links to other documents point into the repository's `docs/` folder. If
+you are reading this inside a release archive, find them at
+<https://github.com/Shekyl-Foundation/shekyl-core/tree/main/docs>.
+
 ---
 
 ## Table of Contents
@@ -117,9 +121,11 @@ creates nothing, takes no lock and joins no network, so it can run while
 the daemon is up. A port already in use and Tor's bootstrap are outside
 its verdict.
 
-Initial sync takes several hours depending on your hardware and network. You
-will see log lines showing block height, download rate, and verification
-progress. Let it run until you see "SYNCHRONIZED OK" in the output.
+Initial sync takes several hours depending on your hardware and network.
+To see where it is, run `chain` in `shekyl-cli` (no wallet needed): while
+the daemon is still catching up, a `Target: … (syncing)` line sits under
+its height, and the line is gone once the daemon reports itself
+synchronised.
 
 ### Configuration file
 
@@ -344,8 +350,9 @@ future channel. It is not a property of today's loopback RPC, and
 manager for background operation (systemd on Linux, launchd on macOS,
 Task Scheduler on Windows); the GUI wallet supervises its own bundled
 `shekyld` via the Tauri sidecar. An example systemd unit lives at
-`contrib/packaging/linux/shekyld.service`. Nothing reads the daemon's
-stdin unless `--console` is given, so a unit needs no flag for that.
+`contrib/packaging/linux/shekyld.service`. The daemon has no console and
+reads nothing from stdin; its commands are `shekyl-cli` words (see
+[Commands](#commands)).
 
 **Crash dumps**
 
@@ -1158,9 +1165,10 @@ prompts for the current password, then the new one twice.
 - **Disk space:** A full node needs ~50 GB. There is no pruning flag. The
   stripe engine was deleted 2026-09-21 (`PDM-Q7`); uniform archival discard
   has not landed (S-PRUNE, `docs/design/DRS_E1_SPRUNE.md`).
-- **Corrupted database:** Try `pop_blocks 100` in the daemon console to
-  roll back recent blocks. As a last resort, delete the LMDB directory and
-  resync.
+- **Damaged chain store:** there is no command that rolls blocks back. If
+  the daemon refuses to open its store, stop it, delete `chain.db` and
+  `pool.db` from its data directory, and start it again: it downloads the
+  chain from peers. Leave the rest of the data directory in place.
 
 ### Wallet balance is wrong or zero
 
@@ -1174,8 +1182,9 @@ prompts for the current password, then the new one twice.
 ### Transaction not confirming
 
 - Make sure the daemon is synced (`status` in the wallet shows both
-  heights; `status` in the daemon console shows peers and sync state).
-- The transaction pool can be checked with `print_pool` in the daemon.
+  heights; `chain` and `sync status` in `shekyl-cli` show the daemon's
+  connections and sync state).
+- The transaction pool can be checked with `txpool list` in `shekyl-cli`.
 - Check the transaction's state with `tx list` / `tx show <id>`
   in the wallet. A dispatched send that the network has dropped can be
   given up with `tx abandon <txid>`.
@@ -1185,13 +1194,13 @@ prompts for the current password, then the new one twice.
 Increase daemon verbosity for debugging:
 
 ```bash
-./shekyld --log-level 2
+./shekyld --log-level debug
 ```
 
-Or change it at runtime in the console:
+Or change it at runtime from `shekyl-cli`:
 
 ```
-set_log 2
+option set log-level debug
 ```
 
 `shekyl-cli` logs to stderr only (warnings and up by default; tune with
@@ -1326,7 +1335,6 @@ Behavior changes to be aware of when upgrading:
 | **Block height** | The sequential number of a block, starting from 0. |
 | **Block reward** | New SKL created and given to the miner who finds a valid block. |
 | **Config file** | A TOML file (`/etc/shekyl/shekyld-<network>.toml` by default) holding daemon options under their command-line names, or another file named with `--config-file`. |
-| **Console** | The interactive command prompt inside `shekyld` when running in foreground mode. |
 | **Daemon** | The background program (`shekyld`) that connects to the Shekyl network and maintains the blockchain. |
 | **Difficulty** | A measure of how hard mining puzzles are. Adjusts automatically to target ~2-minute blocks. |
 | **Emission** | The schedule by which new SKL is created. The total supply is mathematically capped. |
