@@ -95,10 +95,6 @@
 #define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS       1
 
 
-#define CRYPTONOTE_MEMPOOL_TX_LIVETIME                    (86400*3) //seconds, three days
-#define CRYPTONOTE_MEMPOOL_TX_FROM_ALT_BLOCK_LIVETIME     604800 //seconds, one week
-
-
 // 2 is the out-degree of the (approximately) 4-regular expander stem graph, and is
 // load-bearing for privacy, not a tuning knob: 1 makes every stem a single-node
 // black-hole point-of-failure; >=3 fans the stem toward a tree and leaks to the
