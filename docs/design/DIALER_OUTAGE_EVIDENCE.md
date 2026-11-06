@@ -1,6 +1,6 @@
 # One judge of failed dials; each connector declares how its failures are judged
 
-**Status: RULED (Round 0 closed 2026-10-31; `OE-D10` ruled 2026-11-01).** Every decision is ruled (§0) and nothing in the mapping is open. The code is #1235 (§8), all seven steps built there as of 2026-11-02, not yet on dev. The brief is [`DIALER_OUTAGE_EVIDENCE_BRIEF.md`](DIALER_OUTAGE_EVIDENCE_BRIEF.md). This record states the design as ruled; the rounds that reached it are in git (revision 1 `4a570f834`, revision 2 `2f85829ef`, revision 3 `12737f3fbe`).
+**Status: RULED (Round 0 closed 2026-10-31; `OE-D10` ruled 2026-11-01; its launch stamp, §6.1, ruled 2026-11-05).** Every decision is ruled (§0) and nothing in the mapping is open. The code is #1235 (§8), all seven steps built there as of 2026-11-02, not yet on dev. The brief is [`DIALER_OUTAGE_EVIDENCE_BRIEF.md`](DIALER_OUTAGE_EVIDENCE_BRIEF.md). This record states the design as ruled; the rounds that reached it are in git (revision 1 `4a570f834`, revision 2 `2f85829ef`, revision 3 `12737f3fbe`).
 
 **Read at:** `dev` `f608d01604`; every anchor in §1 holds there.
 **Reviews:** the Tor lane reviewed Tor's mapping (§3.2) against tor 0.4.9.14 and derived `OE-D10` (§6); Rick's reviewer covered clearnet's mapping (§3.1).
@@ -295,6 +295,23 @@ The posture line reports the dialer judge's last sign that the Tor link worked, 
 - **What follows:** a live session keeps the line off (the 60 s timed sync always shows life inside 120 s); a dead held session no longer suppresses it (on the floor-device blackhole it would have spoken about 2 minutes in).
 - **`Policy::quiet_after`** becomes `SocksTimeout + δ`, from the Tor connector's own two declarations; the `tor_quiet` status field keeps its type (GS-C2 unaffected).
 - **Where it is built: all in #1235** (Rick, 2026-11-01). Commit 5 publishes the judge's last sign of life on `TorLinkTally`; commit 5b builds the supervisor side on it (`Dials::evaluate` without the held condition, `Policy::quiet_after`, the sentence, its six tests, `TOR_SUPERVISOR.md` §4.2), which the Tor lane reviews on #1235; commit 7 deletes Tor's span S with the rest of the guard (§5).
+
+### 6.1 The launch stamp, `attempt_began`: one field both rules read (Rick, 2026-11-05)
+
+A Tor dial launched before the quiet stretch began can fail inside it: a respawn's new Running, or a wake, starts the stretch while dials sent to the old Tor are still running out their window. Dating that failure by when it was counted (`last_unopened_at`, above) lets it stand the line on a link that has not been tested since the stretch began.
+- **The rule:** only failures are filtered, never successes. A failure counts toward the line only if its attempt began at or after the stretch started. A stream that opens counts whenever it arrives, however old its dial.
+- **No incarnation.** Leaving the link's incarnation out of the rule is rule 21: the launch time already separates a dial sent to the old Tor from one sent to the new, and adding the incarnation would provision for a case the launch time covers.
+- **The field:** `attempt_began`, the instant the dialer launched the attempt (today the `started` stamp in `timed`, `shekyl-dialer/src/owner/flight.rs`). It is named once, here, for both rules:
+  - the supervisor's line asks whether a failed dial began inside the stretch;
+  - the judge asks whether a stream opened after an attempt began.
+- **The tally carries** the latest `attempt_began` among failed Tor dials. The line stands only if that is at or after the stretch's start. It replaces `last_unopened_at`, which is deleted (rule 15).
+- **One clock, enforced by type.** The dialer's stamp and the supervisor's stretch start both come from the process timing engine. They are a type only that engine's clock can mint, so the compiler checks that two instants are comparable, not a convention. The type lives in `shekyl-timing-engine`. On #1272's layout the network builds the one production clock and hands it to the supervisor through `Network::engine`, so the dialer and the supervisor already share one origin. The type makes that sharing a requirement the compiler checks. Comparing instants on one clock holds whether or not the platform's clock counts through sleep (Windows' does, Linux's `CLOCK_MONOTONIC` does not), and a wake restarts the stretch either way.
+- **Tests,** each naming the edit that makes it fail:
+  - a failure launched before a respawn's Running raises nothing;
+  - a failure launched before a wake raises nothing;
+  - a failure launched after the stretch began still counts;
+  - an old dial's success still counts.
+- **Where it is built:** the Tor lane's PR after #1272, which moves the tally into `shekyl-p2p`. The same PR deletes `TorLinkTally::held` and restructures the supervisor's wait.
 
 ## 7. Wargame (§5 of the brief)
 

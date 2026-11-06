@@ -167,7 +167,7 @@ impl Drive {
     pub(super) fn round_stuck(&mut self) -> Vec<Input> {
         tracing::debug!(
             target: "tor",
-            events_dropped = self.incoming.dropped(),
+            events_dropped = self.incoming.source().dropped(),
             "a descriptor upload round has been open for five minutes; ending it"
         );
         self.end_round()
@@ -176,7 +176,7 @@ impl Drive {
     /// The sink dropped events since the last look: an open round's ends may
     /// be among them, so it ends now and the next round can trigger.
     pub(super) fn round_resync(&mut self) -> Vec<Input> {
-        let dropped = self.incoming.dropped();
+        let dropped = self.incoming.source().dropped();
         if dropped == self.dropped_seen {
             return Vec::new();
         }
