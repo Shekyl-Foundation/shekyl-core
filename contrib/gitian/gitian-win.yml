@@ -139,7 +139,7 @@ script: |
     mkdir build && cd build
     cmake .. -DCMAKE_TOOLCHAIN_FILE=${BASEPREFIX}/${i}/share/toolchain.cmake
     make ${MAKEOPTS}
-    cp ../LICENSE ../README.md ../docs/ANONYMITY_NETWORKS.md bin
+    cp ../LICENSE ../docs/USER_GUIDE.md ../docs/ANONYMITY_NETWORKS.md bin
     # The pinned Tor Expert Bundle (TOR_BUNDLE_DISTRIBUTION.md TB-6, TB-11),
     # as gitian-linux.yml stages it: a directory of its own, bin/tor/, because
     # the daemon refuses a tor directory that holds anything but the pinned
