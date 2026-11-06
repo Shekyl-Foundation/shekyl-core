@@ -4092,10 +4092,10 @@ dependencies = [
  "shekyl-draw-rng",
  "shekyl-hash-budget",
  "shekyl-levin",
+ "shekyl-p2p-session",
  "shekyl-peer-policy",
  "shekyl-pow-randomx",
  "shekyl-runtime",
- "shekyl-seam",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
  "shekyl-types",
@@ -4304,20 +4304,26 @@ dependencies = [
 name = "shekyl-daemon"
 version = "3.1.0"
 dependencies = [
+ "rustix",
  "shekyl-address",
+ "shekyl-archival-retention",
  "shekyl-daemon-config",
  "shekyl-daemon-rpc",
- "shekyl-ffi",
+ "shekyl-difficulty",
  "shekyl-logging",
  "shekyl-node",
  "shekyl-onion-v3",
  "shekyl-options",
+ "shekyl-p2p",
+ "shekyl-process",
  "shekyl-runtime",
  "shekyl-socks",
  "shekyl-timing-engine",
  "shekyl-tor-control-client",
  "shekyl-tor-control-daemon",
+ "shekyl-types",
  "shekyl-version",
+ "shekyl-win-sec",
  "tempfile",
  "tokio",
  "tracing",
@@ -4400,9 +4406,9 @@ dependencies = [
  "shekyl-levin",
  "shekyl-network",
  "shekyl-onion-v3",
+ "shekyl-p2p-session",
  "shekyl-peer-policy",
  "shekyl-peerlist",
- "shekyl-seam",
  "shekyl-timing-engine",
  "shekyl-tor",
  "shekyl-transport-layer",
@@ -4672,7 +4678,6 @@ dependencies = [
  "libc",
  "modular-frost",
  "multiexp",
- "postcard",
  "rand 0.8.6",
  "rand_core 0.6.4",
  "rcgen",
@@ -4681,14 +4686,7 @@ dependencies = [
  "shekyl-address",
  "shekyl-archival-retention",
  "shekyl-bulletproofs",
- "shekyl-capped-stream",
- "shekyl-chacha",
- "shekyl-chain-ingest",
- "shekyl-chain-rules",
  "shekyl-chain-store",
- "shekyl-chain-sync",
- "shekyl-chain-sync-runtime",
- "shekyl-clearnet",
  "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
@@ -4697,42 +4695,19 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
- "shekyl-daemon-config",
- "shekyl-dialer",
  "shekyl-difficulty",
- "shekyl-draw-rng",
  "shekyl-economics",
  "shekyl-encoding",
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
  "shekyl-hash-budget",
- "shekyl-levin",
  "shekyl-logging",
- "shekyl-mempool",
- "shekyl-net-address",
- "shekyl-onion-v3",
- "shekyl-options",
- "shekyl-p2p-transport",
- "shekyl-peer-policy",
- "shekyl-peerlist",
  "shekyl-pow-randomx",
- "shekyl-relay",
- "shekyl-relay-privacy",
- "shekyl-rpc-types",
- "shekyl-runtime",
- "shekyl-seam",
- "shekyl-socks",
- "shekyl-thread-ledger",
- "shekyl-timing-engine",
- "shekyl-tor",
- "shekyl-tor-control-client",
- "shekyl-transport-layer",
  "shekyl-types",
  "shekyl-units",
  "shekyl-win-sec",
  "shekyl-wire",
  "tempfile",
- "tokio",
  "tracing",
  "windows-sys 0.61.2",
  "zeroize",
@@ -4915,17 +4890,18 @@ dependencies = [
  "shekyl-daemon-config",
  "shekyl-daemon-rpc",
  "shekyl-difficulty",
- "shekyl-ffi",
  "shekyl-genesis-tool",
  "shekyl-hash-budget",
  "shekyl-mempool",
  "shekyl-miner",
+ "shekyl-onion-v3",
  "shekyl-options",
+ "shekyl-p2p",
+ "shekyl-p2p-transport",
  "shekyl-pow-randomx",
  "shekyl-relay",
  "shekyl-rpc-types",
  "shekyl-runtime",
- "shekyl-seam",
  "shekyl-store-codec",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
@@ -5071,6 +5047,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-p2p"
+version = "3.1.0"
+dependencies = [
+ "libc",
+ "shekyl-capped-stream",
+ "shekyl-clearnet",
+ "shekyl-dialer",
+ "shekyl-draw-rng",
+ "shekyl-levin",
+ "shekyl-network",
+ "shekyl-onion-v3",
+ "shekyl-p2p-session",
+ "shekyl-peer-policy",
+ "shekyl-peerlist",
+ "shekyl-relay",
+ "shekyl-runtime",
+ "shekyl-socks",
+ "shekyl-thread-ledger",
+ "shekyl-timing-engine",
+ "shekyl-tor",
+ "shekyl-tor-control-client",
+ "shekyl-transport-layer",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "shekyl-p2p-harness"
 version = "3.1.0"
 dependencies = [
@@ -5091,10 +5095,10 @@ dependencies = [
  "shekyl-levin",
  "shekyl-miner",
  "shekyl-network",
+ "shekyl-p2p-session",
  "shekyl-peer-policy",
  "shekyl-pow-randomx",
  "shekyl-runtime",
- "shekyl-seam",
  "shekyl-timing-engine",
  "shekyl-tor",
  "shekyl-transport-layer",
@@ -5103,6 +5107,23 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "shekyl-p2p-session"
+version = "3.1.0"
+dependencies = [
+ "shekyl-capped-stream",
+ "shekyl-draw-rng",
+ "shekyl-levin",
+ "shekyl-net-address",
+ "shekyl-onion-v3",
+ "shekyl-p2p-session",
+ "shekyl-peer-policy",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -5162,6 +5183,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-process"
+version = "3.1.0"
+dependencies = [
+ "libc",
+ "shekyl-daemon-config",
+ "shekyl-tor-control-client",
+ "shekyl-win-sec",
+ "tempfile",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "shekyl-proofs"
 version = "3.1.0"
 dependencies = [
@@ -5197,10 +5231,16 @@ dependencies = [
 name = "shekyl-relay"
 version = "3.1.0"
 dependencies = [
+ "rand 0.8.6",
  "shekyl-draw-rng",
+ "shekyl-levin",
+ "shekyl-p2p-session",
+ "shekyl-peer-policy",
  "shekyl-relay-privacy",
+ "shekyl-timing-engine",
  "shekyl-transport-layer",
  "shekyl-types",
+ "tokio",
  "tracing",
 ]
 
@@ -5359,21 +5399,6 @@ dependencies = [
  "tokio",
  "tracing",
  "zeroize",
-]
-
-[[package]]
-name = "shekyl-seam"
-version = "3.1.0"
-dependencies = [
- "shekyl-capped-stream",
- "shekyl-clearnet",
- "shekyl-onion-v3",
- "shekyl-peer-policy",
- "shekyl-timing-engine",
- "shekyl-tor",
- "shekyl-transport-layer",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -5778,7 +5803,7 @@ dependencies = [
  "shekyl-clearnet",
  "shekyl-daemon",
  "shekyl-daemon-rpc",
- "shekyl-ffi",
+ "shekyl-relay",
  "shekyl-transport-layer",
  "shekyl-types",
 ]

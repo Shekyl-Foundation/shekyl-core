@@ -408,7 +408,7 @@ const EXPIRATION_PERIOD: Duration = Duration::from_hours(24);
 ```
 
 White has one clock, `last_observed`. The C++ field is `last_seen`
-(`src/p2p/p2p_protocol_defs.h:67`). Rust keeps one name. The clock answers
+(line 67 of `src/p2p/p2p_protocol_defs.h` at `e8838b0095`). Rust keeps one name. The clock answers
 "has this white address gone 24 hours without contact?" It is not a sort key,
 not a load rank, and not a field on gray.
 
@@ -789,7 +789,7 @@ that signature is the hole §5 closes.
 These C++ outcomes match the lists. The functions that produce them are not
 the API.
 
-- `--add-peer` is gray (`append_operator_candidate`, `src/p2p/net_node.inl:524`, `net_peerlist.h:419`).
+- `--add-peer` is gray (`append_operator_candidate`, line 524 of `src/p2p/net_node.inl` at `e8838b0095`, `net_peerlist.h:419`).
 - An inbound advertisement is gray (`append_with_peer_gray`, `net_node.inl:2831`).
 - A received peerlist is merged into gray (`net_peerlist.h:239`).
 - Inbound timed sync does not write white (`src/p2p/net_node.inl` lines 1244–1245 at `b18cd248dd` wrote only when the session was one this node opened; *records-was:* the C++ peerlist is deleted, `9081776f67`).

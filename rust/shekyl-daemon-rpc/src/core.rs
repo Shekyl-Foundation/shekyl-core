@@ -26,33 +26,12 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! The p2p facts handle: net stats, the board's connections, the peer
-//! lists and stem tallies. Chain and pool reads go through the store, and
-//! chain sync's view is the node's (CS-5 §7).
-//!
-//! Each read names its deleter (`DRS_X_STORE_FLIP.md` FLIP-Q5): `net_stats`
-//! and `connections` read the C++ node server and the board and go with
-//! slice 4; `stem_tallies` reads `levin_notify` and goes with RD.
-//! `peer_list` and the list sizes read the dialer's lists through
-//! [`crate::p2p_reads`], which is Rust and has no C++ deleter.
-
-use crate::ffi;
-use std::ffi::CStr;
-
-use crate::seam::seam;
-
-/// Wrapper around the opaque `core_rpc_handle` pointer.
-/// The handle borrows the daemon's `rpc_subject` (core and the p2p server).
-///
-/// Methods are `&self`. The reads they make are the sync half, and Axum
-/// dispatches the blocking ones via `spawn_blocking`.
-pub struct CoreRpc {
-    handle: *mut ffi::CoreRpcHandle,
-}
-
-// The sync-half reads do not share mutable state through this handle.
-unsafe impl Send for CoreRpc {}
-unsafe impl Sync for CoreRpc {}
+//! The RPC's value types for the p2p facts (net stats, the board's
+//! connections, the peer lists) and the transaction bodies a store read
+//! returns. Chain and pool reads go through the store, chain sync's view is
+//! the node's (CS-5 §7), and the p2p facts are the node's
+//! [`crate::chain_facts::P2pFacts`] over `shekyl-p2p`'s board: nothing
+//! here reaches C++.
 
 /// The body of one transaction as the store holds it: the **skeleton**
 /// every node keeps at every horizon, and the **archival good** it may or
@@ -155,13 +134,11 @@ pub enum TxSlot {
     },
 }
 
-/// One live p2p connection, copied out of the C++ view before its owner is
-/// released.
+/// One live p2p connection, as the node read it from the session board.
 ///
-/// Raw and absolute, deliberately: the wire's elapsed times and rates are
-/// derived from these against the one `now` that came back beside the list,
-/// so a connection's reported lifetime and the divisor behind its own
-/// averages cannot come from different seconds.
+/// Raw and absolute: the wire's elapsed times and rates are derived from
+/// these against the one `now` beside the list, so a connection's reported
+/// lifetime and the divisor behind its averages come from the same second.
 // No `Eq`: the raw speeds are `f64`, and they are raw on purpose.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectionFacts {
@@ -210,19 +187,8 @@ pub enum P2pRead<T> {
     Offline,
 }
 
-/// Offline, when configure recorded it. The peer methods return this
-/// before any dialer call. `None` when the daemon is online, so the
-/// caller asks the dialer.
-fn offline_answer<T>() -> Option<Result<P2pRead<T>, crate::chain_facts::FactsFault>> {
-    if crate::ffi_exports::offline() {
-        Some(Ok(P2pRead::Offline))
-    } else {
-        None
-    }
-}
-
-/// One peerlist entry, copied out of the installed peer-list read. No
-/// clock: the lists carry none (3.55). Named apart from
+/// One peer-list entry, as the node read it. No clock: the lists carry
+/// none (3.55). Named apart from
 /// [`crate::info_facts::PeerFacts`], `get_info`'s Peers state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerEntry {
@@ -241,191 +207,4 @@ pub struct PeerEntry {
     /// Whether the host is currently blocked; applying `include_blocked` is
     /// this side's job.
     pub blocked: bool,
-}
-
-/// Copy a C++-owned string view into an owned `String`.
-///
-/// Lossy, as the other string copies at this seam are (`block_at`'s `json`,
-/// `tx_to_json`): these are addresses and host names produced by epee's own
-/// formatters, so a non-UTF-8 byte would be a fault in the formatter rather
-/// than data a caller supplied, and there is no reply shape that could carry
-/// it faithfully anyway — the wire is JSON.
-///
-/// # Safety
-///
-/// `ptr` must be null or point to `len` readable bytes that outlive the call.
-unsafe fn borrowed_string(ptr: *const std::os::raw::c_char, len: usize) -> String {
-    if ptr.is_null() || len == 0 {
-        return String::new();
-    }
-    String::from_utf8_lossy(std::slice::from_raw_parts(ptr.cast::<u8>(), len)).into_owned()
-}
-
-impl CoreRpc {
-    /// Wrap the daemon's `rpc_subject`.
-    ///
-    /// # Safety
-    /// `subject_ptr` must point to a live `rpc_subject` that outlives this
-    /// value, or be null. A subject missing either pointer yields `None`.
-    pub unsafe fn from_raw(rpc_server_ptr: *mut std::ffi::c_void) -> Option<Self> {
-        let handle = unsafe { (seam().create)(rpc_server_ptr) };
-        if handle.is_null() {
-            None
-        } else {
-            Some(Self { handle })
-        }
-    }
-
-    /// §55: relay stem-outcome tallies as a JSON array string.
-    ///
-    /// The counts live in the relay zones. This is the readout while C++
-    /// owns their lifetime.
-    pub fn stem_tallies(&self) -> Option<String> {
-        if self.handle.is_null() {
-            return None;
-        }
-        unsafe { consume_c_string((seam().stem_tallies)(self.handle)) }
-    }
-
-    /// Network throttle counters and the core's start time
-    /// (`shekyl_rpc_net_stats`); `Err(code)` on a non-OK return.
-    pub fn net_stats(&self) -> Result<ffi::NetStatsFactsFfi, i32> {
-        if self.handle.is_null() {
-            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
-        }
-        let mut pod = ffi::NetStatsFactsFfi {
-            start_time: 0,
-            total_packets_in: 0,
-            total_bytes_in: 0,
-            total_packets_out: 0,
-            total_bytes_out: 0,
-        };
-        // SAFETY: live handle; `pod` is a valid out pointer for the call.
-        let rc = unsafe { (seam().net_stats)(self.handle, &raw mut pod) };
-        if rc == ffi::SHEKYL_RPC_FACTS_OK {
-            Ok(pod)
-        } else {
-            Err(rc)
-        }
-    }
-
-    /// The live p2p connections (`shekyl_rpc_connections`), copied out of the
-    /// C++-owned view before it is released.
-    pub fn connections(&self) -> Result<ConnectionsSnapshot, i32> {
-        if self.handle.is_null() {
-            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
-        }
-        let mut rows: *const ffi::ConnectionFactsFfi = std::ptr::null();
-        let mut len: usize = 0;
-        let mut now: u64 = 0;
-        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
-        // SAFETY: live handle; the four out pointers are valid; on OK the
-        // view is valid until `shekyl_rpc_connections_free(owner)`, and every
-        // copy below is taken before that call.
-        unsafe {
-            let rc = (seam().connections)(
-                self.handle,
-                &raw mut now,
-                &raw mut rows,
-                &raw mut len,
-                &raw mut owner,
-            );
-            if rc != ffi::SHEKYL_RPC_FACTS_OK {
-                return Err(rc);
-            }
-            let mut connections = Vec::with_capacity(len);
-            if !rows.is_null() {
-                for e in std::slice::from_raw_parts(rows, len) {
-                    connections.push(ConnectionFacts {
-                        address: borrowed_string(e.address, e.address_len),
-                        host: borrowed_string(e.host, e.host_len),
-                        connection_id: e.connection_id,
-                        started: e.started,
-                        last_recv: e.last_recv,
-                        last_send: e.last_send,
-                        recv_count: e.recv_count,
-                        send_count: e.send_count,
-                        current_speed_down: e.current_speed_down,
-                        current_speed_up: e.current_speed_up,
-                        port: e.port,
-                        address_type: e.address_type,
-                        incoming: e.incoming != 0,
-                        localhost: e.localhost != 0,
-                        local_ip: e.local_ip != 0,
-                    });
-                }
-            }
-            (seam().connections_free)(owner);
-            Ok(ConnectionsSnapshot { now, connections })
-        }
-    }
-
-    /// The peer list, white entries then gray. `public_only` is the
-    /// clearnet lists alone. No core handle: the lists are the dialer's,
-    /// read through [`crate::p2p_reads`]. [`P2pRead::Offline`] when
-    /// configure recorded offline, before any list read. An online daemon
-    /// with no lists is [`crate::chain_facts::FactsFault::ListsAbsent`],
-    /// not an empty list.
-    pub fn peer_list(
-        &self,
-        public_only: bool,
-    ) -> Result<P2pRead<Vec<PeerEntry>>, crate::chain_facts::FactsFault> {
-        if let Some(offline) = offline_answer() {
-            return offline;
-        }
-        let rows = (crate::p2p_reads::reads().peers)(public_only)?;
-        Ok(P2pRead::Running(rows))
-    }
-
-    /// How many addresses the clearnet white and gray lists hold, as
-    /// `(white, gray)`. No core handle: the lists are the dialer's.
-    /// [`P2pRead::Offline`] when configure recorded offline, before any
-    /// list read. An online daemon with no lists is
-    /// [`crate::chain_facts::FactsFault::ListsAbsent`], not zeros.
-    pub fn peerlist_sizes() -> Result<P2pRead<(u64, u64)>, crate::chain_facts::FactsFault> {
-        if let Some(offline) = offline_answer() {
-            return offline;
-        }
-        let sizes = (crate::p2p_reads::reads().sizes)()?;
-        Ok(P2pRead::Running(sizes))
-    }
-
-    /// Whether P2P runs. Offline is the bit configure recorded. Anything
-    /// else is running: the RPC is served only after configure, and a
-    /// process that never configured still asks the dialer rather than
-    /// inventing an offline state.
-    pub fn p2p_state() -> Result<P2pRead<()>, crate::chain_facts::FactsFault> {
-        offline_answer().unwrap_or(Ok(P2pRead::Running(())))
-    }
-}
-
-impl Drop for CoreRpc {
-    fn drop(&mut self) {
-        if !self.handle.is_null() {
-            unsafe { (seam().destroy)(self.handle) };
-        }
-    }
-}
-
-#[cfg(test)]
-impl CoreRpc {
-    /// Null-handle stand-in reserved for future router tests that never reach FFI.
-    #[allow(dead_code)]
-    pub(crate) fn null_for_router_tests() -> Self {
-        Self {
-            handle: std::ptr::null_mut(),
-        }
-    }
-}
-
-/// Take ownership of a C-allocated string, copy it into a Rust String, and free the C side.
-unsafe fn consume_c_string(ptr: *mut std::os::raw::c_char) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let s = unsafe { CStr::from_ptr(ptr) }
-        .to_string_lossy()
-        .into_owned();
-    unsafe { (seam().free_string)(ptr) };
-    Some(s)
 }

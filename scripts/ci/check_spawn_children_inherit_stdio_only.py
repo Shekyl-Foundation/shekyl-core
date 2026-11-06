@@ -9,10 +9,10 @@
 # (docs/design/DAEMON_CONFIG_CUTOVER.md section 2.10; the helper is
 # rust/shekyl-tor-control-client/src/inherit.rs).
 #
-# WHY. Rust opens every descriptor close-on-exec; C++ in the same process does
-# not promise to (Boost.Asio's sockets, the store's files, a C++ library's
-# own). Without the helper in the child's pre_exec, each such descriptor passes
-# into the operator's notify command or into the managed tor.
+# WHY. Rust opens every descriptor close-on-exec; a C library in the same
+# process does not promise to (the store's, a TLS library's own). Without the
+# helper in the child's pre_exec, each such descriptor passes into the
+# operator's notify command or into the managed tor.
 #
 # THE RULE. The crates are check_spawn_sites_take_the_lock.py's WATCHED set,
 # read from that script, as is its comment-and-string blanking (rule 47), so
@@ -30,14 +30,14 @@
 #
 #   TEST-ONLY SPAWNS ARE NOT THIS GATE'S SUBJECT: `tests/`, `benches/` and
 #   `examples/`, a build script, a test module, and a file declared only for
-#   tests (the DC-F12 sibling `true` in notify_ffi.rs's tests, the engine's
-#   regtest harness). A test binary is not the daemon's image: the C++ whose
-#   descriptors this guards is not running there. Their count is printed so a
+#   tests (the DC-F12 sibling `true` in notify.rs's tests, the engine's
+#   regtest harness). A test binary is not the daemon's image: the libraries
+#   whose descriptors this guards are not running there. Their count is printed so a
 #   production spawn that moved into a test region is visible in the log.
 #
 # A file the check does not see: a second command in a file that already
 # names `inherit::` once, and a command made by `Command::from`. The unit
-# tests beside each call site bite those (notify_ffi.rs, launch.rs).
+# tests beside each call site bite those (notify.rs, launch.rs).
 #
 # SUBJECT. The managed launch and the notify runner are production spawn
 # files. If either is not found as one, the gate has lost its subject and
@@ -64,7 +64,7 @@ from check_spawn_sites_take_the_lock import (  # noqa: E402
 
 SUBJECTS = (
     "shekyl-tor-control-client/src/control/launch.rs",
-    "shekyl-ffi/src/notify_ffi.rs",
+    "shekyl-daemon/src/notify.rs",
 )
 HELPER = re.compile(r"\binherit::")
 TEST_ATTR = re.compile(r"#\[\s*cfg\s*\(\s*(?:test\b|all\s*\(\s*test\b)")

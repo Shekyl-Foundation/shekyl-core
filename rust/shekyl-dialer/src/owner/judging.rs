@@ -29,8 +29,9 @@
 use std::sync::Arc;
 
 use shekyl_draw_rng::RelayRng;
+use shekyl_p2p_session::{Board, Direction};
 use shekyl_peerlist::{dial_profile, ConnectorId, DialOutcome, Tick, Verdict};
-use shekyl_seam::{Board, Direction};
+use shekyl_timing_engine::Clock;
 use shekyl_transport_layer::SessionTraffic;
 
 use super::{Dialer, Shared};
@@ -78,7 +79,7 @@ pub(super) struct LinkEvidence {
     pub(super) excused_since: bool,
 }
 
-impl Dialer {
+impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
     /// Read each connector's corroborating sessions off `board`: the latest
     /// byte any of them received. A byte that arrived is kept when its
     /// session later closes; it did arrive.
@@ -225,7 +226,7 @@ impl Dialer {
     /// life inside its bracket, or excused at its deadline. Each wake does
     /// this first, as the owner loop does.
     pub fn apply_verdicts<R: RelayRng + ?Sized>(&self, rng: &mut R) {
-        let now = self.hub.now();
+        let now = self.now();
         self.with_inbound(|shared| Self::apply_due_verdicts(shared, now, rng));
     }
 
@@ -266,7 +267,7 @@ impl Dialer {
             .min()?;
         drop(shared);
         let wait_nanos = wait_ms.saturating_mul(1_000_000);
-        Some(Tick::new(self.hub.now().get().saturating_add(wait_nanos)))
+        Some(Tick::new(self.now().get().saturating_add(wait_nanos)))
     }
 
     /// The deferred verdicts waiting on `connector`, for tests and the

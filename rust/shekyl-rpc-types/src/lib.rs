@@ -133,8 +133,9 @@ pub use info::{
 pub use nullable::Nullable;
 pub use p2p::{
     ChainSyncState, ConnectionInfo, GetConnectionsResponse, GetNetStatsResponse,
-    GetPeerListRequest, GetPeerListResponse, P2pReply, P2pRunningReply, Peer, SyncBodyRequest,
-    SyncHeaderRequest, SyncInfoPeer, SyncInfoResponse, SyncMode,
+    GetPeerListRequest, GetPeerListResponse, P2pReply, P2pRunningReply, Peer, StemConnector,
+    StemFloor, StemTallies, StemTallyRow, SyncBodyRequest, SyncHeaderRequest, SyncInfoPeer,
+    SyncInfoResponse, SyncMode,
 };
 pub use transactions::{
     ArchivedTx, GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,

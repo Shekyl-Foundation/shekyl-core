@@ -12,24 +12,30 @@ Tor dial and gap deadlines lifted to 120 s, so the distribution is read
 uncensored by the deadlines it is meant to derive. That is a compile-time
 feature on `shekyl-transport-layer` (`measurement-spans`), built only for
 the measurement binary, never a runtime option. A node built with it keeps
-a silent Tor peer for two minutes instead of seconds. Nothing in the
-compiler notices if a release path turns it on; this gate does.
+a silent Tor peer for two minutes instead of seconds. Two more crates own a
+feature of the same name for the same build: `shekyl-clearnet` (the step 7
+message-size tap) and `shekyl-relay` (transaction ids on the relay's debug
+lines, which a shipped node's log must not carry: beside a batch's session
+they name the transactions it originated and their first stem hop).
+Nothing in the compiler notices if a release path turns one on; this gate
+does.
 
 # What it asserts
 
-  1. **Subject** — the feature exists in `shekyl-transport-layer`'s feature
-     map, `spans.rs` switches on it, and `cmake/BuildRust.cmake` declares
-     the `SHEKYL_MEASUREMENT_SPANS` option default `OFF` and passes the
-     feature only under it, through Corrosion's `corrosion_set_features`.
-     Corrosion compiles `shekyld` in a cargo target directory of its own
-     under the build tree (not the shared `rust/target`), so a measurement
-     build cannot leave a measurement archive for a release build directory
-     to link — the target-dir limb the daemon-image build needed is gone
-     with the daemon image (DC-Q23). Without this limb the others pass
-     vacuously (rule 47).
+  1. **Subject** — each owner in `OWNERS` declares the feature and its
+     named source file switches on it, and `cmake/BuildRust.cmake` declares
+     the `SHEKYL_MEASUREMENT_SPANS` option default `OFF` and passes every
+     owner's feature only under it, as the `--features` value of
+     `_shekyl_rust_bin_features` on the one cargo line that builds the
+     binaries (`shekyl_rust_bins`). `shekyld` is a cargo binary and
+     nothing links it, so a measurement build leaves no archive for a
+     release build directory to pick up — the target-dir limb the
+     daemon-image build needed is gone with the daemon image (DC-Q23).
+     Without this limb the others pass vacuously (rule 47).
   2. **No Cargo edge** — no dependency edge of any kind, and no feature of
-     any workspace package (`default` included), enables it. The only way
-     in is the CMake option, on the command line of a measurement build.
+     any workspace package (`default` included), enables any owner's. The
+     only way in is the CMake option, on the command line of a measurement
+     build.
   3. **No release path** — no workflow, release or packaging script turns
      the option on or names the feature: `.github/`, `contrib/`,
      `scripts/` (this gate excepted), `Makefile`, `CMakeLists.txt`,
@@ -46,26 +52,35 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-OWNER = "shekyl-transport-layer"
 FEATURE = "measurement-spans"
+# Every crate that owns the feature, with the source file that switches on
+# it: the Tor gap, the clearnet message-size tap, the relay's transaction
+# ids on its debug lines. Each is the gate's subject (rule 47).
+OWNERS = {
+    "shekyl-transport-layer": "src/spans.rs",
+    "shekyl-clearnet": "src/sizes.rs",
+    "shekyl-relay": "src/stem_watch.rs",
+}
 OPTION = "SHEKYL_MEASUREMENT_SPANS"
 SELF = pathlib.Path(__file__).resolve()
 SCANNED = [".github", "contrib", "scripts", "Makefile", "CMakeLists.txt", "cmake"]
 
 
 def edge_enablers(metadata):
-    """Every (package, how) in the workspace graph that turns the feature on."""
+    """Every (package, owner, how) in the workspace graph that turns an
+    owner's feature on."""
     found = []
     for pkg in metadata["packages"]:
         for dep in pkg.get("dependencies", []):
-            if dep["name"] == OWNER and FEATURE in dep.get("features", []):
-                found.append((pkg["name"], f"{dep.get('kind') or 'normal'} edge"))
+            if dep["name"] in OWNERS and FEATURE in dep.get("features", []):
+                found.append((pkg["name"], dep["name"], f"{dep.get('kind') or 'normal'} edge"))
         for name, enables in pkg.get("features", {}).items():
             for item in enables:
-                if item in (f"{OWNER}/{FEATURE}", f"{OWNER}?/{FEATURE}") or (
-                    pkg["name"] == OWNER and item == FEATURE
-                ):
-                    found.append((pkg["name"], f"its feature `{name}`"))
+                for owner in OWNERS:
+                    if item in (f"{owner}/{FEATURE}", f"{owner}?/{FEATURE}") or (
+                        pkg["name"] == owner and item == FEATURE
+                    ):
+                        found.append((pkg["name"], owner, f"its feature `{name}`"))
     return found
 
 
@@ -84,7 +99,9 @@ def release_mentions(files):
 
 
 def guarded(line):
-    return "corrosion_set_features" in line and f"{OWNER}/{FEATURE}" in line
+    return "set(_shekyl_rust_bin_features --features" in line and all(
+        f"{owner}/{FEATURE}" in line for owner in OWNERS
+    )
 
 
 def scanned_files():
@@ -103,17 +120,18 @@ def scanned_files():
 
 
 def subject(metadata, fail):
-    owner = next((p for p in metadata["packages"] if p["name"] == OWNER), None)
-    if owner is None or FEATURE not in owner.get("features", {}):
-        fail(f"{OWNER} does not declare the `{FEATURE}` feature")
-    spans = (ROOT / "rust" / OWNER / "src" / "spans.rs").read_text(encoding="utf-8")
-    if f'feature = "{FEATURE}"' not in spans:
-        fail(f"spans.rs does not switch on `{FEATURE}`")
+    for name, switch in OWNERS.items():
+        owner = next((p for p in metadata["packages"] if p["name"] == name), None)
+        if owner is None or FEATURE not in owner.get("features", {}):
+            fail(f"{name} does not declare the `{FEATURE}` feature")
+        source = (ROOT / "rust" / name / switch).read_text(encoding="utf-8")
+        if f'feature = "{FEATURE}"' not in source:
+            fail(f"{name}'s {switch} does not switch on `{FEATURE}`")
     cmake = (ROOT / "cmake" / "BuildRust.cmake").read_text(encoding="utf-8")
     if not re.search(rf'option\(\s*{OPTION}\s+"[^"]*"\s+OFF\s*\)', cmake):
         fail(f"cmake/BuildRust.cmake does not declare option {OPTION} default OFF")
     if not any(guarded(line) for line in cmake.splitlines()):
-        fail(f"cmake/BuildRust.cmake does not pass the feature under {OPTION}")
+        fail(f"cmake/BuildRust.cmake does not pass every owner's feature under {OPTION}")
     if not re.search(rf"if\(\s*{OPTION}\s*\)", cmake):
         fail(f"cmake/BuildRust.cmake does not guard the feature with if({OPTION})")
 
@@ -121,38 +139,36 @@ def subject(metadata, fail):
 def run(metadata, files):
     errors = []
     subject(metadata, errors.append)
-    for pkg, how in edge_enablers(metadata):
-        errors.append(f"{pkg} enables {OWNER}/{FEATURE} through {how}")
+    for pkg, owner, how in edge_enablers(metadata):
+        errors.append(f"{pkg} enables {owner}/{FEATURE} through {how}")
     for path, n, text in release_mentions(files):
         errors.append(f"{path}:{n} names the measurement build: {text}")
     return errors
 
 
 def selftest():
-    meta = {
-        "packages": [
-            {"name": OWNER, "features": {FEATURE: [], "default": []}, "dependencies": []},
-            {"name": "shekyl-ffi", "features": {}, "dependencies": [{"name": OWNER, "features": [], "kind": None}]},
-        ]
-    }
-    assert edge_enablers(meta) == [], "clean graph"
-    meta["packages"][1]["dependencies"][0]["features"] = [FEATURE]
-    assert edge_enablers(meta), "a normal edge enabling the feature is red"
-    meta["packages"][1]["dependencies"][0]["features"] = []
-    meta["packages"][0]["features"]["default"] = [FEATURE]
-    assert edge_enablers(meta), "the owner's default enabling it is red"
+    for owner in OWNERS:
+        meta = {
+            "packages": [
+                {"name": owner, "features": {FEATURE: [], "default": []}, "dependencies": []},
+                {"name": "shekyld", "features": {}, "dependencies": [{"name": owner, "features": [], "kind": None}]},
+            ]
+        }
+        assert edge_enablers(meta) == [], f"clean graph ({owner})"
+        meta["packages"][1]["dependencies"][0]["features"] = [FEATURE]
+        assert edge_enablers(meta), f"a normal edge enabling {owner}'s feature is red"
+        meta["packages"][1]["dependencies"][0]["features"] = []
+        meta["packages"][0]["features"]["default"] = [FEATURE]
+        assert edge_enablers(meta), f"{owner}'s default enabling it is red"
+        assert release_mentions([("x.sh", f"cargo build --features {owner}/{FEATURE}")]), f"a script naming {owner}'s is red"
     assert release_mentions([("x.yml", "cmake -B b -DSHEKYL_MEASUREMENT_SPANS=ON")]), "a workflow turning it on is red"
-    assert release_mentions([("x.sh", f"cargo build --features {OWNER}/{FEATURE}")]), "a script naming it is red"
-    assert not release_mentions(
-        [(
-            "cmake/BuildRust.cmake",
-            f"    corrosion_set_features(shekyld FEATURES {OWNER}/{FEATURE} shekyl-clearnet/{FEATURE})",
-        )]
-    ), "the guarded line is allowed"
-    assert guarded(
-        f"    corrosion_set_features(shekyld FEATURES {OWNER}/{FEATURE} shekyl-clearnet/{FEATURE})"
-    ), "the corrosion_set_features line is the guarded one"
-    assert not guarded(f"    set(_x --features {OWNER}/{FEATURE})"), "only corrosion_set_features is the guard"
+    every = ",".join(f"{owner}/{FEATURE}" for owner in OWNERS)
+    line = f"        set(_shekyl_rust_bin_features --features {every})"
+    assert not release_mentions([("cmake/BuildRust.cmake", line)]), "the guarded line is allowed"
+    assert guarded(line), "the _shekyl_rust_bin_features line is the guarded one"
+    short = ",".join(f"{owner}/{FEATURE}" for owner in list(OWNERS)[:-1])
+    assert not guarded(f"        set(_shekyl_rust_bin_features --features {short})"), "a line missing an owner is not the guard"
+    assert not guarded(f"    set(_x --features {every})"), "only _shekyl_rust_bin_features is the guard"
     print("check_measurement_spans selftest: ok")
 
 
@@ -173,7 +189,8 @@ def main():
         for e in errors:
             print(f"  {e}")
         return 1
-    print(f"ok: {OWNER}/{FEATURE} is reachable only through {OPTION} (default OFF)")
+    names = ", ".join(f"{owner}/{FEATURE}" for owner in OWNERS)
+    print(f"ok: {names} are reachable only through {OPTION} (default OFF)")
     return 0
 
 

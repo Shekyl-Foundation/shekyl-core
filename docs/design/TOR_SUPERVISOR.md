@@ -51,12 +51,12 @@ needs, so the supervisor adds no path around it:
 
 | The supervisor needs to… | The seam that already exists (PR-3, #1056) | What changes |
 | --- | --- | --- |
-| tell dials where to go | `ZoneDial::dial_tor` reads the Tor link's route at each dial (`TSR-F1`, `rust/shekyl-ffi/src/zone_ffi.rs`) | the supervisor becomes the link's publisher |
+| tell dials where to go | `Connectors::dial_tor` reads the Tor link's route at each dial (`TSR-F1`, `rust/shekyl-p2p/src/dial.rs:173-176`) | the supervisor becomes the link's publisher |
 | stop the dialer drawing while Tor is down | `Dialer::choose` plans, then draws (`rust/shekyl-dialer/src/owner/mod.rs:574-601`, the draw at `:685-686`) | the plan reads the connector's link before it draws; the owner loop parks on the link |
-| learn whether outbound works | every dial ends in a `CloseCause` that keeps the SOCKS reply (`rust/shekyl-transport-layer/src/cause.rs:202-246`) | each outcome is also evidence to the supervisor; no separate client probe |
-| prove the onion is reachable end to end | the self-connection nonce: an inbound handshake carrying a nonce this node put in flight on this zone is recognised and dropped (`src/p2p/net_node.inl:714-719`) | a probe nonce kind; the probe is a dialer dial of our own onion |
+| learn whether outbound works | every dial ends in a `CloseCause` that keeps the SOCKS reply (`CloseCause::proxy_refused`, `rust/shekyl-transport-layer/src/cause.rs:133-151`) | each outcome is also evidence to the supervisor; no separate client probe |
+| prove the onion is reachable end to end | the self-connection nonce: an inbound handshake carrying a nonce this node put in flight on this zone is recognised and dropped (`NonceTake::SelfConnection`, `rust/shekyl-p2p-session/src/session.rs:384-390`) | a probe nonce kind; the probe is a dialer dial of our own onion |
 | tell peers our address | `Dialer::set_own_addresses` (`rust/shekyl-dialer/src/owner/mod.rs:237`) → the partition's own member of the disclosure sample (`rust/shekyl-peerlist/src/partition.rs:521-535`) | called once per boot: the onion does not change at a respawn (`TSR-Q1`) |
-| keep inbound working across a respawn | the forward listener is bound by the zone host on loopback, not by Tor (`zone_ffi::start_tor`) | nothing: a republished onion targets the same port |
+| keep inbound working across a respawn | the forward listener is bound by the network on loopback, not by Tor (`Network::bind_tor`, `rust/shekyl-p2p/src/network.rs:421-423`) | nothing: a republished onion targets the same port |
 
 The relay is deliberately absent from that table; see `TSR-F9`.
 
@@ -139,7 +139,7 @@ The link being usable is not Health (`GS-Q3`, the GUI sync lane's `GS-F3`):
 after a Tor boot the link is usable before any address-hiding peer has
 handshaken, and the relay holds a local origin until one has. The relay
 publishes `OriginVerdict` after every session change, epoch rebuild and plan
-(`shekyl-ffi` `origin_verdict`, written by the production zone's publish);
+(`Network::origin_verdict`, `rust/shekyl-p2p/src/network.rs:541`, the relay's watch);
 the supervisor folds `Input::AddressHidingOrigin`. Health is
 `hides_address`, every state but `Absent`. `OwnTx` reads `Routable`. A
 recovery is said at once, a loss once under the announcement cap. The link
@@ -420,9 +420,9 @@ here.
 | `HS_DESC UPLOAD` / `UPLOADED` / `FAILED REASON=` for our address | `HS_DESC`, coalesced into rounds by `UploadRounds` (`TSR-Q5`) | the end of a round in which an upload succeeded schedules the round's probe (§4.5). A round in which more than half of its uploads ended `FAILED REASON=UPLOAD_REJECTED` is refused: those directories hold a copy numbered above this one (tor 0.4.9.14 `hs_cache.c:185`), the facet says so, and nothing is republished (§4.5, "Refused rounds"). The share is taken over every upload the round began, unfinished ones included: a refusal comes back within seconds, so an unfinished upload is unknown, not refused. A round with no upload that succeeded, refused or not, is not Service-class evidence: Tor retries its own uploads. One `FAILED` in a round that also succeeded is not evidence (`TSR-M7` saw 1 of 13). A sink that dropped events ends the open round, so the next can trigger |
 | `HS_DESC_CONTENT` for our address | `HS_DESC_CONTENT` | the directory check's answer (§4.5): the copy one directory returned to a fetch, and its `revision-counter`. Tor sends it right after `HS_DESC RECEIVED` for every copy it decoded (`hs_client.c:1685-1689`), also one its client cache then discards for a lower counter (`hs_cache.c:837-842`), so each directory's own copy is seen |
 | `NOTICE` / `WARN` / `ERR` | log events | the `tor` log category (§4.10) |
-| every Tor dial's outcome | the connector's dial path → the dialer's tally (`TorLinkTally`, through `shekyl_ffi::tor_link`) → the supervisor | display only, never a cause (`TSR-Q14`). The tally carries the dialer judge's last sign that the Tor link worked (`last_sign_of_life`, a tick on the process clock; `DIALER_OUTAGE_EVIDENCE.md` §6): a stream that opened, or a byte any Tor session received, inbound included; never a session merely held, the probe, or Tor's own network judgment. The supervisor's span runs from that instant or from Tor last reaching Running, whichever is later; a resume restarts it from the wake. While Tor is Running and names nothing, the span reaches `Policy::quiet_after`, and a Tor dial has failed since the last sign of life (that failure is `last_unopened_at` on the same clock, the instant the dialer counted it; the watch keeps only the latest tally), the posture line says "Nothing has come through Tor for N: no connection has opened, and no peer has sent anything.", once, with no fix. `quiet_after` is the managed Tor's `SocksTimeout` plus the Tor connector's judging bracket δ (105 s + 15 s = 120 s), both the connector's own declarations: by then a dial started at the last sign of life has used Tor's retries and its bracket has closed empty, so the judge has excused it as the link's, and the operator is told the fact the dialer acted on. A live session keeps the line off (the 60 s timed sync shows life inside 120 s); a held session that sends nothing does not. The tally already in the cell when the supervisor starts watching is `Input::DialBaseline`: its failures are not folded. A respawn does not re-seed; `opened` is monotonic for the process |
-| a stream accepted at our forward listener | the Tor connector's inbound accept (`adopt_tor`, `rust/shekyl-ffi/src/zone_ffi.rs:413`) | display evidence only (posture line, RPC): a peer fetched the descriptor and completed introduction and rendezvous. Once its handshake has finished, the row is a Tor session: a byte it receives is the judge's sign of life, so the quiet line does not stand while it talks. A handshake still open is not a session: the probe of this node's own onion is dropped before the session is established, so it occupies the board's row count and never corroborates (§4.5; `DIALER_OUTAGE_EVIDENCE.md` §3.3). It is not a dial: `opened` and `unopened` stay. It neither arms nor defers the probe |
-| a probe nonce arrived | the inbound handshake's one nonce lookup (`shekyl_dial_take_handshake_nonce` answers 2), through `shekyl_ffi::tor_link::probe_arrivals` | inbound evidence: `Reachable`, when it names the probe in flight and the handshake took the nonce before that probe's bound (§4.5). The evidence time is that take, so a fold that runs later does not move it. A nonce taken at or after the bound is not evidence, and the deadline still misses the probe |
+| every Tor dial's outcome | the connector's dial path → the dialer's tally (`TorLinkTally`, through `Network::tor_link_tally`, `rust/shekyl-p2p/src/network.rs:612`) → the supervisor | display only, never a cause (`TSR-Q14`). The tally carries the dialer judge's last sign that the Tor link worked (`last_sign_of_life`, a tick on the process clock; `DIALER_OUTAGE_EVIDENCE.md` §6): a stream that opened, or a byte any Tor session received, inbound included; never a session merely held, the probe, or Tor's own network judgment. The supervisor's span runs from that instant or from Tor last reaching Running, whichever is later; a resume restarts it from the wake. While Tor is Running and names nothing, the span reaches `Policy::quiet_after`, and a Tor dial has failed since the last sign of life (that failure is `last_unopened_at` on the same clock, the instant the dialer counted it; the watch keeps only the latest tally), the posture line says "Nothing has come through Tor for N: no connection has opened, and no peer has sent anything.", once, with no fix. `quiet_after` is the managed Tor's `SocksTimeout` plus the Tor connector's judging bracket δ (105 s + 15 s = 120 s), both the connector's own declarations: by then a dial started at the last sign of life has used Tor's retries and its bracket has closed empty, so the judge has excused it as the link's, and the operator is told the fact the dialer acted on. A live session keeps the line off (the 60 s timed sync shows life inside 120 s); a held session that sends nothing does not. The tally already in the cell when the supervisor starts watching is `Input::DialBaseline`: its failures are not folded. A respawn does not re-seed; `opened` is monotonic for the process |
+| a stream accepted at our forward listener | the Tor connector's inbound accept (`Network::spawn_tor_accept`, `rust/shekyl-p2p/src/network.rs:461`) | display evidence only (posture line, RPC): a peer fetched the descriptor and completed introduction and rendezvous. Once its handshake has finished, the row is a Tor session: a byte it receives is the judge's sign of life, so the quiet line does not stand while it talks. A handshake still open is not a session: the probe of this node's own onion is dropped before the session is established, so it occupies the board's row count and never corroborates (§4.5; `DIALER_OUTAGE_EVIDENCE.md` §3.3). It is not a dial: `opened` and `unopened` stay. It neither arms nor defers the probe |
+| a probe nonce arrived | the inbound handshake's one nonce lookup (`NonceTake::Probe`, `rust/shekyl-p2p-session/src/session.rs:391`), through `Network::probe_arrivals` (`rust/shekyl-p2p/src/network.rs:606`) | inbound evidence: `Reachable`, when it names the probe in flight and the handshake took the nonce before that probe's bound (§4.5). The evidence time is that take, so a fold that runs later does not move it. A nonce taken at or after the bound is not evidence, and the deadline still misses the probe |
 
 Tor's own warning when it numbers a descriptor on a clock that went back,
 `set_descriptor_revision_counter: Non-fatal assertion now >= srv_start
@@ -573,12 +573,12 @@ never handed to a peer, so one presented on another connector is found,
 logged as this node's defect, dropped, and never evidence.
 
 An in-process consumer reads the managed route at each use and never
-caches it (`TSR-F10`). The publication record lives on the zone host,
-beside the operator's proxy and never in its place, and dies with that
-host. It answers only while the Tor link is usable on the route the
+caches it (`TSR-F10`). The publication record lives on the network's Tor
+link (`TorLink`, `rust/shekyl-p2p/src/tor.rs:53`), beside the operator's
+proxy and never in its place, and dies with the network. It answers only while the Tor link is usable on the route the
 managed Tor published, so an operator's Tor, a fallen route, or a route
 from before a respawn is not a route. There are two readers.
-`shekyl_ffi::zone_ffi::managed_socks` is the address alone. The
+`Network::managed_socks` (`rust/shekyl-p2p/src/network.rs:656`) is the address alone. The
 settlement fetch takes that: each of its reads presents credentials from
 its own nonce (`SF-D3`), a fresh circuit per read, apart from the other
 reads, from the peer dials, and from the probe. `managed_route` is that
@@ -1292,8 +1292,10 @@ clearnet off; shekyl-dev `data/tsr-acceptance/2026-10-30-linux-vm-clock/`):
     id, as a fetch's (§4.5, the two-miss rule's paragraph). This run's
     facet stood on the clock throughout.
 - **Seen in the stop path, not this round's:** the C++ remnant's
-  teardown throws `std::out_of_range` from `on_connection_close` on most
-  stops, caught (FOLLOWUPS, `DAEMON_CONFIG_CUTOVER.md` §2.2).
+  teardown threw `std::out_of_range` from `on_connection_close` on most
+  stops, caught. Its FOLLOWUPS row closed with the remnant
+  (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §3; the stop now ends with the Rust
+  node's close, timed in the log).
 - **The stop after a clock set back (2026-11-01, shekyl-dev
   `data/tsr-acceptance/2026-11-01-linux-vm-stops/`).** Every stop that
   never exited on the VM followed a backward change of the wall clock

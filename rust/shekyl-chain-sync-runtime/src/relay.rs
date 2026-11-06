@@ -12,45 +12,38 @@
 
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::store::{ChainStore, StoreError};
-use shekyl_levin::{
-    notify, BlockCompleteEntry, NewCompactBlock, PayloadError, PortableMap,
-    NOTIFY_NEW_COMPACT_BLOCK,
-};
-use shekyl_seam::{Hub, SocketId};
+use shekyl_levin::{BlockCompleteEntry, NewCompactBlock};
+use shekyl_p2p_session::{Encoded, Established};
 use shekyl_types::BlockHash;
+
+use crate::session::Session;
 
 /// `block_weight` of zero is omitted on the wire. A relay does not claim
 /// a weight; the receiver forms the block.
 const OMITTED_BLOCK_WEIGHT: u64 = 0;
 
-/// Why a relay could not be built.
-pub(crate) enum Fault {
-    /// The store could not be read.
-    Store(StoreError),
-    /// The announcement did not encode.
-    Encode(PayloadError),
-}
-
-/// The main chain's block `hash` as one 2008 frame, or `None` when `hash`
-/// is not on main.
-pub(crate) fn announcement(store: &ChainStore, hash: &BlockHash) -> Result<Option<Vec<u8>>, Fault> {
-    let snap = store.begin_read().map_err(Fault::Store)?;
-    let Some(height) = snap.height_of(hash).map_err(Fault::Store)? else {
+/// The main chain's block `hash` as one 2008, or `None` when `hash` is
+/// not on main.
+pub(crate) fn announcement(
+    store: &ChainStore,
+    hash: &BlockHash,
+) -> Result<Option<NewCompactBlock>, StoreError> {
+    let snap = store.begin_read()?;
+    let Some(height) = snap.height_of(hash)? else {
         return Ok(None);
     };
-    let AtHeight::Recorded(body) = snap.block(height).map_err(Fault::Store)? else {
+    let AtHeight::Recorded(body) = snap.block(height)? else {
         return Ok(None);
     };
-    let attestation_witness = match snap.attestation_witness_at(height).map_err(Fault::Store)? {
+    let attestation_witness = match snap.attestation_witness_at(height)? {
         AtHeight::Recorded(Some(witness)) => witness,
         _ => Vec::new(),
     };
     let current_blockchain_height = snap
-        .tip()
-        .map_err(Fault::Store)?
+        .tip()?
         .recorded
         .map_or(0, |tip| tip.height.to_raw().saturating_add(1));
-    let compact = NewCompactBlock {
+    Ok(Some(NewCompactBlock {
         b: BlockCompleteEntry {
             pruned: false,
             block: body.block.serialize(),
@@ -59,25 +52,20 @@ pub(crate) fn announcement(store: &ChainStore, hash: &BlockHash) -> Result<Optio
             attestation_witness,
         },
         current_blockchain_height,
-    };
-    let payload = compact.store().map_err(Fault::Encode)?;
-    Ok(Some(notify(NOTIFY_NEW_COMPACT_BLOCK, &payload)))
+    }))
 }
 
-/// Send `bytes` to every opened session but `from`. With no `from` it goes
-/// to every opened session. Opened, not the hub's `established`: an
-/// inbound row is established before its handshake reply is queued, and a
-/// frame ahead of that reply is refused by the peer.
-pub(crate) fn fan_out(
-    hub: &Hub,
-    opened: impl IntoIterator<Item = SocketId>,
-    from: Option<SocketId>,
-    bytes: &[u8],
+/// Send `encoded` to every established session but `from`. With no `from`
+/// it goes to every established session. A refused send is the session
+/// layer's close, not sync's.
+pub(crate) fn fan_out<'a>(
+    sessions: impl IntoIterator<Item = (&'a Session, &'a Established)>,
+    from: Option<Session>,
+    encoded: &Encoded,
 ) {
-    for id in opened {
-        if Some(id) != from {
-            // A refused send is the transport's close, not sync's.
-            let _sent = hub.send(id, bytes.to_vec());
+    for (session, handle) in sessions {
+        if Some(*session) != from {
+            let _sent = handle.send_encoded(encoded);
         }
     }
 }

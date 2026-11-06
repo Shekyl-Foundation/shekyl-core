@@ -20,7 +20,7 @@ falsifier ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D6).
 
 **Pre-flight discharged 2026-09-25** by `ca825e8df`, the commit before
 the crate. It re-read the substrate at `dev` `78eef562d` (the #860
-merge). Substrate re-read: `levin_notify.cpp:495` and `:895`,
+merge). Substrate re-read: `levin_notify.cpp` lines 495 and 895,
 `net_node.h:720-725`, and `Driver::next_wake`. The relay function is
 now `driver/mod.rs:158`; the design had cited `:149`. It is still
 derived on every call and not cached. No other cited site moved. The
@@ -58,7 +58,7 @@ engine runs today's behaviour so a differential harness can match it.
 
 | Job | Today | Owner |
 | --- | --- | --- |
-| Relay wake | `steady_timer wake` in `src/cryptonote_protocol/levin_notify.cpp:495`, armed at `:895` from `Driver::next_wake` (`shekyl-relay` `driver/mod.rs:158`) | relay `Driver`. This engine only sleeps until that wake |
+| Relay wake | *(the "Today" column is the C++ of 2026-09-25, at `e8838b0095` and before; the host left in PR #1272)* `steady_timer wake` at line 495 of `src/cryptonote_protocol/levin_notify.cpp`, armed at 895 from `Driver::next_wake` (`shekyl-relay` `driver/mod.rs:158`) | relay `Driver`. This engine only sleeps until that wake |
 | Chain-state backstop | `peer_sync_idle_maker` sends command 1002 every 60 s (`P2P_DEFAULT_HANDSHAKE_INTERVAL`, `cryptonote_config.h:185`). Both sides exchange height and top block (`process_payload_sync_data`) | sync lane. The period is how long a node can be stale after a missed announcement, against the block time. New blocks are already pushed when found |
 | Peerlist gossip | the same 1002 response carries up to 250 addresses (`p2p_protocol_defs.h:215-239`) into the gray list | peerlist, slices 1 and 3. Also a privacy surface: each exchange shows a peer part of this node's view of the network |
 | Connection liveness | the same 1002 is a request that must be answered, and it keeps the session off the inherited idle timer | the transport layer, per connector (D9). Not a Levin command |

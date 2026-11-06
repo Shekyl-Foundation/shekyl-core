@@ -451,7 +451,7 @@ impl RegtestDaemon {
         match std::env::var_os("SHEKYLD_BIN") {
             Some(p) => PathBuf::from(p),
             None => panic!(
-                "SHEKYLD_BIN not set. Build the daemon (cmake --build build --target cargo-build_shekyld) \
+                "SHEKYLD_BIN not set. Build the daemon (cmake --build build --target shekyl_rust_bins) \
                  and run e.g. SHEKYLD_BIN=/abs/path/build/bin/shekyld cargo test ... -- --ignored"
             ),
         }
@@ -851,6 +851,20 @@ impl RegtestDaemon {
             .expect("get_info")
             .health
             .height
+    }
+
+    /// The tip's hash, from `get_info`: what the chain holds, read whether
+    /// or not the node is synchronized. `get_last_block_header` refuses a
+    /// node that is catching up to a peer's claim, which a node taking a
+    /// relayed block is for the moment between the claim and the block.
+    pub(super) async fn top_block_hash(&self) -> String {
+        self.rpc
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
+            .await
+            .expect("get_info")
+            .health
+            .top_block_hash
+            .to_string()
     }
 
     /// The accepting daemon's own version string (`get_info.version`).
@@ -1556,13 +1570,15 @@ pub(super) async fn try_generate_blocks(
 
 /// A stop's last lines reach the log file: the daemon flushes its queued
 /// sinks last, after the lock's release, before it exits (`shekyl-logging`'s
-/// `flush`; Rick's ruling of 2026-10-17, item 7). `Deinitializing core...` is
-/// the last line the stop logs; SIGTERM is the operator's stop.
+/// `flush`; Rick's ruling of 2026-10-17, item 7). "the node closed in …;
+/// the daemon exits" is the last line the stop logs (`shekyl-daemon`'s
+/// `run.rs`, `finish`; it was the C++ remnant's `Deinitializing core...`
+/// until the p2p remnant cutover); SIGTERM is the operator's stop.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn a_stops_last_line_reaches_the_log_file() {
-    const LAST_LINE: &str = "Deinitializing core...";
+    const LAST_LINE: &str = "; the daemon exits";
     const STOP_WITHIN: Duration = Duration::from_secs(60);
     let mut daemon = RegtestDaemon::start().await;
     let pid = daemon.child.id().to_string();

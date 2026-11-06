@@ -44,15 +44,19 @@ shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 shekyl-miner = { path = "../shekyl-miner" }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
-shekyl-seam = { path = "../shekyl-seam" }
+shekyl-p2p-session = { path = "../shekyl-p2p-session" }
 shekyl-types = { path = "../shekyl-types" }
 shekyl-wire = { path = "../shekyl-wire" }
 tracing = "0.1"
 
 [dev-dependencies]
-# The tests' seeded draw source for the node under test; held to this edge,
-# as the generator is test-only (`check_test_only_features.py`).
+# The tests' seeded draw source for the node under test, and the session
+# crate's scripted frames. Both features are test-only
+# (`check_test_only_features.py`): the library takes the draw as a
+# `RelayRng` and builds its own 1001, so neither feature is on the normal
+# edge above.
 shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
+shekyl-p2p-session = { path = "../shekyl-p2p-session", features = ["harness"] }
 # The miner's keys for a node that posts templates (CS-5 §3).
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
 # The loopback tests' logs: the owner's closes and faults, under RUST_LOG.

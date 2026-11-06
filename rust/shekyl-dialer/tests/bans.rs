@@ -10,16 +10,17 @@
 //! dialer's lock (`Dialer::shared`): a ban bars the seats its entry covers,
 //! a lift frees them.
 
-use std::net::{IpAddr, Ipv4Addr};
-use std::sync::Arc;
+#[path = "support/rig.rs"]
+mod rig;
+#[path = "support/tables.rs"]
+mod tables;
 
-use shekyl_dialer::Dialer;
+use std::net::{IpAddr, Ipv4Addr};
+
+use rig::{Build, Rig};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_peer_policy::InboundCeiling;
-use shekyl_peerlist::{ConnectorId, NetworkAddress, RefusedSet, Source, Tick};
-use shekyl_seam::{Hub, SyncPayload};
+use shekyl_peerlist::{ConnectorId, NetworkAddress, Source, Tick};
 use shekyl_timing_engine::ManualClock;
-use shekyl_transport_layer::Sockets;
 
 fn peer(n: u8) -> NetworkAddress {
     NetworkAddress::Ipv4 {
@@ -32,30 +33,16 @@ fn host(n: u8) -> IpAddr {
     peer(n).ip().expect("clearnet")
 }
 
-fn dialer_over(sockets: Sockets) -> Dialer {
-    let hub = Hub::new(
-        sockets,
-        InboundCeiling::Bounded(8),
-        Arc::new(|_post| {}),
-        Arc::new(ManualClock::new(Tick::new(1_000_000_000))),
-    );
-    Dialer::new(
-        hub,
-        RefusedSet::NON_GLOBAL,
-        Arc::new(|| {
-            Some(SyncPayload {
-                current_height: 1,
-                cumulative_difficulty: 1,
-                cumulative_difficulty_top64: 0,
-                top_id: [0; 32],
-            })
-        }),
-    )
+/// A rig whose dialer subscribed to `prepare`'s table state: the bans in
+/// force at subscription are its seed.
+fn rig_after(prepare: impl FnOnce(&shekyl_transport_layer::Sockets)) -> Rig {
+    let clock = ManualClock::new(Tick::new(1_000_000_000));
+    Rig::build_with(Build::on(&clock), prepare)
 }
 
 /// Every gray address the draw can reach now, sorted; each draw released.
-fn drawable(dialer: &Dialer, rng: &mut SplitMix64) -> Vec<NetworkAddress> {
-    let mut shared = dialer.shared();
+fn drawable(rig: &Rig, rng: &mut SplitMix64) -> Vec<NetworkAddress> {
+    let mut shared = rig.dialer.shared();
     let mut drawn = Vec::new();
     while let Some(address) = shared.lists.draw_gray(ConnectorId::Clearnet, rng) {
         drawn.push(address);
@@ -76,9 +63,10 @@ fn drawable(dialer: &Dialer, rng: &mut SplitMix64) -> Vec<NetworkAddress> {
 #[test]
 fn the_dialer_bars_what_the_ban_list_posts_and_frees_what_it_lifts() {
     let mut rng = SplitMix64::new(11);
-    let sockets = Sockets::new();
-    assert!(sockets.ban_host_permanent(host(1)).is_empty());
-    let dialer = dialer_over(sockets.clone());
+    let rig = rig_after(|sockets| {
+        assert!(sockets.ban_host_permanent(host(1)).is_empty());
+    });
+    let (sockets, dialer) = (&rig.sockets, &rig.dialer);
     assert!(
         sockets.lift_host(host(1)),
         "lifted after the seed was taken"
@@ -94,10 +82,10 @@ fn the_dialer_bars_what_the_ban_list_posts_and_frees_what_it_lifts() {
         assert!(admitted.is_ok(), "{admitted:?}");
     }
     assert!(sockets.ban_host_permanent(host(2)).is_empty());
-    assert_eq!(drawable(&dialer, &mut rng), vec![peer(1), peer(3)]);
+    assert_eq!(drawable(&rig, &mut rng), vec![peer(1), peer(3)]);
 
     assert!(sockets.lift_host(host(2)));
-    assert_eq!(drawable(&dialer, &mut rng), vec![peer(1), peer(2), peer(3)]);
+    assert_eq!(drawable(&rig, &mut rng), vec![peer(1), peer(2), peer(3)]);
 }
 
 /// Every read of the lists goes through `Dialer::shared`, which applies
@@ -107,8 +95,8 @@ fn the_dialer_bars_what_the_ban_list_posts_and_frees_what_it_lifts() {
 #[test]
 fn a_ban_posted_just_before_a_read_is_in_it() {
     let mut rng = SplitMix64::new(12);
-    let sockets = Sockets::new();
-    let dialer = dialer_over(sockets.clone());
+    let rig = rig_after(|_sockets| {});
+    let (sockets, dialer) = (&rig.sockets, &rig.dialer);
     let admitted =
         dialer
             .shared()

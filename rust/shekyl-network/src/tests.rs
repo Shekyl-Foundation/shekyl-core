@@ -113,6 +113,61 @@ fn the_id_is_a_function_of_the_genesis_hash() {
     assert_ne!(prefix_for(&id_a), prefix_for(&network_id_from_genesis(&b)));
 }
 
+/// Recorded output of [`Network::network_id`] and [`prefix_for`] over each
+/// network's table genesis. Re-recorded with the signing envelope's
+/// regenesis (`NETWORK_IDENTITY.md` §2.4.1): the genesis transaction key is
+/// derived under the network's `name_id`, so every id and prefix moved. A
+/// regenesis that moves a hash fails this until the bytes are re-recorded
+/// with it. These are not a second definition of the id; the pin is held
+/// where the derivation is.
+const RECORDED: [(Network, [u8; 16], [u8; 8]); 4] = [
+    (
+        Network::Mainnet,
+        [
+            0x9E, 0x77, 0xDD, 0x8E, 0xF6, 0x4F, 0xAE, 0xF2, 0xC4, 0x3C, 0x42, 0xB1, 0xCF, 0x5B,
+            0xC5, 0x54,
+        ],
+        [0x6A, 0xEE, 0x8B, 0x20, 0x26, 0x94, 0xAA, 0xA4],
+    ),
+    (
+        Network::Testnet,
+        [
+            0x4E, 0x94, 0x8C, 0xF2, 0x48, 0x14, 0x73, 0xD8, 0x94, 0x9D, 0xA6, 0x45, 0x69, 0x24,
+            0x64, 0xDE,
+        ],
+        [0xA3, 0x2D, 0x47, 0x0A, 0x0E, 0xF9, 0x45, 0x7E],
+    ),
+    (
+        Network::Stagenet,
+        [
+            0x3A, 0x6B, 0x9B, 0x9F, 0xF5, 0xB7, 0x32, 0x7C, 0xB4, 0x4B, 0x19, 0x2C, 0xC1, 0xD9,
+            0x8E, 0xC8,
+        ],
+        [0x5E, 0xAF, 0x7F, 0x64, 0xCE, 0xFF, 0x6F, 0x5B],
+    ),
+    (
+        Network::Regtest,
+        [
+            0x39, 0x90, 0x64, 0x29, 0x84, 0x36, 0xB7, 0x6E, 0x73, 0x49, 0xDF, 0x0A, 0x18, 0xCF,
+            0xBA, 0xDF,
+        ],
+        [0xCB, 0x51, 0xD2, 0xBD, 0x58, 0xBB, 0x9A, 0x64],
+    ),
+];
+
+/// Every network, regtest included, derives its own recorded id from its
+/// own genesis (NI-Q8: regtest's id is not mainnet's).
+#[test]
+fn each_genesis_derives_its_recorded_id_and_prefix() {
+    assert_eq!(RECORDED.len(), Network::ALL.len());
+    for (net, id_kat, prefix_kat) in RECORDED {
+        let id = net.network_id();
+        assert_eq!(id, network_id_from_genesis(&net.genesis().hash()), "{net}");
+        assert_eq!(id, id_kat, "{net}");
+        assert_eq!(prefix_for(&id), prefix_kat, "{net}");
+    }
+}
+
 /// A permit exists exactly where the row permits the lever, and names it.
 #[test]
 fn a_permit_is_the_rows_permission() {

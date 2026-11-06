@@ -3,17 +3,15 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The owner's reply conversion and its serving queue. The owner end to
+//! The owner's reply conversion and its end guard. The owner end to
 //! end is the loopback harness's (`shekyl-p2p-harness`,
 //! `tests/chain_sync_loopback.rs`).
 
 use shekyl_chain_ingest::service::{ArrivalTag, CannotFollow, Refusal, Reply};
 use shekyl_chain_ingest::PopBeyondReorgCap;
 use shekyl_chain_rules::{CenRow, InvalidBlock, Locus};
-use shekyl_levin::{RequestBodies, RequestHeaders};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
-use super::{ServeRequest, Serving};
 use crate::outcome::{of_refusal, of_reply};
 use shekyl_chain_sync::{Outcome, SyncState};
 
@@ -218,44 +216,11 @@ fn a_switch_is_a_connect_only_when_the_arrival_is_the_new_tip() {
     );
 }
 
-/// A session's queue holds at most one waiting request of each kind,
-/// however many arrive while one is served: a later request replaces the
-/// waiting one of its kind, in its place, and the other kind keeps its own.
-#[test]
-fn a_session_holds_one_waiting_request_of_each_kind() {
-    let headers = |byte: u8| {
-        ServeRequest::Headers(RequestHeaders {
-            block_ids: vec![[byte; 32]],
-        })
-    };
-    let mut serving = Serving {
-        busy: true,
-        ..Serving::default()
-    };
-    assert!(!serving.push(headers(0)));
-    assert!(!serving.push(ServeRequest::Bodies(RequestBodies {
-        hashes: vec![[9; 32]],
-    })));
-    for byte in 1..=64 {
-        assert!(serving.push(headers(byte)), "request {byte} replaces");
-    }
-    assert_eq!(serving.queue.len(), 2);
-    match &serving.queue[0] {
-        ServeRequest::Headers(request) => assert_eq!(request.block_ids, vec![[64; 32]]),
-        ServeRequest::Bodies(_) | ServeRequest::MissingTxs(_) => {
-            panic!("the header request keeps its place")
-        }
-    }
-    assert!(
-        matches!(&serving.queue[1], ServeRequest::Bodies(request) if request.hashes == vec![[9; 32]])
-    );
-}
-
 /// Every exit publishes `NoView` and drops the sender, so the watch
 /// closes on that state. Facts and the follower read a closed watch as
 /// `NoView`; a reader that only borrows sees the publish. The same guard
 /// reports how the task ended: the cause an exit set, a panic when none
-/// did, and a stop when one was asked, including an exit before the hub.
+/// did, and a stop when one was asked.
 #[test]
 fn an_owner_exit_publishes_no_view_and_reports_how_it_ended() {
     let (sender, mut seen) = tokio::sync::watch::channel(SyncState::Synced);
@@ -269,7 +234,7 @@ fn an_owner_exit_publishes_no_view_and_reports_how_it_ended() {
     };
     assert_eq!(*seen.borrow(), SyncState::Synced);
     assert_eq!(*ended.borrow(), None, "a running owner has not ended");
-    live.how = super::Ended::Failed(super::EndCause::RouterClosed);
+    live.how = super::Ended::Failed(super::EndCause::PortClosed);
     drop(live);
     assert_eq!(*seen.borrow_and_update(), SyncState::NoView);
     assert!(
@@ -278,7 +243,7 @@ fn an_owner_exit_publishes_no_view_and_reports_how_it_ended() {
     );
     assert_eq!(
         *ended.borrow(),
-        Some(super::Ended::Failed(super::EndCause::RouterClosed))
+        Some(super::Ended::Failed(super::EndCause::PortClosed))
     );
     // An unwind runs the guard with no exit's cause set: a panic.
     let (sender, _seen) = tokio::sync::watch::channel(SyncState::Synced);
@@ -309,20 +274,4 @@ fn an_owner_exit_publishes_no_view_and_reports_how_it_ended() {
     assert_eq!(*ended.borrow(), Some(super::Ended::Stopped));
     assert_eq!(*stopped.borrow_and_update(), SyncState::NoView);
     assert!(stopped.has_changed().is_err());
-    // An exit before the hub publishes `NoView` too. The task is gone,
-    // and a reader must not keep the state at open.
-    let (sender, mut unbound_state) = tokio::sync::watch::channel(SyncState::Synced);
-    let (unbound_tx, unbound) = tokio::sync::watch::channel(None);
-    drop(super::EndGuard {
-        state: sender,
-        ended: unbound_tx,
-        stop: tokio::sync::watch::channel(false).1,
-        how: super::Ended::Failed(super::EndCause::SeamNeverBound),
-    });
-    assert_eq!(*unbound_state.borrow_and_update(), SyncState::NoView);
-    assert!(unbound_state.has_changed().is_err());
-    assert_eq!(
-        *unbound.borrow(),
-        Some(super::Ended::Failed(super::EndCause::SeamNeverBound))
-    );
 }

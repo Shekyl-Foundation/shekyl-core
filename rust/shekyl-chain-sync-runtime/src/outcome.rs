@@ -7,7 +7,6 @@
 
 use shekyl_chain_ingest::service::{Refusal, Reply};
 use shekyl_chain_sync::{Outcome, Proved};
-use shekyl_levin::{notify, PortableMap};
 use shekyl_peer_policy::{Invalidate, SyncReply, SyncReplyAction};
 use shekyl_types::BlockHash;
 
@@ -18,14 +17,6 @@ pub(crate) fn proved_kind(proved: &Proved) -> &'static str {
         Proved::Refused(_) => "refused",
         Proved::NotHeld => "not held",
     }
-}
-
-/// `message` encoded and framed as the notify `command`.
-pub(crate) fn framed(command: u32, message: &impl PortableMap) -> Result<Vec<u8>, String> {
-    message
-        .store()
-        .map(|payload| notify(command, &payload))
-        .map_err(|err| err.to_string())
 }
 
 /// The outcome the model is told when the door refuses an offer of `bytes`.

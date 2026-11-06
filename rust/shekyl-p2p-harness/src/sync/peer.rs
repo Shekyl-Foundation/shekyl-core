@@ -19,9 +19,9 @@ use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_chain_sync_runtime::serve::{serve_bodies, serve_headers};
 use shekyl_levin::{
-    notify, BlockCompleteEntry, NewCompactBlock, PortableMap, RequestBodies, RequestHeaders,
-    ResponseBodies, ResponseHeaders, SyncCommand, TxBlobEntry, HASH_SIZE, HEADERS_RESPONSE_BYTES,
-    NOTIFY_NEW_COMPACT_BLOCK,
+    notify, BlockCompleteEntry, Command, NewCompactBlock, PortableMap, RequestBodies,
+    RequestHeaders, ResponseBodies, ResponseHeaders, TxBlobEntry, HASH_SIZE,
+    HEADERS_RESPONSE_BYTES, NOTIFY_NEW_COMPACT_BLOCK,
 };
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Block, SkeletonTx, TxBody};
@@ -91,11 +91,11 @@ impl MutePeer {
 
 impl SyncPeer for MutePeer {
     fn on_message(&mut self, command: u32, _payload: &[u8]) -> Vec<Vec<u8>> {
-        match SyncCommand::from_wire(command) {
-            Some(SyncCommand::RequestHeaders) => {
+        match Command::from_wire(command) {
+            Some(Command::RequestHeaders) => {
                 self.seen.header_requests.fetch_add(1, Ordering::AcqRel);
             }
-            Some(SyncCommand::RequestBodies) => {
+            Some(Command::RequestBodies) => {
                 self.seen.body_requests.fetch_add(1, Ordering::AcqRel);
             }
             _ => self.seen.note_other(command),
@@ -225,21 +225,21 @@ impl ServingPeer {
 
 impl SyncPeer for ServingPeer {
     fn on_message(&mut self, command: u32, payload: &[u8]) -> Vec<Vec<u8>> {
-        match SyncCommand::from_wire(command) {
-            Some(SyncCommand::RequestHeaders) => {
+        match Command::from_wire(command) {
+            Some(Command::RequestHeaders) => {
                 self.seen.header_requests.fetch_add(1, Ordering::AcqRel);
                 let request = RequestHeaders::decode(payload).expect("the node's request decodes");
                 let mut response = serve_headers(&self.store, &request).expect("the store answers");
                 if let Some(work) = self.tip_work {
                     response.tip_work = work;
                 }
-                vec![frame(SyncCommand::ResponseHeaders, &response)]
+                vec![frame(Command::ResponseHeaders, &response)]
             }
-            Some(SyncCommand::RequestBodies) => {
+            Some(Command::RequestBodies) => {
                 self.seen.body_requests.fetch_add(1, Ordering::AcqRel);
                 let request = RequestBodies::decode(payload).expect("the node's request decodes");
                 let response = self.bodies(&request);
-                let frame = frame(SyncCommand::ResponseBodies, &response);
+                let frame = frame(Command::ResponseBodies, &response);
                 if let Bodies::Hold(held) = &self.bodies {
                     held.lock().expect("held").push(frame);
                     return Vec::new();
@@ -323,13 +323,13 @@ impl HeaderChainPeer {
 
 impl SyncPeer for HeaderChainPeer {
     fn on_message(&mut self, command: u32, payload: &[u8]) -> Vec<Vec<u8>> {
-        match SyncCommand::from_wire(command) {
-            Some(SyncCommand::RequestHeaders) => {
+        match Command::from_wire(command) {
+            Some(Command::RequestHeaders) => {
                 self.seen.header_requests.fetch_add(1, Ordering::AcqRel);
                 let request = RequestHeaders::decode(payload).expect("the node's request decodes");
-                vec![frame(SyncCommand::ResponseHeaders, &self.headers(&request))]
+                vec![frame(Command::ResponseHeaders, &self.headers(&request))]
             }
-            Some(SyncCommand::RequestBodies) => {
+            Some(Command::RequestBodies) => {
                 self.seen.body_requests.fetch_add(1, Ordering::AcqRel);
                 let request = RequestBodies::decode(payload).expect("the node's request decodes");
                 let response = ResponseBodies {
@@ -337,7 +337,7 @@ impl SyncPeer for HeaderChainPeer {
                     deferred: Vec::new(),
                     missed_ids: request.hashes,
                 };
-                vec![frame(SyncCommand::ResponseBodies, &response)]
+                vec![frame(Command::ResponseBodies, &response)]
             }
             _ => {
                 self.seen.note_other(command);
@@ -353,7 +353,7 @@ impl SyncPeer for HeaderChainPeer {
 ///
 /// The payload does not encode: a harness defect.
 #[must_use]
-pub fn frame(command: SyncCommand, payload: &impl PortableMap) -> Vec<u8> {
+pub fn frame(command: Command, payload: &impl PortableMap) -> Vec<u8> {
     notify(
         command.wire_id(),
         &payload.store().expect("the payload encodes"),
@@ -364,7 +364,7 @@ pub fn frame(command: SyncCommand, payload: &impl PortableMap) -> Vec<u8> {
 #[must_use]
 pub fn request_headers(locator: Vec<[u8; HASH_SIZE]>) -> Vec<u8> {
     frame(
-        SyncCommand::RequestHeaders,
+        Command::RequestHeaders,
         &RequestHeaders { block_ids: locator },
     )
 }

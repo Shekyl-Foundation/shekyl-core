@@ -58,6 +58,34 @@ fn a_transaction_the_chain_holds_is_a_duplicate_and_is_not_judged() {
 
 /// A refusal is the door's answer and leaves nothing: not in memory, not
 /// in the file — a reopen finds an empty pool.
+/// The door's question before it verifies: a transaction the chain carries
+/// is a duplicate, one it does not is not. Neither answer judges anything.
+#[test]
+fn duplicate_names_a_transaction_the_chain_carries_and_nothing_else() {
+    let path = tmp("m1-duplicate");
+    let base = spendable_chain();
+    let tx = listed_on(&base, [0x42; 32]);
+    let txid = tx.txid_parts().hash;
+    let chain = base.clone().with_transaction(txid);
+    let (carried, absent) = chain.with_view(|view| {
+        let (pool, _, _) = Pool::open(
+            &path,
+            UnixSeconds::from_raw(1),
+            &view,
+            &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
+            &AdmissionPolicy::GENESIS,
+        )
+        .unwrap();
+        let carried = pool.duplicate(&txid, &view).unwrap();
+        let absent = base.with_view(|bare| pool.duplicate(&txid, &bare).unwrap());
+        (carried, absent)
+    });
+    assert_eq!(carried, Some(Duplicate::OnChain));
+    assert_eq!(absent, None);
+    drop(std::fs::remove_file(&path));
+}
+
 #[test]
 fn a_refused_transaction_leaves_no_trace() {
     let path = tmp("refused");

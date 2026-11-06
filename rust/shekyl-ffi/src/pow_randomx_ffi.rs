@@ -17,20 +17,6 @@
 //!   *Records-was:* the C++ chain called it on every block and pinned the
 //!   canonical seed through `shekyl_pow_randomx_v2_set_canonical`, which
 //!   was deleted when nothing in C++ knew the seed any more.
-//! - [`shekyl_pow_randomx_v2_seedheight`] /
-//!   [`shekyl_pow_randomx_v2_next_seedheight`] /
-//!   [`shekyl_pow_randomx_v2_seed_epoch_blocks`] /
-//!   [`shekyl_pow_randomx_v2_seed_epoch_overridden`] — the seed-epoch
-//!   schedule (replacing `crypto::rx_seedheight`/`rx_seedheights`). The
-//!   schedule arithmetic is pure and lives in
-//!   `shekyl_difficulty::seed_epoch` (moved there from the engine crate
-//!   2026-09-19 so the validator adopts the one implementation for
-//!   CEN-D3 without depending on the engine — DRS-E6 slice 2); **this
-//!   module owns the ambient half** — the `SEEDHASH_EPOCH_*` env
-//!   overrides (regtest fast-epoch lever) are read once per process here,
-//!   clamped by the `clamp_*` functions below, and passed in as
-//!   parameters, keeping both the verifier crate and the validation crate
-//!   free of runtime state.
 //!
 //! The RandomX v2 algorithm itself lives entirely in
 //! [`shekyl_pow_randomx`] (the `#![deny(unsafe_code)]` verifier crate);
@@ -117,9 +103,8 @@
 //! module-level state (`RANDOMX_V2_RUST.md` §7.2); the memo lives here
 //! at the FFI boundary.
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
-use shekyl_difficulty::{next_seedheight, seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
 use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
 
 /// Upper bound on `data_len` accepted by [`shekyl_pow_randomx_v2_hash`].
@@ -228,239 +213,10 @@ pub unsafe extern "C" fn shekyl_pow_randomx_v2_hash(
     SHEKYL_POW_RANDOMX_V2_OK
 }
 
-/// Clamp a raw `SEEDHASH_EPOCH_LAG` override exactly as the C `atoi`
-/// path did for in-range values: absent → default; unparsable → 0 →
-/// fails power-of-two → default; parsed but `> default` or not a
-/// power of two → default.
-///
-/// C-parity is precise, not bit-for-bit: three deliberate deltas from
-/// glibc `atoi`, all regtest-lever-only and measured against the C before
-/// deletion — values ≥ 2³² clamp to the default instead of wrapping
-/// mod 2³² (glibc: `atoi("4294967312") == 16`, so the old C *accepted*
-/// absurd wrapped overrides); only ASCII whitespace is skipped (C
-/// `isspace`; a plain `str::trim_start` would accept NBSP-prefixed values
-/// the C rejected); non-UTF-8 env bytes read as absent (the C parsed the
-/// raw byte prefix).
-/// The seed-epoch schedule the daemon recorded from its `dev-` rows
-/// (`dev-pow-seed-epoch-blocks`, `dev-pow-seed-epoch-lag`;
-/// `DAEMON_CONFIG_CUTOVER.md` §4.2), before the first read latched it.
-static RECORDED: Mutex<Option<(u64, u64)>> = Mutex::new(None);
-
-/// Why the daemon's seed-epoch rows were refused. Each arm names the row
-/// it is about, except a latch that already happened: that refusal is the
-/// machine's, and pinning either row would blame the wrong one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SeedEpochRefusal {
-    /// `dev-pow-seed-epoch-blocks` is not a power of two in range.
-    Blocks(String),
-    /// `dev-pow-seed-epoch-lag` is not a power of two at most the lag.
-    Lag(String),
-    /// The schedule had already latched. No row owns that fact.
-    Latched(String),
-}
-
-impl SeedEpochRefusal {
-    /// The option the refusal is about, when one option owns it.
-    #[must_use]
-    pub const fn row(&self) -> Option<&'static str> {
-        match self {
-            Self::Blocks(_) => Some("dev-pow-seed-epoch-blocks"),
-            Self::Lag(_) => Some("dev-pow-seed-epoch-lag"),
-            Self::Latched(_) => None,
-        }
-    }
-
-    /// The rule the diagnostic prints.
-    #[must_use]
-    pub fn rule(&self) -> &str {
-        match self {
-            Self::Blocks(rule) | Self::Lag(rule) | Self::Latched(rule) => rule,
-        }
-    }
-}
-
-impl std::fmt::Display for SeedEpochRefusal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.rule())
-    }
-}
-
-impl std::error::Error for SeedEpochRefusal {}
-
-/// The schedule the daemon's seed-epoch rows name, or the row's refusal.
-/// Pure: the configuration check calls this and latches nothing
-/// (`INPUT_GRAMMAR.md` IG-Q59); [`record_seed_epoch`] calls it and then
-/// latches, so the rule is written once. `None` is the mainnet value.
-///
-/// # Errors
-/// [`SeedEpochRefusal::Blocks`] when the length is not a power of two in
-/// `2..=SEEDHASH_EPOCH_BLOCKS`, [`SeedEpochRefusal::Lag`] when the lag is
-/// not a power of two at most `SEEDHASH_EPOCH_LAG`.
-pub fn check_seed_epoch(
-    blocks: Option<u64>,
-    lag: Option<u64>,
-) -> Result<(u64, u64), SeedEpochRefusal> {
-    let blocks = match blocks {
-        Some(b) if (2..=SEEDHASH_EPOCH_BLOCKS).contains(&b) && b.is_power_of_two() => b,
-        Some(_) => {
-            return Err(SeedEpochRefusal::Blocks(format!(
-                "a power of two from 2 to {SEEDHASH_EPOCH_BLOCKS}"
-            )))
-        }
-        None => SEEDHASH_EPOCH_BLOCKS,
-    };
-    let lag = match lag {
-        Some(l) if l <= SEEDHASH_EPOCH_LAG && l.is_power_of_two() => l,
-        Some(_) => {
-            return Err(SeedEpochRefusal::Lag(format!(
-                "a power of two at most {SEEDHASH_EPOCH_LAG}"
-            )))
-        }
-        None => SEEDHASH_EPOCH_LAG,
-    };
-    Ok((blocks, lag))
-}
-
-/// Records the seed-epoch schedule from the daemon's section: the Rust
-/// `main()` calls this at step 6, before any export reads it. The value
-/// is [`check_seed_epoch`]'s. The daemon refuses to start on `Err`, naming
-/// the row the arm carries.
-///
-/// # Errors
-/// [`check_seed_epoch`]'s refusals, and [`SeedEpochRefusal::Latched`] when
-/// a read already pinned a different pair.
-pub fn record_seed_epoch(blocks: Option<u64>, lag: Option<u64>) -> Result<(), SeedEpochRefusal> {
-    let (blocks, lag) = check_seed_epoch(blocks, lag)?;
-    if let Some(latched) = PARAMS.get() {
-        if *latched != (blocks, lag) {
-            return Err(SeedEpochRefusal::Latched(
-                "the seed-epoch schedule had already latched".to_owned(),
-            ));
-        }
-    }
-    *RECORDED
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((blocks, lag));
-    Ok(())
-}
-
-/// The latched `(epoch_blocks, epoch_lag)`: what was recorded, or the
-/// mainnet schedule. Read once per process, as the retired C statics were.
-static PARAMS: OnceLock<(u64, u64)> = OnceLock::new();
-
-/// The effective `(epoch_blocks, epoch_lag)` schedule parameters:
-/// mainnet defaults, or the recorded regtest lever.
-fn seed_epoch_params() -> (u64, u64) {
-    *PARAMS.get_or_init(|| {
-        RECORDED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .unwrap_or((SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG))
-    })
-}
-
-/// The height whose block hash seeds the cache used to verify `height`
-/// — the RandomX seed-epoch schedule (2048-block epochs, 64-block lag;
-/// `SEEDHASH_EPOCH_*` env overrides are the regtest lever, read once).
-///
-/// Pure `u64 → u64` (no pointers); total over the domain — the lag
-/// addition in the `next` variant wraps like the C `uint64_t` did.
-/// Replaces the retired C `rx_seedheight`.
-#[no_mangle]
-pub extern "C" fn shekyl_pow_randomx_v2_seedheight(height: u64) -> u64 {
-    let (blocks, lag) = seed_epoch_params();
-    seedheight(height, blocks, lag)
-}
-
-/// `seedheight(height + lag)` — the upcoming seed height, for the RPC
-/// next-seed pre-announce path (the second output of the retired C
-/// `rx_seedheights`). Wrapping add at `u64::MAX`, matching C.
-#[no_mangle]
-pub extern "C" fn shekyl_pow_randomx_v2_next_seedheight(height: u64) -> u64 {
-    let (blocks, lag) = seed_epoch_params();
-    next_seedheight(height, blocks, lag)
-}
-
-/// The effective seed-epoch length in blocks (2048, or the clamped
-/// `SEEDHASH_EPOCH_BLOCKS` override). Single source of truth for C++
-/// consumers that need the epoch length itself (block-sync sizing) —
-/// replaces their independent, differently-clamped env parses.
-#[no_mangle]
-pub extern "C" fn shekyl_pow_randomx_v2_seed_epoch_blocks() -> u64 {
-    seed_epoch_params().0
-}
-
-/// True iff the effective schedule differs from the mainnet defaults
-/// (i.e. a `SEEDHASH_EPOCH_*` override is active). Lets the daemon log
-/// a loud startup warning — the override silently changes a consensus
-/// schedule, and a regtest env leaking into a production unit must be
-/// visible in the logs, not discovered via chain fork.
-#[no_mangle]
-pub extern "C" fn shekyl_pow_randomx_v2_seed_epoch_overridden() -> bool {
-    seed_epoch_params() != (SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A record refuses what the C clamps used to silently replace with
-    /// the mainnet value: the daemon names the row instead.
-    #[test]
-    fn a_seed_epoch_record_refuses_a_value_off_the_schedule() {
-        assert!(matches!(
-            record_seed_epoch(Some(3), None),
-            Err(SeedEpochRefusal::Blocks(_))
-        ));
-        assert!(matches!(
-            record_seed_epoch(Some(1), None),
-            Err(SeedEpochRefusal::Blocks(_))
-        ));
-        assert!(matches!(
-            record_seed_epoch(Some(SEEDHASH_EPOCH_BLOCKS * 2), None),
-            Err(SeedEpochRefusal::Blocks(_))
-        ));
-        assert!(matches!(
-            record_seed_epoch(None, Some(SEEDHASH_EPOCH_LAG * 2)),
-            Err(SeedEpochRefusal::Lag(_))
-        ));
-        assert!(matches!(
-            record_seed_epoch(None, Some(3)),
-            Err(SeedEpochRefusal::Lag(_))
-        ));
-        assert_eq!(
-            SeedEpochRefusal::Latched(String::new()).row(),
-            None,
-            "a latch is the machine's fact, not a row's"
-        );
-    }
-
-    /// The configuration check's half refuses what the record refuses and
-    /// never sees the latch: after a read pinned the schedule, a different
-    /// valid pair is still `Ok` from the check and `Latched` from the record.
-    #[test]
-    fn the_check_judges_the_value_and_never_the_latch() {
-        assert!(matches!(
-            check_seed_epoch(Some(3), None),
-            Err(SeedEpochRefusal::Blocks(_))
-        ));
-        assert!(matches!(
-            check_seed_epoch(None, Some(3)),
-            Err(SeedEpochRefusal::Lag(_))
-        ));
-        assert_eq!(
-            check_seed_epoch(None, None),
-            Ok((SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG))
-        );
-        // Pin the schedule through a read, as the first verify would.
-        let pinned = seed_epoch_params();
-        let other = if pinned.0 == 2 { 4 } else { 2 };
-        assert_eq!(check_seed_epoch(Some(other), Some(1)), Ok((other, 1)));
-        assert!(matches!(
-            record_seed_epoch(Some(other), Some(1)),
-            Err(SeedEpochRefusal::Latched(_))
-        ));
-    }
     use shekyl_pow_randomx::PreparedCache;
 
     /// `seedhash == NULL` is rejected before any dereference.
@@ -584,30 +340,5 @@ mod tests {
             assert_eq!(rb, SHEKYL_POW_RANDOMX_V2_OK);
         }
         assert_eq!(a, b);
-    }
-
-    /// The seed-epoch exports round the schedule through the C ABI
-    /// unchanged: the expected values come from the same latched
-    /// parameters the exports read, so the test verifies the WIRING
-    /// (export == pure formula at the effective params); the schedule
-    /// itself is KAT'd in `shekyl_difficulty::seed_epoch`.
-    #[test]
-    fn seedheight_exports_match_schedule() {
-        let (blocks, lag) = seed_epoch_params();
-        for h in [0u64, 2100, 2112, 2113, 4161, u64::MAX] {
-            assert_eq!(
-                shekyl_pow_randomx_v2_seedheight(h),
-                seedheight(h, blocks, lag)
-            );
-            assert_eq!(
-                shekyl_pow_randomx_v2_next_seedheight(h),
-                next_seedheight(h, blocks, lag)
-            );
-        }
-        assert_eq!(shekyl_pow_randomx_v2_seed_epoch_blocks(), blocks);
-        assert_eq!(
-            shekyl_pow_randomx_v2_seed_epoch_overridden(),
-            (blocks, lag) != (2048, 64)
-        );
     }
 }

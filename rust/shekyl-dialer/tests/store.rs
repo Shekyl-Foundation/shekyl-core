@@ -11,17 +11,19 @@
 //! The loop's call is `store_if_due` at each wake; the interval is pinned
 //! here on that function, and the loop's call site is read, not run.
 
-use std::net::Ipv4Addr;
-use std::sync::Arc;
+#[path = "support/rig.rs"]
+mod rig;
+#[path = "support/tables.rs"]
+mod tables;
 
-use shekyl_dialer::{AddressStore, Dialer, LoadError, STORE_INTERVAL_NANOS};
+use std::net::Ipv4Addr;
+
+use rig::{Build, Rig};
+use shekyl_dialer::{AddressStore, LoadError, STORE_INTERVAL_NANOS};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::address_file::AddressFileError;
-use shekyl_peerlist::{ConnectorId, NetworkAddress, RefusedSet, Tick};
-use shekyl_seam::{Hub, Route, RoutePublish, SyncPayload};
+use shekyl_peerlist::{ConnectorId, NetworkAddress, Tick};
 use shekyl_timing_engine::{Clock, ManualClock};
-use shekyl_transport_layer::Sockets;
 
 fn peer(n: u8) -> NetworkAddress {
     NetworkAddress::Ipv4 {
@@ -30,52 +32,18 @@ fn peer(n: u8) -> NetworkAddress {
     }
 }
 
-fn dialer() -> (Arc<Dialer>, ManualClock) {
-    dialer_over(Sockets::new())
-}
-
-/// A dialer whose hub holds `sockets`: the ban list's timing owner
-/// expires through that table.
-fn dialer_over(sockets: Sockets) -> (Arc<Dialer>, ManualClock) {
+/// A rig on a clock the test holds, at one second.
+fn rig() -> Rig {
     let clock = ManualClock::new(Tick::new(1_000_000_000));
-    let hub = Hub::new(
-        sockets,
-        InboundCeiling::Bounded(8),
-        Arc::new(|_post| {}),
-        Arc::new(clock.clone()),
-    );
-    let dialer = Arc::new(Dialer::new(
-        hub,
-        RefusedSet::NON_GLOBAL,
-        Arc::new(|| {
-            Some(SyncPayload {
-                current_height: 1,
-                cumulative_difficulty: 1,
-                cumulative_difficulty_top64: 0,
-                top_id: [0; 32],
-            })
-        }),
-    ));
-    dialer.set_network_id([7; 16]);
-    // The link is usable: the plan draws only then (TSR-F1).
-    assert!(
-        matches!(
-            dialer
-                .hub()
-                .links()
-                .publish_usable(ConnectorId::Clearnet, Route::Direct, Tick::new(1),),
-            RoutePublish::Installed { .. }
-        ),
-        "the test route was not already usable"
-    );
-    (dialer, clock)
+    Build::on(&clock).finish()
 }
 
 #[test]
 fn a_missing_file_is_a_first_start_and_the_first_store_creates_it() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("p2pstate.bin");
-    let (dialer, _clock) = dialer();
+    let rig = rig();
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(1);
     assert_eq!(
         dialer
@@ -100,7 +68,8 @@ fn a_fresh_open_of_a_stored_file_puts_every_address_on_gray() {
     let path = dir.path().join("p2pstate.bin");
     let mut rng = SplitMix64::new(2);
     {
-        let (dialer, _clock) = dialer();
+        let rig = rig();
+        let dialer = &rig.dialer;
         dialer
             .open_address_file(path.clone(), &mut rng)
             .expect("opened");
@@ -111,7 +80,8 @@ fn a_fresh_open_of_a_stored_file_puts_every_address_on_gray() {
         }
         assert!(dialer.store_addresses().expect("stored"));
     }
-    let (restarted, _clock) = dialer();
+    let rig = rig();
+    let restarted = &rig.dialer;
     assert_eq!(
         restarted.open_address_file(path, &mut rng).expect("opened"),
         5
@@ -125,7 +95,8 @@ fn a_fresh_open_of_a_stored_file_puts_every_address_on_gray() {
 
 #[test]
 fn no_store_was_named_so_nothing_is_written() {
-    let (dialer, _clock) = dialer();
+    let rig = rig();
+    let dialer = &rig.dialer;
     assert!(!dialer.store_addresses().expect("no store"));
     assert!(!dialer.store_if_due(Tick::new(u64::MAX)).expect("no store"));
 }
@@ -136,7 +107,8 @@ fn a_file_this_build_cannot_read_is_dropped_whole_and_replaced_at_the_next_store
     let path = dir.path().join("p2pstate.bin");
     // The C++ peerlist's file, as a previous build left it: not the magic.
     std::fs::write(&path, b"\x01\x00\x00\x00boost archive bytes").expect("written");
-    let (dialer, _clock) = dialer();
+    let rig = rig();
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(3);
     dialer
         .admit_operator(&peer(9), Tick::new(1), &mut rng)
@@ -164,7 +136,8 @@ fn a_file_this_build_cannot_read_is_dropped_whole_and_replaced_at_the_next_store
 fn the_store_is_due_one_interval_after_the_open_and_stop_writes_once_more() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("p2pstate.bin");
-    let (dialer, clock) = dialer();
+    let rig = rig();
+    let (dialer, clock) = (&rig.dialer, &rig.clock);
     let mut rng = SplitMix64::new(4);
     let opened_at = clock.now();
     dialer
@@ -204,14 +177,14 @@ fn the_store_is_due_one_interval_after_the_open_and_stop_writes_once_more() {
 
 /// **A banned host is left out of the file, and written again once its ban
 /// expires** (Rick ruled (ii), 2026-10-24; the gray lifecycle's file rule,
-/// at the dialer). The store reads the hub's bans through the same
+/// at the dialer). The store reads the table's bans through the same
 /// snapshot the draws read. The ban itself is never saved.
 #[test]
 fn a_banned_host_is_left_out_of_the_file_and_written_again_once_its_ban_expires() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("p2pstate.bin");
-    let sockets = Sockets::new();
-    let (dialer, clock) = dialer_over(sockets.clone());
+    let rig = rig();
+    let (dialer, clock, sockets) = (&rig.dialer, &rig.clock, &rig.sockets);
     let mut rng = SplitMix64::new(9);
     dialer
         .open_address_file(path.clone(), &mut rng)
@@ -222,9 +195,7 @@ fn a_banned_host_is_left_out_of_the_file_and_written_again_once_its_ban_expires(
             .expect("admitted");
     }
     let until = Tick::new(clock.now().get() + 60_000_000_000);
-    dialer
-        .hub()
-        .ban_host(peer(1).ip().expect("clearnet"), until);
+    rig.layer.ban_host(peer(1).ip().expect("clearnet"), until);
 
     assert!(dialer.store_addresses().expect("stored"));
     assert_eq!(

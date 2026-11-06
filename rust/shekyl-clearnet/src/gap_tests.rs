@@ -74,7 +74,7 @@ where
             Arc::new(move |end: DialEnd| sink(end.cause()))
         },
         send_queue_bytes: 65_536,
-        admitted: admitted_tx,
+        admitted: super::super::publish_on(admitted_tx),
     };
     let handle = engine.handle();
     pool.spawn(super::super::dial_one(dial, handle));
@@ -161,8 +161,8 @@ fn timed_sync_frame() -> Vec<u8> {
     )
 }
 
-/// One plain inbound connection under a `gap`: the accept loop, as the
-/// zone host runs it, and a client socket that has written `opening`.
+/// One plain inbound connection under a `gap`: the accept loop, and a
+/// client socket that has written `opening`.
 struct AcceptedPeer {
     engine: EngineService<MonotonicClock>,
     pool: shekyl_runtime::Pool,
@@ -196,7 +196,7 @@ fn accept_peer_that_writes(gap: Tick, opening: &[u8]) -> AcceptedPeer {
             tally: Arc::new(super::super::zero_tally()),
             on_cause,
             send_queue_bytes: 65_536,
-            admitted: admitted_tx,
+            admitted: super::super::publish_on(admitted_tx),
             linger,
             backoff: Duration::from_millis(1),
         };

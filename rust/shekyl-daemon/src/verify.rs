@@ -18,7 +18,8 @@ use shekyl_daemon_config::sections::{log_location_creatable, DaemonConfig, Tor};
 use shekyl_daemon_config::{account, announce, marker, resolve, Lock, TABLE};
 use shekyl_options::{Code, Diagnostic, Source, Value};
 
-use crate::run::{tell, Host};
+use crate::levers;
+use crate::run::tell;
 
 /// What the walk found: the network id a start needs, and the warnings
 /// that change no verdict (the Tor pin's, IG-Q59).
@@ -27,69 +28,49 @@ pub(crate) struct Walked {
     pub(crate) warnings: Vec<String>,
 }
 
-/// Why the walk stopped: a refusal (`refuse`, exit 2) or the host failure
-/// a start returns as 1 (IG-Q62).
-#[derive(Debug)]
-pub(crate) enum Stopped {
-    Refused(Vec<Diagnostic>),
-    Failed(String),
-}
-
-impl From<Diagnostic> for Stopped {
-    fn from(d: Diagnostic) -> Self {
-        Self::Refused(vec![d])
-    }
-}
-
-/// The walk (IG-Q59), in a start's order, stopping at the first refusal.
+/// The walk (IG-Q59), in a start's order, stopping at the first refusal
+/// (`refuse`, exit 2).
 ///
 /// Whether the account could create the data directory and open the lock
-/// file; whether the host has a network id; the marker, read and not
-/// written; whether the account could create the log directory and open
-/// the log file; the owner values the table accepted, judged and not
-/// latched; a `mine-threads` count above the host's parallelism, refused
-/// here so the start-time miner never asks for it (Rick, 2026-11-02); and
-/// the managed Tor's pin, read and not started. Nothing is
-/// created, opened for writing, locked or latched, so the check can run
-/// while a daemon is up and leaves the machine as it found it.
+/// file; the marker, read and not written, against the network's id
+/// (`Network::network_id`, derived from the table's genesis hash: every
+/// network has one, so the host failure IG-Q62 once named is gone);
+/// whether the account could create the log directory and open the log
+/// file; the owner values the table accepted, judged and not latched; a
+/// `mine-threads` count above the host's parallelism, refused here so the
+/// start-time miner never asks for it (Rick, 2026-11-02); and the managed
+/// Tor's pin, read and not started. Nothing is created, opened for
+/// writing, locked or latched, so the check can run while a daemon is up
+/// and leaves the machine as it found it.
 pub(crate) fn walk(
     config: &DaemonConfig,
     resolved: &resolve::Resolved,
-    host: &Host,
-) -> Result<Walked, Stopped> {
+) -> Result<Walked, Vec<Diagnostic>> {
     let network = config.network;
-    Lock::creatable(&config.data_dir)?;
-    let Some(network_id) = (host.network_id_of)(network.code()) else {
-        return Err(Stopped::Failed(format!(
-            "no network id for {}",
-            network.name()
-        )));
-    };
-    marker::read(&config.data_dir, network, network_id)?;
-    log_location_creatable(&config.logging.file)?;
+    Lock::creatable(&config.data_dir).map_err(one)?;
+    let network_id = network.network_id();
+    marker::read(&config.data_dir, network, network_id).map_err(one)?;
+    log_location_creatable(&config.logging.file).map_err(one)?;
     let dev = &config.dev;
-    if let Err(refusal) = shekyl_ffi::pow_randomx_ffi::check_seed_epoch(
-        dev.pow_seed_epoch_blocks,
-        dev.pow_seed_epoch_lag,
-    ) {
-        return Err(owner_refusal(resolved, refusal.row(), refusal.rule()).into());
+    if let Err(refusal) =
+        levers::check_seed_epoch(dev.pow_seed_epoch_blocks, dev.pow_seed_epoch_lag)
+    {
+        return Err(vec![owner_refusal(resolved, refusal.row(), refusal.rule())]);
     }
-    if let Err(refusal) = shekyl_ffi::archival_ffi::check_settlement_schedule(
-        dev.settlement_epoch_blocks,
-        dev.archival_reorg_depth,
-    ) {
-        return Err(owner_refusal(resolved, refusal.row(), refusal.rule()).into());
+    if let Err(refusal) =
+        levers::check_settlement_schedule(dev.settlement_epoch_blocks, dev.archival_reorg_depth)
+    {
+        return Err(vec![owner_refusal(resolved, refusal.row(), refusal.rule())]);
     }
     if let Some(threads) = config.mine.threads {
         let host = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
         let asked = usize::try_from(threads.get()).unwrap_or(usize::MAX);
         if asked > host {
-            return Err(owner_refusal(
+            return Err(vec![owner_refusal(
                 resolved,
                 Some("mine-threads"),
                 &format!("at most the host's parallelism, {host}"),
-            )
-            .into());
+            )]);
         }
     }
     let mut warnings = Vec::new();
@@ -103,6 +84,10 @@ pub(crate) fn walk(
         network_id,
         warnings,
     })
+}
+
+fn one(d: Diagnostic) -> Vec<Diagnostic> {
+    vec![d]
 }
 
 /// The check's acceptance (IG-Q61).
@@ -192,40 +177,22 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
     use std::path::Path;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use shekyl_daemon_config::{load, Platform};
     use shekyl_options::read_cli;
 
-    use crate::remnant::Remnant;
-    use crate::{EXIT_FAILED, EXIT_REFUSED};
+    use crate::EXIT_REFUSED;
 
-    /// Runs the check tests give the sequence: a start that reaches the
-    /// remnant is the failure. The count is this module's; the start
-    /// tests' run counter is a different one.
-    static FORBIDDEN_RUNS: AtomicUsize = AtomicUsize::new(0);
-
-    extern "C" fn forbidden_run(
-        _snapshot: *const shekyl_ffi::daemon_snapshot_ffi::ShekylDaemonSnapshot,
-    ) -> std::ffi::c_int {
-        FORBIDDEN_RUNS.fetch_add(1, Ordering::SeqCst);
-        99
+    /// The network id every check in this module compares the marker
+    /// against: regtest's, which is the genesis derivation's.
+    fn regtest_id() -> [u8; 16] {
+        shekyl_daemon_config::Network::Regtest.network_id()
     }
 
-    extern "C" fn no_stop() {}
-
-    /// A remnant whose `run` must never be reached.
-    fn checking_remnant() -> Remnant {
-        Remnant::absent_core(forbidden_run, no_stop)
-    }
-
-    fn host(home: &Path) -> Host {
-        Host {
-            platform: Platform {
-                home: Some(home.to_path_buf()),
-                program_data: None,
-            },
-            network_id_of: |code| Some([code; 16]),
+    fn platform(home: &Path) -> Platform {
+        Platform {
+            home: Some(home.to_path_buf()),
+            program_data: None,
         }
     }
 
@@ -263,7 +230,7 @@ mod tests {
         let data = d.path().join("deep").join("data");
         let log = d.path().join("logs").join("shekyld.log");
         let a = offline_regtest(&data, &log);
-        assert_eq!(crate::run::main(checking_remnant(), &a, &host(d.path())), 0);
+        assert_eq!(crate::run::main(&a, &platform(d.path())), 0);
         assert!(
             !d.path().join("deep").exists(),
             "no data directory was created"
@@ -272,16 +239,12 @@ mod tests {
             !d.path().join("logs").exists(),
             "no log directory was created"
         );
-        assert_eq!(
-            FORBIDDEN_RUNS.load(Ordering::SeqCst),
-            0,
-            "the remnant did not run"
-        );
         // A daemon is up: its lock is held, its marker is written.
         let held = Lock::take(&data).unwrap();
-        marker::check_or_write(&held, shekyl_daemon_config::Network::Regtest, [3u8; 16]).unwrap();
+        marker::check_or_write(&held, shekyl_daemon_config::Network::Regtest, regtest_id())
+            .unwrap();
         let before = std::fs::read(data.join("shekyld.network")).unwrap();
-        assert_eq!(crate::run::main(checking_remnant(), &a, &host(d.path())), 0);
+        assert_eq!(crate::run::main(&a, &platform(d.path())), 0);
         assert_eq!(std::fs::read(data.join("shekyld.network")).unwrap(), before);
         assert!(!log.exists());
         drop(held);
@@ -298,10 +261,7 @@ mod tests {
         let other = marker::render(shekyl_daemon_config::Network::Testnet, [9u8; 16]);
         std::fs::write(data.join("shekyld.network"), &other).unwrap();
         let a = offline_regtest(&data, &log);
-        assert_eq!(
-            crate::run::main(checking_remnant(), &a, &host(d.path())),
-            EXIT_REFUSED
-        );
+        assert_eq!(crate::run::main(&a, &platform(d.path())), EXIT_REFUSED);
         assert_eq!(
             std::fs::read_to_string(data.join("shekyld.network")).unwrap(),
             other
@@ -311,25 +271,6 @@ mod tests {
             "no lock file was created"
         );
         assert!(!log.exists());
-    }
-
-    /// IG-Q62: the one host failure a start returns as 1 is the check's 1,
-    /// and it comes after the data directory's question, with nothing made.
-    #[test]
-    fn config_verify_returns_one_when_the_host_has_no_network_id() {
-        let d = tempfile::tempdir().unwrap();
-        let data = d.path().join("data");
-        let log = d.path().join("shekyld.log");
-        let a = offline_regtest(&data, &log);
-        let no_id = Host {
-            platform: host(d.path()).platform,
-            network_id_of: |_| None,
-        };
-        assert_eq!(
-            crate::run::main(checking_remnant(), &a, &no_id),
-            EXIT_FAILED
-        );
-        assert!(!data.exists());
     }
 
     /// The owner values the table accepted are judged in the row's terms,
@@ -343,21 +284,16 @@ mod tests {
         let mut a = offline_regtest(&data, &log);
         a.extend(["--dev-pow-seed-epoch-blocks", "3"].map(OsString::from));
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-        let loaded = load(cli, &host(d.path()).platform).unwrap();
-        let Err(Stopped::Refused(ds)) = walk(&loaded.config, &loaded.resolved, &host(d.path()))
-        else {
-            panic!("a seed-epoch length of 3 is refused");
-        };
+        let loaded = load(cli, &platform(d.path())).unwrap();
+        let ds = walk(&loaded.config, &loaded.resolved)
+            .err()
+            .expect("a seed-epoch length of 3 is refused");
         assert_eq!(ds.len(), 1);
         assert_eq!(ds[0].code, Code::ValueRange);
         assert_eq!(ds[0].option.as_deref(), Some("dev-pow-seed-epoch-blocks"));
         assert_eq!(ds[0].get("value"), Some("3"));
-        assert_eq!(
-            crate::run::main(checking_remnant(), &a, &host(d.path())),
-            EXIT_REFUSED
-        );
+        assert_eq!(crate::run::main(&a, &platform(d.path())), EXIT_REFUSED);
         assert!(!data.exists());
-        assert_eq!(FORBIDDEN_RUNS.load(Ordering::SeqCst), 0);
     }
 
     /// The managed Tor's pin is read and not started. A named binary that
@@ -386,9 +322,9 @@ mod tests {
             log.to_str().unwrap(),
         ]);
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-        let loaded = load(cli, &host(d.path()).platform).unwrap();
-        let walked = walk(&loaded.config, &loaded.resolved, &host(d.path())).unwrap();
-        assert_eq!(walked.network_id, [3u8; 16]);
+        let loaded = load(cli, &platform(d.path())).unwrap();
+        let walked = walk(&loaded.config, &loaded.resolved).unwrap();
+        assert_eq!(walked.network_id, regtest_id());
         assert_eq!(walked.warnings.len(), 1);
         let warning = &walked.warnings[0];
         assert!(warning.starts_with("warning: managed Tor: "));
@@ -413,7 +349,7 @@ mod tests {
         );
         assert!(err.iter().any(|line| line.starts_with("shekyld: posture:")));
         assert!(err.iter().any(|line| line.contains("warning: managed Tor")));
-        assert_eq!(crate::run::main(checking_remnant(), &a, &host(d.path())), 0);
+        assert_eq!(crate::run::main(&a, &platform(d.path())), 0);
         assert!(!data.exists());
     }
 
@@ -450,8 +386,8 @@ mod tests {
             full.extend_from_slice(cli);
             let a = args(&full);
             let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-            let loaded = load(cli, &host(d.path()).platform).unwrap();
-            let walked = walk(&loaded.config, &loaded.resolved, &host(d.path())).unwrap();
+            let loaded = load(cli, &platform(d.path())).unwrap();
+            let walked = walk(&loaded.config, &loaded.resolved).unwrap();
             let (_, err) = accepted_lines(
                 &loaded.resolved,
                 loaded.file_read.as_deref(),

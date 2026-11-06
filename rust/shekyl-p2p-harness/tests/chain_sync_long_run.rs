@@ -37,8 +37,8 @@ use shekyl_chain_sync::{CachePlan, HashClass, ProveItem, Proved, SyncState};
 use shekyl_chain_sync_runtime::executor::{prove, Executor};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_hash_budget::Budget;
+use shekyl_levin::CoreSyncData;
 use shekyl_p2p_harness::sync::{substrate, Bodies, Chain, Corpus, Node, ServingPeer, Step};
-use shekyl_seam::SyncPayload;
 use shekyl_types::{BlockHash, BlockHeight};
 
 const LIMIT: Duration = Duration::from_secs(48 * 60 * 60);
@@ -60,9 +60,14 @@ fn rng() -> SplitMix64 {
     SplitMix64::new(0x5EED)
 }
 
-fn claim_of(chain: &Chain) -> SyncPayload {
+/// The session layer's draw. See `chain_sync/support.rs`.
+fn session_rng() -> SplitMix64 {
+    SplitMix64::new(0x5e55_1011)
+}
+
+fn claim_of(chain: &Chain) -> CoreSyncData {
     let (count, work, top) = chain.tip().expect("a chain");
-    SyncPayload {
+    CoreSyncData {
         current_height: count,
         cumulative_difficulty: u64::try_from(work & u128::from(u64::MAX)).expect("low"),
         cumulative_difficulty_top64: u64::try_from(work >> 64).expect("high"),
@@ -192,13 +197,14 @@ async fn body_phase_on_the_captured_corpora() {
             &steps[..1],
             4,
             rng(),
+            session_rng(),
         )
         .await;
         let started = Instant::now();
         let mut seen = Vec::new();
         for _ in 0..2 {
             let (peer, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-            node.connect(Box::new(peer), Some(claim_of(&held)));
+            node.connect(Box::new(peer), Some(claim_of(&held))).await;
             seen.push(asked);
         }
         assert!(

@@ -50,7 +50,7 @@
 | `on_get_block_hash` | bare `hash64` string | `D/methods.rs:447-451` |
 | `calc_pow` | bare `hash64` string | `H:414` (`typedef std::string response`); `S:604`; `F:226-245` |
 | `/submit_transaction` | a tagged `verdict` object | `T/lib.rs:165-206` |
-| `/get_stem_tallies` | a hand-built `{floor,tallies}` object | `src/p2p/net_node.inl:545-599` |
+| `/get_stem_tallies` | a hand-built `{floor,tallies}` object | `rust/shekyl-node/src/p2p_facts.rs:218-245` (`project_stem_tallies`; was `stem_tallies_json` in `shekyl-p2p`, and lines 545 to 599 of `src/p2p/net_node.inl` at `e8838b0095`) |
 | `option_set`, `option_show` | `{options:[…]}` | `D/options.rs:347-352` |
 
 #### JSON-RPC envelope (`POST /json_rpc`)
@@ -1350,7 +1350,7 @@ Same reply as §2.15.
 | attribute | value |
 |---|---|
 | transport | REST |
-| owner | C++ (hand-built JSON; `D/handlers/json.rs:598` → `S:786-789` → `src/p2p/net_node.inl:545-599`) |
+| owner | Rust since the p2p remnant cutover (PR #1272, 2026-11-05): `D/handlers/json.rs:440` → `facts.stem_tallies()` at `rust/shekyl-node/src/p2p_facts.rs:105` → `project_stem_tallies` at `:218`, the same JSON the C++ built (was `D/handlers/json.rs:598` → `S:786-789` → lines 545 to 599 of `src/p2p/net_node.inl` at `e8838b0095`) |
 | visibility | **admin** |
 | aliases | none |
 | params | none |
@@ -1365,9 +1365,9 @@ The reply has **no `status`**.
 | `floor[].floor` | u32 | **same key as its parent array** | `net_node.inl:810-811` |
 | `floor[].below` | bool | | `net_node.inl:812-813` |
 | `tallies` | [object] | per peer | `net_node.inl:816-822` |
-| `tallies[].peer` | hexstr | the peer id's 16 bytes, so 32 hex chars (`levin_notify.h:185`) | `src/cryptonote_protocol/levin_notify.cpp:1796-1801` |
+| `tallies[].peer` | hexstr | the peer id's 16 bytes, so 32 hex chars | `rust/shekyl-node/src/p2p_facts.rs:237` (was lines 1796 to 1801 of `src/cryptonote_protocol/levin_notify.cpp` at `e8838b0095`) |
 | `tallies[].connector` | string | `"unnamed"` if unknown | `levin_notify.cpp:1802-1806` |
-| `tallies[].propagated` | u64 | count | `levin_notify.cpp:1807-1808`, `src/cryptonote_protocol/levin_notify.h:186` |
+| `tallies[].propagated` | u64 | count | `rust/shekyl-node/src/p2p_facts.rs:239` (was `levin_notify.cpp` lines 1807 to 1808 and line 186 of `src/cryptonote_protocol/levin_notify.h` at `e8838b0095`) |
 | `tallies[].silent` | u64 | count | `levin_notify.cpp:1809-1810`, `levin_notify.h:187` |
 | `tallies[].distinct_sources` | u64 | count | `levin_notify.cpp:1811-1812`, `levin_notify.h:188` |
 

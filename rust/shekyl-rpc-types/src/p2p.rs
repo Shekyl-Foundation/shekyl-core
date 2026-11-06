@@ -460,6 +460,56 @@ where
     }
 }
 
+/// The connector a stem tally names.
+///
+/// `unnamed` is the wire spelling of a successor whose connector has not
+/// been observed. It is not a null and not an absent field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StemConnector {
+    #[serde(rename = "clearnet")]
+    Clearnet,
+    #[serde(rename = "tor")]
+    Tor,
+    #[serde(rename = "unnamed")]
+    Unnamed,
+}
+
+/// One connector's outbound floor, as `/get_stem_tallies` reports it.
+///
+/// A connector with no floor observation is absent from the list. It is
+/// not filled with zeros.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StemFloor {
+    pub connector: StemConnector,
+    pub achieved_out_connections: u64,
+    pub floor: u64,
+    pub below: bool,
+}
+
+/// One successor's stem counts. `peer` is the connection id, thirty-two
+/// lowercase hex digits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StemTallyRow {
+    pub peer: String,
+    pub connector: StemConnector,
+    pub propagated: u64,
+    pub silent: u64,
+    pub distinct_sources: u64,
+}
+
+/// The body of `/get_stem_tallies`.
+///
+/// Both arrays are always present, including when empty. This document is
+/// not wrapped in a status envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct StemTallies {
+    pub floor: Vec<StemFloor>,
+    pub tallies: Vec<StemTallyRow>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ChainSyncState, SyncMode};
@@ -489,5 +539,44 @@ mod tests {
             let serialized = serde_json::to_string(&state).expect("serialize");
             assert_eq!(format!("\"{}\"", state.as_str()), serialized, "{state:?}");
         }
+    }
+
+    /// The stem-tallies document, byte for byte, field order included.
+    #[test]
+    fn stem_tallies_serialize_in_field_order() {
+        use super::{StemConnector, StemFloor, StemTallies, StemTallyRow};
+
+        let document = StemTallies {
+            floor: vec![StemFloor {
+                connector: StemConnector::Clearnet,
+                achieved_out_connections: 3,
+                floor: 8,
+                below: true,
+            }],
+            tallies: vec![
+                StemTallyRow {
+                    peer: "00000000000000000000000000000000".to_owned(),
+                    connector: StemConnector::Tor,
+                    propagated: 5,
+                    silent: 1,
+                    distinct_sources: 3,
+                },
+                StemTallyRow {
+                    peer: "00000000000000000000000000000001".to_owned(),
+                    connector: StemConnector::Unnamed,
+                    propagated: 2,
+                    silent: 0,
+                    distinct_sources: 1,
+                },
+            ],
+        };
+        assert_eq!(
+            serde_json::to_string(&document).expect("serialize"),
+            "{\"floor\":[{\"connector\":\"clearnet\",\"achieved_out_connections\":3,\"floor\":8,\
+             \"below\":true}],\"tallies\":[{\"peer\":\"00000000000000000000000000000000\",\
+             \"connector\":\"tor\",\"propagated\":5,\"silent\":1,\"distinct_sources\":3},\
+             {\"peer\":\"00000000000000000000000000000001\",\"connector\":\"unnamed\",\
+             \"propagated\":2,\"silent\":0,\"distinct_sources\":1}]}"
+        );
     }
 }

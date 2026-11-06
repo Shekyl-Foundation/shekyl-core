@@ -36,10 +36,9 @@ shekyl_add_executable(cn_deserialize
 
 target_link_libraries(cn_deserialize
   LINK_PRIVATE
-    cryptonote_core
+    cryptonote_basic
     device
     fcmp
-    p2p
     epee
     ${CMAKE_THREAD_LIBS_INIT})
 

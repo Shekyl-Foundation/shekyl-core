@@ -81,8 +81,8 @@ fn proxy_unavailable(proxy: SocketAddr, why: &'static str) -> Observed {
     Observed::ProxyUnavailable
 }
 
-/// A Tor channel. `onion` is the dialed host. Inbound has none: the zone
-/// is the address.
+/// A Tor channel. `onion` is the dialed host and port. Inbound has none:
+/// the peer's onion is not known at accept.
 ///
 /// `open` is a clone of the reservation the connection task also holds.
 /// `gap` disarms the session deadline. Dropping it ends the wait with
@@ -94,6 +94,18 @@ pub struct Admitted {
     pub onion: Option<(String, u16)>,
 }
 
+/// Where a connected socket is published.
+///
+/// Called on the accept or dial task. `false` means the publisher is gone
+/// and the connector ends the connection as its own failure.
+pub type Publish = Arc<dyn Fn(Admitted) -> bool + Send + Sync>;
+
+/// Publish onto a channel. `false` is a closed receiver.
+#[must_use]
+pub fn publish_on(tx: mpsc::UnboundedSender<Admitted>) -> Publish {
+    Arc::new(move |admitted| tx.send(admitted).is_ok())
+}
+
 pub struct Accept {
     pub stream: TcpStream,
     pub sockets: Sockets,
@@ -101,7 +113,7 @@ pub struct Accept {
     pub gap_within: Tick,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
-    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub admitted: Publish,
 }
 
 pub struct Dial {
@@ -114,7 +126,7 @@ pub struct Dial {
     /// dial's failure before the channel, or the session's end after it.
     pub on_end: Arc<dyn Fn(DialEnd) + Send + Sync>,
     pub send_queue_bytes: usize,
-    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub admitted: Publish,
 }
 
 /// What an accept loop needs besides the socket it just took.
@@ -126,7 +138,7 @@ pub struct Inbound<F> {
     pub gap_within: Tick,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
-    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub admitted: Publish,
     pub backoff: Duration,
 }
 
@@ -374,7 +386,7 @@ async fn run<C>(
     gap_within: Tick,
     send_queue_bytes: usize,
     open: &OpenSocket,
-    admitted: &mpsc::UnboundedSender<Admitted>,
+    admitted: &Publish,
     onion: Option<(String, u16)>,
 ) -> DialEnd
 where
@@ -410,15 +422,13 @@ where
         inbound,
     } = StreamEnds::open(send_queue_bytes);
     let (gap_tx, mut gap_rx) = oneshot::channel();
-    if admitted
-        .send(Admitted {
-            open: open.clone(),
-            bytes,
-            gap: gap_tx,
-            onion,
-        })
-        .is_err()
-    {
+    let published = admitted(Admitted {
+        open: open.clone(),
+        bytes,
+        gap: gap_tx,
+        onion,
+    });
+    if !published {
         ignore(owner.deregister());
         let end = Observed::OwnFailure.end();
         inbound.seal(&hold, end);

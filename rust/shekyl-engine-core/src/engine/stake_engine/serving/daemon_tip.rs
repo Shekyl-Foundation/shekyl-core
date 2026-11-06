@@ -181,22 +181,27 @@ pub(crate) enum TipReading {
 ///
 /// # The sync predicate, and why one flag is not enough
 ///
-/// `synchronized` is **sticky**. In `cryptonote_protocol_handler.inl` the
-/// backing `m_synchronized` is written exactly twice — the constructor, and
-/// a one-way `compare_exchange_strong(expected, true)`. Nothing ever stores
-/// `false`: not a disconnect, not a pop, not a refused reorg.
+/// `synchronized` was **sticky** on the C++ daemon this reading was written
+/// against: in `cryptonote_protocol_handler.inl` (deleted 2026-11-05) the
+/// backing `m_synchronized` was written exactly twice — the constructor, and
+/// a one-way `compare_exchange_strong(expected, true)`. Nothing ever stored
+/// `false`: not a disconnect, not a pop, not a refused reorg. A once-synced
+/// daemon that later lost every peer therefore kept reporting
+/// `synchronized: true` at a frozen height, forever. Stamping that as fresh
+/// re-creates the unbounded lag `WSS-24` exists to remove — by a different
+/// route, and silently, because every signature stays well-formed.
 ///
-/// A once-synced daemon that later loses every peer therefore keeps
-/// reporting `synchronized: true` at a frozen height, forever. Stamping
-/// that as fresh re-creates the unbounded lag `WSS-24` exists to remove — by a different route, and silently, because every
-/// signature stays well-formed.
-///
-/// So the sticky flag is treated as **necessary and not sufficient**, and
-/// joined by facts that can go false again:
+/// The Rust daemon's flag reads `SyncState::Synced` off the chain-sync
+/// watch (`shekyl-node` `facts.rs`) and falls back to `NoView` or `Behind`
+/// when the view is lost, so it does revert. The wallet keeps the
+/// discipline anyway: a flag is one daemon's reading of its own sync, and
+/// the facts below are what this persona can check. So `synchronized` is
+/// treated as **necessary and not sufficient**, and joined by facts that
+/// can go false again:
 ///
 /// | fact | reverts? |
 /// |---|---|
-/// | `synchronized` | never (one-way) |
+/// | `synchronized` | on the Rust daemon, yes; the wallet does not rely on it |
 /// | `offline` | yes |
 /// | `following_degraded` | never (one-way, refusing) |
 /// | `has_peers` | yes |

@@ -8,13 +8,12 @@
 //! [`super::json_rpc`] is the HTTP frame: it admits the caller and
 //! returns the JSON-RPC object. This module is the dispatch. Three
 //! shapes stay a match, because they are three different runtimes:
-//! [`on_chain`] reads the store on a worker, [`run_blocking`] reads what
-//! the C++ p2p remnant still holds (connections, net stats), and
+//! [`on_chain`] reads the store on a worker, [`run_blocking`] reads the
+//! network's facts off the node handle (connections, net stats), and
 //! [`from_error`] / [`blocking`] cover mining, bans, and the pool.
 
 use crate::authority::Authority;
-use crate::chain_facts::FfiP2pFacts;
-use crate::core::CoreRpc;
+use crate::chain_facts::P2pFacts;
 use crate::handles::ChainReadHandle;
 use crate::methods::{InternalFault, RpcFault};
 use crate::server::AppState;
@@ -79,8 +78,8 @@ pub(super) fn native_method_for(method: &str) -> Option<NativeMethod> {
         "sync_info" => NativeMethod::SyncInfo,
         "get_connections" => NativeMethod::Connections,
         // RK-5b. Both spellings of each, as the C++ table carried them
-        // (`core_rpc_ffi.cpp:269-283`); `get_fee_estimate` had only one
-        // there and gains none here.
+        // (`core_rpc_ffi.cpp`, deleted 2026-11-05); `get_fee_estimate` had
+        // only one there and gains none here.
         "get_last_block_header" | "getlastblockheader" => NativeMethod::LastBlockHeader,
         "get_block_header_by_hash" | "getblockheaderbyhash" => NativeMethod::BlockHeaderByHash,
         "get_block_headers_range" | "getblockheadersrange" => NativeMethod::BlockHeadersRange,
@@ -193,11 +192,11 @@ pub(super) async fn native_method(
             // see `methods::sync_info`.
             let chain = Arc::clone(&state.handles.chain);
             Some(frame_native(
-                run_blocking(state, move |core| {
+                run_blocking(state, move |p2p| {
                     crate::methods::sync_info(
                         chain.as_chain_facts(),
                         chain.as_sync_view(),
-                        &FfiP2pFacts::new(core),
+                        p2p.as_ref(),
                     )
                 })
                 .await,
@@ -206,8 +205,8 @@ pub(super) async fn native_method(
         NativeMethod::Connections => {
             let chain = Arc::clone(&state.handles.chain);
             Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_connections(&FfiP2pFacts::new(core), chain.as_sync_view())
+                run_blocking(state, move |p2p| {
+                    crate::methods::get_connections(p2p.as_ref(), chain.as_sync_view())
                 })
                 .await,
             ))
@@ -583,17 +582,17 @@ where
     join_fault(tokio::task::spawn_blocking(move || f(&chain)).await)?
 }
 
-/// Run a native method on a worker thread holding the live core.
+/// Run a native method on a worker thread holding the p2p facts.
 ///
-/// What remains here reads the C++ p2p remnant (connections, net stats). A
+/// What runs here reads the network's board (connections, net stats). A
 /// join failure is an [`InternalFault`], never a fact about the chain.
 pub(super) async fn run_blocking<T, F>(state: &Arc<AppState>, f: F) -> Result<T, RpcFault>
 where
     T: Send + 'static,
-    F: FnOnce(Arc<CoreRpc>) -> Result<T, RpcFault> + Send + 'static,
+    F: FnOnce(Arc<dyn P2pFacts>) -> Result<T, RpcFault> + Send + 'static,
 {
-    let core = state.core.clone();
-    join_fault(tokio::task::spawn_blocking(move || f(core)).await)?
+    let p2p = Arc::clone(&state.handles.p2p);
+    join_fault(tokio::task::spawn_blocking(move || f(p2p)).await)?
 }
 
 /// What a JSON-RPC caller is told when a native method does not answer.

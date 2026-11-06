@@ -5,8 +5,7 @@
 
 use std::time::Duration;
 
-use shekyl_ffi::origin_verdict::OriginVerdict;
-use shekyl_ffi::tor_link::TorLinkTally;
+use shekyl_p2p::{OriginVerdict, ProbeArrival, TorLinkTally};
 use shekyl_timing_engine::Clock;
 use shekyl_timing_engine::{EngineService, ManualClock, OwnerClass, Tick};
 use shekyl_tor_control_client::control::{
@@ -257,8 +256,8 @@ struct Harness {
     origin: Live<watch::Receiver<OriginVerdict>>,
     tally_tx: Option<watch::Sender<TorLinkTally>>,
     tor_link: Live<watch::Receiver<TorLinkTally>>,
-    arrivals_tx: Option<watch::Sender<Option<shekyl_ffi::tor_link::ProbeArrival>>>,
-    probe_arrivals: Live<watch::Receiver<Option<shekyl_ffi::tor_link::ProbeArrival>>>,
+    arrivals_tx: Option<watch::Sender<Option<ProbeArrival>>>,
+    probe_arrivals: Live<watch::Receiver<Option<ProbeArrival>>>,
     sink: Option<EventSink>,
     incoming: Live<EventReceiver>,
     death_tx: Option<mpsc::Sender<(u64, TorDeath)>>,

@@ -7,15 +7,6 @@
 
 use super::legacy_types::ShekylBuffer;
 
-pub(crate) fn arr32_from_ptr(ptr: *const u8) -> Option<[u8; 32]> {
-    if ptr.is_null() {
-        return None;
-    }
-    let mut arr = [0u8; 32];
-    unsafe { std::ptr::copy_nonoverlapping(ptr, arr.as_mut_ptr(), 32) };
-    Some(arr)
-}
-
 /// # Safety
 ///
 /// The caller must ensure that `ptr` points to a valid allocation of at

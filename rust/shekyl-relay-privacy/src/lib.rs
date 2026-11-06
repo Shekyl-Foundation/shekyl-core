@@ -145,6 +145,13 @@
 //! now — and doing it before the removal would buy the seam and pay for it until
 //! the C++ leaves.
 //!
+//! **2026-11-05: the removal happened.** The C++ relay path and its asio
+//! strand left with the C++ p2p host (`P2P_3_REMNANT_CUTOVER_BRIEF.md`). The
+//! relay owner, `shekyl-relay::owner`, is a tokio actor over this crate's
+//! `&mut self` state machines, so the p2p path has one reactor again —
+//! tokio's — and this crate is still a library the owner calls, which is the
+//! shape reason 2 prescribed.
+//!
 //! Cuprate's `net/levin` and `net/epee-encoding` were a genuinely different
 //! question. The levin half is LV-1 (`shekyl-levin`). The epee half is LV-2
 //! (`docs/design/LV2_PORTABLE_STORAGE.md`): first-party `shekyl-portable-storage`,

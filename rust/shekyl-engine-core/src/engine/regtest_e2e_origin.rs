@@ -60,8 +60,9 @@ use super::*;
 /// state back, and a caller brackets its assertions with it.
 pub(super) struct StemSinkPair {
     origin: RegtestDaemon,
-    /// Held only to keep the process alive and to clean it up on drop.
-    _sink: RegtestDaemon,
+    /// The origin's one peer, a second daemon; the stems it receives are
+    /// read from its own pool.
+    sink: RegtestDaemon,
 }
 
 /// One entry of the unrestricted `/get_transaction_pool` reply — the two
@@ -126,15 +127,16 @@ impl StemSinkPair {
                 }),
         )
         .await;
-        let pair = StemSinkPair {
-            origin,
-            _sink: sink,
-        };
+        let pair = StemSinkPair { origin, sink };
         pair.await_linked().await;
         pair
     }
 
     /// The daemon a wallet submits to. It carries both listeners.
+    pub(super) fn sink(&self) -> &RegtestDaemon {
+        &self.sink
+    }
+
     pub(super) fn origin(&self) -> &RegtestDaemon {
         &self.origin
     }
@@ -597,6 +599,30 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
              every pool read, and did not on: {withheld:?}"
         );
         eprintln!("attempt {attempt}: held across the reads; hidden on four, shown on four");
+
+        // The stem reached the sink, a second daemon, over p2p after the
+        // handshake: it admitted the peer-delivered transaction to its own
+        // pool (brief §5, "admitted and relayed after the handshake").
+        let sink = pair.sink();
+        let admitted_by = Instant::now() + Duration::from_secs(20);
+        loop {
+            let pool: PoolRelayResp = sink
+                .rpc
+                .rpc_call("get_transaction_pool", None::<serde_json::Value>)
+                .await
+                .expect("sink /get_transaction_pool");
+            if pool.transactions.iter().any(|t| t.id_hash == hex_id) {
+                break;
+            }
+            if Instant::now() >= admitted_by {
+                sink.panic_with_log(
+                    "the sink did not admit the transaction its peer stemmed to it",
+                    format!("{hex_id} not in its pool after 20 s"),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        eprintln!("attempt {attempt}: the sink admitted the stemmed transaction");
 
         // The other half, that a restricted listener names what the node
         // shows, is `restricted_listener_names_a_transaction_this_node_shows`

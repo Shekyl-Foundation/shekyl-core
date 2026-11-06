@@ -16,22 +16,20 @@ use std::time::Duration;
 use shekyl_dialer::Dialer;
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{ConnectorId, NetworkAddress, Tick};
-use shekyl_seam::{Dial, Hub, SocketId};
 use shekyl_timing_engine::{Clock, ManualClock};
-use shekyl_transport_layer::DialEnd;
-use shekyl_transport_layer::Sockets;
+use shekyl_transport_layer::{DialEnd, SocketId};
 
 use super::life::Life;
-use super::{dialer_on, onions, peer, reply, HeldDial, CLEARNET, NETWORK, TOR, TOR_WINDOW};
+use super::rig::{Answer, Rig};
+use super::{onions, peer, reply, CLEARNET, NETWORK, TOR, TOR_WINDOW};
 
 /// One rig for white is known-working (Rick, 2026-10-26): `count` addresses
 /// on `connector`, each made white by a kept session that the peer then
 /// closed, so every one is white and none is held.
 struct WhiteRig {
+    rig: Rig,
     clock: ManualClock,
-    hub: Hub,
-    dial: Arc<HeldDial>,
-    dialer: Arc<Dialer>,
+    dialer: Arc<Dialer<ManualClock>>,
     connector: ConnectorId,
     white: Vec<NetworkAddress>,
     life: Life,
@@ -41,12 +39,10 @@ struct WhiteRig {
 impl WhiteRig {
     fn new(connector: ConnectorId, seed: u64, count: usize) -> Self {
         let clock = ManualClock::new(Tick::new(1_000_000_000));
-        let sockets = Sockets::new();
-        let dial = Arc::new(HeldDial::answering(
-            sockets.clone(),
-            std::iter::repeat_n(reply(NETWORK), count).collect(),
-        ));
-        let (hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+        let rig = Rig::on(&clock);
+        rig.peer
+            .answer_each(count, || Answer::Answered(reply(NETWORK)));
+        let dialer = Arc::clone(&rig.dialer);
         dialer.set_window(TOR, Some(TOR_WINDOW));
         let life = Life::install(&dialer, &clock);
         let mut rng = SplitMix64::new(seed);
@@ -68,16 +64,15 @@ impl WhiteRig {
             assert!(dialer.shared().lists.is_white(address), "{address:?} white");
         }
         let rig = Self {
+            rig,
             clock,
-            hub,
-            dial,
             dialer,
             connector,
             white: addresses,
             life,
             rng,
         };
-        for id in rig.dial.opened() {
+        for id in rig.rig.opened() {
             rig.close(id);
         }
         assert_eq!(rig.dialer.kept_sessions(connector), 0, "none held");
@@ -86,10 +81,7 @@ impl WhiteRig {
 
     /// The peer closes `id`'s session.
     fn close(&self, id: SocketId) {
-        let end = crate::tables::peer_closed(self.connector);
-        self.hub.finish(id, end);
-        self.dialer
-            .session_closed_from_seam(id, end, &mut SplitMix64::new(0));
+        self.rig.close_as_peer(id);
     }
 
     fn advance(&self, by: Duration) {
@@ -100,7 +92,7 @@ impl WhiteRig {
     /// One attempt at the drawable white address, refused with `cause`
     /// after `took`.
     fn attempt(&mut self, cause: DialEnd, took: Duration) {
-        self.dial.refuse_after(&self.clock, cause, took);
+        self.rig.peer.refuse_after(cause, took);
         assert!(self.dialer.wake(self.connector, &mut self.rng), "a draw");
     }
 
@@ -130,12 +122,8 @@ impl WhiteRig {
     /// Keep one more session to a white address, and return it with the
     /// white address that is not held. Its bytes are what the test shows.
     fn hold_one(&mut self) -> (SocketId, NetworkAddress) {
-        let before = self.dial.opened();
-        self.dial
-            .answers
-            .lock()
-            .expect("answers")
-            .push_back(reply(NETWORK));
+        let before = self.rig.opened();
+        self.rig.peer.answer_next(Answer::Answered(reply(NETWORK)));
         assert!(
             self.dialer.wake(self.connector, &mut self.rng),
             "a keep, held"
@@ -143,7 +131,7 @@ impl WhiteRig {
         let held = self.dialer.shared().kept_addresses(self.connector);
         assert_eq!(held.len(), 1, "one held");
         let id = self
-            .dial
+            .rig
             .opened()
             .into_iter()
             .find(|id| !before.contains(id))
@@ -250,11 +238,7 @@ fn a_clearnet_white_address_whose_redial_succeeds_stays_white() {
         Duration::ZERO,
     );
     rig.advance(PAST_EVERY_RETRY_WAIT);
-    rig.dial
-        .answers
-        .lock()
-        .expect("answers")
-        .push_back(reply(NETWORK));
+    rig.rig.peer.answer_next(Answer::Answered(reply(NETWORK)));
     assert!(rig.dialer.wake(CLEARNET, &mut rig.rng), "the redial");
     assert!(
         rig.is_white(&address) && !rig.is_cooling(&address),

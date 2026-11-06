@@ -30,7 +30,6 @@
 
 use crate::bind::BoundListener;
 use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener};
-use crate::core::CoreRpc;
 use crate::handlers::{binary, json, json_rpc, submit};
 use crate::handles::Handles;
 use crate::middleware::DEFAULT_BODY_LIMIT;
@@ -51,7 +50,6 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tracing::info;
 
 pub struct AppState {
-    pub core: Arc<CoreRpc>,
     /// The Rust admission engine behind `POST /submit_transaction`
     /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §3).
     pub submit_engine: Arc<DaemonSubmitEngine>,
@@ -63,8 +61,8 @@ pub struct AppState {
     /// What `option_set` and `option_show` read and write
     /// (`options::OptionsFacts`, RT-O26); the composition root supplies it.
     pub options: Arc<dyn OptionsFacts>,
-    /// The node's handles (N1). Present, and not yet what the live routes
-    /// read: those keep the C++ `core` until the store flip.
+    /// The node's handles (N1): every route reads through them, the p2p
+    /// facts included.
     pub handles: Handles,
     /// One hash budget for every bounded caller (§6.3).
     pub hash_budget: Arc<HashBudget>,
@@ -161,9 +159,12 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 //     lists that could both contain it.
 //
 // Handlers stay out of the table (and out of anything a unit test calls)
-// because naming a handler pulls `core_rpc_ffi_*` into the link set; lib tests
-// link no C++ remnant. `assemble`'s generic handler parameter is what keeps
-// that true while still letting a test route the real table.
+// so a test can route the real table without an `AppState` behind it: the
+// handlers read the node handle, which a route test has no business
+// building. (Until 2026-11-05 naming a handler also pulled the C++ remnant's
+// `core_rpc_ffi_*` exports into the link set; that half is gone, the shape
+// stays.) `assemble`'s generic handler parameter is what keeps that true
+// while still letting a test route the real table.
 //
 // The tests assert against a specification written out separately (§70): an
 // oracle that iterates this table cannot fail when the table changes.
@@ -209,7 +210,7 @@ pub(crate) struct Route {
 
 /// The daemon RPC route table — the single source of *what is served where*.
 ///
-/// Handler-free so tests can read it without linking `core_rpc_ffi_*`.
+/// Handler-free so tests can read it without an `AppState`.
 /// [`build_router`] registers every row; the request layer admits each path.
 pub(crate) const ROUTES: &[Route] = &[
     Route {
@@ -315,9 +316,9 @@ pub(crate) fn served_paths() -> impl Iterator<Item = &'static str> {
 /// the same mistake a startup abort — green CI, then a daemon that does not
 /// come up (§70.1).
 ///
-/// Deliberately not called from unit tests — naming a handler pulls
-/// `core_rpc_ffi_*` into the test binary (`#[ignore]` skips execution, not
-/// linking), which is why [`assemble`] takes the binding as a parameter.
+/// Deliberately not called from unit tests — a real handler needs the
+/// `AppState` behind it, which is why [`assemble`] takes the binding as a
+/// parameter.
 fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
     match endpoint {
         Endpoint::JsonRpc => post(json_rpc::handle),
@@ -357,7 +358,7 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
 ///
 /// Generic over the handler binding **so tests can build the real router**.
 /// [`build_router`] passes [`handler_for`]; the gate tests pass a dummy
-/// handler, which keeps `core_rpc_ffi_*` out of the test link set while still
+/// handler, which keeps the `AppState` out of the test while still
 /// exercising the thing that ships: `Router::route` over every row.
 /// Route selection is then asserted by *serving requests* rather than by
 /// re-reading a const — and axum's duplicate-path panic fires here as a test
@@ -400,7 +401,7 @@ where
     }))
 }
 
-/// Serves the RPC section's two listener sets on one core: `admin` at the
+/// Serves the RPC section's two listener sets on one node: `admin` at the
 /// admin listener's authority (every grant, and the host's) and `view` at the
 /// view listener's (`crate::authority::Authority::VIEW_LISTENER`), with one
 /// submit engine and ONE connection
@@ -411,7 +412,6 @@ where
 /// once already. An empty set serves nothing; both empty is a daemon with no
 /// RPC, which returns once the stop arrives.
 pub async fn serve_listeners(
-    core: Arc<CoreRpc>,
     config: ServerConfig,
     submit_engine: Arc<DaemonSubmitEngine>,
     admin: Vec<BoundListener>,
@@ -423,7 +423,6 @@ pub async fn serve_listeners(
     let coinbase_reads = Arc::new(Semaphore::new(1));
     let router_at = |authority: Authority| {
         let state = Arc::new(AppState {
-            core: core.clone(),
             submit_engine: submit_engine.clone(),
             conn_tracker: conn_tracker.clone(),
             shard_view: config.shard_view.clone(),
@@ -716,8 +715,8 @@ mod tests {
     /// A router with the real route table, the real gate and dummy handlers.
     ///
     /// This is [`build_router`]'s own assembly — the same [`assemble`] and
-    /// [`gate`] calls — with only the handler binding swapped, because naming
-    /// a real handler pulls `core_rpc_ffi_*` into the test link set. Both
+    /// [`gate`] calls — with only the handler binding swapped, because a
+    /// real handler needs the `AppState` behind it. Both
     /// methods are bound so an unrouted path answers 404 rather than 405.
     fn probe_router(authority: Authority) -> Router {
         gate(
@@ -831,8 +830,7 @@ mod tests {
 
     #[tokio::test]
     async fn cors_default_deny_omits_allow_origin() {
-        // Exercise `cors_layer` without `AppState` / C++ FFI (lib tests cannot
-        // link `core_rpc_ffi_*`).
+        // Exercise `cors_layer` without an `AppState`.
         let app = Router::new()
             .route("/get_info", get(|| async { "ok" }))
             .layer(cors_layer(&[]));

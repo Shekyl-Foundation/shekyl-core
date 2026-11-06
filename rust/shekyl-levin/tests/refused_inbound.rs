@@ -37,12 +37,13 @@ use live_daemon::{connector_refill, spawn_peer, Daemon, LoopbackHost, PeerOutcom
 /// logs, listeners and the reservation its Rust `main()` records).
 const DESCRIPTOR_LIMIT: u64 = 160;
 
-/// The ceiling the daemon logged at bind, `Bounded(n)`.
+/// The ceiling the daemon logged before its listeners bound, `Bounded(n)`
+/// (`shekyl-p2p`'s `network.rs`, `inbound ceiling`).
 fn logged_ceiling(daemon: &Daemon) -> Option<u32> {
     let text = daemon.log_text();
     let line = text
         .lines()
-        .find(|l| l.contains("the inbound ceiling the seam binds with"))?;
+        .find(|l| l.contains("shekyl_p2p::network: inbound ceiling"))?;
     let start = line.find("Bounded(")? + "Bounded(".len();
     let end = line[start..].find(')')? + start;
     line[start..end].parse().ok()

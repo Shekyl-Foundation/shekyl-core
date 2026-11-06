@@ -27,7 +27,10 @@
 // a callback as the function type of its twins.
 //
 // Negative-controlled at introduction (TSR-F1, PR #1092), each injected into
-// a header, a Rust source or the manifest and observed to fail the gate. In
+// a header, a Rust source or the manifest and observed to fail the gate.
+// (The seam's, the stem tally's, the ban view's and the RPC facts' structs
+// named below were deleted with the C++ host on 2026-11-05; the record of
+// what they showed about the gate stands.) In
 // shekyl_seam_handshake_result: current_height and cumulative_difficulty
 // swapped (one width, so the size agrees) -> member-name compare;
 // support_flags widened to uint64_t -> size and type; _pad dropped, top_id

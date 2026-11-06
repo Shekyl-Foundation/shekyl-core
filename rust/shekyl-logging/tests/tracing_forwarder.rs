@@ -23,9 +23,9 @@
 //! global state.
 //!
 //! The link-time half of the contract — exactly one `GLOBAL_DISPATCH`
-//! symbol in `shekyld` — is asserted by the post-link `nm` gate on the
-//! `cargo-build_shekyld` CMake target, not here; no Rust-side test can
-//! observe a foreign image's dispatcher.
+//! symbol in `shekyld` — holds by the link: one cargo build, one
+//! `tracing-core` in `Cargo.lock`. No Rust-side test can observe a foreign
+//! image's dispatcher.
 
 use shekyl_logging::ffi::{shekyl_log_init_stderr, SHEKYL_LOG_LEVEL_INFO, SHEKYL_LOG_OK};
 use shekyl_logging::{install_tracing_forwarder, ForwarderError};

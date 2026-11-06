@@ -29,7 +29,8 @@
 //! the queue and drops what was already posted. A post after that close is
 //! rejected, and the task drops the result. An application that has already
 //! taken its row is counted. Stop waits for that count, and it does not
-//! hold the dialer lock across the hub calls that finish the application.
+//! hold the dialer lock across the session-layer calls that finish the
+//! application.
 
 use std::collections::VecDeque;
 use std::future::Future;
@@ -37,15 +38,15 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 
 use shekyl_draw_rng::RelayRng;
+use shekyl_p2p_session::SessionLayer;
 use shekyl_peerlist::{ConnectorId, NetworkAddress};
-use shekyl_seam::{Hub, SocketId};
-use shekyl_transport_layer::DialEnd;
+use shekyl_timing_engine::Clock;
+use shekyl_transport_layer::{DialEnd, SocketId};
 
 use super::handshake::{attempt_task, failed_outcome, Attempt, AttemptEnd, Prepared, TaskResult};
 use super::ready::block_on_future;
 use super::{Dialer, Shared};
 use crate::fill::DialAim;
-use crate::nonce::InFlightNonce;
 
 /// What one [`Dialer::launch`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,8 +55,8 @@ pub enum Launch {
     Nothing,
     /// An attempt task is running. The loop applies its result by id.
     Running(u64),
-    /// The attempt ended before any I/O (no endpoint, no tip, no network
-    /// id) and was recorded at once.
+    /// The attempt ended before any I/O (no endpoint) and was recorded at
+    /// once.
     Recorded,
     /// The dialer had stopped. The pending draw was cancelled and stays
     /// seated. Nothing was spawned and nothing was recorded.
@@ -78,10 +79,6 @@ pub struct Applied {
 pub(super) struct InFlight {
     connector: ConnectorId,
     address: NetworkAddress,
-    aim: DialAim,
-    /// Held for its drop: the nonce is in the set until this record is
-    /// dropped, after the result is applied or the attempt is cancelled.
-    _nonce: InFlightNonce,
     /// Held for its drop: dropping it completes the attempt's cancel.
     _cancel: tokio::sync::oneshot::Sender<()>,
 }
@@ -89,8 +86,8 @@ pub(super) struct InFlight {
 /// An attempt task's result, how long it ran, and when it resolved.
 pub(super) struct Finished {
     result: TaskResult,
-    /// Nanoseconds from the task's first poll to its result, on the hub's
-    /// clock. Neither the spawn's scheduling nor the wait in the completion
+    /// Nanoseconds from the task's first poll to its result, on the
+    /// engine's clock. Neither the spawn's scheduling nor the wait in the completion
     /// queue counts, so a timeout's place against the Tor window
     /// ([`Dialer::window`]) is the attempt's own.
     ran_nanos: u64,
@@ -103,14 +100,17 @@ pub(super) struct Finished {
 }
 
 /// `attempt`, timed inside its task ([`Finished::ran_nanos`]).
-async fn timed(hub: Hub, attempt: impl Future<Output = AttemptEnd>) -> Finished {
-    let started = hub.now();
+async fn timed<C: Clock + Clone + Send + Sync + 'static>(
+    layer: SessionLayer<C>,
+    attempt: impl Future<Output = AttemptEnd>,
+) -> Finished {
+    let started = layer.now();
     let AttemptEnd {
         result,
         opened_ms,
         ended_ms,
     } = attempt.await;
-    let ran_nanos = hub.now().get().saturating_sub(started.get());
+    let ran_nanos = layer.now().get().saturating_sub(started.get());
     Finished {
         result,
         ran_nanos,
@@ -121,8 +121,8 @@ async fn timed(hub: Hub, attempt: impl Future<Output = AttemptEnd>) -> Finished 
 
 /// The results attempt tasks have posted and the loops have not taken.
 ///
-/// Its lock is its own. A task takes nothing else, and no hub call is made
-/// under it. The loop is the only consumer: [`Self::take`] removes one
+/// Its lock is its own. A task takes nothing else, and no session-layer
+/// call is made under it. The loop is the only consumer: [`Self::take`] removes one
 /// connector's results, in the order posted. [`Self::close`] is permanent:
 /// stop closes the queue, and a dialer does not start again.
 #[derive(Default)]
@@ -322,22 +322,21 @@ async fn drive_attempt(
     }
 }
 
-impl Dialer {
+impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
     /// One wake's launch: the plan, the draw, and the attempt task it
     /// starts. The loop calls this when its wake fires. It does not wait
     /// for the dial.
     pub fn launch<R: RelayRng + ?Sized>(&self, connector: ConnectorId, rng: &mut R) -> Launch {
-        let Some((address, aim, nonce)) = self.choose(connector, rng) else {
+        let Some((address, aim)) = self.choose(connector, rng) else {
             return Launch::Nothing;
         };
-        self.spawn_drawn(connector, address, aim, nonce, rng)
+        self.spawn_drawn(connector, address, aim, rng)
     }
 
     /// Apply every result posted for `connector`, in the order posted, each
     /// through the layer that owns its decision. The attempt leaves
-    /// [`crate::Attempts`] and its nonce leaves the set only here. A result
-    /// whose attempt is no longer held (cancelled at stop) is dropped,
-    /// which releases its channel.
+    /// [`crate::Attempts`] only here. A result whose attempt is no longer
+    /// held (cancelled at stop) is dropped, which releases its session.
     pub fn apply_completions<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
@@ -356,10 +355,10 @@ impl Dialer {
     /// waits on a dial.
     pub fn wake<R: RelayRng + ?Sized>(&self, connector: ConnectorId, rng: &mut R) -> bool {
         self.apply_verdicts(rng);
-        let Some((address, aim, nonce)) = self.choose(connector, rng) else {
+        let Some((address, aim)) = self.choose(connector, rng) else {
             return false;
         };
-        match self.drive_here(connector, address, aim, nonce, rng) {
+        match self.drive_here(connector, address, aim, rng) {
             Drove::Stopped => false,
             Drove::Settled { .. } => true,
         }
@@ -381,7 +380,7 @@ impl Dialer {
     /// draw as the lists require. A white address is a re-contact and is
     /// not drawn. An address on neither list is not dialed. The clock is
     /// read before the dialer lock: the draw thaws a cooldown that has
-    /// ended, and the hub is never called under that lock.
+    /// ended, and the session layer is never called under that lock.
     pub fn dial<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
@@ -396,7 +395,7 @@ impl Dialer {
             );
             return None;
         }
-        let now = self.hub.now();
+        let now = self.now();
         {
             let mut shared = self.shared();
             if shared.lists.is_gray(address) {
@@ -417,8 +416,7 @@ impl Dialer {
                 return None;
             }
         }
-        let nonce = self.nonces.mint(connector, rng);
-        match self.drive_here(connector, address.clone(), aim, nonce, rng) {
+        match self.drive_here(connector, address.clone(), aim, rng) {
             Drove::Stopped => None,
             Drove::Settled { kept } => kept,
         }
@@ -468,26 +466,20 @@ impl Dialer {
         connector: ConnectorId,
         address: NetworkAddress,
         aim: DialAim,
-        nonce: InFlightNonce,
         rng: &mut R,
     ) -> Launch {
         tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
-        let prepared = match self.prepare(connector, &address, &nonce) {
+        let prepared = match self.prepare(&address) {
             Ok(prepared) => prepared,
             Err(end) => {
-                return self
-                    .record_local(connector, address, nonce, end, rng)
-                    .launch();
+                return self.record_local(connector, address, end, rng).launch();
             }
         };
-        let Some(enlisted) = self.enlist(connector, address.clone(), aim, nonce) else {
+        let Some(enlisted) = self.enlist(connector, address.clone()) else {
             return Launch::Stopped;
         };
         let id = enlisted.id;
-        if !self.spawn_enlisted(connector, address.clone(), prepared, enlisted) {
-            tracing::warn!("{connector:?}: the dial attempt task could not start");
-            return self.record_unstarted(connector, address, rng).launch();
-        }
+        self.spawn_enlisted(connector, address, aim, prepared, enlisted);
         // A posted result stays in the table until the loop applies it.
         // Absence means the guard already released the row: stop drained
         // it, or the task was dropped before it posted. An attempt that
@@ -505,19 +497,16 @@ impl Dialer {
         connector: ConnectorId,
         address: NetworkAddress,
         aim: DialAim,
-        nonce: InFlightNonce,
         rng: &mut R,
     ) -> Drove {
         tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
-        let prepared = match self.prepare(connector, &address, &nonce) {
+        let prepared = match self.prepare(&address) {
             Ok(prepared) => prepared,
             Err(end) => {
-                return self
-                    .record_local(connector, address, nonce, end, rng)
-                    .drove();
+                return self.record_local(connector, address, end, rng).drove();
             }
         };
-        let Some(enlisted) = self.enlist(connector, address.clone(), aim, nonce) else {
+        let Some(enlisted) = self.enlist(connector, address.clone()) else {
             return Drove::Stopped;
         };
         let Enlisted {
@@ -525,9 +514,16 @@ impl Dialer {
             cancel,
             mut guard,
         } = enlisted;
-        let hub = self.hub.clone();
-        let attempt = attempt_task(hub.clone(), connector, address, prepared);
-        let outcome = block_on_future(drive_attempt(cancel, timed(hub, attempt)));
+        let layer = self.layer().clone();
+        let attempt = attempt_task(
+            layer.clone(),
+            Arc::clone(&self.shared),
+            connector,
+            address,
+            aim,
+            prepared,
+        );
+        let outcome = block_on_future(drive_attempt(cancel, timed(layer, attempt)));
         match outcome {
             None => Drove::Stopped,
             Some(result) => {
@@ -543,15 +539,8 @@ impl Dialer {
 
     /// Put the begun attempt in the table, or cancel it when the dialer
     /// has stopped. The flag and the insert share this lock section.
-    /// `None` when it was cancelled: the nonce is dropped, and nothing
-    /// is recorded.
-    fn enlist(
-        &self,
-        connector: ConnectorId,
-        address: NetworkAddress,
-        aim: DialAim,
-        nonce: InFlightNonce,
-    ) -> Option<Enlisted> {
+    /// `None` when it was cancelled: nothing is recorded.
+    fn enlist(&self, connector: ConnectorId, address: NetworkAddress) -> Option<Enlisted> {
         let (sender, cancel) = tokio::sync::oneshot::channel();
         let shared = Arc::clone(&self.shared);
         let id = {
@@ -559,7 +548,6 @@ impl Dialer {
             if self.stop.load(Ordering::Acquire) {
                 state.attempts(connector).cancel(&address);
                 drop(state);
-                drop(nonce);
                 return None;
             }
             let id = state.next_attempt;
@@ -569,8 +557,6 @@ impl Dialer {
                 InFlight {
                     connector,
                     address,
-                    aim,
-                    _nonce: nonce,
                     _cancel: sender,
                 },
             );
@@ -583,24 +569,25 @@ impl Dialer {
         })
     }
 
-    /// Hand `enlisted` to the hub's attempt spawner. The guard moves into
-    /// the task, so a task that is dropped before it posts releases the row.
-    /// `false` when the task could not be started; it was dropped.
+    /// Spawn `enlisted` on the transport runtime. The guard moves into the
+    /// task, so a task that is dropped before it posts releases the row.
     fn spawn_enlisted(
         &self,
         connector: ConnectorId,
         address: NetworkAddress,
+        aim: DialAim,
         prepared: Prepared,
         enlisted: Enlisted,
-    ) -> bool {
+    ) {
         let Enlisted { id, cancel, guard } = enlisted;
-        let hub = self.hub.clone();
+        let layer = self.layer().clone();
+        let shared = Arc::clone(&self.shared);
         let completions = Arc::clone(&self.completions);
         let bell = Arc::clone(&self.bell);
         let task = async move {
             let mut guard = guard;
-            let attempt = attempt_task(hub.clone(), connector, address, prepared);
-            let posted = drive_attempt(cancel, timed(hub, attempt)).await;
+            let attempt = attempt_task(layer.clone(), shared, connector, address, aim, prepared);
+            let posted = drive_attempt(cancel, timed(layer, attempt)).await;
             // Disarm only once the queue has accepted the result. A rejected
             // post was dropped inside `post`, after its lock, and the guard
             // still releases the row when stop has not already drained it.
@@ -611,24 +598,23 @@ impl Dialer {
                 }
             }
         };
-        self.hub.spawn_attempt(Box::pin(task))
+        // The dialer stops before the runtime does (`TSR-F13`), so the
+        // runtime is running here.
+        self.layer().runtime().spawn(task);
     }
 
     /// Record a local failure that ended before any I/O, unless the dialer
     /// has stopped: then the pending draw is cancelled and stays seated.
-    /// The nonce is dropped on both paths. The hub clock is read before
-    /// the dialer lock, and the inbound rows under the table lock, as the
-    /// settle reads them.
+    /// The engine's clock is read before the dialer lock, and the inbound
+    /// rows off the board, as the settle reads them.
     fn record_local<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
         address: NetworkAddress,
-        nonce: InFlightNonce,
         end: DialEnd,
         rng: &mut R,
     ) -> BeforeIo {
-        drop(nonce);
-        let now = self.hub.now();
+        let now = self.now();
         let ended_ms = self.life_now_ms();
         self.with_inbound(|shared| {
             if self.stop.load(Ordering::Acquire) {
@@ -636,29 +622,6 @@ impl Dialer {
                 return BeforeIo::Stopped;
             }
             let outcome = failed_outcome(address, end);
-            Self::record(shared, connector, &outcome, None, ended_ms, now, rng);
-            BeforeIo::Recorded
-        })
-    }
-
-    /// The task never started, and its guard has already cancelled the
-    /// open test. Record the local failure so the outstanding gray cools:
-    /// the cause carries no proof, and the open test is already gone, so
-    /// there is nothing left to defer. Unless stop has won: then the draw
-    /// stays seated and nothing is recorded.
-    fn record_unstarted<R: RelayRng + ?Sized>(
-        &self,
-        connector: ConnectorId,
-        address: NetworkAddress,
-        rng: &mut R,
-    ) -> BeforeIo {
-        let now = self.hub.now();
-        let ended_ms = self.life_now_ms();
-        self.with_inbound(|shared| {
-            if self.stop.load(Ordering::Acquire) {
-                return BeforeIo::Stopped;
-            }
-            let outcome = failed_outcome(address, DialEnd::local_close());
             Self::record(shared, connector, &outcome, None, ended_ms, now, rng);
             BeforeIo::Recorded
         })
@@ -675,9 +638,9 @@ impl Dialer {
     /// The stop flag and the remove share this lock section, the same one
     /// as the insert. Stop set the flag before it drains, so this either
     /// leaves the row for that drain or counts an application stop must
-    /// wait for. The count's permit is built after the lock drops: the hub
-    /// work that follows is not done under it.
-    fn begin_apply(&self, id: u64) -> Option<(InFlight, ApplyPermit<'_>)> {
+    /// wait for. The count's permit is built after the lock drops: the
+    /// session-layer work that follows is not done under it.
+    fn begin_apply(&self, id: u64) -> Option<(InFlight, ApplyPermit<'_, C>)> {
         let record = {
             let mut shared = self.shared();
             if self.stop.load(Ordering::Acquire) {
@@ -691,8 +654,10 @@ impl Dialer {
     }
 
     /// Apply one taken result. `None` when stop has won or the attempt is
-    /// no longer held: the result is dropped, releasing its channel, and a
-    /// row stop has not yet drained is left for it.
+    /// no longer held: the result is dropped, and a row stop has not yet
+    /// drained is left for it. A kept session whose result is dropped here
+    /// stays established on the layer with no kept row: stop shuts the
+    /// layer down after the dialer, and the layer closes it there.
     fn apply_taken<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
@@ -711,7 +676,7 @@ impl Dialer {
             return None;
         };
         let address = record.address.clone();
-        let kept = match self.apply_result(connector, &address, record.aim, result, rng) {
+        let kept = match self.apply_result(connector, &address, result, rng) {
             Attempt::Done(outcome) => {
                 tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
                 self.settle_or_retry(connector, &outcome, ran_nanos, opened_ms, ended_ms, rng);
@@ -719,12 +684,10 @@ impl Dialer {
             }
             Attempt::Kept(kept) => {
                 let socket = kept.id;
-                self.accept_and_notify(connector, &address, kept, opened_ms, ended_ms, rng)
+                self.accept_kept(connector, &address, kept, opened_ms, ended_ms, rng)
                     .then_some(socket)
             }
         };
-        // The nonce leaves the set here, after the result is applied and
-        // before stop is told this application is finished.
         drop(record);
         drop(permit);
         Some(Applied { id, address, kept })
@@ -734,11 +697,11 @@ impl Dialer {
 /// One application [`Dialer::stop`] is waiting on. The decrement takes the
 /// dialer lock and wakes stop when it was the last. Drop covers the panic
 /// path, so a count cannot outlive the application that incremented it.
-struct ApplyPermit<'a> {
-    dialer: &'a Dialer,
+struct ApplyPermit<'a, C: Clock + Clone + Send + Sync + 'static> {
+    dialer: &'a Dialer<C>,
 }
 
-impl Drop for ApplyPermit<'_> {
+impl<C: Clock + Clone + Send + Sync + 'static> Drop for ApplyPermit<'_, C> {
     fn drop(&mut self) {
         let mut shared = self.dialer.shared();
         shared.applying -= 1;

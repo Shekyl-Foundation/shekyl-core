@@ -50,9 +50,8 @@ each of those paths on synthetic manifests, so the negative limb here is
 never a grep that happened to find nothing.
 
 The shipped roots are **read from `cmake/BuildRust.cmake`** — the `-p`
-packages of its cargo invocations, the `_shekyl_rust_bins` list and the
-`CRATES` of its `corrosion_import_crate` (the daemon binary, DC-Q19) — not a
-second copy held here; a new shipped package added there is inspected here
+packages of its cargo invocations and the `_shekyl_rust_bins` list (the
+daemon and the wallet binaries) — not a second copy held here; a new shipped package added there is inspected here
 without a paired edit, and the gate refuses if the parse finds nothing or
 finds a name the workspace does not have. A workspace member outside every
 shipped closure (the `SP-T3` measurement rig enables `test-signer` on a
@@ -344,18 +343,13 @@ def resolve_features(root: str, members: dict[str, dict], workspace_deps: dict) 
 
 
 def shipped_roots(text: str) -> list[str]:
-    """The packages `BuildRust.cmake` builds: literal `-p <pkg>` arguments,
-    the `_shekyl_rust_bins` list, and the `CRATES` a `corrosion_import_crate`
-    names. `-p "${var}"` forms are not roots themselves; the list they expand
-    from is."""
+    """The packages `BuildRust.cmake` builds: literal `-p <pkg>` arguments
+    and the `_shekyl_rust_bins` list. `-p "${var}"` forms are not roots
+    themselves; the list they expand from is."""
     roots: list[str] = []
     roots += re.findall(r"(?<![\w-])-p\s+(shekyl[a-z0-9-]*)", text)
     for group in re.findall(r"set\(\s*_shekyl_rust_bins\s+([^)]*)\)", text):
         roots += re.findall(r"shekyl[a-z0-9-]*", group)
-    for call in re.findall(r"corrosion_import_crate\s*\(([^)]*)\)", text):
-        crates = re.search(r"\bCRATES\s+((?:shekyl[a-z0-9-]*\s*)+)", call)
-        if crates:
-            roots += crates.group(1).split()
     return sorted(set(roots))
 
 
@@ -439,8 +433,7 @@ def selftest() -> int:
                 bad = 1
                 print(f"FAIL selftest [{label}]: expected detected={expect}, got {got}")
     cmake = (
-        'cargo build -p shekyl-ffi\nset(_shekyl_rust_bins shekyl-cli shekyl-wallet-rpc)\n-p "${_bin}"\n'
-        "corrosion_import_crate(\n  MANIFEST_PATH x\n  CRATES shekyld\n  LOCKED)\n"
+        'cargo build -p shekyl-ffi\nset(_shekyl_rust_bins shekyld shekyl-cli shekyl-wallet-rpc)\n-p "${_bin}"\n'
     )
     if shipped_roots(cmake) != ["shekyl-cli", "shekyl-ffi", "shekyl-wallet-rpc", "shekyld"]:
         bad = 1

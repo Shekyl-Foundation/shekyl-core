@@ -566,13 +566,15 @@ async fn a_block_a_node_mines_reaches_its_peer_by_relay() {
             .len()
     }
 
+    // The peer's chain, not its sync state: between A's claim and the
+    // relayed block it is catching up, and not synchronized.
     async fn takes_tip(peer: &RegtestDaemon, tip: &str, how: &str) {
         let by = Instant::now() + RELAYED_WITHIN;
-        while peer.last_block_hash().await != tip {
+        while peer.top_block_hash().await != tip {
             if Instant::now() >= by {
                 peer.panic_with_log(
                     &format!("the peer did not take the block {how} within {RELAYED_WITHIN:?}"),
-                    format!("its tip is {}", peer.last_block_hash().await),
+                    format!("its tip is {}", peer.top_block_hash().await),
                 );
             }
             tokio::time::sleep(Duration::from_millis(100)).await;

@@ -69,27 +69,10 @@ trap 'rm -rf "${workdir}"' EXIT
 # name:path — one gated Rust source file each. The name is the generated
 # header's suffix, which ffi_signature_gate.cpp includes.
 SURFACES=(
-  "relay:rust/shekyl-ffi/src/relay_zone_ffi/mod.rs"
-  "rpc_peerlist:rust/shekyl-ffi/src/rpc_peerlist_ffi.rs"
-  "close_cause:rust/shekyl-ffi/src/close_cause_ffi.rs"
-  # The one stop request the console's `exit` and the RPC's `stop_daemon`
-  # make (DAEMON_CONFIG_CUTOVER.md §2.2 step 9).
-  "daemon_stop:rust/shekyl-daemon/src/stop.rs"
-  # The one RPC start and its stop (DAEMON_CONFIG_CUTOVER.md §2.3).
-  "daemon_rpc:rust/shekyl-daemon-rpc/src/ffi_exports.rs"
-  # The notify runner's three pushes (DAEMON_CONFIG_CUTOVER.md §2.10).
-  "notify:rust/shekyl-ffi/src/notify_ffi.rs"
-  # The utilities' default data directory (DAEMON_CONFIG_CUTOVER.md §2.6).
-  "data_dir:rust/shekyl-ffi/src/data_dir_ffi.rs"
-  # The configuration snapshot, its field count and the test binaries' and
-  # the importer's parse (DAEMON_CONFIG_CUTOVER.md §2.9).
-  "daemon_snapshot:rust/shekyl-ffi/src/daemon_snapshot_ffi.rs"
+  # The one surface left after the daemon went all-Rust (2026-11-05): the
+  # p2p, relay, RPC, notify, data-dir, snapshot and chain-sync files that
+  # were gated here were deleted with the C++ host that called them.
   "tx_extra_codec:rust/shekyl-ffi/src/tx_extra_codec_ffi.rs"
-  # Chain sync's published state for the shell (CS-5 §3). `dialer_ffi.rs`,
-  # whose C ABI CS-5 F4 also changed, is not gateable whole: its other
-  # exports pass the seam's structs, which the header names in snake case
-  # (`shekyl_seam_address`), so the generated declarations conflict.
-  "chain_sync:rust/shekyl-ffi/src/chain_sync_ffi.rs"
 )
 
 # The hand-written header with comment lines removed: rustdoc and header
@@ -164,15 +147,13 @@ g++ -fsyntax-only -std=c++17 -I "${workdir}" -I src scripts/ci/ffi_signature_gat
 # checks that every crossing struct a header defines is compared or exempt,
 # compares member names, and writes the asserts ffi_layout_gate.cpp
 # compiles. Its GROUPS list is the pairs; see ffi_layout_gate.cpp for the
-# mechanism note and the negative controls. rpc_facts_ffi.h includes
-# crypto/hash.h, so the TU takes the daemon's include paths.
+# mechanism note and the negative controls.
 read -r layouts exempt < <(python3 scripts/ci/ffi_layout_gate.py "${workdir}")
 if [ -z "${layouts:-}" ]; then
   echo "error: the layout limb reported nothing" >&2
   exit 1
 fi
 
-g++ -fsyntax-only -std=c++17 -I "${workdir}" -I src -I contrib/epee/include -I external \
-  scripts/ci/ffi_layout_gate.cpp
+g++ -fsyntax-only -std=c++17 -I "${workdir}" -I src scripts/ci/ffi_layout_gate.cpp
 
 echo "FFI signatures: hand-written header agrees with the Rust definitions (${total} exports over ${#SURFACES[@]} files checked; $(wc -l <<<"${declared}") declarations all exported; ${layouts} struct layouts compared, ${exempt} exempt)"

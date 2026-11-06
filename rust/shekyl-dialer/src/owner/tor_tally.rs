@@ -12,24 +12,18 @@
 //! §4.5). An inbound session is not a dial: it does not move `opened` or
 //! `unopened` (§4.2).
 //!
-//! The adopt poster calls [`Dialer::session_closed`] while it holds the
-//! table lock, and that mutex is not re-entrant, so the close does not
-//! read the board. It publishes the inbound count last stored here. This
-//! module refreshes that count with the table lock held across the
-//! dialer's lock, which is the order the hub's posters already take. A
-//! dial outcome therefore cannot publish a count from before its row.
-//! The seam's close poster does not hold the table lock. It refreshes
-//! first ([`Dialer::session_closed_from_seam`]), and the row is already
-//! off the board.
+//! [`Dialer::session_closed`] does not read the board: it publishes the
+//! inbound count last stored here. This module refreshes that count from
+//! the board the session layer publishes, read before the dialer's lock.
+//! The layer's close hook refreshes first, when the row is already off the
+//! board, and then applies the close.
 
-use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{ConnectorId, Direction};
-use shekyl_seam::SocketId;
-use shekyl_transport_layer::DialEnd;
+use shekyl_timing_engine::Clock;
 
 use super::{Dialer, Shared};
 
-impl Dialer {
+impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
     /// An inbound Tor session finished its handshake, or the board has
     /// dropped one.
     ///
@@ -40,34 +34,20 @@ impl Dialer {
         self.with_inbound(Self::publish_tor_held);
     }
 
-    /// A session closed, told by the seam's close poster. That poster does
-    /// not hold the table lock, and the row is already off the board.
-    /// The adopt poster calls [`Self::session_closed`] instead, while it
-    /// still holds the lock.
-    pub fn session_closed_from_seam<R: RelayRng + ?Sized>(
-        &self,
-        id: SocketId,
-        end: DialEnd,
-        rng: &mut R,
-    ) {
-        self.note_inbound_tor();
-        self.session_closed(id, end, rng);
-    }
-
     /// Read each connector's inbound rows into the cache, then run `body`.
     ///
-    /// The table lock is held across the dialer's lock. `body` must not
-    /// call back into the hub.
+    /// The board is the layer's published copy, read before the dialer's
+    /// lock. `body` must not call back into the session layer.
     pub(super) fn with_inbound<R>(&self, body: impl FnOnce(&mut Shared) -> R) -> R {
-        self.hub.with_board(|board| {
-            let mut shared = self.shared();
-            for connector in ConnectorId::ALL {
-                shared.inbound[connector.index()] =
-                    board.established_sessions(*connector, Direction::Inbound);
-            }
-            Self::observe_sessions(board, &mut shared, self.hub.now());
-            body(&mut shared)
-        })
+        let board = self.board();
+        let now = self.now();
+        let mut shared = self.shared();
+        for connector in ConnectorId::ALL {
+            shared.inbound[connector.index()] =
+                board.established_sessions(*connector, Direction::Inbound);
+        }
+        Self::observe_sessions(&board, &mut shared, now);
+        body(&mut shared)
     }
 
     /// Outbound Tor sessions this dialer kept, plus the inbound rows last

@@ -388,7 +388,7 @@ after the outcome, including failure before adopt.
 
 **The `Keep` count is the dialer's.** It is adopted `Keep` rows plus
 pending `Keep` attempts, per connector. It is not `Board::count`
-(`rust/shekyl-seam/src/registry.rs:175`), which counts every outbound
+(line 175 of `rust/shekyl-seam/src/registry.rs` at `e8838b0095`; the seam left in PR #1272), which counted every outbound
 row on the connector, a `Confirm` row included, and knows nothing of
 a pending attempt. Lowering the cap at runtime, today
 `release_outbound` from `set_max_out_peers` (`net_node.inl:3176`,
@@ -425,7 +425,7 @@ deletes it.
 
 ## The dial
 
-`Hub::connect` (`rust/shekyl-seam/src/hub.rs:274`) is the composition
+`Hub::connect` (line 274 of `rust/shekyl-seam/src/hub.rs` at `e8838b0095`; the seam left in PR #1272) is the composition
 of two operations that already have different jobs. The implementation
 PR splits them. `Hub::connect` stays the composition, so the seam
 tests keep one call. Callers of `Hub::connect` today are
@@ -1212,7 +1212,7 @@ named below; `add_host_fail` was deleted with the automatic ban
 | The dial path in `idle_worker` | `idle_worker` is `:2303`. The fill call is `:2306`. The gray-probe call is `:2307` | `rg -n -e connections_maker -e gray_peerlist_housekeeping src/p2p` returns nothing. `idle_worker` itself stays until its other gates move |
 | `gray_peerlist_housekeeping` and its interval | function `:3336`, declaration `net_node.h:713`, interval `:756`. The comment at `net_node.inl:1091` names the function and goes with it | `rg -n -e gray_peerlist_housekeeping -e m_gray_peerlist_housekeeping_interval src/p2p` returns nothing. Before deletion that command hits the declaration, the interval, the `idle_worker` call, the definition, and that comment |
 | `zone_server::open` and its `open_outcome` result type | `zone_server.h:382`; `struct open_outcome` at `:376` | `rg -n -e 'open_outcome open\(' src/p2p/zone_server.h` returns nothing, and `rg -n -w open_outcome src/p2p` returns nothing: the struct is the freeze row's witness and goes with the function |
-| `shekyl_seam_open`'s blocking wait | `rust/shekyl-ffi/src/seam_ffi.rs:303` | The function remains and returns the channel without waiting for the handler to arm. `rg -n -e shekyl_seam_open rust/shekyl-ffi/src/seam_ffi.rs` still hits the definition. Zero hits fails |
+| `shekyl_seam_open`'s blocking wait | line 303 of `rust/shekyl-ffi/src/seam_ffi.rs` at `e8838b0095` (the export left in PR #1272) | The function remains and returns the channel without waiting for the handler to arm. `rg -n -e shekyl_seam_open rust/shekyl-ffi/src/seam_ffi.rs` still hits the definition. Zero hits fails |
 | `shekyl_seam_session_cause` | `cause_ffi.rs:55`, declared `shekyl_ffi.h:4430`, C++ read `net_node.h:229` (the file and both readers deleted 2026-10-13) | `rg -n -e shekyl_seam_session_cause rust src` returns nothing |
 | The outbound call of `try_get_support_flags` | call `:1435`, definition `:2677`, inbound call `:2837` inside `handle_handshake`, declaration `net_node.h:673` | `rg -n -e try_get_support_flags src/p2p` still matches the declaration, the definition, and the call in `handle_handshake`, and nothing else. Zero matches fails. A match inside `do_handshake_with_peer` fails, because that function is gone |
 | `node_data.address` (handshake-address ruling, 2026-10-09; deleted 2026-10-13) | The field in `basic_node_data` (`p2p_protocol_defs.h`), written by `get_local_node_data`, read by `handle_handshake` through `derive_advertised_endpoint` (`net_node.cpp`, declared `net_node.h`) and by `get_announced_address` / `get_announced_port`. The Rust codec's `BasicNodeData.address` and its fixtures go with it; the two announce getters compute the address directly and stay, for the operator log line and the tests | `rg -n -e derive_advertised_endpoint -e 'node_data.address' src tests rust` returns nothing. `rg -n -e get_announced_address src/p2p` still hits the declaration, the definition and `get_announced_port`; zero hits fails, because the getter was kept. The harness goldens are re-recorded from the seam in the same commit, 44 bytes shorter per handshake |

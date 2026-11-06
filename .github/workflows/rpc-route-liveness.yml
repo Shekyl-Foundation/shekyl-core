@@ -36,7 +36,6 @@ on:
       - "rust/shekyl-daemon-rpc/**"
       - "rust/shekyl-rpc-client/**"
       - "rust/shekyl-engine-core/**"
-      - "src/rpc/**"
       - "utils/python-rpc/**"
       - "scripts/ci/check_rpc_route_liveness.sh"
       - ".github/workflows/rpc-route-liveness.yml"

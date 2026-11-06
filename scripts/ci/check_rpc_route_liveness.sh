@@ -83,7 +83,6 @@ for names in "${ROUTE_PATHS[@]}"; do
               rust src tests utils scripts 2>/dev/null \
             | grep -v "^rust/shekyl-daemon-rpc/src/server.rs:" \
             | grep -v "^rust/shekyl-daemon-rpc/src/handlers/" \
-            | grep -v "^src/rpc/core_rpc_ffi.cpp:" \
             | grep -v "^scripts/ci/check_rpc_route_liveness.sh:" \
             | grep -vE '^[^:]+:[0-9]*:?\s*(//|#|\*|/\*)' \
             | grep -cv '^\s*$' || true)

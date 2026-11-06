@@ -24,8 +24,7 @@ pub(super) use live::Live;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use shekyl_ffi::origin_verdict::OriginVerdict;
-use shekyl_ffi::tor_link::{ProbeArrival, TorLinkTally};
+use shekyl_p2p::{OriginVerdict, ProbeArrival, TorLinkTally};
 use shekyl_timing_engine::{Clock, OwnerHandle};
 use shekyl_tor_control_client::control::{
     resume_lateness, BootstrapState, ControlReply, EventReceiver, Resume,
