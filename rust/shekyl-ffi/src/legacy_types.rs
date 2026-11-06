@@ -45,27 +45,6 @@ pub struct ProveInputFields {
     pub pseudo_out_blind: [u8; 32],
 }
 
-/// Result struct for construct_output FFI.
-#[repr(C)]
-pub struct ShekylOutputData {
-    pub output_key: [u8; 32],
-    pub commitment: [u8; 32],
-    pub enc_amount: [u8; 8],
-    pub amount_tag: u8,
-    pub enc_label: [u8; 8],
-    pub label_tag: u8,
-    pub view_tag_prefilter: u8,
-    pub kem_ciphertext_x25519: [u8; 32],
-    pub kem_ciphertext_ml_kem: ShekylBuffer,
-    pub pqc_public_key: ShekylBuffer,
-    /// The output's 64-byte `tx_extra 0x07` entry `CM ‖ record` (`PL-D3`).
-    pub pqc_leaf: [u8; 64],
-    pub y: [u8; 32],
-    pub z: [u8; 32],
-    pub k_amount: [u8; 32],
-    pub success: bool,
-}
-
 /// Result struct for scan_output FFI.
 #[repr(C)]
 pub struct ShekylScannedOutput {
@@ -78,14 +57,6 @@ pub struct ShekylScannedOutput {
     pub pqc_secret_key: ShekylBuffer,
     /// The output's 64-byte `tx_extra 0x07` entry `CM ‖ record`, re-derived.
     pub pqc_leaf: [u8; 64],
-    pub success: bool,
-}
-
-/// Result struct for sign_pqc_auth FFI.
-#[repr(C)]
-pub struct ShekylPqcAuthResult {
-    pub hybrid_public_key: ShekylBuffer,
-    pub signature: ShekylBuffer,
     pub success: bool,
 }
 
@@ -138,40 +109,4 @@ pub struct ShekylFcmpProveResult {
     pub proof: ShekylBuffer,
     pub pseudo_outs: ShekylBuffer,
     pub success: bool,
-}
-
-/// Result of `shekyl_sign_fcmp_transaction`.
-///
-/// On success, `success` is true and `proofs_json` contains a JSON-encoded
-/// `SignedProofs` (BP+, FCMP++, ECDH, pseudo-outs, tree metadata).
-/// On failure, `success` is false, `error_code` classifies the error, and
-/// `error_message` contains a human-readable description.
-///
-/// The caller must free `proofs_json` and `error_message` via `shekyl_buffer_free`.
-#[repr(C)]
-pub struct ShekylSignResult {
-    pub proofs_json: ShekylBuffer,
-    pub success: bool,
-    pub error_code: i32,
-    pub error_message: ShekylBuffer,
-}
-
-impl ShekylSignResult {
-    pub(crate) fn ok(json: Vec<u8>) -> Self {
-        ShekylSignResult {
-            proofs_json: ShekylBuffer::from_vec(json),
-            success: true,
-            error_code: 0,
-            error_message: ShekylBuffer::null(),
-        }
-    }
-
-    pub(crate) fn err(code: i32, message: String) -> Self {
-        ShekylSignResult {
-            proofs_json: ShekylBuffer::null(),
-            success: false,
-            error_code: code,
-            error_message: ShekylBuffer::from_vec(message.into_bytes()),
-        }
-    }
 }

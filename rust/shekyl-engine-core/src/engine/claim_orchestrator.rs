@@ -868,7 +868,7 @@ mod tests {
                 .await
                 .expect("reference root resolves");
             let mut cursor: &[u8] = reply.bound_tx.bytes();
-            let mut tx = Transaction::read(&mut cursor).expect("assembled bytes parse whole");
+            let tx = Transaction::read(&mut cursor).expect("assembled bytes parse whole");
             assert!(cursor.is_empty(), "no trailing bytes after the tx");
             let emission_index = tx
                 .prefix
@@ -883,9 +883,10 @@ mod tests {
             };
             let vin = ArchivalRewardEmissionVin::read(&mut canonical_bytes.as_slice())
                 .expect("vin blob parses");
-            tx.prefix.inputs.remove(emission_index);
-            let signable = tx.prefix_hash();
-            emission_vin_verify_backing(&vin, &root, depth, signable.to_bytes())
+            // The transaction's one network-bound message, over CEN-J22's
+            // prefix (the wire strips the emission vin itself).
+            let tx_signable = tx.tx_signable(&shekyl_network::HARNESS_NETWORK_ID);
+            emission_vin_verify_backing(&vin, &root, depth, &tx_signable)
                 .expect("backing leg verifies against the REAL tree root and depth");
         }
     }

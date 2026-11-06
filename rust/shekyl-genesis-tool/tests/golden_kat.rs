@@ -22,17 +22,14 @@ use shekyl_wire::tx_extra::{
     self, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES, PQC_LEAF_ENTRY_LEN,
 };
 
-// --- pinned vectors (recaptured 2026-08-16: genesis-txkey-v2 payment identity) ---
-// Re-pinned 2026-11-03 with "One secret, one derivation" (NI-R7, NI-R10,
-// `docs/V3_WALLET_DECISION_LOG.md`): the fixture recipients' keys are now
-// `account_from_seed` under the v2 network salt, so their addresses moved, and
-// with them every value below that commits to the recipients (the tx secret
-// and pubkey, the serialized bytes, the tx hash, the block id). The length is
-// unchanged: no layout moved. Re-pinned again 2026-11-04 for the salt
-// `name_id ‖ shekyl-master-derive-v3` (`V3_WALLET_DECISION_LOG.md`
-// 2026-11-04): the same values moved for the same reason, the length did not.
-const KAT_TX_SECRET_HEX: &str = "92b429a2dfcb758815c0dead2208157aa0307f8da93718e217f4f4709ee39e0e";
-const KAT_TX_PUB_HEX: &str = "ed3fe6ab6003124ce9c293b43992c55c5d68d50456cc5d49b9a51b97dd81e87f";
+// --- pinned vectors ---
+// The tx key is `frame(shekyl/genesis-txkey-v3, name_id, [recipients])` over
+// the fixture recipients, whose keys are `account_from_seed` under the salt
+// `name_id ‖ shekyl-master-derive-v3`. Every value below commits to the tx key
+// or the recipients (the tx secret and pubkey, the serialized bytes, the tx
+// hash, the block id); the length commits to the layout alone.
+const KAT_TX_SECRET_HEX: &str = "32391db417db663258cc1048850a1661bd59d54b925d60fb738d3b63d9363206";
+const KAT_TX_PUB_HEX: &str = "27d4877662de088dab66440c7c610e10f5ab3ccb0bf95437eded16db52c293ed";
 // Re-pinned 2026-10-11 with `SO-D12i` (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.8):
 // the genesis extra gained the `0x0C` draw commitment (32 zero bytes) after the
 // nonce, +33 bytes (tag ‖ 32), so the blob, its sha256, the tx hash and the
@@ -44,11 +41,11 @@ const KAT_TX_PUB_HEX: &str = "ed3fe6ab6003124ce9c293b43992c55c5d68d50456cc5d49b9
 // bytes per output. tx secret / pubkey were unchanged by those layout moves.
 const KAT_BLOB_LEN: usize = 6466;
 const KAT_BLOB_SHA256_HEX: &str =
-    "7a3fe5d85e64fbdfa76685a14c16efeed7ba76c4bc4fc9ec33cb691c1571dd8f";
-const KAT_TX_HASH_HEX: &str = "6b35c61276dcafbcd404cdec416b50149270046fd9ff9b1005b1bbaf17cf655a";
+    "a5dd684467a665612b46781d267a4035f7259d881e4618de8e01dbe19b659dba";
+const KAT_TX_HASH_HEX: &str = "95c3042a529d4be98de3d5c0cc5d6007936ffaf85c5162d630e6863b22e2f747";
 // The block id is the genesis header over the tx, nonce 0 on every network
 // (NI-Q1); the tx pins above do not depend on the header.
-const KAT_BLOCK_ID_HEX: &str = "5d182464edb02e4f1bf517b61d22482b41eab780b67327492d00840b729d7308";
+const KAT_BLOCK_ID_HEX: &str = "1515ced8f8d5623bd656bb2d57df3cd56c235f57e4e7fb80c9cccd603aa7d22e";
 // ----------------------------------------------------------------------------
 
 fn fixture_recipients() -> Vec<Recipient> {
@@ -104,8 +101,8 @@ fn golden_kat() {
     );
 }
 
-/// The network string is part of the derivation preimage: identical
-/// recipients on different networks must yield different tx keys.
+/// The network's `name_id` binds the derivation: identical recipients on
+/// different networks must yield different tx keys.
 #[test]
 fn txkey_domain_separation_by_network() {
     let recipients = fixture_recipients();

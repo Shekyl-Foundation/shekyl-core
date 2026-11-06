@@ -29,7 +29,7 @@
 
 use crate::CryptoError;
 use ed25519_dalek::{
-    Signature as Ed25519Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey,
+    Signature as Ed25519Signature, Signer as _, SigningKey, VerifyingKey,
     PUBLIC_KEY_LENGTH as ED25519_PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH as ED25519_SECRET_KEY_LENGTH,
     SIGNATURE_LENGTH as ED25519_SIGNATURE_LENGTH,
 };
@@ -124,6 +124,13 @@ pub(crate) fn verify_nested<K>(
 ) -> Result<(), CryptoError> {
     let verifying_key = VerifyingKey::from_bytes(signature.ed25519_public)
         .map_err(|_| CryptoError::InvalidKeyMaterial)?;
+    // Canonical key encoding only: decompression accepts a y coordinate at
+    // or above p and a negative zero x, and the key's bytes are signed
+    // content in the messages that carry it, so a second spelling of one
+    // key is refused here rather than left to each message.
+    if verifying_key.to_edwards().compress().as_bytes() != signature.ed25519_public {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
     let sigma_ed = Ed25519Signature::try_from(signature.ed25519_signature)
         .map_err(|_| CryptoError::SignatureVerificationFailed)?;
     let pq_key = prepare_pq()?;
@@ -132,8 +139,11 @@ pub(crate) fn verify_nested<K>(
     if !verify_pq(&pq_key, &inner, signature.sigma_pq) {
         return Err(CryptoError::SignatureVerificationFailed);
     }
+    // Strict: a small-order key or R is refused, R must be its canonical
+    // encoding (it is compared as bytes) and S below the group order, so a
+    // valid signature has no second encoding a third party could substitute.
     verifying_key
-        .verify(&outer_message(&inner, signature.sigma_pq), &sigma_ed)
+        .verify_strict(&outer_message(&inner, signature.sigma_pq), &sigma_ed)
         .map_err(|_| CryptoError::SignatureVerificationFailed)
 }
 

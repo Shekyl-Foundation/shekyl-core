@@ -134,7 +134,7 @@ fn mined_with_slots(
     support: u32,
     slots: NonZeroUsize,
 ) -> (Arc<WitnessRing>, Producer, Chain) {
-    let ring = Arc::new(WitnessRing::new());
+    let ring = Arc::new(WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID));
     let mut producer = producer_with_slots(&ring, seed, slots);
     let mut chain = Chain::default();
     // Two templates for 100; the second is the one mined.
@@ -546,7 +546,7 @@ fn a_block_with_no_draws_files_nothing() {
 /// of it. Red edit: claim by height alone — 101 is learned.
 #[test]
 fn another_miners_block_is_not_ours() {
-    let ring = Arc::new(WitnessRing::new());
+    let ring = Arc::new(WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID));
     let mut producer = producer(&ring, 10);
     let mut chain = Chain::default();
     ring.draw(h(101)).expect("draws");
@@ -584,7 +584,7 @@ fn the_read_heights_are_not_a_function_of_the_seed() {
 /// bytes appear.
 #[test]
 fn a_learn_shows_no_seed() {
-    let ring = Arc::new(WitnessRing::new());
+    let ring = Arc::new(WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID));
     let mut producer = producer(&ring, 13);
     let mut chain = Chain::default();
     let commitment = ring.draw(h(100)).expect("draws");

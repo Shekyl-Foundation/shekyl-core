@@ -28,7 +28,8 @@ fn an_assembled_bundle_is_signed_over_its_commitment_under_the_witness_domain() 
     let kept = kept_at(BlockHeight::from_raw(900), 9, &[0b0000_0101, 0]);
     let records = [record(1), record(2)];
     let mut asked = None;
-    let (reference, body) = assemble_bundle(&kept, &records, &public_bytes, |commitment| {
+    let net = shekyl_network::Network::Testnet.network_id();
+    let (reference, body) = assemble_bundle(&net, &kept, &records, &public_bytes, |commitment| {
         asked = Some(*commitment);
         sign_bundle_commitment(&secret, commitment)
     })
@@ -38,7 +39,7 @@ fn an_assembled_bundle_is_signed_over_its_commitment_under_the_witness_domain() 
     assert_eq!(reference.prunable_hash(), &body.prunable_hash());
     assert_eq!(body.witness_public_key(), &public_bytes);
     assert_eq!(body.records().collect::<Vec<_>>(), records.to_vec());
-    let commitment = kept.commitment(body.records_bytes());
+    let commitment = kept.commitment(&net, body.records_bytes());
     assert_eq!(asked, Some(commitment));
     let signature =
         FnDsaHybridSignature::from_canonical_bytes(body.witness_signature()).expect("canonical");
@@ -55,6 +56,6 @@ fn an_assembled_bundle_is_signed_over_its_commitment_under_the_witness_domain() 
         .is_err());
 
     let refused: Result<_, &str> =
-        assemble_bundle(&kept, &records, &public_bytes, |_| Err("no signer"));
+        assemble_bundle(&net, &kept, &records, &public_bytes, |_| Err("no signer"));
     assert_eq!(refused.unwrap_err(), "no signer");
 }

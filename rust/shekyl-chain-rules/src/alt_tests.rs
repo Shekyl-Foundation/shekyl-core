@@ -21,7 +21,7 @@ use crate::harness::{
 };
 use crate::rule_set::{CappedEpoch, RuleSet, SettlementEpochBlocks};
 use crate::trust::Trust;
-use crate::validate::{form, validate};
+use crate::validate::{form, validate, FormClaims};
 use crate::verdict::Locus;
 use crate::view::{AtHeight, HeaderRecord, Tip};
 
@@ -361,11 +361,14 @@ fn a_target_claim_the_alt_chain_does_not_derive_is_stale_not_a_verdict() {
     assert_ne!(wrong, right, "the fixture's claim must be wrong");
     let formed = match form(
         candidate_on(&chain, Vec::new()),
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(&chain),
+            target: wrong,
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        expected_seed(&chain),
-        wrong,
-        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -398,11 +401,14 @@ fn a_rule_set_the_token_was_not_formed_under_is_stale_not_a_verdict() {
     let formed_under_other = chain.with_view(|_| {
         match form(
             candidate_on(&chain, Vec::new()),
-            &other,
+            &FormClaims {
+                rule_set: &other,
+                seed: expected_seed(&chain),
+                target: expected_target(&chain, &other),
+                references: &crate::block::ReferenceClaims::EMPTY,
+                network: crate::HARNESS_NETWORK_ID,
+            },
             &MockSubstrate::default(),
-            expected_seed(&chain),
-            expected_target(&chain, &other),
-            &crate::block::ReferenceClaims::EMPTY,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,

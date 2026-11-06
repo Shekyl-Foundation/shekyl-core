@@ -119,7 +119,9 @@ async fn the_producer_prices_its_listing_at_the_built_coinbase_and_the_block_con
                 keys: &keys,
                 params: &params,
                 now,
-                witness: &shekyl_bundle_producer::WitnessRing::new(),
+                witness: &shekyl_bundle_producer::WitnessRing::new(
+                    shekyl_network::HARNESS_NETWORK_ID,
+                ),
                 #[cfg(test)]
                 between_locks: None,
             };
@@ -242,7 +244,7 @@ async fn a_template_on_an_older_tip_than_the_pools_posts_and_evicts_nothing() {
             keys: &keys,
             params: &params,
             now,
-            witness: &shekyl_bundle_producer::WitnessRing::new(),
+            witness: &shekyl_bundle_producer::WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID),
             #[cfg(test)]
             between_locks: None,
         };
@@ -309,6 +311,7 @@ async fn pop_blocks_refuses_genesis_and_returns_two_blocks_bodies_to_the_pool() 
             UnixSeconds::from_raw(1),
             &view,
             &rule_set,
+            &shekyl_network::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .expect("open")
@@ -536,7 +539,15 @@ async fn a_full_pool_admits_a_better_payer_by_evicting_the_cheapest() {
         .read_chain(|view, rule_set| {
             let policy = AdmissionPolicy::GENESIS;
             let now = UnixSeconds::from_raw(1);
-            let (mut pool, _, _) = Pool::open(&path, now, view, rule_set, &policy).expect("open");
+            let (mut pool, _, _) = Pool::open(
+                &path,
+                now,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &policy,
+            )
+            .expect("open");
             pool.set_limits(Limits { max_weight: room });
             let mut admit = |tx: &shekyl_wire::Transaction| {
                 pool.admit(tx.clone(), now, view, rule_set, &policy)
@@ -722,7 +733,14 @@ async fn a_pass_that_no_longer_holds_is_verified_outside_the_pool_lock() {
                 .map(|(id, _)| id)
                 .collect();
             // Outside the lock: step 1 for what was listed, then staged.
-            let step1 = shekyl_mempool::stateless(&spend, view, &other, None).expect("judged");
+            let step1 = shekyl_mempool::stateless(
+                &spend,
+                view,
+                &other,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                None,
+            )
+            .expect("judged");
             pool.stage_step1(txid, step1);
             let before = probes::fcmp_verifies();
             let reconciled = pool.reconcile(view, &other, &policy).expect("reconcile");
@@ -799,7 +817,9 @@ async fn a_body_flushed_between_the_producers_locks_posts_nothing() {
                 keys: &keys,
                 params: &params,
                 now,
-                witness: &shekyl_bundle_producer::WitnessRing::new(),
+                witness: &shekyl_bundle_producer::WitnessRing::new(
+                    shekyl_network::HARNESS_NETWORK_ID,
+                ),
                 between_locks: Some(&flush_first),
             };
             produce(&snap, &producer, Some(&pool), |_| true).map(|produced| produced.job.height)

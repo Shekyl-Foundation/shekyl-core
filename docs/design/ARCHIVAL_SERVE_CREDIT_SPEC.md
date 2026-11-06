@@ -498,11 +498,8 @@ not claim `P` stores them.
 - **Signature domain.** A new scheme domain for the receipt under scheme
   3, `shekyl/archival-receipt-scheme-v1`; the witness's signature on the
   bundle has its own, `shekyl/archival-witness-bundle-scheme-v1`, minted
-  with its constant when the verifier is built. The bundle commitment is
-  a different message from the carrier's set commitment, so it does not
-  take the carrier's label, `shekyl/archival-witness-carrier-scheme-v1`;
-  that constant has no signer and is not used for the bundle. One label
-  never names two messages or two schemes
+  with its constant when the verifier is built. One label never names two
+  messages or two schemes
   ([`30-cryptography`](../../.cursor/rules/30-cryptography.mdc)).
 - **Key generation.** The receipt key is seeded (§6.3). The witness's key
   is not: it is drawn from the OS for one block and is never derived from
@@ -637,30 +634,29 @@ Ruled:
   ascending `h`. Each bundle contributes its kept bytes and
   `cSHAKE256_32` of its prunable bytes.
 
-The commitment (`SCS-P35`, ruled 2026-10-12):
+The commitment (`SCS-P35`, ruled 2026-10-12; on the signing envelope,
+ruled 2026-11-05):
 
 ```text
-cSHAKE256_32("shekyl/archival-serve-credit-bundle-v1",
-             seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap ‖ r₁ ‖ … ‖ rₙ)
+frame("shekyl/archival-serve-credit-bundle-v2", network_id, [kept, records])[..64]
+kept    = seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap ‖ support_count_le[4] ‖ support_bitmap
+records = r₁ ‖ … ‖ rₙ
 ```
 
-which is the kept part followed by the records, with `count` the kept
-part's, the bitmap `⌈count / 8⌉` bytes, and each record
-`attempt[1] ‖ anchor_height_le[8] ‖ delivery_digest[32] ‖ receipt[1,356]`.
+with `count` the kept part's, the bitmap `⌈count / 8⌉` bytes, and each
+record `attempt[1] ‖ anchor_height_le[8] ‖ delivery_digest[32] ‖
+receipt[1,356]`. It is 64 bytes because a hybrid signature signs it, and
+it carries the network's id because nothing else in it is network-bound:
+the seed is the witness's own random value. A witness signature made on
+one network verifies on no other.
 
-- **Nothing is framed, and that rests on one fact:** every record is the
-  same width. `count` fixes the bitmap's length, the bitmap's set bits fix
+- **The bytes on the wire are not framed, and that rests on one fact:**
+  every record is the same width. `count` fixes the bitmap's length, the bitmap's set bits fix
   the number of records, and 1,397 bytes fixes where each ends. The width
   is fixed because FN-DSA-1024's signature is padded to 1,280 bytes and
   the canonical hybrid encoding is fixed-length (§6.2). **A scheme whose
   signature is not fixed-width breaks this construction**, and needs
   frames or a different commitment along with its version bump.
-- **A new label.** The bundle commitment does not take
-  `shekyl/archival-serve-credit-batch-v1`: one label never names two
-  messages. That label, `serve_credit_batch_commitment`
-  (`rust/shekyl-archival-retention/src/secret_draw.rs`), its vectors and
-  its registry row are superseded and stay in the tree beside the new
-  ones (§11.1, re-ruled 2026-10-12); nothing calls them.
 - **The header field is renamed** (`SCS-P34`): the block header's
   `attestation_root` becomes `bundle_root`, in the same rule-42 bump that
   changes what it commits to. The field keeps its place; it does not keep
@@ -1861,11 +1857,11 @@ stays until that code is deleted (§11.1), and is marked.
 
 ## 16. Labels this specification mints
 
-Each row lands with its constant. Six have: the settlement selection and
+Each row lands with its constant. Five have: the settlement selection and
 the issued-index term (`rust/shekyl-archival-retention/src/settlement_select.rs`,
-2026-10-08), the two scheme domains (`SCHEME_DOMAIN_RECEIPT`,
-`SCHEME_DOMAIN_WITNESS_CARRIER` in `rust/shekyl-crypto-pq/src/signature.rs`,
-2026-10-09), and the two receipt-key labels
+2026-10-08), the receipt's scheme domain (`SCHEME_DOMAIN_RECEIPT` in
+`rust/shekyl-crypto-pq/src/signature.rs`, 2026-10-09), and the two
+receipt-key labels
 (`rust/shekyl-crypto-pq/src/archival_p.rs`, 2026-10-10). The rest have no
 constant or registry row yet.
 
@@ -1876,12 +1872,10 @@ constant or registry row yet.
 | `shekyl/archival-challenge-nonce-v1` | cSHAKE256 | Challenge nonce, over `(seed, block_hash(h), j, attempt)`, §5.2 |
 | `shekyl/archival-issued-index-v1` | cSHAKE256 | One issued draw's term in the epoch's running digest, §10 |
 | `shekyl/archival-settlement-select-v1` | cSHAKE256 | Counted-draw selection, §9.3 |
-| `shekyl/archival-serve-credit-batch-v1` | cSHAKE256 | The carrier's set commitment. Superseded by the bundle commitment (`SCS-P35`); the constant, its vectors and its registry row stay (§11.1) |
-| `shekyl/archival-serve-credit-bundle-v1` | cSHAKE256 | The bundle commitment, §7.3 |
+| `shekyl/archival-serve-credit-bundle-v2` | cSHAKE256, the signing envelope's frame | The bundle commitment, §7.3 |
 | `shekyl-archival-p-receipt-ed25519-v1` | HKDF info | The Ed25519 half of the persona's receipt key, from the master seed, §6.3 |
 | `shekyl-archival-p-receipt-fn-dsa-1024-v1` | HKDF info | The FN-DSA-1024 half of the same key, §6.3 |
 | `shekyl/archival-receipt-scheme-v1` | signature domain | Receipts under scheme 3, §6.2 |
-| `shekyl/archival-witness-carrier-scheme-v1` | signature domain | The witness's signature on a carrier. Landed as a constant with no signer; not used for the bundle (§6.2) |
 | `shekyl/archival-witness-bundle-scheme-v1` | signature domain | The witness's signature on the bundle, under scheme 3, §7.3. Minted with the verifier |
 
 Four were minted with their constants on the verifier's PR (#1047, merged
@@ -1889,7 +1883,7 @@ Four were minted with their constants on the verifier's PR (#1047, merged
 witness's bundle signature domain
 (`rust/shekyl-crypto-pq/src/signature.rs:139`), the bundle commitment,
 `shekyl/archival-bundle-prunable-v1` and `shekyl/archival-bundle-root-v1`
-(`rust/shekyl-archival-retention/src/bundle.rs:73`, `:76`, `:79`; §7.3).
+(`rust/shekyl-archival-retention/src/bundle.rs`; §7.3).
 The seed and the witness key have no label: they are fresh randomness.
 
 ---

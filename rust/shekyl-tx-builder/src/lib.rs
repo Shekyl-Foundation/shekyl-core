@@ -91,7 +91,7 @@ pub use assemble::{open_spend, AuthSlots, OpenSpend, SpendLayout};
 pub use error::TxBuilderError;
 pub use sign::{
     prove_backing_membership, sign_pqc_auths, sign_transaction, sign_transaction_with_terms,
-    MembershipOnlyProof,
+    tx_signable_for, MembershipOnlyProof,
 };
 pub use types::{
     LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION,

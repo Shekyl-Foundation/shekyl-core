@@ -504,6 +504,7 @@ impl Engine<SoloSigner> {
             bundles,
             bonded,
             bodies,
+            network: network.network_id(),
         }))
     }
 
@@ -512,7 +513,13 @@ impl Engine<SoloSigner> {
     /// bundles are already values. The conformance self-cert, the one
     /// fallible step after this, is the caller's.
     fn spawn_prepared_stake_engine(ready: PreparedStakeEngine) -> StakeEngineHandle {
-        StakeEngineHandle::spawn(ready.bundles, ready.bonded, None, ready.bodies)
+        StakeEngineHandle::spawn(
+            ready.bundles,
+            ready.bonded,
+            None,
+            ready.bodies,
+            ready.network,
+        )
     }
 }
 
@@ -521,6 +528,9 @@ struct PreparedStakeEngine {
     bundles: std::collections::BTreeMap<PSlot, shekyl_crypto_pq::archival_p::ArchivalPKeys>,
     bonded: std::collections::BTreeSet<PSlot>,
     bodies: shekyl_p_store::BodyStore,
+    /// The id of the wallet's network: the spends the stake engine
+    /// assembles sign under it (`NETWORK_IDENTITY.md` NI-Q4).
+    network: shekyl_network::NetworkId,
 }
 
 /// S6 (conformance build only) — eager observation of the actor's

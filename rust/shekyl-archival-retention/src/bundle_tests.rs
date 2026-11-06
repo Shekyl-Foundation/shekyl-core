@@ -32,6 +32,11 @@ use super::*;
 const SEED: [u8; 32] = [0x11; 32];
 const H: BlockHeight = BlockHeight::from_raw(1_000_000);
 
+/// The network the commitment vectors are on.
+fn testnet() -> shekyl_network::NetworkId {
+    shekyl_network::Network::Testnet.network_id()
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -478,70 +483,97 @@ fn a_reference_of_any_length_but_its_own_refuses() {
 
 // ------------------------------------------------------------ commitment
 
-/// The bundle commitment's vectors (§7.3, `SCS-P35`): no draws; eight
-/// draws and no pass; one record; three records with a bitmap that crosses
-/// a byte boundary; that case at `h + 1`; and that case with one more
-/// economy bit set and the same records. Every support bitmap here is
-/// empty. The support-bit vector is [`support_pins`]. The preimage is the
-/// kept part followed by the records, support count included. The hex is
-/// the independent cSHAKE named in the module docs. Red edits: hash
-/// anything but `BundleKept::encode` in front of the records; write `h` or
-/// a count big-endian; rename the label; put the records first; leave the
-/// support count out.
+/// The bundle commitment's vectors (§7.3, `SCS-P35`; the signing envelope
+/// §2.4) on testnet: no draws; eight draws and no pass; one record; three
+/// records with a bitmap that crosses a byte boundary; that case at `h + 1`;
+/// and that case with one more economy bit set and the same records. Every
+/// support bitmap here is empty. The support-bit vector is
+/// [`support_pins`]. The fields are the kept part and the records, support
+/// count included. The hex is `scripts/kat/bundle_commitment_oracle.py`,
+/// which builds these fixtures from the formulas here and reproduces the
+/// `-v1` pins before it frames them. Red edits: frame anything but
+/// `BundleKept::encode` as field 1; write `h` or a count big-endian; rename
+/// the label; put the records first; leave the support count out; drop the
+/// network id.
 #[test]
 fn the_bundle_commitment_matches_its_vectors() {
     let three = records_bytes(3);
     let commit = |h: BlockHeight, count: u32, bitmap: &[u8], records: &[u8]| {
-        hex(&bundle_commitment(&kept_at(h, count, bitmap), records))
+        hex(&bundle_commitment(
+            &testnet(),
+            &kept_at(h, count, bitmap),
+            records,
+        ))
     };
     assert_eq!(
         commit(H, 0, &[], &[]),
-        "3d2a83a7b959e521e409e25e8aa03b528c475380ee8e0b4b8006c62ea74a9023"
+        "fca47f3be267d7a80ddf41164a76392591948c92b29c548597aa780715fb04b9efe0ee902eeedfd21404a4ff844860308b644525e8881a765112e458c3248839"
     );
     assert_eq!(
         commit(H, 8, &[0x00], &[]),
-        "2ce39ad03bb353db1f7115da22c4ce5564b021f48d2ba4322140851b0d31dc65"
+        "cc1c660a85be2d8b8ca8ed1d7ee0083cfd44f80755fbc9aa3a5d7e22d7f42c79ede54d02f0cbc58386b91c518a10306b3e05dd9619f884f6c9d4c3e2944fd6a5"
     );
     assert_eq!(
         commit(H, 1, &[0x01], &record(0).encode()),
-        "bcd6ae8354943380172c9ecc4e80decd4c2eb8a2006e0c1f3e17f8f103dd000c"
+        "9826b35755be487c37e8d6afd6b060d0876176c573b67aa180f94bae16565da3bb000c94cdad209cc500cfe4c55ccce2f130a95ca2a431580bf975423955bc92"
     );
     assert_eq!(
         commit(H, 12, &[0x01, 0x0A], &three),
-        "7474d1f829369e895a6019f63a3c033ec5b438786cd17c69e91a52cda9d584d7"
+        "5dadd6089ff5611da1711d21b5312ad8e2a008dabde3912ed867be2a953c05f857063de917ab8e9f7cc85fc02a3df42f6b7b374cc85626e53df4f0ca04695b36"
     );
     assert_eq!(
         commit(BlockHeight::from_raw(1_000_001), 12, &[0x01, 0x0A], &three),
-        "65ff3cc44efa77bc055ca3ff645d6d2881f880e6bd2ca60942e6e3af0609ec09"
+        "8f0326bd71daf78d8d07b8146d5e972d183e18d2325870300404bb184ae619d90addd6d4a0f9d2d4ab35401a2660e4cb7d52bd19b522a0a4ade043dc07666144"
     );
     assert_eq!(
         commit(H, 12, &[0x09, 0x0A], &three),
-        "e6c849bf022b175965c02c9f402df9ba2d277d7a0cba457d5efe4b980e4230e0"
+        "9d116525e7d6c77109c93f36ab2f0fbb0d9768b22ffc2497b2ad4023441dfeab72e83f29492836179f773dd94d1fdd9c93da836cb78bf78640a5948b4b8ffbf7"
     );
 }
 
-/// The commitment is the hash of the kept part's one encoding followed by
-/// the records — the same bytes a reference opens with. Red edit: give
+/// The commitment frames the kept part's one encoding and the records —
+/// field 1 the same bytes a reference opens with. Red edit: give
 /// `bundle_commitment` its own serialisation of the kept fields; the two
 /// then agree only until one of them changes.
 #[test]
 fn the_commitment_is_over_the_kept_parts_encoding_then_the_records() {
     let kept = kept_at(H, 12, &[0x01, 0x0A]);
     let three = body(3);
-    let mut preimage = kept.encode();
-    preimage.extend_from_slice(three.records_bytes());
-    let expected = crate::hash::cshake256_32(BUNDLE_COMMITMENT_CUSTOMIZATION, &preimage);
-    assert_eq!(bundle_commitment(&kept, three.records_bytes()), expected);
-    assert_eq!(kept.commitment(three.records_bytes()), expected);
+    let encoded = kept.encode();
+    let expected = BUNDLE_COMMITMENT.frame(&testnet(), [&encoded, three.records_bytes()]);
     assert_eq!(
-        hex(&expected),
-        "7474d1f829369e895a6019f63a3c033ec5b438786cd17c69e91a52cda9d584d7"
+        bundle_commitment(&testnet(), &kept, three.records_bytes()),
+        expected
     );
+    assert_eq!(kept.commitment(&testnet(), three.records_bytes()), expected);
     assert_eq!(
         BundleRef::of(&kept, &three).encode()[..50],
-        preimage[..50],
+        encoded[..50],
         "a reference opens with the bytes the commitment opens with"
     );
+}
+
+/// The commitment binds the network (the signing envelope §2.4): the same
+/// bundle commits to a different value on every network, so a witness
+/// signature made on one verifies on no other. Red edit: drop the id from
+/// the frame.
+#[test]
+fn the_commitment_differs_on_every_network() {
+    let kept = kept_at(H, 12, &[0x01, 0x0A]);
+    let three = records_bytes(3);
+    let mut seen: Vec<[u8; 64]> = shekyl_network::Network::ALL
+        .iter()
+        .map(|net| bundle_commitment(&net.network_id(), &kept, &three))
+        .collect();
+    seen.push(bundle_commitment(
+        &shekyl_network::HARNESS_NETWORK_ID,
+        &kept,
+        &three,
+    ));
+    let count = seen.len();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), count, "two networks share a commitment");
 }
 
 /// The commitment covers every byte of the seed, `h`, both counts, both
@@ -550,41 +582,40 @@ fn the_commitment_is_over_the_kept_parts_encoding_then_the_records() {
 fn the_commitment_moves_with_every_field() {
     let three = records_bytes(3);
     let kept = kept_at(H, 12, &[0x01, 0x0A]);
-    let base = bundle_commitment(&kept, &three);
+    let net = testnet();
+    let base = bundle_commitment(&net, &kept, &three);
     let mut other_seed = kept.clone();
     other_seed.seed[31] ^= 1;
-    assert_ne!(base, bundle_commitment(&other_seed, &three));
+    assert_ne!(base, bundle_commitment(&net, &other_seed, &three));
     // Thirteen bits in the same two bytes: only the count differs.
     assert_ne!(
         base,
-        bundle_commitment(&kept_at(H, 13, &[0x01, 0x0A]), &three)
+        bundle_commitment(&net, &kept_at(H, 13, &[0x01, 0x0A]), &three)
     );
     for at in [0, 1, 9, 41, 1_396, 1_397, 2 * 1_397 + 700, three.len() - 1] {
         let mut flipped = three.clone();
         flipped[at] ^= 0x01;
-        assert_ne!(base, bundle_commitment(&kept, &flipped), "record byte {at}");
+        assert_ne!(
+            base,
+            bundle_commitment(&net, &kept, &flipped),
+            "record byte {at}"
+        );
     }
     // The records in another order are another bundle.
     let mut swapped = record(1).encode().to_vec();
     swapped.extend_from_slice(&record(0).encode());
     swapped.extend_from_slice(&record(2).encode());
-    assert_ne!(base, bundle_commitment(&kept, &swapped));
+    assert_ne!(base, bundle_commitment(&net, &kept, &swapped));
 }
 
-/// The bundle commitment is not the carrier's set commitment over the same
-/// seed and height: a new message under a new label (§7.3). Red edit: give
-/// `BUNDLE_COMMITMENT_CUSTOMIZATION` the carrier's bytes.
+/// The bundle's three labels are distinct (§7.3).
 #[test]
-fn the_bundle_label_is_not_the_carriers() {
+fn the_bundle_labels_are_distinct() {
     assert_ne!(
-        BUNDLE_COMMITMENT_CUSTOMIZATION,
-        crate::secret_draw::SERVE_CREDIT_BATCH_CUSTOMIZATION
-    );
-    assert_ne!(
-        BUNDLE_COMMITMENT_CUSTOMIZATION,
+        BUNDLE_COMMITMENT.customization(),
         BUNDLE_PRUNABLE_CUSTOMIZATION
     );
-    assert_ne!(BUNDLE_COMMITMENT_CUSTOMIZATION, BUNDLE_ROOT_CUSTOMIZATION);
+    assert_ne!(BUNDLE_COMMITMENT.customization(), BUNDLE_ROOT_CUSTOMIZATION);
     assert_ne!(BUNDLE_PRUNABLE_CUSTOMIZATION, BUNDLE_ROOT_CUSTOMIZATION);
 }
 

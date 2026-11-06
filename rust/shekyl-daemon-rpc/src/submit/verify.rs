@@ -144,14 +144,26 @@ pub trait TxVerifier {
     /// [`crate::submit::VerificationCertificate`]; failure maps to a
     /// [`RejectCause`] via [`VerifyReject::cause`]. The reason is for
     /// the operator log, never the wire.
-    fn verify(&self, parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyReject>;
+    /// `network` is the id of the node's network, which every input's
+    /// signature hash binds (CEN-I17, `NETWORK_IDENTITY.md` NI-Q4).
+    fn verify(
+        &self,
+        parsed: &ParsedSubmission,
+        facts: &SubmitFacts,
+        network: &shekyl_network::NetworkId,
+    ) -> Result<(), VerifyReject>;
 }
 
 // Forwarding impl, mirroring the `SubmitStateShim` one: shared-verifier
 // ownership (engine + assertion handle) without orphan-rule friction.
 impl<T: TxVerifier + ?Sized> TxVerifier for std::sync::Arc<T> {
-    fn verify(&self, parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyReject> {
-        (**self).verify(parsed, facts)
+    fn verify(
+        &self,
+        parsed: &ParsedSubmission,
+        facts: &SubmitFacts,
+        network: &shekyl_network::NetworkId,
+    ) -> Result<(), VerifyReject> {
+        (**self).verify(parsed, facts, network)
     }
 }
 

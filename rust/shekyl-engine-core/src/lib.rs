@@ -188,6 +188,9 @@ pub mod __test_helpers {
             std::collections::BTreeSet::from([p_slot]),
             Some(p_slot),
             bodies,
+            // The holder signs receipts, never a spend: no signature is
+            // made under this id.
+            [0; 16],
         );
         let key = ResidentReceiptKey::new(&stake, p_slot);
         (ReceiptKeyHolder(stake), key)

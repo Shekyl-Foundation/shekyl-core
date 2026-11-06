@@ -1,0 +1,67 @@
+# The domain-binding ratchet (the signing envelope §2.5; NETWORK_IDENTITY.md §2.4.1).
+#
+# Rows of docs/design/CRYPTO_DOMAIN_REGISTRY.tsv the binding gate
+# (rust/shekyl-crypto-pq/tests/domain_binding.rs) cannot yet hold to their
+# binding. Each section's count is pinned in that test, so the list can only
+# shrink: a row leaves when its site is fixed (the gate refuses a listed row it
+# can already prove), and nothing joins without editing the pin. The release
+# gate (scripts/release/check_binding_ratchet.py) refuses a cut at or past
+# v3.1.0, the genesis release, while any row remains (Rick, 2026-11-05).
+#
+# Sections:
+#   input-raw  an input:<type> row whose site does not take the named type: no
+#              newtype exists for the value (frame output, a key derived under
+#              salt_for, a Noise handshake message), or the site takes raw
+#              bytes. Owner: the archival lane; each row is typed when its own
+#              round touches it.
+#   unframed   an id or name cSHAKE row not declared as an IdDomain or
+#              NameDomain constant: the binding is in its input, but not
+#              through frame.
+#   pending    a production row with no binding the closed lists give
+#              without a ruling; its registry binding is "-".
+#
+# section	literal	note
+input-raw	shekyl/ek-bind-v1	input:SaltForKey: no type for a key derived under salt_for yet
+input-raw	shekyl/archival-serve-challenge-leaf-v2	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
+input-raw	shekyl/archival-serve-challenge-fire-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
+input-raw	shekyl/archival-p-id-v1	input:SaltForKey: no type for a key derived under salt_for yet
+input-raw	shekyl/archival-settlement-select-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
+input-raw	shekyl/archival-draw-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
+input-raw	shekyl/archival-support-draw-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
+input-raw	shekyl/archival-support-challenge-nonce-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
+input-raw	shekyl/archival-challenge-nonce-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
+input-raw	shekyl/output-handle-v1	input:TxId: the site takes raw bytes, not the TxId newtype
+input-raw	shekyl/pqc-auth-tx-v1	input:SigningPayloadHash: the site takes raw bytes, not the SigningPayloadHash newtype
+input-raw	shekyl/pqc-auth-tx-multisig-v1	input:SigningPayloadHash: the site takes raw bytes, not the SigningPayloadHash newtype
+input-raw	shekyl/archival-emission-claim-scheme-v1	input:frame: no type for a frame output yet
+input-raw	shekyl/archival-emission-backing-scheme-v1	input:frame: no type for a frame output yet
+input-raw	shekyl/archival-attestation-scheme-v3	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
+input-raw	shekyl/archival-receipt-scheme-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
+input-raw	shekyl/archival-witness-bundle-scheme-v1	input:frame: no type for a frame output yet
+input-raw	shekyl/snapshot-id-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
+input-raw	shekyl/chain-digest/v0	input:TreeRoot: the site takes raw bytes, not the TreeRoot newtype
+input-raw	shekyl/chain-digest/v0/chain	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
+input-raw	shekyl/fcmp-pp-batch-weights-v1	input:TreeRoot: the site takes raw bytes, not the TreeRoot newtype
+input-raw	shekyl/fcmp-membership-only-batch-weights-v1	input:TreeRoot: the site takes raw bytes, not the TreeRoot newtype
+input-raw	nonce	input:SaltForKey: no type for a key derived under salt_for yet
+input-raw	Shekyl FROST SAL v1	input:TxSignableHash: the site takes raw bytes, not the TxSignableHash newtype
+input-raw	Shekyl FCMP++ SAL full v1	input:TxSignableHash: the site takes raw bytes, not the TxSignableHash newtype
+input-raw	Shekyl FCMP++ SAL membership-only v1	input:TxSignableHash: the site takes raw bytes, not the TxSignableHash newtype
+input-raw	shekyl-outbound-tx-proof-v1	input:frame: no type for a frame output yet
+input-raw	shekyl-inbound-tx-proof-v1	input:frame: no type for a frame output yet
+input-raw	shekyl-reserve-proof-v1	input:frame: no type for a frame output yet
+input-raw	shekyl-reserve-proof-dleq-v1	input:frame: no type for a frame output yet
+input-raw	shekyl/msg-sign-outer-v1	input:frame: no type for a frame output yet
+input-raw	shekyl-subaddr-v1\0	input:SaltForKey: no type for a key derived under salt_for yet
+input-raw	shekyl-mlkem-chacha-seed	input:SaltForKey: no type for a key derived under salt_for yet
+input-raw	shekyl/rpc-busy-v1	input:NoiseMessage: no type for a Noise handshake message yet
+input-raw	shekyl/rpc-mac1-v1	input:NoiseMessage: no type for a Noise handshake message yet
+unframed	shekyl/p2p-wire-prefix-v1	id: the id at position 0 of a raw cSHAKE input, not frame(id); the P2P wire prefix
+unframed	shekyl/rpc-rendezvous-name-v1	id: the id at position 0 of a raw cSHAKE input, not frame(id); the RPC rendezvous name
+pending	shekyl/pqc-leaf-record-v1	ruled derived:, but no census rule recomputes the leaf record
+pending	shekyl/archival-bundle-prunable-v1	ruled derived:, but no census rule states the body-to-reference match (it is the verifier's non-verdict BodyNotReferenced)
+pending	shekyl/archival-pass-delivery-digest-v1	ruled derived:, but CEN-B4 says the digest is verified through the signature, not recomputed
+pending	shekyl/archival-serve-credit-response-v1	ruled deleted with its code (2026-11-05); held for the CEN-J10 question
+pending	shekyl/archival-serve-credit-scheme-v1	ruled deleted with its code (2026-11-05); held for the CEN-J10 question
+pending	shekyl/rpc-static-fingerprint-v1	no binding ruled: a key-bundle fingerprint the daemon matches against its enrolment list
+pending	shekyl/noise-record-header-v1	no binding ruled: a record-layer key from a handshake whose prologue carries the id

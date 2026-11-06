@@ -27,6 +27,8 @@ license.workspace = true
 # ingest: `MinedBlock` names what it reads off a mined block, so the
 # ingest's `Mined` and a store test's own block implement it alike.
 [dependencies]
+# The network id a spend signs under (NETWORK_IDENTITY.md NI-Q4).
+shekyl-network = { path = "../shekyl-network" }
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # The wallet-side tree (`CurveTreeClient`): DRS-D3c's proving store, fed

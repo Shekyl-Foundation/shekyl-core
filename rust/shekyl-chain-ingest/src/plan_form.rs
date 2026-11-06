@@ -23,7 +23,8 @@
 //! [`Reorganize`]: crate::connector::Reorganize
 
 use shekyl_chain_rules::{
-    form, Candidate, FormAttempt, InvalidBlock, ReferenceClaims, StructurallyValid, Substrate,
+    form, Candidate, FormAttempt, FormClaims, InvalidBlock, ReferenceClaims, StructurallyValid,
+    Substrate,
 };
 use shekyl_types::BlockHash;
 
@@ -178,11 +179,14 @@ where
                         let _permit = permit();
                         match form(
                             candidate,
-                            &rules.in_force(at.height),
+                            &FormClaims {
+                                rule_set: &rules.in_force(at.height),
+                                seed: at.seed,
+                                target: at.target,
+                                references: &references,
+                                network: rules.trust().network_id(),
+                            },
                             substrate,
-                            at.seed,
-                            at.target,
-                            &references,
                             FormAttempt::FIRST,
                         ) {
                             Ok(Ok(valid)) => formed.push(valid),

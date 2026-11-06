@@ -56,6 +56,7 @@ fn the_producers_economy_pairs_are_the_verifiers_draws() {
         world.h + shekyl_types::BlockCount::ONE,
         &world.view,
         &RuleSet::GENESIS,
+        &crate::HARNESS_NETWORK_ID,
     )
     .expect("the all-miss bundle admits");
     assert_eq!(economy.len(), admitted.draws.len());
@@ -116,6 +117,7 @@ fn the_producers_support_seats_are_the_verifiers_observations() {
         world.h + shekyl_types::BlockCount::ONE,
         &world.view,
         &RuleSet::GENESIS,
+        &crate::HARNESS_NETWORK_ID,
     )
     .expect("the support pass the producer collected admits");
     assert_eq!(admitted.support.len(), support.len());

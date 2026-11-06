@@ -24,8 +24,8 @@
 //! # Reading a failure in `encrypted_field_has_no_byte_constructor.stderr`
 //!
 //! That snapshot contains rustc's `help:` block, which lists the associated
-//! functions a caller might have meant — currently `assemble` and
-//! `from_ffi_json_unverified`. Trybuild compares stderr whole and offers no
+//! functions a caller might have meant — currently `assemble`, which is
+//! crate-private. Trybuild compares stderr whole and offers no
 //! wildcards, so the snapshot cannot be trimmed to the error line alone.
 //! A mismatch there therefore means one of two things, and they are worth
 //! telling apart before reaching for `TRYBUILD=overwrite`:

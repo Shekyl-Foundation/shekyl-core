@@ -47,6 +47,7 @@ impl Pooled {
                 UnixSeconds::from_raw(1),
                 &view,
                 &rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
             )
             .expect("open");

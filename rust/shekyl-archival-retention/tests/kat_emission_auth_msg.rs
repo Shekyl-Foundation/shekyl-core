@@ -50,17 +50,21 @@
 //! so an unintended *format* change cannot hide behind an intended *semantic*
 //! one.
 
-use shekyl_archival_retention::hash::cshake256_32;
+use shekyl_archival_retention::hash::{cshake256_32, cshake256_64};
 use shekyl_archival_retention::{
     ArchivalRewardEmissionVin, EmissionAuthRole, HoldingsDescriptor, HoldingsKind,
     MembershipOnlyBacking, RewardCommit, ShardSet, ShardWorkEntry, WorkEpochClaim,
+    EMISSION_AUTH_BACKING, EMISSION_AUTH_CLAIM,
 };
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
+use shekyl_network::Network;
+use shekyl_types::TxSignableHash;
 
-/// Expected 64-byte `auth_msg` digest, stake-side (`Backing`) customization.
-const EXPECTED_BACKING_HEX: &str = "c975235c70fa6c9bd80b429e8a92f06dea988a22edb6d6af38e53d62fdb7943270947bbcd8320ca7061e0e9b6c3161fdf93dfbfc4116d208287f8d54ac73c901";
-/// Expected 64-byte `auth_msg` digest, claim-side (`Claim`) customization.
-const EXPECTED_CLAIM_HEX: &str = "dd39154467976ebd6ca98456ffde6934cbcd29adee749e8621903e7908230fbc28ceeca5dd693e9b571fe7965bc64987ed684e320d46ab5d62f8858eb338b6f5";
+/// The vector file, read whole: the framed inventory and the per-network
+/// role digests are pinned there, where `scripts/kat/emission_auth_msg_oracle.py`
+/// recomputes each digest independently.
+const VECTORS: &str = include_str!("../../../docs/test_vectors/EMISSION_AUTH_MSG_V1/vectors.json");
+
 /// Expected serialized wire length of the fixture vin.
 const EXPECTED_WIRE_LEN: usize = 10_901;
 /// Expected `cshake256_32("shekyl/emission-wire-kat-v1", wire_bytes)` of the
@@ -130,32 +134,85 @@ fn fixture_commits() -> Vec<RewardCommit> {
     }]
 }
 
-const FIXTURE_TX_HASH: [u8; 32] = [0x42; 32];
+/// The fixture's field 8: a stand-in `tx_signable` (the message is over its
+/// 32 bytes, whatever transaction produced them).
+const FIXTURE_TX_SIGNABLE: TxSignableHash = TxSignableHash::from_bytes([0x42; 32]);
 
 #[test]
 fn emission_auth_msg_matches_pinned_vectors() {
+    let vectors: serde_json::Value = serde_json::from_str(VECTORS).expect("vectors parse");
     let vin = fixture_vin();
     let commits = fixture_commits();
 
-    let backing = vin
-        .auth_msg(&commits, &FIXTURE_TX_HASH, EmissionAuthRole::Backing)
-        .expect("fixture is valid");
-    let claim = vin
-        .auth_msg(&commits, &FIXTURE_TX_HASH, EmissionAuthRole::Claim)
-        .expect("fixture is valid");
+    assert_eq!(
+        vectors["customizations"]["backing"].as_str(),
+        std::str::from_utf8(EMISSION_AUTH_BACKING.customization()).ok(),
+        "the file's backing customization is the code's"
+    );
+    assert_eq!(
+        vectors["customizations"]["claim"].as_str(),
+        std::str::from_utf8(EMISSION_AUTH_CLAIM.customization()).ok(),
+        "the file's claim customization is the code's"
+    );
 
+    // The framed inventory (fields 1-9), the part after the network id.
+    let framed = vin
+        .auth_msg_framed(&commits, &FIXTURE_TX_SIGNABLE)
+        .expect("fixture is valid");
     assert_eq!(
-        hex::encode(backing),
-        EXPECTED_BACKING_HEX,
-        "backing auth digest moved — consensus fault unless a deliberate \
+        vectors["expected"]["auth_msg_framed_hex"].as_str(),
+        Some(hex::encode(&framed).as_str()),
+        "framed inventory moved — consensus fault unless a deliberate \
          pre-genesis format bump regenerated EMISSION_AUTH_MSG_V1"
     );
-    assert_eq!(
-        hex::encode(claim),
-        EXPECTED_CLAIM_HEX,
-        "claim auth digest moved — consensus fault unless a deliberate \
-         pre-genesis format bump regenerated EMISSION_AUTH_MSG_V1"
-    );
+
+    // Each network's two digests, as the oracle computes them: the
+    // envelope frame of the fields under the id, 64 bytes (NI-F11; the
+    // signing envelope §2.2, §2.7).
+    let pinned = &vectors["expected"]["auth_msgs_by_network"];
+    let mut seen = Vec::new();
+    for net in Network::ALL {
+        let id = net.network_id();
+        for (role, key) in [
+            (EmissionAuthRole::Backing, "backing"),
+            (EmissionAuthRole::Claim, "claim"),
+        ] {
+            let digest = vin
+                .auth_msg(&id, &commits, &FIXTURE_TX_SIGNABLE, role)
+                .expect("fixture is valid");
+            assert_eq!(
+                pinned[net.name()][key].as_str(),
+                Some(hex::encode(digest).as_str()),
+                "{net} {key} auth digest moved — consensus fault unless a \
+                 deliberate pre-genesis format bump regenerated EMISSION_AUTH_MSG_V1"
+            );
+            seen.push(digest);
+        }
+    }
+    let count = seen.len();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), count, "two networks or roles share a digest");
+}
+
+/// The id is load-bearing: the same framed fields hashed without it are no
+/// network's digest. Fails if the 16 bytes are ever dropped from the input.
+#[test]
+fn the_digest_without_the_network_id_is_not_pinned() {
+    let vectors: serde_json::Value = serde_json::from_str(VECTORS).expect("vectors parse");
+    let framed = fixture_vin()
+        .auth_msg_framed(&fixture_commits(), &FIXTURE_TX_SIGNABLE)
+        .expect("fixture is valid");
+    let bare = hex::encode(cshake256_64(EMISSION_AUTH_CLAIM.customization(), &framed));
+    for net in Network::ALL {
+        let pinned = vectors["expected"]["auth_msgs_by_network"][net.name()]["claim"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{net}: no claim digest pinned"));
+        assert_ne!(
+            pinned, bare,
+            "{net}: the pinned digest does not depend on the network id"
+        );
+    }
 }
 
 #[test]

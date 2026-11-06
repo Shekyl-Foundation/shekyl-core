@@ -47,7 +47,7 @@ use crate::verdict::{InvalidBlock, Verdict};
 /// `Emission`. H6 has refused a second archival vin before any rule here
 /// runs, so a class of `Emission` holds exactly one; its index is where the
 /// C++'s `archival_emission_index` points.
-pub(crate) fn the_emission<'tx>(cx: &TxContext<'tx>) -> Option<(usize, &'tx [u8])> {
+pub(crate) fn the_emission<'tx, N>(cx: &TxContext<'tx, N>) -> Option<(usize, &'tx [u8])> {
     if !matches!(cx.class, TxClass::Emission { .. }) {
         return None;
     }
@@ -153,12 +153,23 @@ impl TxRule for J20 {
 /// copy of the prefix and hashes it). The vin cannot be covered by the hash
 /// its own auths and backing proof sign — the circularity — and every
 /// property the exclusion loses is re-bound by the Q1 auth message (the
-/// vin's fields) and the reward commit set (CEN-J24); the tx-level hybrid
-/// auth (CEN-I17/I18) still covers the complete prefix. The hash itself is
-/// the wire's one derivation, [`shekyl_wire::TxPrefix::hash`], over the
-/// edited prefix — the same function the engine's claim assembler reaches
-/// through `tx_prefix_hash_from_parts_with_extra` and the row-7 differential
-/// pins (`the_drivers_assembly_and_the_handler_emit_identical_bytes`).
+/// vin's fields) and the reward commit set (CEN-J24). The hash itself is
+/// the wire's one derivation, [`shekyl_wire::Transaction::signable_prefix_hash`]
+/// (the prefix hash over the edited prefix) — the same bytes the engine's
+/// claim assembler reaches through `tx_prefix_hash_from_parts_with_extra`
+/// and the row-7 differential pins
+/// (`the_drivers_assembly_and_the_handler_emit_identical_bytes`).
+///
+/// It is the prefix field of the transaction's one network-bound message,
+/// `tx_signable` (the signing envelope §2.2), which every SAL, both auths
+/// and the per-input hybrid auths (CEN-I17/I18, through the spend hash)
+/// prove over. The emission vin is therefore covered by its own two auths
+/// alone, byte for byte: every byte of it is either a field both auths sign
+/// (the vin's fields, and the backing's wire bytes as field 9 — the proof,
+/// `pseudo_out`, the backing key and the tree depth) or one of the two auth
+/// signatures, and those are verified strictly (canonical encodings only,
+/// both halves of the hybrid; CEN-J25). Changing any byte of the vin is
+/// refused (`emission_verify_kat::auth_refuses_any_changed_byte_of_the_input`).
 ///
 /// Nothing fails a definition. The row runs in `tx_form` so the derivation
 /// is exercised at both sites on every emission, and is recorded there;
@@ -172,11 +183,9 @@ impl Rule for J22 {
 
 impl J22 {
     /// The signable hash, if the class is `Emission`.
-    pub(crate) fn signable_hash(cx: &TxContext<'_>) -> Option<PrefixHash> {
-        let (index, _) = the_emission(cx)?;
-        let mut prefix = cx.tx.prefix.clone();
-        prefix.inputs.remove(index);
-        Some(prefix.hash())
+    pub(crate) fn signable_hash<N>(cx: &TxContext<'_, N>) -> Option<PrefixHash> {
+        the_emission(cx)?;
+        Some(cx.tx.signable_prefix_hash())
     }
 }
 
@@ -216,7 +225,9 @@ impl J24 {
     /// The ordered reward commit set and its checked sum: `Ok(None)` off the
     /// emission class, `Err` under this row where the set is not
     /// well-defined.
-    pub(crate) fn reward_commits(cx: &TxContext<'_>) -> Verdict<Option<(Vec<RewardCommit>, u64)>> {
+    pub(crate) fn reward_commits<N>(
+        cx: &TxContext<'_, N>,
+    ) -> Verdict<Option<(Vec<RewardCommit>, u64)>> {
         if the_emission(cx).is_none() {
             return Ok(None);
         }

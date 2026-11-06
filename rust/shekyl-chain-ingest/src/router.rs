@@ -40,6 +40,7 @@ use shekyl_chain_rules::{
 use shekyl_chain_store::store::{
     AltCannot, AltChain, AltView, ChainStore, ReadSnapshot, StoreCannot, StoreError,
 };
+use shekyl_network::NetworkId;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::Block;
 
@@ -122,6 +123,9 @@ pub struct Claims {
     pub target: Target,
     /// The third claim: each reference's height and root.
     pub references: ReferenceClaims,
+    /// The id of the network the run is on: every input's signature hash
+    /// binds it (CEN-I17, `NETWORK_IDENTITY.md` NI-Q4).
+    pub network: NetworkId,
 }
 
 /// Why a run's claims stopped at one of its blocks.
@@ -245,6 +249,7 @@ fn claim_one(
         seed,
         target,
         references,
+        network: rules.trust().network_id(),
     })
 }
 
@@ -339,6 +344,7 @@ pub(crate) fn claim_alt(
             seed,
             target,
             references: ReferenceClaims::EMPTY,
+            network: rules.trust().network_id(),
         },
         prepare,
     })

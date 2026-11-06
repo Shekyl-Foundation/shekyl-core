@@ -424,8 +424,16 @@ fn the_producers_support_draws_are_the_verifiers_observations() {
         let refs = [reference];
         let bodies = [body];
         let root = bundle_root(&refs).expect("one reference");
-        let admitted = judge_bundles(&refs, &bodies, &root, h_incl, &bundle_view, &RULES)
-            .expect("the store view admits the clear-bit bundle");
+        let admitted = judge_bundles(
+            &refs,
+            &bodies,
+            &root,
+            h_incl,
+            &bundle_view,
+            &RULES,
+            &shekyl_network::HARNESS_NETWORK_ID,
+        )
+        .expect("the store view admits the clear-bit bundle");
         let observed = &admitted[0].support;
         assert_eq!(observed.len(), support.len());
         for (target, seen) in support.iter().zip(observed) {

@@ -181,7 +181,8 @@ fn admit_one(door: &Installed, tx: Transaction) -> i32 {
     };
     let height = Tip::connecting_height(tip.as_ref());
     let rule_set = door.rules.in_force(height);
-    let prior = match stateless(&tx, &view, &rule_set, None) {
+    let network = door.rules.trust().network_id();
+    let prior = match stateless(&tx, &view, &rule_set, &network, None) {
         Ok(Ok(pass)) => Some(pass),
         Ok(Err(_)) => return SHEKYL_POOL_REFUSED_FORM,
         Err(_) => return SHEKYL_POOL_FAULT,

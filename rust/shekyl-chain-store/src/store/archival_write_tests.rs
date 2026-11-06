@@ -35,7 +35,8 @@ use std::collections::BTreeSet;
 use shekyl_chain_rules::harness::{assert_refused, fixture};
 use shekyl_chain_rules::{
     form, validate, ArchivalDelta, AtHeight, Candidate, CappedEpoch, CenRow, Fault, FormAttempt,
-    HeaderView, Locus, RecordWriteKind, ReferenceClaims, RuleSet, Trust, TxSlot, Verdict,
+    FormClaims, HeaderView, Locus, RecordWriteKind, ReferenceClaims, RuleSet, Trust, TxSlot,
+    Verdict,
 };
 use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest, IssuedDraw};
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -167,11 +168,14 @@ fn verdict_under<'b, 'id>(
     let references = ReferenceClaims::from_headers(view, connecting, &candidate)?;
     let formed = match form(
         candidate,
-        rules,
+        &FormClaims {
+            rule_set: rules,
+            seed: expected_seed(view)?,
+            target: expected_target(view, rules)?,
+            references: &references,
+            network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+        },
         &FixtureSubstrate,
-        expected_seed(view)?,
-        expected_target(view, rules)?,
-        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

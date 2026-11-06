@@ -30,7 +30,8 @@ fn pool(name: &str, limits: Limits) -> (Pool, std::path::PathBuf) {
         std::thread::current().id()
     ));
     drop(std::fs::remove_file(&p));
-    let (pool, _) = Pool::create(&p, limits).expect("create");
+    let (pool, _) =
+        Pool::create(&p, limits, shekyl_chain_rules::HARNESS_NETWORK_ID).expect("create");
     (pool, p)
 }
 

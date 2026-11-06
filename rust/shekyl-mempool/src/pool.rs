@@ -16,6 +16,7 @@
 //! discardable by ruling (`SPL-Q8`): a pool that loses it loses only the
 //! transactions it held, never a fact the chain needs.
 
+use shekyl_network::NetworkId;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
@@ -208,6 +209,11 @@ pub struct Pool {
     /// ordered it. `None` when they were not judged at one tip.
     /// [`Pool::judged_at`] is the tip a template compares to its parent.
     judged_at: Option<JudgedTip>,
+    /// The one network this pool judges under for its lifetime (NI-Q4).
+    /// Taken at [`Pool::create`] / [`Pool::open`]; admission, reconcile, and
+    /// a template selection over this pool read it here rather than taking
+    /// it again beside the rule set.
+    network: NetworkId,
 }
 
 /// A tip the pool judged against, and the fork-choice work through it.
@@ -232,10 +238,12 @@ impl core::fmt::Debug for Pool {
 
 impl Pool {
     /// The pool file at `path`, with nothing in memory yet — [`Pool::open`]'s
-    /// first step, which then reads the file back and reconciles it.
+    /// first step, which then reads the file back and reconciles it. `network`
+    /// is the id every later judgement of this pool uses.
     pub(crate) fn create(
         path: impl AsRef<Path>,
         limits: Limits,
+        network: NetworkId,
     ) -> Result<(Self, PoolOpen), StoreError> {
         let (store, how) = PoolStore::create(path)?;
         Ok((
@@ -246,15 +254,22 @@ impl Pool {
                 limits,
                 prepared: HashMap::new(),
                 judged_at: None,
+                network,
             },
             how,
         ))
     }
 
+    /// The network this pool was opened on.
+    #[must_use]
+    pub const fn network(&self) -> &NetworkId {
+        &self.network
+    }
+
     /// Admit `tx`, relayed — from a peer or this node's own submit — at
-    /// `now`, against `chain` under `rule_set` and `policy`: the one way
-    /// into the pool from outside it. Not public until the relay's fluff
-    /// event says so.
+    /// `now`, against `chain` under `rule_set` and `policy`, on this pool's
+    /// network: the one way into the pool from outside it. Not public until
+    /// the relay's fluff event says so.
     ///
     /// CEN-M1 first: a transaction the pool or the chain already holds is
     /// a [`Duplicate`] and nothing is judged. Then CEN-M10's rising
@@ -372,6 +387,7 @@ impl Pool {
             chain,
             &self.key_images,
             rule_set,
+            self.network(),
             policy,
             prior.as_ref(),
         )
@@ -466,7 +482,7 @@ impl Pool {
                     let claims = shekyl_chain_rules::ReferenceClaims::for_transaction(
                         chain, connecting, &held.tx,
                     )?;
-                    pass.holds_under(&held.tx, rule_set, &claims)
+                    pass.holds_under(&held.tx, rule_set, self.network(), &claims)
                 }
             };
             if !holds {

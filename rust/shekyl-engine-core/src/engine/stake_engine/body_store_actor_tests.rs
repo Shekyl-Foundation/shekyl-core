@@ -118,6 +118,7 @@ async fn the_stake_engine_shutdown_closes_the_body_store_too() {
         std::collections::BTreeSet::new(),
         None,
         BodyStore::open(&path, key()).expect("create"),
+        [0; 16],
     );
     stake
         .bodies

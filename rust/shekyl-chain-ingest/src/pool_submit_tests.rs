@@ -68,6 +68,7 @@ async fn a_poisoned_pool_still_admits() {
                         shekyl_types::UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -90,6 +91,7 @@ async fn a_poisoned_pool_still_admits() {
                 pool,
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
+                shekyl_network::HARNESS_NETWORK_ID,
             ));
             SubmitEngine::new(shim, DaemonTxVerifier).submit(&hex(&paid), SubmitCaller::Owner)
         })
@@ -125,6 +127,7 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
                         shekyl_types::UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -136,6 +139,7 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
                 std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
+                shekyl_network::HARNESS_NETWORK_ID,
             ));
             let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
             let first = engine.submit(&hex(&paid), SubmitCaller::Owner);
@@ -194,6 +198,7 @@ async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
                         shekyl_types::UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -206,6 +211,7 @@ async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
                     std::sync::Arc::new(std::sync::Mutex::new(pool)),
                     AdmissionPolicy::GENESIS,
                     || UnixSeconds::from_raw(1),
+                    shekyl_network::HARNESS_NETWORK_ID,
                 ),
                 DaemonTxVerifier,
             );
@@ -334,6 +340,7 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
                         shekyl_types::UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -346,6 +353,7 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
                     std::sync::Arc::new(std::sync::Mutex::new(pool)),
                     AdmissionPolicy::GENESIS,
                     || UnixSeconds::from_raw(1),
+                    shekyl_network::HARNESS_NETWORK_ID,
                 ),
                 DaemonTxVerifier,
             );
@@ -407,6 +415,7 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
             )
             .expect("open")
@@ -499,6 +508,7 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
                         UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -510,6 +520,7 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
                 std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
+                shekyl_network::HARNESS_NETWORK_ID,
             ));
             let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
             let counted = |tx: &shekyl_wire::Transaction, caller| {
@@ -610,6 +621,7 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
                         UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -624,6 +636,7 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
                 std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
+                shekyl_network::HARNESS_NETWORK_ID,
             ));
             let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
             let submit = |tx: &shekyl_wire::Transaction, caller| {
@@ -697,6 +710,7 @@ async fn a_lone_nodes_own_transaction_is_listed_once_the_relay_shows_it() {
                 UnixSeconds::from_raw(1),
                 &SnapshotView::new(snapshot),
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
             )
             .expect("open")
@@ -716,6 +730,7 @@ async fn a_lone_nodes_own_transaction_is_listed_once_the_relay_shows_it() {
         Arc::clone(&pool),
         AdmissionPolicy::GENESIS,
         || UnixSeconds::from_raw(1),
+        shekyl_network::HARNESS_NETWORK_ID,
     ));
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     assert_eq!(

@@ -48,7 +48,7 @@ half. Nothing signs or verifies with it yet.
 | --- | --- |
 | The combiner and the canonical header, one body for both schemes | `rust/shekyl-crypto-pq/src/hybrid_combiner.rs` |
 | Scheme 3: types, key generation, sign, verify | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs` |
-| Scheme byte and the two scheme domains increment 1 minted | `rust/shekyl-crypto-pq/src/signature.rs` (`HYBRID_SCHEME_ID_ED25519_FN_DSA_1024`, `SCHEME_DOMAIN_RECEIPT`, `SCHEME_DOMAIN_WITNESS_CARRIER`). Slice C later minted a third, `SCHEME_DOMAIN_WITNESS_BUNDLE`, which is what the witness signs under; the carrier's domain has no signer (§6) |
+| Scheme byte and the scheme domains | `rust/shekyl-crypto-pq/src/signature.rs` (`HYBRID_SCHEME_ID_ED25519_FN_DSA_1024`, `SCHEME_DOMAIN_RECEIPT`, and `SCHEME_DOMAIN_WITNESS_BUNDLE`, which Slice C minted and the witness signs under; §6) |
 | The hedged RNG adapter and the fail-loud key-material draw | `rust/shekyl-crypto-pq/src/rng.rs` (`HedgedOsRng`, `key_material32`) |
 | Vectors | `docs/test_vectors/FN_DSA_HYBRID_V1_KAT.json`, `rust/shekyl-crypto-pq/tests/kat_fn_dsa_hybrid_v1.rs` |
 | Genesis gate | `scripts/ci/check_fn_dsa_genesis_gate.py` |
@@ -257,10 +257,8 @@ open a second road to a release.
   per-block key. That key is random, never seeded and never stored. Its
   signature is over the bundle commitment under `SCHEME_DOMAIN_WITNESS_BUNDLE`
   (`shekyl/archival-witness-bundle-scheme-v1`), minted with the bundle
-  verifier, not under `SCHEME_DOMAIN_WITNESS_CARRIER`: the one-bundle-per-block
-  round (`SCS-P14` onward) replaced the carrier, and the carrier's label,
-  which increment 1 minted for it, stays as a constant with no signer
-  (specification §16).
+  verifier: the one-bundle-per-block round (`SCS-P14` onward) replaced the
+  carrier, and the carrier's label is deleted with it.
 
 ## 7. Increment 2 — the receipt key
 

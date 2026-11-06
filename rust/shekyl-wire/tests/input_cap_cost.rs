@@ -446,6 +446,7 @@ fn measure(
 
     let started = Instant::now();
     let signed = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         tx_prefix_hash,
         &spend_inputs,
         &outputs,
@@ -487,7 +488,7 @@ fn measure(
             })
             .collect(),
     );
-    let payload_hashes = wire_tx.pqc_signing_payload_hashes();
+    let payload_hashes = wire_tx.pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID);
     assert_eq!(payload_hashes.len(), n, "one payload hash per input");
     let auths = sign_pqc_auths(&payload_hashes, &spend_inputs).expect("Phase-2 PQC auth signing");
     if let Ct::Fcmp { pqc_auths, .. } = &mut wire_tx.ct {
@@ -520,7 +521,8 @@ fn measure(
         &pqc_pk_hashes,
         tree_root.as_bytes(),
         signed.tree_depth,
-        tx_prefix_hash.to_bytes(),
+        // The message the proof was made over (the signing envelope §2.2).
+        signed.tx_signable.to_bytes(),
     )
     .expect("verify must not error");
     let verify_proof = started.elapsed();
@@ -532,7 +534,7 @@ fn measure(
     // The hashing is inside the timer because the validator pays it.
     let started = Instant::now();
     let scheme = HybridEd25519MlDsa;
-    let verifier_hashes = wire_tx.pqc_signing_payload_hashes();
+    let verifier_hashes = wire_tx.pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID);
     for (auth, message) in auths.iter().zip(&verifier_hashes) {
         let pk = HybridPublicKey::from_canonical_bytes(&auth.public_key).expect("key parses");
         let sig = HybridSignature::from_canonical_bytes(&auth.signature).expect("sig parses");

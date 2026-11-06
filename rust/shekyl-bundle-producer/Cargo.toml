@@ -31,6 +31,8 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # The witness key: scheme 3, drawn from the OS per block.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# The network id the bundle commitment is framed under.
+shekyl-network = { path = "../shekyl-network" }
 # Heights, hashes, personas, shards, `DrawCommitment`.
 shekyl-types = { path = "../shekyl-types" }
 # The one fetch path, with the challenge nonce (feature `fetch`).

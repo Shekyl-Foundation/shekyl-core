@@ -18,7 +18,7 @@ use crate::harness::{
 };
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
-use crate::validate::{form, validate};
+use crate::validate::{form, validate, FormClaims};
 use shekyl_economics::{BLOCK_WEIGHT_SURGE_FACTOR, FULL_REWARD_ZONE};
 use shekyl_types::CurveTreeRoot;
 
@@ -370,11 +370,14 @@ fn validated_on(chain: &MockChain, candidate: Candidate) -> Weights {
     let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

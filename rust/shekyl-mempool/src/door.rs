@@ -45,6 +45,7 @@ use shekyl_chain_rules::{
     ChainView, Fault, FormAttempt, InvalidBlock, PolicyCoverage, PolicyRefused, ReferenceClaims,
     RuleCoverage, RuleSet, StatelessPass, Tip, TxSlot, ViewRead,
 };
+use shekyl_network::NetworkId;
 use shekyl_types::BlockHeight;
 use shekyl_wire::Transaction;
 
@@ -129,11 +130,12 @@ pub fn stateless<'id, V: ChainView<'id>>(
     tx: &Transaction,
     chain: &V,
     rule_set: &RuleSet,
+    network: &NetworkId,
     prior: Option<&StatelessPass>,
 ) -> Result<Result<StatelessPass, InvalidBlock>, Fault<V::Fault>> {
     let connecting = Tip::connecting_height(chain.tip().map_err(Fault::View)?.as_ref());
     let claims = ReferenceClaims::for_transaction(chain, connecting, tx).map_err(Fault::View)?;
-    Ok(judge_lone_stateless(tx, rule_set, &claims, prior))
+    Ok(judge_lone_stateless(tx, rule_set, network, &claims, prior))
 }
 
 /// Judge `tx` for the pool holding `pool`, against `chain` under
@@ -154,10 +156,11 @@ pub fn judge<'id, V: ChainView<'id>>(
     chain: &V,
     pool: &KeyImages,
     rule_set: &RuleSet,
+    network: &NetworkId,
     policy: &AdmissionPolicy,
     prior: Option<&StatelessPass>,
 ) -> Result<Judged, DoorFault<V::Fault>> {
-    let pass = match stateless(tx, chain, rule_set, prior).map_err(DoorFault::Chain)? {
+    let pass = match stateless(tx, chain, rule_set, network, prior).map_err(DoorFault::Chain)? {
         Ok(pass) => pass,
         Err(refused) => return Ok(Judged::Stateless(refused)),
     };
@@ -173,6 +176,7 @@ pub fn judge<'id, V: ChainView<'id>>(
         TxSlot::Lone,
         &view,
         rule_set,
+        network,
         pass.proven(),
         FormAttempt::FIRST,
     )

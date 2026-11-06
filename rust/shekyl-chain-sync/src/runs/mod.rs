@@ -566,6 +566,7 @@ fn retry_of(stale: &Stale) -> Option<FormAttempt> {
     let retry = match stale {
         Stale::Seed { retry, .. }
         | Stale::RuleSet { retry, .. }
+        | Stale::Network { retry, .. }
         | Stale::Target { retry, .. }
         | Stale::Reference { retry, .. } => retry,
     };

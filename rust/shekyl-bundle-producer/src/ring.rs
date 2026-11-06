@@ -38,6 +38,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSecretKey, HybridEd25519FnDsa};
 use shekyl_crypto_pq::CryptoError;
+use shekyl_network::NetworkId;
 use shekyl_types::archival::DrawCommitment;
 use shekyl_types::BlockHeight;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
@@ -122,15 +123,10 @@ pub struct WitnessRing {
     state: Mutex<RingState>,
     /// [`MAX_CANDIDATES`], except in a test of the bound.
     bound: usize,
-}
-
-impl Default for WitnessRing {
-    fn default() -> Self {
-        Self {
-            state: Mutex::default(),
-            bound: MAX_CANDIDATES,
-        }
-    }
+    /// The network whose id every bundle this ring files is committed
+    /// under (`bundle_commitment`): a witness signature made here verifies
+    /// on this network alone.
+    network_id: NetworkId,
 }
 
 impl core::fmt::Debug for WitnessRing {
@@ -144,10 +140,15 @@ impl core::fmt::Debug for WitnessRing {
 }
 
 impl WitnessRing {
-    /// An empty ring: every node starts with one, and a restart has one.
+    /// An empty ring filing for the network whose id is `network_id`:
+    /// every node starts with one, and a restart has one.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(network_id: NetworkId) -> Self {
+        Self {
+            state: Mutex::default(),
+            bound: MAX_CANDIDATES,
+            network_id,
+        }
     }
 
     /// A ring holding at most `bound` candidates: the bound's test, which
@@ -157,6 +158,7 @@ impl WitnessRing {
         Self {
             state: Mutex::default(),
             bound,
+            network_id: shekyl_network::HARNESS_NETWORK_ID,
         }
     }
 
@@ -253,6 +255,7 @@ impl WitnessRing {
             support,
         };
         Some(assemble_bundle(
+            &self.network_id,
             &kept,
             records,
             &material.public,

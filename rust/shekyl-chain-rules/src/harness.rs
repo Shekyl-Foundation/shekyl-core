@@ -620,8 +620,8 @@ mod views;
 
 pub use assert::{
     assert_refused, boundary_pair, credited_to_this_falsifier, defined, expected_references,
-    expected_seed, expected_target, formed, formed_on, formed_under, infallible, judge_on, judged,
-    token_for_one_rule, MockSubstrate,
+    expected_seed, expected_target, formed, formed_on, formed_on_network, formed_under,
+    formed_under_network, infallible, judge_on, judged, token_for_one_rule, MockSubstrate,
 };
 pub use views::{
     Faulted, FaultingView, NonCanonicalBondView, NonCanonicalHybridKey, WithheldRead,

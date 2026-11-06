@@ -31,7 +31,9 @@ fn edge_round_trip() {
     assert_eq!(LongTermWeight::from_raw(800).to_raw(), 800);
     assert_eq!(PqcAuthHash::from_bytes(bytes).to_bytes(), bytes);
     assert_eq!(PrefixHash::from_bytes(bytes).to_bytes(), bytes);
-    assert_eq!(SigningPayloadHash::from_bytes(bytes).to_bytes(), bytes);
+    // 64 bytes: a hybrid signature's signed content (the signing envelope §2.7).
+    let wide = [3u8; 64];
+    assert_eq!(SigningPayloadHash::from_bytes(wide).to_bytes(), wide);
     assert_eq!(AttestationRoot::from_bytes(bytes).as_bytes(), &bytes);
     assert_eq!(OneTimePubkey::from_bytes(bytes).to_bytes(), bytes);
     fn via_trait<T: Hash32Bytes>(bytes: [u8; 32]) -> [u8; 32] {

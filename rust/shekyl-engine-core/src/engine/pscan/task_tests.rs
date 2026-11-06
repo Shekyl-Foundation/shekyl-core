@@ -129,7 +129,7 @@ fn spawn_stake(bonded: &[u32]) -> StakeEngineHandle {
         .map(|&s| (PSlot::from_raw(s), persona(s)))
         .collect();
     let bonded: BTreeSet<PSlot> = bonded.iter().map(|&s| PSlot::from_raw(s)).collect();
-    StakeEngineHandle::spawn(bundles, bonded, None, ephemeral_body_store())
+    StakeEngineHandle::spawn(bundles, bonded, None, ephemeral_body_store(), [0; 16])
 }
 
 /// A tiny test horizon so a sweep needs only a few real blocks.

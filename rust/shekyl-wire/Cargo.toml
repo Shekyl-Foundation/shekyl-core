@@ -12,6 +12,9 @@ build = "build.rs"
 serde_json.workspace = true
 
 [dependencies]
+# The network id the spend signature's hash binds (NETWORK_IDENTITY.md
+# NI-Q4).
+shekyl-network = { path = "../shekyl-network" }
 # Consensus original Keccak-256 (`shekyl_crypto_hash::keccak256`; 0x01 padding;
 # byte-identical to C++ `cn_fast_hash`). Single source for tx/block hash identities.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }

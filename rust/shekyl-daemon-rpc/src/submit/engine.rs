@@ -281,7 +281,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // the credit arm triggers no scan, so gating it would spend a hybrid
         // verify to protect nothing.
         if parsed.bond_post_is_release() {
-            if let Err(reject) = verify_debit_slot_possession(&parsed) {
+            if let Err(reject) = verify_debit_slot_possession(&parsed, &self.shim.network_id()) {
                 tracing::info!(
                     cause = ?reject.cause(),
                     reason = %reject.reason(),
@@ -507,7 +507,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
 
         // The crypto battery (FCMP++ membership, BP+, CT balance, PQC
         // hybrid auth, archival-arm checks) behind the seam.
-        if let Err(reject) = self.verifier.verify(parsed, facts) {
+        if let Err(reject) = self.verifier.verify(parsed, facts, &self.shim.network_id()) {
             // `info`, not `debug`: the submitter only ever sees the
             // coarse `RejectCause`, so this line is the operator's one
             // record of what the daemon refused. The reason is on the
