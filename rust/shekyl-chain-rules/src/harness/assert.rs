@@ -155,6 +155,28 @@ pub fn formed_under(
     target: Target,
     references: &ReferenceClaims,
 ) -> StructurallyValid {
+    formed_under_network(
+        candidate,
+        rule_set,
+        seed,
+        target,
+        references,
+        crate::HARNESS_NETWORK_ID,
+    )
+}
+
+/// [`formed_under`] on the network whose id is `network`: what a fixture
+/// judged under a pinned [`Trust`](crate::Trust) forms with, since
+/// `validate` refuses a token formed under another id than its trust's.
+#[track_caller]
+pub fn formed_under_network(
+    candidate: Candidate,
+    rule_set: &RuleSet,
+    seed: BlockHash,
+    target: Target,
+    references: &ReferenceClaims,
+    network: shekyl_network::NetworkId,
+) -> StructurallyValid {
     match form(
         candidate,
         &FormClaims {
@@ -162,7 +184,7 @@ pub fn formed_under(
             seed,
             target,
             references,
-            network: crate::HARNESS_NETWORK_ID,
+            network,
         },
         &MockSubstrate::default(),
         FormAttempt::FIRST,
@@ -178,13 +200,25 @@ pub fn formed_under(
 /// I12's comparison hold and the view stage judges the candidate.
 #[track_caller]
 pub fn formed_on(chain: &MockChain, candidate: Candidate) -> StructurallyValid {
+    formed_on_network(chain, candidate, crate::HARNESS_NETWORK_ID)
+}
+
+/// [`formed_on`] on the network whose id is `network` (see
+/// [`formed_under_network`]).
+#[track_caller]
+pub fn formed_on_network(
+    chain: &MockChain,
+    candidate: Candidate,
+    network: shekyl_network::NetworkId,
+) -> StructurallyValid {
     let references = expected_references(chain, &candidate);
-    formed_under(
+    formed_under_network(
         candidate,
         &RuleSet::GENESIS,
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
         &references,
+        network,
     )
 }
 
