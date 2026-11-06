@@ -570,6 +570,48 @@ mod tests {
         );
     }
 
+    /// The parity at the growth schedule's medians, 2⁴⁰ to 2⁴⁹ bytes (its
+    /// year 80 to year 110), where the penalty's product nears `u128` and
+    /// `fee·D²` leaves it. The bodies are a fixed fraction of the median, so
+    /// the reference walk stays short, and the run starts empty (the free
+    /// batch, then the body that crosses the median) or deep in the zone.
+    #[test]
+    fn admit_up_to_is_the_walk_at_the_growth_schedules_medians() {
+        let counts = [0u64, 1, 7, 1_000, 1 << 20, u64::MAX];
+        let mut cases = 0u64;
+        for multiple in [2 * SCALE, 15 * SCALE / 10, MAX_BLOCK_WEIGHT_LIMIT_MULTIPLE] {
+            let p = params_at(multiple);
+            let v = volume(&p);
+            for median in [1u64 << 40, 1 << 44, 1 << 47, 1 << 49] {
+                for already_generated in [
+                    0,
+                    p.emission_curve_asymptote / 2,
+                    p.emission_curve_asymptote + 1,
+                ] {
+                    let empty = Fill::empty(median, coinbase_weight(), already_generated, v, &p)
+                        .expect("priced");
+                    for start in [0, median / 7] {
+                        let mut base = empty;
+                        if start > 0 && !base.admit(median + start, u64::MAX / 4) {
+                            base = empty;
+                        }
+                        for weight in [median >> 14, median >> 9] {
+                            for fee in [0u64, 1, 1 << 20, 1 << 30, 1 << 36, 1 << 40, u64::MAX / 3] {
+                                let at = format!(
+                                    "multiple {multiple} median {median} ag {already_generated} \
+                                     start {start}"
+                                );
+                                assert!(parity(base, weight, fee, &counts, &at), "{at}");
+                                cases += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 900, "the grid ran ({cases})");
+    }
+
     /// Every case on a small block: a 64-byte zone, so a walk is at most
     /// 128 bodies and every weight, fee and count can be enumerated. The
     /// tail is small enough (6, 100 and 12 346 atomic) that the penalty's
@@ -740,6 +782,31 @@ mod tests {
                 base = empty;
             }
             proptest::prop_assume!(parity(base, weight, fee, &[count], "random"));
+        }
+
+        /// The same at the growth schedule's medians, 2³⁶ to 2⁵⁰ bytes, with
+        /// the body a random fraction of the median so the walk stays short.
+        #[test]
+        fn admit_up_to_is_the_walk_at_random_large_medians(
+            median in 1u64 << 36..1 << 50,
+            already_generated in proptest::prelude::any::<u64>(),
+            volume in 0u64..10_000,
+            tenths in 11u64..=40,
+            start_tenths in 0u64..30,
+            shift in 9u32..18,
+            fee in proptest::prop_oneof![0u64..1 << 20, 0u64..1 << 42, proptest::prelude::any::<u64>()],
+            count in proptest::prop_oneof![0u64..1 << 12, proptest::prelude::Just(u64::MAX)],
+        ) {
+            let p = params_at(tenths * SCALE / 10);
+            let v = TxVolume::per_block(volume);
+            let Ok(empty) = Fill::empty(median, coinbase_weight(), already_generated, v, &p) else {
+                return Err(proptest::test_runner::TestCaseError::reject("not priced"));
+            };
+            let mut base = empty;
+            if !base.admit(median / 10 * start_tenths, u64::MAX / 4) {
+                base = empty;
+            }
+            proptest::prop_assume!(parity(base, median >> shift, fee, &[count], "large"));
         }
     }
 
