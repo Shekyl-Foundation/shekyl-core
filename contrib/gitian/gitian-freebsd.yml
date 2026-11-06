@@ -132,7 +132,7 @@ script: |
     cmake .. -DCMAKE_TOOLCHAIN_FILE=${BASEPREFIX}/${i}/share/toolchain.cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_SKIP_RPATH=ON
     make ${MAKEOPTS}
     chmod 755 bin/*
-    cp ../LICENSE ../README.md ../docs/ANONYMITY_NETWORKS.md bin
+    cp ../LICENSE ../docs/USER_GUIDE.md ../docs/ANONYMITY_NETWORKS.md bin
     chmod 644 bin/LICENSE bin/*.md
     DISTNAME=shekyl-${i}-${version}
     mv bin ${DISTNAME}
