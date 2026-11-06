@@ -55,7 +55,7 @@ use tokio::task::JoinHandle;
 mod probe;
 mod wake;
 
-use self::wake::{led, plain_inputs, take_queued, wait, Open, Sources, Wake, Woken};
+use self::wake::{led, plain_inputs, take_queued, wait, Live, Sources, Wake, Woken};
 
 /// A control reply this far past due is a process fault. Not a bootstrap limit.
 const REPLY_BOUND: Duration = Duration::from_secs(30);
@@ -335,15 +335,15 @@ async fn drive(
         binary,
         data_dir,
         events,
-        incoming,
+        incoming: Live::new(incoming),
         seed,
         probe_pair,
         virtual_port,
-        stop,
-        forward,
-        origin,
-        tor_link,
-        probe_arrivals,
+        stop: Live::new(stop),
+        forward: Live::new(forward),
+        origin: Live::new(origin),
+        tor_link: Live::new(tor_link),
+        probe_arrivals: Live::new(probe_arrivals),
         service: None,
         rounds: None,
         dropped_seen: 0,
@@ -355,9 +355,8 @@ async fn drive(
         incarnation: None,
         generation: 0,
         death_tx,
-        death_rx,
+        death_rx: Live::new(death_rx),
         bootstrap: None,
-        open: Open::ALL,
     }
     .run()
     .await;
@@ -371,25 +370,25 @@ struct Drive {
     binary: Option<PathBuf>,
     data_dir: PathBuf,
     events: EventSink,
-    incoming: EventReceiver,
+    incoming: Live<EventReceiver>,
     seed: OnionSeed,
     /// The probe's isolation pair, held beside the seed for the boot.
     probe_pair: IsolationPair,
     virtual_port: u16,
-    stop: watch::Receiver<bool>,
-    forward: watch::Receiver<Option<SocketAddr>>,
+    stop: Live<watch::Receiver<bool>>,
+    forward: Live<watch::Receiver<Option<SocketAddr>>>,
     /// The relay's hop-0 verdict for a local origin (`GS-Q3`). Health and
     /// `OwnTx` project it.
-    origin: watch::Receiver<OriginVerdict>,
+    origin: Live<watch::Receiver<OriginVerdict>>,
     /// What this node's own Tor dials show (§4.2), for the posture line
     /// only (`TSR-Q14`). The value in the cell at start is the baseline.
     /// The loop folds a later change as evidence.
-    tor_link: watch::Receiver<TorLinkTally>,
+    tor_link: Live<watch::Receiver<TorLinkTally>>,
     /// Each probe whose nonce came back through the onion (§4.5): the mint
     /// that names it, and the process time the handshake took it. The core
     /// accepts the take when it names the probe in flight and landed before
     /// that probe's bound.
-    probe_arrivals: watch::Receiver<Option<ProbeArrival>>,
+    probe_arrivals: Live<watch::Receiver<Option<ProbeArrival>>>,
     /// The onion as last published.
     service: Option<ServiceId>,
     /// That onion's descriptor upload rounds (`TSR-Q5`).
@@ -407,11 +406,8 @@ struct Drive {
     incarnation: Option<u64>,
     generation: u64,
     death_tx: mpsc::Sender<(u64, TorDeath)>,
-    death_rx: mpsc::Receiver<(u64, TorDeath)>,
+    death_rx: Live<mpsc::Receiver<(u64, TorDeath)>>,
     bootstrap: Option<watch::Receiver<BootstrapState>>,
-    /// The process-lived watches still in the wait ([`wake`]'s rule: a
-    /// closed sender takes its source out).
-    open: Open,
 }
 
 impl Drive {
@@ -426,7 +422,6 @@ impl Drive {
             let entered = self.now();
             arm(&self.owner, armed);
             let sources = Sources {
-                open: &mut self.open,
                 stop: &mut self.stop,
                 forward: &mut self.forward,
                 origin: &mut self.origin,
@@ -563,7 +558,7 @@ impl Drive {
                 self.resume_before(vec![spawned])
             }
             Action::Sample => {
-                let mut stop = self.stop.clone();
+                let mut stop = self.stop.source().clone();
                 match race_stop(&mut stop, self.sample()).await {
                     Ok(inputs) => self.resume_before(inputs),
                     Err(shutdown) => vec![shutdown],
@@ -571,7 +566,7 @@ impl Drive {
             }
             Action::WatchState => self.watch_state().into_iter().collect(),
             Action::SetConfAvoidDiskWrites => {
-                let mut stop = self.stop.clone();
+                let mut stop = self.stop.source().clone();
                 let Some(control) = self.control.as_ref() else {
                     return Vec::new();
                 };
@@ -607,7 +602,7 @@ impl Drive {
                 Vec::new()
             }
             Action::RefetchDescriptor => {
-                let mut stop = self.stop.clone();
+                let mut stop = self.stop.source().clone();
                 match race_stop(&mut stop, self.refetch()).await {
                     Ok(input) => self.resume_before(vec![input]),
                     Err(shutdown) => vec![shutdown],
@@ -615,14 +610,14 @@ impl Drive {
             }
             Action::ProbeAfterJump => vec![probe::jump_probe()],
             Action::CheckDirectories => {
-                let mut stop = self.stop.clone();
+                let mut stop = self.stop.source().clone();
                 match race_stop(&mut stop, self.directories_drawn()).await {
                     Ok(input) => self.resume_before(vec![input]),
                     Err(shutdown) => vec![shutdown],
                 }
             }
             Action::FetchFromDirectory { hsdir } => {
-                let mut stop = self.stop.clone();
+                let mut stop = self.stop.source().clone();
                 match race_stop(&mut stop, self.fetch_from(hsdir)).await {
                     Ok(input) => self.resume_before(input.into_iter().collect()),
                     Err(shutdown) => vec![shutdown],
@@ -648,7 +643,7 @@ impl Drive {
             }
             Action::RepublishOnion => {
                 tracing::info!(target: "tor", "publishing this node's onion again");
-                let mut stop = self.stop.clone();
+                let mut stop = self.stop.source().clone();
                 match race_stop(&mut stop, self.republish()).await {
                     Ok(input) => self.resume_before(vec![input]),
                     Err(shutdown) => vec![shutdown],
@@ -682,14 +677,14 @@ impl Drive {
                 self.after_timer(lead, wake.woke).await;
                 return true;
             }
-            Woken::Event(reply) => reply
-                .map(|reply| self.event_inputs(&reply))
-                .unwrap_or_default(),
-            Woken::Death(death) => death
-                .filter(|(generation, _)| *generation == self.generation)
-                .and_then(|(_, how)| observed_death(how))
-                .into_iter()
-                .collect(),
+            Woken::Event(reply) => self.event_inputs(&reply),
+            Woken::Death { generation, how } => {
+                if generation == self.generation {
+                    observed_death(how).into_iter().collect()
+                } else {
+                    Vec::new()
+                }
+            }
             Woken::Bootstrap(state) => vec![self.bootstrap_input(state)],
             plain => plain_inputs(&plain),
         };
@@ -701,7 +696,7 @@ impl Drive {
     /// first, at the wake, and then the deadline. The timer won this wait,
     /// so an event that arrives later cannot hold the deadline off.
     async fn after_timer(&mut self, lead: Option<Input>, woke: u64) {
-        let queued = take_queued(&mut self.incoming);
+        let queued = take_queued(self.incoming.source_mut());
         let mut inputs = lead.into_iter().collect::<Vec<_>>();
         for reply in &queued {
             inputs.extend(self.event_inputs(reply));
@@ -856,7 +851,7 @@ impl Drive {
                 // stop drops it. The fork itself has already returned; the
                 // control is stored so shutdown still owns the child.
                 self.control = Some(up);
-                let mut stop = self.stop.clone();
+                let mut stop = self.stop.source().clone();
                 // Stored on the line above. The subscription borrows that
                 // child; a missing one is a broken launch, not a quiet skip.
                 let control = self
@@ -991,7 +986,7 @@ impl Drive {
         let Some(control) = self.control.as_ref() else {
             return Input::ControlEnded;
         };
-        let Some(forward) = *self.forward.borrow() else {
+        let Some(forward) = *self.forward.source().borrow() else {
             return Input::ForwardAbsent;
         };
         match control
