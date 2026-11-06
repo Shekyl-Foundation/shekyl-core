@@ -956,6 +956,7 @@ stale_through = [
   { through = "981fc8af04", note = "is_already_open is deleted from ClientError and StoreError, and the LockedElsewhere doc says the lock is not transient. No spend-path function changed. Not measured." },
   { through = "7938c51f16", note = "R8 (#1259): one test in shekyl-curve-tree's client.rs is renamed (rollback_to_the_fork_at_the_tip_changes_nothing); the rest of the commit deletes the daemon's console, outside these paths. No production code in these paths changed; nothing the capture prices moved. Not measured." },
   { through = "e3e573d19d", note = "The signing envelope's tx_signable (#1266): in this path set, frost_sal.rs renames the FROST session's message field to tx_signable. The spend's prover takes one 32-byte message as before (the builder now frames it from the prefix and base hashes, one cSHAKE256 outside these paths); tree build, path assembly and the prover do the same work. Not measured; the rows stay stale." },
+  { through = "11cff8aeb90695ccd843b62d6fae2231937271cc", note = "DISPATCHED_PROOF_LIFE in shekyl-curve-tree reference.rs is REFERENCE_BLOCK_MAX_AGE minus REBUILD_AT, a const subtraction beside the existing reference constants. No tree build, path assembly or prover work moved. Not measured; the rows stay stale." },
 ]
 
 [[constant]]

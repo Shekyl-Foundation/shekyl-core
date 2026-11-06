@@ -959,30 +959,26 @@ de-risking the multi-daemon reopen in advance.
    (`shekyl-curve-tree` `reference.rs`); a resubmit after that is
    refused `StaleRoot`.
 2. **Dandelion++ embargo fail-safe — the irreducible kernel.** The
-   black-holed-stem case (honest daemon stems to one adversarial peer which
-   drops the tx) is the one failure no wallet policy reliably fixes: wallet
-   resubmission re-enters stem and can hit the same adversarial peer; only
-   the origin's own embargo timer guarantees eventual broadcast. Mechanism,
-   verified: public-zone dispatch of a `local` tx runs `dandelionpp_notify`
-   (`levin_notify.cpp:876-893`), which calls `on_transactions_relayed(stem)`
-   **before** the stem send (`:562`) → `set_relayed` arms
-   `last_relayed_time = now + poisson(embargo)` as a *future deadline* for
-   `dandelionpp_stem` entries (`tx_pool.cpp:909-913`); failed sends fluff
-   immediately (`levin_notify.cpp:578-582`); stem entries past deadline are
-   routed into the public fluff request by the periodic loop
-   (`tx_pool.cpp:828-836` → `cryptonote_core.cpp:1127-1141`), re-arming on
-   each attempt (`tx_pool.cpp:868-877`); a fluff echo arriving first cancels
-   the embargo through ordinary ingestion. **Noise zones (Tor/i2p)
-   intentionally do not arm the embargo** (`levin_notify.cpp:850`,
-   `tx_pool.cpp:914-915`) — covert-channel re-send cadence covers them,
-   and arming would fluff over clearnet, deanonymizing the origin.
-   Recorded here so nobody "fixes" the noise-zone branch into arming —
-   but the consequence is not a parenthetical: over anonymity networks
-   the black-hole guarantee is **deployment-dependent**, a named threat
-   entry (§7.5), and the wallet watchdog horizon must be sized for it.
-   Shim 3 enters through the same `relay_transactions` entry point, so
-   arming is **inherited, not re-implemented**; PR-3 carries the test
-   obligation (§10.4).
+   black-holed-stem case (an honest node stems to one adversarial peer
+   which drops the transaction) is the one failure no wallet policy
+   reliably fixes: a wallet resubmission re-enters stem and can hit the
+   same peer. Only the embargo guarantees the transaction is eventually
+   published. Mechanism, in `shekyl-relay` `graph/embargo.rs`: every stem
+   send arms a deadline; the first fire re-stems to the source's frozen
+   alternate; the second fire, or a first fire with no live alternate,
+   fluffs to every session but the source and marks the transaction
+   shown. An origin's deadline is `origin_retry_secs` (1,148 s at the
+   shipped terms, pinned in that crate's embargo tests); a relay position
+   draws its connector's memoryless embargo. An origin that never sent
+   is held unsent and re-planned every 300 s (`NEVER_SENT_RETRY_MS`),
+   and at once when the node turns synchronised or a session is
+   established. There is no periodic re-broadcast after publication, and
+   the pool does not re-relay: residence ends when the reference leaves
+   the window (item 1). No shipped configuration leaves the embargo
+   unarmed. Under an anonymity-network eclipse the fluff still lands in
+   the eclipsed outbound set, so the wallet watchdog's operator-alarm
+   rung remains the sole effective backstop there (§7.5). The wallet
+   cannot substitute for this kernel.
 3. **Honest health context.** The wallet's policy needs to distinguish "tx
    stuck" from "daemon has no peers to relay to" and "daemon is behind."
    The existing info surface's peer/connection counts and
