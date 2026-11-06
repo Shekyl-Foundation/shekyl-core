@@ -228,6 +228,7 @@ tables has one cause. Each item names what would show it wrong.
 | **ESR-9** | Every live passage that quotes a superseded figure or reads as history is replaced by the current one, with the history in git (ruled 2026-10-15). In scope: the documents that quote the old tables (§12.13–§12.14 rows); the FL-E1 note in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §11.7, re-measured before it is replaced; the staking-sim plan's clause that L11–L19 figures become records-was rows (§6, EUP-3's to restate before it runs); and Appendix A, which Appendix A2's re-census supersedes; and the thin-margin counts that `FEE_LADDER_DERIVATION.md` (the arm table of §10.10) and `FEE_LADDER_ROUND.md` (round 16b) quote from a column the sim no longer prints. Also in scope: the deleted fee-ladder arms (`served_ceil_cq`, and the quantized, hysteresis, rate-limited and grid columns), the FL-R3 and FL-R18 sweep lines `--fee-ladder` no longer prints, and the §4 nearest-pow2 row. | No current-tense sentence quotes a superseded figure, and no live section says records-was. |
 | **ESR-15** | One fee loop over a pricing function: the ordinary fee is the lattice-rounded fixed point of weight and rate, paid as the wallet pays it (`shekyl_economics::quantized_fee`), and §4's unrounded-fee row is deleted. The loop is judged against seven properties (the brief's §A.2a, ruled 2026-10-24; [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §12): never under-pays; least (the least fixed point, from a seed at or below it); bounded over-payment (`f − rate × weight(f) < MASK` at the final weight); exact; fails closed (`None`, never a saturated fee); terminates by agreement (two successive passes equal, never the pass limit); one lattice on both sides. Its own step, after ESR-9 and before ESR-10 runs (ruled 2026-10-17): ESR-10's fixture changes then come from ESR-10 alone. Its PR records the lattice's size as an open fee-ladder row with its current ground, and prints the lattice step as basis points of the ordinary fee (ruling 7, 2026-10-24); the six decimals stay until ruled. Predictions are written before it runs. | A fee `--stage2` charges on the production arm that is not a multiple of `FEE_QUANTIZATION_MASK`; a loop output that fails one of the seven properties on any registered cell. |
 | **ESR-16** | The parameter sweep (the brief's §B.3a; ruled 2026-10-24, [`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.9; the completion's placement ruled 2026-10-29, §5.26). Three generated structs, one source file each, the file boundary the digest boundary: `EconomicParams` is chain identity in the params digest, every economic consensus constant a field, promoted so each digest and the C4 fixture move once; `ArchivalParams` is the archival consensus set, in the consensus digest; `RelayPolicy` (G, the admission slack, the fee decimals, `w_ref`, the rung ratios, the emission-claim hold) stays outside both, on FL-R27's reasoning. One accessor per struct, onto which the validator's `OnceLock`, the FFI's `default()` sites and the wallet cap collapse, and a gate that holds it: production reads only the default. A sim run is that baseline plus named overrides, each through its struct's validator. The windows become const generics, not runtime buffers. Each two-source constant gets one source in the lowest crate with a test holding the derived pair equal (the zone and `TX_WEIGHT_LIMIT`; `settlement_epoch_blocks`; `BLOCKS_PER_YEAR` from the DAA target). The bond floor's `const` asserts become a test on the generated default, the cover rung derives from the field, and `engine-core`'s second generated copy goes. The sim varies both structs; production never does. | A production composition that reads a bare economic constant, or resolves parameters anywhere but the accessor (the gate); a default-valued sweep cell that differs from the default report by one byte. |
+| **ESR-17** | The pool the Rust daemon holds (`shekyl-mempool`, CEN-M10, the rulings of 2026-10-17), before ESR-10 (ruled 2026-11-06). The waiting transactions are cohorts, each keeping the fee and weight it was built with. A cohort leaves when its reference leaves CEN-I11's window: the wallet's reference is `select_reference_height` at the tip it built on, and the window is `admissible_references` at the connecting height, both called. The pool holds at most `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit. Admission evicts entries paying strictly less per unit of weight, cheapest first, and refuses a transaction it cannot make room for. The template offers by fee per unit of weight, then the hour received. The cap's arithmetic and both orders are called from `shekyl-mempool`'s store-free policy, not restated. The C++ livetime defines, the sim's copy and §4's two pool rows are deleted. Predictions in §5.27. | A cohort that re-prices, or one held past the window; a pool over its cap; a template order that differs from `AdmissionRank::template` on a pool where they can be compared; carried per block moving in any scenario. |
 
 The constant-fee closed form for the fee horizon (`onset.rs`, and the two
 tests that pin it) describes a fee the chain does not charge. It is
@@ -2707,6 +2708,128 @@ algorithm's shape, pinned by its KAT vectors). The C++ `median * 2` in
 multiple and is not migrated: the DRS-X flip (#1212) deletes that file
 with the C++ chain. If the flip slips past the next release, a check
 that the C++ literal and the generated multiple agree lands before it.
+
+### 5.27 ESR-17, the pool the Rust daemon holds, predicted before it is built (2026-11-06)
+
+Written against `dev` at `b8b11453e`, before any ESR-17 code. Nothing
+below is a result. The figures quoted as today's are the committed
+`--stage2` narration at that pin.
+
+**The model.** The sim keeps one queue of identical transactions. Each
+pays the fee of the block it is offered to, and each is dropped
+2 160 blocks after it arrived (the C++ three-day define). The daemon
+keeps neither rule:
+
+- A transaction keeps the fee and weight it was built with.
+- It is listable while its reference is inside CEN-I11's window. The
+  wallet anchors at `tip − REF_ANCHOR_AGE` (6). The window at connecting
+  height `c` is `[c − 100, c − 5]`. A transaction built at tip `t` can
+  therefore be listed in blocks `t + 1` through `t + 94`
+  (`PROOF_VALIDITY_HORIZON`). A transaction the sim offers first to
+  block `h` was built at tip `h − 1`.
+- The pool holds at most `REFERENCE_BLOCK_MAX_AGE` × the block weight
+  limit. Admission evicts entries paying strictly less per unit of
+  weight, cheapest first, then the newest. It refuses a transaction it
+  cannot make room for.
+- The template offers by fee per unit of weight, then by the hour the
+  pool first held the transaction, then by hash. It walks every
+  candidate and does not stop at a refusal.
+
+The wallet does not rebuild a submitted transaction on its own: the
+watchdog's rebuild rung needs a human (`submit_watchdog.rs`). The
+wallet's `REBUILD_AT` (50) re-anchors a transaction at submit time
+only, and the sim builds and submits in the same block.
+
+**Today's figures.**
+
+- The ordinary transaction weighs about 14.6 kB.
+- On the baseline in the constrained era (years 1 to 18), 22 of 50 are
+  carried per block and 28.0 expire (27.6 in year 1).
+- The production fee falls through the constrained era: 1.19 SKL in
+  year 1, 0.92 SKL in year 10. That is one lattice step (1 000 atomic)
+  about every eight blocks, so runs of about eight consecutive blocks
+  share a fee.
+
+**Two corrections to the brief's figures.**
+
+- The cap in transactions is about 200 × carried, not 16 k. It is
+  `100 × limit_multiple × M_eff`, with `M_eff` near 324 kB, so 64.8 MB.
+  At 14.6 kB per transaction that is about 4.4 k, against the brief's
+  "about 16 k", which is 60 MB at `w_ref` (3 000 B). Without a cap the
+  waiting pool is about dropped-per-block × 94. So the cap binds
+  wherever more than about 2.1 transactions are dropped per carried
+  one.
+- On the baseline the fee falls, so the template's first offer is the
+  oldest cohort, the richest. Age at inclusion skews old. It skews young
+  only where the fee rises.
+
+**Two choices, stated before the run.**
+
+- **The hour tie.** At equal fee per unit of weight the template orders
+  by the hour first held, then by hash. The sim maps block `h` to hour
+  `⌊h × daa_target / 3 600⌋`: blocks at the target spacing, genesis on
+  an hour boundary. Within an hour and a rate, the hash order of users'
+  transactions is not knowable, so a partly served (or evicted) group
+  is shared across its cohorts in proportion to their counts, by
+  largest remainder. That is the expected value of a uniform hash
+  order. The eviction order's tie (the newest hour first, then the
+  hash) is handled the same way.
+- **The stop rule.** A cohort is offered with `Fill::admit_up_to`. Its
+  first refusal ends it, and every later cohort of the same weight.
+  Proof: `Fill::admit` refuses `(w, f)` at block weight `W` iff
+  `W + w > limit` or `f < penalised(W) − penalised(W + w)`, and a
+  refusal changes nothing. A later cohort of the same weight pays
+  `f' ≤ f` (the order is by rate), so both tests refuse it too. A
+  cohort of another weight is still offered.
+
+**Predictions.**
+
+- **E17-1.** Carried per block, by year, is unchanged in every scenario
+  on both arms.
+- **E17-2.** No onset year, crossing year or growth year moves in any
+  scenario. The one exception allowed is boom-bust's, by at most one
+  year, and earlier: where the fee falls, the first offer is a cohort
+  built at a dearer block.
+- **E17-3.** Dropped per block (expired, evicted or refused) is within
+  ±3 % of today's expired column in every era where carried is
+  capacity-bound. On the baseline that is 28.0, and year 1 moves from
+  27.6 to about 28.0, because a 94-block horizon expires its first
+  cohorts 2 066 blocks sooner.
+  - The waiting pool's steady depth on the baseline falls from about
+    28 × 2 160 ≈ 60 k to about 28 × 94 ≈ 2.6 k, about 23×. The run
+    prints the new figure; the old one is this arithmetic.
+- **E17-4.** The cap never binds on the baseline, stake concentration,
+  mass unstaking or the late-chain tail. It binds where the backlog
+  exceeds about 4.4 k transactions:
+  - boom-bust in its boom years;
+  - sustained growth from year 4 through year 15;
+  - chain bootstrap from year 8 through year 15;
+  - high-history low-activity from year 1 through year 15.
+
+  The stuffing attack's year 1 (44 dropped per block, about 4.1 k
+  waiting) is at the edge, and may bind for part of the year. Where it
+  binds and the fee falls or stands still, an arrival pays no more than
+  what the pool holds, so it is refused at the door: refusals, not
+  evictions. Evictions appear only where the fee rises. The run prints
+  expired, evicted and refused per block for every scenario.
+- **E17-5.** The fee columns move only through the fee fixed at build:
+  by less than one block's fee drift times the age at inclusion. In the
+  constrained era a year's fee total moves by under 0.1 % on the
+  production arm. The flat control arm's fees do not move.
+- **E17-6.** On the baseline the fee falls, so the template serves the
+  oldest cohorts first: the median age at inclusion in the constrained
+  era is between 85 and 93 blocks, and p95 is 93. Where the fee rises,
+  the median is under 10. The run prints the median and p95 for every
+  scenario at its sample years.
+- **E17-7.** The C4 recorder fixture
+  (`docs/test_vectors/economics/baseline_steady_state.json`) is
+  byte-identical. It runs on the flat arm, where every cohort pays one
+  fee, and carried does not move.
+- **E17-8.** The ESR-7 envelope reads the last block's listing, cohort
+  by cohort, not one body at the current fee. Its figures move by under
+  0.1 %. The relay stuffer's outranking rate (one atomic unit per byte
+  above the honest bodies) may move by one unit: it outranks the
+  richest body listed, which on the baseline is the oldest.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
