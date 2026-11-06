@@ -85,6 +85,7 @@ jobs:
   f6-multisig-feature:
     name: "F-6: cargo check/clippy/test --features multisig"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: rust

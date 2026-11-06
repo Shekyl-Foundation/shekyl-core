@@ -72,6 +72,7 @@ jobs:
   changes:
     name: 'Change scope (rust)'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
     steps:
@@ -103,6 +104,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
+    # Successful runs took 115 to 218 min on 2026-11-06, so twice the p90
+    # passes the 360 min platform cap. 300 still ends a hang an hour
+    # early; it comes down when the test run is partitioned.
+    timeout-minutes: 300
     container:
       image: ubuntu:24.04
       env:

@@ -34,6 +34,7 @@ jobs:
   changes:
     name: 'Change scope (codeql)'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
     steps:

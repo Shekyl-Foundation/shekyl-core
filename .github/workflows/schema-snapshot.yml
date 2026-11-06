@@ -97,6 +97,7 @@ jobs:
   assert-snapshots:
     name: "Assert committed schema snapshots"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 
@@ -156,6 +157,7 @@ jobs:
   enforce-version-bump:
     name: "Enforce paired block_version bump"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
         with:

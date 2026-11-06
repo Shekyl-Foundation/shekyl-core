@@ -61,6 +61,7 @@ jobs:
   legs:
     name: 'Depends legs'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       legs: ${{ steps.legs.outputs.legs }}
     steps:
@@ -79,6 +80,7 @@ jobs:
     needs: legs
     if: needs.legs.outputs.legs != '[]'
     runs-on: ubuntu-latest
+    timeout-minutes: 70
     # A nightly red reaches a human: the on-failure step opens or comments
     # on a tracking issue (the slow-gate nightly's route).
     permissions:
