@@ -10,10 +10,9 @@
 //! carries the outputs' encrypted fields; a byte the hash did not cover
 //! could be changed after signing without invalidating the signature. The
 //! full preimage is pinned elsewhere (`pqc_signing_preimage_kat.rs`), but a
-//! pin of the whole does not show which bytes reach it. The C++
-//! `enc_label_binds_ctsig_base_prehash` flipped one label byte and one
-//! amount byte of the C++ hash; this flips each byte of both fields, for
-//! two outputs, through the Rust hash the signer and verifier use.
+//! pin of the whole does not show which bytes reach it. This flips each
+//! byte of both fields, for two outputs, through the hash the signer and
+//! verifier share.
 
 use shekyl_types::BlockHash;
 use shekyl_wire::transaction::{fcmp_base_hash, CT_ENC_FIELD_LEN};

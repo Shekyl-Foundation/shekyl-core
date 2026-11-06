@@ -3,14 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `keccak256` against the 321 Keccak-256 vectors the C++ `hash-tests`
-//! ran as `hash-fast` (`tests/hash/tests-fast.txt`).
+//! `keccak256` against 321 Keccak-256 vectors.
 //!
-//! `vectors/keccak256.txt` is that file, byte for byte: one vector per line,
-//! the expected hash then the input, both in hex, and `x` for the empty
-//! input. The C++ hash and its test are deleted with the C++ tree; this is
-//! where the vectors stay. Original Keccak padding (`0x01`), not SHA3's
-//! (`0x06`): the empty-input vector is the one that tells them apart.
+//! `vectors/keccak256.txt` is the inherited hash suite's `tests-fast.txt`,
+//! byte for byte: one vector per line, the expected hash then the input,
+//! both in hex, and `x` for the empty input. Original Keccak padding
+//! (`0x01`), not SHA3's (`0x06`): the empty-input vector tells them apart.
 
 use shekyl_crypto_hash::keccak256;
 

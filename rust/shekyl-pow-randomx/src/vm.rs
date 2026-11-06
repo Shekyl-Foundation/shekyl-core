@@ -3347,11 +3347,9 @@ mod tests {
     }
 
     /// The Phase 3a canonical known answer: under seed `0x01..=0x20`, the
-    /// verifier hashes the ASCII blob below to `34f8b017…`. The release
-    /// parity gate anchored that value against the C library's full
-    /// dataset, the mode miners run; before this test it was pinned only on
-    /// the C++ side (`mining_parity.cpp` through the FFI, and the C++ parity
-    /// harness), so no Rust test held the verifier to it.
+    /// verifier hashes the ASCII blob below to `34f8b017…`, the value the
+    /// release parity gate anchors against the C library's full dataset,
+    /// the mode miners run.
     #[test]
     fn the_verifier_reproduces_the_canonical_known_answer() {
         assert_eq!(

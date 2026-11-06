@@ -14,8 +14,7 @@
 //! transcript, which hashes the points' bytes before they are used. This
 //! test holds that, for each of the seven non-identity 8-torsion points
 //! added to each of the proof's points (A, A1, B, every L and R) and to
-//! each commitment. The C++ `bulletproofs_plus.invalid_torsion` held the
-//! same for the C++ verifier, which nothing ships.
+//! each commitment.
 
 use curve25519_dalek::constants::EIGHT_TORSION;
 

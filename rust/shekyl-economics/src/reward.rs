@@ -275,8 +275,7 @@ mod tests {
     /// The genesis reward and block 1's miner share, as values. The test
     /// above holds their shape (whole at genesis, split from block 1);
     /// this holds the numbers, so a reward-math change fails here even when
-    /// the shape still agrees with itself. The C++ `mining_parity` test
-    /// pinned the same two values through the FFI; it leaves with the C++.
+    /// the shape still agrees with itself.
     ///
     /// The literals are derived from the frozen parameters, not read back
     /// from the code under test: at genesis `curve(0) = asymptote >> esf` =

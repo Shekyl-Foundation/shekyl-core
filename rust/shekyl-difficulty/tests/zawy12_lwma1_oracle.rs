@@ -26,8 +26,7 @@
 //! (`docs/design/refs/zawy12_issue_3_lwma1.md`) must hash to the SHA-256
 //! its anchors file pins, and the function the oracle was transliterated
 //! from must open and close on the anchors' first and last lines at the
-//! pinned byte range. Until the C++ tree went, the same reference ran as
-//! C++ in `tests/difficulty`; this replaces it.
+//! pinned byte range.
 
 use sha2::{Digest, Sha256};
 use shekyl_difficulty::{lwma1_next, CumulativeDifficulty, GENESIS_DIFFICULTY, N, T_SECONDS};

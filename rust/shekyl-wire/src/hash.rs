@@ -88,8 +88,8 @@ mod tests {
         assert_eq!(merkle_root(vec![]), None);
     }
 
-    /// The 16 tree-hash vectors the C++ `hash-tests` ran as `hash-tree`
-    /// (`tests/hash/tests-tree.txt`, copied byte for byte): the expected
+    /// The 16 tree-hash vectors of the inherited hash suite's
+    /// `tests-tree.txt`, copied byte for byte: the expected
     /// root, then the leaves as one hex string of 32-byte hashes. They are
     /// the only vectors for the odd sizes, where the rightmost leaves pair
     /// down to a power of two before the rest; the block header's
