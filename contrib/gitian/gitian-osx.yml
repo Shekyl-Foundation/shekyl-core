@@ -128,7 +128,7 @@ script: |
     cmake .. -DCMAKE_TOOLCHAIN_FILE=${BASEPREFIX}/${i}/share/toolchain.cmake
     make ${MAKEOPTS}
     chmod 755 bin/*
-    cp ../LICENSE ../README.md ../docs/ANONYMITY_NETWORKS.md bin
+    cp ../LICENSE ../docs/USER_GUIDE.md ../docs/ANONYMITY_NETWORKS.md bin
     chmod 644 bin/LICENSE bin/*.md
     # The pinned Tor (TOR_BUNDLE_DISTRIBUTION.md TB-6, TB-11), in bin/tor/ with
     # its licence texts beside it, as the Linux descriptor stages it. macOS
