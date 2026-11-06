@@ -54,15 +54,17 @@ use shekyl_economics::{
     burn::calc_burn_pct_at, price_emission, CirculatingSupply, ClosedShardCount, EconomicParams,
     EmissionInputs, PaidEmission, RelayPolicy,
 };
+use shekyl_mempool::policy::FeeRate;
 use shekyl_tx_weight::predict_weight;
 use shekyl_types::SHARD_LENGTH;
 
+use crate::block_space::ListedBodies;
 use crate::calibration::{
     all_shapes, required_price, stuffer_cost_per_shard_atomic, stuffer_shape,
     tree_depth_for_leaves, PerByteRate, Shape,
 };
 use crate::engine::SimParams;
-use crate::fee_model::FeePoint;
+use crate::fee_model::{FeePoint, OrdinaryTx};
 use crate::stage2::LastBlock;
 
 /// How the cheapest packing changed the block.
@@ -357,8 +359,13 @@ struct Block<'a> {
     height: u64,
     supply: CirculatingSupply,
     closed_shards: ClosedShardCount,
-    honest_weight: u64,
-    honest_fee: u64,
+    /// The bodies the fold listed, cohort by cohort at the fee and weight
+    /// each was built with, the cheapest per weight first: the order a
+    /// miner drops them in, losing the least fee per byte.
+    listed: Vec<ListedBodies>,
+    /// The ordinary transaction at this block, for a listing with nothing
+    /// in it.
+    ordinary: OrdinaryTx,
     /// The block as the fold listed it, priced once. A packing prices only
     /// the block it would list, against this.
     honest_paid: PaidEmission,
@@ -414,8 +421,8 @@ impl<'a> Block<'a> {
             height: last.chain_height,
             supply,
             closed_shards,
-            honest_weight: last.honest_tx.weight,
-            honest_fee: last.honest_tx.fee_atomic,
+            listed: cheapest_first(&last.listed),
+            ordinary: last.honest_tx,
             honest_paid,
         }
     }
@@ -450,10 +457,17 @@ impl<'a> Block<'a> {
         let rate = if at_floor {
             floor
         } else {
-            // Outrank the honest bodies: one atomic unit per byte above their
-            // rate, which the pool offers first and the fill rule lists under
-            // the median in their place. The pricer stays the floor's.
-            floor.with_atomic(self.honest_fee / self.honest_weight.max(1) + 1)
+            // Outrank the honest bodies: one atomic unit per byte above the
+            // richest listed, which the pool offers first and the fill rule
+            // lists under the median in their place. The pricer stays the
+            // floor's.
+            let richest = self
+                .listed
+                .iter()
+                .map(|bodies| bodies.fee / bodies.weight.max(1))
+                .max()
+                .unwrap_or(self.ordinary.fee_atomic / self.ordinary.weight.max(1));
+            floor.with_atomic(richest + 1)
         };
         (
             rate,
@@ -597,25 +611,20 @@ impl<'a> Block<'a> {
         })
     }
 
-    /// The honest bodies as identical transactions, plus a remainder the
-    /// fill did not count as one of them.
-    fn honest_bodies(&self) -> HonestBodies {
-        let weight = self.honest_weight;
-        let count = if weight == 0 {
-            0
-        } else {
-            self.honest.bodies_weight() / weight
-        };
-        let counted_weight = count.saturating_mul(weight);
-        let counted_fees = count
-            .saturating_mul(self.honest_fee)
-            .min(self.honest.fees());
+    /// The honest bodies the block listed, the cheapest per weight first.
+    fn honest_bodies(&self) -> HonestBodies<'_> {
+        let count = self.listed.iter().map(|bodies| bodies.count).sum();
+        debug_assert_eq!(
+            self.listed
+                .iter()
+                .map(|bodies| bodies.count * bodies.weight)
+                .sum::<u64>(),
+            self.honest.bodies_weight(),
+            "the listing is the fill's"
+        );
         HonestBodies {
             count,
-            weight,
-            fee: self.honest_fee,
-            remainder_weight: self.honest.bodies_weight() - counted_weight,
-            remainder_fees: self.honest.fees() - counted_fees,
+            listed: &self.listed,
         }
     }
 }
@@ -650,27 +659,48 @@ impl StuffingBody {
     }
 }
 
-/// The honest bodies a packing may drop, as a count of one transaction.
+/// The honest bodies a packing may drop: the block's listing, the cheapest
+/// per weight first, and how many there are. Dropping `n` drops the first
+/// `n` in that order.
 #[derive(Clone, Copy)]
-struct HonestBodies {
+struct HonestBodies<'a> {
     count: u64,
-    weight: u64,
-    fee: u64,
-    remainder_weight: u64,
-    remainder_fees: u64,
+    listed: &'a [ListedBodies],
 }
 
-impl HonestBodies {
+impl HonestBodies<'_> {
+    /// The weight and fees of the bodies kept when `dropped` go.
+    fn kept(self, dropped: u64) -> Option<(u64, u64)> {
+        if dropped > self.count {
+            return None;
+        }
+        let mut to_drop = dropped;
+        let (mut weight, mut fees) = (0u64, 0u64);
+        for bodies in self.listed {
+            let gone = to_drop.min(bodies.count);
+            to_drop -= gone;
+            let kept = bodies.count - gone;
+            weight = weight.checked_add(kept.checked_mul(bodies.weight)?)?;
+            fees = fees.checked_add(kept.checked_mul(bodies.fee)?)?;
+        }
+        Some((weight, fees))
+    }
+
     fn kept_weight(self, dropped: u64) -> Option<u64> {
-        let kept = self.count.checked_sub(dropped)?;
-        kept.checked_mul(self.weight)?
-            .checked_add(self.remainder_weight)
+        self.kept(dropped).map(|(weight, _)| weight)
     }
 
     fn kept_fees(self, dropped: u64) -> Option<u64> {
-        let kept = self.count.checked_sub(dropped)?;
-        kept.checked_mul(self.fee)?.checked_add(self.remainder_fees)
+        self.kept(dropped).map(|(_, fees)| fees)
     }
+}
+
+/// `listed`, the cheapest per weight first (`shekyl-mempool`'s rate
+/// comparison; a tie keeps the listing's order).
+fn cheapest_first(listed: &[ListedBodies]) -> Vec<ListedBodies> {
+    let mut sorted = listed.to_vec();
+    sorted.sort_by(|a, b| FeeRate::new(a.fee, a.weight).cmp_rate(FeeRate::new(b.fee, b.weight)));
+    sorted
 }
 
 /// One integer packing, before it is turned into a shard price.
@@ -802,10 +832,10 @@ pub(crate) fn print_envelope(
         let Some(agg) = scenario.aggs.iter().find(|a| a.year == year) else {
             continue;
         };
-        let last = agg.last_block;
-        let e = envelope_at(&last, params);
+        let last = &agg.last_block;
+        let e = envelope_at(last, params);
         let economic = params.economic();
-        let block = Block::new(&last, economic, params.relay());
+        let block = Block::new(last, economic, params.relay());
         let unenforced = e.miner(AttackKind::MinerUnenforced);
         let (relay_rate, relay_at_floor, relay_atomic) = match e.attack(AttackKind::Relay).cost {
             AttackCost::Relay {
@@ -891,8 +921,6 @@ mod tests {
     };
     use shekyl_units::AtomicUnits;
 
-    use crate::fee_model::OrdinaryTx;
-
     /// A block whose honest demand is `offered` identical transactions, listed
     /// by the fill rule. The stuffer reads the listing, it does not re-offer.
     fn block_at(offered: u64, params: &SimParams) -> LastBlock {
@@ -929,7 +957,7 @@ mod tests {
             economic,
         )
         .expect("priced");
-        fill.admit_up_to(honest_tx.weight, honest_tx.fee_atomic, offered);
+        let admitted = fill.admit_up_to(honest_tx.weight, honest_tx.fee_atomic, offered);
         LastBlock {
             chain_height,
             supply,
@@ -943,6 +971,11 @@ mod tests {
             honest_tx,
             bodies_weight: fill.bodies_weight(),
             fees: fill.fees(),
+            listed: vec![ListedBodies {
+                fee: honest_tx.fee_atomic,
+                weight: honest_tx.weight,
+                count: admitted,
+            }],
         }
     }
 
@@ -1120,8 +1153,10 @@ mod tests {
         let honest = block.honest_bodies();
         let kept = honest.count - dropped;
         let fees_before = block.honest.fees();
-        let fees_after = kept * honest.fee + honest.remainder_fees + stuffed * fee;
-        let weight_after = kept * honest.weight + honest.remainder_weight + stuffed * weight;
+        let only = honest.listed[0];
+        assert_eq!(honest.listed.len(), 1, "one cohort listed");
+        let fees_after = kept * only.fee + stuffed * fee;
+        let weight_after = kept * only.weight + stuffed * weight;
         let reward_before = block.honest.reward();
         let reward_after = block
             .honest

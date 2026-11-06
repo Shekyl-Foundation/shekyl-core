@@ -5,63 +5,133 @@
 
 //! The transactions waiting for a block, and the producer's fill of one.
 //!
-//! [`BlockSpace`] offers the waiting transactions, oldest first, then the
-//! block's own demand, to [`Fill`](shekyl_block_template::Fill) at the
-//! effective median [`MedianWindow`](crate::median_window::MedianWindow)
-//! holds. What the rule refuses stays until it is older than the mempool
-//! livetime. The departure from the chain — a waiting transaction paying
-//! the fee of the block it is offered to — is declared on [`BlockSpace`].
-//! The block's recorded weight includes the coinbase reserve, the maximum
-//! coinbase.
+//! [`BlockSpace`] is the pool the Rust daemon holds (`shekyl-mempool`,
+//! CEN-M10), kept as cohorts: the transactions built at one block, each
+//! keeping the fee and weight it was built with. Each block it
+//!
+//! 1. drops the cohorts whose reference has left CEN-I11's window at the
+//!    connecting height (the reconcile at the new tip);
+//! 2. admits the block's demand, built on the tip below it, making room
+//!    under CEN-M10's limit from strictly cheaper entries and refusing what
+//!    it cannot make room for;
+//! 3. offers the cohorts to the producer's fill rule
+//!    ([`Fill`](shekyl_block_template::Fill)) in the template's order, at the
+//!    effective median [`MedianWindow`](crate::median_window::MedianWindow)
+//!    holds;
+//! 4. trims the pool to its limit, passing over the bodies the block lists;
+//! 5. drops the listed bodies, which the block carries.
+//!
+//! The limit, both orders and both eviction walks are `shekyl-mempool`'s
+//! [`policy`](shekyl_mempool::policy), called. The wallet's reference is
+//! `shekyl_curve_tree::select_reference_height`, and the window is
+//! `shekyl_chain_rules::admissible_references`. The block's recorded weight
+//! includes the coinbase reserve, the maximum coinbase.
 
-use std::collections::VecDeque;
+use core::cmp::Ordering;
 
 use shekyl_block_template::Fill;
-use shekyl_chain_rules::EffectiveMedian;
+use shekyl_chain_rules::{admissible_references, EffectiveMedian};
+use shekyl_curve_tree::select_reference_height;
+use shekyl_mempool::policy::{eviction_order, make_room, template_order, trim_to, FeeRate, Limits};
+use shekyl_types::BlockHeight;
 use shekyl_wire::transaction::COINBASE_RESERVE;
 
 use crate::fee_model::{FeePoint, OrdinaryTx};
 use crate::median_window::MedianWindow;
 
-/// `CRYPTONOTE_MEMPOOL_TX_LIVETIME`: how long, in seconds, the daemon keeps
-/// a transaction no block has taken. The pool has no Rust owner yet
-/// (`DRS_E1_SPOOL.md`), so this is the C++ define restated, pinned to it by
-/// a test that reads the header; it moves to the pool's owner when the pool
-/// does.
-const MEMPOOL_TX_LIVETIME_SECS: u64 = 86_400 * 3;
+/// Seconds in the pool's received key: `ReceivedHour::of` is Unix seconds
+/// over this (`shekyl-chain-store`, `codec/pool.rs`), pinned by
+/// `the_received_key_is_the_pools_hour`.
+const SECONDS_PER_RECEIVED_KEY: u64 = 3_600;
 
-/// The transactions waiting for a block, the medians they wait under, and
-/// the rule that decides how many a block takes.
+/// The transactions one block's demand built: `count` of them, each paying
+/// `fee` at `weight`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Cohort {
+    /// The first block that can list it. It was built on the tip below.
+    arrived: u64,
+    /// The height of its reference block: the wallet's anchor at that tip.
+    reference: u64,
+    /// The hour the pool first held it, the tie both orders break on.
+    hour: u64,
+    fee: u64,
+    weight: u64,
+    count: u64,
+}
+
+impl Cohort {
+    fn rate(&self) -> FeeRate {
+        FeeRate::new(self.fee, self.weight)
+    }
+
+    fn key(&self) -> (FeeRate, u64) {
+        (self.rate(), self.hour)
+    }
+}
+
+/// Bodies a block listed from one cohort.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ListedBodies {
+    pub(crate) fee: u64,
+    pub(crate) weight: u64,
+    pub(crate) count: u64,
+}
+
+/// The pool the Rust daemon holds, and the medians it fills under (module
+/// docs).
 ///
-/// Each block offers the waiting transactions, oldest first, and then the
-/// block's own demand to the producer's fill rule ([`Fill`],
-/// `shekyl-block-template`) at the effective median, admits until the rule
-/// refuses, and leaves the rest waiting; a transaction older than the pool's
-/// livetime is dropped before the block is filled. The transactions are
-/// identical, so a refusal leaves the fill unchanged and every later offer
-/// would be refused the same way: the rule's own batch offer
-/// ([`Fill::admit_up_to`]) is the producer's walk over this pool, not a
-/// shortcut of it. The departure from the chain, declared in §4 of the
-/// design document, is that every waiting transaction pays the fee of the
-/// block it is offered to, not the fee it was built with. The weight the
-/// median records is the block's: the bodies plus the coinbase reserve.
+/// Two of the pool's orders end on the transaction hash: the template's
+/// (the richest per weight, then the earliest hour, then the hash) and
+/// eviction's (the cheapest, then the newest hour, then the hash). Which of
+/// a user's transactions has the lesser hash is not knowable, so where an
+/// order reaches a group of equal rate and hour and takes only part of it,
+/// the part is shared across the group's cohorts in proportion to their
+/// counts, by largest remainder: the expected value of a uniform hash
+/// order. Within such a group, cohorts of different weight (an equal rate
+/// at a different weight) are offered lightest first and evicted heaviest
+/// first.
+///
+/// The pool is kept in the template's order, so a block walks it without
+/// sorting; eviction walks the same groups backwards.
+///
+/// A scenario's first blocks are before the chain is deep enough for a
+/// wallet to anchor (`select_reference_height` is `None`) or for CEN-I11 to
+/// admit any reference. The scenario's demand starts at its first block,
+/// as if users had outputs to spend there. Those transactions anchor at
+/// genesis, and no window drops anything until one exists: a scenario
+/// boundary, declared in §4 of the design document.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BlockSpace {
     medians: MedianWindow,
-    /// `(height it arrived at, count)`, oldest first.
-    waiting: VecDeque<(u64, u64)>,
-    /// The sum of `waiting`'s counts, kept as it changes: the queue holds a
-    /// livetime of entries while blocks are full.
+    /// The pool, in the template's order ([`template_cmp`]).
+    waiting: Vec<Cohort>,
+    /// The sum of `waiting`'s counts, kept as it changes.
     waiting_total: u64,
+    /// The pool's weight, kept as it changes.
+    weight_total: u128,
+    /// Bodies listed since the last [`Self::take_ages`], by age at
+    /// inclusion: the listing height less the cohort's arrival.
+    ages: Vec<u64>,
+    /// The last block's listing, group by group, in the order offered.
+    listed: Vec<ListedBodies>,
+    /// This block's listing per entry of `waiting`, for the trim.
+    taken: Vec<u64>,
 }
 
-/// What one block took.
+/// What one block took, and what left the pool unserved.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Filled {
     /// Transactions the block lists.
     pub(crate) included: u64,
-    /// Transactions dropped unserved before this block, for age.
+    /// Transactions whose reference left CEN-I11's window before this block.
     pub(crate) expired: u64,
+    /// Transactions CEN-M10 evicted at this block: to make room for an
+    /// arrival paying more per weight, or to bring the pool within its limit.
+    pub(crate) evicted: u64,
+    /// Arrivals the pool refused: no strictly cheaper entries freed room.
+    pub(crate) refused: u64,
+    /// Transactions waiting after the block.
+    pub(crate) waiting: u64,
     /// The penalised gross reward at the block's weight
     /// ([`Fill::reward`]), before the split.
     pub(crate) paid_reward: u64,
@@ -73,20 +143,386 @@ pub(crate) struct Filled {
     pub(crate) fees: u64,
 }
 
+/// `k` shared across `counts` in proportion, by largest remainder; an equal
+/// remainder goes to the earlier entry. Each share is at most its count when
+/// `k` is at most their sum.
+fn pro_rata(counts: &[u64], k: u64) -> Vec<u64> {
+    let total: u128 = counts.iter().map(|&count| u128::from(count)).sum();
+    if total == 0 {
+        return vec![0; counts.len()];
+    }
+    let k = u128::from(k).min(total);
+    let mut shares: Vec<u64> = Vec::with_capacity(counts.len());
+    let mut remainders: Vec<(u128, usize)> = Vec::with_capacity(counts.len());
+    let mut given: u128 = 0;
+    for (index, &count) in counts.iter().enumerate() {
+        let scaled = k * u128::from(count);
+        let share = scaled / total;
+        given += share;
+        shares.push(u64::try_from(share).expect("a share is at most its count"));
+        remainders.push((scaled % total, index));
+    }
+    remainders.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let leftover = usize::try_from(k - given).expect("fewer than the entries");
+    for &(_, index) in remainders.iter().take(leftover) {
+        shares[index] += 1;
+    }
+    shares
+}
+
+/// The pool's order: the template's ([`template_order`]), then the lighter,
+/// then the cheaper, then build order. Eviction's order is this one's groups
+/// read backwards ([`eviction_order`] reverses the template's rate and hour).
+fn template_cmp(a: &Cohort, b: &Cohort) -> Ordering {
+    template_order(a.key(), b.key())
+        .then(a.weight.cmp(&b.weight))
+        .then(a.fee.cmp(&b.fee))
+        .then(a.arrived.cmp(&b.arrived))
+}
+
+/// Whether two cohorts are one group: tied by the order, at one fee and
+/// weight. Their transactions are then interchangeable but for age.
+fn same_group(a: &Cohort, b: &Cohort) -> bool {
+    template_order(a.key(), b.key()) == Ordering::Equal && a.weight == b.weight && a.fee == b.fee
+}
+
 impl BlockSpace {
+    /// A pool holding `cohorts`, kept in the pool's order.
+    #[cfg(test)]
+    fn holding(cohorts: &[Cohort]) -> Self {
+        let mut waiting = cohorts.to_vec();
+        waiting.sort_by(template_cmp);
+        Self {
+            waiting_total: waiting.iter().map(|cohort| cohort.count).sum(),
+            weight_total: waiting
+                .iter()
+                .map(|cohort| u128::from(cohort.weight) * u128::from(cohort.count))
+                .sum(),
+            waiting,
+            ..Self::default()
+        }
+    }
+
     /// The medians the next block is judged under.
     pub(crate) fn medians(&self, params: &shekyl_economics::EconomicParams) -> EffectiveMedian {
         self.medians.medians(params)
     }
 
-    /// Transactions waiting after the last block.
+    /// Transactions waiting after the last block ([`Filled::waiting`] is
+    /// the fold's read).
+    #[cfg(test)]
     pub(crate) fn waiting(&self) -> u64 {
         self.waiting_total
     }
 
+    /// Bodies listed since the last call, by age at inclusion (index = age
+    /// in blocks), and start counting again.
+    pub(crate) fn take_ages(&mut self) -> Vec<u64> {
+        core::mem::take(&mut self.ages)
+    }
+
+    /// The last block's listing, group by group.
+    pub(crate) fn listed(&self) -> &[ListedBodies] {
+        &self.listed
+    }
+
+    /// The end of the group that starts at `start`.
+    fn group_end(&self, start: usize) -> usize {
+        let head = &self.waiting[start];
+        let mut end = start + 1;
+        while end < self.waiting.len() && same_group(head, &self.waiting[end]) {
+            end += 1;
+        }
+        end
+    }
+
+    /// Every group, in the template's order, as index ranges.
+    fn groups(&self) -> Vec<core::ops::Range<usize>> {
+        let mut out = Vec::new();
+        let mut start = 0;
+        while start < self.waiting.len() {
+            let end = self.group_end(start);
+            out.push(start..end);
+            start = end;
+        }
+        out
+    }
+
+    fn group_count(&self, group: &core::ops::Range<usize>) -> u64 {
+        self.waiting[group.clone()]
+            .iter()
+            .map(|cohort| cohort.count)
+            .sum()
+    }
+
+    /// Take `k` from the cohorts of `group`, in proportion.
+    fn take_from(&mut self, group: core::ops::Range<usize>, k: u64) {
+        if k == 0 {
+            return;
+        }
+        let weight = self.waiting[group.start].weight;
+        if group.len() == 1 {
+            self.waiting[group.start].count -= k;
+        } else {
+            let counts: Vec<u64> = self.waiting[group.clone()]
+                .iter()
+                .map(|c| c.count)
+                .collect();
+            for (index, share) in group.zip(pro_rata(&counts, k)) {
+                self.waiting[index].count -= share;
+            }
+        }
+        self.waiting_total -= k;
+        self.weight_total -= u128::from(weight) * u128::from(k);
+    }
+
+    fn drop_empty(&mut self) {
+        self.waiting.retain(|cohort| cohort.count > 0);
+    }
+
+    /// Step 1: the reconcile at the tip below `connecting`.
+    fn expire(&mut self, connecting: u64) -> u64 {
+        let Some((oldest, _)) = admissible_references(BlockHeight::from_raw(connecting)) else {
+            return 0;
+        };
+        let oldest = oldest.to_raw();
+        let mut expired = 0;
+        let mut expired_weight: u128 = 0;
+        self.waiting.retain(|cohort| {
+            let keep = cohort.reference >= oldest;
+            if !keep {
+                expired += cohort.count;
+                expired_weight += u128::from(cohort.weight) * u128::from(cohort.count);
+            }
+            keep
+        });
+        self.waiting_total -= expired;
+        self.weight_total -= expired_weight;
+        expired
+    }
+
+    /// Add `k` to the cohort at `index`.
+    fn add(&mut self, index: usize, k: u64) {
+        let cohort = &mut self.waiting[index];
+        cohort.count += k;
+        self.waiting_total += k;
+        self.weight_total += u128::from(cohort.weight) * u128::from(k);
+    }
+
+    /// Step 2: admit `demand` copies of `tx`, built on the tip below
+    /// `connecting`, under `limit`. Returns `(evicted, refused)`.
+    ///
+    /// Each arrival is [`make_room`]'s question: the entries paying
+    /// strictly less per weight, the cheapest first, until it fits. An
+    /// arrival refused once leaves the pool as it was, so every identical
+    /// arrival after it is refused too. Where the next victim has the
+    /// arrival's weight and one victim covers the excess, each arrival
+    /// takes exactly one, which is what [`make_room`] returns for it; those
+    /// arrivals are admitted together.
+    fn admit(
+        &mut self,
+        connecting: u64,
+        demand: u64,
+        tx: OrdinaryTx,
+        limit: u64,
+        daa: u64,
+    ) -> (u64, u64) {
+        if demand == 0 {
+            return (0, 0);
+        }
+        let tip = connecting.saturating_sub(1);
+        let reference =
+            select_reference_height(BlockHeight::from_raw(tip)).map_or(0, BlockHeight::to_raw);
+        let arrival = Cohort {
+            arrived: connecting,
+            reference,
+            hour: tip.saturating_mul(daa) / SECONDS_PER_RECEIVED_KEY,
+            fee: tx.fee_atomic,
+            weight: tx.weight,
+            count: 0,
+        };
+        let rate = arrival.rate();
+        let new = self
+            .waiting
+            .partition_point(|cohort| template_cmp(cohort, &arrival) == Ordering::Less);
+        self.waiting.insert(new, arrival);
+
+        let (mut evicted, mut remaining) = (0u64, demand);
+        while remaining > 0 {
+            let free = u128::from(limit).saturating_sub(self.weight_total);
+            let fits = if tx.weight == 0 {
+                u128::from(remaining)
+            } else {
+                free / u128::from(tx.weight)
+            };
+            let fits = u64::try_from(fits.min(u128::from(remaining))).expect("at most remaining");
+            if fits > 0 {
+                self.add(new, fits);
+                remaining -= fits;
+                continue;
+            }
+            // The groups paying strictly less, the cheapest first.
+            let victims: Vec<core::ops::Range<usize>> = self
+                .groups()
+                .into_iter()
+                .rev()
+                .filter(|group| {
+                    self.waiting[group.start].rate().cmp_rate(rate) == Ordering::Less
+                        && self.group_count(group) > 0
+                })
+                .collect();
+            let over =
+                (self.weight_total + u128::from(tx.weight)).saturating_sub(u128::from(limit));
+            if let Some(first) = victims.first() {
+                if self.waiting[first.start].weight == tx.weight && over <= u128::from(tx.weight) {
+                    let batch = self.group_count(first).min(remaining);
+                    self.take_from(first.clone(), batch);
+                    self.add(new, batch);
+                    evicted += batch;
+                    remaining -= batch;
+                    continue;
+                }
+            }
+            // One arrival, through the pool's own walk over every entry.
+            let units = victims.iter().enumerate().flat_map(|(at, group)| {
+                let head = self.waiting[group.start];
+                (0..self.group_count(group)).map(move |_| (at, head.rate(), head.weight))
+            });
+            let Some(taken) = make_room(self.weight_total, tx.weight, limit, rate, units) else {
+                break;
+            };
+            let mut per_group = vec![0u64; victims.len()];
+            for at in taken {
+                per_group[at] += 1;
+            }
+            for (group, n) in victims.iter().zip(per_group) {
+                self.take_from(group.clone(), n);
+                evicted += n;
+            }
+            self.add(new, 1);
+            remaining -= 1;
+        }
+        // Nothing above removes an entry, so `new` held; drop the empties now.
+        self.drop_empty();
+        (evicted, remaining)
+    }
+
+    /// Step 3: offer the pool to `fill` in the template's order; the bodies
+    /// listed are recorded in `self.listed` (per group), `self.taken` (per
+    /// entry) and `self.ages`, and taken from the pool.
+    ///
+    /// **The stop rule.** A group is offered with [`Fill::admit_up_to`], and
+    /// a refusal ends it. It also ends every later group of the same weight:
+    /// `Fill::admit` refuses `(w, f)` at block weight `W` exactly when
+    /// `W + w` passes the block limit or `f` is less than
+    /// `penalised(W) − penalised(W + w)`, and a refusal leaves `W` where it
+    /// was. A later group of weight `w` pays `f' ≤ f`, because the order is
+    /// by fee per weight, so both conditions refuse it as well. A group of
+    /// another weight faces a different penalty and limit test and is still
+    /// offered, as the template walks every candidate.
+    fn offer(&mut self, fill: &mut Fill<'_>, height: u64) -> u64 {
+        self.listed.clear();
+        self.taken.clear();
+        self.taken.resize(self.waiting.len(), 0);
+        let mut closed: Vec<u64> = Vec::new();
+        let mut included = 0u64;
+        let mut start = 0;
+        while start < self.waiting.len() {
+            let end = self.group_end(start);
+            let head = self.waiting[start];
+            let group = start..end;
+            start = end;
+            if closed.contains(&head.weight) {
+                continue;
+            }
+            let offered = self.group_count(&group);
+            if offered == 0 {
+                continue;
+            }
+            let taken = fill.admit_up_to(head.weight, head.fee, offered);
+            if taken < offered {
+                closed.push(head.weight);
+            }
+            if taken == 0 {
+                continue;
+            }
+            let shares = if group.len() == 1 {
+                vec![taken]
+            } else {
+                let counts: Vec<u64> = self.waiting[group.clone()]
+                    .iter()
+                    .map(|c| c.count)
+                    .collect();
+                pro_rata(&counts, taken)
+            };
+            for (index, share) in group.clone().zip(shares) {
+                if share == 0 {
+                    continue;
+                }
+                let age = usize::try_from(height - self.waiting[index].arrived).expect("small");
+                if self.ages.len() <= age {
+                    self.ages.resize(age + 1, 0);
+                }
+                self.ages[age] += share;
+                self.taken[index] += share;
+                self.waiting[index].count -= share;
+            }
+            self.waiting_total -= taken;
+            self.weight_total -= u128::from(head.weight) * u128::from(taken);
+            self.listed.push(ListedBodies {
+                fee: head.fee,
+                weight: head.weight,
+                count: taken,
+            });
+            included += taken;
+        }
+        included
+    }
+
+    /// Step 4: bring the pool within `limit`, the bodies this block listed
+    /// (`self.taken`) counting toward the weight and never chosen
+    /// ([`trim_to`]).
+    fn trim(&mut self, limit: u64) -> u64 {
+        let listed_weight: u128 = self
+            .waiting
+            .iter()
+            .zip(&self.taken)
+            .map(|(cohort, &taken)| u128::from(cohort.weight) * u128::from(taken))
+            .sum();
+        if self.weight_total + listed_weight <= u128::from(limit) {
+            return 0;
+        }
+        // Units in eviction order: per group, the listed ones (never chosen)
+        // and the ones still waiting.
+        let order: Vec<core::ops::Range<usize>> = self.groups().into_iter().rev().collect();
+        let units: Vec<(Option<usize>, u64)> = order
+            .iter()
+            .enumerate()
+            .flat_map(|(at, group)| {
+                let weight = self.waiting[group.start].weight;
+                let listed: u64 = self.taken[group.clone()].iter().sum();
+                let waiting = self.group_count(group);
+                (0..listed)
+                    .map(move |_| (None, weight))
+                    .chain((0..waiting).map(move |_| (Some(at), weight)))
+            })
+            .collect();
+        let trimmed = trim_to(limit, units, |key| key.is_none());
+        let mut per_group = vec![0u64; order.len()];
+        for key in trimmed {
+            per_group[key.expect("only waiting units are chosen")] += 1;
+        }
+        let mut total = 0;
+        for (group, n) in order.into_iter().zip(per_group) {
+            self.take_from(group, n);
+            total += n;
+        }
+        total
+    }
+
     /// Build the block at `height` under `medians` — what [`Self::medians`]
-    /// returned for it — from the waiting transactions and `demand` new ones,
-    /// each the ordinary transaction `tx` priced at `at`, then record it.
+    /// returned for it — from the pool and `demand` new transactions, each
+    /// the ordinary transaction `tx` priced at `at`, then record it.
     pub(crate) fn fill(
         &mut self,
         height: u64,
@@ -95,22 +531,12 @@ impl BlockSpace {
         tx: OrdinaryTx,
         at: &FeePoint<'_>,
     ) -> Filled {
-        let livetime_blocks = MEMPOOL_TX_LIVETIME_SECS / at.params.daa_target_seconds;
-        let mut expired = 0;
-        while let Some(&(arrived, count)) = self.waiting.front() {
-            if height - arrived <= livetime_blocks {
-                break;
-            }
-            expired += count;
-            self.waiting.pop_front();
-        }
-        if demand > 0 {
-            self.waiting.push_back((height, demand));
-        }
-        self.waiting_total = self.waiting_total + demand - expired;
+        let limit = Limits::of_block_limit(medians.limit(at.params).to_raw()).max_weight;
+        let expired = self.expire(height);
+        let (made_room, refused) =
+            self.admit(height, demand, tx, limit, at.params.daa_target_seconds);
 
         let effective = medians.effective_median.to_raw();
-        let offered = self.waiting();
         let coinbase = u64::try_from(COINBASE_RESERVE).expect("the reserve fits");
         let mut fill = Fill::empty(
             effective,
@@ -120,27 +546,18 @@ impl BlockSpace {
             at.params,
         )
         .expect("sim trajectory stays within the reward's arithmetic domain");
-        let included = fill.admit_up_to(tx.weight, tx.fee_atomic, offered);
-        let mut taken = included;
-        while taken > 0 {
-            let front = self
-                .waiting
-                .front_mut()
-                .expect("taken never exceeds offered");
-            let from_front = front.1.min(taken);
-            front.1 -= from_front;
-            taken -= from_front;
-            if front.1 == 0 {
-                self.waiting.pop_front();
-            }
-        }
-        self.waiting_total -= included;
+        let included = self.offer(&mut fill, height);
+        let trimmed = self.trim(limit);
+        self.drop_empty();
 
         let weight = fill.block_weight();
         self.medians.push(medians, weight, at.params);
         Filled {
             included,
             expired,
+            evicted: made_room + trimmed,
+            refused,
+            waiting: self.waiting_total,
             paid_reward: fill.reward(),
             block_weight: weight,
             bodies_weight: fill.bodies_weight(),
@@ -150,96 +567,5 @@ impl BlockSpace {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use shekyl_economics::{EconomicParams, TxVolume};
-
-    /// The livetime is the C++ define's, read from the header.
-    #[test]
-    fn the_pool_livetime_is_the_cxx_define() {
-        let config_h = include_str!("../../../src/cryptonote_config.h");
-        let value = config_h
-            .lines()
-            .find_map(|l| {
-                let mut words = l.split_whitespace();
-                (words.next() == Some("#define")
-                    && words.next() == Some("CRYPTONOTE_MEMPOOL_TX_LIVETIME"))
-                .then(|| words.next())
-                .flatten()
-            })
-            .expect("cryptonote_config.h defines CRYPTONOTE_MEMPOOL_TX_LIVETIME");
-        assert_eq!(value, "(86400*3)", "the define's expression");
-        assert_eq!(MEMPOOL_TX_LIVETIME_SECS, 86_400 * 3);
-    }
-
-    /// The running total against the queue it stands for.
-    fn assert_total_is_the_queue(space: &BlockSpace) {
-        let queued: u64 = space.waiting.iter().map(|&(_, count)| count).sum();
-        assert_eq!(
-            space.waiting(),
-            queued,
-            "the running total is the queue's sum"
-        );
-    }
-
-    fn baseline_tx() -> OrdinaryTx {
-        OrdinaryTx {
-            fee_atomic: 3_000_000_000,
-            weight: 14_643,
-        }
-    }
-
-    /// Below the median a block takes all it is offered; what the rule
-    /// refuses waits, oldest first, and is dropped once older than the
-    /// livetime.
-    #[test]
-    fn the_block_takes_what_the_rule_admits_and_the_rest_waits_then_expires() {
-        let params = EconomicParams::default();
-        let at = FeePoint {
-            already_generated: 0,
-            volume: TxVolume::per_block(params.tx_volume_baseline),
-            long_term_median: params.full_reward_zone,
-            sigma_scaled: 0,
-            burn_pct_scaled: 0,
-            chain_leaves: 1,
-            params: &params,
-            relay: shekyl_economics::relay_policy(),
-        };
-        let mut space = BlockSpace::default();
-        let small = space.fill(0, space.medians(&params), 5, baseline_tx(), &at);
-        assert_eq!(
-            (small.included, space.waiting()),
-            (5, 0),
-            "five fit under the zone"
-        );
-
-        // More than a livetime of blocks can take, so some of it expires.
-        let demand = 1_000_000;
-        let full = space.fill(1, space.medians(&params), demand, baseline_tx(), &at);
-        assert!(full.included < demand, "the rule refuses past the median");
-        assert_total_is_the_queue(&space);
-        assert_eq!(space.waiting(), demand - full.included);
-
-        let livetime = MEMPOOL_TX_LIVETIME_SECS / params.daa_target_seconds;
-        let mut drained = full.included;
-        for height in 2..=livetime + 1 {
-            let block = space.fill(height, space.medians(&params), 0, baseline_tx(), &at);
-            assert_eq!(
-                block.expired, 0,
-                "nothing is older than the livetime at {height}"
-            );
-            drained += block.included;
-            assert_total_is_the_queue(&space);
-        }
-        let last = space.fill(livetime + 2, space.medians(&params), 0, baseline_tx(), &at);
-        assert!(last.expired > 0, "the rest is older than the livetime");
-        assert_eq!(last.included, 0, "dropped before the block is filled");
-        assert_eq!(
-            drained + last.expired,
-            demand,
-            "every transaction is served or dropped"
-        );
-        assert_eq!(space.waiting(), 0);
-        assert_total_is_the_queue(&space);
-    }
-}
+#[path = "block_space_tests.rs"]
+mod tests;
