@@ -5,7 +5,7 @@
 
 [package]
 name = "randomx-v2-sys"
-description = "Hand-written extern \"C\" bindings for external/randomx-v2 (Phase 2g differential harness only)"
+description = "Hand-written extern \"C\" bindings for external/randomx-v2 (the RandomX differential and full-dataset parity harnesses only)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,7 +20,8 @@ build = "build.rs"
 # This crate is a Shekyl-introduced `*-sys`-shaped sub-crate that owns
 # the hand-written `extern "C"` declarations + the `build.rs` linker
 # directives (added at C3 per §8.1) for `external/randomx-v2`'s
-# 7-symbol cache + VM surface (R4-D4 enumeration). The sole consumer
+# 12-symbol cache, dataset and VM surface (R4-D4 enumeration, and the
+# Phase 3a dataset functions). The sole consumer
 # is `shekyl-randomx-differential` (lands at C4 per §8.1); per §5.2.3
 # + §5.2.5 + R1-D13 disposition, no other workspace member may depend
 # on this crate. T14 (§6.6) asserts the sole-consumer invariant
@@ -42,9 +43,9 @@ build = "build.rs"
 # `fork-pin-coupled = true` marker signals to T15 (§6.7) and to
 # any future fork-pin-bump PR that this crate's `src/lib.rs`
 # declarations are coupled to a specific upstream pin; any advance
-# requires the 7-signature re-audit per R1-D2 reopening criterion.
+# requires the 12-signature re-audit per R1-D2 reopening criterion.
 # `fork-pin-sha` is the superproject gitlink pin T15 asserts
-# (`HEAD:external/randomx-v2`). Any advance requires the 7-signature
+# (`HEAD:external/randomx-v2`). Any advance requires the 12-signature
 # re-audit per R1-D2 reopening criterion. T15 also compares on-disk
 # HEAD when the checkout has its own `.git`.
 fork-pin-coupled = true

@@ -5,7 +5,8 @@
 
 //! Hand-written `extern "C"` bindings for the `external/randomx-v2`
 //! C reference. Consumed exclusively by `shekyl-randomx-differential`
-//! (the Phase 2g Rust/C differential test harness).
+//! (the Phase 2g Rust/C differential test harness, and the Phase 3a
+//! full-dataset parity harness and miner-shaped known-answer tool).
 //!
 //! See
 //! [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2G_PLAN.md)
@@ -19,14 +20,14 @@
 //! `extern "C"` declarations and (at C3 per §8.1 / §5.2.2) the
 //! linker directives. Three reasons:
 //!
-//! 1. **Audit boundary.** All 7 declarations are in this one source
+//! 1. **Audit boundary.** All 12 declarations are in this one source
 //!    file, audit-bounded against
 //!    [`external/randomx-v2/src/randomx.h`](../../../external/randomx-v2/src/randomx.h)
 //!    at the pinned fork commit (`aaafe71...`). Comparison against
 //!    the C header is mechanical and one-time per fork-pin advance.
 //!    Bindgen-generated declarations were rejected on auditability
 //!    grounds per R1-D2 substrate-anchored rationale (generated code
-//!    varies per bindgen version; for a 7-symbol surface the audit
+//!    varies per bindgen version; for a 12-symbol surface the audit
 //!    cost of hand-written declarations is one-time per fork-pin
 //!    versus per-bindgen-version).
 //! 2. **Sole-consumer discipline.** The Phase 2F crate-invariant
@@ -46,7 +47,7 @@
 //!
 //! # Fork-pin coupling
 //!
-//! The 7-signature surface is pinned against
+//! The 12-signature surface is pinned against
 //! `external/randomx-v2/src/randomx.h` at fork commit
 //! `aaafe71322df6602c21a5c72937ac284724ae561`. The
 //! `[package.metadata.shekyl]` `fork-pin-coupled = true` +
@@ -54,7 +55,7 @@
 //! audit-trail anchors; T15 (§6.7) asserts the metadata SHA
 //! matches the current HEAD of `external/randomx-v2` at per-PR
 //! cadence. Any advance of the fork pin requires re-verifying the
-//! 7 declarations against the new pin's `randomx.h` (R1-D2
+//! 12 declarations against the new pin's `randomx.h` (R1-D2
 //! reopening criterion).
 //!
 //! # Safety
@@ -85,7 +86,7 @@
 
 #![deny(missing_docs)]
 
-use std::os::raw::{c_int, c_void};
+use std::os::raw::{c_int, c_ulong, c_void};
 
 /// Opaque handle to a `randomx_cache` allocated by
 /// [`randomx_alloc_cache`]. Zero-sized `_opaque: [u8; 0]` body
@@ -108,6 +109,16 @@ pub struct RandomxCache {
 /// `*mut RandomxVm` pointers returned by the C library.
 #[repr(C)]
 pub struct RandomxVm {
+    _opaque: [u8; 0],
+}
+
+/// Opaque handle to a `randomx_dataset` allocated by
+/// [`randomx_alloc_dataset`]: the ~2 080 MiB full dataset a miner
+/// hashes against in fast mode. Same zero-sized opaque shape as
+/// [`RandomxCache`]; only used through `*mut RandomxDataset`
+/// pointers returned by the C library.
+#[repr(C)]
+pub struct RandomxDataset {
     _opaque: [u8; 0],
 }
 
@@ -166,7 +177,25 @@ pub const RANDOMX_FLAG_DEFAULT: RandomxFlags = 0;
 /// call sites.
 pub const RANDOMX_FLAG_V2: RandomxFlags = 128;
 
+/// `RANDOMX_FLAG_FULL_MEM = 4` per
+/// [`external/randomx-v2/src/randomx.h`](../../../external/randomx-v2/src/randomx.h)'s
+/// `randomx_flags` enum. Fast mode: the VM reads a full dataset
+/// instead of computing dataset items from the cache. Pass to
+/// [`randomx_create_vm`] with a non-NULL `dataset` and a NULL
+/// `cache`; the full-dataset parity harness ORs it with
+/// [`randomx_get_flags`]'s result and [`RANDOMX_FLAG_V2`], the
+/// flags a miner runs.
+pub const RANDOMX_FLAG_FULL_MEM: RandomxFlags = 4;
+
 extern "C" {
+    /// The flags the C library recommends for this CPU (JIT, hardware
+    /// AES, the Argon2 SIMD variant): what a miner passes. The light
+    /// differential harness does not use them (it pins
+    /// [`RANDOMX_FLAG_DEFAULT`] for cross-runner determinism); the
+    /// full-dataset parity harness does, so it measures the mode
+    /// miners run.
+    pub fn randomx_get_flags() -> RandomxFlags;
+
     /// Allocate a `randomx_cache` instance. Returns NULL on
     /// allocation failure; callers must check before use. Caller
     /// releases via [`randomx_release_cache`].
@@ -193,13 +222,36 @@ extern "C" {
     /// Release a cache allocated via [`randomx_alloc_cache`].
     pub fn randomx_release_cache(cache: *mut RandomxCache);
 
-    /// Create a VM bound to a cache. Light mode (R4-D5): pass a
-    /// non-NULL `cache` and a NULL `dataset`. Returns NULL on
-    /// allocation failure; callers must check before use.
+    /// Allocate a full dataset (~2 080 MiB). Returns NULL on
+    /// allocation failure; callers must check before use. Caller
+    /// releases via [`randomx_release_dataset`].
+    pub fn randomx_alloc_dataset(flags: RandomxFlags) -> *mut RandomxDataset;
+
+    /// The number of items in a full dataset.
+    pub fn randomx_dataset_item_count() -> c_ulong;
+
+    /// Compute `item_count` dataset items from `start_item` out of an
+    /// initialized cache. Disjoint ranges may be filled from several
+    /// threads at once (the library's own benchmark does this); the
+    /// cache must outlive every call.
+    pub fn randomx_init_dataset(
+        dataset: *mut RandomxDataset,
+        cache: *mut RandomxCache,
+        start_item: c_ulong,
+        item_count: c_ulong,
+    );
+
+    /// Release a dataset allocated via [`randomx_alloc_dataset`].
+    pub fn randomx_release_dataset(dataset: *mut RandomxDataset);
+
+    /// Create a VM. Light mode (R4-D5): a non-NULL `cache` and a NULL
+    /// `dataset`. Fast mode ([`RANDOMX_FLAG_FULL_MEM`]): a NULL `cache`
+    /// and a non-NULL `dataset`. Returns NULL on allocation failure;
+    /// callers must check before use.
     pub fn randomx_create_vm(
         flags: RandomxFlags,
         cache: *mut RandomxCache,
-        dataset: *mut c_void,
+        dataset: *mut RandomxDataset,
     ) -> *mut RandomxVm;
 
     /// Destroy a VM created via [`randomx_create_vm`]. Does NOT

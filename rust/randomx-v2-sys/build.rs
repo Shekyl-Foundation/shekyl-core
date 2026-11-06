@@ -46,8 +46,8 @@
 //     `-DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` cmake option, and
 //     the handoff relationship between the two, then `return`
 //     cleanly. The `rlib` still compiles; only the downstream binary
-//     link step fails (with undefined references to the seven cache
-//     + VM symbols enumerated in `src/lib.rs`). This is the R5-D2
+//     link step fails (with undefined references to the cache,
+//     dataset and VM symbols enumerated in `src/lib.rs`). This is the R5-D2
 //     soft-fail refinement of R4-D3's original `process::exit(1)`
 //     disposition; it preserves the §8 per-commit bisection invariant
 //     for workspace-wide cargo invocations (e.g., `cargo clippy
@@ -79,7 +79,7 @@ fn main() {
                  randomx-v2-sys's rlib will compile but linking any \
                  binary that depends on it (e.g., the Phase 2g \
                  shekyl-randomx-differential harness) will fail with \
-                 undefined references to the 7-symbol cache + VM \
+                 undefined references to the cache, dataset and VM \
                  surface. To build the harness: configure CMake with \
                  -DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON, build \
                  the librandomx.a artifact, then export \
