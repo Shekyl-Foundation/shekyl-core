@@ -115,6 +115,7 @@ pub mod cache_precondition;
 pub mod canonical_outputs;
 pub mod corpus_random;
 pub mod failure_output;
+pub mod full_parity;
 pub mod invocation_banner;
 pub mod mode_adversarial_ratio;
 pub mod mode_concurrent;

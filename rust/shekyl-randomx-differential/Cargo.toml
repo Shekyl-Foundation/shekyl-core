@@ -74,6 +74,17 @@ path = "src/main.rs"
 name = "gen-parity-corpus"
 path = "src/bin/gen_parity_corpus.rs"
 
+# The Phase 3a full-dataset parity gate and its miner-shaped known
+# answer (`RANDOMX_V2_PHASE3_PLAN.md` §7), run by the `full-parity` job
+# of `randomx-v2-differential.yml`.
+[[bin]]
+name = "full-parity"
+path = "src/bin/full_parity.rs"
+
+[[bin]]
+name = "miner-kat"
+path = "src/bin/miner_kat.rs"
+
 [dependencies]
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx", features = ["test-internals"] }
 randomx-v2-sys = { path = "../randomx-v2-sys" }
@@ -85,6 +96,13 @@ shekyl-types = { path = "../shekyl-types" }
 # primitive, so the domain separator is registry-governed like every
 # other one rather than a local Keccak call.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# The full-dataset gate's genesis case: mainnet's genesis block as the
+# daemon assembles it (the network table's transaction under the genesis
+# tool's header), hashed and PoW-blobbed by the wire crate.
+shekyl-network = { path = "../shekyl-network" }
+shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
+shekyl-wire = { path = "../shekyl-wire" }
+hex = "0.4"
 rand_chacha = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }
