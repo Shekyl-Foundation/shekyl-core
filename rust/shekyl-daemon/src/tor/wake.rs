@@ -603,8 +603,8 @@ mod tests {
         rx
     }
 
-    /// **The spin (FOLLOWUPS: "a daemon with managed Tor idles at about
-    /// 1.2 cores").** `bootstrap_poll_loop` drops its sender after `Ready`;
+    /// **The spin (`TOR_SUPERVISOR.md` §10 `TSR-M15`: two threads near a
+    /// core each, idle).** `bootstrap_poll_loop` drops its sender after `Ready`;
     /// a closed watch answers `changed()` at once, every time. The watch
     /// says `Ready` once and leaves the wait; the next wait stays pending
     /// until its timer. Restoring `let _changed = bootstrap.changed().await;`
