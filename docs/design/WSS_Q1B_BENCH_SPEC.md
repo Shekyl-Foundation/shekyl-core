@@ -897,9 +897,11 @@ process enforced `arch == aarch64`, `userland == 64-bit`, `RAM >= 7.5 GB` and
 `device matches ["Raspberry Pi 4", "BCM2711"]`, and recorded the two operator
 attestations it cannot observe — `storage == usb-ssd` and
 `thermals == sustained steady state` — on the maintainer's authorization.
-Storage was a **Verbatim Pocket SSD** (`18a5:0481`, `rotational=0`, ext4 at
-`/mnt/ssd`), with the repository, build target and every measured store on that
-device; the OS remains microSD and no longer touches a measured path.
+Storage was a **Verbatim Pocket SSD** (`18a5:0481`, `rotational=0`, ext4),
+mounted as the floor device's attested storage, with the repository, build
+target and every measured store on that device; the OS remains microSD and no
+longer touches a measured path. The mount point is the device's own operational
+detail and lives with the host record, not here (rule 37).
 `Raspberry Pi 4 Model B Rev 1.4`, kernel `7.0.0-1020-raspi`, prover
 `shekyl-fcmp 3.1.0` at `ece3aa4fb` — clean, not dirty.
 

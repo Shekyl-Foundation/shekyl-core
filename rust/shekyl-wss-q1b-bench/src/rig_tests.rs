@@ -242,7 +242,11 @@ fn a_cortex_a72_core_string_alone_no_longer_grades() {
 /// `grading` rather than simply demanding a path of every run.
 #[test]
 fn a_graded_run_must_name_the_path_its_writes_land_on() {
-    let path = std::path::Path::new("/mnt/ssd/ring");
+    // Deliberately not the rig's real mount point: the rule under test is
+    // "a graded run names a path", and any path exercises it. A local mount
+    // path here would read as a dependency the test does not have, and
+    // `shekyl-core` is public (rule 37 — the role, never the location).
+    let path = std::path::Path::new("/attested-device/ring");
 
     // Grading is exactly where the claim is made, so it is the only place the
     // path is required.
