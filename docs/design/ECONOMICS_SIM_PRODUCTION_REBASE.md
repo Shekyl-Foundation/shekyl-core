@@ -2819,7 +2819,9 @@ and the bound. It checks against a 256-bit oracle at the growth medians.
   fixtures pass unregenerated (2 passed in 267 s, release).
 - **Z-2, missed as worded, and not on cost.** `sustained_growth` cannot
   fold to 135 years on either arm. The refusal is upstream of the fill,
-  which admits the blocks the walk admits, so the pin reaches it too. The year
+  which admits the blocks the walk admits, so the pin reaches it too. That
+  is derived, not measured: the pin's fold to year 114 had not finished
+  when this was written. The year
   its cumulative fee burn passes everything emitted, the fold's supply
   invariant refuses it: `engine.rs` `net_supply`, "a fold destroys only
   fees, which never exceed what it emitted". On production that is year
