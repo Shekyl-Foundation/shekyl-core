@@ -51,7 +51,7 @@ The brief refers to "F4b / F4c / F6 / F7" and "T5 / T7 / T8" as if `docs/design/
 
 ### 1.3 The existing "three-leg" is **not** the differential this study needs
 Today's three-leg differential is **rust-light ≡ C-light ≡ canonical-pin** (`mode_correctness.rs:272`; corpus `corpus_random.rs`). It is *light-vs-light*. The brief's target — **XMRig-produced hash ≡ C-full ≡ Rust-light** — bridges two things the codebase keeps *separate*:
-- The **C-full / miner-produced** leg is the distinct **Hole-1 gate** (`RANDOMX_V2_PHASE3_PLAN.md:436` §7), with a miner KAT already pinned at `tests/randomx_v2_parity/randomx_v2_miner_kat.cpp` (`randomx_v2_full_parity_miner_kat`, status *discharged*).
+- The **C-full / miner-produced** leg is the distinct **Hole-1 gate** (`RANDOMX_V2_PHASE3_PLAN.md:436` §7), with a miner KAT already pinned by `shekyl-randomx-differential`'s `miner-kat` bin (status *discharged*).
 - **No XMRig leg exists anywhere.** `grep xmrig` across `shekyl-randomx-differential` returns nothing.
 
 So the "shared-corpus equivalence that licenses a ceiling number" is **new ground**. Phase 0 builds it by *reusing* the Hole-1 C-full path and *adding* an XMRig leg, without touching the equivalence-critical oracle.
@@ -321,7 +321,7 @@ Structured adversarial passes on the measurement design (2026-07-05). All findin
 - Daemon PoW call: the Rust ingest's `shekyl-pow-randomx` (the C++ dispatch `pow_randomx.cpp:16-21` → `shekyl_pow_randomx_v2_hash` was deleted with the C++ chain in DRS-X; the export stays for the parity harness); Rust export `rust/shekyl-ffi/src/pow_randomx_ffi.rs:177-214`; C header `src/shekyl/shekyl_ffi.h:1235`. `nm` isolation `scripts/ci/check_randomx_symbol_isolation.sh` (banned C `randomx_*` list `:76`; required Rust export check `:97`). Consensus stub (do NOT route benches through it) `rust/shekyl-consensus/src/randomx.rs:16-52`.
 
 **Parity / Hole-1 (C-full + miner KAT)**
-- `RANDOMX_V2_PHASE3_PLAN.md:436` §7 (C-full vs Rust-light); miner KAT `tests/randomx_v2_parity/randomx_v2_miner_kat.cpp` (`randomx_v2_full_parity_miner_kat`), full parity `tests/randomx_v2_parity/randomx_v2_full_parity.cpp`. CI: `randomx-v2-differential.yml` (T5 daily), `randomx-v2-adversarial-ratio.yml` (T6 weekly).
+- `RANDOMX_V2_PHASE3_PLAN.md:436` §7 (C-full vs Rust-light); miner KAT `rust/shekyl-randomx-differential/src/bin/miner_kat.rs`, full parity `rust/shekyl-randomx-differential/src/bin/full_parity.rs` (`full-parity` job). CI: `randomx-v2-differential.yml` (T5 daily), `randomx-v2-adversarial-ratio.yml` (T6 weekly).
 
 **Difficulty / LWMA**
 - `rust/shekyl-difficulty/src/lwma1.rs:62` (`lwma1_next`; clamp `:97-98,125`; floor `:142`); consts `src/consts.rs:22,32` (`N=90`, `T=120`); JSON source `config/consensus_constants.json:9-13`. C++ call path `src/cryptonote_core/blockchain.cpp,192,1008,1095`. Cross-check `tests/difficulty/lwma1_cross_check.cpp` (monotonic vectors 1–5; anti-selfish-mine vectors 6–7 `:176-188`).
