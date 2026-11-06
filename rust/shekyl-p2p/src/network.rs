@@ -31,13 +31,14 @@ use shekyl_capped_stream::{node_gate, process_write_stall};
 use shekyl_clearnet::{channel_choice, zero_tally, ClearnetOption, Linger};
 use shekyl_dialer::Dialer;
 use shekyl_p2p_session::{
-    CoreSyncData, Intervals, Owners, Parts, PerConnector, ProbeHandshake, SessionConfig,
+    Board, CoreSyncData, Intervals, Owners, Parts, PerConnector, ProbeHandshake, SessionConfig,
     SessionLayer,
 };
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::RefusedSet;
 use shekyl_relay::owner::{
-    self as relay, PoolDoor, RelayConfig, RelayHandle, RelayParts, RelayStartError, SecureRelayRng,
+    self as relay, PoolDoor, RelayConfig, RelayHandle, RelayParts, RelaySnapshot, RelayStartError,
+    SecureRelayRng,
 };
 use shekyl_relay::{NodeSync, OriginVerdict};
 use shekyl_runtime::{runtime, Pool, RuntimeBudget, ThreadName};
@@ -52,7 +53,7 @@ use tokio::sync::watch;
 use crate::bans::{self, BanSpan, Bans};
 use crate::descriptors;
 use crate::dial::{ClearnetReady, Connectors, Spans, ACCEPT_BACKOFF};
-use crate::facts::{self, ConnectionsSnapshot, LinkTotals, ListedPeer, PeerCounts};
+use crate::facts::{self, LinkTotals, ListedAddress, PeerCounts, SocketTraffic};
 use crate::peers::{self, OwnerLoops, Peers};
 use crate::plan::{LinkLimits, NetworkPlan, TorPlan};
 use crate::tor::{TorLink, TOR_SOCKS_TIMEOUT};
@@ -546,10 +547,16 @@ impl Network {
         &self.inner.bans
     }
 
-    /// The connections, read against one clock read.
+    /// The session board at this moment. Cloning it clones an `Arc`.
     #[must_use]
-    pub fn connections(&self, now_unix: u64) -> ConnectionsSnapshot {
-        facts::connections(&self.inner.layer.board(), now_unix)
+    pub fn board(&self) -> Board {
+        self.inner.layer.board()
+    }
+
+    /// Traffic the link gate holds for one admission id.
+    #[must_use]
+    pub fn socket_traffic(&self, id: u64) -> SocketTraffic {
+        facts::socket_traffic(id)
     }
 
     /// The link totals.
@@ -559,10 +566,16 @@ impl Network {
     }
 
     /// The peer lists, white then gray, for every connector or clearnet
-    /// only.
+    /// only. Each row is the list's address, not an RPC rendering of it.
     #[must_use]
-    pub fn peer_list(&self, public_only: bool) -> Vec<ListedPeer> {
-        facts::listed_peers(&self.inner.dialer, public_only)
+    pub fn listed(&self, public_only: bool) -> Vec<ListedAddress> {
+        facts::listed(&self.inner.dialer, public_only)
+    }
+
+    /// The relay owner's published snapshot.
+    #[must_use]
+    pub fn relay_snapshot(&self) -> Arc<RelaySnapshot> {
+        self.inner.relay.snapshot()
     }
 
     /// The sockets per connector and direction, and the clearnet list
@@ -576,12 +589,6 @@ impl Network {
     #[must_use]
     pub fn session_counts(&self) -> (u64, u64) {
         facts::session_counts(&self.inner.layer.board())
-    }
-
-    /// `get_stem_tallies`' body, in the JSON the C++ served.
-    #[must_use]
-    pub fn stem_tallies_json(&self) -> String {
-        facts::stem_tallies_json(&self.inner.relay.snapshot())
     }
 
     /// Store the address file if its interval has passed. The node calls

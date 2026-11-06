@@ -1261,6 +1261,13 @@ pub fn get_peer_list(
     }))
 }
 
+/// `/get_stem_tallies` (host-only): the relay's floor diagnostic and the
+/// per-successor stem counts. The value is the response body. It carries
+/// no status envelope.
+pub fn get_stem_tallies(facts: &dyn P2pFacts) -> Result<shekyl_rpc_types::StemTallies, RpcFault> {
+    Ok(facts.stem_tallies()?)
+}
+
 /// `sync_info` (JSON-RPC, admin-only): chain sync's view (3.68). Whether
 /// the node is syncing, toward what, from whom and how fast, and whether it
 /// is stuck.
@@ -2783,8 +2790,8 @@ pub(crate) mod tests {
         fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault> {
             self.state.clone()
         }
-        fn stem_tallies(&self) -> Result<String, FactsFault> {
-            Ok("{}".to_owned())
+        fn stem_tallies(&self) -> Result<shekyl_rpc_types::StemTallies, FactsFault> {
+            Ok(shekyl_rpc_types::StemTallies::default())
         }
     }
 

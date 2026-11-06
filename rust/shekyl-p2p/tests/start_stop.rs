@@ -94,7 +94,7 @@ fn offline_starts_and_stops() {
     let network = Network::start(parts(plan(dir.path(), None))).expect("starts");
     assert!(network.listening().clearnet.is_empty());
     assert_eq!(network.listening().tor_forward, None);
-    assert!(network.connections(0).connections.is_empty());
+    assert!(network.board().is_empty());
     assert_eq!(network.session_counts(), (0, 0));
     network.stop();
     network.stop();

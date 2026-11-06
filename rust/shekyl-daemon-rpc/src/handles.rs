@@ -671,7 +671,7 @@ impl P2pFacts for P2pAbsent {
         Err(FactsFault::NotReady)
     }
 
-    fn stem_tallies(&self) -> Result<String, FactsFault> {
+    fn stem_tallies(&self) -> Result<shekyl_rpc_types::StemTallies, FactsFault> {
         Err(FactsFault::NotReady)
     }
 }

@@ -320,15 +320,16 @@ pub trait P2pFacts: Send + Sync {
     /// method that reads no peer list answers about peers or connections.
     fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault>;
 
-    /// The relay owner's per-successor stem tallies, as the JSON body
-    /// `/get_stem_tallies` serves (`DAEMON_RELAY_PRIVACY.md` §55).
+    /// The relay owner's per-successor stem tallies (`DAEMON_RELAY_PRIVACY.md`
+    /// §55). The handler serializes the value. The body is that object, not
+    /// a status envelope.
     ///
     /// # Errors
     ///
     /// [`FactsFault::NotReady`] before the node is up. A node owns its
     /// network for its whole life, so once up the tallies are always there
     /// to read; an offline node's are empty.
-    fn stem_tallies(&self) -> Result<String, FactsFault>;
+    fn stem_tallies(&self) -> Result<shekyl_rpc_types::StemTallies, FactsFault>;
 }
 
 /// The dynamic base-fee estimate: three priced tiers.

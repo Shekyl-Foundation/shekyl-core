@@ -44,11 +44,7 @@ fn json_ok(body: String) -> (StatusCode, [(&'static str, &'static str); 1], Stri
     (StatusCode::OK, [("content-type", "application/json")], body)
 }
 
-fn json_dispatch_error() -> (StatusCode, [(&'static str, &'static str); 1], String) {
-    json_error("FFI dispatch failed")
-}
-
-/// The REST error envelope with a reason that names what actually failed —
+/// The REST error envelope with a reason that names what actually failed.
 /// a natively-served method never fails for "FFI dispatch" reasons.
 fn json_error(reason: &str) -> (StatusCode, [(&'static str, &'static str); 1], String) {
     let envelope = shekyl_rpc_types::RestErrorEnvelope {
@@ -440,17 +436,9 @@ fn render<T: serde::Serialize>(
 /// silently changing the oracle.
 pub async fn get_stem_tallies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let facts = Arc::clone(&state.handles.p2p);
-    match tokio::task::spawn_blocking(move || facts.stem_tallies()).await {
-        Ok(Ok(body)) => json_ok(body),
-        Ok(Err(fault)) => {
-            tracing::warn!(?fault, "get_stem_tallies: facts unavailable");
-            json_dispatch_error()
-        }
-        Err(e) => {
-            tracing::warn!(?e, "get_stem_tallies: handler task did not complete");
-            json_dispatch_error()
-        }
-    }
+    let result =
+        tokio::task::spawn_blocking(move || crate::methods::get_stem_tallies(facts.as_ref())).await;
+    render("get_stem_tallies", "p2p facts unavailable", result)
 }
 
 #[cfg(test)]

@@ -37,6 +37,8 @@ shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 shekyl-mempool = { path = "../shekyl-mempool" }
 shekyl-miner = { path = "../shekyl-miner" }
+# Hostnames the connection list renders from a dialed onion's service key.
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 # The network the node builds and stops (P2P_3_REMNANT_CUTOVER_BRIEF.md
 # section 2): the one way sockets, sessions and the relay are reached.
 shekyl-p2p = { path = "../shekyl-p2p" }

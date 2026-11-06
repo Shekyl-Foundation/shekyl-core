@@ -90,5 +90,5 @@ pub use graph::{
     RelayDispatch, RelayNewError, RelayPlan, TxBlob, NEVER_SENT_RETRY_MS,
 };
 pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend};
-pub use shekyl_relay_privacy::SlotIndex;
+pub use shekyl_relay_privacy::{ConnectionId, SlotIndex};
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};

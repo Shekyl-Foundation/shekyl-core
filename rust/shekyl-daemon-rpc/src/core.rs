@@ -134,13 +134,11 @@ pub enum TxSlot {
     },
 }
 
-/// One live p2p connection, copied out of the C++ view before its owner is
-/// released.
+/// One live p2p connection, as the node read it from the session board.
 ///
-/// Raw and absolute, deliberately: the wire's elapsed times and rates are
-/// derived from these against the one `now` that came back beside the list,
-/// so a connection's reported lifetime and the divisor behind its own
-/// averages cannot come from different seconds.
+/// Raw and absolute: the wire's elapsed times and rates are derived from
+/// these against the one `now` beside the list, so a connection's reported
+/// lifetime and the divisor behind its averages come from the same second.
 // No `Eq`: the raw speeds are `f64`, and they are raw on purpose.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectionFacts {
@@ -189,8 +187,8 @@ pub enum P2pRead<T> {
     Offline,
 }
 
-/// One peerlist entry, copied out of the installed peer-list read. No
-/// clock: the lists carry none (3.55). Named apart from
+/// One peer-list entry, as the node read it. No clock: the lists carry
+/// none (3.55). Named apart from
 /// [`crate::info_facts::PeerFacts`], `get_info`'s Peers state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerEntry {

@@ -4889,6 +4889,7 @@ dependencies = [
  "shekyl-hash-budget",
  "shekyl-mempool",
  "shekyl-miner",
+ "shekyl-onion-v3",
  "shekyl-options",
  "shekyl-p2p",
  "shekyl-p2p-transport",
