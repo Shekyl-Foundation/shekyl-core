@@ -17382,10 +17382,16 @@ nothing moves. The class's state (`HiddenClass`: `Empty`, `One`,
 `Several`) is reported when it changes, first at the first epoch
 rebuild (`HiddenClassWatch` in `hidden_slot.rs`). Until that rebuild
 the watch is unarmed: the dialer's opening sessions are not a report.
-One is the class-of-one rotation report (`hop-0 edge cannot rotate`),
-a warning. Empty is a warning that a transaction this node originates
-has no address-hiding session to leave on. A return to several is
-noted as the session count. The three lines name the class. They do
+One is the class-of-one rotation report (`hop-0 edge cannot rotate`).
+Empty says that a transaction this node originates has no
+address-hiding session to leave on. A return to several is noted as
+the session count. All three are info lines (amended 2026-11-06, the
+alpha.11 hunt): Tor churn takes a node through empty and one on its way
+back to several, and the operator can change none of it. A transaction
+the node originates and holds for want of an address-hiding session is
+warned where it is held, in the relay's dispatch, and a managed Tor's
+posture line says the same. *Records-was: empty and one were warnings.*
+The three lines name the class. They do
 not say an origin pin has resumed: a pin whose frozen set is exhausted
 stays `NoOwnEdge` until the epoch ends (§98.5). A rebuild that finds
 the state unchanged reports nothing. `Relay::new` refuses `stems < 2` with a hidden connector (a new

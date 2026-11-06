@@ -320,84 +320,167 @@ fn a_dial_that_cannot_open_is_dial_failed_with_the_cause() {
     );
 }
 
+fn info_text(run: impl FnOnce()) -> String {
+    log_text(tracing::Level::INFO, run)
+}
+
 fn warn_text(run: impl FnOnce()) -> String {
     log_text(tracing::Level::WARN, run)
 }
 
-fn warn_count(text: &str, needle: &str) -> usize {
+fn count(text: &str, needle: &str) -> usize {
     text.matches(needle).count()
 }
 
+/// The idle report is an info line: every reason is a state the connector
+/// leaves without the operator. The first under-target spell's sixtieth
+/// idle wake says it; leaving the spell (a target of zero) starts another.
 #[test]
-fn an_idle_connector_warns_once_at_sixty_wakes_and_again_after_the_reason_changes() {
+fn an_idle_connector_says_so_once_at_sixty_wakes_and_again_in_a_new_spell() {
     let rig = Rig::new();
     assert!(rig.dialer.target(CLEARNET) > 0);
     let mut rng = SplitMix64::new(14);
-    let text = warn_text(|| {
+    let text = info_text(|| {
         for _ in 0..59 {
             assert!(!rig.dialer.wake(CLEARNET, &mut rng));
         }
     });
     assert_eq!(
-        warn_count(&text, "nothing dialed"),
+        count(&text, "dialed nothing"),
         0,
         "59 under-target wakes stay quiet: {text}"
     );
-    let text = warn_text(|| {
-        for _ in 0..60 {
+    let warned = warn_text(|| {
+        let text = info_text(|| {
+            assert!(!rig.dialer.wake(CLEARNET, &mut rng));
+        });
+        assert_eq!(
+            count(&text, "dialed nothing for 60 wakes: it knows no address"),
+            1,
+            "the 60th wake says it once: {text}"
+        );
+    });
+    assert_eq!(
+        count(&warned, "dialed nothing"),
+        0,
+        "the line is not a warning: {warned}"
+    );
+    let text = info_text(|| {
+        for _ in 0..120 {
             assert!(!rig.dialer.wake(CLEARNET, &mut rng));
         }
     });
     assert_eq!(
-        warn_count(&text, "nothing dialed: no candidate"),
-        1,
-        "the 60th wake warns once: {text}"
-    );
-    let text = warn_text(|| {
-        assert!(!rig.dialer.wake(CLEARNET, &mut rng));
-    });
-    assert_eq!(
-        warn_count(&text, "nothing dialed"),
+        count(&text, "dialed nothing"),
         0,
-        "a further wake with the same reason stays quiet: {text}"
+        "a further run with the same reason stays quiet: {text}"
     );
 
     let target = rig.dialer.target(CLEARNET);
     rig.dialer.set_target(CLEARNET, 0, &mut rng);
     assert!(!rig.dialer.wake(CLEARNET, &mut rng));
     rig.dialer.set_target(CLEARNET, target, &mut rng);
-    let text = warn_text(|| {
+    let text = info_text(|| {
         for _ in 0..59 {
             assert!(!rig.dialer.wake(CLEARNET, &mut rng));
         }
     });
     assert_eq!(
-        warn_count(&text, "nothing dialed"),
+        count(&text, "dialed nothing"),
         0,
-        "leaving the idle state resets the count: {text}"
+        "leaving the spell restarts the count: {text}"
     );
-    let text = warn_text(|| {
+    let text = info_text(|| {
         assert!(!rig.dialer.wake(CLEARNET, &mut rng));
     });
-    assert_eq!(warn_count(&text, "nothing dialed: no candidate"), 1);
+    assert_eq!(
+        count(&text, "dialed nothing for 60 wakes: it knows no address"),
+        1
+    );
 }
 
+/// An address the filter refuses (here this node's own) is named as in
+/// use, apart from an empty list.
 #[test]
-fn a_filter_is_named_apart_from_an_empty_list() {
+fn an_address_in_use_is_named_apart_from_an_empty_list() {
     let rig = Rig::new();
     rig.dialer.set_own_addresses(CLEARNET, vec![peer(1)]);
     let mut rng = admit(&rig, &peer(1), 15);
-    let text = warn_text(|| {
+    let text = info_text(|| {
         for _ in 0..60 {
             assert!(!rig.dialer.wake(CLEARNET, &mut rng));
         }
     });
     assert_eq!(
-        warn_count(&text, "a filter holds every address"),
+        count(
+            &text,
+            "every address it knows is connected, on a host it already reaches, or its own"
+        ),
         1,
         "{text}"
     );
-    assert_eq!(warn_count(&text, "no candidate"), 0, "{text}");
+    assert_eq!(count(&text, "it knows no address"), 0, "{text}");
+}
+
+/// A cooling address is named as cooling, not as filtered: a failed dial
+/// holds its seat until the cooldown passes (A7, the alpha.11 fleet).
+#[test]
+fn a_cooling_address_is_named_as_cooling() {
+    let rig = Rig::new();
+    rig.peer.refuse_unqueued(DialEnd::local_close());
+    let mut rng = admit(&rig, &peer(1), 18);
+    assert!(rig
+        .dialer
+        .dial(CLEARNET, &peer(1), DialAim::Keep, &mut rng)
+        .is_none());
+    assert!(rig.dialer.shared().lists.is_cooling(&peer(1)));
+    let text = info_text(|| {
+        for _ in 0..60 {
+            assert!(!rig.dialer.wake(CLEARNET, &mut rng));
+        }
+    });
+    assert_eq!(
+        count(
+            &text,
+            "the addresses it is not using are cooling after a failed dial"
+        ),
+        1,
+        "{text}"
+    );
+    assert_eq!(count(&text, "connected"), 0, "{text}");
+}
+
+/// A draw ends a run of idle wakes, not the spell: a dead address that
+/// thaws, is drawn and fails again does not repeat the line. Before, each
+/// draw re-armed it, and the gaps between the lines followed the cooldown
+/// ladder (A7, the alpha.11 fleet: about 47 a day on each public seed).
+#[test]
+fn a_draw_inside_one_spell_does_not_repeat_the_line() {
+    /// Past the longest cooldown and its jitter.
+    const PAST_COOLDOWN_NANOS: u64 = 2 * shekyl_peerlist::dial_profile(CLEARNET).cooldown.cap_nanos;
+    let rig = Rig::new();
+    rig.peer.refuse_unqueued(DialEnd::local_close());
+    let mut rng = admit(&rig, &peer(1), 19);
+    assert!(rig
+        .dialer
+        .dial(CLEARNET, &peer(1), DialAim::Keep, &mut rng)
+        .is_none());
+    let text = info_text(|| {
+        for _ in 0..3 {
+            for _ in 0..60 {
+                assert!(!rig.dialer.wake(CLEARNET, &mut rng));
+            }
+            rig.clock.set(Tick::new(
+                rig.clock.now().get().saturating_add(PAST_COOLDOWN_NANOS),
+            ));
+            assert!(
+                rig.dialer.wake(CLEARNET, &mut rng),
+                "past its cooldown the address is drawn, and fails again"
+            );
+            assert!(rig.dialer.shared().lists.is_cooling(&peer(1)));
+        }
+    });
+    assert_eq!(count(&text, "dialed nothing"), 1, "{text}");
 }
 
 #[test]
@@ -412,13 +495,41 @@ fn an_in_flight_dial_is_named_ahead_of_an_empty_draw() {
     wait_until("the dial to be in flight", || {
         rig.dialer.in_flight(CLEARNET) > 0
     });
-    let text = warn_text(|| {
+    let text = info_text(|| {
         for _ in 0..60 {
             assert!(!rig.dialer.wake(CLEARNET, &mut rng));
         }
     });
-    assert_eq!(warn_count(&text, "a dial is in flight"), 1, "{text}");
-    assert_eq!(warn_count(&text, "no candidate"), 0, "{text}");
+    assert_eq!(count(&text, "a dial is in flight"), 1, "{text}");
+    assert_eq!(count(&text, "it knows no address"), 0, "{text}");
+    let _request = wire.read_blocking();
+    wire.inject_blocking(reply(NETWORK, vec![]));
+    owner.join().expect("dial").expect("kept");
+}
+
+/// Below its bound, a dial in flight with nothing else drawable is named as
+/// in flight. Its address is an outstanding draw, not a filtered one (A7:
+/// on Tor, one dial of five read "a filter holds every address").
+#[test]
+fn a_dial_in_flight_below_the_bound_is_named_in_flight() {
+    let rig = Rig::new();
+    rig.dialer.set_in_flight_bound(CLEARNET, 2);
+    let mut rng = admit(&rig, &peer(1), 20);
+    let dialer = Arc::clone(&rig.dialer);
+    let owner = thread::spawn(move || {
+        dialer.dial(CLEARNET, &peer(1), DialAim::Keep, &mut SplitMix64::new(21))
+    });
+    let mut wire = rig.dialed();
+    wait_until("the dial to be in flight", || {
+        rig.dialer.in_flight(CLEARNET) == 1
+    });
+    let text = info_text(|| {
+        for _ in 0..60 {
+            assert!(!rig.dialer.wake(CLEARNET, &mut rng));
+        }
+    });
+    assert_eq!(count(&text, "a dial is in flight"), 1, "{text}");
+    assert_eq!(count(&text, "connected"), 0, "{text}");
     let _request = wire.read_blocking();
     wire.inject_blocking(reply(NETWORK, vec![]));
     owner.join().expect("dial").expect("kept");

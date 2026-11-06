@@ -48,6 +48,9 @@ pub struct SeatCensus {
     pub gray: usize,
     /// Hosts a gray draw could return.
     pub gray_candidates: usize,
+    /// Seats a hold keeps off the draw: gray cooling after a failed test,
+    /// and white under an excusal. Each is also in `white` or `gray`.
+    pub held: usize,
 }
 
 /// A partition that has already been demoted and expired.
@@ -66,6 +69,7 @@ impl Settled<'_> {
             white_candidates: self.partition.candidate_hosts(true, eligible),
             gray: self.partition.gray_len(),
             gray_candidates: self.partition.candidate_hosts(false, eligible),
+            held: self.partition.held_len(),
         }
     }
 

@@ -8,10 +8,7 @@
 //! between empty, one and several address-hiding sessions. The notice names
 //! the class. It does not say an exhausted origin pin has resumed.
 
-use super::hidden_slot::{
-    DegradedHiddenClass, HiddenClass, HiddenClassLevel, HiddenClassLine, HiddenClassNotice,
-    HiddenClassWatch,
-};
+use super::hidden_slot::{DegradedHiddenClass, HiddenClass, HiddenClassNotice, HiddenClassWatch};
 use super::*;
 
 use shekyl_draw_rng::SplitMix64;
@@ -64,8 +61,8 @@ fn expected_notice(
     Some(match (previous, observed) {
         (None, HiddenClass::Several) => HiddenClassNotice::Quiet,
         (_, HiddenClass::Several) => HiddenClassNotice::Recovered { sessions },
-        (_, HiddenClass::Empty) => HiddenClassNotice::Warn(DegradedHiddenClass::Empty),
-        (_, HiddenClass::One) => HiddenClassNotice::Warn(DegradedHiddenClass::One),
+        (_, HiddenClass::Empty) => HiddenClassNotice::Degraded(DegradedHiddenClass::Empty),
+        (_, HiddenClass::One) => HiddenClassNotice::Degraded(DegradedHiddenClass::One),
     })
 }
 
@@ -138,26 +135,19 @@ fn a_recovery_names_the_session_count() {
 fn a_notice_names_the_class_and_not_the_origin_pin() {
     assert_eq!(HiddenClassNotice::Quiet.line(), None);
     assert_eq!(
-        HiddenClassNotice::Warn(DegradedHiddenClass::Empty).line(),
-        Some(HiddenClassLine {
-            level: HiddenClassLevel::Warn,
-            text: "no outbound connection hides this node's address, so a transaction this node originates has no address-hiding session to leave on".to_string(),
-        })
+        HiddenClassNotice::Degraded(DegradedHiddenClass::Empty).line(),
+        Some("no outbound connection hides this node's address, so a transaction this node originates has no address-hiding session to leave on".to_string())
     );
     assert_eq!(
-        HiddenClassNotice::Warn(DegradedHiddenClass::One).line(),
-        Some(HiddenClassLine {
-            level: HiddenClassLevel::Warn,
-            text: "hop-0 edge cannot rotate: one outbound connection hides this node's address"
-                .to_string(),
-        })
+        HiddenClassNotice::Degraded(DegradedHiddenClass::One).line(),
+        Some(
+            "hop-0 edge cannot rotate: one outbound connection hides this node's address"
+                .to_string()
+        )
     );
     assert_eq!(
         HiddenClassNotice::Recovered { sessions: 3 }.line(),
-        Some(HiddenClassLine {
-            level: HiddenClassLevel::Info,
-            text: "3 outbound connections hide this node's address".to_string(),
-        })
+        Some("3 outbound connections hide this node's address".to_string())
     );
 }
 

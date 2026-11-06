@@ -297,6 +297,11 @@ impl Partition {
         self.white_seats
     }
 
+    /// Seats a hold keeps off the draw: cooling gray and excused white.
+    pub(crate) fn held_len(&self) -> usize {
+        self.cooling + self.excused_white
+    }
+
     pub(crate) fn is_gray(&self, address: &NetworkAddress) -> bool {
         matches!(self.seat_of(address), Some(Seat::Gray { .. }))
     }

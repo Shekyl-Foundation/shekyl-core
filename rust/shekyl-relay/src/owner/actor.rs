@@ -216,6 +216,29 @@ struct Pending {
     local: bool,
 }
 
+/// Why a stem fell back to fluff after its retry: the inherited
+/// retry-then-fluff, the designed path. None is a fault. A node with no
+/// outbound session takes it for every stem it holds, so it is a debug line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StemFallback {
+    /// No outbound session is a stem successor, after the refresh.
+    NoSuccessor,
+    /// The refresh turned the epoch to fluff.
+    EpochFluffs,
+    /// The successor's session was gone when it was written, twice.
+    WriteFailed,
+}
+
+impl StemFallback {
+    const fn reason(self) -> &'static str {
+        match self {
+            Self::NoSuccessor => "no outbound session to stem to",
+            Self::EpochFluffs => "the epoch turned to fluff",
+            Self::WriteFailed => "the stem successor's session was closing",
+        }
+    }
+}
+
 /// Start the owner on `parts.runtime`.
 ///
 /// # Errors
@@ -642,7 +665,13 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                 return;
             }
             RelayPlan::NoOwnEdge => {
-                tracing::debug!("no outbound edge hides this node's address; the origin is held");
+                // The one line that says this node's own transaction is not
+                // leaving. The class report beside the stem map is an info
+                // line, and a node with operator-run Tor has no posture line.
+                tracing::warn!(
+                    count = txs.len(),
+                    "this node's transaction is held: no outbound connection that hides this node's address can carry it now"
+                );
                 self.driver.zone_mut().hold_origin(txs, now);
                 return;
             }
@@ -729,8 +758,15 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                 .driver
                 .zone_mut()
                 .plan_relay(source, local, node_sync, &mut *self.rng);
-            match retry {
+            let fallback = match retry {
                 RelayPlan::AwaitSync => return,
+                RelayPlan::NoOwnEdge => {
+                    // The first plan answers this for every origin today; a
+                    // retry that reaches it holds, as that arm does, and
+                    // never fluffs on a link whose peer learns the address.
+                    self.driver.zone_mut().hold_origin(&to_send, now);
+                    return;
+                }
                 RelayPlan::Stem(destination) | RelayPlan::OwnEdge(destination) => {
                     if self.send_stem(destination, &to_send) {
                         self.driver.zone_mut().record_stem(
@@ -742,10 +778,16 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                         );
                         return;
                     }
+                    StemFallback::WriteFailed
                 }
-                RelayPlan::NoRoute | RelayPlan::FluffEpoch | RelayPlan::NoOwnEdge => {}
-            }
-            tracing::error!("unable to send transaction(s) via Dandelion++ stem");
+                RelayPlan::NoRoute => StemFallback::NoSuccessor,
+                RelayPlan::FluffEpoch => StemFallback::EpochFluffs,
+            };
+            tracing::debug!(
+                count = to_send.len(),
+                "fluffing what could not stem: {}",
+                fallback.reason()
+            );
         }
         self.fluff_and_record(&to_send, source);
     }
