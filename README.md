@@ -504,8 +504,12 @@ The produced binaries still link libc dynamically. If the binary is compiled on 
 
 ## Installing Shekyl from a package
 
-No distribution packages exist yet. Build from source using the instructions
-above. Packaging contributions are welcome.
+Each release on the
+[releases page](https://github.com/Shekyl-Foundation/shekyl-core/releases)
+carries a `.deb` and an `.rpm` for Linux x86_64 and aarch64 and a Windows
+installer, beside the binary archives. Each installs `shekyld`,
+`shekyl-cli`, `shekyl-wallet-rpc` and the pinned Tor; the `.deb` also
+installs the systemd unit and its slice.
 
 ## Running shekyld
 
@@ -530,8 +534,8 @@ To run in the background, use your platform's service manager (systemd,
 launchd, or Task Scheduler). The shipped systemd unit is
 `contrib/packaging/linux/shekyld.service`, which runs in its own
 `shekyl.slice` beside it (the `.deb` installs both). Adapt paths and the
-service user to your deployment; nothing reads the daemon's stdin unless
-`--console` is given, so a unit needs no flag for that. `shekyld` always
+service user to your deployment. The daemon has no console and reads
+nothing from stdin; its commands are `shekyl-cli` words. `shekyld` always
 runs in the foreground and is supervised externally.
 
 ## Using Tor
@@ -550,8 +554,7 @@ shekyld --tor operator --tor-socks 127.0.0.1:9050 \
 `--tor off` is clearnet only; `--clearnet off` is Tor only. The same rows
 go in the configuration file. The wallet reaches a daemon's RPC over an
 onion service you run in front of its loopback RPC, through `--proxy`
-(see [docs/proxies.md](docs/proxies.md)); use `--untrusted-daemon` unless
-it is your own.
+(see [docs/proxies.md](docs/proxies.md)).
 
 ### Using Tor on Tails
 
@@ -656,10 +659,4 @@ The daemon's chain store is the Rust store `shekyl-node` opens. `mdb_stat` does 
 Because of the nature of socket-based protocols that drive decentralized nodes, certain protocol weaknesses are somewhat unavoidable at this time. Please consider the following precautions if you are a Shekyl node operator:
 
 - Run `shekyld` on a secured machine. At minimum, use a dedicated machine and avoid general web/email activity on that host.
-- RPC is operator-to-operator: run `shekyld` on a machine you control. There is no public-remote-node product; `--restricted-rpc` is a view-only listener for *your* wallet, not an invitation for strangers.
-
-### Blockchain-based
-
-Certain blockchain "features" can be considered "bugs" if misused correctly. Consequently, please consider the following:
-
-- When receiving funds, be aware that they may be locked for an arbitrary time if the sender elected to set an unlock condition.
+- RPC is operator-to-operator: run `shekyld` on a machine you control. There is no public-remote-node product; `rpc-view-listen` is a view-only listener for *your* wallet, not an invitation for strangers.
