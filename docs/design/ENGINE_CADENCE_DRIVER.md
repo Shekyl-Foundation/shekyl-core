@@ -170,7 +170,7 @@ fire while stalled — firing against a known-stale view is the thing
 the tick base exists to prevent.
 
 **Horizons are evaluated against observation.**
-The submit leg's block ceiling (`WatchdogConfig::DEFAULT`,
+The submit leg's block ceiling (`WatchdogConfig::production`,
 `DISPATCHED_PROOF_LIFE` minus one block) is in blocks and measured
 against observed chain progress. An origin the daemon has judged overdue
 alarms on the next tick that sees that state. The wallet does not time it.

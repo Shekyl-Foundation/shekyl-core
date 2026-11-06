@@ -60,7 +60,6 @@
 use std::collections::HashSet;
 
 use shekyl_curve_tree::DISPATCHED_PROOF_LIFE;
-use shekyl_economics::RELAY_FLOOR_LOOKBACK;
 use shekyl_types::TxHash;
 
 use super::traits::DaemonHealth;
@@ -78,8 +77,17 @@ use super::traits::DaemonHealth;
 /// that block. It is not a measured refresh lag, and it is not a duration.
 pub(crate) const PROBE_REFRESH_LAG_BLOCKS: u64 = 1;
 
-/// Watchdog tunables. Production is [`Self::DEFAULT`]; tests build their
-/// own to exercise the ladder at other ceilings.
+/// Blocks past the accept baseline at which the kernel probes, whatever
+/// relay state it last saw.
+///
+/// [`DISPATCHED_PROOF_LIFE`] minus [`PROBE_REFRESH_LAG_BLOCKS`]. Past the
+/// life the pool may already have removed the transaction (CEN-M10) and
+/// the probe comes back `StaleRoot`.
+pub(crate) const PROBE_CEILING_BLOCKS: u64 =
+    DISPATCHED_PROOF_LIFE.to_raw() - PROBE_REFRESH_LAG_BLOCKS;
+
+/// Watchdog tunables. Production is [`WatchdogConfig::production`]; tests
+/// build their own to exercise the ladder at other ceilings.
 ///
 /// Block counts only. Whether an origin is overdue is the daemon's
 /// judgment, returned as relay state. This kernel never reads a duration
@@ -87,43 +95,46 @@ pub(crate) const PROBE_REFRESH_LAG_BLOCKS: u64 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WatchdogConfig {
     /// Blocks past the accept baseline at which the kernel probes,
-    /// whatever relay state it last saw.
-    ///
-    /// [`DISPATCHED_PROOF_LIFE`] minus [`PROBE_REFRESH_LAG_BLOCKS`]. Past
-    /// the life the pool may already have removed the transaction
-    /// (CEN-M10) and the probe comes back `StaleRoot`.
+    /// whatever relay state it last saw. Production is
+    /// [`PROBE_CEILING_BLOCKS`].
     pub probe_ceiling_blocks: u64,
     /// Blocks a published, unmined transaction may sit before the
     /// "published, not mined" alarm.
     ///
-    /// **Assumption — never measured.** Basis: [`RELAY_FLOOR_LOOKBACK`],
-    /// the fee ladder's quote-to-broadcast gap (a quote at `F(h)` is
-    /// admitted while the tip lies in `[h, h+G]`). Not a conversion of
-    /// that gap into seconds.
+    /// **Assumption — never measured.** Basis: the fee ladder's lookback
+    /// on the shipped relay policy ([`shekyl_economics::relay_policy()`]).
+    /// A quote at `F(h)` is admitted while the tip lies in `[h, h+G]`.
+    /// Not a conversion of that gap into seconds.
     pub published_unmined_blocks: u64,
 }
 
 impl WatchdogConfig {
     /// The production configuration.
-    // CLIPPY: cast_possible_truncation — the lookback is 5 blocks.
-    #[allow(clippy::cast_possible_truncation)]
-    pub(crate) const DEFAULT: Self = Self {
-        probe_ceiling_blocks: DISPATCHED_PROOF_LIFE.to_raw() - PROBE_REFRESH_LAG_BLOCKS,
-        published_unmined_blocks: RELAY_FLOOR_LOOKBACK as u64,
-    };
+    ///
+    /// The ceiling is the dispatched proof's life minus the refresh-lag
+    /// margin. The published-unmined count is the shipped relay policy's
+    /// lookback. A lookback that meets the ceiling collapses the two
+    /// block questions into one; [`Self::production`] rejects that in
+    /// debug, and the kernel test holds it for the shipped policy.
+    #[must_use]
+    pub(crate) fn production() -> Self {
+        let published_unmined_blocks = shekyl_economics::relay_policy().lookback;
+        debug_assert!(published_unmined_blocks > 0);
+        debug_assert!(published_unmined_blocks < PROBE_CEILING_BLOCKS);
+        Self {
+            probe_ceiling_blocks: PROBE_CEILING_BLOCKS,
+            published_unmined_blocks,
+        }
+    }
 }
 
 // A zero ceiling probes on the first check. A ceiling at or past the
-// dispatched proof's life probes bytes the daemon may already refuse. A
-// published-unmined count that meets the ceiling collapses the two block
-// questions into one. Any of those is a broken constant, caught here.
-const _: () = assert!(WatchdogConfig::DEFAULT.probe_ceiling_blocks > 0);
-const _: () =
-    assert!(WatchdogConfig::DEFAULT.probe_ceiling_blocks < DISPATCHED_PROOF_LIFE.to_raw());
-const _: () = assert!(WatchdogConfig::DEFAULT.published_unmined_blocks > 0);
-const _: () = assert!(
-    WatchdogConfig::DEFAULT.published_unmined_blocks < WatchdogConfig::DEFAULT.probe_ceiling_blocks
-);
+// dispatched proof's life probes bytes the daemon may already refuse.
+// Either is a broken constant, caught here. The lookback is not a
+// constant of this crate, so its place under the ceiling is checked
+// where `WatchdogConfig::production` reads it.
+const _: () = assert!(PROBE_CEILING_BLOCKS > 0);
+const _: () = assert!(PROBE_CEILING_BLOCKS < DISPATCHED_PROOF_LIFE.to_raw());
 
 // ---------------------------------------------------------------------------
 // Held-tx tracking (chain-confirmation-keyed)

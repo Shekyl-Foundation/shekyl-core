@@ -213,11 +213,12 @@ const FRUITLESS_RESCAN_BREAKER_THRESHOLD: u32 = 3;
 
 impl SubmitLifecycleDriver {
     /// Construct a driver at the production escape horizon
-    /// ([`WatchdogConfig::DEFAULT`], derived from the dispatched proof's
-    /// life in blocks).
+    /// ([`WatchdogConfig::production`], the dispatched proof's life in
+    /// blocks, and the relay policy's lookback for a published
+    /// transaction).
     pub(crate) fn new() -> Self {
         Self {
-            config: WatchdogConfig::DEFAULT,
+            config: WatchdogConfig::production(),
             overlay: HashMap::new(),
             alarmed: HashSet::new(),
             rescan_targets: HashMap::new(),

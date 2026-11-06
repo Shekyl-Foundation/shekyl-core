@@ -189,7 +189,7 @@ pub(crate) trait BondBroadcast: Send + Sync + 'static {
 /// **Default rationale (rule 75), resolving `ARCHIVAL_BOND_WI3_DISPATCH.md`
 /// §6(b).** §6(b) proposed reusing the submit-watchdog's escape horizon;
 /// verification at source rejects that: the watchdog's block ceiling
-/// (`WatchdogConfig::DEFAULT`, the dispatched proof's life minus one block)
+/// (`WatchdogConfig::production`, the dispatched proof's life minus one block)
 /// measures a probe of bytes still in the pool, but the pscan cannot confirm
 /// a reservation until it is **reorg-deep** — at least
 /// [`ARCHIVAL_REORG_DEPTH_BLOCKS`] (720) blocks behind tip — so a normally-mined

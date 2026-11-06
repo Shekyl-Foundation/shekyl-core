@@ -1027,7 +1027,8 @@ de-risking the multi-daemon reopen in advance.
   (`origin_retry_secs` over the origin's fires, the cycle count
   `RecoveryBudget::for_cap` prices), and the wallet holds no relay
   constant. **Published** and unmined past the fee ladder's lookback
-  (`RELAY_FLOOR_LOOKBACK`, **Assumption — never measured**) raises the
+  (`relay_policy().lookback`, shipped as `RELAY_FLOOR_LOOKBACK`,
+  **Assumption — never measured**) raises the
   published-unmined alarm. **Absent** resubmits, and that resubmit is the
   remedy; the wait restarts. **In chain** keeps holding for refresh.
   The block ceiling probes whatever state is still waiting, including a

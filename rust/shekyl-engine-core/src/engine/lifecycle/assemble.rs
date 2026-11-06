@@ -334,7 +334,7 @@ impl Engine<SoloSigner> {
         let economics = crate::engine::local_economics::LocalEconomics::new();
 
         // §5.3 submit lifecycle driver at the production escape horizon
-        // (`WatchdogConfig::DEFAULT`, derived in blocks from the dispatched
+        // (`WatchdogConfig::production`, derived in blocks from the dispatched
         // proof's life). Owned by the Engine so its overlays persist across
         // ticks; the wallet surface and daemon are lent per tick.
         let submit_driver =

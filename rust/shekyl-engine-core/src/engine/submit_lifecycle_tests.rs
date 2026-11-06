@@ -25,14 +25,14 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
-use super::super::submit_watchdog::PoolSight;
+use super::super::submit_watchdog::{PoolSight, PROBE_CEILING_BLOCKS};
 use super::super::traits::FeeEstimates;
 use shekyl_rpc_client::{Rpc, RpcError};
 use shekyl_rpc_types::PoolRelay;
 
 /// The production block ceiling the driver runs at
-/// ([`WatchdogConfig::DEFAULT`]), read rather than re-typed.
-const CEILING: u64 = WatchdogConfig::DEFAULT.probe_ceiling_blocks;
+/// ([`PROBE_CEILING_BLOCKS`]), read rather than re-typed.
+const CEILING: u64 = PROBE_CEILING_BLOCKS;
 
 fn txid(seed: u8) -> TxHash {
     TxHash::from_bytes([seed; 32])
