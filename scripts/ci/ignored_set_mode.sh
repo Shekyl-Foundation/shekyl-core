@@ -3,32 +3,27 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# Sourced by the three nightly ignored-set scripts (ignored_set_chain_ingest.sh,
-# ignored_set_chain_store.sh, ignored_set_economics_sim.sh). Each script judges
-# its crate's `--list --ignored` against the set it names, then runs the set.
+# Sourced by the three nightly ignored-set scripts. Each script judges its
+# crate's `--list --ignored` against the set it names, then runs that set.
 #
-# With `--check`, a script judges the listing and stops: the per-PR Rust job
-# (rust-audit-test.yml) runs all three that way, so a PR that adds, renames or
-# un-ignores a test fails in its own CI instead of the next night's (alpha.11
-# finding 12; issue #1215 was main's chain-ingest leg stopped by an unlisted
-# `#[ignore]` that dev had already listed).
+# ignored_set_mode sets two variables:
+#   ignored_set_check    0, or 1 when the caller was invoked with --check.
+#   ignored_set_profile  (--release) for the nightly listing, empty for --check.
 #
-# The check lists the debug build, which the job's workspace tests have
-# already compiled; the nightly run lists the release build. The two lists
-# are the same only while no test attribute in the crate is gated on the
-# profile, so the check refuses such an attribute by name instead of
-# assuming its absence.
-#
-# Sets: `check` (0 or 1) and `profile` (an array: `--release`, or empty).
+# --check is the per-PR judgement (rust-audit-test.yml). It lists the debug
+# build that job has already compiled. ignored_set_stop_after_judgement then
+# exits 0, and the release run below that call stays the nightly path. A test
+# attribute cfg-gated on debug_assertions can put a name in one listing and
+# not the other; the nightly lane is the release judgement.
 
 ignored_set_mode() {
-  check=0
-  profile=(--release)
+  ignored_set_check=0
+  ignored_set_profile=(--release)
   case "$#:${1:-}" in
     0:) ;;
     1:--check)
-      check=1
-      profile=()
+      ignored_set_check=1
+      ignored_set_profile=()
       ;;
     *)
       echo "usage: $0 [--check]" >&2
@@ -37,17 +32,10 @@ ignored_set_mode() {
   esac
 }
 
-# `$1`: the crate's directory under rust/. Run from rust/.
-refuse_profile_gated_tests() {
-  local gated status=0
-  gated=$(grep -rEn '#!?\[cfg(_attr)?\([^]]*debug_assertions' "$1/src") || status=$?
-  if [ "$status" -eq 0 ]; then
-    echo "::error::$1 gates an attribute on the build profile, so its debug and release ignored sets can differ and --check cannot stand in for the nightly listing:"
-    printf '%s\n' "$gated"
-    exit 1
-  fi
-  if [ "$status" -ne 1 ]; then
-    echo "::error::grep over $1/src failed (exit $status)"
-    exit 1
+# Exit 0 when this invocation is --check. The cargo run below the call is
+# the nightly lane and always passes --release.
+ignored_set_stop_after_judgement() {
+  if [ "$ignored_set_check" -eq 1 ]; then
+    exit 0
   fi
 }

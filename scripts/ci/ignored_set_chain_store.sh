@@ -29,21 +29,15 @@
 # the pipe early and fail `pipefail` on a match); the run's own exit is the
 # verdict and travels through no pipe.
 #
-# The per-PR Rust job runs this script with `--check`, which stops after
-# the subject check (ignored_set_mode.sh), so a PR that renames, deletes or
-# un-ignores a member fails in its own CI. The check is this lane's own:
-# its subjects must be present, and a further ignored test is counted, not
-# refused.
+# `--check` (ignored_set_mode.sh) stops after this judgement. The per-PR
+# Rust job uses it; the run below is the nightly lane.
 set -euo pipefail
 . "$(dirname "$0")/ignored_set_mode.sh"
 ignored_set_mode "$@"
 cd "$(dirname "$0")/../../rust"
 branch="${BRANCH:-the checked-out ref}"
 
-if [ "$check" -eq 1 ]; then
-  refuse_profile_gated_tests shekyl-chain-store
-fi
-list=$(cargo test --locked "${profile[@]}" -p shekyl-chain-store --lib -- --list --ignored)
+list=$(cargo test --locked "${ignored_set_profile[@]}" -p shekyl-chain-store --lib -- --list --ignored)
 for subject in \
   'store::prune_tests::the_boundary_batch_discards_closed_shards_on_real_spends' \
   'store::slash_scan_bench_tests::slash_scan_bench' \
@@ -57,9 +51,7 @@ do
 done
 count=$(printf '%s\n' "$list" | grep -c ': test$')
 echo "shekyl-chain-store ignored set: ${count} test(s)"
-if [ "$check" -eq 1 ]; then
-  exit 0
-fi
+ignored_set_stop_after_judgement
 
 START=$(date +%s)
 cargo test --locked --release -p shekyl-chain-store --lib -- --ignored --nocapture

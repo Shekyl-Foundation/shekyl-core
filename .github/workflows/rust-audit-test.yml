@@ -496,18 +496,10 @@ jobs:
           BAT5_STORE="$store" BAT5_MODE=phase BAT5_N=2 BAT5_PHASE_N=1 BAT5_LABEL=ci \
             cargo test --locked -p shekyl-p-serve --test ba_t5_floor_probe -- --ignored --nocapture
       - name: "Nightly ignored sets: each crate's ignored tests agree with its lane's list"
-        # nightly.yml runs three crates' `#[ignore]`d sets: chain-ingest,
-        # chain-store and economics-sim. Each lane first judges the crate's
-        # `--list --ignored` against the set its script names, and that
-        # judgement used to run only at night. A PR that added, renamed or
-        # un-ignored a test passed its own CI and stopped the next night's
-        # lane before anything ran (alpha.11 finding 12; issue #1215). Here
-        # each script judges the listing and stops (`--check`). The listing
-        # is the debug build the workspace tests above compiled, and the
-        # check refuses an attribute gated on the profile, the one thing
-        # that would make it differ from the nightly release listing
-        # (scripts/ci/ignored_set_mode.sh). The tests themselves still run
-        # only at night.
+        # The three nightly lanes judge `--list --ignored` in their scripts.
+        # `--check` is that judgement and then stops. The listing is the debug
+        # build the workspace tests above compiled. The nightly lists release
+        # and runs the tests. Each script keeps its own rule.
         run: |
           bash scripts/ci/ignored_set_chain_ingest.sh --check
           bash scripts/ci/ignored_set_chain_store.sh --check
