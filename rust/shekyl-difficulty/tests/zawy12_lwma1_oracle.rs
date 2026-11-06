@@ -29,7 +29,9 @@
 //! pinned byte range.
 
 use sha2::{Digest, Sha256};
-use shekyl_difficulty::{lwma1_next, CumulativeDifficulty, GENESIS_DIFFICULTY, N, T_SECONDS};
+use shekyl_difficulty::{
+    lwma1_next, CumulativeDifficulty, GENESIS_DIFFICULTY, N, N_USIZE, T_SECONDS,
+};
 use shekyl_types::{BlockHeight, Timestamp};
 
 const CAPTURE: &[u8] = include_bytes!("../../../docs/design/refs/zawy12_issue_3_lwma1.md");
@@ -66,7 +68,7 @@ fn zawy12_lwma1(
     let mut previous_timestamp: u64 = timestamps[0].wrapping_sub(t);
     for i in 1..=n {
         // Safely prevent out-of-sequence timestamps
-        let ts = timestamps[i as usize];
+        let ts = timestamps[usize::try_from(i).expect("an index fits usize")];
         if ts > previous_timestamp {
             this_timestamp = ts;
         } else {
@@ -84,7 +86,8 @@ fn zawy12_lwma1(
     if l < l_floor {
         l = l_floor;
     }
-    let avg_d = cumulative_difficulties[n as usize].wrapping_sub(cumulative_difficulties[0]) / n;
+    let last = usize::try_from(n).expect("N fits usize");
+    let avg_d = cumulative_difficulties[last].wrapping_sub(cumulative_difficulties[0]) / n;
 
     // Prevent round off error for small D and overflow for large D.
     let mut next_d = if avg_d > 2_000_000u64.wrapping_mul(n).wrapping_mul(n).wrapping_mul(t) {
@@ -105,12 +108,13 @@ fn zawy12_lwma1(
     // Optional. Make all insignificant digits zero for easy reading.
     let mut i: u64 = 1_000_000_000;
     while i > 1 {
+        // `if (…) { …; break; } else { i /= 10; }`: the else runs only when
+        // the branch did not break.
         if next_d > i.wrapping_mul(100) {
             next_d = (next_d.wrapping_add(i / 2) / i).wrapping_mul(i);
             break;
-        } else {
-            i /= 10;
         }
+        i /= 10;
     }
     next_d
 }
@@ -211,7 +215,7 @@ fn vector_3_half_the_hashrate() {
 #[test]
 fn vector_4_the_six_t_clamp() {
     let mut ts = stepped(T_SECONDS);
-    let n = N as usize;
+    let n = N_USIZE;
     ts[n] = ts[n - 1] + 100 * T_SECONDS;
     agree("4-clamp", &ts, 892_000);
 }
@@ -224,7 +228,7 @@ fn vector_5_the_l_floor() {
 #[test]
 fn vector_6_a_back_step_diverges() {
     let mut ts = stepped(T_SECONDS);
-    let n = N as usize;
+    let n = N_USIZE;
     ts[n] = B + (N - 2) * T_SECONDS;
     diverge("6-oos-back-step", &ts, 1_010_000, 1_040_000);
 }
@@ -232,7 +236,7 @@ fn vector_6_a_back_step_diverges() {
 #[test]
 fn vector_7_a_selfish_mine_diverges() {
     let mut ts = stepped(T_SECONDS);
-    let n = N as usize;
+    let n = N_USIZE;
     ts[n - 1] = B + (N - 2) * T_SECONDS + 1000 * T_SECONDS;
     ts[n] = B + (N - 2) * T_SECONDS + T_SECONDS;
     diverge("7-selfish-mine", &ts, 911_000, 1_040_000);

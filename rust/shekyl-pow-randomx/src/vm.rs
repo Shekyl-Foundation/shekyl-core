@@ -3354,7 +3354,7 @@ mod tests {
     fn the_verifier_reproduces_the_canonical_known_answer() {
         assert_eq!(
             CANONICAL_SEEDHASH_BYTES,
-            core::array::from_fn::<u8, 32, _>(|i| (i + 1) as u8),
+            core::array::from_fn::<u8, 32, _>(|i| u8::try_from(i + 1).expect("32 fits u8")),
             "the known answer's seed is 0x01..=0x20"
         );
         let blob = b"Shekyl RandomX v2 full-dataset parity KAT (Phase 3a, pin aaafe71)";

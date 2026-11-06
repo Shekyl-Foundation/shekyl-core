@@ -18,17 +18,17 @@ use shekyl_types::BlockHash;
 use shekyl_wire::transaction::{fcmp_base_hash, CT_ENC_FIELD_LEN};
 use shekyl_wire::CtBase;
 
-const OUTPUTS: usize = 2;
+const OUTPUTS: u8 = 2;
 
 fn base() -> CtBase {
     CtBase {
         enc_amounts: (0..OUTPUTS)
-            .map(|o| std::array::from_fn(|i| (0x10 + 16 * o + i) as u8))
+            .map(|o| std::array::from_fn(|i| 0x10 + 16 * o + u8::try_from(i).expect("9 fits u8")))
             .collect(),
         enc_labels: (0..OUTPUTS)
-            .map(|o| std::array::from_fn(|i| (0xA0 + 16 * o + i) as u8))
+            .map(|o| std::array::from_fn(|i| 0xA0 + 16 * o + u8::try_from(i).expect("9 fits u8")))
             .collect(),
-        commitments: (0..OUTPUTS).map(|o| [0x50 + o as u8; 32]).collect(),
+        commitments: (0..OUTPUTS).map(|o| [0x50 + o; 32]).collect(),
     }
 }
 
@@ -39,7 +39,7 @@ fn hash(base: &CtBase) -> [u8; 32] {
 #[test]
 fn every_enc_label_byte_moves_the_base_hash() {
     let original = hash(&base());
-    for output in 0..OUTPUTS {
+    for output in 0..usize::from(OUTPUTS) {
         for byte in 0..CT_ENC_FIELD_LEN {
             let mut tampered = base();
             tampered.enc_labels[output][byte] ^= 0x01;
@@ -55,7 +55,7 @@ fn every_enc_label_byte_moves_the_base_hash() {
 #[test]
 fn every_enc_amount_byte_moves_the_base_hash() {
     let original = hash(&base());
-    for output in 0..OUTPUTS {
+    for output in 0..usize::from(OUTPUTS) {
         for byte in 0..CT_ENC_FIELD_LEN {
             let mut tampered = base();
             tampered.enc_amounts[output][byte] ^= 0x01;

@@ -15,7 +15,7 @@ use shekyl_crypto_hash::keccak256;
 const VECTORS: &str = include_str!("vectors/keccak256.txt");
 
 fn unhex(text: &str) -> Vec<u8> {
-    assert!(text.len() % 2 == 0, "odd-length hex: {text}");
+    assert!(text.len().is_multiple_of(2), "odd-length hex: {text}");
     (0..text.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&text[i..i + 2], 16).expect("hex digit"))

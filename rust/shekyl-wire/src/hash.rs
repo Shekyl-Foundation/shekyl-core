@@ -98,7 +98,7 @@ mod tests {
     fn merkle_root_matches_every_tree_vector() {
         const VECTORS: &str = include_str!("../tests/vectors/tx_tree_hash.txt");
         let unhex = |text: &str| -> Vec<u8> {
-            assert!(text.len() % 2 == 0, "odd-length hex: {text}");
+            assert!(text.len().is_multiple_of(2), "odd-length hex: {text}");
             (0..text.len())
                 .step_by(2)
                 .map(|i| u8::from_str_radix(&text[i..i + 2], 16).expect("hex digit"))
@@ -113,7 +113,11 @@ mod tests {
                 panic!("line {}: not `<root> <leaves>`: {line:?}", line_no + 1);
             };
             let bytes = unhex(leaves);
-            assert!(bytes.len() % 32 == 0, "line {}: leaves", line_no + 1);
+            assert!(
+                bytes.len().is_multiple_of(32),
+                "line {}: leaves",
+                line_no + 1
+            );
             let leaves: Vec<[u8; 32]> = bytes
                 .chunks(32)
                 .map(|c| c.try_into().expect("32 bytes"))
