@@ -93,40 +93,32 @@ file is TOML with the same names (see the example in `USER_GUIDE.md`).
 <!-- development rows, live on the named networks only and not in --help: dev-clearnet-encrypt (testnet, stagenet, regtest); dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-rpc (regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->
 <!-- shekyld-options: end -->
 
-### Interactive console commands
+### Daemon commands
 
-With `--console`, the daemon provides a command console on its own
-terminal. Under a service manager (systemd, launchd, Task Scheduler, or
-the GUI wallet's Tauri sidecar) nothing reads the daemon's stdin, so no
-flag is needed there:
+The daemon has no console and reads nothing from stdin. Its commands are
+`shekyl-cli` words, sent over the daemon's RPC; none needs an open wallet.
+Mining (`mine start`, `mine stop`, `mine status`) and the node's health
+(`chain`) are listed with the rest of `shekyl-cli`'s words
+[below](#interactive-commands); `help` in `shekyl-cli` lists every word.
 
 | Command | Description |
 |---------|-------------|
-| `help` | List available commands |
-| `status` | Current sync height, network, hashrate |
-| `print_height` | Current blockchain height |
-| `print_bc <start> [end]` | Print block range |
-| `print_block <hash\|height>` | Print a single block |
-| `print_tx <txid>` | Print transaction details |
-| `print_pl` | Print peer list |
-| `print_cn` | Print active connections |
-| `print_net_stats` | Network traffic statistics |
-| `print_pool` | Full transaction pool contents |
-| `print_pool_sh` | Short transaction pool summary |
-| `print_pool_stats` | Pool statistics |
-| `start_mining <addr> [threads]` | Start mining to an address |
-| `stop_mining` | Stop mining |
-| `mining_status` | Current mining status |
-| `diff` | Current network difficulty |
-| `sync_info` | Blockchain sync progress and peer states |
-| `bans` | List banned peers |
-| `ban <ip> [seconds]` | Ban an IP address |
-| `unban <ip>` | Remove a ban |
-| `flush_txpool [txid]` | Remove transactions from the pool |
-| `pop_blocks <n>` | Remove the top N blocks (for recovery) |
-| `version` | Print daemon version |
-| `save` | Force a blockchain save |
-| `exit` / `stop_daemon` | Shut down the daemon |
+| `daemon status` | Height against the network's, network, mining state, hash rate, connections, uptime |
+| `daemon stop` | Stop the daemon |
+| `sync status` | Sync progress and peer states |
+| `peer list [--white] [--gray] [--max <n>]` | The daemon's peer lists |
+| `peer stats` | Peer-list counts |
+| `peer connections` | Open connections |
+| `p2p stats` | Network traffic statistics |
+| `txpool list [--short]` | The transaction pool's contents |
+| `txpool stats` | Transaction pool statistics |
+| `txpool flush [id]` | Remove one transaction, or all, from the pool |
+| `ban list` | Banned peers |
+| `ban add <ip> [--duration <quantity>]` | Ban an address |
+| `ban remove <ip>` | Lift a ban |
+| `ban show <ip>` | One address's ban |
+| `option show [<name>]` | The daemon's options and their values |
+| `option set <name> <value>` | Change an option whose Runtime column above says yes, such as `log-level` |
 
 ### Examples
 

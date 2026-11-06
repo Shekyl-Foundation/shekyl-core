@@ -695,6 +695,14 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_consensus_digest_oracle.py
 
+      - name: Run release-archive docs check
+        # Every gitian descriptor ships docs/USER_GUIDE.md in its archive and
+        # none ships the repository README (alpha.11 bug hunt A10). Instance
+        # of 47-gate-subject-assertion.mdc: a missing descriptor or one with
+        # no `cp ... bin` line fails.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_release_archive_docs.py
+
       - name: Run claim-era basename check
         # docs/design/ must not grow CONFIDENTIAL_STAKING.md or a
         # txin_stake_claim spec. Instance of 47-gate-subject-assertion.mdc.
