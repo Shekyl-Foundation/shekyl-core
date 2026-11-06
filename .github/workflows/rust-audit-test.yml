@@ -211,6 +211,8 @@ jobs:
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_key_blob.rs
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_sig_blob.rs
             rust/shekyl-wire/fuzz/fuzz_targets/fuzz_tx_extra_parse.rs
+            rust/shekyl-wire/fuzz/fuzz_targets/fuzz_block_parse.rs
+            rust/shekyl-wire/fuzz/fuzz_targets/fuzz_tx_parse.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message1.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message2.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_open_one.rs
@@ -252,6 +254,7 @@ jobs:
           workspaces: |
             rust -> target
             rust/shekyl-fcmp/fuzz -> target
+            rust/shekyl-wire/fuzz -> target
             docs/formal/checkct/dynamic -> target
       - name: install cargo-audit
         # `cargo install --locked` is idempotent: on Swatinem cache
@@ -427,6 +430,12 @@ jobs:
         # No CARGO_TARGET_DIR: this workspace must not share rust/target.
         # Its own target/ is the second cache workspace above.
         run: cargo check --locked --manifest-path rust/shekyl-fcmp/fuzz/Cargo.toml
+      - name: compile the shekyl-wire fuzz harnesses
+        # The wire parsers that read untrusted bytes: the block, the
+        # transaction and tx_extra. Same shape as the fcmp step above: its
+        # own workspace and lockfile, type-checked on the pinned stable
+        # toolchain as the API-drift gate; running them needs nightly.
+        run: cargo check --locked --manifest-path rust/shekyl-wire/fuzz/Cargo.toml
       - name: "constant-time dynamic harness: fmt, clippy, tests"
         # docs/formal/checkct/dynamic is its own workspace (its own lockfile
         # pins the audited crypto-bigint) on the shipped toolchain (its
