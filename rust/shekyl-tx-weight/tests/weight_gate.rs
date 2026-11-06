@@ -83,11 +83,20 @@ fn filler(i: usize, tag: u8) -> u8 {
     u8::try_from(i).expect("index is bounded by MAX_INPUTS / MAX_OUTPUTS") ^ tag
 }
 
-/// `EncryptedOutputField` has no byte constructor outside its `Deserialize`
-/// impl, deliberately (a test-only one could not be gated out of the
-/// production archive). Same route the builder's own fixtures take.
+/// `EncryptedOutputField` has no byte constructor, deliberately (a test-only
+/// one could not be gated out of the production archive): a real output's
+/// field, built in process by `construct_output`, the builder's fixtures' route.
 fn enc_field() -> EncryptedOutputField {
-    serde_json::from_str("\"000000000000000000\"").expect("fixture hex is valid")
+    use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
+    let (pk, _sk) = HybridX25519MlKem
+        .keypair_generate()
+        .expect("a KEM keypair generates");
+    let spend = curve25519_dalek::constants::ED25519_BASEPOINT_POINT
+        .compress()
+        .to_bytes();
+    shekyl_crypto_pq::output::construct_output(&[9u8; 32], &pk.x25519, &pk.ml_kem, &spend, 1, 0)
+        .expect("an output constructs")
+        .enc_amount_wire()
 }
 
 /// A real Bp+ over `n_out` commitments. Proving is the one genuinely slow part

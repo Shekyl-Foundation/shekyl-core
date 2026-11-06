@@ -151,7 +151,10 @@ impl NodePoolDoor {
         }
         let height = Tip::connecting_height(tip.as_ref());
         let rule_set = self.rules.in_force(height);
-        let prior = match stateless(&tx, &view, &rule_set, None) {
+        // The id the pool was opened under: this run's trust, so a
+        // signature made for another network is refused before admission.
+        let network = self.rules.trust().network_id();
+        let prior = match stateless(&tx, &view, &rule_set, &network, None) {
             Ok(Ok(pass)) => Some(pass),
             Ok(Err(_)) => return Admit::RefusedForm,
             Err(_) => return Admit::Fault,

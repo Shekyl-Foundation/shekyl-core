@@ -154,6 +154,7 @@ async fn an_undecodable_receipt_key_costs_one_response_then_refuses_at_pre_fligh
         BTreeSet::from([slot(SLOT)]),
         Some(slot(SLOT)),
         ephemeral_body_store(),
+        [0; 16],
     );
     let (endpoint, client) = receipt_endpoint(&stake, SLOT).await;
 

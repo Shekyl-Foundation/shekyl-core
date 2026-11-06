@@ -16,7 +16,7 @@ use std::sync::{Arc, PoisonError};
 
 use kameo::error::SendError;
 use shekyl_chain_rules::{
-    form, form_judged, Candidate, CenRow, Fault, FormAttempt, HeaderJudged, HeaderView,
+    form, form_judged, Candidate, CenRow, Fault, FormAttempt, FormClaims, HeaderJudged, HeaderView,
     InvalidBlock, StatelessPass, StructurallyValid, Substrate, Tip,
 };
 use shekyl_chain_store::store::{AltCannot, SnapshotView, StoreCannot, StoreError};
@@ -313,11 +313,14 @@ where
         }
         let verdict = form(
             candidate,
-            &claims.rule_set,
+            &FormClaims {
+                rule_set: &claims.rule_set,
+                seed: claims.seed,
+                target: claims.target,
+                references: &claims.references,
+                network: claims.network,
+            },
             &*substrate,
-            claims.seed,
-            claims.target,
-            &claims.references,
             FormAttempt::FIRST,
         );
         if matches!(verdict, Ok(Err(_))) {
@@ -347,7 +350,7 @@ where
             return None;
         }
         let started = std::time::Instant::now();
-        let verdict = form_judged(candidate, &judged, &claims.references);
+        let verdict = form_judged(candidate, &judged, &claims.references, &claims.network);
         if let Some(metrics) = &metrics {
             metrics.block_formed(started.elapsed());
         }
@@ -1011,11 +1014,14 @@ where
         let branch = Branch::new(&**worker.substrate(), &held);
         let verdict = form(
             candidate,
-            &claims.rule_set,
+            &FormClaims {
+                rule_set: &claims.rule_set,
+                seed,
+                target: claims.target,
+                references: &claims.references,
+                network: claims.network,
+            },
             &branch,
-            seed,
-            claims.target,
-            &claims.references,
             FormAttempt::FIRST,
         );
         drop(permit);
@@ -1300,7 +1306,7 @@ fn prepare_blocking(
     let rule_set = rules.in_force(Tip::connecting_height(tip.as_ref()));
     let mut prepared = Vec::with_capacity(bodies.len());
     for tx in bodies {
-        match stateless(&tx, &view, &rule_set, None) {
+        match stateless(&tx, &view, &rule_set, &rules.trust().network_id(), None) {
             Ok(step1) => prepared.push((tx, step1)),
             Err(fault) => return Err(PrepFault::Chain(fault)),
         }

@@ -27,7 +27,7 @@ use crate::harness::{
 };
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
-use crate::validate::{form, validate};
+use crate::validate::{form, validate, FormClaims};
 use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind, ShardSet};
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_types::{BlockHash, KeyImage};
@@ -55,11 +55,14 @@ fn check(candidate: &Candidate) -> Verdict<()> {
 fn form_judges(candidate: Candidate) -> Verdict<RuleCoverage> {
     match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: BlockHash::NULL,
+            target: expected_target(&MockChain::default(), &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        BlockHash::NULL,
-        expected_target(&MockChain::default(), &RuleSet::GENESIS),
-        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => Ok(*formed.coverage()),

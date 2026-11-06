@@ -130,6 +130,10 @@ SET_PROPERTY(SOURCE archival_bond_record_v7_corpus.cpp PROPERTY COMPILE_DEFINITI
 # fixture (NETWORK_IDENTITY.md NI-Q3).
 SET_PROPERTY(SOURCE json_serialization.cpp tx_prunable_region_sole_occupant.cpp APPEND PROPERTY COMPILE_DEFINITIONS
   MAINNET_GENESIS_TX_HEX_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-network/genesis/mainnet.tx.hex")
+# The live-oracle spend (a daemon-accepted FCMP++ spend), the FCMP++ fixture
+# for the JSON round trip.
+SET_PROPERTY(SOURCE json_serialization.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+  LIVE_ORACLE_SPEND_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/live_oracle_spend_v1.json")
 SET_PROPERTY(SOURCE mtp_boundary.cpp PROPERTY COMPILE_DEFINITIONS
   MTP_BOUNDARY_VECTOR_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/MTP_BOUNDARY_V1.json")
 SET_PROPERTY(SOURCE pruned_tx_hash_parity.cpp PROPERTY COMPILE_DEFINITIONS

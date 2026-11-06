@@ -3,21 +3,16 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The secret draw: selection, the `0x0C` commitment, the challenge nonce,
-//! and the superseded serve-credit batch commitment.
+//! The secret draw: selection, the `0x0C` commitment and the challenge
+//! nonce.
 //!
 //! Design: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../../../docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
 //! §4 (the draw), §5.2 (the nonce), §7.3 (the bundle commitment). The
-//! first three hashes are consensus: every node must pick the same pair
-//! and recompute the same nonce. **The batch commitment is SUPERSEDED** by
-//! the bundle commitment (`SCS-P16`, `SCS-P35`;
-//! [`crate::bundle_commitment`]): no consensus path computes it, and it
-//! stays until the cutover decides it (spec §11.1). The witness key and the
-//! receipt scheme are Slice C's FN-DSA increment; this module is the
-//! hash side, which that increment does not move.
-
-use shekyl_curve_io::write_varint;
-use shekyl_types::BlockHeight;
+//! hashes are consensus: every node must pick the same pair and recompute
+//! the same nonce. The bundle commitment is [`crate::bundle_commitment`]
+//! (`SCS-P35`). The witness key and the receipt scheme are Slice C's
+//! FN-DSA increment; this module is the hash side, which that increment
+//! does not move.
 
 use crate::hash::cshake256_32;
 use crate::ArchivalParams;
@@ -31,11 +26,6 @@ pub const DRAW_COMMIT_CUSTOMIZATION: &[u8] = b"shekyl/archival-draw-commit-v1";
 
 /// cSHAKE256 customization for [`challenge_nonce`].
 pub const CHALLENGE_NONCE_CUSTOMIZATION: &[u8] = b"shekyl/archival-challenge-nonce-v1";
-
-/// cSHAKE256 customization for [`serve_credit_batch_commitment`].
-/// **SUPERSEDED** by `shekyl/archival-serve-credit-bundle-v1`
-/// (`SCS-P35`): registered, with no consensus caller.
-pub const SERVE_CREDIT_BATCH_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-credit-batch-v1";
 
 /// Attempts at one draw before the candidate in hand is accepted.
 /// [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../../../docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
@@ -176,31 +166,6 @@ pub fn challenge_nonce(seed: &[u8; 32], block_hash: &[u8; 32], draw: u32, attemp
     input[64..68].copy_from_slice(&draw.to_le_bytes());
     input[68] = attempt;
     cshake256_32(CHALLENGE_NONCE_CUSTOMIZATION, &input)
-}
-
-/// **SUPERSEDED** by [`crate::bundle_commitment`] (`SCS-P16`, `SCS-P35`):
-/// the carrier's set commitment, which nothing signs and no consensus path
-/// computes. Seed, `h`, then each record framed as `varint(len) ‖ bytes`,
-/// in input order.
-///
-/// `None` when there are no members (`n ≥ 1` is a structural check).
-#[must_use]
-pub fn serve_credit_batch_commitment(
-    seed: &[u8; 32],
-    height: BlockHeight,
-    members: &[&[u8]],
-) -> Option<[u8; 32]> {
-    if members.is_empty() {
-        return None;
-    }
-    let mut input = Vec::new();
-    input.extend_from_slice(seed);
-    input.extend_from_slice(&height.to_raw().to_le_bytes());
-    for member in members {
-        write_varint(&member.len(), &mut input).expect("a Vec write is infallible");
-        input.extend_from_slice(member);
-    }
-    Some(cshake256_32(SERVE_CREDIT_BATCH_CUSTOMIZATION, &input))
 }
 
 /// The count-rule horizon `H` at epoch-relative height `r`, under
@@ -645,58 +610,6 @@ mod tests {
                 "j = {draw}, attempt = {attempt}: the attempt byte is in the preimage"
             );
         }
-    }
-
-    /// The vectors of the specification's §7.3.
-    #[test]
-    fn the_batch_commitment_matches_the_specifications_vectors() {
-        let h = BlockHeight::from_raw(1_000_000);
-        let first: Vec<u8> = (0x00..=0x3f).collect();
-        let second: Vec<u8> = (0x40..=0x9f).collect();
-        let a: Vec<u8> = (0x00..=0x0f).collect();
-        let b: Vec<u8> = (0x10..=0x3f).collect();
-        let c: Vec<u8> = (0x00..=0x1f).collect();
-        let d: Vec<u8> = (0x20..=0x3f).collect();
-        let long_a = vec![0xa5; 127];
-        let long_b = vec![0x5a; 128];
-
-        assert_eq!(
-            hex(&serve_credit_batch_commitment(&SEED, h, &[&first]).expect("n ≥ 1")),
-            "a75502337d8e6b440413009dcc6a96650354ab194abfe1289dbc0f685a6cf14b"
-        );
-        assert_eq!(
-            hex(&serve_credit_batch_commitment(&SEED, h, &[&first, &second]).expect("n ≥ 1")),
-            "cd10b6b4cb65ee0028868f2a62e7b0b5df85b1d6f6ea6d3ff88b680c15053c0b"
-        );
-        assert_eq!(
-            hex(&serve_credit_batch_commitment(&SEED, h, &[&a, &b]).expect("n ≥ 1")),
-            "f32bddca0eb179ed027b4421d5cff58a707b03b140ec54b0161dc57932f2fd6d"
-        );
-        assert_eq!(
-            hex(&serve_credit_batch_commitment(&SEED, h, &[&c, &d]).expect("n ≥ 1")),
-            "91f5ca7a11d3b1120206fb683655ee379b3c69153f6e14d7c859fbae185056ac"
-        );
-        assert_eq!(
-            hex(&serve_credit_batch_commitment(&SEED, h, &[&long_a, &long_b]).expect("n ≥ 1")),
-            "47d951c68a20dda3111eab91a320338f0c9adde3319bbda4450ad6d784f7a782"
-        );
-        assert_eq!(
-            hex(&serve_credit_batch_commitment(
-                &SEED,
-                BlockHeight::from_raw(1_000_001),
-                &[&first, &second]
-            )
-            .expect("n ≥ 1")),
-            "b1d20f8af7d47aa5ea0b046e84c7d655d2a61314badba546f2840e7a7e4807c4"
-        );
-    }
-
-    #[test]
-    fn an_empty_carrier_has_no_commitment() {
-        assert_eq!(
-            serve_credit_batch_commitment(&SEED, BlockHeight::from_raw(1), &[]),
-            None
-        );
     }
 
     #[test]

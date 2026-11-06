@@ -126,7 +126,7 @@ fi
 # Re-delimit with unit separator (\x1f, not IFS whitespace) to keep empty
 # fields in place.
 rows=0
-while IFS=$'\x1f' read -r mech literal file const status _key _notes || [[ -n "${mech:-}" ]]; do
+while IFS=$'\x1f' read -r mech literal file const status _binding _width _role _key _notes || [[ -n "${mech:-}" ]]; do
   [[ -z "${mech:-}" || "${mech:0:1}" == "#" ]] && continue
   rows=$((rows + 1))
 
@@ -140,6 +140,11 @@ while IFS=$'\x1f' read -r mech literal file const status _key _notes || [[ -n "$
       continue
       ;;
   esac
+
+  # A retired label must NOT be in the code (the binding gate refuses its
+  # reuse, rust/shekyl-crypto-pq/tests/domain_binding.rs); none of the
+  # presence checks below applies to it.
+  [[ "$status" == "retired" ]] && continue
 
   if [[ -z "$literal" || -z "$file" ]]; then
     echo "MALFORMED ROW: mech=$mech literal='$literal' file='$file' (need both)" >&2
@@ -380,12 +385,69 @@ count_pattern() {
 # shekyl/archival-support-draw-v1, both already registered. One
 # #[cfg(test)] site in the same file hashes the economy preimage under
 # the existing draw label to show the support labels are not that label.
+# NI-Q4 (2026-11-04): 82 -> 83. One production site in
+# rust/shekyl-wire/src/transaction/signing_preimage.rs (`signed_hash`)
+# under shekyl/fcmp-spend-signing-v1: the spend signature's hash binds the
+# network id.
 # Network name binding (2026-11-04, NI-R16; the signing envelope §2.6):
-# 82 -> 83. One site in rust/shekyl-network/src/tests.rs
+# 83 -> 84 (beside NI-Q4's site above). One site in rust/shekyl-network/src/tests.rs
 # (`the_name_id_is_the_tags_cshake`) recomputes each row's name_id under
 # the new domain shekyl/network-name-v1, registered with it. The rows hold
 # name_id as constants, so production adds no call.
-MECH1_EXPECTED=83
+# NI PR 2's binding tests (2026-11-04, NI-F2, NI-F11, NI-F13): 84 -> 88.
+# Four #[cfg(test)] sites under domains already registered, no production
+# site: two in rust/shekyl-address/src/multisig_address.rs
+# (`the_fingerprint_starts_with_the_networks_name`, which hashes the
+# fingerprint input with and without the name), one in
+# rust/shekyl-archival-retention/src/emission_wire.rs
+# (`auth_msg_is_stable_role_separated_and_non_replayable`), one in
+# rust/shekyl-crypto-pq/src/message_signing.rs (`armored_tamper_battery`).
+# PR 2 had them at 87 against a pin of 83 before PR 1's site above joined.
+# The signing envelope's frame (2026-11-04, NI_SIGNING_ENVELOPE §2.1, §2.6):
+# 88 -> 91. Two production sites in rust/shekyl-network/src/envelope.rs, the
+# 32- and 64-byte widths every framed domain hashes through (the domain is
+# the caller's registered constant, not a literal here), and one
+# #[cfg(test)] site in envelope/tests.rs that rebuilds the input by hand.
+# Until the gate counts frame sites (the envelope §2.5), this count rises
+# and falls as domains move onto frame.
+# tx_signable and spend signing v2 (2026-11-04, the signing envelope §2.2):
+# 91 -> 90. `signed_hash` in rust/shekyl-wire/src/transaction/signing_preimage.rs
+# called cshake256_32 under shekyl/fcmp-spend-signing-v1; it and the new
+# shekyl/tx-signable-v1 now reach cSHAKE only through frame.
+# Message signing on the envelope (2026-11-04, the signing envelope §2.1):
+# 90 -> 88. message_preimage in rust/shekyl-crypto-pq/src/message_signing.rs
+# hashed the message under shekyl/msg-hash-v1 and the preimage under
+# shekyl/msg-sign-v1; it frames [mode, segment, message] under
+# shekyl/msg-sign-v2, and msg-hash-v1 is retired.
+# Multisig fingerprint on the envelope (2026-11-04, the signing envelope
+# §2.6): 88 -> 85. `address_fingerprint` in
+# rust/shekyl-address/src/multisig_address.rs frames the payload under
+# shekyl/multisig-address-v3 and the name_id; its cshake256_32 site and the
+# two #[cfg(test)] sites that rebuilt the -v2 input by hand are gone.
+# Emission auths on the envelope (2026-11-05, the signing envelope §2.2,
+# §2.7): 85 -> 82. `auth_msg` and `auth_msgs` in
+# rust/shekyl-archival-retention/src/emission_wire.rs called cshake256_64
+# three times under the -v3 customizations; they frame the eight fields
+# under shekyl/archival-emission-auth-{backing,claim}-v4 at 64 bytes.
+# No retired rows before genesis (2026-11-05, Rick; the signing envelope
+# §2.4): 82 -> 79. serve_credit_batch_commitment (secret_draw.rs, one
+# production site) is deleted with shekyl/archival-serve-credit-batch-v1,
+# and challenge.rs loses the retired -v1 leaf label's negative control (two
+# #[cfg(test)] sites). shekyl/archival-witness-carrier-scheme-v1 goes too; a
+# scheme domain, it had no call site of its own.
+# Bundle commitment on the envelope (2026-11-05, Rick; the signing envelope
+# §2.4, §2.7): 79 -> 77. `bundle_commitment` in
+# rust/shekyl-archival-retention/src/bundle.rs called cshake256_32 under
+# shekyl/archival-serve-credit-bundle-v1; it frames the kept part and the
+# records under shekyl/archival-serve-credit-bundle-v2 and the network id
+# at 64 bytes. The #[cfg(test)] site in bundle_tests.rs that rebuilt the
+# -v1 preimage by hand goes with it.
+# Genesis tx key on the envelope (2026-11-05, Rick; the signing envelope
+# §2.4): 77 -> 76. `derive_genesis_tx_secret` in
+# rust/shekyl-genesis-tool/src/txkey.rs called cshake256_32 under
+# shekyl/genesis-txkey-v2 over the name string and the recipients; it frames
+# the recipients under shekyl/genesis-txkey-v3 and the network's name_id.
+MECH1_EXPECTED=76
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

@@ -106,6 +106,7 @@ impl StakeEngineHandle {
         bonded: BTreeSet<PSlot>,
         active: Option<PSlot>,
         bodies: shekyl_p_store::BodyStore,
+        network: shekyl_network::NetworkId,
     ) -> Self {
         assert!(
             tokio::runtime::Handle::try_current().is_ok(),
@@ -120,6 +121,7 @@ impl StakeEngineHandle {
             bundles,
             bonded,
             active,
+            network,
             // A non-test `conformance` build always grades the real OsRng adapter
             // (no field); in `test + conformance` the default is `Skip` so
             // unrelated stake tests are not flaked by the grade. The dedicated S6

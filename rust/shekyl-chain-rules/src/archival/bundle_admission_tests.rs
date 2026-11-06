@@ -33,6 +33,7 @@ fn judge_bundles_names_each_admission_row() {
             BlockHeight::from_raw(h_incl),
             &world.view,
             &RuleSet::GENESIS,
+            &crate::HARNESS_NETWORK_ID,
         )
         .expect_err("a refusal")
         .row()
@@ -50,6 +51,7 @@ fn judge_bundles_names_each_admission_row() {
             BlockHeight::from_raw(h + 1),
             &world.view,
             &RuleSet::GENESIS,
+            &crate::HARNESS_NETWORK_ID,
         )
         .expect_err("a wrong root")
         .row(),

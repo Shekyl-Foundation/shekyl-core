@@ -43,6 +43,7 @@ use shekyl_chain_store::store::{
     ChainStore, QueueCannot, ReadSnapshot, SnapshotView, StoreBundleView, StoreCannot, StoreError,
     WriteBatch,
 };
+use shekyl_network::NetworkId;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use zeroize::Zeroizing;
 
@@ -340,6 +341,16 @@ fn root_of_one(reference: &BundleRef) -> [u8; 32] {
     }
 }
 
+/// What one bundle is judged against: the height it would be included
+/// at, the rule set in force there, and the network whose id its witness
+/// signature is checked under.
+#[derive(Clone, Copy)]
+struct Judging<'a> {
+    h_incl: BlockHeight,
+    rule_set: &'a RuleSet,
+    network_id: &'a NetworkId,
+}
+
 /// Judge one reference on a view the caller already filled.
 ///
 /// `V` is named by its path. Importing [`BundleRows`](shekyl_chain_store::store::BundleRows)
@@ -347,8 +358,7 @@ fn root_of_one(reference: &BundleRef) -> [u8; 32] {
 /// `header_at` would no longer resolve.
 fn judge_prepared<V>(
     bundle_view: &StoreBundleView<'_, V>,
-    h_incl: BlockHeight,
-    rule_set: &RuleSet,
+    judging: Judging<'_>,
     reference: &BundleRef,
     body: &BundleBody,
 ) -> Result<Option<Refusal>, RunFault>
@@ -361,9 +371,10 @@ where
         refs,
         std::slice::from_ref(body),
         &root,
-        h_incl,
+        judging.h_incl,
         bundle_view,
-        rule_set,
+        judging.rule_set,
+        judging.network_id,
     ))
 }
 
@@ -371,15 +382,17 @@ where
 fn judge_batch(
     batch: &WriteBatch<'_, '_>,
     memo: &mut DrawableMemo,
-    h_incl: BlockHeight,
-    rule_set: &RuleSet,
+    judging: Judging<'_>,
     reference: &BundleRef,
     body: &BundleBody,
 ) -> Result<Option<Refusal>, RunFault> {
+    let Judging {
+        h_incl, rule_set, ..
+    } = judging;
     let view = batch.chain_view();
     remember_window_epochs(&view, h_incl, rule_set, memo).map_err(|f| view_fault(batch, f))?;
     let bundle_view = StoreBundleView::new(&view, memo, h_incl, rule_set.settlement_schedule());
-    judge_prepared(&bundle_view, h_incl, rule_set, reference, body)
+    judge_prepared(&bundle_view, judging, reference, body)
 }
 
 /// Judge one bundle against the tip, on a snapshot. A `Corrupt` latches
@@ -388,15 +401,17 @@ fn judge_snapshot(
     store: &ChainStore,
     view: &SnapshotView<'_>,
     memo: &mut DrawableMemo,
-    h_incl: BlockHeight,
-    rule_set: &RuleSet,
+    judging: Judging<'_>,
     reference: &BundleRef,
     body: &BundleBody,
 ) -> Result<Option<Refusal>, RunFault> {
+    let Judging {
+        h_incl, rule_set, ..
+    } = judging;
     remember_window_epochs(view, h_incl, rule_set, memo)
         .map_err(|fault| snapshot_view_fault(store, fault))?;
     let bundle_view = StoreBundleView::new(view, memo, h_incl, rule_set.settlement_schedule());
-    judge_prepared(&bundle_view, h_incl, rule_set, reference, body)
+    judge_prepared(&bundle_view, judging, reference, body)
 }
 
 fn offer(
@@ -414,7 +429,13 @@ fn offer(
             why: "the chain is empty".into(),
         });
     };
-    match judge_batch(batch, memo, h_incl, &rule_set, reference, body)? {
+    let network_id = rules.trust().network_id();
+    let judging = Judging {
+        h_incl,
+        rule_set: &rule_set,
+        network_id: &network_id,
+    };
+    match judge_batch(batch, memo, judging, reference, body)? {
         None => {}
         Some(Refusal::AlreadyRevealed) => return Ok(BundleOffered::AlreadyRevealed { h }),
         Some(Refusal::Rule { row, why }) => return Ok(BundleOffered::Refused { h, row, why }),
@@ -554,6 +575,7 @@ fn classify(
         .settlement_schedule()
         .challenge_response_blocks()
         .map_or(BlockCount::ZERO, |w| BlockCount::from_raw(w.get()));
+    let network_id = rules.trust().network_id();
     let mut plan = Upkeep::quiet();
     for entry in entries {
         let h = entry.h;
@@ -580,8 +602,11 @@ fn classify(
             store,
             &view,
             memo,
-            h_incl,
-            &rule_set,
+            Judging {
+                h_incl,
+                rule_set: &rule_set,
+                network_id: &network_id,
+            },
             &entry.queued.reference,
             &entry.body,
         )? {
@@ -683,7 +708,15 @@ impl Message<ApplyAdmitting> for Connector {
             let admitted = {
                 let bundle_view =
                     StoreBundleView::new(&view, &*memo, height, in_force.settlement_schedule());
-                match judge_bundles(&refs, &bodies, &root, height, &bundle_view, &in_force) {
+                match judge_bundles(
+                    &refs,
+                    &bodies,
+                    &root,
+                    height,
+                    &bundle_view,
+                    &in_force,
+                    &trust.network_id(),
+                ) {
                     Ok(admitted) => admitted,
                     Err(fault) => {
                         return Ok(AppliedAdmitting {

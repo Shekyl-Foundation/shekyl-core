@@ -384,7 +384,7 @@ mod tests {
     use crate::harness::fixture::{candidate, candidate_on, chain_of, recorded_with_work, root};
     use crate::harness::{expected_seed, expected_target, MockChain, MockSubstrate};
     use crate::trust::Trust;
-    use crate::{form, form_judged, validate};
+    use crate::{form, form_judged, validate, FormClaims};
 
     /// `judge_header` faults a rule set other than the one `form_header`
     /// kept, and the retry is the attempt that was formed, not a fresh one.
@@ -480,15 +480,23 @@ mod tests {
                     Ok(judged) => judged,
                     Err(refused) => panic!("honest header refused: {refused:?}"),
                 };
-            let from_header = form_judged(input.clone(), &judged, &ReferenceClaims::EMPTY)
-                .expect("the body forms");
+            let from_header = form_judged(
+                input.clone(),
+                &judged,
+                &ReferenceClaims::EMPTY,
+                &crate::HARNESS_NETWORK_ID,
+            )
+            .expect("the body forms");
             let from_bytes = form(
                 input.clone(),
-                &rule_set,
+                &FormClaims {
+                    rule_set: &rule_set,
+                    seed: BlockHash::NULL,
+                    target,
+                    references: &ReferenceClaims::EMPTY,
+                    network: crate::HARNESS_NETWORK_ID,
+                },
                 &substrate,
-                BlockHash::NULL,
-                target,
-                &ReferenceClaims::EMPTY,
                 FormAttempt::FIRST,
             )
             .expect("mock")
@@ -503,7 +511,12 @@ mod tests {
             assert_eq!(from_header.pow(), from_bytes.pow());
             let mut moved = input;
             moved.block.header.nonce = moved.block.header.nonce.wrapping_add(1);
-            match form_judged(moved, &judged, &ReferenceClaims::EMPTY) {
+            match form_judged(
+                moved,
+                &judged,
+                &ReferenceClaims::EMPTY,
+                &crate::HARNESS_NETWORK_ID,
+            ) {
                 Err(refused) => assert_eq!(refused.rule, CenRow::B6),
                 Ok(_) => panic!("a different preimage formed"),
             }
@@ -561,8 +574,13 @@ mod tests {
                 Err(refused) => panic!("honest header refused: {refused:?}"),
             }
         });
-        let from_header =
-            form_judged(deep_candidate, &judged, &ReferenceClaims::EMPTY).expect("the body forms");
+        let from_header = form_judged(
+            deep_candidate,
+            &judged,
+            &ReferenceClaims::EMPTY,
+            &crate::HARNESS_NETWORK_ID,
+        )
+        .expect("the body forms");
         MockChain::default().with_view(|view| {
             match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
                 Err(Fault::Stale(Stale::Seed { claimed, .. })) => {
@@ -602,8 +620,13 @@ mod tests {
                 Err(refused) => panic!("honest header refused: {refused:?}"),
             }
         });
-        let from_header =
-            form_judged(long_candidate, &judged, &ReferenceClaims::EMPTY).expect("the body forms");
+        let from_header = form_judged(
+            long_candidate,
+            &judged,
+            &ReferenceClaims::EMPTY,
+            &crate::HARNESS_NETWORK_ID,
+        )
+        .expect("the body forms");
         judged_on.with_view(|view| {
             match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
                 Err(Fault::Stale(Stale::Target {

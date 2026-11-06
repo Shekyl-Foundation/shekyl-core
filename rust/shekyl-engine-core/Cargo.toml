@@ -16,6 +16,8 @@ build = "build.rs"
 serde_json = "1"
 
 [dependencies]
+# The network id the wallet's spends sign under (NETWORK_IDENTITY.md NI-Q4).
+shekyl-network = { path = "../shekyl-network" }
 shekyl-scanner = { path = "../shekyl-scanner" }
 # Canonical, spec-faithful block/transaction parse (`GENESIS_TX_WIRE_FORMAT.md`).
 # Backs `DaemonEngine::fetch_scannable_block` (`engine/block_fetch.rs`) and the

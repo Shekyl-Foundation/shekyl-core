@@ -10,6 +10,7 @@
 //! not already compute.
 
 use shekyl_archival_retention::{BundleBody, BundleRef};
+use shekyl_network::NetworkId;
 use shekyl_types::BlockHeight;
 
 use super::{
@@ -72,6 +73,7 @@ pub fn judge_bundles<V: BundleView>(
     h_incl: BlockHeight,
     view: &V,
     rule_set: &RuleSet,
+    network_id: &NetworkId,
 ) -> Result<Vec<Admitted>, AdmissionFault<V::Fault>> {
     match check_section(refs, header_root, h_incl, view, rule_set) {
         Ok(SectionStanding::Admitted(_)) => {}
@@ -89,7 +91,7 @@ pub fn judge_bundles<V: BundleView>(
     }
     let mut admitted = Vec::with_capacity(refs.len());
     for (at, (reference, body)) in refs.iter().zip(bodies.iter()).enumerate() {
-        match verify_bundle(reference, body, h_incl, view, rule_set) {
+        match verify_bundle(reference, body, h_incl, view, rule_set, network_id) {
             Ok(one) => admitted.push(one),
             Err(refused) => return Err(AdmissionFault::Bundle { at, refused }),
         }

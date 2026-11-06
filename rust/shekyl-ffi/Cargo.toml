@@ -56,11 +56,9 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # via archival-retention; depended on directly here for the no-bond-term shape.
 shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 # `AtomicUnits` amount-newtype (`docs/completed/ATOMIC_UNITS_NEWTYPE.md`).
-# FFI structs stay `#[repr(C)] u64`; this is used only to wrap raw `u64` at
-# the `SpendInput`/`sign_transaction` edge (§4.3).
+# FFI structs stay `#[repr(C)] u64`; this wraps raw `u64` at the CT-balance
+# and economics edges (§4.3).
 shekyl-units = { path = "../shekyl-units" }
-shekyl-proofs = { path = "../shekyl-proofs" }
-shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 # Curve-tree client, exposed as a *replica* (`curve_tree_replica_ffi.rs`) so
 # the C++ test generator can fill block headers with real curve-tree roots
 # instead of a placeholder -- the retirement of CEN-B5's FAKECHAIN skip

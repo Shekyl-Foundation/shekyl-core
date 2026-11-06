@@ -38,8 +38,8 @@ use std::time::Instant;
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
-    form, seed_height, validate, AtHeight, Candidate, ChainValid, Fault, FormAttempt, HeaderView,
-    RuleSet, Substrate, Trust,
+    form, seed_height, validate, AtHeight, Candidate, ChainValid, Fault, FormAttempt, FormClaims,
+    HeaderView, RuleSet, Substrate, Trust,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, BlockHeader};
@@ -118,11 +118,14 @@ fn judge<'b, 'id>(
         shekyl_chain_rules::ReferenceClaims::from_headers(view, connecting, &candidate)?;
     let formed = match form(
         candidate,
-        &RULES,
+        &FormClaims {
+            rule_set: &RULES,
+            seed,
+            target,
+            references: &references,
+            network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+        },
         substrate,
-        seed,
-        target,
-        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

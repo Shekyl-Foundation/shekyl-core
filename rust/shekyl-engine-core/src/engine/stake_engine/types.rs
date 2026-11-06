@@ -869,6 +869,9 @@ pub(crate) struct StakeEngineArgs {
     /// Must be present in `bundles` when `Some` (the orchestrator guarantees the
     /// current slot is in the derive-forward set).
     pub active: Option<PSlot>,
+    /// The id of the network the personas are on; the spends the engine
+    /// assembles sign under it (`NETWORK_IDENTITY.md` NI-Q4).
+    pub network: shekyl_network::NetworkId,
     /// **Test + conformance only.** Selects the `on_start` session self-cert (S6)
     /// behavior. Defaults to [`TestSelfCert::Skip`] so the bulk of the stake
     /// tests — which are **not** about the self-cert — do not run a real ~15 ms

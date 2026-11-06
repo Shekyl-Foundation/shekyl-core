@@ -19,7 +19,7 @@ use crate::fault::{Fault, FormAttempt, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::difficulty::{target_claim, Target};
 use crate::substrate::Substrate;
-use crate::validate::form;
+use crate::validate::{form, FormClaims};
 use crate::verdict::{InvalidBlock, Locus, Verdict};
 use crate::view::{AtHeight, ChainView};
 
@@ -155,13 +155,38 @@ pub fn formed_under(
     target: Target,
     references: &ReferenceClaims,
 ) -> StructurallyValid {
-    match form(
+    formed_under_network(
         candidate,
         rule_set,
-        &MockSubstrate::default(),
         seed,
         target,
         references,
+        crate::HARNESS_NETWORK_ID,
+    )
+}
+
+/// [`formed_under`] on the network whose id is `network`: what a fixture
+/// judged under a pinned [`Trust`](crate::Trust) forms with, since
+/// `validate` refuses a token formed under another id than its trust's.
+#[track_caller]
+pub fn formed_under_network(
+    candidate: Candidate,
+    rule_set: &RuleSet,
+    seed: BlockHash,
+    target: Target,
+    references: &ReferenceClaims,
+    network: shekyl_network::NetworkId,
+) -> StructurallyValid {
+    match form(
+        candidate,
+        &FormClaims {
+            rule_set,
+            seed,
+            target,
+            references,
+            network,
+        },
+        &MockSubstrate::default(),
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -175,13 +200,25 @@ pub fn formed_under(
 /// I12's comparison hold and the view stage judges the candidate.
 #[track_caller]
 pub fn formed_on(chain: &MockChain, candidate: Candidate) -> StructurallyValid {
+    formed_on_network(chain, candidate, crate::HARNESS_NETWORK_ID)
+}
+
+/// [`formed_on`] on the network whose id is `network` (see
+/// [`formed_under_network`]).
+#[track_caller]
+pub fn formed_on_network(
+    chain: &MockChain,
+    candidate: Candidate,
+    network: shekyl_network::NetworkId,
+) -> StructurallyValid {
     let references = expected_references(chain, &candidate);
-    formed_under(
+    formed_under_network(
         candidate,
         &RuleSet::GENESIS,
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
         &references,
+        network,
     )
 }
 
@@ -197,11 +234,14 @@ pub fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
     let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -245,6 +285,7 @@ pub fn token_for_one_rule(chain: &MockChain, candidate: Candidate) -> Structural
     StructurallyValid::new(
         candidate,
         RuleSet::GENESIS,
+        crate::HARNESS_NETWORK_ID,
         crate::coverage::RuleCoverage::EMPTY,
         crate::header_facts::HeaderFacts::for_harness(
             header,

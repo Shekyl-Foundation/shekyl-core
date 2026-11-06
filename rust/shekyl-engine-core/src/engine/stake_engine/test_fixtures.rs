@@ -51,6 +51,7 @@ pub(crate) fn spawn_over(held: &[u32], bonded: &[u32], active: Option<u32>) -> S
         bonded,
         active.map(PSlot::from_raw),
         ephemeral_body_store(),
+        shekyl_network::HARNESS_NETWORK_ID,
     )
 }
 

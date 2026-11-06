@@ -369,6 +369,10 @@ impl MockShim {
 }
 
 impl SubmitStateShim for MockShim {
+    fn network_id(&self) -> shekyl_network::NetworkId {
+        shekyl_network::HARNESS_NETWORK_ID
+    }
+
     fn snapshot_facts(
         &self,
         txid: &TxHash,
@@ -453,7 +457,12 @@ impl MockVerifier {
 }
 
 impl TxVerifier for MockVerifier {
-    fn verify(&self, _parsed: &ParsedSubmission, _facts: &SubmitFacts) -> Result<(), VerifyReject> {
+    fn verify(
+        &self,
+        _parsed: &ParsedSubmission,
+        _facts: &SubmitFacts,
+        _network: &shekyl_network::NetworkId,
+    ) -> Result<(), VerifyReject> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.result.clone()
     }

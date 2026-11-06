@@ -17,6 +17,10 @@ license.workspace = true
 # relay sets the public bit through this crate's interface, and the
 # dependency points from the relay's wiring to here, never back.
 [dependencies]
+# The network id a lone transaction's signatures are judged under
+# (NETWORK_IDENTITY.md NI-Q4): data the caller passes, as it passes the
+# rule set.
+shekyl-network = { path = "../shekyl-network" }
 # judge_slot_stateless / tx_against / policy_form — the door's three calls;
 # ChainView / HeaderView — what the decorator implements; ReferenceClaims.
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }

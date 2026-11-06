@@ -137,9 +137,13 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
     }
 }
 
+/// The network these fixtures are signed and verified on: any id, the
+/// same on both sides (`NETWORK_IDENTITY.md` NI-Q4).
+const NETWORK: shekyl_network::NetworkId = shekyl_network::HARNESS_NETWORK_ID;
+
 fn verify(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyFailure> {
     DaemonTxVerifier
-        .verify(parsed, facts)
+        .verify(parsed, facts, &NETWORK)
         .map_err(|e| e.cause())
 }
 
@@ -481,6 +485,7 @@ fn build_fixture() -> SpendFixture {
         &submit_fixtures::conforming_pqc_extra(2),
     );
     let signed = sign_transaction(
+        &NETWORK,
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
         &outputs,
@@ -522,7 +527,8 @@ fn build_fixture() -> SpendFixture {
         }],
         fcmp_layers: signed.tree_depth,
     };
-    let payload_hashes = phase1_payload_hashes(&wire_input).expect("phase-1 payload hashes");
+    let payload_hashes =
+        phase1_payload_hashes(&wire_input, &NETWORK).expect("phase-1 payload hashes");
     let pqc_auths = sign_pqc_auths(&payload_hashes, std::slice::from_ref(&spend_input))
         .expect("phase-2 PQC auth signing");
     wire_input.pqc_auths = pqc_auths;
@@ -702,6 +708,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
 
     // ── Prove: the bond credit rides as the sole output-side term ────────
     let signed = sign_transaction_with_terms(
+        &NETWORK,
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
         &outputs,
@@ -745,7 +752,8 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
         ],
         fcmp_layers: signed.tree_depth,
     };
-    let payload_hashes = phase1_payload_hashes(&wire_input).expect("phase-1 payload hashes");
+    let payload_hashes =
+        phase1_payload_hashes(&wire_input, &NETWORK).expect("phase-1 payload hashes");
     assert_eq!(payload_hashes.len(), 2, "one hash per pqc_auths slot");
     let mut pqc_auths = sign_pqc_auths(&payload_hashes[..1], std::slice::from_ref(&spend_input))
         .expect("phase-2 PQC auth signing (funding slot)");
@@ -833,7 +841,7 @@ fn a_malformed_reject_names_its_leg() {
         base.commitments[0] = identity;
     });
     let err = DaemonTxVerifier
-        .verify(&parsed, &admitting_facts(fixture()))
+        .verify(&parsed, &admitting_facts(fixture()), &NETWORK)
         .expect_err("a trivial output commitment must be refused");
     assert_eq!(err.cause(), VerifyFailure::Malformed);
     assert!(
@@ -1282,7 +1290,7 @@ fn bond_spend_pk_swap_after_signing_is_rejected() {
     // the key-swap-at-join foreclosure (GENESIS_TX_WIRE_FORMAT.md, security-
     // critical) would rest on no test at all.
     let fx = bond_fixture();
-    let baseline = fx.parsed.tx.pqc_signing_payload_hashes();
+    let baseline = fx.parsed.tx.pqc_signing_payload_hashes(&NETWORK);
     let mut swapped = fx.parsed.tx.clone();
     for input in &mut swapped.prefix.inputs {
         if let shekyl_wire::transaction::Input::BondPost(bp) = input {
@@ -1294,7 +1302,7 @@ fn bond_spend_pk_swap_after_signing_is_rejected() {
             bond_spend_pk[0] ^= 0x01;
         }
     }
-    let moved = swapped.pqc_signing_payload_hashes();
+    let moved = swapped.pqc_signing_payload_hashes(&NETWORK);
     assert_eq!(baseline.len(), moved.len(), "slot count unchanged");
     assert_ne!(
         baseline[1], moved[1],
@@ -1624,6 +1632,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     .expect("prefix hash with the release input");
 
     let signed = sign_transaction_with_terms(
+        &NETWORK,
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
         &outputs,
@@ -1674,7 +1683,8 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
         ],
         fcmp_layers: signed.tree_depth,
     };
-    let payload_hashes = phase1_payload_hashes(&wire_input).expect("phase-1 payload hashes");
+    let payload_hashes =
+        phase1_payload_hashes(&wire_input, &NETWORK).expect("phase-1 payload hashes");
     let mut pqc_auths = sign_pqc_auths(&payload_hashes[..1], std::slice::from_ref(&spend_input))
         .expect("phase-2 PQC auth signing (funding slot)");
     let slot_sk = match auth_key {

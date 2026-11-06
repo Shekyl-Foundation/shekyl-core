@@ -97,11 +97,6 @@ pub mod tx_extra_codec_ffi;
 // One mixer; the C++ one is deleted.
 pub mod txid_ffi;
 
-// The PQC signing preimage (CHAIN_RULES_SLICE_6.md §5 commit 7, Q7 (c)):
-// shekyl-wire derives every input's signed hash; the daemon verifies against
-// it. Replaces the C++ assembly in tx_pqc_verify.cpp, one call per tx.
-pub mod tx_signing_ffi;
-
 // Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §10).
 pub mod archival_ffi;
 
@@ -132,8 +127,6 @@ mod legacy_core;
 mod legacy_curve_tree;
 mod legacy_fcmp;
 mod legacy_frost;
-mod legacy_kem;
-mod legacy_proofs;
 mod legacy_tx;
 mod legacy_types;
 mod legacy_util;
@@ -148,10 +141,6 @@ pub use legacy_curve_tree::*;
 pub use legacy_fcmp::*;
 #[allow(unused_imports)]
 pub use legacy_frost::*;
-#[allow(unused_imports)]
-pub use legacy_kem::*;
-#[allow(unused_imports)]
-pub use legacy_proofs::*;
 #[allow(unused_imports)]
 pub use legacy_tx::*;
 #[allow(unused_imports)]

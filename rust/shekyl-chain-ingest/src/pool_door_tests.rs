@@ -77,6 +77,7 @@ async fn door(scenario: &mut Scenario<FreeHash>, tx: &Transaction) -> (Verdict, 
                 view,
                 &KeyImages::default(),
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
                 None,
             )
@@ -285,6 +286,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("open");
@@ -355,6 +357,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("reopen");
@@ -391,6 +394,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("open");
@@ -424,6 +428,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("reopen");

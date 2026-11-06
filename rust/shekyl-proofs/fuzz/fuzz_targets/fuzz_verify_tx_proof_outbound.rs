@@ -36,6 +36,8 @@ fuzz_target!(|data: &[u8]| {
     }];
 
     let _ = verify_outbound_proof(
+        // Any id: the verifier frames under whichever network it is given.
+        &[0u8; 16],
         proof_bytes,
         &txid,
         address,

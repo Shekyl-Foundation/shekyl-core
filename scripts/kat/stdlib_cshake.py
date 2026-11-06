@@ -21,6 +21,7 @@ encode_string prefix and the 0x04 suffix that SHAKE256 does not (Rick's
 ruling 3 on the signing envelope, 2026-11-04). `anchor()` adds the four
 derived network ids against the recorded values (`shekyl-network`'s `RECORDED`),
 and `name_id` is pinned for all four networks (the envelope §2.6).
+`framed()` and `frame()` are the envelope's §2.6, written from the design.
 
 An oracle loads this file by its path (`importlib`), as `python3 -I` puts
 neither the script's directory nor the working directory on `sys.path`.
@@ -41,10 +42,10 @@ NETWORK_ID_DST = b"shekyl/p2p-network-id-v1"
 # The ids rust/shekyl-network/src/tests.rs records (`RECORDED`), written out:
 # the derivation below must reproduce them before it is trusted.
 RECORDED_IDS = {
-    "mainnet": "cf9f4283032b6ca19545f2696a228d80",
-    "testnet": "ff927a109aba9400d681e9f9934c7860",
-    "stagenet": "6ac79895e519d701c3076deae5eef0d8",
-    "regtest": "724b36a3b46f9ccd5e50c63b6fb6e731",
+    "mainnet": "9e77dd8ef64faef2c43c42b1cf5bc554",
+    "testnet": "4e948cf2481473d8949da645692464de",
+    "stagenet": "3a6b9b9ff5b7327cb44b192cc1d98ec8",
+    "regtest": "399064298436b76e7349df0a18cfbadf",
 }
 
 # ---- Keccak-f[1600] -------------------------------------------------------
@@ -170,10 +171,26 @@ def name_id(name: str) -> bytes:
     return cshake256(f"shekyl/{name}".encode("ascii"), 32, s=NETWORK_NAME_DST)[:16]
 
 
+def keccak256(data: bytes) -> bytes:
+    """Keccak-256 with the original 0x01 padding (not SHA3-256): the txid's
+    and the prefix hash's function."""
+    return _sponge(data, _RATE, 0x01, 32)
+
+
+# Keccak-256 of the empty string and of "abc", the published values.
+KECCAK256_SAMPLES = (
+    (b"", "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"),
+    (b"abc", "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"),
+)
+
+
 def anchor_sponge() -> None:
     for msg in (b"", b"abc", bytes(range(200))):
         if cshake256(msg, 32) != hashlib.shake_256(msg).digest(32):
             sys.exit("the Keccak sponge disagrees with hashlib's SHAKE256")
+    for msg, want in KECCAK256_SAMPLES:
+        if keccak256(msg).hex() != want:
+            sys.exit("Keccak-256 disagrees with its published value")
     for data, want in NIST_CSHAKE256_SAMPLES:
         if cshake256(data, 64, s=b"Email Signature").hex() != want:
             sys.exit("cSHAKE256 disagrees with NIST SP 800-185's published sample")
@@ -181,6 +198,20 @@ def anchor_sponge() -> None:
         if name_id(name).hex() != want:
             sys.exit(f"{name}: name_id is not the pinned value")
 
+
+
+def framed(field: bytes) -> bytes:
+    """The envelope's field framing (§2.6): u64_le(len) ‖ field."""
+    return len(field).to_bytes(8, "little") + field
+
+
+def frame(domain: bytes, binding: bytes, fields: list[bytes], out_len: int = 32) -> bytes:
+    """The signing envelope (§2.6): cSHAKE256(S = domain,
+    X = binding ‖ framed(f_1) ‖ … ‖ framed(f_n)), out_len bytes. The binding is
+    16 bytes, raw: a network id or a name_id."""
+    if len(binding) != 16:
+        sys.exit(f"a binding is 16 bytes, not {len(binding)}")
+    return cshake256(binding + b"".join(framed(f) for f in fields), out_len, s=domain)
 
 
 def network_id(name: str) -> bytes:
@@ -192,4 +223,4 @@ def anchor() -> None:
     anchor_sponge()
     for name in NETWORKS:
         if network_id(name).hex() != RECORDED_IDS[name]:
-            sys.exit(f"{name}: the derived network id is not the one PR 1 recorded")
+            sys.exit(f"{name}: the derived network id is not the recorded one")

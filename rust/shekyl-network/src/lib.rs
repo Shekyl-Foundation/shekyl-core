@@ -35,6 +35,7 @@ use std::str::FromStr;
 
 use shekyl_crypto_hash::cshake256_32;
 
+pub mod envelope;
 mod genesis;
 pub use genesis::Genesis;
 
@@ -115,7 +116,7 @@ impl Network {
     /// (NI-R10, NI-R16). Key derivation's HKDF salt is this, then
     /// `shekyl-master-derive-v3`.
     #[must_use]
-    pub const fn name_id(self) -> [u8; 16] {
+    pub const fn name_id(self) -> NameId {
         self.row().name_id
     }
 
@@ -232,7 +233,7 @@ pub struct Row {
     /// `name_id`: `cSHAKE256(S = NETWORK_NAME_DST, X = tag)[..16]`, the
     /// name's 16-byte binding (`NETWORK_IDENTITY.md` NI-R10, the signing
     /// envelope §2.6). Held as a constant; a test recomputes it.
-    pub name_id: [u8; 16],
+    pub name_id: NameId,
     /// The address prefixes.
     pub prefixes: Prefixes,
     /// The daemon's default ports.
@@ -499,10 +500,10 @@ const ROWS: [Row; 4] = [
         network: Network::Mainnet,
         name: "mainnet",
         tag: "shekyl/mainnet",
-        name_id: [
+        name_id: NameId::from_bytes([
             0x5e, 0x6f, 0x51, 0xbe, 0xaf, 0xca, 0x4a, 0x33, 0xdb, 0xc9, 0x82, 0x67, 0x57, 0x4f,
             0xc1, 0xc8,
-        ],
+        ]),
         prefixes: Prefixes {
             classical: "shekyl",
             pqc_a: "skpq",
@@ -523,10 +524,10 @@ const ROWS: [Row; 4] = [
         network: Network::Testnet,
         name: "testnet",
         tag: "shekyl/testnet",
-        name_id: [
+        name_id: NameId::from_bytes([
             0x86, 0x6a, 0x98, 0x67, 0x74, 0xba, 0x35, 0x9c, 0x89, 0x50, 0xf9, 0x38, 0xe8, 0xde,
             0xb3, 0x0a,
-        ],
+        ]),
         prefixes: Prefixes {
             classical: "tshekyl",
             pqc_a: "tskpq",
@@ -547,10 +548,10 @@ const ROWS: [Row; 4] = [
         network: Network::Stagenet,
         name: "stagenet",
         tag: "shekyl/stagenet",
-        name_id: [
+        name_id: NameId::from_bytes([
             0xfd, 0x3a, 0x11, 0x44, 0x6a, 0x29, 0x37, 0x82, 0x68, 0x60, 0x94, 0x94, 0x74, 0x45,
             0x63, 0x12,
-        ],
+        ]),
         prefixes: Prefixes {
             classical: "sshekyl",
             pqc_a: "sskpq",
@@ -571,10 +572,10 @@ const ROWS: [Row; 4] = [
         network: Network::Regtest,
         name: "regtest",
         tag: "shekyl/regtest",
-        name_id: [
+        name_id: NameId::from_bytes([
             0x4b, 0x22, 0xbe, 0x74, 0x3e, 0xf0, 0xc2, 0x75, 0xc6, 0xf9, 0xb0, 0x5b, 0xb4, 0x4f,
             0xf3, 0x3f,
-        ],
+        ]),
         prefixes: Prefixes {
             classical: "rshekyl",
             pqc_a: "rskpq",
@@ -610,6 +611,36 @@ pub const PREFIX_LEN: usize = 8;
 
 /// A network id: the derived form of a network (NI-R10).
 pub type NetworkId = [u8; 16];
+
+/// A network's `name_id`: the name's 16-byte binding (NI-R10, NI-R15; the
+/// signing envelope §2.6), `cSHAKE256(S = NETWORK_NAME_DST, X = tag)[..16]`.
+///
+/// A type of its own, not a `[u8; 16]`, so it cannot be passed where an
+/// id is expected or the reverse: [`envelope::IdDomain`] takes a
+/// [`NetworkId`] and [`envelope::NameDomain`] takes this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct NameId([u8; 16]);
+
+impl NameId {
+    /// The `name_id` whose bytes are `bytes`.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    /// Its 16 bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+}
+
+/// The id a harness chain is judged under: a chain that mines its own
+/// genesis and so has no row (`Trust::UNPINNED` in `shekyl-chain-rules`).
+/// One value, so every harness signer and the trust it is validated under
+/// agree (`NETWORK_IDENTITY.md` NI-Q4). No network's row has this id, and
+/// no release path reads it.
+pub const HARNESS_NETWORK_ID: NetworkId = [0; 16];
 
 /// The id of the chain whose genesis block hash is `genesis_block_hash`:
 /// the first 16 bytes of `cSHAKE256(S = NETWORK_ID_DST, X = genesis hash)`,

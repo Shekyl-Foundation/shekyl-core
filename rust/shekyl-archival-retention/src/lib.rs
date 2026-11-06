@@ -74,6 +74,7 @@ pub mod debit_auth;
 pub mod distinct;
 pub mod drawable_epoch;
 pub mod drawable_pair;
+pub mod emission_auth;
 pub mod emission_kat_shape;
 pub mod emission_verify;
 pub mod emission_wire;
@@ -142,10 +143,10 @@ pub use bond_wire::{
 pub use bundle::{
     assemble_bundle, bundle_charge, bundle_commitment, bundle_prunable_hash, bundle_root,
     section_budget, section_d_max, sign_bundle_commitment, BundleBody, BundleKept, BundleRecord,
-    BundleRef, BundleWireError, PassBitmap, SectionBudget, TooManyReferences,
-    BUNDLE_COMMITMENT_CUSTOMIZATION, BUNDLE_KEPT_FIXED_LEN, BUNDLE_PRUNABLE_CUSTOMIZATION,
-    BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN, BUNDLE_ROOT_CUSTOMIZATION, BUNDLE_SEED_LEN,
-    BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN, BUNDLE_WITNESS_LEN,
+    BundleRef, BundleWireError, PassBitmap, SectionBudget, TooManyReferences, BUNDLE_COMMITMENT,
+    BUNDLE_KEPT_FIXED_LEN, BUNDLE_PRUNABLE_CUSTOMIZATION, BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN,
+    BUNDLE_ROOT_CUSTOMIZATION, BUNDLE_SEED_LEN, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
+    BUNDLE_WITNESS_LEN,
 };
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,
@@ -209,8 +210,8 @@ pub use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 pub use emission_wire::{
     ArchivalRewardEmissionVin, EmissionAuthMsgs, EmissionAuthRole, MembershipOnlyBacking,
     RewardCommit, ShardWorkEntry, WireError as EmissionWireError, WorkEpochClaim,
-    EMISSION_AUTH_BACKING_CUSTOMIZATION, EMISSION_AUTH_CLAIM_CUSTOMIZATION,
-    MAX_BACKING_PROOF_BYTES, MAX_SETTLEMENT_EPOCHS_PER_EMISSION, VIN_TYPE_ARCHIVAL_REWARD_EMISSION,
+    EMISSION_AUTH_BACKING, EMISSION_AUTH_CLAIM, MAX_BACKING_PROOF_BYTES,
+    MAX_SETTLEMENT_EPOCHS_PER_EMISSION, VIN_TYPE_ARCHIVAL_REWARD_EMISSION,
 };
 pub use error::VerifyError;
 pub use failure_window::{
@@ -233,9 +234,8 @@ pub use reward_arithmetic::{
 };
 pub use secret_draw::{
     challenge_nonce, commit_and_discard, draw_commit, draw_count, draw_horizon, draw_target,
-    select_draw, serve_credit_batch_commitment, DrawTarget, SelectedDraw,
-    CHALLENGE_NONCE_CUSTOMIZATION, CHALLENGE_READS, DRAW_ATTEMPTS, DRAW_COMMIT_CUSTOMIZATION,
-    DRAW_CUSTOMIZATION, SERVE_CREDIT_BATCH_CUSTOMIZATION,
+    select_draw, DrawTarget, SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION, CHALLENGE_READS,
+    DRAW_ATTEMPTS, DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION,
 };
 pub use segment_freeze::{
     challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, LeafChunkBounds,

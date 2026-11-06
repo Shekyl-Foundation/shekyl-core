@@ -1351,52 +1351,6 @@ pub fn compute_output_key_image(
     Ok(result)
 }
 
-/// Compute key image from a pre-derived `ho`.
-///
-/// Same arithmetic as [`compute_output_key_image`], which derives `ho` itself
-/// and is what the scanner and the engine call. This entry exists for the one
-/// site that already holds `ho`: `shekyl_scan_and_recover`.
-pub fn compute_output_key_image_from_ho(
-    ho: &[u8; 32],
-    spend_secret: &[u8; 32],
-    hp_of_output: &[u8; 32],
-) -> Result<KeyImageResult, CryptoError> {
-    let hp_point = CompressedEdwardsY(*hp_of_output)
-        .decompress()
-        .ok_or(CryptoError::InvalidKeyMaterial)?;
-    if hp_point == EdwardsPoint::default() {
-        return Err(CryptoError::InvalidKeyMaterial);
-    }
-    if !hp_point.is_torsion_free() {
-        return Err(CryptoError::InvalidKeyMaterial);
-    }
-
-    // `ho`, the spend secret `b`, and the output spend secret `x = ho + b` are
-    // all secret scalars; `Zeroizing` wipes their limbs on drop.
-    let ho_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(*ho)).ok_or(CryptoError::InvalidKeyMaterial)?,
-    );
-    let b_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(*spend_secret))
-            .ok_or(CryptoError::InvalidKeyMaterial)?,
-    );
-
-    let x = Zeroizing::new(*ho_scalar + *b_scalar);
-    let key_image =
-        crate::key_image::KeyImage::from_canonical_bytes((*x * hp_point).compress().to_bytes());
-
-    let mut x_bytes = zeroize::Zeroizing::new(x.to_bytes());
-
-    let result = KeyImageResult {
-        key_image,
-        spend_secret_x: x_bytes.clone(),
-    };
-
-    x_bytes.zeroize();
-
-    Ok(result)
-}
-
 /// Internal helper: derive ML-DSA-65 keypair from seed bytes, returning
 /// serialized public and secret key.
 fn keygen_from_seed_bytes(ml_dsa_seed: &[u8; 32]) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
@@ -2322,28 +2276,6 @@ mod tests {
     }
 
     #[test]
-    fn key_image_both_variants_agree() {
-        let (combined_ss, spend_secret, _output_key, hp_of_output, idx) = setup_key_image_test();
-
-        let from_ss =
-            compute_output_key_image(&combined_ss, idx, &spend_secret, &hp_of_output).unwrap();
-
-        let ps = derive_proof_secrets(&combined_ss, idx);
-        let from_ho =
-            compute_output_key_image_from_ho(&ps.ho, &spend_secret, &hp_of_output).unwrap();
-
-        assert_eq!(
-            from_ss.key_image, from_ho.key_image,
-            "compute_output_key_image and _from_ho must produce identical key images"
-        );
-        assert_eq!(
-            from_ss.spend_secret_x.as_ref(),
-            from_ho.spend_secret_x.as_ref(),
-            "both variants must produce identical spend_secret_x"
-        );
-    }
-
-    #[test]
     fn key_image_is_deterministic() {
         let (combined_ss, spend_secret, _output_key, hp_of_output, idx) = setup_key_image_test();
 
@@ -2519,14 +2451,7 @@ mod tests {
         );
         eprintln!("[pipeline] key image algebraically verified: I = x * Hp(O)");
 
-        // Step 9: Verify _from_ho variant agrees
-        let ki_from_ho =
-            compute_output_key_image_from_ho(&ps.ho, &spend_scalar.to_bytes(), &hp_point).unwrap();
-        assert_eq!(
-            ki_result.key_image, ki_from_ho.key_image,
-            "_from_ho variant must produce same key image"
-        );
-        eprintln!("[pipeline] _from_ho variant agrees -- full pipeline passed");
+        eprintln!("[pipeline] full pipeline passed");
     }
 
     #[test]

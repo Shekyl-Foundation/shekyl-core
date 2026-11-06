@@ -18,7 +18,7 @@ use shekyl_chain_rules::harness::{
     assert_refused, expected_seed, expected_target, judged, MockChain, MockSubstrate,
 };
 use shekyl_chain_rules::{
-    form, validate, Candidate, CenRow, ChainView, FormAttempt, Locus, RuleSet, Trust,
+    form, validate, Candidate, CenRow, ChainView, FormAttempt, FormClaims, Locus, RuleSet, Trust,
 };
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_difficulty::{CumulativeDifficulty, FTL_SECONDS, GENESIS_DIFFICULTY};
@@ -161,11 +161,14 @@ fn admitted(chain: &MockChain, template: Template) -> Vec<CenRow> {
     let references = expected_references(chain, &candidate);
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
         FormAttempt::FIRST,
     )
     .expect("the default substrate never faults")
@@ -576,11 +579,14 @@ fn the_builders_c1_refusal_is_the_validators() {
     let references = expected_references(&chain, &candidate);
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(&chain),
+            target: expected_target(&chain, &RuleSet::GENESIS),
+            references: &references,
+            network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        expected_seed(&chain),
-        expected_target(&chain, &RuleSet::GENESIS),
-        &references,
         FormAttempt::FIRST,
     )
     .expect("no fault")

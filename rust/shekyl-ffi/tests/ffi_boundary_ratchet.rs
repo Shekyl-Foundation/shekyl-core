@@ -88,12 +88,12 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // Tightened so the win cannot grow back.
     ("legacy_fcmp.rs", 1, 5),
     ("legacy_frost.rs", 2, 3),
-    ("legacy_proofs.rs", 4, 0),
     ("legacy_tests.rs", 3, 0),
-    // 2 -> 1 with_capacity: the wallet-cache envelope export was the other
-    // reserve, and it left with the callerless cache FFI. The remaining
-    // reserve is the collapsed-sign input vec.
-    ("legacy_tx.rs", 1, 1),
+    // 2 -> 1 -> 0 with_capacity: the wallet-cache envelope export left with
+    // the callerless cache FFI, and the collapsed-sign input vec with the
+    // wallet's C++ signing exports (the signing envelope, #1266). What
+    // remains is the witness-header writer's one borrow.
+    ("legacy_tx.rs", 1, 0),
     // RETIRED (P2P_3_REMNANT_CUTOVER_BRIEF.md §3): `levin_ffi.rs` and
     // `relay_zone_ffi/` left with the C++ p2p host. The Levin reader and the
     // relay zone are reached as Rust crates now, with no `extern "C"` edge.

@@ -36,11 +36,16 @@ fn test_address() -> ShekylAddress {
 fn canonical_address_bytes_layout_is_pinned() {
     let addr = test_address();
     let bytes = canonical_address_bytes(&addr);
-    assert_eq!(bytes.len(), 1 + 32 + 32 + 1184);
-    assert_eq!(bytes[0], Network::Mainnet.code());
-    assert_eq!(&bytes[1..33], &[0xAA; 32]);
-    assert_eq!(&bytes[33..65], &[0xBB; 32]);
-    assert_eq!(&bytes[65..], &[0xCC; 1184][..]);
+    assert_eq!(bytes.len(), 32 + 32 + 1184);
+    assert_eq!(&bytes[..32], &[0xAA; 32]);
+    assert_eq!(&bytes[32..64], &[0xBB; 32]);
+    assert_eq!(&bytes[64..], &[0xCC; 1184][..]);
+    // An address and only an address: the network a proof is valid on is the
+    // envelope's binding, not these bytes (the signing envelope §2.3), so the
+    // same keys on another network are the same bytes.
+    let mut other = addr.clone();
+    other.network = Network::Testnet;
+    assert_eq!(canonical_address_bytes(&other), bytes);
 }
 
 // ── tx-proof framing ─────────────────────────────────────────────
@@ -602,6 +607,7 @@ mod check_workflows {
         let bytes = proof_bridge::generate_inbound_proof(
             &fx.local,
             &InboundProofRequest {
+                network_id: fx.address.network.network_id(),
                 txid: fx.txid,
                 address_bytes: canonical_address_bytes(&fx.address),
                 message: MSG.as_bytes().to_vec(),
@@ -645,6 +651,7 @@ mod check_workflows {
         let bytes = proof_bridge::generate_reserve_proof(
             &fx.local,
             &ReserveProofRequest {
+                network_id: fx.address.network.network_id(),
                 address_bytes: canonical_address_bytes(&fx.address),
                 message: MSG.as_bytes().to_vec(),
                 outputs: fx
@@ -707,6 +714,7 @@ mod check_workflows {
         // both outputs, exactly what `generate_outbound` produces
         // after vout discovery.
         let bytes = generate_outbound_proof(
+            &fx.address.network.network_id(),
             &TX_KEY_SECRET,
             &fx.txid,
             &canonical_address_bytes(&fx.address),
@@ -855,6 +863,7 @@ mod check_workflows {
         let bytes = proof_bridge::generate_reserve_proof(
             &fx.local,
             &ReserveProofRequest {
+                network_id: fx.address.network.network_id(),
                 address_bytes: canonical_address_bytes(&fx.address),
                 message: MSG.as_bytes().to_vec(),
                 outputs: vec![dup(0), dup(0)],
@@ -1193,6 +1202,7 @@ mod check_workflows {
 
         let address_bytes = canonical_address_bytes(&fx.address);
         let with_secrets = generate_outbound_proof_with_secrets(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &TX_KEY_SECRET,
             &fx.txid,
             &address_bytes,
@@ -1201,6 +1211,7 @@ mod check_workflows {
         )
         .expect("with-secrets generation succeeds");
         let rederived = generate_outbound_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &TX_KEY_SECRET,
             &fx.txid,
             &address_bytes,
@@ -1216,6 +1227,7 @@ mod check_workflows {
         assert_eq!(with_secrets[97..], rederived[97..]);
 
         let verified = verify_outbound_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &with_secrets,
             &fx.txid,
             &address_bytes,

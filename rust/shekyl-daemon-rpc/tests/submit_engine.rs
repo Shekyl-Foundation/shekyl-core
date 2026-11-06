@@ -414,6 +414,10 @@ fn snapshot_fault_is_a_fault_not_a_verdict() {
     // transport Err arm, never as a verdict — and verification never runs.
     struct FaultingShim;
     impl shekyl_daemon_rpc::submit::SubmitStateShim for FaultingShim {
+        fn network_id(&self) -> shekyl_network::NetworkId {
+            shekyl_network::HARNESS_NETWORK_ID
+        }
+
         fn snapshot_facts(
             &self,
             _txid: &shekyl_types::TxHash,

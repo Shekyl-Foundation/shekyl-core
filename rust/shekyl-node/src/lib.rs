@@ -331,7 +331,9 @@ impl Node {
             .map_err(|refused| OpenError::Rules(format!("the mine-address row: {refused}")))?;
         // Every template draws its `0x0C` commitment from this ring, and the
         // bundle producer files from it (`SO-D12` increment 4c).
-        let witness = Arc::new(shekyl_bundle_producer::WitnessRing::new());
+        let witness = Arc::new(shekyl_bundle_producer::WitnessRing::new(
+            rules.trust().network_id(),
+        ));
         let producer = producer::seat(args.config, &store, &witness, Arc::clone(&network_slot));
         let follow = Follow {
             job: Some(JobSeat {
@@ -933,6 +935,7 @@ fn open_pool(
         wall_now(),
         &view,
         &rule_set,
+        &rules.trust().network_id(),
         &AdmissionPolicy::GENESIS,
     )
     .map_err(|error| OpenError::Pool(format!("{error:?}")))?;

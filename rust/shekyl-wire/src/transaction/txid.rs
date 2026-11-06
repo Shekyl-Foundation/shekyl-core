@@ -400,10 +400,6 @@ impl Transaction {
         self.prefix
             .write(&mut prefix_buf)
             .expect("Vec write is infallible");
-        let mut base_buf = Vec::new();
-        self.ct
-            .write_base(&mut base_buf)
-            .expect("Vec write is infallible");
         let discardable = match &self.ct {
             Ct::Null(_) => Discardable::Coinbase,
             Ct::Fcmp { .. } => Discardable::Fcmp {
@@ -412,7 +408,11 @@ impl Transaction {
                 archival_len,
             },
         };
-        mix(keccak256(&prefix_buf), keccak256(&base_buf), discardable)
+        mix(
+            keccak256(&prefix_buf),
+            self.ct.base_hash().to_bytes(),
+            discardable,
+        )
     }
 }
 

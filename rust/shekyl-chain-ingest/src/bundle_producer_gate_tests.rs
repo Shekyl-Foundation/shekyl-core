@@ -361,7 +361,7 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
     let epoch = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
 
     // 2. The ring, P serving, the producer.
-    let ring = Arc::new(WitnessRing::new());
+    let ring = Arc::new(WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID));
     scenario.draw_from(Arc::clone(&ring));
     let p_tip = Arc::new(DaemonTipCache::new(Duration::from_secs(24 * 60 * 60)));
     p_tip.stamp_synced(tip_of(&chain));
@@ -392,7 +392,7 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
                     "the queue survives a restart, reconciled"
                 );
                 // A restart's ring is empty: a fresh one, as a new process.
-                ring = Arc::new(WitnessRing::new());
+                ring = Arc::new(WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID));
                 scenario.draw_from(Arc::clone(&ring));
                 let (restarted_serving, client) =
                     serve(shard, Arc::clone(&body), &p_tip, true).await;
@@ -580,7 +580,7 @@ async fn a_produced_support_bundle_is_admitted_and_connects_through_the_staged_d
     chain.push(join);
 
     // 2. The ring, T serving its prefix, the producer.
-    let ring = Arc::new(WitnessRing::new());
+    let ring = Arc::new(WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID));
     scenario.draw_from(Arc::clone(&ring));
     let p_tip = Arc::new(DaemonTipCache::new(Duration::from_secs(24 * 60 * 60)));
     p_tip.stamp_synced(tip_of(&chain));

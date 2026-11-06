@@ -79,8 +79,8 @@ use shekyl_curve_tree::{
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_tx_builder::{
-    sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, LeafEntry, OutputInfo, SpendInput,
-    TreeContext,
+    sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, tx_signable_for, LeafEntry,
+    OutputInfo, SpendInput, TreeContext,
 };
 use shekyl_types::SigningPayloadHash;
 use shekyl_units::AtomicUnits;
@@ -414,6 +414,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         &extra,
     );
     let signed = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
         &outputs,
@@ -423,9 +424,23 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     .expect("sign transaction");
 
     // ── 7. Verify against the Rust consensus verifier ─────────────────────
-    // `sign_transaction` feeds the raw `tx_prefix_hash` to the prover as the
-    // signable hash and returns the (random) pseudo-out blinds in
-    // `signed.pseudo_outs`, so verification must reuse both verbatim.
+    // `sign_transaction` proves over the transaction's network-bound message,
+    // `tx_signable` (the prefix hash and the base it built, framed under the
+    // network's id; the signing envelope §2.2), and returns it with the
+    // (random) pseudo-out blinds in `signed.pseudo_outs`; verification reuses
+    // both verbatim.
+    let tx_signable = signed.tx_signable;
+    assert_eq!(
+        tx_signable,
+        tx_signable_for(
+            &shekyl_network::HARNESS_NETWORK_ID,
+            tx_prefix_hash,
+            AtomicUnits::from_raw(fee),
+            &tree_ctx.reference_block,
+            &outputs,
+        ),
+        "the signer proved over the tx_signable its parts frame to"
+    );
     let verifier_proof = ShekylFcmpProof {
         // Clone: the same proof bytes are re-used by the Stage-3 wire round-trip.
         data: signed.fcmp_proof.clone(),
@@ -447,7 +462,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         tree_root.as_bytes(),
         signed.tree_depth,
         // Proof-crate boundary: the verifier takes the signable hash as bytes.
-        tx_prefix_hash.to_bytes(),
+        tx_signable.to_bytes(),
     )
     .expect("verify must not error");
     assert!(
@@ -476,6 +491,13 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         ],
         &extra,
     );
+    let mutated_signable = tx_signable_for(
+        &shekyl_network::HARNESS_NETWORK_ID,
+        mutated_prefix_hash,
+        AtomicUnits::from_raw(fee),
+        &tree_ctx.reference_block,
+        &outputs,
+    );
     let mutated_result = proof::verify(
         &verifier_proof,
         &key_images,
@@ -483,13 +505,53 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         &pqc_pk_hashes,
         tree_root.as_bytes(),
         signed.tree_depth,
-        mutated_prefix_hash.to_bytes(),
+        mutated_signable.to_bytes(),
     );
     assert!(
         !matches!(mutated_result, Ok(true)),
         "proof must NOT verify against a prefix hash derived from mutated output \
          keys — the FCMP++ proof binds to the transaction prefix (got \
          {mutated_result:?})"
+    );
+
+    // Network binding is the proof's own (NI-F12 (b), the signing envelope
+    // §2.2): the same transaction's message on any other network, and the
+    // bare prefix hash the SAL used to prove over, are both refused. No
+    // signature is consulted here: the SAL proof alone commits to the id.
+    for net in shekyl_network::Network::ALL {
+        let elsewhere = tx_signable_for(
+            &net.network_id(),
+            tx_prefix_hash,
+            AtomicUnits::from_raw(fee),
+            &tree_ctx.reference_block,
+            &outputs,
+        );
+        let result = proof::verify(
+            &verifier_proof,
+            &key_images,
+            &signed.pseudo_outs,
+            &pqc_pk_hashes,
+            tree_root.as_bytes(),
+            signed.tree_depth,
+            elsewhere.to_bytes(),
+        );
+        assert!(
+            !matches!(result, Ok(true)),
+            "a SAL proof made for the harness chain verified on {net} (got {result:?})"
+        );
+    }
+    let unframed = proof::verify(
+        &verifier_proof,
+        &key_images,
+        &signed.pseudo_outs,
+        &pqc_pk_hashes,
+        tree_root.as_bytes(),
+        signed.tree_depth,
+        tx_prefix_hash.to_bytes(),
+    );
+    assert!(
+        !matches!(unframed, Ok(true)),
+        "the proof verified over the bare prefix hash, with no network in it (got {unframed:?})"
     );
 
     // ── 8. CT cleartext balance ───────────────────────────────────────────
@@ -537,10 +599,15 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     let pqc_auths = sign_pqc_auths(
         // A stand-in message: the prefix hash's bytes, not the §1.1 per-input
         // payload (`phase1_payload_hashes`). These auths are never verified
-        // here; `.to_bytes()` then `SigningPayloadHash::from_bytes` is the
-        // deliberate, visible un-typing and re-typing — both newtypes refuse
-        // the silent form (RTN-7 Q3), which is why a stand-in has to say so.
-        &[SigningPayloadHash::from_bytes(tx_prefix_hash.to_bytes())],
+        // here. The prefix hash's 32 bytes, zero-extended to the 64 a signed
+        // hash carries (the signing envelope §2.7), re-typed visibly: both
+        // newtypes refuse the silent form (RTN-7 Q3), which is why a stand-in
+        // has to say so.
+        &[SigningPayloadHash::from_bytes({
+            let mut wide = [0u8; 64];
+            wide[..32].copy_from_slice(tx_prefix_hash.as_bytes());
+            wide
+        })],
         std::slice::from_ref(&spend_input),
     )
     .expect("Phase-2 PQC auth signing");
@@ -629,6 +696,13 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         parsed.serialize(),
         bytes,
         "shekyl-wire serialization must be deterministic (byte-identical re-emit)"
+    );
+    // The verifier derives the message from the finished body, by the
+    // txid's own components: it is the one the proof was made over.
+    assert_eq!(
+        parsed.tx_signable(&shekyl_network::HARNESS_NETWORK_ID),
+        tx_signable,
+        "the assembled body's tx_signable is the one the signer proved over"
     );
 
     // ── Cross-crate byte-identity (replaces the assemble-direct shim) ─────────────

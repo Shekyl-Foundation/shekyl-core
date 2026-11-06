@@ -113,6 +113,13 @@ then tag** (avoids the "tag not on the default branch" trap that
          remedy is the flag's exit, by its owner, or a re-ruled deadline
          with its reason recorded beside it; there is no command-line
          exemption.
+   - [ ] **Binding ratchet:** `python3 scripts/release/check_binding_ratchet.py <tag>`
+         with the tag this cut will carry. The ratchet
+         (`docs/design/DOMAIN_BINDING_RATCHET.tsv`) lists the domain rows the
+         binding gate cannot yet hold to their network binding
+         (`NETWORK_IDENTITY.md` §2.4.1), and it must be empty at v3.1.0: the
+         gate refuses a cut at or past that release with any row left. The
+         remedy is fixing the row's site; there is no command-line exemption.
    - [ ] **Gitian dry-run gate** — dispatch the gitian workflow against the
          frozen SHA and confirm **all four platforms** (Linux/Windows/FreeBSD/macOS)
          build green *before* the cut/promote/tag:

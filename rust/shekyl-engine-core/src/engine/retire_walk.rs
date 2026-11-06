@@ -144,6 +144,7 @@ fn spawn_walk_actor() -> (StakeEngineHandle, PCanonicalId) {
         bonded,
         Some(PSlot::from_raw(ACTIVE_SLOT)),
         ephemeral_body_store(),
+        [0; 16],
     );
     (handle, id)
 }

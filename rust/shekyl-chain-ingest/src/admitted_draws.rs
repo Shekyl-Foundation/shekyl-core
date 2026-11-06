@@ -211,9 +211,13 @@ async fn file_draws(
         passes: filed.economy,
         support: filed.support,
     };
-    let (reference, body) = assemble_bundle(&kept, &filed.records, &witness.public, |commitment| {
-        sign_bundle_commitment(&witness.secret, commitment)
-    })
+    let (reference, body) = assemble_bundle(
+        &shekyl_network::HARNESS_NETWORK_ID,
+        &kept,
+        &filed.records,
+        &witness.public,
+        |commitment| sign_bundle_commitment(&witness.secret, commitment),
+    )
     .expect("the witness signs");
     let offered = scenario
         .connector()

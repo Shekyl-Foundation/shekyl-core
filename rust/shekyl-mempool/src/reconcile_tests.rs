@@ -46,6 +46,7 @@ fn two_planted(path: &std::path::Path) -> (Pool, [TxHash; 2]) {
         crate::Limits {
             max_weight: u64::MAX,
         },
+        shekyl_chain_rules::HARNESS_NETWORK_ID,
     )
     .unwrap();
     let a = pool.plant(listed_on(&chain, [0x41; 32]), ADMITTED);
@@ -156,6 +157,7 @@ fn an_entry_that_does_not_parse_is_dropped_at_open() {
             NOW,
             &view,
             &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .unwrap();
@@ -198,6 +200,7 @@ fn two_filed_entries_claiming_one_image_open_and_are_judged() {
             NOW,
             &view,
             &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .unwrap()
@@ -251,6 +254,7 @@ fn a_misfiled_row_and_an_unreadable_one_are_dropped_and_the_pool_opens() {
             NOW,
             &view,
             &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .expect("a discardable file never stops the open")

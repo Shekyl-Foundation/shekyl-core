@@ -268,6 +268,7 @@ fn install_submit(submit: Submit) {
             pool,
             shekyl_chain_rules::AdmissionPolicy::GENESIS,
             crate::wall_now,
+            rules.trust().network_id(),
         )
         .retiring(Arc::new(move |fault| health.retire(fault)))
         .nudging(Arc::new(move |txid: &TxHash, blob: &[u8]| {

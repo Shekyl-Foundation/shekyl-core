@@ -61,6 +61,7 @@ fn judge_at(world: &BundleWorld, reference: &BundleRef, body: &BundleBody, h_inc
         BlockHeight::from_raw(h_incl),
         &world.view,
         &RuleSet::GENESIS,
+        &crate::HARNESS_NETWORK_ID,
     )
 }
 
@@ -503,6 +504,7 @@ fn the_window_is_read_off_the_rule_set() {
             BlockHeight::from_raw(h_incl),
             &world.view,
             rule_set,
+            &crate::HARNESS_NETWORK_ID,
         )
     };
     assert!(at(1_051, &hundred).is_ok());
@@ -873,6 +875,31 @@ fn a_body_the_producer_did_not_sign_refuses_before_any_receipt() {
         judge(&world, &moved, &body),
         invalid(BundleInvalid::WitnessSignature)
     );
+}
+
+/// The witness signature binds the network (the signing envelope §2.4):
+/// an honest bundle, signed under the harness network's id, is refused as
+/// [`BundleInvalid::WitnessSignature`] by a verifier on any other network.
+/// Red edit: drop the network id from the bundle commitment.
+#[test]
+fn a_bundle_signed_for_one_network_is_refused_on_every_other() {
+    let world = BundleWorld::new(10);
+    let (reference, body) = world.bundle(&[1, 4, 9]);
+    assert!(judge(&world, &reference, &body).is_ok());
+    for net in shekyl_network::Network::ALL {
+        assert_eq!(
+            verify_bundle(
+                &reference,
+                &body,
+                world.h + BlockCount::ONE,
+                &world.view,
+                &RuleSet::GENESIS,
+                &net.network_id(),
+            ),
+            invalid(BundleInvalid::WitnessSignature),
+            "{net}"
+        );
+    }
 }
 
 /// One flipped byte anywhere in the prunable part refuses the bundle, and

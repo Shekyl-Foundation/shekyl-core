@@ -158,6 +158,7 @@ impl Message<AssembleBond> for StakeEngine {
         // would close over `bond_spend_sk` instead.
         let assembled = assemble_signed_bond_post(
             BondPostAssembleArgs {
+                network: self.network,
                 keys,
                 persona,
                 funding: msg.funding,

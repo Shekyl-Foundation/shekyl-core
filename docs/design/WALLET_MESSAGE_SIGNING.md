@@ -609,26 +609,29 @@ rationale strengthened.**
   binding-side house precedent is cSHAKE (`ek_bind`, and the tag in
   the SM-DQ-7 shape); the derivation-side Blake2b precedent does not
   apply. *(Ratified as drafted.)*
-- `preimage = cSHAKE256("shekyl/msg-sign-v1", sig_format_version ‖
-  network_id ‖ mode ‖ len(classical_segment) ‖ classical_segment ‖
-  cSHAKE256("shekyl/msg-hash-v1", message))`, where:
-  - **`sig_format_version`, renamed from `version` (R3-b):** the
-    classical segment already *contains* the address version
-    (`SPEND_OFFSET = VERSION_LEN`, `address.rs`), so the draft had two
-    fields both spelled "version" — the outer one is the
-    message-signing format version and now says so.
-  - **`len(classical_segment)` length prefix (R3-b, second half):**
-    with fork (ii) the segment is variable-length across address
-    versions (v1 vs v2 with an inline SLH key). Concatenation would
-    stay unambiguous anyway — the in-segment address version
-    determines the length, and the message-hash tail is fixed-width —
-    but both of those are load-bearing-by-accident properties.
-    A two-byte LE length prefix makes the framing unambiguous by
-    construction instead of by coincidence.
+- `preimage = frame64("shekyl/msg-sign-v2", network_id,
+  [u64_le(mode), classical_segment, message])`, the signing envelope's
+  frame read to 64 bytes (`NETWORK_IDENTITY.md` §2.4.1, NI-R17), where:
+  - **`network_id`** is the network's 16-byte genesis-derived id
+    (`Network::network_id`, NI-F2), the envelope's binding at position 0.
+  - **Every field is behind its u64 little-endian length**, so the
+    variable-length segment (fork (ii): v1 vs v2 with an inline SLH key)
+    and the message are unambiguous by construction (R3-b). The message
+    is framed whole; no pre-hash.
   - `classical_segment` is the **full bound form as ruled by the
-    genesis lane** (the byte layout is exactly what SM-DQ-7 freezes;
-    this is why PR-SM-1 blocks on that ruling); `mode = 0x01`
-    spend-tier, future modes append, never renumber.
+    genesis lane** (the byte layout is exactly what SM-DQ-7 freezes);
+    `mode = 0x01` spend-tier, an integer framed as `u64_le`; future modes
+    append, never renumber.
+  - **The version is the domain's.** `-v2` is the hashed layout version;
+    the decoded wire format keeps its own layout version byte (R5-c),
+    `sig_format_version = 2`, read and not hashed, and a layout-1
+    signature is refused as an unknown layout version.
+  - **64 bytes** because SLH-DSA-192s signs it: a 32-byte digest caps
+    collision resistance at 2^128, below the scheme's Category 3.
+  - The envelope version (`shekylmsgsig1.`) and the canonical length do
+    not depend on any of this: the id is hashed, never carried. Vectors:
+    `docs/test_vectors/MSG_SIGN_PREIMAGE_V2.json`, rebuilt and checked by
+    `scripts/kat/msg_sign_preimage_oracle.py`.
 - **R3-c — the view-tier forward reference is DELETED, not
   softened.** The mode byte's append-only discipline is kept — that
   is cheap, real forward compatibility. But naming view-tier implied

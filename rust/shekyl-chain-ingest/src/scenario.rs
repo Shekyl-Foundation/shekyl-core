@@ -52,7 +52,8 @@ use shekyl_block_template::{
     build, EmissionOperands, MinerKeys, Template, TemplateContext, TemplateError,
 };
 use shekyl_chain_rules::{
-    form, seed_height, Candidate, CenRow, FormAttempt, ReferenceClaims, RuleSet, Substrate, Target,
+    form, seed_height, Candidate, CenRow, FormAttempt, FormClaims, ReferenceClaims, RuleSet,
+    Substrate, Target,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -368,11 +369,14 @@ where
         self.substrate.pin_seed(&seed);
         let formed = form(
             candidate,
-            &rule_set,
+            &FormClaims {
+                rule_set: &rule_set,
+                seed,
+                target,
+                references: &references,
+                network: self.rules.trust().network_id(),
+            },
             &self.substrate,
-            seed,
-            target,
-            &references,
             FormAttempt::FIRST,
         )
         .expect("the driver's substrate does not fault");
@@ -491,11 +495,14 @@ where
         self.substrate.pin_seed(&mined.seed);
         let formed = form(
             mined.candidate(),
-            &self.rules.in_force(mined.height),
+            &FormClaims {
+                rule_set: &self.rules.in_force(mined.height),
+                seed: mined.seed,
+                target: mined.target,
+                references: &ReferenceClaims::EMPTY,
+                network: self.rules.trust().network_id(),
+            },
             &self.substrate,
-            mined.seed,
-            mined.target,
-            &ReferenceClaims::EMPTY,
             FormAttempt::FIRST,
         )
         .expect("the driver's substrate does not fault")
@@ -530,11 +537,14 @@ where
         self.substrate.pin_seed(&seed);
         let formed = form(
             candidate.clone(),
-            &self.rules.in_force(height),
+            &FormClaims {
+                rule_set: &self.rules.in_force(height),
+                seed,
+                target,
+                references: &ReferenceClaims::EMPTY,
+                network: self.rules.trust().network_id(),
+            },
             &self.substrate,
-            seed,
-            target,
-            &ReferenceClaims::EMPTY,
             FormAttempt::FIRST,
         )
         .expect("the driver's substrate does not fault")
@@ -558,11 +568,14 @@ where
         self.substrate.pin_seed(&block.seed);
         let formed = form(
             block.candidate.clone(),
-            &self.rules.in_force(block.height),
+            &FormClaims {
+                rule_set: &self.rules.in_force(block.height),
+                seed: block.seed,
+                target: block.target,
+                references: &ReferenceClaims::EMPTY,
+                network: self.rules.trust().network_id(),
+            },
             &self.substrate,
-            block.seed,
-            block.target,
-            &ReferenceClaims::EMPTY,
             FormAttempt::FIRST,
         )
         .expect("the driver's substrate does not fault")
