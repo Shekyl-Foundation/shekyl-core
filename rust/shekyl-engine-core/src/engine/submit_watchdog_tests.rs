@@ -14,9 +14,7 @@
 use super::*;
 use shekyl_engine_state::{TransferDetails, SPENDABLE_AGE};
 
-const CFG: WatchdogConfig = WatchdogConfig {
-    escape_horizon_blocks: 540,
-};
+const CFG: WatchdogConfig = WatchdogConfig::DEFAULT;
 
 /// Minimal unspent transfer fixture at `gindex = seed` (locks are
 /// journal-derived since PR-SJ-1b, so the row itself carries none).
@@ -258,42 +256,33 @@ fn held(baseline: u64) -> HeldSubmit {
     }
 }
 
-/// F35: the derived default horizon fires strictly before the
-/// daemon's 1.5-day re-relay cutoff.
+/// F35 upper bound: the production horizon probes while the same bytes
+/// are still submittable — inside the dispatched proof's life, with 2×
+/// margin for wallet refresh lag and wallet–daemon height skew.
 #[test]
-fn default_horizon_is_inside_the_re_relay_bound() {
-    let block_target = shekyl_economics::EconomicParams::default().daa_target_seconds;
-    let cfg = WatchdogConfig::from_block_target(block_target);
-    let re_relay_cutoff_blocks = DAEMON_RE_RELAY_CUTOFF_SECONDS / block_target;
+fn default_horizon_probes_inside_the_dispatched_proof_life() {
+    let life = DISPATCHED_PROOF_LIFE.to_raw();
+    let horizon = WatchdogConfig::DEFAULT.escape_horizon_blocks;
     assert!(
-        cfg.escape_horizon_blocks < re_relay_cutoff_blocks,
-        "horizon {} must fire before the re-relay cutoff {}",
-        cfg.escape_horizon_blocks,
-        re_relay_cutoff_blocks
+        horizon * 2 <= life,
+        "horizon {horizon} must leave 2x margin inside the dispatched proof's life {life}"
     );
-    assert!(cfg.escape_horizon_blocks > 0, "horizon must be non-trivial");
 }
 
-/// A zero block target is a broken consensus constant; the
-/// constructor fails loudly in all build profiles rather than
-/// deriving a nonsense horizon from a silent fallback.
+/// F35 lower bound: the production horizon outlasts the daemon relay
+/// publishing the wallet's own transaction — two origin retries (re-stem,
+/// then fluff) and one block to mine it — at the consensus block target.
+/// Probing sooner alarms on a transaction that is propagating normally.
 #[test]
-#[should_panic(expected = "block target must be positive")]
-fn zero_block_target_panics() {
-    let _ = WatchdogConfig::from_block_target(0);
-}
-
-/// A block target *large enough* that the re-relay-cutoff-derived
-/// horizon floors to zero blocks (integer division, not a zero
-/// target) is the same broken-consensus-constant failure mode as
-/// [`zero_block_target_panics`], and must fail loudly the same way
-/// — not silently disable the watchdog's wait rung for every held
-/// tx. `DAEMON_RE_RELAY_CUTOFF_SECONDS` itself is such a target:
-/// `.../2/DAEMON_RE_RELAY_CUTOFF_SECONDS == 0` unconditionally.
-#[test]
-#[should_panic(expected = "zero-block escape horizon")]
-fn block_target_too_large_panics() {
-    let _ = WatchdogConfig::from_block_target(DAEMON_RE_RELAY_CUTOFF_SECONDS);
+fn escape_horizon_outlasts_the_relays_own_publication() {
+    let block_target = shekyl_economics::EconomicParams::default().daa_target_seconds;
+    let publish_secs = 2 * u64::from(shekyl_relay::origin_retry_secs()) + block_target;
+    let horizon_secs = WatchdogConfig::DEFAULT.escape_horizon_blocks * block_target;
+    assert!(
+        horizon_secs > publish_secs,
+        "horizon {horizon_secs}s must outlast the relay's own publication and one block \
+         ({publish_secs}s)"
+    );
 }
 
 /// §10 item 8 ladder ordering: below horizon → wait; past horizon →

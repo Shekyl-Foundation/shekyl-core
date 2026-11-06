@@ -1970,7 +1970,7 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
     );
 
     // Horizon reachability, the property the §7.2 cap names.
-    let config = WatchdogConfig::from_block_target(120);
+    let config = WatchdogConfig::DEFAULT;
     let healthy = DaemonHealth {
         p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
         height: 20,

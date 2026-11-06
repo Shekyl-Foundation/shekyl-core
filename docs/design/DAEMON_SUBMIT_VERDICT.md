@@ -942,13 +942,22 @@ de-risking the multi-daemon reopen in advance.
 
 ### 5.2 Daemon-side guarantees (each source-verified)
 
-1. **Periodic re-relay.** `core::on_idle` (`cryptonote_core.cpp:1597`) →
-   `relay_txpool_transactions()` (`:1105-1145`) → `get_relayable_transactions`
-   (`tx_pool.cpp:806-879`). The insert tail sets
-   `last_relayed_time = max()` (`:313-322`), making a committed tx
-   immediately eligible even if shim 3's nudge is lost. Bound: re-relay
-   stops at half the pool lifetime (`:851-852` — 1.5 days of the 3-day
-   `CRYPTONOTE_MEMPOOL_TX_LIVETIME`).
+1. **Origin re-send, then residence.** The relay re-sends the node's own
+   transaction only on its embargo: each stem send arms a deadline of
+   `origin_retry_secs` (1,148 s at the shipped terms); the first fire
+   re-stems to the source's alternate, the second fluffs and publishes
+   (`shekyl-relay` `graph/embargo.rs`). An origin that never sent is
+   re-planned every 300 s, at once on turning synchronised and at once on
+   a new session. There is no periodic re-broadcast after publication.
+   The pool then holds the transaction until its reference leaves the
+   window (`REFERENCE_BLOCK_MAX_AGE`, CEN-M10, `shekyl-mempool`
+   `evict.rs`) or a cheaper-first eviction makes room under the cap; it
+   has no lifetime of its own. A transaction an honest wallet dispatched
+   therefore stays submittable at least `DISPATCHED_PROOF_LIFE`
+   (`MAX_AGE − REBUILD_AT`, 50 blocks) and at most
+   `PROOF_VALIDITY_HORIZON` (94 blocks) past dispatch
+   (`shekyl-curve-tree` `reference.rs`); a resubmit after that is
+   refused `StaleRoot`.
 2. **Dandelion++ embargo fail-safe — the irreducible kernel.** The
    black-holed-stem case (honest daemon stems to one adversarial peer which
    drops the tx) is the one failure no wallet policy reliably fixes: wallet
@@ -991,11 +1000,15 @@ de-risking the multi-daemon reopen in advance.
   claims.
 - **Chain-confirmation keying.** The watchdog's success condition is
   confirmation observed via refresh — never a daemon relay claim.
-- **Horizon bound (F35).** The escape horizon must fire **before the
-  1.5-day re-relay cutoff** (§5.2 item 1), not after: between 1.5 days and
-  the 3-day eviction a pool tx is held-but-no-longer-re-relayed, so a
-  watchdog that fires inside that window is inspecting a tx the daemon has
-  already stopped offering. And the horizon must be sized for the
+- **Horizon bound (F35).** The escape horizon must fire **inside the
+  dispatched proof's life** (§5.2 item 1): past `DISPATCHED_PROOF_LIFE`
+  the pool may already have removed the transaction and the
+  resubmit-same-bytes probe is refused `StaleRoot`, so a later watchdog
+  can no longer re-offer the bytes it holds. It must also outlast the
+  relay's own publication (two origin retries and a block to mine), or it
+  probes a transaction that is propagating normally. The default is half
+  `DISPATCHED_PROOF_LIFE`, 25 blocks (`WatchdogConfig::DEFAULT`; both
+  bounds pinned by tests beside it). And the horizon must be sized for the
   anon-network eclipse case (§7.5) — where the watchdog is the *only*
   backstop — not only for the clearnet-stem case where the embargo also
   protects.
@@ -1211,8 +1224,8 @@ it carries two named obligations:
 
 1. **The watchdog horizon is sized for this case**, not only for the
    clearnet-stem case where the embargo also protects (§5.3's horizon
-   bound: fire before the 1.5-day re-relay cutoff, well inside the 3-day
-   pool lifetime).
+   bound: fire inside the dispatched proof's life, half
+   `DISPATCHED_PROOF_LIFE`).
 2. **The escalation for present-but-unconfirmed goes straight to alarm**
    (§5.3's presence branch) — the resubmit rung is inert here by
    construction, and burning horizon-multiples on it delays the only

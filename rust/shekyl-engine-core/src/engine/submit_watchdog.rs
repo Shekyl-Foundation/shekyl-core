@@ -59,6 +59,7 @@
 
 use std::collections::HashSet;
 
+use shekyl_curve_tree::DISPATCHED_PROOF_LIFE;
 use shekyl_types::TxHash;
 
 use super::traits::DaemonHealth;
@@ -67,72 +68,68 @@ use super::traits::DaemonHealth;
 // Horizon configuration
 // ---------------------------------------------------------------------------
 
-/// The daemon stops re-relaying a pool tx at half the pool lifetime —
-/// 1.5 days of the 3-day `CRYPTONOTE_MEMPOOL_TX_LIVETIME`
-/// (§5.2 item 1, source-verified at `tx_pool.cpp:851-852`).
-const DAEMON_RE_RELAY_CUTOFF_SECONDS: u64 = 3 * 86_400 / 2;
-
-/// Watchdog tunables. Constructed via [`Self::from_block_target`] so the
-/// horizon is derived from the consensus block target rather than
-/// hard-coding a block count that silently rots if the target changes.
+/// Watchdog tunables. Production is [`Self::DEFAULT`]; tests build their
+/// own to exercise the ladder at other horizons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WatchdogConfig {
     /// Escape horizon, in blocks past the accepting verdict's height,
     /// after which a still-unconfirmed held tx enters the escape ladder.
     ///
-    /// **Default rationale (F35 + rule 75):** two binding constraints.
-    /// *Upper bound:* the horizon must fire **before** the daemon's
-    /// 1.5-day re-relay cutoff — between 1.5 days and the 3-day eviction
-    /// a pool tx is held-but-no-longer-re-relayed, so a later watchdog
-    /// inspects a tx the daemon has already stopped offering. *Lower
-    /// bound:* the horizon must not be so short that ordinary
-    /// confirmation latency or a short partition trips the ladder — the
-    /// timeout is itself an attack surface (§5.3), so spurious firings
-    /// are alarm fatigue an adversary can hide inside. The default is
-    /// **half the re-relay cutoff** (~18 h at a 120 s target): 2×
-    /// safety margin against the upper bound (covering wallet refresh
-    /// lag and wallet–daemon height skew), while sized for the
-    /// anon-network eclipse case (§7.5) where this watchdog is the
-    /// *only* backstop — the origin's embargo timer does not arm over
-    /// noise zones, so waiting longer than necessary extends the
-    /// black-hole exposure window with no compensating benefit.
+    /// **Default rationale (F35 + rule 75):** two binding constraints,
+    /// both in blocks.
     ///
-    /// Safe-adjustment bounds: strictly below
-    /// `DAEMON_RE_RELAY_CUTOFF_SECONDS / block_target` (upper), and
-    /// comfortably above the wallet's `max_reorg_depth` plus its refresh
-    /// cadence in blocks (lower).
+    /// *Upper bound — the probe must land while the same bytes are still
+    /// submittable.* A dispatched proof is guaranteed
+    /// [`DISPATCHED_PROOF_LIFE`] blocks of submittability (`MAX_AGE −
+    /// REBUILD_AT`, 50: the transfer path re-anchors before it sends
+    /// whenever `should_reanchor` holds). Past that the pool may already
+    /// have removed the transaction (CEN-M10: an entry leaves when its
+    /// reference leaves the window; the pool has no lifetime of its own),
+    /// and the resubmit probe comes back `StaleRoot` — the
+    /// `ReferenceStaleNeedsRebuild` alarm instead of a re-offer. The
+    /// baseline is the *wallet's* height at accept and the probe fires on
+    /// the wallet's height, so wallet–daemon height skew is spent out of
+    /// this bound.
+    ///
+    /// *Lower bound — the probe must not fire on the normal path.* The
+    /// daemon's relay publishes its own transaction within two origin
+    /// retries (`shekyl-relay`'s `origin_retry_secs`, 1,148 s at the
+    /// shipped terms: the first fire re-stems to the alternate, the second
+    /// fluffs), and a published transaction mines in the next block. A
+    /// horizon inside that probes a transaction that is still propagating
+    /// normally — and present-but-unconfirmed goes straight to the alarm
+    /// (§5.3), so that is alarm fatigue an adversary can hide inside.
+    /// `escape_horizon_outlasts_the_relays_own_publication` pins this
+    /// against the relay's own number and the consensus block target.
+    ///
+    /// The default is **half [`DISPATCHED_PROOF_LIFE`]** — 25 blocks,
+    /// ~50 min at the 120 s target: 2× margin against the upper bound
+    /// (wallet refresh lag and wallet–daemon skew), ~5 blocks above the
+    /// lower. Sooner is the point for the anon-network eclipse case
+    /// (§7.5), where the alarm rung is the *only* backstop.
+    ///
+    /// No re-relay rule bounds it: the Rust relay re-sends an origin's
+    /// transaction only on those two embargo fires and has no periodic
+    /// re-broadcast (`shekyl-relay`'s `graph::embargo`).
     pub escape_horizon_blocks: u64,
 }
 
 impl WatchdogConfig {
-    /// Derive the default configuration from the consensus block target
-    /// (`daa_target_seconds`, generated from `config/consensus_constants.json`).
-    ///
-    /// A zero target is a broken consensus constant, not a runtime
-    /// condition to degrade around: a silent `max(1)` fallback would
-    /// compute a horizon that blows past the F35 re-relay upper bound.
-    /// Loud failure, release builds included — and the same discipline
-    /// applies to the *derived* horizon, not just the input: a
-    /// `block_target_seconds` large enough that the integer division
-    /// floors `escape_horizon_blocks` to zero is the identical failure
-    /// mode (a broken consensus constant) wearing a different input
-    /// value. A zero horizon means every held tx is "past horizon" on
-    /// the very first check, jumping straight to the escape ladder —
-    /// silently disabling the wait rung entirely.
-    pub(crate) fn from_block_target(block_target_seconds: u64) -> Self {
-        assert!(block_target_seconds > 0, "block target must be positive");
-        let escape_horizon_blocks = DAEMON_RE_RELAY_CUTOFF_SECONDS / 2 / block_target_seconds;
-        assert!(
-            escape_horizon_blocks > 0,
-            "block target {block_target_seconds}s yields a zero-block escape horizon \
-             (re-relay cutoff / 2 = {}s) — broken consensus constant",
-            DAEMON_RE_RELAY_CUTOFF_SECONDS / 2
-        );
-        Self {
-            escape_horizon_blocks,
-        }
-    }
+    /// The production configuration (rationale on
+    /// [`Self::escape_horizon_blocks`]).
+    pub(crate) const DEFAULT: Self = Self {
+        escape_horizon_blocks: DISPATCHED_PROOF_LIFE.to_raw() / 2,
+    };
 }
+
+// A zero horizon would put every held tx past horizon on its first check,
+// silently skipping the wait rung; a horizon at or past the dispatched
+// proof's life probes bytes the daemon may already refuse. Either is a
+// broken consensus constant (`config/consensus_constants.json`), caught
+// at compile time.
+const _: () = assert!(WatchdogConfig::DEFAULT.escape_horizon_blocks > 0);
+const _: () =
+    assert!(WatchdogConfig::DEFAULT.escape_horizon_blocks < DISPATCHED_PROOF_LIFE.to_raw());
 
 // ---------------------------------------------------------------------------
 // Held-tx tracking (chain-confirmation-keyed)

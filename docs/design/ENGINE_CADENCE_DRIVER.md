@@ -169,12 +169,11 @@ polling. The alarm clears on the next observed advance. Legs do not
 fire while stalled — firing against a known-stale view is the thing
 the tick base exists to prevent.
 
-**Seconds-denominated horizons are evaluated against observation.**
-The submit leg's escape horizon (`DAEMON_RE_RELAY_CUTOFF_SECONDS`,
-converted to ~540 blocks for intuition only) is measured against
-observed chain progress, not a free-running timer — the existing
-`WatchdogConfig::from_block_target` block-denominated conversion
-already has this shape and is kept. A consequence worth stating
+**Horizons are evaluated against observation.**
+The submit leg's escape horizon (`WatchdogConfig::DEFAULT`, 25 blocks:
+half the dispatched proof's life, `DISPATCHED_PROOF_LIFE`) is in blocks
+and measured against observed chain progress, not a free-running timer.
+A consequence worth stating
 before a reviewer flags it: **the submit watchdog goes quiet exactly
 when the chain does.** That is correct, not the watchdog sleeping
 through its own failure mode — its horizons are progress-denominated,

@@ -49,6 +49,13 @@ shekyl-fcmp = { path = "../shekyl-fcmp" }
 # silently and shift the window; a test reds with the constant named.
 shekyl-tx-weight = { path = "../shekyl-tx-weight" }
 shekyl-levin = { path = "../shekyl-levin" }
+# TEST-ONLY, same rule. `reshape_recovery_is_a_cost_not_a_break` measures
+# recovery against how long an honest transaction is guaranteed to stay in the
+# pool: `DISPATCHED_PROOF_LIFE` blocks (the pool removes an entry when its
+# reference leaves the window, CEN-M10) at the consensus block target. Both are
+# read from their owners rather than re-typed.
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+shekyl-economics = { path = "../shekyl-economics" }
 
 [lints]
 workspace = true

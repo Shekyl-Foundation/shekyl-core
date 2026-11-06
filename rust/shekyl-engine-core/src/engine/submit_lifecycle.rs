@@ -212,18 +212,12 @@ struct RescanTarget {
 const FRUITLESS_RESCAN_BREAKER_THRESHOLD: u32 = 3;
 
 impl SubmitLifecycleDriver {
-    /// Construct a driver deriving the escape horizon from the consensus
-    /// `block_target_seconds` ([`WatchdogConfig::from_block_target`]).
-    ///
-    /// # Panics
-    ///
-    /// Panics on a broken consensus block target (zero, or large enough
-    /// to floor the horizon to zero blocks) — a broken consensus
-    /// constant is loud failure, not a runtime degradation
-    /// (`from_block_target`'s contract).
-    pub(crate) fn new(block_target_seconds: u64) -> Self {
+    /// Construct a driver at the production escape horizon
+    /// ([`WatchdogConfig::DEFAULT`], derived from the dispatched proof's
+    /// life in blocks).
+    pub(crate) fn new() -> Self {
         Self {
-            config: WatchdogConfig::from_block_target(block_target_seconds),
+            config: WatchdogConfig::DEFAULT,
             overlay: HashMap::new(),
             alarmed: HashSet::new(),
             rescan_targets: HashMap::new(),

@@ -28,11 +28,9 @@ use std::sync::{Arc, Mutex};
 use super::super::traits::FeeEstimates;
 use shekyl_rpc_client::{Rpc, RpcError};
 
-/// Block target 120 s → escape horizon 540 blocks. Derived by
-/// [`WatchdogConfig::from_block_target`], not hard-coded into the
-/// driver; the constant here mirrors the kernel test's `CFG`.
-const BLOCK_TARGET_SECS: u64 = 120;
-const HORIZON: u64 = 540;
+/// The production escape horizon the driver runs at
+/// ([`WatchdogConfig::DEFAULT`]), read rather than re-typed.
+const HORIZON: u64 = WatchdogConfig::DEFAULT.escape_horizon_blocks;
 
 fn txid(seed: u8) -> TxHash {
     TxHash::from_bytes([seed; 32])
@@ -47,7 +45,7 @@ fn held(seed: u8, baseline: u64) -> HeldSubmit {
 }
 
 fn driver() -> SubmitLifecycleDriver {
-    SubmitLifecycleDriver::new(BLOCK_TARGET_SECS)
+    SubmitLifecycleDriver::new()
 }
 
 // ----------------------------------------------------------------

@@ -223,7 +223,14 @@ fn reshape_recovery_is_a_cost_not_a_break() {
     let mut rng = SplitMix64::new(0x5EC0);
     let r = simulate_reshape_recovery(&e, 1, 300_000, &mut rng);
 
-    const MEMPOOL_LIVETIME_S: f64 = 86_400.0 * 3.0; // CRYPTONOTE_MEMPOOL_TX_LIVETIME
+    // The shortest residence an honest transaction has in the pool: it was
+    // sent with at least `DISPATCHED_PROOF_LIFE` blocks before its reference
+    // leaves the window and the pool removes it (CEN-M10). The pool has no
+    // lifetime of its own.
+    #[allow(clippy::cast_precision_loss)] // two small consensus integers
+    let residence_s = (shekyl_curve_tree::DISPATCHED_PROOF_LIFE.to_raw()
+        * shekyl_economics::EconomicParams::default().daa_target_seconds)
+        as f64;
     const MIN_RELAY_S: f64 = 300.0;
 
     println!("\nRecovery latency for a black-holed tx (embargo 144s, cap=1)");
@@ -236,8 +243,9 @@ fn reshape_recovery_is_a_cost_not_a_break() {
         r.reshape_worst_p50_s, r.reshape_worst_p90_s, r.reshape_worst_p99_s
     );
     println!(
-        "  reshape worst p99 = {:.2}% of the 3-day mempool lifetime",
-        r.reshape_worst_p99_s / MEMPOOL_LIVETIME_S * 100.0
+        "  reshape worst p99 = {:.1}% of the shortest pool residence ({:.0}s)",
+        r.reshape_worst_p99_s / residence_s * 100.0,
+        residence_s
     );
 
     // It IS a cost: reshape's worst case exceeds fluff (an extra embargo cycle).
@@ -245,11 +253,15 @@ fn reshape_recovery_is_a_cost_not_a_break() {
         r.reshape_worst_p99_s > r.fluff_p99_s,
         "reshape worst-case should exceed fluff (it is a real cost)"
     );
-    // It is NOT a break: the worst case is a tiny fraction of the tx's lifetime,
-    // so the tx always propagates well within its mempool residence.
+    // It is NOT a break: the worst case finishes inside the first half of the
+    // shortest residence. The second half is the wallet's: its submit watchdog
+    // probes the same bytes at half `DISPATCHED_PROOF_LIFE`
+    // (`shekyl-engine-core`'s `submit_watchdog`), and a recovery still running
+    // then reads as a stuck transaction.
     assert!(
-        r.reshape_worst_p99_s < MEMPOOL_LIVETIME_S * 0.01,
-        "reshape worst-case recovery {:.0}s must be << mempool lifetime (a cost, not a break)",
+        r.reshape_worst_p99_s < residence_s / 2.0,
+        "reshape worst-case recovery {:.0}s must finish inside half the shortest pool \
+         residence {residence_s:.0}s (a cost, not a break)",
         r.reshape_worst_p99_s
     );
     // And it is bounded by ~(cap+1) embargo means, not unbounded — the whole
@@ -261,14 +273,14 @@ fn reshape_recovery_is_a_cost_not_a_break() {
     );
 
     println!(
-        "\n  Reshape's worst-case recovery (~{:.0}s p99) is {:.2}% of the tx's 3-day\n  \
-         mempool lifetime — a cost (a slower recovery, bounded by the retry cap),\n  \
+        "\n  Reshape's worst-case recovery (~{:.0}s p99) is {:.1}% of the tx's shortest\n  \
+         pool residence — a cost (a slower recovery, bounded by the retry cap),\n  \
          not a break (the tx never fails to propagate). Fluff-on-expiry already\n  \
          recovers slowly (p99 {:.0}s, the 144s memoryless embargo); reshape's\n  \
          marginal cost is the rare W3 second cycle. The priority order lets us pay\n  \
          this to stop spending privacy on recovery speed.",
         r.reshape_worst_p99_s,
-        r.reshape_worst_p99_s / MEMPOOL_LIVETIME_S * 100.0,
+        r.reshape_worst_p99_s / residence_s * 100.0,
         r.fluff_p99_s
     );
 }

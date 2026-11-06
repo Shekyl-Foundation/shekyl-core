@@ -275,6 +275,11 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # network id derivation. Both are workspace crates already in the graph.
 shekyl-levin = { path = "../shekyl-levin" }
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
+# The submit watchdog's lower bound (`submit_watchdog_tests.rs`): its escape
+# horizon must outlast the relay publishing the wallet's own transaction, so
+# the test reads the relay's origin retry rather than re-typing 1,148 s.
+# Test-only; the wallet's production graph never links the relay.
+shekyl-relay = { path = "../shekyl-relay" }
 # Self dev-dep (the scanner crate's own bench idiom): enables `test-helpers`
 # for this crate's integration tests, so `tests/sp_r0_arm1_fire.rs` compiles
 # the DQ-F fire harness into the lib-under-test on a plain `cargo test`

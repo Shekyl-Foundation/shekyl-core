@@ -86,11 +86,9 @@ impl ServingConfig {
     /// The staleness bound is **derived, not picked**: it is
     /// [`STALENESS_BOUND_REFRESHES`] refresh cadences expressed in blocks, which
     /// needs the chain's block target. That is taken as an argument rather than
-    /// read from a constant here, the same shape
-    /// [`WatchdogConfig::from_block_target`](crate::engine::submit_watchdog) uses
-    /// for the same reason — a wallet-side horizon in blocks is a function of a
-    /// consensus parameter, and burying that parameter in this module would
-    /// fork it.
+    /// read from a constant here: a wallet-side horizon in blocks derived from a
+    /// seconds cadence is a function of a consensus parameter, and burying that
+    /// parameter in this module would fork it.
     ///
     /// # Panics
     ///
