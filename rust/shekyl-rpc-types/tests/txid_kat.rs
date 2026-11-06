@@ -42,11 +42,11 @@ const ORACLE_CORPUS: [(&[u8], &str); 2] = [
     (
         include_bytes!("vectors/regtest_coinbase_h0.tx"),
         // regtest's genesis miner_tx (h0)
-        "187c7c7ea8095838497498e297a47da31e8fb3e739db4e9887eb6cad77a6e64d",
+        "3a96f09b3b1cabc7b4bf7e3b0d91dbd9410f3f7180ee0874ec26503be1753b6e",
     ),
     (
         include_bytes!("vectors/regtest_coinbase_h1.tx"),
-        "e7fa46029ce745563b5e0b81add94b69356f262c5257d5f42226820a87a8f138",
+        "146c03912711e4e2116059f88a976d7160738b0ad30199972abfa24a6e222855",
     ),
 ];
 

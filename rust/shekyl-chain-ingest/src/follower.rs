@@ -658,14 +658,14 @@ fn plant_blocking(
     let rule_set = rules.in_force(Tip::connecting_height(tip.as_ref()));
     let mut staged = Vec::with_capacity(unverified.len());
     for (txid, tx) in unverified {
-        match stateless(&tx, &view, &rule_set, None) {
+        match stateless(&tx, &view, &rule_set, &rules.trust().network_id(), None) {
             Ok(step1) => staged.push((txid, step1)),
             Err(fault) => return Err(PlantFault::Chain(fault)),
         }
     }
     let mut prepared = Vec::with_capacity(pending.len());
     for tx in pending {
-        match stateless(&tx, &view, &rule_set, None) {
+        match stateless(&tx, &view, &rule_set, &rules.trust().network_id(), None) {
             Ok(step1) => prepared.push((tx, step1)),
             Err(fault) => return Err(PlantFault::Chain(fault)),
         }

@@ -50,6 +50,8 @@ use shekyl_crypto_pq::signature::{
 };
 use shekyl_fcmp::proof::{verify_membership_only, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
+use shekyl_network::NetworkId;
+use shekyl_types::TxSignableHash;
 use thiserror::Error;
 
 /// Rejection reasons for the §7.1 verify body. Every variant is a consensus
@@ -689,7 +691,7 @@ pub fn emission_vin_verify_backing(
     vin: &ArchivalRewardEmissionVin,
     tree_root: &[u8; 32],
     tree_depth: u8,
-    signable_tx_hash: [u8; 32],
+    tx_signable: &TxSignableHash,
 ) -> Result<BackingVerified, EmissionVerifyError> {
     let backing = &vin.backing;
 
@@ -704,7 +706,9 @@ pub fn emission_vin_verify_backing(
         &[PqcKeyScalar::from_pqc_public_key(&backing.backing_pubkey)],
         tree_root,
         tree_depth,
-        signable_tx_hash,
+        // The transaction's one network-bound message (the signing envelope
+        // §2.2): the backing proof proves over it like every SAL.
+        tx_signable.to_bytes(),
     )?;
     if !ok {
         return Err(EmissionVerifyError::BackingRejected(
@@ -737,15 +741,19 @@ pub fn emission_vin_verify_backing(
 /// R1.A posture — Auth-P has no membership-proof classical fallback, so an
 /// ML-DSA-only auth would be a single point of cryptographic failure.
 ///
-/// `reward_commits` and `signable_tx_hash` are the same tx-level context the
+/// `reward_commits` and `tx_signable` are the same tx-level context the
 /// wallet builder signed over; a destination swap or cross-tx replay changes
-/// the recomputed message and both signatures reject.
+/// the recomputed message and both signatures reject. `network_id` is the
+/// verifying node's (its trust's, `NETWORK_IDENTITY.md` NI-F11): an emission
+/// signed for another network recomputes to another message and is refused
+/// here, whatever proofs the transaction carries.
 pub fn emission_vin_verify_auth(
     vin: &ArchivalRewardEmissionVin,
     reward_commits: &[RewardCommit],
-    signable_tx_hash: &[u8; 32],
+    tx_signable: &TxSignableHash,
+    network_id: &NetworkId,
 ) -> Result<AuthVerified, EmissionVerifyError> {
-    let msgs = vin.auth_msgs(reward_commits, signable_tx_hash)?;
+    let msgs = vin.auth_msgs(network_id, reward_commits, tx_signable)?;
 
     // Auth-B: the key's leaf binding is step 6's in-circuit opening (PL-D3).
     verify_hybrid_auth(

@@ -101,18 +101,20 @@ use zeroize::Zeroizing;
 
 use shekyl_address::BoundClassicalSegment;
 
+use shekyl_network::envelope::{IdDomain, W64};
+
 use crate::account::{salt_for, Network, MASTER_SEED_BYTES};
 use crate::schnorr;
 use crate::CryptoError;
 
-/// Preimage domain (SM-R-3): the cSHAKE customization string over the
-/// assembled binding input. Doubles as the hybrid binding label — it is
-/// what separates this surface from every other signing transcript.
-pub const MSG_SIGN_DOMAIN: &[u8] = b"shekyl/msg-sign-v1";
-
-/// Message pre-hash domain (SM-R-3): the message is hashed under its own
-/// customization string before entering the preimage.
-pub const MSG_HASH_DOMAIN: &[u8] = b"shekyl/msg-hash-v1";
+/// Preimage domain (SM-R-3; the signing envelope §2.1): the envelope domain
+/// a message signature's preimage is framed under, bound to the network's
+/// id, with fields `[mode, classical_segment, message]`. It is what
+/// separates this surface from every other signing transcript. `-v2`: the
+/// layout version and the id's position moved into the envelope (the
+/// domain string is the only hashed version), and the message is framed
+/// whole where `-v1` pre-hashed it under its own domain.
+pub const MSG_SIGN: IdDomain<3, W64> = IdDomain::new(b"shekyl/msg-sign-v2");
 
 /// Signing-identity derivation label (SM-R-4): the literal, not a
 /// template — rule 30's inventory collision-checks literals. If the
@@ -132,11 +134,12 @@ pub const MSG_SIG_CHECKSUM_DOMAIN: &[u8] = b"shekyl/msg-sig-ck-v1";
 /// the other domains; distinct from every proof domain).
 pub const MSG_SIGN_OUTER_DOMAIN: &[u8] = b"shekyl/msg-sign-outer-v1";
 
-/// Payload layout version — the same single value appears as the leading
-/// canonical byte and inside the preimage as `sig_format_version`
-/// (SM-R-5 R5-c: one value, two appearances; the armored prefix's `1` is
-/// the separate envelope version).
-pub const MSG_SIG_LAYOUT_VERSION: u8 = 1;
+/// Wire layout version of a decoded message signature. Written as the
+/// leading canonical byte and read at decode; it is not an input to
+/// [`message_preimage`]. The domain string `shekyl/msg-sign-v2` is the
+/// hashed version. The armored prefix's trailing `1` is a separate
+/// envelope version.
+pub const MSG_SIG_LAYOUT_VERSION: u8 = 2;
 
 /// Scheme byte: SLH-DSA-SHA2-192s inner + spend-scalar Schnorr outer,
 /// nested (SM-R-8). Append-only — the **value** is the genesis-frozen
@@ -175,8 +178,10 @@ pub const SLH_192S_SIG_LEN: usize = slh_dsa_sha2_192s::SIG_LEN;
 /// Classical (spend-Schnorr) signature length: `R ‖ s`.
 pub const CLASSICAL_SIG_LEN: usize = schnorr::SIG_LEN;
 
-/// Length of the signing preimage (cSHAKE256-32 output).
-pub const MSG_PREIMAGE_LEN: usize = 32;
+/// Length of the signing preimage: 64 bytes, because SLH-DSA-192s signs it
+/// and a 32-byte digest caps collision resistance at 2^128, below the
+/// scheme's Category 3 (the signing envelope §2.7; `cshake256_64`'s rule).
+pub const MSG_PREIMAGE_LEN: usize = 64;
 
 /// Outer message the classical half signs: `preimage ‖ σ_pq`.
 pub const OUTER_MSG_LEN: usize = MSG_PREIMAGE_LEN + SLH_192S_SIG_LEN;
@@ -203,7 +208,7 @@ const _: () = assert!(slh_dsa_sha2_192s::N == SLH_192S_N);
 // 3 + 16224 + 64 + 4 — the ~21.7 KB-encoded blob the round priced.
 const _: () = assert!(MSG_SIG_CANONICAL_LEN == 16_295);
 const _: () = assert!(OUTER_MSG_LEN == MSG_PREIMAGE_LEN + SLH_192S_SIG_LEN);
-const _: () = assert!(MSG_PREIMAGE_LEN == 32);
+const _: () = assert!(MSG_PREIMAGE_LEN == 64);
 
 /// Message-signing errors, split on the SM-R-6 boundary: a *shape* error
 /// is the caller's bug; a *verification failure* is an answer.
@@ -302,39 +307,31 @@ pub fn derive_message_signing_public_key(
     Ok(pk.into_bytes())
 }
 
-/// Assemble the signing preimage (SM-R-3):
+/// Assemble the signing preimage (SM-R-3; the signing envelope §2.1, §2.6):
 ///
 /// ```text
-/// preimage = cSHAKE256("shekyl/msg-sign-v1",
-///     sig_format_version ‖ network_id ‖ mode ‖
-///     len(classical_segment) as u16 LE ‖ classical_segment ‖
-///     cSHAKE256("shekyl/msg-hash-v1", message))
+/// preimage = frame("shekyl/msg-sign-v2", network_id,
+///                  [u64_le(mode), classical_segment, message])[..64]
 /// ```
 ///
-/// `network_id` is the network's code ([`Network::code`]), one byte per
-/// network. `NETWORK_IDENTITY.md` NI-Q9 moves it to the genesis-derived
-/// network id.
+/// 64 bytes: SLH-DSA-192s signs it (the signing envelope §2.7).
 ///
-/// The length prefix makes the framing unambiguous by construction
-/// (R3-b): under fork (ii) the segment is variable-length across address
-/// versions, and unambiguity must not rest on accidental properties.
+/// `network_id` is the network's 16-byte genesis-derived id
+/// ([`Network::network_id`], `NETWORK_IDENTITY.md` NI-F2) at position 0 of
+/// the envelope, the place every network-bound hash puts it. The envelope
+/// frames every field with its length, so the segment, variable-length
+/// across address versions under fork (ii), and the message are
+/// unambiguous by construction (R3-b). The layout version is the domain's
+/// `-v2`; the decoded wire format keeps its own version byte
+/// ([`MSG_SIG_LAYOUT_VERSION`]), which is read, not hashed.
 #[must_use]
 pub fn message_preimage(
     network: Network,
     classical_segment: &[u8],
     message: &[u8],
 ) -> [u8; MSG_PREIMAGE_LEN] {
-    let msg_hash = shekyl_crypto_hash::cshake256_32(MSG_HASH_DOMAIN, message);
-    let mut buf = Vec::with_capacity(MSG_SIG_HEADER_LEN + 2 + classical_segment.len() + 32);
-    buf.push(MSG_SIG_LAYOUT_VERSION);
-    buf.push(network.code());
-    buf.push(MSG_SIG_MODE_SPEND);
-    // CLIPPY: segment lengths are address-segment-sized, far below u16::MAX.
-    #[allow(clippy::cast_possible_truncation)]
-    buf.extend_from_slice(&(classical_segment.len() as u16).to_le_bytes());
-    buf.extend_from_slice(classical_segment);
-    buf.extend_from_slice(&msg_hash);
-    shekyl_crypto_hash::cshake256_32(MSG_SIGN_DOMAIN, &buf)
+    let mode = u64::from(MSG_SIG_MODE_SPEND).to_le_bytes();
+    MSG_SIGN.frame(&network.network_id(), [&mode, classical_segment, message])
 }
 
 /// Sign the outer bytes with the spend **scalar** — see the module-docs
@@ -932,6 +929,21 @@ mod tests {
             Err(MessageSigError::Malformed("unknown mode"))
         );
 
+        // A layout-1 signature, from before the preimage bound the network
+        // id (`NETWORK_IDENTITY.md` NI-F2), is intact but not this layout:
+        // it is named as an unknown layout, not read as damage.
+        let mut c = engine
+            .decode(armored.strip_prefix(MSG_SIG_PREFIX).unwrap())
+            .unwrap();
+        c[0] = 1;
+        let body_len = MSG_SIG_CANONICAL_LEN - MSG_SIG_CHECKSUM_LEN;
+        let ck = shekyl_crypto_hash::cshake256_32(MSG_SIG_CHECKSUM_DOMAIN, &c[..body_len]);
+        c[body_len..].copy_from_slice(&ck[..MSG_SIG_CHECKSUM_LEN]);
+        assert_eq!(
+            verify(&format!("{}{}", MSG_SIG_PREFIX, engine.encode(&c))),
+            Err(MessageSigError::Malformed("unknown layout version"))
+        );
+
         // The control that keeps the two assertions above honest: the
         // SAME header bytes flipped WITHOUT recomputing the checksum are
         // damage, and must read as damage. Without this, an
@@ -1071,7 +1083,7 @@ mod tests {
         let preimage = message_preimage(NET, seg.as_bytes(), b"m");
         let (_pk, sk) = derive_message_signing_identity(&SEED, NET).unwrap();
         let sig_pq_bad_ctx = Box::new(
-            sk.try_sign(&preimage, MSG_SIGN_DOMAIN, true)
+            sk.try_sign(&preimage, MSG_SIGN.customization(), true)
                 .expect("sign with wrong ctx"),
         );
 
@@ -1087,12 +1099,11 @@ mod tests {
     }
 
     /// Domain strings are distinct (the collision check the inventory
-    /// relies on) and the preimage is length-prefix framed.
+    /// relies on) and the preimage is length-framed by the envelope.
     #[test]
     fn domains_distinct_and_framing_unambiguous() {
-        let domains: [&[u8]; 5] = [
-            MSG_SIGN_DOMAIN,
-            MSG_HASH_DOMAIN,
+        let domains: [&[u8]; 4] = [
+            MSG_SIGN.customization(),
             MSG_SIGN_SEED_DOMAIN,
             MSG_SIG_CHECKSUM_DOMAIN,
             MSG_SIGN_OUTER_DOMAIN,
@@ -1103,7 +1114,7 @@ mod tests {
             }
         }
         // Length-prefix framing: shifting a byte across the
-        // segment/message-hash boundary changes the preimage.
+        // segment/message boundary changes the preimage.
         let p1 = message_preimage(NET, &[0xAA, 0xBB], b"x");
         let p2 = message_preimage(NET, &[0xAA], b"x");
         assert_ne!(p1, p2);

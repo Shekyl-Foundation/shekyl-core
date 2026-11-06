@@ -52,9 +52,7 @@
 //! is the pure verifier in `shekyl-chain-rules` (`archival::bundle`), which
 //! `SO-D12`'s cutover increment calls at admission
 //! ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../../../docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
-//! §9.6, §11). The carrier's set commitment
-//! ([`serve_credit_batch_commitment`](crate::secret_draw::serve_credit_batch_commitment))
-//! is what this replaces; it stays beside it until that lane deletes it.
+//! §9.6, §11).
 //!
 //! # No secrets
 //!
@@ -66,13 +64,18 @@ use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockHeight, SettlementEpoch};
 
+use shekyl_network::envelope::{IdDomain, W64};
+use shekyl_network::NetworkId;
+
 use crate::hash::cshake256_32;
 use crate::ArchivalParams;
 use crate::SettlementSchedule;
 
-/// cSHAKE256 customization for [`bundle_commitment`] (rule 30: one label,
-/// one message, versioned).
-pub const BUNDLE_COMMITMENT_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-credit-bundle-v1";
+/// The envelope domain of [`bundle_commitment`]: two fields under the
+/// network's id, 64 bytes wide because a hybrid signature signs it (the
+/// signing envelope §2.4, §2.7).
+pub const BUNDLE_COMMITMENT: IdDomain<2, W64> =
+    IdDomain::new(b"shekyl/archival-serve-credit-bundle-v2");
 
 /// cSHAKE256 customization for [`bundle_prunable_hash`].
 pub const BUNDLE_PRUNABLE_CUSTOMIZATION: &[u8] = b"shekyl/archival-bundle-prunable-v1";
@@ -393,10 +396,11 @@ impl BundleKept {
     }
 
     /// [`bundle_commitment`] over this kept part and `records`, the
-    /// records' bytes in order ([`BundleBody::records_bytes`]).
+    /// records' bytes in order ([`BundleBody::records_bytes`]), on the
+    /// network whose id is `network_id`.
     #[must_use]
-    pub fn commitment(&self, records: &[u8]) -> [u8; 32] {
-        bundle_commitment(self, records)
+    pub fn commitment(&self, network_id: &NetworkId, records: &[u8]) -> [u8; 64] {
+        bundle_commitment(network_id, self, records)
     }
 
     /// [`bundle_charge`] of this bundle's stated count.
@@ -693,7 +697,8 @@ impl BundleBody {
 ///
 /// `records` are the set bits' records in bitmap order, economy first and
 /// support after. `sign` is the witness's signing capability: it is handed
-/// the 32-byte commitment and returns the canonical scheme-3 signature
+/// the 64-byte commitment on the network whose id is `network_id` and
+/// returns the canonical scheme-3 signature
 /// under `SCHEME_DOMAIN_WITNESS_BUNDLE` ([`sign_bundle_commitment`] over a
 /// held key). The secret key itself never enters this function, so the
 /// producer's ring can keep it. The fixture producer
@@ -706,13 +711,14 @@ impl BundleBody {
 ///
 /// Whatever `sign` returns.
 pub fn assemble_bundle<E>(
+    network_id: &NetworkId,
     kept: &BundleKept,
     records: &[BundleRecord],
     witness_public_key: &[u8; BUNDLE_WITNESS_KEY_LEN],
-    sign: impl FnOnce(&[u8; 32]) -> Result<[u8; BUNDLE_SIGNATURE_LEN], E>,
+    sign: impl FnOnce(&[u8; 64]) -> Result<[u8; BUNDLE_SIGNATURE_LEN], E>,
 ) -> Result<(BundleRef, BundleBody), E> {
     let records_bytes: Vec<u8> = records.iter().flat_map(BundleRecord::encode).collect();
-    let signature = sign(&kept.commitment(&records_bytes))?;
+    let signature = sign(&kept.commitment(network_id, &records_bytes))?;
     let body = BundleBody::new(witness_public_key, &signature, records);
     Ok((BundleRef::of(kept, &body), body))
 }
@@ -726,7 +732,7 @@ pub fn assemble_bundle<E>(
 /// canonical width.
 pub fn sign_bundle_commitment(
     secret: &shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSecretKey,
-    commitment: &[u8; 32],
+    commitment: &[u8; 64],
 ) -> Result<[u8; BUNDLE_SIGNATURE_LEN], shekyl_crypto_pq::CryptoError> {
     use shekyl_crypto_pq::signature::SignatureScheme as _;
     let signature = shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa.sign(
@@ -746,24 +752,25 @@ pub fn sign_bundle_commitment(
 /// `SCS-P35`).
 ///
 /// ```text
-/// cSHAKE256_32("shekyl/archival-serve-credit-bundle-v1",
-///              seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap
-///              ‖ support_count_le[4] ‖ support_bitmap ‖ r₁ ‖ … ‖ rₙ)
+/// frame("shekyl/archival-serve-credit-bundle-v2", network_id, [kept, records])[..64]
+/// kept    = seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap
+///           ‖ support_count_le[4] ‖ support_bitmap
+/// records = r₁ ‖ … ‖ rₙ
 /// ```
 ///
-/// That is **the kept part followed by the records**: the preimage opens
-/// with [`BundleKept::encode`], the same bytes a reference opens with, and
-/// `records` follows — the records' bytes in order, each
-/// [`BUNDLE_RECORD_LEN`] wide. The hash does not check the records'
-/// length: the verifier holds their number to the bitmap's set bits before
-/// it compares. Nothing is framed because nothing needs to be (module
-/// docs).
+/// Field 1 is [`BundleKept::encode`], the same bytes a reference opens
+/// with; field 2 the records' bytes in order, each [`BUNDLE_RECORD_LEN`]
+/// wide. The hash does not check the records' length: the verifier holds
+/// their number to the bitmap's set bits before it compares.
+///
+/// The network's id is at position 0 because nothing else in the message
+/// is network-bound: the seed is the witness's own random value, and the
+/// draw commitment that binds it to block `h` is checked beside this
+/// signature, not inside it. With the id, a witness signature made on one
+/// network verifies on no other (the signing envelope §2.4).
 #[must_use]
-pub fn bundle_commitment(kept: &BundleKept, records: &[u8]) -> [u8; 32] {
-    let mut input = Vec::with_capacity(kept.encoded_len() + records.len());
-    kept.encode_into(&mut input);
-    input.extend_from_slice(records);
-    cshake256_32(BUNDLE_COMMITMENT_CUSTOMIZATION, &input)
+pub fn bundle_commitment(network_id: &NetworkId, kept: &BundleKept, records: &[u8]) -> [u8; 64] {
+    BUNDLE_COMMITMENT.frame(network_id, [&kept.encode(), records])
 }
 
 /// The hash of a bundle's prunable bytes: what its reference carries, and

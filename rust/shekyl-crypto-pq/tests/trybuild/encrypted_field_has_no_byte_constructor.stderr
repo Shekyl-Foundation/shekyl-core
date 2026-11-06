@@ -9,11 +9,8 @@ note: constructor is not visible here due to private fields
    |
    | pub struct EncryptedOutputField([u8; 9]);
    |                                 ^^^^^^^ private field
-help: you might have meant to use an associated function to build this type
+help: you might have meant to use the `assemble` associated function
    |
 14 -     let _ = EncryptedOutputField([0u8; 9]);
 14 +     let _ = EncryptedOutputField::assemble(_, _);
-   |
-14 -     let _ = EncryptedOutputField([0u8; 9]);
-14 +     let _ = EncryptedOutputField::from_ffi_json_unverified(_);
    |

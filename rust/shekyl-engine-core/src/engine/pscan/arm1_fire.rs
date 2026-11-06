@@ -167,11 +167,14 @@ fn spawn_actor() -> Result<StakeEngineHandle, String> {
     let bodies =
         shekyl_p_store::BodyStore::open_ephemeral(shekyl_p_store::StoreKey::from_bytes([0x5a; 32]))
             .map_err(|e| e.to_string())?;
+    // The fire lane scans; it assembles no spend, so no signature is made
+    // under this id.
     Ok(StakeEngineHandle::spawn(
         BTreeMap::from([(slot, keys)]),
         BTreeSet::from([slot]),
         Some(slot),
         bodies,
+        [0; 16],
     ))
 }
 

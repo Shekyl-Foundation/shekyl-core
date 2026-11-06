@@ -73,8 +73,9 @@ pub use block::{
 };
 pub use sync_body::{BlockBody, BoundTx, SkeletonTx, TxBody};
 pub use transaction::{
-    carries_archival_good, empty_region_prunable_hash, is_join_market_post_kind, pqc_auth_hash_of,
-    prunable_hash_of, BondPost, BondPostKind, BpPlus, Ct, CtBase, FullTransaction, Holdings, Input,
-    Output, PqcAuth, PqcSigningPreimage, Prunable, PrunedError, RetiredKeylessJoinMarket,
-    Transaction, TxPrefix, TxSegments, TxidParts, TxidSegments, MIN_PRUNED_SEGMENT,
+    carries_archival_good, empty_region_prunable_hash, fcmp_base_hash, is_join_market_post_kind,
+    pqc_auth_hash_of, prunable_hash_of, tx_signable, BondPost, BondPostKind, BpPlus, Ct, CtBase,
+    FullTransaction, Holdings, Input, Output, PqcAuth, PqcSigningPreimage, Prunable, PrunedError,
+    RetiredKeylessJoinMarket, Transaction, TxPrefix, TxSegments, TxidParts, TxidSegments,
+    FCMP_SPEND_SIGNING, MIN_PRUNED_SEGMENT, TX_SIGNABLE,
 };

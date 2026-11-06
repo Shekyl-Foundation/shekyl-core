@@ -25,7 +25,7 @@ const fn h(n: u64) -> BlockHeight {
 /// derive the seed from the height — the commitments collide.
 #[test]
 fn two_templates_for_one_height_commit_to_distinct_draws() {
-    let ring = WitnessRing::new();
+    let ring = WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID);
     let a = ring.draw(h(10)).expect("draws");
     let b = ring.draw(h(10)).expect("draws");
     assert_ne!(a, b);
@@ -37,7 +37,7 @@ fn two_templates_for_one_height_commit_to_distinct_draws() {
 /// stays. Red edit: keep the rivals — the candidate count is 2.
 #[test]
 fn a_claim_takes_the_mined_candidate_and_drops_its_rivals() {
-    let ring = WitnessRing::new();
+    let ring = WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID);
     let first = ring.draw(h(10)).expect("draws");
     let mined = ring.draw(h(10)).expect("draws");
     let next = ring.draw(h(11)).expect("draws");
@@ -56,7 +56,7 @@ fn a_claim_takes_the_mined_candidate_and_drops_its_rivals() {
 /// floor` — the candidate exactly at the depth survives.
 #[test]
 fn candidates_go_at_the_depth_and_at_the_bound() {
-    let ring = WitnessRing::new();
+    let ring = WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID);
     ring.draw(h(100)).expect("draws");
     ring.draw(h(101)).expect("draws");
     assert_eq!(ring.evict(h(100) + CANDIDATE_DEPTH - BlockCount::ONE), 0);
@@ -78,7 +78,7 @@ fn candidates_go_at_the_depth_and_at_the_bound() {
 /// without removing — `seed(h)` still answers.
 #[test]
 fn filing_signs_inside_the_ring_and_takes_the_entry() {
-    let ring = WitnessRing::new();
+    let ring = WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID);
     let commitment = ring.draw(h(20)).expect("draws");
     assert!(ring.claim(h(20), &commitment));
     assert!(ring.seed(h(20)).is_some());
@@ -107,7 +107,9 @@ fn filing_signs_inside_the_ring_and_takes_the_entry() {
         .verify(
             &key,
             SCHEME_DOMAIN_WITNESS_BUNDLE,
-            &reference.kept().commitment(body.records_bytes()),
+            &reference
+                .kept()
+                .commitment(&shekyl_network::HARNESS_NETWORK_ID, body.records_bytes()),
             &signature,
         )
         .expect("the witness signature verifies");
@@ -116,7 +118,7 @@ fn filing_signs_inside_the_ring_and_takes_the_entry() {
 /// A forgotten entry is gone, secrets and all.
 #[test]
 fn forget_drops_an_entry() {
-    let ring = WitnessRing::new();
+    let ring = WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID);
     let commitment = ring.draw(h(30)).expect("draws");
     assert!(ring.claim(h(30), &commitment));
     assert!(ring.forget(h(30)));
@@ -139,7 +141,7 @@ fn ring_entries_wipe_themselves() {
 /// entry — its seed bytes appear.
 #[test]
 fn the_ring_shows_no_secret() {
-    let ring = WitnessRing::new();
+    let ring = WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID);
     let commitment = ring.draw(h(40)).expect("draws");
     assert!(ring.claim(h(40), &commitment));
     let seed = ring.seed(h(40)).expect("in flight");

@@ -69,8 +69,9 @@ fn off_the_emission_class_the_rows_are_recorded_vacuous() {
     let spend = listed_on(&chain, KI);
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
-        let cx =
-            TxContext::derive(&spend, TxSlot::Lone, &mut coverage).expect("a spend classifies");
+        let cx = TxContext::derive(&spend, TxSlot::Lone, &mut coverage)
+            .expect("a spend classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
         defined(judge_emission_claim(
             &cx,
             &view,
@@ -96,13 +97,16 @@ fn off_the_emission_class_the_rows_are_recorded_vacuous() {
 #[test]
 fn i15_over_the_fee_subset_refuses_filler_and_requires_absence_over_nothing() {
     let tx = emission();
-    assert!(I15::verify(&tx, &[0], &REFERENCE).is_err(), "filler proof");
     assert!(
-        I15::verify(&tx, &[], &REFERENCE).is_err(),
+        I15::verify(&tx, &[0], &REFERENCE, &crate::HARNESS_NETWORK_ID).is_err(),
+        "filler proof"
+    );
+    assert!(
+        I15::verify(&tx, &[], &REFERENCE, &crate::HARNESS_NETWORK_ID).is_err(),
         "a proof over no spends"
     );
     assert!(
-        I15::verify(&tx, &[1], &REFERENCE).is_err(),
+        I15::verify(&tx, &[1], &REFERENCE, &crate::HARNESS_NETWORK_ID).is_err(),
         "the emission slot is not a spend"
     );
     let mut absent = tx;
@@ -113,11 +117,11 @@ fn i15_over_the_fee_subset_refuses_filler_and_requires_absence_over_nothing() {
         p.fcmp_proof.clear();
     }
     assert!(
-        I15::verify(&absent, &[], &REFERENCE).is_ok(),
+        I15::verify(&absent, &[], &REFERENCE, &crate::HARNESS_NETWORK_ID).is_ok(),
         "nothing to prove"
     );
     assert!(
-        I15::verify(&absent, &[0], &REFERENCE).is_err(),
+        I15::verify(&absent, &[0], &REFERENCE, &crate::HARNESS_NETWORK_ID).is_err(),
         "a spend with no proof"
     );
 }
@@ -147,7 +151,8 @@ fn refuses_at_j23(chain: &MockChain) {
         for reference in [Some(&REFERENCE), None] {
             let mut coverage = RuleCoverage::EMPTY;
             let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
-                .expect("an emission classifies");
+                .expect("an emission classifies")
+                .on_network(crate::HARNESS_NETWORK_ID);
             assert_refused(
                 defined(judge_emission_claim(
                     &cx,
@@ -174,7 +179,8 @@ fn j23_refuses_a_vin_it_cannot_read_when_asked_alone() {
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
         let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
-            .expect("an emission classifies by its input kind");
+            .expect("an emission classifies by its input kind")
+            .on_network(crate::HARNESS_NETWORK_ID);
         assert_refused(
             defined(judge_emission_claim(
                 &cx,
@@ -218,7 +224,8 @@ fn j25_refuses_a_claim_the_verify_rejects_and_one_with_no_reference() {
         for reference in [Some(&REFERENCE), None] {
             let mut coverage = RuleCoverage::EMPTY;
             let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
-                .expect("an emission classifies");
+                .expect("an emission classifies")
+                .on_network(crate::HARNESS_NETWORK_ID);
             assert_refused(
                 defined(judge_emission_claim(
                     &cx,

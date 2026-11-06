@@ -21,8 +21,9 @@ shekyl-types = { path = "../shekyl-types" }
 # Output construction (deterministic KEM), account derivation (gen-wallets),
 # BIP-39 helpers, Edwards→Montgomery map for the recipient X25519 key.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-# cSHAKE256 domain-separated hashing for the deterministic genesis tx key.
-shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# The envelope the deterministic genesis tx key is framed by, and the
+# network's name_id it is bound to.
+shekyl-network = { path = "../shekyl-network" }
 # Post-#327 address encode/decode (three bech32m segments, ek_bind tag).
 shekyl-address = { path = "../shekyl-address" }
 # Empty curve-tree root for the genesis header (`selene_hash_init`).
@@ -44,8 +45,6 @@ rand = "0.8"
 curve25519-dalek = { version = "4", features = ["zeroize"] }
 
 [dev-dependencies]
-# The table's id and wire-prefix derivation (tests/genesis_table.rs).
-shekyl-network = { path = "../shekyl-network" }
 # Golden-KAT blob digest (tests/golden_kat.rs) — a compact pin over the full
 # serialized genesis tx, so any wire-level drift fails on one line.
 sha2 = { workspace = true }

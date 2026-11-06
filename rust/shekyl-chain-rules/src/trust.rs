@@ -32,6 +32,9 @@
 //! (`full(GenesisPin::NONE)`) exists in test and harness builds only, for
 //! a harness chain that mines its own genesis.
 
+use shekyl_network::{network_id_from_genesis, NetworkId};
+use shekyl_types::BlockHeight;
+
 use crate::genesis_pin::GenesisPin;
 
 /// The genesis pin this node holds a height-0 candidate to.
@@ -62,4 +65,25 @@ impl Trust {
     pub const fn genesis_pin(&self) -> &GenesisPin {
         &self.genesis
     }
+
+    /// The id of the network this trust pins: derived from its genesis
+    /// (`NETWORK_IDENTITY.md` NI-R10), the id every spend signature's hash
+    /// binds (NI-Q4). Under [`Trust::UNPINNED`] it is
+    /// [`HARNESS_NETWORK_ID`], the id every harness signer signs under.
+    #[must_use]
+    pub fn network_id(&self) -> NetworkId {
+        match self.genesis.expected_at(BlockHeight::ZERO) {
+            Some(genesis) => network_id_from_genesis(genesis.as_bytes()),
+            #[cfg(any(test, feature = "harness"))]
+            None => HARNESS_NETWORK_ID,
+            #[cfg(not(any(test, feature = "harness")))]
+            None => unreachable!("only a harness build has a pin with no genesis"),
+        }
+    }
 }
+
+/// The network id of a harness chain that mines its own genesis
+/// ([`Trust::UNPINNED`]), re-exported from `shekyl-network` for test and
+/// harness builds.
+#[cfg(any(test, feature = "harness"))]
+pub use shekyl_network::HARNESS_NETWORK_ID;

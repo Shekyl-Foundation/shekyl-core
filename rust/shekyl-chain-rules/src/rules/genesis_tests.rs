@@ -10,7 +10,9 @@
 
 use super::*;
 use crate::harness::fixture::{candidate_on, recorded, root};
-use crate::harness::{assert_refused, formed_on, infallible, judged, FaultingView, MockChain};
+use crate::harness::{
+    assert_refused, formed_on_network, infallible, judged, FaultingView, MockChain,
+};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::validate::validate;
@@ -30,7 +32,8 @@ fn the_genesis_pin_judges_the_genesis_candidate() {
     let chain = MockChain::default();
     let wrong = Trust::full(pinning_genesis(OTHER));
     chain.with_view(|view| {
-        let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
+        let formed =
+            formed_on_network(&chain, candidate_on(&chain, Vec::new()), wrong.network_id());
         assert_refused(
             judged(validate(formed, &view, &RuleSet::GENESIS, &wrong)),
             CenRow::E1,
@@ -48,7 +51,7 @@ fn the_pinned_genesis_passes_with_e1_recorded() {
     let identity = candidate.block.hash();
     let trust = Trust::full(pinning_genesis(identity));
     chain.with_view(|view| {
-        let formed = formed_on(&chain, candidate);
+        let formed = formed_on_network(&chain, candidate, trust.network_id());
         let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &trust))
             .expect("the genesis candidate is the pin");
         assert_eq!(valid.block().hash(), identity);
@@ -63,7 +66,8 @@ fn a_height_above_genesis_passes_vacuously_and_is_recorded() {
     let chain = five_blocks();
     for trust in [Trust::UNPINNED, Trust::full(pinning_genesis(OTHER))] {
         chain.with_view(|view| {
-            let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
+            let formed =
+                formed_on_network(&chain, candidate_on(&chain, Vec::new()), trust.network_id());
             let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &trust))
                 .expect("nothing is pinned above genesis");
             assert!(valid.coverage().contains(CenRow::E1));

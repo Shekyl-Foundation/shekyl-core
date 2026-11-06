@@ -638,9 +638,13 @@ impl BundleWorld {
             passes,
             support,
         };
-        assemble_bundle(&kept, records, &self.witness_public_key, |commitment| {
-            sign_bundle_commitment(&self.witness_secret_key, commitment)
-        })
+        assemble_bundle(
+            &crate::HARNESS_NETWORK_ID,
+            &kept,
+            records,
+            &self.witness_public_key,
+            |commitment| sign_bundle_commitment(&self.witness_secret_key, commitment),
+        )
         .expect("fixture witness signing")
     }
 }

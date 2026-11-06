@@ -44,6 +44,7 @@
 use core::fmt;
 
 use shekyl_fcmp::LeafInput;
+use shekyl_network::NetworkId;
 use shekyl_types::{
     BlockHash, BlockHeight, GlobalOutputIndex, PCanonicalId, SettlementEpoch, ShardId,
 };
@@ -115,6 +116,20 @@ pub enum Stale {
         formed_under: Box<RuleSet>,
         /// What `validate` was given.
         in_force: Box<RuleSet>,
+        /// Whether `form` may be run again.
+        retry: Retry,
+    },
+    /// The network id `form` bound every signature and proof under is not
+    /// the id `validate` was given (`trust.network_id()`). A signature is
+    /// valid on one network (NI-Q4). A mismatch means the two stages
+    /// described different networks — a driver defect, the same class as
+    /// [`Self::RuleSet`]. A fault, never a refusal. The id is sixteen
+    /// bytes, so both values travel by value.
+    Network {
+        /// What `form` bound.
+        formed_under: NetworkId,
+        /// What `validate` was given.
+        in_force: NetworkId,
         /// Whether `form` may be run again.
         retry: Retry,
     },
@@ -771,6 +786,14 @@ impl fmt::Display for Stale {
             } => write!(
                 f,
                 "stale rule set: formed under {formed_under:?}, {in_force:?} is in force ({retry})"
+            ),
+            Self::Network {
+                formed_under,
+                in_force,
+                retry,
+            } => write!(
+                f,
+                "stale network: formed under {formed_under:?}, {in_force:?} is in force ({retry})"
             ),
             Self::Target {
                 claimed,

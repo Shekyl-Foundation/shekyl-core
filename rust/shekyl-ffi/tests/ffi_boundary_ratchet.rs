@@ -88,12 +88,12 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // Tightened so the win cannot grow back.
     ("legacy_fcmp.rs", 1, 5),
     ("legacy_frost.rs", 2, 3),
-    ("legacy_proofs.rs", 4, 0),
     ("legacy_tests.rs", 3, 0),
-    // 2 -> 1 with_capacity: the wallet-cache envelope export was the other
-    // reserve, and it left with the callerless cache FFI. The remaining
-    // reserve is the collapsed-sign input vec.
-    ("legacy_tx.rs", 1, 1),
+    // 2 -> 1 -> 0 with_capacity: the wallet-cache envelope export left with
+    // the callerless cache FFI, and the collapsed-sign input vec with the
+    // wallet's C++ signing exports (the signing envelope, #1266). What
+    // remains is the witness-header writer's one borrow.
+    ("legacy_tx.rs", 1, 0),
     ("levin_ffi.rs", 2, 0),
     ("pow_randomx_ffi.rs", 1, 0),
     // Curve-tree replica (test-generator surface, 2026-09-05): one typed-slice

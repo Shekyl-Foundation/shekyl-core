@@ -1,219 +1,23 @@
 
 #include <gtest/gtest.h>
 #include <rapidjson/document.h>
+#include <rapidjson/istreamwrapper.h>
 #include <rapidjson/writer.h>
 #include <vector>
 #include <string>
-#include <cstring>
-#include <array>
 #include <fstream>
 #include <stdexcept>
 
 #include "byte_stream.h"
-#include "crypto/crypto.h"
 #include "crypto/hash.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
-#include "cryptonote_config.h"
 #include "serialization/json_object.h"
 #include "string_tools.h"
-#include "memwipe.h"
-#include "common/varint.h"
-#include "shekyl/shekyl_ffi.h"
 #include "fcmp/ct_ops.h"
 
 namespace
 {
-    std::string hex_encode(const uint8_t* data, size_t len)
-    {
-        static const char hex_chars[] = "0123456789abcdef";
-        std::string result;
-        result.reserve(len * 2);
-        for (size_t i = 0; i < len; ++i)
-        {
-            result.push_back(hex_chars[data[i] >> 4]);
-            result.push_back(hex_chars[data[i] & 0x0F]);
-        }
-        return result;
-    }
-
-    std::vector<uint8_t> hex_decode(const std::string& hex)
-    {
-        std::vector<uint8_t> bytes;
-        bytes.reserve(hex.size() / 2);
-        for (size_t i = 0; i + 1 < hex.size(); i += 2)
-        {
-            uint8_t hi = (hex[i] >= 'a') ? (hex[i] - 'a' + 10) : (hex[i] - '0');
-            uint8_t lo = (hex[i+1] >= 'a') ? (hex[i+1] - 'a' + 10) : (hex[i+1] - '0');
-            bytes.push_back((hi << 4) | lo);
-        }
-        return bytes;
-    }
-
-    struct WalletKeys {
-        uint8_t spend_secret[32];
-        uint8_t spend_public[32];
-        uint8_t x25519_pk[32];
-        uint8_t x25519_sk[32];
-        std::vector<uint8_t> ml_kem_ek;
-        std::vector<uint8_t> ml_kem_dk;
-
-        ~WalletKeys() { memwipe(spend_secret, 32); memwipe(x25519_sk, 32); }
-    };
-
-    WalletKeys generate_wallet_keys()
-    {
-        WalletKeys w{};
-        crypto::public_key pk;
-        crypto::secret_key sk;
-        crypto::generate_keys(pk, sk);
-        memcpy(w.spend_secret, &sk, 32);
-        memcpy(w.spend_public, &pk, 32);
-
-        ShekylPqcKeypair kem = shekyl_kem_keypair_generate();
-        EXPECT_TRUE(kem.success) << "DEBUG: KEM keypair generation failed";
-
-        EXPECT_EQ(kem.public_key.len, 1216u)
-            << "DEBUG: KEM pk expected 1216 bytes, got " << kem.public_key.len;
-        EXPECT_EQ(kem.secret_key.len, 2432u)
-            << "DEBUG: KEM sk expected 2432 bytes, got " << kem.secret_key.len;
-
-        memcpy(w.x25519_pk, kem.public_key.ptr, 32);
-        w.ml_kem_ek.assign(kem.public_key.ptr + 32, kem.public_key.ptr + kem.public_key.len);
-
-        memcpy(w.x25519_sk, kem.secret_key.ptr, 32);
-        w.ml_kem_dk.assign(kem.secret_key.ptr + 32, kem.secret_key.ptr + kem.secret_key.len);
-
-        shekyl_buffer_free(kem.public_key.ptr, kem.public_key.len);
-        shekyl_buffer_free(kem.secret_key.ptr, kem.secret_key.len);
-        return w;
-    }
-
-    struct ConstructedOutput {
-        uint8_t output_key[32];
-        uint8_t commitment[32];
-        uint8_t enc_amount[8];
-        uint8_t amount_tag;
-        uint8_t enc_label[8];
-        uint8_t label_tag;
-        uint8_t view_tag;
-        uint8_t kem_ct_x25519[32];
-        std::vector<uint8_t> kem_ct_ml_kem;
-        uint8_t pqc_leaf[64];  // CM || record (PL-D3)
-        uint8_t y[32];
-        uint8_t z[32];
-    };
-
-    ConstructedOutput construct_output_ffi(
-        const uint8_t* tx_secret,
-        const WalletKeys& recipient,
-        uint64_t amount,
-        uint64_t output_index)
-    {
-        ShekylOutputData data = shekyl_construct_output(
-            tx_secret,
-            recipient.x25519_pk,
-            recipient.ml_kem_ek.data(),
-            recipient.ml_kem_ek.size(),
-            recipient.spend_public,
-            amount,
-            output_index);
-
-        ConstructedOutput out{};
-        EXPECT_TRUE(data.success) << "DEBUG: shekyl_construct_output failed";
-
-        memcpy(out.output_key, data.output_key, 32);
-        memcpy(out.commitment, data.commitment, 32);
-        memcpy(out.enc_amount, data.enc_amount, 8);
-        out.amount_tag = data.amount_tag;
-        memcpy(out.enc_label, data.enc_label, 8);
-        out.label_tag = data.label_tag;
-        out.view_tag = data.view_tag_prefilter;
-        memcpy(out.kem_ct_x25519, data.kem_ciphertext_x25519, 32);
-        out.kem_ct_ml_kem.assign(
-            data.kem_ciphertext_ml_kem.ptr,
-            data.kem_ciphertext_ml_kem.ptr + data.kem_ciphertext_ml_kem.len);
-        memcpy(out.pqc_leaf, data.pqc_leaf, 64);
-        memcpy(out.y, data.y, 32);
-        memcpy(out.z, data.z, 32);
-
-        shekyl_output_data_free(&data);
-        return out;
-    }
-
-    struct ScannedSecrets {
-        uint8_t ho[32];
-        uint8_t y[32];
-        uint8_t z[32];
-        uint64_t amount;
-        uint8_t key_image[32];
-        uint8_t combined_ss[64];
-        uint8_t pqc_leaf[64];  // CM || record (PL-D3)
-        std::vector<uint8_t> pqc_pk;
-        std::vector<uint8_t> pqc_sk;
-
-        ~ScannedSecrets() { memwipe(ho, 32); memwipe(combined_ss, 64); }
-    };
-
-    ScannedSecrets scan_output_ffi(
-        const WalletKeys& wallet,
-        const ConstructedOutput& out,
-        uint64_t output_index)
-    {
-        ge_p3 hp;
-        ct::key od_rct;
-        memcpy(od_rct.bytes, out.output_key, 32);
-        ct::hash_to_p3(hp, od_rct);
-        uint8_t hp_of_o[32];
-        ge_p3_tobytes(hp_of_o, &hp);
-
-        ScannedSecrets s{};
-        uint8_t k_amount[32];
-        uint8_t recovered_spend_key[32];
-        ShekylBuffer pqc_pk_buf{nullptr, 0};
-        ShekylBuffer pqc_sk_buf{nullptr, 0};
-
-        bool ok = shekyl_scan_and_recover(
-            wallet.x25519_sk,
-            wallet.ml_kem_dk.data(),
-            wallet.ml_kem_dk.size(),
-            out.kem_ct_x25519,
-            out.kem_ct_ml_kem.data(),
-            out.kem_ct_ml_kem.size(),
-            out.output_key,
-            out.commitment,
-            out.enc_amount,
-            out.amount_tag,
-            out.enc_label,
-            out.label_tag,
-            out.view_tag,
-            output_index,
-            wallet.spend_secret,
-            hp_of_o,
-            true,
-            s.ho, s.y, s.z,
-            k_amount,
-            &s.amount,
-            recovered_spend_key,
-            s.key_image,
-            s.combined_ss,
-            &pqc_pk_buf,
-            &pqc_sk_buf,
-            s.pqc_leaf);
-
-        EXPECT_TRUE(ok) << "DEBUG: shekyl_scan_and_recover failed";
-
-        if (pqc_pk_buf.ptr && pqc_pk_buf.len > 0)
-            s.pqc_pk.assign(pqc_pk_buf.ptr, pqc_pk_buf.ptr + pqc_pk_buf.len);
-        if (pqc_sk_buf.ptr && pqc_sk_buf.len > 0)
-            s.pqc_sk.assign(pqc_sk_buf.ptr, pqc_sk_buf.ptr + pqc_sk_buf.len);
-
-        shekyl_buffer_free(pqc_pk_buf.ptr, pqc_pk_buf.len);
-        shekyl_buffer_free(pqc_sk_buf.ptr, pqc_sk_buf.len);
-        memwipe(k_amount, 32);
-        return s;
-    }
-
     template<typename T>
     T test_json(const T& value)
     {
@@ -250,6 +54,29 @@ static std::string mainnet_genesis_tx_hex()
   return hex;
 }
 
+// A spend a running daemon accepted and connected
+// (`rust/shekyl-wire/tests/fixtures/live_oracle_spend_v1.json`, which
+// `pruned_tx_hash_parity.cpp` also reads): an FCMP++ spend with real proofs
+// and hybrid signatures, built by the Rust wallet. It replaced a fixture this
+// file built through the wallet's C++ signing exports, deleted with them: the
+// wallet is Rust (`.cursor/rules/20-rust-vs-cpp-policy.mdc`). The path is
+// CMake's.
+#ifndef LIVE_ORACLE_SPEND_FIXTURE_PATH
+#define LIVE_ORACLE_SPEND_FIXTURE_PATH "rust/shekyl-wire/tests/fixtures/live_oracle_spend_v1.json"
+#endif
+static std::string live_oracle_spend_tx_hex()
+{
+  std::ifstream ifs(LIVE_ORACLE_SPEND_FIXTURE_PATH);
+  if (!ifs.good())
+    throw std::runtime_error(std::string("missing the live-oracle spend fixture at ") + LIVE_ORACLE_SPEND_FIXTURE_PATH);
+  rapidjson::IStreamWrapper wrapper(ifs);
+  rapidjson::Document doc;
+  doc.ParseStream(wrapper);
+  if (doc.HasParseError() || !doc.HasMember("tx_hex") || !doc["tx_hex"].IsString())
+    throw std::runtime_error("invalid live-oracle spend fixture");
+  return doc["tx_hex"].GetString();
+}
+
 namespace test
 {
     // The network table's mainnet genesis: a production coinbase written by
@@ -273,365 +100,17 @@ namespace test
         return tx;
     }
 
+    // The live-oracle spend: six inputs, two outputs.
     cryptonote::transaction
     make_fcmp_transaction()
     {
-        // --- 1. Generate wallet keys ---
-        WalletKeys wallet = generate_wallet_keys();
-
-        crypto::secret_key tx_sk;
-        crypto::public_key tx_pk;
-        crypto::generate_keys(tx_pk, tx_sk);
-        uint8_t tx_secret[32];
-        memcpy(tx_secret, &tx_sk, 32);
-
-        const uint64_t input_amount  = 1000000000; // 1 SKL
-        const uint64_t fee           = 1000000;
-        const uint64_t output_amount = input_amount - fee;
-        const uint64_t input_output_index = 0;
-
-        // --- 2. Construct the "existing" output that we'll spend ---
-        ConstructedOutput input_out = construct_output_ffi(
-            tx_secret, wallet, input_amount, input_output_index);
-
-        // --- 3. Scan and recover secrets ---
-        ScannedSecrets scanned = scan_output_ffi(wallet, input_out, input_output_index);
-        EXPECT_EQ(scanned.amount, input_amount)
-            << "DEBUG: scanned amount mismatch: expected " << input_amount
-            << " got " << scanned.amount;
-
-        // --- 4. Build single-layer Selene curve tree root (layers=1) ---
-        // The leaf's 4th scalar is CM.x; the constructor takes the commitment
-        // point at the front of the 0x07 entry (PL-D3).
-        uint8_t leaf[128];
-        bool leaf_ok = shekyl_construct_curve_tree_leaf(
-            input_out.output_key, input_out.commitment, scanned.pqc_leaf, leaf);
-        EXPECT_TRUE(leaf_ok) << "DEBUG: shekyl_construct_curve_tree_leaf failed";
-
-        uint8_t selene_init[32];
-        EXPECT_TRUE(shekyl_curve_tree_selene_hash_init(selene_init));
-        uint8_t zero_scalar[32] = {};
-        uint8_t tree_root[32];
-        EXPECT_TRUE(shekyl_curve_tree_hash_grow_selene(
-            selene_init, 0, zero_scalar, leaf, 4, tree_root));
-
-        // --- 5. Construct change output ---
-        WalletKeys change_wallet = generate_wallet_keys();
-        crypto::secret_key change_tx_sk;
-        crypto::public_key change_tx_pk;
-        crypto::generate_keys(change_tx_pk, change_tx_sk);
-        uint8_t change_tx_secret[32];
-        memcpy(change_tx_secret, &change_tx_sk, 32);
-
-        ConstructedOutput change_out = construct_output_ffi(
-            change_tx_secret, change_wallet, output_amount, 0);
-
-        // --- 6. Build Hp(O) for the leaf chunk's key-image generator ---
-        ge_p3 hp;
-        ct::key od_rct;
-        memcpy(od_rct.bytes, input_out.output_key, 32);
-        ct::hash_to_p3(hp, od_rct);
-        uint8_t hp_of_o[32];
-        ge_p3_tobytes(hp_of_o, &hp);
-
-        // --- 7. Build JSON blobs for signer ---
-        std::string inputs_json = "[{"
-            "\"ki\":\"" + hex_encode(scanned.key_image, 32) + "\","
-            "\"combined_ss\":\"" + hex_encode(scanned.combined_ss, 64) + "\","
-            "\"output_index\":" + std::to_string(input_output_index) + ","
-            "\"amount\":" + std::to_string(input_amount) + ","
-            "\"commitment_mask\":\"" + hex_encode(scanned.z, 32) + "\","
-            "\"commitment\":\"" + hex_encode(input_out.commitment, 32) + "\","
-            "\"output_key\":\"" + hex_encode(input_out.output_key, 32) + "\","
-            "\"leaf_chunk\":[{"
-                "\"output_key\":\"" + hex_encode(input_out.output_key, 32) + "\","
-                "\"key_image_gen\":\"" + hex_encode(hp_of_o, 32) + "\","
-                "\"commitment\":\"" + hex_encode(input_out.commitment, 32) + "\","
-                "\"cm_x\":\"" + hex_encode(leaf + 96, 32) + "\""
-            "}],"
-            "\"c1_layers\":[],"
-            "\"c2_layers\":[]"
-        "}]";
-
-        uint8_t enc_amount_9[9];
-        memcpy(enc_amount_9, change_out.enc_amount, 8);
-        enc_amount_9[8] = change_out.amount_tag;
-
-        uint8_t enc_label_9[9];
-        memcpy(enc_label_9, change_out.enc_label, 8);
-        enc_label_9[8] = change_out.label_tag;
-
-        std::string outputs_json = "[{"
-            "\"dest_key\":\"" + hex_encode(change_out.output_key, 32) + "\","
-            "\"amount\":" + std::to_string(output_amount) + ","
-            "\"commitment_mask\":\"" + hex_encode(change_out.z, 32) + "\","
-            "\"enc_amount\":\"" + hex_encode(enc_amount_9, 9) + "\","
-            "\"enc_label\":\"" + hex_encode(enc_label_9, 9) + "\""
-        "}]";
-
-        // --- 8. Sign ---
-        uint8_t tx_prefix_hash[32] = {};
-        tx_prefix_hash[0] = 0xAA;
-        tx_prefix_hash[31] = 0xBB;
-
-        uint8_t reference_block[32] = {};
-        reference_block[0] = 0xCC;
-        reference_block[31] = 0xDD;
-
-        // LMDB depth 0 = leaves only (single Selene root). The signing FFI
-        // converts to layers = 0 + 1 = 1 for the upstream library.
-        const uint8_t tree_depth = 0;
-
-        ShekylSignResult result = shekyl_sign_fcmp_transaction(
-            wallet.spend_secret,
-            tx_prefix_hash,
-            reinterpret_cast<const uint8_t*>(inputs_json.data()),
-            inputs_json.size(),
-            reinterpret_cast<const uint8_t*>(outputs_json.data()),
-            outputs_json.size(),
-            fee,
-            reference_block,
-            tree_root,
-            tree_depth);
-
-        if (!result.success)
-        {
-            std::string err_msg = "(no message)";
-            if (result.error_message.ptr && result.error_message.len > 0)
-                err_msg.assign(reinterpret_cast<const char*>(result.error_message.ptr),
-                               result.error_message.len);
-            shekyl_buffer_free(result.error_message.ptr, result.error_message.len);
-            shekyl_buffer_free(result.proofs_json.ptr, result.proofs_json.len);
-            throw std::runtime_error{
-                "shekyl_sign_fcmp_transaction failed (code="
-                + std::to_string(result.error_code) + "): " + err_msg};
-        }
-
-        EXPECT_TRUE(result.proofs_json.ptr != nullptr && result.proofs_json.len > 0)
-            << "DEBUG: proofs_json is empty on success";
-
-        // --- 9. Parse SignedProofs JSON (the pattern wallet2.cpp used,
-        //        before it was deleted at Phase 5; the shape is the
-        //        contract here) ---
-        std::string proofs_str(
-            reinterpret_cast<const char*>(result.proofs_json.ptr),
-            result.proofs_json.len);
-
-        rapidjson::Document proofs_doc;
-        proofs_doc.Parse(proofs_str.c_str(), proofs_str.size());
-        EXPECT_FALSE(proofs_doc.HasParseError())
-            << "DEBUG: proofs_json parse error at offset " << proofs_doc.GetErrorOffset();
-
-        std::vector<uint8_t> fcmp_proof = hex_decode(proofs_doc["fcmp_proof"].GetString());
-
-        const auto& pseudo_outs_arr = proofs_doc["pseudo_outs"].GetArray();
-        EXPECT_EQ(pseudo_outs_arr.Size(), 1u) << "DEBUG: expected 1 pseudo_out";
-        std::vector<uint8_t> pseudo_out = hex_decode(pseudo_outs_arr[0].GetString());
-        EXPECT_EQ(pseudo_out.size(), 32u) << "DEBUG: pseudo_out should be 32 bytes";
-
-        shekyl_buffer_free(result.proofs_json.ptr, result.proofs_json.len);
-        shekyl_buffer_free(result.error_message.ptr, result.error_message.len);
-
-        // --- 10. Verify the proof ---
-        // shekyl_fcmp_verify expects layers (= LMDB depth + 1).
-        const uint8_t verify_layers = static_cast<uint8_t>(tree_depth + 1);
-        // The verifier's per-input value is the scalar of the key the spend
-        // REVEALS — `pqc_auths[i].hybrid_public_key`, the canonical hybrid
-        // encoding derived from `combined_ss` — not the ML-DSA-only key the
-        // scan hands back as `pqc_pk` (PL-D3; the leaf commits to the hybrid
-        // key, so hashing the other string fails verification).
-        ShekylBuffer hybrid_pk = shekyl_derive_pqc_public_key(scanned.combined_ss, input_output_index);
-        EXPECT_TRUE(hybrid_pk.ptr != nullptr && hybrid_pk.len > 0)
-            << "DEBUG: shekyl_derive_pqc_public_key failed";
-        uint8_t pqc_key[32];
-        EXPECT_TRUE(shekyl_fcmp_pqc_key_scalar(hybrid_pk.ptr, hybrid_pk.len, pqc_key));
-        shekyl_buffer_free(hybrid_pk.ptr, hybrid_pk.len);
-        uint8_t fcmp_result = shekyl_fcmp_verify(
-            fcmp_proof.data(), fcmp_proof.size(),
-            scanned.key_image, 1,
-            pseudo_out.data(), 1,
-            pqc_key, 1,
-            tree_root, verify_layers,
-            tx_prefix_hash);
-        EXPECT_EQ(fcmp_result, 0) << "shekyl_fcmp_verify error code: " << (int)fcmp_result;
-
-        // --- 11. Build transaction struct from SignedProofs ---
+        cryptonote::blobdata blob;
+        if (!epee::string_tools::parse_hexstr_to_binbuff(
+                live_oracle_spend_tx_hex(), blob))
+            throw std::runtime_error{"the live-oracle spend is not hex"};
         cryptonote::transaction tx{};
-        tx.version = 3;
-        tx.unlock_time = 0;
-        tx.pruned = false;
-
-        // Input: real key image
-        cryptonote::txin_to_key txin{};
-        txin.amount = 0;
-        memcpy(&txin.k_image, scanned.key_image, 32);
-        txin.key_offsets.push_back(input_output_index);
-        tx.vin.push_back(txin);
-
-        // Output: real output key from change output
-        {
-            cryptonote::tx_out txout{};
-            txout.amount = 0;
-            cryptonote::txout_to_tagged_key tagged{};
-            memcpy(&tagged.key, change_out.output_key, 32);
-            tagged.view_tag.data = static_cast<char>(change_out.view_tag);
-            txout.target = tagged;
-            tx.vout.push_back(txout);
-        }
-
-        // Extra: tx public key, laid out by hand (0x01 ‖ key) — this is a
-        // serialization round-trip fixture, not a transaction the shape rule
-        // is asked about.
-        tx.extra.push_back(SHEKYL_TX_EXTRA_TAG_PUBKEY);
-        tx.extra.insert(tx.extra.end(), reinterpret_cast<const uint8_t*>(&tx_pk),
-          reinterpret_cast<const uint8_t*>(&tx_pk) + 32);
-
-        // RCT base fields
-        tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
-        tx.ct_signatures.txnFee = fee;
-        memcpy(tx.ct_signatures.message.bytes, tx_prefix_hash, 32);
-        memcpy(tx.ct_signatures.referenceBlock.data, reference_block, 32);
-        tx.ct_signatures.p.curve_trees_tree_depth = proofs_doc["tree_depth"].GetUint();
-
-        // outPk from commitments
-        {
-            const auto& comms = proofs_doc["commitments"].GetArray();
-            tx.ct_signatures.outPk.resize(comms.Size());
-            for (rapidjson::SizeType i = 0; i < comms.Size(); ++i)
-            {
-                std::vector<uint8_t> bin = hex_decode(comms[i].GetString());
-                EXPECT_EQ(bin.size(), 32u) << "DEBUG: commitment size mismatch at " << i;
-                memcpy(tx.ct_signatures.outPk[i].mask.bytes, bin.data(), 32);
-            }
-        }
-
-        // BP+ range proof: deserialize Rust blob -> C++ BulletproofPlus
-        // (the deserialization pattern wallet2.cpp used, before Phase 5)
-        {
-            std::string bp_bin;
-            epee::string_tools::parse_hexstr_to_binbuff(
-                proofs_doc["bulletproof_plus"].GetString(), bp_bin);
-            const uint8_t* bp_data = reinterpret_cast<const uint8_t*>(bp_bin.data());
-            size_t bp_len = bp_bin.size();
-            size_t bp_off = 0;
-
-            ct::BulletproofPlus bpp{};
-            bpp.V.resize(tx.ct_signatures.outPk.size());
-            for (size_t vi = 0; vi < tx.ct_signatures.outPk.size(); ++vi)
-                bpp.V[vi] = tx.ct_signatures.outPk[vi].mask;
-
-            EXPECT_GE(bp_len, bp_off + 192u) << "DEBUG: BP+ blob too short for fixed fields";
-            memcpy(bpp.A.bytes,  bp_data + bp_off, 32); bp_off += 32;
-            memcpy(bpp.A1.bytes, bp_data + bp_off, 32); bp_off += 32;
-            memcpy(bpp.B.bytes,  bp_data + bp_off, 32); bp_off += 32;
-            memcpy(bpp.r1.bytes, bp_data + bp_off, 32); bp_off += 32;
-            memcpy(bpp.s1.bytes, bp_data + bp_off, 32); bp_off += 32;
-            memcpy(bpp.d1.bytes, bp_data + bp_off, 32); bp_off += 32;
-
-            uint64_t l_len = 0;
-            {
-                auto it = bp_bin.cbegin() + static_cast<ptrdiff_t>(bp_off);
-                auto end = bp_bin.cend();
-                int rd = tools::read_varint(it, end, l_len);
-                EXPECT_GT(rd, 0) << "DEBUG: BP+ L varint read failed";
-                bp_off += rd;
-            }
-            bpp.L.resize(l_len);
-            for (uint64_t li = 0; li < l_len; ++li)
-            {
-                EXPECT_LE(bp_off + 32, bp_len) << "DEBUG: BP+ blob underflow in L at " << li;
-                memcpy(bpp.L[li].bytes, bp_data + bp_off, 32);
-                bp_off += 32;
-            }
-
-            uint64_t r_len = 0;
-            {
-                auto it = bp_bin.cbegin() + static_cast<ptrdiff_t>(bp_off);
-                auto end = bp_bin.cend();
-                int rd = tools::read_varint(it, end, r_len);
-                EXPECT_GT(rd, 0) << "DEBUG: BP+ R varint read failed";
-                bp_off += rd;
-            }
-            bpp.R.resize(r_len);
-            for (uint64_t ri = 0; ri < r_len; ++ri)
-            {
-                EXPECT_LE(bp_off + 32, bp_len) << "DEBUG: BP+ blob underflow in R at " << ri;
-                memcpy(bpp.R[ri].bytes, bp_data + bp_off, 32);
-                bp_off += 32;
-            }
-
-            tx.ct_signatures.p.bulletproofs_plus.clear();
-            tx.ct_signatures.p.bulletproofs_plus.push_back(std::move(bpp));
-        }
-
-        // enc_amounts (9 bytes each)
-        {
-            if (!proofs_doc.HasMember("enc_amounts") || !proofs_doc["enc_amounts"].IsArray())
-                throw std::runtime_error("enc_amounts missing or not an array in signed proofs JSON");
-            const auto& ea_arr = proofs_doc["enc_amounts"].GetArray();
-            tx.ct_signatures.enc_amounts.resize(ea_arr.Size());
-            for (rapidjson::SizeType i = 0; i < ea_arr.Size(); ++i)
-            {
-                std::vector<uint8_t> bin = hex_decode(ea_arr[i].GetString());
-                if (bin.size() != 9)
-                    throw std::runtime_error("enc_amount must decode to 9 bytes");
-                memcpy(tx.ct_signatures.enc_amounts[i].data(), bin.data(), 9);
-            }
-        }
-
-        // enc_labels (9 bytes each)
-        {
-            if (!proofs_doc.HasMember("enc_labels") || !proofs_doc["enc_labels"].IsArray())
-                throw std::runtime_error("enc_labels missing or not an array in signed proofs JSON");
-            const auto& el_arr = proofs_doc["enc_labels"].GetArray();
-            tx.ct_signatures.enc_labels.resize(el_arr.Size());
-            for (rapidjson::SizeType i = 0; i < el_arr.Size(); ++i)
-            {
-                std::vector<uint8_t> bin = hex_decode(el_arr[i].GetString());
-                if (bin.size() != 9)
-                    throw std::runtime_error("enc_label must decode to 9 bytes");
-                memcpy(tx.ct_signatures.enc_labels[i].data(), bin.data(), 9);
-            }
-        }
-
-        // pseudoOuts (prunable section for CTTypeFcmpPlusPlusPqc)
-        {
-            tx.ct_signatures.p.pseudoOuts.resize(pseudo_outs_arr.Size());
-            for (rapidjson::SizeType i = 0; i < pseudo_outs_arr.Size(); ++i)
-            {
-                std::vector<uint8_t> bin = hex_decode(pseudo_outs_arr[i].GetString());
-                memcpy(tx.ct_signatures.p.pseudoOuts[i].bytes, bin.data(), 32);
-            }
-        }
-
-        // FCMP++ proof blob
-        tx.ct_signatures.p.fcmp_pp_proof.assign(fcmp_proof.begin(), fcmp_proof.end());
-
-        // PQC auth via FFI
-        {
-            ShekylPqcAuthResult pqc_auth_result = shekyl_sign_pqc_auth(
-                scanned.combined_ss,
-                input_output_index,
-                tx_prefix_hash, 32);
-            EXPECT_TRUE(pqc_auth_result.success)
-                << "DEBUG: shekyl_sign_pqc_auth failed";
-
-            cryptonote::pqc_authentication auth{};
-            auth.auth_version = 1;
-            auth.scheme_id = 0;
-            auth.flags = 0;
-            auth.hybrid_public_key.assign(
-                pqc_auth_result.hybrid_public_key.ptr,
-                pqc_auth_result.hybrid_public_key.ptr + pqc_auth_result.hybrid_public_key.len);
-            auth.hybrid_signature.assign(
-                pqc_auth_result.signature.ptr,
-                pqc_auth_result.signature.ptr + pqc_auth_result.signature.len);
-            shekyl_pqc_auth_result_free(&pqc_auth_result);
-            tx.pqc_auths.push_back(std::move(auth));
-        }
-
-        memwipe(tx_secret, 32);
-        memwipe(change_tx_secret, 32);
+        if (!cryptonote::parse_and_validate_tx_from_blob(blob, tx))
+            throw std::runtime_error{"the live-oracle spend does not parse"};
         return tx;
     }
 }
@@ -678,13 +157,13 @@ TEST(JsonSerialization, FcmpPlusPlusTransaction)
     const auto tx = test::make_fcmp_transaction();
 
     EXPECT_EQ(tx.version, 3u) << "DEBUG: version mismatch";
-    EXPECT_EQ(tx.vin.size(), 1u) << "DEBUG: input count mismatch";
-    EXPECT_EQ(tx.vout.size(), 1u) << "DEBUG: output count mismatch";
+    EXPECT_EQ(tx.vin.size(), 6u) << "DEBUG: input count mismatch";
+    EXPECT_EQ(tx.vout.size(), 2u) << "DEBUG: output count mismatch";
     EXPECT_EQ(tx.ct_signatures.type, ct::CTTypeFcmpPlusPlusPqc)
         << "DEBUG: rct type mismatch, got " << (int)tx.ct_signatures.type;
     EXPECT_FALSE(tx.ct_signatures.p.fcmp_pp_proof.empty())
         << "DEBUG: FCMP++ proof blob is empty";
-    EXPECT_EQ(tx.pqc_auths.size(), 1u) << "DEBUG: pqc_auths count mismatch";
+    EXPECT_EQ(tx.pqc_auths.size(), tx.vin.size()) << "DEBUG: pqc_auths count mismatch";
     EXPECT_FALSE(tx.pqc_auths[0].hybrid_public_key.empty())
         << "DEBUG: pqc_auth hybrid_public_key is empty";
     EXPECT_FALSE(tx.pqc_auths[0].hybrid_signature.empty())

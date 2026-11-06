@@ -577,6 +577,12 @@ pub enum CommitOutcome {
 /// The engine's seam to pool/blockchain state (§3.2). See the module docs
 /// for the reversion shape.
 pub trait SubmitStateShim {
+    /// The id of the network this node is on. Every submission's
+    /// signatures are judged under it (CEN-I17, `NETWORK_IDENTITY.md`
+    /// NI-Q4), the release pre-gate's included, which runs before any
+    /// snapshot.
+    fn network_id(&self) -> shekyl_network::NetworkId;
+
     /// Phase B: one short pool→blockchain lock scope, reads only (§4.1).
     ///
     /// `bond_probe` is `Some` for a bond-post submission and names which
@@ -632,6 +638,10 @@ pub trait SubmitStateShim {
 // shape; without this, every out-of-crate implementor hits the orphan rule
 // wrapping its mock in `Arc`.
 impl<T: SubmitStateShim + ?Sized> SubmitStateShim for std::sync::Arc<T> {
+    fn network_id(&self) -> shekyl_network::NetworkId {
+        (**self).network_id()
+    }
+
     fn snapshot_facts(
         &self,
         txid: &TxHash,

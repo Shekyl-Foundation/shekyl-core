@@ -71,6 +71,7 @@ async fn every_captured_body_passes_the_doors_consensus_halves_against_its_paren
                     &view,
                     &KeyImages::default(),
                     &rule_set,
+                    &rules.trust().network_id(),
                     &AdmissionPolicy::GENESIS,
                     None,
                 )

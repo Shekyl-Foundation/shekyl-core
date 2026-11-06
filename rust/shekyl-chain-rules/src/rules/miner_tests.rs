@@ -29,7 +29,7 @@ use crate::harness::{
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule};
 use crate::trust::Trust;
-use crate::validate::{form, form_judged, validate};
+use crate::validate::{form, form_judged, validate, FormClaims};
 use crate::verdict::{ChainValid, Locus, TxSlot, Verdict};
 use crate::view::{RecordedBlock, Tip};
 use crate::{form_header, judge_header};
@@ -51,11 +51,14 @@ fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
     let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -768,11 +771,14 @@ fn a_g2_failure_is_refused_before_any_longhash() {
     };
     match form(
         unpaired.clone(),
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(&chain),
+            target: expected_target(&chain, &RuleSet::GENESIS),
+            references: &expected_references(&chain, &unpaired),
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &no_hash,
-        expected_seed(&chain),
-        expected_target(&chain, &RuleSet::GENESIS),
-        &expected_references(&chain, &unpaired),
         FormAttempt::FIRST,
     ) {
         Ok(Err(refused)) => assert_eq!(refused.rule, CenRow::G2),
@@ -847,11 +853,14 @@ fn same_body_row(chain: &MockChain, candidate: Candidate, row: CenRow) {
     };
     match form(
         candidate.clone(),
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed,
+            target,
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &no_hash,
-        seed,
-        target,
-        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Err(refused)) => assert_eq!(refused.rule, row, "form"),
@@ -875,7 +884,7 @@ fn same_body_row(chain: &MockChain, candidate: Candidate, row: CenRow) {
             Ok(judged) => judged,
             Err(refused) => panic!("{row:?}: judge_header refused: {refused}"),
         };
-        match form_judged(candidate, &judged, &references) {
+        match form_judged(candidate, &judged, &references, &crate::HARNESS_NETWORK_ID) {
             Err(refused) => assert_eq!(refused.rule, row, "form_judged"),
             Ok(_) => panic!("{row:?}: form_judged accepted"),
         }

@@ -114,8 +114,8 @@ const ROWS: [CenRow; 3] = [J4::ROW, J5::ROW, J6::ROW];
 /// # Errors
 ///
 /// The view's fault, from the record read.
-pub(crate) fn judge_serve_credit_bond<'id, V: ChainView<'id>>(
-    cx: &TxContext<'_>,
+pub(crate) fn judge_serve_credit_bond<'id, N, V: ChainView<'id>>(
+    cx: &TxContext<'_, N>,
     view: &V,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<()>, V::Fault> {
@@ -385,8 +385,8 @@ const POST_ROWS: [CenRow; 5] = [J13::ROW, J14::ROW, J15::ROW, J16::ROW, J18::ROW
 /// J16's serving reads; [`ViewRead::Corrupt`] from J15's predicate when
 /// the fold counts a shard closed that no height closed
 /// ([`crate::Corrupt::ShardCloseUnplaced`]).
-pub(crate) fn judge_bond_post<'id, V: ChainView<'id>>(
-    cx: &TxContext<'_>,
+pub(crate) fn judge_bond_post<'id, N, V: ChainView<'id>>(
+    cx: &TxContext<'_, N>,
     view: &V,
     rule_set: &RuleSet,
     coverage: &mut RuleCoverage,

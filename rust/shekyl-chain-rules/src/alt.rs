@@ -314,7 +314,7 @@ impl<'id, V> AltValid<'id, V> {
 /// [`Fault::View`] on the view's own fault; [`Fault::Corrupt`] when the
 /// stitched chain is not the chain it claims (a hole below the parent, a
 /// non-monotone cumulative difficulty); [`Fault::Stale`] when `formed`'s
-/// rule set, seed or target is not this view's.
+/// rule set, network, seed or target is not this view's.
 pub fn alt_against<'id, H: AltChainView<'id>>(
     formed: StructurallyValid,
     alt_view: &H,
@@ -325,6 +325,14 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
         return Err(Fault::Stale(Stale::RuleSet {
             formed_under: Box::new(formed.rule_set()),
             in_force: Box::new(*rule_set),
+            retry: formed.attempt().next(),
+        }));
+    }
+    let network = formed.network_id();
+    if network != trust.network_id() {
+        return Err(Fault::Stale(Stale::Network {
+            formed_under: network,
+            in_force: trust.network_id(),
             retry: formed.attempt().next(),
         }));
     }

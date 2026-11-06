@@ -55,6 +55,7 @@
 //! [`SubmitStateShim::relay`] hands the committed bytes to the node's
 //! nudge. The engine calls it only after [`CommitOutcome::Committed`].
 
+use shekyl_network::NetworkId;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use shekyl_archival_retention::{
@@ -170,6 +171,9 @@ pub struct RustPoolShim<C> {
     nudge: Option<RelayNudge>,
     /// Set by the node: ids that left the pool on this commit.
     departed: Option<PoolDeparted>,
+    /// The id of the node's network: a submission's signatures are judged
+    /// under it (`NETWORK_IDENTITY.md` NI-Q4).
+    network: NetworkId,
 }
 
 impl<C: Clone> Clone for RustPoolShim<C> {
@@ -182,6 +186,7 @@ impl<C: Clone> Clone for RustPoolShim<C> {
             retire: self.retire.clone(),
             nudge: self.nudge.clone(),
             departed: self.departed.clone(),
+            network: self.network,
         }
     }
 }
@@ -194,15 +199,16 @@ impl<C> core::fmt::Debug for RustPoolShim<C> {
 
 impl<C: ChainSource> RustPoolShim<C> {
     /// The shim over `chain` and the node's `pool`, admitting under
-    /// `policy`, with `clock` the wall clock an admission is stamped by.
-    /// The pool is the one the ingest service holds, not a second one over
-    /// the same file.
+    /// `policy`, with `clock` the wall clock an admission is stamped by,
+    /// on the network whose id is `network`. The pool is the one the ingest
+    /// service holds, not a second one over the same file.
     #[must_use]
     pub fn new(
         chain: C,
         pool: Arc<Mutex<Pool>>,
         policy: AdmissionPolicy,
         clock: fn() -> UnixSeconds,
+        network: NetworkId,
     ) -> Self {
         Self {
             chain,
@@ -212,6 +218,7 @@ impl<C: ChainSource> RustPoolShim<C> {
             retire: None,
             nudge: None,
             departed: None,
+            network,
         }
     }
 
@@ -591,6 +598,10 @@ fn gather(
 }
 
 impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
+    fn network_id(&self) -> NetworkId {
+        self.network
+    }
+
     fn snapshot_facts(
         &self,
         txid: &TxHash,
@@ -635,10 +646,17 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
         // guards the view-bound half alone (the review of #1102, S1). Every
         // submit pays it, a duplicate the pool holds unpublished included,
         // so a concealed answer costs what a fresh accept does (B2).
+        let network = self.network;
         let prior = self
             .chain
             .read(|snapshot, rule_set| {
-                stateless(&parsed.tx, &SnapshotView::new(snapshot), rule_set, None)
+                stateless(
+                    &parsed.tx,
+                    &SnapshotView::new(snapshot),
+                    rule_set,
+                    &network,
+                    None,
+                )
             })
             .ok()
             .and_then(Result::ok)

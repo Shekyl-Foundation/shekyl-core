@@ -36,6 +36,7 @@ impl RunEnd {
             | RunFault::StaleTarget { .. }
             | RunFault::StaleReference { .. }
             | RunFault::StaleRuleSet { .. }
+            | RunFault::StaleNetwork { .. }
             | RunFault::HeightClaim { .. }
             | RunFault::NoNextHeight { .. }
             | RunFault::RewindTarget { .. }
@@ -144,6 +145,20 @@ pub enum RunFault {
     StaleRuleSet {
         /// The connecting height.
         height: BlockHeight,
+    },
+    /// `form` bound signatures under a network id other than the one
+    /// `validate` was given. A driver defect, the same class as
+    /// [`Self::StaleRuleSet`]; the writer stays up.
+    #[error("driver defect: network id handed to form at height {height} was {formed_under:?}, validate holds {in_force:?} ({retry:?})")]
+    StaleNetwork {
+        /// The connecting height.
+        height: BlockHeight,
+        /// What `form` bound.
+        formed_under: shekyl_network::NetworkId,
+        /// What `validate` was given.
+        in_force: shekyl_network::NetworkId,
+        /// What the validator would allow next.
+        retry: Retry,
     },
     /// The source's height for an `Extend` is not the height the chain
     /// connects at (`tip + 1` on the batch's view). Nothing is judged: the
@@ -274,6 +289,16 @@ pub(crate) fn fault_reply(
             retry,
         },
         Fault::Stale(Stale::RuleSet { .. }) => RunFault::StaleRuleSet { height },
+        Fault::Stale(Stale::Network {
+            formed_under,
+            in_force,
+            retry,
+        }) => RunFault::StaleNetwork {
+            height,
+            formed_under,
+            in_force,
+            retry,
+        },
     }
 }
 

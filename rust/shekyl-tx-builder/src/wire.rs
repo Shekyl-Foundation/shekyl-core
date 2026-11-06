@@ -9,6 +9,7 @@
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
+use shekyl_network::NetworkId;
 use shekyl_types::{BlockHash, PrefixHash, SigningPayloadHash};
 use shekyl_wire::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth as WirePqcAuth, Prunable, Transaction, TxPrefix,
@@ -137,7 +138,7 @@ fn wire_outputs(
 /// C++ daemon: the version is part of the prefix hash, `reference_block` is a 32-byte
 /// hash in the *base*, the prunable is `nbp ‖ bp+ ‖ tree_depth ‖ proof ‖ pseudoOuts`, and
 /// the pqc_header uses a varint public-key length.
-fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError> {
+pub(crate) fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError> {
     // Enforce the wire arity couplings up front: the committed-base arrays are per-output
     // and pqc_auths / pseudo_outs are per-input (the invariants `Transaction::validate`
     // assumes). A mismatch would otherwise serialize a tx only the daemon (or
@@ -287,14 +288,17 @@ fn prefix_only_tx(
     })
 }
 
-/// Per-input PQC signing-preimage hashes — delegates to the canonical
+/// Per-input PQC signing-preimage hashes on the network whose id is
+/// `network` — delegates to the canonical
 /// [`shekyl_wire::Transaction::pqc_signing_payload_hashes`]
-/// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1). Typed to the signing call: the
-/// hash degrades to bytes only where the primitive takes its message.
+/// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1; `NETWORK_IDENTITY.md` NI-Q4).
+/// Typed to the signing call: the hash degrades to bytes only where the
+/// primitive takes its message.
 pub fn phase1_payload_hashes(
     input: &WireEncodeInput,
+    network: &NetworkId,
 ) -> Result<Vec<SigningPayloadHash>, TxBuilderError> {
-    Ok(build_wire_tx(input)?.pqc_signing_payload_hashes())
+    Ok(build_wire_tx(input)?.pqc_signing_payload_hashes(network))
 }
 
 /// Assemble and serialize the final signed transaction via the canonical
@@ -383,6 +387,9 @@ pub fn tx_prefix_hash_from_parts_with_extra(
 
 #[cfg(test)]
 mod tests {
+    /// Any network's id: the builder hashes under the id it is given.
+    const TEST_NETWORK_ID: NetworkId = [7; 16];
+
     use super::*;
     use shekyl_bulletproofs::Bulletproof;
 
@@ -395,8 +402,8 @@ mod tests {
             view_tags: vec![Some(3)],
             tx_extra: vec![1, 2, 3],
             fee: 1_000,
-            enc_amounts: vec![crate::tests::enc_field_fixture([0u8; 9])],
-            enc_labels: vec![crate::tests::enc_field_fixture([0u8; 9])],
+            enc_amounts: vec![crate::tests::enc_fields().0],
+            enc_labels: vec![crate::tests::enc_fields().1],
             out_commitments: vec![[4u8; 32]],
             pseudo_outs: vec![[5u8; 32]],
             bulletproof: Bulletproof::prove_plus(
@@ -432,7 +439,7 @@ mod tests {
     #[test]
     fn phase1_payload_hashes_len_matches_inputs() {
         let input = minimal_input();
-        let hashes = phase1_payload_hashes(&input).expect("hashes");
+        let hashes = phase1_payload_hashes(&input, &TEST_NETWORK_ID).expect("hashes");
         assert_eq!(hashes.len(), input.key_images.len());
     }
 
@@ -515,8 +522,8 @@ mod tests {
         let tx = Transaction::from_bytes(&bytes).expect("encoded tx must re-parse");
 
         assert_eq!(
-            phase1_payload_hashes(&input).expect("hashes"),
-            tx.pqc_signing_payload_hashes(),
+            phase1_payload_hashes(&input, &TEST_NETWORK_ID).expect("hashes"),
+            tx.pqc_signing_payload_hashes(&TEST_NETWORK_ID),
             "delegated phase-1 hashes must match the encoded tx's signing hashes"
         );
         assert_eq!(
@@ -568,8 +575,8 @@ mod tests {
         assert_eq!(tx.prefix.inputs.len(), 2);
         assert!(matches!(tx.prefix.inputs[1], Input::BondPost(_)));
         assert_eq!(
-            phase1_payload_hashes(&input).expect("hashes"),
-            tx.pqc_signing_payload_hashes()
+            phase1_payload_hashes(&input, &TEST_NETWORK_ID).expect("hashes"),
+            tx.pqc_signing_payload_hashes(&TEST_NETWORK_ID)
         );
         assert_eq!(tx_prefix_hash_for_signing(&input), tx.prefix_hash());
         assert_eq!(
@@ -690,9 +697,7 @@ mod tests {
         // A per-output base array out of step with the output count must fail at the
         // boundary, not serialize a tx the daemon later rejects.
         let mut input = minimal_input();
-        input
-            .enc_amounts
-            .push(crate::tests::enc_field_fixture([0u8; 9])); // 2 enc_amounts vs 1 output
+        input.enc_amounts.push(crate::tests::enc_fields().0); // 2 enc_amounts vs 1 output
         assert!(matches!(
             encode_final_tx(&input),
             Err(TxBuilderError::WireError(_))

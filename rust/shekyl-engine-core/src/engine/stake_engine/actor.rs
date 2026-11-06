@@ -70,6 +70,10 @@ pub(crate) struct StakeEngine {
     /// see the field docs there). Feature-gated out of default builds.
     #[cfg(feature = "gf7-hooks")]
     pub(crate) observer: Box<dyn BroadcastTimelineObserver>,
+    /// The id of the network the wallet's personas are on: every spend this
+    /// engine assembles (bond post, emission claim, drain) signs under it
+    /// (`NETWORK_IDENTITY.md` NI-Q4).
+    pub(crate) network: shekyl_network::NetworkId,
 }
 
 impl StakeEngine {
@@ -577,6 +581,7 @@ impl Actor for StakeEngine {
             watch_quarantine: BTreeSet::new(),
             #[cfg(feature = "gf7-hooks")]
             observer: args.observer,
+            network: args.network,
         })
     }
 

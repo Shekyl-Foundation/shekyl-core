@@ -19,8 +19,9 @@ use shekyl_chain_rules::harness::fixture::{coinbase_extra, TWO_G};
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{
     bind_body, form, form_header, form_judged, judge_header, judge_header_cheap, seed_height,
-    target_claim, validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, GenesisPin,
-    HeaderView, OpenHeader, ProspectFault, ReferenceClaims, RuleSet, Stale, Target, Trust,
+    target_claim, validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, FormClaims,
+    GenesisPin, HeaderView, OpenHeader, ProspectFault, ReferenceClaims, RuleSet, Stale, Target,
+    Trust,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{StoreError, WriteBatch};
@@ -140,11 +141,14 @@ fn validate_said<'id, V: ChainView<'id, Fault = StoreError>>(
         ReferenceClaims::from_headers(view, connecting(view), &candidate).expect("references");
     match form(
         candidate,
-        rule_set,
+        &FormClaims {
+            rule_set,
+            seed,
+            target,
+            references: &references,
+            network: trust.network_id(),
+        },
         substrate,
-        seed,
-        target,
-        &references,
         FormAttempt::FIRST,
     )
     .expect("the mock answers")
@@ -236,11 +240,14 @@ fn the_header_path_agrees_with_validate_on_every_captured_block() {
                         .expect("references");
                     let formed = form(
                         candidate.clone(),
-                        &rule_set,
+                        &FormClaims {
+                            rule_set: &rule_set,
+                            seed,
+                            target,
+                            references: &references,
+                            network: rules.trust().network_id(),
+                        },
                         substrate.as_ref(),
-                        seed,
-                        target,
-                        &references,
                         FormAttempt::FIRST,
                     )
                     .expect("the mock answers")
@@ -347,11 +354,14 @@ fn at_first_later_block(
                     ReferenceClaims::from_headers(&view, height, candidate).expect("references");
                 let formed = form(
                     candidate.clone(),
-                    &rule_set,
+                    &FormClaims {
+                        rule_set: &rule_set,
+                        seed,
+                        target,
+                        references: &references,
+                        network: rules.trust().network_id(),
+                    },
                     substrate.as_ref(),
-                    seed,
-                    target,
-                    &references,
                     FormAttempt::FIRST,
                 )
                 .expect("mock")
@@ -689,11 +699,14 @@ fn bind_body_agrees_with_validate() {
                         .expect("references");
                     let formed = form(
                         candidate.clone(),
-                        &rule_set,
+                        &FormClaims {
+                            rule_set: &rule_set,
+                            seed,
+                            target,
+                            references: &references,
+                            network: rules.trust().network_id(),
+                        },
                         substrate.as_ref(),
-                        seed,
-                        target,
-                        &references,
                         FormAttempt::FIRST,
                     )
                     .expect("mock")
@@ -898,11 +911,14 @@ fn appended_bytes_are_not_the_transaction() {
                     ReferenceClaims::from_headers(&view, height, candidate).expect("references");
                 let formed = form(
                     candidate.clone(),
-                    &rule_set,
+                    &FormClaims {
+                        rule_set: &rule_set,
+                        seed,
+                        target,
+                        references: &references,
+                        network: rules.trust().network_id(),
+                    },
                     substrate.as_ref(),
-                    seed,
-                    target,
-                    &references,
                     FormAttempt::FIRST,
                 )
                 .expect("mock")
@@ -996,11 +1012,14 @@ fn a_longhash_the_target_refuses_is_d1_on_both_paths() {
                 ReferenceClaims::from_headers(&view, height, &chain[0]).expect("references");
             match form(
                 chain[0].clone(),
-                &rule_set,
+                &FormClaims {
+                    rule_set: &rule_set,
+                    seed,
+                    target,
+                    references: &references,
+                    network: rules.trust().network_id(),
+                },
                 &substrate,
-                seed,
-                target,
-                &references,
                 FormAttempt::FIRST,
             )
             .expect("the mock answers")
@@ -1046,17 +1065,25 @@ fn a_judged_header_forms_the_block_without_hashing() {
                         .expect("references");
                     let from_bytes = form(
                         candidate.clone(),
-                        &rule_set,
+                        &FormClaims {
+                            rule_set: &rule_set,
+                            seed,
+                            target,
+                            references: &references,
+                            network: rules.trust().network_id(),
+                        },
                         substrate.as_ref(),
-                        seed,
-                        target,
-                        &references,
                         FormAttempt::FIRST,
                     )
                     .expect("mock")
                     .expect("forms from bytes");
-                    let from_header = form_judged(candidate.clone(), &judged, &references)
-                        .expect("forms from the header");
+                    let from_header = form_judged(
+                        candidate.clone(),
+                        &judged,
+                        &references,
+                        &rules.trust().network_id(),
+                    )
+                    .expect("forms from the header");
                     assert_eq!(from_header.coverage(), from_bytes.coverage());
                     assert_eq!(from_header.rule_set(), from_bytes.rule_set());
                     assert_eq!(from_header.seed(), from_bytes.seed());
