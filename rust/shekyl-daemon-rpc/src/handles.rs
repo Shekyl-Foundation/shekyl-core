@@ -216,14 +216,28 @@ pub trait MiningFacts: Send + Sync {
     fn template(&self) -> Result<Result<PostedTemplate, Diagnostic>, FactsFault>;
 
     /// Start the built-in miner with `threads` workers, or the host's
-    /// parallelism. The inner error is the node's refusal. Joins nothing,
-    /// but spawns threads: a caller on a runtime calls it from a blocking
-    /// thread.
+    /// parallelism. It searches every posted job. The inner error is the
+    /// node's refusal. Joins nothing, but spawns threads: a caller on a
+    /// runtime calls it from a blocking thread.
     ///
     /// # Errors
     ///
     /// [`FactsFault::NotReady`] when no mining control was supplied.
     fn start(&self, threads: Option<NonZeroUsize>) -> Result<Result<(), Diagnostic>, FactsFault>;
+
+    /// Start the built-in miner searching no block above `height`. The
+    /// thread count is [`Self::start`] with `None`. A miner already
+    /// running is a refusal, and that miner is left as it is. When its
+    /// search covers `height`, the diagnostic is `mine.running` and the
+    /// caller may wait. When it does not, the diagnostic is
+    /// `mine.bound_short`: waiting would not reach `height`. This call
+    /// does not bound a miner it did not start. Joins nothing, but spawns
+    /// threads: a caller on a runtime calls it from a blocking thread.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn start_until(&self, height: BlockHeight) -> Result<Result<(), Diagnostic>, FactsFault>;
 
     /// Stop the built-in miner; `false` when it was not running. The node
     /// keeps running. Joins the workers, which can be mid-hash: a caller on
@@ -573,6 +587,10 @@ impl MiningFacts for MiningAbsent {
     }
 
     fn start(&self, _threads: Option<NonZeroUsize>) -> Result<Result<(), Diagnostic>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn start_until(&self, _height: BlockHeight) -> Result<Result<(), Diagnostic>, FactsFault> {
         Err(FactsFault::NotReady)
     }
 
