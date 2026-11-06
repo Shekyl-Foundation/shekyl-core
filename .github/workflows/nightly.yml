@@ -280,6 +280,8 @@ jobs:
     # Same matrix as above. The set is read from the checked-out ref's
     # scripts/ci/ignored_set_chain_ingest.sh, so each leg is judged by its
     # own tree; `workflow_dispatch` with `ref` proves one branch's set.
+    # Each PR's Rust job runs the same script with `--check`, the agreement
+    # alone, so a PR that changes the set is stopped in its own CI.
     runs-on: ubuntu-latest
     timeout-minutes: 240
     strategy:

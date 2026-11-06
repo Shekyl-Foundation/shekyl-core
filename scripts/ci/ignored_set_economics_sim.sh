@@ -28,9 +28,15 @@
 # shown; no verdict travels through a pipe, and every pipe below carries
 # data to a consumer that reads to the end of its input.
 #
+# The per-PR Rust job runs this script with `--check`, which stops after
+# that judgement (ignored_set_mode.sh), so a new ignored test is decided in
+# the PR that adds it rather than after the next night's run.
+#
 # The crate is a binary with no library target: the tests are in
 # `--bin shekyl-economics-sim`.
 set -euo pipefail
+. "$(dirname "$0")/ignored_set_mode.sh"
+ignored_set_mode "$@"
 cd "$(dirname "$0")/../../rust"
 branch="${BRANCH:-the checked-out ref}"
 
@@ -51,7 +57,10 @@ if [ "$want" -eq 0 ]; then
   exit 1
 fi
 
-listing=$(cargo test --locked --release -p shekyl-economics-sim --bin shekyl-economics-sim -- --list --ignored)
+if [ "$check" -eq 1 ]; then
+  refuse_profile_gated_tests shekyl-economics-sim
+fi
+listing=$(cargo test --locked "${profile[@]}" -p shekyl-economics-sim --bin shekyl-economics-sim -- --list --ignored)
 # Both sides are sorted in this one environment, so the compare is
 # locale-independent either way; LC_ALL=C makes the printed listing the
 # same on every runner.
@@ -65,6 +74,10 @@ if [ "$found" != "$expected" ]; then
   printf '%s\n' "$found"
   echo "Decide in scripts/ci/ignored_set_economics_sim.sh whether each new ignored test is run here or is a regeneration helper."
   exit 1
+fi
+if [ "$check" -eq 1 ]; then
+  echo "shekyl-economics-sim ignored set: ${want} test(s) run and the regeneration helpers, exactly the listed set"
+  exit 0
 fi
 
 START=$(date +%s)

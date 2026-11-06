@@ -35,9 +35,14 @@
 # fails here by name; and every ignored test in the listing must be below,
 # so a new `#[ignore]` stops the lane by name until it is added here (or
 # made a non-ignored test). Either refusal comes before anything runs.
+# The per-PR Rust job runs this script with `--check`, which stops after
+# that judgement (ignored_set_mode.sh), so the refusal lands in the PR that
+# caused it rather than in the next night's run.
 # Rule 46: the listing is captured once and judged; no verdict travels
 # through a pipe that can end early; the run's own exit is the verdict.
 set -euo pipefail
+. "$(dirname "$0")/ignored_set_mode.sh"
+ignored_set_mode "$@"
 cd "$(dirname "$0")/../../rust"
 branch="${BRANCH:-the checked-out ref}"
 
@@ -66,7 +71,10 @@ subjects=(
   'vectors_tests::replays_every_captured_chain_under_the_production_substrate'
 )
 
-list=$(cargo test --locked --release -p shekyl-chain-ingest --features pipeline --lib -- --list --ignored)
+if [ "$check" -eq 1 ]; then
+  refuse_profile_gated_tests shekyl-chain-ingest
+fi
+list=$(cargo test --locked "${profile[@]}" -p shekyl-chain-ingest --features pipeline --lib -- --list --ignored)
 listed=$(sed -n 's/: test$//p' <<< "$list")
 
 missing=0
@@ -94,6 +102,9 @@ if [ "$missing" -ne 0 ] || [ "$extra" -ne 0 ]; then
   exit 1
 fi
 echo "shekyl-chain-ingest ignored set: ${#subjects[@]} test(s), exactly the listed set"
+if [ "$check" -eq 1 ]; then
+  exit 0
+fi
 
 START=$(date +%s)
 cargo test --locked --release -p shekyl-chain-ingest --features pipeline --lib -- --ignored --nocapture
