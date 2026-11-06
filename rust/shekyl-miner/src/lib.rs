@@ -34,6 +34,10 @@
 //!   refused when it is not this network's, or carries no KEM key a coinbase
 //!   can pay.
 //! - **The thread count** is a [`NonZeroUsize`](std::num::NonZeroUsize).
+//! - **The search bound** is a [`SearchBound`]. [`SearchBound::Unbounded`]
+//!   searches every posted job. [`SearchBound::Until`] leaves a job above
+//!   its height unhashed and waits for a newer posting. That is how far
+//!   the one mining mode searches, not a second mode.
 //!
 //! # The loop
 //!
@@ -89,5 +93,7 @@ pub use address::{MiningAddress, MiningAddressRefused};
 pub use drain::{DrainGate, Draining};
 pub use found::{found_blocks, Found, FoundBlocks, FoundInbox, FoundWait};
 pub use job::{Generation, Job, JobBoard, ListedBody};
-pub use miner::{Miner, MinerConfig, MinerStartRefused, MinerStatus, MinerStop, PreparedMiner};
+pub use miner::{
+    Miner, MinerConfig, MinerStartRefused, MinerStatus, MinerStop, PreparedMiner, SearchBound,
+};
 pub use rate::{HashRate, RATE_WINDOW};
