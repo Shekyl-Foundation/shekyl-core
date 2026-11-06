@@ -89,7 +89,7 @@ fn build_paid_to_self(
         enc_label: constructed.enc_label_bytes(),
         label_tag_on_chain: constructed.label_tag(),
         output_index,
-        tx_hash,
+        tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
     };
     (input, amount)
 }
@@ -295,7 +295,7 @@ async fn try_claim_output_for_derived_spend_point_returns_not_mine() {
         enc_label: constructed.enc_label_bytes(),
         label_tag_on_chain: constructed.label_tag(),
         output_index: 0,
-        tx_hash: [0u8; 32],
+        tx_hash: shekyl_types::TxHash::from_bytes([0u8; 32]),
     };
 
     let result = keys.try_claim_output(&input).await.unwrap();
@@ -1122,10 +1122,10 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             &key_images,
             &signed_engine.pseudo_outs,
             &pqc_pk_hashes,
-            tree.tree_root.as_bytes(),
+            &tree.tree_root,
             tree.tree_depth,
             // The message the proof was made over (the signing envelope §2.2).
-            signed_engine.tx_signable.to_bytes(),
+            signed_engine.tx_signable,
         );
         assert!(
             matches!(result, Ok(true)),
@@ -1406,9 +1406,9 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
                 &key_images,
                 &signed.pseudo_outs,
                 &pqc_pk_hashes,
-                tree.tree_root.as_bytes(),
+                &tree.tree_root,
                 tree.tree_depth,
-                signed.tx_signable.to_bytes(),
+                signed.tx_signable,
             ),
             Ok(true)
         ),

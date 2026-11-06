@@ -154,6 +154,8 @@ ShekylPqcSignatureResult shekyl_pqc_sign_multisig_participant(
 /// deleted group_id, so verify is a 9-check pipeline. 9 is left as a gap; 10/11
 /// keep their values (not renumbered).
 /// For scheme_id 1 (single-signer), only codes 10 and 11 apply.
+/// message/message_len: the input's 64-byte signing payload hash; any other
+/// length is not one and returns 11.
 /// See rust/shekyl-crypto-pq/src/error.rs PqcVerifyError for canonical definitions.
 uint8_t shekyl_pqc_verify(
     uint8_t scheme_id,

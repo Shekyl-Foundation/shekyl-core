@@ -239,7 +239,13 @@ pub extern "C" fn shekyl_pqc_verify(
     // (CEN-I18): the scheme dispatch and the Rust-owned tx-auth domain
     // (SA-R-2; C++ passes no domain) live in `verify_pqc_auth`, and the
     // discriminant it returns is the code this ABI has always exported.
-    match shekyl_crypto_pq::signature::verify_pqc_auth(scheme_id, pk_bytes, sig_bytes, msg) {
+    // The message is the input's 64-byte signing payload hash; any other
+    // length is not one, and fails as a parse.
+    let Ok(msg) = <[u8; 64]>::try_from(msg) else {
+        return 11;
+    };
+    let msg = shekyl_types::SigningPayloadHash::from_bytes(msg);
+    match shekyl_crypto_pq::signature::verify_pqc_auth(scheme_id, pk_bytes, sig_bytes, &msg) {
         Ok(()) => 0,
         Err(e) => e as u8,
     }

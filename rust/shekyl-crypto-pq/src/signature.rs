@@ -47,6 +47,7 @@ use ed25519_dalek::{
 use fips204::ml_dsa_65;
 use fips204::traits::{SerDes as _, Signer as _, Verifier as _};
 use serde::{Deserialize, Serialize};
+use shekyl_types::SigningPayloadHash;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub const HYBRID_KEY_VERSION: u8 = 1;
@@ -499,7 +500,9 @@ impl SignatureScheme for HybridEd25519MlDsa {
 /// Anything else is [`PqcVerifyError::SchemeMismatch`]. Structural pins on
 /// the slot's *other* fields (`auth_version`, `flags`) are the wire's
 /// business (CEN-I16), not this function's: it is given the three blobs and
-/// the message and answers whether the signature is valid for them.
+/// the message and answers whether the signature is valid for them. The
+/// message is the input's [`SigningPayloadHash`] by type: that is what binds
+/// the slot to its network (`DOMAIN_BINDING_RATCHET.tsv`).
 ///
 /// `Result<()>`, never `Result<bool>` (SA-R-1): there is no `Ok(false)` to
 /// mishandle. The error is the discriminant the FFI has always exported —
@@ -513,7 +516,7 @@ pub fn verify_pqc_auth(
     scheme_id: u8,
     public_key: &[u8],
     signature: &[u8],
-    message: &[u8],
+    message: &SigningPayloadHash,
 ) -> Result<(), PqcVerifyError> {
     match scheme_id {
         HYBRID_SCHEME_ID_ED25519_ML_DSA_65 => {
@@ -522,7 +525,12 @@ pub fn verify_pqc_auth(
             let signature = HybridSignature::from_canonical_bytes(signature)
                 .map_err(|_| PqcVerifyError::DeserializationFailed)?;
             HybridEd25519MlDsa
-                .verify(&public_key, SCHEME_DOMAIN_PQC_AUTH_TX, message, &signature)
+                .verify(
+                    &public_key,
+                    SCHEME_DOMAIN_PQC_AUTH_TX,
+                    message.as_bytes(),
+                    &signature,
+                )
                 .map_err(|_| PqcVerifyError::CryptoVerifyFailed)
         }
         crate::multisig::HYBRID_SCHEME_ID_MULTISIG => {
@@ -627,7 +635,7 @@ mod tests {
     fn verify_pqc_auth_dispatches_and_refuses_by_discriminant() {
         let scheme = scheme();
         let (pk, sk) = kp();
-        let msg = [0x5a; 32];
+        let msg = [0x5a; 64];
         let sig = scheme.sign(&sk, SCHEME_DOMAIN_PQC_AUTH_TX, &msg).unwrap();
         let pk_bytes = pk.to_canonical_bytes().unwrap();
         let sig_bytes = sig.to_canonical_bytes().unwrap();
@@ -635,7 +643,7 @@ mod tests {
             HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
             &pk_bytes,
             &sig_bytes,
-            &msg,
+            &SigningPayloadHash::from_bytes(msg),
         )
         .expect("a slot signed under the tx-auth domain verifies");
         assert_eq!(
@@ -643,7 +651,7 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes,
                 &sig_bytes,
-                &[0x5b; 32]
+                &SigningPayloadHash::from_bytes([0x5b; 64])
             ),
             Err(PqcVerifyError::CryptoVerifyFailed),
             "a different message"
@@ -651,7 +659,12 @@ mod tests {
         let mut forged = sig_bytes.clone();
         *forged.last_mut().unwrap() ^= 0x01;
         assert_eq!(
-            verify_pqc_auth(HYBRID_SCHEME_ID_ED25519_ML_DSA_65, &pk_bytes, &forged, &msg),
+            verify_pqc_auth(
+                HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                &pk_bytes,
+                &forged,
+                &SigningPayloadHash::from_bytes(msg)
+            ),
             Err(PqcVerifyError::CryptoVerifyFailed),
             "a well-formed signature that does not verify"
         );
@@ -660,7 +673,7 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes,
                 &sig_bytes[1..],
-                &msg
+                &SigningPayloadHash::from_bytes(msg)
             ),
             Err(PqcVerifyError::DeserializationFailed),
             "a signature that does not parse"
@@ -670,13 +683,18 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes[1..],
                 &sig_bytes,
-                &msg
+                &SigningPayloadHash::from_bytes(msg)
             ),
             Err(PqcVerifyError::DeserializationFailed),
             "a key that does not parse"
         );
         assert_eq!(
-            verify_pqc_auth(0x7f, &pk_bytes, &sig_bytes, &msg),
+            verify_pqc_auth(
+                0x7f,
+                &pk_bytes,
+                &sig_bytes,
+                &SigningPayloadHash::from_bytes(msg)
+            ),
             Err(PqcVerifyError::SchemeMismatch),
             "an unknown scheme"
         );
@@ -690,7 +708,7 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes,
                 &other.to_canonical_bytes().unwrap(),
-                &msg
+                &SigningPayloadHash::from_bytes(msg)
             ),
             Err(PqcVerifyError::CryptoVerifyFailed),
             "another surface's domain"

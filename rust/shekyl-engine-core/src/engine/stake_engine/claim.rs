@@ -435,12 +435,9 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             .map_err(|e| StakeEngineError::from(BondAssemblyError::build("proving", e)))?;
             // Step-7 self-check, backing leg: the landed consensus verifier
             // over the assembled vin (cause-blind on refusal, CB-5).
-            if let Err(e) = emission_vin_verify_backing(
-                &vin,
-                tree.tree_root.as_bytes(),
-                tree.tree_depth,
-                &tx_signable,
-            ) {
+            if let Err(e) =
+                emission_vin_verify_backing(&vin, &tree.tree_root, tree.tree_depth, &tx_signable)
+            {
                 tracing::error!(error = %e, "emission self-check: backing verification failed");
                 return Err(StakeEngineError::EmissionClaim(
                     EmissionClaimError::SelfCheckFailed,

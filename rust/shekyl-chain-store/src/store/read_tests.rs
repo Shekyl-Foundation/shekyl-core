@@ -13,7 +13,7 @@
 //! (`DAEMON_REDB_STORE.md` §3.6.2, the read-side half).
 
 use shekyl_chain_rules::{AtHeight, RuleSet};
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, LongTermWeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
@@ -571,7 +571,7 @@ fn an_empty_file_digests_as_no_hashes_no_spends_and_the_empty_root() {
     let snap = store.begin_read().expect("read");
     assert_eq!(
         snap.logical_state_digest_v0().expect("digest"),
-        crate::digest_v0::digest_v0(&[], &[], CurveTreeRoot::EMPTY.as_bytes())
+        crate::digest_v0::digest_v0(&[], &[], &CurveTreeRoot::EMPTY)
     );
     cleanup(&path);
 }
@@ -595,19 +595,17 @@ fn the_redb_digest_is_the_hasher_over_the_files_three_families() {
     let snap = store.begin_read().expect("read");
     // The spent images are read off the two spends as the chain connected
     // them (one per spend block), not literals that would follow the code.
-    let spent: Vec<[u8; 32]> = connected.iter().flatten().flat_map(key_images).collect();
+    let spent: Vec<KeyImage> = connected
+        .iter()
+        .flatten()
+        .flat_map(key_images)
+        .map(KeyImage::from_bytes)
+        .collect();
     assert_eq!(spent.len(), 2, "one spend per spend block");
-    let by_hand = {
-        let blocks: Vec<[u8; 32]> = hashes.iter().map(|h| *h.as_bytes()).collect();
-        crate::digest_v0::digest_v0(&blocks, &spent, live_root.as_bytes())
-    };
+    let by_hand = crate::digest_v0::digest_v0(&hashes, &spent, &live_root);
     assert_eq!(snap.logical_state_digest_v0().expect("digest"), by_hand);
     // Order-insensitive in the spent family, as the hasher promises.
-    let swapped = crate::digest_v0::digest_v0(
-        &hashes.iter().map(|h| *h.as_bytes()).collect::<Vec<_>>(),
-        &[spent[1], spent[0]],
-        live_root.as_bytes(),
-    );
+    let swapped = crate::digest_v0::digest_v0(&hashes, &[spent[1], spent[0]], &live_root);
     assert_eq!(by_hand, swapped);
     cleanup(&path);
 }

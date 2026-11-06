@@ -101,7 +101,7 @@ use shekyl_curve_io::CompressedPoint;
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof, VerifyError};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_types::archival::ReceiptSignPk;
-use shekyl_types::SigningPayloadHash;
+use shekyl_types::{CurveTreeRoot, SigningPayloadHash};
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 use shekyl_wire::transaction::{
     BondPost as WireBondPost, BondPostKind as WireBondPostKind, Ct, CtBase, Input, PqcAuth,
@@ -922,7 +922,7 @@ fn verify_debit_arm(
 fn fcmp_reference_layers(
     facts: &SubmitFacts,
     prunable: &Prunable,
-) -> Result<([u8; 32], u8), VerifyReject> {
+) -> Result<(CurveTreeRoot, u8), VerifyReject> {
     let reference = facts
         .reference
         .ok_or_else(|| VerifyReject::stale_root("K12: snapshot carries no reference"))?;
@@ -1002,7 +1002,7 @@ fn verify_fcmp(
     parsed: &ParsedSubmission,
     prunable: &Prunable,
     leaf_auths: &[&PqcAuth],
-    tree_root: &[u8; 32],
+    tree_root: &CurveTreeRoot,
     layers: u8,
     network: &NetworkId,
 ) -> Result<(), VerifyReject> {
@@ -1051,8 +1051,7 @@ fn verify_fcmp(
         &pqc_hashes,
         tree_root,
         layers,
-        // Proof-crate boundary: the verifier takes the signable hash as bytes.
-        parsed.tx.tx_signable(network).to_bytes(),
+        parsed.tx.tx_signable(network),
     ) {
         Ok(true) => Ok(()),
         // `verify` never returns `Ok(false)` today (failures are `Err`);
@@ -1178,7 +1177,7 @@ fn verify_pqc_auth_slot(
         auth.scheme_id,
         &auth.hybrid_public_key,
         &auth.hybrid_signature,
-        payload_hash.as_bytes(),
+        payload_hash,
     )
     .map_err(|e| {
         VerifyReject::malformed(match e {

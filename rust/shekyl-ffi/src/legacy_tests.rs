@@ -458,7 +458,8 @@ fn test_pqc_keygen_sign_verify_ffi() {
         assert!(!kp.public_key.ptr.is_null());
         assert!(!kp.secret_key.ptr.is_null());
 
-        let msg = b"ffi hybrid pq signature";
+        // The input's signing payload hash is 64 bytes; nothing else verifies.
+        let msg = [0x6du8; 64];
         let sig = shekyl_pqc_sign(
             kp.secret_key.ptr,
             kp.secret_key.len,
@@ -478,6 +479,19 @@ fn test_pqc_keygen_sign_verify_ffi() {
             msg.len(),
         );
         assert_eq!(result, 0, "expected success (0), got error code {result}");
+
+        // A message that is not 64 bytes is not a signing payload hash: it
+        // fails as a parse (11), before any signature check.
+        let short = shekyl_pqc_verify(
+            1,
+            kp.public_key.ptr,
+            kp.public_key.len,
+            sig.signature.ptr,
+            sig.signature.len,
+            msg.as_ptr(),
+            32,
+        );
+        assert_eq!(short, 11, "a 32-byte message must fail as a parse");
 
         shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
         shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
@@ -523,7 +537,8 @@ fn test_page_size_nonzero() {
 fn test_pqc_verify_rejects_modified_signature() {
     unsafe {
         let kp = shekyl_pqc_keypair_generate();
-        let msg = b"ffi hybrid pq signature";
+        // The input's signing payload hash is 64 bytes; nothing else verifies.
+        let msg = [0x6du8; 64];
         let sig = shekyl_pqc_sign(
             kp.secret_key.ptr,
             kp.secret_key.len,
@@ -546,7 +561,12 @@ fn test_pqc_verify_rejects_modified_signature() {
             msg.as_ptr(),
             msg.len(),
         );
-        assert_ne!(result, 0, "corrupted signature should not verify");
+        // 10 = CryptoVerifyFailed: the message parses, so the refusal is the
+        // signature check's, not the length check's.
+        assert_eq!(
+            result, 10,
+            "corrupted signature should fail the check, got {result}"
+        );
 
         shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
         shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);

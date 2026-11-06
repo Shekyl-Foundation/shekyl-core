@@ -48,7 +48,7 @@ const CENSUS: &str = include_str!("../../../docs/design/CONSENSUS_RULE_CENSUS.md
 
 /// The ratchet's pinned section sizes. Lower a pin when a row leaves; a
 /// raise is a new hole and needs a ruling.
-const INPUT_RAW_EXPECTED: usize = 35;
+const INPUT_RAW_EXPECTED: usize = 17;
 const UNFRAMED_EXPECTED: usize = 2;
 const PENDING_EXPECTED: usize = 7;
 
@@ -296,12 +296,18 @@ fn facts_of(source: &str) -> Result<Facts, String> {
 }
 
 /// Whether `ty` (squashed) is the named type, by value or reference, with
-/// or without a path.
+/// or without a path, or a slice of it (a site that takes a run of block
+/// hashes takes block hashes).
 fn names_type(ty: &str, name: &str) -> bool {
     let bare: String = ty
         .split_whitespace()
         .filter(|t| !matches!(*t, "&" | "mut") && !t.starts_with('\''))
         .collect();
+    let bare = bare
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .filter(|inner| !inner.contains(';'))
+        .unwrap_or(&bare);
     bare == name || bare.ends_with(&format!("::{name}"))
 }
 
@@ -726,10 +732,36 @@ fn control_a_prologue_not_from_the_network_id_is_refused() {
     );
 }
 
+/// A typed row whose site goes back to raw bytes, and is not in the
+/// ratchet, is refused. The source is edited, not the ratchet, so the
+/// control holds when the `input-raw` section is empty.
 #[test]
 fn control_an_untyped_input_row_outside_the_ratchet_is_refused() {
-    let ratchet = RATCHET.replacen("input-raw\tshekyl/archival-draw-v1\t", "#\t", 1);
-    refused_with(REGISTRY, &ratchet, CENSUS, "not in the ratchet");
+    const DRAW: &str = "rust/shekyl-archival-retention/src/secret_draw.rs";
+    let read = |file: &str| {
+        let text = read_tree(file)?;
+        Some(if file == DRAW {
+            text.replace("block_hash: &BlockHash", "block_hash: &[u8; 32]")
+        } else {
+            text
+        })
+    };
+    let bad = check(REGISTRY, RATCHET, CENSUS, &read);
+    assert!(
+        bad.iter()
+            .any(|b| b.contains("archival-draw-v1") && b.contains("not in the ratchet")),
+        "{bad:?}"
+    );
+}
+
+#[test]
+fn a_slice_of_the_type_names_it_and_an_array_does_not() {
+    assert!(names_type("& [BlockHash]", "BlockHash"));
+    assert!(names_type("& 'a [shekyl_types :: BlockHash]", "BlockHash"));
+    assert!(names_type("& BlockHash", "BlockHash"));
+    assert!(!names_type("& [u8 ; 32]", "BlockHash"));
+    assert!(!names_type("& [BlockHash ; 2]", "BlockHash"));
+    assert!(!names_type("& [u8]", "BlockHash"));
 }
 
 #[test]

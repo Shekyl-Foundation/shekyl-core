@@ -151,7 +151,12 @@ mod tests {
         for k in &keys {
             acc.insert(k);
         }
-        assert_eq!(acc.value(), spent_accumulator(&keys));
+        let images: Vec<shekyl_types::KeyImage> = keys
+            .iter()
+            .copied()
+            .map(shekyl_types::KeyImage::from_bytes)
+            .collect();
+        assert_eq!(acc.value(), spent_accumulator(&images));
     }
 
     #[test]
