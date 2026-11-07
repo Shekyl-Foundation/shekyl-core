@@ -55,6 +55,7 @@ jobs:
   wallet-rpc-liveness:
     name: "wallet RPC: registry and dispatch agree in both directions"
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.2 min over 25 runs; the floor
     steps:
       - uses: actions/checkout@v5
       - name: check wallet RPC liveness

@@ -28,7 +28,7 @@ pub const INVOKE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The timed-sync draw's floor (brief §7.6, Assumption for Ruling B):
 /// `TIMED_SYNC_MIN + U(0, TIMED_SYNC_JITTER)` has the mean PWD-B2 fixed,
-/// `P2P_DEFAULT_HANDSHAKE_INTERVAL` = 60 s.
+/// the inherited 60 s handshake interval.
 pub const TIMED_SYNC_MIN: Duration = Duration::from_secs(45);
 
 /// The timed-sync draw's uniform width (brief §7.6).
