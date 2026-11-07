@@ -117,9 +117,9 @@ fn due(
         attempt: 1,
     };
     let nonce = match stream {
-        PassStream::Economy => challenge_nonce(&[0x11; 32], &[0x22; 32], 2, 1),
+        PassStream::Economy => challenge_nonce(&[0x11; 32], &key.hash, 2, 1),
         PassStream::Support => {
-            shekyl_archival_retention::support_challenge_nonce(&[0x11; 32], &[0x22; 32], 2, 1)
+            shekyl_archival_retention::support_challenge_nonce(&[0x11; 32], &key.hash, 2, 1)
         }
     };
     DueRead {

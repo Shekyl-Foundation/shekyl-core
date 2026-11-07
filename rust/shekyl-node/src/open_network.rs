@@ -29,7 +29,7 @@ use shekyl_hash_budget::Budget;
 use shekyl_mempool::Pool;
 use shekyl_p2p::{CoreSyncData, Network, NetworkParts, NetworkPlan, NodeSync, SupervisorFeeds};
 use shekyl_relay::owner::{PoolDoor, RelayHandle};
-use shekyl_relay::TxId;
+use shekyl_relay::{OriginPublication as RelayOrigin, TxId};
 use shekyl_transport_layer::Sockets;
 use shekyl_types::TxHash;
 
@@ -254,6 +254,18 @@ struct Submit {
     offline: bool,
 }
 
+fn facts_origin(
+    relay: &RelayHandle,
+    txid: &TxHash,
+) -> Option<shekyl_daemon_rpc::submit::OriginPublication> {
+    use shekyl_daemon_rpc::submit::OriginPublication as Facts;
+    match relay.origin_publication(TxId::from_bytes(txid.to_bytes())) {
+        Some(RelayOrigin::Held) => Some(Facts::Held),
+        Some(RelayOrigin::HeldOverdue) => Some(Facts::HeldOverdue),
+        None => None,
+    }
+}
+
 fn install_submit(submit: Submit) {
     let Submit {
         store,
@@ -274,6 +286,10 @@ fn install_submit(submit: Submit) {
             rules.trust().network_id(),
         )
         .retiring(Arc::new(move |fault| health.retire(fault)))
+        .observing_origin({
+            let relay = relay.clone();
+            Arc::new(move |txid: &TxHash| facts_origin(&relay, txid))
+        })
         .nudging(Arc::new(move |txid: &TxHash, blob: &[u8]| {
             // An offline node has no network to hide from, so the
             // transaction is shown at once (RX-2, Rick 2026-10-29).

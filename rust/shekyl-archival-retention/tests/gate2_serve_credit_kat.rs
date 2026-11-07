@@ -179,7 +179,7 @@ fn build_integration_substrate(
         &p_id,
         shard_id,
         settlement_epoch,
-        &INTEGRATION_PREV_BLOCK_HASH,
+        &BlockHash::from_bytes(INTEGRATION_PREV_BLOCK_HASH),
         segment_leaf_count,
     );
     // Cross-language pin: the fixture carries the chunk bounds the Rust
@@ -195,7 +195,7 @@ fn build_integration_substrate(
     let h_fire = challenge_fire_height(
         h_open,
         h_close,
-        &block_hash_at_seal,
+        &BlockHash::from_bytes(block_hash_at_seal),
         &p_id,
         shard_id,
         settlement_epoch,
@@ -545,7 +545,7 @@ fn build_kat_document(
         &p_id,
         shard_id,
         settlement_epoch,
-        &CHALLENGE_PREV_BLOCK_HASH,
+        &BlockHash::from_bytes(CHALLENGE_PREV_BLOCK_HASH),
         segment_leaf_count,
     );
 
@@ -556,7 +556,7 @@ fn build_kat_document(
     let h_fire = challenge_fire_height(
         h_open,
         h_close,
-        &block_hash_at_seal,
+        &BlockHash::from_bytes(block_hash_at_seal),
         &p_id,
         shard_id,
         settlement_epoch,
@@ -748,7 +748,13 @@ fn gate2_serve_credit_kat_vectors() {
         let leaf_index = u32::try_from(case["leaf_index"].as_u64().expect("leaf_index"))
             .expect("leaf_index fits u32");
         assert_eq!(
-            challenge_leaf_index(&p_id, shard_id, epoch, &prev_block_hash, count),
+            challenge_leaf_index(
+                &p_id,
+                shard_id,
+                epoch,
+                &BlockHash::from_bytes(prev_block_hash),
+                count
+            ),
             leaf_index
         );
         // (verify_leaf_index was deleted by RF-D6; the derivation above IS the
@@ -758,7 +764,14 @@ fn gate2_serve_credit_kat_vectors() {
             case["h_seal"].as_u64().expect("h_seal")
         );
         assert_eq!(
-            challenge_fire_height(h_open, h_close, &seal_hash, &p_id, shard_id, epoch),
+            challenge_fire_height(
+                h_open,
+                h_close,
+                &BlockHash::from_bytes(seal_hash),
+                &p_id,
+                shard_id,
+                epoch
+            ),
             case["h_fire"].as_u64().expect("h_fire")
         );
     }
@@ -880,11 +893,11 @@ fn gate2_serve_credit_kat_vectors() {
         &parsed.p_canonical_id,
         parsed.shard_id,
         parsed.settlement_epoch,
-        &decode_hex32(
+        &BlockHash::from_bytes(decode_hex32(
             integration["prev_block_hash_hex"]
                 .as_str()
                 .expect("integration prev block hash"),
-        ),
+        )),
         integration["segment_leaf_count"]
             .as_u64()
             .expect("segment count"),

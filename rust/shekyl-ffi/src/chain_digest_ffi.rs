@@ -13,6 +13,7 @@
 
 use crate::{array_from_ptr, slice_from_ptr};
 use shekyl_chain_store::digest_v0::digest_v0;
+use shekyl_types::{BlockHash, CurveTreeRoot, KeyImage};
 
 /// Success; `*out_digest` holds the 32-byte digest.
 pub const SHEKYL_CHAIN_DIGEST_V0_OK: i32 = 0;
@@ -66,7 +67,10 @@ pub unsafe extern "C" fn shekyl_logical_state_digest_v0(
     let Some(root) = (unsafe { array_from_ptr::<32>(curve_root) }) else {
         return SHEKYL_CHAIN_DIGEST_V0_ERR_NULL_PTR;
     };
-    let digest = digest_v0(blocks, spent, &root);
+    // The C side hands bytes; the hasher takes the families by type.
+    let blocks: Vec<BlockHash> = blocks.iter().copied().map(BlockHash::from_bytes).collect();
+    let spent: Vec<KeyImage> = spent.iter().copied().map(KeyImage::from_bytes).collect();
+    let digest = digest_v0(&blocks, &spent, &CurveTreeRoot::from_bytes(root));
     unsafe {
         out_digest.copy_from_nonoverlapping(digest.as_ptr(), 32);
     }
@@ -153,7 +157,7 @@ mod tests {
             )
         };
         assert_eq!(code, SHEKYL_CHAIN_DIGEST_V0_OK);
-        assert_eq!(out, digest_v0(&[], &[], &root));
+        assert_eq!(out, digest_v0(&[], &[], &CurveTreeRoot::from_bytes(root)));
     }
 
     #[test]

@@ -22,12 +22,22 @@
 //! is why a retired family is checked whether or not the snapshot diff
 //! reports it. The reconnect is compared exactly, digest included, at
 //! every block.
+//!
+//! The `properties` table is not a retired table: it holds chain-state
+//! cells (`total_burned`, `archival_last_slash_epoch`) that a pop restores
+//! like any other row. The boundary batch writes one cell there, the
+//! `undo_log_floor`, and never lowers it (`shekyl-chain-store`
+//! `store/prune.rs`, `retire_undo_rows`): the connect deleted the undo rows
+//! below it, and the journal's first key must equal the floor
+//! (`DRS_E1_SPRUNE.md` SPR-4). So after a boundary pop that one cell is the
+//! connect's, present or absent alike, and every other cell is the parent's.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::FAILURE_WINDOW_M;
 use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFamily};
+use shekyl_chain_store::codec::{PropertyCell, TotalBurnedCell, UndoLogFloorCell};
 use shekyl_chain_store::store::RawRows;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_harness_spender::{Owner, Spender};
@@ -60,7 +70,6 @@ const RETIRED_AT_A_BOUNDARY: &[&str] = &[
     "txs_prunable",
     "txs_pqc_auths",
     "undo_log",
-    "properties",
     "archival_slash_log",
     "archival_release_journal",
     "archival_block_draws",
@@ -118,6 +127,31 @@ fn pop_keeps_the_prune(
         && pop
             .iter()
             .all(|(key, value)| parent.contains_key(key) && connected.get(key) == Some(value))
+}
+
+/// The table that holds the store's property cells.
+const PROPERTIES: &str = "properties";
+
+/// The pop of the `properties` table across a boundary (module docs): the
+/// `undo_log_floor` cell is the connect's, present or absent alike, and
+/// every other cell is the parent's.
+///
+/// A pop that restores the floor fails, and so does a pop that keeps a
+/// chain-state cell the connect rewrote.
+fn pop_keeps_the_floor(
+    parent: &BTreeMap<Vec<u8>, Vec<u8>>,
+    pop: &BTreeMap<Vec<u8>, Vec<u8>>,
+    connected: &BTreeMap<Vec<u8>, Vec<u8>>,
+) -> bool {
+    let floor = UndoLogFloorCell::KEY.as_bytes();
+    let others = |cells: &BTreeMap<Vec<u8>, Vec<u8>>| {
+        cells
+            .iter()
+            .filter(|(key, _)| key.as_slice() != floor)
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    pop.get(floor) == connected.get(floor) && others(pop) == others(parent)
 }
 
 /// One pair's draws for an epoch, as the regtest door records them.
@@ -314,19 +348,39 @@ fn assert_same(step: &str, parent: &Tip, got: &Tip, connected: Option<&Tip>) {
                     &indexed(have),
                     &indexed(connected.rows.get(table).unwrap_or(&none)),
                 ),
+                Some(connected) if *table == PROPERTIES => pop_keeps_the_floor(
+                    &indexed(want),
+                    &indexed(have),
+                    &indexed(connected.rows.get(table).unwrap_or(&none)),
+                ),
                 _ => want == have,
             };
             !kept
         })
         .collect();
+    // On a boundary pop the parent-to-pop difference alone can show only
+    // the rows that were right to differ; the connect-to-pop difference
+    // names a row the pop restored or kept against its rule.
     let detail: Vec<String> = differ
         .iter()
         .map(|table| {
-            table_diff(
-                table,
+            let got_rows = got.rows.get(table).unwrap_or(&none);
+            let from_parent = table_diff(
+                &format!("{table}, parent -> pop"),
                 parent.rows.get(table).unwrap_or(&none),
-                got.rows.get(table).unwrap_or(&none),
-            )
+                got_rows,
+            );
+            match connected {
+                Some(connected) => format!(
+                    "{from_parent}\n{}",
+                    table_diff(
+                        &format!("{table}, connect -> pop"),
+                        connected.rows.get(table).unwrap_or(&none),
+                        got_rows,
+                    )
+                ),
+                None => from_parent,
+            }
         })
         .collect();
     assert!(
@@ -620,5 +674,51 @@ fn a_restored_prune_is_not_the_parent_the_connect_left() {
     assert!(
         !pop_keeps_the_prune(&parent, &deleted, &untouched),
         "a pop does not delete a row the connect left"
+    );
+}
+
+/// A boundary pop keeps the raised undo floor and restores every other
+/// property cell. Red edits: compare the whole table with
+/// [`pop_keeps_the_prune`] (the nightly's false red from 2026-11-02, a
+/// restored `total_burned` read as a restored prune), or with the parent.
+#[test]
+fn a_boundary_pop_keeps_the_floor_and_restores_the_chain_state_cells() {
+    let floor = UndoLogFloorCell::KEY.as_bytes().to_vec();
+    let burned = TotalBurnedCell::KEY.as_bytes().to_vec();
+    let cells = |floor_at: Option<u8>, burned_at: u8| {
+        let mut cells = BTreeMap::from([(burned.clone(), vec![burned_at])]);
+        if let Some(at) = floor_at {
+            cells.insert(floor.clone(), vec![at]);
+        }
+        cells
+    };
+    let parent = cells(Some(37), 5);
+    let connected = cells(Some(39), 6);
+
+    assert!(pop_keeps_the_floor(
+        &parent,
+        &cells(Some(39), 5),
+        &connected
+    ));
+    assert!(
+        !pop_keeps_the_prune(&parent, &cells(Some(39), 5), &connected),
+        "the per-table rule refuses the right pop"
+    );
+    assert!(
+        !pop_keeps_the_floor(&parent, &cells(Some(37), 5), &connected),
+        "restoring the floor fails"
+    );
+    assert!(
+        !pop_keeps_the_floor(&parent, &cells(Some(39), 6), &connected),
+        "keeping the connect's burn fails"
+    );
+
+    // The first boundary creates the cell, and the pop leaves it.
+    let first = cells(None, 5);
+    let created = cells(Some(3), 5);
+    assert!(pop_keeps_the_floor(&first, &created, &created));
+    assert!(
+        !pop_keeps_the_floor(&first, &first, &created),
+        "dropping the created floor fails"
     );
 }

@@ -500,7 +500,7 @@ pub(crate) struct Reservation {
     /// time. The reorg-rewind invariant in
     /// [`PendingTxError::ChainStateChanged`] compares this against
     /// the wallet's current view at submit time.
-    pub built_at_tip_hash: [u8; 32],
+    pub built_at_tip_hash: shekyl_types::BlockHash,
     /// [`SnapshotId`] derived at build time over the wallet's
     /// ledger snapshot. C5β's rewritten `submit` handler compares
     /// this against the engine's `current_snapshot` and emits
@@ -565,7 +565,7 @@ pub struct PendingTx {
     pub built_at_height: shekyl_types::BlockHeight,
     /// Engine's recorded block hash at `built_at_height` at build
     /// time.
-    pub built_at_tip_hash: [u8; 32],
+    pub built_at_tip_hash: shekyl_types::BlockHash,
     /// Fee in atomic units captured at build time, resolved through
     /// the `FeeEstimator` seam against a validated daemon snapshot.
     pub fee_atomic_units: AtomicUnits,

@@ -104,7 +104,7 @@ fn the_producers_support_seats_are_the_verifiers_observations() {
     // the target's shard, under the target's nonce.
     let hash = fixture_block_hash(world.h);
     let pass = support[1];
-    let nonce = support_challenge_nonce(&world.seed, hash.as_bytes(), pass.draw, 0);
+    let nonce = support_challenge_nonce(&world.seed, &hash, pass.draw, 0);
     let record = world.persona_record(2, pass.shard.to_raw(), PassStream::Support, &nonce);
     let (reference, body) = world.assemble_support(
         PassBitmap::from_passes(world.count, []).expect("no economy passes"),

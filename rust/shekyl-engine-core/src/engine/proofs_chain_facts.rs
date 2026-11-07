@@ -37,7 +37,7 @@ use shekyl_wire::{Ct, Transaction};
 use super::block_fetch::{parse_tx_batch, refuse_unless_ok, TXS_PER_REQUEST};
 use super::daemon::synced_chain_facts::{fetch_synced_chain_facts, SyncedChainFacts};
 use super::proofs::ProofsError;
-use shekyl_types::{BlockHash, TxHash};
+use shekyl_types::TxHash;
 
 /// Where the daemon found a transaction, and the depth that goes with
 /// it. An arm rather than a `bool` beside an `Option`, for the reason
@@ -505,7 +505,7 @@ impl ProofChainView {
             .await
             .map_err(ProofsError::Daemon)?;
         self.witness
-            .bracket(BlockHash::from_bytes(at_tip_now))
+            .bracket(at_tip_now)
             .map(|_bracketed| SealedProofView(()))
             .map_err(|_| {
                 ProofsError::Daemon(RpcError::InvalidNode(

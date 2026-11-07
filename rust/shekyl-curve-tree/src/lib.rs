@@ -71,8 +71,8 @@ pub use client::{
 pub use reference::{
     blocks_until_in_tree, drained_through, in_tree_at_reference, proof_expired, proof_submittable,
     reference_block_age, select_reference_height, should_reanchor, two_sided_reference_height,
-    TwoSidedRefusal, PROOF_VALIDITY_HORIZON, REBUILD_AT, REFERENCE_BLOCK_MAX_AGE,
-    REFERENCE_BLOCK_MIN_AGE, REF_ANCHOR_AGE,
+    TwoSidedRefusal, DISPATCHED_PROOF_LIFE, PROOF_VALIDITY_HORIZON, REBUILD_AT,
+    REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE, REF_ANCHOR_AGE,
 };
 pub use segment::{
     leaves_per_segment, outputs_per_node, segment_freeze_eligible, SegmentId,

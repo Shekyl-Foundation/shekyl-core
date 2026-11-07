@@ -540,11 +540,11 @@ impl I15 {
             &key_images,
             &prunable.pseudo_outs,
             &pqc_keys,
-            reference.anchor.as_bytes(),
+            &reference.anchor,
             layers,
             // The transaction's network-bound message (the signing
             // envelope §2.2): a proof made for another network fails here.
-            tx.tx_signable(network).to_bytes(),
+            tx.tx_signable(network),
         ) {
             Ok(true) => Ok(()),
             Ok(false) | Err(_) => Err(()),

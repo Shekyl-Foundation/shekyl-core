@@ -370,6 +370,9 @@ macro_rules! hash32 {
         pub struct $name([u8; $n]);
 
         impl $name {
+            /// Width of the wrapped bytes.
+            pub const LEN: usize = $n;
+
             /// Wrap raw bytes. An *edge* constructor.
             #[must_use]
             pub const fn from_bytes(bytes: [u8; $n]) -> Self {
@@ -386,6 +389,17 @@ macro_rules! hash32 {
             #[must_use]
             pub const fn as_bytes(&self) -> &[u8; $n] {
                 &self.0
+            }
+
+            /// Wrap a slice that is exactly [`Self::LEN`] bytes.
+            ///
+            /// An edge constructor for an untrusted buffer. Any other length
+            /// is `None`: a shorter or longer slice is not this value.
+            #[must_use]
+            pub fn try_from_slice(bytes: &[u8]) -> Option<Self> {
+                let array =
+                    <[u8; Self::LEN] as core::convert::TryFrom<&[u8]>>::try_from(bytes).ok()?;
+                Some(Self::from_bytes(array))
             }
         }
     };

@@ -467,7 +467,7 @@ impl BundleWorld {
         // `Err` arm is uninhabited, so the `let` is irrefutable.
         let Ok(selected) = select_draw(
             &self.seed,
-            hash.as_bytes(),
+            &hash,
             draw,
             self.drawable_epoch().len(),
             |index| Ok::<_, Infallible>(self.view.short.contains(&(self.h, index))),
@@ -494,7 +494,7 @@ impl BundleWorld {
             .view
             .chain_block_hash(self.h)
             .expect("the block is at or below the fixture chain's tip");
-        let nonce = challenge_nonce(&self.seed, hash.as_bytes(), draw, attempt);
+        let nonce = challenge_nonce(&self.seed, &hash, draw, attempt);
         let index = self.selected(draw);
         self.record_signed_over(index, attempt, anchor, &nonce)
     }

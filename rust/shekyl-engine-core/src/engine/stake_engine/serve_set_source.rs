@@ -57,7 +57,6 @@ use super::body_store_actor::BodyStoreHandle;
 use crate::engine::curve_tree_actor::CurveTreeHandle;
 
 use super::departure_ledger::{Continuity, DepartureLedger, Obligation, EPOCHS_BEFORE_PIN_RELEASE};
-use shekyl_types::BlockHash;
 
 use crate::engine::daemon::synced_chain_facts::{AnchoredView, TimelineBreak};
 use crate::engine::emission_source::fetch_vouched_claim_source;
@@ -151,9 +150,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
             None => Continuity::FirstObservation,
             Some(anchor) => match usize::try_from(anchor.height.to_raw()) {
                 Ok(number) => match self.rpc.get_block_hash(number).await {
-                    Ok(bytes) => Continuity::Verified {
-                        canonical_now: BlockHash::from_bytes(bytes),
-                    },
+                    Ok(canonical_now) => Continuity::Verified { canonical_now },
                     Err(_) => Continuity::Unverifiable,
                 },
                 Err(_) => Continuity::Unverifiable,
