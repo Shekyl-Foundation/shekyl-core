@@ -18,58 +18,89 @@
 //! transcript, and the Noise bytes are what they were before it existed.
 //! The key is derived from public material only. Holding it is holding the
 //! bundle, which §4.3 already treats as a probing capability.
+//!
+//! Each label is held at its input's type: the key derives from a
+//! [`StaticPublic`] bundle, and a busy reply answers a [`Mac1Tag`], which
+//! only [`Mac1Key::mac1`] makes and [`Mac1Key::verify`] hands back.
 
 use blake2::digest::consts::U16;
 use blake2::digest::{Digest, Mac};
 use blake2::{Blake2s256, Blake2sMac};
 use subtle::ConstantTimeEq;
 
-use crate::{BUSY_DST, BUSY_LEN, MAC1_DST, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
+use crate::handshake::StaticPublic;
+use crate::{BUSY_LEN, MAC1_LEN};
+
+/// The label the mac1 key is derived from: the key is BLAKE2s-256 of these
+/// bytes followed by the daemon's public bundle (`RPC_CHANNEL.md` §4.3).
+const MAC1_DST: &[u8] = b"shekyl/rpc-mac1-v1";
+
+/// The label in front of what a busy reply authenticates: the reply is
+/// keyed BLAKE2s-128 under the mac1 key over these bytes followed by the
+/// mac1 of the message 1 it answers (`RPC_CHANNEL.md` §4.3, ruled
+/// 2026-10-20).
+const BUSY_DST: &[u8] = b"shekyl/rpc-busy-v1";
 
 /// The length of the mac1 key.
-pub(crate) const MAC1_KEY_LEN: usize = 32;
+const MAC1_KEY_LEN: usize = 32;
 
-/// BLAKE2s-256 of [`MAC1_DST`] then the bundle.
-pub(crate) fn mac1_key(
-    x25519: &[u8; X25519_PUBLIC_LEN],
-    mlkem_ek: &[u8; MLKEM768_EK_LEN],
-) -> [u8; MAC1_KEY_LEN] {
-    let mut hasher = Blake2s256::new();
-    hasher.update(MAC1_DST);
-    hasher.update(x25519);
-    hasher.update(mlkem_ek);
-    hasher.finalize().into()
+/// The mac1 key of one daemon's bundle.
+pub(crate) struct Mac1Key([u8; MAC1_KEY_LEN]);
+
+/// The mac1 of one message 1: made under a bundle's key, or read off the
+/// wire and proved by recomputing it. There is no way to make one from
+/// bytes, so a busy reply answers only a message 1 that passed mac1.
+#[derive(Clone, Copy)]
+pub struct Mac1Tag([u8; MAC1_LEN]);
+
+impl Mac1Tag {
+    /// The tag as it travels after the Noise message.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; MAC1_LEN] {
+        &self.0
+    }
 }
 
-fn keyed(key: &[u8; MAC1_KEY_LEN]) -> Blake2sMac<U16> {
-    // A 32-byte key is within BLAKE2s's limit, so this cannot fail.
-    <Blake2sMac<U16> as Mac>::new_from_slice(key).expect("a 32-byte BLAKE2s key")
-}
+impl Mac1Key {
+    /// BLAKE2s-256 of [`MAC1_DST`] then the bundle.
+    pub(crate) fn of(bundle: &StaticPublic) -> Self {
+        let mut hasher = Blake2s256::new();
+        hasher.update(MAC1_DST);
+        hasher.update(bundle.x25519());
+        hasher.update(bundle.mlkem_ek());
+        Self(hasher.finalize().into())
+    }
 
-/// The mac1 of a Noise message 1 under `key`.
-pub(crate) fn mac1(key: &[u8; MAC1_KEY_LEN], noise_message1: &[u8]) -> [u8; MAC1_LEN] {
-    let mut mac = keyed(key);
-    mac.update(noise_message1);
-    mac.finalize().into_bytes().into()
-}
+    fn keyed(&self) -> Blake2sMac<U16> {
+        // A 32-byte key is within BLAKE2s's limit, so this cannot fail.
+        <Blake2sMac<U16> as Mac>::new_from_slice(&self.0).expect("a 32-byte BLAKE2s key")
+    }
 
-/// Whether `tag` is the mac1 of `noise_message1` under `key`, compared in
-/// constant time.
-pub(crate) fn verify(key: &[u8; MAC1_KEY_LEN], noise_message1: &[u8], tag: &[u8]) -> bool {
-    let mut mac = keyed(key);
-    mac.update(noise_message1);
-    mac.verify_slice(tag).is_ok()
-}
+    /// The mac1 of a Noise message 1.
+    pub(crate) fn mac1(&self, noise_message1: &[u8]) -> Mac1Tag {
+        let mut mac = self.keyed();
+        mac.update(noise_message1);
+        Mac1Tag(mac.finalize().into_bytes().into())
+    }
 
-/// The busy reply to the message 1 whose mac1 is `mac1_tag`: keyed
-/// BLAKE2s-128 under `key` over [`BUSY_DST`] then that mac1. It answers one
-/// message 1 only, since every message 1 carries a fresh ephemeral and so a
-/// fresh mac1.
-pub(crate) fn busy(key: &[u8; MAC1_KEY_LEN], mac1_tag: &[u8; MAC1_LEN]) -> [u8; BUSY_LEN] {
-    let mut mac = keyed(key);
-    mac.update(BUSY_DST);
-    mac.update(mac1_tag);
-    mac.finalize().into_bytes().into()
+    /// The tag, when `tag` is the mac1 of `noise_message1`: compared in
+    /// constant time, so the time taken does not say how many leading bytes
+    /// of a forgery were right.
+    pub(crate) fn verify(&self, noise_message1: &[u8], tag: &[u8]) -> Option<Mac1Tag> {
+        let expected = self.mac1(noise_message1);
+        (tag.len() == MAC1_LEN && bool::from(tag.ct_eq(expected.0.as_slice()))).then_some(expected)
+    }
+
+    /// The busy reply to the message 1 whose mac1 is `tag`: keyed
+    /// BLAKE2s-128 over [`BUSY_DST`] then that mac1. It answers one message
+    /// 1 only, since every message 1 carries a fresh ephemeral and so a
+    /// fresh mac1.
+    pub(crate) fn busy(&self, tag: &Mac1Tag) -> [u8; BUSY_LEN] {
+        let mut mac = self.keyed();
+        mac.update(BUSY_DST);
+        mac.update(&tag.0);
+        mac.finalize().into_bytes().into()
+    }
 }
 
 /// Whether `reply` is `expected`. A different length is not busy; the bytes
@@ -82,6 +113,11 @@ pub(crate) fn busy_matches(expected: &[u8; BUSY_LEN], reply: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
+
+    fn bundle(x25519: [u8; X25519_PUBLIC_LEN], mlkem_ek: [u8; MLKEM768_EK_LEN]) -> StaticPublic {
+        StaticPublic::from_parts(x25519, mlkem_ek).expect("a valid test bundle")
+    }
 
     /// The key depends on every byte of the bundle and on the label; the
     /// mac depends on every byte of the message.
@@ -89,54 +125,54 @@ mod tests {
     fn the_key_and_the_mac_move_with_their_inputs() {
         let x = [0x11; X25519_PUBLIC_LEN];
         let ek = [0x22; MLKEM768_EK_LEN];
-        let key = mac1_key(&x, &ek);
+        let key = Mac1Key::of(&bundle(x, ek));
         let mut other_x = x;
         other_x[31] ^= 1;
         let mut other_ek = ek;
         other_ek[0] ^= 1;
-        assert_ne!(key, mac1_key(&other_x, &ek));
-        assert_ne!(key, mac1_key(&x, &other_ek));
+        let other = Mac1Key::of(&bundle(other_x, ek));
+        assert_ne!(key.0, other.0);
+        assert_ne!(key.0, Mac1Key::of(&bundle(x, other_ek)).0);
 
         let message = [0x5a; 64];
-        let tag = mac1(&key, &message);
-        assert!(verify(&key, &message, &tag));
+        let tag = key.mac1(&message);
+        let proved = key.verify(&message, tag.as_bytes()).expect("its own mac1");
+        assert_eq!(proved.as_bytes(), tag.as_bytes());
         let mut changed = message;
         changed[63] ^= 1;
-        assert!(!verify(&key, &changed, &tag));
-        assert!(!verify(&mac1_key(&other_x, &ek), &message, &tag));
-        assert!(!verify(&key, &message, &tag[..MAC1_LEN - 1]));
+        assert!(key.verify(&changed, tag.as_bytes()).is_none());
+        assert!(other.verify(&message, tag.as_bytes()).is_none());
+        assert!(key
+            .verify(&message, &tag.as_bytes()[..MAC1_LEN - 1])
+            .is_none());
+        let mut long = tag.as_bytes().to_vec();
+        long.push(0);
+        assert!(key.verify(&message, &long).is_none());
     }
 
     /// Known answer, computed independently with Python's `hashlib`:
     /// `blake2s(MAC1_DST + bundle)` for the key, and
     /// `blake2s(message, key=key, digest_size=16)` for the mac. A
-    /// 2,320-byte message, the length of a Noise message 1.
+    /// 2,320-byte message, the length of a Noise message 1. The busy reply
+    /// is `blake2s(BUSY_DST + mac1, key=key, digest_size=16)`, answering
+    /// that message 1.
     #[test]
-    fn known_answer_from_an_independent_implementation() {
-        let key = mac1_key(&[0x11; X25519_PUBLIC_LEN], &[0x22; MLKEM768_EK_LEN]);
+    fn known_answers_from_an_independent_implementation() {
+        let key = Mac1Key::of(&bundle([0x11; X25519_PUBLIC_LEN], [0x22; MLKEM768_EK_LEN]));
         assert_eq!(
-            hex::encode(key),
+            hex::encode(key.0),
             "5b837de470bcb848b6f23f71c73ce2131dd9dc96c10a586df39e22563df749b2"
         );
         let message: Vec<u8> = (0..2_320_usize)
             .map(|i| u8::try_from(i % 256).unwrap())
             .collect();
+        let tag = key.mac1(&message);
         assert_eq!(
-            hex::encode(mac1(&key, &message)),
+            hex::encode(tag.as_bytes()),
             "81422da8958bceb200e31cb50c35f639"
         );
-    }
-
-    /// Known answer for the busy reply, from the same independent source:
-    /// `blake2s(BUSY_DST + mac1, key=key, digest_size=16)`, answering the
-    /// message 1 of the test above.
-    #[test]
-    fn busy_known_answer_from_an_independent_implementation() {
-        let key = mac1_key(&[0x11; X25519_PUBLIC_LEN], &[0x22; MLKEM768_EK_LEN]);
-        let mut tag = [0u8; MAC1_LEN];
-        hex::decode_to_slice("81422da8958bceb200e31cb50c35f639", &mut tag).unwrap();
         assert_eq!(
-            hex::encode(busy(&key, &tag)),
+            hex::encode(key.busy(&tag)),
             "d0bc52c26a1c24ad22c8ee575a786b52"
         );
     }

@@ -37,8 +37,6 @@ input-raw	shekyl-reserve-proof-dleq-v1	input:frame: no type for a frame output y
 input-raw	shekyl/msg-sign-outer-v1	input:frame: no type for a frame output yet
 input-raw	shekyl-subaddr-v1\0	input:SaltForKey: no type for a key derived under salt_for yet
 input-raw	shekyl-mlkem-chacha-seed	input:SaltForKey: no type for a key derived under salt_for yet
-input-raw	shekyl/rpc-busy-v1	input:NoiseMessage: no type for a Noise handshake message yet
-input-raw	shekyl/rpc-mac1-v1	input:NoiseMessage: no type for a Noise handshake message yet
 unframed	shekyl/p2p-wire-prefix-v1	id: the id at position 0 of a raw cSHAKE input, not frame(id); the P2P wire prefix
 unframed	shekyl/rpc-rendezvous-name-v1	id: the id at position 0 of a raw cSHAKE input, not frame(id); the RPC rendezvous name
 pending	shekyl/pqc-leaf-record-v1	ruled derived:, but no census rule recomputes the leaf record

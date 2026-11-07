@@ -16,10 +16,8 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
 use super::HandshakeError;
-use crate::mac1::{self, MAC1_KEY_LEN};
-use crate::{
-    static_fingerprint, StaticFingerprint, BUSY_LEN, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN,
-};
+use crate::mac1::{Mac1Key, Mac1Tag};
+use crate::{static_fingerprint, StaticFingerprint, BUSY_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
 
 /// A static public bundle: an X25519 key and an ML-KEM-768 encapsulation
 /// key, the latter already checked as FIPS 203 requires.
@@ -31,8 +29,6 @@ pub struct StaticPublic {
     x25519: [u8; X25519_PUBLIC_LEN],
     mlkem_ek_bytes: [u8; MLKEM768_EK_LEN],
     pub(super) mlkem_ek: ml_kem_768::EncapsKey,
-    /// The mac1 key, derived once from the bundle (`crate::mac1`).
-    mac1_key: [u8; MAC1_KEY_LEN],
 }
 
 /// The two halves did not form a usable bundle.
@@ -63,7 +59,6 @@ impl StaticPublic {
             x25519,
             mlkem_ek_bytes: mlkem_ek,
             mlkem_ek: parsed,
-            mac1_key: mac1::mac1_key(&x25519, &mlkem_ek),
         })
     }
 
@@ -86,22 +81,13 @@ impl StaticPublic {
     /// (§4.3). [`crate::handshake::Client::start`] adds it; this is the same
     /// computation, for a caller that builds the bytes itself.
     #[must_use]
-    pub fn mac1(&self, noise_message1: &[u8]) -> [u8; MAC1_LEN] {
-        mac1::mac1(&self.mac1_key, noise_message1)
-    }
-
-    /// Whether `tag` is the mac1 of `noise_message1` under this bundle.
-    pub(super) fn mac1_verifies(&self, noise_message1: &[u8], tag: &[u8]) -> bool {
-        mac1::verify(&self.mac1_key, noise_message1, tag)
-    }
-
-    /// The daemon's busy reply to the message 1 whose mac1 is `mac1_tag`.
-    pub(super) fn busy_reply(&self, mac1_tag: &[u8; MAC1_LEN]) -> [u8; BUSY_LEN] {
-        mac1::busy(&self.mac1_key, mac1_tag)
+    pub fn mac1(&self, noise_message1: &[u8]) -> Mac1Tag {
+        Mac1Key::of(self).mac1(noise_message1)
     }
 }
 
-/// A long-term identity: both secret halves and the public bundle.
+/// A long-term identity: both secret halves, the public bundle, and the
+/// bundle's mac1 key, derived once for the daemon's check on every message 1.
 ///
 /// The secrets wipe themselves when this is dropped (`x25519-dalek`'s and
 /// `fips203`'s types do it), and nothing here hands them out.
@@ -109,6 +95,7 @@ pub struct StaticKeypair {
     pub(super) x25519: StaticSecret,
     pub(super) mlkem_dk: ml_kem_768::DecapsKey,
     pub(super) public: StaticPublic,
+    mac1_key: Mac1Key,
 }
 
 impl StaticKeypair {
@@ -134,6 +121,7 @@ impl StaticKeypair {
         Ok(Self {
             x25519,
             mlkem_dk,
+            mac1_key: Mac1Key::of(&public),
             public,
         })
     }
@@ -141,6 +129,17 @@ impl StaticKeypair {
     /// The public bundle.
     pub fn public(&self) -> &StaticPublic {
         &self.public
+    }
+
+    /// The tag, when `tag` is the mac1 of `noise_message1` under this
+    /// identity's bundle.
+    pub(super) fn mac1_verifies(&self, noise_message1: &[u8], tag: &[u8]) -> Option<Mac1Tag> {
+        self.mac1_key.verify(noise_message1, tag)
+    }
+
+    /// The busy reply to the message 1 whose mac1 is `tag`.
+    pub(super) fn busy_reply(&self, tag: &Mac1Tag) -> [u8; BUSY_LEN] {
+        self.mac1_key.busy(tag)
     }
 }
 
