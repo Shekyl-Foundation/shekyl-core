@@ -47,6 +47,7 @@ Total bytes for this vector: 3072 (= 384 × 8).
 Generator
 ---------
 source      = ./_generator/phase2c/gen.cpp (mode t5)
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/phase2c/Makefile (`make gen`)
 command     = ./gen t5 > t5_vm_program_parse.bin
 output_size = 3072 bytes
