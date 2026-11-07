@@ -237,10 +237,13 @@ fn a_forged_busy_reply_is_not_busy() {
     let daemon = StaticKeypair::generate().unwrap();
     let other = StaticKeypair::generate().unwrap();
     let client = StaticKeypair::generate().unwrap();
+    // The tag is the daemon's to prove; any bundle's key can then answer it.
     let busy_for = |wire: &[u8], who: &StaticKeypair| {
-        let mut mac1 = [0u8; MAC1_LEN];
-        mac1.copy_from_slice(&wire[MESSAGE1_LEN..]);
-        who.public().busy_reply(&mac1)
+        let (noise, mac1) = wire.split_at(MESSAGE1_LEN);
+        let tag = daemon
+            .mac1_verifies(noise, mac1)
+            .expect("the client's mac1, under the daemon's bundle");
+        who.busy_reply(&tag)
     };
     let (earlier, earlier_wire) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
     let (waiting, wire) = Client::start(&NETWORK, &client, daemon.public()).unwrap();

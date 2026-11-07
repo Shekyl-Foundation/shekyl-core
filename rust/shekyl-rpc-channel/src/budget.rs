@@ -41,6 +41,7 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use crate::mac1::Mac1Tag;
 use crate::MAC1_LEN;
 
 /// The daemon's CPU for one handshake, in nanoseconds: the 99th percentile
@@ -171,12 +172,12 @@ impl HandshakeBudget {
     /// Present `mac1` at `now`. A repeat is [`Admission::Replay`] and does
     /// not move the balance. A first presentation is charged, and remembered
     /// until a ruled burst of newer mac1s has followed it.
-    pub(crate) fn present(&self, mac1: &[u8; MAC1_LEN], now: Instant) -> Admission {
+    pub(crate) fn present(&self, mac1: &Mac1Tag, now: Instant) -> Admission {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         // A repeat returns before the refill, so `last` stays where the
         // previous first presentation left it and the next new mac1 still
         // earns the time that passed.
-        if !state.remember(mac1) {
+        if !state.remember(mac1.as_bytes()) {
             return Admission::Replay;
         }
         if self.charge(&mut state, now) {
@@ -228,11 +229,14 @@ fn nanos(d: Duration) -> u64 {
     u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
 
+/// The mac1 of `n`'s bytes under one fixed bundle: a distinct tag per `n`.
 #[cfg(test)]
-fn tag(n: u64) -> [u8; MAC1_LEN] {
-    let mut out = [0u8; MAC1_LEN];
-    out[..8].copy_from_slice(&n.to_le_bytes());
-    out
+fn tag(n: u64) -> Mac1Tag {
+    use crate::handshake::StaticPublic;
+    use crate::{MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
+    let bundle = StaticPublic::from_parts([0x11; X25519_PUBLIC_LEN], [0x22; MLKEM768_EK_LEN])
+        .expect("a valid test bundle");
+    crate::mac1::Mac1Key::of(&bundle).mac1(&n.to_le_bytes())
 }
 
 #[cfg(test)]
@@ -313,7 +317,7 @@ mod tests {
         let two = Duration::from_nanos(HANDSHAKE_DAEMON_CPU_NANOS * 2);
         let budget = HandshakeBudget::with_share(1_000, two, t0);
         assert_eq!(budget.burst_admissions(), 2);
-        let first = [0xab; MAC1_LEN];
+        let first = tag(u64::MAX);
         assert_eq!(budget.present(&first, t0), Admission::Admitted);
         assert_eq!(budget.present(&first, t0), Admission::Replay);
         assert_eq!(
@@ -346,7 +350,7 @@ mod tests {
     fn the_window_holds_exactly_the_ruled_burst() {
         let t0 = Instant::now();
         let wide = HandshakeBudget::with_share(1_000, Duration::from_secs(3_600), t0);
-        let first = [0xcd; MAC1_LEN];
+        let first = tag(u64::MAX - 1);
         assert_eq!(wide.present(&first, t0), Admission::Admitted);
         for n in 0..HANDSHAKE_REPLAY_SLOTS - 1 {
             assert_eq!(wide.present(&tag(n), t0), Admission::Admitted);
@@ -368,7 +372,7 @@ mod tests {
         let one = Duration::from_nanos(HANDSHAKE_DAEMON_CPU_NANOS);
         let refilling = HandshakeBudget::with_share(1_000, one, t0);
         assert_eq!(refilling.present(&tag(0), t0), Admission::Admitted);
-        let answered = [0xef; MAC1_LEN];
+        let answered = tag(u64::MAX - 2);
         assert_eq!(refilling.present(&answered, t0), Admission::Busy);
         assert_eq!(
             refilling.present(&answered, t0 + Duration::from_secs(1)),
@@ -376,6 +380,6 @@ mod tests {
             "the bucket refilled, and the busy-answered mac1 is still spent"
         );
         assert_eq!(none.present(&answered, t0), Admission::Busy);
-        assert!(none.remembers(&answered));
+        assert!(none.remembers(answered.as_bytes()));
     }
 }
