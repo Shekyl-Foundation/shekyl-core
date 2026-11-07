@@ -109,16 +109,19 @@ ShekylPqcCanonicalLens shekyl_pqc_canonical_lens();
 /// production code. Free both buffers with shekyl_buffer_free; wipe secret_key.
 ShekylPqcKeypair shekyl_pqc_keypair_generate();
 
-/// Sign a message with a canonical-encoded hybrid (Ed25519 + ML-DSA-65) secret
-/// key on the **tx per-input PQC auth surface**: the Rust side binds the
-/// surface domain (SCHEME_DOMAIN_PQC_AUTH_TX, SA-R-2) internally — C++ never
-/// carries a domain string — so signatures from this export verify ONLY as tx
-/// per-input auth (shekyl_pqc_verify scheme 1). Do not reach for it from any
-/// other signing surface; each surface gets its own export with its own
-/// Rust-owned domain (see shekyl_pqc_sign_multisig_participant).
+/// Sign a signing payload hash with a canonical-encoded hybrid (Ed25519 +
+/// ML-DSA-65) secret key on the tx per-input PQC auth surface. The Rust side
+/// binds the surface domain (SCHEME_DOMAIN_PQC_AUTH_TX, SA-R-2) internally —
+/// C++ never carries a domain string — and signatures from this export verify
+/// as tx per-input auth (shekyl_pqc_verify scheme 1). Each other signing
+/// surface has its own export with its own Rust-owned domain (see
+/// shekyl_pqc_sign_multisig_participant).
 /// secret_key_ptr/len: canonical hybrid secret key bytes. Production keys are
 /// wallet-derived and Rust-held (rule 36) — production C++ never holds one;
 /// tests source keys from the TEST-SUPPORT shekyl_pqc_keypair_generate.
+/// message_ptr/len: the input's 64-byte signing payload hash
+/// (SigningPayloadHash). Any other length fails closed: success is false and
+/// the signature buffer is null, the refusal shekyl_pqc_verify reports as 11.
 /// Returns signature blob. Caller frees with shekyl_buffer_free.
 ShekylPqcSignatureResult shekyl_pqc_sign(
     const uint8_t* secret_key_ptr,
@@ -126,13 +129,13 @@ ShekylPqcSignatureResult shekyl_pqc_sign(
     const uint8_t* message_ptr,
     size_t message_len);
 
-/// TEST-SUPPORT ONLY (F-7): sign a message as a multisig participant (scheme 2),
-/// under the multisig-specific domain. A participant signature is NOT
-/// interchangeable with a shekyl_pqc_sign (single-signer) signature over the
-/// same message. Use this — not shekyl_pqc_sign — to assemble multisig
-/// containers in tests. Production multisig participant signing is unbuilt; do
-/// not call from production code. Returns signature blob; free with
-/// shekyl_buffer_free.
+/// TEST-SUPPORT ONLY (F-7): sign a signing payload hash as a multisig
+/// participant (scheme 2), under the multisig-specific domain. The signature
+/// verifies through scheme 2. Use this to assemble multisig containers in
+/// tests. message_ptr/len is the 64-byte signing payload hash; any other
+/// length fails closed, as shekyl_pqc_sign does. Production multisig
+/// participant signing is unbuilt; do not call from production code. Returns
+/// signature blob; free with shekyl_buffer_free.
 ShekylPqcSignatureResult shekyl_pqc_sign_multisig_participant(
     const uint8_t* secret_key_ptr,
     size_t secret_key_len,

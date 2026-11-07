@@ -8,7 +8,9 @@
 //! v1.1 for the full specification.
 
 use crate::error::PqcVerifyError;
-use crate::signature::{HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme};
+use crate::signature::{
+    HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
+};
 use shekyl_types::SigningPayloadHash;
 
 /// Largest multisig group served (MSW-G, settled 2026-07-15: 2f+1 at f=2;
@@ -392,6 +394,29 @@ pub fn verify_multisig(
     }
 
     Ok(())
+}
+
+/// Sign one multisig participant's share under
+/// [`SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`](crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG).
+///
+/// `message` is the input's [`SigningPayloadHash`], the same value
+/// [`verify_multisig`] checks. The signature verifies only under this
+/// domain. The FFI test export parses the caller's bytes as one and calls
+/// this.
+///
+/// # Errors
+///
+/// The hybrid signer's refusal. A message of the wrong width never reaches
+/// here.
+pub fn sign_multisig_participant(
+    secret: &HybridSecretKey,
+    message: &SigningPayloadHash,
+) -> Result<HybridSignature, crate::CryptoError> {
+    HybridEd25519MlDsa.sign(
+        secret,
+        crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
+        message.as_bytes(),
+    )
 }
 
 // ---------------------------------------------------------------------------

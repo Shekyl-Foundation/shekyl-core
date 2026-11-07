@@ -458,8 +458,8 @@ fn test_pqc_keygen_sign_verify_ffi() {
         assert!(!kp.public_key.ptr.is_null());
         assert!(!kp.secret_key.ptr.is_null());
 
-        // The input's signing payload hash is 64 bytes; nothing else verifies.
-        let msg = [0x6du8; 64];
+        // The input's signing payload hash is SigningPayloadHash::LEN bytes.
+        let msg = [0x6du8; shekyl_types::SigningPayloadHash::LEN];
         let sig = shekyl_pqc_sign(
             kp.secret_key.ptr,
             kp.secret_key.len,
@@ -468,6 +468,17 @@ fn test_pqc_keygen_sign_verify_ffi() {
         );
         assert!(sig.success);
         assert!(!sig.signature.ptr.is_null());
+
+        let short_sign = shekyl_pqc_sign(
+            kp.secret_key.ptr,
+            kp.secret_key.len,
+            msg.as_ptr(),
+            msg.len() - 1,
+        );
+        assert!(
+            !short_sign.success && short_sign.signature.ptr.is_null(),
+            "a short message is not a signing payload hash"
+        );
 
         let result = shekyl_pqc_verify(
             1,
@@ -480,8 +491,8 @@ fn test_pqc_keygen_sign_verify_ffi() {
         );
         assert_eq!(result, 0, "expected success (0), got error code {result}");
 
-        // A message that is not 64 bytes is not a signing payload hash: it
-        // fails as a parse (11), before any signature check.
+        // A message that is not a signing payload hash fails as a parse,
+        // before any signature check.
         let short = shekyl_pqc_verify(
             1,
             kp.public_key.ptr,
@@ -489,9 +500,13 @@ fn test_pqc_keygen_sign_verify_ffi() {
             sig.signature.ptr,
             sig.signature.len,
             msg.as_ptr(),
-            32,
+            msg.len() / 2,
         );
-        assert_eq!(short, 11, "a 32-byte message must fail as a parse");
+        assert_eq!(
+            short,
+            shekyl_crypto_pq::error::PqcVerifyError::DeserializationFailed as u8,
+            "a short message must fail as a parse"
+        );
 
         shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
         shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
@@ -537,8 +552,7 @@ fn test_page_size_nonzero() {
 fn test_pqc_verify_rejects_modified_signature() {
     unsafe {
         let kp = shekyl_pqc_keypair_generate();
-        // The input's signing payload hash is 64 bytes; nothing else verifies.
-        let msg = [0x6du8; 64];
+        let msg = [0x6du8; shekyl_types::SigningPayloadHash::LEN];
         let sig = shekyl_pqc_sign(
             kp.secret_key.ptr,
             kp.secret_key.len,

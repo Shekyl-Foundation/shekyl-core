@@ -5,10 +5,13 @@
 
 //! Init, PQC sign/verify, hashing, and secure memory.
 
+use shekyl_crypto_pq::error::PqcVerifyError;
+use shekyl_crypto_pq::multisig::sign_multisig_participant;
 use shekyl_crypto_pq::signature::{
-    HybridEd25519MlDsa, HybridSecretKey, SignatureScheme as _, SCHEME_DOMAIN_PQC_AUTH_TX,
-    SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
+    sign_pqc_auth, HybridEd25519MlDsa, HybridSecretKey, HybridSignature,
 };
+use shekyl_crypto_pq::CryptoError;
+use shekyl_types::SigningPayloadHash;
 use std::os::raw::c_char;
 use std::sync::Mutex;
 
@@ -95,12 +98,13 @@ pub extern "C" fn shekyl_pqc_keypair_generate() -> ShekylPqcKeypair {
 }
 
 /// One FFI sign body for every hybrid sign export: pointer validation, secret
-/// key parse, nested sign under the export's Rust-owned domain (SA-R-2), and
-/// canonical encoding. The exports differ **only** in the domain constant they
-/// bind — keeping the body single-sourced means a hardening fix (zeroization,
-/// slice validation) cannot land in one export and silently miss the other.
-fn pqc_sign_with_domain(
-    domain: &[u8],
+/// key parse, the message parsed as a [`SigningPayloadHash`], the nested sign
+/// the export names, and canonical encoding. The exports differ only in which
+/// Rust signer they call. A message of any other length fails closed, the
+/// same refusal [`shekyl_pqc_verify`] reports as
+/// [`PqcVerifyError::DeserializationFailed`].
+fn pqc_sign_payload(
+    sign: fn(&HybridSecretKey, &SigningPayloadHash) -> Result<HybridSignature, CryptoError>,
     secret_key_ptr: *const u8,
     secret_key_len: usize,
     message_ptr: *const u8,
@@ -116,13 +120,13 @@ fn pqc_sign_with_domain(
     let Some(message) = (unsafe { slice_from_ptr(message_ptr, message_len) }) else {
         return fail;
     };
+    let Some(message) = SigningPayloadHash::try_from_slice(message) else {
+        return fail;
+    };
     let Ok(secret_key) = HybridSecretKey::from_canonical_bytes(secret_key_bytes) else {
         return fail;
     };
-    match HybridEd25519MlDsa
-        .sign(&secret_key, domain, message)
-        .and_then(|sig| sig.to_canonical_bytes())
-    {
+    match sign(&secret_key, &message).and_then(|sig| sig.to_canonical_bytes()) {
         Ok(signature) => ShekylPqcSignatureResult {
             signature: ShekylBuffer::from_vec(signature),
             success: true,
@@ -131,11 +135,15 @@ fn pqc_sign_with_domain(
     }
 }
 
-/// Sign a message using a canonical-encoded hybrid secret key, under the
-/// **tx per-input PQC auth** surface (`SCHEME_DOMAIN_PQC_AUTH_TX`, SA-R-2 —
-/// the domain is Rust-owned; C++ never carries a domain string). Signatures
-/// from this export verify only on that surface; use the surface-specific
-/// export for any other context.
+/// Sign a [`SigningPayloadHash`] with a canonical-encoded hybrid secret key,
+/// under the tx per-input PQC auth surface. The domain is Rust-owned
+/// ([`sign_pqc_auth`]); C++ carries no domain string. Signatures from this
+/// export verify on that surface. Any other signing surface has its own
+/// export.
+///
+/// `message_ptr`/`message_len` are the hash's bytes
+/// ([`SigningPayloadHash::LEN`]). Any other length fails closed: `success`
+/// is false and the signature buffer is null.
 ///
 /// Returns a canonical-encoded hybrid signature buffer. Caller owns the buffer
 /// and must release it via `shekyl_buffer_free`.
@@ -146,8 +154,8 @@ pub extern "C" fn shekyl_pqc_sign(
     message_ptr: *const u8,
     message_len: usize,
 ) -> ShekylPqcSignatureResult {
-    pqc_sign_with_domain(
-        SCHEME_DOMAIN_PQC_AUTH_TX,
+    pqc_sign_payload(
+        sign_pqc_auth,
         secret_key_ptr,
         secret_key_len,
         message_ptr,
@@ -155,16 +163,14 @@ pub extern "C" fn shekyl_pqc_sign(
     )
 }
 
-/// Sign a message as a **multisig participant** (scheme 2), under the
-/// multisig-specific domain (SA-R-5). A participant signature is NOT
-/// interchangeable with a single-signer signature (`shekyl_pqc_sign`) over the
-/// same message: this applies `SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`, which is
-/// what `verify_multisig` (scheme_id=2) checks.
+/// Sign a [`SigningPayloadHash`] as a multisig participant (scheme 2).
+/// The domain is Rust-owned ([`sign_multisig_participant`]); the signature
+/// verifies only through `verify_multisig`. The message is the hash's bytes
+/// ([`SigningPayloadHash::LEN`]). Any other length fails closed.
 ///
 /// **Test-support only** (F-7): production multisig participant signing is
 /// unbuilt; this export exists so the C++ FFI test suite can assemble genuine
-/// multisig containers instead of faking participant sigs through the
-/// single-signer FFI. The domain is Rust-owned — C++ carries no domain string.
+/// multisig containers. The domain is Rust-owned — C++ carries no domain string.
 /// Do not call from production C++. Free the buffer via `shekyl_buffer_free`.
 #[no_mangle]
 pub extern "C" fn shekyl_pqc_sign_multisig_participant(
@@ -173,8 +179,8 @@ pub extern "C" fn shekyl_pqc_sign_multisig_participant(
     message_ptr: *const u8,
     message_len: usize,
 ) -> ShekylPqcSignatureResult {
-    pqc_sign_with_domain(
-        SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
+    pqc_sign_payload(
+        sign_multisig_participant,
         secret_key_ptr,
         secret_key_len,
         message_ptr,
@@ -226,25 +232,24 @@ pub extern "C" fn shekyl_pqc_verify(
     message_len: usize,
 ) -> u8 {
     let Some(pk_bytes) = (unsafe { slice_from_ptr(pubkey_blob, pubkey_len) }) else {
-        return 11; // DeserializationFailed
+        return PqcVerifyError::DeserializationFailed as u8;
     };
     let Some(msg) = (unsafe { slice_from_ptr(message, message_len) }) else {
-        return 11;
+        return PqcVerifyError::DeserializationFailed as u8;
     };
     let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_blob, sig_len) }) else {
-        return 11;
+        return PqcVerifyError::DeserializationFailed as u8;
     };
 
     // One body with the submit verifier (K13) and the consensus validator
     // (CEN-I18): the scheme dispatch and the Rust-owned tx-auth domain
     // (SA-R-2; C++ passes no domain) live in `verify_pqc_auth`, and the
     // discriminant it returns is the code this ABI has always exported.
-    // The message is the input's 64-byte signing payload hash; any other
-    // length is not one, and fails as a parse.
-    let Ok(msg) = <[u8; 64]>::try_from(msg) else {
-        return 11;
+    // The message is the input's signing payload hash; any other length
+    // fails as a parse.
+    let Some(msg) = SigningPayloadHash::try_from_slice(msg) else {
+        return PqcVerifyError::DeserializationFailed as u8;
     };
-    let msg = shekyl_types::SigningPayloadHash::from_bytes(msg);
     match shekyl_crypto_pq::signature::verify_pqc_auth(scheme_id, pk_bytes, sig_bytes, &msg) {
         Ok(()) => 0,
         Err(e) => e as u8,

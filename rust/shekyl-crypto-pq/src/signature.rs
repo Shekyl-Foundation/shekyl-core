@@ -540,6 +540,23 @@ pub fn verify_pqc_auth(
     }
 }
 
+/// Sign one input's tx auth under [`SCHEME_DOMAIN_PQC_AUTH_TX`].
+///
+/// `message` is that input's [`SigningPayloadHash`]. The FFI export parses
+/// the caller's bytes as one and calls this, so the domain stays in Rust
+/// and the export signs only a value of this type.
+///
+/// # Errors
+///
+/// The hybrid signer's refusal: malformed key material, or the combiner
+/// giving up. A message of the wrong width never reaches here.
+pub fn sign_pqc_auth(
+    secret: &HybridSecretKey,
+    message: &SigningPayloadHash,
+) -> Result<HybridSignature, CryptoError> {
+    HybridEd25519MlDsa.sign(secret, SCHEME_DOMAIN_PQC_AUTH_TX, message.as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
