@@ -139,6 +139,13 @@ jobs:
             python3 scripts/ci/check_job_timeouts.py --selftest
           run_one "Every step job carries its own timeout" \
             python3 scripts/ci/check_job_timeouts.py
+          # A red push run on dev reaches report-dev-red.yml only from the
+          # jobs its caller `needs`; a job added and left out of that list
+          # could go red on dev with no issue.
+          run_one "The dev-red reporter needs every job (selftest)" \
+            python3 scripts/ci/check_dev_red_reporter.py --selftest
+          run_one "The dev-red reporter needs every job" \
+            python3 scripts/ci/check_dev_red_reporter.py
           run_one "A depth-changing fetch runs only under GitHub Actions (selftest)" \
             python3 scripts/ci/check_workflow_fetch_guard.py --selftest
           run_one "A depth-changing fetch runs only under GitHub Actions" \

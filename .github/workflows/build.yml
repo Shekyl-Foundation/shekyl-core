@@ -953,3 +953,22 @@ jobs:
         with:
           name: ${{ env.OUTPUT }}
           path: ${{ env.OUTPUT }}
+
+  # A red push run on `dev` opens or threads a tracking issue
+  # (`report-dev-red.yml`). `needs` lists every other job in this file, so
+  # a red in any of them reports; scripts/ci/check_dev_red_reporter.py
+  # holds the list and this condition to the file. Only a push run on
+  # `dev` reports: a pull request's red is read on the pull request. A job
+  # past its `timeout-minutes` is cancelled, not failed, and `failure()`
+  # does not see it, so the condition reads each needed job's result: a
+  # failed or cancelled one reports, unless the whole run was cancelled
+  # (a newer merge superseded it), which `!cancelled()` leaves out.
+  report-dev-red:
+    needs: [changes, lint-rust-debug-macros, build-macos, build-ubuntu, test-ubuntu, build-windows-msvc, source-archive]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/report-dev-red.yml
