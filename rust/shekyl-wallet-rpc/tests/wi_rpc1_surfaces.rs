@@ -56,7 +56,7 @@ async fn rpc(state: Arc<AppState>, method: &str, params: Value) -> Value {
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
-        .uri("/")
+        .uri("/json_rpc")
         .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
