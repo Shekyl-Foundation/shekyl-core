@@ -17,7 +17,7 @@
 # release. An ignored test no scheduled lane runs is a deleted test with a
 # comment on it.
 #
-# Helpers, never run here: the six fixture and vector writers and the
+# Helpers, never run here: the five fixture and vector writers and the
 # regtest-address printer. They WRITE committed files or print a value for
 # a regeneration; a lane that regenerated a fixture and then compared
 # against it would pass every night.
