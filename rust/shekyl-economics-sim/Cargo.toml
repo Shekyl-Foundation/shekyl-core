@@ -36,6 +36,11 @@ shekyl-fcmp = { path = "../shekyl-fcmp" }
 # function — so the stuffer's FCMP proof cost rides real chain depth, not a
 # mirrored width product (DQ-2G).
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# ESR-17: the pool the daemon holds. CEN-M10's store-free policy — the
+# weight limit, the eviction and template orders, the two eviction walks —
+# called rather than restated. Default features off: the pool's store,
+# door and wire stay out of the sim.
+shekyl-mempool = { path = "../shekyl-mempool", default-features = false }
 # The D2 operand's unit (SHT-Q2): `SHARD_LENGTH` (W) and `shard_of`, the one
 # boundary function — the sim folds archival bytes and calls the partition, it
 # never divides by W itself (05-system-thinking "a formula two lanes need is a
@@ -47,3 +52,8 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 thiserror.workspace = true
 serde = { workspace = true }
 serde_json = "1"
+
+[dev-dependencies]
+# `the_received_key_is_the_pools_hour` pins the sim's hour to the pool's
+# received key, `ReceivedHour::of`. Test edge only.
+shekyl-chain-store = { path = "../shekyl-chain-store" }

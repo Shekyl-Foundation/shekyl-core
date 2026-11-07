@@ -86,9 +86,6 @@
 // LWMA-1 migration; see `docs/completed/DAA_LWMA1.md` §9.2 and the
 // `docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md` §3 disposition.
 
-#define CRYPTONOTE_MEMPOOL_TX_LIVETIME                    (86400*3) //seconds, three days
-
-
 // The relay's constants are Rust's, and none of them is a macro here: the
 // Dandelion++ stem count, epoch and fluff terms, the embargo, the covert
 // cadence and its channel count all live in shekyl-relay-privacy's `params`

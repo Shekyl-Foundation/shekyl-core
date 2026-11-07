@@ -480,6 +480,7 @@ pub fn onset_report(
     let mut fee_rows: Vec<(String, String)> = Vec::new();
     let mut lattice_rows: Vec<(String, String)> = Vec::new();
     let mut space_rows: Vec<(String, String)> = Vec::new();
+    let mut pool_rows: Vec<(String, String)> = Vec::new();
     for scenario in folded {
         let aggs = &scenario.aggs;
         fee_rows.push((
@@ -534,7 +535,25 @@ pub fn onset_report(
                         per_block(a.carried_txs),
                         per_block(a.demand_txs),
                         a.long_term_median as f64 / 1_000.0,
+                        per_block(a.dropped_txs()),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" |"),
+        ));
+        pool_rows.push((
+            scenario.name.clone(),
+            aggs.iter()
+                .filter(|a| BLOCK_SPACE_YEARS.contains(&a.year))
+                .map(|a| {
+                    format!(
+                        "{:>5.1}/{:>5.1}/{:>5.1} {:>6} {:>2}/{:>2}",
                         per_block(a.expired_txs),
+                        per_block(a.evicted_txs),
+                        per_block(a.refused_txs),
+                        a.waiting_at_year_end,
+                        age_quantile(&a.inclusion_ages, 50),
+                        age_quantile(&a.inclusion_ages, 95),
                     )
                 })
                 .collect::<Vec<_>>()
@@ -624,11 +643,21 @@ pub fn onset_report(
     writeln!(
         out,
         "  -> BLOCK SPACE (ESR-6) at y{}: carried/demanded transactions per block, the long-term\n\
-         median at year end (KB), and transactions per block dropped unserved after the pool\n\
-         livetime. Blocks take what the producer's fill rule admits at the effective median.",
+         median at year end (KB), and transactions per block dropped unserved (expired, evicted\n\
+         or refused, below). Blocks take what the producer's fill rule admits at the effective median.",
         BLOCK_SPACE_YEARS.map(|y| y.to_string()).join("/"),
     )?;
     for (name, series) in &space_rows {
+        writeln!(out, "       {:<20} {series}", trunc(name, 20))?;
+    }
+    writeln!(
+        out,
+        "  -> POOL (ESR-17) at y{}: per block, expired (reference out of CEN-I11's window) /\n\
+         evicted (CEN-M10, for a richer arrival or the limit) / refused (no room); waiting after\n\
+         the year's last block; age at inclusion in blocks, median/p95 ('-' when nothing was listed).",
+        BLOCK_SPACE_YEARS.map(|y| y.to_string()).join("/"),
+    )?;
+    for (name, series) in &pool_rows {
         writeln!(out, "       {:<20} {series}", trunc(name, 20))?;
     }
     if params.fee == crate::fee_model::FeeModel::PRODUCTION_DEFAULT {
@@ -636,6 +665,24 @@ pub fn onset_report(
     }
     crate::fee_horizon::write_report(out, params)?;
     Ok(results)
+}
+
+/// The smallest age at or below which `percent` of the bodies in `ages`
+/// (index = age in blocks) were listed; `-` when none were.
+fn age_quantile(ages: &[u64], percent: u64) -> String {
+    let total: u128 = ages.iter().map(|&n| u128::from(n)).sum();
+    if total == 0 {
+        return "-".to_string();
+    }
+    let want = (total * u128::from(percent)).div_ceil(100);
+    let mut seen: u128 = 0;
+    for (age, &n) in ages.iter().enumerate() {
+        seen += u128::from(n);
+        if seen >= want {
+            return age.to_string();
+        }
+    }
+    (ages.len() - 1).to_string()
 }
 
 /// A1-L — the lever table on the two bracketing scenarios. Prints to `out`,
