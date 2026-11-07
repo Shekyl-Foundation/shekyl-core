@@ -11,8 +11,7 @@ The legs are contrib/depends/ci-toolchains.json. A pull request runs:
   this script;
 - the MinGW leg (x86_64-w64-mingw32) alone when it touches what decides how
   an executable links (Rick, 2026-10-19): any CMakeLists.txt, anything under
-  cmake/, a C header under src/shekyl/ (where every C-callable export is
-  declared), or a file of a Rust crate that defines a C export. A crate
+  cmake/, or a file of a Rust crate that defines a C export. A crate
   defines one when a source file under its src/ declares `#[no_mangle]` or
   `#[unsafe(no_mangle)]`. Comments are stripped first (`strip_c_comments`),
   so a crate that mentions the attribute, or forbids it, is not one. The
@@ -58,7 +57,7 @@ SELF = "scripts/ci/depends_legs.py"
 # Every leg.
 FULL = ("contrib/depends/*", "Makefile", ".github/workflows/depends.yml", SELF)
 # The MinGW leg: how an executable links.
-LINK = ("CMakeLists.txt", "*/CMakeLists.txt", "cmake/*", "src/shekyl/*.h")
+LINK = ("CMakeLists.txt", "*/CMakeLists.txt", "cmake/*")
 # A declared export. The edition-2024 spelling is `#[unsafe(no_mangle)]`.
 # A mention in a comment is not a declaration; comments are stripped first.
 EXPORT_ATTR = re.compile(r"#\[\s*(?:no_mangle|unsafe\s*\(\s*no_mangle\s*\))\s*\]")
@@ -70,10 +69,12 @@ EXPORT_ATTR = re.compile(r"#\[\s*(?:no_mangle|unsafe\s*\(\s*no_mangle\s*\))\s*\]
 # is read as what it is.
 ATTR_LINE = re.compile(r"^\s*#\[.*\]\s*$")
 CFG_TEST = re.compile(r"#\[\s*cfg\s*\(\s*test\s*\)\s*\]")
-# Crates whose src/ declares an export today. The census reads the tree;
-# this set is what `--selftest` pins, so a comment that starts matching, or
-# a real export that appears, fails here instead of drifting.
-EXPORT_CRATES = frozenset({"shekyl-ffi", "shekyl-logging"})
+# Crates whose src/ declares an export today: none. The census reads the
+# tree; this set is what `--selftest` pins, so a comment that starts
+# matching, or a real export that appears, fails here instead of drifting.
+# A crate that declares one again is in the census at both revisions and
+# selects the MinGW leg, whatever this set says.
+EXPORT_CRATES = frozenset()
 
 
 def matches(path, patterns):
@@ -235,7 +236,10 @@ def selftest():
         {"name": "Win64", "host": MINGW},
         {"name": "x86_64 Linux", "host": "x86_64-unknown-linux-gnu"},
     ]
-    crates = {"shekyl-ffi", "shekyl-logging"}
+    # A hypothetical exporting crate: the path rules do not depend on which
+    # crates declare an export, so the cases name one that does not exist.
+    exporter = "shekyl-exporter"
+    crates = {exporter}
     cases = {
         "a depends package": (["contrib/depends/packages/boost.mk"], "all"),
         "the Makefile": (["Makefile"], "all"),
@@ -244,12 +248,11 @@ def selftest():
         "the root CMakeLists.txt": (["CMakeLists.txt"], "mingw"),
         "a nested CMakeLists.txt": (["src/blockchain_utilities/CMakeLists.txt"], "mingw"),
         "a cmake module": (["cmake/BuildRust.cmake"], "mingw"),
-        "an FFI header": (["src/shekyl/shekyl_ffi.h"], "mingw"),
-        "an export crate's file": (["rust/shekyl-logging/src/ffi.rs"], "mingw"),
-        "an export crate's manifest": (["rust/shekyl-ffi/Cargo.toml"], "mingw"),
+        "an export crate's file": ([f"rust/{exporter}/src/ffi.rs"], "mingw"),
+        "an export crate's manifest": ([f"rust/{exporter}/Cargo.toml"], "mingw"),
         "a crate with no export": (["rust/shekyl-dialer/src/lib.rs"], "none"),
         "docs only": (["docs/FOLLOWUPS.md"], "none"),
-        "C++ outside the headers": (["src/cryptonote_basic/account.cpp"], "none"),
+        "a script outside the link set": (["scripts/ci/change_scope.py"], "none"),
         "depends beats link": (["CMakeLists.txt", "Makefile"], "all"),
         "an empty change set runs everything": ([], "all"),
     }
@@ -283,8 +286,7 @@ def selftest():
             print(f"selftest FAIL: {name}: declares_export is {got}, wanted {want}")
             failed = True
     # Rule 47: the census reads this tree. shekyl-pow-randomx mentions the
-    # attribute and does not declare one; shekyl-node declares one under
-    # `#[cfg(test)]` only.
+    # attribute (its crate doc forbids it) and does not declare one.
     found = export_crates(ROOT)
     if found != EXPORT_CRATES:
         print(f"selftest FAIL: export census {sorted(found)}, wanted {sorted(EXPORT_CRATES)}")
@@ -293,11 +295,7 @@ def selftest():
     # declaration is.
     pinned = {
         "a crate that forbids the attribute": (["rust/shekyl-pow-randomx/src/lib.rs"], "none"),
-        "a crate whose only export is a test's stub": (
-            ["rust/shekyl-node/src/lib.rs"],
-            "none",
-        ),
-        "a crate that declares one": (["rust/shekyl-logging/src/lib.rs"], "mingw"),
+        "a crate that declares none": (["rust/shekyl-logging/src/lib.rs"], "none"),
     }
     for name, (changed, want) in pinned.items():
         got = scope(changed, EXPORT_CRATES)
@@ -308,18 +306,18 @@ def selftest():
     # head no longer has the crate, the base still does, and MinGW runs.
     removals = {
         "the last export is removed": (
-            ["rust/shekyl-logging/src/lib.rs"],
-            {"shekyl-ffi"} | {"shekyl-ffi", "shekyl-logging"},
+            [f"rust/{exporter}/src/lib.rs"],
+            {"shekyl-other"} | {"shekyl-other", exporter},
             "mingw",
         ),
         "the exporting source is deleted": (
-            ["rust/shekyl-logging/src/lib.rs"],
-            set() | {"shekyl-logging"},
+            [f"rust/{exporter}/src/lib.rs"],
+            set() | {exporter},
             "mingw",
         ),
         "neither revision declares an export": (
             ["rust/shekyl-dialer/src/lib.rs"],
-            {"shekyl-ffi"} | {"shekyl-ffi"},
+            {"shekyl-other"} | {"shekyl-other"},
             "none",
         ),
     }

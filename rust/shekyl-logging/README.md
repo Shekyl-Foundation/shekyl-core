@@ -1,38 +1,18 @@
 # shekyl-logging
 
 Unified `tracing`-based logger initialization for Shekyl Rust
-binaries, and the translation layer that will let C++ call sites
-route through the same subscriber once the `easylogging++` shim is
-retired in V4.
+binaries.
 
-## Why this crate exists
+## What this crate is
 
-Shekyl's logging story is mid-migration from the unmaintained C++
-`easylogging++` library to [`tracing`]. The migration ships in two
-chores:
-
-- **Chore #1 (this crate, shipped in V3.1 alpha.4).** Consolidate
-  the ad-hoc `tracing_subscriber::fmt().with_env_filter(...)`
-  bootstraps scattered across Shekyl's Rust binaries (`shekyl-cli`,
-  `shekyl-wallet-rpc`, `shekyl-daemon-rpc`) behind a single
-  `shekyl_logging::init` entry point. Define the canonical env var
-  (`SHEKYL_LOG`), the file-sink discipline (`0600` on POSIX for
-  non-rotating sinks — see the rotation caveat below), and ship a
-  stateful translator for the legacy category grammar so Chore #2
-  has a hinge.
-- **Chore #2 (V3.x, in progress).** Replace `MINFO` / `MDEBUG` /
-  etc. macros in `src/` and `contrib/` with calls that route
-  through a Rust FFI bridge into this crate. Drop
-  `external/easylogging++/` from the build. Retire `MONERO_LOGS` /
-  `MONERO_LOG_FORMAT` in favor of `SHEKYL_LOG`. The `size_rolling`
-  file sink variant lands here as a Chore #2 prerequisite so the
-  C++ daemon's legacy size-based rotation behavior carries over
-  unchanged.
-
-The translator in Chore #1 exists specifically so Chore #2 can
-accept C++-originated category strings (`net.p2p:DEBUG,wallet.wallet2:INFO`,
-numeric `0..=4` presets, `+`/`-` modifiers) without introducing a
-second grammar in the unified logger.
+One `shekyl_logging::init` entry point that every Shekyl binary
+(`shekyld`, `shekyl-cli`, `shekyl-wallet-rpc`) calls instead of
+building its own `tracing_subscriber` stack. It fixes the canonical
+env var (`SHEKYL_LOG`), the file-sink discipline (`0600` on POSIX
+for non-rotating and size-rolling sinks — see the rotation caveat
+below), the queued, never-blocking sinks, and the daemon's runtime
+filter changes (`subsystem::apply` for `log-level` /
+`log-category`).
 
 ## Public API
 
@@ -79,13 +59,11 @@ binaries actually need:
   Intended for operator-owned `--log-file <PATH>` opt-ins.
 - `FileSink::size_rolling(directory, filename_prefix, max_bytes,
   max_files)` — size-based rotation owned by `shekyl-logging`
-  itself. Intended for the C++ daemon default sink
-  (`~/.shekyl/logs/shekyld.log`, `100 MB`, `50` files) and other
-  long-running binaries where the operator wants bounded on-disk
-  footprint. `max_bytes = 0` disables the size check; `max_files
+  itself, for long-running binaries where the operator wants a
+  bounded on-disk footprint. `FileSink::within_budget` builds the
+  daemon's from its `log-size-max` byte budget. `max_bytes = 0` disables the size check; `max_files
   = 0` disables pruning. When a rollover fires, the live file is
-  renamed to `{filename_prefix}-{UTC %Y-%m-%d-%H-%M-%S}` (matching
-  the legacy C++ `generate_log_filename` format) and a fresh live
+  renamed to `{filename_prefix}-{UTC %Y-%m-%d-%H-%M-%S}` and a fresh live
   file is opened at the original path.
 
 On POSIX:
@@ -115,10 +93,9 @@ thread (`log-stderr`, `log-file`). A log call only enqueues. When a
 sink stalls and its queue fills, further lines for that sink are
 dropped and counted, never waited on; when the sink's writer catches
 up it writes one line, `N lines dropped since <time>`, so the loss is
-never silent. *Records-was (to 2026-10-14):* the stderr layer wrote
-synchronously, and one slow stderr write (a file on a stalled disk, a
-slow journald) held every logging thread, the daemon's P2P transport
-workers among them, for as long as it stalled.
+never silent: one slow stderr write (a file on a stalled disk, a slow
+journald) cannot hold a logging thread, the daemon's P2P transport
+workers among them.
 `tests/never_blocks.rs` times each log call while the sink's write
 stalls, and checks the drop report once the sink catches up.
 
@@ -138,37 +115,12 @@ waits on a full queue. A process about to exit calls it last (the
 daemon does, after its lock's release, with `FLUSH_WITHIN`), and so
 does a test that reads what a sink wrote. `tests/flush.rs` checks both
 outcomes through the installed subscriber. What the queues leave
-(shutdown, the pre-init passthrough, a bound in lines, the thread
-ledger) is recorded in the crate doc.
+(shutdown, a bound in lines, the thread ledger) is recorded in the crate doc.
 
 ### `LoggerGuard`
 
 RAII guard for the sinks' writer threads, one per sink. Must outlive
 the process's interesting work. See "The `LoggerGuard` footgun" below.
-
-### `directives_from_legacy_categories(current, new, fallback) -> Result<TranslationReport, FilterError>`
-
-Translator from the legacy easylogging++ `log-levels=` grammar to
-an `EnvFilter` directive string. Stateful: `current` is the
-currently-active spec (so `+cat:LEVEL` / `-cat` modifiers merge
-textually). Process startup passes `current = None`.
-
-Returns a `TranslationReport { directive, unknown, warnings }`.
-Unknown category names are *reported*, not rejected, so callers
-can choose to surface a warning without failing startup. Suffix
-globs (`*y.z:LEVEL`) are rejected with
-`FilterError::UnsupportedGlob` and, where possible, a suggested
-rewrite.
-
-**Empty-input semantics.** The two call sites diverge on purpose:
-
-- `current == None` + empty `new`: startup fallback. Uses
-  `fallback_default` (e.g. `WARN` for CLI, `INFO` for wallet-rpc).
-- `current == Some(..)` + empty `new`: RPC/runtime toggle. Returns
-  an `"off"` directive so the subsequent `EnvFilter` reload
-  *silences* all logging, matching the legacy C++
-  `mlog_set_categories("")` contract used by
-  `TEST(logging, no_logs)`. This is not "no change".
 
 ### Env vars
 
@@ -180,60 +132,6 @@ rewrite.
 Release builds never honor `RUST_LOG`. A long-lived shell export
 of `RUST_LOG=debug` from some other Rust project would otherwise
 be a privacy foot-cannon against Shekyl binaries.
-
-## C ABI (Chore #2 only)
-
-`shekyl-logging` also ships a `staticlib` crate-type that exposes a
-stable C ABI in `src/ffi.rs`. The Chore #2 C++ shim — the
-replacement for `external/easylogging++/` — links against
-`libshekyl_logging.a` and routes every `MINFO` / `MDEBUG` / etc.
-call site through the unified Rust subscriber. The header at
-`src/shekyl/shekyl_log.h` (landing in commit 3) mirrors the ABI
-verbatim.
-
-Summary of the C surface:
-
-- `shekyl_log_init_stderr(fallback_level)` /
-  `shekyl_log_init_file(dir, dir_len, prefix, prefix_len,
-  fallback_level, max_bytes, max_files)` — install the global
-  subscriber. `max_bytes = 0` maps to `FileSink::unrotated`; any
-  positive value maps to `FileSink::size_rolling`. First call wins;
-  later calls return `SHEKYL_LOG_ERR_ALREADY_INIT`.
-- `shekyl_log_level_enabled(level, target, target_len)` — hot-path
-  gate the shim calls before building the C++ `std::stringstream`.
-  Short-circuits filtered-out sites before any allocation.
-- `shekyl_log_emit(level, target, ..., msg, msg_len)` — emit one
-  event. Target strings are interned on first use into a leaked
-  `'static` callsite pool so `EnvFilter`'s target-matching lines
-  up with the translator output from
-  `directives_from_legacy_categories`.
-- `shekyl_log_set_categories(spec, spec_len, fallback_level)` /
-  `shekyl_log_set_level(numeric_level)` — runtime filter reload,
-  routed through the stateful translator (`current_spec` = last-
-  applied directive) and a `tracing_subscriber::reload::Layer`.
-- `shekyl_log_get_categories(out, out_cap)` /
-  `shekyl_log_default_path(binary_name, ..., out, out_cap)` /
-  `shekyl_log_last_error_message(out, out_cap)` — read-side
-  helpers. All return the total number of bytes that would have
-  been written, so callers can detect truncation and re-invoke
-  with a larger buffer. Bytes are never NUL-terminated.
-- `shekyl_log_flush(within_ms)` — `flush` for C: `SHEKYL_LOG_OK`, or
-  `SHEKYL_LOG_ERR_FLUSH_DEADLINE` when lines were still queued at the
-  deadline. The unit tests' stderr capture calls it before it opens
-  and before it reads.
-- `shekyl_log_shutdown()` — drop the stashed `LoggerGuard`: each sink
-  flushes within `FLUSH_WITHIN` and its writer stops. Safe to call
-  multiple times.
-
-Thread-safety: the global state is an `OnceLock<Mutex<_>>` and the
-last-error text is per-thread, so concurrent C calls across threads
-never race on diagnostic strings.
-
-Integration coverage: `tests/c_ffi.rs` writes a small C harness to
-a tempdir, compiles it with the system C compiler, links against
-`libshekyl_logging.a`, and asserts the printed output exercising
-init + enabled + emit + set-categories + shutdown. The test skips
-gracefully when no C toolchain is on `PATH`.
 
 ## The `LoggerGuard` footgun
 
@@ -294,17 +192,6 @@ before review approval.
    `LoggerGuard` is dropped, buffered events are lost. Graceful
    shutdown paths must let `main` return normally or explicitly
    drop the guard before calling `exit`.
-
-## Reserved legacy target names
-
-The preset strings used by the legacy easylogging++ numeric levels
-(`0..=4`) reference two self-instrumentation targets, `logging` and
-`msgwriter`. The translator preserves them verbatim so the preset's
-self-instrumentation overrides survive translation. They are
-**reserved**: new Rust `tracing::*` call sites must not use
-`target: "logging"` or `target: "msgwriter"`. A CI test
-(`tests/reserved_names.rs`) grep-enforces this against every Rust
-source outside this crate.
 
 ## Versioning and stability
 

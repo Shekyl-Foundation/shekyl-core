@@ -2,10 +2,10 @@
 //!
 //! Two primitives, two jobs, and the split is the point:
 //!
-//! - [`keccak256`] / [`tree_hash`] — **Keccak-256, for existing pinned contracts
+//! - [`keccak256`] — **Keccak-256, for existing pinned contracts
 //!   only.** Two caller classes, both closed: (a) outputs that must be
 //!   byte-identical to the Monero-descended C++ daemon — `prefix_hash`,
-//!   `tree_hash`, block IDs, `pqc_signing_payload_hashes`; (b) cross-party
+//!   the transaction tree hash, block IDs, `pqc_signing_payload_hashes`; (b) cross-party
 //!   multisig contracts with no C++
 //!   mirror but multiple independent signers pinned to these bytes by spec —
 //!   `intent_hash` / the chain-state fingerprint (`shekyl-multisig/src/intent.rs`).
@@ -34,11 +34,8 @@
 //! the same original-Keccak-256, and standardizing on the RustCrypto crate collapses
 //! the codebase onto one audited keccak (shekyl-oxide already uses `sha3`).
 //!
-//! **Naming.** Rust API is [`keccak256`] (states the primitive). The C++ daemon
-//! function stays `cn_fast_hash` (`src/crypto/hash.c`) for 1:1 consensus
-//! source-mapping; the FFI export stays `shekyl_cn_fast_hash` for C ABI
-//! stability. CryptoNote lineage name on the C++/ABI side only
-//! (`60-no-monero-legacy.mdc`).
+//! **Naming.** Rust API is [`keccak256`] (states the primitive), not the
+//! CryptoNote lineage name `cn_fast_hash` (`60-no-monero-legacy.mdc`).
 
 #![deny(unsafe_code)]
 
@@ -132,68 +129,6 @@ fn cshake256<const N: usize>(customization: &[u8], input: &[u8]) -> [u8; N] {
     let mut out = [0u8; N];
     reader.read(&mut out);
     out
-}
-
-/// Compute `tree_hash_cnt`: largest power of 2 strictly less than count.
-/// Equivalent to `tree_hash_cnt` in `src/crypto/tree-hash.c`.
-fn tree_hash_cnt(count: usize) -> usize {
-    debug_assert!(count >= 3);
-    let mut pow = 2usize;
-    while pow < count {
-        pow <<= 1;
-    }
-    pow >> 1
-}
-
-/// Compute Merkle tree hash from a list of 32-byte hashes.
-///
-/// Matches `tree_hash` in `src/crypto/tree-hash.c` exactly.
-pub fn tree_hash(hashes: &[Hash]) -> Hash {
-    let count = hashes.len();
-    match count {
-        0 => [0u8; HASH_SIZE],
-        1 => hashes[0],
-        2 => {
-            let mut buf = [0u8; 2 * HASH_SIZE];
-            buf[..HASH_SIZE].copy_from_slice(&hashes[0]);
-            buf[HASH_SIZE..].copy_from_slice(&hashes[1]);
-            keccak256(&buf)
-        }
-        _ => {
-            let mut cnt = tree_hash_cnt(count);
-            let mut ints = vec![[0u8; HASH_SIZE]; cnt];
-
-            let skip = 2 * cnt - count;
-            ints[..skip].copy_from_slice(&hashes[..skip]);
-
-            let mut i = skip;
-            let mut j = skip;
-            while j < cnt {
-                let mut buf = [0u8; 2 * HASH_SIZE];
-                buf[..HASH_SIZE].copy_from_slice(&hashes[i]);
-                buf[HASH_SIZE..].copy_from_slice(&hashes[i + 1]);
-                ints[j] = keccak256(&buf);
-                i += 2;
-                j += 1;
-            }
-            debug_assert_eq!(i, count);
-
-            while cnt > 2 {
-                cnt >>= 1;
-                for k in 0..cnt {
-                    let mut buf = [0u8; 2 * HASH_SIZE];
-                    buf[..HASH_SIZE].copy_from_slice(&ints[2 * k]);
-                    buf[HASH_SIZE..].copy_from_slice(&ints[2 * k + 1]);
-                    ints[k] = keccak256(&buf);
-                }
-            }
-
-            let mut buf = [0u8; 2 * HASH_SIZE];
-            buf[..HASH_SIZE].copy_from_slice(&ints[0]);
-            buf[HASH_SIZE..].copy_from_slice(&ints[1]);
-            keccak256(&buf)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -291,22 +226,5 @@ mod tests {
         // An empty customization silently degrades to plain SHAKE256 (no domain
         // separation); the guard must reject it rather than return a SHAKE digest.
         let _hash = cshake256_32(b"", b"anything");
-    }
-
-    #[test]
-    fn tree_hash_single() {
-        let h = [0xABu8; HASH_SIZE];
-        assert_eq!(tree_hash(&[h]), h);
-    }
-
-    #[test]
-    fn tree_hash_two() {
-        let a = keccak256(b"a");
-        let b = keccak256(b"b");
-        let root = tree_hash(&[a, b]);
-        let mut combined = [0u8; 64];
-        combined[..32].copy_from_slice(&a);
-        combined[32..].copy_from_slice(&b);
-        assert_eq!(root, keccak256(&combined));
     }
 }
