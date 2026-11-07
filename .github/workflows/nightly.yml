@@ -14,6 +14,7 @@ on:
           - store-ignored
           - economics-sim-ignored
           - chain-ingest-ignored
+          - wire-ignored
           - producer-gate
         default: all
       ref:
@@ -315,13 +316,65 @@ jobs:
           BRANCH: ${{ matrix.branch }}
         run: bash scripts/ci/ignored_set_chain_ingest.sh
 
+  wire-ignored:
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'wire-ignored' }}
+    # shekyl-wire's `#[ignore]`d set: the RT-W10 listed-tx parse harness,
+    # run with RT_W10_OUT unset so it writes a few samples to a scratch
+    # directory and removes it (the run proves the harness works; its
+    # figures come from the floor device), and the input-cap measurement
+    # (BA-I30). This job is the lane that invokes them. Before it none did.
+    #
+    # The crate's fixture and vector writers WRITE committed files and are
+    # never run here; the script names them so the set is exact.
+    #
+    # Same matrix as above. The set is read from the checked-out ref's
+    # scripts/ci/ignored_set_wire.sh, so each leg is judged by its own tree;
+    # `workflow_dispatch` with `ref` proves one branch's set.
+    runs-on: ubuntu-latest
+    # Not yet timed: a release build of shekyl-wire's test targets and two
+    # tests of seconds each. Size it from the first runs.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: nightly-wire-ignored-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: nightly-wire-ignored-${{ matrix.branch }}-
+
+      - name: Run shekyl-wire's ignored tests
+        # The set, the helpers and their assertions are
+        # scripts/ci/ignored_set_wire.sh, in the tree under test: each
+        # branch judges itself.
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: bash scripts/ci/ignored_set_wire.sh
+
   report-red:
     # A nightly tier without a route to a human "joins a silence"
     # (`run_live_daemon_gates.sh` header, PR #660): these lanes exist
     # because unrun ignored tests rotted unreported, and a red nobody reads
-    # is the same silence one hop later. For each red leg of the three
-    # ignored-test lanes this opens a tracking issue, or comments on the
-    # open one so repeats thread.
+    # is the same silence one hop later. For each red leg of the lanes in
+    # `needs` this opens a tracking issue, or comments on the open one so
+    # repeats thread.
     #
     # Its own job, with the only write permission in this workflow: the
     # lanes above run the code of the ref they check out, and no job that
@@ -329,7 +382,7 @@ jobs:
     #
     # Scheduled runs report. A dispatched run reports only when asked
     # (`report`): the person who dispatched it is reading it.
-    needs: [store-ignored, economics-sim-ignored, chain-ingest-ignored, producer-gate]
+    needs: [store-ignored, economics-sim-ignored, chain-ingest-ignored, wire-ignored, producer-gate]
     if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     permissions:
@@ -350,7 +403,7 @@ jobs:
               'store-ignored': {
                 title: 'nightly chain-store ignored set RED',
                 lines: [
-                  'The `store-ignored` job (shekyl-chain-store `--ignored`: the real-spend shard-boundary deletion test and the two benches) failed.',
+                  'The `store-ignored` job (shekyl-chain-store `--ignored`: the real-spend shard-boundary deletion test, the two benches and the RT-W10 coinbase harness) failed.',
                   'Either an ignored test no longer builds a chain its constants admit, or the boundary test\'s deletions disagree with the calendar.',
                 ],
               },
@@ -359,6 +412,13 @@ jobs:
                 lines: [
                   'The `producer-gate` job failed. It runs `bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects_through_the_staged_door` and its support-stream twin `a_produced_support_bundle_is_admitted_and_connects_through_the_staged_door` in `shekyl-chain-ingest` (SO-D12 increments 4c and 4b item 3): a produced bundle admitted by the queue and connected through the staged door on a driven chain.',
                   'If the job stopped before running anything, the test was renamed or un-ignored: point `scripts/ci/producer_gate.sh` at it.',
+                ],
+              },
+              'wire-ignored': {
+                title: 'nightly wire ignored tests RED',
+                lines: [
+                  'The `wire-ignored` job failed. It runs two `#[ignore]`d tests of `shekyl-wire`: `rt_w10_listed_tx_parse` (the RT-W10 harness, with `RT_W10_OUT` unset) and `the_input_caps_cost_is_measured_not_inherited` (BA-I30).',
+                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_wire.sh` whether the new test is run or is a helper.',
                 ],
               },
               'economics-sim-ignored': {
