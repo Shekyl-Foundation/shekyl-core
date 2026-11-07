@@ -68,7 +68,7 @@ fi
 # stderr is NOT discarded and rc>1 is NOT folded into "no markers": an
 # unreadable search root would otherwise read as a completed sweep.
 marked_rc=0
-marked=$(grep -rl "$MARKER" rust/ docs/ src/ --include='*.rs' --include='*.md' --include='*.h' --include='*.cpp') || marked_rc=$?
+marked=$(grep -rl "$MARKER" rust/ docs/ --include='*.rs' --include='*.md') || marked_rc=$?
 if [ "$marked_rc" -gt 1 ]; then
   echo "FAIL: the marker search errored (rc ${marked_rc}) -- a search that could"
   echo "      not read its roots has not shown that no marker survives."

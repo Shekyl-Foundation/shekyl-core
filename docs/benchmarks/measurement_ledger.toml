@@ -106,12 +106,11 @@ spec = [
   "rust/shekyl-fcmp/src",
   "rust/shekyl-fcmp-proofs/src",
   "rust/shekyl-oxide/crypto/fcmps",
-  "rust/shekyl-ffi/src/legacy_fcmp.rs",
-  "rust/shekyl-ffi/src/ct_balance_ffi.rs",
-  "rust/shekyl-ffi/src/legacy_core.rs",
+  "rust/shekyl-chain-rules/src/rules/proofs.rs",
+  "rust/shekyl-ct-balance/src",
+  "rust/shekyl-bulletproofs/src",
   "rust/shekyl-crypto-pq/src/signature.rs",
   "rust/shekyl-pow-randomx/src",
-  "src/fcmp/bulletproofs_plus.cc",
 ]
 stale_through = [
   { through = "20738bf714", note = "PL-D3: the leaf's fourth scalar becomes a Pedersen commitment opened in-circuit. The proof changed for every shape; its verify cost has not been re-measured on the floor." },
@@ -172,8 +171,8 @@ spec = [
 
 [[constant]]
 name = "fcmp_max_inputs_per_tx"
-defined_in = "src/cryptonote_config.h"
-needle = "#define FCMP_MAX_INPUTS_PER_TX                  8"
+defined_in = "rust/shekyl-wire/src/transaction.rs"
+needle = "pub const MAX_FCMP_INPUTS: usize = 8;"
 measured_by = ["BA-T10"]
 status = "unmeasured"
 carrier = "BA-T10. The 2026-09-24 input-count runs are quoted in CHAIN_RULES_SLICE_6.md section 5.4 and have no capture in the tree; the cap's derivation is owed (FOLLOWUPS, CEN-I4)."
@@ -211,8 +210,8 @@ path_set = "archival-attestation-cap"
 id = "relay-verify-cell"
 spec = [
   "rust/shekyl-fcmp/src",
-  "rust/shekyl-ffi/src/legacy_fcmp.rs",
-  "rust/shekyl-ffi/src/ct_balance_ffi.rs",
+  "rust/shekyl-daemon-rpc/src/submit/verifier.rs",
+  "rust/shekyl-ct-balance/src",
 ]
 
 [[constant]]
