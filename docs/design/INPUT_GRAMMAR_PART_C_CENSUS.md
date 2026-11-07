@@ -49,7 +49,7 @@
 |---|---|---|
 | `on_get_block_hash` | bare `hash64` string | `D/methods.rs:447-451` |
 | `calc_pow` | bare `hash64` string | `H:414` (`typedef std::string response`); `S:604`; `F:226-245` |
-| `/submit_transaction` | a tagged `verdict` object | `T/lib.rs:165-206` |
+| `/submit_transaction` | a tagged `verdict` object | `T/lib.rs:189-244` |
 | `/get_stem_tallies` | a hand-built `{floor,tallies}` object | `rust/shekyl-node/src/p2p_facts.rs:218-245` (`project_stem_tallies`; was `stem_tallies_json` in `shekyl-p2p`, and lines 545 to 599 of `src/p2p/net_node.inl` at `e8838b0095`) |
 | `option_set`, `option_show` | `{options:[…]}` | `D/options.rs:347-352` |
 
@@ -1252,9 +1252,10 @@ The reply is tagged and has **no `status`**.
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `verdict` | string enum | `accepted` / `already_in_pool` / `already_in_chain` / `rejected` | `T/lib.rs:165-206` |
-| `height` | u64 | `already_in_chain` only | `T/lib.rs:195-198` |
-| `cause` | string enum | `rejected` only: `malformed`, `fee_too_low`, `double_spend_conflict`, `stale_root`, `reference_too_recent`, `reference_not_found`, `consensus_rule` (3.63; its `row` names the consensus row, `"CEN-J15"`); `join_market_unsupported` left the set at 3.63; `unrecognized` is only the client's `#[serde(other)]` decode fallback for an unknown value; the daemon never sends it | `T/lib.rs:202-205,218-266` |
+| `verdict` | string enum | `accepted` / `already_in_pool` / `already_in_chain` / `rejected` | `T/lib.rs:189-244` |
+| `relay` | string enum | `already_in_pool` only, required: `held` / `held_overdue` / `published` / `untracked`. The daemon judges `held_overdue` when the state is read, on its own clock. A missing origin row is `untracked` | `T/lib.rs` `PoolRelay` |
+| `height` | u64 | `already_in_chain` only | `T/lib.rs:227-230` |
+| `cause` | string enum | `rejected` only: `malformed`, `fee_too_low`, `double_spend_conflict`, `stale_root`, `reference_too_recent`, `reference_not_found`, `consensus_rule` (3.63; its `row` names the consensus row, `"CEN-J15"`); `join_market_unsupported` left the set at 3.63; `unrecognized` is only the client's `#[serde(other)]` decode fallback for an unknown value; the daemon never sends it | `T/lib.rs:258-305` |
 
 A request error is HTTP 400 plain text. An internal fault is HTTP 500 plain text (`D/handlers/submit.rs:29-94`).
 
