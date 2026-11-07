@@ -18,8 +18,8 @@ default = []
 # The challenge read over the daemon's fetch scheduler, and the
 # classification of its outcome. Off by default: the ring is drawn from by
 # the template producer in `shekyl-chain-ingest`'s `pipeline`, which
-# `shekyl-ffi` (the wallet-side image) links, and the fetch client must not
-# enter that graph (SF-D4; `shekyl-archival-fetch-sched` is daemon-only).
+# `shekyl-chain-sync-runtime` and `shekyl-p2p-harness` take without the
+# fetch client (SF-D4; `shekyl-archival-fetch-sched` is daemon-only).
 # `shekyl-chain-ingest`'s `producer` feature turns this on for the node.
 fetch = ["dep:shekyl-archival-fetch-sched"]
 
