@@ -500,6 +500,15 @@ jobs:
           fi
           BAT5_STORE="$store" BAT5_MODE=phase BAT5_N=2 BAT5_PHASE_N=1 BAT5_LABEL=ci \
             cargo test --locked -p shekyl-p-serve --test ba_t5_floor_probe -- --ignored --nocapture
+      - name: "Nightly ignored sets: each crate's ignored tests agree with its lane's list"
+        # The three nightly lanes judge `--list --ignored` in their scripts.
+        # `--check` is that judgement and then stops. The listing is the debug
+        # build the workspace tests above compiled. The nightly lists release
+        # and runs the tests. Each script keeps its own rule.
+        run: |
+          bash scripts/ci/ignored_set_chain_ingest.sh --check
+          bash scripts/ci/ignored_set_chain_store.sh --check
+          bash scripts/ci/ignored_set_economics_sim.sh --check
       - name: "shard-visual-x86-smoke"
         working-directory: rust
         # Option (c) of `docs/V3_SHARD_VISUALIZATION.md` "Where the bound is
