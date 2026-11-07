@@ -7,6 +7,7 @@ use shekyl_curve_primitives::Commitment;
 
 mod derived;
 mod plus;
+mod torsion;
 
 #[test]
 fn bulletproofs_plus() {

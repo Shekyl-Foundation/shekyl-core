@@ -297,6 +297,16 @@ CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
         "(BA-I22). The derived keys stay in the crate; the function returns "
         "nothing. The bench is the one caller, and the feature dies with it",
     ),
+    (
+        "randomx-v2-sys",
+        "full-dataset",
+    ): (
+        "shekyl-randomx-differential",
+        "the five miner symbols (randomx_get_flags and the dataset functions) "
+        "exist for the Hole-1 parity harness. The light oracle build does not "
+        "enable them. A second crate enabling the feature is the isolation "
+        "failure this row exists to catch, and the feature dies with the harness",
+    ),
 }
 
 # (owning crate, feature) → why it is an ordinary, permanent feature. The third
@@ -378,6 +388,10 @@ PERMANENT: dict[tuple[str, str], str] = {
 # `shekyl-p2p-session` joined 2026-11-05 (the p2p remnant cutover, PR #1272):
 # its `harness` feature is enabled across a crate boundary by
 # shekyl-p2p-harness's tests. That is its only feature, and it is test-only.
+# `randomx-v2-sys` joined 2026-11-06, the commit that declared
+# `full-dataset` for shekyl-randomx-differential's Hole-1 bins. That is
+# its only feature. It is consumer-owned: the light differential build
+# does not enable it, and the feature dies with the harness.
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -406,6 +420,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-curve-tree",
         "shekyl-p2p-session",
         "shekyl-network",
+        "randomx-v2-sys",
     }
 )
 

@@ -58,7 +58,7 @@
 #
 # * Weekly cron (`0 6 * * 1`): the FULL 1024-pin `full-parity` sweep.
 #   The daily 05:00 cron runs that job's 19-dataset subset; the Monday
-#   cron is what selects the full label (see `PARITY_CTEST_LABEL`,
+#   cron is what selects the full scope (see `PARITY_SEED_COUNT`,
 #   which keys on `schedule != '0 5 * * *'`). This cron previously also
 #   drove the weekly `cargo-mutants` sweep; that job is DELETED (see
 #   below), but the cron is deliberately KEPT because full-parity's
@@ -256,7 +256,7 @@ jobs:
       # §F2 per-PR subset (16×8 = 128 pairs); the daily 05:00 cron (the
       # only schedule that reaches this job, per the `if:` above) runs
       # full nightly sizing (32×32 = 1024). Same fail-safe shape as
-      # full-parity's label selector.
+      # full-parity's scope selector.
       CORRECTNESS_SEEDHASHES: ${{ github.event_name == 'schedule' && '32' || '16' }}
       CORRECTNESS_DATA_PER_SEEDHASH: ${{ github.event_name == 'schedule' && '32' || '8' }}
     steps:
@@ -318,9 +318,11 @@ jobs:
         # the substrate-correct environment (with
         # `RANDOMX_V2_INSTALL_DIR` set, so `gen_canonical_outputs`
         # and the harness binary link successfully under clippy's
-        # `cargo check` phase).
+        # `cargo check` phase). The second command lints `full-dataset`,
+        # which the light build and the workspace clippy leave off.
         run: |
           cargo clippy --locked -p shekyl-randomx-differential -p randomx-v2-sys --all-targets -- -D warnings
+          cargo clippy --locked -p randomx-v2-sys -p shekyl-randomx-differential --all-targets --features full-dataset -- -D warnings
       - name: cargo test (harness lib + integration)
         working-directory: rust
         # Covers T9 (corpus-determinism), T10 (adversarial pin),
@@ -1058,36 +1060,24 @@ jobs:
           retention-days: 90
 
   full-parity:
-    # Phase 3a Hole-1 gate wiring (RandomX v2 test-regime hardening F1):
-    # the C **full-dataset** (miner mode) vs Rust **light-cache**
-    # (verifier) parity harness — `tests/randomx_v2_parity/` — existed
-    # since the Phase 3 cutover but was wired into ZERO workflows: an
-    # armed gate no automation ever ran. This job is its trigger.
+    # The Phase 3a Hole-1 gate (RANDOMX_V2_PHASE3_PLAN.md §7): the C
+    # library's full-dataset hash, the mode miners run, against the Rust
+    # verifier's light-cache hash, plus the miner-shaped known answer and
+    # the post-link symbol isolation of the daemon. Both harnesses are
+    # Rust (`shekyl-randomx-differential`'s `full-parity` and `miner-kat`
+    # bins, over `randomx-v2-sys`); the C reference is built by the same
+    # action as every other lane in this workflow. Each mode is its own
+    # process, so peak memory is one ~2 080 MiB dataset.
     #
-    # Cron-only, not per-PR: every exercised seed allocates and
-    # initializes a ~2 080 MiB dataset (minutes each, 19–35 datasets per
-    # run), on top of a full C++ daemon build — far outside the per-PR
-    # budget. Daily (05:00 cron + workflow_dispatch) runs the
-    # `randomx_v2_full_parity_daily` subset (genesis + canonical +
-    # miner-KAT + corpus seeds 0–15, mirroring the Phase 2g per-PR seed
-    # subset); the Monday 06:00 cron runs the full
-    # `randomx_v2_full_parity` sweep (all 32 corpus seeds = all 1024
-    # canonical pins re-checked under C-full-dataset).
+    # Scope: the daily 05:00 cron and a "daily" dispatch run genesis,
+    # canonical, the miner known answer and corpus seeds 0-15 (19
+    # datasets); the Monday cron and a "full" dispatch run all 32 seeds,
+    # every one of the 1024 canonical pins. A divergence is halt-on-red
+    # (§7.3): the binary's message says so.
     #
-    # Unlike structural-validate (which builds only the C reference
-    # out-of-band), this job needs the parent CMake project — the parity
-    # harness links cryptonote_basic + the Rust FFI — so it mirrors
-    # build.yml's Ubuntu container recipe (apt list + pinned-Rust install
-    # + ccache). CMake must stay single-config here (default Makefiles /
-    # Ninja with an explicit CMAKE_BUILD_TYPE): external/CMakeLists.txt
-    # FATAL_ERRORs on multi-config generators under
-    # BUILD_RANDOMX_V2_MINER_LIB=ON by design — do not "fix" that guard.
-    #
-    # The job also runs the binary symbol-isolation gate on the linked
-    # daemon (scripts/ci/check_randomx_symbol_isolation.sh). The same
-    # script runs per-PR on the Ubuntu 24.04 daemon artifact in
-    # build.yml; this cron copy is the cadence that still fires when no
-    # daemon-building PR ran that day.
+    # The symbol-isolation gate (scripts/ci/check_randomx_symbol_isolation.sh)
+    # also runs per-PR on build.yml's Ubuntu 24.04 daemon; this cron copy
+    # still fires on a day no daemon-building PR ran.
     name: 'cron: full-dataset parity gate + symbol isolation'
     runs-on: ubuntu-latest
     timeout-minutes: 300
@@ -1096,31 +1086,10 @@ jobs:
       image: ubuntu:24.04
       env:
         DEBIAN_FRONTEND: noninteractive
-        CCACHE_TEMPDIR: /tmp/.ccache-temp
-        CCACHE_DIR: ~/.ccache
     env:
-      # Daily subset ONLY for the cadences that mean it (the 05:00 daily
-      # cron, and manual dispatch unless parity_scope=full); everything
-      # else falls through to the FULL sweep. Fail-safe direction: if the
-      # weekly cron is ever retimed, the retimed run no longer
-      # string-matches anything and runs the FULL sweep — over-testing
-      # loudly — instead of the inverted ternary's failure mode, where a
-      # retimed weekly silently degrades to the daily subset and the
-      # 1024-pin sweep never runs again. (A retimed DAILY cron also falls
-      # through to full: louder and slower, but never silent
-      # under-coverage. A dropped Monday cron is recoverable via
-      # dispatch with parity_scope=full.)
-      #
-      # The `inputs.*` reference is guarded behind the event_name check:
-      # the inputs context is only populated for workflow_dispatch, and
-      # this expression is the load-bearing cadence selector — it must
-      # not depend on how an empty context dereferences on cron events.
-      PARITY_CTEST_LABEL: ${{ ((github.event_name == 'workflow_dispatch' && inputs.parity_scope == 'full') || (github.event_name == 'schedule' && github.event.schedule != '0 5 * * *')) && 'randomx_v2_full_parity' || 'randomx_v2_full_parity_daily' }}
+      PARITY_SEED_COUNT: ${{ ((github.event_name == 'workflow_dispatch' && inputs.parity_scope == 'full') || (github.event_name == 'schedule' && github.event.schedule != '0 5 * * *')) && '32' || '16' }}
     steps:
       - name: set apt conf
-        # Mirrors build.yml APT_SET_CONF (kept in sync manually; this
-        # workflow already mirrors build.yml's Rust-install block the
-        # same way).
         run: |
           tee -a /etc/apt/apt.conf.d/80-custom << EOF
           Acquire::Retries "3";
@@ -1130,62 +1099,58 @@ jobs:
       - name: update apt
         run: apt update
       - name: install build dependencies
-        # Mirrors build.yml APT_INSTALL_LINUX.
-        run: apt -y install build-essential cmake libboost-all-dev graphviz doxygen pkg-config libssl-dev libsodium-dev ccache git curl
+        run: apt -y install build-essential cmake ninja-build pkg-config git curl binutils
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
           submodules: recursive
       - name: install Rust toolchain
-        # Composite action (.github/actions/install-rust); see the
-        # structural-validate job's step comment. Must come AFTER
-        # checkout: a `./`-referenced local action does not exist on
-        # the runner until the repo is checked out (the inline `run:`
-        # it replaced had no such dependency).
         uses: ./.github/actions/install-rust
-      - uses: actions/cache@v5
-        with:
-          path: ~/.ccache
-          key: ccache-ubuntu:24.04-full-parity-${{ github.sha }}
-          restore-keys: ccache-ubuntu:24.04-full-parity-
-      - uses: ./.github/actions/set-make-job-count
-      - name: build daemon + parity harness + miner-KAT tool
-        env:
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: |
-          ccache --max-size=150M
-          ccache --set-config=compression=true
-          cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release -D BUILD_RANDOMX_V2_MINER_LIB=ON
-          cmake --build build --target shekyl_rust_bins randomx-v2-full-parity randomx-v2-miner-kat
-      - name: symbol isolation on linked daemon (nm)
-        run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
-      - name: generate parity corpus
-        # Deterministic (fixed ChaCha20 seed): byte-identical on every
-        # run at the same corpus revision; the per-PR structural gate
-        # pins its SHA-256. Consumes the C reference the parent CMake
-        # build just produced (randomx-v2-sys links librandomx.a).
+      - name: Configure + build randomx-v2 C reference
+        uses: ./.github/actions/build-randomx-v2-ref
+      - name: build the daemon and the parity harnesses
         working-directory: rust
-        # Runtime $GITHUB_WORKSPACE, NOT the ${{ github.workspace }}
-        # template: inside a container job the template interpolates
-        # the HOST path (/home/runner/work/...), which does not exist
-        # in the container (the work tree is mounted at /__w/...) —
-        # the first hosted execution of this job died exactly there
-        # (dispatch run 28690002177: "No such file or directory"
-        # creating the corpus). The env var is container-correct.
         run: |
-          export RANDOMX_V2_INSTALL_DIR="$GITHUB_WORKSPACE/build/external/randomx-v2-install"
-          cargo run --release --locked -p shekyl-randomx-differential \
-            --bin gen-parity-corpus -- \
-            --out "$GITHUB_WORKSPACE/build/tests/randomx_v2_parity/parity_corpus.dat"
-      - name: run parity gate (ctest -L ${{ env.PARITY_CTEST_LABEL }})
-        # Serial (ctest default): each test allocates a ~2 080 MiB
-        # dataset; parallel invocations would multiply peak memory.
-        # --no-tests=error: zero matched tests is a wiring failure, not
-        # a pass — this job exists because the gate had no trigger.
-        working-directory: build
-        run: ctest -L "$PARITY_CTEST_LABEL" --output-on-failure --no-tests=error
-
+          cargo build --release --locked -p shekyld
+          cargo build --release --locked -p shekyl-randomx-differential --features full-dataset --bin full-parity --bin miner-kat
+      - name: symbol isolation on linked daemon (nm)
+        run: scripts/ci/check_randomx_symbol_isolation.sh rust/target/release/shekyld
+      - name: run the parity gate (${{ env.PARITY_SEED_COUNT }} corpus seeds)
+        shell: bash
+        working-directory: rust
+        # Every mode runs even after a failure, and the step fails if any
+        # did (rule 46: each exit is read, none travels through a pipe).
+        # `<seed-count>` is the full corpus's, so a resized corpus refuses
+        # here instead of leaving seeds unrun.
+        run: |
+          set -u
+          bin=target/release
+          failed=0
+          run() {
+            echo "::group::$*"
+            # The step shell is `bash -e`: a bare failing "$@" would exit
+            # here, before the status is kept and the other modes run.
+            local rc=0
+            "$@" || rc=$?
+            echo "::endgroup::"
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::$* exited $rc"
+              failed=$((failed + 1))
+            fi
+          }
+          run "$bin/full-parity" genesis
+          run "$bin/full-parity" canonical
+          run "$bin/miner-kat" "Shekyl RandomX v2 full-dataset parity KAT (Phase 3a, pin aaafe71)" \
+            34f8b0179159d837e463c17c8692c106d2d3536f7da325aeefeb3e22a136b651
+          for seed in $(seq 0 $((PARITY_SEED_COUNT - 1))); do
+            run "$bin/full-parity" corpus "$seed" 32
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::$failed full-dataset parity run(s) failed"
+            exit 1
+          fi
+          echo "full-dataset parity: genesis, canonical, the miner known answer and $PARITY_SEED_COUNT corpus seeds passed"
   native-arm:
     # Native aarch64 lane (test-regime hardening PR-2 / audit F5): the
     # verifier ships on exactly two arches (fpu_rounding.rs: x86_64
