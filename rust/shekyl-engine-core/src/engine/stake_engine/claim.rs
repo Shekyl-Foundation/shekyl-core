@@ -24,7 +24,7 @@ use shekyl_tx_builder::{
     tx_prefix_hash_from_parts_with_extra, tx_signable_for, AuthSlots, InputTerm, SpendLayout,
     TreeContext,
 };
-use shekyl_types::GlobalOutputIndex;
+use shekyl_types::{GlobalOutputIndex, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Input;
 use zeroize::Zeroizing;
@@ -504,7 +504,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // bundle, no seed re-borrow) over the payload hash phase 1 bound
         // to the identity key.
         let emission_sig = {
-            let emission_payload = open
+            let emission_payload: &SigningPayloadHash = open
                 .sole_extra_payload()
                 .map_err(|e| BondAssemblyError::build("emission slot payload", e))?;
             HybridEd25519MlDsa

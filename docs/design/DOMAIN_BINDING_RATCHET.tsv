@@ -9,11 +9,12 @@
 # v3.1.0, the genesis release, while any row remains (Rick, 2026-11-05).
 #
 # Sections:
-#   input-raw  an input:<type> row whose site does not take the named type: no
-#              newtype exists for the value (frame output, a key derived under
-#              salt_for, a Noise handshake message), or the site takes raw
-#              bytes. Owner: the archival lane; each row is typed when its own
-#              round touches it.
+#   input-raw  an input:<type> row whose applying function does not take the
+#              named type. The site is the function that applies the domain.
+#              No newtype exists yet for some values (a frame output, a key
+#              derived under salt_for, a Noise handshake message), or the
+#              function takes raw bytes. Owner: the archival lane; each row
+#              is typed when its own round touches it.
 #   unframed   an id or name cSHAKE row not declared as an IdDomain or
 #              NameDomain constant: the binding is in its input, but not
 #              through frame.

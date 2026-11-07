@@ -17,8 +17,11 @@
 //!    type has a row marked accordingly;
 //! 3. an HKDF row marked `name` is defined beside a call of `salt_for`;
 //! 4. both Noise handshakes take their prologue from a `&NetworkId`;
-//! 5. an `input:<type>` row's site takes the named type, in a function
-//!    parameter or a field of its input struct;
+//! 5. an `input:<type>` row is held at every production function that
+//!    applies its domain constant. The function carries the type in a
+//!    parameter, a typed binding, a field of those types, a same-file
+//!    function it calls, or another method of the same type. A slice, a
+//!    `Vec`, an array and a tuple of the type carry it;
 //! 6. `local` is refused on a row whose verification is evidence of who made
 //!    something or that it is authentic (role `signed` or `auth`), and
 //!    `derived:` names a rule present in `CONSENSUS_RULE_CENSUS.md`;
@@ -39,6 +42,8 @@ use std::path::PathBuf;
 use quote::ToTokens;
 use syn::visit::Visit;
 
+#[path = "support/input_sites.rs"]
+mod input_sites;
 #[path = "support/registry_parse.rs"]
 mod registry_parse;
 
@@ -361,6 +366,12 @@ fn check(
         .map(|f| (f, read(f).and_then(|s| facts_of(&s).ok())))
         .collect();
     let facts = |file: &str| parsed.get(file).and_then(Option::as_ref);
+    let files = production_sources();
+    if files.is_empty() {
+        bad.push("no production Rust sources under rust/".to_owned());
+    }
+    let (workspace, parse_errors) = input_sites::collect(read, &files);
+    bad.extend(parse_errors);
 
     for literal in ratchet
         .input_raw
@@ -495,27 +506,45 @@ fn check(
                 row.file
             ));
         }
-        // 5. input:<type> rows take the type, or are in the ratchet.
+        // 5. input:<type> rows are held at the function that applies the
+        // domain, or are in the ratchet.
         if let Binding::Input(t) = row.binding {
             if derivation {
                 continue;
             }
-            let rust = INPUT_TYPES
+            let listed = ratchet.input_raw.contains(&row.literal);
+            let Some(rust_type) = INPUT_TYPES
                 .iter()
                 .find(|(name, _)| *name == t)
-                .and_then(|(_, r)| *r);
-            let typed = rust.is_some_and(|r| f.param_types.iter().any(|ty| names_type(ty, r)));
-            let listed = ratchet.input_raw.contains(&row.literal);
-            if typed && listed {
+                .and_then(|(_, rust)| *rust)
+            else {
+                if !listed {
+                    bad.push(format!(
+                        "{at}: input:{t} has no Rust type yet and it is not in the ratchet"
+                    ));
+                }
+                continue;
+            };
+            let apps = input_sites::applications(&workspace, row.konst, row.literal, rust_type);
+            let proven = !apps.is_empty() && apps.iter().all(|app| app.carries);
+            if proven && listed {
                 bad.push(format!(
                     "{at}: its site takes {t}; remove it from the ratchet"
                 ));
             }
-            if !typed && !listed {
-                bad.push(format!(
-                    "{at}: input:{t}, but no site in {} takes it and it is not in the ratchet",
-                    row.file
-                ));
+            if !proven && !listed {
+                if apps.is_empty() {
+                    bad.push(format!(
+                        "{at}: no production function applies {} and it is not in the ratchet",
+                        row.konst
+                    ));
+                }
+                for app in apps.iter().filter(|app| !app.carries) {
+                    bad.push(format!(
+                        "{at}: {}::{} applies {} without taking {t} and it is not in the ratchet",
+                        app.file, app.function, row.konst
+                    ));
+                }
             }
         }
     }
@@ -567,6 +596,55 @@ fn retired_reuse<'a>(registry: &'a str, sources: &[(String, String)]) -> Vec<(&'
         }
     }
     hits
+}
+
+/// Production Rust sources, repository-relative and `/`-separated.
+///
+/// The gate reads them through the same `read` the controls override.
+/// `tests`, `benches`, `examples`, `shekyl-oxide` and `target` stay out
+/// of the walk, and so do `tests.rs`, `*_tests.rs` and `*_test.rs`:
+/// those files are the `#[path]` bodies of test modules, and a
+/// standalone parse would treat them as production.
+fn production_sources() -> Vec<String> {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if path.is_dir() {
+                if !matches!(
+                    name.as_str(),
+                    "target" | ".git" | "shekyl-oxide" | "tests" | "benches" | "examples"
+                ) {
+                    walk(&path, root, out);
+                }
+                continue;
+            }
+            let skipped = !name.ends_with(".rs")
+                || name == "tests.rs"
+                || name.ends_with("_tests.rs")
+                || name.ends_with("_test.rs");
+            if skipped {
+                continue;
+            }
+            let Ok(rel) = path.strip_prefix(root) else {
+                continue;
+            };
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            if rel.split('/').any(|part| part == "src") {
+                out.push(rel);
+            }
+        }
+    }
+    let root = repo_root();
+    let mut out = Vec::new();
+    walk(&root.join("rust"), &root, &mut out);
+    out.sort();
+    out
 }
 
 fn repo_root() -> PathBuf {
@@ -755,13 +833,104 @@ fn control_an_untyped_input_row_outside_the_ratchet_is_refused() {
 }
 
 #[test]
-fn a_slice_of_the_type_names_it_and_an_array_does_not() {
-    assert!(names_type("& [BlockHash]", "BlockHash"));
-    assert!(names_type("& 'a [shekyl_types :: BlockHash]", "BlockHash"));
-    assert!(names_type("& BlockHash", "BlockHash"));
-    assert!(!names_type("& [u8 ; 32]", "BlockHash"));
-    assert!(!names_type("& [BlockHash ; 2]", "BlockHash"));
-    assert!(!names_type("& [u8]", "BlockHash"));
+fn a_container_or_a_unique_struct_field_carries_the_type() {
+    let empty = BTreeMap::new();
+    assert!(input_sites::type_carries(
+        "& [BlockHash]",
+        "BlockHash",
+        &empty
+    ));
+    assert!(input_sites::type_carries(
+        "& 'a [shekyl_types :: BlockHash]",
+        "BlockHash",
+        &empty
+    ));
+    assert!(input_sites::type_carries(
+        "& BlockHash",
+        "BlockHash",
+        &empty
+    ));
+    assert!(input_sites::type_carries(
+        "& [BlockHash ; 2]",
+        "BlockHash",
+        &empty
+    ));
+    assert!(input_sites::type_carries(
+        "Vec < BlockHash >",
+        "BlockHash",
+        &empty
+    ));
+    assert!(input_sites::type_carries(
+        "(BlockHeight , BlockHash)",
+        "BlockHash",
+        &empty
+    ));
+    assert!(input_sites::type_carries(
+        "Option < & BlockHash >",
+        "BlockHash",
+        &empty
+    ));
+    assert!(!input_sites::type_carries(
+        "& [u8 ; 32]",
+        "BlockHash",
+        &empty
+    ));
+    assert!(!input_sites::type_carries("& [u8]", "BlockHash", &empty));
+
+    let mut structs = BTreeMap::new();
+    structs.insert(
+        "LedgerSnapshot".to_owned(),
+        vec![vec!["ReorgBlocks".to_owned()]],
+    );
+    structs.insert(
+        "ReorgBlocks".to_owned(),
+        vec![vec!["Vec < (BlockHeight , BlockHash) >".to_owned()]],
+    );
+    structs.insert(
+        "Input".to_owned(),
+        vec![vec!["BlockHash".to_owned()], vec!["TxHash".to_owned()]],
+    );
+    assert!(input_sites::type_carries(
+        "LedgerSnapshot",
+        "BlockHash",
+        &structs
+    ));
+    assert!(!input_sites::type_carries(
+        "LedgerSnapshot",
+        "TxHash",
+        &structs
+    ));
+    assert!(!input_sites::type_carries("Input", "BlockHash", &structs));
+}
+
+/// A typed parameter on a function the draw does not call leaves the
+/// row unproven. `challenge_nonce` still takes `BlockHash`; `stream`,
+/// which applies the draw domain, does not.
+#[test]
+fn control_a_typed_parameter_elsewhere_in_the_file_does_not_clear_the_row() {
+    const DRAW: &str = "rust/shekyl-archival-retention/src/secret_draw.rs";
+    const STREAM: &str = "fn stream(seed: &[u8; 32], block_hash: &BlockHash,";
+    let read = |file: &str| {
+        let text = read_tree(file)?;
+        Some(if file == DRAW {
+            let untyped = "fn stream(seed: &[u8; 32], block_hash: &[u8; 32],";
+            let with_decoy = text.replacen(
+                STREAM,
+                &format!("fn decoy_block_hash(_block_hash: &BlockHash) {{}}\n{untyped}"),
+                1,
+            );
+            assert_ne!(with_decoy, text, "the draw stream signature was not found");
+            with_decoy
+        } else {
+            text
+        })
+    };
+    let bad = check(REGISTRY, RATCHET, CENSUS, &read);
+    assert!(
+        bad.iter()
+            .any(|b| b.contains("archival-draw-v1") && b.contains("not in the ratchet")),
+        "{bad:?}"
+    );
 }
 
 #[test]
