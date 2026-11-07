@@ -267,10 +267,12 @@ fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
     colour: LineColour,
 ) -> Result<(LoggerGuard, reload::FilterReloadHandle), InitError> {
     let filter = match &config.directive {
-        Some(directive) => EnvFilter::try_new(directive),
-        None => filter::resolve_env_filter(config.fallback_default),
-    }
-    .map_err(|e| InitError::FilterParse(e.to_string()))?;
+        Some(directive) => {
+            EnvFilter::try_new(directive).map_err(|e| InitError::FilterParse(e.to_string()))
+        }
+        None => filter::resolve_env_filter(config.fallback_default)
+            .map_err(|e| InitError::FilterParse(e.to_string())),
+    }?;
 
     // Wrap the resolved `EnvFilter` in a reload layer so a runtime
     // `log-level` / `log-category` change ([`subsystem::apply`]) swaps

@@ -8,7 +8,7 @@
 
 use tracing::Level;
 
-use shekyl_logging::filter::resolve_env_filter;
+use shekyl_logging::filter::{resolve_env_filter, FilterError};
 use shekyl_logging::SHEKYL_LOG_ENV;
 
 // -----------------------------------------------------------------------
@@ -100,4 +100,18 @@ fn a_set_shekyl_log_is_the_directive() {
         let filter = resolve_env_filter(Level::WARN).expect("the directive parses");
         assert_eq!(filter.to_string(), "shekyl_relay=debug");
     });
+}
+
+#[test]
+fn a_cxx_log_category_is_refused_by_name() {
+    with_env(
+        &[(SHEKYL_LOG_ENV, Some("info,net.p2p:DEBUG"))],
+        || match resolve_env_filter(Level::WARN) {
+            Err(FilterError::CxxCategory { target, source_var }) => {
+                assert_eq!(target, "net.p2p:DEBUG");
+                assert_eq!(source_var, SHEKYL_LOG_ENV);
+            }
+            other => panic!("a C++ category must be refused, got {other:?}"),
+        },
+    );
 }

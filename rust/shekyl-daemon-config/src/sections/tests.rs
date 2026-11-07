@@ -371,6 +371,21 @@ fn log_categories_become_the_owners_directive() {
     assert_eq!(sink.filename_prefix, "shekyld-mainnet.log");
 }
 
+/// A C++ log category is not a subsystem: the key is refused where it is
+/// read, on the command line and in the file, so a configuration written
+/// for the C++ daemon fails at start instead of filtering nothing.
+#[test]
+fn a_cxx_log_category_is_refused_as_a_key() {
+    let cli = build_from(&["--log-category", "net=debug"], "").unwrap_err();
+    assert_eq!(cli[0].option.as_deref(), Some("log-category"), "{cli:?}");
+    let file = build_from(&[], "log-category = { blockchain = \"debug\" }\n").unwrap_err();
+    assert_eq!(file[0].option.as_deref(), Some("log-category"), "{file:?}");
+    // The same form with a subsystem key is the user guide's example, and
+    // builds: the refusal is the key's.
+    let ok = build_from(&[], "log-category = { p2p = \"debug\", tor = \"trace\" }\n").unwrap();
+    assert!(ok.logging.directive().contains("shekyl_dialer=debug"));
+}
+
 #[test]
 fn an_ipv6_admin_listener_is_accepted() {
     let c = build_from(&["--rpc-admin-listen", "[::1]:11029"], "").unwrap();
