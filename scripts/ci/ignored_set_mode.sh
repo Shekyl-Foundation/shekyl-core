@@ -3,7 +3,7 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# Sourced by the three nightly ignored-set scripts. Each script judges its
+# Sourced by the four nightly ignored-set scripts. Each script judges its
 # crate's `--list --ignored` against the set it names, then runs that set.
 #
 # ignored_set_mode sets two variables:

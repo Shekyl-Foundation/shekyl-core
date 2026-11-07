@@ -636,9 +636,10 @@ serde_json = "1"
 
 # A test's own temp directory, removed when it drops: every store the
 # chain-store, chain-ingest and p2p-harness tests open lives in one, and the
-# RT-W10 harnesses write their scratch output to one. Dev-only, except in
-# `shekyl-p2p-harness` (`publish = false`, no dependents). Verified at
-# source (3.27.0, rule 17): `Builder::tempdir` makes the directory with a
+# RT-W10 harnesses write their scratch output to one (`shekyl-chain-store`
+# `store/rt_w10_cost.rs`, `shekyl-wire` `tests/rt_w10_tx_parse.rs`). Dev-only,
+# except in `shekyl-p2p-harness` (`publish = false`, no dependents). Verified
+# at source (3.27.0, rule 17): `Builder::tempdir` makes the directory with a
 # non-recursive `DirBuilder::create` under a random name, retrying a name
 # that exists, so a planted path or symlink is never written into or
 # deleted; `TempDir::close` removes it and reports the error, and `Drop`

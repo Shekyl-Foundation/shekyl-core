@@ -558,8 +558,42 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --locked --no-deps --lib -p shekyl-win-sec
 
-      # TB-7 part 2 on Windows. This is the only job that compiles this
-      # crate's Windows code, so clippy for it lives here too.
+      # Clippy on a Windows target, every lane the Linux gate runs
+      # (`rust-audit-test.yml`, `multisig-feature.yml`), with the same
+      # commands. The Linux gate never compiles a `cfg(windows)` arm, and
+      # before this step only `shekyl-win-sec` and `shekyl-tor-control-client`
+      # were linted here: a Windows sweep for #1293 found eight crates
+      # failing `-D warnings` and every `--all-targets` lane failing to build
+      # (gungraun's `client_requests`, now `cfg(unix)`). Every lane runs
+      # whatever the earlier ones did, its exit read from $LASTEXITCODE
+      # (rule 46), and the step exits with the first failure. The
+      # `shekyl-win-sec` step above keeps its `test-utils` lane.
+      - name: "clippy -D warnings, the Linux gate's lanes (Windows target)"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $first_failure = 0
+          foreach ($argv in @(
+            @('--workspace', '--all-targets', '--keep-going'),
+            @('-p', 'shekyl-engine-core', '--all-targets', '--features', 'gf7-hooks'),
+            @('-p', 'shekyl-engine-core', '--all-targets', '--features', 'bench-internals'),
+            @('-p', 'shekyl-chain-ingest', '-p', 'shekyl-chain-rules', '-p', 'shekyl-chain-store', '-p', 'shekyl-chain-sync-runtime', '-p', 'shekyl-curve-tree', '-p', 'shekyl-mempool', '-p', 'shekyl-draw-rng', '-p', 'shekyl-p-host', '-p', 'shekyl-p2p-session', '-p', 'shekyl-tor-control-client', '-p', 'shekyl-wire', '--lib'),
+            @('-p', 'shekyl-engine-core', '-p', 'shekyl-ffi', '-p', 'shekyl-fcmp', '-p', 'shekyl-fcmp-proofs', '--features', 'multisig', '--all-targets', '--keep-going'),
+            @('-p', 'shekyl-multisig', '--all-targets', '--keep-going')
+          )) {
+            $shown = 'cargo clippy --locked ' + ($argv -join ' ') + ' -- -D warnings'
+            Write-Host "::group::$shown"
+            cargo clippy --locked @argv -- -D warnings
+            $code = $LASTEXITCODE
+            Write-Host "::endgroup::"
+            Write-Host "$shown -> exit $code"
+            if ($code -ne 0 -and $first_failure -eq 0) { $first_failure = $code }
+          }
+          exit $first_failure
+
+      # TB-7 part 2 on Windows. Clippy for this crate's Windows code is in
+      # the workspace step above.
       #
       # `the_managed_launch_environment_is_exact` reads `Command::get_envs`,
       # which lists variables the builder set and cannot see `env_clear`.
@@ -570,11 +604,6 @@ jobs:
       #
       # `--exact` plus "1 passed": a renamed test matches nothing and cargo
       # exits 0, which is not a pass.
-      - name: "TB-7: clippy -D warnings (shekyl-tor-control-client, Windows)"
-        shell: pwsh
-        working-directory: rust
-        run: cargo clippy --locked -p shekyl-tor-control-client --all-targets -- -D warnings
-
       - name: "TB-7: the managed launch environment pair list"
         shell: pwsh
         working-directory: rust
@@ -924,3 +953,22 @@ jobs:
         with:
           name: ${{ env.OUTPUT }}
           path: ${{ env.OUTPUT }}
+
+  # A red push run on `dev` opens or threads a tracking issue
+  # (`report-dev-red.yml`). `needs` lists every other job in this file, so
+  # a red in any of them reports; scripts/ci/check_dev_red_reporter.py
+  # holds the list and this condition to the file. Only a push run on
+  # `dev` reports: a pull request's red is read on the pull request. A job
+  # past its `timeout-minutes` is cancelled, not failed, and `failure()`
+  # does not see it, so the condition reads each needed job's result: a
+  # failed or cancelled one reports, unless the whole run was cancelled
+  # (a newer merge superseded it), which `!cancelled()` leaves out.
+  report-dev-red:
+    needs: [changes, lint-rust-debug-macros, build-macos, build-ubuntu, test-ubuntu, build-windows-msvc, source-archive]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/report-dev-red.yml

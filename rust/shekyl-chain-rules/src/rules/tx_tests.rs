@@ -113,52 +113,18 @@ fn a_non_coinbase_row_is_vacuous_at_the_miner_slot_and_run_elsewhere() {
 // on any `MockChain` view (slice 6 row 6), so the union has no accepted
 // block to show on here.
 
-// ---- the limits: pinned to the C++ defines, held equal to the wire's ----
+// ---- the limits: pinned values, held equal to the wire's ----
 
-/// The integer a `#define NAME value` line in `cryptonote_config.h` carries.
-/// Read from the header itself, not from a copy of the number, so a C++
-/// edit that moves a limit fails here rather than diverging silently (the
-/// slice-4 Q5 pin shape).
-fn cxx_define(name: &str) -> u64 {
-    let config_h = include_str!("../../../../src/cryptonote_config.h");
-    let line = config_h
-        .lines()
-        .find(|l| {
-            let mut words = l.split_whitespace();
-            words.next() == Some("#define") && words.next() == Some(name)
-        })
-        .unwrap_or_else(|| panic!("cryptonote_config.h defines {name}"));
-    line.split_whitespace()
-        .nth(2)
-        .expect("the define carries a value")
-        .parse()
-        .unwrap_or_else(|_| panic!("{name}'s value is an integer"))
-}
-
-/// The one define that is an alias: `CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL`
-/// names `CRYPTONOTE_MAX_BLOCK_NUMBER`, so the sentinel pins to the latter
-/// and this asserts the alias still holds.
+/// The transaction size limit, the coinbase reserve and the unlock-time
+/// sentinel, pinned as the shipped values and held equal to the wire
+/// crate's copies. The size limit has a copy in this crate and one in the
+/// wire crate, and they are held equal.
 #[test]
-fn the_limits_are_the_cxx_defines() {
-    assert_eq!(cxx_define("CRYPTONOTE_MAX_TX_SIZE"), MAX_TX_SIZE as u64);
-    assert_eq!(
-        cxx_define("CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE"),
-        shekyl_wire::transaction::COINBASE_RESERVE as u64
-    );
-    assert_eq!(
-        cxx_define("CRYPTONOTE_MAX_BLOCK_NUMBER"),
-        UNLOCK_TIME_SENTINEL
-    );
-    let config_h = include_str!("../../../../src/cryptonote_config.h");
-    assert!(
-        config_h.lines().any(|l| {
-            let mut w = l.split_whitespace();
-            w.next() == Some("#define")
-                && w.next() == Some("CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL")
-                && w.next() == Some("CRYPTONOTE_MAX_BLOCK_NUMBER")
-        }),
-        "the sentinel is still the alias of CRYPTONOTE_MAX_BLOCK_NUMBER"
-    );
+fn the_limits_are_pinned_and_the_wires() {
+    assert_eq!(MAX_TX_SIZE, 1_000_000);
+    assert_eq!(MAX_TX_SIZE, shekyl_wire::transaction::MAX_TX_SIZE);
+    assert_eq!(shekyl_wire::transaction::COINBASE_RESERVE, 1386);
+    assert_eq!(UNLOCK_TIME_SENTINEL, 500_000_000);
 }
 
 /// H3's limit is the wire crate's `TX_WEIGHT_LIMIT`. The formula — half

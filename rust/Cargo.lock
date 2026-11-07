@@ -3892,6 +3892,7 @@ name = "shekyl-block-template"
 version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
+ "proptest",
  "shekyl-archival-retention",
  "shekyl-chain-rules",
  "shekyl-crypto-pq",
@@ -4426,6 +4427,7 @@ version = "3.1.0"
 dependencies = [
  "proptest",
  "serde_json",
+ "sha2",
  "shekyl-types",
 ]
 
@@ -4453,9 +4455,11 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-block-template",
  "shekyl-chain-rules",
+ "shekyl-chain-store",
  "shekyl-curve-tree",
  "shekyl-economics",
  "shekyl-fcmp",
+ "shekyl-mempool",
  "shekyl-rpc-types",
  "shekyl-tx-weight",
  "shekyl-types",
@@ -5221,14 +5225,18 @@ dependencies = [
 name = "shekyl-randomx-differential"
 version = "3.1.0"
 dependencies = [
+ "hex",
  "rand_chacha 0.3.1",
  "randomx-v2-sys",
  "serde",
  "serde_json",
  "sha2",
  "shekyl-crypto-hash",
+ "shekyl-genesis-tool",
+ "shekyl-network",
  "shekyl-pow-randomx",
  "shekyl-types",
+ "shekyl-wire",
 ]
 
 [[package]]
@@ -5769,6 +5777,7 @@ dependencies = [
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
+ "tempfile",
 ]
 
 [[package]]

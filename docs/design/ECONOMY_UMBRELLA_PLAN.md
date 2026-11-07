@@ -275,7 +275,7 @@ the three operands.
 | # | Work | Gate |
 | --- | --- | --- |
 | a | The version-gate sweep: every version comparison in the C++, classified by operand, with a gate holding the inventory. **Done 2026-10-05** ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md)): the block-version gates are deleted or collapsed, bar the fill (d); the transaction-version collapse is its own PR | before EUP-4 |
-| b | `Fill::admit_up_to` batches the penalty-free part (built 2026-10-04) and walks the penalty zone one body at a time. The approved zone closed form, held to the single-offer walk, is **not built**: it is the first EUP-4 prep PR (ruling 5, 2026-10-24; [`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.6) | EUP-4 prep; the 135-year growth arms wait on it |
+| b | `Fill::admit_up_to` admits the penalty-free part and the penalty zone in closed form, held to the single-offer walk. **Built 2026-11-06**, the first EUP-4 prep PR (ruling 5, 2026-10-24; [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md) §5.28) | EUP-4 prep. The 135-year horizon for the registered tables waits on §4's ratification |
 | c | The coinbase reserve, derived. **Done 2026-10-22** on the inherited 300,000 B zone (reserve 1,386; `TX_WEIGHT_LIMIT` 148,614). The cover is the codec test `the_maximal_coinbase_weighs_what_the_grammar_sums`. The zone's capacity leg remains EUP-5 G and moves the limit again | with the zone's capacity leg; before (d) |
 | d | The Rust fill prices and bounds the weight the block carries, coinbase included, and the sim records that weight. **Done 2026-10-22.** The C++ fill deletes with `tx_pool.cpp` at the DRS-X flip (DEL-010), not in this change | after (c) |
 | e | Q9, the floor in consensus (D) | after (d): both land in the template and admission path, and the enforced case's arithmetic depends on the fill |
@@ -303,7 +303,7 @@ prevent.
 | 5. Demand-responsive emission | Release multiplier and burn under step, boom/bust and stuffing schedules; the 720 window's step response | M_r in [0.8, 1.3] | **PROPOSED:** a stuffer working the window's edge cannot hold M_r above 1.0 for longer than the window at a cost below the ESR-7 envelope |
 | 6. Self-regulating balance | Staker yield; A1 clearance; onset year; coverage | Staker yield 4–6 % years 1–5, ~1.7 % at year 10 | **PROPOSED:** yields within a factor of two of April's in years 1–10; A1 flat-25 clearance ≥ 1 through year 20 at 10 % on the baseline |
 | Capacity (no April row) | Transactions carried per block against demand; years to carry the baseline's 50 | — (April assumed blocks carry demand) | **PROPOSED:** the default rung carries the baseline's demand from genesis, or the deviation is a ruled choice |
-| Usability (no April row) | Standard-rung fee for an ordinary transaction, by year | — | **PROPOSED:** a year-1 figure Rick sets before EUP-4 |
+| Usability (no April row) | Standard-rung fee for an ordinary transaction, by year | — | **RATIFIED (Rick, 2026-11-06):** the year-1 Standard-rung fee for an ordinary 1-in/2-out transaction is at most **0.05 %** of the year-1 block reward: about 0.496 SKL (496 289 839 atomic) on the design curve, whose year-1 mean block reward is 992.58 SKL (`projected_already_generated` over the first 262 800 blocks, read at `b8b11453e`). The floor is the stuffing criterion, applied in year 1. Set before ESR-10 runs, which prints this fee for every cell |
 | Tail (no April row; ruled a criterion, §3.2) | Per-block fee revenue, median and variance, on the baseline, in the structural arms to about year 135 | — | **PROPOSED:** at maturity the tail is at least `k` × the median per-block fee revenue, `k ≥ 1`; Rick sets `k`. The tail's ratio of the asymptote per year is read off this table and then ratified |
 | Stuffing (§6) | The ESR-7 envelope minimum, in floors per byte, by era | "Marginally profitable short-term" | **PROPOSED:** the cheapest archival byte is no cheaper than the relay floor in any era, after D is decided |
 
@@ -326,16 +326,13 @@ the knee is held, not re-pinned (`docs/FOLLOWUPS.md`).
 questions (onset, fee era, tail) are tail-era questions, and a 60-year run no
 longer sees them. The structural arms run to about 135 years; the remaining
 arms stay at 60. Measured cost on the control arm: the baseline to 135 years
-is 64 s. The growth schedule is not affordable that far as the fill stands —
-63 years is 337 s and 66 years exceeds 500 s — because
-`Fill::admit_up_to` batches only the penalty-free part of a block and walks
-the penalty zone one body at a time. Long growth arms wait on that zone being
-closed in form, held to the single-offer walk as the free part is (approved
-2026-10-05 as EUP-4 prep, §3.2 b). Re-measured 2026-10-23
-([`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.6): on the flat
-control 63 years is 273 s and 66 years passes 1 200 s; on production the
-growth arm passes 1 200 s somewhere past year 80, and every other scenario
-folds 135 years in about a minute. The structural arms carry a per-block fee
+is 64 s. The penalty zone is admitted in closed form (§3.2 b), so the fill no
+longer bounds a growth arm's horizon: every scenario's fold cost at 135 years
+is [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.28.1. The growth schedule stops in year 114 on production and year 80 on
+the flat control. That is the year its cumulative fee burn passes everything
+emitted, and the sim's supply invariant refuses the fold (§5.28.1). Whether the growth arm runs to
+the horizon is a question about that schedule, not about cost. The structural arms carry a per-block fee
 revenue and variance column for the tail criterion (§3.2, 3).
 
 Scenario 9 (high history, low activity) is the first of the structural arms.
@@ -361,9 +358,11 @@ six: the purse, the knee, the onset and the stuffer's cost are not readable
 on a chain capped at the zone.
 
 *Amended 2026-10-04 (§3.1), ruled 2026-10-05 (§3.2, 1).* "The production
-arm" here is the sim's fill, the reward-aware comparison, which is the
-design's fill. The daemon runs the pre-v5 rule until the fill moves to Rust,
-so this reading is the design's behaviour once the fill lands.
+arm" here is the sim's fill, the reward-aware comparison. It is the fill the
+daemon runs: `shekyl-mempool`'s template offers the pool's bodies to
+`shekyl-block-template`'s `Fill`, and the sim calls the same `Fill` over the
+same pool policy (ESR-17). The registered capacity reading is a reading
+about the shipped daemon.
 
 ---
 

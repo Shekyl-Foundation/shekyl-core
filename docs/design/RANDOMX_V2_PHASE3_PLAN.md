@@ -425,8 +425,8 @@ The Rust verifier is **light-cache only** (256 MiB `PreparedCache`;
 no dataset in the crate). Miners run the v2 C library in
 **full-dataset** fast mode. RandomX guarantees light and full produce
 identical hashes — but the Phase 2g differential harness compares
-Rust-light vs C-**light** (`randomx-v2-sys` is light-only *by
-design*). The full-dataset path has therefore **never** been
+Rust-light vs C-**light** (the light build of `randomx-v2-sys` leaves
+`full-dataset` off). The full-dataset path has therefore **never** been
 differentially checked against the Rust verifier. The cutover
 invariant is exactly that check:
 
@@ -436,37 +436,37 @@ invariant is exactly that check:
 
 ### 7.2 Test construction
 
-A gated C++ test (built only with `BUILD_RANDOMX_V2_MINER_LIB=ON`,
-which links `external/randomx-v2` @ `aaafe71`):
+The gate is Rust: `shekyl-randomx-differential`'s `full-parity` and
+`miner-kat` binaries, over `randomx-v2-sys`'s `full-dataset` feature
+(the light build does not enable it), bound to `external/randomx-v2`
+@ `aaafe71`.
 
-1. Build the C-full reference **deterministically** — not via
-   `rx-slow-hash.c`'s async state machine (which races light/full),
-   but directly: `randomx_alloc_cache` → `randomx_init_cache` →
-   `randomx_alloc_dataset` → `randomx_init_dataset` →
-   `randomx_create_vm(flags | RANDOMX_FLAG_FULL_MEM | RANDOMX_FLAG_V2)`
-   → `randomx_calculate_hash`. The `RANDOMX_FLAG_V2` inclusion is
-   load-bearing (its omission was the PR #79 divergence).
-2. Compare byte-for-byte against `shekyl_pow_randomx_v2_hash` over a
-   fixed corpus that includes the **genesis** `(seedhash=genesis
-   block hash, blob=genesis hashing blob)` case (spec §16) and
-   several non-genesis blocks.
-3. Pin at least one **miner-produced KAT**: a `(seedhash, blob,
-   expected_hash)` whose `expected_hash` was captured from an actual
-   full-dataset mining run (not an in-process `rx_slow_hash`), frozen
-   as a vector. This closes the in-process-proxy gap — it proves
-   "blocks real miners produce validate under the Rust verifier," not
-   just "two in-process computations agree."
-   **(Status: discharged**, test-regime hardening PR-1, 2026-07. The
-   separate-process miner-shaped tool
-   (`tests/randomx_v2_parity/randomx_v2_miner_kat.cpp`) recomputes the
-   canonical-seed KAT under `FULL_MEM|V2` with no harness plumbing, no
-   Rust FFI, and no consensus code linked, and asserts the frozen
-   `kFrozenKatHashHex` on every gate run —
-   `randomx_v2_full_parity_miner_kat`.)
+1. Build the C-full reference **deterministically**, as a miner does:
+   `randomx_alloc_cache` → `randomx_init_cache` →
+   `randomx_alloc_dataset` → `randomx_init_dataset` (on every core) →
+   `randomx_create_vm(randomx_get_flags() | RANDOMX_FLAG_FULL_MEM |
+   RANDOMX_FLAG_V2)` → `randomx_calculate_hash`. The `RANDOMX_FLAG_V2`
+   inclusion is load-bearing (its omission was the PR #79 divergence).
+   The Rust side is the verifier itself (`PreparedCache::derive`,
+   `compute_hash`).
+2. Compare byte-for-byte, one dataset per process, over three modes:
+   `genesis` (seedhash = mainnet's genesis block hash and blob = its PoW
+   blob, the block assembled as the daemon assembles it from the network
+   table; spec §16), `canonical` (seed `0x01..=0x20`, carrying the frozen
+   known answer `34f8b017…`), and `corpus <i>` (seed group `i` of the
+   nightly random corpus, generated in-process, every case also pinned
+   to its committed canonical hash).
+3. A **miner-shaped known answer**: `miner-kat` recomputes the canonical
+   known answer under `FULL_MEM|V2` with the C library alone (no Rust
+   verifier, no harness corpus, no consensus code) on every gate run.
 
-Gating: a ctest label (e.g. `randomx_v2_full_parity`) in the
-release-gate suite, **not** the per-PR fast gate (the full dataset is
-2+ GiB and minutes to build).
+Gating: the `full-parity` job of `randomx-v2-differential.yml`, cron
+and dispatch only, **not** the per-PR gate (each dataset is ~2 080 MiB).
+The daily scope is genesis, canonical, the miner known answer and corpus
+seeds 0–15; the Monday scope is all 32 seeds, every one of the 1 024
+canonical pins. The Rust verifier's side of the known answer is also a
+per-PR unit test (`shekyl-pow-randomx`'s
+`the_verifier_reproduces_the_canonical_known_answer`).
 
 ### 7.3 Named risk — halt-on-red, not fix-the-test
 
@@ -527,7 +527,7 @@ exists.)
 
 | Gate | Cadence | Asserts |
 |------|---------|---------|
-| Hole-1 C-full vs Rust-light parity (§7) | daily/weekly cron (`randomx_v2_full_parity_daily` / `randomx_v2_full_parity`; wired by test-regime hardening PR-1, 2026-07) | the cutover invariant; **halt-on-red** |
+| Hole-1 C-full vs Rust-light parity (§7) | daily/weekly cron, the `full-parity` job (`full-parity` and `miner-kat` bins; daily 19 datasets, Monday all 32 corpus seeds) | the cutover invariant; **halt-on-red** |
 | 2g differential (light-vs-light) | per-PR | Rust verifier ≡ C v2 light |
 | Per-hash average latency ≤3.0× (T5, in-mode gate) | daily cron in the dedicated `runtime-modes` job, main + dev matrix; opt-in on dispatch (`runtime_modes` input) — wired by the runtime-mode change, 2026-07; interleaved same-process ratio — runner-noise-immune. Baseline recorded 2026-07-04: 1.817× on the committed runner class (budget holds, ~39% headroom); dev-hardware ~3.1× readings are a hardware artifact (no drift vs the 2g-close pin) — canonical record on `LATENCY_RATIO_BUDGET` | parent §6 line 246 |
 | Three-leg correctness `--mode=correctness` (rust ≡ C ≡ canonical) | per-PR at 16×8 sizing + daily cron at full 32×32 (x86, runtime-mode change) and per-PR on the native-arm lane (PR #239) | the 1024 canonical pins, all three legs |

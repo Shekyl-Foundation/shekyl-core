@@ -1217,7 +1217,9 @@ mod live_tests {
     /// finished bootstrapping, and the panic says "did not bootstrap", the
     /// phrase the lane retries on. Any other posture — never spawned, died,
     /// restarting, degraded — is the supervisor's doing and is reported as
-    /// that, with the posture, and is not retried.
+    /// that, with the posture, and is not retried. Unix only, as the tests
+    /// that call it are.
+    #[cfg(unix)]
     async fn await_ready<F: Fn(&TorPosture) -> bool>(
         rx: &mut watch::Receiver<TorPosture>,
         secs: u64,

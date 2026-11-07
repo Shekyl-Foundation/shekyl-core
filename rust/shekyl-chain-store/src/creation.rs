@@ -457,6 +457,13 @@ fn rename_classified(source: File, from: &Path, to: &Path) -> io::Result<()> {
 
 /// Flush the directory holding `path`, so a rename in it is durable. Unix
 /// only: elsewhere a directory cannot be opened to flush.
+#[cfg_attr(
+    not(unix),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "the Unix arm's signature: callers handle both platforms the same way"
+    )
+)]
 pub(crate) fn sync_parent(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {

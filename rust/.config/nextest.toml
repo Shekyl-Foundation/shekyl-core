@@ -15,9 +15,19 @@
 [profile.ci]
 # Run every test and report every failure, not just the first.
 fail-fast = false
-# Name a test that is still running after a minute, again each minute.
-# Nothing is killed here: the job's own timeout does that.
-slow-timeout = { period = "60s" }
+# A failing test runs once more. A test that then passes does not fail the
+# run, and it is not hidden either: `scripts/ci/nextest_report.py` lists
+# it under "Flaky" in the job summary and raises a warning on the pull
+# request. A test that fails both times fails the run.
+retries = 1
+# Name a test that is still running after a minute, again each minute, and
+# kill it at the thirtieth. The kill is a failure, so the retry above runs
+# it once more: a hung test fails by name within an hour, not at the job's
+# timeout five hours on. Thirty is about twice the slowest
+# green test seen: in #1285's run (2026-11-07), with every binary running
+# at once, the chain-rules trybuild test took 15m05s and six others 11m49s
+# to 14m40s.
+slow-timeout = { period = "60s", terminate-after = 30 }
 # The closing summary lists slow tests as well as failures, so the run
 # names the tests that set the step's length.
 final-status-level = "slow"

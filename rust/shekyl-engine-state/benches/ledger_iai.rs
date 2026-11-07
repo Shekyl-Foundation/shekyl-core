@@ -36,6 +36,9 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use curve25519_dalek::Scalar;
+// Valgrind client requests exist only where Valgrind does (the
+// crate's `cfg(unix)` dev-dependency).
+#[cfg(unix)]
 use gungraun::client_requests::callgrind as callgrind_cr;
 use gungraun::{
     library_benchmark, library_benchmark_group, main, Callgrind, EntryPoint, LibraryBenchmarkConfig,
@@ -113,8 +116,10 @@ fn build_bytes(n: usize) -> Vec<u8> {
 /// count is the closure body, not setup. Works if inlined: the
 /// client-request sequences are position-based.
 fn measure<T>(f: impl FnOnce() -> T) -> T {
+    #[cfg(unix)]
     callgrind_cr::start_instrumentation();
     let out = f();
+    #[cfg(unix)]
     callgrind_cr::stop_instrumentation();
     out
 }
