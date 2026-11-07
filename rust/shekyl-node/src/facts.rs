@@ -837,6 +837,15 @@ impl StopFacts for StopBridge {
     }
 }
 
+/// A connector as `get_info`'s Peers rows name it. Exhaustive: a new
+/// connector is a new wire name, decided where it is added.
+const fn wire_connector(connector: ConnectorId) -> shekyl_rpc_types::InfoConnector {
+    match connector {
+        ConnectorId::Clearnet => shekyl_rpc_types::InfoConnector::Clearnet,
+        ConnectorId::Tor => shekyl_rpc_types::InfoConnector::Tor,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1002,14 +1011,5 @@ mod tests {
             (synced.target, synced.synchronized, synced.busy_syncing),
             (None, true, false)
         );
-    }
-}
-
-/// A connector as `get_info`'s Peers rows name it. Exhaustive: a new
-/// connector is a new wire name, decided where it is added.
-const fn wire_connector(connector: ConnectorId) -> shekyl_rpc_types::InfoConnector {
-    match connector {
-        ConnectorId::Clearnet => shekyl_rpc_types::InfoConnector::Clearnet,
-        ConnectorId::Tor => shekyl_rpc_types::InfoConnector::Tor,
     }
 }
