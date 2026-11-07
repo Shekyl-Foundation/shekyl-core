@@ -298,7 +298,10 @@ impl Partition {
     }
 
     /// Seats a hold keeps off the draw: cooling gray and excused white.
-    pub(crate) fn held_len(&self) -> usize {
+    ///
+    /// Cooling gray is a counted failure or an excusal. Excused white is an
+    /// excusal only. Sessions are not this count.
+    pub(crate) fn off_draw_len(&self) -> usize {
         self.cooling + self.excused_white
     }
 

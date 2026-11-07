@@ -36,9 +36,9 @@ enum IdleWhy {
     FillDeclined,
     /// Neither list holds an address.
     NoAddress,
-    /// The addresses the connector is not using are cooling after a failed
-    /// dial, or held by an excusal.
-    Cooling,
+    /// The addresses the connector is not using are off the draw: cooling
+    /// after a failed dial, or held by an excusal.
+    OffDraw,
     /// Every address is a session, on a host the connector already reaches,
     /// or this node's own: the network is smaller than the target.
     InUse,
@@ -51,23 +51,52 @@ impl IdleWhy {
             Self::RetryWaiting => "a retry is waiting",
             Self::FillDeclined => "no fill rule takes the drawable addresses",
             Self::NoAddress => "it knows no address",
-            Self::Cooling => "the addresses it is not using are cooling after a failed dial",
+            Self::OffDraw => {
+                "the addresses it is not using are cooling after a failed dial, or held by an excusal"
+            }
             Self::InUse => {
                 "every address it knows is connected, on a host it already reaches, or its own"
             }
         }
     }
+}
 
-    /// One bit per reason, for [`IdleWatch::said`].
-    const fn bit(self) -> u8 {
-        match self {
-            Self::InFlight => 1,
-            Self::RetryWaiting => 1 << 1,
-            Self::FillDeclined => 1 << 2,
-            Self::NoAddress => 1 << 3,
-            Self::Cooling => 1 << 4,
-            Self::InUse => 1 << 5,
+/// Which reasons this under-target spell has already said.
+///
+/// One field per [`IdleWhy`], in the same order. A new reason does not
+/// compile until it is named here.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SaidReasons {
+    in_flight: bool,
+    retry_waiting: bool,
+    fill_declined: bool,
+    no_address: bool,
+    off_draw: bool,
+    in_use: bool,
+}
+
+impl SaidReasons {
+    const fn contains(self, why: IdleWhy) -> bool {
+        match why {
+            IdleWhy::InFlight => self.in_flight,
+            IdleWhy::RetryWaiting => self.retry_waiting,
+            IdleWhy::FillDeclined => self.fill_declined,
+            IdleWhy::NoAddress => self.no_address,
+            IdleWhy::OffDraw => self.off_draw,
+            IdleWhy::InUse => self.in_use,
         }
+    }
+
+    fn insert(&mut self, why: IdleWhy) {
+        let slot = match why {
+            IdleWhy::InFlight => &mut self.in_flight,
+            IdleWhy::RetryWaiting => &mut self.retry_waiting,
+            IdleWhy::FillDeclined => &mut self.fill_declined,
+            IdleWhy::NoAddress => &mut self.no_address,
+            IdleWhy::OffDraw => &mut self.off_draw,
+            IdleWhy::InUse => &mut self.in_use,
+        };
+        *slot = true;
     }
 }
 
@@ -78,8 +107,8 @@ impl IdleWhy {
 pub(super) struct IdleWatch {
     /// The current run of idle wakes with one reason, and its length.
     run: Option<(IdleWhy, u32)>,
-    /// The reasons already said in this spell, one [`IdleWhy::bit`] each.
-    said: u8,
+    /// The reasons already said in this spell.
+    said: SaidReasons,
 }
 
 /// How many consecutive wakes with one reason before the owner says so.
@@ -119,15 +148,17 @@ fn under_target(kept: usize, target: usize) -> bool {
 /// What the census says about an under-target wake that does not draw.
 /// `None` when the connector is not under its target.
 ///
-/// `held` is the seats a hold keeps off the draw ([`SeatCensus::held`]).
-/// A dial in flight is the reason whenever nothing else is drawable, below
-/// the bound too: its address is an outstanding draw, not a filtered one.
-/// A waiting test is the reason only when nothing else is drawable.
+/// `off_draw` is the seats a hold keeps off the draw
+/// ([`SeatCensus::off_draw`]): counted cooling and excusals. It is not
+/// the session count. A dial in flight is the reason whenever nothing
+/// else is drawable, below the bound too: its address is an outstanding
+/// draw, not a filtered one. A waiting test is the reason only when
+/// nothing else is drawable.
 ///
-/// [`SeatCensus::held`]: shekyl_peerlist::SeatCensus::held
+/// [`SeatCensus::off_draw`]: shekyl_peerlist::SeatCensus::off_draw
 fn idle_if_undrawn(
     census: &Census,
-    held: usize,
+    off_draw: usize,
     retry_waiting: bool,
     bound: usize,
 ) -> Option<IdleWhy> {
@@ -151,8 +182,8 @@ fn idle_if_undrawn(
     if census.white.saturating_add(census.gray) == 0 {
         return Some(IdleWhy::NoAddress);
     }
-    if held > 0 {
-        return Some(IdleWhy::Cooling);
+    if off_draw > 0 {
+        return Some(IdleWhy::OffDraw);
     }
     Some(IdleWhy::InUse)
 }
@@ -231,7 +262,7 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
             gray: seats.gray,
             gray_candidates: seats.gray_candidates,
         };
-        let undrawn = idle_if_undrawn(&census, seats.held, waiting, bound);
+        let undrawn = idle_if_undrawn(&census, seats.off_draw, waiting, bound);
         // Stranded: under the target, nothing in flight, nothing drawable.
         // The lists cannot yield another peer, so this wake re-admits and
         // dials nothing. One kept session is not a healthy connector
@@ -322,17 +353,69 @@ fn note_idle(
         }
         WakeReport::Idle(why) => why,
     };
-    let watch = slot.get_or_insert(IdleWatch { run: None, said: 0 });
+    let watch = slot.get_or_insert(IdleWatch {
+        run: None,
+        said: SaidReasons::default(),
+    });
     let wakes = match watch.run {
         Some((current, wakes)) if current == why => wakes.saturating_add(1),
         _ => 1,
     };
     watch.run = Some((why, wakes));
-    if wakes == IDLE_REPORT_WAKES && watch.said & why.bit() == 0 {
-        watch.said |= why.bit();
+    if wakes == IDLE_REPORT_WAKES && !watch.said.contains(why) {
+        watch.said.insert(why);
         let reason = why.reason();
         tracing::info!(
             "{connector:?}: holds {held} of its {target} target sessions and dialed nothing for {IDLE_REPORT_WAKES} wakes: {reason}"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{idle_if_undrawn, IdleWhy, SaidReasons};
+    use crate::fill::Census;
+
+    const REASONS: [IdleWhy; 6] = [
+        IdleWhy::InFlight,
+        IdleWhy::RetryWaiting,
+        IdleWhy::FillDeclined,
+        IdleWhy::NoAddress,
+        IdleWhy::OffDraw,
+        IdleWhy::InUse,
+    ];
+
+    fn census(white: usize, gray: usize) -> Census {
+        Census {
+            kept: 1,
+            in_flight: 0,
+            target: 12,
+            white,
+            white_candidates: 0,
+            gray,
+            gray_candidates: 0,
+        }
+    }
+
+    #[test]
+    fn a_hold_off_the_draw_is_named_apart_from_an_address_in_use() {
+        let seats = census(1, 0);
+        assert_eq!(idle_if_undrawn(&seats, 1, false, 4), Some(IdleWhy::OffDraw));
+        assert_eq!(idle_if_undrawn(&seats, 0, false, 4), Some(IdleWhy::InUse));
+        assert_eq!(
+            IdleWhy::OffDraw.reason(),
+            "the addresses it is not using are cooling after a failed dial, or held by an excusal"
+        );
+    }
+
+    #[test]
+    fn each_reason_has_its_own_flag() {
+        for why in REASONS {
+            let mut said = SaidReasons::default();
+            said.insert(why);
+            for other in REASONS {
+                assert_eq!(said.contains(other), other == why);
+            }
+        }
     }
 }

@@ -44,7 +44,7 @@ fn sessions_for(class: HiddenClass) -> usize {
 /// The report the watch owes for this transition. `arm` is the epoch rebuild.
 ///
 /// Before the first rebuild nothing is recorded. The first several is quiet.
-/// Every other entrance is a warning, and a later several carries the census.
+/// Every degraded entrance is an info line, and a later several carries the census.
 fn expected_notice(
     previous: Option<HiddenClass>,
     observed: HiddenClass,

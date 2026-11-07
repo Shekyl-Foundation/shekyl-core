@@ -48,9 +48,10 @@ pub struct SeatCensus {
     pub gray: usize,
     /// Hosts a gray draw could return.
     pub gray_candidates: usize,
-    /// Seats a hold keeps off the draw: gray cooling after a failed test,
-    /// and white under an excusal. Each is also in `white` or `gray`.
-    pub held: usize,
+    /// Seats a hold keeps off the draw. Gray cooling is a counted failure
+    /// or an excusal; white under a hold is an excusal. Each seat is also
+    /// in `white` or `gray`. This is not the dialer's session count.
+    pub off_draw: usize,
 }
 
 /// A partition that has already been demoted and expired.
@@ -62,14 +63,14 @@ pub struct Settled<'a> {
 }
 
 impl Settled<'_> {
-    /// The four counts, with `eligible` as the dialer's candidate filter.
+    /// One connector's seats, with `eligible` as the dialer's candidate filter.
     pub fn census(&self, eligible: &mut dyn FnMut(&NetworkAddress) -> bool) -> SeatCensus {
         SeatCensus {
             white: self.partition.white_len(),
             white_candidates: self.partition.candidate_hosts(true, eligible),
             gray: self.partition.gray_len(),
             gray_candidates: self.partition.candidate_hosts(false, eligible),
-            held: self.partition.held_len(),
+            off_draw: self.partition.off_draw_len(),
         }
     }
 

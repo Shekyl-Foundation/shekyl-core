@@ -515,10 +515,11 @@ and one reason logs an info line naming the sessions it holds, its
 target and the reason: a dial is in flight (at the bound, or with
 nothing else drawable), a retry is waiting, no fill rule takes the
 drawable addresses, it knows no address, the addresses it is not using
-are cooling after a failed dial, or every address it knows is connected,
-on a host it already reaches, or its own. Each reason is said at most
-once per under-target spell: a draw or a change of reason restarts the
-count, and only reaching the target ends the spell. Every reason is a
+are cooling after a failed dial or held by an excusal, or every address
+it knows is connected, on a host it already reaches, or its own. Each
+reason is said at most once per under-target spell: a draw or a change
+of reason restarts the count, and only reaching the target ends the
+spell. Every reason is a
 state the connector leaves without the operator, so it is not a
 warning. *Amendment (2026-11-06, the alpha.11 hunt's A7).* A warning
 on a network smaller than the target, every hour on every public seed:

@@ -17388,9 +17388,10 @@ address-hiding session to leave on. A return to several is noted as
 the session count. All three are info lines (amended 2026-11-06, the
 alpha.11 hunt): Tor churn takes a node through empty and one on its way
 back to several, and the operator can change none of it. A transaction
-the node originates and holds for want of an address-hiding session is
-warned where it is held, in the relay's dispatch, and a managed Tor's
-posture line says the same. *Records-was: empty and one were warnings.*
+the node originates and holds is warned where it is held, in the relay's
+dispatch, which names the hold: no address-hiding session, or a session
+is up and this origin's pin is exhausted for the epoch. A managed Tor's
+posture line says the empty class too. *Records-was: empty and one were warnings.*
 The three lines name the class. They do
 not say an origin pin has resumed: a pin whose frozen set is exhausted
 stays `NoOwnEdge` until the epoch ends (§98.5). A rebuild that finds

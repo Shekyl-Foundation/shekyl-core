@@ -65,8 +65,8 @@ impl HiddenClass {
 /// An info line, not a warning. Tor churn takes a node through both on its
 /// way back to several, and nothing the operator does changes that. The
 /// consequence that matters, a transaction this node originates being
-/// held, is said where it happens: the relay's dispatch warns, and a
-/// managed Tor's posture line says it too.
+/// held, is said where it happens: the relay's dispatch warns and names
+/// the hold, and a managed Tor's posture line says the empty class too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DegradedHiddenClass {
     /// [`HiddenClass::Empty`].

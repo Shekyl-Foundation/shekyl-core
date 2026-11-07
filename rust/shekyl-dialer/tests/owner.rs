@@ -422,10 +422,12 @@ fn an_address_in_use_is_named_apart_from_an_empty_list() {
     assert_eq!(count(&text, "it knows no address"), 0, "{text}");
 }
 
-/// A cooling address is named as cooling, not as filtered: a failed dial
-/// holds its seat until the cooldown passes (A7, the alpha.11 fleet).
+/// A cooling address is named in the off-draw line. That line is the
+/// union of a counted cooldown and an excusal, so a cooling seat is not
+/// reported as cooling alone, nor as an address already in use
+/// (A7, the alpha.11 fleet).
 #[test]
-fn a_cooling_address_is_named_as_cooling() {
+fn a_cooling_address_is_named_as_off_the_draw() {
     let rig = Rig::new();
     rig.peer.refuse_unqueued(DialEnd::local_close());
     let mut rng = admit(&rig, &peer(1), 18);
@@ -442,12 +444,13 @@ fn a_cooling_address_is_named_as_cooling() {
     assert_eq!(
         count(
             &text,
-            "the addresses it is not using are cooling after a failed dial"
+            "the addresses it is not using are cooling after a failed dial, or held by an excusal"
         ),
         1,
         "{text}"
     );
     assert_eq!(count(&text, "connected"), 0, "{text}");
+    assert_eq!(count(&text, "it knows no address"), 0, "{text}");
 }
 
 /// A draw ends a run of idle wakes, not the spell: a dead address that
