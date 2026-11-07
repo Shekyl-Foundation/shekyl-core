@@ -244,7 +244,8 @@ conformance and the transport timeouts run deterministically.
 
 A `Tick` is nanoseconds since the clock's origin. `ManualClock` is the
 test clock. `MonotonicClock` is the production clock: `std::time::Instant`,
-origin at construction. On Linux that instant is `CLOCK_MONOTONIC`, which
+one origin for the whole process (the first instant any `MonotonicClock`
+was built). On Linux that instant is `CLOCK_MONOTONIC`, which
 does not advance while the system is suspended, so a deadline is not late
 by the time the machine spent suspended. The transport layer and the C++
 bridge use this clock. They do not keep their own.
@@ -418,15 +419,19 @@ is not D5's budget.
 command on that mailbox, not a side channel. The home stamps
 `polled_at` itself, at the moment it observes the wake.
 
-**Every home uses the engine's clock, cloned from the same origin.**
-`MonotonicClock::new` stores `Instant::now()` as its origin, and `now`
-is nanoseconds since that instant. The clock is `Clone`, and a clone
-keeps the origin. The service constructs one clock and clones it to
-each home. A home that called `MonotonicClock::new` itself would report
-lateness from a different zero. In the daemon the engine's clock is
-itself a clone of the process clock in `shekyl-ffi` (Rick, 2026-10-14).
-The seam hub, every ban deadline, the zone host's engine and the link
-gate read one origin, so an engine `now` compares with a ban directly.
+**Every production clock reads one origin.** The process holds one
+origin, a `static OnceLock<Instant>` set by the first
+`MonotonicClock::new`, and `now` on any `MonotonicClock` is nanoseconds
+since it. Two clocks built at different times, or a clone and its
+source, give ticks on one timeline, so a home that built its own clock
+reports lateness from the same zero as the engine. The seam hub, every
+ban deadline, the zone host's engine and the link gate read that origin,
+so an engine `now` compares with a ban directly, and a `Stamp` the
+dialer takes compares with one the Tor supervisor takes
+(`DIALER_OUTAGE_EVIDENCE.md` §6.1). A `ManualClock` keeps its own time,
+for tests. Test:
+`a_stamp_from_a_later_clock_is_never_earlier_than_one_taken_before_it`
+(`rust/shekyl-timing-engine/src/engine_tests.rs`).
 
 **After close.** Each handle holds a closed flag. `register`, `arm`,
 `clear`, and `deregister` check it and return `EngineError::Closed`

@@ -9,7 +9,9 @@ use crate::common::{
     self, inbound_clearnet, kind, outbound_clearnet, Event, Rig, Settings, SEND_CAP, SETTLE,
 };
 use crate::session_test;
-use shekyl_p2p_session::{CloseCause, CloseKind, ConnectorId, DialEnd, Direction};
+use shekyl_p2p_session::{
+    CloseCause, CloseKind, ConnectorId, DialEnd, Direction, Endpoint, PerConnector,
+};
 use shekyl_timing_engine::{Clock, Tick};
 
 session_test!(the_board_follows_the_rows, async {
@@ -33,6 +35,43 @@ session_test!(the_board_follows_the_rows, async {
     assert!(board.get(a.id).is_none());
     assert!(board.get(b.id).is_some());
 });
+
+// **The sessions each connector holds** (`TSR-Q12`, alpha.11 finding 9):
+// the layer reports a row once its handshake has finished, in either
+// direction, and again when it leaves. A handshake still open is not a
+// session: the probe of this node's own onion is dropped there. Counting
+// every row instead of established ones fails the second assertion.
+session_test!(
+    the_sessions_each_connector_holds_follow_established_rows,
+    async {
+        let mut rig = Rig::new(Settings::default());
+        let log = std::sync::Arc::clone(&rig.held);
+        let reports = move || log.lock().expect("held reports").clone();
+        let held = |clearnet, tor| PerConnector { clearnet, tor };
+        assert_eq!(reports(), vec![held(0, 0)], "the count at construction");
+
+        let (mut tor, _gt) = rig.accept(Endpoint::TorInbound);
+        tokio::time::sleep(SETTLE).await;
+        assert_eq!(
+            reports(),
+            vec![held(0, 0)],
+            "a handshake still open is not a session"
+        );
+
+        let (_out, _wire) = rig.dial_kept(outbound_clearnet(24)).await;
+        let _in = rig.establish_inbound(&mut tor).await;
+        assert_eq!(reports(), vec![held(0, 0), held(1, 0), held(1, 1)]);
+
+        rig.layer
+            .close(tor.id, DialEnd::local_close_after_channel());
+        let _ = rig.closed(tor.id).await;
+        assert_eq!(
+            reports(),
+            vec![held(0, 0), held(1, 0), held(1, 1), held(1, 0)],
+            "a close is reported once, and an unchanged count is not"
+        );
+    }
+);
 
 session_test!(shutdown_closes_every_session_as_this_nodes_own, async {
     let mut rig = Rig::new(Settings::default());

@@ -37,7 +37,7 @@ use shekyl_dialer::{session_of, DialAim, TorLinkTally};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_onion_v3::v3_onion_hostname;
 use shekyl_p2p_session::harness::new_transactions;
-use shekyl_p2p_session::{ClaimCarrier, Endpoint};
+use shekyl_p2p_session::ClaimCarrier;
 use shekyl_peerlist::{ConnectorId, Direction, NetworkAddress, Tick};
 use shekyl_timing_engine::{Clock, ManualClock};
 use shekyl_transport_layer::DialEnd;
@@ -498,9 +498,8 @@ fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
         TorLinkTally {
             opened: 1,
             unopened: 0,
-            held: 1,
             last_sign_of_life: opened.last_sign_of_life,
-            last_unopened_at: None,
+            failed_attempt_began: None,
         }
     );
 
@@ -513,83 +512,14 @@ fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
         TorLinkTally {
             opened: 1,
             unopened: 0,
-            held: 0,
             last_sign_of_life: opened.last_sign_of_life,
-            last_unopened_at: None,
+            failed_attempt_began: None,
         },
         "the close is not a new stream"
     );
     assert!(
         rig.dialer.shared().lists.is_white(&peer),
         "PayloadRefused does not demote white"
-    );
-}
-
-/// An inbound Tor row has no list address and is not a dial. A handshake
-/// still open is on the board and is not held: the probe of this node's own
-/// onion is dropped there, before the session is established, so it never
-/// moves the quiet line. Once the handshake finishes the row is a session
-/// and the quiet line's held count includes it. Accepting it does not move
-/// the opened count. The close drops the row before the dialer is told, and
-/// the held count follows. Counting the open handshake as held fails this.
-#[test]
-fn an_inbound_tor_session_is_held_once_its_handshake_finishes() {
-    let rig = Rig::new();
-    let mut wire = rig.accept(Endpoint::TorInbound);
-    let id = wire.id;
-    assert_eq!(
-        rig.layer.board().count(TOR, Direction::Inbound),
-        1,
-        "a dial cap counts the handshake"
-    );
-    assert_eq!(
-        rig.layer
-            .board()
-            .established_sessions(TOR, Direction::Inbound),
-        0
-    );
-    rig.dialer.note_inbound_tor();
-    assert_eq!(
-        rig.dialer.tor_link_tally(),
-        TorLinkTally::default(),
-        "a handshake still open is not a held session"
-    );
-
-    rig.establish_inbound(&mut wire);
-    assert_eq!(
-        rig.layer
-            .board()
-            .established_sessions(TOR, Direction::Inbound),
-        1
-    );
-    wait_until(
-        "the peers owner was told the session is established",
-        || rig.dialer.tor_link_tally().held == 1,
-    );
-    assert_eq!(
-        rig.dialer.tor_link_tally(),
-        TorLinkTally {
-            opened: 0,
-            unopened: 0,
-            held: 1,
-            last_sign_of_life: None,
-            last_unopened_at: None,
-        }
-    );
-
-    wire.peer_closes();
-    wait_until("the owners were told of the close", || {
-        rig.recorder.was_told_closed(id)
-    });
-    assert_eq!(
-        rig.layer.board().count(TOR, Direction::Inbound),
-        0,
-        "the board drops a closed row before the dialer is told"
-    );
-    assert_eq!(
-        rig.dialer.tor_link_tally(),
-        TorLinkTally::default(),
-        "the close leaves the dial counts alone"
     );
 }
 

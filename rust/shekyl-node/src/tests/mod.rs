@@ -70,6 +70,7 @@ fn open_at(dir: &Path, stop: Arc<dyn Fn() + Send + Sync>) -> Node {
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
+        supervisor: None,
         request_stop: stop,
         plan: test_plan(&config),
     })
@@ -88,6 +89,7 @@ fn open_posted(dir: &Path, extra: &[&str]) -> Node {
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
+        supervisor: None,
         request_stop: Arc::new(|| {}),
         plan: test_plan(&config),
     })
@@ -178,6 +180,7 @@ fn open_mining_with(
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
+        supervisor: None,
         request_stop: Arc::new(|| {}),
         plan: test_plan(&config),
     })

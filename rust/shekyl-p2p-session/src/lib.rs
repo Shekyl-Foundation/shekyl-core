@@ -55,7 +55,7 @@ pub use layer::{
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce, NonceTake};
 pub use owners::{
     ClaimCarrier, Owners, PeerOwner, ProbeArrival, ProbeSink, RelayOwner, SessionFacts,
-    SyncInbound, SyncOwner, Taken,
+    SessionsSink, SyncInbound, SyncOwner, Taken,
 };
 pub use timing::{Intervals, OwnerClass, INVOKE_TIMEOUT, TIMED_SYNC_JITTER, TIMED_SYNC_MIN};
 

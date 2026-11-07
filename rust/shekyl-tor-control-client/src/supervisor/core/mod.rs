@@ -13,8 +13,8 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use super::posture::{
-    fixes, own_tx, BootstrapLine, Cause, Connectors, Inbound, OriginVerdict, ProgressWindow, Shown,
-    Space, Status, Syncing,
+    fixes, own_tx, BootstrapLine, Cause, Connectors, Inbound, OriginVerdict, ProgressWindow,
+    Sessions, Shown, Space, Status,
 };
 
 mod announce;
@@ -519,12 +519,12 @@ pub enum Input {
     Shutdown,
     /// The relay's hop-0 verdict for a local origin moved (`GS-Q3`).
     AddressHidingOrigin(OriginVerdict),
-    /// The tally already in the cell when this supervisor started watching.
-    /// It is the baseline, not an open: the stretch clock does not move.
-    DialBaseline(DialTally),
     /// The dialer's tally of this node's Tor dials changed (§4.2). Display
     /// only, never a cause (`TSR-Q14`).
     DialEvidence(DialTally),
+    /// The sessions each connector holds changed (`TSR-Q12`): what the
+    /// node syncs over. Display only.
+    Sessions(Sessions),
     /// Tor's sampled view of its network. Ignored unless Running.
     NetworkView(NetworkView),
     /// Tor says it reaches its network: `NETWORK_LIVENESS UP` or
@@ -632,6 +632,8 @@ pub struct Core {
     connectors: Connectors,
     /// The relay's hop-0 verdict, as last folded (`GS-Q3`).
     origin: OriginVerdict,
+    /// The sessions each connector holds, as last folded.
+    sessions: Sessions,
     phase: Phase,
     cause: Cause,
     /// The [`Shown`] value [`Self::since`] names. `since` moves when the
@@ -705,6 +707,7 @@ impl Core {
             policy,
             connectors,
             origin: OriginVerdict::Absent,
+            sessions: Sessions::default(),
             phase: Phase::Absent {
                 duty: AbsentDuty::Retry,
             },
@@ -817,8 +820,11 @@ impl Core {
             Input::StateFileAppeared => self.state_file(),
             Input::Shutdown => self.shutdown(),
             Input::AddressHidingOrigin(verdict) => self.origin_verdict(verdict, now),
-            Input::DialBaseline(tally) => self.dial_baseline(tally),
             Input::DialEvidence(tally) => self.dial_evidence(tally, now),
+            Input::Sessions(sessions) => {
+                self.sessions = sessions;
+                Vec::new()
+            }
             Input::NetworkView(view) => self.network_view(now, view),
             Input::ExternalCleared => self.external_cleared(now),
         };
@@ -955,12 +961,9 @@ impl Core {
             cause: self.cause.clone(),
             since: self.since,
             respawn_count: self.respawn_count,
-            // What the node syncs over is the outbound facet: an onion
-            // peers cannot reach still dials out (§4.1).
-            sync: Syncing {
-                clearnet: self.connectors.clearnet_on,
-                tor: self.outbound_usable(),
-            },
+            // What the node syncs over is the sessions it holds, not the
+            // configuration or the link (alpha.11 finding 9).
+            sync: self.sessions.syncing(),
             own_tx: own_tx(self.origin, self.connectors),
             fixes: fixes(&self.cause, self.connectors),
             progress: self.progress.percent(),
