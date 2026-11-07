@@ -35,7 +35,7 @@
 
 use shekyl_chain_rules::{
     seed_height, target_claim, AtHeight, Candidate, Corrupt, Fault, HeaderRecord, HeaderView,
-    InvalidBlock, PerHeightRecord, ReferenceClaims, RuleSet, Target, ViewRead,
+    PerHeightRecord, ReferenceClaims, RuleSet, Target, ViewRead,
 };
 use shekyl_chain_store::store::{
     AltCannot, AltChain, AltView, ChainStore, ReadSnapshot, StoreCannot, StoreError,
@@ -131,14 +131,6 @@ pub struct Claims {
 /// Why a run's claims stopped at one of its blocks.
 #[derive(Debug)]
 pub enum ClaimStop {
-    /// CEN-D6 refused the block's target on its own headers: that block's
-    /// verdict, so it is not formed.
-    Refused {
-        /// Its index in the run.
-        index: usize,
-        /// The verdict.
-        refused: InvalidBlock,
-    },
     /// The headers the window reads are corrupt: the writer's to judge.
     Corrupt {
         /// The connecting height whose window it was.
@@ -187,16 +179,7 @@ pub fn claim_run(
     let mut ledger = TargetLedger::new();
     for (index, candidate) in run.iter().enumerate() {
         let height = BlockHeight::from_raw(first.to_raw() + index as u64);
-        match claim_one(
-            &snap,
-            rules,
-            &mut ledger,
-            first,
-            run,
-            index,
-            height,
-            candidate,
-        ) {
+        match claim_one(&snap, rules, &mut ledger, first, run, height, candidate) {
             Ok(claim) => claims.push(claim),
             Err(stop) => return (claims, Some(stop)),
         }
@@ -204,17 +187,12 @@ pub fn claim_run(
     (claims, None)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one block's claim reads the snapshot, the run and the ledger the run builds"
-)]
 fn claim_one(
     snap: &ReadSnapshot<'_>,
     rules: ChainRules,
     ledger: &mut TargetLedger,
     first: BlockHeight,
     run: &[Candidate],
-    index: usize,
     height: BlockHeight,
     candidate: &Candidate,
 ) -> Result<Claims, ClaimStop> {
@@ -230,8 +208,7 @@ fn claim_one(
         ledger.record(at, header_record(snap, at)?);
     }
     let target = match ledger.claim(height, &rule_set) {
-        Ok(Ok(target)) => target,
-        Ok(Err(refused)) => return Err(ClaimStop::Refused { index, refused }),
+        Ok(target) => target,
         Err(corrupt) => return Err(ClaimStop::Corrupt { height, corrupt }),
     };
     // Read before this block's own header joins the ledger: a block cannot
@@ -331,8 +308,7 @@ pub(crate) fn claim_alt(
         refused => return Ok(ClaimedAlt::Spend(refused)),
     };
     let target = match target_claim(&view, height, &rule_set) {
-        Ok(Ok(target)) => target,
-        Ok(Err(refused)) => return Err(ClaimStop::Refused { index: 0, refused }),
+        Ok(target) => target,
         Err(Fault::Corrupt(corrupt)) => return Err(ClaimStop::Corrupt { height, corrupt }),
         Err(Fault::View(e)) => return Err(ClaimStop::Store(e)),
         Err(Fault::Stale(stale)) => unreachable!("a derivation is never stale: {stale}"),
@@ -370,8 +346,7 @@ pub(crate) fn claim_next(
         Some(at) => recorded_hash(snap, at)?,
     };
     match target_claim(&view, connecting, &rule_set) {
-        Ok(Ok(target)) => Ok((connecting, seed, target)),
-        Ok(Err(refused)) => Err(ClaimStop::Refused { index: 0, refused }),
+        Ok(target) => Ok((connecting, seed, target)),
         Err(Fault::Corrupt(corrupt)) => Err(ClaimStop::Corrupt {
             height: connecting,
             corrupt,

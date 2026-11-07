@@ -21,8 +21,8 @@ use shekyl_wire::Transaction;
 
 use crate::connector::RunFault;
 
-/// The seconds between the driver's blocks — the DAA target, so a
-/// scripted chain's timestamps look like a chain's.
+/// The seconds between the driver's blocks by default — the DAA target, so
+/// a scripted chain's timestamps look like a chain's.
 const BLOCK_INTERVAL: u64 = 120;
 
 /// Where the driver's clock starts: after the harness fixtures' epoch so a
@@ -34,16 +34,26 @@ pub const CLOCK_START: Timestamp = Timestamp::from_raw(1_800_000_000);
 /// the default is the harness's always-satisfying longhash.
 pub struct Clocked<P> {
     clock: AtomicU64,
+    /// Seconds per [`tick`](Self::tick).
+    interval: AtomicU64,
     pow: P,
 }
 
 impl<P> Clocked<P> {
-    /// A clock at [`CLOCK_START`] over `pow`'s longhash.
+    /// A clock at [`CLOCK_START`] over `pow`'s longhash, ticking one DAA
+    /// target per block.
     pub const fn new(pow: P) -> Self {
         Self {
             clock: AtomicU64::new(CLOCK_START.to_raw()),
+            interval: AtomicU64::new(BLOCK_INTERVAL),
             pow,
         }
+    }
+
+    /// Tick `seconds` per block from now on: a chain whose blocks come
+    /// faster or slower than the DAA's target.
+    pub fn set_interval(&self, seconds: core::num::NonZeroU64) {
+        self.interval.store(seconds.get(), Ordering::Relaxed);
     }
 
     /// The clock now.
@@ -53,10 +63,11 @@ impl<P> Clocked<P> {
 
     /// Advance the clock by one block interval and return the new reading.
     pub fn tick(&self) -> Timestamp {
+        let interval = self.interval.load(Ordering::Relaxed);
         let next = self
             .clock
-            .fetch_add(BLOCK_INTERVAL, Ordering::Relaxed)
-            .saturating_add(BLOCK_INTERVAL);
+            .fetch_add(interval, Ordering::Relaxed)
+            .saturating_add(interval);
         Timestamp::from_raw(next)
     }
 }

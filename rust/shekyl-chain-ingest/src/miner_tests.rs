@@ -190,7 +190,10 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
     s.mine(1).await;
     // A block at the chain's target, through the connector.
     let mut next = s.next_template(Vec::new()).await.expect("a template");
-    assert_eq!(next.target.difficulty(), Difficulty::from_raw(8));
+    assert_eq!(
+        next.target.difficulty(),
+        Difficulty::new(8).expect("a test difficulty is non-zero")
+    );
     pin_job_seed(&substrate, &caches, &next);
     let first = board.publish(job_for(&next));
     let block = found.recv_timeout(FIND_WITHIN).expect("a block is found");
@@ -228,7 +231,7 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
     // template: the block that arrives is the newer job's.
     let mut next = s.next_template(Vec::new()).await.expect("a template");
     let unreachable = Job {
-        difficulty: Difficulty::from_raw(u128::MAX),
+        difficulty: Difficulty::new(u128::MAX).expect("a test difficulty is non-zero"),
         ..job_for(&next)
     };
     pin_job_seed(&substrate, &caches, &next);
@@ -397,6 +400,82 @@ async fn the_miner_extends_the_chain_block_after_block() {
     s.close().await;
 }
 
+/// LWMA-1's floor, mined (`DAA_LWMA1.md` §5.3 step 10; Rick, 2026-11-07).
+/// `N + 1` blocks at a fixed difficulty of one, a DAA target apart, are a
+/// window of ones on time: LWMA-1's tail over it is `0.99`, which floors
+/// to zero, and the block after it used to be refused (CEN-D6) with every
+/// successor. Continued under LWMA-1, that block's target is one. At one
+/// every hash is a block, so the chain's blocks come a second apart, and
+/// the target climbs as the slow window slides out: over the next window
+/// it passes one hundred (the integer model gives 260 at block `N`).
+/// Real RandomX through the production substrate, the workers' search and
+/// the connector's door; the scenario's clock is the only thing scripted.
+/// Red edit: drop step 10, and the first template is never built.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "real RandomX, about 2,600 hashes over a window; run by nightly.yml's chain-ingest-ignored job"]
+async fn a_chain_at_the_difficulty_floor_mines_its_way_back() {
+    let _lane = MINER_LANE.lock().await;
+    let caches = Arc::new(CacheStore::new());
+    let pow = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
+    let substrate = pow.clone();
+    let mut s = Scenario::open_under(
+        "miner-floor",
+        pow,
+        ChainRules::harness_regtest(NonZeroU128::new(1), CappedEpoch::PRODUCTION),
+    );
+    // Heights 0..=N at one, on time: the window of ones.
+    s.mine(shekyl_difficulty::N + 1).await;
+    s.continue_under(ChainRules::harness_regtest(None, CappedEpoch::PRODUCTION))
+        .await;
+    s.space_blocks(core::num::NonZeroU64::MIN);
+
+    let board = Arc::new(JobBoard::new());
+    let (sink, found) = found_blocks();
+    let miner = Miner::start(
+        &MinerConfig {
+            address: MiningAddress::decode(&harness_address(), Network::Mainnet)
+                .expect("the harness address"),
+            threads: NonZeroUsize::new(2).expect("two"),
+            bound: SearchBound::Unbounded,
+        },
+        Arc::clone(&board),
+        Arc::clone(&caches),
+        shekyl_hash_budget::Budget::of_host(),
+        sink,
+    )
+    .expect("the workers start");
+    let mut targets = Vec::new();
+    for _ in 0..=shekyl_difficulty::N {
+        let mut next = s.next_template(Vec::new()).await.expect("a template");
+        targets.push(next.target.difficulty());
+        pin_job_seed(&substrate, &caches, &next);
+        board.publish(job_for(&next));
+        let block = found.recv_timeout(FIND_WITHIN).expect("a block is found");
+        next.template.block = block.block;
+        let height = next.height;
+        s.connect_template(next)
+            .await
+            .unwrap_or_else(|outcome| panic!("block {height:?} connects: {outcome}"));
+    }
+    miner.stop().join();
+    s.close().await;
+
+    assert_eq!(
+        targets.first(),
+        Some(&Difficulty::ONE),
+        "the block after the window of ones is claimed at the floor"
+    );
+    assert!(
+        targets.windows(2).all(|pair| pair[0] <= pair[1]),
+        "fast blocks never lower the target: {targets:?}"
+    );
+    let last = *targets.last().expect("a window of targets");
+    assert!(
+        last >= Difficulty::new(100).expect("non-zero"),
+        "one window of fast blocks lifts the floor at least a hundredfold: {targets:?}"
+    );
+}
+
 /// The miner leaves the last permit free (PR2-Q3). Two permits, one
 /// worker, a job no hash meets: the worker holds one permit and a chain
 /// `form` takes the other at once, while that hash is still running.
@@ -443,7 +522,7 @@ fn a_form_takes_the_permit_the_miner_left_free() {
         block: template,
         height: shekyl_types::BlockHeight::from_raw(1),
         seed,
-        difficulty: Difficulty::from_raw(u128::MAX),
+        difficulty: Difficulty::new(u128::MAX).expect("a test difficulty is non-zero"),
     });
     let started = Instant::now();
     while budget.held(Class::Miner) == 0 {
@@ -511,7 +590,7 @@ fn the_miners_rate_per_worker() {
             block: template.clone(),
             height: shekyl_types::BlockHeight::from_raw(1),
             seed,
-            difficulty: Difficulty::from_raw(u128::MAX),
+            difficulty: Difficulty::new(u128::MAX).expect("a test difficulty is non-zero"),
             offsets: template
                 .blob_offsets()
                 .expect("a built coinbase reserves the extra nonce"),

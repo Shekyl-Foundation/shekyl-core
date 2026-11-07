@@ -109,8 +109,7 @@ fn judge<'b, 'id>(
         },
     };
     let target = match shekyl_chain_rules::target_claim(view, connecting, &RULES) {
-        Ok(Ok(target)) => target,
-        Ok(Err(refused)) => panic!("the bench chain derives a target: {refused}"),
+        Ok(target) => target,
         Err(Fault::View(fault)) => return Err(fault),
         Err(other) => panic!("the bench chain's headers are a chain: {other:?}"),
     };

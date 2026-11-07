@@ -52,6 +52,7 @@ subjects=(
   'archival_slash_tests::the_levered_slash_chain_judges_each_row_on_one_record'
   'bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects_through_the_staged_door'
   'bundle_producer_gate_tests::a_produced_support_bundle_is_admitted_and_connects_through_the_staged_door'
+  'miner_tests::a_chain_at_the_difficulty_floor_mines_its_way_back'
   'miner_tests::the_miner_extends_the_chain_block_after_block'
   'miner_tests::the_miners_rate_per_worker'
   'pool_submit_tests::join_posts_are_accepted_through_the_rust_pool_shim'

@@ -660,7 +660,11 @@ the CEN-D6 verdict. So the test has a third outcome beside "fold into a type"
 and "keep the refusal": **re-classify** — a refusal reachable from valid
 inputs belongs to the rules, not to the store's belts, and mis-filing it as
 corruption would have halted the writer on a chain the C++ merely refuses a
-block on.
+block on. **And the rule may itself be wrong (ruled 2026-11-07):** a refusal
+of zero refused every successor, so the chain died; LWMA-1 now floors at one
+(`DAA_LWMA1.md` §5.3 step 10), `Difficulty` is non-zero by construction, and
+CEN-D6 is folded into the type after all — because the algorithm changed so
+that no input produces zero, not because the arm was declared unreachable.
 
 The `Block` is kept **whole** rather than decomposed into header + miner tx
 (the round-2 sketch): the header's `transaction_hashes` are part of what
@@ -919,7 +923,7 @@ pub enum Stale {
 pub struct ReferenceMismatch { pub claimed: Option<ReferenceClaim>, pub expected: ReferenceClaim }
 pub enum Retry { Again(FormAttempt), Exhausted }          // MAX_FORM_ATTEMPTS = 3
 pub enum Corrupt {
-    CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyOverflow,   // ZeroTarget deleted 2026-09-20 (RD-F17): zero is CEN-D6's verdict
+    CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyOverflow,   // no ZeroTarget: Difficulty is non-zero (DAA_LWMA1.md §5.3 step 10)
     TxCountNotMonotone { at },                                             // slice 6
     BurnExceedsEmission { coins_generated, total_burned },                 // slice 7 wave B: the R9 register above the parent's emission (FL-R16c) — the store halts on the register
 }

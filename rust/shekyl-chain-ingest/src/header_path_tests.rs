@@ -76,10 +76,7 @@ fn target_of<'id, V: HeaderView<'id>>(view: &V, height: BlockHeight, rule_set: &
 where
     V::Fault: std::fmt::Debug,
 {
-    match target_claim(view, height, rule_set).expect("the target read") {
-        Ok(target) => target,
-        Err(refused) => panic!("the target claim was refused: {refused:?}"),
-    }
+    target_claim(view, height, rule_set).expect("the target read")
 }
 
 fn connecting<'id, V: HeaderView<'id>>(view: &V) -> BlockHeight

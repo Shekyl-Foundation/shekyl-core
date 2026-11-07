@@ -1,6 +1,7 @@
 # LWMA-1 — Difficulty adjustment, Rust, from genesis
 
-**Status.** **RATIFIED — Phase 0 close (2026-05-18 UTC).** Review
+**Status.** **RATIFIED — Phase 0 close (2026-05-18 UTC); amended
+2026-11-07 (§5.3 step 10, the floor at one, Rick).** Review
 passes 1–13 have all landed against PR #49. Phase 0 deliverable for
 the Shekyl difficulty-adjustment algorithm (DAA) migration. Companion:
 [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md). Phase 1 implementation is
@@ -1043,7 +1044,8 @@ vectors at all, and the FFI shim accepts a shorter `count` per §6.1.
 ### 5.2 Output
 
 `next_difficulty: u128` — the difficulty that the next block must
-satisfy.
+satisfy. Never zero (step 10): the Rust type is
+`shekyl_difficulty::Difficulty`, non-zero by construction.
 
 ### 5.3 Algorithm (textual specification)
 
@@ -1476,6 +1478,41 @@ spec source and requires a §10 reversion-clause amendment plus a
 fresh round of cross-check derivation against an alternative
 reference. Phase 1's Rust transcription includes the step; any
 PR proposing to drop or alter it requires a §10 disposition.
+
+**Step 10 — The floor at one (Rick, 2026-11-07; Shekyl's departure
+from canonical zawy12).** `next_D := max(next_D, 1)`.
+
+A difficulty is the expected number of hashes per block, and a block
+costs at least one hash, so one is the least value the quantity has.
+The floor states what difficulty means; it is not a constant someone
+chose and it prices nothing. Any live miner produces at least one hash
+per target interval, so for a chain still mining the true equilibrium
+is at or above one. A floor above one would be a hardware claim
+(`76-device-provisioning-floor`): blocks would take `F / hashrate`
+whenever mining is thin, and the constant would age with hardware.
+
+Why it is needed: canonical LWMA-1 has no floor (`LWMA1_()` returns
+step 9's value as is), and its tail floors to zero. With every
+solvetime at the `+6T` clamp, `L = 6T · N(N+1)/2` and the output is
+`avg_D · 99 / 600`, zero for `avg_D ≤ 6` (`400 → 66 → 10 → 1 → 0` over
+four maximally slow windows); with solvetimes on target it is
+`0.99 · avg_D`, zero at `avg_D = 1`. Below about 100, integer division
+rounds every step down. From zero, `avg_D · k` stays zero, and the
+census's zero refusal (CEN-D6) refused that block and so every
+successor: a chain that mined slowly enough never mined again (DRS-E2
+RD-F17, 2026-09-20).
+
+From one the chain recovers. At one every hash is a block, so
+solvetimes fall to the minimum-L floor (step 5) and the tail is
+`avg_D · 99(N+1) / (10N) ≈ 10.01 · avg_D`: a window at the floor
+whose blocks come fast lifts the next difficulty about tenfold
+(`1 → 10 → 100 → 1000`, §8.1 vector 9).
+
+Every output step 9 makes that is not zero is unchanged, so every
+earlier vector stands; the floor adds vectors 8 and 9. The Rust type
+carries the rest: `Difficulty` cannot be zero, so the census's
+CEN-D6 has no runtime arm. Canonical-reference cross-checks (§8.2)
+apply step 10 to the reference's output before comparing.
 
 ### 5.4 Properties
 
@@ -2359,6 +2396,16 @@ cross-check both numbers.
   that it cancels in the sum gets caught by this unit test,
   not by post-genesis drift. **Required**: Phase 1 cannot merge
   without this vector.
+- **The floor (§5.3 step 10, 2026-11-07), vector 8.** Every
+  solvetime at the `+6T` clamp (`timestamps[i] = B + i*7*T`), with
+  `avg_D` from 1 to 6: the tail `avg_D * 99 / 600` is zero, canonical
+  returns 0, and Shekyl returns **1**. At `avg_D = 7` the output is 1
+  without the floor, at 13 it is 2, at 400 it is 66: nothing above
+  zero moves.
+- **The floor's way back, vector 9.** Every timestamp equal
+  (`timestamps[i] = B`), so `L` takes the minimum-L floor and the
+  tail is `avg_D * 99 * (N+1) / (10N)`: `avg_D = 1 → 10`,
+  `10 → 100`, `100 → 1_000` (step 9 rounds `1_001`).
 
 All vectors derived analytically against the §5.3 specification
 and (for those expressing concrete numerical tuples) empirically

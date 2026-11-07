@@ -107,15 +107,13 @@ pub fn expected_seed(chain: &MockChain) -> BlockHash {
 
 /// The target CEN-D4 derives for a candidate on `chain`'s tip under
 /// `rule_set`: what an honest driver claims to `form`, through the one
-/// derivation (`target_claim`). Panics on a D6 refusal — a fixture chain
-/// whose difficulty derives zero is a fixture error.
+/// derivation (`target_claim`).
 #[must_use]
 #[track_caller]
 pub fn expected_target(chain: &MockChain, rule_set: &RuleSet) -> Target {
     let connecting = BlockHeight::from_raw(chain.tip().map_or(0, |tip| tip.height.to_raw() + 1));
     chain.with_view(|view| match target_claim(&view, connecting, rule_set) {
-        Ok(Ok(target)) => target,
-        Ok(Err(refused)) => panic!("the fixture chain derives no target: {refused}"),
+        Ok(target) => target,
         Err(Fault::View(never)) => match never {},
         Err(fault) => panic!("the fixture chain's headers are not a chain: {fault}"),
     })

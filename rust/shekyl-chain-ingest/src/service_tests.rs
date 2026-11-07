@@ -2065,7 +2065,7 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
         block: blocks[2].template.block.clone(),
         height: blocks[2].height,
         seed: BlockHash::NULL,
-        difficulty: shekyl_difficulty::Difficulty::from_raw(1),
+        difficulty: shekyl_difficulty::Difficulty::ONE,
         offsets: blocks[2]
             .template
             .block
@@ -2278,7 +2278,7 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
                     block: block.clone(),
                     height: BlockHeight::from_raw(1),
                     seed: BlockHash::from_bytes([1; 32]),
-                    difficulty: shekyl_difficulty::Difficulty::from_raw(1),
+                    difficulty: shekyl_difficulty::Difficulty::ONE,
                     offsets: block
                         .blob_offsets()
                         .expect("a built coinbase reserves the extra nonce"),
@@ -2345,9 +2345,7 @@ where
             AtHeight::AboveTip => BlockHash::NULL,
         },
     };
-    let target = target_claim(&view, connecting, &rule_set)
-        .expect("view")
-        .expect("a target");
+    let target = target_claim(&view, connecting, &rule_set).expect("view");
     let pow = shekyl_wire::PowBlob::read(&mined.template.block.pow_blob()).expect("preimage");
     let formed = form_header(&pow, &rule_set, gate, seed, target, FormAttempt::FIRST)
         .expect("the substrate answers")

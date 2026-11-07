@@ -92,7 +92,7 @@ fn nonce_meeting_target(
     txs: &[Transaction],
     reward: u64,
 ) -> u32 {
-    let difficulty = Difficulty::from_raw(MINED_DIFFICULTY);
+    let difficulty = Difficulty::new(MINED_DIFFICULTY).expect("a test difficulty is non-zero");
     first_nonce(NONCE_BUDGET, |nonce| {
         let block = block_with_nonce(root, height, previous, txs, reward, nonce);
         check_hash(seeded_keccak(&block.pow_blob(), seed).as_bytes(), difficulty)
@@ -380,7 +380,8 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
             };
             let pow = Pow {
                 longhash: &seeded_keccak,
-                difficulty: Difficulty::from_raw(MINED_DIFFICULTY),
+                difficulty: Difficulty::new(MINED_DIFFICULTY)
+                    .expect("a test difficulty is non-zero"),
                 true_seed: seed_for(AT, |at| {
                     chain[usize::try_from(at).expect("seed height fits an index")]
                         .0

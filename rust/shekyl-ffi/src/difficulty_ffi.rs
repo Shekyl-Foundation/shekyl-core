@@ -305,7 +305,14 @@ pub unsafe extern "C" fn shekyl_difficulty_check_hash(
     // an aligned, initialized [u8; 32].
     let hash = &*hash_ptr;
 
-    let pass = check_hash(hash, Difficulty::from_raw(u128::from(difficulty)));
+    // Zero is not a difficulty in Rust (`DAA_LWMA1.md` §5.3 step 10). The
+    // C ABI still carries a raw integer, and the inherited C++ treats zero
+    // as always-pass, so this edge keeps that answer for its C++ callers
+    // until the FFI is deleted (C++ removal PR 2). Never a panic here.
+    let pass = match Difficulty::new(u128::from(difficulty)) {
+        Some(difficulty) => check_hash(hash, difficulty),
+        None => true,
+    };
 
     // SAFETY: out_pass is non-null per the check above; the caller's
     // contract guarantees alignment and writability.
