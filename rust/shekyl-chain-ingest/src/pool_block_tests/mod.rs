@@ -318,8 +318,15 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
     assert!(carried.public, "a block published it");
     assert!(shown(&carried));
 
-    // The pool file is discardable (SPL-Q8): discard it.
+    // The pool file is discardable (SPL-Q8): discard it before the switch.
+    // Closing the pool leaves the file; the directory guard removes it only
+    // when the test ends.
     drop(pool);
+    std::fs::remove_file(&path).expect("the operator discards the pool file");
+    assert!(
+        !path.path().exists(),
+        "the pool file is gone before the switch"
+    );
     let plan = offer_branch(&x, &b[1..]).await;
     let switched = x.reorganize(&plan).await.expect("switch");
     assert!(
