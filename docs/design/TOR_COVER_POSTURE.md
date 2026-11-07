@@ -40,8 +40,8 @@ Three consequences follow immediately:
   Both re-draw per epoch. A hidden-address pool of one is a degraded state
   the node reports (`hop-0 edge cannot rotate`), not a configuration it
   accepts quietly. **UPDATE 2026-10-07:** that pool's target is
-  `MIN_PROVISIONED_OUT_PEERS` (12). The warning is a pool of one, and it
-  does not name a target. *Records-was: the managed Tor zone opens
+  `MIN_PROVISIONED_OUT_PEERS` (12). The report is a pool of one, an info
+  line (`DAEMON_RELAY_PRIVACY.md` §98.5), and it does not name a target. *Records-was: the managed Tor zone opens
   `HOP0_OUTBOUND_TARGET` (4) outbound connections so that pool has the
   paper's degree to rotate over.*
   `--out-peers` does not change the address-hiding target. A live own-edge is not
