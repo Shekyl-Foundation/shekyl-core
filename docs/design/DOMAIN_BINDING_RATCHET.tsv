@@ -24,17 +24,9 @@
 # section	literal	note
 input-raw	shekyl/ek-bind-v1	input:SaltForKey: no type for a key derived under salt_for yet
 input-raw	shekyl/archival-p-id-v1	input:SaltForKey: no type for a key derived under salt_for yet
-input-raw	shekyl/archival-emission-claim-scheme-v1	input:frame: no type for a frame output yet
-input-raw	shekyl/archival-emission-backing-scheme-v1	input:frame: no type for a frame output yet
 input-raw	shekyl/archival-attestation-scheme-v3	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
 input-raw	shekyl/archival-receipt-scheme-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
-input-raw	shekyl/archival-witness-bundle-scheme-v1	input:frame: no type for a frame output yet
 input-raw	nonce	input:SaltForKey: no type for a key derived under salt_for yet
-input-raw	shekyl-outbound-tx-proof-v1	input:frame: no type for a frame output yet
-input-raw	shekyl-inbound-tx-proof-v1	input:frame: no type for a frame output yet
-input-raw	shekyl-reserve-proof-v1	input:frame: no type for a frame output yet
-input-raw	shekyl-reserve-proof-dleq-v1	input:frame: no type for a frame output yet
-input-raw	shekyl/msg-sign-outer-v1	input:frame: no type for a frame output yet
 input-raw	shekyl-subaddr-v1\0	input:SaltForKey: no type for a key derived under salt_for yet
 input-raw	shekyl-mlkem-chacha-seed	input:SaltForKey: no type for a key derived under salt_for yet
 unframed	shekyl/p2p-wire-prefix-v1	id: the id at position 0 of a raw cSHAKE input, not frame(id); the P2P wire prefix

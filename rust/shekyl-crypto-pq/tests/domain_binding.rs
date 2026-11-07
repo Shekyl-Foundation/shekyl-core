@@ -53,7 +53,7 @@ const CENSUS: &str = include_str!("../../../docs/design/CONSENSUS_RULE_CENSUS.md
 
 /// The ratchet's pinned section sizes. Lower a pin when a row leaves; a
 /// raise is a new hole and needs a ruling.
-const INPUT_RAW_EXPECTED: usize = 15;
+const INPUT_RAW_EXPECTED: usize = 7;
 const UNFRAMED_EXPECTED: usize = 2;
 const PENDING_EXPECTED: usize = 7;
 
@@ -74,10 +74,11 @@ const HEDGED_NONCES: [&str; 6] = [
 
 /// `input:<type>` (§2.4, closed) and the Rust type a site must take for it.
 /// `None`: no type exists yet, so every such row is in the ratchet.
-const INPUT_TYPES: [(&str, Option<&str>); 9] = [
+const INPUT_TYPES: [(&str, Option<&str>); 10] = [
     ("TxSignableHash", Some("TxSignableHash")),
     ("SigningPayloadHash", Some("SigningPayloadHash")),
-    ("frame", None),
+    ("Framed32", Some("Framed32")),
+    ("Framed64", Some("Framed64")),
     ("BlockHash", Some("BlockHash")),
     ("TxId", Some("TxHash")),
     ("TreeRoot", Some("CurveTreeRoot")),

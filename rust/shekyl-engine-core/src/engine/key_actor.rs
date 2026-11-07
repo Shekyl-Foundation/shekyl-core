@@ -240,15 +240,15 @@ impl Message<SignTransaction> for KeyActor {
 }
 
 /// Actor message for the classical half of a wallet message signature
-/// (PR-SM-1). `outer` is `preimage ‖ σ_pq` — **public bytes**, length
-/// fixed by type ([`OUTER_MSG_LEN`](shekyl_crypto_pq::message_signing::OUTER_MSG_LEN))
-/// — so nothing secret crosses into or out of the mailbox: the master
+/// (PR-SM-1). `outer` is `preimage ‖ σ_pq` — **public bytes**: an
+/// [`OuterMessage`](shekyl_crypto_pq::message_signing::OuterMessage), whose
+/// preimage is a frame output by type — so nothing secret crosses into or out of the mailbox: the master
 /// seed stays at the engine (its transient borrow never reaches the
 /// actor, the same posture the stake personas pin), and the spend
 /// scalar never leaves the actor. Wrong-shape payloads cannot be
 /// constructed; the type is the signing-oracle gate.
 pub(crate) struct SignMessageOuter {
-    pub outer: Box<[u8; shekyl_crypto_pq::message_signing::OUTER_MSG_LEN]>,
+    pub outer: shekyl_crypto_pq::message_signing::OuterMessage,
 }
 
 impl Message<SignMessageOuter> for KeyActor {
@@ -261,7 +261,7 @@ impl Message<SignMessageOuter> for KeyActor {
     ) -> Self::Reply {
         shekyl_crypto_pq::message_signing::sign_outer_with_spend_scalar(
             self.local.keys.spend_sk.as_canonical_bytes(),
-            msg.outer.as_ref(),
+            &msg.outer,
         )
         .map_err(|_| KeyEngineError::Primitive {
             detail: "spend-scalar Schnorr signing failed",
@@ -502,10 +502,10 @@ impl KeyEngineHandle {
     /// Sign the classical half of a wallet message signature (PR-SM-1).
     /// Same inherent-method disposition as the proof methods above: one
     /// production caller, no `LocalKeys` equivalence oracle to abstract.
-    /// Outer length is compile-time fixed — see [`SignMessageOuter`].
+    /// The outer message is typed — see [`SignMessageOuter`].
     pub(crate) async fn sign_message_outer(
         &self,
-        outer: Box<[u8; shekyl_crypto_pq::message_signing::OUTER_MSG_LEN]>,
+        outer: shekyl_crypto_pq::message_signing::OuterMessage,
     ) -> Result<[u8; shekyl_crypto_pq::message_signing::CLASSICAL_SIG_LEN], KeyEngineError> {
         self.actor
             .ask(SignMessageOuter { outer })

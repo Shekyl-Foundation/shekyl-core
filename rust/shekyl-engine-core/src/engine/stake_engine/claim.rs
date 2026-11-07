@@ -16,7 +16,6 @@ use shekyl_archival_retention::{
     MembershipOnlyBacking, RewardCommit,
 };
 use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
-use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
@@ -362,10 +361,9 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         let auth_msgs = vin
             .auth_msgs(&self.network, &reward_commits, &tx_signable)
             .map_err(|e| BondAssemblyError::build("auth binding message", e))?;
-        let auth_b = sign_pqc_auth_for_output(
+        let auth_b = shekyl_crypto_pq::output::sign_emission_backing_for_output(
             &backing_combined,
             backing_index,
-            shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
             &auth_msgs.backing,
         )
         .map_err(|e| BondAssemblyError::build("backing auth signing", e))?;
@@ -382,13 +380,11 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             .into());
         }
         vin.auth_backing = auth_b.signature;
-        let claim_sig = HybridEd25519MlDsa
-            .sign(
-                &keys.hybrid_sign_sk,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_CLAIM,
-                &auth_msgs.claim,
-            )
-            .map_err(|e| BondAssemblyError::build("claim auth signing", e))?;
+        let claim_sig = shekyl_crypto_pq::signature::sign_emission_claim(
+            &keys.hybrid_sign_sk,
+            &auth_msgs.claim,
+        )
+        .map_err(|e| BondAssemblyError::build("claim auth signing", e))?;
         vin.auth_claim = claim_sig
             .to_canonical_bytes()
             .map_err(|e| BondAssemblyError::build("claim auth encoding", e))?;

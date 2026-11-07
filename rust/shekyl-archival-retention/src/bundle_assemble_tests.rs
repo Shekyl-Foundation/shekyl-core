@@ -47,12 +47,17 @@ fn an_assembled_bundle_is_signed_over_its_commitment_under_the_witness_domain() 
         .verify(
             &public,
             SCHEME_DOMAIN_WITNESS_BUNDLE,
-            &commitment,
+            commitment.as_bytes(),
             &signature,
         )
         .expect("the witness domain verifies");
     assert!(HybridEd25519FnDsa
-        .verify(&public, SCHEME_DOMAIN_RECEIPT, &commitment, &signature)
+        .verify(
+            &public,
+            SCHEME_DOMAIN_RECEIPT,
+            commitment.as_bytes(),
+            &signature
+        )
         .is_err());
 
     let refused: Result<_, &str> =

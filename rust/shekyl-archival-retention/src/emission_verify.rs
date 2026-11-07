@@ -50,6 +50,7 @@ use shekyl_crypto_pq::signature::{
 };
 use shekyl_fcmp::proof::{verify_membership_only, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
+use shekyl_network::envelope::Framed64;
 use shekyl_network::NetworkId;
 use shekyl_types::{CurveTreeRoot, TxSignableHash};
 use thiserror::Error;
@@ -779,7 +780,7 @@ pub fn emission_vin_verify_auth(
 /// deserialization can still fail on malformed component encodings.
 fn verify_hybrid_auth(
     pubkey_bytes: &[u8],
-    msg: &[u8; 64],
+    msg: &Framed64,
     sig_bytes: &[u8],
     role: EmissionAuthRole,
 ) -> Result<(), EmissionVerifyError> {
@@ -796,7 +797,7 @@ fn verify_hybrid_auth(
         EmissionAuthRole::Backing => shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
     };
     HybridEd25519MlDsa
-        .verify(&pubkey, domain, msg, &sig)
+        .verify(&pubkey, domain, msg.as_bytes(), &sig)
         .map_err(|_| EmissionVerifyError::AuthRejected { role })
 }
 

@@ -81,7 +81,7 @@ pub fn derive_genesis_tx_secret(net: Network, recipients: &[Recipient]) -> [u8; 
     // The table row's `name_id` (`shekyl_network`), never a literal here:
     // genesis commits to the network's name through this key (NI-R12).
     let seed = GENESIS_TXKEY.frame(&net.name_id(), [&m]);
-    Scalar::from_bytes_mod_order(seed).to_bytes()
+    Scalar::from_bytes_mod_order(seed.into_bytes()).to_bytes()
 }
 
 /// The tx public key `R = r·G` for a canonical secret scalar, compressed —

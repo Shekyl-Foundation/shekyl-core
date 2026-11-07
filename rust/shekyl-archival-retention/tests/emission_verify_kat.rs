@@ -710,7 +710,7 @@ fn authed_vin(
         .sign(
             &b_sk,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
-            &msgs.backing,
+            msgs.backing.as_bytes(),
         )
         .expect("backing sign")
         .to_canonical_bytes()
@@ -719,7 +719,7 @@ fn authed_vin(
         .sign(
             &p_sk,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_CLAIM,
-            &msgs.claim,
+            msgs.claim.as_bytes(),
         )
         .expect("claim sign")
         .to_canonical_bytes()
@@ -802,7 +802,7 @@ fn auth_rejects_claim_signed_by_wrong_key() {
         .sign(
             &b_sk,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_CLAIM,
-            &msgs.claim,
+            msgs.claim.as_bytes(),
         )
         .expect("cross sign")
         .to_canonical_bytes()
@@ -922,7 +922,7 @@ fn auth_rejects_malformed_hybrid_encodings() {
         .sign(
             &b_sk,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
-            &msgs.backing,
+            msgs.backing.as_bytes(),
         )
         .expect("backing sign")
         .to_canonical_bytes()
@@ -931,7 +931,7 @@ fn auth_rejects_malformed_hybrid_encodings() {
         .sign(
             &p_sk,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_CLAIM,
-            &msgs.claim,
+            msgs.claim.as_bytes(),
         )
         .expect("claim sign")
         .to_canonical_bytes()
