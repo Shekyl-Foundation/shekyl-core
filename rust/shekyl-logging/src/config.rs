@@ -177,10 +177,10 @@ impl FileSink {
 pub struct Config {
     /// Filter level applied when no `SHEKYL_LOG` env var is set.
     ///
-    /// Passed through to the legacy translator's `fallback_default`
-    /// argument so that unset `SHEKYL_LOG` at startup produces an explicit
-    /// bare-level directive instead of the "empty directive => no filter"
-    /// landmine described in the crate README.
+    /// An unset `SHEKYL_LOG` at startup produces an explicit bare-level
+    /// directive from this ([`crate::filter::resolve_env_filter`]) instead
+    /// of the "empty directive => no filter" landmine described in the
+    /// crate README.
     pub fallback_default: Level,
 
     /// Optional file sink.

@@ -12,10 +12,7 @@ env var (`SHEKYL_LOG`), the file-sink discipline (`0600` on POSIX
 for non-rotating and size-rolling sinks — see the rotation caveat
 below), the queued, never-blocking sinks, and the daemon's runtime
 filter changes (`subsystem::apply` for `log-level` /
-`log-category`). It also carries a stateful translator from the
-easylogging++ `log-levels=` category grammar
-(`net.p2p:DEBUG`, numeric `0..=4` presets, `+`/`-` modifiers) to
-`EnvFilter` directives.
+`log-category`).
 
 ## Public API
 
@@ -125,30 +122,6 @@ outcomes through the installed subscriber. What the queues leave
 RAII guard for the sinks' writer threads, one per sink. Must outlive
 the process's interesting work. See "The `LoggerGuard` footgun" below.
 
-### `directives_from_legacy_categories(current, new, fallback) -> Result<TranslationReport, FilterError>`
-
-Translator from the legacy easylogging++ `log-levels=` grammar to
-an `EnvFilter` directive string. Stateful: `current` is the
-currently-active spec (so `+cat:LEVEL` / `-cat` modifiers merge
-textually). Process startup passes `current = None`.
-
-Returns a `TranslationReport { directive, unknown, warnings }`.
-Unknown category names are *reported*, not rejected, so callers
-can choose to surface a warning without failing startup. Suffix
-globs (`*y.z:LEVEL`) are rejected with
-`FilterError::UnsupportedGlob` and, where possible, a suggested
-rewrite.
-
-**Empty-input semantics.** The two call sites diverge on purpose:
-
-- `current == None` + empty `new`: startup fallback. Uses
-  `fallback_default` (e.g. `WARN` for CLI, `INFO` for wallet-rpc).
-- `current == Some(..)` + empty `new`: RPC/runtime toggle. Returns
-  an `"off"` directive so the subsequent `EnvFilter` reload
-  *silences* all logging, matching the legacy C++
-  `mlog_set_categories("")` contract used by
-  `TEST(logging, no_logs)`. This is not "no change".
-
 ### Env vars
 
 | Name | Role | When honored |
@@ -219,17 +192,6 @@ before review approval.
    `LoggerGuard` is dropped, buffered events are lost. Graceful
    shutdown paths must let `main` return normally or explicitly
    drop the guard before calling `exit`.
-
-## Reserved legacy target names
-
-The preset strings used by the legacy easylogging++ numeric levels
-(`0..=4`) reference two self-instrumentation targets, `logging` and
-`msgwriter`. The translator preserves them verbatim so the preset's
-self-instrumentation overrides survive translation. They are
-**reserved**: new Rust `tracing::*` call sites must not use
-`target: "logging"` or `target: "msgwriter"`. A CI test
-(`tests/reserved_names.rs`) grep-enforces this against every Rust
-source outside this crate.
 
 ## Versioning and stability
 

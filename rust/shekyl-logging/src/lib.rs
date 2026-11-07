@@ -19,8 +19,6 @@
 //! - File sinks are optional, per-binary, and POSIX-mode `0600` on the
 //!   active file at init time (see [`config::FileSink`] for the
 //!   rotation caveat).
-//! - A translator ([`filter::directives_from_legacy_categories`]) converts
-//!   the easylogging++ `log-levels=` grammar to EnvFilter directives.
 //! - The daemon's `log-level` / `log-category` change the live filter at
 //!   runtime through [`subsystem::apply`], without reinstalling the
 //!   subscriber.
@@ -94,7 +92,6 @@ pub mod subsystem;
 
 mod appender;
 mod colour;
-mod legacy;
 mod queue;
 mod reload;
 
@@ -103,9 +100,7 @@ pub use queue::{flush, Flushed, FLUSH_WITHIN, SINK_QUEUE_LINES};
 #[doc(hidden)]
 pub use colour::LineColour;
 pub use config::{Config, FileSink, Rotation};
-pub use filter::{
-    directives_from_legacy_categories, FilterError, TranslationReport, SHEKYL_LOG_ENV,
-};
+pub use filter::SHEKYL_LOG_ENV;
 
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -260,12 +260,11 @@ mod tests {
     }
 
     #[test]
-    fn no_target_belongs_to_two_subsystems_and_none_is_reserved() {
+    fn no_target_belongs_to_two_subsystems() {
         let mut seen = BTreeSet::new();
         for s in Subsystem::ALL {
             for t in s.targets() {
                 assert!(seen.insert(*t), "{t} is listed twice");
-                assert!(*t != "logging" && *t != "msgwriter", "{t} is reserved");
             }
         }
     }
