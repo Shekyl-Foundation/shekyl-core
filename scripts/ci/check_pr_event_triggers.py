@@ -8,8 +8,7 @@
 A `branches:` filter on `pull_request` means the workflow does not run while
 the PR's base is some other branch. Stacked PRs (#1254, #1259) merged with
 CodeQL, the doc gates, the FFI signature gate and the rest of that set never
-started. The merge queue reruns on `merge_group`; that trigger is unchanged
-and is not this gate's subject.
+started.
 
 The `edited` activity type is refused. #1268 added it so a retarget (the
 one `edited` whose payload carries `changes.base`) would re-run every
@@ -24,9 +23,12 @@ for work not yet done. No activity-type filter distinguishes a retarget
 from a title edit, and GitHub offers no other event for it.
 
 Disposition for the retarget case (rule 21): a retargeted PR keeps the
-check runs computed against its previous base until its next push; the
-merge queue validates the actual merge result before `dev` moves
-(`06-branching.mdc`). Reopen if the repository gains a workflow identity
+check runs computed against its previous base until its next push, so its
+checks can be green for a base it no longer has. Nothing tests its merge
+into `dev` before it lands; the push runs on `dev` test the result after
+(`06-branching.mdc`), so a break shows red on `dev`, not on the PR. A push
+to the retargeted PR, such as merging `dev` into it, closes the gap before
+the merge. Reopen if the repository gains a workflow identity
 that is not `GITHUB_TOKEN` (a GitHub App installation token): events that
 token raises do trigger workflows, so a one-job `edited` workflow could
 then close and reopen a retargeted PR, and `reopened` runs everything
