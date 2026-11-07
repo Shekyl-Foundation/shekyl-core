@@ -200,7 +200,11 @@ const _: () = assert!(
     MAX_OUTPUTS.is_power_of_two(),
     "MAX_BP_LR_LEN derivation requires MAX_OUTPUTS to be a power of two"
 );
-/// Max `tx_extra` bytes for a non-coinbase tx (`MAX_TX_EXTRA_SIZE`).
+/// Max `tx_extra` bytes for a non-coinbase tx. FCMP++ adds per-output
+/// `tx_extra` (tags `0x06`/`0x07`): the hybrid KEM ciphertext (~1 120 B) and
+/// the PQC leaf hash (32 B) each, plus pubkey, nonce and padding. The
+/// worst case, `MAX_OUTPUTS` (16), needs on the order of 20 KiB; 24 KiB
+/// leaves headroom. There is no C++ copy.
 pub const MAX_TX_EXTRA: usize = 24_576;
 /// Max serialized transaction size (`CRYPTONOTE_MAX_TX_SIZE`) — the hard
 /// parse/DoS cap. The **binding** relay/consensus bound for a single tx is

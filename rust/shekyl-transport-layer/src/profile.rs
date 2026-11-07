@@ -242,7 +242,8 @@ const CLEARNET_WHITE_ATTEMPTS: u8 = 2;
 const TOR_ATTEMPTS_PER_TEST: u8 = 3;
 
 /// Tor's δ, 15 s. **Assumption** (§97, "Tor failure bracket"). Basis: the
-/// 60 s timed sync (`P2P_DEFAULT_HANDSHAKE_INTERVAL`) gives each session
+/// 60 s mean timed sync (`shekyl-p2p-session`'s `TIMED_SYNC_MIN` plus half
+/// `TIMED_SYNC_JITTER`) gives each session
 /// about two received messages a minute, and every Tor stream crosses the
 /// one guard link, so with `n` sessions a healthy link shows nothing in δ
 /// with probability `exp(−n · δ / 30 s)`. Re-derived if that interval moves.

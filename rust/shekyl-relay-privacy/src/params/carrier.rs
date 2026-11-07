@@ -8,8 +8,8 @@
 //!
 //! # Not `inherited`, and the distinction is the point
 //!
-//! [`super::inherited`] is the single Rust mirror of the `cryptonote_config.h`
-//! relay block. These two are **not** mirrors: they replace
+//! [`super::inherited`] holds the values the C++ relay block carried. These
+//! two are **not** inherited: they replace
 //! `CRYPTONOTE_NOISE_BYTES` (3 KiB) and `CRYPTONOTE_MAX_FRAGMENTS` (20), both
 //! of which are deleted from C++ by the same change that adds this module —
 //! discharging the FOLLOWUP `levin_notify.cpp` recorded beside its own guard
