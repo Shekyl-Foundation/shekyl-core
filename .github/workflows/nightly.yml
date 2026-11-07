@@ -332,6 +332,7 @@ jobs:
     needs: [store-ignored, economics-sim-ignored, chain-ingest-ignored, producer-gate]
     if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
     permissions:
       actions: read
       issues: write

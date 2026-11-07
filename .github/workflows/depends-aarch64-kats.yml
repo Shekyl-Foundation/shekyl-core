@@ -54,6 +54,7 @@ jobs:
   aarch64-kats:
     name: "ARM v8 qemu KATs"
     runs-on: ubuntu-latest
+    timeout-minutes: 80  # p90 37.9 min over 15 runs
     container:
       image: ubuntu:22.04
       env:
