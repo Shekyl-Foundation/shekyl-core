@@ -633,6 +633,16 @@ sha2 = "0.10"
 # asserts all 11 fields are present in the parsed map.
 serde_json = "1"
 
+# The RT-W10 harnesses' scratch output directory (`shekyl-chain-store`
+# `store/rt_w10_cost.rs`, `shekyl-wire` `tests/rt_w10_tx_parse.rs`; dev-only
+# in both). Verified at source (3.27.0, rule 17): `Builder::tempdir` makes the
+# directory with a non-recursive `DirBuilder::create` under a random name,
+# retrying a name that exists, so a planted path or symlink is never written
+# into or deleted; `TempDir::close` removes it and reports the error, and
+# `Drop` removes it on a panic. Already in Cargo.lock at this version
+# (through proptest), so the edge adds no crate.
+tempfile = "3.27"
+
 # CT-1 `shekyl-curve-tree` LeafStore persistence (`docs/design/CT1_ROUND1_PINS.md`).
 # Verified at source (redb 4.1.0): `Database::create`, `begin_write`/`begin_read`,
 # `TableDefinition`, `ReadableTable` range scan; public chain data only — no
