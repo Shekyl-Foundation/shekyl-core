@@ -151,6 +151,11 @@ bench's cost depends on crates other than its own):
 - An iai-callgrind entry **missing** from the PR's envelope is
   treated as `fail` (a deleted bench is the most dangerous
   regression — a "regression" that no longer exists to be caught).
+- A bench that **moved crate** (the same bench target, group,
+  function and run id under another crate, matched one to one) is
+  not missing: it is compared across the move under the same
+  thresholds, so a move that also changed the workload still fails.
+  An ambiguous match is not paired and stays missing.
 - An entry present in the PR but not the baseline is
   informational; the first merge to `dev` seeds it into the
   rolling baseline.
