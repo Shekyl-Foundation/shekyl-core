@@ -101,10 +101,10 @@ async fn a_poisoned_pool_still_admits() {
     assert_eq!(verdict.expect("no engine fault"), SubmitVerdict::Accepted);
 }
 
-/// A spend paying the floor is accepted and held by the pool, not public
-/// (the engine's own submit is a relay origination); the same bytes again
-/// are `AlreadyInPool`, the identity the shim's facts carry; a spend paying
-/// one atomic unit is refused on its fee.
+/// A spend paying the floor is accepted and held by the pool, not public.
+/// The same bytes again are `AlreadyInPool`. This harness installs no
+/// origin observer, so the facts carry no origin row and the owner is
+/// told `untracked`. A spend paying one atomic unit is refused on its fee.
 #[tokio::test]
 async fn the_engine_submits_through_the_rust_pool_and_its_door() {
     let (mut scenario, mined) = matured("pool-submit").await;
@@ -153,7 +153,7 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
     assert_eq!(
         again.expect("no engine fault"),
         SubmitVerdict::AlreadyInPool {
-            relay: PoolRelay::Held,
+            relay: PoolRelay::Untracked,
         }
     );
     assert_eq!(
