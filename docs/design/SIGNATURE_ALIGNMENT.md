@@ -52,7 +52,7 @@ as a security property.
 | `shekyl-engine-core/…/stake_engine/bond.rs:313` | sign | `bond_payload_hash` | **no** — bare hash |
 | `shekyl-engine-core/…/stake_engine/claim.rs:337,484` | sign | claim / emission payload hash | **no** — bare hash |
 | `shekyl-ffi/src/legacy_core.rs:157` (`shekyl_pqc_sign`) | sign | raw FFI `message` | **no** — bare, arbitrary |
-| `shekyl-ffi/src/legacy_fcmp.rs:734` | verify | FFI `msg` | **no** — bare |
+| `shekyl-ffi/src/legacy_fcmp.rs` (line 734 at `7121932783`) | verify | FFI `msg` | **no** — bare |
 | `shekyl-ffi/src/archival_ffi/serve_credit.rs` (the verify export deleted, `DEL-008`; the preimage is `shekyl-archival-retention`'s) | verify | `response.signature_preimage()` | yes — `shekyl/archival-serve-credit-response-v1` |
 | `shekyl-daemon-rpc/src/submit/verifier.rs:885,901` | verify | `payload_hash` (consensus) | **no** — bare hash |
 | `shekyl-archival-retention/src/emission_verify.rs:764` | verify | `msg` | **no** — bare |
@@ -371,7 +371,7 @@ moves only with a regeneration recorded in the decision log.
   rejection negative control pins the separation in `multisig.rs`).
 - The emission tx carries **three** hybrid signatures from the claim path
   (A prefix-auth, C claim, D backing) — distinct messages, distinct domains.
-- The §1.2 census row `shekyl-ffi/src/legacy_fcmp.rs:734`
+- The §1.2 census row `shekyl-ffi/src/legacy_fcmp.rs` (line 734 at `7121932783`)
   (`shekyl_emission_hybrid_auth_verify`) is **retired in PR-SA-2**, not
   domained. It was the PR-E1 per-auth primitive; its header contract claimed
   both emission roles ("Auth-B backing, Auth-P pseudonym") but its shape was
