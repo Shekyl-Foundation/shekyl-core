@@ -10,7 +10,7 @@
 //! 2026-10-30 rendered "Tor is carrying this node's traffic. This machine
 //! cannot reach the Tor network.").
 
-use super::super::super::posture::{render, Cause, OwnTx, Shown, Space, Status};
+use super::super::super::posture::{render, Carriage, Cause, OwnTx, Shown, Space, Status};
 use super::held_status;
 
 /// Every cause kind, one detail each. The match below makes a new variant
@@ -63,6 +63,8 @@ fn every_cause() -> Vec<Cause> {
     all
 }
 
+const EVERY_CARRIAGE: [Carriage; 3] = [Carriage::Carries, Carriage::OpenOnly, Carriage::Gone];
+
 const EVERY_SHOWN: [Shown; 5] = [
     Shown::Restarting,
     Shown::RestartingHeld,
@@ -78,53 +80,56 @@ const EVERY_OWN_TX: [OwnTx; 4] = [
     OwnTx::Offline,
 ];
 
-/// "Tor is carrying this node's traffic" is said only while the link shows
-/// usable, or degraded on its inbound side alone, whatever the relay's
-/// verdict: beside every other shown state and every cause it would
-/// contradict what follows. Saying it from the verdict alone fails this for
-/// every pair of a fault or network cause with an address-hiding origin.
-/// Open connections are said to carry traffic only while degraded, when the
-/// Tor holding them still runs; a restarting or bootstrapping Tor holds
-/// none, and saying so beside a lagging verdict fails this.
+/// The traffic sentences follow [`Carriage`], the core's reading of the
+/// link, and nothing else: whatever the projection and the cause, "Tor is
+/// carrying this node's traffic" is said only while the link carries, open
+/// connections are said to carry only while the Tor holding them runs, and
+/// a held node waits for Tor only while the link does not carry. Which
+/// causes leave the link carrying is the core's
+/// (`a_version_warning_beside_an_unreachable_onion_leaves_the_link_carrying`,
+/// `a_dead_tor_carries_nothing_while_the_verdict_lags`). Deriving a sentence
+/// from the shown state or the cause again fails this for a pair it reads
+/// differently.
 #[test]
-fn no_rendering_says_tor_carries_traffic_beside_a_cause_that_says_it_cannot() {
+fn the_traffic_sentences_follow_the_carriage_whatever_the_cause_and_shown_state() {
     let mut rendered = 0;
     for cause in every_cause() {
         for shown in EVERY_SHOWN {
-            for own_tx in EVERY_OWN_TX {
-                let status = Status {
-                    cause: cause.clone(),
-                    shown,
-                    own_tx,
-                    ..held_status()
-                };
-                let text = render(&status);
-                rendered += 1;
-                let carries = text.contains("Tor is carrying this node's traffic");
-                let allowed =
-                    shown == Shown::Usable || (shown == Shown::Degraded && cause == Cause::None);
-                assert!(
-                    !carries || allowed,
-                    "{cause:?} / {shown:?} / {own_tx:?}: {text}"
-                );
-                let open_only = text.contains("Connections already open through Tor still carry");
-                if own_tx == OwnTx::AddressHiding && !allowed {
-                    // Degraded: the Tor holding the connections still runs.
-                    // Restarting or bootstrapping: it ended, and no sentence
-                    // says its connections carry anything.
-                    if shown == Shown::Degraded {
-                        assert!(open_only, "{cause:?} / {shown:?}: {text}");
-                    } else {
-                        assert!(
-                            !open_only && text.contains("holding its own transactions"),
-                            "{cause:?} / {shown:?}: {text}"
-                        );
-                    }
+            for carriage in EVERY_CARRIAGE {
+                for own_tx in EVERY_OWN_TX {
+                    let status = Status {
+                        cause: cause.clone(),
+                        shown,
+                        carriage,
+                        own_tx,
+                        ..held_status()
+                    };
+                    let text = render(&status);
+                    rendered += 1;
+                    let at = format!("{cause:?} / {shown:?} / {carriage:?} / {own_tx:?}: {text}");
+                    let hiding = own_tx == OwnTx::AddressHiding;
+                    assert_eq!(
+                        text.contains("Tor is carrying this node's traffic"),
+                        hiding && carriage == Carriage::Carries,
+                        "{at}"
+                    );
+                    assert_eq!(
+                        text.contains("Connections already open through Tor still carry"),
+                        hiding && carriage == Carriage::OpenOnly,
+                        "{at}"
+                    );
+                    let held = own_tx == OwnTx::Held || (hiding && carriage == Carriage::Gone);
+                    assert_eq!(text.contains("holding its own transactions"), held, "{at}");
+                    assert_eq!(
+                        text.contains("waiting for Tor"),
+                        held && carriage != Carriage::Carries,
+                        "{at}"
+                    );
                 }
             }
         }
     }
-    assert_eq!(rendered, 16 * 5 * 4);
+    assert_eq!(rendered, 16 * 5 * 3 * 4);
 }
 
 /// Tor's process ends while the relay still holds an address-hiding

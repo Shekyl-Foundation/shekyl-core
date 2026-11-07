@@ -142,8 +142,14 @@ publishes `OriginVerdict` after every session change, epoch rebuild and plan,
 into the supervisor's verdict cell (`SupervisorFeeds::verdict`, the relay's
 `VerdictSink`); the supervisor folds `Input::AddressHidingOrigin`. Health is
 `hides_address`, every state but `Absent`. `OwnTx` reads `Routable`. A
-recovery is said at once, a loss once under the announcement cap. The link
-stays the phase (§4.3) and decides whether the node is waiting for Tor. What
+recovery is said at once, a loss once under the announcement cap. Whether
+the node is waiting for Tor is what the link carries (`Status::carriage`):
+the core reads it from the phase and the outbound facet, never from the
+§4.3 projection, which shows an onion peers cannot reach, or any cause, as
+degraded. A cause that is not an outbound one, such as `DangerousVersion`,
+leaves a usable link carrying; an outbound cause leaves only the
+connections already open; a Tor restarting or bootstrapping a new process
+carries nothing. What
 the node syncs over (`Syncing`) is the sessions each connector holds, read
 live from the session layer (`SupervisorFeeds::sessions`, `Input::Sessions`),
 never the configuration: alpha.11's posture line said "syncing over Tor and

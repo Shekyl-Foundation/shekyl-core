@@ -13,8 +13,8 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use super::posture::{
-    fixes, own_tx, BootstrapLine, Cause, Connectors, Inbound, OriginVerdict, ProgressWindow,
-    Sessions, Shown, Space, Status,
+    fixes, own_tx, BootstrapLine, Carriage, Cause, Connectors, Inbound, OriginVerdict,
+    ProgressWindow, Sessions, Shown, Space, Status,
 };
 
 mod announce;
@@ -958,6 +958,7 @@ impl Core {
         Status {
             health: self.origin.hides_address(),
             shown,
+            carriage: self.carriage(),
             cause: self.cause.clone(),
             since: self.since,
             respawn_count: self.respawn_count,
@@ -1406,6 +1407,27 @@ impl Core {
                 duty: AbsentDuty::Held | AbsentDuty::Fixed,
             } => Shown::RestartingHeld,
             Phase::Absent { .. } | Phase::Launching | Phase::Stopping => Shown::Restarting,
+        }
+    }
+
+    /// What the link carries: the outbound facet, and whether the Tor that
+    /// holds the connections still runs with its route installed. Not the
+    /// projection, which shows an unreachable onion or any cause as
+    /// degraded (Copilot, #1283: a version warning beside a usable link).
+    fn carriage(&self) -> Carriage {
+        if self.outbound_usable() {
+            Carriage::Carries
+        } else if matches!(
+            self.phase,
+            Phase::Running {
+                route: Duty::Done,
+                link: Link::Open,
+                ..
+            }
+        ) {
+            Carriage::OpenOnly
+        } else {
+            Carriage::Gone
         }
     }
 

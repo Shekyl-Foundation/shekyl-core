@@ -481,6 +481,10 @@ pub struct Status {
     pub health: bool,
     /// The §4.3 projection.
     pub shown: Shown,
+    /// What the Tor behind the link carries now: the outbound facet, not
+    /// the projection. An onion peers cannot reach, or a cause that is not
+    /// an outbound one, leaves it carrying.
+    pub carriage: Carriage,
     /// The typed cause.
     pub cause: Cause,
     /// When `shown` last changed, in the caller's clock units.
@@ -726,43 +730,41 @@ fn behaviour(status: &Status) -> String {
         // session. What is true of the traffic depends on the Tor that held
         // those sessions, so the shown state picks the sentence: the verdict
         // lags a Tor that ended until the relay sees its sessions close.
-        OwnTx::AddressHiding => match carriage(status) {
+        OwnTx::AddressHiding => match status.carriage {
             Carriage::Carries => "Tor is carrying this node's traffic.".to_owned(),
             Carriage::OpenOnly => {
                 "Connections already open through Tor still carry this node's traffic.".to_owned()
             }
             Carriage::Gone => held_sentence(false, status.sync),
         },
-        OwnTx::Held => held_sentence(carriage(status) == Carriage::Carries, status.sync),
+        OwnTx::Held => held_sentence(status.carriage == Carriage::Carries, status.sync),
         OwnTx::ClearnetOnly => "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.".to_owned(),
         OwnTx::Offline => "This node is offline.".to_owned(),
     }
 }
 
-/// What the Tor behind an address-hiding verdict can carry.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Carriage {
-    /// Shown usable, or degraded only because the onion is unreachable (no
-    /// cause stands): the link carries traffic.
+/// What the Tor behind the link carries (`TSR-Q12`). The core reads it
+/// from the phase and the outbound facet, never from [`Shown`]: the
+/// projection shows an unreachable onion, or a cause that is no outbound
+/// one, as degraded while the link still carries everything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Carriage {
+    /// The outbound facet is usable: Tor runs, the route is installed, and
+    /// no outbound cause stands. The link carries traffic, and the node is
+    /// not waiting for Tor whatever its onion's reachability or a cause
+    /// such as a version warning says.
     Carries,
-    /// Degraded with a cause: the Tor that holds the open connections is
-    /// still running, and a sentence that it carries the traffic would
-    /// contradict the cause that follows (the VM suspend, 2026-10-30).
+    /// Tor runs with its route installed, and an outbound cause stands: the
+    /// Tor that holds the open connections is still running, and a sentence
+    /// that it carries the traffic would contradict the cause that follows
+    /// (the VM suspend, 2026-10-30).
     OpenOnly,
-    /// Restarting, or bootstrapping a new process: the Tor that held the
-    /// sessions has ended or is being taken down, so its connections carry
-    /// nothing. The node is held until Tor is back, as the verdict will say
-    /// once the relay sees the sessions close.
+    /// Tor is not running with its route installed: restarting,
+    /// bootstrapping a new process, or rebuilding after a clock jump. The
+    /// connections the earlier link held carry nothing, and the node is
+    /// held until Tor is back, as the verdict will say once the relay sees
+    /// the sessions close.
     Gone,
-}
-
-fn carriage(status: &Status) -> Carriage {
-    match status.shown {
-        Shown::Usable => Carriage::Carries,
-        Shown::Degraded if status.cause == Cause::None => Carriage::Carries,
-        Shown::Degraded => Carriage::OpenOnly,
-        Shown::Restarting | Shown::RestartingHeld | Shown::Bootstrapping => Carriage::Gone,
-    }
 }
 
 fn append(text: &mut String, sentence: &str) {
