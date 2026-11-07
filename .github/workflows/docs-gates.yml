@@ -34,14 +34,6 @@
 name: ci/docs-gates
 
 on:
-  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
-  # not only the branch head — the class of failure neither PR's CI can
-  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
-  # filter, so this runs on every group regardless of the PR filter above
-  # or below.
-  merge_group:
-    types: [checks_requested]
-    branches: [dev]
   pull_request:
     types: [opened, synchronize, reopened]
     # NO `paths:` FILTER, DELIBERATELY. This job's name is a REQUIRED status
@@ -74,6 +66,11 @@ on:
     #
     # Cost of always running: ~25 s (five consecutive runs: 24/25/25/26 s and
     # one 3m31s outlier), on a job already bounded at 10 minutes.
+  # `dev` too: every check here is whole-tree, so a file one pull request
+  # moves and another one links to is green on each and red on `dev`; only
+  # the run on `dev` sees what the merges made (06-branching.mdc).
+  push:
+    branches: [dev]
 
 concurrency:
   group: docs-gates-${{ github.ref }}
