@@ -98,7 +98,14 @@
 # (cryptonote_core.cpp:1781-1835) in the sentence that was rewritten, so the
 # figure falls by one. The fee estimate is now
 # rust/shekyl-daemon-rpc/src/store_facts.rs:532-543.
-dead-citations: 41
+# Lowered 41 -> 38 on 2026-11-07 (the RandomX full-dataset feature
+# boundary): Appendix A of RANDOMX_V2_MINING_ASYMMETRY.md cited the
+# light-mode surface as `src/lib.rs:169-222`, the unbound dataset
+# symbols as `src/lib.rs:75-80`, and the flags as `src/lib.rs:120-167`.
+# Those tokens do not resolve: the file is `rust/randomx-v2-sys/src/lib.rs`.
+# The row now names the `full-dataset` feature instead of those ranges.
+# The fork pin stays `Cargo.toml:48-49`.
+dead-citations: 38
 
 # ── declares ──────────────────────────────────────────────────────────────────
 # Documents that have opted a leg in cannot quietly opt back out: dropping a
