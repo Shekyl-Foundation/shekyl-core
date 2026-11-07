@@ -258,6 +258,7 @@ fn mine_on_mines_a_real_block_with_no_rpc_call() {
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
+        supervisor: None,
         request_stop: Arc::new(|| {}),
         plan: test_plan(&config),
     })

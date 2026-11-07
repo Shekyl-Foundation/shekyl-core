@@ -15,19 +15,18 @@ use super::{announces, managed, policy, reach_usable, socks, spawns, takes_down}
 use crate::control::{NetworkView, Reported};
 
 /// A tally of `unopened` failed Tor dials since the `opened`-th opened one,
-/// with `held` sessions, and no sign of life from the judge.
-fn dials(opened: u64, unopened: u32, held: u32) -> Input {
-    lived(opened, unopened, held, None)
+/// the latest of them launched at `began`, and no sign of life.
+fn dials(opened: u64, unopened: u32, began: Option<u64>) -> Input {
+    lived(opened, unopened, None, began)
 }
 
 /// [`dials`], with the judge's last sign of life at `life`.
-fn lived(opened: u64, unopened: u32, held: u32, life: Option<u64>) -> Input {
+fn lived(opened: u64, unopened: u32, life: Option<u64>, began: Option<u64>) -> Input {
     Input::DialEvidence(DialTally {
         opened,
         unopened,
-        held,
         last_sign_of_life: life,
-        last_unopened_at: None,
+        failed_attempt_began: began,
     })
 }
 
@@ -94,7 +93,7 @@ fn ten_minutes_of_failed_dials_are_a_neutral_line_never_a_cause() {
         at += duration_ns(Duration::from_secs(5));
         steps.extend(run_until(&mut core, at));
         unopened += 1;
-        steps.push(core.on(dials(0, unopened, 0), at));
+        steps.push(core.on(dials(0, unopened, Some(at)), at));
     }
     let samples = steps
         .iter()
@@ -121,88 +120,54 @@ fn ten_minutes_of_failed_dials_are_a_neutral_line_never_a_cause() {
 
 /// **The line runs from the judge's last sign of life**
 /// (`DIALER_OUTAGE_EVIDENCE.md` §6): a byte a session received, or a stream
-/// that opened, starts the span again; with a Tor dial failed after it, the
-/// line stands `quiet_after` later and not before. The testnet case, two
-/// live seeds talking while four dead ones are redialed, is a byte every
-/// timed sync, so no line. Reading the opened count instead of the judge's
-/// instant fails the byte half.
+/// that opened, starts the span again; with a Tor dial launched after it
+/// and failed, the line stands `quiet_after` later and not before. The
+/// testnet case, two live seeds talking while four dead ones are redialed,
+/// is a byte every timed sync, so no line. Reading the opened count instead
+/// of the judge's instant fails the byte half.
 #[test]
 fn the_line_runs_from_the_judges_last_sign_of_life() {
     let after = duration_ns(policy().quiet_after);
     for (opened, life) in [(0, secs(30)), (1, secs(40))] {
         let (mut core, _) = Core::start(policy(), managed(true), 0);
         reach_usable(&mut core);
-        core.on(dials(0, 1, 0), secs(1));
-        core.on(lived(opened, 0, 0, Some(life)), life);
-        core.on(lived(opened, 1, 0, Some(life)), life + secs(1));
-        core.on(lived(opened, 1, 0, Some(life)), life + after - 1);
+        core.on(dials(0, 1, Some(secs(1))), secs(1));
+        core.on(lived(opened, 0, Some(life), Some(secs(1))), life);
+        let failed = Some(life + secs(1));
+        core.on(lived(opened, 1, Some(life), failed), life + secs(1));
+        core.on(lived(opened, 1, Some(life), failed), life + after - 1);
         assert_eq!(core.status().tor_quiet, None, "{opened}: inside the span");
-        let step = core.on(lived(opened, 1, 0, Some(life)), life + after);
+        let step = core.on(lived(opened, 1, Some(life), failed), life + after);
         assert_eq!(says_progress(&[step]), 1, "{opened}: said once");
         assert_eq!(core.status().tor_quiet, Some(policy().quiet_after));
     }
 }
 
-/// **A held session that sends nothing does not keep the line away**: a
-/// session merely held is not a sign of life (§3.3). On the floor device's
-/// blackhole the idle sessions sat open for minutes, and the line said
-/// nothing. Keeping the held condition fails this.
+/// **No dial launched since the last sign of life and failed, no line**:
+/// the line states the fact the dialer acted on, so a span with no such
+/// failure says nothing however long it is. A failure launched before the
+/// sign of life is not one, even when the tally carrying both arrives
+/// after the byte (the cell keeps only the latest tally). Reading "some
+/// dial failed, ever", or dating the failure when its tally arrived, fails
+/// this.
 #[test]
-fn a_held_session_that_sends_nothing_does_not_keep_the_line_away() {
-    let (mut core, _) = Core::start(policy(), managed(true), 0);
-    reach_usable(&mut core);
-    core.on(dials(3, 1, 2), secs(5));
-    let step = core.on(dials(3, 2, 2), duration_ns(policy().quiet_after));
-    assert_eq!(says_progress(&[step]), 1, "two sessions held, silent");
-    assert!(core.status().tor_quiet.is_some());
-}
-
-/// **No failed dial since the last sign of life, no line**: the line states
-/// the fact the dialer acted on, an excused failure, so a span with no Tor
-/// dial failed in it says nothing however long it is. A failure before the
-/// sign of life is not one. Reading "some dial failed, ever" fails this.
-#[test]
-fn the_line_needs_a_failed_dial_since_the_last_sign_of_life() {
+fn the_line_needs_a_dial_launched_since_the_last_sign_of_life() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     let after = duration_ns(policy().quiet_after);
-    core.on(dials(0, 1, 0), secs(10));
-    core.on(lived(0, 1, 0, Some(secs(20))), secs(20));
-    core.on(lived(0, 1, 0, Some(secs(20))), secs(20) + 2 * after);
-    assert_eq!(core.status().tor_quiet, None, "no failure since the byte");
-    let late = secs(20) + 2 * after + 1;
-    let step = core.on(lived(0, 2, 0, Some(secs(20))), late);
-    assert_eq!(says_progress(&[step]), 1, "a dial failed since");
-    assert!(core.status().tor_quiet.is_some());
-}
-
-/// **A coalesced failure-then-life is still a failure before the byte.**
-/// The watch keeps only the latest tally, so a dial that failed at 10 s
-/// and a byte at 20 s can arrive as one tally at 21 s. The failure is
-/// dated when the dialer counted it. Dating it at arrival puts it after
-/// the byte, and the line stands once the span has elapsed.
-#[test]
-fn a_coalesced_failure_then_life_is_not_a_failure_since_the_byte() {
-    let (mut core, _) = Core::start(policy(), managed(true), 0);
-    reach_usable(&mut core);
-    let after = duration_ns(policy().quiet_after);
-    let failed_at = secs(10);
     let life = secs(20);
-    let tally = DialTally {
-        opened: 0,
-        unopened: 1,
-        held: 0,
-        last_sign_of_life: Some(life),
-        last_unopened_at: Some(failed_at),
-    };
-    core.on(Input::DialEvidence(tally), secs(21));
-    assert_eq!(core.status().tor_quiet, None);
-    core.on(Input::DialEvidence(tally), life + after);
+    core.on(dials(0, 1, Some(secs(10))), secs(10));
+    core.on(lived(0, 1, Some(life), Some(secs(10))), secs(21));
+    core.on(lived(0, 1, Some(life), Some(secs(10))), life + 2 * after);
     assert_eq!(
         core.status().tor_quiet,
         None,
-        "the failure ended before the byte"
+        "the failure was launched before the byte"
     );
+    let late = life + 2 * after + 1;
+    let step = core.on(lived(0, 2, Some(life), Some(late)), late);
+    assert_eq!(says_progress(&[step]), 1, "a dial launched since failed");
+    assert!(core.status().tor_quiet.is_some());
 }
 
 /// **The sentence says what the judge observed**, neutral and with no fix
@@ -213,8 +178,8 @@ fn a_coalesced_failure_then_life_is_not_a_failure_since_the_byte() {
 fn the_quiet_sentence_says_what_the_judge_observed() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
-    core.on(dials(0, 1, 0), secs(1));
-    core.on(dials(0, 2, 0), secs(80));
+    core.on(dials(0, 1, Some(secs(1))), secs(1));
+    core.on(dials(0, 2, Some(secs(70))), secs(80));
     let text = render(&core.status());
     assert!(
         text.contains(
@@ -225,18 +190,8 @@ fn the_quiet_sentence_says_what_the_judge_observed() {
     assert!(!text.contains("cannot reach"), "{text}");
 }
 
-/// **The span starts at the later of the judge's last sign of life and
-/// Running**: failures and life from before a Tor reached Running do not
-/// make the line stand for the new Tor at once. Starting the span at the
-/// sign of life alone fails this.
-#[test]
-fn the_quiet_stretch_starts_when_a_tor_reaches_running() {
-    let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(
-        lived(0, 9, 0, Some(secs(50))),
-        duration_ns(Duration::from_secs(100)),
-    );
-    let at = duration_ns(Duration::from_secs(100));
+/// Bring `core` to Running at `at`, after failures and life from before.
+fn running_at(core: &mut Core, at: u64) {
     core.on(Input::PinAccepted, at);
     core.on(Input::Spawned, at);
     core.on(
@@ -249,47 +204,86 @@ fn the_quiet_stretch_starts_when_a_tor_reaches_running() {
     );
     core.on(Input::BootstrapComplete, at);
     core.on(Input::RouteInstalled, at);
-    core.on(lived(0, 10, 0, Some(secs(50))), at + 1);
-    assert_eq!(core.status().tor_quiet, None);
-    core.on(
-        lived(0, 11, 0, Some(secs(50))),
-        at + duration_ns(policy().quiet_after),
-    );
-    assert!(core.status().tor_quiet.is_some());
 }
 
-/// Dials counted before this supervisor watched are the baseline, not an
-/// open. Seeding them after Running, at a later instant, leaves the stretch
-/// clock on the transition into Running. Folding that same tally as evidence
-/// would move the clock to the seed and the line would not stand yet.
+/// **A failure launched before a respawn's Running raises nothing**
+/// (`DIALER_OUTAGE_EVIDENCE.md` §6.1). Dials sent to the Tor that ended run
+/// out their window after the new one reaches Running; they did not test
+/// it. Dating the failure when it was counted, or starting the stretch at
+/// the last sign of life alone, makes the line stand at once.
 #[test]
-fn a_tally_from_before_this_tor_does_not_count_as_an_open() {
+fn a_failure_launched_before_a_respawns_running_raises_nothing() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    reach_usable(&mut core);
-    let quiet = duration_ns(policy().quiet_after);
-    core.on(
-        Input::DialBaseline(DialTally {
-            opened: 4,
-            unopened: 2,
-            held: 0,
-            last_sign_of_life: None,
-            last_unopened_at: None,
-        }),
-        1,
-    );
-    let step = core.on(dials(4, 3, 0), quiet);
-    assert_eq!(
-        says_progress(&[step]),
-        1,
-        "no new open, so the stretch stands"
-    );
-    assert!(core.status().tor_quiet.is_some());
-    core.on(lived(5, 1, 0, Some(quiet + 1)), quiet + 1);
+    let at = secs(100);
+    core.on(lived(0, 9, Some(secs(50)), Some(secs(60))), at);
+    running_at(&mut core, at);
+    let after = duration_ns(policy().quiet_after);
+    core.on(lived(0, 10, Some(secs(50)), Some(at - 1)), at + 1);
+    core.on(lived(0, 11, Some(secs(50)), Some(at - 1)), at + 2 * after);
     assert_eq!(
         core.status().tor_quiet,
         None,
-        "an open on this Tor is a sign of life"
+        "launched before Running, counted after it"
     );
+}
+
+/// **A failure launched after the stretch began still counts** (§6.1): one
+/// dial sent to the new Tor and failed stands the line once the span has
+/// elapsed. Filtering every failure that arrives after Running by anything
+/// other than its launch fails this.
+#[test]
+fn a_failure_launched_inside_the_stretch_counts() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    let at = secs(100);
+    core.on(lived(0, 9, Some(secs(50)), Some(secs(60))), at);
+    running_at(&mut core, at);
+    let after = duration_ns(policy().quiet_after);
+    core.on(lived(0, 10, Some(secs(50)), Some(at)), at + 1);
+    let step = core.on(lived(0, 10, Some(secs(50)), Some(at)), at + after);
+    assert_eq!(says_progress(&[step]), 1);
+    assert!(core.status().tor_quiet.is_some());
+}
+
+/// **A failure launched before a wake raises nothing** (§6.1). A wake
+/// starts the stretch again; a dial launched before the machine slept
+/// fails after it, and did not test the link since the wake. Leaving the
+/// stretch where the sleep found it fails this.
+#[test]
+fn a_failure_launched_before_a_wake_raises_nothing() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    let after = duration_ns(policy().quiet_after);
+    let woke = secs(50);
+    core.on(
+        Input::Resumed {
+            late_by: Duration::from_secs(600),
+        },
+        woke,
+    );
+    core.on(dials(0, 1, Some(woke - 1)), woke + 1);
+    core.on(dials(0, 2, Some(woke - 1)), woke + 2 * after);
+    assert_eq!(core.status().tor_quiet, None, "launched before the wake");
+    let step = core.on(dials(0, 3, Some(woke + 2 * after)), woke + 2 * after);
+    assert_eq!(says_progress(&[step]), 1, "one launched after it counts");
+}
+
+/// **An old dial's success still counts** (§6.1): only failures are
+/// filtered by launch. A stream that opens is a sign of life whenever its
+/// dial was launched, and it starts the stretch again. Filtering successes
+/// by launch too makes the line stand here.
+#[test]
+fn an_old_dials_success_still_counts() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    let at = secs(100);
+    running_at(&mut core, at);
+    let after = duration_ns(policy().quiet_after);
+    let failed = Some(at + 1);
+    core.on(dials(0, 1, failed), at + 1);
+    // A dial launched before Running opens its stream at `opened`.
+    let opened = at + secs(50);
+    core.on(lived(1, 0, Some(opened), failed), opened);
+    core.on(lived(1, 0, Some(opened), failed), at + after + 1);
+    assert_eq!(core.status().tor_quiet, None, "the open is life");
 }
 
 /// Tor's own view (`TSR-Q14`) governs even when Tor sends no event: its
@@ -413,7 +407,7 @@ fn the_line_reads_whether_dials_failed_not_how_many() {
     for unopened in [1, 5] {
         let (mut core, _) = Core::start(policy(), managed(true), 0);
         reach_usable(&mut core);
-        let step = core.on(dials(0, unopened, 0), late);
+        let step = core.on(dials(0, unopened, Some(late)), late);
         seen.push((says_progress(&[step]), core.status()));
     }
     assert_eq!(

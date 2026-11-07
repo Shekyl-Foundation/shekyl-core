@@ -3,25 +3,25 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! What this node's own Tor shows the managed-Tor supervisor, and what the
-//! supervisor tells the network: the dial tally (`TOR_SUPERVISOR.md` §4.2,
-//! display only, never a verdict on the link, `TSR-Q14`), the probe's
-//! arrivals (§4.5), and the managed route's incarnation.
+//! What the network tells the managed-Tor supervisor, and what the
+//! supervisor tells the network.
 //!
-//! One instance per network, held by [`crate::Network`]. The supervisor in
-//! `shekyl-daemon` reads the two watches and publishes the route through
-//! the network's verbs.
+//! The supervisor in `shekyl-daemon` hands the network its [`SupervisorFeeds`]
+//! at start (`TOR_SUPERVISOR.md` §5): the network's producers publish into
+//! them and never wait on the supervisor. The supervisor publishes the route
+//! through the network's verbs, and [`TorLink`] keeps the managed route's
+//! incarnation, one instance per network, held by [`crate::Network`].
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use shekyl_dialer::{TallySink, TorLinkTally};
-use shekyl_p2p_session::{ProbeArrival, ProbeSink};
+use shekyl_dialer::TallySink;
+use shekyl_p2p_session::{ProbeSink, SessionsSink};
+use shekyl_relay::owner::VerdictSink;
 use shekyl_socks::{Proxy, SocksUsername};
 use shekyl_tor_control_client::control::SocksTimeout;
 use shekyl_transport_layer::{spans, ConnectorId, Links, Route};
-use tokio::sync::watch;
 
 /// The deadline every Tor dial runs under (`TOR_DIAL_WITHIN_NANOS`). The
 /// managed Tor's `SocksTimeout` sits below it, so Tor's own reply ends a
@@ -40,6 +40,22 @@ pub const TOR_SOCKS_TIMEOUT: SocksTimeout = SocksTimeout::Below {
     dial_deadline: TOR_DIAL_WITHIN,
 };
 
+/// What the managed-Tor supervisor hears from the network. Each is called
+/// by its producer and must not block (`TOR_SUPERVISOR.md` §5).
+pub struct SupervisorFeeds {
+    /// The dialer's tally of this node's Tor dials (§4.2): the value at
+    /// start, then each change. Display only (`TSR-Q14`).
+    pub tally: TallySink,
+    /// Each probe of this node's onion that arrived (§4.5).
+    pub probes: Arc<dyn ProbeSink>,
+    /// The relay's hop-0 verdict for a local origin (`GS-Q3`): the value at
+    /// start, then each change.
+    pub verdict: VerdictSink,
+    /// The sessions each connector holds (`TSR-Q12`): the count at start,
+    /// then each change.
+    pub sessions: SessionsSink,
+}
+
 /// The managed route as published: the incarnation the link gave it and
 /// the SOCKS address. Read back by [`TorLink::managed_socks`] against the
 /// link, so a route that fell since is not reported.
@@ -49,45 +65,16 @@ struct ManagedRoute {
     at: SocketAddr,
 }
 
-/// The Tor link's cells.
+/// The managed route's incarnation, as the supervisor last published it.
 pub(crate) struct TorLink {
-    probe: watch::Sender<Option<ProbeArrival>>,
-    tally: watch::Sender<TorLinkTally>,
     managed: Mutex<Option<ManagedRoute>>,
 }
 
 impl TorLink {
     pub(crate) fn new() -> Self {
         Self {
-            probe: watch::channel(None).0,
-            tally: watch::channel(TorLinkTally::default()).0,
             managed: Mutex::new(None),
         }
-    }
-
-    /// The probe that last arrived; `None` until one does.
-    pub(crate) fn probe_arrivals(&self) -> watch::Receiver<Option<ProbeArrival>> {
-        self.probe.subscribe()
-    }
-
-    /// The dial tally as it changes.
-    pub(crate) fn tally(&self) -> watch::Receiver<TorLinkTally> {
-        self.tally.subscribe()
-    }
-
-    /// The sink the dialer reports the tally through. A repeat of the held
-    /// tally wakes nobody.
-    pub(crate) fn sink(self: &Arc<Self>) -> TallySink {
-        let link = Arc::clone(self);
-        Arc::new(move |tally| {
-            link.tally.send_if_modified(|held| {
-                if *held == tally {
-                    return false;
-                }
-                *held = tally;
-                true
-            });
-        })
     }
 
     /// Record the managed route as published, and return its incarnation.
@@ -120,35 +107,9 @@ impl TorLink {
     }
 }
 
-impl ProbeSink for TorLink {
-    fn probe_arrived(&self, arrival: ProbeArrival) {
-        self.probe.send_replace(Some(arrival));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_dialers_sink_reaches_the_supervisor_and_a_repeat_wakes_nobody() {
-        let link = Arc::new(TorLink::new());
-        let mut receiver = link.tally();
-        receiver.borrow_and_update();
-        let tally = TorLinkTally {
-            opened: 0,
-            unopened: 3,
-            held: 0,
-            last_sign_of_life: None,
-            last_unopened_at: None,
-        };
-        let sink = link.sink();
-        sink(tally);
-        assert!(receiver.has_changed().expect("link held"));
-        assert_eq!(*receiver.borrow_and_update(), tally);
-        sink(tally);
-        assert!(!receiver.has_changed().expect("link held"));
-    }
 
     #[test]
     fn a_managed_route_is_reported_only_while_the_link_is_that_route() {

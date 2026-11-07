@@ -20,10 +20,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use shekyl_capped_stream::SendHalf;
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{BasicNodeData, CoreSyncData, PeerlistEntry};
-use shekyl_timing_engine::{Clock, Handle, Tick};
+use shekyl_timing_engine::{Clock, Handle, Stamp, Tick};
 use shekyl_transport_layer::{
-    monotonic_ms, CloseCause, CloseKind, ConnectorId, DialEnd, DialFailure, Ipv4Subnet, OpenSocket,
-    Reached, Retry, SocketId, Sockets, StreamEnd,
+    monotonic_ms, CloseCause, CloseKind, ConnectorId, DialEnd, DialFailure, Direction, Ipv4Subnet,
+    OpenSocket, Reached, Retry, SocketId, Sockets, StreamEnd,
 };
 use tokio::sync::{oneshot, watch, Notify};
 
@@ -33,7 +33,7 @@ use crate::endpoint::Endpoint;
 use crate::handle::{Control, Established, SendRefused, SessionHandle};
 use crate::handshake;
 use crate::nonce::{HandshakeNonceSet, InFlightNonce};
-use crate::owners::{Owners, SessionFacts};
+use crate::owners::{Owners, SessionFacts, SessionsSink};
 use crate::session::{self, Role};
 use crate::timing::Intervals;
 
@@ -260,15 +260,77 @@ pub(crate) struct Slot {
     stop: Arc<Notify>,
 }
 
+/// One snapshot of the sessions each connector holds, numbered in the
+/// order the table took it. Small enough to copy: a sequence and two counts.
+#[derive(Clone, Copy)]
+struct SessionsReport {
+    /// The sequence of this snapshot. [`Self::CONSTRUCTION`] is given out
+    /// before the layer is shared; every later snapshot is numbered after it.
+    seq: u64,
+    held: PerConnector<u32>,
+}
+
+impl SessionsReport {
+    /// The sequence of the report given at construction. Both connectors
+    /// hold nothing, and nothing else has been issued, so a later report
+    /// cannot carry this sequence.
+    const CONSTRUCTION: u64 = 0;
+
+    /// Both connectors hold nothing. Issued before the layer is shared.
+    fn construction() -> Self {
+        Self {
+            seq: Self::CONSTRUCTION,
+            held: PerConnector::both(0),
+        }
+    }
+
+    /// `incoming` is still newer than every report already handed to the sink.
+    fn is_later(delivered: Option<u64>, incoming: u64) -> bool {
+        delivered.is_none_or(|delivered| incoming > delivered)
+    }
+}
+
+/// Hands each [`SessionsReport`] to the sink. A report that arrives after
+/// a later one is dropped, so the sink keeps the latest count and is never
+/// handed an earlier one afterwards.
+struct SessionsOut {
+    sink: Option<SessionsSink>,
+    /// The highest sequence the sink has been given. `None` until the first.
+    delivered: Option<u64>,
+}
+
+impl SessionsOut {
+    /// Give `report` to the sink when it is later than every one already
+    /// given. The caller holds the report gate across this call, and the
+    /// sink must not re-enter the session layer.
+    fn deliver(&mut self, report: SessionsReport) {
+        if !SessionsReport::is_later(self.delivered, report.seq) {
+            return;
+        }
+        self.delivered = Some(report.seq);
+        if let Some(sink) = &self.sink {
+            sink(report.held);
+        }
+    }
+}
+
 struct Table {
     slots: HashMap<SocketId, Slot>,
     board: Board,
     /// [`SessionLayer::shutdown`] ran: no channel is placed after it.
     shut: bool,
+    /// The counts last taken into a report. The sink is not called here:
+    /// a report is delivered after this lock is dropped.
+    held: PerConnector<u32>,
+    /// The last sequence issued, including the construction report.
+    issued: u64,
 }
 
 impl Table {
-    fn republish(&mut self) {
+    /// Rebuild the board from the rows. When the sessions each connector
+    /// holds moved, issue the next report. The caller delivers it after
+    /// dropping this lock, so the sink never runs under it.
+    fn republish(&mut self) -> Option<SessionsReport> {
         let rows = self
             .slots
             .iter()
@@ -283,6 +345,34 @@ impl Table {
             })
             .collect();
         self.board = Board::from_rows(rows);
+        let held = held_sessions(&self.board);
+        if held == self.held {
+            return None;
+        }
+        self.held = held;
+        self.issued = self
+            .issued
+            .checked_add(1)
+            .expect("session report space exhausted");
+        Some(SessionsReport {
+            seq: self.issued,
+            held,
+        })
+    }
+}
+
+/// The sessions each connector holds on `board`: rows whose handshake has
+/// finished, in either direction.
+fn held_sessions(board: &Board) -> PerConnector<u32> {
+    let held = |connector| {
+        let both = board
+            .established_sessions(connector, Direction::Outbound)
+            .saturating_add(board.established_sessions(connector, Direction::Inbound));
+        u32::try_from(both).unwrap_or(u32::MAX)
+    };
+    PerConnector {
+        clearnet: held(ConnectorId::Clearnet),
+        tor: held(ConnectorId::Tor),
     }
 }
 
@@ -297,6 +387,11 @@ pub(crate) struct Shared<C: Clock + Clone> {
     pub(crate) rng: Mutex<Box<dyn RelayRng + Send>>,
     pub(crate) nonces: HandshakeNonceSet,
     table: Mutex<Table>,
+    /// Reports of the sessions each connector holds. Taken under the
+    /// table's lock and delivered here after that lock is dropped, so a
+    /// sink cannot stall the table. The gate is held across the sink: a
+    /// later report is never overtaken by an earlier one.
+    sessions_out: Mutex<SessionsOut>,
 }
 
 /// The session layer. Clones share one table.
@@ -317,6 +412,12 @@ impl<C: Clock + Clone + Send + Sync + 'static> SessionLayer<C> {
     /// dialed.
     #[must_use]
     pub fn new(parts: Parts<C>) -> Self {
+        let mut sessions_out = SessionsOut {
+            sink: parts.owners.sessions.clone(),
+            delivered: None,
+        };
+        // Before the layer is shared, so this report cannot race a later one.
+        sessions_out.deliver(SessionsReport::construction());
         let shared = Shared {
             sockets: parts.sockets,
             config: parts.config,
@@ -331,7 +432,10 @@ impl<C: Clock + Clone + Send + Sync + 'static> SessionLayer<C> {
                 slots: HashMap::new(),
                 board: Board::empty(),
                 shut: false,
+                held: PerConnector::both(0),
+                issued: SessionsReport::CONSTRUCTION,
             }),
+            sessions_out: Mutex::new(sessions_out),
         };
         Self {
             shared: Arc::new(shared),
@@ -374,6 +478,12 @@ impl<C: Clock + Clone + Send + Sync + 'static> SessionLayer<C> {
     #[must_use]
     pub fn now(&self) -> Tick {
         self.shared.timing.clock().now()
+    }
+
+    /// [`Self::now`], as a stamp only the clock can mint.
+    #[must_use]
+    pub fn stamp(&self) -> Stamp {
+        self.shared.timing.clock().stamp()
     }
 
     /// The runtime session tasks run on, for an owner's own tasks.
@@ -525,6 +635,19 @@ impl<C: Clock + Clone + Send + Sync + 'static> SessionLayer<C> {
 }
 
 impl<C: Clock + Clone + Send + Sync + 'static> Shared<C> {
+    /// Hand `report` to the sink, when it is still the latest. The table's
+    /// lock is not held. The gate is held across the sink, so a later
+    /// report cannot be overtaken; the sink must not re-enter this layer.
+    fn deliver_sessions(&self, report: Option<SessionsReport>) {
+        let Some(report) = report else {
+            return;
+        };
+        self.sessions_out
+            .lock()
+            .expect("session reports")
+            .deliver(report);
+    }
+
     /// Place the row and start the task. The board is republished with the
     /// row in `Handshaking`.
     fn place(self: &Arc<Self>, channel: Channel, role: Role) {
@@ -548,7 +671,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Shared<C> {
             started_mono: monotonic_ms(),
             stop: Arc::clone(&stop),
         };
-        {
+        let report = {
             let mut table = self.table.lock().expect("session table");
             // A ban that lands while the channel is between the connector's
             // publish and this placement (or a dial between its connect and
@@ -569,8 +692,9 @@ impl<C: Clock + Clone + Send + Sync + 'static> Shared<C> {
             }
             let replaced = table.slots.insert(id, slot);
             debug_assert!(replaced.is_none(), "one row per admission id");
-            table.republish();
-        }
+            table.republish()
+        };
+        self.deliver_sessions(report);
         let shared = Arc::clone(self);
         let connector = endpoint.connector();
         self.runtime.spawn(session::run(
@@ -613,7 +737,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Shared<C> {
     /// The session's handshake completed: the row is established, the
     /// board republished.
     pub(crate) fn establish(self: &Arc<Self>, id: SocketId) -> Option<Established> {
-        let endpoint = {
+        let (endpoint, report) = {
             let mut table = self.table.lock().expect("session table");
             let slot = table.slots.get_mut(&id)?;
             if slot.end.is_some() {
@@ -621,9 +745,9 @@ impl<C: Clock + Clone + Send + Sync + 'static> Shared<C> {
             }
             slot.established = true;
             let endpoint = slot.endpoint;
-            table.republish();
-            endpoint
+            (endpoint, table.republish())
         };
+        self.deliver_sessions(report);
         let control: Arc<dyn Control> = Arc::clone(self) as Arc<dyn Control>;
         Some(Established::mint(SessionHandle::new(id, endpoint, control)))
     }
@@ -632,16 +756,17 @@ impl<C: Clock + Clone + Send + Sync + 'static> Shared<C> {
     /// end is the recorded one, or `fallback` when the task observed the
     /// end itself (the peer closed, the connector errored).
     pub(crate) fn finish(&self, id: SocketId, fallback: DialEnd) -> (SessionFacts, DialEnd) {
-        let (slot, end) = {
+        let (slot, end, report) = {
             let mut table = self.table.lock().expect("session table");
             let slot = table
                 .slots
                 .remove(&id)
                 .expect("a session task finishes the row it was started for");
-            table.republish();
+            let report = table.republish();
             let end = slot.end.unwrap_or(fallback);
-            (slot, end)
+            (slot, end, report)
         };
+        self.deliver_sessions(report);
         if let Some(open) = slot.open {
             let _ = open.close(end.cause());
         }
@@ -697,5 +822,62 @@ impl<C: Clock + Clone + Send + Sync + 'static> Control for Shared<C> {
             cause,
         );
         Shared::close(self, id, end);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::{PerConnector, SessionsOut, SessionsReport};
+
+    /// A report that arrives after a later one is not handed to the sink.
+    /// The single-threaded rig already covers reports that stay in order.
+    #[test]
+    fn a_later_session_report_suppresses_an_earlier_one() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        let mut gate = SessionsOut {
+            sink: Some(Arc::new(move |held| {
+                record.lock().expect("held reports").push(held);
+            })),
+            delivered: None,
+        };
+        gate.deliver(SessionsReport::construction());
+        gate.deliver(SessionsReport {
+            seq: 2,
+            held: PerConnector {
+                clearnet: 2,
+                tor: 0,
+            },
+        });
+        gate.deliver(SessionsReport {
+            seq: 1,
+            held: PerConnector {
+                clearnet: 1,
+                tor: 0,
+            },
+        });
+        gate.deliver(SessionsReport {
+            seq: 3,
+            held: PerConnector {
+                clearnet: 1,
+                tor: 1,
+            },
+        });
+        assert_eq!(
+            seen.lock().expect("held reports").as_slice(),
+            &[
+                PerConnector::both(0),
+                PerConnector {
+                    clearnet: 2,
+                    tor: 0,
+                },
+                PerConnector {
+                    clearnet: 1,
+                    tor: 1,
+                },
+            ]
+        );
     }
 }

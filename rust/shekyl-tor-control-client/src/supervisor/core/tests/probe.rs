@@ -13,9 +13,11 @@
 
 use std::time::Duration;
 
-use super::super::super::posture::{render, Cause, Inbound, InboundCause, Shown};
+use super::super::super::posture::{render, Carriage, Cause, Inbound, InboundCause, OwnTx, Shown};
 use super::super::{duration_ns, Action, Core, Input, RoundTally, Step};
-use super::{announces, bring_up, managed, policy, reach_usable, socks, takes_down};
+use super::{
+    announces, bring_up, carrying, held, managed, policy, reach_usable, socks, takes_down,
+};
 
 pub(super) fn secs(seconds: u64) -> u64 {
     duration_ns(Duration::from_secs(seconds))
@@ -659,4 +661,58 @@ fn a_round_open_for_five_minutes_is_counted_once_and_never_a_cause() {
     core.on(uploaded(0), secs(401));
     core.on(Input::UploadRoundStarted, secs(402));
     assert_eq!(core.status().stuck_upload_rounds, 1);
+}
+
+/// **A cause that is no outbound one leaves the link carrying** (Copilot,
+/// #1283). An onion found unreachable shows the link as degraded, and a
+/// version warning is a cause, but neither stops the link carrying: a held
+/// node does not say it waits for Tor, and once an origin leaves, Tor is
+/// said to carry the traffic. An outbound cause on the same link leaves
+/// only the connections already open. Reading the carriage from the
+/// projection and the cause, as the renderer did, fails the first
+/// assertion.
+#[test]
+fn a_version_warning_beside_an_unreachable_onion_leaves_the_link_carrying() {
+    let mut core = published();
+    core.on(uploaded(0), 0);
+    run_to(&mut core, secs(15));
+    core.on(
+        Input::ProbeDialed {
+            minted_at: secs(15),
+        },
+        secs(15),
+    );
+    let (at, _) = misses_twice(&mut core, secs(15));
+    assert!(matches!(core.status().inbound, Inbound::Unreachable { .. }));
+    core.on(Input::DangerousVersion, at);
+    core.on(held(), at);
+    let holding = core.status();
+    assert_eq!(
+        (holding.shown, &holding.cause, holding.own_tx),
+        (Shown::Degraded, &Cause::DangerousVersion, OwnTx::Held)
+    );
+    assert_eq!(holding.carriage, Carriage::Carries);
+    let text = render(&holding);
+    assert!(
+        text.contains("This node is holding its own transactions.")
+            && !text.contains("waiting for Tor"),
+        "{text}"
+    );
+
+    core.on(carrying(), at);
+    let text = render(&core.status());
+    assert!(
+        text.starts_with("Tor is carrying this node's traffic."),
+        "{text}"
+    );
+
+    core.on(Input::DirectoryUnreachable, at);
+    let blocked = core.status();
+    assert_eq!(blocked.cause, Cause::DirectoryUnreachable);
+    assert_eq!(blocked.carriage, Carriage::OpenOnly);
+    let text = render(&blocked);
+    assert!(
+        text.starts_with("Connections already open through Tor still carry"),
+        "{text}"
+    );
 }

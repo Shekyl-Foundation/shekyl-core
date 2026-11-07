@@ -31,7 +31,7 @@ pub use events::{
     CERTIFICATE_OUT_OF_DATE,
 };
 pub use posture::{
-    fixes, held_sentence, install_sentence, own_tx, render, BootstrapLine, BootstrapPace, Cause,
-    Connectors, Inbound, InboundCause, ManagedTorFix, OriginVerdict, OwnTx, Shown, Space, Status,
-    Syncing, TorSetting,
+    fixes, held_at_start_sentence, install_sentence, own_tx, render, BootstrapLine, BootstrapPace,
+    Carriage, Cause, Connectors, Inbound, InboundCause, ManagedTorFix, OriginVerdict, OwnTx,
+    Sessions, Shown, Space, Status, Syncing, TorSetting,
 };
