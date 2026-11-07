@@ -782,7 +782,7 @@ jobs:
   # failed or cancelled one reports, unless the whole run was cancelled
   # (a newer merge superseded it), which `!cancelled()` leaves out.
   report-dev-red:
-    needs: [changes, lint-rust-debug-macros, build-macos, build-ubuntu, test-ubuntu, build-windows-msvc, source-archive]
+    needs: [changes, lint-rust-debug-macros, build-macos, build-ubuntu, build-windows-msvc, source-archive]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     permissions:
       actions: read

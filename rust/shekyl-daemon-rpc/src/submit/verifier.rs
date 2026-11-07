@@ -821,8 +821,8 @@ fn verify_debit_arm(
 
     // ── UB3: the record's COMMITTED authorizer, never the identity key ──
     // Composed gate, not the bare pin: Release is unconditional in
-    // `requires_cold_authority`, so this arm and the C++ connect arm share
-    // the selector.
+    // `requires_cold_authority`, so this arm and block connect's (chain-rules
+    // CEN-J13) share the selector.
     if let Err(e) = cold_authority_pin(
         RetentionBondPostKind::Release,
         bond.bond_debit,
@@ -1198,7 +1198,7 @@ fn verify_pqc_auth_slot(
 /// §8.7.1.1 fact gather takes the pool→blockchain locks.
 ///
 /// **Why this exists, stated as the attack it closes.** The gather's cheap
-/// pin (`cold_authority_pin`, run C++-side at `daemon_submit_ffi.cpp`) compares
+/// pin (`cold_authority_pin`, run in the submit gather, `rust_pool_shim.rs`) compares
 /// the presented key to the record's committed `bond_spend_pk`. Both are
 /// **public**: `bond_spend_pk` rides the JoinMarket bond post on the wire
 /// and is therefore readable by anyone who syncs the chain. Equality of two

@@ -159,9 +159,7 @@ pub(crate) fn judge_serve_credit_bond<'id, N, V: ChainView<'id>>(
 /// CEN-J13: the bond slot's `pqc_auths[i].hybrid_public_key` is the key
 /// the post's kind selects. A **Release** (the debit arm) authorizes only
 /// against the record's committed `bond_spend_pk` — the retention crate's
-/// [`cold_authority_pin`], the function the C++ called through its FFI
-/// (deleted, `DEL-008`), which also refuses a record that
-/// commits no key (`RecordCommitsNoKey`: the identity key never authorizes
+/// [`cold_authority_pin`], which also refuses a record that commits no key (`RecordCommitsNoKey`: the identity key never authorizes
 /// a value-out). A **JoinMarket** or **Reinstate** (the credit arms)
 /// authorizes with the identity key, `P_pubkey` — the post's own
 /// `hybrid_public_key` (`blockchain.cpp`, *"credit-path pqc auth key does
