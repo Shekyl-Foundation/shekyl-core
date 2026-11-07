@@ -48,13 +48,14 @@
 //!
 //! # What it does *not* measure, by design
 //!
-//! **Batch depth.** The door judges one transaction per call, so a batch of
-//! `N` pays `N` verifications before *any* forward. Depth is a free
-//! parameter, so it is a multiplier in the derivation — `(N+1)/2` at the mean
-//! position, `N` for the worst-placed transaction — never a bench dimension
-//! (§72.4). (The relay owner, `shekyl-relay`, does not yet hand received
-//! transactions to the door; `hop`'s verification term is the door's cost
-//! once it does.)
+//! **Batch depth.** A received 2002 batch is admitted one transaction at a
+//! time — the relay owner's `Port::new_transactions` (`shekyl-relay`) calls
+//! its `PoolDoor` per blob, and the node's door (`shekyl-node`
+//! `pool_door.rs`) runs `shekyl-mempool`'s `stateless` on each — and only
+//! then forwards the admitted ones, so a batch of `N` pays `N` verifications
+//! before *any* forward. Depth is a free parameter, so it is a multiplier in
+//! the derivation — `(N+1)/2` at the mean position, `N` for the worst-placed
+//! transaction — never a bench dimension (§72.4).
 //!
 //! **Storage.** Pool insertion is inside `hop` but not inside this term; it is
 //! measured with the end-to-end arm, where the substrate matters (§72.5).

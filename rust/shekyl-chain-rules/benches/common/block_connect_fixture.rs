@@ -31,7 +31,9 @@ use curve25519_dalek::scalar::Scalar;
 use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
 use shekyl_crypto_pq::error::PqcVerifyError;
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
-use shekyl_crypto_pq::signature::{verify_pqc_auth, SCHEME_DOMAIN_PQC_AUTH_TX};
+use shekyl_crypto_pq::signature::{
+    verify_pqc_auth, HYBRID_SCHEME_ID_ED25519_ML_DSA_65, SCHEME_DOMAIN_PQC_AUTH_TX,
+};
 use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_primitives::Commitment;
 use shekyl_types::SigningPayloadHash;
@@ -42,10 +44,6 @@ use shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES;
 
 #[path = "relay_admission_fixture.rs"]
 pub mod relay;
-
-/// The single-signer hybrid scheme id (`HYBRID_SCHEME_ID_ED25519_ML_DSA_65`),
-/// the scheme every input of this fixture carries.
-pub const SCHEME_SINGLE: u8 = 1;
 
 /// A real hybrid Ed25519+ML-DSA-65 auth: key, signature, and the message it
 /// signs. Production signs each input's `signed_hash(i)`
@@ -78,14 +76,14 @@ pub fn build_pqc_auth<R: RngCore + CryptoRng>(
     )
     .expect("pqc sign");
     PqcAuthFixture {
-        public_key: signed.hybrid_public_key.clone(),
-        signature: signed.signature.clone(),
+        public_key: signed.hybrid_public_key,
+        signature: signed.signature,
         message,
     }
 }
 
 /// One hybrid verification through CEN-I18's body
-/// ([`verify_pqc_auth`], scheme 1) — the call `form` makes per input, and the
+/// ([`verify_pqc_auth`], the single-signer scheme) — the call `form` makes per input, and the
 /// pool door's and the submit verifier's K13 make too.
 pub fn pqc_verify(auth: &PqcAuthFixture) -> Result<(), PqcVerifyError> {
     pqc_verify_against(auth, &auth.message)
@@ -96,7 +94,12 @@ pub fn pqc_verify_against(
     auth: &PqcAuthFixture,
     message: &SigningPayloadHash,
 ) -> Result<(), PqcVerifyError> {
-    verify_pqc_auth(SCHEME_SINGLE, &auth.public_key, &auth.signature, message)
+    verify_pqc_auth(
+        HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+        &auth.public_key,
+        &auth.signature,
+        message,
+    )
 }
 
 /// A real Bp+ aggregate range proof over `n_out` commitments, plus the
@@ -256,7 +259,7 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
     let pqc_auths: Vec<PqcAuth> = (0..n_in)
         .map(|_| PqcAuth {
             auth_version: 1,
-            scheme_id: 1, // single-signer hybrid Ed25519+ML-DSA-65
+            scheme_id: HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
             flags: 0,
             hybrid_public_key: pqc.public_key.clone(),
             hybrid_signature: pqc.signature.clone(),
