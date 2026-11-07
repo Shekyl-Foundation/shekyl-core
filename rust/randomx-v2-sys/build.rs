@@ -79,8 +79,9 @@ fn main() {
                  randomx-v2-sys's rlib will compile but linking any \
                  binary that depends on it (e.g., the Phase 2g \
                  shekyl-randomx-differential harness) will fail with \
-                 undefined references to the cache, dataset and VM \
-                 surface. To build the harness: configure CMake with \
+                 undefined references to the light-mode cache and VM \
+                 symbols, and, with the full-dataset feature, the dataset \
+                 symbols. To build the harness: configure CMake with \
                  -DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON, build \
                  the librandomx.a artifact, then export \
                  RANDOMX_V2_INSTALL_DIR pointing to the install \

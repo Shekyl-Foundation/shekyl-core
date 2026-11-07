@@ -318,9 +318,11 @@ jobs:
         # the substrate-correct environment (with
         # `RANDOMX_V2_INSTALL_DIR` set, so `gen_canonical_outputs`
         # and the harness binary link successfully under clippy's
-        # `cargo check` phase).
+        # `cargo check` phase). The second command lints `full-dataset`,
+        # which the light build and the workspace clippy leave off.
         run: |
           cargo clippy --locked -p shekyl-randomx-differential -p randomx-v2-sys --all-targets -- -D warnings
+          cargo clippy --locked -p randomx-v2-sys -p shekyl-randomx-differential --all-targets --features full-dataset -- -D warnings
       - name: cargo test (harness lib + integration)
         working-directory: rust
         # Covers T9 (corpus-determinism), T10 (adversarial pin),
@@ -1111,7 +1113,7 @@ jobs:
         working-directory: rust
         run: |
           cargo build --release --locked -p shekyld
-          cargo build --release --locked -p shekyl-randomx-differential --bin full-parity --bin miner-kat
+          cargo build --release --locked -p shekyl-randomx-differential --features full-dataset --bin full-parity --bin miner-kat
       - name: symbol isolation on linked daemon (nm)
         run: scripts/ci/check_randomx_symbol_isolation.sh rust/target/release/shekyld
       - name: run the parity gate (${{ env.PARITY_SEED_COUNT }} corpus seeds)

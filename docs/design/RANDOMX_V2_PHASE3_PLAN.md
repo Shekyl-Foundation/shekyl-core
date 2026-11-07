@@ -425,8 +425,8 @@ The Rust verifier is **light-cache only** (256 MiB `PreparedCache`;
 no dataset in the crate). Miners run the v2 C library in
 **full-dataset** fast mode. RandomX guarantees light and full produce
 identical hashes — but the Phase 2g differential harness compares
-Rust-light vs C-**light** (`randomx-v2-sys` is light-only *by
-design*). The full-dataset path has therefore **never** been
+Rust-light vs C-**light** (the light build of `randomx-v2-sys` leaves
+`full-dataset` off). The full-dataset path has therefore **never** been
 differentially checked against the Rust verifier. The cutover
 invariant is exactly that check:
 
@@ -437,8 +437,9 @@ invariant is exactly that check:
 ### 7.2 Test construction
 
 The gate is Rust: `shekyl-randomx-differential`'s `full-parity` and
-`miner-kat` binaries, over `randomx-v2-sys`'s bindings to
-`external/randomx-v2` @ `aaafe71`.
+`miner-kat` binaries, over `randomx-v2-sys`'s `full-dataset` feature
+(the light build does not enable it), bound to `external/randomx-v2`
+@ `aaafe71`.
 
 1. Build the C-full reference **deterministically**, as a miner does:
    `randomx_alloc_cache` → `randomx_init_cache` →

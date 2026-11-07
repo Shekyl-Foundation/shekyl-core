@@ -13,13 +13,12 @@
 //! differential harness compares Rust-light against C-light only, so this
 //! is the check that blocks real miners produce verify under the daemon.
 //!
-//! The C side is built directly, as a miner's is: `randomx_alloc_cache` →
-//! `randomx_init_cache` → `randomx_alloc_dataset` → `randomx_init_dataset`
-//! (on every core) → `randomx_create_vm(get_flags | FULL_MEM | V2)` →
-//! `randomx_calculate_hash`. `RANDOMX_FLAG_V2` is threaded through, as
-//! the library's own mining benchmark does; its omission was the PR #79
-//! divergence. The Rust side is the verifier itself
-//! ([`PreparedCache::derive`] and [`compute_hash`]), not a wrapper.
+//! The C side is `full_dataset::FullDatasetVm`, compiled with the
+//! `full-dataset` feature: one cache, one dataset filled on every core,
+//! then a fast-mode VM. The light build leaves that feature off, so this
+//! module names no miner symbol. The Rust side is the verifier itself
+//! ([`shekyl_pow_randomx::PreparedCache::derive`] and
+//! [`shekyl_pow_randomx::compute_hash`]), not a wrapper.
 //!
 //! One dataset per process: each mode builds exactly one, so peak memory
 //! is one dataset and the gate's runner can schedule the modes as
@@ -32,16 +31,7 @@
 //! it apart from a pin drift (the two sides agree with each other but not
 //! with a committed pin), which is an audit, not an architecture finding.
 
-use std::os::raw::c_ulong;
-use std::ptr;
-use std::thread;
-
-use randomx_v2_sys::{
-    randomx_alloc_cache, randomx_alloc_dataset, randomx_calculate_hash, randomx_create_vm,
-    randomx_dataset_item_count, randomx_destroy_vm, randomx_get_flags, randomx_init_cache,
-    randomx_init_dataset, randomx_release_cache, randomx_release_dataset, RandomxCache,
-    RandomxDataset, RandomxFlags, RandomxVm, RANDOMX_FLAG_FULL_MEM, RANDOMX_FLAG_V2,
-};
+#[cfg(feature = "full-dataset")]
 use shekyl_pow_randomx::{compute_hash, PreparedCache, Seedhash};
 
 use crate::canonical_outputs::CANONICAL_RANDOM_HASHES;
@@ -65,114 +55,6 @@ pub const KAT_BLOB: &[u8] = b"Shekyl RandomX v2 full-dataset parity KAT (Phase 3
 #[must_use]
 pub fn canonical_seed() -> [u8; 32] {
     core::array::from_fn(|i| u8::try_from(i + 1).expect("32 fits u8"))
-}
-
-/// The flags a miner runs: the CPU's recommended flags, fast mode, v2.
-#[must_use]
-pub fn miner_flags() -> RandomxFlags {
-    // SAFETY: `randomx_get_flags` takes no arguments and reads CPU features.
-    unsafe { randomx_get_flags() | RANDOMX_FLAG_FULL_MEM | RANDOMX_FLAG_V2 }
-}
-
-/// A C full-dataset VM: the dataset and the VM over it, released on drop.
-pub struct CFull {
-    dataset: *mut RandomxDataset,
-    vm: *mut RandomxVm,
-}
-
-/// Raw pointers handed to the dataset-filling threads. Each thread fills
-/// a disjoint item range of one dataset from one cache, which the library
-/// supports (its benchmark fills a dataset this way); the scope joins
-/// every thread before the cache is released.
-#[derive(Clone, Copy)]
-struct FillTarget {
-    dataset: *mut RandomxDataset,
-    cache: *mut RandomxCache,
-}
-
-// SAFETY: see `FillTarget`: disjoint ranges, joined before release.
-unsafe impl Send for FillTarget {}
-
-impl CFull {
-    /// Build the full dataset for `seed` with `flags` and a VM over it.
-    ///
-    /// # Errors
-    ///
-    /// Which allocation failed (the dataset needs ~2 080 MiB).
-    pub fn build(seed: &[u8; 32], flags: RandomxFlags) -> Result<CFull, String> {
-        // SAFETY: each pointer the library returns is checked before use,
-        // and released exactly once: the cache here after the fill, the
-        // dataset and VM in `Drop`.
-        unsafe {
-            let cache = randomx_alloc_cache(flags);
-            if cache.is_null() {
-                return Err("randomx_alloc_cache failed".into());
-            }
-            randomx_init_cache(cache, seed.as_ptr().cast(), seed.len());
-            let dataset = randomx_alloc_dataset(flags);
-            if dataset.is_null() {
-                randomx_release_cache(cache);
-                return Err("randomx_alloc_dataset failed (~2 080 MiB)".into());
-            }
-            fill_dataset(FillTarget { dataset, cache });
-            randomx_release_cache(cache);
-            let vm = randomx_create_vm(flags, ptr::null_mut(), dataset);
-            if vm.is_null() {
-                randomx_release_dataset(dataset);
-                return Err("randomx_create_vm(FULL_MEM|V2) failed".into());
-            }
-            Ok(CFull { dataset, vm })
-        }
-    }
-
-    /// The C full-dataset hash of `blob`.
-    #[must_use]
-    pub fn hash(&self, blob: &[u8]) -> [u8; 32] {
-        let mut out = [0u8; 32];
-        // SAFETY: `self.vm` is a live VM; `blob` and `out` are valid for
-        // their lengths, and `out` is the 32 bytes the hash writes.
-        unsafe {
-            randomx_calculate_hash(
-                self.vm,
-                blob.as_ptr().cast(),
-                blob.len(),
-                out.as_mut_ptr().cast(),
-            );
-        }
-        out
-    }
-}
-
-impl Drop for CFull {
-    fn drop(&mut self) {
-        // SAFETY: both were allocated by `build` and are released once.
-        unsafe {
-            randomx_destroy_vm(self.vm);
-            randomx_release_dataset(self.dataset);
-        }
-    }
-}
-
-/// Fill every dataset item, one disjoint range per available core.
-fn fill_dataset(target: FillTarget) {
-    // SAFETY: no arguments.
-    let items: c_ulong = unsafe { randomx_dataset_item_count() };
-    let cores = thread::available_parallelism().map_or(1, usize::from);
-    let threads = c_ulong::try_from(cores).unwrap_or(1).clamp(1, items.max(1));
-    thread::scope(|scope| {
-        let mut start: c_ulong = 0;
-        for t in 0..threads {
-            let count = items / threads + c_ulong::from(t < items % threads);
-            let range_start = start;
-            scope.spawn(move || {
-                let target = target;
-                // SAFETY: a disjoint range of a live dataset from a live
-                // cache; the scope joins before either is released.
-                unsafe { randomx_init_dataset(target.dataset, target.cache, range_start, count) };
-            });
-            start += count;
-        }
-    });
 }
 
 /// One `(seed, blob)` under test.
@@ -354,11 +236,15 @@ pub fn verdict(outcomes: &[Outcome]) -> Verdict {
 
 /// Hash every case under the C full dataset and the Rust light cache.
 ///
+/// Compiled only with the `full-dataset` feature. The light differential
+/// build does not construct a dataset.
+///
 /// # Errors
 ///
 /// The C full dataset could not be built.
-pub fn run(corpus: &Corpus) -> Result<Vec<Outcome>, String> {
-    let c_full = CFull::build(&corpus.seed, miner_flags())?;
+#[cfg(feature = "full-dataset")]
+pub fn run(corpus: &Corpus) -> Result<Vec<Outcome>, crate::full_dataset::BuildError> {
+    let c_full = crate::full_dataset::FullDatasetVm::build(&corpus.seed)?;
     let light = PreparedCache::derive(Seedhash::from_bytes(corpus.seed));
     Ok(corpus
         .cases

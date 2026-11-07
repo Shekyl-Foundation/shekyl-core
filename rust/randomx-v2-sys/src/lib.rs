@@ -20,14 +20,16 @@
 //! `extern "C"` declarations and (at C3 per §8.1 / §5.2.2) the
 //! linker directives. Three reasons:
 //!
-//! 1. **Audit boundary.** All 12 declarations are in this one source
-//!    file, audit-bounded against
+//! 1. **Audit boundary.** The light build declares the seven cache and
+//!    VM symbols. The `full-dataset` feature adds the five miner
+//!    symbols (`randomx_get_flags` and the four dataset functions).
+//!    Both live in this one source file, audit-bounded against
 //!    [`external/randomx-v2/src/randomx.h`](../../../external/randomx-v2/src/randomx.h)
 //!    at the pinned fork commit (`aaafe71...`). Comparison against
 //!    the C header is mechanical and one-time per fork-pin advance.
 //!    Bindgen-generated declarations were rejected on auditability
 //!    grounds per R1-D2 substrate-anchored rationale (generated code
-//!    varies per bindgen version; for a 12-symbol surface the audit
+//!    varies per bindgen version; for this surface the audit
 //!    cost of hand-written declarations is one-time per fork-pin
 //!    versus per-bindgen-version).
 //! 2. **Sole-consumer discipline.** The Phase 2F crate-invariant
@@ -47,15 +49,15 @@
 //!
 //! # Fork-pin coupling
 //!
-//! The 12-signature surface is pinned against
+//! The light surface and the `full-dataset` surface are pinned against
 //! `external/randomx-v2/src/randomx.h` at fork commit
 //! `aaafe71322df6602c21a5c72937ac284724ae561`. The
 //! `[package.metadata.shekyl]` `fork-pin-coupled = true` +
 //! `fork-pin-sha = "aaafe71..."` markers in `Cargo.toml` are the
 //! audit-trail anchors; T15 (§6.7) asserts the metadata SHA
 //! matches the current HEAD of `external/randomx-v2` at per-PR
-//! cadence. Any advance of the fork pin requires re-verifying the
-//! 12 declarations against the new pin's `randomx.h` (R1-D2
+//! cadence. Any advance of the fork pin requires re-verifying both
+//! surfaces against the new pin's `randomx.h` (R1-D2
 //! reopening criterion).
 //!
 //! # Safety
@@ -74,11 +76,12 @@
 //! - [`randomx_destroy_vm`] does NOT release the cache; callers
 //!   must release the cache separately via [`randomx_release_cache`].
 //! - Light-mode VM construction (R4-D5 disposition): pass a non-NULL
-//!   `cache` and a NULL `dataset` to [`randomx_create_vm`]. The
-//!   harness is light-mode-only; dataset-related symbols are not
-//!   declared here on purpose (declaring unused symbols invites a
-//!   future caller to use them without re-auditing the scope-vs-
-//!   fork-pin assumption per R1-D2).
+//!   `cache` and a NULL `dataset` to [`randomx_create_vm`]. The light
+//!   build does not enable `full-dataset`, so it cannot name
+//!   `randomx_get_flags`, `RANDOMX_FLAG_FULL_MEM`, or the dataset
+//!   functions. Those exist for the Hole-1 parity bins, which are the
+//!   feature's one consumer. The timing bench's further surface
+//!   (`randomx_vm_set_cache`, large pages) is not part of this feature.
 //!
 //! This crate does not wrap the FFI in safe abstractions; consumers
 //! (`shekyl-randomx-differential`'s `c_oracle.rs` per §5.1.8) are
@@ -86,7 +89,9 @@
 
 #![deny(missing_docs)]
 
-use std::os::raw::{c_int, c_ulong, c_void};
+#[cfg(feature = "full-dataset")]
+use std::os::raw::c_ulong;
+use std::os::raw::{c_int, c_void};
 
 /// Opaque handle to a `randomx_cache` allocated by
 /// [`randomx_alloc_cache`]. Zero-sized `_opaque: [u8; 0]` body
@@ -112,11 +117,23 @@ pub struct RandomxVm {
     _opaque: [u8; 0],
 }
 
+/// The dataset handle when `full-dataset` is off.
+///
+/// The enum has no variants, so a dataset value cannot be constructed.
+/// [`randomx_create_vm`] still takes `*mut RandomxDataset`, and light
+/// mode passes null. The `full-dataset` feature replaces this enum
+/// with the opaque struct the miner symbols return.
+#[cfg(not(feature = "full-dataset"))]
+pub enum RandomxDataset {}
+
 /// Opaque handle to a `randomx_dataset` allocated by
-/// [`randomx_alloc_dataset`]: the ~2 080 MiB full dataset a miner
-/// hashes against in fast mode. Same zero-sized opaque shape as
-/// [`RandomxCache`]; only used through `*mut RandomxDataset`
-/// pointers returned by the C library.
+/// [`randomx_alloc_dataset`].
+///
+/// The full dataset is about 2 080 MiB. Same zero-sized opaque shape as
+/// [`RandomxCache`]. Rust never constructs or dereferences a value; the
+/// miner symbols return `*mut RandomxDataset`. The light build leaves
+/// `full-dataset` off, and this struct is an empty enum there.
+#[cfg(feature = "full-dataset")]
 #[repr(C)]
 pub struct RandomxDataset {
     _opaque: [u8; 0],
@@ -182,20 +199,13 @@ pub const RANDOMX_FLAG_V2: RandomxFlags = 128;
 /// `randomx_flags` enum. Fast mode: the VM reads a full dataset
 /// instead of computing dataset items from the cache. Pass to
 /// [`randomx_create_vm`] with a non-NULL `dataset` and a NULL
-/// `cache`; the full-dataset parity harness ORs it with
-/// [`randomx_get_flags`]'s result and [`RANDOMX_FLAG_V2`], the
-/// flags a miner runs.
+/// `cache`. The Hole-1 bins OR it with [`randomx_get_flags`]'s result
+/// and [`RANDOMX_FLAG_V2`]. The light build does not enable
+/// `full-dataset`, so it cannot name this constant.
+#[cfg(feature = "full-dataset")]
 pub const RANDOMX_FLAG_FULL_MEM: RandomxFlags = 4;
 
 extern "C" {
-    /// The flags the C library recommends for this CPU (JIT, hardware
-    /// AES, the Argon2 SIMD variant): what a miner passes. The light
-    /// differential harness does not use them (it pins
-    /// [`RANDOMX_FLAG_DEFAULT`] for cross-runner determinism); the
-    /// full-dataset parity harness does, so it measures the mode
-    /// miners run.
-    pub fn randomx_get_flags() -> RandomxFlags;
-
     /// Allocate a `randomx_cache` instance. Returns NULL on
     /// allocation failure; callers must check before use. Caller
     /// releases via [`randomx_release_cache`].
@@ -222,32 +232,10 @@ extern "C" {
     /// Release a cache allocated via [`randomx_alloc_cache`].
     pub fn randomx_release_cache(cache: *mut RandomxCache);
 
-    /// Allocate a full dataset (~2 080 MiB). Returns NULL on
-    /// allocation failure; callers must check before use. Caller
-    /// releases via [`randomx_release_dataset`].
-    pub fn randomx_alloc_dataset(flags: RandomxFlags) -> *mut RandomxDataset;
-
-    /// The number of items in a full dataset.
-    pub fn randomx_dataset_item_count() -> c_ulong;
-
-    /// Compute `item_count` dataset items from `start_item` out of an
-    /// initialized cache. Disjoint ranges may be filled from several
-    /// threads at once (the library's own benchmark does this); the
-    /// cache must outlive every call.
-    pub fn randomx_init_dataset(
-        dataset: *mut RandomxDataset,
-        cache: *mut RandomxCache,
-        start_item: c_ulong,
-        item_count: c_ulong,
-    );
-
-    /// Release a dataset allocated via [`randomx_alloc_dataset`].
-    pub fn randomx_release_dataset(dataset: *mut RandomxDataset);
-
     /// Create a VM. Light mode (R4-D5): a non-NULL `cache` and a NULL
-    /// `dataset`. Fast mode ([`RANDOMX_FLAG_FULL_MEM`]): a NULL `cache`
-    /// and a non-NULL `dataset`. Returns NULL on allocation failure;
-    /// callers must check before use.
+    /// `dataset`. Fast mode (`full-dataset`, `RANDOMX_FLAG_FULL_MEM`):
+    /// a NULL `cache` and a non-NULL `dataset`. Returns NULL on
+    /// allocation failure; callers must check before use.
     pub fn randomx_create_vm(
         flags: RandomxFlags,
         cache: *mut RandomxCache,
@@ -271,4 +259,38 @@ extern "C" {
         input_size: usize,
         output: *mut c_void,
     );
+}
+
+#[cfg(feature = "full-dataset")]
+extern "C" {
+    /// The flags the C library recommends for this CPU (JIT, hardware
+    /// AES, the Argon2 SIMD variant): what a miner passes. The result
+    /// does not include full-mem, large pages, or the secure flag.
+    /// The light differential harness does not enable `full-dataset`;
+    /// it pins [`RANDOMX_FLAG_DEFAULT`] for cross-runner determinism.
+    pub fn randomx_get_flags() -> RandomxFlags;
+
+    /// Allocate a full dataset (about 2 080 MiB). Returns NULL on
+    /// allocation failure; callers must check before use. The allocator
+    /// honors large pages only, and this crate does not request them.
+    /// Caller releases via [`randomx_release_dataset`].
+    pub fn randomx_alloc_dataset(flags: RandomxFlags) -> *mut RandomxDataset;
+
+    /// The number of items in a full dataset.
+    pub fn randomx_dataset_item_count() -> c_ulong;
+
+    /// Compute `item_count` dataset items from `start_item` out of an
+    /// initialized cache. The C function requires `start_item` below the
+    /// dataset size and `start_item + item_count` within it. Disjoint
+    /// ranges may be filled from several threads at once (the library's
+    /// own benchmark does this); the cache must outlive every call.
+    pub fn randomx_init_dataset(
+        dataset: *mut RandomxDataset,
+        cache: *mut RandomxCache,
+        start_item: c_ulong,
+        item_count: c_ulong,
+    );
+
+    /// Release a dataset allocated via [`randomx_alloc_dataset`].
+    pub fn randomx_release_dataset(dataset: *mut RandomxDataset);
 }

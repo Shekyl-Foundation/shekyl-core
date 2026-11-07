@@ -9,8 +9,10 @@ option (c) close in
 
 This crate's only consumer is
 [`shekyl-randomx-differential`](../shekyl-randomx-differential/):
-the Phase 2g light differential harness, and the Phase 3a
-full-dataset parity harness and miner-shaped known-answer tool. T14
+the Phase 2g light differential harness, and — when those bins enable
+the crate's `full-dataset` feature — the Phase 3a full-dataset parity
+harness and miner-shaped known-answer tool. The light build leaves the
+feature off. T14
 (§6.6) asserts the sole-consumer invariant via `cargo metadata`
 at per-PR cadence; any additional consumer is a precedent
 violation per the §5.2.5 + §5.7 + R1-D13 disposition and fails
@@ -28,18 +30,19 @@ per-PR.
 
 ## Fork-pin coupling
 
-The 12-signature surface in [`src/lib.rs`](src/lib.rs) is pinned
-against `external/randomx-v2/src/randomx.h` at fork commit
-`aaafe71322df6602c21a5c72937ac284724ae561`. The
+The default build declares the 7 light-mode symbols in
+[`src/lib.rs`](src/lib.rs). The `full-dataset` feature adds the five
+miner symbols (`randomx_get_flags` and the four dataset functions).
+Both are pinned against `external/randomx-v2/src/randomx.h` at fork
+commit `aaafe71322df6602c21a5c72937ac284724ae561`. The
 `[package.metadata.shekyl]` `fork-pin-coupled = true` +
 `fork-pin-sha = "aaafe71..."` markers in [`Cargo.toml`](Cargo.toml)
 are the audit-trail anchors per §1.7 maintenance discipline.
 
 T15 (§6.7) asserts the metadata SHA matches `external/randomx-v2`'s
 HEAD at per-PR cadence. Any advance of the fork pin must re-verify
-the 12 declarations against the new pin's `randomx.h` and update
-the `fork-pin-sha` metadata in the same PR (R1-D2 reopening
-criterion).
+both surfaces against the new pin's `randomx.h` and update the
+`fork-pin-sha` metadata in the same PR (R1-D2 reopening criterion).
 
 ## Build prerequisites (lands at C3)
 
