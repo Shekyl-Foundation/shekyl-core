@@ -196,7 +196,9 @@ default paths: the packaging sets the account's home or the unit passes
 effective-configuration line, `dev-` lever warnings and posture warnings
 (clearnet-only, offline, a plaintext RPC listener bound beyond
 loopback) reach the log and standard error at every start
-whatever the log level. The effective-configuration line shows every
+whatever the log level, and so does a stop the operator asked for
+(`stop requested by` its cause), with no level tag. A forced stop is
+an error event. The effective-configuration line shows every
 value and its source; a secret is shown as set, never its value (IG-6).
 
 **IG-15 Home.** These rules are this file. The glossary tree and the name
