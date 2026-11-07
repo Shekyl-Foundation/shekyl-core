@@ -8,7 +8,11 @@
 //! Ignored. The registered method is
 //! `docs/benchmarks/rt_w10_request_cost_20261102.md`. `RT_W10_OUT` is the
 //! directory; the test writes `parse.tsv` and `constants.tsv` and does not
-//! overwrite them. Linux only: the clock is `CLOCK_THREAD_CPUTIME_ID`.
+//! overwrite them. Unset, the test takes [`SCRATCH_SAMPLES`] samples into a
+//! temporary directory, checks both files, and removes it: that is the
+//! nightly `wire-ignored` lane's run, which proves the harness still runs
+//! and measures nothing (`scripts/ci/ignored_set_wire.sh`). Linux only: the
+//! clock is `CLOCK_THREAD_CPUTIME_ID`.
 
 #![cfg(target_os = "linux")]
 
@@ -23,6 +27,9 @@ use shekyl_wire::{Ct, Transaction};
 
 const WARMUP: usize = 5;
 const SAMPLES: usize = 100;
+/// The scratch run's samples: enough to read the series through the
+/// writer, which is what that run proves. It measures nothing.
+const SCRATCH_SAMPLES: usize = 3;
 const HEADER: &str = "series\titeration\tbytes\twall_ns\tcpu_ns";
 const PENALTY_MULTIPLE: u64 = 2;
 
@@ -79,8 +86,22 @@ fn fee_of(tx: &Transaction) -> u64 {
 #[test]
 #[ignore = "RT-W10 floor-device listed-tx parse; docs/benchmarks/rt_w10_request_cost_20261102.md"]
 fn rt_w10_listed_tx_parse() {
-    let out =
-        PathBuf::from(std::env::var("RT_W10_OUT").expect("RT_W10_OUT is the output directory"));
+    // `var_os`: a set value is a path, and need not be UTF-8.
+    let (out, scratch) = match std::env::var_os("RT_W10_OUT") {
+        Some(dir) => (PathBuf::from(dir), false),
+        None => (
+            std::env::temp_dir().join(format!("shekyl-wire-rt-w10-{}.d", std::process::id())),
+            true,
+        ),
+    };
+    if scratch {
+        drop(fs::remove_dir_all(&out));
+    }
+    let (warmup, samples) = if scratch {
+        (1, SCRATCH_SAMPLES)
+    } else {
+        (WARMUP, SAMPLES)
+    };
     fs::create_dir_all(&out).expect("the output directory can be created");
     let parse_path = out.join("parse.tsv");
     let constants_path = out.join("constants.tsv");
@@ -108,11 +129,11 @@ fn rt_w10_listed_tx_parse() {
     let mut rows = String::new();
     rows.push_str(HEADER);
     rows.push('\n');
-    for _ in 0..WARMUP {
+    for _ in 0..warmup {
         let tx = Transaction::read(&mut pruned.as_slice()).expect("warmup");
         black_box(fee_of(&tx));
     }
-    for iteration in 1..=SAMPLES {
+    for iteration in 1..=samples {
         let (wall_ns, cpu_ns) = timed(|| {
             let tx = Transaction::read(&mut pruned.as_slice()).expect("parse");
             assert_eq!(fee_of(&tx), expected);
@@ -131,4 +152,19 @@ fn rt_w10_listed_tx_parse() {
         pruned.len()
     );
     fs::write(&constants_path, constants).expect("write constants.tsv");
+    if scratch {
+        let lines = |path: &PathBuf| {
+            fs::read_to_string(path)
+                .expect("read back a written file")
+                .lines()
+                .count()
+        };
+        assert_eq!(
+            lines(&parse_path),
+            1 + samples,
+            "the header and one row per sample"
+        );
+        assert_eq!(lines(&constants_path), 4, "the four constants");
+        fs::remove_dir_all(&out).expect("remove the scratch output directory");
+    }
 }

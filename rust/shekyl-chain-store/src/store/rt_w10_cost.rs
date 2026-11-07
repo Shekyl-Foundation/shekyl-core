@@ -8,9 +8,10 @@
 //! Ignored. The registered method is
 //! `docs/benchmarks/rt_w10_request_cost_20261102.md`. `RT_W10_OUT` is the
 //! directory; the test writes `coinbase.tsv` and does not overwrite it.
-//! Unset, the test writes into a temporary directory and removes it: that
-//! is the nightly `store-ignored` lane's run, which proves the harness
-//! still runs and measures nothing (`scripts/ci/ignored_set_chain_store.sh`).
+//! Unset, the test takes [`SCRATCH_SAMPLES`] samples into a temporary
+//! directory and removes it: that is the nightly `store-ignored` lane's run,
+//! which proves the harness still runs and measures nothing
+//! (`scripts/ci/ignored_set_chain_store.sh`).
 //! Linux only: the clock is `CLOCK_THREAD_CPUTIME_ID`.
 
 use std::fs::{self, File};
@@ -29,6 +30,9 @@ use super::ChainStore;
 const CHAIN_BLOCKS: u64 = 32;
 const WARMUP: usize = 5;
 const SAMPLES: usize = 100;
+/// The scratch run's samples: enough to read every series through the
+/// writer, which is what that run proves. It measures nothing.
+const SCRATCH_SAMPLES: usize = 3;
 const HEADER: &str = "series\titeration\tbytes\twall_ns\tcpu_ns";
 
 const CLOCK_THREAD_CPUTIME_ID: i32 = 3;
@@ -91,6 +95,11 @@ fn rt_w10_coinbase_span_cost() {
     if scratch {
         drop(fs::remove_dir_all(&out));
     }
+    let (warmup, samples) = if scratch {
+        (1, SCRATCH_SAMPLES)
+    } else {
+        (WARMUP, SAMPLES)
+    };
     fs::create_dir_all(&out).expect("the output directory can be created");
     let path = out.join("coinbase.tsv");
     assert!(
@@ -111,13 +120,13 @@ fn rt_w10_coinbase_span_cost() {
     rows.push_str(HEADER);
     rows.push('\n');
 
-    for _ in 0..WARMUP {
+    for _ in 0..warmup {
         let height = BlockHeight::from_raw(0);
         black_box(recorded(snap.block(height), "warmup block"));
         black_box(recorded(snap.block_info(height), "warmup info"));
         let _ = black_box(snap.tx_record(&miner).expect("warmup tx"));
     }
-    for iteration in 1..=SAMPLES {
+    for iteration in 1..=samples {
         let height = BlockHeight::from_raw(
             u64::try_from((iteration - 1) % usize::try_from(CHAIN_BLOCKS).expect("32 fits"))
                 .expect("a height index fits u64"),
@@ -151,7 +160,7 @@ fn rt_w10_coinbase_span_cost() {
                 .expect("read coinbase.tsv")
                 .lines()
                 .count(),
-            1 + 3 * SAMPLES,
+            1 + 3 * samples,
             "the header and three series of every sample"
         );
         fs::remove_dir_all(&out).expect("remove the scratch output directory");
