@@ -6,7 +6,7 @@
 the inventory is empty or the C++ is gone, whichever comes first; the gate
 and the inventory are deleted then.
 
-The inventory is [`docs/ci/cxx-version-gates.tsv`](../ci/cxx-version-gates.tsv).
+The inventory is `docs/ci/cxx-version-gates.tsv` at `ac3836de90`.
 `scripts/ci/check_cxx_version_gates.py` holds the tree to it in both
 directions on every pull request. This document says what the rows mean. It
 does not repeat them: a second copy of the table would drift from the one
