@@ -39,7 +39,8 @@ fn gi(raw: u64) -> shekyl_types::GlobalOutputIndex {
 /// vouts ([`SPEND_VOUT_0`], `+ 1`), then the last miner's ([`LAST_MINER`]);
 /// [`OUTPUT_COUNT`] in all. Returns the spend as connected, for the reads
 /// that must know what it put at those two indices.
-fn output_chain(path: &std::path::Path) -> (ChainStore, Grown, Transaction) {
+fn output_chain(path: impl AsRef<std::path::Path>) -> (ChainStore, Grown, Transaction) {
+    let path: &std::path::Path = path.as_ref();
     let store = ChainStore::create(path, EPOCH).expect("create");
     let (grown, mut connected) =
         connect_chain_anchored(&store, &spendable_prefix(vec![vec![spend()], vec![]]));

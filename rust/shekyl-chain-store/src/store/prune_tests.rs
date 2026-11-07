@@ -692,7 +692,8 @@ fn spec_300(h: u64) -> Vec<Sized> {
 /// 200 names nothing (`close_epoch + 2 ≤ e` fails) and the epoch-3 and
 /// epoch-4 boundaries at 300 and 400 name shard 0, as the epoch-2 and
 /// epoch-3 boundaries did at 200 and 300 over the unshifted chain.
-fn chain_to_300(path: &std::path::Path) -> (ChainStore, Builder, Connected, Connected) {
+fn chain_to_300(path: impl AsRef<std::path::Path>) -> (ChainStore, Builder, Connected, Connected) {
+    let path: &std::path::Path = path.as_ref();
     let store =
         ChainStore::with_horizons(path, ApplyPolicy::default(), horizons()).expect("create");
     let mut b = Builder::new();
@@ -1077,7 +1078,8 @@ fn short_horizons() -> Horizons {
     .expect("cap ≤ retention < epoch")
 }
 
-fn short_store(path: &std::path::Path) -> ChainStore {
+fn short_store(path: impl AsRef<std::path::Path>) -> ChainStore {
+    let path: &std::path::Path = path.as_ref();
     ChainStore::with_horizons(path, ApplyPolicy::default(), short_horizons()).expect("open")
 }
 
@@ -1472,7 +1474,8 @@ fn pruned_and_unpruned_stores_place_every_shard_alike() {
 /// Build the ten-block chain to `BASE + to` and close the store, for a raw
 /// plant. The corruption tests do not need the exact maximal credit, so
 /// height `BASE + 35` lists a 140 000-byte one and skips the probe.
-fn short_chain_to(path: &std::path::Path, to: u64) -> Builder {
+fn short_chain_to(path: impl AsRef<std::path::Path>, to: u64) -> Builder {
+    let path: &std::path::Path = path.as_ref();
     let store = short_store(path);
     let mut b = Builder::under(SHORT);
     b.connect_sized(&store, 0, BASE + to, 0, short_spec(140_000));
@@ -1482,10 +1485,11 @@ fn short_chain_to(path: &std::path::Path, to: u64) -> Builder {
 /// Connect `BASE + height` on the reopened ten-block store with nothing
 /// listed.
 fn connect_short(
-    path: &std::path::Path,
+    path: impl AsRef<std::path::Path>,
     b: &Builder,
     height: u64,
 ) -> (ChainStore, Result<Connected, TestErr>) {
+    let path: &std::path::Path = path.as_ref();
     let store = short_store(path);
     let previous = b.hashes().last().copied().expect("parent");
     let cand = candidate_on(&store, BASE + height, previous, Vec::new());
@@ -1696,22 +1700,25 @@ fn a_length_row_that_disagrees_with_the_fold_refuses_the_boundary() {
 
 /// Replace `block_info[height].cumulative_tx_count`. A raw write: the
 /// store's own connect never records a decrease.
-fn plant_listed(path: &std::path::Path, height: u64, listed: u64) {
+fn plant_listed(path: impl AsRef<std::path::Path>, height: u64, listed: u64) {
+    let path: &std::path::Path = path.as_ref();
     plant_info(path, height, |info| info.cumulative_tx_count = listed);
 }
 
 /// Replace `block_info[height].cumulative_archival_len`, likewise.
-fn plant_archival(path: &std::path::Path, height: u64, len: u64) {
+fn plant_archival(path: impl AsRef<std::path::Path>, height: u64, len: u64) {
+    let path: &std::path::Path = path.as_ref();
     plant_info(path, height, |info| {
         info.cumulative_archival_len = ArchivalLength::from_raw(len);
     });
 }
 
 fn plant_info(
-    path: &std::path::Path,
+    path: impl AsRef<std::path::Path>,
     height: u64,
     edit: impl FnOnce(&mut crate::codec::BlockInfo),
 ) {
+    let path: &std::path::Path = path.as_ref();
     let db = redb::Database::open(path).expect("open raw");
     let txn = db.begin_write().expect("write");
     {
@@ -2240,7 +2247,8 @@ fn floor_at(boundary: u64) -> SlashLogFloor {
 
 /// A store under the pair with the given undo retention — the cap, or
 /// deeper for `SLK-2`'s falsifier.
-fn window_store(path: &std::path::Path, retention: u64) -> ChainStore {
+fn window_store(path: impl AsRef<std::path::Path>, retention: u64) -> ChainStore {
+    let path: &std::path::Path = path.as_ref();
     let horizons = Horizons::new(
         WINDOW_RULES.settlement_schedule().blocks(),
         BlockCount::from_raw(retention),
@@ -2257,11 +2265,12 @@ fn window_store(path: &std::path::Path, retention: u64) -> ChainStore {
 /// return, for a raw plant; the connects are returned for the boundaries'
 /// `Pruned`.
 fn window_chain_to(
-    path: &std::path::Path,
+    path: impl AsRef<std::path::Path>,
     retention: u64,
     to: u64,
     join_at: u64,
 ) -> (Builder, Vec<Connected>) {
+    let path: &std::path::Path = path.as_ref();
     let store = window_store(path, retention);
     let mut b = Builder::under(WINDOW_RULES);
     let connects = b.connect_sized(&store, 0, to, 0, move |h| {

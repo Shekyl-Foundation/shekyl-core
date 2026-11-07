@@ -185,7 +185,8 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     );
 }
 
-fn plant_draws(path: &std::path::Path, height: BlockHeight, row: BlockDraws) {
+fn plant_draws(path: impl AsRef<std::path::Path>, height: BlockHeight, row: BlockDraws) {
+    let path: &std::path::Path = path.as_ref();
     super::super::archival_read_tests::plant(path, |txn| {
         let mut table = txn
             .open_table(crate::schema::ARCHIVAL_BLOCK_DRAWS)

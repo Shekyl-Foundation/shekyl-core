@@ -5,7 +5,6 @@
 
 //! Store paths for this crate's tests.
 
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
@@ -19,13 +18,32 @@ use tempfile::TempDir;
 /// keeps beside itself (`.creation-lock`, `.discard`, `.unfinished-*`). A
 /// panicking test drops it too.
 ///
-/// Bind it to a name for as long as the store is used. A call chained on
-/// the temporary (`tmp("x").with_extension("y")`) drops the directory at the
-/// end of that statement and leaves a path to nothing; the compiler does
-/// not catch it.
+/// The directory outlives the open store.
+///
+/// - A local is declared before the store. Locals drop in reverse
+///   declaration order, so the store drops first.
+/// - A field is declared after the store. Fields drop in declaration
+///   order, so the store drops first.
+///
+/// An owner that holds both stays whole. A struct pattern drops its
+/// bindings in reverse pattern order, so naming the directory last in the
+/// pattern removes it before the store.
+///
+/// The file is [`Self::path`]. [`AsRef<Path>`] serves a function that takes
+/// `impl AsRef<Path>`. A function that takes `&Path` is handed
+/// [`Self::path`]. Bind this value, then borrow it: chaining on the
+/// temporary ends the directory at the end of that statement.
 pub(crate) struct TestPath {
     path: PathBuf,
     _dir: TempDir,
+}
+
+impl TestPath {
+    /// The store file inside the directory this owns.
+    #[must_use]
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 /// A fresh `<name>.redb` path in a directory of its own.
@@ -41,14 +59,6 @@ pub(crate) fn tmp(name: &str) -> TestPath {
     TestPath {
         path: dir.path().join(format!("{name}.redb")),
         _dir: dir,
-    }
-}
-
-impl Deref for TestPath {
-    type Target = Path;
-
-    fn deref(&self) -> &Path {
-        &self.path
     }
 }
 

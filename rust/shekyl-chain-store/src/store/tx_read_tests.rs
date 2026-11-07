@@ -43,7 +43,10 @@ fn hash_of(tx: &Transaction) -> TxHash {
 /// per-input `pqc_auths` and is 4-part. Coinbases at every height, so the
 /// dense id space is `0..TX_COUNT`: the coinbases and the join through the
 /// spend block's coinbase, then the serve credit, the spend.
-fn tx_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>, Transaction, Transaction) {
+fn tx_chain(
+    path: impl AsRef<std::path::Path>,
+) -> (ChainStore, Vec<BlockHash>, Transaction, Transaction) {
+    let path: &std::path::Path = path.as_ref();
     let store = ChainStore::create(path, EPOCH).expect("create");
     let (join, plain) = credited(10);
     let listing = spendable_prefix(vec![vec![join], vec![body(plain.clone()), spend()]]);

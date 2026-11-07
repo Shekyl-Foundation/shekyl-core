@@ -533,7 +533,7 @@ fn the_old_file_is_overwritten_before_it_is_unlinked() {
         .map(|i| u8::try_from(i % 251 + 1).expect("below 252"))
         .collect();
     std::fs::write(&path, &bytes).unwrap();
-    super::header::overwrite(&path).unwrap();
+    super::header::overwrite(path.path()).unwrap();
     let after = std::fs::read(&path).unwrap();
     assert_eq!(after.len(), bytes.len());
     assert!(
@@ -548,7 +548,7 @@ fn the_old_file_is_overwritten_before_it_is_unlinked() {
 /// would refuse as foreign, and every open finishes a discard left behind.
 #[test]
 fn an_interrupted_recreate_leaves_a_pool_that_opens() {
-    let discard = |path: &std::path::Path| super::header::discard_path(path);
+    let discard = |path: &crate::test_paths::TestPath| super::header::discard_path(path.path());
 
     // Interrupted mid-wipe: the old file sits at the discard path with its
     // header zeroed, and the pool's path is empty. The open creates a fresh
@@ -680,8 +680,8 @@ fn two_openers_of_one_unfinished_pool_finish_it_once() {
             PoolStore::create(&path)
         })
     };
-    let left = spawn(path.to_path_buf(), Arc::clone(&go));
-    let right = spawn(path.to_path_buf(), go);
+    let left = spawn(path.path().to_path_buf(), Arc::clone(&go));
+    let right = spawn(path.path().to_path_buf(), go);
     let results = [left.join().unwrap(), right.join().unwrap()];
     let mut finished = 0;
     let mut busy = 0;
@@ -727,8 +727,13 @@ fn a_file_that_only_looks_unfinished_is_refused_untouched() {
         assert!(
             matches!(err, StoreError::Cannot(StoreCannot::PoolFileForeign)),
             "{}: {err:?}",
-            path.display()
+            path.path().display()
         );
-        assert_eq!(std::fs::read(path).unwrap(), bytes, "{}", path.display());
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            bytes,
+            "{}",
+            path.path().display()
+        );
     }
 }

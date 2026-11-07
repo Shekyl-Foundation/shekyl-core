@@ -53,9 +53,12 @@ on a later run of this harness).
 - `rust/shekyl-pow-randomx/examples/rt_w10_request_cost.rs` writes
   `hashes.tsv`.
 - `shekyl-chain-store`'s ignored test `rt_w10_coinbase_span_cost` writes
-  `coinbase.tsv` into `RT_W10_OUT`. Unset, it writes into a temporary
-  directory and removes it: that is the nightly `store-ignored` lane's run,
-  which proves the harness runs and measures nothing.
+  `coinbase.tsv`. With `RT_W10_OUT` set, that file is the measurement:
+  5 warmup calls, not recorded, then 100 samples of each series. Unset,
+  warmup is 1 call and the sample count is 3, written into a temporary
+  directory the test removes. That is the nightly `store-ignored` lane's
+  run. It proves the harness runs and measures nothing. It is not the
+  measurement.
 - `shekyl-wire`'s ignored test `rt_w10_listed_tx_parse` writes `parse.tsv`
   and `constants.tsv`.
 
@@ -63,8 +66,10 @@ Linux only. Any other host compiles the example and exits without a run,
 because the clock is `CLOCK_THREAD_CPUTIME_ID` and the host is the Pi 4.
 Each sample is one call. The thread-CPU read brackets the wall read, so
 the CPU sample includes the two wall reads and the wall sample does not
-include `clock_gettime`. Warmup is 5 calls and is not recorded. Then 100
-samples of each series. A file that already exists is not overwritten.
+include `clock_gettime`. A measurement's warmup is 5 calls and is not
+recorded. Then 100 samples of each series. A file that already exists is
+not overwritten. The store test's unset run is the shorter proof named
+above, not this measurement.
 
 The summary is `scripts/bench/rt_w10_summary.py`. Its tests are
 `scripts/bench/test_rt_w10_summary.py`, run in CI. Percentiles are

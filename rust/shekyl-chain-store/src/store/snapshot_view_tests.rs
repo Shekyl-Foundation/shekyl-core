@@ -67,7 +67,9 @@ where
 
 #[test]
 fn the_snapshot_view_answers_every_read_as_the_batch_view_does() {
-    let (store, _path, _mock, blocks) = twin_chains(5);
+    let opened = twin_chains(5);
+    let store = opened.store();
+    let blocks = opened.blocks();
     let hashes: Vec<BlockHash> = blocks
         .iter()
         .map(|b| b.block.hash())
@@ -90,5 +92,4 @@ fn the_snapshot_view_answers_every_read_as_the_batch_view_does() {
         Ok(AtHeight::AboveTip)
     ));
     drop(snapshot);
-    drop(store);
 }

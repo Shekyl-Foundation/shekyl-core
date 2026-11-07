@@ -25,7 +25,8 @@ use crate::redb_recovery::{bytes_and_mtime, mark_recovery_required};
 /// timestamp on a filesystem whose modification-time tick is a second or two.
 const BEFORE_THE_SNAPSHOT: Duration = Duration::from_secs(120);
 
-fn record(path: &std::path::Path, blocks: usize) -> Vec<BlockHash> {
+fn record(path: impl AsRef<std::path::Path>, blocks: usize) -> Vec<BlockHash> {
+    let path: &std::path::Path = path.as_ref();
     let store = ChainStore::create(path, EPOCH).expect("unanchored create");
     let listed = vec![Vec::new(); blocks];
     let hashes = connect_chain(&store, &listed).hashes;
@@ -33,7 +34,8 @@ fn record(path: &std::path::Path, blocks: usize) -> Vec<BlockHash> {
     hashes
 }
 
-fn released(path: &std::path::Path, pin: &GenesisPin) -> Result<ChainStore, StoreError> {
+fn released(path: impl AsRef<std::path::Path>, pin: &GenesisPin) -> Result<ChainStore, StoreError> {
+    let path: &std::path::Path = path.as_ref();
     ChainStore::with_genesis(path, ApplyPolicy::Full, production_horizons(), pin)
         .map(|(store, _cut)| store)
 }
@@ -47,7 +49,8 @@ fn pin_of(pin: &GenesisPin) -> BlockHash {
 ///
 /// The handle is read-write, and the open does not truncate. Windows
 /// refuses [`std::fs::File::set_modified`] on a read-only handle.
-fn age_mtime(path: &std::path::Path) {
+fn age_mtime(path: impl AsRef<std::path::Path>) {
+    let path: &std::path::Path = path.as_ref();
     let aged = std::time::SystemTime::now()
         .checked_sub(BEFORE_THE_SNAPSHOT)
         .expect("the clock reaches back");

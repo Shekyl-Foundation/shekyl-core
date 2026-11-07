@@ -322,8 +322,7 @@ fn rows_from_open(label: &str, through: u64, with_memo: bool) -> Vec<BlockDraws>
     plant_compact_bond(&mut chain);
     let mut memo = DrawableMemo::new();
     let mut slot = if with_memo { Some(&mut memo) } else { None };
-    let rows = connect_span(&mut chain, open, through, &mut slot);
-    rows
+    connect_span(&mut chain, open, through, &mut slot)
 }
 
 fn draws_of(chain: &SlashedChain, height: BlockHeight) -> BlockDraws {

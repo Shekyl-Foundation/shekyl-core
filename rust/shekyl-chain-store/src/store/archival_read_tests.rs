@@ -73,7 +73,8 @@ pub(super) fn record() -> BondRecord {
 
 /// Plant rows raw: `f` receives the open write transaction. Shared with
 /// `prune_tests`, which plants slash rows across the retirement floor.
-pub(super) fn plant(path: &std::path::Path, f: impl FnOnce(&redb::WriteTransaction)) {
+pub(super) fn plant(path: impl AsRef<std::path::Path>, f: impl FnOnce(&redb::WriteTransaction)) {
+    let path: &std::path::Path = path.as_ref();
     let db = redb::Database::open(path).expect("open raw");
     let txn = db.begin_write().expect("write");
     f(&txn);

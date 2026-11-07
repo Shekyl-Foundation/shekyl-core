@@ -41,7 +41,8 @@ fn grown(root: CurveTreeRoot, count: u64) -> CurveTreeState {
 }
 
 /// Three blocks from genesis. The live root is [`live_root_after_three`].
-fn connect_three(path: &std::path::Path) {
+fn connect_three(path: impl AsRef<std::path::Path>) {
+    let path: &std::path::Path = path.as_ref();
     let store = ChainStore::create(path, EPOCH).expect("create");
     connect_chain(&store, &[vec![], vec![], vec![]]);
 }
@@ -55,7 +56,8 @@ fn live_root_after_three() -> CurveTreeRoot {
 
 /// Write `state` over the seal's summary and leaves at `0..leaf_count`.
 /// Rows already past that count are left where they are.
-fn plant_summary(path: &std::path::Path, state: CurveTreeState) {
+fn plant_summary(path: impl AsRef<std::path::Path>, state: CurveTreeState) {
+    let path: &std::path::Path = path.as_ref();
     let count = state.leaf_count.to_raw();
     let db = redb::Database::open(path).expect("open raw");
     let txn = db.begin_write().expect("write");

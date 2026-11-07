@@ -113,7 +113,8 @@ const _: () = assert!(FIRST_SPEND_HEIGHT < CREDIT_HEIGHT && CREDIT_HEIGHT < CLOS
 const SHORT_RETENTION: u64 = 8;
 const SHORT: RuleSet = RuleSet::GENESIS.with_levers(None, pair(SHORT_SEB, 4));
 
-fn short_store(path: &std::path::Path) -> ChainStore {
+fn short_store(path: impl AsRef<std::path::Path>) -> ChainStore {
+    let path: &std::path::Path = path.as_ref();
     let horizons = Horizons::new(
         SHORT.settlement_schedule().blocks(),
         BlockCount::from_raw(SHORT_RETENTION),

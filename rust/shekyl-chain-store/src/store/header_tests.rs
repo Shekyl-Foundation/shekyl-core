@@ -36,7 +36,8 @@ fn stubbed(families: &[ArchivalFamily]) -> ApplyPolicy {
 }
 
 /// Create a store, commit one probe row, drop the handle.
-fn seeded(path: &std::path::Path, policy: ApplyPolicy) {
+fn seeded(path: impl AsRef<std::path::Path>, policy: ApplyPolicy) {
+    let path: &std::path::Path = path.as_ref();
     let store = ChainStore::with_apply_policy(path, policy, EPOCH).expect("create");
     store
         .write(|batch| probe_row(batch, "k", 1))
@@ -50,7 +51,8 @@ fn commit_empty(store: &ChainStore) -> Provenance {
 }
 
 /// Write raw bytes to a `properties` cell, bypassing the store entirely.
-fn raw_put(path: &std::path::Path, key: &str, value: Option<&[u8]>) {
+fn raw_put(path: impl AsRef<std::path::Path>, key: &str, value: Option<&[u8]>) {
+    let path: &std::path::Path = path.as_ref();
     let db = redb::Database::open(path).expect("raw open");
     let txn = db.begin_write().expect("raw write");
     {
@@ -69,7 +71,8 @@ fn raw_put(path: &std::path::Path, key: &str, value: Option<&[u8]>) {
 /// Read raw bytes from a `properties` cell, bypassing the store. `None` if
 /// the cell — or the whole table — is absent. redb admits one handle per
 /// file per process, so callers drop their `ChainStore` first.
-fn raw_get(path: &std::path::Path, key: &str) -> Option<Vec<u8>> {
+fn raw_get(path: impl AsRef<std::path::Path>, key: &str) -> Option<Vec<u8>> {
+    let path: &std::path::Path = path.as_ref();
     let db = redb::Database::open(path).expect("raw open");
     let txn = db.begin_read().expect("raw read");
     let t = match txn.open_table(PROPERTIES) {
@@ -768,7 +771,7 @@ fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
     let (store, cut) = open_at(
-        &path,
+        path.path(),
         ApplyPolicy::Full,
         production_horizons(),
         GenesisAdmission::Unpinned,

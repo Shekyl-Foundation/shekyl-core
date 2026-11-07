@@ -162,10 +162,11 @@ fn an_empty_tree_whose_copies_agree_on_another_root_fails_the_root_arm() {
 /// a still-canonical scalar diverges the chunk; a non-element is not on
 /// the curve.
 fn rewrite_leaf(
-    path: &std::path::Path,
+    path: impl AsRef<std::path::Path>,
     position: u64,
     edit: impl FnOnce(&mut [u8; TreeLeaf::LEN]),
 ) {
+    let path: &std::path::Path = path.as_ref();
     let db = redb::Database::open(path).expect("open raw");
     let txn = db.begin_write().expect("write");
     {

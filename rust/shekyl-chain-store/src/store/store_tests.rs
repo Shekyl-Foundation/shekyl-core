@@ -117,7 +117,10 @@ fn an_empty_stub_is_refused_at_open() {
         ChainStore::with_apply_policy(&path, ApplyPolicy::StubbedFamilies(FamilySet::EMPTY), EPOCH),
         Err(StoreError::Cannot(StoreCannot::EmptyApplyStub))
     ));
-    assert!(!path.exists(), "a refused policy must not create the store");
+    assert!(
+        !path.path().exists(),
+        "a refused policy must not create the store"
+    );
 }
 
 #[test]
@@ -554,7 +557,10 @@ fn open_read_only_refuses_a_store_that_does_not_exist() {
         ChainStore::open_read_only(&path, production_horizons()),
         Err(StoreError::Engine(EngineError::Open(_)))
     ));
-    assert!(!path.exists(), "a read-only open must not create the store");
+    assert!(
+        !path.path().exists(),
+        "a read-only open must not create the store"
+    );
 }
 
 #[test]
@@ -593,7 +599,7 @@ fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
         let path = tmp(label);
         std::fs::write(&path, &bytes).expect("the unfinished file");
         let (store, cut) = open_at(
-            &path,
+            path.path(),
             ApplyPolicy::Full,
             production_horizons(),
             GenesisAdmission::Unpinned,
@@ -608,12 +614,12 @@ fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
             "{label}: kept aside"
         );
         assert!(
-            crate::creation::creation_lock_path(&path).is_file(),
+            crate::creation::creation_lock_path(path.path()).is_file(),
             "{label}: the path lock stays"
         );
         drop(store);
         let (_store, cut) = open_at(
-            &path,
+            path.path(),
             ApplyPolicy::Full,
             production_horizons(),
             GenesisAdmission::Unpinned,
@@ -647,8 +653,8 @@ fn two_openers_of_one_unfinished_file_finish_it_once() {
             )
         })
     };
-    let left = spawn(path.to_path_buf(), Arc::clone(&go));
-    let right = spawn(path.to_path_buf(), go);
+    let left = spawn(path.path().to_path_buf(), Arc::clone(&go));
+    let right = spawn(path.path().to_path_buf(), go);
     let results = [left.join().expect("left"), right.join().expect("right")];
     let mut finished = 0;
     let mut busy = 0;
@@ -674,7 +680,7 @@ fn two_openers_of_one_unfinished_file_finish_it_once() {
         "the original empty file"
     );
     let (_store, cut) = open_at(
-        &path,
+        path.path(),
         ApplyPolicy::Full,
         production_horizons(),
         GenesisAdmission::Unpinned,
@@ -715,13 +721,13 @@ fn a_file_that_only_looks_unfinished_is_refused_untouched() {
                 Err(StoreError::Engine(EngineError::Open(_)))
             ),
             "{}",
-            path.display()
+            path.path().display()
         );
         assert_eq!(
             std::fs::read(path).expect("kept"),
             bytes,
             "{}",
-            path.display()
+            path.path().display()
         );
     }
 }
