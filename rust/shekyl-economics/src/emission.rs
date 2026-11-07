@@ -291,8 +291,9 @@ impl PrePenaltyEmission {
     /// when `block_weight` is below the penalty-free weight, or when `fee·D`,
     /// `A·s²·w` or `A·s²·w·D` leaves `u128`. With a body inside the limit
     /// (`s·w ≤ D`) the last is at most `A·s·D²`, so `None` comes only near
-    /// where the penalty's own product refuses ([`apply_weight_penalty`]'s
-    /// domain). A caller handed `None` offers the bodies one at a time.
+    /// where the penalty's own product refuses ([`Self::penalised`]'s
+    /// [`EmissionError::Overflow`]). A caller handed `None` offers the
+    /// bodies one at a time.
     #[must_use]
     pub fn bodies_the_fee_covers(
         self,
