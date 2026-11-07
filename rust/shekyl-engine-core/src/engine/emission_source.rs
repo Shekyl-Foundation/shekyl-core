@@ -51,7 +51,7 @@ use crate::engine::daemon::synced_chain_facts::{
     fetch_synced_chain_facts, AnchoredView, BracketedChainFacts, CoherentChainView,
     SyncedChainFacts, TimelineBreak,
 };
-use shekyl_types::{BlockHash, ChainCount, PCanonicalId};
+use shekyl_types::{ChainCount, PCanonicalId};
 
 /// The daemon JSON-RPC method name (registered on both the epee and
 /// Rust/Axum transports in PR 1's daemon half).
@@ -691,9 +691,9 @@ impl VouchedClaimSource {
         let facts = crate::engine::daemon::synced_chain_facts::SyncedChainFacts::new(
             source.chain_height,
             true,
-            shekyl_types::BlockHash::from_bytes(crate::engine::test_support::test_block_hash_at(
+            crate::engine::test_support::test_block_hash_at(
                 source.chain_height.to_raw().saturating_sub(1),
-            )),
+            ),
         )
         .expect("test vouching is synchronized by construction");
         let bracketed = facts
@@ -790,7 +790,7 @@ async fn bracket_after_record<R: Rpc>(
         .get_block_hash(number)
         .await
         .map_err(|e| TimelineBreak::from_facts_error(&e))?;
-    facts.bracket(BlockHash::from_bytes(at_tip_now))
+    facts.bracket(at_tip_now)
 }
 
 /// A claim-source response **paired with the `P` it was actually requested

@@ -1,0 +1,1 @@
+- **CI: `shekyl-wire`'s ignored tests have a nightly lane** (`wire-ignored`, `scripts/ci/ignored_set_wire.sh`): the RT-W10 parse harness runs with a scratch output, as the store's now does with three samples, and the BA-I30 input-cap measurement runs; the fixture writers are named and never run.

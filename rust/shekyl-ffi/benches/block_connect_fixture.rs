@@ -33,32 +33,36 @@ use shekyl_wire::transaction::{
 use shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES;
 
 use shekyl_ffi::{shekyl_buffer_free, shekyl_pqc_keypair_generate, shekyl_pqc_sign};
+use shekyl_types::SigningPayloadHash;
 
 #[path = "relay_admission_fixture.rs"]
 pub mod relay;
 
 /// A real hybrid Ed25519+ML-DSA-65 auth: key, signature, and the message it
-/// signs (the admission fixture's signable tx hash — the same binding the
-/// daemon's `verify_transaction_pqc_auth` checks per input).
+/// signs. Production signs each input's `signed_hash(i)`
+/// (`PqcSigningPreimage::signed_hash`), which needs the finished
+/// transaction; the fixture signs a stand-in of the same type and width,
+/// since what the bench prices is the verify, whose cost depends on the
+/// message's length, not its content.
 pub struct PqcAuthFixture {
     pub public_key: Vec<u8>,
     pub signature: Vec<u8>,
-    pub message: [u8; 32],
+    pub message: SigningPayloadHash,
 }
 
 /// Generate a keypair and sign `message` through the same FFI surface the
 /// daemon consumes (`shekyl_pqc_keypair_generate` / `shekyl_pqc_sign`), so the
 /// byte lengths entering the wire fixture are the production encodings, not
 /// guesses.
-pub fn build_pqc_auth(message: [u8; 32]) -> PqcAuthFixture {
+pub fn build_pqc_auth(message: SigningPayloadHash) -> PqcAuthFixture {
     unsafe {
         let kp = shekyl_pqc_keypair_generate();
         assert!(kp.success, "pqc keypair generation failed");
         let sig = shekyl_pqc_sign(
             kp.secret_key.ptr,
             kp.secret_key.len,
-            message.as_ptr(),
-            message.len(),
+            message.as_bytes().as_ptr(),
+            message.as_bytes().len(),
         );
         assert!(sig.success, "pqc sign failed");
 
@@ -80,7 +84,7 @@ pub fn build_pqc_auth(message: [u8; 32]) -> PqcAuthFixture {
 /// One hybrid verification through the daemon's entry point
 /// (`shekyl_pqc_verify`, scheme 1). `0` is the only success code.
 pub fn pqc_verify_code(auth: &PqcAuthFixture) -> u8 {
-    pqc_verify_code_against(auth, &auth.message)
+    pqc_verify_code_against(auth, auth.message.as_bytes())
 }
 
 /// Verify `auth` against an arbitrary message — the negative limb's hook.
@@ -168,7 +172,7 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
     layout: relay::ChunkLayout,
 ) -> ConnectTxFixture {
     let adm = relay::build_fixture(rng, n_in, n_out, tree_depth, layout);
-    let pqc = build_pqc_auth(adm.signable_tx_hash);
+    let pqc = build_pqc_auth(SigningPayloadHash::from_bytes([0x5a; 64]));
     let bp = build_bp(rng, n_out);
 
     // Inputs: n_in FCMP++ spends, key images from the admission fixture.

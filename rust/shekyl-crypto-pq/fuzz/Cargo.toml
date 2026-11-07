@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 shekyl-crypto-pq = { path = ".." }
+shekyl-types = { path = "../../shekyl-types" }
 
 [[bin]]
 name = "fuzz_multisig_key_blob"

@@ -124,6 +124,8 @@ jobs:
     # both branches, but the set is read from the checked-out ref's
     # scripts/ci/ignored_set_chain_store.sh, so each leg is judged by its
     # own tree; `workflow_dispatch` with `ref` proves one branch's set.
+    # The per-PR Rust job runs this script with `--check` and stops after
+    # that judgement.
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -225,6 +227,8 @@ jobs:
     # both branches, but the set is read from the checked-out ref's
     # scripts/ci/ignored_set_economics_sim.sh, so each leg is judged by its
     # own tree; `workflow_dispatch` with `ref` proves one branch's set.
+    # The per-PR Rust job runs this script with `--check` and stops after
+    # that judgement.
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -281,6 +285,8 @@ jobs:
     # Same matrix as above. The set is read from the checked-out ref's
     # scripts/ci/ignored_set_chain_ingest.sh, so each leg is judged by its
     # own tree; `workflow_dispatch` with `ref` proves one branch's set.
+    # The per-PR Rust job runs this script with `--check` and stops after
+    # that judgement.
     runs-on: ubuntu-latest
     timeout-minutes: 240
     strategy:
@@ -385,6 +391,7 @@ jobs:
     needs: [store-ignored, economics-sim-ignored, chain-ingest-ignored, wire-ignored, producer-gate]
     if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
     permissions:
       actions: read
       issues: write

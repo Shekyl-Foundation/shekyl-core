@@ -220,27 +220,33 @@ pub enum DiscardReason {
 /// enum, no `String` payload (PR 4 §5.4.7 R6 memory-amplifier closure
 /// carries to the watchdog stream verbatim).
 ///
-/// The first four variants project the kernel's decision surface
-/// ([`AlarmReason`](crate::engine::submit_watchdog::AlarmReason) plus the two
-/// driver-level conditions the kernel cannot represent). The
-/// `#[non_exhaustive]` discipline lets the F40 re-scan executor add its
-/// own alarm reasons additively.
+/// The kernel's reasons come first. The last two are driver-level
+/// conditions the kernel cannot represent. The `#[non_exhaustive]`
+/// discipline lets a later executor add its own alarm reasons.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WatchdogAlarmReason {
-    /// The probe found the tx present-but-unconfirmed past the escape
-    /// horizon: repeating the resubmit is pointless (F31), and the
-    /// censoring / eclipse case (§7.5) lands exactly here. Projects
-    /// [`AlarmReason::PresentButUnconfirmedPastHorizon`](crate::engine::submit_watchdog::AlarmReason::PresentButUnconfirmedPastHorizon).
-    PresentButUnconfirmedPastHorizon,
+    /// The daemon still holds the transaction past its own publication
+    /// budget. Projects
+    /// [`AlarmReason::HeldOverdue`](crate::engine::submit_watchdog::AlarmReason::HeldOverdue).
+    HeldOverdue,
 
-    /// Past horizon and the daemon reports no peers: relay is
-    /// impossible and no wallet action can fix it. Projects
+    /// Pool-resident, and the zone holds no origin row. Projects
+    /// [`AlarmReason::OriginUntracked`](crate::engine::submit_watchdog::AlarmReason::OriginUntracked).
+    OriginUntracked,
+
+    /// Published, and unmined past the fee ladder's lookback, measured
+    /// from the first observation of publication. Projects
+    /// [`AlarmReason::PublishedUnmined`](crate::engine::submit_watchdog::AlarmReason::PublishedUnmined).
+    PublishedUnmined,
+
+    /// The daemon reports no peers: relay is impossible and no wallet
+    /// action can fix it. Projects
     /// [`AlarmReason::DaemonPeerless`](crate::engine::submit_watchdog::AlarmReason::DaemonPeerless).
     DaemonPeerless,
 
-    /// Past horizon and the daemon was started offline: it relays nothing
-    /// by configuration. Projects
+    /// The daemon was started offline: it relays nothing by
+    /// configuration. Projects
     /// [`AlarmReason::DaemonOffline`](crate::engine::submit_watchdog::AlarmReason::DaemonOffline).
     DaemonOffline,
 
@@ -278,9 +284,8 @@ pub enum WatchdogProbeOutcome {
     /// through full admission and fresh relay. The wait restarts.
     ReofferedAfterAbsence,
 
-    /// `AlreadyInPool`: present-but-unconfirmed. No relay pulse (F31);
-    /// the alarm rung follows.
-    PresentInPool,
+    /// `AlreadyInPool`. The relay state is the daemon's, passed through.
+    InPool(shekyl_rpc_types::PoolRelay),
 
     /// `AlreadyInChain`: confirmation observed by verdict. Refresh
     /// remains the settlement authority; the wait epoch restarts.

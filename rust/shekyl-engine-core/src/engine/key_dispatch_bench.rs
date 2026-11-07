@@ -65,7 +65,7 @@ use shekyl_engine_state::{
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
-use shekyl_types::{BlockHeight, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use crate::engine::key_actor::KeyEngineHandle;
 use crate::engine::local_keys::LocalKeys;
@@ -108,7 +108,7 @@ fn build_output_paid_to(
     recipient: &AllKeysBlob,
     output_index: u64,
     amount: u64,
-    tx_hash: [u8; 32],
+    tx_hash: TxHash,
 ) -> OutputDetectionInput {
     let constructed = construct_output(
         &DISPATCH_BENCH_TX_KEY_SECRET,
@@ -182,10 +182,12 @@ impl KeyDispatchBenchHarness {
         let actor_blob = make_blob(DISPATCH_BENCH_SEED);
         let local = LocalKeys::from_test_seed(DISPATCH_BENCH_SEED);
 
-        let mine_input = build_output_paid_to(&actor_blob, 0, 1_337, [0x33u8; 32]);
+        let mine_input =
+            build_output_paid_to(&actor_blob, 0, 1_337, TxHash::from_bytes([0x33u8; 32]));
 
         let stranger = make_blob(DISPATCH_BENCH_STRANGER_SEED);
-        let not_mine_input = build_output_paid_to(&stranger, 0, 42, [0x44u8; 32]);
+        let not_mine_input =
+            build_output_paid_to(&stranger, 0, 42, TxHash::from_bytes([0x44u8; 32]));
 
         let handle = KeyEngineHandle::spawn(actor_blob);
 
@@ -271,7 +273,7 @@ impl KeyBaselineBenchFixture {
     pub fn new() -> Self {
         let blob = make_blob(DISPATCH_BENCH_SEED);
         let local = LocalKeys::from_test_seed(DISPATCH_BENCH_SEED);
-        let mine_input = build_output_paid_to(&blob, 0, 1_337, [0x33u8; 32]);
+        let mine_input = build_output_paid_to(&blob, 0, 1_337, TxHash::from_bytes([0x33u8; 32]));
         Self { local, mine_input }
     }
 
@@ -398,10 +400,18 @@ impl MergeProjectionBenchFixture {
             transfers.push(td);
         }
 
-        let tip = BlockchainTip::new(BlockHeight::from_raw(1_000_000), [0xAA; 32]);
+        let tip = BlockchainTip::new(
+            BlockHeight::from_raw(1_000_000),
+            BlockHash::from_bytes([0xAA; 32]),
+        );
         let reorg_blocks = ReorgBlocks {
             blocks: (999_990..=1_000_000)
-                .map(|h| (BlockHeight::from_raw(h), [(h & 0xff) as u8; 32]))
+                .map(|h| {
+                    (
+                        BlockHeight::from_raw(h),
+                        BlockHash::from_bytes([(h & 0xff) as u8; 32]),
+                    )
+                })
                 .collect(),
         };
         let ledger = LedgerBlock::new(transfers, tip, reorg_blocks);

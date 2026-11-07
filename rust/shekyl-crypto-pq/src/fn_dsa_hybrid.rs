@@ -791,7 +791,7 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_FN_DSA_1024,
                 &pk.to_canonical_bytes(),
                 &sig.to_canonical_bytes(),
-                b"tx hash",
+                &shekyl_types::SigningPayloadHash::from_bytes([0x7a; 64]),
             ),
             Err(PqcVerifyError::SchemeMismatch)
         );
@@ -801,7 +801,7 @@ mod tests {
                 crate::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk.to_canonical_bytes(),
                 &sig.to_canonical_bytes(),
-                b"tx hash",
+                &shekyl_types::SigningPayloadHash::from_bytes([0x7a; 64]),
             ),
             Err(PqcVerifyError::DeserializationFailed)
         );

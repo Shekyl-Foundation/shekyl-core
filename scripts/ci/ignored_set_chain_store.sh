@@ -32,11 +32,16 @@
 # count that judges it reads to the end of its input (a `grep -q` can end
 # the pipe early and fail `pipefail` on a match); the run's own exit is the
 # verdict and travels through no pipe.
+#
+# `--check` (ignored_set_mode.sh) stops after this judgement. The per-PR
+# Rust job uses it; the run below is the nightly lane.
 set -euo pipefail
+. "$(dirname "$0")/ignored_set_mode.sh"
+ignored_set_mode "$@"
 cd "$(dirname "$0")/../../rust"
 branch="${BRANCH:-the checked-out ref}"
 
-list=$(cargo test --locked --release -p shekyl-chain-store --lib -- --list --ignored)
+list=$(cargo test --locked "${ignored_set_profile[@]}" -p shekyl-chain-store --lib -- --list --ignored)
 for subject in \
   'store::prune_tests::the_boundary_batch_discards_closed_shards_on_real_spends' \
   'store::rt_w10_cost::rt_w10_coinbase_span_cost' \
@@ -51,6 +56,7 @@ do
 done
 count=$(printf '%s\n' "$list" | grep -c ': test$')
 echo "shekyl-chain-store ignored set: ${count} test(s)"
+ignored_set_stop_after_judgement
 
 START=$(date +%s)
 cargo test --locked --release -p shekyl-chain-store --lib -- --ignored --nocapture

@@ -31,6 +31,9 @@ permissions:
 jobs:
   floor:
     runs-on: [self-hosted, linux, aarch64]
+    # Never run, so no duration to size from: this is the platform default
+    # written down. Size it from the first run on the floor device.
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v5
       - name: owner cost per header

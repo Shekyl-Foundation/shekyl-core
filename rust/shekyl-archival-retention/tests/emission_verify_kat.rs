@@ -631,8 +631,13 @@ fn backing_rejects_bad_proof() {
     let fx = Fixture::new(E);
     let vin = honest_vin(&fx);
     assert!(matches!(
-        emission_vin_verify_backing(&vin, &[0u8; 32], 3, &TxSignableHash::from_bytes([0u8; 32]))
-            .unwrap_err(),
+        emission_vin_verify_backing(
+            &vin,
+            &shekyl_types::CurveTreeRoot::from_bytes([0u8; 32]),
+            3,
+            &TxSignableHash::from_bytes([0u8; 32])
+        )
+        .unwrap_err(),
         EmissionVerifyError::BackingRejected(_)
     ));
 }

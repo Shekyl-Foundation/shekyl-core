@@ -12,13 +12,16 @@
 //! and dropped does not cycle the log.
 //!
 //! Every wake reports here, including a wake that is stranded again. The
-//! report carries the kept count before this wake's own dial, and the
-//! address this wake drew, when it drew one. The episode ends on the
-//! first of these:
+//! report carries the sessions held before this wake's own dial. The
+//! episode ends on the first of these:
 //!
-//! - the kept count is higher than it was when the episode opened;
-//! - the connector is no longer under its target;
-//! - this wake drew an address the episode did not re-admit.
+//! - the connector holds more sessions than when the episode opened;
+//! - the connector holds its target.
+//!
+//! Sessions held, not the `Keep` count: a `Keep` dial in flight holds a
+//! target slot but is not a session, and may still fail. A draw is not an
+//! end either, whatever list the address came from: an address that thaws,
+//! is drawn and fails leaves the connector where it was.
 //!
 //! A session gained on the previous wake is visible on this one, and
 //! this one is often stranded itself: the dial finished, the new session
@@ -34,17 +37,15 @@ use shekyl_peerlist::{ConnectorId, NetworkAddress, Peerlist, Source, Tick};
 use super::Shared;
 
 /// Why a recovery episode ended. The leave line names this and no other
-/// reason: a risen kept count, a met target, and a foreign draw can all
-/// be true on one wake, and the first match is the one said.
+/// reason: a risen session count and a met target can both be true on one
+/// wake, and the first match is the one said.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RecoveryEnd {
-    /// A kept session was added after the episode opened.
+    /// A session was added after the episode opened.
     KeptRose,
-    /// The connector is no longer under its target. The kept count may
+    /// The connector is no longer under its target. The session count may
     /// be the one the episode opened with: the operator lowered the target.
     TargetReached,
-    /// This wake drew an address the episode did not re-admit.
-    ForeignCandidate,
 }
 
 impl RecoveryEnd {
@@ -52,34 +53,26 @@ impl RecoveryEnd {
         match self {
             Self::KeptRose => "a kept session was added",
             Self::TargetReached => "the connector is at its target",
-            Self::ForeignCandidate => "a candidate it did not re-admit was drawn",
         }
     }
 }
 
-/// The open episode: what the connector had when recovery started, which
-/// configured addresses it has put back, and which refusals it has said.
+/// The open episode: the sessions the connector held when recovery
+/// started, and which refusals it has said.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Recovery {
-    /// The kept count when the episode opened.
-    kept_at_entry: usize,
-    /// Configured addresses this episode put back on gray.
-    re_admitted: BTreeSet<NetworkAddress>,
+    /// The sessions held when the episode opened.
+    held_at_entry: usize,
     /// Configured addresses whose refusal this episode has said.
     refused: BTreeSet<NetworkAddress>,
 }
 
 impl Recovery {
-    fn open(kept_at_entry: usize) -> Self {
+    fn open(held_at_entry: usize) -> Self {
         Self {
-            kept_at_entry,
-            re_admitted: BTreeSet::new(),
+            held_at_entry,
             refused: BTreeSet::new(),
         }
-    }
-
-    fn note_re_admitted(&mut self, address: &NetworkAddress) {
-        self.re_admitted.insert(address.clone());
     }
 
     /// `true` the first time `address` is refused in this episode.
@@ -89,25 +82,15 @@ impl Recovery {
 
     /// `None` while this episode is still recovery.
     ///
-    /// A risen kept count wins over the target and over the draw: it is
-    /// the progress the episode exists to notice. The target is next, so
-    /// a wake that meets it by a lowered target is not described as a
-    /// foreign draw. A draw of an address this episode re-admitted, and
-    /// a wake that drew nothing, leave the episode open.
-    fn end(
-        &self,
-        kept: usize,
-        target: usize,
-        drawn: Option<&NetworkAddress>,
-    ) -> Option<RecoveryEnd> {
-        if kept > self.kept_at_entry {
+    /// A risen session count wins over the target: it is the progress the
+    /// episode exists to notice. A lost session leaves the episode open, so
+    /// a later return to the entry count does not look like a gain.
+    fn end(&self, held: usize, target: usize) -> Option<RecoveryEnd> {
+        if held > self.held_at_entry {
             return Some(RecoveryEnd::KeptRose);
         }
-        if kept >= target {
+        if held >= target {
             return Some(RecoveryEnd::TargetReached);
-        }
-        if drawn.is_some_and(|address| !self.re_admitted.contains(address)) {
-            return Some(RecoveryEnd::ForeignCandidate);
         }
         None
     }
@@ -115,21 +98,16 @@ impl Recovery {
 
 /// Close `episode` when this wake shows that recovery worked, and say why.
 ///
-/// `kept` is the count before this wake's dial. `drawn` is the address
-/// this wake drew, or `None` when it drew nothing — a recovery wake and
-/// an idle wake both pass `None`. Every wake calls this, so a stranded
-/// wake after a gained session is the wake that closes the episode.
+/// `held` is the sessions held before this wake's dial. Every wake calls
+/// this, so a stranded wake after a gained session is the wake that closes
+/// the episode.
 pub(in crate::owner) fn report_wake(
     episode: &mut Option<Recovery>,
     connector: ConnectorId,
-    kept: usize,
+    held: usize,
     target: usize,
-    drawn: Option<&NetworkAddress>,
 ) {
-    let Some(end) = episode
-        .as_ref()
-        .and_then(|open| open.end(kept, target, drawn))
-    else {
+    let Some(end) = episode.as_ref().and_then(|open| open.end(held, target)) else {
         return;
     };
     *episode = None;
@@ -138,12 +116,11 @@ pub(in crate::owner) fn report_wake(
 }
 
 /// Re-admit the closed network, or the configured seeds and `--add-peer`,
-/// as operator-named gray. Already seated is quiet, and covered by the
-/// episode. A refusal is said once
+/// as operator-named gray. Already seated is quiet. A refusal is said once
 /// per episode. The first call of an episode opens it and says so.
 ///
 /// Called after [`report_wake`] on a stranded wake. A wake that just
-/// closed the episode opens the next one here, with the kept count the
+/// closed the episode opens the next one here, with the session count the
 /// report already saw.
 pub(super) fn re_admit<R: RelayRng + ?Sized>(
     shared: &mut Shared,
@@ -156,24 +133,19 @@ pub(super) fn re_admit<R: RelayRng + ?Sized>(
         None => shared.configured.clone(),
     };
     let index = connector.index();
-    let kept = shared.attempts(connector).kept_count();
+    let held = shared.attempts(connector).held();
     let entering = shared.recovery[index].is_none();
-    let episode = shared.recovery[index].get_or_insert_with(|| Recovery::open(kept));
+    let episode = shared.recovery[index].get_or_insert_with(|| Recovery::open(held));
     let mut admitted = 0usize;
     for address in population
         .iter()
         .filter(|address| Peerlist::connector_of(address) == Some(connector))
     {
         match shared.lists.admit_gray(address, Source::Operator, now, rng) {
-            Ok(true) => {
-                admitted += 1;
-                episode.note_re_admitted(address);
-            }
+            Ok(true) => admitted += 1,
             // Already seated: cooling, outstanding or in a session (the gray
-            // lifecycle). The episode covers it, so drawing it once it is
-            // drawable again is still recovery, not "a candidate it did not
-            // re-admit" (shekyl-core-c0's review of #1174, item 3).
-            Ok(false) => episode.note_re_admitted(address),
+            // lifecycle).
+            Ok(false) => {}
             Err(refusal) => {
                 if episode.note_refused(address) {
                     tracing::warn!(
@@ -192,53 +164,29 @@ pub(super) fn re_admit<R: RelayRng + ?Sized>(
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
-
-    use shekyl_peerlist::NetworkAddress;
-
     use super::{Recovery, RecoveryEnd};
 
-    fn address(n: u8) -> NetworkAddress {
-        NetworkAddress::Ipv4 {
-            ip: Ipv4Addr::new(11, 15, 0, n),
-            port: 18080,
-        }
-    }
-
     #[test]
-    fn a_risen_kept_count_ends_the_episode_ahead_of_the_other_reasons() {
-        let mut episode = Recovery::open(1);
-        let own = address(1);
-        episode.note_re_admitted(&own);
-        // The target is met and the draw is an address this episode put
-        // back. The risen count is still the reason.
-        assert_eq!(episode.end(2, 2, Some(&own)), Some(RecoveryEnd::KeptRose));
+    fn a_risen_session_count_ends_the_episode_ahead_of_the_target() {
+        let episode = Recovery::open(1);
+        // The target is met too. The risen count is still the reason.
+        assert_eq!(episode.end(2, 2), Some(RecoveryEnd::KeptRose));
     }
 
     #[test]
     fn reaching_the_target_without_a_new_session_is_its_own_reason() {
         let episode = Recovery::open(1);
-        // A foreign draw on the same wake must not hide the met target.
-        assert_eq!(
-            episode.end(1, 1, Some(&address(2))),
-            Some(RecoveryEnd::TargetReached)
-        );
+        assert_eq!(episode.end(1, 1), Some(RecoveryEnd::TargetReached));
     }
 
     #[test]
-    fn a_foreign_draw_ends_the_episode_and_a_re_admitted_draw_does_not() {
-        let mut episode = Recovery::open(1);
-        let own = address(1);
-        episode.note_re_admitted(&own);
+    fn a_lost_session_leaves_the_episode_open() {
+        let episode = Recovery::open(1);
         let target = 4usize;
-        assert_eq!(
-            episode.end(1, target, Some(&address(2))),
-            Some(RecoveryEnd::ForeignCandidate)
-        );
-        assert_eq!(episode.end(1, target, Some(&own)), None);
-        assert_eq!(episode.end(1, target, None), None);
-        // A lost session is not recovery working. The episode stays open,
-        // so a later return to the entry count does not look like a gain.
-        assert_eq!(episode.end(0, target, None), None);
+        assert_eq!(episode.end(1, target), None);
+        // A lost session is not recovery working, and a return to the
+        // entry count is not a gain.
+        assert_eq!(episode.end(0, target), None);
+        assert_eq!(episode.end(1, target), None);
     }
 }

@@ -10,7 +10,7 @@
 //! The kernel is pure: facts in, one decision out. This module is the
 //! thin scheduler around those audited decisions — it projects the held
 //! set from the ledger's F14 locks, overlays the in-memory probe state
-//! the kernel doc anticipates (per-txid `probed_this_epoch` / wait-epoch
+//! the kernel doc anticipates (per-txid relay sight / wait-epoch
 //! baseline), fetches daemon health, runs the escape ladder per held tx,
 //! executes the rung-1 resubmit-same-bytes probe against the retained
 //! bytes, applies the probe outcome (including the §2.6 confirmed-absent
@@ -74,7 +74,7 @@
 use std::collections::{HashMap, HashSet};
 
 use shekyl_rpc_client::RejectCause;
-use shekyl_types::{BlockHeight, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use super::diagnostics::{PendingTxDiagnostic, WatchdogAlarmReason, WatchdogProbeOutcome};
 use super::local_pending_tx::RescanRequest;
@@ -98,7 +98,7 @@ use super::traits::{DaemonEngine, DaemonHealth, TxSubmitOutcome};
 pub(crate) trait WatchdogHost: Send + Sync {
     /// Project the current held-submit set from the ledger's F14 locks
     /// ([`submit_watchdog::held_submits`](super::submit_watchdog::held_submits)),
-    /// one fresh entry per awaited txid (`probed_this_epoch: false`).
+    /// one fresh entry per awaited txid (relay unread).
     fn held_submits(&self) -> Vec<HeldSubmit>;
 
     /// The wallet's current synced chain height — the horizon reference
@@ -108,7 +108,7 @@ pub(crate) trait WatchdogHost: Send + Sync {
     /// The ledger's stored block hash at `height`, or `None` when the
     /// height is outside the retained range. Used by the F40 executor's
     /// cheap hash-compare (decision 1).
-    fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]>;
+    fn block_hash_at(&self, height: BlockHeight) -> Option<BlockHash>;
 
     /// The retained network-exposed bytes for `tx_hash` (§5.3 decision
     /// 2), cloned for the resubmit-same-bytes probe. `None` means the
@@ -143,8 +143,9 @@ pub(crate) trait WatchdogHost: Send + Sync {
 /// [`tick`](Self::tick), not owned:
 ///
 /// - `overlay`: per-txid [`HeldSubmit`] state carried across ticks — the
-///   `probed_this_epoch` flag and the wait-epoch baseline the kernel
-///   advances on a `RestartWait`. Fresh projections seed missing entries;
+///   relay sight and the wait-epoch baseline the kernel
+///   advances when a resubmit or an in-chain observation moves the
+///   baseline. Fresh projections seed missing entries;
 ///   confirmed / released txids are reaped.
 /// - `alarmed`: the edge-trigger latch. Each held tx emits its **first**
 ///   alarm; subsequent ticks suppress re-emission (alarm-fatigue bound,
@@ -207,23 +208,19 @@ struct RescanTarget {
 /// persistently lying about confirmation, which no wallet action can
 /// remedy (the lock stays placed; F40-R1 is structural). Safe-adjustment
 /// bounds: at least 2 (a single transient must not trip), and small
-/// enough that the operator is alerted well before the escape horizon
-/// would independently alarm.
+/// enough that three persistent lies alert the operator. The ladder
+/// still asks on each of those ticks; the breaker is the signal that
+/// the confirmation claim is the lie.
 const FRUITLESS_RESCAN_BREAKER_THRESHOLD: u32 = 3;
 
 impl SubmitLifecycleDriver {
-    /// Construct a driver deriving the escape horizon from the consensus
-    /// `block_target_seconds` ([`WatchdogConfig::from_block_target`]).
-    ///
-    /// # Panics
-    ///
-    /// Panics on a broken consensus block target (zero, or large enough
-    /// to floor the horizon to zero blocks) — a broken consensus
-    /// constant is loud failure, not a runtime degradation
-    /// (`from_block_target`'s contract).
-    pub(crate) fn new(block_target_seconds: u64) -> Self {
+    /// Construct a driver at the production escape horizon
+    /// ([`WatchdogConfig::production`], the dispatched proof's life in
+    /// blocks, and the relay policy's lookback for a published
+    /// transaction).
+    pub(crate) fn new() -> Self {
         Self {
-            config: WatchdogConfig::from_block_target(block_target_seconds),
+            config: WatchdogConfig::production(),
             overlay: HashMap::new(),
             alarmed: HashSet::new(),
             rescan_targets: HashMap::new(),
@@ -290,9 +287,10 @@ impl SubmitLifecycleDriver {
     /// newly-held txids.
     ///
     /// `entry(..).or_insert(..)` preserves an existing overlay entry: a
-    /// `RestartWait` may have advanced its baseline past the F14 accept
-    /// height the fresh projection carries, and that higher baseline is
-    /// the live wait epoch.
+    /// resubmit or an in-chain observation may have advanced its baseline
+    /// past the F14 accept height the fresh projection carries, and that
+    /// higher baseline is the live wait epoch. The recorded relay sight
+    /// stays with it.
     ///
     /// Reaping the rescan target on projection-exit is the R2 breaker's
     /// success path: a tx that left the held set confirmed via refresh
@@ -427,7 +425,9 @@ impl SubmitLifecycleDriver {
             WatchdogStep::OperatorAlarm(reason) => {
                 self.raise_alarm(host, held.tx_hash, project_alarm(reason));
             }
-            WatchdogStep::ProbeResubmitSameBytes => self.probe(host, daemon, held, synced).await,
+            WatchdogStep::ProbeResubmitSameBytes => {
+                self.probe(host, daemon, held, synced, health).await
+            }
         }
     }
 
@@ -440,6 +440,7 @@ impl SubmitLifecycleDriver {
         daemon: &D,
         held: HeldSubmit,
         synced: u64,
+        health: DaemonHealth,
     ) {
         let Some(bytes) = host.held_bytes_for(&held.tx_hash) else {
             // Bytes gone (restart crossed the await, decision 2): the
@@ -466,12 +467,13 @@ impl SubmitLifecycleDriver {
             return;
         };
 
+        let verdict = classify_probe(outcome);
         host.emit(PendingTxDiagnostic::WatchdogProbeResolved {
             tx_hash: held.tx_hash,
-            outcome: probe_trace(outcome),
+            outcome: probe_trace(&verdict),
         });
 
-        match classify_probe(outcome) {
+        match verdict {
             ProbeVerdict::ReferenceStale => {
                 self.raise_alarm(
                     host,
@@ -480,27 +482,24 @@ impl SubmitLifecycleDriver {
                 );
             }
             ProbeVerdict::Kernel(kernel_outcome) => {
-                self.apply_kernel_outcome(host, held, kernel_outcome, synced);
+                self.apply_kernel_outcome(host, held, kernel_outcome, synced, health);
             }
         }
     }
 
-    /// Apply a kernel [`ProbeOutcome`] to the overlay and act on the
-    /// [`ProbeDisposition`].
+    /// Record a kernel [`ProbeOutcome`] and judge the sight it wrote.
+    ///
+    /// A probe the judgment asks for is the next chain advance, not a
+    /// second round-trip in this tick. Only an operator alarm acts now.
     fn apply_kernel_outcome(
         &mut self,
         host: &dyn WatchdogHost,
         held: HeldSubmit,
         outcome: ProbeOutcome,
         probe_height: u64,
+        health: DaemonHealth,
     ) {
-        let (disposition, next) = apply_probe_outcome(&held, outcome, probe_height);
-        match disposition {
-            ProbeDisposition::RestartWait | ProbeDisposition::KeepHolding => {
-                if let Some(next) = next {
-                    self.overlay.insert(next.tx_hash, next);
-                }
-            }
+        match apply_probe_outcome(&held, outcome, probe_height) {
             ProbeDisposition::ReleaseConfirmedAbsent => {
                 // §2.6 release path 2: the definite terminal verdict
                 // proves the tx never confirmed; release the F14 locks.
@@ -509,11 +508,14 @@ impl SubmitLifecycleDriver {
                 self.overlay.remove(&held.tx_hash);
                 self.alarmed.remove(&held.tx_hash);
             }
-            ProbeDisposition::Alarm(reason) => {
-                if let Some(next) = next {
-                    self.overlay.insert(next.tx_hash, next);
+            ProbeDisposition::Continue(next) => {
+                let tx_hash = next.tx_hash;
+                self.overlay.insert(tx_hash, next);
+                if let WatchdogStep::OperatorAlarm(reason) =
+                    escape_ladder_step(&next, probe_height, health, self.config)
+                {
+                    self.raise_alarm(host, tx_hash, project_alarm(reason));
                 }
-                self.raise_alarm(host, held.tx_hash, project_alarm(reason));
             }
         }
     }
@@ -550,7 +552,9 @@ fn classify_probe(outcome: TxSubmitOutcome) -> ProbeVerdict {
         TxSubmitOutcome::Submitted { .. } => {
             ProbeVerdict::Kernel(ProbeOutcome::ReofferedAfterAbsence)
         }
-        TxSubmitOutcome::AlreadyInPool { .. } => ProbeVerdict::Kernel(ProbeOutcome::PresentInPool),
+        TxSubmitOutcome::AlreadyInPool { relay, .. } => {
+            ProbeVerdict::Kernel(ProbeOutcome::InPool(relay))
+        }
         TxSubmitOutcome::AlreadyInChain { .. } => {
             ProbeVerdict::Kernel(ProbeOutcome::ConfirmedInChain)
         }
@@ -571,23 +575,22 @@ fn classify_probe(outcome: TxSubmitOutcome) -> ProbeVerdict {
     }
 }
 
-/// Project the daemon [`TxSubmitOutcome`] onto the observability trace
-/// enum (`WatchdogProbeResolved`).
-fn probe_trace(outcome: TxSubmitOutcome) -> WatchdogProbeOutcome {
-    match outcome {
-        TxSubmitOutcome::Submitted { .. } => WatchdogProbeOutcome::ReofferedAfterAbsence,
-        TxSubmitOutcome::AlreadyInPool { .. } => WatchdogProbeOutcome::PresentInPool,
-        TxSubmitOutcome::AlreadyInChain { .. } => WatchdogProbeOutcome::ConfirmedInChain,
-        TxSubmitOutcome::Rejected { cause, .. } => match cause {
-            RejectCause::Malformed
-            | RejectCause::FeeTooLow
-            | RejectCause::DoubleSpendConflict
-            | RejectCause::ConsensusRule
-            | RejectCause::Unrecognized => WatchdogProbeOutcome::RejectedTerminal,
-            RejectCause::StaleRoot
-            | RejectCause::ReferenceTooRecent
-            | RejectCause::ReferenceNotFound => WatchdogProbeOutcome::RejectedRetryable,
-        },
+/// Project one classified probe onto the observability trace
+/// (`WatchdogProbeResolved`). The classification is [`classify_probe`];
+/// this function does not classify again.
+fn probe_trace(verdict: &ProbeVerdict) -> WatchdogProbeOutcome {
+    match verdict {
+        ProbeVerdict::Kernel(ProbeOutcome::ReofferedAfterAbsence) => {
+            WatchdogProbeOutcome::ReofferedAfterAbsence
+        }
+        ProbeVerdict::Kernel(ProbeOutcome::InPool(relay)) => WatchdogProbeOutcome::InPool(*relay),
+        ProbeVerdict::Kernel(ProbeOutcome::ConfirmedInChain) => {
+            WatchdogProbeOutcome::ConfirmedInChain
+        }
+        ProbeVerdict::Kernel(ProbeOutcome::RejectedTerminal) => {
+            WatchdogProbeOutcome::RejectedTerminal
+        }
+        ProbeVerdict::ReferenceStale => WatchdogProbeOutcome::RejectedRetryable,
     }
 }
 
@@ -595,9 +598,9 @@ fn probe_trace(outcome: TxSubmitOutcome) -> WatchdogProbeOutcome {
 /// [`WatchdogAlarmReason`].
 fn project_alarm(reason: AlarmReason) -> WatchdogAlarmReason {
     match reason {
-        AlarmReason::PresentButUnconfirmedPastHorizon => {
-            WatchdogAlarmReason::PresentButUnconfirmedPastHorizon
-        }
+        AlarmReason::HeldOverdue => WatchdogAlarmReason::HeldOverdue,
+        AlarmReason::OriginUntracked => WatchdogAlarmReason::OriginUntracked,
+        AlarmReason::PublishedUnmined => WatchdogAlarmReason::PublishedUnmined,
         AlarmReason::DaemonPeerless => WatchdogAlarmReason::DaemonPeerless,
         AlarmReason::DaemonOffline => WatchdogAlarmReason::DaemonOffline,
     }

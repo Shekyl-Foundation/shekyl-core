@@ -1190,6 +1190,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-fcmp-proofs",
+ "shekyl-types",
  "thiserror",
  "tracing",
  "zeroize",
@@ -1202,6 +1203,7 @@ dependencies = [
  "libfuzzer-sys",
  "shekyl-curve-generators",
  "shekyl-fcmp",
+ "shekyl-types",
 ]
 
 [[package]]
@@ -1222,6 +1224,7 @@ dependencies = [
  "rand_chacha",
  "rand_core",
  "shekyl-curve-generators",
+ "shekyl-types",
  "std-shims",
  "zeroize",
 ]

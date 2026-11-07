@@ -21,6 +21,7 @@ use std::collections::BTreeSet;
 
 use shekyl_archival_retention::{challenge_leaf_index, SEGMENT_LEAF_COUNT};
 use shekyl_types::archival::COUNTED_DRAWS;
+use shekyl_types::BlockHash;
 
 /// The set of segment-leaf indices the challenge derivation names for one
 /// `(P, s, E)`, across all `COUNTED_DRAWS` of its draws.
@@ -43,7 +44,7 @@ fn named_leaf_indices(p_id: &[u8; 32], shard_id: u64, settlement_epoch: u64) -> 
             p_id,
             shard_id,
             settlement_epoch,
-            &prev_block_hash,
+            &BlockHash::from_bytes(prev_block_hash),
             SEGMENT_LEAF_COUNT,
         ));
     }

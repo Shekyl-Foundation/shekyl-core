@@ -1124,6 +1124,7 @@ version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
  "shekyl-crypto-pq",
+ "shekyl-types",
 ]
 
 [[package]]

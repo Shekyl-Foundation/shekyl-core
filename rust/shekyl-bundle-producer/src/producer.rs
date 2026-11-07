@@ -531,10 +531,8 @@ impl Producer {
                 let stream = draw.target.stream;
                 let j = draw.target.draw;
                 let nonce = match stream {
-                    PassStream::Economy => challenge_nonce(&seed, hash.as_bytes(), j, attempt),
-                    PassStream::Support => {
-                        support_challenge_nonce(&seed, hash.as_bytes(), j, attempt)
-                    }
+                    PassStream::Economy => challenge_nonce(&seed, &hash, j, attempt),
+                    PassStream::Support => support_challenge_nonce(&seed, &hash, j, attempt),
                 };
                 draw.state = DrawState::Reading { attempt };
                 let key = ReadKey {

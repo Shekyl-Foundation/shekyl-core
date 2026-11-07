@@ -6,10 +6,21 @@
 
 use libfuzzer_sys::fuzz_target;
 use shekyl_crypto_pq::multisig::verify_multisig;
+use shekyl_types::SigningPayloadHash;
+
+/// The message is a 64-byte signing payload hash, so the fuzzed surface is
+/// the key and signature blobs: whatever input is left after them fills the
+/// payload, zero-padded or cut to its width.
+fn payload(rest: &[u8]) -> SigningPayloadHash {
+    let mut bytes = [0u8; 64];
+    let take = rest.len().min(64);
+    bytes[..take].copy_from_slice(&rest[..take]);
+    SigningPayloadHash::from_bytes(bytes)
+}
 
 fuzz_target!(|data: &[u8]| {
     if data.is_empty() {
-        let _ = verify_multisig(0, &[], &[], &[]);
+        let _ = verify_multisig(0, &[], &[], &payload(&[]));
         return;
     }
 
@@ -17,7 +28,7 @@ fuzz_target!(|data: &[u8]| {
     let mut i = 1usize;
 
     if data.len() < i + 2 {
-        let _ = verify_multisig(scheme_id, &[], &[], &data[i..]);
+        let _ = verify_multisig(scheme_id, &[], &[], &payload(&data[i..]));
         return;
     }
 
@@ -30,7 +41,7 @@ fuzz_target!(|data: &[u8]| {
     i += key_take;
 
     if data.len() < i + 2 {
-        let _ = verify_multisig(scheme_id, key_blob, &[], &data[i..]);
+        let _ = verify_multisig(scheme_id, key_blob, &[], &payload(&data[i..]));
         return;
     }
 
@@ -42,6 +53,5 @@ fuzz_target!(|data: &[u8]| {
     let sig_blob = &data[i..i + sig_take];
     i += sig_take;
 
-    let message = &data[i..];
-    let _ = verify_multisig(scheme_id, key_blob, sig_blob, message);
+    let _ = verify_multisig(scheme_id, key_blob, sig_blob, &payload(&data[i..]));
 });
