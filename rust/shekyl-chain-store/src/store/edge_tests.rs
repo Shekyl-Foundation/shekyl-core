@@ -16,8 +16,9 @@ use shekyl_types::{BlockHeight, CurveTreeRoot, TreeLeaf};
 
 use super::connect_fixtures::{connect_chain, spend, spendable_prefix, Listed};
 use super::error::{EdgeFault, StoreInvariant};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
+use crate::test_paths::TestPath;
 use redb::ReadableTable;
 
 use crate::codec::{Canonical, CurveTreeState};
@@ -38,7 +39,7 @@ fn listing() -> Vec<Vec<Listed>> {
     listed
 }
 
-fn chain(name: &str) -> (std::path::PathBuf, ChainStore) {
+fn chain(name: &str) -> (TestPath, ChainStore) {
     let path = tmp(name);
     let store = ChainStore::create(&path, EPOCH).expect("create");
     connect_chain(&store, &listing());
@@ -55,7 +56,7 @@ fn summary(store: &ChainStore) -> CurveTreeState {
 
 #[test]
 fn a_run_of_pops_leaves_a_right_edge_its_children_rebuild_to() {
-    let (path, store) = chain("edge-clean");
+    let (_path, store) = chain("edge-clean");
     let before = summary(&store);
     assert!(before.leaf_count.to_raw() > POPS, "the run trims leaves");
     let out: Result<usize, TestErr> = store.write(|batch| Ok(batch.pop_many(POPS)?.len()));
@@ -73,21 +74,19 @@ fn a_run_of_pops_leaves_a_right_edge_its_children_rebuild_to() {
     assert!(store.connect_state().is_live());
     drop(snap);
     drop(store);
-    cleanup(&path);
 }
 
 #[test]
 fn popping_nothing_reads_nothing_and_succeeds() {
-    let (path, store) = chain("edge-zero");
+    let (_path, store) = chain("edge-zero");
     let out: Result<usize, TestErr> = store.write(|batch| Ok(batch.pop_many(0)?.len()));
     assert_eq!(out, Ok(0));
     drop(store);
-    cleanup(&path);
 }
 
 /// Three blocks, none of them past the unlock window, so nothing has
 /// drained: a pop leaves the empty tree, whose root is the empty root.
-fn undrained(name: &str) -> (std::path::PathBuf, ChainStore) {
+fn undrained(name: &str) -> (TestPath, ChainStore) {
     let path = tmp(name);
     let store = ChainStore::create(&path, EPOCH).expect("create");
     connect_chain(&store, &[Vec::new(), Vec::new(), Vec::new()]);
@@ -99,7 +98,7 @@ fn undrained(name: &str) -> (std::path::PathBuf, ChainStore) {
 
 #[test]
 fn popping_an_undrained_chain_holds_the_empty_root() {
-    let (path, store) = undrained("edge-empty-pop");
+    let (_path, store) = undrained("edge-empty-pop");
     let out: Result<usize, TestErr> = store.write(|batch| Ok(batch.pop_many(1)?.len()));
     assert_eq!(out, Ok(1));
     let state = summary(&store);
@@ -107,7 +106,6 @@ fn popping_an_undrained_chain_holds_the_empty_root() {
     assert_eq!(state.root, CurveTreeRoot::EMPTY);
     assert!(store.connect_state().is_live());
     drop(store);
-    cleanup(&path);
 }
 
 #[test]
@@ -157,7 +155,6 @@ fn an_empty_tree_whose_copies_agree_on_another_root_fails_the_root_arm() {
     };
     assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
     drop(store);
-    cleanup(&path);
 }
 
 /// Rewrite the leaf at `position` under the store's back (a raw redb
@@ -220,7 +217,6 @@ fn a_wrong_leaf_under_the_edge_halts_the_pop_run_at_the_leaf_chunk() {
         .recorded;
     assert_eq!(tip.map(|t| t.height.to_raw()), Some(TIP));
     drop(store);
-    cleanup(&path);
 }
 
 #[test]
@@ -255,7 +251,6 @@ fn an_off_curve_leaf_on_the_edge_names_the_leaves_table() {
         .recorded;
     assert_eq!(tip.map(|t| t.height.to_raw()), Some(TIP));
     drop(store);
-    cleanup(&path);
 }
 
 #[test]
@@ -296,5 +291,4 @@ fn a_summary_and_live_root_moved_together_fail_the_root_arm() {
     };
     assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
     drop(store);
-    cleanup(&path);
 }

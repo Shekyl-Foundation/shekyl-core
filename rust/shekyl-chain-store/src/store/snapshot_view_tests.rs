@@ -13,7 +13,7 @@ use shekyl_chain_rules::{AtHeight, ChainView, HeaderView};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, KeyImage, PCanonicalId};
 
 use super::super::conformance_tests::twin_chains;
-use super::super::store_tests::{cleanup, TestErr};
+use super::super::store_tests::TestErr;
 use super::SnapshotView;
 
 /// Every read the validator makes, at every probed height, rendered for
@@ -67,7 +67,7 @@ where
 
 #[test]
 fn the_snapshot_view_answers_every_read_as_the_batch_view_does() {
-    let (store, path, _mock, blocks) = twin_chains(5);
+    let (store, _path, _mock, blocks) = twin_chains(5);
     let hashes: Vec<BlockHash> = blocks
         .iter()
         .map(|b| b.block.hash())
@@ -91,5 +91,4 @@ fn the_snapshot_view_answers_every_read_as_the_batch_view_does() {
     ));
     drop(snapshot);
     drop(store);
-    cleanup(&path);
 }

@@ -4008,6 +4008,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",
@@ -4062,6 +4063,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "tempfile",
  "toml 0.8.23",
 ]
 
@@ -5105,6 +5107,7 @@ dependencies = [
  "shekyl-transport-layer",
  "shekyl-types",
  "shekyl-wire",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

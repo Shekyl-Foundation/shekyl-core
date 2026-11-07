@@ -62,7 +62,7 @@ use super::connect_fixtures::{
     at, candidate, candidate_over, judge_under, root_going_into, serve_credit, spends, Grown,
     Listed, FIRST_SPEND_HEIGHT,
 };
-use super::store_tests::{cleanup, tmp, TestErr};
+use super::store_tests::{tmp, TestErr};
 use super::*;
 use crate::codec::{
     Canonical, PropertyCell, PropertyCellBytes, Raw, SettlementEpochBlocks, UndoLogFloorCell,
@@ -434,7 +434,6 @@ fn the_join_length_the_model_assumes_is_the_chains() {
         JOIN_LEN,
         "the chain's join length moved — re-derive every table in this module"
     );
-    cleanup(&path);
 }
 
 /// A serve credit for slot `slot`'s persona, in `settlement_epoch`, whose
@@ -791,7 +790,6 @@ fn the_boundary_batch_discards_closed_shards_and_retires_undo_rows() {
     assert_eq!(rows.last(), Some(&(BASE + 300)));
     assert_eq!(rows.len(), 51);
     assert!(store.connect_state().is_live());
-    cleanup(&path);
 }
 
 /// Retained-ness from the model's discarded-ness.
@@ -949,7 +947,6 @@ fn the_boundary_batch_discards_closed_shards_on_real_spends() {
     assert_eq!((rows.first(), rows.last()), (Some(&floor), Some(&tip)));
     assert_eq!(rows.len(), usize::try_from(RETENTION + 1).expect("fits"));
     assert!(store.connect_state().is_live());
-    cleanup(&path);
 }
 
 #[test]
@@ -969,7 +966,6 @@ fn epochs_zero_and_one_run_no_batch() {
         "nothing retired: the floor is genesis"
     );
     assert_eq!(undo_rows(&store).len(), 151);
-    cleanup(&path);
 }
 
 #[test]
@@ -995,7 +991,6 @@ fn a_pop_below_the_undo_floor_is_a_refusal_not_si6() {
         "below the retained journal is a capability limit, loud"
     );
     assert!(store.connect_state().is_live(), "a refusal is not a halt");
-    cleanup(&path);
 }
 
 /// §4, §8: a reorg across the boundary block reconnects some block at
@@ -1021,7 +1016,6 @@ fn the_hook_is_idempotent_across_a_boundary_reorg() {
     assert_eq!((undo_floor_cell(&store), undo_rows(&store)), before);
     assert_eq!(prunable_state(&store, 0), Some(false));
     assert_eq!(prunable_state(&store, BASE + 65), Some(true));
-    cleanup(&path);
 }
 
 /// `h_scarce` (§4): the `close_height` of the last shard the calendar has
@@ -1065,7 +1059,6 @@ fn h_scarce_is_the_last_discarded_shards_close_height() {
             model.h_scarce(SEB, BASE + 300)
         )
     );
-    cleanup(&path);
 }
 
 /// The levered set for the ten-block schedule the `SHT-Q2` boundary and
@@ -1174,7 +1167,6 @@ fn the_store_records_each_length_and_the_running_total() {
         // `BASE + 21`'s two — the prefix's coinbases add nothing.
         assert_eq!(through, 3_300_000);
     }
-    cleanup(&path);
 }
 
 /// Shard 0 has closed by `BASE + 21` (`through == 3_300_000`, `W` is
@@ -1214,7 +1206,6 @@ fn a_closed_shard_is_the_indexed_fold_and_the_next_is_open() {
         ShardFold::Closed(_) => panic!("shard 1 is still open through BASE + 21"),
     }
     drop(snap);
-    cleanup(&path);
 }
 
 /// Scope 4 (a): a transaction starting **exactly** at `k·W` opens shard
@@ -1256,7 +1247,6 @@ fn a_transaction_starting_exactly_at_k_w_opens_shard_k() {
         body_states(&store),
         not(&b.model().discarded(SHORT_SEB, BASE + 30))
     );
-    cleanup(&path);
 }
 
 /// Scope 4 (b): the largest transaction CEN-H3 admits, straddling `2·W`,
@@ -1301,7 +1291,6 @@ fn a_maximal_transaction_straddling_a_boundary_belongs_to_the_shard_it_starts_in
         body_states(&store),
         not(&model.discarded(SHORT_SEB, BASE + 50))
     );
-    cleanup(&path);
 }
 
 /// Scope 4 (c): two shards closing inside one boundary's window are one
@@ -1354,7 +1343,6 @@ fn consecutive_boundaries_and_every_batch_match_the_model() {
         vec![1, 2],
         "consecutive"
     );
-    cleanup(&path);
 }
 
 /// Scope 4 (d): a reorg that pops back across a shard boundary and connects
@@ -1434,8 +1422,6 @@ fn a_reorg_back_across_a_shard_boundary_is_the_new_branchs_partition() {
         reorged_states,
         not(&f.model().discarded(SHORT_SEB, BASE + 70))
     );
-    cleanup(&path);
-    cleanup(&fresh_path);
 }
 
 /// Scope 4 (e): membership is the same question on a pruned store and an
@@ -1481,7 +1467,6 @@ fn pruned_and_unpruned_stores_place_every_shard_alike() {
         unpruned,
         (0..3).map(|k| model.ids_of(k)).collect::<Vec<_>>()
     );
-    cleanup(&path);
 }
 
 /// Build the ten-block chain to `BASE + to` and close the store, for a raw
@@ -1538,7 +1523,6 @@ fn a_decreasing_listed_total_refuses_the_boundary() {
             },
         }
     );
-    cleanup(&path);
 }
 
 /// The decrease the coinbase term can mask: listed `28 → 27` from height
@@ -1566,7 +1550,6 @@ fn a_decrease_smaller_than_the_coinbase_term_still_refuses_the_boundary() {
             },
         }
     );
-    cleanup(&path);
 }
 
 /// SI-13 on the archival fold: `D(14)` at `BASE + 40` samples `C(BASE +
@@ -1591,7 +1574,6 @@ fn a_decreasing_archival_total_refuses_the_boundary() {
             },
         }
     );
-    cleanup(&path);
 }
 
 /// SI-13 across the whole run the boundary reads, not at its samples
@@ -1632,7 +1614,6 @@ fn a_shifted_run_between_two_samples_refuses_the_boundary() {
         body_states(&store).iter().all(|&held| held),
         "no body was discarded"
     );
-    cleanup(&path);
 }
 
 /// SI-24 at every block the descent passes (Copilot, PR #910): a shift
@@ -1674,7 +1655,6 @@ fn a_shift_that_persists_through_the_window_refuses_the_boundary() {
     for id in BASE + 50..BASE + 79 {
         assert_eq!(prunable_state(&store, id), Some(true), "id {id} is held");
     }
-    cleanup(&path);
 }
 
 /// SI-24: the boundary at `BASE + 30` sums block `BASE + 19`'s length rows
@@ -1712,7 +1692,6 @@ fn a_length_row_that_disagrees_with_the_fold_refuses_the_boundary() {
             },
         }
     );
-    cleanup(&path);
 }
 
 /// Replace `block_info[height].cumulative_tx_count`. A raw write: the
@@ -1802,7 +1781,6 @@ fn a_malformed_undo_floor_cell_poisons_the_batch() {
         !store.connect_state().is_live(),
         "pop noted the tip as chain work, so the writer halts on the latch"
     );
-    cleanup(&path);
 }
 
 /// SPR-4: the persisted floor and the journal's first key record one fact,
@@ -1846,7 +1824,6 @@ fn a_journal_whose_first_row_is_not_the_floor_is_si6_at_pop_and_at_the_boundary(
         "the cell and the table disagree: SI-6, not a capability limit"
     );
     assert!(!store.connect_state().is_live(), "the writer halts on SI-6");
-    cleanup(&path);
 
     // The same gap, met by the boundary batch: connect to `BASE + 399`
     // under a clean journal, open the gap at the floor that `BASE + 400`
@@ -1895,7 +1872,6 @@ fn a_journal_whose_first_row_is_not_the_floor_is_si6_at_pop_and_at_the_boundary(
         "the boundary block did not connect"
     );
     assert!(!store.connect_state().is_live());
-    cleanup(&path);
 }
 
 /// SCW-7 as a refusal on both sides: `Horizons::new` refuses a retention
@@ -1952,7 +1928,6 @@ fn a_retention_below_the_in_force_cap_is_refused_at_open_and_at_connect() {
             .is_none(),
         "nothing connected"
     );
-    cleanup(&path);
 }
 
 /// SCW-2 at connect (DRS-E4 `ARW-15`): the in-force set's settlement epoch
@@ -1984,7 +1959,6 @@ fn a_set_naming_another_epoch_is_refused_at_connect() {
         ))
     );
     assert!(store.connect_state().is_live(), "a refusal is not a halt");
-    cleanup(&path);
 }
 
 /// `Horizons::under` is the set's own pair read back: the genesis set gives
@@ -2126,8 +2100,6 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
              in the domain after a prune"
         );
     }
-
-    cleanup(&path);
 }
 
 /// **`SHT-Q1` leg (f) for the serve-credit form, named.** The test above
@@ -2224,8 +2196,6 @@ fn a_connected_serve_credit_stays_in_the_domain_across_a_prune() {
         shekyl_wire::empty_region_prunable_hash(),
         "its prunable hash row records the region it had"
     );
-
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -2351,7 +2321,6 @@ fn the_window_is_the_rounds_and_the_boundary_before_it_has_no_floor() {
             .collect::<Vec<_>>(),
         "every boundary under the window ran, and none had a floor"
     );
-    cleanup(&path);
 }
 
 /// The first enforcement of `journal_horizon` (`PDM-Q-F19`): at the first
@@ -2458,7 +2427,6 @@ fn the_boundary_retires_slash_rows_below_the_floor_and_the_read_asserts_it() {
         "the same expression at the same height"
     );
     assert_eq!(slash_rows(&store), kept, "the same, already empty, range");
-    cleanup(&path);
 }
 
 /// A boundary past the first slash floor: the Release journal retires
@@ -2583,7 +2551,6 @@ fn the_boundary_retires_release_rows_and_settled_digests_below_the_floor() {
         (first_kept..=schedule.epoch_at_height(boundary)).collect::<Vec<_>>(),
         "drawable digests retire below the settling floor; the epoch at it stays"
     );
-    cleanup(&path);
 }
 
 /// A session that stubs `SlashLog` does not retire it (`ARW-9`). The
@@ -2630,7 +2597,6 @@ fn a_stubbed_slash_log_is_not_retired_at_the_boundary() {
         planted,
         "rows below the floor stay when the family is stubbed"
     );
-    cleanup(&path);
 }
 
 /// `SLK-2`'s falsifier: the floor is the rule set's cap, not the store's
@@ -2674,7 +2640,6 @@ fn a_deeper_undo_retention_moves_the_undo_floor_and_not_the_slash_floor() {
         "and not the slash floor's: the cap is the rule set's"
     );
     assert_eq!(slash_rows(&store), vec![(floor, 0)]);
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -2997,7 +2962,6 @@ fn each_per_epoch_table_retires_at_its_familys_floor_and_the_read_asserts_it() {
         floors
     );
     assert_eq!(retained(&store), after, "the same, already empty, ranges");
-    cleanup(&path);
 }
 
 /// A session that stubs a per-epoch table's family does not retire it
@@ -3040,5 +3004,4 @@ fn a_stubbed_per_epoch_family_is_not_retired_at_the_boundary() {
         Some(&claim),
         "an applied family is retired"
     );
-    cleanup(&path);
 }

@@ -240,7 +240,6 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
         panic!("aborted, not refused");
     };
     assert!(refused.contains("holds no digest"), "{refused}");
-    chain.finish();
 }
 
 /// An aborted switch inserts the other fork's set and does not adopt it.
@@ -313,7 +312,6 @@ fn an_aborted_switch_does_not_change_the_next_row() {
         next, reference[2],
         "A's next block counts A's set, not the set the aborted fork inserted"
     );
-    chain.finish();
 }
 
 /// Epoch 2's open through `through`, on a chain of its own. `with_memo`
@@ -325,7 +323,6 @@ fn rows_from_open(label: &str, through: u64, with_memo: bool) -> Vec<BlockDraws>
     let mut memo = DrawableMemo::new();
     let mut slot = if with_memo { Some(&mut memo) } else { None };
     let rows = connect_span(&mut chain, open, through, &mut slot);
-    chain.finish();
     rows
 }
 
@@ -519,7 +516,6 @@ fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
         next.shortfall, opened.shortfall,
         "E + 1's shortfall is untouched"
     );
-    chain.finish();
 }
 
 fn late_bundle(h: u64) -> Vec<Admitted> {

@@ -48,7 +48,7 @@ use super::connect_fixtures::{
     anchor, batch_root_going_into, body, candidate_over, connect_chain, credited, expected_seed,
     expected_target, priced, spendable_prefix, FixtureSubstrate, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
-use super::store_tests::{cleanup, inject_permit, issue_permit, tmp, TestErr, EPOCH};
+use super::store_tests::{inject_permit, issue_permit, tmp, TestErr, EPOCH};
 use super::view::BatchView;
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
@@ -289,7 +289,6 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
     assert_eq!(snap.budget_accruing(epoch(0)).expect("read"), before);
     drop(snap);
     drop(store);
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------- phase 9c
@@ -454,7 +453,6 @@ fn a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers() {
     }
     drop(snap);
     drop(store);
-    cleanup(&path);
 }
 
 // -------------------------------------------------------------- phase 5
@@ -511,7 +509,6 @@ fn the_empty_attestation_set_is_no_row_and_a_zero_count_sidecar_is_refused() {
     );
     drop(snap);
     drop(store);
-    cleanup(&path);
 }
 
 // ------------------------------------------------------- the injector
@@ -613,7 +610,6 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
     );
     drop(snap);
     drop(store);
-    cleanup(&path);
 }
 
 /// The door writes one family and does not skip: a session stubbing
@@ -636,7 +632,6 @@ fn the_injector_is_refused_when_serve_credits_are_stubbed() {
         "{err:?}"
     );
     drop(store);
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------- ARW-9
@@ -709,7 +704,6 @@ fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
     );
     drop(snap);
     drop(store);
-    cleanup(&path);
 }
 
 // ------------------------------------------------ CEN-J26 before a record
@@ -810,7 +804,6 @@ fn a_claim_with_a_filler_fee_proof_is_refused_at_j26_before_the_persisted_record
         },
     );
     drop(store);
-    cleanup(&path);
 }
 
 /// The draw-issue door (`SO-D10f`) beside the credit injector: Fakechain
@@ -922,7 +915,6 @@ fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_
     connect_empty(&store, &mut grown, RuleSet::GENESIS);
     pop(&store);
     assert_eq!(read(0), (vec![draw(0, false), draw(1, true)], digest));
-    cleanup(&path);
 }
 
 #[path = "block_draws_write_tests.rs"]

@@ -18,7 +18,7 @@ use shekyl_types::{BlockHeight, CurveTreeRoot, TreeLeaf, TreePosition};
 
 use super::connect_fixtures::connect_chain;
 use super::error::{CellFault, LeafDensity, StoreError, StoreInvariant};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::{Canonical, CurveTreeState, LeafCount, TreeDepth};
 use crate::schema::{CURVE_TREE_LEAVES, CURVE_TREE_META};
@@ -114,7 +114,6 @@ fn a_fresh_store_reads_the_empty_tree_as_a_row_not_a_default() {
         snap.leaves(pos(0)..pos(0)).expect("walk"),
         AtIndex::Recorded(Vec::new())
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -129,7 +128,6 @@ fn an_ungrown_chain_keeps_the_seal_summary_and_the_live_root_is_empty_too() {
         AtHeight::Recorded(live_root_after_three()),
         "the derived root of an ungrown tree is the empty tree, which the seal's summary claims"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -156,7 +154,6 @@ fn a_live_root_planted_beneath_the_seal_summary_is_si12() {
     let snap = store.begin_read().expect("read");
     let err = snap.curve_tree().expect_err("SI-12");
     assert!(is_root_diverged(&err), "{err}");
-    cleanup(&path);
 }
 
 #[test]
@@ -171,7 +168,6 @@ fn the_summary_is_the_planted_row_when_its_root_is_the_live_root() {
     assert_eq!(state, planted);
     assert_eq!(state.depth.fcmp_layers(), 3, "depth 2 ⇒ three proof layers");
     assert_eq!(state.leaf_count.next_position(), pos(3));
-    cleanup(&path);
 }
 
 #[test]
@@ -184,7 +180,6 @@ fn a_grown_summary_whose_root_is_not_the_live_root_is_si12() {
     let err = snap.curve_tree().expect_err("roots disagree");
     assert!(is_root_diverged(&err), "{err}");
     assert_eq!(StoreInvariant::SummaryRootDiverged.row(), 12);
-    cleanup(&path);
 }
 
 #[test]
@@ -199,7 +194,6 @@ fn a_grown_summary_on_an_empty_chain_is_si12() {
         .curve_tree()
         .expect_err("no tip, so the live root is EMPTY");
     assert!(is_root_diverged(&err), "{err}");
-    cleanup(&path);
 }
 
 #[test]
@@ -245,7 +239,6 @@ fn a_missing_summary_row_is_si7_absent_never_the_empty_tree() {
         ),
         "{err}"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -270,7 +263,6 @@ fn a_count_that_is_not_the_leaf_tables_length_is_si11_length() {
     // The walk names the missing position. The length belt does not.
     let err = snap.leaves(pos(0)..pos(3)).expect_err("a hole at 2");
     assert!(is_hole(&err, 2), "{err}");
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +282,6 @@ fn root_at_on_an_empty_chain_is_the_empty_tree_at_zero_and_above_tip_after() {
         snap.root_at(BlockHeight::from_raw(1)).expect("read"),
         AtHeight::AboveTip
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -327,7 +318,6 @@ fn root_at_reads_key_h_through_the_live_root_and_refuses_above_it() {
         Ok(())
     });
     assert_eq!(via_view, Ok(()));
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -372,7 +362,6 @@ fn leaves_walks_a_range_in_position_order_and_refuses_past_the_count() {
         snap.leaves(pos(2)..pos(1)).expect("walk"),
         AtIndex::Recorded(Vec::new())
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -411,5 +400,4 @@ fn a_hole_inside_the_count_is_si11_at_the_first_missing_position() {
         snap.tip().expect("tip").connect,
         super::halt::ConnectState::Live
     ));
-    cleanup(&path);
 }

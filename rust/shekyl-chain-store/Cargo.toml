@@ -102,6 +102,9 @@ shekyl-economics = { path = "../shekyl-economics" }
 # dependency of shekyl-chain-rules (rule 17); test-only here, for the same
 # reason as `shekyl-economics`.
 shekyl-fcmp = { path = "../shekyl-fcmp" }
+# Each test store's own directory (`test_paths.rs`), which takes the
+# store's sidecar files with it when the test ends.
+tempfile = { workspace = true }
 # The v7 cross-check corpus (`codec::archival_tests`) is JSON written by the
 # C++ unit test that still owns the decoder; read with the workspace's
 # serde_json (rule 17: already a workspace dependency, no new crate).

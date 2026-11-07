@@ -18,7 +18,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_types::{BlockHash, BlockHeight};
 
-use super::store_tests::{cleanup, tmp, EPOCH};
+use super::store_tests::{tmp, EPOCH};
 use super::*;
 use crate::codec::{Canonical, QueuedBody};
 use crate::schema::{ARCHIVAL_BUNDLE_BODY, ARCHIVAL_BUNDLE_QUEUE};
@@ -96,7 +96,6 @@ fn a_queued_bundle_reads_back_with_its_body_and_tip() {
     assert_eq!(read[1].body, body);
     assert_eq!((read[1].queued.tip_height, read[1].queued.tip_hash), tip());
     drop(store);
-    cleanup(&path);
 }
 
 /// One per `h`: the second offer for a height is refused and the first
@@ -141,7 +140,6 @@ fn one_bundle_per_height_and_a_body_that_is_not_its_references_is_refused() {
     );
     assert_eq!(entries(&store).len(), 1);
     drop(store);
-    cleanup(&path);
 }
 
 /// The bound: at `capacity` the next offer is refused. Removing an entry
@@ -175,7 +173,6 @@ fn the_queue_is_bounded_and_removal_takes_the_body() {
     assert_eq!(bodies, 2, "the removed entry's body went with it");
     queue(&store, 13).expect("room again");
     drop(store);
-    cleanup(&path);
 }
 
 /// The queue is persisted: a reopen reads what was queued. Red edit: keep
@@ -189,7 +186,6 @@ fn the_queue_survives_a_reopen() {
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     assert_eq!(entries(&store).len(), 1);
     drop(store);
-    cleanup(&path);
 }
 
 /// The open's reconcile drops a body no entry names and an entry whose
@@ -257,7 +253,6 @@ fn the_open_reconcile_drops_what_has_no_holder_and_says_so() {
         .expect("a count");
     assert_eq!(queue_rows, 1);
     drop(store);
-    cleanup(&path);
 }
 
 /// A body no entry names is SI-41 at the queue's read once the open has
@@ -293,7 +288,6 @@ fn a_body_without_a_holder_is_si_41() {
         "{refused:?}"
     );
     drop(store);
-    cleanup(&path);
 }
 
 /// A retip of a height the queue does not hold is SI-41, and catching it
@@ -347,5 +341,4 @@ fn a_swallowed_retip_of_an_absent_entry_poisons_and_leaves_the_writer_live() {
         .write(|_| Ok::<(), StoreError>(()))
         .expect("a later write proceeds");
     drop(store);
-    cleanup(&path);
 }

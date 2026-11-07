@@ -17,7 +17,7 @@ use super::connect_fixtures::{
     candidate, connect_chain_burning, connect_with_image_planted_under_the_token, spend,
     spend_paying, spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
+use super::store_tests::{tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::*;
 use crate::codec::{forged, BlockBody, Canonical, Raw, TotalBurnedCell};
 use crate::schema::{BLOCKS, BLOCK_INFO, SPENT_KEYS, UNDO_LOG};
@@ -137,7 +137,6 @@ fn pop_removes_the_tip_and_pops_a_reorg_depth_in_one_batch() {
     assert_eq!(out.map(|p| p.height), Ok(BlockHeight::from_raw(tip - 1)));
     assert_eq!(tip_height(&store), Some(tip - 2));
     assert!(store.connect_state().is_live());
-    cleanup(&path);
 }
 
 #[test]
@@ -152,7 +151,6 @@ fn pop_on_an_empty_chain_is_refused_not_fatal() {
         ))
     );
     assert!(store.connect_state().is_live(), "a refusal does not halt");
-    cleanup(&path);
 }
 
 #[test]
@@ -207,7 +205,6 @@ fn a_journal_whose_top_is_not_the_tip_is_si6_and_halts_the_writer() {
     drop(store);
     let reopened = ChainStore::create(&path, EPOCH).expect("reopen");
     assert!(reopened.connect_state().is_live());
-    cleanup(&path);
 }
 
 #[test]
@@ -253,7 +250,6 @@ fn a_poisoned_connect_halts_the_writer_but_a_probe_violation_does_not() {
         refused,
         Err(TestErr::Store(ref m)) if m.contains(&halted)
     ));
-    cleanup(&path);
 }
 
 /// SI-6's second arm is exact: an inverse that finds the key present but
@@ -313,7 +309,6 @@ fn a_row_rewritten_around_the_journal_makes_pop_si6_not_a_silent_repair() {
             .map(|g| g.value().bytes().to_vec()),
         Some(impostor)
     );
-    cleanup(&path);
 }
 
 /// A block recorded at the tip with no journal row is SI-6, not the pop
@@ -366,5 +361,4 @@ fn a_recorded_tip_with_no_journal_row_is_si6_not_the_floor() {
             },
         }
     );
-    cleanup(&path);
 }

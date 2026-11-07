@@ -11,7 +11,7 @@
 use redb::ReadableTableMetadata;
 
 use super::connect_fixtures::candidate;
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
+use super::store_tests::{tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::undo::Replayed;
 use super::*;
 use crate::codec::{
@@ -162,7 +162,6 @@ fn every_verb_journals_its_pre_image_in_write_order() {
     // The row's own insert is not in the row, and nothing before the
     // recording began is.
     assert!(row.0.iter().all(|e| e.table() != ord("undo_log")));
-    cleanup(&path);
 }
 
 #[test]
@@ -263,7 +262,6 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
         Ok(Replayed::NoRow),
         "below the floor there is nothing to pop"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -287,7 +285,6 @@ fn two_heights_in_one_batch_pop_in_lifo_order() {
         .expect("t")
         .is_empty()
         .expect("len"));
-    cleanup(&path);
 }
 
 #[test]
@@ -324,7 +321,6 @@ fn a_present_output_key_is_refused_not_journaled_and_the_first_row_survives_the_
     let amounts = snap.open_table(OUTPUT_AMOUNTS).expect("t");
     assert_eq!(amounts.len().expect("len"), 1);
     assert!(amounts.get(slot(0)).expect("g").is_some());
-    cleanup(&path);
 }
 
 #[test]
@@ -354,7 +350,6 @@ fn an_unsealed_recording_refuses_the_commit_and_lands_nothing() {
             .expect("len"),
         "nothing landed"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -380,7 +375,6 @@ fn sealing_over_a_recorded_height_is_si6_and_poisons_the_batch() {
         Err(TestErr::Store(StoreError::from(want).to_string()))
     );
     assert_eq!(want.row(), 6);
-    cleanup(&path);
 }
 
 /// Write a hand-built row at `height` with no recording live.
@@ -430,7 +424,6 @@ fn an_entry_whose_target_is_gone_is_si6() {
         undo_row(&store, 9).is_some(),
         "a refused replay lands nothing, the row stays"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -491,7 +484,6 @@ fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
     plant_row(&store, 5, &not_utf8.encode());
     let msg = replay_err(&store, 5);
     assert!(msg.contains("not UTF-8"), "{msg}");
-    cleanup(&path);
 }
 
 #[test]
@@ -521,7 +513,6 @@ fn a_probe_table_writes_freely_while_no_recording_is_live() {
     // And `properties` is catalogued, so the header's own cells are readable
     // through the same ordinal the journal would record.
     assert!(ordinal_of(redb::TableHandle::name(&PROPERTIES)).is_some());
-    cleanup(&path);
 }
 
 /// A row under `rule_set_in_force[5]`, written outside any recording, for the
@@ -582,7 +573,6 @@ fn a_remove_journals_its_prior_and_replay_restores_it() {
         "the prior is back"
     );
     assert!(undo_row(&store, 1).is_none(), "the row is consumed");
-    cleanup(&path);
 }
 
 /// An absent key is the belt the remove handle was opened with: refused,
@@ -613,7 +603,6 @@ fn removing_an_absent_key_is_the_bound_row_and_arms_the_batch() {
     );
     drop(snap);
     assert!(undo_row(&store, 1).is_none());
-    cleanup(&path);
 }
 
 /// SI-6 for the delete: replay of a `Removed` entry must find the key
@@ -662,7 +651,6 @@ fn a_key_present_at_the_undo_of_a_remove_is_si6_not_an_overwrite() {
         "the around-write is intact; nothing was repaired"
     );
     assert!(undo_row(&store, 1).is_some(), "the row is not consumed");
-    cleanup(&path);
 }
 
 /// The fourth verb: `replace` overwrites a present key and journals that
@@ -710,7 +698,6 @@ fn a_replace_journals_the_present_prior_and_replay_restores_it() {
         Some(RuleSetInForce(RuleSetId::from_raw(7)))
     );
     assert!(undo_row(&store, 1).is_none(), "the row is consumed");
-    cleanup(&path);
 }
 
 /// An absent key is the belt the replace handle was opened with: refused
@@ -747,7 +734,6 @@ fn replacing_an_absent_key_is_the_bound_row_and_arms_the_batch() {
     drop(snap);
     assert_eq!(rule_set_at_5(&store), None);
     assert!(undo_row(&store, 1).is_none());
-    cleanup(&path);
 }
 
 /// `insert_observing` reports the row for that key, not the row the handle
@@ -773,5 +759,4 @@ fn insert_observing_reports_the_row_for_that_key() {
     });
     assert!(out.is_err(), "an armed batch does not commit");
     assert_eq!(super::store_tests::probe_val(&store, "k"), None);
-    cleanup(&path);
 }

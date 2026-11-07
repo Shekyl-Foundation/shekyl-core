@@ -100,21 +100,7 @@ pub(super) fn issue_permit() -> shekyl_network::Permit {
         .expect("regtest's row permits it")
 }
 
-pub(super) fn tmp(name: &str) -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!(
-        "shekyl-chain-store-{}-{}-{:?}.redb",
-        name,
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    drop(std::fs::remove_file(&p));
-    p
-}
-
-pub(super) fn cleanup(path: &std::path::Path) {
-    drop(std::fs::remove_file(path));
-}
+pub(super) use crate::test_paths::tmp;
 
 #[test]
 fn a_store_defaults_to_full_apply_and_a_fresh_file_is_evidence() {
@@ -122,7 +108,6 @@ fn a_store_defaults_to_full_apply_and_a_fresh_file_is_evidence() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     assert_eq!(store.apply_policy(), ApplyPolicy::Full);
     assert!(store.provenance().is_parity_evidence());
-    cleanup(&path);
 }
 
 #[test]
@@ -160,7 +145,6 @@ fn declared_commit_policy_constants_are_pinned() {
     // `write` arms the transaction before it runs the closure, so reaching
     // the closure at all is the engine accepting the declared policy.
     assert_eq!(store.write(abort::<()>), Err(TestErr::Abort));
-    cleanup(&path);
 }
 
 #[test]
@@ -177,7 +161,6 @@ fn ok_from_the_closure_commits_and_the_value_comes_back() {
     let snap = store.begin_read().expect("read");
     let table = snap.open_table(PROBE).expect("open read");
     assert_eq!(table.get("k").expect("get").expect("present").value(), 1);
-    cleanup(&path);
 }
 
 #[test]
@@ -199,7 +182,6 @@ fn err_from_the_closure_aborts_and_nothing_lands() {
     store
         .write(|_| Ok::<(), StoreError>(()))
         .expect("a later write proceeds");
-    cleanup(&path);
 }
 
 #[test]
@@ -216,7 +198,6 @@ fn a_store_failure_converts_into_the_callers_error_type() {
             StoreError::Cannot(StoreCannot::ReadOnly).to_string()
         ))
     );
-    cleanup(&path);
 }
 
 // ------------------------------------------- two verbs, one poison
@@ -266,7 +247,6 @@ fn insert_lands_on_a_fresh_key_and_names_the_row_on_a_present_one() {
     store
         .write(|_| Ok::<(), StoreError>(()))
         .expect("a later write proceeds");
-    cleanup(&path);
 }
 
 #[test]
@@ -284,7 +264,6 @@ fn a_propagated_violation_reaches_the_caller_in_the_callers_type() {
     });
     assert_eq!(result, Err(TestErr::Store(PROBE_ROW.to_string())));
     assert_eq!(probe_val(&store, "k"), Some(1));
-    cleanup(&path);
 }
 
 #[test]
@@ -310,7 +289,6 @@ fn a_swallowed_violation_outvotes_a_different_err() {
     });
     assert_eq!(result, Err(TestErr::Store(PROBE_ROW.to_string())));
     assert_eq!(probe_val(&store, "k"), Some(1));
-    cleanup(&path);
 }
 
 #[test]
@@ -333,7 +311,6 @@ fn upsert_replaces_and_returns_the_displaced_value() {
         })
         .expect("commit");
     assert_eq!(probe_val(&store, "k"), Some(2));
-    cleanup(&path);
 }
 
 #[test]
@@ -352,7 +329,6 @@ fn a_second_live_batch_is_a_typed_error_not_a_deadlock() {
     store
         .write(|_| Ok::<(), StoreError>(()))
         .expect("after the outer batch is gone");
-    cleanup(&path);
 }
 
 #[test]
@@ -370,7 +346,6 @@ fn the_brand_unifies_within_one_batch_only() {
             Ok(())
         })
         .expect("commit");
-    cleanup(&path);
 }
 
 #[test]
@@ -410,7 +385,6 @@ fn a_second_batch_from_another_thread_is_refused_not_queued() {
         })
         .expect("holder commits");
     asker.join().expect("asker thread");
-    cleanup(&path);
 }
 
 #[test]
@@ -423,7 +397,6 @@ fn a_read_snapshot_is_allowed_while_a_write_is_live() {
             Ok(())
         })
         .expect("commit");
-    cleanup(&path);
 }
 
 #[test]
@@ -445,7 +418,6 @@ fn a_stubbed_family_cannot_open_its_table_on_a_write() {
             Ok(())
         })
         .expect("commit");
-    cleanup(&path);
 }
 
 #[test]
@@ -485,7 +457,6 @@ fn the_properties_table_has_no_raw_write_handle() {
         .expect("read")
         .open_table(crate::schema::PROPERTIES)
         .expect("raw read of properties is allowed");
-    cleanup(&path);
 }
 
 #[test]
@@ -502,7 +473,6 @@ fn a_read_only_store_refuses_at_the_single_refusal_point() {
         Err(StoreError::Cannot(StoreCannot::ReadOnly))
     ));
     store.begin_read().expect("read on a read-only store");
-    cleanup(&path);
 }
 
 // ------------------------------------------------ one file, one writer
@@ -538,7 +508,6 @@ fn a_second_writable_open_is_refused_while_a_writer_is_live() {
     );
     drop(live);
     ChainStore::create(&path, EPOCH).expect("reopen once the lock is released");
-    cleanup(&path);
 }
 
 #[test]
@@ -550,7 +519,6 @@ fn a_read_only_open_is_refused_while_a_writer_is_live() {
         production_horizons()
     )));
     drop(live);
-    cleanup(&path);
 }
 
 #[test]
@@ -563,7 +531,6 @@ fn a_writable_open_is_refused_while_a_reader_is_live() {
         "a reader's provenance is read once at open; a writer admitted behind it could widen the cell"
     );
     drop(reader);
-    cleanup(&path);
 }
 
 #[test]
@@ -577,7 +544,6 @@ fn two_read_only_handles_coexist() {
         .expect("second ro alongside the first");
     assert_eq!(first.provenance(), second.provenance());
     drop((first, second));
-    cleanup(&path);
 }
 
 #[test]
@@ -608,7 +574,6 @@ fn an_existing_file_that_is_not_a_store_is_refused_untouched() {
         bytes,
         "the reopen arm touched a file that is not a creation of its own"
     );
-    cleanup(&path);
 }
 
 /// The two shapes a power loss leaves before the engine has finished
@@ -655,8 +620,6 @@ fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
         )
         .unwrap_or_else(|e| panic!("{label}: reopens: {e:?}"));
         assert!(cut.is_none(), "{label}: an ordinary reopen");
-        cleanup(&path);
-        drop(std::fs::remove_file(&to));
     }
 }
 
@@ -684,8 +647,8 @@ fn two_openers_of_one_unfinished_file_finish_it_once() {
             )
         })
     };
-    let left = spawn(path.clone(), Arc::clone(&go));
-    let right = spawn(path.clone(), go);
+    let left = spawn(path.to_path_buf(), Arc::clone(&go));
+    let right = spawn(path.to_path_buf(), go);
     let results = [left.join().expect("left"), right.join().expect("right")];
     let mut finished = 0;
     let mut busy = 0;
@@ -718,8 +681,6 @@ fn two_openers_of_one_unfinished_file_finish_it_once() {
     )
     .expect("reopen");
     assert!(cut.is_none(), "the file is a store now");
-    cleanup(&path);
-    drop(std::fs::remove_file(&to));
 }
 
 /// A zero-filled file of the initialization length, and a young store
@@ -762,6 +723,5 @@ fn a_file_that_only_looks_unfinished_is_refused_untouched() {
             "{}",
             path.display()
         );
-        cleanup(path);
     }
 }

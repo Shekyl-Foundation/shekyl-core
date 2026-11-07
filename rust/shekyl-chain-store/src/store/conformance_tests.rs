@@ -56,8 +56,9 @@ use super::connect_fixtures::{
     batch_root_going_into, candidate, candidate_over, endow_genesis, grown_over, judge, priced,
     root_going_into, FixtureSubstrate, FIRST_SPEND_HEIGHT,
 };
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
+use crate::test_paths::TestPath;
 use shekyl_chain_rules::EpochFloor;
 
 /// One judgement, projected to what both views must agree on. The two
@@ -213,7 +214,7 @@ where
 /// the cumulative work the validator derived for each block (read back off
 /// the verdict the store connected and the store it connected into — the
 /// record both views must then agree on).
-pub(super) fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Candidate>) {
+pub(super) fn twin_chains(len: u64) -> (ChainStore, TestPath, MockChain, Vec<Candidate>) {
     let path = tmp(&format!("conformance-{len}"));
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let mut mock = MockChain::default();
@@ -431,7 +432,7 @@ fn every_landed_rule_judges_identically_over_batch_view_and_the_mock() {
     // (the spend shapes run; the tree has grown, so B5 and I12 read a
     // non-empty root on both views).
     for len in [0u64, 1, 12, FIRST_SPEND_HEIGHT] {
-        let (store, path, mock, blocks) = twin_chains(len);
+        let (store, _path, mock, blocks) = twin_chains(len);
         let genesis = blocks
             .first()
             .map(|b| b.block.hash())
@@ -472,7 +473,6 @@ fn every_landed_rule_judges_identically_over_batch_view_and_the_mock() {
         let expected = if len >= FIRST_SPEND_HEIGHT { 7 + 2 } else { 7 };
         assert_eq!(checked, expected, "every shape ran at len {len}");
         drop(store);
-        cleanup(&path);
     }
 }
 
@@ -484,7 +484,7 @@ fn a_drifted_mock_is_caught_by_the_comparison() {
     // shape a SCW-19 keying drift takes once roots differ per height —
     // disagrees with the real view on the well-formed candidate: the store
     // passes it, the drifted mock refuses it on B5.
-    let (store, path, mock, blocks) = twin_chains(3);
+    let (store, _path, mock, blocks) = twin_chains(3);
     let mut drifted = MockChain::default();
     for (h, b) in blocks.iter().enumerate() {
         let h = h as u64;
@@ -525,12 +525,11 @@ fn a_drifted_mock_is_caught_by_the_comparison() {
     );
     assert_ne!(real, mocked, "the comparison goes red on a drifted mock");
     drop(store);
-    cleanup(&path);
 }
 
 #[test]
 fn a_stale_seed_is_stale_over_both_views() {
-    let (store, path, mock, _) = twin_chains(3);
+    let (store, _path, mock, _) = twin_chains(3);
     let wrong = BlockHash::from_bytes([0xbb; 32]);
     let cand = candidate(3, mock.tip().expect("blocks").hash, Vec::new());
     let (real, mocked) = both(&store, &mock, cand, &Env::FIXTURE, wrong);
@@ -540,7 +539,6 @@ fn a_stale_seed_is_stale_over_both_views() {
         "{real:?}"
     );
     drop(store);
-    cleanup(&path);
 }
 
 /// What the header rules read off a recorded block through
@@ -617,7 +615,7 @@ fn the_mock_view_and_the_batch_view_answer_the_same_reads() {
     // projection — a view whose `header_at` answered from a different
     // record than its `block_at` would pass the first check and fail the
     // second.
-    let (store, path, mock, blocks) = twin_chains(5);
+    let (store, _path, mock, blocks) = twin_chains(5);
     let real: Result<HeightReads, TestErr> = store.write(|batch| Ok(reads(&batch.chain_view())?));
     let real = real.expect("reads");
     let mocked = mock.with_view(|view| match reads(&view) {
@@ -815,7 +813,6 @@ fn the_mock_view_and_the_batch_view_answer_the_same_reads() {
     assert_eq!(real_archival.expect("reads"), mocked_archival);
     assert_eq!(mocked_archival, ArchivalReads::EMPTY);
     drop(store);
-    cleanup(&path);
 }
 
 /// Every archival read, asked once, at one persona / shard / epoch / height
@@ -889,7 +886,7 @@ fn the_harness_fixtures_are_the_same_shape_the_store_fixtures_build() {
     // judged the same over the mock. Guards against the harness's
     // `candidate_on` and the store's `candidate` drifting into different
     // header conventions that would make the comparison above vacuous.
-    let (store, path, mock, blocks) = twin_chains(2);
+    let (store, _path, mock, blocks) = twin_chains(2);
     let from_store = fixture::repriced(&mock, candidate(2, blocks[1].block.hash(), Vec::new()));
     let from_harness = fixture::candidate_on(&mock, Vec::new());
     assert_eq!(
@@ -915,5 +912,4 @@ fn the_harness_fixtures_are_the_same_shape_the_store_fixtures_build() {
     assert_eq!(real, mocked);
     assert!(matches!(real, Outcome::Valid { .. }), "{real:?}");
     drop(store);
-    cleanup(&path);
 }

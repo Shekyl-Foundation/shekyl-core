@@ -178,7 +178,6 @@ fn a_trees_seats_over_an_epoch_are_its_c_slots_at_each_width() {
         widths.len() >= 2,
         "the chain passes through two archive widths: {widths:?}"
     );
-    seated.chain.finish();
 }
 
 /// The first height of `epoch` whose row seats someone.
@@ -242,7 +241,6 @@ fn a_past_blocks_roster_reads_as_written_at_connect() {
         Err(TestErr::Abort)
     });
     assert!(matches!(out, Err(TestErr::Abort)));
-    chain.finish();
 }
 
 /// The first height after `epoch`'s open that its schedule seats a tree
@@ -331,7 +329,6 @@ fn a_seat_row_that_is_not_the_schedule_is_si_43() {
             refused.contains(&format!("{persona:?}")),
             "{label}: {refused}"
         );
-        chain.finish();
     }
 }
 
@@ -359,7 +356,6 @@ fn a_pop_removes_the_seat_row_and_the_reconnect_restores_it() {
     let again: Vec<Option<SupportSeats>> = (h..=tip).map(|at| seat_row(&chain, at)).collect();
     assert_eq!(again, rows, "the reconnect writes the same rows");
     assert!(rows[0].as_ref().is_some_and(|row| !row.is_empty()));
-    chain.finish();
 }
 
 /// The producer's support draws over the store's view are the verifier's
@@ -446,5 +442,4 @@ fn the_producers_support_draws_are_the_verifiers_observations() {
         Err(TestErr::Abort)
     });
     assert!(matches!(out, Err(TestErr::Abort)));
-    chain.finish();
 }

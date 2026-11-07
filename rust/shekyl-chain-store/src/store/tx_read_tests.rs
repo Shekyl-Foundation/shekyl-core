@@ -16,7 +16,7 @@ use super::connect_fixtures::{
     body, connect_chain_anchored, credited, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, HeldRegion, StoreError, StoreInvariant};
-use super::store_tests::{cleanup, tmp, EPOCH};
+use super::store_tests::{tmp, EPOCH};
 use super::*;
 use crate::codec::{stored_timelock, Canonical, Coded, Raw, TxIndex, TxPrunedSegment};
 use crate::ids::TxStorageId;
@@ -109,7 +109,6 @@ fn tx_location_is_some_for_a_recorded_hash_and_none_for_an_unknown_one() {
         ConnectState::Live,
         "a read never arms the halt"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -129,7 +128,6 @@ fn tx_count_is_the_dense_id_space_coinbases_included() {
         snap.tx_archival_good(id(TX_COUNT - 1)).expect("read"),
         AtIndex::Recorded(_)
     ));
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------- T3
@@ -179,7 +177,6 @@ fn tx_record_carries_the_permanent_half_and_recomposes_the_wire_bytes() {
             .expect("read"),
         None
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -218,7 +215,6 @@ fn a_recorded_transaction_missing_its_prunable_hash_row_is_si7_not_a_log_line() 
         .expect_err("T4 refuses the same file");
     assert!(is_si7_absent(&err, "txs_prunable_hash"), "got {err:?}");
     assert_eq!(store.connect_state(), ConnectState::Live);
-    cleanup(&path);
 }
 
 #[test]
@@ -364,7 +360,6 @@ fn a_half_held_archival_good_is_si42_and_a_pqc_segment_without_its_row_is_si7() 
         .tx_archival_good(tx_id)
         .expect_err("segment without its hash row");
     assert!(is_si7_absent(&err, "txs_pqc_auth_hash"), "got {err:?}");
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------- T4
@@ -430,7 +425,6 @@ fn tx_archival_good_is_retained_below_the_count_beyond_count_at_it_and_discarded
         .expect("recorded");
     assert_eq!(record.prunable_hash, plain.txid_parts().prunable_hash);
     assert_eq!(store.connect_state(), ConnectState::Live);
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------- T5
@@ -490,7 +484,6 @@ fn tx_output_indices_is_dense_bound_first_and_a_hole_is_si9() {
         ),
         "a hole below the dense count is SI-9, got {err:?}"
     );
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------- T6
@@ -545,7 +538,6 @@ fn tx_locations_walks_tx_indices_in_key_order_and_agrees_with_tx_location_row_fo
         .collect::<Result<_, _>>()
         .expect("decodes");
     assert!(inverted.is_empty());
-    cleanup(&path);
 }
 
 // ------------------------------------------------ the primary row (round 1)
@@ -603,7 +595,6 @@ fn a_missing_primary_row_below_the_count_is_si9_on_every_by_id_read_whatever_the
     let err = snap.tx_record(&hash_of(&plain)).expect_err("primary hole");
     assert!(is_si7_absent(&err, "txs_pruned"), "got {err:?}");
     assert_eq!(store.connect_state(), ConnectState::Live);
-    cleanup(&path);
 }
 
 #[test]
@@ -685,7 +676,6 @@ fn an_index_id_at_or_past_the_count_is_si9_on_every_hash_read_even_with_a_stray_
         si9, 1,
         "MAX is included and classified, not dropped by an exclusive end"
     );
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------------- STX-9

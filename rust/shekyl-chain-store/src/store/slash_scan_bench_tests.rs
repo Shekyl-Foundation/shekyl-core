@@ -136,10 +136,11 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Transaction};
 
 use super::connect_fixtures::{Grown, Listed, FIRST_SPEND_HEIGHT};
-use super::store_tests::{cleanup, tmp, TestErr};
+use super::store_tests::{tmp, TestErr};
 use super::*;
 use crate::archival_snapshot::{hex, ArchivalSnapshot, SnapshotFamily};
 use crate::codec::{Canonical, SettlementEpochBlocks, SlashLogEntry};
+use crate::test_paths::TestPath;
 use shekyl_chain_rules::EpochFloor;
 
 const SEB: u64 = 100;
@@ -450,7 +451,8 @@ fn mean(timings: &[Timing]) -> Timing {
 /// asserts and then reads the timings.
 struct SlashedChain {
     store: ChainStore,
-    path: std::path::PathBuf,
+    /// The store's directory, removed when this drops (after the store).
+    _path: TestPath,
     personas: u64,
     /// `M`, the slashing epoch's raw value.
     m: u64,
@@ -551,7 +553,7 @@ impl SlashedChain {
         );
         Self {
             store,
-            path,
+            _path: path,
             personas,
             m,
             slashing_height,
@@ -787,11 +789,6 @@ impl SlashedChain {
         let back = ArchivalSnapshot::read_body(&mut body.as_slice()).expect("reads");
         assert_eq!(back, got);
     }
-
-    fn finish(self) {
-        drop(self.store);
-        cleanup(&self.path);
-    }
 }
 
 /// `keccak256(body)` of the `0x04` body at the witness's slashing tip
@@ -903,7 +900,6 @@ fn slash_writes_land_at_the_m_epoch_deadline() {
     chain.assert_nothing_slashed_before_m();
     chain.assert_slashed();
     chain.assert_snapshot_pins_the_slash_families();
-    chain.finish();
 }
 
 #[test]
@@ -949,7 +945,6 @@ fn slash_scan_bench() {
         "  slashing judge / ordinary judge = {:.2}",
         slashing.judge.as_secs_f64() / ordinary.judge.as_secs_f64().max(f64::EPSILON)
     );
-    chain.finish();
 }
 
 #[path = "settlement_slash_tests.rs"]

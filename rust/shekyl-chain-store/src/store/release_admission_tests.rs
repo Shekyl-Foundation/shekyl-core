@@ -16,7 +16,7 @@ use shekyl_chain_rules::{GenesisConflict, GenesisPin};
 use shekyl_types::{BlockHash, BlockHeight};
 
 use super::connect_fixtures::connect_chain;
-use super::store_tests::{cleanup, production_horizons, tmp, EPOCH};
+use super::store_tests::{production_horizons, tmp, EPOCH};
 use super::*;
 use crate::apply_policy::ApplyPolicy;
 use crate::redb_recovery::{bytes_and_mtime, mark_recovery_required};
@@ -75,7 +75,6 @@ fn an_empty_file_agrees_with_a_public_table() {
     let store = released(&path, &pin).expect("an empty file contradicts nothing");
     let tip = store.begin_read().expect("read").tip().expect("tip");
     assert!(tip.recorded.is_none());
-    cleanup(&path);
 }
 
 /// Red if the open compares the pin to anything other than the recorded
@@ -96,7 +95,6 @@ fn a_file_whose_genesis_is_the_pin_opens() {
     assert_eq!(tip.height, BlockHeight::ZERO);
     assert_eq!(tip.hash, recorded[0]);
     assert_eq!(pin_of(&pin), recorded[0]);
-    cleanup(&path);
 }
 
 /// Red if admission ignores the table it was given, reports one network's
@@ -127,7 +125,6 @@ fn a_foreign_genesis_is_refused_on_every_public_network() {
     assert_ne!(pinned[0], pinned[1]);
     assert_ne!(pinned[0], pinned[2]);
     assert_ne!(pinned[1], pinned[2]);
-    cleanup(&path);
 }
 
 /// Red if admission runs only after the writable open: a writable open
@@ -152,7 +149,6 @@ fn a_foreign_genesis_is_refused_with_the_file_untouched() {
         before,
         "a refused store keeps its bytes and its modification time"
     );
-    cleanup(&path);
 }
 
 /// A foreign store a crash left needing recovery cannot be judged on a
@@ -186,7 +182,6 @@ fn a_foreign_genesis_that_needs_repair_is_repaired_then_refused_with_its_chain_i
         "nothing lost: its own chain is intact"
     );
     drop(store);
-    cleanup(&path);
 }
 
 /// Red if `create` starts admitting. The synthetic id is not a public pin,
@@ -206,7 +201,6 @@ fn an_unpinned_create_keeps_a_synthetic_genesis() {
         .recorded
         .expect("block 0");
     assert_eq!(tip.hash, recorded[0]);
-    cleanup(&path);
 }
 
 /// Red if `GenesisPin::NONE` is treated as a public table. Fakechain
@@ -224,7 +218,6 @@ fn an_empty_table_agrees_with_a_synthetic_genesis() {
         .recorded
         .expect("block 0");
     assert_eq!(tip.hash, recorded[0]);
-    cleanup(&path);
 }
 
 /// Red if the reader twin skips admission, or if it refuses a file whose
@@ -245,5 +238,4 @@ fn a_reader_admits_the_same_pins() {
     let store = ChainStore::open_read_only_with_genesis(&path, production_horizons(), &matching)
         .expect("a reader opens a file that carries the pin");
     assert!(store.is_read_only());
-    cleanup(&path);
 }

@@ -24,17 +24,7 @@ use crate::store::{
     EngineError, ErrorClass, PoolCannot, StoreCannot, StoreInvariant, DURABILITY, TWO_PHASE_COMMIT,
 };
 
-fn tmp(name: &str) -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!(
-        "shekyl-pool-store-{}-{}-{:?}.redb",
-        name,
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    drop(std::fs::remove_file(&p));
-    p
-}
+use crate::test_paths::tmp;
 
 fn txid(n: u8) -> TxHash {
     TxHash::from_bytes([n; 32])
@@ -87,7 +77,6 @@ fn create_then_open_then_every_read_on_the_empty_file() {
     drop(store);
     let (_store, how) = PoolStore::create(&path).unwrap();
     assert_eq!(how, PoolOpen::Opened);
-    drop(std::fs::remove_file(&path));
 }
 
 #[test]
@@ -140,7 +129,6 @@ fn insert_publish_remove_and_their_refusals() {
     store.write(|b| b.remove(&h)).unwrap();
     store.write(|b| b.remove(&h)).unwrap();
     assert_eq!(store.begin_read().unwrap().len().unwrap(), 0);
-    drop(std::fs::remove_file(&path));
 }
 
 #[test]
@@ -158,7 +146,6 @@ fn an_err_from_the_closure_aborts_the_whole_batch() {
         0,
         "nothing landed"
     );
-    drop(std::fs::remove_file(&path));
 }
 
 #[test]
@@ -187,7 +174,6 @@ fn entries_enumerate_in_key_order_with_blobs_on_demand() {
     let public = entries.iter().filter(|e| e.record.public).count();
     assert_eq!(public, 2);
     assert_eq!(snap.len().unwrap(), 3);
-    drop(std::fs::remove_file(&path));
 }
 
 /// SI-16, both directions, named by the read that found it.
@@ -256,7 +242,6 @@ fn an_unpaired_entry_is_si16() {
     store
         .write(|b| b.insert(txid(3), &admitted(), b"three"))
         .unwrap();
-    drop(std::fs::remove_file(&path));
 }
 
 #[test]
@@ -285,7 +270,6 @@ fn an_undecodable_meta_row_is_si7() {
         }
         other => panic!("expected SI-7, got {other:?}"),
     }
-    drop(std::fs::remove_file(&path));
 }
 
 /// `SPL-Q8`: a sealed pool file at another version is recreated; a file
@@ -431,7 +415,6 @@ fn another_version_recreates_and_everything_else_is_refused() {
         // Judged on a read-only open: a writable one would have written
         // the engine's allocator state into the file as it closed.
         assert_eq!(bytes_and_mtime(&path), before, "{label}: refused unwritten");
-        drop(std::fs::remove_file(&path));
     }
 
     // (4) Not a redb database at all: refused, kept, byte for byte.
@@ -444,7 +427,6 @@ fn another_version_recreates_and_everything_else_is_refused() {
         "{err:?}"
     );
     assert_eq!(bytes_and_mtime(&path), before, "refused unwritten");
-    drop(std::fs::remove_file(&path));
 }
 
 /// A reader holding the file stops a recreate, and the file stays byte for
@@ -506,7 +488,6 @@ fn a_live_reader_stops_a_recreate_and_the_file_stays() {
     );
     assert_eq!(store.begin_read().unwrap().len().unwrap(), 0);
     drop(store);
-    drop(std::fs::remove_file(&path));
 }
 
 /// A cleanly shut-down file with redb's recovery bit set is `RepairAborted`
@@ -541,7 +522,6 @@ fn a_recovery_bit_reopens_the_committed_row() {
         Some(b"kept".as_slice())
     );
     drop(store);
-    drop(std::fs::remove_file(&path));
 }
 
 /// A layout recreate overwrites the old file before unlinking it (S7): the
@@ -560,7 +540,6 @@ fn the_old_file_is_overwritten_before_it_is_unlinked() {
         after.iter().all(|b| *b == 0),
         "nothing of the old file remains"
     );
-    drop(std::fs::remove_file(&path));
 }
 
 /// A recreate interrupted at any step leaves a pool that opens (Copilot,
@@ -630,7 +609,6 @@ fn an_interrupted_recreate_leaves_a_pool_that_opens() {
     ));
     assert_eq!(std::fs::read(&path).unwrap(), b"not a pool");
     assert!(!discard(&path).exists());
-    drop(std::fs::remove_file(&path));
 }
 
 /// What a power loss between the engine's first commit and the seal leaves
@@ -656,7 +634,6 @@ fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
     drop(store);
     let (_store, how) = PoolStore::create(&path).expect("reopens");
     assert_eq!(how, PoolOpen::Opened);
-    drop(std::fs::remove_file(&path));
 }
 
 /// The two shapes a power loss leaves before the engine has finished
@@ -682,8 +659,6 @@ fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
         drop(store);
         let (_store, how) = PoolStore::create(&path).unwrap();
         assert_eq!(how, PoolOpen::Opened, "{label}");
-        drop(std::fs::remove_file(&path));
-        drop(std::fs::remove_file(&to));
     }
 }
 
@@ -705,8 +680,8 @@ fn two_openers_of_one_unfinished_pool_finish_it_once() {
             PoolStore::create(&path)
         })
     };
-    let left = spawn(path.clone(), Arc::clone(&go));
-    let right = spawn(path.clone(), go);
+    let left = spawn(path.to_path_buf(), Arc::clone(&go));
+    let right = spawn(path.to_path_buf(), go);
     let results = [left.join().unwrap(), right.join().unwrap()];
     let mut finished = 0;
     let mut busy = 0;
@@ -729,8 +704,6 @@ fn two_openers_of_one_unfinished_pool_finish_it_once() {
     assert_eq!(std::fs::read(&to).unwrap(), b"");
     let (_store, how) = PoolStore::create(&path).unwrap();
     assert_eq!(how, PoolOpen::Opened);
-    drop(std::fs::remove_file(&path));
-    drop(std::fs::remove_file(&to));
 }
 
 /// A zero-filled file of the initialization length, and a sealed pool
@@ -757,6 +730,5 @@ fn a_file_that_only_looks_unfinished_is_refused_untouched() {
             path.display()
         );
         assert_eq!(std::fs::read(path).unwrap(), bytes, "{}", path.display());
-        drop(std::fs::remove_file(path));
     }
 }

@@ -16,7 +16,7 @@ use super::connect_fixtures::{
     prefix_to, spend, spendable_prefix, Grown, FIRST_SPEND_HEIGHT,
 };
 use super::error::{StoreError, StoreInvariant};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::Canonical;
 use crate::ids::OutputSlot;
@@ -112,7 +112,6 @@ fn has_key_image_is_true_for_a_spent_image_and_false_otherwise_on_one_snapshot()
             "key image {image:02x?}: membership is exact, `bool` is the shape"
         );
     }
-    cleanup(&path);
 }
 
 #[test]
@@ -142,7 +141,6 @@ fn has_key_image_on_the_snapshot_and_in_the_batch_are_one_body() {
         from_batch.expect("batch"),
         "the validator's view and the read snapshot answer from one body"
     );
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------ S-OUT-KI K2
@@ -176,7 +174,6 @@ fn key_images_yields_exactly_the_connected_set() {
         "the scan is the connected set, no more and no less — compared as a set, \
          because the digest consumer is order-insensitive and no other consumer exists"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -189,7 +186,6 @@ fn key_images_on_an_empty_chain_is_an_empty_scan_not_an_error() {
         0,
         "the seal creates `spent_keys` (amendment A2), so an empty chain scans as empty"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -222,7 +218,6 @@ fn a_snapshot_sees_one_committed_state_across_a_concurrent_connect() {
         .has_key_image(&KeyImage::from_bytes(later))
         .expect("read"));
     assert_eq!(fresh.key_images().expect("open").count(), 2);
-    cleanup(&path);
 }
 
 // --------------------------------------------------------- S-OUT-KI O1 / O2
@@ -276,7 +271,6 @@ fn output_is_recorded_at_every_index_below_the_count_and_beyond_count_from_it() 
         snap.output(gi(u64::MAX)).expect("read"),
         AtIndex::BeyondCount
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -324,7 +318,6 @@ fn output_origin_is_the_global_read_and_agrees_with_output_on_every_index() {
             .expect("decodes");
         assert_eq!(record.output_id.to_raw(), i, "two counters, one output");
     }
-    cleanup(&path);
 }
 
 #[test]
@@ -369,7 +362,6 @@ fn a_hole_below_the_output_count_is_si9_not_beyond_count() {
     // The read never armed the writer (the halt is the writer's state).
     assert_eq!(store.connect_state(), ConnectState::Live);
     let _ = store;
-    cleanup(&path);
 }
 
 #[test]
@@ -416,7 +408,6 @@ fn a_row_whose_output_id_disagrees_with_its_slot_is_si9_not_served() {
         snap.output(gi(0)).expect("read"),
         AtIndex::Recorded(_)
     ));
-    cleanup(&path);
 }
 
 #[test]
@@ -458,7 +449,6 @@ fn a_stray_row_at_or_beyond_the_count_is_beyond_count_not_served() {
         snap.output_origin(gi(OUTPUT_COUNT)).expect("read"),
         AtIndex::BeyondCount
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -496,5 +486,4 @@ fn a_missing_output_txs_row_below_the_count_is_si9_whatever_output_amounts_holds
         ),
         "got {err:?}"
     );
-    cleanup(&path);
 }

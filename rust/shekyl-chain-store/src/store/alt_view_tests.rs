@@ -20,7 +20,7 @@ use shekyl_types::{BlockHash, BlockHeight};
 
 use super::alt_tests::{admitted, alt, h, plant, side_block, side_candidate, with_witness};
 use super::connect_fixtures::connect_chain;
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 
 /// `BatchView::header_at(h)` — the main-chain read the stitched view must
@@ -103,9 +103,7 @@ fn the_orphan_is_unlinked_at_the_first_unheld_hash() {
     );
     drop(snap);
     drop(empty);
-    cleanup(&empty_path);
     drop(store);
-    cleanup(&path);
 }
 
 #[test]
@@ -166,7 +164,6 @@ fn a_chain_through_two_alt_entries_reaches_a_recorded_row() {
     }
     drop(snap);
     drop(store);
-    cleanup(&path);
 }
 
 #[test]
@@ -258,7 +255,6 @@ fn the_alt_view_is_the_recorded_chain_below_the_fork_and_the_entries_above() {
     );
     drop(snap);
     drop(store);
-    cleanup(&path);
 }
 
 #[test]
@@ -299,5 +295,4 @@ fn a_row_whose_height_disagrees_with_its_chain_is_si7() {
     );
     drop(snap);
     drop(store);
-    cleanup(&path);
 }

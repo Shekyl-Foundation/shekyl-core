@@ -503,7 +503,6 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
         text.contains("does not contain"),
         "an index past D is not a memo miss: {text}"
     );
-    prepared.chain.finish();
 }
 
 /// Genesis answers its commitment, and a bundle that does not open it is
@@ -551,7 +550,6 @@ fn a_bundle_for_genesis_is_refused_at_j33() {
         Ok(())
     });
     out.expect("the view answered");
-    chain.finish();
 }
 
 /// An empty memo on a connected open is SI-35, not an absent set.
@@ -577,7 +575,6 @@ fn a_memo_miss_is_the_sequencing_fault() {
         panic!("the batch admitted");
     };
     assert!(text.contains("SI-35"), "{text}");
-    chain.finish();
 }
 
 /// Settlement's index-vs-digest compare passes after the admission, and
@@ -601,7 +598,6 @@ fn the_digest_check_closes_on_an_admitted_bundle() {
         Ok(())
     });
     out.expect("the pass settles");
-    prepared.chain.finish();
 
     let mut tampered = prepare("admit-digest-tamper");
     let (admitted, _) = admit(&mut tampered);
@@ -649,7 +645,6 @@ fn the_digest_check_closes_on_an_admitted_bundle() {
         Ok(())
     });
     out.expect("the refusal");
-    tampered.chain.finish();
 }
 
 /// A fresh memo at an epoch's open still answers the previous epoch. The
@@ -669,5 +664,4 @@ fn a_cold_memo_at_the_open_holds_the_prior_epoch() {
         Ok(())
     });
     out.expect("the prior epoch is in the memo");
-    chain.finish();
 }
