@@ -408,13 +408,18 @@ async fn the_miner_extends_the_chain_block_after_block() {
 /// every hash is a block, so the chain's blocks come a second apart, and
 /// the target climbs as the slow window slides out: over the next window
 /// it passes one hundred (the integer model gives 260 at block `N`).
-/// Real RandomX through the production substrate, the workers' search and
-/// the connector's door; the scenario's clock is the only thing scripted.
-/// Red edit: drop step 10, and the first template is never built.
+///
+/// Real RandomX throughout: each nonce is hashed under the cache the
+/// production substrate pinned and judged by `check_hash`, and every block
+/// goes through the connector's door, whose substrate verifies it again.
+/// The search is this test's own loop, not the miner's workers: they run
+/// at the lowest priority by design, and the subject here is the
+/// difficulty, not the miner. The scenario's clock is the only thing
+/// scripted. Red edit: drop step 10, and the first template is never
+/// built.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "real RandomX, about 2,600 hashes over a window; run by nightly.yml's chain-ingest-ignored job"]
+#[ignore = "real RandomX, about 2,700 hashes over a window; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_chain_at_the_difficulty_floor_mines_its_way_back() {
-    let _lane = MINER_LANE.lock().await;
     let caches = Arc::new(CacheStore::new());
     let pow = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
     let substrate = pow.clone();
@@ -429,36 +434,36 @@ async fn a_chain_at_the_difficulty_floor_mines_its_way_back() {
         .await;
     s.space_blocks(core::num::NonZeroU64::MIN);
 
-    let board = Arc::new(JobBoard::new());
-    let (sink, found) = found_blocks();
-    let miner = Miner::start(
-        &MinerConfig {
-            address: MiningAddress::decode(&harness_address(), Network::Mainnet)
-                .expect("the harness address"),
-            threads: NonZeroUsize::new(2).expect("two"),
-            bound: SearchBound::Unbounded,
-        },
-        Arc::clone(&board),
-        Arc::clone(&caches),
-        shekyl_hash_budget::Budget::of_host(),
-        sink,
-    )
-    .expect("the workers start");
+    let began = Instant::now();
     let mut targets = Vec::new();
+    let mut hashes = 0u64;
     for _ in 0..=shekyl_difficulty::N {
         let mut next = s.next_template(Vec::new()).await.expect("a template");
-        targets.push(next.target.difficulty());
+        let target = next.target.difficulty();
+        targets.push(target);
         pin_job_seed(&substrate, &caches, &next);
-        board.publish(job_for(&next));
-        let block = found.recv_timeout(FIND_WITHIN).expect("a block is found");
-        next.template.block = block.block;
+        let cache = caches
+            .lookup(&Seedhash::from_bytes(*next.seed.as_bytes()))
+            .expect("the seed is pinned");
+        let block = &mut next.template.block;
+        loop {
+            hashes += 1;
+            if check_hash(&compute_hash(&cache, &block.pow_blob()), target) {
+                break;
+            }
+            block.header.nonce = block.header.nonce.wrapping_add(1);
+        }
         let height = next.height;
         s.connect_template(next)
             .await
             .unwrap_or_else(|outcome| panic!("block {height:?} connects: {outcome}"));
     }
-    miner.stop().join();
     s.close().await;
+    eprintln!(
+        "floor: {} blocks, {hashes} hashes, {:?}; targets {targets:?}",
+        targets.len(),
+        began.elapsed()
+    );
 
     assert_eq!(
         targets.first(),
