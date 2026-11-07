@@ -35,7 +35,7 @@ jobs:
   build-windows-msys2:
     name: 'Windows (MSYS2)'
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 45  # p90 22.0 min over 8 runs
     env:
       CCACHE_TEMPDIR: C:\Users\runneradmin\.ccache-temp
       CCACHE_DIR: C:\Users\runneradmin\.ccache
@@ -64,7 +64,7 @@ jobs:
   build-arch:
     name: 'Arch Linux'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 60  # p90 29.6 min over 8 runs
     container:
       image: archlinux:latest
     steps:

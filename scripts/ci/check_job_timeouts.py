@@ -10,7 +10,7 @@ runner for six hours and reports nothing until then; on a self-hosted
 runner it holds the device. On 2026-11-06, 33 of the 63 jobs had no
 value, among them every job in `build.yml` and `rust-audit-test.yml`.
 Each was sized at about twice its p90 over its recent successful runs,
-with a 10-minute floor. A workflow states its exceptions beside the value.
+with a 10-minute floor; the figure used is written beside each value.
 
 What passes: every job without a reusable `uses` has `timeout-minutes` as
 a whole number from 1 to 360. An expression is refused, because this gate
@@ -20,9 +20,11 @@ their own file.
 Scope: the live workflows (`.yml`, `.yaml`). A `.disabled` file does not
 run; renaming it back makes it live, and the PR that does so runs this.
 
-Rule 47: a workflows directory with fewer step jobs than on 2026-11-06 is a
-missing subject, not a pass. A deleted workflow lowers the count, and the
-PR that deletes it lowers `MIN_STEP_JOBS` with it.
+Rule 47, per file rather than by a global count: every live workflow
+must parse and contribute at least one job, graded or a reusable call. A
+parser that silently saw nothing, or a file whose jobs went missing, fails
+by name; deleting a whole workflow needs no edit here. An empty or missing
+workflows directory fails too.
 """
 
 from __future__ import annotations
@@ -41,14 +43,13 @@ LIVE_SUFFIXES = (".yml", ".yaml")
 # The platform's cap; a value above it is not honoured.
 MAX_MINUTES = 360
 
-# Step jobs in the live workflows on 2026-11-06.
-MIN_STEP_JOBS = 62
-
 
 def problems_in(filename: str, doc: object) -> tuple[list[str], int]:
     """The problems in one parsed workflow, and how many step jobs it has."""
     if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
         return [f"{filename}: no jobs mapping"], 0
+    if not doc["jobs"]:
+        return [f"{filename}: no jobs, so nothing in it is graded"], 0
     problems: list[str] = []
     graded = 0
     for name, job in doc["jobs"].items():
@@ -85,25 +86,24 @@ def check_tree() -> int:
         return 1
     problems: list[str] = []
     graded = 0
-    for filename in sorted(os.listdir(WORKFLOWS)):
-        if not filename.endswith(LIVE_SUFFIXES):
-            continue
+    live = [name for name in sorted(os.listdir(WORKFLOWS)) if name.endswith(LIVE_SUFFIXES)]
+    if not live:
+        problems.append(f"job timeouts: no live workflow in {WORKFLOWS}")
+    for filename in live:
         with open(os.path.join(WORKFLOWS, filename), encoding="utf-8") as handle:
-            doc = yaml.load(handle, Loader=StrictLoader)
+            try:
+                doc = yaml.load(handle, Loader=StrictLoader)
+            except yaml.YAMLError as error:
+                problems.append(f"{filename}: does not parse, so nothing in it is graded: {error}")
+                continue
         found, count = problems_in(filename, doc)
         problems.extend(found)
         graded += count
-    if graded < MIN_STEP_JOBS:
-        problems.append(
-            f"job timeouts: {graded} step jobs graded, fewer than the "
-            f"{MIN_STEP_JOBS} on 2026-11-06; a workflow went missing, or one "
-            "was deleted without lowering MIN_STEP_JOBS"
-        )
     for problem in problems:
         print(f"::error::{problem}")
     if problems:
         return 1
-    print(f"job timeouts: {graded} step jobs, each with its own timeout")
+    print(f"job timeouts: {len(live)} workflows, {graded} step jobs, each with its own timeout")
     return 0
 
 
@@ -117,6 +117,7 @@ def selftest() -> int:
         ("above the cap", {"jobs": {"a": {"timeout-minutes": 361}}}, 1),
         ("a reusable call", {"jobs": {"a": {"uses": "./.github/workflows/b.yml"}}}, 0),
         ("no jobs", {"on": "push"}, 1),
+        ("an empty jobs mapping", {"on": "push", "jobs": {}}, 1),
     ]
     failed = 0
     for label, doc, want in cases:

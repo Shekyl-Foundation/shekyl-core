@@ -78,7 +78,7 @@ jobs:
   verify:
     name: tor integration — pin + live lifecycle (${{ matrix.target.label }})
     runs-on: ${{ matrix.target.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 30  # p90 11.3 min (the slowest leg, macos-aarch64, 6 runs)
     strategy:
       fail-fast: false
       matrix:

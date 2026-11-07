@@ -72,7 +72,7 @@ jobs:
   changes:
     name: 'Change scope (rust)'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 10  # p90 0.6 min over 23 runs; the floor
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
     steps:

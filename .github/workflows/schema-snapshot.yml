@@ -97,7 +97,7 @@ jobs:
   assert-snapshots:
     name: "Assert committed schema snapshots"
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 10  # p90 3.5 min over 22 runs; the floor
     steps:
       - uses: actions/checkout@v5
 
@@ -157,7 +157,7 @@ jobs:
   enforce-version-bump:
     name: "Enforce paired block_version bump"
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 10  # p90 0.6 min over 24 runs; the floor
     steps:
       - uses: actions/checkout@v5
         with:

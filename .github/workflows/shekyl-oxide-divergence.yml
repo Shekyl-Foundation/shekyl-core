@@ -19,7 +19,7 @@ jobs:
   compare-upstream-tip:
     name: Compare vendored crypto snapshot to fork tip
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 10  # p90 0.1 min over 12 runs; the floor
     steps:
       - uses: actions/checkout@v5
       - name: Read vendored snapshot metadata

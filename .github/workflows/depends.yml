@@ -61,7 +61,7 @@ jobs:
   legs:
     name: 'Depends legs'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 10  # p90 0.9 min over 24 runs; the floor
     outputs:
       legs: ${{ steps.legs.outputs.legs }}
     steps:
@@ -80,7 +80,7 @@ jobs:
     needs: legs
     if: needs.legs.outputs.legs != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    timeout-minutes: 70  # slowest leg 30.7 min over 2 runs (Cross-Mac x86_64)
     # A nightly red reaches a human: the on-failure step opens or comments
     # on a tracking issue (the slow-gate nightly's route).
     permissions:

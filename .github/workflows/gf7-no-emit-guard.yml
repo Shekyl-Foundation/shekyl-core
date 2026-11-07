@@ -63,7 +63,7 @@ jobs:
   no-emit-guard:
     name: "GF-7 hooks: dependency-graph + feature containment"
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 10  # p90 0.8 min over 23 runs; the floor
     steps:
       - uses: actions/checkout@v5
 
