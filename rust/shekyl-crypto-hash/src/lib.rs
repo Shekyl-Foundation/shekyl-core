@@ -3,11 +3,11 @@
 //! Two primitives, two jobs, and the split is the point:
 //!
 //! - [`keccak256`] — **Keccak-256, for existing pinned contracts
-//!   only.** Two caller classes, both closed: (a) outputs that must be
-//!   byte-identical to the Monero-descended C++ daemon — `prefix_hash`,
-//!   the transaction tree hash, block IDs, `pqc_signing_payload_hashes`; (b) cross-party
-//!   multisig contracts with no C++
-//!   mirror but multiple independent signers pinned to these bytes by spec —
+//!   only.** Two caller classes, both closed: (a) consensus outputs whose
+//!   bytes are pinned by KAT — `prefix_hash`, the transaction tree hash,
+//!   block IDs, `pqc_signing_payload_hashes`; (b) cross-party multisig
+//!   contracts with no consensus role but multiple independent signers
+//!   pinned to these bytes by spec —
 //!   `intent_hash` / the chain-state fingerprint (`shekyl-multisig/src/intent.rs`).
 //!   Class (b) migrates to cSHAKE only via its owning spec, never unilaterally
 //!   (FOLLOWUPS, "residual consensus-parity Keccak"). They are un-domained
@@ -23,13 +23,13 @@
 //! SHA3-256 (0x06) share a permutation and a rate and differ in one byte — so an
 //! independent implementer reading "Keccak-256" has a coin-flip, and the failure is
 //! silent: a different digest, no diagnostic. That ambiguity is tolerable exactly
-//! where a KAT and a C++ twin pin it, and nowhere else. `cSHAKE256` has one meaning.
+//! where a KAT pins it, and nowhere else. `cSHAKE256` has one meaning.
 //!
 //! # Keccak-256 (consensus)
 //!
 //! Original Keccak padding (0x01), NOT NIST SHA3 padding (0x06). Consensus-critical:
-//! the output must be byte-identical to the C `src/crypto/keccak.c` (the empty-input
-//! KAT in `tests` pins exactly that). The byte-identity, not the implementation
+//! the empty-input KAT in `tests` pins the output (original Keccak-256, the function
+//! CryptoNote names `cn_fast_hash`). The byte-identity, not the implementation
 //! crate, is what is genesis-locked — `sha3` and the prior `tiny-keccak` both compute
 //! the same original-Keccak-256, and standardizing on the RustCrypto crate collapses
 //! the codebase onto one audited keccak (shekyl-oxide already uses `sha3`).
@@ -48,13 +48,11 @@ pub const HASH_SIZE: usize = 32;
 pub type Hash = [u8; HASH_SIZE];
 
 /// Original-padding Keccak-256 (`0x01`, NOT NIST SHA3-256's `0x06`), via RustCrypto
-/// `sha3` — byte-identical to the C++ daemon's `cn_fast_hash`.
+/// `sha3` — the function CryptoNote names `cn_fast_hash`.
 ///
-/// Matches `cn_fast_hash` in `src/crypto/hash.c` (keccak1600 absorb, first 32 bytes;
-/// rate 136 bytes for 256-bit output). `sha3::Keccak256` is the original Keccak
-/// variant, so this is byte-identical to the prior tiny-keccak impl and to the C++
-/// daemon — verified by the empty-input KAT below and the live coinbase/spend hash
-/// KATs in shekyl-wire.
+/// Keccak1600 absorb, first 32 bytes; rate 136 bytes for 256-bit output.
+/// `sha3::Keccak256` is the original Keccak variant — verified by the empty-input KAT
+/// below and the live coinbase/spend hash KATs in shekyl-wire.
 ///
 /// A second public `keccak256` (same primitive) lives in `shekyl-curve-primitives`
 /// for the oxide-lineage hash-to-point stack; the tx-builder equivalence test
@@ -70,7 +68,7 @@ pub fn keccak256(data: &[u8]) -> Hash {
 /// **The default for any new hashed artifact.** The customization string makes
 /// domain separation structural: two contexts cannot collide even over identical
 /// input bytes, without anyone having to remember a convention. Use
-/// [`keccak256`] only where byte-identity with the C++ daemon is required.
+/// [`keccak256`] only where an existing pinned contract requires it.
 ///
 /// `customization` follows the house convention `b"shekyl/<domain>-v1"` (see
 /// `shekyl/archival-serve-credit-response-v1`, `shekyl/receive-label-hash-v1`);

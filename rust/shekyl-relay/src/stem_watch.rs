@@ -62,10 +62,6 @@
 //! shekyl-relay      Relay::record_stem  ->  StemWatch::stemmed
 //! ```
 //!
-//! (Until 2026-11-05 the first two hops were `levin_notify.cpp`'s
-//! `dandelionpp_notify` → `record_stem_observation` and `shekyl-ffi`'s
-//! `shekyl_relay_zone_record_stem`; the relay owner took their place.)
-//!
 //! **An empty tally for a connector that is not configured still means "no
 //! stems", not "no drops".** The two read identically off [`StemTally`] and
 //! mean opposite things. The connector on the row is how an operator tells

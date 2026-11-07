@@ -8,13 +8,13 @@
 //! (`docs/design/DAEMON_SUBMIT_VERDICT.md` §3.1 Phase C; §8 rows O6, N8,
 //! K12, K13).
 //!
-//! Every check here is the same Rust code the C++ oracle itself dispatches
-//! to (`shekyl_verify_ct_balance`, `shekyl_fcmp_verify`, `shekyl_pqc_verify`
-//! in `shekyl-ffi`) or a pinned thin-port of a C++-native check
-//! (`check_commitment_mask_valid`; the Bp+ layout statics of
-//! `n_bulletproof_plus_amounts`). Calling the crates natively removes the
-//! FFI hop without changing the consensus arithmetic — the oracle and the
-//! engine literally share the verifying functions.
+//! Every check here is a native call into the consensus crates
+//! (`shekyl-ct-balance`'s `verify_ct_balance`, `shekyl-fcmp`'s proof
+//! verify, `shekyl-crypto-pq`'s `verify_pqc_auth`, `shekyl-bulletproofs`)
+//! or a check this module holds itself (commitment-mask non-triviality; the
+//! Bp+ layout statics). The block validator (`shekyl-chain-rules`) calls the
+//! same crates, so the submit path and the block path share the verifying
+//! functions.
 //!
 //! Check order mirrors the C++ submit path where it is observable in logs
 //! (never in the verdict — every failure here is one of the three
@@ -31,9 +31,9 @@
 //! `Σ pseudoOuts + bond_debit = Σ out_masks + fee + bond_credit`, Bp+, K12
 //! FCMP++ over the `ToKey` funding subset, K13 PQC over every input) and
 //! BP2's canonical-id recomputation. Every semantic leg is a native call
-//! into `shekyl-archival-retention` — the same crate the C++ oracle's own
-//! `check_archival_bond_post_input` dispatches to over FFI, so the two paths
-//! share the verifying functions and cannot diverge semantically.
+//! into `shekyl-archival-retention` — the same crate the block validator's
+//! bond-post rules call, so the two paths share the verifying functions and
+//! cannot diverge semantically.
 //!
 //! - **JoinMarket — the credit arm** (`verify_credit_arm`): BP5 pins the
 //!   bond slot's auth key to `P`'s **identity** key, BP6 requires the
@@ -197,7 +197,8 @@ fn verify_spend(
     // `sum(pseudoOuts) == sum(outPk) + fee·H` via the single-sourced
     // equation (`shekyl-ct-balance`) — the same crate the C++
     // `verCtSemanticsSimple` dispatches to through
-    // `shekyl_verify_ct_balance` (ct_semantics.cpp:226-241). The arity
+    // `shekyl_verify_ct_balance` (`ct_semantics.cpp` at `ac3836de90` (lines
+    // 174–179)). The arity
     // pre-checks around it (`outPk == enc_amounts == enc_labels`,
     // `pseudoOuts == ToKey subset` — every spend input for this shape —
     // and base pseudoOuts empty) are structural in `shekyl-wire`'s
@@ -302,7 +303,8 @@ fn verify_bond_post(
     // `Σ pseudoOuts + bond_debit = Σ out_masks + fee + bond_credit` via the
     // single-sourced `shekyl-archival-retention` equation — the same crate
     // the C++ `verCtSemanticsBondPost` dispatches to through
-    // `shekyl_archival_verify_bond_post_ct_balance` (ct_semantics.cpp:325-340).
+    // `shekyl_archival_verify_bond_post_ct_balance` (`ct_semantics.cpp` at
+    // `ac3836de90` (lines 242–249)).
     // The `(credit, debit) → BondTerm` conversion is
     // `BondTerm::from_credit_debit` (zero/zero is Unmoved; both-nonzero
     // refuses). `pseudoOuts == ToKey subset` arity is `validate()`'s
@@ -446,7 +448,8 @@ fn verify_emission(
     // ── EV4: the mint-side CT balance ───────────────────────────────────
     // `Σ pseudoOuts + total_reward = Σ out_masks + fee` — the mint rides
     // the debit slot of the single-sourced archival balance
-    // (`verCtSemanticsBondPost`'s sibling, ct_semantics.cpp:348-370). The loud
+    // (`verCtSemanticsBondPost`'s sibling `verCtSemanticsEmission`,
+    // `ct_semantics.cpp` at `ac3836de90` (lines 290–322)). The loud
     // vout sum is non-zero by Phase A's EV3 static, so the `BondTerm`
     // conversion below is total for an admitted submission.
     let vout_reward_sum: u64 = {
@@ -956,7 +959,8 @@ fn check_commitment_masks(base: &CtBase) -> Result<(), VerifyReject> {
 /// are the outPk masks exactly as transmitted: the statement multiplies by
 /// `INV_EIGHT` for the transcript and clears the cofactor for evaluation —
 /// matching the C++ path, which reconstructs `V = outPk·(1/8)` at
-/// deserialization (cryptonote_format_utils.cpp:176) and evaluates `8·V`
+/// deserialization (`cryptonote_format_utils.cpp` at `ac3836de90` (lines
+/// 155–157)) and evaluates `8·V`
 /// (bulletproofs_plus.cc). L/R round-count statics
 /// (`n_bulletproof_plus_amounts`) are enforced structurally by the WIP
 /// verifier's round check; unreduced-scalar rejection (`is_reduced`) by

@@ -486,8 +486,8 @@ pub fn pqc_leaf_entries_per_output(blob: &[u8]) -> io::Result<Vec<[u8; PQC_LEAF_
 
 /// Which of the two CEN-I19 fields a shape verdict is about.
 ///
-/// The verdict names the field, not a raw tag, so the FFI code table is a
-/// total match on this enum.
+/// The verdict names the field, not a raw tag, so a match on it is total
+/// over the two fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PqcExtraField {
     /// `0x06`, [`HYBRID_KEM_CT_BYTES`] bytes per output.
@@ -520,9 +520,8 @@ impl PqcExtraField {
 ///
 /// Every variant names its field, and every variant whose defect is a count
 /// or a length names those numbers — a rejected transaction says what was
-/// expected. The daemon logs this type's [`Display`] verbatim across the FFI
-/// (`shekyl_tx_extra_shape_of`), so the log line and a port's error are the
-/// same sentence. The coinbase grammar is [`CoinbaseGrammarError`], not a
+/// expected. Its [`Display`] is that sentence, so a log line and a port's
+/// error read the same. The coinbase grammar is [`CoinbaseGrammarError`], not a
 /// reuse of these variants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PqcFieldShapeError {

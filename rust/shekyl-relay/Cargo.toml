@@ -34,8 +34,8 @@ shekyl-levin = { path = "../shekyl-levin" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 # The owner is one task: its inbox, the node's sync watch, the verdict watch.
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync"] }
-# `OsRng` for `SecureRelayRng`. Pinned per crate as `shekyl-ffi` pinned it;
-# the workspace has no `rand` entry (rule 17 §1).
+# `OsRng` for `SecureRelayRng`. Pinned per crate; the workspace has no
+# `rand` entry (rule 17 §1).
 rand = "0.8"
 # The seam's byte-pinned vocabulary (`RelayMethod`, `NetZone`) lives below both
 # this crate and the daemon store (rule 18; DRS-E1 S-POOL `SPL-Q6`).

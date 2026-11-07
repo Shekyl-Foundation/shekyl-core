@@ -514,7 +514,7 @@ fn a_due_keep_retry_does_not_take_the_connector_past_its_target() {
 
 /// The window the dialer reads in these tests: the earliest the daemon's
 /// 105 s `SocksTimeout` can expire, since Tor counts a stream's age in
-/// whole seconds (`shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT.earliest_expiry()`).
+/// whole seconds (`shekyl_p2p::TOR_SOCKS_TIMEOUT.earliest_expiry()`).
 const TOR_WINDOW: Duration = Duration::from_secs(104);
 
 /// One Tor attempt at one gray onion, refused with `cause` after `took`,

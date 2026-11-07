@@ -46,7 +46,7 @@ compile_error!(
      exploited by KyberSlash (Bernstein et al., 2024) against fielded \
      CT implementations. The hybrid X25519+ML-KEM construction does not \
      rescue the ML-KEM secret once it leaks via timing. Matching gates \
-     live in shekyl-ffi, shekyl-tx-builder, and the top-level CMakeLists.txt. \
+     live in shekyl-tx-builder and the top-level CMakeLists.txt. \
      See docs/CHANGELOG.md entry 'Retired 32-bit build targets' before \
      attempting to revert this gate."
 );

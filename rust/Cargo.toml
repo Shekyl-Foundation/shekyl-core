@@ -183,8 +183,7 @@ members = [
     "shekyl-archival-bond-builder",
 
     # The daemon binary (DAEMON_CONFIG_CUTOVER.md DC-Q19): a Rust `main`
-    # over `shekyl-daemon`'s sequence. All Rust since the p2p cutover
-    # (2026-11-05): it links no C++ and does not depend on `shekyl-ffi`.
+    # over `shekyl-daemon`'s sequence. It links no C++.
     # One Rust dependency graph, so one tracing-core dispatcher; the staged
     # binary's nm gate asserts it.
     "shekyld",
@@ -342,7 +341,7 @@ members = [
     # The network composition: connectors per configuration, the session
     # layer and its owners, the process engine and transport runtime, the
     # stop order, the RPC's facts from the board (brief §2). The node builds
-    # one `Network`; nothing above it reaches shekyl-ffi.
+    # one `Network`.
     "shekyl-p2p",
     # P2P conformance harness (P2P_DIFFERENTIAL_HARNESS.md). The scripted
     # peer, the seam host, the transcript comparator, and check-goldens.
@@ -377,8 +376,8 @@ members = [
     "shekyl-p-loopback",
 
     # Daemon-only operator scheduler of `shekyl-p-fetch` (SF-D1). Linked
-    # from the `shekyld` binary crate only — never from `shekyl-ffi` or an
-    # RPC crate (`check_p_fetch_dep_cut.py`).
+    # from the `shekyld` binary crate only — never from an RPC crate
+    # (`check_p_fetch_dep_cut.py`).
     "shekyl-archival-fetch-sched",
 
     # The serve-credit bundle producer (SO-D12 increment 4c): the witness
@@ -463,7 +462,8 @@ members = [
     "shekyl-node",
 
     # Pure-software RandomX v2 verifier (docs/design/RANDOMX_V2_PLAN.md,
-    # RANDOMX_V2_RUST.md). Consumed by shekyl-ffi (Phase 3); not the miner.
+    # RANDOMX_V2_RUST.md). Light and cache-only: the daemon's crates and
+    # `shekyl-miner` hash through it; fast mining is an external miner's job.
     "shekyl-pow-randomx",
 
     # Phase 2g Rust/C differential harness substrate: hand-written

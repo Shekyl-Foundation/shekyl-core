@@ -164,7 +164,7 @@ impl Transaction {
     /// `H(prefix) · H(base) · H(pqc_auths) · H(prunable) · L`; for an FCMP++
     /// body with no `pqc_auths` component, the same without that digest. `L`
     /// is the archival length word. `H(prefix)` includes the version varint
-    /// (the first field of the C++ `transaction_prefix`).
+    /// (the prefix's first field).
     ///
     /// The `hash` field of [`Self::txid_parts`]. Reconstruction of a body that
     /// no longer holds a discardable region is
@@ -217,13 +217,11 @@ impl Transaction {
 
     /// `keccak256` of the **prunable byte region** ([`prunable_hash_of`]) —
     /// exactly the bytes [`Self::write_segments`] puts in `prunable`. The
-    /// C++ `calculate_transaction_prunable_hash` hands the same range
-    /// (`blob[unprunable_size..]`) to the same function, and the chain store
-    /// records the result in `txs_prunable_hash`.
+    /// chain store records the result in `txs_prunable_hash`.
     ///
     /// This is **not** the txid's prunable component in every case: when the
     /// region is absent (a coinbase, or a skeleton's bytes) the txid
-    /// substitutes the null hash, while this is `keccak256("")` — the C++
+    /// substitutes the null hash, while this is `keccak256("")` — the
     /// store's row for a coinbase is the latter. When the region is present
     /// the two coincide, and [`Self::hash`] is built from this value.
     #[must_use]
@@ -253,8 +251,8 @@ impl Transaction {
     ///
     /// **Not** `keccak256` of the stored `txs_pqc_auths` segment, which has no
     /// count prefix and so verifies nothing the chain signed: the count
-    /// varint mirrors the C++ generic `std::vector` serializer the oracle
-    /// hashes with (`cryptonote_format_utils.cpp:1169`, `begin_array(cnt)`),
+    /// varint is the one the C++ generic `std::vector` serializer writes
+    /// (`container.h` at `ac3836de90` (line 100), `begin_array(cnt)`),
     /// unlike the tx *body*, where the count is implicit in `vin.size()`.
     #[must_use]
     pub fn pqc_auth_hash(&self) -> Option<PqcAuthHash> {
@@ -328,18 +326,18 @@ impl Transaction {
         )
     }
 
-    /// Whether this prefix can carry a third txid component (C++ oracle,
-    /// `cryptonote_format_utils.cpp`, `has_pqc`): `version >= 3 &&
-    /// !vin.empty() && vin[0] != gen`. Here: the ct is `Fcmp` (version 3) and
-    /// the first input **exists and is not `gen`**. Auth presence is a
+    /// Whether this prefix can carry a third txid component (the C++
+    /// `first_input_is_spend`, `cryptonote_format_utils.cpp` at `ac3836de90`
+    /// (line 991)): `version >= 3 && !vin.empty() && vin[0] != gen`. Here: the
+    /// ct is `Fcmp` (version 3) and the first input **exists and is not `gen`**. Auth presence is a
     /// separate fact — on a body, `!pqc_auths.is_empty()`; when supplied,
     /// `pqc_auth.is_some()` — so this predicate has no boolean "auths
-    /// present" argument. Both malformed shapes the oracle hashes without the
+    /// present" argument. Both malformed shapes that hash without the
     /// component, gen-first-with-auths and no-inputs-with-auths, fail it
     /// rather than misclassifying as a spend. A malformed body's identity is
     /// still consensus-visible (relay dedup, the `already known` arm) before
-    /// `validate` refuses it, so the predicate matches the oracle on every
-    /// input, not only valid ones. The prefix is part of every form, skeleton
+    /// `validate` refuses it, so the predicate is decided on every input,
+    /// not only valid ones. The prefix is part of every form, skeleton
     /// included, so this half is always computable.
     pub(crate) fn prefix_carries_pqc_component(&self) -> bool {
         let first_is_spend = matches!(
