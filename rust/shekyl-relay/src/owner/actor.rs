@@ -35,8 +35,8 @@ use super::snapshot::RelaySnapshot;
 use crate::driver::{Driver, Effect};
 use crate::floor_diag::{AchievedOutConnections, FloorTransition, FloorWatch};
 use crate::graph::{
-    ConnectorId, NodeSync, OriginVerdict, Relay, RelayCarrier, RelayDispatch, RelayNewError,
-    RelayPlan, TxBlob,
+    ConnectorId, NodeSync, OriginPublication, OriginVerdict, Relay, RelayCarrier, RelayDispatch,
+    RelayNewError, RelayPlan, TxBlob,
 };
 use crate::noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues};
 use crate::stem_watch::TxId;
@@ -125,12 +125,48 @@ pub struct Started {
     pub handle: RelayHandle,
 }
 
+/// The relay task's clock, cloned onto the handle so a publication read
+/// is judged when it is asked. The closure is the clock; `Debug` names
+/// the clock rather than printing it.
+struct RelayNow {
+    now: Arc<dyn Fn() -> Millis + Send + Sync>,
+}
+
+impl RelayNow {
+    fn new(now: impl Fn() -> Millis + Send + Sync + 'static) -> Self {
+        Self { now: Arc::new(now) }
+    }
+
+    fn get(&self) -> Millis {
+        (self.now)()
+    }
+}
+
+impl Clone for RelayNow {
+    fn clone(&self) -> Self {
+        Self {
+            now: Arc::clone(&self.now),
+        }
+    }
+}
+
+impl std::fmt::Debug for RelayNow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RelayNow")
+    }
+}
+
 /// The node's end of the owner.
 #[derive(Clone, Debug)]
 pub struct RelayHandle {
     inbox: mpsc::UnboundedSender<Cmd>,
     verdict: watch::Receiver<OriginVerdict>,
     snapshot: Arc<Mutex<Arc<RelaySnapshot>>>,
+    /// This node's origin arm times. Not a field of [`RelaySnapshot`]:
+    /// that snapshot is what health projects, and a transaction id does
+    /// not belong on it. A read judges the arm with [`RelayNow`].
+    origins: Arc<Mutex<Arc<HashMap<TxId, Millis>>>>,
+    now: RelayNow,
 }
 
 impl RelayHandle {
@@ -163,6 +199,24 @@ impl RelayHandle {
     #[must_use]
     pub fn snapshot(&self) -> Arc<RelaySnapshot> {
         Arc::clone(&self.snapshot.lock().expect("relay snapshot"))
+    }
+
+    /// This node's judgment of `tx`, if it still holds the origin
+    /// unpublished. Absent once the transaction has fluffed, and absent
+    /// for a relay position.
+    ///
+    /// The arm time is the last snapshot. The clock is this read's. A
+    /// timer that has not yet woken still reports
+    /// [`OriginPublication::HeldOverdue`] once the budget has elapsed.
+    #[must_use]
+    pub fn origin_publication(&self, tx: TxId) -> Option<OriginPublication> {
+        let armed_at = self
+            .origins
+            .lock()
+            .expect("origin arms")
+            .get(&tx)
+            .copied()?;
+        Some(OriginPublication::judge(armed_at, self.now.get()))
     }
 
     /// End the task. Sessions established after this are not relayed to.
@@ -238,7 +292,8 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
     let owner = timing
         .register(OwnerClass::Relay)
         .map_err(RelayStartError::Timing)?;
-    let now = millis(owner.clock().now());
+    let clock = owner.clock().clone();
+    let now = millis(clock.now());
     // The epoch scheduler reads only this pair; embargo timers are built per
     // connector inside `Relay::new`, from the declarations.
     let params = DandelionParams {
@@ -277,6 +332,7 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
     let (inbox_tx, inbox) = mpsc::unbounded_channel();
     let (verdict_tx, verdict) = watch::channel(zone.origin_verdict());
     let snapshot = Arc::new(Mutex::new(Arc::new(RelaySnapshot::default())));
+    let origins = Arc::new(Mutex::new(Arc::new(HashMap::new())));
     let port = Arc::new(Port::new(
         inbox_tx.clone(),
         Arc::clone(&pool),
@@ -286,6 +342,8 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         inbox: inbox_tx,
         verdict,
         snapshot: Arc::clone(&snapshot),
+        origins: Arc::clone(&origins),
+        now: RelayNow::new(move || millis(clock.now())),
     };
     let actor = Actor {
         driver: Driver::new(zone),
@@ -301,6 +359,7 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         inbox,
         verdict: verdict_tx,
         snapshot,
+        origins,
     };
     runtime.spawn(actor.run());
     Ok(Started { port, handle })
@@ -329,6 +388,7 @@ struct Actor<C: Clock + Clone + Send + Sync + 'static> {
     inbox: mpsc::UnboundedReceiver<Cmd>,
     verdict: watch::Sender<OriginVerdict>,
     snapshot: Arc<Mutex<Arc<RelaySnapshot>>>,
+    origins: Arc<Mutex<Arc<HashMap<TxId, Millis>>>>,
 }
 
 impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
@@ -390,6 +450,9 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         };
         if let Ok(mut slot) = self.snapshot.lock() {
             *slot = Arc::new(snapshot);
+        }
+        if let Ok(mut slot) = self.origins.lock() {
+            *slot = Arc::new(zone.origin_armed());
         }
         let verdict = zone.origin_verdict();
         self.verdict.send_if_modified(|current| {

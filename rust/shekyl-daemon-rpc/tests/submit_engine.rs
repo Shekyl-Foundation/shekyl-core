@@ -13,11 +13,12 @@ mod submit_fixtures;
 
 use std::sync::Arc;
 
+use shekyl_daemon_rpc::submit::OriginPublication;
 use shekyl_daemon_rpc::submit::{
     parse_submission, BondProbe, CommitOutcome, EngineFault, KeyImageConflict, SubmitCaller,
     SubmitEngine, SubmitFacts, VerifyFailure,
 };
-use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_rpc_types::{PoolRelay, RejectCause, SubmitVerdict};
 use shekyl_types::{BlockHeight, ChainCount};
 use submit_fixtures::{
     admitting_facts, emission_tx, hexify, serve_credit_tx, spend_tx, MockShim, MockVerifier,
@@ -35,6 +36,10 @@ fn engine(
     let verifier = MockVerifier::passing();
     let engine = SubmitEngine::new(Arc::clone(&shim), Arc::clone(&verifier));
     (engine, shim, verifier)
+}
+
+fn already_in_pool(relay: PoolRelay) -> SubmitVerdict {
+    SubmitVerdict::AlreadyInPool { relay }
 }
 
 fn spend_hex() -> String {
@@ -88,7 +93,8 @@ fn already_in_pool_short_circuits() {
     let (engine, shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
-        SubmitVerdict::AlreadyInPool
+        already_in_pool(PoolRelay::Untracked),
+        "a pool row with no origin row is not a hold"
     );
     assert_eq!(verifier.call_count(), 0);
     assert_eq!(shim.commit_count(), 0);
@@ -483,7 +489,7 @@ fn raced_in_pool_classifies_already_in_pool() {
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
-        SubmitVerdict::AlreadyInPool
+        already_in_pool(PoolRelay::Untracked)
     );
 }
 
@@ -587,7 +593,7 @@ fn a_concealed_answer_is_the_fresh_answer_under_every_public_change() {
         );
         assert_eq!(
             submit(held, raced(), SubmitCaller::Owner),
-            SubmitVerdict::AlreadyInPool,
+            already_in_pool(PoolRelay::Untracked),
             "{what}: the owner is told the duplicate"
         );
     }
@@ -732,7 +738,7 @@ fn foreign_broadcast_presence_reveals_already_in_pool() {
     let (engine, _shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Foreign).unwrap(),
-        SubmitVerdict::AlreadyInPool
+        already_in_pool(PoolRelay::Published)
     );
     assert_eq!(
         verifier.call_count(),
@@ -745,15 +751,58 @@ fn foreign_broadcast_presence_reveals_already_in_pool() {
 fn owner_embargoed_presence_reveals_already_in_pool() {
     // The owner (unrestricted endpoint) keeps the F31 resubmit-as-status
     // query: an embargoed self-tx returns AlreadyInPool immediately.
+    // Inside the budget the zone has recorded a hold, and that is what
+    // the owner is told.
     let mut facts = base_facts();
     facts.in_pool = true;
     facts.in_pool_broadcast = false;
+    facts.origin_publication = Some(OriginPublication::Held);
     let (engine, _shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
-        SubmitVerdict::AlreadyInPool
+        already_in_pool(PoolRelay::Held)
     );
     assert_eq!(verifier.call_count(), 0);
+}
+
+#[test]
+fn owner_without_an_origin_row_is_told_untracked() {
+    let mut facts = base_facts();
+    facts.in_pool = true;
+    facts.in_pool_broadcast = false;
+    facts.origin_publication = None;
+    let (engine, _shim, _verifier) = engine(facts, CommitOutcome::Committed);
+    assert_eq!(
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
+        already_in_pool(PoolRelay::Untracked)
+    );
+}
+
+#[test]
+fn owner_held_overdue_is_told_overdue() {
+    let mut facts = base_facts();
+    facts.in_pool = true;
+    facts.in_pool_broadcast = false;
+    facts.origin_publication = Some(OriginPublication::HeldOverdue);
+    let (engine, _shim, verifier) = engine(facts, CommitOutcome::Committed);
+    assert_eq!(
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
+        already_in_pool(PoolRelay::HeldOverdue)
+    );
+    assert_eq!(verifier.call_count(), 0);
+}
+
+#[test]
+fn broadcast_outranks_a_stale_held_overdue() {
+    let mut facts = base_facts();
+    facts.in_pool = true;
+    facts.in_pool_broadcast = true;
+    facts.origin_publication = Some(OriginPublication::HeldOverdue);
+    let (engine, _shim, _verifier) = engine(facts, CommitOutcome::Committed);
+    assert_eq!(
+        engine.submit(&spend_hex(), SubmitCaller::Foreign).unwrap(),
+        already_in_pool(PoolRelay::Published)
+    );
 }
 
 #[test]
@@ -780,7 +829,7 @@ fn foreign_raced_broadcast_duplicate_reveals_already_in_pool() {
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Foreign).unwrap(),
-        SubmitVerdict::AlreadyInPool
+        already_in_pool(PoolRelay::Published)
     );
 }
 

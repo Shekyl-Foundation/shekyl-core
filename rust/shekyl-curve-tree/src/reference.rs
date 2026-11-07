@@ -116,11 +116,36 @@ pub const PROOF_VALIDITY_HORIZON: shekyl_types::BlockCount =
 pub const REBUILD_AT: shekyl_types::BlockCount =
     shekyl_types::BlockCount::from_raw(FCMP_REFERENCE_BLOCK_MAX_AGE / 2);
 
+/// The fewest blocks a proof an honest wallet dispatched stays submittable,
+/// counted from its dispatch: `MAX_AGE − REBUILD_AT`.
+///
+/// The wallet re-anchors before it sends whenever [`should_reanchor`]
+/// holds, so a dispatched proof's reference age is at most
+/// `REBUILD_AT − 1`, and the daemon accepts it while the age is at most
+/// `MAX_AGE` (inclusive). That leaves `MAX_AGE − REBUILD_AT + 1` blocks;
+/// the `+ 1` is left out as margin for the blocks that can land between
+/// the wallet's staleness check and the daemon's verdict. The most a
+/// proof can have is [`PROOF_VALIDITY_HORIZON`], when it is sent at
+/// [`REF_ANCHOR_AGE`].
+///
+/// Past this many blocks a dispatched transaction may no longer be
+/// mineable: the pool removes an entry whose reference has left the
+/// window (CEN-M10, `shekyl-mempool`'s `evict` module), and a resubmit
+/// of the same bytes is refused `StaleRoot`. Anything the wallet means
+/// to do with the *same bytes* after dispatch — the submit watchdog's
+/// resubmit probe — has to happen inside it.
+pub const DISPATCHED_PROOF_LIFE: shekyl_types::BlockCount =
+    match REFERENCE_BLOCK_MAX_AGE.checked_sub(REBUILD_AT) {
+        Some(span) => span,
+        None => panic!("DISPATCHED_PROOF_LIFE underflowed"),
+    };
+
 // Derived-constant sentinels: catch an arithmetic regression if the JSON
 // values change in a way the sentinels above were updated to permit.
 const _: () = assert!(REF_ANCHOR_AGE.to_raw() == 6);
 const _: () = assert!(PROOF_VALIDITY_HORIZON.to_raw() == 94);
 const _: () = assert!(REBUILD_AT.to_raw() == 50);
+const _: () = assert!(DISPATCHED_PROOF_LIFE.to_raw() == 50);
 
 /// The last maturity height the tree committed at `reference_height` holds.
 ///
@@ -454,6 +479,32 @@ mod tests {
         // hard bound): re-anchor fires well before expiry.
         assert!(proof_submittable(tip, at(REBUILD_AT)));
         assert!(!proof_expired(tip, at(REBUILD_AT)));
+    }
+
+    /// [`DISPATCHED_PROOF_LIFE`]'s claim, walked: the oldest proof a wallet
+    /// sends (age `REBUILD_AT − 1`, one short of re-anchor) is still
+    /// submittable `DISPATCHED_PROOF_LIFE` blocks later, and expires one
+    /// block after the `+ 1` margin the constant leaves out.
+    #[test]
+    fn oldest_dispatched_proof_lives_dispatched_proof_life() {
+        let dispatch_tip = h(10_000);
+        let reference = dispatch_tip
+            .checked_sub_count(REBUILD_AT - BlockCount::ONE)
+            .unwrap();
+        assert!(!should_reanchor(dispatch_tip, reference));
+
+        let later = |blocks: BlockCount| h(dispatch_tip.to_raw() + blocks.to_raw());
+        assert!(proof_submittable(later(DISPATCHED_PROOF_LIFE), reference));
+        assert!(proof_submittable(
+            later(DISPATCHED_PROOF_LIFE + BlockCount::ONE),
+            reference
+        ));
+        assert!(proof_expired(
+            later(DISPATCHED_PROOF_LIFE + BlockCount::ONE + BlockCount::ONE),
+            reference
+        ));
+        // The freshest proof lives the whole validity horizon.
+        assert!(DISPATCHED_PROOF_LIFE < PROOF_VALIDITY_HORIZON);
     }
 
     #[test]
