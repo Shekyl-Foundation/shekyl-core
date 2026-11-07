@@ -357,6 +357,17 @@ jobs:
           cargo test --locked -p shekyl-randomx-differential -p randomx-v2-sys \
             -- --skip t2_adversarial_corpus_byte_equality \
                --skip canonical_pins_full
+      - name: cargo test (full-dataset range split)
+        working-directory: rust
+        # `full_dataset` compiles only with `full-dataset`. The light
+        # `cargo test` above leaves that feature off, and the clippy
+        # step type-checks the module without running it. This runs the
+        # module's tests. They split item ranges; they do not allocate
+        # the dataset or call into the C library. `--lib` keeps the
+        # Hole-1 binaries, which do allocate, out of this step.
+        run: |
+          cargo test --locked -p shekyl-randomx-differential \
+            --features full-dataset --lib full_dataset::
       - name: cargo test --release T2 adversarial_corpus_byte_equality
         working-directory: rust
         # Per-PR release-mode T2 invocation (post-PR-#79 FOLLOWUP

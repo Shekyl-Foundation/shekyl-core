@@ -282,6 +282,10 @@ fn item_ranges(items: u64, threads: u64) -> Vec<(u64, u64)> {
 
 #[cfg(test)]
 mod tests {
+    //! Range splits only. A test here does not call into the C library
+    //! and does not allocate a dataset. The structural job runs this
+    //! module with `full-dataset`; the light test lane does not compile it.
+
     use super::item_ranges;
 
     fn covers(items: u64, threads: u64) {
