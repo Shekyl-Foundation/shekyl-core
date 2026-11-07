@@ -23,11 +23,10 @@ use shekyl_wire::transaction::COINBASE_RESERVE;
 use crate::fee_model::{FeePoint, OrdinaryTx};
 use crate::median_window::MedianWindow;
 
-/// `CRYPTONOTE_MEMPOOL_TX_LIVETIME`: how long, in seconds, the daemon keeps
-/// a transaction no block has taken. The pool has no Rust owner yet
-/// (`DRS_E1_SPOOL.md`), so this is the C++ define restated, pinned to it by
-/// a test that reads the header; it moves to the pool's owner when the pool
-/// does.
+/// How long, in seconds, this model keeps a transaction no block has taken:
+/// three days. The Rust pool (`shekyl-mempool`) drops a transaction by its
+/// reference block's window, not by age; ESR-17 (#1279) moves this model
+/// onto that window and retires the constant.
 const MEMPOOL_TX_LIVETIME_SECS: u64 = 86_400 * 3;
 
 /// The transactions waiting for a block, the medians they wait under, and
@@ -153,24 +152,6 @@ impl BlockSpace {
 mod tests {
     use super::*;
     use shekyl_economics::{EconomicParams, TxVolume};
-
-    /// The livetime is the C++ define's, read from the header.
-    #[test]
-    fn the_pool_livetime_is_the_cxx_define() {
-        let config_h = include_str!("../../../src/cryptonote_config.h");
-        let value = config_h
-            .lines()
-            .find_map(|l| {
-                let mut words = l.split_whitespace();
-                (words.next() == Some("#define")
-                    && words.next() == Some("CRYPTONOTE_MEMPOOL_TX_LIVETIME"))
-                .then(|| words.next())
-                .flatten()
-            })
-            .expect("cryptonote_config.h defines CRYPTONOTE_MEMPOOL_TX_LIVETIME");
-        assert_eq!(value, "(86400*3)", "the define's expression");
-        assert_eq!(MEMPOOL_TX_LIVETIME_SECS, 86_400 * 3);
-    }
 
     /// The running total against the queue it stands for.
     fn assert_total_is_the_queue(space: &BlockSpace) {

@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "shekyl-ffi",
     "shekyl-fcmp",
 
     # V3.1 multisig — Option E′ (MS-5). The FROST spend-ceremony FSM, blob
