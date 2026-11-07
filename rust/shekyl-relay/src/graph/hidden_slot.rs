@@ -18,8 +18,8 @@
 //! No connector is named here. The class is `address_hidden_from_peer` on
 //! each session's declaration. [`HiddenClassWatch`] records it. The watch
 //! arms at the first epoch rebuild and thereafter reports a change of
-//! [`HiddenClass`]. The notice names the class. It does not name the origin
-//! pin: a pin whose frozen set is exhausted stays [`RelayPlan::NoOwnEdge`]
+//! [`HiddenClass`] as an info line. The notice names the class. It does not
+//! name the origin pin: a pin whose frozen set is exhausted stays [`RelayPlan::NoOwnEdge`]
 //! until the epoch ends. No cover on Tor by ruling: the plan kind stays
 //! [`RelayPlan::OwnEdge`], one ordinary send, terminal on write failure, so
 //! a failed hidden write is never fluffed on a clear link.
@@ -57,10 +57,16 @@ impl HiddenClass {
     }
 }
 
-/// A hidden class the operator is warned about.
+/// A hidden class the operator is told about when it is entered.
 ///
 /// [`HiddenClass::Several`] is not one of these: a rotating class is the
 /// steady state, and the first time it is seen it is recorded in silence.
+///
+/// An info line, not a warning. Tor churn takes a node through both on its
+/// way back to several, and nothing the operator does changes that. The
+/// consequence that matters, a transaction this node originates being
+/// held, is said where it happens: the relay's dispatch warns and names
+/// the hold, and a managed Tor's posture line says the empty class too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DegradedHiddenClass {
     /// [`HiddenClass::Empty`].
@@ -70,13 +76,13 @@ pub(crate) enum DegradedHiddenClass {
 }
 
 impl DegradedHiddenClass {
-    /// The warning for this degraded class.
+    /// The line for this degraded class.
     ///
     /// The words name the sessions that exist. They do not say when a held
     /// origin will leave, and they do not say which session an origin pin
     /// is using. An exhausted pin stays [`RelayPlan::NoOwnEdge`] until the
     /// epoch ends, whatever this class does meanwhile (§98.5).
-    fn warning(self) -> &'static str {
+    fn text(self) -> &'static str {
         match self {
             Self::Empty => {
                 "no outbound connection hides this node's address, so a transaction this node originates has no address-hiding session to leave on"
@@ -93,8 +99,8 @@ impl DegradedHiddenClass {
 pub(crate) enum HiddenClassNotice {
     /// The first rebuild found [`HiddenClass::Several`]. Record it. No line.
     Quiet,
-    /// The class is degraded. A warning.
-    Warn(DegradedHiddenClass),
+    /// The class is degraded.
+    Degraded(DegradedHiddenClass),
     /// A recorded class became [`HiddenClass::Several`]. `sessions` is the
     /// census, two or more. An info line. Not a claim that an origin pin
     /// resumed.
@@ -105,48 +111,30 @@ impl HiddenClassNotice {
     fn on_arm(observed: HiddenClass) -> Self {
         match observed {
             HiddenClass::Several => Self::Quiet,
-            HiddenClass::Empty => Self::Warn(DegradedHiddenClass::Empty),
-            HiddenClass::One => Self::Warn(DegradedHiddenClass::One),
+            HiddenClass::Empty => Self::Degraded(DegradedHiddenClass::Empty),
+            HiddenClass::One => Self::Degraded(DegradedHiddenClass::One),
         }
     }
 
     fn on_change(observed: HiddenClass, sessions: usize) -> Self {
         match observed {
             HiddenClass::Several => Self::Recovered { sessions },
-            HiddenClass::Empty => Self::Warn(DegradedHiddenClass::Empty),
-            HiddenClass::One => Self::Warn(DegradedHiddenClass::One),
+            HiddenClass::Empty => Self::Degraded(DegradedHiddenClass::Empty),
+            HiddenClass::One => Self::Degraded(DegradedHiddenClass::One),
         }
     }
 
-    /// The log line for this notice, or `None` when the notice is
+    /// The info line for this notice, or `None` when the notice is
     /// [`HiddenClassNotice::Quiet`].
-    pub(crate) fn line(self) -> Option<HiddenClassLine> {
+    pub(crate) fn line(self) -> Option<String> {
         match self {
             Self::Quiet => None,
-            Self::Warn(class) => Some(HiddenClassLine {
-                level: HiddenClassLevel::Warn,
-                text: class.warning().to_string(),
-            }),
-            Self::Recovered { sessions } => Some(HiddenClassLine {
-                level: HiddenClassLevel::Info,
-                text: format!("{sessions} outbound connections hide this node's address"),
-            }),
+            Self::Degraded(class) => Some(class.text().to_string()),
+            Self::Recovered { sessions } => Some(format!(
+                "{sessions} outbound connections hide this node's address"
+            )),
         }
     }
-}
-
-/// Warn or info. The two levels this report uses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HiddenClassLevel {
-    Warn,
-    Info,
-}
-
-/// One operator line: a level and the text.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct HiddenClassLine {
-    pub(crate) level: HiddenClassLevel,
-    pub(crate) text: String,
 }
 
 /// The hidden class as last recorded, or still waiting for the first epoch
@@ -217,12 +205,8 @@ enum OutboundStem {
 }
 
 fn log_hidden_class(notice: HiddenClassNotice) {
-    let Some(line) = notice.line() else {
-        return;
-    };
-    match line.level {
-        HiddenClassLevel::Warn => tracing::warn!("{}", line.text),
-        HiddenClassLevel::Info => tracing::info!("{}", line.text),
+    if let Some(line) = notice.line() {
+        tracing::info!("{line}");
     }
 }
 

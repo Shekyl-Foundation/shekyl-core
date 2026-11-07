@@ -654,7 +654,7 @@ mod tests {
             enc_label: constructed.enc_label_bytes(),
             label_tag_on_chain: constructed.label_tag(),
             output_index,
-            tx_hash,
+            tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
         }
     }
 

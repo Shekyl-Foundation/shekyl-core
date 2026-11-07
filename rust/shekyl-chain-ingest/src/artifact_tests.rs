@@ -68,10 +68,10 @@ fn the_trace_round_trips_through_both_doors() {
     for hh in 0..3 {
         w.push_facts(h(hh), &facts_at(hh)).expect("facts");
     }
-    let hashes = [[0x11; 32], [0x12; 32], [0x13; 32]];
-    let spent = [[0x21; 32], [0x22; 32]];
+    let hashes = [0x11, 0x12, 0x13].map(|b| BlockHash::from_bytes([b; 32]));
+    let spent = [0x21, 0x22].map(|b| shekyl_types::KeyImage::from_bytes([b; 32]));
     let root = CurveTreeRoot::from_bytes([0xc2; 32]);
-    let state = digest_v0(&hashes, &spent, root.as_bytes());
+    let state = digest_v0(&hashes, &spent, &root);
     w.push_checkpoint(&state).expect("checkpoint");
     // The checkpoint's other encoding (§3.8.1): one accrual row, one
     // budget row — 8 + 8 bytes each behind a `u32` length.
@@ -139,7 +139,7 @@ fn trace_refusals_gap_unanchored_duplicate_reserved_and_trailer() {
             found: 2
         }
     ));
-    let state = digest_v0(&[], &[], CurveTreeRoot::EMPTY.as_bytes());
+    let state = digest_v0(&[], &[], &CurveTreeRoot::EMPTY);
     let mut empty = TraceWriter::new(Vec::new()).expect("header");
     assert!(matches!(
         empty.push_checkpoint(&state).expect_err("no facts"),
@@ -226,7 +226,7 @@ fn the_archival_snapshot_is_the_checkpoints_other_encoding_on_both_sides() {
     // checkpoint's. A trace with no checkpoint carries neither and reads;
     // the `0x00` layout, which carried neither record, is not read at all.
     let empty = ArchivalSnapshot::empty();
-    let state = digest_v0(&[], &[], CurveTreeRoot::EMPTY.as_bytes());
+    let state = digest_v0(&[], &[], &CurveTreeRoot::EMPTY);
 
     // Writer: unanchored, duplicate, missing.
     let mut w = TraceWriter::new(Vec::new()).expect("header");

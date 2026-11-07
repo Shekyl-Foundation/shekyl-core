@@ -74,6 +74,29 @@ fn a_stem_batch_goes_to_an_outbound_successor_as_a_stem() {
     assert_eq!(rig.relay.snapshot().stem_in_flight, 1);
 }
 
+/// A node with no outbound session has no stem successor, so a stem it
+/// receives takes the retry-then-fluff fallback and goes to its other
+/// peers as a fluff. This is the designed path, taken for every stem such
+/// a node holds; its log line is a debug line (the alpha.11 fleet: an
+/// ERROR per stem on an inbound-only node).
+#[test]
+fn a_stem_with_no_outbound_successor_is_fluffed_to_the_other_peers() {
+    let rig = Rig::build(Build::default());
+    let mut sender = rig.inbound(1);
+    let mut other = rig.inbound(2);
+    sender.inject_blocking(new_transactions(vec![blob(4)], false));
+    support::wait_until("the blob was admitted", || rig.pool.admits().len() == 1);
+    support::wait_until("it was shown", || rig.pool.shown().len() == 1);
+    let batch = rig.read_batch_within(&mut other, 10);
+    assert!(batch.dandelionpp_fluff, "with no successor the stem fluffs");
+    assert_eq!(batch.txs, vec![blob(4)]);
+    assert!(
+        rig.quiet(&mut sender),
+        "the source does not get its own batch back"
+    );
+    assert_eq!(rig.relay.snapshot().stem_in_flight, 0);
+}
+
 #[test]
 fn a_batch_that_repeats_a_blob_closes_the_session_before_the_pool_sees_it() {
     let rig = Rig::build(Build::default());

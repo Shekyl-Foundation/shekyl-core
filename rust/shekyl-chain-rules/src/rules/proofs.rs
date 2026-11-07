@@ -259,7 +259,7 @@ impl I18 {
                 auth.scheme_id,
                 &auth.hybrid_public_key,
                 &auth.hybrid_signature,
-                hash.as_bytes(),
+                hash,
             )
             .is_err()
             {

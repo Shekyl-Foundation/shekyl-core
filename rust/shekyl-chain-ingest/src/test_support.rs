@@ -513,13 +513,13 @@ pub fn facts_at(
 
 /// The spent-key set of `chain` after its last block: one key image per
 /// listed spend.
-pub fn spent_keys_of(chain: &[(Block, Vec<Transaction>)]) -> Vec<[u8; 32]> {
+pub fn spent_keys_of(chain: &[(Block, Vec<Transaction>)]) -> Vec<KeyImage> {
     chain
         .iter()
         .flat_map(|(_, txs)| txs.iter())
         .flat_map(|t| t.prefix.inputs.iter())
         .filter_map(|i| match i {
-            Input::ToKey { key_image, .. } => Some(KeyImage::from_bytes(*key_image).to_bytes()),
+            Input::ToKey { key_image, .. } => Some(KeyImage::from_bytes(*key_image)),
             _ => None,
         })
         .collect()
@@ -574,7 +574,7 @@ pub fn trace_pinned(
                     .and_then(|t| u64::try_from(t).ok())
                     .expect("a checkpoint of the tree needs a tip: the chain is empty");
                 (
-                    digest_of(chain, tree.root_after(h(tip)).as_bytes()),
+                    digest_of(chain, &tree.root_after(h(tip))),
                     tree.archival_snapshot_after(h(tip)),
                 )
             }
@@ -616,18 +616,15 @@ pub fn trace_read(
 }
 
 /// The redb-shaped digest of `chain` given the root after its tip.
-fn digest_of(chain: &[(Block, Vec<Transaction>)], root_after_tip: &[u8; 32]) -> Digest {
-    let hashes: Vec<[u8; 32]> = chain
-        .iter()
-        .map(|(block, _)| block.hash().to_bytes())
-        .collect();
+fn digest_of(chain: &[(Block, Vec<Transaction>)], root_after_tip: &CurveTreeRoot) -> Digest {
+    let hashes: Vec<BlockHash> = chain.iter().map(|(block, _)| block.hash()).collect();
     digest_v0(&hashes, &spent_keys_of(chain), root_after_tip)
 }
 
 /// The redb-shaped digest one would expect after `chain`.
 pub fn expected_state(chain: &[(Block, Vec<Transaction>)]) -> Digest {
     let last = u64::try_from(chain.len() - 1).expect("a chain has a tip");
-    digest_of(chain, GrownTree::over(chain).root_after(h(last)).as_bytes())
+    digest_of(chain, &GrownTree::over(chain).root_after(h(last)))
 }
 
 pub fn open_store(path: &std::path::Path) -> ChainStore {

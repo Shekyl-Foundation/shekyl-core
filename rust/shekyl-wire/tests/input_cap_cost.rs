@@ -519,10 +519,10 @@ fn measure(
         &kis,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        tree_root.as_bytes(),
+        &tree_root,
         signed.tree_depth,
         // The message the proof was made over (the signing envelope §2.2).
-        signed.tx_signable.to_bytes(),
+        signed.tx_signable,
     )
     .expect("verify must not error");
     let verify_proof = started.elapsed();

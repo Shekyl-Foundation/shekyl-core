@@ -595,16 +595,12 @@ impl ReadSnapshot<'_> {
     pub fn logical_state_digest_v0(&self) -> Result<[u8; 32], StoreError> {
         let tip = self.tip_row()?;
         let hashes = self.block_hashes_through_tip(tip.as_ref())?;
-        let mut spent: Vec<[u8; 32]> = Vec::new();
+        let mut spent = Vec::new();
         for key_image in self.key_images()? {
-            spent.push(*key_image?.as_bytes());
+            spent.push(key_image?);
         }
         let root = self.live_root(tip.as_ref())?;
-        Ok(crate::digest_v0::digest_v0(
-            &hashes,
-            &spent,
-            root.as_bytes(),
-        ))
+        Ok(crate::digest_v0::digest_v0(&hashes, &spent, &root))
     }
 
     /// Height-ordered `block_info.hash` for `h ∈ 0..=tip`. An empty chain
@@ -613,7 +609,7 @@ impl ReadSnapshot<'_> {
     fn block_hashes_through_tip(
         &self,
         tip: Option<&(u64, BlockInfo)>,
-    ) -> Result<Vec<[u8; 32]>, StoreError> {
+    ) -> Result<Vec<BlockHash>, StoreError> {
         let Some((tip_height, _)) = tip else {
             return Ok(Vec::new());
         };
@@ -633,7 +629,7 @@ impl ReadSnapshot<'_> {
         let mut hashes = Vec::new();
         for row in rows {
             let (_, info) = row?;
-            hashes.push(*info.hash.as_bytes());
+            hashes.push(info.hash);
         }
         let expected = tip_height
             .checked_add(1)

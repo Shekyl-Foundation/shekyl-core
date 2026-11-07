@@ -142,7 +142,10 @@ use crate::{
 ///
 /// `22` (2026-10-18): `SendRecipient::destination` — the nested send-journal
 /// block went to version 5.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 22;
+///
+/// `23` (2026-11-06): `ReorgBlocks` hashes and `BlockchainTip.tip_hash`
+/// retype to [`shekyl_types::BlockHash`] (`LEDGER_BLOCK_VERSION` 13).
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 23;
 
 /// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.

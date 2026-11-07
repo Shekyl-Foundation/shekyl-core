@@ -27,7 +27,12 @@ fn a_dense_path_off_a_real_tree_proves_and_verifies() {
     );
 
     let inputs = prove_inputs(&corpus, &path, 1);
-    let result = prove_only(&inputs, &path, [0xAB; 32]).expect("prove");
+    let result = prove_only(
+        &inputs,
+        &path,
+        shekyl_types::TxSignableHash::from_bytes([0xAB; 32]),
+    )
+    .expect("prove");
     let images = [key_image(&corpus.chunk[corpus.spent_index])];
     let keys = [corpus.chunk[corpus.spent_index].pqc_key_scalar];
     let ok = shekyl_fcmp::proof::verify(
@@ -37,7 +42,7 @@ fn a_dense_path_off_a_real_tree_proves_and_verifies() {
         &keys,
         &path.tree_root,
         path.tree_depth,
-        [0xAB; 32],
+        shekyl_types::TxSignableHash::from_bytes([0xAB; 32]),
     )
     .expect("verify");
     assert!(ok, "a path the harness measured must verify");
@@ -62,7 +67,12 @@ fn a_synthesized_sparse_path_proves_and_verifies_at_the_same_depth() {
     }
 
     let inputs = prove_inputs(&corpus, &path, 1);
-    let result = prove_only(&inputs, &path, [0xCD; 32]).expect("prove");
+    let result = prove_only(
+        &inputs,
+        &path,
+        shekyl_types::TxSignableHash::from_bytes([0xCD; 32]),
+    )
+    .expect("prove");
     let images = [key_image(&corpus.chunk[corpus.spent_index])];
     let keys = [corpus.chunk[corpus.spent_index].pqc_key_scalar];
     let ok = shekyl_fcmp::proof::verify(
@@ -72,7 +82,7 @@ fn a_synthesized_sparse_path_proves_and_verifies_at_the_same_depth() {
         &keys,
         &path.tree_root,
         path.tree_depth,
-        [0xCD; 32],
+        shekyl_types::TxSignableHash::from_bytes([0xCD; 32]),
     )
     .expect("verify");
     assert!(ok, "a sparse path is a real path: it must verify");
@@ -85,11 +95,17 @@ fn a_proof_does_not_verify_against_a_different_root() {
     let corpus = build_corpus(u64::try_from(SELENE_CHUNK_WIDTH).expect("width fits"), 0x33);
     let path = synth_sparse_path(&corpus, 3);
     let inputs = prove_inputs(&corpus, &path, 1);
-    let result = prove_only(&inputs, &path, [0xEF; 32]).expect("prove");
+    let result = prove_only(
+        &inputs,
+        &path,
+        shekyl_types::TxSignableHash::from_bytes([0xEF; 32]),
+    )
+    .expect("prove");
     let images = [key_image(&corpus.chunk[corpus.spent_index])];
     let keys = [corpus.chunk[corpus.spent_index].pqc_key_scalar];
-    let mut wrong_root = path.tree_root;
+    let mut wrong_root = path.tree_root.to_bytes();
     wrong_root[0] ^= 0x01;
+    let wrong_root = shekyl_types::CurveTreeRoot::from_bytes(wrong_root);
     let verdict = shekyl_fcmp::proof::verify(
         &result.proof,
         &images,
@@ -97,7 +113,7 @@ fn a_proof_does_not_verify_against_a_different_root() {
         &keys,
         &wrong_root,
         path.tree_depth,
-        [0xEF; 32],
+        shekyl_types::TxSignableHash::from_bytes([0xEF; 32]),
     );
     assert!(
         !matches!(verdict, Ok(true)),

@@ -20,10 +20,11 @@
 //! seated and is not drawable until the cooldown ends: a connector whose
 //! every address is cooling is stranded, and recovery re-admits nothing new
 //! for it; the clock is what frees the address, no faster than its
-//! cooldown. A configured address recovery finds already seated counts as
-//! covered by the episode, so drawing it once it thaws does not end the
-//! episode. *Records-was (2026-10-14 to 2026-10-24): the failed draw left
-//! gray, and the stranded wake re-admitted it.*
+//! cooldown. A draw does not end the episode, whatever list the address
+//! came from; a session gained or the target met does. The episode counts
+//! sessions held, not dials in flight. *Records-was (2026-10-14 to
+//! 2026-10-24): the failed draw left gray, and the stranded wake
+//! re-admitted it.*
 
 #[path = "support/log_capture.rs"]
 mod log_capture;
@@ -295,8 +296,8 @@ fn a_connector_under_target_redials_its_cooling_configured_address_no_faster_tha
 /// target of two; one dead configured address, drawn once, failed, and
 /// cooling for the rest of the run; one configured address under a ban,
 /// refused at every re-admission. Over twenty wakes: recovery is entered
-/// once, never left (the kept count did not rise, and nothing was drawn
-/// that the episode does not cover), and the banned address is refused
+/// once, never left (the session count did not rise), and the banned
+/// address is refused
 /// aloud once. *Records-was (to 2026-10-24): the dead address was
 /// re-admitted, drawn, failed and dropped every two wakes, and the test was
 /// named for that cycle.*
@@ -367,8 +368,7 @@ fn the_recovery_log_is_one_episode_while_a_dead_configured_address_cools() {
 /// stranded. That wake says the kept count rose and opens the next episode.
 /// A dead configured address added after that, and a banned one, then
 /// cycle inside the new episode: the dead one is drawn each time its
-/// cooldown ends, fails and cools again, and as a configured address the
-/// episode found seated it is covered, so its draw does not end the
+/// cooldown ends, fails and cools again, and a draw does not end the
 /// episode; one more refusal, and no further enter or leave.
 ///
 /// The gain is a keep dial, not a fill draw. One gray address sits under
@@ -503,14 +503,154 @@ fn a_gained_session_closes_the_episode_on_the_following_wake() {
         0,
         "the connector is still under its target:\n{text}"
     );
-    assert_eq!(
-        text.matches("did not re-admit").count(),
-        0,
-        "no foreign candidate was drawn:\n{text}"
-    );
     assert_eq!(dialer.kept_sessions(CLEARNET), 2);
     assert!(
         !gray(dialer).contains(&peer(4)),
         "the banned address stays out"
+    );
+}
+
+/// **A `Keep` dial in flight does not end the episode** (A7, the alpha.11
+/// fleet: CS-5's three-node run logged a leave and an enter as a pair every
+/// ~16 s). The `Keep` count holds a target slot for a dial in flight, and
+/// the episode read it as a gained session: the leave was said while the
+/// dial was open, and its failure opened the next episode. The episode
+/// counts sessions held. Target three, peer 1 kept, peer 2 failed and
+/// cooling; the stranded wake opens the episode; past the cooldown peer 2
+/// is dialed and held open while the connector wakes, then refused.
+#[test]
+fn a_keep_dial_in_flight_does_not_end_the_episode() {
+    let clock = ManualClock::new(Tick::new(1));
+    let rig = keeping_on(&clock, vec![reply(NETWORK), reply(OTHER_NETWORK)]);
+    let dialer = &rig.dialer;
+    let mut rng = SplitMix64::new(23);
+    dialer.set_target(CLEARNET, 3, &mut rng);
+    for n in [1, 2] {
+        dialer
+            .admit_operator(&peer(n), Tick::new(1), &mut rng)
+            .expect("admitted");
+    }
+    dialer
+        .dial(CLEARNET, &peer(1), DialAim::Keep, &mut rng)
+        .expect("the first dial is kept");
+    assert_eq!(
+        dialer.dial(CLEARNET, &peer(2), DialAim::Keep, &mut rng),
+        None,
+        "peer 2 fails its test"
+    );
+    rig::wait_until("the refused session left the board", || {
+        rig.layer.board().rows().len() == 1
+    });
+
+    let text = log_text(tracing::Level::INFO, || {
+        assert!(
+            !dialer.wake(CLEARNET, &mut rng),
+            "the stranded wake opens the episode"
+        );
+        past_cooldowns(&clock);
+        // The rig holds the earlier dials' channels, so the next one
+        // `dialed` hands over is this dial's.
+        let earlier = rig.opened();
+        assert_eq!(earlier.len(), 2, "two channels opened before this dial");
+        // No answer is queued: the dial connects and waits for the reply.
+        let held_open = std::sync::Arc::clone(dialer);
+        let owner = std::thread::spawn(move || {
+            held_open.dial(CLEARNET, &peer(2), DialAim::Keep, &mut SplitMix64::new(24))
+        });
+        let mut wire = rig.dialed();
+        rig::wait_until("the dial to be in flight", || {
+            dialer.in_flight(CLEARNET) == 1
+        });
+        assert_eq!(
+            dialer.kept_sessions(CLEARNET),
+            2,
+            "the Keep count holds the dial's target slot"
+        );
+        for _ in 0..3 {
+            assert!(!dialer.wake(CLEARNET, &mut rng), "the bound is reached");
+        }
+        let _request = wire.read_blocking();
+        wire.inject_blocking(rig::reply(OTHER_NETWORK, Vec::new()));
+        assert_eq!(owner.join().expect("dial"), None, "peer 2 is refused");
+        rig::wait_until("the refused session left the board", || {
+            rig.layer.board().rows().len() == 1
+        });
+        assert!(
+            !dialer.wake(CLEARNET, &mut rng),
+            "stranded again, in the same episode"
+        );
+    });
+    assert_eq!(
+        text.matches("no drawable candidate; re-admitted").count(),
+        1,
+        "one episode:\n{text}"
+    );
+    assert_eq!(
+        text.matches("no longer stranded").count(),
+        0,
+        "a dial in flight is not a session:\n{text}"
+    );
+}
+
+/// **A learned address that thaws and fails does not end the episode.**
+/// Peer 1 is configured and kept, and its handshake names peer 5, which
+/// nothing configured. Peer 5 is drawn and refused, and cools; the stranded
+/// wake opens the episode. Each time peer 5 thaws it is drawn and refused
+/// again. Before, each such draw closed the episode as "a candidate it did
+/// not re-admit was drawn", and its failure opened the next, a pair per
+/// rung of the cooldown ladder (A7).
+#[test]
+fn a_learned_address_that_thaws_and_fails_does_not_end_the_episode() {
+    const DRAWS: usize = 3;
+    let clock = ManualClock::new(Tick::new(1));
+    let mut answers = vec![rig::reply(NETWORK, vec![peer(5)])];
+    answers.extend(std::iter::repeat_n(reply(OTHER_NETWORK), DRAWS + 1));
+    let rig = keeping_on(&clock, answers);
+    let dialer = &rig.dialer;
+    let mut rng = SplitMix64::new(25);
+    dialer.set_target(CLEARNET, 3, &mut rng);
+    dialer
+        .admit_operator(&peer(1), Tick::new(1), &mut rng)
+        .expect("admitted");
+    dialer
+        .dial(CLEARNET, &peer(1), DialAim::Keep, &mut rng)
+        .expect("the first dial is kept");
+    assert!(
+        gray(dialer).contains(&peer(5)),
+        "the handshake taught peer 5"
+    );
+    let settled = || {
+        rig::wait_until("the refused session left the board", || {
+            rig.layer.board().rows().len() == 1
+        })
+    };
+    assert!(dialer.wake(CLEARNET, &mut rng), "peer 5 is drawn");
+    assert!(dialer.shared().lists.is_cooling(&peer(5)), "and cools");
+    settled();
+
+    let text = log_text(tracing::Level::INFO, || {
+        for _ in 0..DRAWS {
+            assert!(
+                !dialer.wake(CLEARNET, &mut rng),
+                "inside the cooldown: stranded, nothing dialed"
+            );
+            past_cooldowns(&clock);
+            assert!(
+                dialer.wake(CLEARNET, &mut rng),
+                "past the cooldown peer 5 is drawn"
+            );
+            assert!(dialer.shared().lists.is_cooling(&peer(5)));
+            settled();
+        }
+    });
+    assert_eq!(
+        text.matches("no drawable candidate; re-admitted").count(),
+        1,
+        "one episode:\n{text}"
+    );
+    assert_eq!(
+        text.matches("no longer stranded").count(),
+        0,
+        "a draw is not a session:\n{text}"
     );
 }
