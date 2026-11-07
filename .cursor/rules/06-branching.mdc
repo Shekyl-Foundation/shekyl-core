@@ -99,32 +99,50 @@ analogous to LWMA-1 Phase 4" — it is "does this PR meet the four
 named criteria in `07-consensus-atomic-cutovers.mdc`?" The exception
 is auditable mechanically against the criteria, not by precedent.
 
-## The merge queue tests the merge result
+## The runs on `dev` test the merge result
 
-`dev` merges through GitHub's merge queue. A PR's CI runs on the PR's own
-head merged onto the `dev` of the moment it was pushed. The queue reruns
-the required checks on the **actual merge result** just before it lands.
-That is the only check that sees a semantic conflict: two PRs each green
-alone, broken together. The mechanism is the workflows' `merge_group:`
-trigger — every PR gate carries one; a gate that runs on the PR but not
-on the group has a hole exactly where this class lives — plus the `dev`
-ruleset. Consequences:
+A PR merges into `dev` once its own required checks pass; the `dev`
+ruleset requires a PR and those checks, and nothing else.
+A PR's CI runs on its head merged onto the `dev` of its last push. Two PRs
+each green alone can be broken together (#771×#772, #853×#858,
+#878×#880), and neither PR's run can see it. The runs on `dev` do: every
+gate that checks the whole tree also runs on push to `dev`, with the same
+`paths` filter it has on PRs. Consequences:
 
-- **A stacked PR cannot enter the queue until its base merges and it
-  re-targets `dev`.** That was already the discipline; the queue makes it
-  load-bearing. Expect it, do not fight it.
-- **"Require branches to be up to date" is not the cheaper alternative.**
-  It tests the same thing by making every author rebase and re-run CI after
-  every other merge — with six lanes open, each merge invalidates the other
-  five. The queue does the rebase-and-test once, on the group.
-- **`merge_group` takes no `paths` filter.** A path-filtered gate runs on
-  every group; the cheap gates carry the trigger anyway, the expensive
-  non-gate workflows (the depends cross-compiles, the RandomX differential
-  lane, the benchmark comparator) do not, and are named as such in their
-  files.
-- **A failure in the queue is `dev`'s finding, not the PR's** (the PR was
-  green on its own head): read the group's diff against the base, find the
-  other lane's change, fix on the PR, re-queue.
+- **A red run on `dev` is `dev`'s finding, not the last PR's.** The PRs
+  were green on their own heads. GitHub notifies whoever merged. Read the
+  diff since the last green run on `dev`, find the two changes that
+  disagree, and fix it on a new PR before more merges land on top; every
+  open PR that merges `dev` until then inherits the red.
+- **A burst of merges is tested once, at its newest commit.** A
+  workflow's concurrency group is its ref, so a push to `dev` cancels the
+  run of the push before it. The build and Rust scope jobs measure a push
+  from the last commit that workflow passed on
+  (`scripts/ci/push_scope_base.sh`), not from the previous push, so a
+  cancelled run's commits stay in scope and a docs-only merge cannot skip
+  them. A red names the merges since the last green run, not one PR.
+- **A gate on a PR's own diff runs on PRs only:** the schema snapshots'
+  version-bump pairing (the snapshot tests themselves are in the Rust
+  suite) and the benchmark comparator. CodeQL analyses each PR and,
+  weekly, `main`; the depends cross-compiles run per PR and nightly; the
+  ProVerif model is not a required check and runs per PR.
+- **A stacked PR retargeted onto `dev` keeps its old base's checks until
+  its next push.** Merge `dev` into it before it merges
+  (`scripts/ci/check_pr_event_triggers.py` names why no event does this).
+- **"Require branches to be up to date" is the alternative not taken.**
+  It tests each merge result before it lands by making every author merge
+  `dev` and rerun CI after every other merge; with the Rust job over an
+  hour and six lanes open, each merge would cost the other five that run.
+  The runs on `dev` test the same combination once, after the merge; the
+  price is that a break lands before it is seen.
+- **No merge queue (rule 21).** A queue also tests each merge result
+  before it lands, but a group passes only if every required check
+  finishes inside the queue's timeout, and a group removed for a timeout
+  or a conflict sends its PRs back to wait again: in the queue's last
+  eight hours on `dev` (to 2026-11-07), one PR merged. Reopen when the required checks
+  finish well inside a queue timeout (the Rust suite partitioned across
+  runners is the step that gets there), and record what the queue would
+  replace here.
 
 ## When to ask the user instead of proceeding
 
