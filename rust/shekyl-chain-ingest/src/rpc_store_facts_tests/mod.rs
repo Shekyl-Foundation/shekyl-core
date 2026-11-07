@@ -29,9 +29,7 @@ use shekyl_chain_store::store::{ChainStore, SnapshotView};
 use shekyl_daemon_rpc::chain_facts::{BlockLookup, ChainFacts, FactsFault};
 
 use shekyl_daemon_rpc::info::{get_info, Disclosure};
-use shekyl_daemon_rpc::info_facts::{
-    InfoPeersFacts, PeerFacts, PoolCounts, PoolScope, PoolState, SessionCounts,
-};
+use shekyl_daemon_rpc::info_facts::{PeerFacts, PoolCounts, PoolScope, PoolState, SessionCounts};
 use shekyl_daemon_rpc::methods::{
     get_block, get_block_count, get_block_hash, get_block_header_by_hash,
     get_block_header_by_height, get_block_headers_range, get_fee_estimate, get_height,
@@ -138,14 +136,16 @@ impl NodeFacts for TestNode {
     fn peers(&self) -> Result<PeerFacts, FactsFault> {
         // An online node has its peer lists; `Offline` belongs to a node
         // whose sync facts say so.
-        Ok(PeerFacts::Running(InfoPeersFacts {
-            public_incoming_sockets: 1,
-            public_outgoing_sockets: 2,
-            tor_incoming_sockets: 0,
-            tor_outgoing_sockets: 0,
-            white_peerlist_size: 5,
-            grey_peerlist_size: 7,
-        }))
+        Ok(PeerFacts::Running(
+            shekyl_rpc_types::InfoPeers::new(vec![shekyl_rpc_types::InfoConnectorPeers {
+                connector: shekyl_rpc_types::InfoConnector::Clearnet,
+                incoming_sockets: 1,
+                outgoing_sockets: 2,
+                white_peerlist_size: 5,
+                gray_peerlist_size: 7,
+            }])
+            .expect("one row is in order"),
+        ))
     }
     fn sessions(&self) -> Result<SessionCounts, FactsFault> {
         Ok(SessionCounts {

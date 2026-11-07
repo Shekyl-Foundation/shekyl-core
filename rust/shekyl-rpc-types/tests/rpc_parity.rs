@@ -832,7 +832,7 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 45] = [
+    let links: [(&str, &str); 46] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -1013,6 +1013,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v45.json"),
             include_str!("vectors/rpc/get_version_synced_v46.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v46.json"),
+            include_str!("vectors/rpc/get_version_synced_v47.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1031,7 +1035,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 45] = [
+    const ADDED_AT_LINK: [&[&str]; 46] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1077,6 +1081,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.67 (calc_pow and get_coinbase_tx_sum are served within the hash budget and the coinbase-read permit; get_version gains nothing)
         &[], // 3.68 (sync_info is chain sync's view, CS-5 §7; get_version gains nothing)
         &[], // 3.69 (already_in_pool carries required relay, including untracked; get_version gains nothing)
+        &[], // 3.70 (get_info's Peers part is one row per connector; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1088,7 +1093,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 45] = [
+    const REMOVED_AT_LINK: [&[&str]; 46] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1134,6 +1139,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.67 (the hash budget is not get_version's; it retires nothing)
         &[], // 3.68 (sync_info's spans and overview are not get_version's; it retires nothing)
         &[], // 3.69 (already_in_pool carries required relay, including untracked; get_version gains nothing)
+        &[], // 3.70 (the Peers rows are not get_version's; it retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -1698,6 +1704,60 @@ fn the_3_56_get_info_vectors_say_whether_p2p_runs_before_any_count() {
         parsed(include_str!("vectors/rpc/get_info_offline_v1.json")),
         "the offline fixture is the peerless one offline and no count"
     );
+}
+
+/// **3.70, by derivation.** `get_info`'s Peers part is one row per
+/// connector the daemon runs. Each successor is its predecessor minus
+/// exactly the six flat counts, plus `connectors`: a clearnet row of the
+/// `public_*` sockets and the two list sizes (which were the clearnet
+/// lists alone), then a tor row of the `tor_*` sockets and the tor lists'
+/// sizes, which no predecessor carried (40 white, 300 gray).
+#[test]
+fn the_3_70_get_info_vectors_are_their_predecessors_with_one_row_per_connector() {
+    for (before_raw, after_raw) in [
+        (
+            include_str!("vectors/rpc/get_info_synced_v8.json"),
+            include_str!("vectors/rpc/get_info_synced_v9.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_info_syncing_v7.json"),
+            include_str!("vectors/rpc/get_info_syncing_v8.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_info_peerless_startup_v8.json"),
+            include_str!("vectors/rpc/get_info_peerless_startup_v9.json"),
+        ),
+    ] {
+        let mut derived = parsed(before_raw);
+        let object = derived.as_object_mut().expect("a fixture is an object");
+        let mut take = |key: &str| {
+            object
+                .remove(key)
+                .unwrap_or_else(|| panic!("the predecessor carries `{key}`"))
+        };
+        let clearnet = serde_json::json!({
+            "connector": "clearnet",
+            "incoming_sockets": take("public_incoming_socket_count"),
+            "outgoing_sockets": take("public_outgoing_socket_count"),
+            "white_peerlist_size": take("white_peerlist_size"),
+            "gray_peerlist_size": take("grey_peerlist_size"),
+        });
+        let tor = serde_json::json!({
+            "connector": "tor",
+            "incoming_sockets": take("tor_incoming_socket_count"),
+            "outgoing_sockets": take("tor_outgoing_socket_count"),
+            "white_peerlist_size": 40,
+            "gray_peerlist_size": 300,
+        });
+        assert!(object
+            .insert("connectors".to_owned(), serde_json::json!([clearnet, tor]))
+            .is_none());
+        assert_eq!(
+            derived,
+            parsed(after_raw),
+            "the successor is its predecessor with the six counts as one row per connector"
+        );
+    }
 }
 
 /// **3.54, by derivation.** `get_info` stops repeating the daemon's network
@@ -2562,9 +2622,9 @@ fn fee_v4_is_v3_minus_exactly_the_quantization_mask() {
 mod get_info {
     use super::{assert_parity, parsed, tagged_hash};
     use shekyl_rpc_types::{
-        GetInfoResponse, HealthP2p, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost,
-        InfoIdentity, InfoP2p, InfoPeers, InfoPool, InfoStatus, Nullable, RpcStatus,
-        StatusConnections,
+        GetInfoResponse, HealthP2p, Hidden, InfoChain, InfoConnector, InfoConnectorPeers,
+        InfoEconomics, InfoHealth, InfoHost, InfoIdentity, InfoP2p, InfoPeers, InfoPool,
+        InfoStatus, Nullable, RpcStatus, StatusConnections,
     };
     use shekyl_units::AtomicUnits;
 
@@ -2617,14 +2677,25 @@ mod get_info {
                 alt_blocks_count: 3,
                 rpc_connections_count: 0,
             }),
-            peers: Hidden::Shown(InfoP2p::Running(InfoPeers {
-                public_incoming_socket_count: 13,
-                public_outgoing_socket_count: 10,
-                tor_incoming_socket_count: 4,
-                tor_outgoing_socket_count: 2,
-                white_peerlist_size: 500,
-                grey_peerlist_size: 2500,
-            })),
+            peers: Hidden::Shown(InfoP2p::Running(
+                InfoPeers::new(vec![
+                    InfoConnectorPeers {
+                        connector: InfoConnector::Clearnet,
+                        incoming_sockets: 13,
+                        outgoing_sockets: 10,
+                        white_peerlist_size: 500,
+                        gray_peerlist_size: 2500,
+                    },
+                    InfoConnectorPeers {
+                        connector: InfoConnector::Tor,
+                        incoming_sockets: 4,
+                        outgoing_sockets: 2,
+                        white_peerlist_size: 40,
+                        gray_peerlist_size: 300,
+                    },
+                ])
+                .expect("the rows are in connector order"),
+            )),
             host: Hidden::Shown(InfoHost {
                 tx_pool_unbroadcast_count: Some(3),
             }),
@@ -2635,7 +2706,7 @@ mod get_info {
     #[test]
     fn synced_matches_the_oracle() {
         assert_parity(
-            include_str!("vectors/rpc/get_info_synced_v8.json"),
+            include_str!("vectors/rpc/get_info_synced_v9.json"),
             &synced(),
         );
     }
@@ -2647,7 +2718,7 @@ mod get_info {
         built.health.target_height = Nullable::value(1_300_000);
         built.health.busy_syncing = true;
         built.health.following_degraded = true;
-        assert_parity(include_str!("vectors/rpc/get_info_syncing_v7.json"), &built);
+        assert_parity(include_str!("vectors/rpc/get_info_syncing_v8.json"), &built);
     }
 
     #[test]
@@ -2664,15 +2735,23 @@ mod get_info {
             outgoing: 0,
             incoming: 0,
         };
-        let Hidden::Shown(InfoP2p::Running(peers)) = &mut built.peers else {
+        let Hidden::Shown(InfoP2p::Running(peers)) = &built.peers else {
             unreachable!("the fixture shows a running node's Peers")
         };
-        peers.public_incoming_socket_count = 0;
-        peers.public_outgoing_socket_count = 0;
-        peers.tor_incoming_socket_count = 0;
-        peers.tor_outgoing_socket_count = 0;
+        let rows = peers
+            .connectors()
+            .iter()
+            .map(|row| InfoConnectorPeers {
+                incoming_sockets: 0,
+                outgoing_sockets: 0,
+                ..*row
+            })
+            .collect();
+        built.peers = Hidden::Shown(InfoP2p::Running(
+            InfoPeers::new(rows).expect("the rows keep their order"),
+        ));
         assert_parity(
-            include_str!("vectors/rpc/get_info_peerless_startup_v8.json"),
+            include_str!("vectors/rpc/get_info_peerless_startup_v9.json"),
             &built,
         );
     }
@@ -2700,16 +2779,18 @@ mod get_info {
     #[test]
     fn offline_with_a_count_and_a_count_without_p2p_are_refused() {
         let off = parsed(include_str!("vectors/rpc/get_info_offline_v1.json"));
+        let rows =
+            parsed(include_str!("vectors/rpc/get_info_synced_v9.json"))["connectors"].clone();
         for key in PEERS_KEYS {
             let mut doc = off.clone();
-            doc[key] = 0.into();
+            doc[key] = rows.clone();
             let refusal = decode(&doc).expect_err("offline carries no count");
             assert!(
                 refusal.contains("offline") && refusal.contains(key),
                 "the refusal names offline and `{key}`; got {refusal:?}"
             );
         }
-        let running = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+        let running = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
         let mut doc = running.clone();
         doc.as_object_mut().unwrap().remove("p2p");
         let refusal = decode(&doc).expect_err("a count says what it is of");
@@ -2723,7 +2804,7 @@ mod get_info {
     #[test]
     fn each_part_that_disagrees_with_offline_is_refused() {
         let offline = parsed(include_str!("vectors/rpc/get_info_offline_v1.json"));
-        let running = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+        let running = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
         let refused = |doc: &serde_json::Value, needle: &str| {
             let refusal = decode(doc).expect_err("a disagreement must not decode");
             assert!(refusal.contains(needle), "{needle}: got {refusal:?}");
@@ -2754,7 +2835,7 @@ mod get_info {
         let mut doc = offline.clone();
         doc["p2p"] = "running".into();
         for key in PEERS_KEYS {
-            doc[key] = 0.into();
+            doc[key] = running[key].clone();
         }
         refused(&doc, "`p2p` disagrees");
     }
@@ -2792,14 +2873,68 @@ mod get_info {
         "alt_blocks_count",
         "rpc_connections_count",
     ];
-    const PEERS_KEYS: [&str; 6] = [
-        "public_incoming_socket_count",
-        "public_outgoing_socket_count",
-        "tor_incoming_socket_count",
-        "tor_outgoing_socket_count",
-        "white_peerlist_size",
-        "grey_peerlist_size",
-    ];
+    /// The Peers part's counts: one key since 3.70, the rows.
+    const PEERS_KEYS: [&str; 1] = ["connectors"];
+
+    /// **A Peers row is the all-or-none unit** (3.70). A row missing any
+    /// member, carrying one it should not, or naming a connector the wire
+    /// does not know is refused; so are rows out of connector order and a
+    /// connector named twice. A connector the daemon does not run has no
+    /// row, and a reply without one decodes.
+    #[test]
+    fn a_peers_row_is_whole_and_the_rows_are_in_connector_order() {
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
+        for member in [
+            "connector",
+            "incoming_sockets",
+            "outgoing_sockets",
+            "white_peerlist_size",
+            "gray_peerlist_size",
+        ] {
+            let mut doc = full.clone();
+            assert!(
+                doc["connectors"][1]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(member)
+                    .is_some(),
+                "the tor row carries `{member}`"
+            );
+            let refusal = decode(&doc).expect_err("a partial row must not decode");
+            assert!(
+                refusal.contains(member),
+                "names `{member}`: got {refusal:?}"
+            );
+        }
+
+        let mut doc = full.clone();
+        doc["connectors"][0]["grey_peerlist_size"] = 1.into();
+        assert!(decode(&doc).is_err(), "a row carries no other member");
+
+        let mut doc = full.clone();
+        doc["connectors"][1]["connector"] = "i2p".into();
+        assert!(decode(&doc).is_err(), "a connector the wire does not know");
+
+        let mut doc = full.clone();
+        doc["connectors"].as_array_mut().unwrap().reverse();
+        let refusal = decode(&doc).expect_err("tor before clearnet");
+        assert!(refusal.contains("connector order"), "got {refusal:?}");
+
+        let mut doc = full.clone();
+        let clearnet = doc["connectors"][0].clone();
+        doc["connectors"][1] = clearnet;
+        let refusal = decode(&doc).expect_err("clearnet twice");
+        assert!(refusal.contains("twice"), "got {refusal:?}");
+
+        let mut doc = full;
+        doc["connectors"].as_array_mut().unwrap().truncate(1);
+        let reply = decode(&doc).expect("a clearnet-only daemon has one row");
+        let Hidden::Shown(InfoP2p::Running(peers)) = &reply.peers else {
+            panic!("the reply shows a running node's Peers")
+        };
+        assert!(peers.connector(InfoConnector::Tor).is_none());
+        assert_eq!(serde_json::to_value(&reply).unwrap(), doc);
+    }
 
     fn decode(doc: &serde_json::Value) -> Result<GetInfoResponse, String> {
         serde_json::from_value(doc.clone()).map_err(|e| e.to_string())
@@ -2810,7 +2945,7 @@ mod get_info {
     /// key, for every key of both parts — never a part read as withheld.
     #[test]
     fn a_hidden_part_missing_one_key_is_refused_not_read_as_withheld() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
         for (part, keys) in [("status", &STATUS_KEYS[..]), ("peers", &PEERS_KEYS[..])] {
             for key in keys {
                 let mut doc = full.clone();
@@ -2831,7 +2966,7 @@ mod get_info {
     /// part is unaffected, and the reply writes back without those keys.
     #[test]
     fn a_hidden_part_with_no_keys_is_withheld_and_writes_none() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
 
         let mut doc = full.clone();
         for key in STATUS_KEYS {
@@ -2864,7 +2999,7 @@ mod get_info {
     /// decodes.
     #[test]
     fn a_shown_status_with_an_empty_version_is_refused() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
         doc["version"] = "".into();
         let refusal = decode(&doc).expect_err("an empty version is not an answer");
         assert!(refusal.contains("empty `version`"), "got {refusal:?}");
@@ -2883,7 +3018,7 @@ mod get_info {
     /// without the key, and `0` is a count, not an absence (RK-Q10).
     #[test]
     fn the_host_part_is_withheld_when_its_key_is_absent() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
         let shown = decode(&doc).expect("the host's reply decodes");
         assert_eq!(
             shown.host,
@@ -2916,7 +3051,7 @@ mod get_info {
     /// key that withholds the part.
     #[test]
     fn a_retired_pool_is_null_counts_and_the_decoder_refuses_a_mix() {
-        let live = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+        let live = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
         assert!(
             live.get("pool_retired").is_none(),
             "a live reply carries no `pool_retired`"
@@ -2980,7 +3115,7 @@ mod get_info {
     /// it cannot carry the attribute on a flattened type.
     #[test]
     fn an_unknown_key_is_refused() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
         doc.as_object_mut()
             .unwrap()
             .insert("emission_era".to_owned(), "Founding".into());
@@ -3002,7 +3137,7 @@ mod get_info {
             "restricted",
             "burn_pct",
         ] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
             doc.as_object_mut().unwrap().remove(key);
             let refusal = decode(&doc).expect_err("a missing required key must not decode");
             assert!(refusal.contains(key), "{key}: got {refusal:?}");
@@ -3022,7 +3157,7 @@ mod get_info {
     #[test]
     fn the_two_amounts_are_required_decimal_strings() {
         for key in ["already_generated_coins", "total_burned"] {
-            let full = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+            let full = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
 
             let mut missing = full.clone();
             missing.as_object_mut().unwrap().remove(key);
@@ -3090,7 +3225,7 @@ mod get_info {
             ("testnet", serde_json::json!(false)),
             ("stagenet", serde_json::json!(false)),
         ] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
             doc.as_object_mut().unwrap().insert(key.to_owned(), value);
             let refusal = decode(&doc).expect_err("a retired name must not decode");
             assert!(
@@ -3113,7 +3248,7 @@ mod get_info {
             ("block_size_limit", serde_json::json!(600_000)),
             ("block_size_median", serde_json::json!(300_000)),
         ] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
             doc.as_object_mut().unwrap().insert(key.to_owned(), value);
             let refusal = decode(&doc).expect_err("a retired name must not decode");
             assert!(refusal.contains(key), "{key}: got {refusal:?}");
@@ -3131,7 +3266,7 @@ mod get_info {
     #[test]
     fn the_weight_names_are_required_and_zero_is_written() {
         for key in ["block_weight_limit", "block_weight_median"] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
             doc.as_object_mut().unwrap().remove(key);
             let refusal = decode(&doc).expect_err("a missing weight name must not decode");
             assert!(refusal.contains(key), "{key}: got {refusal:?}");
@@ -3162,7 +3297,7 @@ mod get_info {
                 serde_json::json!(format!("0x1{}", "0".repeat(32))),
                 serde_json::json!(255),
             ] {
-                let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+                let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
                 doc[key] = wrong.clone();
                 assert!(
                     decode(&doc).is_err(),

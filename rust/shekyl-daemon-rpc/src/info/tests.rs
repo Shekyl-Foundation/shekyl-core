@@ -18,9 +18,27 @@ use shekyl_units::AtomicUnits;
 
 use super::*;
 use crate::info_facts::{
-    InfoChainFacts, InfoPeersFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolState,
-    SessionCounts,
+    InfoChainFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolState, SessionCounts,
 };
+use shekyl_rpc_types::{InfoConnector, InfoConnectorPeers, InfoPeers};
+
+/// The fixture's Peers rows, every row's sockets replaced: a node whose
+/// lists are full and whose sockets read `incoming` and `outgoing`.
+pub(super) fn with_sockets(peers: &PeerFacts, incoming: u64, outgoing: u64) -> PeerFacts {
+    let PeerFacts::Running(peers) = peers else {
+        unreachable!("the fixture's P2P runs")
+    };
+    let rows = peers
+        .connectors()
+        .iter()
+        .map(|row| InfoConnectorPeers {
+            incoming_sockets: incoming,
+            outgoing_sockets: outgoing,
+            ..*row
+        })
+        .collect();
+    PeerFacts::Running(InfoPeers::new(rows).expect("the rows keep their order"))
+}
 
 /// The emitter's `tagged_hash`: byte i = (i*7 + tag) & 0xff.
 fn tagged_hash(tag: u8) -> BlockHash {
@@ -100,14 +118,25 @@ pub(crate) fn synced_facts() -> FakeInfoFacts {
             alt_blocks_count: 3,
             version: "3.1.0-oracle".to_owned(),
         },
-        peers: PeerFacts::Running(InfoPeersFacts {
-            public_incoming_sockets: 13,
-            public_outgoing_sockets: 10,
-            tor_incoming_sockets: 4,
-            tor_outgoing_sockets: 2,
-            white_peerlist_size: 500,
-            grey_peerlist_size: 2500,
-        }),
+        peers: PeerFacts::Running(
+            InfoPeers::new(vec![
+                InfoConnectorPeers {
+                    connector: InfoConnector::Clearnet,
+                    incoming_sockets: 13,
+                    outgoing_sockets: 10,
+                    white_peerlist_size: 500,
+                    gray_peerlist_size: 2500,
+                },
+                InfoConnectorPeers {
+                    connector: InfoConnector::Tor,
+                    incoming_sockets: 4,
+                    outgoing_sockets: 2,
+                    white_peerlist_size: 40,
+                    gray_peerlist_size: 300,
+                },
+            ])
+            .expect("the rows are in connector order"),
+        ),
         chain_fault: None,
         pool_fault: None,
         store_size_fault: None,
@@ -161,7 +190,7 @@ impl InfoFacts for FakeInfoFacts {
 
     fn peers(&self) -> Result<PeerFacts, FactsFault> {
         self.peers_reads.fetch_add(1, Ordering::Relaxed);
-        self.peers_fault.map_or(Ok(self.peers), Err)
+        self.peers_fault.map_or_else(|| Ok(self.peers.clone()), Err)
     }
 
     fn sessions(&self) -> Result<SessionCounts, FactsFault> {
@@ -192,7 +221,7 @@ fn synced_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&synced_facts(), Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v8.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v9.json"
         ))
     );
 }
@@ -232,7 +261,7 @@ fn syncing_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v7.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v8.json"
         ))
     );
 }
@@ -243,17 +272,11 @@ fn peerless_startup_reproduces_the_oracle_vector() {
     facts.chain.synchronized = false;
     facts.chain.core_target_height = None;
     facts.sessions = SessionCounts::NONE;
-    let PeerFacts::Running(peers) = &mut facts.peers else {
-        unreachable!("the fixture's P2P runs")
-    };
-    peers.public_incoming_sockets = 0;
-    peers.public_outgoing_sockets = 0;
-    peers.tor_incoming_sockets = 0;
-    peers.tor_outgoing_sockets = 0;
+    facts.peers = with_sockets(&facts.peers, 0, 0);
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v8.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v9.json"
         ))
     );
 }
@@ -639,14 +662,7 @@ fn a_restricted_reply_withholds_status_and_peers() {
         "alt_blocks_count",
         "rpc_connections_count",
     ];
-    const PEERS_KEYS: [&str; 6] = [
-        "public_incoming_socket_count",
-        "public_outgoing_socket_count",
-        "tor_incoming_socket_count",
-        "tor_outgoing_socket_count",
-        "white_peerlist_size",
-        "grey_peerlist_size",
-    ];
+    const PEERS_KEYS: [&str; 1] = ["connectors"];
 
     let facts = synced_facts();
     let view = get_info(&facts, Disclosure::VIEW, 17).expect("a view caller is answered");
