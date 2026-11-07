@@ -483,6 +483,8 @@ jobs:
           name: rust-nextest-junit
           path: rust/target/nextest/ci/junit.xml
           if-no-files-found: warn
+          # A re-run of the job uploads under the same name.
+          overwrite: true
       - name: "BA-T5 floor probe smoke: the ignored probe still serves whole responses"
         working-directory: rust
         # The floor probe (`shekyl-p-serve/tests/ba_t5_floor_probe.rs`) is
