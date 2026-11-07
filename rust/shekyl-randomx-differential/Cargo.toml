@@ -74,6 +74,24 @@ path = "src/main.rs"
 name = "gen-parity-corpus"
 path = "src/bin/gen_parity_corpus.rs"
 
+# The Phase 3a full-dataset parity gate and its miner-shaped known
+# answer (`RANDOMX_V2_PHASE3_PLAN.md` §7), run by the `full-parity` job
+# of `randomx-v2-differential.yml`.
+[[bin]]
+name = "full-parity"
+path = "src/bin/full_parity.rs"
+required-features = ["full-dataset"]
+
+[[bin]]
+name = "miner-kat"
+path = "src/bin/miner_kat.rs"
+required-features = ["full-dataset"]
+
+# Forwards `randomx-v2-sys`'s miner symbols. The light differential
+# build does not enable this. `full-parity` and `miner-kat` require it.
+[features]
+full-dataset = ["randomx-v2-sys/full-dataset"]
+
 [dependencies]
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx", features = ["test-internals"] }
 randomx-v2-sys = { path = "../randomx-v2-sys" }
@@ -85,16 +103,22 @@ shekyl-types = { path = "../shekyl-types" }
 # primitive, so the domain separator is registry-governed like every
 # other one rather than a local Keccak call.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# The full-dataset gate's genesis case: mainnet's genesis block as the
+# daemon assembles it (the network table's transaction under the genesis
+# tool's header), hashed and PoW-blobbed by the wire crate.
+shekyl-network = { path = "../shekyl-network" }
+shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
+shekyl-wire = { path = "../shekyl-wire" }
+hex = "0.4"
 rand_chacha = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# Workspace clippy lint set per `rust/Cargo.toml`. The C4 skeleton has
-# no FFI, no unsafe, no consensus-coupling — the workspace defaults
-# (verified at C4 close by `cargo clippy --workspace --all-targets
-# --keep-going -- -D warnings`) are sufficient. Per-crate `[lints]`
-# overrides may land later if specific modes (e.g., `--mode=concurrent`
-# at C9) introduce per-module exemptions.
+# Workspace clippy lint set per `rust/Cargo.toml`. The light build
+# declares no `extern "C"` (that surface stays in `randomx-v2-sys`).
+# The `full-dataset` feature's module is the one unsafe caller, and it
+# calls the sys crate rather than declaring symbols here. The workspace
+# defaults are sufficient.
 [lints]
 workspace = true

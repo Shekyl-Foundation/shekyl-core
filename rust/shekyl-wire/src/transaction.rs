@@ -264,8 +264,7 @@ pub const COINBASE_RESERVE_MARGIN: usize = 0;
 /// Bytes a block holds for its coinbase when [`TX_WEIGHT_LIMIT`] is derived.
 ///
 /// The largest coinbase the grammar allows, plus [`COINBASE_RESERVE_MARGIN`].
-/// The C++ `CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE` is this number as a
-/// literal until the flip deletes that header's readers.
+/// `shekyl-chain-rules` pins this value.
 pub const COINBASE_RESERVE: usize = max_coinbase_weight() + COINBASE_RESERVE_MARGIN;
 
 /// Per-transaction weight limit (`get_transaction_weight_limit`,

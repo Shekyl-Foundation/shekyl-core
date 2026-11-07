@@ -4425,6 +4425,7 @@ version = "3.1.0"
 dependencies = [
  "proptest",
  "serde_json",
+ "sha2",
  "shekyl-types",
 ]
 
@@ -5221,14 +5222,18 @@ dependencies = [
 name = "shekyl-randomx-differential"
 version = "3.1.0"
 dependencies = [
+ "hex",
  "rand_chacha 0.3.1",
  "randomx-v2-sys",
  "serde",
  "serde_json",
  "sha2",
  "shekyl-crypto-hash",
+ "shekyl-genesis-tool",
+ "shekyl-network",
  "shekyl-pow-randomx",
  "shekyl-types",
+ "shekyl-wire",
 ]
 
 [[package]]
