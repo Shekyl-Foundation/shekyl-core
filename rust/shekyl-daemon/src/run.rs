@@ -314,7 +314,7 @@ fn supervise(
         let mut sync_ended = node.sync_ended();
         note_run(
             &mut preserve_status,
-            pool.block_on(run_or_stop(&mut sync_ended)),
+            pool.block_on(run_or_stop(&config.logging.file, &mut sync_ended)),
         );
     }
     notify_driver.abort();
@@ -369,12 +369,15 @@ fn finish(
 /// [`shekyl_node::SyncEnded::Stopped`], and this wait is not polled while
 /// the node is dropped. A failed end is read before a stop request: the
 /// owner is stopped only in the teardown, so a stop cannot cause it.
-async fn run_or_stop(sync_ended: &mut watch::Receiver<Option<shekyl_node::SyncEnded>>) -> RunWait {
+async fn run_or_stop(
+    log_file: &Path,
+    sync_ended: &mut watch::Receiver<Option<shekyl_node::SyncEnded>>,
+) -> RunWait {
     tokio::select! {
         biased;
         cause = sync_failed(sync_ended) => RunWait::SyncFailed(cause),
         cause = signals::stop_requested() => {
-            note_stop(cause);
+            note_stop(log_file, cause);
             RunWait::StopRequested
         }
     }
@@ -411,8 +414,31 @@ fn note_run(preserve_status: &mut bool, wait: RunWait) {
     }
 }
 
-fn note_stop(by: &'static str) {
-    tracing::warn!(target: "daemon", "stop requested by {by}");
+fn note_stop(log_file: &Path, cause: signals::StopCause) {
+    match stop_line(cause) {
+        StopLine::Announced(line) => announce_all(log_file, &[line]),
+        StopLine::Error(line) => tracing::error!(target: "daemon", "{line}"),
+    }
+}
+
+/// How a stop is reported.
+#[derive(Debug, PartialEq, Eq)]
+enum StopLine {
+    /// A stop the operator asked for: an IG-14 announcement, to standard
+    /// error and the log whatever the level, with no level tag (Rick,
+    /// 2026-11-06). An ordinary `SIGTERM` is not a fault, and an operator
+    /// still sees why the daemon went away.
+    Announced(String),
+    /// A forced stop: an `error` event.
+    Error(String),
+}
+
+fn stop_line(cause: signals::StopCause) -> StopLine {
+    if cause.asked_for() {
+        StopLine::Announced(format!("stop requested by {cause}"))
+    } else {
+        StopLine::Error(format!("stop forced: {cause}"))
+    }
 }
 
 /// The line a start with `mine = on` announces when the node's declaration
@@ -609,7 +635,7 @@ mod tests {
         assert_eq!(status, 0, "a requested stop is the exit status 0");
         assert_eq!(
             pool.block_on(signals::stop_requested()),
-            "the daemon's own request (console or RPC)"
+            signals::StopCause::Requested
         );
         pool.shutdown_background();
     }
@@ -668,7 +694,13 @@ mod tests {
         let text = std::fs::read_to_string(&log).unwrap();
         assert!(text.contains("effective configuration:"), "{text}");
         assert!(text.contains("posture:"), "{text}");
-        assert!(text.contains("stop requested by"), "{text}");
+        // The stop was asked for: an announcement, in the log whatever the
+        // level, with no level tag (IG-14; alpha.11 bug hunt).
+        let stop = text
+            .lines()
+            .find(|line| line.contains("stop requested by"))
+            .unwrap_or_else(|| panic!("no stop announcement: {text}"));
+        assert_eq!(stop, "stop requested by the RPC's stop_daemon", "{text}");
         // The lock was released at the end: it can be taken again.
         assert!(Lock::take(&data).is_ok());
     }
@@ -689,12 +721,14 @@ mod tests {
             .expect("runtime");
         // Clears a stop an earlier test latched.
         signals::own(rt.handle()).expect("own");
+        let d = tempfile::tempdir().unwrap();
+        let log = d.path().join("shekyld.log");
         let (ended_tx, mut ended) = watch::channel(None);
         ended_tx.send_replace(Some(shekyl_node::SyncEnded::Stopped));
         let waited = rt.block_on(async {
             tokio::time::timeout(
                 std::time::Duration::from_millis(50),
-                run_or_stop(&mut ended),
+                run_or_stop(&log, &mut ended),
             )
             .await
         });
@@ -702,14 +736,41 @@ mod tests {
         ended_tx.send_replace(Some(shekyl_node::SyncEnded::Failed(
             shekyl_node::EndCause::PortClosed,
         )));
-        let wait = rt.block_on(run_or_stop(&mut ended));
+        let wait = rt.block_on(run_or_stop(&log, &mut ended));
         assert_eq!(wait, RunWait::SyncFailed(shekyl_node::EndCause::PortClosed));
         let mut preserve_status = true;
         note_run(&mut preserve_status, wait);
         assert!(!preserve_status, "the exit was not made a failure");
         assert_eq!(
             rt.block_on(signals::stop_requested()),
-            "the session layer dropped the sync owner"
+            signals::StopCause::Fatal("the session layer dropped the sync owner")
+        );
+    }
+
+    /// **An asked-for stop is announced, a forced one is an `error`.**
+    /// The fleet's every service stop was a `WARN` (alpha.11 bug hunt),
+    /// which reads as a fault; Rick ruled it an IG-14 announcement
+    /// (2026-11-06). Red edit: report an asked-for stop as an `Error`.
+    #[test]
+    fn an_asked_for_stop_is_announced_and_a_forced_one_is_an_error() {
+        use signals::StopCause;
+        assert_eq!(
+            stop_line(StopCause::Requested),
+            StopLine::Announced("stop requested by the RPC's stop_daemon".to_owned())
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            stop_line(StopCause::Signal(signals::Signal::Terminate)),
+            StopLine::Announced("stop requested by SIGTERM".to_owned())
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            stop_line(StopCause::Signal(signals::Signal::Shutdown)),
+            StopLine::Announced("stop requested by shutdown".to_owned())
+        );
+        assert_eq!(
+            stop_line(StopCause::Fatal("the session layer dropped the sync owner")),
+            StopLine::Error("stop forced: the session layer dropped the sync owner".to_owned())
         );
     }
 }

@@ -7,8 +7,8 @@
 //!
 //! Every trigger reaches one latch: the POSIX signals and every Windows
 //! console event through [`own`], which holds the operating system's
-//! streams for the process's life on the signal runtime; the console's
-//! `exit` and the RPC's `stop_daemon` through [`request_stop`]; and a part
+//! streams for the process's life on the signal runtime; the RPC's
+//! `stop_daemon` (`shekyl-cli daemon stop`) through [`request_stop`]; and a part
 //! the daemon cannot run without ending, chain sync's owner, through
 //! [`fatal`], whose stop also makes the exit a failure. A wait is
 //! [`stop_requested`], which answers at once when the latch is already
@@ -19,16 +19,91 @@
 //! The latch is per daemon start: [`own`] clears it, so a request made
 //! before the owner existed does not stop the daemon it was not meant for.
 
+use std::fmt;
 use std::sync::Mutex;
 
 use tokio::sync::Notify;
 
+/// A stop trigger the operating system delivers, by its platform name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Signal {
+    #[cfg(unix)]
+    Interrupt,
+    #[cfg(unix)]
+    Terminate,
+    #[cfg(windows)]
+    CtrlC,
+    #[cfg(windows)]
+    CtrlBreak,
+    #[cfg(windows)]
+    WindowClose,
+    #[cfg(windows)]
+    Logoff,
+    #[cfg(windows)]
+    Shutdown,
+}
+
+impl Signal {
+    fn name(self) -> &'static str {
+        match self {
+            #[cfg(unix)]
+            Self::Interrupt => "SIGINT",
+            #[cfg(unix)]
+            Self::Terminate => "SIGTERM",
+            #[cfg(windows)]
+            Self::CtrlC => "Ctrl-C",
+            #[cfg(windows)]
+            Self::CtrlBreak => "Ctrl-Break",
+            #[cfg(windows)]
+            Self::WindowClose => "window close",
+            #[cfg(windows)]
+            Self::Logoff => "logoff",
+            #[cfg(windows)]
+            Self::Shutdown => "shutdown",
+        }
+    }
+}
+
+/// Why the daemon stops. An operator's stop and a forced one are different
+/// kinds, so the line that reports them can tell them apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StopCause {
+    /// The operating system's stop trigger: a service manager's or a
+    /// terminal's ordinary way to stop the daemon.
+    Signal(Signal),
+    /// The RPC's `stop_daemon`, which `shekyl-cli daemon stop` posts.
+    Requested,
+    /// A part the daemon cannot run without ended, with this cause.
+    Fatal(&'static str),
+}
+
+impl StopCause {
+    /// Whether the operator asked for this stop. An asked-for stop is the
+    /// daemon doing what it was told, announced rather than logged as a
+    /// fault (IG-14; alpha.11 bug hunt, a SIGTERM logged at WARN); a forced
+    /// one is an error.
+    #[must_use]
+    pub fn asked_for(self) -> bool {
+        !matches!(self, Self::Fatal(_))
+    }
+}
+
+impl fmt::Display for StopCause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Signal(signal) => f.write_str(signal.name()),
+            Self::Requested => f.write_str("the RPC's stop_daemon"),
+            Self::Fatal(cause) => f.write_str(cause),
+        }
+    }
+}
+
 /// The cause of the stop, once one has arrived.
-static STOP: Mutex<Option<&'static str>> = Mutex::new(None);
+static STOP: Mutex<Option<StopCause>> = Mutex::new(None);
 /// Woken when `STOP` is set.
 static STOPPED: Notify = Notify::const_new();
 
-fn latch(cause: &'static str) {
+fn latch(cause: StopCause) {
     let mut stop = STOP
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -39,15 +114,15 @@ fn latch(cause: &'static str) {
     }
 }
 
-fn latched() -> Option<&'static str> {
+fn latched() -> Option<StopCause> {
     *STOP
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The daemon's own request: the console's `exit`, the RPC's `stop_daemon`.
+/// The daemon's own request: the RPC's `stop_daemon`.
 pub fn request_stop() {
-    latch("the daemon's own request (console or RPC)");
+    latch(StopCause::Requested);
 }
 
 /// A part the daemon cannot run without has ended, with `cause`: chain
@@ -55,7 +130,7 @@ pub fn request_stop() {
 /// cause. The caller makes the exit a failure; a stop already latched
 /// keeps its own cause.
 pub fn fatal(cause: &'static str) {
-    latch(cause);
+    latch(StopCause::Fatal(cause));
 }
 
 /// Install the owner of the operating system's stop triggers on `handle`:
@@ -79,8 +154,8 @@ pub fn own(handle: &tokio::runtime::Handle) -> std::io::Result<()> {
         })?;
         handle.spawn(async move {
             tokio::select! {
-                _ = interrupt.recv() => latch("SIGINT"),
-                _ = terminate.recv() => latch("SIGTERM"),
+                _ = interrupt.recv() => latch(StopCause::Signal(Signal::Interrupt)),
+                _ = terminate.recv() => latch(StopCause::Signal(Signal::Terminate)),
             }
         });
     }
@@ -98,11 +173,11 @@ pub fn own(handle: &tokio::runtime::Handle) -> std::io::Result<()> {
         })?;
         handle.spawn(async move {
             tokio::select! {
-                _ = c.recv() => latch("Ctrl-C"),
-                _ = brk.recv() => latch("Ctrl-Break"),
-                _ = close.recv() => latch("window close"),
-                _ = logoff.recv() => latch("logoff"),
-                _ = shutdown.recv() => latch("shutdown"),
+                _ = c.recv() => latch(StopCause::Signal(Signal::CtrlC)),
+                _ = brk.recv() => latch(StopCause::Signal(Signal::CtrlBreak)),
+                _ = close.recv() => latch(StopCause::Signal(Signal::WindowClose)),
+                _ = logoff.recv() => latch(StopCause::Signal(Signal::Logoff)),
+                _ = shutdown.recv() => latch(StopCause::Signal(Signal::Shutdown)),
             }
         });
     }
@@ -111,17 +186,21 @@ pub fn own(handle: &tokio::runtime::Handle) -> std::io::Result<()> {
 
 /// Resolves when a stop has been requested, with its cause; at once when
 /// one already has.
-pub async fn stop_requested() -> &'static str {
-    let notified = STOPPED.notified();
-    tokio::pin!(notified);
-    // Enabled before the check, so a latch set between the check and the
-    // await still wakes this wait.
-    notified.as_mut().enable();
-    if let Some(cause) = latched() {
-        return cause;
+pub async fn stop_requested() -> StopCause {
+    loop {
+        let notified = STOPPED.notified();
+        tokio::pin!(notified);
+        // Enabled before the check, so a latch set between the check and
+        // the await still wakes this wait.
+        notified.as_mut().enable();
+        if let Some(cause) = latched() {
+            return cause;
+        }
+        // The latch is set before the wake. It reads clear here only if a
+        // start's `own` cleared it in between, which is not a stop: wait
+        // again rather than name a cause nobody gave.
+        notified.await;
     }
-    notified.await;
-    latched().unwrap_or("a stop")
 }
 
 /// Process-wide dispositions the daemon runs with.
@@ -164,7 +243,7 @@ mod tests {
 
         request_stop();
         let cause = rt.block_on(stop_requested());
-        assert_eq!(cause, "the daemon's own request (console or RPC)");
+        assert_eq!(cause, StopCause::Requested);
         // Still latched: a second wait answers the same way.
         assert_eq!(rt.block_on(stop_requested()), cause);
     }

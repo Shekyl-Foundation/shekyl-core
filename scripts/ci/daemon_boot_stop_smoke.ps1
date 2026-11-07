@@ -72,7 +72,8 @@ $CTRL_BREAK_EVENT = [uint32] 1
 # Used only when the launcher could not adopt the child and stops it
 # before dropping the last handle. A daemon stop is exit 0.
 $UNADOPTED_PROCESS_EXIT = [uint32] 1
-# signals.rs latches this cause; note_stop logs it at warn.
+# signals.rs latches this cause; note_stop announces it whatever the
+# level (IG-14), so a `warn` log still holds it.
 $CtrlBreakStopLine = 'stop requested by Ctrl-Break'
 if ($IsWindows) {
     # One interop surface: the console pre-flight and the process-group
