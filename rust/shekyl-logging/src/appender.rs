@@ -150,6 +150,10 @@ fn set_dir_mode_0700(dir: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix arm's signature: callers handle both platforms the same way"
+)]
 fn set_dir_mode_0700(_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
@@ -204,6 +208,10 @@ fn chmod_matching_files_0600(dir: &Path, prefix: &str) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix arm's signature: callers handle both platforms the same way"
+)]
 fn chmod_matching_files_0600(_dir: &Path, _prefix: &str) -> std::io::Result<()> {
     Ok(())
 }
@@ -219,6 +227,10 @@ pub fn __test_only_reapply_file_modes(dir: &Path, prefix: &str) -> std::io::Resu
 /// No-op on non-Unix.
 #[doc(hidden)]
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix arm's signature: callers handle both platforms the same way"
+)]
 pub fn __test_only_reapply_file_modes(_dir: &Path, _prefix: &str) -> std::io::Result<()> {
     Ok(())
 }
