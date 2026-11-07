@@ -361,7 +361,7 @@ impl fmt::Display for RelayNewError {
 /// has no schedule; an enabled zone always has one deadline per stem slot.
 /// Channel `i` is bound to stem slot `i` (§20.3), so the deadline vector's
 /// length is the stem width, which production pins to
-/// [`inherited::NOISE_CHANNELS`] (`CRYPTONOTE_NOISE_CHANNELS` on the C++ side).
+/// [`inherited::NOISE_CHANNELS`].
 ///
 /// **CV-3 lives in how deadlines are mutated.** Each entry is drawn once and
 /// re-drawn only when *that* channel fires. A wake caused by the fluff
