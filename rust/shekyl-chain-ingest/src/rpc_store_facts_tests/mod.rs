@@ -172,7 +172,12 @@ fn identity() -> NodeIdentity {
 }
 
 /// The store-backed facts over the store at `path`, under `rules`.
-pub(crate) fn facts_over(store: Arc<ChainStore>, path: &Path, rules: ChainRules) -> StoreFacts {
+pub(crate) fn facts_over(
+    store: Arc<ChainStore>,
+    path: impl AsRef<Path>,
+    rules: ChainRules,
+) -> StoreFacts {
+    let path: &Path = path.as_ref();
     facts_with_caches(store, path, rules, Arc::new(CacheStore::new()))
 }
 

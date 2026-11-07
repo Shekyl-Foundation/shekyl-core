@@ -180,7 +180,15 @@ mod tests {
 
     use crate::test_support::{tmp, TestPath};
 
-    fn empty_store() -> (StoreShardFacts, StoreHolderSource, TestPath) {
+    /// Facts and holders over one empty store. The directory is last, so
+    /// it drops after both handles. They share the store.
+    struct EmptyStore {
+        facts: StoreShardFacts,
+        holders: StoreHolderSource,
+        _path: TestPath,
+    }
+
+    fn empty_store() -> EmptyStore {
         let path = tmp("sv-d9");
         let store = Arc::new(
             ChainStore::create(
@@ -189,16 +197,18 @@ mod tests {
             )
             .expect("create empty store"),
         );
-        (
-            StoreShardFacts::new(Arc::clone(&store)),
-            StoreHolderSource::new(store),
-            path,
-        )
+        EmptyStore {
+            facts: StoreShardFacts::new(Arc::clone(&store)),
+            holders: StoreHolderSource::new(store),
+            _path: path,
+        }
     }
 
     #[test]
     fn an_empty_store_has_an_open_tip_shard_and_no_holders() {
-        let (facts, holders, _path) = empty_store();
+        let opened = empty_store();
+        let facts = &opened.facts;
+        let holders = &opened.holders;
         assert_eq!(facts.tip_height().expect("tip"), BlockHeight::ZERO);
         assert_eq!(facts.block_hash_at(BlockHeight::ZERO).expect("hash"), None);
         match facts.shard(ShardId::from_raw(0)).expect("standing") {

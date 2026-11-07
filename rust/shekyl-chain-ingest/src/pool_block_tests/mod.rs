@@ -50,7 +50,8 @@ async fn offer_branch(x: &Scenario<FreeHash>, branch: &[Mined]) -> crate::Switch
 }
 
 /// An empty pool at `path`, over `x`'s chain.
-async fn open_pool(x: &mut Scenario<FreeHash>, path: &std::path::Path) -> Pool {
+async fn open_pool(x: &mut Scenario<FreeHash>, path: impl AsRef<std::path::Path>) -> Pool {
+    let path: &std::path::Path = path.as_ref();
     x.read_chain(|view, rule_set| {
         Pool::open(
             path,

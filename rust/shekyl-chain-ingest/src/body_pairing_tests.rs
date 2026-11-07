@@ -208,7 +208,8 @@ async fn replay(name: &str, chain: &Chain, trace: Trace) -> (RunReport, TestPath
 
 /// Every recorded output's originating transaction, in global-index order —
 /// the order the curve tree will drain them in.
-fn output_origins(path: &std::path::Path) -> Vec<TxHash> {
+fn output_origins(path: impl AsRef<std::path::Path>) -> Vec<TxHash> {
+    let path: &std::path::Path = path.as_ref();
     let store = ChainStore::open_read_only(path, Horizons::production(EPOCH).expect("SEB > D_MAX"))
         .expect("reopen read-only");
     let snapshot = store.begin_read().expect("read");

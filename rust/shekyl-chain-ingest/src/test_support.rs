@@ -96,13 +96,32 @@ pub const EPOCH: SettlementEpochBlocks = match SettlementEpochBlocks::new(10_000
 /// keeps beside itself (`.creation-lock`, `.discard`, `.unfinished-*`). A
 /// panicking test drops it too.
 ///
-/// Bind it to a name for as long as the store is used. A call chained on
-/// the temporary (`tmp("x").with_extension("y")`) drops the directory at the
-/// end of that statement and leaves a path to nothing; the compiler does
-/// not catch it.
+/// The directory outlives the open store.
+///
+/// - A local is declared before the store. Locals drop in reverse
+///   declaration order, so the store drops first.
+/// - A field is declared after the store. Fields drop in declaration
+///   order, so the store drops first.
+///
+/// An owner that holds both stays whole. A struct pattern drops its
+/// bindings in reverse pattern order, so naming the directory last in the
+/// pattern removes it before the store.
+///
+/// The file is [`Self::path`]. A function that takes `impl AsRef<Path>`
+/// accepts this value. A function that takes `&Path` is handed
+/// [`Self::path`]. Bind this value, then borrow it: chaining on the
+/// temporary ends the directory at the end of that statement.
 pub struct TestPath {
     path: std::path::PathBuf,
     _dir: tempfile::TempDir,
+}
+
+impl TestPath {
+    /// The store file inside the directory this owns.
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
 }
 
 /// A fresh `<name>.redb` path in a directory of its own.
@@ -118,14 +137,6 @@ pub fn tmp(name: &str) -> TestPath {
     TestPath {
         path: dir.path().join(format!("{name}.redb")),
         _dir: dir,
-    }
-}
-
-impl std::ops::Deref for TestPath {
-    type Target = std::path::Path;
-
-    fn deref(&self) -> &std::path::Path {
-        &self.path
     }
 }
 
@@ -651,7 +662,7 @@ pub fn expected_state(chain: &[(Block, Vec<Transaction>)]) -> Digest {
     digest_of(chain, &GrownTree::over(chain).root_after(h(last)))
 }
 
-pub fn open_store(path: &std::path::Path) -> ChainStore {
+pub fn open_store(path: impl AsRef<std::path::Path>) -> ChainStore {
     ChainStore::create(path, EPOCH).expect("create")
 }
 
@@ -668,7 +679,7 @@ pub fn open_store(path: &std::path::Path) -> ChainStore {
 /// [`ApplyPolicy`]: shekyl_chain_store::apply_policy::ApplyPolicy
 /// [`ApplyPolicy::Full`]: shekyl_chain_store::apply_policy::ApplyPolicy::Full
 pub fn open_store_under(
-    path: &std::path::Path,
+    path: impl AsRef<std::path::Path>,
     in_force: &RuleSet,
     policy: shekyl_chain_store::apply_policy::ApplyPolicy,
 ) -> ChainStore {

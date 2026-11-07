@@ -51,9 +51,10 @@ use crate::schedule::ChainRules;
 /// The store at `path`, opened under the levered rules, and the
 /// store-backed facts over it.
 fn facts_at(
-    path: &std::path::Path,
+    path: impl AsRef<std::path::Path>,
     rules: ChainRules,
 ) -> (Arc<ChainStore>, Arc<super::StoreFacts>) {
+    let path: &std::path::Path = path.as_ref();
     let store = Arc::new(open_store_under(
         path,
         &rules.in_force(BlockHeight::ZERO),

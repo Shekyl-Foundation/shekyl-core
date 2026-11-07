@@ -106,7 +106,8 @@ fn candidate(b: &shekyl_wire::Block, txs: &[shekyl_wire::Transaction]) -> Candid
     Candidate::new(b.clone(), txs.to_vec())
 }
 
-fn tip_of(path: &std::path::Path) -> Option<(shekyl_types::BlockHeight, BlockHash)> {
+fn tip_of(path: impl AsRef<std::path::Path>) -> Option<(shekyl_types::BlockHeight, BlockHash)> {
+    let path: &std::path::Path = path.as_ref();
     let reopened = open_store(path);
     let tip = reopened
         .begin_read()
@@ -704,7 +705,8 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
 
 /// Rewrite `block_info[height].cumulative_difficulty` in the store at
 /// `path`, the way the SI-10 test plants its decrease.
-fn plant_work(path: &std::path::Path, height: shekyl_types::BlockHeight, work: u128) {
+fn plant_work(path: impl AsRef<std::path::Path>, height: shekyl_types::BlockHeight, work: u128) {
+    let path: &std::path::Path = path.as_ref();
     let db = redb::Database::open(path).expect("open raw");
     let txn = db.begin_write().expect("write");
     {

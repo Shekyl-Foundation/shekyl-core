@@ -84,9 +84,10 @@ async fn an_alt_blocks_work_is_its_own_chains_not_the_main_chains_at_its_height(
 /// `facts_over`, with the pool's shown entries spending `pool_spends`.
 fn facts_with_pool_spends(
     store: Arc<ChainStore>,
-    path: &Path,
+    path: impl AsRef<Path>,
     pool_spends: Vec<shekyl_types::KeyImage>,
 ) -> StoreFacts {
+    let path: &Path = path.as_ref();
     let mut node = TestNode::synced();
     node.pool_spends = pool_spends;
     StoreFacts::new(
@@ -221,7 +222,7 @@ async fn a_spend_connected_between_the_reads_is_spent_in_the_chain() {
     };
     let facts = StoreFacts::new(
         store,
-        copy.to_path_buf(),
+        copy.path().to_path_buf(),
         Arc::new(move |h| RULES.in_force(h)),
         Arc::new(node),
         identity(),
