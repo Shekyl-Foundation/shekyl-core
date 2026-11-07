@@ -40,7 +40,7 @@ use shekyl_relay::owner::{
     self as relay, PoolDoor, RelayConfig, RelayHandle, RelayParts, RelaySnapshot, RelayStartError,
     SecureRelayRng,
 };
-use shekyl_relay::{NodeSync, OriginVerdict};
+use shekyl_relay::NodeSync;
 use shekyl_runtime::{runtime, Pool, RuntimeBudget, ThreadName};
 use shekyl_socks::{Proxy, SocksUsername};
 use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock};
@@ -56,10 +56,7 @@ use crate::dial::{ClearnetReady, Connectors, Spans, ACCEPT_BACKOFF};
 use crate::facts::{self, LinkTotals, ListedAddress, PeerCounts, SocketTraffic};
 use crate::peers::{self, OwnerLoops, Peers};
 use crate::plan::{LinkLimits, NetworkPlan, TorPlan};
-use crate::tor::{TorLink, TOR_SOCKS_TIMEOUT};
-
-pub use shekyl_dialer::TorLinkTally;
-pub use shekyl_p2p_session::ProbeArrival;
+use crate::tor::{SupervisorFeeds, TorLink, TOR_SOCKS_TIMEOUT};
 
 /// What the node hands the network.
 pub struct NetworkParts {
@@ -76,6 +73,41 @@ pub struct NetworkParts {
     pub node_sync: watch::Receiver<NodeSync>,
     /// The chain tip as the handshake and timed sync carry it.
     pub tip: watch::Receiver<CoreSyncData>,
+    /// What the managed-Tor supervisor hears, when one runs.
+    pub supervisor: Option<SupervisorFeeds>,
+}
+
+/// [`SupervisorFeeds`] split for the parts that take them, each `None`
+/// when no supervisor runs.
+struct SupervisorParts {
+    tally: Option<shekyl_dialer::TallySink>,
+    probes: Option<Arc<dyn shekyl_p2p_session::ProbeSink>>,
+    verdict: Option<shekyl_relay::owner::VerdictSink>,
+    sessions: Option<shekyl_p2p_session::SessionsSink>,
+}
+
+impl SupervisorParts {
+    fn of(feeds: Option<SupervisorFeeds>) -> Self {
+        match feeds {
+            Some(SupervisorFeeds {
+                tally,
+                probes,
+                verdict,
+                sessions,
+            }) => Self {
+                tally: Some(tally),
+                probes: Some(probes),
+                verdict: Some(verdict),
+                sessions: Some(sessions),
+            },
+            None => Self {
+                tally: None,
+                probes: None,
+                verdict: None,
+                sessions: None,
+            },
+        }
+    }
 }
 
 /// Where the connectors listen.
@@ -163,7 +195,14 @@ impl Network {
             pool: door,
             node_sync,
             tip,
+            supervisor,
         } = parts;
+        let SupervisorParts {
+            tally,
+            probes,
+            verdict,
+            sessions,
+        } = SupervisorParts::of(supervisor);
 
         // The transport runtime and the one process clock. The engine
         // (every transport deadline) and the link gate read the origin
@@ -222,7 +261,9 @@ impl Network {
             Box::new(SecureRelayRng),
         ));
         let tor_link = Arc::new(TorLink::new());
-        dialer.report_tor_link(tor_link.sink());
+        if let Some(tally) = tally {
+            dialer.report_tor_link(tally);
+        }
         if let Some(clearnet) = &plan.clearnet {
             dialer.set_own_addresses(ConnectorId::Clearnet, clearnet.own.clone());
         }
@@ -239,6 +280,7 @@ impl Network {
             timing: timing.clone(),
             runtime: handle.clone(),
             rng: Box::new(SecureRelayRng),
+            verdict,
         })
         .map_err(StartError::Relay)?;
 
@@ -268,7 +310,8 @@ impl Network {
                 peers: Arc::clone(&dialer) as Arc<dyn shekyl_p2p_session::PeerOwner>,
                 sync,
                 relay: Arc::clone(&relay.port) as Arc<dyn shekyl_p2p_session::RelayOwner>,
-                probes: Arc::clone(&tor_link) as Arc<dyn shekyl_p2p_session::ProbeSink>,
+                probes,
+                sessions,
             },
             connectors: Arc::clone(&connectors) as Arc<dyn shekyl_p2p_session::Dial>,
             timing: timing.clone(),
@@ -535,12 +578,6 @@ impl Network {
         &self.inner.relay
     }
 
-    /// The origin verdict as the relay owner publishes it.
-    #[must_use]
-    pub fn origin_verdict(&self) -> watch::Receiver<OriginVerdict> {
-        self.inner.relay.origin_verdict()
-    }
-
     /// The ban verbs.
     #[must_use]
     pub fn bans(&self) -> &Bans {
@@ -604,18 +641,6 @@ impl Network {
     #[must_use]
     pub fn mint_probe(&self) -> Option<ProbeHandshake> {
         self.inner.layer.mint_probe()
-    }
-
-    /// The probe that last arrived; `None` until one does.
-    #[must_use]
-    pub fn probe_arrivals(&self) -> watch::Receiver<Option<ProbeArrival>> {
-        self.inner.tor_link.probe_arrivals()
-    }
-
-    /// This node's own Tor dials, as a tally for display.
-    #[must_use]
-    pub fn tor_link_tally(&self) -> watch::Receiver<TorLinkTally> {
-        self.inner.tor_link.tally()
     }
 
     /// The managed Tor is running at `socks`: publish the route, give the

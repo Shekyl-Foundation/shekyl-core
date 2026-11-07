@@ -53,8 +53,9 @@ pub const SUPERVISOR_EVENTS: [&str; 8] = [
 impl Command {
     /// The supervisor's one `SETEVENTS`: [`SUPERVISOR_EVENTS`].
     ///
-    /// Nothing in production sends it yet. The wallet's managed tor stays
-    /// unsubscribed (`EventSink::unsubscribed`): SP-T0 §3b withdrew its subscription,
+    /// The daemon's supervisor sends this on each managed Tor it launches.
+    /// The wallet's managed tor stays unsubscribed
+    /// (`EventSink::unsubscribed`): SP-T0 §3b withdrew its subscription,
     /// and that retraction stands for the wallet.
     #[must_use]
     pub fn supervisor_events() -> Self {

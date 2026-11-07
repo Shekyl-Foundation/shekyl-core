@@ -11,7 +11,7 @@
 //! from that count when it closes. A handshake still open is not held.
 
 use shekyl_levin::PeerlistEntry;
-use shekyl_p2p_session::{Endpoint, Established, PeerOwner, SessionFacts};
+use shekyl_p2p_session::{Established, PeerOwner, SessionFacts};
 use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_timing_engine::Clock;
 use shekyl_transport_layer::DialEnd;
@@ -41,24 +41,13 @@ impl<C: Clock + Clone + Send + Sync + 'static> PeerOwner for Dialer<C> {
         self.admit_on_established(session, &addresses);
     }
 
-    /// An inbound Tor session finished its handshake: it is held.
-    fn on_established(&self, session: &Established) {
-        if *session.endpoint() == Endpoint::TorInbound {
-            self.note_inbound_tor();
-        }
-    }
-
-    /// A session closed. The board no longer holds its row; the inbound
-    /// rows are re-read before the close is applied. The lists forget the
-    /// session's intake ledger: socket ids never repeat, so a ledger left
-    /// behind is a row for the life of the process.
+    /// A session closed. The lists forget the session's intake ledger:
+    /// socket ids never repeat, so a ledger left behind is a row for the
+    /// life of the process.
     fn on_closed(&self, facts: &SessionFacts, end: DialEnd) {
         self.shared()
             .lists
             .forget_session(facts.connector(), session_of(facts.id));
-        if facts.endpoint == Endpoint::TorInbound {
-            self.note_inbound_tor();
-        }
         let mut rng = self.rng.lock().expect("dialer rng");
         self.session_closed(facts.id, end, &mut **rng);
     }

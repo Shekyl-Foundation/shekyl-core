@@ -27,7 +27,7 @@ use shekyl_chain_sync::{Declaration, Requesting, SyncState};
 use shekyl_chain_sync_runtime::executor::Executor;
 use shekyl_hash_budget::Budget;
 use shekyl_mempool::Pool;
-use shekyl_p2p::{CoreSyncData, Network, NetworkParts, NetworkPlan, NodeSync};
+use shekyl_p2p::{CoreSyncData, Network, NetworkParts, NetworkPlan, NodeSync, SupervisorFeeds};
 use shekyl_relay::owner::{PoolDoor, RelayHandle};
 use shekyl_relay::{OriginPublication as RelayOrigin, TxId};
 use shekyl_transport_layer::Sockets;
@@ -51,6 +51,7 @@ pub(crate) struct Parts<'a> {
     /// Cloned into the relay's sync bridge. The node keeps its own.
     pub sync: tokio::sync::watch::Receiver<SyncState>,
     pub plan: NetworkPlan,
+    pub supervisor: Option<SupervisorFeeds>,
     pub sockets: Sockets,
     /// The relay owner's pool door.
     pub relay_door: Arc<dyn PoolDoor>,
@@ -96,6 +97,7 @@ pub(crate) fn start(parts: Parts<'_>) -> Result<Started, OpenError> {
         tips,
         sync,
         plan,
+        supervisor,
         sockets,
         relay_door,
         departures,
@@ -126,6 +128,7 @@ pub(crate) fn start(parts: Parts<'_>) -> Result<Started, OpenError> {
         pool: relay_door,
         node_sync,
         tip,
+        supervisor,
     })
     .map_err(|error| OpenError::Network(error.to_string()))?;
     departures.attach(network.relay().clone());

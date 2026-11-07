@@ -28,6 +28,7 @@ use tokio::sync::OwnedSemaphorePermit;
 
 use crate::endpoint::Endpoint;
 use crate::handle::Established;
+use crate::layer::PerConnector;
 
 /// The session's permit for one owner-bound message. Dropping it lets the
 /// session read its next frame.
@@ -206,8 +207,23 @@ pub trait ProbeSink: Send + Sync {
     fn probe_arrived(&self, arrival: ProbeArrival);
 }
 
-/// The three owners, as the composition hands them to the layer, and the
-/// probe sink.
+/// Where the layer reports how many sessions each connector holds: every
+/// row whose handshake has finished, outbound and inbound. A handshake
+/// still open is not a session: the probe of this node's own onion is
+/// dropped in that handshake, so it never counts (`TOR_SUPERVISOR.md`
+/// §4.5).
+///
+/// Called with the count at construction, before the layer is shared, and
+/// after each change. The count is taken under the session table's lock
+/// and delivered after that lock is dropped, so the call does not stall
+/// the table. A later count is never overtaken by an earlier one; a count
+/// that lost the race is skipped, and the sink keeps the latest. The call
+/// must return without waiting, and must not re-enter the session layer:
+/// the report gate is held across it.
+pub type SessionsSink = Arc<dyn Fn(PerConnector<u32>) + Send + Sync>;
+
+/// The three owners, as the composition hands them to the layer, and what
+/// the managed Tor supervisor hears from it.
 #[derive(Clone)]
 pub struct Owners {
     /// The lists and the dialer.
@@ -216,8 +232,12 @@ pub struct Owners {
     pub sync: Arc<dyn SyncOwner>,
     /// Transaction relay.
     pub relay: Arc<dyn RelayOwner>,
-    /// The managed Tor supervisor's reachability probe.
-    pub probes: Arc<dyn ProbeSink>,
+    /// The managed Tor supervisor's reachability probe. `None` when no
+    /// supervisor runs: then no probe is minted, and none can arrive.
+    pub probes: Option<Arc<dyn ProbeSink>>,
+    /// The sessions each connector holds, for the supervisor's posture
+    /// line (`TSR-Q12`). `None` when no supervisor runs.
+    pub sessions: Option<SessionsSink>,
 }
 
 impl Owners {
