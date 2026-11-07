@@ -60,8 +60,9 @@ on:
     types: [opened, synchronize, reopened]
     # The whole Rust workspace, not a list of benched crates (BA-Q8, ruled
     # 2026-10-05). A bench's cost depends on its dependency closure, not on
-    # its own crate: `relay_admission_verify_iai` lives in `shekyl-ffi` and
-    # measures code in `shekyl-fcmp` and `shekyl-fcmp-proofs`. A per-crate
+    # its own crate: `relay_admission_verify_iai` lives in
+    # `shekyl-chain-rules` and measures code in `shekyl-fcmp`,
+    # `shekyl-fcmp-proofs` and `shekyl-ct-balance`. A per-crate
     # list that omits one of those runs neither the comparison nor the
     # baseline refresh for a change there, and the next PR that does trigger
     # the gate is then compared against a baseline that predates the change.

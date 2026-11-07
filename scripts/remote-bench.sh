@@ -86,8 +86,8 @@ grep -h . /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor | sort | un
 # `&&`: the --test pass GATES the timing run. A fixture that stopped verifying
 # must stop the sweep, not silently retitle hours of timings as measurements of
 # the reject path.
-cargo +1.94.0 bench -p shekyl-ffi --bench "$BENCH" -- --test \
-	&& cargo +1.94.0 bench -p shekyl-ffi --bench "$BENCH"
+cargo +1.94.0 bench -p shekyl-chain-rules --bench "$BENCH" -- --test \
+	&& cargo +1.94.0 bench -p shekyl-chain-rules --bench "$BENCH"
 rc=$?
 echo "BENCH_EXIT=$rc"
 [ "$rc" -eq 0 ] && echo BENCH_COMPLETE

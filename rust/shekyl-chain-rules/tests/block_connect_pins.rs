@@ -1,0 +1,230 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Pins for the GAP-7 cold-block bench (`benches/block_connect_verify.rs`).
+//!
+//! A bench that measures the wrong thing is worse than none, so what the
+//! bench claims about its own fixtures is asserted HERE, under `cargo test`,
+//! where CI sees it:
+//!
+//! 1. **Cap saturation** — the constructed worst-case candidates actually
+//!    saturate the caps the census ratifies (CEN-H1's 1 MB, CEN-H3's
+//!    weight limit, the 600 000 = 2×zone budget), so the worst case is as
+//!    adversarial as the CONSTANTS say, not as the fixture happens to be.
+//! 2. **Positive limbs** — every crypto component the bench times VERIFIES
+//!    (else the bench times a reject path and reports a fiction).
+//! 3. **Verifier fidelity** — the Bp+ verifier (`verify_batch`, CEN-H19's
+//!    body) accepts what the production prover emits, alone and as a block's
+//!    fold, and rejects a corrupted statement; the hybrid verifier
+//!    (`verify_pqc_auth`, CEN-I18's body) accepts the wallet signer's
+//!    signature and rejects a wrong message and a corrupted signature. Their
+//!    numbers then describe verification work rather than an error path.
+
+use rand_core::OsRng;
+
+#[path = "../benches/common/block_connect_fixture.rs"]
+mod fx;
+
+use fx::relay::{admission_verify, ChunkLayout};
+use fx::{
+    bp_verify, bp_verify_block, build_bp, build_connect_tx, build_pqc_auth, parse_wire, pqc_verify,
+    pqc_verify_against,
+};
+use shekyl_crypto_pq::error::PqcVerifyError;
+use shekyl_types::SigningPayloadHash;
+use shekyl_wire::transaction::{MAX_TX_SIZE, TX_WEIGHT_LIMIT};
+/// The permanent floor operating point: 2 × the 300 000 penalty-free zone.
+const BUDGET_AT_ZONE: usize = 600_000;
+
+/// Exact expected weights per shape — every component length is
+/// deterministic (canonical fixed-length hybrid keys/sigs, shape-fixed
+/// proof lengths, codec-owned extra), so the pin is equality, not a
+/// tautology: `n_txs = budget / weight` makes the budget inequalities true
+/// for ANY positive weight, which means only an exact-weight pin can catch
+/// an under- or over-weighted fixture (review finding). A legitimate
+/// weight change (wire format, proof size, auth encoding) must update this
+/// table consciously — that is the point.
+// Re-pinned 2026-09-14 with `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2): the
+// `0x07` entry grew to 64 B per output (`+32·n_out`, plus one byte where the
+// field's length varint crosses 128) and the FCMP++ proof
+// gained the in-circuit opening leg (single-input proofs +128 B; multi-input
+// proofs shrink because the leg replaces the per-input extra-scalar branch —
+// census companion §8), so every cell moved and not by one constant.
+const EXPECTED_WEIGHTS: [(usize, usize, usize); 6] = [
+    (1, 2, 13_198),
+    (8, 2, 58_782),
+    (1, 16, 34_588),
+    (8, 16, 80_172),
+    (4, 4, 37_460),
+    (2, 8, 30_357),
+];
+
+#[test]
+fn fixture_weights_are_exactly_expected() {
+    // Capture aid: every shape's weight is printed before the first assert
+    // so a deliberate wire change can update the whole table from one run.
+    for (n_in, n_out, _) in EXPECTED_WEIGHTS {
+        let fx = build_connect_tx(&mut OsRng, n_in, n_out, 2, ChunkLayout::Spread);
+        eprintln!("weight ({n_in},{n_out}) = {}", fx.weight);
+    }
+    for (n_in, n_out, expected) in EXPECTED_WEIGHTS {
+        let fx = build_connect_tx(&mut OsRng, n_in, n_out, 2, ChunkLayout::Spread);
+        assert_eq!(
+            fx.weight, expected,
+            "shape ({n_in},{n_out}): weight moved — if deliberate, update              EXPECTED_WEIGHTS and note the wire change; if not, the fixture              or a codec drifted"
+        );
+    }
+}
+
+#[test]
+fn candidate_shapes_saturate_their_caps() {
+    for (n_in, n_out) in [(8usize, 2usize), (1usize, 16usize), (8, 16)] {
+        let fx = build_connect_tx(&mut OsRng, n_in, n_out, 2, ChunkLayout::Spread);
+
+        // The wire must round-trip at the claimed shape — the parse fixture
+        // and the crypto fixtures must describe the SAME transaction shape.
+        let parsed = parse_wire(&fx);
+        assert_eq!(parsed.prefix.inputs.len(), n_in, "parsed input arity");
+        assert_eq!(parsed.prefix.outputs.len(), n_out, "parsed output arity");
+        assert_eq!((fx.n_in, fx.n_out), (n_in, n_out), "fixture shape record");
+
+        // The extra's INTERIOR must parse too. `Transaction::from_bytes`
+        // treats `prefix.extra` as an opaque byte run (§9.4: V(extra_len) ·
+        // bytes), so the arity asserts above cannot see a mis-encoded field —
+        // the first cut of the 0x07 block omitted its length varint (per a
+        // defective GTWF §9.6a sentence) and every pin stayed green. This
+        // opt-in `parse_extra` round-trip is what makes interior encoding
+        // failures visible.
+        let fields = parsed
+            .prefix
+            .parse_extra()
+            .expect("tx_extra interior must parse");
+        let kem_blobs: Vec<usize> = fields
+            .iter()
+            .filter_map(|f| match f {
+                shekyl_wire::tx_extra::TxExtraField::PqcKemCiphertext(b) => Some(b.len()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            kem_blobs,
+            vec![shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES * n_out],
+            "exactly ONE 0x06 field carrying all outputs' KEM cts concatenated"
+        );
+        let leaf_blobs: Vec<usize> = fields
+            .iter()
+            .filter_map(|f| match f {
+                shekyl_wire::tx_extra::TxExtraField::PqcLeafEntries(b) => Some(b.len()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            leaf_blobs,
+            vec![shekyl_wire::tx_extra::PQC_LEAF_ENTRY_LEN * n_out],
+            "exactly ONE 0x07 field carrying 64·n_out leaf-entry bytes (PL-D3)"
+        );
+
+        // Per-tx caps hold — the fixture is admissible under what R2 ratifies
+        // (CEN-H1 and CEN-H3, `shekyl-chain-rules` `rules/tx.rs`).
+        assert!(
+            fx.wire_bytes.len() <= MAX_TX_SIZE,
+            "shape ({n_in},{n_out}): serialized {} exceeds CEN-H1 cap",
+            fx.wire_bytes.len()
+        );
+        assert!(
+            fx.weight <= TX_WEIGHT_LIMIT,
+            "shape ({n_in},{n_out}): weight {} exceeds CEN-H3 cap",
+            fx.weight
+        );
+        // Weight ≥ size always (clawback is additive) — the invariant Q6's
+        // "H3 binds tighter" reasoning rests on.
+        assert!(fx.weight >= fx.wire_bytes.len());
+
+        // Budget saturation at the floor operating point: N txs fit, N+1 do
+        // not — the block the bench prices is full to within one tx.
+        let n_txs = BUDGET_AT_ZONE / fx.weight;
+        assert!(n_txs >= 1, "shape ({n_in},{n_out}): no tx fits the budget");
+        assert!(n_txs * fx.weight <= BUDGET_AT_ZONE);
+        assert!(
+            (n_txs + 1) * fx.weight > BUDGET_AT_ZONE,
+            "shape ({n_in},{n_out}): budget not saturated — {} txs of weight {} \
+             leave more than one tx of headroom",
+            n_txs,
+            fx.weight
+        );
+
+        // Positive limbs: everything the bench times verifies.
+        let status = admission_verify(&fx.adm);
+        assert!(
+            status.verified(),
+            "shape ({n_in},{n_out}): admission fixture must verify: {status:?}"
+        );
+        assert_eq!(
+            pqc_verify(&fx.pqc),
+            Ok(()),
+            "shape ({n_in},{n_out}): pqc auth must verify"
+        );
+        assert!(
+            bp_verify(&fx.bp),
+            "shape ({n_in},{n_out}): bp+ fixture must verify"
+        );
+    }
+}
+
+#[test]
+fn bp_verifier_fidelity_positive_and_negative() {
+    let bp = build_bp(&mut OsRng, 16);
+    // Positive limbs: the verifier accepts what the production prover emits,
+    // alone (the pool door's batch of one) and folded with copies of itself
+    // (a block's batch, as the budget fill times it).
+    assert!(
+        bp_verify(&bp),
+        "verifier must accept the production prover's proof"
+    );
+    assert!(
+        bp_verify_block(&bp, 46),
+        "verifier must accept a block's fold of the prover's proofs"
+    );
+
+    // Negative limb: a corrupted statement is rejected — the verifier is a
+    // verifier, not a parser that waves proofs through.
+    let mut corrupted = fx::BpFixture {
+        proof: bp.proof.clone(),
+        commitments: bp.commitments.clone(),
+    };
+    let mut bytes = corrupted.commitments[0].0;
+    bytes[8] ^= 0x40;
+    corrupted.commitments[0] = shekyl_curve_io::CompressedPoint(bytes);
+    assert!(
+        !bp_verify(&corrupted),
+        "verifier must reject a corrupted commitment"
+    );
+}
+
+#[test]
+fn pqc_fixture_fidelity_positive_and_negative() {
+    let auth = build_pqc_auth(&mut OsRng, SigningPayloadHash::from_bytes([0x11; 64]));
+    assert_eq!(pqc_verify(&auth), Ok(()), "hybrid sig must verify");
+
+    // Wrong message → CryptoVerifyFailed, never success.
+    assert_eq!(
+        pqc_verify_against(&auth, &SigningPayloadHash::from_bytes([0x22; 64])),
+        Err(PqcVerifyError::CryptoVerifyFailed),
+        "hybrid sig must not verify a different message"
+    );
+
+    // Corrupted signature → rejected (decode failure or verify failure).
+    let mut corrupted = fx::PqcAuthFixture {
+        public_key: auth.public_key.clone(),
+        signature: auth.signature.clone(),
+        message: auth.message,
+    };
+    let mid = corrupted.signature.len() / 2;
+    corrupted.signature[mid] ^= 0x01;
+    assert!(
+        pqc_verify(&corrupted).is_err(),
+        "corrupted hybrid sig must not verify"
+    );
+}
