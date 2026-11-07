@@ -48,8 +48,8 @@ use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
+use crate::policy::{AdmissionRank, FeeRate};
 use crate::pool::{key_images_of, Pool};
-use crate::rate::{AdmissionRank, FeeRate};
 use crate::relay::shown;
 use crate::view::{KeyImages, PoolView};
 
@@ -130,7 +130,7 @@ struct Candidate<'a> {
     tx: &'a Transaction,
     weight: u64,
     fee: AtomicUnits,
-    rank: AdmissionRank,
+    rank: AdmissionRank<ReceivedHour>,
     anchor: Option<VerifiedReference>,
 }
 

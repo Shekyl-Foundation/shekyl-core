@@ -192,7 +192,9 @@ the chain runs at, not its reachable minimum, and no document uses it as one.
 - `rust/shekyl-economics-sim/src/fee_model.rs:19` says "three places" and
   lists two.
 - umbrella §3.2 row b: "batches the penalty-free part … Done". The ruled item
-  was the penalty *zone* (§P0.6).
+  was the penalty *zone* (§P0.6). Closed by the zone's closed form
+  ([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+  §5.28): row b records it built.
 
 ### Instruments that report an extreme from sampled heights
 
@@ -497,7 +499,7 @@ defect; each needs a row or a reason it is not a departure.
 | Emission curve, tail subsidy | through production (`price_emission` → `base_block_reward`) | — |
 | Release multiplier, 720-block window | through production (`TxVolume::window`, `tx_volume_span`) | the window's length stress is EUP-5 §4.2 |
 | Medians, penalty, limit | through production (`medians_from`, `Fill`) | — |
-| Fill rule | through production (`Fill::admit_up_to`) | the penalty zone is walked one body at a time (§P0.6) |
+| Fill rule | through production (`Fill::admit_up_to`) | the penalty zone is admitted in closed form (rebase doc §5.28) |
 | Standard rung, fee correction, growth gate | through production (`corrected_fee_ladder`, `fee_correction`) | rounding: ESR-15 |
 | Burn and its split, staker emission share, net supply, corpus, escalation share | through production (`calc_burn_pct_at`, `compute_burn_split_at`, `emission_share_at`, `CirculatingSupply::derive`, `shard_of`, `staker_pool_share_at`) | — |
 | Secret draw | through production (`draw_count`, `draw_horizon`, `select_draw`); behaviour modelled | — |
@@ -541,27 +543,19 @@ minute on either arm, so the 135-year arms are affordable except for growth.
 Growth blows up once its demand outgrows the penalty-free room: from year 61
 on the flat control, and somewhere past year 80 on production, whose blocks
 grow later. That is the shape umbrella §4.1 recorded and attributed to
-`Fill::admit_up_to` offering the penalty zone one body at a time (not profiled
-here). #1152 did not change it. **The closed form is still needed** for any growth arm past
-year 80 on production or year 61 on the flat control.
+`Fill::admit_up_to` offering the penalty zone one body at a time. #1152 did
+not change it.
 
-**The closed form approved on 2026-10-05 was never built.** The ruling
-(`82ad0876e`) approved "`Fill::admit_up_to` batches **the penalty zone**,
-held to the single-offer walk". `1f7718f2e` (2026-10-22) restated umbrella
-§3.2 row b as "batches **the penalty-free part** … Done", which is what the
-code already did on 2026-10-04. The loop at
-`rust/shekyl-block-template/src/fill.rs:242` still walks the penalty zone one
-body at a time; `admit_up_to_is_the_single_offer_walk`
-(`rust/shekyl-block-template/src/fill.rs:302`) pins the free-part batch
-against the walk and does not cover a zone batch. No 135-year arm exists: every
-horizon caps at `ONSET_HORIZON_YEARS = 60`
+**The closed form is built**
+([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.28): `Fill::admit_up_to` admits the penalty zone by bisection past the
+real root, held to the single-offer walk by the parity tests §5.28 lists. The
+fold's cost at 135 years is §5.28.1's table, which succeeds the one above.
+The growth schedule no longer stops on the fill. It stops on the sim's
+supply invariant, in year 114 on production and year 80 on the flat control
+(§5.28.1). No 135-year arm is wired: every horizon
+caps at `ONSET_HORIZON_YEARS = 60`
 (`rust/shekyl-economics-sim/src/onset.rs:87`).
-
-The parity test the closed form owes: for every offered count, weight and fee
-on a grid spanning the penalty-free part, the penalty zone and the 2× limit
-(including the coinbase operand and fees that do and do not cover the
-marginal penalty), `admit_up_to(w, f, n)` returns the same count, block weight
-and fees as `n` single offers of `admit(w, f)`.
 
 ---
 

@@ -288,8 +288,8 @@ pub enum Ended {
 
 /// Why the owner's task ended on its own.
 ///
-/// The daemon's stop latch records [`Self::text`]. Callers match the
-/// variant; they do not match the prose.
+/// The daemon's stop latch records the variant. Callers match it;
+/// [`Self::text`] is the prose the daemon's error line quotes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EndCause {
     /// The task unwound before an exit set a cause.
@@ -307,7 +307,7 @@ pub enum EndCause {
 }
 
 impl EndCause {
-    /// The prose the daemon's stop latch records.
+    /// The prose of this cause. The daemon's error line quotes it.
     #[must_use]
     pub const fn text(self) -> &'static str {
         match self {

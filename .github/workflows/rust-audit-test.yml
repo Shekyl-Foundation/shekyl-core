@@ -605,6 +605,19 @@ jobs:
         # `working-directory`, `run`. Add a row there and a `-p` here in
         # the same commit.
         run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-curve-tree -p shekyl-mempool -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-tor-control-client -p shekyl-wire --lib -- -D warnings
+      - name: "shekyl-mempool: the policy build the economics sim links (no default features)"
+        working-directory: rust
+        # The economics sim depends on shekyl-mempool with
+        # `default-features = false`: the `policy` module alone, no store
+        # (ECONOMICS_SIM_PRODUCTION_REBASE.md, ESR-17). Every other dependent
+        # turns `pool` on, and the workspace runs above unify features, so
+        # none of them builds the crate the sim links. This lane lints and
+        # tests that build: a pool-only item reached from `policy`, or a
+        # test target that needs the pool without requiring the feature,
+        # fails here.
+        run: |
+          cargo clippy --locked -p shekyl-mempool --no-default-features --all-targets -- -D warnings
+          cargo test --locked -p shekyl-mempool --no-default-features
       - name: shekyl-standoff conformance suite (x86_64 only)
         working-directory: rust
         # `shekyl-standoff`'s conformance grading + negative controls

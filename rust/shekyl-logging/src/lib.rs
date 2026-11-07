@@ -95,7 +95,7 @@ mod colour;
 mod queue;
 mod reload;
 
-pub use queue::{flush, Flushed, FLUSH_WITHIN, SINK_QUEUE_LINES};
+pub use queue::{announce, flush, Flushed, FLUSH_WITHIN, SINK_QUEUE_LINES};
 
 #[doc(hidden)]
 pub use colour::LineColour;
@@ -281,24 +281,23 @@ fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
     // line's fields are unchanged; colour is the `colour` argument.
     let (stderr_writer, stderr_guard) =
         queue::queued(stderr, queue::Sink::Stderr, lines).map_err(InitError::WriterThread)?;
-    let mut producers = vec![stderr_writer.clone()];
     let stderr_layer = fmt::layer()
-        .with_writer(stderr_writer)
+        .with_writer(stderr_writer.clone())
         .with_ansi(colour.ansi());
 
-    let (file_layer, file_guard) = if let Some(file_sink) = config.file_sink {
+    let (file_layer, file_guard, file_writer) = if let Some(file_sink) = config.file_sink {
         let (writer, guard) = appender::open(&file_sink, lines)?;
-        producers.push(writer.clone());
         (
             Some(
                 fmt::layer()
-                    .with_writer(writer)
+                    .with_writer(writer.clone())
                     .with_ansi(LineColour::Plain.ansi()),
             ),
             Some(guard),
+            Some(writer),
         )
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     tracing_subscriber::registry()
@@ -307,7 +306,7 @@ fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
         .with(file_layer)
         .try_init()
         .map_err(|e| InitError::SubscriberInstall(e.to_string()))?;
-    queue::install(producers);
+    queue::install(stderr_writer, file_writer);
 
     Ok((
         LoggerGuard {

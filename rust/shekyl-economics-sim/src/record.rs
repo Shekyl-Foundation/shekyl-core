@@ -199,7 +199,6 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
     for block in 0..total_blocks {
         let priced = chain.price(
             ChainStep {
-                fold_height: block,
                 chain_height: block + config.genesis_height_offset,
                 demand: (config.volume.get_volume)(block, blocks_per_year),
                 leaves: outputs.leaves(),

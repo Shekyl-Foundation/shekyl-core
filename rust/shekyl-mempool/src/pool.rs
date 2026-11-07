@@ -33,8 +33,8 @@ use shekyl_wire::transaction::{Ct, Input};
 use shekyl_wire::Transaction;
 
 use crate::door::{self, DoorFault, Judged};
-use crate::evict::Limits;
-use crate::rate::{AdmissionRank, FeeRate};
+use crate::policy::Limits;
+use crate::policy::{AdmissionRank, FeeRate};
 use crate::view::KeyImages;
 
 /// Step 1 of the door, relative to the pool lock.
@@ -177,7 +177,7 @@ impl Held {
     }
 
     /// This entry in the order eviction and template selection share.
-    pub(crate) fn rank(&self, txid: TxHash) -> AdmissionRank {
+    pub(crate) fn rank(&self, txid: TxHash) -> AdmissionRank<ReceivedHour> {
         AdmissionRank::new(self.rate(), self.record.received, txid)
     }
 }

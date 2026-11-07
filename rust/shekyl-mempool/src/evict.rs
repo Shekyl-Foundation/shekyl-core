@@ -46,22 +46,17 @@
 
 use std::collections::BTreeSet;
 
-use shekyl_chain_rules::{block_weight_limit_at, ChainView, Fault, Tip, REFERENCE_BLOCK_MAX_AGE};
+use shekyl_chain_rules::{block_weight_limit_at, ChainView, Fault, Tip};
 use shekyl_chain_store::store::StoreError;
 use shekyl_types::TxHash;
 
+use crate::policy::{make_room, trim_to, FeeRate, Limits};
 use crate::pool::{Held, Pool};
-use crate::rate::FeeRate;
-
-/// CEN-M10's limit (module docs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Limits {
-    /// The total weight the pool holds.
-    pub max_weight: u64,
-}
 
 impl Limits {
-    /// The limit at the tip of `chain` (module docs).
+    /// The limit at the tip of `chain` (module docs): the block weight
+    /// limit for the block that connects next, through
+    /// [`Limits::of_block_limit`].
     ///
     /// # Errors
     ///
@@ -69,9 +64,7 @@ impl Limits {
     pub fn at<'id, V: ChainView<'id>>(chain: &V) -> Result<Self, Fault<V::Fault>> {
         let connecting = Tip::connecting_height(chain.tip().map_err(Fault::View)?.as_ref());
         let block = block_weight_limit_at(chain, connecting)?.to_raw();
-        Ok(Self {
-            max_weight: REFERENCE_BLOCK_MAX_AGE.to_raw().saturating_mul(block),
-        })
+        Ok(Self::of_block_limit(block))
     }
 }
 
@@ -91,7 +84,7 @@ pub enum Evicted {
 impl Pool {
     /// The entries to evict, in order, for `weight` more to fit: entries
     /// paying strictly less per weight than `candidate`, the cheapest
-    /// first ([`FeeRate`], [`crate::rate::AdmissionRank::eviction`]).
+    /// first ([`FeeRate`], [`crate::policy::AdmissionRank::eviction`]).
     /// `None` when no such set frees enough. An equal rate does not leave.
     pub(crate) fn room_for(&self, weight: u64, candidate: FeeRate) -> Option<Vec<TxHash>> {
         let total: u128 = self
@@ -99,20 +92,15 @@ impl Pool {
             .values()
             .map(|held| u128::from(held.weight))
             .sum();
-        let mut over =
-            (total + u128::from(weight)).saturating_sub(u128::from(self.limits().max_weight));
-        let mut victims = Vec::new();
-        for (txid, held) in self.cheapest_first() {
-            if over == 0 {
-                break;
-            }
-            if held.rate().cmp_rate(candidate) != core::cmp::Ordering::Less {
-                return None;
-            }
-            victims.push(txid);
-            over = over.saturating_sub(u128::from(held.weight));
-        }
-        (over == 0).then_some(victims)
+        make_room(
+            total,
+            weight,
+            self.limits().max_weight,
+            candidate,
+            self.cheapest_first()
+                .into_iter()
+                .map(|(txid, held)| (txid, held.rate(), held.weight)),
+        )
     }
 
     /// Every entry, the least fee per weight first (ties: the newest first,
@@ -151,28 +139,16 @@ impl Pool {
                 evicted.push((*txid, Evicted::Refused));
             }
         }
-        let limit = u128::from(self.limits().max_weight);
-        let survivors: Vec<(TxHash, &Held)> = self
+        let survivors: Vec<(TxHash, u64)> = self
             .cheapest_first()
             .into_iter()
             .filter(|(txid, _)| !gone.contains(txid))
+            .map(|(txid, held)| (txid, held.weight))
             .collect();
         // The listed bodies count toward the weight and are never chosen.
-        let mut total: u128 = survivors
-            .iter()
-            .map(|(_, held)| u128::from(held.weight))
-            .sum();
-        let mut over_weight = Vec::new();
-        for (txid, held) in survivors {
-            if total <= limit {
-                break;
-            }
-            if listed.contains(&txid) {
-                continue;
-            }
-            total -= u128::from(held.weight);
-            over_weight.push(txid);
-        }
+        let over_weight = trim_to(self.limits().max_weight, survivors, |txid| {
+            listed.contains(txid)
+        });
         evicted.extend(
             over_weight
                 .into_iter()

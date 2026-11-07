@@ -325,6 +325,14 @@ CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
 # false`; `shekyl-chain-sync` takes none).
 PERMANENT: dict[tuple[str, str], str] = {
     (
+        "shekyl-mempool",
+        "pool",
+    ): "the pool itself: the store, the door, the relay bit, the reconcile "
+    "and template selection. On by default, so every daemon-side consumer "
+    "takes it; the economics sim takes the crate with default features off "
+    "for CEN-M10's store-free policy (the limit, the two orders, the "
+    "eviction walks), which ESR-17 calls rather than restates",
+    (
         "shekyl-network",
         "serde",
     ): "the network's lowercase name on the wire and in files: shekyl-address "

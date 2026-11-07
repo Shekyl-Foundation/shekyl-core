@@ -3789,6 +3789,7 @@ name = "shekyl-block-template"
 version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
+ "proptest",
  "shekyl-archival-retention",
  "shekyl-chain-rules",
  "shekyl-crypto-pq",
@@ -4360,9 +4361,11 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-block-template",
  "shekyl-chain-rules",
+ "shekyl-chain-store",
  "shekyl-curve-tree",
  "shekyl-economics",
  "shekyl-fcmp",
+ "shekyl-mempool",
  "shekyl-rpc-types",
  "shekyl-tx-weight",
  "shekyl-types",
