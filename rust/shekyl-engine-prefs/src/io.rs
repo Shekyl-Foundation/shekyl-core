@@ -497,6 +497,10 @@ fn fsync_parent_dir(parent: &Path) -> Result<(), PrefsError> {
 }
 
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix arm's signature: callers handle both platforms the same way"
+)]
 fn fsync_parent_dir(_parent: &Path) -> Result<(), PrefsError> {
     // Windows has no directory-fsync; `File::sync_all` on the file
     // is sufficient per the platform's durability model.

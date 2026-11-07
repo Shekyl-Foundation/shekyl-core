@@ -185,6 +185,10 @@ fn sync_dir(dir: &Path) -> std::io::Result<()> {
 /// Windows has no directory handle to sync; the rename is durable on its
 /// own once the file was.
 #[cfg(windows)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix arm's signature: callers handle both platforms the same way"
+)]
 fn sync_dir(_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
