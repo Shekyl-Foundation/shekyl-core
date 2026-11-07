@@ -33,6 +33,13 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # No lane here caches cargo's registry or `rust/target`. On the
+  # 2026-11-07 schedule all ten legs missed their cache, restore keys
+  # included, and seven saved a multi-GB `rust/target` anyway: the
+  # repository's caches sit over the 10 GB quota, so by the next night
+  # GitHub has evicted what a lane saved. The saves only pushed the
+  # per-PR jobs' caches out, which are the ones that hit. A lane builds
+  # from source; a nightly has the time and a PR does not.
   proptest-exhaustive:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'proptest-exhaustive' }}
     # Scheduled workflows always execute from the default branch (main), so the
@@ -67,16 +74,6 @@ jobs:
         # checked-out `ref` above, so each matrix branch uses its own
         # copy.
         uses: ./.github/actions/install-rust
-
-      - name: Cache cargo registry + build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: nightly-proptest-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: nightly-proptest-${{ matrix.branch }}-
 
       - name: Run proptest (200 000 cases)
         working-directory: rust
@@ -144,16 +141,6 @@ jobs:
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
 
-      - name: Cache cargo registry + build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: nightly-store-ignored-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: nightly-store-ignored-${{ matrix.branch }}-
-
       - name: Run the chain store's ignored set
         # The set and its assertions are scripts/ci/ignored_set_chain_store.sh,
         # in the tree under test: each branch judges itself (the header says
@@ -191,16 +178,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
-
-      - name: Cache cargo registry + build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: nightly-producer-gate-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: nightly-producer-gate-${{ matrix.branch }}-
 
       - name: Run the bundle producer's gate
         # The subject and its assertion are scripts/ci/producer_gate.sh, in
@@ -246,16 +223,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
-
-      - name: Cache cargo registry + build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: nightly-economics-sim-ignored-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: nightly-economics-sim-ignored-${{ matrix.branch }}-
 
       - name: Run the economics sim's ignored tests
         # The set, the helpers and their assertions are
@@ -305,16 +272,6 @@ jobs:
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
 
-      - name: Cache cargo registry + build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: nightly-chain-ingest-ignored-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: nightly-chain-ingest-ignored-${{ matrix.branch }}-
-
       - name: Run the chain-ingest ignored set
         # The set and its assertions are scripts/ci/ignored_set_chain_ingest.sh,
         # in the tree under test: each branch judges itself.
@@ -355,16 +312,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
-
-      - name: Cache cargo registry + build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: nightly-wire-ignored-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: nightly-wire-ignored-${{ matrix.branch }}-
 
       - name: Run shekyl-wire's ignored tests
         # The set, the helpers and their assertions are

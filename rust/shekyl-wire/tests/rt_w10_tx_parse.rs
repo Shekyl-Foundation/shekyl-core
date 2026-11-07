@@ -9,7 +9,7 @@
 //! `docs/benchmarks/rt_w10_request_cost_20261102.md`. `RT_W10_OUT` is the
 //! directory; the test writes `parse.tsv` and `constants.tsv` and does not
 //! overwrite them. Unset, the test takes [`SCRATCH_SAMPLES`] samples into a
-//! temporary directory, checks both files, and removes it: that is the
+//! fresh temporary directory it owns, checks both files, and removes it: that is the
 //! nightly `wire-ignored` lane's run, which proves the harness still runs
 //! and measures nothing (`scripts/ci/ignored_set_wire.sh`). Linux only: the
 //! clock is `CLOCK_THREAD_CPUTIME_ID`.
@@ -19,7 +19,7 @@
 use std::fs::{self, File};
 use std::hint::black_box;
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use shekyl_wire::transaction::{COINBASE_RESERVE, MIN_BLOCK_WEIGHT};
@@ -86,18 +86,20 @@ fn fee_of(tx: &Transaction) -> u64 {
 #[test]
 #[ignore = "RT-W10 floor-device listed-tx parse; docs/benchmarks/rt_w10_request_cost_20261102.md"]
 fn rt_w10_listed_tx_parse() {
-    // `var_os`: a set value is a path, and need not be UTF-8.
+    // `var_os`: a set value is a path, and need not be UTF-8. Unset, the run
+    // writes into a directory it creates under a random name and owns; it is
+    // removed by `close` below, or on a panic when it drops.
     let (out, scratch) = match std::env::var_os("RT_W10_OUT") {
-        Some(dir) => (PathBuf::from(dir), false),
-        None => (
-            std::env::temp_dir().join(format!("shekyl-wire-rt-w10-{}.d", std::process::id())),
-            true,
-        ),
+        Some(dir) => (PathBuf::from(dir), None),
+        None => {
+            let dir = tempfile::Builder::new()
+                .prefix("shekyl-wire-rt-w10-")
+                .tempdir()
+                .expect("create the scratch output directory");
+            (dir.path().to_path_buf(), Some(dir))
+        }
     };
-    if scratch {
-        drop(fs::remove_dir_all(&out));
-    }
-    let (warmup, samples) = if scratch {
+    let (warmup, samples) = if scratch.is_some() {
         (1, SCRATCH_SAMPLES)
     } else {
         (WARMUP, SAMPLES)
@@ -152,8 +154,8 @@ fn rt_w10_listed_tx_parse() {
         pruned.len()
     );
     fs::write(&constants_path, constants).expect("write constants.tsv");
-    if scratch {
-        let lines = |path: &PathBuf| {
+    if let Some(scratch) = scratch {
+        let lines = |path: &Path| {
             fs::read_to_string(path)
                 .expect("read back a written file")
                 .lines()
@@ -165,6 +167,8 @@ fn rt_w10_listed_tx_parse() {
             "the header and one row per sample"
         );
         assert_eq!(lines(&constants_path), 4, "the four constants");
-        fs::remove_dir_all(&out).expect("remove the scratch output directory");
+        scratch
+            .close()
+            .expect("remove the scratch output directory");
     }
 }
