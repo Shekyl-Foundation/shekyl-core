@@ -383,10 +383,11 @@ impl HybridEd25519MlDsa {
 }
 
 // Test-support surface (F-7). Behind `test-utils` (or `cfg(test)` in-crate).
-// **Not** a production isolation gate: `shekyl-ffi` enables `test-utils` so the
-// C++ unit tests can link the same archive as production — cargo feature
-// unification keeps these symbols in that artifact. The structural gate
-// (separate test-only archive / cmake feature) is tracked in FOLLOWUPS F-7.
+// **Not** a production isolation gate: `shekyl-p-serve`'s `test-signer` feature
+// forwards `test-utils` on a normal dependency edge, and cargo feature
+// unification keeps these symbols in any artifact built beside an enabler
+// (`scripts/ci/check_test_only_features.py`). The structural gate is tracked in
+// FOLLOWUPS F-7.
 // Names announce test-only intent; do not call from production paths.
 #[cfg(any(test, feature = "test-utils"))]
 impl HybridEd25519MlDsa {

@@ -36,8 +36,8 @@ pub struct WireEncodeInput {
     /// ordinary FCMP++ spend). Non-zero only for the emission-claim reward vouts,
     /// which are *loud* by consensus: the daemon reads `tx.vout[i].amount` directly
     /// to form the reward-commit set and the `total_reward` operand of
-    /// `verCtSemanticsEmission` (`blockchain.cpp:3926`, `ct_semantics.cpp:348`). Arity
-    /// is pinned to `output_keys` at build.
+    /// `verCtSemanticsEmission` (`blockchain.cpp:3926`, `ct_semantics.cpp` at
+    /// `ac3836de90` (lines 290–322)). Arity is pinned to `output_keys` at build.
     pub output_amounts: Vec<u64>,
     pub view_tags: Vec<Option<u8>>,
     pub tx_extra: Vec<u8>,

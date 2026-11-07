@@ -138,8 +138,9 @@ fn fcmp_spend_round_trips_self_consistently() {
 fn pruned_fcmp_spend_round_trips_and_ingests() {
     use shekyl_wire::PrunedError;
     // The `serialize_base` framing keeps the consensus pqc_auths but drops the
-    // prunable proof (cryptonote_basic.h:523 gates `rctsig_prunable` on
-    // `!pruned`, while pqc_auths at :491-517 are written regardless).
+    // prunable proof (`cryptonote_basic.h` at `ac3836de90` (line 605) gates
+    // `ctsig_prunable` on `!pruned`, while the pqc_auths (line 598) are written
+    // regardless).
     // `Ct::read`'s EOF-after-pqc_auths tail must parse it; the pruned-safe
     // ingestion validator must accept it; and `into_full()` — the one boundary
     // to consensus code that needs the proof — must still reject it, so a body

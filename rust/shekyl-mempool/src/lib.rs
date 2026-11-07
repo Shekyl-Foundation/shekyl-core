@@ -35,10 +35,10 @@
 //! default), which carries the store, the network and the wire, so the
 //! economics sim calls the pool's policy without taking a store.
 //!
-//! # Wired at the flip
+//! # The door's caller
 //!
-//! `shekyl-ffi`'s `pool_ffi` is the protocol handler's door (DX-Q5). The
-//! C++ `tx_memory_pool` deletes in the same PR (`DEL-010`).
+//! The pool's door is the ingest service in `shekyl-chain-ingest`
+//! (DX-Q5), which runs the pool's steps beside its cache slots.
 
 #[cfg(feature = "pool")]
 mod block;
