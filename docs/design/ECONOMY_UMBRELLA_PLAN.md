@@ -275,7 +275,7 @@ the three operands.
 | # | Work | Gate |
 | --- | --- | --- |
 | a | The version-gate sweep: every version comparison in the C++, classified by operand, with a gate holding the inventory. **Done 2026-10-05** ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md)): the block-version gates are deleted or collapsed, bar the fill (d); the transaction-version collapse is its own PR | before EUP-4 |
-| b | `Fill::admit_up_to` batches the penalty-free part (built 2026-10-04) and walks the penalty zone one body at a time. The approved zone closed form, held to the single-offer walk, is **not built**: it is the first EUP-4 prep PR (ruling 5, 2026-10-24; [`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.6) | EUP-4 prep; the 135-year growth arms wait on it |
+| b | `Fill::admit_up_to` admits the penalty-free part and the penalty zone in closed form, held to the single-offer walk. **Built 2026-11-06**, the first EUP-4 prep PR (ruling 5, 2026-10-24; [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md) §5.28) | EUP-4 prep. The 135-year horizon for the registered tables waits on §4's ratification |
 | c | The coinbase reserve, derived. **Done 2026-10-22** on the inherited 300,000 B zone (reserve 1,386; `TX_WEIGHT_LIMIT` 148,614). The cover is the codec test `the_maximal_coinbase_weighs_what_the_grammar_sums`. The zone's capacity leg remains EUP-5 G and moves the limit again | with the zone's capacity leg; before (d) |
 | d | The Rust fill prices and bounds the weight the block carries, coinbase included, and the sim records that weight. **Done 2026-10-22.** The C++ fill deletes with `tx_pool.cpp` at the DRS-X flip (DEL-010), not in this change | after (c) |
 | e | Q9, the floor in consensus (D) | after (d): both land in the template and admission path, and the enforced case's arithmetic depends on the fill |
@@ -326,16 +326,13 @@ the knee is held, not re-pinned (`docs/FOLLOWUPS.md`).
 questions (onset, fee era, tail) are tail-era questions, and a 60-year run no
 longer sees them. The structural arms run to about 135 years; the remaining
 arms stay at 60. Measured cost on the control arm: the baseline to 135 years
-is 64 s. The growth schedule is not affordable that far as the fill stands —
-63 years is 337 s and 66 years exceeds 500 s — because
-`Fill::admit_up_to` batches only the penalty-free part of a block and walks
-the penalty zone one body at a time. Long growth arms wait on that zone being
-closed in form, held to the single-offer walk as the free part is (approved
-2026-10-05 as EUP-4 prep, §3.2 b). Re-measured 2026-10-23
-([`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.6): on the flat
-control 63 years is 273 s and 66 years passes 1 200 s; on production the
-growth arm passes 1 200 s somewhere past year 80, and every other scenario
-folds 135 years in about a minute. The structural arms carry a per-block fee
+is 64 s. The penalty zone is admitted in closed form (§3.2 b), so the fill no
+longer bounds a growth arm's horizon: every scenario's fold cost at 135 years
+is [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.28.1. The growth schedule stops in year 114 on production and year 80 on
+the flat control. That is the year its cumulative fee burn passes everything
+emitted, and the sim's supply invariant refuses the fold (§5.28.1). Whether the growth arm runs to
+the horizon is a question about that schedule, not about cost. The structural arms carry a per-block fee
 revenue and variance column for the tail criterion (§3.2, 3).
 
 Scenario 9 (high history, low activity) is the first of the structural arms.

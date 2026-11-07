@@ -2888,6 +2888,169 @@ backlog does not survive 94 blocks. The rung pool ESR-10 builds rides on
 this, and P2–P4's operands are re-read from these fixtures in its
 amendment.
 
+### 5.28 EUP-4 prep 1, the penalty zone in closed form, predicted before it is built (2026-11-06)
+
+Written against `dev` at `b8b11453e`, before any code. The ruling is the
+approval of 2026-10-05 ([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md)
+§3.2 b) and [`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.9
+ruling 5: `Fill::admit_up_to` stops walking the penalty zone one body at a
+time and stays exactly the single-offer walk. Nothing below is a result.
+
+**Two facts at the pin that the brief stated otherwise.**
+
+- The fill's block limit is a literal two medians:
+  `median_weight.saturating_mul(2)` in
+  `rust/shekyl-block-template/src/fill.rs`, on the raw median. ESR-16's
+  completion (#1218) moved the penalty to `k × max(median, zone)`
+  (`block_weight_limit`, `apply_weight_penalty`) and left the fill. At
+  the shipped `k = 2` the two agree, because `medians_from` floors the
+  effective median at the zone. A swept `k` splits them: at `k = 4` the
+  fill stops at two medians and the penalty runs to four. The closed
+  form takes `admit`'s exits as they stand, the fill's limit and the
+  penalty's, and reads `e / s = k − 1` from the set. Moving the fill's
+  limit changes `admit`, and so the node's template. That is outside this
+  change, and it is raised with the design owner.
+- The plan the brief names, `SIM_PHASE2_PLAN.md`, is not in the tree at
+  the pin. This change follows §P0.9 step 4.
+
+**The arithmetic.** `M` is the penalty-free weight, `k − 1 = e / s` in
+lowest terms, `D = e·M`, `A` the pre-penalty emission, `x` a block's
+excess over `M`, and `w`, `f` the body's weight and fee. The penalty is
+one floor of one quotient, because `⌊⌊N/D⌋/D⌋ = ⌊N/D²⌋`:
+`R(x) = A − ⌈c·x²⌉` with `c = A·s²/D²`. Body `j` costs `Δ_j` in the
+integers and `δ_j = c·w·(2·x_{j−1} + w)` on the real curve, and
+`Δ_j ≤ ⌈δ_j⌉`. So a body whose fee covers `δ_j` is admitted: the integer
+walk never refuses before the real root. The brief's worry about flooring
+runs in one direction only. `δ_j` is linear in `j`, so the root is a
+quotient of exact integers, not a square root. Past the root,
+`⌈c·x_j² − f·j⌉` never falls, so "every body since the root is admitted"
+is the single test `R(root) − R(j) ≤ f·(j − root)`. That test is monotone
+and can be bisected with production's `penalised`.
+
+**The bound.** Past the root, at most `B = t − 1` bodies are admitted,
+where `t` is the least integer with `t·(t − 1) ≥ T` and
+`T = (e·M)² / (A·s²·w²)`. That is about `e·M / (s·w·√A)`. The proof is in
+`Fill::admit_up_to`'s doc comment.
+
+**Baseline at the pin**, registered before the change. This is one fold of
+`stage2::a1_year_aggs` with `sim_years = 135`, on the production arm,
+release build, timed by an uncommitted probe test. It is §P0.6's method.
+The machine was shared, with a load average near 25 on 16 cores.
+`baseline_steady_state` took **64.9 s**.
+
+- **Z-1.** No output byte changes. Both narration fixtures pass
+  unregenerated. Every mode's stdout and stderr match the pin byte for
+  byte, on both arms, after masking wall-clock lines: the default run,
+  `--stage2`, `--gate7`, `--fb1c-c2`, `--fee-ladder`, `--fee-floor`,
+  `--secret-draw` and `--secret-draw-production`. `--esr10` has not
+  landed at the pin.
+- **Z-2.** On the production arm, `sustained_growth` folded to 135 years
+  finishes within 3× the baseline's time, measured back to back on the
+  same machine. One risk is registered with it. The growth schedule's
+  median passes the penalty product's `u128` range, where
+  `A·(e·M)² ≥ 2¹²⁸`. That is `M` near `2⁶⁴/√A`: about `10¹⁴` bytes on the
+  curve, `7·10¹⁴` at the tail. On the schedule's 20 % a year from year
+  60's 36 GB, that comes between year 100 and year 115. From there the
+  first body past the median is refused by the penalty's
+  `Overflow` exit, and blocks stop at the median. The prediction is that
+  this happens without a panic. The run reports carried and demanded
+  transactions at year 135.
+- **Z-3.** As the brief worded it ("a small constant, independent of `n`
+  and `M`"), predicted **false**. `B` grows with `M/(w·√A)`. At the 300 kB
+  zone, `T < 1` and `B ≤ 1` on every era. On growth's year-60 median of
+  36 GB, with ≈ 15.3 kB bodies and ≈ 24 SKL of emission, `T ≈ 230` and
+  `B ≤ 15`. Past year 100, `B` is of order `10⁵` a block. The brief's
+  "step back `B`, walk `2B + 1`" would then cost about `10¹⁰` pricings
+  a year of chain. So the closed form bisects past the root instead of
+  walking it, and its cost does not depend on `B`.
+
+#### 5.28.1 What the run said (2026-11-06)
+
+Measured at the change's last code commit, against the pin's binary. The
+machine was shared, and each timing below gives the load average it started
+at, on 16 cores.
+
+**The parity tests.** `rust/shekyl-block-template/src/fill.rs` holds
+`admit_up_to` to the walk five ways, each with a red check that a mutant in
+the root fails:
+
+- a grid over medians from a third of the zone to 2³³ bytes, three eras,
+  multiples 1.5, 2 and 4, fees up to a third of `u64::MAX` and counts up to
+  `u64::MAX`, over 10,000 cases;
+- the growth schedule's medians, 2⁴⁰ to 2⁴⁹ bytes, where `fee·D²` leaves
+  `u128`;
+- every small case on a 64-byte zone, every fee up to one past the emission,
+  over 400,000 cases;
+- each of `admit`'s exits, in order: fee headroom, weight overflow,
+  `BlockTooBig` and the penalty product's `Overflow`;
+- two property tests of 2,048 cases each, over random operands and over
+  random medians from 2³⁶ to 2⁵⁰.
+
+`rust/shekyl-economics/src/emission.rs` holds the count itself
+(`PrePenaltyEmission::bodies_the_fee_covers`) to the real root, the lemma
+and the bound. It checks against a 256-bit oracle at the growth medians.
+
+- **Z-1 held.** Sixteen runs: the eight modes on both arms. All sixteen
+  exit 0. 30 of the 32 streams are byte-identical to the pin's. The other
+  two are `--secret-draw-production`'s stderr on each arm. They match once
+  the progress lines' elapsed-time prefixes and the closing `wall time:`
+  line are masked and the progress lines are sorted. Its cells run in
+  parallel, so their order is not fixed run to run. Both narration
+  fixtures pass unregenerated (2 passed in 267 s, release).
+- **Z-2, missed as worded, and not on cost.** `sustained_growth` cannot
+  fold to 135 years on either arm. The refusal is upstream of the fill,
+  which admits the blocks the walk admits, so the pin reaches it too. That
+  is derived, not measured: the pin's fold to year 114 had not finished
+  when this was written. The year
+  its cumulative fee burn passes everything emitted, the fold's supply
+  invariant refuses it: `engine.rs` `net_supply`, "a fold destroys only
+  fees, which never exceed what it emitted". On production that is year
+  114. On the flat control it is year 80. The sim takes fees as exogenous,
+  so the schedule burns coins nobody held. `fee_model.rs`
+  `growth_schedule_caveat` already calls the schedule unphysical past
+  year 60, and the flat control's burn-out by about year 38. Up to that
+  year the fold costs no more than the baseline. On production, growth to
+  113 years took 80.7 s (load 25.6), every demanded transaction carried,
+  against the pin baseline's 64.9 s. To 110 years it took 44 s (load 13
+  to 18), back to back with the baseline at 135 years: 59.0 s and 47.9 s
+  for the change, 71.0 s for the pin. At the pin, growth to 80 years took
+  146 s and to 135 years passed 1,200 s. On the flat control, growth to
+  79 years took 71.0 s, where the pin could not pass year 61. The
+  registered `u128` edge did not arrive by year 113. Every demanded
+  transaction was carried and no count fell back to the walk.
+- **Z-3, false as predicted, and smaller than predicted on the arms.** `B`
+  is not a constant: it is `t − 1` with `t·(t − 1) ≥ (e·M)²/(A·s²·w²)`.
+  The test grid's widest run past the root is 3,134 bodies, on a 64-byte
+  zone with a tail of 6 atomic units. An instrumented copy of the change,
+  never committed, counted the widest run past the root in every fold.
+  Production growth to 113 years: one body, at a 92.9 MB median, over
+  519,720 penalty-zone runs. Flat-control growth to 79 years: none. Every
+  other scenario at 135 years: none. No count fell back to the walk. The
+  bound's value along the arms was not instrumented. The prediction of
+  order 10⁵ past year 100 was about the bound, and the bisection's cost
+  does not depend on it.
+
+**The fold's cost at 135 years**, production arm. One fold of
+`stage2::a1_year_aggs`, release build, the instrumented copy above (one
+relaxed atomic per penalty-zone run). The loads were high and uneven, so
+these are ceilings, not a benchmark. Growth runs to the last year its
+supply invariant allows.
+
+| Scenario | Years | Seconds | Load at start |
+| --- | --- | --- | --- |
+| `baseline_steady_state` | 135 | 61.8 | 17.9 |
+| `boom_bust_cycle` | 135 | 71.7 | 17.8 |
+| `sustained_growth` | 113 | 80.7 | 25.6 |
+| `stuffing_attack` | 135 | 129.6 | 22.6 |
+| `stake_concentration` | 135 | 122.2 | 53.2 |
+| `mass_unstaking` | 135 | 95.1 | 65.3 |
+| `chain_bootstrap` | 135 | 72.9 | 53.4 |
+| `late_chain_tail` | 135 | 86.3 | 35.5 |
+| `high_history_low_activity` | 135 | 78.5 | 33.5 |
+
+The registered tables stay at `ONSET_HORIZON_YEARS = 60`. Turning on the
+135-year horizon is not part of this change.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 Under the cycle ruling (§0), staking is being designed now, and the
