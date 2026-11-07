@@ -54,6 +54,7 @@ jobs:
   rpc-route-liveness:
     name: "RK: every served RPC route has a consumer"
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.2 min over 25 runs; the floor
     steps:
       - uses: actions/checkout@v5
       - name: check RPC route liveness
