@@ -53,7 +53,9 @@ on a later run of this harness).
 - `rust/shekyl-pow-randomx/examples/rt_w10_request_cost.rs` writes
   `hashes.tsv`.
 - `shekyl-chain-store`'s ignored test `rt_w10_coinbase_span_cost` writes
-  `coinbase.tsv`.
+  `coinbase.tsv` into `RT_W10_OUT`. Unset, it writes into a temporary
+  directory and removes it: that is the nightly `store-ignored` lane's run,
+  which proves the harness runs and measures nothing.
 - `shekyl-wire`'s ignored test `rt_w10_listed_tx_parse` writes `parse.tsv`
   and `constants.tsv`.
 
