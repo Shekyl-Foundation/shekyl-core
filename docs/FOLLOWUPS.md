@@ -320,7 +320,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`PL-D4` — a proper hash-commitment mechanism for the leaf's 4th scalar, succeeding the `PL-D3` Pedersen commitment.** A hash over the leaf field chosen on measured gates and published cryptanalysis, with generated parameters, pinned vectors, a registry row and one shared Rust implementation; it makes the leaf commitment binding beyond discrete log and is what a post-quantum-sound membership leg would prove over ([`design/FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §6.5). Ruled 2026-09-14: designed with the V4 lattice-only transition (itself gated on lattice threshold signatures or mature isogeny signatures such as PRISM) as one leaf-format cutover; until then `PL-D3a`'s record beside the point is the post-quantum ownership record for every v3 output.
   - Target: V4
 
-- **CEN-A7's per-block transaction-count bound has two undocumented values: `2^28` (`CRYPTONOTE_MAX_TX_PER_BLOCK`, `cryptonote_basic.h:914`, an element count) and `10^6` (`shekyl_wire::READ_LEN_CAP`, `block.rs:163`).** A knowingly-reproduced deviation in the DRS §7.6 three-field form — *reproduced:* two structural bounds on one field, neither derived; *why:* parity first, and no real block approaches either; *correct:* one constant with a derivation record (a count bound derived from the block-weight limit, or ruled unbounded-below-weight), typed as a count rather than a bare integer so a bytes/count misreading is a compile error. Owner: the wire-format port ([`BLOCK_TX_WIRE_FORMAT_PORT.md`](design/BLOCK_TX_WIRE_FORMAT_PORT.md)), where A6/A7's wire-side invariant register also lands. Falsifier: one constant with a derivation record, or the divergence ruled. Found at [`CHAIN_RULES_SLICE_1.md`](completed/CHAIN_RULES_SLICE_1.md) F2; migrates into the E2 repair-backlog query when minted.
+- **CEN-A7's per-block transaction-count bound has two undocumented values: `2^28` (`CRYPTONOTE_MAX_TX_PER_BLOCK`, `cryptonote_basic.h` at `ac3836de90` (line 914), an element count) and `10^6` (`shekyl_wire::READ_LEN_CAP`, `block.rs:163`).** A knowingly-reproduced deviation in the DRS §7.6 three-field form — *reproduced:* two structural bounds on one field, neither derived; *why:* parity first, and no real block approaches either; *correct:* one constant with a derivation record (a count bound derived from the block-weight limit, or ruled unbounded-below-weight), typed as a count rather than a bare integer so a bytes/count misreading is a compile error. Owner: the wire-format port ([`BLOCK_TX_WIRE_FORMAT_PORT.md`](design/BLOCK_TX_WIRE_FORMAT_PORT.md)), where A6/A7's wire-side invariant register also lands. Falsifier: one constant with a derivation record, or the divergence ruled. Found at [`CHAIN_RULES_SLICE_1.md`](completed/CHAIN_RULES_SLICE_1.md) F2; migrates into the E2 repair-backlog query when minted.
   - Target: pre-genesis
 
 - **DRS-W16: `remove_block` deletes at an implicit cursor position its caller sets.** The positioning `mdb_cursor_get(…, MDB_SET)` was removed by inherited commit `22c0fae47b` (subject unrelated to block removal); the delete is correct today only because `BlockchainDB::pop_block` reads the top block through the same write-cursor member one call earlier. Latent, not reachable in this tree — but any `blocks` read inserted between those two calls, or any second caller of `remove_block`, deletes at a valid-but-wrong position, which **succeeds silently** while the explicitly-positioned `block_info` and `block_heights` deletes remove the right rows. Either restore the dropped `MDB_SET` or land the guard at the Rust port. Falsify by `grep -n "MDB_SET" ` over `remove_block` in `src/blockchain_db/lmdb/db_lmdb.cpp`. Mechanism in [`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9.
@@ -760,7 +760,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`fips204` features-list discipline: drop `default-rng` and [`rust/shekyl-crypto-pq/Cargo.toml`](../rust/shekyl-crypto-pq/Cargo.toml)**
   - Target: pre-genesis
 
-- **`epee::wipeable_string` mlock-backed allocator [`contrib/epee/include/wipeable_string.h:83`](../contrib/epee/include/wipeable_string.h)**
+- **`epee::wipeable_string` mlock-backed allocator `contrib/epee/include/wipeable_string.h` at `ac3836de90` (line 83)**
   - Target: pre-genesis
 
 - **RandomX v2 SHA-256 digest of the 7-symbol `randomx.h` surface** beside `fork-pin-sha` in `randomx-v2-sys`. Reopen: pin-bump of `external/randomx-v2` or a tarball-CI need (checkout-hygiene conjunct fired in PR #754). [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
@@ -1178,7 +1178,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`WalletFile` handle slimming (post–PR 6 `PersistenceEngine`).**
   - Target: pre-genesis
 
-- **FFI C ABI symbol rename: `shekyl_wallet_*` → `shekyl_engine_*`, [`shekyl-ffi`](../rust/shekyl-ffi/)**
+- **FFI C ABI symbol rename: `shekyl_wallet_*` → `shekyl_engine_*`, `shekyl-ffi` at `ac3836de90`**
   - Target: pre-genesis
 
 - **C++ JSON-RPC method-name rename: `wallet_*` → engine-shaped names (folded into Phase 4b's Shekyl-native RPC method-set work).**

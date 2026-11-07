@@ -200,7 +200,7 @@ not act on them:
   caller-less standalone object serializers (`rctSigBase`, `rctSigPrunable`,
   `rctSig`) so a second, disagreeing definition of the bytes cannot produce
   this class of phantom finding again.
-- **The boost-serialization line (`cryptonote_boost_serialization.h:428`)
+- **The boost-serialization line (`cryptonote_boost_serialization.h` at `ac3836de90` (line 428))
   was never part of this deletion — do not touch it in the sweep.** That
   line is the **prunable** field (`x.pseudoOuts` inside
   `serialize(rctSigPrunable&)`), which is live and load-bearing; removing it
@@ -231,7 +231,7 @@ Do not lump these into one "V4 namespace" deferral.
 
 | Surface | Consensus / wire | Pre-genesis cost | Rename PR gate |
 |---------|------------------|------------------|----------------|
-| **Wire tags** | **Renamed 2026-07-11** — `ar.tag("ct_signatures")`, `"ctsig_prunable"` in [`cryptonote_basic.h`](../../src/cryptonote_basic/cryptonote_basic.h). JSON-archive-only (`binary_archive::tag` is a no-op): affects `decode_as_json` / tx-pool JSON, not binary bytes; no KAT pinned the JSON key names | Done pre-genesis | Landed (V3.0 public-API slice) |
+| **Wire tags** | **Renamed 2026-07-11** — `ar.tag("ct_signatures")`, `"ctsig_prunable"` in `cryptonote_basic.h` at `ac3836de90`. JSON-archive-only (`binary_archive::tag` is a no-op): affects `decode_as_json` / tx-pool JSON, not binary bytes; no KAT pinned the JSON key names | Done pre-genesis | Landed (V3.0 public-API slice) |
 | **C++ identifiers** | Invisible if wire tags unchanged | Cheap after `wallet2` gone | **Landed 2026-08-21** — rename-only; byte-identical by construction (binary variant tags are numeric) |
 | **Rust + FFI** | C ABI strings stable until coordinated cut | **Free now** — use Shekyl-native names in Rust | New exports use `shekyl_ct_*` / semantics vocabulary; legacy `rct_*` only at the C++ glue edge |
 

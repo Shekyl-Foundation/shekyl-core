@@ -106,7 +106,7 @@ from landed figures rather than carried:
 Sources: 3.43 KB/record and the chain-growth finding, `FOLLOWUPS.md` §"ADDITION
 FROM CHECKING IT"; 99 B kept / 5,107 B pruned / ≈5,204 B record, the `RF-D10`
 row in `IMPLEMENTATION_INDEX.md` and `SERVE_CREDIT_PRUNED_MAX_BYTES`
-(`ct_types.h:318–321`).
+(`ct_types.h` at `ac3836de90` (lines 318–321)).
 
 **The record got bigger and the chain got smaller** — because `RF-D8` ruling
 (i) kept the ~1,920 B opening *additively*, and `RF-D10` put the 5,107 B
@@ -146,7 +146,7 @@ k_cap·SEB/D) = min(3, 32.1) = 3` even at the TJ-extreme `D ≈ 324,000` —
 | Maturity (TJ extreme) | ~324,000 | **98** | ~506 KB | **1.7×** — penalised |
 
 `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 = 300000`
-(`cryptonote_config.h:58`) is a **penalty threshold, not a hard cap** — so
+(`cryptonote_config.h` at `ac3836de90` (line 58)) is a **penalty threshold, not a hard cap** — so
 maturity-scale exact coverage is an *economic* cost (a standing block-reward
 penalty), not an impossibility. That is a materially different finding from
 "the mechanism does not scale past ~10⁵ pairs", and it is better news, but it

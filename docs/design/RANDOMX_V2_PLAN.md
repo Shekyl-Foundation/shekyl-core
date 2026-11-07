@@ -257,7 +257,7 @@ Two design documents, **both** required before Phase 1.
 
 9. **Grover-bound argument for the lattice transition.** Grover gives a square-root speedup against unstructured preimage search — for 256-bit output the idealized work drops from ~2²⁵⁶ to ~2¹²⁸, i.e., the search-effort exponent halves. For 256-bit output and difficulty target T ≪ 2²⁵⁶, the classical bound on finding a hash below T is still ahead of Grover. Cite the specific calculation; audit reviewers will ask. (Mirrors `RANDOMX_V2_RUST.md` §10's framing; the canonical statement lives there.)
 
-10. **`cncrypto` PUBLIC link survey.** [src/crypto/CMakeLists.txt](../../src/crypto/CMakeLists.txt) links `randomx` PUBLIC into `cncrypto`. Phase 0 surveys cncrypto's transitive consumers and documents which subsystems silently depend on `randomx` through the PUBLIC link. Phase 3 cannot drop the link until those consumers are resolved.
+10. **`cncrypto` PUBLIC link survey.** `src/crypto/CMakeLists.txt` at `ac3836de90` links `randomx` PUBLIC into `cncrypto`. Phase 0 surveys cncrypto's transitive consumers and documents which subsystems silently depend on `randomx` through the PUBLIC link. Phase 3 cannot drop the link until those consumers are resolved.
 
 11. **What stays state, named explicitly.** Per Decision #8: `shekyl-ffi`'s internal `CacheStore` entries, chain's current `Seedhash`, protocol constants. Auditors can grep this section against the crate's public surface to confirm no hidden state in `shekyl-pow-randomx`.
 
@@ -396,7 +396,7 @@ Per `60-no-monero-legacy.mdc`, `15-deletion-and-debt.mdc`, and `70-modular-conse
 **Misc cleanup:**
 
 - `src/wallet/wallet_rpc_payments.cpp` is gone (wallet2 cutover). Not a remaining Phase 4 site.
-- Update PoW unit tests under [tests/unit_tests/](../../tests/unit_tests/) to v2-only.
+- Update PoW unit tests under `tests/unit_tests/` at `ac3836de90` to v2-only.
 
 ### Phase 5: Docs — LANDED 2026-09-16
 

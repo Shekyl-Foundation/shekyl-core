@@ -226,7 +226,7 @@ cadence driver:
   refusal removes it (§2's table). Claims and drains are held.
 - **The pool's clock is per node, and the Rust pool has none.** The C++
   pool's is three days from that node's admission
-  (`CRYPTONOTE_MEMPOOL_TX_LIVETIME`, `src/cryptonote_config.h:104`), about
+  (`CRYPTONOTE_MEMPOOL_TX_LIVETIME`, `src/cryptonote_config.h` at `ac3836de90` (line 104)), about
   2,160 blocks at 120 s, measured from `receive_time`
   (`src/cryptonote_core/tx_pool.cpp`); a byte-identical resend to a
   node that still holds the transaction does not reset it, and only

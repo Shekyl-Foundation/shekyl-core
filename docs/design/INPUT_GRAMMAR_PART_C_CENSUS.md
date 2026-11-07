@@ -20,7 +20,7 @@
 | `bool` | JSON boolean |
 | `string` | JSON string |
 | `hash64` | a 64-char lowercase hex string (`HashHex`; on deserialize it accepts either case and refuses any other length): `T/hash.rs:168-191` |
-| `hex128` | `"0x"` followed by minimal lowercase hex of a u128. Rust: `HexU128`, `T/hex128.rs:127-138`. C++: `cryptonote::hex`, `src/cryptonote_basic/difficulty.cpp:93`, through `store_128` at `S:74-79` |
+| `hex128` | `"0x"` followed by minimal lowercase hex of a u128. Rust: `HexU128`, `T/hex128.rs:127-138`. C++: `cryptonote::hex`, `src/cryptonote_basic/difficulty.cpp` at `ac3836de90` (line 93), through `store_128` at `S:74-79` |
 | `hexstr` | a free-length lowercase hex string (`buff_to_hex_nodelimer` / `hex::encode`) |
 | `atomic-dec` | a decimal string of atomic units (`AtomicUnitsString`, `rust/shekyl-units/src/wire.rs:40`) |
 | `nullable<T>` | the key is always present, and its value is `T` or `null` (`Nullable`, `T/nullable.rs:67-70`) |

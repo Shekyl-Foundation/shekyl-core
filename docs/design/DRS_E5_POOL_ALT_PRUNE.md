@@ -1495,7 +1495,7 @@ in read-only mode.
 
 **Default.** Yes: `KeepCurrent | Switch | ForcedSwitch`; `Switch` keeps the
 demoted chain as alt blocks, `ForcedSwitch` discards it. The C++ FFI
-consumer (`difficulty_ffi.rs:457`, `blockchain.cpp:2291`) compares against
+consumer (`difficulty_ffi.rs` at `ac3836de90` (line 457), `blockchain.cpp:2291`) compares against
 `SHEKYL_FORK_CHOICE_SWITCH` only, so until DEL-009 it reads the new arm as
 *not switch* — the C++ shim therefore maps `ForcedSwitch` to its existing
 switch path (one line, `:2291`) in the same commit, keeping its own
