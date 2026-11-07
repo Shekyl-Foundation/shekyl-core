@@ -127,6 +127,13 @@ doc. A plan that only rearranges documentation does not owe a
 CHANGELOG novel; a one-line Unreleased note is enough when the change
 is process-only.
 
+A pull request writes its entry as a new file under `docs/changelog.d/`,
+named after its branch. It never edits `docs/CHANGELOG.md`. Only the
+release cut (`docs/RELEASING.md` step 1) moves entries into the
+CHANGELOG. An edit at the top of `[Unreleased]` conflicts with every
+other open pull request that makes one, and a conflict evicts a pull
+request from the merge queue.
+
 CI (`.github/workflows/docs-gates.yml`) holds the banners, FOLLOWUPS
 `Target:` tokens, forbidden fossils in always-applied rules, index §2
 prefix uniqueness, and the claim-era basename refusal. A closed plan

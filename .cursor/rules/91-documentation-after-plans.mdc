@@ -17,8 +17,9 @@ the changes.
   current behavior, APIs, or design.
 - **What to update:** fix outdated steps, names, examples, and TODOs; add
   or revise sections for new behavior; keep cross-references and checklist
-  items accurate. Update `docs/CHANGELOG.md` **only** for user-visible,
-  consensus, API, or security-relevant deltas (see
+  items accurate. Write a CHANGELOG entry **only** for user-visible,
+  consensus, API, or security-relevant deltas, as a file under
+  `docs/changelog.d/`, not an edit of `docs/CHANGELOG.md` (see
   [`95-documentation-lifecycle.mdc`](95-documentation-lifecycle.mdc)).
   Design-round archaeology stays in the plan doc. Completing a plan
   includes archive-or-contract: living SoTs stay and flip their Status
@@ -106,8 +107,8 @@ becomes the next person's starting assumption.
 When a Plan has N tasks, the (N+1)th task is:
 
 > "Read and update documentation (docs/*.md, README, design/API docs) to
-> reflect the changes. Archive-or-contract per rule 95. Update
-> CHANGELOG.md only if the change is user-visible, consensus, API, or
-> security-relevant."
+> reflect the changes. Archive-or-contract per rule 95. Add a
+> `docs/changelog.d/` entry only if the change is user-visible, consensus,
+> API, or security-relevant."
 
 Complete that task before considering the Plan done.

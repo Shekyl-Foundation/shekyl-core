@@ -4661,6 +4661,7 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "shekyl-curve-generators",
+ "shekyl-types",
  "std-shims",
  "zeroize",
 ]
@@ -5791,6 +5792,7 @@ dependencies = [
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-tx-weight",
+ "shekyl-types",
  "shekyl-wire",
  "tempfile",
  "tokio",

@@ -24,7 +24,7 @@ use shekyl_tx_builder::{
     tx_prefix_hash_from_parts_with_extra, tx_signable_for, AuthSlots, InputTerm, SpendLayout,
     TreeContext,
 };
-use shekyl_types::GlobalOutputIndex;
+use shekyl_types::{GlobalOutputIndex, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Input;
 use zeroize::Zeroizing;
@@ -435,12 +435,9 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             .map_err(|e| StakeEngineError::from(BondAssemblyError::build("proving", e)))?;
             // Step-7 self-check, backing leg: the landed consensus verifier
             // over the assembled vin (cause-blind on refusal, CB-5).
-            if let Err(e) = emission_vin_verify_backing(
-                &vin,
-                tree.tree_root.as_bytes(),
-                tree.tree_depth,
-                &tx_signable,
-            ) {
+            if let Err(e) =
+                emission_vin_verify_backing(&vin, &tree.tree_root, tree.tree_depth, &tx_signable)
+            {
                 tracing::error!(error = %e, "emission self-check: backing verification failed");
                 return Err(StakeEngineError::EmissionClaim(
                     EmissionClaimError::SelfCheckFailed,
@@ -507,7 +504,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // bundle, no seed re-borrow) over the payload hash phase 1 bound
         // to the identity key.
         let emission_sig = {
-            let emission_payload = open
+            let emission_payload: &SigningPayloadHash = open
                 .sole_extra_payload()
                 .map_err(|e| BondAssemblyError::build("emission slot payload", e))?;
             HybridEd25519MlDsa

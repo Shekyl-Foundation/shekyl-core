@@ -130,7 +130,7 @@ pub fn draw_targets<V: BundleView>(
                 epoch,
             }));
         };
-        let pairs = select_pairs(view, drawable, h, seed, hash.as_bytes(), count)?;
+        let pairs = select_pairs(view, drawable, h, seed, &hash, count)?;
         draws.reserve(pairs.len());
         for (draw, (index, pair)) in (0..count).zip(pairs) {
             let Some(receipt_key) = drawable.receipt_key(index) else {
@@ -145,7 +145,7 @@ pub fn draw_targets<V: BundleView>(
             });
         }
     }
-    for seat in records::support_seats(view, h, seed, hash.as_bytes(), issued)? {
+    for seat in records::support_seats(view, h, seed, &hash, issued)? {
         draws.push(Drawn {
             draw: seat.draw,
             persona: seat.persona,

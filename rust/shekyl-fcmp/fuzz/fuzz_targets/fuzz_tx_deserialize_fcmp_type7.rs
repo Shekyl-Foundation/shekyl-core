@@ -7,6 +7,7 @@
 use libfuzzer_sys::fuzz_target;
 use shekyl_fcmp::leaf::PqcKeyScalar;
 use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
+use shekyl_types::{CurveTreeRoot, TxSignableHash};
 
 // Simulates deserializing the prunable portion of a CTTypeFcmpPlusPlusPqc
 // transaction. The fuzzer provides arbitrary bytes which are interpreted as
@@ -81,6 +82,8 @@ fuzz_target!(|data: &[u8]| {
     if data.len() >= 66 {
         signable_tx_hash.copy_from_slice(&data[34..66]);
     }
+    let tree_root = CurveTreeRoot::from_bytes(tree_root);
+    let signable_tx_hash = TxSignableHash::from_bytes(signable_tx_hash);
 
     // Main proof verification attempt
     if !proof_data.is_empty() {

@@ -204,7 +204,7 @@ async fn file_draws(
         height: parent,
         hash: mined[usize::try_from(parent.to_raw()).expect("a test chain's length")].hash,
     };
-    let filed = pass_every_draw(&targets.draws, &seed, hash.as_bytes(), anchor, signers);
+    let filed = pass_every_draw(&targets.draws, &seed, &hash, anchor, signers);
     let kept = BundleKept {
         h,
         seed,
@@ -242,7 +242,7 @@ struct FiledPasses {
 fn pass_every_draw(
     targets: &[DrawTarget],
     seed: &[u8; 32],
-    block_hash: &[u8; 32],
+    block_hash: &BlockHash,
     anchor: Anchor,
     signers: &[&Persona],
 ) -> FiledPasses {
@@ -274,7 +274,7 @@ fn stream_passes(
     stream: PassStream,
     targets: &[DrawTarget],
     seed: &[u8; 32],
-    block_hash: &[u8; 32],
+    block_hash: &BlockHash,
     anchor: Anchor,
     signers: &[&Persona],
 ) -> (PassBitmap, Vec<BundleRecord>) {

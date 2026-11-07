@@ -15,6 +15,7 @@ use ciphersuite::{
 use dalek_ff_group::{Ed25519, EdwardsPoint, Scalar};
 
 use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
+use shekyl_types::TxSignableHash;
 
 use crate::{Input, Output};
 
@@ -292,7 +293,7 @@ impl SpendAuthAndLinkability {
 
     #[allow(clippy::too_many_arguments)]
     fn challenge(
-        signable_tx_hash: [u8; 32],
+        signable_tx_hash: TxSignableHash,
         input: &Input,
         L: EdwardsPoint,
         P: EdwardsPoint,
@@ -323,7 +324,7 @@ impl SpendAuthAndLinkability {
     /// Prove a Spend-Authorization and Linkability proof.
     pub fn prove(
         rng: &mut (impl RngCore + CryptoRng),
-        signable_tx_hash: [u8; 32],
+        signable_tx_hash: TxSignableHash,
         opening: &OpenedInputTuple,
     ) -> (<Ed25519 as Ciphersuite>::G, SpendAuthAndLinkability) {
         let G = <Ed25519 as Ciphersuite>::G::generator();
@@ -400,7 +401,7 @@ impl SpendAuthAndLinkability {
         &self,
         rng: &mut (impl RngCore + CryptoRng),
         verifier: &mut multiexp::BatchVerifier<(), <Ed25519 as Ciphersuite>::G>,
-        signable_tx_hash: [u8; 32],
+        signable_tx_hash: TxSignableHash,
         input: &Input,
         L: <Ed25519 as Ciphersuite>::G,
     ) {

@@ -433,7 +433,7 @@ async fn a_challenge_read_carries_the_derived_nonce() {
     let draw = ChallengeDraw {
         stream: PassStream::Economy,
         seed: [0x11; 32],
-        block_hash: [0x22; 32],
+        block_hash: BlockHash::from_bytes([0x22; 32]),
         draw: 0,
         attempt: 0,
     };
@@ -527,7 +527,7 @@ async fn a_challenge_read_does_not_fall_through_to_another_holder() {
         ChallengeDraw {
             stream: PassStream::Economy,
             seed: [0x11; 32],
-            block_hash: [0x22; 32],
+            block_hash: BlockHash::from_bytes([0x22; 32]),
             draw: 0,
             attempt: 0,
         },
@@ -566,7 +566,7 @@ async fn a_challenge_rejection_retries_the_same_holder_only() {
         ChallengeDraw {
             stream: PassStream::Economy,
             seed: [0x33; 32],
-            block_hash: [0x44; 32],
+            block_hash: BlockHash::from_bytes([0x44; 32]),
             draw: 1,
             attempt: 0,
         },
@@ -911,7 +911,7 @@ async fn receipt_stack() -> (
 async fn a_challenge_read_of_a_receipt_holder_returns_the_receipt() {
     let (endpoint, scheduler, key) = receipt_stack().await;
     let seed = [0x11; 32];
-    let block_hash = [0x22; 32];
+    let block_hash = BlockHash::from_bytes([0x22; 32]);
     for (served, stream) in [(1, PassStream::Economy), (2, PassStream::Support)] {
         let draw = ChallengeDraw {
             stream,

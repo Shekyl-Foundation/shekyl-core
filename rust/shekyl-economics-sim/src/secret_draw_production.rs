@@ -60,6 +60,7 @@ use serde::Serialize;
 use shekyl_archival_retention::{
     select_draw, CHALLENGE_RESPONSE_BLOCKS, DRAW_ATTEMPTS, SETTLEMENT_EPOCH_BLOCKS,
 };
+use shekyl_types::BlockHash;
 
 use crate::rng::SplitMix64;
 use crate::secret_draw::{
@@ -267,7 +268,7 @@ impl Visible {
 pub struct BlockTrace<'a> {
     pub h: u64,
     pub seed: &'a [u8; 32],
-    pub block_hash: &'a [u8; 32],
+    pub block_hash: &'a BlockHash,
     /// The visible issued counts at `h`, before this block's draws.
     pub visible: &'a [u16],
     pub shortfall: u64,
@@ -481,7 +482,7 @@ fn run_epochs_observed(
         run.blocks_at_cap += u64::from(capped_at(pairs, shortfall, in_flight, rel));
 
         let block_seed = rng.bytes32();
-        let block_hash = rng.bytes32();
+        let block_hash = BlockHash::from_bytes(rng.bytes32());
         let rolls = Rolls {
             dropout: rng.below(1000) as u32,
             lag: rng.below(w2 - timing.margin + 1),
@@ -955,7 +956,7 @@ mod tests {
     /// One block of a run, kept.
     struct Kept {
         seed: [u8; 32],
-        block_hash: [u8; 32],
+        block_hash: BlockHash,
         visible: Vec<u16>,
         shortfall: u64,
         in_flight: u64,

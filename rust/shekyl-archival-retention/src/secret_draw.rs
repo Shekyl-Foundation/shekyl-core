@@ -14,6 +14,8 @@
 //! FN-DSA increment; this module is the hash side, which that increment
 //! does not move.
 
+use shekyl_types::BlockHash;
+
 use crate::hash::cshake256_32;
 use crate::ArchivalParams;
 
@@ -80,7 +82,7 @@ pub struct SelectedDraw {
 /// ```
 pub fn select_draw<E>(
     seed: &[u8; 32],
-    block_hash: &[u8; 32],
+    block_hash: &BlockHash,
     draw: u32,
     set_size: u64,
     mut short: impl FnMut(u64) -> Result<bool, E>,
@@ -166,10 +168,15 @@ pub fn commit_and_discard(
 /// `attempt` is the read's index, from 0. Admission refuses
 /// `attempt ≥ K` (`K = 3`).
 #[must_use]
-pub fn challenge_nonce(seed: &[u8; 32], block_hash: &[u8; 32], draw: u32, attempt: u8) -> [u8; 32] {
+pub fn challenge_nonce(
+    seed: &[u8; 32],
+    block_hash: &BlockHash,
+    draw: u32,
+    attempt: u8,
+) -> [u8; 32] {
     let mut input = [0u8; 32 + 32 + 4 + 1];
     input[..32].copy_from_slice(seed);
-    input[32..64].copy_from_slice(block_hash);
+    input[32..64].copy_from_slice(block_hash.as_bytes());
     input[64..68].copy_from_slice(&draw.to_le_bytes());
     input[68] = attempt;
     cshake256_32(CHALLENGE_NONCE_CUSTOMIZATION, &input)
@@ -315,10 +322,10 @@ pub fn draw_count(
     Some((count, carry))
 }
 
-fn stream(seed: &[u8; 32], block_hash: &[u8; 32], draw: u32, attempt: u32) -> [u8; 32] {
+fn stream(seed: &[u8; 32], block_hash: &BlockHash, draw: u32, attempt: u32) -> [u8; 32] {
     let mut input = [0u8; 32 + 32 + 4 + 4];
     input[..32].copy_from_slice(seed);
-    input[32..64].copy_from_slice(block_hash);
+    input[32..64].copy_from_slice(block_hash.as_bytes());
     input[64..68].copy_from_slice(&draw.to_le_bytes());
     input[68..].copy_from_slice(&attempt.to_le_bytes());
     cshake256_32(DRAW_CUSTOMIZATION, &input)
@@ -342,7 +349,7 @@ mod tests {
     const HASH: [u8; 32] = [0x22; 32];
 
     fn pick(set_size: u64, short_through: Option<u64>, draw: u32) -> SelectedDraw {
-        select_draw(&SEED, &HASH, draw, set_size, |i| {
+        select_draw(&SEED, &BlockHash::from_bytes(HASH), draw, set_size, |i| {
             Ok::<_, ()>(short_through.is_some_and(|end| i <= end))
         })
         .expect("the short predicate does not fail")
@@ -350,9 +357,11 @@ mod tests {
     }
 
     fn none_short(set_size: u64, draw: u32) -> SelectedDraw {
-        select_draw(&SEED, &HASH, draw, set_size, |_| Ok::<_, ()>(false))
-            .expect("the short predicate does not fail")
-            .expect("a non-empty set selects")
+        select_draw(&SEED, &BlockHash::from_bytes(HASH), draw, set_size, |_| {
+            Ok::<_, ()>(false)
+        })
+        .expect("the short predicate does not fail")
+        .expect("a non-empty set selects")
     }
 
     /// The vectors of the specification's §4.5.
@@ -511,7 +520,7 @@ mod tests {
     fn an_empty_set_selects_nothing_and_does_not_ask() {
         let mut asked = false;
         assert_eq!(
-            select_draw(&SEED, &HASH, 0, 0, |_| {
+            select_draw(&SEED, &BlockHash::from_bytes(HASH), 0, 0, |_| {
                 asked = true;
                 Ok::<_, &str>(true)
             }),
@@ -527,14 +536,17 @@ mod tests {
     /// call `short` on the 256th attempt.
     #[test]
     fn a_short_fault_is_not_a_selection_and_the_cap_does_not_ask() {
-        let err = select_draw(&SEED, &HASH, 0, 8, |_| Err("unreadable")).expect_err("asked");
+        let err = select_draw(&SEED, &BlockHash::from_bytes(HASH), 0, 8, |_| {
+            Err("unreadable")
+        })
+        .expect_err("asked");
         assert_eq!(err, "unreadable");
 
         // `j = 28_409_462`, D = 8, none short: the in-zone attempts before
         // the cap refuse, and the 256th selects index 1. Count those
         // reads, then fault on any read past them.
         let mut asked = 0u32;
-        let selected = select_draw(&SEED, &HASH, 28_409_462, 8, |_| {
+        let selected = select_draw(&SEED, &BlockHash::from_bytes(HASH), 28_409_462, 8, |_| {
             asked += 1;
             Ok::<_, &str>(false)
         })
@@ -551,7 +563,7 @@ mod tests {
         assert!(consulted < DRAW_ATTEMPTS, "the cap is not one of the reads");
 
         let mut asked = 0u32;
-        let selected = select_draw(&SEED, &HASH, 28_409_462, 8, |_| {
+        let selected = select_draw(&SEED, &BlockHash::from_bytes(HASH), 28_409_462, 8, |_| {
             asked += 1;
             if asked > consulted {
                 Err("the cap asked")
@@ -569,19 +581,19 @@ mod tests {
     #[test]
     fn the_nonce_matches_the_specifications_vectors() {
         assert_eq!(
-            hex(&challenge_nonce(&SEED, &HASH, 0, 0)),
+            hex(&challenge_nonce(&SEED, &BlockHash::from_bytes(HASH), 0, 0)),
             "b9601207ca7b74d36da0ee2402b83418e94408a7815e33d318db0ff783da45dc"
         );
         assert_eq!(
-            hex(&challenge_nonce(&SEED, &HASH, 0, 1)),
+            hex(&challenge_nonce(&SEED, &BlockHash::from_bytes(HASH), 0, 1)),
             "61a3796f42ab53642e53458b5b6012c6102aacbce03c9ea20796407776df2248"
         );
         assert_eq!(
-            hex(&challenge_nonce(&SEED, &HASH, 0, 2)),
+            hex(&challenge_nonce(&SEED, &BlockHash::from_bytes(HASH), 0, 2)),
             "f8bfae392e076cf3415bd37f1584a48abefbae56cb6fe89329b98955cc1b76d4"
         );
         assert_eq!(
-            hex(&challenge_nonce(&SEED, &HASH, 1, 0)),
+            hex(&challenge_nonce(&SEED, &BlockHash::from_bytes(HASH), 1, 0)),
             "65bf6d43f77b2e7f71e2ff7a5e3a570257be3ce73f8760a76152f92773bdb31b"
         );
     }
@@ -612,7 +624,12 @@ mod tests {
         );
         for (draw, attempt) in [(0, 0), (0, 1), (0, 2), (1, 0)] {
             assert_ne!(
-                hex(&challenge_nonce(&SEED, &HASH, draw, attempt)),
+                hex(&challenge_nonce(
+                    &SEED,
+                    &BlockHash::from_bytes(HASH),
+                    draw,
+                    attempt
+                )),
                 without_attempt,
                 "j = {draw}, attempt = {attempt}: the attempt byte is in the preimage"
             );

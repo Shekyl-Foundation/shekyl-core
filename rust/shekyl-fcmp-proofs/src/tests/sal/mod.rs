@@ -29,10 +29,20 @@ fn full_sal_roundtrip_with_dst() {
     let opening = OpenedInputTuple::open(&rerandomized_output, &x, &y).unwrap();
 
     let tx_hash = [0xa5; 32];
-    let (L, proof) = SpendAuthAndLinkability::prove(&mut OsRng, tx_hash, &opening);
+    let (L, proof) = SpendAuthAndLinkability::prove(
+        &mut OsRng,
+        shekyl_types::TxSignableHash::from_bytes(tx_hash),
+        &opening,
+    );
 
     let mut verifier = BatchVerifier::new(4);
-    proof.verify(&mut OsRng, &mut verifier, tx_hash, &input, L);
+    proof.verify(
+        &mut OsRng,
+        &mut verifier,
+        shekyl_types::TxSignableHash::from_bytes(tx_hash),
+        &input,
+        L,
+    );
     assert!(
         verifier.verify_vartime(),
         "full SAL roundtrip with DST failed"
@@ -40,7 +50,13 @@ fn full_sal_roundtrip_with_dst() {
 
     // A different tx hash must not verify (the DST does not weaken replay binding).
     let mut verifier = BatchVerifier::new(4);
-    proof.verify(&mut OsRng, &mut verifier, [0x5a; 32], &input, L);
+    proof.verify(
+        &mut OsRng,
+        &mut verifier,
+        shekyl_types::TxSignableHash::from_bytes([0x5a; 32]),
+        &input,
+        L,
+    );
     assert!(
         !verifier.verify_vartime(),
         "full SAL verified under wrong tx hash"
@@ -61,9 +77,19 @@ fn test_sal() {
     let rerandomized_output = RerandomizedOutput::new(&mut OsRng, Output::new(O, I, C).unwrap());
     let input = rerandomized_output.input();
     let opening = OpenedInputTuple::open(&rerandomized_output, &x, &y).unwrap();
-    let (L_, proof) = SpendAuthAndLinkability::prove(&mut OsRng, [0; 32], &opening);
+    let (L_, proof) = SpendAuthAndLinkability::prove(
+        &mut OsRng,
+        shekyl_types::TxSignableHash::from_bytes([0; 32]),
+        &opening,
+    );
     assert_eq!(L_, L);
     let mut verifier = BatchVerifier::new(1);
-    proof.verify(&mut OsRng, &mut verifier, [0; 32], &input, L);
+    proof.verify(
+        &mut OsRng,
+        &mut verifier,
+        shekyl_types::TxSignableHash::from_bytes([0; 32]),
+        &input,
+        L,
+    );
     assert!(verifier.verify_vartime());
 }

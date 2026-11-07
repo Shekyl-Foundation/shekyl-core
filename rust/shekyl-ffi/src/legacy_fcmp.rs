@@ -7,6 +7,7 @@
 
 use super::legacy_types::*;
 use super::legacy_util::*;
+use shekyl_types::{CurveTreeRoot, TxSignableHash};
 use zeroize::Zeroizing;
 
 // ─── FCMP++: Generators ─────────────────────────────────────────────────────
@@ -470,9 +471,9 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
         &key_images,
         &pseudo_outs,
         &pqc_hashes,
-        &tree_root,
+        &CurveTreeRoot::from_bytes(tree_root),
         tree_depth,
-        signable_tx_hash,
+        TxSignableHash::from_bytes(signable_tx_hash),
     ) {
         Ok(true) => 0,
         Ok(false) => 6, // BatchVerificationFailed
@@ -598,9 +599,9 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
         &proof,
         &pseudo_outs,
         &pqc_hashes,
-        &tree_root,
+        &CurveTreeRoot::from_bytes(tree_root),
         tree_depth,
-        signable_tx_hash,
+        TxSignableHash::from_bytes(signable_tx_hash),
     ) {
         Ok(true) => 0,
         // `verify_membership_only` returns `Ok(true)` or `Err`, so `Ok(false)` is
