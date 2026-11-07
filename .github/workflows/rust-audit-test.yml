@@ -17,30 +17,23 @@ name: ci/gh-actions/rust
 # ruleset / branch-protection change is needed.
 
 on:
-  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
-  # not only the branch head — the class of failure neither PR's CI can
-  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
-  # filter, so this runs on every group regardless of the PR filter above
-  # or below.
-  merge_group:
-    types: [checks_requested]
-    branches: [dev]
   push:
-    # `main` only. PRs are covered by `pull_request`. A push-to-dev
-    # trigger double-ran this ~95-minute job on every merge.
-    #
-    # `paths` with negations instead of `paths-ignore` (the two cannot be
-    # combined per event): docs are skipped EXCEPT the domain registry TSV,
-    # which shekyl-crypto-pq's tests/domain_registry.rs include_str!s — a
-    # TSV-only PR that skipped this workflow could merge a duplicate domain
-    # and turn dev's test suite red for the next unrelated rust/** PR.
-    # Order matters: the last matching pattern wins.
-    branches: [main]
+    # `dev` and `main`. A pull request's run tests its head merged onto the
+    # `dev` of its last push; the run on `dev` tests what the merges
+    # actually made, the one place two pull requests each green alone can
+    # show red together (06-branching.mdc). Docs-only pushes are skipped by
+    # the `changes` job below, not by a `paths` filter here: a filter would
+    # suppress the required check.
+    branches: [dev, main]
   pull_request:
     types: [opened, synchronize, reopened]
 
 # Own concurrency group (distinct from build.yml's `build-<ref>`) so same-PR
 # reruns of the Rust gate supersede only each other, not the OS build run.
+# Every push to `dev` shares one ref, so a merge cancels the run of the
+# merge before it and a burst is tested once, at its newest commit. The
+# `changes` job measures a push from the last green run, not from the
+# previous push, so a cancelled run's commits are still in scope.
 concurrency:
   group: rust-audit-${{ github.ref }}
   cancel-in-progress: true
@@ -75,23 +68,29 @@ jobs:
     timeout-minutes: 10  # p90 0.6 min over 23 runs; the floor
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
+    # `actions: read` lists this workflow's earlier runs for a push's base.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - id: scope
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -u
+          head="${{ github.sha }}"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
-          elif [ "${{ github.event_name }}" = "merge_group" ]; then
-            # The queue's group: its base is the `dev` tip the group merges onto.
-            base="${{ github.event.merge_group.base_sha }}"
           else
-            base="${{ github.event.before }}"
+            # A push is measured from the last commit this workflow passed
+            # on, not from `before`: see scripts/ci/push_scope_base.sh. No
+            # base prints nothing, and the classifier then runs everything.
+            base=$(scripts/ci/push_scope_base.sh rust-audit-test.yml "${{ github.ref_name }}" "$head")
           fi
-          head="${{ github.sha }}"
 
           # One classifier for every scope job: scripts/ci/change_scope.py.
           # It finds the code inputs that live under docs/ (the domain
