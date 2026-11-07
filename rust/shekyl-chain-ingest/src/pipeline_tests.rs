@@ -1762,7 +1762,7 @@ async fn a_dropped_spent_key_row_moves_the_digest_off_the_checkpoint() {
             );
         };
         let removed = spent
-            .remove(LmdbHashKey::from_bytes(*spent_at_tip))
+            .remove(LmdbHashKey::from_bytes(spent_at_tip.to_bytes()))
             .expect("remove")
             .is_some();
         assert!(removed, "the row was there to drop");

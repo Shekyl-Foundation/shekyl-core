@@ -78,8 +78,8 @@ use crate::submit::certificate::VerificationCertificate;
 use crate::submit::facts::{
     BondProbe, CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
     EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, EpochClaimStanding,
-    KeyImageConflict, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts, ShimFault, SubmitFacts,
-    SubmitStateShim, TxMeta,
+    KeyImageConflict, OriginPublication, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts,
+    ShimFault, SubmitFacts, SubmitStateShim, TxMeta,
 };
 use crate::submit::phase_a::parse_submission;
 
@@ -122,6 +122,11 @@ pub type RelayNudge = Arc<dyn Fn(&TxHash, &[u8]) + Send + Sync>;
 /// eviction). The pool lock is not held across the call. The same hook
 /// the ingest service uses for a mined departure (`pool_ffi::note_left`).
 pub type PoolDeparted = Arc<dyn Fn(&[TxHash]) + Send + Sync>;
+
+/// Set by the node: this node's judgment of one origin hold. The hook
+/// locks the relay's publication map, not the pool, so a caller reads it
+/// before taking the pool lock.
+pub type OriginHold = Arc<dyn Fn(&TxHash) -> Option<OriginPublication> + Send + Sync>;
 
 fn lock_production() -> MutexGuard<'static, Option<RustPoolShim<StoreChain>>> {
     PRODUCTION.lock().unwrap_or_else(PoisonError::into_inner)
@@ -171,6 +176,9 @@ pub struct RustPoolShim<C> {
     nudge: Option<RelayNudge>,
     /// Set by the node: ids that left the pool on this commit.
     departed: Option<PoolDeparted>,
+    /// Set by the node: this node's origin-hold judgment. Read before the
+    /// pool lock.
+    origins: Option<OriginHold>,
     /// The id of the node's network: a submission's signatures are judged
     /// under it (`NETWORK_IDENTITY.md` NI-Q4).
     network: NetworkId,
@@ -186,6 +194,7 @@ impl<C: Clone> Clone for RustPoolShim<C> {
             retire: self.retire.clone(),
             nudge: self.nudge.clone(),
             departed: self.departed.clone(),
+            origins: self.origins.clone(),
             network: self.network,
         }
     }
@@ -218,6 +227,7 @@ impl<C: ChainSource> RustPoolShim<C> {
             retire: None,
             nudge: None,
             departed: None,
+            origins: None,
             network,
         }
     }
@@ -244,6 +254,19 @@ impl<C: ChainSource> RustPoolShim<C> {
     pub fn departing(mut self, departed: PoolDeparted) -> Self {
         self.departed = Some(departed);
         self
+    }
+
+    /// `origins` answers this node's judgment of one origin hold. The
+    /// shim reads it before taking the pool lock.
+    #[must_use]
+    pub fn observing_origin(mut self, origins: OriginHold) -> Self {
+        self.origins = Some(origins);
+        self
+    }
+
+    /// The installed origin judgment for `txid`, if the node set a hook.
+    fn origin_publication(&self, txid: &TxHash) -> Option<OriginPublication> {
+        self.origins.as_ref().and_then(|hook| hook(txid))
     }
 
     /// The node's pool, locked under the service's policy: a panic that
@@ -513,6 +536,7 @@ fn gather(
     reference_block: &BlockHash,
     bond_probe: Option<BondProbe<'_>>,
     emission_probe: Option<(&[u8; 32], &[u64])>,
+    origin_publication: Option<OriginPublication>,
 ) -> Result<SubmitFacts, ShimFault> {
     let fault = |_| ShimFault;
     let view = SnapshotView::new(snapshot);
@@ -537,7 +561,7 @@ fn gather(
         ) {
             (AtHeight::Recorded(root), AtHeight::Recorded(tree_depth)) => Some(ReferenceFacts {
                 height,
-                root: *root.as_bytes(),
+                root,
                 tree_depth,
             }),
             _ => return Err(ShimFault),
@@ -555,6 +579,7 @@ fn gather(
     let mut facts = SubmitFacts {
         in_pool,
         in_pool_broadcast,
+        origin_publication,
         in_chain,
         key_image_conflicts,
         reference,
@@ -610,6 +635,8 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
         bond_probe: Option<BondProbe<'_>>,
         emission_probe: Option<(&[u8; 32], &[u64])>,
     ) -> Result<SubmitFacts, ShimFault> {
+        // The origin map before either lock: the hook does not take the pool.
+        let origin_publication = self.origin_publication(txid);
         // The snapshot first, then the pool: the order every reader of
         // both keeps (`shekyl-chain-ingest`'s `live_pool`).
         self.chain.read(|snapshot, rule_set| {
@@ -623,6 +650,7 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
                 reference_block,
                 bond_probe,
                 emission_probe,
+                origin_publication,
             )
         })?
     }
@@ -662,6 +690,7 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
             .and_then(Result::ok)
             .and_then(Result::ok);
         let now = (self.clock)();
+        let origin_publication = self.origin_publication(txid);
         let retire = self.retire.clone();
         let mut departed_ids = Vec::new();
         let outcome = self.chain.read(|snapshot, rule_set| {
@@ -696,6 +725,7 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
                         &parsed.reference_block,
                         parsed.bond_probe(),
                         emission_probe.as_ref().map(|(id, epochs)| (id, *epochs)),
+                        origin_publication,
                     ) {
                         Ok(mut fresh) => {
                             // The rising minimum against the pool as it

@@ -12,7 +12,7 @@
 //   Diagnostic-only and excluded from the default build.
 
 use crate::params::DandelionParams;
-use crate::schedule::EmbargoTimer;
+use crate::schedule::{EmbargoTimer, PROPAGATION_FALSE_FAIL_ONE_IN};
 use shekyl_draw_rng::{bernoulli, RelayRng};
 
 use super::stem::walk_stem;
@@ -154,6 +154,55 @@ pub fn simulate_precision_increment<R: RelayRng + ?Sized>(
         precision_c1,
         precision_c1_c3,
         delta: precision_c1_c3 - precision_c1,
+    }
+}
+
+/// What the retry cap prices a worst-case recovery at, read off the embargo
+/// that recovery runs.
+///
+/// A reshape worst case is `retry_cap + 1` independent embargoes: the first
+/// cycle, plus one more for each retry the cap allows (`DAEMON_RELAY_PRIVACY.md`
+/// §14.5, §14.8). This is that count, in the two units the timer already
+/// publishes — its mean, and the deadline at which one embargo is still
+/// running with probability [`PROPAGATION_FALSE_FAIL_ONE_IN`]. It is not a
+/// quantile of the sum, and not a pool residence: those are different clocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecoveryBudget {
+    /// `retry_cap + 1`.
+    pub cycles: u32,
+    /// [`Self::cycles`] embargo means. The median of a right-skewed sum of
+    /// that many draws sits inside this (§14.5: bounded by the cap at
+    /// `(cap + 1)` embargo means).
+    pub mean_secs: u32,
+    /// [`Self::cycles`] times one embargo's
+    /// [`PROPAGATION_FALSE_FAIL_ONE_IN`] failure deadline. The measured
+    /// worst-case tail sits inside this.
+    pub failed_secs: u32,
+}
+
+impl RecoveryBudget {
+    /// Price `retry_cap` against `embargo`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cap or either product does not fit in `u32`. A cap that
+    /// overflows is not a budget.
+    #[must_use]
+    pub fn for_cap(embargo: &EmbargoTimer, retry_cap: u32) -> Self {
+        let cycles = retry_cap.checked_add(1).expect("retry cap exhausted u32");
+        let mean_secs = embargo
+            .mean_secs()
+            .checked_mul(cycles)
+            .expect("mean budget overflowed");
+        let failed_secs = embargo
+            .judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN)
+            .checked_mul(cycles)
+            .expect("failure budget overflowed");
+        Self {
+            cycles,
+            mean_secs,
+            failed_secs,
+        }
     }
 }
 

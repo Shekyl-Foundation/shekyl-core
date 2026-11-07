@@ -103,9 +103,10 @@ fn a_busy_block_header_is_not_read_as_the_zero_hash() {
         serde_json::from_str(CAPTURED_OK).expect("the captured reply parses");
     let ok = CannedDaemon(reply_with_status(shekyl_rpc_types::RpcStatus::OK));
     let hash = block_on(ok.get_block_hash(0)).expect("an OK reply");
-    assert_eq!(hash, expected.block_header.hash.to_bytes());
+    assert_eq!(hash.to_bytes(), expected.block_header.hash.to_bytes());
     assert_ne!(
-        hash, [0; 32],
+        hash,
+        shekyl_types::BlockHash::NULL,
         "the capture's hash is not the zero the BUSY case carries, or the \
          refusal above would be indistinguishable from a read"
     );

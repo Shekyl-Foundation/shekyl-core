@@ -6,7 +6,7 @@
 //! The verification certificate — a **witness type**
 //! (`docs/design/DAEMON_SUBMIT_VERDICT.md` §3.3, F33).
 
-use shekyl_types::{BlockHash, BlockHeight, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, TxHash};
 
 /// Witness that Phase C fully verified the transaction identified by
 /// `txid` against `root` at `ref_height`.
@@ -33,7 +33,7 @@ pub struct VerificationCertificate {
     txid: TxHash,
     reference_block: BlockHash,
     ref_height: BlockHeight,
-    root: [u8; 32],
+    root: CurveTreeRoot,
 }
 
 impl VerificationCertificate {
@@ -43,7 +43,7 @@ impl VerificationCertificate {
         txid: TxHash,
         reference_block: BlockHash,
         ref_height: BlockHeight,
-        root: [u8; 32],
+        root: CurveTreeRoot,
     ) -> Self {
         Self {
             txid,
@@ -70,7 +70,7 @@ impl VerificationCertificate {
     }
 
     /// The curve-tree root the proof verified against.
-    pub fn root(&self) -> &[u8; 32] {
+    pub fn root(&self) -> &CurveTreeRoot {
         &self.root
     }
 }

@@ -251,7 +251,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     rpc: &R,
     handle: PersonaHandle,
     ctx: ClaimAssemblyContext<'_>,
-    block_hash_at: impl Fn(BlockHeight) -> Option<[u8; 32]>,
+    block_hash_at: impl Fn(BlockHeight) -> Option<BlockHash>,
 ) -> Result<OrchestratedClaim, ClaimOrchestrationError> {
     // 1+2a. Fetch the claim source (single-field query over the persona's
     //    OWN transport — the `PersonaIsolatedTransport` bound is the §7.4
@@ -338,7 +338,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     let reference = ReferenceBlock {
         height: reference_height,
         curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-        block_hash: BlockHash::from_bytes(block_hash),
+        block_hash,
     };
     let assemble_inputs: Vec<AssembleInput> = swept
         .path_records()
@@ -587,7 +587,8 @@ mod tests {
             fn get_block_hash(
                 &self,
                 number: usize,
-            ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+            ) -> impl Send + std::future::Future<Output = Result<shekyl_types::BlockHash, RpcError>>
+            {
                 async move {
                     Ok(crate::engine::test_support::test_block_hash_at(
                         number as u64,
@@ -614,9 +615,7 @@ mod tests {
                         chain_count: shekyl_types::ChainCount::from_raw(10_000),
                         target_height: (!synced).then_some(1_000_000),
                         synchronized: synced,
-                        top_hash: shekyl_types::BlockHash::from_bytes(
-                            crate::engine::test_support::test_block_hash_at(9_999),
-                        ),
+                        top_hash: crate::engine::test_support::test_block_hash_at(9_999),
                         has_peers: true,
                     }
                     .to_value()
@@ -839,7 +838,7 @@ mod tests {
                 },
                 |height| {
                     assert_eq!(height, expected_reference, "anchor per the two-sided gate");
-                    Some([0xB1u8; 32])
+                    Some(BlockHash::from_bytes([0xB1u8; 32]))
                 },
             )
             .await
@@ -886,8 +885,13 @@ mod tests {
             // The transaction's one network-bound message, over CEN-J22's
             // prefix (the wire strips the emission vin itself).
             let tx_signable = tx.tx_signable(&shekyl_network::HARNESS_NETWORK_ID);
-            emission_vin_verify_backing(&vin, &root, depth, &tx_signable)
-                .expect("backing leg verifies against the REAL tree root and depth");
+            emission_vin_verify_backing(
+                &vin,
+                &CurveTreeRoot::from_bytes(root),
+                depth,
+                &tx_signable,
+            )
+            .expect("backing leg verifies against the REAL tree root and depth");
         }
     }
 }

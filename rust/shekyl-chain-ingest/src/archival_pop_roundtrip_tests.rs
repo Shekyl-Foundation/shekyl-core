@@ -13,7 +13,8 @@
 //! is the levered slash chain. Each connect after the proof fill is popped
 //! and connected again by [`Driven`](crate::chain_drive::Driven). The pop
 //! equals its parent, except on a pruning boundary, where a retired table
-//! keeps the keys the parent and the connect share, at the connect's value.
+//! keeps the keys the parent and the connect share, at the connect's value,
+//! and the `undo_log_floor` property cell stays where the connect raised it.
 //! The reconnect is exact, digest included.
 //!
 //! [`a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_is_refused`]

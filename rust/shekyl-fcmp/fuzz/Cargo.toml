@@ -11,6 +11,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 shekyl-fcmp = { path = ".." }
 shekyl-curve-generators = { path = "../../shekyl-curve-generators" }
+shekyl-types = { path = "../../shekyl-types" }
 
 [[bin]]
 name = "fuzz_fcmp_proof_deserialize"

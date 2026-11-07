@@ -857,7 +857,10 @@ CHECKS = {"series": check_series, "range": check_range, "sections": check_sectio
 # path merely CONTAINING one of these as historical, so `FOO_CHANGELOG.md` or a
 # directory named `notcompleted/` would drop out of the ratchet and the range
 # check — a live document could be excused from the gate by its name.
-RECORDS_WAS_DIRS = ("completed", "audit_trail", "benchmarks")
+# `changelog.d` holds the next release's CHANGELOG entries, one file per pull
+# request, until the release cut moves them into CHANGELOG.md
+# (`docs/RELEASING.md` step 1): an entry is the same record there as here.
+RECORDS_WAS_DIRS = ("completed", "audit_trail", "benchmarks", "changelog.d")
 RECORDS_WAS_FILES = ("CHANGELOG.md", "V3_WALLET_DECISION_LOG.md")
 BASELINE = DOCS / "ci" / "doc-claims-baseline.txt"
 

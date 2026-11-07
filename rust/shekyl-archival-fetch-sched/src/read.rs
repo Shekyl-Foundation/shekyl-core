@@ -38,7 +38,7 @@ use shekyl_p_fetch::{
     ExpectedShard, FetchError, NextMove, PFetchClient, PassVerifyingKey, RequestHeader, TxSink,
     VerifiedShard,
 };
-use shekyl_types::{ArchivalLength, BlockHeight, PCanonicalId, ShardId};
+use shekyl_types::{ArchivalLength, BlockHash, BlockHeight, PCanonicalId, ShardId};
 
 use crate::draw::{DrawFault, Urn};
 use crate::facts::{
@@ -501,7 +501,7 @@ pub struct ChallengeDraw {
     /// The block's unrevealed draw seed.
     pub seed: [u8; 32],
     /// `block_hash(h)` of the issuing block.
-    pub block_hash: [u8; 32],
+    pub block_hash: BlockHash,
     /// Draw index `j` at `h`.
     pub draw: u32,
     /// This read of the draw, from 0. Admission refuses `≥ K`.

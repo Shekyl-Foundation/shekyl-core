@@ -297,6 +297,14 @@ impl Partition {
         self.white_seats
     }
 
+    /// Seats a hold keeps off the draw: cooling gray and excused white.
+    ///
+    /// Cooling gray is a counted failure or an excusal. Excused white is an
+    /// excusal only. Sessions are not this count.
+    pub(crate) fn off_draw_len(&self) -> usize {
+        self.cooling + self.excused_white
+    }
+
     pub(crate) fn is_gray(&self, address: &NetworkAddress) -> bool {
         matches!(self.seat_of(address), Some(Seat::Gray { .. }))
     }

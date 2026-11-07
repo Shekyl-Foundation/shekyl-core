@@ -82,7 +82,7 @@ use shekyl_tx_builder::{
     sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, tx_signable_for, LeafEntry,
     OutputInfo, SpendInput, TreeContext,
 };
-use shekyl_types::SigningPayloadHash;
+use shekyl_types::{SigningPayloadHash, TxSignableHash};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
 
@@ -459,10 +459,10 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         &key_images,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        tree_root.as_bytes(),
+        &tree_root,
         signed.tree_depth,
         // Proof-crate boundary: the verifier takes the signable hash as bytes.
-        tx_signable.to_bytes(),
+        tx_signable,
     )
     .expect("verify must not error");
     assert!(
@@ -503,9 +503,9 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         &key_images,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        tree_root.as_bytes(),
+        &tree_root,
         signed.tree_depth,
-        mutated_signable.to_bytes(),
+        mutated_signable,
     );
     assert!(
         !matches!(mutated_result, Ok(true)),
@@ -531,9 +531,9 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
             &key_images,
             &signed.pseudo_outs,
             &pqc_pk_hashes,
-            tree_root.as_bytes(),
+            &tree_root,
             signed.tree_depth,
-            elsewhere.to_bytes(),
+            elsewhere,
         );
         assert!(
             !matches!(result, Ok(true)),
@@ -545,9 +545,9 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         &key_images,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        tree_root.as_bytes(),
+        &tree_root,
         signed.tree_depth,
-        tx_prefix_hash.to_bytes(),
+        TxSignableHash::from_bytes(tx_prefix_hash.to_bytes()),
     );
     assert!(
         !matches!(unframed, Ok(true)),

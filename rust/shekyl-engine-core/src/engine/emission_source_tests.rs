@@ -638,7 +638,7 @@ fn unknown_holdings_kind_is_loud() {
 #[derive(Clone)]
 struct BracketDaemon {
     record: std::sync::Arc<Value>,
-    at_tip_now: [u8; 32],
+    at_tip_now: shekyl_types::BlockHash,
     calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
@@ -646,7 +646,7 @@ struct BracketDaemon {
 const WITNESS_COUNT: u64 = 30_001;
 
 impl BracketDaemon {
-    fn new(record: Value, at_tip_now: [u8; 32]) -> Self {
+    fn new(record: Value, at_tip_now: shekyl_types::BlockHash) -> Self {
         Self {
             record: std::sync::Arc::new(record),
             at_tip_now,
@@ -663,7 +663,7 @@ impl Rpc for BracketDaemon {
     fn get_block_hash(
         &self,
         number: usize,
-    ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+    ) -> impl Send + std::future::Future<Output = Result<shekyl_types::BlockHash, RpcError>> {
         self.calls
             .lock()
             .expect("call log")
@@ -687,9 +687,7 @@ impl Rpc for BracketDaemon {
                 chain_count: shekyl_types::ChainCount::from_raw(WITNESS_COUNT),
                 target_height: None,
                 synchronized: true,
-                top_hash: shekyl_types::BlockHash::from_bytes(
-                    crate::engine::test_support::test_block_hash_at(WITNESS_COUNT - 1),
-                ),
+                top_hash: crate::engine::test_support::test_block_hash_at(WITNESS_COUNT - 1),
                 has_peers: true,
             }
             .to_value()
@@ -730,7 +728,10 @@ fn record_at(count: u64) -> Value {
 async fn a_witness_block_replaced_during_the_record_read_is_not_vouched() {
     let witness_block = crate::engine::test_support::test_block_hash_at(WITNESS_COUNT - 1);
 
-    let replaced = BracketDaemon::new(record_at(WITNESS_COUNT + 1), [0xFF; 32]);
+    let replaced = BracketDaemon::new(
+        record_at(WITNESS_COUNT + 1),
+        shekyl_types::BlockHash::from_bytes([0xFF; 32]),
+    );
     let vouched = fetch_vouched_claim_source(&replaced, &[7; 32])
         .await
         .expect("the record itself reads");

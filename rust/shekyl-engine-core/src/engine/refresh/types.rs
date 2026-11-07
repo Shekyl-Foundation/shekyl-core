@@ -10,7 +10,7 @@ use std::num::NonZeroU32;
 use std::ops::Range;
 
 use shekyl_engine_state::{LedgerBlock, ReorgBlocks};
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHash, BlockHeight};
 
 use crate::engine::pending::SnapshotId;
 use crate::scan::ScanResult;
@@ -50,7 +50,7 @@ use crate::scan::ScanResult;
 ///
 /// Per the Phase 2a snapshot-strategy decision, the snapshot is built
 /// by cloning these two fields directly (`BlockHeight` is trivially cheap;
-/// `ReorgBlocks` is a `Vec<(BlockHeight, [u8; 32])>` trimmed after a
+/// `ReorgBlocks` is a `Vec<(BlockHeight, BlockHash)>` trimmed after a
 /// successful merge to the finality hash window, so cloning it is a
 /// small allocation, not a full-ledger walk).
 ///
@@ -94,7 +94,7 @@ impl LedgerSnapshot {
     /// [`LedgerBlock::block_hash_at`] over the snapshotted window.
     /// Returns `None` if the height is below the window's earliest
     /// retained entry or above the snapshotted tip.
-    pub(crate) fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]> {
+    pub(crate) fn block_hash_at(&self, height: BlockHeight) -> Option<BlockHash> {
         self.reorg_blocks
             .blocks
             .iter()
@@ -131,10 +131,16 @@ pub(crate) fn snapshot_id_preimage(snapshot: &LedgerSnapshot) -> Vec<u8> {
     buf.extend_from_slice(&snapshot.synced_height.to_raw().to_le_bytes());
     buf.extend_from_slice(&(n_blocks as u64).to_le_bytes());
     for (height, hash) in &snapshot.reorg_blocks.blocks {
-        buf.extend_from_slice(&height.to_raw().to_le_bytes());
-        buf.extend_from_slice(hash);
+        push_window_entry(&mut buf, *height, hash);
     }
     buf
+}
+
+/// One window entry of [`snapshot_id_preimage`]: the height, then the
+/// block hash the wallet recorded there.
+fn push_window_entry(buf: &mut Vec<u8>, height: BlockHeight, hash: &BlockHash) {
+    buf.extend_from_slice(&height.to_raw().to_le_bytes());
+    buf.extend_from_slice(hash.as_bytes());
 }
 
 /// Derive the opaque [`SnapshotId`] for a [`LedgerSnapshot`].

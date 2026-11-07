@@ -9,11 +9,12 @@
 # v3.1.0, the genesis release, while any row remains (Rick, 2026-11-05).
 #
 # Sections:
-#   input-raw  an input:<type> row whose site does not take the named type: no
-#              newtype exists for the value (frame output, a key derived under
-#              salt_for, a Noise handshake message), or the site takes raw
-#              bytes. Owner: the archival lane; each row is typed when its own
-#              round touches it.
+#   input-raw  an input:<type> row whose applying function does not take the
+#              named type. The site is the function that applies the domain.
+#              No newtype exists yet for some values (a frame output, a key
+#              derived under salt_for, a Noise handshake message), or the
+#              function takes raw bytes. Owner: the archival lane; each row
+#              is typed when its own round touches it.
 #   unframed   an id or name cSHAKE row not declared as an IdDomain or
 #              NameDomain constant: the binding is in its input, but not
 #              through frame.
@@ -22,31 +23,13 @@
 #
 # section	literal	note
 input-raw	shekyl/ek-bind-v1	input:SaltForKey: no type for a key derived under salt_for yet
-input-raw	shekyl/archival-serve-challenge-leaf-v2	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
-input-raw	shekyl/archival-serve-challenge-fire-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
 input-raw	shekyl/archival-p-id-v1	input:SaltForKey: no type for a key derived under salt_for yet
-input-raw	shekyl/archival-settlement-select-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
-input-raw	shekyl/archival-draw-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
-input-raw	shekyl/archival-support-draw-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
-input-raw	shekyl/archival-support-challenge-nonce-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
-input-raw	shekyl/archival-challenge-nonce-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
-input-raw	shekyl/output-handle-v1	input:TxId: the site takes raw bytes, not the TxId newtype
-input-raw	shekyl/pqc-auth-tx-v1	input:SigningPayloadHash: the site takes raw bytes, not the SigningPayloadHash newtype
-input-raw	shekyl/pqc-auth-tx-multisig-v1	input:SigningPayloadHash: the site takes raw bytes, not the SigningPayloadHash newtype
 input-raw	shekyl/archival-emission-claim-scheme-v1	input:frame: no type for a frame output yet
 input-raw	shekyl/archival-emission-backing-scheme-v1	input:frame: no type for a frame output yet
 input-raw	shekyl/archival-attestation-scheme-v3	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
 input-raw	shekyl/archival-receipt-scheme-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
 input-raw	shekyl/archival-witness-bundle-scheme-v1	input:frame: no type for a frame output yet
-input-raw	shekyl/snapshot-id-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
-input-raw	shekyl/chain-digest/v0	input:TreeRoot: the site takes raw bytes, not the TreeRoot newtype
-input-raw	shekyl/chain-digest/v0/chain	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
-input-raw	shekyl/fcmp-pp-batch-weights-v1	input:TreeRoot: the site takes raw bytes, not the TreeRoot newtype
-input-raw	shekyl/fcmp-membership-only-batch-weights-v1	input:TreeRoot: the site takes raw bytes, not the TreeRoot newtype
 input-raw	nonce	input:SaltForKey: no type for a key derived under salt_for yet
-input-raw	Shekyl FROST SAL v1	input:TxSignableHash: the site takes raw bytes, not the TxSignableHash newtype
-input-raw	Shekyl FCMP++ SAL full v1	input:TxSignableHash: the site takes raw bytes, not the TxSignableHash newtype
-input-raw	Shekyl FCMP++ SAL membership-only v1	input:TxSignableHash: the site takes raw bytes, not the TxSignableHash newtype
 input-raw	shekyl-outbound-tx-proof-v1	input:frame: no type for a frame output yet
 input-raw	shekyl-inbound-tx-proof-v1	input:frame: no type for a frame output yet
 input-raw	shekyl-reserve-proof-v1	input:frame: no type for a frame output yet

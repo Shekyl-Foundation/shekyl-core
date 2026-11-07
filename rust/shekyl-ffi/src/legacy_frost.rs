@@ -61,7 +61,7 @@ pub unsafe extern "C" fn shekyl_frost_sal_session_new(
         key_image_gen: read32(key_image_gen_ptr),
         commitment: read32(commitment_ptr),
         spend_key_x: read32(spend_key_x_ptr),
-        tx_signable: read32(signable_tx_hash_ptr),
+        tx_signable: shekyl_types::TxSignableHash::from_bytes(read32(signable_tx_hash_ptr)),
     };
 
     match shekyl_fcmp::frost_sal::FrostSalSession::new(&input_data) {

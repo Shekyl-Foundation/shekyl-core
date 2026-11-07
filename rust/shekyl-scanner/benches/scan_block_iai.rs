@@ -58,7 +58,7 @@ fn hot_path_bench_scan_block_process_outputs(
     let added = indexes.process_scanned_outputs(
         &mut ledger,
         shekyl_types::BlockHeight::from_raw(2_000),
-        [0xAAu8; 32],
+        shekyl_types::BlockHash::from_bytes([0xAAu8; 32]),
         outputs,
     );
     black_box(added);

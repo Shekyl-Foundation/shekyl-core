@@ -25,7 +25,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use shekyl_rpc_types::core_rpc_version_string;
-use shekyl_types::ChainCount;
+use shekyl_types::{BlockHash, ChainCount};
 
 pub mod tx_fee;
 
@@ -325,7 +325,7 @@ struct JsonRpcEnvelope<T> {
 // dependency. The legacy `TxRelayResponse` (a lossy projection of the
 // deleted `send_raw_transaction` boolean-flag reply) is replaced by the
 // typed [`SubmitVerdict`]; see [`Rpc::publish_transaction`].
-pub use shekyl_rpc_types::{RejectCause, SubmitTransactionRequest, SubmitVerdict};
+pub use shekyl_rpc_types::{PoolRelay, RejectCause, SubmitTransactionRequest, SubmitVerdict};
 
 // The identity verdict [`RpcError::IdentityMismatch`] and
 // [`DaemonFault::Identity`] carry, with the types inside it, for the same
@@ -530,7 +530,7 @@ pub trait Rpc: Sync + Clone {
     fn get_block_hash(
         &self,
         number: usize,
-    ) -> impl Send + Future<Output = Result<[u8; 32], RpcError>> {
+    ) -> impl Send + Future<Output = Result<BlockHash, RpcError>> {
         async move {
             // The wire type is `shekyl-rpc-types`'s (RK-D1).
             let reply: shekyl_rpc_types::GetBlockHeaderByHeightResponse = self
@@ -558,7 +558,7 @@ pub trait Rpc: Sync + Clone {
             }
             // No re-parse: the wire type already validated the hex on the
             // way in (RK-3's `HashHex`), so the edge is just naming the bytes.
-            Ok(reply.block_header.hash.to_bytes())
+            Ok(BlockHash::from_bytes(reply.block_header.hash.to_bytes()))
         }
     }
 

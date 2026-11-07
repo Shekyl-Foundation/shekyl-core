@@ -164,29 +164,18 @@ where
         let synced_height = self.ledger.with_wallet_ledger_mut(|wallet| {
             let synced_height = wallet.ledger.height().to_raw();
             // F40 §2.5(a): baseline at the claimed confirming height, not
-            // the wallet's current height — the watchdog horizon counts
-            // from the block that (per the verdict) settles the spend.
+            // the wallet's current height. An in-chain observation later
+            // counts the proof-life ceiling from the baseline a probe
+            // records; until that probe, the sight is unread and is asked
+            // on the next chain advance.
             //
-            // Clamped to a height this wallet has actually reached. The
-            // claim is untrusted (§7.2 rider row `AlreadyInChain.height`),
-            // and that row's lie-high damage cap is "released by the §2.6
-            // confirmed-absent watchdog horizon (bounded liveness cost)" —
-            // which only holds if the horizon is *reachable*. The kernel
-            // gate is `synced_height - baseline_height >= horizon`
-            // (`submit_watchdog::escape_ladder_step`), so an unreachable
-            // claim (a lying remote node, a reorg-confused daemon, or
-            // `u64::MAX`) would park it at zero forever: the rung-1 probe
-            // never runs, no alarm is ever raised, and the F14 lock is
-            // *persisted*, so the inputs stay unspendable across restarts
-            // with no escape at all. Clamping costs nothing where the claim
-            // is honest — a wallet only holds a lock because it just built
-            // and submitted, which requires being at the tip, so an honest
-            // (a)-case claim is a handful of blocks above `synced_height`
-            // against a horizon of hundreds — and it degrades the lie-high
-            // case to exactly the baseline the fresh-accept path already
-            // uses. The raw claim still routes the release path below and
-            // still rides the verdict to the consumer; only the persisted
-            // baseline is bounded.
+            // Clamped to a height this wallet has reached. The claim is
+            // untrusted (§7.2 rider row `AlreadyInChain.height`). An
+            // unread sight does not read the baseline, so the claim
+            // cannot park the status probe. The clamp still keeps an
+            // absurd height out of the journal. The raw claim still
+            // routes the release path and still rides the verdict; only
+            // the persisted baseline is bounded.
             //
             // Journal owns the baseline (C2), and since PR-SJ-1b the F14
             // lock set *is* a view of it — the same accepting-verdict

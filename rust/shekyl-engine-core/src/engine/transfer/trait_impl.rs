@@ -69,7 +69,7 @@ where
         self.ledger.with_ledger_block(LedgerBlock::height)
     }
 
-    fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]> {
+    fn block_hash_at(&self, height: BlockHeight) -> Option<BlockHash> {
         self.ledger
             .with_ledger_block(|ledger| ledger.block_hash_at(height).copied())
     }
@@ -247,7 +247,7 @@ where
                             Some(ReferenceBlock {
                                 height: rh,
                                 curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-                                block_hash: BlockHash::from_bytes(block_hash),
+                                block_hash,
                             }),
                             depth,
                         )
@@ -383,7 +383,7 @@ where
                 created_at: Instant::now(),
                 snapshot_id: SnapshotId([0u8; 16]),
                 built_at_height: shekyl_types::BlockHeight::ZERO,
-                built_at_tip_hash: [0u8; 32],
+                built_at_tip_hash: BlockHash::from_bytes([0u8; 32]),
                 tx_bytes: Vec::new(),
                 request: TxRequest {
                     recipients: Vec::new(),
