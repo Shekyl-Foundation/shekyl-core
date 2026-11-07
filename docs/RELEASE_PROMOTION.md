@@ -97,9 +97,10 @@ then tag** (avoids the "tag not on the default branch" trap that
    references this SHA. `dev` stays open: the release ships from a branch
    cut at the SHA (step 3), so a later merge into `dev` goes to the next
    release. A pull request that merges after the changelog cut but before
-   the freeze ships in this release while its entry sits under
-   `[Unreleased]`; move the entry into the release's section in one more
-   pull request, whose merge is then the frozen SHA.
+   the freeze ships in this release while its entry waits under
+   `docs/changelog.d/`. Move the entry into the release's section, and
+   delete its file, in one more pull request. That merge is then the
+   frozen SHA.
 2. **Pre-flight at the frozen SHA:**
    - [ ] CI green on the SHA (fmt + clippy `-D warnings` + full test suite).
    - [ ] `Cargo.lock` and vendored-dep state are exactly the green-on-`dev`
