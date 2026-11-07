@@ -25,6 +25,9 @@ tempfile = "3"
 # Also the one home for the tree widths and `outputs_per_node`, which the depth
 # ladder is derived from rather than restated.
 shekyl-fcmp = { path = "../shekyl-fcmp" }
+# The prover's typed inputs (`CurveTreeRoot`, `TxSignableHash`): the root and
+# the message it proves over, named as the prover takes them.
+shekyl-types = { path = "../shekyl-types" }
 # `W`'s two summands (`SPENDABLE_AGE_BLOCKS` + `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`)
 # and `REFERENCE_BLOCK_MIN_AGE`, which together fix the replay window. Read from
 # their owners, never re-pinned: the window is the measurement's scale factor.

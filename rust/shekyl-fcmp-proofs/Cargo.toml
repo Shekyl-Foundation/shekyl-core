@@ -37,6 +37,7 @@ generalized-bulletproofs-ec-gadgets = { path = "../shekyl-oxide/crypto/fcmps/ec-
 fcmps = { package = "full-chain-membership-proofs", path = "../shekyl-oxide/crypto/fcmps", default-features = false }
 
 shekyl-curve-generators = { path = "../shekyl-curve-generators", default-features = false }
+shekyl-types = { path = "../shekyl-types" }
 
 rand_chacha = { version = "0.3", default-features = false, optional = true }
 transcript = { package = "flexible-transcript", version = "0.3", default-features = false, features = ["recommended"], optional = true }

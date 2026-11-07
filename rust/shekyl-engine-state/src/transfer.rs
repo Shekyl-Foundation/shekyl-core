@@ -599,7 +599,7 @@ mod tests {
         });
         td.output_handle = Some(shekyl_crypto_pq::handle::derive_output_handle(
             &[0x77; 32],
-            td.tx_hash.as_bytes(),
+            &td.tx_hash,
             td.internal_output_index.to_raw(),
         ));
         td.key_image = Some(KeyImage::from_canonical_bytes([7u8; 32]));

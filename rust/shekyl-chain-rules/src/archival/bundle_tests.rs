@@ -1139,7 +1139,7 @@ fn a_receipt_under_a_key_the_drawable_epoch_does_not_hold_refuses() {
     let anchor = world.honest_anchor();
     let nonce = shekyl_archival_retention::challenge_nonce(
         &world.seed,
-        fixture_block_hash(world.h).as_bytes(),
+        &fixture_block_hash(world.h),
         draw,
         0,
     );
@@ -1328,10 +1328,9 @@ fn a_later_support_attempt_refuses_before_an_earlier_receipt() {
     };
     let support_record = |world: &BundleWorld, draw: u32, attempt: u8| {
         let persona = &world.personas[draw as usize];
-        let shard =
-            select_support_shard(&world.seed, hash.as_bytes(), &persona.persona, draw, width)
-                .expect("a non-zero archive selects");
-        let nonce = support_challenge_nonce(&world.seed, hash.as_bytes(), draw, attempt);
+        let shard = select_support_shard(&world.seed, &hash, &persona.persona, draw, width)
+            .expect("a non-zero archive selects");
+        let nonce = support_challenge_nonce(&world.seed, &hash, draw, attempt);
         let mut record = world.record_signed_by(
             &persona.receipt_secret_key,
             shard,
@@ -1610,11 +1609,10 @@ fn a_support_pass_is_not_serve_credit() {
         }],
     );
     let hash = fixture_block_hash(world.h);
-    let shard = select_support_shard(&world.seed, hash.as_bytes(), &persona, 0, width)
+    let shard = select_support_shard(&world.seed, &hash, &persona, 0, width)
         .expect("a non-zero archive selects");
-    let support_nonce = support_challenge_nonce(&world.seed, hash.as_bytes(), 0, 0);
-    let economy_nonce =
-        shekyl_archival_retention::challenge_nonce(&world.seed, hash.as_bytes(), 0, 0);
+    let support_nonce = support_challenge_nonce(&world.seed, &hash, 0, 0);
+    let economy_nonce = shekyl_archival_retention::challenge_nonce(&world.seed, &hash, 0, 0);
     let good = world.persona_record(0, shard, PassStream::Support, &support_nonce);
     let passes = PassBitmap::from_passes(world.count, []).expect("no economy passes");
     let support = PassBitmap::from_passes(1, [0]).expect("the one support bit");

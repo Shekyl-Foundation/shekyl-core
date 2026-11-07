@@ -643,7 +643,7 @@ fn raced_root_mismatch_classifies_stale_root() {
     // Same height, different root: root-table motion / reorg to an
     // equal-height alternative — the certificate's root premise failed.
     let mut fresh = base_facts();
-    fresh.reference.as_mut().unwrap().root = [0xBB; 32];
+    fresh.reference.as_mut().unwrap().root = shekyl_types::CurveTreeRoot::from_bytes([0xBB; 32]);
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),

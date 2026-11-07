@@ -36,6 +36,7 @@ use shekyl_curve_generators::{
     FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, HELIOS_HASH_INIT, PQC_LEAF_COMMITMENT_J, SELENE_HASH_INIT,
     T,
 };
+use shekyl_types::TxSignableHash;
 
 /// The Spend-Authorization and Linkability proof.
 pub mod sal;
@@ -311,7 +312,7 @@ impl FcmpPlusPlus {
         verifier_2: &mut generalized_bulletproofs::BatchVerifier<Helios>,
         tree: TreeRoot<<Curves as FcmpCurves>::C1, <Curves as FcmpCurves>::C2>,
         layers: usize,
-        signable_tx_hash: [u8; 32],
+        signable_tx_hash: TxSignableHash,
         per_input: Vec<InputVerification>,
     ) -> Result<(), FcmpPlusPlusError> {
         if self.inputs.len() != per_input.len() {
@@ -449,7 +450,7 @@ impl FcmpMembershipOnly {
         verifier_2: &mut generalized_bulletproofs::BatchVerifier<Helios>,
         tree: TreeRoot<<Curves as FcmpCurves>::C1, <Curves as FcmpCurves>::C2>,
         layers: usize,
-        signable_tx_hash: [u8; 32],
+        signable_tx_hash: TxSignableHash,
         pqc_key_points: Vec<<Ed25519 as Ciphersuite>::G>,
     ) -> Result<(), FcmpPlusPlusError> {
         if self.inputs.is_empty() {

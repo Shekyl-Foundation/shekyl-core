@@ -486,11 +486,11 @@ TEST(fcmp, single_sig_hex_roundtrip)
   ShekylPqcKeypair kp = shekyl_pqc_keypair_generate();
   ASSERT_TRUE(kp.success);
 
-  uint8_t msg[32];
-  memset(msg, 0xAB, 32);
+  uint8_t msg[64];
+  memset(msg, 0xAB, 64);
 
   ShekylPqcSignatureResult sig = shekyl_pqc_sign(
-      kp.secret_key.ptr, kp.secret_key.len, msg, 32);
+      kp.secret_key.ptr, kp.secret_key.len, msg, 64);
   ASSERT_TRUE(sig.success);
 
   std::vector<uint8_t> sig_bytes(sig.signature.ptr, sig.signature.ptr + sig.signature.len);
@@ -509,7 +509,7 @@ TEST(fcmp, single_sig_hex_roundtrip)
       1,
       kp.public_key.ptr, kp.public_key.len,
       reinterpret_cast<const uint8_t*>(recovered.data()), recovered.size(),
-      msg, 32);
+      msg, 64);
   ASSERT_EQ(pqc_result, 0) << "PQC verify error code: " << (int)pqc_result;
 
   shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
@@ -543,8 +543,8 @@ TEST(fcmp, multisig_2of3_sig_container_assembly)
     ASSERT_TRUE(kps[i].success);
   }
 
-  uint8_t payload_hash[32];
-  memset(payload_hash, 0xCC, 32);
+  uint8_t payload_hash[64];
+  memset(payload_hash, 0xCC, 64);
 
   // Signers 0 and 2 produce partial signatures. Multisig participants sign
   // under the multisig domain (SA-R-5) — a single-signer signature is NOT a
@@ -554,7 +554,7 @@ TEST(fcmp, multisig_2of3_sig_container_assembly)
   {
     ShekylPqcSignatureResult sig = shekyl_pqc_sign_multisig_participant(
         kps[signer].secret_key.ptr, kps[signer].secret_key.len,
-        payload_hash, 32);
+        payload_hash, 64);
     ASSERT_TRUE(sig.success);
     partials.push_back({(uint8_t)signer,
         std::vector<uint8_t>(sig.signature.ptr, sig.signature.ptr + sig.signature.len)});
@@ -594,7 +594,7 @@ TEST(fcmp, multisig_2of3_sig_container_assembly)
       2,  // scheme_id = multisig
       key_blob.data(), key_blob.size(),
       sig_blob.data(), sig_blob.size(),
-      payload_hash, 32);
+      payload_hash, 64);
   ASSERT_EQ(pqc_result, 0) << "multisig PQC verify error code: " << (int)pqc_result;
 
   // Cleanup
