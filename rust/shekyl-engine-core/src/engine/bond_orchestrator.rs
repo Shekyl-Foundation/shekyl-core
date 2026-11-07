@@ -443,7 +443,7 @@ use super::Engine;
 pub(crate) async fn anchored_reference_block(
     curve_tree: &CurveTreeHandle,
     chain_tip: shekyl_types::BlockHeight,
-    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<[u8; 32]>,
+    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<BlockHash>,
 ) -> Result<ReferenceBlock, BondAssemblyError> {
     let covered_through = curve_tree
         .ingested_tip_height()
@@ -475,7 +475,7 @@ pub(crate) async fn anchored_reference_block(
     Ok(ReferenceBlock {
         height: reference_height,
         curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-        block_hash: BlockHash::from_bytes(block_hash),
+        block_hash,
     })
 }
 
@@ -726,7 +726,7 @@ where
         store: &PendingPostStore<WalletFilePendingSealStore<S, D, L, E, R, P>>,
         curve_tree: &CurveTreeHandle,
         chain_tip: BlockHeight,
-        tip_hash_at: impl FnOnce(BlockHeight) -> Option<[u8; 32]>,
+        tip_hash_at: impl FnOnce(BlockHeight) -> Option<BlockHash>,
         p_slot: PSlot,
         holdings: &HoldingsDescriptor,
         fee: AtomicUnits,

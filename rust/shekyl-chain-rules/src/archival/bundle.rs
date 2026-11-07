@@ -755,22 +755,16 @@ pub fn verify_bundle<V: BundleView>(
                 height: h,
             }));
         };
-        let draws = derive_draws(view, drawable, &kept, hash_at_h.as_bytes(), count)?;
+        let draws = derive_draws(view, drawable, &kept, &hash_at_h, count)?;
         (draws, Some(drawable), hash_at_h)
     };
 
     let mut passes = Vec::new();
     records::bind_economy(&mut passes, &kept, body, &draws)?;
-    let support = records::bind_support(
-        view,
-        &kept,
-        body,
-        hash_at_h.as_bytes(),
-        economy_records,
-        &mut passes,
-    )?;
+    let support =
+        records::bind_support(view, &kept, body, &hash_at_h, economy_records, &mut passes)?;
     // 7 then 8. Both streams: attempts, then anchors, then receipts.
-    records::judge_passes(view, &kept, hash_at_h.as_bytes(), &passes, drawable)?;
+    records::judge_passes(view, &kept, &hash_at_h, &passes, drawable)?;
 
     Ok(Admitted {
         kept,
@@ -807,7 +801,7 @@ fn derive_draws<V: BundleView>(
     view: &V,
     drawable: &DrawableEpoch,
     kept: &BundleKept,
-    hash_at_h: &[u8; 32],
+    hash_at_h: &BlockHash,
     count: u32,
 ) -> Result<Vec<DerivedDraw>, BundleRefused<V::Fault>> {
     Ok(
@@ -836,7 +830,7 @@ fn select_pairs<V: BundleView>(
     drawable: &DrawableEpoch,
     h: BlockHeight,
     seed: &[u8; 32],
-    hash_at_h: &[u8; 32],
+    hash_at_h: &BlockHash,
     count: u32,
 ) -> Result<Vec<(u64, DrawablePair)>, BundleRefused<V::Fault>> {
     let mut asked: BTreeMap<u64, bool> = BTreeMap::new();

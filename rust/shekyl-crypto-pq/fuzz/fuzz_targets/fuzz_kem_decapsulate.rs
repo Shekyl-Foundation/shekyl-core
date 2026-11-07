@@ -6,8 +6,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use shekyl_crypto_pq::kem::{
-    HybridCiphertext, HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation,
-    ML_KEM_768_CT_LEN, ML_KEM_768_DK_LEN,
+    HybridCiphertext, HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation, ML_KEM_768_CT_LEN,
 };
 
 fuzz_target!(|data: &[u8]| {

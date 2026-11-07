@@ -148,10 +148,7 @@ fn drain<T>(queue: &Mutex<Vec<T>>) -> T {
 /// terminates the loop with `Ok(_)`.
 fn empty_result_for(snapshot: &LedgerSnapshot) -> ScanResult {
     let start = snapshot.synced_height.to_raw().saturating_add(1);
-    // The snapshot's reorg rows are persisted bytes (RAW_TYPE PR C).
-    let parent_hash = snapshot
-        .block_hash_at(snapshot.synced_height)
-        .map(BlockHash::from_bytes);
+    let parent_hash = snapshot.block_hash_at(snapshot.synced_height);
     ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(start), parent_hash)
 }
 
@@ -174,9 +171,7 @@ fn malformed_result_for(snapshot: &LedgerSnapshot) -> ScanResult {
     let start = snapshot.synced_height.to_raw().saturating_add(1);
     let mut result = ScanResult::empty_at(
         shekyl_types::BlockHeight::from_raw(start),
-        snapshot
-            .block_hash_at(snapshot.synced_height)
-            .map(BlockHash::from_bytes),
+        snapshot.block_hash_at(snapshot.synced_height),
     );
     // Empty range + non-empty block_hashes is the
     // contract-violation shape `apply_scan_result_to_state`
@@ -557,11 +552,20 @@ fn ledger_snapshot_is_independent_of_transfer_count() {
     // confirm `LedgerSnapshot::from_ledger` reads only the tip
     // height and the reorg window — `transfers` (when populated
     // in production) does not contribute to snapshot cost.
-    let tip = BlockchainTip::new(BlockHeight::from_raw(1234), [0xAA; 32]);
+    let tip = BlockchainTip::new(
+        BlockHeight::from_raw(1234),
+        BlockHash::from_bytes([0xAA; 32]),
+    );
     let reorg_blocks = ReorgBlocks {
         blocks: vec![
-            (shekyl_types::BlockHeight::from_raw(1233), [0xBB; 32]),
-            (shekyl_types::BlockHeight::from_raw(1234), [0xAA; 32]),
+            (
+                shekyl_types::BlockHeight::from_raw(1233),
+                BlockHash::from_bytes([0xBB; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(1234),
+                BlockHash::from_bytes([0xAA; 32]),
+            ),
         ],
     };
     let ledger = LedgerBlock::new(Vec::new(), tip, reorg_blocks);
@@ -573,7 +577,7 @@ fn ledger_snapshot_is_independent_of_transfer_count() {
     assert_eq!(snap.reorg_blocks.blocks.len(), 2);
     assert_eq!(
         snap.block_hash_at(shekyl_types::BlockHeight::from_raw(1234)),
-        Some([0xAA; 32])
+        Some(BlockHash::from_bytes([0xAA; 32]))
     );
     assert_eq!(
         snap.block_hash_at(shekyl_types::BlockHeight::from_raw(1232)),
@@ -590,7 +594,7 @@ fn ledger_snapshot_is_independent_of_transfer_count() {
 /// snapshot's fields directly.
 fn snapshot_from_parts(
     synced_height: u64,
-    blocks: Vec<(shekyl_types::BlockHeight, [u8; 32])>,
+    blocks: Vec<(shekyl_types::BlockHeight, shekyl_types::BlockHash)>,
 ) -> LedgerSnapshot {
     LedgerSnapshot {
         synced_height: BlockHeight::from_raw(synced_height),
@@ -608,15 +612,27 @@ fn derive_snapshot_id_deterministic() {
     let snap_a = snapshot_from_parts(
         100,
         vec![
-            (shekyl_types::BlockHeight::from_raw(99), [0x11; 32]),
-            (shekyl_types::BlockHeight::from_raw(100), [0x22; 32]),
+            (
+                shekyl_types::BlockHeight::from_raw(99),
+                BlockHash::from_bytes([0x11; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(100),
+                BlockHash::from_bytes([0x22; 32]),
+            ),
         ],
     );
     let snap_a_again = snapshot_from_parts(
         100,
         vec![
-            (shekyl_types::BlockHeight::from_raw(99), [0x11; 32]),
-            (shekyl_types::BlockHeight::from_raw(100), [0x22; 32]),
+            (
+                shekyl_types::BlockHeight::from_raw(99),
+                BlockHash::from_bytes([0x11; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(100),
+                BlockHash::from_bytes([0x22; 32]),
+            ),
         ],
     );
     assert_eq!(
@@ -628,8 +644,14 @@ fn derive_snapshot_id_deterministic() {
     let snap_b_height = snapshot_from_parts(
         101,
         vec![
-            (shekyl_types::BlockHeight::from_raw(99), [0x11; 32]),
-            (shekyl_types::BlockHeight::from_raw(100), [0x22; 32]),
+            (
+                shekyl_types::BlockHeight::from_raw(99),
+                BlockHash::from_bytes([0x11; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(100),
+                BlockHash::from_bytes([0x22; 32]),
+            ),
         ],
     );
     assert_ne!(
@@ -641,8 +663,14 @@ fn derive_snapshot_id_deterministic() {
     let snap_b_blocks = snapshot_from_parts(
         100,
         vec![
-            (shekyl_types::BlockHeight::from_raw(99), [0x11; 32]),
-            (shekyl_types::BlockHeight::from_raw(100), [0x33; 32]),
+            (
+                shekyl_types::BlockHeight::from_raw(99),
+                BlockHash::from_bytes([0x11; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(100),
+                BlockHash::from_bytes([0x33; 32]),
+            ),
         ],
     );
     assert_ne!(
@@ -669,8 +697,14 @@ fn derive_snapshot_id_domain_separated() {
     let snap = snapshot_from_parts(
         7,
         vec![
-            (shekyl_types::BlockHeight::from_raw(6), [0xCD; 32]),
-            (shekyl_types::BlockHeight::from_raw(7), [0xAB; 32]),
+            (
+                shekyl_types::BlockHeight::from_raw(6),
+                BlockHash::from_bytes([0xCD; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(7),
+                BlockHash::from_bytes([0xAB; 32]),
+            ),
         ],
     );
 
@@ -724,13 +758,22 @@ fn derive_snapshot_id_length_prefix_separates_neighbours() {
     let snap_zero = snapshot_from_parts(50, Vec::new());
     let snap_one = snapshot_from_parts(
         50,
-        vec![(shekyl_types::BlockHeight::from_raw(49), [0x77; 32])],
+        vec![(
+            shekyl_types::BlockHeight::from_raw(49),
+            BlockHash::from_bytes([0x77; 32]),
+        )],
     );
     let snap_two = snapshot_from_parts(
         50,
         vec![
-            (shekyl_types::BlockHeight::from_raw(49), [0x77; 32]),
-            (shekyl_types::BlockHeight::from_raw(50), [0x88; 32]),
+            (
+                shekyl_types::BlockHeight::from_raw(49),
+                BlockHash::from_bytes([0x77; 32]),
+            ),
+            (
+                shekyl_types::BlockHeight::from_raw(50),
+                BlockHash::from_bytes([0x88; 32]),
+            ),
         ],
     );
 

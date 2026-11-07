@@ -87,7 +87,7 @@ impl BoundPass {
 pub(super) fn judge_passes<V: BundleView>(
     view: &V,
     kept: &BundleKept,
-    hash_at_h: &[u8; 32],
+    hash_at_h: &BlockHash,
     passes: &[BoundPass],
     drawable: Option<&DrawableEpoch>,
 ) -> Result<(), BundleRefused<V::Fault>> {
@@ -124,7 +124,7 @@ pub(super) fn judge_passes<V: BundleView>(
 
 fn verify_one<F>(
     kept: &BundleKept,
-    hash_at_h: &[u8; 32],
+    hash_at_h: &BlockHash,
     pass: &BoundPass,
     anchor_hash: &BlockHash,
     drawable: Option<&DrawableEpoch>,
@@ -241,7 +241,7 @@ pub(super) fn support_seats<V: BundleView>(
     view: &V,
     h: shekyl_types::BlockHeight,
     seed: &[u8; 32],
-    hash_at_h: &[u8; 32],
+    hash_at_h: &BlockHash,
     issued: u32,
 ) -> Result<Vec<SeatDraw>, BundleRefused<V::Fault>> {
     if issued == 0 {
@@ -285,7 +285,7 @@ pub(super) fn bind_support<V: BundleView>(
     view: &V,
     kept: &BundleKept,
     body: &BundleBody,
-    hash_at_h: &[u8; 32],
+    hash_at_h: &BlockHash,
     economy_records: usize,
     passes: &mut Vec<BoundPass>,
 ) -> Result<Vec<SupportObservation>, BundleRefused<V::Fault>> {

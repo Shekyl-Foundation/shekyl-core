@@ -61,7 +61,7 @@ fn driver() -> SubmitLifecycleDriver {
 struct HostState {
     held: Vec<HeldSubmit>,
     synced: u64,
-    block_hashes: HashMap<u64, [u8; 32]>,
+    block_hashes: HashMap<u64, shekyl_types::BlockHash>,
     held_bytes: HashMap<TxHash, Vec<u8>>,
     rescan_queue: Vec<RescanRequest>,
     released: HashSet<TxHash>,
@@ -93,7 +93,11 @@ impl StubHost {
     }
 
     fn with_block_hash(self, height: u64, hash: [u8; 32]) -> Self {
-        self.state.lock().unwrap().block_hashes.insert(height, hash);
+        self.state
+            .lock()
+            .unwrap()
+            .block_hashes
+            .insert(height, shekyl_types::BlockHash::from_bytes(hash));
         self
     }
 
@@ -145,7 +149,7 @@ impl WatchdogHost for StubHost {
         BlockHeight::from_raw(self.state.lock().unwrap().synced)
     }
 
-    fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]> {
+    fn block_hash_at(&self, height: BlockHeight) -> Option<shekyl_types::BlockHash> {
         self.state
             .lock()
             .unwrap()
@@ -196,7 +200,7 @@ impl WatchdogHost for StubHost {
 struct DaemonState {
     health: DaemonHealth,
     health_fail: bool,
-    block_hashes: HashMap<u64, [u8; 32]>,
+    block_hashes: HashMap<u64, shekyl_types::BlockHash>,
     block_hash_err: HashSet<u64>,
     submit: VecDeque<Result<TxSubmitOutcome, RpcError>>,
     submit_calls: usize,
@@ -234,7 +238,11 @@ impl StubDaemon {
     }
 
     fn set_block_hash(&self, height: u64, hash: [u8; 32]) {
-        self.state.lock().unwrap().block_hashes.insert(height, hash);
+        self.state
+            .lock()
+            .unwrap()
+            .block_hashes
+            .insert(height, shekyl_types::BlockHash::from_bytes(hash));
     }
 
     fn push_submit(&self, outcome: Result<TxSubmitOutcome, RpcError>) {
@@ -263,7 +271,7 @@ impl Rpc for StubDaemon {
     fn get_block_hash(
         &self,
         number: usize,
-    ) -> impl Send + Future<Output = Result<[u8; 32], RpcError>> {
+    ) -> impl Send + Future<Output = Result<shekyl_types::BlockHash, RpcError>> {
         let state = self.state.clone();
         async move {
             let s = state.lock().unwrap();

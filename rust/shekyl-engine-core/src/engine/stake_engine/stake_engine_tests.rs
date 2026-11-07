@@ -1648,7 +1648,7 @@ mod emission_claim_assembly {
         // auths, and the economics recompute. A builder/daemon drift in
         // the signable hash, index derivation, commit set, or either
         // auth key refuses here.
-        emission_vin_verify_backing(&vin, tree_root.as_bytes(), depth, &tx_signable)
+        emission_vin_verify_backing(&vin, &tree_root, depth, &tx_signable)
             .expect("backing leg verifies against the erase-rule message");
         emission_vin_verify_auth(&vin, &reward_commits, &tx_signable, &net)
             .expect("both auth legs verify against the erase-rule message");
@@ -1817,8 +1817,13 @@ mod emission_claim_assembly {
             drivers.tx_signable,
             "framed over the erase-rule prefix"
         );
-        emission_vin_verify_backing(&drivers.vin, root, depth, &drivers.tx_signable)
-            .expect("the driver's backing proof verifies");
+        emission_vin_verify_backing(
+            &drivers.vin,
+            &shekyl_types::CurveTreeRoot::from_bytes(*root),
+            depth,
+            &drivers.tx_signable,
+        )
+        .expect("the driver's backing proof verifies");
         emission_vin_verify_auth(
             &drivers.vin,
             &drivers.reward_commits,

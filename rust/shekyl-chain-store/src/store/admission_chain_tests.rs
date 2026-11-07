@@ -185,13 +185,9 @@ fn produce(prepared: &Prepared) -> (BundleRef, BundleBody) {
     world.view.hashes.insert(h, prepared.hash);
     world.view.hashes.insert(anchor, prepared.anchor_hash);
     let drawable = drawable(prepared);
-    let selected = select_draw(
-        &world.seed,
-        prepared.hash.as_bytes(),
-        0,
-        drawable.len(),
-        |_| Ok::<_, core::convert::Infallible>(true),
-    )
+    let selected = select_draw(&world.seed, &prepared.hash, 0, drawable.len(), |_| {
+        Ok::<_, core::convert::Infallible>(true)
+    })
     .expect("a short read does not fail")
     .expect("the planted set selects");
     let pair = drawable.pair(selected.index).expect("the index is in D");
@@ -204,7 +200,7 @@ fn produce(prepared: &Prepared) -> (BundleRef, BundleBody) {
                 .is_some_and(|key| persona.keys().receipt_sign_pk == *key)
         })
         .expect("D's receipt key is one of the planted personas");
-    let nonce = challenge_nonce(&world.seed, prepared.hash.as_bytes(), 0, 0);
+    let nonce = challenge_nonce(&world.seed, &prepared.hash, 0, 0);
     let record = world.record_signed_by(
         &signer.keys().receipt_sign_sk,
         pair.shard.to_raw(),

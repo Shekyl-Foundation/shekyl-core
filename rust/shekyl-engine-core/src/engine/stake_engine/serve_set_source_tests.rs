@@ -46,7 +46,7 @@ impl Rpc for ClaimSourceDaemon {
     fn get_block_hash(
         &self,
         number: usize,
-    ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+    ) -> impl Send + std::future::Future<Output = Result<shekyl_types::BlockHash, RpcError>> {
         async move { Ok(test_block_hash_at(number as u64)) }
     }
 
@@ -75,13 +75,13 @@ impl Rpc for ClaimSourceDaemon {
                 ),
                 target_height: None,
                 synchronized: true,
-                top_hash: shekyl_types::BlockHash::from_bytes(test_block_hash_at(
+                top_hash: test_block_hash_at(
                     self.0
                         .get("chain_height")
                         .and_then(serde_json::Value::as_u64)
                         .expect("the fixture source carries a chain height")
                         .saturating_sub(1),
-                )),
+                ),
                 has_peers: true,
             }
             .to_value()
@@ -585,7 +585,7 @@ impl Rpc for ScheduledDaemon {
     fn get_block_hash(
         &self,
         number: usize,
-    ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+    ) -> impl Send + std::future::Future<Output = Result<shekyl_types::BlockHash, RpcError>> {
         async move { Ok(test_block_hash_at(number as u64)) }
     }
 
@@ -608,7 +608,7 @@ impl Rpc for ScheduledDaemon {
                 chain_count: shekyl_types::ChainCount::from_raw(tip + 1),
                 target_height: (!self.synchronized).then_some(1_000_000),
                 synchronized: self.synchronized,
-                top_hash: shekyl_types::BlockHash::from_bytes(test_block_hash_at(tip)),
+                top_hash: test_block_hash_at(tip),
                 has_peers: true,
             }
             .to_value()

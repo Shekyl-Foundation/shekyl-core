@@ -120,7 +120,7 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
         key_image_conflicts: vec![KeyImageConflict::Free; fx.parsed.key_images.len()],
         reference: Some(ReferenceFacts {
             height: BlockHeight::from_raw(fx.reference_height),
-            root: fx.tree_root,
+            root: shekyl_types::CurveTreeRoot::from_bytes(fx.tree_root),
             tree_depth: fx.lmdb_depth,
         }),
         fee_floor_window: Some(vec![1]),
@@ -943,7 +943,7 @@ fn proof_against_a_different_root_is_rejected_deterministically() {
     let mut facts = admitting_facts(fx);
     facts.reference = Some(ReferenceFacts {
         height: BlockHeight::from_raw(fx.reference_height),
-        root: fx.other_root,
+        root: shekyl_types::CurveTreeRoot::from_bytes(fx.other_root),
         tree_depth: fx.lmdb_depth,
     });
     assert_eq!(
@@ -1517,7 +1517,7 @@ fn release_admitting_facts() -> SubmitFacts {
     facts.chain_height = ChainCount::from_raw(release_chain_height());
     facts.reference = Some(ReferenceFacts {
         height: BlockHeight::from_raw(release_chain_height() - 50),
-        root: fixture().tree_root,
+        root: shekyl_types::CurveTreeRoot::from_bytes(fixture().tree_root),
         tree_depth: fixture().lmdb_depth,
     });
     facts.release = Some(ReleaseFacts {

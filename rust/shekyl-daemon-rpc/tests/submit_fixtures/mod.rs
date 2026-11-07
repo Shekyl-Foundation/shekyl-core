@@ -278,7 +278,7 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
         key_image_conflicts: vec![KeyImageConflict::Free; parsed.key_images.len()],
         reference: Some(ReferenceFacts {
             height: BlockHeight::from_raw(150),
-            root: FIXTURE_ROOT,
+            root: shekyl_types::CurveTreeRoot::from_bytes(FIXTURE_ROOT),
             tree_depth: 8,
         }),
         fee_floor_window: Some(vec![1]),
@@ -412,7 +412,7 @@ impl SubmitStateShim for MockShim {
             cert_txid: *cert.txid(),
             cert_reference_block: *cert.reference_block(),
             cert_ref_height: cert.ref_height(),
-            cert_root: *cert.root(),
+            cert_root: cert.root().to_bytes(),
             expected: expected.clone(),
         });
         self.commit_outcome
