@@ -1,13 +1,6 @@
-[submodule "external/rapidjson"]
-	path = external/rapidjson
-	url = https://github.com/Tencent/rapidjson
 [submodule "external/randomx"]
 	path = external/randomx
 	url = https://github.com/tevador/RandomX
-[submodule "external/supercop"]
-	path = external/supercop
-	url = https://github.com/monero-project/supercop
-	branch = monero
 [submodule "external/randomx-v2"]
 	path = external/randomx-v2
 	url = https://github.com/Shekyl-Foundation/RandomX
