@@ -1127,8 +1127,10 @@ jobs:
           failed=0
           run() {
             echo "::group::$*"
-            "$@"
-            local rc=$?
+            # The step shell is `bash -e`: a bare failing "$@" would exit
+            # here, before the status is kept and the other modes run.
+            local rc=0
+            "$@" || rc=$?
             echo "::endgroup::"
             if [ "$rc" -ne 0 ]; then
               echo "::error::$* exited $rc"
