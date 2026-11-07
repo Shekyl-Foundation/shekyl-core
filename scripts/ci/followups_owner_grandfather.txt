@@ -200,7 +200,6 @@ Fleet: arm readouts must record the per-sample series, not a pooled summary — 
 Relay: `full_travel_probability`'s cross-check holds `fluff_return_ms` fixed, and `F'` is the axis the region derivation moves.
 Relay: `F'` may be per-POSTURE even though §89.2 correctly refused per-ZONE.
 Relay: populate the 48-cell Pi verification surface, then consume it per shape.
-Execute PWD-T6's PWC-F3 deletion: remove `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size`, and `network_config`'s KV serializer.
 The rustdoc gate enumerates crates by name, so a crate outside the list is never documented and its errors accumulate unseen — `shekyl-relay` currently has 5.
 Re-derive `drop_connections(address)`'s host-keyed severing together with the anonymity-zone inbound bound.
 Carry an anonymity-zone peer's endpoint in the handshake, and delete the `unknown()` sentinel with it.

@@ -60,8 +60,8 @@ pub struct RelayConfig {
 
 impl RelayConfig {
     /// The inherited zone: two stems, a ten-minute epoch with up to thirty
-    /// seconds of jitter (`CRYPTONOTE_DANDELIONPP_STEMS`, `_MIN_EPOCH`,
-    /// `_EPOCH_RANGE`), the carrier off unless asked.
+    /// seconds of jitter (`DandelionParams::inherited`), the carrier off
+    /// unless asked.
     #[must_use]
     pub fn inherited(connectors: Vec<ConnectorId>, noise: bool) -> Self {
         Self {
