@@ -53,11 +53,13 @@ on a later run of this harness).
 - `rust/shekyl-pow-randomx/examples/rt_w10_request_cost.rs` writes
   `hashes.tsv`.
 - `shekyl-chain-store`'s ignored test `rt_w10_coinbase_span_cost` writes
-  `coinbase.tsv` into `RT_W10_OUT`. Unset, it writes into a temporary
-  directory and removes it: that is the nightly `store-ignored` lane's run,
-  which proves the harness runs and measures nothing.
+  `coinbase.tsv` into `RT_W10_OUT`. Unset, it takes three samples into a
+  temporary directory and removes it: that is the nightly `store-ignored`
+  lane's run, which proves the harness runs and measures nothing.
 - `shekyl-wire`'s ignored test `rt_w10_listed_tx_parse` writes `parse.tsv`
-  and `constants.tsv`.
+  and `constants.tsv` into `RT_W10_OUT`. Unset, it does the same as the
+  store's: three samples, a temporary directory, the nightly `wire-ignored`
+  lane's run.
 
 Linux only. Any other host compiles the example and exits without a run,
 because the clock is `CLOCK_THREAD_CPUTIME_ID` and the host is the Pi 4.

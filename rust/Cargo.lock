@@ -4063,6 +4063,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "tempfile",
  "toml 0.8.23",
 ]
 
@@ -5774,6 +5775,7 @@ dependencies = [
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
+ "tempfile",
 ]
 
 [[package]]
