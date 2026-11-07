@@ -349,6 +349,66 @@ fn an_excused_failure_with_no_count_waits_the_outage_retry() {
     assert_eq!(list.failed_tests(&peer), 0);
 }
 
+/// `off_draw` counts both holds the draw skips, and neither is a session: a
+/// counted cooldown in gray, and a white address an excusal holds back.
+/// The edit that makes this red is counting only the ladder, or counting
+/// a kept session in the same number.
+#[test]
+fn off_draw_counts_a_counted_cooldown_and_an_excusal() {
+    let mut rng = SplitMix64::new(21);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let cooled = v4(21);
+    let excused = v4(22);
+    assert_eq!(
+        list.admit_gray(&cooled, Source::Operator, at(0), &mut rng),
+        Ok(true)
+    );
+    draw_until(&mut list, &cooled, at(0), &mut rng);
+    list.apply(
+        &connection_problem(&cooled),
+        at(0),
+        Verdict::Counted,
+        &mut rng,
+    );
+    assert!(list.is_cooling(&cooled));
+    assert!(
+        !list.is_excused(&cooled),
+        "a counted cooldown is not an excusal"
+    );
+
+    assert_eq!(
+        list.admit_gray(&excused, Source::Operator, at(0), &mut rng),
+        Ok(true)
+    );
+    assert_eq!(list.draw_gray(CLEARNET, &mut rng), Some(excused.clone()));
+    list.apply(
+        &DialOutcome::Confirmed(excused.clone()),
+        at(0),
+        Verdict::Counted,
+        &mut rng,
+    );
+    list.apply(
+        &connection_problem(&excused),
+        at(0),
+        Verdict::Excused,
+        &mut rng,
+    );
+    assert!(list.is_white(&excused) && list.is_excused(&excused));
+    assert!(
+        !list.is_cooling(&excused),
+        "an excusal on white is not gray cooling"
+    );
+
+    let census = list
+        .settle(CLEARNET, at(0), &mut NoSessions, &mut rng)
+        .census(&mut |_| true);
+    assert_eq!(census.off_draw, 2, "{census:?}");
+    assert_eq!(census.gray, 1, "{census:?}");
+    assert_eq!(census.white, 1, "{census:?}");
+    assert_eq!(census.gray_candidates, 0, "{census:?}");
+    assert_eq!(census.white_candidates, 0, "{census:?}");
+}
+
 #[test]
 fn a_restart_retests_every_cooled_address() {
     let mut rng = SplitMix64::new(5);
