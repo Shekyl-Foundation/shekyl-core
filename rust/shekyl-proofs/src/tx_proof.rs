@@ -48,7 +48,7 @@ use crate::error::ProofError;
 use shekyl_crypto_pq::kem::SharedSecret;
 use shekyl_crypto_pq::output::{derive_proof_secrets, rederive_combined_ss, ProofSecrets};
 use shekyl_crypto_pq::schnorr;
-use shekyl_network::envelope::IdDomain;
+use shekyl_network::envelope::{Framed32, IdDomain};
 use shekyl_network::NetworkId;
 
 /// The tx proof format's version, the proof's first byte. Version 3: the
@@ -135,7 +135,7 @@ fn assemble_proof_message(
     address_bytes: &[u8],
     user_message: &[u8],
     per_output_data: &[u8],
-) -> [u8; 32] {
+) -> Framed32 {
     domain.frame(
         network_id,
         [txid, address_bytes, user_message, per_output_data],
@@ -248,7 +248,7 @@ pub fn generate_outbound_proof_with_secrets(
         // `ps` drops here; `ProofSecrets` is `ZeroizeOnDrop`.
     }
 
-    let msg = assemble_proof_message(
+    let msg: Framed32 = assemble_proof_message(
         OUTBOUND_MESSAGE,
         network_id,
         txid,
@@ -262,7 +262,7 @@ pub fn generate_outbound_proof_with_secrets(
     )?;
     let pk_point = sk_scalar * G_POINT;
 
-    let sig = schnorr::sign(OUTBOUND_DOMAIN, &sk_scalar, &pk_point, &msg);
+    let sig = schnorr::sign(OUTBOUND_DOMAIN, &sk_scalar, &pk_point, msg.as_bytes());
 
     let mut proof = Vec::with_capacity(OUTBOUND_HEADER_SIZE + n * PER_OUTPUT_SIZE);
     proof.push(CURRENT_PROOF_VERSION);
@@ -348,7 +348,7 @@ pub fn verify_outbound_proof(
 
     let per_output_blob = &proof_bytes[OUTBOUND_HEADER_SIZE..];
 
-    let msg = assemble_proof_message(
+    let msg: Framed32 = assemble_proof_message(
         OUTBOUND_MESSAGE,
         network_id,
         txid,
@@ -362,7 +362,7 @@ pub fn verify_outbound_proof(
     )?;
     let pk_point = sk_scalar * G_POINT;
 
-    if !schnorr::verify(OUTBOUND_DOMAIN, &pk_point, &msg, &sig) {
+    if !schnorr::verify(OUTBOUND_DOMAIN, &pk_point, msg.as_bytes(), &sig) {
         return Err(ProofError::SignatureFailed);
     }
 
@@ -499,7 +499,7 @@ pub fn generate_inbound_proof(
         write_per_output(*vout, ps, &mut per_output_blob);
     }
 
-    let msg = assemble_proof_message(
+    let msg: Framed32 = assemble_proof_message(
         INBOUND_MESSAGE,
         network_id,
         txid,
@@ -513,7 +513,7 @@ pub fn generate_inbound_proof(
     )?;
     let pk_point = sk_scalar * G_POINT;
 
-    let sig = schnorr::sign(INBOUND_DOMAIN, &sk_scalar, &pk_point, &msg);
+    let sig = schnorr::sign(INBOUND_DOMAIN, &sk_scalar, &pk_point, msg.as_bytes());
 
     let mut proof = Vec::with_capacity(INBOUND_HEADER_SIZE + n * PER_OUTPUT_SIZE);
     proof.push(CURRENT_PROOF_VERSION);
@@ -588,7 +588,7 @@ pub fn verify_inbound_proof(
         .decompress()
         .ok_or(ProofError::InvalidFormat("invalid view public key".into()))?;
 
-    let msg = assemble_proof_message(
+    let msg: Framed32 = assemble_proof_message(
         INBOUND_MESSAGE,
         network_id,
         txid,
@@ -597,7 +597,7 @@ pub fn verify_inbound_proof(
         per_output_blob,
     );
 
-    if !schnorr::verify(INBOUND_DOMAIN, &view_pk, &msg, &sig) {
+    if !schnorr::verify(INBOUND_DOMAIN, &view_pk, msg.as_bytes(), &sig) {
         return Err(ProofError::SignatureFailed);
     }
 

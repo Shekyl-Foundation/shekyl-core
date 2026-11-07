@@ -71,10 +71,14 @@ pub fn tx_signable(
     prefix_hash: PrefixHash,
     ct_base_hash: CtBaseHash,
 ) -> TxSignableHash {
-    TxSignableHash::from_bytes(TX_SIGNABLE.frame(
-        network_id,
-        [prefix_hash.as_bytes(), ct_base_hash.as_bytes()],
-    ))
+    TxSignableHash::from_bytes(
+        TX_SIGNABLE
+            .frame(
+                network_id,
+                [prefix_hash.as_bytes(), ct_base_hash.as_bytes()],
+            )
+            .into_bytes(),
+    )
 }
 
 /// A transaction's PQC signing preimage on one network — the fields shared
@@ -142,15 +146,19 @@ impl PqcSigningPreimage {
         let mut header = Vec::with_capacity(4 + auth.hybrid_public_key.len());
         auth.write_header(&mut header)
             .expect("writing to a Vec is infallible");
-        SigningPayloadHash::from_bytes(FCMP_SPEND_SIGNING.frame(
-            &self.network_id,
-            [
-                self.tx_signable.as_bytes(),
-                &header,
-                &self.key_hashes,
-                self.prunable_hash.as_bytes(),
-            ],
-        ))
+        SigningPayloadHash::from_bytes(
+            FCMP_SPEND_SIGNING
+                .frame(
+                    &self.network_id,
+                    [
+                        self.tx_signable.as_bytes(),
+                        &header,
+                        &self.key_hashes,
+                        self.prunable_hash.as_bytes(),
+                    ],
+                )
+                .into_bytes(),
+        )
     }
 }
 

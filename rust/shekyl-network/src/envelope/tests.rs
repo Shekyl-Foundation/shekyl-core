@@ -25,7 +25,7 @@ fn the_input_is_the_binding_then_each_field_behind_its_length() {
     x.extend_from_slice(a);
     x.extend_from_slice(&0u64.to_le_bytes());
     assert_eq!(
-        ID_2.frame(&id, [a, b]),
+        ID_2.frame(&id, [a, b]).into_bytes(),
         cshake256_32(b"shekyl/tx-signable-v1", &x)
     );
     // Moving a byte across a field boundary changes the digest: the
@@ -46,17 +46,19 @@ fn the_frames_are_the_oracles() {
     let counting: [u8; 32] = core::array::from_fn(|i| u8::try_from(i).expect("below 32"));
     let fields: [&[u8]; 2] = [&counting, &[0xaa; 32]];
     assert_eq!(
-        hex(&ID_2.frame(&id, fields)),
+        hex(ID_2.frame(&id, fields).as_bytes()),
         "63331bc96e0f6ce84fa1b07222e054853530f1c22eed0ac65caad702d2121d6c"
     );
     let wide = ID_2_WIDE.frame(&id, fields);
     assert_eq!(
-        hex(&wide),
+        hex(wide.as_bytes()),
         "63331bc96e0f6ce84fa1b07222e054853530f1c22eed0ac65caad702d2121d6c\
          538ea991c4dee6772906cadcd76d354412e8baa3b316782af6048c27968e9981"
     );
     assert_eq!(
-        hex(&NAME_2.frame(&Network::Testnet.name_id(), [b"", b"abc"])),
+        hex(NAME_2
+            .frame(&Network::Testnet.name_id(), [b"", b"abc"])
+            .as_bytes()),
         "3b43163155a891e9ea9bd7a36d2c83f29fd4510f1da2f791d3c05fbf808205ba"
     );
 }

@@ -30,7 +30,7 @@ use crate::error::ProofError;
 use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::output::ProofSecrets;
 use shekyl_crypto_pq::schnorr;
-use shekyl_network::envelope::IdDomain;
+use shekyl_network::envelope::{Framed32, IdDomain};
 use shekyl_network::NetworkId;
 
 /// The reserve proof format's version, the proof's first byte. Version 3: the
@@ -108,7 +108,7 @@ fn assemble_proof_message(
     address_bytes: &[u8],
     user_message: &[u8],
     per_output_data: &[u8],
-) -> [u8; 32] {
+) -> Framed32 {
     RESERVE_MESSAGE.frame(network_id, [address_bytes, user_message, per_output_data])
 }
 
@@ -176,8 +176,9 @@ pub fn generate_reserve_proof(
         );
     }
 
-    let msg = assemble_proof_message(network_id, address_bytes, user_message, &per_output_blob);
-    let sig = schnorr::sign(RESERVE_DOMAIN, &b_scalar, &b_point, &msg);
+    let msg: Framed32 =
+        assemble_proof_message(network_id, address_bytes, user_message, &per_output_blob);
+    let sig = schnorr::sign(RESERVE_DOMAIN, &b_scalar, &b_point, msg.as_bytes());
 
     let mut proof = Vec::with_capacity(HEADER_SIZE + n * PER_OUTPUT_SIZE);
     proof.push(CURRENT_PROOF_VERSION);
@@ -193,7 +194,7 @@ fn assemble_dleq_context(
     address_bytes: &[u8],
     user_message: &[u8],
     output_key: &[u8; 32],
-) -> [u8; 32] {
+) -> Framed32 {
     RESERVE_DLEQ_CONTEXT.frame(network_id, [address_bytes, user_message, output_key])
 }
 
@@ -269,9 +270,10 @@ pub fn verify_reserve_proof(
         .decompress()
         .ok_or(ProofError::InvalidFormat("invalid spend pubkey".into()))?;
 
-    let msg = assemble_proof_message(network_id, address_bytes, user_message, per_output_blob);
+    let msg: Framed32 =
+        assemble_proof_message(network_id, address_bytes, user_message, per_output_blob);
 
-    if !schnorr::verify(RESERVE_DOMAIN, &b_point, &msg, &sig) {
+    if !schnorr::verify(RESERVE_DOMAIN, &b_point, msg.as_bytes(), &sig) {
         return Err(ProofError::SignatureFailed);
     }
 

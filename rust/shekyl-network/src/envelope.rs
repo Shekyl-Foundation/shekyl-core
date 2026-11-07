@@ -39,12 +39,28 @@ use crate::{NameId, NetworkId};
 /// The binding's width: a [`NetworkId`] or a [`NameId`].
 pub const BINDING_LEN: usize = 16;
 
-/// The output widths a domain may declare.
-pub trait Width {
+/// The output widths a domain may declare: [`W32`] and [`W64`], and no other.
+///
+/// Each names its output type. A [`Framed32`] or [`Framed64`] comes only out
+/// of a `frame` call, so a signer or proof that takes one takes a value this
+/// envelope bound to a network, never bytes a caller assembled.
+pub trait Width: sealed::Sealed {
     /// The digest.
     type Out;
-    /// `cSHAKE256(S = customization, X = input)`, this many bytes.
-    fn hash(customization: &[u8], input: &[u8]) -> Self::Out;
+    /// `cSHAKE256(S = customization, X = input)`, this many bytes. The
+    /// [`Frame`] token keeps it to this module: nothing outside can make
+    /// one, so nothing outside can hash its way to an `Out`.
+    fn hash(token: Frame, customization: &[u8], input: &[u8]) -> Self::Out;
+}
+
+/// The token only this module makes; see [`Width::hash`].
+#[derive(Debug)]
+pub struct Frame(());
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::W32 {}
+    impl Sealed for super::W64 {}
 }
 
 /// 32-byte output, the default.
@@ -55,17 +71,68 @@ pub enum W32 {}
 #[derive(Clone, Copy, Debug)]
 pub enum W64 {}
 
+/// A 32-byte frame output: a public digest bound to one network's id or
+/// name. Like the other public hashes it orders, hashes and reads as bytes;
+/// only `frame` makes one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Framed32([u8; 32]);
+
+/// A 64-byte frame output: a hybrid signature's signed content, bound to one
+/// network's id or name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Framed64([u8; 64]);
+
+impl AsRef<[u8]> for Framed32 {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for Framed64 {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Framed32 {
+    /// The digest's bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// The digest's bytes, by value.
+    #[must_use]
+    pub const fn into_bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+impl Framed64 {
+    /// The digest's bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 64] {
+        &self.0
+    }
+
+    /// The digest's bytes, by value.
+    #[must_use]
+    pub const fn into_bytes(self) -> [u8; 64] {
+        self.0
+    }
+}
+
 impl Width for W32 {
-    type Out = [u8; 32];
-    fn hash(customization: &[u8], input: &[u8]) -> [u8; 32] {
-        cshake256_32(customization, input)
+    type Out = Framed32;
+    fn hash(_: Frame, customization: &[u8], input: &[u8]) -> Framed32 {
+        Framed32(cshake256_32(customization, input))
     }
 }
 
 impl Width for W64 {
-    type Out = [u8; 64];
-    fn hash(customization: &[u8], input: &[u8]) -> [u8; 64] {
-        cshake256_64(customization, input)
+    type Out = Framed64;
+    fn hash(_: Frame, customization: &[u8], input: &[u8]) -> Framed64 {
+        Framed64(cshake256_64(customization, input))
     }
 }
 
@@ -125,7 +192,7 @@ impl<const N: usize, W: Width> IdDomain<N, W> {
     /// `frame(self, id, fields)`.
     #[must_use]
     pub fn frame(&self, id: &NetworkId, fields: [&[u8]; N]) -> W::Out {
-        W::hash(self.customization, &input(id, &fields))
+        W::hash(Frame(()), self.customization, &input(id, &fields))
     }
 }
 
@@ -133,7 +200,11 @@ impl<const N: usize, W: Width> NameDomain<N, W> {
     /// `frame(self, name_id, fields)`.
     #[must_use]
     pub fn frame(&self, name: &NameId, fields: [&[u8]; N]) -> W::Out {
-        W::hash(self.customization, &input(name.as_bytes(), &fields))
+        W::hash(
+            Frame(()),
+            self.customization,
+            &input(name.as_bytes(), &fields),
+        )
     }
 }
 

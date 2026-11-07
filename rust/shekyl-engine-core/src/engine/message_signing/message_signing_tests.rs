@@ -67,7 +67,7 @@ fn assert_outer_half_binds(
 ) {
     let sig = ms::ArmoredSignature::decode(armored).expect("armored string decodes");
     let preimage = ms::message_preimage(network, segment.as_bytes(), message);
-    let outer = ms::outer_bytes(&preimage, sig.sig_pq());
+    let outer = ms::outer_message(&preimage, sig.sig_pq()).to_bytes();
     assert!(
         schnorr::verify_compressed(
             ms::MSG_SIGN_OUTER_DOMAIN,
@@ -80,7 +80,7 @@ fn assert_outer_half_binds(
     // Negative control: the same signature must NOT verify against a
     // different transcript, or the assertion above proves nothing.
     let other = ms::message_preimage(network, segment.as_bytes(), b"a different message");
-    let other_outer = ms::outer_bytes(&other, sig.sig_pq());
+    let other_outer = ms::outer_message(&other, sig.sig_pq()).to_bytes();
     assert!(
         !schnorr::verify_compressed(
             ms::MSG_SIGN_OUTER_DOMAIN,
@@ -237,7 +237,7 @@ async fn sign_message_outer_with_real_keys() {
     let (preimage, sig_pq) =
         ms::sign_message_pq_half(&master_seed, network, &segment, message).expect("pq half");
     let sig_cl = handle
-        .sign_message_outer(ms::outer_bytes(&preimage, &sig_pq))
+        .sign_message_outer(ms::outer_message(&preimage, &sig_pq))
         .await
         .expect("actor signs the outer bytes");
     let armored = ms::assemble_armored(&sig_pq, &sig_cl);

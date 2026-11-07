@@ -10,7 +10,7 @@
 //! module does not own a second framer. The vin codec stays in
 //! [`emission_wire`](crate::emission_wire).
 
-use shekyl_network::envelope::{framed_fields, IdDomain, W64};
+use shekyl_network::envelope::{framed_fields, Framed64, IdDomain, W64};
 use shekyl_network::NetworkId;
 use shekyl_types::TxSignableHash;
 
@@ -62,9 +62,9 @@ pub enum EmissionAuthRole {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EmissionAuthMsgs {
     /// Stake-side (`auth_backing`) binding message.
-    pub backing: [u8; 64],
+    pub backing: Framed64,
     /// Claim-side (`auth_claim`) binding message.
-    pub claim: [u8; 64],
+    pub claim: Framed64,
 }
 
 impl EmissionAuthRole {
@@ -138,7 +138,7 @@ impl ArchivalRewardEmissionVin {
         reward_commits: &[RewardCommit],
         tx_signable: &TxSignableHash,
         role: EmissionAuthRole,
-    ) -> Result<[u8; 64], WireError> {
+    ) -> Result<Framed64, WireError> {
         let fields = self.auth_msg_fields(reward_commits, tx_signable)?;
         Ok(role
             .domain()
