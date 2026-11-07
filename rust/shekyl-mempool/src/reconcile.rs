@@ -36,7 +36,7 @@ use shekyl_types::{TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
 
 use crate::door::{self, Judged};
-use crate::evict::Limits;
+use crate::policy::Limits;
 use crate::pool::{Held, Pool, PoolFault};
 use crate::view::KeyImages;
 

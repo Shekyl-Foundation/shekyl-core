@@ -303,7 +303,7 @@ prevent.
 | 5. Demand-responsive emission | Release multiplier and burn under step, boom/bust and stuffing schedules; the 720 window's step response | M_r in [0.8, 1.3] | **PROPOSED:** a stuffer working the window's edge cannot hold M_r above 1.0 for longer than the window at a cost below the ESR-7 envelope |
 | 6. Self-regulating balance | Staker yield; A1 clearance; onset year; coverage | Staker yield 4–6 % years 1–5, ~1.7 % at year 10 | **PROPOSED:** yields within a factor of two of April's in years 1–10; A1 flat-25 clearance ≥ 1 through year 20 at 10 % on the baseline |
 | Capacity (no April row) | Transactions carried per block against demand; years to carry the baseline's 50 | — (April assumed blocks carry demand) | **PROPOSED:** the default rung carries the baseline's demand from genesis, or the deviation is a ruled choice |
-| Usability (no April row) | Standard-rung fee for an ordinary transaction, by year | — | **PROPOSED:** a year-1 figure Rick sets before EUP-4 |
+| Usability (no April row) | Standard-rung fee for an ordinary transaction, by year | — | **RATIFIED (Rick, 2026-11-06):** the year-1 Standard-rung fee for an ordinary 1-in/2-out transaction is at most **0.05 %** of the year-1 block reward: about 0.496 SKL (496 289 839 atomic) on the design curve, whose year-1 mean block reward is 992.58 SKL (`projected_already_generated` over the first 262 800 blocks, read at `b8b11453e`). The floor is the stuffing criterion, applied in year 1. Set before ESR-10 runs, which prints this fee for every cell |
 | Tail (no April row; ruled a criterion, §3.2) | Per-block fee revenue, median and variance, on the baseline, in the structural arms to about year 135 | — | **PROPOSED:** at maturity the tail is at least `k` × the median per-block fee revenue, `k ≥ 1`; Rick sets `k`. The tail's ratio of the asymptote per year is read off this table and then ratified |
 | Stuffing (§6) | The ESR-7 envelope minimum, in floors per byte, by era | "Marginally profitable short-term" | **PROPOSED:** the cheapest archival byte is no cheaper than the relay floor in any era, after D is decided |
 
@@ -361,9 +361,11 @@ six: the purse, the knee, the onset and the stuffer's cost are not readable
 on a chain capped at the zone.
 
 *Amended 2026-10-04 (§3.1), ruled 2026-10-05 (§3.2, 1).* "The production
-arm" here is the sim's fill, the reward-aware comparison, which is the
-design's fill. The daemon runs the pre-v5 rule until the fill moves to Rust,
-so this reading is the design's behaviour once the fill lands.
+arm" here is the sim's fill, the reward-aware comparison. It is the fill the
+daemon runs: `shekyl-mempool`'s template offers the pool's bodies to
+`shekyl-block-template`'s `Fill`, and the sim calls the same `Fill` over the
+same pool policy (ESR-17). The registered capacity reading is a reading
+about the shipped daemon.
 
 ---
 

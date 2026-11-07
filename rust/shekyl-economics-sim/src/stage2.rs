@@ -23,6 +23,7 @@ use std::io::Write;
 use shekyl_chain_rules::EffectiveMedian;
 use shekyl_economics::{params::SCALE, CirculatingSupply, ClosedShardCount, TxVolume};
 
+use crate::block_space::ListedBodies;
 use crate::burden::{
     bond_opp_cost_skl, burden_cost_fiat_per_year, normal_tx_archival_bytes, ordinary_tx_fee,
     HonestFold, KryderRate, BASE_STORAGE_FIAT_PER_BYTE_YEAR, OPP_COST_RATE_BAND,
@@ -237,9 +238,21 @@ pub struct A1YearAgg {
     pub carried_txs: u128,
     /// Transactions the scenario's schedule offered over the year.
     pub demand_txs: u128,
-    /// Transactions dropped over the year after waiting out the pool's
-    /// livetime.
+    /// Transactions whose reference left CEN-I11's window unserved over the
+    /// year (ESR-17).
     pub expired_txs: u128,
+    /// Transactions CEN-M10 evicted over the year: for an arrival paying
+    /// more per weight, or to bring the pool within its limit.
+    pub evicted_txs: u128,
+    /// Arrivals the pool refused over the year: it was full of entries
+    /// paying at least as much per weight.
+    pub refused_txs: u128,
+    /// Transactions waiting after the year's last block.
+    pub waiting_at_year_end: u64,
+    /// Bodies listed over the year by age at inclusion, in blocks (index =
+    /// age).
+    #[serde(skip)]
+    pub inclusion_ages: Vec<u64>,
     /// The long-term effective median (CEN-G6) at year end, bytes — the
     /// `M` the next block's fee divides by.
     pub long_term_median: u64,
@@ -249,11 +262,20 @@ pub struct A1YearAgg {
     pub last_block: LastBlock,
 }
 
+impl A1YearAgg {
+    /// Transactions that left the pool unserved over the year: expired,
+    /// evicted or refused.
+    #[must_use]
+    pub fn dropped_txs(&self) -> u128 {
+        self.expired_txs + self.evicted_txs + self.refused_txs
+    }
+}
+
 /// One block's state as a fold built it, for pricing what an attacker could
 /// add to it (`miner_stuffer.rs`). The operands are what the cursor priced
 /// the block at; `bodies_weight` and `fees` are the fill's outcome, so the
 /// attacker rebuilds that fill instead of offering the transactions again.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct LastBlock {
     /// The consensus height the block was priced at, and the net supply
     /// its burn read: with the volume, the operands production's
@@ -273,6 +295,9 @@ pub struct LastBlock {
     pub honest_tx: OrdinaryTx,
     pub bodies_weight: u64,
     pub fees: u64,
+    /// The bodies the fill listed, cohort by cohort, each at the fee and
+    /// weight it was built with (ESR-17): what a stuffer displaces.
+    pub listed: Vec<ListedBodies>,
 }
 
 /// The admission rate the honest chain serves when it has closed a given
@@ -392,6 +417,8 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
     let mut year_carried: u128 = 0;
     let mut year_demand: u128 = 0;
     let mut year_expired: u128 = 0;
+    let mut year_evicted: u128 = 0;
+    let mut year_refused: u128 = 0;
     let mut year_n_at_cap: Option<u64> = None;
     let mut aggs = Vec::with_capacity(config.sim_years as usize);
     let mut chain = ChainCursor::default();
@@ -406,7 +433,6 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         let demand = (config.volume.get_volume)(block, params.blocks_per_year());
         let priced = chain.price(
             ChainStep {
-                fold_height: block,
                 chain_height: abs_height,
                 demand,
                 leaves: leaves_priced,
@@ -430,6 +456,8 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             honest_tx: priced.tx,
             bodies_weight: priced.filled.bodies_weight,
             fees: priced.filled.fees,
+            // Read only at year end, below.
+            listed: Vec::new(),
         };
         let total_fees = priced.filled.fees;
         fold.add_block(priced.filled.included);
@@ -448,6 +476,9 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         year_carried += u128::from(priced.filled.included);
         year_demand += u128::from(demand);
         year_expired += u128::from(priced.filled.expired);
+        year_evicted += u128::from(priced.filled.evicted);
+        year_refused += u128::from(priced.filled.refused);
+        let waiting = priced.filled.waiting;
         already_generated += u128::from(paid_reward);
         // The ledger advances by what production destroys at this block's
         // closed-shard count. At the shipped parameters that is the flat
@@ -456,6 +487,10 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
 
         if (block + 1) % params.blocks_per_year() == 0 {
             let year = (block + 1) / params.blocks_per_year();
+            let last_block = LastBlock {
+                listed: chain.listed().to_vec(),
+                ..last_block
+            };
             aggs.push(A1YearAgg {
                 year,
                 start_height: config.genesis_height_offset + (year - 1) * params.blocks_per_year(),
@@ -471,12 +506,18 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 carried_txs: year_carried,
                 demand_txs: year_demand,
                 expired_txs: year_expired,
+                evicted_txs: year_evicted,
+                refused_txs: year_refused,
+                waiting_at_year_end: waiting,
+                inclusion_ages: chain.take_ages(),
                 long_term_median: chain.medians(economic).long_term_effective_median.to_raw(),
                 last_block,
             });
             year_carried = 0;
             year_demand = 0;
             year_expired = 0;
+            year_evicted = 0;
+            year_refused = 0;
             year_emission_atomic = 0;
             year_burn_atomic = 0;
             year_fees_atomic = 0;
