@@ -12,8 +12,10 @@
 use std::io::Error;
 
 /// Process file-descriptor ceiling. Linux and the BSDs use this number.
+#[cfg(unix)]
 const EMFILE: i32 = 24;
 /// System-wide file-descriptor ceiling. Linux and the BSDs use this number.
+#[cfg(unix)]
 const ENFILE: i32 = 23;
 /// Windows `ERROR_TOO_MANY_OPEN_FILES`.
 #[cfg(windows)]

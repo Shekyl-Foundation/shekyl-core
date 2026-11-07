@@ -325,6 +325,10 @@ fn fsync_parent_dir(parent: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix arm's signature: callers handle both platforms the same way"
+)]
 fn fsync_parent_dir(_parent: &Path) -> io::Result<()> {
     // Windows NTFS guarantees rename durability after the file's
     // sync_all; there is no directory-fsync equivalent, so the write is
