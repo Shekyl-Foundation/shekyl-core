@@ -71,5 +71,12 @@ trybuild = "1"
 redb = { workspace = true }
 shekyl-store-codec = { path = "../shekyl-store-codec" }
 
+# The trybuild programs name the pool's own types (`Pool`, `PoolView`,
+# `RelayView`), which exist only with `pool`. Without the feature the crate
+# is `policy`, and its tests are the unit tests and `no_verifier`.
+[[test]]
+name = "trybuild"
+required-features = ["pool"]
+
 [lints]
 workspace = true
