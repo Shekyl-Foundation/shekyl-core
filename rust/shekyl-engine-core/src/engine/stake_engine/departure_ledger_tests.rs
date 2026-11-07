@@ -25,12 +25,9 @@ use crate::engine::test_support::test_block_hash_at;
 /// `min` relation is exercised by every test here, not only the one that
 /// names it.
 fn view_at(tip: u64) -> AnchoredView {
-    let synced = SyncedChainFacts::new(
-        ChainCount::from_raw(tip + 1),
-        true,
-        BlockHash::from_bytes(test_block_hash_at(tip)),
-    )
-    .expect("synced");
+    let synced =
+        SyncedChainFacts::new(ChainCount::from_raw(tip + 1), true, test_block_hash_at(tip))
+            .expect("synced");
     CoherentChainView::reconcile(
         &synced.bracket(synced.top_hash()).expect("bracketed"),
         ChainCount::from_raw(tip + 1),

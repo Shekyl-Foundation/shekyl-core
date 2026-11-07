@@ -7,6 +7,7 @@
 use libfuzzer_sys::fuzz_target;
 use shekyl_fcmp::leaf::PqcKeyScalar;
 use shekyl_fcmp::proof::{prove, verify, KeyImage, ProveInput};
+use shekyl_types::{CurveTreeRoot, TxSignableHash};
 
 fuzz_target!(|data: &[u8]| {
     // Feed block headers with fuzz-supplied tree roots and signable hashes to
@@ -22,6 +23,9 @@ fuzz_target!(|data: &[u8]| {
     prove_root.copy_from_slice(&data[..32]);
     verify_root.copy_from_slice(&data[32..64]);
     signable_tx_hash.copy_from_slice(&data[64..96]);
+    let prove_root = CurveTreeRoot::from_bytes(prove_root);
+    let verify_root = CurveTreeRoot::from_bytes(verify_root);
+    let signable_tx_hash = TxSignableHash::from_bytes(signable_tx_hash);
 
     let tree_depth = if data.len() > 96 { data[96].max(1) } else { 1 };
 

@@ -63,7 +63,7 @@ use shekyl_tx_builder::{
     tx_prefix_hash_from_parts_with_extra, tx_signable_for, AuthSlots, InputTerm, OutputInfo,
     SpendInput, SpendLayout, TreeContext,
 };
-use shekyl_types::{HoldingsDescriptor, PCanonicalId, TxSignableHash};
+use shekyl_types::{HoldingsDescriptor, PCanonicalId, SigningPayloadHash, TxSignableHash};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::tx_extra::{serialize, TxExtraField};
 use shekyl_wire::Input;
@@ -425,7 +425,7 @@ fn assemble(
     .expect("the fee side opens");
     drop(spend_inputs);
     let emission_sig = {
-        let payload = open
+        let payload: &SigningPayloadHash = open
             .sole_extra_payload()
             .expect("the emission slot has a payload");
         HybridEd25519MlDsa

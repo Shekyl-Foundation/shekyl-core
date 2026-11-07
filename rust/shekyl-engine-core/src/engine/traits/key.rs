@@ -77,7 +77,7 @@ use shekyl_units::AtomicUnits;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::engine::error::KeyEngineError;
-use shekyl_types::BlockHash;
+use shekyl_types::{BlockHash, TxHash};
 
 // --- Constants -------------------------------------------------------------
 
@@ -209,11 +209,8 @@ pub(crate) struct OutputDetectionInput {
     /// The containing transaction's hash, consumed by
     /// [`shekyl_crypto_pq::handle::derive_output_handle`] alongside the
     /// view secret and `output_index` to produce the deterministic
-    /// 16-byte handle. Raw `[u8; 32]` (rather than a typed `TxHash`
-    /// newtype) for consistency with the workspace-wide raw-bytes
-    /// pattern for transaction hashes; introducing a
-    /// workspace-wide `TxHash` newtype is tracked separately.
-    pub tx_hash: [u8; 32],
+    /// 16-byte handle.
+    pub tx_hash: TxHash,
 }
 
 /// Result of a [`KeyEngine::try_claim_output`] call.
@@ -345,7 +342,7 @@ pub(crate) struct TxInputSigningContext {
     /// workflow-internal handle table.
     pub handle: OutputHandle,
     /// Containing transaction hash (co-located with handle per §3.9 PF2).
-    pub tx_hash: [u8; 32],
+    pub tx_hash: TxHash,
     /// Output index within the containing transaction.
     pub internal_output_index: u64,
     /// Decrypted spend amount (atomic units).
@@ -905,7 +902,7 @@ mod tests {
     }
 
     fn sentinel_handle() -> shekyl_crypto_pq::handle::OutputHandle {
-        derive_output_handle(&[0u8; 32], &[0u8; 32], 0)
+        derive_output_handle(&[0u8; 32], &TxHash::from_bytes([0u8; 32]), 0)
     }
 
     fn assert_no_decimal_leak_of_byte(rendered: &str, byte: u8) {
@@ -948,7 +945,7 @@ mod tests {
     fn tx_input_signing_context_debug_redacts_on_chain_material() {
         let ctx = TxInputSigningContext {
             handle: sentinel_handle(),
-            tx_hash: [0x77; 32],
+            tx_hash: TxHash::from_bytes([0x77; 32]),
             internal_output_index: 0,
             amount: AtomicUnits::from_raw(1),
             key_image: KeyImage::from_canonical_bytes([0x88; 32]),
@@ -988,7 +985,7 @@ mod tests {
             network: Network::Mainnet,
             inputs: vec![TxInputSigningContext {
                 handle: sentinel_handle(),
-                tx_hash: [0x77; 32],
+                tx_hash: TxHash::from_bytes([0x77; 32]),
                 internal_output_index: 0,
                 amount: AtomicUnits::from_raw(1),
                 key_image: KeyImage::from_canonical_bytes([0x88; 32]),

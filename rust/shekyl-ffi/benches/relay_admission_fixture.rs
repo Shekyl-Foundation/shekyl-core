@@ -309,8 +309,14 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
         })
         .collect();
 
-    let result = prove_with_rng(&mut *rng, &inputs, &tree_root, tree_depth, signable_tx_hash)
-        .expect("fixture proof must build");
+    let result = prove_with_rng(
+        &mut *rng,
+        &inputs,
+        &shekyl_types::CurveTreeRoot::from_bytes(tree_root),
+        tree_depth,
+        shekyl_types::TxSignableHash::from_bytes(signable_tx_hash),
+    )
+    .expect("fixture proof must build");
 
     let mut key_images_flat = Vec::with_capacity(32 * n_in);
     for i in 0..n_in {

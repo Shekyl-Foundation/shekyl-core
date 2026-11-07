@@ -17,6 +17,12 @@ license.workspace = true
 # cannot accidentally pass arbitrary `[u8; 32]` payloads (commitments,
 # pseudo-outs, hashes) where a key image is required.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# The proof takes the tree root and the message it proves over by type
+# (`CurveTreeRoot`, `TxSignableHash`; `DOMAIN_BINDING_RATCHET.tsv`).
+# `CurveTreeRoot::EMPTY` is pinned as bytes there so the store can name the
+# empty tree without this crate; `tests/empty_root_kat.rs` is what stops that
+# pin drifting from `SELENE_HASH_INIT` (S-CHAIN-W §3.4).
+shekyl-types = { path = "../shekyl-types" }
 # First-party FCMP++ proof + generator crates (relocated out of shekyl-oxide in the
 # un-vendor; no longer tracked upstream).
 shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs", default-features = false, features = ["std", "compile-time-generators"] }
@@ -51,10 +57,6 @@ serde.workspace = true
 
 [dev-dependencies]
 rand = "0.8"
-# `CurveTreeRoot::EMPTY` is pinned as bytes in `shekyl-types` so the store
-# can name the empty tree without this crate; `tests/empty_root_kat.rs` is
-# what stops that pin drifting from `SELENE_HASH_INIT` (S-CHAIN-W §3.4).
-shekyl-types = { path = "../shekyl-types" }
 # `PqcKeyScalar`'s manual `Deserialize` is a refuse-don't-reduce boundary
 # check; its refusal test exercises it through a real serde format.
 serde_json = "1"

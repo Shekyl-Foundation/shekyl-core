@@ -41,7 +41,10 @@ mod epoch_map;
 mod hidden_slot;
 mod origin;
 
-pub use embargo::{origin_retry_ms, origin_retry_secs, EmbargoWork, NEVER_SENT_RETRY_MS};
+pub use embargo::{
+    origin_publication_budget_ms, origin_retry_ms, origin_retry_secs, EmbargoWork,
+    OriginPublication, NEVER_SENT_RETRY_MS,
+};
 pub use origin::OriginVerdict;
 
 use epoch_map::EpochMap;
@@ -275,11 +278,14 @@ pub enum RelayPlan {
     /// a cover-bearing link the own-edge is [`RelayPlan::Stem`], and that
     /// slot is the channel.
     OwnEdge(ConnectionId),
-    /// The hidden-address pool is empty.
+    /// No address-hiding session is slotted, or the origin's pin is
+    /// exhausted for the epoch.
     ///
     /// Send nothing and record nothing. Not a stem-map refresh, and not a
     /// fluff: either would publish the origin on a link whose peer learns
-    /// this node's address.
+    /// this node's address. [`OriginVerdict::Absent`] is the empty class.
+    /// [`OriginVerdict::Connected`] is the exhausted pin. The dispatch
+    /// warning names which one it read.
     NoOwnEdge,
 }
 

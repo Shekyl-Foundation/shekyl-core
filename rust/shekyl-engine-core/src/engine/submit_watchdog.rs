@@ -40,14 +40,22 @@
 //!    from [`WatchdogStep`]: the kernel can *wait*, *probe*, or *alarm*;
 //!    it cannot authorize a rebuild.
 //!
-//! The rungs are presence-conditional (round-6 minor b), with one
-//! resubmit acting as the probe: **absent** (evicted / never landed) →
-//! the resubmit *is* the remedy and the wait restarts; **present but
-//! unconfirmed past horizon** → straight to the alarm rung — repeating
-//! the resubmit is pointless by construction (F31: an in-pool resubmit
-//! early-returns `AlreadyInPool` with no relay pulse), and the eclipse
-//! case (§7.5) lands exactly here. Terminal verdicts on the probe
-//! resolve the wait per §2.5/§2.6.
+//! The rungs are presence-conditional (round-6 minor b). One function,
+//! [`escape_ladder_step`], is the alarm policy. The driver calls it
+//! before a probe and again after the sight is written. A probe that
+//! the second call asks for waits until the next chain advance.
+//!
+//! **Unread, held, and published-under-lookback** are asked on the
+//! tick, including while the daemon is still syncing. **Held-overdue**
+//! and **untracked** alarm on the tick they are seen: the daemon
+//! already judged overdue, and a missing origin row is not a hold.
+//! **Published** measures the fee ladder's lookback from the height
+//! publication was first observed. The first observation does not
+//! alarm. Sync gates only that published-unmined alarm. **In chain**
+//! waits until the proof-life ceiling, then asks again; under the
+//! ceiling it does not read health. Two clocks, never converted:
+//! block counts are what consensus defines, and overdue is not one of
+//! them. Terminal verdicts on the probe resolve the wait per §2.5/§2.6.
 
 // The kernel's production consumer is the §5.3 submit lifecycle driver
 // ([`submit_lifecycle`](super::submit_lifecycle)), reached from the public
@@ -59,80 +67,83 @@
 
 use std::collections::HashSet;
 
+use shekyl_curve_tree::DISPATCHED_PROOF_LIFE;
+use shekyl_rpc_types::PoolRelay;
 use shekyl_types::TxHash;
 
 use super::traits::DaemonHealth;
 
 // ---------------------------------------------------------------------------
-// Horizon configuration
+// Block counts. The daemon's clock is not one of them.
 // ---------------------------------------------------------------------------
 
-/// The daemon stops re-relaying a pool tx at half the pool lifetime —
-/// 1.5 days of the 3-day `CRYPTONOTE_MEMPOOL_TX_LIVETIME`
-/// (§5.2 item 1, source-verified at `tx_pool.cpp:851-852`).
-const DAEMON_RE_RELAY_CUTOFF_SECONDS: u64 = 3 * 86_400 / 2;
+/// Blocks spared at the end of [`DISPATCHED_PROOF_LIFE`] so the probe is
+/// in flight while the same bytes are still submittable.
+///
+/// **Assumption — never measured.** The proof-life derivation leaves one
+/// block out of the theoretical span for blocks that can land between the
+/// wallet's staleness check and the daemon's verdict. This margin spends
+/// that block. It is not a measured refresh lag, and it is not a duration.
+pub(crate) const PROBE_REFRESH_LAG_BLOCKS: u64 = 1;
 
-/// Watchdog tunables. Constructed via [`Self::from_block_target`] so the
-/// horizon is derived from the consensus block target rather than
-/// hard-coding a block count that silently rots if the target changes.
+/// Blocks after an in-chain observation before the kernel asks again.
+///
+/// [`DISPATCHED_PROOF_LIFE`] minus [`PROBE_REFRESH_LAG_BLOCKS`]. This is
+/// the last moment the same bytes are still submittable (CEN-M10), so
+/// an in-chain sight is re-probed then. It is not the first moment the
+/// wallet may ask: an unread, held, or recently published transaction
+/// is asked on the next chain advance.
+pub(crate) const PROBE_CEILING_BLOCKS: u64 =
+    DISPATCHED_PROOF_LIFE.to_raw() - PROBE_REFRESH_LAG_BLOCKS;
+
+/// Watchdog tunables. Production is [`WatchdogConfig::production`]; tests
+/// build their own to exercise the ladder at other ceilings.
+///
+/// Block counts only. Whether an origin is overdue is the daemon's
+/// judgment, returned as relay state. This kernel never reads a duration
+/// and never compares a block count with one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WatchdogConfig {
-    /// Escape horizon, in blocks past the accepting verdict's height,
-    /// after which a still-unconfirmed held tx enters the escape ladder.
+    /// Blocks after an in-chain observation before the kernel asks
+    /// again. Production is [`PROBE_CEILING_BLOCKS`].
+    pub probe_ceiling_blocks: u64,
+    /// Blocks since publication was first observed before the
+    /// "published, not mined" alarm.
     ///
-    /// **Default rationale (F35 + rule 75):** two binding constraints.
-    /// *Upper bound:* the horizon must fire **before** the daemon's
-    /// 1.5-day re-relay cutoff — between 1.5 days and the 3-day eviction
-    /// a pool tx is held-but-no-longer-re-relayed, so a later watchdog
-    /// inspects a tx the daemon has already stopped offering. *Lower
-    /// bound:* the horizon must not be so short that ordinary
-    /// confirmation latency or a short partition trips the ladder — the
-    /// timeout is itself an attack surface (§5.3), so spurious firings
-    /// are alarm fatigue an adversary can hide inside. The default is
-    /// **half the re-relay cutoff** (~18 h at a 120 s target): 2×
-    /// safety margin against the upper bound (covering wallet refresh
-    /// lag and wallet–daemon height skew), while sized for the
-    /// anon-network eclipse case (§7.5) where this watchdog is the
-    /// *only* backstop — the origin's embargo timer does not arm over
-    /// noise zones, so waiting longer than necessary extends the
-    /// black-hole exposure window with no compensating benefit.
-    ///
-    /// Safe-adjustment bounds: strictly below
-    /// `DAEMON_RE_RELAY_CUTOFF_SECONDS / block_target` (upper), and
-    /// comfortably above the wallet's `max_reorg_depth` plus its refresh
-    /// cadence in blocks (lower).
-    pub escape_horizon_blocks: u64,
+    /// **Assumption — never measured.** Basis: the fee ladder's lookback
+    /// on the shipped relay policy ([`shekyl_economics::relay_policy()`]).
+    /// A quote at `F(h)` is admitted while the tip lies in `[h, h+G]`.
+    /// Not a conversion of that gap into seconds.
+    pub published_unmined_blocks: u64,
 }
 
 impl WatchdogConfig {
-    /// Derive the default configuration from the consensus block target
-    /// (`daa_target_seconds`, generated from `config/consensus_constants.json`).
+    /// The production configuration.
     ///
-    /// A zero target is a broken consensus constant, not a runtime
-    /// condition to degrade around: a silent `max(1)` fallback would
-    /// compute a horizon that blows past the F35 re-relay upper bound.
-    /// Loud failure, release builds included — and the same discipline
-    /// applies to the *derived* horizon, not just the input: a
-    /// `block_target_seconds` large enough that the integer division
-    /// floors `escape_horizon_blocks` to zero is the identical failure
-    /// mode (a broken consensus constant) wearing a different input
-    /// value. A zero horizon means every held tx is "past horizon" on
-    /// the very first check, jumping straight to the escape ladder —
-    /// silently disabling the wait rung entirely.
-    pub(crate) fn from_block_target(block_target_seconds: u64) -> Self {
-        assert!(block_target_seconds > 0, "block target must be positive");
-        let escape_horizon_blocks = DAEMON_RE_RELAY_CUTOFF_SECONDS / 2 / block_target_seconds;
-        assert!(
-            escape_horizon_blocks > 0,
-            "block target {block_target_seconds}s yields a zero-block escape horizon \
-             (re-relay cutoff / 2 = {}s) — broken consensus constant",
-            DAEMON_RE_RELAY_CUTOFF_SECONDS / 2
-        );
+    /// The ceiling is the dispatched proof's life minus the refresh-lag
+    /// margin. The published-unmined count is the shipped relay policy's
+    /// lookback. A lookback that meets the ceiling collapses the two
+    /// block questions into one; [`Self::production`] rejects that in
+    /// debug, and the kernel test holds it for the shipped policy.
+    #[must_use]
+    pub(crate) fn production() -> Self {
+        let published_unmined_blocks = shekyl_economics::relay_policy().lookback;
+        debug_assert!(published_unmined_blocks > 0);
+        debug_assert!(published_unmined_blocks < PROBE_CEILING_BLOCKS);
         Self {
-            escape_horizon_blocks,
+            probe_ceiling_blocks: PROBE_CEILING_BLOCKS,
+            published_unmined_blocks,
         }
     }
 }
+
+// A zero ceiling probes on the first check. A ceiling at or past the
+// dispatched proof's life probes bytes the daemon may already refuse.
+// Either is a broken constant, caught here. The lookback is not a
+// constant of this crate, so its place under the ceiling is checked
+// where `WatchdogConfig::production` reads it.
+const _: () = assert!(PROBE_CEILING_BLOCKS > 0);
+const _: () = assert!(PROBE_CEILING_BLOCKS < DISPATCHED_PROOF_LIFE.to_raw());
 
 // ---------------------------------------------------------------------------
 // Held-tx tracking (chain-confirmation-keyed)
@@ -146,16 +157,36 @@ impl WatchdogConfig {
 pub(crate) struct HeldSubmit {
     /// Canonical txid of the awaited transaction.
     pub tx_hash: TxHash,
-    /// The height baseline the escape horizon counts from: the wallet
-    /// synced height when the accepting verdict was observed, advanced
-    /// to the probe height when an absent-probe resubmission restarts
-    /// the wait.
+    /// The height the in-chain wait runs from. A fresh projection is
+    /// the accept height. A resubmit and an in-chain observation
+    /// advance it to the probe height.
     pub baseline_height: u64,
-    /// Whether the resubmit-same-bytes probe has already been performed
-    /// for the current wait epoch. A present-but-unconfirmed probe
-    /// outcome sets this; repeating the probe is pointless by
-    /// construction (F31) and the next escalation is the alarm rung.
-    pub probed_this_epoch: bool,
+    /// What the last probe in this wait reported. Fresh projections
+    /// are [`RelaySight::Unread`].
+    pub relay: RelaySight,
+}
+
+/// What the last owner-tier probe reported about one held transaction.
+///
+/// [`Self::Published::at`] is the synced height of the first probe
+/// that reported publication. A later published answer keeps it, so
+/// the lookback does not start at the accept baseline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum RelaySight {
+    /// No probe this wait has reported a relay state.
+    #[default]
+    Unread,
+    /// The daemon holds it, inside its publication budget.
+    Held,
+    /// The daemon holds it past its publication budget.
+    HeldOverdue,
+    /// The daemon has published it. `at` is the first observation.
+    Published { at: u64 },
+    /// Pool-resident, and the zone holds no origin row.
+    Untracked,
+    /// Last observed in the chain. Refresh remains the settlement
+    /// authority. The next probe waits out [`PROBE_CEILING_BLOCKS`].
+    InChain,
 }
 
 /// Project the held-submit set from the send journal — one entry per
@@ -173,8 +204,8 @@ pub(crate) struct HeldSubmit {
 /// watchdog — the journal rows survive the wipe, so tracking continues
 /// across it.
 ///
-/// Fresh projections carry `probed_this_epoch: false`; the driving
-/// actor overlays its in-memory probe state across refresh cycles.
+/// Fresh projections carry [`RelaySight::Unread`]; the driving actor
+/// overlays its in-memory relay state across refresh cycles.
 /// `BTreeMap` row order makes the projection deterministic.
 pub(crate) fn held_submits(wallet: &shekyl_engine_state::WalletLedger) -> Vec<HeldSubmit> {
     wallet
@@ -186,7 +217,7 @@ pub(crate) fn held_submits(wallet: &shekyl_engine_state::WalletLedger) -> Vec<He
             row.lock_baseline.map(|baseline_height| HeldSubmit {
                 tx_hash: TxHash::from_bytes(*txid),
                 baseline_height,
-                probed_this_epoch: false,
+                relay: RelaySight::Unread,
             })
         })
         .collect()
@@ -199,27 +230,37 @@ pub(crate) fn held_submits(wallet: &shekyl_engine_state::WalletLedger) -> Vec<He
 /// Why the kernel chose to keep waiting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WaitReason {
-    /// The escape horizon has not elapsed.
-    HorizonNotReached,
-    /// Past horizon, but the daemon is behind the network: "unconfirmed
-    /// at this daemon" is uninformative until it syncs (the same
-    /// sync-gating shape as the `ReferenceNotFound` disposition, §2.5).
+    /// Last seen in the chain, and the proof-life ceiling has not
+    /// elapsed. Asking again teaches nothing until those bytes might
+    /// have left the pool.
+    InChain,
+    /// Published long enough to alarm, but the daemon is behind the
+    /// network. "Unmined at this daemon" is uninformative until it
+    /// syncs (the same sync-gating shape as the `ReferenceNotFound`
+    /// disposition, §2.5).
     DaemonSyncing,
 }
 
 /// Why the kernel escalated to the operator-alarm rung.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AlarmReason {
-    /// The probe found the tx present-but-unconfirmed past horizon:
-    /// repeating the resubmit is pointless (F31), and the censoring /
-    /// eclipse case (§7.5) lands exactly here. A human decides.
-    PresentButUnconfirmedPastHorizon,
-    /// Past horizon and the daemon reports no peers: relay is
-    /// impossible and no wallet action can fix it — the alarm rung
-    /// carries the decision to the operator (§2.6 invariant 2).
+    /// The daemon holds the transaction past its own publication budget.
+    /// No block count enters this decision.
+    HeldOverdue,
+    /// Pool-resident, and the zone holds no origin row. A watchdog
+    /// probe is at least one block after admit, so this is not the
+    /// admit race.
+    OriginUntracked,
+    /// Published, and unmined for [`WatchdogConfig::published_unmined_blocks`]
+    /// since publication was first observed. The eclipse case (§7.5)
+    /// after a fluff lands here.
+    PublishedUnmined,
+    /// The daemon reports no peers: relay is impossible and no wallet
+    /// action can fix it — the alarm rung carries the decision to the
+    /// operator (§2.6 invariant 2).
     DaemonPeerless,
-    /// Past horizon and the daemon was started offline (`--offline`): it
-    /// relays nothing by configuration, which only the operator can change.
+    /// The daemon was started offline (`--offline`): it relays nothing
+    /// by configuration, which only the operator can change.
     DaemonOffline,
 }
 
@@ -240,46 +281,80 @@ pub(crate) enum WatchdogStep {
 /// decision out — the §10 item 8 ladder-ordering property (resubmit
 /// precedes alarm; rebuild never fires) is checkable over this function
 /// by construction.
+///
+/// The driver calls this before a probe and again on the sight the
+/// probe recorded. A [`WatchdogStep::ProbeResubmitSameBytes`] from the
+/// second call is not a second round-trip in the same tick.
 pub(crate) fn escape_ladder_step(
     held: &HeldSubmit,
     synced_height: u64,
     health: DaemonHealth,
     config: WatchdogConfig,
 ) -> WatchdogStep {
-    let past_horizon =
-        synced_height.saturating_sub(held.baseline_height) >= config.escape_horizon_blocks;
-    if !past_horizon {
-        return WatchdogStep::Wait(WaitReason::HorizonNotReached);
+    match held.relay {
+        // A confirmed observation does not need the relay. Health is
+        // read only when the ceiling says the bytes might be submittable
+        // again.
+        RelaySight::InChain
+            if blocks_since(synced_height, held.baseline_height) < config.probe_ceiling_blocks =>
+        {
+            WatchdogStep::Wait(WaitReason::InChain)
+        }
+        RelaySight::HeldOverdue => alarm_unless_blocked(health, AlarmReason::HeldOverdue),
+        RelaySight::Untracked => alarm_unless_blocked(health, AlarmReason::OriginUntracked),
+        RelaySight::Published { at }
+            if blocks_since(synced_height, at) >= config.published_unmined_blocks =>
+        {
+            published_unmined(health)
+        }
+        RelaySight::Unread
+        | RelaySight::Held
+        | RelaySight::Published { .. }
+        | RelaySight::InChain => probe_unless_blocked(health),
     }
-    // Health gate (§5.2 item 3): separate "tx stuck" from daemon-side
-    // conditions before spending a rung. Peerlessness is checked before
-    // sync: a daemon with no peers can neither sync nor relay, so the
-    // actionable operator-only condition (DaemonPeerless) must not be
-    // masked by the transient DaemonSyncing wait when the daemon is both
-    // behind and peerless.
-    //
-    // Both facts are the fields of [`DaemonHealth`]. The ladder does not
-    // keep a second reading of them.
-    // An offline daemon relays nothing by configuration: its own alarm,
-    // not "peerless", which is a running node that has found nobody.
+}
+
+fn blocks_since(synced_height: u64, observed_at: u64) -> u64 {
+    synced_height.saturating_sub(observed_at)
+}
+
+/// Offline or peerless: the daemon cannot relay. Peerlessness is not
+/// masked by "syncing" — a daemon with no peers cannot sync either.
+fn relay_impossible(health: DaemonHealth) -> Option<WatchdogStep> {
     match health.p2p {
         shekyl_rpc_types::HealthP2p::Offline => {
-            return WatchdogStep::OperatorAlarm(AlarmReason::DaemonOffline);
+            Some(WatchdogStep::OperatorAlarm(AlarmReason::DaemonOffline))
         }
         shekyl_rpc_types::HealthP2p::Running { has_peers: false } => {
-            return WatchdogStep::OperatorAlarm(AlarmReason::DaemonPeerless);
+            Some(WatchdogStep::OperatorAlarm(AlarmReason::DaemonPeerless))
         }
-        shekyl_rpc_types::HealthP2p::Running { has_peers: true } => {}
+        shekyl_rpc_types::HealthP2p::Running { has_peers: true } => None,
+    }
+}
+
+/// Offline or peerless outranks the alarm. Sync does not: an origin
+/// past its budget, or a pool row with no origin, is late whether or
+/// not this node has the chain tip.
+fn alarm_unless_blocked(health: DaemonHealth, reason: AlarmReason) -> WatchdogStep {
+    relay_impossible(health).unwrap_or(WatchdogStep::OperatorAlarm(reason))
+}
+
+/// A status read is a local relay fact. It is valid while the daemon
+/// is still syncing. Offline and peerless outrank it.
+fn probe_unless_blocked(health: DaemonHealth) -> WatchdogStep {
+    relay_impossible(health).unwrap_or(WatchdogStep::ProbeResubmitSameBytes)
+}
+
+/// The lookback has elapsed since publication was first observed.
+/// Relay-blocked outranks the alarm. Sync gates only this alarm.
+fn published_unmined(health: DaemonHealth) -> WatchdogStep {
+    if let Some(blocked) = relay_impossible(health) {
+        return blocked;
     }
     if !health.synchronized {
         return WatchdogStep::Wait(WaitReason::DaemonSyncing);
     }
-    if held.probed_this_epoch {
-        // One resubmit acts as the probe; a present tx does not become
-        // more relayed by asking again (F31).
-        return WatchdogStep::OperatorAlarm(AlarmReason::PresentButUnconfirmedPastHorizon);
-    }
-    WatchdogStep::ProbeResubmitSameBytes
+    WatchdogStep::OperatorAlarm(AlarmReason::PublishedUnmined)
 }
 
 // ---------------------------------------------------------------------------
@@ -287,16 +362,17 @@ pub(crate) fn escape_ladder_step(
 // ---------------------------------------------------------------------------
 
 /// The probe's verdict, projected onto the presence facts the ladder
-/// branches on (round-6 minor b).
+/// branches on (round-6 minor b). Recording a sight does not alarm.
+/// [`escape_ladder_step`] is the only alarm policy, and it reads the
+/// sight this function writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProbeOutcome {
     /// `Accepted`: the tx was absent (evicted / never landed) and the
     /// resubmission *was* the remedy — re-offered through full admission
     /// and fresh relay.
     ReofferedAfterAbsence,
-    /// `AlreadyInPool`: present-but-unconfirmed. No relay pulse was or
-    /// will be triggered by asking (F31).
-    PresentInPool,
+    /// `AlreadyInPool`. The relay state is the daemon's.
+    InPool(PoolRelay),
     /// `AlreadyInChain`: confirmation observed by verdict; refresh
     /// remains the settlement authority (§2.5).
     ConfirmedInChain,
@@ -305,77 +381,64 @@ pub(crate) enum ProbeOutcome {
     RejectedTerminal,
 }
 
-/// What the driving actor does with a probe outcome.
+/// What the driving actor does with a recorded probe. The alarm, if
+/// the new sight calls for one, is [`escape_ladder_step`] on the
+/// continued entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProbeDisposition {
-    /// Restart the wait epoch from the probe height (the resubmission
-    /// re-offered the bytes; the horizon counts anew).
-    RestartWait,
-    /// Keep holding: confirmation is expected via refresh, which
-    /// releases the F14 locks through `mark_spent` (confirmed-present,
-    /// §2.6). The alarm rung follows if the horizon elapses again
-    /// (reorgs happen — the verdict authorizes no lock release).
-    KeepHolding,
+    /// Keep the recorded sight. The caller judges it.
+    Continue(HeldSubmit),
     /// Confirmed-absent resolution (§2.6 release path 2): the definite
     /// verdict proves the tx is gone; release the F14 locks via
     /// [`release_awaiting_confirmation`]. **Release is not rebuild
     /// authorization** (§2.6 invariant 3).
     ReleaseConfirmedAbsent,
-    /// Escalate to the alarm rung (present-but-unconfirmed).
-    Alarm(AlarmReason),
 }
 
-/// Apply a probe outcome to a held entry, returning the disposition and
-/// the updated tracking entry (`None` when tracking ends).
+/// Record a probe outcome onto a held entry. This does not alarm.
 pub(crate) fn apply_probe_outcome(
     held: &HeldSubmit,
     outcome: ProbeOutcome,
     probe_height: u64,
-) -> (ProbeDisposition, Option<HeldSubmit>) {
+) -> ProbeDisposition {
     match outcome {
-        ProbeOutcome::ReofferedAfterAbsence => (
-            ProbeDisposition::RestartWait,
-            Some(HeldSubmit {
-                tx_hash: held.tx_hash,
-                baseline_height: probe_height,
-                probed_this_epoch: false,
-            }),
-        ),
-        ProbeOutcome::PresentInPool => (
-            ProbeDisposition::Alarm(AlarmReason::PresentButUnconfirmedPastHorizon),
-            Some(HeldSubmit {
-                probed_this_epoch: true,
-                ..*held
-            }),
-        ),
-        ProbeOutcome::ConfirmedInChain => (
-            ProbeDisposition::KeepHolding,
-            // Restart the wait epoch outright — both the baseline AND the
-            // probed flag. Advancing only the baseline (leaving
-            // `probed_this_epoch: true`) still let escape_ladder_step jump
-            // *straight to* the alarm rung once a fresh horizon elapsed:
-            // `probed_this_epoch` short-circuits the probe, so the
-            // re-escalation would raise
-            // OperatorAlarm(PresentButUnconfirmedPastHorizon) on a tx last
-            // *observed confirmed* — a stale-info alarm whose reason is
-            // factually wrong, and exactly the alarm-fatigue §5.3 warns
-            // against. Clearing the flag keeps that alarm rung specific to the
-            // present-but-unconfirmed branch: KeepHolding's documented "alarm
-            // only if the horizon elapses again" still holds, but every
-            // re-escalation is routed through a *fresh probe* first — which
-            // re-reads presence and only alarms if the tx is genuinely
-            // present-but-unconfirmed (a deep reorg back to the pool), restarts
-            // on eviction, or resets the epoch again if still in-chain. The
-            // normal path needs none of this: refresh clears the F14 lock via
-            // mark_spent well within one horizon and the entry drops from the
-            // projection.
-            Some(HeldSubmit {
-                tx_hash: held.tx_hash,
-                baseline_height: probe_height,
-                probed_this_epoch: false,
-            }),
-        ),
-        ProbeOutcome::RejectedTerminal => (ProbeDisposition::ReleaseConfirmedAbsent, None),
+        ProbeOutcome::ReofferedAfterAbsence => ProbeDisposition::Continue(HeldSubmit {
+            baseline_height: probe_height,
+            relay: RelaySight::Held,
+            ..*held
+        }),
+        ProbeOutcome::InPool(relay) => ProbeDisposition::Continue(HeldSubmit {
+            relay: sight_after_pool(held.relay, relay, probe_height),
+            ..*held
+        }),
+        ProbeOutcome::ConfirmedInChain => ProbeDisposition::Continue(HeldSubmit {
+            baseline_height: probe_height,
+            relay: RelaySight::InChain,
+            ..*held
+        }),
+        ProbeOutcome::RejectedTerminal => ProbeDisposition::ReleaseConfirmedAbsent,
+    }
+}
+
+/// Map the daemon's relay state onto the sight the ladder reads.
+///
+/// A published answer keeps the first observation height. Every other
+/// relay state replaces the sight.
+fn sight_after_pool(previous: RelaySight, relay: PoolRelay, probe_height: u64) -> RelaySight {
+    match relay {
+        PoolRelay::Held => RelaySight::Held,
+        PoolRelay::HeldOverdue => RelaySight::HeldOverdue,
+        PoolRelay::Untracked => RelaySight::Untracked,
+        PoolRelay::Published => RelaySight::Published {
+            at: match previous {
+                RelaySight::Published { at } => at,
+                RelaySight::Unread
+                | RelaySight::Held
+                | RelaySight::HeldOverdue
+                | RelaySight::Untracked
+                | RelaySight::InChain => probe_height,
+            },
+        },
     }
 }
 

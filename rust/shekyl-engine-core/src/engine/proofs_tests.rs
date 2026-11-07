@@ -429,7 +429,8 @@ mod check_workflows {
                                 .pointer("/params/height")
                                 .and_then(serde_json::Value::as_u64)
                                 .expect("height is a number");
-                            let mut hash = crate::engine::test_support::test_block_hash_at(height);
+                            let mut hash =
+                                crate::engine::test_support::test_block_hash_at(height).to_bytes();
                             if self.witness_replaced {
                                 hash[0] ^= 0xff;
                             }

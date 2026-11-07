@@ -525,7 +525,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     // rule judges it: the membership-only backing proof and the dual auth
     // through the retention crate's verifiers (the consensus operations
     // CEN-J22/J24 will call), the fee spend's FCMP through CEN-I15's.
-    let root = backing.tree.tree_root.as_bytes();
+    let root = &backing.tree.tree_root;
     emission_vin_verify_backing(&claim.vin, root, claim.tree_depth, &claim.tx_signable)
         .expect("the backing's membership-only proof verifies against the wallet-side root");
     emission_vin_verify_auth(
@@ -548,7 +548,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         &[PqcKeyScalar::from_pqc_public_key(&claim.fee_pubkeys[0])],
         root,
         claim.tree_depth,
-        claim.tx_signable.to_bytes(),
+        claim.tx_signable,
     )
     .expect("verify runs");
     assert!(fee_verified, "the fee spend's FCMP verifies");

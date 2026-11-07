@@ -1005,7 +1005,7 @@ fn i18_an_anchored_spends_signatures_verify_and_the_row_is_recorded() {
             auth.scheme_id,
             &auth.hybrid_public_key,
             &auth.hybrid_signature,
-            hash.as_bytes(),
+            &hash,
         )
         .expect("the fixture's slot verifies through the shared body");
     }
@@ -1235,7 +1235,7 @@ fn i18_the_identity_signature_covers_the_join_markets_receipt_key() {
                 auth.scheme_id,
                 &auth.hybrid_public_key,
                 &auth.hybrid_signature,
-                hash.as_bytes(),
+                &hash,
             )
             .is_ok()
         };

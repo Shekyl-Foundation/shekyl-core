@@ -173,7 +173,7 @@ fn membership_only_proof(
         let opening = OpenedInputTuple::open(&r, &leaf.x, &leaf.y).unwrap();
         let msa = MembershipSpendAuth::prove(
             &mut OsRng,
-            tx_hash,
+            shekyl_types::TxSignableHash::from_bytes(tx_hash),
             u32::try_from(index).unwrap(),
             &opening,
         );
@@ -221,7 +221,7 @@ fn membership_only_roundtrip() {
             &mut verifiers.c2,
             tree,
             1,
-            tx_hash,
+            shekyl_types::TxSignableHash::from_bytes(tx_hash),
             vec![leaf.pqc.K],
         )
         .unwrap();
@@ -250,7 +250,7 @@ fn membership_only_roundtrip() {
             &mut verifiers.c2,
             tree,
             1,
-            tx_hash,
+            shekyl_types::TxSignableHash::from_bytes(tx_hash),
             vec![leaf.pqc.K],
         )
         .unwrap();
@@ -273,7 +273,7 @@ fn membership_only_multi_input_roundtrip() {
             &mut verifiers.c2,
             tree,
             1,
-            tx_hash,
+            shekyl_types::TxSignableHash::from_bytes(tx_hash),
             vec![leaf_a.pqc.K, leaf_b.pqc.K],
         )
         .unwrap();
@@ -332,7 +332,7 @@ fn membership_only_bytes_rejected_by_full_path() {
                 &mut verifiers.c2,
                 tree,
                 1,
-                tx_hash,
+                shekyl_types::TxSignableHash::from_bytes(tx_hash),
                 vec![InputVerification {
                     key_image,
                     pqc_key_point: leaf.pqc.K,
@@ -354,7 +354,11 @@ fn full_proof_bytes_rejected_by_membership_only_path() {
 
     let rerandomized = RerandomizedOutput::new(&mut OsRng, leaf.output);
     let opening = OpenedInputTuple::open(&rerandomized, &leaf.x, &leaf.y).unwrap();
-    let (_, sal) = SpendAuthAndLinkability::prove(&mut OsRng, tx_hash, &opening);
+    let (_, sal) = SpendAuthAndLinkability::prove(
+        &mut OsRng,
+        shekyl_types::TxSignableHash::from_bytes(tx_hash),
+        &opening,
+    );
     let (tree, fcmp) = tree_and_fcmp(&[&leaf], core::slice::from_ref(&rerandomized));
     let full = FcmpPlusPlus::new(vec![(rerandomized.input(), sal)], fcmp);
 
@@ -373,7 +377,7 @@ fn full_proof_bytes_rejected_by_membership_only_path() {
                 &mut verifiers.c2,
                 tree,
                 1,
-                tx_hash,
+                shekyl_types::TxSignableHash::from_bytes(tx_hash),
                 vec![leaf.pqc.K],
             );
             assert!(
@@ -436,9 +440,20 @@ fn membership_only_zero_rng_synthesis() {
     // Schnorr nonces synthesize nonzero under a dead RNG too: prove and verify.
     let opening = OpenedInputTuple::open(&a, &leaf.x, &leaf.y).unwrap();
     let tx_hash = [5; 32];
-    let msa = MembershipSpendAuth::prove(&mut ZeroRng, tx_hash, 0, &opening);
+    let msa = MembershipSpendAuth::prove(
+        &mut ZeroRng,
+        shekyl_types::TxSignableHash::from_bytes(tx_hash),
+        0,
+        &opening,
+    );
     let mut verifier = multiexp::BatchVerifier::new(1);
-    msa.verify(&mut OsRng, &mut verifier, tx_hash, 0, &a.input());
+    msa.verify(
+        &mut OsRng,
+        &mut verifier,
+        shekyl_types::TxSignableHash::from_bytes(tx_hash),
+        0,
+        &a.input(),
+    );
     assert!(verifier.verify_vartime());
 }
 
@@ -472,7 +487,11 @@ fn mixed_type_batch_rejects() {
     let full_rerandomized = RerandomizedOutput::new(&mut OsRng, full_leaf.output);
     let full_opening =
         OpenedInputTuple::open(&full_rerandomized, &full_leaf.x, &full_leaf.y).unwrap();
-    let (key_image, sal) = SpendAuthAndLinkability::prove(&mut OsRng, tx_hash, &full_opening);
+    let (key_image, sal) = SpendAuthAndLinkability::prove(
+        &mut OsRng,
+        shekyl_types::TxSignableHash::from_bytes(tx_hash),
+        &full_opening,
+    );
     let (full_tree, full_fcmp) =
         tree_and_fcmp(&[&full_leaf], core::slice::from_ref(&full_rerandomized));
     let full = FcmpPlusPlus::new(vec![(full_rerandomized.input(), sal)], full_fcmp);
@@ -526,7 +545,7 @@ fn mixed_type_batch_rejects() {
             &mut verifiers.c2,
             full_tree,
             1,
-            tx_hash,
+            shekyl_types::TxSignableHash::from_bytes(tx_hash),
             vec![InputVerification {
                 key_image,
                 pqc_key_point: full_leaf.pqc.K,
@@ -541,7 +560,7 @@ fn mixed_type_batch_rejects() {
                 &mut verifiers.c2,
                 mo_tree,
                 1,
-                tx_hash,
+                shekyl_types::TxSignableHash::from_bytes(tx_hash),
                 vec![mo_leaf.pqc.K],
             )
             .unwrap();
@@ -562,7 +581,7 @@ fn mixed_type_batch_rejects() {
                 &mut verifiers.c2,
                 full_tree,
                 1,
-                tx_hash,
+                shekyl_types::TxSignableHash::from_bytes(tx_hash),
                 vec![InputVerification {
                     key_image,
                     pqc_key_point: full_leaf.pqc.K,
@@ -576,7 +595,7 @@ fn mixed_type_batch_rejects() {
             &mut verifiers.c2,
             mo_tree,
             1,
-            tx_hash,
+            shekyl_types::TxSignableHash::from_bytes(tx_hash),
             vec![mo_leaf.pqc.K],
         )
         .unwrap();
@@ -596,7 +615,7 @@ fn mixed_type_batch_rejects() {
             &mut verifiers.c2,
             full_tree,
             1,
-            tx_hash,
+            shekyl_types::TxSignableHash::from_bytes(tx_hash),
             vec![InputVerification {
                 key_image,
                 pqc_key_point: full_leaf.pqc.K,
@@ -610,7 +629,7 @@ fn mixed_type_batch_rejects() {
             &mut verifiers.c2,
             mo_tree,
             1,
-            tx_hash,
+            shekyl_types::TxSignableHash::from_bytes(tx_hash),
             vec![mo_leaf.pqc.K],
         )
         .unwrap();
@@ -633,7 +652,7 @@ fn membership_only_empty_inputs_reject() {
         &mut verifiers.c2,
         tree,
         1,
-        [7; 32],
+        shekyl_types::TxSignableHash::from_bytes([7; 32]),
         vec![],
     );
     assert!(matches!(result, Err(FcmpPlusPlusError::EmptyInputs)));
@@ -649,10 +668,21 @@ fn membership_spend_auth_index_binding() {
         membership_only_rerandomize(&mut OsRng, leaf.output, &leaf.x, b"index").unwrap();
     let opening = OpenedInputTuple::open(&rerandomized, &leaf.x, &leaf.y).unwrap();
 
-    let msa = MembershipSpendAuth::prove(&mut OsRng, tx_hash, 0, &opening);
+    let msa = MembershipSpendAuth::prove(
+        &mut OsRng,
+        shekyl_types::TxSignableHash::from_bytes(tx_hash),
+        0,
+        &opening,
+    );
 
     let mut verifier = multiexp::BatchVerifier::new(1);
-    msa.verify(&mut OsRng, &mut verifier, tx_hash, 1, &rerandomized.input());
+    msa.verify(
+        &mut OsRng,
+        &mut verifier,
+        shekyl_types::TxSignableHash::from_bytes(tx_hash),
+        1,
+        &rerandomized.input(),
+    );
     assert!(
         !verifier.verify_vartime(),
         "index binding failed: slot transplant verified"
@@ -683,7 +713,7 @@ fn membership_only_blob_swap_rejects() {
             &mut verifiers.c2,
             tree,
             1,
-            tx_hash,
+            shekyl_types::TxSignableHash::from_bytes(tx_hash),
             vec![leaf_a.pqc.K, leaf_b.pqc.K],
         )
         .unwrap();
@@ -705,7 +735,7 @@ fn membership_only_replay_rejects() {
             &mut verifiers.c2,
             tree,
             1,
-            [11; 32],
+            shekyl_types::TxSignableHash::from_bytes([11; 32]),
             vec![leaf.pqc.K],
         )
         .unwrap();
@@ -734,7 +764,7 @@ fn membership_only_wrong_root_rejects() {
         &mut verifiers.c2,
         other_tree,
         1,
-        tx_hash,
+        shekyl_types::TxSignableHash::from_bytes(tx_hash),
         vec![leaf.pqc.K],
     );
     assert!(
@@ -778,7 +808,7 @@ fn membership_only_tamper_rejects() {
                     &mut verifiers.c2,
                     tree,
                     1,
-                    tx_hash,
+                    shekyl_types::TxSignableHash::from_bytes(tx_hash),
                     vec![leaf.pqc.K],
                 );
                 assert!(

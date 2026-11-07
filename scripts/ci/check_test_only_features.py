@@ -279,6 +279,14 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "dev edges no production build can name it: a production draw from "
     "SplitMix64 is a compile error. The production generator is shekyl-ffi's "
     "SecureRelayRng over OS entropy",
+    (
+        "shekyl-relay-privacy",
+        "conformance",
+    ): "compiles the float goodness-of-fit grader and the timeline "
+    "measurement. The daemon-linked build is the integer draws. Enabled "
+    "from shekyl-relay's dev edge, which pins the origin publication "
+    "budget to the recovery cycle count, and from this crate's own dev "
+    "edge for its instruments. A shipped relay does not grade",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -392,6 +400,9 @@ PERMANENT: dict[tuple[str, str], str] = {
 # `full-dataset` for shekyl-randomx-differential's Hole-1 bins. That is
 # its only feature. It is consumer-owned: the light differential build
 # does not enable it, and the feature dies with the harness.
+# `shekyl-relay-privacy` joined 2026-11-06: `conformance` is its only
+# feature, and shekyl-relay's dev edge enables it for the origin-budget
+# pin. The crate's own tests enable it too; no normal edge does.
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -419,6 +430,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-bundle-producer",
         "shekyl-curve-tree",
         "shekyl-p2p-session",
+        "shekyl-relay-privacy",
         "shekyl-network",
         "randomx-v2-sys",
     }

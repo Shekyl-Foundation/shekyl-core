@@ -415,10 +415,10 @@ fn default_fee_estimates() -> FeeEstimates {
 /// continuity check is exactly the comparison between them. Four fixtures
 /// with four derivations would make that agreement a coincidence to
 /// maintain. A fork fixture answers something else on purpose.
-pub fn test_block_hash_at(height: u64) -> [u8; 32] {
+pub fn test_block_hash_at(height: u64) -> BlockHash {
     let mut h = [0xB1u8; 32];
     h[..8].copy_from_slice(&height.to_le_bytes());
-    h
+    BlockHash::from_bytes(h)
 }
 
 /// How far above its chain count a syncing test daemon places
@@ -439,7 +439,7 @@ pub(crate) fn daemon_get_info(chain_count: u64, syncing: bool) -> serde_json::Va
         chain_count: ChainCount::from_raw(chain_count),
         target_height,
         synchronized: !syncing,
-        top_hash: BlockHash::from_bytes(test_block_hash_at(chain_count.saturating_sub(1))),
+        top_hash: test_block_hash_at(chain_count.saturating_sub(1)),
         has_peers: true,
     }
     .to_value()
@@ -745,7 +745,7 @@ impl Rpc for TestDaemon {
     fn get_block_hash(
         &self,
         number: usize,
-    ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+    ) -> impl Send + std::future::Future<Output = Result<shekyl_types::BlockHash, RpcError>> {
         async move { Ok(test_block_hash_at(number as u64)) }
     }
 
@@ -871,7 +871,10 @@ impl DaemonEngine for TestDaemon {
             if state.submitted_hashes.insert(hash) {
                 Ok(TxSubmitOutcome::Submitted { hash })
             } else {
-                Ok(TxSubmitOutcome::AlreadyInPool { hash })
+                Ok(TxSubmitOutcome::AlreadyInPool {
+                    hash,
+                    relay: shekyl_rpc_types::PoolRelay::Published,
+                })
             }
         }
     }
@@ -1431,8 +1434,8 @@ mod tests {
 
         let expected = TxHash::from_bytes(shekyl_crypto_hash::keccak256(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
-        assert!(matches!(second, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
-        assert!(matches!(third, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
+        assert!(matches!(second, TxSubmitOutcome::AlreadyInPool { hash, .. } if hash == expected));
+        assert!(matches!(third, TxSubmitOutcome::AlreadyInPool { hash, .. } if hash == expected));
         assert_eq!(daemon.submitted_count(), 1, "dedup keeps the set size at 1");
     }
 
@@ -1487,7 +1490,7 @@ mod tests {
         let expected = TxHash::from_bytes(shekyl_crypto_hash::keccak256(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
         assert!(
-            matches!(second_via_clone, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected)
+            matches!(second_via_clone, TxSubmitOutcome::AlreadyInPool { hash, .. } if hash == expected)
         );
     }
 

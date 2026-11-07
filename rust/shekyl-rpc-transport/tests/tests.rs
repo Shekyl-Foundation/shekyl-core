@@ -62,7 +62,7 @@ async fn test_rpc() {
 
         let mut actual_blocks = Vec::with_capacity(amount_of_blocks);
         for i in (tip + 1 - amount_of_blocks)..=tip {
-            actual_blocks.push(rpc.get_block_hash(i).await.unwrap());
+            actual_blocks.push(rpc.get_block_hash(i).await.unwrap().to_bytes());
         }
         assert_eq!(blocks, actual_blocks);
     }

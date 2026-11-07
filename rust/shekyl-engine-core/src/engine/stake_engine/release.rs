@@ -39,7 +39,7 @@ use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 use shekyl_tx_builder::TreeContext;
 use shekyl_units::AtomicUnits;
 
-use shekyl_types::PCanonicalId;
+use shekyl_types::{PCanonicalId, SigningPayloadHash};
 
 use crate::engine::bond_assembly::{BondAssemblyError, FundingInputContext, PBoundBytes};
 use crate::engine::emission_source::{ClaimSourceFor, ServeAnchor, SlashWatermark};
@@ -410,7 +410,7 @@ impl Message<AssembleRelease> for StakeEngine {
                 bond_auth_pk,
                 output_site: "exit-output construction",
             },
-            |payload_hash| {
+            |payload_hash: &SigningPayloadHash| {
                 let sig = HybridEd25519MlDsa
                     .sign(
                         &keys.bond_spend_sk,

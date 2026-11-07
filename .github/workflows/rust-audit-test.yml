@@ -268,6 +268,12 @@ jobs:
         # source. Moved here from pre-checkout so the cache restore
         # has a chance to populate ~/.cargo/bin first.
         run: cargo install cargo-audit --locked
+      - name: install cargo-nextest
+        # Same cache behaviour as cargo-audit above. Pinned: the runner
+        # decides which tests run and what counts as a pass, so a new
+        # version is a change to the gate and comes in its own commit.
+        # 0.9.138 needs Rust 1.91; the workspace pins 1.94.0.
+        run: cargo install cargo-nextest --locked --version 0.9.138
       - name: cargo audit
         working-directory: rust
         run: |
@@ -457,23 +463,42 @@ jobs:
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
-      - name: cargo test (all workspace crates)
+      - name: cargo nextest (all workspace crates), then the doctests
         working-directory: rust
-        # `shekyl-randomx-differential` excluded from the workspace-wide
-        # test because its `c_oracle` module links against the C
-        # reference's `librandomx.a` via `randomx-v2-sys`, which requires
-        # the `RANDOMX_V2_INSTALL_DIR` env var to point at a CMake-built
-        # install prefix (per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md`
-        # §5.1.16 + §5.2.2 R5-D2). The `rust-audit-and-test` job does not
-        # configure CMake or build the C library; that work lives in the
-        # dedicated `.github/workflows/randomx-v2-differential.yml`
-        # workflow (per §5.5.1 + R1-D12), which builds the C library and
-        # runs `cargo test -p shekyl-randomx-differential` with the env
-        # var set. Excluding here is the discipline-correct shape:
-        # workspace-wide test asserts every crate that builds in the
-        # bare-Rust environment passes; the differential harness asserts
-        # under its own substrate-correct environment.
-        run: cargo test --locked --workspace --exclude shekyl-randomx-differential
+        # nextest runs each test in its own process and runs tests from
+        # every test binary at once. `cargo test` ran the binaries one
+        # after another, so the step lasted as long as their sum. Same
+        # tests, same exclusions; `--profile ci` is in `.config/nextest.toml`
+        # (no fail-fast, slow tests named, JUnit timings). nextest does not
+        # run doctests, so `cargo test --doc` runs them after it.
+        #
+        # `shekyl-randomx-differential` is excluded because its `c_oracle`
+        # module links against the C reference's `librandomx.a` via
+        # `randomx-v2-sys`, which requires the `RANDOMX_V2_INSTALL_DIR` env
+        # var to point at a CMake-built install prefix (per
+        # `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1.16 + §5.2.2 R5-D2).
+        # The `rust-audit-and-test` job does not configure CMake or build
+        # the C library; that work lives in the dedicated
+        # `.github/workflows/randomx-v2-differential.yml` workflow (per
+        # §5.5.1 + R1-D12), which builds the C library and runs
+        # `cargo test -p shekyl-randomx-differential` with the env var set.
+        # This step asserts every crate that builds in the bare-Rust
+        # environment passes; the differential harness asserts under its
+        # own substrate-correct environment.
+        run: |
+          cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential
+          cargo test --locked --doc --workspace --exclude shekyl-randomx-differential
+      - name: upload the test timings (JUnit)
+        # Each test's time from the nextest run above, kept for the slow
+        # tests to be named and the step to be partitioned by them.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: rust-nextest-junit
+          path: rust/target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          # A re-run of the job uploads under the same name.
+          overwrite: true
       - name: "BA-T5 floor probe smoke: the ignored probe still serves whole responses"
         working-directory: rust
         # The floor probe (`shekyl-p-serve/tests/ba_t5_floor_probe.rs`) is
@@ -558,7 +583,7 @@ jobs:
         # but `-D warnings`, or if this step carries any key but `name`,
         # `working-directory`, `run`. Add a row there and a `-p` here in
         # the same commit.
-        run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-curve-tree -p shekyl-mempool -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p2p-session -p shekyl-tor-control-client -p shekyl-wire --lib -- -D warnings
+        run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-curve-tree -p shekyl-mempool -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-tor-control-client -p shekyl-wire --lib -- -D warnings
       - name: shekyl-standoff conformance suite (x86_64 only)
         working-directory: rust
         # `shekyl-standoff`'s conformance grading + negative controls

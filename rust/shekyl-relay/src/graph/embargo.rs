@@ -53,6 +53,20 @@ use crate::stem_watch::TxId;
 /// sync turn and a new session re-plan sooner; this is the backstop.
 pub const NEVER_SENT_RETRY_MS: Millis = 300_000;
 
+/// The adopted origin's per-fire interval and how many fires that graph
+/// allows, including the first send.
+///
+/// The fire count is the cycle count `RecoveryBudget::for_cap` prices
+/// (`retry_cap + 1`, and the origin's retry cap is one less than the
+/// stem count). The interval is [`origin_retry_secs`], not that budget's
+/// mean and not its 1-in-100 deadline: those are the reshape timer's units.
+fn origin_terms() -> (u32, u32) {
+    let params = DandelionParams::adopted_for_transit_ms(super::longest_transit());
+    let secs = EmbargoTimer::adopted(&params).judge_failed_after_secs(origin_retry_one_in());
+    let fires = u32::try_from(params.graph.stem_count()).expect("stem count fits u32");
+    (secs, fires)
+}
+
 /// The origin's retry interval, in milliseconds: the 1-in-`origin_retry_one_in`
 /// survival quantile of the adopted anonymity timer over the longest
 /// declared transit (§92.5c; 1,148 s at the shipped terms). Asked at the
@@ -66,8 +80,63 @@ pub fn origin_retry_ms() -> Millis {
 /// [`origin_retry_ms`] in whole seconds, the unit the FFI export carries.
 #[must_use]
 pub fn origin_retry_secs() -> u32 {
-    let params = DandelionParams::adopted_for_transit_ms(super::longest_transit());
-    EmbargoTimer::adopted(&params).judge_failed_after_secs(origin_retry_one_in())
+    origin_terms().0
+}
+
+/// How long this node's own transaction may stay unpublished before the
+/// daemon calls it overdue, in milliseconds.
+///
+/// [`origin_retry_secs`] times the origin's fires ([`origin_terms`]). The
+/// daemon's clock. On time, the last fire fluffs at this age and the hold
+/// is gone; a hold still here at this age is [`OriginPublication::HeldOverdue`].
+#[must_use]
+pub fn origin_publication_budget_ms() -> Millis {
+    static BUDGET: OnceLock<Millis> = OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        let (secs, fires) = origin_terms();
+        u64::from(secs)
+            .checked_mul(1_000)
+            .and_then(|ms| ms.checked_mul(u64::from(fires)))
+            .expect("origin publication budget overflowed")
+    })
+}
+
+/// Whether this node's own transaction is still unpublished, judged on
+/// the daemon's clock against [`origin_publication_budget_ms`].
+///
+/// A relay position is not this node's origin and is absent. A transaction
+/// that has fluffed is absent too: publication is the pool's shown bit.
+/// The judgment is [`Self::judge`]: the zone records the arm time, and
+/// the read applies the clock it is asked with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OriginPublication {
+    /// Unpublished, and younger than the budget.
+    Held,
+    /// Unpublished at or past the budget. The scheduler is late, or the
+    /// origin was never sent.
+    HeldOverdue,
+}
+
+impl OriginPublication {
+    /// Judge one arm time against `now`.
+    ///
+    /// One millisecond inside the budget is [`Self::Held`]. The budget
+    /// itself, with the hold still recorded, is [`Self::HeldOverdue`].
+    /// The comparison does not know whether the timer has woken.
+    #[must_use]
+    pub fn judge(armed_at: Millis, now: Millis) -> Self {
+        if now.saturating_sub(armed_at) >= origin_publication_budget_ms() {
+            Self::HeldOverdue
+        } else {
+            Self::Held
+        }
+    }
+}
+
+/// An origin's arm time. A relay position (`source` is some peer) is not
+/// this node's hold.
+fn held_arm(held: &Held) -> Option<Millis> {
+    held.source.is_none().then_some(held.armed_at)
 }
 
 /// A stem this node sent and has not seen circulate.
@@ -83,6 +152,9 @@ pub(super) struct Held {
     /// The one re-stem the cap allows has been spent (cap `STEMS - 1 = 1`,
     /// §12.3).
     pub(super) restemmed: bool,
+    /// When this node first held the transaction. A re-stem does not move
+    /// it: the publication budget is one span, not one per fire.
+    pub(super) armed_at: Millis,
 }
 
 /// An originated transaction that was never sent.
@@ -91,6 +163,9 @@ pub(super) struct Unsent {
     pub(super) blob: TxBlob,
     /// When the zone plans it again.
     pub(super) due: Millis,
+    /// When this node first held the transaction. Stemming later copies
+    /// this onto the held row, so the budget does not start over.
+    pub(super) armed_at: Millis,
 }
 
 /// The zone's per-transaction relay state.
@@ -145,6 +220,7 @@ impl Relay {
         for (tx, blob) in txs {
             self.stem_watch
                 .stemmed(*tx, successor, source, connector, deadline);
+            let prior_armed = self.embargoes.unsent.get(tx).map(|unsent| unsent.armed_at);
             self.embargoes.unsent.remove(tx);
             let alternate = self.map.alternate_for(source, successor);
             self.embargoes.held.entry(*tx).or_insert_with(|| Held {
@@ -152,6 +228,7 @@ impl Relay {
                 source,
                 alternate,
                 restemmed: false,
+                armed_at: prior_armed.unwrap_or(now),
             });
         }
     }
@@ -220,6 +297,7 @@ impl Relay {
             self.embargoes.unsent.entry(*tx).or_insert_with(|| Unsent {
                 blob: TxBlob::clone(blob),
                 due: now.saturating_add(NEVER_SENT_RETRY_MS),
+                armed_at: now,
             });
         }
     }
@@ -259,13 +337,18 @@ impl Relay {
             let plan = self.plan_relay_with_refresh(None, true, self.node_sync, rng);
             match plan {
                 RelayPlan::Stem(peer) | RelayPlan::OwnEdge(peer) => {
-                    let unsent = self
-                        .embargoes
-                        .unsent
-                        .remove(&tx)
-                        .expect("due ids come from the map");
-                    self.record_stem(&[(tx, TxBlob::clone(&unsent.blob))], peer, None, now, rng);
-                    work.stems.push((peer, unsent.blob));
+                    // Leave the unsent row until `record_stem` copies its
+                    // `armed_at`. Removing it first would start the budget over.
+                    let blob = TxBlob::clone(
+                        &self
+                            .embargoes
+                            .unsent
+                            .get(&tx)
+                            .expect("due ids come from the map")
+                            .blob,
+                    );
+                    self.record_stem(&[(tx, TxBlob::clone(&blob))], peer, None, now, rng);
+                    work.stems.push((peer, blob));
                 }
                 RelayPlan::AwaitSync | RelayPlan::NoOwnEdge => {
                     if let Some(unsent) = self.embargoes.unsent.get_mut(&tx) {
@@ -294,6 +377,43 @@ impl Relay {
             .values()
             .map(|unsent| unsent.due)
             .min()
+    }
+
+    /// This node's own `tx`, if the zone still holds it unpublished, judged
+    /// at `now`. A relay position and a transaction that has fluffed are
+    /// `None`.
+    ///
+    /// The same comparison as [`OriginPublication::judge`] on
+    /// [`Self::origin_armed`].
+    #[must_use]
+    pub fn origin_publication(&self, tx: &TxId, now: Millis) -> Option<OriginPublication> {
+        self.armed_at(tx)
+            .map(|armed_at| OriginPublication::judge(armed_at, now))
+    }
+
+    /// Every origin's arm time. Held rows count only when this node is the
+    /// source. Unsent rows are origins by construction. The map is not
+    /// sorted: a reader judges each arm with the clock it has now.
+    #[must_use]
+    pub fn origin_armed(&self) -> HashMap<TxId, Millis> {
+        let mut armed =
+            HashMap::with_capacity(self.embargoes.held.len() + self.embargoes.unsent.len());
+        for (tx, held) in &self.embargoes.held {
+            if let Some(at) = held_arm(held) {
+                armed.insert(*tx, at);
+            }
+        }
+        for (tx, unsent) in &self.embargoes.unsent {
+            armed.insert(*tx, unsent.armed_at);
+        }
+        armed
+    }
+
+    fn armed_at(&self, tx: &TxId) -> Option<Millis> {
+        if let Some(held) = self.embargoes.held.get(tx) {
+            return held_arm(held);
+        }
+        self.embargoes.unsent.get(tx).map(|unsent| unsent.armed_at)
     }
 
     /// The pool dropped `tx` (mined, evicted, removed): the zone forgets it.

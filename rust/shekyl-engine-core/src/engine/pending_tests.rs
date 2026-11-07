@@ -62,7 +62,7 @@ fn populate(
     let inserted_range = indexes.process_scanned_outputs(
         ledger,
         BlockHeight::from_raw(block_height),
-        block_hash,
+        shekyl_types::BlockHash::from_bytes(block_hash),
         timelocked,
     );
     assert!(!inserted_range.is_empty() || ledger.transfer_count() == 0);
@@ -71,7 +71,7 @@ fn populate(
         let _ = indexes.process_scanned_outputs(
             ledger,
             BlockHeight::from_raw(h),
-            hash,
+            shekyl_types::BlockHash::from_bytes(hash),
             Timelocked::from_vec(Vec::new()),
         );
     }
@@ -285,7 +285,7 @@ fn submit_too_old_when_built_height_outside_reorg_window() {
         let _ = indexes.process_scanned_outputs(
             &mut ledger,
             BlockHeight::from_raw(h),
-            hash,
+            shekyl_types::BlockHash::from_bytes(hash),
             Timelocked::from_vec(Vec::new()),
         );
     }
@@ -329,7 +329,7 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
         let _ = indexes.process_scanned_outputs(
             &mut ledger,
             BlockHeight::from_raw(h),
-            hash,
+            shekyl_types::BlockHash::from_bytes(hash),
             Timelocked::from_vec(Vec::new()),
         );
     }
@@ -354,7 +354,7 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
         let _ = indexes.process_scanned_outputs(
             &mut ledger,
             BlockHeight::from_raw(h),
-            hash,
+            shekyl_types::BlockHash::from_bytes(hash),
             Timelocked::from_vec(Vec::new()),
         );
     }
