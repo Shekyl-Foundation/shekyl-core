@@ -75,100 +75,6 @@ struct ShekylBuffer {
 /// ShekylBuffer::len returned by the paired Rust call. Mismatched lengths cause UB.
 void shekyl_buffer_free(uint8_t* ptr, size_t len);
 
-/// PQC: Hybrid signatures.
-struct ShekylPqcKeypair {
-    ShekylBuffer public_key;
-    ShekylBuffer secret_key;
-    bool success;
-};
-
-struct ShekylPqcSignatureResult {
-    ShekylBuffer signature;
-    bool success;
-};
-
-/// MSW-1 cross-language consistency: the canonical PQC multisig wire lengths,
-/// owned by shekyl-crypto-pq. The `cryptonote_config.h` twins are pinned equal
-/// to these by a unit test — the only check that catches C++ and Rust drifting
-/// from each other (F-1: each side internally consistent, disagreeing across
-/// the FFI). All fields are byte counts.
-struct ShekylPqcCanonicalLens {
-    size_t single_key_len;
-    size_t single_sig_len;
-    size_t spend_auth_pubkey_len;
-    size_t max_multisig_participants;
-    size_t max_public_key_blob;
-    size_t max_signature_blob;
-};
-
-/// Return the canonical PQC multisig wire lengths (see ShekylPqcCanonicalLens).
-ShekylPqcCanonicalLens shekyl_pqc_canonical_lens();
-
-/// TEST-SUPPORT ONLY (F-7): generates a fresh, NON-derived hybrid keypair for
-/// the FFI test suite. Real wallets derive their keys — do NOT call from
-/// production code. Free both buffers with shekyl_buffer_free; wipe secret_key.
-ShekylPqcKeypair shekyl_pqc_keypair_generate();
-
-/// Sign a signing payload hash with a canonical-encoded hybrid (Ed25519 +
-/// ML-DSA-65) secret key on the tx per-input PQC auth surface. The Rust side
-/// binds the surface domain (SCHEME_DOMAIN_PQC_AUTH_TX, SA-R-2) internally —
-/// C++ never carries a domain string — and signatures from this export verify
-/// as tx per-input auth (shekyl_pqc_verify scheme 1). Each other signing
-/// surface has its own export with its own Rust-owned domain (see
-/// shekyl_pqc_sign_multisig_participant).
-/// secret_key_ptr/len: canonical hybrid secret key bytes. Production keys are
-/// wallet-derived and Rust-held (rule 36) — production C++ never holds one;
-/// tests source keys from the TEST-SUPPORT shekyl_pqc_keypair_generate.
-/// message_ptr/len: the input's 64-byte signing payload hash
-/// (SigningPayloadHash). Any other length fails closed: success is false and
-/// the signature buffer is null, the refusal shekyl_pqc_verify reports as 11.
-/// Returns signature blob. Caller frees with shekyl_buffer_free.
-ShekylPqcSignatureResult shekyl_pqc_sign(
-    const uint8_t* secret_key_ptr,
-    size_t secret_key_len,
-    const uint8_t* message_ptr,
-    size_t message_len);
-
-/// TEST-SUPPORT ONLY (F-7): sign a signing payload hash as a multisig
-/// participant (scheme 2), under the multisig-specific domain. The signature
-/// verifies through scheme 2. Use this to assemble multisig containers in
-/// tests. message_ptr/len is the 64-byte signing payload hash; any other
-/// length fails closed, as shekyl_pqc_sign does. Production multisig
-/// participant signing is unbuilt; do not call from production code. Returns
-/// signature blob; free with shekyl_buffer_free.
-ShekylPqcSignatureResult shekyl_pqc_sign_multisig_participant(
-    const uint8_t* secret_key_ptr,
-    size_t secret_key_len,
-    const uint8_t* message_ptr,
-    size_t message_len);
-
-/// Verify a hybrid PQC signature. The scheme-level domain is Rust-owned
-/// (SA-R-2): scheme_id 1 verifies under the tx per-input auth surface
-/// (SCHEME_DOMAIN_PQC_AUTH_TX — the shekyl_pqc_sign twin), scheme_id 2 under
-/// the multisig participant domain (the shekyl_pqc_sign_multisig_participant
-/// twin). C++ passes no domain string.
-///
-/// Returns 0 on success, or a nonzero PqcVerifyError discriminant on failure:
-///   1  = SchemeMismatch         5  = ThresholdMismatch     (9 retired — see below)
-///   2  = ParameterBounds        6  = IndexOutOfRange       10 = CryptoVerifyFailed
-///   3  = KeyBlobLength          7  = IndicesNotAscending   11 = DeserializationFailed
-///   4  = SigBlobLength          8  = DuplicateKeys
-/// Discriminant 9 (formerly GroupIdMismatch, "check 9") is retired: Option E′
-/// deleted group_id, so verify is a 9-check pipeline. 9 is left as a gap; 10/11
-/// keep their values (not renumbered).
-/// For scheme_id 1 (single-signer), only codes 10 and 11 apply.
-/// message/message_len: the input's 64-byte signing payload hash; any other
-/// length is not one and returns 11.
-/// See rust/shekyl-crypto-pq/src/error.rs PqcVerifyError for canonical definitions.
-uint8_t shekyl_pqc_verify(
-    uint8_t scheme_id,
-    const uint8_t* pubkey_blob,
-    size_t pubkey_len,
-    const uint8_t* sig_blob,
-    size_t sig_len,
-    const uint8_t* message,
-    size_t message_len);
-
 /// Compute Keccak-256 hash of data_ptr[0..data_len].
 /// out_ptr: 32 writable bytes for the hash output.
 bool shekyl_cn_fast_hash(
@@ -438,16 +344,6 @@ void shekyl_generator_T(uint8_t* out_ptr);
 
 // ─── FCMP++: Proof and tree operations ──────────────────────────────────────
 
-/// Compute the verifier-side PQC key scalar k = H_l(hybrid_pk) for a revealed
-/// PQC public key (PL-D3): the per-input value shekyl_fcmp_verify /
-/// shekyl_fcmp_membership_only_verify take. The verifier derives K = k*G_k
-/// from it and the FCMP++ circuit opens the spent leaf's commitment to K. A
-/// function of the revealed key only -- never the leaf value. Writes 32 bytes.
-bool shekyl_fcmp_pqc_key_scalar(
-    const uint8_t* pqc_pk_ptr,
-    size_t pqc_pk_len,
-    uint8_t* out_ptr);
-
 /// Derive the output's 64-byte tx_extra 0x07 entry CM || record (PL-D3 /
 /// PL-D3a) from combined KEM shared secret and output index. Secret key and
 /// blinds stay on the Rust side; never returned.
@@ -481,7 +377,7 @@ uint8_t shekyl_derive_view_tag_prefilter(
 /// Verify FCMP++ proof with batch verification.
 ///
 /// pqc_pk_hashes_ptr: pqc_hash_count * 32 bytes, one PQC key scalar k per input
-/// (shekyl_fcmp_pqc_key_scalar over the input's revealed hybrid_public_key).
+/// (H_l over the input's revealed hybrid_public_key, PL-D3).
 /// A non-canonical scalar encoding is refused with code 1, never reduced.
 ///
 /// Returns 0 on success, or a nonzero VerifyError discriminant on failure:

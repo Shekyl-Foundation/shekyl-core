@@ -30,9 +30,10 @@ mod fx;
 
 use fx::relay::{admission_verify, ChunkLayout, ADMISSION_OK};
 use fx::{
-    bp_verify, build_bp, build_connect_tx, build_pqc_auth, parse_wire, pqc_verify_code,
-    pqc_verify_code_against,
+    bp_verify, build_bp, build_connect_tx, build_pqc_auth, parse_wire, pqc_verify,
+    pqc_verify_against,
 };
+use shekyl_crypto_pq::error::PqcVerifyError;
 use shekyl_types::SigningPayloadHash;
 use shekyl_wire::transaction::TX_WEIGHT_LIMIT;
 
@@ -164,8 +165,8 @@ fn candidate_shapes_saturate_their_caps() {
             "shape ({n_in},{n_out}): admission fixture must verify"
         );
         assert_eq!(
-            pqc_verify_code(&fx.pqc),
-            0,
+            pqc_verify(&fx.pqc),
+            Ok(()),
             "shape ({n_in},{n_out}): pqc auth must verify"
         );
         assert!(
@@ -202,12 +203,12 @@ fn bp_proxy_fidelity_positive_and_negative() {
 #[test]
 fn pqc_fixture_fidelity_positive_and_negative() {
     let auth = build_pqc_auth(SigningPayloadHash::from_bytes([0x11; 64]));
-    assert_eq!(pqc_verify_code(&auth), 0, "hybrid sig must verify");
+    assert_eq!(pqc_verify(&auth), Ok(()), "hybrid sig must verify");
 
-    // Wrong message → CryptoVerifyFailed (10), never success.
-    assert_ne!(
-        pqc_verify_code_against(&auth, &[0x22; 64]),
-        0,
+    // Wrong message: a good parse that does not verify.
+    assert_eq!(
+        pqc_verify_against(&auth, &SigningPayloadHash::from_bytes([0x22; 64])),
+        Err(PqcVerifyError::CryptoVerifyFailed),
         "hybrid sig must not verify a different message"
     );
 
@@ -219,9 +220,8 @@ fn pqc_fixture_fidelity_positive_and_negative() {
     };
     let mid = corrupted.signature.len() / 2;
     corrupted.signature[mid] ^= 0x01;
-    assert_ne!(
-        pqc_verify_code(&corrupted),
-        0,
+    assert!(
+        pqc_verify(&corrupted).is_err(),
         "corrupted hybrid sig must not verify"
     );
 }

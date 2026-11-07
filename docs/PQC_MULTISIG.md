@@ -678,7 +678,7 @@ consensus. With the Solution C receiving model in place, the binding chain is:
 3. At spend time, the spender presents `pqc_auths[i].hybrid_public_key`
    containing the canonical `MultisigKeyContainer` (byte-identical to the
    one committed)
-4. The verifier computes `k = shekyl_fcmp_pqc_key_scalar(blob)`, derives
+4. The verifier computes `k = pqc_key_scalar(blob)`, derives
    `K = k·G_k`, and the FCMP++ proof confirms a leaf whose commitment opens
    to `K` is in the curve tree
 5. The FCMP++ proof verifies the key image derives from `O`

@@ -46,14 +46,11 @@ GROUPS = [
         # The daemon's pairs (the configuration snapshot, the relay blob and
         # stem tallies, the seam's rows, the RPC facts) went with the C++
         # host on 2026-11-05, and the account blob with the C++ wallet
-        # account code (NETWORK_IDENTITY.md NI-R7); what crosses now is the
-        # PQ, economics and curve-tree surface the test binaries and
-        # utilities link.
+        # account code (NETWORK_IDENTITY.md NI-R7), and the PQC sign and
+        # verify exports on 2026-11-07; what crosses now is the economics
+        # and curve-tree surface the test binaries and utilities link.
         "pairs": {
             "ShekylBuffer": "ShekylBuffer",
-            "ShekylPqcKeypair": "ShekylPqcKeypair",
-            "ShekylPqcSignatureResult": "ShekylPqcSignatureResult",
-            "ShekylPqcCanonicalLens": "ShekylPqcCanonicalLens",
             "ShekylBurnSplit": "ShekylBurnSplit",
             "ShekylEmissionSplit": "ShekylEmissionSplit",
             "ShekylCurveTreeReplicaOutput": "ShekylCurveTreeReplicaOutput",

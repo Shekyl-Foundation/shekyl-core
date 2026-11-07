@@ -99,7 +99,7 @@ The 4th scalar's derivation, implemented once in
 
 - `k = H_ℓ(hybrid_pk)`: a 64-byte cSHAKE256 read of the canonical hybrid
   public key under customization `shekyl/pqc-leaf-key-v1`, reduced modulo
-  the Ed25519 group order (`pqc_key_scalar`; FFI `shekyl_fcmp_pqc_key_scalar`).
+  the Ed25519 group order (`pqc_key_scalar`).
 - `r`: HKDF-Expand of the output's `combined_ss` under
   `shekyl-pqc-leaf-blind ‖ idx_le64 ‖ ctr`, reduced mod ℓ; the guard counter
   `ctr` (0 in all but a ~2⁻²⁵² fraction of outputs) is re-derived at scan and
@@ -585,7 +585,7 @@ For each input `i` in `tx.vin`:
 proof       = rv.p.fcmp_pp_proof
 key_images  = [ tx.vin[i].k_image for i in 0..num_inputs ]
 pseudo_outs = rv.p.pseudoOuts
-pqc_keys    = [ shekyl_fcmp_pqc_key_scalar(pqc_auths[i].hybrid_public_key)  # k = H_l(hybrid_pk)
+pqc_keys    = [ pqc_key_scalar(pqc_auths[i].hybrid_public_key)  # k = H_l(hybrid_pk)
                 for i in 0..num_inputs ]
 tree_root   = (from Step 2a)
 tree_depth  = rv.p.curve_trees_tree_depth
@@ -616,8 +616,8 @@ as defence in depth; since `PL-D3`, 2026-09-14, no such check exists.)
 6b. pqc_auths[i].scheme_id in {1, 2}   (single-signer or multisig)
 6c. pqc_auths[i].flags == 0
 6d. Compute signed_payload_i
-6e. shekyl_pqc_verify(scheme_id, hybrid_public_key, hybrid_signature,
-                       signed_payload_i) == true
+6e. verify_pqc_auth(scheme_id, hybrid_public_key, hybrid_signature,
+                    signed_payload_i) is Ok
 ```
 
 ### Step 7: Bulletproof+ Range Proof Verification
@@ -652,7 +652,6 @@ rust/
 |-----------|-------------|---------|
 | `shekyl_sign_fcmp_transaction()` | `shekyl-ffi/src/legacy_tx.rs` | C ABI collapsed signing. Production spends call `shekyl_tx_builder::sign_transaction_with_terms` from the engine |
 | `shekyl_fcmp_verify()` | `shekyl-ffi/src/legacy_fcmp.rs` | Verify FCMP++ proof |
-| `shekyl_fcmp_pqc_key_scalar()` | `shekyl-ffi/src/legacy_fcmp.rs` | PQC key scalar `k = H_ℓ(hybrid_pk)` for the verifier (`PL-D3`) |
 | `shekyl_derive_pqc_leaf_entry()` | `shekyl-ffi/src/legacy_fcmp.rs` | Derive the 64-byte `0x07` entry `CM ‖ record` from combined_ss (blinds stay in Rust) |
 | `shekyl_derive_pqc_public_key()` | `shekyl-ffi/src/legacy_fcmp.rs` | Derive hybrid public key from combined_ss (secret stays in Rust) |
 | `shekyl_fcmp_outputs_to_leaves()` | `shekyl-ffi/src/legacy_fcmp.rs` | Convert outputs to 4-scalar leaves |
@@ -667,7 +666,6 @@ rust/
 | `shekyl_frost_keys_group_key()` | `shekyl-ffi/src/lib.rs` | Extract 32-byte Ed25519T group key (Rust-only, `multisig` feature) |
 | `shekyl_frost_keys_validate()` | `shekyl-ffi/src/lib.rs` | Validate M-of-N params against threshold keys (Rust-only, `multisig` feature) |
 | `shekyl_frost_keys_free()` | `shekyl-ffi/src/lib.rs` | Free FROST threshold keys handle (Rust-only, `multisig` feature) |
-| `shekyl_pqc_verify()` | `shekyl-ffi/src/lib.rs` | Verify hybrid PQC signature |
 | `shekyl_kem_encapsulate()` | `shekyl-ffi/src/lib.rs` | Hybrid KEM encapsulation |
 | `shekyl_kem_decapsulate()` | `shekyl-ffi/src/lib.rs` | Hybrid KEM decapsulation |
 | `shekyl_address_encode()` | `shekyl-ffi/src/lib.rs` | Bech32m address encoding (network-aware) |
@@ -1224,7 +1222,7 @@ in [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) (membership-
 backing + work payload; dedup on the bond record). FCMP++ membership proofs
 for ordinary spends are unchanged.
 
-**PQC ownership binding** for **regular** spends: the circuit proves `leaf[96:128] = (K + r·J).x` with `K = shekyl_fcmp_pqc_key_scalar(pqc_pk)·G_k` (`PL-D3`); no verifier-side equality on the leaf value exists.
+**PQC ownership binding** for **regular** spends: the circuit proves `leaf[96:128] = (K + r·J).x` with `K = pqc_key_scalar(pqc_pk)·G_k` (`PL-D3`); no verifier-side equality on the leaf value exists.
 
 Lock-tier staked-output / `txin_stake_claim` PQC checks, claim-reward fingerprinting
 rules, claim sub-path in `check_tx_inputs`, `create_claim_transaction`, batch pool
@@ -1246,7 +1244,7 @@ Do not reintroduce them. Archival emission is a different vin
 | key image not y-normalized | Sign bit set on key image | `tvc.m_verifivation_failed` |
 | FCMP++ proof invalid | `shekyl_fcmp_verify` returns false | `tvc.m_verifivation_failed` |
 | `pqc_auths` count mismatch | `pqc_auths.size() != vin.size()` | `tvc.m_verifivation_failed` |
-| PQC signature invalid | `shekyl_pqc_verify` returns false | `tvc.m_verifivation_failed` |
+| PQC signature invalid | `verify_pqc_auth` refuses | `tvc.m_verifivation_failed` |
 | Key image double-spend | Key image already in DB | `tvc.m_double_spend` |
 | Stake claim pool overdraw | Sum of all claim amounts > pool balance | `tvc.m_verifivation_failed` |
 | Stake claim amount overflow | `total_claimed` wraps `uint64_t` | `tvc.m_verifivation_failed` |

@@ -60,34 +60,6 @@ pub struct ShekylScannedOutput {
     pub success: bool,
 }
 
-#[repr(C)]
-pub struct ShekylPqcKeypair {
-    pub public_key: ShekylBuffer,
-    pub secret_key: ShekylBuffer,
-    pub success: bool,
-}
-
-#[repr(C)]
-pub struct ShekylPqcSignatureResult {
-    pub signature: ShekylBuffer,
-    pub success: bool,
-}
-
-/// MSW-1 cross-language consistency: the canonical PQC multisig wire lengths,
-/// owned by `shekyl-crypto-pq`. The C++ `cryptonote_config.h` twins are pinned
-/// equal to these by `tests/unit_tests/fcmp.cpp` — the only mechanism that
-/// catches C++ and Rust drifting from each other (F-1: each side internally
-/// consistent, disagreeing across the FFI, which no single-language assert sees).
-#[repr(C)]
-pub struct ShekylPqcCanonicalLens {
-    pub single_key_len: usize,
-    pub single_sig_len: usize,
-    pub spend_auth_pubkey_len: usize,
-    pub max_multisig_participants: usize,
-    pub max_public_key_blob: usize,
-    pub max_signature_blob: usize,
-}
-
 /// Opaque result struct for the fee burn split, readable from C++.
 #[repr(C)]
 pub struct ShekylBurnSplit {

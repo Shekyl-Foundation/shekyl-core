@@ -52,10 +52,9 @@ extension preserves the zero-knowledge proof system's security properties.
      by the derivation-side exceptional-value guard)
    - `k = H_ℓ(pqc_pk)`: cSHAKE256 under `shekyl/pqc-leaf-key-v1`, 64-byte read
      reduced mod ℓ, implemented once in
-     `rust/shekyl-crypto-pq/src/derivation.rs` (`pqc_key_scalar` — the single
+     `rust/shekyl-crypto-pq/src/leaf_commitment.rs` (`pqc_key_scalar` — the single
      source). Forwarding-only entry points stay forwarding-only:
-     `shekyl_fcmp::leaf::PqcKeyScalar::from_pqc_public_key` and the FFI
-     `shekyl_fcmp_pqc_key_scalar()` in `rust/shekyl-ffi/src/legacy_fcmp.rs`
+     `shekyl_fcmp::leaf::PqcKeyScalar::from_pqc_public_key`
    - Blind derivation `r` (HKDF, `shekyl-pqc-leaf-blind ‖ idx ‖ ctr`) and the
      NUMS generators `PQC_LEAF_COMMITMENT_G_K` / `_J`
    - Public input handling: the verifier derives `K = k·G_k` from each

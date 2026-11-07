@@ -451,70 +451,6 @@ fn emission_share_at_ffi_matches_the_crate() {
 }
 
 #[test]
-fn test_pqc_keygen_sign_verify_ffi() {
-    unsafe {
-        let kp = shekyl_pqc_keypair_generate();
-        assert!(kp.success);
-        assert!(!kp.public_key.ptr.is_null());
-        assert!(!kp.secret_key.ptr.is_null());
-
-        // The input's signing payload hash is SigningPayloadHash::LEN bytes.
-        let msg = [0x6du8; shekyl_types::SigningPayloadHash::LEN];
-        let sig = shekyl_pqc_sign(
-            kp.secret_key.ptr,
-            kp.secret_key.len,
-            msg.as_ptr(),
-            msg.len(),
-        );
-        assert!(sig.success);
-        assert!(!sig.signature.ptr.is_null());
-
-        let short_sign = shekyl_pqc_sign(
-            kp.secret_key.ptr,
-            kp.secret_key.len,
-            msg.as_ptr(),
-            msg.len() - 1,
-        );
-        assert!(
-            !short_sign.success && short_sign.signature.ptr.is_null(),
-            "a short message is not a signing payload hash"
-        );
-
-        let result = shekyl_pqc_verify(
-            1,
-            kp.public_key.ptr,
-            kp.public_key.len,
-            sig.signature.ptr,
-            sig.signature.len,
-            msg.as_ptr(),
-            msg.len(),
-        );
-        assert_eq!(result, 0, "expected success (0), got error code {result}");
-
-        // A message that is not a signing payload hash fails as a parse,
-        // before any signature check.
-        let short = shekyl_pqc_verify(
-            1,
-            kp.public_key.ptr,
-            kp.public_key.len,
-            sig.signature.ptr,
-            sig.signature.len,
-            msg.as_ptr(),
-            msg.len() / 2,
-        );
-        assert_eq!(
-            short,
-            shekyl_crypto_pq::error::PqcVerifyError::DeserializationFailed as u8,
-            "a short message must fail as a parse"
-        );
-
-        shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
-        shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
-        shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
-    }
-}
-
-#[test]
 fn test_ssl_cert_generation_ecdsa() {
     unsafe {
         let mut key_pem = ShekylBuffer::null();
@@ -546,43 +482,6 @@ fn test_page_size_nonzero() {
     let ps = unsafe { shekyl_page_size() };
     assert!(ps > 0, "page size should be > 0, got {ps}");
     assert!(ps.is_power_of_two(), "page size should be power of 2");
-}
-
-#[test]
-fn test_pqc_verify_rejects_modified_signature() {
-    unsafe {
-        let kp = shekyl_pqc_keypair_generate();
-        let msg = [0x6du8; shekyl_types::SigningPayloadHash::LEN];
-        let sig = shekyl_pqc_sign(
-            kp.secret_key.ptr,
-            kp.secret_key.len,
-            msg.as_ptr(),
-            msg.len(),
-        );
-        assert!(sig.success);
-
-        let mut sig_bytes =
-            std::slice::from_raw_parts(sig.signature.ptr, sig.signature.len).to_vec();
-        let last = sig_bytes.len() - 1;
-        sig_bytes[last] ^= 0x01;
-
-        let result = shekyl_pqc_verify(
-            1,
-            kp.public_key.ptr,
-            kp.public_key.len,
-            sig_bytes.as_ptr(),
-            sig_bytes.len(),
-            msg.as_ptr(),
-            msg.len(),
-        );
-        // The message is 64 bytes, so it parses: the refusal is the
-        // signature's (a decode or a verify failure), not the length check's.
-        assert_ne!(result, 0, "corrupted signature should not verify");
-
-        shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
-        shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
-        shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
-    }
 }
 
 #[cfg(feature = "multisig")]

@@ -9,6 +9,16 @@ S-TX. The `file:line` cites in §2.1 and §5 were re-read on 2026-10-14;
 the rest were read at `dev` `090f2e8f2`–`6c41bf820`. Re-verify before
 acting on one.
 
+**2026-11-07:** the PQC pair below (`shekyl_pqc_keypair_generate`,
+`shekyl_pqc_sign_multisig_participant`) is deleted, with `shekyl_pqc_sign`,
+`shekyl_pqc_verify`, `shekyl_pqc_canonical_lens`, their header declarations
+and the C++ tests that called them. `shekyl-ffi` now enables
+`shekyl-crypto-pq/test-utils` on a dev edge only, so its own archive no
+longer carries shape (a); `shekyl-p-serve`'s forwarded edge (§4) still
+does. The replica family, `shekyl_test_coinbase_extra` and
+`shekyl_test_conforming_pqc_leaf_entry` remain this row's subject (the seed
+trace went with the C++ account code).
+
 ## 1. The row this record serves
 
 **F-7 structural gate for the test-only FFI exports shipped in the production archive.** The PQC test helpers (`shekyl_pqc_keypair_generate`, `shekyl_pqc_sign_multisig_participant`, added under `shekyl-crypto-pq`'s `test-utils` feature because cmake builds one `-p shekyl-ffi` archive that every binary links) ship in production through feature unification; the header and Rust docs mark them, but nothing structural keeps them out. The curve-tree replica family `shekyl_curve_tree_replica_*` (PR #623 — the core_tests generator's header-root oracle, `rust/shekyl-ffi/src/curve_tree_replica_ffi.rs`) is the same class and belongs to the same gate. Remedy: a separate test-only archive, or a cmake feature that production targets never enable, with an `nm` gate asserting the families' absence from shipped binaries. *(This line was truncated on `dev` — "(added" and nothing after — and is restored here from the Cargo.toml note that cites it.)*

@@ -23,8 +23,8 @@
 //!
 //! `sign` / `verify` take a required non-empty `domain` — there is no bare-
 //! message path. Each signing surface has a named `SCHEME_DOMAIN_*` constant
-//! below. FFI exports apply the surface's constant in Rust so C++ never
-//! carries a domain string. Full surface table: `docs/design/SIGNATURE_ALIGNMENT.md`.
+//! below, applied by that surface's own function, so no caller passes a
+//! domain string. Full surface table: `docs/design/SIGNATURE_ALIGNMENT.md`.
 //!
 //! # Version byte is the security boundary (SA-R-4)
 //!
@@ -80,9 +80,9 @@ pub const HYBRID_SCHEME_ID_ED25519_FN_DSA_1024: u8 = 3;
 /// applies to build `message`, and it gets its own string rather than reusing
 /// the inner one (a shared string across two layers would create a standing
 /// cross-parse proof obligation for no benefit). `sign`/`verify` take the
-/// domain as a required parameter so a caller cannot sign a bare message; the
-/// FFI exports apply the surface's constant internally so C++ never carries a
-/// domain string it could get wrong.
+/// domain as a required parameter so a caller cannot sign a bare message;
+/// [`sign_pqc_auth`] and [`verify_pqc_auth`] apply this constant, so no
+/// caller carries a domain string it could get wrong.
 pub const SCHEME_DOMAIN_PQC_AUTH_TX: &[u8] = b"shekyl/pqc-auth-tx-v1";
 /// Multisig participant auth (scheme 2), **distinct** from single-sig
 /// [`SCHEME_DOMAIN_PQC_AUTH_TX`] (SA-R-5). A multisig participant and a
@@ -383,11 +383,11 @@ impl HybridEd25519MlDsa {
 }
 
 // Test-support surface (F-7). Behind `test-utils` (or `cfg(test)` in-crate).
-// **Not** a production isolation gate: `shekyl-ffi` enables `test-utils` so the
-// C++ unit tests can link the same archive as production — cargo feature
-// unification keeps these symbols in that artifact. The structural gate
-// (separate test-only archive / cmake feature) is tracked in FOLLOWUPS F-7.
-// Names announce test-only intent; do not call from production paths.
+// **Not** a production isolation gate: a crate that enables `test-utils` on a
+// normal edge, or forwards it from one (`shekyl-p-serve`), puts these symbols
+// in its production build through feature unification. The structural gate
+// is tracked in FOLLOWUPS F-7. Names announce test-only intent; do not call
+// from production paths.
 #[cfg(any(test, feature = "test-utils"))]
 impl HybridEd25519MlDsa {
     pub fn generate_ephemeral_keypair_for_tests(
@@ -487,9 +487,9 @@ impl SignatureScheme for HybridEd25519MlDsa {
 }
 
 /// One transaction `pqc_auths` slot's signature, verified — **the** body
-/// behind every consumer: the daemon's `shekyl_pqc_verify` FFI, the
-/// daemon-rpc submit verifier (K13) and the consensus validator (CEN-I18)
-/// all call this, so the three cannot disagree on what a valid slot is.
+/// behind every consumer: the daemon-rpc submit verifier (K13) and the
+/// consensus validator (CEN-I18) both call this, so the two cannot disagree
+/// on what a valid slot is.
 ///
 /// Dispatch on the container `scheme_id`:
 /// [`HYBRID_SCHEME_ID_ED25519_ML_DSA_65`] parses the single hybrid key and
@@ -505,7 +505,7 @@ impl SignatureScheme for HybridEd25519MlDsa {
 /// the slot to its network (`DOMAIN_BINDING_RATCHET.tsv`).
 ///
 /// `Result<()>`, never `Result<bool>` (SA-R-1): there is no `Ok(false)` to
-/// mishandle. The error is the discriminant the FFI has always exported —
+/// mishandle. The error says which refusal it is:
 /// a parse failure is [`PqcVerifyError::DeserializationFailed`], a good
 /// parse that does not verify is [`PqcVerifyError::CryptoVerifyFailed`].
 ///
@@ -542,9 +542,7 @@ pub fn verify_pqc_auth(
 
 /// Sign one input's tx auth under [`SCHEME_DOMAIN_PQC_AUTH_TX`].
 ///
-/// `message` is that input's [`SigningPayloadHash`]. The FFI export parses
-/// the caller's bytes as one and calls this, so the domain stays in Rust
-/// and the export signs only a value of this type.
+/// `message` is that input's [`SigningPayloadHash`].
 ///
 /// # Errors
 ///
@@ -644,7 +642,7 @@ mod tests {
     }
 
     /// The one slot verifier every consumer calls: scheme 1 verifies a
-    /// signature made under the tx-auth domain and refuses, by the FFI's
+    /// signature made under the tx-auth domain and refuses, by its
     /// discriminants, a wrong message, a garbled signature, a garbled key
     /// and an unknown scheme. Scheme 2's arm is `verify_multisig`'s and is
     /// held by that module's tests.

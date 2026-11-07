@@ -73,9 +73,9 @@
 //!   pins depth 2 / `Spread`, today's production topology, and does not
 //!   re-sweep that axis).
 //! - **`pqc`** — one hybrid Ed25519+ML-DSA-65 verification
-//!   (`shekyl_pqc_verify`), which the daemon runs **per input**
-//!   (`verify_transaction_pqc_auth`, `blockchain.cpp:4342`; CEN-I18) for
-//!   every non-serve-credit v3 tx. The relay bench excluded this term
+//!   (`verify_pqc_auth`), which the validator runs **per input**
+//!   (`shekyl-chain-rules` `rules/proofs.rs`; CEN-I18) for every
+//!   non-serve-credit v3 tx. The relay bench excluded this term
 //!   because *its* calls never pay it; the connect path does.
 //! - **`bp_proxy`** — Bp+ aggregate verification over `n_out` commitments.
 //!   **PROXY**: the Rust verifier (`shekyl-bulletproofs`), sibling of the
@@ -350,7 +350,7 @@ use rand_core::OsRng;
 mod block_connect_fixture;
 
 use block_connect_fixture::{
-    bp_verify, build_connect_tx, parse_wire, pqc_verify_code, relay::admission_verify,
+    bp_verify, build_connect_tx, parse_wire, pqc_verify, relay::admission_verify,
     relay::ChunkLayout, relay::ADMISSION_OK, ConnectTxFixture,
 };
 
@@ -379,7 +379,7 @@ fn full_tx_verify(fx: &ConnectTxFixture) {
     std::hint::black_box(parsed);
     assert_eq!(admission_verify(&fx.adm), ADMISSION_OK);
     for _ in 0..fx.n_in {
-        assert_eq!(pqc_verify_code(&fx.pqc), 0);
+        assert_eq!(pqc_verify(&fx.pqc), Ok(()));
     }
     assert!(bp_verify(&fx.bp));
 }
@@ -393,7 +393,7 @@ fn bench_terms(c: &mut Criterion) {
 
         // Self-witness every component or the bench times a reject path.
         assert_eq!(admission_verify(&fx.adm), ADMISSION_OK);
-        assert_eq!(pqc_verify_code(&fx.pqc), 0);
+        assert_eq!(pqc_verify(&fx.pqc), Ok(()));
         assert!(bp_verify(&fx.bp));
 
         let tag = format!("in{n_in}_out{n_out}_w{}", fx.weight);
@@ -403,7 +403,7 @@ fn bench_terms(c: &mut Criterion) {
             b.iter(|| admission_verify(&f.adm))
         });
         group.bench_with_input(BenchmarkId::new("pqc_per_input", &tag), &fx, |b, f| {
-            b.iter(|| pqc_verify_code(&f.pqc))
+            b.iter(|| pqc_verify(&f.pqc))
         });
         group.bench_with_input(BenchmarkId::new("bp_proxy", &tag), &fx, |b, f| {
             b.iter(|| bp_verify(&f.bp))
@@ -432,7 +432,7 @@ fn bench_budget_fill(c: &mut Criterion) {
     ] {
         let fx = build_connect_tx(&mut OsRng, n_in, n_out, TREE_DEPTH, ChunkLayout::Spread);
         assert_eq!(admission_verify(&fx.adm), ADMISSION_OK);
-        assert_eq!(pqc_verify_code(&fx.pqc), 0);
+        assert_eq!(pqc_verify(&fx.pqc), Ok(()));
         assert!(bp_verify(&fx.bp));
 
         // Multi-point span so the marginal per-byte cost is MEASURED, not

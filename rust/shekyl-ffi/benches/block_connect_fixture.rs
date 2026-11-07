@@ -32,7 +32,10 @@ use shekyl_wire::transaction::{
 };
 use shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES;
 
-use shekyl_ffi::{shekyl_buffer_free, shekyl_pqc_keypair_generate, shekyl_pqc_sign};
+use shekyl_crypto_pq::error::PqcVerifyError;
+use shekyl_crypto_pq::signature::{
+    sign_pqc_auth, verify_pqc_auth, HybridEd25519MlDsa, HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+};
 use shekyl_types::SigningPayloadHash;
 
 #[path = "relay_admission_fixture.rs"]
@@ -50,53 +53,37 @@ pub struct PqcAuthFixture {
     pub message: SigningPayloadHash,
 }
 
-/// Generate a keypair and sign `message` through the same FFI surface the
-/// daemon consumes (`shekyl_pqc_keypair_generate` / `shekyl_pqc_sign`), so the
-/// byte lengths entering the wire fixture are the production encodings, not
-/// guesses.
+/// Generate a keypair and sign `message` with the tx-auth signer
+/// (`sign_pqc_auth`), so the byte lengths entering the wire fixture are the
+/// production encodings, not guesses.
 pub fn build_pqc_auth(message: SigningPayloadHash) -> PqcAuthFixture {
-    unsafe {
-        let kp = shekyl_pqc_keypair_generate();
-        assert!(kp.success, "pqc keypair generation failed");
-        let sig = shekyl_pqc_sign(
-            kp.secret_key.ptr,
-            kp.secret_key.len,
-            message.as_bytes().as_ptr(),
-            message.as_bytes().len(),
-        );
-        assert!(sig.success, "pqc sign failed");
-
-        let public_key = std::slice::from_raw_parts(kp.public_key.ptr, kp.public_key.len).to_vec();
-        let signature = std::slice::from_raw_parts(sig.signature.ptr, sig.signature.len).to_vec();
-
-        shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
-        shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
-        shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
-
-        PqcAuthFixture {
-            public_key,
-            signature,
-            message,
-        }
+    let (public_key, secret_key) = HybridEd25519MlDsa
+        .generate_ephemeral_keypair_for_tests()
+        .expect("pqc keypair generation");
+    let signature = sign_pqc_auth(&secret_key, &message).expect("pqc sign");
+    PqcAuthFixture {
+        public_key: public_key.to_canonical_bytes().expect("public key encodes"),
+        signature: signature.to_canonical_bytes().expect("signature encodes"),
+        message,
     }
 }
 
-/// One hybrid verification through the daemon's entry point
-/// (`shekyl_pqc_verify`, scheme 1). `0` is the only success code.
-pub fn pqc_verify_code(auth: &PqcAuthFixture) -> u8 {
-    pqc_verify_code_against(auth, auth.message.as_bytes())
+/// One hybrid verification through the validator's entry point
+/// (`verify_pqc_auth`, scheme 1), which the daemon runs per input.
+pub fn pqc_verify(auth: &PqcAuthFixture) -> Result<(), PqcVerifyError> {
+    pqc_verify_against(auth, &auth.message)
 }
 
-/// Verify `auth` against an arbitrary message — the negative limb's hook.
-pub fn pqc_verify_code_against(auth: &PqcAuthFixture, message: &[u8]) -> u8 {
-    shekyl_ffi::shekyl_pqc_verify(
-        1,
-        auth.public_key.as_ptr(),
-        auth.public_key.len(),
-        auth.signature.as_ptr(),
-        auth.signature.len(),
-        message.as_ptr(),
-        message.len(),
+/// Verify `auth` against another message: the negative limb's hook.
+pub fn pqc_verify_against(
+    auth: &PqcAuthFixture,
+    message: &SigningPayloadHash,
+) -> Result<(), PqcVerifyError> {
+    verify_pqc_auth(
+        HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+        &auth.public_key,
+        &auth.signature,
+        message,
     )
 }
 

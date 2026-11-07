@@ -21,14 +21,7 @@ default = []
 multisig = ["shekyl-fcmp/multisig", "modular-frost", "dalek-ff-group"]
 
 [dependencies]
-# `test-utils` is required here so the C++ unit-test suite can call
-# `shekyl_pqc_keypair_generate` / `shekyl_pqc_sign_multisig_participant`
-# against the same `shekyl-ffi` archive production links (cmake builds one
-# `-p shekyl-ffi`). This is **not** production isolation — feature unification
-# ships those symbols in the production archive. Header + Rust docs mark the
-# exports; structural gate = FOLLOWUPS F-7 (separate test-only archive or
-# cmake feature). Do not treat this feature flag as the gate.
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-encoding = { path = "../shekyl-encoding" }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
@@ -97,6 +90,10 @@ modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
 dalek-ff-group = { version = "0.5", optional = true }
 
 [dev-dependencies]
+# The block-connect bench fixture draws a fresh hybrid keypair
+# (`generate_ephemeral_keypair_for_tests`). A dev edge, so the archive
+# production links is built without `test-utils`.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 # The ingest entry's test starts a service, which takes the hasher budget,
 # over a substrate it defines and a regtest schedule.
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }

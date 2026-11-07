@@ -121,10 +121,10 @@ has joined `GOVERNED_OWNERS` may not also be listed. Three of the fifteen are
 findings rather than chores — a feature whose name says test-only, enabled
 on a **normal** edge. Two are hygiene (move the edge, or rule PERMANENT with
 the reason) and share the governance FOLLOWUPS row; the third,
-`shekyl-crypto-pq/test-utils` enabled by `shekyl-ffi` directly and by
-`shekyl-p-serve` through forwarding, is **FOLLOWUPS F-7**'s — its exports are unconditional
-`extern "C"` in the production header, so categorizing the feature changes
-nothing and the fix is the structural gate that row already names.
+`shekyl-crypto-pq/test-utils` enabled by `shekyl-p-serve` through forwarding,
+is **FOLLOWUPS F-7**'s, and the fix is the structural gate that row already
+names. (`shekyl-ffi` enabled it directly until its PQC exports were deleted;
+its edge is dev now.)
 
 # The production-shape lint lane lives next door
 
@@ -440,13 +440,13 @@ Hit = tuple[str, str, str]  # feature, consumer, edge kind
 MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = {
     "shekyl-crypto-pq": (
         "FINDING owned by FOLLOWUPS F-7, not the governance row: test-utils reaches "
-        "shekyl-ffi on a NORMAL edge directly and shekyl-p-serve on a NORMAL edge by "
-        "forwarding (its test-signer feature); the FFI exports that call it are "
-        "unconditional extern \"C\" in the production header, so categorizing changes "
-        "nothing. Leaves this list when F-7 lands.",
+        "shekyl-p-serve on a NORMAL edge by forwarding (its test-signer feature). "
+        "shekyl-ffi's edge is dev since the PQC FFI exports that called it were "
+        "deleted (2026-11-07): its bench fixture draws a keypair. Leaves this list "
+        "when F-7 lands.",
         frozenset({
             ("test-utils", "shekyl-archival-retention", "dev"),
-            ("test-utils", "shekyl-ffi", "normal"),
+            ("test-utils", "shekyl-ffi", "dev"),
             ("test-utils", "shekyl-p-fetch", "dev"),
             ("test-utils", "shekyl-p-serve", "normal"),
             ("test-utils", "shekyl-tx-builder", "dev"),

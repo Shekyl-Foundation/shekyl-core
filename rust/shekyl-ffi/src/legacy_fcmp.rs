@@ -31,33 +31,6 @@ pub unsafe extern "C" fn shekyl_generator_T(out_ptr: *mut u8) {
 
 // ─── FCMP++: Proof and Tree Operations ──────────────────────────────────────
 
-/// Compute the verifier-side PQC key scalar `k = H_ℓ(hybrid_pk)` for a revealed
-/// PQC public key (`PL-D3`): the per-input value `shekyl_fcmp_verify` /
-/// `shekyl_fcmp_membership_only_verify` take, from which they derive the point
-/// `K = k·G_k` the circuit opens the spent leaf's commitment to. `k` is a
-/// function of the revealed key only — never the leaf value.
-///
-/// Writes 32 bytes to `out_ptr`. Returns true on success.
-///
-/// # Safety
-/// Caller must ensure all pointer arguments are valid or null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_fcmp_pqc_key_scalar(
-    pqc_pk_ptr: *const u8,
-    pqc_pk_len: usize,
-    out_ptr: *mut u8,
-) -> bool {
-    let Some(pk_bytes) = (unsafe { slice_from_ptr(pqc_pk_ptr, pqc_pk_len) }) else {
-        return false;
-    };
-    if out_ptr.is_null() {
-        return false;
-    }
-    let k = shekyl_crypto_pq::leaf_commitment::pqc_key_scalar(pk_bytes);
-    std::ptr::copy_nonoverlapping(k.as_ptr(), out_ptr, 32);
-    true
-}
-
 /// Derive the output's 64-byte `tx_extra 0x07` entry `CM ‖ record` (`PL-D3` /
 /// `PL-D3a`) from combined shared secret and output index. Secret key is derived
 /// internally, used for public key derivation only, and zeroized immediately.
@@ -349,7 +322,7 @@ fn parse_branch_layers(
 /// Verify an FCMP++ proof with batch verification.
 ///
 /// `pqc_pk_hashes_ptr`: `pqc_hash_count × 32` bytes, one PQC key scalar `k`
-/// per input from `shekyl_fcmp_pqc_key_scalar` (`PL-D3`). A non-canonical
+/// per input, `shekyl_crypto_pq::leaf_commitment::pqc_key_scalar` (`PL-D3`). A non-canonical
 /// scalar encoding is refused here with code 1 (never silently reduced).
 ///
 /// Returns 0 on success, or a nonzero `VerifyError` discriminant on failure:
