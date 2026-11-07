@@ -213,9 +213,13 @@ pub trait ProbeSink: Send + Sync {
 /// dropped in that handshake, so it never counts (`TOR_SUPERVISOR.md`
 /// §4.5).
 ///
-/// Called with the count at construction and after each change, under the
-/// session table's lock, so the counts arrive in the order the board took
-/// them. It must not block.
+/// Called with the count at construction, before the layer is shared, and
+/// after each change. The count is taken under the session table's lock
+/// and delivered after that lock is dropped, so the call does not stall
+/// the table. A later count is never overtaken by an earlier one; a count
+/// that lost the race is skipped, and the sink keeps the latest. The call
+/// must return without waiting, and must not re-enter the session layer:
+/// the report gate is held across it.
 pub type SessionsSink = Arc<dyn Fn(PerConnector<u32>) + Send + Sync>;
 
 /// The three owners, as the composition hands them to the layer, and what
