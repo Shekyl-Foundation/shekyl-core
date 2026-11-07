@@ -34,16 +34,24 @@ The CI workflows install all dependencies automatically. For local builds:
    entry is a file of its own under `docs/changelog.d/` (its `README.md`
    says why). The cut is one commit, on a branch off `dev`, merged by pull
    request:
-   1. List the entries, newest merge first:
+   1. List the entries, newest merge first, from the repository root of
+      the cut branch before any edit:
 
       ```bash
       git fetch origin
       git log origin/dev --first-parent --diff-filter=A --name-only --format= \
         -- docs/changelog.d/ | awk 'NF && !seen[$0]++' \
-        | while read -r f; do [ -f "$f" ] && [ "${f##*/}" != README.md ] && echo "$f"; done
+        | while read -r f; do
+            if [ -f "$f" ] && [ "${f##*/}" != README.md ]; then echo "$f"; fi
+          done
       ```
 
-      Its count must equal `ls docs/changelog.d | grep -vc '^README.md$'`.
+      The history also names entries an earlier cut deleted, and the
+      README, which is always its oldest name. The `if` skips them and
+      keeps the listing's exit status 0, so it runs under `set -e`.
+
+      Its count must equal
+      `find docs/changelog.d -type f ! -name README.md | wc -l`.
       A file the list misses was added outside `dev`'s first-parent history.
       Place it by hand, then go on.
    2. In `docs/CHANGELOG.md`, rename `## [Unreleased]` to
