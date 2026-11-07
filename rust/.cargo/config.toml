@@ -4,19 +4,13 @@
 # BSD-3-Clause
 
 # +crt-static for the MSVC target family. Rust otherwise links the dynamic
-# CRT, and the cc-built C objects inside the staticlibs follow this feature
-# (/MT). The feature selects libcmt in every profile, debug included.
-# CMake requires -DSTATIC=ON (cmake/MsvcStaticRuntime.cmake). With CMP0091
-# OLD it rewrites /MD to /MT on Debug, Release, RelWithDebInfo and
-# MinSizeRel, and Debug's /MDd becomes /MTd. With CMP0091 NEW the runtime
-# is CMAKE_MSVC_RUNTIME_LIBRARY, the static selection, set before any
-# target; the rewrite only removes a stray /MD. /MTd is the static
-# triplet's debug libraries and not libcmt.
+# CRT, and the cc-built C objects inside crates follow this feature (/MT).
+# The feature selects libcmt in every profile, debug included, so the
+# Windows binaries need no Visual C++ runtime beside them.
 # Cargo reads this file because CMake runs cargo from this directory
 # (cmake/BuildRust.cmake, WORKING_DIRECTORY ${RUST_SOURCE_DIR}), and so
-# does every direct cargo invocation here. That cmake file lists this path
-# in _shekyl_rust_deps, so an edit rebuilds the archives. An environment
-# RUSTFLAGS replaces these flags; the build sets none for an MSVC target.
+# does every direct cargo invocation here. An environment RUSTFLAGS
+# replaces these flags; the build sets none for an MSVC target.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
 

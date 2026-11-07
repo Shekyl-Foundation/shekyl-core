@@ -27,36 +27,17 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-# Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 list(INSERT CMAKE_MODULE_PATH 0
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-if (IOS)
-    INCLUDE(CmakeLists_IOS.txt)
-endif()
-
 # 3.22: raised from 3.5 for Corrosion (DAEMON_CONFIG_CUTOVER.md DC-Q23),
 # which went with the last C++ archive in the daemon's link; the floor
-# stays, since every policy is now at 3.22's NEW behaviour and
-# cmake/MsvcStaticRuntime.cmake already handles CMP0091 either way.
+# stays, since every policy is now at 3.22's NEW behaviour.
 cmake_minimum_required(VERSION 3.22)
 message(STATUS "CMake version ${CMAKE_VERSION}")
-
-# CMake 4.x compatibility
-if(POLICY CMP0148)
-  # Modern path: FindPythonInterp / FindPythonLibs are removed in CMake 4+;
-  # Chore #3 follow-up migrated the top-level CMakeLists.txt to
-  # find_package(Python3 COMPONENTS Interpreter), so there is no legacy
-  # module left to un-deprecate. NEW explicitly opts into the modern
-  # behavior and silences the "policy not set" dev warning on CMake ≥ 3.27.
-  cmake_policy(SET CMP0148 NEW)
-endif()
-if(POLICY CMP0167)
-  cmake_policy(SET CMP0167 NEW)  # use Boost's own cmake config instead of deprecated FindBoost
-endif()
 
 # Shekyl ships nothing on Android. Called twice because the two ways a
 # configure becomes Android are visible at different moments:
@@ -88,10 +69,9 @@ shekyl_refuse_android_target()
 # ---------------------------------------------------------------------------
 # 64-bit-only gate — Chore #3, v3.1.0-alpha.5 (Tripwire D).
 #
-# Matching Rust gates (defense-in-depth; all four must be defeated to ship a
+# Matching Rust gates (defense-in-depth; all three must be defeated to ship a
 # 32-bit build):
 #   - rust/shekyl-crypto-pq/src/lib.rs   (Tripwire A, primary ML-KEM/ML-DSA consumer)
-#   - rust/shekyl-ffi/src/lib.rs         (Tripwire B, structural-not-observable)
 #   - rust/shekyl-tx-builder/src/lib.rs  (Tripwire C, direct fips204 consumer)
 #
 # This gate MUST stay above any find_package / add_subdirectory / include()
@@ -142,106 +122,21 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR
     "exploited by KyberSlash (Bernstein et al., 2024) against fielded "
     "CT implementations. The hybrid X25519+ML-KEM construction does not "
     "rescue the ML-KEM secret once it leaks via timing. Matching gates "
-    "live in rust/shekyl-crypto-pq/src/lib.rs, rust/shekyl-ffi/src/lib.rs, "
-    "and rust/shekyl-tx-builder/src/lib.rs. See docs/CHANGELOG.md entry "
+    "live in rust/shekyl-crypto-pq/src/lib.rs and "
+    "rust/shekyl-tx-builder/src/lib.rs. See docs/CHANGELOG.md entry "
     "'Retired 32-bit build targets' before attempting to revert this gate.")
 endif()
 
-# Compiler-flag / function / library helpers and the Python3 interpreter
-# discovery are loaded AFTER the 64-bit gate above so the gate-test CI job
-# at `tests/cmake-gate-test/run.sh` can assert that no find_package /
-# compiler probe chatter reaches stdout ahead of the gate firing (a PR
-# that moves any of these includes back above the gate fails that job).
-# These modules do not depend on `project()` state beyond what the gate's
-# own CMAKE_SYSTEM_PROCESSOR / CMAKE_SIZEOF_VOID_P predicate already
-# consumed, so the relocation is safe.
+# What this project builds. There is no first-party C or C++: the three
+# binaries are one cargo invocation (cmake/BuildRust.cmake), and the only
+# C++ CMake can configure is the vendored RandomX v2 reference
+# (external/randomx-v2), opt-in below. The C toolchain is still read:
+# BuildRust hands CMAKE_C_COMPILER, CMAKE_AR and CMAKE_C_FLAGS to cargo
+# whenever it names a target triple (every cross build, and native macOS
+# and FreeBSD), as CC_/AR_/CFLAGS_<triple> for the C that crates compile
+# and as -C link-arg for the link. The flags below exist for that.
 include(CheckCCompilerFlag)
-include(CheckCXXCompilerFlag)
-include(CheckLinkerFlag)
-include(CheckLibraryExists)
-include(CheckFunctionExists)
 
-# Python3 interpreter — canonical, single source of truth for every consumer
-# in the tree. Migrated from the deprecated include(FindPythonInterp) in
-# Chore #3 follow-up (v3.1.0-alpha.5); FindPythonInterp entered maintenance-
-# only mode in CMake 3.12 and is slated for removal under CMP0148 in 3.27+.
-# The modern find_package(Python3 ...) sets Python3_EXECUTABLE and
-# Python3_Interpreter_FOUND; we alias the legacy PYTHON_EXECUTABLE and
-# PYTHONINTERP_FOUND names for backward compatibility with consumers that
-# have not yet been migrated (tests/difficulty/CMakeLists.txt,
-# tests/block_weight/CMakeLists.txt).
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
-set(PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
-set(PYTHONINTERP_FOUND "${Python3_Interpreter_FOUND}")
-
-option (USE_CCACHE "Use ccache if a usable instance is found" ON)
-if (USE_CCACHE)
-	include(FindCcache) # Has to be included after the project() macro, to be able to read the CXX variable.
-else()
-	message(STATUS "ccache deselected")
-endif()
-option (USE_COMPILATION_TIME_PROFILER "Use compilation time profiler (for CLang >= 9 only)" OFF)
-if (USE_COMPILATION_TIME_PROFILER)
-	if (NOT "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
-		message(FATAL_ERROR "The flag USE_COMPILATION_TIME_PROFILER is meant to be set only for CLang compiler!")
-	endif()
-	add_compile_options("-ftime-trace")
-endif()
-
-if (${CMAKE_VERSION} VERSION_GREATER "3.0.0" AND CMAKE_MAKE_PROGRAM MATCHES "ninja")
-  set(MONERO_PARALLEL_COMPILE_JOBS "" CACHE STRING "The maximum number of concurrent compilation jobs.")
-  if (MONERO_PARALLEL_COMPILE_JOBS)
-    set_property(GLOBAL APPEND PROPERTY JOB_POOLS compile_job_pool=${MONERO_PARALLEL_COMPILE_JOBS})
-    set(CMAKE_JOB_POOL_COMPILE compile_job_pool)
-  endif ()
-
-  set(MONERO_PARALLEL_LINK_JOBS "" CACHE STRING "The maximum number of concurrent link jobs.")
-  if (MONERO_PARALLEL_LINK_JOBS)
-    set_property(GLOBAL APPEND PROPERTY JOB_POOLS link_job_pool=${MONERO_PARALLEL_LINK_JOBS})
-    set(CMAKE_JOB_POOL_LINK link_job_pool)
-  endif ()
-endif ()
-  
-option (USE_CLANG_TIDY_C   "Lint the code with clang-tidy - variant C"   OFF)
-option (USE_CLANG_TIDY_CXX "Lint the code with clang-tidy - variant C++" OFF)
-if (USE_CLANG_TIDY_C AND USE_CLANG_TIDY_CXX)
-	message(FATAL_ERROR "Enabling both USE_CLANG_TIDY_C and USE_CLANG_TIDY_CXX simultaneously crashes clang-tidy.")
-endif()
-if (USE_CLANG_TIDY_C OR USE_CLANG_TIDY_CXX)
-	include(SetClangTidy)
-endif()
-if (USE_CLANG_TIDY_C)
-	monero_clang_tidy("C")
-elseif (USE_CLANG_TIDY_CXX)
-	monero_clang_tidy("CXX")
-endif()
-
-enable_language(C ASM)
-
-# Require C11/C++11 and disable extensions for all targets
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
-function (die msg)
-  if (NOT WIN32)
-    string(ASCII 27 Esc)
-    set(ColourReset "${Esc}[m")
-    set(BoldRed     "${Esc}[1;31m")
-  else ()
-    set(ColourReset "")
-    set(BoldRed     "")
-  endif ()
-
-  message(FATAL_ERROR "${BoldRed}${msg}${ColourReset}")
-endfunction ()
-
-# CMake file(GLOB "dir/*") includes dotfiles (cmake 3.31; GLOB * is
-# not shell glob). A `.git`-only interrupted submodule checkout must
-# not count as populated — same contract as T15 and gate-and-push.sh.
 function (dir_populated_ignoring_git dir out_var)
   file(GLOB _dpi_entries LIST_DIRECTORIES true "${dir}/*")
   set(_dpi_populated FALSE)
@@ -266,147 +161,10 @@ function (add_c_flag_if_supported flag var)
   endif()
 endfunction()
 
-function (add_cxx_flag_if_supported flag var)
-  set(TMP "-Werror ${flag}")
-  string(REGEX REPLACE "[- ]" "_" supported ${TMP}_cxx)
-  check_cxx_compiler_flag(${TMP} ${supported})
-  if(${${supported}})
-    set(${var} "${${var}} ${flag}" PARENT_SCOPE)
-  endif()
-endfunction()
-
-function (add_linker_flag_if_supported flag var)
-  string(REPLACE "-" "_" supported ${flag}_ld)
-  string(REPLACE "," "_" supported ${flag}_ld)
-  check_linker_flag(${flag} ${supported})
-  if(${${supported}})
-    set(${var} "${${var}} ${flag}" PARENT_SCOPE)
-  endif()
-endfunction()
-
-function (add_definition_if_function_found function var)
-  string(REPLACE "-" "_" supported ${function}_function)
-  check_function_exists(${function} ${supported})
-  if(${${supported}})
-    add_definitions("-D${var}")
-  endif()
-endfunction()
-
-function (add_definition_if_library_exists library function header var)
-  string(REPLACE "-" "_" supported ${function}_library)
-  check_library_exists(${library} ${function} ${header} ${supported})
-  if(${${supported}})
-    add_definitions("-D${var}")
-  endif()
-endfunction()
-
-option(RELINK_TARGETS "Relink targets, when just a dependant .so changed, but not its header?" OFF)
-function (monero_set_target_no_relink target)
-  if (RELINK_TARGETS MATCHES OFF)
-    # Will not relink the target, when just its dependant .so has changed, but not it's interface
-    set_target_properties("${target}" PROPERTIES LINK_DEPENDS_NO_SHARED true)
-  endif()
-endfunction()
-
-option(STRIP_TARGETS "Strip symbols from targets?" OFF)
-function (monero_set_target_strip target)
-  if (STRIP_TARGETS)
-    set_target_properties("${target}" PROPERTIES LINK_FLAGS_RELEASE -s)
-    set_target_properties("${target}" PROPERTIES LINK_FLAGS_DEBUG -s)
-    # Stripping from Debug might make sense if you're low on disk space, but want to test if debug version builds properly.
-  endif()
-endfunction()
-
-function (monero_add_minimal_executable name)
-  source_group("${name}"
-    FILES
-      ${ARGN})
-
-  add_executable("${name}"
-    ${ARGN})
-    monero_set_target_no_relink("${name}")
-    monero_set_target_strip    ("${name}")
-endfunction()
-
-# Finds all headers in a directory and its subdirs, to be able to search for them and autosave in IDEs.
-#
-# Parameters:
-# - headers_found:    Output variable, which will hold the found headers
-# - module_root_dir:  The search path for the headers. Typically it will be the module's root dir, so "${CMAKE_CURRENT_SOURCE_DIR}" or a derivative of it.
-macro (monero_find_all_headers headers_found module_root_dir)
-  file(GLOB ${headers_found}
-           "${module_root_dir}/*.h*"    # h* will include hpps as well.
-           "${module_root_dir}/**/*.h*" # Any number of subdirs will be included.
-           "${module_root_dir}/*.inl"   # .inl is typically template code and is being treated as headers (it's being included).
-           "${module_root_dir}/**/*.inl"
-)
-endmacro()
-
-# Function to forbid undefined symbols and also verify
-# 1) Test project with all types of libraries and without undefined symbols can compile successfully
-# 2) Test project with all types of libraries and undefined symbols can not compile successfully
-function(forbid_undefined_symbols)
-  unset(TMP)
-  # https://www.unix.com/man-page/linux/1/ld, --no-undefined, Report unresolved symbol references from regular object files.
-  add_linker_flag_if_supported(-Wl,--no-undefined TMP)
-  # https://www.unix.com/man-page/osx/1/ld/, -undefined, Specifies how undefined symbols are to be treated.
-  add_linker_flag_if_supported(-Wl,-undefined,error TMP)
-  string(APPEND CMAKE_SHARED_LINKER_FLAGS ${TMP})
-  string(APPEND CMAKE_MODULE_LINKER_FLAGS ${TMP})
-  set(CMAKE_SHARED_LINKER_FLAGS ${CMAKE_SHARED_LINKER_FLAGS} PARENT_SCOPE)
-  set(CMAKE_MODULE_LINKER_FLAGS ${CMAKE_MODULE_LINKER_FLAGS} PARENT_SCOPE)
-  set(TEST_PROJECT "${CMAKE_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/CMakeTmp/test_project")
-  foreach(EXPECT IN ITEMS TRUE FALSE)
-    file(REMOVE_RECURSE "${TEST_PROJECT}")
-    file(MAKE_DIRECTORY "${TEST_PROJECT}")
-    file(WRITE "${TEST_PROJECT}/CMakeLists.txt"
-      [=[
-cmake_minimum_required(VERSION 3.22)
-project(test)
-option(EXPECT_SUCCESS "" ON)
-file(WRITE "${CMAKE_SOURCE_DIR}/incorrect_source.cpp" "void undefined_symbol(); void symbol() { undefined_symbol(); }")
-if (EXPECT_SUCCESS)
-  file(APPEND "${CMAKE_SOURCE_DIR}/incorrect_source.cpp" " void undefined_symbol() {}; ")
-endif()
-add_library(l0 SHARED incorrect_source.cpp)
-add_library(l1 MODULE incorrect_source.cpp)
-add_library(l2 STATIC incorrect_source.cpp)
-add_library(l3 OBJECT incorrect_source.cpp)
-]=]
-    )
-    try_compile(SUCCESS "${TEST_PROJECT}/build" "${TEST_PROJECT}" test
-      CMAKE_FLAGS
-      "-DCMAKE_SHARED_LINKER_FLAGS=${CMAKE_SHARED_LINKER_FLAGS}"
-      "-DCMAKE_MODULE_LINKER_FLAGS=${CMAKE_MODULE_LINKER_FLAGS}"
-      "-DEXPECT_SUCCESS=${EXPECT}"
-    )
-    if (NOT ${SUCCESS} STREQUAL ${EXPECT})
-      message(FATAL_ERROR "Undefined symbols test failure: expect(${EXPECT}), success(${SUCCESS})")
-    endif()
-    file(REMOVE_RECURSE "${TEST_PROJECT}")
-  endforeach()
-endfunction()
-if (NOT (CMAKE_SYSTEM_NAME MATCHES "kOpenBSD.*|OpenBSD.*") AND NOT OSSFUZZ)
-  forbid_undefined_symbols()
-endif()
-
-if (MINGW)
-  function(export_all_symbols)
-    unset(TMP)
-    add_linker_flag_if_supported(-Wl,--export-all-symbols TMP)
-    string(APPEND CMAKE_SHARED_LINKER_FLAGS ${TMP})
-    string(APPEND CMAKE_MODULE_LINKER_FLAGS ${TMP})
-    set(CMAKE_SHARED_LINKER_FLAGS ${CMAKE_SHARED_LINKER_FLAGS} PARENT_SCOPE)
-    set(CMAKE_MODULE_LINKER_FLAGS ${CMAKE_MODULE_LINKER_FLAGS} PARENT_SCOPE)
-  endfunction()
-  export_all_symbols()
-endif()
-
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
   message(STATUS "Setting default build type: ${CMAKE_BUILD_TYPE}")
 endif()
-string(TOLOWER ${CMAKE_BUILD_TYPE} CMAKE_BUILD_TYPE_LOWER)
 
 # ARCH defines the target architecture, either by an explicit identifier or
 # one of the following two keywords. By default, ARCH a value of 'native':
@@ -467,85 +225,166 @@ set(RISCV   1)
 set(RISCV32 1)
 endif()
 
-if(WIN32 OR ARM OR PPC64LE OR PPC64 OR PPC)
-  set(OPT_FLAGS_RELEASE "-O2")
-else()
-  set(OPT_FLAGS_RELEASE "-O3 -ffast-math")
-  include(CheckCCompilerFlag)
-  check_c_compiler_flag("-fno-semantic-interposition" HAS_NO_SEMANTIC_INTERPOSITION)
-  if(HAS_NO_SEMANTIC_INTERPOSITION)
-    string(APPEND OPT_FLAGS_RELEASE " -fno-semantic-interposition")
+if(CMAKE_SYSTEM_NAME MATCHES "kOpenBSD.*|OpenBSD.*")
+  set(OPENBSD TRUE)
+endif()
+
+function(set_default_arch)
+  if (OPENBSD)
+    set(ARCH default)
+  else()
+    set(ARCH native)
+  endif()
+
+  set(ARCH ${ARCH} CACHE STRING "CPU to build for: -march value or 'default' to not pass -march at all")
+endfunction()
+
+if (NOT (MSVC OR ARCH))
+  set_default_arch()
+endif()
+
+set(PIC_FLAG "-fPIC")
+
+if (UNIX AND NOT APPLE)
+  add_c_flag_if_supported(-pthread CMAKE_C_FLAGS)
+endif()
+
+if(NOT MSVC)
+  message(STATUS "Building on ${CMAKE_SYSTEM_PROCESSOR} for ${ARCH}")
+  if(ARCH STREQUAL "default")
+    set(ARCH_FLAG "")
+  elseif(PPC64LE)
+    set(ARCH_FLAG "-mcpu=power8")
+  elseif(PPC64)
+    set(ARCH_FLAG "-mcpu=970")
+  elseif(PPC)
+    set(ARCH_FLAG "-mcpu=7400")
+  else()
+    set(ARCH_FLAG "-march=${ARCH}")
+    if(ARCH STREQUAL "native")
+      check_c_compiler_flag(-march=native CC_SUPPORTS_MARCH_NATIVE)
+      if (NOT CC_SUPPORTS_MARCH_NATIVE)
+        check_c_compiler_flag(-mtune=native CC_SUPPORTS_MTUNE_NATIVE)
+        if (CC_SUPPORTS_MTUNE_NATIVE)
+          set(ARCH_FLAG "-mtune=${ARCH}")
+        else()
+          set(ARCH_FLAG "")
+        endif()
+      endif()
+    endif()
+  endif()
+
+  option(NO_AES "Explicitly disable AES support" ${NO_AES})
+
+  if(NO_AES)
+    message(STATUS "AES support explicitly disabled")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DNO_AES")
+  elseif(NOT ARM AND NOT PPC64LE AND NOT PPC64 AND NOT PPC AND NOT S390X AND NOT RISCV)
+    message(STATUS "AES support enabled")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -maes")
+  elseif(PPC64LE OR PPC64 OR PPC)
+    message(STATUS "AES support not available on POWER")
+  elseif(S390X)
+    message(STATUS "AES support not available on s390x")
+  elseif(RISCV)
+    message(STATUS "AES support not available on RISC-V")
+  elseif(ARM8)
+    check_c_compiler_flag("-march=${ARCH}+crypto" ARCH_PLUS_CRYPTO)
+    if(ARCH_PLUS_CRYPTO)
+      message(STATUS "Crypto extensions enabled for ARMv8")
+      set(ARCH_FLAG "-march=${ARCH}+crypto")
+    else()
+      message(STATUS "Crypto extensions unavailable on your ARMv8 device")
+    endif()
+  else()
+    message(STATUS "AES support disabled")
+  endif()
+
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ARCH_FLAG}")
+
+  if(MINGW)
+    set(MINGW_FLAG "${MINGW_FLAG} -DWIN32_LEAN_AND_MEAN")
+  endif()
+
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-strict-aliasing")
+
+  if(CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT OPENBSD)
+    set(C_SECURITY_FLAGS "${C_SECURITY_FLAGS} -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1")
+  endif()
+
+  # warnings (duplicated in WARNINGS for non-MSVC; kept here for SECURITY_FLAGS aggregation)
+  add_c_flag_if_supported(-Wformat C_SECURITY_FLAGS)
+  add_c_flag_if_supported(-Wformat-security C_SECURITY_FLAGS)
+
+  # protection against identifier-based attacks and stack reuse
+  add_c_flag_if_supported(-fno-extended-identifiers C_SECURITY_FLAGS)
+  add_c_flag_if_supported(-fstack-reuse=none C_SECURITY_FLAGS)
+
+  # ARM64 branch protection (BTI / pointer authentication)
+  if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+      add_c_flag_if_supported("-mbranch-protection=bti" C_SECURITY_FLAGS)
+    else()
+      add_c_flag_if_supported("-mbranch-protection=standard" C_SECURITY_FLAGS)
+    endif()
+  endif()
+
+  # -fstack-protector
+  if (NOT OPENBSD AND NOT (WIN32 AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1)))
+    add_c_flag_if_supported(-fstack-protector C_SECURITY_FLAGS)
+    add_c_flag_if_supported(-fstack-protector-strong C_SECURITY_FLAGS)
+  endif()
+
+  # New in GCC 8.2 -- CET is x86 Linux only; macOS lacks cet.h
+  if (NOT APPLE AND NOT OPENBSD AND NOT (WIN32 AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1)))
+    add_c_flag_if_supported(-fcf-protection=full C_SECURITY_FLAGS)
+  endif()
+  if (NOT WIN32 AND NOT OPENBSD)
+    add_c_flag_if_supported(-fstack-clash-protection C_SECURITY_FLAGS)
+  endif()
+
+  # Removed in GCC 9.1 (or before ?), but still accepted, so spams the output
+  if (NOT (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND NOT CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1))
+    add_c_flag_if_supported(-mmitigate-rop C_SECURITY_FLAGS)
+  endif()
+
+  # Per-function/data sections allow the linker to strip unreferenced code,
+  # reducing binary size (inspired by Monero #9898 author's findings:
+  # -ffunction-sections + --gc-sections shrank Docker images by ~14 MiB).
+  if(NOT MINGW)
+    add_c_flag_if_supported(-ffunction-sections C_SECURITY_FLAGS)
+    add_c_flag_if_supported(-fdata-sections C_SECURITY_FLAGS)
+  endif()
+
+  # Warnings, that when ignored are so severe, that they can segfault or even UB any application.
+  # Treat them as errors.
+  add_c_flag_if_supported(  -Werror=switch      C_SECURITY_FLAGS)
+  add_c_flag_if_supported(  -Werror=return-type C_SECURITY_FLAGS)
+
+  message(STATUS "Using C security hardening flags: ${C_SECURITY_FLAGS}")
+
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_GNU_SOURCE ${MINGW_FLAG} ${PIC_FLAG} ${C_SECURITY_FLAGS}")
+
+  if(ARM)
+    message(STATUS "Setting FPU Flags for ARM Processors")
+
+    # Cortex-A53 errata workarounds, for the C the crates compile.
+    check_c_compiler_flag(-mfix-cortex-a53-835769 CC_ACCEPTS_MFIX_CORTEX_A53_835769)
+    check_c_compiler_flag(-mfix-cortex-a53-843419 CC_ACCEPTS_MFIX_CORTEX_A53_843419)
+    if(CC_ACCEPTS_MFIX_CORTEX_A53_835769)
+      message(STATUS "Enabling Cortex-A53 workaround 835769")
+      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfix-cortex-a53-835769")
+    endif()
+    if(CC_ACCEPTS_MFIX_CORTEX_A53_843419)
+      message(STATUS "Enabling Cortex-A53 workaround 843419")
+      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfix-cortex-a53-843419")
+    endif()
   endif()
 endif()
 
-# BUILD_TAG is used to select the build type to check for a new version
-if(BUILD_TAG)
-  message(STATUS "Building build tag ${BUILD_TAG}")
-  add_definitions("-DBUILD_TAG=${BUILD_TAG}")
-else()
-  message(STATUS "Building without build tag")
-endif()
-
-option(MANUAL_SUBMODULES "Skip submodule up-to-date checks" OFF)
-if(NOT MANUAL_SUBMODULES)
-  find_package(Git)
-  if(GIT_FOUND)
-    function (check_submodule relative_path)
-      set(_sm_path "${CMAKE_CURRENT_SOURCE_DIR}/${relative_path}")
-      # Empty-dir fail-closed. `git rev-parse HEAD` inside an empty
-      # submodule directory walks up to the superproject and compares
-      # two different SHAs of the same commit (or reports "not
-      # up-to-date"). This function already compares the submodule-dir
-      # HEAD against HEAD:<path> in the superproject; the empty-dir
-      # check is the whole additional fix. Do not replace the gitlink
-      # comparison with a second instrument.
-      if(NOT EXISTS "${_sm_path}" OR NOT IS_DIRECTORY "${_sm_path}")
-        message(FATAL_ERROR "Submodule '${relative_path}' is missing or not a directory. Initialize with\ngit submodule update --init --force ${relative_path}\nor run cmake with -DMANUAL_SUBMODULES=1\n")
-      endif()
-      dir_populated_ignoring_git("${_sm_path}" _sm_populated)
-      if(NOT _sm_populated)
-        message(FATAL_ERROR "Submodule '${relative_path}' is an empty directory (not initialized). git rev-parse HEAD inside it walks up to the superproject. Initialize with\ngit submodule update --init --force ${relative_path}\nor run cmake with -DMANUAL_SUBMODULES=1\n")
-      endif()
-      execute_process(COMMAND git rev-parse "HEAD" WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${relative_path} OUTPUT_VARIABLE localHead)
-      execute_process(COMMAND git rev-parse "HEAD:${relative_path}" WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} OUTPUT_VARIABLE checkedHead)
-      string(COMPARE EQUAL "${localHead}" "${checkedHead}" upToDate)
-      if (upToDate)
-        message(STATUS "Submodule '${relative_path}' is up-to-date")
-      else()
-        message(FATAL_ERROR "Submodule '${relative_path}' is not up-to-date. Update with\ngit submodule update --init --force ${relative_path}\nor run cmake with -DMANUAL_SUBMODULES=1\n")
-      endif()
-    endfunction ()
-    
-    message(STATUS "Checking submodules")
-    check_submodule(external/rapidjson)
-    # external/randomx (tevador v1) is a gitlink-only pin for the
-    # restated v1 fallback (RANDOMX_V1_FALLBACK.md). Nothing in
-    # src/ tests/ rust/ scripts/ cmake/ builds that tree; do not
-    # require it initialized on a default clone. A fallback that
-    # re-adds a v1 CMake target re-adds this check with it.
-    check_submodule(external/supercop)
-  endif()
-endif()
-
-set(CMAKE_C_FLAGS_RELEASE "-DNDEBUG ${OPT_FLAGS_RELEASE}")
-set(CMAKE_CXX_FLAGS_RELEASE "-DNDEBUG ${OPT_FLAGS_RELEASE}")
-
-list(INSERT CMAKE_MODULE_PATH 0
-  "${CMAKE_SOURCE_DIR}/cmake")
-
-option(BOOST_IGNORE_SYSTEM_PATHS "Ignore boost system paths for local boost installation" OFF)
-if (BOOST_IGNORE_SYSTEM_PATHS)
-  set(Boost_NO_SYSTEM_PATHS TRUE)
-endif()
-
-set_property(GLOBAL PROPERTY USE_FOLDERS ON)
-enable_testing()
-
-option(BUILD_DOCUMENTATION "Build the Doxygen documentation." ON)
-option(BUILD_TESTS "Build tests." OFF)
 # RandomX v2 C reference library (Shekyl-Foundation fork) miner-library
 # build toggle. Production PoW is the Rust light-cache verifier
-# (`shekyl-pow-randomx` via FFI); this option builds `librandomx.a`
+# (`shekyl-pow-randomx`); this option builds `librandomx.a`
 # out-of-tree for the differential harness and Hole-1 miner KATs only.
 # OFF (default): the v2 C build is not configured; daemon and other
 # components are unaffected and byte-identical to a no-flag build.
@@ -612,239 +451,6 @@ if(BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS AND NOT BUILD_RANDOMX_V2_MINER_LIB)
     FORCE)
 endif()
 
-if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-  set(DEFAULT_BUILD_DEBUG_UTILITIES ON)
-else()
-  set(DEFAULT_BUILD_DEBUG_UTILITIES OFF)
-endif()
-option(BUILD_DEBUG_UTILITIES "Build debug utilities." ${DEFAULT_BUILD_DEBUG_UTILITIES})
-
-if(OSSFUZZ)
-  message(STATUS "Using OSS-Fuzz fuzzing system")
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DOSSFUZZ")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DOSSFUZZ")
-endif()
-
-# Check if we're on FreeBSD.
-# CMAKE_SYSTEM_NAME checks are commonly known, but specifically taken from libsdl's CMakeLists
-if(CMAKE_SYSTEM_NAME MATCHES "kFreeBSD.*|FreeBSD")
-  set(FREEBSD TRUE)
-endif()
-
-# Check if we're on DragonFly BSD. See the README.md for build instructions.
-if(CMAKE_SYSTEM_NAME MATCHES "DragonFly.*")
-  set(DRAGONFLY TRUE)
-endif()
-
-# Check if we're on OpenBSD. See the README.md for build instructions.
-if(CMAKE_SYSTEM_NAME MATCHES "kOpenBSD.*|OpenBSD.*")
-  set(OPENBSD TRUE)
-endif()
-
-# TODO: check bsdi, NetBSD, to see if they need the same FreeBSD changes
-#
-# elseif(CMAKE_SYSTEM_NAME MATCHES "kNetBSD.*|NetBSD.*")
-#   set(NETBSD TRUE)
-# elseif(CMAKE_SYSTEM_NAME MATCHES ".*BSDI.*")
-#   set(BSDI TRUE)
-
-include_directories(src contrib/epee/include)
-include_directories(SYSTEM external/rapidjson/include external external/supercop/include)
-
-if(MSVC OR MINGW)
-  set(DEFAULT_STATIC true)
-else()
-  set(DEFAULT_STATIC false)
-endif()
-option(STATIC "Link libraries statically" ${DEFAULT_STATIC})
-
-# Internal libraries are always static. Shared internal libraries are
-# refused, not merely defaulted off: every internal library that lists
-# SHEKYL_FFI_LINK_LIBS is the head of its own link line when it is a shared
-# object, so each .so embeds its own copy of the Rust image — its own
-# tracing dispatcher and its own copy of every Rust `static` — next to the
-# executable's image. That violates the single-Rust-image contract
-# (V3_WALLET_DECISION_LOG.md 2026-06-11 / 2026-09-10) in a way no
-# post-link inspection of the binary can see, because the duplicates live
-# in the .so files. Observed (while the daemon still linked C++): a Debug
-# shekyld whose Blockchain::init armed the regtest settlement-epoch
-# schedule in libcryptonote_core.so's copy while the RPC submit verifier
-# read the executable's unarmed copy and refused every emission claim as
-# not-yet-finalized under the genesis schedule.
-if(BUILD_SHARED_LIBS)
-  message(FATAL_ERROR "BUILD_SHARED_LIBS=ON is not supported: shared internal libraries each embed a separate copy of the Rust image and split its process-global state (single-Rust-image contract, V3_WALLET_DECISION_LOG.md 2026-09-10). Configure without -DBUILD_SHARED_LIBS.")
-endif()
-set(BUILD_SHARED_LIBS OFF)
-message(STATUS "Building internal libraries as static")
-set(PIC_FLAG "-fPIC")
-
-if(STATIC)
-  if(MSVC)
-    set(CMAKE_FIND_LIBRARY_SUFFIXES .lib .dll.a .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
-  else()
-    set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
-  endif()
-endif()
-
-option(SANITIZE "Use ASAN memory sanitizer" OFF)
-if(SANITIZE)
-  if (MSVC)
-    message(FATAL_ERROR "Cannot sanitize with MSVC")
-  else()
-    message(STATUS "Using ASAN")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
-  endif()
-endif()
-
-if (UNIX AND NOT APPLE)
-  # Note that at the time of this writing the -Wstrict-prototypes flag added below will make this fail
-  set(THREADS_PREFER_PTHREAD_FLAG ON)
-  find_package(Threads)
-  add_c_flag_if_supported(-pthread CMAKE_C_FLAGS)
-  add_cxx_flag_if_supported(-pthread CMAKE_CXX_FLAGS)
-endif()
-
-# Handle OpenSSL, used for sha256sum on binary updates and light wallet ssl http
-if (CMAKE_SYSTEM_NAME MATCHES "(SunOS|Solaris)")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthreads")
-endif ()
-
-if (APPLE AND NOT IOS)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=default")
-  if (NOT OPENSSL_ROOT_DIR)
-      EXECUTE_PROCESS(COMMAND brew --prefix openssl
-        OUTPUT_VARIABLE OPENSSL_ROOT_DIR
-        OUTPUT_STRIP_TRAILING_WHITESPACE)
-    message(STATUS "Using OpenSSL found at ${OPENSSL_ROOT_DIR}")
-  endif()
-endif()
-
-find_package(OpenSSL REQUIRED)
-message(STATUS "Using OpenSSL include dir at ${OPENSSL_INCLUDE_DIR}")
-include_directories(${OPENSSL_INCLUDE_DIR})
-
-if(STATIC AND NOT IOS)
-  if(UNIX)
-    set(OPENSSL_LIBRARIES "${OPENSSL_LIBRARIES};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")
-  endif()
-endif()
-
-if (WIN32)
-  list(APPEND OPENSSL_LIBRARIES ws2_32 crypt32)
-endif()
-
-add_definition_if_library_exists(c memset_s "string.h" HAVE_MEMSET_S)
-add_definition_if_library_exists(c explicit_bzero "strings.h" HAVE_EXPLICIT_BZERO)
-add_definition_if_function_found(strptime HAVE_STRPTIME)
-
-add_definitions(-DAUTO_INITIALIZE_EASYLOGGINGPP)
-
-set(MONERO_GENERATED_HEADERS_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_include")
-include_directories(${MONERO_GENERATED_HEADERS_DIR})
-file(MAKE_DIRECTORY "${MONERO_GENERATED_HEADERS_DIR}/shekyl")
-
-# Single source of truth for economics constants consumed by C++ and Rust.
-set(SHEKYL_ECONOMICS_CONFIG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/config/economics_params.json")
-set(SHEKYL_ECONOMICS_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_economics_params.py")
-set(SHEKYL_ECONOMICS_GENERATED_HEADER "${MONERO_GENERATED_HEADERS_DIR}/shekyl/economics_params_generated.h")
-# Python3 was discovered once, early, above the 64-bit gate's downstream
-# includes — Python3_EXECUTABLE is set for the whole configure pass.
-execute_process(
-  COMMAND ${Python3_EXECUTABLE} "${SHEKYL_ECONOMICS_GENERATOR}" "${SHEKYL_ECONOMICS_CONFIG_JSON}" "${SHEKYL_ECONOMICS_GENERATED_HEADER}"
-  RESULT_VARIABLE SHEKYL_ECONOMICS_GEN_RESULT
-)
-if(NOT SHEKYL_ECONOMICS_GEN_RESULT EQUAL 0)
-  message(FATAL_ERROR "Failed generating economics constants header from ${SHEKYL_ECONOMICS_CONFIG_JSON}")
-endif()
-
-# Single source of truth for the consensus-affecting constant subset
-# identified by the 2026-05-05 FFI constant-drift audit
-# (`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`). Same JSON
-# is consumed by `rust/shekyl-engine-core/build.rs` so neither side
-# can drift.
-set(SHEKYL_CONSENSUS_CONFIG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/config/consensus_constants.json")
-set(SHEKYL_CONSENSUS_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_consensus_constants.py")
-set(SHEKYL_CONSENSUS_GENERATED_HEADER "${MONERO_GENERATED_HEADERS_DIR}/shekyl/consensus_constants_generated.h")
-
-# `CMAKE_CONFIGURE_DEPENDS` makes CMake auto-reconfigure (and therefore
-# re-run the `execute_process` below) whenever the JSON authority or
-# the generator script changes. Without this, an edit to the JSON
-# would not regenerate the C++ header on incremental builds — only the
-# Rust side (`build.rs` with `cargo:rerun-if-changed`) would pick the
-# change up, and the two sides would silently diverge until a clean
-# build. That divergence is exactly the bug class this branch exists
-# to close, so the configure-time generation must track both inputs.
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-  "${SHEKYL_CONSENSUS_CONFIG_JSON}"
-  "${SHEKYL_CONSENSUS_GENERATOR}"
-)
-execute_process(
-  COMMAND ${Python3_EXECUTABLE} "${SHEKYL_CONSENSUS_GENERATOR}" "${SHEKYL_CONSENSUS_CONFIG_JSON}" "${SHEKYL_CONSENSUS_GENERATED_HEADER}"
-  RESULT_VARIABLE SHEKYL_CONSENSUS_GEN_RESULT
-)
-if(NOT SHEKYL_CONSENSUS_GEN_RESULT EQUAL 0)
-  message(FATAL_ERROR "Failed generating consensus constants header from ${SHEKYL_CONSENSUS_CONFIG_JSON}")
-endif()
-
-# As of OpenBSD 6.8, -march=<anything> breaks the build
-function(set_default_arch)
-  if (OPENBSD)
-    set(ARCH default)
-  else()
-    set(ARCH native)
-  endif()
-
-  set(ARCH ${ARCH} CACHE STRING "CPU to build for: -march value or 'default' to not pass -march at all")
-endfunction()
-
-if (NOT (MSVC OR ARCH))
-    set_default_arch()
-endif()
-
-option(COVERAGE "Enable profiling for test coverage report" OFF)
-if(COVERAGE)
-    message(STATUS "Building with profiling for test coverage report")
-endif()
-macro (monero_enable_coverage)
-  if(COVERAGE AND NOT MSVC)
-    foreach(COV_FLAG -fprofile-arcs -ftest-coverage --coverage)
-      set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   ${COV_FLAG}")
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${COV_FLAG}")
-    endforeach()
-  endif()
-endmacro()
-
-function (monero_add_library name)
-    monero_add_library_with_deps(NAME "${name}" SOURCES ${ARGN})
-endfunction()
-
-function (monero_add_library_with_deps)
-  cmake_parse_arguments(MONERO_ADD_LIBRARY "" "NAME" "DEPENDS;SOURCES" ${ARGN})
-  source_group("${MONERO_ADD_LIBRARY_NAME}" FILES ${MONERO_ADD_LIBRARY_SOURCES})
-
-  # Define a ("virtual") object library and an actual library that links those
-  # objects together. The virtual libraries can be arbitrarily combined to link
-  # any subset of objects into one library archive. This is used for releasing
-  # libwallet, which combines multiple components.
-  set(objlib obj_${MONERO_ADD_LIBRARY_NAME})
-  add_library(${objlib} OBJECT ${MONERO_ADD_LIBRARY_SOURCES})
-  add_library("${MONERO_ADD_LIBRARY_NAME}" $<TARGET_OBJECTS:${objlib}>)
-  monero_set_target_no_relink("${MONERO_ADD_LIBRARY_NAME}")
-  monero_set_target_strip    ("${MONERO_ADD_LIBRARY_NAME}")
-  if (MONERO_ADD_LIBRARY_DEPENDS)
-    add_dependencies(${objlib} ${MONERO_ADD_LIBRARY_DEPENDS})
-  endif()
-  set_property(TARGET "${MONERO_ADD_LIBRARY_NAME}" PROPERTY FOLDER "libs")
-  target_compile_definitions(${objlib}
-    PRIVATE $<TARGET_PROPERTY:${MONERO_ADD_LIBRARY_NAME},INTERFACE_COMPILE_DEFINITIONS>)
-endfunction ()
-
-# Git-free randomx-v2 populate check. Must not call check_submodule
-# (that function exists only inside if(NOT MANUAL_SUBMODULES)/if(GIT_FOUND)).
-# BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS auto-flips miner-lib ON above,
-# so this covers both options. Empty SOURCE_DIR would otherwise fail
-# inside ExternalProject with a generic message.
 if(BUILD_RANDOMX_V2_MINER_LIB)
   set(_RANDOMX_V2_SRC "${CMAKE_SOURCE_DIR}/external/randomx-v2")
   if(NOT EXISTS "${_RANDOMX_V2_SRC}" OR NOT IS_DIRECTORY "${_RANDOMX_V2_SRC}")
@@ -864,586 +470,8 @@ if(BUILD_RANDOMX_V2_MINER_LIB)
       "not the happy path, and does not skip this populate check.")
   endif()
 endif()
-# Before external/. The runtime property is copied when a target is created.
-if(MSVC)
-  include(MsvcStaticRuntime)
-endif()
+
 add_subdirectory(external)
 
-if(MSVC)
-  # No `/GS-`: the compiler's stack-buffer security checks stay on in every
-  # C++ object (DAEMON_CONFIG_CUTOVER.md DC-Q21, §3.8 of the Rust-binary
-  # PR). The flag was inherited; nothing measured a need for it.
-  add_definitions("/bigobj /MP /FS /W3 /D_CRT_SECURE_NO_WARNINGS /wd4996 /wd4345 /D_WIN32_WINNT=0x0600 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DGTEST_HAS_TR1_TUPLE=0 /FIinline_c.h /D__SSE4_1__ /Zc:preprocessor")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FIiso646.h")
-  # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /Dinline=__inline")
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:10485760")
-  include_directories(SYSTEM src/platform/msc)
-else()
-  include(TestCXXAcceptsFlag)
-  message(STATUS "Building on ${CMAKE_SYSTEM_PROCESSOR} for ${ARCH}")
-  if(ARCH STREQUAL "default")
-    set(ARCH_FLAG "")
-  elseif(PPC64LE)
-    set(ARCH_FLAG "-mcpu=power8")
-  elseif(PPC64)
-    set(ARCH_FLAG "-mcpu=970")
-  elseif(PPC)
-    set(ARCH_FLAG "-mcpu=7400")
-  elseif(IOS AND ARCH STREQUAL "arm64")
-    message(STATUS "IOS: Changing arch from arm64 to armv8")
-    set(ARCH_FLAG "-march=armv8")
-  else()
-    set(ARCH_FLAG "-march=${ARCH}")
-    if(ARCH STREQUAL "native")
-      check_c_compiler_flag(-march=native CC_SUPPORTS_MARCH_NATIVE)
-      if (NOT CC_SUPPORTS_MARCH_NATIVE)
-        check_c_compiler_flag(-mtune=native CC_SUPPORTS_MTUNE_NATIVE)
-        if (CC_SUPPORTS_MTUNE_NATIVE)
-          set(ARCH_FLAG "-mtune=${ARCH}")
-        else()
-          set(ARCH_FLAG "")
-        endif()
-      endif()
-    endif()
-  endif()
-
-  option(NO_AES "Explicitly disable AES support" ${NO_AES})
-
-  if(NO_AES)
-    message(STATUS "AES support explicitly disabled")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DNO_AES")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DNO_AES")
-  elseif(NOT ARM AND NOT PPC64LE AND NOT PPC64 AND NOT PPC AND NOT S390X AND NOT RISCV)
-    message(STATUS "AES support enabled")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -maes")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -maes")
-  elseif(PPC64LE OR PPC64 OR PPC)
-    message(STATUS "AES support not available on POWER")
-  elseif(S390X)
-    message(STATUS "AES support not available on s390x")
-  elseif(RISCV)
-    message(STATUS "AES support not available on RISC-V")
-  elseif(ARM8)
-    CHECK_CXX_ACCEPTS_FLAG("-march=${ARCH}+crypto" ARCH_PLUS_CRYPTO)
-    if(ARCH_PLUS_CRYPTO)
-      message(STATUS "Crypto extensions enabled for ARMv8")
-      set(ARCH_FLAG "-march=${ARCH}+crypto")
-    else()
-      message(STATUS "Crypto extensions unavailable on your ARMv8 device")
-    endif()
-  else()
-    message(STATUS "AES support disabled")
-  endif()
-
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ARCH_FLAG}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ARCH_FLAG}")
-
-  set(WARNINGS "-Wall -Wextra -Wpointer-arith -Wundef -Wvla -Wwrite-strings -Wformat -Wformat-security -Wredundant-decls -Wdate-time -Wimplicit-fallthrough -Wunreachable-code -Wno-unused-parameter -Wno-error=deprecated-declarations -Wno-error=unused-variable -Wno-error=undef -Wno-error=uninitialized")
-  if(CMAKE_C_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    set(WARNINGS "${WARNINGS} -Wgnu -Wshadow-field -Wthread-safety -Wloop-analysis -Wunused-member-function -Wconditional-uninitialized -Wdocumentation -Wself-assign -Wno-error=extra")
-    if(ARM)
-      set(WARNINGS "${WARNINGS} -Wno-error=inline-asm")
-    endif()
-  else()
-    set(WARNINGS "${WARNINGS} -Wlogical-op -Wno-error=maybe-uninitialized -Wno-error=cpp -Wduplicated-branches")
-  endif()
-  if(MINGW)
-    set(WARNINGS "${WARNINGS} -Wno-error=unused-value -Wno-error=unused-but-set-variable")
-    set(MINGW_FLAG "${MINGW_FLAG} -DWIN32_LEAN_AND_MEAN")
-    set(Boost_THREADAPI win32)
-    include_directories(SYSTEM src/platform/mingw)
-    # mingw doesn't support LTO (multiple definition errors at link time)
-    set(USE_LTO_DEFAULT false)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,10485760")
-    # Pin the Windows API tier to Vista (0x0600) on 64-bit MinGW so
-    # MinGW-w64's headers expose the Vista+ declarations they gate on
-    # `_WIN32_WINNT`. 32-bit MinGW was retired in Chore #3
-    # (v3.1.0-alpha.5) — the root `CMakeLists.txt`
-    # `CMAKE_SIZEOF_VOID_P` gate above refuses any i686 configure.
-    # The chain-store file that needed the compression-control
-    # declaration was deleted with the C++ store. The tier pin stays
-    # for the headers this build still includes.
-    add_definitions(-DWINVER=0x0600 -D_WIN32_WINNT=0x0600)
-  endif()
-  set(C_WARNINGS "-Waggregate-return -Wnested-externs -Wold-style-definition -Wstrict-prototypes")
-  set(CXX_WARNINGS "-Wno-reorder -Wno-missing-field-initializers -Woverloaded-virtual -Wsuggest-override")
-  try_compile(STATIC_ASSERT_RES "${CMAKE_CURRENT_BINARY_DIR}/static-assert" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test-static-assert.c" CMAKE_FLAGS -DCMAKE_C_STANDARD=11)
-  if(STATIC_ASSERT_RES)
-    set(STATIC_ASSERT_FLAG "")
-  else()
-    set(STATIC_ASSERT_FLAG "-Dstatic_assert=_Static_assert")
-  endif()
-
-  try_compile(STATIC_ASSERT_CPP_RES "${CMAKE_CURRENT_BINARY_DIR}/static-assert" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test-static-assert.cpp" CMAKE_FLAGS -DCMAKE_CXX_STANDARD=11)
-  if(STATIC_ASSERT_CPP_RES)
-    set(STATIC_ASSERT_CPP_FLAG "")
-  else()
-    set(STATIC_ASSERT_CPP_FLAG "-Dstatic_assert=_Static_assert")
-  endif()
-
-  monero_enable_coverage()
-  # With GCC 6.1.1 the compiled binary malfunctions due to aliasing. Until that
-  # is fixed in the code (Issue #847), force compiler to be conservative.
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-strict-aliasing")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-strict-aliasing")
-
-  # if those don't work for your compiler, single it out where appropriate
-  if(CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT OPENBSD)
-    set(C_SECURITY_FLAGS "${C_SECURITY_FLAGS} -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1")
-    set(CXX_SECURITY_FLAGS "${CXX_SECURITY_FLAGS} -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1")
-  endif()
-
-  # warnings (duplicated in WARNINGS for non-MSVC; kept here for SECURITY_FLAGS aggregation)
-  add_c_flag_if_supported(-Wformat C_SECURITY_FLAGS)
-  add_cxx_flag_if_supported(-Wformat CXX_SECURITY_FLAGS)
-  add_c_flag_if_supported(-Wformat-security C_SECURITY_FLAGS)
-  add_cxx_flag_if_supported(-Wformat-security CXX_SECURITY_FLAGS)
-
-  # protection against identifier-based attacks and stack reuse
-  add_c_flag_if_supported(-fno-extended-identifiers C_SECURITY_FLAGS)
-  add_cxx_flag_if_supported(-fno-extended-identifiers CXX_SECURITY_FLAGS)
-  add_c_flag_if_supported(-fstack-reuse=none C_SECURITY_FLAGS)
-  add_cxx_flag_if_supported(-fstack-reuse=none CXX_SECURITY_FLAGS)
-
-  # ARM64 branch protection (BTI / pointer authentication)
-  if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-      add_c_flag_if_supported("-mbranch-protection=bti" C_SECURITY_FLAGS)
-      add_cxx_flag_if_supported("-mbranch-protection=bti" CXX_SECURITY_FLAGS)
-    else()
-      add_c_flag_if_supported("-mbranch-protection=standard" C_SECURITY_FLAGS)
-      add_cxx_flag_if_supported("-mbranch-protection=standard" CXX_SECURITY_FLAGS)
-    endif()
-  endif()
-
-  # -fstack-protector
-  if (NOT OPENBSD AND NOT (WIN32 AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1)))
-    add_c_flag_if_supported(-fstack-protector C_SECURITY_FLAGS)
-    add_cxx_flag_if_supported(-fstack-protector CXX_SECURITY_FLAGS)
-    add_c_flag_if_supported(-fstack-protector-strong C_SECURITY_FLAGS)
-    add_cxx_flag_if_supported(-fstack-protector-strong CXX_SECURITY_FLAGS)
-  endif()
-
-  # New in GCC 8.2 -- CET is x86 Linux only; macOS lacks cet.h
-  if (NOT APPLE AND NOT OPENBSD AND NOT (WIN32 AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1)))
-    add_c_flag_if_supported(-fcf-protection=full C_SECURITY_FLAGS)
-    add_cxx_flag_if_supported(-fcf-protection=full CXX_SECURITY_FLAGS)
-  endif()
-  if (NOT WIN32 AND NOT OPENBSD)
-    add_c_flag_if_supported(-fstack-clash-protection C_SECURITY_FLAGS)
-    add_cxx_flag_if_supported(-fstack-clash-protection CXX_SECURITY_FLAGS)
-  endif()
-
-  # Removed in GCC 9.1 (or before ?), but still accepted, so spams the output
-  if (NOT (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND NOT CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1))
-    add_c_flag_if_supported(-mmitigate-rop C_SECURITY_FLAGS)
-    add_cxx_flag_if_supported(-mmitigate-rop CXX_SECURITY_FLAGS)
-  endif()
-
-  # Per-function/data sections allow the linker to strip unreferenced code,
-  # reducing binary size (inspired by Monero #9898 author's findings:
-  # -ffunction-sections + --gc-sections shrank Docker images by ~14 MiB).
-  if(NOT MINGW)
-    add_c_flag_if_supported(-ffunction-sections C_SECURITY_FLAGS)
-    add_cxx_flag_if_supported(-ffunction-sections CXX_SECURITY_FLAGS)
-    add_c_flag_if_supported(-fdata-sections C_SECURITY_FLAGS)
-    add_cxx_flag_if_supported(-fdata-sections CXX_SECURITY_FLAGS)
-  endif()
-
-  # linker
-  if (NOT SANITIZE AND NOT OSSFUZZ AND NOT (WIN32 AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND (CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1 OR NOT STATIC))))
-    # PIE executables randomly crash at startup with ASAN
-    # Windows binaries die on startup with PIE when compiled with GCC <9.x
-    # Windows dynamically-linked binaries die on startup with PIE regardless of GCC version
-    if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
-      # Clang does not support -pie flag
-      add_linker_flag_if_supported("-Wl,-pie" LD_SECURITY_FLAGS)
-    else()
-      add_linker_flag_if_supported("-pie" LD_SECURITY_FLAGS)
-    endif()
-  endif()
-  add_linker_flag_if_supported(-Wl,-z,relro LD_SECURITY_FLAGS)
-  add_linker_flag_if_supported(-Wl,-z,now LD_SECURITY_FLAGS)
-  add_linker_flag_if_supported(-Wl,-z,noexecstack noexecstack_SUPPORTED)
-  if (noexecstack_SUPPORTED)
-    set(LD_SECURITY_FLAGS "${LD_SECURITY_FLAGS} -Wl,-z,noexecstack")
-  endif()
-  add_linker_flag_if_supported(-Wl,-z,noexecheap noexecheap_SUPPORTED)
-  if (noexecheap_SUPPORTED)
-    set(LD_SECURITY_FLAGS "${LD_SECURITY_FLAGS} -Wl,-z,noexecheap")
-  endif()
-
-  # Strip unreferenced sections (pairs with -ffunction-sections/-fdata-sections above)
-  if(APPLE)
-    add_linker_flag_if_supported("-Wl,-dead_strip" LD_SECURITY_FLAGS)
-  elseif(NOT MINGW)
-    add_linker_flag_if_supported("-Wl,--gc-sections" LD_SECURITY_FLAGS)
-  endif()
-
-  if(BACKCOMPAT)
-      add_linker_flag_if_supported(-Wl,--wrap=glob LD_BACKCOMPAT_FLAGS)
-      message(STATUS "Using Lib C back compat flags: ${LD_BACKCOMPAT_FLAGS}")
-  endif()
-
-  # some windows linker bits
-  if (WIN32)
-    add_linker_flag_if_supported(-Wl,--dynamicbase LD_SECURITY_FLAGS)
-    add_linker_flag_if_supported(-Wl,--nxcompat LD_SECURITY_FLAGS)
-    add_linker_flag_if_supported(-Wl,--high-entropy-va LD_SECURITY_FLAGS)
-  endif()
-
-  # Warnings, that when ignored are so severe, that they can segfault or even UB any application.
-  # Treat them as errors.
-  add_c_flag_if_supported(  -Werror=switch      C_SECURITY_FLAGS)
-  add_cxx_flag_if_supported(-Werror=switch      CXX_SECURITY_FLAGS)
-  add_c_flag_if_supported(  -Werror=return-type C_SECURITY_FLAGS)
-  add_cxx_flag_if_supported(-Werror=return-type CXX_SECURITY_FLAGS)
-
-  message(STATUS "Using C security hardening flags: ${C_SECURITY_FLAGS}")
-  message(STATUS "Using C++ security hardening flags: ${CXX_SECURITY_FLAGS}")
-  message(STATUS "Using linker security hardening flags: ${LD_SECURITY_FLAGS}")
-
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_GNU_SOURCE ${MINGW_FLAG} ${STATIC_ASSERT_FLAG} ${WARNINGS} ${C_WARNINGS} ${PIC_FLAG} ${C_SECURITY_FLAGS}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_GNU_SOURCE ${MINGW_FLAG} ${STATIC_ASSERT_CPP_FLAG} ${WARNINGS} ${CXX_WARNINGS} ${PIC_FLAG} ${CXX_SECURITY_FLAGS}")
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${LD_SECURITY_FLAGS} ${LD_BACKCOMPAT_FLAGS}")
-
-  # With GCC 6.1.1 the compiled binary malfunctions due to aliasing. Until that
-  # is fixed in the code (Issue #847), force compiler to be conservative.
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-strict-aliasing")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-strict-aliasing")
-
-  if(ARM)
-    message(STATUS "Setting FPU Flags for ARM Processors")
-
-    #NB NEON hardware does not fully implement the IEEE 754 standard for floating-point arithmetic
-    #Need custom assembly code to take full advantage of NEON SIMD
-
-    #Cortex-A5/9  -mfpu=neon-fp16
-    #Cortex-A7/15 -mfpu=neon-vfpv4
-    #Cortex-A8    -mfpu=neon
-    #ARMv8  	  -FP and SIMD on by default for all ARM8v-A series, NO -mfpu setting needed
-
-    #For custom -mtune, processor IDs for ARMv8-A series:
-    #0xd04 - Cortex-A35
-    #0xd07 - Cortex-A57
-    #0xd08 - Cortex-A72
-    #0xd03 - Cortex-A73
-
-    CHECK_CXX_ACCEPTS_FLAG(-mfix-cortex-a53-835769 CXX_ACCEPTS_MFIX_CORTEX_A53_835769)
-    CHECK_CXX_ACCEPTS_FLAG(-mfix-cortex-a53-843419 CXX_ACCEPTS_MFIX_CORTEX_A53_843419)
-
-    if(CXX_ACCEPTS_MFIX_CORTEX_A53_835769)
-      message(STATUS "Enabling Cortex-A53 workaround 835769")
-      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfix-cortex-a53-835769")
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfix-cortex-a53-835769")
-    endif()
-
-    if(CXX_ACCEPTS_MFIX_CORTEX_A53_843419)
-      message(STATUS "Enabling Cortex-A53 workaround 843419")
-      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfix-cortex-a53-843419")
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfix-cortex-a53-843419")
-    endif()
-
-  endif(ARM)
-
-  # random crash on startup when asan is on if pie is enabled
-  if(NOT SANITIZE AND IOS)
-    message(STATUS "Enabling PIE executable")
-    set(PIC_FLAG "")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIE")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIE")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_CXX_FLAGS} -fPIE -pie")
-  endif()
-
-  if(APPLE)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=default -DGTEST_HAS_TR1_TUPLE=0")
-  endif()
-
-  set(DEBUG_FLAGS "-g3")
-
-  # At least some CLANGs default to not enough for monero
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ftemplate-depth=900")
-
-  if(NOT DEFINED USE_LTO_DEFAULT)
-    set(USE_LTO_DEFAULT false)
-  endif()
-  set(USE_LTO ${USE_LTO_DEFAULT} CACHE BOOL "Use Link-Time Optimization (Release mode only)")
-
-  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    # There is a clang bug that does not allow to compile code that uses AES-NI intrinsics if -flto is enabled, so explicitly disable
-    set(USE_LTO false)
-  endif()
-
-
-  if(USE_LTO)
-    set(RELEASE_FLAGS "${RELEASE_FLAGS} -flto")
-    if(STATIC)
-      set(RELEASE_FLAGS "${RELEASE_FLAGS} -ffat-lto-objects")
-    endif()
-    # Since gcc 4.9 the LTO format is non-standard (slim), so we need the gcc-specific ar and ranlib binaries
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.9.0) AND NOT OPENBSD AND NOT DRAGONFLY)
-      # When invoking cmake on distributions on which gcc's binaries are prefixed
-      # with an arch-specific triplet, the user must specify -DCHOST=<prefix>
-      if (DEFINED CHOST)
-        set(CMAKE_AR "${CHOST}-gcc-ar")
-        set(CMAKE_RANLIB "${CHOST}-gcc-ranlib")
-      else()
-        set(CMAKE_AR "gcc-ar")
-        set(CMAKE_RANLIB "gcc-ranlib")
-      endif()
-    endif()
-  endif()
-
-  set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} ${DEBUG_FLAGS}")
-  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} ${DEBUG_FLAGS}")
-  set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} ${RELEASE_FLAGS}")
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} ${RELEASE_FLAGS}")
-
-  if(STATIC)
-    # STATIC already configures most deps to be linked in statically,
-    # here we make more deps static if the platform permits it
-    if (MINGW)
-      # On Windows, this is as close to fully-static as we get:
-      # this leaves only deps on /c/Windows/system32/*.dll
-      set(STATIC_FLAGS "-static")
-    elseif (NOT (APPLE OR FREEBSD OR OPENBSD OR DRAGONFLY))
-      # On Linux, we don't support fully static build, but these can be static
-      set(STATIC_FLAGS "-static-libgcc -static-libstdc++")
-    endif()
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${STATIC_FLAGS} ")
-  endif()
-endif()
-
-set(OLD_LIB_SUFFIXES ${CMAKE_FIND_LIBRARY_SUFFIXES})
-if(STATIC)
-  if(MINGW)
-    set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
-  endif()
-
-  set(Boost_USE_STATIC_LIBS ON)
-  if(MINGW)
-    set(Boost_USE_STATIC_RUNTIME ON)
-  endif()
-endif()
-
-# Find Boost headers and libraries.
-# Prefer CONFIG mode (Boost 1.85+ ships CMake config files) to avoid
-# FindBoost SO-version mismatches on rolling-release distros.
-set(BOOST_MIN_VER 1.74)
-set(BOOST_COMPONENTS filesystem thread date_time chrono serialization program_options)
-if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-  list(APPEND BOOST_COMPONENTS locale)
-endif()
-
-set(_BOOST_USE_CONFIG FALSE)
-
-# Probe: try CONFIG mode first (preferred -- CMake 3.30 removed FindBoost.cmake).
-find_package(Boost ${BOOST_MIN_VER} QUIET CONFIG)
-if(Boost_FOUND)
-  set(_BOOST_USE_CONFIG TRUE)
-  message(STATUS "Found Boost ${Boost_VERSION_STRING} via CMake config mode")
-endif()
-
-# Fallback: MODULE mode (FindBoost.cmake on CMake < 3.30) or default resolution.
-if(NOT Boost_FOUND)
-  find_package(Boost ${BOOST_MIN_VER} QUIET)
-  if(Boost_FOUND)
-    message(STATUS "Found Boost ${Boost_VERSION_STRING} via module/fallback mode")
-  endif()
-endif()
-
-if(NOT Boost_FOUND)
-  die("Could not find Boost libraries, please make sure you have installed Boost or libboost-all-dev (>=${BOOST_MIN_VER}) or the equivalent")
-elseif(Boost_FOUND)
-  if(NOT Boost_VERSION_STRING)
-    if(Boost_VERSION_MAJOR)
-      set(Boost_VERSION_STRING "${Boost_VERSION_MAJOR}.${Boost_VERSION_MINOR}.${Boost_VERSION_PATCH}")
-    else()
-      set(Boost_VERSION_STRING "${Boost_VERSION}")
-    endif()
-  endif()
-  message(STATUS "Found Boost Version: ${Boost_VERSION_STRING}")
-
-  # Boost System is header-only since 1.69
-  if (Boost_VERSION_STRING VERSION_LESS 1.69.0)
-    list(APPEND BOOST_COMPONENTS system)
-  endif()
-
-  # Boost Regex is header-only since 1.77
-  if (Boost_VERSION_STRING VERSION_LESS 1.77.0)
-    list(APPEND BOOST_COMPONENTS regex)
-  endif()
-
-  # Boost Locale depends on container since 1.85
-  if (NOT Boost_VERSION_STRING VERSION_LESS 1.85.0)
-    list(APPEND BOOST_COMPONENTS container)
-  endif()
-
-  message(STATUS "Boost components: ${BOOST_COMPONENTS}")
-
-  # Find component libraries using the same mode as the initial detection to
-  # avoid duplicate-target SEND_ERRORs from Boost's own config files.
-  if(_BOOST_USE_CONFIG)
-    find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED CONFIG COMPONENTS ${BOOST_COMPONENTS})
-  else()
-    find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED COMPONENTS ${BOOST_COMPONENTS})
-  endif()
-  set(CMAKE_FIND_LIBRARY_SUFFIXES ${OLD_LIB_SUFFIXES})
-endif()
-
-# When Boost is found via CONFIG mode (1.85+), verify the resolved shared
-# libraries actually exist on disk. On rolling-release distros the boost-libs
-# package (shared .so files) may be missing or version-mismatched against the
-# cmake config shipped by the boost (headers) package.
-if(_BOOST_USE_CONFIG AND TARGET Boost::filesystem)
-  get_target_property(_boost_fs_loc Boost::filesystem IMPORTED_LOCATION_RELEASE)
-  if(NOT _boost_fs_loc)
-    get_target_property(_boost_fs_loc Boost::filesystem IMPORTED_LOCATION)
-  endif()
-  if(_boost_fs_loc AND NOT EXISTS "${_boost_fs_loc}")
-    message(FATAL_ERROR
-      "Boost CONFIG mode resolved Boost::filesystem to '${_boost_fs_loc}' "
-      "which does not exist. On Arch Linux, install the 'boost-libs' package "
-      "alongside 'boost' to provide the shared libraries.")
-  endif()
-endif()
-
-# Remap old-style Boost_XXX_LIBRARY variables to imported targets when CONFIG
-# mode is active. This avoids stale versioned .so paths in downstream
-# target_link_libraries() calls.
-if(_BOOST_USE_CONFIG)
-  foreach(_comp filesystem thread chrono system date_time serialization
-          program_options locale regex container atomic)
-    string(TOUPPER "${_comp}" _COMP_UPPER)
-    if(TARGET Boost::${_comp})
-      set(Boost_${_COMP_UPPER}_LIBRARY Boost::${_comp})
-    endif()
-  endforeach()
-  set(Boost_LIBRARIES "")
-  foreach(_comp IN LISTS BOOST_COMPONENTS)
-    if(TARGET Boost::${_comp})
-      list(APPEND Boost_LIBRARIES Boost::${_comp})
-    endif()
-  endforeach()
-endif()
-
-add_definitions(-DBOOST_ASIO_ENABLE_SEQUENTIAL_STRAND_ALLOCATION)
-add_definitions(-DBOOST_NO_AUTO_PTR)
-add_definitions(-DBOOST_UUID_DISABLE_ALIGNMENT) # This restores UUID's std::has_unique_object_representations property
-
-include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
-if(MINGW)
-  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wa,-mbig-obj")
-  set(EXTRA_LIBRARIES mswsock;ws2_32;iphlpapi;crypt32;bcrypt)
-  if(DEPENDS)
-    set(ICU_LIBRARIES icuio icui18n icuuc icudata icutu iconv)
-  else()
-    # This is an extremely ugly hack to get around Boost not being built with static ICU.
-    # We reported the issue, we are waiting for upstream to fix this issue: https://github.com/boostorg/boost/issues/1079#issue-3384962885
-    # This hack links shared ICU libs to avoid linker errors we get in MSYS2 compilation (undefined symbols to ICU).
-    set(OLD_LIB_SUFFIXES ${CMAKE_FIND_LIBRARY_SUFFIXES})
-    set(CMAKE_FIND_LIBRARY_SUFFIXES ".dll.a")
-    find_library(ICUIO_LIBRARIES NAMES icuio REQUIRED)
-    find_library(ICUIN_LIBRARIES NAMES icuin REQUIRED)
-    find_library(ICUUC_LIBRARIES NAMES icuuc REQUIRED)
-    find_library(ICUDT_LIBRARIES NAMES icudt REQUIRED)
-    find_library(ICUTU_LIBRARIES NAMES icutu REQUIRED)
-    find_library(ICONV_LIBRARIES NAMES iconv REQUIRED)
-    set(ICU_LIBRARIES ${ICUIO_LIBRARIES} ${ICUIN_LIBRARIES} ${ICUUC_LIBRARIES} ${ICUDT_LIBRARIES} ${ICUTU_LIBRARIES} ${ICONV_LIBRARIES})
-    set(CMAKE_FIND_LIBRARY_SUFFIXES ${OLD_LIB_SUFFIXES})
-  endif()
-elseif(APPLE OR OPENBSD)
-  set(EXTRA_LIBRARIES "")
-elseif(FREEBSD)
-  set(EXTRA_LIBRARIES execinfo)
-elseif(DRAGONFLY)
-  find_library(COMPAT compat)
-  set(EXTRA_LIBRARIES execinfo ${COMPAT})
-elseif(CMAKE_SYSTEM_NAME MATCHES "(SunOS|Solaris)")
-  set(EXTRA_LIBRARIES socket nsl resolv)
-elseif(NOT MSVC AND NOT DEPENDS)
-  find_library(RT rt)
-  set(EXTRA_LIBRARIES ${RT})
-endif()
-
-list(APPEND EXTRA_LIBRARIES ${CMAKE_DL_LIBS})
-
-option(USE_READLINE "Build with GNU readline support." ON)
-if(USE_READLINE AND NOT DEPENDS)
-  find_package(Readline)
-  if(READLINE_FOUND AND GNU_READLINE_FOUND)
-    add_definitions(-DHAVE_READLINE)
-    include_directories(${Readline_INCLUDE_DIR})
-    message(STATUS "Found readline library at: ${Readline_ROOT_DIR}")
-    set(EPEE_READLINE epee_readline)
-  else()
-    message(STATUS "Could not find GNU readline library so building without readline support")
-  endif()
-elseif(USE_READLINE AND DEPENDS AND NOT MINGW)
-  find_path(Readline_INCLUDE_PATH readline/readline.h)
-  find_library(Readline_LIBRARY readline)
-  find_library(Terminfo_LIBRARY tinfo)
-  set(Readline_LIBRARY "${Readline_LIBRARY};${Terminfo_LIBRARY}")
-  set(GNU_READLINE_LIBRARY ${Readline_LIBRARY})
-  add_definitions(-DHAVE_READLINE)
-  set(EPEE_READLINE epee_readline)
-endif()
-
-find_library(SODIUM_LIBRARY NAMES sodium libsodium)
-if(SODIUM_LIBRARY)
-  find_path(SODIUM_INCLUDE_PATH sodium/crypto_verify_32.h)
-  if (SODIUM_INCLUDE_PATH)
-    message(STATUS "SODIUM_INCLUDE_PATH: ${SODIUM_INCLUDE_PATH}")
-    include_directories(${SODIUM_INCLUDE_PATH})
-  else()
-    message(FATAL_ERROR "Could not find required sodium/crypto_verify_32.h")
-  endif()
-endif()
-
-include(external/supercop/functions.cmake) # place after setting flags and before src directory inclusion
-include(Version) # before BuildRust: the Rust wallet binaries carry the same version string
-include(BuildRust) # Build Shekyl Rust workspace (PQ crypto, modular consensus, FFI)
-add_subdirectory(contrib)
-add_subdirectory(src)
-
-# Python3 was discovered once, early, above; PYTHON_EXECUTABLE is aliased
-# for legacy consumers under tests/ that have not been migrated from
-# FindPythonInterp to Python3 yet. No shadowing find_package needed here.
-if(BUILD_TESTS)
-  message(STATUS "Building tests")
-  add_subdirectory(tests)
-else()
-  message(STATUS "Not building tests")
-endif()
-
-if(BUILD_DEBUG_UTILITIES)
-  message(STATUS "Building debug utilities")
-else()
-  message(STATUS "Not building debug utilities")
-endif()
-
-if(BUILD_DOCUMENTATION)
-  set(DOC_GRAPHS "YES" CACHE STRING "Create dependency graphs (needs graphviz)")
-  set(DOC_FULLGRAPHS "NO" CACHE STRING "Create call/callee graphs (large)")
-
-  find_program(DOT_PATH dot)
-
-  if (DOT_PATH STREQUAL "DOT_PATH-NOTFOUND")
-    message("Doxygen: graphviz not found - graphs disabled")
-    set(DOC_GRAPHS "NO")
-  endif()
-
-  find_package(Doxygen)
-  if(DOXYGEN_FOUND)
-    configure_file("cmake/Doxyfile.in" "Doxyfile" @ONLY)
-    configure_file("cmake/Doxygen.extra.css.in" "Doxygen.extra.css" @ONLY)
-    add_custom_target(doc
-      ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile
-      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-      COMMENT "Generating API documentation with Doxygen.." VERBATIM)
-  endif()
-endif()
-
-# when ON - will install libwallet_merged into "lib"
-option(BUILD_GUI_DEPS "Build GUI dependencies." OFF)
+include(Version) # before BuildRust: the binaries carry the version string
+include(BuildRust) # the three binaries, one cargo invocation

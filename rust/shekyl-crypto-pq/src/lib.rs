@@ -18,11 +18,10 @@
 // ---------------------------------------------------------------------------
 // 64-bit-only gate — Chore #3, v3.1.0-alpha.5 (Tripwire A — primary).
 //
-// Matching gates (defense-in-depth; all four must be defeated to ship a
+// Matching gates (defense-in-depth; all three must be defeated to ship a
 // 32-bit build):
-//   - rust/shekyl-ffi/src/lib.rs           (Tripwire B, structural-not-observable)
 //   - rust/shekyl-tx-builder/src/lib.rs    (Tripwire C, direct fips204 consumer)
-//   - CMakeLists.txt (top)                 (Tripwire D, C++-side configure gate)
+//   - CMakeLists.txt (top)                 (Tripwire D, configure gate)
 //
 // This is the primary ML-KEM-768 / ML-DSA-65 consumer. The `fips203` /
 // `fips204` constant-time guarantees are stated against native 64-bit
