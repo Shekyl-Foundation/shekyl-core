@@ -346,14 +346,19 @@ impl Timer {
     }
 
     /// The loop wants `deadline`, or none. A deadline unchanged keeps its
-    /// generation; a new one gets the next.
+    /// generation; a new one gets the next. The generation does not wrap:
+    /// zero is never issued, and a wrapped zero would alias a generation
+    /// the loop has already folded.
     pub(super) fn want(&mut self, deadline: Option<u64>) -> Option<Wanted> {
         let current = *self.wanted.borrow();
         let wanted = match (current, deadline) {
             (_, None) => None,
             (Some(current), Some(at)) if current.at == at => Some(current),
             (_, Some(at)) => {
-                self.next = self.next.wrapping_add(1);
+                self.next = self
+                    .next
+                    .checked_add(1)
+                    .expect("deadline generation space exhausted");
                 Some(Wanted {
                     generation: self.next,
                     at,
