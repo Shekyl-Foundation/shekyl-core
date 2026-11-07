@@ -1,0 +1,140 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# A red run on `dev` opens a tracking issue, or comments on the open one.
+#
+# `dev` has no merge queue: a pull request merges on its own checks, and
+# the push runs on `dev` are the first to test what the merges made
+# (06-branching.mdc). A red there is `dev`'s finding, and a red nobody
+# reads is a silence. This is the route to a human, the same shape as
+# `nightly.yml`'s `report-red`: one open issue per workflow, found by its
+# exact title, so repeated reds thread instead of forking.
+#
+# Called by the last job of `build.yml` and `rust-audit-test.yml`, which
+# needs every other job of its workflow and runs on a push run on `dev` in
+# which one of them failed or was cancelled; a job past its
+# `timeout-minutes` is cancelled, not failed. scripts/ci/check_dev_red_reporter.py
+# holds the list and the condition to the file. A run cancelled as a whole,
+# because a newer merge superseded it, reports nothing.
+#
+# The issue names the red jobs, the pull request of the commit under test,
+# and every pull request merged since this workflow last passed on `dev`:
+# the push runs measure from that commit, so a red covers all of them.
+#
+# Checks out nothing: the only job here that holds a write token runs no
+# code from the tree.
+
+name: report-dev-red
+
+on:
+  workflow_call:
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # an API script; nightly's report-red p90 is 0.1 min
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const repoUrl = `${context.serverUrl}/${owner}/${repo}`;
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              owner,
+              repo,
+              run_id: context.runId,
+            });
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner,
+              repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+            // Every finished job that did not pass: failed, cancelled at its
+            // timeout, or any other non-passing conclusion. This job is still
+            // running, so it has no conclusion and is not counted.
+            const passing = new Set(['success', 'skipped', 'neutral']);
+            const red = jobs.filter((job) => job.conclusion && !passing.has(job.conclusion));
+            if (red.length === 0) {
+              core.setFailed('report-dev-red ran and found no job in this run that did not pass: the caller\'s condition and this run disagree.');
+              return;
+            }
+
+            // The pull request whose merge made the commit under test.
+            const { data: headPulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner,
+              repo,
+              commit_sha: run.head_sha,
+            });
+            const headPull = headPulls.find((p) => p.merged_at && p.base.ref === 'dev');
+
+            // Every merge since this workflow last passed on dev.
+            const { data: greens } = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: run.workflow_id,
+              branch: 'dev',
+              event: 'push',
+              status: 'success',
+              per_page: 1,
+            });
+            const green = greens.workflow_runs[0];
+            const since = [];
+            if (!green) {
+              since.push('No push run of this workflow has passed on `dev`; every merge so far is in scope.');
+            } else {
+              const { data: cmp } = await github.rest.repos.compareCommits({
+                owner,
+                repo,
+                base: green.head_sha,
+                head: run.head_sha,
+              });
+              const merges = cmp.commits
+                .map((c) => /^Merge pull request #(\d+) from (\S+)/.exec(c.commit.message))
+                .filter(Boolean)
+                .map((m) => `- #${m[1]} (\`${m[2]}\`)`);
+              since.push(`Merged since this workflow last passed on \`dev\` (${green.head_sha.slice(0, 10)}, ${repoUrl}/compare/${green.head_sha}...${run.head_sha}):`);
+              since.push(...(merges.length ? merges : ['- none found in the commit messages; read the compare link']));
+              if (cmp.total_commits > cmp.commits.length) {
+                since.push(`The compare holds ${cmp.total_commits} commits and the API listed ${cmp.commits.length}; the list above may be short.`);
+              }
+            }
+
+            const title = `dev RED: ${run.name}`;
+            const body = [
+              `Run: ${run.html_url}`,
+              `Commit: ${run.head_sha}` + (headPull ? `, merged by #${headPull.number}` : ''),
+              '',
+              'Jobs that did not pass:',
+              ...red.map((job) => `- [${job.name}](${job.html_url}): ${job.conclusion}`),
+              '',
+              ...since,
+              '',
+              'Each pull request was green on its own head. Find the two changes that disagree and fix it on a new pull request before more merges land on top (06-branching.mdc, "The runs on `dev` test the merge result").',
+            ].join('\n');
+
+            // Exact-title match over open issues, not text search: the search
+            // API's in:title is a substring match and lags on a fresh issue,
+            // which would fork the thread on back-to-back reds.
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = open.find((i) => !i.pull_request && i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body });
+              core.notice(`Commented on #${existing.number}: ${title}`);
+            } else {
+              const { data: issue } = await github.rest.issues.create({ owner, repo, title, body });
+              core.notice(`Opened #${issue.number}: ${title}`);
+            }

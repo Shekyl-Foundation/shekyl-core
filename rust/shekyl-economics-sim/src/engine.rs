@@ -317,7 +317,6 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
         let priced = chain.price(
             ChainStep {
-                fold_height: block,
                 chain_height: block + config.genesis_height_offset,
                 demand: (config.volume.get_volume)(block, params.blocks_per_year()),
                 leaves: outputs.leaves(),

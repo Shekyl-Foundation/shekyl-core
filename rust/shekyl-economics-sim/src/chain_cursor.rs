@@ -35,12 +35,11 @@ pub(crate) struct ChainCursor {
     space: BlockSpace,
 }
 
-/// What one block offers the cursor. Heights are a pair: `fold_height` is
-/// the cursor's own count, from the fold's first block, and `chain_height`
-/// is the consensus height the emission share reads (a scenario that starts
-/// mid-chain adds its genesis offset here, and nowhere else).
+/// What one block offers the cursor. `chain_height` is the consensus height
+/// the emission share, the pool's reference window and its received hour
+/// read (a scenario that starts mid-chain adds its genesis offset here, and
+/// nowhere else).
 pub(crate) struct ChainStep {
-    pub(crate) fold_height: u64,
     pub(crate) chain_height: u64,
     /// Transactions the scenario offers this block.
     pub(crate) demand: u64,
@@ -90,6 +89,17 @@ impl ChainCursor {
         self.space.medians(params)
     }
 
+    /// Bodies listed since the last call, by age at inclusion in blocks
+    /// (index = age), and start counting again.
+    pub(crate) fn take_ages(&mut self) -> Vec<u64> {
+        self.space.take_ages()
+    }
+
+    /// The last block's listing, cohort by cohort.
+    pub(crate) fn listed(&self) -> &[crate::block_space::ListedBodies] {
+        self.space.listed()
+    }
+
     /// Price `step` and record the block the fill listed.
     ///
     /// The volume window and the medians are the blocks before this one.
@@ -118,9 +128,11 @@ impl ChainCursor {
             relay: params.relay(),
         };
         let tx = params.fee.ordinary_tx(&fee_point);
+        // The pool's heights are the chain's: the reference window and the
+        // received hour read them.
         let filled = self
             .space
-            .fill(step.fold_height, medians, step.demand, tx, &fee_point);
+            .fill(step.chain_height, medians, step.demand, tx, &fee_point);
         self.window.push(filled.included);
         let paid = price_emission(&EmissionInputs {
             height: step.chain_height,
@@ -171,7 +183,6 @@ mod tests {
         for block in 0..params.blocks_per_year() {
             let priced = cursor.price(
                 ChainStep {
-                    fold_height: block,
                     chain_height: block,
                     demand: params.economic().tx_volume_baseline,
                     leaves,
@@ -215,7 +226,6 @@ mod tests {
         for block in 0..params.blocks_per_year() {
             let priced = cursor.price(
                 ChainStep {
-                    fold_height: block,
                     chain_height: block,
                     demand: economic.tx_volume_baseline,
                     leaves,
@@ -260,7 +270,6 @@ mod tests {
         let mut chain = ChainCursor::default();
         let first = chain.price(
             ChainStep {
-                fold_height: 0,
                 chain_height: 0,
                 demand: 5,
                 leaves: 0,
@@ -275,7 +284,6 @@ mod tests {
         assert_eq!(first.filled.included, 5, "five fit under the zone");
         let second = chain.price(
             ChainStep {
-                fold_height: 1,
                 chain_height: 1,
                 demand: 5,
                 leaves: 0,

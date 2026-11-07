@@ -119,6 +119,10 @@ fn may_open(file: &Path, _meta: &std::fs::Metadata, need: Need) -> std::io::Resu
 /// A directory's read-only attribute means nothing for the entries it may
 /// hold; the account's rights on it are found by start's create.
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix arm's signature: callers handle both platforms the same way"
+)]
 fn may_create_in(_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }

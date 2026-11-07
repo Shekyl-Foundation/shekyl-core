@@ -271,6 +271,26 @@ If a test would benefit from emitting a value that *might* be secret-derived,
 treat that as a signal that the type is missing a redacted `Debug` and fix
 the type, not the test.
 
+## A flaky test is a finding, not a pass
+
+CI's Rust job retries a failing test once (`rust/.config/nextest.toml`).
+A test that passes on the retry does not fail the run. It is listed under
+"Flaky" in the job summary and raised as a warning on the pull request
+(`scripts/ci/nextest_report.py`). The retry keeps one flake from blocking
+unrelated work; it does not make the flake acceptable.
+
+- **A flaky warning on a pull request is read like a red.** If the test
+  touches what the pull request changed, the flake is the pull request's
+  until shown otherwise.
+- **Two flakes of one test within seven days quarantine it.** It leaves
+  the `ci` profile's run by an exclusion in `rust/.config/nextest.toml`
+  whose comment carries the date, the two runs, and an owner who fixes or
+  deletes it. A quarantined test is a debt with a name on it, not a
+  resting place.
+- **A flake is never quieted by a wider timeout or another retry.** That
+  moves it, and the next one to see it pays more (the curve-tree reopen
+  bound in `docs/FOLLOWUPS.md` is that case, ruled 2026-10-31).
+
 ## Audit tables in PR descriptions
 
 For changes that touch many sites (>10), the PR description includes:

@@ -96,6 +96,10 @@ ARCHIVAL_KEPT = {
         os.path.join(ARCHIVAL_CRATE, "src", "secret_draw.rs"),
         "structural: the selection's 256-attempt cap, the stream's attempt counter",
     ),
+    "FULL_PAIR_ACCEPT_MASK": (
+        os.path.join(ARCHIVAL_CRATE, "src", "secret_draw.rs"),
+        "structural: the full pair's 1/16 acceptance, the selection's shape, pinned by the KATs",
+    ),
 }
 _BARE_ARCHIVAL = re.compile(r"\b(" + "|".join(ARCHIVAL_OWNED) + r")\b")
 

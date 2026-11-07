@@ -1238,8 +1238,7 @@ mod tests {
         #[cfg(windows)]
         {
             let err = ListenAddr::parse("uds:///tmp/x.sock")
-                .err()
-                .expect("uds:// must be refused on Windows");
+                .expect_err("uds:// must be refused on Windows");
             assert!(err.contains("Windows"), "{err}");
         }
         // Empty path is refused everywhere; the TCP form parses everywhere.

@@ -17,30 +17,23 @@ name: ci/gh-actions/rust
 # ruleset / branch-protection change is needed.
 
 on:
-  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
-  # not only the branch head — the class of failure neither PR's CI can
-  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
-  # filter, so this runs on every group regardless of the PR filter above
-  # or below.
-  merge_group:
-    types: [checks_requested]
-    branches: [dev]
   push:
-    # `main` only. PRs are covered by `pull_request`. A push-to-dev
-    # trigger double-ran this ~95-minute job on every merge.
-    #
-    # `paths` with negations instead of `paths-ignore` (the two cannot be
-    # combined per event): docs are skipped EXCEPT the domain registry TSV,
-    # which shekyl-crypto-pq's tests/domain_registry.rs include_str!s — a
-    # TSV-only PR that skipped this workflow could merge a duplicate domain
-    # and turn dev's test suite red for the next unrelated rust/** PR.
-    # Order matters: the last matching pattern wins.
-    branches: [main]
+    # `dev` and `main`. A pull request's run tests its head merged onto the
+    # `dev` of its last push; the run on `dev` tests what the merges
+    # actually made, the one place two pull requests each green alone can
+    # show red together (06-branching.mdc). Docs-only pushes are skipped by
+    # the `changes` job below, not by a `paths` filter here: a filter would
+    # suppress the required check.
+    branches: [dev, main]
   pull_request:
     types: [opened, synchronize, reopened]
 
 # Own concurrency group (distinct from build.yml's `build-<ref>`) so same-PR
 # reruns of the Rust gate supersede only each other, not the OS build run.
+# Every push to `dev` shares one ref, so a merge cancels the run of the
+# merge before it and a burst is tested once, at its newest commit. The
+# `changes` job measures a push from the last green run, not from the
+# previous push, so a cancelled run's commits are still in scope.
 concurrency:
   group: rust-audit-${{ github.ref }}
   cancel-in-progress: true
@@ -75,23 +68,29 @@ jobs:
     timeout-minutes: 10  # p90 0.6 min over 23 runs; the floor
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
+    # `actions: read` lists this workflow's earlier runs for a push's base.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - id: scope
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -u
+          head="${{ github.sha }}"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
-          elif [ "${{ github.event_name }}" = "merge_group" ]; then
-            # The queue's group: its base is the `dev` tip the group merges onto.
-            base="${{ github.event.merge_group.base_sha }}"
           else
-            base="${{ github.event.before }}"
+            # A push is measured from the last commit this workflow passed
+            # on, not from `before`: see scripts/ci/push_scope_base.sh. No
+            # base prints nothing, and the classifier then runs everything.
+            base=$(scripts/ci/push_scope_base.sh rust-audit-test.yml "${{ github.ref_name }}" "$head")
           fi
-          head="${{ github.sha }}"
 
           # One classifier for every scope job: scripts/ci/change_scope.py.
           # It finds the code inputs that live under docs/ (the domain
@@ -104,9 +103,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
-    # Successful runs took 115 to 218 min on 2026-11-06, so twice the p90
-    # passes the 360 min platform cap. 300 still ends a hang an hour
-    # early; it comes down when the test run is partitioned.
+    # The six green runs under nextest (2026-11-07) took 120, 179, 180,
+    # 181, 183 and 236 min, so twice the p90 passes the 360 min platform
+    # cap. The `ci` profile kills a hung test at 30 min and its retry at
+    # 30 more, so this bounds a hang outside the test run; 300 ends one an
+    # hour early. It comes down when the test run is partitioned across
+    # runners.
     timeout-minutes: 300
     container:
       image: ubuntu:24.04
@@ -454,14 +456,12 @@ jobs:
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
-      - name: cargo nextest (all workspace crates), then the doctests
+      - name: build the workspace test binaries
+        id: nextest-build
         working-directory: rust
-        # nextest runs each test in its own process and runs tests from
-        # every test binary at once. `cargo test` ran the binaries one
-        # after another, so the step lasted as long as their sum. Same
-        # tests, same exclusions; `--profile ci` is in `.config/nextest.toml`
-        # (no fail-fast, slow tests named, JUnit timings). nextest does not
-        # run doctests, so `cargo test --doc` runs them after it.
+        # Its own step so the job's step times say how much of the test
+        # phase is compiling and how much is running. The same selection as
+        # the run below, which then finds every binary built.
         #
         # `shekyl-randomx-differential` is excluded because its `c_oracle`
         # module links against the C reference's `librandomx.a` via
@@ -476,9 +476,31 @@ jobs:
         # This step asserts every crate that builds in the bare-Rust
         # environment passes; the differential harness asserts under its
         # own substrate-correct environment.
-        run: |
-          cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential
-          cargo test --locked --doc --workspace --exclude shekyl-randomx-differential
+        run: cargo nextest run --locked --profile ci --no-run --workspace --exclude shekyl-randomx-differential
+      - name: cargo nextest (all workspace crates)
+        working-directory: rust
+        # nextest runs each test in its own process and runs tests from
+        # every test binary at once. `cargo test` ran the binaries one
+        # after another, so the step lasted as long as their sum. Same
+        # tests, same exclusions as the build above; `--profile ci` is in
+        # `.config/nextest.toml` (no fail-fast, one retry, slow tests named
+        # and killed at 30 min, JUnit timings).
+        run: cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential
+      - name: doctests (all workspace crates)
+        working-directory: rust
+        # nextest does not run doctests. They run whether or not a test
+        # above failed, so one run reports both; only a failed build skips
+        # them, since they would fail on the same error.
+        if: ${{ !cancelled() && steps.nextest-build.outcome == 'success' }}
+        run: cargo test --locked --doc --workspace --exclude shekyl-randomx-differential
+      - name: report flaky and slow tests
+        # Flaky tests (failed, then passed on the retry) to the job summary
+        # and as warnings on the pull request; then the slowest tests and
+        # binaries, which size the partition of the run. Report only: the
+        # run's own exit status is the verdict. It fails when there is no
+        # JUnit file to read, so a run that wrote none cannot read as clean.
+        if: ${{ !cancelled() && steps.nextest-build.outcome == 'success' }}
+        run: python3 scripts/ci/nextest_report.py rust/target/nextest/ci/junit.xml
       - name: upload the test timings (JUnit)
         # Each test's time from the nextest run above, kept for the slow
         # tests to be named and the step to be partitioned by them.
@@ -575,6 +597,19 @@ jobs:
         # `working-directory`, `run`. Add a row there and a `-p` here in
         # the same commit.
         run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-curve-tree -p shekyl-mempool -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-tor-control-client -p shekyl-wire --lib -- -D warnings
+      - name: "shekyl-mempool: the policy build the economics sim links (no default features)"
+        working-directory: rust
+        # The economics sim depends on shekyl-mempool with
+        # `default-features = false`: the `policy` module alone, no store
+        # (ECONOMICS_SIM_PRODUCTION_REBASE.md, ESR-17). Every other dependent
+        # turns `pool` on, and the workspace runs above unify features, so
+        # none of them builds the crate the sim links. This lane lints and
+        # tests that build: a pool-only item reached from `policy`, or a
+        # test target that needs the pool without requiring the feature,
+        # fails here.
+        run: |
+          cargo clippy --locked -p shekyl-mempool --no-default-features --all-targets -- -D warnings
+          cargo test --locked -p shekyl-mempool --no-default-features
       - name: shekyl-standoff conformance suite (x86_64 only)
         working-directory: rust
         # `shekyl-standoff`'s conformance grading + negative controls
@@ -603,10 +638,14 @@ jobs:
         # not bit-identical across arches; a module-level `compile_error!` in
         # `stake_engine.rs` rejects the `conformance` feature on non-x86 targets so
         # the skip is loud, never a silent false "conformance passed".
-        run: cargo test --locked -p shekyl-engine-core --features conformance
-      - name: "Gate 1: proptest (--release for speed)"
-        working-directory: rust
-        run: cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip
+        #
+        # The whole crate again, not only the three `s6_self_cert` tests the
+        # feature adds: with the feature on, every wallet open that prepares
+        # a stake engine waits on the self-cert (`observe_stake_self_cert`
+        # in `lifecycle/assemble.rs`), and this run is the only one that
+        # executes that wait. `--lib --tests` leaves out the doctests, which
+        # the feature does not change and the workspace step already ran.
+        run: cargo test --locked -p shekyl-engine-core --features conformance --lib --tests
       - name: "FN-DSA vectors with the AVX2 paths compiled out"
         working-directory: rust
         # The pinned `fn-dsa` crate dispatches to AVX2 at run time on x86_64,
@@ -730,3 +769,22 @@ jobs:
         # PR that bumps the action pin.
         if: always()
         run: mkdir -p rust/target/tests/target
+
+  # A red push run on `dev` opens or threads a tracking issue
+  # (`report-dev-red.yml`). `needs` lists every other job in this file, so
+  # a red in any of them reports; scripts/ci/check_dev_red_reporter.py
+  # holds the list and this condition to the file. Only a push run on
+  # `dev` reports: a pull request's red is read on the pull request. A job
+  # past its `timeout-minutes` is cancelled, not failed, and `failure()`
+  # does not see it, so the condition reads each needed job's result: a
+  # failed or cancelled one reports, unless the whole run was cancelled
+  # (a newer merge superseded it), which `!cancelled()` leaves out.
+  report-dev-red:
+    needs: [changes, rust-audit-and-test]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/report-dev-red.yml

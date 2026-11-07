@@ -196,7 +196,6 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
 
         let priced = chain.price(
             ChainStep {
-                fold_height: block,
                 chain_height: abs_height,
                 demand: (scenario.get_volume)(block, params.blocks_per_year()),
                 leaves: outputs.leaves(),
