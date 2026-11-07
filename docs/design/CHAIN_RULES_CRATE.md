@@ -1319,7 +1319,7 @@ the same machine and load):
 An invalid block also pays the locus walk, one batch of one per proof: at
 `limit-full`'s density that is about 45 × 4.7 ms beside the 98 ms batch.
 For scale, GAP-7's dev-box per-transaction admission term is 22.8 ms at
-shape 1/2 (`shekyl-ffi` `benches/block_connect_verify.rs`, an uncontended
+shape 1/2 (`shekyl-chain-rules` `benches/block_connect_verify.rs`, an uncontended
 run), so the range proof is the smaller per-transaction term. That bench
 timed the same verifier with an `OsRng` weight at 2.82 ms per two-output
 proof, so contention likely accounts for most of the gap to this run's
