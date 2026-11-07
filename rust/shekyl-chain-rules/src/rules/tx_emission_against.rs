@@ -598,8 +598,7 @@ impl J25 {
         let Ok(claims) = emission_vin_verify_claims_under(schedule, vin, &ctx, &sources) else {
             return Ok(refuse());
         };
-        let Ok(backing) =
-            emission_vin_verify_backing(vin, reference.anchor.as_bytes(), layers, &signable)
+        let Ok(backing) = emission_vin_verify_backing(vin, &reference.anchor, layers, &signable)
         else {
             return Ok(refuse());
         };

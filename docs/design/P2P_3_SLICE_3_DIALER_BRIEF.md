@@ -509,11 +509,23 @@ taken first. The hub's close poster runs after the table lock is
 released, because that poster calls the dialer and the strand, and the
 strand locks the table again.
 
-**An idle connector (Rick, 2026-10-16).** A connector under its target
-for 60 wakes with nothing dialed logs one warning naming why: a dial
-is in flight, no candidate, or a filter holds every address. The same
-reason logs nothing more until it changes, the connector draws, or it
-is no longer under its target.
+**An idle connector (Rick, 2026-10-16; amended 2026-11-06).** A
+connector under its target for 60 consecutive wakes with nothing dialed
+and one reason logs an info line naming the sessions it holds, its
+target and the reason: a dial is in flight (at the bound, or with
+nothing else drawable), a retry is waiting, no fill rule takes the
+drawable addresses, it knows no address, the addresses it is not using
+are cooling after a failed dial or held by an excusal, or every address
+it knows is connected, on a host it already reaches, or its own. Each
+reason is said at most once per under-target spell: a draw or a change
+of reason restarts the count, and only reaching the target ends the
+spell. Every reason is a
+state the connector leaves without the operator, so it is not a
+warning. *Amendment (2026-11-06, the alpha.11 hunt's A7).* A warning
+on a network smaller than the target, every hour on every public seed:
+a draw re-armed it, cooling seats and a dial in flight below the bound
+were both named "a filter holds every address". *Records-was: one
+warning per reason, re-armed by every draw.*
 
 **The clock (Rick, 2026-10-08).** The outbound handshake's only clock
 is each connector's transport gap, from channel established to the
@@ -963,21 +975,24 @@ drawn, dropped and re-admitted again, one dial per two wakes (R3: mean
 redials was the retry PR's, a `docs/FOLLOWUPS.md` row the gray
 lifecycle closed.*
 
-*The log (Rick's review of #1174, 2026-10-24).* Recovery is an episode.
-It is entered once, with the count re-admitted, and left once, when
-recovery worked. Every wake reports the kept count and the address it
-drew, including a wake that makes a test's next attempt. The episode
-ends on the first of these: the kept count has risen since the episode
-opened, the connector is no longer under its target, or this wake drew
-an address the episode does not cover. The episode covers the
-configured addresses it re-admitted and those it found already seated:
-cooling, outstanding or in a session (the gray lifecycle, 2026-10-24;
-shekyl-core-c0's review of #1174, item 3). The leave line names which
-one. Drawing a covered address, or drawing nothing, is still recovery,
-so a dead configured address that cools, thaws, is drawn and fails again
-does not cycle the two lines. *Records-was: the episode covered only the
-addresses it re-admitted, and the dead address was re-admitted, drawn
-and dropped.* A gained session is visible on the following wake,
+*The log (Rick's review of #1174, 2026-10-24; amended 2026-11-06).*
+Recovery is an episode. It is entered once, with the count re-admitted,
+and left once, when recovery worked. Every wake reports the sessions the
+connector holds, including a wake that makes a test's next attempt. The
+episode ends on the first of these: the connector holds more sessions
+than when the episode opened, or it is no longer under its target. The
+leave line names which one. The count is sessions held, not the `Keep`
+count: a `Keep` dial in flight holds a target slot but may still fail. A
+draw does not end the episode, whatever list the address came from, so
+an address that cools, thaws, is drawn and fails again does not cycle
+the two lines. *Amendment (2026-11-06, the alpha.11 hunt's A7).* The
+episode read the `Keep` count, which since 2026-10-26 counts dials in
+flight, so every `Keep` draw ended it and the draw's failure opened the
+next (a pair every ~16 s in CS-5's fleet run), and a draw of an address
+the episode had not re-admitted ended it too (a pair per rung of a
+learned dead address's cooldown). *Records-was: the episode ended on a
+risen `Keep` count, or on a draw of an address it did not cover.* A
+gained session is visible on the following wake,
 because the dial finishes before that wake runs. When that wake is
 stranded again, it closes the episode and opens the next one. A
 configured address refused at re-admission (a banned one, for instance)

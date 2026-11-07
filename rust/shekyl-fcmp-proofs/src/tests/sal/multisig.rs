@@ -31,7 +31,7 @@ fn test_sal_multisig() {
     let algorithm = SalAlgorithm::new(
         OsRng,
         RecommendedTranscript::new(b"SpendAuthAndLinkability Multisig Test"),
-        [0; 32],
+        shekyl_types::TxSignableHash::from_bytes([0; 32]),
         rerandomized_output.clone(),
         x,
     );
@@ -50,6 +50,12 @@ fn test_sal_multisig() {
     );
 
     let mut verifier = BatchVerifier::new(1);
-    sig.verify(&mut OsRng, &mut verifier, [0; 32], &input, L);
+    sig.verify(
+        &mut OsRng,
+        &mut verifier,
+        shekyl_types::TxSignableHash::from_bytes([0; 32]),
+        &input,
+        L,
+    );
     assert!(verifier.verify_vartime());
 }

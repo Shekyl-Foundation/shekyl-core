@@ -51,7 +51,7 @@ fn ledger_with(transfers: Vec<TransferDetails>) -> shekyl_engine_state::LedgerBl
         transfers,
         shekyl_engine_state::BlockchainTip::new(
             shekyl_types::BlockHeight::from_raw(5_000),
-            [0xAA; 32],
+            shekyl_types::BlockHash::from_bytes([0xAA; 32]),
         ),
         shekyl_engine_state::ReorgBlocks::default(),
     )

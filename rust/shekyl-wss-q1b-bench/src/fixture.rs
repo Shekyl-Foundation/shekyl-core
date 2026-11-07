@@ -47,6 +47,7 @@ use shekyl_fcmp::tree::{
     helios_hash_init, helios_point_to_selene_scalar, key_image_generator, layer_is_selene,
     selene_hash_init, selene_point_to_helios_scalar, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
 };
+use shekyl_types::{CurveTreeRoot, TxSignableHash};
 
 const ZERO: [u8; 32] = [0u8; 32];
 
@@ -115,7 +116,7 @@ pub struct Path {
     /// Helios branch layers.
     pub c2_layers: Vec<Vec<[u8; 32]>>,
     /// The root point.
-    pub tree_root: [u8; 32],
+    pub tree_root: CurveTreeRoot,
     /// `c1_layers.len() + c2_layers.len() + 1`.
     pub tree_depth: u8,
 }
@@ -199,11 +200,13 @@ pub fn read_off_path(layers: &[Vec<[u8; 32]>], leaf_pos: usize) -> Path {
     Path {
         c1_layers,
         c2_layers,
-        tree_root: *layers
-            .last()
-            .expect("non-empty tree")
-            .first()
-            .expect("root"),
+        tree_root: CurveTreeRoot::from_bytes(
+            *layers
+                .last()
+                .expect("non-empty tree")
+                .first()
+                .expect("root"),
+        ),
         tree_depth: depth,
     }
 }
@@ -244,7 +247,7 @@ pub fn synth_sparse_path(corpus: &Corpus, tree_depth: u8) -> Path {
     Path {
         c1_layers,
         c2_layers,
-        tree_root: node,
+        tree_root: CurveTreeRoot::from_bytes(node),
         tree_depth,
     }
 }
@@ -344,7 +347,7 @@ pub fn prove_and_verify(
     corpus: &Corpus,
     path: &Path,
     n_in: usize,
-    signable_tx_hash: [u8; 32],
+    signable_tx_hash: TxSignableHash,
 ) -> Result<bool, proof::ProveError> {
     let inputs = prove_inputs(corpus, path, n_in);
     let result = prove_only(&inputs, path, signable_tx_hash)?;
@@ -380,7 +383,7 @@ pub fn prove_and_verify(
 pub fn prove_only(
     inputs: &[ProveInput],
     path: &Path,
-    signable_tx_hash: [u8; 32],
+    signable_tx_hash: TxSignableHash,
 ) -> Result<proof::ProveResult, proof::ProveError> {
     proof::prove(inputs, &path.tree_root, path.tree_depth, signable_tx_hash)
 }

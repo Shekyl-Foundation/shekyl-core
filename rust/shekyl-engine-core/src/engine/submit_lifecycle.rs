@@ -74,7 +74,7 @@
 use std::collections::{HashMap, HashSet};
 
 use shekyl_rpc_client::RejectCause;
-use shekyl_types::{BlockHeight, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use super::diagnostics::{PendingTxDiagnostic, WatchdogAlarmReason, WatchdogProbeOutcome};
 use super::local_pending_tx::RescanRequest;
@@ -108,7 +108,7 @@ pub(crate) trait WatchdogHost: Send + Sync {
     /// The ledger's stored block hash at `height`, or `None` when the
     /// height is outside the retained range. Used by the F40 executor's
     /// cheap hash-compare (decision 1).
-    fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]>;
+    fn block_hash_at(&self, height: BlockHeight) -> Option<BlockHash>;
 
     /// The retained network-exposed bytes for `tx_hash` (§5.3 decision
     /// 2), cloned for the resubmit-same-bytes probe. `None` means the

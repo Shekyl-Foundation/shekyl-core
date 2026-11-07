@@ -16,7 +16,7 @@ use shekyl_archival_retention::{
     BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindScan, LastServedScan,
     SettlementSchedule, ShardClose,
 };
-use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount, CurveTreeRoot, PCanonicalId, TxHash};
 
 use crate::submit::certificate::VerificationCertificate;
 
@@ -54,7 +54,7 @@ pub struct ReferenceFacts {
     /// Height of the reference block on the main chain.
     pub height: BlockHeight,
     /// Curve-tree root at that height.
-    pub root: [u8; 32],
+    pub root: CurveTreeRoot,
     /// Current curve-tree depth in the consensus/LMDB convention
     /// (`curve_trees_tree_depth` = layer count − 1) — the row-K10 upper
     /// bound for the wire `tree_depth`. The verifier reconstructs its

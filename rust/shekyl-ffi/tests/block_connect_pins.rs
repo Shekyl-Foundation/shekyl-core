@@ -33,6 +33,7 @@ use fx::{
     bp_verify, build_bp, build_connect_tx, build_pqc_auth, parse_wire, pqc_verify_code,
     pqc_verify_code_against,
 };
+use shekyl_types::SigningPayloadHash;
 use shekyl_wire::transaction::TX_WEIGHT_LIMIT;
 
 /// CEN-H1: serialized tx size cap.
@@ -200,12 +201,12 @@ fn bp_proxy_fidelity_positive_and_negative() {
 
 #[test]
 fn pqc_fixture_fidelity_positive_and_negative() {
-    let auth = build_pqc_auth([0x11; 32]);
+    let auth = build_pqc_auth(SigningPayloadHash::from_bytes([0x11; 64]));
     assert_eq!(pqc_verify_code(&auth), 0, "hybrid sig must verify");
 
     // Wrong message → CryptoVerifyFailed (10), never success.
     assert_ne!(
-        pqc_verify_code_against(&auth, &[0x22; 32]),
+        pqc_verify_code_against(&auth, &[0x22; 64]),
         0,
         "hybrid sig must not verify a different message"
     );

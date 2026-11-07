@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_types::archival::{ReceiptSignPk, SlashLogEntry};
-use shekyl_types::{ArchivalLength, SHARD_LENGTH};
+use shekyl_types::{ArchivalLength, BlockHash, SHARD_LENGTH};
 use shekyl_units::AtomicUnits;
 
 use shekyl_archival_retention::SLASH_GRACE_EPOCHS;
@@ -204,7 +204,7 @@ fn height_zero_and_all_of_epoch_zero_issue_no_draw() {
 
     // Whatever seed a block committed to, and whatever it hashes to, there
     // is no pair for a draw to select.
-    const BLOCK_HASH: [u8; 32] = [0x22; 32];
+    const BLOCK_HASH: BlockHash = BlockHash::from_bytes([0x22; 32]);
     for seed in [[0u8; 32], [0x11; 32]] {
         assert_eq!(
             select_draw(&seed, &BLOCK_HASH, 0, d, |_| Ok::<_, ()>(true)),

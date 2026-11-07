@@ -245,7 +245,7 @@ fn advance_ledger_empty_blocks(ledger: &LocalLedger, from: u64, to: u64) {
         let _ = indexes.process_scanned_outputs(
             ledger_block,
             shekyl_types::BlockHeight::from_raw(h),
-            hash,
+            BlockHash::from_bytes(hash),
             Timelocked::from_vec(Vec::new()),
         );
     }
@@ -268,7 +268,7 @@ fn populate_ledger(
     let inserted_range = indexes.process_scanned_outputs(
         ledger_block,
         shekyl_types::BlockHeight::from_raw(block_height),
-        block_hash,
+        BlockHash::from_bytes(block_hash),
         timelocked,
     );
     assert!(!inserted_range.is_empty() || ledger_block.transfer_count() == 0);
@@ -277,7 +277,7 @@ fn populate_ledger(
         let _ = indexes.process_scanned_outputs(
             ledger_block,
             shekyl_types::BlockHeight::from_raw(h),
-            hash,
+            BlockHash::from_bytes(hash),
             Timelocked::from_vec(Vec::new()),
         );
     }
@@ -315,7 +315,7 @@ fn populate_ledger(
         td.source_ciphertext = Some(ciphertext.clone());
         td.output_handle = Some(derive_output_handle(
             blob.view_sk.as_canonical_bytes(),
-            td.tx_hash.as_bytes(),
+            &td.tx_hash,
             output_index,
         ));
 
@@ -2656,7 +2656,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let reference = ReferenceBlock {
         height: rh,
         curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-        block_hash: BlockHash::from_bytes(block_hash),
+        block_hash,
     };
 
     // ── Assemble the REAL membership path for the funding output ─────
@@ -2832,10 +2832,10 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
         &key_images,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        tree_ctx.tree_root.as_bytes(),
+        &tree_ctx.tree_root,
         tree_ctx.tree_depth,
         // The message the proof was made over (the signing envelope §2.2).
-        signed.tx_signable.to_bytes(),
+        signed.tx_signable,
     );
     assert!(
         matches!(fcmp_result, Ok(true)),
@@ -3573,7 +3573,7 @@ fn populate_ledger_scan_only(
     let inserted_range = indexes.process_scanned_outputs(
         ledger_block,
         shekyl_types::BlockHeight::from_raw(block_height),
-        block_hash,
+        BlockHash::from_bytes(block_hash),
         timelocked,
     );
     assert!(!inserted_range.is_empty() || ledger_block.transfer_count() == 0);
@@ -3582,7 +3582,7 @@ fn populate_ledger_scan_only(
         let _ = indexes.process_scanned_outputs(
             ledger_block,
             shekyl_types::BlockHeight::from_raw(h),
-            hash,
+            BlockHash::from_bytes(hash),
             Timelocked::from_vec(Vec::new()),
         );
     }

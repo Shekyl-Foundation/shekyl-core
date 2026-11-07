@@ -752,7 +752,7 @@ fn scoped_records(
 pub(crate) async fn orchestrate_drain(
     handle: PersonaHandle,
     ctx: DrainCtx<'_>,
-    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<[u8; 32]>,
+    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<shekyl_types::BlockHash>,
 ) -> Result<OrchestratedDrain, DrainOrchestrationError> {
     // 1. Anchor one ReferenceBlock via the ordinary send-path procedure
     //    (shared with the bond path — never a hand-rolled `tip − age`, WI-2

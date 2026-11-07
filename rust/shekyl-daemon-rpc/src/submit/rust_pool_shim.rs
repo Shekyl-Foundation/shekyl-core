@@ -561,7 +561,7 @@ fn gather(
         ) {
             (AtHeight::Recorded(root), AtHeight::Recorded(tree_depth)) => Some(ReferenceFacts {
                 height,
-                root: *root.as_bytes(),
+                root,
                 tree_depth,
             }),
             _ => return Err(ShimFault),
