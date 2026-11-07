@@ -9,8 +9,12 @@ globs:
 
 # Device Provisioning Floor
 
-**The minimum supported device is `Raspberry Pi 4 Model B` (Cortex-A72,
-aarch64, 64-bit userland).**
+**The minimum supported device is `Raspberry Pi 4 Model B, 4 GB` (Cortex-A72,
+aarch64, 64-bit userland, 4 GB of RAM).**
+
+The memory is part of the floor (Rick, 2026-11-01: "no one is running 64-bit
+code with less than 4 G RAM"). The board ships with 1, 2, 4 or 8 GB, so naming
+only the board leaves every memory budget unprovisioned.
 
 Anonymity guarantees are provisioned so that a node at or above this device
 receives them in full.
@@ -61,7 +65,12 @@ their existing hardware qualifies.
    number, a convenient measurement has been substituted for the decision — the
    shape that produced every inherited constant this project has had to
    re-derive.
-5. **Synthesized future conditions are labelled as projections at the value.**
+5. **Memory is measured under the floor's memory.** The test floor device has
+   8 GB; a resident-memory or memory-pressure measurement taken on it runs
+   under a 4 GiB cgroup limit (`systemd-run --scope -p MemoryMax=4G …`), or
+   it measures headroom the floor device does not have. Record the limit
+   beside the number, as rule 1 records the machine.
+6. **Synthesized future conditions are labelled as projections at the value.**
    A number produced by simulating conditions that do not exist yet is a prior,
    not a measurement, and must say so or a later reader will skip the
    re-measurement it stands in for.

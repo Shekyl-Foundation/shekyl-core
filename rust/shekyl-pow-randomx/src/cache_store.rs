@@ -598,6 +598,29 @@ impl CacheStore {
         let prior = canonical.replace(prepared);
         *transient = prior;
     }
+
+    /// Empty the transient slot; the canonical slot does not move. Returns
+    /// whether the slot held a cache.
+    ///
+    /// The ingest's seed window names the seeds the slots must hold. When
+    /// it names one, the second slot holds a seed no block the node will
+    /// hash or pop needs, and only this call empties it:
+    /// [`Self::set_canonical`] moves a slot only by demoting into it, so
+    /// without this a seed that left the window stays resident until the
+    /// next demotion (A2, alpha.11 bug hunt).
+    ///
+    /// A consumer holding the evicted [`Arc<PreparedCache>`] (a prepared
+    /// branch seed, an in-flight hash) keeps it until its clone drops,
+    /// as with every eviction.
+    ///
+    /// # Lock ordering
+    ///
+    /// Takes the transient write lock alone, as
+    /// [`Self::lookup_or_derive`] does when it publishes; it never waits
+    /// on the canonical lock while holding it.
+    pub fn release_transient(&self) -> bool {
+        self.transient.write().unwrap().take().is_some()
+    }
 }
 
 impl Default for CacheStore {
@@ -687,6 +710,38 @@ mod tests {
         assert!(cs.lookup(&seedhash_d()).is_some());
         assert!(cs.lookup(&seedhash_b()).is_none());
         assert!(cs.lookup(&seedhash_c()).is_none());
+    }
+
+    // ---- release ------------------------------------------------
+
+    #[test]
+    fn cachestore_release_transient_empties_only_the_transient_slot() {
+        // A2: after an advance from A to B, A sits in the transient slot
+        // until the next demotion. Releasing it leaves B canonical and A
+        // out of every slot; a consumer's clone of A stays valid. A second
+        // release finds nothing.
+        let cs = CacheStore::new();
+        let pa = cs.lookup_or_derive(&seedhash_a());
+        cs.set_canonical(Arc::clone(&pa));
+        let pb = cs.lookup_or_derive(&seedhash_b());
+        cs.set_canonical(pb);
+        assert!(
+            cs.lookup(&seedhash_a()).is_some(),
+            "A was demoted, not evicted"
+        );
+        assert!(cs.release_transient(), "the transient slot held A");
+        assert!(cs.lookup(&seedhash_a()).is_none(), "A is out of every slot");
+        assert!(cs.lookup(&seedhash_b()).is_some(), "B stays canonical");
+        assert_eq!(
+            Arc::strong_count(&pa),
+            1,
+            "only the consumer's clone of A is left"
+        );
+        assert!(!cs.release_transient(), "nothing left to release");
+        // The next miss publishes to the emptied slot as before.
+        let _pc = cs.lookup_or_derive(&seedhash_c());
+        assert!(cs.lookup(&seedhash_c()).is_some());
+        assert!(cs.lookup(&seedhash_b()).is_some());
     }
 
     // ---- T-CS-2 -------------------------------------------------
