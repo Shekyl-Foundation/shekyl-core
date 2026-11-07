@@ -296,7 +296,7 @@ pub unsafe extern "C" fn shekyl_page_size() -> usize {
             page_size: 0,
             _rest: [0; 52],
         };
-        GetSystemInfo(&mut info);
+        GetSystemInfo(&raw mut info);
         info.page_size as usize
     }
     #[cfg(not(any(unix, windows)))]

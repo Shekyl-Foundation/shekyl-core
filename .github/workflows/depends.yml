@@ -1,10 +1,6 @@
 name: ci/gh-actions/depends
 
 on:
-  # No `merge_group:` trigger, deliberately (06-branching.mdc, the merge
-  # queue): `merge_group` takes no `paths` filter, so this would run six
-  # cross-compiles (~124 billed minutes) on every merge group; the depends
-  # tree is not the cross-lane surface the queue exists to test.
   pull_request:
     types: [opened, synchronize, reopened]
     # Which legs a pull request runs is scripts/ci/depends_legs.py's (the

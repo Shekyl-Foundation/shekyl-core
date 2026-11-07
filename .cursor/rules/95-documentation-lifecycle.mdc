@@ -131,8 +131,8 @@ A pull request writes its entry as a new file under `docs/changelog.d/`,
 named after its branch. It never edits `docs/CHANGELOG.md`. Only the
 release cut (`docs/RELEASING.md` step 1) moves entries into the
 CHANGELOG. An edit at the top of `[Unreleased]` conflicts with every
-other open pull request that makes one, and a conflict evicts a pull
-request from the merge queue.
+other open pull request that makes one, and each conflict costs a merge
+of `dev` and a full CI run.
 
 CI (`.github/workflows/docs-gates.yml`) holds the banners, FOLLOWUPS
 `Target:` tokens, forbidden fossils in always-applied rules, index §2

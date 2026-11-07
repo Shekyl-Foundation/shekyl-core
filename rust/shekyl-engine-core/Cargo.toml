@@ -360,7 +360,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # for a given binary, so retries cannot clear it (see
 # `docs/investigation/2026-05-09-bench-baseline-flake.md` and the
 # key-dispatch baseline bench's module doc).
-gungraun = { version = "0.19", features = ["client_requests"] }
+gungraun = "0.19"
 tempfile = "3"
 # `test-util` enables `#[tokio::test(start_paused = true)]` and the
 # in-test `tokio::time` virtualization that `wallet::refresh`'s
@@ -449,6 +449,15 @@ ciphersuite = "0.4"
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 dalek-ff-group = "0.5"
 rand_core = "0.6"
+
+# `client_requests` builds `valgrind-requests`, whose build script refuses
+# a target Valgrind does not support, Windows among them, so it is
+# Unix-only: every `--all-targets` lane on the Windows runner failed on it
+# (feature unification carries it to every crate in a workspace build).
+# The benches' Callgrind start/stop calls are `cfg(unix)` to match; the
+# benches compile on Windows and run only where Valgrind does.
+[target.'cfg(unix)'.dev-dependencies]
+gungraun = { version = "0.19", features = ["client_requests"] }
 
 [[bench]]
 name = "refresh_snapshot"
