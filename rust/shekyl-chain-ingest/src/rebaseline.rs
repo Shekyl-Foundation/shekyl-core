@@ -203,8 +203,6 @@ mod tests {
             "a refusal publishes nothing"
         );
         drop(store);
-        crate::test_support::cleanup(&store_path);
-        crate::test_support::cleanup(&trace);
     }
 
     #[test]
@@ -214,7 +212,6 @@ mod tests {
         publish_bytes(&path, b"next").expect("publish");
         assert_eq!(std::fs::read(&path).expect("read"), b"next");
         assert!(siblings_of(&path).is_empty(), "the sibling was renamed");
-        crate::test_support::cleanup(&path);
     }
 
     #[test]
@@ -223,7 +220,6 @@ mod tests {
         let first = sibling_path(&path).expect("first");
         let second = sibling_path(&path).expect("second");
         assert_ne!(first, second);
-        crate::test_support::cleanup(&path);
     }
 
     #[test]
@@ -248,8 +244,6 @@ mod tests {
             siblings_of(&path).is_empty(),
             "this attempt removed only the sibling it created"
         );
-        crate::test_support::cleanup(&path);
-        crate::test_support::cleanup(&foreign);
     }
 
     /// Siblings this process would create for `path`: `.{name}.{pid}.{n}.partial`.

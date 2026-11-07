@@ -110,7 +110,7 @@ use crate::pipeline::{run, PipelineConfig, PipelineFault};
 use crate::scenario::{Clocked, FreeHash, Mined, Scenario, RULES};
 use crate::scenario_archival::{complete_tree, shard_set, Persona};
 use crate::source::{IngestEvent, Injection, ServeCredit};
-use crate::test_support::{cleanup, open_store, tmp, trace_of, trace_read, Scripted};
+use crate::test_support::{open_store, tmp, trace_of, trace_read, Scripted};
 use shekyl_harness_spender::Spender;
 
 /// The settlement epoch open at `height` under the genesis rule set — the
@@ -732,7 +732,6 @@ async fn a_replayed_inject_is_reported_as_its_receipt_and_a_rewind_below_it_is_r
         expected_row.rows(SnapshotFamily::ServeCredit)
     );
     drop(reopened);
-    cleanup(&path);
 
     // A rewind to the injection's height keeps the bit; one below strands
     // it and is refused before the connector is asked.
@@ -766,7 +765,6 @@ async fn a_replayed_inject_is_reported_as_its_receipt_and_a_rewind_below_it_is_r
         ),
         "{fault:?}"
     );
-    cleanup(&path);
 }
 
 /// An `Inject` filed at the **covered tip** — where a capture files it: the
@@ -851,7 +849,6 @@ async fn an_inject_at_the_covered_tip_commits_before_the_checkpoint_is_compared(
         "the credit committed before the rows were read: {:?}",
         archival.diff.diverged().collect::<Vec<_>>()
     );
-    cleanup(&path);
 
     // The control: no injection, the same trace. The digest still agrees
     // (it carries no archival state, ARW-25); the rows differ by the one
@@ -881,5 +878,4 @@ async fn an_inject_at_the_covered_tip_commits_before_the_checkpoint_is_compared(
         1,
         "the trace's one credit row, which this replay did not write"
     );
-    cleanup(&path);
 }

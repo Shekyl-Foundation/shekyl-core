@@ -383,9 +383,6 @@ async fn the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded() {
     assert_eq!(entry.archival_len, spend.archival_len().to_raw());
     drop(facts);
     drop(store);
-
-    crate::test_support::cleanup(&before);
-    crate::test_support::cleanup(&after);
 }
 
 /// One operand of the served skeleton for `target` changed, each its own

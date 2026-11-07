@@ -221,7 +221,7 @@ async fn a_spend_connected_between_the_reads_is_spent_in_the_chain() {
     };
     let facts = StoreFacts::new(
         store,
-        copy.clone(),
+        copy.to_path_buf(),
         Arc::new(move |h| RULES.in_force(h)),
         Arc::new(node),
         identity(),
@@ -237,7 +237,6 @@ async fn a_spend_connected_between_the_reads_is_spent_in_the_chain() {
     .await
     .expect("joined");
     service.stop().await.expect("stops");
-    crate::test_support::cleanup(&copy);
     scenario.close().await;
     assert!(
         connected.load(std::sync::atomic::Ordering::Acquire),
@@ -388,7 +387,6 @@ async fn the_wallets_block_fetch_reads_a_spend_from_the_store_backed_handlers() 
     let fetched = client
         .fetch_scannable_block(usize::try_from(landed.height.to_raw()).expect("fits"))
         .await;
-    crate::test_support::cleanup(&copy);
     scenario.close().await;
     let fetched = fetched.expect("the wallet reads the block");
     assert_eq!(fetched.block.serialize(), landed.template.block.serialize());

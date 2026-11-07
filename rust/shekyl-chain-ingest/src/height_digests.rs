@@ -150,6 +150,5 @@ mod tests {
         assert_eq!(value["rows"][0]["height"], 0);
         assert_eq!(value["rows"][1]["height"], 1);
         assert_eq!(value["rows"][0]["digest"], "11".repeat(32));
-        crate::test_support::cleanup(&path);
     }
 }

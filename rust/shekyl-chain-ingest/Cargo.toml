@@ -185,6 +185,9 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Each test store's own directory (`test_support::tmp`), which takes the
+# store's sidecar files with it when the test ends.
+tempfile = { workspace = true }
 # Its workers' ledger rows, counted by the same tests.
 shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 # `BoundTx::modify` for the below-horizon test's edited body (TEST_ONLY,

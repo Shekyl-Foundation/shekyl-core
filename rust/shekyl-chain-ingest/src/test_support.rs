@@ -86,29 +86,53 @@ pub const EPOCH: SettlementEpochBlocks = match SettlementEpochBlocks::new(10_000
     None => unreachable!(),
 };
 
-/// A fresh temp path for a store.
+/// A store path inside a directory the test owns.
 ///
-/// A redb store is **one file**, so a stale one is removed with
-/// `remove_file`; `remove_dir_all` on a file fails with `NotADirectory`,
-/// which is how an earlier version of this helper left every store behind
-/// and would have handed a same-named test a *reopened* stale store rather
-/// than a fresh one (`ChainStore::create` reopens an existing path).
-pub fn tmp(name: &str) -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!("shekyl-ingest-{}-{name}", std::process::id()));
-    cleanup(&p);
-    assert!(
-        !p.exists(),
-        "stale store at {} could not be removed",
-        p.display()
-    );
-    p
+/// The directory is created under the system temp directory with a random
+/// name, by a `mkdir` that refuses an existing path, so a test never
+/// reopens a store another test or an earlier run left behind
+/// (`ChainStore::create` reopens an existing path). When this drops, the
+/// directory goes with everything in it: the store, and the files a store
+/// keeps beside itself (`.creation-lock`, `.discard`, `.unfinished-*`). A
+/// panicking test drops it too.
+///
+/// Bind it to a name for as long as the store is used. A call chained on
+/// the temporary (`tmp("x").with_extension("y")`) drops the directory at the
+/// end of that statement and leaves a path to nothing; the compiler does
+/// not catch it.
+pub struct TestPath {
+    path: std::path::PathBuf,
+    _dir: tempfile::TempDir,
 }
 
-/// Remove the store at `p` (a file — or a directory, should a helper ever
-/// make one). Absence is not an error.
-pub fn cleanup(p: &std::path::Path) {
-    let _gone = std::fs::remove_file(p).or_else(|_| std::fs::remove_dir_all(p));
+/// A fresh `<name>.redb` path in a directory of its own.
+///
+/// # Panics
+///
+/// The directory cannot be created.
+pub fn tmp(name: &str) -> TestPath {
+    let dir = tempfile::Builder::new()
+        .prefix("shekyl-chain-ingest-")
+        .tempdir()
+        .expect("create a test directory");
+    TestPath {
+        path: dir.path().join(format!("{name}.redb")),
+        _dir: dir,
+    }
+}
+
+impl std::ops::Deref for TestPath {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl AsRef<std::path::Path> for TestPath {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.path
+    }
 }
 
 pub fn h(n: u64) -> BlockHeight {

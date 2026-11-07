@@ -37,7 +37,7 @@ use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 
 use super::{captured_chains, mock_with_the_real_clock, replay_keeping_store};
-use crate::test_support::{cleanup, h, open_store_under};
+use crate::test_support::{h, open_store_under};
 
 /// Every connecting height of every captured chain: the window off the
 /// view equals the owner over independently read rows, height by height.
@@ -173,7 +173,6 @@ async fn the_window_off_the_store_is_the_owner_over_its_rows() {
         }
         drop(snap);
         drop(store);
-        cleanup(&path);
     }
     assert!(compared > 0, "no floor was compared (rule 47)");
     println!("relay-floor: {compared} floors compared against the owner over the rows");

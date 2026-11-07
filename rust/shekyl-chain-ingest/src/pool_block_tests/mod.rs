@@ -116,7 +116,6 @@ async fn a_switchs_returns_run_the_door_and_the_floor_refuses_one_below_it() {
     assert!(record.public, "a block carried it");
     assert!(shown(&record), "and the node shows it");
     drop(pool);
-    drop(std::fs::remove_file(&path));
     x.close().await;
     y.close().await;
 }
@@ -208,7 +207,6 @@ async fn a_returned_spend_the_chain_refuses_is_dropped_and_the_store_keeps_its_b
         .len()
         .expect("len");
     assert_eq!(filed, 0, "nothing was filed");
-    drop(std::fs::remove_file(&path));
     x.close().await;
     y.close().await;
 }
@@ -321,7 +319,6 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
 
     // The pool file is discardable (SPL-Q8): discard it.
     drop(pool);
-    drop(std::fs::remove_file(&path));
     let plan = offer_branch(&x, &b[1..]).await;
     let switched = x.reorganize(&plan).await.expect("switch");
     assert!(
@@ -387,7 +384,6 @@ async fn a_switch_back_promotes_a_demoted_body_the_door_refused() {
     );
     assert_eq!(x.digest().await.expect("d"), z.digest().await.expect("d"));
     drop(pool);
-    drop(std::fs::remove_file(&path));
     x.close().await;
     y.close().await;
     z.close().await;
@@ -572,7 +568,6 @@ async fn a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it(
         .await;
     assert_eq!(same, (0, vec![txid]), "the cache spares the proof");
     assert_eq!(reopened, (1, vec![txid]), "an open trusts no anchor");
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use super::service_tests::{arrival, offer_all, service, Gated};
 use super::{Reply, ServiceConfig};
 use crate::scenario::{Mined, Scenario};
-use crate::test_support::cleanup;
+use crate::test_support::TestPath;
 
 /// The shared prefix: blocks 0..=2039. Every branch's fork root is 2039,
 /// below the seed block at 2048.
@@ -86,10 +86,7 @@ fn seed_block(branch: &[Mined]) -> shekyl_types::BlockHash {
 }
 
 /// A service holding the prefix and the main branch, and its substrate.
-async fn on_main(
-    name: &str,
-    chains: &Branches,
-) -> (super::Service<Gated>, std::path::PathBuf, Arc<Gated>) {
+async fn on_main(name: &str, chains: &Branches) -> (super::Service<Gated>, TestPath, Arc<Gated>) {
     let substrate = Arc::new(Gated::new());
     let (service, path) = service(name, Arc::clone(&substrate), ServiceConfig::default());
     let door = service.door();
@@ -109,7 +106,7 @@ async fn on_main(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_heavier_branch_past_its_own_seed_point_is_followed() {
     let chains = branches().await;
-    let (service, path, substrate) = on_main("seed-point-follow", chains).await;
+    let (service, _path, substrate) = on_main("seed-point-follow", chains).await;
     let replies = offer_all(&service.door(), 2, &chains.z).await;
     let past: Vec<_> = chains
         .z
@@ -143,7 +140,6 @@ async fn a_heavier_branch_past_its_own_seed_point_is_followed() {
         "after the switch the branch's seed block is canonical"
     );
     service.stop().await.expect("stops");
-    cleanup(&path);
 }
 
 /// Store z and w up to their seed points, where both still hash under
@@ -165,7 +161,7 @@ async fn up_to_the_seed_point(service: &super::Service<Gated>, chains: &Branches
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_branches_alternating_derive_once_per_alternation() {
     let chains = branches().await;
-    let (service, path, substrate) = on_main("seed-point-alternate", chains).await;
+    let (service, _path, substrate) = on_main("seed-point-alternate", chains).await;
     up_to_the_seed_point(&service, chains).await;
     let canonical = substrate.canonical();
     assert_eq!(
@@ -221,7 +217,6 @@ async fn two_branches_alternating_derive_once_per_alternation() {
     );
     assert_eq!(substrate.pins(), pins, "branch seeds are never pinned");
     service.stop().await.expect("stops");
-    cleanup(&path);
 }
 
 /// Two branches past their seed points arriving at once: their forms run
@@ -230,7 +225,7 @@ async fn two_branches_alternating_derive_once_per_alternation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn branch_forms_run_one_at_a_time() {
     let chains = branches().await;
-    let (service, path, substrate) = on_main("seed-point-one", chains).await;
+    let (service, _path, substrate) = on_main("seed-point-one", chains).await;
     up_to_the_seed_point(&service, chains).await;
     let door = service.door();
     let (z, w) = tokio::join!(
@@ -243,5 +238,4 @@ async fn branch_forms_run_one_at_a_time() {
     );
     assert_eq!(substrate.branch_forms_max(), 1, "one branch form at a time");
     service.stop().await.expect("stops");
-    cleanup(&path);
 }

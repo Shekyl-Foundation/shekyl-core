@@ -26,7 +26,6 @@ use super::{captured_chains, mock_with_the_real_clock};
 use crate::corpus::CorpusReader;
 use crate::mutation::{Environment, Mutated, Mutation};
 use crate::source::{IngestEvent, Source};
-use crate::test_support::cleanup;
 use crate::trace::Trace;
 
 /// The height of the first block in `dir`'s corpus that lists a spend.
@@ -76,7 +75,7 @@ async fn the_ninth_input_is_refused_on_a_captured_regtest_chain() {
             resigned: None,
         },
     );
-    let (report, path, _rules) = replay_open(
+    let (report, _path, _rules) = replay_open(
         &manifest,
         substrate,
         ApplyPolicy::Full,
@@ -85,7 +84,6 @@ async fn the_ninth_input_is_refused_on_a_captured_regtest_chain() {
         Arc::new(Trace::read(std::io::Cursor::new(trace.as_slice())).expect("read trace")),
     )
     .await;
-    cleanup(&path);
     let report = report.expect("the mutated chain runs to its refusal");
     let (height, verdict) = report
         .refused

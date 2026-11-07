@@ -44,7 +44,6 @@
 //! against, and the producer's ledger of what it priced (`Priced`, handed
 //! to `connect` through `Composed`) went with the last of them.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use kameo::actor::ActorRef;
@@ -75,7 +74,7 @@ use crate::connector::{
 };
 use crate::schedule::ChainRules;
 use crate::target::TargetLedger;
-use crate::test_support::{cleanup, open_store, open_store_under, tmp};
+use crate::test_support::{open_store, open_store_under, tmp, TestPath};
 
 #[path = "scenario_types.rs"]
 mod types;
@@ -100,7 +99,7 @@ fn spawn_connector(args: ConnectorArgs) -> (ActorRef<Connector>, ConnectorTask) 
 /// The driver. Owns the connector (and through it the store) and the
 /// clock; every block it mines pays the harness miner.
 pub struct Scenario<P> {
-    path: PathBuf,
+    path: TestPath,
     connector: ActorRef<Connector>,
     /// The connector's task, joined on [`close`](Self::close) and
     /// [`reopen`](Self::reopen) so the store it owns is dropped before the
@@ -751,7 +750,6 @@ where
     /// Stop the connector, release the store, remove the file.
     pub async fn close(mut self) {
         self.stop_connector().await;
-        cleanup(&self.path);
     }
 
     /// Stop the connector and release the store, run `edit` on the file —

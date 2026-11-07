@@ -178,15 +178,10 @@ mod tests {
     use shekyl_types::archival::SettlementEpochBlocks;
     use shekyl_types::ArchivalLength;
 
-    fn empty_store() -> (StoreShardFacts, StoreHolderSource, std::path::PathBuf) {
-        let path = std::env::temp_dir().join(format!(
-            "shekyl-sv-d9-{}-{}.redb",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ));
+    use crate::test_support::{tmp, TestPath};
+
+    fn empty_store() -> (StoreShardFacts, StoreHolderSource, TestPath) {
+        let path = tmp("sv-d9");
         let store = Arc::new(
             ChainStore::create(
                 &path,
@@ -203,7 +198,7 @@ mod tests {
 
     #[test]
     fn an_empty_store_has_an_open_tip_shard_and_no_holders() {
-        let (facts, holders, path) = empty_store();
+        let (facts, holders, _path) = empty_store();
         assert_eq!(facts.tip_height().expect("tip"), BlockHeight::ZERO);
         assert_eq!(facts.block_hash_at(BlockHeight::ZERO).expect("hash"), None);
         match facts.shard(ShardId::from_raw(0)).expect("standing") {
@@ -220,8 +215,5 @@ mod tests {
             .holders_of(ShardId::from_raw(0))
             .expect("holders")
             .is_empty());
-        drop(facts);
-        drop(holders);
-        std::fs::remove_file(path).expect("remove temp store");
     }
 }
