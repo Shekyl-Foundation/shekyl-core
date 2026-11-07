@@ -104,11 +104,10 @@ async fn next_arrival(inbox: &mut Inbox) -> Arrival {
 // Producers that end
 // ---------------------------------------------------------------------
 
-/// **The owner's stop is said once.** A posted stop is an arrival and
-/// sets the latch an ask races. The queue then closes, and a closed queue
-/// answers at once, every time: it is not read again, so the next wait
-/// stays pending. Reading the closed queue on every wait fails the second
-/// assertion (a stop at every wait: the spin).
+/// **The owner's stop is said once.** Closing the queue is the stop, and
+/// it sets the latch an ask races. A closed queue answers at once, every
+/// time, so it is not read again: the next wait stays pending. Posting a
+/// stop and then closing would say it twice and fail that pending check.
 #[tokio::test(start_paused = true)]
 async fn the_owners_stop_is_said_once() {
     let (mut owner, mut inbox, _feeds) = inbox();
@@ -118,11 +117,6 @@ async fn the_owners_stop_is_said_once() {
     tokio::time::timeout(Duration::from_millis(1), latch.stopped())
         .await
         .expect("the latch is set");
-    let after = inbox.wait().await;
-    assert!(
-        matches!(after, Woken::Arrived(Arrival::Stop)),
-        "the close after the posted stop is the stop, once: {after:?}"
-    );
     assert!(pending_a_minute(&mut inbox).await.is_none(), "it spun");
 }
 
@@ -133,7 +127,6 @@ async fn the_owners_stop_is_said_once() {
 async fn an_owner_dropped_is_the_stop_said_once() {
     let (owner, mut inbox, _feeds) = inbox();
     drop(owner);
-    assert!(matches!(inbox.wait().await, Woken::Arrived(Arrival::Stop)));
     assert!(matches!(inbox.wait().await, Woken::Arrived(Arrival::Stop)));
     assert!(pending_a_minute(&mut inbox).await.is_none());
 }
@@ -554,7 +547,8 @@ impl Live {
         }
     }
 
-    /// End `producer`. The owner's end posts the stop: one more arrival.
+    /// End `producer`. The owner's end closes the queue, which is the stop:
+    /// one more arrival.
     fn close(&mut self, producer: Producer) {
         match producer {
             Producer::Owner => {
@@ -602,11 +596,11 @@ async fn drain(inbox: &mut Inbox, passes: &mut usize) {
 /// are bounded by the inputs and deadlines fed in** (Rick, 2026-11-05).
 /// Every one of the 120 orders: each live producer feeds an input, one
 /// closes, each still live feeds again, and so on until all have closed.
-/// Every wait that returns is a pass. The passes never exceed what was fed
-/// plus one, the queue's close said as the stop; and once every producer
-/// has ended, the wait stays pending. A closed source that answers a wait
-/// fails the bound with the spin cap; a stop said at every wait after the
-/// close fails the pending check.
+/// Every wait that returns is a pass. The passes never exceed what was fed.
+/// The owner's close is one of those inputs, the stop said once; a second
+/// stop from that close would pass the bound. Once every producer has
+/// ended, the wait stays pending. A closed source that answers a wait
+/// fails the bound with the spin cap.
 #[tokio::test(start_paused = true)]
 async fn for_any_order_of_producers_closing_the_passes_are_bounded_by_the_inputs() {
     for order in orders(&PRODUCERS) {
@@ -640,7 +634,7 @@ async fn for_any_order_of_producers_closing_the_passes_are_bounded_by_the_inputs
             drain(&mut inbox, &mut passes).await;
         }
         assert!(
-            passes <= live.fed + 1,
+            passes <= live.fed,
             "{order:?}: {passes} passes for {} inputs fed",
             live.fed
         );

@@ -1044,7 +1044,7 @@ loop has since replaced carries an old generation and is ignored, so no arm
 is cleared and armed again. Each pass folds the sleep the wait observed,
 then every cell that changed, then the one arrival; an event posted before
 a deadline is folded before it. A control ask cannot read the queue without
-taking what is behind the stop, so posting the stop also sets a latch the
+taking what is behind the stop, so closing the queue also sets a latch the
 ask races. Tor's events are bounded in the queue at `EVENT_QUEUE_EVENTS`
 not yet taken (`TSR-F2`); one past that is dropped and counted, and the
 count is the round resync's.

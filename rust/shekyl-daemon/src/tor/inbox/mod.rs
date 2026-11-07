@@ -29,9 +29,9 @@
 //!
 //! A control ask to Tor runs between waits and can take seconds. The stop
 //! must still end it, and the ask cannot read the queue without taking the
-//! inputs behind the stop. So posting the stop also sets the inbox's stop
+//! inputs behind the stop. So closing the queue also sets the inbox's stop
 //! latch, which an ask races ([`StopLatch`]). The stop itself is still the
-//! queue's: the loop folds it in its turn.
+//! queue's close, said once: the loop folds it in its turn.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -147,11 +147,11 @@ impl Owner {
         self.shared.set(|cells| cells.forward = Some(at));
     }
 
-    /// Post the stop and close the queue.
+    /// Close the queue. That close is the stop, said once, and it sets the
+    /// latch an ask races. Posting a stop as well would say it a second time
+    /// when the loop reads the close.
     pub(super) fn stop(&mut self) {
-        if let Some(queue) = self.queue.take() {
-            let _posted = queue.send(Arrival::Stop);
-        }
+        self.queue.take();
         self.shared.latch_stop();
     }
 }
@@ -293,15 +293,14 @@ impl Inbox {
     }
 }
 
-/// The stop as an ask sees it: set once the owner posts the stop, or closes
-/// the queue.
+/// The stop as an ask sees it: set once the owner closes the queue.
 #[derive(Clone)]
 pub(super) struct StopLatch {
     shared: Arc<Shared>,
 }
 
 impl StopLatch {
-    /// Resolves once the stop is posted.
+    /// Resolves once the owner has closed the queue.
     pub(super) async fn stopped(&self) {
         loop {
             let rung = self.shared.stop_rung.notified();
