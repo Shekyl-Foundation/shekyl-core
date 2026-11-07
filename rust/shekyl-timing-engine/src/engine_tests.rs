@@ -367,3 +367,24 @@ fn the_monotonic_clock_does_not_go_backwards() {
     let second = clock.now();
     assert!(second >= first);
 }
+
+/// Every production clock is on one timeline: a stamp from a clock built
+/// later is never earlier than one taken before it from another clock.
+/// The dialer and the Tor supervisor compare stamps from clocks they were
+/// each handed (`DIALER_OUTAGE_EVIDENCE.md` §6.1). Restoring a
+/// per-instance origin (`origin: Instant::now()` in `MonotonicClock::new`)
+/// turns this red: the later clock would count from its own construction.
+#[test]
+fn a_stamp_from_a_later_clock_is_never_earlier_than_one_taken_before_it() {
+    let earlier_clock = MonotonicClock::new();
+    std::thread::sleep(Duration::from_millis(20));
+    let before = earlier_clock.stamp();
+    let later_clock = MonotonicClock::new();
+    let after = later_clock.stamp();
+    assert!(
+        after >= before,
+        "a clock built later read {:?}, earlier than {:?} from the first clock",
+        after.tick(),
+        before.tick()
+    );
+}

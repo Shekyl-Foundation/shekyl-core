@@ -203,6 +203,8 @@ pub struct Rig {
     pub loopback: Arc<Loopback>,
     pub tip: watch::Sender<CoreSyncData>,
     pub timing: shekyl_timing_engine::Handle<MonotonicClock>,
+    /// Every report of the sessions each connector holds, in order.
+    pub held: Arc<Mutex<Vec<PerConnector<u32>>>>,
     _engine: EngineService<MonotonicClock>,
 }
 
@@ -246,11 +248,16 @@ impl Rig {
         let engine = EngineService::start(MonotonicClock::new());
         let timing = engine.handle();
         let (tip, tip_rx) = watch::channel(our_tip());
+        let held = Arc::new(Mutex::new(Vec::new()));
+        let reports = Arc::clone(&held);
         let owners = Owners {
             peers: recorder.clone(),
             sync: recorder.clone(),
             relay: recorder.clone(),
-            probes: recorder.clone(),
+            probes: Some(recorder.clone()),
+            sessions: Some(Arc::new(move |sessions| {
+                reports.lock().expect("held reports").push(sessions);
+            })),
         };
         let layer = SessionLayer::new(Parts {
             sockets: sockets.clone(),
@@ -275,6 +282,7 @@ impl Rig {
             loopback,
             tip,
             timing,
+            held,
             _engine: engine,
         }
     }

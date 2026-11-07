@@ -197,21 +197,21 @@ fn a_probe_in_flight_through_a_sleep_keeps_a_whole_bound() {
 }
 
 /// The quiet stretch counts awake time: a sleep is not ten minutes in which
-/// no Tor connection opened. After the wake the stretch runs again. Leaving
-/// the stretch's start where it was fails this.
+/// no Tor connection opened. After the wake the stretch runs again, and a
+/// dial launched after it that fails stands the line once the span has
+/// passed. Leaving the stretch's start where it was fails this.
 #[test]
 fn the_quiet_stretch_counts_awake_time() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     core.on(Input::StateFileAppeared, 0);
-    let quiet = super::super::DialTally {
+    let failed = |unopened, began| super::super::DialTally {
         opened: 0,
-        unopened: 1,
-        held: 0,
+        unopened,
         last_sign_of_life: None,
-        last_unopened_at: None,
+        failed_attempt_began: Some(began),
     };
-    core.on(Input::DialEvidence(quiet), secs(1));
+    core.on(Input::DialEvidence(failed(1, secs(1))), secs(1));
     run(&mut core, secs(15), 100, 1_000);
     assert_eq!(core.status().tor_quiet, None);
     let wake = secs(15 + SLEEP);
@@ -225,6 +225,8 @@ fn the_quiet_stretch_counts_awake_time() {
         1_000,
     );
     assert_eq!(core.status().tor_quiet, None, "the sleep is not quiet");
+    let since = wake + duration_ns(policy().alive_every) + secs(1);
+    core.on(Input::DialEvidence(failed(2, since)), since);
     let after = policy().quiet_after;
     run(&mut core, wake + duration_ns(after) + secs(4), 100, 1_000);
     assert!(core.status().tor_quiet.is_some(), "awake and still quiet");

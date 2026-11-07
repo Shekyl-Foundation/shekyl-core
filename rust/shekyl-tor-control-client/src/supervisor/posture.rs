@@ -231,16 +231,37 @@ pub struct Space {
     pub needed: u64,
 }
 
-/// Whether the node is syncing, and over what (`TSR-Q12`).
-///
-/// `clearnet` is the configured clearnet connector and `tor` is health.
-/// A chain-sync feed replaces those two reads in place.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Whether the node is syncing, and over what (`TSR-Q12`): each connector
+/// that holds a session now. Every session runs the timed sync, so one
+/// held is the node in sync with a peer over that connector. Read live
+/// from the session layer, never from the configuration: a clearnet that
+/// is on and that no peer accepts carries nothing (alpha.11 finding 9).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Syncing {
-    /// Syncing over clearnet.
+    /// A clearnet session is held.
     pub clearnet: bool,
-    /// Syncing over Tor.
+    /// A Tor session is held.
     pub tor: bool,
+}
+
+/// The sessions each connector holds, as the session layer reports them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sessions {
+    /// Clearnet sessions whose handshake has finished.
+    pub clearnet: u32,
+    /// Tor sessions whose handshake has finished.
+    pub tor: u32,
+}
+
+impl Sessions {
+    /// What the node syncs over: each connector that holds one.
+    #[must_use]
+    pub const fn syncing(self) -> Syncing {
+        Syncing {
+            clearnet: self.clearnet > 0,
+            tor: self.tor > 0,
+        }
+    }
 }
 
 /// How a bootstrap is going, as of the last progress line (`TOR_SUPERVISOR.md`
@@ -710,15 +731,16 @@ fn behaviour(status: &Status) -> String {
             Carriage::OpenOnly => {
                 "Connections already open through Tor still carry this node's traffic.".to_owned()
             }
-            Carriage::Gone => held_sentence(status.sync),
+            Carriage::Gone => held_sentence(false, status.sync),
         },
-        OwnTx::Held => held_sentence(status.sync),
+        OwnTx::Held => held_sentence(carriage(status) == Carriage::Carries, status.sync),
         OwnTx::ClearnetOnly => "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.".to_owned(),
         OwnTx::Offline => "This node is offline.".to_owned(),
     }
 }
 
 /// What the Tor behind an address-hiding verdict can carry.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Carriage {
     /// Shown usable, or degraded only because the onion is unreachable (no
     /// cause stands): the link carries traffic.
@@ -784,27 +806,40 @@ fn spoken_bytes(bytes: u64) -> String {
 }
 
 /// The `Held` sentence. The node is "waiting for Tor" only while the link
-/// is not usable; a held origin beside a usable link (no address-hiding peer
-/// yet, or the epoch's pin exhausted) is holding, not waiting. What the node
-/// syncs over is read from `sync`, never assumed from the hold; the typed
-/// reason for the hold is `GS-C2`'s (IG-Q72).
+/// is not usable (`tor_up` false); a held origin beside a usable link (no
+/// address-hiding peer yet, or the epoch's pin exhausted) is holding, not
+/// waiting. What the node syncs over is `sync`, the sessions it holds,
+/// never assumed from the hold or the link; the typed reason for the hold
+/// is `GS-C2`'s (IG-Q72).
 ///
-/// [`render`] speaks this for a held status. The daemon's pin warning
-/// speaks it too, with `tor` false: the link is not up, and `clearnet` is
-/// the connector.
-#[must_use]
-pub fn held_sentence(sync: Syncing) -> String {
+/// [`render`] speaks this for a held status.
+fn held_sentence(tor_up: bool, sync: Syncing) -> String {
     let syncing = match (sync.tor, sync.clearnet) {
         (true, true) => "It is syncing over Tor and clearnet.",
         (true, false) => "It is syncing over Tor.",
         (false, true) => "It is syncing over clearnet.",
         (false, false) => "It is not syncing.",
     };
-    if sync.tor {
+    if tor_up {
         format!("This node is holding its own transactions. {syncing}")
     } else {
         format!("This node is waiting for Tor and holding its own transactions. {syncing}")
     }
+}
+
+/// What a refused pin means for a node not yet started: the configuration
+/// check speaks it after the pin's cause (`INPUT_GRAMMAR.md` IG-Q59). No
+/// session exists at a check, so it says what the node will do, from the
+/// connectors it is set to: under TB-2 it starts all the same, holds its
+/// own transactions, and syncs over clearnet only when clearnet is on.
+#[must_use]
+pub fn held_at_start_sentence(clearnet_on: bool) -> String {
+    let syncing = if clearnet_on {
+        "It will sync over clearnet."
+    } else {
+        "It will not sync until Tor is up."
+    };
+    format!("When it starts, this node will wait for Tor and hold its own transactions. {syncing}")
 }
 
 /// The quiet fact, said only when the bootstrap line is not. A running Tor

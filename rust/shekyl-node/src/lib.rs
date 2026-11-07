@@ -74,7 +74,7 @@ pub use producer::descriptors as producer_descriptors;
 pub use shekyl_chain_sync::Declaration;
 pub use shekyl_chain_sync_runtime::owner::{EndCause, Ended as SyncEnded};
 pub use shekyl_p2p::{
-    BanTarget, ClearnetPlan, LinkLimits, Network, NetworkPlan, PeerPlan, TorPlan,
+    BanTarget, ClearnetPlan, LinkLimits, Network, NetworkPlan, PeerPlan, SupervisorFeeds, TorPlan,
 };
 
 use std::num::NonZeroUsize;
@@ -209,6 +209,11 @@ pub struct OpenArgs<'a> {
     /// bans. The node builds the [`Network`] from it after the chain is
     /// open, so the handshake's tip is the chain's.
     pub plan: NetworkPlan,
+    /// What the managed-Tor supervisor hears from the network, when Tor
+    /// is managed. The daemon makes the supervisor's inbox before the node
+    /// opens, so the network's producers publish into it from the start
+    /// (`TOR_SUPERVISOR.md` §5).
+    pub supervisor: Option<SupervisorFeeds>,
 }
 
 struct Slots {
@@ -415,6 +420,7 @@ impl Node {
             tips: tips.clone(),
             sync: sync.clone(),
             plan: args.plan,
+            supervisor: args.supervisor,
             sockets: sockets.clone(),
             nudge_door: Arc::clone(&pool_door),
             relay_door: pool_door,

@@ -11,7 +11,8 @@ use std::time::Duration;
 use shekyl_timing_engine::{Clock, ManualClock, Tick};
 
 use super::super::posture::{
-    render, Cause, Connectors, ManagedTorFix, OriginVerdict, OwnTx, Shown, Status, TorSetting,
+    render, Cause, Connectors, ManagedTorFix, OriginVerdict, OwnTx, Sessions, Shown, Status,
+    Syncing, TorSetting,
 };
 use super::{duration_ns, Action, Core, Input, Policy, Step};
 
@@ -125,6 +126,15 @@ fn bring_up(core: &mut Core) -> Step {
     step
 }
 
+/// The session layer reports one Tor session: the first peer the dialer
+/// kept over the link.
+fn tor_session() -> Input {
+    Input::Sessions(Sessions {
+        clearnet: 0,
+        tor: 1,
+    })
+}
+
 /// The link reaches Usable, and then the relay's verdict arrives. Between
 /// the two the send is held (`GS-F3`): the link is not the fact.
 fn reach_usable(core: &mut Core) {
@@ -143,7 +153,12 @@ fn reach_usable(core: &mut Core) {
         OwnTx::Held,
         "held until the relay can originate"
     );
-    assert!(status.sync.tor, "the link is what the node syncs over");
+    assert_eq!(
+        status.sync,
+        Syncing::default(),
+        "a usable link with no session syncs nothing (alpha.11 finding 9)"
+    );
+    core.on(tor_session(), 0);
     let step = core.on(carrying(), 0);
     assert_eq!(
         announces(&step),
@@ -201,6 +216,13 @@ fn a_respawn_backs_off_and_announces_once_per_cap() {
     assert_eq!(
         said, 2,
         "the first fault and one more at the cap, not each retry"
+    );
+    core.on(
+        Input::Sessions(Sessions {
+            clearnet: 2,
+            tor: 0,
+        }),
+        ns(&clock),
     );
     let text = render(&core.status());
     assert!(
@@ -857,6 +879,13 @@ fn held_status() -> Status {
 fn the_relays_verdict_decides_own_tx_and_health_and_is_said_under_the_cap() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
+    core.on(
+        Input::Sessions(Sessions {
+            clearnet: 1,
+            tor: 1,
+        }),
+        0,
+    );
     let cap = duration_ns(policy().cap);
     let text = render(&core.status());
     assert!(
@@ -877,7 +906,7 @@ fn the_relays_verdict_decides_own_tx_and_health_and_is_said_under_the_cap() {
     assert!(!status.health);
     assert_eq!(status.own_tx, OwnTx::Held);
     assert_eq!(status.shown, Shown::Usable, "the link did not move");
-    assert!(status.sync.tor, "the node still syncs over the link");
+    assert!(status.sync.tor, "the node still holds its Tor session");
     let text = render(&status);
     assert!(
         text.starts_with(
@@ -938,6 +967,50 @@ fn a_held_origin_under_a_down_link_waits_for_tor() {
             "This node is waiting for Tor and holding its own transactions. It is not syncing."
         ),
         "{text}"
+    );
+}
+
+/// **What the node syncs over is the sessions it holds** (alpha.11 finding
+/// 9): a default node with clearnet on and no clearnet peer said "syncing
+/// over Tor and clearnet". The line follows the session layer's counts:
+/// a connector is named while it holds a session, and not while it holds
+/// none, whatever the configuration. Building `Syncing` from the
+/// configured connector again fails the first assertion.
+#[test]
+fn the_node_syncs_over_the_connectors_that_hold_a_session() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    core.on(held(), 1);
+    let line = |core: &Core| render(&core.status());
+    let sessions = |clearnet, tor| Input::Sessions(Sessions { clearnet, tor });
+    core.on(sessions(0, 3), 2);
+    assert!(
+        line(&core).contains("It is syncing over Tor.") && !line(&core).contains("clearnet"),
+        "clearnet is on and holds nothing: {}",
+        line(&core)
+    );
+    core.on(sessions(1, 3), 3);
+    assert!(
+        line(&core).contains("It is syncing over Tor and clearnet."),
+        "{}",
+        line(&core)
+    );
+    core.on(sessions(1, 0), 4);
+    assert!(
+        line(&core).contains("It is syncing over clearnet."),
+        "the Tor link is up and holds nothing: {}",
+        line(&core)
+    );
+    assert!(
+        !line(&core).contains("waiting for Tor"),
+        "the link is up, so the node is not waiting for it: {}",
+        line(&core)
+    );
+    core.on(sessions(0, 0), 5);
+    assert!(
+        line(&core).contains("It is not syncing."),
+        "{}",
+        line(&core)
     );
 }
 

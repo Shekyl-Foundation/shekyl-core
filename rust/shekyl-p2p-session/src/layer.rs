@@ -20,10 +20,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use shekyl_capped_stream::SendHalf;
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{BasicNodeData, CoreSyncData, PeerlistEntry};
-use shekyl_timing_engine::{Clock, Handle, Tick};
+use shekyl_timing_engine::{Clock, Handle, Stamp, Tick};
 use shekyl_transport_layer::{
-    monotonic_ms, CloseCause, CloseKind, ConnectorId, DialEnd, DialFailure, Ipv4Subnet, OpenSocket,
-    Reached, Retry, SocketId, Sockets, StreamEnd,
+    monotonic_ms, CloseCause, CloseKind, ConnectorId, DialEnd, DialFailure, Direction, Ipv4Subnet,
+    OpenSocket, Reached, Retry, SocketId, Sockets, StreamEnd,
 };
 use tokio::sync::{oneshot, watch, Notify};
 
@@ -33,7 +33,7 @@ use crate::endpoint::Endpoint;
 use crate::handle::{Control, Established, SendRefused, SessionHandle};
 use crate::handshake;
 use crate::nonce::{HandshakeNonceSet, InFlightNonce};
-use crate::owners::{Owners, SessionFacts};
+use crate::owners::{Owners, SessionFacts, SessionsSink};
 use crate::session::{self, Role};
 use crate::timing::Intervals;
 
@@ -265,9 +265,16 @@ struct Table {
     board: Board,
     /// [`SessionLayer::shutdown`] ran: no channel is placed after it.
     shut: bool,
+    /// Where the sessions each connector holds are reported.
+    sessions: Option<SessionsSink>,
+    /// The counts last reported.
+    held: PerConnector<u32>,
 }
 
 impl Table {
+    /// Rebuild the board from the rows, and report the sessions each
+    /// connector holds when that moved. Under the table's lock, so the
+    /// reports follow the board's order.
     fn republish(&mut self) {
         let rows = self
             .slots
@@ -283,6 +290,28 @@ impl Table {
             })
             .collect();
         self.board = Board::from_rows(rows);
+        let held = held_sessions(&self.board);
+        if held != self.held {
+            self.held = held;
+            if let Some(sink) = &self.sessions {
+                sink(held);
+            }
+        }
+    }
+}
+
+/// The sessions each connector holds on `board`: rows whose handshake has
+/// finished, in either direction.
+fn held_sessions(board: &Board) -> PerConnector<u32> {
+    let held = |connector| {
+        let both = board
+            .established_sessions(connector, Direction::Outbound)
+            .saturating_add(board.established_sessions(connector, Direction::Inbound));
+        u32::try_from(both).unwrap_or(u32::MAX)
+    };
+    PerConnector {
+        clearnet: held(ConnectorId::Clearnet),
+        tor: held(ConnectorId::Tor),
     }
 }
 
@@ -317,6 +346,10 @@ impl<C: Clock + Clone + Send + Sync + 'static> SessionLayer<C> {
     /// dialed.
     #[must_use]
     pub fn new(parts: Parts<C>) -> Self {
+        let sessions = parts.owners.sessions.clone();
+        if let Some(sink) = &sessions {
+            sink(PerConnector::both(0));
+        }
         let shared = Shared {
             sockets: parts.sockets,
             config: parts.config,
@@ -331,6 +364,8 @@ impl<C: Clock + Clone + Send + Sync + 'static> SessionLayer<C> {
                 slots: HashMap::new(),
                 board: Board::empty(),
                 shut: false,
+                sessions,
+                held: PerConnector::both(0),
             }),
         };
         Self {
@@ -374,6 +409,12 @@ impl<C: Clock + Clone + Send + Sync + 'static> SessionLayer<C> {
     #[must_use]
     pub fn now(&self) -> Tick {
         self.shared.timing.clock().now()
+    }
+
+    /// [`Self::now`], as a stamp only the clock can mint.
+    #[must_use]
+    pub fn stamp(&self) -> Stamp {
+        self.shared.timing.clock().stamp()
     }
 
     /// The runtime session tasks run on, for an owner's own tasks.

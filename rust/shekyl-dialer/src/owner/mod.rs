@@ -30,10 +30,6 @@
 //! timer. It waits on the change that could supply it, and the wake spacing
 //! resumes when the connector is ready. The tip and the network id are the
 //! session layer's: it does not exist before they do.
-//! The `tor_tally` module publishes how many Tor sessions are held. The
-//! count refreshes when a Tor handshake finishes or a Tor session closes.
-//! An inbound session is not a dial.
-//!
 //! The [`peers`] module is the session layer's peers owner: the layer asks
 //! it for the list a handshake or timed sync discloses, hands it the lists
 //! peers send, and tells it when a session is established or closed. The
@@ -48,7 +44,6 @@ mod judging;
 mod peers;
 mod ready;
 mod recovery;
-mod tor_tally;
 mod wake;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -63,7 +58,7 @@ use shekyl_peerlist::{
     dial_profile, white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, ListName,
     NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick, Verdict,
 };
-use shekyl_timing_engine::{Clock, Handle, OwnerHandle};
+use shekyl_timing_engine::{Clock, Handle, OwnerHandle, Stamp};
 use shekyl_transport_layer::{
     BanEvent, BanFeed, CloseKind, DialEnd, Links, Retry, SocketId, Sockets, Subscription,
 };
@@ -85,6 +80,21 @@ use crate::store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};
 /// layer calls ([`shekyl_p2p_session::PeerOwner`]) carry no generator of
 /// the caller's.
 pub type OwnerRng = Box<dyn RelayRng + Send>;
+
+/// When one dial attempt ran: its launch on the process clock, and its
+/// stream's open and its end on the judge's clock.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct AttemptTimes {
+    /// When the dialer launched the attempt (`attempt_began`,
+    /// `DIALER_OUTAGE_EVIDENCE.md` §6.1).
+    pub(super) began: Stamp,
+    /// When its stream opened, when one did.
+    pub(super) opened_ms: Option<u64>,
+    /// When it resolved ([`crate::reach::AttemptEnd::ended_ms`]). The
+    /// failure is dated here. The wait in the completion queue is not part
+    /// of it, so a verdict applied late can err only toward excusing.
+    pub(super) ended_ms: u64,
+}
 
 /// The state the owner loops and the FFI calls share.
 pub struct Shared {
@@ -144,9 +154,6 @@ pub struct Shared {
     /// What the Tor dials show, for the managed-Tor supervisor's posture
     /// line (`TOR_SUPERVISOR.md` §4.2). Display only (`TSR-Q14`).
     tor_link: LinkFold,
-    /// Each connector's inbound rows last read off the board
-    /// ([`Dialer::with_inbound`]).
-    inbound: [usize; ConnectorId::COUNT],
     /// What the judge has seen of each connector's link ([`judging`]).
     evidence: [judging::LinkEvidence; ConnectorId::COUNT],
     /// Failed tests whose verdict waits for its bracket to close.
@@ -288,7 +295,6 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
                 }),
                 published_windows: [None; ConnectorId::COUNT],
                 tor_link: LinkFold::new(),
-                inbound: [0; ConnectorId::COUNT],
                 evidence: [judging::LinkEvidence::default(); ConnectorId::COUNT],
                 pending: Vec::new(),
                 life_clock: judging::LifeClock::production(),
@@ -362,6 +368,11 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
     #[must_use]
     pub fn now(&self) -> Tick {
         self.timing.clock().now()
+    }
+
+    /// The engine's clock now, as the stamp the Tor tally carries.
+    fn stamp(&self) -> Stamp {
+        self.timing.clock().stamp()
     }
 
     /// Store the retry window `connector` published with its route.
@@ -577,10 +588,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
     /// the failed dials since that open. Any other cause only drops the
     /// kept row. An id this dialer is not keeping has no row here: a dial
     /// still in the handshake, a confirm dial, or an inbound Tor session,
-    /// which has no list address. The board is not read: the held count
-    /// uses the inbound rows last read by [`Self::note_inbound_tor`], which
-    /// the layer's close hook ([`shekyl_p2p_session::PeerOwner::on_closed`])
-    /// calls first.
+    /// which has no list address.
     pub fn session_closed<R: RelayRng + ?Sized>(&self, id: SocketId, end: DialEnd, rng: &mut R) {
         let now = self.now();
         let mut shared = self.shared();
@@ -602,7 +610,6 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
                 shared.attempts(connector).session_closed(&address);
             }
         }
-        Self::publish_tor_held(&mut shared);
     }
 
     /// Stop every owner loop at its next bell, cancel every attempt in
@@ -713,29 +720,41 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
         self.store_addresses()
     }
 
-    /// Record a test's outcome. `opened_ms` is when its final attempt's
-    /// stream opened, on the judge's clock, when one did. `ended_ms` is
-    /// when that attempt resolved, on the same clock: the failure is judged
-    /// then, not when this record runs. The stream is dated at its open,
-    /// and never later than `ended_ms`, so it is never after its own failure.
+    /// Record a test's outcome, from its final attempt's `times`. The
+    /// failure is judged at `ended_ms`, not when this record runs. The
+    /// stream is dated at its open, and never later than `ended_ms`, so it
+    /// is never after its own failure. `at` is now.
     fn record<R: RelayRng + ?Sized>(
         shared: &mut Shared,
         connector: ConnectorId,
         outcome: &DialOutcome,
-        opened_ms: Option<u64>,
-        ended_ms: u64,
-        now: Tick,
+        times: AttemptTimes,
+        at: Stamp,
         rng: &mut R,
     ) {
+        let now = at.tick();
         Self::apply_due_verdicts(shared, now, rng);
         // The attempt frees its slot whatever the verdict: a deferred one
         // holds only the outstanding seat.
         shared.attempts(connector).finish(outcome);
-        Self::judge_outcome(shared, connector, outcome, ended_ms, now, rng);
-        let opened = opened_ms.map_or(ended_ms, |opened| opened.min(ended_ms));
-        Self::note_stream(shared, connector, outcome, opened, now);
-        let held = Self::tor_held(shared);
-        shared.tor_link.observe(connector, outcome, held, now);
+        Self::judge_outcome(shared, connector, outcome, times.ended_ms, now, rng);
+        Self::note_attempt(shared, connector, outcome, times, at);
+    }
+
+    /// An attempt's stream and its place in the Tor tally, whether its test
+    /// is recorded or deferred for a retry.
+    fn note_attempt(
+        shared: &mut Shared,
+        connector: ConnectorId,
+        outcome: &DialOutcome,
+        times: AttemptTimes,
+        at: Stamp,
+    ) {
+        let opened = times
+            .opened_ms
+            .map_or(times.ended_ms, |opened| opened.min(times.ended_ms));
+        Self::note_stream(shared, connector, outcome, opened, at);
+        shared.tor_link.observe(connector, outcome, times.began);
     }
 
     /// A finished attempt's outcome, or its deferral. A `DialFailed` whose
@@ -754,12 +773,12 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
         connector: ConnectorId,
         outcome: &DialOutcome,
         ran_nanos: u64,
-        opened_ms: Option<u64>,
-        ended_ms: u64,
+        times: AttemptTimes,
         rng: &mut R,
     ) {
-        let now = self.now();
-        self.with_inbound(|shared| {
+        let at = self.stamp();
+        let now = at.tick();
+        self.with_sessions(at, |shared| {
             let address = outcome.address();
             if let DialOutcome::DialFailed(_, failure) = outcome {
                 let cutoff = dial_profile(connector)
@@ -795,15 +814,12 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
                             ran_nanos / 1_000_000,
                             wait / 1_000_000
                         );
-                        let opened = opened_ms.map_or(ended_ms, |opened| opened.min(ended_ms));
-                        Self::note_stream(shared, connector, outcome, opened, now);
-                        let held = Self::tor_held(shared);
-                        shared.tor_link.observe(connector, outcome, held, now);
+                        Self::note_attempt(shared, connector, outcome, times, at);
                         return;
                     }
                 }
             }
-            Self::record(shared, connector, outcome, opened_ms, ended_ms, now, rng);
+            Self::record(shared, connector, outcome, times, at, rng);
         });
     }
 
@@ -821,19 +837,18 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
         connector: ConnectorId,
         address: &NetworkAddress,
         kept: KeptDial,
-        opened_ms: Option<u64>,
-        ended_ms: u64,
+        times: AttemptTimes,
         rng: &mut R,
     ) -> bool {
         let KeptDial { id, mut window } = kept;
-        let now = self.now();
-        let closed = self.with_inbound(|shared| {
+        let at = self.stamp();
+        let closed = self.with_sessions(at, |shared| {
             let closed = window.settle(shared);
             let outcome = match closed {
                 Some(end) => DialOutcome::DialFailed(address.clone(), end.failure()),
                 None => DialOutcome::SessionAccepted(address.clone()),
             };
-            Self::record(shared, connector, &outcome, opened_ms, ended_ms, now, rng);
+            Self::record(shared, connector, &outcome, times, at, rng);
             if closed.is_none() {
                 shared.kept.insert(id.get(), address.clone());
             }
