@@ -125,7 +125,6 @@ jobs:
         # (`ci/benchmarks`) already ships clang, so the capture job
         # stayed green while this gate failed. Still gungraun — no
         # harness swap. clippy `--all-targets` builds benches.
-        # ripgrep moved with lint_cpp_clamp_ban.sh to grep-gates.yml.
         run: apt -y install build-essential git curl pkg-config libssl-dev valgrind libclang-dev clang
       - name: configure git
         run: git config --global --add safe.directory '*'
@@ -678,14 +677,14 @@ jobs:
           # 0.4 as a *normal* (non-dev, non-build) dependency. If upstream
           # ciphersuite upgrades to 0.5, this gate can be removed entirely.
           DIRECT=$(grep -rn 'dalek_ff_group' --include='*.rs' \
-                   shekyl-*/src shekyl-ffi/src shekyl-ffi/tests 2>/dev/null \
+                   shekyl-*/src 2>/dev/null \
                    | grep -v '^\s*//' || true)
           if [ -n "$DIRECT" ]; then
             echo "Files referencing dalek_ff_group directly (must all resolve to 0.5):"
             echo "$DIRECT"
           fi
           # Fail if any shekyl crate has a normal dependency on the 0.4 line
-          for crate in shekyl-ffi shekyl-fcmp shekyl-crypto-pq shekyl-proofs shekyl-tx-builder shekyl-scanner shekyl-daemon-rpc; do
+          for crate in shekyld shekyl-fcmp shekyl-crypto-pq shekyl-proofs shekyl-tx-builder shekyl-scanner shekyl-daemon-rpc; do
             if cargo tree -p "$crate" --edges normal 2>/dev/null \
                | grep 'dalek-ff-group v0\.4'; then
               echo "FATAL: $crate has a normal (non-dev) dependency on dalek-ff-group 0.4"
@@ -696,11 +695,11 @@ jobs:
       - name: determinism check (build twice, compare hashes)
         working-directory: rust
         run: |
-          cargo build --locked --release -p shekyl-ffi
-          sha256sum target/release/libshekyl_ffi.a > /tmp/build1.sha256
-          cargo clean -p shekyl-ffi --release
-          cargo build --locked --release -p shekyl-ffi
-          sha256sum target/release/libshekyl_ffi.a > /tmp/build2.sha256
+          cargo build --locked --release -p shekyld
+          sha256sum target/release/shekyld > /tmp/build1.sha256
+          cargo clean -p shekyld --release
+          cargo build --locked --release -p shekyld
+          sha256sum target/release/shekyld > /tmp/build2.sha256
           echo "=== Build 1 ===" && cat /tmp/build1.sha256
           echo "=== Build 2 ===" && cat /tmp/build2.sha256
           diff /tmp/build1.sha256 /tmp/build2.sha256 || (echo "FATAL: non-deterministic Rust build" && exit 1)

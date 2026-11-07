@@ -12,7 +12,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+# Superseded-run cancellation (the house pattern the other workflows cite).
 # Without a concurrency group, every push to an open PR stacks a full new
 # run behind the old one — with the shared runner pool, repeated pushes
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
@@ -32,7 +32,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # ARCH="default" (not "native") ensures, that a different execution host can execute binaries compiled elsewhere.
-  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
+  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
   # clang + libclang-dev: the live-daemon gates step runs
   # `cargo test -p shekyl-engine-core --lib`, and lib tests build the crate's
   # dev-dependencies -- which include gungraun with `client_requests`, whose
@@ -41,16 +41,13 @@ env:
   # "stdbool.h file not found" otherwise). GitHub-hosted runners ship clang,
   # which is why the Rust workflow never needed this; these jobs run in bare
   # ubuntu containers, which do not.
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev graphviz doxygen pkg-config libssl-dev libsodium-dev ccache git curl clang libclang-dev'
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
     Acquire::http::Timeout "120";
     Acquire::ftp::Timeout "120";
     EOF
-  CCACHE_SETTINGS: |
-    ccache --max-size=150M
-    ccache --set-config=compression=true
 
 jobs:
   # Change scope, computed once and consumed by every job below.
@@ -60,8 +57,8 @@ jobs:
   # and branch protection waits forever for a context nobody will report. That
   # is a required check that CANNOT PASS: loud, but a hard deadlock. A job-level
   # `if:` instead produces a check that reports "skipping", which protection
-  # accepts -- the same shape `codeql.yml`'s `analyze-cpp` / `analyze-python`
-  # already rely on for two other required contexts in this repo.
+  # accepts -- the same shape `codeql.yml`'s `analyze-python` already relies
+  # on for another required context in this repo.
   #
   # No third-party action: `git diff` against the base does this, and a
   # change-detection action would be a new supply-chain surface in CI (rule 17).
@@ -176,35 +173,6 @@ jobs:
         run: scripts/ci/check_randomx_fpu_rounding.sh
       - name: enforce RandomX crate-level isolation invariants
         run: scripts/ci/check_randomx_crate_invariants.sh
-      - name: reject BOOST_FOREACH in C++
-        run: |
-          HITS=$(grep -rn 'BOOST_FOREACH' src/ tests/ --include='*.cpp' --include='*.h' --include='*.hpp' || true)
-          if [ -n "$HITS" ]; then
-            echo "FATAL: BOOST_FOREACH found — use range-based for loops:"
-            echo "$HITS"
-            exit 1
-          fi
-          echo "No BOOST_FOREACH — OK"
-      - name: reject direct POSIX-header includes in src/
-        run: |
-          # The three POSIX headers owned by src/common/compat.h:
-          #   unistd.h, dlfcn.h, sys/mman.h
-          # Every new site should #include "common/compat.h" instead of
-          # repeating the _WIN32 / _MSC_VER guard dance inline.
-          #
-          # Allow-list (files whose direct include has an architectural
-          # reason — OS-specific arms, vendored ref10 code, or compat.h
-          # itself). Keep this list tight; prefer migrating new sites.
-          ALLOW='^(src/common/compat\.h|src/common/compat/glibc_compat\.cpp|src/common/password\.cpp|src/cryptonote_basic/miner\.cpp|src/crypto/random\.c|src/crypto/oaes_lib\.c|src/crypto/crypto_ops_builder/randombytes\.c|src/crypto/slow-hash\.c):'
-          HITS=$(grep -rnE '^[[:space:]]*#include[[:space:]]*<(unistd|dlfcn|sys/mman)\.h>' \
-                 src/ --include='*.c' --include='*.cpp' --include='*.h' --include='*.hpp' \
-                 | grep -vE "$ALLOW" || true)
-          if [ -n "$HITS" ]; then
-            echo "FATAL: direct POSIX-header include — use #include \"common/compat.h\":"
-            echo "$HITS"
-            exit 1
-          fi
-          echo "No unguarded POSIX-header includes outside compat.h — OK"
 
   build-macos:
     name: 'macOS (brew)'
@@ -212,8 +180,6 @@ jobs:
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: macOS-latest
     timeout-minutes: 45  # p90 20.4 min over 13 runs
-    env:
-      CCACHE_TEMPDIR: /tmp/.ccache-temp
     steps:
       - uses: actions/checkout@v5
         with:
@@ -233,24 +199,17 @@ jobs:
             exit 1
           fi
           echo "Cargo path portability guard passed."
-      - uses: actions/cache@v5
-        with:
-          path: /Users/runner/Library/Caches/ccache
-          key: ccache-${{ runner.os }}-build-${{ github.sha }}
-          restore-keys: ccache-${{ runner.os }}-build-
       - uses: ./.github/actions/set-make-job-count
       - name: install dependencies
         run: |
           brew uninstall cmake
           brew update
-          brew install --quiet cmake boost openssl libpgm ccache
+          brew install --quiet cmake
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
       - uses: dtolnay/rust-toolchain@1.94.0
       - name: build
-        run: |
-          ${{env.CCACHE_SETTINGS}}
-          make -j${{env.MAKE_JOB_COUNT}}
+        run: make -j${{env.MAKE_JOB_COUNT}}
       # The Mach-O half of the hardening gate (MH_PIE, no executable stack,
       # no LC_RPATH) on the three staged Rust binaries; otool is Xcode's.
       # The Makefile's build directory carries the OS and the branch name
@@ -289,22 +248,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Minimum supported Ubuntu LTS (Boost >= 1.74). Compile-only —
-          # the test job consumes the 24.04 artifact (same Release
-          # BUILD_TESTS=ON tree) rather than rebuilding twice.
+          # The oldest supported Ubuntu LTS builds and checks the binaries;
+          # the live-daemon and symbol gates run on 24.04 alone.
           - name: Ubuntu 22.04
             container: ubuntu:22.04
-            pack_ctest: false
+            live_gates: false
 
           - name: Ubuntu 24.04
             container: ubuntu:24.04
-            pack_ctest: true
+            live_gates: true
     container:
       image: ${{ matrix.container }}
       env:
         DEBIAN_FRONTEND: noninteractive
-        CCACHE_TEMPDIR: /tmp/.ccache-temp
-        CCACHE_DIR: ~/.ccache
     steps:
       - name: set apt conf
         if: needs.changes.outputs.docs_only != 'true'
@@ -333,21 +289,13 @@ jobs:
         # checkout — a `./`-referenced local action does not exist on
         # the runner until the repo is checked out.
         uses: ./.github/actions/install-rust
-      - uses: actions/cache@v5
-        if: needs.changes.outputs.docs_only != 'true'
-        with:
-          path: ~/.ccache
-          key: ccache-${{ matrix.container }}-build-${{ github.sha }}
-          restore-keys: ccache-${{ matrix.container }}-build-
       - uses: ./.github/actions/set-make-job-count
         if: needs.changes.outputs.docs_only != 'true'
       - name: build
         if: needs.changes.outputs.docs_only != 'true'
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: |
-          ${{env.CCACHE_SETTINGS}}
-          ${{env.BUILD_DEFAULT_LINUX}}
+        run: ${{env.BUILD_DEFAULT_LINUX}}
       # Armed #[ignore]d regtest_e2e gates against the shekyld just built.
       # Runs here rather than in the test job because that job installs no
       # Rust by design, and here the binary and the toolchain already coexist.
@@ -365,7 +313,7 @@ jobs:
       # reference of the PoW test setter cannot merge on a green source
       # grep alone. nm is binutils, pulled in by build-essential.
       - name: symbol isolation on linked daemon (nm)
-        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
+        if: matrix.live_gates && needs.changes.outputs.docs_only != 'true'
         shell: bash
         run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
       # The hardening the link flags claim, read off the staged ELF binaries
@@ -376,119 +324,24 @@ jobs:
         if: needs.changes.outputs.docs_only != 'true'
         shell: bash
         run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc
-      # The cutover's outcome (P2P_3_REMNANT_CUTOVER_BRIEF.md §1; Rick,
-      # 2026-11-05): the staged shekyld needs no C++ runtime and carries none
-      # of our C++'s symbols, and no Rust extern block imports a C-linkage
-      # name declared under src/. Selftest first, so a gate that cannot
-      # fail is caught before it passes.
-      - name: the daemon is Rust alone (no C++ in its link, no Rust import of our C)
+      # The C++ removal's end state (Rick, 2026-11-06), on what this job
+      # built: the staged shekyld needs no C++ runtime and holds no C++
+      # symbol. The tree half (no first-party C or C++ tracked, no CMake
+      # target compiling any) runs in the grep gates. Selftest first, so a
+      # gate that cannot fail is caught before it passes.
+      - name: the daemon holds no C++ (no C++ runtime, no C++ symbol)
         if: needs.changes.outputs.docs_only != 'true'
         shell: bash
         run: |
-          python3 scripts/ci/check_rust_only_daemon.py --selftest
-          python3 scripts/ci/check_rust_only_daemon.py build/bin/shekyld
+          python3 scripts/ci/check_no_first_party_c.py --selftest
+          python3 scripts/ci/check_no_first_party_c.py --binary build/bin/shekyld
       - name: live-daemon gates
-        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
-        # `shell: bash` like the CTest-artifact step below, and for the same
-        # reason: the job's default shell in this container is dash, which
-        # rejects `set -o pipefail` outright — the script dies on line 1
-        # before running anything.
+        if: matrix.live_gates && needs.changes.outputs.docs_only != 'true'
+        # `shell: bash`: the job's default shell in this container is dash,
+        # which rejects `set -o pipefail` outright — the script dies on line
+        # 1 before running anything.
         shell: bash
         run: scripts/ci/run_live_daemon_gates.sh
-
-      # Pack the CTest tree for the 24.04 test job. Same shape as
-      # economics-c2a-prime.yml: internal libraries are always static
-      # (CMakeLists.txt refuses BUILD_SHARED_LIBS), so test binaries are
-      # statically linked against in-tree libraries and the tar can drop
-      # *.o / *.a / CMakeFiles.
-      # They still need SYSTEM libraries (boost, ssl, sodium)
-      # that the test job installs. CMake bakes absolute paths into
-      # CTestTestfile.cmake; both jobs use container ubuntu:24.04 +
-      # actions/checkout, so github.workspace is `/__w/shekyl-core/shekyl-core`
-      # on both sides. tests/data/ is repo-tracked — the test job reads
-      # it from checkout, not this tarball.
-      - name: Pack CTest tree
-        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
-        run: |
-          tar --exclude='**/CMakeFiles' --exclude='**/*.o' --exclude='**/*.a' \
-            -czf ubuntu-24.04-ctest.tar.gz build/
-      - name: Verify CTest artifact
-        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          listing="$(tar tzf ubuntu-24.04-ctest.tar.gz)"
-          if ! grep -qx 'build/CTestTestfile.cmake' <<< "$listing"; then
-            echo "FATAL: ubuntu-24.04-ctest.tar.gz missing build/CTestTestfile.cmake" >&2
-            echo "tar tf (first 40 entries):" >&2
-            head -40 <<< "$listing" >&2
-            exit 1
-          fi
-          # Fail closed if the GNU tar excludes above silently missed
-          # (rule 47: absence of CTestTestfile is not the only signal;
-          # CMakeFiles/*.o/*.a must also be absent). Same exclude set
-          # as economics-c2a-prime.yml; this assertion is the check
-          # that they took effect, not a rewrite of the pack command.
-          leaked="$(grep -E '(^|/)CMakeFiles(/|$)|\.(o|a)$' <<< "$listing" || true)"
-          if [ -n "$leaked" ]; then
-            echo "FATAL: ubuntu-24.04-ctest.tar.gz still contains CMakeFiles/*.o/*.a" >&2
-            echo "$leaked" | head -20 >&2
-            exit 1
-          fi
-          echo "OK: artifact contains CTestTestfile.cmake and excludes CMakeFiles/*.o/*.a"
-      - uses: actions/upload-artifact@v4
-        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
-        with:
-          name: ubuntu-24.04-ctest
-          path: ubuntu-24.04-ctest.tar.gz
-          retention-days: 1
-
-  test-ubuntu:
-    name: "Ubuntu 24.04 (tests)"
-    needs: [changes, build-ubuntu]
-    if: needs.changes.outputs.docs_only != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10  # p90 2.6 min over 14 runs; the floor
-    container:
-      image: ubuntu:24.04
-      env:
-        DEBIAN_FRONTEND: noninteractive
-      # Setting up a loop device (losetup) requires additional capabilities.
-      # tests/create_test_disks.sh
-      options: --privileged
-    steps:
-      - name: set apt conf
-        run: ${{env.APT_SET_CONF}}
-      - name: update apt
-        run: apt update
-      - name: install runtime + test dependencies
-        # No compiler, no cmake rebuild, no Rust. APT_INSTALL_LINUX is the
-        # same package set the 24.04 build job used, so the DT_NEEDED
-        # system libraries the statically-linked-against-in-tree binaries
-        # still require are present. Python packages are for functional
-        # tests that ctest launches.
-        run: |
-          ${{env.APT_INSTALL_LINUX}}
-          apt install -y python3-requests python3-psutil python3-monotonic python3-deepdiff
-      - name: configure git
-        run: git config --global --add safe.directory '*'
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
-      - uses: actions/download-artifact@v4
-        with:
-          name: ubuntu-24.04-ctest
-      - name: Unpack CTest tree
-        run: tar -xzf ubuntu-24.04-ctest.tar.gz
-      - name: create dummy disk drives for testing
-        run: tests/create_test_disks.sh >> $GITHUB_ENV
-      - name: tests
-        env:
-          CTEST_OUTPUT_ON_FAILURE: ON
-        # ctest, not `cmake --build --target test`: the latter would
-        # notice unpacked timestamps and try to rebuild. The build job
-        # already compiled everything.
-        run: ctest --test-dir build --output-on-failure
 
   build-windows-msvc:
     name: 'Windows (MSVC, daemon)'
@@ -644,21 +497,20 @@ jobs:
         working-directory: rust
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
-          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-ffi -p shekyl-process --no-fail-fast *> daemon-crates.out
+          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-process --no-fail-fast *> daemon-crates.out
           $rc = $LASTEXITCODE
           Get-Content daemon-crates.out
           if ($rc -ne 0) { exit $rc }
           # A floor is per test binary, keyed by its name under deps\. The
           # libs are the crates' own; shekyl-process's lib tests are all Unix
           # (core limits, dumpable, procctl), so its Windows floor is the
-          # integration test that faults a child under hardening, which moved
-          # here from shekyl-ffi with the code. Windows counts at the p2p
-          # cutover (2026-11-05): options 31, daemon 44, daemon-config 63,
-          # daemon-rpc 180, ffi 97, dc_q21_a_fault_ends_with_its_code 4. The
-          # cutover deleted the seam-facts and p2p halves of daemon-rpc and
-          # ffi; shekyl-cli, which took daemon-rpc's console tests (R8), is
-          # covered by the Rust workspace job, not this MSVC link step.
-          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 170; 'shekyl_ffi-' = 80; 'dc_q21_a_fault_ends_with_its_code-' = 4 }
+          # integration test that faults a child under hardening. Windows
+          # counts at the p2p cutover (2026-11-05): options 31, daemon 44,
+          # daemon-config 63, daemon-rpc 180,
+          # dc_q21_a_fault_ends_with_its_code 4. shekyl-cli, which took
+          # daemon-rpc's console tests (R8), is covered by the Rust workspace
+          # job, not this MSVC link step.
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 170; 'dc_q21_a_fault_ends_with_its_code-' = 4 }
           $lines = Get-Content daemon-crates.out
           foreach ($binary in $floors.Keys) {
             $at = ($lines | Select-String -Pattern ("Running .*\\deps\\" + [regex]::Escape($binary)) | Select-Object -First 1).LineNumber
@@ -792,53 +644,19 @@ jobs:
           $results | Format-Table -AutoSize | Out-String | Write-Host
           exit $first_failure
 
-      - name: restore vcpkg cache
-        uses: actions/cache/restore@v5
-        id: vcpkg-cache
-        with:
-          path: |
-            C:\vcpkg\downloads
-            C:\vcpkg\installed
-            C:\vcpkg\archives
-          key: vcpkg-x64-windows-static-${{ hashFiles('.github/workflows/build.yml', 'vcpkg-overlay/**') }}
-          restore-keys: vcpkg-x64-windows-static-
-      - name: install vcpkg dependencies
-        shell: pwsh
-        env:
-          VCPKG_BINARY_SOURCES: clear;files,C:\vcpkg\archives,readwrite
-        run: |
-          vcpkg install --triplet x64-windows-static --overlay-ports="${{ github.workspace }}/vcpkg-overlay/ports" boost openssl libsodium
-      - name: save vcpkg cache
-        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            C:\vcpkg\downloads
-            C:\vcpkg\installed
-            C:\vcpkg\archives
-          key: vcpkg-x64-windows-static-${{ hashFiles('.github/workflows/build.yml', 'vcpkg-overlay/**') }}
       - name: configure
         shell: pwsh
         run: |
           cmake -S . -B build `
             -G "Visual Studio 18 2026" -A x64 `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DSTATIC=ON `
-            -DBUILD_SHARED_LIBS=OFF `
-            -DBUILD_TESTS=ON `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows-static
-      # Daemon only. The C++ wallet stack was deleted at Phase 5, and the
-      # Rust wallet binaries are not built for Windows targets — see
-      # docs/design/WINDOWS_WALLET_SUPPORT.md. The Windows wallet gap is
-      # neither caused nor widened here: the `wallet` target built a binary
-      # that has not shipped since the C1/C2 install cutover (#500). Slice
-      # WP-W5 of that design round owns renaming this job back.
+            -DCMAKE_BUILD_TYPE=Release
+      # Daemon only: the Rust wallet binaries are not built for Windows
+      # targets — see docs/design/WINDOWS_WALLET_SUPPORT.md. Slice WP-W5 of
+      # that design round owns renaming this job back.
       - name: build daemon
         shell: pwsh
         # The link gate is the script: shekyld exists, and the link log
-        # has no LNK4098. The importer, mdb_copy and core_tests are gone
-        # with the C++ chain.
+        # has no LNK4098.
         run: |
           pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage link
       # The PE half of the hardening gate on the linked daemon: PE32+ and

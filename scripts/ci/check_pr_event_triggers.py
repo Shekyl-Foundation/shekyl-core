@@ -76,18 +76,17 @@ NAMED = (
     "codeql.yml",
     "doc-claims.yml",
     "docs-gates.yml",
-    "economics-c2a-prime.yml",
-    "ffi-signatures.yml",
     "gf7-no-emit-guard.yml",
     "p2p-nnhfs-model.yml",
     "rpc-channel-model.yml",
     "schema-snapshot.yml",
 )
 
-# The pull_request workflows on 2026-11-04. A count below this means a
-# trigger was deleted rather than fixed; a new workflow is fine, and it is
-# graded by the same rules.
-MIN_PULL_REQUEST_WORKFLOWS = 22
+# The pull_request workflows on 2026-11-07, after the C++ removal deleted
+# the FFI-signature and C2a' C++ workflows with what they built. A count
+# below this means a trigger was deleted rather than fixed; a new workflow
+# is fine, and it is graded by the same rules.
+MIN_PULL_REQUEST_WORKFLOWS = 20
 
 _BRANCH_KEYS = ("branches", "branches-ignore")
 _EDITED_ONLY = "github.event.changes"

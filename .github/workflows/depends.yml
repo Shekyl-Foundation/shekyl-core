@@ -6,9 +6,8 @@ on:
     # Which legs a pull request runs is scripts/ci/depends_legs.py's (the
     # `legs` job below): all six when the depends tree, the Makefile, this
     # workflow or that script changes; the MinGW leg alone when a change can
-    # alter how an executable links (a CMakeLists.txt, cmake/, a C header
-    # under src/shekyl/, or a Rust crate that defines a C export; Rick,
-    # 2026-10-19); none otherwise. These paths only wake the selector:
+    # alter how an executable links (a CMakeLists.txt, cmake/, or a Rust
+    # crate that defines a C export; Rick, 2026-10-19); none otherwise. These paths only wake the selector:
     # `rust/**` is wide because which crates define an export is read from
     # the tree, not listed here. Unrelated PRs used to pay ~124 billed
     # minutes for six cross-compiles. ARM v8 qemu KATs live in
@@ -21,13 +20,12 @@ on:
       - 'scripts/ci/depends_legs.py'
       - '**/CMakeLists.txt'
       - 'cmake/**'
-      - 'src/shekyl/**'
       - 'rust/**'
   schedule:
     - cron: "0 4 * * *"   # daily 04:00 UTC — the rest of the matrix
   workflow_dispatch:
 
-# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+# Superseded-run cancellation (house pattern: build.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
 # run behind the old one — with the shared runner pool, repeated pushes
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
