@@ -33,8 +33,9 @@
 //! [`events`] parses one asynchronous `650` line. The quoted-field lexer it
 //! reads with stays private to this module: a keyword counts only at the start
 //! of a token, before any quote is opened. [`upload_rounds`] is the supervisor's
-//! policy over parsed `HS_DESC` events (`TSR-Q5`). Nothing in production sends
-//! `SETEVENTS` yet; the policy stays because the later increments are its caller.
+//! policy over parsed `HS_DESC` events (`TSR-Q5`). The daemon's supervisor
+//! sends one `SETEVENTS` on each managed Tor it launches and reads that
+//! policy from the subscription. The wallet does not subscribe.
 
 pub mod actor;
 pub mod auth;

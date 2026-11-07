@@ -69,17 +69,14 @@
 //!
 //! # What the tor control [`EventSink`](shekyl_tor_control_wallet::service::EventSink) is not
 //!
-//! It is **not** this channel's input, and an earlier plan to make it one
-//! rested on a premise the code refutes: no production call site issues
-//! `SETEVENTS`, so tor never sends the async `650` events the sink carries, so
-//! in production the sink receives nothing at all. (`ControlReply` is also a
-//! raw, deliberately forensic surface — "parse it, never log it" — not an
-//! alarm vocabulary.) The wallet's honest production value for
-//! `WalletTorControlConfig::events` is
+//! It is **not** this channel's input. The daemon's supervisor subscribes and
+//! takes those events into its own inbox. The wallet does not: its production
+//! value for `WalletTorControlConfig::events` is
 //! [`EventSink::unsubscribed`](shekyl_tor_control_wallet::service::EventSink::unsubscribed),
-//! which names that fact at the construction site; the alarm input is the
-//! posture watch, which is where the supervisor's liveness policy actually
-//! publishes.
+//! and SP-T0 §3b's retraction of the wallet subscription stands. (`ControlReply`
+//! is also a raw, deliberately forensic surface — "parse it, never log it" —
+//! not an alarm vocabulary.) The alarm input is the posture watch, which is
+//! where the supervisor's liveness policy actually publishes.
 
 #![forbid(unsafe_code)]
 
