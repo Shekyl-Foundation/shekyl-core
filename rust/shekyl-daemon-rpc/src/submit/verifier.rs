@@ -9,8 +9,8 @@
 //! K12, K13).
 //!
 //! Every check here is the same Rust code the C++ oracle itself dispatches
-//! to (`shekyl_verify_ct_balance`, `shekyl_fcmp_verify`, `shekyl_pqc_verify`
-//! in `shekyl-ffi`) or a pinned thin-port of a C++-native check
+//! to (`shekyl_verify_ct_balance` and `shekyl_fcmp_verify` in `shekyl-ffi`,
+//! and `verify_pqc_auth`) or a pinned thin-port of a C++-native check
 //! (`check_commitment_mask_valid`; the Bp+ layout statics of
 //! `n_bulletproof_plus_amounts`). Calling the crates natively removes the
 //! FFI hop without changing the consensus arithmetic — the oracle and the
@@ -1007,8 +1007,8 @@ fn verify_fcmp(
     network: &NetworkId,
 ) -> Result<(), VerifyReject> {
     // One PQC key scalar `k = H_ℓ(hybrid_public_key)` per spending input,
-    // submission order — the same value the C++ caller computes per input via
-    // `shekyl_fcmp_pqc_key_scalar`; the verifier derives `K = k·G_k` and the
+    // submission order — `pqc_key_scalar` over each input's revealed key; the
+    // verifier derives `K = k·G_k` and the
     // circuit opens the spent leaf's commitment to it (`PL-D3`,
     // `FCMP_SPEND_LINKABILITY.md` §6.2). The caller passes `leaf_auths` already
     // narrowed to the leaf-contributing subset (every auth for a spend, the
@@ -1169,8 +1169,7 @@ fn verify_pqc_auth_slot(
         // Excluded by the closed-set check above.
         _ => return Err(VerifyReject::malformed("K13: unreachable scheme arm")),
     }
-    // One body with the daemon's `shekyl_pqc_verify` and the validator's
-    // CEN-I18: scheme dispatch, the tx-auth domains, and the single
+    // One body with the validator's CEN-I18 (`verify_pqc_auth`): scheme dispatch, the tx-auth domains, and the single
     // `verify_multisig` entry point (group-id binding no longer exists —
     // Option E′ deleted `group_id`; identity is the address fingerprint).
     verify_pqc_auth(

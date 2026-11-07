@@ -455,7 +455,7 @@ impl I13 {
 /// CEN-I15: the FCMP++ membership-and-spend-authorisation proof verifies
 /// over the transaction's spends — the proof bytes, every spend's key
 /// image, every pseudo-out, each spend's PQC key scalar
-/// `k = H_ℓ(hybrid_public_key)` (`shekyl_fcmp_pqc_key_scalar`), the root
+/// `k = H_ℓ(hybrid_public_key)` (`pqc_key_scalar`), the root
 /// at the reference, `layers = depth + 1`, and the prefix hash
 /// (`shekyl_fcmp_verify`, `blockchain.cpp:4224`; `FCMP_PLUS_PLUS.md` §7
 /// step 4). The body is [`shekyl_fcmp::proof::verify`], **the function the

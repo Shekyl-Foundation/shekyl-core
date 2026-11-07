@@ -59,9 +59,9 @@ pub enum PqcVerifyError {
     // Discriminant 9 (the former GroupIdMismatch, "check 9") is **retired**: E′
     // deleted the group_id check — the group's identity is the address
     // fingerprint (`shekyl-address`), not a per-output container hash, and the
-    // check recomputed the id from the same blob the leaf already binds. The FFI
-    // error-code space (`shekyl_pqc_verify`, codes 1–11) keeps 9 unused so 10/11
-    // do not shift under existing C++ consumers.
+    // check recomputed the id from the same blob the leaf already binds. The
+    // code space (1–11) keeps 9 unused, so 10 and 11 keep the values every
+    // pinned test and doc names.
     #[error("cryptographic signature verification failed")]
     CryptoVerifyFailed = 10,
 

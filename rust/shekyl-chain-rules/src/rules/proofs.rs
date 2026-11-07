@@ -208,10 +208,9 @@ impl I17 {
 /// gated at `blockchain.cpp:4277–4285` on every non-coinbase transaction
 /// but the serve credit). The verification body is
 /// [`shekyl_crypto_pq::signature::verify_pqc_auth`], **the same function
-/// the daemon's `shekyl_pqc_verify` and daemon-rpc's K13 call** — scheme
-/// dispatch, the tx-auth domains and the container parse live there once,
-/// so the validator, the daemon and the pool cannot disagree on what a
-/// valid slot is. The slot's structural pins (`auth_version`, `flags`,
+/// daemon-rpc's K13 calls** — scheme dispatch, the tx-auth domains and the
+/// container parse live there once, so the validator and the pool cannot
+/// disagree on what a valid slot is. The slot's structural pins (`auth_version`, `flags`,
 /// scheme id, key-blob length) are CEN-I16's, in `tx_form`.
 ///
 /// Refuses at the input whose signature does not verify. Vacuous on the
