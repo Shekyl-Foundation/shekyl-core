@@ -97,7 +97,7 @@ The prefix hash = `keccak256(serialize(transaction_prefix))` — **also includes
 `version=3`** — is the first field of `tx_signable` (§1.1), which is what the
 membership/SAL proof signs.
 
-### 1.3 CtSigBase (`src/fcmp/ct_types.h:198-…`)
+### 1.3 CtSigBase (`src/fcmp/ct_types.h` at `ac3836de90` (from line 198))
 ```
 FIELD(type)                       # 1 byte: CTTypeNull(coinbase) | CTTypeFcmpPlusPlusPqc
 if Fcmp:
@@ -108,7 +108,7 @@ enc_labels                        # outputs × 9 bytes,            no len prefix
 outPk                             # outputs × 32 bytes (commitments), no len prefix
 ```
 
-### 1.4 CtSigPrunable (`src/fcmp/ct_types.h:348-…`)
+### 1.4 CtSigPrunable (`src/fcmp/ct_types.h` at `ac3836de90` (from line 348))
 ```
 VARINT(nbp)                       # bulletproof+ count (= 1 at genesis)
 bulletproofs_plus[nbp]            # Bp+ structure
