@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-09-04 (§7 step 2 anchor source reconciled — CEN-I12; step 1 rationale's retired staked arm removed — CEN-L12)
+> **Last updated:** 2026-11-06 (§12 checkpoints: the store records the tree at every height; the C++ interval constant is deleted)
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -410,8 +410,9 @@ Returns the current curve tree state summary.
 
 ### `get_curve_tree_checkpoint` JSON-RPC
 
-Retrieves a stored checkpoint at a specific block height (for fast-sync).
-Checkpoints are stored every `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` blocks.
+Retrieves the curve tree after the block at a specific height (for
+fast-sync). The chain store records the tree at every height, so any height
+through the tip answers.
 
 **Request:** `{ "block_height": uint64 }`
 
@@ -1007,15 +1008,11 @@ HRPs. There are no remaining Base58 code paths.
 
 ### Curve Tree Checkpoints
 
-The curve tree is checkpointed every `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL`
-(10,000) blocks during `add_block`. Each checkpoint stores:
-
-```text
-checkpoint = root[32 bytes] + depth[1 byte] + leaf_count[8 bytes]
-```
-
-Checkpoints are stored in the `curve_tree_checkpoints` LMDB table
-(MDB_INTEGERKEY, keyed by block height).
+The Rust chain store keeps the tree's root and leaf count at every height
+(`curve_tree_roots`, `curve_tree_leaf_counts`; `shekyl-chain-store`
+`schema.rs`), and `get_curve_tree_checkpoint` answers from them for any
+height through the tip. There is no separate interval checkpoint table: it
+would be a second source for rows that already exist (CTW-Q3).
 
 **Purpose:** Fast-sync resumption. A syncing node can skip to the latest
 checkpoint and rebuild only the tree state from that point forward, rather
@@ -1263,7 +1260,6 @@ Do not reintroduce them. Archival emission is a different vin
 | `FCMP_REFERENCE_BLOCK_MAX_AGE` | 100 | `cryptonote_config.h` |
 | `FCMP_REFERENCE_BLOCK_MIN_AGE` | 5 (reorg safety margin) | `cryptonote_config.h` |
 | `FCMP_MAX_INPUTS_PER_TX` | 8 | `cryptonote_config.h` |
-| `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` | 10,000 | `cryptonote_config.h` |
 | `CTTypeFcmpPlusPlusPqc` | 1 | `ct_types.h` |
 | `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | 0x06 | `shekyl-wire/src/tx_extra.rs` |
 | `TX_EXTRA_TAG_PQC_LEAF_ENTRIES` | 0x07 | `shekyl-wire/src/tx_extra.rs` |

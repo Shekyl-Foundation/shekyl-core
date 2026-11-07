@@ -218,7 +218,7 @@ Each value is the connector's own, an `Assumption` with its basis in `DAEMON_REL
 | δ (the bracket) | 15 s | 15 s |
 | `outage_retry` | 10 s + U(5 s) | 10 s + U(5 s) |
 | **Basis of `outage_retry`** | Stays under the slot turnover, `window / bound` (105 s / 5 = 21 s): an excused address is drawable again before a slot comes free, so the outage cooldown never holds a slot idle | Caps redials of an unproven address: with bound 1 and a 1.415 s deadline, at most one redial of such an address per 10–15 s |
-| **Basis of δ** | Depends on the 60 s timed-sync interval (`P2P_DEFAULT_HANDSHAKE_INTERVAL`) and on stream opens through the one guard link: with `n` sessions, `exp(−n · δ / 30 s)` is the chance a healthy link shows nothing in δ | Depends on the 60 s timed-sync interval and on outbound sessions only (inbound is excluded from clearnet's corroboration, §3.3) |
+| **Basis of δ** | Depends on the 60 s mean timed-sync interval (`TIMED_SYNC_MIN` plus half `TIMED_SYNC_JITTER`, `shekyl-p2p-session` `timing.rs`) and on stream opens through the one guard link: with `n` sessions, `exp(−n · δ / 30 s)` is the chance a healthy link shows nothing in δ | Depends on the 60 s timed-sync interval and on outbound sessions only (inbound is excluded from clearnet's corroboration, §3.3) |
 | Ladder, retries, waits, window, target, in-flight bound | unchanged | unchanged |
 
 Equal numbers on the two rows are two derivations landing on one value, not one value shared: each row's basis is its own, and each re-derives when its basis moves (the timed-sync interval for both δ; Tor's window or bound for Tor's `outage_retry`; clearnet's deadline or bound for clearnet's).

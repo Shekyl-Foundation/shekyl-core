@@ -51,6 +51,7 @@ jobs:
   crypto-content:
     name: vendored crypto matches manifest
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.2 min over 11 runs; the floor
     steps:
       - uses: actions/checkout@v5
       - name: verify vendored crypto content
