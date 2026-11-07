@@ -595,8 +595,8 @@ impl Node {
 
     /// How chain sync's owner ended, once it has: `None` while it runs.
     /// An owner that ends on its own ([`SyncEnded::Failed`]) leaves a
-    /// daemon that never syncs again, so the daemon stops on
-    /// [`EndCause::text`]. The watch outlives the owner and the node's
+    /// daemon that never syncs again, so the daemon stops and records
+    /// the [`EndCause`]. The watch outlives the owner and the node's
     /// stop.
     #[must_use]
     pub fn sync_ended(

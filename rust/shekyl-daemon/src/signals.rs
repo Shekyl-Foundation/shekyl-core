@@ -22,6 +22,7 @@
 use std::fmt;
 use std::sync::Mutex;
 
+use shekyl_node::EndCause;
 use tokio::sync::Notify;
 
 /// A stop trigger the operating system delivers, by its platform name.
@@ -64,8 +65,8 @@ impl Signal {
     }
 }
 
-/// Why the daemon stops. An operator's stop and a forced one are different
-/// kinds, so the line that reports them can tell them apart.
+/// Why the daemon stops. The report matches the variant: an operator's
+/// stop is announced, and [`Self::Fatal`] is an error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopCause {
     /// The operating system's stop trigger: a service manager's or a
@@ -73,19 +74,8 @@ pub enum StopCause {
     Signal(Signal),
     /// The RPC's `stop_daemon`, which `shekyl-cli daemon stop` posts.
     Requested,
-    /// A part the daemon cannot run without ended, with this cause.
-    Fatal(&'static str),
-}
-
-impl StopCause {
-    /// Whether the operator asked for this stop. An asked-for stop is the
-    /// daemon doing what it was told, announced rather than logged as a
-    /// fault (IG-14; alpha.11 bug hunt, a SIGTERM logged at WARN); a forced
-    /// one is an error.
-    #[must_use]
-    pub fn asked_for(self) -> bool {
-        !matches!(self, Self::Fatal(_))
-    }
+    /// Chain sync's owner ended on its own.
+    Fatal(EndCause),
 }
 
 impl fmt::Display for StopCause {
@@ -93,7 +83,7 @@ impl fmt::Display for StopCause {
         match self {
             Self::Signal(signal) => f.write_str(signal.name()),
             Self::Requested => f.write_str("the RPC's stop_daemon"),
-            Self::Fatal(cause) => f.write_str(cause),
+            Self::Fatal(cause) => f.write_str(cause.text()),
         }
     }
 }
@@ -125,11 +115,12 @@ pub fn request_stop() {
     latch(StopCause::Requested);
 }
 
-/// A part the daemon cannot run without has ended, with `cause`: chain
-/// sync's owner ending on its own. Every waiter sees the stop with this
-/// cause. The caller makes the exit a failure; a stop already latched
-/// keeps its own cause.
-pub fn fatal(cause: &'static str) {
+/// Chain sync's owner ended on its own, with `cause`.
+///
+/// Every waiter sees [`StopCause::Fatal`]. A stop already latched keeps
+/// its own cause. The waiter that observes a fatal cause makes the exit
+/// a failure, as does the arm that reads the owner's failed end directly.
+pub fn fatal(cause: EndCause) {
     latch(StopCause::Fatal(cause));
 }
 

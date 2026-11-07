@@ -197,9 +197,11 @@ effective-configuration line, `dev-` lever warnings and posture warnings
 (clearnet-only, offline, a plaintext RPC listener bound beyond
 loopback) reach the log and standard error at every start
 whatever the log level, and so does a stop the operator asked for
-(`stop requested by` its cause), with no level tag. A forced stop is
-an error event. The effective-configuration line shows every
-value and its source; a secret is shown as set, never its value (IG-6).
+(`stop requested by` its cause), with no level tag. A forced stop
+(chain sync's owner ending on its own) is an error event (`chain sync
+stopped:` the cause) and fails the exit. The effective-configuration
+line shows every value and its source; a secret is shown as set,
+never its value (IG-6).
 
 **IG-15 Home.** These rules are this file. The glossary tree and the name
 tables live in `docs/design/INPUT_GRAMMAR.md`. One Rust crate holds the
