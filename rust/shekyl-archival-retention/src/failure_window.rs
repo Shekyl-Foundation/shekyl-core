@@ -314,8 +314,9 @@ pub const fn settlement_retention_floor(
 /// constant bump. The affine-shape coupling of the two derivations
 /// (`epoch_close_height` and `settlement_epoch_slash_deadline_height`, both
 /// in `consensus_state` since DRS-E4 commit 4 moved the geometry to its one
-/// home) is asserted by no test in the workspace; the assert below pins
-/// only `k ≥ 1`.
+/// home) is asserted by `consensus_state`'s
+/// `slash_settle_strictly_follows_close_write_at_every_epoch`; the assert
+/// below pins `k ≥ 1`.
 const _: () = assert!(
     SLASH_GRACE_EPOCHS >= 1,
     "SLASH_GRACE_EPOCHS = 0 lands the slash pass for epoch E on the SAME \

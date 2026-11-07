@@ -1461,4 +1461,41 @@ mod tests {
             Some(5)
         );
     }
+
+    /// The slash-settle operand for epoch `E` (the first block above its
+    /// slash deadline) is STRICTLY greater than `E`'s close-write height.
+    /// Equal is not enough: chain-rules' archival transition scans slashes
+    /// before it closes (`archival::transition`), so at an equal height the
+    /// slash scan would read settlement state the close has not written
+    /// yet.
+    ///
+    /// The two heights are separate derivations
+    /// ([`SettlementSchedule::close_height`] and
+    /// [`SettlementSchedule::slash_deadline_height`]), so this test is their
+    /// coupling: it fires if either one's shape changes, even in a
+    /// direction that stays positive at small epochs. Both are affine in
+    /// `E` with slope `SEB`, so strictness at sampled epochs plus an equal
+    /// difference at every sample holds the property at every epoch.
+    #[test]
+    fn slash_settle_strictly_follows_close_write_at_every_epoch() {
+        let diff_at = |e: u64| {
+            let close_write = epoch_close_height(e).expect("no overflow at test epochs");
+            let slash_settle = settlement_epoch_slash_deadline_height(e) + 1;
+            assert!(
+                slash_settle > close_write,
+                "epoch {e}: slash settles at {slash_settle} but close writes at \
+                 {close_write} - the slash-then-close order would read unsettled state"
+            );
+            slash_settle - close_write
+        };
+        let d0 = diff_at(0);
+        for e in [1u64, 2, 25, 10_000] {
+            assert_eq!(
+                d0,
+                diff_at(e),
+                "slash/close derivations diverge in slope at epoch {e} - one of \
+                 the two separate formulas changed shape"
+            );
+        }
+    }
 }
