@@ -2,7 +2,6 @@
 description: How Rust code is structured in Shekyl. Workspace layout, FFI crate, dependency rules.
 globs:
   - rust/**
-  - src/shekyl/shekyl_ffi.h
   - cmake/BuildRust.cmake
 ---
 
