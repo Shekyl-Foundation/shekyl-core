@@ -1103,9 +1103,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §7
 
-- **Four test-data file names are too long for a Windows checkout under a deep path.** `tests/data/account-<128 hex>` is 151 characters from the repository root, so a checkout whose root path is longer than about 108 characters exceeds Windows' 260-character `MAX_PATH` and git cannot write those files unless `core.longpaths` is on. A Windows developer then has a checkout with four files missing. The files date from the inherited tree's first commit, and no file in `tests/`, `src/` or `rust/` names them; if nothing reads them they are deleted (rule 60), otherwise shortened with their reader, or failing both `git config core.longpaths true` is documented where a Windows build is described. Falsify by: every tracked path is under 150 characters, or `COMPILING_DEBUGGING_TESTING.md`'s Windows section names the setting.
-  - Target: pre-genesis
-  - Owner: [`WINDOWS_WALLET_SUPPORT.md`](design/WINDOWS_WALLET_SUPPORT.md)
 
 - **Measure `TSR-M4`'s set-`MaxMemInQueues` arm once increment 3 proposes a value.** The pre-flight measured Tor's memory at the §10 load at Tor's default cap (91.0 MiB on the floor device, 2026-10-19), not under a set one, because there is no candidate value to set yet. Blocker: increment 3, which proposes the value. Falsify by `TOR_SUPERVISOR.md` §10's `TSR-M4` row carrying the floor device's figure under the proposed `MaxMemInQueues`.
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §10 (`TSR-M4`)
