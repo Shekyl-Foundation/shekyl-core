@@ -826,6 +826,14 @@ def main() -> None:
                                (t / "docs" / "completed" / "old.md").write_text(
                                    "# Closed round\n\nIt held XX-W1…XX-W2 then.\n",
                                    encoding="utf-8"))),
+        # negative control: a CHANGELOG entry waiting for the release cut is
+        # the same record as one already in CHANGELOG.md, so neither its stale
+        # range nor its citation of a since-deleted file fails the gate.
+        green("changelog entry before the cut is not a live claim",
+              extra=lambda t: ((t / "docs" / "changelog.d").mkdir(exist_ok=True),
+                               (t / "docs" / "changelog.d" / "fix-x.md").write_text(
+                                   "- **X.** It held XX-W1…XX-W2; see `src/gone.cpp:1`.\n",
+                                   encoding="utf-8"))),
         # negative control: a POPULATED submodule is ordinary tree, and its
         # citations resolve. Without this, "skip everything under a submodule"
         # would pass the matrix while silently retiring the leg for external/.
@@ -1194,6 +1202,7 @@ def main() -> None:
     # as a failure path — a matrix that miscounts its own cases is the first
     # thing a reader stops trusting.
     controls = {"historical restatement is not a live claim",
+                "changelog entry before the cut is not a live claim",
                 "populated submodule resolves normally",
                 "lowering the baseline against the base revision is allowed",
                 "deleting a document releases its registry line",

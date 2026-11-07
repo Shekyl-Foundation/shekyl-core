@@ -46,13 +46,14 @@ pub use engine::{EngineFault, SubmitCaller, SubmitEngine};
 pub use facts::{
     BondProbe, CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
     EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, EpochClaimStanding,
-    KeyImageConflict, LastServedScanMismatch, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts,
-    ShimFault, SubmitFacts, SubmitStateShim, TxMeta,
+    KeyImageConflict, LastServedScanMismatch, OriginPublication, ReferenceFacts, ReleaseFacts,
+    ReleaseRecordFacts, ShimFault, SubmitFacts, SubmitStateShim, TxMeta,
 };
 pub use gate::phase_c_semaphore;
 pub use phase_a::{parse_submission, ParsedSubmission, PhaseAReject, SubmitTxKind};
 pub use rust_pool_shim::{
-    clear_production, install_production, production, ChainSource, RustPoolShim, StoreChain,
+    clear_production, install_production, production, ChainSource, OriginHold, RustPoolShim,
+    StoreChain,
 };
 pub use verifier::DaemonTxVerifier;
 pub use verify::{TxVerifier, VerifyFailure, VerifyReject};

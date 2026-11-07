@@ -243,7 +243,8 @@ encoder's own; `_response_empty_v1.bin` is unchanged.
 deleted block queue, are gone, so neither is its `_v3` reshaped and the
 `_v3` vectors rest on their parity tests. `get_connections_v4` takes each
 row's `height` and `state` from the same view. `get_version_synced_v45` is
-the chain's 3.68 link. 3.66 and 3.67 are the bounded-caller minors
+the chain's 3.68 link. 3.69 is `get_version_synced_v46`: `already_in_pool`
+carries a required `relay`, and `get_version` gains nothing. 3.66 and 3.67 are the bounded-caller minors
 (`get_version_synced_v43` and `_v44`): an over-cap request is
 `OverResourceBound`, then `calc_pow` and `get_coinbase_tx_sum` are served.
 Neither minor changes `sync_info`.

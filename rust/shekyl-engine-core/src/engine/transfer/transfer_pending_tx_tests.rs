@@ -1648,10 +1648,11 @@ async fn ambiguous_verdict_keeps_dispatch_persisted_record() {
 ///
 /// The persisted baseline is the claimed height **clamped to the
 /// wallet's synced height** (§2.5(a) as amended): the claim is
-/// untrusted, and the watchdog horizon is measured as `synced −
-/// baseline`, so a baseline the wallet has not reached is a horizon it
-/// cannot reach. The verdict still carries the raw claim to the
-/// consumer — this pins that the two are read from different places.
+/// untrusted. An unread sight does not read the baseline, so the claim
+/// cannot park the status probe. The clamp still keeps a height this
+/// wallet has not reached out of the journal. The verdict still carries
+/// the raw claim to the consumer — this pins that the two are read from
+/// different places.
 #[tokio::test]
 async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
     let sink = Arc::new(AssertionSink::new());
@@ -1719,8 +1720,7 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
                 lock.accepted_at_height,
                 shekyl_types::BlockHeight::from_raw(20),
                 "the lock is baselined at a height the wallet has reached — \
-                 the claimed 25 clamped to the synced 20, so the watchdog \
-                 horizon stays measurable"
+                 the claimed 25 clamped to the synced 20"
             );
             assert_eq!(
                 row.lock_baseline,
@@ -1912,22 +1912,18 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
     }
 }
 
-/// The lie-high damage cap (§7.2 rider row `AlreadyInChain.height`) is
-/// "released by the §2.6 confirmed-absent watchdog horizon (bounded
-/// liveness cost)". Asserted on the axis the cap actually lives on —
-/// horizon *reachability*, not the stored number: a daemon claiming
-/// `u64::MAX` must not be able to park `escape_ladder_step` on
-/// `HorizonNotReached` forever, because the F14 lock it places is
-/// persisted and nothing else would ever release it (refresh cannot
-/// observe a spend that never reached the chain).
-///
-/// The negative control is the unclamped value itself: fed as a
-/// baseline, `u64::MAX` fails this same assertion at every height, so
-/// the test cannot pass by accident.
+/// The lie-high damage cap (§7.2 rider row `AlreadyInChain.height`).
+/// A fresh projection is unread, and an unread sight is asked on the
+/// next chain advance whatever baseline was stored. A daemon claiming
+/// `u64::MAX` therefore cannot park the status probe. The stored
+/// baseline is still the wallet's synced height: the journal does not
+/// keep a height this wallet has not reached. An in-chain sight counts
+/// the proof-life ceiling from the baseline a probe records, and a
+/// baseline of `u64::MAX` on that sight would wait forever.
 #[tokio::test]
 async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reachable() {
     use crate::engine::submit_watchdog::{
-        escape_ladder_step, held_submits, HeldSubmit, WaitReason, WatchdogConfig, WatchdogStep,
+        escape_ladder_step, held_submits, HeldSubmit, WatchdogConfig, WatchdogStep,
     };
     use crate::engine::traits::DaemonHealth;
 
@@ -1969,31 +1965,26 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
         }
     );
 
-    // Horizon reachability, the property the §7.2 cap names.
-    let config = WatchdogConfig::from_block_target(120);
+    // An unread sight is asked at the wallet's height and at the
+    // unclamped claim. The height cannot park the ladder.
+    let config = WatchdogConfig::production();
     let healthy = DaemonHealth {
         p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
         height: 20,
         synchronized: true,
     };
-    let horizon_reached = 20 + config.escape_horizon_blocks;
-    assert_ne!(
-        escape_ladder_step(held, horizon_reached, healthy, config),
-        WatchdogStep::Wait(WaitReason::HorizonNotReached),
-        "a lock baselined at a reached height must clear the horizon once \
-         the wallet syncs past it — otherwise the escape ladder never runs \
-         and the persisted lock strands the inputs permanently"
+    assert_eq!(
+        escape_ladder_step(held, 20, healthy, config),
+        WatchdogStep::ProbeResubmitSameBytes
     );
-    // Negative control: the unclamped claim is exactly what would break it.
     let unclamped = HeldSubmit {
         baseline_height: u64::MAX,
         ..*held
     };
     assert_eq!(
-        escape_ladder_step(&unclamped, horizon_reached, healthy, config),
-        WatchdogStep::Wait(WaitReason::HorizonNotReached),
-        "sanity: the unclamped baseline is unreachable, so this assertion \
-         discriminates rather than passing for any input"
+        escape_ladder_step(&unclamped, 20, healthy, config),
+        WatchdogStep::ProbeResubmitSameBytes,
+        "an unread sight is asked whatever baseline a height claim wrote"
     );
 }
 

@@ -871,7 +871,10 @@ impl DaemonEngine for TestDaemon {
             if state.submitted_hashes.insert(hash) {
                 Ok(TxSubmitOutcome::Submitted { hash })
             } else {
-                Ok(TxSubmitOutcome::AlreadyInPool { hash })
+                Ok(TxSubmitOutcome::AlreadyInPool {
+                    hash,
+                    relay: shekyl_rpc_types::PoolRelay::Published,
+                })
             }
         }
     }
@@ -1431,8 +1434,8 @@ mod tests {
 
         let expected = TxHash::from_bytes(shekyl_crypto_hash::keccak256(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
-        assert!(matches!(second, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
-        assert!(matches!(third, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
+        assert!(matches!(second, TxSubmitOutcome::AlreadyInPool { hash, .. } if hash == expected));
+        assert!(matches!(third, TxSubmitOutcome::AlreadyInPool { hash, .. } if hash == expected));
         assert_eq!(daemon.submitted_count(), 1, "dedup keeps the set size at 1");
     }
 
@@ -1487,7 +1490,7 @@ mod tests {
         let expected = TxHash::from_bytes(shekyl_crypto_hash::keccak256(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
         assert!(
-            matches!(second_via_clone, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected)
+            matches!(second_via_clone, TxSubmitOutcome::AlreadyInPool { hash, .. } if hash == expected)
         );
     }
 

@@ -134,6 +134,7 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
         release: None,
         emission: None,
         emission_claim_conflict: None,
+        origin_publication: None,
     }
 }
 
@@ -1077,6 +1078,7 @@ fn non_spend_kinds_refuse_loudly() {
         release: None,
         emission: None,
         emission_claim_conflict: None,
+        origin_publication: None,
     };
     assert_eq!(
         verify(&parsed, &facts),

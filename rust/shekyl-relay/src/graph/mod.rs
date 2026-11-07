@@ -41,7 +41,10 @@ mod epoch_map;
 mod hidden_slot;
 mod origin;
 
-pub use embargo::{origin_retry_ms, origin_retry_secs, EmbargoWork, NEVER_SENT_RETRY_MS};
+pub use embargo::{
+    origin_publication_budget_ms, origin_retry_ms, origin_retry_secs, EmbargoWork,
+    OriginPublication, NEVER_SENT_RETRY_MS,
+};
 pub use origin::OriginVerdict;
 
 use epoch_map::EpochMap;

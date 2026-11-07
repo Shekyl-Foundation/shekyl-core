@@ -290,6 +290,7 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
         release: None,
         emission: None,
         emission_claim_conflict: None,
+        origin_publication: None,
     }
 }
 

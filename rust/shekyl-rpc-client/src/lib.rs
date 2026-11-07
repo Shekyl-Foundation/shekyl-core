@@ -325,7 +325,7 @@ struct JsonRpcEnvelope<T> {
 // dependency. The legacy `TxRelayResponse` (a lossy projection of the
 // deleted `send_raw_transaction` boolean-flag reply) is replaced by the
 // typed [`SubmitVerdict`]; see [`Rpc::publish_transaction`].
-pub use shekyl_rpc_types::{RejectCause, SubmitTransactionRequest, SubmitVerdict};
+pub use shekyl_rpc_types::{PoolRelay, RejectCause, SubmitTransactionRequest, SubmitVerdict};
 
 // The identity verdict [`RpcError::IdentityMismatch`] and
 // [`DaemonFault::Identity`] carry, with the types inside it, for the same
