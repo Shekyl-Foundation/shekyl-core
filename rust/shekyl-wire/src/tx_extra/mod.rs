@@ -520,9 +520,9 @@ impl PqcExtraField {
 ///
 /// Every variant names its field, and every variant whose defect is a count
 /// or a length names those numbers — a rejected transaction says what was
-/// expected. Its [`Display`] is that sentence, so a log line and a port's
-/// error read the same. The coinbase grammar is [`CoinbaseGrammarError`], not a
-/// reuse of these variants.
+/// expected. Its [`Display`](std::fmt::Display) is that sentence, so a log
+/// line and a port's error read the same. The coinbase grammar is
+/// [`CoinbaseGrammarError`], not a reuse of these variants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PqcFieldShapeError {
     /// A tagged field is present on a transaction with no outputs.
