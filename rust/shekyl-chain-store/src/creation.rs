@@ -540,7 +540,8 @@ mod tests {
                 .unwrap()
                 .to_string_lossy()
                 .into_owned();
-            assert!(name.starts_with(&format!("{label}.unfinished-")), "{name}");
+            let store = path.file_name().unwrap().to_string_lossy();
+            assert!(name.starts_with(&format!("{store}.unfinished-")), "{name}");
             assert!(
                 creation_lock_path(&path).is_file(),
                 "{label}: the path lock"
