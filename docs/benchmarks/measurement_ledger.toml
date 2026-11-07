@@ -136,6 +136,7 @@ stale_through = [
   { through = "7222a8a450", note = "FFI sign parses a signing payload hash (#1282): in this path set, signature.rs adds sign_pqc_auth, which calls the existing hybrid sign under SCHEME_DOMAIN_PQC_AUTH_TX on the payload bytes, and legacy_core.rs's shekyl_pqc_sign parses the caller message as a SigningPayloadHash and fails closed on any other length before that call. shekyl_pqc_verify parses with SigningPayloadHash::try_from_slice, the same length check and 64-byte copy 42911e567a already recorded. verify_pqc_auth is unchanged, and block verification prices that verify. Not re-measured; the rows stay stale from PL-D3." },
   { through = "2236763308", note = "Windows clippy (#1293): in this path set, legacy_core.rs's Windows-only page_size passes GetSystemInfo a raw pointer written &raw mut info where it was an implicit borrow. Same call, same pointer; the line is cfg(windows) and the Linux floor never compiles it. No code path the block-verify capture priced changed. Not re-measured; the rows stay stale from PL-D3." },
   { through = "50e942a480", note = "C++ removal (#1299): in this path set, signature.rs loses sign_pqc_auth and sign_multisig_participant, the two sign entry points only shekyl-ffi called. The nested verify, the scheme domains and every signing path a caller still uses are unchanged, so nothing the capture priced has moved." },
+  { through = "682d97049c", note = "C++ removal (#1299): one module-doc paragraph in shekyl-fcmp's frost_sal.rs, naming the FOLLOWUPS rows that track the multisig spend path. Comment only; no code path changed, and nothing the capture priced has moved." },
 ]
 
 [[constant]]
@@ -964,6 +965,7 @@ stale_through = [
   { through = "7938c51f16", note = "R8 (#1259): one test in shekyl-curve-tree's client.rs is renamed (rollback_to_the_fork_at_the_tip_changes_nothing); the rest of the commit deletes the daemon's console, outside these paths. No production code in these paths changed; nothing the capture prices moved. Not measured." },
   { through = "e3e573d19d", note = "The signing envelope's tx_signable (#1266): in this path set, frost_sal.rs renames the FROST session's message field to tx_signable. The spend's prover takes one 32-byte message as before (the builder now frames it from the prefix and base hashes, one cSHAKE256 outside these paths); tree build, path assembly and the prover do the same work. Not measured; the rows stay stale." },
   { through = "11cff8aeb90695ccd843b62d6fae2231937271cc", note = "DISPATCHED_PROOF_LIFE in shekyl-curve-tree reference.rs is REFERENCE_BLOCK_MAX_AGE minus REBUILD_AT, a const subtraction beside the existing reference constants. No tree build, path assembly or prover work moved. Not measured; the rows stay stale." },
+  { through = "682d97049c", note = "C++ removal (#1299): one module-doc paragraph in shekyl-fcmp's frost_sal.rs, naming the FOLLOWUPS rows that track the multisig spend path. Comment only; no code path changed, and nothing the capture priced has moved." },
 ]
 
 [[constant]]
