@@ -71,12 +71,14 @@ docs/design/RPC_CHANNEL.md:../../src/daemon/daemon.cpp # R0 drift note cites the
 docs/design/RPC_CHANNEL.md:../../src/p2p/net_node.cpp # R0 drift note cites the pre-cutover daemon and listener; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
 docs/design/RPC_TRANSPORT_POSTURE.md:../../src/daemon/daemon.cpp # cites the pre-cutover daemon at a pinned sha; deleted 2026-11-05 by the p2p remnant cutover (rule 91)
 
-# Deleted after `ac3836de90`, which still holds them: links in records-was documents keep the path as written (rule 91).
+# Deleted after `ac3836de90`, which still holds them: links in records-was documents and FOLLOWUPS rows keep the path as written (rule 91).
 docs/CHANGELOG.md:../rust/shekyl-pow-randomx/tests/vectors/reference/_generator/phase2c/ # records-was; the target was deleted after `ac3836de90`, the commit that still holds it (rule 91)
 docs/CHANGELOG.md:../rust/shekyl-pow-randomx/tests/vectors/reference/_generator/phase2d/ # records-was; the target was deleted after `ac3836de90`, the commit that still holds it (rule 91)
 docs/CHANGELOG.md:../src/cryptonote_basic/cryptonote_basic_impl.cpp # records-was; the target was deleted after `ac3836de90`, the commit that still holds it (rule 91)
 docs/CHANGELOG.md:../src/shekyl/economics.h # records-was; the target was deleted after `ac3836de90`, the commit that still holds it (rule 91)
 docs/CHANGELOG.md:../src/shekyl/shekyl_ffi.h # records-was; the target was deleted after `ac3836de90`, the commit that still holds it (rule 91)
+docs/FOLLOWUPS.md:../contrib/epee/include/wipeable_string.h # rows are keyed by their heading text; the target was deleted after `ac3836de90`, the commit that still holds it (rule 91)
+docs/FOLLOWUPS.md:../rust/shekyl-ffi/ # rows are keyed by their heading text; the target was deleted after `ac3836de90`, the commit that still holds it (rule 91)
 docs/audit_trail/FOLLOWUPS_ACCEPTANCES.md:../../src/crypto/random.c # records-was; the target was deleted after `ac3836de90`, the commit that still holds it (rule 91)
 docs/completed/DAA_LWMA1.md:../../src/cryptonote_basic/difficulty.cpp # records-was; the target was deleted after `ac3836de90`, the commit that still holds it (rule 91)
 docs/completed/DAA_LWMA1.md:../../src/cryptonote_basic/difficulty.h # records-was; the target was deleted after `ac3836de90`, the commit that still holds it (rule 91)

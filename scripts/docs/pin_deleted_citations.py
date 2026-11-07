@@ -56,6 +56,9 @@
 # fenced or commented line is allowlisted for the same reason: it is an
 # example, not a claim.
 #
+# docs/FOLLOWUPS.md is treated the same way: its rows are keyed by their exact
+# heading text, so its text is not rewritten and its links are allowlisted.
+#
 # Records-was documents' citations (as opposed to links) are left alone: the
 # ratchet does not count them, and their era is when they were written, which
 # a pin at the base would misstate.
@@ -92,6 +95,12 @@ ALLOWLIST = os.path.join("docs", "ci", "link-allowlist.txt")
 # Files this script never edits. CLAUDE.md is orientation maintained by hand
 # and is read by no documentation gate.
 NEVER_EDIT = ("CLAUDE.md",)
+
+# Files whose text is not rewritten, so their links to deleted paths are
+# allowlisted instead: FOLLOWUPS rows are keyed by their exact heading text
+# (scripts/ci/followups_owner_grandfather.txt), and a pin inside a heading
+# un-grandfathers the row.
+TEXT_FROZEN = ("docs/FOLLOWUPS.md",)
 
 SPAN_RE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
 FOLLOW_RE = re.compile(
@@ -518,7 +527,7 @@ class Run:
                 lines, citations.eras_for_lines(lines)):
             for n in section["lines"]:
                 declared.setdefault(n, set()).add(section["declaration"].strip("`"))
-        records = self.records_was(rel)
+        records = self.records_was(rel) or rel in TEXT_FROZEN
         if len(visible) not in (len(lines), len(lines) - 1):
             raise SystemExit(f"pin_deleted_citations: {rel} splits into lines "
                              "differently for the fence scanner; not editing it")
@@ -581,13 +590,16 @@ class Run:
 
     def write_allowlist(self, path, new):
         header = (f"# Deleted after `{self.base}`, which still holds them: links "
-                  f"in records-was documents keep the path as written (rule 91).")
+                  f"in records-was documents and FOLLOWUPS rows keep the path as "
+                  f"written (rule 91).")
         with open(path, encoding="utf-8") as fh:
             body = fh.read()
         if header not in body:
             body = body.rstrip("\n") + "\n\n" + header + "\n"
         for rel, target in new:
-            body += (f"{rel}:{target} # records-was; the target was deleted after "
+            kind = ("rows are keyed by their heading text" if rel in TEXT_FROZEN
+                    else "records-was")
+            body += (f"{rel}:{target} # {kind}; the target was deleted after "
                      f"`{self.base}`, the commit that still holds it (rule 91)\n")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(body)
