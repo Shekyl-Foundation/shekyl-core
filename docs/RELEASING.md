@@ -30,9 +30,27 @@ The CI workflows install all dependencies automatically. For local builds:
 
 ## Creating a Release
 
-1. **Prepare the changelog on `dev`.** In `docs/CHANGELOG.md`, rename the
-   `## Unreleased` section to `## [X.Y.Z] - YYYY-MM-DD` and add a fresh
-   empty `## Unreleased` section above it. Commit on `dev`.
+1. **Prepare the changelog on `dev`.** Until the cut, each pull request's
+   entry is a file of its own under `docs/changelog.d/` (its `README.md`
+   says why). The cut is one commit, on a branch off `dev`, merged by pull
+   request:
+   1. List the entries, newest merge first:
+
+      ```bash
+      git fetch origin
+      git log origin/dev --first-parent --diff-filter=A --name-only --format= \
+        -- docs/changelog.d/ | awk 'NF && !seen[$0]++' \
+        | while read -r f; do [ -f "$f" ] && [ "${f##*/}" != README.md ] && echo "$f"; done
+      ```
+
+      Its count must equal `ls docs/changelog.d | grep -vc '^README.md$'`.
+      A file the list misses was added outside `dev`'s first-parent history.
+      Place it by hand, then go on.
+   2. In `docs/CHANGELOG.md`, rename `## [Unreleased]` to
+      `## [X.Y.Z] - YYYY-MM-DD` and put each file's bullets, in that order,
+      at the top of its `### Changes`, above any already there. Add a fresh
+      empty `## [Unreleased]` section above it.
+   3. `git rm` the listed files. The README stays.
 
 2. **Promote `dev` to `main`** by pull request, titled `Release: vX.Y.Z`, and
    merge it with GitHub's **Create a merge commit** — never squash, rebase or
