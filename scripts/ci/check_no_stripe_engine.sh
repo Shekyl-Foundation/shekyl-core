@@ -19,7 +19,7 @@
 #
 # Two invariants, both at source level:
 #
-#   1. No stripe-engine identifier in code (Rust, or what C++ remains). Comment-only
+#   1. No stripe-engine identifier in Rust code. Comment-only
 #      mentions are allowed — the structs that lost the field document
 #      why, and a deletion that may not name what it deleted is the
 #      "comment that outlived its architecture" failure inverted.
@@ -46,9 +46,10 @@ cd "$REPO_ROOT"
 
 FAIL=0
 
-# Populations. `rust/target` is a build product; `docs/` is where the
-# deletion is recorded and may say the word.
-ROOTS=(src tests contrib/epee rust)
+# Populations. `rust/` holds every source the stripe engine could return
+# in; `rust/target` is a build product; `docs/` is where the deletion is
+# recorded and may say the word.
+ROOTS=(rust)
 EXCLUDES=(
   -g '!rust/target/**' -g '!**/target/**'
   # The two negative tests that pin the deletion by spelling the key and

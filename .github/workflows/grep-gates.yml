@@ -248,30 +248,8 @@ jobs:
             python3 scripts/ci/check_bundle_producer_secrets.py
           run_one "RandomX symbol-isolation negatives (rule 50)" \
             scripts/ci/test_check_randomx_symbol_isolation.sh
-          run_one "C++ clamp-ban (address-freeze)" \
-            bash scripts/lint_cpp_clamp_ban.sh
           run_one "§94: transit provenance marker outlives its constant" \
             scripts/ci/check_transit_marker.sh
-          run_one "No unbounded blob dump in a log line" \
-            python3 scripts/ci/check_log_blob_dumps.py
-          # A blocking wait armed on the wall clock lasts as long as the clock
-          # is set back: the daemon's stop hung a day after a backward clock
-          # change (TOR_SUPERVISOR.md §7). The selftest plants each banned
-          # token, including one after a non-UTF-8 byte, and requires the
-          # scan to fail. An unreadable file and a missing root fail too.
-          run_one "No wall-clock blocking wait in the C++ (selftest)" \
-            python3 scripts/ci/check_wall_clock_waits.py --selftest
-          run_one "No wall-clock blocking wait in the C++" \
-            python3 scripts/ci/check_wall_clock_waits.py
-          # Every version comparison and hard-fork table call in the C++ has
-          # a classified row, in both directions: Shekyl's block version is 1,
-          # so a gate on another number selects one arm forever, and the
-          # reward-aware template fill sat dead behind one. No path filter
-          # here, so a new gate in any file is seen.
-          run_one "C++ version gates match their inventory" \
-            python3 scripts/ci/check_cxx_version_gates.py
-          run_one "C++ version-gate inventory self-test" \
-            python3 scripts/ci/test_check_cxx_version_gates.py
           # FN-DSA is pre-standard: the five `fn-dsa*` crates are pinned exact
           # and locked at one version, and a genesis release (a tag with no
           # pre-release suffix) is refused on a pre-1.0 lock. Here the gate
@@ -361,20 +339,13 @@ jobs:
           run_one "Economics sim: no float reaches an integer in a fold file" \
             python3 scripts/ci/check_sim_integer_seams.py
 
-          grep_absent "C++ residue: no shekyl_y" \
-            grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h'
-          grep_absent "C++ residue: no derivation_to_y_scalar" \
-            grep -rn 'derivation_to_y_scalar' src/crypto/ --include='*.cpp' --include='*.h'
-          grep_absent "C++ residue: no RCTTypeFull/Simple/Bulletproof" \
-            grep -rn 'RCTTypeFull\|RCTTypeSimple\|RCTTypeBulletproof[^P]' src/ --include='*.cpp' --include='*.h'
-          grep_absent "C++ residue: no v1/v2 tx version branches" \
-            grep -rn 'tx\.version\s*==\s*1\b\|tx\.version\s*<\s*2\b\|hf_version\s*<\s*1\b' src/ --include='*.cpp' --include='*.h'
-          grep_absent "C++ residue: no HASH_KEY_TXPROOF" \
-            grep -rn 'HASH_KEY_TXPROOF' --include='*.cpp' --include='*.h' src/ tests/
-
-          # The Ledger exemption is gone with the backend. A filter that
-          # dropped device_ledger hits would stay green if that tree came back.
-          grep_absent "C++ residue: no ecdhEncode/ecdhDecode" \
-            grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/
+          # The end state of the C++ removal (Rick, 2026-11-06): no
+          # first-party C or C++ is tracked outside external/, and no CMake
+          # target compiles any. The tree half here; the build job adds the
+          # half that reads the linked daemon. Selftest first (rule 47).
+          run_one "No first-party C or C++ (selftest)" \
+            python3 scripts/ci/check_no_first_party_c.py --selftest
+          run_one "No first-party C or C++ tracked, and no CMake target compiling any" \
+            python3 scripts/ci/check_no_first_party_c.py --tree
 
           exit "${failed}"
