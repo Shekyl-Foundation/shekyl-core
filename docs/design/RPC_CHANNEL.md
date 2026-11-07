@@ -1721,7 +1721,7 @@ two. Every route they replace is a REST path today.
   surfaces (IG-12). *From the tree:* the logging owner does not meet
   step 2 yet. Its runtime path swaps the filter through a reload handle whose
   `reload` returns a `Result`
-  ([`ffi.rs:639`](../../rust/shekyl-logging/src/ffi.rs)), and the handle
+  (`ffi.rs` at `ac3836de90` (line 639)), and the handle
   is reached only through the FFI module. The implementing PR gives the
   owner a Rust interface that holds the handle for the life of the process.
   PR #1069 (every log sink queued, so a log call never blocks) changed

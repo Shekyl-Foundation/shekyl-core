@@ -454,7 +454,7 @@ supplies, with no FFI (RT-O26):
   both surfaces (IG-12). The logging owner's apply does not meet step 2 yet:
   its filter is swapped through a reload handle whose `reload` returns a
   `Result`, reachable only through the FFI module
-  ([`rust/shekyl-logging/src/ffi.rs:639`](../../rust/shekyl-logging/src/ffi.rs)).
+  (`rust/shekyl-logging/src/ffi.rs` at `d26148535e` (line 639)).
   The cutover gives `shekyl-logging` a Rust interface that holds the
   handle for the life of the process and cannot fail.
 - **What a change does to traffic already running.** A rate limit takes
