@@ -8,9 +8,10 @@
 //! names, never implementation names).
 //!
 //! A subsystem is an operator-meaningful part of the daemon. Each maps to
-//! the `tracing` targets that implement it: the C++ categories as the legacy
-//! translator spells them (`.` becomes `::`) and the Rust crates by module
-//! path. A crate rename changes a list here, never a configuration file.
+//! the `tracing` targets that implement it: the Rust crates by module path,
+//! and the few explicit targets the daemon's code names (`global`, `daemon`,
+//! `txpool`, `tor`, `notify`). A crate rename changes a list here, never a
+//! configuration file.
 //! The list is the owner the grammar's `log-category` row validates its
 //! keys against, by reference.
 
@@ -92,25 +93,19 @@ impl Subsystem {
     }
 
     /// The `tracing` targets the subsystem covers. A target is a prefix at
-    /// the `::` boundary, as `EnvFilter` reads it, so `net` covers
-    /// `net::p2p`; a longer target in another subsystem takes precedence
-    /// there, as `EnvFilter` ranks the more specific directive first.
+    /// the `::` boundary, as `EnvFilter` reads it, so `shekyl_relay` covers
+    /// `shekyl_relay::graph`.
     #[must_use]
     pub const fn targets(self) -> &'static [&'static str] {
         match self {
             Self::Daemon => &[
                 "daemon",
                 "global",
-                "default",
-                "stacktrace",
-                "util",
-                "shekyl_ffi",
                 "shekyl_daemon_config",
                 "shekyl_runtime",
                 "shekyl_timing_engine",
             ],
             Self::P2p => &[
-                "net",
                 "shekyl_dialer",
                 "shekyl_peerlist",
                 "shekyl_p2p_session",
@@ -124,28 +119,19 @@ impl Subsystem {
                 "shekyl_socks",
             ],
             Self::Sync => &[
-                "net::cn",
                 "shekyl_chain_sync",
                 "shekyl_chain_sync_runtime",
                 "shekyl_chain_ingest",
             ],
             Self::Chain => &[
-                "blockchain",
-                "cn",
-                "verify",
-                "checkpoints",
-                "difficulty",
-                "bcutil",
                 "shekyl_chain_rules",
                 "shekyl_consensus",
                 "shekyl_difficulty",
             ],
-            Self::Store => &["blockchain::db", "shekyl_chain_store"],
+            Self::Store => &["shekyl_chain_store"],
             Self::Txpool => &["txpool"],
-            Self::Relay => &["net::p2p::tx", "shekyl_relay", "shekyl_relay_privacy"],
+            Self::Relay => &["shekyl_relay", "shekyl_relay_privacy"],
             Self::Rpc => &[
-                "daemon::rpc",
-                "net::http",
                 "shekyl_daemon_rpc",
                 "shekyl_rpc_channel",
                 "shekyl_rpc_transport",
@@ -159,8 +145,8 @@ impl Subsystem {
                 "shekyl_tor_control_daemon",
                 "tor",
             ],
-            Self::Miner => &["miner", "shekyl_block_template", "shekyl_pow_randomx"],
-            Self::Notify => &["notify", "spawn"],
+            Self::Miner => &["shekyl_block_template", "shekyl_pow_randomx"],
+            Self::Notify => &["notify"],
             Self::Archival => &[
                 "shekyl_p_serve",
                 "shekyl_p_fetch",
@@ -225,7 +211,7 @@ pub fn directive_from_words(base: &str, overrides: &[(&str, &str)]) -> Option<St
 /// Applies a base level and per-subsystem overrides to the live filter.
 /// The directive is [`directive`]'s. See [`apply_directive`].
 pub fn apply(base: Level, overrides: &[(Subsystem, Level)]) {
-    apply_directive(directive(base, overrides));
+    apply_directive(&directive(base, overrides));
 }
 
 /// Installs one directive on the live filter: the runtime owner of
@@ -239,8 +225,8 @@ pub fn apply(base: Level, overrides: &[(Subsystem, Level)]) {
 /// is a process with no subscriber, which is reported to standard error and
 /// leaves the filter as it was, so a caller that built its values first
 /// stays all or nothing.
-pub fn apply_directive(directive: String) {
-    if let Err(reason) = crate::ffi::reload_directive(directive) {
+pub fn apply_directive(directive: &str) {
+    if let Err(reason) = crate::reload::reload_directive(directive) {
         // No subscriber is the failure, so this cannot go through tracing.
         // The line is the operator's, on standard error.
         drop(writeln!(
