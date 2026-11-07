@@ -63,6 +63,21 @@ pub struct ReferenceFacts {
     pub tree_depth: u8,
 }
 
+/// This node's judgment of its own unpublished transaction.
+///
+/// Duplicated at this boundary so `shekyl-daemon-rpc` does not depend on
+/// `shekyl-relay`. The node maps the relay crate's enum onto this one.
+/// `None` on [`SubmitFacts::origin_publication`] means the zone holds no
+/// origin row: the transaction has fluffed, it is a relay position, or
+/// the zone has not recorded it yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OriginPublication {
+    /// Unpublished, inside the daemon's publication budget.
+    Held,
+    /// Unpublished at or past the daemon's publication budget.
+    HeldOverdue,
+}
+
 /// The Phase-B POD fact snapshot (§3.1 Phase B / §4.1), taken under one
 /// short pool→blockchain lock scope. Also the shape of Phase-D **fresh
 /// facts** when the commit races.
@@ -90,6 +105,11 @@ pub struct SubmitFacts {
     /// from foreigners exactly as the inherited identity check concealed it.
     /// The C++ side asks `relay_category::broadcasted`.
     pub in_pool_broadcast: bool,
+    /// This node's origin hold for the submitted txid, judged on the
+    /// relay task's clock. `None` when the zone holds no origin row.
+    /// Broadcast presence ([`in_pool_broadcast`](Self::in_pool_broadcast))
+    /// outranks a stale hold: a fluffed transaction is published.
+    pub origin_publication: Option<OriginPublication>,
     /// `Some(height)` iff the submitted txid is in the main chain,
     /// confirmed at `height` — the F40 confirming-block height, read under
     /// the same lock scope as the membership fact so the pair cannot be

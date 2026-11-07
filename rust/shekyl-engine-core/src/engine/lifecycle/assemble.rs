@@ -333,16 +333,12 @@ impl Engine<SoloSigner> {
         // confidential-staking sweep.)
         let economics = crate::engine::local_economics::LocalEconomics::new();
 
-        // §5.3 submit lifecycle driver: the escape horizon is derived from
-        // the consensus block target (`daa_target_seconds`, generated from
-        // `config/consensus_constants.json` into `shekyl_economics`), the
-        // same source the kernel's `WatchdogConfig::from_block_target`
-        // documents. Owned by the Engine so its overlays persist across
+        // §5.3 submit lifecycle driver at the production escape horizon
+        // (`WatchdogConfig::production`, derived in blocks from the dispatched
+        // proof's life). Owned by the Engine so its overlays persist across
         // ticks; the wallet surface and daemon are lent per tick.
         let submit_driver =
-            tokio::sync::Mutex::new(crate::engine::submit_lifecycle::SubmitLifecycleDriver::new(
-                shekyl_economics::economic_params().daa_target_seconds,
-            ));
+            tokio::sync::Mutex::new(crate::engine::submit_lifecycle::SubmitLifecycleDriver::new());
 
         Ok(Self {
             persistence: file,
