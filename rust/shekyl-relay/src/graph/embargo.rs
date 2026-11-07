@@ -106,6 +106,8 @@ pub fn origin_publication_budget_ms() -> Millis {
 ///
 /// A relay position is not this node's origin and is absent. A transaction
 /// that has fluffed is absent too: publication is the pool's shown bit.
+/// The judgment is [`Self::judge`]: the zone records the arm time, and
+/// the read applies the clock it is asked with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OriginPublication {
     /// Unpublished, and younger than the budget.
@@ -115,12 +117,26 @@ pub enum OriginPublication {
     HeldOverdue,
 }
 
-fn judge_origin(armed_at: Millis, now: Millis) -> OriginPublication {
-    if now.saturating_sub(armed_at) >= origin_publication_budget_ms() {
-        OriginPublication::HeldOverdue
-    } else {
-        OriginPublication::Held
+impl OriginPublication {
+    /// Judge one arm time against `now`.
+    ///
+    /// One millisecond inside the budget is [`Self::Held`]. The budget
+    /// itself, with the hold still recorded, is [`Self::HeldOverdue`].
+    /// The comparison does not know whether the timer has woken.
+    #[must_use]
+    pub fn judge(armed_at: Millis, now: Millis) -> Self {
+        if now.saturating_sub(armed_at) >= origin_publication_budget_ms() {
+            Self::HeldOverdue
+        } else {
+            Self::Held
+        }
     }
+}
+
+/// An origin's arm time. A relay position (`source` is some peer) is not
+/// this node's hold.
+fn held_arm(held: &Held) -> Option<Millis> {
+    held.source.is_none().then_some(held.armed_at)
 }
 
 /// A stem this node sent and has not seen circulate.
@@ -366,34 +382,38 @@ impl Relay {
     /// This node's own `tx`, if the zone still holds it unpublished, judged
     /// at `now`. A relay position and a transaction that has fluffed are
     /// `None`.
+    ///
+    /// The same comparison as [`OriginPublication::judge`] on
+    /// [`Self::origin_armed`].
     #[must_use]
     pub fn origin_publication(&self, tx: &TxId, now: Millis) -> Option<OriginPublication> {
-        if let Some(held) = self.embargoes.held.get(tx) {
-            if held.source.is_some() {
-                return None;
-            }
-            return Some(judge_origin(held.armed_at, now));
-        }
-        self.embargoes
-            .unsent
-            .get(tx)
-            .map(|unsent| judge_origin(unsent.armed_at, now))
+        self.armed_at(tx)
+            .map(|armed_at| OriginPublication::judge(armed_at, now))
     }
 
-    /// Every origin hold, judged at `now`, in transaction-id order.
+    /// Every origin's arm time. Held rows count only when this node is the
+    /// source. Unsent rows are origins by construction. The map is not
+    /// sorted: a reader judges each arm with the clock it has now.
     #[must_use]
-    pub fn origin_publications(&self, now: Millis) -> Vec<(TxId, OriginPublication)> {
-        let mut rows = Vec::new();
+    pub fn origin_armed(&self) -> HashMap<TxId, Millis> {
+        let mut armed =
+            HashMap::with_capacity(self.embargoes.held.len() + self.embargoes.unsent.len());
         for (tx, held) in &self.embargoes.held {
-            if held.source.is_none() {
-                rows.push((*tx, judge_origin(held.armed_at, now)));
+            if let Some(at) = held_arm(held) {
+                armed.insert(*tx, at);
             }
         }
         for (tx, unsent) in &self.embargoes.unsent {
-            rows.push((*tx, judge_origin(unsent.armed_at, now)));
+            armed.insert(*tx, unsent.armed_at);
         }
-        rows.sort_unstable_by_key(|(tx, _)| *tx);
-        rows
+        armed
+    }
+
+    fn armed_at(&self, tx: &TxId) -> Option<Millis> {
+        if let Some(held) = self.embargoes.held.get(tx) {
+            return held_arm(held);
+        }
+        self.embargoes.unsent.get(tx).map(|unsent| unsent.armed_at)
     }
 
     /// The pool dropped `tx` (mined, evicted, removed): the zone forgets it.

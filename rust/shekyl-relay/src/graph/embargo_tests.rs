@@ -93,6 +93,47 @@ fn origin_budget_is_the_recovery_cycle_count_times_the_origin_retry() {
     assert_ne!(u64::from(recovery.failed_secs) * 1_000, budget_ms);
 }
 
+/// The judgment is a function of an arm time and the clock at the read.
+/// The zone's map stores the arm. One millisecond inside the budget is
+/// held; the budget itself is overdue. The single-tx query is that
+/// function on the map.
+#[test]
+fn an_origin_is_judged_when_it_is_read() {
+    let budget = origin_publication_budget_ms();
+    assert_eq!(
+        OriginPublication::judge(0, budget - 1),
+        OriginPublication::Held
+    );
+    assert_eq!(
+        OriginPublication::judge(0, budget),
+        OriginPublication::HeldOverdue
+    );
+    let armed_at = 40_000;
+    assert_eq!(
+        OriginPublication::judge(armed_at, armed_at + budget - 1),
+        OriginPublication::Held
+    );
+
+    let mut rng = SplitMix64::new(0xB1);
+    let mut z = stem_zone(&[1, 2], &mut rng);
+    let sent = tx(11);
+    originate(&mut z, &sent, &mut rng);
+    let armed = z.origin_armed();
+    let at = armed.get(&sent.0).copied().expect("the origin is armed");
+    for now in [at, at + budget - 1, at + budget] {
+        assert_eq!(
+            z.origin_publication(&sent.0, now),
+            Some(OriginPublication::judge(at, now)),
+            "now {now}"
+        );
+    }
+    assert_eq!(
+        armed.get(&sent.0).copied(),
+        Some(at),
+        "the map keeps the arm time after the late read"
+    );
+}
+
 /// The daemon judges an origin hold on its own clock. One millisecond
 /// inside the budget is held; the budget itself, with the hold still
 /// there, is overdue. A relay position is not an origin. Fluffing removes

@@ -158,10 +158,12 @@ pub struct SubmitTransactionRequest {
 
 /// The owner tier's relay state for a pool-resident transaction.
 ///
-/// The daemon judges `held_overdue` on its own clock. The wallet does
-/// not convert that judgment into blocks, or a block count into a
-/// duration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// The daemon judges `held_overdue` when the state is read, on its own
+/// clock. The wallet does not convert that judgment into blocks, or a
+/// block count into a duration. A missing origin row is [`Self::Untracked`]:
+/// the zone has not recorded this transaction as its own hold, and that
+/// absence is not a hold inside the budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PoolRelay {
     /// Unpublished, inside the daemon's publication budget.
@@ -170,6 +172,8 @@ pub enum PoolRelay {
     HeldOverdue,
     /// Fluffed. Mining is a block-count question, not this field.
     Published,
+    /// Pool-resident, and the zone holds no origin row for it.
+    Untracked,
 }
 
 /// The daemon's atomic verdict on one submitted transaction
@@ -201,8 +205,8 @@ pub enum SubmitVerdict {
     /// lands in the `Err` arm. A foreign caller is told `published` only,
     /// and only once the transaction has fluffed.
     AlreadyInPool {
-        /// Held, held past the daemon's own publication budget, or
-        /// published and not yet mined.
+        /// Held, held past the daemon's own publication budget,
+        /// published and not yet mined, or untracked (no origin row).
         relay: PoolRelay,
     },
     /// Identity match: this txid is in the main chain, confirmed at

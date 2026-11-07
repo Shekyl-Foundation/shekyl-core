@@ -93,7 +93,8 @@ fn already_in_pool_short_circuits() {
     let (engine, shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
-        already_in_pool(PoolRelay::Held)
+        already_in_pool(PoolRelay::Untracked),
+        "a pool row with no origin row is not a hold"
     );
     assert_eq!(verifier.call_count(), 0);
     assert_eq!(shim.commit_count(), 0);
@@ -488,7 +489,7 @@ fn raced_in_pool_classifies_already_in_pool() {
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
-        already_in_pool(PoolRelay::Held)
+        already_in_pool(PoolRelay::Untracked)
     );
 }
 
@@ -592,7 +593,7 @@ fn a_concealed_answer_is_the_fresh_answer_under_every_public_change() {
         );
         assert_eq!(
             submit(held, raced(), SubmitCaller::Owner),
-            already_in_pool(PoolRelay::Held),
+            already_in_pool(PoolRelay::Untracked),
             "{what}: the owner is told the duplicate"
         );
     }
@@ -750,15 +751,31 @@ fn foreign_broadcast_presence_reveals_already_in_pool() {
 fn owner_embargoed_presence_reveals_already_in_pool() {
     // The owner (unrestricted endpoint) keeps the F31 resubmit-as-status
     // query: an embargoed self-tx returns AlreadyInPool immediately.
+    // Inside the budget the zone has recorded a hold, and that is what
+    // the owner is told.
     let mut facts = base_facts();
     facts.in_pool = true;
     facts.in_pool_broadcast = false;
+    facts.origin_publication = Some(OriginPublication::Held);
     let (engine, _shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         already_in_pool(PoolRelay::Held)
     );
     assert_eq!(verifier.call_count(), 0);
+}
+
+#[test]
+fn owner_without_an_origin_row_is_told_untracked() {
+    let mut facts = base_facts();
+    facts.in_pool = true;
+    facts.in_pool_broadcast = false;
+    facts.origin_publication = None;
+    let (engine, _shim, _verifier) = engine(facts, CommitOutcome::Committed);
+    assert_eq!(
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
+        already_in_pool(PoolRelay::Untracked)
+    );
 }
 
 #[test]

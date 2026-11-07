@@ -37,6 +37,12 @@ fn frozen_corpus() -> Vec<(SubmitVerdict, &'static str)> {
             r#"{"verdict":"already_in_pool","relay":"published"}"#,
         ),
         (
+            SubmitVerdict::AlreadyInPool {
+                relay: PoolRelay::Untracked,
+            },
+            r#"{"verdict":"already_in_pool","relay":"untracked"}"#,
+        ),
+        (
             SubmitVerdict::AlreadyInChain { height: 1_234_567 },
             r#"{"verdict":"already_in_chain","height":1234567}"#,
         ),

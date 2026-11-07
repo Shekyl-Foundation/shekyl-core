@@ -125,16 +125,48 @@ pub struct Started {
     pub handle: RelayHandle,
 }
 
+/// The relay task's clock, cloned onto the handle so a publication read
+/// is judged when it is asked. The closure is the clock; `Debug` names
+/// the clock rather than printing it.
+struct RelayNow {
+    now: Arc<dyn Fn() -> Millis + Send + Sync>,
+}
+
+impl RelayNow {
+    fn new(now: impl Fn() -> Millis + Send + Sync + 'static) -> Self {
+        Self { now: Arc::new(now) }
+    }
+
+    fn get(&self) -> Millis {
+        (self.now)()
+    }
+}
+
+impl Clone for RelayNow {
+    fn clone(&self) -> Self {
+        Self {
+            now: Arc::clone(&self.now),
+        }
+    }
+}
+
+impl std::fmt::Debug for RelayNow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RelayNow")
+    }
+}
+
 /// The node's end of the owner.
 #[derive(Clone, Debug)]
 pub struct RelayHandle {
     inbox: mpsc::UnboundedSender<Cmd>,
     verdict: watch::Receiver<OriginVerdict>,
     snapshot: Arc<Mutex<Arc<RelaySnapshot>>>,
-    /// This node's origin holds, judged on the relay task's clock. Not a
-    /// field of [`RelaySnapshot`]: that snapshot is what health projects,
-    /// and a transaction id does not belong on it.
-    origins: Arc<Mutex<Arc<HashMap<TxId, OriginPublication>>>>,
+    /// This node's origin arm times. Not a field of [`RelaySnapshot`]:
+    /// that snapshot is what health projects, and a transaction id does
+    /// not belong on it. A read judges the arm with [`RelayNow`].
+    origins: Arc<Mutex<Arc<HashMap<TxId, Millis>>>>,
+    now: RelayNow,
 }
 
 impl RelayHandle {
@@ -172,13 +204,19 @@ impl RelayHandle {
     /// This node's judgment of `tx`, if it still holds the origin
     /// unpublished. Absent once the transaction has fluffed, and absent
     /// for a relay position.
+    ///
+    /// The arm time is the last snapshot. The clock is this read's. A
+    /// timer that has not yet woken still reports
+    /// [`OriginPublication::HeldOverdue`] once the budget has elapsed.
     #[must_use]
     pub fn origin_publication(&self, tx: TxId) -> Option<OriginPublication> {
-        self.origins
+        let armed_at = self
+            .origins
             .lock()
-            .expect("origin publications")
+            .expect("origin arms")
             .get(&tx)
-            .copied()
+            .copied()?;
+        Some(OriginPublication::judge(armed_at, self.now.get()))
     }
 
     /// End the task. Sessions established after this are not relayed to.
@@ -254,7 +292,8 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
     let owner = timing
         .register(OwnerClass::Relay)
         .map_err(RelayStartError::Timing)?;
-    let now = millis(owner.clock().now());
+    let clock = owner.clock().clone();
+    let now = millis(clock.now());
     // The epoch scheduler reads only this pair; embargo timers are built per
     // connector inside `Relay::new`, from the declarations.
     let params = DandelionParams {
@@ -304,6 +343,7 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         verdict,
         snapshot: Arc::clone(&snapshot),
         origins: Arc::clone(&origins),
+        now: RelayNow::new(move || millis(clock.now())),
     };
     let actor = Actor {
         driver: Driver::new(zone),
@@ -348,7 +388,7 @@ struct Actor<C: Clock + Clone + Send + Sync + 'static> {
     inbox: mpsc::UnboundedReceiver<Cmd>,
     verdict: watch::Sender<OriginVerdict>,
     snapshot: Arc<Mutex<Arc<RelaySnapshot>>>,
-    origins: Arc<Mutex<Arc<HashMap<TxId, OriginPublication>>>>,
+    origins: Arc<Mutex<Arc<HashMap<TxId, Millis>>>>,
 }
 
 impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
@@ -396,7 +436,6 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
     }
 
     fn publish(&self) {
-        let now = self.now();
         let zone = self.driver.zone();
         let snapshot = RelaySnapshot {
             noise: zone.noise_enabled(),
@@ -412,9 +451,8 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         if let Ok(mut slot) = self.snapshot.lock() {
             *slot = Arc::new(snapshot);
         }
-        let judged = zone.origin_publications(now);
         if let Ok(mut slot) = self.origins.lock() {
-            *slot = Arc::new(judged.into_iter().collect());
+            *slot = Arc::new(zone.origin_armed());
         }
         let verdict = zone.origin_verdict();
         self.verdict.send_if_modified(|current| {

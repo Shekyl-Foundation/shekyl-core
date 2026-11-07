@@ -259,9 +259,10 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// takes `height` (the claim's count) and `state` (the session's mode, or
 /// null) from the view. `get_version` gains nothing.
 /// 3.69: `already_in_pool` carries a required `relay` (`held`,
-/// `held_overdue`, or `published`), the owner tier's relay state. The
-/// daemon judges `held_overdue` on its own clock. `get_version` gains
-/// nothing.
+/// `held_overdue`, `published`, or `untracked`), the owner tier's relay
+/// state. The daemon judges `held_overdue` when that state is read, on
+/// its own clock. A missing origin row is `untracked`. `get_version`
+/// gains nothing.
 pub const CORE_RPC_VERSION_MINOR: u32 = 69;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
@@ -729,7 +730,8 @@ mod tests {
         // caller, within the hash budget and the one coinbase-read permit.
         // 3.68 is chain sync's cutover: `sync_info` is the sync owner's view
         // (CS-5 §7); it had written 66, and took the minor after both.
-        // 3.69 gives `already_in_pool` its required `relay` field.
+        // 3.69 gives `already_in_pool` its required `relay` field
+        // (`held`, `held_overdue`, `published`, `untracked`).
         assert_eq!(CORE_RPC_VERSION, 196_677);
         assert_eq!(CORE_RPC_VERSION, (3 << 16) | 69);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);

@@ -159,15 +159,16 @@ enum PoolDisclosure {
 /// The relay state an owner, or a broadcast-visible foreign caller, is told.
 ///
 /// Broadcast presence wins over a stale origin hold: a fluffed transaction
-/// is published. An origin row the zone has not recorded yet is held, so
-/// the wallet waits rather than alarming on a race.
+/// is published. An origin row the zone has not recorded is untracked.
+/// That is not a hold, and the wallet does not treat it as one.
 fn disclosed_relay(facts: &SubmitFacts) -> PoolRelay {
     if facts.in_pool_broadcast {
         return PoolRelay::Published;
     }
     match facts.origin_publication {
         Some(OriginPublication::HeldOverdue) => PoolRelay::HeldOverdue,
-        Some(OriginPublication::Held) | None => PoolRelay::Held,
+        Some(OriginPublication::Held) => PoolRelay::Held,
+        None => PoolRelay::Untracked,
     }
 }
 

@@ -170,17 +170,20 @@ fire while stalled — firing against a known-stale view is the thing
 the tick base exists to prevent.
 
 **Horizons are evaluated against observation.**
-The submit leg's block ceiling (`WatchdogConfig::production`,
-`DISPATCHED_PROOF_LIFE` minus one block) is in blocks and measured
-against observed chain progress. An origin the daemon has judged overdue
-alarms on the next tick that sees that state. The wallet does not time it.
-A consequence worth stating
+The submit leg asks for relay state on the tick. An origin the daemon
+has judged overdue, and a pool row with no origin, alarm on the next
+tick that sees that state. The wallet does not time them. A published
+transaction's lookback is blocks since publication was first observed.
+The proof-life ceiling (`WatchdogConfig::production`,
+`DISPATCHED_PROOF_LIFE` minus one block) is when an in-chain
+observation is asked again. A consequence worth stating
 before a reviewer flags it: **the submit watchdog goes quiet exactly
 when the chain does.** That is correct, not the watchdog sleeping
-through its own failure mode — its horizons are progress-denominated,
-so nothing accrues against a held tx while nothing advances, and the
-stall itself is surfaced by the `ChainProgress` alarm rather than by
-legs firing against a stale view.
+through its own failure mode — its block questions are
+progress-denominated, so nothing accrues against a published or
+in-chain transaction while nothing advances, and the stall itself is
+surfaced by the `ChainProgress` alarm rather than by legs firing
+against a stale view.
 
 **Tip source.** The driver reads the same daemon the engine holds
 (`self.daemon`), not a persona-isolated transport: the tick base is

@@ -220,11 +220,9 @@ pub enum DiscardReason {
 /// enum, no `String` payload (PR 4 §5.4.7 R6 memory-amplifier closure
 /// carries to the watchdog stream verbatim).
 ///
-/// The first four variants project the kernel's
-/// [`AlarmReason`](crate::engine::submit_watchdog::AlarmReason). The last
-/// two are driver-level conditions the kernel cannot represent. The
-/// `#[non_exhaustive]` discipline lets the F40 re-scan executor add its
-/// own alarm reasons additively.
+/// The kernel's reasons come first. The last two are driver-level
+/// conditions the kernel cannot represent. The `#[non_exhaustive]`
+/// discipline lets a later executor add its own alarm reasons.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WatchdogAlarmReason {
@@ -233,7 +231,12 @@ pub enum WatchdogAlarmReason {
     /// [`AlarmReason::HeldOverdue`](crate::engine::submit_watchdog::AlarmReason::HeldOverdue).
     HeldOverdue,
 
-    /// Published, and unmined past the fee ladder's lookback. Projects
+    /// Pool-resident, and the zone holds no origin row. Projects
+    /// [`AlarmReason::OriginUntracked`](crate::engine::submit_watchdog::AlarmReason::OriginUntracked).
+    OriginUntracked,
+
+    /// Published, and unmined past the fee ladder's lookback, measured
+    /// from the first observation of publication. Projects
     /// [`AlarmReason::PublishedUnmined`](crate::engine::submit_watchdog::AlarmReason::PublishedUnmined).
     PublishedUnmined,
 
@@ -281,14 +284,8 @@ pub enum WatchdogProbeOutcome {
     /// through full admission and fresh relay. The wait restarts.
     ReofferedAfterAbsence,
 
-    /// `AlreadyInPool { relay: held }`. Inside the daemon's budget.
-    Held,
-
-    /// `AlreadyInPool { relay: held_overdue }`. The daemon's clock.
-    HeldOverdue,
-
-    /// `AlreadyInPool { relay: published }`. Mining is a block count.
-    Published,
+    /// `AlreadyInPool`. The relay state is the daemon's, passed through.
+    InPool(shekyl_rpc_types::PoolRelay),
 
     /// `AlreadyInChain`: confirmation observed by verdict. Refresh
     /// remains the settlement authority; the wait epoch restarts.

@@ -1076,7 +1076,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.66 (a bounded list cap and fill_pow_hash are OverResourceBound; get_version gains nothing)
         &[], // 3.67 (calc_pow and get_coinbase_tx_sum are served within the hash budget and the coinbase-read permit; get_version gains nothing)
         &[], // 3.68 (sync_info is chain sync's view, CS-5 §7; get_version gains nothing)
-        &[], // 3.69 (already_in_pool carries required relay; get_version gains nothing)
+        &[], // 3.69 (already_in_pool carries required relay, including untracked; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1133,7 +1133,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.66 (the refusal class is not get_version's; it retires nothing)
         &[], // 3.67 (the hash budget is not get_version's; it retires nothing)
         &[], // 3.68 (sync_info's spans and overview are not get_version's; it retires nothing)
-        &[], // 3.69 (already_in_pool carries required relay; get_version gains nothing)
+        &[], // 3.69 (already_in_pool carries required relay, including untracked; get_version gains nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
