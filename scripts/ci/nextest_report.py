@@ -27,6 +27,9 @@ Usage:
   nextest_report.py <junit.xml>   # markdown to $GITHUB_STEP_SUMMARY, else stdout
   nextest_report.py --selftest
 
+The warning annotations are printed only under GitHub Actions, where they
+are commands; a local run gets the markdown alone, flaky tests included.
+
 Exit 0 when the report was written, flaky tests or not; this report is not
 the job's verdict, nextest's exit status is. Exit 2 when the file is
 missing, does not parse, or holds no test: a report over nothing would read
@@ -78,20 +81,34 @@ def parse(xml_text: str) -> Run:
         raise NoSubject(f"the root element is <{root.tag}>, not <testsuites>")
     cases = []
     for suite in root.iter("testsuite"):
+        binary = suite.get("name", "?")
         for tc in suite.iter("testcase"):
+            name = tc.get("name", "?")
+            # nextest writes both on every test case; a file without them is
+            # not nextest's, and a report that guessed them would misorder
+            # the tables it exists to give.
+            try:
+                start = datetime.fromisoformat(tc.get("timestamp", ""))
+                seconds = float(tc.get("time", ""))
+            except ValueError as e:
+                raise NoSubject(f"{binary} {name}: no readable timestamp and time ({e})") from e
             cases.append(
                 Case(
-                    binary=suite.get("name", "?"),
-                    name=tc.get("name", "?"),
-                    start=datetime.fromisoformat(tc.get("timestamp")),
-                    seconds=float(tc.get("time", "0")),
+                    binary=binary,
+                    name=name,
+                    start=start,
+                    seconds=seconds,
                     flaky_tries=len(tc.findall("flakyFailure")),
                     failed=tc.find("failure") is not None or tc.find("error") is not None,
                 )
             )
     if not cases:
         raise NoSubject("the JUnit file holds no test")
-    return Run(cases=cases, wall_seconds=float(root.get("time", "0")))
+    try:
+        wall_seconds = float(root.get("time", ""))
+    except ValueError as e:
+        raise NoSubject(f"the run has no readable time ({e})") from e
+    return Run(cases=cases, wall_seconds=wall_seconds)
 
 
 def fmt_secs(s: float) -> str:
@@ -197,6 +214,9 @@ def selftest() -> int:
         ('<testsuites name="nextest-run" time="0"></testsuites>', "no test"),
         ("<testsuites", "does not parse"),
         ("<testsuite name='x'/>", "not <testsuites>"),
+        (SELFTEST_XML.replace(' timestamp="2026-11-07T11:55:00.000+00:00"', ""), "a test with no timestamp"),
+        (SELFTEST_XML.replace('time="70.0"', 'time="soon"'), "a test with no readable time"),
+        (SELFTEST_XML.replace('time="70.5"', ""), "a run with no time"),
     ]:
         try:
             parse(bad)
@@ -210,7 +230,8 @@ def selftest() -> int:
     print(
         "SELFTEST PASS: a flaky test is listed and annotated, a test failed on "
         "every try is not flaky, the slow tables lead with the slowest, and an "
-        "empty, unparseable or foreign file is refused"
+        "empty, unparseable or foreign file, or one missing a test's timestamp "
+        "or time, is refused"
     )
     return 0
 
@@ -219,7 +240,7 @@ def main(argv: list[str]) -> int:
     if argv == ["--selftest"]:
         return selftest()
     if len(argv) != 1:
-        print(__doc__.split("\n\n")[-2], file=sys.stderr)
+        print("usage: nextest_report.py <junit.xml> | --selftest", file=sys.stderr)
         return 2
     path = argv[0]
     try:
@@ -229,8 +250,9 @@ def main(argv: list[str]) -> int:
         print(f"nextest report: {path}: {e}", file=sys.stderr)
         return 2
     md, annotations = report(run)
-    for a in annotations:
-        print(a)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        for a in annotations:
+            print(a)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
