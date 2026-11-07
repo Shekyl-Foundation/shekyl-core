@@ -1056,7 +1056,7 @@ pqc_auths.size() == vin.size()  -> serialize = 1   blob = 3636  unprunable = 363
 
 | Site | Requires |
 | --- | --- |
-| `cryptonote_basic.h:621` (write path) | `pqc_auths.size() == vin.size()` |
+| `cryptonote_basic.h` at `ac3836de90` (line 621) (write path) | `pqc_auths.size() == vin.size()` |
 | `tx_verification_utils.cpp:118` (verify) | `tx.pqc_auths.empty()` |
 | `blockchain.cpp:3746` (verify) | serve-credit `pqc_auths` **must be empty** |
 

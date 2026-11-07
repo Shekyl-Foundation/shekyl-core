@@ -110,7 +110,7 @@ fix to its PR 2 (`:330`). §A records the couplings that remain.
       target (`DAEMON_CONFIG_CUTOVER.md` §4.2, "the reverse pulls").
     - `SYNC_SEARCH_CONNECTIONS = 2` there duplicates
       `P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT`
-      (`cryptonote_config.h:197`), which still exists.
+      (`cryptonote_config.h` at `ac3836de90` (line 197)), which still exists.
 - **CS-F5. The ingest docs disagree with the landed switch.**
   - `source.rs:28` says "DRS-X's p2p source computes the heavier-chain
     switch". `:43` says the p2p feed "emit[s] `Rewind`".
@@ -847,7 +847,7 @@ emits `Rewind`; it offers blocks, and the alt tier switches.
 
 **Problem.**
 - `RESPONSE_CHAIN_ENTRY` returns up to 10,000 bare hashes
-  (`BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT`, `cryptonote_config.h:97`),
+  (`BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT`, `cryptonote_config.h` at `ac3836de90` (line 97)),
   which carry no proof of work. So a peer can make us reserve spans for
   junk.
 - It also carries fields no receiver reads: `first_block`,
@@ -1118,7 +1118,7 @@ the existing types are extended, not replaced.
 **Problem** (as posed at this brief's ground; the automatic ban is deleted, #1250).
 - `add_host_fail` (`net_node.inl:349`) added weights (1, 5, 10)
   into an un-decaying per-host map. At more than
-  `P2P_IP_FAILS_BEFORE_BLOCK` (10, `cryptonote_config.h:200`) it banned the
+  `P2P_IP_FAILS_BEFORE_BLOCK` (10, `cryptonote_config.h` at `ac3836de90` (line 200)) it banned the
   host for 24 h through the transport ban list.
 - It was fed from:
   - this handler (`:2570`, `:2615`), with the weight picked by
@@ -1341,7 +1341,7 @@ a mechanism?
 **What is deleted:**
 - `update_sync_search`;
 - `needs_new_sync_connections`;
-- `P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT` (`cryptonote_config.h:197`);
+- `P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT` (`cryptonote_config.h` at `ac3836de90` (line 197));
 - **landed Rust:** `rust/shekyl-ffi/src/sync_ffi.rs`
   whole, meaning `shekyl_sync_room_for_syncing_peer`,
   `shekyl_sync_wants_more_outbound`, `SYNC_SEARCH_CONNECTIONS = 2` and
@@ -1611,9 +1611,9 @@ handler.
 | 7 | C++ caller, in `needs_new_sync_connections` | `.inl:2553` |
 | 8 | Declarations | `src/shekyl/shekyl_ffi.h` (deleted by CS-5) |
 | 9 | Module | line 184 of `rust/shekyl-ffi/src/lib.rs` at `e8838b0095` |
-| 10 | FFI signature gate's registration | `scripts/ci/check_ffi_signatures.sh:87-88` |
+| 10 | FFI signature gate's registration | `scripts/ci/check_ffi_signatures.sh` at `34397ac08` (lines 87–88) |
 | 11 | `sync_connector_of` | 1c #9 |
-| 12 | `P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT` (no C++ user) | `src/cryptonote_config.h:200` |
+| 12 | `P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT` (no C++ user) | `src/cryptonote_config.h` at `34397ac08` (line 200) |
 
 **3a. Score arguments (CS-Q5).** Deleted with the automatic ban (#1250),
 in the same change as `add_host_fail`: `drop_connection_with_score` and
@@ -1899,7 +1899,7 @@ half-cut, and one cutover PR avoids it.
     (`prep-blocks-threads`);
   - `cryptonote_core.cpp:414-415`: `block_sync_size = 0`, adaptive
     through `get_block_sync_size` (`:608`) over
-    `BLOCKS_SYNCHRONIZING_DEFAULT_COUNT` (20, `cryptonote_config.h:100`).
+    `BLOCKS_SYNCHRONIZING_DEFAULT_COUNT` (20, `cryptonote_config.h` at `ac3836de90` (line 100)).
 
 **Question.** Does any of the four survive as an operator option?
 

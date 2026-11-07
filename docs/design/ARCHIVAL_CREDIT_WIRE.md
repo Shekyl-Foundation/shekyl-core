@@ -189,7 +189,7 @@ shape 4.**
 
 **AMENDMENT (2026-08-04) — SUPERSEDES the shape-4 residence below: a `block_header`
 field, not a tx-merkle leaf.** The C++ map surfaced a fact the shape 1/2/3/4
-enumeration never had in view: `curve_tree_root` (`cryptonote_basic.h:843`) is
+enumeration never had in view: `curve_tree_root` (`cryptonote_basic.h` at `ac3836de90` (line 843)) is
 already a `crypto::hash` **block-header field**, mined because
 `get_block_hashing_blob` serializes the whole `block_header` into the PoW
 preimage, defaulting to `null_hash`. `attestation_root` is the same object, so it

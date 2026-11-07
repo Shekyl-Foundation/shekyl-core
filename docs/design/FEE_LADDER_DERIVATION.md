@@ -318,7 +318,7 @@ hysteresis/smoothing on `C`, then re-test; if still divergent, surface in
 - **Degenerate cases (FL-C8, must be pinned, not sampled by accident):**
   `b` at its 0.9 cap; `M_r` at both rails; tail-emission reward; and the
   supply-headroom clamp `shekyl_cap_reward_to_remaining_supply`
-  (`cryptonote_basic_impl.cpp:168`) binding — when the cap binds,
+  (`cryptonote_basic_impl.cpp` at `ac3836de90` (line 168)) binding — when the cap binds,
   marginal penalty is absorbed by the clamp and expansion is locally free;
   the round must state whether that state is reachable and what the estimate
   does there.
@@ -387,7 +387,7 @@ by FL-R17.
 
 - Block validation (`validate_miner_transaction`,
   `blockchain.cpp:1789`) calls the **six-argument** `get_block_reward` with
-  `tx_volume_avg`; the overload (`cryptonote_basic_impl.cpp:148-172`)
+  `tx_volume_avg`; the overload (`cryptonote_basic_impl.cpp` at `ac3836de90` (lines 148–172))
   applies `shekyl_calc_release_multiplier` + `shekyl_apply_release_multiplier`
   to the already-penalized reward, then the supply-headroom cap.
 - Both fee-estimate paths call the **five-argument** (unmodulated) overload:
@@ -532,7 +532,7 @@ The FFI called them twins (at `a566a466` the doc comment on the
 capped-composition entry read "the emission-side twin of
 `shekyl_advance_already_generated`"; that comment went with the cap under
 FL-R12′, and the economics FFI has since moved from `legacy_core.rs` to
-`rust/shekyl-ffi/src/economics_ffi.rs:536`, where the surviving function's
+`rust/shekyl-ffi/src/economics_ffi.rs` at `ac3836de90` (line 536), where the surviving function's
 comment states the perpetual tail). They were not twins:
 
 - **`blockchain.cpp:6420`** advances the supply accumulator through
@@ -547,7 +547,7 @@ comment states the perpetual tail). They were not twins:
   below. In Monero the premise holds because `MONEY_SUPPLY = 2⁶⁴−1` is
   unreachable; here it is reached at ≈ block 19 158 412. Rule 16: the
   inherited rationale is still sitting in the comment.
-- **`cryptonote_basic_impl.cpp:168`** clips the validation reward through
+- **`cryptonote_basic_impl.cpp` at `ac3836de90` (line 168)** clips the validation reward through
   `shekyl_cap_reward_to_remaining_supply` to `money_supply −
   already_generated` — **pay nothing** once the accumulator saturates.
 
@@ -559,7 +559,7 @@ side — which is exactly why FL-R12 was malformed as originally posed.
 
 ### FL-V9 — The supply cap is gated on an unrelated feature flag (review round 2)
 
-`cryptonote_basic_impl.cpp:153` wraps **both** the release multiplier and
+`cryptonote_basic_impl.cpp` at `ac3836de90` (line 153) wraps **both** the release multiplier and
 the supply cap in `if (SHEKYL_TX_VOLUME_BASELINE > 0)`. Setting the
 demand-pacing baseline to 0 silently flips terminal emission policy from
 cap-to-zero back to tail-forever. A genesis-frozen supply rule must not
@@ -704,7 +704,7 @@ median `M` at fee rate `f`, at expansion `x = (B−M)/M ∈ (0, 1]`:
 - **Marginal cost:** the penalty is applied to the base subsidy `R`
   (KAT-pinned quadratic, `emission.rs:142-190`: reward
   `= R·(1−x²)`), then the release multiplier scales the penalized value
-  (`cryptonote_basic_impl.cpp:150-160`), then the supply cap, then the
+  (`cryptonote_basic_impl.cpp` at `ac3836de90` (lines 150–160)), then the supply cap, then the
   emission split takes `σ` off the top (`blockchain.cpp:1795-1798`). Away
   from the supply cap, the miner's marginal cost of expansion is
   `(1−σ)·M_r · dP`, with `dP/dbytes = 2Rx/M` (marginal) and the average

@@ -2173,7 +2173,7 @@ not there. What was owed, and where each piece stands:
 **once** in this tree — `hash_with_supplied_components`, stored 32-byte
 digests standing in for regions the node does not hold — and item 2 is its
 `pqc_auths` application. `get_pruned_transaction_weight`
-(`src/cryptonote_basic/cryptonote_format_utils.cpp:336`) is a *sibling*
+(`src/cryptonote_basic/cryptonote_format_utils.cpp` at `ac3836de90` (line 336)) is a *sibling*
 shape, not the same one: it reconstructs weight from **retained metadata**
 — it serialises the pruned body and adds deterministic sizes,
 `ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES × n` among them — and consumes

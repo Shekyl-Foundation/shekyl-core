@@ -697,7 +697,7 @@ batch and offload together; neither alone is enough.
 
 **Block-granularity is adequate — no mid-block-resumable cursor needed.** A single block's
 work is **consensus-bounded**: outputs-per-tx are capped at `BULLETPROOF_PLUS_MAX_OUTPUTS = 16`
-(`src/cryptonote_config.h:241`), the decode path independently gates on
+(`src/cryptonote_config.h` at `ac3836de90` (line 241)), the decode path independently gates on
 `shekyl_scanner::MAX_OUTPUTS` (`engine-core/.../curve_tree_decode.rs:109`), and txs-per-block
 is bounded by the cumulative block-weight limit. So a small `BlockRange` carries bounded work
 and `synced_height` (block-granular) is a sufficient resume point. **Tuning note (not
