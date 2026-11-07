@@ -420,6 +420,59 @@ async fn tor_events_are_bounded_and_a_taken_one_makes_room() {
     assert_eq!(sink.dropped(), 1, "a taken event made room");
 }
 
+/// **A deadline goes after the arrivals already queued behind it** (#1283
+/// review). The loop judges a deadline at the moment it takes it, and a
+/// probe's nonce queued behind it was taken before that moment: folded
+/// after the deadline, it would find the probe already timed out. Only what
+/// is queued when the deadline is taken goes ahead, so arrivals posted later
+/// stay behind it and a stream cannot hold it back; the Tor events moved
+/// ahead free their places. Handing the deadline out in queue order fails
+/// the first assertion; moving events ahead without counting them taken
+/// fails the bound.
+#[tokio::test(start_paused = true)]
+async fn a_deadline_goes_after_the_arrivals_already_queued_behind_it() {
+    let (_owner, mut inbox, feeds) = inbox();
+    let poster = inbox.poster();
+    let sink: EventSink = poster.events();
+    poster.post(Arrival::Deadline { generation: 7 });
+    feeds.probes.probe_arrived(ProbeArrival {
+        minted_at: Tick::new(1),
+        arrived_at: Tick::new(secs(45)),
+    });
+    for _ in 0..EVENT_QUEUE_EVENTS {
+        sink.route(framed_notice());
+    }
+    assert!(
+        matches!(next_arrival(&mut inbox).await, Arrival::Probe(_)),
+        "the probe's answer is folded before the deadline"
+    );
+    sink.route(framed_notice());
+    assert_eq!(sink.dropped(), 0, "the events moved ahead made room");
+    feeds.probes.probe_arrived(ProbeArrival {
+        minted_at: Tick::new(2),
+        arrived_at: Tick::new(secs(70)),
+    });
+    for _ in 0..EVENT_QUEUE_EVENTS {
+        assert!(matches!(next_arrival(&mut inbox).await, Arrival::Event(_)));
+    }
+    assert!(matches!(
+        next_arrival(&mut inbox).await,
+        Arrival::Deadline { generation: 7 }
+    ));
+    assert!(
+        matches!(next_arrival(&mut inbox).await, Arrival::Event(_)),
+        "an event routed after the deadline was taken stays behind it"
+    );
+    let Arrival::Probe(late) = next_arrival(&mut inbox).await else {
+        panic!("the later probe answer, behind the deadline");
+    };
+    assert_eq!(late.minted_at, Tick::new(2));
+    assert!(
+        pending_a_minute(&mut inbox).await.is_none(),
+        "nothing else was queued"
+    );
+}
+
 // ---------------------------------------------------------------------
 // The bound on passes
 // ---------------------------------------------------------------------

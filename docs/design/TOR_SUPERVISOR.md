@@ -1043,7 +1043,14 @@ the generation the loop gave it, when the clock reaches it. A deadline the
 loop has since replaced carries an old generation and is ignored, so no arm
 is cleared and armed again. Each pass folds the sleep the wait observed,
 then every cell that changed, then the one arrival; an event posted before
-a deadline is folded before it. A control ask cannot read the queue without
+a deadline is folded before it, and so is every arrival already queued
+behind the deadline when the loop takes it. A deadline carries no fact: it
+is judged at the moment it is folded, and what is queued behind it happened
+before that moment, so a probe's nonce taken inside its bound is folded
+before the deadline that would time it out, however long a control ask held
+the loop. Only what is queued when the deadline is taken goes ahead, so a
+stream of events cannot hold it back
+(`a_deadline_goes_after_the_arrivals_already_queued_behind_it`). A control ask cannot read the queue without
 taking what is behind the stop, so closing the queue also sets a latch the
 ask races. Tor's events are bounded in the queue at `EVENT_QUEUE_EVENTS`
 not yet taken (`TSR-F2`); one past that is dropped and counted, and the

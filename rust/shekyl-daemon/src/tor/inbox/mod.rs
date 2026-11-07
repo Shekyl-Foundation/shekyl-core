@@ -27,12 +27,19 @@
 //! again, and no wake already delivered can fire a deadline the loop no
 //! longer wants.
 //!
+//! A deadline is the one arrival that carries no fact: it says the clock
+//! passed an instant, and the loop judges it at the moment it folds it.
+//! Everything already queued behind it happened before that moment, so the
+//! inbox hands those out first ([`Inbox::wait`]): a probe's nonce taken
+//! inside its bound is folded before the deadline that would time it out.
+//!
 //! A control ask to Tor runs between waits and can take seconds. The stop
 //! must still end it, and the ask cannot read the queue without taking the
 //! inputs behind the stop. So closing the queue also sets the inbox's stop
 //! latch, which an ask races ([`StopLatch`]). The stop itself is still the
 //! queue's close, said once: the loop folds it in its turn.
 
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -127,6 +134,7 @@ pub(super) fn inbox() -> (Owner, Inbox, SupervisorFeeds) {
     };
     let inbox = Inbox {
         queue: receiver,
+        ahead: VecDeque::new(),
         closed: false,
         shared,
         poster,
@@ -238,6 +246,9 @@ pub(super) enum Woken {
 /// The loop's end.
 pub(super) struct Inbox {
     queue: mpsc::UnboundedReceiver<Arrival>,
+    /// Arrivals taken from the queue to go ahead of a deadline, the
+    /// deadline last. Handed out before the queue is read again.
+    ahead: VecDeque<Arrival>,
     /// The queue has closed and said so: it is read no more.
     closed: bool,
     shared: Arc<Shared>,
@@ -245,12 +256,17 @@ pub(super) struct Inbox {
 }
 
 impl Inbox {
-    /// The next arrival, or the doorbell. Arrivals come first, in order.
+    /// The next arrival, or the doorbell. Arrivals come first, in order,
+    /// except that a deadline goes after every arrival already queued
+    /// behind it when it is taken ([`Self::behind_queued`]).
     ///
     /// A closed queue is the stop, said once. A closed queue answers at
     /// once, every time, so after that it is not read: the loop that keeps
     /// waiting hears only the doorbell, and cannot spin.
     pub(super) async fn wait(&mut self) -> Woken {
+        if let Some(arrival) = self.ahead.pop_front() {
+            return Woken::Arrived(arrival);
+        }
         if self.closed {
             self.shared.doorbell.notified().await;
             return Woken::Rang;
@@ -258,6 +274,7 @@ impl Inbox {
         tokio::select! {
             biased;
             arrival = self.queue.recv() => match arrival {
+                Some(Arrival::Deadline { generation }) => self.behind_queued(generation),
                 Some(arrival) => self.taken(arrival),
                 None => {
                     self.closed = true;
@@ -269,10 +286,43 @@ impl Inbox {
     }
 
     fn taken(&self, arrival: Arrival) -> Woken {
+        self.count_taken(&arrival);
+        Woken::Arrived(arrival)
+    }
+
+    /// A Tor event taken off the queue makes room for another
+    /// ([`EVENT_QUEUE_EVENTS`]).
+    fn count_taken(&self, arrival: &Arrival) {
         if matches!(arrival, Arrival::Event(_)) {
             self.shared.events_held.fetch_sub(1, Ordering::AcqRel);
         }
-        Woken::Arrived(arrival)
+    }
+
+    /// The deadline `generation`, after the arrivals queued behind it now.
+    ///
+    /// The loop folds a deadline at the moment it takes it, and an arrival
+    /// already queued happened before that moment. Folded after it, a
+    /// probe's nonce taken inside its bound would find the probe already
+    /// timed out by a deadline the loop reached late, a control ask having
+    /// held it. Only what is queued when the deadline is taken goes ahead:
+    /// an event stream that keeps arriving cannot hold the deadline back.
+    fn behind_queued(&mut self, generation: u64) -> Woken {
+        let queued = self.queue.len();
+        for _ in 0..queued {
+            let Ok(arrival) = self.queue.try_recv() else {
+                break;
+            };
+            self.count_taken(&arrival);
+            self.ahead.push_back(arrival);
+        }
+        let deadline = Arrival::Deadline { generation };
+        match self.ahead.pop_front() {
+            Some(first) => {
+                self.ahead.push_back(deadline);
+                Woken::Arrived(first)
+            }
+            None => Woken::Arrived(deadline),
+        }
     }
 
     /// Every cell's value not yet taken.
