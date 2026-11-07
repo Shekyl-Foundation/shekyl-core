@@ -212,7 +212,8 @@ pub enum InitError {
 /// Subsequent calls in the same process return
 /// [`InitError::AlreadyInitialized`].
 ///
-/// Stderr's colour is [`LineColour::stderr`] on this process's stderr.
+/// Stderr is coloured only when it is a terminal and `NO_COLOR` is unset or
+/// empty.
 pub fn init(config: Config) -> Result<LoggerGuard, InitError> {
     let stderr = std::io::stderr();
     let colour = LineColour::stderr(stderr.is_terminal(), NoColor::from_env());
