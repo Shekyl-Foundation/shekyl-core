@@ -831,9 +831,9 @@ impl Spender {
             &key_images,
             open.pseudo_outs(),
             &pqc_scalars,
-            tree.tree_root.as_bytes(),
+            &tree.tree_root,
             open.layers(),
-            tx_signable.to_bytes(),
+            tx_signable,
         );
         match verified {
             Ok(true) => assert!(

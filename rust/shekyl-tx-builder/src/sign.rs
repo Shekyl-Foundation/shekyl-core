@@ -194,15 +194,8 @@ pub fn sign_transaction_with_terms(
         &enc_amounts,
         &enc_labels,
     );
-    let prove_result = proof::prove(
-        &prove_inputs,
-        // Proof-crate boundary: both the root and the signable hash are
-        // bytes here (RAW_TYPE_NEWTYPE_MIGRATION.md original PR E).
-        tree.tree_root.as_bytes(),
-        tree.tree_depth,
-        tx_signable.to_bytes(),
-    )
-    .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
+    let prove_result = proof::prove(&prove_inputs, &tree.tree_root, tree.tree_depth, tx_signable)
+        .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
 
     // ── 8. Construct-side balance self-verify ────────────────────────
     // Run the *same* commitment-sum balance equation the daemon runs, over the
@@ -423,9 +416,9 @@ pub fn prove_backing_membership(
 
     let result = proof::prove_membership_only(
         &[prove_input],
-        tree.tree_root.as_bytes(),
+        &tree.tree_root,
         tree.tree_depth,
-        tx_signable.to_bytes(),
+        tx_signable,
         tree.tree_root.as_bytes(),
     )
     .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;

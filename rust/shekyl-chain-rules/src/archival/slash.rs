@@ -46,9 +46,7 @@
 use core::num::NonZeroU64;
 use std::collections::BTreeMap;
 
-use shekyl_archival_retention::settlement_select::{
-    issued_draw_term, settle_pair, SETTLEMENT_BEACON_LEN,
-};
+use shekyl_archival_retention::settlement_select::{issued_draw_term, settle_pair};
 use shekyl_archival_retention::{
     good_through, holds_shard_at, settle_support, settlement_window_slashable,
     slash_open_interval_to_append, SupportSettlementKey, MAX_BOND_BAD_INTERVALS,
@@ -57,7 +55,7 @@ use shekyl_types::archival::{
     BondRecord, HeldShard, Holdings, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
     SettlementRow, SlashLogEntry, SlashedHolding,
 };
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::fault::{Corrupt, RecordInvariant, SettlementCheck, ViewRead};
@@ -388,7 +386,7 @@ impl super::Transition {
         &self,
         view: &V,
         epoch: SettlementEpoch,
-    ) -> Result<[u8; SETTLEMENT_BEACON_LEN], ViewRead<V::Fault>> {
+    ) -> Result<BlockHash, ViewRead<V::Fault>> {
         let window = self
             .schedule
             .challenge_response_blocks()
@@ -403,8 +401,7 @@ impl super::Transition {
                 check: SettlementCheck::BeaconNotRecorded,
             }));
         }
-        let beacon = recorded(view, BlockHeight::from_raw(at))?.header.hash;
-        Ok(*beacon.as_bytes())
+        Ok(recorded(view, BlockHeight::from_raw(at))?.header.hash)
     }
 
     /// The slashes logged against `persona` strictly above `height`: the

@@ -163,7 +163,7 @@ fn verdict_reaches_the_ledger_row_and_the_balance() {
     indexes.process_scanned_outputs(
         &mut ledger,
         shekyl_types::BlockHeight::from_raw(7),
-        [0x22u8; 32],
+        shekyl_types::BlockHash::from_bytes([0x22u8; 32]),
         outputs,
     );
     assert_eq!(ledger.transfers.len(), 1);

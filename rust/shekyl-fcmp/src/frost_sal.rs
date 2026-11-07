@@ -33,6 +33,7 @@ use dalek_ff_group::{EdwardsPoint, Scalar};
 use transcript::{RecommendedTranscript, Transcript};
 
 use modular_frost::{algorithm::Algorithm, Participant, ThresholdKeys, ThresholdView};
+use shekyl_types::TxSignableHash;
 
 pub use shekyl_fcmp_proofs::sal::multisig::{Ed25519T, SalAlgorithm};
 use shekyl_fcmp_proofs::sal::{RerandomizedOutput, SpendAuthAndLinkability};
@@ -74,7 +75,7 @@ pub struct FrostSalInput {
     /// (`shekyl_wire::tx_signable`; the signing envelope §2.2): the FROST
     /// SAL proves over it like the single-signer SAL, so a multisig spend
     /// commits to its network itself.
-    pub tx_signable: [u8; 32],
+    pub tx_signable: TxSignableHash,
 }
 
 /// Result of FROST preprocessing (round 1).
@@ -598,7 +599,7 @@ mod tests {
             key_image_gen: [0; 32],
             commitment: [0; 32],
             spend_key_x: [0; 32],
-            tx_signable: [0; 32],
+            tx_signable: TxSignableHash::from_bytes([0; 32]),
         };
         let result = FrostSalSession::new(&input);
         assert!(result.is_err());
@@ -618,7 +619,7 @@ mod tests {
             key_image_gen: i.to_bytes(),
             commitment: c.to_bytes(),
             spend_key_x: x.to_repr(),
-            tx_signable: [0xAB; 32],
+            tx_signable: TxSignableHash::from_bytes([0xAB; 32]),
         };
 
         let session = FrostSalSession::new(&input);
@@ -645,7 +646,7 @@ mod tests {
             key_image_gen: i.to_bytes(),
             commitment: c.to_bytes(),
             spend_key_x: x.to_repr(),
-            tx_signable: [0xCD; 32],
+            tx_signable: TxSignableHash::from_bytes([0xCD; 32]),
         };
 
         let s1 = FrostSalSession::new(&input).unwrap();
@@ -840,7 +841,7 @@ mod tests {
             key_image_gen: i.to_bytes(),
             commitment: c.to_bytes(),
             spend_key_x: x.to_repr(),
-            tx_signable: [0xEF; 32],
+            tx_signable: TxSignableHash::from_bytes([0xEF; 32]),
         };
 
         let mut session = FrostSalSession::new(&input).unwrap();

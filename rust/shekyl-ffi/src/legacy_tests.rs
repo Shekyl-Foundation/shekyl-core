@@ -458,7 +458,8 @@ fn test_pqc_keygen_sign_verify_ffi() {
         assert!(!kp.public_key.ptr.is_null());
         assert!(!kp.secret_key.ptr.is_null());
 
-        let msg = b"ffi hybrid pq signature";
+        // The input's signing payload hash is SigningPayloadHash::LEN bytes.
+        let msg = [0x6du8; shekyl_types::SigningPayloadHash::LEN];
         let sig = shekyl_pqc_sign(
             kp.secret_key.ptr,
             kp.secret_key.len,
@@ -467,6 +468,17 @@ fn test_pqc_keygen_sign_verify_ffi() {
         );
         assert!(sig.success);
         assert!(!sig.signature.ptr.is_null());
+
+        let short_sign = shekyl_pqc_sign(
+            kp.secret_key.ptr,
+            kp.secret_key.len,
+            msg.as_ptr(),
+            msg.len() - 1,
+        );
+        assert!(
+            !short_sign.success && short_sign.signature.ptr.is_null(),
+            "a short message is not a signing payload hash"
+        );
 
         let result = shekyl_pqc_verify(
             1,
@@ -478,6 +490,23 @@ fn test_pqc_keygen_sign_verify_ffi() {
             msg.len(),
         );
         assert_eq!(result, 0, "expected success (0), got error code {result}");
+
+        // A message that is not a signing payload hash fails as a parse,
+        // before any signature check.
+        let short = shekyl_pqc_verify(
+            1,
+            kp.public_key.ptr,
+            kp.public_key.len,
+            sig.signature.ptr,
+            sig.signature.len,
+            msg.as_ptr(),
+            msg.len() / 2,
+        );
+        assert_eq!(
+            short,
+            shekyl_crypto_pq::error::PqcVerifyError::DeserializationFailed as u8,
+            "a short message must fail as a parse"
+        );
 
         shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
         shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
@@ -523,7 +552,7 @@ fn test_page_size_nonzero() {
 fn test_pqc_verify_rejects_modified_signature() {
     unsafe {
         let kp = shekyl_pqc_keypair_generate();
-        let msg = b"ffi hybrid pq signature";
+        let msg = [0x6du8; shekyl_types::SigningPayloadHash::LEN];
         let sig = shekyl_pqc_sign(
             kp.secret_key.ptr,
             kp.secret_key.len,
@@ -546,6 +575,8 @@ fn test_pqc_verify_rejects_modified_signature() {
             msg.as_ptr(),
             msg.len(),
         );
+        // The message is 64 bytes, so it parses: the refusal is the
+        // signature's (a decode or a verify failure), not the length check's.
         assert_ne!(result, 0, "corrupted signature should not verify");
 
         shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);

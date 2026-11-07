@@ -33,7 +33,7 @@ use std::ops::Range;
 use shekyl_engine_state::{
     transfer::eligible_height, LedgerBlock, LedgerIndexes, ReceiveAttribution, TransferDetails,
 };
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHash, BlockHeight};
 
 use crate::{balance::BalanceSummary, output::WalletOutput, scan::Timelocked};
 
@@ -139,7 +139,7 @@ pub trait LedgerIndexesExt {
         &mut self,
         ledger: &mut LedgerBlock,
         block_height: BlockHeight,
-        block_hash: [u8; 32],
+        block_hash: BlockHash,
         outputs: Timelocked,
     ) -> Range<usize>;
 }
@@ -149,7 +149,7 @@ impl LedgerIndexesExt for LedgerIndexes {
         &mut self,
         ledger: &mut LedgerBlock,
         block_height: BlockHeight,
-        block_hash: [u8; 32],
+        block_hash: BlockHash,
         outputs: Timelocked,
     ) -> Range<usize> {
         let outputs = outputs.into_inner();

@@ -3301,6 +3301,20 @@ a **cost** (a slower recovery), not a **break** (a failure to propagate).
 Fluff-on-expiry *already* recovers slowly (p99 662 s, because the embargo is a
 144 s memoryless timer); reshape's marginal cost is only the rare W3 second cycle.
 
+> **Status note 2026-11-06.** The three-day lifetime and the re-relay loop
+> left with the C++ pool. The table above is the measurement as it was taken.
+> The executable form of "a cost, not a break" is the cap's own budget, read
+> off the embargo the measurement builds (`RecoveryBudget`): the worst-case
+> median stays inside `(retry_cap + 1)` embargo means, and the worst-case p99
+> stays inside that many of the timer's 1-in-100 failure deadlines. Pool
+> residence (`DISPATCHED_PROOF_LIFE`, CEN-M10) is how long the same
+> bytes stay submittable. The wallet asks again at that life minus one
+> block only for a transaction last seen in chain. An origin still held
+> past its publication budget is judged when the state is read, on the
+> daemon's clock. A fluffed transaction measures the fee ladder's
+> lookback from the height the wallet first observed publication. This
+> instrument prices the embargo.
+
 ### 14.6 The one residual where C3 buys something real: W3
 
 When **both** stem successors are black holes (W3, §12), reshape's re-stem has
@@ -17382,10 +17396,17 @@ nothing moves. The class's state (`HiddenClass`: `Empty`, `One`,
 `Several`) is reported when it changes, first at the first epoch
 rebuild (`HiddenClassWatch` in `hidden_slot.rs`). Until that rebuild
 the watch is unarmed: the dialer's opening sessions are not a report.
-One is the class-of-one rotation report (`hop-0 edge cannot rotate`),
-a warning. Empty is a warning that a transaction this node originates
-has no address-hiding session to leave on. A return to several is
-noted as the session count. The three lines name the class. They do
+One is the class-of-one rotation report (`hop-0 edge cannot rotate`).
+Empty says that a transaction this node originates has no
+address-hiding session to leave on. A return to several is noted as
+the session count. All three are info lines (amended 2026-11-06, the
+alpha.11 hunt): Tor churn takes a node through empty and one on its way
+back to several, and the operator can change none of it. A transaction
+the node originates and holds is warned where it is held, in the relay's
+dispatch, which names the hold: no address-hiding session, or a session
+is up and this origin's pin is exhausted for the epoch. A managed Tor's
+posture line says the empty class too. *Records-was: empty and one were warnings.*
+The three lines name the class. They do
 not say an origin pin has resumed: a pin whose frozen set is exhausted
 stays `NoOwnEdge` until the epoch ends (§98.5). A rebuild that finds
 the state unchanged reports nothing. `Relay::new` refuses `stems < 2` with a hidden connector (a new

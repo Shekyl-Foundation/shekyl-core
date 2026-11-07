@@ -1191,7 +1191,7 @@ at `c72048125560c11112daaf464a6acfa65cc3e1da`     curve-tree root CEN-B5 compare
     (at `c72048125560c11112daaf464a6acfa65cc3e1da` `src/blockchain_db/lmdb/db_lmdb.cpp`). (c) `ref_height` is
     bounded by `block_exists` and `FCMP_REFERENCE_BLOCK_MIN_AGE = 5` /
     `MAX_AGE = 100` only (at `c72048125560c11112daaf464a6acfa65cc3e1da` `src/cryptonote_core/blockchain.cpp`,
-    `src/cryptonote_config.h:329`–`:331`), so `ref_height = 0` is
+    `src/cryptonote_config.h:158`–`:159`), so `ref_height = 0` is
     selectable while `chain_height ≤ 100`, and all four consumers
     (at `c72048125560c11112daaf464a6acfa65cc3e1da` `blockchain.cpp:3767`, `:3916`, `:4178`; `src/rpc/daemon_submit_ffi.cpp`)
     then hand zeros to `shekyl_fcmp_verify`. (d) Zeros are not rejected at

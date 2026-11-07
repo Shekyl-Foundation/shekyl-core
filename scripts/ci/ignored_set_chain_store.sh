@@ -14,9 +14,13 @@
 #
 # The set: the shard-boundary deletion test over real multi-input spends
 # (`prune_tests::the_boundary_batch_discards_closed_shards_on_real_spends`,
-# minutes of proving — the unit lane runs its padded-record twin) and the
-# two benches (`weights_read_bench`, `slash_scan_bench`). An `#[ignore]`d
-# test no scheduled lane runs is a deleted test with a comment on it.
+# minutes of proving — the unit lane runs its padded-record twin), the
+# two benches (`weights_read_bench`, `slash_scan_bench`) and the RT-W10
+# floor-device harness (`rt_w10_coinbase_span_cost`), which here writes into
+# a temporary directory it removes: the run proves the harness still runs,
+# and its timings off the floor device are not a measurement. An
+# `#[ignore]`d test no scheduled lane runs is a deleted test with a comment
+# on it.
 #
 # Rule 47: the lane asserts every subject it owns is in the set before
 # running it — a renamed, deleted or un-ignored member fails here by name,
@@ -28,13 +32,19 @@
 # count that judges it reads to the end of its input (a `grep -q` can end
 # the pipe early and fail `pipefail` on a match); the run's own exit is the
 # verdict and travels through no pipe.
+#
+# `--check` (ignored_set_mode.sh) stops after this judgement. The per-PR
+# Rust job uses it; the run below is the nightly lane.
 set -euo pipefail
+. "$(dirname "$0")/ignored_set_mode.sh"
+ignored_set_mode "$@"
 cd "$(dirname "$0")/../../rust"
 branch="${BRANCH:-the checked-out ref}"
 
-list=$(cargo test --locked --release -p shekyl-chain-store --lib -- --list --ignored)
+list=$(cargo test --locked "${ignored_set_profile[@]}" -p shekyl-chain-store --lib -- --list --ignored)
 for subject in \
   'store::prune_tests::the_boundary_batch_discards_closed_shards_on_real_spends' \
+  'store::rt_w10_cost::rt_w10_coinbase_span_cost' \
   'store::slash_scan_bench_tests::slash_scan_bench' \
   'store::weights_read_bench_tests::weights_read_bench'
 do
@@ -46,6 +56,7 @@ do
 done
 count=$(printf '%s\n' "$list" | grep -c ': test$')
 echo "shekyl-chain-store ignored set: ${count} test(s)"
+ignored_set_stop_after_judgement
 
 START=$(date +%s)
 cargo test --locked --release -p shekyl-chain-store --lib -- --ignored --nocapture

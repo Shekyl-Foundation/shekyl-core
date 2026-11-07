@@ -48,6 +48,10 @@ shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 tracing = "0.1"
 
 [dev-dependencies]
+# The origin-budget pin reads `RecoveryBudget::for_cap`'s cycle count.
+# The feature stays off the production dependency: dependents do not
+# build the conformance instruments.
+shekyl-relay-privacy = { path = "../shekyl-relay-privacy", features = ["conformance"] }
 # `SplitMix64`, for the unit tests only. Not a grader feature.
 shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 # The owner's tests drive it from the far side of the session layer's

@@ -823,10 +823,7 @@ pub(crate) fn apply_scan_result_to_state(
     // result's claim. (For `start == 1`, both sides must be `None`.)
     let start = result.processed_height_range.start;
     if start.to_raw() > 1 {
-        let stored = ledger
-            .block_hash_at(start - BlockCount::ONE)
-            .copied()
-            .map(BlockHash::from_bytes);
+        let stored = ledger.block_hash_at(start - BlockCount::ONE).copied();
         match (stored, result.parent_hash) {
             (Some(stored_hash), Some(claimed_hash)) if stored_hash == claimed_hash => {}
             // Stored / claimed disagree, or one side is `None` and the
@@ -1005,8 +1002,7 @@ pub(crate) fn apply_scan_result_to_state(
 
         let outputs = transfers_by_height.remove(&h).unwrap_or_default();
         let timelocked = Timelocked::from_vec(outputs);
-        let inserted_range =
-            indexes.process_scanned_outputs(ledger, h, block_hash.to_bytes(), timelocked);
+        let inserted_range = indexes.process_scanned_outputs(ledger, h, block_hash, timelocked);
         // Per-height ranges are contiguous suffixes of
         // `ledger.transfers`, monotonically advancing across the loop
         // (each iteration appends, never reorders). Flattening to a
@@ -1187,7 +1183,7 @@ pub(crate) fn populate_engine_handle_fields(
         if td.output_handle.is_none() {
             td.output_handle = Some(derive_output_handle(
                 view_secret,
-                td.tx_hash.as_bytes(),
+                &td.tx_hash,
                 td.internal_output_index.to_raw(),
             ));
         }

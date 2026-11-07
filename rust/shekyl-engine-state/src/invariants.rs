@@ -380,7 +380,7 @@ mod tests {
         transfer::{TransferDetails, SPENDABLE_AGE},
         tx_meta_block::{ScannedPoolTx, TxMetaBlock, TxSecretKey, TxSecretKeys},
     };
-    use shekyl_types::BlockHeight;
+    use shekyl_types::{BlockHash, BlockHeight};
     use std::collections::BTreeMap;
     use zeroize::Zeroizing;
 
@@ -435,12 +435,12 @@ mod tests {
         let transfers = vec![mk_transfer(1, 10), mk_transfer(2, 15), mk_transfer(3, 20)];
         let ledger = LedgerBlock::new(
             transfers,
-            BlockchainTip::new(BlockHeight::from_raw(30), [0xAA; 32]),
+            BlockchainTip::new(BlockHeight::from_raw(30), BlockHash::from_bytes([0xAA; 32])),
             ReorgBlocks {
                 blocks: vec![
-                    (BlockHeight::from_raw(28), [1; 32]),
-                    (BlockHeight::from_raw(29), [2; 32]),
-                    (BlockHeight::from_raw(30), [0xAA; 32]),
+                    (BlockHeight::from_raw(28), BlockHash::from_bytes([1; 32])),
+                    (BlockHeight::from_raw(29), BlockHash::from_bytes([2; 32])),
+                    (BlockHeight::from_raw(30), BlockHash::from_bytes([0xAA; 32])),
                 ],
             },
         );
@@ -459,7 +459,10 @@ mod tests {
         let transfers = vec![mk_transfer(1, 1_000)];
         let ledger = LedgerBlock::new(
             transfers,
-            BlockchainTip::new(BlockHeight::from_raw(500), [0xAA; 32]),
+            BlockchainTip::new(
+                BlockHeight::from_raw(500),
+                BlockHash::from_bytes([0xAA; 32]),
+            ),
             ReorgBlocks::default(),
         );
         let w = WalletLedger::new(
@@ -611,7 +614,7 @@ mod tests {
         spent_row.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
         let ledger = LedgerBlock::new(
             vec![spent_row],
-            BlockchainTip::new(BlockHeight::from_raw(30), [0xAA; 32]),
+            BlockchainTip::new(BlockHeight::from_raw(30), BlockHash::from_bytes([0xAA; 32])),
             ReorgBlocks::default(),
         );
         let w = WalletLedger::new(
@@ -643,7 +646,7 @@ mod tests {
         let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());
         let ledger = LedgerBlock::new(
             vec![mk_transfer(0x11, 10)],
-            BlockchainTip::new(BlockHeight::from_raw(30), [0xAA; 32]),
+            BlockchainTip::new(BlockHeight::from_raw(30), BlockHash::from_bytes([0xAA; 32])),
             ReorgBlocks::default(),
         );
         let mut w = WalletLedger::new(
@@ -679,11 +682,14 @@ mod tests {
     fn reorg_trail_out_of_order_is_refused() {
         let ledger = LedgerBlock::new(
             Vec::new(),
-            BlockchainTip::new(BlockHeight::from_raw(100), [0xAA; 32]),
+            BlockchainTip::new(
+                BlockHeight::from_raw(100),
+                BlockHash::from_bytes([0xAA; 32]),
+            ),
             ReorgBlocks {
                 blocks: vec![
-                    (BlockHeight::from_raw(10), [1; 32]),
-                    (BlockHeight::from_raw(9), [2; 32]),
+                    (BlockHeight::from_raw(10), BlockHash::from_bytes([1; 32])),
+                    (BlockHeight::from_raw(9), BlockHash::from_bytes([2; 32])),
                 ],
             },
         );
@@ -701,11 +707,14 @@ mod tests {
     fn reorg_trail_duplicate_height_is_refused() {
         let ledger = LedgerBlock::new(
             Vec::new(),
-            BlockchainTip::new(BlockHeight::from_raw(100), [0xAA; 32]),
+            BlockchainTip::new(
+                BlockHeight::from_raw(100),
+                BlockHash::from_bytes([0xAA; 32]),
+            ),
             ReorgBlocks {
                 blocks: vec![
-                    (BlockHeight::from_raw(10), [1; 32]),
-                    (BlockHeight::from_raw(10), [2; 32]),
+                    (BlockHeight::from_raw(10), BlockHash::from_bytes([1; 32])),
+                    (BlockHeight::from_raw(10), BlockHash::from_bytes([2; 32])),
                 ],
             },
         );
@@ -723,9 +732,9 @@ mod tests {
     fn reorg_trail_above_tip_is_refused() {
         let ledger = LedgerBlock::new(
             Vec::new(),
-            BlockchainTip::new(BlockHeight::from_raw(10), [0xAA; 32]),
+            BlockchainTip::new(BlockHeight::from_raw(10), BlockHash::from_bytes([0xAA; 32])),
             ReorgBlocks {
-                blocks: vec![(BlockHeight::from_raw(11), [1; 32])],
+                blocks: vec![(BlockHeight::from_raw(11), BlockHash::from_bytes([1; 32]))],
             },
         );
         let w = WalletLedger::new(
@@ -749,7 +758,10 @@ mod tests {
         t.key_image = Some(KeyImage::from_canonical_bytes([1; 32]));
         let ledger = LedgerBlock::new(
             vec![t],
-            BlockchainTip::new(BlockHeight::from_raw(100), [0xAA; 32]),
+            BlockchainTip::new(
+                BlockHeight::from_raw(100),
+                BlockHash::from_bytes([0xAA; 32]),
+            ),
             ReorgBlocks::default(),
         );
         let w = WalletLedger::new(
@@ -775,7 +787,10 @@ mod tests {
         t.key_image = None;
         let ledger = LedgerBlock::new(
             vec![t],
-            BlockchainTip::new(BlockHeight::from_raw(100), [0xAA; 32]),
+            BlockchainTip::new(
+                BlockHeight::from_raw(100),
+                BlockHash::from_bytes([0xAA; 32]),
+            ),
             ReorgBlocks::default(),
         );
         let w = WalletLedger::new(
@@ -799,7 +814,10 @@ mod tests {
         t.key_image = None;
         let ledger = LedgerBlock::new(
             vec![t],
-            BlockchainTip::new(BlockHeight::from_raw(100), [0xAA; 32]),
+            BlockchainTip::new(
+                BlockHeight::from_raw(100),
+                BlockHash::from_bytes([0xAA; 32]),
+            ),
             ReorgBlocks::default(),
         );
         let w = WalletLedger::new(
@@ -822,7 +840,10 @@ mod tests {
         t.spent_height = Some(shekyl_types::BlockHeight::from_raw(20));
         let ledger = LedgerBlock::new(
             vec![t],
-            BlockchainTip::new(BlockHeight::from_raw(100), [0xAA; 32]),
+            BlockchainTip::new(
+                BlockHeight::from_raw(100),
+                BlockHash::from_bytes([0xAA; 32]),
+            ),
             ReorgBlocks::default(),
         );
         let w = WalletLedger::new(
@@ -850,7 +871,10 @@ mod tests {
         t2.key_image = Some(KeyImage::from_canonical_bytes([0xCC; 32]));
         let ledger = LedgerBlock::new(
             vec![t1, t2],
-            BlockchainTip::new(BlockHeight::from_raw(100), [0xAA; 32]),
+            BlockchainTip::new(
+                BlockHeight::from_raw(100),
+                BlockHash::from_bytes([0xAA; 32]),
+            ),
             ReorgBlocks::default(),
         );
         let w = WalletLedger::new(
@@ -875,7 +899,7 @@ mod tests {
         let transfers = vec![mk_transfer(1, 100)];
         let ledger = LedgerBlock::new(
             transfers,
-            BlockchainTip::new(BlockHeight::from_raw(50), [0; 32]),
+            BlockchainTip::new(BlockHeight::from_raw(50), BlockHash::from_bytes([0; 32])),
             ReorgBlocks::default(),
         );
         let w = WalletLedger::new(

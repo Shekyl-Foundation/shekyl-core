@@ -51,7 +51,7 @@ use shekyl_crypto_pq::signature::{
 use shekyl_fcmp::proof::{verify_membership_only, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_network::NetworkId;
-use shekyl_types::TxSignableHash;
+use shekyl_types::{CurveTreeRoot, TxSignableHash};
 use thiserror::Error;
 
 /// Rejection reasons for the §7.1 verify body. Every variant is a consensus
@@ -689,7 +689,7 @@ pub fn emission_vin_verify_claims_under(
 /// with the field it compared; its job moved into the proof.
 pub fn emission_vin_verify_backing(
     vin: &ArchivalRewardEmissionVin,
-    tree_root: &[u8; 32],
+    tree_root: &CurveTreeRoot,
     tree_depth: u8,
     tx_signable: &TxSignableHash,
 ) -> Result<BackingVerified, EmissionVerifyError> {
@@ -708,7 +708,7 @@ pub fn emission_vin_verify_backing(
         tree_depth,
         // The transaction's one network-bound message (the signing envelope
         // §2.2): the backing proof proves over it like every SAL.
-        tx_signable.to_bytes(),
+        *tx_signable,
     )?;
     if !ok {
         return Err(EmissionVerifyError::BackingRejected(

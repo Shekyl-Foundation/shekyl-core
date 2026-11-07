@@ -7,6 +7,7 @@
 use libfuzzer_sys::fuzz_target;
 use shekyl_fcmp::leaf::PqcKeyScalar;
 use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
+use shekyl_types::{CurveTreeRoot, TxSignableHash};
 
 fuzz_target!(|data: &[u8]| {
     // Attempt to interpret raw bytes as an FCMP++ proof and verify it.
@@ -22,9 +23,9 @@ fuzz_target!(|data: &[u8]| {
             &[KeyImage::from_canonical_bytes([0u8; 32])],
             &[[0u8; 32]],
             &[PqcKeyScalar::from_canonical_bytes([0u8; 32]).expect("zero is canonical")],
-            &[0u8; 32],
+            &CurveTreeRoot::from_bytes([0u8; 32]),
             8,
-            [0u8; 32],
+            TxSignableHash::from_bytes([0u8; 32]),
         );
         return;
     }
@@ -45,6 +46,8 @@ fuzz_target!(|data: &[u8]| {
     if data.len() >= 67 {
         signable_tx_hash.copy_from_slice(&data[35..67]);
     }
+    let tree_root = CurveTreeRoot::from_bytes(tree_root);
+    let signable_tx_hash = TxSignableHash::from_bytes(signable_tx_hash);
 
     let key_images: Vec<KeyImage> = (0..num_inputs as usize)
         .map(|i| {
