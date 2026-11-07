@@ -11,14 +11,15 @@
 //! commands and never wait for them to be applied.
 //!
 //! A [`Tick`] is nanoseconds since the clock's origin. [`MonotonicClock`] is
-//! the production clock. [`ManualClock`] is the one tests move by hand.
+//! the production clock, one origin for the whole process. [`ManualClock`]
+//! is the one tests move by hand.
 
 #![deny(unsafe_code)]
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Nanoseconds since the clock's origin.
@@ -44,11 +45,11 @@ impl Tick {
 /// A [`Tick`] can be built from any number, so two of them say nothing
 /// about whether they are comparable. This one is minted only by
 /// [`Clock::stamp`], and only this crate's two clocks implement
-/// [`Clock`]. Two stamps taken from clones of one clock share its origin.
-/// The daemon's process clock is one [`MonotonicClock`], built by the
-/// network and handed to every owner through its engine, so a stamp the
-/// dialer takes and one the Tor supervisor takes are on one timeline
-/// (`DIALER_OUTAGE_EVIDENCE.md` §6.1).
+/// [`Clock`]. Every [`MonotonicClock`] in a process reads from the one
+/// process origin, so a stamp the dialer takes and one the Tor supervisor
+/// takes are on one timeline whichever clock each was handed
+/// (`DIALER_OUTAGE_EVIDENCE.md` §6.1). A [`ManualClock`] keeps its own
+/// time, for tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Stamp(Tick);
 
@@ -130,20 +131,26 @@ impl Clock for ManualClock {
     }
 }
 
-/// Production clock. The origin is the moment of construction.
+/// The process origin every [`MonotonicClock`] measures from: the first
+/// instant any of them was built.
+static PROCESS_ORIGIN: OnceLock<Instant> = OnceLock::new();
+
+/// Production clock. Every instance reads the one process origin, so two
+/// clocks built at different times give comparable ticks; the instance
+/// holds no time of its own.
 ///
 /// `Instant` on Linux is `CLOCK_MONOTONIC`. That clock does not advance
 /// while the system is suspended, so a deadline is not late by the time
 /// the machine spent suspended.
 #[derive(Clone, Debug)]
 pub struct MonotonicClock {
-    origin: Instant,
+    origin: &'static Instant,
 }
 
 impl MonotonicClock {
     pub fn new() -> Self {
         Self {
-            origin: Instant::now(),
+            origin: PROCESS_ORIGIN.get_or_init(Instant::now),
         }
     }
 }
