@@ -3,16 +3,20 @@
 # All rights reserved.
 # BSD-3-Clause
 
-# Local-only cargo-fuzz harness for the `tx_extra` codec — the single
-# implementation parsing untrusted block-path bytes since the C++ parser
-# left (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q5b). Isolated from the parent
-# workspace via its own [workspace] table (same shape as shekyl-fcmp/fuzz)
-# so stable-Rust CI never attempts to resolve libfuzzer-sys. Builds and
-# runs only under nightly:
-#   cargo +nightly fuzz run fuzz_tx_extra_parse corpus/fuzz_tx_extra_parse seeds/fuzz_tx_extra_parse
-# The seeds (`seeds/fuzz_tx_extra_parse/`, committed) are the C++ fuzzer's
-# corpus (`tests/data/fuzz/tx-extra/`), moved here with the target they
-# seed; `corpus/` is the grown, uncommitted working set.
+# Local-only cargo-fuzz harnesses for the wire parsers that read untrusted
+# bytes: the `tx_extra` codec (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q5b), the
+# block parser and the transaction parser. Isolated from the parent
+# workspace via its own [workspace] table and lockfile (same shape as
+# shekyl-fcmp/fuzz), so the workspace's own checks never resolve
+# libfuzzer-sys. The Rust CI job type-checks the harnesses on the pinned
+# stable toolchain (`cargo check --manifest-path`), the API-drift gate;
+# running them needs nightly:
+#   cargo +nightly fuzz run <target> corpus/<target> seeds/<target>
+# `seeds/<target>/` is committed: the tx_extra seeds are the inherited
+# fuzzer's tx-extra corpus; the block seeds are the regtest coinbase blocks
+# (`tests/vectors/`); the transaction seeds are the fixtures' transactions
+# (`tests/fixtures/`) and those blocks' miner transactions. `corpus/` is
+# the grown, uncommitted working set.
 
 [package]
 name = "shekyl-wire-fuzz"
@@ -31,6 +35,20 @@ shekyl-wire = { path = ".." }
 [[bin]]
 name = "fuzz_tx_extra_parse"
 path = "fuzz_targets/fuzz_tx_extra_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_block_parse"
+path = "fuzz_targets/fuzz_block_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_tx_parse"
+path = "fuzz_targets/fuzz_tx_parse.rs"
 test = false
 doc = false
 bench = false

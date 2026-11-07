@@ -238,31 +238,45 @@ impl std::fmt::Display for ControlError {
 
 impl std::error::Error for ControlError {}
 
-/// Where asynchronous `650` events (`STREAM`, `STATUS_CLIENT`, …) are routed: the
-/// bootstrap gate, the measurement consumer, and the supervisor. The actor only ever
-/// *sends* into it.
+/// Where asynchronous `650` events (`STREAM`, `STATUS_CLIENT`, …) are routed.
+/// The actor only ever *sends* into it, and never waits
+/// (`TOR_SUPERVISOR.md` `TSR-F2`).
 ///
 /// Carries [`ControlReply`]s, a forensic surface, so it is not `Debug`.
 ///
-/// **Bounded, and the actor never waits on it** (`TOR_SUPERVISOR.md` `TSR-F2`). It holds
-/// [`EVENT_QUEUE_EVENTS`]; an event that arrives while it is full is dropped and counted,
-/// and the count is the consumer's to read ([`EventReceiver::dropped`]). Anyone who can
-/// make tor log can make events arrive, including a peer misbehaving at our onion, so an
-/// unbounded queue would be a memory channel an outsider can fill. Waiting instead of
-/// dropping would stall the read loop, and with it every command reply.
+/// Three ways to make one, and each holds at most [`EVENT_QUEUE_EVENTS`]:
 ///
-/// `Clone` so a supervisor can hand each incarnation the same long-lived sink: the
-/// consumer's receiver and the drop count survive restarts, and senders are
-/// per-incarnation. **Consequence for consumers:** because the supervisor retains a
-/// sender clone across restarts, the receiver does *not* observe all-senders-dropped
-/// when an incarnation dies. A supervised consumer must detect incarnation death through
-/// the supervisor's posture watch (the wallet's `WalletTorControl`, or the daemon's
-/// supervisor once it exists), not through `recv() == None`, which is correct only for a
-/// directly spawned, sole-sender actor.
+/// - [`Self::bounded`] keeps the events in its own queue and hands back the
+///   [`EventReceiver`]. `Clone` shares that queue and its drop count. The
+///   receiver does not see all-senders-dropped when one clone goes: incarnation
+///   death is the supervisor's posture, not `recv() == None`.
+/// - [`Self::feeding`] takes each event into a queue the consumer already
+///   keeps. The daemon's supervisor does this, so every discrete input lands
+///   in one inbox (`TOR_SUPERVISOR.md` §5). The feed says [`Fed::Full`] past
+///   the bound, and the sink counts that drop ([`Self::dropped`]).
+/// - [`Self::unsubscribed`] is the sink for a caller that does not issue
+///   `SETEVENTS`: stake serving, an ephemeral control connection, the spikes.
+///   It drops every event and counts none.
+///
+/// Anyone who can make tor log can make events arrive, including a peer
+/// misbehaving at our onion, so neither queue is unbounded. Waiting instead
+/// of dropping would stall the read loop, and with it every command reply.
 #[derive(Clone)]
 pub struct EventSink {
-    sender: mpsc::Sender<ControlReply>,
+    feed: Arc<dyn Fn(ControlReply) -> Fed + Send + Sync>,
     dropped: Arc<AtomicU64>,
+}
+
+/// What a feed did with one event ([`EventSink::feeding`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fed {
+    /// The consumer holds it.
+    Held,
+    /// The consumer already holds [`EVENT_QUEUE_EVENTS`]: the event is
+    /// dropped and counted.
+    Full,
+    /// The consumer is gone: the event is discarded, not counted.
+    Gone,
 }
 
 /// The consumer's end of an [`EventSink`]: the held events, and how many were dropped
@@ -277,33 +291,46 @@ impl EventSink {
     #[must_use]
     pub fn bounded() -> (Self, EventReceiver) {
         let (sender, receiver) = mpsc::channel(EVENT_QUEUE_EVENTS);
-        let dropped = Arc::new(AtomicU64::new(0));
-        (
-            Self {
-                sender,
-                dropped: Arc::clone(&dropped),
-            },
-            EventReceiver { receiver, dropped },
-        )
+        let sink = Self::feeding(move |reply| match sender.try_send(reply) {
+            Ok(()) => Fed::Held,
+            Err(mpsc::error::TrySendError::Full(_)) => Fed::Full,
+            Err(mpsc::error::TrySendError::Closed(_)) => Fed::Gone,
+        });
+        let dropped = Arc::clone(&sink.dropped);
+        (sink, EventReceiver { receiver, dropped })
     }
 
-    /// A sink with no consumer: **the correct production value today**, and a
-    /// place to notice when it stops being one.
+    /// A sink whose events `feed` takes into a queue the consumer keeps. The
+    /// feed holds at most [`EVENT_QUEUE_EVENTS`] and never waits: it says
+    /// [`Fed::Full`] when it holds that many, and the sink counts the drop.
+    /// It is called on the control read loop.
+    pub fn feeding(feed: impl Fn(ControlReply) -> Fed + Send + Sync + 'static) -> Self {
+        Self {
+            feed: Arc::new(feed),
+            dropped: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// How many events were dropped because the consumer was full, since the
+    /// sink was made, across every incarnation that shared it. It never
+    /// decreases.
+    #[must_use]
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    /// A sink for a caller that does not issue [`Command::SetEvents`].
     ///
-    /// Async `650` events arrive only after a `SETEVENTS`
-    /// ([`Command::SetEvents`]), and no production call site issues one: the
-    /// DQ-T0.4 `STREAM` measurement is a harness, and §3c's retraction settled
-    /// that bootstrap readiness is a `GETINFO` **poll**, not a subscription
-    /// ("a `GETINFO` poll is a command, not a subscription, so it never touches
-    /// `SETEVENTS`"). The daemon's supervisor will subscribe; until it exists, this
-    /// sink receives nothing, and wiring a consumer to it would be wiring a consumer
-    /// to silence.
+    /// Async `650` events arrive only after that command. Stake serving, an
+    /// ephemeral control connection, and the spikes do not subscribe, so this
+    /// is the sink they hold. The daemon's supervisor does subscribe, through
+    /// [`Self::feeding`], into its own inbox. Bootstrap readiness stays a
+    /// `GETINFO` poll, not a subscription.
     ///
     /// This exists rather than an inline `let (sink, _receiver) = EventSink::bounded()`
     /// because that shape is indistinguishable from a caller who dropped the
-    /// receiver by accident. Whoever adds the first production `SETEVENTS` has
-    /// to replace a call named `unsubscribed`, which is a question a reviewer
-    /// can see; deleting an anonymous `_receiver` is not.
+    /// receiver by accident. A caller that does not subscribe names
+    /// [`Self::unsubscribed`].
     ///
     /// The returned sink drops every event and counts none: routing treats a
     /// closed receiver as "the consumer is gone", which is not an overflow.
@@ -322,9 +349,9 @@ impl EventSink {
     /// The control read loop is the production caller. A caller that already
     /// holds a framed reply uses this same write.
     pub fn route(&self, reply: ControlReply) {
-        match self.sender.try_send(reply) {
-            Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
+        match (self.feed)(reply) {
+            Fed::Held | Fed::Gone => {}
+            Fed::Full => {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
             }
         }

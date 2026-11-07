@@ -218,6 +218,8 @@ jobs:
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_key_blob.rs
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_sig_blob.rs
             rust/shekyl-wire/fuzz/fuzz_targets/fuzz_tx_extra_parse.rs
+            rust/shekyl-wire/fuzz/fuzz_targets/fuzz_block_parse.rs
+            rust/shekyl-wire/fuzz/fuzz_targets/fuzz_tx_parse.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message1.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message2.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_open_one.rs
@@ -259,6 +261,7 @@ jobs:
           workspaces: |
             rust -> target
             rust/shekyl-fcmp/fuzz -> target
+            rust/shekyl-wire/fuzz -> target
             docs/formal/checkct/dynamic -> target
       - name: install cargo-audit
         # `cargo install --locked` is idempotent: on Swatinem cache
@@ -440,6 +443,12 @@ jobs:
         # No CARGO_TARGET_DIR: this workspace must not share rust/target.
         # Its own target/ is the second cache workspace above.
         run: cargo check --locked --manifest-path rust/shekyl-fcmp/fuzz/Cargo.toml
+      - name: compile the shekyl-wire fuzz harnesses
+        # The wire parsers that read untrusted bytes: the block, the
+        # transaction and tx_extra. Same shape as the fcmp step above: its
+        # own workspace and lockfile, type-checked on the pinned stable
+        # toolchain as the API-drift gate; running them needs nightly.
+        run: cargo check --locked --manifest-path rust/shekyl-wire/fuzz/Cargo.toml
       - name: "constant-time dynamic harness: fmt, clippy, tests"
         # docs/formal/checkct/dynamic is its own workspace (its own lockfile
         # pins the audited crypto-bigint) on the shipped toolchain (its
@@ -548,7 +557,7 @@ jobs:
           BAT5_STORE="$store" BAT5_MODE=phase BAT5_N=2 BAT5_PHASE_N=1 BAT5_LABEL=ci \
             cargo test --locked -p shekyl-p-serve --test ba_t5_floor_probe -- --ignored --nocapture
       - name: "Nightly ignored sets: each crate's ignored tests agree with its lane's list"
-        # The three nightly lanes judge `--list --ignored` in their scripts.
+        # The four nightly lanes judge `--list --ignored` in their scripts.
         # `--check` is that judgement and then stops. The listing is the debug
         # build the workspace tests above compiled. The nightly lists release
         # and runs the tests. Each script keeps its own rule.
@@ -556,6 +565,7 @@ jobs:
           bash scripts/ci/ignored_set_chain_ingest.sh --check
           bash scripts/ci/ignored_set_chain_store.sh --check
           bash scripts/ci/ignored_set_economics_sim.sh --check
+          bash scripts/ci/ignored_set_wire.sh --check
       - name: "shard-visual-x86-smoke"
         working-directory: rust
         # Option (c) of `docs/V3_SHARD_VISUALIZATION.md` "Where the bound is
@@ -597,6 +607,19 @@ jobs:
         # `working-directory`, `run`. Add a row there and a `-p` here in
         # the same commit.
         run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-curve-tree -p shekyl-mempool -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-tor-control-client -p shekyl-wire --lib -- -D warnings
+      - name: "shekyl-mempool: the policy build the economics sim links (no default features)"
+        working-directory: rust
+        # The economics sim depends on shekyl-mempool with
+        # `default-features = false`: the `policy` module alone, no store
+        # (ECONOMICS_SIM_PRODUCTION_REBASE.md, ESR-17). Every other dependent
+        # turns `pool` on, and the workspace runs above unify features, so
+        # none of them builds the crate the sim links. This lane lints and
+        # tests that build: a pool-only item reached from `policy`, or a
+        # test target that needs the pool without requiring the feature,
+        # fails here.
+        run: |
+          cargo clippy --locked -p shekyl-mempool --no-default-features --all-targets -- -D warnings
+          cargo test --locked -p shekyl-mempool --no-default-features
       - name: shekyl-standoff conformance suite (x86_64 only)
         working-directory: rust
         # `shekyl-standoff`'s conformance grading + negative controls

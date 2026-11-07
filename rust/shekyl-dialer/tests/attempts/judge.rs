@@ -514,7 +514,7 @@ fn the_probe_never_corroborates() {
 }
 
 /// **The judge's last sign of life on Tor** is published on the tally, as
-/// a tick on the process clock, for the posture line (§6): a stream that
+/// a stamp on the process clock, for the posture line (§6): a stream that
 /// opens moves it, and so does a byte a session receives; a failure does
 /// not. The edit that makes this red: not publishing a sign of life.
 #[test]
@@ -536,7 +536,7 @@ fn the_tally_carries_the_judges_last_sign_of_life() {
 
     rig.later(1_000);
     rig.life.received_now(held);
-    let now = rig.clock.now();
+    let now = rig.clock.stamp();
     rig.dialer.apply_verdicts(&mut rig.rng);
     assert_eq!(rig.dialer.tor_link_tally().last_sign_of_life, Some(now));
 }

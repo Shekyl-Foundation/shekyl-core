@@ -31,8 +31,8 @@ use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
+use crate::policy::FeeRate;
 use crate::pool::Pool;
-use crate::rate::FeeRate;
 use crate::view::KeyImages;
 
 /// Whether the node may show `record`'s transaction to anyone: public.

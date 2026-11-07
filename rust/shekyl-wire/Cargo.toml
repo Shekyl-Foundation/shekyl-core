@@ -66,6 +66,8 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-units = { path = "../shekyl-units" }
+# The RT-W10 harness's scratch output directory (`tests/rt_w10_tx_parse.rs`).
+tempfile = { workspace = true }
 # Single source for the coinbase maturity window consensus constant
 # (`COINBASE_LOCK_WINDOW`) the e2e fixture references, rather than duplicating
 # the literal `60` and risking silent drift if the parameter ever changes.

@@ -3,17 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Parity-corpus generator binary for the Phase 3a Hole-1 C++ parity
-//! gate (`tests/randomx_v2_parity/`, `corpus` mode).
+//! Parity-corpus file generator for the C++ parity harness
+//! (`tests/randomx_v2_parity/`, `corpus` mode). The CI gate is the Rust
+//! `full-parity` bin, which generates the corpus in-process and does not
+//! read this file.
 //!
 //! Emits the full nightly random corpus + canonical pins in the
 //! [`shekyl_randomx_differential::parity_corpus`] v1 file format.
 //! The corpus is deterministic (R6-D1 fixed ChaCha20 seed), so the
 //! output is byte-identical on every run at the same corpus revision;
 //! the `parity_corpus` module's whole-file SHA-256 pin asserts exactly
-//! that per-PR. The CI consumer is the `full-parity` job in
-//! `.github/workflows/randomx-v2-differential.yml`, which runs this
-//! binary and hands the file to `randomx-v2-full-parity corpus`.
+//! that per-PR.
 //!
 //! Usage:
 //!

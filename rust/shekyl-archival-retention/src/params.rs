@@ -152,6 +152,20 @@ pub enum ArchivalParamsError {
     /// A section multiple of zero budgets no draw and refuses every section.
     #[error("bundle section budget multiple is zero")]
     SectionBudgetZero,
+    /// A section multiple at or past `W₂` budgets more than any section can
+    /// hold: a block admits at most one bundle per height of the last `W₂`
+    /// (the queue keeps one per `h`), each charged at most the count cap, so
+    /// the section is at most `W₂` bundles at the cap — the spec's byte
+    /// bound, 500 bundles and 1.6 MB of bodies at the widest `W₂`
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.4). A budget that no section can
+    /// reach bounds nothing.
+    #[error("bundle section budget multiple {multiple} is at or past W2 = {w2} bundles")]
+    SectionBudgetPastWindow {
+        /// The multiple refused.
+        multiple: u64,
+        /// The window it is at or past.
+        w2: u64,
+    },
     /// The release cooldown does not outlast the slash grace, so a release
     /// could outrun its last epoch's slash (`ARCHIVAL_TIMING_CONSTANTS.md`
     /// §2.2, the L16 pin).
@@ -318,6 +332,12 @@ impl ArchivalParams {
         }
         if self.bundle_section_budget_multiple == 0 {
             return Err(ArchivalParamsError::SectionBudgetZero);
+        }
+        if self.bundle_section_budget_multiple >= w2 {
+            return Err(ArchivalParamsError::SectionBudgetPastWindow {
+                multiple: self.bundle_section_budget_multiple,
+                w2,
+            });
         }
         if self.release_cooldown_epochs <= SLASH_GRACE_EPOCHS {
             return Err(ArchivalParamsError::CooldownNotPastGrace(
@@ -496,6 +516,19 @@ mod tests {
         assert_eq!(
             with(|p| p.bundle_section_budget_multiple = 0),
             Err(ArchivalParamsError::SectionBudgetZero)
+        );
+        let w2 = ArchivalParams::SHIPPED.settlement_epoch_blocks / W2_EPOCH_DIVISOR;
+        let mut at_w2 = ArchivalParams::SHIPPED;
+        at_w2.bundle_section_budget_multiple = w2;
+        assert_eq!(
+            at_w2.validate(),
+            Err(ArchivalParamsError::SectionBudgetPastWindow { multiple: w2, w2 })
+        );
+        at_w2.bundle_section_budget_multiple = w2 - 1;
+        assert_eq!(
+            at_w2.validate(),
+            Ok(()),
+            "one below W2 still binds a section"
         );
         assert_eq!(
             with(|p| p.release_cooldown_epochs = SLASH_GRACE_EPOCHS),

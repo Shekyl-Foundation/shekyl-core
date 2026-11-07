@@ -65,10 +65,6 @@
 // the legacy name is kept for its call sites (rule 93). Rust owner:
 // shekyl-economics::params::BLOCK_WEIGHT_LONG_TERM_WINDOW.
 #define CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE   SHEKYL_BLOCK_WEIGHT_LONG_TERM_WINDOW_BLOCKS // size in blocks of the long term block weight median window
-// Literal of `shekyl_wire::transaction::COINBASE_RESERVE` (the grammar's
-// maximum coinbase, margin 0). The header-parse test holds the two equal.
-// Readers of this define go away with the C++ validator and the pool.
-#define CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE          1386
 // Display precision and atomic-unit constant are generated from config/economics_params.json.
 // w_ref is shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT. The floor and
 // the ladder read it inside the FFI; it is not a C++ macro.
@@ -85,9 +81,6 @@
 // V1 BLOCKS_ESTIMATE_TIMESPAN alias) were deleted in Phase 4 of the
 // LWMA-1 migration; see `docs/completed/DAA_LWMA1.md` §9.2 and the
 // `docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md` §3 disposition.
-
-#define CRYPTONOTE_MEMPOOL_TX_LIVETIME                    (86400*3) //seconds, three days
-
 
 // The relay's constants are Rust's, and none of them is a macro here: the
 // Dandelion++ stem count, epoch and fluff terms, the embargo, the covert

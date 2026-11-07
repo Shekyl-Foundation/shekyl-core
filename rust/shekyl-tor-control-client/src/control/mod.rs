@@ -33,8 +33,9 @@
 //! [`events`] parses one asynchronous `650` line. The quoted-field lexer it
 //! reads with stays private to this module: a keyword counts only at the start
 //! of a token, before any quote is opened. [`upload_rounds`] is the supervisor's
-//! policy over parsed `HS_DESC` events (`TSR-Q5`). Nothing in production sends
-//! `SETEVENTS` yet; the policy stays because the later increments are its caller.
+//! policy over parsed `HS_DESC` events (`TSR-Q5`). The daemon's supervisor
+//! sends one `SETEVENTS` on each managed Tor it launches and reads that
+//! policy from the subscription. The wallet does not subscribe.
 
 pub mod actor;
 pub mod auth;
@@ -58,8 +59,9 @@ pub mod vanguards;
 
 pub use actor::{
     BootstrapReadiness, Command, CommandResult, ControlError, DeathSignal, DiskWrites,
-    EventReceiver, EventSink, ManagedTor, Signal, SocksPort, SocksTimeout, SystemDirectoryError,
-    TorControlClient, TorControlClientConfig, TorExit, TorLaunch, EVENT_QUEUE_EVENTS,
+    EventReceiver, EventSink, Fed, ManagedTor, Signal, SocksPort, SocksTimeout,
+    SystemDirectoryError, TorControlClient, TorControlClientConfig, TorExit, TorLaunch,
+    EVENT_QUEUE_EVENTS,
 };
 pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, ServerNonce};
 pub use bootstrap::{parse_bootstrap_progress, BootstrapState};
