@@ -76,7 +76,7 @@ zones other than Tor.)* Everything below is what that change would wake up.
 | ~~`send_noise`~~ | ~~`levin_notify.cpp`~~ | **DELETED 2026-08-20 (#515)**. CV-1 lives in `NoiseQueues`. |
 | the covert branch in `send_txs` | `levin_notify.cpp` | **DELETED 2026-08-19 (§2.9 step 4)** — see §1.4 for why it was not restored |
 | `shekyl_relay_zone_noise_enabled` | FFI, called from `levin_notify.cpp` | live call. **Was** "always false: C++ never sets the flag"; since 2026-08-27 `make_relay_zone` sets it for an ENCRYPTED zone when `set_carrier_development(true)` — a process-wide runtime opt-in **defaulting off**, so a shipped build still reads false everywhere |
-| `CRYPTONOTE_NOISE_CHANNELS` | `cryptonote_config.h` | channel count. `_MIN_DELAY` and `_DELAY_RANGE` **DELETED 2026-08-28** — zero readers, and the cadence is now `params::carrier::NOISE_MIN_DELAY_MS` / `_DELAY_JITTER_MS` in milliseconds. `CRYPTONOTE_NOISE_BYTES` and `CRYPTONOTE_MAX_FRAGMENTS` **DELETED 2026-08-23 (#546)** — derived in `params::carrier`, enforced in `tests/carrier_window.rs`. |
+| ~~`CRYPTONOTE_NOISE_CHANNELS`~~ | ~~`cryptonote_config.h`~~ | **DELETED 2026-11-06** — no C++ reader; the channel count is `params::inherited::NOISE_CHANNELS`. `_MIN_DELAY` and `_DELAY_RANGE` **DELETED 2026-08-28** — zero readers, and the cadence is now `params::carrier::NOISE_MIN_DELAY_MS` / `_DELAY_JITTER_MS` in milliseconds. `CRYPTONOTE_NOISE_BYTES` and `CRYPTONOTE_MAX_FRAGMENTS` **DELETED 2026-08-23 (#546)** — derived in `params::carrier`, enforced in `tests/carrier_window.rs`. |
 
 ### 1.3 Rust inventory
 

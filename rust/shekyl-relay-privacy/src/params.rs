@@ -6,8 +6,8 @@
 //! Dandelion++ parameters — **derived from the paper, not inherited as
 //! constants**.
 //!
-//! This is the module PR-1 exists for. The inherited daemon hard-codes six
-//! `#define`s in `src/cryptonote_config.h` and explains one of them in a
+//! This is the module PR-1 exists for. The inherited daemon hard-coded six
+//! `#define`s in `src/cryptonote_config.h` and explained one of them in a
 //! comment in `src/cryptonote_core/tx_pool.cpp`. That comment states the
 //! derivation inputs — `k = 5`, `ep = 0.10`, `hop = 175 ms` — and then states
 //! the answer: 39 seconds. **The stated inputs do not produce the stated
@@ -364,8 +364,9 @@ pub struct DandelionParams {
 }
 
 impl DandelionParams {
-    /// The parameter set Shekyl currently inherits, transcribed from
-    /// `src/cryptonote_config.h` lines 101-106.
+    /// The parameter set Shekyl inherited from the C++ relay's
+    /// `CRYPTONOTE_DANDELIONPP_*` defines. Those defines are deleted; this is
+    /// the only copy of the values.
     ///
     /// This constructor exists to be *measured against*, not to be shipped.
     /// It is the baseline the design round compares its own derivation to.
@@ -612,12 +613,11 @@ pub fn reconciles_under_log10(params: &DandelionParams) -> f64 {
     (-k * (k - 1.0) * hop) / (2.0 * EMBARGO_FULL_TRAVEL_PROBABILITY.log10())
 }
 
-/// Constants transcribed from the inherited `src/cryptonote_config.h` relay
-/// block, so this crate is the single Rust mirror of that surface.
+/// The values the inherited C++ relay block carried, kept as the only copy:
+/// the `#define`s they came from are deleted and no C++ reads any of them.
 ///
 /// These are *not* re-derived — they are the current values, present so a
-/// measurement run and a design round can reference them without re-reading
-/// the C++ header, and so a future FFI cut has one place to reconcile.
+/// measurement run and a design round can reference them.
 pub mod inherited {
     /// `CRYPTONOTE_DANDELIONPP_FLUSH_AVERAGE` — mean fluff-flush delay for
     /// *inbound* peers, in seconds. Drawn as a Poisson over quarter-seconds
@@ -635,13 +635,13 @@ pub mod inherited {
     //
     // They were mirrors of `CRYPTONOTE_NOISE_MIN_DELAY` and
     // `CRYPTONOTE_NOISE_DELAY_RANGE`; both `#define`s had zero readers and are
-    // deleted by the same change. This module is the mirror of the
-    // `cryptonote_config.h` relay block, so a value that mirrors nothing does
-    // not belong here — and the carrier module is where the ceiling those
+    // deleted by the same change. This module holds the inherited relay
+    // values, so a value that is derived rather than inherited does not
+    // belong here — and the carrier module is where the ceiling those
     // numbers now have to satisfy can be asserted against `WINDOW_BYTES`.
 
-    /// `CRYPTONOTE_NOISE_CHANNELS` — max outbound connections per zone used
-    /// for covert sending.
+    /// Max outbound connections per zone used for covert sending (the
+    /// inherited `CRYPTONOTE_NOISE_CHANNELS`).
     pub const NOISE_CHANNELS: usize = 2;
 }
 

@@ -65,6 +65,7 @@ jobs:
   check-ffi-signatures:
     name: "FFI signature gate"
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 1.1 min over 24 runs; the floor
     steps:
       - uses: actions/checkout@v5
 

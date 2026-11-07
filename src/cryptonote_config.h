@@ -40,7 +40,6 @@
 #define CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL            CRYPTONOTE_MAX_BLOCK_NUMBER
 #define CRYPTONOTE_MAX_TX_SIZE                          1000000
 #define CRYPTONOTE_MAX_TX_PER_BLOCK                     0x10000000
-#define CRYPTONOTE_PUBLIC_ADDRESS_TEXTBLOB_VER          0
 #define CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW            60
 #define CURRENT_TRANSACTION_VERSION                     3
 #define CURRENT_BLOCK_MAJOR_VERSION                     1
@@ -56,8 +55,6 @@
 // (update_next_cumulative_weight_limit). Rust owner:
 // shekyl-economics::params::BLOCK_WEIGHT_SHORT_TERM_WINDOW.
 #define CRYPTONOTE_REWARD_BLOCKS_WINDOW                 SHEKYL_BLOCK_WEIGHT_SHORT_TERM_WINDOW_BLOCKS
-#define CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2    60000 //size of block (bytes) after which reward for block calculated using block size
-#define CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V1    20000 //size of block (bytes) after which reward for block calculated using block size - before first fork
 // The penalty-free zone is generated from config/consensus_constants.json
 // (`block_weight_full_reward_zone_bytes`) so that C++ and Rust read one
 // value; the legacy name is kept for its call sites (rule 93: rename when
@@ -78,8 +75,6 @@
 
 // Four-component economics constants are generated from config/economics_params.json.
 
-#define ORPHANED_BLOCKS_MAX_COUNT                       100
-
 
 // Difficulty constants: LWMA-1 sources N (window size), T (target block
 // time), and the derived FTL/MTP from `config/consensus_constants.json`
@@ -91,53 +86,13 @@
 // LWMA-1 migration; see `docs/completed/DAA_LWMA1.md` §9.2 and the
 // `docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md` §3 disposition.
 
-#define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2   SHEKYL_DAA_TARGET_SECONDS * CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS
-#define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS       1
-
-
-// 2 is the out-degree of the (approximately) 4-regular expander stem graph, and is
-// load-bearing for privacy, not a tuning knob: 1 makes every stem a single-node
-// black-hole point-of-failure; >=3 fans the stem toward a tree and leaks to the
-// first-spy estimator. Do NOT raise this to harden the slot-occupancy attack
-// (ProxyMark / W3) — that trades a demonstrated active attack for a real passive
-// leak; the occupancy defence lives in peer selection (g_max), not the count.
-// Derivation and guard: docs/design/DAEMON_RELAY_PRIVACY.md sec 12.7.
-#define CRYPTONOTE_DANDELIONPP_STEMS              2 // number of outgoing stem connections per epoch
-#define CRYPTONOTE_DANDELIONPP_MIN_EPOCH         10 // minutes
-#define CRYPTONOTE_DANDELIONPP_EPOCH_RANGE       30 // seconds
-// The fluff probability (20 %) and the fluff-flush delay are Rust-owned and
-// must not become macros here again: both live in shekyl-relay-privacy's
-// DandelionParams / FluffScheduler, constructed inside shekyl_relay_zone_new
-// (only STEMS and the epoch pair above cross the FFI). The inherited
-// FLUFF_PROBABILITY / FLUSH_AVERAGE macros were deleted as dead — no C++
-// read either — and the flush comment was wrong besides: production fluff
-// delay is memoryless geometric, not Poisson.
-// Derivation and ownership: docs/design/DAEMON_RELAY_PRIVACY.md sec 10.5, 16.
-// The stem embargo is NOT a constant here any more, and must not become one
-// again. The inherited `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE = 39` did not
-// follow from the derivation printed beside it (the formula it cited gives
-// 16.61 s; 39 s reproduces only if you read log10 for ln), and it was drawn
-// from a Poisson under a derivation assuming exponential survival, so the
-// backstop it exists to provide never fired. Both the value (now 190 s) and the
-// distribution come from shekyl-relay-privacy's `EmbargoTimer` via
-// src/shekyl/shekyl_ffi.h, where the number and its
-// derivation live in the same place and are pinned by tests.
-// Derivation and guard: docs/design/DAEMON_RELAY_PRIVACY.md sec 17.
-
-// Noise channel count. The epoch pair (CRYPTONOTE_NOISE_MIN_EPOCH /
-// _EPOCH_RANGE) went with noise_zone_params: C++ no longer selects a noise
-// epoch; the Dandelion++ epoch crosses as min_epoch_secs.
-//
-// CRYPTONOTE_NOISE_MIN_DELAY / _DELAY_RANGE were here and are DELETED
-// (2026-08-28). They had ZERO readers in C++ — the cadence has been drawn in
-// Rust since the carrier moved there — so the comment above calling them "the
-// source the Rust inherited mirrors transcribe" described a direction of truth
-// that no longer existed. The cadence is now shekyl-relay-privacy's
-// params::carrier::NOISE_MIN_DELAY_MS / _DELAY_JITTER_MS, in milliseconds
-// because 3.333 s is not a whole number of seconds. Keeping a second copy
-// here would have meant two privacy constants with nothing forcing them to
-// agree, and this change makes them disagree.
-#define CRYPTONOTE_NOISE_CHANNELS                       2      // Max outgoing connections per zone used for noise/covert sending
+// The relay's constants are Rust's, and none of them is a macro here: the
+// Dandelion++ stem count, epoch and fluff terms, the embargo, the covert
+// cadence and its channel count all live in shekyl-relay-privacy's `params`
+// (`DandelionParams`, `params::inherited`, `params::carrier`), where each
+// value and its derivation are pinned by tests. No C++ reads any of them.
+// Derivation and ownership: docs/design/DAEMON_RELAY_PRIVACY.md sec 10.5,
+// 12.7, 16, 17.
 
 /* CRYPTONOTE_FORWARD_DELAY_BASE / _AVERAGE were here, and Q12-U2 deleted them
    with the mechanism they timed.
@@ -160,14 +115,7 @@
 
    The Q-11 Unit 0 warning that governed them (DO NOT re-couple to NOISE_*)
    dies with them and is not inherited by anything: the covert cadence defends
-   the wire observer and keeps its own constants below, untouched. */
-
-
-#define DEFAULT_RPC_MAX_CONNECTIONS_PER_PUBLIC_IP       3
-#define DEFAULT_RPC_MAX_CONNECTIONS_PER_PRIVATE_IP      25
-#define DEFAULT_RPC_MAX_CONNECTIONS                     100
-#define DEFAULT_RPC_SOFT_LIMIT_SIZE                     25 * 1024 * 1024 // 25 MiB
-#define MAX_RPC_CONTENT_LENGTH                          1048576 // 1 MB
+   the wire observer and keeps its own constants, in Rust (`params::carrier`). */
 
 
 // P2P_DEFAULT_CONNECTIONS_COUNT is gone: the outbound connection count is
@@ -178,23 +126,10 @@
 // the deployed out-degree, so a value C++ could move on its own left those
 // instruments free to describe a network the daemon no longer runs -- F-7's
 // failure mode one layer down. See DAEMON_RELAY_PRIVACY.md §70.
-#define P2P_DEFAULT_HANDSHAKE_INTERVAL                  60           //secondes
-#define P2P_DEFAULT_PACKET_MAX_SIZE                     50000000     //50000000 bytes maximum packet size
-#define P2P_DEFAULT_CONNECTION_TIMEOUT                  5000       //5 seconds
-#define P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT               45         // seconds
-#define P2P_DEFAULT_PING_CONNECTION_TIMEOUT             2000       //2 seconds
-#define P2P_DEFAULT_INVOKE_TIMEOUT                      60*2*1000  //2 minutes
-#define P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT            5000       //5 seconds
 
 
 // The protocol version is `shekyl_version::PROTOCOL_VERSION`, a Rust
 // constant (DAEMON_CONFIG_CUTOVER.md DC-Q20); no C++ reads it.
-
-#define CRYPTONOTE_NAME                         "shekyl"
-#define CRYPTONOTE_BLOCKCHAINDATA_FILENAME      "data.mdb"
-#define CRYPTONOTE_BLOCKCHAINDATA_LOCK_FILENAME "lock.mdb"
-#define P2P_NET_DATA_FILENAME                   "p2pstate.bin"
-#define RPC_PAYMENTS_DATA_FILENAME              "rpcpayments.bin"
 
 #define THREAD_STACK_SIZE                       5 * 1024 * 1024
 
@@ -220,7 +155,6 @@
 #define FCMP_REFERENCE_BLOCK_MAX_AGE            SHEKYL_FCMP_REFERENCE_BLOCK_MAX_AGE
 #define FCMP_REFERENCE_BLOCK_MIN_AGE            SHEKYL_FCMP_REFERENCE_BLOCK_MIN_AGE
 #define FCMP_MAX_INPUTS_PER_TX                  8    // bounds proof generation time and tx size
-constexpr uint64_t FCMP_CURVE_TREE_CHECKPOINT_INTERVAL = 10000;
 static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE > FCMP_REFERENCE_BLOCK_MIN_AGE,
   "FCMP_REFERENCE_BLOCK_MAX_AGE must be > MIN_AGE to give wallets a valid reference block window");
 // Sentinel against silent loss-of-meaning if the JSON authority is bumped
@@ -241,36 +175,17 @@ static_assert(FCMP_REFERENCE_BLOCK_MIN_AGE == 5,
 static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE == 100,
   "FCMP_REFERENCE_BLOCK_MAX_AGE diverged from baseline (100); review consensus implications before updating the sentinel");
 
-#define CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES 2
-
-#define DEFAULT_TXPOOL_MAX_WEIGHT               648000000ull // 3 days at 300000, in bytes
-
 #define BULLETPROOF_MAX_OUTPUTS                 16
 #define BULLETPROOF_PLUS_MAX_OUTPUTS            16
 
 
 
-#define DNS_BLOCKLIST_LIFETIME (86400 * 8)
-
-// Legacy Monero-era cap was 1060 bytes. FCMP++ adds per-output tx_extra (tags 0x06/0x07):
-// hybrid KEM ciphertext (~1120 B) + PQC leaf hash (32 B) each, plus pubkey/nonce/padding.
-// Worst case BULLETPROOF_PLUS_MAX_OUTPUTS (16) needs on the order of 20 KiB; 24 KiB leaves headroom.
-#define MAX_TX_EXTRA_SIZE                       24576
-
 // New constants are intended to go here
 namespace config
 {
-  uint64_t const DEFAULT_FEE_ATOMIC_SKL_PER_KB = 500; // placeholder
-  uint8_t const FEE_CALCULATION_MAX_RETRIES = 10;
-  uint64_t const DEFAULT_DUST_THRESHOLD = ((uint64_t)2000000); // 2 * pow(10, 6) = 0.002 SKL
-  uint64_t const BASE_REWARD_CLAMP_THRESHOLD = ((uint64_t)100000); // pow(10, 5) = 0.0001 SKL
-
-
   // Hash domain separators (only values with a live caller)
   const char HASH_KEY_BULLETPROOF_PLUS_EXPONENT[] = "bulletproof_plus";
   const char HASH_KEY_BULLETPROOF_PLUS_TRANSCRIPT[] = "bulletproof_plus_transcript";
-  const char HASH_KEY_SUBADDRESS[] = "SubAddr";
-  const unsigned char HASH_KEY_ENCRYPTED_PAYMENT_ID = 0x8d;
   // PQC Multisig (scheme_id = 2)
   // MSW-G (settled 2026-07-15: 2f+1 at f=2; withdrew the same-day MAX=8).
   // Correctness cap only (verify_multisig / MultisigKeyContainer reject
@@ -302,9 +217,6 @@ namespace config
 
   // Archival serve-credit transport ceilings (gate-2 §5.1 / RF-D1). The
   // interior is shekyl-archival-retention::wire; these size the opaque blobs.
-  constexpr size_t ARCHIVAL_MAX_PATH_LAYERS_PER_KIND = 64;
-  constexpr size_t ARCHIVAL_MAX_BRANCH_SCALARS = 256;
-
   // RF-D1 / rule 40: the serve-credit vin is an OPAQUE blob (`canonical_bytes`,
   // tag byte included) whose only parser is shekyl-archival-retention::wire.
   // This is a transport ceiling, twin of shekyl-wire's
