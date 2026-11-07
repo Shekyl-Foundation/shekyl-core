@@ -4,9 +4,9 @@ A pull request that owes a CHANGELOG entry (rule 95, "CHANGELOG scope")
 adds it here as a new file. It does not edit `docs/CHANGELOG.md`.
 
 An edit at the top of the `[Unreleased]` section conflicts with every
-other open pull request that makes one. Each conflict evicts a pull
-request from the merge queue and sends it back for a merge of `dev` and
-a full CI run. A new file per pull request conflicts with nothing.
+other open pull request that makes one. Each merge then sends every other
+open pull request back for a merge of `dev` and a full CI run. A new file
+per pull request conflicts with nothing.
 
 ## Writing an entry
 
