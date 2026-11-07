@@ -1510,7 +1510,7 @@ fn a_decreasing_listed_total_refuses_the_boundary() {
     let path = tmp("prune-monotone");
     let b = short_chain_to(&path, 29);
     // Listed through `BASE + 18`: 14 blocks of two bodies.
-    plant_listed(&path, BASE + 19, 28 - 5);
+    plant_listed(&path, BlockHeight::from_raw(BASE + 19), 28 - 5);
     let (store, out) = connect_short(&path, &b, 30);
     assert!(
         out.is_err(),
@@ -1537,7 +1537,7 @@ fn a_decreasing_listed_total_refuses_the_boundary() {
 fn a_decrease_smaller_than_the_coinbase_term_still_refuses_the_boundary() {
     let path = tmp("prune-monotone-masked");
     let b = short_chain_to(&path, 29);
-    plant_listed(&path, BASE + 19, 27);
+    plant_listed(&path, BlockHeight::from_raw(BASE + 19), 27);
     let (store, out) = connect_short(&path, &b, 30);
     assert!(
         out.is_err(),
@@ -1564,7 +1564,7 @@ fn a_decrease_smaller_than_the_coinbase_term_still_refuses_the_boundary() {
 fn a_decreasing_archival_total_refuses_the_boundary() {
     let path = tmp("prune-archival-monotone");
     let b = short_chain_to(&path, 39);
-    plant_archival(&path, BASE + 29, 0);
+    plant_archival(&path, BlockHeight::from_raw(BASE + 29), 0);
     let (store, out) = connect_short(&path, &b, 40);
     assert!(out.is_err());
     assert_eq!(tip(&store), BASE + 39);
@@ -1699,16 +1699,19 @@ fn a_length_row_that_disagrees_with_the_fold_refuses_the_boundary() {
 }
 
 /// Replace `block_info[height].cumulative_tx_count`. A raw write: the
-/// store's own connect never records a decrease.
-fn plant_listed(path: impl AsRef<std::path::Path>, height: u64, listed: u64) {
+/// store's own connect never records a decrease. `height` is the block
+/// the row belongs to; the redb key is that height's raw word.
+fn plant_listed(path: impl AsRef<std::path::Path>, height: BlockHeight, listed: u64) {
     let path: &std::path::Path = path.as_ref();
-    plant_info(path, height, |info| info.cumulative_tx_count = listed);
+    plant_info(path, height.to_raw(), |info| {
+        info.cumulative_tx_count = listed;
+    });
 }
 
 /// Replace `block_info[height].cumulative_archival_len`, likewise.
-fn plant_archival(path: impl AsRef<std::path::Path>, height: u64, len: u64) {
+fn plant_archival(path: impl AsRef<std::path::Path>, height: BlockHeight, len: u64) {
     let path: &std::path::Path = path.as_ref();
-    plant_info(path, height, |info| {
+    plant_info(path, height.to_raw(), |info| {
         info.cumulative_archival_len = ArchivalLength::from_raw(len);
     });
 }
