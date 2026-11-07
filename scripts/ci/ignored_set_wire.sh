@@ -33,7 +33,12 @@
 # The ignored tests are all integration tests, one target each; the lib has
 # none. `rt_w10_tx_parse` is Linux-only (`#![cfg(target_os = "linux")]`),
 # as the runner is.
+#
+# `--check` (ignored_set_mode.sh) stops after this judgement. The per-PR
+# Rust job uses it; the run below is the nightly lane.
 set -euo pipefail
+. "$(dirname "$0")/ignored_set_mode.sh"
+ignored_set_mode "$@"
 cd "$(dirname "$0")/../../rust"
 branch="${BRANCH:-the checked-out ref}"
 
@@ -53,7 +58,7 @@ if [ "$want" -eq 0 ]; then
   exit 1
 fi
 
-listing=$(cargo test --locked --release -p shekyl-wire --tests -- --list --ignored)
+listing=$(cargo test --locked "${ignored_set_profile[@]}" -p shekyl-wire --tests -- --list --ignored)
 found=$(printf '%s\n' "$listing" | sed -n 's/: test$//p' | LC_ALL=C sort)
 expected=$(printf '%s\n%s\n' "$(printf '%s\n' "$run_tests" | cut -d: -f2)" "$helpers" | LC_ALL=C sort)
 if [ "$found" != "$expected" ]; then
@@ -65,6 +70,7 @@ if [ "$found" != "$expected" ]; then
   echo "Decide in scripts/ci/ignored_set_wire.sh whether each new ignored test is run here or is a helper."
   exit 1
 fi
+ignored_set_stop_after_judgement
 
 targets=()
 names=()
