@@ -18,8 +18,8 @@
 //! crash.
 //!
 //! Both tools report "nothing was killed" as exit status [`NOTHING_MATCHED`].
-//! Any other failure is a broken pattern or a tool error, and panics: a live
-//! test must not read that as "the Tor was not there".
+//! Any other failure is a broken pattern, a broken script or a tool error,
+//! and panics: a live test must not read that as "the Tor was not there".
 //!
 //! Test-only: compiled under `cfg(test)` or the `unpinned-tor-for-tests`
 //! feature, which only dev-dependency edges enable
@@ -33,8 +33,16 @@ use std::process::{Command, ExitStatus};
 use crate::inherit;
 use crate::spawn_lock;
 
-/// `pkill` exit 1, and the Windows script's `exit 1`: nothing was killed.
+/// `pkill`'s exit status when nothing was killed.
+#[cfg(unix)]
 const NOTHING_MATCHED: i32 = 1;
+
+/// The Windows script's exit status when nothing was killed. PowerShell
+/// exits 1 on its own when a `-Command` script fails to parse or ends on an
+/// error, so "nothing" is a status PowerShell never gives by itself, and a
+/// broken script panics instead of reading as "nothing was killed".
+#[cfg(windows)]
+const NOTHING_MATCHED: i32 = 3;
 
 /// Extended-regex metacharacters. `pkill -f` compiles `REG_EXTENDED` on
 /// Linux and on macOS. A data directory is text, so each of these is escaped.
@@ -155,16 +163,18 @@ fn tor_pattern(needle: &str) -> String {
 /// `-Force`. `Contains` matches the text literally: `-like` would read `[`
 /// and `]` in a path as a pattern. The needle travels in the environment, so
 /// no quoting of the path reaches the script. Exit [`NOTHING_MATCHED`] when
-/// none was found. A `Stop-Process` failure exits 2, which is not that
-/// status, so the caller panics instead of reporting that nothing was killed.
+/// none was found. Every error is terminating (`Stop`), and the query and
+/// the stops are inside the `try`, so a failed query or a failed stop exits
+/// 2: the caller panics instead of reporting that nothing was killed.
 #[cfg(windows)]
 fn kill_command(needle: &str) -> Command {
-    const SCRIPT: &str = "$needle = $env:SHEKYL_KILL_TOR_NAMED_BY; \
-        $found = @(Get-CimInstance Win32_Process -Filter \"Name = 'tor.exe'\" | \
-            Where-Object { $_.CommandLine -and $_.CommandLine.Contains($needle) }); \
-        if ($found.Count -eq 0) { exit 1 }; \
+    const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
         try { \
-            $found | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } \
+            $needle = $env:SHEKYL_KILL_TOR_NAMED_BY; \
+            $found = @(Get-CimInstance Win32_Process -Filter \"Name = 'tor.exe'\" | \
+                Where-Object { $_.CommandLine -and $_.CommandLine.Contains($needle) }); \
+            if ($found.Count -eq 0) { exit 3 }; \
+            $found | ForEach-Object { Stop-Process -Id $_.ProcessId -Force } \
         } catch { exit 2 }; \
         exit 0";
     let mut command = child_command("powershell");

@@ -509,6 +509,27 @@ jobs:
             exit 1
           }
 
+      # The outside kill on Windows (`outside_kill`): the PowerShell script
+      # that kills a Tor by its command line for the live tests. Its three
+      # tests are the only run of the script's "nothing was killed" and "not
+      # Tor" paths: `tor-pin-verify`'s live tests see only a kill. A script
+      # that no longer parses exits 1 and panics the first test, so a broken
+      # script fails here. Floor = the module's test count (3).
+      - name: "The outside kill's tests (Windows)"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p shekyl-tor-control-client --lib -- outside_kill::tests:: *> outside-kill.out
+          $rc = $LASTEXITCODE
+          Get-Content outside-kill.out
+          if ($rc -ne 0) { exit $rc }
+          $passed = Select-String -Path outside-kill.out -Pattern 'test result: ok\. (\d+) passed' | ForEach-Object { [int]$_.Matches[0].Groups[1].Value } | Select-Object -First 1
+          if (-not $passed -or $passed -lt 3) {
+            Write-Error "the outside kill ran $passed tests on Windows; the floor is 3"
+            exit 1
+          }
+
       # DC-F39 / DC-F40 / DC-F42 (DAEMON_CONFIG_CUTOVER.md §11): the daemon
       # crates' tests on MSVC, the RPC crate among them (review 3 §3). Nothing ran them here before, and the first Windows
       # run found a lib test that did not link (link.exe resolves every
