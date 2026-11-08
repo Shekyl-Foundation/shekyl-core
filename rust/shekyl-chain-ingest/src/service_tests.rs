@@ -95,6 +95,11 @@ impl Gated {
         self.slots.lock().expect("slots").0
     }
 
+    /// The seed in the transient slot.
+    pub(crate) fn transient(&self) -> Option<BlockHash> {
+        self.slots.lock().expect("slots").1
+    }
+
     /// The most forms that hashed under a held branch cache at once.
     pub(crate) fn branch_forms_max(&self) -> usize {
         self.branch_forms_max.load(Ordering::Acquire)
@@ -142,6 +147,15 @@ impl Substrate for Gated {
         let mut slots = self.slots.lock().expect("slots");
         if slots.0 != Some(*seed) {
             *slots = (Some(*seed), slots.0);
+        }
+    }
+
+    /// The cache store's `release`: the transient slot empties when it
+    /// holds `seed`; the canonical slot does not move.
+    fn release_seed(&self, seed: &BlockHash) {
+        let mut slots = self.slots.lock().expect("slots");
+        if slots.1 == Some(*seed) {
+            slots.1 = None;
         }
     }
 
@@ -407,6 +421,10 @@ impl Substrate for Faulting {
 
     fn pin_seed(&self, seed: &BlockHash) {
         self.gate.pin_seed(seed);
+    }
+
+    fn release_seed(&self, seed: &BlockHash) {
+        self.gate.release_seed(seed);
     }
 
     fn prepare_seed(&self, seed: &BlockHash) -> Self::Held {
@@ -2632,4 +2650,131 @@ async fn the_local_entry_waits_for_its_seat_and_a_closed_door_answers_stopped() 
         .expect("not oversize");
     assert_eq!(after.reply, Reply::Stopped, "a closed door answers Stopped");
     y.close().await;
+}
+
+/// A2, the window half: once genesis is connected the window never names
+/// the null seed. Only genesis hashes under it, and genesis is never
+/// popped, so the window's lower end is block 1, whose seed is genesis's.
+/// Under the levered cap of ten, five blocks are well inside the cap,
+/// where the lower end used to reach height 0 and name the null seed as
+/// the second slot. A cap past the tip, the reach stops at the floor.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_window_names_no_null_seed_once_genesis_connects() {
+    use crate::cache_window::seeds_for;
+    let rules = crate::scenario_shard::levered_rules();
+    let mut y = Scenario::open_under("window-null-seed", crate::scenario::FreeHash, rules);
+    let blocks = y.mine(5).await;
+    let genesis = blocks[0].hash;
+    let pair = seeds_for(&y.store(), rules).expect("the window reads");
+    assert_eq!(
+        pair.canonical, genesis,
+        "block 5 hashes under genesis's seed"
+    );
+    assert_eq!(
+        pair.transient, None,
+        "the null seed is not a slot: {pair:?}"
+    );
+    assert!(!pair.holds(&BlockHash::NULL));
+    // A cap deep and past it, the same: one seed until the next epoch.
+    y.mine(10).await;
+    let deeper = seeds_for(&y.store(), rules).expect("the window reads");
+    assert_eq!(deeper.transient, None, "{deeper:?}");
+    y.close().await;
+}
+
+/// A2, the store half: the slots match the pair the window publishes. The
+/// first install pins the null seed (the empty chain's connecting height
+/// hashes under it); genesis's pin then demotes it into the transient
+/// slot, and a window naming one seed releases it there rather than
+/// holding it until the next epoch's pin.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_slots_hold_no_seed_the_window_does_not_name() {
+    let mut y = Scenario::open("service-null-seed-y");
+    let blocks = y.mine(3).await;
+    let genesis = blocks[0].hash;
+    let gate = Arc::new(Gated::new());
+    let (service, path) = service(
+        "service-null-seed",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    let mut seeds = door.seeds();
+    seeds
+        .wait_for(|pair| pair.is_some_and(|p| p.canonical == BlockHash::NULL))
+        .await
+        .expect("the empty chain's window is installed");
+    assert_eq!(gate.canonical(), Some(BlockHash::NULL));
+    let replies = offer_all(&door, 1, &blocks).await;
+    assert!(
+        replies.iter().all(|r| matches!(r, Reply::Connected { .. })),
+        "{replies:?}"
+    );
+    // The run's pin publishes the slots as they stand (genesis canonical,
+    // the null seed demoted beside it); the window's install then makes
+    // them its pair. Wait for that pair, and check the slots hold it: on
+    // the code before A2 the pair was published while the null seed stayed
+    // resident in the transient slot.
+    let window = crate::cache_window::SeedPair {
+        canonical: genesis,
+        transient: None,
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        seeds.wait_for(|pair| *pair == Some(window)),
+    )
+    .await
+    .expect("the window after genesis is installed within 30 s")
+    .expect("the service is up");
+    assert_eq!(gate.canonical(), Some(genesis));
+    assert_eq!(
+        gate.transient(),
+        None,
+        "the null seed was demoted into the transient slot and released"
+    );
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+}
+
+/// A2's release names its seed. A run in flight pins the seeds of blocks
+/// it has not committed yet (`span.rs`, `pin_seeds`), and the follower
+/// installs the window at the committed tip, which cannot name them, on
+/// every tip move, beside the run. The install's pin demotes the run's seed
+/// into the transient slot; it must stay resident there. Releasing
+/// "whatever the second slot holds" took it from under the run's forms, so
+/// they missed the cache and the span was asked for again (#1301's CI: a
+/// sync that re-requested headers, and seed tests that ran for minutes).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_window_install_leaves_a_runs_uncommitted_seed_resident() {
+    let gate = Arc::new(Gated::new());
+    let (service, path) = service(
+        "service-run-seed-kept",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let mut seeds = service.door().seeds();
+    seeds
+        .wait_for(|pair| pair.is_some_and(|p| p.canonical == BlockHash::NULL))
+        .await
+        .expect("the empty chain's window is installed");
+    // A run over genesis and the blocks above it: genesis hashes under the
+    // null seed, the rest under genesis's id, which the store has not got.
+    let run_seed = BlockHash::from_bytes([7; 32]);
+    {
+        let _pins = service.shared.pin_lock.lock().expect("the pin lock");
+        gate.pin_seed(&BlockHash::NULL);
+        gate.pin_seed(&run_seed);
+    }
+    service.shared.note_pins(&[BlockHash::NULL, run_seed]);
+    // The tip has not moved, so the window is still the empty chain's.
+    super::window::install_blocking(&service.shared).expect("the window installs");
+    assert_eq!(gate.canonical(), Some(BlockHash::NULL));
+    assert_eq!(
+        gate.transient(),
+        Some(run_seed),
+        "the run's seed is still resident beside the window's"
+    );
+    service.stop().await.expect("stops");
+    cleanup(&path);
 }
