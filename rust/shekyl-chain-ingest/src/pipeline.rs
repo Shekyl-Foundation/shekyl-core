@@ -949,22 +949,7 @@ where
         let seed = self.claim_seed(height).await?;
         let in_force = self.rules.in_force(height);
         let target = match self.claim_target(height, &in_force).await? {
-            Ok(Ok(target)) => target,
-            // CEN-D6 on the claim's own derivation: `validate` would refuse
-            // the block on the same headers, so that refusal is its verdict
-            // and it is not formed (`target` module docs). The refusal ends
-            // the run, and the ledger has no header at this height for a
-            // successor to claim against, so nothing more is read; the
-            // workers already numbered drain in order.
-            Ok(Err(refused)) => {
-                drop(permit);
-                self.exhausted = true;
-                self.in_flight.spawn_blocking(move || Sequenced {
-                    seq,
-                    event: Ok((height, Err(refused))),
-                });
-                return Ok(());
-            }
+            Ok(target) => target,
             Err(corrupt) => {
                 self.unclaimable(height, corrupt);
                 return Ok(());
@@ -1055,14 +1040,13 @@ where
     /// The target for a block connecting at `connecting` under `rule_set`:
     /// the ledger's derivation, after the store has answered every height
     /// the ledger's window lacks (`target` module docs). The inner `Err` is
-    /// CEN-D6 on the derivation itself; the outer is a corrupt window, the
-    /// writer's to judge.
+    /// a corrupt window, the writer's to judge.
     async fn claim_target(
         &mut self,
         connecting: BlockHeight,
         rule_set: &shekyl_chain_rules::RuleSet,
     ) -> Result<
-        Result<Verdict<shekyl_chain_rules::Target>, shekyl_chain_rules::Corrupt>,
+        Result<shekyl_chain_rules::Target, shekyl_chain_rules::Corrupt>,
         PipelineFault<Src::Fault, S::Fault>,
     > {
         for height in self.targets.missing_for(connecting) {

@@ -188,11 +188,7 @@ where
         let seed = Self::seed_of(&view, connecting)?;
         let rule = (self.rules)(connecting);
         let target = match target_claim(&view, connecting, &rule) {
-            Ok(Ok(target)) => target,
-            Ok(Err(refused)) => {
-                self.close(session, CloseCause::HeaderRefused(refused.rule), out);
-                return Ok(());
-            }
+            Ok(target) => target,
             Err(Fault::View(fault)) => return Err(fault),
             Err(Fault::Stale(_) | Fault::Corrupt(_)) => return Ok(()),
         };

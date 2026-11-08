@@ -549,20 +549,17 @@ pub fn validate_with_memo<'id, V: ChainView<'id>>(
     // alt tier calls — and recorded where they are derived: the connecting
     // height, the seed (D3), the MTP window (C3), the target (D4, minted
     // through D6) and the work it implies, the comparison (D1b). B6 was
-    // recorded by `form` and rides on the token. CEN-D6's zero is a
-    // refusal, not a fault (rules::difficulty module docs). This tier does
-    // not record D5: the window is the recorded chain.
-    let derived = match header_ladder::derive(
+    // recorded by `form` and rides on the token. CEN-D6 is held by the
+    // target's type (rules::difficulty module docs). This tier does not
+    // record D5: the window is the recorded chain.
+    let derived = header_ladder::derive(
         formed.seed(),
         formed.target(),
         formed.attempt(),
         view,
         rule_set,
         &mut coverage,
-    )? {
-        Ok(derived) => derived,
-        Err(refused) => return Ok(Err(refused)),
-    };
+    )?;
     let connecting = derived.connecting;
     let cumulative_difficulty = derived.cumulative_difficulty;
     let cx = crate::rules::BlockContext::from_derived(&formed, derived, trust);

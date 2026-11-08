@@ -72,16 +72,12 @@ fn formed(
     let mut ledger = crate::target::TargetLedger::new();
     for (at, parent) in parents.iter().enumerate() {
         let at = h(u64::try_from(at).expect("small"));
-        let target = ledger
-            .claim(at, &RuleSet::GENESIS)
-            .expect("consistent")
-            .expect("a target");
+        let target = ledger.claim(at, &RuleSet::GENESIS).expect("consistent");
         ledger.extend(at, parent, target).expect("consistent");
     }
     let target = ledger
         .claim(h(height), &RuleSet::GENESIS)
-        .expect("consistent")
-        .expect("a target");
+        .expect("consistent");
     let references = match ReferenceClaims::from_headers(&ledger, h(height), &candidate) {
         Ok(references) => references,
         Err(never) => match never {},
@@ -777,16 +773,16 @@ async fn an_overflowing_parent_halts_the_writer_on_its_own_observation() {
     );
 }
 
-/// CEN-D6 on the claim itself, with another block behind it. `N + 1`
+/// The floor on the claim itself, with another block behind it. `N + 1`
 /// blocks six target solvetimes apart, each recording one unit of work,
-/// make LWMA-1 derive zero for the next block (the rules crate's
-/// `cen_d6_a_slow_window_of_minimal_work_derives_zero_and_refuses_the_block`
-/// window). The sequencer emits that refusal as block `N + 1`'s verdict
-/// without forming it. It reads nothing more, so block `N + 2` — whose
-/// claim would need the unformed block's header — never asks the store for
-/// it, and the refusal reaches the writer.
+/// are the window where LWMA-1 used to derive zero and CEN-D6 refused the
+/// block and every successor (the rules crate's
+/// `cen_d6_a_slow_window_of_minimal_work_floors_at_one` window). LWMA-1
+/// now floors at one (`DAA_LWMA1.md` §5.3 step 10): block `N + 1` is
+/// claimed at one, formed and connected, and block `N + 2` claims against
+/// its header. Red edit: drop step 10, and nothing past `N` lands.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_zero_derived_target_is_refused_and_the_next_extend_does_not_strand_it() {
+async fn a_slow_window_claims_one_and_the_chain_goes_on() {
     let path = tmp("pipeline-d6-claim");
     let n = shekyl_difficulty::N;
     let n_us = usize::try_from(n).expect("N is small");
@@ -833,15 +829,12 @@ async fn a_zero_derived_target_is_refused_and_the_next_extend_does_not_strand_it
         PipelineConfig::default(),
     )
     .await
-    .expect("a refusal is a verdict, not a fault");
-    let (at, refused) = report.refused.expect("block N + 1 is refused");
-    assert_eq!(at, h(n + 1));
-    assert_eq!(refused.rule, CenRow::D6);
-    assert_eq!(refused.locus, Locus::Block);
+    .expect("the floor's block replays");
+    assert_eq!(report.refused, None, "nothing is refused at the floor");
     assert_eq!(
         tip_of(&path).map(|t| t.0),
-        Some(h(n)),
-        "nothing past N landed"
+        Some(h(n + 2)),
+        "blocks N + 1 and N + 2 landed past the slow window"
     );
 }
 

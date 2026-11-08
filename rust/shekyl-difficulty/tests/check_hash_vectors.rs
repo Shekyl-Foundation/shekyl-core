@@ -38,7 +38,17 @@ use shekyl_difficulty::{check_hash, Difficulty};
 #[test]
 fn matches_cpp_oracle_corpus() {
     for (idx, (hash, difficulty, expected)) in CHECK_HASH_VECTORS.iter().enumerate() {
-        let got = check_hash(hash, Difficulty::from_raw(*difficulty));
+        // The C++ corpus carries `difficulty == 0`, its always-pass escape.
+        // Zero is not a difficulty here (`DAA_LWMA1.md` §5.3 step 10): the
+        // vector stays, and asserts the type refuses its input.
+        let Some(difficulty) = Difficulty::new(*difficulty) else {
+            assert!(
+                *expected,
+                "corpus vector #{idx}: the C++ passed every hash at zero"
+            );
+            continue;
+        };
+        let got = check_hash(hash, difficulty);
         assert_eq!(
             got, *expected,
             "corpus vector #{idx}: hash={hash:02x?} difficulty={difficulty} \
@@ -113,8 +123,11 @@ fn reference_check_hash(hash: &[u8; 32], difficulty: u128) -> bool {
 #[test]
 fn agrees_with_independent_reference_on_corpus() {
     for (hash, difficulty, _) in &CHECK_HASH_VECTORS {
+        let Some(typed) = Difficulty::new(*difficulty) else {
+            continue;
+        };
         assert_eq!(
-            check_hash(hash, Difficulty::from_raw(*difficulty)),
+            check_hash(hash, typed),
             reference_check_hash(hash, *difficulty),
             "reference disagreement: hash={hash:02x?} difficulty={difficulty}",
         );
@@ -127,10 +140,11 @@ proptest::proptest! {
     #[test]
     fn fuzz_matches_independent_reference(
         hash in proptest::array::uniform32(proptest::num::u8::ANY),
-        difficulty in proptest::num::u128::ANY,
+        difficulty in 1u128..=u128::MAX,
     ) {
+        let typed = Difficulty::new(difficulty).expect("the range starts at one");
         proptest::prop_assert_eq!(
-            check_hash(&hash, Difficulty::from_raw(difficulty)),
+            check_hash(&hash, typed),
             reference_check_hash(&hash, difficulty)
         );
     }
@@ -143,8 +157,8 @@ proptest::proptest! {
     #[test]
     fn fuzz_matches_golden_uniform_byte_formula(
         b in proptest::num::u8::ANY,
-        // hash-target.cpp drives difficulty >= 1; difficulty 0 always
-        // passes and is covered by the corpus and the unit tests.
+        // hash-target.cpp drives difficulty >= 1, and zero is not a
+        // difficulty (the corpus's zero vectors assert that).
         difficulty in 1u128..=u128::MAX,
     ) {
         let hash = [b; 32];
@@ -154,6 +168,7 @@ proptest::proptest! {
         } else {
             difficulty <= u128::from(255u8 / b)
         };
-        proptest::prop_assert_eq!(check_hash(&hash, Difficulty::from_raw(difficulty)), golden);
+        let typed = Difficulty::new(difficulty).expect("the range starts at one");
+        proptest::prop_assert_eq!(check_hash(&hash, typed), golden);
     }
 }
