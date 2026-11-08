@@ -80,8 +80,8 @@ impl<P: Substrate> Substrate for Clocked<P> {
     }
 
     /// The release is the pin's: through the clock to the cache store.
-    fn release_transient(&self) {
-        self.pow.release_transient();
+    fn release_seed(&self, seed: &BlockHash) {
+        self.pow.release_seed(seed);
     }
 
     fn cache_absent(&self, fault: &P::Fault) -> bool {

@@ -162,10 +162,10 @@ impl Substrate for ProductionSubstrate {
         self.record_cache(outcome, started);
     }
 
-    /// Empty the cache store's transient slot: the window names only the
-    /// canonical seed (A2).
-    fn release_transient(&self) {
-        self.caches.release_transient();
+    /// Empty the cache store's transient slot if it holds `seed`, which
+    /// left the window (A2).
+    fn release_seed(&self, seed: &BlockHash) {
+        self.caches.release(&Seedhash::from_bytes(*seed.as_bytes()));
     }
 
     fn cache_absent(&self, fault: &SubstrateFault) -> bool {
@@ -262,8 +262,8 @@ impl<P: Substrate> Substrate for Recalled<'_, P> {
         self.inner.pin_seed(seed);
     }
 
-    fn release_transient(&self) {
-        self.inner.release_transient();
+    fn release_seed(&self, seed: &BlockHash) {
+        self.inner.release_seed(seed);
     }
 
     fn cache_absent(&self, fault: &P::Fault) -> bool {
@@ -327,8 +327,8 @@ impl<P: Substrate> Substrate for Branch<'_, P> {
         self.inner.pin_seed(seed);
     }
 
-    fn release_transient(&self) {
-        self.inner.release_transient();
+    fn release_seed(&self, seed: &BlockHash) {
+        self.inner.release_seed(seed);
     }
 
     fn cache_absent(&self, fault: &P::Fault) -> bool {
