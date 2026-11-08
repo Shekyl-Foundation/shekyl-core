@@ -795,6 +795,7 @@ cleared = [
   { through = "623fa03dce", reason = "Each connector publishes an admitted socket through a callback in place of the shared admission channel. The library listener still sends on that channel (publish_on), at the same point after the channel exists. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, and no deadline moved, so the 2026-10-14 capture still prices this tree." },
   { through = "63fcdd9d25", reason = "profile.rs: the doc comment on Tor's δ names its 60 s basis as shekyl-p2p-session's TIMED_SYNC_MIN plus half TIMED_SYNC_JITTER, in place of the deleted C++ P2P_DEFAULT_HANDSHAKE_INTERVAL. A comment only; no dial, handshake, gap or shutdown wait changes." },
   { through = "c42ef64a2d", reason = "C++ removal (#1299): comments only in shekyl-tor publish.rs; no code path changed, and nothing the capture priced has moved." },
+  { through = "1cd88d18ba", reason = "The onion keypair moves into shekyl-crypto-pq: OnionIdentity is built from a keypair and the daemon holds one for the boot instead of a seed, so an ADD_ONION no longer expands a seed first. The publish path only; no SOCKS dial, gap, shutdown wait or deadline changes, so the 2026-10-14 capture still prices this tree." },
 ]
 
 [[constant]]
