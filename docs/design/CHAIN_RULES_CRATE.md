@@ -101,9 +101,7 @@ this worktree (`feat/drs-e6-inc1-chain-rules-scaffold`, stacked on
 
 **Explicitly not reused:** `shekyl-curve-tree::BlockHeight` (the crate depends
 on `redb` — G1 forbids the edge; `shekyl-types::BlockHeight` is the canonical
-one anyway); `shekyl-consensus::{ChainState, BlockHeader}` (the pluggable-proof
-crate's own types — the handoff names them as a confusion hazard; they are
-`u64`/`[u8; 32]`-shaped and not the wire header); `shekyl-types::
+one anyway); `shekyl-types::
 {GlobalOutputIndex, OutputIndexInTx}` (no view method reads them — §3.3).
 
 ### 3.2 `shekyl-wire` candidate-type verdict: **SUITABLE**, with two recorded deltas

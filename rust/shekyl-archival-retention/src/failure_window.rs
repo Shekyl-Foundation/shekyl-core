@@ -312,7 +312,7 @@ pub const fn settlement_retention_floor(
 /// structurally. Re-pinning `SLASH_GRACE_EPOCHS` to zero requires reordering
 /// the connect hooks first, and that is a decision about both sides, not a
 /// constant bump. The affine-shape coupling of the two derivations
-/// (`epoch_close_height` and `settlement_epoch_slash_deadline_height`, both
+/// (`epoch_close_height` and `SettlementSchedule::slash_deadline_height`, both
 /// in `consensus_state` since DRS-E4 commit 4 moved the geometry to its one
 /// home) is asserted by `consensus_state`'s
 /// `slash_settle_strictly_follows_close_write_at_every_epoch`; the assert

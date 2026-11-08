@@ -125,7 +125,7 @@ fn base_reward_at(operands: FeeOperands, params: &EconomicParams) -> Option<u64>
 }
 
 /// The relay floor at the operands: `F = R·C·w_ref/M²`, floored at 1
-/// ([`checked_relay_fee_floor`]), `w_ref` the policy's. `None` when the
+/// (the arithmetic [`super::relay_fee_floor`] saturates), `w_ref` the policy's. `None` when the
 /// parameters cannot price the tail or the scalars leave the `u128` domain.
 #[must_use]
 pub fn relay_floor_from(

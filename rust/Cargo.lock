@@ -4068,11 +4068,6 @@ dependencies = [
 [[package]]
 name = "shekyl-consensus"
 version = "3.1.0"
-dependencies = [
- "serde",
- "shekyl-difficulty",
- "thiserror",
-]
 
 [[package]]
 name = "shekyl-crypto-hash"

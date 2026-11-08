@@ -431,9 +431,8 @@ open-time `WARN` lines still give the user a chance to notice.
 - `shekyl_engine_state::safety_constants::WalletSafetyConstants` —
   §2.1 / §3.1 constants (`2k.1`), and `ReorgDepthOverride`, the
   raise-only reorg-depth override. Landed in `shekyl-engine-state`
-  rather than `shekyl-consensus` because
-  `70-modular-consensus.mdc` scopes the latter to PoW proof validation;
-  wallet safety policy is a wallet-state concern.
+  rather than `shekyl-consensus` because the latter holds only the
+  consensus lock windows; wallet safety policy is a wallet-state concern.
 - `shekyl_engine_file::SafetyOverrides` — §2.3 runtime type (`2k.2`).
 - `shekyl-engine-prefs` crate — §2.2 TOML types, HMAC, parser (`2k.3`).
 - `shekyl_ffi::wallet_prefs_ffi` — C ABI for the TOML layer (`2k.4`).
