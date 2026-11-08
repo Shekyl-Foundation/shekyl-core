@@ -16,7 +16,8 @@
 //! more capital to bond — L4). `price` is the previous epoch's work→reward exchange
 //! rate, carrying the competitive-share servo's dilution into the marginal decision.
 
-use crate::model::{bond_age, bond_duration, fetch_latency, g_age, CompositionParams, World};
+use crate::model::{bond_age, bond_duration, fetch_latency, CompositionParams, World};
+use crate::reward::{shard_value, RewardArm};
 use crate::rng::SplitMix64;
 
 #[derive(Debug, Clone)]
@@ -93,6 +94,9 @@ pub struct AgentParams {
     /// dodge is defeated, the tail is held). This is the agent the seal must hold against,
     /// not only the rational one that never dodges.
     pub dodge_pref: f64,
+    /// The reward arm the agent values shards under: the work term it is paid
+    /// on (`reward::shard_value`).
+    pub reward_arm: RewardArm,
 }
 
 /// One actor's best-response. Mutates `world.holdings[actor]` (and `world.locks`).
@@ -198,7 +202,7 @@ fn best_response(
         let r_eff = if held { r[s].max(1) } else { r[s] + 1 };
         let age = world.shards[s].age;
         let deep = world.shards[s].is_deep(ap.deep_threshold);
-        let value = price * (1.0 / r_eff as f64) * g_age(age, age_weight);
+        let value = shard_value(ap.reward_arm, price, r_eff, age, age_weight);
         let mut cost = ap.storage_unit_cost * ap.comp.size(&world.shards[s])
             + if deep { ap.bond_carry } else { 0.0 };
         // Anticipatory lock cost: acquiring a deep shard commits storage for its
