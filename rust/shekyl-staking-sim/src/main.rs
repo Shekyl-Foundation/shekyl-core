@@ -51,7 +51,7 @@ mod retrieval;
 mod reward;
 mod riders;
 mod rng;
-use reward::CurveImpl;
+use reward::{CurveImpl, RewardArm};
 #[cfg(test)]
 mod l11_l13_pin;
 mod scenarios;
@@ -2122,12 +2122,29 @@ fn main() {
         return;
     }
 
-    // Integer is the authoritative backend: it is what the emission vin mints
-    // money with at zero tolerance (REWARD_EMISSION_VIN_PLAN.md §5.4), and PR 1.5
-    // (ARCHIVAL_SIM_ECONOMICS_VERDICT.md) showed float over-reads worst-shard
-    // redundancy by up to one replica. So sweeps default to integer; float is
-    // opt-in exploration only. An unrecognized value fails loudly rather than
-    // silently falling back to the non-authoritative backend.
+    // The reward arm. Production pays linear credited work on its integer
+    // operands and is the default; the registered plateau arm reproduces the
+    // L11/L13 pins and is on the retirement list (Appendix B, D1). An
+    // unrecognized value fails loudly.
+    let reward_arm =
+        match std::env::args().find_map(|a| a.strip_prefix("--reward-arm=").map(str::to_string)) {
+            None => RewardArm::Production,
+            Some(v) => match v.as_str() {
+                "production" => RewardArm::Production,
+                "registered-plateau" => RewardArm::RegisteredPlateau,
+                other => {
+                    eprintln!(
+                        "shekyl-staking-sim: unknown --reward-arm={other:?} \
+                     (expected `production` (default) or `registered-plateau`)"
+                    );
+                    std::process::exit(2);
+                }
+            },
+        };
+    // The registered arm's plateau backend. Integer evaluates the banded curve
+    // with `curve_milli`; PR 1.5 (ARCHIVAL_SIM_ECONOMICS_VERDICT.md) showed the
+    // float mirror over-reads worst-shard redundancy by up to one replica, so
+    // float is opt-in. Production applies no plateau.
     let curve_impl =
         match std::env::args().find_map(|a| a.strip_prefix("--curve-impl=").map(str::to_string)) {
             None => CurveImpl::Integer,
@@ -2143,14 +2160,19 @@ fn main() {
                 }
             },
         };
-    eprintln!(
-        "shekyl-staking-sim: curve backend = {curve_impl:?}{}",
-        match curve_impl {
-            CurveImpl::Integer => " (authoritative — canonical reward_arithmetic)",
-            CurveImpl::Float =>
-                " (exploration only — NOT authoritative; see ARCHIVAL_SIM_ECONOMICS_VERDICT.md)",
-        }
-    );
+    match reward_arm {
+        RewardArm::Production => eprintln!(
+            "shekyl-staking-sim: reward arm = Production (linear credited work, production integer arithmetic)"
+        ),
+        RewardArm::RegisteredPlateau => eprintln!(
+            "shekyl-staking-sim: reward arm = RegisteredPlateau (retired plateau; L11/L13 pins' control), curve backend = {curve_impl:?}{}",
+            match curve_impl {
+                CurveImpl::Integer => " (curve_milli)",
+                CurveImpl::Float =>
+                    " (float mirror, exploration only; see ARCHIVAL_SIM_ECONOMICS_VERDICT.md)",
+            }
+        ),
+    }
 
     let mut cfgs: Vec<_> = build_scenarios()
         .into_iter()
@@ -2163,6 +2185,7 @@ fn main() {
 
     for c in &mut cfgs {
         c.curve_impl = curve_impl;
+        c.reward_arm = reward_arm;
     }
 
     if cfgs.is_empty() {
@@ -2359,7 +2382,7 @@ mod tests {
 
     #[test]
     fn reconciliation_curve_float_vs_integer() {
-        use crate::reward::{curve, CurveImpl, RewardParams};
+        use crate::reward::{curve, CurveImpl, RewardArm, RewardParams};
         use shekyl_archival_retention::WORK_MILLI_SCALE;
 
         // Two milli quanta: one for the integer backend's milli rounding, one
@@ -2371,6 +2394,7 @@ mod tests {
             pseudonym_cost: 0.05,
             age_weight: AGE_WEIGHT,
             curve_impl: CurveImpl::Integer,
+            arm: RewardArm::RegisteredPlateau,
         };
         let float_params = RewardParams {
             curve_impl: CurveImpl::Float,

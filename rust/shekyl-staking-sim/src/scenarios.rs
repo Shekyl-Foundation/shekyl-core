@@ -23,7 +23,7 @@ use crate::participation::{
 use crate::retrieval::{
     r_target_for_availability, r_target_for_durability, serving_availability, serving_durability,
 };
-use crate::reward::{evaluate, CurveImpl, RewardParams};
+use crate::reward::{evaluate, CurveImpl, RewardArm, RewardParams};
 use crate::rng::SplitMix64;
 use crate::transport::{effective_uptime, regime_latency_epochs};
 use serde::Serialize;
@@ -60,6 +60,8 @@ pub struct SimConfig {
     pub pseudonym_cost: f64,
     pub age_weight: f64,
     pub curve_impl: CurveImpl,
+    /// Which mechanism pays (`reward::RewardArm`). Production by default.
+    pub reward_arm: RewardArm,
     pub storage_unit_cost: f64,
     pub bond_rate: f64,
     /// Age-scaling of the bond (L4): 0 = flat, >0 = older shards bond higher.
@@ -514,6 +516,9 @@ pub struct ScenarioResult {
     pub slashed_capital: f64,
     /// Slash exits over the run (A18).
     pub slash_exits: usize,
+    /// The most atomic units `reward_share_floor` left unminted in one epoch
+    /// (production arm; `0` on the registered arm).
+    pub reward_dust_atomic_max: u64,
     /// **Post-shock market wipe-out events** (swan-2 / W1, re-read swan-4): the subset
     /// of `deep_extinct_total` at/after the shock epoch — the shock-attributable
     /// availability exposure. The number that distinguishes *metric recovery* (`shkRec`)
@@ -683,6 +688,7 @@ impl SimConfig {
             reseed_rate: self.reseed_rate,
             release_cooldown_epochs: self.release_cooldown_epochs,
             dodge_pref: self.dodge_pref,
+            reward_arm: self.reward_arm,
         }
     }
     /// The composition axis this scenario runs under.
@@ -991,6 +997,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         pseudonym_cost: cfg.pseudonym_cost,
         age_weight: cfg.age_weight,
         curve_impl: cfg.curve_impl,
+        arm: cfg.reward_arm,
     };
     let ap = cfg.agent_params();
     let pp = ParticipationParams {
@@ -1102,6 +1109,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // A18: bond capital burned by slash exits, and how many there were.
     let mut slashed_capital = 0.0_f64;
     let mut slash_exits = 0usize;
+    // The most of the purse `reward_share_floor` left unminted in one epoch.
+    let mut reward_dust_atomic_max = 0u64;
     let mut shock_deep_extinct = 0usize;
     let mut shock_extinct_bands = [0usize; N_BANDS];
     let mut deep_extinct_floored_total = 0usize;
@@ -1343,6 +1352,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         series_old_held.push(old_held);
 
         last_eval = evaluate(&world, &rp, price);
+        reward_dust_atomic_max = reward_dust_atomic_max.max(last_eval.dust_atomic);
         price = if last_eval.price > 0.0 {
             last_eval.price
         } else {
@@ -2002,6 +2012,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         deep_extinct_total: deep_extinct_total as f64,
         slashed_capital,
         slash_exits,
+        reward_dust_atomic_max,
         shock_deep_extinct: shock_deep_extinct as f64,
         shock_extinct_bands: shock_extinct_bands.iter().map(|&x| x as f64).collect(),
         deep_extinct_floored_total: deep_extinct_floored_total as f64,
@@ -2111,6 +2122,9 @@ pub(crate) fn baseline() -> SimConfig {
         // Authoritative backend by default (the canonical minting arithmetic);
         // main overrides per `--curve-impl`. Float is opt-in exploration only.
         curve_impl: CurveImpl::Integer,
+        // Production pays: linear credited work on its integer operands. The
+        // registered plateau arm is the L11/L13 pins' control.
+        reward_arm: RewardArm::Production,
         storage_unit_cost: BASELINE_STORAGE_UNIT_COST,
         bond_rate: BASELINE_BOND_RATE, // mid
         bond_age_scale: 0.0,           // flat bond is the iteration-1 baseline (L4 sweep varies it)

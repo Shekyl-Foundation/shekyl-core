@@ -3,7 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Five-seed pins of the L11 and L13 vector on the abstract purse.
+//! Five-seed pins of the L11 and L13 vector on the abstract purse, on the
+//! registered plateau arm (`RewardArm::RegisteredPlateau`).
+//!
+//! This is the EUP-3 check half's falsifier: the arm reproduces these bits
+//! after every incorporation that does not touch the purse
+//! (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §6.1).
 //!
 //! The June sections quoted one seed as a point estimate. These rows are
 //! that seed and four others, on the population model as of the check.
@@ -12,6 +17,7 @@
 //! `c_deep_u` is `committed_deep_under`. The June prose called that
 //! figure `deep_und`.
 
+use crate::reward::RewardArm;
 use crate::scenarios::{build_scenarios, run_sim};
 
 const SEEDS: [u64; 5] = [
@@ -113,7 +119,80 @@ const BITS: [[[u64; 3]; 11]; 5] = [
     ],
 ];
 
+/// `(bondA, cDeepU, oUmx)` as `f64::to_bits` on [`RewardArm::Production`],
+/// the default arm, taken at the EUP-3 check half (2026-11-08). Same layout
+/// as [`BITS`].
+#[rustfmt::skip]
+const BITS_PRODUCTION: [[[u64; 3]; 11]; 5] = [
+    [
+        [4635279250975275090, 4566758108544739836, 0],
+        [4635315842722247475, 4562254508917369340, 0],
+        [4635279250975275090, 4566758108544739836, 0],
+        [4635279250975275090, 4566758108544739836, 0],
+        [4635383865841619217, 4557097432852324608, 0],
+        [4634406913109952649, 4587416800807649274, 4589363828969986315],
+        [4632916268545789133, 4606909342416356046, ONE],
+        [4630753602474728926, ONE, ONE],
+        [4626918505917046238, ONE, ONE],
+        [4625590882276894310, ONE, ONE],
+        [4633985873457289626, 4596238402771233577, ONE],
+    ],
+    [
+        [4634840150011606467, 4592147324659411290, 0],
+        [4634781040266497229, 4591803665364768864, 0],
+        [4634840150011606467, 4592147324659411290, 0],
+        [4634840150011606467, 4592147324659411290, 0],
+        [4635302941785814903, 0, 0],
+        [4634370555925460855, 4589220552638107079, 4590985262245439308],
+        [4632740346685344973, 4606893813203474273, ONE],
+        [4630662123107297963, ONE, ONE],
+        [4626421233458190746, ONE, ONE],
+        [4624812134841328162, ONE, ONE],
+        [4634039822827825835, 4594925857001988132, 4600504667628399086],
+    ],
+    [
+        [4634399641673054290, 4593793482025470063, 4600736089921624345],
+        [4634448899793978655, 4593237155012677234, 4603120348547879314],
+        [4634399641673054290, 4593793482025470063, 4600736089921624345],
+        [4634399641673054290, 4593793482025470063, 4600736089921624345],
+        [4635335780533097813, 4557605141404812027, 0],
+        [4634303705618492075, 4593649018394301840, ONE],
+        [4632294677972219767, 4606491692480619966, ONE],
+        [4630261021265485278, ONE, ONE],
+        [4626496293451980254, ONE, ONE],
+        [4624924724832012425, ONE, ONE],
+        [4633533167869746654, 4598186963386936502, ONE],
+    ],
+    [
+        [4634344754052595712, 4588263044995334673, 0],
+        [4634344754052595712, 4587355232786982824, 0],
+        [4634344754052595712, 4588263044995334673, 0],
+        [4634344754052595712, 4588263044995334673, 0],
+        [4635245473978069811, 4549671586801728227, 0],
+        [4634445615919250364, 4586231692640058896, 4590002020221529960],
+        [4632472945457469850, 4606862631872387345, ONE],
+        [4630561261240643311, ONE, ONE],
+        [4626913814667434394, ONE, ONE],
+        [4625633103523400909, ONE, ONE],
+        [4633549587243388109, 4597011130089663803, ONE],
+    ],
+    [
+        [4635011849747399967, 4578167227600745096, 0],
+        [4635045626744605245, 4575861384591531399, 0],
+        [4635011849747399967, 4578167227600745096, 0],
+        [4635011849747399967, 4578167227600745096, 0],
+        [4635404976464872516, 0, 0],
+        [4634369383113057894, 4590541312055230405, 4598521650285843377],
+        [4632543314201647514, 4606751758735454946, ONE],
+        [4630359537507334007, ONE, ONE],
+        [4626660487188394803, ONE, ONE],
+        [4625253112304841523, ONE, ONE],
+        [4633678596607713826, 4597138745815127241, ONE],
+    ],
+];
+
 const _: () = assert!(SEEDS.len() == BITS.len() && NAMES.len() == BITS[0].len());
+const _: () = assert!(SEEDS.len() == BITS_PRODUCTION.len());
 
 #[test]
 fn pin_names_are_unique() {
@@ -123,38 +202,53 @@ fn pin_names_are_unique() {
     assert_eq!(names.len(), NAMES.len());
 }
 
-#[test]
-#[ignore = "population pin, five seeds; cargo test -p shekyl-staking-sim --release --bin shekyl-staking-sim -- l11_l13_five_seed_pins --ignored"]
-fn l11_l13_five_seed_pins() {
+/// Run every pinned scenario on every seed under `arm` and compare its
+/// `(bondA, cDeepU, oUmx)` bits with `bits`. No shock fires on L11 or L13, so
+/// no slash burns capital (A18).
+fn check_vector(arm: RewardArm, bits: &[[[u64; 3]; 11]; 5]) {
     let built = build_scenarios();
     for (seed_ix, seed) in SEEDS.iter().enumerate() {
         for (name_ix, name) in NAMES.iter().enumerate() {
-            let [bond_a, c_deep_u, o_umx] = BITS[seed_ix][name_ix];
+            let [bond_a, c_deep_u, o_umx] = bits[seed_ix][name_ix];
             let mut cfg = built
                 .iter()
                 .find(|cfg| cfg.name == *name)
                 .unwrap_or_else(|| panic!("missing scenario {name}"))
                 .clone();
             cfg.seed = *seed;
+            cfg.reward_arm = arm;
             let result = run_sim(&cfg);
-            // A18: no shock fires on L11 or L13, so no slash burns capital.
             assert_eq!(result.slash_exits, 0, "{name} seed {seed:#x} slash exits");
             assert_eq!(result.slashed_capital, 0.0, "{name} seed {seed:#x} burned");
             assert_eq!(
                 result.bonded_active.to_bits(),
                 bond_a,
-                "{name} seed {seed:#x} bondA"
+                "{arm:?} {name} seed {seed:#x} bondA"
             );
             assert_eq!(
                 result.committed_deep_under.to_bits(),
                 c_deep_u,
-                "{name} seed {seed:#x} cDeepU"
+                "{arm:?} {name} seed {seed:#x} cDeepU"
             );
             assert_eq!(
                 result.oldest_under_max.to_bits(),
                 o_umx,
-                "{name} seed {seed:#x} oUmx"
+                "{arm:?} {name} seed {seed:#x} oUmx"
             );
         }
     }
+}
+
+/// The falsifier: the registered arm reproduces the pins.
+#[test]
+#[ignore = "population pin, five seeds; cargo test -p shekyl-staking-sim --release --bin shekyl-staking-sim -- l11_l13_five_seed --ignored"]
+fn l11_l13_five_seed_pins() {
+    check_vector(RewardArm::RegisteredPlateau, &BITS);
+}
+
+/// The default arm's reading, held so a later change that moves it is seen.
+#[test]
+#[ignore = "population pin, five seeds; cargo test -p shekyl-staking-sim --release --bin shekyl-staking-sim -- l11_l13_five_seed --ignored"]
+fn l11_l13_five_seed_production_pins() {
+    check_vector(RewardArm::Production, &BITS_PRODUCTION);
 }
