@@ -3346,6 +3346,26 @@ mod tests {
         })
     }
 
+    /// The Phase 3a canonical known answer: under seed `0x01..=0x20`, the
+    /// verifier hashes the ASCII blob below to `34f8b017…`, the value the
+    /// release parity gate anchors against the C library's full dataset,
+    /// the mode miners run.
+    #[test]
+    fn the_verifier_reproduces_the_canonical_known_answer() {
+        assert_eq!(
+            CANONICAL_SEEDHASH_BYTES,
+            core::array::from_fn::<u8, 32, _>(|i| u8::try_from(i + 1).expect("32 fits u8")),
+            "the known answer's seed is 0x01..=0x20"
+        );
+        let blob = b"Shekyl RandomX v2 full-dataset parity KAT (Phase 3a, pin aaafe71)";
+        let expected: [u8; 32] = [
+            0x34, 0xf8, 0xb0, 0x17, 0x91, 0x59, 0xd8, 0x37, 0xe4, 0x63, 0xc1, 0x7c, 0x86, 0x92,
+            0xc1, 0x06, 0xd2, 0xd3, 0x53, 0x6f, 0x7d, 0xa3, 0x25, 0xae, 0xef, 0xeb, 0x3e, 0x22,
+            0xa1, 0x36, 0xb6, 0x51,
+        ];
+        assert_eq!(compute_hash(canonical_prepared_cache(), blob), expected);
+    }
+
     /// T6 spec-vector: post-mask `(sp_addr0, sp_addr1)` pairs across
     /// the first 4 iterations of the stub-NOP loop match the v2
     /// RandomX fork's interpreted iteration loop byte-for-byte at

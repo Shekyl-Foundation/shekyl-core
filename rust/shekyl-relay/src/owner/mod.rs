@@ -37,6 +37,7 @@ mod snapshot;
 
 pub use actor::{
     connection_id, start, RelayConfig, RelayHandle, RelayParts, RelayStartError, Started,
+    VerdictSink,
 };
 pub use pool::{Admit, PoolDoor};
 pub use port::Port;

@@ -247,6 +247,7 @@ fn a_newer_chain_file_is_refused_an_older_one_replaced_and_a_corrupt_one_kept() 
             version: "test".to_owned(),
             protocol_version: 1,
             release_build: false,
+            supervisor: None,
             request_stop: Arc::new(|| {}),
             plan: test_plan(&config),
         })
@@ -307,6 +308,7 @@ fn a_regtest_node_refuses_a_testnet_store_and_leaves_it_unwritten() {
             version: "test".to_owned(),
             protocol_version: 1,
             release_build: false,
+            supervisor: None,
             request_stop: Arc::new(|| {}),
             plan: test_plan(config),
         })
@@ -362,6 +364,7 @@ fn a_foreign_pool_file_is_recreated_and_a_corrupt_one_is_kept() {
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
+        supervisor: None,
         request_stop: Arc::new(|| {}),
         plan: test_plan(&config),
     });
@@ -381,6 +384,7 @@ fn one_archival_lever_opens_and_a_cap_outside_the_epoch_does_not() {
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
+        supervisor: None,
         request_stop: Arc::new(|| {}),
         plan: test_plan(&config),
     })
@@ -400,6 +404,7 @@ fn one_archival_lever_opens_and_a_cap_outside_the_epoch_does_not() {
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
+        supervisor: None,
         request_stop: Arc::new(|| {}),
         plan: test_plan(&refused),
     });
@@ -433,6 +438,7 @@ fn the_state_at_open_reads_the_declaration_not_the_network() {
                 version: "test".to_owned(),
                 protocol_version: 1,
                 release_build: false,
+                supervisor: None,
                 request_stop: Arc::new(|| {}),
                 plan: test_plan(&config),
             })

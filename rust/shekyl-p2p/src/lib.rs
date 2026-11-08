@@ -33,15 +33,15 @@ pub use descriptors::{observe_descriptors, PROBE_DESCRIPTORS};
 pub use facts::{LinkTotals, ListedAddress, PeerCounts, SocketTraffic};
 pub use network::{Listening, Network, NetworkParts, StartError};
 pub use plan::{ClearnetPlan, LinkLimits, NetworkPlan, PeerPlan, TorPlan};
-pub use tor::{TOR_DIAL_WITHIN, TOR_SOCKS_TIMEOUT};
+pub use tor::{SupervisorFeeds, TOR_DIAL_WITHIN, TOR_SOCKS_TIMEOUT};
 
-pub use shekyl_dialer::{session_of, TorLinkTally};
+pub use shekyl_dialer::{session_of, TallySink, TorLinkTally};
 pub use shekyl_p2p_session::{
-    Board, ClaimCarrier, CoreSyncData, Endpoint, Established, ProbeArrival, ProbeHandshake, Row,
-    SyncInbound, SyncOwner, Taken,
+    Board, ClaimCarrier, CoreSyncData, Endpoint, Established, PerConnector, ProbeArrival,
+    ProbeHandshake, ProbeSink, Row, SessionsSink, SyncInbound, SyncOwner, Taken,
 };
 pub use shekyl_peer_policy::InboundCeiling;
-pub use shekyl_relay::owner::{Admit, PoolDoor, RelayHandle};
+pub use shekyl_relay::owner::{Admit, PoolDoor, RelayHandle, VerdictSink};
 pub use shekyl_relay::{NodeSync, OriginVerdict, TxId};
 pub use shekyl_transport_layer::{
     clearnet_linger_descriptors, dial_profile, BanLeft, ConnectorId, DownCause, InboundCause,

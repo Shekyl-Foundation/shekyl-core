@@ -34,6 +34,13 @@ pub const CHALLENGE_NONCE_CUSTOMIZATION: &[u8] = b"shekyl/archival-challenge-non
 /// §4.4: the 256th attempt selects whatever its weight, so the loop is total.
 pub const DRAW_ATTEMPTS: u32 = 256;
 
+/// The full-pair acceptance mask: a pair that is not visibly short is
+/// selected when the low nibble of the attempt's ninth stream byte is zero,
+/// one attempt in sixteen, which is the 16 : 1 weight a visibly-short index
+/// carries (§4.4). Structural: the selection algorithm's shape, pinned by
+/// the draw's KAT vectors, not a parameter.
+pub const FULL_PAIR_ACCEPT_MASK: u8 = 0x0F;
+
 /// Reads of one draw before the challenger abandons it. Admission
 /// refuses `attempt ≥ K` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §5.3, `SCS-P13`).
 pub const CHALLENGE_READS: u8 = 3;
@@ -70,7 +77,7 @@ pub struct SelectedDraw {
 ///     i = v mod D
 ///     if attempt = 255:                select i
 ///     if short(i):                     select i
-///     if x[8] & 0x0F = 0:              select i
+///     if x[8] & FULL_PAIR_ACCEPT_MASK = 0: select i
 ///     otherwise continue
 /// ```
 pub fn select_draw<E>(
@@ -93,7 +100,7 @@ pub fn select_draw<E>(
             continue;
         }
         let index = value % set_size;
-        if short(index)? || x[8] & 0x0F == 0 {
+        if short(index)? || x[8] & FULL_PAIR_ACCEPT_MASK == 0 {
             return Ok(Some(SelectedDraw {
                 index,
                 attempts: attempt + 1,

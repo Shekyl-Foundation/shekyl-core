@@ -25,7 +25,6 @@
 use std::ffi::OsString;
 use std::io::Write;
 use std::num::NonZeroUsize;
-use std::path::Path;
 use std::sync::Arc;
 
 use tokio::sync::watch;
@@ -157,7 +156,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     );
     announced.rest.extend(mining_notice(&config));
     let lines = announced.into_lines();
-    announce_all(&config.logging.file, &lines);
+    announce_all(&lines);
 
     // The settlement schedule, armed before the node whose first epoch
     // arithmetic would latch it exists; a value the owner refuses is the
@@ -173,6 +172,10 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
         )]);
     }
 
+    // The managed Tor's inbox, before the node: the network publishes into
+    // it from its first value (`TOR_SUPERVISOR.md` §5). The supervisor
+    // starts on it once the node is open.
+    let (tor_inbox, tor_feeds) = tor::prepare(&config.tor).unzip();
     // The node, after the marker (DX-Q6): the store, ingest, the pool,
     // chain sync, and the network built from the plan (§2). The network's
     // ban file entries are applied before its first accept, and its
@@ -186,6 +189,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
         release_build: shekyl_version::IS_RELEASE,
         request_stop: Arc::new(signals::request_stop),
         plan: network::plan(&config, network_id),
+        supervisor: tor_feeds,
     }) {
         Ok(node) => node,
         Err(error) => {
@@ -246,7 +250,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
         network,
         Arc::new(move |limits| link_owner.set_limits(limits)),
     ));
-    let status = supervise(&config, &pool, options, node);
+    let status = supervise(&config, &pool, options, node, tor_inbox);
     pool.shutdown_background();
     drop(lock);
     // Last: every sink is a queue, and the lines logged up to here (the
@@ -259,10 +263,12 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
 }
 
 /// A stop was requested, or chain sync's owner ended on its own. A small
-/// status: copied, never borrowed.
+/// status: copied, never borrowed. The stop arm carries the cause, so the
+/// report is made where the wait is recorded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RunWait {
-    StopRequested,
+    /// [`signals::stop_requested`] resolved with this cause.
+    StopRequested(signals::StopCause),
     /// The node's sync owner ended on its own, with this cause: the
     /// daemon would stay up and never sync, so it stops and exits failed.
     SyncFailed(shekyl_node::EndCause),
@@ -279,6 +285,7 @@ fn supervise(
     pool: &shekyl_runtime::Pool,
     options: OptionsHandle,
     node: shekyl_node::Node,
+    tor_inbox: Option<tor::Prepared>,
 ) -> i32 {
     // The RPC, bound before anything is announced as up. A refusal is a
     // failed start: the node is torn down the one way.
@@ -297,14 +304,17 @@ fn supervise(
     // The managed Tor starts with the node, which does not wait for it:
     // clearnet, the listeners and the dialer are up already, and the
     // managed connector is parked until the supervisor publishes a route.
-    let supervisor = tor::begin(
-        &config.tor,
-        config.clearnet_on(),
-        config.network.ports().p2p,
-        &config.data_dir,
-        pool.handle(),
-        node.network().clone(),
-    );
+    let supervisor = tor_inbox.and_then(|prepared| {
+        tor::begin(
+            prepared,
+            &config.tor,
+            config.clearnet_on(),
+            config.network.ports().p2p,
+            &config.data_dir,
+            pool.handle(),
+            node.network().clone(),
+        )
+    });
     if let (Some(supervisor), Some(forward)) = (&supervisor, node.network().listening().tor_forward)
     {
         supervisor.note_forward(forward);
@@ -312,10 +322,8 @@ fn supervise(
     let mut preserve_status = rpc.is_some();
     if rpc.is_some() {
         let mut sync_ended = node.sync_ended();
-        note_run(
-            &mut preserve_status,
-            pool.block_on(run_or_stop(&mut sync_ended)),
-        );
+        let wait = pool.block_on(run_or_stop(&mut sync_ended));
+        note_run(&mut preserve_status, wait);
     }
     notify_driver.abort();
     finish(pool, supervisor, rpc, preserve_status, node)
@@ -373,10 +381,7 @@ async fn run_or_stop(sync_ended: &mut watch::Receiver<Option<shekyl_node::SyncEn
     tokio::select! {
         biased;
         cause = sync_failed(sync_ended) => RunWait::SyncFailed(cause),
-        cause = signals::stop_requested() => {
-            note_stop(cause);
-            RunWait::StopRequested
-        }
+        cause = signals::stop_requested() => RunWait::StopRequested(cause),
     }
 }
 
@@ -402,17 +407,47 @@ async fn sync_failed(
 /// failure.
 fn note_run(preserve_status: &mut bool, wait: RunWait) {
     match wait {
-        RunWait::StopRequested => {}
+        RunWait::StopRequested(cause) => {
+            if matches!(cause, signals::StopCause::Fatal(_)) {
+                *preserve_status = false;
+            }
+            deliver(stop_report(cause));
+        }
         RunWait::SyncFailed(cause) => {
-            tracing::error!(target: "daemon", "chain sync stopped: {cause}; the daemon stops");
-            signals::fatal(cause.text());
+            deliver(stop_report(signals::StopCause::Fatal(cause)));
+            signals::fatal(cause);
             *preserve_status = false;
         }
     }
 }
 
-fn note_stop(by: &'static str) {
-    tracing::warn!(target: "daemon", "stop requested by {by}");
+/// What the operator is told about one stop. The match is the whole
+/// policy: a new [`signals::StopCause`] variant has to choose here.
+#[derive(Debug, PartialEq, Eq)]
+enum StopReport {
+    /// An IG-14 announcement: standard error and the log, whatever the
+    /// level, with no level tag.
+    Announce(String),
+    /// An error event.
+    Error(String),
+}
+
+fn stop_report(cause: signals::StopCause) -> StopReport {
+    match cause {
+        signals::StopCause::Signal(_) | signals::StopCause::Requested => {
+            StopReport::Announce(format!("stop requested by {cause}"))
+        }
+        signals::StopCause::Fatal(cause) => {
+            StopReport::Error(format!("chain sync stopped: {cause}; the daemon stops"))
+        }
+    }
+}
+
+fn deliver(report: StopReport) {
+    match report {
+        StopReport::Announce(line) => announce_all(&[line]),
+        StopReport::Error(line) => tracing::error!(target: "daemon", "{line}"),
+    }
 }
 
 /// The line a start with `mine = on` announces when the node's declaration
@@ -435,17 +470,15 @@ pub fn mining_notice(config: &DaemonConfig) -> Option<String> {
     )
 }
 
-/// The announcements, to standard error and appended to the log file.
-fn announce_all(log_file: &Path, lines: &[String]) {
+/// The announcements, on standard error and in the log, whatever the level.
+///
+/// Each line is queued on the installed sinks, so the call does not wait
+/// on one and does not open the log beside the rolling writer. Standard
+/// error is prefixed `shekyld:`; the log line is the line alone. The
+/// closing [`shekyl_logging::flush`] delivers a line queued before it.
+fn announce_all(lines: &[String]) {
     for line in lines {
-        tell(&mut std::io::stderr(), &format!("shekyld: {line}"));
-    }
-    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(log_file) {
-        for line in lines {
-            if writeln!(f, "{line}").is_err() {
-                break;
-            }
-        }
+        shekyl_logging::announce(&format!("shekyld: {line}"), line);
     }
 }
 
@@ -462,6 +495,7 @@ pub(crate) fn hold_process_table() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::sync::Mutex;
 
     /// The signal owner's request and the schedule latches are
@@ -570,6 +604,7 @@ mod tests {
             release_build: false,
             request_stop: Arc::new(crate::signals::request_stop),
             plan: network::plan(&config, [3u8; 16]),
+            supervisor: None,
         })
         .expect("the node opens");
         (config, node)
@@ -604,12 +639,13 @@ mod tests {
             &pool,
             Arc::new(shekyl_daemon_rpc::options::OptionsAbsent),
             node,
+            None,
         );
         requester.join().unwrap();
         assert_eq!(status, 0, "a requested stop is the exit status 0");
         assert_eq!(
             pool.block_on(signals::stop_requested()),
-            "the daemon's own request (console or RPC)"
+            signals::StopCause::Requested
         );
         pool.shutdown_background();
     }
@@ -668,7 +704,13 @@ mod tests {
         let text = std::fs::read_to_string(&log).unwrap();
         assert!(text.contains("effective configuration:"), "{text}");
         assert!(text.contains("posture:"), "{text}");
-        assert!(text.contains("stop requested by"), "{text}");
+        // The stop was asked for: an announcement, in the log whatever the
+        // level, with no level tag (IG-14; alpha.11 bug hunt).
+        let stop = text
+            .lines()
+            .find(|line| line.contains("stop requested by"))
+            .unwrap_or_else(|| panic!("no stop announcement: {text}"));
+        assert_eq!(stop, "stop requested by the RPC's stop_daemon", "{text}");
         // The lock was released at the end: it can be taken again.
         assert!(Lock::take(&data).is_ok());
     }
@@ -709,7 +751,63 @@ mod tests {
         assert!(!preserve_status, "the exit was not made a failure");
         assert_eq!(
             rt.block_on(signals::stop_requested()),
-            "the session layer dropped the sync owner"
+            signals::StopCause::Fatal(shekyl_node::EndCause::PortClosed)
+        );
+    }
+
+    /// **A fatal cause on the stop arm fails the exit.** The owner's
+    /// failed end is the other arm; this is a waiter that sees the cause
+    /// the latch already holds. Red edit: leave `preserve_status` set.
+    #[test]
+    fn a_latched_fatal_cause_fails_the_exit() {
+        let _serial = SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        signals::own(rt.handle()).expect("own");
+        signals::fatal(shekyl_node::EndCause::EngineClosed);
+        let (_ended_tx, mut ended) = watch::channel(None);
+        let wait = rt.block_on(run_or_stop(&mut ended));
+        assert_eq!(
+            wait,
+            RunWait::StopRequested(signals::StopCause::Fatal(
+                shekyl_node::EndCause::EngineClosed
+            ))
+        );
+        let mut preserve_status = true;
+        note_run(&mut preserve_status, wait);
+        assert!(!preserve_status, "a fatal cause kept the exit");
+    }
+
+    /// **An asked-for stop is announced, a forced one is the sync error.**
+    /// The report matches the cause. Red edit: announce a fatal cause,
+    /// or report an asked-for stop as an error.
+    #[test]
+    fn an_asked_for_stop_is_announced_and_a_forced_one_is_an_error() {
+        use signals::StopCause;
+        assert_eq!(
+            stop_report(StopCause::Requested),
+            StopReport::Announce("stop requested by the RPC's stop_daemon".to_owned())
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            stop_report(StopCause::Signal(signals::Signal::Terminate)),
+            StopReport::Announce("stop requested by SIGTERM".to_owned())
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            stop_report(StopCause::Signal(signals::Signal::Shutdown)),
+            StopReport::Announce("stop requested by shutdown".to_owned())
+        );
+        assert_eq!(
+            stop_report(StopCause::Fatal(shekyl_node::EndCause::PortClosed)),
+            StopReport::Error(
+                "chain sync stopped: the session layer dropped the sync owner; the daemon stops"
+                    .to_owned()
+            )
         );
     }
 }

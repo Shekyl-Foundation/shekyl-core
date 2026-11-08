@@ -438,10 +438,12 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
             }
             NonceTake::Probe { minted_at } => {
                 let arrived_at = self.deadlines.now();
-                self.shared.owners.probes.probe_arrived(ProbeArrival {
-                    minted_at,
-                    arrived_at,
-                });
+                if let Some(probes) = &self.shared.owners.probes {
+                    probes.probe_arrived(ProbeArrival {
+                        minted_at,
+                        arrived_at,
+                    });
+                }
                 self.close(DialEnd::local_close_after_channel());
                 return;
             }

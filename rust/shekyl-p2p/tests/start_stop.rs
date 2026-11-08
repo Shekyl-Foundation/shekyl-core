@@ -11,7 +11,7 @@
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use shekyl_levin::{
@@ -20,8 +20,9 @@ use shekyl_levin::{
 
 use shekyl_p2p::{
     Admit, BanSpan, BanTarget, ClaimCarrier, ClearnetPlan, CoreSyncData, Established, LinkLimits,
-    Network, NetworkParts, NetworkPlan, NodeSync, PeerPlan, PoolDoor, Sockets, SyncInbound,
-    SyncOwner, Taken, TorPlan, TxId,
+    Network, NetworkParts, NetworkPlan, NodeSync, OriginVerdict, PeerPlan, PerConnector, PoolDoor,
+    ProbeArrival, ProbeSink, Sockets, SupervisorFeeds, SyncInbound, SyncOwner, Taken, TorLinkTally,
+    TorPlan, TxId,
 };
 use tokio::sync::watch;
 
@@ -85,6 +86,7 @@ fn parts(plan: NetworkPlan) -> NetworkParts {
         pool: Arc::new(EmptyPool),
         node_sync,
         tip,
+        supervisor: None,
     }
 }
 
@@ -97,6 +99,59 @@ fn offline_starts_and_stops() {
     assert!(network.board().is_empty());
     assert_eq!(network.session_counts(), (0, 0));
     network.stop();
+    network.stop();
+}
+
+/// What the supervisor hears, recorded.
+#[derive(Default)]
+struct Heard {
+    tallies: Mutex<Vec<TorLinkTally>>,
+    verdicts: Mutex<Vec<OriginVerdict>>,
+    sessions: Mutex<Vec<PerConnector<u32>>>,
+}
+
+impl ProbeSink for Heard {
+    fn probe_arrived(&self, _: ProbeArrival) {}
+}
+
+/// **The feeds reach the supervisor at start** (`TOR_SUPERVISOR.md` §5).
+/// Each producer the network starts publishes its value at start into the
+/// feed it was handed: the dial tally, the relay's verdict, the sessions
+/// each connector holds. Dropping any one wiring in `Network::start`
+/// leaves its list empty.
+#[test]
+fn the_supervisor_feeds_hear_each_value_at_start() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let heard = Arc::new(Heard::default());
+    let mut parts = parts(plan(dir.path(), None));
+    parts.supervisor = Some(SupervisorFeeds {
+        tally: {
+            let heard = Arc::clone(&heard);
+            Arc::new(move |tally| heard.tallies.lock().expect("tallies").push(tally))
+        },
+        probes: Arc::clone(&heard) as Arc<dyn ProbeSink>,
+        verdict: {
+            let heard = Arc::clone(&heard);
+            Arc::new(move |verdict| heard.verdicts.lock().expect("verdicts").push(verdict))
+        },
+        sessions: {
+            let heard = Arc::clone(&heard);
+            Arc::new(move |held| heard.sessions.lock().expect("sessions").push(held))
+        },
+    });
+    let network = Network::start(parts).expect("starts");
+    assert_eq!(
+        *heard.tallies.lock().expect("tallies"),
+        vec![TorLinkTally::default()]
+    );
+    assert_eq!(
+        *heard.verdicts.lock().expect("verdicts"),
+        vec![OriginVerdict::Absent]
+    );
+    assert_eq!(
+        *heard.sessions.lock().expect("sessions"),
+        vec![PerConnector::both(0)]
+    );
     network.stop();
 }
 

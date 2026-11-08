@@ -87,4 +87,54 @@ mod tests {
     fn empty_is_none() {
         assert_eq!(merkle_root(vec![]), None);
     }
+
+    /// The 16 tree-hash vectors of the inherited hash suite's
+    /// `tests-tree.txt`, copied byte for byte: the expected
+    /// root, then the leaves as one hex string of 32-byte hashes. They are
+    /// the only vectors for the odd sizes, where the rightmost leaves pair
+    /// down to a power of two before the rest; the block header's
+    /// transaction tree hash is this function.
+    #[test]
+    fn merkle_root_matches_every_tree_vector() {
+        const VECTORS: &str = include_str!("../tests/vectors/tx_tree_hash.txt");
+        let unhex = |text: &str| -> Vec<u8> {
+            assert!(text.len().is_multiple_of(2), "odd-length hex: {text}");
+            (0..text.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&text[i..i + 2], 16).expect("hex digit"))
+                .collect()
+        };
+        let mut sizes = Vec::new();
+        for (line_no, line) in VECTORS.lines().enumerate() {
+            let mut fields = line.split_whitespace();
+            let (Some(expected), Some(leaves), None) =
+                (fields.next(), fields.next(), fields.next())
+            else {
+                panic!("line {}: not `<root> <leaves>`: {line:?}", line_no + 1);
+            };
+            let bytes = unhex(leaves);
+            assert!(
+                bytes.len().is_multiple_of(32),
+                "line {}: leaves",
+                line_no + 1
+            );
+            let leaves: Vec<[u8; 32]> = bytes
+                .chunks(32)
+                .map(|c| c.try_into().expect("32 bytes"))
+                .collect();
+            sizes.push(leaves.len());
+            let root = merkle_root(leaves).expect("a vector has a leaf");
+            assert_eq!(
+                root.to_vec(),
+                unhex(expected),
+                "line {}: {} leaves",
+                line_no + 1,
+                sizes[sizes.len() - 1]
+            );
+        }
+        // The subject (rule 47): every size from 1 to 16 leaves, so each
+        // odd size and each power-of-two boundary is in the file.
+        sizes.sort_unstable();
+        assert_eq!(sizes, (1..=16).collect::<Vec<_>>(), "the leaf counts");
+    }
 }

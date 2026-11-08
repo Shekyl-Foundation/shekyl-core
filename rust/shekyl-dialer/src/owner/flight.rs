@@ -45,7 +45,7 @@ use shekyl_transport_layer::{DialEnd, SocketId};
 
 use super::handshake::{attempt_task, failed_outcome, Attempt, AttemptEnd, Prepared, TaskResult};
 use super::ready::block_on_future;
-use super::{Dialer, Shared};
+use super::{AttemptTimes, Dialer, Shared};
 use crate::fill::DialAim;
 
 /// What one [`Dialer::launch`] did.
@@ -91,12 +91,9 @@ pub(super) struct Finished {
     /// queue counts, so a timeout's place against the Tor window
     /// ([`Dialer::window`]) is the attempt's own.
     ran_nanos: u64,
-    /// When the attempt's stream opened, on the judge's clock, when one did.
-    opened_ms: Option<u64>,
-    /// When the attempt resolved, on the judge's clock ([`AttemptEnd::ended_ms`]).
-    /// The failure is dated here. The wait in the completion queue is not
-    /// part of it, so a verdict applied late can err only toward excusing.
-    ended_ms: u64,
+    /// When the attempt began, when its stream opened, and when it
+    /// resolved.
+    times: AttemptTimes,
 }
 
 /// `attempt`, timed inside its task ([`Finished::ran_nanos`]).
@@ -104,18 +101,21 @@ async fn timed<C: Clock + Clone + Send + Sync + 'static>(
     layer: SessionLayer<C>,
     attempt: impl Future<Output = AttemptEnd>,
 ) -> Finished {
-    let started = layer.now();
+    let began = layer.stamp();
     let AttemptEnd {
         result,
         opened_ms,
         ended_ms,
     } = attempt.await;
-    let ran_nanos = layer.now().get().saturating_sub(started.get());
+    let ran_nanos = layer.now().get().saturating_sub(began.tick().get());
     Finished {
         result,
         ran_nanos,
-        opened_ms,
-        ended_ms,
+        times: AttemptTimes {
+            began,
+            opened_ms,
+            ended_ms,
+        },
     }
 }
 
@@ -614,15 +614,19 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
         end: DialEnd,
         rng: &mut R,
     ) -> BeforeIo {
-        let now = self.now();
-        let ended_ms = self.life_now_ms();
-        self.with_inbound(|shared| {
+        let at = self.stamp();
+        let times = AttemptTimes {
+            began: at,
+            opened_ms: None,
+            ended_ms: self.life_now_ms(),
+        };
+        self.with_sessions(at, |shared| {
             if self.stop.load(Ordering::Acquire) {
                 shared.attempts(connector).cancel(&address);
                 return BeforeIo::Stopped;
             }
             let outcome = failed_outcome(address, end);
-            Self::record(shared, connector, &outcome, None, ended_ms, now, rng);
+            Self::record(shared, connector, &outcome, times, at, rng);
             BeforeIo::Recorded
         })
     }
@@ -668,8 +672,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
         let Finished {
             result,
             ran_nanos,
-            opened_ms,
-            ended_ms,
+            times,
         } = finished;
         let Some((record, permit)) = self.begin_apply(id) else {
             drop(result);
@@ -679,12 +682,12 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
         let kept = match self.apply_result(connector, &address, result, rng) {
             Attempt::Done(outcome) => {
                 tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
-                self.settle_or_retry(connector, &outcome, ran_nanos, opened_ms, ended_ms, rng);
+                self.settle_or_retry(connector, &outcome, ran_nanos, times, rng);
                 None
             }
             Attempt::Kept(kept) => {
                 let socket = kept.id;
-                self.accept_kept(connector, &address, kept, opened_ms, ended_ms, rng)
+                self.accept_kept(connector, &address, kept, times, rng)
                     .then_some(socket)
             }
         };
@@ -715,15 +718,20 @@ impl<C: Clock + Clone + Send + Sync + 'static> Drop for ApplyPermit<'_, C> {
 mod tests {
     use super::{Completions, Finished};
     use crate::owner::handshake::TaskResult;
+    use crate::owner::AttemptTimes;
     use shekyl_peerlist::ConnectorId;
+    use shekyl_timing_engine::{Clock, ManualClock, Tick};
     use shekyl_transport_layer::DialEnd;
 
     fn failed() -> Finished {
         Finished {
             result: TaskResult::Failed(DialEnd::local_close()),
             ran_nanos: 0,
-            opened_ms: None,
-            ended_ms: 0,
+            times: AttemptTimes {
+                began: ManualClock::new(Tick::new(0)).stamp(),
+                opened_ms: None,
+                ended_ms: 0,
+            },
         }
     }
 

@@ -11,7 +11,7 @@
 //! - **Observations.** A stream that opened is noted when its attempt
 //!   ends, after that attempt was judged, so it never corroborates its own
 //!   failure. A corroborating session's received bytes are read off the
-//!   board with the inbound rows ([`Dialer::with_inbound`]): sessions whose
+//!   board before the dialer's lock ([`Dialer::with_sessions`]): sessions whose
 //!   handshake finished, inbound included only where the connector counts
 //!   inbound. The probe of this node's own onion is dropped in that
 //!   handshake, so it is never one of them (§3.3, the brief's test 7).
@@ -31,7 +31,7 @@ use std::sync::Arc;
 use shekyl_draw_rng::RelayRng;
 use shekyl_p2p_session::{Board, Direction};
 use shekyl_peerlist::{dial_profile, ConnectorId, DialOutcome, Tick, Verdict};
-use shekyl_timing_engine::Clock;
+use shekyl_timing_engine::{Clock, Stamp};
 use shekyl_transport_layer::SessionTraffic;
 
 use super::{Dialer, Shared};
@@ -80,10 +80,22 @@ pub(super) struct LinkEvidence {
 }
 
 impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
+    /// Read each connector's corroborating sessions off the board, then
+    /// run `body`, dating any sign of life `at`.
+    ///
+    /// The board is the layer's published copy, read before the dialer's
+    /// lock. `body` must not call back into the session layer.
+    pub(super) fn with_sessions<R>(&self, at: Stamp, body: impl FnOnce(&mut Shared) -> R) -> R {
+        let board = self.board();
+        let mut shared = self.shared();
+        Self::observe_sessions(&board, &mut shared, at);
+        body(&mut shared)
+    }
+
     /// Read each connector's corroborating sessions off `board`: the latest
     /// byte any of them received. A byte that arrived is kept when its
     /// session later closes; it did arrive.
-    pub(super) fn observe_sessions(board: &Board, shared: &mut Shared, now: Tick) {
+    fn observe_sessions(board: &Board, shared: &mut Shared, at: Stamp) {
         for &connector in ConnectorId::ALL {
             let traffic = dial_profile(connector)
                 .judging
@@ -105,7 +117,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
             shared.evidence[connector.index()]
                 .observed
                 .note_session(latest);
-            Self::note_life(shared, connector, now);
+            Self::note_life(shared, connector, at);
         }
     }
 
@@ -118,13 +130,13 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
         connector: ConnectorId,
         outcome: &DialOutcome,
         at_ms: u64,
-        now: Tick,
+        at: Stamp,
     ) {
         if attempt_stream(outcome) == AttemptStream::Opened {
             shared.evidence[connector.index()]
                 .observed
                 .note_stream(at_ms);
-            Self::note_life(shared, connector, now);
+            Self::note_life(shared, connector, at);
         }
     }
 
@@ -132,7 +144,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
     /// failure whose bracket it falls inside, clears the excusals made
     /// since the last one, and on Tor is published for the posture line
     /// (§6).
-    fn note_life(shared: &mut Shared, connector: ConnectorId, now: Tick) {
+    fn note_life(shared: &mut Shared, connector: ConnectorId, at: Stamp) {
         let judging = dial_profile(connector).judging;
         let evidence = &mut shared.evidence[connector.index()];
         let life = evidence.observed.last_life(judging.corroboration);
@@ -153,7 +165,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
         if std::mem::take(&mut evidence.excused_since) {
             shared.lists.clear_excused(connector);
         }
-        shared.tor_link.life(connector, now);
+        shared.tor_link.life(connector, at);
     }
 
     /// Judge a failed test at `failed_ms`, or defer its verdict. A test
@@ -226,8 +238,10 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
     /// life inside its bracket, or excused at its deadline. Each wake does
     /// this first, as the owner loop does.
     pub fn apply_verdicts<R: RelayRng + ?Sized>(&self, rng: &mut R) {
-        let now = self.now();
-        self.with_inbound(|shared| Self::apply_due_verdicts(shared, now, rng));
+        let at = self.stamp();
+        self.with_sessions(at, |shared| {
+            Self::apply_due_verdicts(shared, at.tick(), rng)
+        });
     }
 
     fn perform<R: RelayRng + ?Sized>(

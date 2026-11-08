@@ -330,8 +330,11 @@ mod tests {
         assert!(warning.starts_with("warning: managed Tor: "));
         assert!(warning.contains("was not started"));
         assert!(warning.contains(missing.to_str().unwrap()));
-        assert!(warning.contains("waiting for Tor"));
-        assert!(warning.contains("It is not syncing."));
+        assert!(warning.contains("this node will wait for Tor"));
+        assert!(
+            warning.contains("It will not sync until Tor is up."),
+            "clearnet is off, and a check holds no session: {warning}"
+        );
         let (out, err) = accepted_lines(
             &loaded.resolved,
             loaded.file_read.as_deref(),

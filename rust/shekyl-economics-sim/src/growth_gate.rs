@@ -36,11 +36,12 @@ const BASELINE_TABLE_YEARS: usize = 25;
 /// tuning knob.
 const ONE_TRANSACTION_PER_BLOCK: u64 = 1;
 
-/// One year's carried and expired transactions, in counts over the year.
+/// One year's carried transactions and those it dropped unserved (expired,
+/// evicted or refused), in counts over the year.
 struct BlockTraffic {
     year: u64,
     carried_txs: u128,
-    expired_txs: u128,
+    dropped_txs: u128,
 }
 
 /// The year's last block, reduced to the operands the gate reads.
@@ -182,8 +183,8 @@ fn fee_gate(block: &GateBlock, params: &SimParams, economic: &EconomicParams) ->
 /// First year whose carried count exceeds the constrained ceiling by more
 /// than one transaction a block.
 ///
-/// A year raises the ceiling only when it expires more than one transaction
-/// a block. The comparison is strict, so a climb of exactly that grain is
+/// A year raises the ceiling only when it drops more than one transaction a
+/// block unserved (expired, evicted or refused). The comparison is strict, so a climb of exactly that grain is
 /// still the same congestion. `None` when no year was constrained, or when
 /// `blocks_per_year` is `0` (there is no per-block grain to compare).
 fn congestion_escape_year(years: &[BlockTraffic], blocks_per_year: u64) -> Option<u64> {
@@ -198,7 +199,7 @@ fn congestion_escape_year(years: &[BlockTraffic], blocks_per_year: u64) -> Optio
                 return Some(year.year);
             }
         }
-        if year.expired_txs > grain {
+        if year.dropped_txs > grain {
             ceiling = Some(ceiling.map_or(year.carried_txs, |room| room.max(year.carried_txs)));
         }
     }
@@ -255,7 +256,7 @@ pub(crate) fn write_report(
     )?;
     writeln!(
         out,
-        "     ('-' when no year expired more than one tx/block)."
+        "     ('-' when no year dropped more than one tx/block unserved)."
     )?;
     writeln!(
         out,
@@ -313,7 +314,7 @@ pub(crate) fn write_report(
             .map(|agg| BlockTraffic {
                 year: agg.year,
                 carried_txs: agg.carried_txs,
-                expired_txs: agg.expired_txs,
+                dropped_txs: agg.dropped_txs(),
             })
             .collect();
         let growth = congestion_escape_year(&traffic, params.blocks_per_year());
@@ -345,11 +346,11 @@ mod tests {
         }
     }
 
-    fn traffic(year: u64, carried_txs: u128, expired_txs: u128) -> BlockTraffic {
+    fn traffic(year: u64, carried_txs: u128, dropped_txs: u128) -> BlockTraffic {
         BlockTraffic {
             year,
             carried_txs,
-            expired_txs,
+            dropped_txs,
         }
     }
 
@@ -461,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn a_year_that_never_expires_a_tx_per_block_is_not_constrained() {
+    fn a_year_that_never_drops_a_tx_per_block_is_not_constrained() {
         assert_eq!(
             congestion_escape_year(&[traffic(1, 10, 0), traffic(2, 10_000, 0)], 10),
             None
@@ -528,7 +529,7 @@ mod tests {
             .map(|agg| BlockTraffic {
                 year: agg.year,
                 carried_txs: agg.carried_txs,
-                expired_txs: agg.expired_txs,
+                dropped_txs: agg.dropped_txs(),
             })
             .collect();
         assert_eq!(

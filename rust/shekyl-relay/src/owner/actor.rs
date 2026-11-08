@@ -88,7 +88,15 @@ pub struct RelayParts<C: Clock + Clone + Send + Sync + 'static> {
     pub runtime: tokio::runtime::Handle,
     /// The zone's draws. `SecureRelayRng` in production.
     pub rng: Box<dyn RelayRng + Send>,
+    /// Who hears the hop-0 verdict for a local origin: the managed Tor
+    /// supervisor (`GS-Q3`). `None` when none runs.
+    pub verdict: Option<VerdictSink>,
 }
+
+/// Where the relay reports its hop-0 verdict for a local origin: the value
+/// at start, then each change. Called from the relay's task: it must not
+/// block.
+pub type VerdictSink = Arc<dyn Fn(OriginVerdict) + Send + Sync>;
 
 /// Why the owner did not start.
 #[derive(Debug)]
@@ -160,7 +168,6 @@ impl std::fmt::Debug for RelayNow {
 #[derive(Clone, Debug)]
 pub struct RelayHandle {
     inbox: mpsc::UnboundedSender<Cmd>,
-    verdict: watch::Receiver<OriginVerdict>,
     snapshot: Arc<Mutex<Arc<RelaySnapshot>>>,
     /// This node's origin arm times. Not a field of [`RelaySnapshot`]:
     /// that snapshot is what health projects, and a transaction id does
@@ -185,14 +192,6 @@ impl RelayHandle {
     /// Transactions that left the pool: their relay state is released.
     pub fn departed(&self, txs: Vec<TxId>) {
         let _gone = self.inbox.send(Cmd::Departed(txs));
-    }
-
-    /// Whether a local origin leaves on a session that hides this node's
-    /// address, as the zone last judged it. The managed Tor supervisor and
-    /// the node's health read this.
-    #[must_use]
-    pub fn origin_verdict(&self) -> watch::Receiver<OriginVerdict> {
-        self.verdict.clone()
     }
 
     /// The zone's published reads.
@@ -307,6 +306,7 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         node_sync,
         timing,
         runtime,
+        verdict,
         mut rng,
     } = parts;
     if config.min_epoch_secs == 0 {
@@ -353,7 +353,10 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         .map(|connector| (*connector, FloorWatch::new(MIN_PROVISIONED_OUT_PEERS)))
         .collect();
     let (inbox_tx, inbox) = mpsc::unbounded_channel();
-    let (verdict_tx, verdict) = watch::channel(zone.origin_verdict());
+    let last_verdict = zone.origin_verdict();
+    if let Some(sink) = &verdict {
+        sink(last_verdict);
+    }
     let snapshot = Arc::new(Mutex::new(Arc::new(RelaySnapshot::default())));
     let origins = Arc::new(Mutex::new(Arc::new(HashMap::new())));
     let port = Arc::new(Port::new(
@@ -363,7 +366,6 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
     ));
     let handle = RelayHandle {
         inbox: inbox_tx,
-        verdict,
         snapshot: Arc::clone(&snapshot),
         origins: Arc::clone(&origins),
         now: RelayNow::new(move || millis(clock.now())),
@@ -380,7 +382,8 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         node_sync,
         owner,
         inbox,
-        verdict: verdict_tx,
+        verdict,
+        last_verdict,
         snapshot,
         origins,
     };
@@ -409,7 +412,9 @@ struct Actor<C: Clock + Clone + Send + Sync + 'static> {
     node_sync: watch::Receiver<NodeSync>,
     owner: OwnerHandle<C>,
     inbox: mpsc::UnboundedReceiver<Cmd>,
-    verdict: watch::Sender<OriginVerdict>,
+    /// Who hears the hop-0 verdict, and the value it last heard.
+    verdict: Option<VerdictSink>,
+    last_verdict: OriginVerdict,
     snapshot: Arc<Mutex<Arc<RelaySnapshot>>>,
     origins: Arc<Mutex<Arc<HashMap<TxId, Millis>>>>,
 }
@@ -458,7 +463,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         if let Err(_engine_closing) = self.owner.arm(tick_of(self.driver.next_wake())) {}
     }
 
-    fn publish(&self) {
+    fn publish(&mut self) {
         let zone = self.driver.zone();
         let snapshot = RelaySnapshot {
             noise: zone.noise_enabled(),
@@ -478,14 +483,12 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
             *slot = Arc::new(zone.origin_armed());
         }
         let verdict = zone.origin_verdict();
-        self.verdict.send_if_modified(|current| {
-            if *current == verdict {
-                false
-            } else {
-                *current = verdict;
-                true
+        if verdict != self.last_verdict {
+            self.last_verdict = verdict;
+            if let Some(sink) = &self.verdict {
+                sink(verdict);
             }
-        });
+        }
     }
 
     fn on_cmd(&mut self, cmd: Cmd) {

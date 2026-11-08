@@ -10,13 +10,15 @@
 //! Which reply a failed onion dial gets is the destination's to choose as
 //! much as the link's: a live service that refuses its port answers `0x01`,
 //! one that blackholes it answers `0x06`, as a blocked link does. So the
-//! tally says only what is plainly so: whether streams open, and whether
-//! the node holds a Tor session now. The supervisor never sees an address
-//! or a reply code.
+//! tally says only what is plainly so: whether streams open, and when the
+//! link last showed life. The supervisor never sees an address
+//! or a reply code. How many sessions each connector holds is the session
+//! layer's to publish, from its board.
 
 use std::sync::Arc;
 
-use shekyl_peerlist::{ConnectorId, DialOutcome, Tick};
+use shekyl_peerlist::{ConnectorId, DialOutcome};
+use shekyl_timing_engine::Stamp;
 
 use crate::reach::{attempt_stream, AttemptStream};
 
@@ -30,19 +32,17 @@ pub struct TorLinkTally {
     /// whose test goes on to a retry (revision 4 of the in-flight bound,
     /// Rick 2026-10-26).
     pub unopened: u32,
-    /// Tor sessions this node holds now: outbound sessions the dialer
-    /// kept, plus inbound sessions on the board.
-    pub held: u32,
-    /// When the dialer's judge last saw the link work, on the process
-    /// clock: a stream that opened, or a byte a session received
-    /// (`DIALER_OUTAGE_EVIDENCE.md` §4.1). `None` until the first.
-    pub last_sign_of_life: Option<Tick>,
-    /// When a Tor dial last ended without a stream, on the process clock.
-    /// The quiet line dates that failure here: the tally the supervisor
-    /// receives can also carry a later sign of life, and the watch keeps
-    /// only the latest value. `None` until the first. An opened stream
-    /// does not clear it.
-    pub last_unopened_at: Option<Tick>,
+    /// When the dialer's judge last saw the link work: a stream that
+    /// opened, or a byte a session received (`DIALER_OUTAGE_EVIDENCE.md`
+    /// §4.1). `None` until the first.
+    pub last_sign_of_life: Option<Stamp>,
+    /// The latest `attempt_began` among Tor dials that ended without a
+    /// stream (`DIALER_OUTAGE_EVIDENCE.md` §6.1): when the dialer launched
+    /// the attempt, not when it was counted. A dial sent to an old Tor, or
+    /// before a wake, fails after the quiet stretch begins, and its launch
+    /// says it did not test the link since. `None` until the first. An
+    /// opened stream does not clear it.
+    pub failed_attempt_began: Option<Stamp>,
 }
 
 /// Where the tally goes. Called under the dialer's lock: it must not block.
@@ -74,18 +74,13 @@ impl LinkFold {
 
     /// Fold one dial attempt's outcome when it is a Tor dial: the test's
     /// outcome, or a failed attempt deferred for a retry. Anything that
-    /// reached a peer opened a stream; every other failure, this node's own
-    /// included, is a dial that ended without one, dated at `now`. A
+    /// reached a peer opened a stream, whenever its attempt `began`. Every
+    /// other failure, this node's own included, is a dial that ended
+    /// without one, and the tally keeps the latest `began` among those. A
     /// payload refusal is not a dial: it names a kept session the payload
     /// owner declined, and that stream was counted when the dial was
-    /// accepted. An opened stream does not clear the failure's instant.
-    pub(crate) fn observe(
-        &mut self,
-        connector: ConnectorId,
-        outcome: &DialOutcome,
-        held: usize,
-        now: Tick,
-    ) {
+    /// accepted. An opened stream does not clear the failure's launch.
+    pub(crate) fn observe(&mut self, connector: ConnectorId, outcome: &DialOutcome, began: Stamp) {
         if connector != ConnectorId::Tor {
             return;
         }
@@ -98,31 +93,20 @@ impl LinkFold {
             }
             AttemptStream::Unopened => {
                 next.unopened = next.unopened.saturating_add(1);
-                next.last_unopened_at = Some(now);
+                next.failed_attempt_began = next.failed_attempt_began.max(Some(began));
             }
         }
-        next.held = u32::try_from(held).unwrap_or(u32::MAX);
         self.publish(next);
     }
 
-    /// The judge saw `connector`'s link work at `now`: the tally's last
-    /// sign of life when it is the Tor link.
-    pub(crate) fn life(&mut self, connector: ConnectorId, now: Tick) {
+    /// The judge saw `connector`'s link work `at`: the tally's last sign
+    /// of life when it is the Tor link.
+    pub(crate) fn life(&mut self, connector: ConnectorId, at: Stamp) {
         if connector != ConnectorId::Tor {
             return;
         }
         let mut next = self.tally;
-        next.last_sign_of_life = Some(now);
-        self.publish(next);
-    }
-
-    /// A Tor session ended: the count of those held moves.
-    pub(crate) fn held(&mut self, connector: ConnectorId, held: usize) {
-        if connector != ConnectorId::Tor {
-            return;
-        }
-        let mut next = self.tally;
-        next.held = u32::try_from(held).unwrap_or(u32::MAX);
+        next.last_sign_of_life = Some(at);
         self.publish(next);
     }
 
@@ -142,6 +126,7 @@ mod tests {
     use std::sync::Mutex;
 
     use shekyl_peerlist::NetworkAddress;
+    use shekyl_timing_engine::{Clock, ManualClock, Tick};
     use shekyl_transport_layer::{DialFailure, Reached, Retry};
 
     use super::*;
@@ -155,6 +140,11 @@ mod tests {
         DialOutcome::DialFailed(onion(n), failure)
     }
 
+    /// The process clock read at `nanos`.
+    fn at(nanos: u64) -> Stamp {
+        ManualClock::new(Tick::new(nanos)).stamp()
+    }
+
     /// Every failed dial with no stream is one unopened dial, whatever its
     /// evidence: each reply, the dial deadline and this node's own proxy
     /// alike. A stream that opened, even one the peer then refused, resets
@@ -166,30 +156,26 @@ mod tests {
             fold.observe(
                 ConnectorId::Tor,
                 &failed(0, shekyl_tor::stamp_reply(reply)),
-                0,
-                Tick::new(0),
+                at(0),
             );
         }
         fold.observe(
             ConnectorId::Tor,
             &failed(1, shekyl_tor::Observed::Deadline.end().failure()),
-            0,
-            Tick::new(0),
+            at(0),
         );
         fold.observe(
             ConnectorId::Tor,
             &failed(2, shekyl_tor::Observed::ProxyUnavailable.end().failure()),
-            0,
-            Tick::new(0),
+            at(0),
         );
         assert_eq!(
             fold.tally(),
             TorLinkTally {
                 opened: 0,
                 unopened: 8,
-                held: 0,
                 last_sign_of_life: None,
-                last_unopened_at: Some(Tick::new(0)),
+                failed_attempt_began: Some(at(0)),
             }
         );
         fold.observe(
@@ -198,8 +184,7 @@ mod tests {
                 3,
                 DialFailure::refused_by_peer(ConnectorId::Tor, Reached::StreamOpened),
             ),
-            0,
-            Tick::new(0),
+            at(0),
         );
         assert_eq!(
             fold.tally().opened,
@@ -210,35 +195,28 @@ mod tests {
     }
 
     /// A payload refusal is the close of a session already counted. It
-    /// moves the held count and leaves the dial counts where the open
-    /// and the failures since it put them.
+    /// leaves the dial counts where the open and the failures since it put
+    /// them.
     #[test]
-    fn a_payload_refusal_is_a_close_and_not_another_open() {
+    fn a_payload_refusal_is_not_another_open() {
         let mut fold = LinkFold::new();
         fold.observe(
             ConnectorId::Tor,
             &DialOutcome::SessionAccepted(onion(0)),
-            1,
-            Tick::new(0),
+            at(0),
         );
         fold.observe(
             ConnectorId::Tor,
             &failed(1, shekyl_tor::stamp_reply(0x06)),
-            1,
-            Tick::new(1),
+            at(1),
         );
-        let opened = fold.tally();
-        assert_eq!(opened.opened, 1);
-        assert_eq!(opened.unopened, 1);
         fold.observe(
             ConnectorId::Tor,
             &DialOutcome::PayloadRefused(onion(0)),
-            0,
-            Tick::new(2),
+            at(2),
         );
         assert_eq!(fold.tally().opened, 1, "the close is not a new stream");
         assert_eq!(fold.tally().unopened, 1, "failed dials since the open stay");
-        assert_eq!(fold.tally().held, 0);
     }
 
     /// Another connector's dials say nothing about Tor.
@@ -255,75 +233,68 @@ mod tests {
                 clearnet.clone(),
                 DialFailure::destination(Retry::Again, Reached::NoStream),
             ),
-            3,
-            Tick::new(0),
+            at(0),
         );
         fold.observe(
             ConnectorId::Clearnet,
             &DialOutcome::SessionAccepted(clearnet),
-            3,
-            Tick::new(0),
+            at(0),
         );
-        fold.held(ConnectorId::Clearnet, 3);
+        fold.life(ConnectorId::Clearnet, at(5));
         assert_eq!(fold.tally(), TorLinkTally::default());
     }
 
-    /// The count of held sessions follows accepts and closes, and the sink
-    /// hears only changes.
+    /// The sink hears the tally at install and then only changes.
     #[test]
-    fn held_sessions_follow_accepts_and_closes_and_only_changes_are_sent() {
+    fn the_sink_hears_the_tally_at_install_and_then_only_changes() {
         let heard = Arc::new(Mutex::new(Vec::new()));
         let sink_heard = Arc::clone(&heard);
         let mut fold = LinkFold::new();
         fold.set_sink(Arc::new(move |tally| {
             sink_heard.lock().expect("heard").push(tally);
         }));
-        fold.observe(
-            ConnectorId::Tor,
-            &DialOutcome::SessionAccepted(onion(0)),
-            1,
-            Tick::new(0),
-        );
-        fold.held(ConnectorId::Tor, 1);
-        fold.held(ConnectorId::Tor, 0);
+        fold.life(ConnectorId::Tor, at(3));
+        fold.life(ConnectorId::Tor, at(3));
         let heard = heard.lock().expect("heard");
-        assert_eq!(heard.len(), 3, "the initial tally, the accept, the close");
-        assert_eq!(heard[1].held, 1);
-        assert_eq!(heard[2].held, 0);
+        assert_eq!(heard.len(), 2, "the initial tally, then the one change");
+        assert_eq!(heard[1].last_sign_of_life, Some(at(3)));
     }
 
-    /// An unopened dial is dated when it ends. A later sign of life, and a
-    /// stream that opens after it, leave that date: the quiet line reads it
-    /// from the tally the watch delivers, which can carry both.
+    /// The tally keeps the latest launch among failed dials, not the last
+    /// one counted. A dial launched early and counted late does not move
+    /// the launch back; later life and a later open leave it alone.
+    /// Taking the counted attempt's launch instead of the latest fails the
+    /// second assertion.
     #[test]
-    fn an_unopened_dial_keeps_the_instant_it_ended() {
+    fn a_failed_dial_keeps_the_latest_launch_among_failures() {
         let mut fold = LinkFold::new();
-        let ended = Tick::new(10);
         fold.observe(
             ConnectorId::Tor,
             &failed(0, shekyl_tor::stamp_reply(0x01)),
-            0,
-            ended,
+            at(10),
         );
-        assert_eq!(fold.tally().last_unopened_at, Some(ended));
-        fold.life(ConnectorId::Tor, Tick::new(20));
-        assert_eq!(fold.tally().last_sign_of_life, Some(Tick::new(20)));
-        assert_eq!(
-            fold.tally().last_unopened_at,
-            Some(ended),
-            "a later byte does not move the failure"
-        );
+        assert_eq!(fold.tally().failed_attempt_began, Some(at(10)));
         fold.observe(
             ConnectorId::Tor,
-            &DialOutcome::SessionAccepted(onion(1)),
-            1,
-            Tick::new(30),
+            &failed(1, shekyl_tor::stamp_reply(0x01)),
+            at(4),
+        );
+        assert_eq!(
+            fold.tally().failed_attempt_began,
+            Some(at(10)),
+            "an older launch counted later does not move the latest back"
+        );
+        fold.life(ConnectorId::Tor, at(20));
+        fold.observe(
+            ConnectorId::Tor,
+            &DialOutcome::SessionAccepted(onion(2)),
+            at(30),
         );
         assert_eq!(fold.tally().unopened, 0, "an open resets the count");
         assert_eq!(
-            fold.tally().last_unopened_at,
-            Some(ended),
-            "an open does not forget when the last failure ended"
+            fold.tally().failed_attempt_began,
+            Some(at(10)),
+            "life and an open leave the failure's launch"
         );
     }
 }

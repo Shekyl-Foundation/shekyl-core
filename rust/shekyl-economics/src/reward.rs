@@ -272,6 +272,32 @@ mod tests {
         assert!(later.split.miner_emission < later.paid.to_raw());
     }
 
+    /// The genesis reward and block 1's miner share, as values. The test
+    /// above holds their shape (whole at genesis, split from block 1);
+    /// this holds the numbers, so a reward-math change fails here even when
+    /// the shape still agrees with itself.
+    ///
+    /// The literals are derived from the frozen parameters, not read back
+    /// from the code under test: at genesis `curve(0) = asymptote >> esf` =
+    /// 1 024 000 000 000 at ESF 22 per block; an empty volume window holds
+    /// the release multiplier at its 0.8 rail and the tail floor does not
+    /// bind, so the paid reward is 819 200 000 000; the emission share at
+    /// block 1 is 15%, leaving the miner 696 320 000 000.
+    #[test]
+    fn the_genesis_reward_and_block_ones_miner_share_are_pinned() {
+        let params = EconomicParams::default();
+        let genesis =
+            price_emission(&inputs(&params, GENESIS_HEIGHT, 0)).expect("under the median");
+        assert_eq!(genesis.paid, AtomicUnits::from_raw(819_200_000_000));
+        assert_eq!(genesis.split.miner_emission, 819_200_000_000);
+        assert_eq!(genesis.split.staker_emission, 0);
+
+        let block_one = price_emission(&inputs(&params, 1, 0)).expect("under the median");
+        assert_eq!(block_one.paid, genesis.paid, "nothing generated yet");
+        assert_eq!(block_one.split.miner_emission, 696_320_000_000);
+        assert_eq!(block_one.split.staker_emission, 122_880_000_000);
+    }
+
     #[test]
     fn a_replaced_schedule_splits_the_paid_reward() {
         let params = EconomicParams {
