@@ -2465,14 +2465,17 @@ mod live_tests {
     }
 
     /// The pinned tor runs with the launch's safety options. `GETINFO
-    /// config-text` lists every option that differs from Tor's default. On
-    /// macOS it carries `CompiledProofOfWorkHash 0`: the hardened runtime
-    /// kills Tor when it runs the compiled hash (`TOR_SUPERVISOR.md`
-    /// `TSR-F18`). Elsewhere the option is at its default and absent. No
-    /// `SafeLogging` other than Tor's default `1` is in force; that Tor
-    /// started at all says it accepted the launch's `--SafeLogging 1`. Red
-    /// edit: drop the macOS line from the launch, and this fails on macOS
-    /// against the signed bytes.
+    /// config-text` lists every option that differs from Tor's default. It
+    /// must carry `DisableNetwork 1`, which this launch sets: a reply with
+    /// no configuration in it would pass every absence check below without
+    /// reading anything. On macOS it carries `CompiledProofOfWorkHash 0`:
+    /// the hardened runtime kills Tor when it runs the compiled hash
+    /// (`TOR_SUPERVISOR.md` `TSR-F18`). Elsewhere the option is at its
+    /// default and absent. No `SafeLogging` other than Tor's default `1` is
+    /// in force; that Tor started at all says it accepted the launch's
+    /// `--SafeLogging 1`. Red edits: drop the macOS line from the launch,
+    /// and this fails on macOS against the signed bytes; read an empty
+    /// reply, and the `DisableNetwork` check fails on every platform.
     #[tokio::test]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
     async fn the_managed_tor_runs_with_the_launchs_safety_options() {
@@ -2509,6 +2512,10 @@ mod live_tests {
             .flat_map(|line| line.lines())
             .map(str::trim)
             .collect();
+        assert!(
+            set.contains(&"DisableNetwork 1"),
+            "config-text carries the launch's own DisableNetwork 1: {set:?}"
+        );
         let pow: Vec<&&str> = set
             .iter()
             .filter(|line| line.starts_with("CompiledProofOfWorkHash"))

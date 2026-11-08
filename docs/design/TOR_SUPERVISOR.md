@@ -376,10 +376,9 @@ then makes executable, without `MAP_JIT`; the hardened runtime forbids
 executing that page. A client solves at any nonzero effort, either the
 onion's suggested effort or its own after a failed introduction, and a
 service under load verifies the same way, so on macOS Tor would end
-whenever either happened. The daemon publishes with proof-of-work on; the
-six testnet peer onions carry no proof-of-work parameters (the signed `tor`
-alone, dialing each). Why this probe solved and later ones did not is not
-pinned down. Tor's `auto` is no fallback: the compile succeeds and the kill
+whenever either happened. The daemon publishes its onion with
+proof-of-work on, and the probe dials that onion. Why this probe solved and
+later ones did not is not pinned down. Tor's `auto` is no fallback: the compile succeeds and the kill
 comes at execution. The launch passes `CompiledProofOfWorkHash 0` on macOS,
 Tor's interpreter, about 20 times slower per hash; it covers the wallet's
 Tor too, which has the same launch. Rejected: signing with
