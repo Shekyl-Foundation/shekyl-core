@@ -129,8 +129,12 @@ jobs:
         # overrode per cargo invocation anyway).
         uses: ./.github/actions/install-rust
 
-      - name: cache cargo registry + target
-        uses: actions/cache@v4
+      - name: restore cargo registry + target
+        # Restore only: the update-baseline job's push run saves this key.
+        # A cache a pull request saves is readable by that pull request
+        # alone, and saving it evicts the `dev` caches every other pull
+        # request restores from (rust-audit-test.yml's cache step).
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -340,8 +344,9 @@ jobs:
         # overrode per cargo invocation anyway).
         uses: ./.github/actions/install-rust
 
-      - name: cache cargo registry + target
-        uses: actions/cache@v4
+      - name: restore cargo registry + target
+        # Restore only, as in capture-pr.
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
