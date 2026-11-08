@@ -266,7 +266,7 @@ DRS-W5). Orchestration tangle is
 storage class alone.
 Policy math increasingly lives in Rust. Cross-language gather/FFI/store is a
 **boundary-thickness and type-safety** problem under
-[`40-ffi-discipline`](../../.cursor/rules/40-ffi-discipline.mdc) — marshal
+[`40-ffi-discipline`](../completed/RULE_40_FFI_DISCIPLINE.md) — marshal
 *cost* is unmeasured and **must not** load-bearing-justify Path B (R2-4 / R-14).
 
 **Program:** re-census LMDB truth **and** build a layout-independent **state

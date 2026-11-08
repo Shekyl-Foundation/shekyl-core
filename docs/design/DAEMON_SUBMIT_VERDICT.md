@@ -833,7 +833,7 @@ this is the C++-as-minimal-transport-shim shape.
 
 **FFI boundary (implementation-round pin).** These shims deliberately do
 **not** route through the single `shekyl-ffi` surface that
-[`40-ffi-discipline.mdc`](../../.cursor/rules/40-ffi-discipline.mdc) /
+[`40-ffi-discipline.mdc`](../completed/RULE_40_FFI_DISCIPLINE.md) /
 [`25-rust-architecture.mdc`](../../.cursor/rules/25-rust-architecture.mdc)
 otherwise mandate. They resolve pool/blockchain/protocol from a live
 `core_rpc_server` (`core_rpc_ffi_*`), which is a daemon-only object;

@@ -9,8 +9,12 @@ globs:
 
 All Rust code lives under `rust/` in a Cargo workspace. The binaries are
 `shekyld`, `shekyl-cli` and `shekyl-wallet-rpc`. There is no C ABI and no
-`shekyl-ffi`: a crate is called from Rust. `cmake/BuildRust.cmake` runs
-the cargo build and forwards C flags to cross builds. The only C is
+`shekyl-ffi`. **Do not add a C ABI to reach a Rust crate:** a crate is
+called from Rust, and an export would be a permanent audit obligation (the
+retired rule 40's record is
+[`RULE_40_FFI_DISCIPLINE.md`](../../docs/completed/RULE_40_FFI_DISCIPLINE.md)).
+`cmake/BuildRust.cmake` runs the cargo build and forwards C flags to cross
+builds. The only C is
 vendored under `external/` (the RandomX references).
 
 New functionality:
@@ -33,7 +37,9 @@ New functionality:
 
 - **`#![deny(unsafe_code)]` at the crate level.** Logic does not need
   `unsafe`. An exception is a reviewed, scoped block with a `SAFETY`
-  comment, not a crate whose purpose is an FFI export.
+  comment, not a crate whose purpose is an FFI export. The only
+  crate-level allows are the two RandomX C-reference crates rule 45
+  names.
 - **Pin Rust dependency versions in `Cargo.lock`.** Audit new crate additions
   with `cargo audit`.
 - **Cross-compilation must work:** verify `BuildRust.cmake` handles new

@@ -11,7 +11,7 @@ operational properties the envelope guarantees.
 [30-cryptography.mdc](../.cursor/rules/30-cryptography.mdc) ·
 [35-secure-memory.mdc](../.cursor/rules/35-secure-memory.mdc) ·
 [36-secret-locality.mdc](../.cursor/rules/36-secret-locality.mdc) ·
-[40-ffi-discipline.mdc](../.cursor/rules/40-ffi-discipline.mdc).
+[40-ffi-discipline.mdc](completed/RULE_40_FFI_DISCIPLINE.md).
 
 ## 1. Design goals
 

@@ -32,9 +32,6 @@ computation is a fault, not a value: Rick 2026-10-09).
    - Rust: `Option<T>`. Not a newtype with a magic constant, not a
      `bool` beside a value.
    - JSON wire: `null`.
-   - C ABI (no `Option`): an explicit discriminant — a `has_<field>` byte
-     in the POD, or a distinct return code — never an in-band value
-     ([`40-ffi-discipline`](40-ffi-discipline.mdc): distinct return codes).
    - Persisted (postcard / redb codecs): `Option<T>`, versioned per
      [`42-serialization-policy`](42-serialization-policy.mdc).
 3. **A refusal is not a result.** A computation that refuses (overflow,

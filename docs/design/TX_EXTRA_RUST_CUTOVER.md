@@ -18,7 +18,7 @@ as `fuzz_tx_extra_parse`. Governing rule:
 [`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
 §*Migration is a planning activity* — this document is that plan's first
 round. FFI shape per
-[`40-ffi-discipline.mdc`](../../.cursor/rules/40-ffi-discipline.mdc).
+[`40-ffi-discipline.mdc`](../completed/RULE_40_FFI_DISCIPLINE.md).
 Identifier families `TXE-F` (findings) and `TXE-Q` (questions), registered
 in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 by this PR.
 

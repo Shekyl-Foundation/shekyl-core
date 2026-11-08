@@ -83,7 +83,6 @@ Rust & FFI
 - [`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc) — workspace layout, the single `shekyl-ffi` crate, dependency rules
 - [`17-dependency-discipline`](.cursor/rules/17-dependency-discipline.mdc) — verify deps at source before adding
 - [`18-type-placement`](.cursor/rules/18-type-placement.mdc) — transform- vs state-shaped types; byte-layout discipline
-- [`40-ffi-discipline`](.cursor/rules/40-ffi-discipline.mdc) — FFI surface management
 - [`42-serialization-policy`](.cursor/rules/42-serialization-policy.mdc) — persisted-block wire change ⇒ version-constant bump (CI-enforced)
 - [`45-rust-lint-checks`](.cursor/rules/45-rust-lint-checks.mdc) — `cargo fmt` + `cargo clippy --all-targets -- -D warnings` before any Rust commit
 - [`46-shell-gate-exits`](.cursor/rules/46-shell-gate-exits.mdc) — gate verdicts never travel through a pipe; `PIPESTATUS`/unpiped exits; the pipefail SIGPIPE trap; `pgrep -f` matches the caller
