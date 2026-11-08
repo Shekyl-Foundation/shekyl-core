@@ -3243,6 +3243,43 @@ there. Why the cooldown shrinks the
 active set at the shock is not isolated; one reading, untested, is that a
 re-entrant that cannot bond takes strikes and leaves sooner.
 
+**P9, (d): L19 on `SHARD_LENGTH`.** `SHT-Q2` cuts a shard at an archival
+length `W = SHARD_LENGTH` (3 000 000 bytes), so every shard is `W` bytes
+to within one transaction, whatever era it was born in. A transaction's
+archival length is at most its weight, and consensus caps the weight at
+`TX_WEIGHT_LIMIT` (`shekyl-wire`), which `shekyl-chain-rules` asserts is
+under `W`. So a shard's size relative to the mean lies within `1 ± b`,
+`b = TX_WEIGHT_LIMIT / W`, about 0.05. The worst a heavy era can do is put
+every one of its shards at `1 + b` and every light shard at `1 − b`: an era
+spread `S = (1 + b)/(1 − b)`, about 1.105, against L19's registered 4 and
+10. The re-run grades §L19a's four arms (Plateau and Burst, marginal and
+covered bases) at that `S`, on the current default arm, eight paired
+seeds, as registered.
+- Every arm reads **clear**, with no seed over `X = 0.05`.
+- The per-seed deltas are seed noise around 0: the median within ±0.02.
+- No run is void for demand matching. Whether the heavies are in frame at
+  so small a spread is not predicted; a void-for-frame run is reported as
+  such.
+
+**P10, (d): L12 and L13 without the floor.** Every one of the 17 floor
+scenarios has a sibling in the default sweep that is identical apart from
+the floor: `l12_boot_nofloor` for the L12 and P3 boot arms,
+`l13_decay_lo` for `l13_floor` and the P3 fee arms, `l16_regime_L6` for
+`l16_L6_floor`, and the matching `swan_price_*` rows for the swan-3 floor
+arms. The floor counts toward retrieval coverage only, never the reward
+or the agents' decisions. So:
+- Every field the market produces (`bondA`, `cDeepU`, `oUmx`, the serving
+  figures, the fee and shock figures) is **bit-identical** between each
+  floor scenario and its sibling.
+- The floor shows only in the `*_floored*` fields, which read at or below
+  the sibling's market figure, and further below where the P3 tilt puts
+  the floor's replicas on the oldest band.
+- Without the floor those fields equal the market fields. That is what
+  every coverage figure means after D3 is deleted: market coverage only.
+  The complete-tree support role production keeps outside the market is
+  not modeled as replicas; whether a flat floor is needed is the coupling
+  half's row (`e1f99748e`).
+
 ## L14×L15 — proof-of-archival in harmony with retrieval (specification)
 
 *Specification first, code second (`05-system-thinking.mdc`). This section is the design
