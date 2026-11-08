@@ -39,6 +39,7 @@
 //!
 //! The pool's door is the ingest service in `shekyl-chain-ingest`
 //! (DX-Q5), which runs the pool's steps beside its cache slots.
+#![deny(unsafe_code)]
 
 #[cfg(feature = "pool")]
 mod block;

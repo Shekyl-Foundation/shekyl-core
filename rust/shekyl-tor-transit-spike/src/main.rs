@@ -54,6 +54,7 @@
 //! hindsight. The runner is deliberately kept out of the repo: it is
 //! machine-specific glue (absolute tor-binary and worktree paths), and a
 //! committed script with a hardcoded `$HOME` is the debt rule 15/16 forbids.
+#![deny(unsafe_code)]
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};

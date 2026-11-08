@@ -48,6 +48,7 @@
 //!   boot and passed into [`ephemeral::DaemonTorControl::publish`]. Death is
 //!   still observable ([`ephemeral::DaemonTorControl::is_alive`] /
 //!   [`ephemeral::DaemonTorControl::wait_death`]).
+#![deny(unsafe_code)]
 
 mod data_dir;
 pub mod ephemeral;
