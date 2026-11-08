@@ -1409,19 +1409,6 @@ off; faults on a network namespace's link only; shekyl-dev
 - **Stops:** both exited 1.1 s after `SIGTERM`, one after 67 minutes
   including the drop.
 
-**Ctrl-C and an inherited ignore, Windows, 2026-11-08** (Windows Server
-2025, `shekyld` at `8d78bbacfb`; shekyl-dev
-`data/tsr-acceptance/2026-11-08-windows/`, commit `6610555`). The
-acceptance driver's process chain (ssh, then PowerShell) ignored Ctrl-C, and
-Windows passes that to children. The daemon it started in a console of its
-own ignored Ctrl-C three times, for 120 s each, and so did Tor, which shares
-that console; Ctrl-Break and closing the window stopped it in 1.3 to 1.4 s.
-With the attribute cleared in the launcher before the start, Ctrl-C stopped
-it in 1.5 s, exit 0, no `tor.exe` left. Ruled (Rick, 2026-11-08): the node
-honours an inherited ignore on every platform and says so at start
-(`DAEMON_CONFIG_CUTOVER.md` §2.2 step 9). Windows has no documented call that
-reads the attribute, so every Windows start names the stops that work.
-
 | Case | Expected | Apparatus |
 | --- | --- | --- |
 | kill the Tor child | respawn; the same onion republished; the dialer resumes; no draws while down | a kill by PID (`kill -9`, `taskkill /F`) |
