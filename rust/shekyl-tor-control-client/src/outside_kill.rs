@@ -37,15 +37,15 @@ pub fn kill_tor_named_by(needle: &Path) -> bool {
     status.success()
 }
 
-/// `pkill -9 -f`: SIGKILL to every process whose full command line matches.
-/// `pkill` does not match itself. Like every spawn in a crate that launches a
-/// managed tor, its child inherits standard input, output and error only
-/// (`DAEMON_CONFIG_CUTOVER.md` §2.10).
+/// `pkill -9 -f`: SIGKILL to every process whose full command line matches
+/// [`tor_pattern`]. `pkill` does not match itself. Like every spawn in a
+/// crate that launches a managed tor, its child inherits standard input,
+/// output and error only (`DAEMON_CONFIG_CUTOVER.md` §2.10).
 #[cfg(unix)]
 fn kill_command(needle: &str) -> Command {
     use std::os::unix::process::CommandExt;
     let mut command = Command::new("pkill");
-    command.args(["-9", "-f", needle]);
+    command.args(["-9", "-f"]).arg(tor_pattern(needle));
     let stdio_only = inherit::StdioOnly::prepare();
     // SAFETY: the closure runs in the child between `fork` and `exec`, and
     // [`inherit::StdioOnly::apply`] is async-signal-safe.
@@ -53,6 +53,27 @@ fn kill_command(needle: &str) -> Command {
         command.pre_exec(move || stdio_only.apply());
     }
     command
+}
+
+/// The extended regular expression `pkill -f` reads, matching what Windows
+/// matches: a process whose program is a file named `tor`, and whose command
+/// line contains `needle` as text. The managed launch runs tor by its
+/// absolute path, so the command line starts with `…/tor ` (`launch.rs`).
+/// Every character of the needle that the expression grammar reads is
+/// escaped: a temporary directory's `.` would otherwise match any character.
+/// The program's path may not contain a space, so that a later argument
+/// ending in `/tor` cannot stand in for the program. A tor at such a path is
+/// not found, and the caller's "tor was killed" check fails loudly.
+#[cfg(unix)]
+fn tor_pattern(needle: &str) -> String {
+    let mut literal = String::with_capacity(needle.len() * 2);
+    for c in needle.chars() {
+        if "\\.[](){}*+?|^$".contains(c) {
+            literal.push('\\');
+        }
+        literal.push(c);
+    }
+    format!("^([^ ]*/)?tor .*{literal}")
 }
 
 /// Every `tor.exe` whose command line contains the needle, stopped with
@@ -88,5 +109,112 @@ mod tests {
         let unused = tempfile::tempdir().unwrap();
         let needle = unused.path().join("no-tor-was-ever-started-here");
         assert!(!kill_tor_named_by(&needle));
+    }
+
+    /// A process that waits 60 s, started as `program` with `marker` on its
+    /// command line. Unix: `program -c 'sleep 60; :' marker`, a shell; the
+    /// `:` keeps the shell from replacing itself with `sleep`, which would
+    /// take the marker off the command line. Windows:
+    /// `program /c "ping -n 60 127.0.0.1 >nul & rem marker"`, `cmd.exe`.
+    fn waiter(program: &Path, marker: &Path) -> std::process::Child {
+        let mut command = Command::new(program);
+        #[cfg(unix)]
+        command.args(["-c", "sleep 60; :"]).arg(marker);
+        #[cfg(windows)]
+        command.args([
+            "/c",
+            &format!("ping -n 60 127.0.0.1 >nul & rem {}", marker.display()),
+        ]);
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // A copied program can be busy for a moment: another test's fork may
+        // hold the copy's write descriptor until that child execs.
+        for _ in 0..50 {
+            match command.spawn() {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                started => return started.expect("the waiter starts"),
+            }
+        }
+        panic!("the copied program stayed busy for a second");
+    }
+
+    /// A shell that runs as itself: `/bin/zsh` on macOS, whose `/bin/sh`
+    /// starts another shell in its place; `/bin/sh` on the other Unixes;
+    /// `cmd.exe` on Windows.
+    fn shell() -> std::path::PathBuf {
+        #[cfg(target_os = "macos")]
+        let shell = std::path::PathBuf::from("/bin/zsh");
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let shell = std::path::PathBuf::from("/bin/sh");
+        #[cfg(windows)]
+        let shell =
+            std::path::PathBuf::from(std::env::var_os("ComSpec").expect("ComSpec names cmd.exe"));
+        shell
+    }
+
+    /// Whether `child` is still running after up to 5 s for an exit already
+    /// sent, then end it.
+    fn alive_then_reaped(mut child: std::process::Child) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut alive = true;
+        while std::time::Instant::now() < deadline {
+            if child.try_wait().expect("the waiter's state").is_some() {
+                alive = false;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        // Ending a child that has already exited is not an error here.
+        drop(child.kill());
+        drop(child.wait());
+        alive
+    }
+
+    /// A process that is not Tor survives, though its command line carries
+    /// the needle. Red edit: drop the program from the match (Unix: match
+    /// the needle anywhere; Windows: drop `Name = 'tor.exe'`), and the shell
+    /// is killed.
+    #[test]
+    fn a_process_that_is_not_tor_survives() {
+        let dir = tempfile::tempdir().unwrap();
+        let needle = dir.path().join("data");
+        let bystander = waiter(&shell(), &needle);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!kill_tor_named_by(&needle), "nothing named tor carries it");
+        assert!(alive_then_reaped(bystander), "the shell was not killed");
+    }
+
+    /// The needle is text, not a pattern: a Tor whose command line differs
+    /// from it only where the needle has a `.` survives, and a Tor carrying
+    /// the needle itself is killed. The Tor is a copy of the system shell
+    /// named `tor`. Red edit: pass the needle to `pkill` unescaped, and the
+    /// first Tor is killed.
+    #[test]
+    fn the_needle_is_text_not_a_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let tor = dir.path().join("tor");
+        #[cfg(windows)]
+        let tor = dir.path().join("tor.exe");
+        std::fs::copy(shell(), &tor).expect("a copy of the shell named tor");
+        let needle = dir.path().join("data.dir");
+        let near_miss = waiter(&tor, &dir.path().join("dataXdir"));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            !kill_tor_named_by(&needle),
+            "no tor carries the needle as text"
+        );
+        assert!(alive_then_reaped(near_miss), "the near miss was not killed");
+        let carrier = waiter(&tor, &needle);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            kill_tor_named_by(&needle),
+            "the tor carrying the needle is found"
+        );
+        assert!(!alive_then_reaped(carrier), "and killed");
     }
 }
