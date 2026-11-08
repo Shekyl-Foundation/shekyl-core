@@ -54,10 +54,11 @@ mod data_dir;
 pub mod ephemeral;
 pub mod probe;
 
-pub use data_dir::{space_needed, sweep_stale_data_dirs, TOR_WRITE_HEADROOM};
+pub use data_dir::{space_needed, sweep_stale_data_dirs, KeptLog, TOR_WRITE_HEADROOM};
 pub use ephemeral::{
     CacheSave, DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
-    KeptDataDir, LaunchFailure, OnionSeed, SpawnError, Teardown, TorDeath,
+    KeptDataDir, LaunchFailure, OnionSeed, Retirement, SpawnError, Teardown, TombstoneEnd,
+    TorDeath, TOMBSTONE_DELETE_BOUND,
 };
 pub use probe::{probe_own_onion, IsolationPair, ProbeDial};
 pub use shekyl_tor_control_client::control::OnionPow;

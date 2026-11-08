@@ -59,6 +59,9 @@ shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 # The notify driver's tests build chain tips.
 shekyl-types = { path = "../shekyl-types" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
+# The Tor supervisor's tests read what it logs. Already in the lock through
+# shekyl-logging; the `fmt` writer is the capture.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 
 [target.'cfg(unix)'.dev-dependencies]
 # The notify tests plant a descriptor without close-on-exec.
