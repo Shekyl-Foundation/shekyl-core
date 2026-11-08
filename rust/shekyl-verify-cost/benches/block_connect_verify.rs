@@ -247,38 +247,55 @@
 //! own cited figure, reproduced]; pqc 934 µs [5.25×]; RandomX (flagless)
 //! 1.222 s/block [3.86×]; C++ Bp+ single 13.59 ms @ 2-out / 71.8 ms @
 //! 16-out — **2.56× FASTER than this file's single-proof cell on the A72,
-//! the inverse of the i9's 1.56×-slower ratio**; C++ batched 46× =
+//! the inverse of the i9's 1.56×-slower ratio** (that cell was the eager-`Â`
+//! verifier; see below); C++ batched 46× =
 //! 1.745 ms/proof (amortization 7.79× vs i9's 8.3× — algorithmic-first,
 //! confirmed). **Four-plus per-term floor ratios spanning 3.86× to ≈12×,
 //! one of them INVERTED: no single assumed scaling factor could have been
 //! right anywhere (rule 76 §3, measured).** Dev-box RELATIVE shape costs
 //! are not floor relative costs — the sub-argmax ordering flipped.
 //!
-//! **What that ratio means for the shipped bill:** the composition below
-//! takes its Bp+ term from the C++ verifier, and `verify_batch` — the
-//! verifier that ships — measured 2.56× slower than it single-proof on this
-//! board. Its batched cost on the floor is unmeasured: the `rust` phase of
-//! `scripts/bench/gap7_pi4_gate.sh` now times it (`bp_lone`, and the fold
-//! inside `budget_fill`), and `verify_floor` is owed that re-run before it
-//! is read as the shipped figure. Direction: the Bp+ term can only have
-//! grown, so `surge_max` below can only fall.
+//! **The 2.56× was the eager `Â`, and the batched term is now measured.**
+//! The verifier the September capture timed evaluated `Â` with a
+//! multiscalar multiplication of its own (`2·mn + 2` points), then summed
+//! the same generators again in the batch's: a lone proof paid two large
+//! multiexps, and a batch shared only the second, so it amortised to about
+//! 0.56 of a lone proof where the C++ verifier amortised to 0.13. The
+//! verifier now adds `Â`'s terms into the batch (#1319, BA-Q9, ruled
+//! 2026-11-08), and the floor device measured it, flagless, at rev
+//! `78de6a14e2` (`docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt`):
 //!
-//! **Interim until that re-run (2026-11-08, ruled by Rick): an Assumption,
-//! not a measurement.** Scale the C++ batched Bp+ term by the measured
-//! single-proof ratio, 2.56 (1.745 → 4.47 ms/proof), assuming the batch
-//! amortises the Rust verifier as it did the C++ one. Per argmax tx that
-//! adds 2.72 ms: verify_floor ≈ 131.49 ms/tx (≈ 10.11 µs per weight-byte),
-//! 46.13 argmax txs per 600 kB zone block, RandomX 1.2845 s per block, and
-//! `surge_max = (f·T − RandomX) / (zone fill)`. The tiers become ≈ 6.38 at
-//! d2, ≈ 5.58 at d7 and **≈ 3.92 at d24**, against the composition below
-//! (6.52 / 5.69 / 3.97, quoted as 6.5 / 5.7 / 4.0). The signed ×4 is the
-//! d24 figure, so under this interim it sits above its own bound. The
-//! conservative bracket, the Rust single-proof cost (34.8 ms) in place of
-//! the batched term, gives ≈ 3.43 at d24. **Correction:** the shipped
-//! verifier evaluates `Â` with a multiscalar multiplication of its own per
-//! proof, so its batch amortises to about 0.6 of a single proof, not as the
-//! C++ one did; the 3.92 overstates `surge_max`, and #1319 folds `Â` into
-//! the batch and measures the term.
+//! | cell | eager `Â` (control) | folded | C++ |
+//! |---|---|---|---|
+//! | lone, 2-out | 34.80 ms | 18.84 ms | 13.59 ms |
+//! | lone, 16-out | 196.3 ms | 107.3 ms | 71.8 ms |
+//! | batch of 46 × 2-out, per proof | 19.63 ms | **3.659 ms** | 1.745 ms |
+//!
+//! The control is the same session's run with the pre-fold verifier
+//! (`…_rust_eager_20261108T231752Z.txt`): it reproduces the September lone
+//! cells within 1.5 % under the host's resident load, so the folded figures
+//! are read against it. Eager lone minus folded lone is 15.96 ms, one `Â`
+//! multiexp; eager batch minus folded batch is 15.98 ms per proof: the fold
+//! removed exactly the 46 `Â` multiexps. Against C++ the folded verifier is
+//! 1.39× on a lone proof and 2.10× batched. Part of the rest is
+//! `curve25519-dalek`'s field backend on the Cortex-A72: the same cells
+//! under its 32-bit backend (`…_rust_dalek32_20261108T234742Z.txt`,
+//! reported and not adopted; adopting a backend is its own decision) read
+//! 16.26 ms lone (1.20× C++), 94.42 ms at 16 outputs and 3.238 ms per
+//! batched proof (1.86×), 11-14 % under the 64-bit backend. The rest is the
+//! batch's per-proof residue.
+//!
+//! **verify_floor with the measured batched term.** Per argmax tx the Bp+
+//! term is 3.659 ms in place of C++'s 1.745: verify_floor ≈ 130.68 ms/tx
+//! (≈ 10.05 µs per weight-byte), 46.14 argmax txs per 600 kB zone block,
+//! RandomX 1.2845 s per block, `surge_max = (f·T − RandomX) / (zone fill)`
+//! at f·T = 40 s, and the §85.3 depth slope (3.76 ms per layer at 1 input).
+//! The tiers are ≈ 6.42 at d2, ≈ 5.61 at d7 and **≈ 3.93 at d24**, against
+//! the C++-term composition below (6.52 / 5.69 / 3.97). The signed ×4 is the
+//! d24 figure, so it sits above its own bound. The conservative bracket, the
+//! folded lone proof (18.84 ms) in place of the batched term, is ≈ 5.75 at
+//! d2, ≈ 5.10 at d7 and **≈ 3.67 at d24**. The other terms are still the
+//! September capture's; BA-T10 re-runs the full sweep and re-derives S.
 //!
 //! **Regime note:** the sweep was measured with the FA-6 §8.2 flags; a
 //! one-point comparison against the shipping configuration (generic
@@ -375,7 +392,8 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use rand_core::OsRng;
 
 use shekyl_verify_cost::connect::{
-    bp_verify, bp_verify_block, build_bp, build_connect_tx, parse_wire, pqc_verify, ConnectTxFixture,
+    bp_verify, bp_verify_block, build_bp, build_connect_tx, parse_wire, pqc_verify,
+    ConnectTxFixture,
 };
 use shekyl_verify_cost::relay::{admission_verify, masks_check, membership_verify, ChunkLayout};
 
@@ -510,15 +528,16 @@ fn bench_bp_batch(c: &mut Criterion) {
     group.sample_size(10);
 
     let fx = build_bp(&mut OsRng, 2);
-    assert!(bp_verify_block(&fx, BLOCK_BATCH_PROOFS), "the block's batch verifies");
+    assert!(
+        bp_verify_block(&fx, BLOCK_BATCH_PROOFS),
+        "the block's batch verifies"
+    );
     group.throughput(Throughput::Elements(
         u64::try_from(BLOCK_BATCH_PROOFS).expect("fits u64"),
     ));
-    group.bench_with_input(
-        BenchmarkId::new("bp_batch46", "out2"),
-        &fx,
-        |b, f| b.iter(|| assert!(bp_verify_block(f, BLOCK_BATCH_PROOFS))),
-    );
+    group.bench_with_input(BenchmarkId::new("bp_batch46", "out2"), &fx, |b, f| {
+        b.iter(|| assert!(bp_verify_block(f, BLOCK_BATCH_PROOFS)))
+    });
 
     group.finish();
 }

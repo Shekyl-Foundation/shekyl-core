@@ -753,15 +753,35 @@ terms to BA-T1, and re-derive the hop from BA-T10's floor figures.
 **RULED 2026-11-08 for §72.2 and the hop; BA-T1's scope is not ruled.**
 §72.2 is amended to the Rust door's sequence. Each `SPEC_VERIFY_COST` cell
 is that sequence on the floor device: §85.3's masks-and-proof term, plus
-`n_in` hybrid signatures (971.86 µs per input at 1 input, 972.28 µs at 8)
-and the lone range proof at 2 outputs (18.838 ms, 18.882 ms), the last two
-from `docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt`
+`n_in` hybrid signatures (971.86 µs per single-signer input at 1 input,
+972.28 µs at 8, from `docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt`)
+and the lone range proof at 2 outputs (18.838 ms, 18.882 ms, from
+`docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt`)
 (`DAEMON_RELAY_PRIVACY.md` §72.2's table). The modal cell is 144.31 ms,
 the clearnet hop 195 ms, the Tor hop 1770 ms; the embargoes 194 s and
 511 s; the wallet wait 2352 s. Every value derived from the cells moved
 with them, through the production derivation (`DAEMON_RELAY_PRIVACY.md`
 §97's register). BA-T10's floor run re-times the door's sequence, and the
 masks-and-proof term with it, after `PL-D3`.
+
+**Why the Rust range proof read 2.56× C++, and what it reads now
+(ruled 2026-11-08, landed in #1319).** The verifier evaluated `Â` with a
+multiscalar multiplication of its own, `2·mn + 2` points (258 at 2
+outputs), over the same `G_i`/`H_i` the batch's final multiexp sums again:
+a lone proof paid two large multiexps where one is enough, and a batch
+shared only the second, amortising to 0.56 of a lone proof where C++
+amortised to 0.13. That second multiexp is the 2.56× (34.80 ms against
+C++'s 13.59 ms, lone, 2 outputs, on the floor device). The verifier now
+adds `Â`'s terms into the batch, verdict for verdict the same (a
+differential test holds it to the eager path), and the floor device reads,
+flagless: a lone 2-output proof 18.84 ms, **1.39×** C++; a 16-output proof
+107.3 ms; a batch of 46 two-output proofs 3.659 ms per proof, **2.10×**
+C++'s 1.745 ms. Part of the remaining gap is `curve25519-dalek`'s field
+backend on the Cortex-A72: under its 32-bit backend the same cells read
+16.26 ms lone (1.20×) and 3.238 ms batched (1.86×)
+(`gap7_block_verify_pi4_rust_dalek32_20261108T234742Z.txt`, reported, not
+adopted; choosing a backend is a separate decision). The rest is the
+batch's per-proof residue.
 
 **BA-Q10 — Re-measure verify cost on the floor after `PL-D3`.** Default: one
 BA-T10 run serves the surge factor, the zone, the hop surface and the input
