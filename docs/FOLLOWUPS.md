@@ -1436,10 +1436,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 
-- **Some docs still describe the deleted C++ PQC FFI exports as current.** #1299 deleted `shekyl-ffi` and pinned the citations of deleted C++ to a commit, but these read as present tense: the census's FFI scope table lists `shekyl_fcmp_verify` and `shekyl_pqc_verify` as verdict surfaces (`CONSENSUS_RULE_CENSUS.md` §3.4), `POST_QUANTUM_CRYPTOGRAPHY.md`'s phase table cites `rust/shekyl-ffi/src/lib.rs` as done, and `SIGNATURE_ALIGNMENT.md` §1.3 describes the FFI boundary. Each should name the Rust function (`shekyl_crypto_pq::signature::verify_pqc_auth`, `shekyl_fcmp::proof::verify`) or pin the deleted name to a commit. Found while replacing #1300; kept out of that PR by its scope.
-  - Owner: [`DRS_X_STORE_FLIP.md`](design/DRS_X_STORE_FLIP.md) §3.5 (the FFI deletion list): the docs sweep after #1299's deletion, one PR over the three docs
-  - Target: pre-genesis
-
 ## Post-genesis
 
 Exceptional deferral with a named blocker. This list stays tiny.
