@@ -823,9 +823,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Wallet file backup-exclusion markers (PR 6 lessons canvass §5.12 F1).** [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](./completed/STAGE_1_PR_6_PERSISTENCE_ENGINE.md)
   - Target: pre-genesis
 
-- **Process core-dump disable at wallet-RPC startup (PR 6 §5.12 F2).**
-  - Target: pre-genesis
-
 - **Argon2 stack-resident secret copies — cryptographer review (PR 6 §5.12 F3).**
   - Target: pre-genesis
 

@@ -35,6 +35,9 @@ shekyl-economics = { path = "../shekyl-economics" }
 shekyl-peerlist = { path = "../shekyl-peerlist" }
 shekyl-daemon-config = { path = "../shekyl-daemon-config" }
 shekyl-options = { path = "../shekyl-options" }
+# The process hardening, the first statement of `main` (rule 35, DC-Q21):
+# no core and no same-account tracer before an argument is read.
+shekyl-process = { path = "../shekyl-process" }
 clap = { version = "4", features = ["derive"] }
 rustyline = "15"
 tokio = { version = "1", features = ["full"] }
