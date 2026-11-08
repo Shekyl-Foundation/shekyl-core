@@ -18,7 +18,11 @@ use crate::rng::SplitMix64;
 use crate::timing_cluster::SETTLEMENT_EPOCH_BLOCKS;
 use crate::transport::{effective_uptime, regime_latency_epochs};
 use serde::Serialize;
+use shekyl_archival_retention::settlement_select::settle_pair;
+use shekyl_types::archival::{IssuedDraw, SettlementOutcome, COUNTED_DRAWS};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use std::collections::VecDeque;
+use std::sync::OnceLock;
 
 /// L16 onion band-ceiling operating point (scalar `u_eff` does not pin tail shape).
 pub const L16_U_BASE: f64 = 0.9;
@@ -33,10 +37,27 @@ pub const N_MARKET_ARCHIVERS: u64 = 2_000;
 pub const SHARDS_PER_P: u64 = 6;
 /// Order-of-magnitude pure archival serve-credit vin size (bytes).
 pub const CHALLENGE_VIN_BYTES: u64 = 2_048;
-pub const BLOCK_WEIGHT_LIMIT_BYTES: u64 = 300_000;
+/// The block budget the traffic check divides by: the penalty-free zone,
+/// `shekyl_economics::FULL_REWARD_ZONE`. A declared stand-in, not the limit.
+/// The hard limit is `block_weight_limit`, `k · max(median, zone)`, twice the
+/// zone at genesis, so dividing by the zone overstates the fraction by at most
+/// 2× (Appendix B, R13).
+pub const BLOCK_BUDGET_STAND_IN_BYTES: u64 = shekyl_economics::FULL_REWARD_ZONE;
 /// Fraction of per-SEB block-weight budget above which challenge traffic is binding.
 /// Order-of-magnitude check only; per-P micro-sim cannot settle absolute volume.
 pub const VOLUME_BINDING_FRACTION: f64 = 0.05;
+
+/// Production's failure window `(m, n)`, from `archival_params()`: the default
+/// every scenario starts from. The other windows in this module are a declared
+/// sweep around it (Appendix B, R15).
+#[must_use]
+pub fn production_window() -> (usize, usize) {
+    let params = shekyl_archival_retention::archival_params();
+    (
+        params.failure_window_m as usize,
+        params.failure_window_n as usize,
+    )
+}
 
 /// Mostly-offline dodge-P must be slashed at least this often under a sound policy.
 pub const DODGE_SLASH_FLOOR: f64 = 0.90;
@@ -266,7 +287,7 @@ pub struct SlidingMSweepPoint {
 pub struct BaselineTimingNote {
     /// Micro-sim: baseline every `baseline_period` settlement epochs (deterministic grid).
     pub sim_baseline_model: String,
-    /// Production: `H_fire` beacon-unpredictable per gate-2 §3.4 (shared prerequisite).
+    /// Production: `select_draw`, the secret per-block draw (shared prerequisite).
     pub production_baseline_model: String,
     pub production_unpredictable: bool,
 }
@@ -442,6 +463,39 @@ fn can_serve(
     }
 }
 
+/// One pair's settlement verdict for one epoch, through production's fold
+/// (`settle_pair`, `SERVE_THRESHOLD_PASSES` of `COUNTED_DRAWS`).
+///
+/// The micro-sim's availability is per epoch: an available pair passes every
+/// counted draw and an absent one passes none, so the verdict cannot depend
+/// on which draws the selection counts. Both verdicts are computed once,
+/// through `settle_pair`, and `settle_pair_verdict_is_selection_invariant`
+/// holds the invariance the cache relies on (Appendix B, R14).
+fn observed_served(available: bool) -> bool {
+    static VERDICTS: OnceLock<[bool; 2]> = OnceLock::new();
+    let verdicts = VERDICTS
+        .get_or_init(|| [false, true].map(|passed| settle_served(passed, [0; 32], 0, 0, 0)));
+    verdicts[usize::from(available)]
+}
+
+/// `settle_pair` on `COUNTED_DRAWS` issued draws, every one `passed` or not.
+fn settle_served(passed: bool, persona: [u8; 32], shard: u64, epoch: u64, beacon: u8) -> bool {
+    let draws = [IssuedDraw {
+        revealed_at: BlockHeight::from_raw(0),
+        passed,
+    }; COUNTED_DRAWS];
+    let row = settle_pair(
+        &BlockHash::from_bytes([beacon; 32]),
+        &PCanonicalId::from_bytes(persona),
+        ShardId::from_raw(shard),
+        SettlementEpoch::from_raw(epoch),
+        &draws,
+    )
+    .expect("settle_pair refuses nothing at COUNTED_DRAWS draws")
+    .expect("a pair with issued draws has a row");
+    row.outcome() == SettlementOutcome::Served
+}
+
 fn transient_window(epochs: u32, law: DownDurationLaw, rng: &mut SplitMix64) -> (u32, u32) {
     let start = (epochs / 3).max(1);
     let len = law.sample_down_epochs(rng);
@@ -477,7 +531,7 @@ fn run_escalate(
                 out.forced_online_epochs += w.end - w.start + 1;
             }
             out.challenges += 1;
-            let serve = can_serve(truth, epoch, avail, transient, dodge_window);
+            let serve = observed_served(can_serve(truth, epoch, avail, transient, dodge_window));
             pending = None;
             if serve {
                 continue;
@@ -490,7 +544,7 @@ fn run_escalate(
 
         if baseline_due && pending.is_none() {
             out.challenges += 1;
-            let serve = can_serve(truth, epoch, avail, transient, None);
+            let serve = observed_served(can_serve(truth, epoch, avail, transient, None));
             if serve {
                 continue;
             }
@@ -567,7 +621,7 @@ fn run_sliding(
     // `index · baseline_period` — walk it with `step_by` rather than storing it.
     let missed: Vec<bool> = (0..epochs)
         .step_by(params.baseline_period as usize)
-        .map(|epoch| !can_serve(truth, epoch, avail, transient, None))
+        .map(|epoch| !observed_served(can_serve(truth, epoch, avail, transient, None)))
         .collect();
 
     let slash_at = sliding_window_first_slash_baseline(
@@ -666,12 +720,14 @@ fn paired_stats(esc: &[SimOutcome], slide: &[SimOutcome]) -> PairedActorStats {
 /// Absolute block-space check (arithmetic; not settled by per-P micro-sim).
 pub fn binding_analysis(baseline_period: u32, recheck_width: u32) -> BindingAnalysis {
     let baseline_rate = 1.0 / baseline_period as f64;
-    // Per settlement epoch: one guaranteed baseline per (P, shard); recheck is conditional.
-    let challenges_per_p_per_epoch = baseline_rate;
+    // Per observed settlement epoch, production issues `COUNTED_DRAWS` draws
+    // to each (P, shard) pair and settles them into one row; a recheck is
+    // conditional (Appendix B, R14).
+    let challenges_per_p_per_epoch = baseline_rate * COUNTED_DRAWS as f64;
     let slots_per_epoch = N_MARKET_ARCHIVERS * SHARDS_PER_P;
     let challenges_per_seb = (slots_per_epoch as f64 * challenges_per_p_per_epoch) as u64;
     let weight_per_seb = challenges_per_seb * CHALLENGE_VIN_BYTES;
-    let budget_per_seb = BLOCK_WEIGHT_LIMIT_BYTES * SETTLEMENT_EPOCH_BLOCKS;
+    let budget_per_seb = BLOCK_BUDGET_STAND_IN_BYTES * SETTLEMENT_EPOCH_BLOCKS;
     let fraction = weight_per_seb as f64 / budget_per_seb as f64;
     let volume_binding = fraction >= VOLUME_BINDING_FRACTION;
     // Foundation durability floor: Δslash of a few epochs is not network-load-bearing.
@@ -786,13 +842,14 @@ fn baseline_timing_note(baseline_period: u32) -> BaselineTimingNote {
             "settlement-epoch grid: baseline every {baseline_period} epoch(s) (deterministic)"
         ),
         production_baseline_model:
-            "gate-2 §3.4: H_fire beacon from block_hash(H_seal) — unpredictable at H_open".into(),
+            "select_draw: secret per-block draw, unpredictable before its block".into(),
         production_unpredictable: true,
     }
 }
 
 pub fn run_u_sweep(seeds: u32, epochs: usize) -> Vec<USlashPoint> {
     let assumed = DownDurationLaw::exponential(DEFAULT_MEAN_DOWN_EPOCHS);
+    let (m, n) = production_window();
     let mut out = Vec::new();
     for &u in &[0.50, 0.60, 0.70, 0.80, 0.90, 0.95] {
         let params = Round1Params {
@@ -804,8 +861,8 @@ pub fn run_u_sweep(seeds: u32, epochs: usize) -> Vec<USlashPoint> {
             assumed_law: assumed,
             recheck_quantile: 0.95,
             recheck_window_width_epochs: 3,
-            sliding_window_epochs: 5,
-            miss_threshold: 2,
+            sliding_window_epochs: n,
+            miss_threshold: m,
             baseline_period: 1,
             gaming_baseline_sweep: vec![1],
         };
@@ -966,7 +1023,7 @@ fn build_policy_pin(
         ));
     }
     rationale.push(
-        "production baseline: H_fire beacon-unpredictable (gate-2 §3.4) — shared anti-gaming prerequisite"
+        "production baseline: select_draw, the secret per-block draw — shared anti-gaming prerequisite"
             .into(),
     );
 
@@ -1074,6 +1131,7 @@ pub fn build_round1_scenarios() -> Vec<Round1Params> {
     let exp = DownDurationLaw::exponential(DEFAULT_MEAN_DOWN_EPOCHS);
     let fat = DownDurationLaw::lognormal_fat_tail(DEFAULT_MEAN_DOWN_EPOCHS, 1.2);
     let gaming_sweep = vec![1, 2, 3, 5, 7, 10];
+    let (prod_m, prod_n) = production_window();
 
     let base = |true_law: DownDurationLaw, assumed: DownDurationLaw| Round1Params {
         name: String::new(),
@@ -1084,8 +1142,8 @@ pub fn build_round1_scenarios() -> Vec<Round1Params> {
         assumed_law: assumed,
         recheck_quantile: 0.95,
         recheck_window_width_epochs: 3,
-        sliding_window_epochs: 5,
-        miss_threshold: 2,
+        sliding_window_epochs: prod_n,
+        miss_threshold: prod_m,
         baseline_period: 1,
         gaming_baseline_sweep: gaming_sweep.clone(),
     };
@@ -1362,8 +1420,8 @@ mod tests {
             assumed_law: DownDurationLaw::exponential(2.0),
             recheck_quantile: 0.95,
             recheck_window_width_epochs: 3,
-            sliding_window_epochs: 5,
-            miss_threshold: 2,
+            sliding_window_epochs: production_window().1,
+            miss_threshold: production_window().0,
             baseline_period: 1,
             gaming_baseline_sweep: vec![1, 2, 3],
         };
@@ -1385,8 +1443,8 @@ mod tests {
             assumed_law: exp,
             recheck_quantile: 0.95,
             recheck_window_width_epochs: 3,
-            sliding_window_epochs: 5,
-            miss_threshold: 2,
+            sliding_window_epochs: production_window().1,
+            miss_threshold: production_window().0,
             baseline_period: 1,
             gaming_baseline_sweep: vec![1],
         };
@@ -1400,6 +1458,50 @@ mod tests {
             r_fat.transient.tail_misspecification_gap >= r_exp.transient.tail_misspecification_gap,
             "tail gap should be at least as large under misspec"
         );
+    }
+
+    /// The cache in `observed_served` holds only if `settle_pair`'s verdict
+    /// on all-pass or all-fail draws does not depend on the selection's
+    /// operands. Sweep them.
+    #[test]
+    fn settle_pair_verdict_is_selection_invariant() {
+        for epoch in [0u64, 1, 7, 26, 1_000, u64::from(u32::MAX)] {
+            for persona in [[0u8; 32], [0xA5; 32], [0xFF; 32]] {
+                for (shard, beacon) in [(0u64, 0u8), (3, 0x11), (239, 0xEE)] {
+                    assert!(settle_served(true, persona, shard, epoch, beacon));
+                    assert!(!settle_served(false, persona, shard, epoch, beacon));
+                }
+            }
+        }
+        assert!(observed_served(true));
+        assert!(!observed_served(false));
+    }
+
+    #[test]
+    fn traffic_counts_the_counted_draws_against_the_zone() {
+        let b = binding_analysis(1, 3);
+        assert_eq!(b.challenges_per_p_per_epoch_upper, COUNTED_DRAWS as f64);
+        assert_eq!(
+            b.block_weight_budget_per_seb,
+            shekyl_economics::FULL_REWARD_ZONE * SETTLEMENT_EPOCH_BLOCKS
+        );
+        assert_eq!(
+            b.challenge_weight_per_seb,
+            N_MARKET_ARCHIVERS * SHARDS_PER_P * COUNTED_DRAWS as u64 * CHALLENGE_VIN_BYTES
+        );
+    }
+
+    #[test]
+    fn the_default_scenario_runs_production_window() {
+        let default = build_round1_scenarios()
+            .into_iter()
+            .find(|p| p.name == "l14b_confirm_default")
+            .expect("the default scenario is registered");
+        assert_eq!(
+            (default.miss_threshold, default.sliding_window_epochs),
+            production_window()
+        );
+        assert_eq!(production_window(), (11, 13));
     }
 
     #[test]
@@ -1429,8 +1531,8 @@ mod tests {
             assumed_law: exp,
             recheck_quantile: 0.95,
             recheck_window_width_epochs: 3,
-            sliding_window_epochs: 5,
-            miss_threshold: 2,
+            sliding_window_epochs: production_window().1,
+            miss_threshold: production_window().0,
             baseline_period: 1,
             gaming_baseline_sweep: vec![1, 2, 3, 5],
         };
