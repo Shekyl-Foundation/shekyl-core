@@ -674,7 +674,9 @@ check's, and a failed fetch never ends a round. `SIGNAL NEWNYM` would also clear
 client state, but it purges Tor's client state for every onion and moves
 every new peer stream onto new circuits, and is not used. The bound is not
 a respawn. The floor-device soak measures both miss rates; if the
-second-miss rate is near zero, the rule is settled.
+second-miss rate is near zero, the rule is settled. The 2026-10-31 soak
+(§12, increment 6) had one first miss in 322 probes, and its second probe
+arrived 19 s later: no second miss.
 
 **Overdue: a republish outside a round (Rick, 2026-10-31).** Tor gives the
 descriptor a 3 h lifetime (`HS_DESC_DEFAULT_LIFETIME`, line 30 of Tor's
@@ -1659,11 +1661,19 @@ are fixed before the work starts:
    suspend ran on a VM (2026-10-30; `TSR-M8` measured on Windows and
    macOS) and their findings are fixed; the slow link and a silent drop
    (under `TSR-Q14`) pass on the floor device (2026-10-31). Open: the VM
-   cases on a build with the fixes, the Windows and macOS runs
-   (`TSR-F15`), and the
-   floor-device soak, running since 2026-10-31 at `ffb7259051`, which also
-   records the probe's latency under its isolation pair and its arrival
-   rate.
+   cases on a build with the fixes, and the Windows and macOS runs
+   (`TSR-F15`). The floor-device soak ran from 2026-10-31 06:17Z to
+   2026-11-08 00:01Z at `ffb7259051` (shekyl-dev
+   `data/tsr-acceptance/2026-10-31-pi-soak/`):
+   - **Tor:** one Tor process the whole week, no respawn and no late timer;
+     321 of 322 probes arrived (p50 3.4 s, max 45.8 s); all 316 upload rounds
+     ended `Uploaded`.
+   - **The stall:** from 2026-11-01 the node was stuck one block behind on
+     the C++ Levin handler's 256 KiB limit (deleted by #1272), and Tor carried
+     about 75,000 session opens a day.
+   - **CPU:** the driver spin (#1274) was running, so its CPU and load are
+     not the device's baseline (`TSR-M15` is).
+   - **Open:** Rick's ruling on whether this soak stands as §1's Linux soak.
 
 ## 13. Review denominator
 
