@@ -288,8 +288,8 @@ pub const UNLOCK_TIME_BLOCK_SENTINEL: u64 = 500_000_000;
 // only — crypto-pq is dev-only, by design), so these are retyped twins of the
 // canonical `shekyl_crypto_pq::multisig` values rather than imports. They are
 // pinned equal to the canonical source by the cross-crate test in
-// `tests/pqc_consts_match_crypto_pq.rs` — the Rust↔Rust analog of the C++↔Rust
-// cross-language KAT: the only mechanism that catches the two sides drifting.
+// `tests/pqc_consts_match_crypto_pq.rs`. That test also reads
+// `cryptonote_config.h`, so the C++ twin cannot drift either.
 /// Single hybrid public-key length — twin of `SINGLE_KEY_CANONICAL_LEN`. Used
 /// for the exact bond-post `hybrid_public_key` / `bond_spend_pk` length checks.
 pub const PQC_HYBRID_SINGLE_KEY_LEN: usize = 1996;

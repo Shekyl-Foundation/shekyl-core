@@ -187,8 +187,8 @@ namespace config
   // Correctness cap only (verify_multisig / MultisigKeyContainer reject
   // n_total > MAX); NOT the source of the DoS ceilings below. The C++ twin of
   // shekyl-crypto-pq's MAX_MULTISIG_PARTICIPANTS — the cross-language KAT
-  // (`fcmp.cpp::msw1_pqc_constants_match_rust`) pins C++ == Rust, the only
-  // check that catches the two sides drifting from each other (F-1).
+  // `rust/shekyl-wire/tests/pqc_consts_match_crypto_pq.rs` reads these
+  // definitions and pins them to shekyl-crypto-pq (F-1).
   const uint32_t MAX_MULTISIG_PARTICIPANTS{5};
   // Per-participant serialized lengths (twins of SINGLE_KEY/SIG_CANONICAL_LEN
   // + SPEND_AUTH_PUBKEY_LEN). Ed25519(32) + ML-DSA-65(1952) + 12 header = 1996;
