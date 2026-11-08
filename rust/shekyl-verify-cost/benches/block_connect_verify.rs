@@ -274,7 +274,11 @@
 //! (6.52 / 5.69 / 3.97, quoted as 6.5 / 5.7 / 4.0). The signed ×4 is the
 //! d24 figure, so under this interim it sits above its own bound. The
 //! conservative bracket, the Rust single-proof cost (34.8 ms) in place of
-//! the batched term, gives ≈ 3.43 at d24.
+//! the batched term, gives ≈ 3.43 at d24. **Correction:** the shipped
+//! verifier evaluates `Â` with a multiscalar multiplication of its own per
+//! proof, so its batch amortises to about 0.6 of a single proof, not as the
+//! C++ one did; the 3.92 overstates `surge_max`, and #1319 folds `Â` into
+//! the batch and measures the term.
 //!
 //! **Regime note:** the sweep was measured with the FA-6 §8.2 flags; a
 //! one-point comparison against the shipping configuration (generic
