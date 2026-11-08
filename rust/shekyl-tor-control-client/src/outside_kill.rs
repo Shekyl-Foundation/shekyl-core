@@ -191,8 +191,8 @@ mod tests {
     /// The needle is text, not a pattern: a Tor whose command line differs
     /// from it only where the needle has a `.` survives, and a Tor carrying
     /// the needle itself is killed. The Tor is a copy of the system shell
-    /// named `tor`. Red edit: pass the needle to `pkill` unescaped, and the
-    /// first Tor is killed.
+    /// named `tor` (signed ad hoc on macOS). Red edit: pass the needle to
+    /// `pkill` unescaped, and the first Tor is killed.
     #[test]
     fn the_needle_is_text_not_a_pattern() {
         let dir = tempfile::tempdir().unwrap();
@@ -201,6 +201,20 @@ mod tests {
         #[cfg(windows)]
         let tor = dir.path().join("tor.exe");
         std::fs::copy(shell(), &tor).expect("a copy of the shell named tor");
+        // macOS kills a copied system binary at exec (status 137); an ad-hoc
+        // signature makes the copy a program of its own.
+        #[cfg(target_os = "macos")]
+        assert!(
+            Command::new("codesign")
+                .args(["-f", "-s", "-"])
+                .arg(&tor)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("codesign starts")
+                .success(),
+            "the copy is signed ad hoc"
+        );
         let needle = dir.path().join("data.dir");
         let near_miss = waiter(&tor, &dir.path().join("dataXdir"));
         std::thread::sleep(std::time::Duration::from_millis(300));
