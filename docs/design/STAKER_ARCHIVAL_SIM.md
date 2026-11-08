@@ -3890,14 +3890,20 @@ drain spacing) remain open per timing doc §7.
 
 ### Funding-seam entry standoff (Gate 6 §10.12 pass-4; 2026-06-13)
 
+> **The order coin is retired, and its arm was deleted 2026-11-08** (D8,
+> `ECONOMICS_SIM_PRODUCTION_REBASE.md` §6.2). Production draws the entry gap
+> as a spread only (`shekyl_standoff::draw_entry_gap`): there is no
+> inversion. The coin's rows (`thin_inv_on`, `thin_inv_off`) and its
+> `inversion` field were last at `c9d11d569`; every other `--standoff` row
+> reproduces bit for bit. Where this section reasons from the inversion, it
+> describes that retired construction.
+
 **Authority:** [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §10.12. Closes the §7
 "wallet jitter default" open item flagged in the timing-cluster pin above (T-A4).
 
 **Charter (pass-4 organizing principle):** hide **P ↔ principal** (GF-7), *not* **P ↔ its own
 rewards** (`P_canonical_id` is a conceded-public earner). The standoff decorrelates `P`'s observable
-entry event from the bond-post; the **inversion** (`P` may appear *before* its bond is staked,
-feasible because the announce is membership-only backing over principal outputs that exist pre-bond)
-removes the adversary's ordering prior. The mitigation touches **no economic quantity** — it is off
+entry event from the bond-post. The mitigation touches **no economic quantity** — it is off
 the trilemma axis.
 
 **Harness:** `cargo run -p shekyl-staking-sim -- --standoff`
@@ -3934,25 +3940,21 @@ effect would over-read the model (cf. the float-vs-integer over-read,
    window's value depends entirely on the **background funding-spend rate, which is unmeasured
    pre-testnet** — a swept assumption flagged like `fetch_latency_per_unit` (L10). The recommendation
    is conditional on the measured rate.
-3. **The inversion carries the low-activity worst case.** In the thin regime (rate `0.005`, where
-   set-enlargement *cannot* lift cover), enabling inversion cuts single-guess link probability
-   `0.52 → 0.32` and thin-cover `56 % → 20 %`, and breaks the ordering prior in ~50 % of cases — the
-   structural gain width alone can't buy. Inversion should be **on**.
+3. *(The order coin's thin-regime arm: retired with the coin, its rows last at `c9d11d569`.)*
 4. **Trigger independence is decisive.** A shared trigger (everyone jittering off a common epoch
    boundary) collapses the candidate set `16 → 1.01` and link `0.067 → 0.997` — a detectable surge
    separable from background traffic, destroying all cover regardless of width. **Uniform-independent
    draws are mandatory.**
 
-**Recommendation:** **window = 600 blocks (~20 h), uniform-independent draw, inversion enabled**
-(symmetric ±600 envelope). Rationale: thin-cover → 0 % and set mean ≈ 13 at moderate background
-traffic (rate ≥ 0.02), comfortably homeostasis-free (`latΕ = 0.06`), and the inversion both breaks the
-ordering prior and covers the low-activity principal that a wider symmetric window cannot. The window
+**Recommendation:** **window = 600 blocks (~20 h), uniform-independent draw.** Rationale:
+thin-cover → 0 % and set mean ≈ 13 at moderate background traffic (rate ≥ 0.02), comfortably
+homeostasis-free (`latΕ = 0.06`). The window
 cap is a candidate consensus bound, but as an **anti-griefing ceiling** (max announce↔bond separation,
 with announce-before-bond permitted) — *not* a privacy control; the privacy floor is the
 uniform-independent draw, which is wallet-only and therefore a **hard conformance requirement with a
 published test vector**, not a default (see caveats below). **Testnet must measure the background
 funding-spend rate** — at low traffic (rate ≤ 0.005) set≥10 is unbuyable by width under the
-homeostasis ceiling, and the inversion (not a wider window) is the lever.
+homeostasis ceiling.
 
 **Conditionality and caveats (review pass, 2026-06-13) — what the numbers mean.**
 The window/inversion/draw *shape* is right and the standoff sits off the trilemma axis as claimed,

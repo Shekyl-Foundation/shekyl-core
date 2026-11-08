@@ -5,9 +5,8 @@
 //! `P_canonical_id` is a conceded-public earner; the load-bearing seam is GF-7:
 //! the temporal correlation between `P`'s observable funding/entry events and the
 //! principal's on-chain activity. A randomized **standoff window** decorrelates
-//! the entry event from the bond-post, and the **inversion** (`P` may appear
-//! *before* its bond is staked) removes the adversary's ordering prior
-//! ("the bond-post follows a recent principal spend").
+//! the entry event from the bond-post. Production draws the gap as a spread
+//! only (`shekyl_standoff::draw_entry_gap`); there is no order coin.
 //!
 //! This harness answers the pass-4 sim question, sharpened past "smooth vs surge":
 //!
@@ -18,16 +17,12 @@
 //!    tail** — the worst-case an averaged window hides.
 //! 2. **The low-activity principal is the worst case.** Background decoys do not
 //!    depend on the target's own spend rate, so a rarely-spending principal gets
-//!    exactly the network-decoy cover and nothing more — which is precisely where
-//!    only the inversion helps (it removes the prior set-enlargement cannot).
+//!    exactly the network-decoy cover and nothing more.
 //! 3. **Clustering = trigger independence.** Independent uniform draws smooth
 //!    entries into the *background* funding traffic (large decoy pool); a shared
 //!    trigger (everyone jittering off an epoch boundary) concentrates entries into
 //!    a **detectable surge** separable from background, collapsing the decoy pool
 //!    to co-entrants only. This is the knob that decides smooth vs surge.
-//! 4. **Inversion as its own arm.** Reported as the share of mass where the
-//!    bond-post *precedes* the entry event — the fraction of cases the causal
-//!    "spend-just-before-bond" heuristic cannot even include the true funder.
 //!
 //! **Homeostasis is analytical, not re-simmed.** The economic model is
 //! epoch-quantized at `SETTLEMENT_EPOCH_BLOCKS` (~13.9 d); an obfuscation-useful
@@ -73,21 +68,20 @@
 //!   testnet target.
 //!
 //! **Construction the harness assumes (conformance-critical).** The model assumes the
-//! gap between the two seam events is drawn *directly* as `s ~ U[0, window]` with a
-//! random order (the inversion coin). The obvious wrong implementation —
+//! gap between the two seam events is drawn *directly* as `s ~ U[0, window]`.
+//! The obvious wrong implementation —
 //! independently jittering both event-times in `[0, window]` around a common
 //! intent anchor `t0` — yields a separation that is the *difference of two
 //! uniforms*: **triangular, peaked at zero**, i.e. the events cluster together
 //! most of the time, the precise opposite of a standoff. That wrong build
 //! satisfies "both within `window`" and "separation ≤ `window`" on paper while
-//! delivering near-zero effective standoff. Correct shape: at `t0`, flip a coin
-//! for order, place the first event at `t0`, draw `s ~ U[0, window]`, place the
-//! second at `t0 + s` (uniform separation, free inversion, max latency `window`,
-//! per-`P` independence since `t0` is the principal's private intent). The
-//! published conformance test vector must reject the triangular construction.
+//! delivering near-zero effective standoff. Correct shape: place the first event
+//! at `t0`, draw `s ~ U[0, window]`, place the second at `t0 + s` (uniform
+//! separation, max latency `window`, per-`P` independence since `t0` is the
+//! principal's private intent). The published conformance test vector must
+//! reject the triangular construction.
 //!
-//! **This harness models the *entry* seam only** (announce↔bond,
-//! order-symmetric, inversion-eligible). The *exit* seam carries **no standoff
+//! **This harness models the *entry* seam only** (announce↔bond). The *exit* seam carries **no standoff
 //! draw**: the F-D4 exit mechanism was deleted at Gate-6 §12.9 decision 5 after
 //! the premise audit found its principal-side referent unobservable
 //! (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §2.1/§15.4 — the phantom-`T`
@@ -130,9 +124,6 @@ pub struct StandoffConfig {
     /// Rate of *new staking entries* network-wide (entries/block). Only the decoy
     /// pool under a shared trigger (co-entrants in the surge); ≪ funding rate.
     pub entry_rate_per_block: f64,
-    /// Inversion allowed: the entry event may precede the bond-post (symmetric
-    /// window), removing the ordering prior and doubling the search width.
-    pub inversion: bool,
     /// Shared trigger (clustering) vs independent uniform draw.
     pub shared_trigger: bool,
     pub trials: u64,
@@ -146,12 +137,11 @@ pub struct StandoffResult {
     pub window_blocks: u64,
     pub window_minutes: f64,
     pub net_funding_rate_per_block: f64,
-    pub inversion: bool,
     pub shared_trigger: bool,
-    /// Effective search width feeding the decoy model (blocks): the
-    /// inversion-adjusted window in the normal path, or the surge cluster width
-    /// under a shared trigger (where the separable surge collapses the effective
-    /// width the adversary must consider).
+    /// Effective search width feeding the decoy model (blocks): the window in
+    /// the normal path, or the surge cluster width under a shared trigger
+    /// (where the separable surge collapses the effective width the adversary
+    /// must consider).
     pub search_width_blocks: f64,
     /// Mean candidate-set size (1 target + background decoys).
     pub anon_set_mean: f64,
@@ -161,10 +151,6 @@ pub struct StandoffResult {
     pub thin_cover_frac: f64,
     /// Mean adversary single-guess link probability (1/set under uniform).
     pub link_prob_mean: f64,
-    /// Share of mass where the bond-post *strictly* precedes the entry event
-    /// (causal: 0; inversion: `0.5·W/(W+1)` under the discrete gap model) — cases
-    /// the "spend-before-bond" heuristic cannot include.
-    pub inversion_prior_break: f64,
     /// Standoff entry latency as a fraction of one settlement epoch.
     pub entry_latency_frac_epoch: f64,
     pub homeostasis_free: bool,
@@ -194,11 +180,7 @@ fn blocks_to_minutes(blocks: u64) -> f64 {
 
 fn run(cfg: &StandoffConfig) -> StandoffResult {
     assert!(cfg.trials > 0, "standoff::run requires trials > 0");
-    let search_width = if cfg.inversion {
-        2.0 * cfg.window_blocks as f64
-    } else {
-        cfg.window_blocks as f64
-    };
+    let search_width = cfg.window_blocks as f64;
 
     // Under a shared trigger the entry surge is separable from background, so the
     // decoy pool collapses to co-entrants inside the cluster width; otherwise the
@@ -236,29 +218,19 @@ fn run(cfg: &StandoffConfig) -> StandoffResult {
         window_blocks: cfg.window_blocks,
         window_minutes: blocks_to_minutes(cfg.window_blocks),
         net_funding_rate_per_block: cfg.net_funding_rate_per_block,
-        inversion: cfg.inversion,
         shared_trigger: cfg.shared_trigger,
         search_width_blocks: decoy_width,
         anon_set_mean: mean,
         anon_set_p05: p05,
         thin_cover_frac: thin as f64 / n as f64,
         link_prob_mean: link_sum / n as f64,
-        // Discrete gap model: P(bond strictly precedes entry) = P(bond_first)·P(s>0)
-        // = 0.5·W/(W+1). Zero at W=0, where the two events always coincide and no
-        // inversion is possible — so the constant 0.5 over-reported that edge.
-        inversion_prior_break: if cfg.inversion {
-            0.5 * cfg.window_blocks as f64 / (cfg.window_blocks as f64 + 1.0)
-        } else {
-            0.0
-        },
         entry_latency_frac_epoch,
         homeostasis_free: entry_latency_frac_epoch <= HOMEOSTASIS_FREE_FRAC_EPOCH,
     }
 }
 
 /// Smallest window (blocks) reaching `TARGET_ANON_SET` mean candidate set at the
-/// given background rate under independent triggers, no inversion (the
-/// conservative arm). Closed-form inverse of `1 + rate * W = target`; the MC
+/// given background rate under independent triggers. Closed-form inverse of `1 + rate * W = target`; the MC
 /// confirms the mean and exposes the tail.
 fn recommended_window_blocks(rate: f64) -> u64 {
     if rate <= 0.0 {
@@ -324,8 +296,8 @@ pub fn build_configs() -> Vec<StandoffConfig> {
     // Entry rate (new stakers/block) — the shared-trigger decoy pool; ≪ funding.
     let entry_rate = 0.002_f64;
 
-    // Arm A — window sweep at a mid background rate, independent trigger, no
-    // inversion (the conservative baseline: how wide for a reasonable set?).
+    // Arm A — window sweep at a mid background rate, independent trigger (the
+    // baseline: how wide for a reasonable set?).
     for &w in &[0u64, 5, 10, 30, 60, 120, 300, 600, 1200] {
         cfgs.push(StandoffConfig {
             name: format!("win_{w}_r0.02"),
@@ -333,7 +305,6 @@ pub fn build_configs() -> Vec<StandoffConfig> {
             window_blocks: w,
             net_funding_rate_per_block: 0.02,
             entry_rate_per_block: entry_rate,
-            inversion: false,
             shared_trigger: false,
             trials,
             seed,
@@ -349,7 +320,6 @@ pub fn build_configs() -> Vec<StandoffConfig> {
             window_blocks: 300,
             net_funding_rate_per_block: r,
             entry_rate_per_block: entry_rate,
-            inversion: false,
             shared_trigger: false,
             trials,
             seed,
@@ -357,22 +327,10 @@ pub fn build_configs() -> Vec<StandoffConfig> {
         seed += 1;
     }
 
-    // Arm C — inversion on/off at a thin (low-rate) regime, the low-activity worst
-    // case where set-enlargement cannot help and only the inversion does.
-    for &inv in &[false, true] {
-        cfgs.push(StandoffConfig {
-            name: format!("thin_inv_{}", if inv { "on" } else { "off" }),
-            axis: "standoff_inversion",
-            window_blocks: 300,
-            net_funding_rate_per_block: 0.005,
-            entry_rate_per_block: entry_rate,
-            inversion: inv,
-            shared_trigger: false,
-            trials,
-            seed,
-        });
-        seed += 1;
-    }
+    // The two seeds after Arm B belonged to the order coin's on/off pair,
+    // deleted 2026-11-08 (production draws no order coin). Skipping them keeps
+    // Arm D on the seeds its published rows were taken on.
+    seed += 2;
 
     // Arm D — trigger independence (clustering) at a mid window/rate.
     for &shared in &[false, true] {
@@ -382,7 +340,6 @@ pub fn build_configs() -> Vec<StandoffConfig> {
             window_blocks: 300,
             net_funding_rate_per_block: 0.05,
             entry_rate_per_block: entry_rate,
-            inversion: false,
             shared_trigger: shared,
             trials,
             seed,
@@ -434,7 +391,6 @@ mod tests {
             window_blocks: 0,
             net_funding_rate_per_block: 0.05,
             entry_rate_per_block: 0.002,
-            inversion: false,
             shared_trigger: false,
             trials: 10_000,
             seed: 1,
@@ -453,7 +409,6 @@ mod tests {
             window_blocks: 60,
             net_funding_rate_per_block: 0.05,
             entry_rate_per_block: 0.002,
-            inversion: false,
             shared_trigger: false,
             trials: 50_000,
             seed: 7,
@@ -473,7 +428,6 @@ mod tests {
             window_blocks: 300,
             net_funding_rate_per_block: 0.05,
             entry_rate_per_block: 0.002,
-            inversion: false,
             shared_trigger: false,
             trials: 50_000,
             seed: 11,
@@ -488,29 +442,6 @@ mod tests {
     }
 
     #[test]
-    fn inversion_breaks_the_ordering_prior() {
-        let causal = StandoffConfig {
-            name: "t".into(),
-            axis: "t",
-            window_blocks: 300,
-            net_funding_rate_per_block: 0.02,
-            entry_rate_per_block: 0.002,
-            inversion: false,
-            shared_trigger: false,
-            trials: 10_000,
-            seed: 3,
-        };
-        let inv = StandoffConfig {
-            inversion: true,
-            ..causal.clone()
-        };
-        assert_eq!(run(&causal).inversion_prior_break, 0.0);
-        assert!(run(&inv).inversion_prior_break > 0.4);
-        // Inversion also widens the search width ⇒ larger set.
-        assert!(run(&inv).anon_set_mean > run(&causal).anon_set_mean);
-    }
-
-    #[test]
     fn homeostasis_free_below_epoch_tenth() {
         // 600-block standoff (~20 h) is well under 0.10 epoch ⇒ economically free.
         let cfg = StandoffConfig {
@@ -519,7 +450,6 @@ mod tests {
             window_blocks: 600,
             net_funding_rate_per_block: 0.02,
             entry_rate_per_block: 0.002,
-            inversion: false,
             shared_trigger: false,
             trials: 1000,
             seed: 2,
@@ -533,7 +463,7 @@ mod tests {
     fn sim_rng_conforms_via_shared_self_cert() {
         // Single-sourcing smoke test: the sim's `SplitMix64` reference stream
         // passes the *same* self-certification harness a wallet runs against its
-        // CSPRNG (uniform spread, fair order, serial independence). The full
+        // CSPRNG (uniform spread, serial independence). The full
         // distributional + instrument-validity vector lives in
         // `shekyl-standoff/tests/conformance_grading.rs`.
         let mut rng = SplitMix64::new(0xC0FF_EE12_3456_789A);

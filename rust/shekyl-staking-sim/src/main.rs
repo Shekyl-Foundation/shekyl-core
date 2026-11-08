@@ -794,13 +794,12 @@ fn print_standoff_report() {
     eprintln!("  latΕ = entry latency / epoch.");
     eprintln!();
     eprintln!(
-        "{:<20} {:<20} {:>6} {:>7} {:>6} {:>4} {:>4} | {:>6} {:>6} {:>6} {:>6} | {:>7} {:>5}",
+        "{:<20} {:<20} {:>6} {:>7} {:>6} {:>4} | {:>6} {:>6} {:>6} {:>6} | {:>7} {:>5}",
         "scenario",
         "axis",
         "win",
         "win_min",
         "rate",
-        "inv",
         "shr",
         "setMean",
         "setP05",
@@ -811,13 +810,12 @@ fn print_standoff_report() {
     );
     for r in &report.results {
         eprintln!(
-            "{:<20} {:<20} {:>6} {:>7.0} {:>6.3} {:>4} {:>4} | {:>6.2} {:>6.1} {:>6.3} {:>6.3} | {:>7.4} {:>5}",
+            "{:<20} {:<20} {:>6} {:>7.0} {:>6.3} {:>4} | {:>6.2} {:>6.1} {:>6.3} {:>6.3} | {:>7.4} {:>5}",
             r.name,
             r.axis,
             r.window_blocks,
             r.window_minutes,
             r.net_funding_rate_per_block,
-            if r.inversion { "Y" } else { "n" },
             if r.shared_trigger { "Y" } else { "n" },
             r.anon_set_mean,
             r.anon_set_p05,
@@ -829,7 +827,7 @@ fn print_standoff_report() {
     }
     eprintln!();
     eprintln!(
-        "Recommended window for set≥{:.0} (independent trigger, no inversion — conservative):",
+        "Recommended window for set≥{:.0} (independent trigger):",
         report.target_anon_set
     );
     eprintln!(
