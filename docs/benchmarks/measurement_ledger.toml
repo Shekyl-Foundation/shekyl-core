@@ -223,11 +223,63 @@ spec = [
 [[constant]]
 name = "spec_verify_cost_modal_cell"
 defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
-needle = "cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis, 13_311));"
+needle = "door_sequence_ms(124.5, 1, SIG_1, BP_1),"
 measured_by = ["BA-T1", "BA-T10"]
 status = "unmeasured"
-carrier = "BA-T10. The 2026-08-05 floor grids are not in the tree, and the cell's own comment says the floor re-measurement is owed after PL-D3 (BA-G4; FOLLOWUPS, the 48-cell surface)."
+carrier = "BA-T10. The cell is the door's sequence (BA-Q9, 2026-11-08): this masks-and-proof term plus the signature and lone range-proof terms below. The 2026-08-05 floor grids this term comes from are not in the tree, and the cell's own comment says the floor re-measurement is owed after PL-D3 (BA-G4; FOLLOWUPS, the 48-cell surface)."
 path_set = "relay-verify-cell"
+
+[[constant]]
+name = "pi4_hybrid_sig_1in_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
+needle = "const PI4_HYBRID_SIG_1IN_MS: f64 = 0.971_86;"
+measured_by = ["BA-T10"]
+status = "stale"
+stale_since = "20738bf714"
+carrier = "BA-T10 (BA-Q9). The pqc_per_input median at the 1-input shape, the term of every SPEC_VERIFY_COST cell the pool door pays per input. Shares the block-weight path set and its capture, so it is stale from the same commit; the hybrid verify itself changed at bf2fcbe091 (verify_strict), acknowledged there."
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
+capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
+rev_source = "capture header"
+path_set = "block-weight"
+
+[[constant]]
+name = "pi4_hybrid_sig_8in_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
+needle = "const PI4_HYBRID_SIG_8IN_MS: f64 = 0.972_28;"
+measured_by = ["BA-T10"]
+status = "stale"
+stale_since = "20738bf714"
+carrier = "BA-T10 (BA-Q9). The pqc_per_input median at the 8-input shape; as pi4_hybrid_sig_1in_ms."
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
+capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
+rev_source = "capture header"
+path_set = "block-weight"
+
+[[constant]]
+name = "pi4_range_proof_lone_1in_2out_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
+needle = "const PI4_RANGE_PROOF_LONE_1IN_2OUT_MS: f64 = 35.017;"
+measured_by = ["BA-T10"]
+status = "stale"
+stale_since = "20738bf714"
+carrier = "BA-T10 (BA-Q9). The bp_proxy median at the 1-input 2-output shape: verify_batch over a batch of one, what the pool door pays at TxSlot::Lone. Shares the block-weight path set and its capture, so it is stale from the same commit."
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
+capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
+rev_source = "capture header"
+path_set = "block-weight"
+
+[[constant]]
+name = "pi4_range_proof_lone_8in_2out_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
+needle = "const PI4_RANGE_PROOF_LONE_8IN_2OUT_MS: f64 = 34.827;"
+measured_by = ["BA-T10"]
+status = "stale"
+stale_since = "20738bf714"
+carrier = "BA-T10 (BA-Q9). The bp_proxy median at the 8-input 2-output shape; as pi4_range_proof_lone_1in_2out_ms."
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
+capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
+rev_source = "capture header"
+path_set = "block-weight"
 
 [[path_set]]
 id = "relay-aes"
