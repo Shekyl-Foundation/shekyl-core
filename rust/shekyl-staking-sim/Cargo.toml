@@ -33,9 +33,6 @@ shekyl-units = { path = "../shekyl-units" }
 # asked of the validator's `EpochFloor` rather than restated as a horizon.
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 shekyl-types = { path = "../shekyl-types" }
-# `TX_WEIGHT_LIMIT`: one transaction's largest archival length, which bounds
-# a byte-cut shard's size against `SHARD_LENGTH` (`--f34-shard-length`, P9).
-shekyl-wire = { path = "../shekyl-wire" }
 # GF-7 measurement pipeline (`docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md` §4/§5):
 # this crate is the ONLY home of a recording `BroadcastTimelineObserver` impl
 # (layer 2 of the no-emit guard — a standalone binary no production crate

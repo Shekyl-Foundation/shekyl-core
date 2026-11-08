@@ -5329,7 +5329,6 @@ dependencies = [
  "shekyl-standoff",
  "shekyl-types",
  "shekyl-units",
- "shekyl-wire",
 ]
 
 [[package]]

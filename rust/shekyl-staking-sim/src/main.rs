@@ -117,16 +117,13 @@ fn print_summary(results: &[ScenarioResult]) {
     );
     eprintln!("  (L11 free entry/exit; flat at full population when endogenous=false).");
     eprintln!(
-        "  bDU = BOOTSTRAP worst deep gap, unfloored (peak serving deep-under over the run);"
+        "  bDU = BOOTSTRAP worst deep gap (peak serving deep-under over the run); baPk = peak"
     );
-    eprintln!("  bDUf = same WITH the population-decaying foundation floor; baPk = peak bonded-");
     eprintln!(
-        "  archiver count (baPk - bondA is the OVERSHOOT). L12; all 0/=bondA outside bootstrap."
+        "  bonded-archiver count (baPk - bondA is the OVERSHOOT). L12; all 0/=bondA outside bootstrap."
     );
-    eprintln!("  boOld = OLDEST-band floored gap peak (P3); > bDUf ⇒ residual concentrates in the");
-    eprintln!(
-        "  irreplaceable tail; age-stratified floor (floor_age_tilt>0) pulls it toward bDUf."
-    );
+    eprintln!("  boOld = OLDEST-band gap peak (P3); > bDU ⇒ residual concentrates in the");
+    eprintln!("  irreplaceable tail.");
     eprintln!(
         "  feB = FEE-ERA realized purse at end (< budget = subsidy decayed; = ceiling = servo"
     );
@@ -140,12 +137,6 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!("  foundation retention guarantee (V3_STAKER_ARCHIVAL.md, complete trees held");
     eprintln!("  permanently) these are FOUNDATION-AS-SOLE-SOURCE transitions, not data loss;");
     eprintln!("  shkExt = the post-shock subset. swan-2/W1, re-read swan-4.");
-    eprintln!(
-        "  shkExF = post-shock wipe-outs NET OF THE MODELED SERVING FLOOR (counted only when"
-    );
-    eprintln!(
-        "  market holders AND floor are simultaneously zero; = shkExt when floor_replicas=0)."
-    );
     eprintln!(
         "  extB = shkExt binned by age band at wipe-out (b1/../b5, oldest last). swan-3/W12-13."
     );
@@ -184,7 +175,7 @@ fn print_summary(results: &[ScenarioResult]) {
     );
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>6} {:>5} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>4} {:>6} {:>6} {:>14} {:>5} {:>5} {:>5} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>6} {:>5} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>4} {:>6} {:>14} {:>5} {:>5} {:>5} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
         "scenario",
         "axis",
         "bond",
@@ -215,7 +206,6 @@ fn print_summary(results: &[ScenarioResult]) {
         "actv",
         "bondA",
         "bDU",
-        "bDUf",
         "baPk",
         "boOld",
         "feB",
@@ -225,7 +215,6 @@ fn print_summary(results: &[ScenarioResult]) {
         "shkBA",
         "extT",
         "shkExt",
-        "shkExF",
         "extB",
         "ssSE",
         "ssMxW",
@@ -250,7 +239,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>6.3} {:>5.3} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.0} {:>5.0} {:>4.0} {:>6.0} {:>6.0} {:>14} {:>5.0} {:>5.0} {:>5.0} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>6.3} {:>5.3} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.0} {:>5.0} {:>4.0} {:>6.0} {:>14} {:>5.0} {:>5.0} {:>5.0} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -284,9 +273,8 @@ fn print_summary(results: &[ScenarioResult]) {
             r.active_frac,
             r.bonded_active,
             r.boot_deep_under_peak,
-            r.boot_deep_under_floored_peak,
             r.bonded_active_peak,
-            r.boot_oldest_floored_peak,
+            r.boot_oldest_under_peak,
             r.fee_budget_end,
             r.fee_deep_under_peak,
             r.shock_deep_under_peak,
@@ -294,7 +282,6 @@ fn print_summary(results: &[ScenarioResult]) {
             r.shock_bonded_trough,
             r.deep_extinct_total,
             r.shock_deep_extinct,
-            r.shock_deep_extinct_floored,
             r.shock_extinct_bands
                 .iter()
                 .map(|&x| format!("{}", x as usize))
@@ -1111,7 +1098,6 @@ mod tests {
     use crate::metrics::gini;
     use crate::model::{bond_age, bond_duration, g_age, r_target, World, AGE_WEIGHT};
     use crate::model::{Actor, Shard};
-    use crate::participation::{foundation_floor, foundation_floor_aged};
 
     #[test]
     fn gini_equal_is_zero() {
@@ -1209,45 +1195,6 @@ mod tests {
         assert_eq!(hot, 3);
         assert_eq!(deep, 6);
         assert!(deep > hot);
-    }
-
-    #[test]
-    fn foundation_floor_aged_reduces_to_uniform_at_zero_tilt() {
-        // P3: tilt 0 ⇒ the aged floor is byte-identical to the uniform floor at every age.
-        // This is the invariant that keeps every pre-P3 scenario (floor_age_tilt default 0)
-        // unchanged.
-        let dt = 0.5;
-        for &pop in &[0usize, 40, 80] {
-            for age in [0.5, 0.7, 0.9, 1.0] {
-                assert_eq!(
-                    foundation_floor_aged(pop, 6, 80.0, 0.0, age, dt),
-                    foundation_floor(pop, 6, 80.0),
-                    "tilt-0 must equal uniform at pop={pop}, age={age}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn foundation_floor_aged_tilts_toward_oldest() {
-        // P3: a positive tilt steers replicas to the oldest band at the expense of the
-        // freshly-deepened band, pivoting about the deep midpoint (mean-preserving in the
-        // continuous form). At pop=0 the base floor is the full `floor0`.
-        let dt = 0.5;
-        let base = foundation_floor(0, 6, 80.0); // 6
-        let oldest = foundation_floor_aged(0, 6, 80.0, 0.6, 1.0, dt);
-        let youngest_deep = foundation_floor_aged(0, 6, 80.0, 0.6, dt, dt);
-        assert!(
-            oldest > base,
-            "oldest must be over-floored: {oldest} > {base}"
-        );
-        assert!(
-            youngest_deep < base,
-            "freshly-deepened must be under-floored: {youngest_deep} < {base}"
-        );
-        // A zero base floor (population at/above decay_pop) stays zero regardless of tilt —
-        // the tilt redistributes a floor, it does not create one.
-        assert_eq!(foundation_floor_aged(80, 6, 80.0, 0.9, 1.0, dt), 0);
     }
 
     #[test]

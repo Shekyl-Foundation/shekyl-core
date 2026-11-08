@@ -1055,7 +1055,7 @@ assumed-away tails into measured ones:
   of the healthy attractor; `swan2_cascade_rho` compounds the 50 % exit with
   a ρ ×2 panic so entry is suppressed exactly when the rebuild needs it.
 
-**swan-3 instrument extensions (W12–W15 wargame response, same day).** swan-2
+*(The swan-3 floor arms and `shkExF` were deleted with the decaying floor 2026-11-08, last at `b4f753d90`.)* **swan-3 instrument extensions (W12–W15 wargame response, same day).** swan-2
 sized the gate-5 floor-completeness export *by inference*: the swan worlds are
 **bare-lean** (`floor_replicas = 0` everywhere), the export's band scope
 ("oldest stratum") was an assumption, and the benign domain results ran with
@@ -2669,6 +2669,16 @@ yield rises). The honest residue: ρ and `budget` are still genesis/economic inp
 
 ### L12 — bootstrapping / cold-start: the transient approach to the attractor
 
+> **The decaying foundation floor is deleted (2026-11-08, D3).** Production
+> keeps a permanent complete-tree support role outside the market and prices
+> one floor; it has no population-decaying floor. Re-run without it (P10,
+> EUP-3 check half), every market figure is bit-identical and only the
+> floored fields move. The floor, its 17 scenarios (`l12_boot_floor`, the
+> `l12_decay_*` sweep, `l13_floor`, the P3 tilt arms, `l16_L6_floor`, the
+> swan-3 floor arms) and the floored fields (`bDUf`, `shkExF`) were last at
+> `b4f753d90`, the citation for every floored figure below. `boOld` reads the market
+> (`boot_oldest_under_peak`).
+
 L11 settled the *steady-state* operating point as an attractor. L12 asks how the system
 **reaches** it from genesis, where deep history is ~empty and accrues over time while the
 archiver population grows into it — the cold-start the chain "can least afford" because
@@ -2771,6 +2781,16 @@ floor's genesis size and decay schedule are gate-5 foundation parameters, pinnab
 thick-state hand-off and re-tunable as the foundation observes the real entry rate.
 
 ### L13 — fee-era end-state: the attractor under a shrinking purse
+
+> **The decaying foundation floor is deleted (2026-11-08, D3).** Production
+> keeps a permanent complete-tree support role outside the market and prices
+> one floor; it has no population-decaying floor. Re-run without it (P10,
+> EUP-3 check half), every market figure is bit-identical and only the
+> floored fields move. The floor, its 17 scenarios (`l12_boot_floor`, the
+> `l12_decay_*` sweep, `l13_floor`, the P3 tilt arms, `l16_L6_floor`, the
+> swan-3 floor arms) and the floored fields (`bDUf`, `shkExF`) were last at
+> `b4f753d90`, the citation for every floored figure below. `boOld` reads the market
+> (`boot_oldest_under_peak`).
 
 **Current reading (2026-11-08).** On the default production reward arm
 (§*EUP-3 check half*) the knee's `cDeepU` is 0.042–0.125 across five
@@ -3867,6 +3887,16 @@ the **seeding class** (step 2) and **routing-quality** (secondary market), not t
 reward basis — durability-diversity replaces availability-diversity for the primary promise.
 
 ### P3 disposition — floor-tilt ≠ duration age-scaling
+
+> **The decaying foundation floor is deleted (2026-11-08, D3).** Production
+> keeps a permanent complete-tree support role outside the market and prices
+> one floor; it has no population-decaying floor. Re-run without it (P10,
+> EUP-3 check half), every market figure is bit-identical and only the
+> floored fields move. The floor, its 17 scenarios (`l12_boot_floor`, the
+> `l12_decay_*` sweep, `l13_floor`, the P3 tilt arms, `l16_L6_floor`, the
+> swan-3 floor arms) and the floored fields (`bDUf`, `shkExF`) were last at
+> `b4f753d90`, the citation for every floored figure below. `boOld` reads the market
+> (`boot_oldest_under_peak`).
 
 `foundation_floor_aged` (mean-preserving oldest-ward floor tilt) must **not** be filed under
 the same "age-scaling" disposition as L9/L10 bond-duration age-scaling. Floor-tilt is a

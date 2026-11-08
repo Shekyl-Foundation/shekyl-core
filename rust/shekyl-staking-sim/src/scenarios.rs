@@ -17,8 +17,7 @@ use crate::model::{
     r_target, Actor, Shard, World, AGE_WEIGHT, BOND_FLOOR, RELEASE_COOLDOWN_EPOCHS,
 };
 use crate::participation::{
-    admit_entrants, bonded_active_count, foundation_floor_aged, process_exits, slash_exit,
-    ParticipationParams,
+    admit_entrants, bonded_active_count, process_exits, slash_exit, ParticipationParams,
 };
 use crate::retrieval::{
     r_target_for_availability, r_target_for_durability, serving_availability, serving_durability,
@@ -153,15 +152,6 @@ pub struct SimConfig {
     /// Shards appended per epoch (the block-production / chain-growth rate) until the
     /// window reaches `n_shard`, after which the steady-state recycle holds it.
     pub shard_growth_per_epoch: usize,
-    /// **Foundation floor** (L12): deep-shard replicas the foundation runs at genesis as
-    /// the bootstrap coverage guarantee, decaying linearly to zero as the bonded-archiver
-    /// population reaches `floor_decay_pop`. `0` ⇒ no floor (the pure-market read showing
-    /// the unbacked transient gap). Counts toward retrieval coverage only, never the
-    /// reward servo (see `participation::foundation_floor`).
-    pub floor_replicas: usize,
-    /// Bonded-archiver population at which the foundation floor reaches zero (it withdraws
-    /// once the market is this thick). Set near the emergent steady-state archiver count.
-    pub floor_decay_pop: f64,
 
     // L13 fee-era / sustainability axis (mission timeframe 2; inert when `!fee_era`).
     /// As block subsidy → 0 the archival purse comes from fees / a bounded terminal
@@ -314,13 +304,6 @@ pub struct SimConfig {
     /// Deterrence threshold `a* = freeride_benefit / freeride_penalty`.
     pub freeride_penalty: f64,
 
-    /// **Age-stratified floor tilt (P3).** Mean-preserving oldest-ward tilt of the
-    /// foundation floor (and, in the fee-era, the terminal-subsidy backstop): the oldest
-    /// deep shards get `floor·(1+tilt)`, the just-deep shoulder `floor·(1−tilt)`, same total
-    /// cost. `0.0` ⇒ uniform floor (byte-identical). Protects the irreplaceable tail that
-    /// fails first at both temporal ends (L12 hand-off, L13 thinning).
-    pub floor_age_tilt: f64,
-
     /// **Transport / latency-regime coupling (L16).** When on, `fetch_latency_per_unit`
     /// is the onion-rendezvous operating point (L10 seating lag) and depresses the
     /// per-holder uptime used in the L15 retrieval SLA (`u_eff = u_base / (1+k·L)`).
@@ -453,25 +436,19 @@ pub struct ScenarioResult {
     /// archiver set. The attractor check requires this converge to the same value from
     /// fill-up (`init_active_frac=0`) and trim-down (`init_active_frac=1`) starts.
     pub bonded_active: f64,
-    /// **Bootstrap worst deep gap, unfloored** (L12): peak serving deep under-target over
+    /// **Bootstrap worst deep gap** (L12): peak serving deep under-target over
     /// the whole run — the bare-market cold-start transient (deep history accrues before
     /// the archiver population that covers it does). `0` outside bootstrap.
     pub boot_deep_under_peak: f64,
-    /// **Bootstrap worst deep gap, floored** (L12): the same peak with the
-    /// population-decaying foundation floor added. The floor is load-bearing iff this is
-    /// ≈0 while `boot_deep_under_peak` is large — the floor covering the transient the
-    /// market cannot yet. `0` outside bootstrap.
-    pub boot_deep_under_floored_peak: f64,
     /// **Peak bonded-archiver count** (L12): max over the run. `bonded_active_peak −
     /// bonded_active` (steady) is the overshoot the APR-inversion warning predicts;
     /// ≈0 means entry tracked demand monotonically (no overshoot-and-shed). Equals
     /// `bonded_active` outside endogenous runs.
     pub bonded_active_peak: f64,
-    /// **Oldest-band floored gap peak** (P3): the worst floored deep gap restricted to the
-    /// oldest band. `> boot_deep_under_floored_peak` ⇒ the residual concentrates in the
-    /// irreplaceable tail (uniform floor); an age-stratified floor pulls it down at equal
-    /// total foundation cost. `0` outside bootstrap/fee-era.
-    pub boot_oldest_floored_peak: f64,
+    /// **Oldest-band gap peak** (P3): the worst serving deep gap restricted to the
+    /// oldest band. `> boot_deep_under_peak` ⇒ the residual concentrates in the
+    /// irreplaceable tail. `0` outside bootstrap/fee-era.
+    pub boot_oldest_under_peak: f64,
     /// **Fee-era realized purse at end** (L13): the budget in the final epoch. Below the
     /// initial `budget` it shows the subsidy decay; at `budget_ceiling` it shows the
     /// adaptive servo saturated (fee market maxed). Equals `budget` outside fee-era.
@@ -523,22 +500,6 @@ pub struct ScenarioResult {
     /// means an oldest-only floor under-scopes (absence of the claim is a claim of
     /// absence). Empty bands outside the deep range stay 0 by construction.
     pub shock_extinct_bands: Vec<f64>,
-    /// **Wipe-out events net of the serving floor** (swan-3 / W13), run-wide: a
-    /// deep-seated shard is counted fully *unserved* only when its market holder set
-    /// **and** the serving floor (`foundation_floor_aged` at its age) are
-    /// *simultaneously* zero — the floor is the non-market serving source, so a market
-    /// wipe-out with the floor engaged is under-replication with a live server.
-    /// Conditional on **floor completeness** over the band (the foundation actually
-    /// serving a copy of every shard the formula says it floors) — which is exactly
-    /// the gate-5 serving requirement the W13 arm sizes. Equals `deep_extinct_total`
-    /// when `floor_replicas = 0`. Retention is unaffected either way (swan-4).
-    pub deep_extinct_floored_total: f64,
-    /// **Post-shock floored wipe-outs** (swan-3 / W13): the shock-attributable
-    /// subset of `deep_extinct_floored_total`. ≈0 on a floor-on arm of a wiping-out
-    /// scenario is the closure evidence that a complete re-engagement serving floor
-    /// converts the swan-1 sole-source windows into covered under-replication. `0`
-    /// outside the shock axis.
-    pub shock_deep_extinct_floored: f64,
     /// **Foundation-as-sole-source shard-epochs, run-wide** (swan-4): total epochs
     /// summed over deep shards spent with zero serving market holders after having
     /// been seated at depth. Under the foundation retention guarantee
@@ -790,11 +751,10 @@ fn build_world(cfg: &SimConfig, rng: &mut SplitMix64) -> World {
 /// `reseed_rate > 0`). `deep_seated[s]` = the slot has had ≥1 serving holder while deep
 /// since its last recycle; `extinct[s]` = the slot's *market* wipe-out has been counted
 /// (one event per deep lifetime; both reset when the slot leaves the deep band, i.e. on
-/// recycle); `extinct_floored[s]` = counted with the serving floor also at zero.
+/// recycle).
 struct ExtinctionScan {
     deep_seated: Vec<bool>,
     extinct: Vec<bool>,
-    extinct_floored: Vec<bool>,
     /// swan-4: current **foundation-as-sole-source window** length per slot (epochs
     /// the deep-seated slot has had zero serving market holders; 0 = market-sourced).
     /// Under the retention guarantee a market wipe-out is an availability state, not
@@ -807,7 +767,6 @@ struct ExtinctionScan {
 /// that actually extinguishes).
 struct ExtinctionEvents {
     market: usize,
-    floored: usize,
     bands: [usize; N_BANDS],
 }
 
@@ -816,7 +775,6 @@ impl ExtinctionScan {
         ExtinctionScan {
             deep_seated: vec![false; n],
             extinct: vec![false; n],
-            extinct_floored: vec![false; n],
             ss_open: vec![0; n],
         }
     }
@@ -858,30 +816,15 @@ impl ExtinctionScan {
     /// Scan for newly-orphaned deep shards. The *market* read counts a deep-seated slot
     /// the first time its serving market holder set empties — the start of a
     /// foundation-as-sole-source window (swan-4: an availability event, not data loss,
-    /// even though the coverage metric re-greens). The *floored* read (W13)
-    /// additionally requires `foundation_floor_aged` = 0 at the shard's age — a market
-    /// wipe-out with the serving floor engaged is under-replication with a live
-    /// non-market server. The floored flag can fire *later* than the market flag:
-    /// if the floor holds through the trough but withdraws (population recovery decays
-    /// it) before the market re-seats the slot, the hand-off race is lost and the slot
-    /// is counted then. Conditional on floor *completeness* over the floored band — the
-    /// gate-5 serving requirement this read sizes.
-    fn scan(
-        &mut self,
-        world: &World,
-        serving_r: &[usize],
-        cfg: &SimConfig,
-        pop_now: usize,
-    ) -> ExtinctionEvents {
+    /// even though the coverage metric re-greens).
+    fn scan(&mut self, world: &World, serving_r: &[usize], cfg: &SimConfig) -> ExtinctionEvents {
         // Bootstrap worlds grow the window; extend state for appended slots.
         if self.deep_seated.len() < world.shards.len() {
             self.deep_seated.resize(world.shards.len(), false);
             self.extinct.resize(world.shards.len(), false);
-            self.extinct_floored.resize(world.shards.len(), false);
         }
         let mut ev = ExtinctionEvents {
             market: 0,
-            floored: 0,
             bands: [0; N_BANDS],
         };
         #[allow(clippy::needless_range_loop)]
@@ -890,32 +833,15 @@ impl ExtinctionScan {
             if age >= cfg.deep_threshold {
                 if serving_r[s] > 0 {
                     self.deep_seated[s] = true;
-                } else if self.deep_seated[s] {
-                    if !self.extinct[s] {
-                        self.extinct[s] = true;
-                        ev.market += 1;
-                        let band = ((age * N_BANDS as f64) as usize).min(N_BANDS - 1);
-                        ev.bands[band] += 1;
-                    }
-                    if !self.extinct_floored[s] {
-                        let floor_eff = foundation_floor_aged(
-                            pop_now,
-                            cfg.floor_replicas,
-                            cfg.floor_decay_pop,
-                            cfg.floor_age_tilt,
-                            age,
-                            cfg.deep_threshold,
-                        );
-                        if floor_eff == 0 {
-                            self.extinct_floored[s] = true;
-                            ev.floored += 1;
-                        }
-                    }
+                } else if self.deep_seated[s] && !self.extinct[s] {
+                    self.extinct[s] = true;
+                    ev.market += 1;
+                    let band = ((age * N_BANDS as f64) as usize).min(N_BANDS - 1);
+                    ev.bands[band] += 1;
                 }
             } else {
                 self.deep_seated[s] = false;
                 self.extinct[s] = false;
-                self.extinct_floored[s] = false;
             }
         }
         ev
@@ -1028,15 +954,12 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     let mut series_active = Vec::with_capacity(cfg.epochs);
     let mut series_bonded_active = Vec::with_capacity(cfg.epochs);
     // L12 bootstrap: the deep retrieval-coverage transient. `boot_deep_under` is the
-    // *unfloored* serving deep under-target per epoch (the bare-market cold-start gap);
-    // `boot_deep_under_floored` adds the population-decaying foundation floor (the backed
-    // transient). Peaks are taken over the WHOLE run (the transient is early, not in the
-    // steady-state window). Both equal the serving deep under-target outside bootstrap.
+    // serving deep under-target per epoch (the market's cold-start gap). Peaks are taken
+    // over the WHOLE run (the transient is early, not in the steady-state window).
     let mut series_boot_deep_under = Vec::with_capacity(cfg.epochs);
-    let mut series_boot_deep_floored = Vec::with_capacity(cfg.epochs);
-    // P3 band-resolve: the floored deep gap restricted to the OLDEST band (the most
-    // irreplaceable tail), to test whether the aggregate floored residual concentrates there.
-    let mut series_boot_oldest_floored = Vec::with_capacity(cfg.epochs);
+    // P3 band-resolve: the deep gap restricted to the OLDEST band (the most irreplaceable
+    // tail), to test whether the aggregate residual concentrates there.
+    let mut series_boot_oldest_under = Vec::with_capacity(cfg.epochs);
     // L13 fee-era: the base subsidy decays toward `budget_floor`; the adaptive servo may
     // top it up toward `budget_ceiling`; the realized purse per epoch is tracked here.
     // `signal` is the previous epoch's *serving* deep retrieval shortfall (the trust
@@ -1066,8 +989,6 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     let mut reward_dust_atomic_max = 0u64;
     let mut shock_deep_extinct = 0usize;
     let mut shock_extinct_bands = [0usize; N_BANDS];
-    let mut deep_extinct_floored_total = 0usize;
-    let mut shock_deep_extinct_floored = 0usize;
     // swan-4: foundation-as-sole-source accounting — total shard-epochs spent with the
     // foundation as a deep shard's only source, and the longest single-shard window.
     let mut sole_source_shard_epochs = 0usize;
@@ -1230,12 +1151,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 || cfg.shock_exit_top_deep > 0.0
             {
                 let sr = world.serving_replication();
-                let pop = bonded_active_count(&world, &ap);
-                let ev = ext_scan.scan(&world, &sr, cfg, pop);
+                let ev = ext_scan.scan(&world, &sr, cfg);
                 deep_extinct_total += ev.market;
-                deep_extinct_floored_total += ev.floored;
                 shock_deep_extinct += ev.market;
-                shock_deep_extinct_floored += ev.floored;
                 for (acc, &n) in shock_extinct_bands.iter_mut().zip(&ev.bands) {
                     *acc += n;
                 }
@@ -1414,12 +1332,10 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         // foundation-as-sole-source (swan-4; sticky per slot until recycle). Counted
         // run-wide as the frontier-noise baseline and post-shock as the
         // shock-attributable read.
-        let ext_ev = ext_scan.scan(&world, &serving_r, cfg, bonded_active_count(&world, &ap));
+        let ext_ev = ext_scan.scan(&world, &serving_r, cfg);
         deep_extinct_total += ext_ev.market;
-        deep_extinct_floored_total += ext_ev.floored;
         if cfg.shock_at > 0 && ep >= cfg.shock_at {
             shock_deep_extinct += ext_ev.market;
-            shock_deep_extinct_floored += ext_ev.floored;
             for (acc, &n) in shock_extinct_bands.iter_mut().zip(&ext_ev.bands) {
                 *acc += n;
             }
@@ -1485,64 +1401,40 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             series_dur_avail_deep.push(1.0);
         }
 
-        // L12 bootstrap deep coverage: serving deep under-target with and without the
-        // foundation floor. The floor decays with the current bonded-archiver population
-        // and adds replicas to *deep* shards only (retrieval coverage, not the reward
-        // servo — see `participation::foundation_floor`). Computed inline over deep shards
-        // to avoid a third full coverage pass. Outside bootstrap (`floor_replicas == 0`)
-        // both equal the serving deep under-target.
-        let pop_now = bonded_active_count(&world, &ap);
-        // P3: the floor is age-stratified (oldest-ward, mean-preserving) when `floor_age_tilt
-        // > 0`; `foundation_floor_aged` reduces to the uniform `foundation_floor` at tilt 0.
-        // The oldest band (top 1/N_BANDS of the age range) is resolved separately to test
-        // whether the floored residual concentrates in the irreplaceable tail (P3 / L13#2).
+        // L12 bootstrap deep coverage: serving deep under-target, computed inline over
+        // deep shards to avoid a third full coverage pass. The oldest band (top
+        // 1/N_BANDS of the age range) is resolved separately to test whether the
+        // residual concentrates in the irreplaceable tail (P3 / L13#2).
         let oldest_lo = (N_BANDS - 1) as f64 / N_BANDS as f64;
         let mut deep_n = 0usize;
-        let mut deep_under_bare = 0usize;
-        let mut deep_under_floored = 0usize;
+        let mut deep_under = 0usize;
         let mut old_n = 0usize;
-        let mut old_under_floored = 0usize;
+        let mut old_under = 0usize;
         #[allow(clippy::needless_range_loop)]
         for s in 0..world.shards.len() {
             let age = world.shards[s].age;
             if age >= cfg.deep_threshold {
                 deep_n += 1;
                 let tgt = r_target(age, cfg.r_target_hot, cfg.r_target_deep);
-                let floor_eff = foundation_floor_aged(
-                    pop_now,
-                    cfg.floor_replicas,
-                    cfg.floor_decay_pop,
-                    cfg.floor_age_tilt,
-                    age,
-                    cfg.deep_threshold,
-                );
-                if serving_r[s] < tgt {
-                    deep_under_bare += 1;
-                }
-                let floored_under = serving_r[s] + floor_eff < tgt;
-                if floored_under {
-                    deep_under_floored += 1;
+                let under = serving_r[s] < tgt;
+                if under {
+                    deep_under += 1;
                 }
                 if age >= oldest_lo {
                     old_n += 1;
-                    if floored_under {
-                        old_under_floored += 1;
+                    if under {
+                        old_under += 1;
                     }
                 }
             }
         }
         series_boot_deep_under.push(if deep_n > 0 {
-            deep_under_bare as f64 / deep_n as f64
+            deep_under as f64 / deep_n as f64
         } else {
             0.0
         });
-        series_boot_deep_floored.push(if deep_n > 0 {
-            deep_under_floored as f64 / deep_n as f64
-        } else {
-            0.0
-        });
-        series_boot_oldest_floored.push(if old_n > 0 {
-            old_under_floored as f64 / old_n as f64
+        series_boot_oldest_under.push(if old_n > 0 {
+            old_under as f64 / old_n as f64
         } else {
             0.0
         });
@@ -1574,12 +1466,10 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             // death-spiral channel's wipe-outs are systematically invisible.
             // Sticky flags make the double scan idempotent per deep lifetime.
             let sr = world.serving_replication();
-            let ev = ext_scan.scan(&world, &sr, cfg, bonded_active_count(&world, &ap));
+            let ev = ext_scan.scan(&world, &sr, cfg);
             deep_extinct_total += ev.market;
-            deep_extinct_floored_total += ev.floored;
             if cfg.shock_at > 0 && ep >= cfg.shock_at {
                 shock_deep_extinct += ev.market;
-                shock_deep_extinct_floored += ev.floored;
                 for (acc, &n) in shock_extinct_bands.iter_mut().zip(&ev.bands) {
                     *acc += n;
                 }
@@ -1818,15 +1708,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         .iter()
         .copied()
         .fold(0.0_f64, f64::max);
-    let boot_deep_under_floored_peak = series_boot_deep_floored
-        .iter()
-        .copied()
-        .fold(0.0_f64, f64::max);
-    // P3: peak floored gap on the OLDEST band over the run. `boot_oldest_floored_peak >
-    // boot_deep_under_floored_peak` confirms the residual concentrates in the irreplaceable
-    // tail (uniform floor); an age-stratified floor (`floor_age_tilt > 0`) should pull this
-    // down toward the aggregate at equal total foundation cost.
-    let boot_oldest_floored_peak = series_boot_oldest_floored
+    // P3: peak gap on the OLDEST band over the run. `boot_oldest_under_peak >
+    // boot_deep_under_peak` confirms the residual concentrates in the irreplaceable tail.
+    let boot_oldest_under_peak = series_boot_oldest_under
         .iter()
         .copied()
         .fold(0.0_f64, f64::max);
@@ -1945,9 +1829,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         active_frac,
         bonded_active,
         boot_deep_under_peak,
-        boot_deep_under_floored_peak,
         bonded_active_peak,
-        boot_oldest_floored_peak,
+        boot_oldest_under_peak,
         fee_budget_end,
         fee_deep_under_peak,
         shock_deep_under_peak,
@@ -1957,8 +1840,6 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         reward_dust_atomic_max,
         shock_deep_extinct: shock_deep_extinct as f64,
         shock_extinct_bands: shock_extinct_bands.iter().map(|&x| x as f64).collect(),
-        deep_extinct_floored_total: deep_extinct_floored_total as f64,
-        shock_deep_extinct_floored: shock_deep_extinct_floored as f64,
         sole_source_shard_epochs: sole_source_shard_epochs as f64,
         sole_source_max_window: sole_source_max_window as f64,
         sole_source_open_end: ext_scan.sole_source_open() as f64,
@@ -2113,8 +1994,6 @@ pub(crate) fn baseline() -> SimConfig {
         bootstrap: false,
         n_shard_genesis: 0,
         shard_growth_per_epoch: 0,
-        floor_replicas: 0,
-        floor_decay_pop: 0.0,
         // L13: constant budget by default (every pre-L13 scenario). The fee-era
         // scenarios opt in.
         fee_era: false,
@@ -2165,7 +2044,6 @@ pub(crate) fn baseline() -> SimConfig {
         freeride_penalty: 1.0,
         // P3 age-stratified floor: uniform by default (tilt 0 ⇒ byte-identical to the
         // L12/L13 floor). The P3 scenarios opt in.
-        floor_age_tilt: 0.0,
         // L16 transport coupling: off by default (inert, byte-identical). The L16
         // scenarios opt in. Defaults: 90% baseline uptime, depression k=0.07 per epoch
         // of deep fetch latency (the onion-rendezvous operating band L2–L6).
@@ -2780,37 +2658,6 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         let mut c = l12_base();
         c.name = "l12_boot_nofloor".into();
         c.axis = "bootstrap".into();
-        c.floor_replicas = 0;
-        out.push(c);
-    }
-
-    // (2) COLD-START + foundation floor: the same run with the foundation running
-    // r_target_deep replicas at genesis, decaying to zero as the bonded-archiver
-    // population reaches the emergent steady-state count (~80). `boot_deep_under_floored_peak`
-    // ≈0 while the unfloored peak is large is the floor doing its bootstrap job —
-    // covering the transient without crowding out entry (it is invisible to the reward
-    // servo) and withdrawing once the market is thick.
-    {
-        let mut c = l12_base();
-        c.name = "l12_boot_floor".into();
-        c.axis = "bootstrap".into();
-        c.floor_replicas = 6; // = r_target_deep: full deep coverage at genesis
-        c.floor_decay_pop = 80.0; // withdraw as the archiver set reaches ~steady size
-        out.push(c);
-    }
-
-    // (3) FLOOR-DECAY schedule: how fast the foundation withdraws. Aggressive (decay_pop
-    // small ⇒ floor gone while the market is still half-built) should leave a residual
-    // transient gap; gentle (decay_pop large ⇒ floor lingers) fully covers but keeps the
-    // foundation working longer. The schedule is the lever trading bootstrap-risk against
-    // foundation-burden; the floored peak as a function of decay_pop locates the safe
-    // withdrawal speed.
-    for (label, decay) in [("fast", 40.0_f64), ("mid", 80.0), ("slow", 160.0)] {
-        let mut c = l12_base();
-        c.name = format!("l12_decay_{label}");
-        c.axis = "bootstrap_floor_decay".into();
-        c.floor_replicas = 6;
-        c.floor_decay_pop = decay;
         out.push(c);
     }
 
@@ -2824,7 +2671,6 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.name = format!("l12_growth_{label}");
         c.axis = "bootstrap_growth".into();
         c.shard_growth_per_epoch = growth;
-        c.floor_replicas = 0;
         out.push(c);
     }
 
@@ -2962,24 +2808,6 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.adaptive_share = true;
         c.share_gain = 8.0;
         c.budget_ceiling = ceil;
-        out.push(c);
-    }
-
-    // (5) FOUNDATION FLOOR re-engagement: the L12 floor decay schedule, run in REVERSE. The
-    // floor is `floor0 · max(0, 1 − pop/decay_pop)` — in bootstrap `pop` rises and the floor
-    // withdraws; in the fee-era `pop` THINS as the purse shrinks, so the floor automatically
-    // re-engages. Decay (unsustainable floor) + foundation floor, no servo: the bare deep
-    // gap (`boot_deep_under_peak`) is large as the market thins, but the FLOORED gap
-    // (`boot_deep_under_floored_peak`) stays ≈0 — retrieval coverage held by the foundation
-    // backstop without paying the staker servo. The one non-market capacity source is
-    // load-bearing at BOTH ends (genesis and fee-era), as the unifying note predicts.
-    {
-        let mut c = l13_base();
-        c.name = "l13_floor".into();
-        c.axis = "fee_floor".into();
-        c.budget_floor = 40.0;
-        c.floor_replicas = 6; // = r_target_deep
-        c.floor_decay_pop = 80.0; // re-engages as bonded archivers thin below ~80
         out.push(c);
     }
 
@@ -3207,52 +3035,6 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         out.push(c);
     }
 
-    // --- P3 (age-stratified floor / irreplaceable-tail protection): L13#2 found the OLDEST
-    // band oscillates under (oUmx 0.163) while mid-deep holds (cDeepU 0.057), and the L12
-    // hand-off residual (0.019) is an *aggregate* deep figure that may hide an oldest-band
-    // concentration. The new `boOld` column band-resolves the floored gap: `boOld > bDUf`
-    // on the uniform-floor scenarios (l12_*, l13_floor) is the band-resolve test — it
-    // confirms the residual sits in the irreplaceable tail. P3's lever is an age-stratified
-    // floor: `foundation_floor_aged` applies a MEAN-PRESERVING oldest-ward tilt (same total
-    // foundation cost, redistributed toward the deepest band — the same way `R_target(age)`
-    // already tilts). These scenarios run the REALISTIC re-engagement floor
-    // (`floor_replicas = 6 = r_target_deep`, matching `l13_floor`), at which the fee-era
-    // residual concentrates in the oldest band (`l13_floor`: boOld 0.612 > bDUf 0.425),
-    // then sweep the tilt: `boOld` should fall toward 0 as the tilt steers replicas to the
-    // oldest band, at the cost of a modest rise in the aggregate gap (younger, re-derivable
-    // deep history under-floored). That trade — protect the irreplaceable, let the
-    // replaceable ride the market — is the P3 disposition.
-    //
-    // (P3a) FEE-ERA re-engagement (= `l13_floor` at tilt 0). The market thins, the floor
-    // re-engages, but the oldest band is abandoned by the market FIRST (age-weight churn),
-    // so the floored residual lands on the irreplaceable tail. The tilt over-floors the
-    // oldest band (round(6·(1+tilt))) at the expense of the freshly-deepened band
-    // (round(6·(1−tilt))). `boOld` ↓ while `bDUf` holds/rises slightly is the trade.
-    for (label, tilt) in [("t00", 0.0_f64), ("t03", 0.3), ("t06", 0.6), ("t09", 0.9)] {
-        let mut c = l13_base();
-        c.name = format!("p3_fee_tilt_{label}");
-        c.axis = "p3_fee_tilt".into();
-        c.budget_floor = 40.0;
-        c.floor_replicas = 6; // = r_target_deep, the realistic re-engagement floor
-        c.floor_decay_pop = 80.0; // re-engages as bonded archivers thin below ~80
-        c.floor_age_tilt = tilt;
-        out.push(c);
-    }
-    // (P3b) BOOTSTRAP (= `l12_boot_floor` at tilt 0). The asymmetry check: at genesis the
-    // oldest shards are the genesis core (covered earliest/longest), so the bootstrap
-    // residual is the freshly-deepened band, NOT the oldest (`boOld` ≈ 0). The tilt should
-    // therefore leave `boOld` at ~0 — confirming the irreplaceable tail is exposed at the
-    // FEE-ERA end, not the bootstrap end, so the age-stratification is a fee-era lever.
-    for (label, tilt) in [("t00", 0.0_f64), ("t03", 0.3), ("t06", 0.6), ("t09", 0.9)] {
-        let mut c = l12_base();
-        c.name = format!("p3_boot_tilt_{label}");
-        c.axis = "p3_boot_tilt".into();
-        c.floor_replicas = 6; // = r_target_deep, matching l12_boot_floor
-        c.floor_decay_pop = 80.0;
-        c.floor_age_tilt = tilt;
-        out.push(c);
-    }
-
     // --- L16: transport / latency-regime coupling. The firewalled-pseudonym requirement
     // forces heavy fetch onto onion rendezvous, so `fetch_latency_per_unit` is the
     // transport operating point on the L2–L6 band (L10 seating lag) AND depresses the
@@ -3313,18 +3095,6 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.axis = "l16_transport_diversity".into();
         c.fetch_latency_per_unit = 4.0;
         c.retr_n_domains = 3;
-        out.push(c);
-    }
-    // (L16d) L6 + foundation floor: the floor adds R replicas (retrieval coverage) but
-    // does NOT raise u — so at saturation the SLA can still fail even with the floor on.
-    // Separates capacity backstop from uptime depression (feeds P4 / soundness pass).
-    {
-        let mut c = l16_base();
-        c.name = "l16_L6_floor".into();
-        c.axis = "l16_floor_backstop".into();
-        c.fetch_latency_per_unit = 6.0;
-        c.floor_replicas = 6;
-        c.floor_decay_pop = 200.0; // persist through the run (~80 archivers)
         out.push(c);
     }
 
@@ -3831,60 +3601,11 @@ pub fn build_scenarios() -> Vec<SimConfig> {
 
     // --- swan-3 (W12–W15 wargame response, STAKER_ARCHIVAL_SIM.md §L17 swan-3). The
     // swan-2 price-row extinctions (vshape 37, servo400 99) were measured BARE-LEAN
-    // (`floor_replicas = 0` everywhere in the swan worlds), so the gate-5
+    // (no foundation floor in the swan worlds), so the gate-5
     // floor-completeness export was sized by inference; and the benign domain results
     // ran with NO placement-side diversity floor in the model (the L15 machinery is
     // scoring-only), so they are luck of the bucketing, not a floor working.
     //
-    // (1) W13 closure arms: the two extinguishing price rows re-run with the
-    // foundation floor on as a re-engagement backstop (6 = r_target_deep;
-    // decay_pop 100 ≈ the healthy attractor population, so the floor is ≈0 pre-shock
-    // and re-engages exactly as the trough thins the market — the L12 backstop
-    // property). Tilt 0 = completeness over the WHOLE deep set. `shkExtF` ≈ 0 with
-    // `shkExt` unchanged is the closure evidence: a complete floor converts the
-    // swan-1 data losses into covered under-replication; nonzero `shkExtF` is the
-    // hand-off race lost (floor withdrew before the market re-seated).
-    {
-        let mut c = swan_base();
-        c.name = "swan3_vshape_floor".into();
-        c.axis = "swan3_floor".into();
-        c.flow_cost_fiat = true;
-        c.shock_price_mult = 0.25;
-        c.shock_price_relax = 0.05;
-        c.floor_replicas = 6;
-        c.floor_decay_pop = 100.0;
-        out.push(c);
-    }
-    {
-        let mut c = swan_base();
-        c.name = "swan3_servo400_floor".into();
-        c.axis = "swan3_floor".into();
-        c.flow_cost_fiat = true;
-        c.shock_price_mult = 0.25;
-        swan_servo(&mut c);
-        c.budget_ceiling = 400.0;
-        c.floor_replicas = 6;
-        c.floor_decay_pop = 100.0;
-        out.push(c);
-    }
-    // (2) W12 stratification scoping: the V-crash floor arm with the P3 oldest-ward
-    // tilt at its swept maximum (0.9). The `extB` band read says WHERE trough
-    // extinction lands; this arm measures what an oldest-tilted floor misses — if
-    // extinction is not oldest-concentrated, the under-floored shoulder leaks
-    // extinctions the uniform floor catches (`shkExtF` > the tilt-0 arm), which is
-    // exactly the under-scoping W12 warns the gate-5 export against.
-    {
-        let mut c = swan_base();
-        c.name = "swan3_vshape_floor_t9".into();
-        c.axis = "swan3_floor".into();
-        c.flow_cost_fiat = true;
-        c.shock_price_mult = 0.25;
-        c.shock_price_relax = 0.05;
-        c.floor_replicas = 6;
-        c.floor_decay_pop = 100.0;
-        c.floor_age_tilt = 0.9;
-        out.push(c);
-    }
     // (3) W15 holder-class-correlated exit: the actors holding the most deep shards
     // exit at once — the honest worst case for the FTX pattern (custody membership
     // correlated with holder class). Compare `swan_cascade30/50` (stride, benign) and
