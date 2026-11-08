@@ -33,6 +33,14 @@ flat-vs-age-scaled-bond fork (L4)*, the bond-duration + co-location work in §*I
 — bond duration (L9) and co-location (L8)*, the backfill-lag work in §*L10 — the
 backfill-lag model*, and the forward worklist in §*Adjustment ledger* at the end of this doc.
 
+**Reward arms (2026-11-08).** The default reward is production's: linear
+credited work on its integer operands (§*EUP-3 check half*). Every
+population figure in this document dated before 2026-11-08 was taken on
+the plateau the sim carried then, now `--reward-arm=registered-plateau`,
+and reproduces only on that arm. §L11 and §L13 give both arms' current
+readings; the other sections are that arm's record until the coupling
+half re-runs them on the economy's purse.
+
 **Iteration-3 headline (L10).** The backfill-lag model — deep-shard **fetch latency**
 (committed-but-not-serving while fetching; drops instant), **decoupled** from the economic
 game (game on committed replication = iteration-2-stable; retrieval coverage on seated
@@ -1924,6 +1932,12 @@ calibration shifts the triple intersection.
 
 ### L9 — bond duration
 
+**Plan ahead** (EUP-3 check half, Appendix B R6 of
+`ECONOMICS_SIM_PRODUCTION_REBASE.md`). The retention lock is this sim's
+design. Production has the duration function, `bond_duration`, with a
+parity test against this model's formula, and no caller: nothing refuses
+a `Release` before a term ends. The lock is off by default.
+
 Sweeping `dur_age_scale ∈ {0, 2, 4}` in the dynamic world:
 
 | scenario | agents | `oChrn` (oldest-band churn) | `oldU` (oldest residual) | `deep_und` |
@@ -2487,7 +2501,16 @@ and why getting its sizing/decay right (L5/L6) is the highest-leverage open item
 
 ### L11 — endogenous participation: the lean equilibrium *derived*, not asserted
 
-**Current reading (2026-10-22, model at `c2dcfe601`).** The June
+**Current reading (2026-11-08).** The default reward arm is production's:
+linear credited work on its integer operands (§*EUP-3 check half*). Its
+lean point, five seeds, is the table in that section: `cDeepU`
+0.002–0.128 and `oUmx` 0 on four seeds of five. `bondA` 66.0–79.3.
+`l11_l13_five_seed_production_pins` holds it. The blocks below are the
+registered plateau arm (`--reward-arm=registered-plateau`), on which the
+June figures and the 2026-10-22 five-seed reading were taken;
+`l11_l13_five_seed_pins` holds that arm.
+
+**The registered arm's reading (2026-10-22, model at `c2dcfe601`).** The June
 numbers below are one seed, `0x5EED_1234`. Five seeds at that commit
 already spread `bondA` by 13 archivers (66.3–79.4) and `oUmx` by 0.55.
 A figure quoted from that seed is that seed's reading.
@@ -2499,8 +2522,8 @@ both arms at every seed. The attractor stands inside that band. At
 matches on one seed of five. Archiver count still meets within a few;
 the oldest-band gap does not.
 
-**Today's lean point** (`l11_fill`, identical to `l11_rho_r02` and
-`l11_bud_b100` on these seeds). `cDeepU` is `committed_deep_under`,
+**The registered arm's lean point** (`l11_fill`, identical to
+`l11_rho_r02` and `l11_bud_b100` on these seeds). `cDeepU` is `committed_deep_under`,
 the windowed mean. The June word `deep_und`, where it prints 0.002,
 is this mean; where it prints 0.392 it is the final-epoch snapshot.
 
@@ -2749,7 +2772,13 @@ thick-state hand-off and re-tunable as the foundation observes the real entry ra
 
 ### L13 — fee-era end-state: the attractor under a shrinking purse
 
-**Current reading (2026-10-22, model at `c2dcfe601`).** The knee
+**Current reading (2026-11-08).** On the default production reward arm
+(§*EUP-3 check half*) the knee's `cDeepU` is 0.042–0.125 across five
+seeds and its `oUmx` 0.065–0.269 on four of them (1.000 on `0x2222_2222`).
+Floor 100 is fully covered on every seed. The blocks below are the
+registered plateau arm, which `l11_l13_five_seed_pins` holds.
+
+**The registered arm's reading (2026-10-22, model at `c2dcfe601`).** The knee
 figures below (`oUmx` 0.163, `cDeepU` 0.057, `bondA` 67) are the pin
 seed at the June commit. Five seeds there already spread knee `bondA`
 by 2.4 and `oUmx` by 0.19. The same attribution as §L11 applies:
@@ -2757,7 +2786,7 @@ by 2.4 and `oUmx` by 0.19. The same attribution as §L11 applies:
 (and `oUmx` 1 on all five seeds); `a04c988b1`'s `reward.rs` half, not
 its `r_market_count` half, moved it back.
 
-**Today's knee** (`l13_decay_knee`), five seeds. Purse is 84.1 on
+**The registered arm's knee** (`l13_decay_knee`), five seeds. Purse is 84.1 on
 every seed.
 
 | seed | bondA | cDeepU | oUmx |
@@ -3011,6 +3040,77 @@ only (the default).** Two production-shaped arms beside the default.
   storage (22) binds before capital. Coverage lands near the deep-only
   arm at 2.0, and the yield denominator is smaller.
 
+### Outcomes (2026-11-08)
+
+| # | Prediction | Outcome | Grade |
+| --- | --- | --- | --- |
+| P1 | No stream moves | All 21 modes byte-identical between the merge head and the one-body build, the 6 MB default sweep included. The five-seed vector holds. A test pins seed 0 to SplitMix64's reference stream | Held |
+| P2 | Default row's sliding false slash 0.588 → 0.002; volR below 0.10; honest slash falls from 1.000, furthest at u = 0.95; dodge and explicit window rows unchanged; traffic 0.00819 → 0.02458 | 0.588 → 0.002; volR 1.74 → 0.06; honest sliding slash 0.969 at u = 0.50, 0.910, 0.773, 0.504, 0.219, 0.082 at u = 0.95; dodge 0.000 / 1.000 and every explicit window row unchanged; traffic 0.02458. Not predicted: the rows that inherit the default window moved with it (the lognormal-tail row's sliding false slash 0.479 → 0.021, gaming-thin 0.006 → 0.000) | Held; the inheriting rows were missed |
+| P3 | No figure moves | The five-seed vector holds, and the default sweep's 388 shock-free scenarios are identical | Held |
+| P4 | Dust under 240 atomic per epoch; `cDeepU` up by at most 0.05; `bondA` within ±3; `oUmx` within the seed band | Dust at most 133 atomic in any epoch. `cDeepU` **falls**: by 0.05–0.19 at the lean point (mean −0.12) and 0.07 on average at the L13 knee. `oUmx` falls to 0 at the lean point on four seeds of five. `bondA` moves −5.7 to +6.2 | Dust held; direction wrong |
+| P5 | Zero burned on L11/L13; on the swan scenarios post-shock `bondA` recovers more slowly | Zero slash exits and zero burned on every L11/L13 run, asserted by the pin test. On the 11 shock scenarios 118.5–508.5 units burn per run. Recovery epochs and troughs do not move (one trough 39 → 40), and the ending `bondA` **rises** on 8 of 11 (e.g. `swan2_aftershock` 97.95 → 103.32) with deep coverage unchanged | Zero held; direction wrong |
+| P6 | Every held shard at 2.0: `cDeepU` well up, `bondA` down. At the floor: near deep-only at 2.0 | At 2.0: lean `cDeepU` 0.061 → 0.424, `oUmx` → 1, as predicted; `bondA` **rises** 72 → 88. At the floor: 0.299 and `oUmx` 1, far from deep-only at 2.0 | Half held |
+
+**Why P4 went the other way.** The mechanism below is read from the code;
+no run isolated it. The prediction read only the agent's price: linear credit raises Σ credited work, lowers the price per unit of
+work, and so should drop marginal holdings. The agent never saw the
+plateau, though. It values a shard at `price · g / r` on both arms. What
+the plateau changed was the *realized* reward: a storage-rich actor's work
+above 4 was credited at half and above 8 at a quarter, less the pseudonym
+split's cost. Exit runs on realized yield, so those actors left, and deep
+coverage went with them. Production's linear credit keeps them.
+
+**Why P5 went the other way.** `bondA` is a head count, not capital. One
+reading, not tested here: a slashed actor re-enters capital-poorer and
+bonds fewer deep shards, so the same coverage takes more archivers, and
+the burn shows up as more, smaller holders rather than as slower
+recovery.
+
+**Why P6 missed at the floor.** Two terms. The carry cost (A6) is a flat
+0.03 per bonded shard whatever the rate, so bonding hot shards adds that
+flow cost to every hot holding. With the carry scaled to the rate
+(0.03 · rate / 2.0), every held shard at the floor reads 0.157 at the lean
+point and 0.180 at the knee: the carry model explains about half the gap.
+The rest is not attributed here. One candidate is the yield denominator:
+every held shard's bond counts as committed capital, so the realized
+yield falls. The oldest band is uncovered on every seed either way.
+
+**The production arm at the lean point and the L13 knee**, five seeds
+(`l11_l13_five_seed_production_pins` holds these bits):
+
+| seed | lean `bondA` | lean `cDeepU` | lean `oUmx` | knee `bondA` | knee `cDeepU` | knee `oUmx` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `0x5EED_1234` | 79.28 | 0.002 | 0.000 | 66.88 | 0.050 | 0.065 |
+| `0x1111_1111` | 73.04 | 0.104 | 0.000 | 66.37 | 0.063 | 0.088 |
+| `0x2222_2222` | 66.78 | 0.128 | 0.392 | 65.42 | 0.125 | 1.000 |
+| `0xA5A5_A5A5` | 66.00 | 0.056 | 0.000 | 67.43 | 0.042 | 0.074 |
+| `0x00FF_00FF` | 75.48 | 0.012 | 0.000 | 66.35 | 0.082 | 0.269 |
+
+L13's floor 100 (`l13_decay_hi`) is fully covered on every seed (`cDeepU`
+0, `oUmx` 0). The floors at 60 and below, the spiral and the servo read
+as on the registered arm to within 0.04 of `cDeepU`; `bondA` moves by
+−0.7 to +3.2.
+
+**A7, the bond's scope** (production arm, five-seed means; the
+`a7_bond_scope` scenarios):
+
+| arm | lean `bondA` | lean `cDeepU` | lean `oUmx` | knee `bondA` | knee `cDeepU` | knee `oUmx` |
+| --- | --- | --- | --- | --- | --- | --- |
+| deep only, 2.0 (default) | 72.12 | 0.061 | 0.078 | 66.49 | 0.072 | 0.299 |
+| every held shard, 2.0 | 88.04 | 0.424 | 1.000 | 73.45 | 0.748 | 1.000 |
+| every held shard, floor 0.75 | 62.45 | 0.299 | 1.000 | 53.13 | 0.382 | 1.000 |
+| deep only, floor 0.75 | 106.77 | 0.000 | 0.000 | 83.13 | 0.000 | 0.000 |
+
+**The falsifier.** `l11_l13_five_seed_pins` runs the registered plateau
+arm and holds every bit at the head of this PR, after P1, P2, P3, P5 and
+P6, none of which touches the purse. P4 touches it: it changes how the
+purse is split, so it is a second arm and not a change to the registered
+one.
+
+**Not modeled.** The counted draws' free ride (P2) has no sim figure: the
+micro-sim's availability is per epoch. The voluntary exit's Release
+cooldown is not applied (R10, for Rick).
+
 ## L14×L15 — proof-of-archival in harmony with retrieval (specification)
 
 *Specification first, code second (`05-system-thinking.mdc`). This section is the design
@@ -3099,6 +3199,11 @@ that makes free-riding unprofitable *given* that hot shards self-prove, so the c
 non-productive traffic — lands only on the cold tail.
 
 ### L14 — proof-of-archival: oversight traffic collapses onto the cold tail
+
+**Plan ahead** (EUP-3 check half, Appendix B D4). The read-credited audit
+cadence is this sim's design for EUP-5 H. Production draws a fixed
+`COUNTED_DRAWS` per pair per epoch and has no read credit. The audit model
+is off by default.
 
 L14 quantifies the §*L14×L15 specification*'s central lever — **a content-bound retrieval is
 a proof of possession** — against the user's question: how does shard-holding validation work

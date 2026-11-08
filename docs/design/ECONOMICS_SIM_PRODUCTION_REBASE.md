@@ -3053,6 +3053,11 @@ The registered tables stay at `ONSET_HORIZON_YEARS = 60`. Turning on the
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
+**The check half landed 2026-11-08** (EUP-3, branch
+`chore/eup3-staking-sim-check`). Appendix B is its census with every row
+disposed, §6.1 its falsifier and §6.2 what it puts to Rick. The coupling
+half waits on ESR-10.
+
 Under the cycle ruling (§0), staking is being designed now, and the
 staking sim is where it is designed. It is not a
 re-base onto a finished system. Its next PR is the *check* half of the cycle,
@@ -3067,15 +3072,10 @@ for the pieces that have been implemented and settled:
 - the settlement epoch;
 - the block time.
 
-Appendix B lists every place the sim restates or departs from one of them.
-Each row is resolved in one of two ways, and says which:
-
-- **The sim is behind the code.** The sim incorporates the code, and calls
-  it.
-- **The plan is ahead of the code.** The sim keeps its mechanism as the plan,
-  declared, and the code follows. The release cooldown's per-shard versus
-  whole-record anchoring (Appendix B, R10) is the first row that has to say
-  which.
+Appendix B lists every place the sim restates or departs from one of them,
+and gives each row one of four dispositions (its header): Incorporate,
+Plan ahead, Retired or Exogenous. The release cooldown's per-shard versus
+whole-record anchoring (R10) is §6.2's item 2.
 
 What has not been built — the purse's shape, the parts of the bond
 lifecycle not yet coded, the yield a staker sees — stays the sim's design
@@ -3086,18 +3086,20 @@ abstract-purse control arm reproduces the existing L11 and L13 pins in
 
 Two consequences are recorded here so they are not discovered later.
 
-- When that PR lands, each L11–L19 section that reports a run reports
-  the new one, and cites the run it replaces by its commit. Records-was:
-  no test pinned a population result, only the document. `l11_l13_five_seed_pins`
-  now pins the five-seed L11/L13 vector.
+- When the coupling half lands, each L11–L19 section that reports a run
+  reports the new one, and cites the run it replaces by its commit.
+  `l11_l13_five_seed_pins` and `l11_l13_five_seed_production_pins` pin the
+  five-seed L11/L13 vector on both reward arms, and the nightly
+  `staking-sim-ignored` lane runs them.
 - The consensus constants calibrated from those runs — the bond floor, the
   age weight, the bond duration, the failure window, the release cooldown
   — keep their values and lose their derivation until the runs are
   repeated.
 
-It is a separate PR because it is a separate validation surface (rule 19),
-and it is carried by the `FOLLOWUPS.md` row *Check `shekyl-staking-sim`
-against the staking code built so far*.
+It is a separate PR because it is a separate validation surface (rule 19).
+The coupling half is carried by the `FOLLOWUPS.md` row *EUP-3's coupling
+half: run the staking sim on the economy's purse*, and the retirement list
+by *Delete the staking sim's retired mechanisms as Rick rules them*.
 
 **Complete-tree floor, checked 2026-10-22.** `bond_floor_of` posts one
 `ARCHIVAL_BOND_FLOOR_ATOMIC` for `HoldingsKind::CompleteTree`, however
@@ -3113,6 +3115,77 @@ still accepts the kind from any poster, and that poster earns nothing.
 The coupling half, still blocked on ESR-10, carries the correlated
 failure-domain arm. The lowest floor that clears its lower bound is
 EUP-5 I, blocked on that half. Both are `FOLLOWUPS.md` rows.
+
+### 6.1 The check half's falsifier
+
+The registered plateau arm reproduces the five-seed L11/L13 pins after
+every incorporation that does not touch the purse. `l11_l13_five_seed_pins`
+runs that arm and holds every bit at the PR's head, after the one RNG body,
+the failure-confirmation model on production's window and fold, the bond
+floor and the named baseline, the slash, and the bond-scope arm. The
+reward arithmetic touches the purse: it changes how the purse is split. It
+is a second arm, `RewardArm::Production`, the default, and
+`l11_l13_five_seed_production_pins` holds its vector. The nightly
+`staking-sim-ignored` lane runs both. The predictions and their grades are
+[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*EUP-3 check half*.
+
+### 6.2 For Rick
+
+Each item is measured on both arms where it has two. None is cut here.
+
+**1. The retirement list.** Each row is a mechanism production retired or
+built differently (Appendix B). Deleting it is Rick's ruling.
+
+| Module and functions | Production mechanism that replaced it | Callers | What deleting it removes from a published figure |
+| --- | --- | --- | --- |
+| `reward.rs`: `RewardArm::RegisteredPlateau`, `evaluate_registered`, `curve`, `split_decision`, `CurveImpl`; `curve.rs` `curve_banded`; the `cap`, `pseudonym_cost` and `curve_impl` fields; `--reward-arm=registered-plateau`, `--curve-impl`; the split cost in `participation::flow_cost` (D1, R1–R4, X `reward.rs:36`) | Linear credited work, `credited_work_milli` (D3/R2) | `l11_l13_five_seed_pins` (the falsifier's control); the `cap` sweep; `reconciliation_curve_float_vs_integer` and `reconciliation_plateau_cross_check` in `main.rs`; the `reward.rs` tests | Every population figure in `STAKER_ARCHIVAL_SIM.md` dated before 2026-11-08 stops reproducing, and the falsifier loses its control |
+| `agent.rs` `best_response`'s in-place add and drop, `World::cooling`, the `holdingsupdate_cooldown` axis and `dodge_pref` (D2, R10) | `Release` and `JoinMarket` (`HoldingsUpdate` rejected 2026-09-20); a whole-record cooldown on `Release` | Every population scenario | Every population figure. **Blocked**: it cannot go until a participation model built on `Release` and `JoinMarket` replaces it |
+| `participation.rs` `foundation_floor`, `foundation_floor_aged`; `floor_decay_pop` on nine scenarios (D3) | A permanent complete-tree support role, excluded from the market | L12, the L13 floor arms, P3 | The L12 cold-start and the L13 re-engagement figures |
+| `cover.rs` (D7, X `cover.rs:1585`) | `COVER_RUNG_ATOMIC` and `draw_cover_amount` (`shekyl-standoff`), count-free | `--cover`, `--cover-fn`, `--cover-targeting`, `--cover-dispersion`, `--cover-magnitudes`, `--cover-dial`; the module's tests | `docs/completed/ARCHIVAL_COVER_DRAW.md`'s figures stop reproducing |
+| `standoff.rs` order coin: the inversion and `bond_first` (D8) | `draw_entry_gap`, spread only | `--standoff`; `inversion_breaks_the_ordering_prior` | The funding-seam standoff figures (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff*) |
+| `GF7_FAIL_CLOSED`, the withdrawn arms in `riders.rs`, `gf7_breakeven.rs`, `PARTITION_ARM_WITHDRAWN` (D9) | None: the banners already withdraw them | `--gf7-breakeven`; `--partition-adversary`, which also runs the riders report | The withdrawn verdicts' figures |
+| `K_COVER` comments; `--gf7-seal` and `--partition-adversary` on the withdrawn verdict (D10) | The M1 gate is retired; withholding is individual only | Comments, and the two modes | Nothing current: those verdicts are already withdrawn |
+| `REGISTERED_SHARD_TX_COUNT` (D6, X `model.rs:221`) | `shekyl_types::SHARD_LENGTH`, by archival bytes | The composition axis (`size_at_birth`), the L19 runs | L19a–L19j stop reproducing |
+| The fire beacon (D5) | `select_draw` | None: the three strings now name `select_draw` | Nothing; no code modeled it |
+
+**2. R10, the cooldown's anchor.** The brief's premise does not hold at
+`d78000c45`: the Release anchor still reads the serve-credit table's last
+pass (`release_last_served` in `shekyl-chain-rules`), and `SO-D12j` is
+still deferred. Either source gives the sim the same epoch, because the
+sim's archiver serves until it leaves, so the anchor question does not
+change the sim. What changes it is where the cooldown applies. The sim's
+cooldown is a per-shard escrow on a voluntary drop, which models the
+rejected `HoldingsUpdate`. Production's applies to the whole record at
+`Release`, which is the sim's voluntary exit, and the sim refunds there at
+once. The question: should the sim's exit wait `RELEASE_COOLDOWN_EPOCHS`
+before its capital returns, and should the per-shard escrow go with D2?
+
+**3. A7, deep only against every held shard.** Production bonds every held
+shard at the floor. Five-seed means on the production arm, lean point /
+L13 knee (`a7_bond_scope`):
+
+| arm | `cDeepU` | `oUmx` | `bondA` |
+| --- | --- | --- | --- |
+| deep only at 2.0 (default) | 0.061 / 0.072 | 0.078 / 0.299 | 72.1 / 66.5 |
+| every held shard at 2.0 | 0.424 / 0.748 | 1.000 / 1.000 | 88.0 / 73.5 |
+| every held shard at the floor | 0.299 / 0.382 | 1.000 / 1.000 | 62.5 / 53.1 |
+| deep only at the floor | 0.000 / 0.000 | 0.000 / 0.000 | 106.8 / 83.1 |
+
+The carry cost confounds the comparison: it is a flat 0.03 per bonded
+shard whatever the rate (A6), so the every-held arm pays it on hot shards
+too. With it scaled to the rate, every held shard at the floor reads
+0.157 / 0.180 and the oldest band is still uncovered on every seed. The
+question: does the sim adopt production's every-held-shard bond as its
+default, and is the carry's scaling with the bond (A6) a model correction
+or a calibration for the coupling half?
+
+**4. Calibrations an incorporation would move.** The bond floor (0.75 SKL;
+the sim's 2.0 is an arm above it), the age weight (2000 milli), the bond
+duration (base 4, scale 4), the failure window (11 of 13) and the release
+cooldown (2 epochs) keep their values. Each was derived on runs taken on
+the registered plateau arm against the abstract purse, so each derivation
+is marked to be repeated at the coupling half, on the production arm and
+the economy's purse.
 
 ## 7. What this round does not decide
 
