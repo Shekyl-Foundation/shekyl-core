@@ -642,14 +642,6 @@ where
     }
     match stop {
         None => Next::Continue,
-        Some(ClaimStop::Refused { refused, .. }) => {
-            let arrival = arrivals.pop_front().expect("the refused block is next");
-            arrival.slot.send(Reply::Refused(refused));
-            Next::Cancel {
-                by: arrival.tag,
-                rest: rest(arrivals),
-            }
-        }
         Some(ClaimStop::Corrupt { height, .. }) => {
             match shared.connector.ask(ObserveTarget { height }).await {
                 Ok(()) => Next::Again(rest(arrivals)),
@@ -804,7 +796,6 @@ where
     let (claims, prepare) = match claimed {
         Ok(ClaimedAlt::Ready { claims, prepare }) => (claims, prepare),
         Ok(ClaimedAlt::Spend(spend)) => return answer_spend(shared, arrival, spend),
-        Err(ClaimStop::Refused { refused, .. }) => return refuse(arrival, refused),
         Err(ClaimStop::Store(StoreError::Cannot(StoreCannot::Alt(AltCannot::Unlinked {
             ..
         })))) => {

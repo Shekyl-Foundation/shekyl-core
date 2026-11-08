@@ -378,7 +378,8 @@ census_rows! {
         D2 implemented(crate::rules::pow::D2),
         D3 implemented(crate::rules::pow::D3),
         // D4 the target definition, recorded at `D4::target`; D6 held by the
-        // `Target` type (`NonZeroU128`), recorded at every production path
+        // types (`Difficulty` is non-zero, LWMA-1 floors at one), recorded at
+        // every production path
         // (`D6::record` / `D6::mint`) so levered `Fixed` and genesis-block
         // `1` cover the row as well as LWMA-1 (slice 2 Q4). D5 is D4's
         // algorithm over the stitched view — `D5::target` wraps `D4::target`
