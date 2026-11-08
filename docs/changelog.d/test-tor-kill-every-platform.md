@@ -1,0 +1,6 @@
+- **The Tor live tests that kill Tor now run on Windows and macOS too** (`tor-pin-verify`, `TOR_SUPERVISOR.md` §7).
+  - **How Tor is killed.** One test helper, `shekyl-tor-control-client` `outside_kill::kill_tor_named_by`, kills a managed Tor from outside by its command line: `pkill -9 -f` on Unix, `Stop-Process -Force` on Windows. It replaces `pkill` in the wallet's tests and `/proc` plus `kill -9` in the daemon's.
+  - **Wallet tests.** The wallet's three respawn tests (crash and respawn, the onion republished on every incarnation, the degraded episode) were `#[cfg(unix)]` and now run on Windows.
+  - **Daemon tests.** The daemon's death-watcher and probe-respawn tests were Linux-only and now run on Windows and macOS.
+  - **Workflow floors.** Every `tor-pin-verify` entry now requires the four wallet live tests and the five daemon live tests, each by name.
+  - **Death-watcher check.** On Windows it checks that `TerminateProcess` left an exit code; on Unix, that the signal left none.
