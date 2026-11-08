@@ -258,18 +258,6 @@ enum Planned {
         /// The fork point, the heavier tip and its work.
         evidence: shekyl_chain_store::codec::FollowingDegraded,
     },
-    /// CEN-D6 refused an alt entry's target on its own headers: that
-    /// block's verdict (`target` module docs), so there is no claim to
-    /// make and nothing is formed. The refused entry and every entry
-    /// above it are the roots. The write removes those and every other
-    /// branch built on them.
-    Refused {
-        /// The verdict.
-        refused: InvalidBlock,
-        /// The refused entry and its successors, ascending: the roots
-        /// the closure is taken from.
-        remove: Vec<BlockHash>,
-    },
 }
 
 /// The formed blocks a [`SwitchPlan`] named, back to the actor (module
@@ -532,10 +520,6 @@ fn offer(
     match plan(store, &snap, rules, tip, hash)? {
         Planned::Due(plan) => Ok(Offered::SwitchDue(plan)),
         Planned::BeyondCap { beyond, evidence } => Ok(Offered::BeyondCap { beyond, evidence }),
-        Planned::Refused { refused, remove } => {
-            remove_alt_suffix(store, &remove)?;
-            Ok(Offered::Refused(refused))
-        }
     }
 }
 
@@ -543,11 +527,9 @@ fn offer(
 /// `alt_tip`, or the cap's refusal (`E5-Q6`), read on `snap`. Each
 /// block's target is claimed here, through the one derivation
 /// (`target_claim`) over the chain the block is on: the stitched view for
-/// an alt entry, the recorded chain below it for a demoted block. A D6
-/// refusal on an alt entry is that block's verdict ([`Planned::Refused`]);
-/// on a demoted block, it is a recorded block failing its own rules —
-/// SI-27, the writer halts, as the cheap tier's refusal does in
-/// [`switch`].
+/// an alt entry, the recorded chain below it for a demoted block. Every
+/// derivation yields a target (LWMA-1 floors at one); a corrupt window is
+/// the snapshot's fault.
 fn plan(
     store: &ChainStore,
     snap: &ReadSnapshot<'_>,
@@ -584,10 +566,7 @@ fn plan(
         let parent = recorded_hash(snap, BlockHeight::from_raw(height.to_raw() - 1))?;
         let below = AltView::new(snap, AltChain::build(snap, &parent)?);
         let target = match target_claim(&below, height, &rules.in_force(height)) {
-            Ok(Ok(target)) => target,
-            Ok(Err(_refused)) => {
-                return Err(halt_writer(store, |batch| batch.refuse_demotion(height)))
-            }
+            Ok(target) => target,
             Err(fault) => return Err(snapshot_fault(store, height, fault)),
         };
         demoted.push(PlannedDemotion {
@@ -602,7 +581,7 @@ fn plan(
         });
     }
     let mut promoted = Vec::with_capacity(entries.len());
-    for (index, entry) in entries.iter().enumerate() {
+    for entry in entries {
         let height = entry.block.height();
         let witness = entry
             .block
@@ -611,13 +590,7 @@ fn plan(
             .transpose()
             .expect("an alt row's witness was held well-formed when it was read (AL4)");
         let target = match target_claim(&stitched, height, &rules.in_force(height)) {
-            Ok(Ok(target)) => target,
-            Ok(Err(refused)) => {
-                return Ok(Planned::Refused {
-                    refused,
-                    remove: entries[index..].iter().map(|e| e.id).collect(),
-                })
-            }
+            Ok(target) => target,
             Err(fault) => return Err(snapshot_fault(store, height, fault)),
         };
         promoted.push(PlannedPromotion {
