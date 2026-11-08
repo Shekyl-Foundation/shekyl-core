@@ -166,7 +166,7 @@ dialect will not produce accepted blocks.
 Regtest uses the same constants as the issued networks:
 `CURRENT_BLOCK_MAJOR_VERSION` (1) and `CURRENT_BLOCK_MINOR_VERSION` (0)
 at every height. There is no fork table and no height at which the
-rules change (`design/CXX_VERSION_GATES.md` §5).
+rules change (`completed/CXX_VERSION_GATES.md` §5).
 
 ### Pre-existing harness gaps (not blocking, but worth filing)
 

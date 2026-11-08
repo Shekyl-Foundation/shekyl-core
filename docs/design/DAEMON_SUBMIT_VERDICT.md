@@ -642,7 +642,7 @@ arithmetic (min 5 / max 100, from config); fee floor against snapshot params;
 weight rule (the *limit* is a compile-time constant on Shekyl —
 `get_transaction_weight_limit` reduces to `get_min_block_weight`, which
 returns `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` unconditionally,
-`cryptonote_basic_impl.cpp:66-71` — so unlike the fee floor it needs no
+`cryptonote_basic_impl.cpp` at `ac3836de90` (lines 66–71) — so unlike the fee floor it needs no
 Phase-D re-check); the archival-arm battery for bond-post / serve-credit txs
 (§8.7.1 — already Rust in `shekyl-archival-retention`, called natively); then
 the expensive cryptography natively — FCMP++ membership (`shekyl-fcmp`, the
@@ -1740,7 +1740,7 @@ nobody files it as a hole later.
 The §8.7.1 matrix (F36) predates the C-1 emission arm; these rows extend it
 with the same discipline. Sources: `ver_non_input_consensus`'s emission
 branch (`tx_verification_utils.cpp`, `verCtSemanticsEmission` →
-`ct_semantics.cpp:348-370`) and `check_tx_inputs`' `is_archival_emission_tx`
+`ct_semantics.cpp` at `ac3836de90` (lines 348–370)) and `check_tx_inputs`' `is_archival_emission_tx`
 branch (`blockchain.cpp:3801-4110`). The semantic battery is already Rust
 (`shekyl-archival-retention::emission_verify` — the witness-minting
 `emission_vin_verify_claims` / `_backing` / `_auth` + the assembling

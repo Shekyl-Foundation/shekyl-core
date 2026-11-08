@@ -13,12 +13,10 @@
 //!
 //! Consumer status (C2-R3, ratified 2026-09-01; crossing re-ratified
 //! same day): [`check_timestamp_rule`] is the ONE implementation of the
-//! ruled block-timestamp rule, exported to the C++ validator through
-//! `shekyl-ffi`'s `shekyl_difficulty_check_timestamp_rule` — the C++
-//! side is a marshaling shim per rule 20, and the shared vectors
-//! `docs/test_vectors/MTP_BOUNDARY_V1.json` pin this crate natively and
-//! the FFI boundary end-to-end. One implementation cannot drift from
-//! itself; the earlier same-PR C++ twin was deleted with the crossing.
+//! ruled block-timestamp rule, which the block validator
+//! (`shekyl-chain-rules`) calls, and the shared vectors
+//! `docs/test_vectors/MTP_BOUNDARY_V1.json` pin it natively. One
+//! implementation cannot drift from itself.
 
 use crate::consts::{FTL_SECONDS, MTP_WINDOW_USIZE};
 use shekyl_types::Timestamp;

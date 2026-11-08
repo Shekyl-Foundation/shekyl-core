@@ -52,6 +52,7 @@ register file — only the FPU mode.
 Generator
 ---------
 source      = ./_generator/phase2d/gen.cpp (mode t15)
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 command     = ./gen t15 > t15_vm_cfround_throttle.bin
 output_size = 780 bytes
 

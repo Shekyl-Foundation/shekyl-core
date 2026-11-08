@@ -14,12 +14,10 @@
 //! # Crate posture
 //!
 //! - `#![no_std]` — pure-arithmetic crate; no allocations, no clock
-//!   reads, no system state. Phase 4's C++ daemon and any future
+//!   reads, no system state. The daemon's validator and any future
 //!   embedded validator consume the same code.
 //! - `#![deny(unsafe_code)]` — the algorithm operates exclusively on
-//!   safe Rust primitives; the FFI shim (Phase 3, in
-//!   `rust/shekyl-ffi`) is the only `unsafe` boundary in the LWMA-1
-//!   landing.
+//!   safe Rust primitives.
 //! - Leaf crate: no external runtime crates. First-party `shekyl-types`
 //!   supplies [`shekyl_types::BlockHeight`] / [`shekyl_types::Timestamp`]
 //!   so this crate does not redefine them as `u64` (the DAA §2.1 cycle
@@ -52,16 +50,12 @@
 //! - Public consensus constants `N`, `T_SECONDS`, `FTL_SECONDS`,
 //!   `MTP_WINDOW`, `GENESIS_DIFFICULTY` — see [`consts`].
 //!
-//! # FFI
+//! # Consumers
 //!
-//! Two consensus entry points live in
-//! `rust/shekyl-ffi/src/difficulty_ffi.rs`, both consumed per-block by
-//! the C++ validator: `shekyl_difficulty_lwma1_next` (the `ShekylU128`
-//! ABI and `i32` error codes documented in
-//! `docs/completed/DAA_LWMA1.md` §6.1) and
-//! `shekyl_difficulty_check_timestamp_rule` (the C2-R3 rule; verdict
-//! codes mirror [`TimestampRuleVerdict`]). This crate exposes only the
-//! safe-Rust API; the FFI shims wrap it with the `#[repr(C)]` ABI.
+//! The block validator (`shekyl-chain-rules`) calls [`lwma1_next`] and
+//! [`check_timestamp_rule`] (the C2-R3 rule; verdicts are
+//! [`TimestampRuleVerdict`]) per block, through this crate's safe-Rust
+//! API.
 
 #![no_std]
 #![deny(unsafe_code)]

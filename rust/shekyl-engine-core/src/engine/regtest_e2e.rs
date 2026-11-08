@@ -1640,8 +1640,8 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     let wallet_path = tmp.path().join("wallet");
     let creds = Credentials::password_only(b"track2-test");
 
-    // FAKECHAIN uses mainnet config/address format (cryptonote_config.h:372), so
-    // the wallet is Mainnet.
+    // Regtest is its own network row (`shekyl-network`), so the wallet is
+    // created on `Network::Regtest`.
     let params = EngineCreateParams {
         base_path: &wallet_path,
         credentials: &creds,

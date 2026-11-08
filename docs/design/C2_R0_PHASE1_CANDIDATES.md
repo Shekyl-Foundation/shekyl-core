@@ -1117,9 +1117,9 @@ is individually correct; only their composition is contradictory.**
   "MONEY_SUPPLY yields a subsidy of 0 under the base formula and therefore the
   minimum subsidy >0 in the tail state."
 - `shekyl_cap_reward_to_remaining_supply` (called at
-  `src/cryptonote_basic/cryptonote_basic_impl.cpp:168`): caps a single block's reward
+  `src/cryptonote_basic/cryptonote_basic_impl.cpp` at `ac3836de90` (line 168)): caps a single block's reward
   at remaining headroom — **pays zero at exhaustion**.
-- The `shekyl_ffi.h:333–338` doc comment names them "twins" (one stops the running
+- The `shekyl_ffi.h` at `ac3836de90` (lines 333–338) doc comment names them "twins" (one stops the running
   total, one stops a single block) without registering that the twins encode
   **opposite terminal policies**: one exists so emission continues at the tail
   minimum forever; the other stops emission dead at the cap.
@@ -1128,7 +1128,7 @@ is individually correct; only their composition is contradictory.**
 the gap row must QUOTE both passages,** because the code alone could be an accident
 while the documentation proves nobody examined the composition:
 
-> `shekyl_ffi.h:333–335`: "The emission-side **twin** of
+> `shekyl_ffi.h` at `ac3836de90` (lines 333–335): "The emission-side **twin** of
 > `shekyl_advance_already_generated`: that one stops the running total at the cap,
 > this one stops a single block from exceeding what remains."
 

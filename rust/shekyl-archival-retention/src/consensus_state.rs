@@ -1,10 +1,10 @@
 //! Pure consensus-state computation for emission reads (ARCHIVAL_CONSENSUS_STATE.md §3–§5).
 //!
-//! No LMDB. This module is the **single implementation** of the epoch-close
-//! consensus semantics: the C++ daemon gathers raw rows from LMDB, calls
-//! [`epoch_close_compute`] through `shekyl-ffi`, and stores the returned
-//! `R_market` / `Σwork` values. C++ performs no consensus arithmetic of its
-//! own (`20-rust-vs-cpp-policy.mdc` §4; `40-ffi-discipline.mdc` coarse-call rule).
+//! No store. This module is the **single implementation** of the epoch-close
+//! consensus semantics: the validator's close (`shekyl-chain-rules`,
+//! `archival::close`) gathers the raw rows from its store view, calls
+//! [`epoch_close_compute`], and writes the returned `R_market` / `Σwork`
+//! values. The gather performs no consensus arithmetic of its own.
 
 #[cfg(test)]
 use crate::constants::SETTLEMENT_EPOCH_BLOCKS;
@@ -18,8 +18,8 @@ mod settlement_schedule;
 pub use settlement_schedule::SettlementSchedule;
 
 // The process-latched entry points — [`SettlementSchedule::effective`]'s
-// geometry, for the C++ daemon (through `shekyl-ffi`), the wallet and the
-// admission gather, none of which holds a rule set. Each is the method of
+// geometry, for the wallet, the submit verifier and the other callers that
+// hold no rule set. Each is the method of
 // the same name on the type; the validator reads the type off `RuleSet`.
 
 /// [`SettlementSchedule::epoch_at_height`] under the process-latched
@@ -1233,12 +1233,13 @@ mod tests {
 
     // The close/verify shared-sourcing identity — that summing the emission
     // numerator's per-P `Curve(work_P)` terms reproduces the persisted Σwork(E)
-    // denominator exactly — is pinned end-to-end through the real FFI numerator
-    // in `shekyl-ffi::archival_ffi::emission_epoch_work_sums_to_persisted_sigma`
-    // (distinct per-P terms, non-members zeroed). A unit-level restatement here
-    // could only re-run `epoch_close_compute`'s own `sigma_work_milli` +
-    // `as_of_e_served_work` expressions against themselves (tautological), so it
-    // is deliberately not duplicated at this layer.
+    // denominator exactly — is exercised end-to-end for one bond by
+    // `shekyl-chain-ingest`'s `the_drivers_emission_claim_connects_and_pays_the_persona`
+    // (ignored lane). No test pins it with distinct per-P terms and non-members
+    // zeroed. A unit-level restatement here could only re-run
+    // `epoch_close_compute`'s own `sigma_work_milli` + `as_of_e_served_work`
+    // expressions against themselves (tautological), so it is not written at
+    // this layer.
 
     #[test]
     fn epoch_close_bad_interval_excludes_bond_everywhere() {
@@ -1459,5 +1460,42 @@ mod tests {
                 .map(core::num::NonZeroU64::get),
             Some(5)
         );
+    }
+
+    /// The slash-settle operand for epoch `E` (the first block above its
+    /// slash deadline) is STRICTLY greater than `E`'s close-write height.
+    /// Equal is not enough: chain-rules' archival transition scans slashes
+    /// before it closes (`archival::transition`), so at an equal height the
+    /// slash scan would read settlement state the close has not written
+    /// yet.
+    ///
+    /// The two heights are separate derivations
+    /// ([`SettlementSchedule::close_height`] and
+    /// [`SettlementSchedule::slash_deadline_height`]), so this test is their
+    /// coupling: it fires if either one's shape changes, even in a
+    /// direction that stays positive at small epochs. Both are affine in
+    /// `E` with slope `SEB`, so strictness at sampled epochs plus an equal
+    /// difference at every sample holds the property at every epoch.
+    #[test]
+    fn slash_settle_strictly_follows_close_write_at_every_epoch() {
+        let diff_at = |e: u64| {
+            let close_write = epoch_close_height(e).expect("no overflow at test epochs");
+            let slash_settle = settlement_epoch_slash_deadline_height(e) + 1;
+            assert!(
+                slash_settle > close_write,
+                "epoch {e}: slash settles at {slash_settle} but close writes at \
+                 {close_write} - the slash-then-close order would read unsettled state"
+            );
+            slash_settle - close_write
+        };
+        let d0 = diff_at(0);
+        for e in [1u64, 2, 25, 10_000] {
+            assert_eq!(
+                d0,
+                diff_at(e),
+                "slash/close derivations diverge in slope at epoch {e} - one of \
+                 the two separate formulas changed shape"
+            );
+        }
     }
 }

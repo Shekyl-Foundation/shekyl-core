@@ -94,9 +94,10 @@ pub const TAG_INPUT_BOND_POST: u8 = 0x03;
 /// `txin_archival_reward_emission` tag (C-1) — an opaque canonical blob whose
 /// codec is owned by `shekyl-archival-retention::emission_wire`
 /// (`VIN_TYPE_ARCHIVAL_REWARD_EMISSION`); mirrors the C++
-/// `TXIN_ARCHIVAL_REWARD_EMISSION_WIRE_TAG` (`cryptonote_basic.h:296`). The blob's
-/// **leading byte echoes this tag** — the transport guard the C++ deserializer
-/// enforces (`cryptonote_basic.h:302-310`) and [`Input::read`] mirrors.
+/// `TXIN_ARCHIVAL_REWARD_EMISSION_WIRE_TAG` (`cryptonote_basic.h` at `ac3836de90`
+/// (line 298)). The blob's **leading byte echoes this tag** — the transport guard
+/// the C++ deserializer enforces (`cryptonote_basic.h` at `ac3836de90`
+/// (lines 308–311)) and [`Input::read`] mirrors.
 pub const TAG_INPUT_ARCHIVAL_REWARD_EMISSION: u8 = 0x04;
 
 /// `post_kind` value for a JoinMarket archival bond post — the one wire
@@ -168,7 +169,8 @@ pub const HOLDINGS_SHARD_SET_COMPACT: u8 = 0;
 pub const HOLDINGS_COMPLETE_TREE: u8 = 1;
 
 /// Transport bound on the emission `canonical_bytes` blob
-/// (`config::ARCHIVAL_EMISSION_VIN_MAX_BYTES`, `src/cryptonote_config.h:308`).
+/// (`config::ARCHIVAL_EMISSION_VIN_MAX_BYTES`, `src/cryptonote_config.h` at
+/// `ac3836de90` (line 251)).
 /// Deliberately the C++ transport cap verbatim (1 MiB > [`MAX_TX_SIZE`]): the wire
 /// layer mirrors the oracle's accept/reject exactly, and the tx-size bound rejects
 /// the oversized *transaction* independently.
@@ -331,12 +333,13 @@ pub const PQC_MAX_PUBLIC_KEY_BLOB: usize = 16384;
 pub const PQC_MAX_SIGNATURE_BLOB: usize = 32768;
 
 /// The Bp+ weight clawback as a pure function of the padded output count — the C++
-/// `get_transaction_weight_clawback` (`cryptonote_format_utils.cpp:93`); `0` for ≤ 2
-/// padded outputs. This is the single source of the formula: [`Transaction::weight`]
-/// applies it to the count derived from the proof, and the wallet fee predictor
-/// (`shekyl-engine-core`) applies it to the count derived a-priori from `n_out`, so the
-/// two can never drift. Callers pass an already-bounded `n_padded_outputs`
-/// (≤ [`MAX_OUTPUTS`] for any valid tx); `saturating_mul` keeps it overflow-safe.
+/// `get_transaction_weight_clawback` (`cryptonote_format_utils.cpp` at `ac3836de90`
+/// (lines 73–89)); `0` for ≤ 2 padded outputs. This is the single source of the
+/// formula: [`Transaction::weight`] applies it to the count derived from the proof,
+/// and the wallet fee predictor (`shekyl-engine-core`) applies it to the count
+/// derived a-priori from `n_out`, so the two can never drift. Callers pass an
+/// already-bounded `n_padded_outputs` (≤ [`MAX_OUTPUTS`] for any valid tx);
+/// `saturating_mul` keeps it overflow-safe.
 #[must_use]
 pub fn bp_plus_weight_clawback(n_padded_outputs: usize) -> usize {
     if n_padded_outputs <= 2 {
@@ -477,19 +480,22 @@ pub enum Input {
     /// Archival reward-emission (dense tag `0x04`, C-1) — the complete Rust
     /// canonical encoding as an **opaque blob**, leading wire tag `0x04` included.
     /// This crate is transport only, matching the C++ posture
-    /// (`cryptonote_basic.h:283-311`): `shekyl-archival-retention::emission_wire`
+    /// (`cryptonote_basic.h` at `ac3836de90` (lines 285–313)):
+    /// `shekyl-archival-retention::emission_wire`
     /// owns the codec, the parse, and every structural bound; the transport guard
     /// here is the allocation bound + the wire-tag echo, and a blob passing it can
     /// still be garbage — the emission parser is the validator. Like a bond-post,
     /// this input occupies a `pqc_auths` slot but no pseudo-out slot (module
-    /// header; C++ `count_spend_inputs`, `cryptonote_basic.h:322`).
+    /// header; C++ `count_spend_inputs`, `cryptonote_basic.h` at `ac3836de90`
+    /// (lines 324–331)).
     ArchivalRewardEmission {
         /// The complete `emission_wire.rs` canonical encoding (leading `0x04` included).
         canonical_bytes: Vec<u8>,
     },
 }
 
-/// The emission-blob transport guard (`cryptonote_basic.h:302-310`): length in
+/// The emission-blob transport guard (`cryptonote_basic.h` at `ac3836de90`
+/// (lines 308–311)): length in
 /// `2..=`[`ARCHIVAL_EMISSION_VIN_MAX_BYTES`], leading byte echoing the wire tag.
 /// One source for the two sites that must agree — [`Input::read`] (accept/reject
 /// parity with the C++ deserializer) and `validate_context_free_pruned`'s per-arm
@@ -954,7 +960,8 @@ impl Output {
 ///
 /// Present for **both** the coinbase `Null` type and the `Fcmp` spend — the C++
 /// `serialize_ctsig_base` writes `enc_amounts` / `enc_labels` / `outPk` for both
-/// so every output gets a tree-leaf commitment (ct_types.h:209-280).
+/// so every output gets a tree-leaf commitment (`ct_types.h` at `ac3836de90`
+/// (lines 209–280)).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CtBase {
     /// Per-output encrypted amounts (8-byte value + 1-byte tag).
@@ -1165,7 +1172,8 @@ impl BpPlus {
         let s1 = read_array(r)?;
         let d1 = read_array(r)?;
         // Parse-parity with the C++ deserializer: `serialize_ctsig_prunable`
-        // (ct_types.h:338) fails deserialization unless every proof has
+        // (`ct_types.h` at `ac3836de90` (lines 360–361)) fails deserialization
+        // unless every proof has
         // `6 <= |L| == |R| <= 6 + log2(BULLETPROOF_PLUS_MAX_OUTPUTS)`
         // (`n_bulletproof_plus_max_amounts` returns 0 otherwise). The remaining
         // output-count coupling — `|L| == 6 + ceil(log2(next_pow2(n_out)))` —
@@ -1631,7 +1639,7 @@ pub struct Transaction {
 mod txid;
 pub use txid::{
     carries_archival_good, empty_region_prunable_hash, pqc_auth_hash_of, prunable_hash_of,
-    TxidParts, TxidSegments,
+    TxidParts,
 };
 
 mod signing_preimage;
@@ -1831,7 +1839,8 @@ impl Transaction {
 
     /// The consensus **transaction weight** — the serialized size **plus** the
     /// bulletproof-plus clawback, mirroring the C++ `get_transaction_weight`
-    /// (`blob_size + bp_clawback`, `cryptonote_format_utils.cpp:292`). The clawback is
+    /// (`blob_size + bp_clawback`, `cryptonote_format_utils.cpp` at `ac3836de90`
+    /// (line 296)). The clawback is
     /// a verification-cost *penalty* added for a Bp+ covering more than two (padded)
     /// outputs — so weight is **not** the serialized length, and weight ≥ size always.
     /// It is `0` for the genesis ≤2-output spend shapes and for any non-spend (coinbase
@@ -2367,9 +2376,11 @@ impl Transaction {
                     // `|L| == |R| == 6 + ceil(log2(next_pow2(n_out)))`. The daemon
                     // enforces both directions: `n_padded >= n_out` at parse
                     // (`n_bulletproof_plus_max_amounts < outputs` fails
-                    // deserialization, ct_types.h:338) and `n_padded < 2·n_out` at
+                    // deserialization, `ct_types.h` at `ac3836de90` (lines 360–361))
+                    // and `n_padded < 2·n_out` at
                     // verify (`n_bulletproof_amounts_base`'s V/L tightness,
-                    // ct_types.cpp:234-235, with `V` restored from outPk == n_out).
+                    // `ct_types.cpp` at `ac3836de90` (lines 234–235), with `V`
+                    // restored from outPk == n_out).
                     // Without this a tx with a valid output count but an
                     // inconsistent `|L|` passes local validation and dies at the
                     // daemon — a local↔daemon divergence surfacing at submit.

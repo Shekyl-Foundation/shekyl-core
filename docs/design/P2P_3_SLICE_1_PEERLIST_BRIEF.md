@@ -328,7 +328,7 @@ no other drawable gray seat remains, gray may sit over the cap by that
 handful rather than cancelling one. Over the white cap, demote a random
 white address to gray. The
 caps move with the crate and are not re-derived
-(`src/cryptonote_config.h:176-177`). The insert rule is uniform across
+(`src/cryptonote_config.h` at `f317d979c4` (lines 176–177)). The insert rule is uniform across
 sources: `insert_gray` seats the address just admitted and, over the cap,
 evicts a uniformly random *other* drawable gray seat
 (`partition.rs:131-142`, `:480-491`), whatever the source was. There is

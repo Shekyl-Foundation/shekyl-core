@@ -40,7 +40,7 @@ ifeq ($(USE_SINGLE_BUILDDIR),)
 else
   builddir := build
   topdir   := ../..
-  deldirs  := $(builddir)/debug $(builddir)/release $(builddir)/fuzz
+  deldirs  := $(builddir)/debug $(builddir)/release
 endif
 
 all: release-all
@@ -56,21 +56,13 @@ cmake-debug:
 debug: cmake-debug
 	cd $(builddir)/debug && $(MAKE)
 
-debug-test:
-	mkdir -p $(builddir)/debug
-	cd $(builddir)/debug && cmake -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Debug $(topdir) &&  $(MAKE) && $(MAKE) test
-
-debug-test-asan:
-	mkdir -p $(builddir)/debug
-	cd $(builddir)/debug && cmake -D BUILD_TESTS=ON -D SANITIZE=ON -D CMAKE_BUILD_TYPE=Debug $(topdir) &&  $(MAKE) && $(MAKE) test
-
 debug-all:
 	mkdir -p $(builddir)/debug
-	cd $(builddir)/debug && cmake -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Debug $(topdir) && $(MAKE)
+	cd $(builddir)/debug && cmake -D CMAKE_BUILD_TYPE=Debug $(topdir) && $(MAKE)
 
 debug-static-all:
 	mkdir -p $(builddir)/debug
-	cd $(builddir)/debug && cmake -D BUILD_TESTS=ON -D STATIC=ON -D CMAKE_BUILD_TYPE=Debug $(topdir) && $(MAKE)
+	cd $(builddir)/debug && cmake -D STATIC=ON -D CMAKE_BUILD_TYPE=Debug $(topdir) && $(MAKE)
 
 debug-static-win64:
 	mkdir -p $(builddir)/debug
@@ -83,31 +75,23 @@ cmake-release:
 release: cmake-release
 	cd $(builddir)/release && $(MAKE)
 
-release-test:
-	mkdir -p $(builddir)/release
-	cd $(builddir)/release && cmake -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release $(topdir) && $(MAKE) && $(MAKE) test
-
 release-all:
 	mkdir -p $(builddir)/release
-	cd $(builddir)/release && cmake -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release $(topdir) && $(MAKE)
+	cd $(builddir)/release && cmake -D CMAKE_BUILD_TYPE=Release $(topdir) && $(MAKE)
 
 release-seed:
 	mkdir -p $(builddir)/release
-	cd $(builddir)/release && cmake -D CMAKE_BUILD_TYPE=Release -D ARCH="x86-64" -D BUILD_TESTS=OFF $(topdir) && $(MAKE)
+	cd $(builddir)/release && cmake -D CMAKE_BUILD_TYPE=Release -D ARCH="x86-64" $(topdir) && $(MAKE)
 
 release-static:
 	mkdir -p $(builddir)/release
 	cd $(builddir)/release && cmake -D STATIC=ON -D CMAKE_BUILD_TYPE=Release $(topdir) && $(MAKE)
 
-coverage:
-	mkdir -p $(builddir)/debug
-	cd $(builddir)/debug && cmake -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Debug -D COVERAGE=ON $(topdir) && $(MAKE) && $(MAKE) test
-
 # Targets for specific prebuilt builds which will be advertised for updates by their build tag
 
 release-static-linux-armv8:
 	mkdir -p $(builddir)/release
-	cd $(builddir)/release && cmake -D BUILD_TESTS=OFF -D ARCH="armv8-a" -D STATIC=ON -D CMAKE_BUILD_TYPE=Release -D BUILD_TAG="linux-armv8" $(topdir) && $(MAKE)
+	cd $(builddir)/release && cmake -D ARCH="armv8-a" -D STATIC=ON -D CMAKE_BUILD_TYPE=Release -D BUILD_TAG="linux-armv8" $(topdir) && $(MAKE)
 
 release-static-linux-x86_64:
 	mkdir -p $(builddir)/release
@@ -125,10 +109,6 @@ release-static-win64:
 	mkdir -p $(builddir)/release
 	cd $(builddir)/release && cmake -G "MSYS Makefiles" -D STATIC=ON -D ARCH="x86-64" -D CMAKE_BUILD_TYPE=Release -D BUILD_TAG="win-x64" -D CMAKE_TOOLCHAIN_FILE=$(topdir)/cmake/mingw-toolchain.cmake -D MSYS2_FOLDER=$(shell cd ${MINGW_PREFIX}/.. && pwd -W) $(topdir) && $(MAKE)
 
-fuzz:
-	mkdir -p $(builddir)/fuzz
-	cd $(builddir)/fuzz && cmake -D STATIC=ON -D SANITIZE=ON -D BUILD_TESTS=ON -D USE_LTO=OFF -D CMAKE_C_COMPILER=afl-gcc -D CMAKE_CXX_COMPILER=afl-g++ -D ARCH="x86-64" -D CMAKE_BUILD_TYPE=fuzz -D BUILD_TAG="linux-x64" $(topdir) && $(MAKE)
-
 clean:
 	@echo "WARNING: Back-up your wallet if it exists within ./"$(deldirs)"!" ; \
     read -r -p "This will destroy the build directory, continue (y/N)?: " CONTINUE; \
@@ -141,7 +121,4 @@ clean-all:
 	[ $$CONTINUE = "y" ] || [ $$CONTINUE = "Y" ] || (echo "Exiting."; exit 1;)
 	rm -rf ./build
 
-tags:
-	ctags -R --sort=1 --c++-kinds=+p --fields=+iaS --extra=+q --language-force=C++ src contrib tests/gtest
-
-.PHONY: all cmake-debug debug debug-test debug-all cmake-release release release-test release-all release-seed clean tags
+.PHONY: all cmake-debug debug debug-all cmake-release release release-all release-seed clean

@@ -12,7 +12,7 @@
 //! nothing is left listening.
 //!
 //! The address this returns is this node's own onion: the caller records it
-//! in the dialer's lists with `shekyl_ffi::dialer_ffi::note_own_onion`.
+//! in the dialer's lists with `shekyl_p2p::Network::note_own_onion`.
 //! [`crate::ForwardAddr`] is the only address this function accepts.
 //! [`crate::OperatorInbound`] does not convert into it.
 
@@ -28,7 +28,7 @@ use crate::ForwardAddr;
 #[derive(Debug)]
 pub enum InboundPosture {
     /// The onion is published. Record this address as this node's own onion
-    /// (`shekyl_ffi::dialer_ffi::note_own_onion`).
+    /// (`shekyl_p2p::Network::note_own_onion`).
     Published { address: NetworkAddress },
     /// Tor is up and outbound still works. The onion was not published.
     OutboundOnly { fault: PublishFault },

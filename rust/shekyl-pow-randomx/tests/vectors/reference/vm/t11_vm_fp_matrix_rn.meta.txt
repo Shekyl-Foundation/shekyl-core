@@ -27,6 +27,7 @@ listed above. Total: 2304 bytes.
 Generator
 ---------
 source      = ./_generator/phase2d/gen.cpp (mode t11)
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 command     = ./gen t11 > t11_vm_fp_matrix_rn.bin
 output_size = 2304 bytes
 

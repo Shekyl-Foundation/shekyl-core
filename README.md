@@ -147,70 +147,46 @@ Releases follow the `dev` -> `main` workflow. Active development happens on
 
 ### Dependencies
 
-The following table summarizes the tools and libraries required to build. A
-few of the libraries are also included in this repository (marked as
-"Vendored"). By default, the build uses the library installed on the system
-and ignores the vendored sources. However, if no library is found installed on
-the system, then the vendored source will be built and used. The vendored
-sources are also used for statically-linked builds because distribution
-packages often include only shared library binaries (`.so`) but not static
-library archives (`.a`).
+Shekyl is a Rust workspace (`rust/`); CMake and the top-level Makefile drive
+one cargo build that stages `shekyld`, `shekyl-cli` and `shekyl-wallet-rpc`.
+The tree holds no C++ of its own. A C toolchain is still needed: some crates
+compile C (`ring`, for one), and cross builds link through it.
 
-| Dep          | Min. version  | Vendored | Debian/Ubuntu pkg    | Arch pkg     | Void pkg           | Fedora pkg          | Optional | Purpose         |
-| ------------ | ------------- | -------- | -------------------- | ------------ | ------------------ | ------------------- | -------- | --------------- |
-| GCC          | 5             | NO       | `build-essential`    | `base-devel` | `base-devel`       | `gcc`               | NO       |                 |
-| CMake        | 3.22          | NO       | `cmake`              | `cmake`      | `cmake`            | `cmake`             | NO       |                 |
-| pkg-config   | any           | NO       | `pkg-config`         | `base-devel` | `base-devel`       | `pkgconf`           | NO       |                 |
-| Boost        | 1.66          | NO       | `libboost-all-dev`   | `boost`      | `boost-devel`      | `boost-devel`       | NO       | C++ libraries   |
-| OpenSSL      | basically any | NO       | `libssl-dev`         | `openssl`    | `openssl-devel`    | `openssl-devel`     | NO       | sha256 sum      |
-| libsodium    | ?             | NO       | `libsodium-dev`      | `libsodium`  | `libsodium-devel`  | `libsodium-devel`   | NO       | cryptography    |
-| libreadline  | 6.3.0         | NO       | `libreadline6-dev`   | `readline`   | `readline-devel`   | `readline-devel`    | YES      | Input editing   |
-| GTest        | 1.5           | YES      | `libgtest-dev`[1]    | `gtest`      | `gtest-devel`      | `gtest-devel`       | YES      | Test suite      |
-| ccache       | any           | NO       | `ccache`             | `ccache`     | `ccache`           | `ccache`            | YES      | Compil. cache   |
-| Doxygen      | any           | NO       | `doxygen`            | `doxygen`    | `doxygen`          | `doxygen`           | YES      | Documentation   |
-| Graphviz     | any           | NO       | `graphviz`           | `graphviz`   | `graphviz`         | `graphviz`          | YES      | Documentation   |
+| Dep              | Min. version | Debian/Ubuntu pkg | Arch pkg     | Fedora pkg | Optional | Purpose                                   |
+| ---------------- | ------------ | ----------------- | ------------ | ---------- | -------- | ----------------------------------------- |
+| GCC or Clang     | any current  | `build-essential` | `base-devel` | `gcc`      | NO       | the C some crates compile; the linker     |
+| CMake            | 3.22         | `cmake`           | `cmake`      | `cmake`    | NO       | the build entry point                     |
+| Git              | any          | `git`             | `git`        | `git`      | NO       | submodules, the version string            |
+| Rust (`rustup`)  | the pin      | see rustup.rs     | `rustup`     | `rustup`   | NO       | the toolchain `rust/rust-toolchain.toml` pins |
+| Clang + libclang | any          | `clang libclang-dev` | `clang`   | `clang-devel` | YES   | bindgen, for some tests' dev-dependencies |
 
-[1] On Debian/Ubuntu `libgtest-dev` only includes sources and headers. You must
-build the library binary manually. This can be done with the following command `sudo apt-get install libgtest-dev && cd /usr/src/gtest && sudo cmake . && sudo make`
-then:
-
-* on Debian:
-  `sudo mv libg* /usr/lib/`
-* on Ubuntu:
-  `sudo mv lib/libg* /usr/lib/`
-
-Install all dependencies at once on Debian/Ubuntu:
+Install the system packages at once on Debian/Ubuntu (then Rust from
+https://rustup.rs; `cargo` picks the pinned toolchain up from the tree):
 
 ```
-sudo apt update && sudo apt install build-essential cmake pkg-config libssl-dev libsodium-dev libreadline6-dev libboost-chrono-dev libboost-date-time-dev libboost-filesystem-dev libboost-locale-dev libboost-program-options-dev libboost-regex-dev libboost-serialization-dev libboost-system-dev libboost-thread-dev python3 ccache doxygen graphviz
+sudo apt update && sudo apt install build-essential cmake git clang libclang-dev
 ```
 
-Install all dependencies at once on Arch:
+On Arch:
 ```
-sudo pacman -Syu --needed base-devel cmake boost openssl libsodium readline gtest python3 ccache doxygen graphviz
-```
-
-Install all dependencies at once on Fedora:
-```
-sudo dnf install gcc gcc-c++ cmake pkgconf boost-devel openssl-devel libsodium-devel readline-devel gtest-devel ccache doxygen graphviz
+sudo pacman -Syu --needed base-devel cmake git clang rustup
 ```
 
-Install all dependencies at once on openSUSE:
-
+On Fedora:
 ```
-sudo zypper ref && sudo zypper in libboost_chrono-devel libboost_date_time-devel libboost_filesystem-devel libboost_locale-devel libboost_program_options-devel libboost_regex-devel libboost_serialization-devel libboost_system-devel libboost_thread-devel libminiupnpc-devel libsodium-devel cmake doxygen ccache fdupes gcc-c++ libevent-devel libopenssl-devel pkgconf-pkg-config readline-devel patterns-devel-C-C++-devel_C_C++
+sudo dnf install gcc cmake git clang-devel rustup
 ```
 
-Install all dependencies at once on macOS with the provided Brewfile:
+On macOS with the provided Brewfile:
 
 ```
 brew update && brew bundle --file=contrib/brew/Brewfile
 ```
 
-FreeBSD 12.1 one-liner required to build dependencies:
+On FreeBSD:
 
 ```
-pkg install git gmake cmake pkgconf boost-libs libsodium
+pkg install git gmake cmake rust
 ```
 
 ### Cloning the repository
@@ -282,13 +258,11 @@ invokes cmake commands as needed.
   launchd/Task Scheduler for background operation. See
   `contrib/packaging/linux/shekyld.service` for an example systemd unit.
 
-* **Optional**: build and run the test suite to verify the binaries:
+* **Optional**: run the test suite (from `rust/`):
 
     ```bash
-    make release-test
+    cd rust && cargo test --workspace --exclude shekyl-randomx-differential
     ```
-
-    *NOTE*: `core_tests` test may take a few hours to complete.
 
 * **Optional**: to build binaries suitable for debugging:
 
@@ -302,18 +276,10 @@ invokes cmake commands as needed.
     make release-static
     ```
 
-Dependencies need to be built with -fPIC. Static libraries usually aren't, so you may have to build them yourself with -fPIC. Refer to their documentation for how to build them.
-
-* **Optional**: build documentation in `doc/html` (omit `HAVE_DOT=YES` if `graphviz` is not installed):
+* **Optional**: build the crate documentation (from `rust/`):
 
     ```bash
-    HAVE_DOT=YES doxygen Doxyfile
-    ```
-
-* **Optional**: use ccache not to rebuild translation units that have not changed. Shekyl's CMakeLists.txt file automatically handles it.
-
-    ```bash
-    sudo apt install ccache
+    cd rust && cargo doc --workspace --no-deps
     ```
 
 #### On the Raspberry Pi (ARM)
@@ -368,7 +334,7 @@ application.
 * Install dependencies for 64-bit Windows:
 
     ```bash
-    pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium
+    pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-rust git
     ```
 
 * Open the MingW shell via the `MinGW-w64-Win64 Shell` shortcut.
@@ -420,12 +386,9 @@ Shekyl package naming may differ by distro and is not yet standardized.
 
 ### On OpenBSD:
 
-You will need to add a few packages to your system. `pkg_add cmake gmake libiconv boost`.
+You will need to add a few packages to your system. `pkg_add cmake gmake git rust`.
 
-The `doxygen` and `graphviz` packages are optional and require the xbase set.
-Running the test suite also requires `py-requests` package.
-
-Build Shekyl: `env DEVELOPER_LOCAL_TOOLS=1 BOOST_ROOT=/usr/local gmake release-static`
+Build Shekyl: `gmake release-static`
 
 Note: you may encounter the following error when compiling the latest version as a normal user:
 
@@ -438,11 +401,9 @@ Then you need to increase the data ulimit size to 2GB and try again: `ulimit -d 
 
 ### On NetBSD:
 
-Check that the dependencies are present: `pkg_info -c libexecinfo boost-headers boost-libs readline git-base pkgconf gmake cmake | more`, and install any that are reported missing, using `pkg_add` or from your pkgsrc tree.  Readline is optional but worth having.
+Check that the dependencies are present: `pkg_info -c git-base gmake cmake rust | more`, and install any that are reported missing, using `pkg_add` or from your pkgsrc tree.
 
-Third-party dependencies are usually under `/usr/pkg/`, but if you have a custom setup, adjust the "/usr/pkg" (below) accordingly.
-
-Clone the Shekyl repository recursively and checkout the most recent release as described above. Then build: `gmake BOOST_ROOT=/usr/pkg LDFLAGS="-Wl,-R/usr/pkg/lib" release`. The resulting executables can be found in `build/NetBSD/[Release version]/Release/bin/`.
+Clone the Shekyl repository recursively and checkout the most recent release as described above. Then build: `gmake release`. The resulting executables can be found in `build/NetBSD/[Release version]/Release/bin/`.
 
 ### On Solaris:
 
@@ -468,8 +429,8 @@ By default, in either dynamically or statically linked builds, binaries target t
 32-bit portable targets (`release-static-linux-i686`, `release-static-win32`)
 were permanently retired in v3.1.0-alpha.5 (Chore #3) on PQC constant-time
 grounds — see `docs/CHANGELOG.md` entry "Retired 32-bit build targets".
-The C++-side configure refuses non-64-bit hosts, and the Rust workspace
-carries three independent `compile_error!` tripwires against
+The CMake configure refuses non-64-bit hosts, and the Rust workspace
+carries two independent `compile_error!` tripwires against
 `target_pointer_width != 64`.
 
 ### Cross Compiling

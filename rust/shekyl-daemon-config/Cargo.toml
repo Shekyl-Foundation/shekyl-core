@@ -34,7 +34,7 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 rustix = { version = "1", features = ["fs", "process"] }
 # The group and account reads the secret-read rule makes (`group.rs`:
 # `getgrgid_r`, `getpwuid_r`, the `getpwent` walk), which rustix does not
-# wrap. The pin shekyl-ffi and shekyl-logging already carry.
+# wrap. The pin shekyl-logging already carries.
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]

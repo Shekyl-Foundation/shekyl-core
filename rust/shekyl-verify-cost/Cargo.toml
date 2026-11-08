@@ -1,0 +1,60 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-verify-cost"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Verification-cost instruments: pool admission and cold-block connect, measured at the bodies the rules run"
+
+[dependencies]
+# The fixtures build real proofs and real transactions, then call the
+# verification bodies. Every crate here is already in the workspace
+# lockfile (rule 17). The production graph does not depend on this one;
+# `scripts/ci/check_bench_not_a_dependency.py` holds that.
+shekyl-types = { path = "../shekyl-types" }
+shekyl-wire = { path = "../shekyl-wire" }
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs" }
+shekyl-ct-balance = { path = "../shekyl-ct-balance" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+curve25519-dalek = "4"
+ciphersuite = "0.4"
+dalek-ff-group = "0.5"
+ec-divisors = { path = "../shekyl-oxide/crypto/divisors" }
+helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
+multiexp = "0.4"
+rand_core = { version = "0.6", features = ["std"] }
+
+[dev-dependencies]
+# Wall clock is criterion. The drift gate is gungraun. The connect bench's
+# one RandomX hash is the shipped verifier. All three are already in the
+# lockfile.
+criterion = { version = "0.5", features = ["html_reports"] }
+gungraun = "0.19"
+rand_chacha = { workspace = true }
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
+
+[[bench]]
+name = "relay_admission_verify"
+harness = false
+
+[[bench]]
+name = "relay_admission_verify_iai"
+harness = false
+
+[[bench]]
+name = "block_connect_verify"
+harness = false
+
+[lints]
+workspace = true

@@ -10,11 +10,9 @@
 //! shape this module implements (`H_seal`/`H_fire`, one challenge per
 //! pair-epoch) is superseded by the secret draw
 //! (`ARCHIVAL_SERVE_CREDIT_SPEC.md`). The public urn that was the interim
-//! assignment is deleted. This module is still the live serve-credit
-//! admission path (through `shekyl-ffi` into `blockchain.cpp`'s
-//! serve-credit gate and `db_lmdb.cpp`'s slash-eligibility consumer) until
-//! that draw's admission replaces it. Receipt signing under scheme 3 is
-//! the FN-DSA lane's increment, not this deletion.
+//! assignment is deleted. No admission path in the workspace calls this
+//! module; its callers are this crate's gate-2 KAT tests. Receipt signing
+//! under scheme 3 is the FN-DSA lane's increment, not this deletion.
 //!
 //! # The leaf-opening half IS deletion-bound — `RF-D8` (i) RETRACTED 2026-08-26
 //!

@@ -99,10 +99,10 @@ the peer lists' own entry (§2.8), where the handshake owner reads it
 
 At the pin a daemon store is the LMDB environment, `lmdb/data.mdb` under the
 data directory
-([`src/cryptonote_config.h:215`](../../src/cryptonote_config.h),
+(`src/cryptonote_config.h` at `d26148535e` (line 215),
 `src/blockchain_db/lmdb/db_lmdb.cpp`),
 and `p2pstate.bin`
-([`src/cryptonote_config.h:217`](../../src/cryptonote_config.h)), which PR-3
+(`src/cryptonote_config.h` at `d26148535e` (line 217)), which PR-3
 made the Rust dialer's address file under the same name (then line 123 of
 `src/p2p/net_node.inl`, at `e8838b0095`; now `ADDRESS_FILE`,
 `rust/shekyl-daemon/src/network.rs:30`). The marker

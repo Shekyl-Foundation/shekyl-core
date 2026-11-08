@@ -120,7 +120,7 @@ together.
 | --- | --- | --- |
 | `hidden_out` | `MIN_PROVISIONED_OUT_PEERS` (12, `shekyl-relay-privacy/src/params.rs:203`) | This slice. The hidden-address pool. No hidden session above it |
 | `clearnet_out` | `P2P_DEFAULT_OUT_PEERS` (12, `params.rs:179`), written by `set_max_out_peers` (`net_node.inl:2957`; the `arg_out_peers` call is `:621`) | The setter. A cap of 0 stays legal. A positive cap below the floor is refused. Clearnet is not folded into `hidden_out` |
-| `DISCLOSE_COUNT` | 12, a protocol constant: the same on every node and every connector (D3, Rick 2026-10-09). Not tied to the outbound target | Slice 1. Replaces `P2P_DEFAULT_PEERS_IN_HANDSHAKE` (250, `cryptonote_config.h:193`) and `P2P_MAX_PEERS_IN_HANDSHAKE` (`:194`) as the sample size and the receiver limit. *Records-was: `disclose_count`, that connector's outbound target* |
+| `DISCLOSE_COUNT` | 12, a protocol constant: the same on every node and every connector (D3, Rick 2026-10-09). Not tied to the outbound target | Slice 1. Replaces `P2P_DEFAULT_PEERS_IN_HANDSHAKE` (250, `cryptonote_config.h` at `ac3836de90` (line 193)) and `P2P_MAX_PEERS_IN_HANDSHAKE` (`:194`) as the sample size and the receiver limit. *Records-was: `disclose_count`, that connector's outbound target* |
 | `white_diversity_floor` | `INTERIM_WHITE_DIVERSITY_MULTIPLE` (4) times `DISCLOSE_COUNT`, 48. **R5 (Rick, 2026-10-12): stays 48**, labelled `Assumption`, derived on the Rust path after PR-3; the review's one explicit open point, closed | Slice 1. The refill line (60, D-PR2-2) stays above the floor. The same floor gates disclosure (slice 1 §5) and the fill's keep draws (rule (b)) |
 
 `hidden_out` is the outbound sessions whose connector declares
@@ -416,7 +416,7 @@ bound, one dial per connector, unmeasured.*
 
 *Records-was: `connections_maker` (`net_node.inl:2134-2157`) branches
 on `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70,
-`cryptonote_config.h:200`). Below that share of the cap it tries white
+`cryptonote_config.h` at `ac3836de90` (line 200)). Below that share of the cap it tries white
 then gray. At or above it, gray then white.* PWD-I4 derives against
 this loop. The 70% schedule is what the C++ does until this slice
 deletes it.

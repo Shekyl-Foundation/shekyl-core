@@ -1165,7 +1165,7 @@ The path, verified end to end:
 
 **That is Shi §III-B unmodified**: connect inbound → answer the back-ping → land
 in white with a maximal timestamp → repeat until the 1000-entry cap
-(`cryptonote_config.h:175`) trims the honest set out. The paper's cost — 1,000
+(`cryptonote_config.h` at `ac3836de90` (line 175)) trims the honest set out. The paper's cost — 1,000
 IPs — is paid in **one inbound connection each**, and the per-connection record
 ceiling above never applies, because no record is sent.
 
@@ -1435,7 +1435,7 @@ producer's.** `handle_remote_peerlist` enforces the per-message limit with
 `P2P_MAX_PEERS_IN_HANDSHAKE` (`net_node.inl:2123`), while
 `P2P_DEFAULT_PEERS_IN_HANDSHAKE` is what *this node discloses*
 (`get_peerlist_head`'s depth, `send_peerlist_sz`). **They were both 250 and
-independent constants** (`cryptonote_config.h:186-187` at this round's pin; both deleted 2026-10-13 with the C++ peerlist — the one number on both sides is `DISCLOSE_COUNT`, 12, in `shekyl-peer-bounds`), so a ceiling
+independent constants** (`cryptonote_config.h` at `ac3836de90` (lines 186–187) at this round's pin; both deleted 2026-10-13 with the C++ peerlist — the one number on both sides is `DISCLOSE_COUNT`, 12, in `shekyl-peer-bounds`), so a ceiling
 inheriting the producer default would silently stop matching the acceptance cap
 the moment either moved. **If both survive the rewrite, a gate must assert they
 are equal** — otherwise the inheritance this ceiling relies on is a coincidence,
@@ -2352,7 +2352,7 @@ nothing about it has to be redone:
   `shekyl_host_inbound_zone_is_capped`, `shekyl_host_inbound_admits`, matching
   the `shekyl_drop_verdict_*` naming.
 - Both `1` literals are gone, each leaving a comment in the form
-  `cryptonote_config.h:177-182` uses for a deleted `#define`; the precedent for
+  `cryptonote_config.h` at `ac3836de90` (lines 177–182) uses for a deleted `#define`; the precedent for
   the value itself is `shekyl-relay-privacy/src/params.rs`'s
   `P2P_DEFAULT_OUT_PEERS` and `relay_zone_ffi/mod.rs`'s
   `shekyl_p2p_default_out_peers`.
@@ -3696,7 +3696,7 @@ this limit, and PWD-T8's vector 1.**
 
 **Two inherited constants disagree, and PWC-F3's disposition follows from this
 row rather than waiting on anything.** `P2P_DEFAULT_PACKET_MAX_SIZE` (50 MB,
-`cryptonote_config.h:185`) is **dead** — two sites, its definition and a write
+`cryptonote_config.h` at `ac3836de90` (line 185)) is **dead** — two sites, its definition and a write
 into the never-sent `network_config` map (`net_node.h:388`), and
 `packet_max_size` is **written and never read** anywhere in the tree — while the
 live limit is `LEVIN_DEFAULT_MAX_PACKET_SIZE` (100 MB).
@@ -4627,7 +4627,7 @@ log settings:
 
 `net_node.inl` logs under `net.p2p`, and level 0's default category set is
 `*:WARNING` with `net.p2p` explicitly carved down to `FATAL`
-(`contrib/epee/src/mlog.cpp:127`) — so the message is filtered three levels
+(`contrib/epee/src/mlog.cpp` at `ac3836de90` (line 127)) — so the message is filtered three levels
 below where it is emitted. `daemon` and `blockchain::db::lmdb` WARNs print at
 default in the same run, so WARN is not globally off; the carve-out is
 specific. It predates this use and is still right for suppressing
