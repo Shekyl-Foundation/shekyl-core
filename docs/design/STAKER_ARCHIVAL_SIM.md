@@ -3178,6 +3178,7 @@ taken on.
 | Deep only at 2.0 reproduces the old production pins | Bit for bit, both bases | Held |
 | Every held shard at the floor near 0.157 / 0.180, oldest band uncovered | 0.157 / 0.180; `oUmx` 1 on every seed | Held |
 | Deep only at the floor stays covered, `bondA` up | `cDeepU` 0, `oUmx` 0; `bondA` 106.8 → 123.2 and 83.1 → 93.1 | Held |
+| The rest of the default sweep moves wherever a bond is posted | 403 of the 405 scenarios moved; every scenario posts a bond. The two that did not are `a7_l11_all_b200` and `a7_l13_all_b200`, already every held shard at 2.0 | Held |
 
 **Why `bondA` fell on two rows.** The spiral and the servo are the two
 pinned rows with `price_coupling` on (0.10): a deep retrieval shortfall
@@ -3186,6 +3187,36 @@ shard bonding thins deep coverage, the shortfall lifts reservations, and
 on those two rows the participation channel beat the count's wider
 definition. The mechanism is read from the scenario definitions; no run
 isolated it.
+
+**P8, (b): the exit waits the release cooldown and stays slashable.** A
+voluntary exit is a `Release`. Production returns the bond
+`RELEASE_COOLDOWN_EPOCHS` (2) after it, and a slash before then burns it.
+The sim refunded at once. Now an exiting actor's whole posted bond goes
+into a release escrow for 2 epochs: an exit at the end of epoch `e`
+returns the bond for the best-response of epoch `e + 2`, as the per-shard
+escrow counts its epochs. While it is held, the capital cannot fund a new
+bond if the actor re-enters, and a slash burns it with the posted bond. The
+escrow ticks every epoch, dynamic window or not. The per-shard drop escrow
+(`release_cooldown_epochs`, L18) is unchanged and goes with D2. The
+registered arm keeps the at-once refund, the configuration its figures
+were taken on.
+- *The falsifier.* `l11_l13_five_seed_pins` holds every bit, and the
+  registered sweep's scenarios are byte-identical.
+- *L11 and L13 on the production arm.* `admit_entrants` re-admits the
+  lowest-index inactive actors, up to 6 an epoch, so an exited actor can be
+  back the next epoch. For that one epoch its spendable capital is short
+  its old bond. A capital-poor actor (capital 20) whose 10 bonds at 2.0 were
+  all its capital re-enters with nothing to bond, posts no bond, and takes a
+  strike; its patience is 3, so it stays. Expected: `bondA` falls slightly
+  where exits are frequent (the L13 floors at 60 and below, the spiral, the
+  servo), by less than 2, and `cDeepU` and `oUmx` move within 0.02. Rows
+  with few exits (`l13_decay_hi`, the L11 rows after fill) move least, and
+  some may hold bit for bit.
+- *Slashes.* No shock fires on L11 or L13, so nothing burns there, and the
+  pin test still asserts it. On the shock scenarios a shock picks active
+  actors, so an escrow burns only if its actor re-entered and was shocked
+  inside the 2 epochs. Expected: `slashed_capital` rises on few shock rows
+  and by little.
 
 ## L14×L15 — proof-of-archival in harmony with retrieval (specification)
 
