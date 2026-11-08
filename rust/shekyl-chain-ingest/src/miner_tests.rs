@@ -406,8 +406,11 @@ async fn the_miner_extends_the_chain_block_after_block() {
 /// to zero, and the block after it used to be refused (CEN-D6) with every
 /// successor. Continued under LWMA-1, that block's target is one. At one
 /// every hash is a block, so the chain's blocks come a second apart, and
-/// the target climbs as the slow window slides out: over the next window
-/// it passes one hundred (the integer model gives 260 at block `N`).
+/// the target climbs as the on-time window slides out: within the next
+/// window it reaches ten, the tenfold climb of §8.1 vector 9 (the integer
+/// model first reaches it about 62 blocks in). The test stops there: the
+/// climb from ten to a hundred and on is the same arithmetic, pinned by
+/// vector 9, and mining it costs about ten times as many hashes.
 ///
 /// Real RandomX throughout: each nonce is hashed under the cache the
 /// production substrate pinned and judged by `check_hash`, and every block
@@ -418,7 +421,7 @@ async fn the_miner_extends_the_chain_block_after_block() {
 /// scripted. Red edit: drop step 10, and the first template is never
 /// built.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "real RandomX, about 2,700 hashes over a window; run by nightly.yml's chain-ingest-ignored job"]
+#[ignore = "real RandomX, about 140 hashes over most of a window, five minutes in release; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_chain_at_the_difficulty_floor_mines_its_way_back() {
     let caches = Arc::new(CacheStore::new());
     let pow = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
@@ -437,10 +440,14 @@ async fn a_chain_at_the_difficulty_floor_mines_its_way_back() {
     let began = Instant::now();
     let mut targets = Vec::new();
     let mut hashes = 0u64;
+    let ten = Difficulty::new(10).expect("non-zero");
     for _ in 0..=shekyl_difficulty::N {
         let mut next = s.next_template(Vec::new()).await.expect("a template");
         let target = next.target.difficulty();
         targets.push(target);
+        if target >= ten {
+            break;
+        }
         pin_job_seed(&substrate, &caches, &next);
         let cache = caches
             .lookup(&Seedhash::from_bytes(*next.seed.as_bytes()))
@@ -476,8 +483,8 @@ async fn a_chain_at_the_difficulty_floor_mines_its_way_back() {
     );
     let last = *targets.last().expect("a window of targets");
     assert!(
-        last >= Difficulty::new(100).expect("non-zero"),
-        "one window of fast blocks lifts the floor at least a hundredfold: {targets:?}"
+        last >= ten,
+        "within one window of fast blocks the floor climbs tenfold: {targets:?}"
     );
 }
 
