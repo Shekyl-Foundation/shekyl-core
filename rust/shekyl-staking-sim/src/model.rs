@@ -322,8 +322,10 @@ pub struct World {
     /// freeze's *coverage incidence* is age-stratified (deep capital is least mobile via
     /// the L9 lock, and the deep tail is thinnest), not its *amount*. Always empty when
     /// `release_cooldown_epochs == 0` (every pre-L18 scenario), so legacy behavior is
-    /// byte-identical. Slash (L11 exit / age-1 recycle) forfeits collateral to burn
-    /// (gate-4 §4.5) and never escrows — only voluntary drops cool.
+    /// byte-identical. Exits never escrow here: a voluntary L11 exit is a `Release`
+    /// and refunds at once (R10), an L17 shock exit is a slash that burns
+    /// (`participation::slash_exit`), and the age-1 recycle is a window boundary with
+    /// no production event. Only voluntary drops cool.
     pub cooling: Vec<Vec<(f64, u32)>>,
 }
 
@@ -357,10 +359,14 @@ impl World {
         self.cooling[a].iter().map(|&(amt, _)| amt).sum()
     }
 
-    /// Deactivate actor `a` (L11 exit): clears its holdings, locks, and in-flight
-    /// fetches. Exit forfeits any posted bond (a slash) and overrides retention locks —
-    /// duration (L9) deters *voluntary drop while staying*, not *capital flight*, so an
-    /// exiting actor abandons even locked shards. Resets its streak.
+    /// Deactivate actor `a`: clears its holdings, locks, and in-flight fetches, and
+    /// resets its streak. Capital is untouched here. A voluntary L11 exit is a
+    /// production `Release`, which refunds the bond (production refunds after
+    /// `RELEASE_COOLDOWN_EPOCHS`; the sim at once, Appendix B R10). A slash burns the
+    /// bond, and goes through `participation::slash_exit`, which calls this after
+    /// the burn (A18). Exit overrides L9 retention locks: production has no lock that
+    /// refuses a `Release` (R6), and duration deters *voluntary drop while staying*,
+    /// not *capital flight*.
     pub fn deactivate(&mut self, a: usize) {
         self.active[a] = false;
         self.below_streak[a] = 0;

@@ -137,6 +137,9 @@ fn l11_l13_five_seed_pins() {
                 .clone();
             cfg.seed = *seed;
             let result = run_sim(&cfg);
+            // A18: no shock fires on L11 or L13, so no slash burns capital.
+            assert_eq!(result.slash_exits, 0, "{name} seed {seed:#x} slash exits");
+            assert_eq!(result.slashed_capital, 0.0, "{name} seed {seed:#x} burned");
             assert_eq!(
                 result.bonded_active.to_bits(),
                 bond_a,
