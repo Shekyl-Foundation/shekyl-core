@@ -623,8 +623,8 @@ impl std::error::Error for PqcFieldShapeError {}
 /// Why a parsed `extra` is refused at admission: CEN-I19, the coinbase
 /// grammar, or a `0x02` on a transaction that is not a coinbase.
 ///
-/// One type so the daemon logs one [`Display`] and the FFI flattens one
-/// match. The variants do not overlap: a missing pubkey is
+/// One type so the daemon logs one [`Display`] and a caller matches one
+/// enum. The variants do not overlap: a missing pubkey is
 /// [`CoinbaseGrammarError::PubkeyMissing`], never [`PqcFieldShapeError::Missing`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExtraShapeError {
@@ -666,9 +666,8 @@ impl std::error::Error for ExtraShapeError {}
 ///
 /// `kem_lens` / `leaf_lens` are the byte lengths of every `0x06` / `0x07`
 /// field [`parse`] found, in order. [`check_pqc_field_shape_of`] is that
-/// extraction. The daemon does not parse `extra` and does not hand lengths
-/// across the FFI; `shekyl_tx_extra_shape_of` parses and calls
-/// [`check_tx_extra_shape`]. The zero-output arm is what keeps serve-credit
+/// extraction; the validator's CEN-I19 calls it and [`check_tx_extra_shape`]
+/// (`shekyl-chain-rules` `rules/tx_extra.rs`). The zero-output arm is what keeps serve-credit
 /// transactions (no outputs, empty `extra`) admissible: they are the
 /// must-accept control.
 ///
@@ -827,9 +826,8 @@ pub fn conforming_pqc_leaf_entry() -> [u8; PQC_LEAF_ENTRY_LEN] {
 /// The `0x0C` draw commitment every fixture coinbase carries: a fixed value
 /// with no opening, so a fixture block commits to a seed nobody reveals and
 /// issues no draw. Not zero, so a fixture cannot pass for the genesis
-/// block's commitment by accident. One constant for every crate's fixtures
-/// and for the C++ test writer, as [`conforming_pqc_leaf_entry`] is for the
-/// leaf entry.
+/// block's commitment by accident. One constant for every crate's fixtures,
+/// as [`conforming_pqc_leaf_entry`] is for the leaf entry.
 pub const CONFORMING_DRAW_COMMITMENT: DrawCommitment =
     DrawCommitment::from_bytes([0xDC; DRAW_COMMITMENT_LEN]);
 

@@ -39,9 +39,8 @@
 //!   (`docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md` §4.3, ratified
 //!   2026-09-01): saturating FTL + strict MTP over the 11 preceding
 //!   timestamps, short windows genesis-padded, wider windows refused
-//!   ([`TimestampRuleVerdict`] is the verdict, its discriminants the
-//!   wire codes). The C++ validator's `check_block_timestamp` is a
-//!   marshaling shim over this function's FFI export.
+//!   ([`TimestampRuleVerdict`] is the verdict, its discriminants stable
+//!   codes).
 //! - [`is_timestamp_below_ftl`], [`is_above_mtp`] and [`mtp_median`] —
 //!   the coupled timestamp predicates per §5.5, each the single site
 //!   of its comparison; [`check_timestamp_rule`] composes them and is

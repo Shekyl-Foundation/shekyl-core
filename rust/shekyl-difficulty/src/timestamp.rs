@@ -24,9 +24,8 @@ use shekyl_types::Timestamp;
 /// Verdict of the ruled block-timestamp rule (C2-R3,
 /// `docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md` §4.3).
 ///
-/// Discriminants are the wire-stable FFI codes returned by
-/// `shekyl_difficulty_check_timestamp_rule`; renumbering is an FFI
-/// break.
+/// Discriminants are stable codes; renumbering one changes what a
+/// logged verdict means.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimestampRuleVerdict {
@@ -57,10 +56,9 @@ pub enum TimestampRuleVerdict {
 /// Per §5.5, FTL is `T*N/20 = 540` seconds and is co-tuned with the
 /// algorithm-internal `6*T` solvetime clamp. The live FTL check IS this
 /// predicate: [`check_timestamp_rule`] delegates its FTL half here, and
-/// the C++ validator consumes it through the
-/// `shekyl_difficulty_check_timestamp_rule` FFI (see the module-level
-/// consumer-status note). The shared-vector u64-boundary rows pin the
-/// saturating shape.
+/// the block validator (`shekyl-chain-rules`) calls that rule (see the
+/// module-level consumer-status note). The shared-vector u64-boundary rows
+/// pin the saturating shape.
 #[must_use]
 pub fn is_timestamp_below_ftl(incoming: Timestamp, local_clock: Timestamp) -> bool {
     incoming.to_raw().saturating_sub(local_clock.to_raw()) <= FTL_SECONDS
@@ -74,11 +72,9 @@ pub fn is_timestamp_below_ftl(incoming: Timestamp, local_clock: Timestamp) -> bo
 /// re-derived the `>`-vs-`>=` question after §5.5's "preserved
 /// unchanged" premise was refuted at the tree, and ruled strict. This
 /// predicate is PRODUCTION-LIVE: [`check_timestamp_rule`] delegates its
-/// MTP half here, and the C++ validator consumes it through the
-/// `shekyl_difficulty_check_timestamp_rule` FFI (the crossing
-/// re-ratified 2026-09-01; the shared vectors in
-/// `docs/test_vectors/MTP_BOUNDARY_V1.json` pin the rule natively and
-/// end-to-end through that boundary). Genesis-timestamp padding
+/// MTP half here, and the block validator (`shekyl-chain-rules`) calls
+/// that rule; the shared vectors in
+/// `docs/test_vectors/MTP_BOUNDARY_V1.json` pin it. Genesis-timestamp padding
 /// (C2-R3-Q2) is performed by [`check_timestamp_rule`] before this
 /// predicate runs; only the newest-11 selection (C2-R3-Q1 sub-a, an
 /// order-dependent choice) remains with the outermost caller. This
