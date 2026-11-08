@@ -17,7 +17,7 @@ globs:
 `cmd | tail`, `cmd | grep`, `cmd | head` — the pipeline's exit status is
 the LAST command's, so the gate reads the filter's success and the real
 verdict is discarded. This has shipped a clippy-red commit and masked a
-broken C++ link in the same review round; five instances were tallied in
+broken link step in the same review round; five instances were tallied in
 one SA round alone.
 
 - The verdict command runs **unpiped**: redirect to a log file and read

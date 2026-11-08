@@ -110,7 +110,7 @@ When a design "gracefully accepts," "preserves compatibility,"
 "soft-deprecates," or "tolerates skew," ask whether any pre-genesis user
 is protected by that default. If none, the inversion is the disposition.
 The same default re-enters every review under a new name (a new RPC
-field, an FFI parameter, an error code). Ask each time.
+field, a function parameter, an error code). Ask each time.
 
 ## A comment that outlived its architecture
 

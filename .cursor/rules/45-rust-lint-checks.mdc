@@ -65,8 +65,7 @@ Per `25-rust-architecture.mdc`: every crate root carries
 reviewed, scoped block with a `SAFETY` comment: code that must call the
 operating system or a C library allows `unsafe_code` on the item or module
 that makes the call, never on the crate, with a `// SAFETY:` comment on each
-`unsafe` block and a `# Safety` section on each `unsafe fn`. A crate whose
-purpose is an FFI export is not an exception; there is no such crate.
+`unsafe` block and a `# Safety` section on each `unsafe fn`.
 
 **The two crate-level exceptions** are the crates that exist to bind and
 drive the vendored RandomX C reference for the differential harness, outside

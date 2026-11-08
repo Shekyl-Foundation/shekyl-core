@@ -39,7 +39,7 @@ New functionality:
 
 - **`#![deny(unsafe_code)]` at the crate level.** Logic does not need
   `unsafe`. An exception is a reviewed, scoped block with a `SAFETY`
-  comment, not a crate whose purpose is an FFI export. The only
+  comment. The only
   crate-level allows are the two RandomX C-reference crates rule 45
   names.
 - **Pin Rust dependency versions in `Cargo.lock`.** Audit new crate additions

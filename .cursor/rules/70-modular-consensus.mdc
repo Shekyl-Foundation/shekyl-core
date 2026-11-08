@@ -2,7 +2,6 @@
 description: Consensus is PoW-based; staking is an economic primitive. Speculative consensus scaffolding is forbidden.
 globs:
   - "**/consensus/**"
-  - "**/cryptonote_core/**"
   - rust/shekyl-consensus/**
   - rust/shekyl-economics/**
 ---

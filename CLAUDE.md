@@ -58,7 +58,7 @@ Foundations & process
 - [`91-documentation-after-plans`](.cursor/rules/91-documentation-after-plans.mdc) — docs update is the final task of a plan
 - [`94-tracking-index`](.cursor/rules/94-tracking-index.mdc) — `docs/design/IMPLEMENTATION_INDEX.md` is load-bearing; identifier families register at birth; Phase 3+ / Stage 3+ items start with an index row
 - [`95-documentation-lifecycle`](.cursor/rules/95-documentation-lifecycle.mdc) — document classes, status banners, archive-or-contract, FOLLOWUPS one-liners, CHANGELOG scope, three work-item targets
-- [`26-sub-pr-design-discipline`](.cursor/rules/26-sub-pr-design-discipline.mdc) — opt-in design-round process for multi-round/consensus/FFI sub-PRs
+- [`26-sub-pr-design-discipline`](.cursor/rules/26-sub-pr-design-discipline.mdc) — a new crate or consensus-boundary change is its own change (always); opt-in design-round process for multi-round/consensus/reference-port sub-PRs
 
 Architecture & scope
 
@@ -75,9 +75,9 @@ Architecture & scope
 - [`75-system-autonomy`](.cursor/rules/75-system-autonomy.mdc) — self-regulating design; minimize coordinated upgrades
 - [`76-device-provisioning-floor`](.cursor/rules/76-device-provisioning-floor.mdc) — stated minimum supported device (Pi 4); constants derived from work time are provisioned at the floor, never at the machine that was handy
 
-Rust & FFI
+Rust
 
-- [`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc) — workspace layout, the single `shekyl-ffi` crate, dependency rules
+- [`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc) — workspace layout, no first-party C and no C ABI, dependency rules, decoding untrusted bytes
 - [`17-dependency-discipline`](.cursor/rules/17-dependency-discipline.mdc) — verify deps at source before adding
 - [`18-type-placement`](.cursor/rules/18-type-placement.mdc) — transform- vs state-shaped types; byte-layout discipline
 - [`42-serialization-policy`](.cursor/rules/42-serialization-policy.mdc) — persisted-block wire change ⇒ version-constant bump (CI-enforced)
