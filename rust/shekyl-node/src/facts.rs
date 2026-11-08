@@ -27,8 +27,8 @@ use shekyl_daemon_rpc::handles::{
     StopFacts,
 };
 use shekyl_daemon_rpc::info_facts::{
-    InfoChainFacts, InfoFacts, InfoPeersFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope,
-    PoolState, SessionCounts,
+    InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, PoolState,
+    SessionCounts,
 };
 use shekyl_daemon_rpc::mining_facts::{LocalOutcome, Pending, PopOutcome};
 use shekyl_daemon_rpc::read_facts::{
@@ -40,9 +40,9 @@ use shekyl_daemon_rpc::sync_facts::{
     BodySpanFacts, RequestTiming, SyncSessionFacts, SyncViewFacts, SyncViewRead,
 };
 use shekyl_mempool::Pool;
-use shekyl_p2p::{session_of, BanSpan, BanTarget, Bans, Network, PeerCounts};
+use shekyl_p2p::{session_of, BanSpan, BanTarget, Bans, ConnectorCounts, Network};
 use shekyl_rpc_types::{ChainSyncState, SyncMode};
-use shekyl_transport_layer::{BanLeft, Ipv4Subnet, ListedBan, SocketId};
+use shekyl_transport_layer::{BanLeft, ConnectorId, Ipv4Subnet, ListedBan, SocketId};
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, PowHash, TxHash};
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -102,14 +102,15 @@ pub(crate) struct Surroundings {
 /// What `get_info` counts on the network. The node's [`Network`] is the
 /// one production reader.
 pub(crate) trait NetworkCounts: Send + Sync {
-    /// Sockets per connector and direction, and the list sizes.
-    fn peer_counts(&self) -> PeerCounts;
+    /// One row per connector the network runs, in declaration order: its
+    /// sockets per direction and its list sizes.
+    fn peer_counts(&self) -> Vec<ConnectorCounts>;
     /// Handshaken sessions, `(outbound, inbound)`.
     fn session_counts(&self) -> (u64, u64);
 }
 
 impl NetworkCounts for Network {
-    fn peer_counts(&self) -> PeerCounts {
+    fn peer_counts(&self) -> Vec<ConnectorCounts> {
         Self::peer_counts(self)
     }
 
@@ -250,21 +251,30 @@ impl NodeFacts for Surroundings {
         }))
     }
 
-    /// The socket table's sockets and the peers owner's lists. An offline
-    /// node has no peers by configuration.
+    /// The socket table's sockets and the peers owner's lists, one row per
+    /// connector the network runs. An offline node has no peers by
+    /// configuration.
     fn peers(&self) -> Result<PeerFacts, FactsFault> {
         if self.offline {
             return Ok(PeerFacts::Offline);
         }
-        let counts = self.network.peer_counts();
-        Ok(PeerFacts::Running(InfoPeersFacts {
-            public_incoming_sockets: counts.clearnet_in,
-            public_outgoing_sockets: counts.clearnet_out,
-            tor_incoming_sockets: counts.tor_in,
-            tor_outgoing_sockets: counts.tor_out,
-            white_peerlist_size: counts.white,
-            grey_peerlist_size: counts.gray,
-        }))
+        let rows = self
+            .network
+            .peer_counts()
+            .into_iter()
+            .map(|counts| shekyl_rpc_types::InfoConnectorPeers {
+                connector: wire_connector(counts.connector),
+                incoming_sockets: counts.incoming,
+                outgoing_sockets: counts.outgoing,
+                white_peerlist_size: counts.white,
+                gray_peerlist_size: counts.gray,
+            })
+            .collect();
+        let peers = shekyl_rpc_types::InfoPeers::new(rows).map_err(|err| {
+            tracing::error!(%err, "get_info: the network's connector rows are out of order");
+            FactsFault::Internal
+        })?;
+        Ok(PeerFacts::Running(peers))
     }
 
     /// The board's handshaken sessions. The per-connection sync claims are
@@ -827,6 +837,15 @@ impl StopFacts for StopBridge {
     }
 }
 
+/// A connector as `get_info`'s Peers rows name it. Exhaustive: a new
+/// connector is a new wire name, decided where it is added.
+const fn wire_connector(connector: ConnectorId) -> shekyl_rpc_types::InfoConnector {
+    match connector {
+        ConnectorId::Clearnet => shekyl_rpc_types::InfoConnector::Clearnet,
+        ConnectorId::Tor => shekyl_rpc_types::InfoConnector::Tor,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -835,8 +854,8 @@ mod tests {
     struct NoNetwork;
 
     impl NetworkCounts for NoNetwork {
-        fn peer_counts(&self) -> PeerCounts {
-            PeerCounts::default()
+        fn peer_counts(&self) -> Vec<ConnectorCounts> {
+            Vec::new()
         }
 
         fn session_counts(&self) -> (u64, u64) {

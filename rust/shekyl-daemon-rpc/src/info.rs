@@ -47,7 +47,7 @@
 use shekyl_economics::{project_at_tip, TipOperands};
 use shekyl_rpc_types::{
     GetInfoResponse, HashHex, HealthP2p, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost,
-    InfoIdentity, InfoP2p, InfoPeers, InfoPool, InfoStatus, RpcStatus, StatusConnections,
+    InfoIdentity, InfoP2p, InfoPool, InfoStatus, RpcStatus, StatusConnections,
 };
 
 use shekyl_rpc_types::methods::{Grant, GrantSet, Preset};
@@ -246,14 +246,7 @@ pub fn get_info(
     let peers = if disclosure.peers() {
         let state = match facts.peers()? {
             PeerFacts::Offline => InfoP2p::Offline,
-            PeerFacts::Running(peers) => InfoP2p::Running(InfoPeers {
-                public_incoming_socket_count: peers.public_incoming_sockets,
-                public_outgoing_socket_count: peers.public_outgoing_sockets,
-                tor_incoming_socket_count: peers.tor_incoming_sockets,
-                tor_outgoing_socket_count: peers.tor_outgoing_sockets,
-                white_peerlist_size: peers.white_peerlist_size,
-                grey_peerlist_size: peers.grey_peerlist_size,
-            }),
+            PeerFacts::Running(peers) => InfoP2p::Running(peers),
         };
         if matches!(state, InfoP2p::Offline) != chain.offline {
             tracing::error!(

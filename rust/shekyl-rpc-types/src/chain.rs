@@ -263,7 +263,15 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// state. The daemon judges `held_overdue` when that state is read, on
 /// its own clock. A missing origin row is `untracked`. `get_version`
 /// gains nothing.
-pub const CORE_RPC_VERSION_MINOR: u32 = 69;
+/// 3.70: `get_info`'s Peers part reports one row per connector the daemon
+/// runs, `connectors: [{connector, incoming_sockets, outgoing_sockets,
+/// white_peerlist_size, gray_peerlist_size}]`, `clearnet` before `tor`.
+/// A connector the daemon does not run has no row. The six flat keys
+/// (`public_*`/`tor_*` socket counts, `white_peerlist_size`,
+/// `grey_peerlist_size`) are gone; the list sizes they gave were the
+/// clearnet lists alone, so a Tor-only node read `white 0`. A 3.69 reader
+/// refuses the reply. `get_version` gains nothing.
+pub const CORE_RPC_VERSION_MINOR: u32 = 70;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -731,11 +739,12 @@ mod tests {
         // 3.68 is chain sync's cutover: `sync_info` is the sync owner's view
         // (CS-5 §7); it had written 66, and took the minor after both.
         // 3.69 gives `already_in_pool` its required `relay` field
-        // (`held`, `held_overdue`, `published`, `untracked`).
-        assert_eq!(CORE_RPC_VERSION, 196_677);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 69);
+        // (`held`, `held_overdue`, `published`, `untracked`). 3.70 makes
+        // `get_info`'s Peers part one row per connector the daemon runs.
+        assert_eq!(CORE_RPC_VERSION, 196_678);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 70);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 69);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 70);
     }
 
     #[test]

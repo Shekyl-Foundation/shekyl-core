@@ -133,8 +133,7 @@ its response base (`src/rpc/core_rpc_server_commands_defs.h`).
 | | `outgoing_connections_count`, `incoming_connections_count` | the seam board, per direction (RK-Q3) | epee total − board outgoing, clearnet only |
 | | `alt_blocks_count` | chain facts snapshot (§4.2) | `:213`, `0` when restricted |
 | | `rpc_connections_count` | Rust connection tracker, natively | C++ writes `0` (`:230`); Rust patches the JSON afterwards (`rust/shekyl-daemon-rpc/src/handlers/json.rs:82-100`, `handlers/json_rpc.rs:121-131`) |
-| **Peers** → `peers` | four `*_socket_count` | transport (`shekyl_seam_socket_count`) | `:204-207` |
-| | `white_peerlist_size`, `grey_peerlist_size` | peerlist facts | `:216-217` |
+| **Peers** → `peers` | `connectors`: one row per connector the daemon runs, `{connector, incoming_sockets, outgoing_sockets, white_peerlist_size, gray_peerlist_size}` (3.70) | the socket table per connector and direction, and that connector's peer lists (`shekyl-p2p` `facts::peer_counts`) | Rust only |
 | **Transitional** | `restricted` | the listener flag | `:243`; retired by RT-W10, not here |
 | **Removed** (RK-D21) | `emission_era` | none — deleted before capture | `:279-287` |
 
@@ -637,19 +636,19 @@ configured to be; the fault code is never mapped to `false`. When
 
 **Offline is a state on the Peers part, never a zero (Rick, 2026-10-14;
 `CORE_RPC_VERSION` 3.56).** The Peers part says first whether the
-daemon runs P2P: `"p2p": "running"` with its six counts, or `"p2p": "offline"`
-with none. The type is `InfoP2p::{Running(InfoPeers), Offline}`, and the
-decoder refuses `"off"` with any count, `"on"` without all six, a count
-with no `p2p`, and a `p2p` that disagrees with Health's `offline`; the
+daemon runs P2P: `"p2p": "running"` with its `connectors` rows, or
+`"p2p": "offline"` with none. The type is `InfoP2p::{Running(InfoPeers),
+Offline}`, and the decoder refuses `"offline"` with `connectors`,
+`"running"` without them, `connectors` with no `p2p`, and a `p2p` that
+disagrees with Health's `offline`; the
 handler refuses the same disagreement as `Inconsistent`. The state is
 read from what the p2p layer recorded when it read `--offline`
 (`shekyl_p2p_record_offline`, called where `net_node` reads the flag),
 never inferred from the dialer's absence. Both peer-list exports answer
 `FACTS_OFFLINE` and write nothing for it; an online daemon with no
 peer lists is still `NullHandle`. In the facts layer `PeerFacts::Offline`
-carries nothing and `InfoPeersFacts` is reached only through
-`PeerFacts::Running`, and the sizes export is read first, so no count
-is read for an offline daemon. Offline is a state on the other parts
+carries nothing and the rows are reached only through
+`PeerFacts::Running`, so no count is read for an offline daemon. Offline is a state on the other parts
 too: Health carries `offline: true` and no `has_peers`
 (`HealthP2p::{Offline, Running { has_peers }}`), and a shown Status
 carries no connection count (`StatusConnections::{Offline, Running {
@@ -658,6 +657,26 @@ outgoing, incoming }}`). The decoder refuses `has_peers` beside
 counts that disagree with `offline` the same way. The regtest harness and
 the wallet's watchdog read the state: an offline daemon raises
 `DaemonOffline`, not `DaemonPeerless`.
+
+**The Peers part is one row per connector the daemon runs (Rick,
+2026-11-07; `CORE_RPC_VERSION` 3.70).** `connectors` is an array of
+`{connector, incoming_sockets, outgoing_sockets, white_peerlist_size,
+gray_peerlist_size}`, one row for each connector the network plan starts
+(`NetworkPlan::connectors`), in connector declaration order: `clearnet`
+before `tor`, the spellings `/get_stem_tallies` already uses. A connector
+the daemon does not run has no row; the absence says it is not
+configured and is not a zero. A running daemon has at least one row: with
+both connectors off it is offline (IG-Q3), so `"p2p": "running"` beside
+`connectors: []` is refused. `connectors: null` reads as the key absent,
+as every hidden-part key does: refused beside `"running"`, the part
+withheld when `p2p` is absent too. The encoder never writes `null`. Each row is the all-or-none unit: every
+member is required and no other is accepted, and a connector name the
+wire does not know is refused. `InfoPeers::new` refuses rows out of
+connector order or a connector named twice, on both sides of the wire.
+Each row's list sizes are that connector's own lists (white counted
+against the addresses the dialer holds for it, as the disclosure does),
+so a Tor-only node reports its Tor lists. A 3.69 reader refuses the
+reply.
 
 ### 4.3 Economics — RK-D19 — LANDED (amounts decimal since RK-Q2; the supply invariant refuses since RK-Q9)
 
