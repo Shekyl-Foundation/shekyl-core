@@ -146,7 +146,7 @@ Source ──► Form (N workers) ──► Sequencer ──► Validate+Connect
   | `Fault::Corrupt` | RD-Q4 | `refuse_corrupt`, batch poisoned, **halt**, terminal (RD-Q11) |
   | `Fault::Stale(Stale::Seed { retry: Again, .. })` | RD-Q5 | in replay a **driver defect**: recorded and surfaced on first occurrence (the reply carries the validator's `Retry`). The writer stays up so a later caller can re-`form`; this increment's driver treats the error as run-ending. The live-mode bound is the `Retry` in the fault, exercised by injection |
   | `Fault::Stale(Stale::Seed { retry: Exhausted, .. })` | RD-Q5 | **terminal run error**, surfaced |
-  | `Fault::Stale(Stale::Target { .. })` | the target ledger and the store's headers derive different targets | in replay a **driver defect** (`RunFault::StaleTarget`): recorded and surfaced on first occurrence with the claim, the expectation and the `Retry`; the writer stays up. A CEN-D6 refusal on the claim's own derivation is the block's verdict, emitted without forming it |
+  | `Fault::Stale(Stale::Target { .. })` | the target ledger and the store's headers derive different targets | in replay a **driver defect** (`RunFault::StaleTarget`): recorded and surfaced on first occurrence with the claim, the expectation and the `Retry`; the writer stays up. Every derivation yields a target (LWMA-1 floors at one), so a claim is never refused |
   | `Fault::Stale(Stale::Reference { .. })` | the ledger's `(height, root)` for a listed body's `reference_block` is not the chain's, or no claim was made for a reference the chain holds in CEN-I11's window | in replay a **driver defect** (`RunFault::StaleReference`, 2026-10-16): recorded and surfaced on first occurrence with the slot, the reference, both claims and the `Retry`; the writer stays up, the transaction rolled back; never a second verify. A reference outside the window is not claimed and is CEN-I10/I11's refusal, not this |
   | `Fault::Stale(Stale::RuleSet { .. })` | `form` and `validate` were handed different sets | in replay a **driver defect** (the schedule must hand both stages one `&RuleSet`, §3.7): recorded and surfaced, **not retried** — there is no honest re-`form` for it; in the live daemon the same arm marks a schedule boundary crossed mid-formation and the block is re-formed under the in-force set once |
 
@@ -737,7 +737,11 @@ regtest C++ leg (item 8); tag `0x03`.
   CLOSED plan, `docs/completed/DAA_LWMA1.md`) or stays a refusal is the DAA
   owner's ruling — FOLLOWUPS row, `Owner:` the census document that holds the
   rule, falsifier the fixture above (`lwma1_next` returning zero over a
-  strictly-increasing window). Rule-47 lesson recorded in
+  strictly-increasing window). **Ruled 2026-11-07 (Rick): a floor of
+  one** — a difficulty is the expected number of hashes per block, and a
+  block costs at least one (`DAA_LWMA1.md` §5.3 step 10); `Difficulty` is
+  non-zero by construction and the fixture is now
+  `cen_d6_a_slow_window_of_minimal_work_floors_at_one`. Rule-47 lesson recorded in
   `CHAIN_RULES_CRATE.md` §4.4: beside "fold into a type" and "keep the
   refusal", the adversarial-input test has a third outcome — **re-classify**.
 - **RD-F20 (first real run, 2026-09-20) — the derive counter counted

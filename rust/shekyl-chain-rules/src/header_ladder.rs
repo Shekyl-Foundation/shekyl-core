@@ -27,13 +27,12 @@
 //!
 //! [`derive`] is the shared preparation: the tip, the connecting height,
 //! the seed (CEN-D3), the newest-11 window (CEN-C3), the target (CEN-D4,
-//! CEN-D6 the zero guard) and its check against the target the caller
+//! CEN-D6 held by its type) and its check against the target the caller
 //! claimed ([`Stale::Target`] on a mismatch), the cumulative difficulty
 //! after the block, and the comparison (CEN-D1b). The caller builds the
 //! context the predicates read. The alt tier records CEN-D5 beside that
-//! target, and only when a target was produced — a D6 refusal is D4's
-//! verdict, and D5 did not run. `validate` does not record D5: its window
-//! is the recorded chain.
+//! target. `validate` does not record D5: its window is the recorded
+//! chain.
 
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight};
@@ -68,9 +67,8 @@ pub(crate) struct Derived {
 
 /// The definitions both ladders read, over `view`.
 ///
-/// `Ok(Err(refused))` is CEN-D6: the ratified algorithm derived zero. D4
-/// (and D6, D7) are already recorded; the caller records nothing further
-/// for that height. `Err` is the view's fault or a corrupt observation.
+/// D4 (and D6, D7) are recorded by the derivation. `Err` is the view's
+/// fault or a corrupt observation.
 ///
 /// # Errors
 ///
@@ -84,15 +82,12 @@ pub(crate) fn derive<'id, H: HeaderView<'id>>(
     view: &H,
     rule_set: &RuleSet,
     coverage: &mut RuleCoverage,
-) -> Result<Verdict<Derived>, Fault<H::Fault>> {
+) -> Result<Derived, Fault<H::Fault>> {
     let tip = view.tip().map_err(Fault::View)?;
     let connecting = Tip::connecting_height(tip.as_ref());
     D3::verify_seed(view, connecting, seed, attempt.next(), coverage)?;
     let mtp_window = C3::window(view, connecting, coverage)?;
-    let target = match D4::target(view, connecting, rule_set, coverage)? {
-        Ok(target) => target,
-        Err(refused) => return Ok(Err(refused)),
-    };
+    let target = D4::target(view, connecting, rule_set, coverage)?;
     // The caller judged CEN-D1 against this claim; the claim must be what
     // this view's headers derive, or the block was never judged against its
     // real target. A fault, not a verdict (`Stale::Target`).
@@ -105,13 +100,13 @@ pub(crate) fn derive<'id, H: HeaderView<'id>>(
     }
     let cumulative_difficulty = D4::cumulative_after(view, connecting, target)?;
     D1b::record(coverage);
-    Ok(Ok(Derived {
+    Ok(Derived {
         connecting,
         cumulative_difficulty,
         tip,
         mtp_window,
         target,
-    }))
+    })
 }
 
 /// Run the listed header rules in order. The first refusal is the verdict.
