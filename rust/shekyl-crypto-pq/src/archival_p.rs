@@ -142,9 +142,9 @@ use crate::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSecretKey, HybridEd2
 use crate::kem::ML_KEM_768_EK_LEN;
 use crate::keys::{MlKem768DecapKey, SpendPublicKey, SpendSecret, ViewPublicKey, ViewSecret};
 use crate::montgomery;
-use crate::onion::OnionKeypair;
 use crate::signature::{HybridPublicKey, HybridSecretKey, ML_DSA_65_SECRET_KEY_LENGTH};
 use crate::CryptoError;
+use shekyl_onion_key::OnionKeypair;
 
 // --- frozen info labels ------------------------------------------------------
 //
@@ -394,7 +394,7 @@ pub(crate) fn hs_id_seed(
     p_expand_32(master_seed, net, ARCHIVAL_P_HS_ID_INFO, p_slot)
 }
 
-/// The GF-9 serving seed ([`hs_id_seed`]), for the known-answer tests that
+/// The GF-9 serving seed (`hs_id_seed`), for the known-answer tests that
 /// pin it. Compiled only for this crate's tests and under the test-only
 /// `test-utils` feature, which no shipped binary enables
 /// (`scripts/ci/check_test_only_features.py`). Production takes the
@@ -409,7 +409,7 @@ pub fn derive_p_hs_id_seed(
     hs_id_seed(master_seed, net, p_slot)
 }
 
-/// A persona's v3 onion keypair — GF-9: the [`hs_id_seed`] for
+/// A persona's v3 onion keypair — GF-9: the `hs_id_seed` for
 /// `(master_seed, net, p_slot)`, expanded. The seed is wiped before this
 /// returns and never leaves this crate; the keypair is what the serving path
 /// holds and hands Tor.
@@ -601,8 +601,10 @@ impl ArchivalPKeys {
     }
 
     /// The persona's onion keypair, borrowed. Its public key is the bond
-    /// record's serving endpoint; a serving request takes
-    /// [`OnionKeypair::duplicate`], so the copy is named at the call.
+    /// record's serving endpoint. A serving request takes
+    /// [`OnionKeypair::duplicate`], a second owner of the same key. The
+    /// bytes Tor receives are a separate copy: `*keypair.expanded_secret()`
+    /// into one `ED25519-V3` blob (`OnionIdentity::mint_onion_key`).
     #[must_use]
     pub fn onion_keypair(&self) -> &OnionKeypair {
         &self.onion

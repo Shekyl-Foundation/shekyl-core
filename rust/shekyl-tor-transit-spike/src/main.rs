@@ -60,6 +60,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kameo::actor::{ActorRef, Spawn as _};
+use shekyl_onion_key::OnionKeypair;
 use shekyl_tor_control_client::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow};
 use shekyl_tor_control_client::control::{
     BootstrapReadiness, BootstrapState, Command, DiskWrites, EventSink, TorControlClient,
@@ -67,7 +68,7 @@ use shekyl_tor_control_client::control::{
 use shekyl_tor_control_client::control::{
     ManagedTor, SocksPort, SocksTimeout, TorControlClientConfig, TorLaunch,
 };
-use shekyl_tor_control_client::onion_identity::{OnionIdentity, OnionKeypair};
+use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 

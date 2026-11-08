@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
+use shekyl_onion_key::OnionKeypair;
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
     ask_timed, evaluate_add_onion_reply, AddOnion, AddOnionReplyError, AskError, Asked,
@@ -33,7 +34,7 @@ use shekyl_tor_control_client::control::{
     OnionPort, OnionPow, Resume, ServiceId, SocksTimeout, TorControlClient, TorExit,
 };
 use shekyl_tor_control_client::directory_cache;
-use shekyl_tor_control_client::onion_identity::{OnionIdentity, OnionKeypair};
+use shekyl_tor_control_client::onion_identity::OnionIdentity;
 
 use crate::data_dir::{EphemeralDataDir, KeptLog};
 
@@ -298,7 +299,7 @@ impl DaemonTorControl {
     }
 
     /// The boot's onion identity, from an ephemeral keypair
-    /// (`shekyl_crypto_pq::onion::OnionKeypair::ephemeral`, which draws its
+    /// (`shekyl_onion_key::OnionKeypair::ephemeral`, which draws its
     /// seed from the OS CSPRNG and keeps it). The supervisor holds one until
     /// the daemon stops and passes that same value to every
     /// [`Self::publish`]; it is the keypair Tor is handed, and nothing more.

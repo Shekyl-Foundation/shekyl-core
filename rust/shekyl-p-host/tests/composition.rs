@@ -29,6 +29,7 @@ use shekyl_curve_tree::{
     leaves_per_segment, BlockHeight, Gindex, LeafEntry, LeafStore, OutputIdentity,
     PostureDeclaration, SegmentPin, TargetKind, TreePosition,
 };
+use shekyl_onion_key::OnionKeypair;
 use shekyl_p_host::{
     DaemonTipCache, HostError, PassKey, PersonaServing, PersonaServingHost, PinError, PinReport,
     PinnedServeSet, PriorityFailures, RefusingKey, ReportedSet, ServeCounters, ServeObligation,
@@ -38,8 +39,8 @@ use shekyl_p_serve::HeldShardSource;
 use shekyl_p_serve::{TestKeySigner, IDENTITY_ENVELOPE_LEN};
 use shekyl_p_store::{BodyStore, StoreKey};
 use shekyl_tor_control_wallet::service::{
-    EventSink, OnionIdentity, OnionKeypair, ServingPosture, SupervisorPolicy, TorBinarySource,
-    TorPosture, WalletTorControlConfig,
+    EventSink, OnionIdentity, ServingPosture, SupervisorPolicy, TorBinarySource, TorPosture,
+    WalletTorControlConfig,
 };
 use shekyl_types::ShardId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

@@ -272,9 +272,9 @@ pub(crate) async fn publish_onion(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_onion_key::OnionKeypair;
     use shekyl_tor_control_client::control::onion::evaluate_add_onion_reply;
     use shekyl_tor_control_client::control::ReplyFramer;
-    use shekyl_tor_control_client::onion_identity::OnionKeypair;
 
     fn identity_and_id() -> (OnionIdentity, ServiceId) {
         let identity = OnionIdentity::from_keypair(OnionKeypair::ephemeral().expect("OS CSPRNG"));

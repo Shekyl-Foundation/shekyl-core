@@ -57,6 +57,7 @@ CRYPTO_CRATES = (
     "shekyl-bulletproofs",  # range proofs over commitment masks
     "shekyl-ct-balance",  # commitment-mask balancing
     "shekyl-curve-primitives",
+    "shekyl-onion-key",  # v3 onion seed expansion and its public key
 )
 # Vendored downstream (rule 10); not ours to police.
 EXCLUDED_CRATES = ("shekyl-oxide",)

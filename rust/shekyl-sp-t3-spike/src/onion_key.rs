@@ -9,8 +9,9 @@
 //!
 //! The persona's onion keypair is `shekyl-crypto-pq`'s
 //! [`derive_p_onion_keypair`] (the GF-9 HS-identity label, frozen under
-//! `ARCHIVAL_P_DERIVE_V2`; the RFC 8032 expansion and the public key are
-//! computed there). The rend-spec-v3 §6 `.onion` address and tor's
+//! `ARCHIVAL_P_DERIVE_V2`). The RFC 8032 expansion and the public key are
+//! `shekyl-onion-key`'s; the derivation calls them and the seed does not
+//! leave `shekyl-crypto-pq`. The rend-spec-v3 §6 `.onion` address and tor's
 //! `ED25519-V3` key blob are
 //! [`shekyl_tor_control_client::onion_identity::OnionIdentity`]'s.
 //!
@@ -62,7 +63,7 @@ mod tests {
     /// composition without repeating the network at every call. The context
     /// choice is irrelevant to what they assert (the expansion's and the
     /// public key's pins, the seed's cross-arch vectors included, live in
-    /// `shekyl-crypto-pq`: `onion.rs` and `kat_archival_p_derive_v2`).
+    /// `shekyl-onion-key` and `kat_archival_p_derive_v2`).
     fn identity(seed: &[u8; 64], slot: u32) -> OnionIdentity {
         derive_onion_identity(seed, Network::Mainnet, PSlot::from_raw(slot))
     }

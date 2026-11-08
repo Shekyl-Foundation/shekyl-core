@@ -143,9 +143,11 @@ impl Message<PersonaIdentityOf> for StakeEngine {
 ///
 /// The keypair stays in the bundle for the persona's life, on the heap and
 /// wiped when the bundle drops, and under the `on_stop` wipe. Each request
-/// takes [`OnionKeypair::duplicate`](shekyl_crypto_pq::onion::OnionKeypair::duplicate), the one way to copy a serving secret,
-/// because [`OnionIdentity`] is deliberately not `Clone`: holding the
-/// expanded bytes *is* the persona on the network, so every copy is named
+/// takes `shekyl_onion_key::OnionKeypair::duplicate`, a second owner of the
+/// same key. The bytes Tor receives are a separate copy:
+/// `OnionIdentity::mint_onion_key` reads `expanded_secret` into one
+/// `ED25519-V3` blob. [`OnionIdentity`] is deliberately not `Clone`: holding
+/// the expanded bytes *is* the persona on the network, so every copy is named
 /// where it is made.
 ///
 /// A read-only projection like [`PersonaIdentityOf`]: no activation, no

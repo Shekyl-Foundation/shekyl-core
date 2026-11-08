@@ -33,8 +33,11 @@ tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "ma
 kameo = { workspace = true }
 # OS CSPRNG for the probe's per-boot isolation pair and the data directory's
 # name — the same source the wallet's vanguard rotation draws from. The onion
-# key's seed is drawn inside `shekyl-crypto-pq` (`OnionKeypair::ephemeral`).
+# key's seed is drawn inside `shekyl-onion-key` (`OnionKeypair::ephemeral`).
 getrandom = "0.2"
+# The boot's onion (`OnionKeypair::ephemeral`). The client encodes it; this
+# crate mints it, so the keypair crate is a direct edge.
+shekyl-onion-key = { path = "../shekyl-onion-key" }
 # Wipe-on-drop for the probe's isolation username (35-secure-memory).
 zeroize = { version = "1", default-features = false }
 

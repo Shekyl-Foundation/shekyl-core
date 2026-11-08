@@ -8,9 +8,9 @@
 //! key. The caller supplies the keypair; this crate does not know whether it
 //! is a persona's durable onion or the daemon's ephemeral one.
 //!
-//! The keypair is `shekyl_crypto_pq::onion::OnionKeypair`. The RFC 8032
-//! expansion and the public key are secret-byte operations and live there
-//! (rule 36): a persona's comes from
+//! The keypair is `shekyl_onion_key::OnionKeypair`. The RFC 8032 expansion
+//! and the public key are secret-byte operations and live there (rule 36):
+//! a persona's comes from
 //! `shekyl_crypto_pq::archival_p::derive_p_onion_keypair` (the GF-9 serving
 //! label, network-scoped and `p_slot`-bound, frozen under
 //! `ARCHIVAL_P_DERIVE_V2`), the daemon's from `OnionKeypair::ephemeral`. This
@@ -27,10 +27,7 @@
 //! away from also holding `bond_spend_pk`'s authority, and the type boundary
 //! makes that edit unrepresentable on the serving path.
 
-/// The keypair an [`OnionIdentity`] is built from, re-exported so a caller
-/// of this crate names it without a second dependency edge.
-pub use shekyl_crypto_pq::onion::OnionKeypair;
-use shekyl_crypto_pq::onion::ONION_EXPANDED_SECRET_BYTES;
+use shekyl_onion_key::{OnionKeypair, ONION_EXPANDED_SECRET_BYTES};
 
 use crate::control::onion::{OnionKey, ServiceId, ONION_KEY_BYTES};
 
@@ -137,8 +134,8 @@ mod tests {
     }
 
     // The expansion, the public key and the fixed-seed address are pinned in
-    // `shekyl-crypto-pq` (`onion.rs`, and `kat_archival_p_derive_v2`'s
-    // `hs_id_pubkey` vectors), where they are computed.
+    // `shekyl-onion-key`, and a persona seed's public key in
+    // `kat_archival_p_derive_v2`'s `hs_id_pubkey` vectors.
 
     #[test]
     fn public_key_is_the_service_ids_preimage() {
