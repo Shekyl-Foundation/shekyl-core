@@ -297,11 +297,7 @@ mod tests {
     use crate::scenarios::baseline;
 
     fn shard(age: f64) -> Shard {
-        Shard {
-            age,
-            size_seed: 0.0,
-            size: 1.0,
-        }
+        Shard { age }
     }
 
     /// A slash exit burns exactly the posted bond and deactivates; a

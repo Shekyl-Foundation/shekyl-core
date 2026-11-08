@@ -4667,6 +4667,15 @@ the protocol parameters — and that, not more sweeps, is where the next work be
 
 ## L19 — composition variance: the aggregate bar certifies a failing heavy band (2026-09-26)
 
+> **The composition axis is deleted (2026-11-08, D6).** `SHT-Q2` cuts a shard
+> by archival length, so a shard is `SHARD_LENGTH` bytes to within one
+> transaction in any era, and the per-shard size dispersion L19–L19j model is
+> not a property of the protocol. Re-run on `SHARD_LENGTH` (P9, EUP-3 check
+> half), the covered base is CLEAR with every delta 0 on the registered arm.
+> The axis, the `T = 200` partition (`REGISTERED_SHARD_TX_COUNT`), the
+> composition scenarios and the five `--f34-*` modes were last at `40f98fc44`, the
+> citation for every figure in L19–L19j.
+
 **The question.** `PDM-Q6` item 5 made a shard a fixed count of transactions
 (`T = 200` storage ids, `archival_shard_tx_count`), and retired `SHARD_BYTES` as
 consensus. The partition is right — byte lengths live in the bodies being discarded, so

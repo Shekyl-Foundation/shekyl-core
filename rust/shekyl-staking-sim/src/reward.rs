@@ -427,14 +427,7 @@ mod tests {
 
     fn world(holdings: Vec<Vec<bool>>, ages: &[f64]) -> World {
         use crate::model::{Actor, Shard};
-        let shards = ages
-            .iter()
-            .map(|&age| Shard {
-                age,
-                size_seed: 0.0,
-                size: 1.0,
-            })
-            .collect();
+        let shards = ages.iter().map(|&age| Shard { age }).collect();
         let actors = holdings
             .iter()
             .map(|_| Actor {

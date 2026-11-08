@@ -19,7 +19,7 @@
 //! operating cost per held shard. `price` is the previous epoch's work→reward exchange
 //! rate, carrying the competitive-share servo's dilution into the marginal decision.
 
-use crate::model::{bond_age, bond_duration, fetch_latency, CompositionParams, World};
+use crate::model::{bond_age, bond_duration, fetch_latency, World};
 use crate::reward::{shard_value, RewardArm};
 use crate::rng::SplitMix64;
 
@@ -42,9 +42,6 @@ pub struct AgentParams {
     /// Storage units a deep shard occupies (L8 storage leg / gate-5 granularity lever).
     /// `1.0` = iteration-1 behavior (every shard costs one unit).
     pub deep_shard_size: f64,
-    /// Composition axis: per-shard size multiplier on top of `deep_shard_size`
-    /// (`spread = 1.0` ⇒ every shard one unit ⇒ byte-identical).
-    pub comp: CompositionParams,
     // --- L9 duration axis (iteration 2; inert when `bond_dur_base == 0`) ---
     /// Flat retention-commitment horizon in epochs.
     pub bond_dur_base: f64,
@@ -232,16 +229,12 @@ fn best_response(
     let cap_storage = cap_storage as f64;
     // Storage a shard occupies: deep shards cost `deep_shard_size` units (the L8 storage
     // leg / granularity lever); hot shards cost one unit.
-    // Composition axis: scaled per shard, so a heavy shard both eats more of the storage
-    // budget and costs more to carry — while its VALUE term below stays byte-blind, which
-    // is channel 1's actual shape.
     let stor_cost = |s: usize| {
-        let base = if world.shards[s].is_deep(ap.deep_threshold) {
+        if world.shards[s].is_deep(ap.deep_threshold) {
             ap.deep_shard_size
         } else {
             1.0
-        };
-        base * ap.comp.size(&world.shards[s])
+        }
     };
 
     let mut new_held = vec![false; n_shard];
@@ -277,8 +270,7 @@ fn best_response(
         let deep = world.shards[s].is_deep(ap.deep_threshold);
         let bonds = ap.bonds(&world.shards[s]);
         let value = shard_value(ap.reward_arm, price, r_eff, age, age_weight);
-        let mut cost = ap.storage_unit_cost * ap.comp.size(&world.shards[s])
-            + ap.carry.per_shard(bonds, bond_cost(age));
+        let mut cost = ap.storage_unit_cost + ap.carry.per_shard(bonds, bond_cost(age));
         // Anticipatory lock cost: acquiring a deep shard commits storage for its
         // (age-scaled) duration, foregone if value later drops. Charged only on a
         // *fresh* acquisition (not already held), proportional to the horizon — so
@@ -379,12 +371,9 @@ fn best_response(
         let deep = world.shards[s].is_deep(ap.deep_threshold);
         if new_held[s] && !was_held[s] {
             // Egress is the shard's own bytes (the possession read is whole-shard,
-            // `SF-D1`), so the backfill lag scales with size too.
-            world.inflight[actor][s] = fetch_latency(
-                deep,
-                ap.deep_shard_size * ap.comp.size(&world.shards[s]),
-                ap.fetch_latency_per_unit,
-            );
+            // `SF-D1`), so the backfill lag scales with its size.
+            world.inflight[actor][s] =
+                fetch_latency(deep, ap.deep_shard_size, ap.fetch_latency_per_unit);
         } else if !new_held[s] {
             world.inflight[actor][s] = 0;
         }
