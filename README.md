@@ -541,53 +541,31 @@ launch.
 
 This section contains general instructions for debugging failed installs or runtime issues. First, ensure you are running the latest version built from this repository.
 
-### Obtaining stack traces and core dumps on Unix systems
+### Obtaining stack traces on Unix systems
 
-We generally use the tool `gdb` (GNU debugger) to provide stack trace functionality, and `ulimit` to provide core dumps in builds which crash or segfault.
+`shekyld`, `shekyl-cli` and `shekyl-wallet-rpc` harden their process before they read an argument: the core-file limit is zero on both bounds, so no crash writes a core file. `ulimit -c unlimited` changes nothing, because the process cannot raise the limit again, and `coredumpctl` has nothing to show. On Linux the process is also not dumpable, so only root can attach a debugger to it. On FreeBSD tracing is disabled for every process, root included. On macOS the core limit is the only restriction.
 
-* To use `gdb` in order to obtain a stack trace for a build that has stalled:
+What each binary prints on its way down:
 
-Run the build.
+* A panic: `shekyld` writes one line to standard error and to its log, naming the thread, the source location and the message, then aborts. `shekyl-cli` and `shekyl-wallet-rpc` print Rust's standard panic message; run them with `RUST_BACKTRACE=1` in their environment to add the stack.
+* A stack overflow: the runtime prints "has overflowed its stack" and the process ends by `SIGABRT` (on FreeBSD by `SIGSEGV`, without the message).
+* Any other fault ends the process by its signal.
 
-Once it stalls, enter the following command:
-
-```bash
-gdb /path/to/shekyld `pidof shekyld`
-```
-
-Type `thread apply all bt` within gdb in order to obtain the stack trace
-
-* If however the core dumps or segfaults:
-
-Enter `ulimit -c unlimited` on the command line to enable unlimited filesizes for core dumps
-
-Enter `echo core | sudo tee /proc/sys/kernel/core_pattern` to stop cores from being hijacked by other tools
-
-Run the build.
-
-When it terminates with an output along the lines of "Segmentation fault (core dumped)", there should be a core dump file in the same directory as `shekyld`. It may be named just `core`, or `core.xxxx` with numbers appended.
-
-You can now analyse this core dump with `gdb` as follows:
+To get a stack trace from a process that hangs, attach `gdb` as root (Linux):
 
 ```bash
-gdb /path/to/shekyld /path/to/dumpfile`
+sudo gdb -p "$(pidof shekyld)"
 ```
 
-Print the stack trace with `bt`
+Type `thread apply all bt` within gdb to print every thread's stack.
 
- * If a program crashed and cores are managed by systemd, the following can also get a stack trace for that crash:
+To get a stack trace from a crash on Linux, start the binary under `gdb` from the beginning. The debugger is attached before the hardening runs, and it stays attached:
 
 ```bash
-coredumpctl -1 gdb
+gdb --args /path/to/shekyld <options>
 ```
 
-#### To run Shekyl within gdb:
-
-Type `gdb /path/to/shekyld`
-
-Pass command-line options with `--args` followed by the relevant arguments
-
-Type `run` to run shekyld
+Type `run`. When the process stops on the fault, type `thread apply all bt`.
 
 ### Analysing memory corruption
 
