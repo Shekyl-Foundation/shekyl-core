@@ -328,8 +328,9 @@ fn best_response(
     // C-1) = the full C-epoch freeze; do not "fix" the decrement-before-act by pushing `+1` or
     // the drop epoch is double-counted. Pushed per dropped shard, so re-adding the same shard
     // inside the window needs *fresh* capital (the 2× anti-dodge bite — P2B-7 Pin 3).
-    // Slash-style losses (L11 exit, age-1 recycle) clear holdings outside `best_response` and
-    // never reach here, so only voluntary drops cool. Inert when `release_cooldown_epochs == 0`.
+    // Exits (a voluntary L11 `Release`, an L17 slash) and the age-1 recycle clear holdings
+    // outside `best_response` and never reach here, so only voluntary drops cool. Inert when
+    // `release_cooldown_epochs == 0`.
     if ap.release_cooldown_epochs > 0 && bonded {
         for s in 0..n_shard {
             if was_held[s] && !new_held[s] && world.shards[s].is_deep(ap.deep_threshold) {

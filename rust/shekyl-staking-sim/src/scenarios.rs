@@ -17,7 +17,8 @@ use crate::model::{
     r_target, Actor, CompositionParams, EraShape, Shard, World, AGE_WEIGHT, BOND_FLOOR,
 };
 use crate::participation::{
-    admit_entrants, bonded_active_count, foundation_floor_aged, process_exits, ParticipationParams,
+    admit_entrants, bonded_active_count, foundation_floor_aged, process_exits, slash_exit,
+    ParticipationParams,
 };
 use crate::retrieval::{
     r_target_for_availability, r_target_for_durability, serving_availability, serving_durability,
@@ -508,6 +509,11 @@ pub struct ScenarioResult {
     /// re-seed path (bandwidth-bound when `reseed_rate > 0`; see `sole_source_*`).
     /// On shock-free dynamic scenarios this is the frontier-noise baseline.
     pub deep_extinct_total: f64,
+    /// Bond capital burned by slash exits over the run (A18): the posted bond of
+    /// every L17 shock-exited actor. Zero wherever no shock fires.
+    pub slashed_capital: f64,
+    /// Slash exits over the run (A18).
+    pub slash_exits: usize,
     /// **Post-shock market wipe-out events** (swan-2 / W1, re-read swan-4): the subset
     /// of `deep_extinct_total` at/after the shock epoch — the shock-attributable
     /// availability exposure. The number that distinguishes *metric recovery* (`shkRec`)
@@ -659,6 +665,26 @@ pub struct ScenarioResult {
 }
 
 impl SimConfig {
+    /// The agent's parameters for this scenario.
+    pub(crate) fn agent_params(&self) -> AgentParams {
+        AgentParams {
+            storage_unit_cost: self.storage_unit_cost,
+            bond_rate: self.bond_rate,
+            bond_age_scale: self.bond_age_scale,
+            bond_carry: self.bond_carry,
+            deep_threshold: self.deep_threshold,
+            deep_shard_size: self.deep_shard_size,
+            comp: self.composition(),
+            bond_dur_base: self.bond_dur_base,
+            bond_dur_age_scale: self.bond_dur_age_scale,
+            lock_anticipation: self.lock_anticipation,
+            fetch_latency_per_unit: self.fetch_latency_per_unit,
+            acq_rate: self.acq_rate,
+            reseed_rate: self.reseed_rate,
+            release_cooldown_epochs: self.release_cooldown_epochs,
+            dodge_pref: self.dodge_pref,
+        }
+    }
     /// The composition axis this scenario runs under.
     pub fn composition(&self) -> CompositionParams {
         CompositionParams {
@@ -966,23 +992,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         age_weight: cfg.age_weight,
         curve_impl: cfg.curve_impl,
     };
-    let ap = AgentParams {
-        storage_unit_cost: cfg.storage_unit_cost,
-        bond_rate: cfg.bond_rate,
-        bond_age_scale: cfg.bond_age_scale,
-        bond_carry: cfg.bond_carry,
-        deep_threshold: cfg.deep_threshold,
-        deep_shard_size: cfg.deep_shard_size,
-        comp: cfg.composition(),
-        bond_dur_base: cfg.bond_dur_base,
-        bond_dur_age_scale: cfg.bond_dur_age_scale,
-        lock_anticipation: cfg.lock_anticipation,
-        fetch_latency_per_unit: cfg.fetch_latency_per_unit,
-        acq_rate: cfg.acq_rate,
-        reseed_rate: cfg.reseed_rate,
-        release_cooldown_epochs: cfg.release_cooldown_epochs,
-        dodge_pref: cfg.dodge_pref,
-    };
+    let ap = cfg.agent_params();
     let pp = ParticipationParams {
         entry_per_epoch: cfg.entry_per_epoch,
         patience: cfg.participation_patience,
@@ -1089,6 +1099,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // sourceless. Flags reset when the slot leaves the deep band (recycle path).
     let mut ext_scan = ExtinctionScan::new(world.shards.len());
     let mut deep_extinct_total = 0usize;
+    // A18: bond capital burned by slash exits, and how many there were.
+    let mut slashed_capital = 0.0_f64;
+    let mut slash_exits = 0usize;
     let mut shock_deep_extinct = 0usize;
     let mut shock_extinct_bands = [0usize; N_BANDS];
     let mut deep_extinct_floored_total = 0usize;
@@ -1206,7 +1219,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                     let mut x = 0.0_f64;
                     for _ in 0..k {
                         let i = (x as usize).min(active_idx.len() - 1);
-                        world.deactivate(active_idx[i]);
+                        slashed_capital += slash_exit(&mut world, active_idx[i], &ap);
+                        slash_exits += 1;
                         x += stride;
                     }
                 }
@@ -1220,7 +1234,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             if cfg.shock_exit_domains > 0 {
                 for a in 0..world.actors.len() {
                     if world.active[a] && a % cfg.shock_exit_domains == 0 {
-                        world.deactivate(a);
+                        slashed_capital += slash_exit(&mut world, a, &ap);
+                        slash_exits += 1;
                     }
                 }
             }
@@ -1244,7 +1259,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 let k = (ranked.len() as f64 * cfg.shock_exit_top_deep).round() as usize;
                 ranked.sort_by(|x, y| y.0.cmp(&x.0).then(x.1.cmp(&y.1)));
                 for &(_, a) in ranked.iter().take(k) {
-                    world.deactivate(a);
+                    slashed_capital += slash_exit(&mut world, a, &ap);
+                    slash_exits += 1;
                 }
             }
             // swan-2 / W1: scan for orphaned deep shards *at the shock instant*,
@@ -1984,6 +2000,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         fee_deep_under_peak,
         shock_deep_under_peak,
         deep_extinct_total: deep_extinct_total as f64,
+        slashed_capital,
+        slash_exits,
         shock_deep_extinct: shock_deep_extinct as f64,
         shock_extinct_bands: shock_extinct_bands.iter().map(|&x| x as f64).collect(),
         deep_extinct_floored_total: deep_extinct_floored_total as f64,

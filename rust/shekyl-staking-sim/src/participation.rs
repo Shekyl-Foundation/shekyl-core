@@ -48,7 +48,7 @@ pub struct ParticipationParams {
 /// the (age-dependent) per-shard bond. This is the denominator of the participation
 /// yield: capital actually at stake, not the actor's whole endowment (undeployed
 /// capital is free to pursue the alternative, so it is not "lost to staking").
-fn committed_bond_capital(world: &World, a: usize, ap: &AgentParams) -> f64 {
+pub(crate) fn committed_bond_capital(world: &World, a: usize, ap: &AgentParams) -> f64 {
     if ap.bond_rate <= 0.0 {
         return 0.0;
     }
@@ -64,6 +64,21 @@ fn committed_bond_capital(world: &World, a: usize, ap: &AgentParams) -> f64 {
         }
     }
     cap
+}
+
+/// A slash exit (A18): production's slash burns the bond, so the actor's posted
+/// bond capital leaves its endowment before it is deactivated. An actor that
+/// re-enters later bonds from what is left. Returns the capital burned.
+///
+/// The sim's slash sites are the L17 shock exits: an operator that vanishes
+/// stops serving, the failure window slashes every pair it held, and nobody
+/// is left to post a `Release`. A voluntary exit is a `Release` and goes
+/// through `World::deactivate` alone.
+pub(crate) fn slash_exit(world: &mut World, a: usize, ap: &AgentParams) -> f64 {
+    let burned = committed_bond_capital(world, a, ap);
+    world.actors[a].capital = (world.actors[a].capital - burned).max(0.0);
+    world.deactivate(a);
+    burned
 }
 
 /// Per-epoch flow cost for actor `a`: storage on every held shard, bond-carry on each
@@ -260,4 +275,47 @@ pub fn foundation_floor_aged(
     let x = ((age - deep_threshold) / span).clamp(0.0, 1.0);
     let factor = 1.0 + tilt * (2.0 * x - 1.0);
     (base as f64 * factor).round().max(0.0) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Actor, Shard};
+    use crate::scenarios::baseline;
+
+    fn shard(age: f64) -> Shard {
+        Shard {
+            age,
+            size_seed: 0.0,
+            size: 1.0,
+        }
+    }
+
+    /// A slash exit burns exactly the posted bond and deactivates; a
+    /// voluntary exit (`deactivate` alone) leaves capital whole.
+    #[test]
+    fn a_slash_burns_the_posted_bond_and_a_release_does_not() {
+        let ap = baseline().agent_params();
+        let actor = Actor {
+            storage_capacity: 4,
+            capital: 20.0,
+            is_whale: false,
+            reservation: 0.0,
+        };
+        // Two deep shards and one hot shard held: the bond is two floors of
+        // `bond_rate`, and the hot shard posts none.
+        let mut world = World::new(
+            vec![shard(0.9), shard(0.6), shard(0.1)],
+            vec![actor.clone(), actor],
+        );
+        for w in [0, 1] {
+            world.holdings[w] = vec![true, true, true];
+        }
+        let burned = slash_exit(&mut world, 0, &ap);
+        assert_eq!(burned, 2.0 * ap.bond_rate);
+        assert_eq!(world.actors[0].capital, 20.0 - 2.0 * ap.bond_rate);
+        assert!(!world.active[0]);
+        world.deactivate(1);
+        assert_eq!(world.actors[1].capital, 20.0);
+    }
 }
