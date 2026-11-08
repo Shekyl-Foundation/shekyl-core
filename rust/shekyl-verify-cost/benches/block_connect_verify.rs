@@ -371,7 +371,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use rand_core::OsRng;
 
 use shekyl_verify_cost::connect::{
-    bp_verify, bp_verify_block, build_connect_tx, parse_wire, pqc_verify, ConnectTxFixture,
+    bp_verify, bp_verify_block, build_bp, build_connect_tx, parse_wire, pqc_verify, ConnectTxFixture,
 };
 use shekyl_verify_cost::relay::{admission_verify, masks_check, membership_verify, ChunkLayout};
 
@@ -492,6 +492,33 @@ fn bench_budget_fill(c: &mut Criterion) {
     group.finish();
 }
 
+/// Proofs in one block's batch at the C++ capture's shape: 46 two-output
+/// proofs, the count the zone fills at the argmax (`gap7_block_verify_pi4_cpp_…`,
+/// `shipped batched VERIFY, 46 x 2-output proofs`).
+const BLOCK_BATCH_PROOFS: usize = 46;
+
+/// A block's range proofs as one batch, alone: [`BLOCK_BATCH_PROOFS`]
+/// two-output proofs through `bp_verify_block`, the fold `form` runs after
+/// its slot loop (CEN-H19). Read per proof (the time over 46); the C++
+/// capture reported the same shape the same way.
+fn bench_bp_batch(c: &mut Criterion) {
+    let mut group = c.benchmark_group("block_connect_bp_batch");
+    group.sample_size(10);
+
+    let fx = build_bp(&mut OsRng, 2);
+    assert!(bp_verify_block(&fx, BLOCK_BATCH_PROOFS), "the block's batch verifies");
+    group.throughput(Throughput::Elements(
+        u64::try_from(BLOCK_BATCH_PROOFS).expect("fits u64"),
+    ));
+    group.bench_with_input(
+        BenchmarkId::new("bp_batch46", "out2"),
+        &fx,
+        |b, f| b.iter(|| assert!(bp_verify_block(f, BLOCK_BATCH_PROOFS))),
+    );
+
+    group.finish();
+}
+
 fn bench_randomx_once(c: &mut Criterion) {
     let mut group = c.benchmark_group("block_connect_pow");
     group.sample_size(10);
@@ -511,5 +538,11 @@ fn bench_randomx_once(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_terms, bench_budget_fill, bench_randomx_once);
+criterion_group!(
+    benches,
+    bench_terms,
+    bench_bp_batch,
+    bench_budget_fill,
+    bench_randomx_once
+);
 criterion_main!(benches);

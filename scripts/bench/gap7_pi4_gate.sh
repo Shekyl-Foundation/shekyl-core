@@ -27,6 +27,9 @@
 # Phases (run separately):
 #   ./scripts/bench/gap7_pi4_gate.sh pins   # fixture positive limbs on aarch64 (run FIRST)
 #   ./scripts/bench/gap7_pi4_gate.sh rust   # terms sweep + multi-point budget fill + pow
+#   ./scripts/bench/gap7_pi4_gate.sh rust 'bp_lone|bp_batch46'
+#                                           # only the benches the regex names (criterion's
+#                                           # filter); the header records it
 #
 # Both run `shekyl-verify-cost`'s instrument (`benches/block_connect_verify.rs`,
 # `tests/block_connect_pins.rs`). The Bp+ verifier it times is the shipped
@@ -51,6 +54,7 @@ RUST_ROOT="${REPO_ROOT}/rust"
 OUT_DIR="${REPO_ROOT}/docs/benchmarks"
 
 PHASE="${1:-}"
+FILTER="${2:-}"
 if [[ -z "${PHASE}" ]] || [[ ! "${PHASE}" =~ ^(pins|rust)$ ]]; then
   echo "usage: $0 pins|rust" >&2
   exit 2
@@ -85,9 +89,11 @@ thermal_sampler() {
   echo "# git_rev=$(git -C "${REPO_ROOT}" rev-parse HEAD)"
   echo "# rustc=$(rustc -V 2>/dev/null || echo NA)"
   echo "# RUSTFLAGS=${RUSTFLAGS:-<unset>} (unset = the shipping generic-aarch64 regime; cortex-a72 flags SIGILL RandomX on BCM2711)"
+  echo "# filter=${FILTER:-<none>} (criterion's: only the benches the regex names run)"
   echo "# randomx_mode=light/cache BY CONSTRUCTION — not a configuration that can drift between runs: shekyl-pow-randomx is a cache+VM substrate with no dataset arm (rust/shekyl-pow-randomx/src/lib.rs:46-72)"
   echo "# storage_deviation: run from SD (mmcblk0p2); §8.2 row's USB3 SSD present but unmounted — not mounted deliberately; measured path is CPU-bound and in-memory, so the deviation does not enter verify_floor"
   echo "# ram_as_found: 8 GB (Rev 1.4 board) vs the June row's 4 GB — rule 76 names the MODEL and Model B matches; RandomX is light/cache (~256 MB) and the FCMP terms are CPU-bound, so 8 vs 4 GB cannot bind HERE — a future floor measurement that IS memory-sensitive must not inherit this row's device as 'the floor'"
+  echo "# load_as_found: loadavg $(cut -d' ' -f1-3 /proc/loadavg); busiest: $(ps -eo pcpu=,comm= --sort=-pcpu | head -3 | awk '{printf "%s %s%%; ", $2, $1}')"
   echo "# thermal_start: $(read_temp)"
 } | tee "${OUT_FILE}"
 
@@ -104,7 +110,11 @@ case "${PHASE}" in
   rust)
     # Terms sweep + FULL multi-point budget fill + pow — the increments are
     # measured here (rule 76 §4), not scaled from anywhere.
-    (cd "${RUST_ROOT}" && cargo bench -p shekyl-verify-cost --bench block_connect_verify) 2>&1 | tee -a "${OUT_FILE}"
+    if [[ -n "${FILTER}" ]]; then
+      (cd "${RUST_ROOT}" && cargo bench -p shekyl-verify-cost --bench block_connect_verify -- "${FILTER}") 2>&1 | tee -a "${OUT_FILE}"
+    else
+      (cd "${RUST_ROOT}" && cargo bench -p shekyl-verify-cost --bench block_connect_verify) 2>&1 | tee -a "${OUT_FILE}"
+    fi
     ;;
 esac
 
