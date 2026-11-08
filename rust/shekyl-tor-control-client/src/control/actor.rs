@@ -628,7 +628,7 @@ pub struct TorControlClientConfig {
 /// How the [`TorControlClient`] actor gets its control port (DQ-T0.1 process ownership).
 pub enum TorLaunch {
     /// The actor **spawns and owns** the `tor` process — the production path. Shutdown
-    /// closes the owning connection, waits [`SHUTDOWN_GRACE`], then kills and reaps.
+    /// closes the owning connection, waits `SHUTDOWN_GRACE`, then kills and reaps.
     Managed(ManagedTor),
     /// Connect to an **already-running** control port the actor does *not* own — the
     /// test path (tor spawned externally), and any bring-your-own-`tor` deployment.
@@ -896,7 +896,7 @@ struct TorChild {
 /// How a managed `tor` child ended (observed via [`ManagedTor::exit_observer`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TorExit {
-    /// The actor was asked to stop, and tor exited within the [`SHUTDOWN_GRACE`]
+    /// The actor was asked to stop, and tor exited within the `SHUTDOWN_GRACE`
     /// window after the owning connection closed, and was reaped with this
     /// status: the clean path.
     Reaped(std::process::ExitStatus),
@@ -1220,14 +1220,14 @@ impl Actor for TorControlClient {
         ))
     }
 
-    /// Clean shutdown: withdraw onions according to [`ProcessOwnership`], close
+    /// Clean shutdown: withdraw onions according to `ProcessOwnership`, close
     /// the owning control connection, then reap the managed child.
     /// `TAKEOWNERSHIP` (landed in PR-2) is the *crash* backstop — a panic /
     /// SIGKILL sends no `on_stop`, and the control connection dropping then
     /// exits `tor` — but on a clean stop the connection is still open here, so
     /// this is the primary path. (The bootstrap poll task is aborted in `Drop`.)
     ///
-    /// **`DEL_ONION` follows [`ProcessOwnership`], not the caller.** An
+    /// **`DEL_ONION` follows `ProcessOwnership`, not the caller.** An
     /// **attached** Tor (`TorLaunch::Attached`: bring-your-own `tor`, the
     /// wallet's attached posture, every integration harness) is not ours to
     /// end, so without the withdrawal the services would keep running inside
@@ -1239,7 +1239,7 @@ impl Actor for TorControlClient {
     /// first. Descriptors already uploaded stay with the directories until
     /// they expire either way.
     ///
-    /// The close always runs, including when [`Self::death`] is already set.
+    /// The close always runs, including when `death` is already set.
     /// A read-side fault records [`DeathSignal::ControlClosed`] while this
     /// write half is still open; skipping the close would leave Tor with no
     /// EOF through the grace, then a kill. The recorded death is handed to
