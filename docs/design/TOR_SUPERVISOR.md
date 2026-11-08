@@ -175,7 +175,7 @@ says which and why.
 | The supervisor sends one `SETEVENTS` and reads the parsed events. Bootstrap readiness is still the actor's `GETINFO` poll | `rust/shekyl-tor-control-client/src/control/events.rs` `Command::supervisor_events`; `rust/shekyl-tor-control-client/src/control/actor.rs` `bootstrap_poll_loop` |
 | The event sink holds `EVENT_QUEUE_EVENTS` (256); an event past it is dropped and counted, and the read loop never waits (`TSR-F2`) | `rust/shekyl-tor-control-client/src/control/actor.rs` `EVENT_QUEUE_EVENTS`, `EventSink` |
 | Death has two signals: a watcher waits on the child beside the control connection's end, and either stops the actor (`TSR-F16`) | `rust/shekyl-tor-control-client/src/control/actor.rs` `watch_child` and the `ChildExited` handler |
-| Teardown closes the owning connection, waits 5 s, kills and reaps; then the tombstone (§4.7). `DEL_ONION` goes only to an attached Tor, and no signal is sent | `rust/shekyl-tor-control-client/src/control/actor.rs` `teardown_lines`, `SHUTDOWN_GRACE`, `shut_down`, `kill_and_reap`; `rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs` `shutdown` |
+| Teardown closes the owning connection, waits 5 s, kills and reaps; then the tombstone (§4.7). `DEL_ONION` goes only to an attached Tor, and no signal is sent. A read-side fault still closes the write half before the wait | `rust/shekyl-tor-control-client/src/control/actor.rs` `ProcessOwnership::teardown_lines`, `end_owning_connection`, `SHUTDOWN_GRACE`, `shut_down`, `kill_and_reap`; `rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs` `shutdown` |
 | The managed tor inherits its owning control connection (`__OwningControllerFD`); it opens no control port and writes no cookie. The launch surface is a closed, tested option list | `rust/shekyl-tor-control-client/src/control/launch.rs` `managed_tor_command`, `tor_end`, and its test `launch_option_names` |
 | `SocksPort` is `auto ExtendedErrors`, so onion failures come back as `0xF0`–`0xF7` | `rust/shekyl-tor-control-client/src/control/actor.rs` `SocksPort` (`Auto` renders `auto ExtendedErrors`) |
 | The pin is checked before every spawn, including a respawn | `rust/shekyl-daemon/src/tor/mod.rs` `pin` |
@@ -964,10 +964,13 @@ to close"), wait within `SHUTDOWN_GRACE`, kill (`TerminateProcess` on
 Windows), reap. No `DEL_ONION` precedes the close and no `SIGTERM` follows
 it (Rick, 2026-11-08): the owned Tor's onions end with it, Tor raises
 `SIGTERM` in itself when its owning connection closes, and Windows has no
-signal to send. `DEL_ONION` depends on ownership, not on the caller: an
+signal to send. `DEL_ONION` follows `ProcessOwnership`, not the caller: an
 attached Tor, which is not ours to end, still gets one per published onion
-(`teardown_lines`). On Windows a copy of Tor's socket end leaked into another
-child keeps the connection open (`TSR-F16`); the grace's kill bounds that.
+(`ProcessOwnership::teardown_lines`). A read-side fault records a death while
+the write half is still open; that half is closed before the wait, and the
+recorded death only classifies the exit. On Windows a copy of Tor's socket
+end leaked into another child keeps the connection open (`TSR-F16`); the
+grace's kill bounds that.
 The routine is one; the directory's disposition follows from
 why it ran. At a respawn the directory is kept (`TSR-Q1`), and after the run
 of consecutive launch failures §1 names the next launch takes a fresh one. At
@@ -1457,7 +1460,7 @@ the record. PR-3's hundred-stop rig is not an acceptance basis.
 | Deleted | Where | Replaced by |
 | --- | --- | --- |
 | The no-respawn disposition | `rust/shekyl-tor-control-daemon/src/lib.rs:40-46` | §4.4 |
-| `DEL_ONION` on stop of an owned Tor (the attached posture keeps it) | **Deleted** (Rick, 2026-11-08): `on_stop` writes it only when the actor has no child (`teardown_lines`) | §4.7 |
+| `DEL_ONION` on stop of an owned Tor (the attached posture keeps it) | **Deleted** (Rick, 2026-11-08): `on_stop` writes it only for `ProcessOwnership::Attached` | §4.7 |
 | `SIGTERM` in the managed shutdown | **Deleted** (Rick, 2026-11-08): `request_graceful_stop` is gone; closing the owning connection is the one graceful route | §4.7 |
 | The per-publish seed, minted and dropped inside `publish` so that Tor is the key's only holder | `rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs:298-304` | the boot's seed in secure memory, republished on each respawn (`TSR-Q1`) |
 | The synchronous wipe in teardown and on drop | `rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs:431-439`; `data_dir.rs` `wipe`, `Drop` | the tombstone (§4.7) |
