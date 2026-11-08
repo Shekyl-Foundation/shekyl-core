@@ -3150,12 +3150,18 @@ built differently (Appendix B). Deleting it is Rick's ruling.
 | `reward.rs`: `RewardArm::RegisteredPlateau`, `evaluate_registered`, `curve`, `split_decision`, `CurveImpl`; `curve.rs` `curve_banded`; the `cap`, `pseudonym_cost` and `curve_impl` fields; `--reward-arm=registered-plateau`, `--curve-impl`; the split cost in `participation::flow_cost` (D1, R1–R4, X `reward.rs:36`) | Linear credited work, `credited_work_milli` (D3/R2) | `l11_l13_five_seed_pins` (the falsifier's control); the `cap` sweep; `reconciliation_curve_float_vs_integer` and `reconciliation_plateau_cross_check` in `main.rs`; the `reward.rs` tests | Every population figure in `STAKER_ARCHIVAL_SIM.md` dated before 2026-11-08 stops reproducing, and the falsifier loses its control |
 | `agent.rs` `best_response`'s in-place add and drop, `World::cooling` (the per-shard drop escrow), the `holdingsupdate_cooldown` axis and `dodge_pref` (D2) | `Release` and `JoinMarket` (`HoldingsUpdate` rejected 2026-09-20). The whole-record cooldown on `Release` is modeled (R10) | Every population scenario | Every population figure. **Blocked**: it cannot go until a participation model built on `Release` and `JoinMarket` replaces it |
 | `participation.rs` `foundation_floor`, `foundation_floor_aged`; `floor_decay_pop` on nine scenarios (D3) | A permanent complete-tree support role, excluded from the market | L12, the L13 floor arms, P3 | The L12 cold-start and the L13 re-engagement figures |
-| `cover.rs` (D7, X `cover.rs:1585`) | `COVER_RUNG_ATOMIC` and `draw_cover_amount` (`shekyl-standoff`), count-free | `--cover`, `--cover-fn`, `--cover-targeting`, `--cover-dispersion`, `--cover-magnitudes`, `--cover-dial`; the module's tests | `docs/completed/ARCHIVAL_COVER_DRAW.md`'s figures stop reproducing |
 | `standoff.rs` order coin: the inversion and `bond_first` (D8) | `draw_entry_gap`, spread only | `--standoff`; `inversion_breaks_the_ordering_prior` | The funding-seam standoff figures (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff*) |
 | `GF7_FAIL_CLOSED`, the withdrawn arms in `riders.rs`, `gf7_breakeven.rs`, `PARTITION_ARM_WITHDRAWN` (D9) | None: the banners already withdraw them | `--gf7-breakeven`; `--partition-adversary`, which also runs the riders report | The withdrawn verdicts' figures |
 | `K_COVER` comments; `--gf7-seal` and `--partition-adversary` on the withdrawn verdict (D10) | The M1 gate is retired; withholding is individual only | Comments, and the two modes | Nothing current: those verdicts are already withdrawn |
 | `REGISTERED_SHARD_TX_COUNT` (D6, X `model.rs:221`) | `shekyl_types::SHARD_LENGTH`, by archival bytes | The composition axis (`size_at_birth`), the L19 runs | L19a–L19j stop reproducing |
 | The fire beacon (D5) | `select_draw` | None: the three strings now name `select_draw` | Nothing; no code modeled it |
+
+**Deleted 2026-11-08.** Each row's code was last at the parent of the
+commit that removed it; that hash is the citation for its figures.
+
+| Module and functions | Production mechanism that replaced it | Last at | What stopped reproducing |
+| --- | --- | --- | --- |
+| `cover.rs` and its six modes (`--cover`, `--cover-fn`, `--cover-targeting`, `--cover-dispersion`, `--cover-magnitudes`, `--cover-dial`); `SplitMix64::geometric`, which only it called (D7, X `cover.rs:87`, X `cover.rs:1585`) | `COVER_RUNG_ATOMIC` and `draw_cover_amount` (`shekyl-standoff`), count-free | `68f84376d` | `docs/completed/ARCHIVAL_COVER_DRAW.md`'s figures, and the `--cover-targeting` figure `ARCHIVAL_FIREWALL_THREATS.md` quotes |
 
 **2. R10, the exit's cooldown. Ruled 2026-11-08:** the sim's exit waits
 `RELEASE_COOLDOWN_EPOCHS` and stays slashable during it, and the per-shard
@@ -3476,7 +3482,7 @@ The first three rows are structural: every registered run inherits them from `ba
 | D4 | `sim/audit.rs:22` `read_prob`, `:31` `deterrence_threshold`, `:44` `challenge_needed`; defaults `sim/scenarios.rs:2161` | L14 read-credited probabilistic audit cadence, off by default | Fixed `CHALLENGES_PER_PAIR_PER_EPOCH = 3` (`prod/constants.rs:28`). Serve threshold `SERVE_THRESHOLD_PASSES = 2` lives in `rust/shekyl-types/src/archival/settlement.rs:25` and is applied by `prod/settlement_select.rs:150` `settle_pair`. Slash window is `FAILURE_WINDOW_M/N` (`prod/failure_window.rs:450`). `prod/attestation.rs` no longer holds the threshold (the 2026-10-02 cite `:71` is gone; `SO-D10e`) | V / I (no read credit: not re-derived from a full read of the draw path) | Plan ahead. The read-credited cadence is EUP-5 H, and it is off by default. Re-read at `3533e9405`: `CHALLENGES_PER_PAIR_PER_EPOCH` is deleted. The per-pair count is `COUNTED_DRAWS` (`shekyl-types` `archival/settlement.rs`), and the draws a block issues come from the count rule's `ArchivalParams` fields. |
 | D5 | `sim/failure_confirmation.rs:269`, `:789`, `:969` | The string "production baseline: `H_fire` beacon". No fire-beacon implementation | Assignment shape superseded (`prod/constants.rs:70`, `CHALLENGE_BEACON_SEAL_BLOCKS` marked retired-mechanism). Interim serve-credit still has `challenge_fire_height` at `prod/challenge.rs:157`. Live selection is N1 | V | Incorporate. The three strings name the production selector, `select_draw`, the secret per-block draw. The fire beacon is on the retirement list as a name only: no code models it. |
 | D6 | `sim/model.rs:221` `REGISTERED_SHARD_TX_COUNT`, `:265` `size_at_birth` | `T = 200` transaction-count partition, for composition shape | Retired by SHT-Q2. Owner: `shekyl_types::SHARD_LENGTH` (`rust/shekyl-types/src/archival/mod.rs:128`). Declared, so also in (X) | V | Retired. Kept, declared, so the registered L19 runs reproduce. On the retirement list. |
-| D7 | `sim/cover.rs` (module; banner `:70`; `cover_dial_span_atomic` `:1585`) | Count-dependent `span(C)` cover curve, kept as a record | Retired 2026-07-21 (`docs/completed/ARCHIVAL_COVER_DRAW.md`). Production is `COVER_RUNG_ATOMIC` and `draw_cover_amount` (`rust/shekyl-standoff/src/cover.rs:41`, `:74`), count-free. Callers of the sim curve: `--cover`, `--cover-fn`, `--cover-targeting`, `--cover-dispersion`, `--cover-magnitudes`, `--cover-dial`, and the module's own tests | V | Retired. On the retirement list. |
+| D7 | `sim/cover.rs` (module; banner `:70`; `cover_dial_span_atomic` `:1585`) | Count-dependent `span(C)` cover curve, kept as a record | Retired 2026-07-21 (`docs/completed/ARCHIVAL_COVER_DRAW.md`). Production is `COVER_RUNG_ATOMIC` and `draw_cover_amount` (`rust/shekyl-standoff/src/cover.rs:41`, `:74`), count-free. Callers of the sim curve: `--cover`, `--cover-fn`, `--cover-targeting`, `--cover-dispersion`, `--cover-magnitudes`, `--cover-dial`, and the module's own tests | V | Retired, and deleted 2026-11-08 (§6.2): the module and its six modes were last at `68f84376d`. |
 | D8 | `sim/standoff.rs:75`, `:132` `inversion`, `:246`, `:295` `bond_first` | Order coin. Undeclared in the module | No order coin: `draw_entry_gap` (`rust/shekyl-standoff/src/draw.rs:89`). Caller: `--standoff` and `inversion_breaks_the_ordering_prior`. GF-7 does not use this model (N4) | V | Retired. On the retirement list. |
 | D9 | `sim/gf7_timeline.rs:77` `GF7_FAIL_CLOSED`; `sim/riders.rs:316`; `sim/gf7_breakeven.rs:108`; `sim/partition_adversary.rs:88` `PARTITION_ARM_WITHDRAWN` | Entry-seam correlator and founder-cover arm, already withdrawn in their banners | No live production counterpart. Banners only | V | Retired. The banners already name the arms withdrawn. On the retirement list. |
 | D10 | `sim/main.rs:30`, `:2028`; `sim/gf7_seal.rs:9`; `sim/partition_adversary.rs:113` | `K_COVER` named in comments, as history | Gate retired (M1, 2026-07-19; `docs/completed/ARCHIVAL_REWARD_GATE_M1.md`). `prod/consensus_state.rs` `epoch_close_compute` documents that the early return is gone. No live `K_COVER` symbol. Modes `--gf7-seal` and `--partition-adversary` still run, on the withdrawn verdict | V | Retired. On the retirement list. |
@@ -3512,11 +3518,11 @@ The first three rows are structural: every registered run inherits them from `ba
 | Sim site | Value | Declared where | Tag | Disposition |
 | --- | --- | --- | --- | --- |
 | `sim/model.rs:221` | `REGISTERED_SHARD_TX_COUNT = 200.0` | `sim/model.rs:214` | V | Retired. Same as D6. |
-| `sim/cover.rs:87` | `ATOMIC_PER_SKL = 1e9` (owner `shekyl_units::ATOMIC_UNITS_PER_SKL`) | `sim/cover.rs:85` | V | Incorporate. Done. |
+| `sim/cover.rs:87` | `ATOMIC_PER_SKL = 1e9` (owner `shekyl_units::ATOMIC_UNITS_PER_SKL`) | `sim/cover.rs:85` | V | Incorporate. Done; the site went with D7 (deleted 2026-11-08, last at `68f84376d`). |
 | `sim/wallclock_leg.rs:69` | `TICK_MS = 60_000` | `sim/wallclock_leg.rs:64` | V | Exogenous. Declared wall-clock tick. No production owner. |
 | `sim/reward.rs:36` | `CurveImpl::Float` (`curve_banded`). The comment still calls `Integer` authoritative; production reward is linear (D1) | `sim/reward.rs:27` | V | Retired with D1. The "authoritative" wording is corrected: `CurveImpl` selects the registered arm's plateau backend, and production credits linear work. |
 | `sim/model.rs:493` | fixed recycling window, retire at age 1 | `sim/model.rs:459` | V | Exogenous. Declared at the site. No production owner. |
-| `sim/cover.rs:1585` | local `k(C)` copy of the retired span | `sim/cover.rs:1630` | V | Retired. Same as D7. |
+| `sim/cover.rs:1585` | local `k(C)` copy of the retired span | `sim/cover.rs:1630` | V | Retired. Deleted with D7 (last at `68f84376d`). |
 
 ### (A) Assumed exogenous
 
@@ -3569,7 +3575,7 @@ Read at `3533e9405`.
 
 ### Not re-checked at this pin
 
-- `cover.rs` between the banner and `cover_dial_span_atomic`, and `main.rs` report printers, were not line-read. Their public entry points were.
+- `main.rs` report printers were not line-read. Their public entry points were.
 - D3's "ratified design" is still the sim's comment. `docs/V3_STAKER_ARCHIVAL.md` was not opened.
 - `reseed_rate = 3` and `FOUNDER_COUNT = 5` (`sim/partition_adversary.rs:98`) were not traced to a production owner.
 - Sim figures pinned in `docs/completed/` (`ARCHIVAL_COVER_DRAW.md`, `ARCHIVAL_TM1_CLUSTERING.md`, `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`) were not enumerated.

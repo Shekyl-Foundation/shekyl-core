@@ -67,7 +67,7 @@
 //! network) there is no slack to rotate onto a fresh deep set, and dispersion runs
 //! out regardless of α.
 //!
-//! Focused harness (like `cover.rs` / `standoff.rs`), not `run_sim`. Its
+//! Focused harness (like `standoff.rs`), not `run_sim`. Its
 //! load-bearing claim is only that it reproduces the known capacity-regime result
 //! (the positive control: redundant deep coverage at the lean attractor, the
 //! coverage edge at the trough). Every verdict is a ratio (haircut fraction), so
