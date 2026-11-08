@@ -26,10 +26,10 @@
 //! ```
 //!
 //! i.e. the (at most 384-bit) product fits without overflow into the
-//! least-significant 256 bits. `difficulty == 0` always passes (the
-//! product is `0 < 2^256`); this matches the C++ `check_hash_64`
-//! result for `difficulty == 0` and is the documented genesis/escape
-//! behaviour, not an error.
+//! least-significant 256 bits. A [`Difficulty`](crate::Difficulty) is
+//! never zero, so the inherited C++ escape (`difficulty == 0` always
+//! passes) has no input here: at the least difficulty, one, every hash
+//! passes because `hash * 1 < 2^256`.
 //!
 //! # Arithmetic
 //!
@@ -69,7 +69,7 @@ use crate::Difficulty;
 /// Equivalent to the inherited `cryptonote::check_hash`: passes iff
 /// `(hash as 256-bit LE integer) * difficulty < 2^256`. Pure,
 /// panic-free, and total over every `(hash, difficulty)`.
-/// [`Difficulty::ZERO`] always passes (see module docs).
+/// At [`Difficulty::ONE`] every hash passes (see module docs).
 #[must_use]
 pub fn check_hash(hash: &[u8; 32], difficulty: Difficulty) -> bool {
     let difficulty = difficulty.to_raw();
@@ -135,7 +135,7 @@ mod tests {
     use crate::Difficulty;
 
     fn d(v: u128) -> Difficulty {
-        Difficulty::from_raw(v)
+        Difficulty::new(v).expect("a test difficulty is non-zero")
     }
 
     fn h_from_le_words(w: [u64; 4]) -> [u8; 32] {
@@ -146,11 +146,15 @@ mod tests {
         out
     }
 
+    /// The inherited C++ escape (`difficulty == 0` always passes) has no
+    /// input: zero is not a difficulty, and one, the least, passes every
+    /// hash. Red edit: let `Difficulty::new(0)` return a value.
     #[test]
-    fn difficulty_zero_always_passes() {
-        assert!(check_hash(&[0u8; 32], d(0)));
-        assert!(check_hash(&[0xffu8; 32], d(0)));
-        assert!(check_hash(&h_from_le_words([1, 2, 3, 4]), d(0)));
+    fn zero_is_not_a_difficulty_and_one_passes_every_hash() {
+        assert_eq!(Difficulty::new(0), None);
+        assert!(check_hash(&[0u8; 32], Difficulty::ONE));
+        assert!(check_hash(&[0xffu8; 32], Difficulty::ONE));
+        assert!(check_hash(&h_from_le_words([1, 2, 3, 4]), Difficulty::ONE));
     }
 
     #[test]

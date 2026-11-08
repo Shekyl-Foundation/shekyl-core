@@ -349,17 +349,14 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
     // The definitions over the stitched chain, the same derivation
     // `validate` runs over the recorded one. CEN-D5 records only when that
     // derivation produced a target: a D6 refusal is D4's verdict.
-    let derived = match header_ladder::derive(
+    let derived = header_ladder::derive(
         formed.seed(),
         formed.target(),
         formed.attempt(),
         alt_view,
         rule_set,
         &mut coverage,
-    )? {
-        Ok(derived) => derived,
-        Err(refused) => return Ok(Err(refused)),
-    };
+    )?;
     let connecting = derived.connecting;
     let cumulative_difficulty = derived.cumulative_difficulty;
     let context = crate::rules::BlockContext::from_derived(&formed, derived, trust);

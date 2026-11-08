@@ -136,9 +136,8 @@ fn formed_on<'id, H>(
         AtHeight::Recorded(record) => record.hash,
         AtHeight::AboveTip => BlockHash::NULL,
     };
-    let target = shekyl_chain_rules::target_claim(view, connecting, rules)
-        .expect("the view answers")
-        .expect("the target is claimed");
+    let target =
+        shekyl_chain_rules::target_claim(view, connecting, rules).expect("the view answers");
     // The proof is the executor's one real hash, not a second one here.
     let _ = (rules, seed, target, parent);
 }
