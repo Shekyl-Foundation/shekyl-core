@@ -57,7 +57,6 @@ fn an_empty_index_settles_nothing_and_slashes_nothing() {
         }
     }
     drop(snap);
-    chain.finish();
 }
 
 /// The window passes over an epoch that is not an observation and does
@@ -159,7 +158,6 @@ fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
     // `last_block(M + 2)`, so their draws of M + 2 still count.
     assert_eq!(outcome(1, m + 2), Some(SettlementOutcome::Missed));
     drop(snap);
-    chain.finish();
 }
 
 /// Settlement of an epoch whose stored draws do not fold to its digest is
@@ -246,7 +244,6 @@ fn an_index_that_does_not_fold_to_its_digest_halts_the_slash_pass() {
             message.contains("do not fold to archival_issued_digest"),
             "{label}: {message}"
         );
-        chain.finish();
     }
 }
 
@@ -311,7 +308,6 @@ fn popping_the_deadline_connect_unsettles_the_epoch() {
         6
     );
     drop(snap);
-    chain.finish();
 }
 
 /// An epoch settles once. A row already under a pair's key when the pass
@@ -360,7 +356,6 @@ fn a_settlement_row_already_recorded_refuses_the_second_write() {
         .row(),
         25
     );
-    chain.finish();
 }
 
 /// What a settled epoch's pass freezes (`SO-D12h`, SI-31): the personas
@@ -414,7 +409,6 @@ fn a_settled_epoch_freezes_the_complete_trees_its_gather_excluded() {
         "an epoch not settled has no row"
     );
     drop(snap);
-    chain.finish();
 }
 
 /// The pass freezes an epoch's complete trees once. A set already under
@@ -448,5 +442,4 @@ fn a_frozen_complete_tree_set_already_recorded_refuses_the_second_write() {
         message.contains("freezes an epoch's complete trees once"),
         "the insert names SI-31: {message}"
     );
-    chain.finish();
 }

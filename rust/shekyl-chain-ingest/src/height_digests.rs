@@ -143,13 +143,12 @@ mod tests {
         let mut digests = BTreeMap::new();
         digests.insert(BlockHeight::from_raw(1), [0x22; 32]);
         digests.insert(BlockHeight::from_raw(0), [0x11; 32]);
-        publish(&path, &digests).expect("publish");
+        publish(path.path(), &digests).expect("publish");
         let value: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("json");
         assert_eq!(value["schema"], HEIGHT_DIGESTS_SCHEMA);
         assert_eq!(value["rows"][0]["height"], 0);
         assert_eq!(value["rows"][1]["height"], 1);
         assert_eq!(value["rows"][0]["digest"], "11".repeat(32));
-        crate::test_support::cleanup(&path);
     }
 }

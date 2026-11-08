@@ -188,7 +188,7 @@ mod tests {
         let store = crate::test_support::open_store(&store_path);
         let trace = crate::test_support::tmp("rebaseline-empty-trace");
         std::fs::write(&trace, b"previous").expect("seed the previous trace");
-        let fault = write_trace_file(&store.begin_read().expect("read"), &trace)
+        let fault = write_trace_file(&store.begin_read().expect("read"), trace.path())
             .expect_err("an empty store is not a chain");
         assert!(
             matches!(fault, RebaselineFault::Empty),
@@ -203,43 +203,39 @@ mod tests {
             "a refusal publishes nothing"
         );
         drop(store);
-        crate::test_support::cleanup(&store_path);
-        crate::test_support::cleanup(&trace);
     }
 
     #[test]
     fn publish_replaces_the_destination_and_leaves_no_sibling() {
         let path = crate::test_support::tmp("rebaseline-publish");
         std::fs::write(&path, b"previous").expect("seed");
-        publish_bytes(&path, b"next").expect("publish");
+        publish_bytes(path.path(), b"next").expect("publish");
         assert_eq!(std::fs::read(&path).expect("read"), b"next");
         assert!(siblings_of(&path).is_empty(), "the sibling was renamed");
-        crate::test_support::cleanup(&path);
     }
 
     #[test]
     fn two_attempts_name_different_siblings() {
         let path = crate::test_support::tmp("rebaseline-sibling-names");
-        let first = sibling_path(&path).expect("first");
-        let second = sibling_path(&path).expect("second");
+        let first = sibling_path(path.path()).expect("first");
+        let second = sibling_path(path.path()).expect("second");
         assert_ne!(first, second);
-        crate::test_support::cleanup(&path);
     }
 
     #[test]
     fn a_failed_publish_removes_only_its_own_sibling() {
         let path = crate::test_support::tmp("rebaseline-dest-dir");
         std::fs::create_dir(&path).expect("destination is a directory");
-        let foreign = trace_parent(&path).join({
+        let foreign = trace_parent(path.path()).join({
             let mut name = std::ffi::OsString::from(".");
-            name.push(path.file_name().expect("name"));
+            name.push(path.path().file_name().expect("name"));
             name.push(".partial");
             name
         });
         std::fs::write(&foreign, b"another attempt").expect("plant a shared-style sibling");
-        let error = publish_bytes(&path, b"next").expect_err("a directory is not replaced");
+        let error = publish_bytes(path.path(), b"next").expect_err("a directory is not replaced");
         assert_eq!(error.kind(), std::io::ErrorKind::IsADirectory);
-        assert!(path.is_dir(), "the destination is untouched");
+        assert!(path.path().is_dir(), "the destination is untouched");
         assert_eq!(
             std::fs::read(&foreign).expect("the other sibling survives"),
             b"another attempt"
@@ -248,13 +244,12 @@ mod tests {
             siblings_of(&path).is_empty(),
             "this attempt removed only the sibling it created"
         );
-        crate::test_support::cleanup(&path);
-        crate::test_support::cleanup(&foreign);
     }
 
     /// Siblings this process would create for `path`: `.{name}.{pid}.{n}.partial`.
     /// The old shared name `.{name}.partial` does not match.
-    fn siblings_of(path: &Path) -> Vec<PathBuf> {
+    fn siblings_of(path: impl AsRef<Path>) -> Vec<PathBuf> {
+        let path: &Path = path.as_ref();
         let name = path.file_name().expect("a trace path names a file");
         let mut prefix = std::ffi::OsString::from(".");
         prefix.push(name);

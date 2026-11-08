@@ -27,7 +27,7 @@ use super::connect_fixtures::{
     prefix_to, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::{BlockInfo, Canonical, CurveTreeState};
 use crate::schema::{
@@ -101,7 +101,6 @@ fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
     out.expect("reconnect");
     assert_eq!(cum(second) - cum(first), 3);
     assert_eq!(cum(second), 5);
-    cleanup(&path);
 }
 
 #[test]
@@ -155,7 +154,6 @@ fn long_term_effective_median_is_stored_at_the_height_it_is_in_force_for() {
         zone,
         "the parent's row is not what a connect at 2 writes"
     );
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------------ A2
@@ -237,7 +235,6 @@ fn the_seal_creates_every_catalogued_table() {
     }
     drop(txn);
     drop(db);
-    cleanup(&path);
 }
 
 #[test]
@@ -269,7 +266,6 @@ fn a_sealed_file_missing_a_sealed_table_is_refused_as_si7() {
             StoreCannot::SchemaVersionAbsent | StoreCannot::SchemaVersionMismatch { .. }
         )
     ));
-    cleanup(&path);
 }
 
 /// The version check comes **before** the seal-set check: a file at another
@@ -305,7 +301,6 @@ fn a_file_at_another_version_is_a_version_mismatch_not_a_missing_table() {
         ),
         "{refused}"
     );
-    cleanup(&path);
 }
 
 /// A file whose `properties` table was written under another value shape
@@ -335,7 +330,6 @@ fn a_file_with_a_foreign_header_table_type_is_layout_foreign() {
         })
         .to_string()
     );
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------------ A3
@@ -409,7 +403,6 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
         .expect("sealed")
         .is_empty()
         .expect("len"));
-    cleanup(&path);
 }
 
 #[test]

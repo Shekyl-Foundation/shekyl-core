@@ -33,7 +33,7 @@ use shekyl_wire::{BlockBody, PowBlob, SkeletonTx, TxBody};
 
 use crate::corpus::CorpusReader;
 use crate::source::{IngestEvent, Source};
-use crate::test_support::{cleanup, open_store_under, tmp};
+use crate::test_support::{open_store_under, tmp};
 use crate::vectors_tests::replay::rules_for;
 use crate::vectors_tests::{captured_chains, mock_with_the_real_clock};
 
@@ -306,7 +306,6 @@ fn the_header_path_agrees_with_validate_on_every_captured_block() {
                 Ok(())
             })
             .unwrap_or_else(|e| panic!("{}: {e}", manifest.shape));
-        cleanup(&path);
     }
     assert!(blocks > 0, "no captured block was judged");
 }
@@ -375,7 +374,6 @@ fn at_first_later_block(
             panic!("the chain has no block after genesis");
         })
         .expect("write");
-    cleanup(&path);
 }
 
 /// Header mutations refuse on the same row on both paths. A wrong seed and
@@ -723,7 +721,6 @@ fn bind_body_agrees_with_validate() {
                 Ok(())
             })
             .unwrap_or_else(|e| panic!("{}: {e}", manifest.shape));
-        cleanup(&path);
     }
     assert!(substituted, "no listed transaction to substitute");
     assert!(reordered, "no block listed two transactions");
@@ -776,7 +773,6 @@ fn a_genesis_candidate_with_the_wrong_hash_is_e1_on_both_paths() {
             Ok(())
         })
         .expect("inspect");
-    cleanup(&path);
 }
 
 /// Bytes after a full transaction, or after a skeleton's pruned base, do
@@ -932,7 +928,6 @@ fn appended_bytes_are_not_the_transaction() {
             Ok(())
         })
         .expect("write");
-    cleanup(&path);
     assert!(pinned, "the chain listed no transaction");
 }
 
@@ -973,7 +968,6 @@ fn the_cheap_checks_name_the_version_and_do_not_hash() {
             Ok(())
         })
         .expect("inspect");
-    cleanup(&path);
 }
 
 /// All-ones under difficulty 2 fails CEN-D1. `form_header` and `form` both
@@ -1030,7 +1024,6 @@ fn a_longhash_the_target_refuses_is_d1_on_both_paths() {
             Ok(())
         })
         .expect("inspect");
-    cleanup(&path);
 }
 
 /// Every captured block forms the same way from its judged header as from
@@ -1101,6 +1094,5 @@ fn a_judged_header_forms_the_block_without_hashing() {
                 Ok(())
             })
             .unwrap_or_else(|e| panic!("{}: {e}", manifest.shape));
-        cleanup(&path);
     }
 }

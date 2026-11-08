@@ -8,10 +8,12 @@
 //! Ignored. The registered method is
 //! `docs/benchmarks/rt_w10_request_cost_20261102.md`. `RT_W10_OUT` is the
 //! directory; the test writes `coinbase.tsv` and does not overwrite it.
-//! Unset, the test takes [`SCRATCH_SAMPLES`] samples into a fresh temporary
-//! directory it owns, and removes it: that is the nightly `store-ignored` lane's run,
-//! which proves the harness still runs and measures nothing
-//! (`scripts/ci/ignored_set_chain_store.sh`).
+//! Unset, warmup is [`SCRATCH_WARMUP`] and the sample count is
+//! [`SCRATCH_SAMPLES`]: a fresh temporary directory this test owns, removed
+//! when the run ends. That is the nightly `store-ignored` lane, and it
+//! measures nothing (`scripts/ci/ignored_set_chain_store.sh`). With
+//! `RT_W10_OUT` set, warmup is [`WARMUP`] and the sample count is
+//! [`SAMPLES`]: that is the measurement.
 //! Linux only: the clock is `CLOCK_THREAD_CPUTIME_ID`.
 
 use std::fs::{self, File};
@@ -24,14 +26,20 @@ use shekyl_chain_rules::AtHeight;
 use shekyl_types::BlockHeight;
 
 use super::connect_fixtures::{connect_chain, prefix_to};
-use super::store_tests::{cleanup, tmp, EPOCH};
+use super::store_tests::{tmp, EPOCH};
 use super::ChainStore;
 
 const CHAIN_BLOCKS: u64 = 32;
+/// Measurement warmup, used when `RT_W10_OUT` is set. Not recorded.
 const WARMUP: usize = 5;
+/// Measurement samples, used when `RT_W10_OUT` is set.
 const SAMPLES: usize = 100;
-/// The scratch run's samples: enough to read every series through the
-/// writer, which is what that run proves. It measures nothing.
+/// Scratch-run warmup. One call enters the timed path. The measurement
+/// uses [`WARMUP`].
+const SCRATCH_WARMUP: usize = 1;
+/// Scratch-run samples: enough to read every series through the writer,
+/// which is what that run proves. It measures nothing. The measurement
+/// uses [`SAMPLES`].
 const SCRATCH_SAMPLES: usize = 3;
 const HEADER: &str = "series\titeration\tbytes\twall_ns\tcpu_ns";
 
@@ -101,7 +109,7 @@ fn rt_w10_coinbase_span_cost() {
         }
     };
     let (warmup, samples) = if scratch.is_some() {
-        (1, SCRATCH_SAMPLES)
+        (SCRATCH_WARMUP, SCRATCH_SAMPLES)
     } else {
         (WARMUP, SAMPLES)
     };
@@ -158,7 +166,6 @@ fn rt_w10_coinbase_span_cost() {
     file.flush().expect("flush coinbase.tsv");
     drop(snap);
     drop(store);
-    cleanup(&store_path);
     if let Some(scratch) = scratch {
         assert_eq!(
             fs::read_to_string(&path)

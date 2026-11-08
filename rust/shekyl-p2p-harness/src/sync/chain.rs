@@ -186,14 +186,6 @@ impl Corpus {
     }
 }
 
-/// A unique directory for one store.
-#[must_use]
-pub fn store_path(tag: &str) -> PathBuf {
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("shekyl-cs3-{tag}-{}-{n}", std::process::id()))
-}
-
 /// A store under the schedule `rules` names at genesis.
 ///
 /// # Panics
@@ -213,8 +205,11 @@ pub struct Chain {
     pub service: Service<ProductionSubstrate>,
     /// The rules it connects under.
     pub rules: ChainRules,
-    path: PathBuf,
     next_tag: AtomicU64,
+    /// The store's directory: a fresh one under the system temp directory,
+    /// removed with the store and the files beside it when this drops,
+    /// after the service and the store above.
+    _dir: tempfile::TempDir,
 }
 
 impl Chain {
@@ -239,8 +234,11 @@ impl Chain {
         budget: Budget,
         follow: Follow,
     ) -> Self {
-        let path = store_path(tag);
-        let store = Arc::new(open_store(&path, rules));
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("shekyl-cs3-{tag}-"))
+            .tempdir()
+            .expect("the store's directory");
+        let store = Arc::new(open_store(&dir.path().join("chain.redb"), rules));
         let service = Service::start(
             Arc::clone(&store),
             rules,
@@ -255,8 +253,8 @@ impl Chain {
             store,
             service,
             rules,
-            path,
             next_tag: AtomicU64::new(1),
+            _dir: dir,
         }
     }
 
@@ -334,12 +332,12 @@ impl Chain {
         let Self {
             store,
             service,
-            path,
+            _dir: dir,
             ..
         } = self;
         let _stopped = service.stop().await;
         drop(store);
-        let _removed = std::fs::remove_dir_all(&path);
+        dir.close().expect("remove the store's directory");
     }
 }
 

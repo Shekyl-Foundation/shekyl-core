@@ -22,7 +22,7 @@ use shekyl_types::{BlockCount, BlockHeight};
 use crate::apply_policy::ApplyPolicy;
 
 use super::super::connect_fixtures::Grown;
-use super::super::store_tests::{cleanup, tmp, TestErr};
+use super::super::store_tests::{tmp, TestErr};
 use super::super::{ChainStore, Horizons, StoreError, StoreInvariant};
 use super::{connect_empty, pair, pop};
 
@@ -183,10 +183,10 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
         draws_of(&store, BlockHeight::from_raw(0), BlockDrawsFloor::NONE),
         None
     );
-    cleanup(&path);
 }
 
-fn plant_draws(path: &std::path::Path, height: BlockHeight, row: BlockDraws) {
+fn plant_draws(path: impl AsRef<std::path::Path>, height: BlockHeight, row: BlockDraws) {
+    let path: &std::path::Path = path.as_ref();
     super::super::archival_read_tests::plant(path, |txn| {
         let mut table = txn
             .open_table(crate::schema::ARCHIVAL_BLOCK_DRAWS)
@@ -274,7 +274,6 @@ fn the_count_reads_the_prior_row_and_resets_at_the_opening_block() {
         draws_of(&store, BlockHeight::from_raw(19), BlockDrawsFloor::NONE),
         Some(across)
     );
-    cleanup(&path);
 }
 
 /// SI-33's two count arms, through `refuse_corrupt` as the ingest would
@@ -333,7 +332,6 @@ fn a_count_fault_halts_the_writer_through_refuse_corrupt() {
             "{refused}"
         );
     }
-    cleanup(&excess);
 
     let missing = tmp("draw_count_missing");
     let store = ChainStore::with_horizons(&missing, ApplyPolicy::Full, horizons).expect("create");
@@ -368,5 +366,4 @@ fn a_count_fault_halts_the_writer_through_refuse_corrupt() {
         refused.contains("no draw row is recorded at height 0"),
         "{refused}"
     );
-    cleanup(&missing);
 }

@@ -733,7 +733,6 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
             (reasons, verdicts)
         })
         .await;
-    drop(std::fs::remove_file(&path));
     for reason in &reasons {
         assert!(
             reason.contains("below claim window floor"),

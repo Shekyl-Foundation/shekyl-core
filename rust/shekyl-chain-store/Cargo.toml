@@ -102,7 +102,9 @@ shekyl-economics = { path = "../shekyl-economics" }
 # dependency of shekyl-chain-rules (rule 17); test-only here, for the same
 # reason as `shekyl-economics`.
 shekyl-fcmp = { path = "../shekyl-fcmp" }
-# The RT-W10 harness's scratch output directory (`store/rt_w10_cost.rs`).
+# Each test store's own directory (`test_paths.rs`), which takes the
+# store's sidecar files with it when the test ends, and the RT-W10
+# harness's scratch output (`store/rt_w10_cost.rs`).
 tempfile = { workspace = true }
 # The v7 cross-check corpus (`codec::archival_tests`) is JSON written by the
 # C++ unit test that still owns the decoder; read with the workspace's

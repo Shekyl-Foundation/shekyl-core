@@ -11,7 +11,7 @@ use shekyl_chain_rules::{form, validate, FormAttempt, FormClaims, RuleSet, RuleS
 use shekyl_types::BlockHash;
 
 use super::connect_fixtures::{candidate, expected_target, FixtureSubstrate};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::RuleSetInForce;
 use crate::schema::RULE_SET_IN_FORCE;
@@ -66,7 +66,6 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
         .expect("decodes");
     assert_eq!(recorded, RuleSetInForce(RuleSetId::GENESIS));
     assert_eq!(seven.id(), RuleSetId::GENESIS, "the id is not the set");
-    cleanup(&path);
 }
 
 #[test]
@@ -110,5 +109,4 @@ fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
         in_force: Box::new(RuleSet::GENESIS),
     };
     assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
-    cleanup(&path);
 }

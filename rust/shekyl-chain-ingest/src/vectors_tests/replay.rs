@@ -12,7 +12,6 @@
 #![cfg(test)]
 
 use std::num::NonZeroU128;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks, Substrate};
@@ -24,7 +23,7 @@ use crate::metrics::Metrics;
 use crate::pipeline::{run, PipelineConfig, RunReport};
 use crate::schedule::ChainRules;
 use crate::source::Source;
-use crate::test_support::{open_store_under, tmp};
+use crate::test_support::{open_store_under, tmp, TestPath};
 use crate::trace::Trace;
 
 use super::Manifest;
@@ -76,7 +75,7 @@ pub(crate) async fn replay_open<S, Src>(
     tag: &str,
     mut source: Src,
     trace: Arc<Trace>,
-) -> (Result<RunReport, String>, PathBuf, ChainRules)
+) -> (Result<RunReport, String>, TestPath, ChainRules)
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: Send + std::fmt::Debug + 'static,
@@ -115,7 +114,7 @@ pub(crate) async fn replay_keeping_store<S>(
     substrate: Arc<S>,
     policy: ApplyPolicy,
     tag: &str,
-) -> (Result<RunReport, String>, PathBuf, ChainRules)
+) -> (Result<RunReport, String>, TestPath, ChainRules)
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: Send + std::fmt::Debug + 'static,
