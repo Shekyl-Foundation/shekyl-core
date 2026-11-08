@@ -91,7 +91,7 @@ thermal_sampler() {
   echo "# RUSTFLAGS=${RUSTFLAGS:-<unset>} (unset = the shipping generic-aarch64 regime; cortex-a72 flags SIGILL RandomX on BCM2711)"
   echo "# filter=${FILTER:-<none>} (criterion's: only the benches the regex names run)"
   echo "# randomx_mode=light/cache BY CONSTRUCTION — not a configuration that can drift between runs: shekyl-pow-randomx is a cache+VM substrate with no dataset arm (rust/shekyl-pow-randomx/src/lib.rs:46-72)"
-  echo "# storage_deviation: run from SD (mmcblk0p2); §8.2 row's USB3 SSD present but unmounted — not mounted deliberately; measured path is CPU-bound and in-memory, so the deviation does not enter verify_floor"
+  echo "# storage_as_run: $(findmnt -no SOURCE -T "${REPO_ROOT}" 2>/dev/null || echo NA) (mmcblk = the SD card, sd = the USB3 SSD); the measured path is CPU-bound and in-memory, so storage does not enter verify_floor"
   echo "# ram_as_found: 8 GB (Rev 1.4 board) vs the June row's 4 GB — rule 76 names the MODEL and Model B matches; RandomX is light/cache (~256 MB) and the FCMP terms are CPU-bound, so 8 vs 4 GB cannot bind HERE — a future floor measurement that IS memory-sensitive must not inherit this row's device as 'the floor'"
   echo "# load_as_found: loadavg $(cut -d' ' -f1-3 /proc/loadavg); busiest: $(ps -eo pcpu=,comm= --sort=-pcpu | head -3 | awk '{printf "%s %s%%; ", $2, $1}')"
   echo "# thermal_start: $(read_temp)"

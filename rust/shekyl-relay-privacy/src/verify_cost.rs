@@ -8,8 +8,8 @@
 //!
 //! `hop`'s dominant measurable term is the FCMP++ verification a relay
 //! performs before forwarding (§71), and that cost is **sorted by transaction
-//! shape**: at the spec machine the pool door's sequence spans 160.5 ms
-//! (1 input, genesis tree) to 834.5 ms (8 inputs, depth-7 tree) — §85.3's
+//! shape**: at the spec machine the pool door's sequence spans 144.3 ms
+//! (1 input, genesis tree) to 818.6 ms (8 inputs, depth-7 tree) — §85.3's
 //! membership-proof cells plus the door's signature and range-proof terms
 //! (§72.2, BA-Q9). A scalar provisioned anywhere
 //! on that range either over-provisions the modal transaction or
@@ -279,21 +279,24 @@ const fn node_crypto_ms(msg_bytes: u32) -> f64 {
 /// One hybrid Ed25519 + ML-DSA-65 verification on the floor device, at the
 /// 1-input 2-output shape: `pqc_per_input` in
 /// `docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt`
-/// (median 971.86 µs; Rust verifier, rev `8af70a60a6`).
+/// (criterion's point estimate, 971.86 µs; Rust verifier, rev `8af70a60a6`).
 const PI4_HYBRID_SIG_1IN_MS: f64 = 0.971_86;
 
 /// The same term at the 8-input 2-output shape, from the same capture
-/// (median 972.28 µs per verification).
+/// (972.28 µs per verification).
 const PI4_HYBRID_SIG_8IN_MS: f64 = 0.972_28;
 
 /// The range proof as a batch of one (`verify_batch`, the shipped verifier
 /// the door runs at `TxSlot::Lone`) over 2 outputs, at the 1-input shape:
-/// `bp_proxy` in the same capture (median 35.017 ms).
-const PI4_RANGE_PROOF_LONE_1IN_2OUT_MS: f64 = 35.017;
+/// `bp_lone` in `docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt`
+/// (criterion's point estimate, 18.838 ms; the verifier that folds `Â` into
+/// the batch, rev `78de6a14e2`). The eager verifier before the fold read
+/// 34.80 ms in the same session and 35.017 ms in the 2026-09-05 capture.
+const PI4_RANGE_PROOF_LONE_1IN_2OUT_MS: f64 = 18.838;
 
 /// The same term at the 8-input 2-output shape, from the same capture
-/// (median 34.827 ms; the range proof reads only the output commitments).
-const PI4_RANGE_PROOF_LONE_8IN_2OUT_MS: f64 = 34.827;
+/// (18.882 ms; the range proof reads only the output commitments).
+const PI4_RANGE_PROOF_LONE_8IN_2OUT_MS: f64 = 18.882;
 
 /// The pool door's verification sequence at one shape, in milliseconds: the
 /// membership proof with the masks (§85.3's measured cell), plus `n_in`
@@ -352,7 +355,7 @@ const PI4_AES_BYTES_PER_SEC: f64 = 138_993_660.0;
 /// A populated cell must be a plausible per-hop verification cost: positive,
 /// finite, and under ten seconds. `millis > 0.0` is `false` for NaN, and the
 /// upper bound excludes `+inf` along with any figure that could not be a
-/// verification measurement (the deepest cell is 834.5 ms; ten
+/// verification measurement (the deepest cell is 818.6 ms; ten
 /// seconds is two orders of headroom, not a tuning bound).
 const fn cell_is_plausible(millis: f64) -> bool {
     millis > 0.0 && millis < 10_000.0
@@ -390,16 +393,17 @@ const _: () = {
 /// membership-proof terms are §85.3's measurements: Pi 4 Model B,
 /// `performance` on all four cores, verify-check exit 0 on every fixture (no
 /// cell times a reject path), thermal max 69.6 °C against the 80 °C
-/// soft-throttle. The signature and range-proof terms are the 2026-09-05
-/// floor capture's (§72.2). Depth-7 cells are synthesized-tree projections
+/// soft-throttle. The signature terms are the 2026-09-05 floor capture's and
+/// the range-proof terms the 2026-11-08 capture's, the verifier that folds
+/// `Â` into the batch (§72.2). Depth-7 cells are synthesized-tree projections
 /// per §81.2 and labelled so.
 ///
 /// | cell | masks + proof | signatures | range proof (lone) | `millis` |
 /// |---|---|---|---|---|
-/// | 1-in, depth 2 | 124.5 | 1 × 0.97186 | 35.017 | 160.489 |
-/// | 1-in, depth 7 | 143.3 | 1 × 0.97186 | 35.017 | 179.289 |
-/// | 8-in, depth 2 | 399.2 | 8 × 0.97228 | 34.827 | 441.805 |
-/// | 8-in, depth 7 | 791.9 | 8 × 0.97228 | 34.827 | 834.505 |
+/// | 1-in, depth 2 | 124.5 | 1 × 0.97186 | 18.838 | 144.310 |
+/// | 1-in, depth 7 | 143.3 | 1 × 0.97186 | 18.838 | 163.110 |
+/// | 8-in, depth 2 | 399.2 | 8 × 0.97228 | 18.882 | 425.860 |
+/// | 8-in, depth 7 | 791.9 | 8 × 0.97228 | 18.882 | 818.560 |
 pub const SPEC_VERIFY_COST: SpecVerifyCost = {
     const NONE: Option<VerifyCell> = None;
     const EMPTY_ROW: [Option<VerifyCell>; DEPTH_TIERS] = [NONE; DEPTH_TIERS];

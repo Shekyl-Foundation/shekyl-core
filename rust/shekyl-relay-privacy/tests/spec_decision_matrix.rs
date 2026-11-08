@@ -164,8 +164,9 @@ const TRANSIT_MS: [f64; 3] = [25.0, 50.0, 100.0];
 /// being large; it does not move.
 ///
 /// **Re-priced 2026-11-08 (BA-Q9)**: each cell is the pool door's whole
-/// sequence (§72.2), so the modal cell is 160.49 ms and the 8-input cell
-/// 441.81 ms. The input landed in its own commit and these pins moved in the
+/// sequence (§72.2), so the modal cell is 144.31 ms and the 8-input cell
+/// 425.86 ms (the lone range proof measured after `Â` was folded into the
+/// batch). The input landed in its own commit and these pins moved in the
 /// next, as `DAEMON_RELAY_PRIVACY.md` §94.10 requires: `derive_embargo` is
 /// high-gain near a step (`derive::next_embargo_step`), so a few
 /// milliseconds of hop can move the embargo by seconds, and the re-derivation
@@ -354,22 +355,22 @@ fn the_measured_surface_covers_the_whole_consensus_domain() {
 /// cells cannot land unpinned: a populated cell with no row here fails, and a
 /// row here with no populated cell fails.
 const SPEC_CELLS: [(usize, u32, f64, f64, f64, TreeBasis); 4] = [
-    (1, 2, 124.5, 0.971_86, 35.017, TreeBasis::Genesis),
+    (1, 2, 124.5, 0.971_86, 18.838, TreeBasis::Genesis),
     (
         1,
         7,
         143.3,
         0.971_86,
-        35.017,
+        18.838,
         TreeBasis::SynthesizedProjection,
     ),
-    (8, 2, 399.2, 0.972_28, 34.827, TreeBasis::Genesis),
+    (8, 2, 399.2, 0.972_28, 18.882, TreeBasis::Genesis),
     (
         8,
         7,
         791.9,
         0.972_28,
-        34.827,
+        18.882,
         TreeBasis::SynthesizedProjection,
     ),
 ];
@@ -407,7 +408,7 @@ fn every_published_cell_is_its_pinned_door_sequence() {
     assert_eq!(
         published, pinned,
         "the production verification-cost table no longer matches its sources \
-         (§85.3 and the 2026-09-05 floor capture). If an operand moved, it is a \
+         (§85.3, the 2026-09-05 and 2026-11-08 floor captures). If an operand moved, it is a \
          re-measurement: update its source and this pin together. If a cell \
          appeared, transcribe its measured operands here — an unpinned cell is \
          a number nobody checked feeding the shipped `hop`."

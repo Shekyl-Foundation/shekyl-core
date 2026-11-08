@@ -113,6 +113,7 @@ spec = [
   "rust/shekyl-pow-randomx/src",
 ]
 stale_through = [
+  { through = "334b41b719", note = "BA-Q9 (#1319): the Bp+ verifier adds Â's terms into the batch instead of evaluating Â with its own multiexp. Every verdict is unchanged; the cost falls. On the floor device a lone 2-output proof went 34.80 -> 18.84 ms and a batched one 19.63 -> 3.66 ms per proof (gap7_block_verify_pi4_rust_20261108T232442Z.txt and its eager control). The surge factor's Bp+ term is now that measurement; the capture's other terms are unchanged, and BA-T10 re-runs them." },
   { through = "20738bf714", note = "PL-D3: the leaf's fourth scalar becomes a Pedersen commitment opened in-circuit. The proof changed for every shape; its verify cost has not been re-measured on the floor." },
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
   { through = "48670ca6c9", note = "Three commits to signature.rs. The first moves the Ed25519 + ML-DSA-65 nested sign and verify and the canonical header onto one body shared with a second scheme; the bytes signed and the order of the two halves are unchanged, and the existing vectors pass untouched. The second adds a scheme byte and two domain constants that no transaction path reads. The third edits one doc comment. The gated sign count moved from 7,163,792 to 7,161,994 instructions on an x86 development host (crypto_bench_hybrid_sign_1_input, -0.025 %). Verify has no gated arm and was not measured; no floor run." },
@@ -167,6 +168,12 @@ capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
 capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
 rev_source = "capture header"
 path_set = "block-weight"
+
+[[path_set]]
+id = "bp-verify"
+spec = [
+  "rust/shekyl-bulletproofs/src",
+]
 
 [[path_set]]
 id = "fcmp-inputs"
@@ -258,28 +265,24 @@ path_set = "block-weight"
 [[constant]]
 name = "pi4_range_proof_lone_1in_2out_ms"
 defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
-needle = "const PI4_RANGE_PROOF_LONE_1IN_2OUT_MS: f64 = 35.017;"
+needle = "const PI4_RANGE_PROOF_LONE_1IN_2OUT_MS: f64 = 18.838;"
 measured_by = ["BA-T10"]
-status = "stale"
-stale_since = "20738bf714"
-carrier = "BA-T10 (BA-Q9). The bp_proxy median at the 1-input 2-output shape: verify_batch over a batch of one, what the pool door pays at TxSlot::Lone. Shares the block-weight path set and its capture, so it is stale from the same commit."
-capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
-capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
-rev_source = "capture header"
-path_set = "block-weight"
+status = "current"
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt"
+capture_rev = "78de6a14e2ac732fc3298f4d77db7aae43136db8"
+rev_source = "capture header. bp_lone at the 1-input 2-output shape: verify_batch over a batch of one, what the pool door pays at TxSlot::Lone, on the verifier that folds Â into the batch (BA-Q9, #1319). The same session's eager control read 34.80 ms (gap7_block_verify_pi4_rust_eager_20261108T231752Z.txt), against 35.017 ms in the 2026-09-05 capture."
+path_set = "bp-verify"
 
 [[constant]]
 name = "pi4_range_proof_lone_8in_2out_ms"
 defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
-needle = "const PI4_RANGE_PROOF_LONE_8IN_2OUT_MS: f64 = 34.827;"
+needle = "const PI4_RANGE_PROOF_LONE_8IN_2OUT_MS: f64 = 18.882;"
 measured_by = ["BA-T10"]
-status = "stale"
-stale_since = "20738bf714"
-carrier = "BA-T10 (BA-Q9). The bp_proxy median at the 8-input 2-output shape; as pi4_range_proof_lone_1in_2out_ms."
-capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
-capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
-rev_source = "capture header"
-path_set = "block-weight"
+status = "current"
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt"
+capture_rev = "78de6a14e2ac732fc3298f4d77db7aae43136db8"
+rev_source = "capture header. bp_lone at the 8-input 2-output shape: verify_batch over a batch of one, what the pool door pays at TxSlot::Lone, on the verifier that folds Â into the batch (BA-Q9, #1319). The same session's eager control read 34.61 ms (gap7_block_verify_pi4_rust_eager_20261108T231752Z.txt), against 34.827 ms in the 2026-09-05 capture."
+path_set = "bp-verify"
 
 [[path_set]]
 id = "relay-aes"
