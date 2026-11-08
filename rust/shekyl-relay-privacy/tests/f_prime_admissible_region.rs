@@ -437,7 +437,7 @@ fn dependents_at_each_candidate_boundary() {
     // **Calibration against the shipped constants, which is what makes this a
     // test rather than a report.** The first row is the pair in force today, so
     // it must reproduce the three values the tree pins independently — the
-    // clearnet and anonymity embargoes, 197 s and 513 s, and
+    // clearnet and anonymity embargoes, 194 s and 511 s, and
     // `ADOPTED_PROPAGATION_TIMEOUT_SECS`. If the derivation
     // drifts, every other row is wrong by the same amount and nothing else here
     // would notice.
@@ -447,13 +447,13 @@ fn dependents_at_each_candidate_boundary() {
         "the first row must be the shipped pair for the calibration below to mean anything"
     );
     assert_eq!(
-        shipped_clear, 197,
-        "the shipped clearnet embargo is pinned at 197 s (EmbargoTimer::adopted); this \
+        shipped_clear, 194,
+        "the shipped clearnet embargo is pinned at 194 s (EmbargoTimer::adopted); this \
          derivation gives {shipped_clear} s"
     );
     assert_eq!(
-        shipped_anon, 513,
-        "the shipped anonymity embargo is pinned at 513 s (EmbargoTimer::adopted); this \
+        shipped_anon, 511,
+        "the shipped anonymity embargo is pinned at 511 s (EmbargoTimer::adopted); this \
          derivation gives {shipped_anon} s"
     );
     assert_eq!(
@@ -525,7 +525,7 @@ fn recovery_within_one_block_interval_at_each_candidate() {
     for (mean, note) in [
         (112_u32, "pre-RD-4 (§15.3 recorded 0.657)"),
         (144, "RD-4 (§15.3 recorded 0.565)"),
-        (197, "SHIPPED today"),
+        (194, "SHIPPED today"),
         (208, "beta = 0 (uniform at floor)"),
         (254, "beta <= 1/4, d_min >= 8"),
         (265, "beta <= 1/3, d_min >= 8"),
@@ -740,7 +740,7 @@ fn leak_at_each_candidate_region() {
     // it, or the column below is measuring a channel the record does not have.
     assert!(
         (base - 0.0108).abs() < NOISE_3SIGMA,
-        "the shipped pair (F' = 3250, embargo 197 s) reads {base:.5}; §6.6's banner \
+        "the shipped pair (F' = 3250, embargo 194 s) reads {base:.5}; §6.6's banner \
          records 0.0108 at exactly this pair. A mismatch means this is not the \
          channel §43.2 names"
     );

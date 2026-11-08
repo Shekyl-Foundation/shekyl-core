@@ -439,14 +439,14 @@ impl DandelionParams {
     /// **`time_between_hop_ms` is derived through
     /// [`crate::verify_cost::adopted_hop_ms`]** — the spec machine's modal
     /// verification cell (the pool door's sequence at 1 input, genesis tree:
-    /// 160.49 ms on the Pi 4), its node crypto (0.96 ms), and the labelled
-    /// 50 ms transit assumption: 211 ms, where the inherited set restates
+    /// 144.31 ms on the Pi 4), its node crypto (0.96 ms), and the labelled
+    /// 50 ms transit assumption: 195 ms, where the inherited set restates
     /// `175`. The inherited number was never pure transit (§71.3 — a ~80 ms
     /// Monero-era verification figure plus one ocean crossing); our
-    /// verification is larger, so the clearnet embargo is 197 s against the
+    /// verification is larger, so the clearnet embargo is 194 s against the
     /// inherited set's 190 s. (A longer measured transit takes a longer hop —
     /// see [`Self::adopted_for_transit_ms`]. The wallet failed-send wait is
-    /// the longest measured transit's quantile, currently 2362 s —
+    /// the longest measured transit's quantile, currently 2352 s —
     /// `ADOPTED_PROPAGATION_TIMEOUT_SECS` — and is a deletion target per
     /// §89.6.)
     ///
@@ -822,7 +822,7 @@ mod tests {
 
     /// The adopted set differs from the inherited one in the `hop` input
     /// alone: the Pi modal cell's door sequence plus the stated transit
-    /// assumption is 211 ms against the inherited 175 (§72.2). Every other
+    /// assumption is 195 ms against the inherited 175 (§72.2). Every other
     /// field is the inherited value. If the hop assertion fails, a table cell
     /// or the transit assumption moved — a legitimate act, but one that
     /// re-derives the embargo (the §80.2 price list moves with it) and owes a
@@ -830,7 +830,7 @@ mod tests {
     #[test]
     fn adopted_params_differ_from_inherited_only_in_the_hop() {
         let adopted = DandelionParams::adopted();
-        assert_eq!(adopted.time_between_hop_ms.ms(), 211);
+        assert_eq!(adopted.time_between_hop_ms.ms(), 195);
         assert_eq!(DandelionParams::inherited().time_between_hop_ms.ms(), 175);
         assert_eq!(
             DandelionParams {
@@ -850,7 +850,7 @@ mod tests {
         );
         assert_eq!(
             DandelionParams::adopted().time_between_hop_ms.ms(),
-            211,
+            195,
             "the clearnet hop moved off its derived value (§88, §72.2)"
         );
         // The adopted hop carries the clearnet transit's basis: an assumption.
@@ -869,7 +869,7 @@ mod tests {
         let anon = DandelionParams::adopted_for_transit_ms(crate::verify_cost::ANON_ZONE_TRANSIT);
         // *Records-was:* §89.2 keyed this hop on `RelayZone::Tor`. The live
         // input is that connector's measured transit.
-        assert_eq!(anon.time_between_hop_ms.ms(), 1_786);
+        assert_eq!(anon.time_between_hop_ms.ms(), 1_770);
         assert!(
             anon.time_between_hop_ms.ms() > DandelionParams::adopted().time_between_hop_ms.ms(),
             "the anonymity hop must exceed clearnet's: a rendezvous path is six \

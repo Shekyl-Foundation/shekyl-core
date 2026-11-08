@@ -172,7 +172,7 @@ const TRANSIT_MS: [f64; 3] = [25.0, 50.0, 100.0];
 /// milliseconds of hop can move the embargo by seconds, and the re-derivation
 /// calls it at the actual hop rather than interpolating.
 const DECIDED_SPEC_PRICE_LIST: [(f64, u64, u64); 3] =
-    [(25.0, 191, 249), (50.0, 197, 250), (100.0, 211, 266)];
+    [(25.0, 190, 246), (50.0, 194, 250), (100.0, 200, 263)];
 
 fn embargo_secs(hop_ms: u32) -> u64 {
     let mut p = DandelionParams::inherited();

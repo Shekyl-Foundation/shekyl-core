@@ -125,7 +125,7 @@ fn origin_exposure_meets_target_via_reshape_not_embargo() {
          embargo-only path needs ~{embargo_only_secs}s (p90 recovery ~{:.0}s,\n  \
          several× MIN_RELAY_TIME) and would break the P2P liveness the mechanism\n  \
          depends on. So the levers tune together as: keep the embargo at its\n  \
-         derived 197s (the black-hole backstop — the 144s point measured above\n  \
+         derived 194s (the black-hole backstop — the 144s point measured above\n  \
          is pre-F-7, and reshape meets the target even there), F already\n  \
          handled by F-4, reshape carries the origin-exposure target. ε is a\n  \
          target on the COMPOSED leak with freedom in (embargo, F, reshape) —\n  \
@@ -152,7 +152,7 @@ fn precision_increment_reproduces_delta_table() {
 
     let base = DandelionParams::adopted();
     // The ADOPTED configuration: F-7-corrected `fluff_return_ms`, the shipped
-    // clearnet hop and its derived 197 s embargo, obtained through the
+    // clearnet hop and its derived 194 s embargo, obtained through the
     // production derivation path —
     // not a hand-transcribed tick count, so when `fluff_return_ms` next moves
     // this test measures what ships by construction and the δ pins below go
@@ -163,14 +163,14 @@ fn precision_increment_reproduces_delta_table() {
     // prefix-fire leak at its designed level (§44.3).
     let e = EmbargoTimer::adopted(&base);
 
-    println!("\nδ increment re-run (independent-neighbour lower bound, 197s embargo)");
+    println!("\nδ increment re-run (independent-neighbour lower bound, 194s embargo)");
     println!(
         "{:>6} {:>12} {:>14} {:>12} {:>12}",
         "f", "Prec(C1)", "Prec(C1+C3)", "δ", "review"
     );
     println!("{}", "-".repeat(60));
 
-    // (f, δ at the adopted F′/197 s pair). The review's §13 column
+    // (f, δ at the adopted F′/194 s pair). The review's §13 column
     // (0.0010, 0.0019, 0.0045 at F=2250/144 s) is retained in the printout
     // header comment above; the pinned values are the shipping pair's.
     let cases = [(0.05_f64, 0.0010), (0.10, 0.0021), (0.30, 0.0048)];

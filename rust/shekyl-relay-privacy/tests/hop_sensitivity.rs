@@ -82,8 +82,8 @@ fn hop_sensitivity() {
     // values, which is how a rounding choice made in a test leaks into a
     // design document as a second fact.
     assert_eq!(
-        base_s, 197,
-        "shipped row must match the adopted 197 s clearnet embargo"
+        base_s, 194,
+        "shipped row must match the adopted 194 s clearnet embargo"
     );
 
     // Monotone in hop: a longer stem needs a longer embargo, so any

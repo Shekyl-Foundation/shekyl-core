@@ -397,7 +397,7 @@ pub type EmbargoDistribution = DelayFamily;
 ///
 /// # The shipped value, and why it is not 39 s
 ///
-/// The daemon draws from [`Self::adopted`] — **mean 197 s on clearnet,
+/// The daemon draws from [`Self::adopted`] — **mean 194 s on clearnet,
 /// memoryless** — and
 /// carries no embargo constant of its own (`DAEMON_RELAY_PRIVACY.md` §17). It
 /// replaced an inherited `39 s` that was wrong three ways, each of which this
@@ -472,7 +472,7 @@ pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
 ///
 /// Cost of the interim, stated: a clearnet send reports failure at ~39 minutes
 /// rather than ~15.
-pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_362;
+pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_352;
 
 /* `ADOPTED_FORWARD_DELAY_MEAN_SECS` and `ForwardDelay` were here, and Q12-U2
 deleted them with `relay_method::forward`.
