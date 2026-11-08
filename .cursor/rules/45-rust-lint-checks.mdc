@@ -68,13 +68,19 @@ that makes the call, never on the crate, with a `// SAFETY:` comment on each
 `unsafe` block and a `# Safety` section on each `unsafe fn`. A crate whose
 purpose is an FFI export is not an exception; there is no such crate.
 
-**Not yet meeting it (2026-11-08):** seven crates hold `unsafe` without the
-crate-level deny. `randomx-v2-sys` and `shekyl-randomx-differential` bind
-and drive the vendored RandomX C reference for the differential harness,
-outside every shipped binary. `shekyl-process`, `shekyl-thread-priority`,
-`shekyl-tor-control-client`, `shekyl-logging` and `shekyl-engine-prefs`
-make operating-system calls. Each takes the deny with its `unsafe` scoped
-to the item that needs it. A crate not on this list does not join it.
+**The two crate-level exceptions** are the crates that exist to bind and
+drive the vendored RandomX C reference for the differential harness, outside
+every shipped binary: `randomx-v2-sys` and `shekyl-randomx-differential`.
+Each carries `#![allow(unsafe_code)]` at its root with the reason stated
+beside it, and still a `// SAFETY:` comment on each `unsafe` block. No other
+crate joins them.
+
+**Not yet meeting it (2026-11-08):** `shekyl-process`,
+`shekyl-thread-priority`, `shekyl-tor-control-client`, `shekyl-logging` and
+`shekyl-engine-prefs` make operating-system calls under no crate-level deny,
+and the two exceptions do not yet state their reason at the root. The
+`unsafe` scoping PR, after the secrets-storage PR, gives each of the five the
+deny with item-level allows and `SAFETY`, and the two their stated allow.
 
 ## Patterns clippy will catch that matter
 
