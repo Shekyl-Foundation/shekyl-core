@@ -68,6 +68,7 @@ pub struct ReplArgs {
 
     /// Connect to an external shekyl-wallet-rpc daemon instead of
     /// self-hosting one (http://host:port, or uds:///path/to.sock on Unix).
+    /// The URL names the server; calls go to its /json_rpc.
     #[arg(long, global = true)]
     rpc_url: Option<String>,
 

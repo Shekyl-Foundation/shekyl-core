@@ -43,6 +43,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Value};
+use shekyl_rpc_types::endpoint::JSON_RPC_PATH;
 use shekyl_wallet_rpc::{InProcessHandle, InProcessListen, Network};
 use zeroize::Zeroizing;
 
@@ -333,8 +334,10 @@ impl RpcSession {
         let transport = match parse_rpc_url(rpc_url)? {
             #[cfg(unix)]
             RpcUrlForm::Uds(path) => Transport::Uds(path),
+            // `--rpc-url` names the server; the call goes to the one path
+            // both RPC servers take JSON-RPC at.
             RpcUrlForm::Http => Transport::Http {
-                url: rpc_url.trim_end_matches('/').to_owned(),
+                url: format!("{}{JSON_RPC_PATH}", rpc_url.trim_end_matches('/')),
                 agent: build_http_agent(proxy)?,
             },
         };
@@ -583,7 +586,7 @@ fn http_post_pipe(name: &str, payload: &[u8]) -> Result<String, RpcError> {
 /// serialized bytes and re-serializes nothing (see [`RpcSession::call`]).
 fn http_post_over<S: Read + Write>(stream: &mut S, payload: &[u8]) -> Result<String, RpcError> {
     let request = format!(
-        "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
+        "POST {JSON_RPC_PATH} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n",
         payload.len()
     );

@@ -165,7 +165,7 @@ shekyl-cli [options]
 | Option | Description |
 |--------|-------------|
 | `--daemon-address <host:port\|url>` | Daemon to connect to. Default: this machine's daemon at the RPC port for `--network` (`11029` / `12029` / `13029`). With `--rpc-url` the self-hosted wallet RPC is not started, but the REPL still queries the daemon at this address directly. A daemon that is not loopback is disclosed on stderr at startup (USER_GUIDE "Connecting to a daemon"; `RPC_TRANSPORT_POSTURE.md` §1) |
-| `--rpc-url <url>` | Connect to an external `shekyl-wallet-rpc` instead of self-hosting one (`http://host:port`, or `uds:///path/to.sock` on Unix) |
+| `--rpc-url <url>` | Connect to an external `shekyl-wallet-rpc` instead of self-hosting one (`http://host:port`, or `uds:///path/to.sock` on Unix). The URL names the server; calls go to its `/json_rpc` |
 | `--network <type>` | Network the self-hosted wallet server binds to: `mainnet` (default), `testnet`, `stagenet`. With `--rpc-url` that server is not started, and the flag is then read only to supply the default daemon port for the REPL's own daemon queries — so a run that names its own `--daemon-address` never consults it |
 | `--testnet` / `--stagenet` | Shorthand for `--network testnet` / `--network stagenet` — the same flags `shekyld` takes (CU-1). The prompt names the selected network |
 | `--wallet-dir <path>` | Directory for wallet files. Default: the per-network `~/.shekyl/wallets/<network>/`, created on demand, so wallets on different networks never share a directory (CU-1). Ignored with `--rpc-url`. `--engine-dir` is a hidden alias (CU-2) |
