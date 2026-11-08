@@ -79,7 +79,7 @@ use serde::Serialize;
 
 use shekyl_standoff::{draw_entry_gap, DEFAULT_ENTRY_GAP_WINDOW};
 
-use crate::standoff::SplitMix64;
+use crate::rng::SplitMix64;
 
 /// The §14.4 arm is WITHDRAWN (PR #354). The report is retained as record but
 /// its verdict path **fail-closes to this named withdrawal** — a doc that says
@@ -1986,7 +1986,7 @@ pub fn run_partition_measurement(cfg: &PartitionConfig) -> PartitionReport {
     );
     assert!(cfg.trials > 0, "trials must be ≥ 1");
 
-    let mut rng = SplitMix64(cfg.seed);
+    let mut rng = SplitMix64::new(cfg.seed);
     let subsets = m_subsets(cfg.n, FOUNDER_COUNT);
 
     // Deployed posture — bound 1, both arms: the family-max lift must sit at

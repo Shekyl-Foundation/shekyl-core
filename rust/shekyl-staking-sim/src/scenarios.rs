@@ -13,7 +13,7 @@ use crate::fingerprint::{force_deep_portfolio, Ta1Metrics, Ta1Recorder, SEB_DEFA
 use crate::metrics::{
     churn_rate, coverage, coverage_with_r, size_band_under, CoverageMetrics, TargetParams, N_BANDS,
 };
-use crate::model::{r_target, Actor, CompositionParams, EraShape, Rng, Shard, World, AGE_WEIGHT};
+use crate::model::{r_target, Actor, CompositionParams, EraShape, Shard, World, AGE_WEIGHT};
 use crate::participation::{
     admit_entrants, bonded_active_count, foundation_floor_aged, process_exits, ParticipationParams,
 };
@@ -21,6 +21,7 @@ use crate::retrieval::{
     r_target_for_availability, r_target_for_durability, serving_availability, serving_durability,
 };
 use crate::reward::{evaluate, CurveImpl, RewardParams};
+use crate::rng::SplitMix64;
 use crate::transport::{effective_uptime, regime_latency_epochs};
 use serde::Serialize;
 
@@ -677,7 +678,7 @@ fn eventual_age(cfg: &SimConfig, ep: usize, age_now: f64) -> f64 {
     (age_now + steps * cfg.epoch_aging).min(1.0)
 }
 
-fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
+fn build_world(cfg: &SimConfig, rng: &mut SplitMix64) -> World {
     // L12 bootstrap: the chain starts as a small genesis core of *hot* (age 0) shards —
     // there is no deep history at t=0; it accrues as these age and `run_sim` appends new
     // shards. The full-window draw below is the steady-state (every prior scenario).
@@ -692,12 +693,12 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
     } else {
         (0..cfg.n_shard)
             .map(|_| {
-                let u = rng.next_f64();
+                let u = rng.unit();
                 let age = u.powf(cfg.age_skew);
                 // Composition control key: drawn only for the decorrelated arm, so every
                 // other scenario consumes zero extra RNG and stays byte-identical.
                 let size_seed = if cfg.size_spread > 1.0 && cfg.size_decorrelated {
-                    rng.next_f64()
+                    rng.unit()
                 } else {
                     0.0
                 };
@@ -723,7 +724,7 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
                 let z = if comp.draws_shape() {
                     // Two uniforms folded to a mean-zero, unit-ish spread draw: the
                     // model needs a symmetric shape term, not a normal specifically.
-                    rng.next_f64() + rng.next_f64() - 1.0
+                    rng.unit() + rng.unit() - 1.0
                 } else {
                     0.0
                 };
@@ -741,9 +742,9 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
 
     // Reservation yield (L11): drawn only when endogenous, so non-endogenous scenarios
     // consume zero extra RNG and stay byte-identical.
-    let draw_reservation = |rng: &mut Rng| -> f64 {
+    let draw_reservation = |rng: &mut SplitMix64| -> f64 {
         if cfg.endogenous {
-            cfg.reservation_lo + rng.next_f64() * (cfg.reservation_hi - cfg.reservation_lo)
+            cfg.reservation_lo + rng.unit() * (cfg.reservation_hi - cfg.reservation_lo)
         } else {
             0.0
         }
@@ -751,7 +752,7 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
 
     let mut actors: Vec<Actor> = Vec::with_capacity(cfg.n_actors);
     for _ in 0..cfg.n_actors {
-        let storage_rich = rng.next_f64() < cfg.frac_storage_rich;
+        let storage_rich = rng.unit() < cfg.frac_storage_rich;
         let (storage_capacity, capital) = if storage_rich {
             (scale(cfg.storage_rich_storage), cfg.storage_rich_capital)
         } else {
@@ -950,7 +951,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             && (0.0..=1.0).contains(&cfg.shock_exit_top_deep),
         "shock exit fractions must be in [0, 1]"
     );
-    let mut rng = Rng::new(cfg.seed);
+    let mut rng = SplitMix64::new(cfg.seed);
     let mut world = build_world(cfg, &mut rng);
     if cfg.demand_match {
         world.renormalize_sizes();

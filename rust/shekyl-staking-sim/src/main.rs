@@ -50,6 +50,7 @@ mod partition_adversary;
 mod retrieval;
 mod reward;
 mod riders;
+mod rng;
 use reward::CurveImpl;
 #[cfg(test)]
 mod l11_l13_pin;

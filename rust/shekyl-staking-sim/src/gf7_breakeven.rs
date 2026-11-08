@@ -72,7 +72,7 @@ use crate::gf7_timeline::{
     grade, ArmResult, SynthParams, GF7_FAIL_CLOSED, NEGATIVE_CONTROL_TOL, NOMINAL_COVER_N,
     POSITIVE_CONTROL_MIN, RATIO_BOUND,
 };
-use crate::standoff::SplitMix64;
+use crate::rng::SplitMix64;
 
 /// The swept cover levels. `NOMINAL_COVER_N` (10) is the nominal gate point
 /// (the `1.86` row) and must appear in the sweep — `run_breakeven` asserts it,
@@ -184,7 +184,7 @@ fn controls_valid_at(n: usize, trials: u32, rng: &mut SplitMix64) -> bool {
 /// each row's seed as `base + n · γ` is a seeder jump to an independent
 /// stream — rows are decoupled, so editing `COVER_LEVELS` never perturbs the
 /// other rows' numbers (which the docs quote).
-const SPLITMIX_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
+const SPLITMIX_GAMMA: u64 = crate::rng::GOLDEN_INCREMENT;
 
 fn run_breakeven(trials: u32, seed: u64) -> BreakevenReport {
     assert!(
@@ -197,7 +197,8 @@ fn run_breakeven(trials: u32, seed: u64) -> BreakevenReport {
     let rows: Vec<BreakevenRow> = COVER_LEVELS
         .iter()
         .map(|&n| {
-            let mut rng = SplitMix64(seed.wrapping_add((n as u64).wrapping_mul(SPLITMIX_GAMMA)));
+            let mut rng =
+                SplitMix64::new(seed.wrapping_add((n as u64).wrapping_mul(SPLITMIX_GAMMA)));
             let controls_valid = controls_valid_at(n, trials, &mut rng);
             let (blind, s3, lr) = grade(&posture, n, trials, &mut rng);
             let (blind, s3, lr) = (

@@ -59,7 +59,7 @@
 use serde::Serialize;
 use shekyl_standoff::bounded_uniform;
 
-use crate::standoff::SplitMix64;
+use crate::rng::SplitMix64;
 
 /// Wallet sweep-tick interval in milliseconds — the sim-side mirror of
 /// `DEFAULT_PSCAN_CADENCE` (`shekyl-engine-core` `pscan/start.rs`,
@@ -377,7 +377,7 @@ pub fn run_wallclock_leg() -> WallclockLegReport {
 }
 
 fn run_with(trials: u32, seed: u64) -> WallclockLegReport {
-    let mut rng = SplitMix64(seed);
+    let mut rng = SplitMix64::new(seed);
     let (controls, controls_valid) = run_controls(&mut rng, trials);
 
     let rows: Vec<WallclockRow> = sweep()

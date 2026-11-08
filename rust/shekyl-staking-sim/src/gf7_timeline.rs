@@ -71,7 +71,7 @@ use serde::Serialize;
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
 use shekyl_standoff::{bounded_uniform, draw_entry_gap, DEFAULT_ENTRY_GAP_WINDOW};
 
-use crate::standoff::SplitMix64;
+use crate::rng::SplitMix64;
 use crate::wallclock_leg::{run_wallclock_leg, WallclockLegReport};
 
 /// The interim fail-closed verdict for the entry-seam measurement (GF-7 coin
@@ -924,7 +924,7 @@ fn sweep_specs() -> Vec<(&'static str, SynthParams)> {
 /// Coverage counts over one representative recorded timeline (fresh RNG arm,
 /// does not perturb the graded stream).
 fn coverage_sample(cfg: &RunConfig) -> AxisCoverage {
-    let mut rng = SplitMix64(cfg.seed ^ 0xC0DE);
+    let mut rng = SplitMix64::new(cfg.seed ^ 0xC0DE);
     let mut obs = RecordingObserver::new();
     simulate_pair(&mut rng, &SynthParams::posture(), &mut obs);
     let mut cov = AxisCoverage {
@@ -949,7 +949,7 @@ fn coverage_sample(cfg: &RunConfig) -> AxisCoverage {
 /// Run the full graded measurement (config-driven so tests can run a small
 /// surface; `run_full_report` is the binary evidence config).
 fn run_measurement(cfg: &RunConfig) -> MeasurementReport {
-    let mut rng = SplitMix64(cfg.seed);
+    let mut rng = SplitMix64::new(cfg.seed);
     let baseline = 1.0 / cfg.n as f64;
 
     // Controls first (measurement doc §5): they gate the run's validity.
@@ -1030,7 +1030,7 @@ mod tests {
     }
 
     fn recorded_sample(p: &SynthParams, seed: u64) -> Vec<TimelineEvent> {
-        let mut rng = SplitMix64(seed);
+        let mut rng = SplitMix64::new(seed);
         let mut obs = RecordingObserver::new();
         simulate_pair(&mut rng, p, &mut obs);
         obs.events
@@ -1255,7 +1255,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "seam span")]
     fn window_exceeding_half_horizon_is_refused() {
-        let mut rng = SplitMix64(1);
+        let mut rng = SplitMix64::new(1);
         let mut obs = RecordingObserver::new();
         simulate_pair(
             &mut rng,
@@ -1270,7 +1270,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "seam span")]
     fn dispersal_exceeding_half_horizon_is_refused() {
-        let mut rng = SplitMix64(1);
+        let mut rng = SplitMix64::new(1);
         let mut obs = RecordingObserver::new();
         simulate_pair(
             &mut rng,
@@ -1288,7 +1288,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "seam span")]
     fn combined_seam_span_exceeding_half_horizon_is_refused() {
-        let mut rng = SplitMix64(1);
+        let mut rng = SplitMix64::new(1);
         let mut obs = RecordingObserver::new();
         simulate_pair(
             &mut rng,
