@@ -256,8 +256,8 @@ rust 95.3).
 
 The repository's Actions cache held 10.7 GB against GitHub's 10 GB
 default, and pull requests saved most of it: each Rust job run saved
-2.6 GB and each schema-snapshot run 1.3 GB, under the pull request's own
-ref, where no other run can read it. The `dev` cache every pull request
+2.6 GB, each schema-snapshot run 1.3 GB and each benchmark capture
+1.2 GB, under the pull request's own ref, where no other run can read it. The `dev` cache every pull request
 restores from was evicted between merges.
 
 #### Before
@@ -276,8 +276,9 @@ WP-W5 scouting 11.3m, daemon build 8.5m, DC-F39 4.2m.
 #### After
 
 Pull requests restore and never save; push runs save (`dev` for all
-four workflows, `main` too for the build and Rust workflows). The first pull request run after a green `dev`
-push run is the first that can restore, so the after rows are captured
-from runs after this change merges, by the methodology above.
+five workflows, `main` too for the build and Rust workflows). The first
+pull request run after a green `dev` push run is the first that can
+restore, so the after rows are captured from runs after this change
+merges, by the methodology above.
 
 [workflow]: ../.github/workflows/build.yml
