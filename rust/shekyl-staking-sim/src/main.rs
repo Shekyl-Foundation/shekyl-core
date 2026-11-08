@@ -2174,10 +2174,10 @@ fn main() {
     };
     match reward_arm {
         RewardArm::Production => eprintln!(
-            "shekyl-staking-sim: reward arm = Production (linear credited work, production integer arithmetic; every held shard bonds; capital carry on the bond)"
+            "shekyl-staking-sim: reward arm = Production (linear credited work, production integer arithmetic; every held shard bonds; capital carry on the bond; the exit waits the release cooldown)"
         ),
         RewardArm::RegisteredPlateau => eprintln!(
-            "shekyl-staking-sim: reward arm = RegisteredPlateau (retired plateau, deep-only bonds, flat carry; L11/L13 pins' control), curve backend = {curve_impl:?}{}",
+            "shekyl-staking-sim: reward arm = RegisteredPlateau (retired plateau, deep-only bonds, flat carry, exit refunded at once; L11/L13 pins' control), curve backend = {curve_impl:?}{}",
             match curve_impl {
                 CurveImpl::Integer => " (curve_milli)",
                 CurveImpl::Float =>

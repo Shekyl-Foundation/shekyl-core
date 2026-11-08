@@ -15,6 +15,7 @@ use crate::metrics::{
 };
 use crate::model::{
     r_target, Actor, CompositionParams, EraShape, Shard, World, AGE_WEIGHT, BOND_FLOOR,
+    RELEASE_COOLDOWN_EPOCHS,
 };
 use crate::participation::{
     admit_entrants, bonded_active_count, foundation_floor_aged, process_exits, slash_exit,
@@ -72,6 +73,9 @@ pub struct SimConfig {
     /// A6: the carry beyond storage. `None` takes the arm's shape
     /// ([`SimConfig::arm_defaults`]).
     pub carry: Option<CarryShape>,
+    /// R10: epochs a voluntary exit's bond waits in the release escrow. `None`
+    /// takes the arm's ([`SimConfig::arm_defaults`]).
+    pub exit_cooldown_epochs: Option<u32>,
     pub deep_threshold: f64,
     /// Storage units a deep shard occupies (L8 storage leg / gate-5 granularity lever).
     /// `1.0` = iteration-1 behavior; the (bond × shard-size) pair sweep varies it.
@@ -674,39 +678,51 @@ pub struct ScenarioResult {
     pub ta1: Option<Ta1Metrics>,
 }
 
+/// What an arm sets when a scenario leaves it unset ([`SimConfig::arm_defaults`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArmDefaults {
+    pub bond_scope: BondScope,
+    pub carry: CarryShape,
+    pub exit_cooldown_epochs: u32,
+}
+
 impl SimConfig {
-    /// The bond scope and carry a scenario takes when it names neither.
+    /// The bond scope, carry and exit cooldown a scenario takes when it names
+    /// none of them.
     ///
-    /// The production arm takes production's scope (every held shard) and
-    /// the split carry. The registered arm takes the configuration L11 and
-    /// L13 were published on: deep shards only and a flat carry per bonded
-    /// shard. So `RewardArm::RegisteredPlateau` selects that whole
-    /// configuration, and the falsifier's pins hold on it.
+    /// The production arm takes production's: every held shard bonds, the
+    /// split carry, and the exit waits `RELEASE_COOLDOWN_EPOCHS`. The
+    /// registered arm takes the configuration L11 and L13 were published on:
+    /// deep shards only, a flat carry per bonded shard, and a refund at once.
+    /// So `RewardArm::RegisteredPlateau` selects that whole configuration, and
+    /// the falsifier's pins hold on it.
     #[must_use]
-    pub fn arm_defaults(&self) -> (BondScope, CarryShape) {
+    pub fn arm_defaults(&self) -> ArmDefaults {
         match self.reward_arm {
-            RewardArm::Production => (
-                BondScope::EveryHeld,
-                CarryShape::Split {
+            RewardArm::Production => ArmDefaults {
+                bond_scope: BondScope::EveryHeld,
+                carry: CarryShape::Split {
                     capital_rate: BASELINE_CAPITAL_CARRY_RATE,
                     operating_per_shard: BASELINE_OPERATING_COST,
                 },
-            ),
-            RewardArm::RegisteredPlateau => (
-                BondScope::DeepOnly,
-                CarryShape::FlatPerBond(BASELINE_BOND_CARRY),
-            ),
+                exit_cooldown_epochs: RELEASE_COOLDOWN_EPOCHS,
+            },
+            RewardArm::RegisteredPlateau => ArmDefaults {
+                bond_scope: BondScope::DeepOnly,
+                carry: CarryShape::FlatPerBond(BASELINE_BOND_CARRY),
+                exit_cooldown_epochs: 0,
+            },
         }
     }
 
     /// The agent's parameters for this scenario.
     pub(crate) fn agent_params(&self) -> AgentParams {
-        let (scope, carry) = self.arm_defaults();
+        let arm = self.arm_defaults();
         AgentParams {
             storage_unit_cost: self.storage_unit_cost,
             bond_rate: self.bond_rate,
             bond_age_scale: self.bond_age_scale,
-            carry: self.carry.unwrap_or(carry),
+            carry: self.carry.unwrap_or(arm.carry),
             deep_threshold: self.deep_threshold,
             deep_shard_size: self.deep_shard_size,
             comp: self.composition(),
@@ -719,7 +735,10 @@ impl SimConfig {
             release_cooldown_epochs: self.release_cooldown_epochs,
             dodge_pref: self.dodge_pref,
             reward_arm: self.reward_arm,
-            bond_scope: self.bond_scope.unwrap_or(scope),
+            bond_scope: self.bond_scope.unwrap_or(arm.bond_scope),
+            exit_cooldown_epochs: self
+                .exit_cooldown_epochs
+                .unwrap_or(arm.exit_cooldown_epochs),
         }
     }
     /// The composition axis this scenario runs under.
@@ -1170,6 +1189,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     };
 
     for ep in 0..cfg.epochs {
+        // R10: release escrows tick before this epoch's best-responses, so an
+        // exit at the end of epoch `e` has its bond back at `e + cooldown`.
+        world.tick_releases();
         // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
         // agents react. Skip on the first epoch so the initial distribution settles.
         if cfg.dynamic && ep > 0 {
@@ -2171,6 +2193,7 @@ pub(crate) fn baseline() -> SimConfig {
         bond_rate: BASELINE_BOND_RATE, // mid
         bond_age_scale: 0.0,           // flat bond is the iteration-1 baseline (L4 sweep varies it)
         carry: None,
+        exit_cooldown_epochs: None,
         deep_threshold: BASELINE_DEEP_THRESHOLD,
         deep_shard_size: 1.0, // one unit per shard = iteration-1 behavior
         size_spread: 1.0,     // flat composition = every pre-F34 scenario, byte-identical

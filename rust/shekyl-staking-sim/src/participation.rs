@@ -67,16 +67,19 @@ pub(crate) fn committed_bond_capital(world: &World, a: usize, ap: &AgentParams) 
 }
 
 /// A slash exit (A18): production's slash burns the bond, so the actor's posted
-/// bond capital leaves its endowment before it is deactivated. An actor that
-/// re-enters later bonds from what is left. Returns the capital burned.
+/// bond capital leaves its endowment before it is deactivated. A bond still in
+/// the release escrow from an earlier exit is slashable too (R10), and burns
+/// with it. An actor that re-enters later bonds from what is left. Returns the
+/// capital burned.
 ///
 /// The sim's slash sites are the L17 shock exits: an operator that vanishes
 /// stops serving, the failure window slashes every pair it held, and nobody
 /// is left to post a `Release`. A voluntary exit is a `Release` and goes
 /// through `World::deactivate` alone.
 pub(crate) fn slash_exit(world: &mut World, a: usize, ap: &AgentParams) -> f64 {
-    let burned = committed_bond_capital(world, a, ap);
+    let burned = committed_bond_capital(world, a, ap) + world.released_capital(a);
     world.actors[a].capital = (world.actors[a].capital - burned).max(0.0);
+    world.releasing[a].clear();
     world.deactivate(a);
     burned
 }
@@ -132,8 +135,9 @@ pub fn admit_entrants(world: &mut World, pp: &ParticipationParams) {
 /// Process exits after the epoch's reward is known. An active actor's realized yield
 /// `apr = (reward − flow_cost) / committed_bond_capital` is compared to its
 /// reservation; it accrues a strike if `apr < reservation` *or* it deployed no bond
-/// capital. After `patience` consecutive strikes it exits (`World::deactivate`). Call
-/// **after** `evaluate`.
+/// capital. After `patience` consecutive strikes it exits with a `Release`
+/// (`World::release_exit`): its bond waits `exit_cooldown_epochs` in the release
+/// escrow. Call **after** `evaluate`.
 ///
 /// `reservation_add` (L13) is a *uniform* additive bump to every active actor's
 /// reservation — the **price-coupling / death-spiral channel**. The staking yield and
@@ -209,7 +213,8 @@ pub fn process_exits(
         }
     }
     for a in to_exit {
-        world.deactivate(a);
+        let bond = committed_bond_capital(world, a, ap);
+        world.release_exit(a, bond, ap.exit_cooldown_epochs);
     }
 }
 
@@ -343,6 +348,51 @@ mod tests {
         assert_eq!(committed_bond_capital(&world, 0, &ap), 3.0 * ap.bond_rate);
         ap.bond_scope = BondScope::DeepOnly;
         assert_eq!(committed_bond_capital(&world, 0, &ap), 2.0 * ap.bond_rate);
+    }
+
+    /// R10: a voluntary exit's bond waits the cooldown in the release escrow,
+    /// is not spendable there, and burns if the actor is slashed before it
+    /// clears. A cooldown of 0 refunds at once.
+    #[test]
+    fn a_release_escrows_the_bond_for_the_cooldown_and_stays_slashable() {
+        let ap = baseline().agent_params();
+        assert_eq!(
+            ap.exit_cooldown_epochs,
+            crate::model::RELEASE_COOLDOWN_EPOCHS
+        );
+        let actor = Actor {
+            storage_capacity: 4,
+            capital: 20.0,
+            is_whale: false,
+            reservation: 0.0,
+        };
+        let mut world = World::new(vec![shard(0.9), shard(0.1)], vec![actor.clone(), actor]);
+        world.holdings[0] = vec![true, true];
+        let bond = committed_bond_capital(&world, 0, &ap);
+        world.release_exit(0, bond, 2);
+        assert!(!world.active[0]);
+        assert_eq!(world.released_capital(0), bond);
+        assert_eq!(world.actors[0].capital, 20.0);
+        // The start of the next epoch: still held. The one after: back.
+        world.tick_releases();
+        assert_eq!(world.released_capital(0), bond);
+        world.tick_releases();
+        assert_eq!(world.released_capital(0), 0.0);
+
+        // Re-entered inside the cooldown and slashed: the escrow burns too.
+        world.release_exit(0, bond, 2);
+        world.active[0] = true;
+        world.holdings[0] = vec![true, false];
+        let posted = committed_bond_capital(&world, 0, &ap);
+        let burned = slash_exit(&mut world, 0, &ap);
+        assert_eq!(burned, posted + bond);
+        assert_eq!(world.actors[0].capital, 20.0 - posted - bond);
+        assert_eq!(world.released_capital(0), 0.0);
+
+        // A cooldown of 0 (the registered arm) refunds at once.
+        world.holdings[1] = vec![true, true];
+        world.release_exit(1, 2.0 * ap.bond_rate, 0);
+        assert_eq!(world.released_capital(1), 0.0);
     }
 
     /// A6: the split carry charges capital carry on the posted bond and the

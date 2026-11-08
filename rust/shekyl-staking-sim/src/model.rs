@@ -323,10 +323,20 @@ pub struct World {
     /// the L9 lock, and the deep tail is thinnest), not its *amount*. Always empty when
     /// `release_cooldown_epochs == 0` (every pre-L18 scenario), so legacy behavior is
     /// byte-identical. Exits never escrow here: a voluntary L11 exit is a `Release`
-    /// and refunds at once (R10), an L17 shock exit is a slash that burns
-    /// (`participation::slash_exit`), and the age-1 recycle is a window boundary with
-    /// no production event. Only voluntary drops cool.
+    /// and escrows its whole bond in `releasing`, an L17 shock exit is a slash that
+    /// burns (`participation::slash_exit`), and the age-1 recycle is a window
+    /// boundary with no production event. Only voluntary drops cool. This per-shard
+    /// escrow models the rejected `HoldingsUpdate` and goes with D2.
     pub cooling: Vec<Vec<(f64, u32)>>,
+    /// Per actor, the release escrow: `(bond, epochs_remaining)` for each
+    /// voluntary exit still in its cooldown (R10, ruled 2026-11-08). A voluntary
+    /// exit is a production `Release`, which returns the whole record's bond
+    /// `RELEASE_COOLDOWN_EPOCHS` after the last served epoch, and a slash before
+    /// then burns it. The escrowed capital cannot fund a bond if the actor
+    /// re-enters, and `participation::slash_exit` burns it. Ticked once per epoch
+    /// by [`World::tick_releases`]. Empty when the exit cooldown is 0 (the
+    /// registered arm).
+    pub releasing: Vec<Vec<(f64, u32)>>,
 }
 
 impl World {
@@ -339,6 +349,7 @@ impl World {
         let active = vec![true; n_actor];
         let below_streak = vec![0u32; n_actor];
         let cooling = vec![Vec::new(); n_actor];
+        let releasing = vec![Vec::new(); n_actor];
         Self {
             shards,
             actors,
@@ -348,6 +359,37 @@ impl World {
             active,
             below_streak,
             cooling,
+            releasing,
+        }
+    }
+
+    /// Capital actor `a` has in the release escrow: bonds from voluntary exits
+    /// whose cooldown has not elapsed. Not spendable on a new bond.
+    pub fn released_capital(&self, a: usize) -> f64 {
+        self.releasing[a].iter().map(|&(amt, _)| amt).sum()
+    }
+
+    /// A voluntary exit, a production `Release`: escrow the record's `bond` for
+    /// `cooldown_epochs`, then deactivate. An exit at the end of epoch `e` has
+    /// its bond back for the best-response of epoch `e + cooldown_epochs`:
+    /// [`World::tick_releases`] runs at the start of every epoch, before the
+    /// best-responses. A cooldown of 0 refunds at once.
+    pub fn release_exit(&mut self, a: usize, bond: f64, cooldown_epochs: u32) {
+        if cooldown_epochs > 0 && bond > 0.0 {
+            self.releasing[a].push((bond, cooldown_epochs));
+        }
+        self.deactivate(a);
+    }
+
+    /// Advance every release escrow one epoch; a bond whose cooldown has
+    /// elapsed leaves the escrow and is spendable again. Runs at the start of
+    /// each epoch, dynamic window or not.
+    pub fn tick_releases(&mut self) {
+        for entries in &mut self.releasing {
+            for e in entries.iter_mut() {
+                e.1 = e.1.saturating_sub(1);
+            }
+            entries.retain(|&(_, rem)| rem > 0);
         }
     }
 
@@ -360,11 +402,11 @@ impl World {
     }
 
     /// Deactivate actor `a`: clears its holdings, locks, and in-flight fetches, and
-    /// resets its streak. Capital is untouched here. A voluntary L11 exit is a
-    /// production `Release`, which refunds the bond (production refunds after
-    /// `RELEASE_COOLDOWN_EPOCHS`; the sim at once, Appendix B R10). A slash burns the
-    /// bond, and goes through `participation::slash_exit`, which calls this after
-    /// the burn (A18). Exit overrides L9 retention locks: production has no lock that
+    /// resets its streak. Capital is untouched here, and so is the release escrow. A
+    /// voluntary L11 exit is a production `Release` and goes through
+    /// [`World::release_exit`], which escrows the bond for the cooldown first (R10).
+    /// A slash burns the bond, and goes through `participation::slash_exit`, which
+    /// calls this after the burn (A18). Exit overrides L9 retention locks: production has no lock that
     /// refuses a `Release` (R6), and duration deters *voluntary drop while staying*,
     /// not *capital flight*.
     pub fn deactivate(&mut self, a: usize) {
@@ -599,6 +641,15 @@ impl World {
 /// declared arm above it.
 pub const BOND_FLOOR: f64 = shekyl_archival_retention::archival_params().bond_floor_atomic as f64
     / shekyl_units::ATOMIC_UNITS_PER_SKL as f64;
+
+/// Production's release cooldown, in epochs: `archival_params()`'s
+/// `release_cooldown_epochs`. One sim epoch is one settlement epoch (Appendix B,
+/// R11). The production arm's exit waits it (R10).
+pub const RELEASE_COOLDOWN_EPOCHS: u32 = {
+    let epochs = shekyl_archival_retention::archival_params().release_cooldown_epochs;
+    assert!(epochs <= u32::MAX as u64, "the release cooldown fits a u32");
+    epochs as u32
+};
 
 /// Production age-weight slope, in the units [`g_age`] takes.
 ///

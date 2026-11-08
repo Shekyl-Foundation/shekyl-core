@@ -2946,12 +2946,14 @@ linear work on production's integer operands: `scarcity_micro` per held
 seated shard, summed in micro, floored once by `work_milli_from_micro`,
 gated by `credited_work_milli`, and paid by `reward_share_floor` from a
 purse that crosses into atomic units once. The dust stays unminted. It
-bonds every held shard, as `bond_floor_of` does, and carries capital on
-the posted bond plus an operating cost per held shard (A6, A7, ruled
-2026-11-08). `RewardArm::RegisteredPlateau` is the configuration L11 and
-L13 were taken on: float work, the banded plateau at cap 8, the pseudonym
-split and a float price, deep shards only bonded, and a flat 0.03 carry
-per bonded shard (`SimConfig::arm_defaults`). Production deleted the
+bonds every held shard, as `bond_floor_of` does, carries capital on the
+posted bond plus an operating cost per held shard (A6, A7), and holds an
+exiting actor's bond for `RELEASE_COOLDOWN_EPOCHS`, slashable (R10); all
+three ruled 2026-11-08. `RewardArm::RegisteredPlateau` is the
+configuration L11 and L13 were taken on: float work, the banded plateau at
+cap 8, the pseudonym split and a float price, deep shards only bonded, a
+flat 0.03 carry per bonded shard, and an exit refunded at once
+(`SimConfig::arm_defaults`). Production deleted the
 plateau from the reward path (D3/R2), so that arm is on the retirement
 list, with D1's trigger. It is the falsifier's control:
 `l11_l13_five_seed_pins` runs it, and the pins must hold after every
@@ -3116,8 +3118,7 @@ purse is split, so it is a second arm and not a change to the registered
 one.
 
 **Not modeled.** The counted draws' free ride (P2) has no sim figure: the
-micro-sim's availability is per epoch. The voluntary exit's Release
-cooldown is not applied (R10, for Rick).
+micro-sim's availability is per epoch.
 
 ### The rulings (Rick 2026-11-08): predictions, then outcomes
 
@@ -3217,6 +3218,30 @@ were taken on.
   actors, so an escrow burns only if its actor re-entered and was shocked
   inside the 2 epochs. Expected: `slashed_capital` rises on few shock rows
   and by little.
+
+**P8 outcome.**
+
+| P8 claim | Outcome | Grade |
+| --- | --- | --- |
+| The registered arm's pins hold and its sweep is byte-identical | Every bit holds. The registered sweep's stdout is byte-identical to the one before the commit, and its stderr is too apart from the arm banner line this commit rewords | Held |
+| `bondA` falls slightly where exits are frequent (the L13 floors at 60 and below, the spiral, the servo), by less than 2 | Falls on `l13_decay_lo` (mean −0.10), `l13_decay_min` (−0.43) and the spiral (−0.70), each seed within −1.3. `l13_decay_mid` (+0.26) and the servo (+0.07) move both ways by seed | Held on three of five |
+| `cDeepU` and `oUmx` within 0.02 | `oUmx` does not move on any row or seed. `cDeepU` moves up to +0.104 on the L11 rows and −0.079 on `l13_decay_hi` | `oUmx` held; `cDeepU` wrong on the L11 rows and the floor 100 |
+| Rows with few exits (`l13_decay_hi`, the L11 rows) move least; some may hold bit for bit | No row holds bit for bit. The L11 rows move most: `bondA` −1.7 (`l11_fill`) and −2.2 (`l11_trim`) on average, down to −4.1 on one seed | Wrong |
+| Nothing burns on L11 or L13; on the shock rows `slashed_capital` rises on a few rows and by little | Nothing burns on L11 or L13 (the pin test asserts it). On the 11 shock rows the burn **falls** on 10 (e.g. `swan2_aftershock` 921.8 → 597.8) and rises on one (`swan2_knee_cascade` 147.8 → 327.0), because the slash exits move the same way (88 → 59, 14 → 29). Over the whole default sweep 192 of 407 scenarios moved: the ones with exits | Zero held; direction wrong |
+**Why the L11 rows moved most.** P8 took the L11 rows to be quiet after
+the fill. They are not: about 88 of 240 actors are bonded, 6 enter every
+epoch and about as many leave, so a re-entry inside the cooldown is the
+common case there. `admit_entrants` re-admits the lowest-index inactive
+actors first, which are often the ones that just left. On the L13 floors
+the pool is smaller and slower to turn over. Read from the code; no run
+isolated the re-entry rate.
+
+**Why the burn fell.** A shock exits a fixed fraction of the *active*
+set at the shock epoch (`shock_exit_frac`, `shock_exit_domains`,
+`shock_exit_top_deep`), so fewer slash exits means a smaller active set
+there. Why the cooldown shrinks the
+active set at the shock is not isolated; one reading, untested, is that a
+re-entrant that cannot bond takes strikes and leaves sooner.
 
 ## L14×L15 — proof-of-archival in harmony with retrieval (specification)
 

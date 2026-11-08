@@ -103,6 +103,11 @@ pub struct AgentParams {
     pub reward_arm: RewardArm,
     /// A7: which held shards post a bond.
     pub bond_scope: BondScope,
+    /// R10: epochs a voluntary exit's bond stays in the release escrow
+    /// (`World::release_exit`), slashable, before it is spendable again.
+    /// Production's `RELEASE_COOLDOWN_EPOCHS` on the production arm; 0 (refund
+    /// at once) on the registered arm.
+    pub exit_cooldown_epochs: u32,
 }
 
 /// Which held shards post a bond (A7, ruled 2026-11-08).
@@ -184,7 +189,11 @@ fn best_response(
     // L18: spendable bond budget = endowment minus capital still frozen in release
     // cooldown from earlier voluntary drops. `frozen_capital` is 0 when no drop is
     // cooling (every pre-L18 scenario), so `capital` is unchanged there.
-    let capital = (world.actors[actor].capital - world.frozen_capital(actor)).max(0.0);
+    // R10: a bond still in the release escrow from an earlier exit cannot fund
+    // a new one either.
+    let capital =
+        (world.actors[actor].capital - world.frozen_capital(actor) - world.released_capital(actor))
+            .max(0.0);
     let bonded = ap.bond_rate > 0.0;
     let was_held = world.holdings[actor].clone();
 
