@@ -3098,8 +3098,9 @@ Two consequences are recorded here so they are not discovered later.
 
 It is a separate PR because it is a separate validation surface (rule 19).
 The coupling half is carried by the `FOLLOWUPS.md` row *EUP-3's coupling
-half: run the staking sim on the economy's purse*, and the retirement list
-by *Delete the staking sim's retired mechanisms as Rick rules them*.
+half: run the staking sim on the economy's purse*, and the retirement list's
+last two rows by *Delete the staking sim's last two retired mechanisms when
+their triggers fire*.
 
 **Complete-tree floor, checked 2026-10-22.** `bond_floor_of` posts one
 `ARCHIVAL_BOND_FLOOR_ATOMIC` for `HoldingsKind::CompleteTree`, however
@@ -3447,7 +3448,7 @@ Paths: `sim/` = `rust/shekyl-staking-sim/src/`, `prod/` = `rust/shekyl-archival-
 **The four dispositions.**
 - **Incorporate.** Production owns the mechanism and it is settled. The sim calls the owner and deletes its restatement. Where the restatement belongs to an arm that production retired, it stays with that arm, and the arm goes on the retirement list.
 - **Plan ahead.** The sim's mechanism is the design and production has not built it. Declared at the site, with its design section.
-- **Retired.** Production retired the mechanism, or built a different one. The row goes on the retirement list for Rick (§6.2) and is not cut here.
+- **Retired.** Production retired the mechanism, or built a different one. The row goes on the retirement list (§6.2), and is deleted as Rick rules it.
 - **Exogenous.** An assumption about the world, declared at the site with the run that calibrated it, or "uncalibrated".
 
 "Plan ahead" is reserved for a mechanism the sim designs and production lacks. Where production has settled a mechanism and the sim lags, the row is Incorporate. Where production built something different, the row is Retired. The census's provisional column used "Plan ahead" for both; those rows are re-disposed here.

@@ -3131,11 +3131,13 @@ as on the registered arm to within 0.04 of `cDeepU`; `bondA` moves by
 These are under the flat 0.03 carry; P7's outcome has the floor rows
 under the split carry.
 
-**The falsifier.** `l11_l13_five_seed_pins` runs the registered plateau
-arm and holds every bit at the head of this PR, after P1, P2, P3, P5 and
-P6, none of which touches the purse. P4 touches it: it changes how the
-purse is split, so it is a second arm and not a change to the registered
-one.
+**The falsifier.** `l11_l13_five_seed_pins` runs the registered arm and
+holds every bit at the head of this PR: after P1, P2, P3, P5 and P6, none
+of which touches the purse; after P7 and P8, which change the production
+arm's bond scope, carry and exit and leave the registered arm's alone; and
+after the seven deletions, none of which is on the population path. P4
+touches the purse: it changes how the purse is split, so it is a second
+arm and not a change to the registered one.
 
 **Not modeled.** The counted draws' free ride (P2) has no sim figure: the
 micro-sim's availability is per epoch.
