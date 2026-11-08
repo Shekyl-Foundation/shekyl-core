@@ -7,7 +7,7 @@
 //! one-axis sweeps off a baseline plus the whale×bond cross — not the full Cartesian
 //! product — to keep runtime bounded while exercising each axis.
 
-use crate::agent::{run_epoch, AgentParams};
+use crate::agent::{run_epoch, AgentParams, BondScope, CarryShape};
 use crate::audit::{challenge_needed, deterrence_threshold, read_prob};
 use crate::fingerprint::{force_deep_portfolio, Ta1Metrics, Ta1Recorder, SEB_DEFAULT};
 use crate::metrics::{
@@ -62,14 +62,16 @@ pub struct SimConfig {
     pub curve_impl: CurveImpl,
     /// Which mechanism pays (`reward::RewardArm`). Production by default.
     pub reward_arm: RewardArm,
-    /// A7: bond every held shard (production's shape) instead of deep shards
-    /// only (the default). `AgentParams::bonds`.
-    pub bond_every_held_shard: bool,
+    /// A7: which held shards post a bond. `None` takes the arm's scope
+    /// ([`SimConfig::arm_defaults`]); a named arm sets it.
+    pub bond_scope: Option<BondScope>,
     pub storage_unit_cost: f64,
     pub bond_rate: f64,
     /// Age-scaling of the bond (L4): 0 = flat, >0 = older shards bond higher.
     pub bond_age_scale: f64,
-    pub bond_carry: f64,
+    /// A6: the carry beyond storage. `None` takes the arm's shape
+    /// ([`SimConfig::arm_defaults`]).
+    pub carry: Option<CarryShape>,
     pub deep_threshold: f64,
     /// Storage units a deep shard occupies (L8 storage leg / gate-5 granularity lever).
     /// `1.0` = iteration-1 behavior; the (bond × shard-size) pair sweep varies it.
@@ -673,13 +675,38 @@ pub struct ScenarioResult {
 }
 
 impl SimConfig {
+    /// The bond scope and carry a scenario takes when it names neither.
+    ///
+    /// The production arm takes production's scope (every held shard) and
+    /// the split carry. The registered arm takes the configuration L11 and
+    /// L13 were published on: deep shards only and a flat carry per bonded
+    /// shard. So `RewardArm::RegisteredPlateau` selects that whole
+    /// configuration, and the falsifier's pins hold on it.
+    #[must_use]
+    pub fn arm_defaults(&self) -> (BondScope, CarryShape) {
+        match self.reward_arm {
+            RewardArm::Production => (
+                BondScope::EveryHeld,
+                CarryShape::Split {
+                    capital_rate: BASELINE_CAPITAL_CARRY_RATE,
+                    operating_per_shard: BASELINE_OPERATING_COST,
+                },
+            ),
+            RewardArm::RegisteredPlateau => (
+                BondScope::DeepOnly,
+                CarryShape::FlatPerBond(BASELINE_BOND_CARRY),
+            ),
+        }
+    }
+
     /// The agent's parameters for this scenario.
     pub(crate) fn agent_params(&self) -> AgentParams {
+        let (scope, carry) = self.arm_defaults();
         AgentParams {
             storage_unit_cost: self.storage_unit_cost,
             bond_rate: self.bond_rate,
             bond_age_scale: self.bond_age_scale,
-            bond_carry: self.bond_carry,
+            carry: self.carry.unwrap_or(carry),
             deep_threshold: self.deep_threshold,
             deep_shard_size: self.deep_shard_size,
             comp: self.composition(),
@@ -692,7 +719,7 @@ impl SimConfig {
             release_cooldown_epochs: self.release_cooldown_epochs,
             dodge_pref: self.dodge_pref,
             reward_arm: self.reward_arm,
-            bond_every_held_shard: self.bond_every_held_shard,
+            bond_scope: self.bond_scope.unwrap_or(scope),
         }
     }
     /// The composition axis this scenario runs under.
@@ -2098,7 +2125,17 @@ const _: () = assert!(
     BASELINE_BOND_RATE > BOND_FLOOR,
     "the baseline bond is declared above the floor"
 );
+/// A6 as registered: a flat carry per bonded shard. It is the registered
+/// arm's carry, and `clustering.rs` reads it.
 pub(crate) const BASELINE_BOND_CARRY: f64 = 0.03;
+/// Capital carry per unit of posted bond per epoch. The registered 0.03 at
+/// the baseline's 2.0, so that calibration point is kept; its derivation is
+/// repeated at the coupling half.
+pub(crate) const BASELINE_CAPITAL_CARRY_RATE: f64 = BASELINE_BOND_CARRY / BASELINE_BOND_RATE;
+/// Operating cost per held shard per epoch. The coupling half calibrates it;
+/// until then it is 0, and the registered 0.03 is read as capital carry, as
+/// its own definition said.
+pub(crate) const BASELINE_OPERATING_COST: f64 = 0.0;
 pub(crate) const BASELINE_DEEP_THRESHOLD: f64 = 0.5;
 pub(crate) const BASELINE_TRANSPORT_U_BASE: f64 = 0.9;
 pub(crate) const BASELINE_TRANSPORT_U_K: f64 = 0.07;
@@ -2129,11 +2166,11 @@ pub(crate) fn baseline() -> SimConfig {
         // Production pays: linear credited work on its integer operands. The
         // registered plateau arm is the L11/L13 pins' control.
         reward_arm: RewardArm::Production,
-        bond_every_held_shard: false,
+        bond_scope: None,
         storage_unit_cost: BASELINE_STORAGE_UNIT_COST,
         bond_rate: BASELINE_BOND_RATE, // mid
         bond_age_scale: 0.0,           // flat bond is the iteration-1 baseline (L4 sweep varies it)
-        bond_carry: BASELINE_BOND_CARRY,
+        carry: None,
         deep_threshold: BASELINE_DEEP_THRESHOLD,
         deep_shard_size: 1.0, // one unit per shard = iteration-1 behavior
         size_spread: 1.0,     // flat composition = every pre-F34 scenario, byte-identical
@@ -2968,17 +3005,19 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         out.push(c);
     }
 
-    // A7 (EUP-3 check half, for Rick): which shards post a bond. Production
-    // bonds every held shard at the floor (`bond_floor_of`); the model bonds
-    // deep shards only. Three arms beside each base, the lean point
-    // (`l11_fill`) and the L13 knee (`l13_decay_knee`), which are themselves
-    // the deep-only arm at the baseline's 2.0: every held shard at 2.0, every
-    // held shard at the floor, deep shards only at the floor.
+    // A7: which shards post a bond. Every held shard is the default
+    // (production's `bond_floor_of`, ruled 2026-11-08); deep only is a named
+    // arm. Four arms beside each base, the lean point (`l11_fill`) and the L13
+    // knee (`l13_decay_knee`): every held shard at 2.0 (the base's own
+    // scope, named), deep only at 2.0, and each at the floor. Each names its
+    // scope, so the registered arm runs it as named.
     for (base_label, every, rate, rate_label) in [
         ("l11", true, BASELINE_BOND_RATE, "b200"),
+        ("l11", false, BASELINE_BOND_RATE, "b200"),
         ("l11", true, BOND_FLOOR, "floor"),
         ("l11", false, BOND_FLOOR, "floor"),
         ("l13", true, BASELINE_BOND_RATE, "b200"),
+        ("l13", false, BASELINE_BOND_RATE, "b200"),
         ("l13", true, BOND_FLOOR, "floor"),
         ("l13", false, BOND_FLOOR, "floor"),
     ] {
@@ -2996,7 +3035,11 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         let scope = if every { "all" } else { "deep" };
         c.name = format!("a7_{base_label}_{scope}_{rate_label}");
         c.axis = "a7_bond_scope".into();
-        c.bond_every_held_shard = every;
+        c.bond_scope = Some(if every {
+            BondScope::EveryHeld
+        } else {
+            BondScope::DeepOnly
+        });
         c.bond_rate = rate;
         out.push(c);
     }

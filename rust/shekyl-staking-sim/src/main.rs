@@ -2123,9 +2123,11 @@ fn main() {
     }
 
     // The reward arm. Production pays linear credited work on its integer
-    // operands and is the default; the registered plateau arm reproduces the
-    // L11/L13 pins and is on the retirement list (Appendix B, D1). An
-    // unrecognized value fails loudly.
+    // operands, bonds every held shard and carries capital on the bond; it is
+    // the default. The registered arm runs the configuration L11/L13 were
+    // published on (plateau, deep-only bonds, flat carry; `arm_defaults`),
+    // reproduces their pins, and is on the retirement list (Appendix B, D1).
+    // An unrecognized value fails loudly.
     let reward_arm =
         match std::env::args().find_map(|a| a.strip_prefix("--reward-arm=").map(str::to_string)) {
             None => RewardArm::Production,
@@ -2172,10 +2174,10 @@ fn main() {
     };
     match reward_arm {
         RewardArm::Production => eprintln!(
-            "shekyl-staking-sim: reward arm = Production (linear credited work, production integer arithmetic)"
+            "shekyl-staking-sim: reward arm = Production (linear credited work, production integer arithmetic; every held shard bonds; capital carry on the bond)"
         ),
         RewardArm::RegisteredPlateau => eprintln!(
-            "shekyl-staking-sim: reward arm = RegisteredPlateau (retired plateau; L11/L13 pins' control), curve backend = {curve_impl:?}{}",
+            "shekyl-staking-sim: reward arm = RegisteredPlateau (retired plateau, deep-only bonds, flat carry; L11/L13 pins' control), curve backend = {curve_impl:?}{}",
             match curve_impl {
                 CurveImpl::Integer => " (curve_milli)",
                 CurveImpl::Float =>

@@ -7,13 +7,16 @@
 //! churn-stability pre-commitment). Each actor re-chooses its shard portfolio by
 //! ranking shards on net marginal value:
 //!
-//! `net(s) = price · (1/R_eff(s)) · g(age(s)) − storage_unit_cost − [deep] bond_carry`
+//! `net(s) = price · (1/R_eff(s)) · g(age(s)) − storage_unit_cost − carry(s)`
 //!
 //! and greedily filling under two budgets: total shards ≤ `storage_capacity`, and
-//! posted deep-shard bonds `Σ bond(age) ≤ capital` (the per-shard retention bond —
-//! the keystone Sybil/deep-history lever). The bond is flat (`bond_rate` per deep
-//! shard) when `bond_age_scale = 0` and age-scaled otherwise (older shards cost
-//! more capital to bond — L4). `price` is the previous epoch's work→reward exchange
+//! posted bonds `Σ bond(age) ≤ capital` (the per-shard retention bond — the
+//! keystone Sybil/deep-history lever). Which held shards post a bond is
+//! [`BondScope`]: every held shard by default, as production's `bond_floor_of`
+//! does. The bond is flat (`bond_rate` per bonded shard) when `bond_age_scale = 0`
+//! and age-scaled otherwise (older shards cost more capital to bond — L4).
+//! `carry(s)` is [`CarryShape`]: capital carry on the posted bond plus an
+//! operating cost per held shard. `price` is the previous epoch's work→reward exchange
 //! rate, carrying the competitive-share servo's dilution into the marginal decision.
 
 use crate::model::{bond_age, bond_duration, fetch_latency, CompositionParams, World};
@@ -25,15 +28,16 @@ pub struct AgentParams {
     /// Flow cost per held shard (storage/bandwidth). Stops agents from holding
     /// everything when marginal reward is ~0.
     pub storage_unit_cost: f64,
-    /// Capital locked per deep-history shard (the swept bond rate: low/mid/high).
+    /// Capital locked per bonded shard (the swept bond rate: low/mid/high).
     /// `0` disables the bond (the toothless-cap baseline).
     pub bond_rate: f64,
     /// Age-scaling of the bond *magnitude* (L4). Resolved to `0` (flat) — kept as a
     /// parameter only so the 1c counter-evidence sweeps remain reproducible.
     pub bond_age_scale: f64,
-    /// Flow opportunity cost of capital locked in one deep-shard bond.
-    pub bond_carry: f64,
-    /// `age ≥ deep_threshold` ⇒ deep history ⇒ requires a bond.
+    /// The per-epoch carry on a holding beyond its storage (A6).
+    pub carry: CarryShape,
+    /// `age ≥ deep_threshold` ⇒ deep history. Under [`BondScope::DeepOnly`]
+    /// it also decides which shards bond.
     pub deep_threshold: f64,
     /// Storage units a deep shard occupies (L8 storage leg / gate-5 granularity lever).
     /// `1.0` = iteration-1 behavior (every shard costs one unit).
@@ -97,17 +101,65 @@ pub struct AgentParams {
     /// The reward arm the agent values shards under: the work term it is paid
     /// on (`reward::shard_value`).
     pub reward_arm: RewardArm,
-    /// A7: `false` (the default) bonds deep shards only; `true` bonds every
-    /// held shard, which is production's shape (`bond_floor_of` is the floor
-    /// times the held set). Both arms go to Rick measured.
-    pub bond_every_held_shard: bool,
+    /// A7: which held shards post a bond.
+    pub bond_scope: BondScope,
+}
+
+/// Which held shards post a bond (A7, ruled 2026-11-08).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BondScope {
+    /// Every held shard posts the bond. Production's shape: `bond_floor_of`
+    /// is the floor times the held set. The default.
+    EveryHeld,
+    /// Deep shards only (`age ≥ deep_threshold`). The registered arm's scope,
+    /// and a named arm beside the default (`a7_*_deep_*`).
+    DeepOnly,
+}
+
+/// The per-epoch carry on a holding beyond its storage (A6, ruled 2026-11-08).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CarryShape {
+    /// Capital carry proportional to the posted bond (`capital_rate` per unit
+    /// of bond per epoch), plus `operating_per_shard` on every held shard. The
+    /// default. The operating cost is the coupling half's calibration; it is
+    /// not `storage_unit_cost`, which scales with a shard's bytes.
+    Split {
+        capital_rate: f64,
+        operating_per_shard: f64,
+    },
+    /// A flat amount per bonded shard, whatever the bond: A6 as registered.
+    /// The registered arm's shape; it goes when that arm goes.
+    FlatPerBond(f64),
+}
+
+impl CarryShape {
+    /// The carry on one held shard that posts `bond` when `bonds` is true.
+    #[must_use]
+    pub fn per_shard(self, bonds: bool, bond: f64) -> f64 {
+        match self {
+            Self::Split {
+                capital_rate,
+                operating_per_shard,
+            } => (if bonds { capital_rate * bond } else { 0.0 }) + operating_per_shard,
+            Self::FlatPerBond(carry) => {
+                if bonds {
+                    carry
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
 }
 
 impl AgentParams {
     /// Whether holding `shard` posts a bond (and carries its cost).
     #[must_use]
     pub fn bonds(&self, shard: &crate::model::Shard) -> bool {
-        self.bond_every_held_shard || shard.is_deep(self.deep_threshold)
+        match self.bond_scope {
+            BondScope::EveryHeld => true,
+            BondScope::DeepOnly => shard.is_deep(self.deep_threshold),
+        }
     }
 }
 
@@ -217,7 +269,7 @@ fn best_response(
         let bonds = ap.bonds(&world.shards[s]);
         let value = shard_value(ap.reward_arm, price, r_eff, age, age_weight);
         let mut cost = ap.storage_unit_cost * ap.comp.size(&world.shards[s])
-            + if bonds { ap.bond_carry } else { 0.0 };
+            + ap.carry.per_shard(bonds, bond_cost(age));
         // Anticipatory lock cost: acquiring a deep shard commits storage for its
         // (age-scaled) duration, foregone if value later drops. Charged only on a
         // *fresh* acquisition (not already held), proportional to the horizon — so

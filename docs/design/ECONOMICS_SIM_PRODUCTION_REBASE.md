@@ -3118,20 +3118,27 @@ EUP-5 I, blocked on that half. Both are `FOLLOWUPS.md` rows.
 
 ### 6.1 The check half's falsifier
 
-The registered plateau arm reproduces the five-seed L11/L13 pins after
-every incorporation that does not touch the purse. `l11_l13_five_seed_pins`
-runs that arm and holds every bit at the PR's head, after the one RNG body,
-the failure-confirmation model on production's window and fold, the bond
-floor and the named baseline, the slash, and the bond-scope arm. The
-reward arithmetic touches the purse: it changes how the purse is split. It
-is a second arm, `RewardArm::Production`, the default, and
+The registered arm reproduces the five-seed L11/L13 pins after every
+incorporation that does not touch the purse. The registered arm is the
+configuration L11 and L13 were published on: the plateau, deep shards
+only bonded, and a flat carry per bonded shard (`SimConfig::arm_defaults`).
+`l11_l13_five_seed_pins` runs that arm and holds every bit at the PR's
+head, after the one RNG body, the failure-confirmation model on
+production's window and fold, the bond floor and the named baseline, the
+slash, the bond-scope default and the carry split. The reward arithmetic
+touches the purse: it changes how the purse is split. It is a second arm,
+`RewardArm::Production`, the default, which also takes production's bond
+scope (every held shard) and the split carry, and
 `l11_l13_five_seed_production_pins` holds its vector. The nightly
 `staking-sim-ignored` lane runs both. The predictions and their grades are
 [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*EUP-3 check half*.
 
-### 6.2 For Rick
+### 6.2 Rick's rulings (2026-11-08)
 
-Each item is measured on both arms where it has two. None is cut here.
+Rick took the review's recommendation on each item. The sim has two
+goals: to measure what was built and to design what comes next. Plan-ahead
+designs and named arms stay; only superseded, deprecated or rejected
+mechanisms are dropped. Each item below gives the ruling and what landed.
 
 **1. The retirement list.** Each row is a mechanism production retired or
 built differently (Appendix B). Deleting it is Rick's ruling.
@@ -3160,24 +3167,24 @@ rejected `HoldingsUpdate`. Production's applies to the whole record at
 once. The question: should the sim's exit wait `RELEASE_COOLDOWN_EPOCHS`
 before its capital returns, and should the per-shard escrow go with D2?
 
-**3. A7, deep only against every held shard.** Production bonds every held
-shard at the floor. Five-seed means on the production arm, lean point /
-L13 knee (`a7_bond_scope`):
+**3. A7, the bond's scope, and A6, the carry. Ruled 2026-11-08:** every
+held shard bonds by default, as production does, and deep only is a named
+arm. The carry is capital carry on the posted bond, a model correction,
+plus an operating cost per held shard, which the coupling half calibrates
+and which is 0 until then. Five-seed means on the production arm, lean
+point / L13 knee (`a7_bond_scope`):
 
 | arm | `cDeepU` | `oUmx` | `bondA` |
 | --- | --- | --- | --- |
-| deep only at 2.0 (default) | 0.061 / 0.072 | 0.078 / 0.299 | 72.1 / 66.5 |
-| every held shard at 2.0 | 0.424 / 0.748 | 1.000 / 1.000 | 88.0 / 73.5 |
-| every held shard at the floor | 0.299 / 0.382 | 1.000 / 1.000 | 62.5 / 53.1 |
-| deep only at the floor | 0.000 / 0.000 | 0.000 / 0.000 | 106.8 / 83.1 |
+| every held shard at 2.0 (default) | 0.424 / 0.748 | 1.000 / 1.000 | 88.0 / 73.5 |
+| deep only at 2.0 | 0.061 / 0.072 | 0.078 / 0.299 | 72.1 / 66.5 |
+| every held shard at the floor | 0.157 / 0.180 | 1.000 / 1.000 | 81.8 / 69.7 |
+| deep only at the floor | 0.000 / 0.000 | 0.000 / 0.000 | 123.2 / 93.1 |
 
-The carry cost confounds the comparison: it is a flat 0.03 per bonded
-shard whatever the rate (A6), so the every-held arm pays it on hot shards
-too. With it scaled to the rate, every held shard at the floor reads
-0.157 / 0.180 and the oldest band is still uncovered on every seed. The
-question: does the sim adopt production's every-held-shard bond as its
-default, and is the carry's scaling with the bond (A6) a model correction
-or a calibration for the coupling half?
+At 2.0 the capital carry is the registered 0.03 per bonded shard, so the
+2.0 rows read as they did under the flat carry, bit for bit. Whenever every
+held shard bonds, at 2.0 or at the floor, the oldest band is uncovered on
+every seed. That reading goes to EUP-5 I, the floor's sweep (`FOLLOWUPS.md`).
 
 **4. Calibrations an incorporation would move.** The bond floor (0.75 SKL;
 the sim's 2.0 is an arm above it), the age weight (2000 milli), the bond
@@ -3495,7 +3502,7 @@ The first three rows are structural: every registered run inherits them from `ba
 | R16 | `sim/fingerprint.rs:145` `serve_credit_bit` | `deep && held && inflight == 0` | `settle_epoch` is deleted (`SO-D10e`, 2026-10-08). The fold is `settle_pair` (`prod/settlement_select.rs:150`), which counts `IssuedDraw.passed` against `SERVE_THRESHOLD_PASSES = 2` | V | Incorporate. The serve bit is `settle_pair`'s Served under the population arm's all-pass abstraction (N1), declared at the site. |
 | R17 | `sim/timing_cluster.rs:33` `JOIN_LAG_BLOCKS = SEB`; `:171` `verify_f4_slow_emitter(25, 1)` | join lag of one settlement epoch; the slow-emitter check uses 25 by hand | `good_through` in `prod/consensus_state.rs` credits from `join_epoch + 1`. `MAX_CLAIM_AGE_W = 26`, generated, re-exported through `prod/bond_floor`. The 25 is `W − 1`, not an import | V | Incorporate. Done. `JOIN_LAG_BLOCKS` went with the retired retention horizon on `dev`. |
 | R18 | `sim/budget_throttle.rs:107` `POINTS_SPEC` | `emis_frac` 1.0 and 0.012 | Hand-copied from economics-sim output. Computable from `rust/shekyl-economics/src/emission_share.rs` and `burn.rs`. Not this check's seam | V (the literals) / I (which run they were copied from) | Exogenous until the coupling half. Declared at `POINTS_SPEC` as copied economics-sim output. The coupling half recomputes it. |
-| R19 | `sim/failure_confirmation.rs:24`; `sim/clustering.rs:122`; `sim/cover.rs` endowments; `sim/budget_throttle.rs:115` | copies of `baseline()` and of registered-run outputs | Owner is `sim/scenarios.rs:2051` `baseline` and the doc tables. `sim/clustering.rs:114` says "single-sourced" and then retypes | V | Incorporate. `sim/clustering.rs`'s retyped deep threshold, bond rate and storage cost read `baseline()`. The other copies hold registered-run outputs and are declared at their sites. |
+| R19 | `sim/failure_confirmation.rs:24`; `sim/clustering.rs:122`; `sim/cover.rs` endowments; `sim/budget_throttle.rs:115` | copies of `baseline()` and of registered-run outputs | Owner is `sim/scenarios.rs:2051` `baseline` and the doc tables. `sim/clustering.rs:114` says "single-sourced" and then retypes | V | Incorporate. `sim/clustering.rs`'s retyped deep threshold, bond rate and storage cost read `baseline()`. The other copies hold registered-run outputs and are declared at their sites. `sim/clustering.rs` keeps the registered bond shape, deep shards only at a flat carry, declared at its site: it is the TM1 privacy harness, and A7 and A6 are not its axis. |
 | R20 | the four bodies in N5 | SplitMix64, four times | Intra-crate. See N5 for the economics-sim precedent | V | Incorporate. Same as N5. |
 
 ### (X) Declared exception
@@ -3520,8 +3527,8 @@ No production owner. Line numbers are at this pin; the claims are the 2026-10-02
 | A3 | `sim/scenarios.rs:1164` | adaptive servo `budget_eff = base·(1+gain·signal)`, `share_gain 8.0` | No production owner. `staker_pool_share_at` keys on closed-shard count and is flat | V | Exogenous. No production owner. The L13 servo stays the model's. |
 | A4 | `sim/scenarios.rs:1634` | trust EMA `0.75/0.25` | Comment only | V | Exogenous. Declared in a comment. No production owner. |
 | A5 | `sim/scenarios.rs:2074`; `sim/agent.rs:202` | `storage_unit_cost = 0.03` per shard per epoch | Pinned in code. `DOC` L19h: never calibrated | V | Exogenous. Declared uncalibrated storage cost. |
-| A6 | `sim/scenarios.rs:2077`; `sim/agent.rs:202`; `sim/participation.rs:88` | `bond_carry = 0.03`, flat per deep shard, does not scale with `bond_rate` | Pinned in code. No calibration run named | V | Exogenous. Declared uncalibrated carry. It does not scale with the floor. |
-| A7 | `sim/scenarios.rs:2078`; `sim/model.rs:90`; `sim/agent.rs:123`, `:249` | `deep_threshold = 0.5`; only deep shards bond | Undeclared against production. `bond_floor_of` is flat per held shard, no age input (`prod/bond_floor.rs:28`) | V | For Rick (§6.2, item 3), with both arms measured: deep-only (the default) against a bond on every held shard. Production is flat per held shard. |
+| A6 | `sim/scenarios.rs:2077`; `sim/agent.rs:202`; `sim/participation.rs:88` | `bond_carry = 0.03`, flat per deep shard, does not scale with `bond_rate` | Pinned in code. No calibration run named | V | Incorporate (ruled 2026-11-08). The carry is two terms (`CarryShape::Split`): capital carry on the posted bond at `BASELINE_CAPITAL_CARRY_RATE` (0.015 per unit per epoch, the registered 0.03 at 2.0), a model correction; and an operating cost per held shard, `BASELINE_OPERATING_COST`, 0 until the coupling half calibrates it. The flat 0.03 per bonded shard is the registered arm's carry (`CarryShape::FlatPerBond`) and goes with that arm. |
+| A7 | `sim/scenarios.rs:2078`; `sim/model.rs:90`; `sim/agent.rs:123`, `:249` | `deep_threshold = 0.5`; only deep shards bond | Undeclared against production. `bond_floor_of` is flat per held shard, no age input (`prod/bond_floor.rs:28`) | V | Incorporate (ruled 2026-11-08). Every held shard bonds by default (`BondScope::EveryHeld`), as `bond_floor_of` does. Deep only (`BondScope::DeepOnly`) is a named arm (`a7_*_deep_*`) and the registered arm's scope. `deep_threshold` still classes deep history for coverage. |
 | A8 | `sim/scenarios.rs:2189`; `sim/model.rs` `r_target` | `r_target` 3 hot / 6 deep, linear in age | Stipulated. No production replica target | V | Exogenous. Stipulated replica target. No production owner. |
 | A9 | `sim/scenarios.rs:2110` (0); L11 `:2689` (0.02) | reservation yield ρ | Declared exogenous, post-testnet | V | Exogenous. Reservation yield. Declared post-testnet. |
 | A10 | `sim/scenarios.rs:2670` | `entry_per_epoch = 6`, `participation_patience = 3` | Declared in the L11 comments | V | Exogenous. Declared entry rate and patience. |

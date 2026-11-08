@@ -25,7 +25,7 @@
 //! stay, unprofitable ones leave). Coverage at that emergent point is then *read*, not
 //! tuned: the L11 question is whether free entry self-provisions to `R_target`.
 
-use crate::agent::AgentParams;
+use crate::agent::{AgentParams, CarryShape};
 use crate::model::{bond_age, World};
 use crate::reward::RewardEval;
 
@@ -44,8 +44,8 @@ pub struct ParticipationParams {
     pub pseudonym_cost: f64,
 }
 
-/// Committed bond capital actor `a` has deployed = Σ over its held **deep** shards of
-/// the (age-dependent) per-shard bond. This is the denominator of the participation
+/// Committed bond capital actor `a` has deployed = Σ over its held **bonded** shards
+/// ([`AgentParams::bonds`]) of the (age-dependent) per-shard bond. This is the denominator of the participation
 /// yield: capital actually at stake, not the actor's whole endowment (undeployed
 /// capital is free to pursue the alternative, so it is not "lost to staking").
 pub(crate) fn committed_bond_capital(world: &World, a: usize, ap: &AgentParams) -> f64 {
@@ -81,8 +81,8 @@ pub(crate) fn slash_exit(world: &mut World, a: usize, ap: &AgentParams) -> f64 {
     burned
 }
 
-/// Per-epoch flow cost for actor `a`: storage on every held shard, bond-carry on each
-/// deep shard, and the split cost of any extra pseudonyms.
+/// Per-epoch flow cost for actor `a`: storage on every held shard, the carry
+/// ([`CarryShape`]), and the split cost of any extra pseudonyms.
 fn flow_cost(
     world: &World,
     a: usize,
@@ -100,8 +100,15 @@ fn flow_cost(
             }
         }
     }
+    let carry = match ap.carry {
+        CarryShape::Split {
+            capital_rate,
+            operating_per_shard,
+        } => capital_rate * committed_bond_capital(world, a, ap) + shards * operating_per_shard,
+        CarryShape::FlatPerBond(per_bond) => bonded * per_bond,
+    };
     shards * ap.storage_unit_cost
-        + bonded * ap.bond_carry
+        + carry
         + (pseudonyms.saturating_sub(1)) as f64 * pp.pseudonym_cost
 }
 
@@ -280,6 +287,7 @@ pub fn foundation_floor_aged(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::BondScope;
     use crate::model::{Actor, Shard};
     use crate::scenarios::baseline;
 
@@ -302,8 +310,8 @@ mod tests {
             is_whale: false,
             reservation: 0.0,
         };
-        // Two deep shards and one hot shard held: the bond is two floors of
-        // `bond_rate`, and the hot shard posts none.
+        // Two deep shards and one hot shard held. Every held shard posts
+        // `bond_rate` (the default scope), so the bond is three of them.
         let mut world = World::new(
             vec![shard(0.9), shard(0.6), shard(0.1)],
             vec![actor.clone(), actor],
@@ -312,18 +320,18 @@ mod tests {
             world.holdings[w] = vec![true, true, true];
         }
         let burned = slash_exit(&mut world, 0, &ap);
-        assert_eq!(burned, 2.0 * ap.bond_rate);
-        assert_eq!(world.actors[0].capital, 20.0 - 2.0 * ap.bond_rate);
+        assert_eq!(burned, 3.0 * ap.bond_rate);
+        assert_eq!(world.actors[0].capital, 20.0 - 3.0 * ap.bond_rate);
         assert!(!world.active[0]);
         world.deactivate(1);
         assert_eq!(world.actors[1].capital, 20.0);
     }
 
-    /// A7's production-shaped arm bonds the hot shard too.
+    /// A7: the default scope bonds the hot shard too; deep only does not.
     #[test]
-    fn every_held_shard_arm_bonds_the_hot_shard() {
+    fn every_held_shard_scope_bonds_the_hot_shard() {
         let mut ap = baseline().agent_params();
-        ap.bond_every_held_shard = true;
+        assert_eq!(ap.bond_scope, BondScope::EveryHeld);
         let actor = Actor {
             storage_capacity: 4,
             capital: 20.0,
@@ -333,7 +341,29 @@ mod tests {
         let mut world = World::new(vec![shard(0.9), shard(0.6), shard(0.1)], vec![actor]);
         world.holdings[0] = vec![true, true, true];
         assert_eq!(committed_bond_capital(&world, 0, &ap), 3.0 * ap.bond_rate);
-        ap.bond_every_held_shard = false;
+        ap.bond_scope = BondScope::DeepOnly;
         assert_eq!(committed_bond_capital(&world, 0, &ap), 2.0 * ap.bond_rate);
+    }
+
+    /// A6: the split carry charges capital carry on the posted bond and the
+    /// operating cost on every held shard; the registered flat carry charges
+    /// one amount per bonded shard. At the baseline's 2.0 the split's capital
+    /// carry is exactly the registered 0.03, in `f64`.
+    #[test]
+    fn the_split_carry_scales_with_the_bond() {
+        let split = CarryShape::Split {
+            capital_rate: 0.015,
+            operating_per_shard: 0.002,
+        };
+        assert_eq!(split.per_shard(true, 2.0), 0.015 * 2.0 + 0.002);
+        assert_eq!(split.per_shard(true, 0.75), 0.015 * 0.75 + 0.002);
+        assert_eq!(split.per_shard(false, 2.0), 0.002);
+        let flat = CarryShape::FlatPerBond(0.03);
+        assert_eq!(flat.per_shard(true, 0.75), 0.03);
+        assert_eq!(flat.per_shard(false, 2.0), 0.0);
+        assert_eq!(
+            crate::scenarios::BASELINE_CAPITAL_CARRY_RATE * crate::scenarios::BASELINE_BOND_RATE,
+            crate::scenarios::BASELINE_BOND_CARRY
+        );
     }
 }

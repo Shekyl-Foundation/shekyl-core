@@ -93,7 +93,9 @@ const DEEP_THRESHOLD: f64 = scenarios::BASELINE_DEEP_THRESHOLD;
 const BOND_RATE: f64 = scenarios::BASELINE_BOND_RATE;
 /// Flow cost per held shard (storage/bandwidth) — uniform across shards (protocol).
 const STORAGE_UNIT_COST: f64 = scenarios::BASELINE_STORAGE_UNIT_COST;
-/// Flow opportunity cost of capital locked in one deep-shard bond.
+/// Flow opportunity cost of capital locked in one deep-shard bond. This
+/// harness keeps the registered shape: deep shards only bond, at a flat carry
+/// (Appendix B, R19, declared).
 const BOND_CARRY: f64 = scenarios::BASELINE_BOND_CARRY;
 /// Reward scale (arbitrary; cancels in every ratio). Sets `value = SCALE/R·g(age)`.
 const REWARD_SCALE: f64 = 1.0;

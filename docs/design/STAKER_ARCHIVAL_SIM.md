@@ -2941,17 +2941,21 @@ is disposed in that document's Appendix B, and each Incorporate row calls
 its owner. The predictions below were committed before the code that
 grades them. Each outcome is written under its prediction.
 
-**Two reward arms.** `RewardArm::Production` is the default. It credits
+**Two arms.** `RewardArm::Production` is the default. It credits
 linear work on production's integer operands: `scarcity_micro` per held
 seated shard, summed in micro, floored once by `work_milli_from_micro`,
 gated by `credited_work_milli`, and paid by `reward_share_floor` from a
-purse that crosses into atomic units once. The dust stays unminted.
-`RewardArm::RegisteredPlateau` is the arm L11 and L13 were taken on: float
-work, the banded plateau at cap 8, the pseudonym split and a float price.
-Production deleted the plateau from the reward path (D3/R2), so that arm is
-on the retirement list. Until Rick rules on it, it is the falsifier's
-control: `l11_l13_five_seed_pins` runs it, and the pins must hold after
-every incorporation that does not touch the purse.
+purse that crosses into atomic units once. The dust stays unminted. It
+bonds every held shard, as `bond_floor_of` does, and carries capital on
+the posted bond plus an operating cost per held shard (A6, A7, ruled
+2026-11-08). `RewardArm::RegisteredPlateau` is the configuration L11 and
+L13 were taken on: float work, the banded plateau at cap 8, the pseudonym
+split and a float price, deep shards only bonded, and a flat 0.03 carry
+per bonded shard (`SimConfig::arm_defaults`). Production deleted the
+plateau from the reward path (D3/R2), so that arm is on the retirement
+list, with D1's trigger. It is the falsifier's control:
+`l11_l13_five_seed_pins` runs it, and the pins must hold after every
+incorporation that does not touch the purse.
 
 **Units.** One model unit is one SKL. The bond floor is
 `archival_params().bond_floor_atomic`, 0.75 units. The baseline's
@@ -3075,8 +3079,9 @@ The rest is not attributed here. One candidate is the yield denominator:
 every held shard's bond counts as committed capital, so the realized
 yield falls. The oldest band is uncovered on every seed either way.
 
-**The production arm at the lean point and the L13 knee**, five seeds
-(`l11_l13_five_seed_production_pins` holds these bits):
+**The production arm at the lean point and the L13 knee, deep shards only
+bonded**, five seeds (`a7_l11_deep_b200` and `a7_l13_deep_b200` reproduce
+these bits; the production pins hold P7's):
 
 | seed | lean `bondA` | lean `cDeepU` | lean `oUmx` | knee `bondA` | knee `cDeepU` | knee `oUmx` |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -3096,10 +3101,13 @@ as on the registered arm to within 0.04 of `cDeepU`; `bondA` moves by
 
 | arm | lean `bondA` | lean `cDeepU` | lean `oUmx` | knee `bondA` | knee `cDeepU` | knee `oUmx` |
 | --- | --- | --- | --- | --- | --- | --- |
-| deep only, 2.0 (default) | 72.12 | 0.061 | 0.078 | 66.49 | 0.072 | 0.299 |
+| deep only, 2.0 | 72.12 | 0.061 | 0.078 | 66.49 | 0.072 | 0.299 |
 | every held shard, 2.0 | 88.04 | 0.424 | 1.000 | 73.45 | 0.748 | 1.000 |
 | every held shard, floor 0.75 | 62.45 | 0.299 | 1.000 | 53.13 | 0.382 | 1.000 |
 | deep only, floor 0.75 | 106.77 | 0.000 | 0.000 | 83.13 | 0.000 | 0.000 |
+
+These are under the flat 0.03 carry; P7's outcome has the floor rows
+under the split carry.
 
 **The falsifier.** `l11_l13_five_seed_pins` runs the registered plateau
 arm and holds every bit at the head of this PR, after P1, P2, P3, P5 and
@@ -3158,6 +3166,26 @@ taken on.
 - *The rest of the default sweep* moves wherever a bond is posted. The
   registered arm's sweep (`--reward-arm=registered-plateau`) is
   byte-identical to the sweep before this commit.
+
+**P7 outcome.**
+
+| P7 claim | Outcome | Grade |
+| --- | --- | --- |
+| The registered arm's pins hold | Every bit holds. The registered sweep's 405 scenarios are byte-identical to the sweep before the commit, in order; the two rows the commit adds equal their bases on that arm | Held |
+| `l11_fill` and `l13_decay_knee` equal the every-held A7 rows, bit for bit | Equal on every seed and every cell | Held |
+| The other nine rows: `cDeepU` up on all nine, `oUmx` toward 1 | `cDeepU` rises on the six that were below 1: `l13_decay_hi` 0 → 0.322, `l13_decay_mid` 0.956 → 0.999, `l13_servo` 0.209 → 0.998, and the three L11 rows. `l13_decay_lo`, `l13_decay_min` and `l13_spiral` were already 1 and stay there. `oUmx` reaches 1 on every row and seed but one (`l13_servo` 0.876 → 1 on four seeds) | Held where the cell could move; the saturated rows were not foreseen |
+| `bondA` rises on all nine | Rises on seven (e.g. `l11_trim` 72.3 → 89.2, `l13_decay_hi` 80.1 → 88.6). Falls on `l13_spiral` (16.4 → 14.3) and `l13_servo` (60.8 → 57.9) | Wrong on two |
+| Deep only at 2.0 reproduces the old production pins | Bit for bit, both bases | Held |
+| Every held shard at the floor near 0.157 / 0.180, oldest band uncovered | 0.157 / 0.180; `oUmx` 1 on every seed | Held |
+| Deep only at the floor stays covered, `bondA` up | `cDeepU` 0, `oUmx` 0; `bondA` 106.8 → 123.2 and 83.1 → 93.1 | Held |
+
+**Why `bondA` fell on two rows.** The spiral and the servo are the two
+pinned rows with `price_coupling` on (0.10): a deep retrieval shortfall
+lifts every actor's reservation yield, so more actors exit. Every held
+shard bonding thins deep coverage, the shortfall lifts reservations, and
+on those two rows the participation channel beat the count's wider
+definition. The mechanism is read from the scenario definitions; no run
+isolated it.
 
 ## L14×L15 — proof-of-archival in harmony with retrieval (specification)
 
