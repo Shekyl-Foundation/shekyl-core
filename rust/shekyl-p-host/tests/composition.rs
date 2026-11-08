@@ -38,8 +38,8 @@ use shekyl_p_serve::HeldShardSource;
 use shekyl_p_serve::{TestKeySigner, IDENTITY_ENVELOPE_LEN};
 use shekyl_p_store::{BodyStore, StoreKey};
 use shekyl_tor_control_wallet::service::{
-    EventSink, OnionIdentity, ServingPosture, SupervisorPolicy, TorBinarySource, TorPosture,
-    WalletTorControlConfig,
+    EventSink, OnionIdentity, OnionKeypair, ServingPosture, SupervisorPolicy, TorBinarySource,
+    TorPosture, WalletTorControlConfig,
 };
 use shekyl_types::ShardId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -325,7 +325,7 @@ fn churning_tor(dir: &tempfile::TempDir) -> WalletTorControlConfig {
 }
 
 fn identity() -> OnionIdentity {
-    OnionIdentity::from_hs_id_seed(&[9u8; 32])
+    OnionIdentity::from_keypair(OnionKeypair::ephemeral().expect("OS CSPRNG"))
 }
 
 /// Opaque frame the composition tests put and expect back.

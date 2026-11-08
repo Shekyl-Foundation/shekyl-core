@@ -274,9 +274,10 @@ mod tests {
     use super::*;
     use shekyl_tor_control_client::control::onion::evaluate_add_onion_reply;
     use shekyl_tor_control_client::control::ReplyFramer;
+    use shekyl_tor_control_client::onion_identity::OnionKeypair;
 
     fn identity_and_id() -> (OnionIdentity, ServiceId) {
-        let identity = OnionIdentity::from_hs_id_seed(&[0x24u8; 32]);
+        let identity = OnionIdentity::from_keypair(OnionKeypair::ephemeral().expect("OS CSPRNG"));
         let id = identity.service_id().clone();
         (identity, id)
     }
@@ -303,7 +304,7 @@ mod tests {
         // persona's. Publishing Ready here would advertise an address no
         // witness can reach.
         let (_identity, expected) = identity_and_id();
-        let other = OnionIdentity::from_hs_id_seed(&[0x99u8; 32])
+        let other = OnionIdentity::from_keypair(OnionKeypair::ephemeral().expect("OS CSPRNG"))
             .service_id()
             .clone();
         let reply = reply_from(&format!("ServiceID={}", other.as_str()));
@@ -344,7 +345,7 @@ mod tests {
     #[test]
     fn reply_error_maps_into_publish_error() {
         let (_identity, expected) = identity_and_id();
-        let published = OnionIdentity::from_hs_id_seed(&[0x99u8; 32])
+        let published = OnionIdentity::from_keypair(OnionKeypair::ephemeral().expect("OS CSPRNG"))
             .service_id()
             .clone();
         assert_eq!(

@@ -195,7 +195,7 @@ const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(300);
 /// taken from the caller — by design.
 ///
 /// SPIKE-F-4 relocated the onion-key derivation onto the *production* GF-9 path
-/// ([`derive_onion_identity`] → `shekyl_crypto_pq::archival_p::derive_p_hs_id_seed`).
+/// ([`derive_onion_identity`] → `shekyl_crypto_pq::archival_p::derive_p_onion_keypair`).
 /// A consequence the old spike-local label used to mask: feeding a real wallet's
 /// `master_seed_64` here would now serve at the persona's **actual production
 /// `.onion`** — the co-activation Model D forbids (`BOND_CONSTRUCTION.md:667`,

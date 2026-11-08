@@ -79,7 +79,7 @@ pub use shekyl_tor_control_client::control::onion::OnionPow;
 #[doc(inline)]
 pub use shekyl_tor_control_client::control::{ControlError, EventSink, ServiceId, TorExit};
 #[doc(inline)]
-pub use shekyl_tor_control_client::onion_identity::OnionIdentity;
+pub use shekyl_tor_control_client::onion_identity::{OnionIdentity, OnionKeypair};
 
 /// The service-level posture — what the rest of the wallet sees. One long-lived
 /// watch, owned by the supervisor, outliving every incarnation (the §3b
@@ -1028,8 +1028,9 @@ mod tests {
             .expect("bind loopback target")
             .local_addr()
             .expect("local addr");
-        let identity = shekyl_tor_control_client::onion_identity::OnionIdentity::from_hs_id_seed(
-            &[0x5cu8; 32],
+        let identity = shekyl_tor_control_client::onion_identity::OnionIdentity::from_keypair(
+            shekyl_tor_control_client::onion_identity::OnionKeypair::ephemeral()
+                .expect("OS CSPRNG"),
         );
         let spec = OnionServiceSpec::new(identity, 80, target, 8).expect("loopback spec");
         assert_eq!(
@@ -1393,8 +1394,9 @@ mod live_tests {
             .expect("bind loopback target")
             .local_addr()
             .expect("local addr");
-        let identity = shekyl_tor_control_client::onion_identity::OnionIdentity::from_hs_id_seed(
-            &[0x5cu8; 32],
+        let identity = shekyl_tor_control_client::onion_identity::OnionIdentity::from_keypair(
+            shekyl_tor_control_client::onion_identity::OnionKeypair::ephemeral()
+                .expect("OS CSPRNG"),
         );
         // The address the persona advertises is known before spawn (the caller
         // holds it from the spec), so witnesses can be told where to connect

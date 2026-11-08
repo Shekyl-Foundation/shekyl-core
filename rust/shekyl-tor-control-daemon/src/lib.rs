@@ -44,8 +44,8 @@
 //!   directory, or onion key is the forbidden crossover). Every
 //!   instance-identifying input here is a parameter.
 //! - **The supervisor respawns.** `shekyl-daemon`'s `tor` module drives
-//!   `shekyl-tor-control-client::supervisor`. The onion seed is held for the
-//!   boot and passed into [`ephemeral::DaemonTorControl::publish`]. Death is
+//!   `shekyl-tor-control-client::supervisor`. The onion identity is held for
+//!   the boot and passed into [`ephemeral::DaemonTorControl::publish`]. Death is
 //!   still observable ([`ephemeral::DaemonTorControl::is_alive`] /
 //!   [`ephemeral::DaemonTorControl::wait_death`]).
 #![deny(unsafe_code)]
@@ -57,8 +57,8 @@ pub mod probe;
 pub use data_dir::{space_needed, sweep_stale_data_dirs, KeptLog, TOR_WRITE_HEADROOM};
 pub use ephemeral::{
     CacheSave, DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
-    KeptDataDir, LaunchFailure, OnionSeed, Retirement, SpawnError, Teardown, TombstoneEnd,
-    TorDeath, TOMBSTONE_DELETE_BOUND,
+    KeptDataDir, LaunchFailure, Retirement, SpawnError, Teardown, TombstoneEnd, TorDeath,
+    TOMBSTONE_DELETE_BOUND,
 };
 pub use probe::{probe_own_onion, IsolationPair, ProbeDial};
 pub use shekyl_tor_control_client::control::OnionPow;

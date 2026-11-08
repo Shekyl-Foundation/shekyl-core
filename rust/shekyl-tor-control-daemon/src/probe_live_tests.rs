@@ -38,7 +38,8 @@ use crate::ephemeral::tests::tor_under;
 use crate::ephemeral::tests::wait_for_the_network;
 use crate::probe::{probe_own_onion, IsolationPair, ProbeDial};
 use crate::test_support::tor_binary;
-use crate::{DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, OnionPow, OnionSeed};
+use crate::{DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, OnionPow};
+use shekyl_tor_control_client::onion_identity::OnionIdentity;
 
 /// The onion's virtual port in these tests.
 const VIRTUAL_PORT: u16 = 11021;
@@ -229,7 +230,7 @@ const REMEDY_REPUBLISHES: u32 = 1;
 async fn reachable(
     boot: &DaemonTorControl,
     received: &mut EventReceiver,
-    seed: &OnionSeed,
+    identity: &OnionIdentity,
     service: &ServiceId,
     pair: &IsolationPair,
     stand_in: &mut StandIn,
@@ -258,10 +259,10 @@ async fn reachable(
         }
         drain(received);
         let again = boot
-            .republish(seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
+            .republish(identity, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
             .await
             .expect("the remedy's republish");
-        assert_eq!(&again, service, "the held seed is the same onion");
+        assert_eq!(&again, service, "the held identity is the same onion");
         round_uploaded(received, service, "remedy's republish").await;
     }
     panic!(
@@ -313,11 +314,11 @@ async fn a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit() {
 
     let probe_request = request();
     let mut stand_in = StandIn::bind(probe_request.clone()).await;
-    let seed = DaemonTorControl::mint_seed().expect("seed");
+    let identity = DaemonTorControl::mint_identity().expect("identity");
     // A fresh Tor holds no service: the delete's 552 is not a failure.
     drain(&mut received);
     let service = boot
-        .republish(&seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
+        .republish(&identity, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
         .await
         .expect("publish");
     round_uploaded(&mut received, &service, "first publish").await;
@@ -326,7 +327,7 @@ async fn a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit() {
     let (_republishes, latency) = reachable(
         &boot,
         &mut received,
-        &seed,
+        &identity,
         &service,
         &pair,
         &mut stand_in,
@@ -345,7 +346,7 @@ async fn a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit() {
 }
 
 /// **Test 7.** A Tor killed and respawned into its kept directory
-/// republishes the same onion from the held seed, and is reachable again
+/// republishes the same onion from the held identity, and is reachable again
 /// within the remedy.
 #[tokio::test]
 #[cfg(target_os = "linux")]
@@ -366,18 +367,18 @@ async fn a_respawn_republishes_the_same_onion_and_is_reachable_again() {
 
     let probe_request = request();
     let mut stand_in = StandIn::bind(probe_request.clone()).await;
-    let seed = DaemonTorControl::mint_seed().expect("seed");
+    let identity = DaemonTorControl::mint_identity().expect("identity");
     let pair = IsolationPair::mint().expect("pair");
     drain(&mut received);
     let first = boot
-        .republish(&seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
+        .republish(&identity, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
         .await
         .expect("publish");
     round_uploaded(&mut received, &first, "first Tor's").await;
     reachable(
         &boot,
         &mut received,
-        &seed,
+        &identity,
         &first,
         &pair,
         &mut stand_in,
@@ -415,15 +416,15 @@ async fn a_respawn_republishes_the_same_onion_and_is_reachable_again() {
     let mut stand_in = StandIn::bind(request_again.clone()).await;
     drain(&mut received);
     let second = boot
-        .republish(&seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
+        .republish(&identity, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
         .await
         .expect("republish after the respawn");
-    assert_eq!(second, first, "the held seed is the same onion");
+    assert_eq!(second, first, "the held identity is the same onion");
     round_uploaded(&mut received, &second, "respawned Tor's").await;
     reachable(
         &boot,
         &mut received,
-        &seed,
+        &identity,
         &second,
         &pair,
         &mut stand_in,
@@ -460,15 +461,15 @@ async fn a_deleted_onion_is_missed_and_the_republish_restores_it() {
 
     let probe_request = request();
     let mut stand_in = StandIn::bind(probe_request.clone()).await;
-    let seed = DaemonTorControl::mint_seed().expect("seed");
+    let identity = DaemonTorControl::mint_identity().expect("identity");
     let pair = IsolationPair::mint().expect("pair");
     drain(&mut received);
     let service = boot
-        .publish(&seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
+        .publish(&identity, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
         .await
         .expect("publish");
     match boot
-        .publish(&seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
+        .publish(&identity, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
         .await
     {
         Err(DaemonTorPublishError::Publish(AddOnionReplyError::Rejected { status: 550 })) => {}
@@ -496,7 +497,7 @@ async fn a_deleted_onion_is_missed_and_the_republish_restores_it() {
 
     drain(&mut received);
     let restored = boot
-        .republish(&seed, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
+        .republish(&identity, VIRTUAL_PORT, stand_in.at, 8, OnionPow::Enabled)
         .await
         .expect("the republish restores it");
     assert_eq!(restored, service);
@@ -504,7 +505,7 @@ async fn a_deleted_onion_is_missed_and_the_republish_restores_it() {
     reachable(
         &boot,
         &mut received,
-        &seed,
+        &identity,
         &restored,
         &pair,
         &mut stand_in,

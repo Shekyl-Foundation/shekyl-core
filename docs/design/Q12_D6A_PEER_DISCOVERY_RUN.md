@@ -3026,8 +3026,8 @@ would read as a defense** in the code and in the doc.
 #### The one mechanism with real scarcity, refused
 
 The only scarce resource in the tree that could supply peer-distinctness on Tor
-is the archival serving identity — `OnionIdentity::from_hs_id_seed`
-([`onion_identity.rs:124`](../../rust/shekyl-tor-control-client/src/onion_identity.rs#L124)),
+is the archival serving identity — `OnionIdentity::from_keypair`
+([`onion_identity.rs:75`](../../rust/shekyl-tor-control-client/src/onion_identity.rs#L75)),
 under the `StakeEngine`'s custody since #464. Binding relay peering to it would
 make p2p membership **paid**, give every relay peer a **persistent identity**,
 and **correlate a node's relay position with its archival service** across two

@@ -322,10 +322,10 @@ async fn identity_is_deterministic_across_respawn() {
 // SH-2b-1: the actor hands out an onion **serving credential**, and it is the
 // one the pinned derivation says it should be.
 //
-// The oracle is derived independently — `derive_p_hs_id_seed` straight from the
-// master seed, then expanded — rather than read back off the same bundle the
-// actor used. Comparing the actor's answer to the bundle it holds would assert
-// only that a field was copied; going through the derivation asserts the
+// The oracle is derived independently — `derive_p_onion_keypair` straight
+// from the master seed — rather than read back off the same bundle the actor
+// used. Comparing the actor's answer to the bundle it holds would assert only
+// that a field was copied; going through the derivation asserts the
 // credential is the persona's, which is what a `.onion` address means.
 //
 // Compared on `service_id`, deliberately: that is the public half, it is what
@@ -342,12 +342,13 @@ async fn the_onion_credential_matches_the_pinned_derivation() {
             .await
             .expect("held slot yields a credential");
 
-        let seed = shekyl_crypto_pq::archival_p::derive_p_hs_id_seed(
-            &super::test_fixtures::TEST_SEED,
-            shekyl_crypto_pq::account::Network::Mainnet,
-            slot,
+        let oracle = shekyl_tor_control_wallet::service::OnionIdentity::from_keypair(
+            shekyl_crypto_pq::archival_p::derive_p_onion_keypair(
+                &super::test_fixtures::TEST_SEED,
+                shekyl_crypto_pq::account::Network::Mainnet,
+                slot,
+            ),
         );
-        let oracle = shekyl_tor_control_wallet::service::OnionIdentity::from_hs_id_seed(&seed);
 
         assert_eq!(
             minted.service_id(),

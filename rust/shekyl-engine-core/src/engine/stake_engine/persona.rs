@@ -133,27 +133,20 @@ impl Message<PersonaIdentityOf> for StakeEngine {
 
 /// Mint the persona's **onion serving credential** — the SH-2b handoff.
 ///
-/// Returns an [`OnionIdentity`], never the seed, and that asymmetry is the
-/// custody ruling rather than a convenience. §7.2(iii): the wallet's HKDF
-/// siblings all descend from `master_seed`, so a serving role holding
-/// `hs_id_seed` is one edit away from holding `bond_spend`'s authority. The
-/// expansion therefore runs **here**, inside the secret owner, and what
-/// crosses the actor boundary is a value authorizing exactly one thing:
-/// publishing this onion.
+/// Returns an [`OnionIdentity`], built from the persona's onion keypair, and
+/// that is the custody ruling rather than a convenience. §7.2(iii): the
+/// wallet's HKDF siblings all descend from `master_seed`, so a serving role
+/// holding a seed is one edit away from holding `bond_spend`'s authority. The
+/// seed never exists outside `shekyl-crypto-pq`: the actor's [`ArchivalPKeys`]
+/// holds the keypair, and what crosses the actor boundary is a value
+/// authorizing exactly one thing: publishing this onion.
 ///
-/// **The guarantee is the boundary, not the seed's lifetime**, and the two are
-/// easy to conflate. This call does not shorten the seed's life or wipe it:
-/// `hs_id_seed` stays in the actor's [`ArchivalPKeys`] for the persona's life,
-/// on the heap and wiped when the bundle drops, and under the `on_stop` wipe.
-/// [`OnionIdentity::from_hs_id_seed`] borrows it and retains nothing. What
-/// makes the custody property hold is narrower and stronger: no caller of this
-/// message can obtain the seed, only the expanded credential.
-///
-/// Minted per request rather than cached, because [`OnionIdentity`] is
-/// deliberately not `Clone`: holding the expanded bytes *is* the persona on
-/// the network, so the actor keeps the seed (already in its `ArchivalPKeys`)
-/// and re-derives, rather than keeping a second copy of the serving secret
-/// alive for the session.
+/// The keypair stays in the bundle for the persona's life, on the heap and
+/// wiped when the bundle drops, and under the `on_stop` wipe. Each request
+/// takes [`OnionKeypair::duplicate`](shekyl_crypto_pq::onion::OnionKeypair::duplicate), the one way to copy a serving secret,
+/// because [`OnionIdentity`] is deliberately not `Clone`: holding the
+/// expanded bytes *is* the persona on the network, so every copy is named
+/// where it is made.
 ///
 /// A read-only projection like [`PersonaIdentityOf`]: no activation, no
 /// retired-slot wipe, no generation advance. An unheld slot is
@@ -176,7 +169,9 @@ impl Message<PersonaOnionIdentityOf> for StakeEngine {
             .ok_or(StakeEngineError::LookaheadExhausted {
                 requested: msg.p_slot,
             })?;
-        Ok(OnionIdentity::from_hs_id_seed(held.keys().hs_id_seed()))
+        Ok(OnionIdentity::from_keypair(
+            held.keys().onion_keypair().duplicate(),
+        ))
     }
 }
 
@@ -184,7 +179,7 @@ impl Message<PersonaOnionIdentityOf> for StakeEngine {
 /// identity key — the SH-2 resident-key handoff into `PersonaServingHost`.
 ///
 /// This is the §7.2(iii) ruling applied to a key that is *stronger* than
-/// `hs_id_seed`, and the shape differs accordingly. The onion handoff can
+/// the onion keypair, and the shape differs accordingly. The onion handoff can
 /// export an expanded credential because the credential authorises exactly
 /// one thing. `hybrid_sign_sk` authorises three: the bond post
 /// (`PQC_AUTH_TX`), the emission claim (`EMISSION_CLAIM`) and the attestation
@@ -462,7 +457,7 @@ impl Message<PlanBondPost> for StakeEngine {
         //    never returned to the caller (rule 36-secret-locality): only the
         //    constructed `JoinMarketVin` (paired with its placement offset)
         //    crosses the actor boundary.
-        let endpoint = OnionIdentity::from_hs_id_seed(keys.hs_id_seed()).public_key();
+        let endpoint = keys.onion_keypair().public_key();
         let vin = build_join_market_vin(keys.bond_post_keys(), msg.holdings, endpoint)
             .map_err(StakeEngineError::BondBuild)?;
         Ok(BondPostPlacement {

@@ -4124,6 +4124,7 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-fcmp",
  "shekyl-network",
+ "shekyl-onion-v3",
  "shekyl-stats",
  "shekyl-types",
  "syn 2.0.117",
@@ -5393,7 +5394,6 @@ dependencies = [
 name = "shekyl-tor-control-client"
 version = "3.1.0"
 dependencies = [
- "ed25519-dalek",
  "futures-core",
  "getrandom 0.2.17",
  "hex-literal",
@@ -5402,6 +5402,7 @@ dependencies = [
  "libc",
  "serde_json",
  "sha2",
+ "shekyl-crypto-pq",
  "shekyl-onion-v3",
  "shekyl-timing-engine",
  "shekyl-win-sec",

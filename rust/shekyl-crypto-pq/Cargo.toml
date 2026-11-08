@@ -218,6 +218,10 @@ hex = "0.4"
 # needs the original. Not a dependency of the library, so no shipped path can
 # reach for the generator that does not wipe itself.
 rand_chacha = "0.3"
+# The v3 address of an onion keypair, for the test that pins the address a
+# fixed seed publishes at (`onion.rs`). The library computes keys; the
+# address is the Tor client's, so this stays a test edge.
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 # Self-reference enabling `test-utils` for this crate's own integration tests
 # and benches (F-7): `generate_ephemeral_keypair_for_tests` is gated behind
 # that feature, and a separate integration-test crate cannot see the in-crate

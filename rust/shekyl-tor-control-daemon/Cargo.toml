@@ -31,11 +31,11 @@ shekyl-socks = { path = "../shekyl-socks" }
 # actor's: timers, process, and the I/O the control client uses.
 tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "process", "fs"] }
 kameo = { workspace = true }
-# OS CSPRNG for the per-boot hs-id seed mint — the same source the wallet's
-# vanguard rotation draws from.
+# OS CSPRNG for the probe's per-boot isolation pair and the data directory's
+# name — the same source the wallet's vanguard rotation draws from. The onion
+# key's seed is drawn inside `shekyl-crypto-pq` (`OnionKeypair::ephemeral`).
 getrandom = "0.2"
-# Wipe-on-drop for the minted seed (35-secure-memory): the seed exists only
-# between mint and ADD_ONION, and this makes the window structural.
+# Wipe-on-drop for the probe's isolation username (35-secure-memory).
 zeroize = { version = "1", default-features = false }
 
 [dev-dependencies]

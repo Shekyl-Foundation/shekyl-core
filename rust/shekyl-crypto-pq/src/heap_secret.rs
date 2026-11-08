@@ -27,8 +27,8 @@
 //! orphan rule keeps that implementation out of this crate. `Zeroizing<Box<[u8]>>`
 //! compiles and loses the length.
 //!
-//! Crate-private. [`crate::archival_p::ArchivalPKeys::hs_id_seed`] is the
-//! public borrow of the one value other crates read. A crate that does not
+//! Crate-private. [`crate::onion::OnionKeypair`] holds its expanded secret
+//! in one and lends it through `expanded_secret`. A crate that does not
 //! depend on this one does not gain a dependency to hold its own secrets
 //! this way; the type moves when such a crate needs it.
 

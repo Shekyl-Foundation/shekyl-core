@@ -14,7 +14,7 @@
 //! dial; there is no timer here.
 //!
 //! The dial presents its own isolation pair ([`IsolationPair`]), a fixed
-//! per-boot username minted beside the onion seed. Tor isolates streams by
+//! per-boot username minted beside the onion identity. Tor isolates streams by
 //! SOCKS credentials (`IsolateSOCKSAuth`, its default), so the probe's
 //! circuits are its own, apart from the peer dials, which offer no
 //! authentication. One Tor process has one guard set: the guard can still
@@ -40,8 +40,8 @@ const USERNAME_BYTES: usize = 16;
 /// carries the randomness.
 ///
 /// The bytes are wiped on drop and redacted in `Debug` ([`SocksUsername`]).
-/// It is held by its purpose for the boot, as the onion seed is held by the
-/// supervisor, and never written anywhere.
+/// It is held by its purpose for the boot, as the onion identity is held by
+/// the supervisor, and never written anywhere.
 #[derive(Clone, Debug)]
 pub struct IsolationPair(Arc<SocksUsername>);
 
