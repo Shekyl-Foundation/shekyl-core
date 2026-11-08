@@ -2464,6 +2464,66 @@ mod live_tests {
         );
     }
 
+    /// The pinned tor runs with the launch's safety options. `GETINFO
+    /// config-text` lists every option that differs from Tor's default. On
+    /// macOS it carries `CompiledProofOfWorkHash 0`: the hardened runtime
+    /// kills Tor when it runs the compiled hash (`TOR_SUPERVISOR.md`
+    /// `TSR-F18`). Elsewhere the option is at its default and absent. No
+    /// `SafeLogging` other than Tor's default `1` is in force; that Tor
+    /// started at all says it accepted the launch's `--SafeLogging 1`. Red
+    /// edit: drop the macOS line from the launch, and this fails on macOS
+    /// against the signed bytes.
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
+    async fn the_managed_tor_runs_with_the_launchs_safety_options() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (readiness, _ready_rx) = BootstrapReadiness::new();
+        let (events, _events) = EventSink::bounded();
+        let (exit_tx, exit_rx) = oneshot::channel();
+        let actor = TorControlClient::spawn(TorControlClientConfig {
+            launch: TorLaunch::Managed(ManagedTor {
+                tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
+                data_dir: dir.path().to_path_buf(),
+                socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
+                disable_network: true,
+                disk_writes: DiskWrites::Deferred,
+                exit_observer: Some(exit_tx),
+                leak: None,
+            }),
+            events,
+            readiness,
+        });
+        let reply = actor
+            .ask(Command::GetInfo(vec!["config-text".to_owned()]))
+            .await
+            .expect("GETINFO config-text against the actor-spawned tor");
+        assert_eq!(reply.status(), 250);
+        actor.stop_gracefully().await.expect("graceful stop");
+        actor.wait_for_shutdown().await;
+        await_reap_before_drop(exit_rx).await;
+
+        let set: Vec<&str> = reply
+            .lines()
+            .iter()
+            .flat_map(|line| line.lines())
+            .map(str::trim)
+            .collect();
+        let pow: Vec<&&str> = set
+            .iter()
+            .filter(|line| line.starts_with("CompiledProofOfWorkHash"))
+            .collect();
+        if cfg!(target_os = "macos") {
+            assert_eq!(pow, [&"CompiledProofOfWorkHash 0"], "config-text: {set:?}");
+        } else {
+            assert!(pow.is_empty(), "config-text: {set:?}");
+        }
+        assert!(
+            !set.iter().any(|line| line.starts_with("SafeLogging")),
+            "SafeLogging is at Tor's default 1; config-text: {set:?}"
+        );
+    }
+
     /// The managed launch hands the pinned tor its control end and nothing else of
     /// this process's (`DAEMON_CONFIG_CUTOVER.md` §2.10): a file opened without
     /// close-on-exec, as C++ in the daemon's process opens one, is not in tor's

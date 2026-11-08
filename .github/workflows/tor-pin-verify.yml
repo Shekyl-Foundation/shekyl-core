@@ -87,11 +87,12 @@ jobs:
             host: x86_64-linux-gnu
             runner: ubuntu-latest
             exe: tor
-            client_floor: 9
+            client_floor: 10
             wallet_floor: 4
             daemon_floor: 5
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_runs_with_the_launchs_safety_options
               control::actor::live_tests::the_managed_tor_inherits_its_control_end_and_nothing_else
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
@@ -103,11 +104,12 @@ jobs:
             host: aarch64-linux-gnu
             runner: ubuntu-24.04-arm
             exe: tor
-            client_floor: 9
+            client_floor: 10
             wallet_floor: 4
             daemon_floor: 5
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_runs_with_the_launchs_safety_options
               control::actor::live_tests::the_managed_tor_inherits_its_control_end_and_nothing_else
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
@@ -119,11 +121,12 @@ jobs:
             host: x86_64-w64-mingw32
             runner: windows-latest
             exe: tor.exe
-            client_floor: 8
+            client_floor: 9
             wallet_floor: 1
             daemon_floor: 3
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_runs_with_the_launchs_safety_options
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
               probe_live_tests::a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit
@@ -135,11 +138,12 @@ jobs:
             host: aarch64-apple-darwin11
             runner: macos-latest
             exe: tor
-            client_floor: 8
+            client_floor: 9
             wallet_floor: 4
             daemon_floor: 3
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_runs_with_the_launchs_safety_options
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
               probe_live_tests::a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit
@@ -150,11 +154,12 @@ jobs:
             host: x86_64-apple-darwin11
             runner: macos-15-intel
             exe: tor
-            client_floor: 8
+            client_floor: 9
             wallet_floor: 4
             daemon_floor: 3
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_runs_with_the_launchs_safety_options
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
               probe_live_tests::a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit

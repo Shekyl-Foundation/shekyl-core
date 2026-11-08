@@ -364,6 +364,31 @@ planted there. The launch therefore also passes `GeoIPFile` and `GeoIPv6File`,
 each naming the empty file; with them, Tor opens only that file (measured
 2026-10-15). This joins the launcher fix's scope.
 
+**TSR-F18 (high; Tor lane; fixed).** On macOS the hardened runtime kills Tor
+when it runs a proof-of-work puzzle. Measured 2026-11-08 on the macOS build
+host (macOS 27.0.1, arm64; the signed 15.0.26 `tor`; `shekyld` at
+`8d78bbacfb`): 61 s after a cold start, the node's first probe of its own onion
+made Tor solve a puzzle, and Tor ended with `SIGKILL (Code Signature
+Invalid)`, `CODESIGNING` "Invalid Page", in `equix_solver_solve` under
+`hs_pow_solve` (shekyl-dev `data/tsr-acceptance/2026-11-08-macos/`). HashX
+compiles each puzzle's hash to machine code in a page it maps writable and
+then makes executable, without `MAP_JIT`; the hardened runtime forbids
+executing that page. A client solves at any nonzero effort, either the
+onion's suggested effort or its own after a failed introduction, and a
+service under load verifies the same way, so on macOS Tor would end
+whenever either happened. The daemon publishes with proof-of-work on; the
+six testnet peer onions carry no proof-of-work parameters (the signed `tor`
+alone, dialing each). Why this probe solved and later ones did not is not
+pinned down. Tor's `auto` is no fallback: the compile succeeds and the kill
+comes at execution. The launch passes `CompiledProofOfWorkHash 0` on macOS,
+Tor's interpreter, about 20 times slower per hash; it covers the wallet's
+Tor too, which has the same launch. Rejected: signing with
+`com.apple.security.cs.allow-unsigned-executable-memory`, which gives up
+most of what the hardened runtime protects (`allow-jit` would not help:
+HashX does not use `MAP_JIT`). `tor-pin-verify`'s macOS entries read the
+option back from the signed bytes. The missing `MAP_JIT` is upstream's;
+whether to report it to the Tor Project is Rick's.
+
 ## 4. Design
 
 ### 4.1 The link
@@ -1032,7 +1057,9 @@ with `O_APPEND`), so the log of every incarnation in a directory's life is
 in it. The
 pinned Tor writes no onion address at `notice` or `info` (measured for the
 wallet, `WALLET_SIDE_STORE.md:634`); the daemon's instance is re-measured once
-(`TSR-M9`).
+(`TSR-M9`). The launch passes `SafeLogging 1`, Tor's default, so that the
+scrubbing `TSR-M9` measured does not rest on the default (Rick, 2026-11-08):
+operators paste the daemon's log into bug reports.
 
 ### 4.11 Runtime and timers
 
