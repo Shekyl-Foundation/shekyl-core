@@ -12,10 +12,11 @@ the questions the round answers; it does not answer them yet.
 - **`SSR-R1` — the secrets-storage PR.** The long-lived secret types in
   `shekyl-crypto-pq` apply `mlock` and `madvise(MADV_DONTDUMP)` (and
   `VirtualLock` on Windows) once, at construction. A `TxKey` constructor
-  returns its `R`; `x` comes from `derive_output_secrets`. Those two
-  constructors retire the seven rows of `docs/ci/secret-byte-locality.tsv`
-  where a wallet or node crate reduces a key itself (`R = r·G` ×5,
-  `x = ho + b` ×2). This is the implementation
+  returns its `R`, and a from-seed constructor beside the random one serves
+  the genesis tool; `x` comes from `derive_output_secrets`. Those
+  constructors retire all nine rows of `docs/ci/secret-byte-locality.tsv`,
+  which then holds none: the five `R = r·G` rows, the two `x = ho + b` rows
+  and the genesis tool's two `txkey.rs` rows. This is the implementation
   [`35-secure-memory`](../../.cursor/rules/35-secure-memory.mdc)'s
   OS-level section names, and the move
   [`36-secret-locality`](../../.cursor/rules/36-secret-locality.mdc)'s
@@ -39,10 +40,12 @@ the questions the round answers; it does not answer them yet.
   `ViewSecret`, `MlKem768DecapKey`, and the rest) and `AllKeysBlob`
   (`account.rs`), which is built by value and holds every key of one
   account.
-- The seven inventory rows: `shekyl-block-template` `lib.rs`;
+- The nine inventory rows: `shekyl-block-template` `lib.rs`;
   `shekyl-engine-core` `drain_assembly.rs`, `sign_bridge.rs`,
   `stake_engine/bond_post_assemble.rs`, `stake_engine/claim.rs` (`R`);
-  `shekyl-engine-core` `local_keys.rs`, `stake_engine/helpers.rs` (`x`).
+  `shekyl-engine-core` `local_keys.rs`, `stake_engine/helpers.rs` (`x`);
+  `shekyl-genesis-tool` `txkey.rs` (the ceremony seed reduced to the
+  transaction secret, and `R` from it).
 - `shekyl_process::harden::harden_process()`, which every binary calls
   first; it covers core dumps, not swap.
 
@@ -54,8 +57,10 @@ the questions the round answers; it does not answer them yet.
   pages locked, so the storage is a stable heap allocation. What owns it,
   and what happens when locking fails (the process's `RLIMIT_MEMLOCK`, a
   platform without it)?
-- `SSR-Q3` — The `TxKey` type: its constructor, what it exposes besides
-  `R`, and how each of the five call sites changes.
+- `SSR-Q3` — The `TxKey` type: its random constructor and its from-seed
+  constructor (the genesis tool's ceremony seed, reduced mod ℓ), what it
+  exposes besides `R`, and how each of the seven call sites changes (five
+  wallet and node sites, the genesis tool's two).
 - `SSR-Q4` — The `x = ho + b` call sites against `derive_output_secrets`:
   what each one needs that the function does not yet return.
 - `SSR-Q5` — The tests that observe the locking from outside the process,
