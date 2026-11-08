@@ -247,6 +247,8 @@ fn l11_l13_five_seed_pins() {
 }
 
 /// The default arm's reading, held so a later change that moves it is seen.
+/// A change that moves it writes its prediction in `STAKER_ARCHIVAL_SIM.md`
+/// before it re-pins.
 #[test]
 #[ignore = "population pin, five seeds; cargo test -p shekyl-staking-sim --release --bin shekyl-staking-sim -- l11_l13_five_seed --ignored"]
 fn l11_l13_five_seed_production_pins() {

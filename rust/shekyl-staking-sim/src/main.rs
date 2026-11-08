@@ -2145,21 +2145,31 @@ fn main() {
     // with `curve_milli`; PR 1.5 (ARCHIVAL_SIM_ECONOMICS_VERDICT.md) showed the
     // float mirror over-reads worst-shard redundancy by up to one replica, so
     // float is opt-in. Production applies no plateau.
-    let curve_impl =
-        match std::env::args().find_map(|a| a.strip_prefix("--curve-impl=").map(str::to_string)) {
-            None => CurveImpl::Integer,
-            Some(v) => match v.as_str() {
-                "integer" => CurveImpl::Integer,
-                "float" => CurveImpl::Float,
-                other => {
-                    eprintln!(
-                        "shekyl-staking-sim: unknown --curve-impl={other:?} \
+    let curve_flag =
+        std::env::args().find_map(|a| a.strip_prefix("--curve-impl=").map(str::to_string));
+    // The backend selects nothing on the production arm, so a run that names
+    // one there would print production output under a backend's label. Refuse it.
+    if curve_flag.is_some() && reward_arm != RewardArm::RegisteredPlateau {
+        eprintln!(
+            "shekyl-staking-sim: --curve-impl selects the registered plateau arm's backend; \
+             add --reward-arm=registered-plateau (production credits linear work, no plateau)"
+        );
+        std::process::exit(2);
+    }
+    let curve_impl = match curve_flag {
+        None => CurveImpl::Integer,
+        Some(v) => match v.as_str() {
+            "integer" => CurveImpl::Integer,
+            "float" => CurveImpl::Float,
+            other => {
+                eprintln!(
+                    "shekyl-staking-sim: unknown --curve-impl={other:?} \
                      (expected `integer` (authoritative, default) or `float` (exploration only))"
-                    );
-                    std::process::exit(2);
-                }
-            },
-        };
+                );
+                std::process::exit(2);
+            }
+        },
+    };
     match reward_arm {
         RewardArm::Production => eprintln!(
             "shekyl-staking-sim: reward arm = Production (linear credited work, production integer arithmetic)"
