@@ -99,26 +99,15 @@ pub struct InfoStatusFacts {
     pub version: String,
 }
 
-/// The Peers part's facts: whether P2P runs, and when it does, its counts
-/// (Rick, 2026-10-14). [`InfoPeersFacts`] is reached only through
-/// [`PeerFacts::Running`]; a daemon started offline has no counts to
-/// read, and [`PeerFacts::Offline`] carries nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The Peers part's facts: whether P2P runs, and when it does, one row
+/// per connector it runs (Rick, 2026-10-14; 3.70). The rows are reached
+/// only through [`PeerFacts::Running`]; a daemon started offline has no
+/// counts to read, and [`PeerFacts::Offline`] carries nothing. Read only
+/// for a caller who is shown Peers.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerFacts {
-    Running(InfoPeersFacts),
+    Running(shekyl_rpc_types::InfoPeers),
     Offline,
-}
-
-/// Per-connector transport and peerlist detail of a daemon whose P2P runs.
-/// Read only for a caller who is shown Peers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InfoPeersFacts {
-    pub public_incoming_sockets: u64,
-    pub public_outgoing_sockets: u64,
-    pub tor_incoming_sockets: u64,
-    pub tor_outgoing_sockets: u64,
-    pub white_peerlist_size: u64,
-    pub grey_peerlist_size: u64,
 }
 
 /// Which of the pool's two counts a caller is owed.

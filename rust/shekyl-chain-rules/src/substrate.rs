@@ -79,6 +79,15 @@ pub trait Substrate {
     /// not build the cache. The default pin does nothing.
     fn pin_seed(&self, _seed: &BlockHash) {}
 
+    /// `seed` left the seed window: release its cache if the implementor
+    /// keeps it beside the canonical one, so it is not held until the next
+    /// epoch's pin displaces it (A2). Never the canonical cache, and
+    /// nothing when `seed` is not the one kept beside it. Called after
+    /// [`pin_seed`](Self::pin_seed) under the same lock. A cache a caller
+    /// already holds ([`prepare_seed`](Self::prepare_seed)) stays valid
+    /// for that caller. The default keeps nothing, so it releases nothing.
+    fn release_seed(&self, _seed: &BlockHash) {}
+
     /// Whether `fault` is a missing cache: the seed was not pinned, so
     /// [`longhash`](Self::longhash) refused rather than deriving one.
     ///

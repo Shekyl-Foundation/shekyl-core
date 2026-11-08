@@ -248,3 +248,16 @@ carries a required `relay`, and `get_version` gains nothing. 3.66 and 3.67 are t
 (`get_version_synced_v43` and `_v44`): an over-cap request is
 `OverResourceBound`, then `calc_pow` and `get_coinbase_tx_sum` are served.
 Neither minor changes `sync_info`.
+
+**3.70 — `get_info`'s Peers part is one row per connector, and three
+fixtures have a successor.** The six flat counts (`public_*`/`tor_*`
+socket counts, `white_peerlist_size`, `grey_peerlist_size`) become
+`connectors`, one row per connector the daemon runs, `clearnet` before
+`tor`. The old list sizes were the clearnet lists alone, so the clearnet
+row takes them with the `public_*` sockets; the tor row takes the `tor_*`
+sockets and list sizes no predecessor carried (40 white, 300 gray).
+`get_info_synced_v9`, `_syncing_v8` and `_peerless_startup_v9` are their
+predecessors reshaped that way and nothing else
+(`the_3_70_get_info_vectors_are_their_predecessors_with_one_row_per_connector`).
+`get_info_offline_v1` and `_synced_restricted_v7` carry no Peers count
+and do not move. `get_version_synced_v47` is the chain's 3.70 link.
