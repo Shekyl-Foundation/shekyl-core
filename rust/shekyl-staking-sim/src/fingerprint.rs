@@ -142,6 +142,10 @@ impl Ta1Recorder {
         }
     }
 
+    /// The pair's settlement verdict under the population model's draw
+    /// abstraction: a holder of a seated shard passes every counted draw, so
+    /// `settle_pair` settles it Served; an in-flight fetch passes none. The
+    /// model has no per-draw failure (Appendix B, N1 and R16).
     fn serve_credit_bit(world: &World, actor: usize, shard: usize, deep_threshold: f64) -> bool {
         world.shards[shard].is_deep(deep_threshold)
             && world.holdings[actor][shard]

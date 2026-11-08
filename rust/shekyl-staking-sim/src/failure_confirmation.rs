@@ -25,9 +25,9 @@ use std::collections::VecDeque;
 use std::sync::OnceLock;
 
 /// L16 onion band-ceiling operating point (scalar `u_eff` does not pin tail shape).
-pub const L16_U_BASE: f64 = 0.9;
+pub const L16_U_BASE: f64 = crate::scenarios::BASELINE_TRANSPORT_U_BASE;
 pub const L16_LATENCY_PER_UNIT: f64 = 6.0;
-pub const L16_K: f64 = 0.07;
+pub const L16_K: f64 = crate::scenarios::BASELINE_TRANSPORT_U_K;
 pub const L16_DEEP_SHARD_SIZE: f64 = 1.0;
 
 pub const DEFAULT_MEAN_DOWN_EPOCHS: f64 = 2.0;
