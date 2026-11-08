@@ -28,7 +28,7 @@
 #   ./scripts/bench/gap7_pi4_gate.sh pins   # fixture positive limbs on aarch64 (run FIRST)
 #   ./scripts/bench/gap7_pi4_gate.sh rust   # terms sweep + multi-point budget fill + pow
 #
-# Both run `shekyl-chain-rules`'s instrument (`benches/block_connect_verify.rs`,
+# Both run `shekyl-verify-cost`'s instrument (`benches/block_connect_verify.rs`,
 # `tests/block_connect_pins.rs`). The Bp+ verifier it times is the shipped
 # one (`shekyl_bulletproofs::verify_batch`, CEN-H19's body), alone and as a
 # block's fold, so the floor's Bp+ figures come from the `rust` phase.
@@ -99,12 +99,12 @@ case "${PHASE}" in
   pins)
     # Positive limbs ON THE FLOOR first: a fixture that fails to verify on
     # aarch64 would make every later timing a measurement of a reject path.
-    (cd "${RUST_ROOT}" && cargo test --release -p shekyl-chain-rules --test block_connect_pins) 2>&1 | tee -a "${OUT_FILE}"
+    (cd "${RUST_ROOT}" && cargo test --release -p shekyl-verify-cost --test block_connect_pins) 2>&1 | tee -a "${OUT_FILE}"
     ;;
   rust)
     # Terms sweep + FULL multi-point budget fill + pow — the increments are
     # measured here (rule 76 §4), not scaled from anywhere.
-    (cd "${RUST_ROOT}" && cargo bench -p shekyl-chain-rules --bench block_connect_verify) 2>&1 | tee -a "${OUT_FILE}"
+    (cd "${RUST_ROOT}" && cargo bench -p shekyl-verify-cost --bench block_connect_verify) 2>&1 | tee -a "${OUT_FILE}"
     ;;
 esac
 

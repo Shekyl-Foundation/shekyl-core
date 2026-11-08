@@ -4,10 +4,11 @@
 // BSD-3-Clause
 
 //! Shared fixture support for the GAP-7 cold-block connect bench
-//! (`block_connect_verify.rs`) and its pins (`tests/block_connect_pins.rs`).
+//! (`benches/block_connect_verify.rs`) and its pins
+//! (`tests/block_connect_pins.rs`).
 //!
 //! Builds one **shape-true connect transaction**: the FCMP++ admission fixture
-//! (real proof, via the relay bench's [`relay::build_fixture`]), a real hybrid
+//! (real proof, via [`crate::relay::build_fixture`]), a real hybrid
 //! Ed25519+ML-DSA-65 signature made by the wallet's signer, a real Bp+
 //! aggregate range proof over `n_out` commitments, and the assembled
 //! `shekyl_wire::Transaction` whose `weight()` — the single owner of
@@ -42,8 +43,7 @@ use shekyl_wire::transaction::{
 };
 use shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES;
 
-#[path = "relay_admission_fixture.rs"]
-pub mod relay;
+use crate::relay;
 
 /// A real hybrid Ed25519+ML-DSA-65 auth: key, signature, and the message it
 /// signs. Production signs each input's `signed_hash(i)`

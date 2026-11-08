@@ -21,7 +21,7 @@
 //! the moment the calling code changes — the same reason `peers` needed a
 //! Rust owner rather than a mirrored `#define` (§70.3). Why the bodies and
 //! not `judge_lone_stateless` itself: the fixture is a real proof, not a
-//! consensus-valid transaction (`common/relay_admission_fixture.rs`).
+//! consensus-valid transaction ([`shekyl_verify_cost::relay`]).
 //!
 //! Two boundaries this states, both from §72, and what the Rust door does
 //! with each:
@@ -104,10 +104,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand_core::OsRng;
 
-#[path = "common/relay_admission_fixture.rs"]
-mod relay_admission_fixture;
-
-use relay_admission_fixture::{admission_verify, build_fixture, ChunkLayout};
+use shekyl_verify_cost::relay::{admission_verify, build_fixture, ChunkLayout};
 
 fn bench_admission(c: &mut Criterion) {
     let mut group = c.benchmark_group("relay_admission_verify");

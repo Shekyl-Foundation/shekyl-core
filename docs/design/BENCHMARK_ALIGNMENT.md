@@ -194,7 +194,7 @@ criterion-only and have no instruction count to gate.
 | **BA-I44** | `scripts/bench/test_drs_bench.py` | Tests the DRS comparator against the committed artifacts | CI (`.github/workflows/docs-gates.yml:313`) | **Keep, gated** |
 | **BA-I45** | `scripts/bench/wss_q1b_regtest_open_edge.sh` | Mines coinbase-only blocks and runs the open-edge binary; "not a grading instrument" by its own header | By hand | **Keep, tracked** |
 | **BA-I46** | `scripts/remote-bench.sh` | Runs a `cargo bench` on a remote host without truncating its output | By hand | **Keep, tracked** — it is the transport the T3 runs use |
-| **BA-I47** | `scripts/ci/check_bench_not_a_dependency.py` | Refuses a production dependency on the WSS bench crate | CI (`.github/workflows/docs-gates.yml:624`) | **Keep, gated** |
+| **BA-I47** | `scripts/ci/check_bench_not_a_dependency.py` | Refuses a production dependency on a measurement crate (`shekyl-wss-q1b-bench`, `shekyl-verify-cost`) | CI (`.github/workflows/docs-gates.yml:624`) | **Keep, gated** |
 
 ### 2.5 CI jobs
 

@@ -65,10 +65,7 @@ use gungraun::{library_benchmark, library_benchmark_group, main};
 use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
-#[path = "common/relay_admission_fixture.rs"]
-mod relay_admission_fixture;
-
-use relay_admission_fixture::{
+use shekyl_verify_cost::relay::{
     admission_verify, build_fixture, AdmissionFixture, AdmissionStatus, ChunkLayout,
 };
 

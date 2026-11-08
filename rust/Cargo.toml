@@ -30,6 +30,12 @@ members = [
     # is what enforces that.
     "shekyl-wss-q1b-bench",
 
+    # Verification-cost instruments (GAP-7 connect, §72 admission). NOT a
+    # spike: the floor gate and the instruction-count drift gate re-run
+    # these, so the crate must keep compiling. Nothing in the production
+    # graph may depend on it; the same gate enforces that.
+    "shekyl-verify-cost",
+
     # DISPOSABLE measurement spike (§94): Tor transit, onion-to-onion, one-way.
     # Named `-spike` on purpose -- nothing in it is canonical and it is deleted
     # once `ANON_ZONE_TRANSIT_MEASURED_MS` lands (rule 15: debt, labelled at

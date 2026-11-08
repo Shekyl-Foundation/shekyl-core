@@ -5,31 +5,27 @@
 
 //! Shared fixture for the §72 admission-verification benches.
 //!
-//! Included by both `relay_admission_verify.rs` (wall clock, the `hop` input)
-//! and `relay_admission_verify_iai.rs` (instruction counts, the drift gate) via
-//! `#[path]`, so the two instruments measure **the same workload** — which is
-//! the only thing that makes the gate meaningful about the number. The GAP-7
-//! connect fixture (`block_connect_fixture.rs`) includes it too.
-//!
-//! Not a `tests/common`-style helper: bench targets are separate compilation
-//! units, so a shared module is the only way to keep one definition.
+//! `relay_admission_verify` (wall clock, the `hop` input) and
+//! `relay_admission_verify_iai` (instruction counts, the drift gate) both
+//! call this module, so the two instruments measure the same workload.
+//! The GAP-7 connect fixture ([`crate::connect`]) builds on it too.
 //!
 //! # What the fixture is, and what it is not
 //!
 //! The proof is real — [`prove_with_rng`] over a tree synthesized here — and
-//! [`admission_verify`] hands it to the verification bodies the pool door runs
-//! ([`shekyl_chain_rules::judge_slot_stateless`] at `TxSlot::Lone`). It is
-//! **not** a consensus-valid transaction, so the bench calls those bodies
-//! rather than `judge_lone_stateless` itself: the proof is made over a
-//! constant signable hash, not `Transaction::tx_signable(network)`; each
-//! input's key scalar `k` is drawn at random rather than derived from a
-//! revealed hybrid public key (`PqcKeyScalar::from_pqc_public_key`); and
-//! there is no transaction around it for `tx_form` to judge. Building one at
-//! the synthetic depths 3..=7 would need the wallet builder's coordination
+//! [`admission_verify`] runs the verification bodies the pool door runs:
+//! the mask check and the membership check behind
+//! `shekyl_chain_rules::judge_slot_stateless` at `TxSlot::Lone`. This crate
+//! calls those bodies. It does not call `judge_slot_stateless`, and it does
+//! not depend on `shekyl-chain-rules`. The fixture is **not** a
+//! consensus-valid transaction: the proof is made over a constant signable
+//! hash, not `Transaction::tx_signable(network)`; each input's key scalar
+//! `k` is drawn at random rather than derived from a revealed hybrid public
+//! key (`PqcKeyScalar::from_pqc_public_key`); and there is no transaction
+//! around it for `tx_form` to judge. Building one at the synthetic depths
+//! 3..=7 would need the wallet builder's coordination
 //! (`shekyl-tx-builder`), which draws from `OsRng` and so cannot give the
 //! drift gate a byte-identical fixture.
-
-#![allow(dead_code)]
 
 use ciphersuite::group::ff::PrimeField;
 use ciphersuite::group::{Group, GroupEncoding};

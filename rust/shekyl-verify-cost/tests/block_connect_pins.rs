@@ -24,16 +24,13 @@
 
 use rand_core::OsRng;
 
-#[path = "../benches/common/block_connect_fixture.rs"]
-mod fx;
-
-use fx::relay::{admission_verify, ChunkLayout};
-use fx::{
-    bp_verify, bp_verify_block, build_bp, build_connect_tx, build_pqc_auth, parse_wire, pqc_verify,
-    pqc_verify_against,
-};
 use shekyl_crypto_pq::error::PqcVerifyError;
 use shekyl_types::SigningPayloadHash;
+use shekyl_verify_cost::connect::{
+    bp_verify, bp_verify_block, build_bp, build_connect_tx, build_pqc_auth, parse_wire, pqc_verify,
+    pqc_verify_against, BpFixture, PqcAuthFixture,
+};
+use shekyl_verify_cost::relay::{admission_verify, ChunkLayout};
 use shekyl_wire::transaction::{MAX_TX_SIZE, TX_WEIGHT_LIMIT};
 /// The permanent floor operating point: 2 × the 300 000 penalty-free zone.
 const BUDGET_AT_ZONE: usize = 600_000;
@@ -190,7 +187,7 @@ fn bp_verifier_fidelity_positive_and_negative() {
 
     // Negative limb: a corrupted statement is rejected — the verifier is a
     // verifier, not a parser that waves proofs through.
-    let mut corrupted = fx::BpFixture {
+    let mut corrupted = BpFixture {
         proof: bp.proof.clone(),
         commitments: bp.commitments.clone(),
     };
@@ -216,7 +213,7 @@ fn pqc_fixture_fidelity_positive_and_negative() {
     );
 
     // Corrupted signature → rejected (decode failure or verify failure).
-    let mut corrupted = fx::PqcAuthFixture {
+    let mut corrupted = PqcAuthFixture {
         public_key: auth.public_key.clone(),
         signature: auth.signature.clone(),
         message: auth.message,

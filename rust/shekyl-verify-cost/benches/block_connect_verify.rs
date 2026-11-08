@@ -48,7 +48,7 @@
 //! **Scope, stated precisely: this instrument measures the enumerated
 //! dominant CRYPTO terms through the bodies `form` runs. It is not an
 //! end-to-end production-path harness** — the fixture is not a
-//! consensus-valid transaction (`common/block_connect_fixture.rs`), so it
+//! consensus-valid transaction ([`shekyl_verify_cost::connect`]), so it
 //! cannot be handed to `form` itself. Unmeasured acceptance-path residue,
 //! named: the rest of `tx_form` (the structural and `tx_extra` rows, CEN-H18's
 //! cleartext balance), CEN-I17's signing-hash derivation and the
@@ -355,13 +355,10 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand_core::OsRng;
 
-#[path = "common/block_connect_fixture.rs"]
-mod block_connect_fixture;
-
-use block_connect_fixture::relay::{admission_verify, masks_check, membership_verify, ChunkLayout};
-use block_connect_fixture::{
+use shekyl_verify_cost::connect::{
     bp_verify, bp_verify_block, build_connect_tx, parse_wire, pqc_verify, ConnectTxFixture,
 };
+use shekyl_verify_cost::relay::{admission_verify, masks_check, membership_verify, ChunkLayout};
 
 /// The candidate worst-case shapes. The argmax must EMERGE from the sweep —
 /// these are the two density extremes plus the interior, not a presumed

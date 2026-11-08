@@ -174,49 +174,6 @@ trybuild = "1"
 # a workspace dependency); test-only.
 shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 rand_chacha = { workspace = true }
-# The verification benches (`benches/`) and their pins (`tests/
-# block_connect_pins.rs`): what pool admission (`relay_admission_verify*`,
-# DAEMON_RELAY_PRIVACY.md §72) and a block's connect (`block_connect_verify`,
-# GAP-7) pay, through the bodies `judge_slot_stateless` and `form` run. The
-# admission fixture builds a real FCMP++ proof over a synthesized tree, which
-# takes the prover's curve stack (the generators, the divisor and Selene
-# curves, the multiexp, the dalek group); the connect fixture adds the PoW
-# hash. All of these are already in the lockfile, and none reaches a store:
-# `check_chain_rules_no_store.sh` walks this section too. `OsRng` for the
-# wall-clock fixtures is `rand_core`'s `std` feature (the drift gate seeds a
-# `ChaCha20Rng` instead).
-shekyl-curve-generators = { path = "../shekyl-curve-generators" }
-shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs" }
-shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
-ec-divisors = { path = "../shekyl-oxide/crypto/divisors" }
-helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
-dalek-ff-group = "0.5"
-multiexp = "0.4"
-ciphersuite = "0.4"
-rand_core = { version = "0.6", features = ["std"] }
-# §72.6: two instruments, two consumers. `criterion` is wall clock -- the `hop`
-# input, and the arm that must run on BOTH the reference machine and the slow
-# one. `gungraun` is hardware-independent instruction counts -- the CI drift
-# gate that fires when the proof system moves, x86 only. Conflating them gives
-# either a gate that flaps with runner hardware or a number that cannot be
-# gated.
-criterion = { version = "0.5", features = ["html_reports"] }
-gungraun = "0.19"
-
-# The shared fixtures live in `benches/common/`, which cargo's bench
-# autodiscovery does not reach; the three targets are declared here because
-# each runs its own harness.
-[[bench]]
-name = "relay_admission_verify"
-harness = false
-
-[[bench]]
-name = "relay_admission_verify_iai"
-harness = false
-
-[[bench]]
-name = "block_connect_verify"
-harness = false
 
 [lints]
 workspace = true
