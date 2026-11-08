@@ -332,21 +332,27 @@ impl InfoP2p {
 /// connector the daemon runs, in connector order (3.70).
 ///
 /// A connector the daemon does not run has no row. A missing row says the
-/// connector is not configured; it is not a zero. The rows are built only
-/// through [`Self::new`], which refuses a connector out of order or named
-/// twice.
+/// connector is not configured; it is not a zero. A daemon running P2P runs
+/// at least one connector (with both off it is offline, IG-Q3), so there is
+/// always a row. The rows are built only through [`Self::new`], which
+/// refuses no row, a connector out of order, and a connector named twice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoPeers {
     connectors: Vec<InfoConnectorPeers>,
 }
 
 impl InfoPeers {
-    /// The rows, each connector at most once and in [`InfoConnector`] order.
+    /// The rows: at least one, each connector at most once, in
+    /// [`InfoConnector`] order.
     ///
     /// # Errors
+    /// [`GetInfoShapeError::NoConnectorRow`] for no row;
     /// [`GetInfoShapeError::ConnectorsOutOfOrder`] when a row's connector
     /// is not after the one before it.
     pub fn new(connectors: Vec<InfoConnectorPeers>) -> Result<Self, GetInfoShapeError> {
+        if connectors.is_empty() {
+            return Err(GetInfoShapeError::NoConnectorRow);
+        }
         if connectors
             .windows(2)
             .any(|pair| pair[0].connector >= pair[1].connector)
@@ -446,6 +452,9 @@ pub enum GetInfoShapeError {
     CountWithoutP2p { key: &'static str },
     /// The Peers rows name a connector out of connector order, or twice.
     ConnectorsOutOfOrder,
+    /// `"p2p": "running"` with no connector row. A daemon with both
+    /// connectors off is offline (IG-Q3), so a running one has a row.
+    NoConnectorRow,
     /// `p2p` disagrees with Health's `offline`: both read the daemon's
     /// configuration, so they cannot differ.
     P2pDisagreesWithOffline { offline: bool },
@@ -482,6 +491,10 @@ impl core::fmt::Display for GetInfoShapeError {
             Self::CountWithoutP2p { key } => write!(
                 f,
                 "`{key}` arrived without `p2p`: the Peers part says first whether P2P runs"
+            ),
+            Self::NoConnectorRow => f.write_str(
+                "`p2p` is running and `connectors` has no row: a daemon running no connector \
+                 is offline",
             ),
             Self::ConnectorsOutOfOrder => f.write_str(
                 "the Peers part's `connectors` rows are out of connector order or name a \

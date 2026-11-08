@@ -2876,6 +2876,49 @@ mod get_info {
     /// The Peers part's counts: one key since 3.70, the rows.
     const PEERS_KEYS: [&str; 1] = ["connectors"];
 
+    /// **`connectors: null` is `connectors` absent** (3.70), the rule every
+    /// hidden-part key follows: beside `"p2p": "running"` both are the
+    /// Peers part missing its rows, refused by name; with `p2p` gone too,
+    /// both are the part withheld, written back without the key. The
+    /// encoder never writes `null`. **`connectors: []` is refused**: a
+    /// daemon with both connectors off is offline (IG-Q3), so a running
+    /// one always has a row, and an empty list would be a fourth state the
+    /// daemon cannot be in.
+    #[test]
+    fn null_connectors_is_absent_connectors_and_no_row_is_refused() {
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v9.json"));
+
+        let mut missing = full.clone();
+        missing.as_object_mut().unwrap().remove("connectors");
+        let mut null = full.clone();
+        null["connectors"] = serde_json::Value::Null;
+        for doc in [&missing, &null] {
+            let refusal = decode(doc).expect_err("running without its rows");
+            assert!(
+                refusal.contains("peers") && refusal.contains("`connectors`"),
+                "the refusal names the part and the key; got {refusal:?}"
+            );
+        }
+        assert_eq!(decode(&missing), decode(&null), "null reads as absent");
+
+        for doc in [&mut missing, &mut null] {
+            doc.as_object_mut().unwrap().remove("p2p");
+        }
+        let withheld = decode(&null).expect("no p2p and null rows is withheld");
+        assert_eq!(withheld.peers, Hidden::Withheld);
+        assert_eq!(decode(&missing).unwrap(), withheld);
+        assert_eq!(
+            serde_json::to_value(&withheld).unwrap(),
+            missing,
+            "a withheld Peers part writes no key, never null"
+        );
+
+        let mut empty = full;
+        empty["connectors"] = serde_json::json!([]);
+        let refusal = decode(&empty).expect_err("running with no connector");
+        assert!(refusal.contains("no row"), "got {refusal:?}");
+    }
+
     /// **A Peers row is the all-or-none unit** (3.70). A row missing any
     /// member, carrying one it should not, or naming a connector the wire
     /// does not know is refused; so are rows out of connector order and a

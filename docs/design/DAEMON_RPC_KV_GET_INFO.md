@@ -665,7 +665,11 @@ gray_peerlist_size}`, one row for each connector the network plan starts
 (`NetworkPlan::connectors`), in connector declaration order: `clearnet`
 before `tor`, the spellings `/get_stem_tallies` already uses. A connector
 the daemon does not run has no row; the absence says it is not
-configured and is not a zero. Each row is the all-or-none unit: every
+configured and is not a zero. A running daemon has at least one row: with
+both connectors off it is offline (IG-Q3), so `"p2p": "running"` beside
+`connectors: []` is refused. `connectors: null` reads as the key absent,
+as every hidden-part key does: refused beside `"running"`, the part
+withheld when `p2p` is absent too. The encoder never writes `null`. Each row is the all-or-none unit: every
 member is required and no other is accepted, and a connector name the
 wire does not know is refused. `InfoPeers::new` refuses rows out of
 connector order or a connector named twice, on both sides of the wire.
