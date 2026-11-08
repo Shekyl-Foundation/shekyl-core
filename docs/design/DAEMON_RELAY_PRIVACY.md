@@ -12609,8 +12609,9 @@ They are a separate surface and a separate curve.)*
 > Floor device (`docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt`,
 > rev `8af70a60a6`): 972 µs per single-signer input (`pqc_per_input`, which
 > times one scheme-1 verification; the same at 1 and 8 inputs), under 1 % of
-> the 124.5 ms 1-in genesis cell, and M × 972 µs for a multisig input, up to
-> 4.86 ms at M = 5; the range proof
+> the 124.5 ms 1-in genesis cell. A multisig input is about M × 972 µs, up to
+> 4.86 ms at M = 5 (derived, not measured: M of the timed verifications, under
+> the multisig domain, plus the container parse). The range proof is
 > 35.0 ms at 2 outputs and 193.4 ms at 16 (`bp_proxy`, the shipped
 > single-proof verifier).
 >
@@ -12623,8 +12624,8 @@ They are a separate surface and a separate curve.)*
 > 36 ms at the modal 1-in/2-out shape on the floor device, against 124.5 ms.
 > Omitted work under-states `hop`, the privacy-losing direction (§71.3). The
 > cells price the single-signer input, the modal one; a multisig input adds
-> (M − 1) × 972 µs to its transaction's verification, at most 3.89 ms per
-> input at M = 5.
+> about (M − 1) × 972 µs to its transaction's verification, about 3.89 ms per
+> input at M = 5 (derived as above).
 > Re-deriving the floor over the door's whole sequence is BA-Q9
 > (`BENCHMARK_ALIGNMENT.md`).
 
@@ -12814,8 +12815,9 @@ what a path carrying **no** ML-DSA-65 predicts (§72.2).
 
 *Amended 2026-11-08 (§72.2):* that reading holds for the C++-door sweep it
 was taken on. The Rust door adds the lattice term, 972 µs per single-signer
-input on this board against 178 µs on the dev box (5.46×, inside this table's band, so a
-flat ratio no longer tells the two paths apart), and the lone range proof.
+input on this board against 178 µs on the dev box (5.46×, inside this
+table's band, so a flat ratio no longer tells the two paths apart), and the
+lone range proof.
 
 ### 73.3 §65's conditional is resolved, and not marginally
 
