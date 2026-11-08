@@ -3111,6 +3111,54 @@ one.
 micro-sim's availability is per epoch. The voluntary exit's Release
 cooldown is not applied (R10, for Rick).
 
+### The rulings (Rick 2026-11-08): predictions, then outcomes
+
+Rick ruled the four §6.2 items on 2026-11-08
+(`ECONOMICS_SIM_PRODUCTION_REBASE.md` §6.2). Each step that moves a pinned
+figure has its prediction here, committed before the code.
+
+**P7, (a): every held shard bonds, and the carry splits.** The default
+bond scope becomes production's: every held shard posts `bond_rate`. The
+carry becomes two terms. *Capital carry* is the posted bond times a rate,
+`BASELINE_BOND_CARRY / BASELINE_BOND_RATE` = 0.015 per epoch, which is the
+old 0.03 at the old calibration point. *Operating cost* is charged per
+held shard; it is 0 until the coupling half calibrates it. It is not
+`storage_unit_cost`, which scales with a shard's bytes. Deep only and the
+flat 0.03 per bonded shard become the registered arm's configuration,
+beside the plateau, so that arm stays what the published figures were
+taken on.
+- *The falsifier.* `l11_l13_five_seed_pins` runs the registered arm
+  (plateau, deep only, flat carry) and holds every bit.
+- *The lean point and the L13 knee, bit for bit.* With no age tilt the
+  bond is 2.0, and 0.015 × 2.0 is exactly 0.03 in `f64`. The flow cost's
+  0.015 × (2.0 · n) rounds as n × 0.03 does, and the operating term adds
+  0.0. So the production pins for `l11_fill` and `l13_decay_knee` equal
+  the `a7_l11_all_b200` and `a7_l13_all_b200` readings before this commit,
+  on every seed. Those readings: lean `cDeepU` 0.420, 0.413, 0.504, 0.416,
+  0.367 (mean 0.424), `oUmx` 1 on every seed, `bondA` mean 88.04; knee
+  `cDeepU` 0.769, 0.723, 0.739, 0.734, 0.774 (mean 0.748), `oUmx` 1,
+  `bondA` mean 73.45.
+- *The other nine pinned rows* are at 2.0 as well. A storage-rich actor
+  (capital 20) bonds 10 shards in all instead of 10 deep plus its hot
+  holdings, so deep coverage thins: `cDeepU` rises on all nine, the fully
+  covered floor 100 included, and `oUmx` rises toward 1. `bondA` has two
+  channels that pull apart. The count's definition widens: an actor that
+  holds only hot shards now posts a bond and counts. Participation
+  narrows: the carry on hot shards lowers realized yield, and exits run on
+  realized yield. At the lean point the first won (72 → 88). Predicted:
+  `bondA` rises on all nine.
+- *The A7 arms.* Every held shard is now the base, so the axis gains deep
+  only at 2.0 (`a7_*_deep_b200`). Its capital carry is the same 0.03 per
+  bonded shard, so it reproduces the pre-commit production pins for
+  `l11_fill` and `l13_decay_knee` bit for bit. At the floor the carry is
+  now 0.015 × 0.75: every held shard reads near 0.157 (lean) and 0.180
+  (knee) as five-seed means, the §6.2 scaled-carry figures, with the
+  oldest band still uncovered on every seed. Deep only at the floor stays
+  fully covered, and its `bondA` rises (a lighter carry, a higher yield).
+- *The rest of the default sweep* moves wherever a bond is posted. The
+  registered arm's sweep (`--reward-arm=registered-plateau`) is
+  byte-identical to the sweep before this commit.
+
 ## L14×L15 — proof-of-archival in harmony with retrieval (specification)
 
 *Specification first, code second (`05-system-thinking.mdc`). This section is the design
