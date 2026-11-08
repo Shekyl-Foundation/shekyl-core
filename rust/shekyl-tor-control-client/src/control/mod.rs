@@ -78,6 +78,7 @@ pub use framing::{
     ControlReply, Framed, FramingError, ReplyBudget, ReplyFramer, ASYNC_EVENT_STATUS,
     BULK_REPLY_BYTES, ORDINARY_REPLY_BYTES,
 };
+pub use launch::LOG_FILE_NAME;
 pub use listeners::parse_socks_listeners;
 pub use network::{parse_network_view, NetworkView, Reported};
 pub use onion::{

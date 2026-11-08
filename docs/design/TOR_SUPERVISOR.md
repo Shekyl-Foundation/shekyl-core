@@ -306,12 +306,16 @@ slow, partly unbounded, and silent while it waits"). The
 ruled teardown (§4.7) takes the wipe off the stop path; the dialer stops before
 the Tor teardown. The brief's "stopped in step 9 in parallel with the core
 stop" holds only after the dialer stop; #1066's step 9 is sequential today.
+The Tor side is built: the wipe is off the stop path (§4.7,
+`TOMBSTONE_DELETE_BOUND`). The dialer's order stays with the
+daemon-configuration and P2P lanes.
 
 **TSR-F14 (low; Tor lane). The start sweep removes directories only.**
 `data_dir.rs` matches the `ephemeral-tor-` prefix and removes with
 `remove_dir_all`, which leaves a plain file. The kept log (§4.10) and anything
 else the routine leaves beside the directory are named under that prefix, and
-the sweep removes files as well as directories.
+the sweep removes files as well as directories. **Built:** the sweep removes
+every entry under the prefix, a symlink as a link (§8).
 
 **TSR-F15 (medium; TB lane). macOS has a managed Tor; §7's macOS cases are
 the supervisor's acceptance tests there.** Both macOS rows are pinned at
@@ -531,7 +535,7 @@ faults in the Tor process, so only those respawn:
 | Service | a probe that does not complete within the §10 `TSR-M2` bound (60 s) while outbound is usable, twice, the second after `HSFETCH`, or a directory check that misses twice (§4.5); and the overdue upload (§4.5). A round's failed uploads are not this: Tor retries its own uploads, and a refused round is the clock's. One `HS_DESC UPLOADED` round can leave that dial unfinished until the next round (`TSR-Q5`, §4.5). The 2026-10-22 miss returned no SOCKS reply by the bound, and the nonce was never sent | republish on the running Tor: `DEL_ONION`, then `ADD_ONION` with the held seed, the same onion. Tor answers `550` (address collision) to an `ADD_ONION` for a service it still holds, so the delete comes first; its `552` (no such service) is no failure. Escalate to Process only if the control command itself fails. Not while a republish cannot help (the clock named, or the latest round refused), and no sooner than the republish backoff allows (§4.5) |
 | Process | child exit; control EOF or desync; reply past bound; outbound dead past a bound with no external cause standing; a bootstrap stranded by a clock jump (§5, "Stranded after a clock jump"): Tor reported `CLOCK_JUMPED`, then neither the percent nor the bytes moved for the bound, so its retries sit on the clock that was wrong; a slow mirror always has bytes arriving (Rick, 2026-10-30) | respawn |
 | Install | pin fails at spawn, or discovery finds nothing (`TSR-F6`) | no spawn, so the binary is not executed; the daemon starts (the posture table); announce; retry at the cap |
-| Local resource | data directory unwritable or out of space (a fresh spawn sweeps leftover per-boot directories, then checks; a directory kept for an in-boot respawn is not swept); `TOO_MANY_CONNECTIONS` | no spawn (or, for the open-file limit, no respawn); announce; retry at the cap |
+| Local resource | data directory unwritable or out of space (a fresh spawn sweeps what earlier incarnations left, then checks; a directory kept for an in-boot respawn is not swept); `TOO_MANY_CONNECTIONS` | no spawn (or, for the open-file limit, no respawn); announce; retry at the cap |
 
 A stalled bootstrap is not a cause in any class (Rick, 2026-10-19). In the
 pre-flight's 300 cold runs every stall ended on its own, with no problem event
@@ -958,9 +962,14 @@ of consecutive launch failures §1 names the next launch takes a fresh one. At
 boot end it is renamed to a tombstone in the same parent (one metadata
 operation, after the reap, so on Windows no Tor handle holds a file inside
 it), handed to a blocking task that deletes it under the bound `TSR-M10`
-sets, and swept at the next start. If the rename fails (a scanner holding a file
+sets, and swept at the next start. The bound is `TOMBSTONE_DELETE_BOUND`,
+130 ms: ten times `TSR-M10`'s floor-device maximum. A delete that outlives it
+costs only disk until the next start, and the daemon's runtime ends without
+waiting for it. If the rename fails (a scanner holding a file
 on Windows), the directory stays under its live name and the next start's
-sweep removes it, with the failure logged. What a respawned Tor reads is the kept directory's `state`; when Tor first
+sweep removes it, with the failure logged. A directory the daemon drops
+without a teardown is renamed the same way, and its tombstone is left to the
+sweep. What a respawned Tor reads is the kept directory's `state`; when Tor first
 writes it, and what a kill loses, is `TSR-M6`.
 
 The public directory cache (`TSR-Q8`) is the one thing that outlives a boot.
@@ -1008,11 +1017,17 @@ Tor to the operator's onion. With `tor = off` there is no supervisor.
 ### 4.10 Log stream
 
 `SETEVENTS` adds `NOTICE WARN ERR` beside the status and descriptor events;
-they enter the daemon's log under `tor` through the bounded sink (`TSR-F2`).
+they enter the daemon's log under `tor` through the bounded sink (`TSR-F2`),
+at Tor's own severity (`NOTICE` at `info`), prefixed `Tor:`, with any control
+character replaced. The daemon's log is where Tor's account of a respawn
+survives a restart.
 The previous incarnation's file log is kept until the next start sweep (ruled):
 it moves out of the `DataDirectory` to `ephemeral-tor-<id>.log` in the parent,
 under the sweep's prefix (`TSR-F14`), so a crash loop keeps the last dead
-incarnation's evidence and no Tor log survives into another boot's run. The
+incarnation's evidence and no Tor log survives into another boot's run. A
+respawn into the kept directory appends to the same file (Tor opens its log
+with `O_APPEND`), so the log of every incarnation in a directory's life is
+in it. The
 pinned Tor writes no onion address at `notice` or `info` (measured for the
 wallet, `WALLET_SIDE_STORE.md:634`); the daemon's instance is re-measured once
 (`TSR-M9`).
@@ -1142,9 +1157,11 @@ that detail, not variants of `ManagedTorFix`.
 | Open-file limit reached | `TOO_MANY_CONNECTIONS` | Degraded | the limit and the count; raise it, in the platform's terms | none | wait; retry at the cap |
 | Tor version flagged | `DANGEROUS_VERSION` | announcement | upgrade Shekyl when a release re-pins Tor (TB-10), never Tor itself | none | none |
 
-A fresh spawn sweeps leftover per-boot directories before that space check.
-A directory kept for an in-boot respawn wears the leftover name, so the sweep
-runs only after that directory has been dropped. The cache figure is the bytes
+A fresh spawn sweeps what earlier incarnations left before that space check:
+their directories, tombstones and kept logs. A directory kept for an in-boot
+respawn wears the same prefix and is spared. When a run of failed launches
+replaces it with a fresh one, the sweep runs first and the replaced directory
+is retired after it, so its log stays (§4.10). The cache figure is the bytes
 the copy would write: the four public names, each a regular file within its
 limit. A staging partial is already on the disk the probe reads. A file over
 its limit is refused whole, so it adds nothing.
@@ -1604,7 +1621,10 @@ are fixed before the work starts:
    suspend) is recorded on Windows and macOS (§10). Health and `OwnTx` project the relay's
    hop-0 verdict (`OriginVerdict`), folded as `Input::AddressHidingOrigin`
    (`GS-Q3`, the GUI sync lane's `GS-C1`); the link is the phase.
-   `Syncing` is the sessions each connector holds (§1).
+   `Syncing` is the sessions each connector holds (§1). The teardown's
+   tombstone, the sweep of every leftover, the kept Tor log and Tor's log
+   lines in the daemon's log (§4.7, §4.10, `TSR-F13`'s Tor side, `TSR-F14`)
+   are built.
 3b. The public directory cache (`TSR-Q8`, §4.7). **Implemented.** At launch
    into a fresh directory the daemon copies `cached-microdesc-consensus`,
    `cached-microdescs`, `cached-microdescs.new` and `cached-certs`, each only
