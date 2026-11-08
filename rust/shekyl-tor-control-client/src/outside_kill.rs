@@ -97,24 +97,28 @@ fn killed(status: ExitStatus) -> bool {
 }
 
 /// A command whose child inherits standard input, output and error only.
-///
-/// On Windows a child inherits only handles this process has marked
-/// inheritable, and the spawn lock covers the one it marks for Tor. On Unix
-/// the close-on-exec marks happen in the child (`DAEMON_CONFIG_CUTOVER.md`
+/// The close-on-exec marks happen in the child (`DAEMON_CONFIG_CUTOVER.md`
 /// §2.10).
+#[cfg(unix)]
 fn child_command(program: impl AsRef<OsStr>) -> Command {
+    use std::os::unix::process::CommandExt;
     let mut command = Command::new(program);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let stdio_only = inherit::StdioOnly::prepare();
-        // SAFETY: the closure runs in the child between `fork` and `exec`,
-        // and [`inherit::StdioOnly::apply`] is async-signal-safe.
-        unsafe {
-            command.pre_exec(move || stdio_only.apply());
-        }
+    let stdio_only = inherit::StdioOnly::prepare();
+    // SAFETY: the closure runs in the child between `fork` and `exec`, and
+    // [`inherit::StdioOnly::apply`] is async-signal-safe.
+    unsafe {
+        command.pre_exec(move || stdio_only.apply());
     }
     command
+}
+
+/// A command whose child inherits standard input, output and error only. On
+/// Windows a child inherits only the handles this process has marked
+/// inheritable, and the spawn lock covers the one it marks for Tor, so the
+/// command needs nothing more.
+#[cfg(windows)]
+fn child_command(program: impl AsRef<OsStr>) -> Command {
+    Command::new(program)
 }
 
 /// `pkill -9 -f` with [`tor_pattern`]. `pkill` does not match itself.
