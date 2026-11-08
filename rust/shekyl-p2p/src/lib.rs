@@ -30,7 +30,7 @@ mod tor;
 
 pub use bans::{BanSpan, BanTarget, Bans};
 pub use descriptors::{observe_descriptors, PROBE_DESCRIPTORS};
-pub use facts::{LinkTotals, ListedAddress, PeerCounts, SocketTraffic};
+pub use facts::{ConnectorCounts, LinkTotals, ListedAddress, SocketTraffic};
 pub use network::{Listening, Network, NetworkParts, StartError};
 pub use plan::{ClearnetPlan, LinkLimits, NetworkPlan, PeerPlan, TorPlan};
 pub use tor::{SupervisorFeeds, TOR_DIAL_WITHIN, TOR_SOCKS_TIMEOUT};

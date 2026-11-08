@@ -1,0 +1,5 @@
+- **The managed Tor's log survives a respawn and a stop, and Tor's own log lines reach the daemon's log** (`TOR_SUPERVISOR.md` §4.7, §4.10, `TSR-F13`, `TSR-F14`).
+  - **Tor's own lines.** Tor's `NOTICE`, `WARN` and `ERR` lines are written to the daemon's log under `tor`, at Tor's severity and prefixed `Tor:`. Control characters in Tor's text are replaced. Before this, the daemon subscribed to these lines but dropped them.
+  - **The stop.** A clean stop no longer deletes Tor's data directory in its path. Tor's `tor.log` moves out to `ephemeral-tor-<id>.log` beside the directory. The directory is renamed to `ephemeral-tor-<id>.tomb` and deleted on a blocking task. The stop waits at most 130 ms for that delete, and whatever is left is swept at the next start.
+  - **A fresh directory.** When a run of failed launches replaces Tor's directory, the replaced one's log is kept.
+  - **The start sweep** removes files as well as directories, and a symlink only as a link.

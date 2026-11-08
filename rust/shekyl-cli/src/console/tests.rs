@@ -1117,14 +1117,16 @@ fn info_reply(height: u64) -> String {
             alt_blocks_count: 0,
             rpc_connections_count: 1,
         }),
-        peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(InfoPeers {
-            public_incoming_socket_count: 3,
-            public_outgoing_socket_count: 8,
-            tor_incoming_socket_count: 0,
-            tor_outgoing_socket_count: 0,
-            white_peerlist_size: 10,
-            grey_peerlist_size: 20,
-        })),
+        peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(
+            InfoPeers::new(vec![shekyl_rpc_types::InfoConnectorPeers {
+                connector: shekyl_rpc_types::InfoConnector::Clearnet,
+                incoming_sockets: 3,
+                outgoing_sockets: 8,
+                white_peerlist_size: 10,
+                gray_peerlist_size: 20,
+            }])
+            .expect("one row is in order"),
+        )),
         host: Hidden::Shown(shekyl_rpc_types::InfoHost {
             tx_pool_unbroadcast_count: Some(0),
         }),
