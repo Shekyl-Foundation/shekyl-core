@@ -12,10 +12,8 @@ privacy, and a PoW chain with staking as an economic primitive. Everything
 Shekyl ships is Rust under `rust/`: the node daemon `shekyld` and the wallet
 stack (`shekyl-cli`, `shekyl-wallet-rpc`, `shekyl-engine-core` and
 siblings). The tree holds no first-party C or C++; the only C/C++ is
-vendored under `external/` (the RandomX references), and
-`scripts/ci/check_no_first_party_c.py` holds that end state. When to choose
-Rust is [`20-rust-vs-cpp-policy`](.cursor/rules/20-rust-vs-cpp-policy.mdc);
-how the workspace is laid out is
+vendored under `external/` (the RandomX references). How the workspace is
+laid out, and the gate that holds that end state, is
 [`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc).
 
 ---
@@ -79,7 +77,6 @@ Architecture & scope
 
 Rust & FFI
 
-- [`20-rust-vs-cpp-policy`](.cursor/rules/20-rust-vs-cpp-policy.mdc) — when to use Rust vs. C++
 - [`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc) — workspace layout, the single `shekyl-ffi` crate, dependency rules
 - [`17-dependency-discipline`](.cursor/rules/17-dependency-discipline.mdc) — verify deps at source before adding
 - [`18-type-placement`](.cursor/rules/18-type-placement.mdc) — transform- vs state-shaped types; byte-layout discipline

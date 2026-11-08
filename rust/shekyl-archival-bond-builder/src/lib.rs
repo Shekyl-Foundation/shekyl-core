@@ -256,8 +256,8 @@ pub fn build_join_market_vin(
 /// - [`BondBuildError::CreditImbalance`] if `funding_total` does not equal that
 ///   sum.
 ///
-/// Amounts are [`AtomicUnits`] so the funds path stays checked end-to-end
-/// (rule 20); the raw `u64` is derived only at the error boundary.
+/// Amounts are [`AtomicUnits`] so the funds path stays checked end-to-end;
+/// the raw `u64` is derived only at the error boundary.
 pub fn verify_credit_funding(
     funding_total: AtomicUnits,
     output_total: AtomicUnits,

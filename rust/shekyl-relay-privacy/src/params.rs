@@ -170,12 +170,12 @@ pub fn divert_to_anonymity_zone<R: shekyl_draw_rng::RelayRng + ?Sized>(rng: &mut
 /// Outbound connections a node opens per zone by default — the deployed
 /// network's out-degree.
 ///
-/// **Rust owns this value; C++ consumes it** through
-/// `shekyl_p2p_default_out_peers` (rule 20). It was `#define
-/// P2P_DEFAULT_CONNECTIONS_COUNT 12` in `cryptonote_config.h`, mirrored by
-/// hand into every Rust instrument that simulates the deployed topology —
-/// five copies, no owner, and nothing that fails when the daemon's value
-/// moves. That is F-7's failure mode one layer down: an instrument measuring
+/// **This is the one owner of the value**: the transport's dial profile
+/// (`shekyl-transport-layer` `profile.rs`) and the conformance instruments
+/// read it. It was `#define P2P_DEFAULT_CONNECTIONS_COUNT 12` in the
+/// inherited `cryptonote_config.h`, mirrored by hand into every Rust
+/// instrument that simulates the deployed topology — five copies, no owner,
+/// and nothing that fails when the daemon's value moves. That is F-7's failure mode one layer down: an instrument measuring
 /// a degree the deployment does not run, feeding derivations that then report
 /// numbers for a network that does not exist.
 ///

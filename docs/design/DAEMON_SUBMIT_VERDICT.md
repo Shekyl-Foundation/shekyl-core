@@ -828,7 +828,7 @@ attestation is a consensus-integrity hazard, not a perf bug. Discipline:
 ## 4. The C++ shims (FFI spec)
 
 Three exported functions, POD-struct interfaces, zero verdict logic. Per
-[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md)
 this is the C++-as-minimal-transport-shim shape.
 
 **FFI boundary (implementation-round pin).** These shims deliberately do

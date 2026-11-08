@@ -844,7 +844,7 @@ fixed message, is untouched. Kept side after all four removals: `p_id` 32 ‖
 ### `RF-D10` — RULED 2026-08-20: the C++ side holds an opaque blob, not a typed struct
 
 **The question that produced it:** *why is this going into C++ instead of
-Rust?* The answer is that it should not have been. [Rule 20](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+Rust?* The answer is that it should not have been. [Rule 20](../completed/RULE_20_RUST_VS_CPP.md)
 and [rule 40](../completed/RULE_40_FFI_DISCIPLINE.md) say new code advances
 the FFI boundary rather than thickening C++, and the codebase already had the
 pattern: `txin_archival_reward_emission` is an **opaque `canonical_bytes`

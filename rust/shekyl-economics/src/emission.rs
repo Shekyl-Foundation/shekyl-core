@@ -1323,9 +1323,9 @@ mod tests {
     /// The C++ original formed `(2m - c) * c` in `uint64_t`. Past a median of
     /// ~2^32 that product wraps, and the reward derived from it is garbage.
     /// This crate computes the same expression exactly, so the two disagree in
-    /// that region — deliberately, per rule 16 and rule 20's overflow
-    /// criterion, and safely because pre-genesis no chain history depends on
-    /// the wrapped values.
+    /// that region — deliberately, per rule 16 (an overflow on an amount is a
+    /// bug, not a behaviour to keep), and safely because pre-genesis no chain
+    /// history depends on the wrapped values.
     ///
     /// The wrapped value is recomputed here with `wrapping_mul` rather than
     /// asserted from memory, so the test shows the divergence instead of

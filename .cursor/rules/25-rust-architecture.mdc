@@ -8,14 +8,16 @@ globs:
 # Rust architecture
 
 All Rust code lives under `rust/` in a Cargo workspace. The binaries are
-`shekyld`, `shekyl-cli` and `shekyl-wallet-rpc`. There is no C ABI and no
+`shekyld`, `shekyl-cli` and `shekyl-wallet-rpc`. Shekyl logic is Rust: the
+tree holds no first-party C or C++, the only C is vendored under
+`external/` (the RandomX references), and
+`scripts/ci/check_no_first_party_c.py` holds that. There is no C ABI and no
 `shekyl-ffi`. **Do not add a C ABI to reach a Rust crate:** a crate is
-called from Rust, and an export would be a permanent audit obligation (the
-retired rule 40's record is
-[`RULE_40_FFI_DISCIPLINE.md`](../../docs/completed/RULE_40_FFI_DISCIPLINE.md)).
+called from Rust, and an export would be a permanent audit obligation.
 `cmake/BuildRust.cmake` runs the cargo build and forwards C flags to cross
-builds. The only C is
-vendored under `external/` (the RandomX references).
+builds. The retired rules 20 and 40 are records:
+[`RULE_20_RUST_VS_CPP.md`](../../docs/completed/RULE_20_RUST_VS_CPP.md) and
+[`RULE_40_FFI_DISCIPLINE.md`](../../docs/completed/RULE_40_FFI_DISCIPLINE.md).
 
 New functionality:
 

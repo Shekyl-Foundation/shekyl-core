@@ -88,9 +88,10 @@ These show up often in CryptoNote-derived code and are real bugs, not
 style:
 
 - `clippy::indexing_slicing` on untrusted input → use `.get()` and propagate
-  `Option`/`Result`. See `20-rust-vs-cpp-policy.mdc` rule 3.
+  `Option`/`Result` (`25-rust-architecture.mdc`, §"Decoding untrusted
+  bytes").
 - `clippy::arithmetic_side_effects` on amount math → use
-  `checked_add`/`checked_mul`. See `20-rust-vs-cpp-policy.mdc` rule 4.
+  `checked_add`/`checked_mul`: an overflow on an amount is a financial bug.
 - `clippy::needless_collect`, `clippy::redundant_clone` → often a sign that
   a secret is being copied unnecessarily; check whether the type should be
   `Zeroizing<T>` first.

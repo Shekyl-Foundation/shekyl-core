@@ -61,12 +61,11 @@ computation is a fault, not a value: Rick 2026-10-09).
      is a decode error, not "withheld";
    - `#[serde(default)]` on a reply field is allowed only when the omitted
      form and the default **mean the same thing** (below).
-6. **Convert inherited sentinels at the boundary, once.** C++ that still
-   writes a sentinel is not patched in place
-   ([`20-rust-vs-cpp-policy`](20-rust-vs-cpp-policy.mdc)); the facts shim
-   that reads it maps it to `Option` and holds no other policy (C5's shape:
-   the core's `0` target decodes as `None` and never reaches a `ChainCount`).
-   The sentinel does not survive into any Rust type.
+6. **Convert inherited sentinels at the boundary, once.** An inherited
+   format that writes a sentinel is read by one decoder, which maps it to
+   `Option` and holds no other policy (C5's shape: a `0` target decodes as
+   `None` and never reaches a `ChainCount`). The sentinel does not survive
+   into any Rust type.
 
 ## What this does not forbid
 

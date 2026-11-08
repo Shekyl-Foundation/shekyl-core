@@ -63,7 +63,7 @@ Corpus-freeze guards: align `address_derivation_freeze` error message [`rust/she
 Block-height-only `unlock_time`: native `Timelock`, a pruned-safe context-free ingestion validator, and daemon-side enforcement (flagged 2026-06-23, `feat/scan-refresh-wire-migration`).
 Repo-wide `RingCT`/`rct`/`RCT` → `CT` semantic sweep — a Shekyl tx is simply a confidential transaction (flagged 2026-06-22).
 Store-backed / pruned-tree path assembly (CT-3 pre-flight F5, [`docs/completed/CT3_SYNC.md`](./completed/CT3_SYNC.md)
-C++ FCMP++ wallet send path is incomplete; 2026-06-21 debugging [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+C++ FCMP++ wallet send path is incomplete; 2026-06-21 debugging [`20-rust-vs-cpp-policy`](completed/RULE_20_RUST_VS_CPP.md)
 `get_curve_tree_leaves` daemon endpoint + KAT (CT-3 R1-Q1 deferral [`docs/completed/CT3_SYNC.md`](./completed/CT3_SYNC.md)
 Rollback-adjacent frozen-`R_k` recheck on plain resume (CT-3c C1 disposition, 2026-06-12).
 Full all-segment frozen-`R_k` recheck (CT-3c bounded-check deferral, 2026-06-12).
@@ -204,7 +204,7 @@ Derive PWD-B2's timed-sync `min`/`jitter` split.
 Re-derive initial-sync verification cost at the Pi-4 floor now that C2-R1a has deleted `PER_BLOCK_CHECKPOINT`.
 Measure address volatility for ephemeral-per-boot onion endpoints (PWD-E8), then rule the acceptable dead fraction.
 Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.
-Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](completed/RULE_20_RUST_VS_CPP.md)
 FCMP++ sender-side output verification — inherited `wallet2::sanity_check` [`16-architectural-inheritance`](../.cursor/rules/16-architectural-inheritance.mdc)
 Hardening-pass commit 8 follow-up: WalletPrefs round-trip property test (`2k.a2` deferred test).
 `tx_pool` / `blockchain_db` LMDB transactional wrapper — typed commit-or-abort.

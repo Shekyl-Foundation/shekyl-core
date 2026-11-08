@@ -175,8 +175,7 @@ landing without re-verifying.
 ## Related rules
 
 `00-mission.mdc` rejects a recommendation whose security property fails
-verification. `20-rust-vs-cpp-policy.mdc` sends secret-touching use to
-Rust, which is where this check is strongest. `25-rust-architecture.mdc`
+verification. `25-rust-architecture.mdc`
 governs how a dependency is added. `30-cryptography.mdc`,
 `35-secure-memory.mdc`, and `36-secret-locality.mdc` are the properties
 the source check has to find, not assume.

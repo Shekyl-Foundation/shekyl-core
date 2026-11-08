@@ -165,7 +165,7 @@ shekyl-multisig = { path = "../shekyl-multisig", optional = true }
 # `submit_transaction`, `engine/daemon.rs`) is always-compiled production
 # code that builds `get_fee_estimate` params. The fee snapshot parses
 # through `shekyl_rpc_types::GetFeeEstimateResponse` (defensive
-# untrusted-daemon parsing per `20-rust-vs-cpp-policy.mdc` §3); other
+# untrusted-daemon parsing); other
 # daemon methods still take `serde_json::Value`. `serde_json` is already
 # in the workspace lockfile (transitively via `shekyl-rpc-client`, plus
 # this crate's build- and dev-deps), so making it a direct non-optional

@@ -275,7 +275,7 @@ the distinction the condition was reaching for.
 
 **Q12-R-W1 — repo PR (small, C++).** Delete the Monero onion and i2p seed
 lists (§2.4).
-[`20-rust-vs-cpp-policy`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc) is
+[`20-rust-vs-cpp-policy`](../completed/RULE_20_RUST_VS_CPP.md) is
 named explicitly rather than slid past: the p2p layer has no Rust counterpart
 and is not on the current migration front, and the change is a **data
 constant**. It adds no C++ surface area for the Rust rewrite to pay down.

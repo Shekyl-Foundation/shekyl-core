@@ -584,7 +584,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Store-backed / pruned-tree path assembly (CT-3 pre-flight F5, [`docs/completed/CT3_SYNC.md`](./completed/CT3_SYNC.md)**
   - Target: pre-genesis
 
-- **C++ FCMP++ wallet send path is incomplete; 2026-06-21 debugging [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)**
+- **C++ FCMP++ wallet send path is incomplete; 2026-06-21 debugging [`20-rust-vs-cpp-policy`](completed/RULE_20_RUST_VS_CPP.md)**
   - Target: pre-genesis
 
 - **`get_curve_tree_leaves` daemon endpoint + KAT (CT-3 R1-Q1 deferral [`docs/completed/CT3_SYNC.md`](./completed/CT3_SYNC.md)**
@@ -1120,7 +1120,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.** **Its inputs changed 2026-09-06: the anchor mechanism is deleted, so the `k ≤ 1` anchor-backed-connection cap this sub-round was to derive against no longer exists — there are no anchor-backed connections at all.** Selection is otherwise unchanged until the dialer lands. *Records-was, and what the C++ still does:* `connections_maker` is **white-first up to the `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target, then gray for the remainder**, and gray-first once the count is at or above that share. The anchor-reserved share is already gone. The derivation input is the dialer fill in [`P2P_3_SLICE_3_DIALER_BRIEF.md`](design/P2P_3_SLICE_3_DIALER_BRIEF.md): exclusive, then clearnet priority, then harvest, then `draw_white` up to the connector's outbound target, then `draw_gray` only while white is under the refill line, one dial per jittered wake. Blocker: it must derive against that settled loop, so it follows the dialer rather than preceding it — the "fixed anchor behaviour" this once waited on no longer exists to be fixed; reopening criterion and the §12.10/§7 reconciliation it must carry are in the owning doc — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I4, PWD-I5
   - Target: pre-genesis
 
-- **Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)**
+- **Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](completed/RULE_20_RUST_VS_CPP.md)**
   - Target: pre-genesis
 
 - **FCMP++ sender-side output verification — inherited `wallet2::sanity_check` [`16-architectural-inheritance`](../.cursor/rules/16-architectural-inheritance.mdc)**
