@@ -47,10 +47,11 @@ fn a_running_cli_is_hardened() {
         .expect("spawn shekyl-cli");
     let mut stdin = child.stdin.take().expect("piped stdin");
     writeln!(stdin, "version").expect("write a command");
+    // The reader lives until the child is reaped: dropping it closes the
+    // pipe, and the CLI's next write would end it by EPIPE, not by its input.
+    let mut stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
     let mut answer = String::new();
-    BufReader::new(child.stdout.take().expect("piped stdout"))
-        .read_line(&mut answer)
-        .expect("read the answer");
+    stdout.read_line(&mut answer).expect("read the answer");
     assert!(
         answer.starts_with("shekyl-cli "),
         "shekyl-cli did not answer `version`; stderr:\n{}",
@@ -59,6 +60,7 @@ fn a_running_cli_is_hardened() {
 
     from_outside::assert_hardened(&mut child);
     drop(stdin);
+    std::io::copy(&mut stdout, &mut std::io::sink()).expect("drain the CLI's output");
     let status = child.wait().expect("reap shekyl-cli");
     // On macOS the check ended it by SIGABRT.
     if cfg!(not(target_os = "macos")) {
