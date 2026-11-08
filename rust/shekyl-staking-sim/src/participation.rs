@@ -54,7 +54,7 @@ pub(crate) fn committed_bond_capital(world: &World, a: usize, ap: &AgentParams) 
     }
     let mut cap = 0.0;
     for (s, &held) in world.holdings[a].iter().enumerate() {
-        if held && world.shards[s].is_deep(ap.deep_threshold) {
+        if held && ap.bonds(&world.shards[s]) {
             cap += bond_age(
                 world.shards[s].age,
                 ap.bond_rate,
@@ -91,17 +91,17 @@ fn flow_cost(
     pp: &ParticipationParams,
 ) -> f64 {
     let mut shards = 0.0;
-    let mut deep = 0.0;
+    let mut bonded = 0.0;
     for (s, &held) in world.holdings[a].iter().enumerate() {
         if held {
             shards += 1.0;
-            if world.shards[s].is_deep(ap.deep_threshold) {
-                deep += 1.0;
+            if ap.bonds(&world.shards[s]) {
+                bonded += 1.0;
             }
         }
     }
     shards * ap.storage_unit_cost
-        + deep * ap.bond_carry
+        + bonded * ap.bond_carry
         + (pseudonyms.saturating_sub(1)) as f64 * pp.pseudonym_cost
 }
 
@@ -317,5 +317,23 @@ mod tests {
         assert!(!world.active[0]);
         world.deactivate(1);
         assert_eq!(world.actors[1].capital, 20.0);
+    }
+
+    /// A7's production-shaped arm bonds the hot shard too.
+    #[test]
+    fn every_held_shard_arm_bonds_the_hot_shard() {
+        let mut ap = baseline().agent_params();
+        ap.bond_every_held_shard = true;
+        let actor = Actor {
+            storage_capacity: 4,
+            capital: 20.0,
+            is_whale: false,
+            reservation: 0.0,
+        };
+        let mut world = World::new(vec![shard(0.9), shard(0.6), shard(0.1)], vec![actor]);
+        world.holdings[0] = vec![true, true, true];
+        assert_eq!(committed_bond_capital(&world, 0, &ap), 3.0 * ap.bond_rate);
+        ap.bond_every_held_shard = false;
+        assert_eq!(committed_bond_capital(&world, 0, &ap), 2.0 * ap.bond_rate);
     }
 }

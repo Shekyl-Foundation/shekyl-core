@@ -97,6 +97,18 @@ pub struct AgentParams {
     /// The reward arm the agent values shards under: the work term it is paid
     /// on (`reward::shard_value`).
     pub reward_arm: RewardArm,
+    /// A7: `false` (the default) bonds deep shards only; `true` bonds every
+    /// held shard, which is production's shape (`bond_floor_of` is the floor
+    /// times the held set). Both arms go to Rick measured.
+    pub bond_every_held_shard: bool,
+}
+
+impl AgentParams {
+    /// Whether holding `shard` posts a bond (and carries its cost).
+    #[must_use]
+    pub fn bonds(&self, shard: &crate::model::Shard) -> bool {
+        self.bond_every_held_shard || shard.is_deep(self.deep_threshold)
+    }
 }
 
 /// One actor's best-response. Mutates `world.holdings[actor]` (and `world.locks`).
@@ -149,7 +161,7 @@ fn best_response(
     let precharged: Vec<bool> = (0..n_shard)
         .map(|s| {
             world.holdings[actor][s]
-                && world.shards[s].is_deep(ap.deep_threshold)
+                && ap.bonds(&world.shards[s])
                 && (world.locks[actor][s] > 0 || cooldown_active)
         })
         .collect();
@@ -192,7 +204,7 @@ fn best_response(
     }
 
     // Net marginal value of the remaining (unlocked) shards.
-    let mut ranked: Vec<(usize, f64, bool, f64)> = Vec::with_capacity(n_shard);
+    let mut ranked: Vec<(usize, f64, bool, bool, f64)> = Vec::with_capacity(n_shard);
     for s in 0..n_shard {
         if new_held[s] {
             continue; // already forced in
@@ -202,9 +214,10 @@ fn best_response(
         let r_eff = if held { r[s].max(1) } else { r[s] + 1 };
         let age = world.shards[s].age;
         let deep = world.shards[s].is_deep(ap.deep_threshold);
+        let bonds = ap.bonds(&world.shards[s]);
         let value = shard_value(ap.reward_arm, price, r_eff, age, age_weight);
         let mut cost = ap.storage_unit_cost * ap.comp.size(&world.shards[s])
-            + if deep { ap.bond_carry } else { 0.0 };
+            + if bonds { ap.bond_carry } else { 0.0 };
         // Anticipatory lock cost: acquiring a deep shard commits storage for its
         // (age-scaled) duration, foregone if value later drops. Charged only on a
         // *fresh* acquisition (not already held), proportional to the horizon — so
@@ -227,7 +240,7 @@ fn best_response(
         } else {
             0.0
         };
-        ranked.push((s, value - cost + dodge_bonus, deep, bond_cost(age)));
+        ranked.push((s, value - cost + dodge_bonus, deep, bonds, bond_cost(age)));
     }
     // Highest net first.
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -236,7 +249,7 @@ fn best_response(
     // new deep acquisitions started this epoch, capped by `acq_rate` (bandwidth bound;
     // 0 = unlimited).
     let mut fresh_fetches = 0usize;
-    for (s, net, deep, bond) in ranked {
+    for (s, net, deep, bonds, bond) in ranked {
         if net <= 0.0 {
             break;
         }
@@ -250,7 +263,7 @@ fn best_response(
         // `used_bond`; only a fresh deep acquisition (or any deep shard in the no-cooldown
         // regime) draws from the remaining budget. Skip shards whose bond would overrun it;
         // keep scanning (a cheaper deep shard may fit).
-        let charges_bond = deep && bonded && !precharged[s];
+        let charges_bond = bonds && bonded && !precharged[s];
         if charges_bond && used_bond + bond > capital {
             continue;
         }
@@ -337,7 +350,7 @@ fn best_response(
     // `release_cooldown_epochs == 0`.
     if ap.release_cooldown_epochs > 0 && bonded {
         for s in 0..n_shard {
-            if was_held[s] && !new_held[s] && world.shards[s].is_deep(ap.deep_threshold) {
+            if was_held[s] && !new_held[s] && ap.bonds(&world.shards[s]) {
                 world.cooling[actor].push((ap.bond_rate, ap.release_cooldown_epochs));
             }
         }
