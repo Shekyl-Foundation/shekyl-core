@@ -31,6 +31,7 @@
 
 use crate::metrics::{BandedVerdict, GRADING_AGE_BANDS, GRADING_COST_BANDS};
 use crate::model::{EraShape, AGE_WEIGHT};
+use crate::reward::RewardArm;
 use crate::scenarios::{baseline, run_sim, ScenarioResult, SimConfig};
 
 /// `N`, fixed by §L19a item 2 before the first run.
@@ -67,6 +68,9 @@ pub struct Levers {
     pub age_weight: f64,
     /// The per-unit carry cost of storage (§L19e).
     pub storage_unit_cost: f64,
+    /// The arm the runs take (P9 runs both; every other mode the default).
+    #[serde(skip)]
+    pub reward_arm: RewardArm,
 }
 
 impl Levers {
@@ -77,6 +81,7 @@ impl Levers {
             storage_scale,
             age_weight: b.age_weight,
             storage_unit_cost: b.storage_unit_cost,
+            reward_arm: b.reward_arm,
         }
     }
 }
@@ -88,6 +93,7 @@ fn dynamic_cfg(name: String, lv: Levers, seed: u64) -> SimConfig {
     c.storage_scale = lv.storage_scale;
     c.age_weight = lv.age_weight;
     c.storage_unit_cost = lv.storage_unit_cost;
+    c.reward_arm = lv.reward_arm;
     c.dynamic = true;
     c.epoch_aging = EPOCH_AGING;
     c.seed = seed;
@@ -342,6 +348,74 @@ pub fn heavy_era_report() -> Vec<ArmReport> {
         }
     }
     reports
+}
+
+/// P9 (`STAKER_ARCHIVAL_SIM.md`, EUP-3 check half; ruled 2026-11-08): the
+/// size bound a byte-cut shard keeps. `SHT-Q2` cuts shards at an archival
+/// length `W = SHARD_LENGTH`, so a shard is `W` to within one transaction,
+/// whose archival length is at most its weight, capped by `TX_WEIGHT_LIMIT`.
+/// Relative to the mean, a shard lies within `1 ± b`.
+pub fn shard_length_bound() -> f64 {
+    shekyl_wire::transaction::TX_WEIGHT_LIMIT as f64 / shekyl_types::SHARD_LENGTH.to_raw() as f64
+}
+
+/// The worst era spread the byte partition leaves: every heavy-era shard at
+/// `1 + b`, every light one at `1 − b`.
+pub fn shard_length_spread() -> f64 {
+    let b = shard_length_bound();
+    (1.0 + b) / (1.0 - b)
+}
+
+/// One §L19a arm graded at [`shard_length_spread`].
+#[derive(serde::Serialize)]
+pub struct ShardLengthArm {
+    pub arm: &'static str,
+    pub base: &'static str,
+    pub shape: String,
+    pub grade: Grade,
+    pub seeds: Vec<SeedRow>,
+}
+
+/// `--f34-shard-length`: L19 on `SHARD_LENGTH`.
+#[derive(serde::Serialize)]
+pub struct ShardLengthReport {
+    pub bound: f64,
+    pub spread: f64,
+    pub arms: Vec<ShardLengthArm>,
+}
+
+/// §L19a's four graded arms, at the spread the byte partition leaves, paired
+/// seeds and grading as registered, on the default arm and on the registered
+/// arm L19 was taken on.
+pub fn shard_length_report() -> ShardLengthReport {
+    let spread = shard_length_spread();
+    let mut arms = Vec::new();
+    for (arm_label, reward_arm) in [
+        ("production", RewardArm::Production),
+        ("registered", RewardArm::RegisteredPlateau),
+    ] {
+        for (base, scale) in [("marginal", 1.0), ("covered", 1.3)] {
+            for shape in [EraShape::Plateau, EraShape::Burst] {
+                let lv = Levers {
+                    reward_arm,
+                    ..Levers::at_scale(scale)
+                };
+                let (seeds, grade) = grade_point(shape, spread, lv, false);
+                arms.push(ShardLengthArm {
+                    arm: arm_label,
+                    base,
+                    shape: format!("{shape:?}"),
+                    grade,
+                    seeds,
+                });
+            }
+        }
+    }
+    ShardLengthReport {
+        bound: shard_length_bound(),
+        spread,
+        arms,
+    }
 }
 
 /// `STAKER_ARCHIVAL_SIM.md` §L19c's headroom ladder, fixed before the run. `1.32` and

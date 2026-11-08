@@ -3280,6 +3280,43 @@ or the agents' decisions. So:
   not modeled as replicas; whether a flat floor is needed is the coupling
   half's row (`e1f99748e`).
 
+**P9 outcome** (`--f34-shard-length`). `b = TX_WEIGHT_LIMIT / SHARD_LENGTH`
+= 0.0495, so `S` = 1.1042. Eight paired seeds, `X = 0.05`, delta = the
+cell-wise worst (arm − control):
+
+| arm | base | shape | min | median | max | seeds over X | §L19a rule | governing (§L19g) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| production | marginal | Plateau | 0.000 | 0.200 | 0.435 | 7 | clear | VOID (control collapsed) |
+| production | marginal | Burst | 0.000 | 0.120 | 0.304 | 5 | clear | VOID (control collapsed) |
+| production | covered | Plateau | 0.151 | 0.348 | 0.773 | 8 | BREACH | VOID (control collapsed) |
+| production | covered | Burst | 0.100 | 0.208 | 0.261 | 8 | BREACH | VOID (control collapsed) |
+| registered | marginal | Plateau | 0.000 | 0.042 | 0.291 | 3 | clear | SPLIT |
+| registered | marginal | Burst | 0.000 | 0.058 | 0.142 | 4 | clear | SPLIT |
+| registered | covered | Plateau | 0.000 | 0.000 | 0.000 | 0 | clear | CLEAR |
+| registered | covered | Burst | 0.000 | 0.000 | 0.000 | 0 | clear | CLEAR |
+
+| P9 claim | Outcome | Grade |
+| --- | --- | --- |
+| Every arm clear, no seed over `X`, on the default arm | On the default arm every arm is VOID under the governing rule: the flat control collapses (every held shard bonding at 2.0 leaves the oldest band uncovered, P7), and a delta against a collapsed control reads the collapse, not the spread. §L19a's own rule reads BREACH on the covered base | Wrong: the default arm cannot grade L19 |
+| Deltas are seed noise around 0 | On the registered arm, the configuration L19 was taken on: the covered base is CLEAR with every delta exactly 0. The marginal base is SPLIT (3 and 4 seeds of 8 over `X`): it sits at the coverage edge, where any perturbation of shard sizes moves the worst cell. That the split is the base's own edge and not the 5 % spread is a reading; no run isolated it | Held on the covered base; the marginal base split |
+| No run void for demand matching | None was | Held |
+
+So on the bytes production cuts, a heavy era leaves the covered base
+exactly where its flat control is. The marginal base is not resolved by
+this instrument at a 5 % spread.
+
+**P10 outcome** (the default sweep at `08f0d064f`).
+
+| P10 claim | Outcome | Grade |
+| --- | --- | --- |
+| Every market field bit-identical between each floor scenario and its sibling | All 17: no field without `floored` in its name differs | Held |
+| The floor shows only in the `*_floored*` fields, at or below the market's | Floored deep extinctions over the run: L12 boot and mid decay 8 against 60 without the floor; slow decay 0 against 60; `l13_floor` 0 against 553; swan-3 floors 0 against 194 and 360. `l12_decay_fast` and `l16_L6_floor` equal their siblings in every field: the floor had decayed out before anything read it | Held |
+| Further below where the P3 tilt puts the floor on the oldest band | The tilt made the floored figures worse, not better: `p3_fee_tilt_t09` 7 extinctions against `t00`'s 0; `swan3_vshape_floor_t9`'s floored boot peak 0.362 against 0 untilted | Wrong |
+
+Without the floor, every coverage figure is the market's. The L12
+cold start reads the market alone: `boot_deep_under_peak` 1.0 and 60 deep
+extinctions; L13 at a terminal floor of 40 loses 553.
+
 ## L14×L15 — proof-of-archival in harmony with retrieval (specification)
 
 *Specification first, code second (`05-system-thinking.mdc`). This section is the design

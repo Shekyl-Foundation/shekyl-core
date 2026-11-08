@@ -551,6 +551,45 @@ fn print_f34_heavy_era_report() {
     }
 }
 
+/// **`--f34-shard-length`** — P9: §L19a's arms at the spread a byte-cut shard
+/// keeps (`f34_heavy_era::shard_length_report`). JSON to stdout, a table to stderr.
+fn print_f34_shard_length_report() {
+    use f34_heavy_era::{BREACH_X, SEEDS};
+    let r = f34_heavy_era::shard_length_report();
+    eprintln!(
+        "F34 on SHARD_LENGTH (P9): b = TX_WEIGHT_LIMIT / SHARD_LENGTH = {:.4}, worst era spread S = (1+b)/(1-b) = {:.4}",
+        r.bound, r.spread
+    );
+    eprintln!(
+        "  N = {SEEDS} paired seeds, X = {BREACH_X}; delta = cell-wise worst (arm − control)"
+    );
+    eprintln!(
+        "{:<10} {:<9} {:<8} | {:>8} {:>8} {:>8} {:>6} {:>5} | {:<8} governing",
+        "arm", "base", "shape", "min", "median", "max", "over_x", "void", "verdict"
+    );
+    for a in &r.arms {
+        let g = &a.grade;
+        let f = |x: Option<f64>| x.map_or("-".to_string(), |v| format!("{v:+.4}"));
+        eprintln!(
+            "{:<10} {:<9} {:<8} | {:>8} {:>8} {:>8} {:>6} {:>5} | {:<8} {}",
+            a.arm,
+            a.base,
+            a.shape,
+            f(g.min_delta),
+            f(g.median_delta),
+            f(g.max_delta),
+            g.seeds_over_x,
+            g.void_runs,
+            g.verdict,
+            g.governing_verdict
+        );
+    }
+    match serde_json::to_string_pretty(&r) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing f34 shard-length report: {e}"),
+    }
+}
+
 /// **`--f34-levers`** — §L19c/§L19d: the lever test on covered Burst. The table prints
 /// the seeds over `X` and the absolute arm/control state beside every registered
 /// verdict (§L19g).
@@ -1220,6 +1259,11 @@ fn main() {
         print_f34_levers_report();
         return;
     }
+    if std::env::args().any(|a| a == "--f34-shard-length") {
+        print_f34_shard_length_report();
+        return;
+    }
+
     if std::env::args().any(|a| a == "--f34-heavy-era") {
         print_f34_heavy_era_report();
         return;
