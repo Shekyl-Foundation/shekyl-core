@@ -22,8 +22,8 @@ deallocation.
   implement it manually to redact secrets.
 - Use `Zeroizing::new(...)` at point of creation — never let a bare secret
   exist in a local that gets moved into a wrapper later.
-- `#[deny(unsafe_code)]` at crate level (except `shekyl-ffi`). All wiping
-  goes through `zeroize`, which guarantees the write is not elided.
+- `#![deny(unsafe_code)]` at crate level (rule 25). All wiping goes through
+  `zeroize`, which guarantees the write is not elided.
 
 ## Hand-off discipline for secrets across producer/consumer boundaries
 
@@ -35,8 +35,8 @@ materialising an untracked stack `Copy` of the secret along the way.
 The recurrence pattern: when a secret is held in
 `Zeroizing<[u8; N]>` (or in a `ZeroizeOnDrop`-bearing typed wrapper)
 and needs to flow into another `ZeroizeOnDrop`-bearing wrapper or
-into an FFI-shaped `[u8; N]` buffer at a documented audit boundary,
-*how* the bytes cross matters. Two anti-patterns recur in code that
+into a fixed `[u8; N]` field of a secret-bearing struct, *how* the bytes
+cross matters. Two anti-patterns recur in code that
 otherwise passes the type-shape rules above:
 
 ### Anti-pattern: deref-into-temporary at hand-off
@@ -124,8 +124,8 @@ Both anti-patterns surfaced as Copilot review findings on PR #33's
 "AllKeysBlob zeroize-discipline realignment" chore (rounds 4 and
 5). Round 4 was the producer/consumer hand-off case (Option D
 disposition: producer returns the typed wrapper); round 5 was the
-FFI-mirror write path (`copy_from_slice` disposition for all
-secret-bearing fields). Both surface because the type-shape rules
+write path into a struct's fixed-size secret fields (`copy_from_slice`
+disposition for all secret-bearing fields). Both surface because the type-shape rules
 above are necessary but not sufficient: the *flow* across boundaries
 is the second half of the discipline.
 
@@ -136,31 +136,13 @@ producer and consumer?" If yes, name which of the two
 anti-patterns above is operative and apply the corresponding
 correct shape.
 
-## C++
-
-- Use `epee::wipeable_string` for secret strings (seeds, passwords, mnemonics).
-- Use `memwipe(ptr, len)` (backed by `shekyl_memwipe` → Rust `zeroize`) for
-  raw buffers. Never use plain `memset` — the compiler may optimize it away.
-- For RAII scope cleanup, prefer
-  `auto wiper = epee::misc_utils::create_scope_leave_handler([&] { memwipe(...); });`
-  immediately after allocating the secret.
-- Secret key structs must be wiped in their destructor or by the enclosing
-  scope guard.
-
-## FFI boundary
-
-- `shekyl_buffer_free` already wipes before deallocating. Always use it for
-  Rust-allocated buffers returned to C++.
-- When passing secrets from C++ to Rust as byte pointers, the Rust side must
-  copy into a `Zeroizing` container and the C++ caller must wipe its copy
-  after the call returns.
-
 ## OS-level protection
 
-- Call `shekyl_mlock` (or `mlock`) on pages holding long-lived secrets
-  (wallet spend keys, PQC secret keys) to prevent paging to swap.
-- Daemon and wallet processes set `prctl(PR_SET_DUMPABLE, 0)` on Linux to
-  suppress core dumps containing secrets.
+- Lock pages holding long-lived secrets (wallet spend keys, PQC secret
+  keys) with `mlock` to prevent paging to swap.
+- Daemon and wallet processes suppress core dumps containing secrets: the
+  core limit at zero and, on Linux, `prctl(PR_SET_DUMPABLE, 0)`. The
+  daemon does this as its first statement (`shekyl-process`'s `harden`).
 - Use `madvise(MADV_DONTDUMP)` on secret-holding allocations as a
   belt-and-suspenders measure.
 
