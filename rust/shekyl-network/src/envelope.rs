@@ -45,17 +45,9 @@ pub const BINDING_LEN: usize = 16;
 /// of a `frame` call, so a signer or proof that takes one takes a value this
 /// envelope bound to a network, never bytes a caller assembled.
 pub trait Width: sealed::Sealed {
-    /// The digest.
+    /// The digest `frame` returns for this width.
     type Out;
-    /// `cSHAKE256(S = customization, X = input)`, this many bytes. The
-    /// [`Frame`] token keeps it to this module: nothing outside can make
-    /// one, so nothing outside can hash its way to an `Out`.
-    fn hash(token: Frame, customization: &[u8], input: &[u8]) -> Self::Out;
 }
-
-/// The token only this module makes; see [`Width::hash`].
-#[derive(Debug)]
-pub struct Frame(());
 
 mod sealed {
     pub trait Sealed {}
@@ -124,16 +116,18 @@ impl Framed64 {
 
 impl Width for W32 {
     type Out = Framed32;
-    fn hash(_: Frame, customization: &[u8], input: &[u8]) -> Framed32 {
-        Framed32(cshake256_32(customization, input))
-    }
 }
 
 impl Width for W64 {
     type Out = Framed64;
-    fn hash(_: Frame, customization: &[u8], input: &[u8]) -> Framed64 {
-        Framed64(cshake256_64(customization, input))
-    }
+}
+
+fn framed32(customization: &[u8], x: &[u8]) -> Framed32 {
+    Framed32(cshake256_32(customization, x))
+}
+
+fn framed64(customization: &[u8], x: &[u8]) -> Framed64 {
+    Framed64(cshake256_64(customization, x))
 }
 
 /// A domain bound to the network's id: signed or proved against the chain.
@@ -188,23 +182,35 @@ macro_rules! domain_common {
 domain_common!(IdDomain);
 domain_common!(NameDomain);
 
-impl<const N: usize, W: Width> IdDomain<N, W> {
-    /// `frame(self, id, fields)`.
+impl<const N: usize> IdDomain<N, W32> {
+    /// `frame(self, id, fields)`, 32 bytes.
     #[must_use]
-    pub fn frame(&self, id: &NetworkId, fields: [&[u8]; N]) -> W::Out {
-        W::hash(Frame(()), self.customization, &input(id, &fields))
+    pub fn frame(&self, id: &NetworkId, fields: [&[u8]; N]) -> Framed32 {
+        framed32(self.customization, &input(id, &fields))
     }
 }
 
-impl<const N: usize, W: Width> NameDomain<N, W> {
-    /// `frame(self, name_id, fields)`.
+impl<const N: usize> IdDomain<N, W64> {
+    /// `frame(self, id, fields)`, 64 bytes.
     #[must_use]
-    pub fn frame(&self, name: &NameId, fields: [&[u8]; N]) -> W::Out {
-        W::hash(
-            Frame(()),
-            self.customization,
-            &input(name.as_bytes(), &fields),
-        )
+    pub fn frame(&self, id: &NetworkId, fields: [&[u8]; N]) -> Framed64 {
+        framed64(self.customization, &input(id, &fields))
+    }
+}
+
+impl<const N: usize> NameDomain<N, W32> {
+    /// `frame(self, name_id, fields)`, 32 bytes.
+    #[must_use]
+    pub fn frame(&self, name: &NameId, fields: [&[u8]; N]) -> Framed32 {
+        framed32(self.customization, &input(name.as_bytes(), &fields))
+    }
+}
+
+impl<const N: usize> NameDomain<N, W64> {
+    /// `frame(self, name_id, fields)`, 64 bytes.
+    #[must_use]
+    pub fn frame(&self, name: &NameId, fields: [&[u8]; N]) -> Framed64 {
+        framed64(self.customization, &input(name.as_bytes(), &fields))
     }
 }
 
