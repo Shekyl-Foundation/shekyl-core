@@ -195,7 +195,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: EUP-3 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) §1)
   - Target: pre-genesis
 
-- **Delete the staking sim's last two retired mechanisms when their triggers fire.** Rick ruled the retirement list 2026-11-08 ([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6.2 item 1); D3 and D5–D10 are deleted. Two stay: D1, the registered arm, until the coupling half's falsifier no longer needs a control taken on the abstract purse; and D2, in-place holdings with its per-shard drop escrow, until a participation model built on `Release` and `JoinMarket` replaces it. Falsifier: each is deleted in the change that fires its trigger, or the trigger is restated at its site with the reason it has not fired.
+- **Delete the staking sim's last two retired mechanisms when their triggers fire.** Rick ruled the retirement list 2026-11-08 ([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6.2 item 1); D3 and D6–D10 are deleted, and D5 had no code. Two stay: D1, the registered arm, until the coupling half's falsifier no longer needs a control taken on the abstract purse; and D2, in-place holdings with its per-shard drop escrow, until a participation model built on `Release` and `JoinMarket` replaces it. Falsifier: each is deleted in the change that fires its trigger, or the trigger is restated at its site with the reason it has not fired.
   - Owner: [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6.2
   - Target: pre-genesis
 

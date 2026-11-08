@@ -3200,7 +3200,7 @@ At 2.0 the capital carry is the registered 0.03 per bonded shard, so the
 held shard bonds, at 2.0 or at the floor, the oldest band is uncovered on
 every seed. That reading goes to EUP-5 I, the floor's sweep (`FOLLOWUPS.md`).
 
-**4. Calibrations an incorporation would move.** The bond floor (0.75 SKL;
+**4. Calibrations an incorporation would move. Ruled 2026-11-08: agreed.** The bond floor (0.75 SKL;
 the sim's 2.0 is an arm above it), the age weight (2000 milli), the bond
 duration (base 4, scale 4), the failure window (11 of 13) and the release
 cooldown (2 epochs) keep their values. Each was derived on runs taken on
@@ -3455,7 +3455,7 @@ Paths: `sim/` = `rust/shekyl-staking-sim/src/`, `prod/` = `rust/shekyl-archival-
 
 **Units.** One model unit is one SKL. This is the scale the lean pins already used (`bond_rate` 0.75 at `sim/scenarios.rs:3435`, the floor in SKL), and the one scale both seams read: the bond floor, and the purse's crossing into `reward_share_floor`'s atomic budget. The purse's size in SKL is not calibrated (A1); the coupling half replaces it.
 
-**The reward arm.** `RewardArm::Production` is the default: linear credited work on production's integer operands. `RewardArm::RegisteredPlateau` is the arm the June pins and the five-seed vector were taken on: float work, the retired banded plateau, the pseudonym split and a float price. It is the falsifier's control (§6.1), and it is on the retirement list.
+**The two arms.** `RewardArm::Production` is the default: linear credited work on production's integer operands, every held shard bonded, capital carried on the bond, and the exit held for the release cooldown. `RewardArm::RegisteredPlateau` is the configuration the June pins and the five-seed vector were taken on (`SimConfig::arm_defaults`): float work, the retired banded plateau, the pseudonym split, a float price, deep shards only bonded, a flat carry and an exit refunded at once. It is the falsifier's control (§6.1), and it stays on the retirement list as D1.
 
 ### The four items the 2026-10-02 brief already knew
 
