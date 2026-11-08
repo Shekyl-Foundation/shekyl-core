@@ -10,7 +10,8 @@ notes; Q10 with corrected headroom and the 0x0A rule-15 row); **Q3
 amended — the window/hysteresis half ratified, the ×50 surge factor
 REFUTED-NOT-SUPERSEDED by GAP-7's floor measurement** (§3 Q3 carries the
 strike-through, the named refuter, and the re-derived bound's numbers for
-signature); **Q2 COUNTERSIGNED on the corrected two-regime rationale** — its own
+signature) — **Q3 RE-SIGNED 2026-11-08: S = 3, an Assumption, re-derived
+at `BA-T10`** (§3 Q3); **Q2 COUNTERSIGNED on the corrected two-regime rationale** — its own
 mandated instrument refuted the early-chain half of the first signed
 reason; the corrected text, Rick's account of the refutation, the
 embedded trace, and the load-bearing Q2↔Q3 coupling are all in §3 Q2.
@@ -342,7 +343,8 @@ the falsifier existed to do; recorded as such.
 
 **LOAD-BEARING COUPLING (in both this row and Q3's, so neither can be
 revisited alone):** the ramp-in regime's protection is load-bearing, not
-incidental — **Q3's verification-time bound at surge_max = 4 is the ONLY
+incidental — **Q3's verification-time bound (surge_max = 3 as re-signed
+2026-11-08; 4 at this row's signature) is the ONLY
 thing bounding early-chain weight growth** while the window fills, so
 **any future loosening of surge_max REOPENS Q2, not just Q3.** (Rick:
 *"that coupling is exactly the kind that goes silent otherwise, and it's
@@ -453,6 +455,35 @@ first ~100 000 blocks this bound is the ONLY protection against
 early-chain weight growth — the long-term governor is structurally weak
 while its window fills (Q2's corrected rationale) — so any future
 loosening of surge_max reopens Q2, not just this row.**
+
+**RE-SIGNED (Rick, 2026-11-08): S = 3 — an Assumption, re-derived at
+`BA-T10`.** The verification term the signature priced was not the
+shipped one. The 128.77 ms/tx verify_floor took its Bp+ term from the
+C++ batched verifier (1.745 ms/proof on the floor); the verifier that
+ships is the Rust `verify_batch`, measured 2.56× slower than the C++ one
+single-proof on the same board, and its batched floor cost is unmeasured.
+Two compositions bound it, both on the signed inputs (f·T = 40 s,
+RandomX 1.2845 s per block, 46.13 argmax txs per 600 kB zone block, the
+floor-measured 3.76 ms/layer depth slope):
+
+| Bp+ term per argmax tx | basis | d2 | d7 | d24 |
+|---|---|---|---|---|
+| 1.745 ms (C++ batched) | the signature's composition | 6.52 | 5.69 | 3.97 |
+| 4.47 ms (C++ batched × 2.56) | interim: the Rust verifier amortises as the C++ one did | 6.38 | 5.58 | 3.92 |
+| 34.8 ms (Rust single proof) | conservative: no batch amortisation at all | 5.19 | 4.65 | **3.43** |
+
+The signature's own rule — sign the d24 consensus-max tier — puts the
+signed 4 above its bound under both the interim and the bracket. **S is
+the integer below the conservative d24 bracket: ⌊3.43⌋ = 3.** It is an
+Assumption, not a measurement: no row above times the shipped verifier's
+batch on the floor. `BA-T10`'s floor re-run of the batched Bp+ term
+records the measured d24 `surge_max`, and S is re-signed on it
+(`docs/FOLLOWUPS.md`, the S-interim row). The coupling above carries
+over unchanged: S = 3 tightens the early-chain bound, so Q2 is not
+reopened; a later re-signature above 3 reopens Q2 as any loosening does.
+Doubling cadence is unchanged: reaching ×3 from the floor takes the same
+two 51-block crossings ×4 did (102 blocks). The transient unit becomes
+`2·3·LTEM` = 1.8 MB at launch.
 
 **Falsifier (defect) — FIRED IN REVIEW, correction recorded against the
 signed row (flagged, not smoothed):** ~~"51 full blocks minimum to move
@@ -932,26 +963,30 @@ parent chain extends `k` blocks past it.
    **`margin(k) = min(2^k, S·LTEM/EM)`, S = the ratified surge factor** —
    the proved single-step bound iterated, cut by the surge clamp's
    absolute ceiling (`EM ≤ S·LTEM`; S = 50 in today's code, but Q3's
-   amendment REFUTED ×50 and **the signed re-derivation is S = 4 (d24
-   denomination)** — carry the symbol, never the literal,
+   amendment REFUTED ×50 and **the signed re-derivation is S = 3 (d24
+   denomination, re-signed 2026-11-08)** — carry the symbol, never the literal,
    so no legal announce ever exceeds `2·S·LTEM` regardless of lag). The
    receiver computes both `EM` (its `m_current_block_cumul_weight_limit/2`)
    and `LTEM` live, so the cap needs no protocol constant beyond `S`
    and the lag bound `k` the P2P row states. At typical announce-lag
-   `k ≤ 2`: **×4**, already dominating the observed adversarial ladder
-   (2.5 at k = 2); at the crossover `k ≥ 6`-ish the clamp term takes over.
+   `k ≤ 2` with EM at the floor: **×3** (the clamp arm `S·LTEM/EM` = 3
+   binds at k = 2, below `2^k` = 4), still above the observed adversarial
+   ladder (2.5 at k = 2); above the floor EM leaves less room and the clamp
+   arm binds sooner.
 4. **Genesis-era note:** at chain height `H < 100` the windows are
    `H`-sized and the hysteresis reasoning shifts, but bound (1) and the
    clamp term are window-size-independent, so `min(2^k, S·LTEM/EM)`
    holds from block 1 (with `EM` floored at the zone, limit ≥ 600 000
    while real blocks are tiny — the additive `entry_max` terms dominate).
-5. **Ceiling (reference):** `L ≤ 2·S·LTEM` — at the signed S = 4 this is
-   `8·LTEM` (2.4 MB at launch LTEM; the code's unfixed S = 50 would give
-   `100·LTEM` = 30 MB, the refuted figure); LTEM itself moves ≤ ×1.7 per 50 000 blocks (Q2).
+5. **Ceiling (reference):** `L ≤ 2·S·LTEM` — at the signed S = 3 (Q3,
+   re-signed 2026-11-08) this is `6·LTEM` (1.8 MB at launch LTEM; the
+   code's unfixed S = 50 would give `100·LTEM` = 30 MB, the refuted figure); LTEM itself moves ≤ ×1.7 per 50 000 blocks (Q2).
 
 **Handoff:** `margin(k) = min(2^k, S·LTEM/EM)` with S = the ratified
-surge factor (signed S = 4), computed live; the P2P row states its
-assumed announce-lag `k` (for `k = 2`: multiplier 4).
+surge factor (signed S = 3, Q3 re-signed 2026-11-08), computed live; the
+P2P row states its assumed announce-lag `k` (for `k = 2` with EM at the
+floor: multiplier 3 — the clamp arm binds at the assumed lag, so its
+receiver-local LTEM staleness below applies inside it, not only beyond).
 **Staleness of the receiver-local LTEM, quantified (review finding — the
 clamp arm substitutes LTEM_h where the bound at h+k is S·LTEM_{h+k}):**
 LTEM's growth over the lag is bounded by its own ratified rate,
@@ -1019,7 +1054,8 @@ the zone-point worst cold block measures **7.23 s ≈ 6.0 % of T** —
 Q1 signs unconditionally. Transient leg: the `2·50·LTEM` unit named
 below **failed** (≈ 316 % of T), firing the condition exactly as written —
 the ×50 surge factor is REFUTED (§3 Q3) and the signed re-derivation is
-**S = 4 (d24)**, making the transient unit `2·4·LTEM` = 2.4 MB at launch.
+**S = 3 (d24, conservative bracket; re-signed 2026-11-08)**, making the
+transient unit `2·3·LTEM` = 1.8 MB at launch.
 The text below stands as the blocker's record as named, pre-measurement.
 
 **The gap (as named):** nothing binds weight to verification time on the

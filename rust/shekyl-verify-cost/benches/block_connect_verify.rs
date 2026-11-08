@@ -117,9 +117,10 @@
 //! **The 30 MB figure is RECORDS-WAS, and the value it refuted is gone
 //! (2026-09-12).** `2 × 50 × LTEM` was the ceiling under the inherited ×50.
 //! This extrapolation is what fired against that value: C2-R2 Q3 struck ×50 as
-//! REFUTED-not-superseded and re-derived **S = 4**, now implemented and
+//! REFUTED-not-superseded; the signed value is **S = 3** (C2-R2 Q3,
+//! re-signed 2026-11-08, an Assumption — see the interim below),
 //! single-sourced in `config/consensus_constants.json`. The reachable ceiling
-//! is therefore `2 × 4 × LTEM` = **2.4 MB at launch**, which sits INSIDE the
+//! is therefore `2 × 3 × LTEM` = **1.8 MB at launch**, which sits INSIDE the
 //! measured span rather than 6.25× beyond it. The 30 MB extrapolation is kept
 //! because it is the evidence, not because it describes a state the chain can
 //! now enter — do not read it as the current bound.
@@ -215,7 +216,7 @@
 //! re-derivation target is the surge factor, not the zone); what the
 //! floor device measures remains GAP-7's open half. **That re-derivation
 //! has since happened (2026-09-12): the condition fired, ×50 was struck,
-//! and S = 4 is ratified and implemented — so the ≈ 48 % of a block
+//! and the signed S (now 3) is implemented — so the ≈ 48 % of a block
 //! interval below is the cost of a block the consensus rules no longer
 //! admit. At the ratified ceiling the same extrapolation lands inside the
 //! measured span.** The paragraph is kept as the measurement that forced
@@ -269,10 +270,12 @@
 //! 46.13 argmax txs per 600 kB zone block, RandomX 1.2845 s per block, and
 //! `surge_max = (f·T − RandomX) / (zone fill)`. The tiers become ≈ 6.38 at
 //! d2, ≈ 5.58 at d7 and **≈ 3.92 at d24**, against the composition below
-//! (6.52 / 5.69 / 3.97, quoted as 6.5 / 5.7 / 4.0). The signed ×4 is the
-//! d24 figure, so under this interim it sits above its own bound. The
-//! conservative bracket, the Rust single-proof cost (34.8 ms) in place of
-//! the batched term, gives ≈ 3.43 at d24.
+//! (6.52 / 5.69 / 3.97, quoted as 6.5 / 5.7 / 4.0). The conservative
+//! bracket, the Rust single-proof cost (34.8 ms) in place of the batched
+//! term, gives ≈ 3.43 at d24. **The signed S is 3, the integer below that
+//! bracket** (C2-R2 Q3, re-signed 2026-11-08 per Rick's ruling): an
+//! Assumption, since neither the interim nor the bracket is a measurement
+//! of the shipped batched verifier; `BA-T10`'s floor re-run re-derives it.
 //!
 //! **Regime note:** the sweep was measured with the FA-6 §8.2 flags; a
 //! one-point comparison against the shipping configuration (generic

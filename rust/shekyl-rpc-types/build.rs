@@ -215,7 +215,14 @@ use std::path::PathBuf;
 /// its last reader's reach, `SO-D12h`). The limit and clamp are
 /// `EconomicParams` fields, so the params digest moved to format `0x06` in
 /// the same change. **No production behaviour changes.**
-const PINNED_DIGEST: &str = "2227f8a01a4a47c9f42e46d3a7c01fc900d4927c03ec71bbbfc74d6be69829bd";
+///
+/// **Re-pinned 2026-11-08: a VALUE changed and the chain changed with it.**
+/// `block_weight_short_term_surge_factor` 4 → 3 (C2-R2 Q3 re-signed per
+/// Rick's ruling 2026-11-08, an Assumption: the integer below the
+/// conservative d24 `surge_max` bracket 3.43, re-derived at `BA-T10`). The
+/// chain question, answered: a node holding `S = 3` refuses a block over
+/// `2 · 3 · LTEM` that a node holding `S = 4` accepts, so this is a split.
+const PINNED_DIGEST: &str = "92f90c92135177a89c9791059dece31e0357840a09896a655639e878ed3e13de";
 
 fn main() {
     let manifest_dir =

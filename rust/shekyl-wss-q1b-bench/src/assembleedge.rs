@@ -63,13 +63,13 @@ use crate::timing::DEFAULT_TOLERANCE_PCT;
 /// - The **rate model's** depth, this constant: 6, what a path's proof weight
 ///   is priced at.
 /// - The **replay window's** depth: the window that rate produces holds
-///   765 600 leaves, which is a depth-**5** tree. It is depth 5 at every model
-///   depth from 3 to 7, because the leaf rate moves only 4.5 % across them
-///   (765 600 … 800 400) while a rung needs 38×.
+///   580 000 leaves at `S = 3`, which is a depth-**5** tree. It is depth 5 at
+///   every model depth from 3 to 7, because the leaf rate moves only 4.0 %
+///   across them (580 000 … 603 200) while a rung needs 38×.
 ///   `the_windows_tree_depth_does_not_depend_on_the_rate_model` pins that.
 /// - The **chain's** depth, which is what the curve tree actually is. At
-///   760 320 leaves/day the chain crosses `min_leaves_for_depth(6)` =
-///   17 778 529 after about 23 days, so [`GRADED_TREE_DEPTH`]'s stated band is
+///   576 000 leaves/day the chain crosses `min_leaves_for_depth(6)` =
+///   17 778 529 after about 31 days, so [`GRADED_TREE_DEPTH`]'s stated band is
 ///   satisfied in weeks. Its judgment is sound; it simply is not a statement
 ///   about the window.
 ///

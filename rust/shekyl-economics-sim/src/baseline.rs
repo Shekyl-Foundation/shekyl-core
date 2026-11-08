@@ -696,8 +696,8 @@ mod tests {
         write_header(&mut header, &[]).expect("String sink");
         assert_eq!(
             header,
-            "baseline params digest:    5a63a1d174bf5ef7fda7bb966e3e5e1f2ec00c90c6f7374d37cf146c9238bed2\n\
-             baseline consensus digest: 2227f8a01a4a47c9f42e46d3a7c01fc900d4927c03ec71bbbfc74d6be69829bd\n\
+            "baseline params digest:    50376bfff9b581026383deb54bc4848541658efc3eb7b12bf22f6f8544dfbf6e\n\
+             baseline consensus digest: 92f90c92135177a89c9791059dece31e0357840a09896a655639e878ed3e13de\n\
              baseline relay digest:     5f19950d8d031d0efa1f8e09f06d92c3b9a357175a9685ab7bd7fd49b45cc6b2\n\
              overrides: (none)\n\
              \n"

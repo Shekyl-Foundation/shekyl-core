@@ -145,11 +145,11 @@ stale_through = [
 [[constant]]
 name = "block_weight_short_term_surge_factor"
 defined_in = "config/consensus_constants.json"
-needle = '"block_weight_short_term_surge_factor": 4'
+needle = '"block_weight_short_term_surge_factor": 3'
 measured_by = ["BA-T2", "BA-T10"]
 status = "stale"
 stale_since = "20738bf714"
-carrier = "BA-T10 (BA-G4, BA-Q10). PL-D3 changed the FCMP++ proof nine days after the capture. Interim until the re-run (2026-11-08, an Assumption): the capture's Bp+ term is the C++ batched verifier's; scaled by the shipped verifier's measured 2.56x, the d24 tier this factor is signed on is about 3.92, below 4 (block_connect_verify.rs, FLOOR RESULTS; census R2)."
+carrier = "BA-T10 (BA-G4, BA-Q10). PL-D3 changed the FCMP++ proof nine days after the capture. Interim until the re-run (2026-11-08, an Assumption): the capture's Bp+ term is the C++ batched verifier's; scaled by the shipped verifier's measured 2.56x, the d24 tier this factor is signed on is about 3.92, and with the Rust single-proof cost in place of the batch (the conservative bracket) 3.43. S = 3 is the integer below that bracket, re-signed 2026-11-08 (C2-R2 Q3) as an Assumption; the floor re-run records the measured d24 surge_max and S is re-signed on it (block_connect_verify.rs, FLOOR RESULTS; census R2)."
 capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
 capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
 rev_source = "capture header"
