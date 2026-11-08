@@ -1283,9 +1283,9 @@ mod live_tests {
     /// leaves no orphan. The SOCKS endpoint is read from the posture channel
     /// both times (the consumers-never-cache contract exercised for real).
     // The crash is an *external* kill with no handle, the shape of a real
-    // crash (`outside_kill`: `pkill -9` on Unix, `Stop-Process -Force` on
-    // Windows); exposing the child pid just for the test would soften the
-    // scenario.
+    // crash (`outside_kill`: a process named tor, its command line containing
+    // the data directory as text). Exposing the child pid just for the test
+    // would soften the scenario.
     #[tokio::test]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
     async fn crash_is_survived_respawn_reaches_ready_again() {

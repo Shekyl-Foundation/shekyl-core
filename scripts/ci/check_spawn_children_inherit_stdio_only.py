@@ -25,8 +25,13 @@
 # no-op there.
 #
 #   Production means under the crate's `src/`, outside any item marked
-#   `#[cfg(test)]` or `#[cfg(all(test, ...))]`, and in a module file whose
-#   declaration (`mod name;`) is not itself so marked, up the module tree.
+#   `#[cfg(test)]`, `#[cfg(all(test, ...))]`, or `unpinned-tor-for-tests`,
+#   and in a module file whose declaration (`mod name;`) is not itself so
+#   marked, up the module tree. `unpinned-tor-for-tests` is
+#   shekyl-tor-control-client's `cfg(test)` across a crate boundary
+#   (`cfg(test)` does not cross it). `check_test_only_features.py` refuses
+#   every edge that is not a dev-dependency, so the feature is not in a
+#   shipped binary.
 #
 #   TEST-ONLY SPAWNS ARE NOT THIS GATE'S SUBJECT: `tests/`, `benches/` and
 #   `examples/`, a build script, a test module, and a file declared only for
@@ -67,7 +72,19 @@ SUBJECTS = (
     "shekyl-daemon/src/notify.rs",
 )
 HELPER = re.compile(r"\binherit::")
-TEST_ATTR = re.compile(r"#\[\s*cfg\s*\(\s*(?:test\b|all\s*\(\s*test\b)")
+# `unpinned-tor-for-tests` is test-only (see the module comment). A cfg that
+# names it is blanked the same way `cfg(test)` is, including
+# `cfg(any(test, feature = "unpinned-tor-for-tests"))`, which is how
+# `outside_kill` is declared. The name is read from the attribute itself:
+# `code_of` blanks string literals, so the name is not in the blanked text.
+TEST_ATTR = re.compile(
+    r"#\[\s*cfg\s*\(\s*(?:"
+    r"test\b|"
+    r"all\s*\(\s*test\b|"
+    r"(?:any|all)\s*\([^)]*unpinned-tor-for-tests|"
+    r"feature\s*=\s*\"unpinned-tor-for-tests\""
+    r")"
+)
 TEST_DIRS = {"tests", "benches", "examples"}
 
 
@@ -116,12 +133,22 @@ def item_end(code, at):
     return len(code)
 
 
-def production_code(code):
-    """`code` with every test-marked item blanked, newlines kept."""
+def production_code(original):
+    """`original` with every test-marked item blanked, newlines kept.
+
+    A `#[cfg]` counts only where `#[` survives comment and string blanking, so
+    a cfg written in a comment or a string does not hide a spawn. The
+    attribute is then read from `original`: the feature name lives in a
+    string, and the blanked text no longer contains it.
+    """
+    code = code_of(original)
     out = list(code)
-    for match in TEST_ATTR.finditer(code):
-        end = item_end(code, attribute_end(code, match.start()))
-        for k in range(match.start(), end):
+    for match in re.finditer(r"#\[", code):
+        start = match.start()
+        if TEST_ATTR.match(original, start) is None:
+            continue
+        end = item_end(code, attribute_end(code, start))
+        for k in range(start, end):
             if out[k] != "\n":
                 out[k] = " "
     return "".join(out)
@@ -156,10 +183,11 @@ def declared_for_tests_only(root, rel, seen=None):
         source = root / parent
         if not source.is_file():
             continue
-        code = code_of(source.read_text(encoding="utf-8", errors="replace"))
+        original = source.read_text(encoding="utf-8", errors="replace")
+        code = code_of(original)
         if not declaration.search(code):
             continue
-        if not declaration.search(production_code(code)):
+        if not declaration.search(production_code(original)):
             return True
         return declared_for_tests_only(root, parent, seen)
     return False
@@ -187,7 +215,8 @@ def check(root, watched, subjects):
         if rel.parts and rel.parts[0] in SKIPPED_DIRS:
             continue
         rel = rel.as_posix()
-        code = code_of(path.read_text(encoding="utf-8", errors="replace"))
+        original = path.read_text(encoding="utf-8", errors="replace")
+        code = code_of(original)
         if not SPAWN.search(code):
             continue
         kind = classify(root, rel, watched)
@@ -196,7 +225,7 @@ def check(root, watched, subjects):
         if kind == "test":
             tests.append(rel)
             continue
-        live = production_code(code)
+        live = production_code(original)
         if not SPAWN.search(live):
             tests.append(rel)
             continue
@@ -262,6 +291,37 @@ def selftest():
         "a file declared for tests only": (
             {lib: "mod launch;\n#[cfg(test)]\nmod harness;\n", launch: good, "a/src/harness.rs": bare},
             0,
+        ),
+        "a file declared under the unpinned-tor test feature": (
+            {
+                lib: 'mod launch;\n#[cfg(any(test, feature = "unpinned-tor-for-tests"))]\nmod outside;\n',
+                launch: good,
+                "a/src/outside.rs": bare,
+            },
+            0,
+        ),
+        "a feature-gated spawn does not cover a production one": (
+            {
+                **base,
+                "a/src/other.rs": '#[cfg(feature = "unpinned-tor-for-tests")]\n' + bare + "\n" + bare,
+            },
+            1,
+        ),
+        "a commented feature cfg does not hide a production spawn": (
+            {
+                **base,
+                "a/src/other.rs": '// #[cfg(feature = "unpinned-tor-for-tests")]\n' + bare,
+            },
+            1,
+        ),
+        "the feature named only in a string does not hide a production spawn": (
+            {
+                **base,
+                "a/src/other.rs": (
+                    'const S: &str = "#[cfg(feature = \\"unpinned-tor-for-tests\\")]";\n' + bare
+                ),
+            },
+            1,
         ),
         "a file under a module declared for tests only": (
             {

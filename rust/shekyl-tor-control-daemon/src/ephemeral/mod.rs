@@ -1057,9 +1057,9 @@ pub(crate) mod tests {
     }
 
     /// The death edge (`TOR_SUPERVISOR.md` `TSR-F1`): a watcher hears the
-    /// incarnation end. A tor killed from outside is `Exited`. A shutdown is
-    /// `Stopped`. On Unix the kill is a signal, so there is no exit code; on
-    /// Windows `TerminateProcess` sets one.
+    /// incarnation end. A tor killed from outside is `Exited`, and the exit
+    /// code is what [`shekyl_tor_control_client::outside_kill::reaped_exit_code`]
+    /// says that kill leaves. A shutdown is `Stopped`.
     #[tokio::test]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
     async fn a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop() {
@@ -1079,13 +1079,15 @@ pub(crate) mod tests {
             shekyl_tor_control_client::outside_kill::kill_tor_named_by(dir.path()),
             "the tor under this directory was found and killed"
         );
-        let TorDeath::Exited { code } = heard(death).await.expect("heard").expect("watcher") else {
-            panic!("a tor killed from outside is Exited");
+        let death = heard(death).await.expect("heard").expect("watcher");
+        let TorDeath::Exited { code } = death else {
+            panic!("a tor killed from outside is Exited, was {death:?}");
         };
-        #[cfg(unix)]
-        assert_eq!(code, None, "a signal leaves no exit code");
-        #[cfg(windows)]
-        assert!(code.is_some(), "TerminateProcess sets an exit code");
+        assert_eq!(
+            code,
+            shekyl_tor_control_client::outside_kill::reaped_exit_code(),
+            "the reap reports the outside kill"
+        );
         assert!(!killed.is_alive());
         let _exit_after_kill = killed.shutdown().await;
 
