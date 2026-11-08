@@ -12,13 +12,14 @@
 //! `shekyld` built and accepted, captured whole as the DRS-E2 replay pair
 //! by `engine::regtest_e2e::maybe_capture_chain_vector`: `corpus.e2` (every
 //! block and every listed transaction's **full** bytes, RD-F15-verified
-//! against the headers) and `trace.e2` (the passed-through facts and the
-//! daemon's logical-state digest at the tip). These tests connect every
-//! chain through `form → validate → connect` against a **real** `redb`
-//! store — the same `pipeline::run` the replay binary composes — and hold
-//! the store's digest to the daemon's. The spent set, the reference
-//! heights, `height_of` are derived by the code that derives them in
-//! production; nothing is served to a rule as given.
+//! against the headers) and `trace.e2` (the Rust baseline
+//! `shekyl-chain-replay baseline` wrote from the store a replay of that
+//! corpus left). These tests connect every chain through
+//! `form → validate → connect` against a **real** `redb` store — the same
+//! `pipeline::run` the replay binary composes — and hold the store to that
+//! baseline. The spent set, the reference heights, `height_of` are derived
+//! by the code that derives them in production; nothing is served to a
+//! rule as given.
 //!
 //! **What the substrate is here, said plainly.** The default lane runs the
 //! chains under `MockSubstrate` — the always-satisfying longhash — because
@@ -31,14 +32,15 @@
 //! they land, 4.I — is judged against real state under both.
 //!
 //! A chain that fails to replay is a **finding**, never a fixture error:
-//! either the daemon that built it and this validator disagree (E2's
-//! subject — grade it), or a rule landed that the chain's real spend now
-//! trips (the cascade slice 5 §5.1 named — the fixture was right; the
-//! rule is what moved). The second kind is recorded, not patched: the
-//! corpus pins what was true at capture and is not the witness for a rule
-//! that landed after it, so the chain replays as far as the rule admits,
-//! compares every connected height, and [`PREDATES`] says exactly where it
-//! stops and why — until the chain is regenerated against the rule.
+//! a refusal, or a derived value that differs from the baseline, is a
+//! change in what this pipeline decides. A rule that landed after the
+//! capture and that the chain's real spend now trips is the cascade slice
+//! 5 §5.1 named — the fixture was right; the rule is what moved. That kind
+//! is recorded, not patched: the corpus pins what was true at capture and
+//! is not the witness for a rule that landed after it, so the chain
+//! replays as far as the rule admits, compares every connected height, and
+//! [`PREDATES`] says exactly where it stops and why — until the chain is
+//! regenerated against the rule.
 
 // A whole-file test module, gated at `lib.rs` by
 // `#[cfg(all(test, feature = "pipeline"))]`. The inner attribute is the
@@ -52,7 +54,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use shekyl_chain_rules::harness::MockSubstrate;
-use shekyl_chain_rules::{InvalidBlock, ReleaseAnchors, Substrate};
+use shekyl_chain_rules::{GenesisPin, InvalidBlock, Substrate};
 use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::corpus::CorpusReader;
@@ -60,7 +62,6 @@ use crate::metrics::Metrics;
 use crate::pipeline::RunReport;
 use crate::source::{IngestEvent, Injection, Source};
 use crate::substrate::ProductionSubstrate;
-use crate::test_support::cleanup;
 use shekyl_chain_store::apply_policy::{ApplyPolicy, ArchivalFamily};
 use shekyl_pow_randomx::CacheStore;
 
@@ -68,11 +69,11 @@ use shekyl_pow_randomx::CacheStore;
 mod corpus_census;
 mod h19_cost;
 mod pool_door;
+mod rebaseline;
 mod relay_floor;
 pub(crate) mod replay;
-pub(crate) mod retired_keyless_join;
+mod too_many_inputs;
 pub(crate) use replay::replay_keeping_store;
-pub(crate) use retired_keyless_join::{retired_keyless_join, UntilRetiredJoin};
 
 /// `manifest.json`, as the capture writes it (format 4).
 #[derive(Deserialize, Debug)]
@@ -86,7 +87,7 @@ pub(crate) struct Manifest {
     fixed_difficulty: u128,
     /// The `(SEB, cap)` pair the daemon mined this chain under — the
     /// regtest schedule levers when the generator pulled them, the genesis
-    /// pair otherwise. The replay judges the chain under a Fakechain rule
+    /// pair otherwise. The replay judges the chain under a levered rule
     /// set naming exactly this pair and opens its store under the same
     /// (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-15`): a 512-block epoch judged
     /// under the production one refuses the first block past height 511.
@@ -97,6 +98,18 @@ pub(crate) struct Manifest {
     genesis_hash: String,
     /// The `dev` tree the daemon that built the chain was compiled at.
     built_at_dev_sha: String,
+    /// The decision that authorized regenerating this trace
+    /// (`SHEKYL_PINNED_REGEN_DECISION`), when the capture recorded one.
+    /// Empty on a manifest written before the field existed: those vectors
+    /// are not backfilled with a citation they never carried.
+    #[serde(default)]
+    regen_decision: String,
+    /// The `shekyl-chain-replay` commit that wrote `trace.e2`, when the
+    /// capture recorded one. Empty on a manifest written before the field
+    /// existed. When present it is the same commit as `built_at_dev_sha`:
+    /// one tree built the daemon and the baseline.
+    #[serde(default)]
+    baseline_built_at_dev_sha: String,
     /// Every row in the daemon's state that **no block produced** — a
     /// regtest injector's direct LMDB write. Required, so a manifest asserts
     /// "wholly block-derived" positively (`[]`) rather than by silence: a
@@ -120,15 +133,17 @@ struct OutOfBandWrite {
 /// The one row kind the corpus admits out of band (DRS-E4 §3.8 item 3).
 const OUT_OF_BAND_KIND: &str = "archival_serve_credit";
 
-/// The one captured chain whose state is not wholly block-derived: the
-/// serve credit `emission-claim`'s claim is priced on was injected
-/// (`regtest_e2e.rs`, step A2). Enumerated, not discovered: a new capture
-/// that injects must be added here **and** in its manifest, and a chain
-/// listed here that stops injecting must leave.
-const CHAINS_WITH_OUT_OF_BAND_WRITES: [&str; 1] = ["emission-claim"];
+/// The captured chains whose state is not wholly block-derived: none.
+/// Every captured chain's state is produced by its blocks; `emission-claim`
+/// returns with SO-D12 4b's evidence run, captured with no injected writes
+/// (`docs/FOLLOWUPS.md`; `ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 item 4).
+/// Enumerated, not discovered: a new capture that injects must be added
+/// here **and** in its manifest, and a chain listed here that stops
+/// injecting must leave.
+const CHAINS_WITH_OUT_OF_BAND_WRITES: [&str; 0] = [];
 
 /// The corpus says which of its rows no block produced, and it is exactly
-/// the one chain the pre-flight found (ARW-1). Both directions: a chain
+/// the chains listed above (ARW-1). Both directions: a chain
 /// that injects and does not say so mislabels the corpus; a chain listed as
 /// injecting that does not is a stale claim about the data. And the two
 /// halves of the capture agree: the manifest's receipts are exactly the
@@ -153,15 +168,10 @@ fn only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly
                 dir.display()
             );
         }
-        // A chain that stops at a retired keyless JoinMarket is read only
-        // below it, so only the receipts below it can be found in the
-        // corpus; the manifest still names every one (asserted above).
-        let readable_below = retired_keyless_join(&manifest.shape).map(|r| r.at);
         let in_manifest: Vec<Injection> = manifest
             .out_of_band_writes
             .iter()
             .map(|r| r.receipt)
-            .filter(|r| readable_below.is_none_or(|at| r.at < at))
             .collect();
         assert_eq!(
             corpus_injections(&dir),
@@ -176,9 +186,8 @@ fn only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly
 /// at — the one the corpus law held to the tip when it was written.
 fn corpus_injections(dir: &Path) -> Vec<Injection> {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
-    let mut reader = UntilRetiredJoin::new(
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
-    );
+    let mut reader =
+        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let mut tip: Option<BlockHeight> = None;
     let mut found = Vec::new();
     while let Some(event) = reader.next().expect("corpus reads") {
@@ -196,8 +205,20 @@ fn corpus_injections(dir: &Path) -> Vec<Injection> {
             }),
         }
     }
-    reader.finish(&shape_of(dir));
     found
+}
+
+/// `YYYY-MM-DD <rationale>`, the shape rule 50 requires of a recorded
+/// regeneration decision. Empty is a manifest written before the field
+/// existed; a present value that is not this shape is not a citation.
+fn cited_regen_decision(decision: &str) -> bool {
+    let bytes = decision.as_bytes();
+    bytes.len() > 11
+        && bytes[..10].iter().enumerate().all(|(i, byte)| match i {
+            4 | 7 => *byte == b'-',
+            _ => byte.is_ascii_digit(),
+        })
+        && bytes[10] == b' '
 }
 
 /// Every captured chain, in name order. **Fails on an empty set** (rule
@@ -215,17 +236,39 @@ pub(crate) fn captured_chains() -> Vec<(PathBuf, Manifest)> {
             let manifest: Manifest = serde_json::from_str(&text)
                 .unwrap_or_else(|e| panic!("{}: manifest does not parse: {e}", p.display()));
             assert_eq!(
+                shape_of(&p),
+                manifest.shape,
+                "{}: a captured chain's directory is named for its shape",
+                p.display()
+            );
+            assert_eq!(
                 manifest.format_version,
                 4,
                 "{}: capture format {} is not the one this test reads",
                 p.display(),
                 manifest.format_version
             );
+            if !manifest.baseline_built_at_dev_sha.is_empty() {
+                assert_eq!(
+                    manifest.baseline_built_at_dev_sha,
+                    manifest.built_at_dev_sha,
+                    "{}: the baseline and the daemon name different commits",
+                    p.display()
+                );
+            }
+            if !manifest.regen_decision.is_empty() {
+                assert!(
+                    cited_regen_decision(&manifest.regen_decision),
+                    "{}: regen_decision is not YYYY-MM-DD <rationale> ({:?})",
+                    p.display(),
+                    manifest.regen_decision
+                );
+            }
             (p, manifest)
         })
         .collect();
     found.sort_by(|a, b| a.0.cmp(&b.0));
-    // The witness's subject is these four shapes, not "whatever is in the
+    // The witness's subject is these shapes, not "whatever is in the
     // directory": a capture that fails to land, or a directory that is
     // renamed or pruned, would otherwise shrink the corpus and the test
     // would pass over the remainder (rule 47 — assert the subject exists).
@@ -246,9 +289,8 @@ pub(crate) fn captured_chains() -> Vec<(PathBuf, Manifest)> {
 /// The shapes `regtest_e2e.rs` captures, by the names its `maybe_capture_chain_vector`
 /// calls write into `manifest.json` (§5.2). Adding a capture there adds a
 /// name here; the corpus is enumerated, not discovered.
-const CAPTURED_SHAPES: [&str; 6] = [
+const CAPTURED_SHAPES: [&str; 5] = [
     "bond-post",
-    "emission-claim",
     "limit-full",
     "median-full",
     "spend-1in-2out",
@@ -283,9 +325,8 @@ where
     S: Substrate + Send + Sync + 'static,
     S::Fault: Send + std::fmt::Debug + 'static,
 {
-    let (report, path, _) =
+    let (report, _path, _) =
         replay_keeping_store(dir, manifest, substrate, policy, &policy_tag(policy)).await;
-    cleanup(&path);
     report
 }
 
@@ -342,12 +383,8 @@ pub(crate) struct Predates {
     pub(crate) why: &'static str,
 }
 
-/// The chains that predate a rule. **None, as of 2026-10-12.** The one
-/// record this held since E6 slice 8 row 6 (2026-10-06) — `emission-claim`,
-/// refused at 98 by CEN-J15 for a compact join onto a shard the chain never
-/// closed — named a block that no longer parses: its join is a keyless
-/// JoinMarket, and the chain is a [`retired_keyless_join::RETIRED_KEYLESS_JOINS`] record now. The
-/// mechanism stays for the next rule a capture predates.
+/// The chains that predate a rule: none. The mechanism stays for the next
+/// rule a capture predates.
 pub(crate) const PREDATES: [Predates; 0] = [];
 
 /// The shape a captured chain's directory names.
@@ -386,20 +423,6 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // How far the chain replays: whole, or exactly as far as the rule it
     // predates admits.
     let expected_connected = match predates(&manifest.shape) {
-        // A chain that stops at a retired keyless JoinMarket connects every
-        // block below it and is refused nowhere: the stream ended.
-        None if retired_keyless_join(&manifest.shape).is_some() => {
-            assert!(
-                report.refused.is_none(),
-                "{}: refused below its retired join — {:?}",
-                manifest.shape,
-                report.refused
-            );
-            retired_keyless_join(&manifest.shape)
-                .expect("checked")
-                .at
-                .to_raw()
-        }
         None => {
             assert!(
                 report.refused.is_none(),
@@ -458,20 +481,18 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     let diverged: Vec<_> = report.roots.diverged().collect();
     assert!(
         diverged.is_empty(),
-        "{} ({}): the derived curve-tree root differs from the daemon's at {} height(s), first at \
+        "{} ({}): the derived curve-tree root differs from the baseline's at {} height(s), first at \
          {:?} — a FINDING, adjudicated against the spec (E2 §0), never a fixture problem: the \
-         chain is one the C++ accepted and the root is the validator's derivation",
+         chain is one a previous run connected and the root is this run's derivation",
         manifest.shape,
         manifest.generator,
         diverged.len(),
         diverged.first()
     );
     // CEN-G6/G6b (slice 7 commit 4): the verdict's weight, long-term
-    // weight and long-term effective median are held to the C++'s two
-    // recorded columns and the exporter's re-derived median at **every**
-    // connected height — the medians' parity pin over a chain the C++
-    // built, taken while the LMDB trace exists. Same discipline as the
-    // root: count first, then no divergence, and a divergence is a
+    // weight and long-term effective median are held to the baseline's
+    // three weight facts at **every** connected height. Same discipline as
+    // the root: count first, then no divergence, and a divergence is a
     // finding about the derivation, never a fixture to patch.
     assert_eq!(
         report.weights.compared(),
@@ -484,7 +505,7 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     let diverged: Vec<_> = report.weights.diverged().collect();
     assert!(
         diverged.is_empty(),
-        "{} ({}): a derived weight value differs from the daemon's at {} height(s), first at \
+        "{} ({}): a derived weight value differs from the baseline's at {} height(s), first at \
          {:?} — a FINDING about CEN-G6/G6b's derivation, adjudicated against the spec, never a \
          fixture problem",
         manifest.shape,
@@ -493,18 +514,17 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
         diverged.first()
     );
     // CEN-F14b / G12 (slice 7 commit 5): the verdict's accumulator against
-    // the C++'s `block_info.bi_coins` at every connected height — the paid
+    // the baseline's `coins_generated` at every connected height — the paid
     // reward at each height by difference, so the penalty curve is held
     // wherever a captured block is over the median (`median-full`, 211).
     // The expected value is Shekyl's ratified composition (FL-R12′: the
     // release-modulated, tail-floored emission under C2-R2 Q4's penalty,
-    // `paid_block_reward`), which the C++ marshals; the C++ is the oracle
-    // only insofar as it agrees with that. CEN-F17 / G11 (wave B): the
-    // verdict's burn against the C++'s `block_burn` at the same heights —
-    // the fee split over the FL-R16c supply and the escalation operand,
-    // held wherever a captured block carries a fee. And every one of these
-    // coinbases connected under CEN-F18: the C++ paid exactly what the
-    // Rust derives it owed.
+    // `paid_block_reward`). CEN-F17 / G11 (wave B): the verdict's burn
+    // against the baseline's `burned` at the same heights — the fee split
+    // over the FL-R16c supply and the escalation operand, held wherever a
+    // captured block carries a fee. And every one of these coinbases
+    // connected under CEN-F18: the baseline paid exactly what this run
+    // derives it owed.
     assert_eq!(
         report.emission.compared(),
         expected_connected,
@@ -516,7 +536,7 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     let diverged: Vec<_> = report.emission.diverged().collect();
     assert!(
         diverged.is_empty(),
-        "{} ({}): the derived accumulator or burn differs from the daemon's at {} height(s), \
+        "{} ({}): the derived accumulator or burn differs from the baseline's at {} height(s), \
          first at {:?} — a FINDING about CEN-F14b / G12 or CEN-F17 / G11's derivation, \
          adjudicated against the ratified composition, never a fixture problem",
         manifest.shape,
@@ -537,8 +557,7 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // report's half of the out-of-band contract (the corpus's half is
     // `only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly_those`).
     // A chain that predates a rule applies exactly those attributed below
-    // the refusal — none, on the one such chain today — and the rest wait
-    // on the regeneration with the tip.
+    // the refusal, and the rest wait on the regeneration with the tip.
     let named: Vec<Injection> = manifest
         .out_of_band_writes
         .iter()
@@ -585,15 +604,6 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // height, and the report says so with `None` for both (**not
     // compared**, never identical). The pin over this chain's tip resumes
     // when the chain is regenerated.
-    if let Some(retired) = retired_keyless_join(&manifest.shape) {
-        assert!(
-            report.checkpoint.is_none() && report.archival.is_none(),
-            "{}: stopped at the retired join at {:?} and yet compared at the tip",
-            manifest.shape,
-            retired.at
-        );
-        return;
-    }
     if let Some(record) = predates(&manifest.shape) {
         assert!(
             report.checkpoint.is_none() && report.archival.is_none(),
@@ -606,13 +616,13 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     }
     let checkpoint = report.checkpoint.as_ref().unwrap_or_else(|| {
         panic!(
-            "{}: the trace carries the daemon's digest at the tip",
+            "{}: the trace carries the baseline's digest at the tip",
             manifest.shape
         )
     });
     assert!(
         checkpoint.identical(),
-        "{}: the store's logical state after height {} differs from the daemon's — DIVERGE, \
+        "{}: the store's logical state after height {} differs from the baseline's — DIVERGE, \
          ours {:?} theirs {:?}",
         manifest.shape,
         checkpoint.at,
@@ -629,14 +639,14 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // _tests.rs` pre-declares rather than lets this line imply.
     let archival = report.archival.as_ref().unwrap_or_else(|| {
         panic!(
-            "{}: the trace carries the daemon's archival snapshot at the tip",
+            "{}: the trace carries the baseline's archival snapshot at the tip",
             manifest.shape
         )
     });
     assert_eq!(archival.at, checkpoint.at);
     assert!(
         archival.identical(),
-        "{}: the archival snapshot after height {} differs from the daemon's — DIVERGE:{}",
+        "{}: the archival snapshot after height {} differs from the baseline's — DIVERGE:{}",
         manifest.shape,
         archival.at,
         archival
@@ -658,19 +668,18 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
 /// **The consensus pin, made visible.** These blobs are valid against one
 /// genesis and one rule set; a change of TXE-Q6′'s class — a grammar
 /// closure, a constant regeneration, a row that alters what a valid block
-/// is — invalidates all four chains at once, and without this check the
-/// failure would arrive as 1,979 blocks refusing at block 1 for a reason
+/// is — invalidates every captured chain at once, and without this check the
+/// failure would arrive as every block refusing at block 1 for a reason
 /// that reads as a validator bug. So the manifest carries the genesis the
 /// chain was built from, and this holds it — before any block is judged —
-/// to the genesis the **current build** pins: Fakechain is mainnet's
-/// config (`cryptonote_config.h`: `case FAKECHAIN: return mainnet`), so
-/// the pin is `ReleaseAnchors::MAINNET`'s, which slice 4 verifies by
-/// equality against the C++ `GENESIS_TX`. A regeneration fails HERE with
-/// "these vectors predate the current genesis", not at block 1.
+/// to the genesis the **current build** pins for regtest, the network
+/// these chains are captured on (`NETWORK_IDENTITY.md` NI-Q8). A
+/// regeneration fails HERE with "these vectors predate the current
+/// genesis", not at block 1.
 fn genesis_is_the_current_builds(manifest: &Manifest) {
-    let pinned = ReleaseAnchors::for_network(shekyl_address::Network::Mainnet)
+    let pinned = GenesisPin::for_network(shekyl_address::Network::Regtest)
         .expected_at(BlockHeight::from_raw(0))
-        .expect("the release pins mainnet's genesis, which Fakechain shares");
+        .expect("the release pins regtest's genesis");
     assert_eq!(
         manifest.genesis_hash,
         hex_of(pinned.as_bytes()),
@@ -702,13 +711,7 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
         genesis_is_the_current_builds(&manifest);
         let report = replay(&dir, &manifest, Arc::clone(&substrate)).await;
         hold(&dir, &manifest, &report);
-        let retired = retired_keyless_join(&manifest.shape);
         let tip = match (&report.archival, predates(&manifest.shape)) {
-            (None, _) if retired.is_some() => format!(
-                "RETIRED keyless JoinMarket at {:?}: connected below it, tip {} not compared",
-                retired.expect("checked").at,
-                manifest.tip_height
-            ),
             (Some(archival), _) => format!(
                 "digest MATCH at {}, archival snapshot MATCH at {} ({} rows equal)",
                 manifest.tip_height,
@@ -740,7 +743,7 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
 /// (~0.6 s a block in light mode; the depth-3 chain alone is minutes), so
 /// it runs in the live lane, not on every `cargo test`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "real RandomX over every captured chain; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored replays_every_captured_chain_under_the_production_substrate"]
+#[ignore = "real RandomX over every captured chain; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn replays_every_captured_chain_under_the_production_substrate() {
     let metrics = Arc::new(Metrics::new());
     let substrate = Arc::new(ProductionSubstrate::new(

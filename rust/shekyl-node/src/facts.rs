@@ -9,27 +9,72 @@
 
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use shekyl_chain_ingest::service::Door;
+use shekyl_chain_ingest::service::{
+    ArrivalTag, Door, PoolHealth, Refusal, Reply, Rewinder, ServiceFault,
+};
+use shekyl_chain_ingest::{ProductionSubstrate, Rewound, TipChanged};
+use shekyl_chain_store::codec::FollowingDegraded;
+use shekyl_chain_sync::{SessionMode, SyncState, SyncView};
 use shekyl_daemon_rpc::chain_facts::{
     BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
     FactsFault, FeeEstimate,
 };
-use shekyl_daemon_rpc::handles::{BansFacts, DoorFacts, MiningFacts, PoolFacts, StopFacts};
-use shekyl_daemon_rpc::info_facts::{
-    InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
+use shekyl_daemon_rpc::handles::{
+    BanLeftFacts, BanRow, BanTargetFacts, BansFacts, DoorFacts, PoolEntryFacts, PoolFacts,
+    StopFacts,
 };
+use shekyl_daemon_rpc::info_facts::{
+    InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, PoolState,
+    SessionCounts,
+};
+use shekyl_daemon_rpc::mining_facts::{LocalOutcome, Pending, PopOutcome};
 use shekyl_daemon_rpc::read_facts::{
-    AltChainFacts, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed,
-    ShardCoverage,
+    AdmittedPow, AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange,
+    CurveTreeFacts, PowAdmission, PowSeed, ShardCoverage, SpentAt,
 };
 use shekyl_daemon_rpc::store_facts::{NodeFacts, StoreFacts, SyncFacts};
+use shekyl_daemon_rpc::sync_facts::{
+    BodySpanFacts, RequestTiming, SyncSessionFacts, SyncViewFacts, SyncViewRead,
+};
 use shekyl_mempool::Pool;
-use shekyl_types::{BlockHash, BlockHeight, PCanonicalId};
+use shekyl_p2p::{session_of, BanSpan, BanTarget, Bans, ConnectorCounts, Network};
+use shekyl_rpc_types::{ChainSyncState, SyncMode};
+use shekyl_transport_layer::{BanLeft, ConnectorId, Ipv4Subnet, ListedBan, SocketId};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, PowHash, TxHash};
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Open the pool slot the way a chain read may answer it.
+///
+/// No pool in the slot is [`FactsFault::NotReady`]: the node is not up.
+/// A retired pool is [`PoolState::Retired`]: the node follows the chain
+/// and this pool has no answer. A read that cannot carry that answer uses
+/// [`require_live`].
+fn open_pool(
+    slot: &Mutex<Option<Arc<Mutex<Pool>>>>,
+    health: &PoolHealth,
+) -> Result<PoolState<Arc<Mutex<Pool>>>, FactsFault> {
+    if health.retired() {
+        return Ok(PoolState::Retired);
+    }
+    lock(slot)
+        .clone()
+        .map(PoolState::Live)
+        .ok_or(FactsFault::NotReady)
+}
+
+/// The live pool. A retired pool is not ready: the read cannot answer
+/// without one, and must not treat "no answer" as an empty pool.
+fn require_live(state: PoolState<Arc<Mutex<Pool>>>) -> Result<Arc<Mutex<Pool>>, FactsFault> {
+    match state {
+        PoolState::Live(pool) => Ok(pool),
+        PoolState::Retired => Err(FactsFault::NotReady),
+    }
 }
 
 /// What the chain store does not hold. It does not own the facts slot, so
@@ -38,28 +83,160 @@ pub(crate) struct Surroundings {
     pub(crate) pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
     pub(crate) data_dir: PathBuf,
     pub(crate) offline: bool,
+    /// Chain sync's state: the watch the follower reads.
+    pub(crate) sync: tokio::sync::watch::Receiver<SyncState>,
+    /// The connector's `following_degraded` latch. `None` is clear.
+    /// Chain sync raises it; the connector is the one writer.
+    pub(crate) latch: tokio::sync::watch::Receiver<Option<FollowingDegraded>>,
+    /// Chain sync's view, as its owner publishes it after every event
+    /// (CS-5 §7): what `sync_info` renders.
+    pub(crate) view: tokio::sync::watch::Receiver<SyncView<SocketId>>,
+    /// The service's retirement flag: a pool whose file has faulted is
+    /// not read here, as the pool handle does not read it.
+    pub(crate) health: PoolHealth,
+    /// The network's counts: the board's sessions and the peers owner's
+    /// lists.
+    pub(crate) network: Arc<dyn NetworkCounts>,
+}
+
+/// What `get_info` counts on the network. The node's [`Network`] is the
+/// one production reader.
+pub(crate) trait NetworkCounts: Send + Sync {
+    /// One row per connector the network runs, in declaration order: its
+    /// sockets per direction and its list sizes.
+    fn peer_counts(&self) -> Vec<ConnectorCounts>;
+    /// Handshaken sessions, `(outbound, inbound)`.
+    fn session_counts(&self) -> (u64, u64);
+}
+
+impl NetworkCounts for Network {
+    fn peer_counts(&self) -> Vec<ConnectorCounts> {
+        Self::peer_counts(self)
+    }
+
+    fn session_counts(&self) -> (u64, u64) {
+        Self::session_counts(self)
+    }
 }
 
 impl NodeFacts for Surroundings {
     fn sync(&self) -> Result<SyncFacts, FactsFault> {
-        // No sync owner until chain sync's cutover. A closed sync channel
-        // reads as behind (DX-Q2 item 5); this is that fact.
-        // `following_degraded` is the latch the flip writes into the store.
+        // Chain sync's state, the one the follower posts on (DX-Q3, Q13),
+        // read by the follower's rule: a closed watch says nothing about
+        // the chain, so it reads `NoView`, not its last value.
+        // The target is the best verified chain's count, which chain sync
+        // publishes with `Behind`. The latch is the store's, published by
+        // the connector. A closed watch keeps its last value: the latch is
+        // one-way until a resync.
+        let state = if self.sync.has_changed().is_err() {
+            SyncState::NoView
+        } else {
+            *self.sync.borrow()
+        };
         Ok(SyncFacts {
-            target: None,
-            synchronized: false,
-            busy_syncing: false,
+            target: match state {
+                SyncState::Behind { target, .. } => Some(target),
+                _ => None,
+            },
+            synchronized: state == SyncState::Synced,
+            busy_syncing: matches!(
+                state,
+                SyncState::Behind { .. } | SyncState::Following { .. }
+            ),
             offline: self.offline,
-            following_degraded: false,
+            following_degraded: self.latch.borrow().is_some(),
         })
     }
 
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
-        let slot = lock(&self.pool);
-        let Some(pool) = slot.as_ref() else {
-            return Err(FactsFault::NotReady);
+    /// The owner's view, read once, with each request's age and time to
+    /// its deadline taken at this read. A session is named by the
+    /// connection id the board and the C++ use for its socket.
+    fn sync_view(&self) -> Result<SyncViewFacts, FactsFault> {
+        let view = self.view.borrow().clone();
+        let now = std::time::Instant::now();
+        let timing = |sent: std::time::Instant, deadline: std::time::Instant| RequestTiming {
+            age_ms: millis(now.saturating_duration_since(sent)),
+            due_in_ms: millis(deadline.saturating_duration_since(now)),
         };
-        let pool = lock(pool);
+        Ok(SyncViewFacts {
+            state: chain_sync_state(view.state),
+            stalled: view.stalled,
+            target: view.target.to_raw(),
+            sessions: view
+                .sessions
+                .iter()
+                .map(|row| SyncSessionFacts {
+                    connection_id: connection_id(row.session),
+                    claimed_height: row.claim.map(|claim| claim.count.to_raw()),
+                    mode: sync_mode(row.mode),
+                    header_request: row
+                        .header_request
+                        .map(|request| timing(request.sent, request.deadline)),
+                    body_requests: row
+                        .body_requests
+                        .iter()
+                        .map(|span| BodySpanFacts {
+                            start_height: span.first.to_raw(),
+                            count: span.count.to_raw(),
+                            planned_bytes: span.planned_bytes,
+                            timing: timing(span.sent, span.deadline),
+                        })
+                        .collect(),
+                    rate: row.rate,
+                })
+                .collect(),
+        })
+    }
+
+    /// Only entries the pool shows: a stem-phase spend is not this node's
+    /// to disclose (S6), so it answers unspent here.
+    fn pool_spends(&self, key_images: &[shekyl_types::KeyImage]) -> Result<Vec<bool>, FactsFault> {
+        let pool = require_live(open_pool(&self.pool, &self.health)?)?;
+        let pool = lock(&pool);
+        let shown: std::collections::BTreeSet<[u8; 32]> = pool
+            .shown_entries()
+            .flat_map(|entry| entry.key_images)
+            .map(|image| *image.as_bytes())
+            .collect();
+        Ok(key_images
+            .iter()
+            .map(|image| shown.contains(image.as_bytes()))
+            .collect())
+    }
+
+    /// Read off one lock, in request order: what the pool shows for any
+    /// caller, its stem entries too for the host (S6).
+    fn pool_bodies(
+        &self,
+        ids: &[TxHash],
+        scope: PoolScope,
+    ) -> Result<PoolState<Vec<Option<shekyl_daemon_rpc::store_facts::PoolBody>>>, FactsFault> {
+        let PoolState::Live(pool) = open_pool(&self.pool, &self.health)? else {
+            return Ok(PoolState::Retired);
+        };
+        let pool = lock(&pool);
+        let held: std::collections::BTreeMap<TxHash, shekyl_daemon_rpc::store_facts::PoolBody> =
+            match scope {
+                PoolScope::Broadcast => pool
+                    .shown_entries()
+                    .map(|entry| (entry.id, body_of(&entry)))
+                    .collect(),
+                PoolScope::WithUnbroadcast => pool
+                    .relay_view()
+                    .entries()
+                    .map(|entry| (entry.id, body_of(&entry)))
+                    .collect(),
+            };
+        Ok(PoolState::Live(
+            ids.iter().map(|id| held.get(id).cloned()).collect(),
+        ))
+    }
+
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
+        let PoolState::Live(pool) = open_pool(&self.pool, &self.health)? else {
+            return Ok(PoolState::Retired);
+        };
+        let pool = lock(&pool);
         let broadcast = u64::try_from(pool.listing().count()).unwrap_or(u64::MAX);
         let unbroadcast = match scope {
             PoolScope::Broadcast => None,
@@ -68,20 +245,46 @@ impl NodeFacts for Surroundings {
                 Some(held.saturating_sub(broadcast))
             }
         };
-        Ok(PoolCounts {
+        Ok(PoolState::Live(PoolCounts {
             broadcast,
             unbroadcast,
-        })
+        }))
     }
 
+    /// The socket table's sockets and the peers owner's lists, one row per
+    /// connector the network runs. An offline node has no peers by
+    /// configuration.
     fn peers(&self) -> Result<PeerFacts, FactsFault> {
-        // The hub is the zone server's. This handle does not read it, and
-        // a missing hub is not zero peers.
-        Err(FactsFault::HubAbsent)
+        if self.offline {
+            return Ok(PeerFacts::Offline);
+        }
+        let rows = self
+            .network
+            .peer_counts()
+            .into_iter()
+            .map(|counts| shekyl_rpc_types::InfoConnectorPeers {
+                connector: wire_connector(counts.connector),
+                incoming_sockets: counts.incoming,
+                outgoing_sockets: counts.outgoing,
+                white_peerlist_size: counts.white,
+                gray_peerlist_size: counts.gray,
+            })
+            .collect();
+        let peers = shekyl_rpc_types::InfoPeers::new(rows).map_err(|err| {
+            tracing::error!(%err, "get_info: the network's connector rows are out of order");
+            FactsFault::Internal
+        })?;
+        Ok(PeerFacts::Running(peers))
     }
 
+    /// The board's handshaken sessions. The per-connection sync claims are
+    /// chain sync's view (`sync_info`), not read here.
     fn sessions(&self) -> Result<SessionCounts, FactsFault> {
-        Err(FactsFault::HubAbsent)
+        if self.offline {
+            return Ok(SessionCounts::NONE);
+        }
+        let (outbound, inbound) = self.network.session_counts();
+        Ok(SessionCounts { outbound, inbound })
     }
 
     fn free_space(&self) -> Result<u64, FactsFault> {
@@ -100,6 +303,41 @@ impl NodeFacts for Surroundings {
     }
 }
 
+/// The connection id `get_connections` and the peer lists name a session
+/// by ([`session_of`]): the socket id, little-endian, in the first eight
+/// bytes. `sync_info` names the same session the same way.
+fn connection_id(socket: SocketId) -> [u8; 16] {
+    session_of(socket).0
+}
+
+/// A duration in whole milliseconds, saturating.
+fn millis(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The wire's name for chain sync's state.
+const fn chain_sync_state(state: SyncState) -> ChainSyncState {
+    match state {
+        SyncState::NoView => ChainSyncState::NoView,
+        SyncState::Behind { .. } => ChainSyncState::Behind,
+        SyncState::Following { .. } => ChainSyncState::Following,
+        SyncState::Synced => ChainSyncState::Synced,
+    }
+}
+
+/// The wire's name for a session's mode, one to one.
+const fn sync_mode(mode: SessionMode) -> SyncMode {
+    match mode {
+        SessionMode::Idle => SyncMode::Idle,
+        SessionMode::Reachable => SyncMode::Reachable,
+        SessionMode::Slot => SyncMode::Slot,
+        SessionMode::Challenging => SyncMode::Challenging,
+        SessionMode::PastCap => SyncMode::PastCap,
+        SessionMode::EvidenceCandidate => SyncMode::EvidenceCandidate,
+        SessionMode::Evidence => SyncMode::Evidence,
+    }
+}
+
 pub(crate) fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -107,35 +345,50 @@ pub(crate) fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Free space available to this process under `path`, in bytes: `statvfs`'s
+/// `f_bavail` on Unix, `GetDiskFreeSpaceExW`'s available-to-caller figure on
+/// Windows. An unreadable probe is an error, never a guess. The managed Tor's
+/// pre-spawn check reads it too (`TOR_SUPERVISOR.md` §5).
 #[cfg(unix)]
-fn free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
+pub fn free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
     let stat = rustix::fs::statvfs(path)?;
     Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
 }
 
+/// Windows half of [`free_bytes`].
 #[cfg(windows)]
-fn free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
+pub fn free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
     shekyl_win_sec::free_bytes_available(path)
 }
 
 /// Chain reads over the facts slot.
 pub(crate) struct ChainBridge {
-    facts: Arc<Mutex<Option<StoreFacts>>>,
+    facts: Arc<Mutex<Option<Arc<StoreFacts>>>>,
 }
 
 impl ChainBridge {
-    pub(crate) fn new(facts: Arc<Mutex<Option<StoreFacts>>>) -> Self {
+    pub(crate) fn new(facts: Arc<Mutex<Option<Arc<StoreFacts>>>>) -> Self {
         Self { facts }
     }
 
+    /// Clone the facts out of the slot and drop the lock before `read`.
+    ///
+    /// The guard covers the swap to absent. The read runs after it drops:
+    /// `hash_admitted` waits for a hasher permit and then hashes, and a read
+    /// such as `block_at` or `coinbase_sum` takes its own time. A guard
+    /// that spanned any of them would stall every chain read.
     fn with<T>(
         &self,
         read: impl FnOnce(&StoreFacts) -> Result<T, FactsFault>,
     ) -> Result<T, FactsFault> {
-        match lock(&self.facts).as_ref() {
-            Some(facts) => read(facts),
-            None => Err(FactsFault::NotReady),
-        }
+        let facts = {
+            let slot = lock(&self.facts);
+            match slot.as_ref() {
+                Some(facts) => Arc::clone(facts),
+                None => return Err(FactsFault::NotReady),
+            }
+        };
+        read(&facts)
     }
 }
 
@@ -174,7 +427,7 @@ impl InfoFacts for ChainBridge {
         self.with(InfoFacts::chain)
     }
 
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
         self.with(|facts| facts.pool_counts(scope))
     }
 
@@ -195,7 +448,36 @@ impl InfoFacts for ChainBridge {
     }
 }
 
+impl SyncViewRead for ChainBridge {
+    fn sync_view(&self) -> Result<SyncViewFacts, FactsFault> {
+        self.with(SyncViewRead::sync_view)
+    }
+}
+
 impl ChainReadFacts for ChainBridge {
+    fn transactions(
+        &self,
+        ids: &[TxHash],
+        scope: PoolScope,
+    ) -> Result<shekyl_daemon_rpc::read_facts::TransactionsAt, FactsFault> {
+        self.with(|facts| facts.transactions(ids, scope))
+    }
+
+    fn blocks_by_height(&self, heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault> {
+        self.with(|facts| facts.blocks_by_height(heights))
+    }
+
+    fn output_indices(&self, txid: &TxHash) -> Result<Option<Vec<u64>>, FactsFault> {
+        self.with(|facts| facts.output_indices(txid))
+    }
+
+    fn key_images_spent(
+        &self,
+        key_images: &[shekyl_types::KeyImage],
+    ) -> Result<Vec<SpentAt>, FactsFault> {
+        self.with(|facts| facts.key_images_spent(key_images))
+    }
+
     fn alt_block_hashes(&self) -> Result<Vec<BlockHash>, FactsFault> {
         self.with(ChainReadFacts::alt_block_hashes)
     }
@@ -216,8 +498,16 @@ impl ChainReadFacts for ChainBridge {
         self.with(|facts| facts.coinbase_sum(start, count))
     }
 
-    fn pow_hash(&self, pow_blob: &[u8], seed: PowSeed) -> Result<PowAt, FactsFault> {
-        self.with(|facts| facts.pow_hash(pow_blob, seed))
+    fn admit_pow(&self, seed: PowSeed) -> Result<PowAdmission, FactsFault> {
+        self.with(|facts| facts.admit_pow(seed))
+    }
+
+    fn hash_admitted(
+        &self,
+        pow_blob: &[u8],
+        admitted: &AdmittedPow,
+    ) -> Result<PowHash, FactsFault> {
+        self.with(|facts| facts.hash_admitted(pow_blob, admitted))
     }
 
     fn emission_claim_source(&self, persona: &PCanonicalId) -> Result<ClaimSource, FactsFault> {
@@ -231,66 +521,302 @@ impl ChainReadFacts for ChainBridge {
 
 pub(crate) struct PoolBridge {
     pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
+    /// The service's own retirement flag: a pool it has retired is not
+    /// served here, and a fault met here retires it there.
+    health: PoolHealth,
+    /// Where a flushed id's relay state is released.
+    departed: shekyl_chain_ingest::service::Departed,
 }
 
 impl PoolBridge {
-    pub(crate) fn new(pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>) -> Self {
-        Self { pool }
+    pub(crate) fn new(
+        pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
+        health: PoolHealth,
+        departed: shekyl_chain_ingest::service::Departed,
+    ) -> Self {
+        Self {
+            pool,
+            health,
+            departed,
+        }
+    }
+}
+
+impl PoolBridge {
+    /// The live pool. Absent and retired are both not ready: these methods
+    /// have no reply that can say the pool has no answer.
+    fn pool(&self) -> Result<Arc<Mutex<Pool>>, FactsFault> {
+        require_live(open_pool(&self.pool, &self.health)?)
+    }
+}
+
+/// An entry's body as `get_transactions` reads it.
+fn body_of(entry: &shekyl_mempool::Entry<'_>) -> shekyl_daemon_rpc::store_facts::PoolBody {
+    shekyl_daemon_rpc::store_facts::PoolBody {
+        tx: entry.tx.serialize(),
+        shown: entry.shown,
+    }
+}
+
+/// An entry as the RPC reads it.
+fn entry_facts(entry: shekyl_mempool::Entry<'_>) -> PoolEntryFacts {
+    PoolEntryFacts {
+        id: entry.id,
+        blob: entry.tx.serialize(),
+        weight: entry.weight,
+        fee: entry.fee.to_raw(),
+        shown: entry.shown,
+        key_images: entry.key_images,
     }
 }
 
 impl PoolFacts for PoolBridge {
     fn broadcast_count(&self) -> Result<u64, FactsFault> {
-        let slot = lock(&self.pool);
-        let Some(pool) = slot.as_ref() else {
-            return Err(FactsFault::NotReady);
-        };
-        let pool = lock(pool);
+        let pool = self.pool()?;
+        let pool = lock(&pool);
         u64::try_from(pool.listing().count()).map_err(|_| FactsFault::Internal)
+    }
+
+    fn entries(&self, scope: PoolScope) -> Result<Vec<PoolEntryFacts>, FactsFault> {
+        let pool = self.pool()?;
+        let pool = lock(&pool);
+        Ok(match scope {
+            PoolScope::Broadcast => pool.shown_entries().map(entry_facts).collect(),
+            PoolScope::WithUnbroadcast => pool.relay_view().entries().map(entry_facts).collect(),
+        })
+    }
+
+    /// On a blocking thread: the flush writes the pool file under the
+    /// pool's lock, which a runtime thread must not wait on.
+    fn flush(&self, ids: Vec<TxHash>) -> Pending<'_, Vec<TxHash>> {
+        let pool = self.pool();
+        let health = self.health.clone();
+        let departed = Arc::clone(&self.departed);
+        Box::pin(async move {
+            let pool = pool?;
+            let gone = tokio::task::spawn_blocking(move || {
+                let mut pool = lock(&pool);
+                let ids = if ids.is_empty() {
+                    pool.relay_view().entries().map(|entry| entry.id).collect()
+                } else {
+                    ids
+                };
+                match pool.flush(&ids) {
+                    Ok(flushed) => {
+                        let ids: Vec<TxHash> = flushed.into_iter().map(|(id, _)| id).collect();
+                        Ok(ids)
+                    }
+                    Err(fault) => {
+                        health.retire(&fault);
+                        Err(FactsFault::StoreUnreadable)
+                    }
+                }
+            })
+            .await
+            .map_err(|_| FactsFault::Internal)?;
+            if let Ok(ids) = &gone {
+                departed(ids);
+            }
+            gone
+        })
     }
 }
 
+/// The service's two entries the RPC asks of: the door, and the rewinder
+/// `pop_blocks` pops through. Both hold the service's store and pool, so
+/// they live in the node's slot, which stop empties; a handle that held
+/// either past stop would keep both files open.
+#[derive(Clone)]
+pub(crate) struct DoorEntry {
+    pub(crate) door: Door,
+    pub(crate) rewinder: Rewinder<ProductionSubstrate>,
+}
+
 pub(crate) struct DoorBridge {
-    door: Arc<Mutex<Option<Door>>>,
+    entry: Arc<Mutex<Option<DoorEntry>>>,
+    /// The connector's tip publications.
+    tips: tokio::sync::watch::Receiver<TipChanged>,
+    /// The tag each local offer carries, one more each time. It can repeat
+    /// a tag the miner's sink or genesis gave: a local offer is a span of
+    /// one, and a tag only tells apart the arrivals of one span.
+    tags: AtomicU64,
 }
 
 impl DoorBridge {
-    pub(crate) fn new(door: Arc<Mutex<Option<Door>>>) -> Self {
-        Self { door }
+    pub(crate) fn new(
+        entry: Arc<Mutex<Option<DoorEntry>>>,
+        tips: tokio::sync::watch::Receiver<TipChanged>,
+    ) -> Self {
+        Self {
+            entry,
+            tips,
+            tags: AtomicU64::new(1),
+        }
+    }
+}
+
+/// The door's reply, as the RPC's outcome.
+fn local_outcome(reply: Reply) -> LocalOutcome {
+    match reply {
+        Reply::Connected { height, hash } => LocalOutcome::Connected { height, hash },
+        Reply::Switched { promoted, .. } => LocalOutcome::Switched {
+            height: promoted
+                .last()
+                .map_or(BlockHeight::ZERO, |(height, _)| *height),
+        },
+        Reply::Refused(verdict)
+        | Reply::PromotionRefused {
+            refused: verdict, ..
+        } => LocalOutcome::Refused {
+            rule: verdict.rule.to_string(),
+        },
+        Reply::MissingBodies { indices, .. } => LocalOutcome::MissingBodies { indices },
+        Reply::Unlinked { .. } => LocalOutcome::Unlinked,
+        Reply::AlreadyHeld => LocalOutcome::AlreadyHeld,
+        Reply::Held { .. } => LocalOutcome::Held,
+        Reply::BeyondCap(_) => LocalOutcome::BeyondCap,
+        Reply::CannotFollow(_) => LocalOutcome::CannotFollow,
+        // A span of one arrival has no earlier block to be cancelled by.
+        Reply::Cancelled { by } => {
+            tracing::error!("a local arrival alone in its span was cancelled by {by:?}");
+            LocalOutcome::Stopped
+        }
+        Reply::Stopped => LocalOutcome::Stopped,
     }
 }
 
 impl DoorFacts for DoorBridge {
     fn room(&self) -> Result<usize, FactsFault> {
-        lock(&self.door)
+        lock(&self.entry)
             .as_ref()
-            .map(Door::room)
+            .map(|entry| entry.door.room())
             .ok_or(FactsFault::NotReady)
     }
-}
 
-pub(crate) struct MiningBridge;
+    fn offer_local(&self, block: Vec<u8>) -> Pending<'_, LocalOutcome> {
+        let door = lock(&self.entry).as_ref().map(|entry| entry.door.clone());
+        let tag = ArrivalTag(self.tags.fetch_add(1, Ordering::Relaxed));
+        Box::pin(async move {
+            let Some(door) = door else {
+                return Err(FactsFault::NotReady);
+            };
+            match door.offer_local(tag, block, Vec::new()).await {
+                Ok(tagged) => Ok(local_outcome(tagged.reply)),
+                Err(Refusal::Oversize) => Ok(LocalOutcome::Oversize),
+                // The entry waits out a full window; a closed one is the
+                // service stopping.
+                Err(Refusal::NoRoom | Refusal::Throttled) => Ok(LocalOutcome::Stopped),
+                Err(Refusal::StoreUnreadable) => Err(FactsFault::StoreUnreadable),
+            }
+        })
+    }
 
-impl MiningFacts for MiningBridge {
-    fn running(&self) -> Result<bool, FactsFault> {
-        // PR 3b starts the miner on this node's board. Until then the
-        // node is up and is not mining.
-        Ok(false)
+    fn pop(&self, count: u64) -> Pending<'_, PopOutcome> {
+        let rewinder = lock(&self.entry)
+            .as_ref()
+            .map(|entry| entry.rewinder.clone());
+        Box::pin(async move {
+            let Some(rewinder) = rewinder else {
+                return Err(FactsFault::NotReady);
+            };
+            match rewinder.pop_blocks(count).await {
+                Ok(Rewound::Popped { tip, .. }) => Ok(PopOutcome::Popped { tip }),
+                Ok(Rewound::Refused { tip, floor }) => Ok(PopOutcome::Refused { tip, floor }),
+                Err(ServiceFault::Mailbox) => Err(FactsFault::NotReady),
+                Err(fault) => {
+                    tracing::error!("pop_blocks: {fault}");
+                    Err(FactsFault::Internal)
+                }
+            }
+        })
+    }
+
+    fn tip_at_least(&self, height: BlockHeight) -> Pending<'_, ()> {
+        let mut tips = self.tips.clone();
+        Box::pin(async move {
+            tips.wait_for(|published| {
+                published
+                    .tip
+                    .is_some_and(|tip| tip.count.tip() >= Some(height))
+            })
+            .await
+            .map(|_| ())
+            .map_err(|_| FactsFault::NotReady)
+        })
     }
 }
 
-pub(crate) struct BansBridge;
+/// The node's ban table through the network's ban verbs (DX-Q3, Q11):
+/// one socket table, one clock, and the sessions a ban closes.
+pub(crate) struct BansBridge {
+    path: Bans,
+}
+
+impl BansBridge {
+    pub(crate) const fn new(path: Bans) -> Self {
+        Self { path }
+    }
+}
+
+/// A target as the ban path names it.
+fn ban_target(target: BanTargetFacts) -> Result<BanTarget, FactsFault> {
+    match target {
+        BanTargetFacts::Host(host) => Ok(BanTarget::Host(host)),
+        BanTargetFacts::Subnet { network, prefix } => Ipv4Subnet::new(network, prefix)
+            .map(BanTarget::Subnet)
+            .ok_or(FactsFault::Internal),
+    }
+}
+
+/// Time left, as the RPC reads it: whole seconds, rounded up.
+fn ban_left(left: BanLeft) -> BanLeftFacts {
+    match left {
+        BanLeft::Permanent => BanLeftFacts::Permanent,
+        BanLeft::Remaining { nanos } => BanLeftFacts::Seconds(nanos.div_ceil(1_000_000_000)),
+    }
+}
 
 impl BansFacts for BansBridge {
-    fn ban_host(&self, host: IpAddr) -> Result<(), FactsFault> {
-        // The process table after install is this node's, and a bound hub
-        // finishes the sockets a new ban drops. One function, both states.
-        shekyl_ffi::seam_ffi::bans::ban_host_permanent(host);
-        Ok(())
+    fn ban(&self, target: BanTargetFacts, seconds: Option<u64>) -> Result<bool, FactsFault> {
+        let span = seconds.map_or(BanSpan::Permanent, |seconds| {
+            BanSpan::For(std::time::Duration::from_secs(seconds))
+        });
+        Ok(self.path.ban(ban_target(target)?, span))
     }
 
-    fn banned(&self, host: IpAddr) -> Result<bool, FactsFault> {
-        Ok(shekyl_ffi::seam_ffi::bans::host_is_banned(host))
+    fn fits(&self, seconds: u64) -> Result<bool, FactsFault> {
+        Ok(self
+            .path
+            .fits(BanSpan::For(std::time::Duration::from_secs(seconds))))
+    }
+
+    fn lift(&self, target: BanTargetFacts) -> Result<bool, FactsFault> {
+        Ok(self.path.lift(ban_target(target)?))
+    }
+
+    fn remaining(&self, host: IpAddr) -> Result<Option<BanLeftFacts>, FactsFault> {
+        Ok(self.path.remaining(host).map(ban_left))
+    }
+
+    fn list(&self) -> Result<Vec<BanRow>, FactsFault> {
+        Ok(self
+            .path
+            .listed()
+            .into_iter()
+            .map(|row| match row {
+                ListedBan::Host { host, left } => BanRow {
+                    target: BanTargetFacts::Host(host),
+                    left: ban_left(left),
+                },
+                ListedBan::Subnet { subnet, left } => BanRow {
+                    target: BanTargetFacts::Subnet {
+                        network: subnet.network(),
+                        prefix: subnet.prefix_len(),
+                    },
+                    left: ban_left(left),
+                },
+            })
+            .collect())
     }
 }
 
@@ -308,5 +834,182 @@ impl StopFacts for StopBridge {
     fn request_stop(&self) -> Result<(), FactsFault> {
         (self.request)();
         Ok(())
+    }
+}
+
+/// A connector as `get_info`'s Peers rows name it. Exhaustive: a new
+/// connector is a new wire name, decided where it is added.
+const fn wire_connector(connector: ConnectorId) -> shekyl_rpc_types::InfoConnector {
+    match connector {
+        ConnectorId::Clearnet => shekyl_rpc_types::InfoConnector::Clearnet,
+        ConnectorId::Tor => shekyl_rpc_types::InfoConnector::Tor,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// No network: the counts these tests do not read.
+    struct NoNetwork;
+
+    impl NetworkCounts for NoNetwork {
+        fn peer_counts(&self) -> Vec<ConnectorCounts> {
+            Vec::new()
+        }
+
+        fn session_counts(&self) -> (u64, u64) {
+            (0, 0)
+        }
+    }
+
+    /// The view's rows reach the RPC named by the connection id the board
+    /// and `get_connections` use (the socket id, little-endian, in the
+    /// first eight bytes), with the
+    /// mode and the state mapped one to one and each request's timing
+    /// read at the call.
+    #[test]
+    fn the_view_names_a_session_by_its_connection_id() {
+        let dir = tempfile::tempdir().expect("temp");
+        let (_sync_tx, sync) = tokio::sync::watch::channel(SyncState::Synced);
+        let (_latch_tx, latch) = tokio::sync::watch::channel(None);
+        let socket = SocketId::from_ffi(0x0102_0304_0506_0708).expect("a socket id");
+        let sent = std::time::Instant::now();
+        let view = SyncView {
+            state: SyncState::Synced,
+            stalled: false,
+            target: shekyl_types::ChainCount::from_raw(9),
+            sessions: vec![shekyl_chain_sync::SessionView {
+                session: socket,
+                claim: None,
+                mode: SessionMode::PastCap,
+                header_request: Some(shekyl_chain_sync::HeaderInFlight {
+                    sent,
+                    deadline: sent + std::time::Duration::from_secs(60),
+                }),
+                body_requests: Vec::new(),
+                transit: std::time::Duration::ZERO,
+                rate: Some(7),
+            }],
+        };
+        let surroundings = Surroundings {
+            pool: Arc::new(Mutex::new(None)),
+            data_dir: dir.path().to_path_buf(),
+            offline: false,
+            sync,
+            latch,
+            view: tokio::sync::watch::channel(view).1,
+            health: PoolHealth::unwired(),
+            network: Arc::new(NoNetwork),
+        };
+        let facts = surroundings.sync_view().expect("a view");
+        assert_eq!(facts.state, ChainSyncState::Synced);
+        assert_eq!(facts.target, 9);
+        let row = &facts.sessions[0];
+        let mut expected = [0u8; 16];
+        expected[..8].copy_from_slice(&0x0102_0304_0506_0708_u64.to_le_bytes());
+        assert_eq!(row.connection_id, expected);
+        assert_eq!(row.mode, SyncMode::PastCap);
+        assert_eq!(row.claimed_height, None);
+        assert_eq!(row.rate, Some(7));
+        let timing = row.header_request.expect("a header request");
+        assert!(timing.due_in_ms > 0 && timing.due_in_ms <= 60_000);
+    }
+
+    /// A closed sync watch reads `NoView`, as the follower reads it, never
+    /// its last value (the review of #1165). Red edit: read the last value.
+    #[test]
+    fn a_closed_sync_watch_reads_as_no_view() {
+        let dir = tempfile::tempdir().expect("temp");
+        let (sender, sync) = tokio::sync::watch::channel(SyncState::Synced);
+        let (_latch_tx, latch) = tokio::sync::watch::channel(None);
+        let surroundings = Surroundings {
+            pool: Arc::new(Mutex::new(None)),
+            data_dir: dir.path().to_path_buf(),
+            offline: false,
+            sync,
+            latch,
+            view: tokio::sync::watch::channel(SyncView::empty()).1,
+            health: PoolHealth::unwired(),
+            network: Arc::new(NoNetwork),
+        };
+        assert!(surroundings.sync().expect("open").synchronized);
+        drop(sender);
+        let closed = surroundings.sync().expect("closed");
+        assert!(!closed.synchronized, "a closed watch is not Synced");
+        assert!(!closed.busy_syncing);
+        assert!(!closed.following_degraded);
+    }
+
+    /// The facts read the connector's latch. A closed watch keeps the
+    /// last evidence: the latch is one-way until a resync.
+    #[test]
+    fn the_sync_facts_read_the_latch() {
+        let dir = tempfile::tempdir().expect("temp");
+        let (_sync_tx, sync) = tokio::sync::watch::channel(SyncState::Synced);
+        let evidence = FollowingDegraded {
+            fork_at: BlockHeight::from_raw(3),
+            tip: BlockHash::from_bytes([0x11; 32]),
+            work: shekyl_difficulty::CumulativeDifficulty::from_raw(9),
+        };
+        let (latch_tx, latch) = tokio::sync::watch::channel(None);
+        let surroundings = Surroundings {
+            pool: Arc::new(Mutex::new(None)),
+            data_dir: dir.path().to_path_buf(),
+            offline: false,
+            sync,
+            latch,
+            view: tokio::sync::watch::channel(SyncView::empty()).1,
+            health: PoolHealth::unwired(),
+            network: Arc::new(NoNetwork),
+        };
+        assert!(!surroundings.sync().expect("open").following_degraded);
+        latch_tx.send_replace(Some(evidence));
+        assert!(surroundings.sync().expect("set").following_degraded);
+        drop(latch_tx);
+        assert!(
+            surroundings.sync().expect("closed").following_degraded,
+            "a closed latch watch keeps the evidence"
+        );
+    }
+
+    /// The node's facts read what chain sync publishes into the node's one
+    /// sync sender: `Behind` with its target, then `Synced` with none
+    /// (CS-Q2 step 8). Red edit: answer `target: None` always.
+    #[test]
+    fn the_sync_facts_read_the_published_state_and_its_target() {
+        let dir = tempfile::tempdir().expect("temp");
+        let (sender, sync) = tokio::sync::watch::channel(SyncState::NoView);
+        let (_latch_tx, latch) = tokio::sync::watch::channel(None);
+        let surroundings = Surroundings {
+            pool: Arc::new(Mutex::new(None)),
+            data_dir: dir.path().to_path_buf(),
+            offline: false,
+            sync,
+            latch,
+            view: tokio::sync::watch::channel(SyncView::empty()).1,
+            health: PoolHealth::unwired(),
+            network: Arc::new(NoNetwork),
+        };
+        let none = surroundings.sync().expect("open");
+        assert_eq!(
+            (none.target, none.synchronized, none.busy_syncing),
+            (None, false, false)
+        );
+        let target = shekyl_types::ChainCount::from_raw(120);
+        sender.send_replace(SyncState::Behind {
+            have: shekyl_difficulty::CumulativeDifficulty::from_raw(80),
+            best: shekyl_difficulty::CumulativeDifficulty::from_raw(120),
+            target,
+        });
+        let behind = surroundings.sync().expect("open");
+        assert_eq!(behind.target, Some(target));
+        assert!(behind.busy_syncing && !behind.synchronized);
+        sender.send_replace(SyncState::Synced);
+        let synced = surroundings.sync().expect("open");
+        assert_eq!(
+            (synced.target, synced.synchronized, synced.busy_syncing),
+            (None, true, false)
+        );
     }
 }

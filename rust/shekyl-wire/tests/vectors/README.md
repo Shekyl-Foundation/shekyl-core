@@ -1,12 +1,13 @@
 # Block/tx wire-format vectors (C++ oracle corpus)
 
 `regtest_coinbase_h{0,1,2}.block` are **raw block blobs** captured from a live
-`shekyld --regtest --fixed-difficulty 1` via the `get_block` RPC. The C++ daemon
-is the genesis wire-format / hashing oracle. Two assertions ride these:
+`shekyld --network regtest --dev-difficulty 1` via the `get_block` RPC. The
+daemon is the wire-format / hashing oracle. Two assertions ride these:
 
-> **Corpus shape.** h0 **is** the mainnet genesis (regtest shares `GENESIS_TX`) —
-> five founder outputs, deterministic, cross-anchored to `mining_parity`'s mainnet
-> genesis id. h1/h2 are mined regtest blocks with a single miner output.
+> **Corpus shape.** h0 **is** regtest's genesis — five outputs to regtest's
+> test wallets, deterministic, cross-anchored to regtest's genesis id in the
+> network table (`shekyl-network`). h1/h2 are mined regtest blocks with a
+> single miner output.
 >
 > **Mining address:** `capture_coinbase.py` mines to a local fixture address in
 > `regtest_mining_recipients.json` (reproduce via `cargo test -p shekyl-wire
@@ -24,13 +25,13 @@ is the genesis wire-format / hashing oracle. Two assertions ride these:
   `Block::serialize` == blob; asserts height-dependent output counts (5 / 1 / 1).
 - **Hash identity** (`../coinbase_hash.rs`, §11): `Block::hash()` /
   `Transaction::hash()` == the daemon's `block_header.hash` / `miner_tx_hash`,
-  pinned in `regtest_coinbase_hashes.json`; h0 block hash must also equal the
-  published mainnet genesis id.
+  pinned in `regtest_coinbase_hashes.json`; h0 block hash must also equal
+  regtest's genesis id in the network table.
 
 Each is a coinbase-only block: `vin = [gen]`, ct type `0` (`Null`), tagged_key
 outputs (five on h0, one on h1/h2), PQC `tx_extra`. The coinbase ct base carries
 `enc_amounts` / `enc_labels` / `outPk` even for `Null`
-(`src/fcmp/ct_types.h:209-280`) — the bytes the pre-fix vendored reader skipped,
+(`src/fcmp/ct_types.h` at `ac3836de90` (lines 209–280)) — the bytes the pre-fix vendored reader skipped,
 which this crate consumes.
 
 ## Regenerate

@@ -19,7 +19,6 @@ use std::fmt;
 
 use shekyl_economics::{
     calc_release_multiplier, fee_correction, params::SCALE, EconomicParams, TxVolume,
-    RELAY_FLOOR_REFERENCE_TX_WEIGHT, STANDARD_RUNG_OVER_ECONOMY,
 };
 
 use crate::engine::SimParams;
@@ -37,11 +36,12 @@ const BASELINE_TABLE_YEARS: usize = 25;
 /// tuning knob.
 const ONE_TRANSACTION_PER_BLOCK: u64 = 1;
 
-/// One year's carried and expired transactions, in counts over the year.
+/// One year's carried transactions and those it dropped unserved (expired,
+/// evicted or refused), in counts over the year.
 struct BlockTraffic {
     year: u64,
     carried_txs: u128,
-    expired_txs: u128,
+    dropped_txs: u128,
 }
 
 /// The year's last block, reduced to the operands the gate reads.
@@ -116,7 +116,12 @@ fn rho_scaled(block: &GateBlock, params: &EconomicParams) -> u64 {
 /// `M == 0` does not admit: the penalty divides by the long-term median.
 /// A product that does not fit in `u128` does not admit either. The
 /// weights and medians a fold actually prices sit far under that rail.
-fn admits_one_more(block: &GateBlock, rho_scaled: u64, rung_over_economy: u64) -> bool {
+fn admits_one_more(
+    block: &GateBlock,
+    rho_scaled: u64,
+    rung_over_economy: u64,
+    run: &SimParams,
+) -> bool {
     let long_term = block.long_term_median;
     if long_term == 0 {
         return false;
@@ -132,7 +137,7 @@ fn admits_one_more(block: &GateBlock, rho_scaled: u64, rung_over_economy: u64) -
     };
     let Some(right) = u128::from(rung_over_economy)
         .checked_mul(u128::from(rho_scaled))
-        .and_then(|product| product.checked_mul(u128::from(RELAY_FLOOR_REFERENCE_TX_WEIGHT)))
+        .and_then(|product| product.checked_mul(u128::from(run.relay().ref_tx_weight)))
         .and_then(|product| product.checked_mul(effective))
         .and_then(|product| product.checked_mul(effective))
     else {
@@ -142,17 +147,17 @@ fn admits_one_more(block: &GateBlock, rho_scaled: u64, rung_over_economy: u64) -
 }
 
 /// `θ = w / (rung · w_ref)`: the admission test when the two medians are equal.
-fn theta_at_equal_medians(weight: u64) -> f64 {
-    weight as f64 / (STANDARD_RUNG_OVER_ECONOMY as f64 * RELAY_FLOOR_REFERENCE_TX_WEIGHT as f64)
+fn theta_at_equal_medians(weight: u64, run: &SimParams) -> f64 {
+    weight as f64 / (run.relay().standard_over_economy as f64 * run.relay().ref_tx_weight as f64)
 }
 
 fn fee_gate(block: &GateBlock, params: &SimParams, economic: &EconomicParams) -> FeeGate {
     let scaled = rho_scaled(block, economic);
     let scale = SCALE as f64;
-    let supply_ratio = if params.emission_curve_asymptote == 0 {
+    let supply_ratio = if params.economic().emission_curve_asymptote == 0 {
         0.0
     } else {
-        block.supply_raw as f64 / params.emission_curve_asymptote as f64
+        block.supply_raw as f64 / params.economic().emission_curve_asymptote as f64
     };
     let median_ratio = if block.long_term_median == 0 {
         0.0
@@ -164,17 +169,22 @@ fn fee_gate(block: &GateBlock, params: &SimParams, economic: &EconomicParams) ->
         supply_ratio,
         burn: block.burn_pct_scaled as f64 / scale,
         rho: scaled as f64 / scale,
-        theta_at_equal_medians: theta_at_equal_medians(block.weight),
+        theta_at_equal_medians: theta_at_equal_medians(block.weight, params),
         median_ratio,
-        admits_one_more: admits_one_more(block, scaled, STANDARD_RUNG_OVER_ECONOMY),
+        admits_one_more: admits_one_more(
+            block,
+            scaled,
+            params.relay().standard_over_economy,
+            params,
+        ),
     }
 }
 
 /// First year whose carried count exceeds the constrained ceiling by more
 /// than one transaction a block.
 ///
-/// A year raises the ceiling only when it expires more than one transaction
-/// a block. The comparison is strict, so a climb of exactly that grain is
+/// A year raises the ceiling only when it drops more than one transaction a
+/// block unserved (expired, evicted or refused). The comparison is strict, so a climb of exactly that grain is
 /// still the same congestion. `None` when no year was constrained, or when
 /// `blocks_per_year` is `0` (there is no per-block grain to compare).
 fn congestion_escape_year(years: &[BlockTraffic], blocks_per_year: u64) -> Option<u64> {
@@ -189,7 +199,7 @@ fn congestion_escape_year(years: &[BlockTraffic], blocks_per_year: u64) -> Optio
                 return Some(year.year);
             }
         }
-        if year.expired_txs > grain {
+        if year.dropped_txs > grain {
             ceiling = Some(ceiling.map_or(year.carried_txs, |room| room.max(year.carried_txs)));
         }
     }
@@ -216,8 +226,8 @@ pub(crate) fn write_report(
     params: &SimParams,
     folded: &[FoldedScenario],
 ) -> fmt::Result {
-    let rung = STANDARD_RUNG_OVER_ECONOMY;
-    let w_ref = RELAY_FLOOR_REFERENCE_TX_WEIGHT;
+    let rung = params.relay().standard_over_economy;
+    let w_ref = params.relay().ref_tx_weight;
     let economic = params.economic();
     writeln!(
         out,
@@ -246,7 +256,7 @@ pub(crate) fn write_report(
     )?;
     writeln!(
         out,
-        "     ('-' when no year expired more than one tx/block)."
+        "     ('-' when no year dropped more than one tx/block unserved)."
     )?;
     writeln!(
         out,
@@ -260,12 +270,12 @@ pub(crate) fn write_report(
     {
         Some(baseline) => {
             for agg in baseline.aggs.iter().take(BASELINE_TABLE_YEARS) {
-                let gate = fee_gate(&GateBlock::from_agg(agg), params, &economic);
+                let gate = fee_gate(&GateBlock::from_agg(agg), params, economic);
                 writeln!(
                     out,
                     "       {:>6} {:>8.1} {:>7.0} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>6}",
                     agg.year,
-                    per_block(agg.carried_txs, params.blocks_per_year),
+                    per_block(agg.carried_txs, params.blocks_per_year()),
                     agg.long_term_median as f64 / 1_000.0,
                     gate.sigma,
                     gate.supply_ratio,
@@ -284,7 +294,7 @@ pub(crate) fn write_report(
         let gates: Vec<FeeGate> = scenario
             .aggs
             .iter()
-            .map(|agg| fee_gate(&GateBlock::from_agg(agg), params, &economic))
+            .map(|agg| fee_gate(&GateBlock::from_agg(agg), params, economic))
             .collect();
         let zone = scenario
             .aggs
@@ -304,10 +314,10 @@ pub(crate) fn write_report(
             .map(|agg| BlockTraffic {
                 year: agg.year,
                 carried_txs: agg.carried_txs,
-                expired_txs: agg.expired_txs,
+                dropped_txs: agg.dropped_txs(),
             })
             .collect();
-        let growth = congestion_escape_year(&traffic, params.blocks_per_year);
+        let growth = congestion_escape_year(&traffic, params.blocks_per_year());
         writeln!(
             out,
             "       {:<20} zone theta from {}, admitted from {}, blocks grow from {}",
@@ -336,11 +346,11 @@ mod tests {
         }
     }
 
-    fn traffic(year: u64, carried_txs: u128, expired_txs: u128) -> BlockTraffic {
+    fn traffic(year: u64, carried_txs: u128, dropped_txs: u128) -> BlockTraffic {
         BlockTraffic {
             year,
             carried_txs,
-            expired_txs,
+            dropped_txs,
         }
     }
 
@@ -391,7 +401,8 @@ mod tests {
             admits_one_more(
                 &block_at(weight, 1_000, 1_000),
                 SCALE,
-                STANDARD_RUNG_OVER_ECONOMY,
+                SimParams::default().relay().standard_over_economy,
+                &SimParams::default(),
             )
         };
         // w_ref = 3000 and the rung is 4, so theta = 1 at weight 12_000.
@@ -405,7 +416,8 @@ mod tests {
             admits_one_more(
                 &block_at(weight, 2_000, 1_000),
                 SCALE,
-                STANDARD_RUNG_OVER_ECONOMY,
+                SimParams::default().relay().standard_over_economy,
+                &SimParams::default(),
             )
         };
         assert!(admits(12_001));
@@ -418,7 +430,8 @@ mod tests {
         assert!(!admits_one_more(
             &block_at(12_000, 1_000, 0),
             SCALE,
-            STANDARD_RUNG_OVER_ECONOMY,
+            SimParams::default().relay().standard_over_economy,
+            &SimParams::default(),
         ));
     }
 
@@ -449,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn a_year_that_never_expires_a_tx_per_block_is_not_constrained() {
+    fn a_year_that_never_drops_a_tx_per_block_is_not_constrained() {
         assert_eq!(
             congestion_escape_year(&[traffic(1, 10, 0), traffic(2, 10_000, 0)], 10),
             None
@@ -483,5 +496,46 @@ mod tests {
         assert!(out.contains(BASELINE_STEADY_STATE), "{out}");
         assert!(out.contains("is not in this run"), "{out}");
         assert!(out.contains("fee_correction"), "{out}");
+    }
+
+    /// The figures the design leans on and ESR-10's P2 reads, held by no test
+    /// until Phase 0 (`ECONOMICS_SIM_PHASE0.md` §P0.1): on the baseline,
+    /// year 1's `rho` and `theta`, the year `rho` first reaches `theta`, and
+    /// the year blocks grow. Nineteen years of the production fold.
+    #[test]
+    fn the_baseline_year_one_operands_and_the_crossing_year_are_held() {
+        let params = SimParams::default();
+        let economic = params.economic();
+        let mut config = crate::scenarios::all_scenarios(&params)
+            .into_iter()
+            .find(|c| c.name == BASELINE_STEADY_STATE)
+            .expect("the baseline scenario");
+        config.sim_years = 19;
+        let aggs = crate::stage2::a1_year_aggs(&params, &config);
+        let gates: Vec<FeeGate> = aggs
+            .iter()
+            .map(|agg| fee_gate(&GateBlock::from_agg(agg), &params, economic))
+            .collect();
+        assert_eq!(format!("{:.3}", gates[0].rho), "0.879");
+        assert_eq!(format!("{:.3}", gates[0].theta_at_equal_medians), "1.188");
+        let crossing = aggs
+            .iter()
+            .zip(&gates)
+            .find(|(_, gate)| gate.rho >= gate.theta_at_equal_medians)
+            .map(|(agg, _)| agg.year);
+        assert_eq!(crossing, Some(19), "rho reaches theta in year 19");
+        let traffic: Vec<BlockTraffic> = aggs
+            .iter()
+            .map(|agg| BlockTraffic {
+                year: agg.year,
+                carried_txs: agg.carried_txs,
+                dropped_txs: agg.dropped_txs(),
+            })
+            .collect();
+        assert_eq!(
+            congestion_escape_year(&traffic, params.blocks_per_year()),
+            Some(19),
+            "blocks grow in year 19"
+        );
     }
 }

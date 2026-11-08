@@ -6,7 +6,8 @@
 //! The two cache slots, and the pool steps that run beside them.
 //!
 //! [`install_blocking`] reads the seeds the reorg cap can name and pins
-//! them, transient then canonical, under one chain permit. A hash looks a
+//! them, transient then canonical, under one chain permit, and releases a
+//! seed the window it replaces named and it does not. A hash looks a
 //! cache up; it does not build one. A pool-file fault retires the pool.
 //! A chain-store fault stops the service.
 
@@ -17,7 +18,7 @@ use shekyl_chain_rules::{AdmissionPolicy, Corrupt, Fault, RuleSet, Substrate, Vi
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreError};
 use shekyl_hash_budget::Class;
 use shekyl_mempool::{Pool, PoolFault};
-use shekyl_types::{BlockHash, BlockHeight, TxHash, UnixSeconds};
+use shekyl_types::{BlockHash, BlockHeight, TxHash, UnixSeconds, MAX_ATTESTATION_WITNESS_BYTES};
 use shekyl_wire::Transaction;
 
 use super::{
@@ -55,7 +56,7 @@ where
         return Ok(());
     };
     {
-        let _gate = shared
+        let mut installed = shared
             .pin_lock
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -65,6 +66,22 @@ where
             shared.substrate.pin_seed(&transient);
         }
         shared.substrate.pin_seed(&pair.canonical);
+        // A seed the previous window named and this one does not is
+        // released: nothing else would empty its slot before the next
+        // epoch's pin (A2). Only those. A run in flight pins the seeds of
+        // blocks it has not committed yet, and this window, read at the
+        // committed tip, cannot name them; a release by "whatever the
+        // second slot holds" evicted them under the run's forms.
+        if let Some(previous) = installed.replace(pair) {
+            for seed in [Some(previous.canonical), previous.transient]
+                .into_iter()
+                .flatten()
+            {
+                if !pair.holds(&seed) {
+                    shared.substrate.release_seed(&seed);
+                }
+            }
+        }
     }
     if !shared.stopping() {
         shared.seeds.send_replace(Some(pair));
@@ -72,24 +89,57 @@ where
     Ok(())
 }
 
+/// Why installing the seed window stops its caller.
+pub(crate) enum WindowStop {
+    /// A store read failed ([`install_blocking`]'s error).
+    Read(ViewRead<StoreError>),
+    /// The install panicked: a defect in this node.
+    Panicked,
+}
+
 /// [`install_blocking`] off the runtime.
 ///
 /// # Errors
 ///
-/// As [`install_blocking`].
-pub(crate) async fn install_window<S>(shared: &Arc<Shared<S>>) -> Result<(), ViewRead<StoreError>>
+/// [`WindowStop::Read`] as [`install_blocking`]; [`WindowStop::Panicked`]
+/// when the blocking install panicked. The workspace's dev and release
+/// profiles abort on panic, so the second is reached only where a panic
+/// unwinds (the test profile). Either way the caller stops through
+/// [`record_window_stop`].
+pub(crate) async fn install_window<S>(shared: &Arc<Shared<S>>) -> Result<(), WindowStop>
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
 {
     let shared = Arc::clone(shared);
-    tokio::task::spawn_blocking(move || install_blocking(&shared))
-        .await
-        .expect("installing the seed window does not panic")
+    match tokio::task::spawn_blocking(move || install_blocking(&shared)).await {
+        Ok(installed) => installed.map_err(WindowStop::Read),
+        Err(join) => {
+            tracing::error!("installing the seed window panicked: {join}");
+            Err(WindowStop::Panicked)
+        }
+    }
 }
 
-/// Record a door-side store read that failed, and stop. The door still
-/// answers [`super::Refusal::NoRoom`]: the span was not accepted.
+/// Stop the service on a failed install. A failed read is recorded as
+/// [`record_store_read`] records it. A panic stops it as the follower's
+/// end does ([`ServiceFault::FollowerEnded`]): the follower then leaves its
+/// loop, and the miner's job is withdrawn with it.
+pub(crate) fn record_window_stop<S>(shared: &Shared<S>, stop: WindowStop)
+where
+    S: Substrate,
+    S::Fault: core::fmt::Debug,
+{
+    match stop {
+        WindowStop::Read(read) => record_store_read(shared, read),
+        WindowStop::Panicked => shared.fail(ServiceFault::FollowerEnded),
+    }
+}
+
+/// Record a store read that failed, and stop. On the door's side the
+/// arrival is refused with what the failed read is
+/// ([`super::Refusal::StoreUnreadable`]); the span was not accepted, and
+/// the caller does not wait it out.
 pub(crate) fn record_store_read<S>(shared: &Shared<S>, read: ViewRead<StoreError>)
 where
     S: Substrate,
@@ -272,8 +322,12 @@ impl super::Admission {
     /// # Errors
     ///
     /// The store's. The bound hook records it and the service stops; the
-    /// door still answers [`super::Refusal::NoRoom`].
+    /// door answers [`super::Refusal::StoreUnreadable`].
     pub(super) fn bound(&self) -> Result<crate::admission::ArrivalBound, ()> {
+        #[cfg(test)]
+        if self.refuse_reads.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(());
+        }
         let tip = match self.store.begin_read().and_then(|snap| snap.tip()) {
             Ok(state) => state.recorded.map(|recorded| recorded.hash),
             Err(store) => {
@@ -334,8 +388,14 @@ pub struct Reservation {
 
 impl Reservation {
     /// Accept `span`. It is the arrivals [`Door::reserve`] judged, in that
-    /// order, now carrying their bytes.
-    pub fn commit(mut self, span: Vec<Arrival>) -> Vec<Ticket> {
+    /// order, now carrying their bytes. Each one is hashed here.
+    pub fn commit(self, span: Vec<Arrival>) -> Vec<Ticket> {
+        self.accept(span.into_iter().map(super::Staged::hashed).collect())
+    }
+
+    /// Accept `span`. It is the arrivals [`Door::reserve`] judged, in that
+    /// order. A hashed arrival and a judged one take the same seats.
+    pub(super) fn accept(mut self, span: Vec<super::Staged>) -> Vec<Ticket> {
         assert_eq!(
             span.len(),
             self.seats.len(),
@@ -345,10 +405,10 @@ impl Reservation {
         self.committed = true;
         let mut tickets = Vec::with_capacity(span.len());
         let mut accepted = Vec::with_capacity(span.len());
-        for (arrival, seat) in span.into_iter().zip(seats) {
+        for (staged, seat) in span.into_iter().zip(seats) {
             let (sender, receiver) = oneshot::channel();
             tickets.push(Ticket {
-                tag: arrival.tag,
+                tag: staged.tag,
                 reply: receiver,
             });
             accepted.push(Accepted {
@@ -356,10 +416,11 @@ impl Reservation {
                     sender: Some(sender),
                     seat: Some(seat),
                 },
-                tag: arrival.tag,
-                origin: arrival.origin,
-                block: arrival.block,
-                bodies: arrival.bodies,
+                tag: staged.tag,
+                block: staged.block,
+                bodies: staged.bodies,
+                proof: staged.proof,
+                witness: staged.witness,
             });
         }
         // A service that has ended drops the span here, and each slot
@@ -399,17 +460,15 @@ impl Door {
         if self.room.is_closed() {
             return Err(Refusal::NoRoom);
         }
-        // A store the door cannot read has no room: the service meets the
-        // same read and fails on it.
+        // A store the door cannot read is its own refusal, never "no room":
+        // a local arrival waits out no room, and a seat being free would
+        // send it straight back here.
         let Ok(bound) = self.admission.bound() else {
-            return Err(Refusal::NoRoom);
+            return Err(Refusal::StoreUnreadable);
         };
         let oversize = lengths.iter().any(|arrival| {
-            let bytes = arrival
-                .body_lens
-                .iter()
-                .fold(arrival.block_len, |total, len| total.saturating_add(*len));
-            !bound.admits(u64::try_from(bytes).unwrap_or(u64::MAX))
+            !bound.admits(u64::try_from(arrival.bytes()).unwrap_or(u64::MAX))
+                || arrival.witness_len > MAX_ATTESTATION_WITNESS_BYTES
         });
         if oversize {
             return Err(Refusal::Oversize);

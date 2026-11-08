@@ -511,9 +511,7 @@ mod tests {
     use super::*;
     use crate::engine::error::KeyEngineError;
     use crate::engine::traits::key::{FcmpPlusPlusContext, FeeDirective, KeyEngine, TxToSign};
-    use shekyl_crypto_pq::account::{
-        rederive_account, AllKeysBlob, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
-    };
+    use shekyl_crypto_pq::account::{rederive_account, AllKeysBlob, Network, MASTER_SEED_BYTES};
     use shekyl_tx_builder::TreeContext;
 
     /// Deterministic test seed. Distinct from
@@ -532,12 +530,8 @@ mod tests {
     };
 
     fn deterministic_keys() -> AllKeysBlob {
-        rederive_account(
-            &SIGNER_TEST_MASTER_SEED,
-            DerivationNetwork::Fakechain,
-            SeedFormat::Raw32,
-        )
-        .expect("rederive_account against fakechain raw32 seed")
+        rederive_account(&SIGNER_TEST_MASTER_SEED, Network::Regtest)
+            .expect("rederive_account against a regtest master seed")
     }
 
     fn empty_tx_to_sign() -> TxToSign {

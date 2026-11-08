@@ -250,187 +250,6 @@ impl std::fmt::Debug for LeafStore {
     }
 }
 
-/// A **read-only** handle on the store, for the persona serving path.
-///
-/// The store is a single-writer redb database, and in the wallet that
-/// single writer is the `CurveTreeActor` — its message loop is what
-/// serializes writes, in place of an explicit lock. The serving loop runs
-/// concurrently with block ingest and holds a body reader open for the
-/// seconds a 3.33 MB rendezvous transfer takes, so handing it the store
-/// itself would put a second writer beside the one the actor exists to be.
-/// redb would not corrupt anything, but the two would contend on the write
-/// lock, and the actor's structural guarantee would become a convention
-/// nobody is checking.
-///
-/// So the serving side gets *this* instead: the same `Arc<LeafStore>`,
-/// with only [`Self::open_frozen_segment_body`] reachable through it.
-/// redb readers are MVCC snapshots and run concurrently with the writer,
-/// so nothing is given up — a read-only reader is all the serving loop
-/// ever needed. The point is that it is now the only thing it *can* do:
-/// there is no `&LeafStore` behind this handle to reach a write through,
-/// which is what makes "the serving host does not write to the store" a
-/// property of the types rather than a rule in a doc.
-///
-/// # Narrowing, not gating — which is why [`Self::new`] is public
-///
-/// In production this comes from `CurveTreeClient::serving_reader`, the
-/// object the actor owns. But [`Self::new`] is deliberately public and takes
-/// an `Arc<LeafStore>`, so anyone holding the store can mint one directly
-/// (the serving crates' tests do).
-///
-/// That is not a hole, because this type is **capability-narrowing, not
-/// capability-gating** — a different category from the witnesses elsewhere
-/// on this path. `VerifiedTorBinary` and `VanguardsActive` gate: possessing
-/// one is evidence a check ran, so a public constructor would forge the
-/// evidence. `ServingReader` proves nothing. It removes reach: whoever holds
-/// one can only read, and whoever can mint one already held the store and so
-/// already had strictly more. Restricting construction would buy no
-/// invariant and would only push the serving crates into a test-only
-/// back door — which is how a narrowing type acquires the ceremony of a
-/// gating one without the guarantee.
-///
-/// What the type is for is the *holder*: the serving host is handed one of
-/// these and therefore cannot write, whatever it is asked to do later.
-#[derive(Clone)]
-pub struct ServingReader {
-    store: Arc<LeafStore>,
-}
-
-impl ServingReader {
-    /// Wrap a store handle in the read-only view.
-    #[must_use]
-    pub fn new(store: Arc<LeafStore>) -> Self {
-        Self { store }
-    }
-
-    /// The serving read — see [`LeafStore::open_frozen_segment_body`] for
-    /// the full contract (this is a pure forward).
-    ///
-    /// # Errors
-    ///
-    /// Exactly [`LeafStore::open_frozen_segment_body`]'s.
-    pub fn open_frozen_segment_body(
-        &self,
-        id: SegmentId,
-    ) -> Result<Option<FrozenSegmentBody>, StoreError> {
-        self.store.open_frozen_segment_body(id)
-    }
-
-    /// How far this store has ingested — the serving host's staleness clock.
-    ///
-    /// A serving host reads this **twice**: once when it mints a serve-set
-    /// witness, and again whenever it is asked how stale that witness is.
-    /// One quantity read at two times, so the difference is exactly "blocks
-    /// this wallet has ingested since it last re-derived its holdings".
-    ///
-    /// The independence that makes the reading a *liveness* signal is
-    /// between the two **drivers**, not between two quantities: the stamp is
-    /// taken by the persona-side P-scan refresh, while the value it stamps is
-    /// advanced by the principal's block scan through
-    /// `CurveTreeClient::ingest_block`. Stop the refresh and the stamp
-    /// freezes while this keeps climbing. Pairing this against a *remote*
-    /// height instead — the daemon's tip, say — would measure how far behind
-    /// the daemon this wallet is, which reads healthy for a wallet that is
-    /// simply catching up, precisely across the window in which holdings move.
-    ///
-    /// A wallet that is merely offline freezes both readings and correctly
-    /// reports no staleness: it has learned nothing its serve-set could be
-    /// stale against.
-    ///
-    /// **Not monotonic.** [`Self::truncate_from_tree_position`] resets it to
-    /// zero and [`Self::rollback_to_fork`] moves it back to the fork height,
-    /// and both also delete pinned-segment rows above the truncation point.
-    /// A reader that stamped this value and later sees a *lower* one is
-    /// therefore looking at a store that rolled back beneath its pins — a
-    /// distinct condition from lag, and not one a saturating subtraction may
-    /// quietly report as zero.
-    ///
-    /// # Errors
-    ///
-    /// Store failure (a read transaction on the meta table).
-    pub fn sync_tip_height(&self) -> Result<BlockHeight, StoreError> {
-        self.store.sync_tip_height()
-    }
-
-    /// Which claimed members the store no longer holds pins for — see
-    /// [`LeafStore::members_missing_pins`] for the full contract (this is a
-    /// pure forward).
-    ///
-    /// # Errors
-    ///
-    /// Exactly [`LeafStore::members_missing_pins`]'s.
-    pub fn members_missing_pins(&self, shard_ids: &[u64]) -> Result<Vec<u64>, StoreError> {
-        self.store.members_missing_pins(shard_ids)
-    }
-
-    /// Whether the prune-disabled posture is declared — see
-    /// [`LeafStore::prune_disabled`], of which this is a pure read-only
-    /// forward. The CompleteTree-prefix serve-set witness verifies its
-    /// retention against this on mint and on every staleness poll: the
-    /// posture flag is the prefix arm's pin, so the reader that answers
-    /// "are these pins still there" for the list arm answers "is the
-    /// declaration still there" for the prefix arm.
-    ///
-    /// # Errors
-    ///
-    /// Exactly [`LeafStore::prune_disabled`]'s.
-    pub fn prune_disabled(&self) -> Result<bool, StoreError> {
-        self.store.prune_disabled()
-    }
-
-    /// The store's burial-gated freeze cursor — see
-    /// [`LeafStore::next_freeze_seg`], of which this is a pure read-only
-    /// forward. The CompleteTree-prefix witness verifies a reported
-    /// `frozen_count` against this on mint: the store is the authority
-    /// for the number, and a report that overstates it claims shards
-    /// the store has not frozen.
-    ///
-    /// # Errors
-    ///
-    /// Exactly [`LeafStore::next_freeze_seg`]'s.
-    pub fn next_freeze_seg(&self) -> Result<u64, StoreError> {
-        self.store.next_freeze_seg()
-    }
-
-    /// The corpus integrity scan — see
-    /// [`LeafStore::pruned_frozen_segments`], of which this is a pure
-    /// read-only forward. The CompleteTree-prefix witness runs it only on
-    /// the posture-loss path ([`PostureDeclaration::NewlyDeclared`] at a
-    /// refresh, or prior holes carried on the witness): whether bytes
-    /// were pruned during an unretained gap is a fact about the store,
-    /// answered by the store.
-    ///
-    /// # Errors
-    ///
-    /// Exactly [`LeafStore::pruned_frozen_segments`]'s.
-    pub fn pruned_frozen_segments(&self) -> Result<Vec<u64>, StoreError> {
-        self.store.pruned_frozen_segments()
-    }
-
-    /// Whether `other` is a handle on the **same open database**.
-    ///
-    /// This is allocation identity, and that is store identity: a
-    /// `LeafStore` is the live `redb::Database`, and the wallet's
-    /// curve-tree handle keeps this `Arc` across fail-stop so recovery
-    /// resumes the writer over it rather than opening a second file.
-    /// A healthy respawn therefore does not mint a new `Arc`. Two
-    /// readers that do not share an `Arc` are two open stores — even
-    /// when they were opened on the same path — and pins applied to
-    /// one are not pins in the other.
-    #[must_use]
-    pub fn same_store(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.store, &other.store)
-    }
-}
-
-// The store handle carries no secret (the curve tree is public on-chain
-// material), but there is nothing useful to print either.
-impl std::fmt::Debug for ServingReader {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ServingReader").finish_non_exhaustive()
-    }
-}
-
 /// Chunked reader over a frozen segment's leaf bytes — the body a persona
 /// serves for one shard, from [`LeafStore::open_frozen_segment_body`].
 ///
@@ -665,21 +484,6 @@ pub enum StoreError {
 }
 
 impl StoreError {
-    /// `true` iff this wraps redb's
-    /// [`DatabaseAlreadyOpen`](redb::Error::DatabaseAlreadyOpen) — the
-    /// single-writer lock is held by another live handle to the same file.
-    ///
-    /// This is the **only transient** open failure: it clears the instant the
-    /// holding [`crate::CurveTreeClient`] drops (the `close → reopen` / respawn
-    /// lock-release lag — see [`crate::ClientError::is_already_open`]). Every
-    /// other variant is a standing condition — corruption, schema mismatch, I/O,
-    /// a permission error — that re-opening cannot fix, so callers must surface
-    /// those immediately rather than poll-retrying out a grace window.
-    #[must_use]
-    pub fn is_already_open(&self) -> bool {
-        matches!(self, StoreError::Redb(e) if matches!(**e, redb::Error::DatabaseAlreadyOpen))
-    }
-
     /// What this failure means to whoever has to act on a store that would
     /// not open ([`StoreOpenFault`]). Exhaustive over this enum, so a new
     /// variant has to be placed before it compiles; the arms a caller's own
@@ -726,8 +530,10 @@ impl StoreError {
 /// diagnosis (which stays in the error for the log).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoreOpenFault {
-    /// Another process holds the store's single-writer lock: the wallet is
-    /// open somewhere else.
+    /// Another holder has the store's single-writer lock: the wallet is open
+    /// in another process, or still open in this one. Never transient within
+    /// a process: the wallet's close awaits the store's release
+    /// (`CURVE_TREE_CLIENT.md` §11), so there is nothing to wait for.
     LockedElsewhere,
     /// The store's contents contradict themselves. Remedy: delete the store
     /// and let the wallet rebuild it.
@@ -892,6 +698,15 @@ impl LeafStore {
     }
 
     /// Synced chain tip height last written by the client.
+    ///
+    /// **Not monotonic.** [`Self::truncate_from_tree_position`] resets it to
+    /// zero and [`Self::rollback_to_fork`] moves it back to the fork height,
+    /// and both also delete pinned-segment rows above the truncation point.
+    /// A reader that stamped this value and later sees a *lower* one is
+    /// therefore looking at a store that rolled back beneath its pins — a
+    /// distinct condition from lag, and not one a saturating subtraction may
+    /// quietly report as zero. The serving host's staleness reading relies
+    /// on this (`shekyl-p-host`'s `Staleness::RolledBack`).
     pub fn sync_tip_height(&self) -> Result<BlockHeight, StoreError> {
         let txn = self.db.begin_read()?;
         let meta = txn.open_table(META_TABLE)?;
@@ -905,13 +720,13 @@ impl LeafStore {
     /// when the cell is absent (the same posture as [`Self::leaf_count`]
     /// reads; `init_tables` seeds it to 0 on a fresh store).
     ///
-    /// **Not** `shekyl_archival_retention::frozen_segment_count` — that
+    /// **Not** the frozen-segment count the archival C++ path read (deleted, `DEL-008`) — that
     /// helper is first-crossing completeness (`⌊leaf_count / E⌋`) and is
     /// what the daemon registry writes. This cursor is burial-gated
     /// ([`segment_freeze_eligible`]): a completed but unburied segment
     /// does not advance it. D-5's refresh operand is *this* number;
     /// `COMPLETETREE_ACTIVATION.md` drafted the getter as
-    /// `frozen_segment_count()`, which is amended here so the two facts
+    /// that deleted count, which is amended here so the two facts
     /// cannot share a name. Slice 2's `CompleteTreePrefix.frozen_count`
     /// is this value.
     ///
@@ -3067,8 +2882,11 @@ mod tests {
         let path = dir.path().join("tree.redb");
         let _held = LeafStore::open(&path).expect("first open");
         let second = LeafStore::open(&path).expect_err("the lock is held");
-        assert!(second.is_already_open(), "{second:?}");
-        assert_eq!(second.open_fault(), StoreOpenFault::LockedElsewhere);
+        assert_eq!(
+            second.open_fault(),
+            StoreOpenFault::LockedElsewhere,
+            "{second:?}"
+        );
     }
 
     /// The remedy each store arm names, for the arms a test can build.

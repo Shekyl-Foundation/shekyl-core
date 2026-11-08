@@ -46,7 +46,7 @@ privacy gain does not enter the arithmetic.
 > pinned at `dev@37accf6f` (the brief's read); `dev` has since shed ~195 lines
 > above the serve-credit arm, so today's numbers are lower. Identifiers
 > (`h_close`, `challenge_seal_on_chain`, `ctx.settlement_epoch`,
-> `shekyl_archival_verify_serve_credit_vin`) are stable; re-pin at Slice C.
+> `shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`)) are stable; re-pin at Slice C.
 
 > **F5 (§1.5) → `PL-D1`, CLOSED by `PL-D3` — PR #745
 > (`feat/pl-d3-pedersen-leaf-commitment`), ratified by Rick 2026-09-14.** The
@@ -208,7 +208,7 @@ admitted with `E ≠ epoch(current_height)`. `SO-D8` §12 stands as written.
 `serve_credit.rs:168–169` refuses when `response.settlement_epoch !=
 ctx.settlement_epoch`. `ctx.settlement_epoch` is populated at
 `blockchain.cpp:5304` from `sc_settlement_epoch` — **the value parsed out of
-the same record at `:5124`**. `shekyl_archival_verify_serve_credit_vin` has one
+the same record at `:5124`**. `shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`) has one
 production caller (`:5315`). The check compares the record against a copy of
 itself and refuses nothing.
 
@@ -251,7 +251,7 @@ therefore **Rick's**:
 >   knowingly (Q14); (c) **SUPERSEDED 2026-09-16 (Q15):** the 2026-09-13
 >   coverage plan was an isolated FFI test
 >   (`shekyl-ffi/src/archival_ffi/tests.rs` driving
->   `shekyl_archival_verify_serve_credit_vin`). That test cannot cover the
+>   `shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`)). That test cannot cover the
 >   new row. The falsifier is a `shekyl-chain-rules` `CenRow` whose
 >   negative fixture refuses `settlement_epoch ≠ settlement_epoch_at_height(h)`
 >   with typed `InvalidBlock` — not a full-path future-epoch vector, which
@@ -886,6 +886,17 @@ digest and the list would agree. A wrong `D` is the way that happens, and
 4. **Direction analysis** — §6.1 (layer 1 sees a list that changed
    after admission, layer 2 guards `D`, layer 3 is dominated).
 5. **Ground (3) of the on-chain rejection WITHDRAWN** — §6.6.
+6. **Amendment of 2026-11-01 — derivation 2's output is the epoch
+   snapshot, not `D` alone** (`SO-D12q`; `ARCHIVAL_SUPPORT_DRAW.md` §13.1).
+   Both derivations emit, through one emitter, `D` with its receipt
+   keys, the complete trees that were support members at `h_open(E)`
+   with theirs, and the archive width (`final_count` at `h_open(E)`), and
+   the persisted digest covers all three
+   (`shekyl/archival-drawable-epoch-v2`). The walk back restores a
+   complete tree released or demoted above the open, so it is a member
+   for the rest of `E` in both derivations, as a released compact pair
+   stays in `D`. Rewriting a complete tree's journalled pre-image is now
+   drift, as rewriting a compact one always was.
 
 ### 6.4 Disposition at the site: a store-invariant Fault, never a verdict
 
@@ -1182,13 +1193,11 @@ record's holdings as they stood → filter → emit in canonical order.
 1. **Exclude bonds with `E_join ≥ E`.** A bond posted after `h_open(E)`
    is present at tip and was not drawable. The record carries `E_join`;
    the rule is the existing `E_first = E_join + 1`.
-2. **`CompleteTree` expands over every shard `s` with
-   `closed_and_final(view, s, h_open(E), reorg_cap)`, not over tip.** `k`
-   grows during an epoch, so a tip-based expansion makes foundation
-   records contribute a time-varying pair count — the same instability on
-   a different axis. Closed is not enough: the drawable set has to stay
-   inside the record's owed set, and a shard inside the reorg cap can
-   still change contents (§8.0 input 4, *The `CompleteTree` expansion*).
+2. **`CompleteTree` is not in `D` — RULED 2026-10-22**
+   (`ARCHIVAL_SUPPORT_DRAW.md`). A complete tree contributes no pair and
+   no receipt key. It is drawn on its own stream. SUPERSEDED 2026-10-22:
+   the 2026-09-16 pin expanded the record over every shard closed and
+   final at `h_open(E)`, not over tip.
 
    **Two bounds on "the shards that exist", and what tells them apart
    (confirmed 2026-10-06).** The tree has two, and they are not rivals:
@@ -1336,12 +1345,12 @@ length or version prefix that makes extension clean. It does not.
   (`tx_extra.h:213–228`). Header = 49 B (`p_id‖s‖E‖kind`,
   `attestation_wire.rs:29`). **No version prefix. No length prefix.**
 - Admission requires `headers.len().is_multiple_of(ATTESTATION_HEADER_LEN)`
-  and `k ≤ 256` (`shekyl-ffi/src/archival_ffi/attestation.rs:204–207`).
+  and `k ≤ 256` (the deleted FFI shim's check, `DEL-008`; `MAX_ATTESTATION_RECORDS` in `shekyl-archival-retention`).
   Appending 32 B of `H(witness_pk)` is `32 ≢ 0 (mod 49)` and is refused.
   Prefixing 32 B (or a version byte) is a format change to a
   genesis-frozen field (rule 42).
 - Empty set = **absent tag**, not an empty blob
-  (`cryptonote_format_utils.cpp:685–701`: parse success with no tag is
+  (`cryptonote_format_utils.cpp` at `ac3836de90` (lines 685–701): parse success with no tag is
   `true` and `blob.clear()`). A witness commitment is per issuing block
   and must exist even when the block includes zero records. Forcing
   `0x0B` always-present to carry it would change the empty-set encoding.
@@ -1374,7 +1383,7 @@ i.i.d. noise the window launders, becomes directly observable and
 attributable. Always-present costs tag + varint length + 32-B commitment
 = 34 B/block (`tx_extra.rs:169–173`: `write_blob` is `[tag] ‖ varint(len)
 ‖ blob`; `len = 32` is a one-byte varint), ≈ 9 MB/year permanent at
-120 s/block (`cryptonote_config.h:50`), and carries **no signal**. That
+120 s/block (`cryptonote_config.h` at `ac3836de90` (line 50)), and carries **no signal**. That
 is the right trade: privacy is the product (`00-mission` commitment 2);
 byte count does not enter. Q13 RULED (§7.8): the CEN row is one
 predicate over one field, five fixtures; it does not re-open
@@ -1531,7 +1540,7 @@ no consumer is a free 32-B covert channel in every user transaction.
 
 **Dedicated parser `parse_archival_witness_commitment_from_extra`.** It
 must not follow `parse_archival_attestation_from_extra`. That function
-documents (`cryptonote_format_utils.cpp:687–692`) that a successful
+documents (`cryptonote_format_utils.cpp` at `ac3836de90` (lines 687–692)) that a successful
 parse with no attestation tag returns **true with an empty blob** — the
 committed empty set — distinguished from parse failure, because
 collapsing the two would let a malformed coinbase extra pass for the
@@ -1544,10 +1553,10 @@ The divergence belongs in a comment at the `0x0C` site as carefully
 argued as the one it is deliberately not copying.
 
 **"Exactly one" is a count, not first-wins.**
-`find_tx_extra_field_by_type` (`cryptonote_format_utils.h:70–77`) takes
+`find_tx_extra_field_by_type` (`cryptonote_format_utils.h` at `ac3836de90` (lines 70–77)) takes
 `index` defaulting to 0: `!index--` skips until the index hits 0, then
 returns. It is first-wins, not reject-on-duplicate. The `0x0B` path
-calls it at `cryptonote_format_utils.cpp:699` with the default. A
+calls it at `cryptonote_format_utils.cpp` at `ac3836de90` (line 699) with the default. A
 second `0x0C` is silently ignored unless something counts. The parser
 counts; first-wins is the red edit.
 
@@ -1577,7 +1586,7 @@ as the **non-coinbase** extra cap (`shekyl-wire`
 `transaction.rs:131–132`) and is checked only on
 `construct_tx_with_tx_key` (`cryptonote_tx_utils.cpp:585`).
 `construct_miner_tx` does not check it. `COINBASE_BLOB_RESERVED_SIZE` =
-600 (`cryptonote_config.h:60`) is a **weight reserve subtracted from
+600 (`cryptonote_config.h` at `ac3836de90` (line 60)) is a **weight reserve subtracted from
 `TX_WEIGHT_LIMIT`** (`transaction.rs:141–143`), not an extra cap. The
 attestation cap itself records the fact
 (`cryptonote_config.h:440–442`): *"the coinbase has no other tx_extra
@@ -2002,10 +2011,10 @@ so where it applies.
     (32, `SCS-P1`), coinbase only,
     **present**, from genesis unconditionally. Dedicated parser
     `parse_archival_witness_commitment_from_extra` — must **not** copy
-    `0x0B`'s empty-set convention (`cryptonote_format_utils.cpp:687–692`);
+    `0x0B`'s empty-set convention (`cryptonote_format_utils.cpp` at `ac3836de90` (lines 687–692));
     absent rejects. "Exactly one" is a count;
     `find_tx_extra_field_by_type`
-    (`cryptonote_format_utils.h:70–77`) is first-wins and is the red
+    (`cryptonote_format_utils.h` at `ac3836de90` (lines 70–77)) is first-wins and is the red
     edit for duplicates. Predicate co-located with `0x0B`'s concern;
     site is a chain-rules CEN row at Slice C (Q15). `:5306` is
     records-was of the LMDB 0x0B read. Surface-free; E6-landable

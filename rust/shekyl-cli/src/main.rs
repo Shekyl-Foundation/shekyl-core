@@ -21,7 +21,7 @@ use shekyl_wallet_rpc::Network;
 #[command(
     name = "shekyl-cli",
     about = "Shekyl interactive CLI wallet",
-    version,
+    version = shekyl_version::VERSION_FULL,
     disable_help_subcommand = true
 )]
 pub struct Cli {
@@ -34,7 +34,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Offline check that the embedded ADDRESS_DERIVATION_V2 corpus matches
+    /// Offline check that the embedded ADDRESS_DERIVATION_V3 corpus matches
     /// the compile-time manifest hash pin (release / genesis tooling).
     DerivationFreezeSelfCheck,
 
@@ -68,6 +68,7 @@ pub struct ReplArgs {
 
     /// Connect to an external shekyl-wallet-rpc daemon instead of
     /// self-hosting one (http://host:port, or uds:///path/to.sock on Unix).
+    /// The URL names the server; calls go to its /json_rpc.
     #[arg(long, global = true)]
     rpc_url: Option<String>,
 
@@ -90,13 +91,11 @@ pub struct ReplArgs {
 
     /// Directory for wallet files. Default: ~/.shekyl/wallets/<network>/
     /// (created on demand), so wallets on different networks never share a
-    /// directory. Ignored with --rpc-url. (--engine-dir is a hidden alias,
-    /// CU-2.)
+    /// directory. Ignored with --rpc-url.
     #[arg(long, global = true, alias = "engine-dir")]
     wallet_dir: Option<String>,
 
-    /// Open this wallet immediately on startup. (--engine-file is a hidden
-    /// alias, CU-2.)
+    /// Open this wallet immediately on startup.
     #[arg(long, global = true, alias = "engine-file")]
     wallet: Option<String>,
 
@@ -108,17 +107,13 @@ pub struct ReplArgs {
     #[arg(long, global = true)]
     proxy: Option<String>,
 
-    /// Path to PEM CA certificate for self-signed daemon TLS.
-    /// Only needed for https:// daemon addresses with custom CAs.
-    #[arg(long, global = true)]
-    daemon_ca_cert: Option<String>,
-
     /// Show structured RPC error details (error.data) on failures.
     #[arg(long, global = true, default_value_t = false)]
     pub debug: bool,
 
     /// Read the wallet password from this file when `--wallet` is set.
-    /// Required when stdin is not a terminal. Wiped after the wallet opens.
+    /// Required when stdin is not a terminal. The file is left as it is;
+    /// the password read from it is wiped from memory once the wallet opens.
     #[arg(long, global = true, value_name = "PATH")]
     password_file: Option<std::path::PathBuf>,
 
@@ -169,7 +164,7 @@ impl ReplArgs {
             Some(given) => Ok(given.clone()),
             None => Ok(format!(
                 "127.0.0.1:{}",
-                parse_network(self.network_name())?.daemon_rpc_port()
+                parse_network(self.network_name())?.ports().rpc
             )),
         }
     }
@@ -397,7 +392,7 @@ fn main() {
 /// server validates the daemon endpoint as it starts, the same order
 /// `shekyl-wallet-rpc` keeps in `run_server`. The REPL's `DaemonClient`
 /// comes after, deliberately: it can fail for reasons that are not the
-/// endpoint's (an unusable `--proxy` or `--daemon-ca-cert`), and such a
+/// endpoint's (an unusable `--proxy`), and such a
 /// failure reports itself without retracting what the configured address
 /// would expose — a disclosure withheld until every dial succeeded would
 /// go missing exactly when a misconfigured run most needs it.
@@ -488,7 +483,7 @@ where
 
 fn run_derivation_freeze_self_check() {
     match shekyl_crypto_pq::address_derivation_freeze::address_derivation_manifest_self_check() {
-        Ok(()) => println!("ADDRESS_DERIVATION_V2 corpus OK"),
+        Ok(()) => println!("ADDRESS_DERIVATION_V3 corpus OK"),
         Err(e) => {
             eprintln!("derivation freeze self-check failed: {e}");
             std::process::exit(1);
@@ -499,14 +494,8 @@ fn run_derivation_freeze_self_check() {
 /// Parse the `--network` flag. Unknown values fail loud rather than
 /// defaulting to mainnet.
 fn parse_network(s: &str) -> Result<Network, String> {
-    match s {
-        "mainnet" => Ok(Network::Mainnet),
-        "testnet" => Ok(Network::Testnet),
-        "stagenet" => Ok(Network::Stagenet),
-        other => Err(format!(
-            "invalid --network '{other}': expected mainnet, testnet, or stagenet"
-        )),
-    }
+    s.parse::<Network>()
+        .map_err(|e| format!("invalid --network: {e}"))
 }
 
 /// The daemon-down hint (CU-1, CLI_USABILITY.md §CU-5 F1): when this run
@@ -523,15 +512,14 @@ fn daemon_down_hint(cli: &ReplArgs, address: &str) -> Option<String> {
         return None;
     }
     let network = parse_network(cli.network_name()).ok()?;
+    // Mainnet is the daemon's default network, so its invocation is flagless.
     let flag = match network {
-        Network::Mainnet => "",
-        Network::Testnet => " --network testnet",
-        Network::Stagenet => " --network stagenet",
+        Network::Mainnet => String::new(),
+        other => format!(" --network {other}"),
     };
     Some(format!(
-        "Start the {name} daemon with: shekyld{flag} (its RPC answers on port {port}).",
-        name = cli.network_name(),
-        port = network.daemon_rpc_port(),
+        "Start the {network} daemon with: shekyld{flag} (its RPC answers on port {port}).",
+        port = network.ports().rpc,
     ))
 }
 
@@ -549,12 +537,13 @@ fn run_repl_command(
     // No daemon endpoint, no daemon client — the REPL always resolves one,
     // so this reads as the total form of "dial what was resolved" rather
     // than as a case that happens here.
+    let network = parse_network(cli.network_name())?;
     let daemon_client = endpoints.daemon().and_then(|daemon| {
         match daemon::DaemonClient::new(
             &daemon.address,
             cli.proxy.as_deref(),
-            cli.daemon_ca_cert.as_deref(),
             daemon_down_hint(cli, &daemon.address),
+            network,
         ) {
             Ok(dc) => Some(dc),
             Err(daemon::DaemonError::NotConfigured) => None,
@@ -640,13 +629,7 @@ fn run_repl_command(
         }
     }
 
-    commands::run(
-        rpc,
-        daemon_client.as_ref(),
-        cli.network_name(),
-        *presentation,
-        source,
-    )
+    commands::run(rpc, daemon_client.as_ref(), network, *presentation, source)
 }
 
 #[cfg(test)]

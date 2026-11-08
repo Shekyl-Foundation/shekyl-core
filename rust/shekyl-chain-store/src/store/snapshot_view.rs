@@ -36,7 +36,7 @@ use shekyl_chain_rules::{
 };
 use shekyl_types::archival::{
     BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
-    SettlementRow,
+    SettlementRow, SupportSeats,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -309,6 +309,25 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
             .map_err(ReadFault::into_plain)
     }
 
+    fn support_issued(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::support_issued(self.snapshot.txn(), epoch, floor)
+            .map_err(ReadFault::into_plain)
+    }
+
+    fn support_settlement(
+        &self,
+        persona: &PCanonicalId,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SettlementRow>, StoreError> {
+        archival_reads::support_settlement(self.snapshot.txn(), persona, epoch, floor)
+            .map_err(ReadFault::into_plain)
+    }
+
     fn issued_digest(
         &self,
         epoch: SettlementEpoch,
@@ -334,6 +353,15 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
         floor: BlockDrawsFloor,
     ) -> Result<Option<BlockDraws>, StoreError> {
         archival_reads::block_draws(self.snapshot.txn(), height, floor)
+            .map_err(ReadFault::into_plain)
+    }
+
+    fn support_block_seats(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportSeats>, StoreError> {
+        archival_reads::support_block_seats(self.snapshot.txn(), height, floor)
             .map_err(ReadFault::into_plain)
     }
 
@@ -371,6 +399,59 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
     ) -> Result<Vec<archival_reads::LoggedSlash>, StoreError> {
         archival_reads::slash_log_rows_after(self.snapshot.txn(), height, floor)
             .map_err(ReadFault::into_plain)
+    }
+}
+
+/// The snapshot's bundle rows.
+///
+/// The view traits are implemented for every brand, and these reads do not
+/// use the brand, so each forward names one (`'static`). An invariant comes
+/// back as a plain [`StoreError`]: a snapshot arms nothing, and the caller
+/// latches the writer.
+impl super::bundle_view::BundleRows for SnapshotView<'_> {
+    fn arm_row(&self, row: StoreInvariant) -> StoreError {
+        row.into()
+    }
+
+    fn recorded_block_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<shekyl_wire::Block>, StoreError> {
+        let tip = self.tip_row()?;
+        let body = chain_reads::block_body(self.snapshot.txn(), tip.as_ref(), height.to_raw())
+            .map_err(ReadFault::into_plain)?;
+        Ok(match body {
+            AtHeight::AboveTip => AtHeight::AboveTip,
+            AtHeight::Recorded((_, block)) => AtHeight::Recorded(block),
+        })
+    }
+
+    fn block_draws_row(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<BlockDraws>, StoreError> {
+        <Self as ChainView<'static>>::block_draws(self, height, floor)
+    }
+
+    fn issued_draws_row(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        <Self as ChainView<'static>>::issued_draws(self, epoch, floor)
+    }
+
+    fn support_seats_row(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportSeats>, StoreError> {
+        <Self as ChainView<'static>>::support_block_seats(self, height, floor)
+    }
+
+    fn header_row(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreError> {
+        <Self as HeaderView<'static>>::header_at(self, height)
     }
 }
 

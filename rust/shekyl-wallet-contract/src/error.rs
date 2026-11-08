@@ -21,7 +21,7 @@ use shekyl_engine_prefs::PrefsError;
 use shekyl_engine_state::WalletLedgerError;
 use shekyl_engine_state::{SetNoteError, TxNoteTooLong};
 use shekyl_rpc_client::{
-    DaemonFault, DaemonNetwork, HashHex, IdentityMismatch, RejectCause, SubmitVerdict,
+    DaemonFault, HashHex, IdentityMismatch, Network, RejectCause, SubmitVerdict,
 };
 use thiserror::Error;
 
@@ -492,7 +492,7 @@ pub enum WalletRpcError {
         count: usize,
     },
     /// `-29015`: the curve-tree membership data is unavailable for this
-    /// session — its actor stopped and a respawn did not recover it.
+    /// session — its actor stopped, or its store would not rebuild.
     #[error("the wallet's membership data is unavailable — close and reopen the wallet")]
     CurveTreeUnavailable,
     /// `-29016`: the curve-tree store cannot be used. It holds no keys and
@@ -563,9 +563,9 @@ pub enum WalletRpcError {
     )]
     DaemonNetworkMismatch {
         /// The network this wallet is for.
-        wallet: DaemonNetwork,
+        wallet: Network,
         /// The network the daemon runs.
-        daemon: DaemonNetwork,
+        daemon: Network,
     },
     /// `-29208`: the daemon's chain starts at another genesis block.
     #[error(
@@ -574,7 +574,7 @@ pub enum WalletRpcError {
     )]
     DaemonChainMismatch {
         /// The network whose genesis was compared.
-        network: DaemonNetwork,
+        network: Network,
         /// The genesis block this wallet expects.
         wallet_genesis: HashHex,
         /// The daemon's genesis block.
@@ -817,7 +817,7 @@ pub enum WalletRpcError {
     )]
     StakeNoShardsAvailable,
 
-    /// `stake` (`-29506`): posture `foundation_complete_tree` was requested
+    /// `stake` (`-29506`): posture `support_complete_tree` was requested
     /// without `acknowledge_non_earning_unbounded`.
     ///
     /// **The message is the warning** ([`FOUNDATION_POSTURE_WARNING`]), not
@@ -1326,8 +1326,8 @@ impl WalletRpcError {
         }
     }
 
-    fn submit_rejected(cause: RejectCause) -> Self {
-        let verdict = SubmitVerdict::Rejected { cause };
+    fn submit_rejected(cause: RejectCause, row: Option<String>) -> Self {
+        let verdict = SubmitVerdict::Rejected { cause, row };
         let data = serde_json::to_value(verdict)
             .unwrap_or_else(|_| json!({ "verdict": "rejected", "cause": "unrecognized" }));
         Self::SubmitRejected { data }
@@ -1639,7 +1639,7 @@ pub(crate) fn from_daemon_fault(fault: DaemonFault, detail: &str) -> WalletRpcEr
     }
 }
 
-/// A curve-tree ingest failure that survived the engine's one respawn, by
+/// A curve-tree ingest failure that survived the engine's one rebuild, by
 /// its remedy. Reopening helps only where the session's tree is what
 /// failed; a fault a reopen reproduces never answers "close and reopen".
 fn from_curve_tree_ingest_fault(fault: CurveTreeIngestFault) -> WalletRpcError {
@@ -1649,7 +1649,7 @@ fn from_curve_tree_ingest_fault(fault: CurveTreeIngestFault) -> WalletRpcError {
         // session. A reopen reopens the store, which names its own fault.
         CurveTreeIngestFault::ActorUnavailable
         | CurveTreeIngestFault::ClientPoisoned
-        | CurveTreeIngestFault::RespawnFailed => WalletRpcError::CurveTreeUnavailable,
+        | CurveTreeIngestFault::RebuildFailed => WalletRpcError::CurveTreeUnavailable,
         // The daemon's data broke the contract: leaves its own header does not
         // commit to, or a block that does not decode.
         CurveTreeIngestFault::RootMismatch | CurveTreeIngestFault::BackfillBlockUndecodable => {
@@ -1875,6 +1875,7 @@ fn from_envelope_error(e: &WalletEnvelopeError, whole: &WalletFileError) -> Wall
         | E::CapContentLenMismatch { .. }
         | E::StateSeedBlockMismatch => WalletRpcError::WalletFileCorrupt,
         E::FormatVersionTooNew { .. }
+        | E::FormatVersionRetired { .. }
         | E::UnsupportedKdfAlgo(_)
         | E::UnsupportedWrapCount(_)
         | E::UnknownCapabilityMode(_) => WalletRpcError::WalletFileVersionUnsupported,
@@ -1931,7 +1932,6 @@ fn from_key_error(err: &KeyError) -> WalletRpcError {
             tracing::warn!("keys file public material does not match its seed");
             WalletRpcError::WalletFileCorrupt
         }
-        KeyError::UnsupportedDerivationPair => WalletRpcError::WalletFileVersionUnsupported,
         KeyError::Primitive { detail } => internal_detail("key derivation primitive", detail),
     }
 }
@@ -2172,11 +2172,15 @@ impl From<SubmitError> for WalletRpcError {
             SubmitError::ContentChanged { content_gen, .. } => {
                 Self::ContentGenMismatch { content_gen }
             }
-            SubmitError::DaemonRejectedTerminal { kind } => {
-                Self::submit_rejected(terminal_to_reject_cause(kind))
-            }
+            SubmitError::DaemonRejectedTerminal { kind } => Self::submit_rejected(
+                terminal_to_reject_cause(kind),
+                match kind {
+                    TerminalErrorKind::ConsensusRule { row } => Some(row.as_str().to_owned()),
+                    _ => None,
+                },
+            ),
             SubmitError::DaemonRejectedRetryable { cause, .. } => {
-                Self::submit_rejected(retryable_to_reject_cause(cause))
+                Self::submit_rejected(retryable_to_reject_cause(cause), None)
             }
             SubmitError::DaemonAmbiguous { .. } => Self::SubmitAmbiguous,
             SubmitError::SubmitAlreadyPending { .. } => Self::SubmitAlreadyPending,
@@ -2195,7 +2199,7 @@ fn terminal_to_reject_cause(kind: TerminalErrorKind) -> RejectCause {
         TerminalErrorKind::DoubleSpend => RejectCause::DoubleSpendConflict,
         TerminalErrorKind::FeeTooLow => RejectCause::FeeTooLow,
         TerminalErrorKind::Malformed => RejectCause::Malformed,
-        TerminalErrorKind::JoinMarketUnsupported => RejectCause::JoinMarketUnsupported,
+        TerminalErrorKind::ConsensusRule { .. } => RejectCause::ConsensusRule,
         // `TerminalErrorKind` is `#[non_exhaustive]`; `Unrecognized` and any
         // unknown future kinds take the fail-safe Unrecognized disposition
         // (DAEMON_SUBMIT_VERDICT §2.5).
@@ -2737,6 +2741,22 @@ mod tests {
         let data = err.data().expect("data");
         assert_eq!(data["verdict"], "rejected");
         assert_eq!(data["cause"], "fee_too_low");
+        assert!(
+            data.get("row").is_none(),
+            "no row for a cause that has none"
+        );
+
+        let row = shekyl_engine_core::engine::error::CenRowName::parse("CEN-J15").expect("fits");
+        let err: WalletRpcError = SubmitError::DaemonRejectedTerminal {
+            kind: TerminalErrorKind::ConsensusRule { row },
+        }
+        .into();
+        let data = err.data().expect("data");
+        assert_eq!(data["cause"], "consensus_rule");
+        assert_eq!(
+            data["row"], "CEN-J15",
+            "the row rides to the wallet's caller"
+        );
     }
 
     /// The WI-RPC-5 F-2 pin, mechanically: the five drain refusals carry
@@ -3166,6 +3186,13 @@ mod tests {
                 WalletRpcErrorCode::WalletFileVersionUnsupported,
             ),
             (
+                WalletFileError::Envelope(WalletEnvelopeError::FormatVersionRetired {
+                    got: 1,
+                    current: 2,
+                }),
+                WalletRpcErrorCode::WalletFileVersionUnsupported,
+            ),
+            (
                 WalletFileError::Payload(PayloadError::BadMagic),
                 WalletRpcErrorCode::WalletFileCorrupt,
             ),
@@ -3471,8 +3498,8 @@ mod tests {
             ),
             (
                 DaemonFault::Identity(IdentityMismatch::Network {
-                    ours: DaemonNetwork::Mainnet,
-                    theirs: DaemonNetwork::Testnet,
+                    ours: Network::Mainnet,
+                    theirs: Network::Testnet,
                 }),
                 C::DaemonNetworkMismatch,
                 Some(json!({ "wallet": "mainnet", "daemon": "testnet" })),
@@ -3481,7 +3508,7 @@ mod tests {
                 DaemonFault::Identity(IdentityMismatch::Genesis {
                     ours: digest(3),
                     theirs: digest(4),
-                    network: DaemonNetwork::Testnet,
+                    network: Network::Testnet,
                 }),
                 C::DaemonChainMismatch,
                 Some(json!({
@@ -3532,8 +3559,8 @@ mod tests {
         assert!(newer.message().contains("update this wallet"), "{newer}");
         let network = from_daemon_fault(
             DaemonFault::Identity(IdentityMismatch::Network {
-                ours: DaemonNetwork::Stagenet,
-                theirs: DaemonNetwork::Mainnet,
+                ours: Network::Stagenet,
+                theirs: Network::Mainnet,
             }),
             DAEMON_TEXT,
         );
@@ -3554,8 +3581,8 @@ mod tests {
             CollectUnstakedError, DrainToPrincipalError, FirstStakeError, UnstakeError,
         };
         let wrong_network = DaemonFault::Identity(IdentityMismatch::Network {
-            ours: DaemonNetwork::Mainnet,
-            theirs: DaemonNetwork::Testnet,
+            ours: Network::Mainnet,
+            theirs: Network::Testnet,
         });
         for (fault, code) in [
             (
@@ -3600,7 +3627,7 @@ mod tests {
         for (fault, code) in [
             (F::ActorUnavailable, C::CurveTreeUnavailable),
             (F::ClientPoisoned, C::CurveTreeUnavailable),
-            (F::RespawnFailed, C::CurveTreeUnavailable),
+            (F::RebuildFailed, C::CurveTreeUnavailable),
             (F::RootMismatch, C::DaemonProtocolViolation),
             (F::BackfillBlockUndecodable, C::DaemonProtocolViolation),
             (F::ClientRejected, C::InternalError),

@@ -18,9 +18,10 @@ use std::num::NonZeroU128;
 use shekyl_chain_rules::harness::fixture::{coinbase_extra, TWO_G};
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{
-    bind_body, form, form_header, judge_header, judge_header_cheap, seed_height, target_claim,
-    validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, HeaderView, OpenHeader,
-    ProspectFault, ReferenceClaims, ReleaseAnchors, RuleSet, Stale, Target, Trust,
+    bind_body, form, form_header, form_judged, judge_header, judge_header_cheap, seed_height,
+    target_claim, validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, FormClaims,
+    GenesisPin, HeaderView, OpenHeader, ProspectFault, ReferenceClaims, RuleSet, Stale, Target,
+    Trust,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{StoreError, WriteBatch};
@@ -32,9 +33,9 @@ use shekyl_wire::{BlockBody, PowBlob, SkeletonTx, TxBody};
 
 use crate::corpus::CorpusReader;
 use crate::source::{IngestEvent, Source};
-use crate::test_support::{cleanup, open_store_under, tmp};
+use crate::test_support::{open_store_under, tmp};
 use crate::vectors_tests::replay::rules_for;
-use crate::vectors_tests::{captured_chains, mock_with_the_real_clock, UntilRetiredJoin};
+use crate::vectors_tests::{captured_chains, mock_with_the_real_clock};
 
 /// What a path concluded. A stale claim is the world having moved, not a row.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,16 +48,13 @@ enum Said {
 
 fn load(dir: &std::path::Path, shape: &str) -> Vec<Candidate> {
     let bytes = std::fs::read(dir.join("corpus.e2")).expect("read corpus");
-    let mut reader = UntilRetiredJoin::new(
-        CorpusReader::open(Cursor::new(bytes.as_slice())).expect("open corpus"),
-    );
+    let mut reader = CorpusReader::open(Cursor::new(bytes.as_slice())).expect("open corpus");
     let mut blocks = Vec::new();
     while let Some(sequenced) = reader.next().expect("corpus reads") {
         if let IngestEvent::Extend(candidate) = sequenced.event {
             blocks.push(*candidate);
         }
     }
-    reader.finish(shape);
     assert!(!blocks.is_empty(), "{shape}: the corpus has no blocks");
     blocks
 }
@@ -125,7 +123,7 @@ where
         Ok(formed) => match judge_header(&formed, view, rule_set, trust) {
             Err(fault) => stale(&fault),
             Ok(Err(refused)) => Said::Refused(refused.rule),
-            Ok(Ok(judged)) => Said::Accepted(judged.cumulative_difficulty),
+            Ok(Ok(judged)) => Said::Accepted(judged.cumulative_difficulty()),
         },
     }
 }
@@ -143,11 +141,14 @@ fn validate_said<'id, V: ChainView<'id, Fault = StoreError>>(
         ReferenceClaims::from_headers(view, connecting(view), &candidate).expect("references");
     match form(
         candidate,
-        rule_set,
+        &FormClaims {
+            rule_set,
+            seed,
+            target,
+            references: &references,
+            network: trust.network_id(),
+        },
         substrate,
-        seed,
-        target,
-        &references,
         FormAttempt::FIRST,
     )
     .expect("the mock answers")
@@ -239,11 +240,14 @@ fn the_header_path_agrees_with_validate_on_every_captured_block() {
                         .expect("references");
                     let formed = form(
                         candidate.clone(),
-                        &rule_set,
+                        &FormClaims {
+                            rule_set: &rule_set,
+                            seed,
+                            target,
+                            references: &references,
+                            network: rules.trust().network_id(),
+                        },
                         substrate.as_ref(),
-                        seed,
-                        target,
-                        &references,
                         FormAttempt::FIRST,
                     )
                     .expect("the mock answers")
@@ -302,7 +306,6 @@ fn the_header_path_agrees_with_validate_on_every_captured_block() {
                 Ok(())
             })
             .unwrap_or_else(|e| panic!("{}: {e}", manifest.shape));
-        cleanup(&path);
     }
     assert!(blocks > 0, "no captured block was judged");
 }
@@ -350,11 +353,14 @@ fn at_first_later_block(
                     ReferenceClaims::from_headers(&view, height, candidate).expect("references");
                 let formed = form(
                     candidate.clone(),
-                    &rule_set,
+                    &FormClaims {
+                        rule_set: &rule_set,
+                        seed,
+                        target,
+                        references: &references,
+                        network: rules.trust().network_id(),
+                    },
                     substrate.as_ref(),
-                    seed,
-                    target,
-                    &references,
                     FormAttempt::FIRST,
                 )
                 .expect("mock")
@@ -368,7 +374,6 @@ fn at_first_later_block(
             panic!("the chain has no block after genesis");
         })
         .expect("write");
-    cleanup(&path);
 }
 
 /// Header mutations refuse on the same row on both paths. A wrong seed and
@@ -541,17 +546,26 @@ fn body_of(candidate: &Candidate) -> BlockBody {
     }
 }
 
-fn formed_header(
+fn judged_header<'id, V: HeaderView<'id>>(
     candidate: &Candidate,
+    view: &V,
     rule_set: &RuleSet,
+    trust: &Trust,
     substrate: &MockSubstrate,
     seed: BlockHash,
     target: Target,
-) -> shekyl_chain_rules::FormedHeader {
+) -> shekyl_chain_rules::HeaderJudged
+where
+    V::Fault: std::fmt::Debug,
+{
     let pow = PowBlob::read(&candidate.block.pow_blob()).expect("preimage");
-    form_header(&pow, rule_set, substrate, seed, target, FormAttempt::FIRST)
+    let formed = form_header(&pow, rule_set, substrate, seed, target, FormAttempt::FIRST)
         .expect("mock")
-        .expect("the header forms")
+        .expect("the header forms");
+    match judge_header(&formed, view, rule_set, trust).expect("the view answers") {
+        Ok(judged) => judged,
+        Err(refused) => panic!("an honest header was refused: {refused:?}"),
+    }
 }
 
 /// A substituted transaction, a reordered pair and a substituted witness
@@ -581,8 +595,15 @@ fn bind_body_agrees_with_validate() {
                     let rule_set = rules.in_force(height);
                     let seed = seed_of(&view, height);
                     let target = target_of(&view, height, &rule_set);
-                    let header =
-                        formed_header(candidate, &rule_set, substrate.as_ref(), seed, target);
+                    let header = judged_header(
+                        candidate,
+                        &view,
+                        &rule_set,
+                        &trust,
+                        substrate.as_ref(),
+                        seed,
+                        target,
+                    );
                     let intact = body_of(candidate);
                     assert_eq!(bind_body(&header, &intact), Ok(()));
 
@@ -676,11 +697,14 @@ fn bind_body_agrees_with_validate() {
                         .expect("references");
                     let formed = form(
                         candidate.clone(),
-                        &rule_set,
+                        &FormClaims {
+                            rule_set: &rule_set,
+                            seed,
+                            target,
+                            references: &references,
+                            network: rules.trust().network_id(),
+                        },
                         substrate.as_ref(),
-                        seed,
-                        target,
-                        &references,
                         FormAttempt::FIRST,
                     )
                     .expect("mock")
@@ -697,7 +721,6 @@ fn bind_body_agrees_with_validate() {
                 Ok(())
             })
             .unwrap_or_else(|e| panic!("{}: {e}", manifest.shape));
-        cleanup(&path);
     }
     assert!(substituted, "no listed transaction to substitute");
     assert!(reordered, "no block listed two transactions");
@@ -705,15 +728,15 @@ fn bind_body_agrees_with_validate() {
     assert!(witnessed, "no witness was substituted");
 }
 
-/// A block at an anchored height whose hash is not the anchor's is CEN-E1
-/// on both paths.
+/// A genesis candidate whose hash is not the pin is CEN-E1 on both paths.
+/// Nothing above height 0 is pinned, so the fixture is block 0.
 #[test]
-fn an_anchored_height_with_the_wrong_hash_is_e1_on_both_paths() {
+fn a_genesis_candidate_with_the_wrong_hash_is_e1_on_both_paths() {
     let (dir, manifest) = captured_chains().into_iter().next().expect("a chain");
     let chain = load(&dir, &manifest.shape);
     let rules = rules_for(&manifest);
-    let anchors = ReleaseAnchors::for_tests(Some(BlockHash::from_bytes([0xab; 32])), &[]);
-    let trust = Trust::full(anchors);
+    let pin = GenesisPin::for_tests(Some(BlockHash::from_bytes([0xab; 32])));
+    let trust = Trust::full(pin);
     let substrate = mock_with_the_real_clock();
     let path = tmp("header-path-anchor");
     let store = open_store_under(&path, &rules.in_force(BlockHeight::ZERO), ApplyPolicy::Full);
@@ -750,7 +773,6 @@ fn an_anchored_height_with_the_wrong_hash_is_e1_on_both_paths() {
             Ok(())
         })
         .expect("inspect");
-    cleanup(&path);
 }
 
 /// Bytes after a full transaction, or after a skeleton's pruned base, do
@@ -766,6 +788,7 @@ fn appended_bytes_are_not_the_transaction() {
         .expect("the spend chain");
     let chain = load(&dir, &manifest.shape);
     let rules = rules_for(&manifest);
+    let trust = rules.trust();
     let path = tmp("header-path-trailing");
     let store = open_store_under(&path, &rules.in_force(BlockHeight::ZERO), ApplyPolicy::Full);
     let mut pinned = false;
@@ -778,8 +801,15 @@ fn appended_bytes_are_not_the_transaction() {
                 let seed = seed_of(&view, height);
                 let target = target_of(&view, height, &rule_set);
                 if let Some(tx) = candidate.transactions.first() {
-                    let header =
-                        formed_header(candidate, &rule_set, substrate.as_ref(), seed, target);
+                    let header = judged_header(
+                        candidate,
+                        &view,
+                        &rule_set,
+                        &trust,
+                        substrate.as_ref(),
+                        seed,
+                        target,
+                    );
                     let mut full = body_of(candidate);
                     let trailing = {
                         let TxBody::Full(bytes) = &mut full.txs[0] else {
@@ -877,11 +907,14 @@ fn appended_bytes_are_not_the_transaction() {
                     ReferenceClaims::from_headers(&view, height, candidate).expect("references");
                 let formed = form(
                     candidate.clone(),
-                    &rule_set,
+                    &FormClaims {
+                        rule_set: &rule_set,
+                        seed,
+                        target,
+                        references: &references,
+                        network: rules.trust().network_id(),
+                    },
                     substrate.as_ref(),
-                    seed,
-                    target,
-                    &references,
                     FormAttempt::FIRST,
                 )
                 .expect("mock")
@@ -895,7 +928,6 @@ fn appended_bytes_are_not_the_transaction() {
             Ok(())
         })
         .expect("write");
-    cleanup(&path);
     assert!(pinned, "the chain listed no transaction");
 }
 
@@ -936,7 +968,6 @@ fn the_cheap_checks_name_the_version_and_do_not_hash() {
             Ok(())
         })
         .expect("inspect");
-    cleanup(&path);
 }
 
 /// All-ones under difficulty 2 fails CEN-D1. `form_header` and `form` both
@@ -975,11 +1006,14 @@ fn a_longhash_the_target_refuses_is_d1_on_both_paths() {
                 ReferenceClaims::from_headers(&view, height, &chain[0]).expect("references");
             match form(
                 chain[0].clone(),
-                &rule_set,
+                &FormClaims {
+                    rule_set: &rule_set,
+                    seed,
+                    target,
+                    references: &references,
+                    network: rules.trust().network_id(),
+                },
                 &substrate,
-                seed,
-                target,
-                &references,
                 FormAttempt::FIRST,
             )
             .expect("the mock answers")
@@ -990,5 +1024,75 @@ fn a_longhash_the_target_refuses_is_d1_on_both_paths() {
             Ok(())
         })
         .expect("inspect");
-    cleanup(&path);
+}
+
+/// Every captured block forms the same way from its judged header as from
+/// its bytes, and the header entry does not hash.
+#[test]
+fn a_judged_header_forms_the_block_without_hashing() {
+    let substrate = mock_with_the_real_clock();
+    for (dir, manifest) in captured_chains() {
+        let chain = load(&dir, &manifest.shape);
+        let rules = rules_for(&manifest);
+        let trust = rules.trust();
+        let path = tmp(&format!("header-path-proof-{}", manifest.shape));
+        let store = open_store_under(&path, &rules.in_force(BlockHeight::ZERO), ApplyPolicy::Full);
+        store
+            .write(|batch| -> Result<(), StoreError> {
+                for candidate in &chain {
+                    let view = batch.chain_view();
+                    let height = connecting(&view);
+                    let rule_set = rules.in_force(height);
+                    let seed = seed_of(&view, height);
+                    let target = target_of(&view, height, &rule_set);
+                    let judged = judged_header(
+                        candidate,
+                        &view,
+                        &rule_set,
+                        &trust,
+                        substrate.as_ref(),
+                        seed,
+                        target,
+                    );
+                    let references = ReferenceClaims::from_headers(&view, height, candidate)
+                        .expect("references");
+                    let from_bytes = form(
+                        candidate.clone(),
+                        &FormClaims {
+                            rule_set: &rule_set,
+                            seed,
+                            target,
+                            references: &references,
+                            network: rules.trust().network_id(),
+                        },
+                        substrate.as_ref(),
+                        FormAttempt::FIRST,
+                    )
+                    .expect("mock")
+                    .expect("forms from bytes");
+                    let from_header = form_judged(
+                        candidate.clone(),
+                        &judged,
+                        &references,
+                        &rules.trust().network_id(),
+                    )
+                    .expect("forms from the header");
+                    assert_eq!(from_header.coverage(), from_bytes.coverage());
+                    assert_eq!(from_header.rule_set(), from_bytes.rule_set());
+                    assert_eq!(from_header.seed(), from_bytes.seed());
+                    assert_eq!(from_header.target(), from_bytes.target());
+                    assert_eq!(from_header.attempt(), from_bytes.attempt());
+                    assert_eq!(from_header.judged_at(), from_bytes.judged_at());
+                    assert_eq!(from_header.hash(), from_bytes.hash());
+                    assert_eq!(from_header.pow(), from_bytes.pow());
+                    let valid = validate(from_bytes, &view, &rule_set, &trust)
+                        .expect("mock")
+                        .expect("connects");
+                    drop(view);
+                    batch.connect(valid, rule_set)?;
+                }
+                Ok(())
+            })
+            .unwrap_or_else(|e| panic!("{}: {e}", manifest.shape));
+    }
 }

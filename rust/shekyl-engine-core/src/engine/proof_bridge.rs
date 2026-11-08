@@ -28,6 +28,7 @@
 use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::output::{derive_proof_secrets, recover_combined_ss};
+use shekyl_network::NetworkId;
 use shekyl_proofs::reserve_proof::{self, ReserveOutputEntry};
 use shekyl_proofs::tx_proof;
 
@@ -51,6 +52,9 @@ pub(crate) struct InboundProofOutput {
 /// per-output proof secrets from its view material and signs with the
 /// view secret ([`tx_proof::generate_inbound_proof`]).
 pub(crate) struct InboundProofRequest {
+    /// The id of the network the proof is valid on: the envelope binding of
+    /// the frame its Schnorr signs (the signing envelope §2.3).
+    pub network_id: NetworkId,
     /// Hash of the transaction being proven.
     pub txid: [u8; 32],
     /// Canonical address bytes the proof binds to (the wallet's own
@@ -85,6 +89,9 @@ pub(crate) struct ReserveProofOutput {
 /// ([`reserve_proof::generate_reserve_proof`]). Every wallet is FULL
 /// (rule 23), so the spend secret is always present.
 pub(crate) struct ReserveProofRequest {
+    /// The id of the network the proof is valid on (the signing envelope
+    /// §2.3).
+    pub network_id: NetworkId,
     /// Canonical address bytes the proof binds to.
     pub address_bytes: Vec<u8>,
     /// Caller-supplied challenge message.
@@ -128,6 +135,7 @@ pub(crate) fn generate_inbound_proof(
         per_output.push((out.vout_index, ps));
     }
     Ok(tx_proof::generate_inbound_proof(
+        &req.network_id,
         local.keys.view_sk.as_canonical_bytes(),
         &req.txid,
         &req.address_bytes,
@@ -153,6 +161,7 @@ pub(crate) fn generate_reserve_proof(
         });
     }
     Ok(reserve_proof::generate_reserve_proof(
+        &req.network_id,
         local.keys.spend_sk.as_canonical_bytes(),
         &req.address_bytes,
         &req.message,

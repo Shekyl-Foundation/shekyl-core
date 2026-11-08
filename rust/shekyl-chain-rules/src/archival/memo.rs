@@ -9,6 +9,11 @@
 //! is rules-side state held by the connect loop. It is not a store table,
 //! not consensus state, not persisted, and not undone: an aborted batch's
 //! insert is keyed by a hash no later committed view asks for.
+//!
+//! The admission view reads this memo and does not rebuild. The count phase
+//! of the same block has already filed every epoch a section inside `W₂`
+//! can name, so a miss there is a sequencing fault (SI-35), not an absent
+//! set.
 
 use std::collections::BTreeMap;
 
@@ -116,6 +121,7 @@ mod tests {
             .to_receipt_sign_pk();
         DrawableEpoch::new(
             epoch,
+            std::num::NonZeroU64::new(2).map(shekyl_archival_retention::SupportRoster::empty),
             [(persona, key)],
             [DrawablePair {
                 persona,

@@ -29,6 +29,8 @@ use super::KeyEngineError;
 /// `#[non_exhaustive]` per the segment-2h binding form so V3.x daemon-
 /// rejection refinements (e.g., a future `DaemonOutOfMemory` triage
 /// hint) land additively.
+pub use shekyl_engine_state::pending_post_block::CenRowName;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TerminalErrorKind {
@@ -54,6 +56,14 @@ pub enum TerminalErrorKind {
     /// the spend-conflict and economic-policy classes.
     Malformed,
 
+    /// A consensus row refused the transaction against the chain at the
+    /// pool's commit (`RejectCause::ConsensusRule`): the bytes are sound and
+    /// the chain decides. Terminal; the record is held to its end date
+    /// (BD-Q3 Rule 2) and the user is told the row.
+    ConsensusRule {
+        /// The row, as the daemon named it.
+        row: CenRowName,
+    },
     /// The daemon rejected with a cause this wallet build does not
     /// know ([`RejectCause::Unrecognized`] per the §2.3 version-skew
     /// rules — an additive daemon-side cause landed before this wallet
@@ -63,31 +73,22 @@ pub enum TerminalErrorKind {
     ///
     /// [`RejectCause::Unrecognized`]: shekyl_rpc_client::RejectCause::Unrecognized
     Unrecognized,
-
-    /// The daemon cannot admit a JoinMarket bond post. Phases A–C passed.
-    /// Phase D's mutable re-checks do not run: the C++ commit step decodes
-    /// no JoinMarket form that carries a receipt key (`FN_DSA_HYBRID.md`
-    /// `FND-20`) and returns before `shekyl_submit_commit_tx`. The
-    /// capability refusal is the verdict, so a key-image or fee race is
-    /// reported as this kind. Resubmitting the same bytes to the same
-    /// daemon gets the same answer. Nothing was built wrong, so nothing is
-    /// rebuilt: the reservation is released and the stake waits for a
-    /// daemon that can take it (`DEL-008`).
-    JoinMarketUnsupported,
 }
 
 impl From<TerminalErrorKind> for shekyl_engine_state::pending_post_block::TerminalCause {
     /// The persisted cause a pending record keeps (BD-Q3 Rule 2). Exhaustive
     /// on purpose: a new terminal kind fails this match in review, where the
     /// persisted twin gains its variant (or the kind maps to `Unrecognized`).
+    /// The twin's `JoinMarketUnsupported` has no kind here: a pre-flip
+    /// daemon recorded it, and nothing produces it now.
     fn from(kind: TerminalErrorKind) -> Self {
         use shekyl_engine_state::pending_post_block::TerminalCause as C;
         match kind {
             TerminalErrorKind::DoubleSpend => C::DoubleSpend,
             TerminalErrorKind::FeeTooLow => C::FeeTooLow,
             TerminalErrorKind::Malformed => C::Malformed,
+            TerminalErrorKind::ConsensusRule { row } => C::ConsensusRule { row },
             TerminalErrorKind::Unrecognized => C::Unrecognized,
-            TerminalErrorKind::JoinMarketUnsupported => C::JoinMarketUnsupported,
         }
     }
 }

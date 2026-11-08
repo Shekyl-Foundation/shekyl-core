@@ -35,9 +35,20 @@ output; the transparency is scoped to the allocation itself.
 
 ## 2. Allocations
 
+Every network's genesis is built the same way (`NETWORK_IDENTITY.md`
+NI-R4): five recipients, the transaction key derived from the network's
+name and its recipients, and the block header with nonce 0. The pins live
+in the network table, `rust/shekyl-network/genesis/<network>.tx.hex` and
+`<network>.hash`.
+
 ### mainnet
 
 Source of truth: [`config/genesis_recipients.mainnet.json`](../config/genesis_recipients.mainnet.json)
+
+**Provisional.** Mainnet's recipients are re-derived by their custodians
+at the genesis ceremony under the current wallet derivation, and this
+table and the pin move with them (NI-R11; `docs/FOLLOWUPS.md`). The
+genesis below is not the one mainnet launches with.
 
 | # | Label | Amount | Address |
 |---|---|---|---|
@@ -50,9 +61,8 @@ Source of truth: [`config/genesis_recipients.mainnet.json`](../config/genesis_re
 Genesis identity:
 
 ```text
-GENESIS_NONCE  10000
-tx hash        a0fdfc7e4dab84e393f79ccf2c2f3783a95a9c1cdd9268c8d6221fdd9d582a90
-block id       d7af382339b2cd0c4ee4b2ea0afe7426f34bc2971495d9873fd4cec2107ad8ed
+tx hash        027cd4eab42c68d4906a5106d6015de2c5b7e9c7fd9b1bbad6ab311ee3e5d7ab
+block id       cdd7233fc45420c24b5e4eeae8636bb5a8c52b4e0d7efd92ed397e3cc89e2a55
 ```
 
 ### stagenet
@@ -61,18 +71,17 @@ Source of truth: [`config/genesis_recipients.stagenet.json`](../config/genesis_r
 
 | # | Label | Amount | Address |
 |---|---|---|---|
-| 1 | Founder allocation 1 | 20,000 SHEKYL | `sshekyl1q8tpl0cj…00568qam38dc` |
-| 2 | Founder allocation 2 | 20,000 SHEKYL | `sshekyl1q9fet8jh…4cy77qkxahm5` |
-| 3 | Founder allocation 3 | 20,000 SHEKYL | `sshekyl1qy69mmkk…xad49sykauun` |
-| 4 | Founder allocation 4 | 20,000 SHEKYL | `sshekyl1q92cx59c…lahv3s2z5yst` |
-| 5 | Founder allocation 5 | 20,000 SHEKYL | `sshekyl1qyspctq2…tw5cwsqk2u2q` |
+| 1 | Founder allocation 1 | 20,000 SHEKYL | `sshekyl1qyfcskvl…k7r4lqmna0wy` |
+| 2 | Founder allocation 2 | 20,000 SHEKYL | `sshekyl1q834vknk…cnyujq9hpd72` |
+| 3 | Founder allocation 3 | 20,000 SHEKYL | `sshekyl1qywmgzk8…vjc9eq945auw` |
+| 4 | Founder allocation 4 | 20,000 SHEKYL | `sshekyl1q8rk2wxf…mda6lqqt2rn4` |
+| 5 | Founder allocation 5 | 20,000 SHEKYL | `sshekyl1qxwz8w4h…qtthdq0qv0st` |
 
 Genesis identity:
 
 ```text
-GENESIS_NONCE  10002
-tx hash        7fed0e0eee3e36db2aee89ef2f4bf99823f72b37b0838eba6ce852b50150e854
-block id       371e8fa310afb0c6089e47398ebe02c4e2aa1820e8ccfd32e328558b99677c60
+tx hash        3396d303a926c50e8dc745915d91597ecdb7c20aebd8245cf2e8c1ad57b5688d
+block id       d986a79ea2320037878ff1b862af04a0827148b54e9f7f10283ca1bc038b87d2
 ```
 
 ### testnet
@@ -81,34 +90,45 @@ Source of truth: [`config/genesis_recipients.testnet.json`](../config/genesis_re
 
 | # | Label | Amount | Address |
 |---|---|---|---|
-| 1 | Developer 1 | 20,000 SHEKYL | `tshekyl1q849z9k4…7qun4s3prjf4` |
-| 2 | Developer 2 | 20,000 SHEKYL | `tshekyl1q9c7ffkn…yhzf4q5qx6yq` |
-| 3 | Developer 3 | 20,000 SHEKYL | `tshekyl1qxrg5vxx…2fg0zs9x74gn` |
-| 4 | Developer 4 | 20,000 SHEKYL | `tshekyl1q9h4aw68…0lkhnszd0epx` |
-| 5 | Developer 5 | 20,000 SHEKYL | `tshekyl1q8eagpjh…qnn9fq4jnkjy` |
+| 1 | Developer 1 | 20,000 SHEKYL | `tshekyl1qylh4dak…av8rvsxypdv0` |
+| 2 | Developer 2 | 20,000 SHEKYL | `tshekyl1qyqsj9em…qpv7ns64wtly` |
+| 3 | Developer 3 | 20,000 SHEKYL | `tshekyl1q9hqaurw…9u556su2pkz4` |
+| 4 | Developer 4 | 20,000 SHEKYL | `tshekyl1q8nx0z5w…5qv65qz3u27m` |
+| 5 | Developer 5 | 20,000 SHEKYL | `tshekyl1qxgvt06s…383jmsmk4cue` |
 
 Genesis identity:
 
 ```text
-GENESIS_NONCE  10102
-tx hash        c2750cb4fe1d6371066afeb8e3ccbfebd045b8324473e055c00a824e2d4f5fb3
-block id       e895bf2baa4ea4ccb07620d354e544a4be243bf329925f6a8a51631da18033da
+tx hash        a4ce0b6b0a434e77a5b31f58d2cc6516b5e224335bc397b371b3fa6715e82344
+block id       bb826da27e019532f22c199d366812e39c2e33de1b5bbae3f6352bccf4caaa7b
 ```
 
-The testnet nonce was `10101` (block id `52425d8d…c911d8`) through
-`v3.1.0-alpha.9`. It was moved for the next cut because a consensus rule
-changed with the genesis unchanged, which would have left the old and new
-builds sharing a network id (`RELEASE_PROMOTION.md` §6). The transaction, and
-so the allocations above, are the same.
+### regtest
+
+Source of truth: [`config/genesis_recipients.regtest.json`](../config/genesis_recipients.regtest.json)
+
+Regtest's recipients are test wallets whose seeds are published in the
+repository (`REGTEST_GENESIS_SEEDS`, `rust/shekyl-genesis-tool/src/table.rs`)
+so a regtest harness can spend its genesis outputs. They hold nothing of
+value and exist on no other network.
+
+| # | Label | Amount | Address |
+|---|---|---|---|
+| 1 | Regtest test wallet 1 | 20,000 SHEKYL | `rshekyl1q8kzj2s4…5k2f2svnjpx9` |
+| 2 | Regtest test wallet 2 | 20,000 SHEKYL | `rshekyl1q82e75az…h4vsksw663vd` |
+| 3 | Regtest test wallet 3 | 20,000 SHEKYL | `rshekyl1qytj4xn0…fsl4cq74lrau` |
+| 4 | Regtest test wallet 4 | 20,000 SHEKYL | `rshekyl1q97w3w35…sdtfxs03n8wc` |
+| 5 | Regtest test wallet 5 | 20,000 SHEKYL | `rshekyl1q8es9vja…8v86zsvcw5xy` |
+
+Genesis identity:
+
+```text
+tx hash        3a96f09b3b1cabc7b4bf7e3b0d91dbd9410f3f7180ee0874ec26503be1753b6e
+block id       a55e00d6677d3ad7f07e76e2255102ea761623bac23cc94d4185a0667b8a3825
+```
 
 Addresses are truncated above for readability only — the full strings are
 in the linked JSON files, which are the bytes genesis actually commits to.
-The 2026-08-16 fork-(ii) re-encode kept each recipient's spend/view/ek and
-filled `msg_sign_pk` so the files parse on the current layout. The same-day
-tx-key remint (`shekyl/genesis-txkey-v2`) binds the founding tx to that
-payment identity, not the Bech32m spelling, so a later layout correction
-cannot rotate the pinned bytes. The freeze ceremony (`geblock gen-wallets`)
-still replaces this set with seed-derived keys.
 Each address is a three-segment Bech32m string
 (`<classical>/<ML-KEM part A>/<ML-KEM part B>`) carrying the hybrid
 post-quantum key material Shekyl requires from genesis.
@@ -116,23 +136,24 @@ post-quantum key material Shekyl requires from genesis.
 ## 3. Reproducing genesis
 
 The genesis transaction key is **derived deterministically from the
-recipients file**, so the pinned `GENESIS_TX` is reproducible by anyone —
-you do not have to trust that the published addresses are the ones actually
-paid. From a checkout at the commit that pins this genesis:
+network's name and its recipients file**, so every pinned genesis is
+reproducible by anyone — you do not have to trust that the published
+addresses are the ones actually paid. From a checkout at the commit that
+pins this genesis:
 
 ```bash
 cd rust
 cargo run -p shekyl-genesis-tool --bin geblock -- verify
-cargo run -p shekyl-genesis-tool --bin geblock -- block-id --network mainnet
+cargo run -p shekyl-genesis-tool --bin geblock -- build --network mainnet > /dev/null
 ```
 
-`verify` rebuilds all three networks from the committed recipients files and
-byte-compares the result against the `GENESIS_TX` strings in
-[`src/cryptonote_config.h`](../src/cryptonote_config.h); `block-id` prints
-the block identity to check against the table above. CI runs the same
-byte-compare on every change
-(`rust/shekyl-genesis-tool/tests/config_pin_gate.rs`), so the pins and the
-published recipients cannot drift apart unnoticed.
+`verify` rebuilds all four networks from the committed recipients files and
+byte-compares each transaction and block hash against the network table's
+pins; `build` prints the transaction hash to check against the tables
+above. CI runs the same comparison on every change
+(`rust/shekyl-genesis-tool/tests/genesis_table.rs`), which also recomputes
+each pinned coinbase's transaction key from the network's name, so the
+pins, the names and the published recipients cannot drift apart unnoticed.
 
 ### Why the transaction key is public
 
@@ -147,40 +168,50 @@ founding block.
 Derivation (implemented in `rust/shekyl-genesis-tool/src/txkey.rs`):
 
 ```text
-M = varint(len(net)) ‖ net_ascii            net ∈ {mainnet, testnet, stagenet}
-    ‖ varint(n_recipients)
+R = varint(n_recipients)
     ‖ for each recipient, in file order:
         spend_pk(32) ‖ view_pk(32)
         ‖ varint(len(ek)) ‖ ek              ML-KEM-768 encap key
         ‖ amount_atomic as u64 little-endian
 
-seed      = cSHAKE256-32(customization = "shekyl/genesis-txkey-v2", input = M)
+seed      = frame("shekyl/genesis-txkey-v3", name_id, [R])     32 bytes
 tx_secret = seed reduced mod ℓ
 tx_pub    = tx_secret · G                   (the tx_extra 0x01 field)
 ```
 
+`frame` is the signing envelope's: cSHAKE256 under the customization,
+over the 16-byte binding and then each field behind its u64
+little-endian length. The binding is the network's `name_id`, derived
+from its name (`shekyl/network-name-v1`), the value every key derivation
+is salted with. This is how genesis commits to the network's name
+(NI-R12): the same recipients under another name give another key, so
+another transaction and another block.
+
 ## 4. Key custody
 
-The recipient wallets were generated with fresh operating-system entropy
-(`geblock gen-wallets`), one seed per wallet, captured once at generation:
-24-word BIP-39 mnemonics on mainnet and stagenet, 32-byte seeds on testnet.
-No component of the Shekyl stack can re-export a seed after creation, and
-each wallet was restore-verified from its written seed before its address
-was committed here.
+Testnet's and stagenet's recipient wallets were generated on 2026-11-04,
+under the derivation salt `name_id ‖ shekyl-master-derive-v3`, with fresh
+operating-system entropy (`geblock gen-wallets`), one 32-byte
+seed per wallet, written once as its 24 BIP-39 words to custody files
+outside any repository; every address is decoded back for its network
+before it is written. Mainnet's custodians generate theirs the same way at
+the genesis ceremony. No component of the Shekyl stack can re-export a seed
+after creation.
 
-Only public addresses appear in this repository. Seed material has never
-been committed to any repository and is held offline by the individual
-recipients.
+Only public addresses appear in this repository. Seed material for
+mainnet, stagenet and testnet has never been committed to any repository
+and is held offline. Regtest's seeds are the exception, published on
+purpose (§2).
 
 ## 5. Change policy
 
 Genesis is frozen at launch: after the first block is mined on a network,
 its allocations cannot change. Before launch, any change to this table
 means regenerating the genesis transaction and re-pinning every derived
-artifact together — the procedure is
-`shekyl-dev/docs/GENESIS_WALKTHROUGH.md`. `GENESIS_NONCE` is unchanged by
-allocation edits. `NETWORK_ID` is not a constant beside the chain: it is
-the first 16 bytes of
+artifact together: `geblock pin` writes the network table's pins, and
+the procedure is `shekyl-dev/docs/GENESIS_WALKTHROUGH.md`. The header nonce
+is 0 on every network. The network id is not a constant beside the chain:
+it is the first 16 bytes of
 `cSHAKE256(S = "shekyl/p2p-network-id-v1", X = genesis_block_hash)`, so
 regenerating the genesis transaction rotates it. There is no id byte to
 leave untouched.

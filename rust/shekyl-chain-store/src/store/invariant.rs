@@ -39,7 +39,7 @@ pub enum StoreInvariant {
     ///
     /// Armed by the parent-is-tip pre-check in `connect` and by the
     /// insert-once handles on `blocks` / `block_heights` / `block_info` /
-    /// `hf_versions` / `block_burn`.
+    /// `rule_set_in_force` / `block_burn`.
     TipMismatch,
     /// **SI-3** — `tx_indices` is keyed by tx hash: inserting a hash already
     /// present is fatal (CEN-G1's belt; CEN-F5's corollary for the miner
@@ -304,10 +304,10 @@ pub enum StoreInvariant {
     /// plus the `txs_archival_len` rows (absent ⇔ `0`) of the storage ids
     /// `h` issued (`SHT-Q2`). `connect` writes both from one measurement of
     /// the segments, so they cannot disagree at the write; a disagreement
-    /// is a row or a cell changed under the store. Armed by the prune's
-    /// descent (`prune.rs` `walk_block`), which checks every block it
-    /// passes and would otherwise place a shard boundary by a cell the rows
-    /// do not support.
+    /// is a row or a cell changed under the store. Armed by
+    /// `archival_fold::block_span`, which the prune descent and the shard
+    /// read both call. Either would otherwise place a shard boundary by a
+    /// cell the rows do not support.
     ArchivalLengthsDisagree {
         /// The height whose rows were summed.
         height: u64,
@@ -320,11 +320,13 @@ pub enum StoreInvariant {
     /// The `archival_issued_draw` rows of an epoch fold to
     /// `archival_issued_digest[E]` ([`SettlementFault::IndexDrift`]); the
     /// fold counts no more passes for a pair than draws it selected
-    /// ([`SettlementFault::PassesExceedCounted`]); the settlement beacon is
-    /// a block strictly below the connecting height
+    /// ([`SettlementFault::PassesExceedCounted`]); the support fold counts
+    /// no more passes for a tree than support draws it was issued
+    /// ([`SettlementFault::SupportPassesExceedCounted`]); the settlement
+    /// beacon is a block strictly below the connecting height
     /// ([`SettlementFault::BeaconNotRecorded`]); and `archival_settlement`
     /// holds one row per `(persona, shard, epoch)`, written once
-    /// ([`SettlementFault::AlreadySettled`]). The first three are observed
+    /// ([`SettlementFault::AlreadySettled`]). The first four are observed
     /// by the validator, which computes the rows, and arrive through
     /// `refuse_corrupt`; the last is the store's own, at the insert. Armed
     /// by the slash pass (`ARCHIVAL_SETTLEMENT_WRITER.md` §14;
@@ -456,17 +458,163 @@ pub enum StoreInvariant {
         /// Which half failed.
         observed: DrawRowFault,
     },
-    /// **SI-34** — `archival_block_draws` is read only where it is kept.
-    /// The floor is [`shekyl_chain_rules::BlockDrawsFloor`], a consensus
-    /// expression the store compares and does not source. Absent is *never
-    /// written*; a row below the floor may have been written and retired.
-    /// Fatal, never a verdict on the block.
+    /// **SI-34** — the draw-family rows are read only where they are kept.
+    /// `archival_block_draws` and `archival_support_block` share
+    /// [`shekyl_chain_rules::BlockDrawsFloor`], a consensus expression the
+    /// store compares and does not source. Absent is *never written*; a
+    /// row below the floor may have been written and retired. Fatal, never
+    /// a verdict on the block.
     BlockDrawsReadBelowFloor {
         /// The height asked for.
         asked: shekyl_types::BlockHeight,
         /// The first height still retained.
         floor: shekyl_types::BlockHeight,
     },
+    /// **SI-35** — the admission view reads `D` from the count phase's memo,
+    /// under the opening block's hash. A miss is not a rebuild and not an
+    /// absent set: the count phase of this block already filed every epoch a
+    /// section inside `W₂` can name. Fatal, never a verdict on the block.
+    DrawableMemoMiss {
+        /// The epoch the view was asked for.
+        epoch: shekyl_types::SettlementEpoch,
+    },
+    /// **SI-36** — admission writes each reveal once, and the shortfall
+    /// reduction and the draw ordinal fit the row. A second reveal of `h`,
+    /// a missing draw row, a reduction past `u32`, or an ordinal the
+    /// issued-draw key cannot hold is this halt. Fatal, never a verdict
+    /// on the block.
+    AdmissionWrite {
+        /// The height the write was about: the revealed block, or `h_incl`.
+        height: shekyl_types::BlockHeight,
+        /// Which check failed.
+        observed: AdmissionWriteFault,
+    },
+    /// **SI-37** — `visibly_short` was asked for an index `D` does not
+    /// contain. The verifier derives every index from `D`, so an honest
+    /// admission does not ask this. It is not a memo miss: the set was
+    /// there. Raised before any write. Fatal, never a verdict on the block.
+    DrawableIndexPastSet {
+        /// The height whose drawable set was indexed.
+        height: shekyl_types::BlockHeight,
+        /// The index the set does not contain.
+        index: u64,
+    },
+    /// **SI-38** — a recorded block's coinbase extra does not yield exactly
+    /// one draw commitment. Above the tip is an unanswered bundle, not this
+    /// row. A parse failure, no `0x0C` field, or two of them is this halt.
+    /// The all-zero commitment is a commitment: genesis publishes it.
+    /// Fatal, never a verdict on the block.
+    DrawCommitmentUnreadable {
+        /// The recorded height whose extra was read.
+        height: shekyl_types::BlockHeight,
+    },
+    /// **SI-39** — a pair's visible issued-draw count does not fit the `u32`
+    /// the reduction counts. The count is not saturated, and it is not
+    /// SI-36's reduction width. Fatal, never a verdict on the block.
+    VisibleDrawCountPastWidth {
+        /// The height the reduction was counted below.
+        height: shekyl_types::BlockHeight,
+    },
+    /// **SI-40** — `archival_support_block` holds one seat row per
+    /// connected height. A second insert is a rewrite. The row is the
+    /// complete trees the block seated, in persona order; its length is how
+    /// many support draws the block issued. A block that seated nobody has
+    /// the empty row, [`shekyl_types::archival::SupportSeats::EMPTY`]. A
+    /// missing row is a height the writer did not run for, and that absence
+    /// is not the empty row. The row retires with the draw rows (SI-34).
+    /// Fatal, never a verdict on the block.
+    SupportBlockNotSingular {
+        /// The height whose row was being written.
+        height: shekyl_types::BlockHeight,
+    },
+    /// **SI-41** — every stored bundle body has a holder, and every queue
+    /// entry's body is stored (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5). In
+    /// `SO-D12` increment 4c the bundle queue is the only holder kind; an
+    /// alternative block and a main-chain block not past `D_max` are 4b's.
+    /// The open reconciles the two tables and reports what it dropped;
+    /// after it, a read of the queue that finds them apart is this halt.
+    /// Not chain state, so it poisons the batch and leaves the writer
+    /// live. Never a verdict on a block.
+    BundleBodyHolder(BodyHolderFault),
+    /// **SI-42** — the archival good is one unit (`PDM-Q6` item 1; `SB-Q2`).
+    /// A 4-part transaction's prunable region (`txs_prunable[id]`) and its
+    /// `pqc_auths` region (`txs_pqc_auths[id]`) are written together by
+    /// `connect` and discarded together by the retention prune, which
+    /// deletes both tables over one id range (`prune.rs`). A read that finds
+    /// one held and the other not is this halt: it is neither §7.7 leg
+    /// (iii)'s discarded state nor a recorded body, and no path writes it.
+    /// Fatal, never a verdict on a block.
+    ArchivalGoodHalfHeld {
+        /// The storage id whose two regions disagree.
+        id: crate::ids::TxStorageId,
+        /// Which region is held; the other is not.
+        held: HeldRegion,
+    },
+    /// **SI-43** — a block's seat row equals its epoch's schedule
+    /// ([`shekyl_chain_rules::scheduled_seats`], compared by
+    /// [`shekyl_types::archival::SupportSeats::first_one_sided`]; `SO-D12`
+    /// S1). The
+    /// store's bundle view checks it when admission reads a roster. A
+    /// persona on only one side is this halt: a member the schedule does
+    /// not seat, a stranger, and a scheduled member the row dropped. The
+    /// carry is staged and is not consulted; when it joins the transition
+    /// the seats it writes are the schedule this comparison takes. Raised
+    /// before any write. Fatal, never a verdict on the block.
+    SupportSeatsNotScheduled {
+        /// The height whose roster was read.
+        height: shekyl_types::BlockHeight,
+        /// The first persona, in persona order, present on only one side.
+        persona: shekyl_types::PCanonicalId,
+    },
+}
+
+/// Which half of a half-held archival good is present (payload of
+/// [`StoreInvariant::ArchivalGoodHalfHeld`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeldRegion {
+    /// `txs_prunable[id]` is present and `txs_pqc_auths[id]` is not, under
+    /// a `txs_pqc_auth_hash` row that says the txid is 4-part.
+    Prunable,
+    /// `txs_pqc_auths[id]` is present and `txs_prunable[id]` is not.
+    PqcAuths,
+}
+
+/// What an SI-41 check observed (payload of
+/// [`StoreInvariant::BundleBodyHolder`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BodyHolderFault {
+    /// A queue entry names a body the body store does not hold.
+    EntryWithoutBody {
+        /// The entry's block.
+        h: shekyl_types::BlockHeight,
+    },
+    /// A stored body no queue entry names.
+    BodyWithoutHolder,
+    /// A queue entry's reference is for another block than its key.
+    EntryNotItsHeight {
+        /// The key the entry is stored under.
+        h: shekyl_types::BlockHeight,
+    },
+    /// A rewrite named a height the queue does not hold. The single writer
+    /// classified the row and then did not find it: the caller's picture of
+    /// the queue and the table disagree.
+    EntryAbsent {
+        /// The height the rewrite named.
+        h: shekyl_types::BlockHeight,
+    },
+}
+
+/// What an SI-36 check observed (payload of [`StoreInvariant::AdmissionWrite`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdmissionWriteFault {
+    /// `revealed` was already set. A bundle reveals `h` once.
+    AlreadyRevealed,
+    /// The shortfall reduction does not fit in `issued_short`.
+    ReductionPastWidth,
+    /// The revealed block, or `h_incl`, has no draw row to update.
+    RowAbsent,
+    /// A draw's place in its bundle does not fit the issued-draw key.
+    OrdinalPastWidth,
 }
 
 /// What an SI-33 check observed (payload of
@@ -535,6 +683,13 @@ pub enum SettlementFault {
         /// The shard of the pair.
         shard: shekyl_types::ShardId,
     },
+    /// The support fold counted more passes for the tree than support
+    /// draws it was issued. One row per tree, so the fault names the tree.
+    /// A defect of the fold, not a state a file can hold.
+    SupportPassesExceedCounted {
+        /// The tree.
+        persona: shekyl_types::PCanonicalId,
+    },
     /// The settlement beacon's block is not recorded strictly below the
     /// connecting height. The slash grace puts it there on every schedule
     /// that has a response window; a re-pin that does not is this halt,
@@ -547,6 +702,12 @@ pub enum SettlementFault {
         persona: shekyl_types::PCanonicalId,
         /// The shard of the pair.
         shard: shekyl_types::ShardId,
+    },
+    /// `archival_support_settlement` already holds a row for the tree in
+    /// this epoch.
+    SupportAlreadySettled {
+        /// The tree.
+        persona: shekyl_types::PCanonicalId,
     },
 }
 
@@ -675,6 +836,15 @@ impl StoreInvariant {
             Self::EpochReadBelowFloor { .. } => 32,
             Self::BlockDrawsNotSingular { .. } => 33,
             Self::BlockDrawsReadBelowFloor { .. } => 34,
+            Self::DrawableMemoMiss { .. } => 35,
+            Self::AdmissionWrite { .. } => 36,
+            Self::DrawableIndexPastSet { .. } => 37,
+            Self::DrawCommitmentUnreadable { .. } => 38,
+            Self::VisibleDrawCountPastWidth { .. } => 39,
+            Self::SupportBlockNotSingular { .. } => 40,
+            Self::BundleBodyHolder(_) => 41,
+            Self::ArchivalGoodHalfHeld { .. } => 42,
+            Self::SupportSeatsNotScheduled { .. } => 43,
         }
     }
 }
@@ -853,6 +1023,11 @@ impl core::fmt::Display for StoreInvariant {
                     "settling ({persona}, {shard}) for epoch {epoch} counted more passes than \
                      draws selected; the settlement fold is defective"
                 ),
+                SettlementFault::SupportPassesExceedCounted { persona } => write!(
+                    f,
+                    "settling complete tree {persona} for epoch {epoch} counted more passes \
+                     than support draws issued; the settlement fold is defective"
+                ),
                 SettlementFault::BeaconNotRecorded => write!(
                     f,
                     "the settlement beacon of epoch {epoch} is not recorded strictly below \
@@ -861,6 +1036,11 @@ impl core::fmt::Display for StoreInvariant {
                 SettlementFault::AlreadySettled { persona, shard } => write!(
                     f,
                     "archival_settlement already holds ({persona}, {shard}, {epoch}); an epoch \
+                     settles once"
+                ),
+                SettlementFault::SupportAlreadySettled { persona } => write!(
+                    f,
+                    "archival_support_settlement already holds ({persona}, {epoch}); a tree \
                      settles once"
                 ),
             },
@@ -935,11 +1115,88 @@ impl core::fmt::Display for StoreInvariant {
                      the block corpus"
                 ),
             },
+            Self::AdmissionWrite { height, observed } => match observed {
+                AdmissionWriteFault::AlreadyRevealed => write!(
+                    f,
+                    "archival_block_draws at height {height} is already revealed; a bundle \
+                     reveals a block's seed once"
+                ),
+                AdmissionWriteFault::ReductionPastWidth => write!(
+                    f,
+                    "the shortfall reduction at height {height} does not fit issued_short"
+                ),
+                AdmissionWriteFault::RowAbsent => write!(
+                    f,
+                    "admission was asked to update the draw row at height {height}, and that \
+                     row was never written"
+                ),
+                AdmissionWriteFault::OrdinalPastWidth => write!(
+                    f,
+                    "a draw ordinal at height {height} does not fit the issued-draw key"
+                ),
+            },
+            Self::DrawableIndexPastSet { height, index } => write!(
+                f,
+                "visibly_short at height {height} was asked for index {index}, which the \
+                 drawable set does not contain"
+            ),
+            Self::DrawCommitmentUnreadable { height } => write!(
+                f,
+                "the block at height {height} is recorded and its coinbase extra does not \
+                 yield exactly one draw commitment"
+            ),
+            Self::VisibleDrawCountPastWidth { height } => write!(
+                f,
+                "a pair's visible issued draws at height {height} do not fit the u32 the \
+                 reduction counts"
+            ),
+            Self::SupportBlockNotSingular { height } => write!(
+                f,
+                "archival_support_block already holds height {height}; a block records its \
+                 support seats once"
+            ),
+            Self::BundleBodyHolder(BodyHolderFault::EntryWithoutBody { h }) => write!(
+                f,
+                "the bundle queue's entry for height {h} names a body the body store does not \
+                 hold; an entry and its body are written and removed together"
+            ),
+            Self::BundleBodyHolder(BodyHolderFault::BodyWithoutHolder) => f.write_str(
+                "the body store holds a bundle body no holder names; every body has a holder",
+            ),
+            Self::BundleBodyHolder(BodyHolderFault::EntryNotItsHeight { h }) => write!(
+                f,
+                "the bundle queue's entry under height {h} is a reference for another block"
+            ),
+            Self::BundleBodyHolder(BodyHolderFault::EntryAbsent { h }) => write!(
+                f,
+                "the bundle queue has no entry at height {h}; a rewrite names a row the table does not hold"
+            ),
+            Self::ArchivalGoodHalfHeld { id, held } => {
+                let (held, missing) = match held {
+                    HeldRegion::Prunable => ("txs_prunable", "txs_pqc_auths"),
+                    HeldRegion::PqcAuths => ("txs_pqc_auths", "txs_prunable"),
+                };
+                write!(
+                    f,
+                    "transaction {id} holds its {held} region and not its {missing} region; the \
+                     archival good is one unit, held or discarded together"
+                )
+            }
+            Self::SupportSeatsNotScheduled { height, persona } => write!(
+                f,
+                "the seat row at height {height} is not the schedule: {persona:?} is on only \
+                 one side"
+            ),
+            Self::DrawableMemoMiss { epoch } => write!(
+                f,
+                "the admission view has no drawable set for epoch {epoch} under the opening \
+                 block's hash; the count phase files that set before admission reads it"
+            ),
             Self::BlockDrawsReadBelowFloor { asked, floor } => write!(
                 f,
-                "archival_block_draws was asked for height {asked} while rows below {floor} may \
-                 be retired; a reader asked outside the window its own rule set keeps — the \
-                 schedule is mis-composed, not the data"
+                "archival_block_draws and archival_support_block were asked for height {asked} \
+                 while rows below {floor} may be retired; a reader asked outside the window its \
+                 own rule set keeps — the schedule is mis-composed, not the data"
             ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
@@ -992,6 +1249,15 @@ impl core::error::Error for StoreInvariant {
             | Self::EpochReadBelowFloor { .. }
             | Self::BlockDrawsNotSingular { .. }
             | Self::BlockDrawsReadBelowFloor { .. }
+            | Self::DrawableMemoMiss { .. }
+            | Self::AdmissionWrite { .. }
+            | Self::DrawableIndexPastSet { .. }
+            | Self::DrawCommitmentUnreadable { .. }
+            | Self::VisibleDrawCountPastWidth { .. }
+            | Self::SupportBlockNotSingular { .. }
+            | Self::BundleBodyHolder(_)
+            | Self::ArchivalGoodHalfHeld { .. }
+            | Self::SupportSeatsNotScheduled { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

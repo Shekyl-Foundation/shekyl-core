@@ -7,7 +7,8 @@
 //!
 //! A child of `archival_write_tests` so these tests call that file's
 //! `connect_empty` and `pop`. A windowless schedule writes
-//! [`BlockDraws::ZERO`] and the boundary retires it. The next height reads
+//! [`BlockDraws::ZERO`] and [`SupportSeats::EMPTY`], and the boundary
+//! retires both on the same floor. The next height reads
 //! the prior row, and an opening block starts again from [`BlockDraws::ZERO`].
 //! A reduction past the shortfall, and a missing prior row, halt the writer
 //! through `refuse_corrupt` (SI-33).
@@ -15,13 +16,13 @@
 use shekyl_archival_retention::{draw_count, draw_horizon};
 use shekyl_chain_rules::{BlockDrawsFloor, Corrupt, DrawCountFault, RuleSet};
 use shekyl_store_codec::Canonical;
-use shekyl_types::archival::BlockDraws;
+use shekyl_types::archival::{BlockDraws, SupportSeats};
 use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::apply_policy::ApplyPolicy;
 
 use super::super::connect_fixtures::Grown;
-use super::super::store_tests::{cleanup, tmp, TestErr};
+use super::super::store_tests::{tmp, TestErr};
 use super::super::{ChainStore, Horizons, StoreError, StoreInvariant};
 use super::{connect_empty, pair, pop};
 
@@ -33,6 +34,18 @@ fn draws_of(store: &ChainStore, height: BlockHeight, floor: BlockDrawsFloor) -> 
         .expect("the floor admits the read")
 }
 
+fn support_of(
+    store: &ChainStore,
+    height: BlockHeight,
+    floor: BlockDrawsFloor,
+) -> Option<SupportSeats> {
+    store
+        .begin_read()
+        .expect("read")
+        .support_block_seats(height, floor)
+        .expect("the floor admits the read")
+}
+
 /// A windowless schedule writes a zero row at every height, including the
 /// opening block. The boundary of `B` retires below `(B − 1)·SEB`, and a
 /// pop does not put a retired row back. Red edit: skip the row, or retire
@@ -40,7 +53,7 @@ fn draws_of(store: &ChainStore, height: BlockHeight, floor: BlockDrawsFloor) -> 
 #[test]
 fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     let path = tmp("windowless_draws");
-    let rules = RuleSet::fakechain(None, pair(2, 1));
+    let rules = RuleSet::GENESIS.with_levers(None, pair(2, 1));
     let store = ChainStore::with_horizons(
         &path,
         ApplyPolicy::Full,
@@ -57,9 +70,14 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     for height in 0u64..=3 {
         let delta = connect_empty(&store, &mut grown, rules);
         assert_eq!(delta.draws(), zero);
+        assert_eq!(delta.support_seats(), &SupportSeats::EMPTY);
         assert_eq!(
             draws_of(&store, BlockHeight::from_raw(height), BlockDrawsFloor::NONE),
             Some(zero)
+        );
+        assert_eq!(
+            support_of(&store, BlockHeight::from_raw(height), BlockDrawsFloor::NONE),
+            Some(SupportSeats::EMPTY)
         );
     }
     pop(&store);
@@ -68,14 +86,23 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
         draws_of(&store, BlockHeight::from_raw(3), BlockDrawsFloor::NONE),
         None
     );
+    assert_eq!(
+        support_of(&store, BlockHeight::from_raw(3), BlockDrawsFloor::NONE),
+        None
+    );
     let delta = connect_empty(&store, &mut grown, rules);
     assert_eq!(delta.draws(), zero);
 
     // Height 4 is the boundary of B = 2. Rows strictly below `(2 − 1)·2` go.
     let delta = connect_empty(&store, &mut grown, rules);
     assert_eq!(delta.draws(), zero);
+    assert_eq!(delta.support_seats(), &SupportSeats::EMPTY);
     assert_eq!(
         draws_of(&store, BlockHeight::from_raw(0), BlockDrawsFloor::NONE),
+        None
+    );
+    assert_eq!(
+        support_of(&store, BlockHeight::from_raw(0), BlockDrawsFloor::NONE),
         None
     );
     assert_eq!(
@@ -83,12 +110,24 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
         None
     );
     assert_eq!(
+        support_of(&store, BlockHeight::from_raw(1), BlockDrawsFloor::NONE),
+        None
+    );
+    assert_eq!(
         draws_of(&store, BlockHeight::from_raw(2), BlockDrawsFloor::NONE),
         Some(zero)
     );
     assert_eq!(
+        support_of(&store, BlockHeight::from_raw(2), BlockDrawsFloor::NONE),
+        Some(SupportSeats::EMPTY)
+    );
+    assert_eq!(
         draws_of(&store, BlockHeight::from_raw(4), BlockDrawsFloor::NONE),
         Some(zero)
+    );
+    assert_eq!(
+        support_of(&store, BlockHeight::from_raw(4), BlockDrawsFloor::NONE),
+        Some(SupportSeats::EMPTY)
     );
 
     let floor = BlockDrawsFloor::retired_by(2, rules.settlement_schedule());
@@ -107,6 +146,21 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
         ),
         "{refused:?}"
     );
+    let refused_support = store
+        .begin_read()
+        .expect("read")
+        .support_block_seats(BlockHeight::ZERO, floor)
+        .unwrap_err();
+    assert!(
+        matches!(
+            refused_support,
+            StoreError::InvariantViolated(StoreInvariant::BlockDrawsReadBelowFloor {
+                asked,
+                floor: kept
+            }) if asked == BlockHeight::ZERO && kept == floor.height().expect("a floor")
+        ),
+        "{refused_support:?}"
+    );
 
     pop(&store);
     grown.pop();
@@ -118,16 +172,21 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
         draws_of(&store, BlockHeight::from_raw(4), BlockDrawsFloor::NONE),
         None
     );
+    assert_eq!(
+        support_of(&store, BlockHeight::from_raw(4), BlockDrawsFloor::NONE),
+        None
+    );
     let delta = connect_empty(&store, &mut grown, rules);
     assert_eq!(delta.draws(), zero);
+    assert_eq!(delta.support_seats(), &SupportSeats::EMPTY);
     assert_eq!(
         draws_of(&store, BlockHeight::from_raw(0), BlockDrawsFloor::NONE),
         None
     );
-    cleanup(&path);
 }
 
-fn plant_draws(path: &std::path::Path, height: BlockHeight, row: BlockDraws) {
+fn plant_draws(path: impl AsRef<std::path::Path>, height: BlockHeight, row: BlockDraws) {
+    let path: &std::path::Path = path.as_ref();
     super::super::archival_read_tests::plant(path, |txn| {
         let mut table = txn
             .open_table(crate::schema::ARCHIVAL_BLOCK_DRAWS)
@@ -146,7 +205,7 @@ fn plant_draws(path: &std::path::Path, height: BlockHeight, row: BlockDraws) {
 #[test]
 fn the_count_reads_the_prior_row_and_resets_at_the_opening_block() {
     let path = tmp("draw_count_order");
-    let rules = RuleSet::fakechain(None, pair(20, 1));
+    let rules = RuleSet::GENESIS.with_levers(None, pair(20, 1));
     let horizons = Horizons::new(
         rules.settlement_schedule().blocks(),
         BlockCount::from_raw(4),
@@ -173,8 +232,15 @@ fn the_count_reads_the_prior_row_and_resets_at_the_opening_block() {
         .challenge_response_blocks()
         .expect("20 blocks has a window of 1")
         .get();
-    let (count, carry) = draw_count(0, 750, draw_horizon(1, 20, window), 20, planted.carry)
-        .expect("the horizon fits");
+    let (count, carry) = draw_count(
+        0,
+        750,
+        draw_horizon(1, 20, window, shekyl_archival_retention::archival_params()),
+        20,
+        planted.carry,
+        shekyl_archival_retention::archival_params(),
+    )
+    .expect("the horizon fits");
     assert_eq!(delta.draws().shortfall, 750);
     assert_eq!(delta.draws().carry, carry);
     assert_eq!(u64::from(delta.draws().count), count);
@@ -208,7 +274,6 @@ fn the_count_reads_the_prior_row_and_resets_at_the_opening_block() {
         draws_of(&store, BlockHeight::from_raw(19), BlockDrawsFloor::NONE),
         Some(across)
     );
-    cleanup(&path);
 }
 
 /// SI-33's two count arms, through `refuse_corrupt` as the ingest would
@@ -217,7 +282,7 @@ fn the_count_reads_the_prior_row_and_resets_at_the_opening_block() {
 /// row as a zero.
 #[test]
 fn a_count_fault_halts_the_writer_through_refuse_corrupt() {
-    let rules = RuleSet::fakechain(None, pair(20, 1));
+    let rules = RuleSet::GENESIS.with_levers(None, pair(20, 1));
     let horizons = Horizons::new(
         rules.settlement_schedule().blocks(),
         BlockCount::from_raw(4),
@@ -267,7 +332,6 @@ fn a_count_fault_halts_the_writer_through_refuse_corrupt() {
             "{refused}"
         );
     }
-    cleanup(&excess);
 
     let missing = tmp("draw_count_missing");
     let store = ChainStore::with_horizons(&missing, ApplyPolicy::Full, horizons).expect("create");
@@ -302,5 +366,4 @@ fn a_count_fault_halts_the_writer_through_refuse_corrupt() {
         refused.contains("no draw row is recorded at height 0"),
         "{refused}"
     );
-    cleanup(&missing);
 }

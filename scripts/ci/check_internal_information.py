@@ -149,7 +149,7 @@ GENERIC_HOMES = {
 # (path, class or None for every class, reason). A trailing "/" matches a subtree.
 ALLOW: list[tuple[str, str | None, str]] = [
     (
-        "src/p2p/net_node.inl",
+        "rust/shekyl-dialer/src/seeds.rs",
         "host",
         "the compiled seed list: shipped protocol data, in every node binary, "
         "and bootstrap does not work without it",

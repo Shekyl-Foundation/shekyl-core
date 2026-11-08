@@ -14,22 +14,22 @@
 //! The production arm prices nothing itself. The per-byte rate is
 //! [`shekyl_economics::corrected_fee_ladder`] at the block's own reward and
 //! correction; the weight it multiplies is the ordinary shape at the chain's
-//! depth, and the fee is the unrounded fixed point of that product
-//! ([`shekyl_tx_weight::converge_weight_fee`]). What this module adds is the
-//! order of the calls and the three places the run still departs from the
-//! chain, each named below so that none is silent:
+//! depth, and the fee is the wallet's lattice fixed point
+//! ([`crate::calibration::Shape::tx_fee_atomic`]). The ordinary shape is
+//! 1-in/2-out: the wallet's with-change variant of a one-recipient payment
+//! (one output to the recipient, one change). The call itself is the
+//! no-change call, seed 0 and `quantized_fee`; a zero seed is at or below
+//! the least fixed point, so it meets the with-change seed. What this
+//! module adds is the order of the calls and the places the run still
+//! departs from the chain, each named below so that none is silent:
 //!
-//! - the fee is paid **unrounded** — the product above is not rounded to the
-//!   fee lattice. The wallet rounds up to it
-//!   ([`shekyl_economics::quantized_fee`], 1 000 atomic), and the fee-floor
-//!   instrument in this crate pays exactly too (FL-R22);
 //! - the volume, split, burn and median operands are the fold's own, so they
 //!   carry whatever that fold carries (the design document's ESR-3, ESR-4
 //!   and ESR-6).
 
 use shekyl_economics::{
-    base_block_reward, corrected_fee_ladder, fee_correction, EconomicParams, FeeLadder, TxVolume,
-    RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+    base_block_reward, corrected_fee_ladder, fee_correction, EconomicParams, FeeLadder,
+    RelayPolicy, TxVolume,
 };
 
 use crate::burden::{ordinary_tx_fee, ordinary_tx_weight};
@@ -39,7 +39,9 @@ use crate::calibration::PerByteRate;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeeModel {
     /// **Control arm — a declared divergence from production** (§4 of the
-    /// design document). One flat fee per transaction at every height.
+    /// design document). One flat fee per transaction at every height, off
+    /// the lattice by construction. Its weight-fees, where a shape is priced
+    /// at the flat admission rate, stay on the unrounded pricer.
     ///
     /// The chain charges no such fee: its relay floor is
     /// `F = R·C·w_ref/M²`, proportional to the block reward. This arm
@@ -71,7 +73,7 @@ pub const SECTION_12_14_FLAT_FEE_ATOMIC: u64 = 100_000_000;
 /// The admission rate the §12.13 stuffer was priced at: 300 atomic per
 /// byte. Nothing in the chain charges it — the chain's admission rate is
 /// the relay floor. Kept as the control arm's value and nowhere else.
-pub const SECTION_12_13_ADMISSION_RATE: PerByteRate = PerByteRate::from_atomic(300);
+pub const SECTION_12_13_ADMISSION_RATE: PerByteRate = PerByteRate::unrounded(300);
 
 /// Thousandths in one: the multiplier that leaves a rung unchanged.
 const MILLI: u64 = 1_000;
@@ -97,6 +99,9 @@ pub struct FeePoint<'a> {
     /// ordinary transaction's weight.
     pub chain_leaves: u64,
     pub params: &'a EconomicParams,
+    /// The run's relay policy: the ladder's `w_ref` and rung ratios, and the
+    /// lattice a production rate is priced on.
+    pub relay: &'a RelayPolicy,
 }
 
 /// One ordinary transaction at a block's state: what it pays and what it
@@ -138,8 +143,9 @@ impl FeeModel {
                 // The multiplier scales the rate. The fee is the fixed point
                 // of that rate: scaling an already converged fee would price
                 // a varint the payer does not write.
-                let rate = scaled_rate(ladder_at(at).standard, multiplier_milli);
+                let rate = scaled_lattice_rate(ladder_at(at).standard, multiplier_milli, at.relay);
                 ordinary_tx_fee(at.chain_leaves, rate)
+                    .expect("the standard rung does not price an ordinary transaction")
             }
         }
     }
@@ -162,7 +168,9 @@ impl FeeModel {
     pub fn admission_rate(self, at: &FeePoint<'_>) -> PerByteRate {
         match self {
             Self::FlatControl { admission_rate, .. } => admission_rate,
-            Self::ProductionStandard { .. } => PerByteRate::from_atomic(ladder_at(at).economy),
+            Self::ProductionStandard { .. } => {
+                PerByteRate::lattice(ladder_at(at).economy, at.relay)
+            }
         }
     }
 
@@ -178,7 +186,7 @@ impl FeeModel {
             Self::ProductionStandard { multiplier_milli } => format!(
                 "FEE ARM: production ladder — Standard rung x{:.3} (corrected_fee_ladder at each \
                  block's R, C and long-term median), ordinary 1in/2out weight at chain depth, the \
-                 unrounded fixed point of rate x weight.",
+                 wallet's lattice fixed point of rate x weight.",
                 multiplier_milli as f64 / MILLI as f64,
             ),
         }
@@ -273,12 +281,21 @@ impl FeeModel {
     }
 }
 
-/// The per-byte rate after the run's multiplier. At [`MILLI`] the rate is
-/// unchanged.
-fn scaled_rate(rate_per_byte: u64, multiplier_milli: u64) -> PerByteRate {
-    let scaled =
-        u128::from(rate_per_byte).saturating_mul(u128::from(multiplier_milli)) / u128::from(MILLI);
-    PerByteRate::from_atomic(u64::try_from(scaled).unwrap_or(u64::MAX))
+/// The production per-byte rate after the run's multiplier, on the wallet's
+/// lattice. At [`MILLI`] the count is unchanged. The pricer is lattice
+/// because only the production arm scales a rung. The product of two `u64`s
+/// fits in `u128`, so the division is exact; a count that does not fit the
+/// rate is a refusal, not a rate of `u64::MAX`.
+fn scaled_lattice_rate(
+    rate_per_byte: u64,
+    multiplier_milli: u64,
+    relay: &RelayPolicy,
+) -> PerByteRate {
+    let scaled = u128::from(rate_per_byte) * u128::from(multiplier_milli) / u128::from(MILLI);
+    PerByteRate::lattice(
+        u64::try_from(scaled).expect("a scaled rung fits the per-byte rate"),
+        relay,
+    )
 }
 
 /// The production ladder at `at`: every rung comes from this one call, so
@@ -294,9 +311,10 @@ fn ladder_at(at: &FeePoint<'_>) -> FeeLadder {
     corrected_fee_ladder(
         base_reward,
         at.long_term_median,
-        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        at.relay.ref_tx_weight,
         correction,
         at.params,
+        at.relay,
     )
 }
 
@@ -304,7 +322,8 @@ fn ladder_at(at: &FeePoint<'_>) -> FeeLadder {
 mod tests {
     use super::*;
     use shekyl_economics::{
-        emission_share_at, relay_fee_floor, FeeCorrection, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        emission_share_at, relay_fee_floor, FeeCorrection, FEE_QUANTIZATION_MASK,
+        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
     };
     use shekyl_tx_weight::predict_weight;
 
@@ -320,14 +339,16 @@ mod tests {
             burn_pct_scaled: 0,
             chain_leaves: 1,
             params,
+            relay: shekyl_economics::relay_policy(),
         }
     }
 
-    /// The production arm is four relay floors times the weight, with
-    /// nothing in between. `σ = 0`, `b = 0` and baseline volume make `C = 1`,
-    /// so the expected value is `4 × relay_fee_floor` — the Standard rung's
-    /// definition (`fee/ladder.rs`), with the floor's owner called on the
-    /// other side of the comparison rather than re-derived here.
+    /// The production arm is the wallet's lattice fixed point of four relay
+    /// floors times the weight. `σ = 0`, `b = 0` and baseline volume make
+    /// `C = 1`, so the rate is `4 × relay_fee_floor` — the Standard rung
+    /// (`fee/ladder.rs`), with the floor's owner called on the other side
+    /// rather than re-derived here. The lattice leaves the fee within one
+    /// step of that product.
     #[test]
     fn the_production_arm_is_four_relay_floors_times_the_predicted_weight() {
         let params = EconomicParams::default();
@@ -343,13 +364,17 @@ mod tests {
         let (n_in, n_out) = normal_tx_shape();
         let paid = FeeModel::PRODUCTION_DEFAULT.per_tx_atomic(&at);
         let weight = predict_weight(n_in, n_out, tree_depth_for_leaves(1), paid) as u64;
-        assert_eq!(paid, weight * 4 * floor, "standard = 4 x floor x weight");
+        let product = weight * 4 * floor;
+        assert!(paid >= product, "under-pay: {paid} < {product}");
+        assert!(paid - product < FEE_QUANTIZATION_MASK);
+        assert_eq!(paid % FEE_QUANTIZATION_MASK, 0);
     }
 
-    /// The multiplier scales the per-byte rate, and the fee is the fixed point
-    /// of that rate. At one the product is exact. At any other factor the
-    /// fee's own varint is inside the weight, so the paid fee is that rate's
-    /// fixed point rather than an integer multiple of the unscaled fee.
+    /// The multiplier scales the per-byte rate, and the fee is the lattice
+    /// fixed point of that rate. The fee's own varint is inside the weight,
+    /// so the paid fee is that rate's fixed point rather than an integer
+    /// multiple of the unscaled fee, and it sits within one lattice step of
+    /// the product.
     #[test]
     fn the_multiplier_scales_the_rate_before_the_fixed_point() {
         let params = EconomicParams::default();
@@ -369,7 +394,13 @@ mod tests {
             let paid = arm(multiplier_milli).per_tx_atomic(&at);
             let weight = u128::from(predict_weight(n_in, n_out, depth, paid) as u64);
             let rate = u128::from(4 * floor) * u128::from(multiplier_milli) / u128::from(MILLI);
-            assert_eq!(u128::from(paid), weight * rate, "milli {multiplier_milli}");
+            let product = weight * rate;
+            assert!(
+                u128::from(paid) >= product,
+                "under-pay at milli {multiplier_milli}"
+            );
+            assert!(u128::from(paid) - product < u128::from(FEE_QUANTIZATION_MASK));
+            assert_eq!(paid % FEE_QUANTIZATION_MASK, 0);
         }
     }
 

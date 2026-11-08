@@ -30,9 +30,35 @@ The CI workflows install all dependencies automatically. For local builds:
 
 ## Creating a Release
 
-1. **Prepare the changelog on `dev`.** In `docs/CHANGELOG.md`, rename the
-   `## Unreleased` section to `## [X.Y.Z] - YYYY-MM-DD` and add a fresh
-   empty `## Unreleased` section above it. Commit on `dev`.
+1. **Prepare the changelog on `dev`.** Until the cut, each pull request's
+   entry is a file of its own under `docs/changelog.d/` (its `README.md`
+   says why). The cut is one commit, on a branch off `dev`, merged by pull
+   request:
+   1. List the entries, newest merge first, from the repository root of
+      the cut branch before any edit:
+
+      ```bash
+      git fetch origin
+      git log origin/dev --first-parent --diff-filter=A --name-only --format= \
+        -- docs/changelog.d/ | awk 'NF && !seen[$0]++' \
+        | while read -r f; do
+            if [ -f "$f" ] && [ "${f##*/}" != README.md ]; then echo "$f"; fi
+          done
+      ```
+
+      The history also names entries an earlier cut deleted, and the
+      README, which is always its oldest name. The `if` skips them and
+      keeps the listing's exit status 0, so it runs under `set -e`.
+
+      Its count must equal
+      `find docs/changelog.d -type f ! -name README.md | wc -l`.
+      A file the list misses was added outside `dev`'s first-parent history.
+      Place it by hand, then go on.
+   2. In `docs/CHANGELOG.md`, rename `## [Unreleased]` to
+      `## [X.Y.Z] - YYYY-MM-DD` and put each file's bullets, in that order,
+      at the top of its `### Changes`, above any already there. Add a fresh
+      empty `## [Unreleased]` section above it.
+   3. `git rm` the listed files. The README stays.
 
 2. **Promote `dev` to `main`** by pull request, titled `Release: vX.Y.Z`, and
    merge it with GitHub's **Create a merge commit** — never squash, rebase or
@@ -111,8 +137,8 @@ The CI workflows install all dependencies automatically. For local builds:
    once `dev` has moved it is not done.
 
 7. **GitHub Actions takes over.** The `gitian` workflow automatically:
-   - Builds reproducible, deterministic binaries for Linux (x86_64, aarch64,
-     riscv64), Windows x64, macOS (x86_64, aarch64), and FreeBSD x86_64
+   - Builds reproducible, deterministic binaries for Linux (x86_64, aarch64),
+     Windows x64, macOS (x86_64, aarch64), and FreeBSD x86_64
      inside isolated Docker containers
    - Packages Linux x86_64 and aarch64 binaries as `.deb` and `.rpm`
    - Builds a Windows NSIS installer (`.exe`)
@@ -164,8 +190,8 @@ Each release produces these files (all binaries are Gitian reproducible builds):
 | `SHA256SUMS` | Checksums for all artifacts |
 | `SHA256SUMS.asc` | Detached signature over `SHA256SUMS`, added by the manifest ceremony (step 9) |
 
-The Gitian Linux build also produces a RISC-V 64-bit tarball; the release job
-does not publish it (see "Future Platforms").
+RISC-V 64-bit is switched off in the Gitian Linux build (see "Future
+Platforms"); nothing is produced for it.
 
 ## Linux Package Details
 
@@ -203,7 +229,7 @@ The pipeline has two phases:
 Each Gitian build descriptor installs the Rust toolchain via `rustup`,
 pinned to the workspace toolchain (`--default-toolchain 1.94.0`, kept in
 lockstep with `rust/rust-toolchain.toml`) with the minimal profile and the
-appropriate cross-compilation targets (aarch64, RISC-V for Linux; 64-bit
+appropriate cross-compilation targets (aarch64 for Linux; 64-bit
 MinGW for Windows; Darwin targets for macOS). The pin is serial and
 up-front by design: the parallel `make` build invokes many `cargo`
 processes at once, and letting them auto-install the toolchain concurrently
@@ -245,7 +271,15 @@ Or trigger manually from the Actions tab without retagging.
 
 - **macOS `.dmg` installer** -- native disk image with drag-to-Applications UX.
 - **Linux AppImage** -- single-file portable binary for desktop distributions.
-- **RISC-V 64-bit** is available via Gitian deterministic builds and may be
-  promoted to the main release if demand warrants. 32-bit platforms are
+- **RISC-V 64-bit** is switched off in the Gitian descriptor (Rick,
+  2026-10-24): the constant-time record (`docs/design/CRYPTO_AUDIT.md` §1)
+  cannot cover a target with no BINSEC decoder and no board, so it is not
+  shipped until a user asks for it and there is a way to measure it.
+  Restoration is two edits: put `riscv64-linux-gnu` back on `HOSTS` in
+  `contrib/gitian/gitian-linux.yml`, and drop `"switched_off"` from its
+  row in `config/tor_pins.json`. The apt toolchain, the CMake arch
+  mapping, the descriptor's back-compat branch, and the host-to-rust-triple
+  map stay, so the host's triple is already recorded. A source build is
+  still possible while it is off. 32-bit platforms are
   permanently out of scope on security grounds — see `docs/CHANGELOG.md`
   entry "Retired 32-bit build targets".

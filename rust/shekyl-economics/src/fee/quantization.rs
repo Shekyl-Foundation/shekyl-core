@@ -17,8 +17,12 @@
 use shekyl_units::DISPLAY_DECIMAL_POINT;
 
 /// Decimal places a fee is quoted to, in SKL: the lattice step is
-/// `10^-FEE_DECIMAL_PLACES` SKL.
-pub const FEE_DECIMAL_PLACES: u32 = 6;
+/// `10^-FEE_DECIMAL_PLACES` SKL. Generated from `config/relay_policy.json`
+/// `fee_decimal_places`; the shipped [`crate::RelayPolicy`]'s.
+// CLIPPY: cast_possible_truncation — the build script refuses a value
+// that does not fit u32.
+#[allow(clippy::cast_possible_truncation)]
+pub const FEE_DECIMAL_PLACES: u32 = crate::params::GENERATED_FEE_DECIMAL_PLACES as u32;
 
 const _: () = assert!(
     FEE_DECIMAL_PLACES <= DISPLAY_DECIMAL_POINT as u32,
@@ -27,16 +31,32 @@ const _: () = assert!(
 
 /// Atomic units per lattice step:
 /// `10^(DISPLAY_DECIMAL_POINT − FEE_DECIMAL_PLACES)`.
-pub const FEE_QUANTIZATION_MASK: u64 = 10u64.pow(DISPLAY_DECIMAL_POINT as u32 - FEE_DECIMAL_PLACES);
+pub const FEE_QUANTIZATION_MASK: u64 = match crate::RelayPolicy::SHIPPED.quantization_mask() {
+    Some(mask) => mask,
+    None => panic!("the shipped fee lattice is finer than the atomic unit"),
+};
 
-/// `weight × rate_per_weight`, rounded up to the lattice. `None` when the
-/// product or the rounding leaves `u64`: a requirement no fee can state.
+/// `weight × rate_per_weight`, rounded up to `mask`. `None` when the
+/// product or the rounding leaves `u64`, or when `mask` is zero: a
+/// requirement no fee can state.
+///
+/// [`quantized_fee`] is this on the shipped mask. A [`crate::RelayPolicy`]
+/// passes the mask its decimal places select.
 #[must_use]
-pub const fn quantized_fee(weight: u64, rate_per_weight: u64) -> Option<u64> {
+pub(crate) const fn quantize_to_mask(weight: u64, rate_per_weight: u64, mask: u64) -> Option<u64> {
     match weight.checked_mul(rate_per_weight) {
-        Some(raw) => raw.checked_next_multiple_of(FEE_QUANTIZATION_MASK),
+        Some(raw) => raw.checked_next_multiple_of(mask),
         None => None,
     }
+}
+
+/// `weight × rate_per_weight`, rounded up to the shipped lattice: the
+/// shipped spelling of [`crate::RelayPolicy::quantize`] on
+/// [`crate::RelayPolicy::SHIPPED`]. `None` when the product or the rounding
+/// leaves `u64`.
+#[must_use]
+pub const fn quantized_fee(weight: u64, rate_per_weight: u64) -> Option<u64> {
+    crate::RelayPolicy::SHIPPED.quantize(weight, rate_per_weight)
 }
 
 #[cfg(test)]

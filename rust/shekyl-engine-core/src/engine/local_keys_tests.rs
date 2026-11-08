@@ -89,7 +89,7 @@ fn build_paid_to_self(
         enc_label: constructed.enc_label_bytes(),
         label_tag_on_chain: constructed.label_tag(),
         output_index,
-        tx_hash,
+        tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
     };
     (input, amount)
 }
@@ -295,7 +295,7 @@ async fn try_claim_output_for_derived_spend_point_returns_not_mine() {
         enc_label: constructed.enc_label_bytes(),
         label_tag_on_chain: constructed.label_tag(),
         output_index: 0,
-        tx_hash: [0u8; 32],
+        tx_hash: shekyl_types::TxHash::from_bytes([0u8; 32]),
     };
 
     let result = keys.try_claim_output(&input).await.unwrap();
@@ -1056,6 +1056,7 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
         // ── Sign engine path (sole sign call; legacy parallel
         //    sign call removed per the Trim-1 disposition) ───
         let signed_engine = sign_transaction(
+            &shekyl_network::HARNESS_NETWORK_ID,
             signable_tx_hash,
             &engine_inputs,
             &outputs,
@@ -1121,9 +1122,10 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             &key_images,
             &signed_engine.pseudo_outs,
             &pqc_pk_hashes,
-            tree.tree_root.as_bytes(),
+            &tree.tree_root,
             tree.tree_depth,
-            signable_tx_hash.to_bytes(),
+            // The message the proof was made over (the signing envelope §2.2).
+            signed_engine.tx_signable,
         );
         assert!(
             matches!(result, Ok(true)),
@@ -1190,7 +1192,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         BondPostError, BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
     };
     use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+    use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::kem::HybridCiphertext;
     // (the bond vin carries no on-chain signature; surface-A signing over the
@@ -1207,19 +1209,14 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     // Wallet keys fund the transaction; the bond persona `P` is a separate
     // identity that authorizes the post (credit paths sign under P_pubkey).
     let keys = LocalKeys::from_test_seed(TEST_SEED);
-    let p_keys = derive_archival_p_keys(
-        &[0x33u8; MASTER_SEED_BYTES],
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        0,
-    )
-    .expect("derive archival P keys");
+    let p_keys = derive_archival_p_keys(&[0x33u8; MASTER_SEED_BYTES], Network::Mainnet, 0)
+        .expect("derive archival P keys");
 
     let holdings = HoldingsDescriptor {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     assert!(
         floor > 0,
         "bond floor must be positive for the fixture holdings"
@@ -1315,6 +1312,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     // ── Prove: bond_credit rides as the sole output-side cleartext term ─
     let credit_term = built.credit_term();
     let signed = sign_transaction_with_terms(
+        &shekyl_network::HARNESS_NETWORK_ID,
         signable_tx_hash,
         &inputs,
         &outputs,
@@ -1338,6 +1336,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         change_output_index,
     )];
     let self_check_err = sign_transaction_with_terms(
+        &shekyl_network::HARNESS_NETWORK_ID,
         signable_tx_hash,
         &inputs,
         &short_change,
@@ -1407,9 +1406,9 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
                 &key_images,
                 &signed.pseudo_outs,
                 &pqc_pk_hashes,
-                tree.tree_root.as_bytes(),
+                &tree.tree_root,
                 tree.tree_depth,
-                signable_tx_hash.to_bytes(),
+                signed.tx_signable,
             ),
             Ok(true)
         ),

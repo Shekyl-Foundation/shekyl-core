@@ -86,6 +86,19 @@ impl EpochMap {
         }
     }
 
+    /// [`StemMap::alternate_for`] on whichever map the epoch holds.
+    #[must_use]
+    pub(super) fn alternate_for(
+        &self,
+        source: SourceId,
+        chosen: ConnectionId,
+    ) -> Option<ConnectionId> {
+        match self {
+            Self::Uniform(map) => map.alternate_for(source, chosen),
+            Self::Reserved(map) => map.alternate_for(source, chosen),
+        }
+    }
+
     /// The stem peer for `source`, assigning one on the first call this epoch.
     pub(super) fn stem_for<R: RelayRng + ?Sized>(
         &mut self,
@@ -118,8 +131,23 @@ impl EpochMap {
                 let _change = map.update(all, rng);
             }
             Self::Reserved(map) => {
-                let _change = map.update_with_reserved(class, rest, rng);
+                let _change = map.update_with_reserved(&class, &rest, rng);
             }
+        }
+    }
+
+    /// [`StemMap::local_origin_leaves`] on a reserved epoch. A uniform
+    /// epoch has no address-hiding class, so a local origin never leaves on
+    /// one.
+    #[must_use]
+    pub(super) fn local_origin_leaves(
+        &self,
+        class: &[ConnectionId],
+        rest: &[ConnectionId],
+    ) -> bool {
+        match self {
+            Self::Reserved(map) => map.local_origin_leaves(class, rest),
+            Self::Uniform(_) => false,
         }
     }
 

@@ -1847,11 +1847,12 @@ actor is not its writer — the `WSS-13` unwind,
 under its own authorization). §9.6 item 4's "feed
 `pin_serve_set` from the bond record" therefore could not be implemented by
 handing the serving host a store handle: that is a second writer beside the
-one whose message loop is the serialization. The split: the host holds a
-read-only `ServingReader` (redb readers are MVCC snapshots, so serving reads
-run concurrently with block ingest at no cost), and the pin runs on the
-actor's own object behind a `ServeSetPinner` seam. The serving side now has
-no write to reach.
+one whose message loop is the serialization. The split: the pin runs on the
+actor's own object behind a `ServeSetPinner` seam, and the host holds no
+store handle at all, reading the store facts its witness checks through the
+same seam (`CURVE_TREE_CLIENT.md` §11). The serving side has no write to
+reach. *Records-was (until 2026-11-02):* the host held a read-only
+`ServingReader`, which kept the store's file open past the wallet's close.
 
 **3. The serve-set's provenance is closed against drift, not against
 forgery — stated rather than implied.** `ServeSet`'s only constructor takes
@@ -2010,8 +2011,10 @@ stays drawable, and challengeable, through E's close — roughly 9,280 blocks
 after a 720-block gate would have released.
 
 It bites at the pin rather than one layer up because
-`StoreShardProvider` is **serve-set-blind**: it holds only a `ServingReader`
-and answers for any shard whose bytes are in the store. So the leak is
+`StoreShardProvider` is **serve-set-blind**: it holds only a read route to
+`P`'s body store (`HeldShardSource`, a message to the store's owning actor;
+`CURVE_TREE_CLIENT.md` §11.1) and answers for any shard whose bytes are in
+the store. So the leak is
 currently what *keeps the obligation met* — a dropped-but-still-pinned shard
 is still served. Releasing on a reorg depth would have converted a disk leak
 into a miss, then a slash: §9.7's own asymmetry pointed the wrong way.
@@ -2254,7 +2257,11 @@ by default.
    engine priority; the serving runtime carries the round trip, not the
    ML-DSA work. That work is bounded — one signature per response, about
    forty a second at the measured serving rate — and moving it would move
-   the key, which `SF-D13` forbids. The tor supervisor stays on the
+   the key, which `SF-D13` forbids. Chunk decrypt is not that work and
+   is not this runtime's either: it is synchronous redb on the body-store
+   owner, which has its own one-worker lowered runtime for the whole
+   session (`CURVE_TREE_CLIENT.md` §11.1). This runtime's threads only
+   wait for the owner's reply. The tor supervisor stays on the
    engine's runtime and the wallet's tor *process* stays at normal
    priority: an onion that cannot keep its circuits up serves nothing at
    any priority.
@@ -2262,8 +2269,10 @@ by default.
 2. **Threads lower their own priority at start**, through thread hooks
    the serving runtime passes to `runtime_with_thread_hooks`. The
    ordinary constructor, `shekyl_runtime::runtime`, takes a budget and a
-   name and starts threads as Tokio starts them; no other runtime passes
-   hooks. The hooks are one value, a start and a stop. Tokio's
+   name and starts threads as Tokio starts them. The runtimes that pass
+   hooks are this one and the persona body-store owner's
+   (`CURVE_TREE_CLIENT.md` §11.1): both lower their threads, and neither
+   is the engine's shared pool. The hooks are one value, a start and a stop. Tokio's
    `on_thread_start` runs on every worker and every blocking thread
    before it takes work, and `on_thread_stop` runs before that thread
    exits, including when Tokio retires an idle blocking thread. The

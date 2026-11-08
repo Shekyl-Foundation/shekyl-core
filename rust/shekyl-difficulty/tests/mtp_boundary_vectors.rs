@@ -111,9 +111,9 @@ fn ftl_cases_match_is_timestamp_below_ftl() {
 
 // ---------------------------------------------------------------------------
 // Combined-rule coverage (C2-R3 crossing): `check_timestamp_rule` is the ONE
-// implementation of the ruled sentence, exported to the C++ validator via
-// shekyl-ffi. Every vector section gets its native consumer here — including
-// `assembly_cases` (genesis padding), which previously had only the C++ side.
+// implementation of the ruled sentence, and the block validator
+// (`shekyl-chain-rules`) calls it. Every vector section gets its native
+// consumer here — including `assembly_cases` (genesis padding).
 
 use shekyl_difficulty::{check_timestamp_rule, TimestampRuleVerdict};
 

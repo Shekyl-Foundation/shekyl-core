@@ -218,8 +218,9 @@ const _: () = assert!(FnDsaHybridPublicKey::CANONICAL_LEN == RECEIPT_SIGN_PK_LEN
 /// An Ed25519 + FN-DSA-1024 secret key. Wiped on drop; never serialized.
 ///
 /// There is no canonical encoding for it and no `Clone`: the receipt key is
-/// re-derived from the wallet seed, and the witness key lives for one block
-/// in memory. Neither is written anywhere.
+/// re-derived from the wallet seed, and the witness key lives in memory, in
+/// the block producer's ring, until that block's bundle is filed. Neither
+/// is written anywhere.
 ///
 /// Both halves live on the heap, each at the one address it was written
 /// to, and are wiped there on drop. The bytes are borrowed, not
@@ -236,6 +237,17 @@ impl std::fmt::Debug for FnDsaHybridSecretKey {
         f.write_str("FnDsaHybridSecretKey([REDACTED])")
     }
 }
+
+// A marker, and it wipes nothing: each half is a `HeapSecret`, which wipes
+// itself in its heap slot when it drops. This impl states that to the type
+// system, so a holder of the key (the block producer's witness ring) can
+// require `ZeroizeOnDrop` of what it holds and have the bound checked.
+const _: () = {
+    fn wipes_itself_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+    let _ = wipes_itself_on_drop::<HeapSecret<ED25519_SECRET_KEY_LENGTH>>;
+    let _ = wipes_itself_on_drop::<HeapSecret<FN_DSA_1024_SECRET_KEY_LENGTH>>;
+};
+impl zeroize::ZeroizeOnDrop for FnDsaHybridSecretKey {}
 
 // Test-support surface, behind `test-utils`.
 #[cfg(any(test, feature = "test-utils"))]
@@ -565,10 +577,7 @@ mod tests {
         );
     }
     use crate::error::PqcVerifyError;
-    use crate::signature::{
-        verify_pqc_auth, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE,
-        SCHEME_DOMAIN_WITNESS_CARRIER,
-    };
+    use crate::signature::{verify_pqc_auth, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE};
 
     const D: &[u8] = SCHEME_DOMAIN_RECEIPT;
 
@@ -641,12 +650,11 @@ mod tests {
     }
 
     /// The witness's bundle signature is its own surface: one key, one
-    /// message, and the signature is dead under the carrier's domain and
-    /// under the receipt's. Red edit: give `SCHEME_DOMAIN_WITNESS_BUNDLE`
-    /// the carrier's bytes (or the receipt's) and the matching `is_err`
-    /// fails.
+    /// message, and the signature is dead under the receipt's domain. Red
+    /// edit: give `SCHEME_DOMAIN_WITNESS_BUNDLE` the receipt's bytes and the
+    /// `is_err` fails.
     #[test]
-    fn the_bundle_domain_is_neither_the_carriers_nor_the_receipts() {
+    fn the_bundle_domain_is_not_the_receipts() {
         let (pk, sk) = keypair();
         let scheme = HybridEd25519FnDsa;
         let commitment = [0xB7u8; 32];
@@ -656,9 +664,6 @@ mod tests {
         scheme
             .verify(&pk, SCHEME_DOMAIN_WITNESS_BUNDLE, &commitment, &sig)
             .expect("verifies under its own domain");
-        assert!(scheme
-            .verify(&pk, SCHEME_DOMAIN_WITNESS_CARRIER, &commitment, &sig)
-            .is_err());
         assert!(scheme
             .verify(&pk, SCHEME_DOMAIN_RECEIPT, &commitment, &sig)
             .is_err());
@@ -786,7 +791,7 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_FN_DSA_1024,
                 &pk.to_canonical_bytes(),
                 &sig.to_canonical_bytes(),
-                b"tx hash",
+                &shekyl_types::SigningPayloadHash::from_bytes([0x7a; 64]),
             ),
             Err(PqcVerifyError::SchemeMismatch)
         );
@@ -796,7 +801,7 @@ mod tests {
                 crate::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk.to_canonical_bytes(),
                 &sig.to_canonical_bytes(),
-                b"tx hash",
+                &shekyl_types::SigningPayloadHash::from_bytes([0x7a; 64]),
             ),
             Err(PqcVerifyError::DeserializationFailed)
         );

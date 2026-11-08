@@ -8,7 +8,7 @@
 #
 # Two triggers, three jobs:
 #
-#   pull_request → dev
+#   pull_request (any base)
 #     - capture-pr:       runs the Rust gungraun harness on the PR
 #                         head, uploads `shekyl_rust_v0.json` as an
 #                         artifact.
@@ -53,15 +53,13 @@
 name: ci/benchmarks
 
 on:
-  # No `merge_group:` trigger, deliberately (06-branching.mdc, the merge
-  # queue): a PR-comment comparator whose jobs are gated on the PR
-  # payload; there is no group to compare against or comment on.
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened]
     # The whole Rust workspace, not a list of benched crates (BA-Q8, ruled
     # 2026-10-05). A bench's cost depends on its dependency closure, not on
-    # its own crate: `relay_admission_verify_iai` lives in `shekyl-ffi` and
-    # measures code in `shekyl-fcmp` and `shekyl-fcmp-proofs`. A per-crate
+    # its own crate: `relay_admission_verify_iai` lives in
+    # `shekyl-verify-cost` and measures code in `shekyl-fcmp`,
+    # `shekyl-fcmp-proofs` and `shekyl-ct-balance`. A per-crate
     # list that omits one of those runs neither the comparison nor the
     # baseline refresh for a change there, and the next PR that does trigger
     # the gate is then compared against a baseline that predates the change.
@@ -79,7 +77,7 @@ on:
 
 # Top-level defaults: read-only. Per-job overrides upgrade to write
 # only where strictly necessary (PR comment; bench-baseline push).
-# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+# Superseded-run cancellation (house pattern: build.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
 # run behind the old one — with the shared runner pool, repeated pushes
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is

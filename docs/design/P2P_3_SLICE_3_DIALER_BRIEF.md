@@ -26,6 +26,12 @@ check and the per-entry connector loop are deleted in PR-3. *Records-was
 (2026-10-11): "`sanitize_peerlist` stays with `handle_remote_peerlist`
 until slice 4".*
 
+**UNFREEZE (Rick, 2026-10-27):** src/cryptonote_protocol/cryptonote_protocol_handler.inl — the flip routes block arrivals through shekyl_ingest_offer_span; the connect loop, the size check, pause_mine and safesyncmode are deleted. The reply path keeps what the connect loop recorded: a connected block raises the delivering peer's chain length and the wedge timer, and an announced block that connected as the tip is announced on; an unlinked announcement asks the announcer for its chain; the missing-bodies request names this node's height; a closed session is released at the door; the sync estimates' origin is set where the sync starts.
+
+**UNFREEZE (Rick, 2026-10-27):** src/cryptonote_protocol/cryptonote_protocol_handler.h — the handler declares the ingest reply post and its destructor.
+
+**UNFREEZE (Rick, 2026-10-28):** src/p2p/net_node.h — the peer-list serialization version moved here when the RPC server header that carried it was deleted: the protocol-handler include and `BOOST_CLASS_VERSION` for the node server.
+
 **UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.inl — `handle_remote_peerlist`'s body is replaced by one call into Rust (`shekyl::received_peerlist`), the line that reads `--allow-local-ip` reads it through `shekyl_peerlist_allow_local_ip`, and `sanitize_peerlist` is deleted. Step 2 (the same day): `detect_self_handshake` reads the dialer's nonce set through `shekyl_dial_take_handshake_nonce`; `set_max_out_peers` hands the cap to `shekyl_dialer_set_out_peers`; `--add-peer` enters the Rust gray list through `shekyl::admit_operator_peer`; the handshake and timed-sync responses take their sample from `shekyl::disclose`; `on_outbound_handshake` is the strand's read of the Rust dialer's handshake result, the lines kept from `do_handshake_with_peer`'s invoke callback, which step 3 deletes. §3.2 (the same day): the dial path is deleted (the table below); the `--add-exclusive-node` parse hands its list to the dialer through `shekyl::declare_exclusive_peers`; the `--seed-node` addresses enter gray through `shekyl::admit_operator_peer`; `public_connect` is deleted with `zone_server::open`, and the zone's pointer to it, `m_connect`, becomes the flag `m_outbound` at its nine sites (an edit, not a call into Rust: the flag is what the config parsing read the pointer as). The C++ peerlist's deletion: `init_config`'s `peerlist_storage::open` becomes `shekyl_dialer_open_address_file`; the `--allow-local-ip` line is the bare call, its member gone; `deinit` returns true where it stored; the ban-eviction loops, the timed-sync `set_peer_just_seen`, `store_config`, `log_peerlist` and the four list getters are deleted. The moves: `transport_spans` is deleted with its three call sites (the spans are `shekyl-transport-layer::spans`); `set_max_out_peers` is the push alone, the floor refused by the dialer; `change_max_out_public_peers` pushes the cap and the dialer closes the excess, so `release_outbound` is deleted; `get_max_out_public_peers`, `descriptor_reservations` and the three protocol-handler cap lines read the target through `shekyl_dialer_out_target`. Revision 3 (the same day): `--p2p-disclose-early`'s `add_arg` and its one push, `shekyl_peerlist_disclose_early()`, beside the other config pushes (§2.6, the ruled exception to "no new option"; the daemon-config slice deletes both); the `MINFO` "Tor zone dials through … with no inbound" is deleted (§3 item 2: the Rust side logs the proxy and the own address), and revision 4 §3 item 3 replaces that branch's two comments with one true sentence. The same day: `--seed-node`'s `add_arg`, its parse and its admit loop are deleted with the option (Rick: deleted, not reworded); revision 4 §3 item 2: the dead `MIN_WANTED_SEED_NODES` define, which `connect_to_seed` read, is deleted.
 
 **UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.inl, net_node.h — the switch PR-3 added as --small-network is renamed --p2p-disclose-early at its extern, add_arg, get_arg and push; no line is added.
@@ -42,11 +48,31 @@ until slice 4".*
 
 **UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.h — the cutover's commit (c): `init` loses its proxy parameter and the zone struct its listen, proxy, announce and cap fields; the rest is deletion.
 
+**UNFREEZE (Rick, 2026-10-30):** src/cryptonote_protocol/block_queue.cpp — the flip's sync half meets the ingest door (the DRS-X flip's §3 legs, 2026-10-30): `reset_next_span_time` is a no-op for a span a receipt on another strand filled between the scheduled read and the reset, where its invariant check threw out of the net loop; `get_next_span_from`, `has_filled_span_from` and `remove_spans_ending_before` let a span the handler handed the door stay queued, and so read as held, until the door's connected reply erases it. CS-5 deletes the file.
+
+**UNFREEZE (Rick, 2026-10-30):** src/cryptonote_protocol/block_queue.h — the three declarations above.
+
+**UNFREEZE (Rick, 2026-10-29):** src/cryptonote_protocol/levin_notify.cpp — the flip's relay embargo (RX-1, RX-2; the relay brief of 2026-10-29): `record_stem_observation` hands the zone each transaction's bytes beside its hash (`relay_tx_spans_of`); `hold_origin` gives the zone an origin that was not sent (`AwaitSync`, `NoOwnEdge`, a failed own-edge write, a carrier discard) in place of the returns that left it to the deleted pool's retry; both polls pass the handler's sync state and a `relay_effects::on_stem` callback that writes a reshape or a held origin's send on the ordinary wire; `record_arrival` no longer forwards the propagated set, which the zone now consumes. RD deletes all of it with `levin_notify`.
+
 **UNFREEZE (Rick, 2026-10-13):** src/cryptonote_protocol/levin_notify.cpp — the cutover's commit (c): `make_relay` and the `notify` constructors take no connector mask and no carrier flag; the relay's identity and `dev-relay-cover` are the posture the Rust `main()` records (`shekyl_relay_zone_new` reads it).
 
 **UNFREEZE (Rick, 2026-10-19):** src/p2p/net_node.inl — compression and support flags leave the protocol (rulings on #1134, `SHEKYL_P2P_PROTOCOL.md` PWD-T7). `relay_notify_to_list` sends the finalized message itself, its compressed alternative and the choice between them deleted; `post_each` and `for_connection` hand their callbacks the connection alone, the support-flags argument gone; `handle_get_support_flags`, `try_get_support_flags`, the inbound handshake's re-ask, and the support-flags writes in `init_config`, `get_local_node_data` and `on_outbound_handshake` are deleted. Edits to existing lines and deletions only; no line is added.
 
 **UNFREEZE (Rick, 2026-10-19):** src/p2p/net_node.h — with the above: the `post_each` and `for_connection` declarations take a callback of the connection alone; the connection's `support_flags`, the zone config's `m_support_flags`, the 1007 handler's map entry and the two support-flags declarations are deleted.
+
+**UNFREEZE (Rick, 2026-11-01):** src/cryptonote_protocol/cryptonote_protocol_handler.inl — the score arguments the deleted automatic ban read are deleted (#1250): every drop site calls `drop_connection(context, flush_all_spans)` in place of `drop_connection(context, add_fail, flush_all_spans)` or `drop_connection_with_score(context, score, flush_all_spans)`, the scored overload is deleted, and the drop's debug line no longer prints a score. No drop site is added or removed.
+
+**UNFREEZE (Rick, 2026-11-01):** src/cryptonote_protocol/cryptonote_protocol_handler.h — `drop_connection` is declared as `(context, flush_all_spans)` with its definition, and `drop_connection_with_score`'s declaration is deleted (#1250).
+
+**UNFREEZE (Rick, 2026-11-01):** src/cryptonote_protocol/cryptonote_protocol_handler.inl — chain sync's cutover (CS-5 §9.1): the handler keeps RD's transaction routes. Its constructor takes the core and the endpoint and initialises those two members; `init` and `deinit` return true; `log_connections` loses its state column; the complement route answers a session past its handshake on the seam's flag (F3); the transaction route reads the shell's `is_synchronized` (§3); every drop is one plain `drop_connection(context)`, which closes and does nothing else (CS-Q5); `stop` stops the core alone.
+
+**UNFREEZE (Rick, 2026-11-01):** src/cryptonote_protocol/cryptonote_protocol_handler.h — with the above: the class derives from `i_cryptonote_protocol` alone, its constructor takes no offline flag, the invoke map routes 2002 and 2010, and `drop_connection` takes the context alone.
+
+**UNFREEZE (Rick, 2026-11-01):** src/p2p/net_node.inl — chain sync's cutover (CS-5 F4): the three handshake payloads come from one export, `shekyl_p2p_handshake_tip`, through the five-line `handshake_tip`; `on_outbound_handshake` no longer reads the result it is posted with.
+
+**UNFREEZE (Rick, 2026-11-01):** src/p2p/net_node.h — chain sync's cutover (CS-5 F3): `p2p_connection_context_t::session_established` reads the seam's handshake flag, where the base context's read the sync half's state; timed sync, the double-handshake refusal and epee's post-handshake packet limit read it.
+
+**UNFREEZE (Rick, 2026-11-04):** src/p2p/net_node.inl — network identity PR 1: the network id is the genesis-derived value from Rust (`network_id_for`); one line edited, none added. The line goes with the remnant's deletion.
 
 **UPDATE 2026-10-09 (Rick):** `COMMAND_HANDSHAKE` carries no address
 field on any connector (the handshake-address ruling below, which
@@ -94,7 +120,7 @@ together.
 | --- | --- | --- |
 | `hidden_out` | `MIN_PROVISIONED_OUT_PEERS` (12, `shekyl-relay-privacy/src/params.rs:203`) | This slice. The hidden-address pool. No hidden session above it |
 | `clearnet_out` | `P2P_DEFAULT_OUT_PEERS` (12, `params.rs:179`), written by `set_max_out_peers` (`net_node.inl:2957`; the `arg_out_peers` call is `:621`) | The setter. A cap of 0 stays legal. A positive cap below the floor is refused. Clearnet is not folded into `hidden_out` |
-| `DISCLOSE_COUNT` | 12, a protocol constant: the same on every node and every connector (D3, Rick 2026-10-09). Not tied to the outbound target | Slice 1. Replaces `P2P_DEFAULT_PEERS_IN_HANDSHAKE` (250, `cryptonote_config.h:193`) and `P2P_MAX_PEERS_IN_HANDSHAKE` (`:194`) as the sample size and the receiver limit. *Records-was: `disclose_count`, that connector's outbound target* |
+| `DISCLOSE_COUNT` | 12, a protocol constant: the same on every node and every connector (D3, Rick 2026-10-09). Not tied to the outbound target | Slice 1. Replaces `P2P_DEFAULT_PEERS_IN_HANDSHAKE` (250, `cryptonote_config.h` at `ac3836de90` (line 193)) and `P2P_MAX_PEERS_IN_HANDSHAKE` (`:194`) as the sample size and the receiver limit. *Records-was: `disclose_count`, that connector's outbound target* |
 | `white_diversity_floor` | `INTERIM_WHITE_DIVERSITY_MULTIPLE` (4) times `DISCLOSE_COUNT`, 48. **R5 (Rick, 2026-10-12): stays 48**, labelled `Assumption`, derived on the Rust path after PR-3; the review's one explicit open point, closed | Slice 1. The refill line (60, D-PR2-2) stays above the floor. The same floor gates disclosure (slice 1 §5) and the fill's keep draws (rule (b)) |
 
 `hidden_out` is the outbound sessions whose connector declares
@@ -200,16 +226,23 @@ Two races are accepted. A link that falls between the plan and the
 dial costs that one draw. A wake whose timer was armed before the fall
 runs once and draws nothing. Tests: `shekyl-dialer/tests/readiness.rs`.
 
-**A failed dial drops its draw, whatever the cause (Rick, 2026-10-16;
-closed in #1092).** A `DialFailed` gray draw is dropped, not returned to
-gray, including when the cause does not implicate the address. Whether
-a cause implicates the address decides whether the failed-address memory
-punishes it, never list membership. On clearnet no cause implicates the
-address, because nothing authenticates the destination. So a return to
-gray would keep every dead host that only ever times out on gray for
-good, and the drop is what clears them out. The case that made the drop
-costly, a node that could not dial at all, is the readiness gate's. What
-remains is one draw per link that falls between the plan and the dial.
+**A failed test cools its draw; only a proving one drops it (Rick,
+2026-10-24; the gray lifecycle).** A `DialFailed` draw whose failure
+proves no misbehaviour stays gray and cools: two
+minutes, doubling per consecutive failed test, capped at an hour, each
+with U(0, 50%) jitter; a cooling address is not drawable, and a
+completed handshake clears the count. A cause that proves misbehaviour
+drops the address, and only an authenticating connector stamps one. A
+dead host that only ever times out now costs one connect an hour at the
+cap and leaves gray only by cap eviction; that is the rule's price, and
+the ladder bounds it. The case that made a failed draw costly, a node
+that could not dial at all, is the readiness gate's. What remains is one
+rung of cooldown per link that falls between the plan and the dial.
+*Records-was (Rick, 2026-10-16; #1092): a failed dial dropped its draw
+whatever the cause, not returned to gray, including when the cause did
+not implicate the address. Implication decided the failed-address
+memory, never list membership; on clearnet nothing implicated, so the
+drop was what cleared dead hosts.*
 
 **The population.** A closed network (`--add-exclusive-node`) is not a
 dialer arm (Rick, 2026-10-11): an exclusive list is a network
@@ -355,24 +388,35 @@ after the outcome, including failure before adopt.
 
 **The `Keep` count is the dialer's.** It is adopted `Keep` rows plus
 pending `Keep` attempts, per connector. It is not `Board::count`
-(`rust/shekyl-seam/src/registry.rs:175`), which counts every outbound
+(line 175 of `rust/shekyl-seam/src/registry.rs` at `e8838b0095`; the seam left in PR #1272), which counted every outbound
 row on the connector, a `Confirm` row included, and knows nothing of
 a pending attempt. Lowering the cap at runtime, today
 `release_outbound` from `set_max_out_peers` (`net_node.inl:3176`,
 defined at `:2240`), moves to the dialer and closes `Keep` rows only.
 A `Confirm` row is never what the cap closes.
 
-**Interim in-flight bound: one dial per connector (2026-10-08).** The
-fill is one dial per wake, so the interim needs no measurement. It is
-measured and raised on the Rust path after the cutover, into the
-register (`DAEMON_RELAY_PRIVACY.md` §97). Wargame: at boot, hidden
-sessions open one at a time. The node's own transactions are held
+**The in-flight bound: Tor 5, clearnet 1 (the dialer in-flight bound,
+revision 2, Rick 2026-10-25).** The connector's in-flight bound
+(`dial_profile(connector).in_flight_bound`, the dial profile) is protocol
+data, the same on every node. It limits how many dials are outstanding,
+not the rate: one launch per wake, at R3's spacing. Tor's five is
+derived (`DAEMON_RELAY_PRIVACY.md` §97;
+`docs/benchmarks/p2p_tor_inflight_bound_20261025.md`) with half the
+draws dead, on the lifecycle the dialer runs, where a Tor attempt that
+fails at or after the managed Tor's `SocksTimeout` is final within its
+test (Rick, 2026-10-26): five is the smallest bound that fills the
+12-session target within one stem epoch. Clearnet stays at one. A pending `Keep` counts
+toward the target, so no bound lets keeps pass it; a `Confirm` counts
+toward the bound and not the target, which is why the descriptor
+reservation adds the bound to the target. Wargame: at boot, hidden
+sessions open up to five at a time. The node's own transactions are held
 (`NoOwnEdge`) only until the first hidden session, so originating does
-not wait for all 12.
+not wait for all 12. *Records-was (2026-10-08 to 2026-10-25): the interim
+bound, one dial per connector, unmeasured.*
 
 *Records-was: `connections_maker` (`net_node.inl:2134-2157`) branches
 on `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70,
-`cryptonote_config.h:200`). Below that share of the cap it tries white
+`cryptonote_config.h` at `ac3836de90` (line 200)). Below that share of the cap it tries white
 then gray. At or above it, gray then white.* PWD-I4 derives against
 this loop. The 70% schedule is what the C++ does until this slice
 deletes it.
@@ -381,7 +425,7 @@ deletes it.
 
 ## The dial
 
-`Hub::connect` (`rust/shekyl-seam/src/hub.rs:274`) is the composition
+`Hub::connect` (line 274 of `rust/shekyl-seam/src/hub.rs` at `e8838b0095`; the seam left in PR #1272) is the composition
 of two operations that already have different jobs. The implementation
 PR splits them. `Hub::connect` stays the composition, so the seam
 tests keep one call. Callers of `Hub::connect` today are
@@ -465,11 +509,23 @@ taken first. The hub's close poster runs after the table lock is
 released, because that poster calls the dialer and the strand, and the
 strand locks the table again.
 
-**An idle connector (Rick, 2026-10-16).** A connector under its target
-for 60 wakes with nothing dialed logs one warning naming why: a dial
-is in flight, no candidate, or a filter holds every address. The same
-reason logs nothing more until it changes, the connector draws, or it
-is no longer under its target.
+**An idle connector (Rick, 2026-10-16; amended 2026-11-06).** A
+connector under its target for 60 consecutive wakes with nothing dialed
+and one reason logs an info line naming the sessions it holds, its
+target and the reason: a dial is in flight (at the bound, or with
+nothing else drawable), a retry is waiting, no fill rule takes the
+drawable addresses, it knows no address, the addresses it is not using
+are cooling after a failed dial or held by an excusal, or every address
+it knows is connected, on a host it already reaches, or its own. Each
+reason is said at most once per under-target spell: a draw or a change
+of reason restarts the count, and only reaching the target ends the
+spell. Every reason is a
+state the connector leaves without the operator, so it is not a
+warning. *Amendment (2026-11-06, the alpha.11 hunt's A7).* A warning
+on a network smaller than the target, every hour on every public seed:
+a draw re-armed it, cooling seats and a dial in flight below the bound
+were both named "a filter holds every address". *Records-was: one
+warning per reason, re-armed by every draw.*
 
 **The clock (Rick, 2026-10-08).** The outbound handshake's only clock
 is each connector's transport gap, from channel established to the
@@ -504,31 +560,29 @@ another `Keep` that would put the target over when both adopt.
 
 One report. The dialer emits it on every end path. Slice 1's `apply`
 is the only writer of gray and white, and the match is total. The
-dialer is the only writer of the failed-address memory, and it reads
-the same value. The score owner subscribes to `PeerlistRefused` and
-writes neither store. The handshake task does not call
-`add_host_fail`. That function stays: inbound and the open
-`cryptonote_protocol_handler` row still use it. It is in flight, not
-dead.
+lists read only the cause's marks; the dialer holds no failed-address
+memory (*records-was:* it was the memory's only writer; deleted
+2026-10-24, "Failed-address memory" below). No outcome subscribes a
+score. The automatic ban, and `add_host_fail`, were deleted
+(2026-11-01): no peer can make a ban.
 
 ```rust
 enum DialOutcome {
-    DialFailed { address: NetworkAddress, cause: CloseCause, reply: u16 },
-    PeerlistRefused { address: NetworkAddress },
+    DialFailed { address: NetworkAddress, failure: DialFailure },
     PayloadRefused { address: NetworkAddress },
     Confirmed { address: NetworkAddress },
     SessionAccepted { address: NetworkAddress },
 }
 ```
 
-| Variant | When the dialer emits it | List (`apply`) | Failed-address memory | Score |
-| --- | --- | --- | --- | --- |
-| `DialFailed` | The channel never reached a well-formed response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with | An outstanding gray draw is dropped. A white address stays white | Tor only (R2): written when `implicates_address` is set for that cause and reply, which on clearnet it never is. A `network_id` mismatch is `LevinHandshakeRejected`; on Tor it writes, on clearnet it does not. *Records-was: written on every connector* | No subscription. The mismatch does not call `add_host_fail` |
-| `PeerlistRefused` | `handle_remote_peerlist` refuses (`net_node.inl:1377`). Same close as `LevinHandshakeRejected` | Same as `DialFailed` | Same as `DialFailed` with `LevinHandshakeRejected`: Tor only (R2) | The score owner subscribes. A peerlist this node refuses is the event the score records |
-| `PayloadRefused` | A kept session closed with `CloseKind::SessionRefused`: the payload owner declined a delivery after `SessionAccepted` (*records-was:* the strand refused the sync payload before white was written) | White is unchanged. An outstanding draw that was never confirmed returns to drawable gray | Not written. The peer answered | None |
+| Variant | When the dialer emits it | List (`apply`) | Failed-test count (the cooldown ladder; *records-was* the failed-address memory, deleted 2026-10-24) |
+| --- | --- | --- | --- |
+| `DialFailed` | The channel never reached a well-formed response, `network_id` is not ours (`net_node.inl:1370`), or the peer's list was refused (`net_node.inl:1377`). It carries the `DialFailure` the layer that observed it stamped (#1235); the test's last attempt reports, after any retries. A refused list is [`DialFailure::refused_by_peer`] | The judge's verdict (#1235): a counted failure cools an outstanding gray draw, proof drops it, and an excused one holds its rung. A white address is known-working (2026-10-26): a counted failure moves it to gray and cools it at the first rung, proof drops it, and an excused one leaves it white. *Records-was: dropped whatever the cause (Rick, 2026-10-16); to 2026-10-26, a white address stayed white* | Counted, and the address cools for `cooldown_nanos(count)`, unless the failure proves misbehaviour. A `network_id` mismatch and a refused list are `LevinHandshakeRejected`, stamped proving on Tor and nothing on clearnet. *Records-was: the memory, Tor only (R2), written where `implicates_address` held; before that on every connector* |
+| *`PeerlistRefused` — DELETED (2026-11-02, #1235; no crate symbol)* | *Records-was: a refused list, its own variant carrying `LevinHandshakeRejected`.* Absorbed into `DialFailed`. The variant, its `apply` arm and the reach arm that ignored `Reached` are gone. | — | — |
+| `PayloadRefused` | A kept session closed with `CloseKind::SessionRefused`: the payload owner declined a delivery after `SessionAccepted` (*records-was:* the strand refused the sync payload before white was written) | White is unchanged. An outstanding draw that was never confirmed returns to drawable gray | Not counted. The peer answered |
 | *`HarvestDone` — DELETED (Rick, 2026-10-11; no crate symbol)* | *Records-was: a harvest handshake completed, the session closed, no `adopt`.* Absorbed into `Confirmed`: a confirm-and-close dial learns the peer's sample as a harvest did and writes white. The variant, its `address()` arm, its `apply` arm and its test are gone. *Records-was: left for PR-3 as "more than one line"* | — | — |
-| `Confirmed` | Aim `Confirm`. Rust's handshake checks passed. The owner closed the unadopted channel. No adopt, no post, no row (*records-was:* the strand accepted and the owner closed in that turn) | An outstanding gray draw moves to white and `last_observed` is set. No session remains. Anything else writes nothing | Cleared for that address | None |
-| `SessionAccepted` | Aim `Keep`. Rust's handshake checks passed and the session was not already closed. Recorded in one lists-lock section before the handshake notification (*records-was:* the strand accepted and the session stays) | An outstanding gray draw moves to white and `last_observed` is set. An address that is already white, on a session this node opened, moves the clock. Anything else writes nothing | Cleared for that address | None |
+| `Confirmed` | Aim `Confirm`. Rust's handshake checks passed. The owner closed the unadopted channel. No adopt, no post, no row (*records-was:* the strand accepted and the owner closed in that turn) | An outstanding gray draw moves to white and `last_observed` is set. No session remains. Anything else writes nothing | Cleared for that address |
+| `SessionAccepted` | Aim `Keep`. Rust's handshake checks passed and the session was not already closed. Recorded in one lists-lock section before the handshake notification (*records-was:* the strand accepted and the session stays) | An outstanding gray draw moves to white and `last_observed` is set. An address that is already white, on a session this node opened, moves the clock. Anything else writes nothing | Cleared for that address |
 
 *Records-was: slice 1's `handshake_confirmed` and `draw_failed` were
 three endings sharing one name. Neither spelling is in Rust. They are
@@ -604,20 +658,20 @@ alpha node sends up to 250 entries, a PR-3 node refuses a list over
 *Records-was: "the release notes must ask testnet operators to upgrade
 together".*
 
-**The node's own address (Rick, 2026-10-13).** Tor: the per-boot onion
-goes from `shekyl-tor`'s publish result to `Peerlist::set_own_address`
-on the Rust side (`daemon_tor_ffi.rs`), and the operator onion of
-`--anonymous-inbound` goes through `shekyl::note_own_address`, the one
-replaced line. Clearnet stays dial-only in PR-3: the node does not know
-its own public host, a host-0 address is non-global and `disclose`
-drops it, and no public-host option is added in C++; the dialer logs at
-startup that clearnet is dial-only until a public address is
-configured. How a clearnet node learns its address is open: operator
-configured, or learned from peers and proved by self-dial with the
-nonce. Neither is implemented. The C++ `m_our_address` keeps its two
-writers because `get_announced_address` reads it for the operator's
-inbound-state log line and six unit tests do; the two dial-path readers
-(`is_self_dial`, the candidate loop) go in step 3.
+**The node's own address (Rick, 2026-10-13).** Every own address
+reaches the lists through `Dialer::set_own_addresses`: never a dial
+candidate, and the disclosure population's own member. The daemon hands
+over what its configuration knows when the network starts
+(`shekyl-daemon` `network::own_at_start`): clearnet's
+`clearnet-advertise` when clearnet is on, and the operator's
+`tor-onion` on the operator's Tor arm, each empty for dial-only
+(`INPUT_GRAMMAR.md` IG-Q18). A managed Tor always publishes: its
+per-boot onion is handed over when Tor publishes it
+(`dialer_ffi::note_own_onion`). The dialer logs what this node
+discloses on a connector, or that it is dial-only there, when the
+address is set, so a managed Tor's line comes with its onion. A
+clearnet node learning its address from peers, proved by a self-dial
+with the nonce, is not implemented.
 
 **The address we announce — SUPERSEDED 2026-10-09 (records-was).**
 `get_local_node_data`
@@ -690,7 +744,7 @@ under it, is dropped with the C++ dial path.
 | One outbound per host (`has_outbound_connection_to_host`) | Kept | One outbound session per host on that connector |
 | Peer already in use (`is_peer_used`) | Kept | A second session to an address we already have |
 | Banned (`is_remote_host_allowed`, `net_node.inl:243`) | Kept | Calls `shekyl_ban_remaining_ns` (`seam_ffi.rs:706`). A return of 2 is banned. The check is already Rust |
-| Recently failed (`is_addr_recently_failed`) | Kept, Tor only (R2, 2026-10-12) | This slice's failed-address memory, which clearnet never writes; on clearnet the row is vacuous and a candidate is never skipped for a past failure |
+| Recently failed (`is_addr_recently_failed`) | Dropped (2026-10-24; *records-was* kept, Tor only, R2 2026-10-12) | A failed test cools its address on the lists (`Seat::Cooling`), and a cooling address is not a candidate, so the filter has no row for it. *Records-was: this slice's failed-address memory, which clearnet never wrote; on clearnet the row was vacuous* |
 | One candidate per host while the list is built | Kept | A host that advertises many ports is not drawn more often. The port kept for a host is chosen uniformly, not first in list order. The address that is dialed is still host and port |
 | White-list index weighted by `last_seen`, and the cap of the 20 most recent (`net_node.inl:1948`, weighted pick `:1970-1974`) | Dropped | The uniform draw already ruled. A last-seen weight is the eclipse lever in the wargame below |
 | Address validity (`peerlist_manager::is_host_allowed`, `net_peerlist.h:273`; *records-was* also `sanitize_peerlist`, deleted in PR-3, 2026-10-13) | Kept, in slice 1, at admit (Rick, 2026-10-11) | A network-learned address — a received peerlist, an inbound advertisement — is refused at slice 1's `admit_gray` unless dialable on the public internet, and a received list that carries one is refused whole (`PeerlistRefused`, R4); `disclose` never includes a non-global address (slice 1 brief §2, "Address validity"). Not a dial-time filter: a gray or white address is global or operator-named, and operator-named addresses (`--add-peer`, an exclusive list) are dialed whatever the range; priority nodes are deleted. `--allow-local-ip` is the one override, for private test networks |
@@ -769,8 +823,10 @@ dial that keeps a session is
 
 A confirm whose handshake checks pass is `Confirmed`, whether reached
 under (c) with the pool thin or with every `Keep` slot full. The
-channel is closed in Rust, unadopted. One that fails is `DialFailed`
-or `PeerlistRefused`, with the connector's cause.
+channel is closed in Rust, unadopted. One that fails is `DialFailed`,
+carrying the failure the layer that observed it stamped. *Records-was:
+`PeerlistRefused` was a second variant for a refused list (deleted
+2026-11-02, #1235).*
 *Records-was: a completed harvest was `HarvestDone`, deleted 2026-10-11.
 Records-was (until 2026-10-16): the strand accepted the payload and the
 owner closed in that turn.*
@@ -789,19 +845,169 @@ is the inbound self-connection check.
 
 ---
 
-**Recovery (Rick, 2026-10-14).** A connector whose wake finds no kept
-session, nothing in flight, and no drawable white or gray candidate is
-stranded: its lists cannot get it a peer. That wake re-admits the
-connector's configured addresses to gray as operator-named, under normal
-admission: the compiled seeds and `--add-peer`, or, when a closed
-network is declared (`--add-exclusive-node`), that list alone. It dials
-nothing itself; the next wake draws. Recovery runs only on a wake that
-is ready to dial: a connector whose link is down re-admits nothing. The
-apply table and the address file are unchanged. The dialer logs one line on entering the state, with
-the count re-admitted, and one on leaving it. A connector with a target
-of zero is never stranded. Tests: `shekyl-dialer/tests/recovery.rs` (a
-stranded connector re-admits and dials; a healthy one does not re-admit
-a dead `--add-peer`; a declared closed network re-admits only its list).
+**The gray lifecycle (Rick, 2026-10-24; its own PR, after #1174).** An
+address leaves gray only on authenticated proof of misbehaviour, never
+for a connection problem. Every restart is a fresh look: no trust state
+(cooldowns, bans, white) is saved; the file carries addresses, never
+judgements, a banned address is left out, and the ban is not saved
+(slice 1 brief §7; Rick ruled (ii), 2026-10-24, and the earlier text
+here recorded the unruled option). Where each item
+landed: white expiry follows the connection (slice 1 brief §5, the
+`SessionAccepted` row and the expiry row: the clock moves at the kept
+session's close, and `expire` skips an address in the dialer's `Attempts`
+kept set, the same set `session_closed` removes. *Records-was: the dialer
+answered `BanQuery::has_live_session` from the seam's board*); per-layer
+judgement as four marks on
+the close cause (`P2P_TRANSPORT_LAYER.md`, "The cause travels with the
+close"; the Tor reply table is the Tor connector's,
+`shekyl-tor/src/replies.rs`, and `TOR_SUPERVISOR.md` reads it; the
+transport layer takes the marks as an argument and keeps no SOCKS
+knowledge); retries within a
+test (the connector's dial profile, `.attempts` and `.retry_waits`;
+`shekyl-dialer/src/pace.rs`, `attempts_per_test` and
+`retry_wait_nanos`, and `shekyl-dialer/src/attempts.rs`: the open test,
+in flight or waiting, is one record on `Attempts`; Tor three attempts,
+clearnet one for gray and two for white (one redial before a white
+address demotes, Rick 2026-10-26), the address drawn throughout and no in-flight slot held
+while waiting, one `DialOutcome` per test, the last attempt's; a Tor
+attempt that times out at or after the managed Tor's `SocksTimeout`
+can expire, 104 s into the attempt's own run (105 s,
+`shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT`, the one constant the launch
+also reads, less Tor's whole-second clock), is final within its test and
+the address cools: Tor retried inside its own window, introduction
+points and descriptor fetches (Rick, 2026-10-26; the Tor 0.4.9.14 lines
+are in `TOR_SUPERVISOR.md`'s reply table). The close cause's window-timeout
+mark says which failures can be the window running out: the dial
+deadline's `TransportTimeout`, and every Tor reply worth a retry, since
+with `ExtendedErrors` on Tor answers its own timeout with the onion code
+it last recorded on the stream (`0xF0` after a descriptor not found; the
+short floor series saw `0xF0` at 104 to 110 s, 2026-10-26). Earlier, each
+keeps its retries, as the gap timeout does; `0x01` is final by its own
+row. On a silently blocked link every attempt ends at
+`0x06` at the window, so the candidates it reaches cool; the quiet
+stretch (below) keeps them at the first step.
+Every failed Tor attempt counts in the posture line's
+tally when it ends, deferred or not); a
+cooldown in place of the drop ("The fill" above; the `DialOutcome` table;
+slice 1 brief §5, where cooling
+seats are evictable like drawable ones); the file rule (slice 1 brief
+§7). The values are Assumptions in
+`DAEMON_RELAY_PRIVACY.md` §97. The failed-address memory is deleted
+into this (below).
+
+**The judge (#1235; `DIALER_OUTAGE_EVIDENCE.md`, `OE-D8`) — SUPERSEDES the quiet stretch.**
+A failed test's verdict is the dialer's judge's: a Destination failure
+counts, a Local one is excused, and an Uncertain one counts only if the
+connector's own corroboration showed the link working within δ before the
+failure and again after it (§3.3). An excused failure neither climbs nor
+descends the ladder; an address with no counted failure waits the
+connector's outage retry, and the first sign of life clears those
+excusals (§3.4). Both connectors, one function
+(`shekyl-dialer/src/judge.rs`). It is the dialer's judgement of its own
+evidence about addresses, not a verdict on the link, and nothing is
+announced (`TSR-Q14`); the posture line reports the judge's last sign of
+life (`TOR_SUPERVISOR.md` §4.2). Tests:
+`shekyl-dialer/tests/attempts/judge.rs`. *Records-was, SUPERSEDED (Rick,
+2026-10-26 to #1235):* the quiet stretch cooled a failed test at the first
+step while the connector held no session and its last K attempts across S
+had opened nothing (clearnet 11 across 32.065 s, Tor 13 across 364.5 s);
+on the floor device's blackhole it never engaged, and #1235 deleted it
+whole.
+
+*Wargame:* `DIALER_OUTAGE_EVIDENCE.md` §7. An attacker's dead addresses are
+excused only while nothing shows the link working; one talking session
+and they count. A block does not empty white: a failed white test the
+judge excuses leaves the address white.
+
+**White is known-working (Rick, 2026-10-26; confirmed 2026-10-27).** A
+white address whose test
+fails moves to gray and cools on the ladder (`Partition::fail_test`: the
+first rung, a count of one); a proven misbehaviour drops it, as for gray;
+one success puts it back in white. The test includes its retries: Tor's
+three, with a full-window failure final; on clearnet a white address
+gets one redial after the first retry wait (5 s + U(0, 5 s)) before it
+demotes, and gray stays at one attempt (`attempts_per_test` reads the
+list the address is in). A failed white test the judge excuses does not
+demote. Why: white leaving only at the 24 h expiry let a dead white
+address be redrawn with no cooldown for up to a day, holding a dial slot
+and, for a `Keep`, a target place. Tests:
+`shekyl-dialer/tests/attempts/white.rs` and `shekyl-peerlist/tests/door.rs`
+(`a_failed_white_test_moves_it_to_gray_unless_it_is_excused`).
+*Records-was (to 2026-10-26): a failed white test changed nothing, and
+only the expiry demoted (`a_failed_redial_leaves_white`).*
+
+*Wargame.* Eclipse: a restart already reloads white as gray, so white
+staying put was never the defence; the fill rules are, and demotion on
+a real failure is consistent with them. A clearnet on-path attacker who
+can drop this node's connections to one honest peer can push it out of
+white: a permanent residual, since clearnet can encrypt and recognize
+but never authenticate a destination. The address stays in gray, so the
+cost to that peer is a trip down the cooldown ladder.
+
+**Recovery (Rick, 2026-10-14; amended 2026-10-24).** A connector whose
+wake finds it under its target, nothing in flight, and no drawable white
+or gray candidate is stranded: its lists cannot get it another peer.
+That wake re-admits the connector's configured addresses to gray as
+operator-named, under normal admission: the compiled seeds and
+`--add-peer`, or, when a closed network is declared
+(`--add-exclusive-node`), that list alone. It dials nothing itself; the
+next wake draws. Recovery runs only on a wake that is ready to dial: a
+connector whose link is down re-admits nothing. The apply table and the
+address file are unchanged. A connector with a target of zero is never
+stranded. A drawable candidate, white or gray, means the connector is
+healthy, and a dead `--add-peer` stays out while one exists.
+
+*Amendment (2026-10-24, the alpha.10 fleet report's problem 11).* The
+condition was no kept session. A failed draw drops its address, and a
+connector with one live peer under a target of twelve then held that
+one peer for good; the seeds' outbound degree followed restart order.
+The report's other option, returning an operator-named address to gray
+after a failure window, was not taken: it would make list membership
+depend on who supplied the address, which the apply table refuses. A
+dead configured address a stranded connector re-admits is drawn, fails
+its test and cools where it sits (the gray lifecycle, 2026-10-24): it is
+redialled no faster than its cooldown, two minutes doubling to an hour,
+and is not re-admitted again, since it never left gray. Re-admission
+restores only an address that left gray, by proven misbehaviour or cap
+eviction; a cooling one is seated and waits. *Records-was (#1174):
+drawn, dropped and re-admitted again, one dial per two wakes (R3: mean
+1 s per wake), with no backoff on clearnet (R2); the pacing of those
+redials was the retry PR's, a `docs/FOLLOWUPS.md` row the gray
+lifecycle closed.*
+
+*The log (Rick's review of #1174, 2026-10-24; amended 2026-11-06).*
+Recovery is an episode. It is entered once, with the count re-admitted,
+and left once, when recovery worked. Every wake reports the sessions the
+connector holds, including a wake that makes a test's next attempt. The
+episode ends on the first of these: the connector holds more sessions
+than when the episode opened, or it is no longer under its target. The
+leave line names which one. The count is sessions held, not the `Keep`
+count: a `Keep` dial in flight holds a target slot but may still fail. A
+draw does not end the episode, whatever list the address came from, so
+an address that cools, thaws, is drawn and fails again does not cycle
+the two lines. *Amendment (2026-11-06, the alpha.11 hunt's A7).* The
+episode read the `Keep` count, which since 2026-10-26 counts dials in
+flight, so every `Keep` draw ended it and the draw's failure opened the
+next (a pair every ~16 s in CS-5's fleet run), and a draw of an address
+the episode had not re-admitted ended it too (a pair per rung of a
+learned dead address's cooldown). *Records-was: the episode ended on a
+risen `Keep` count, or on a draw of an address it did not cover.* A
+gained session is visible on the following wake,
+because the dial finishes before that wake runs. When that wake is
+stranded again, it closes the episode and opens the next one. A
+configured address refused at re-admission (a banned one, for instance)
+is said once per episode, not once per wake.
+
+Tests: `shekyl-dialer/tests/recovery.rs` — a stranded connector
+redials a cooling configured address no faster than its cooldown; a
+healthy one leaves a dead `--add-peer` cooling; a declared closed
+network draws only its list once its cooldowns end; one kept session
+under the target redials its cooling configured address no faster than
+its cooldown; a dead configured address is one episode while it cools;
+a gained session closes that episode on the following wake. The log
+tests capture through one global subscriber per test binary
+(`tests/support/log_capture.rs`), so no callsite's interest is cached
+as never.
 
 ## Support flags
 
@@ -821,79 +1027,34 @@ in flight.
 
 ---
 
-## Failed-address memory
+## Failed-address memory — DELETED (2026-10-24)
 
-The key is the host and the port, the address that was dialed. A
-refused port is not evidence about another port on that host. The C++
-keys `addr.host_str()` only (`net_node.h:282`). That host key is
-records-was.
+The memory is gone: `shekyl-dialer/src/memory.rs`,
+`Skip::RecentlyFailed`, `CloseCause::implicates_address`, and their
+tests. `rg -n -e FailedAddresses -e implicates_address -e RecentlyFailed
+rust` returns nothing. What it did is the lists' now ("The gray
+lifecycle" above; slice 1 brief §5, the apply table): a failed test
+cools the drawn address in place, two minutes doubling per consecutive
+failed test to a cap of an hour with U(0, 50%) jitter, and `Confirmed`
+or `SessionAccepted` clears the count. Where the memory asked whether a
+cause implicates the address, `apply` reads the cause's marks: a cause
+that proves misbehaviour drops the address, and only an authenticating
+connector stamps one (the Tor connector's Levin rejection and refused
+list). Nothing of either survives a restart.
 
-The memory is not kept across restarts. It is the process map
-`m_conn_fails_cache` (`net_node.h:788`). `store_config` writes the
-peerlist and does not write this map. A restart dials again.
-
-**Clearnet writes no failed-address memory (R2, Rick, 2026-10-12).**
-On clearnet a refused dial is a TCP RST, and NN being unauthenticated,
-an active path attacker can also forge `LevinHandshakeRejected`.
-Either would suppress an honest address for an hour and refuse it at
-gray admission — the forgeable-reset class D-S1 already keeps away
-from bans (`P2P_TRANSPORT_LAYER.md`, the reconnect throttle), and the
-memory's own doc names the lever: forgetting shrinks the dial set, and
-a shrunken set favours whoever is feeding us addresses
-(`shekyl-transport-layer/src/cause.rs:170`). So on clearnet
-`implicates_address` returns `false` for every cause. `apply` still
-drops the failed gray draw (slice 1 §5), and a dead white address is
-bounded by the 24-hour expiry. The memory remains for Tor's
-destination-naming causes: the replies `0x04 0x05 0xF0 0xF1 0xF2`,
-which come from our own Tor process, not from the path, and a rejected
-handshake, which on Tor comes from the service the onion address names
-(2026-10-13, below).
-
-**PR-3 code change (Rick, 2026-10-13):** `implicates_address(self,
-connector)` counts a destination-naming cause on a connector whose
-declaration says the destination is authenticated. It reads the
-`destination_authenticated` cell of the connector declaration (Tor:
-one-way; clearnet: no, NNhfs authenticates no one) and does not match
-the connector by name. The destination-naming causes are
-`LevinHandshakeRejected`, and `ProxyRefused` with a reply in `0x04 0x05
-0xF0 0xF1 0xF2`. `DialFailed` is not one: on Tor it is this node's
-SOCKS port. Nor is `ProxyUnavailable` (Rick, 2026-10-14): the Tor
-connector names its own proxy, a TCP connect to the SOCKS port that
-failed or an exchange Tor closed without a reply, as that kind and not
-`LocalClose`, and warns about it once a minute at most, never per dial.
-So on clearnet no cause counts, and on Tor exactly six do:
-the rejection and the five replies. The cell already existed in
-`shekyl-transport-layer/src/declaration.rs`; nothing was added to the
-table. Its tests: clearnet, no cause counts; Tor, exactly those six and
-no other kind; and the answer follows the cell for every connector.
-*Records-was (2026-10-12, PR-3's first reading): on Tor only the five
-replies counted, with `LevinHandshakeRejected` left out. That came from
-the PR-3 brief's "the Tor memory is written only for the five replies",
-which was the reviewer's imprecision, not a ruling. Records-was before
-that: "the Tor arms are unchanged", which also kept `DialFailed`
-writing on Tor.*
-
-The suppression window is the same schedule on every operating system.
-Four minutes after the first failure, doubled for each consecutive
-failure, capped at one hour (`window_nanos` in `shekyl-dialer`).
-*Records-was: clearnet used the flat hour, from
-`failed_addr_cache::window`.*
-
-`implicates_address` decides the write, on `DialFailed` and on
-`PeerlistRefused`. On Tor a rejected handshake and an onion reply in
-`0x04 0x05 0xF0 0xF1 0xF2` write the memory. *Records-was: only the
-onion replies.* A refused connect, a handshake timeout, a peer close, a
-local failure,
-a clearnet proxy reply, and — since R2 — every clearnet cause do not.
-`PayloadRefused` does not. `Confirmed` and `SessionAccepted` clear the
-address. *Records-was: a refused dial and a rejected handshake wrote
-it on every connector.*
-
-Slice 1's gray admission refuses an address the memory holds (an onion
-address, after R2), and a banned one (`handle_remote_peerlist`,
-`net_node.inl:2472`). Until this slice lands, slice 1 takes that
-predicate from the C++ cache. This slice replaces where the predicate
-comes from.
+*Records-was (2026-10-12 to 2026-10-24):* a process map keyed by host
+and port, the C++ `m_conn_fails_cache` rewritten, written on Tor only
+(R2, Rick, 2026-10-12: a TCP RST and a forged `LevinHandshakeRejected`
+are a path attacker's to produce) when `implicates_address` held for
+the cause, a rejected Levin handshake or a proxy reply in `0x04 0x05
+0xF0 0xF1 0xF2` on a connector whose declaration authenticates the
+destination (Rick, 2026-10-13), with a suppression window of four
+minutes doubling to an hour. The candidate filter read it; gray
+admission, despite the briefs' line, never did. Before R2 a refused dial
+and a rejected handshake wrote it on every connector. The window was the
+first draft of the cooldown ladder; the ladder lives on the lists,
+starts at two minutes, cools every connector's connection problems
+alike, and drops on proof instead of cooling.
 
 ---
 
@@ -924,16 +1085,32 @@ it to the lists on the Rust side. The operator onion does cross:
 Rick, 2026-10-13). *Records-was (2026-10-13, step 2):
 `shekyl_peerlist_set_own_address` existed with no caller.*
 
-**The dial blocks its owner's thread — ACCEPTED for PR-3 (Rick,
-2026-10-13).** The timing engine owns the wake (R3): the owner loop
-arms its next deadline and blocks on `wait_wake`. Once woken, the
-thread blocks on the TCP dial and on the handshake read until the
-connector's gap deadline ends them; the dial itself is not an engine
-event. With the in-flight bound at one dial per connector that thread
-is the bound, so nothing waits behind it. Reopen criterion: if the
-post-cutover in-flight bound is raised above one, the dial moves into
-the connector as an event-driven step, and the owner loop stops
-holding a thread across it.
+**Each dial attempt is a task; the owner loop never waits on a dial
+(the dialer in-flight bound, revision 2, Rick 2026-10-25, decisions 1
+and 2).** The loop plans, launches and applies results. The attempt
+task runs on the transport runtime's async workers (zone bind; the
+harness polls it on a thread of its own) and does only the I/O and the
+Levin layer's checks: open the channel, send the handshake, read and
+decode the response, check the network id. It posts its result to a
+completion queue and rings the bell. The loop waits on its wake or the
+bell together; a bell applies the posted results through the layer
+that owns each decision (the lists admit the received list, the aim
+confirms or keeps, the hub adopts, then settle), on the loop's CSPRNG,
+and waits again on the same wake. An attempt stays pending, and its
+nonce in flight, until the loop applies its result. `stop` sets the
+flag, rings, cancels every attempt in flight (a connect is aborted, a
+channel released), drops every posted result, waits for any application
+already under way, joins both owner loops, and then writes the address
+file, all before the zone's runtime stops and before the Tor teardown
+(`TOR_SUPERVISOR.md`, `TSR-F13`). Each owner loop is a dedicated thread
+on the thread ledger (`p2p-dial-clearnet`, `p2p-dial-tor`); the engine
+lateness report is an interval task on the transport runtime, not a
+thread (decision B, Rick 2026-10-25). Tests:
+`shekyl-dialer/tests/attempts/`, and the ledger rows in
+`shekyl-ffi/src/zone_ffi_tests.rs`. *Records-was (ACCEPTED for PR-3,
+Rick 2026-10-13, with a reopen criterion this met): the owner loop
+blocked on the TCP dial and the handshake read, so the in-flight bound
+was the thread, and a stopping daemon could wait out a dial.*
 
 ## Measured after the cutover, on the Rust path
 
@@ -1034,8 +1211,9 @@ two dial sites (`:1677`, `:1735`). Inbound is `handle_handshake`
 (`:2752`), which does not call it. Once those calls are gone the
 function has no caller, so the definition and the declaration go with
 them. That is dead, not in flight. `handle_handshake`,
-`detect_self_handshake`, `try_get_support_flags`, and `add_host_fail`
-keep the callers named below.
+`detect_self_handshake` and `try_get_support_flags` keep the callers
+named below; `add_host_fail` was deleted with the automatic ban
+(2026-11-01).
 
 | What | Where, at `f317d979c4` | `rg` when it has landed |
 | --- | --- | --- |
@@ -1049,7 +1227,7 @@ keep the callers named below.
 | The dial path in `idle_worker` | `idle_worker` is `:2303`. The fill call is `:2306`. The gray-probe call is `:2307` | `rg -n -e connections_maker -e gray_peerlist_housekeeping src/p2p` returns nothing. `idle_worker` itself stays until its other gates move |
 | `gray_peerlist_housekeeping` and its interval | function `:3336`, declaration `net_node.h:713`, interval `:756`. The comment at `net_node.inl:1091` names the function and goes with it | `rg -n -e gray_peerlist_housekeeping -e m_gray_peerlist_housekeeping_interval src/p2p` returns nothing. Before deletion that command hits the declaration, the interval, the `idle_worker` call, the definition, and that comment |
 | `zone_server::open` and its `open_outcome` result type | `zone_server.h:382`; `struct open_outcome` at `:376` | `rg -n -e 'open_outcome open\(' src/p2p/zone_server.h` returns nothing, and `rg -n -w open_outcome src/p2p` returns nothing: the struct is the freeze row's witness and goes with the function |
-| `shekyl_seam_open`'s blocking wait | `rust/shekyl-ffi/src/seam_ffi.rs:303` | The function remains and returns the channel without waiting for the handler to arm. `rg -n -e shekyl_seam_open rust/shekyl-ffi/src/seam_ffi.rs` still hits the definition. Zero hits fails |
+| `shekyl_seam_open`'s blocking wait | line 303 of `rust/shekyl-ffi/src/seam_ffi.rs` at `e8838b0095` (the export left in PR #1272) | The function remains and returns the channel without waiting for the handler to arm. `rg -n -e shekyl_seam_open rust/shekyl-ffi/src/seam_ffi.rs` still hits the definition. Zero hits fails |
 | `shekyl_seam_session_cause` | `cause_ffi.rs:55`, declared `shekyl_ffi.h:4430`, C++ read `net_node.h:229` (the file and both readers deleted 2026-10-13) | `rg -n -e shekyl_seam_session_cause rust src` returns nothing |
 | The outbound call of `try_get_support_flags` | call `:1435`, definition `:2677`, inbound call `:2837` inside `handle_handshake`, declaration `net_node.h:673` | `rg -n -e try_get_support_flags src/p2p` still matches the declaration, the definition, and the call in `handle_handshake`, and nothing else. Zero matches fails. A match inside `do_handshake_with_peer` fails, because that function is gone |
 | `node_data.address` (handshake-address ruling, 2026-10-09; deleted 2026-10-13) | The field in `basic_node_data` (`p2p_protocol_defs.h`), written by `get_local_node_data`, read by `handle_handshake` through `derive_advertised_endpoint` (`net_node.cpp`, declared `net_node.h`) and by `get_announced_address` / `get_announced_port`. The Rust codec's `BasicNodeData.address` and its fixtures go with it; the two announce getters compute the address directly and stay, for the operator log line and the tests | `rg -n -e derive_advertised_endpoint -e 'node_data.address' src tests rust` returns nothing. `rg -n -e get_announced_address src/p2p` still hits the declaration, the definition and `get_announced_port`; zero hits fails, because the getter was kept. The harness goldens are re-recorded from the seam in the same commit, 44 bytes shorter per handshake |
@@ -1076,7 +1254,7 @@ keep the callers named below.
 | `shekyl_rpc_peer_list`, `shekyl_rpc_peer_list_free`, `shekyl_rpc_peerlist_sizes` (*records-was* RK-5a's C++ exports `shekyl_rpc_peer_list` and `shekyl_rpc_peerlist_limits` over the C++ peerlist, and `get_public_*_peers_count` in `shekyl_rpc_info_peers`) | `rust/shekyl-ffi/src/rpc_peerlist_ffi.rs`, from the Rust lists' snapshot and the hub's bans; `shekyl-daemon-rpc` declares them and the console reads the caps from `shekyl-peerlist`. `get_peer_list` entries lose `last_seen` at `CORE_RPC_VERSION` 3.55: the lists carry no clock (slice 1 brief §4). A daemon started offline answers `FACTS_OFFLINE` on both and writes nothing, from what `shekyl_p2p_record_offline` recorded (Rick, 2026-10-14; 3.56); an online daemon with no lists is `NullHandle` | Rust owns them. `rg -n -e get_public_peerlist -e get_peerlist -e peerlist_limits src` returns nothing |
 | **C++ this PR adds (§3.2, the cap move): `shekyl_dialer_out_target`, a read of the connector's outbound target** | `descriptor_reservations` (the outbound reserve of the inbound ceiling), `get_max_out_public_peers` (the operator's `out_peers` readback), the two `m_payload_handler.set_max_out_peers` lines of `handle_command_line` and the one in `add_ephemeral_tor_zone`: each a line that read the C++ mirror `max_out_connection_count`, replaced by the call. The mirror is unwritten; the dialer owns the target. *Records-was:* the hidden Tor cap assignment and `set_max_out_peers`'s floor check in C++, and `release_outbound`, which closed the excess the dialer now closes on `set_target` | the inbound-ceiling move to Rust (the reservation) and the daemon-config slice (the readback) |
 | **The `add-priority-node` retired-flag row — DELETED (Rick, 2026-10-13):** `--add-priority-node` is deleted outright, with no `removed_flags.cpp` row: pre-genesis there is no backward compatibility, and the cutover deletes the shim anyway. *Records-was:* the row, its `rust_dialer` reason and the operator message, "refused by name" (2026-10-11). `rg -n -e priority-node -e rust_dialer src` returns nothing | landed |
-| `shekyl_close_implicates_address` (*records-was* a C++ question, deleted 2026-10-13 with its one caller) | `cause_ffi.rs`, read by `record_addr_failed`; the Rust dialer's memory asks `CloseCause::implicates_address` directly, pinned by `shekyl-dialer`'s memory tests and `shekyl-transport-layer`'s cause tests. The C++ unit test of the predicate went with the entry | `rg -n -e shekyl_close_implicates_address rust src tests` returns nothing |
+| `shekyl_close_implicates_address` (*records-was* a C++ question, deleted 2026-10-13 with its one caller) | `cause_ffi.rs`, read by `record_addr_failed`; *records-was* the Rust dialer's memory asked `CloseCause::implicates_address` directly; since 2026-10-24 the memory and the predicate are deleted and the lists read the cause's marks (`proves_misbehaviour`), pinned by `shekyl-peerlist/tests/lifecycle.rs` and `shekyl-transport-layer`'s cause tests. The C++ unit test of the predicate went with the entry | `rg -n -e shekyl_close_implicates_address rust src tests` returns nothing |
 | **Config pushes this PR adds: `shekyl_dialer_set_out_peers`, `shekyl_peerlist_allow_local_ip`** | `set_max_out_peers`; the `--allow-local-ip` read in `init` | the daemon-config slice, which creates the options in Rust |
 | `sanitize_peerlist`, the `P2P_MAX_PEERS_IN_HANDSHAKE` check and the per-entry connector loop in `handle_remote_peerlist` (Rick, 2026-10-13) | *Records-was* definition `net_node.inl:2417`, declaration `net_node.h:510`, the check and the loop in `handle_remote_peerlist`. Rust holds every rule; the handler is one call | `rg -n -e sanitize_peerlist src/p2p` returns nothing. `rg -n -e P2P_MAX_PEERS_IN_HANDSHAKE src/p2p` returns nothing; the define stays in `cryptonote_config.h` as an input of the Levin ingress byte bound (`shekyl-levin/src/ingress.rs`, `check_levin_constant_parity.sh`). `rg -n -e handle_remote_peerlist src/p2p` still matches the declaration, the definition and its two callers until slice 4 |
 | Priority nodes (Rick, 2026-10-11) | `arg_p2p_add_priority_node` (`net_node.cpp:125`, declared `net_node.h:820`, added `net_node.inl:118`); `m_priority_peers` (`net_node.h:767`); the parse (`net_node.inl:556-558`); the clearnet arm (`:2132`); `is_priority_node` (`:2906`, declared `net_node.h:679`), whose callers (`:1670`, `:1681`, `:1727`, `:1737`) only choose a log level. The live flag rows: `docs/EXECUTABLES.md` and `docs/proxies.md`. `docs/USER_GUIDE.md` already has none. The Q12 run record is historical and is not in this gate | `rg -n -e priority_node -e m_priority_peers -e priority-node src/p2p` returns nothing. Before deletion it hits the argument, its registration, the parse, the arm, the predicate and its four callers. `rg -n -e add-priority-node src/common/removed_flags.cpp` hits the retired-flag row; zero hits fails, because the flag is refused by name, not forgotten. When the deletion has landed, `rg -n add-priority-node docs/EXECUTABLES.md docs/proxies.md docs/USER_GUIDE.md` returns nothing. Today the first two still document the live flag |
@@ -1109,35 +1287,38 @@ nothing a prefix rule would have denied, and an attacker within one
 prefix is bounded by the uniform draw's share, which is what PM-2a's
 clearnet variant measures.
 
-**The failed-address memory as something an attacker can drive.** A
-peer, or a directory, that can force a forgetting cause can suppress
-an address for the window. The answer is `implicates_address` on
-`DialFailed` and `PeerlistRefused`: on clearnet nothing writes the
-memory (R2: a TCP RST and, NN being unauthenticated, a forged
-`LevinHandshakeRejected` are both a path attacker's to produce, and
-either would have suppressed an honest address for an hour); on Tor
-only a reply in `0x04 0x05 0xF0 0xF1 0xF2` writes it, and those come
-from our own Tor process. A handshake timeout, a peer close, a local
-failure, and a clearnet proxy reply never did. The window is that
-same schedule. An attacker who can force reply 4 still buys only the
-short first window. That residual is
-unchanged. The key is host and port, so a refused port does not
-suppress another port on the same host. The memory dies with the
-process. *Records-was: a refused dial and a rejected handshake wrote
-the memory on clearnet too.*
+**The cooldown as something an attacker can drive (2026-10-24;
+*records-was* the failed-address memory).** A peer, or a directory, that
+can force a failed test cools the address for one rung of the ladder,
+two minutes at first and at most an hour, and never removes it: a
+connection problem is never proof. Only a cause that proves misbehaviour
+drops the address, and only an authenticating connector stamps one. So
+on clearnet, where a TCP RST and, NN being unauthenticated, a forged
+`LevinHandshakeRejected` are both a path attacker's to produce (R2),
+nothing an attacker does removes an honest address, and the most it
+buys is the hour. On Tor the proving causes come from the service the
+onion names (a Levin rejection, a refused list), not from the path or
+the directories; an attacker on the directories responsible for a
+target's key forces reply `0x04` or `0xF0`, which the Tor table marks
+worth a retry and proves nothing, so the test retries, fails and cools.
+The key is host and port, so a refused port does not cool another port
+on the same host. The cooldown dies with the process. *Records-was: the
+memory, Tor only, written by `implicates_address` on `DialFailed` and
+`PeerlistRefused` for a reply in `0x04 0x05 0xF0 0xF1 0xF2` or a
+rejected handshake, four minutes doubling to an hour; before R2 a
+refused dial and a rejected handshake wrote it on clearnet too.*
 
 **Dial concurrency.** Many simultaneous onion dials are a load the
 managed Tor process was not sized for, and a way to stall every other
 dial behind one SOCKS exchange. Many simultaneous clearnet dials pin
 the dialer's tasks and the peers' handshake slots the same way. Each
-connector has its own in-flight bound, owned by this slice. The
-interim is one dial per connector (the fill section). It is measured
-and raised on the Rust path after the cutover, not before it: a bound
-measured with the C++ dial path in front is a `CppPath` reading
-(`DAEMON_RELAY_PRIVACY.md` §97) and nothing is derived from it.
-*Records-was: both numbers are measured before the implementation PR
-names them.* The fill's one-dial-per-wake is the schedule, not that
-bound.
+connector has its own in-flight bound, owned by this slice: Tor 5,
+derived on the Rust path; clearnet 1 (the fill section). A bound
+measured with the C++ dial path in front would be a `CppPath` reading
+(`DAEMON_RELAY_PRIVACY.md` §97), and nothing was derived from one.
+*Records-was: the interim was one dial per connector; before that, both
+numbers were to be measured before the implementation PR named them.*
+The fill's one-dial-per-wake is the schedule, not that bound.
 
 **Full-pool capture.** The chance an attacker holds every hidden
 session is `p_h^h`. `p_h` is the onion-candidate spy share, as §95

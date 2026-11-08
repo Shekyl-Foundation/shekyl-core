@@ -16,7 +16,7 @@ use super::*;
 
 use std::collections::BTreeMap;
 
-use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+use shekyl_crypto_pq::account::SEED_BYTES;
 use shekyl_engine_state::pscan_cursor::{PScanCursor, PSCAN_CURSOR_BLOCK, PSCAN_CURSOR_VERSION};
 use shekyl_engine_state::pscan_state::{
     PSCAN_STATE_BLOCK, PSCAN_STATE_VERSION, PSCAN_STATE_VERSION_KEYLESS_JOIN,
@@ -32,7 +32,7 @@ use crate::engine::{Credentials, EngineCreateParams};
 use crate::engine::test_support::dummy_daemon;
 
 /// This suite's deterministic seed (multiplier 7).
-fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
+fn fixed_seed() -> [u8; SEED_BYTES] {
     crate::engine::test_support::fixed_seed(7)
 }
 
@@ -217,7 +217,7 @@ async fn staker_auto_start_single_flight_and_shutdown_releases_the_engine() {
     engine
         .persist_bond_record(PSlot::from_raw(3))
         .expect("persist bond record");
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
 
     let opened = Engine::<SoloSigner>::open_full(
         &base_path,
@@ -270,7 +270,7 @@ async fn staker_auto_start_single_flight_and_shutdown_releases_the_engine() {
     let engine = Arc::try_unwrap(arc)
         .unwrap_or_else(|_| panic!("the shut-down task must not hold the engine arc"))
         .into_inner();
-    engine.close(&creds).expect("close after shutdown");
+    engine.close(&creds).await.expect("close after shutdown");
 }
 
 /// A stopped scan can be started again: the slot is reusable across
@@ -293,7 +293,7 @@ async fn pscan_can_be_restarted_after_shutdown() {
     engine
         .persist_bond_record(PSlot::from_raw(0))
         .expect("persist bond record");
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
     let engine = Engine::<SoloSigner>::open_full(
         &base_path,
         &creds,

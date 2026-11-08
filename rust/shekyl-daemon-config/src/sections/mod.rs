@@ -18,7 +18,7 @@
 //! the one child-row table. [`ban`] reads the ban file. A row the table
 //! fills with a literal is required: its default is not restated here.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
@@ -191,7 +191,7 @@ impl Logging {
     /// The table admits only level words and subsystem keys, and [`build`]
     /// refuses anything else, so a built section's words are in that set.
     #[must_use]
-    pub fn directive(&self) -> String {
+    pub fn directive(&self) -> shekyl_logging::filter::Directive {
         let overrides: Vec<(&str, &str)> = self
             .categories
             .iter()
@@ -229,10 +229,12 @@ pub struct Notify {
 
 /// A mining address the configuration decode accepted.
 ///
-/// The text is what the operator wrote, for display. The keys are what the
-/// miner assembles into an account address. The miner does not parse the
-/// text, and this type does not carry the C++ layout: the X25519 prefix is
-/// derived there, from the view key, beside the ML-KEM encapsulation key.
+/// The text is what the operator wrote, for display. The keys are what a
+/// coinbase pays, checked once, here, as the C++ address decode checks
+/// them (`shekyl_crypto_pq::account::coinbase_recipient`): the spend key
+/// is a curve point, the view key maps to X25519, and the ML-KEM-768 key
+/// is well-formed. The template pays these keys; the miner's status shows
+/// the text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MineAddress {
     /// The address the operator wrote.
@@ -241,6 +243,9 @@ pub struct MineAddress {
     pub spend: [u8; 32],
     /// The view public key.
     pub view: [u8; 32],
+    /// The X25519 half of the coinbase's KEM target, derived from the view
+    /// key.
+    pub x25519: [u8; 32],
     /// The ML-KEM encapsulation key.
     pub ml_kem: Vec<u8>,
 }
@@ -248,10 +253,15 @@ pub struct MineAddress {
 /// The miner's section.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mine {
-    /// Mine to this address from start.
+    /// `mine = on`: the node starts the miner once it has opened, to
+    /// `address`, with `threads`. Off, the miner starts on `start_mining`.
+    /// On without an address is refused at parse (Rick, 2026-11-02).
+    pub start: bool,
+    /// The address the miner pays. It starts nothing by itself.
     pub address: Option<MineAddress>,
-    /// The thread count; `None` is `auto`, which the miner receives as 0
-    /// and resolves itself.
+    /// The thread count for the start-time miner and for a `start_mining`
+    /// that names none; `None` is `auto`, the host's parallelism. A count
+    /// above the host's is the configuration check's refusal.
     pub threads: Option<NonZeroU32>,
 }
 
@@ -266,6 +276,10 @@ pub struct Dev {
     pub clearnet_encrypt: bool,
     /// The relay's development cover carrier.
     pub relay_cover: bool,
+    /// Serve the armed test levers (`generateblocks`, `pop_blocks`) to the
+    /// host's administrator (`RPC_CHANNEL.md` RT-O9.2; `DRS_X_STORE_FLIP.md`
+    /// DX-Q3, Q8).
+    pub rpc: bool,
     /// The RandomX seed epoch length.
     pub pow_seed_epoch_blocks: Option<u64>,
     /// The RandomX seed epoch lag.
@@ -276,18 +290,12 @@ pub struct Dev {
     pub archival_reorg_depth: Option<u64>,
 }
 
-/// The interim C++ console's section, until `shekyl-cli` serves it (R8).
+/// Whether this start checks the configuration and exits (`config-verify`,
+/// IG-Q58).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Session {
-    /// Run the interactive console.
-    pub console: bool,
-    /// The positional words: a client-mode command, empty for a daemon
-    /// start.
-    pub command: Vec<String>,
-    /// The admin endpoint a client-mode command reaches. Present only in
-    /// client mode, and only when that endpoint is IPv4: the console dials
-    /// four octets and a port. A daemon may still bind IPv6.
-    pub client_endpoint: Option<SocketAddrV4>,
+    /// Check the configuration as a start would and exit without starting.
+    pub verify: bool,
 }
 
 /// The whole configuration, by section.
@@ -311,15 +319,13 @@ pub struct DaemonConfig {
     pub p2p: P2p,
     /// The RPC service.
     pub rpc: Rpc,
-    /// The transaction pool's weight bound.
-    pub txpool_weight_max: u64,
     /// The notify runner.
     pub notify: Notify,
     /// The miner.
     pub mine: Mine,
     /// The development levers.
     pub dev: Dev,
-    /// The console.
+    /// The configuration check.
     pub session: Session,
 }
 
@@ -330,21 +336,14 @@ impl DaemonConfig {
         self.clearnet == Clearnet::Off && self.tor == Tor::Off
     }
 
-    /// Whether this process is a client of a running daemon (§2.2, client
-    /// mode).
+    /// Whether the clearnet connector is on. The supervisor and the pin
+    /// warning both read this bit.
     #[must_use]
-    pub fn is_client(&self) -> bool {
-        !self.session.command.is_empty()
-    }
-}
-
-/// The address network a daemon network's addresses belong to: regtest
-/// runs mainnet's genesis and prefixes.
-fn address_network(network: Network) -> shekyl_address::Network {
-    match network {
-        Network::Mainnet | Network::Regtest => shekyl_address::Network::Mainnet,
-        Network::Testnet => shekyl_address::Network::Testnet,
-        Network::Stagenet => shekyl_address::Network::Stagenet,
+    pub fn clearnet_on(&self) -> bool {
+        match self.clearnet {
+            Clearnet::Off => false,
+            Clearnet::On { .. } => true,
+        }
     }
 }
 
@@ -391,9 +390,8 @@ pub fn build(
     let rpc = rpc_section(&mut r);
     let mine = mine_section(&mut r, network);
     let dev = dev_section(&mut r);
-    let session = session_section(&mut r, &rpc.admin_listen);
+    let session = session_section(&mut r);
     let notify = notify_section(&mut r);
-    let txpool_weight_max = r.required_bytes("txpool-weight-max");
 
     faults.append(&mut r.faults);
     if !faults.is_empty() {
@@ -416,8 +414,6 @@ pub fn build(
                 .connections_max
                 .expect("rpc-connections-max was read or a fault was recorded"),
         },
-        txpool_weight_max: txpool_weight_max
-            .expect("txpool-weight-max was read or a fault was recorded"),
         notify,
         mine,
         dev,
@@ -485,7 +481,7 @@ pub fn apply_logging(resolved: &Resolved) -> Result<(), Vec<Diagnostic>> {
         .collect();
     let directive = shekyl_logging::subsystem::directive_from_words(level, &overrides)
         .expect("the table admits only level words and subsystem keys");
-    shekyl_logging::subsystem::apply_directive(directive);
+    shekyl_logging::subsystem::apply_directive(&directive);
     Ok(())
 }
 
@@ -568,14 +564,41 @@ fn rpc_section(r: &mut Reader<'_>) -> RpcRead {
 }
 
 fn mine_section(r: &mut Reader<'_>, network: Network) -> Mine {
+    let start = match r.optional_word("mine") {
+        Read::Present("on") => true,
+        // Absent is the table's default, off. Unreadable already recorded
+        // its fault; off starts nothing while the rest of the section builds.
+        Read::Absent | Read::Present("off") | Read::Unreadable => false,
+        Read::Present(other) => {
+            r.word_choice("mine", other, "on, off");
+            false
+        }
+    };
     let address = match r.address("mine-address") {
         Read::Present(text) => {
-            match shekyl_address::ShekylAddress::decode_for_network(&text, address_network(network))
-            {
-                Ok(decoded) => Some(MineAddress {
+            let decoded = shekyl_address::ShekylAddress::decode_for_network(&text, network)
+                .map_err(|error| error.to_string())
+                .and_then(|decoded| {
+                    if !decoded.has_pqc_segment() {
+                        return Err(
+                            "the address has no post-quantum segments; mine to the full address"
+                                .to_owned(),
+                        );
+                    }
+                    shekyl_crypto_pq::account::coinbase_recipient(
+                        &decoded.spend_key,
+                        &decoded.view_key,
+                        &decoded.ml_kem_encap_key,
+                    )
+                    .map(|x25519| (decoded, x25519))
+                    .map_err(|refused| refused.to_string())
+                });
+            match decoded {
+                Ok((decoded, x25519)) => Some(MineAddress {
                     text,
                     spend: decoded.spend_key,
                     view: decoded.view_key,
+                    x25519,
                     ml_kem: decoded.ml_kem_encap_key,
                 }),
                 Err(error) => {
@@ -591,7 +614,11 @@ fn mine_section(r: &mut Reader<'_>, network: Network) -> Mine {
         }
         Read::Absent | Read::Unreadable => None,
     };
+    if start && address.is_none() {
+        r.requires("mine", "mine-address");
+    }
     Mine {
+        start,
         address,
         threads: match r.thread_count("mine-threads") {
             ThreadCount::Counted(count) => Some(count),
@@ -616,6 +643,7 @@ fn dev_section(r: &mut Reader<'_>) -> Dev {
         sync,
         clearnet_encrypt: r.switch("dev-clearnet-encrypt"),
         relay_cover: r.switch("dev-relay-cover"),
+        rpc: r.switch("dev-rpc"),
         pow_seed_epoch_blocks: r.dev_integer("dev-pow-seed-epoch-blocks"),
         pow_seed_epoch_lag: r.dev_integer("dev-pow-seed-epoch-lag"),
         settlement_epoch_blocks: r.dev_integer("dev-settlement-epoch-blocks"),
@@ -623,34 +651,9 @@ fn dev_section(r: &mut Reader<'_>) -> Dev {
     }
 }
 
-fn session_section(r: &mut Reader<'_>, admin_listen: &[SocketAddr]) -> Session {
-    let command = r.positional().to_vec();
-    let client_endpoint = if command.is_empty() {
-        None
-    } else {
-        match admin_listen.first() {
-            Some(SocketAddr::V4(endpoint)) => Some(*endpoint),
-            Some(endpoint) => {
-                r.faults.push(
-                    Diagnostic::new(Code::ValueRange, r.source("rpc-admin-listen"))
-                        .option("rpc-admin-listen")
-                        .param("value", endpoint.to_string())
-                        .param("rule", "the console client reaches an IPv4 admin endpoint"),
-                );
-                None
-            }
-            None => {
-                r.faults.push(
-                    Diagnostic::new(Code::ClientNoEndpoint, Source::Cli).option("rpc-admin-listen"),
-                );
-                None
-            }
-        }
-    };
+fn session_section(r: &mut Reader<'_>) -> Session {
     Session {
-        console: r.switch("console"),
-        command,
-        client_endpoint,
+        verify: r.switch("config-verify"),
     }
 }
 
@@ -662,25 +665,43 @@ fn notify_section(r: &mut Reader<'_>) -> Notify {
     }
 }
 
-/// Refuses if the log file's directory cannot be created or the file
-/// cannot be opened for appending (`config.log.unwritable`).
+/// Whether the account could create the log file's directory and open the
+/// file for appending, asked without creating or opening (IG-Q59,
+/// IG-F15): the configuration check's half, and the question
+/// [`log_location_writable`] asks before it creates.
 ///
 /// # Errors
-/// The typed refusal, naming the path and the error.
-pub fn log_location_writable(file: &Path) -> Result<(), Diagnostic> {
-    let fail = |error: std::io::Error| {
+/// `config.log.unwritable`, as `log_location_writable` would refuse.
+pub fn log_location_creatable(file: &Path) -> Result<(), Diagnostic> {
+    crate::probe::file_openable(file, crate::probe::Need::Write).map_err(log_unwritable(file))
+}
+
+fn log_unwritable(file: &Path) -> impl Fn(std::io::Error) -> Diagnostic + '_ {
+    move |error: std::io::Error| {
         Diagnostic::new(Code::LogUnwritable, Source::Machine)
             .option("log-file")
             .param("path", file.display().to_string())
             .param("error", error.to_string())
-    };
+    }
+}
+
+/// Refuses if the log file's directory cannot be created or the file
+/// cannot be opened for appending (`config.log.unwritable`).
+/// [`log_location_creatable`] is asked first, so the decision is written
+/// once.
+///
+/// # Errors
+/// The typed refusal, naming the path and the error.
+pub fn log_location_writable(file: &Path) -> Result<(), Diagnostic> {
+    log_location_creatable(file)?;
+    let fail = log_unwritable(file);
     if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir).map_err(fail)?;
+        std::fs::create_dir_all(dir).map_err(&fail)?;
     }
     std::fs::OpenOptions::new()
         .append(true)
         .create(true)
         .open(file)
         .map(|_| ())
-        .map_err(fail)
+        .map_err(&fail)
 }

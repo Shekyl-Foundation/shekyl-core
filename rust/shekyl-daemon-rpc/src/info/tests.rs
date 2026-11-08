@@ -18,8 +18,27 @@ use shekyl_units::AtomicUnits;
 
 use super::*;
 use crate::info_facts::{
-    InfoChainFacts, InfoPeersFacts, InfoStatusFacts, PeerFacts, PoolCounts, SessionCounts,
+    InfoChainFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolState, SessionCounts,
 };
+use shekyl_rpc_types::{InfoConnector, InfoConnectorPeers, InfoPeers};
+
+/// The fixture's Peers rows, every row's sockets replaced: a node whose
+/// lists are full and whose sockets read `incoming` and `outgoing`.
+pub(super) fn with_sockets(peers: &PeerFacts, incoming: u64, outgoing: u64) -> PeerFacts {
+    let PeerFacts::Running(peers) = peers else {
+        unreachable!("the fixture's P2P runs")
+    };
+    let rows = peers
+        .connectors()
+        .iter()
+        .map(|row| InfoConnectorPeers {
+            incoming_sockets: incoming,
+            outgoing_sockets: outgoing,
+            ..*row
+        })
+        .collect();
+    PeerFacts::Running(InfoPeers::new(rows).expect("the rows keep their order"))
+}
 
 /// The emitter's `tagged_hash`: byte i = (i*7 + tag) & 0xff.
 fn tagged_hash(tag: u8) -> BlockHash {
@@ -41,6 +60,8 @@ pub(crate) struct FakeInfoFacts {
     /// When set, the double answers a host-axis read without the second
     /// count: a facts layer that did not do what it was asked.
     pub(crate) pool_drops_unbroadcast: bool,
+    /// When set, the pool is retired: the node's pool file faulted.
+    pub(crate) pool_retired: bool,
     pub(crate) store_size: u64,
     pub(crate) status: InfoStatusFacts,
     pub(crate) peers: PeerFacts,
@@ -89,6 +110,7 @@ pub(crate) fn synced_facts() -> FakeInfoFacts {
         pool_broadcast: 9,
         pool_unbroadcast: 3,
         pool_drops_unbroadcast: false,
+        pool_retired: false,
         store_size: 7 * 1024 * 1024 * 1024 + 1,
         status: InfoStatusFacts {
             start_time: 1_699_990_000,
@@ -96,14 +118,25 @@ pub(crate) fn synced_facts() -> FakeInfoFacts {
             alt_blocks_count: 3,
             version: "3.1.0-oracle".to_owned(),
         },
-        peers: PeerFacts::Running(InfoPeersFacts {
-            public_incoming_sockets: 13,
-            public_outgoing_sockets: 10,
-            tor_incoming_sockets: 4,
-            tor_outgoing_sockets: 2,
-            white_peerlist_size: 500,
-            grey_peerlist_size: 2500,
-        }),
+        peers: PeerFacts::Running(
+            InfoPeers::new(vec![
+                InfoConnectorPeers {
+                    connector: InfoConnector::Clearnet,
+                    incoming_sockets: 13,
+                    outgoing_sockets: 10,
+                    white_peerlist_size: 500,
+                    gray_peerlist_size: 2500,
+                },
+                InfoConnectorPeers {
+                    connector: InfoConnector::Tor,
+                    incoming_sockets: 4,
+                    outgoing_sockets: 2,
+                    white_peerlist_size: 40,
+                    gray_peerlist_size: 300,
+                },
+            ])
+            .expect("the rows are in connector order"),
+        ),
         chain_fault: None,
         pool_fault: None,
         store_size_fault: None,
@@ -128,17 +161,20 @@ impl InfoFacts for FakeInfoFacts {
         self.chain_fault.map_or_else(|| Ok(self.chain.clone()), Err)
     }
 
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
         self.pool_scopes.lock().expect("scopes").push(scope);
         if let Some(fault) = self.pool_fault {
             return Err(fault);
         }
-        Ok(PoolCounts {
+        if self.pool_retired {
+            return Ok(PoolState::Retired);
+        }
+        Ok(PoolState::Live(PoolCounts {
             broadcast: self.pool_broadcast,
             // Counted only when asked for, as the real read does.
             unbroadcast: (scope == PoolScope::WithUnbroadcast && !self.pool_drops_unbroadcast)
                 .then_some(self.pool_unbroadcast),
-        })
+        }))
     }
 
     fn store_size(&self) -> Result<u64, FactsFault> {
@@ -154,7 +190,7 @@ impl InfoFacts for FakeInfoFacts {
 
     fn peers(&self) -> Result<PeerFacts, FactsFault> {
         self.peers_reads.fetch_add(1, Ordering::Relaxed);
-        self.peers_fault.map_or(Ok(self.peers), Err)
+        self.peers_fault.map_or_else(|| Ok(self.peers.clone()), Err)
     }
 
     fn sessions(&self) -> Result<SessionCounts, FactsFault> {
@@ -185,7 +221,7 @@ fn synced_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&synced_facts(), Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v8.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v9.json"
         ))
     );
 }
@@ -225,7 +261,7 @@ fn syncing_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v7.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v8.json"
         ))
     );
 }
@@ -236,17 +272,11 @@ fn peerless_startup_reproduces_the_oracle_vector() {
     facts.chain.synchronized = false;
     facts.chain.core_target_height = None;
     facts.sessions = SessionCounts::NONE;
-    let PeerFacts::Running(peers) = &mut facts.peers else {
-        unreachable!("the fixture's P2P runs")
-    };
-    peers.public_incoming_sockets = 0;
-    peers.public_outgoing_sockets = 0;
-    peers.tor_incoming_sockets = 0;
-    peers.tor_outgoing_sockets = 0;
+    facts.peers = with_sockets(&facts.peers, 0, 0);
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v8.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v9.json"
         ))
     );
 }
@@ -261,8 +291,7 @@ fn offline_reproduces_the_offline_vector() {
     facts.chain.core_target_height = None;
     facts.chain.offline = true;
     facts.peers = PeerFacts::Offline;
-    facts.sessions_fault = Some(FactsFault::NullHandle);
-    facts.peers = PeerFacts::Offline;
+    facts.sessions_fault = Some(FactsFault::Internal);
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
@@ -291,15 +320,15 @@ fn a_p2p_state_that_disagrees_with_offline_refuses() {
     ));
 }
 
-/// An online daemon with no peer lists is a fault, not a Peers part of
-/// zeros: the facts layer's `NullHandle` refuses the reply.
+/// An online daemon whose peer facts cannot be read is a fault, not a
+/// Peers part of zeros: the facts layer's fault refuses the reply.
 #[test]
-fn an_online_daemon_with_no_peer_lists_refuses() {
+fn an_online_daemon_whose_peer_facts_fail_refuses() {
     let mut facts = synced_facts();
-    facts.peers_fault = Some(FactsFault::NullHandle);
+    facts.peers_fault = Some(FactsFault::Internal);
     assert!(matches!(
         get_info(&facts, Disclosure::FULL, 0),
-        Err(RpcFault::Facts(FactsFault::NullHandle))
+        Err(RpcFault::Facts(FactsFault::Internal))
     ));
 }
 
@@ -586,22 +615,30 @@ fn already_generated_coins_is_the_snapshots_and_is_not_netted() {
     );
 }
 
-/// The listener's posture is what `restricted` reports.
+/// The transitional `restricted` field reports whether the caller is not
+/// the host's administrator, which is what the listener posture meant.
 #[test]
-fn restricted_reports_the_listener() {
+fn restricted_reports_not_host() {
+    use crate::authority::Authority;
     let facts = synced_facts();
     assert!(
-        get_info(&facts, Disclosure::from_listener(true), 0)
+        get_info(&facts, Authority::VIEW_LISTENER.disclosure(), 0)
             .unwrap()
             .restricted
     );
     assert!(
-        !get_info(&facts, Disclosure::from_listener(false), 0)
+        !get_info(&facts, Authority::admin_listener(false).disclosure(), 0)
             .unwrap()
             .restricted
     );
-    assert_eq!(Disclosure::from_listener(true), Disclosure::VIEW);
-    assert_eq!(Disclosure::from_listener(false), Disclosure::FULL);
+    assert_eq!(
+        Authority::admin_listener(false).disclosure(),
+        Disclosure::FULL
+    );
+    // The view listener holds more grants than the `view` preset (`submit`,
+    // `mining-work`), and none of them selects a part of `get_info`.
+    let view = Authority::VIEW_LISTENER.disclosure();
+    assert!(!view.status() && !view.peers() && !view.config() && !view.host());
 }
 
 /// **A restricted reply withholds Status and Peers: the parts are
@@ -625,14 +662,7 @@ fn a_restricted_reply_withholds_status_and_peers() {
         "alt_blocks_count",
         "rpc_connections_count",
     ];
-    const PEERS_KEYS: [&str; 6] = [
-        "public_incoming_socket_count",
-        "public_outgoing_socket_count",
-        "tor_incoming_socket_count",
-        "tor_outgoing_socket_count",
-        "white_peerlist_size",
-        "grey_peerlist_size",
-    ];
+    const PEERS_KEYS: [&str; 1] = ["connectors"];
 
     let facts = synced_facts();
     let view = get_info(&facts, Disclosure::VIEW, 17).expect("a view caller is answered");
@@ -686,8 +716,8 @@ fn tx_pool_size_is_the_broadcast_count_for_every_caller() {
     let facts = synced_facts();
     for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
         assert_eq!(
-            get_info(&facts, disclosure, 0).unwrap().pool.tx_pool_size,
-            9,
+            get_info(&facts, disclosure, 0).unwrap().pool.tx_pool_size(),
+            Some(9),
             "{disclosure:?}"
         );
     }
@@ -699,8 +729,8 @@ fn tx_pool_size_is_the_broadcast_count_for_every_caller() {
         get_info(&facts, Disclosure::FULL, 0)
             .unwrap()
             .pool
-            .tx_pool_size,
-        9
+            .tx_pool_size(),
+        Some(9)
     );
 }
 
@@ -718,7 +748,7 @@ fn the_unbroadcast_count_is_told_to_the_host_and_not_counted_for_anyone_else() {
     assert_eq!(
         full.host,
         Hidden::Shown(InfoHost {
-            tx_pool_unbroadcast_count: 3
+            tx_pool_unbroadcast_count: Some(3)
         })
     );
 
@@ -761,6 +791,62 @@ fn a_host_read_that_returns_no_unbroadcast_count_is_a_fault() {
         get_info(&facts, Disclosure::FULL, 0),
         Err(RpcFault::Facts(FactsFault::Inconsistent))
     );
+}
+
+/// **A retired pool does not black out the reply.** The node retires its
+/// pool when the pool's file faults and goes on following the chain, so
+/// `get_info` answers: `pool_retired`, the pool's counts `null` (RK-D23:
+/// no answer), and the chain's members as a live pool's reply carries
+/// them. The host's part is shown with its count `null`; any other caller
+/// is withheld the part as ever.
+#[test]
+fn a_retired_pool_answers_null_counts_and_the_chain() {
+    let live = get_info(&synced_facts(), Disclosure::FULL, 0).expect("live");
+    let mut facts = synced_facts();
+    facts.pool_retired = true;
+    let full = get_info(&facts, Disclosure::FULL, 0).expect("a retired pool is answered");
+    assert_eq!(full.pool, InfoPool::Retired);
+    assert_eq!(
+        full.host,
+        Hidden::Shown(InfoHost {
+            tx_pool_unbroadcast_count: None
+        })
+    );
+    assert_eq!(
+        (&full.health, &full.chain, &full.economics, &full.node),
+        (&live.health, &live.chain, &live.economics, &live.node),
+        "the chain's members are what a live pool's reply carries"
+    );
+    let wire = serde_json::to_value(&full).expect("the reply serializes");
+    assert_eq!(wire["pool_retired"], true);
+    assert!(wire["tx_pool_size"].is_null(), "{wire}");
+    assert!(wire["tx_pool_unbroadcast_count"].is_null(), "{wire}");
+    assert_eq!(
+        serde_json::from_value::<GetInfoResponse>(wire).expect("it decodes"),
+        full,
+        "and round-trips"
+    );
+
+    let mut facts = synced_facts();
+    facts.pool_retired = true;
+    let view = get_info(&facts, Disclosure::VIEW, 0).expect("a view caller is answered");
+    assert_eq!(view.pool, InfoPool::Retired);
+    assert_eq!(view.host, Hidden::Withheld);
+    let wire = serde_json::to_value(&view).expect("the reply serializes");
+    assert!(
+        !wire
+            .as_object()
+            .expect("an object")
+            .contains_key("tx_pool_unbroadcast_count"),
+        "withheld stays absent, not null"
+    );
+
+    // A live reply carries no `pool_retired`: its shape is unchanged.
+    let wire = serde_json::to_value(&live).expect("the reply serializes");
+    assert!(!wire
+        .as_object()
+        .expect("an object")
+        .contains_key("pool_retired"));
 }
 
 #[path = "peer_facts_tests.rs"]

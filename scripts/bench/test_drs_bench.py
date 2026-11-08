@@ -6,6 +6,9 @@
 #
 # Selftest for `drs_bench.py`. Needs no daemon and no measurement.
 #
+# The synthetic artifact is `drs_fixture.valid_artifact`. The readback
+# cases and `--seed-daemon` live in `test_drs_readback.py`.
+#
 # A GREEN ASSERTION IS THE WEAK ONE. "the artifact was accepted" says the
 # validator accepted this input, not that it accepted it for the right reason —
 # the named defect may well produce green too. So almost every test here is
@@ -28,54 +31,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import drs_artifact as D  # noqa: E402
 import drs_bench as R  # noqa: E402
-
-
-def valid_artifact(engine="lmdb", **over):
-    a = {
-        "schema_version": D.SCHEMA,
-        "engine": engine,
-        "engine_selected_by": D.ENGINE_DEFAULT_LMDB if engine == "lmdb" else
-                              "--db-engine=redb",
-        "git_rev": "0123456789abcdef",
-        "thresholds_frozen_at": D.FROZEN_AT,
-        "durability": {
-            "policy": "DRS-D9 full-fsync-per-commit",
-            "sync_mode": "safe",
-            "imposed_argv": ["--regtest", "--db-sync-mode=safe", "--data-dir=/x/subject",
-                             "--p2p-bind-port=1", "--rpc-bind-port=2"],
-            "observed": True,
-            "resolved_log_line": "2026-09-13T00:00:00Z INFO global: Database sync: "
-                                 "flags=0x1 (safe), sync_mode=0, threshold=1 blocks",
-            "readback": "the subject daemon's own resolved-flags report",
-        },
-        "environment": {"loadavg_1m_at_start": 0.3, "loadavg_1m_at_end": 0.4,
-                        "loadavg_5m_at_end": 0.35, "cpu_count": 8,
-                        "note": "quiet"},
-        "hardware": {"cpu_model": "Test CPU", "ram_bytes": 1 << 34,
-                     "disk_class": "ssd_or_nvme", "disk_class_source": "probed",
-                     "fs_type": "ext4", "cpu_count": 8},
-        "fixture": {
-            "nettype": "fakechain", "height_reached": 200, "height_requested": 200,
-            "reference_height": D.REFERENCE_HEIGHT, "tx_per_block": 0,
-            "prunable_region": D.PRUNABLE_ABSENT,
-            "verify_exercised": {"pow": True, "fcmp_pp": False},
-            "seed_height": 200, "peers_used": 1,
-        },
-        "measures": [
-            {"name": "ibd_wall_time_s", "axis": "wall_time", "unit": "s",
-             "value": 100.0, "scenario": "ibd_coinbase_only"},
-            {"name": "subject_cpu_s", "axis": "cpu_time", "unit": "s",
-             "value": 400.0, "scenario": "ibd_coinbase_only"},
-            {"name": "peak_rss_bytes", "axis": "memory", "unit": "bytes",
-             "value": 1 << 30, "scenario": "ibd_coinbase_only"},
-            {"name": "store_bytes", "axis": "disk", "unit": "bytes",
-             "value": 1 << 20, "scenario": "ibd_coinbase_only"},
-            {"name": "store_bytes_apparent", "axis": "disk", "unit": "bytes",
-             "value": 1 << 20, "scenario": "ibd_coinbase_only"},
-        ],
-    }
-    a.update(over)
-    return a
+from drs_fixture import hex_fill, valid_artifact  # noqa: E402
 
 
 class FrozenThresholds(unittest.TestCase):
@@ -103,6 +59,11 @@ class FrozenThresholds(unittest.TestCase):
         self.assertEqual(D.PEAK_RSS_RATIO, 2.0)
         self.assertEqual(D.REFERENCE_HEIGHT, 100_000)
         self.assertEqual(D.FROZEN_AT, "ba4b3c73a")
+        # The floor's direction is as registered as its ratio. These literals
+        # are the doc's, not a read-back of the constants: a swap in the
+        # selector map would still divide, in the wrong direction.
+        self.assertEqual(D.FLOOR_DENOMINATOR_ENGINE, "lmdb")
+        self.assertEqual(D.FLOOR_NUMERATOR_ENGINE, "redb")
 
     def test_each_constant_still_appears_in_section_1_3(self):
         """Fails in BOTH directions, which is what makes it a cross-check and
@@ -118,6 +79,17 @@ class FrozenThresholds(unittest.TestCase):
                 self.assertIn(needle, self.section,
                               f"{needle!r} is not in §1.3: the harness and the frozen "
                               "doc disagree, so one of them was edited alone")
+        # The sentence is "redb (or candidate) IBD wall time ≤ 1.25× LMDB wall
+        # time". The numerator is named first, the denominator after it. A
+        # swap of the two constants renders a needle the section does not have.
+        sentence = self.section.lower()
+        numerator_at = sentence.find(
+            f"{D.FLOOR_NUMERATOR_ENGINE} (or candidate) ibd wall time")
+        denominator_at = sentence.find(
+            f"{D.FLOOR_DENOMINATOR_ENGINE} wall time",
+            numerator_at + 1 if numerator_at >= 0 else 0)
+        self.assertGreater(numerator_at, -1, sentence)
+        self.assertGreater(denominator_at, numerator_at, sentence)
 
 
 class ArtifactRefusals(unittest.TestCase):
@@ -136,31 +108,63 @@ class ArtifactRefusals(unittest.TestCase):
         self.assertTrue(any(needle in x for x in r),
                         f"refusals did not mention {needle!r}: {r}")
 
+    def test_refuses_a_row_without_the_probe(self):
+        self._refuse(lambda a: a.pop("probe"), "probe block absent")
+
+    def test_refuses_a_row_with_a_probe_stall(self):
+        self._refuse(lambda a: a["probe"].update(stalls=1), "does not count")
+
+    def test_refuses_a_probe_that_did_not_watch_the_row(self):
+        self._refuse(lambda a: a["probe"].update(samples=10), "did not watch the row")
+
+    def test_a_fractional_probe_window_is_not_truncated_into_a_pass(self):
+        """10 samples in 10.9s is under 95% of the seconds. int(10.9) is 10
+        and would accept them."""
+        self._refuse(lambda a: a["probe"].update(window_s=10.9, samples=10),
+                     "did not watch the row")
+
+    def test_eleven_samples_cover_a_fractional_window(self):
+        a = valid_artifact()
+        a["probe"].update(window_s=10.9, samples=11)
+        self.assertEqual(D.artifact_refusals(a), [])
+
+    def test_a_v1_record_is_read_without_the_probe(self):
+        a = valid_artifact(schema_version=D.SCHEMA_V1)
+        a.pop("probe")
+        self.assertEqual(D.artifact_refusals(a), [])
+
+    def test_a_v1_record_is_not_comparable_with_a_v2_run(self):
+        old = valid_artifact(schema_version=D.SCHEMA_V1)
+        old.pop("probe")
+        refusals = D.comparability_refusals(old, valid_artifact(engine="redb"))
+        self.assertTrue(any("schema versions differ" in x for x in refusals), refusals)
+
     def test_refuses_missing_durability_block(self):
         self._refuse(lambda a: a.pop("durability"), "durability block absent")
 
     def test_refuses_sync_mode_outside_the_allowed_set(self):
-        """The silent-fallthrough guard. `--db-sync-mode=saf` is accepted by the
-        daemon and means DBF_FAST (MDB_NOSYNC) with no diagnostic, so a typo
-        would otherwise produce a confidently-labelled NOSYNC number."""
-        def m(a):
-            a["durability"]["sync_mode"] = "saf"
-            a["durability"]["imposed_argv"] = ["--db-sync-mode=saf"]
-        self._refuse(m, "only ['safe'] satisfies DRS-D9")
+        self._refuse(lambda a: a["durability"].__setitem__("sync_mode", "saf"),
+                     "only ['safe', 'immediate'] satisfies DRS-D9")
 
     def test_refuses_fast_sync_mode_explicitly(self):
+        """A run whose daemon reported `fast` is refused on the label and on the
+        readback, whichever a reader looks at."""
         def m(a):
             a["durability"]["sync_mode"] = "fast"
-            a["durability"]["imposed_argv"] = ["--db-sync-mode=fast"]
+            a["durability"]["resolved_log_line"] = (
+                "INFO global: Database sync: flags=0x2 (fast: MDB_NOSYNC), "
+                "sync_mode=2, threshold=1 blocks")
         self._refuse(m, "MDB_NOSYNC")
 
-    def test_refuses_when_recorded_mode_is_not_the_imposed_mode(self):
-        """Records `safe` while having imposed something else — the exact shape
-        of a mislabelled measurement, and invisible to a check that only reads
-        the label."""
+    def test_refuses_a_label_the_readback_does_not_carry(self):
+        """Records `safe` while the daemon reported something else — the shape
+        of a mislabelled measurement. The daemon takes no sync-mode option, so
+        the readback is the only thing the label can be checked against."""
         self._refuse(lambda a: a["durability"].__setitem__(
-            "imposed_argv", ["--regtest", "--db-sync-mode=fast"]),
-            "is not the mode that was imposed")
+            "resolved_log_line",
+            "INFO global: Database sync: flags=0x4 (fastest: MDB_NOSYNC|MDB_WRITEMAP|"
+            "MDB_MAPASYNC), sync_mode=2, threshold=1000 blocks"),
+            "is not the mode the daemon reported")
 
     def test_refuses_missing_imposed_argv(self):
         self._refuse(lambda a: a["durability"].pop("imposed_argv"),
@@ -192,8 +196,9 @@ class ArtifactRefusals(unittest.TestCase):
     def test_refuses_a_resolved_line_without_the_safe_flag(self):
         self._refuse(lambda a: a["durability"].__setitem__(
             "resolved_log_line",
-            "INFO global: Database sync: flags=0x10 (salvage), sync_mode=0, "
-            "threshold=1 blocks"), "does not report the safe flag")
+            f"INFO global: Database sync: flags=0x{D.DBF_SALVAGE:x} (salvage), "
+            f"sync_mode={D.DB_NOSYNC_ORDINAL}, threshold=1 blocks"),
+            "does not report the safe flag")
 
     def test_refuses_a_non_report_string_as_the_readback(self):
         self._refuse(lambda a: a["durability"].__setitem__(
@@ -311,17 +316,23 @@ class ArtifactRefusals(unittest.TestCase):
         self._refuse(lambda a: a.__setitem__("engine_selected_by", "magic"),
                      "which this gate does not know")
 
-    def test_redb_artifacts_are_unreachable_until_a_selector_exists(self):
-        """The F7 guarantee made checkable. The runner has no redb selection path,
-        so no redb selector is known and an `engine: redb` artifact can be neither
-        produced nor validated. Adding the selector is part of wiring the redb arm;
-        this test turns red then, which is the reminder."""
-        self.assertNotIn("redb", set(D.ENGINE_SELECTORS.values()))
-        for sel in list(D.ENGINE_SELECTORS) + ["--db-engine=redb", "whatever"]:
-            a = valid_artifact("redb")
-            a["engine_selected_by"] = sel
-            self.assertTrue(D.artifact_refusals(a),
-                            f"an engine=redb artifact validated under selector {sel!r}")
+    def test_a_record_predating_the_tip_still_validates(self):
+        """The three committed baselines predate the tip and the binary
+        hashes. Absence is a record from that era. A present value that is
+        not the spelling is a false identity, covered below."""
+        a = valid_artifact()
+        for key in ("top_block_hash", "subject_binary_sha256", "seed_binary_sha256"):
+            a["fixture"].pop(key)
+        self.assertEqual(D.artifact_refusals(a), [])
+
+    def test_refuses_a_tip_that_is_not_a_block_hash(self):
+        self._refuse(lambda a: a["fixture"].__setitem__("top_block_hash", "abcd"),
+                     "top_block_hash")
+
+    def test_refuses_a_binary_hash_that_is_not_sha256(self):
+        self._refuse(
+            lambda a: a["fixture"].__setitem__("subject_binary_sha256", "abcd"),
+            "subject_binary_sha256")
 
     def test_refuses_missing_engine_selected_by(self):
         self._refuse(lambda a: a.pop("engine_selected_by"), "engine_selected_by absent")
@@ -479,10 +490,31 @@ class Comparability(unittest.TestCase):
         nothing about the engine. If the mask broke, EVERY real comparison
         would refuse — so this control is what keeps the mask honest."""
         b, c = self._pair()
-        c["durability"]["imposed_argv"] = ["--regtest", "--db-sync-mode=safe",
-                                           "--data-dir=/other/path",
-                                           "--p2p-bind-port=99", "--rpc-bind-port=98"]
+        c["durability"]["imposed_argv"] = ["--network", "regtest", "--dev-difficulty",
+                                           "1", "--data-dir", "/other/path",
+                                           "--clearnet-listen", "127.0.0.1:99",
+                                           "--rpc-admin-listen", "127.0.0.1:98",
+                                           "--p2p-closed-peer", "127.0.0.1:97"]
         self.assertEqual(D.comparability_refusals(b, c), [])
+
+    def test_control_the_equals_spelling_is_masked_too(self):
+        """The grammar takes a value after `=` as well as the next word."""
+        b, c = self._pair()
+        c["durability"]["imposed_argv"] = ["--network", "regtest", "--dev-difficulty",
+                                           "1", "--data-dir=/other/path",
+                                           "--clearnet-listen=127.0.0.1:99",
+                                           "--rpc-admin-listen=127.0.0.1:98",
+                                           "--p2p-closed-peer=127.0.0.1:97"]
+        self.assertEqual(D.comparability_refusals(b, c), [])
+
+    def test_refuses_a_run_without_a_per_run_flag(self):
+        """The mask drops values, not flags: a run that had no closed peer is
+        another experiment, and the comparison says so."""
+        def m(b, c):
+            argv = c["durability"]["imposed_argv"]
+            i = argv.index("--p2p-closed-peer")
+            del argv[i:i + 2]
+        self._refuse(m, "subject argv differs")
 
     def test_refuses_differing_freeze_era_between_artifacts(self):
         self._refuse(lambda b, c: c.__setitem__("thresholds_frozen_at", "cafebabe"),
@@ -500,15 +532,73 @@ class Comparability(unittest.TestCase):
         c["fixture"]["height_requested"] = b["fixture"]["height_requested"] - 1
         self.assertEqual(D.comparability_refusals(b, c), [])
 
-    def test_refuses_artifacts_from_different_trees(self):
-        """§1.3 requires the same binary with only the engine differing, so a ratio
-        across trees can attribute a consensus change to the engine."""
-        self._refuse(lambda b, c: c.__setitem__("git_rev", "deadbeefc"),
-                     "git_rev differs")
+    def test_a_pair_from_two_trees_is_the_comparison_and_reports_both_revs(self):
+        """One backend per binary: the two engines can only come from two
+        trees (the pre-flip daemon and the flip, DX-Q8 §3.3), so differing
+        revisions are the comparison, not a refusal, and the report names
+        both."""
+        b, c = valid_artifact("lmdb"), valid_artifact("redb")
+        c["git_rev"] = "deadbeefc"
+        self.assertEqual(D.comparability_refusals(b, c), [])
+        rep = D.compare(b, c)
+        self.assertEqual((rep["baseline_git_rev"], rep["candidate_git_rev"]),
+                         ("0123456789abcdef", "deadbeefc"))
+
+    def test_a_pair_that_does_not_name_the_tip_is_refused(self):
+        """Two absent tips compare equal under `!=`. Height is not a chain,
+        so a pair that never named its tip is not one chain."""
+        def m(b, c):
+            b["fixture"].pop("top_block_hash")
+            c["fixture"].pop("top_block_hash")
+        self._refuse(m, "both name a")
+
+    def test_a_pair_on_two_chains_is_refused(self):
+        self._refuse(
+            lambda b, c: c["fixture"].__setitem__("top_block_hash", hex_fill(0x12)),
+            "top_block_hash differs")
+
+    def test_binary_hashes_are_provenance_and_not_the_chain(self):
+        """The flip's seed is another file by construction. The hashes say
+        which files ran. They are not a key the pair must share."""
+        b, c = self._pair()
+        c["fixture"]["seed_binary_sha256"] = hex_fill(0x12)
+        c["fixture"]["subject_binary_sha256"] = hex_fill(0x34)
+        self.assertEqual(D.comparability_refusals(b, c), [])
+
+    def test_the_durability_policy_compares_across_the_two_stores_names(self):
+        """`safe` and `immediate` are one policy; a run that did not observe
+        its readback, or names another policy, is not comparable."""
+        b, c = valid_artifact("lmdb"), valid_artifact("redb")
+        self.assertEqual(D.comparability_refusals(b, c), [])
+        c["durability"]["policy"] = "something else"
+        self.assertTrue(any("durability blocks differ" in x
+                            for x in D.comparability_refusals(b, c)))
 
     def test_refuses_same_engine_pair(self):
         self._refuse(lambda b, c: c.__setitem__("engine", "lmdb"),
                      "ratio BETWEEN engines")
+
+    def test_a_reversed_pair_is_the_reciprocal_of_the_floor(self):
+        """§1.3 divides the redb run by the LMDB run. These two numbers are
+        2× that way and 0.5× swapped, and 0.5× is a PASS. The reciprocal of
+        an OVER must not come back as a report."""
+        lmdb, redb = valid_artifact("lmdb"), valid_artifact("redb")
+        lmdb["measures"][0]["value"] = 100.0
+        redb["measures"][0]["value"] = 200.0
+        reversed_reasons = D.comparability_refusals(redb, lmdb)
+        self.assertTrue(any("reciprocal" in x for x in reversed_reasons),
+                        reversed_reasons)
+        self.assertTrue(any("divides the redb run by the lmdb run" in x
+                            for x in reversed_reasons), reversed_reasons)
+        ordered = D.comparability_refusals(lmdb, redb)
+        self.assertFalse(any("reciprocal" in x for x in ordered), ordered)
+        with self.assertRaises(ValueError) as caught:
+            D.compare(redb, lmdb)
+        self.assertIn("reciprocal", str(caught.exception))
+        report = D.compare(lmdb, redb)
+        wall = next(row for row in report["rows"] if row["name"] == "ibd_wall_time_s")
+        self.assertEqual(wall["ratio"], 2.0)
+        self.assertEqual(wall["verdict"], "OVER")
 
     def test_refuses_differing_durability(self):
         self._refuse(lambda b, c: c["durability"].__setitem__("policy", "relaxed"),
@@ -714,27 +804,6 @@ class InputErrors(unittest.TestCase):
         self.assertNotIn("Traceback", p.stderr + p.stdout)
         self.assertIn("not valid JSON", p.stderr)
 
-    def test_resolved_line_reader_ignores_nothing_and_strips_ansi(self):
-        """The readback reader: it must find the daemon's colourised line and return
-        it without terminal control bytes, and return None when the line is absent
-        rather than a stand-in."""
-        import drs_bench as R
-        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as fh:
-            fh.write("\x1b[2mts\x1b[0m \x1b[32m INFO\x1b[0m global: Database sync: "
-                     "flags=0x1 (safe), sync_mode=3, threshold=1 blocks\n")
-            good = fh.name
-        self.addCleanup(os.unlink, good)
-        line = R._resolved_sync_line(good)
-        self.assertIsNotNone(line)
-        self.assertNotIn("\x1b", line)
-        self.assertIn("flags=0x1 (safe)", line)
-        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as fh:
-            fh.write("nothing relevant here\n")
-            bare = fh.name
-        self.addCleanup(os.unlink, bare)
-        self.assertIsNone(R._resolved_sync_line(bare))
-        self.assertIsNone(R._resolved_sync_line("/nonexistent/x.log"))
-
     def test_a_directory_is_a_verdict_not_a_traceback(self):
         p = self._cli("validate", tempfile.mkdtemp())
         self.assertEqual(p.returncode, 1)
@@ -781,26 +850,60 @@ class CommittedArtifacts(unittest.TestCase):
                     a = json.load(fh)
                 self.assertEqual(D.artifact_refusals(a), [], p)
 
+    def test_a_pair_of_records_that_predate_the_tip_is_not_one_chain(self):
+        """The committed files omit the tip. Each one still validates.
+        A pair of them is not one chain: height is not a chain."""
+        paths = sorted(glob.glob(D.ARTIFACT_GLOB))
+        self.assertGreaterEqual(len(paths), 2, paths)
+        loaded = []
+        for path in paths[:2]:
+            with open(path, encoding="utf-8") as fh:
+                loaded.append(json.load(fh))
+        refusals = D.comparability_refusals(*loaded)
+        self.assertTrue(any("top_block_hash" in x for x in refusals), refusals)
+
 
 class Preflight(unittest.TestCase):
 
-    def test_refuses_an_unrecognised_sync_mode_before_spawn(self):
-        r = D.measurement_preflight(
-            sync_mode="fast", daemon=__file__,
-            work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
-        self.assertTrue(any("MDB_NOSYNC" in x for x in r), r)
+    def test_a_relative_daemon_path_is_absolute(self):
+        """The child cwd is the data directory. A relative path would be resolved
+        there, so preflight can see a file the spawn cannot."""
+        rel = os.path.join("build", "bin", "shekyld")
+        got = R.daemon_executable(rel)
+        self.assertTrue(os.path.isabs(got))
+        self.assertEqual(got, os.path.abspath(rel))
+        self.assertEqual(R.daemon_executable(got), got)
 
     def test_refuses_a_missing_daemon_binary(self):
         r = D.measurement_preflight(
-            sync_mode="safe",
             daemon=os.path.join(tempfile.mkdtemp(), "no-such-shekyld"),
             work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
         self.assertTrue(any("is not a file" in x for x in r), r)
+        self.assertTrue(any("another tree" in x for x in r), r)
+
+    def test_a_missing_seed_binary_is_named_once(self):
+        """Directories are checked once. The seed's missing file is its
+        own sentence: it serves the chain, which is what a second binary
+        is for."""
+        missing = os.path.join(tempfile.mkdtemp(), "no-such-seed")
+        r = D.measurement_preflight(
+            daemon=__file__, work_dir=".", seed_dir=".",
+            disk_class="ssd_or_nvme", seed_daemon=missing)
+        files = [x for x in r if "is not a file" in x]
+        self.assertEqual(files, [x for x in files if "serves the chain" in x], r)
+        self.assertEqual(len(files), 1, r)
+        self.assertFalse(any("another tree" in x for x in r), r)
+        self.assertEqual(len(r), len(set(r)), r)
+
+    def test_the_same_file_is_checked_once(self):
+        r = D.measurement_preflight(
+            daemon=__file__, work_dir=".", seed_dir=".",
+            disk_class="ssd_or_nvme", seed_daemon=__file__)
+        self.assertFalse(any("is not a file" in x for x in r), r)
 
     def test_control_a_sane_lmdb_preflight_is_empty(self):
         r = D.measurement_preflight(
-            sync_mode="safe", daemon=__file__,
-            work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
+            daemon=__file__, work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
         # work_dir '.' may still lack a sysfs rotational node; declaring the
         # class is what makes this a control rather than a probe of this box.
         self.assertFalse(any("engine switch" in x or "MDB_NOSYNC" in x
@@ -808,6 +911,13 @@ class Preflight(unittest.TestCase):
 
 
 class HardwareFingerprint(unittest.TestCase):
+
+    def test_cpu_model_reads_the_line_the_machine_has(self):
+        x86 = "processor\t: 0\nmodel name\t: QEMU Virtual CPU version 2.5+\n"
+        arm = "processor\t: 0\nCPU part\t: 0xd08\nModel\t\t: Raspberry Pi 4 Model B Rev 1.4\n"
+        self.assertEqual(D.cpu_model_from_cpuinfo(x86), "QEMU Virtual CPU version 2.5+")
+        self.assertEqual(D.cpu_model_from_cpuinfo(arm), "Raspberry Pi 4 Model B Rev 1.4")
+        self.assertEqual(D.cpu_model_from_cpuinfo("processor\t: 0\n"), "")
 
     def test_does_not_emit_unknown_as_a_disk_class(self):
         hw = D.hardware_fingerprint(".", declared_disk_class=None)
@@ -832,6 +942,47 @@ class RunnerImport(unittest.TestCase):
     def test_runner_uses_the_gate_module(self):
         self.assertIs(R.A.SCHEMA, D.SCHEMA)
         self.assertIs(R.A.artifact_refusals, D.artifact_refusals)
+
+
+class GeneratingSeedShape(unittest.TestCase):
+    """The generating seed's argv and body follow the binary and the readback.
+
+    The defect is a named archived seed started with `--mine-address`, or
+    posted `{count}`: the archived daemon rejects the flag and does not
+    read that body. The other way, this binary posted the archived trio,
+    puts the address back on a wire that no longer carries it.
+    """
+
+    def test_a_named_archived_seed_is_not_this_binary(self):
+        self.assertFalse(R.seed_uses_this_binary("/usr/bin/shekyld", "/opt/archive/shekyld"))
+        self.assertTrue(R.seed_uses_this_binary("/usr/bin/shekyld", None))
+        self.assertTrue(R.seed_uses_this_binary("/usr/bin/shekyld", ""))
+        self.assertTrue(R.seed_uses_this_binary("/usr/bin/shekyld", "/usr/bin/shekyld"))
+
+    def test_an_archived_seed_is_not_passed_mine_address_and_posts_the_old_body(self):
+        argv = R.seed_generation_argv(False, "--dev-rpc", "addr")
+        self.assertEqual(argv, ["--dev-rpc"])
+        self.assertNotIn("--mine-address", argv)
+        body = R.generateblocks_body("lmdb", 3, "addr")
+        self.assertEqual(body["amount_of_blocks"], 3)
+        self.assertEqual(body["wallet_address"], "addr")
+        self.assertEqual(body["starting_nonce"], 0)
+        self.assertNotIn("count", body)
+
+    def test_this_binary_posts_count_only_and_takes_mine_address(self):
+        argv = R.seed_generation_argv(True, "--dev-rpc", "addr")
+        self.assertEqual(argv, ["--dev-rpc", "--mine-address", "addr"])
+        self.assertEqual(R.generateblocks_body("redb", 3, "addr"), {"count": 3})
+
+    def test_a_readback_from_the_wrong_binary_is_refused(self):
+        named_redb = R.generation_shape_refusal(False, "redb")
+        self.assertIsNotNone(named_redb)
+        self.assertIn("redb", named_redb)
+        self.assertIsNone(R.generation_shape_refusal(False, "lmdb"))
+        this_lmdb = R.generation_shape_refusal(True, "lmdb")
+        self.assertIsNotNone(this_lmdb)
+        self.assertIn("lmdb", this_lmdb)
+        self.assertIsNone(R.generation_shape_refusal(True, "redb"))
 
 
 if __name__ == "__main__":

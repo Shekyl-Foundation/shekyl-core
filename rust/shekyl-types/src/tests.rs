@@ -31,7 +31,18 @@ fn edge_round_trip() {
     assert_eq!(LongTermWeight::from_raw(800).to_raw(), 800);
     assert_eq!(PqcAuthHash::from_bytes(bytes).to_bytes(), bytes);
     assert_eq!(PrefixHash::from_bytes(bytes).to_bytes(), bytes);
-    assert_eq!(SigningPayloadHash::from_bytes(bytes).to_bytes(), bytes);
+    // The wide arm's width is the type's, and a slice of any other length
+    // is not a signing payload hash (the signing envelope §2.7).
+    let wide = [3u8; SigningPayloadHash::LEN];
+    assert_eq!(SigningPayloadHash::from_bytes(wide).to_bytes(), wide);
+    assert_eq!(
+        SigningPayloadHash::try_from_slice(&wide)
+            .expect("the type's own width")
+            .to_bytes(),
+        wide
+    );
+    assert!(SigningPayloadHash::try_from_slice(&wide[..wide.len() - 1]).is_none());
+    assert!(SigningPayloadHash::try_from_slice(&[0u8; SigningPayloadHash::LEN + 1]).is_none());
     assert_eq!(AttestationRoot::from_bytes(bytes).as_bytes(), &bytes);
     assert_eq!(OneTimePubkey::from_bytes(bytes).to_bytes(), bytes);
     fn via_trait<T: Hash32Bytes>(bytes: [u8; 32]) -> [u8; 32] {

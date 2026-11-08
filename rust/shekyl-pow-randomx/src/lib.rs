@@ -5,16 +5,14 @@
 
 //! Pure-software RandomX v2 verifier for Shekyl daemon block validation.
 //!
-//! The daemon's one RandomX: `shekyl-ffi` exports it for the C++
-//! validator and the built-in C++ miner's hash
-//! (`DRS_X_STORE_FLIP.md` DX-Q4), the ingest pipeline's production
-//! substrate verifies with it, and `shekyl-miner`'s loop hashes with it.
-//! It is the light, cache-only mode throughout. `calc_pow` and the Rust
-//! miner call [`CacheStore::lookup`] and never derive: a derivation
-//! publishes into the transient slot and evicts the validator's spare,
-//! and both run on a seed they did not pin. [`CacheStore::pin_canonical`]
-//! is the fill the validator's epoch switch owns. Fast mining is an external
-//! miner's job: the Monero RandomX C/C++ library at `external/randomx-v2/`
+//! The daemon's one RandomX, light and cache-only throughout. The ingest
+//! substrate, `calc_pow`, and `shekyl-miner` hash through
+//! [`CacheStore::lookup`] and never derive: a derivation publishes into
+//! the transient slot and evicts the spare, and each of them runs on a
+//! seed it did not pin. [`CacheStore::pin_canonical`] is the fill an epoch
+//! switch owns; the ingest calls it from `pin_seed`. Fast mining is an
+//! external miner's job: the Monero RandomX C/C++ library at
+//! `external/randomx-v2/`
 //! (pinned at fork commit `aaafe71`, v2.0.1) is that reference, built only
 //! for the differential harness and never linked into `shekyld`. See
 //! [`RANDOMX_V2_PLAN.md`](../../docs/design/RANDOMX_V2_PLAN.md)'s
@@ -153,9 +151,6 @@
 //!   `tests/perf/per_hash_latency.rs` placeholder landed by Phase
 //!   2c.
 //!
-//! Phase 3 then exposes the verifier through `shekyl-ffi` and rewires
-//! the C++ daemon to it; Phase 4 deletes the C++ verifier path.
-//!
 //! # Scope: public-input verification only
 //!
 //! This crate is designed for **public-input verification** (block
@@ -183,8 +178,7 @@ mod prepared_cache;
 // The seed-epoch *schedule* (`seedheight`, the 2048/64 constants) is
 // consensus arithmetic the validator evaluates, and lives in
 // `shekyl_difficulty::seed_epoch` since 2026-09-19 (DRS-E6 slice 2,
-// CEN-D3); this crate never called it. The env-override clamps live at the
-// FFI boundary that reads the environment (`shekyl-ffi::pow_randomx_ffi`).
+// CEN-D3); this crate never calls it.
 mod seedhash;
 pub(crate) mod superscalar;
 mod vm;

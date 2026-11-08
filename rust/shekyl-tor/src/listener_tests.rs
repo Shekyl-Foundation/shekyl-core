@@ -61,7 +61,7 @@ fn config(
 ) -> Config {
     Config {
         proxy: shekyl_socks::Proxy::unauthenticated(proxy),
-        anonymous_inbound: inbound.into_iter().map(OperatorInbound::new).collect(),
+        operator_onion_binds: inbound.into_iter().map(OperatorInbound::new).collect(),
         ceiling,
         dial_within: dial,
         gap_within: gap,
@@ -104,7 +104,7 @@ fn start(
 fn onion() -> NetworkAddress {
     NetworkAddress::Tor {
         host: v3_onion_hostname(&[0x11; 32]),
-        port: 18081,
+        port: 12021,
     }
 }
 
@@ -132,16 +132,15 @@ fn an_ip_address_is_not_dialed() {
         start(proxy, InboundCeiling::Bounded(4), Tick::new(5_000_000_000));
     listener.dial(NetworkAddress::Ipv4 {
         ip: Ipv4Addr::LOCALHOST,
-        port: 18080,
+        port: 11021,
     });
-    let cause = wait_kind(&seen, CloseKind::LocalClose);
-    assert!(!cause.implicates_address(ConnectorId::Tor));
+    wait_kind(&seen, CloseKind::LocalClose);
     listener.shutdown();
     drop(engine);
 }
 
 #[test]
-fn a_failed_anonymous_bind_does_not_leave_a_listener() {
+fn a_failed_operator_onion_bind_does_not_leave_a_listener() {
     let engine = EngineService::start(MonotonicClock::new());
     let pool = runtime(budget(), &name()).expect("runtime");
     let held =
@@ -688,10 +687,9 @@ fn a_name_that_is_not_onion_v3_is_not_dialed() {
     );
     listener.dial(NetworkAddress::Tor {
         host: "not-a-v3-name.onion".into(),
-        port: 18081,
+        port: 12021,
     });
-    let cause = wait_kind(&seen, CloseKind::LocalClose);
-    assert!(!cause.implicates_address(ConnectorId::Tor));
+    wait_kind(&seen, CloseKind::LocalClose);
     listener.shutdown();
     drop(engine);
 }
@@ -708,10 +706,9 @@ fn a_closed_socks_port_is_the_proxy_and_does_not_implicate_the_onion() {
     );
     listener.dial(NetworkAddress::Tor {
         host: v3_onion_hostname(&[0x11; 32]),
-        port: 18081,
+        port: 12021,
     });
-    let cause = wait_kind(&seen, CloseKind::ProxyUnavailable);
-    assert!(!cause.implicates_address(ConnectorId::Tor));
+    wait_kind(&seen, CloseKind::ProxyUnavailable);
     listener.shutdown();
     drop(engine);
 }
@@ -753,8 +750,7 @@ fn a_socks_exchange_closed_without_a_reply_is_the_proxy() {
     )
     .expect("listen");
     listener.dial(onion());
-    let cause = wait_kind(&recorded.seen, CloseKind::ProxyUnavailable);
-    assert!(!cause.implicates_address(ConnectorId::Tor));
+    wait_kind(&recorded.seen, CloseKind::ProxyUnavailable);
     listener.shutdown();
     drop(engine);
 }

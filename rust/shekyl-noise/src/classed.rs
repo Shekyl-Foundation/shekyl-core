@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `ClassedRecord`: the RPC channel's record framer (`RPC_CHANNEL.md`
+//! `ClassedSealer` and `ClassedOpener`: the RPC channel's record framer (`RPC_CHANNEL.md`
 //! section 4.4, RT-O20).
 //!
 //! Every record is padded to one of a table of size classes, and travels as
@@ -27,10 +27,17 @@
 //!   overruns its class or whose pad is not zero, so one payload has one
 //!   encoding.
 //!
+//! There are two types, one per direction (close-out F3, 2026-10-22): a
+//! [`ClassedSealer`] over a [`SendDirection`] and a [`ClassedOpener`] over a
+//! [`RecvDirection`], so a session cannot frame with its halves swapped.
+//!
 //! On the receiving side, a short read is truncation: nothing is spent and
-//! the half stays usable. A class outside the table, a failed tag and a
-//! malformed plaintext are one error, [`ClassedError::Refused`], and each
-//! poisons the half.
+//! the half stays usable. Every other error poisons: a class outside the
+//! table, a failed tag, a malformed plaintext and a direction that cannot
+//! advance. The poison is on the [`RecvDirection`] itself (close-out F5), so
+//! a direction taken out of a refused opener and wrapped again refuses too.
+//! A dead [`SendDirection`] refuses before the class or the length is
+//! considered, the same way.
 //!
 //! What the mask removes is a cleartext class byte a middlebox could match.
 //! It does not hide record sizes: a public set of lengths can still be cut
@@ -41,7 +48,7 @@ use chacha20::ChaCha20;
 use zeroize::Zeroizing;
 
 use crate::aead::{nonce, HASH_LEN, TAG_LEN};
-use crate::direction::{Direction, DirectionError, KeyEpoch};
+use crate::direction::{DirectionError, FramerReads, KeyEpoch, RecvDirection, SendDirection};
 
 /// The label the header-protection key is derived under. Registered in
 /// `CRYPTO_DOMAIN_REGISTRY.tsv`, mechanism 7. Read only by [`HeaderKey::mask`].
@@ -154,21 +161,22 @@ impl ClassTable {
     }
 }
 
-/// What [`ClassedRecord`] can fail at.
+/// What [`ClassedSealer`] and [`ClassedOpener`] can fail at.
 #[derive(Debug, Eq, PartialEq)]
 pub enum ClassedError {
     /// Not a whole record yet. Nothing was spent; read more and try again.
     Truncated,
     /// A class outside the table, a failed tag, or a plaintext that is not
-    /// one payload's encoding. The receiving half is poisoned.
+    /// one payload's encoding. The receiving direction is poisoned.
     Refused,
-    /// A previous record was refused; this half opens nothing more.
+    /// A previous failure killed this direction; it frames nothing more.
     Poisoned,
     /// Sealing named a class the table does not have.
     UnknownClass,
     /// Sealing gave more payload than the class carries.
     PayloadTooLarge,
-    /// The direction's nonce or key epoch cannot advance.
+    /// The direction's nonce or key epoch cannot advance. The direction is
+    /// dead.
     State,
 }
 
@@ -189,8 +197,9 @@ impl std::fmt::Display for ClassedError {
 
 impl std::error::Error for ClassedError {}
 
-/// One opened record.
-#[derive(Debug, Eq, PartialEq)]
+/// One opened record. Its `Debug` shows the payload's length, never its
+/// bytes: they are channel plaintext.
+#[derive(Eq, PartialEq)]
 pub struct Opened {
     /// The payload, without the occupancy or the pad.
     pub payload: Vec<u8>,
@@ -198,6 +207,16 @@ pub struct Opened {
     pub class: ClassId,
     /// How many wire bytes it took; the next record starts after them.
     pub consumed: usize,
+}
+
+impl std::fmt::Debug for Opened {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Opened")
+            .field("payload", &format_args!("<{} bytes>", self.payload.len()))
+            .field("class", &self.class)
+            .field("consumed", &self.consumed)
+            .finish()
+    }
 }
 
 /// The header-protection key, kept against the epoch of the record key it
@@ -217,7 +236,7 @@ impl HeaderKey {
 
     /// The mask for `direction`'s next record. Derives the key again only
     /// when the epoch has moved.
-    fn mask(&mut self, direction: &Direction) -> u8 {
+    fn mask(&mut self, direction: &impl FramerReads) -> u8 {
         let (n, epoch) = direction.next();
         if self.epoch != Some(epoch) {
             self.key = direction.hkdf_from_record_key(RECORD_HEADER_DST);
@@ -241,14 +260,25 @@ impl From<DirectionError> for ClassedError {
         match error {
             DirectionError::Decrypt => Self::Refused,
             DirectionError::State => Self::State,
+            DirectionError::Poisoned => Self::Poisoned,
         }
+    }
+}
+
+/// A direction that has already failed frames nothing more. Argument
+/// checks come after this, so a dead half does not answer `UnknownClass`.
+fn refuse_if_dead(dead: bool) -> Result<(), ClassedError> {
+    if dead {
+        Err(ClassedError::Poisoned)
+    } else {
+        Ok(())
     }
 }
 
 /// The class and the whole record length that `header` announces as the
 /// next record. Spends nothing.
 fn announced(
-    direction: &Direction,
+    direction: &impl FramerReads,
     table: &ClassTable,
     header_key: &mut HeaderKey,
     header: u8,
@@ -258,9 +288,10 @@ fn announced(
     Ok((class, len))
 }
 
-/// Open the next record in `wire`. On `Refused` the caller poisons its half.
+/// Open the next record in `wire`. Every error but `Truncated` is the
+/// caller's to poison.
 fn open_next(
-    direction: &mut Direction,
+    direction: &mut RecvDirection,
     table: &ClassTable,
     header_key: &mut HeaderKey,
     wire: &[u8],
@@ -289,24 +320,49 @@ fn open_next(
     })
 }
 
-/// The record framer over one [`Direction`]. Make one for each direction of
-/// a session, with that direction's table.
-pub struct ClassedRecord {
-    direction: Direction,
-    table: ClassTable,
-    header_key: HeaderKey,
-    poisoned: bool,
+/// Seal `payload` as one record of `class` with `direction`.
+fn seal_record(
+    direction: &mut SendDirection,
+    table: &ClassTable,
+    header_key: &mut HeaderKey,
+    class: ClassId,
+    payload: &[u8],
+) -> Result<Vec<u8>, ClassedError> {
+    let length = table
+        .plaintext_len(class)
+        .ok_or(ClassedError::UnknownClass)?;
+    let occupancy = u16::try_from(payload.len()).map_err(|_| ClassedError::PayloadTooLarge)?;
+    if payload.len() > length - OCCUPANCY_LEN {
+        return Err(ClassedError::PayloadTooLarge);
+    }
+    let mut plaintext = Zeroizing::new(vec![0u8; length]);
+    plaintext[..OCCUPANCY_LEN].copy_from_slice(&occupancy.to_le_bytes());
+    plaintext[OCCUPANCY_LEN..OCCUPANCY_LEN + payload.len()].copy_from_slice(payload);
+    let header = class.0 ^ header_key.mask(direction);
+    let (ciphertext, _) = direction
+        .seal(&plaintext, &[class.0])
+        .map_err(ClassedError::from)?;
+    let mut wire = Vec::with_capacity(HEADER_LEN + ciphertext.len());
+    wire.push(header);
+    wire.extend_from_slice(&ciphertext);
+    Ok(wire)
 }
 
-impl ClassedRecord {
-    /// The framer for `direction`, padding to `table`.
+/// The record framer over a session's [`SendDirection`].
+pub struct ClassedSealer {
+    direction: SendDirection,
+    table: ClassTable,
+    header_key: HeaderKey,
+}
+
+impl ClassedSealer {
+    /// The sealer for `direction`, padding to `table`.
     #[must_use]
-    pub fn new(direction: Direction, table: ClassTable) -> Self {
+    pub fn new(direction: SendDirection, table: ClassTable) -> Self {
         Self {
             direction,
             table,
             header_key: HeaderKey::new(),
-            poisoned: false,
         }
     }
 
@@ -320,30 +376,45 @@ impl ClassedRecord {
     ///
     /// # Errors
     ///
-    /// [`ClassedError::UnknownClass`] or [`ClassedError::PayloadTooLarge`]
-    /// before anything is spent; [`ClassedError::State`] when the direction
-    /// cannot advance.
+    /// [`ClassedError::Poisoned`] when the direction is already dead, before
+    /// the class or the length is considered; [`ClassedError::UnknownClass`]
+    /// or [`ClassedError::PayloadTooLarge`] before anything is spent;
+    /// [`ClassedError::State`] when the direction cannot advance, which
+    /// kills it.
     pub fn seal(&mut self, class: ClassId, payload: &[u8]) -> Result<Vec<u8>, ClassedError> {
-        let length = self
-            .table
-            .plaintext_len(class)
-            .ok_or(ClassedError::UnknownClass)?;
-        let occupancy = u16::try_from(payload.len()).map_err(|_| ClassedError::PayloadTooLarge)?;
-        if payload.len() > length - OCCUPANCY_LEN {
-            return Err(ClassedError::PayloadTooLarge);
+        refuse_if_dead(self.direction.is_dead())?;
+        seal_record(
+            &mut self.direction,
+            &self.table,
+            &mut self.header_key,
+            class,
+            payload,
+        )
+    }
+}
+
+/// The record framer over a session's [`RecvDirection`].
+pub struct ClassedOpener {
+    direction: RecvDirection,
+    table: ClassTable,
+    header_key: HeaderKey,
+}
+
+impl ClassedOpener {
+    /// The opener for `direction`, reading `table`.
+    #[must_use]
+    pub fn new(direction: RecvDirection, table: ClassTable) -> Self {
+        Self {
+            direction,
+            table,
+            header_key: HeaderKey::new(),
         }
-        let mut plaintext = Zeroizing::new(vec![0u8; length]);
-        plaintext[..OCCUPANCY_LEN].copy_from_slice(&occupancy.to_le_bytes());
-        plaintext[OCCUPANCY_LEN..OCCUPANCY_LEN + payload.len()].copy_from_slice(payload);
-        let header = class.0 ^ self.header_key.mask(&self.direction);
-        let (ciphertext, _) = self
-            .direction
-            .seal(&plaintext, &[class.0])
-            .map_err(ClassedError::from)?;
-        let mut wire = Vec::with_capacity(HEADER_LEN + ciphertext.len());
-        wire.push(header);
-        wire.extend_from_slice(&ciphertext);
-        Ok(wire)
+    }
+
+    /// The table this half reads.
+    #[must_use]
+    pub fn table(&self) -> &ClassTable {
+        &self.table
     }
 
     /// How many wire bytes the record that starts with `header` takes.
@@ -352,13 +423,11 @@ impl ClassedRecord {
     /// # Errors
     ///
     /// [`ClassedError::Refused`] for a class outside the table, which
-    /// poisons this half; [`ClassedError::Poisoned`] after any refusal.
+    /// poisons the direction; [`ClassedError::Poisoned`] after any failure.
     pub fn record_len(&mut self, header: u8) -> Result<usize, ClassedError> {
-        if self.poisoned {
-            return Err(ClassedError::Poisoned);
-        }
+        refuse_if_dead(self.direction.is_dead())?;
         let result = announced(&self.direction, &self.table, &mut self.header_key, header);
-        self.poison_on_refusal(result.map(|(_, len)| len))
+        self.poison_unless_truncated(result.map(|(_, len)| len))
     }
 
     /// Open the record at the front of `wire`.
@@ -366,32 +435,33 @@ impl ClassedRecord {
     /// # Errors
     ///
     /// [`ClassedError::Truncated`] when `wire` holds less than the record,
-    /// with nothing spent; [`ClassedError::Refused`], which poisons this
-    /// half; [`ClassedError::Poisoned`] after any refusal.
+    /// with nothing spent. Every other error poisons the direction:
+    /// [`ClassedError::Refused`], [`ClassedError::State`], and
+    /// [`ClassedError::Poisoned`] after any of them.
     pub fn open(&mut self, wire: &[u8]) -> Result<Opened, ClassedError> {
-        if self.poisoned {
-            return Err(ClassedError::Poisoned);
-        }
+        refuse_if_dead(self.direction.is_dead())?;
         let result = open_next(&mut self.direction, &self.table, &mut self.header_key, wire);
-        self.poison_on_refusal(result)
+        self.poison_unless_truncated(result)
     }
 
     /// End this half and return the direction it framed.
     ///
-    /// The header-key cache stays with the half. The next [`ClassedRecord`]
+    /// The header-key cache stays with the half. The next [`ClassedOpener`]
     /// around this direction derives the key again, once, for the epoch the
-    /// direction is on. Poison stays with the half too: a direction taken
-    /// after [`ClassedError::Refused`] starts a new half, and a session that
-    /// must not continue refuses the open instead of wrapping the direction
-    /// again.
+    /// direction is on. The poison does not stay behind: it is on the
+    /// direction, so a direction taken after a refusal refuses in a new half
+    /// too.
     #[must_use = "the direction is the session's receiving half"]
-    pub fn into_direction(self) -> Direction {
+    pub fn into_direction(self) -> RecvDirection {
         self.direction
     }
 
-    fn poison_on_refusal<T>(&mut self, result: Result<T, ClassedError>) -> Result<T, ClassedError> {
-        if matches!(result, Err(ClassedError::Refused)) {
-            self.poisoned = true;
+    fn poison_unless_truncated<T>(
+        &mut self,
+        result: Result<T, ClassedError>,
+    ) -> Result<T, ClassedError> {
+        if matches!(&result, Err(error) if *error != ClassedError::Truncated) {
+            self.direction.poison();
         }
         result
     }
@@ -402,8 +472,16 @@ mod tests {
     use super::*;
     use crate::direction::REKEY_NONCES;
 
-    fn keyed() -> Direction {
-        Direction::new(
+    fn keyed_send() -> SendDirection {
+        SendDirection::new(
+            Zeroizing::new([0x11; HASH_LEN]),
+            Zeroizing::new([0x22; HASH_LEN]),
+            [0x33; HASH_LEN],
+        )
+    }
+
+    fn keyed_recv() -> RecvDirection {
+        RecvDirection::new(
             Zeroizing::new([0x11; HASH_LEN]),
             Zeroizing::new([0x22; HASH_LEN]),
             [0x33; HASH_LEN],
@@ -415,11 +493,16 @@ mod tests {
         ClassTable::new(&[512, 16_384, 65_535]).unwrap()
     }
 
-    fn pair() -> (ClassedRecord, ClassedRecord) {
-        (
-            ClassedRecord::new(keyed(), table()),
-            ClassedRecord::new(keyed(), table()),
-        )
+    fn sealer() -> ClassedSealer {
+        ClassedSealer::new(keyed_send(), table())
+    }
+
+    fn opener(table: ClassTable) -> ClassedOpener {
+        ClassedOpener::new(keyed_recv(), table)
+    }
+
+    fn pair() -> (ClassedSealer, ClassedOpener) {
+        (sealer(), opener(table()))
     }
 
     /// Known answer, computed independently in Python (`hmac` over
@@ -428,7 +511,7 @@ mod tests {
     /// and the mask at nonces 0, 7 and 999.
     #[test]
     fn known_answer_from_an_independent_implementation() {
-        let direction = keyed();
+        let direction = keyed_send();
         let key = direction.hkdf_from_record_key(RECORD_HEADER_DST);
         assert_eq!(
             hex(&key[..]),
@@ -475,6 +558,37 @@ mod tests {
         assert_eq!(t.largest(), ClassId(2));
     }
 
+    /// A direction killed by a nonce that cannot advance answers nothing
+    /// about the next record, not even that the class is unknown or that
+    /// the payload does not fit.
+    #[test]
+    fn a_dead_sealer_refuses_before_it_looks_at_the_class() {
+        let mut send = sealer();
+        let fitting = send.table().smallest_for(1).expect("one byte fits a class");
+        let unknown =
+            ClassId(u8::try_from(send.table().len()).expect("a table's length fits a class byte"));
+        // One byte past the class: a live sealer would say `PayloadTooLarge`.
+        let past_the_class = vec![
+            0u8;
+            send.table()
+                .max_payload(fitting)
+                .expect("the fitting class is in the table")
+                + 1
+        ];
+        send.direction.force_nonce(u64::MAX);
+        assert_eq!(send.seal(fitting, b"a"), Err(ClassedError::State));
+        assert_eq!(
+            send.seal(unknown, b"a"),
+            Err(ClassedError::Poisoned),
+            "an unknown class on a dead direction"
+        );
+        assert_eq!(
+            send.seal(fitting, &past_the_class),
+            Err(ClassedError::Poisoned),
+            "a payload past the class on a dead direction"
+        );
+    }
+
     #[test]
     fn a_payload_over_its_class_is_refused_before_anything_is_spent() {
         let (mut send, mut recv) = pair();
@@ -519,8 +633,8 @@ mod tests {
 
     #[test]
     fn a_class_outside_the_table_is_refused_and_poisons() {
-        let mut send = ClassedRecord::new(keyed(), table());
-        let mut recv = ClassedRecord::new(keyed(), ClassTable::new(&[512]).unwrap());
+        let mut send = sealer();
+        let mut recv = opener(ClassTable::new(&[512]).unwrap());
         let wire = send.seal(ClassId(2), b"body").unwrap();
         assert_eq!(recv.record_len(wire[0]), Err(ClassedError::Refused));
         assert_eq!(recv.open(&wire), Err(ClassedError::Poisoned));
@@ -539,7 +653,7 @@ mod tests {
 
     /// Seal a raw plaintext as a record, past the framer's own encoding, so
     /// the receiver's checks on occupancy and pad can be reached.
-    fn raw(direction: &mut Direction, class: ClassId, plaintext: &[u8]) -> Vec<u8> {
+    fn raw(direction: &mut SendDirection, class: ClassId, plaintext: &[u8]) -> Vec<u8> {
         let header = class.0 ^ HeaderKey::new().mask(direction);
         let (ct, _) = direction.seal(plaintext, &[class.0]).unwrap();
         let mut wire = vec![header];
@@ -554,8 +668,8 @@ mod tests {
     #[test]
     fn the_class_byte_is_the_associated_data() {
         for (ad, opens) in [(0u8, true), (1u8, false)] {
-            let mut send = keyed();
-            let mut recv = ClassedRecord::new(keyed(), table());
+            let mut send = keyed_send();
+            let mut recv = opener(table());
             let header = HeaderKey::new().mask(&send);
             let (ct, _) = send.seal(&[0u8; 512], &[ad]).unwrap();
             let mut wire = vec![header];
@@ -566,8 +680,8 @@ mod tests {
 
     #[test]
     fn an_occupancy_past_the_class_is_refused() {
-        let mut send = keyed();
-        let mut recv = ClassedRecord::new(keyed(), table());
+        let mut send = keyed_send();
+        let mut recv = opener(table());
         let mut plaintext = vec![0u8; 512];
         plaintext[..2].copy_from_slice(&511u16.to_le_bytes());
         let wire = raw(&mut send, ClassId(0), &plaintext);
@@ -576,8 +690,8 @@ mod tests {
 
     #[test]
     fn a_pad_that_is_not_zero_is_refused() {
-        let mut send = keyed();
-        let mut recv = ClassedRecord::new(keyed(), table());
+        let mut send = keyed_send();
+        let mut recv = opener(table());
         let mut plaintext = vec![0u8; 512];
         plaintext[..2].copy_from_slice(&4u16.to_le_bytes());
         plaintext[2..6].copy_from_slice(b"body");
@@ -642,9 +756,93 @@ mod tests {
         assert_eq!(recv.open(&wire).unwrap().payload, b"request");
         let direction = recv.into_direction();
         assert_eq!(direction.opened(), 1);
-        let mut recv = ClassedRecord::new(direction, table());
+        let mut recv = ClassedOpener::new(direction, table());
         let wire = send.seal(ClassId(0), b"second").unwrap();
         assert_eq!(recv.open(&wire).unwrap().payload, b"second");
+    }
+
+    /// Known answer for one whole record, computed independently in Python
+    /// (shekyl-dev `scripts/rpc-channel/noise_vectors.py`, whose
+    /// ChaCha20-Poly1305 reproduces RFC 8439 section 2.8.2 first): record
+    /// key 0x22..22, nonce 0, class 0 of the channel's table, payload
+    /// `shekyl`. It pins how a record is laid out: the masked class byte,
+    /// the occupancy's byte order (little-endian), the pad and the
+    /// associated data, all at once.
+    #[test]
+    fn one_record_matches_an_independent_implementation() {
+        let mut send = sealer();
+        let wire = send.seal(ClassId(0), b"shekyl").unwrap();
+        assert_eq!(wire.len(), 1 + 512 + 16);
+        assert_eq!(wire[0], 0xc1);
+        assert_eq!(
+            hex(&wire[wire.len() - 16..]),
+            "4f75644ca70c8c4edd6e9fafb11fa94c"
+        );
+        let digest = <blake2::Blake2s256 as blake2::Digest>::digest(&wire);
+        assert_eq!(
+            hex(&digest),
+            "c853046b4a0e203a91ccf1ac0be7d607ac98a80fa6fc8e8cb8c98e2c069fabf6"
+        );
+    }
+
+    /// Two records back to back in one buffer: each open consumes exactly
+    /// its own record, and the next opens from where it stopped.
+    #[test]
+    fn records_back_to_back_open_one_at_a_time() {
+        let (mut send, mut recv) = pair();
+        let mut wire = send.seal(ClassId(0), b"first").unwrap();
+        let first_len = wire.len();
+        wire.extend(send.seal(ClassId(1), b"second").unwrap());
+        let opened = recv.open(&wire).unwrap();
+        assert_eq!(opened.payload, b"first");
+        assert_eq!(opened.consumed, first_len);
+        let opened = recv.open(&wire[first_len..]).unwrap();
+        assert_eq!(opened.payload, b"second");
+        assert_eq!(opened.consumed, wire.len() - first_len);
+    }
+
+    /// The poison is on the direction: one taken out of a refused opener
+    /// and wrapped again refuses the next record, though that record is
+    /// genuine.
+    #[test]
+    fn a_refused_direction_cannot_be_wrapped_into_a_working_half() {
+        let (mut send, mut recv) = pair();
+        let mut bad = send.seal(ClassId(0), b"body").unwrap();
+        let good = send.seal(ClassId(0), b"after").unwrap();
+        let last = bad.len() - 1;
+        bad[last] ^= 1;
+        assert_eq!(recv.open(&bad), Err(ClassedError::Refused));
+        let mut again = ClassedOpener::new(recv.into_direction(), table());
+        assert_eq!(again.open(&good), Err(ClassedError::Poisoned));
+    }
+
+    /// A refusal that is not the tag's (a class outside the table) poisons
+    /// the direction too.
+    #[test]
+    fn every_refusal_but_truncation_poisons_the_direction() {
+        let mut send = sealer();
+        let mut recv = opener(ClassTable::new(&[512]).unwrap());
+        let wire = send.seal(ClassId(2), b"body").unwrap();
+        assert_eq!(recv.open(&wire), Err(ClassedError::Refused));
+        let direction = recv.into_direction();
+        let mut again = ClassedOpener::new(direction, table());
+        assert_eq!(again.open(&wire), Err(ClassedError::Poisoned));
+    }
+
+    /// `Opened` prints the payload's length, not the payload.
+    #[test]
+    fn opened_does_not_print_its_payload() {
+        let opened = Opened {
+            payload: b"secret".to_vec(),
+            class: ClassId(0),
+            consumed: 529,
+        };
+        let printed = format!("{opened:?}");
+        assert!(
+            !printed.contains("secret") && !printed.contains("115"),
+            "{printed}"
+        );
+        assert!(printed.contains("<6 bytes>"), "{printed}");
     }
 
     #[test]

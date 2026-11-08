@@ -483,7 +483,7 @@ On block connect for **JoinMarket:** create `ArchivalBondRecord` (§4.1); credit
 
 On block connect for **Release** (§4.3 "On confirm"; connect fold + pop twin landed
 Rust-native, `shekyl-archival-retention::bond_connect` over
-`shekyl_archival_release_connect` / `shekyl_archival_release_pop` — rule 20, P2B-8
+`shekyl_archival_release_connect` (deleted, `DEL-008`) / `shekyl_archival_release_pop` (deleted, `DEL-008`) — rule 20, P2B-8
 implementation locus; **C++ dispatch wiring LANDED**: `add_transaction` Release arm →
 `apply_archival_release` single writer, `m_archival_bond_release_log` pre-image
 journal, `pop_block` → `revert_archival_releases_at_height`, verify dispatch in
@@ -547,11 +547,14 @@ SA-2b retired the on-vin `signature_preimage`, §3.4.1). The v5 record (`Archiva
 datadir-reset posture) commits the key once at JoinMarket connect
 (`put_archival_bond_record`, no-default parameter so no caller can silently
 commit an empty authorizer). The reject→auth swap landed in one change, pinned
-by the discriminating KATs
-(`archival_bond_post.gf1_release_auth_discriminates_on_committed_key` + siblings):
-the committed key accepts — Release verifies end-to-end — while the identity
-key, a foreign key, and a record committing no key (pre-GF-1 shape) all reject
-fail-closed, never an identity fallback.
+by the discriminating tests in Rust (`rust/shekyl-daemon-rpc/tests/submit_verifier.rs`
+`consensus_valid_release_passes_the_production_battery`,
+`the_identity_key_does_not_authorize_a_debit` and
+`a_record_committing_no_key_authorizes_nothing`; `rust/shekyl-archival-retention/src/debit_auth.rs`
+`a_foreign_key_does_not_authorize_a_debit`): the committed key accepts — Release
+verifies end-to-end — while the identity key, a foreign key, and a record
+committing no key (pre-GF-1 shape) all reject fail-closed, never an identity
+fallback.
 
 **Coverage boundary (named, #302 review):** the selector's soundness rests on
 two load-bearing preconditions **upstream and out of its scope** — the
@@ -567,7 +570,7 @@ the one other debit path, the `HoldingsUpdate` drop, is REJECTED).
 **Block-level bond-post pass (LANDED end-to-end):** at most **one bond-post vin
 per `P_canonical_id` per block**, keyed on
 `P` alone, **rejecting the block** — `bond_post_block_unique`
-(`shekyl-archival-retention::bond_post`, over `shekyl_archival_bond_post_block_unique`;
+(`shekyl-archival-retention::bond_post`, over `shekyl_archival_bond_post_block_unique` (deleted, `DEL-008`);
 the emission `(P,E)` pass's sibling, same decision-placement pin: C++ marshals the
 block's ids, Rust decides). Per-tx verify runs against pre-block DB state, so
 a same-`P` same-block pair **of one kind** passes it independently —
@@ -620,7 +623,7 @@ per-shard reverse-cursor maxima over the serve-credit table's BE composite key
 (P2B-8 Q1). A maintained field would only add pop-symmetry surface and a desync
 risk against the serve-credit table, the single source of truth. Landed:
 `release_cooldown.rs` (`whole_record_last_served`), folded at the
-`shekyl_archival_verify_release_bond_post` FFI.
+`shekyl_archival_verify_release_bond_post` (deleted, `DEL-008`) FFI.
 
 **Landed representation of `bond_event_log` (F3).** The interval log is
 `ArchivalBondValue::bad_intervals` (`shekyl_types.h`): a slash appends an **open**

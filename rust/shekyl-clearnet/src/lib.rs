@@ -53,7 +53,7 @@ use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::Pool;
 use shekyl_timing_engine::{Clock, Handle, Tick};
 use shekyl_transport_layer::{
-    stack_plan, AddedLayer, CloseCause, NetworkColumn, Sockets, StackPlan,
+    stack_plan, AddedLayer, CloseCause, DialEnd, NetworkColumn, Sockets, StackPlan,
 };
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -61,7 +61,10 @@ use tokio::sync::mpsc;
 mod drive;
 mod handshake;
 mod inode;
+mod linger;
 mod seam;
+mod sizes;
+mod stamping;
 
 #[cfg(unix)]
 pub use inode::socket_descriptors;
@@ -69,9 +72,12 @@ pub use seam::ChannelChoice;
 pub use shekyl_capped_stream::Session;
 
 pub use drive::{
-    accept_inbound, accept_one, dial_one, zero_tally, Accept, Admitted, Dial, Inbound,
+    accept_inbound, accept_one, dial_one, publish_on, zero_tally, Accept, Admitted, Dial, Inbound,
+    Publish,
 };
+pub use linger::Linger;
 use seam::ChannelChoice as Choice;
+pub use stamping::{stamp_stream_end, Observed};
 
 /// How many responder handshakes the blocking pool computed, and how many
 /// it skipped because the deadline had already fired.
@@ -224,9 +230,12 @@ where
             handshake_within: self.handshake_within,
             gap_within: None,
             tally: Arc::clone(&self.tally),
-            on_cause: Arc::clone(&self.on_cause),
+            on_end: {
+                let on_cause = Arc::clone(&self.on_cause);
+                Arc::new(move |end: DialEnd| on_cause(end.cause()))
+            },
             send_queue_bytes: self.send_queue_bytes,
-            admitted: self.admitted_tx.clone(),
+            admitted: publish_on(self.admitted_tx.clone()),
         };
         let engine = self.engine.clone();
         self.handle.spawn(drive::dial_one(dial, engine));
@@ -283,6 +292,12 @@ where
     let send_queue_bytes = config.send_queue_bytes;
     let shutdown_timeout = config.shutdown_timeout;
     let ceiling = config.ceiling;
+    // The spawn needs the runtime. One task for this connector: a later
+    // listener would clone the same handle.
+    let linger_engine = engine.clone();
+    let linger_cap = sockets.clearnet_linger_cap(handshake_within);
+    let linger =
+        pool.block_on(async move { Linger::spawn(linger_engine, linger_cap, handshake_within) });
     let inbound = Inbound {
         sockets,
         ceiling: move || ceiling,
@@ -293,7 +308,8 @@ where
         tally: Arc::clone(&tally),
         on_cause: Arc::clone(&config.on_cause),
         send_queue_bytes,
-        admitted: admitted_tx,
+        admitted: publish_on(admitted_tx),
+        linger,
         backoff: config.accept_backoff,
     };
     let engine = engine.clone();

@@ -49,6 +49,7 @@ Total bytes for this vector: 1024 (= 4 × 256).
 Generator
 ---------
 source      = ./_generator/phase2c/gen.cpp (mode t7)
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/phase2c/Makefile (`make gen`)
 command     = ./gen t7 > t7_vm_aesmix_4iter.bin
 output_size = 1024 bytes

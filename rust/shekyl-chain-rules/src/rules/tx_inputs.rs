@@ -95,8 +95,8 @@ impl TxRule for I1 {
 /// `FCMP_MAX_INPUTS_PER_TX`), not `config/`, and its only recorded
 /// rationale is RingCT-era ("bounds proof generation time and tx size").
 /// Measured (`shekyl-wire/tests/input_cap_cost.rs`;
-/// `CHAIN_RULES_SLICE_6.md` §5.4) against CEN-H3's `TX_WEIGHT_LIMIT`
-/// (149 400), the ceiling an accepted spend actually meets: 6.4 KB per
+/// `CHAIN_RULES_SLICE_6.md` §5.4) against CEN-H3's `TX_WEIGHT_LIMIT`,
+/// the ceiling an accepted spend actually meets: 6.4 KB per
 /// input on the wire; 11.9 ms (i9-11950H) and 64.9 ms (Pi 4) of verifier
 /// time per input, linear on both. That weight limit admits 22 inputs of
 /// this shape, so the cap of 8 binds by about 2.75×. The 1 MiB parser
@@ -395,7 +395,7 @@ fn the_bond_post<'tx>(cx: &TxContext<'tx>) -> Option<&'tx shekyl_wire::BondPost>
 /// CEN-J11: the post's `hybrid_public_key` is canonical-length
 /// ([`PQC_HYBRID_SINGLE_KEY_LEN`]) and its `p_canonical_id` **is the
 /// recompute over it** ([`p_canonical_id_from_hybrid_pubkey`], the function
-/// the C++ calls through `shekyl_archival_p_canonical_id_from_pubkey`).
+/// the C++ called through its FFI, deleted by `DEL-008`).
 /// The hint is what every later read keys on — the fold's record write,
 /// J13's record read, G10's block uniqueness — so a post whose hint names
 /// another persona would insert the poster's key under the other's id;

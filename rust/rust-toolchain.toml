@@ -28,7 +28,10 @@
 # AND the `--default-toolchain 1.94.0` pins in the gitian descriptors
 # (contrib/gitian/gitian-{linux,osx,win,freebsd}.yml) together, in one
 # deliberate PR; run `cargo fmt --all` in that PR so any rustfmt
-# layout change lands as a single reviewed reflow. The `@stable` canary
+# layout change lands as a single reviewed reflow, and re-run the
+# constant-time harness (docs/formal/checkct, CA-1): its verdicts are per
+# LLVM, and a select that is branchless under one LLVM was a branch under
+# another on 2026-10-24. The `@stable` canary
 # (.github/workflows/rust-stable-canary.yml) gives advance warning of what the next
 # stable would change. No `@beta`/nightly — controlled, audited bumps only.
 

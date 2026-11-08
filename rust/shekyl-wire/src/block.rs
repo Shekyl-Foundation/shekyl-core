@@ -144,7 +144,76 @@ pub struct Block {
     pub transaction_hashes: Vec<TxHash>,
 }
 
+/// Where an external miner writes in a block's serialized blob, both
+/// counted from the blob's first byte: the header's 4-byte nonce, and the
+/// coinbase's reserved [`COINBASE_NONCE_BYTES`](crate::tx_extra::COINBASE_NONCE_BYTES).
+/// Only [`Block::blob_offsets`] makes one, so the two always name the
+/// block they came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlobOffsets {
+    header_nonce: usize,
+    extra_nonce: usize,
+}
+
+impl BlobOffsets {
+    /// The header nonce's offset.
+    #[must_use]
+    pub const fn header_nonce(self) -> usize {
+        self.header_nonce
+    }
+
+    /// The coinbase extra nonce's offset.
+    #[must_use]
+    pub const fn extra_nonce(self) -> usize {
+        self.extra_nonce
+    }
+}
+
 impl Block {
+    /// Where the coinbase's extra-nonce payload sits in
+    /// [`serialize`](Self::serialize)'s output: the header, then the
+    /// coinbase up to its extra, then the nonce's place in the extra's fixed
+    /// grammar. An external miner writes its
+    /// [`COINBASE_NONCE_BYTES`](crate::tx_extra::COINBASE_NONCE_BYTES) there
+    /// (`DRS_X_STORE_FLIP.md` DX-Q3, N2), then hashes the block it made: the
+    /// [`pow_blob`](Self::pow_blob) commits to the coinbase through the
+    /// transaction tree, so a new extra nonce is a new tree hash.
+    ///
+    /// `None` when the coinbase's extra does not open with the pubkey and
+    /// an eight-byte nonce, as every coinbase this node builds does.
+    #[must_use]
+    pub fn coinbase_extra_nonce_offset(&self) -> Option<usize> {
+        use crate::tx_extra::{
+            COINBASE_NONCE_BYTES, COINBASE_NONCE_OFFSET_IN_EXTRA, TX_EXTRA_TAG_NONCE,
+            TX_EXTRA_TAG_PUBKEY,
+        };
+        let extra = &self.miner_transaction.prefix.extra;
+        let nonce_tag = COINBASE_NONCE_OFFSET_IN_EXTRA.checked_sub(2)?;
+        let opens_right = extra.first() == Some(&TX_EXTRA_TAG_PUBKEY)
+            && extra.get(nonce_tag) == Some(&TX_EXTRA_TAG_NONCE)
+            && extra.get(nonce_tag + 1).map(|len| usize::from(*len)) == Some(COINBASE_NONCE_BYTES)
+            && extra.len() >= COINBASE_NONCE_OFFSET_IN_EXTRA + COINBASE_NONCE_BYTES;
+        if !opens_right {
+            return None;
+        }
+        let mut header = Vec::new();
+        self.header
+            .write(&mut header)
+            .expect("writing to a Vec is infallible");
+        Some(header.len() + self.miner_transaction.extra_offset() + COINBASE_NONCE_OFFSET_IN_EXTRA)
+    }
+
+    /// Where an external miner writes in this block's blob: the header
+    /// nonce and the coinbase's reserved extra nonce. `None` when the
+    /// coinbase reserves no extra nonce ([`Self::coinbase_extra_nonce_offset`]).
+    #[must_use]
+    pub fn blob_offsets(&self) -> Option<BlobOffsets> {
+        Some(BlobOffsets {
+            header_nonce: self.header.nonce_offset(),
+            extra_nonce: self.coinbase_extra_nonce_offset()?,
+        })
+    }
+
     /// Write the block.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         self.header.write(w)?;
@@ -320,6 +389,30 @@ const POW_TAIL_BYTES: usize = PREIMAGE_HASH_BYTES + MIN_TX_COUNT_VARINT;
 pub const MIN_POW_BLOB_SIZE: usize =
     HEADER_LEADING_VARINTS + HEADER_HASH_FIELDS + HEADER_NONCE_BYTES + POW_TAIL_BYTES;
 
+/// The longest hashing blob [`PowBlob::read`] accepts.
+///
+/// A hashing blob is the header, the transaction-tree hash and the
+/// transaction-count varint. It does not carry the block body, so
+/// [`MAX_BLOCK_BLOB_SIZE`] is not this length. The versions are at the
+/// width of a `u8`, the timestamp at the width of a `u64`, and the count
+/// at the preimage parser's own cap ([`READ_LEN_CAP`] plus the miner).
+pub const MAX_POW_BLOB_SIZE: usize = max_pow_blob_size();
+
+/// The largest `tx_count` [`PowBlob::read`] accepts: one more than
+/// [`READ_LEN_CAP`], because the count includes the miner.
+const MAX_POW_TX_COUNT: u64 = READ_LEN_CAP as u64 + 1;
+
+const fn max_pow_blob_size() -> usize {
+    use crate::varint::varint_len;
+    varint_len(u8::MAX as u64)
+        + varint_len(u8::MAX as u64)
+        + varint_len(u64::MAX)
+        + HEADER_HASH_FIELDS
+        + HEADER_NONCE_BYTES
+        + PREIMAGE_HASH_BYTES
+        + varint_len(MAX_POW_TX_COUNT)
+}
+
 /// The PoW preimage, parsed: the header, the transaction-tree hash, and the
 /// count the trailing varint carries (`tx_count = n_tx + 1`, the miner
 /// included). [`Block::pow_blob`] writes this and nothing else.
@@ -411,6 +504,59 @@ mod tests {
         }
     }
 
+    /// The extra-nonce offset is where the coinbase's nonce payload is in
+    /// the serialized block: eight bytes written there parse back as the
+    /// coinbase's nonce, and nothing else in the block moves.
+    #[test]
+    fn eight_bytes_at_the_extra_nonce_offset_are_the_coinbases_nonce() {
+        use crate::transaction::{Ct, CtBase, Input, Transaction, TxPrefix};
+        use crate::tx_extra::{build_coinbase_extra, COINBASE_NONCE_BYTES};
+        let extra = build_coinbase_extra(
+            [0x33; 32],
+            &[0; COINBASE_NONCE_BYTES],
+            shekyl_types::archival::DrawCommitment::from_bytes([0x44; 32]),
+            0,
+            &[],
+            &[],
+        )
+        .expect("a leafless coinbase extra");
+        let block = Block {
+            header: header(empty_attestation_root()),
+            miner_transaction: Transaction {
+                prefix: TxPrefix {
+                    unlock_time: 300,
+                    inputs: vec![Input::Gen(7)],
+                    outputs: Vec::new(),
+                    extra,
+                },
+                ct: Ct::Null(CtBase {
+                    enc_amounts: Vec::new(),
+                    enc_labels: Vec::new(),
+                    commitments: Vec::new(),
+                }),
+            },
+            transaction_hashes: vec![TxHash::from_bytes([0x55; 32])],
+        };
+        let offsets = block
+            .blob_offsets()
+            .expect("the coinbase opens with the pubkey and the nonce");
+        let at = offsets.extra_nonce();
+
+        let mut bytes = block.serialize();
+        let written = [0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x07, 0x18];
+        bytes[at..at + COINBASE_NONCE_BYTES].copy_from_slice(&written);
+        let nonce = offsets.header_nonce();
+        bytes[nonce..nonce + 4].copy_from_slice(&0x0102_0304_u32.to_le_bytes());
+        let parsed = Block::from_bytes(&bytes).expect("the written blob parses");
+        let mut expected = block.clone();
+        let nonce_in_extra = crate::tx_extra::COINBASE_NONCE_OFFSET_IN_EXTRA;
+        expected.miner_transaction.prefix.extra
+            [nonce_in_extra..nonce_in_extra + COINBASE_NONCE_BYTES]
+            .copy_from_slice(&written);
+        expected.header.nonce = 0x0102_0304;
+        assert_eq!(parsed, expected, "only the two nonces changed");
+    }
+
     /// The named minimum is the bytes the shortest preimage actually writes.
     #[test]
     fn the_shortest_pow_blob_is_the_named_minimum() {
@@ -430,6 +576,38 @@ mod tests {
         let bytes = blob.write();
         assert_eq!(bytes.len(), MIN_POW_BLOB_SIZE);
         assert_eq!(PowBlob::read(&bytes).expect("the minimum parses"), blob);
+        // The RT-W10 harness (`examples/rt_w10_request_cost.rs` in
+        // `shekyl-pow-randomx`) repeats these two lengths as literals so
+        // that crate does not depend on this one. A change here updates
+        // the harness in the same commit.
+        assert_eq!(MIN_POW_BLOB_SIZE, 136);
+        assert_eq!(MAX_BLOCK_BLOB_SIZE, 33_000_128);
+    }
+
+    /// The format maximum is what the widest field encodings actually write,
+    /// and it is a hashing blob, not a block body.
+    #[test]
+    fn the_longest_pow_blob_is_what_the_widest_fields_write() {
+        let blob = PowBlob {
+            header: BlockHeader {
+                major_version: u8::MAX,
+                minor_version: u8::MAX,
+                timestamp: u64::MAX,
+                previous: BlockHash::from_bytes([0xff; 32]),
+                nonce: u32::MAX,
+                curve_tree_root: CurveTreeRoot::from_bytes([0xff; 32]),
+                attestation_root: AttestationRoot::from_bytes([0xff; 32]),
+            },
+            tx_tree_hash: TxTreeHash::from_bytes([0xff; 32]),
+            tx_count: MAX_POW_TX_COUNT,
+        };
+        let bytes = blob.write();
+        assert_eq!(bytes.len(), MAX_POW_BLOB_SIZE);
+        const {
+            assert!(MAX_POW_BLOB_SIZE > MIN_POW_BLOB_SIZE);
+            assert!(MAX_POW_BLOB_SIZE < MAX_BLOCK_BLOB_SIZE);
+        }
+        assert_eq!(PowBlob::read(&bytes).expect("the maximum parses"), blob);
     }
 
     #[test]

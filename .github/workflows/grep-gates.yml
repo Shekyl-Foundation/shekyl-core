@@ -33,15 +33,8 @@
 name: ci/grep-gates
 
 on:
-  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
-  # not only the branch head — the class of failure neither PR's CI can
-  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
-  # filter, so this runs on every group regardless of the PR filter above
-  # or below.
-  merge_group:
-    types: [checks_requested]
-    branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened]
   push:
     branches: [dev, main]
 
@@ -57,39 +50,8 @@ jobs:
     name: "Grep gates (bundled)"
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      # The revision the dial-path freeze compares against: the base branch
-      # tip on a pull request, the group's base in the merge queue, the
-      # previous tip on a push. Empty is a failure below, not a skip.
-      FREEZE_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
-      # For the release-promotion test below: the pull request's head
-      # commit, and a token to ask how far it is ahead of `dev`.
-      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
-
-      # Ruling A (2026-10-08): the C++ dial path is frozen until the slice 3
-      # cutover deletes it, and the gate reads each frozen body at the base
-      # revision. The checkout above is depth 1, so that revision is fetched
-      # here. It rides this job because the job has no path filter: a "small
-      # fix" to a frozen function would come in through another lane.
-      - name: Fetch the base revision for the dial-path freeze
-        shell: bash
-        run: |
-          set -u
-          # Setup only, and only on the runner: on a developer's clone this
-          # fetch would make the shared object store shallow, and the base
-          # commit is already there (check_workflow_fetch_guard.py).
-          if [ "${GITHUB_ACTIONS:-}" != "true" ]; then
-            echo "not under GitHub Actions; the base revision is already local, fetch skipped"
-            exit 0
-          fi
-          if [ -z "${FREEZE_BASE}" ]; then
-            echo "no base revision for the dial-path freeze on event ${GITHUB_EVENT_NAME}"
-            exit 1
-          fi
-          git fetch --no-tags --depth=1 origin "${FREEZE_BASE}"
 
       - name: Install ripgrep and PyYAML
         run: |
@@ -158,9 +120,32 @@ jobs:
           # workflow edit.
           run_one "Workflow files parse and are well-formed" \
             python3 scripts/ci/check_workflows_parse.py
+          # A pull_request trigger filtered on branches does not run while a
+          # PR's base is another branch. That is how #1254 and #1259 merged
+          # with CodeQL and the doc gates never started. The `edited` type
+          # is refused too: it ran every workflow on each PR body edit with
+          # every job skipped, and the newest check run per name is the one
+          # the PR reports (#1264, #1267). This job has no path filter, so a
+          # workflow edit cannot hide from it.
+          run_one "pull_request triggers run on every base and only on code" \
+            python3 scripts/ci/check_pr_event_triggers.py
           # A setup step that fetches with a depth would make a developer's
           # shared clone shallow when the steps are run locally; it carries
           # the GITHUB_ACTIONS guard, and this holds every such step to it.
+          # A job with no timeout-minutes holds its runner for the platform's
+          # 360 min when it hangs. `--selftest` first, so a gate that grades
+          # nothing cannot pass (rule 47).
+          run_one "Every step job carries its own timeout (selftest)" \
+            python3 scripts/ci/check_job_timeouts.py --selftest
+          run_one "Every step job carries its own timeout" \
+            python3 scripts/ci/check_job_timeouts.py
+          # A red push run on dev reaches report-dev-red.yml only from the
+          # jobs its caller `needs`; a job added and left out of that list
+          # could go red on dev with no issue.
+          run_one "The dev-red reporter needs every job (selftest)" \
+            python3 scripts/ci/check_dev_red_reporter.py --selftest
+          run_one "The dev-red reporter needs every job" \
+            python3 scripts/ci/check_dev_red_reporter.py
           run_one "A depth-changing fetch runs only under GitHub Actions (selftest)" \
             python3 scripts/ci/check_workflow_fetch_guard.py --selftest
           run_one "A depth-changing fetch runs only under GitHub Actions" \
@@ -177,6 +162,16 @@ jobs:
           run_one "Production-lint lane names every TEST_ONLY owner" \
             python3 scripts/ci/check_production_lint_lane.py
 
+          # Each connector declares its dial numbers in one profile
+          # (shekyl_transport_layer::dial_profile); the dialer and the peer
+          # list read it and hold no per-connector arms. `--selftest` plants
+          # an arm and requires a failure, and the gate fails when it cannot
+          # find the dialer's or the peer list's source (rule 47).
+          run_one "No per-connector arms in the dialer or the peer list (selftest)" \
+            python3 scripts/ci/check_connector_profile_arms.py --selftest
+          run_one "No per-connector arms in the dialer or the peer list" \
+            python3 scripts/ci/check_connector_profile_arms.py
+
           # A job-level `if:` is evaluated before the matrix expands, so a
           # skipped matrix job cannot emit its per-leg check names. When those
           # names are required contexts, that is a required check that CANNOT
@@ -186,47 +181,17 @@ jobs:
           run_one "Matrix jobs are not gated at the job level" \
             python3 scripts/ci/check_matrix_job_gating.py
 
-          # Ruling A (2026-10-08, P2P-3): every function on
-          # scripts/ci/dial_path_freeze.tsv is deleted by the slice 3 cutover
-          # and changes to none of them land before it. Each body is compared
-          # with the base revision fetched above. The self-test runs first and
-          # bites every verdict, including the rule-47 case of a row the base
-          # does not have.
-          run_one "Ruling A: dial-path freeze self-test" \
-            python3 scripts/ci/test_check_dial_path_freeze.py
-          # The freeze judges a change against the tree it enters, which is
-          # `dev`. On a pull request into `main` the base is the last
-          # release, so the gate would read a whole epoch as one change: lines
-          # added before the freeze was ruled, and lines admitted since under
-          # an UNFREEZE line in their own pull request, all fail together
-          # (the v3.1.0-alpha.10 promotion: 224 lines in net_node.inl, none
-          # of them new to `dev`).
-          #
-          # A release promotion is exempt, and what makes one is decided by
-          # its commits, not its branch name: base `main`, and a head commit
-          # that is already in `dev`'s history (scripts/ci/
-          # is_release_promotion.py says why a name is not enough). GitHub is
-          # asked how far the head is ahead of `dev`; a request that fails
-          # leaves the answer empty, which is "not a promotion", and the
-          # freeze runs.
-          run_one "Release-promotion rule self-test" \
-            python3 scripts/ci/is_release_promotion.py --selftest
-          ahead_by=""
-          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ -n "${PR_HEAD_SHA}" ]; then
-            if ! ahead_by="$(gh api "repos/${GITHUB_REPOSITORY}/compare/dev...${PR_HEAD_SHA}" --jq '.ahead_by')"; then
-              ahead_by=""
-            fi
-          fi
-          if python3 scripts/ci/is_release_promotion.py --event "${GITHUB_EVENT_NAME}" \
-               --base-ref "${GITHUB_BASE_REF:-}" --ahead-by "${ahead_by}"; then
-            echo "SKIP: Ruling A dial-path freeze: every commit here is already in dev, where it was judged"
-          else
-            run_one "Ruling A: the C++ dial path is frozen until its deletion" \
-              python3 scripts/ci/check_dial_path_freeze.py --base "${FREEZE_BASE}"
-          fi
-
           run_one "SA-3b: domain-registry" \
             scripts/ci/domain_registry_gate.sh
+          # RT-O22 (RT-W9 step 6): the toolchain, the decapsulation closure
+          # of fips203, and every recognised code-generation setting agree
+          # with what RT-P4 was measured on. Anything unrecognised fails on
+          # its own and is not also a re-run. Its self-test first, so a
+          # broken reader cannot pass the real check.
+          run_one "RT-P4 standing check: self-test" \
+            python3 scripts/ci/check_rt_p4_standing.py --selftest
+          run_one "RT-P4 standing check" \
+            python3 scripts/ci/check_rt_p4_standing.py
           run_one "Consensus-invariants" \
             scripts/ci/check_consensus_invariants.sh
           # PDM-Q7: the stripe engine and its pruning_seed wire field are
@@ -268,37 +233,30 @@ jobs:
             python3 scripts/ci/check_inland_height_u64.py --selftest
           run_one "ARW-Q16: no new bare-u64 height on the archival surface" \
             python3 scripts/ci/check_inland_height_u64.py
-          run_one "Rule 71: nettype selects data, not control flow" \
-            scripts/ci/check_network_uniformity.sh
+          run_one "Rule 71: the network selects data, not control flow (selftest)" \
+            python3 scripts/ci/check_network_uniformity.py --selftest
+          run_one "Rule 71: the network selects data, not control flow" \
+            python3 scripts/ci/check_network_uniformity.py
           run_one "Ignored tests carry their reason in the attribute" \
             scripts/ci/check_ignore_reasons.sh
-          # PWD-B7: a rejection describing OUR chain must classify itself, or
-          # the caller's coarser verdict severs a peer whose transaction is
-          # merely in conflict with our view. The one residual the typed
-          # verdict left open, made mechanical rather than remembered.
-          run_one "PWD-B7: double-spend rejections classify themselves" \
-            python3 scripts/ci/check_drop_verdict_classification.py
           run_one "PoW test-seam containment (CEN-D2)" \
             scripts/ci/check_pow_test_seam.sh
+          # DX-Q3 Q4: the node's template draws its coinbase secret and its
+          # draw commitment from the OS (the commitment through the witness
+          # ring); the scenario's reproducible values stay in test code.
+          run_one "The template's secrets are the OS's (DX-Q3 Q4)" \
+            scripts/ci/check_template_secrets.sh
+          # SO-D12 increment 4c: the witness ring's seeds and keys, and the
+          # challenge nonces, reach no log and no derived Debug. The
+          # selftest first, so a scan that reads nothing cannot pass.
+          run_one "The bundle producer's secrets reach no log (selftest)" \
+            python3 scripts/ci/check_bundle_producer_secrets.py --selftest
+          run_one "The bundle producer's secrets reach no log" \
+            python3 scripts/ci/check_bundle_producer_secrets.py
           run_one "RandomX symbol-isolation negatives (rule 50)" \
             scripts/ci/test_check_randomx_symbol_isolation.sh
-          run_one "LV-1: levin wire-constant parity" \
-            ./scripts/ci/check_levin_constant_parity.sh
-          run_one "C++ clamp-ban (address-freeze)" \
-            bash scripts/lint_cpp_clamp_ban.sh
           run_one "§94: transit provenance marker outlives its constant" \
             scripts/ci/check_transit_marker.sh
-          run_one "No unbounded blob dump in a log line" \
-            python3 scripts/ci/check_log_blob_dumps.py
-          # Every version comparison and hard-fork table call in the C++ has
-          # a classified row, in both directions: Shekyl's block version is 1,
-          # so a gate on another number selects one arm forever, and the
-          # reward-aware template fill sat dead behind one. No path filter
-          # here, so a new gate in any file is seen.
-          run_one "C++ version gates match their inventory" \
-            python3 scripts/ci/check_cxx_version_gates.py
-          run_one "C++ version-gate inventory self-test" \
-            python3 scripts/ci/test_check_cxx_version_gates.py
           # FN-DSA is pre-standard: the five `fn-dsa*` crates are pinned exact
           # and locked at one version, and a genesis release (a tag with no
           # pre-release suffix) is refused on a pre-1.0 lock. Here the gate
@@ -330,6 +288,25 @@ jobs:
           # a previous tag at a cut, so this lane holds its rule instead.
           run_one "Frozen-tuple gate self-test" \
             python3 scripts/ci/test_check_frozen_tuple.py
+          # A staging flag names a deadline release; the release-time gate
+          # refuses a cut at or past it while the flag exists (NI-R9 as
+          # amended 2026-11-04). It runs at a cut, so this lane holds its
+          # rule: precedence, refusal and an unreadable table failing.
+          run_one "Staging-deadline gate self-test" \
+            python3 scripts/release/check_staging_deadlines.py --selftest
+          # The same gate over the real table, at a tag below every
+          # deadline: a table it can no longer read fails here, per pull
+          # request, not first at a cut.
+          run_one "Staging-deadline gate reads the table" \
+            python3 scripts/release/check_staging_deadlines.py v0.0.1
+          # The domain-binding ratchet must be empty at v3.1.0 (the signing
+          # envelope §2.5, ruled 2026-11-05); the release-time gate refuses
+          # a cut at or past it with rows left. Its rule and its read of
+          # the real file run here, per pull request.
+          run_one "Binding-ratchet gate self-test" \
+            python3 scripts/release/check_binding_ratchet.py --selftest
+          run_one "Binding-ratchet gate reads the ratchet" \
+            python3 scripts/release/check_binding_ratchet.py v0.0.1
           # TOR_SUPERVISOR.md §4.7: on Windows the managed tor inherits its
           # control socket inside a window the spawn lock keeps private.
           # Every Rust spawn in a crate whose image launches a managed tor
@@ -349,6 +326,15 @@ jobs:
             python3 scripts/ci/check_spawn_children_inherit_stdio_only.py --selftest
           run_one "Spawn children inherit stdio only" \
             python3 scripts/ci/check_spawn_children_inherit_stdio_only.py
+          # DRS-X: a regtest spawn that calls generateblocks or pop_blocks
+          # arms dev-rpc and checks this spawn's announcement. The sentence
+          # has three owners and they agree. `--selftest` first (rule 47).
+          run_one "Armed lever: log check" \
+            python3 scripts/test_armed_lever.py
+          run_one "Armed lever: launcher gate selftest" \
+            python3 scripts/ci/check_armed_lever_launchers.py --selftest
+          run_one "Armed lever: every regtest lever spawn arms the row" \
+            python3 scripts/ci/check_armed_lever_launchers.py
 
           # ESR-14 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.20): the economics
           # sim's fold files form chain quantities in production's integers
@@ -360,20 +346,13 @@ jobs:
           run_one "Economics sim: no float reaches an integer in a fold file" \
             python3 scripts/ci/check_sim_integer_seams.py
 
-          grep_absent "C++ residue: no shekyl_y" \
-            grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h'
-          grep_absent "C++ residue: no derivation_to_y_scalar" \
-            grep -rn 'derivation_to_y_scalar' src/crypto/ --include='*.cpp' --include='*.h'
-          grep_absent "C++ residue: no RCTTypeFull/Simple/Bulletproof" \
-            grep -rn 'RCTTypeFull\|RCTTypeSimple\|RCTTypeBulletproof[^P]' src/ --include='*.cpp' --include='*.h'
-          grep_absent "C++ residue: no v1/v2 tx version branches" \
-            grep -rn 'tx\.version\s*==\s*1\b\|tx\.version\s*<\s*2\b\|hf_version\s*<\s*1\b' src/ --include='*.cpp' --include='*.h'
-          grep_absent "C++ residue: no HASH_KEY_TXPROOF" \
-            grep -rn 'HASH_KEY_TXPROOF' --include='*.cpp' --include='*.h' src/ tests/
-
-          # The Ledger exemption is gone with the backend. A filter that
-          # dropped device_ledger hits would stay green if that tree came back.
-          grep_absent "C++ residue: no ecdhEncode/ecdhDecode" \
-            grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/
+          # The end state of the C++ removal (Rick, 2026-11-06): no
+          # first-party C or C++ is tracked outside external/, and no CMake
+          # target compiles any. The tree half here; the build job adds the
+          # half that reads the linked daemon. Selftest first (rule 47).
+          run_one "No first-party C or C++ (selftest)" \
+            python3 scripts/ci/check_no_first_party_c.py --selftest
+          run_one "No first-party C or C++ tracked, and no CMake target compiling any" \
+            python3 scripts/ci/check_no_first_party_c.py --tree
 
           exit "${failed}"

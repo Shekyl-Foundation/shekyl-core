@@ -73,9 +73,6 @@ fn redact_create_wallet_response(v: &Value) -> Value {
             if obj.contains_key("mnemonic") {
                 obj.insert("mnemonic".into(), Value::String("[REDACTED]".into()));
             }
-            if obj.contains_key("raw_seed_hex") {
-                obj.insert("raw_seed_hex".into(), Value::String("[REDACTED]".into()));
-            }
         }
     }
     out
@@ -86,7 +83,7 @@ async fn post_json(auth: AuthConfig, body: Value) -> (StatusCode, Value) {
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
-        .uri("/")
+        .uri("/json_rpc")
         .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
@@ -103,7 +100,7 @@ async fn post_raw(auth: AuthConfig, body: &'static [u8]) -> (StatusCode, Value) 
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
-        .uri("/")
+        .uri("/json_rpc")
         .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(body))
@@ -124,7 +121,7 @@ async fn post_json_with_auth(user: &str, pass: &str, body: Value) -> (StatusCode
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
-        .uri("/")
+        .uri("/json_rpc")
         .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .header("authorization", format!("Basic {cred}"))
@@ -141,7 +138,7 @@ async fn rpc(state: Arc<AppState>, body: Value) -> Value {
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
-        .uri("/")
+        .uri("/json_rpc")
         .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
@@ -287,7 +284,7 @@ async fn basic_auth_rejects_missing_header() {
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
-        .uri("/")
+        .uri("/json_rpc")
         .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(
@@ -358,7 +355,7 @@ async fn spawn_in_process_serves_get_version_over_private_uds() {
     }))
     .unwrap();
     let request = format!(
-        "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "POST /json_rpc HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
 
@@ -416,7 +413,7 @@ async fn spawn_in_process_serves_get_version_over_the_verified_pipe() {
     }))
     .unwrap();
     let request = format!(
-        "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "POST /json_rpc HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
 
@@ -939,7 +936,7 @@ async fn spawn_in_process_with_lifecycle() {
     }))
     .unwrap();
     let request = format!(
-        "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "POST /json_rpc HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     let local_addr = match &handle.listen {
@@ -1127,7 +1124,7 @@ async fn non_json_content_type_is_refused_before_anything_else() {
             None,
         ] {
             let app = build_router(test_state(auth.clone()));
-            let mut req = Request::builder().method("POST").uri("/");
+            let mut req = Request::builder().method("POST").uri("/json_rpc");
             if let Some(ct) = content_type {
                 req = req.header("content-type", ct);
             }
@@ -1148,7 +1145,7 @@ async fn non_json_content_type_is_refused_before_anything_else() {
         let app = build_router(test_state(auth));
         let req = Request::builder()
             .method("POST")
-            .uri("/")
+            .uri("/json_rpc")
             .header("host", "127.0.0.1")
             .header("content-type", "text/plain")
             .header("content-length", (10 * 1024 * 1024).to_string())
@@ -1162,7 +1159,7 @@ async fn non_json_content_type_is_refused_before_anything_else() {
     let app = build_router(test_state(AuthConfig::Disabled));
     let req = Request::builder()
         .method("POST")
-        .uri("/")
+        .uri("/json_rpc")
         .header("host", "127.0.0.1")
         .header("content-type", "application/json; charset=utf-8")
         .body(Body::from(body))
@@ -1189,7 +1186,7 @@ async fn rebindable_host_is_refused_where_auth_is_disabled() {
         let app = build_router(test_state(auth));
         let mut req = Request::builder()
             .method("POST")
-            .uri("/")
+            .uri("/json_rpc")
             .header("content-type", "application/json");
         if let Some(h) = host {
             req = req.header("host", h);
@@ -1238,7 +1235,7 @@ async fn bodiless_methods_are_not_judged_by_media_type() {
         let app = build_router(test_state(AuthConfig::Disabled));
         let req = Request::builder()
             .method("GET")
-            .uri("/")
+            .uri("/json_rpc")
             .header("host", host)
             .body(Body::empty())
             .unwrap();
@@ -1246,4 +1243,91 @@ async fn bodiless_methods_are_not_judged_by_media_type() {
     };
     assert_eq!(get("127.0.0.1").await, StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(get("evil.example").await, StatusCode::MISDIRECTED_REQUEST);
+}
+
+/// One request to `path` through the router that ships.
+async fn send(
+    auth: AuthConfig,
+    method: &str,
+    path: &str,
+    content_type: &str,
+    basic: Option<&str>,
+) -> (StatusCode, Value) {
+    let app = build_router(test_state(auth));
+    let mut req = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("host", "127.0.0.1")
+        .header("content-type", content_type);
+    if let Some(basic) = basic {
+        req = req.header("authorization", format!("Basic {basic}"));
+    }
+    let response = app
+        .oneshot(
+            req.body(Body::from(
+                r#"{"jsonrpc":"2.0","id":1,"method":"get_version"}"#,
+            ))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// A15: JSON-RPC is served at `/json_rpc`, the daemon's path, and nowhere
+/// else. `/` (where it used to be) and any other path get HTTP 404 with the
+/// shared body naming `/json_rpc`, never an empty 404.
+#[tokio::test]
+async fn json_rpc_is_served_at_json_rpc_only() {
+    let (status, body) = send(
+        AuthConfig::Disabled,
+        "POST",
+        "/json_rpc",
+        "application/json",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["result"]["version"], json!(VERSION));
+
+    for path in ["/", "/json_rpc/", "/jsonrpc", "/get_version"] {
+        let (status, body) =
+            send(AuthConfig::Disabled, "POST", path, "application/json", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(
+            body,
+            shekyl_rpc_types::endpoint::unrouted_path(path),
+            "{path}"
+        );
+    }
+}
+
+/// The unrouted answer sits behind the same gates as the route: a request
+/// without the credential is refused before it learns which path is served,
+/// and a non-JSON request is refused by the browser boundary first.
+#[tokio::test]
+async fn an_unrouted_path_is_answered_behind_the_gates() {
+    use base64::Engine as _;
+    let basic = || {
+        AuthConfig::Basic(
+            shekyl_wallet_rpc::auth::BasicCredential::new("u", "p").expect("valid credential"),
+        )
+    };
+    let good = base64::engine::general_purpose::STANDARD.encode("u:p");
+
+    let (status, body) = send(basic(), "POST", "/", "application/json", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_ne!(body, shekyl_rpc_types::endpoint::unrouted_path("/"));
+
+    let (status, body) = send(basic(), "POST", "/", "application/json", Some(&good)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, shekyl_rpc_types::endpoint::unrouted_path("/"));
+
+    let (status, _) = send(AuthConfig::Disabled, "POST", "/", "text/plain", None).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
 }

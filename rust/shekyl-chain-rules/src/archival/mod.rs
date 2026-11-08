@@ -56,7 +56,7 @@
 //!   carries — never off the process-latched free functions
 //!   (`settlement_epoch_at_height`, …), which are the daemon's and the
 //!   FFI's entry points. The validator reads no environment; a chain
-//!   captured under a shortened regtest epoch replays under a Fakechain
+//!   captured under a shortened regtest epoch replays under a levered
 //!   set naming that epoch, in any process.
 //! - **Zero is a value** (`ARW-Q4`, §3.6). The gather writes an `RMarket`
 //!   for **every shard of its universe**, zeros included; the C++ skipped
@@ -110,6 +110,7 @@
 //! the slash log's per-height sequence and every record's post-image are
 //! functions of the view and the block, not of anything the store chose.
 
+mod admission;
 mod arm;
 mod bundle;
 mod close;
@@ -119,24 +120,30 @@ mod drawable;
 mod inputs;
 mod memo;
 mod slash;
+mod support_seats;
 
+pub use admission::{admission_plan, AdmissionPlan, AdmissionPlanFault, EpochIssues};
 pub(crate) use arm::BondArm;
 pub use bundle::{
-    check_section, check_section_until_switch, open_body, open_reference, verify_bundle, Admitted,
-    BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, SectionCharge,
-    SectionCheckFailed, SectionRefused, SectionStanding,
+    check_section, check_section_until_switch, draw_targets, fill_section, judge_bundles,
+    open_body, open_reference, seats_with_carry, verify_bundle, AdmissionFault, Admitted,
+    BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, DrawOrigin,
+    DrawTargets, Drawn, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
+    SupportCarry, SupportSeat, WindowClosed,
 };
 pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
+pub use count::remember_window_epochs;
 pub(crate) use count::CountMemo;
 pub(crate) use count::L17;
 pub use delta::{
     Accrual, ArchivalDelta, DrawableDigestWrite, EpochClose, EpochGather, RecordWrite,
-    RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
+    RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash, SupportSettlement,
 };
 pub use drawable::{drawable_epoch_walked_back, WALK_BACK_EPOCHS};
 pub use memo::DrawableMemo;
 pub(crate) use slash::apply_slash;
+pub use support_seats::scheduled_seats;
 
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
@@ -217,7 +224,7 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
     let close = transition.close(accrued);
     let opened = transition.drawable_at_open(view)?;
     let drawable_digest = opened.as_ref().map(|(write, _)| *write);
-    let draws = transition.block_draws(
+    let (draws, support_seats) = transition.block_draws(
         view,
         opened.as_ref().map(|(_, drawable)| drawable),
         count_memo,
@@ -229,6 +236,7 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
         close,
         drawable_digest,
         draws,
+        support_seats,
     )))
 }
 
@@ -278,6 +286,8 @@ struct Transition {
     /// The rows this block's slash pass has settled, keyed in the order
     /// the delta carries them: epoch, then persona, then shard.
     settled: BTreeMap<(SettlementEpoch, PCanonicalId, ShardId), SettlementRow>,
+    /// One support row per tree per epoch. Not keyed by shard.
+    support_settled: BTreeMap<(SettlementEpoch, PCanonicalId), SettlementRow>,
     /// The emission gather of each epoch the pass has settled, in epoch
     /// order.
     gathers: Vec<EpochGather>,
@@ -299,6 +309,7 @@ impl Transition {
             releases: Vec::new(),
             serve_credits: Vec::new(),
             settled: BTreeMap::new(),
+            support_settled: BTreeMap::new(),
             gathers: Vec::new(),
             reorg_cap,
             slashes: Vec::new(),
@@ -421,6 +432,7 @@ impl Transition {
         close: Option<EpochClose>,
         drawable_digest: Option<DrawableDigestWrite>,
         draws: shekyl_types::archival::BlockDraws,
+        support_seats: shekyl_types::archival::SupportSeats,
     ) -> ArchivalDelta {
         let records = self
             .posts
@@ -443,11 +455,21 @@ impl Transition {
                 row,
             })
             .collect();
+        let support_settlements = self
+            .support_settled
+            .into_iter()
+            .map(|((epoch, persona), row)| SupportSettlement {
+                persona,
+                epoch,
+                row,
+            })
+            .collect();
         ArchivalDelta {
             records,
             releases: self.releases,
             serve_credits: self.serve_credits,
             settlements,
+            support_settlements,
             gathers: self.gathers,
             slashes: self.slashes,
             slash_watermark: self.slash_watermark,
@@ -455,6 +477,7 @@ impl Transition {
             close,
             drawable_digest,
             draws,
+            support_seats,
         }
     }
 }

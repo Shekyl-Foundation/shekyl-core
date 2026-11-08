@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use kameo::actor::{ActorRef, Spawn, WeakActorRef};
+
+use super::body_store_actor::{BodyStoreHandle, WeakBodyStoreHandle};
 use kameo::error::SendError;
 use shekyl_archival_retention::{HoldingsDescriptor, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
@@ -26,8 +28,8 @@ use super::bond::{AssembleBond, AssembledBondPost};
 use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
     ActivatePersona, ActivePersona, ActivePersonaPaymentDestination, BondPostPlacement,
-    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost, ServingBodies,
-    SignPassTranscript, SignReceiptTranscript,
+    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost, SignPassTranscript,
+    SignReceiptTranscript,
 };
 use super::release::{AssembleRelease, AssembledReleasePost};
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
@@ -49,6 +51,10 @@ use shekyl_crypto_pq::archival_p::PersonaDestination;
 pub(crate) struct StakeEngineHandle {
     /// Strong reference to the stake actor's mailbox.
     pub(crate) actor: ActorRef<StakeEngine>,
+    /// The persona body store's owner (`CURVE_TREE_CLIENT.md` §11.1): its
+    /// own actor, so serving reads never queue in front of bond signing.
+    /// Spawned and stopped with the stake actor.
+    pub(crate) bodies: BodyStoreHandle,
 }
 
 /// A non-owning [`StakeEngineHandle`]: reaches the actor while the engine
@@ -59,6 +65,7 @@ pub(crate) struct StakeEngineHandle {
 #[derive(Clone)]
 pub(crate) struct WeakStakeEngineHandle {
     actor: WeakActorRef<StakeEngine>,
+    bodies: WeakBodyStoreHandle,
 }
 
 impl WeakStakeEngineHandle {
@@ -70,7 +77,10 @@ impl WeakStakeEngineHandle {
     /// test that means "a message sent now will be handled".
     pub(crate) fn upgrade(&self) -> Option<StakeEngineHandle> {
         let actor = self.actor.upgrade()?;
-        actor.is_alive().then_some(StakeEngineHandle { actor })
+        let bodies = self.bodies.upgrade()?;
+        actor
+            .is_alive()
+            .then_some(StakeEngineHandle { actor, bodies })
     }
 }
 
@@ -96,6 +106,7 @@ impl StakeEngineHandle {
         bonded: BTreeSet<PSlot>,
         active: Option<PSlot>,
         bodies: shekyl_p_store::BodyStore,
+        network: shekyl_network::NetworkId,
     ) -> Self {
         assert!(
             tokio::runtime::Handle::try_current().is_ok(),
@@ -105,11 +116,12 @@ impl StakeEngineHandle {
              ARCHIVAL_BOND_CONSTRUCTION.md §10.1."
         );
 
+        let bodies = BodyStoreHandle::spawn(bodies);
         let actor = StakeEngine::spawn(StakeEngineArgs {
             bundles,
             bonded,
             active,
-            bodies,
+            network,
             // A non-test `conformance` build always grades the real OsRng adapter
             // (no field); in `test + conformance` the default is `Skip` so
             // unrelated stake tests are not flaked by the grade. The dedicated S6
@@ -122,7 +134,22 @@ impl StakeEngineHandle {
             #[cfg(feature = "gf7-hooks")]
             observer: Box::new(NoOpObserver),
         });
-        Self { actor }
+        Self { actor, bodies }
+    }
+
+    /// Stop the stake actor, then the body-store actor, awaiting each until
+    /// its `on_stop` has run: the persona bundles are wiped and the
+    /// `.pstore` file is closed when this returns (`CURVE_TREE_CLIENT.md`
+    /// §11.1). Two awaits, not a supervision link, because a linked child's
+    /// mailbox closes before its own `on_stop` runs.
+    pub(crate) async fn shutdown(&self) {
+        if let Err(not_running) = self.actor.stop_gracefully().await {
+            tracing::debug!(?not_running, "stake actor already stopping");
+        }
+        if let Err(hook) = self.actor.wait_for_shutdown_result().await {
+            tracing::warn!(?hook, "the stake actor's stop hook failed");
+        }
+        self.bodies.shutdown().await;
     }
 
     /// S6 — block until the actor's `on_start` self-cert completes, returning the
@@ -197,20 +224,6 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
-    /// The read-only handle on this actor's body store (`WSS-Q1`(a)).
-    ///
-    /// The writer stays on the actor. This reader still decrypts, so
-    /// `WSS-Q13` is not met; the ask exists so the serve task never holds
-    /// the writer, and so the engine orchestrator does not hold the store.
-    pub(crate) async fn serving_bodies(
-        &self,
-    ) -> Result<shekyl_p_store::BodyStoreReader, StakeEngineError> {
-        self.actor
-            .ask(ServingBodies)
-            .await
-            .map_err(collapse_send_error)
-    }
-
     /// The public identity of the currently-active persona, or `None` when idle.
     pub(crate) async fn active_persona(&self) -> Result<Option<PersonaIdentity>, StakeEngineError> {
         self.actor
@@ -269,6 +282,7 @@ impl StakeEngineHandle {
     pub(crate) fn downgrade(&self) -> WeakStakeEngineHandle {
         WeakStakeEngineHandle {
             actor: self.actor.downgrade(),
+            bodies: self.bodies.downgrade(),
         }
     }
 

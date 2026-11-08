@@ -26,13 +26,10 @@
 //!
 //! For the same reason the snapshot's staleness digest
 //! ([`snapshot_calibration_digest`]) is computed **here**, not in
-//! `shekyl-economics`: it must cover every calibration value the snapshot
-//! displays, and the tier table is only visible from `shekyl-engine-core`.
-//! `shekyl_economics::params_digest` covers `EconomicParams` alone (and
-//! backs the C4 fixture lineage guard, whose tested emission/burn values
-//! depend only on `EconomicParams`); the snapshot additionally surfaces the
-//! staker-emission share/decay and the tier table, so its stamp folds those
-//! in on top of the `EconomicParams` sub-digest.
+//! `shekyl-economics`: it is the engine's stamp over the rulebook.
+//! The preimage is one version byte and `shekyl_economics::params_digest`.
+//! Share and decay move the stamp because they are fields of that digest.
+//! The version byte keeps the stamp off the bare sub-digest.
 //!
 //! # No-cache discipline (§6.3 G5)
 //!
@@ -55,47 +52,34 @@ use shekyl_economics::{params_digest, EconomicParams};
 /// widths in that function's layout table — independent of
 /// `shekyl_economics::DIGEST_FORMAT_VERSION` (the `EconomicParams`
 /// sub-digest), which this preimage embeds as an opaque 32 bytes.
-pub(crate) const SNAPSHOT_DIGEST_FORMAT_VERSION: u8 = 0x02;
+pub(crate) const SNAPSHOT_DIGEST_FORMAT_VERSION: u8 = 0x03;
 
-/// Blake2b-256 over the **full calibration surface an
-/// [`EconomicsParametersSnapshot`] exposes** — not merely `EconomicParams`.
+/// Blake2b-256 over the calibration surface an
+/// [`EconomicsParametersSnapshot`] exposes: a version tag and
+/// [`params_digest`](shekyl_economics::params_digest).
 ///
-/// `shekyl_economics::params_digest` covers the ten `EconomicParams`
-/// fields and backs the C4 fixture lineage guard (whose tested
-/// emission/burn values depend only on `EconomicParams`). The snapshot,
-/// however, also surfaces the staker-emission share/decay
-/// (`shekyl-economics` calibration consts) — all driven by
-/// `config/economics_params.json`. A
-/// stamp that hashed only `EconomicParams` would **false-accept** a
-/// snapshot after one of those changed without a
-/// [`CALIBRATION_GENERATION`](shekyl_economics::CALIBRATION_GENERATION)
-/// bump, which (being a hand-maintained constant) is exactly the human
-/// error the digest backstops. This digest therefore folds every
-/// calibration value the snapshot displays.
+/// `shekyl_economics::params_digest` covers every `EconomicParams`
+/// field, including the staker-emission share, its decay and the
+/// year length (ESR-16). Those used to be hashed beside the
+/// sub-digest. They are fields now, so hashing them again would be a
+/// second copy of one source. The version tag keeps this stamp from
+/// collapsing onto the sub-digest.
 ///
-/// # Canonical layout (format version `0x02`)
+/// # Canonical layout (format version `0x03`)
 ///
 /// | Width            | Field                                                                |
 /// |------------------|----------------------------------------------------------------------|
 /// | 1                | format version tag ([`SNAPSHOT_DIGEST_FORMAT_VERSION`])               |
 /// | 32               | `params_digest(params)` — the `EconomicParams` sub-digest            |
-/// | 8                | `staker_emission_share` u64 LE                                       |
-/// | 8                | `staker_emission_decay` u64 LE                                       |
 ///
-/// The function is pure in its arguments (no global reads) so the
-/// coverage tests can vary each input independently. (The claim-era tier
-/// table left the digest with the claim-era retirement; the format
-/// version tag below was bumped to keep old and new digests disjoint.)
-pub(crate) fn snapshot_calibration_digest(
-    params: &EconomicParams,
-    staker_emission_share: u64,
-    staker_emission_decay: u64,
-) -> [u8; 32] {
+/// The share and the decay are fields of `params` (format `0x03` dropped
+/// the trailing pair that restated them). The function is pure in its
+/// argument. The claim-era tier table left the digest with the claim-era
+/// retirement; the version tag keeps old and new digests disjoint.
+pub(crate) fn snapshot_calibration_digest(params: &EconomicParams) -> [u8; 32] {
     let mut hasher = Blake2b::<U32>::new();
     hasher.update([SNAPSHOT_DIGEST_FORMAT_VERSION]);
     hasher.update(params_digest(params));
-    hasher.update(staker_emission_share.to_le_bytes());
-    hasher.update(staker_emission_decay.to_le_bytes());
     hasher.finalize().into()
 }
 
@@ -115,16 +99,14 @@ pub(crate) struct CalibrationStamp {
     /// 8") and treat a mismatch as "stale".
     pub generation: u32,
 
-    /// Blake2b-256 over the **full calibration surface this snapshot
-    /// exposes** (see [`snapshot_calibration_digest`]): the
-    /// [`EconomicParams`](shekyl_economics::EconomicParams) sub-digest
-    /// **plus** the staker-emission share/decay. **Not** raw JSON bytes,
-    /// **not** bincode. Covering only `EconomicParams` (as
-    /// `shekyl_economics::params_digest` does, for the C4 fixture lineage)
-    /// would false-accept a snapshot whose staker calibration changed
-    /// without a `generation` bump. Catches a
-    /// generation increment with no parameter change, and silent
-    /// serialization drift that `generation` alone would miss.
+    /// Blake2b-256 of one version byte and
+    /// [`params_digest`](shekyl_economics::params_digest)
+    /// ([`snapshot_calibration_digest`]). Share and decay move the stamp
+    /// because they are fields of that digest. The version byte keeps
+    /// this stamp off the bare sub-digest. **Not** raw JSON bytes,
+    /// **not** bincode. Catches a generation increment with no parameter
+    /// change, and silent serialization drift that `generation` alone
+    /// would miss.
     pub params_digest: [u8; 32],
 }
 

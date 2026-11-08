@@ -6,9 +6,10 @@
 //!
 //! Every reason a daemon reads a shard body from a holder — a challenge it
 //! must answer, an organic re-read, a test probe, a wallet's view — is one
-//! [`FetchScheduler::read`] (or [`challenge_read`], which is `read_from`
-//! with a derived nonce): a shard id, a sink, a budget. The request on
-//! the wire carries no caller tag (`SF-D1`); the holder is drawn uniformly
+//! [`FetchScheduler::read`] (or [`challenge_read`], which is
+//! [`FetchScheduler::read_from_nonce`] with a derived nonce): a shard id,
+//! a sink, a budget. The request on the wire carries no caller tag
+//! (`SF-D1`); the holder is drawn uniformly
 //! from the shard's holders with no memory of earlier needs (`SF-D10`); a
 //! failed dial moves as the client's taxonomy directs (`SF-D6`) and is
 //! reported, never held against anyone (`SF-D12`).
@@ -17,11 +18,11 @@
 //! aggregate a viewer renders, cached per closed shard and keyed on the
 //! block that closed it (`SV-D4`, `SV-D5`).
 //!
-//! Linked only from `shekyl-daemon-image` (`SF-D4`; the dep-cut gate holds
-//! it). What the scheduler reads — the skeleton and the holder set — comes
-//! through two traits ([`ShardFacts`], [`HolderSource`]) whose production
-//! implementation is the daemon image's store adapter
-//! (`shekyl-daemon-image::shard_view`, `SHARD_VIEW_FETCH.md` `SV-D9`).
+//! Linked only from the `shekyld` binary crate (`SF-D4`; the dep-cut gate
+//! holds it). What the scheduler reads — the skeleton and the holder set —
+//! comes through two traits ([`ShardFacts`], [`HolderSource`]) whose
+//! production implementation is the daemon's store adapter
+//! (`shekyld::shard_view`, `SHARD_VIEW_FETCH.md` `SV-D9`).
 //! The scheduler decides nothing it could not decide against in-memory
 //! facts. The running daemon still opens LMDB, so `ServerConfig` keeps
 //! `SkeletonAbsent` until the store flip (`DRS-X`) selects the adapter.
@@ -41,11 +42,12 @@ pub use facts::{
 };
 pub use read::{
     challenge_read, Attempt, ChallengeDraw, ChallengeReadError, FetchScheduler, NeedBudget, Read,
-    ReadFailure,
+    ReadFailure, SuppliedNonce,
 };
 pub use shekyl_p_fetch::{
-    DiscardTxs, ExpectedShard, FetchError, FetchTarget, NextMove, PFetchClient, RequestHeader,
-    Timeouts, TxSink, VerifiedShard, VerifiedTx, MAX_INFLIGHT,
+    DiscardTxs, ExpectedShard, FetchError, FetchTarget, Malformed, NextMove, PFetchClient,
+    PassVerifyingKey, RequestHeader, ServingEndpoint, Stall, Timeouts, TxSink, VerifiedShard,
+    VerifiedTx, IDENTITY_ENVELOPE_LEN, MAX_INFLIGHT, RECEIPT_ENVELOPE_LEN,
 };
 pub use shekyl_types::ShardView;
 pub use view::{ViewDesk, ViewRefusal};

@@ -7,8 +7,9 @@
 //! door, and a refusal that leaves no trace in memory or in the file.
 
 use shekyl_chain_rules::harness::fixture::{listed_on, spendable_chain};
-use shekyl_chain_rules::{AdmissionPolicy, RuleSet};
-use shekyl_types::UnixSeconds;
+use shekyl_chain_rules::{AdmissionPolicy, RuleSet, Tip};
+use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_types::{BlockHash, BlockHeight, UnixSeconds};
 
 use super::{Admission, Arrival, Duplicate, Pool, Step1};
 use crate::door::Judged;
@@ -38,6 +39,7 @@ fn a_transaction_the_chain_holds_is_a_duplicate_and_is_not_judged() {
             UnixSeconds::from_raw(1),
             &view,
             &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .unwrap();
@@ -56,6 +58,34 @@ fn a_transaction_the_chain_holds_is_a_duplicate_and_is_not_judged() {
 
 /// A refusal is the door's answer and leaves nothing: not in memory, not
 /// in the file — a reopen finds an empty pool.
+/// The door's question before it verifies: a transaction the chain carries
+/// is a duplicate, one it does not is not. Neither answer judges anything.
+#[test]
+fn duplicate_names_a_transaction_the_chain_carries_and_nothing_else() {
+    let path = tmp("m1-duplicate");
+    let base = spendable_chain();
+    let tx = listed_on(&base, [0x42; 32]);
+    let txid = tx.txid_parts().hash;
+    let chain = base.clone().with_transaction(txid);
+    let (carried, absent) = chain.with_view(|view| {
+        let (pool, _, _) = Pool::open(
+            &path,
+            UnixSeconds::from_raw(1),
+            &view,
+            &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
+            &AdmissionPolicy::GENESIS,
+        )
+        .unwrap();
+        let carried = pool.duplicate(&txid, &view).unwrap();
+        let absent = base.with_view(|bare| pool.duplicate(&txid, &bare).unwrap());
+        (carried, absent)
+    });
+    assert_eq!(carried, Some(Duplicate::OnChain));
+    assert_eq!(absent, None);
+    drop(std::fs::remove_file(&path));
+}
+
 #[test]
 fn a_refused_transaction_leaves_no_trace() {
     let path = tmp("refused");
@@ -67,6 +97,7 @@ fn a_refused_transaction_leaves_no_trace() {
             UnixSeconds::from_raw(1),
             &view,
             &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .unwrap();
@@ -94,6 +125,7 @@ fn a_refused_transaction_leaves_no_trace() {
             UnixSeconds::from_raw(1),
             &view,
             &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .unwrap();
@@ -101,4 +133,38 @@ fn a_refused_transaction_leaves_no_trace() {
         assert_eq!(reconciled, crate::reconcile::Reconciled::default());
     });
     drop(std::fs::remove_file(&path));
+}
+
+fn marker(height: u64, byte: u8, work: u128) -> super::JudgedTip {
+    super::JudgedTip {
+        tip: Tip {
+            height: BlockHeight::from_raw(height),
+            hash: BlockHash::from_bytes([byte; 32]),
+        },
+        work: CumulativeDifficulty::from_raw(work),
+    }
+}
+
+/// Fork-choice work orders the judged tip. A same-height reorg is heavier,
+/// so it replaces the marker and a template on the old tip no longer
+/// matches it. A lighter snapshot does not put the old tip back, and equal
+/// work under two hashes clears the marker.
+#[test]
+fn work_orders_the_judged_tip_across_a_reorg() {
+    let old = marker(4, 0xA1, 100);
+    let same_height = marker(4, 0xB2, 140);
+    let shorter = marker(3, 0xC3, 180);
+    let tie = marker(4, 0xD4, 140);
+    assert_eq!(super::judged_tip_after(None, old), Some(old));
+    assert_eq!(super::judged_tip_after(Some(old), old), Some(old));
+    assert_eq!(
+        super::judged_tip_after(Some(old), same_height),
+        Some(same_height)
+    );
+    assert_eq!(super::judged_tip_after(Some(old), shorter), Some(shorter));
+    assert_eq!(
+        super::judged_tip_after(Some(same_height), old),
+        Some(same_height)
+    );
+    assert_eq!(super::judged_tip_after(Some(same_height), tie), None);
 }

@@ -20,13 +20,6 @@ pub enum KeyError {
     #[error("rederived public material does not match keys-file declaration")]
     PublicBytesMismatch,
 
-    /// The keys file declared a `(network, seed_format)` pair that the
-    /// derivation layer rejects as not permitted (e.g., mainnet with a
-    /// raw 32-byte seed). The keys-file integrity check should have
-    /// rejected this earlier; this variant is the defensive path.
-    #[error("keys file declares unsupported (network, seed_format) pair")]
-    UnsupportedDerivationPair,
-
     /// HKDF expand, scalar reduction, or ML-KEM seed expansion produced
     /// an invalid intermediate value. Almost certainly indicates a bug
     /// in `shekyl-crypto-pq`; the variant exists so a future audit can

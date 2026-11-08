@@ -6,7 +6,7 @@
 //! Private entry points for the C5 bench. The numbers are a run record.
 //! They are not a budget.
 
-use shekyl_noise::{rekey_hkdf, HASH_LEN, REKEY_NONCES};
+use shekyl_noise::{rekey_hkdf, RecvDirection, SendDirection, HASH_LEN, REKEY_NONCES};
 
 use crate::channel::{RecvHalf, SendHalf};
 use crate::noise::{Initiator, Responder};
@@ -44,14 +44,21 @@ pub struct Session {
     recv: RecvHalf,
 }
 
+/// One finished handshake. [`Session`] frames it; [`Windows`] takes the
+/// raw directions. The bench times what happens after this returns.
+fn established() -> (crate::Established<true>, crate::Established<false>) {
+    let (init, message1) = Initiator::new(&NID).expect("initiator");
+    let ready = Responder::new(&NID)
+        .read_message1(&message1)
+        .expect("message 1");
+    let (responder, message2) = ready.write_message2().expect("message 2");
+    let initiator = init.read_message2(&message2).expect("message 2");
+    (initiator, responder)
+}
+
 impl Session {
     pub fn connected() -> Self {
-        let (init, message1) = Initiator::new(&NID).expect("initiator");
-        let ready = Responder::new(&NID)
-            .read_message1(&message1)
-            .expect("message 1");
-        let (responder, message2) = ready.write_message2().expect("message 2");
-        let initiator = init.read_message2(&message2).expect("message 2");
+        let (initiator, responder) = established();
         let (send, _init_recv) = initiator.split();
         let (_resp_send, recv) = responder.split();
         Self { send, recv }
@@ -78,4 +85,35 @@ pub fn rekey_once() {
     let chaining_key = [1u8; HASH_LEN];
     let record_key = [2u8; HASH_LEN];
     rekey_hkdf(&chaining_key, &record_key);
+}
+
+/// One direction pair with no framer: each window is one AEAD seal and one
+/// open, as a fixed-window record is (D14 item 4). The interim framer's
+/// [`Session::seal_open`] spends two AEADs a record, its length's and its
+/// body's, so it overstates a window's fixed cost.
+pub struct Windows {
+    send: SendDirection,
+    recv: RecvDirection,
+}
+
+impl Windows {
+    pub fn connected() -> Self {
+        let (initiator, responder) = established();
+        let (send, _init_recv) = initiator.directions();
+        let (_resp_send, recv) = responder.directions();
+        Self { send, recv }
+    }
+
+    /// Seal `window` and open it. Returns the ciphertext length.
+    pub fn seal_open(&mut self, window: &[u8]) -> usize {
+        let (sealed, _) = self.send.seal(window, b"window").expect("seal");
+        let (opened, _) = self.recv.open(&sealed, b"window").expect("open");
+        std::hint::black_box(opened);
+        sealed.len()
+    }
+}
+
+/// How many window seals fit before a direction rekeys: one nonce each.
+pub fn windows_before_rekey() -> u64 {
+    REKEY_NONCES
 }

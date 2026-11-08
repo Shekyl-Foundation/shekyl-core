@@ -2,12 +2,12 @@
 //!
 //! Two primitives, two jobs, and the split is the point:
 //!
-//! - [`keccak256`] / [`tree_hash`] — **Keccak-256, for existing pinned contracts
-//!   only.** Two caller classes, both closed: (a) outputs that must be
-//!   byte-identical to the Monero-descended C++ daemon — `prefix_hash`,
-//!   `tree_hash`, block IDs, `pqc_signing_payload_hashes`; (b) cross-party
-//!   multisig contracts with no C++
-//!   mirror but multiple independent signers pinned to these bytes by spec —
+//! - [`keccak256`] — **Keccak-256, for existing pinned contracts
+//!   only.** Two caller classes, both closed: (a) consensus outputs whose
+//!   bytes are pinned by KAT — `prefix_hash`, the transaction tree hash,
+//!   block IDs, `pqc_signing_payload_hashes`; (b) cross-party multisig
+//!   contracts with no consensus role but multiple independent signers
+//!   pinned to these bytes by spec —
 //!   `intent_hash` / the chain-state fingerprint (`shekyl-multisig/src/intent.rs`).
 //!   Class (b) migrates to cSHAKE only via its owning spec, never unilaterally
 //!   (FOLLOWUPS, "residual consensus-parity Keccak"). They are un-domained
@@ -23,22 +23,19 @@
 //! SHA3-256 (0x06) share a permutation and a rate and differ in one byte — so an
 //! independent implementer reading "Keccak-256" has a coin-flip, and the failure is
 //! silent: a different digest, no diagnostic. That ambiguity is tolerable exactly
-//! where a KAT and a C++ twin pin it, and nowhere else. `cSHAKE256` has one meaning.
+//! where a KAT pins it, and nowhere else. `cSHAKE256` has one meaning.
 //!
 //! # Keccak-256 (consensus)
 //!
 //! Original Keccak padding (0x01), NOT NIST SHA3 padding (0x06). Consensus-critical:
-//! the output must be byte-identical to the C `src/crypto/keccak.c` (the empty-input
-//! KAT in `tests` pins exactly that). The byte-identity, not the implementation
+//! the empty-input KAT in `tests` pins the output (original Keccak-256, the function
+//! CryptoNote names `cn_fast_hash`). The byte-identity, not the implementation
 //! crate, is what is genesis-locked — `sha3` and the prior `tiny-keccak` both compute
 //! the same original-Keccak-256, and standardizing on the RustCrypto crate collapses
 //! the codebase onto one audited keccak (shekyl-oxide already uses `sha3`).
 //!
-//! **Naming.** Rust API is [`keccak256`] (states the primitive). The C++ daemon
-//! function stays `cn_fast_hash` (`src/crypto/hash.c`) for 1:1 consensus
-//! source-mapping; the FFI export stays `shekyl_cn_fast_hash` for C ABI
-//! stability. CryptoNote lineage name on the C++/ABI side only
-//! (`60-no-monero-legacy.mdc`).
+//! **Naming.** Rust API is [`keccak256`] (states the primitive), not the
+//! CryptoNote lineage name `cn_fast_hash` (`60-no-monero-legacy.mdc`).
 
 #![deny(unsafe_code)]
 
@@ -51,13 +48,11 @@ pub const HASH_SIZE: usize = 32;
 pub type Hash = [u8; HASH_SIZE];
 
 /// Original-padding Keccak-256 (`0x01`, NOT NIST SHA3-256's `0x06`), via RustCrypto
-/// `sha3` — byte-identical to the C++ daemon's `cn_fast_hash`.
+/// `sha3` — the function CryptoNote names `cn_fast_hash`.
 ///
-/// Matches `cn_fast_hash` in `src/crypto/hash.c` (keccak1600 absorb, first 32 bytes;
-/// rate 136 bytes for 256-bit output). `sha3::Keccak256` is the original Keccak
-/// variant, so this is byte-identical to the prior tiny-keccak impl and to the C++
-/// daemon — verified by the empty-input KAT below and the live coinbase/spend hash
-/// KATs in shekyl-wire.
+/// Keccak1600 absorb, first 32 bytes; rate 136 bytes for 256-bit output.
+/// `sha3::Keccak256` is the original Keccak variant — verified by the empty-input KAT
+/// below and the live coinbase/spend hash KATs in shekyl-wire.
 ///
 /// A second public `keccak256` (same primitive) lives in `shekyl-curve-primitives`
 /// for the oxide-lineage hash-to-point stack; the tx-builder equivalence test
@@ -73,7 +68,7 @@ pub fn keccak256(data: &[u8]) -> Hash {
 /// **The default for any new hashed artifact.** The customization string makes
 /// domain separation structural: two contexts cannot collide even over identical
 /// input bytes, without anyone having to remember a convention. Use
-/// [`keccak256`] only where byte-identity with the C++ daemon is required.
+/// [`keccak256`] only where an existing pinned contract requires it.
 ///
 /// `customization` follows the house convention `b"shekyl/<domain>-v1"` (see
 /// `shekyl/archival-serve-credit-response-v1`, `shekyl/receive-label-hash-v1`);
@@ -132,68 +127,6 @@ fn cshake256<const N: usize>(customization: &[u8], input: &[u8]) -> [u8; N] {
     let mut out = [0u8; N];
     reader.read(&mut out);
     out
-}
-
-/// Compute `tree_hash_cnt`: largest power of 2 strictly less than count.
-/// Equivalent to `tree_hash_cnt` in `src/crypto/tree-hash.c`.
-fn tree_hash_cnt(count: usize) -> usize {
-    debug_assert!(count >= 3);
-    let mut pow = 2usize;
-    while pow < count {
-        pow <<= 1;
-    }
-    pow >> 1
-}
-
-/// Compute Merkle tree hash from a list of 32-byte hashes.
-///
-/// Matches `tree_hash` in `src/crypto/tree-hash.c` exactly.
-pub fn tree_hash(hashes: &[Hash]) -> Hash {
-    let count = hashes.len();
-    match count {
-        0 => [0u8; HASH_SIZE],
-        1 => hashes[0],
-        2 => {
-            let mut buf = [0u8; 2 * HASH_SIZE];
-            buf[..HASH_SIZE].copy_from_slice(&hashes[0]);
-            buf[HASH_SIZE..].copy_from_slice(&hashes[1]);
-            keccak256(&buf)
-        }
-        _ => {
-            let mut cnt = tree_hash_cnt(count);
-            let mut ints = vec![[0u8; HASH_SIZE]; cnt];
-
-            let skip = 2 * cnt - count;
-            ints[..skip].copy_from_slice(&hashes[..skip]);
-
-            let mut i = skip;
-            let mut j = skip;
-            while j < cnt {
-                let mut buf = [0u8; 2 * HASH_SIZE];
-                buf[..HASH_SIZE].copy_from_slice(&hashes[i]);
-                buf[HASH_SIZE..].copy_from_slice(&hashes[i + 1]);
-                ints[j] = keccak256(&buf);
-                i += 2;
-                j += 1;
-            }
-            debug_assert_eq!(i, count);
-
-            while cnt > 2 {
-                cnt >>= 1;
-                for k in 0..cnt {
-                    let mut buf = [0u8; 2 * HASH_SIZE];
-                    buf[..HASH_SIZE].copy_from_slice(&ints[2 * k]);
-                    buf[HASH_SIZE..].copy_from_slice(&ints[2 * k + 1]);
-                    ints[k] = keccak256(&buf);
-                }
-            }
-
-            let mut buf = [0u8; 2 * HASH_SIZE];
-            buf[..HASH_SIZE].copy_from_slice(&ints[0]);
-            buf[HASH_SIZE..].copy_from_slice(&ints[1]);
-            keccak256(&buf)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -291,22 +224,5 @@ mod tests {
         // An empty customization silently degrades to plain SHAKE256 (no domain
         // separation); the guard must reject it rather than return a SHAKE digest.
         let _hash = cshake256_32(b"", b"anything");
-    }
-
-    #[test]
-    fn tree_hash_single() {
-        let h = [0xABu8; HASH_SIZE];
-        assert_eq!(tree_hash(&[h]), h);
-    }
-
-    #[test]
-    fn tree_hash_two() {
-        let a = keccak256(b"a");
-        let b = keccak256(b"b");
-        let root = tree_hash(&[a, b]);
-        let mut combined = [0u8; 64];
-        combined[..32].copy_from_slice(&a);
-        combined[32..].copy_from_slice(&b);
-        assert_eq!(root, keccak256(&combined));
     }
 }

@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Live Rust Levin client ↔ C++ `shekyld` (`LV2_PORTABLE_STORAGE.md` §12 step 4).
+//! Live Rust Levin client ↔ a running `shekyld` (`LV2_PORTABLE_STORAGE.md` §12 step 4).
 //!
 //! Proves the LV-2b maps round-trip on the real wire. Does **not** rewire
 //! daemon emit/recv (that is LV-3). `#[ignore]`d: requires `SHEKYLD_BIN`.
@@ -14,9 +14,12 @@
 //!   cargo test -p shekyl-levin --test dual_stack -- --ignored --nocapture
 //! ```
 //!
-//! `--offline` skips the p2p bind (`net_node.inl`); this harness uses
-//! `--p2p-bind-ip 127.0.0.1` plus `--out-peers 0`. `--regtest` (FAKECHAIN)
-//! speaks the id derived from fakechain's genesis pin.
+//! The daemon is started on the regtest network with a loopback
+//! `clearnet-listen` and Tor off; the handshake speaks the id derived from
+//! regtest's own genesis pin (NI-Q8). Since 2026-11-05 the daemon's p2p side
+//! is the Rust session layer (`shekyl-p2p-session`), so this is a
+//! Rust-to-Rust walk over the same wire the C++ host once answered; the wire
+//! is unchanged.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -30,11 +33,10 @@ use shekyl_levin::{
     COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
 
-/// FAKECHAIN (`--regtest`) derives its id from fakechain's genesis pin,
-/// which is mainnet's genesis today.
+/// Regtest (`--network regtest`) derives its id from its own genesis pin.
 fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
     shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
-        shekyl_rpc_types::DaemonNetwork::Fakechain,
+        shekyl_rpc_types::Network::Regtest,
     ))
 }
 
@@ -55,8 +57,7 @@ impl Daemon {
                  --test dual_stack -- --ignored"
             ),
         };
-        let rpc_port = free_port();
-        let p2p_port = free_port();
+        let [rpc_port, p2p_port] = distinct_ports();
         let data_dir = std::env::temp_dir().join(format!("shekyl-lv2b-dual-{p2p_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
@@ -137,9 +138,34 @@ impl Drop for Daemon {
     }
 }
 
+/// Probes of port 0 before the test gives up. Same bound as `live_daemon`.
+const PORT_PROBES: usize = 64;
+
 fn free_port() -> u16 {
     let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
     l.local_addr().expect("local_addr").port()
+}
+
+/// A free port that is none of `taken`. Two probes of port 0 can be one
+/// port, and the daemon then cannot bind both listeners.
+fn free_port_excluding(taken: &[u16]) -> u16 {
+    for _ in 0..PORT_PROBES {
+        let port = free_port();
+        if !taken.contains(&port) {
+            return port;
+        }
+    }
+    panic!("could not obtain a port distinct from {taken:?}");
+}
+
+/// `N` ports, each different.
+fn distinct_ports<const N: usize>() -> [u16; N] {
+    let mut ports = [0u16; N];
+    for i in 0..N {
+        let port = free_port_excluding(&ports[..i]);
+        ports[i] = port;
+    }
+    ports
 }
 
 fn wait_tcp(p2p_port: u16, deadline: Instant) {
@@ -333,9 +359,13 @@ fn rust_client_handshakes_with_shekyld() {
         node_data: BasicNodeData {
             network_id: regtest_network_id(),
         },
+        // The daemon's own chain as a claim: under `dev-difficulty=1` every
+        // block's work is 1, so the work is the block count. Chain sync's
+        // owner closes a session whose claim has less work than blocks
+        // (`PayloadRefused::Work`).
         payload_data: CoreSyncData {
             current_height: tip.height,
-            cumulative_difficulty: 0,
+            cumulative_difficulty: tip.height,
             cumulative_difficulty_top64: 0,
             top_id: tip.top_id,
         },

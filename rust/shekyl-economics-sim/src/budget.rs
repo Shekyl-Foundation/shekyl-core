@@ -53,8 +53,8 @@
 use serde::Serialize;
 use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 use shekyl_economics::{
-    base_block_reward, calc_release_multiplier, emission_share_at, params::SCALE,
-    split_block_emission, ClosedShardCount,
+    base_block_reward, calc_release_multiplier, params::SCALE, split_block_emission,
+    ClosedShardCount,
 };
 
 use crate::burden::HonestOutputs;
@@ -142,12 +142,12 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
     let economic = params.economic();
 
     let mut already_generated = emitted_at_start(
-        params.emission_curve_asymptote,
+        params.economic().emission_curve_asymptote,
         scenario.initial_emitted_ppm,
     );
     let mut total_burned: u128 = 0;
 
-    let total_blocks = params.blocks_per_year * scenario.sim_years;
+    let total_blocks = params.blocks_per_year() * scenario.sim_years;
 
     // Per-epoch accumulators (atomic units, u128 to be headroom-safe over 10k
     // blocks of full-supply-scale rewards).
@@ -182,7 +182,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
                 mult_sum,
                 mult_min,
                 blocks_in_epoch,
-                mid_height,
+                economic.emission_schedule().share_at(mid_height),
             ));
             emission_a_acc = 0;
             emission_b_acc = 0;
@@ -196,24 +196,23 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
 
         let priced = chain.price(
             ChainStep {
-                fold_height: block,
                 chain_height: abs_height,
-                demand: (scenario.get_volume)(block, params.blocks_per_year),
+                demand: (scenario.get_volume)(block, params.blocks_per_year()),
                 leaves: outputs.leaves(),
                 already_generated,
                 total_burned,
                 closed_shards: ClosedShardCount::ZERO,
             },
             params,
-            &economic,
+            economic,
         );
-        let base_reward = base_block_reward(priced.fee_point.already_generated, &economic)
+        let base_reward = base_block_reward(priced.fee_point.already_generated, economic)
             .expect("sim neutral trajectory stays within the arithmetic domain");
         let multiplier = calc_release_multiplier(
             priced.volume,
-            params.tx_volume_baseline,
-            params.release_min,
-            params.release_max,
+            params.economic().tx_volume_baseline,
+            params.economic().release_min,
+            params.economic().release_max,
         );
         let emission_share = priced.emission_share;
 
@@ -261,7 +260,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             mult_sum,
             mult_min,
             blocks_in_epoch,
-            mid_height,
+            economic.emission_schedule().share_at(mid_height),
         ));
     }
 
@@ -321,7 +320,7 @@ fn build_epoch_record(
     mult_sum: u128,
     mult_min: u64,
     blocks: u64,
-    abs_height_mid: u64,
+    share: u64,
 ) -> EpochRecord {
     let budget_a = emission_a + fee;
     let budget_b = emission_b + fee;
@@ -335,7 +334,6 @@ fn build_epoch_record(
     } else {
         0.0
     };
-    let share = emission_share_at(abs_height_mid);
     EpochRecord {
         epoch,
         mean_tx_volume: vol_sum as f64 / blocks as f64,

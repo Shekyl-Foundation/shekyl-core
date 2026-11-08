@@ -6733,3 +6733,146 @@ or a zero-filled key.
 persona slots in parallel.
 
 ---
+
+## 2026-10-22 — A pass transcript names its draw stream
+
+**Decision (Rick, 2026-10-22, `ARCHIVAL_SUPPORT_DRAW.md`).** The request
+header and the transcript `P` signs open with one stream byte: `0` for an
+economy draw, `1` for a complete-tree support draw. The header is 73 bytes
+and the transcript is 113. The pinned attestation vectors move with that
+byte.
+
+**Why.** A support draw and an economy draw sign the same fields. The byte
+is what the request carries, so a receipt from one stream is not a receipt
+for the other.
+
+---
+
+## 2026-10-25 — At the filing deadline a read in flight is waited for, bounded by one read (`SCS-P18`)
+
+**Decision (Rick, 2026-10-25; built in `SO-D12` increment 4c,
+`ARCHIVAL_SETTLEMENT_WRITER.md` §16.11).** The specification planned
+reads in `(h, h + W₂ − M]` and filed the bundle by `h + W₂ − M`, which a
+read started at `h + W₂ − M` cannot both meet. At `h + W₂ − M` every read
+not yet started is abandoned and a read in flight is waited for. The wait
+is a bounded rule: one read's worst case, its fetches' timeouts and stall
+retries in blocks at the target interval, is a derived constant
+(`READ_CEILING_BLOCKS`, 19 at the production bounds, with the read's
+random start delay below one block interval) held below `M − 1` at
+build time, so a timeout change cannot quietly eat the margin.
+`h + W₂ − 1` stays as the backstop.
+
+**Why.** A read in flight ends by its own timeouts, not by the window, so
+the margin it spends is one read's, not whatever is left. A persona that
+stalls on purpose delays the bundle by at most that one read and takes a
+miss, since a stall-class last attempt abandons its draw.
+
+**Built with it.** The bound needs a started read never to queue for a
+client slot, so the producer starts no more reads than its client has
+slots; a read that finds none has not started, and is abandoned at the
+deadline like any other.
+
+**Rejected alternative.** Abandoning the read in flight at the deadline:
+it loses a pass the margin can afford.
+
+---
+
+## 2026-10-25 — The bundle queue and the body store land with the producer, in the chain store (`SO-D12p`)
+
+**Decision (Rick, 2026-10-25; built as `SO-D12` increment 4c,
+`ARCHIVAL_SETTLEMENT_WRITER.md` §16.11).** The bundle queue and the body
+store are built with the producer, in the chain store, and the producer
+files to the real queue. Admission to the queue is the bundle rule run
+against the tip through the store's single writer.
+
+**Why.** Built the way it is used after the cutover: the producer's only
+consumer is the queue, and a bundle the queue admits is the gate 4b waits
+on. The queue and the bodies are in the chain store because every body
+must have a holder, and the holders the specification names are this
+file's; a discarded pool file would orphan the bodies it held.
+
+**Rejected alternatives.**
+
+- A `BundleSink` trait with a test sink and a memory outbox, the queue
+  deferred to 4b, was rejected: the outbox was a stand-in nothing could
+  consume before 4b, deleted in 4b (the `regtest_issue_draws` pattern),
+  and the test sink proved a path the product does not have.
+
+**Withdrawn.** The reservation that the queue becomes the admission
+rule's first live caller before the flip: the queue is pool-like state fed
+only by this daemon's own bundles until 4b, and rule 23's falsifier guards
+the connect path, which the queue is not.
+
+---
+
+## 2026-11-03 — One secret, one derivation: a wallet is 32 bytes on every network, salted by the network's name
+
+**Decision** (Rick, `NETWORK_IDENTITY.md` NI-R7 and NI-R10). A wallet's
+secret is 32 bytes on every network, written as BIP-39's 24 words. The
+words decode to the 32 bytes and nothing else: no 12-word option, not
+even on import, and no passphrase, so no PBKDF2 step. Key derivation runs
+`normalize_seed(seed)` and then HKDF under the salt
+`shekyl-master-derive-v2-` ‖ the network's tag (`shekyl/<network>`). The
+seed format leaves the derivation salt and the wallet file; the keys file
+stores the 32-byte seed (format `0x02`), so a wallet can always show its
+words and an import round-trips. A `0x01` file is refused with its
+reason, never reinterpreted.
+
+**Why.**
+- *One pathway for every network* (NI-R4). Mainnet and stagenet derived
+  from BIP-39's PBKDF2 output, testnet and regtest from raw bytes, through
+  separate code: the test networks exercised a wallet path mainnet does
+  not run.
+- *24 words only.* 12 words is 128 bits, 64 bits of security under
+  Grover, below the post-quantum floor.
+- *No passphrase.* Its PBKDF2 stretch is weak, and the wallet file has
+  its own encryption.
+- *The network's name, not its id* (NI-R10). The genesis pays addresses
+  this derivation produces, and the network id is a hash of the genesis,
+  so the id cannot salt the keys the genesis pays. The name exists before
+  genesis, and genesis commits to it in its coinbase. The same 32 bytes
+  on two networks still give unrelated keys.
+
+**Consequences.** Every key-derivation vector is re-recorded:
+`ADDRESS_DERIVATION_V2` becomes `ADDRESS_DERIVATION_V3` and
+`ARCHIVAL_P_DERIVE_V1` becomes `ARCHIVAL_P_DERIVE_V2`; the keys-file
+vectors move to `WALLET_FILE_FORMAT_V2`, with the `V1` file kept as the
+refused input. Format `0x02` also mints the region wrap-key labels
+`shekyl-region1-aead-v2` and `shekyl-region2-aead-v2`, as
+`WALLET_FILE_FORMAT_V1.md` §2.6 requires of a format bump; the prefs HMAC
+label stays `-v1`, because the prefs format did not change. Addresses
+derived from an existing seed move, mainnet's
+genesis recipients included; their custodians re-derive at the genesis
+ceremony (NI-R11). The wallet RPC returns the 24 words on every network
+and no longer a raw seed. Raw 32-byte seeds remain only as harness input.
+
+---
+
+---
+
+## 2026-11-04 — The derivation salt is the name's 16-byte binding, then the purpose
+
+**Decision** (Rick, ruling 2 on the signing envelope, `NETWORK_IDENTITY.md`;
+`claude/NI_SIGNING_ENVELOPE.md` §2.6 in the planning repository). Key
+derivation's HKDF salt is the network's `name_id`, then the purpose label,
+unframed: `salt = name_id ‖ "shekyl-master-derive-v3"`, where
+`name_id = cSHAKE256(S = "shekyl/network-name-v1", X = "shekyl/<network>")[..16]`.
+It replaces `shekyl-master-derive-v2-` ‖ the tag. HKDF stays the key
+primitive; only the salt's shape changes. The same seed derives different
+keys and addresses from this entry on.
+
+**Why.** One binding rule for everything Shekyl hashes, signs or derives:
+16 bytes at position 0, the genesis-derived id for what is signed or proved
+against the chain, the name's `name_id` for what is derived from keys or
+addresses (NI-R10, NI-R15). The salt was the one network binding of its own
+shape (a variable-length tag after a label).
+
+**Where it lands.** In network identity PR 1 (#1264), so testnet, stagenet
+and regtest are regenerated once: their genesis recipients, genesis blocks,
+network ids, the recorded ids, the captured chains and the vector suites
+(`ADDRESS_DERIVATION_V3`, `ARCHIVAL_P_DERIVE_V2`, `WALLET_FILE_FORMAT_V2`)
+move in that one PR. The rest of the envelope lands in PR 2 (#1266).
+Testnet's and stagenet's genesis wallets are generated fresh, not
+re-derived from the 2026-11-03 custody seeds: one of those seeds was
+printed into a working session transcript while this change was prepared,
+so that set is retired.

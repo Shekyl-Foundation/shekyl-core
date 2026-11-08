@@ -31,7 +31,12 @@ const NONCE: [u8; 32] = [0x5a; 32];
 const ANCHOR_HASH: [u8; 32] = [0xa5; 32];
 
 fn header_at(anchor_height: u64) -> [u8; PASS_REQUEST_HEADER_LEN] {
-    pass_request_header_bytes(&NONCE, BlockHeight::from_raw(anchor_height), &ANCHOR_HASH)
+    pass_request_header_bytes(
+        shekyl_archival_retention::PassStream::Economy,
+        &NONCE,
+        BlockHeight::from_raw(anchor_height),
+        &ANCHOR_HASH,
+    )
 }
 
 fn good_header() -> [u8; PASS_REQUEST_HEADER_LEN] {
@@ -552,6 +557,7 @@ async fn the_served_body_is_the_providers_bytes_then_the_countersignature() {
     // daemon runs, against exactly the header the request carried.
     verify_pass_transcript(
         signer.public_key(),
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,
@@ -563,6 +569,7 @@ async fn the_served_body_is_the_providers_bytes_then_the_countersignature() {
     // ...and is bound to *this* shard id and *this* nonce.
     assert!(verify_pass_transcript(
         signer.public_key(),
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,
@@ -573,6 +580,7 @@ async fn the_served_body_is_the_providers_bytes_then_the_countersignature() {
     .is_err());
     assert!(verify_pass_transcript(
         signer.public_key(),
+        shekyl_archival_retention::PassStream::Economy,
         &[0u8; 32],
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,
@@ -591,6 +599,7 @@ async fn the_served_body_is_the_providers_bytes_then_the_countersignature() {
     ] {
         assert!(verify_pass_transcript(
             signer.public_key(),
+            shekyl_archival_retention::PassStream::Economy,
             &NONCE,
             BlockHeight::from_raw(IN_GATE_ANCHOR),
             &ANCHOR_HASH,

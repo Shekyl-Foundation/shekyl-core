@@ -19,12 +19,15 @@
 //! The values are typed chain facts. The handlers own the wire: hex, the
 //! 128-bit triples, the status strings and the refusals.
 
+use std::sync::Arc;
+
 use shekyl_archival_retention::ShardCoverageIn;
 use shekyl_chain_rules::EmissionEpochFacts;
+use shekyl_pow_randomx::PreparedCache;
 use shekyl_types::archival::HoldingsKind;
 use shekyl_types::{
-    BlockHash, BlockHeight, ChainCount, CurveTreeRoot, PCanonicalId, PowHash, SettlementEpoch,
-    ShardId,
+    BlockHash, BlockHeight, ChainCount, CurveTreeRoot, KeyImage, PCanonicalId, PowHash,
+    SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -91,11 +94,9 @@ pub enum PowSeed {
     AtHeight(BlockHeight),
 }
 
-/// A `calc_pow` answer.
+/// Why `calc_pow` will not hash. Neither variant spends a hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PowAt {
-    /// RandomX over the bytes under the seed.
-    Hashed(PowHash),
+pub enum PowDecline {
     /// The seed height is above the tip: the chain has no block there, so
     /// there is no seed to hash under.
     SeedAboveTip {
@@ -113,6 +114,32 @@ pub enum PowAt {
         /// The seed asked for, given or named by the height.
         seed: BlockHash,
     },
+}
+
+/// A cache the daemon already holds, admitted for one `calc_pow` hash.
+///
+/// Only [`ChainReadFacts::admit_pow`] mints one. The caller spends its
+/// hash budget against this value, then [`ChainReadFacts::hash_admitted`]
+/// runs RandomX on the cache it holds, so the lookup that succeeded is
+/// the lookup that hashes. The cache is crate-private: a caller outside
+/// this crate passes the value on and does not build one.
+pub struct AdmittedPow {
+    pub(crate) cache: Arc<PreparedCache>,
+}
+
+impl std::fmt::Debug for AdmittedPow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AdmittedPow")
+    }
+}
+
+/// A seed resolved to a held cache, or a reason it will not be hashed.
+#[derive(Debug)]
+pub enum PowAdmission {
+    /// The seed's cache is held. Hashing it is what spends a hash.
+    Admitted(AdmittedPow),
+    /// The chain has no seed there, or the cache is not held.
+    Declined(PowDecline),
 }
 
 /// A claimant's bond record, as the claim source reports it: what the
@@ -168,9 +195,109 @@ pub struct ShardCoverage {
     pub shards: Vec<ShardCoverageIn>,
 }
 
+/// One listed transaction of a block: its hash as the block lists it, and
+/// its body as the store holds it. The skeleton is always present. Good the
+/// record carries is held or discarded with its shard; a record that
+/// carries none has neither.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedTx {
+    pub hash: TxHash,
+    pub body: crate::core::TxBody,
+}
+
+/// One block of `get_blocks_by_height.bin`: its bytes and its listed
+/// transactions, in list order. The projection chooses each body's form
+/// from the request (`SB-Q2`); a discarded good is a slot state there,
+/// never a reason this read fails.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockRead {
+    /// The block, serialized.
+    pub block: Vec<u8>,
+    /// Each listed transaction.
+    pub txs: Vec<ListedTx>,
+}
+
+/// What [`ChainReadFacts::blocks_by_height`] read: the blocks up to the
+/// first height above the tip, and that height.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlocksAt {
+    /// The blocks read, in request order.
+    pub blocks: Vec<BlockRead>,
+    /// The first height above the tip; `None` when every height was read.
+    /// Nothing else fails a height: a body this node discarded is carried
+    /// as its slot's state (`PDM-Q10`).
+    pub failed: Option<BlockHeight>,
+}
+
+/// What [`ChainReadFacts::transactions`] gathered for `get_transactions`:
+/// one slot per id asked, and the chain height confirmations count from,
+/// both read off one snapshot. A body this node has discarded is a slot
+/// like any other — [`crate::core::ArchivalGood::Discarded`] when it carries
+/// good, [`crate::core::ArchivalGood::CarriesNone`] when it does not — and
+/// the projection decides, per the request's form, whether a discarded good
+/// is an entry or an `archived` state (`PDM-Q10`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransactionsAt {
+    /// One slot per id, in request order.
+    pub slots: Vec<crate::core::TxSlot>,
+    /// The chain's height: the tip's plus one.
+    pub chain_height: u64,
+}
+
+/// Where a key image is spent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpentAt {
+    /// Nowhere this node shows.
+    Unspent,
+    /// By a transaction the chain holds.
+    Chain,
+    /// By a transaction the pool shows; never one in its stem phase (S6).
+    Pool,
+}
+
 /// The chain reads behind the store flip's eight native read methods
 /// (module docs). Every method reads one committed snapshot.
 pub trait ChainReadFacts: Send + Sync {
+    /// The blocks at `heights`, each with its listed transactions as the
+    /// store holds them (`get_blocks_by_height.bin`).
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] on an empty store; the store's faults;
+    /// [`FactsFault::Inconsistent`] when a listed transaction has no
+    /// record.
+    fn blocks_by_height(&self, heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault>;
+
+    /// Each of `ids` from the chain, or else from the pool as `scope` may
+    /// see it, or missed (`get_transactions`). The pool is read before the
+    /// chain's snapshot is begun, so a transaction mined between the two is
+    /// found in the chain.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] on an empty store; the store's faults.
+    fn transactions(
+        &self,
+        ids: &[TxHash],
+        scope: crate::info_facts::PoolScope,
+    ) -> Result<TransactionsAt, FactsFault>;
+
+    /// The global output indices of the transaction `txid`'s outputs, in
+    /// `vout` order; `None` when the chain does not hold it
+    /// (`get_o_indexes.bin`).
+    ///
+    /// # Errors
+    ///
+    /// The store's faults.
+    fn output_indices(&self, txid: &TxHash) -> Result<Option<Vec<u64>>, FactsFault>;
+
+    /// Where each of `key_images` is spent, in order (`is_key_image_spent`).
+    ///
+    /// # Errors
+    ///
+    /// The store's faults; the pool's.
+    fn key_images_spent(&self, key_images: &[KeyImage]) -> Result<Vec<SpentAt>, FactsFault>;
+
     /// Every alt block's identity, in the alt table's key order.
     ///
     /// # Errors
@@ -208,15 +335,31 @@ pub trait ChainReadFacts: Send + Sync {
     /// when a listed transaction or a block in range is missing.
     fn coinbase_sum(&self, start: BlockHeight, count: u64) -> Result<CoinbaseRange, FactsFault>;
 
-    /// RandomX over `pow_blob` under `seed`, under a cache the daemon's
-    /// cache store already holds; [`PowAt::SeedNotHeld`] for any other.
-    /// Never derives a cache.
+    /// Resolve `seed` to a cache the daemon already holds.
+    ///
+    /// Looks the seed up and, when the seed is a height, reads that block.
+    /// Does not derive a cache, run RandomX, take a hasher permit, or
+    /// spend an RPC hash. [`PowAdmission::Declined`] is a request that
+    /// will not hash.
     ///
     /// # Errors
     ///
-    /// As [`curve_tree`](Self::curve_tree) when the seed is read off the
-    /// chain.
-    fn pow_hash(&self, pow_blob: &[u8], seed: PowSeed) -> Result<PowAt, FactsFault>;
+    /// [`FactsFault::NotReady`] when this handle is not open. The store's
+    /// faults when the seed is a height read off the chain.
+    fn admit_pow(&self, seed: PowSeed) -> Result<PowAdmission, FactsFault>;
+
+    /// RandomX over `pow_blob` on the cache `admitted` holds.
+    ///
+    /// Takes one permit in the calc_pow hasher class, then hashes. The
+    /// hash does not fail. [`FactsFault::NotReady`] is the handle: a
+    /// chain that is not open never admits, and hashing on it is that
+    /// fault rather than a zero.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when this handle is not open.
+    fn hash_admitted(&self, pow_blob: &[u8], admitted: &AdmittedPow)
+        -> Result<PowHash, FactsFault>;
 
     /// What `persona`'s emission claim is built from (`ClaimSource`).
     ///

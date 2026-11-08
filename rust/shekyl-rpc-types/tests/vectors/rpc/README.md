@@ -200,3 +200,64 @@ that held them: `_v2` to `_v1` minus exactly the identifier fields of
 (PDM-Q7). The `_v4` delta covers neither (it is `get_peer_list` only), so
 those two deltas are no longer asserted and the three `_v3` vectors rest
 on their parity tests alone.
+
+**3.64 — `get_transactions` answers the skeleton, and five fixtures have a
+successor.** The pruned form is the skeleton (`SB-Q2`): `pruned_as_hex` is
+the pruned segment alone and every entry carries `pqc_auth_hash` (null
+for a body with no `pqc_auths` region); `prunable_as_hex`, `as_json` and
+`pruned` retire with the `split` and `decode_as_json` request switches
+(`IG-Q55`). Each successor is its predecessor minus exactly those keys
+plus `pqc_auth_hash`
+(`the_3_64_vectors_are_their_predecessors_reshaped_to_the_skeleton`):
+`get_transactions_chain_and_pool_v4`, `_request_v2` and
+`_request_defaults_v2`; and two whose meaning changed with the form and so
+take new names — `get_transactions_split_form_v3` becomes
+`_pruned_form_v1` (there is no split form, only the pruned one) and
+`_decoded_v3` becomes `_coinbase_v1` (there is no decoding; what that
+fixture pinned was a coinbase's whole body). `get_transactions_archived_v1`
+is a case no predecessor could express: a full body this node discarded,
+answered as `{tx_hash, shard}` under `archived` where the 3.63 daemon
+refused the reply (`PDM-Q10`). `get_version_synced_v41` is the chain's
+3.64 link.
+
+The same release gives `/get_blocks_by_height.bin` the `prune` switch and
+a per-slot body. `get_blocks_by_height_request_v1.bin` is unchanged: the
+switch is omitted when off, so the epee capture is still a valid 3.64
+request, and `_request_prune_v1.bin` is the switch on. The response's
+`txs` is an array of slots, each a section tagged `form` (`1` full, `2`
+skeleton, `3` archived) in place of the string list, so
+`_response_v2.bin` is `_response_v1.bin` with each body reshaped into a
+full slot
+(`blocks_by_height_v2_is_v1_with_each_body_reshaped_into_a_full_slot`).
+`_response_skeleton_v1.bin` (two skeletons, one with the third component
+and one without, so `pqc_auth_hash` appears exactly once) and
+`_response_archived_v1.bin` (a whole body beside an `{tx_hash, shard}`
+slot) are cases no predecessor could express, pinned as the 3.64
+encoder's own; `_response_empty_v1.bin` is unchanged.
+
+**3.68 — `sync_info` is chain sync's view (CS-5 §7).** `sync_info_v4` and
+`sync_info_empty_v4` carry the sync owner's view under its own names
+(`height`, `target_height`, `state`, `stalled`, and `peers[]` with
+`connection_id`, `address`, `claimed_height`, `mode`, `header_request`,
+`body_requests` and `rate`); `spans` and `overview`, which rendered the
+deleted block queue, are gone, so neither is its `_v3` reshaped and the
+`_v3` vectors rest on their parity tests. `get_connections_v4` takes each
+row's `height` and `state` from the same view. `get_version_synced_v45` is
+the chain's 3.68 link. 3.69 is `get_version_synced_v46`: `already_in_pool`
+carries a required `relay`, and `get_version` gains nothing. 3.66 and 3.67 are the bounded-caller minors
+(`get_version_synced_v43` and `_v44`): an over-cap request is
+`OverResourceBound`, then `calc_pow` and `get_coinbase_tx_sum` are served.
+Neither minor changes `sync_info`.
+
+**3.70 — `get_info`'s Peers part is one row per connector, and three
+fixtures have a successor.** The six flat counts (`public_*`/`tor_*`
+socket counts, `white_peerlist_size`, `grey_peerlist_size`) become
+`connectors`, one row per connector the daemon runs, `clearnet` before
+`tor`. The old list sizes were the clearnet lists alone, so the clearnet
+row takes them with the `public_*` sockets; the tor row takes the `tor_*`
+sockets and list sizes no predecessor carried (40 white, 300 gray).
+`get_info_synced_v9`, `_syncing_v8` and `_peerless_startup_v9` are their
+predecessors reshaped that way and nothing else
+(`the_3_70_get_info_vectors_are_their_predecessors_with_one_row_per_connector`).
+`get_info_offline_v1` and `_synced_restricted_v7` carry no Peers count
+and do not move. `get_version_synced_v47` is the chain's 3.70 link.

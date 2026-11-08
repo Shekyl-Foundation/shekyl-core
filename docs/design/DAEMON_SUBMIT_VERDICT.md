@@ -121,7 +121,10 @@ pub enum SubmitVerdict {
     /// daemon-owned from here (§5.2).
     Accepted,
     /// Identity match: these exact bytes (same txid) are in the pool.
-    AlreadyInPool,
+    /// `relay` is required: `held`, `held_overdue`, `published`, or
+    /// `untracked`. The daemon judges `held_overdue` when the state is
+    /// read, on its own clock. A missing origin row is `untracked`.
+    AlreadyInPool { relay: PoolRelay },
     /// Identity match: this txid is in the main chain, confirmed at
     /// `height`. The height is the lock-lifecycle discriminant (§2.5): it
     /// decides *which release path* clears the awaiting-confirmation lock
@@ -168,13 +171,13 @@ pub enum RejectCause {
     /// Reference block hash unknown to this daemon (typically: daemon not
     /// yet synced to it). Sync-gated retry (§2.5).
     ReferenceNotFound,
-    /// A JoinMarket bond post this daemon cannot admit: its C++ commit
-    /// step has no decoder for the receipt-key form (FND-20). Phases A–C
-    /// passed; Phase D's mutable re-checks do not run, because the shim
-    /// returns before `shekyl_submit_commit_tx`. Deleted with the C++
-    /// commit shim (DEL-008).
-    JoinMarketUnsupported,
+    /// A consensus row refused the transaction against this chain when the
+    /// pool committed it (3.63; the flip). Terminal: the bytes are sound and
+    /// the chain decides. The row rides as `Rejected`'s `row` ("CEN-J15").
+    ConsensusRule,
     /// Forward-compat catch-all: a cause this client build does not know.
+    /// A pre-flip daemon's `join_market_unsupported` (left the set at
+    /// 3.63) reads as this.
     #[serde(other)]
     Unrecognized,
 }
@@ -337,15 +340,15 @@ Request-surface trims relative to `COMMAND_RPC_SEND_RAW_TX`:
 | --- | --- |
 | `Accepted` | Pending-tx enters *awaiting confirmation*; watchdog (§5.3) takes over. Outputs move to the awaiting-confirmation lock state (§2.6: persisted, dual release paths) — **not** marked spent at submit-accept (the current `local_pending_tx.rs:775-807` behavior moves to refresh-authoritative confirmation; PR-4). |
 | `AlreadyInPool` | Same as `Accepted` (identity fact: the bytes are held). Resolves prior transport ambiguity for this txid. |
-| `AlreadyInChain{height}` | Confirmation observed by verdict; refresh remains the settlement authority (reorgs happen — the verdict authorizes lock-lifecycle transitions only). Outputs enter the awaiting-confirmation lock in **both** height cases (fund safety first: no selectable window either way); `height` decides the **release path** (F40). *(a) `height` > wallet synced height:* the ordinary §2.6 path-1 release — refresh reaches the confirming block and settles spent-marking; baseline the lock at `height`, not at current daemon height — **clamped to the wallet's own synced height** (amended 2026-08-04, `feat/w4b-submit-verdict`). The clamp is what makes the §7.2 lie-high damage cap ("released by the confirmed-absent watchdog horizon, bounded liveness cost") true rather than claimed: the horizon gate is `synced_height − baseline ≥ escape_horizon_blocks`, so baselining at an unreachable claim (a lying remote node, a reorg-confused daemon, `u64::MAX`) parks it at zero forever — the rung-1 probe never runs, no alarm is raised, and the *persisted* F14 lock strands the inputs across restarts with no exit at all, which is precisely what §2.6's "every exit is verdict, confirmation, or operator alarm" forbids. The clamp costs nothing where the claim is honest: a wallet only holds this lock because it just built and submitted, which requires being at the tip, so an honest (a)-case claim sits a handful of blocks above the synced height against a horizon of hundreds — and it degrades the lie-high case to exactly the baseline the fresh-accept path already uses. Only the persisted baseline is bounded; the raw claim still selects between (a) and (b), still rides `RescanRequest.claimed_height`, and still reaches the consumer on the verdict. *(b) `height` ≤ wallet synced height:* refresh already passed that height without observing the spend — path-1 release is unreachable by construction (the FOLLOWUPS stranded-lock wedge). Enqueue a **targeted re-scan** of the window around `height` (the reorg-heal machinery — the wallet's view of that height is stale or divergent); the re-scan re-observes the spend and settles refresh-authoritatively. A failed re-scan **never releases** (F40-R1: release is refresh- or watchdog-authoritative only); it falls through to the F31 resubmit-as-status-query for a fresh definite verdict, and consecutive fruitless daemon-directed re-scans are breaker-bounded (F40-R2, F28/F37 family) → operator alarm. Every exit is verdict, confirmation, or operator alarm — no silent strand, no daemon-steered release. |
+| `AlreadyInChain{height}` | Confirmation observed by verdict; refresh remains the settlement authority (reorgs happen — the verdict authorizes lock-lifecycle transitions only). Outputs enter the awaiting-confirmation lock in **both** height cases (fund safety first: no selectable window either way); `height` decides the **release path** (F40). *(a) `height` > wallet synced height:* the ordinary §2.6 path-1 release — refresh reaches the confirming block and settles spent-marking; baseline the lock at `height`, not at current daemon height — **clamped to the wallet's own synced height** (amended 2026-08-04, `feat/w4b-submit-verdict`). The claim is untrusted (§7.2). A fresh projection is unread, and an unread sight is asked on the next chain advance without reading the baseline, so an unreachable claim (a lying remote node, a reorg-confused daemon, `u64::MAX`) cannot park the status probe. The clamp keeps that height out of the journal. An in-chain sight counts the proof-life ceiling from the baseline a probe records, and a baseline the wallet has not reached would make that wait unmeasurable if it were the one recorded. Only the persisted baseline is bounded; the raw claim still selects between (a) and (b), still rides `RescanRequest.claimed_height`, and still reaches the consumer on the verdict. *(b) `height` ≤ wallet synced height:* refresh already passed that height without observing the spend — path-1 release is unreachable by construction (the FOLLOWUPS stranded-lock wedge). Enqueue a **targeted re-scan** of the window around `height` (the reorg-heal machinery — the wallet's view of that height is stale or divergent); the re-scan re-observes the spend and settles refresh-authoritatively. A failed re-scan **never releases** (F40-R1: release is refresh- or watchdog-authoritative only); it falls through to the F31 resubmit-as-status-query for a fresh definite verdict, and consecutive fruitless daemon-directed re-scans are breaker-bounded (F40-R2, F28/F37 family) → operator alarm. Every exit is verdict, confirmation, or operator alarm — no silent strand, no daemon-steered release. |
 | `Rejected{Malformed}` | Release locks, surface, **one-shot rebuild**: if the rebuilt tx also returns `Malformed`, escalate to operator alarm — two independent builds rejected as malformed is a systematic wallet/daemon rule disagreement, not a bad tx; a third silent build burns fees and multiplies linking-tag artifacts (§7.1). Never loop. |
 | `Rejected{FeeTooLow}` | Release, re-estimate fee, rebuild — **once** (F37; the F28 logic applies verbatim): a second consecutive `FeeTooLow` on the rebuilt tx is a systematic fee-model disagreement (a KAT gap on P2, or sustained pool pressure the wallet's estimate never meets) → operator alarm, never loop. The bound is privacy-load-bearing, not just liveness hygiene: unlike `Malformed`, a fee-driven rebuild can *change the input set* — covering a higher fee may pull in an additional input, so each iteration broadcasts a new tx sharing the original key image **and** revealing a newly co-owned input (F30 linkage plus wallet-clustering, once per loop, under the malicious-relay case of §7.1). Covers static-floor, Phase-D re-gate, and pool-pressure variants; under single-egress this verdict carries proof the tx is in neither pool nor chain, so release is safe. |
 | `Rejected{DoubleSpendConflict}` | Terminal release. A different tx spends the input; refresh will surface which. |
 | `Rejected{StaleRoot}` | Rebuild the **proof** over the same input selection against a fresh root. This constructs the wallet's deferred `ProofStale` path and closes the `fcmp_root_stale` FOLLOWUPS criterion (its named reopen was exactly "a daemon-side stale-root signal"). |
 | `Rejected{ReferenceTooRecent}` | Timed backoff (min-age is 5 blocks; the wallet built too close to the tip), then resubmit-same-bytes. |
 | `Rejected{ReferenceNotFound}` | Sync-gated: consult daemon health context (§5.2). If the daemon is behind, wait for sync and resubmit-same-bytes; if the daemon is synced and still does not know the reference, treat as `StaleRoot`. Own-daemon-gated branching per §7.2. |
+| `Rejected{ConsensusRule, row}` | Terminal release; no rebuild (the bytes are sound; the chain's state refused them under the named row, and a rebuild meets the same state). BD-Q3 Rule 2 holds the record and its funding to the end date; the wallet records the row (`TerminalCause::ConsensusRule { row }`, pending-post v14) and tells its user "the chain refused it under consensus rule CEN-J15". A premise that moved under the refusal (a competing spend, a duplicate, a stale root) is classified first, in the race order of §3.1 and with its concealment, so a double spend the door refuses as CEN-I7 is still `DoubleSpendConflict`; the row is the verdict only when nothing else moved. Added at 3.63 (the flip; Rick, 2026-10-29): before it, a chain-bound refusal at the pool's commit reached the wallet as an internal fault, a retryable class, and the wallet resent a post the chain refuses every time. |
 | `Rejected{Unrecognized}` | Release + one-shot rebuild (the F28 loop-breaker applies). |
-| `Rejected{JoinMarketUnsupported}` | Terminal release, no rebuild. Phases A–C passed. Phase D's mutable re-checks do not run: the C++ commit shim cannot reparse these bytes and returns before `shekyl_submit_commit_tx` (`ffi_shim.rs`, FND-20). The capability refusal is the verdict, including when a key-image or fee race would also have refused — retrying the same bytes against this daemon fails the same way. Identity short-circuits (`AlreadyInChain`, the owner's `AlreadyInPool`) return before commit and are not this cause. The pending stake is withdrawn and its funding is spendable again; staking resumes against a daemon that admits a JoinMarket. Deleted with the C++ commit shim (`DEL-008`). |
 | `Err(RpcError)` | The ambiguous case. Hold locks, TTL, resubmit-same-bytes; the next definite verdict resolves. |
 
 **Idempotent resubmission is the status query.** Under identity-first
@@ -378,14 +381,14 @@ privacy. Binding invariant, enforced by PR-4 and tested in §10 item 8:
      remembers.)
    - *Confirmed-absent:* a tx that is evicted and never confirms must not
      strand its outputs in awaiting-confirmation forever. Release is wired
-     to the watchdog horizon (§5.3), not a separate timer: the watchdog's
-     resubmit rung converts absence into a definite verdict (re-offered →
-     the wait restarts on fresh relay; `Rejected{*}` → release per this
-     table; ref aged past the FCMP++ max-age window → `StaleRoot`, a
-     natural terminal for same-bytes liveness), and refresh releases on
-     N-of-horizon observed absence when no definite verdict is reachable
-     (daemon unreachable → the alarm rung carries the decision to the
-     operator). No path strands silently: every exit is
+     to the watchdog's probe (§5.3), not a separate timer. The status
+     probe runs on the next chain advance and converts absence into a
+     definite verdict (re-offered → the wait restarts on a fresh hold;
+     `Rejected{*}` → release per this table; ref aged past the FCMP++
+     max-age window → `StaleRoot`, a natural terminal for same-bytes
+     liveness). When the daemon cannot be asked, the alarm rung carries
+     the decision to the operator. No block-count timer releases by
+     itself. No path strands silently: every exit is
      release-by-verdict, release-by-confirmation, or operator alarm.
 3. **Release is not rebuild authorization.** Releasing outputs makes them
    selectable; it does not authorize an automatic rebuild. For a tx that
@@ -393,12 +396,13 @@ privacy. Binding invariant, enforced by PR-4 and tested in §10 item 8:
    new spend of the same outputs bears the same key image, so the
    escape-ladder ordering (§5.3) and §7.4's
    automatic-actions-are-privacy-neutral rule govern what happens *after*
-   release. The confirmed-absent horizon is doing for verdict-less
+   release. The confirmed-absent probe is doing for verdict-less
    ambiguity exactly what the §7.1 cool-off knob does for terminal
    verdicts under multi-daemon — the two knobs are siblings, not the same
    knob: verdict-based release is immediate under the single-egress
-   theorem (cool-off 0 at V3.0); absence-based release always waits the
-   horizon because there is no verdict to trust.
+   theorem (cool-off 0 at V3.0); absence is asked on the next chain
+   advance, and the release waits for a definite terminal verdict on
+   that probe.
 
 ---
 
@@ -638,7 +642,7 @@ arithmetic (min 5 / max 100, from config); fee floor against snapshot params;
 weight rule (the *limit* is a compile-time constant on Shekyl —
 `get_transaction_weight_limit` reduces to `get_min_block_weight`, which
 returns `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` unconditionally,
-`cryptonote_basic_impl.cpp:66-71` — so unlike the fee floor it needs no
+`cryptonote_basic_impl.cpp` at `ac3836de90` (lines 66–71) — so unlike the fee floor it needs no
 Phase-D re-check); the archival-arm battery for bond-post / serve-credit txs
 (§8.7.1 — already Rust in `shekyl-archival-retention`, called natively); then
 the expensive cryptography natively — FCMP++ membership (`shekyl-fcmp`, the
@@ -942,38 +946,48 @@ de-risking the multi-daemon reopen in advance.
 
 ### 5.2 Daemon-side guarantees (each source-verified)
 
-1. **Periodic re-relay.** `core::on_idle` (`cryptonote_core.cpp:1597`) →
-   `relay_txpool_transactions()` (`:1105-1145`) → `get_relayable_transactions`
-   (`tx_pool.cpp:806-879`). The insert tail sets
-   `last_relayed_time = max()` (`:313-322`), making a committed tx
-   immediately eligible even if shim 3's nudge is lost. Bound: re-relay
-   stops at half the pool lifetime (`:851-852` — 1.5 days of the 3-day
-   `CRYPTONOTE_MEMPOOL_TX_LIVETIME`).
+1. **Origin re-send, then residence.** The relay re-sends the node's own
+   transaction only on its embargo: each stem send arms a deadline of
+   `origin_retry_secs` (1,148 s at the shipped terms); the first fire
+   re-stems to the source's alternate, the second fluffs and publishes
+   (`shekyl-relay` `graph/embargo.rs`). An origin that never sent is
+   re-planned every 300 s, at once on turning synchronised and at once on
+   a new session. There is no periodic re-broadcast after publication.
+   The pool then holds the transaction until its reference leaves the
+   window (`REFERENCE_BLOCK_MAX_AGE`, CEN-M10, `shekyl-mempool`
+   `evict.rs`) or a cheaper-first eviction makes room under the cap; it
+   has no lifetime of its own. A transaction an honest wallet dispatched
+   therefore stays submittable at least `DISPATCHED_PROOF_LIFE`
+   (`MAX_AGE − REBUILD_AT`, 50 blocks) and at most
+   `PROOF_VALIDITY_HORIZON` (94 blocks) past dispatch
+   (`shekyl-curve-tree` `reference.rs`); a resubmit after that is
+   refused `StaleRoot`.
 2. **Dandelion++ embargo fail-safe — the irreducible kernel.** The
-   black-holed-stem case (honest daemon stems to one adversarial peer which
-   drops the tx) is the one failure no wallet policy reliably fixes: wallet
-   resubmission re-enters stem and can hit the same adversarial peer; only
-   the origin's own embargo timer guarantees eventual broadcast. Mechanism,
-   verified: public-zone dispatch of a `local` tx runs `dandelionpp_notify`
-   (`levin_notify.cpp:876-893`), which calls `on_transactions_relayed(stem)`
-   **before** the stem send (`:562`) → `set_relayed` arms
-   `last_relayed_time = now + poisson(embargo)` as a *future deadline* for
-   `dandelionpp_stem` entries (`tx_pool.cpp:909-913`); failed sends fluff
-   immediately (`levin_notify.cpp:578-582`); stem entries past deadline are
-   routed into the public fluff request by the periodic loop
-   (`tx_pool.cpp:828-836` → `cryptonote_core.cpp:1127-1141`), re-arming on
-   each attempt (`tx_pool.cpp:868-877`); a fluff echo arriving first cancels
-   the embargo through ordinary ingestion. **Noise zones (Tor/i2p)
-   intentionally do not arm the embargo** (`levin_notify.cpp:850`,
-   `tx_pool.cpp:914-915`) — covert-channel re-send cadence covers them,
-   and arming would fluff over clearnet, deanonymizing the origin.
-   Recorded here so nobody "fixes" the noise-zone branch into arming —
-   but the consequence is not a parenthetical: over anonymity networks
-   the black-hole guarantee is **deployment-dependent**, a named threat
-   entry (§7.5), and the wallet watchdog horizon must be sized for it.
-   Shim 3 enters through the same `relay_transactions` entry point, so
-   arming is **inherited, not re-implemented**; PR-3 carries the test
-   obligation (§10.4).
+   black-holed-stem case (an honest node stems to one adversarial peer
+   which drops the transaction) is the one failure no wallet policy
+   reliably fixes: a wallet resubmission re-enters stem and can hit the
+   same peer. Only the embargo guarantees the transaction is eventually
+   published. Mechanism, in `shekyl-relay` `graph/embargo.rs`: every stem
+   send arms a deadline; the first fire re-stems to the source's frozen
+   alternate; the second fire, or a first fire with no live alternate,
+   fluffs to every session but the source and marks the transaction
+   shown. An origin's deadline is `origin_retry_secs` (1,148 s at the
+   shipped terms, pinned in that crate's embargo tests); a relay position
+   draws its connector's memoryless embargo. An origin that never sent
+   is held unsent and re-planned every 300 s (`NEVER_SENT_RETRY_MS`),
+   and at once when the node turns synchronised or a session is
+   established. There is no periodic re-broadcast after publication, and
+   the pool does not re-relay: residence ends when the reference leaves
+   the window (item 1). No shipped configuration leaves the embargo
+   unarmed. Under an anonymity-network eclipse the fluff still lands in
+   the eclipsed outbound set, so the wallet watchdog's operator-alarm
+   rung remains the sole effective backstop there (§7.5). The daemon
+   records when it armed an origin and, when that state is read,
+   reports the hold as `held` or `held_overdue` against
+   `origin_retry_secs` times its fires. A missing origin row is
+   `untracked`, not a hold. The wallet is told that judgment and holds
+   no relay constant. The wallet cannot substitute for this
+   kernel.
 3. **Honest health context.** The wallet's policy needs to distinguish "tx
    stuck" from "daemon has no peers to relay to" and "daemon is behind."
    The existing info surface's peer/connection counts and
@@ -991,14 +1005,16 @@ de-risking the multi-daemon reopen in advance.
   claims.
 - **Chain-confirmation keying.** The watchdog's success condition is
   confirmation observed via refresh — never a daemon relay claim.
-- **Horizon bound (F35).** The escape horizon must fire **before the
-  1.5-day re-relay cutoff** (§5.2 item 1), not after: between 1.5 days and
-  the 3-day eviction a pool tx is held-but-no-longer-re-relayed, so a
-  watchdog that fires inside that window is inspecting a tx the daemon has
-  already stopped offering. And the horizon must be sized for the
-  anon-network eclipse case (§7.5) — where the watchdog is the *only*
-  backstop — not only for the clearnet-stem case where the embargo also
-  protects.
+- **Block ceiling (F35).** The ceiling must fire **inside the
+  dispatched proof's life** (§5.2 item 1): past `DISPATCHED_PROOF_LIFE`
+  the pool may already have removed the transaction and the
+  resubmit-same-bytes probe is refused `StaleRoot`, so a later watchdog
+  can no longer re-offer the bytes it holds. The default is that life
+  minus one block (`PROBE_REFRESH_LAG_BLOCKS`, **Assumption — never
+  measured**: the one block the proof-life derivation already leaves for
+  a block that lands between the wallet's check and the daemon's
+  verdict). Overdue is the daemon's judgment, returned as relay state,
+  and it is not a term of this ceiling.
 - **Privacy-tiered escape ladder.** The timeout is itself an attack surface:
   an adversary who can delay confirmation (censoring miner, eclipse) can
   force the wallet past its threshold on demand; if the escape auto-rebuilds
@@ -1008,17 +1024,36 @@ de-risking the multi-daemon reopen in advance.
      daemon dedups; zero new network artifact).
   2. **Operator alarm** — a human decides.
   3. **Deliberate, alarmed rebuild** — never automatic on timeout.
-- **The ladder branches on presence (round-6 minor b).** Resubmit-same-bytes
-  is *inert* for a stuck-but-present tx: it returns `AlreadyInPool` (no
-  relay pulse, F31) and tells the wallet nothing it didn't know. The rungs
-  are therefore presence-conditional, with one resubmit acting as the
-  probe: **absent** (evicted / never landed) → the resubmit *is* the remedy,
-  re-offering through full admission and fresh relay, and the wait restarts;
-  **present-but-unconfirmed past horizon** → skip straight to the alarm rung
-  — repeating the resubmit is pointless by construction, and the eclipse
-  case (§7.5) lands exactly here. Terminal verdicts on the probe
-  (`AlreadyInChain`, `DoubleSpendConflict`, `Rejected{*}`) resolve the wait
-  per §2.5/§2.6.
+- **The ladder branches on the daemon's relay state.** One function
+  is the alarm policy, called before a probe and again on the sight
+  the probe recorded. A probe that second call asks for waits until
+  the next chain advance. The owner-tier probe returns held,
+  held-overdue, published, untracked, absent, or in-chain. **Unread,
+  held, and published under the lookback** are asked on the tick,
+  including while the daemon is still syncing: a status read is a
+  local relay fact. **Held-overdue** alarms on the tick it is seen.
+  The daemon compared the origin's arm time with its publication
+  budget (`origin_retry_secs` over the origin's fires, the cycle count
+  `RecoveryBudget::for_cap` prices) at the moment the state was read,
+  and the wallet holds no relay constant. Sync does not gate that
+  alarm. **Untracked** (pool-resident, no origin row) alarms the same
+  way: a watchdog probe is at least one block after admit, so it is
+  not the admit race. **Published** measures the fee ladder's lookback
+  (`relay_policy().lookback`, shipped as `RELAY_FLOOR_LOOKBACK`,
+  **Assumption — never measured**) from the height publication was
+  first observed. The first observation does not alarm. Sync gates
+  only that published-unmined alarm. **Absent** resubmits, and that
+  resubmit is the remedy; the next advance asks about the fresh hold.
+  **In chain** waits until the proof-life ceiling, then asks again.
+  Under the ceiling it does not read health. The ceiling is the last
+  moment the same bytes are still submittable, not the first moment
+  the wallet may ask. Block counts and the daemon's clock stay on
+  their own questions. A withheld-blocks stall is the
+  cadence chain-progress watchdog (`CHAIN_STALL_HORIZON`, 30 minutes, the
+  Poisson tail of fifteen missed 120 s targets). It is a wall clock on
+  the tick. This ladder leaves that stall where it is. Terminal verdicts
+  on the probe (`AlreadyInChain`, `DoubleSpendConflict`, `Rejected{*}`)
+  resolve the wait per §2.5/§2.6.
 - **Resubmit is a status query, not a relay trigger (F31, source-verified).**
   An in-pool resubmit early-returns `AlreadyInPool` at Phase B, before
   shim 3 — and the old path behaves identically
@@ -1133,7 +1168,7 @@ with trust classification:
 | Current vs target height | `ReferenceNotFound` sync-gating; watchdog | trusted | **untrusted** — a lying sync height flips backoff/terminal at will |
 | Fee params (fee-per-byte, quantization mask) | fee estimation; the `FeeTooLow` re-estimate rung | trusted | **untrusted** — a lying fee oracle griefs: overpay, or an induced `FeeTooLow` loop (bounded by the F37 loop-breaker) |
 | Curve-tree roots / chain view consumed at proof-construction time | tx builder (`shekyl-tx-builder`) | trusted | **untrusted** — a lying chain view yields proofs honest daemons reject (`StaleRoot`-shaped griefing); it cannot forge membership, since consensus verifies against canonical roots |
-| `AlreadyInChain.height` (F40) | lock release-path routing (§2.5) | trusted (but R1/R2-bounded even here) | **untrusted** — but damage-capped in both directions: lie-high routes to path-1 waiting, released by the §2.6 confirmed-absent watchdog horizon (bounded liveness cost); lie-low routes to a targeted re-scan that finds nothing, **never releases** (F40-R1), falls through to the F31 status query, and is breaker-bounded against repetition (F40-R2 — a lie-low spam campaign is a wallet-work amplifier otherwise; the breaker converts it to an operator alarm). Neither lie can force a linkage event: the lock is placed in **both** branches, so no lie makes the inputs selectable. Categorically a *metadata* row, not a verdict row — the verdict (`AlreadyInChain` itself) is the §7.1-class claim; the height only routes its release |
+| `AlreadyInChain.height` (F40) | lock release-path routing (§2.5) | trusted (but R1/R2-bounded even here) | **untrusted** — but damage-capped in both directions: lie-high routes to path-1 waiting, and the status probe still runs, because an unread sight does not read the baseline, so the claim cannot park it (bounded liveness cost); the persisted baseline is clamped to a height the wallet has reached. Lie-low routes to a targeted re-scan that finds nothing, **never releases** (F40-R1), falls through to the F31 status query, and is breaker-bounded against repetition (F40-R2 — a lie-low spam campaign is a wallet-work amplifier otherwise; the breaker converts it to an operator alarm). Neither lie can force a linkage event: the lock is placed in **both** branches, so no lie makes the inputs selectable. Categorically a *metadata* row, not a verdict row — the verdict (`AlreadyInChain` itself) is the §7.1-class claim; the height only routes its release |
 
 Round 4 introduced the health-context consumption; F32 caught that the
 then-current rider enumerated only the *deleted* relay fields
@@ -1185,6 +1220,9 @@ privacy-neutral ones (resubmit-same-bytes). Everything linkage-bearing
 > forced fluff into the same eclipsed outbound set rather than not existing —
 > so the conclusion is unchanged: the wallet watchdog's operator-alarm rung
 > remains the sole effective backstop there, and obligations 1–2 stand.
+> Once the embargo has fluffed, that backstop is the published-unmined
+> alarm, a block count. An origin still holding past its budget is
+> `held_overdue`, judged on the daemon's clock.
 
 The F20 resolution rests on the Dandelion++ embargo being *the* mechanism no
 wallet policy can substitute (§5.2 item 2). That mechanism **does not run
@@ -1209,14 +1247,16 @@ That is an acceptable end state (the alarm is precisely the "a human
 decides" rung, and eclipse is not silently survivable in any design), but
 it carries two named obligations:
 
-1. **The watchdog horizon is sized for this case**, not only for the
-   clearnet-stem case where the embargo also protects (§5.3's horizon
-   bound: fire before the 1.5-day re-relay cutoff, well inside the 3-day
-   pool lifetime).
-2. **The escalation for present-but-unconfirmed goes straight to alarm**
-   (§5.3's presence branch) — the resubmit rung is inert here by
-   construction, and burning horizon-multiples on it delays the only
-   effective response.
+1. **The block ceiling fires inside the dispatched proof's life**
+   (`DISPATCHED_PROOF_LIFE` minus one block), so a probe can still
+   re-offer the bytes. That ceiling is when an in-chain observation
+   is asked again. A fluffed transaction that stays unmined alarms at
+   the fee ladder's lookback, measured from the height publication
+   was first observed.
+2. **An origin still unpublished past the daemon's own budget alarms as
+   held-overdue.** The daemon judges that when the state is read. A
+   missing origin row is untracked and alarms the same way. The wallet
+   does not time either, and neither alarm waits on a block count.
 
 Cross-boundary honesty: on clearnet the guarantee is "the origin itself
 eventually fluffs" (mechanism); over noise zones it is "the operator is
@@ -1364,7 +1404,7 @@ called at `:3614`; funding spend inputs run the regular K battery over
 | # | Check | Site | Disposition |
 | --- | --- | --- | --- |
 | BP1 | Hybrid pubkey length == `PQC_HYBRID_SINGLE_KEY_LEN` | `:4187-4191` | **A** — ⚠ resolved (PR-4b): `shekyl-wire` `BondPost::read`/`validate` pin the exact canonical length, so a `ParsedSubmission` cannot carry a violation; `Malformed` at Phase A |
-| BP2 | `p_canonical_id` recomputation from pubkey | `:4193-4205` | **C** — already Rust behind `shekyl_archival_p_canonical_id_from_pubkey`; engine calls natively (`p_canonical_id_from_hybrid_pubkey`); `Malformed` |
+| BP2 | `p_canonical_id` recomputation from pubkey | `:4193-4205` | **C** — already Rust behind `shekyl_archival_p_canonical_id_from_pubkey` (deleted, `DEL-008`); engine calls natively (`p_canonical_id_from_hybrid_pubkey`); `Malformed` |
 | BP3 | Bond record does not already exist (DB) | `:4207-4208`, consumed at `bond_post.rs:73-75` | **B fact + D re-check** — a bond-post block landing during C flips it; conflict → `DoubleSpendConflict` (claim-slot leg) |
 | BP4 | Economic battery: post-kind, holdings-shape consistency, credit/debit exclusivity, debit == 0, **bond-floor equality** | `:4212-4226` → `verify_join_market_bond_post`, `bond_post.rs:40-78`; floor per `bond_floor.rs:19-30` | **C** — already Rust (`shekyl-archival-retention`), native call; violations → `Malformed` |
 | BP5 | `pqc_auths[i].hybrid_public_key == bond.hybrid_public_key` | `:3620-3626` | **A** — structural cross-field check; `Malformed` |
@@ -1451,12 +1491,12 @@ needs a discriminating argument, not a line number.
 | UB1 | Vin carries **no** `bond_spend_pk` (§9.11 coupling belt — only JoinMarket carries the debit authorizer; a vin-borne key would be a forgeable self-assertion) | `"vin carries a bond_spend_pk"` belt | **A** — `shekyl-wire` refuses the field on `BondPostKind::Other` at parse, so a `ParsedSubmission` cannot carry a violation; the belt is retained for non-parse callers; `Malformed` |
 | UB2 | Bond record **exists** for `p_canonical_id` (the inverse of BP3) **and its `bonded_total_atomic`** — the balance, not just the row | `get_archival_bond_value` (Release arm) | **B facts; the D re-check is on the BALANCE.** Phase B/C requires presence (absent → `Malformed`). Phase D compares the fresh total against the vin's `bond_debit` — gone, zeroed by a competing exit, or raised by a credit → `DoubleSpendConflict`. Presence is *not* the D predicate: the row survives an exit, so a presence-keyed check is inert (see the exit-shape note below) |
 | UB3 | Cold authority: the record commits a canonical-length `bond_spend_pk`, **and** the bond slot's `pqc_auths` pubkey equals it | `archival_cold_authority_pin(record, post_kind, bond_debit, auth_pubkey, "Release")` (2026-09-11; was `archival_debit_auth_pin(record, auth_pubkey, "Release")` — same pin, the selector moved into Rust) | **C over a B fact** — native `cold_authority_pin` (`shekyl-archival-retention`), the same composed gate the block path calls over FFI: `requires_cold_authority` (Release is **unconditional** there, which is why this row sits ahead of UB9's debit-term guards) then the pin; both pin arms `Malformed`. A record committing **no** key authorizes nothing — fail closed, never an identity-key fallback |
-| UB4 | Per-shard last-served epochs, gathered by the scan `HoldingsKind::last_served_scan()` selects (`HeldShards` / `AllShards`) | `shekyl_archival_last_served_scan` → `archival_bond_{all_,}last_served_epochs` | **B fact, no D re-check** (see the Phase-D scope note) — the shim echoes the scan discriminant it ran and the engine pins the echo against the record's `holdings_kind`; a mismatch is `ShimContract`, never a fold (see the permissive-direction note) |
+| UB4 | Per-shard last-served epochs, gathered by the scan `HoldingsKind::last_served_scan()` selects (`HeldShards` / `AllShards`) | `shekyl_archival_last_served_scan` (deleted, `DEL-008`) → `archival_bond_{all_,}last_served_epochs` | **B fact, no D re-check** (see the Phase-D scope note) — the shim echoes the scan discriminant it ran and the engine pins the echo against the record's `holdings_kind`; a mismatch is `ShimContract`, never a fold (see the permissive-direction note) |
 | UB5 | Whole-record cooldown anchor = the fold of UB4's slice; release cooldown elapsed vs the current settlement epoch | `whole_record_last_served` → `release_cooldown_elapsed` | **C**, no D re-check — native fold; `Malformed`. **Contingent** in both directions: a serve landing during C re-closes the window (see the Phase-D scope note), and a later resubmission of the same bytes can pass once the window reopens |
 | UB6 | Slash-settlement watermark (`get_archival_last_slash_epoch`), `u64::MAX` = nothing settled | `get_archival_last_slash_epoch` | **B fact, no D re-check** — the watermark only advances, so a Phase-B read can only be *behind* the truth, which fails **closed**; `Malformed`, contingent |
 | UB7 | Interval log not full (`record_bad_interval_count < MAX_BOND_BAD_INTERVALS`) — a full log makes the tx unconnectable, so it is unverifiable | `record.bad_intervals.size()` → `bond_post.rs` | **B fact** — no D re-check: the count only grows, and growth can only keep it full; `Malformed` |
-| UB8 | Current settlement epoch = `settlement_epoch_at_height(chain_height)` | `shekyl_archival_settlement_epoch_at_height` | **C over the existing `chain_height` fact** — no new fact. **The raw `m_db->height()` count is fed to an "at height" helper deliberately**: that is the consensus shape (the same count-into-height posture the ref-age window documents), and the engine mirrors it rather than correcting it |
-| UB9 | Economic battery: post-kind, `bond_credit == 0`, floor equality on the post-connect state, full-exit (`bonded_total_atomic == 0`), `bond_debit ==` the record's whole balance, UB5/UB6/UB7 | `shekyl_archival_verify_release_bond_post` → `verify_release_bond_post` | **C** — already Rust, native call; the identical function the C++ oracle dispatches to, so the two paths cannot diverge semantically |
+| UB8 | Current settlement epoch = `settlement_epoch_at_height(chain_height)` | `shekyl_archival_settlement_epoch_at_height` (deleted, `DEL-008`) | **C over the existing `chain_height` fact** — no new fact. **The raw `m_db->height()` count is fed to an "at height" helper deliberately**: that is the consensus shape (the same count-into-height posture the ref-age window documents), and the engine mirrors it rather than correcting it |
+| UB9 | Economic battery: post-kind, `bond_credit == 0`, floor equality on the post-connect state, full-exit (`bonded_total_atomic == 0`), `bond_debit ==` the record's whole balance, UB5/UB6/UB7 | `shekyl_archival_verify_release_bond_post` (deleted, `DEL-008`) → `verify_release_bond_post` | **C** — already Rust, native call; the identical function the C++ oracle dispatches to, so the two paths cannot diverge semantically |
 
 **Why UB0 exists, and why it is not redundant with UB3.** The gather that
 produces UB2/UB4's facts runs a per-shard last-served scan — two LMDB seeks
@@ -1678,7 +1718,7 @@ Serve-credit rows (`check_archival_serve_credit_input`,
 | SC5 | `good_through(P, E)` interval semantics (DB) | `:4281-4286` | **B fact + D re-check** — debits during C can flip it |
 | SC6 | Credit deadline `current_height ≤ H_close` | `:4288-4295` | **C** over snapshot height + **D re-check** (height moves during C); past-deadline → `Malformed` (permanent for these bytes) |
 | SC7 | Seal hash at H_seal; H_fire derivation; shard-in-holdings at H_fire; registry segment; leaf-layer scalars | `:4297-4341` | **B facts** (historical state; deep-reorg drift is block-validation-backstopped) → **C** decision |
-| SC8 | Serve-credit vin verification over wire bytes + ctx (incl. vin wire-tag pin) | `:4343-4376` → `shekyl_archival_verify_serve_credit_vin` | **C** — already Rust, native call; the wire-tag check folds into Phase A's parse (`shekyl-wire` owns the dense tag); `Malformed` |
+| SC8 | Serve-credit vin verification over wire bytes + ctx (incl. vin wire-tag pin) | `:4343-4376` → `shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`) | **C** — already Rust, native call; the wire-tag check folds into Phase A's parse (`shekyl-wire` owns the dense tag); `Malformed` |
 
 Classification rule for archival premise failures: **state conflicts**
 (BP3, SC2 — someone else consumed the claim slot) → `DoubleSpendConflict`;
@@ -1700,7 +1740,7 @@ nobody files it as a hole later.
 The §8.7.1 matrix (F36) predates the C-1 emission arm; these rows extend it
 with the same discipline. Sources: `ver_non_input_consensus`'s emission
 branch (`tx_verification_utils.cpp`, `verCtSemanticsEmission` →
-`ct_semantics.cpp:348-370`) and `check_tx_inputs`' `is_archival_emission_tx`
+`ct_semantics.cpp` at `ac3836de90` (lines 348–370)) and `check_tx_inputs`' `is_archival_emission_tx`
 branch (`blockchain.cpp:3801-4110`). The semantic battery is already Rust
 (`shekyl-archival-retention::emission_verify` — the witness-minting
 `emission_vin_verify_claims` / `_backing` / `_auth` + the assembling
@@ -1713,7 +1753,7 @@ branch (`blockchain.cpp:3801-4110`). The semantic battery is already Rust
 | EV2 | Loud vout amount sum does not overflow | same branch → `shekyl_checked_sum_amounts` | **A** — wire `check_money_overflow` parity sum |
 | EV3 | `total_reward > 0` (Σ loud vouts non-zero) | same branch | **A** — engine static (Phase A, emission kind) |
 | EV4 | CT semantics: canonical Bp+ layout; balance `Σ pseudoOuts + total_reward = Σ out_masks + fee` (mint rides the debit slot); Bp+ verify | `verCtSemanticsEmission` → `verArchivalCtBalanceAndRange` | **C** — native `verify_bond_post_ct_balance` with `BondTerm::Debit(total_reward)` + the shared Bp+ leg |
-| E1 | Vin `canonical_bytes` parse → (`P_canonical_id`, claimed epochs, `1..=MAX`) | `blockchain.cpp:3812` → `shekyl_archival_emission_vin_extract` | **C** — native `emission_wire` decode; Phase A pre-parses for the probe key (parse failure → `Malformed`) |
+| E1 | Vin `canonical_bytes` parse → (`P_canonical_id`, claimed epochs, `1..=MAX`) | `blockchain.cpp:3812` → `shekyl_archival_emission_vin_extract` (deleted, `DEL-008`) | **C** — native `emission_wire` decode; Phase A pre-parses for the probe key (parse failure → `Malformed`) |
 | E2 | Emission slot's `pqc_auths` pubkey derives the vin's `P_canonical_id` | `:3830-3845` | **A** — structural cross-field (BP2/BP5 analogue, same canonical-id function); `Malformed` |
 | E3 | Reference block exists + age window — **required even with zero fee inputs** (the backing proof verifies against this root) | `:3865-3886` | engine Phase C — Emission joins the spending-shape reference arm (`ReferenceNotFound` / `ReferenceTooRecent` / `StaleRoot`) |
 | E4 | `curve_trees_tree_depth ∈ [1, current]` | `:3890` | engine Phase C (row-K10 shape) → `StaleRoot` |
@@ -1767,9 +1807,9 @@ completeness check.
 
 | Site | What |
 | --- | --- |
-| `src/cryptonote_core/tx_pool.h:677` | member declaration |
-| `src/cryptonote_core/tx_pool.cpp:161-167` | resubmit gate (defect 0.2) |
-| `src/cryptonote_core/tx_pool.cpp:764` | insert on stuck-sweep |
+| `src/cryptonote_core/tx_pool.h` | member declaration |
+| `src/cryptonote_core/tx_pool.cpp` | resubmit gate (defect 0.2) |
+| `src/cryptonote_core/tx_pool.cpp` | insert on stuck-sweep |
 
 Re-verified at round 6 (minor c): the grep returns **exactly these three
 sites** — no stats getters, serialization, or RPC readers exist. The member
@@ -1781,17 +1821,17 @@ deletes clean. PR-5's re-grep remains the backstop.
 | --- | --- |
 | `src/cryptonote_core/tx_sanity_check.{h,cpp}` | both overloads |
 | `src/cryptonote_core/CMakeLists.txt:34` | build entry |
-| `src/rpc/core_rpc_server.cpp:53`, `:1153` | include + only production call |
+| `src/rpc/core_rpc_server.cpp`, `:1153` | include + only production call |
 | `src/wallet/wallet2.cpp:55` | **dead include** (no call site) — drops with the include sweep |
 
 ### 9.3 Legacy submit endpoint
 
 | Site | What | Disposition |
 | --- | --- | --- |
-| `src/rpc/core_rpc_server.cpp:1044-1143` | `on_send_raw_tx` | delete (PR-5) |
-| `src/rpc/core_rpc_server.h:113-114`, `:199` | route maps + declaration | delete |
-| `src/rpc/core_rpc_server_commands_defs.h:557` | `COMMAND_RPC_SEND_RAW_TX` epee defs | delete |
-| `src/rpc/core_rpc_ffi.cpp:198-199` | `DJSON` legacy-route dispatch entries | delete |
+| `src/rpc/core_rpc_server.cpp` | `on_send_raw_tx` | delete (PR-5) |
+| `src/rpc/core_rpc_server.h`, `:199` | route maps + declaration | delete |
+| `src/rpc/core_rpc_server_commands_defs.h` | `COMMAND_RPC_SEND_RAW_TX` epee defs | delete |
+| `src/rpc/core_rpc_ffi.cpp` | `DJSON` legacy-route dispatch entries | delete |
 | `rust/shekyl-daemon-rpc/src/server.rs:98-103`, `handlers/json.rs:70` | axum proxy routes for the legacy endpoint | replaced by the native typed route (PR-3); deleted PR-5 |
 | `rust/shekyl-rpc-client/src/lib.rs:191-`, `:488-522` | `TxRelayResponse` + string-keyed `publish_transaction` | replaced by typed verdict (PR-4) |
 | `src/wallet/wallet2.cpp:196`, `:7681-7690` | legacy C++ wallet caller (`get_text_reason`, `commit_tx`) | ports to the new endpoint as a minimal epee marshaling shim (transport-only per rule 20); its richer error text comes from the verdict cause |
@@ -1884,23 +1924,30 @@ enumeration above is the complete submit surface.
    **`FeeTooLow` bounded retry** (F37: second consecutive `FeeTooLow` on
    the rebuilt tx → alarm, no third build); watchdog escape-ladder ordering
    (resubmit precedes alarm precedes rebuild; rebuild never fires without
-   the alarm rung) and **presence branching** (round-6 minor b:
-   present-but-unconfirmed past horizon goes straight to alarm; absent
-   re-offers). Awaiting-confirmation invariant (F14, §2.6): **restart
-   mid-await → outputs still excluded from selection** (persistence leg);
-   **evicted-never-confirmed → outputs released after the watchdog
-   horizon**, via verdict where reachable and via observed-absence
-   otherwise (confirmed-absent leg); confirmed-present → refresh clears to
-   spent-final. *Watchdog-execution remainder landed 2026-07-05
-   (`feat/submit-lifecycle-driver`), driven through the §5.3
-   `SubmitLifecycleDriver` over a hermetic `StubHost`/`StubDaemon`:*
-   escape-ladder ordering (`probe_precedes_alarm_present_past_horizon`,
-   `alarm_is_edge_triggered_and_probe_not_repeated`), presence branching
-   (`absent_reoffer_restarts_the_wait`), confirmed-absent release
+   the alarm rung) and **presence branching** (round-6 minor b, restated
+   2026-11-06 on the daemon's relay state: the status probe runs below
+   the ceiling, held-overdue and untracked alarm on the tick they are
+   seen, published-unmined is measured from the first observation of
+   publication, absent re-offers and is asked again, in-chain waits
+   until the proof-life ceiling). Awaiting-confirmation invariant
+   (F14, §2.6): **restart mid-await → outputs still excluded from
+   selection** (persistence leg); **evicted-never-confirmed → outputs
+   released after a terminal probe**, via verdict where reachable and via
+   observed-absence otherwise (confirmed-absent leg); confirmed-present →
+   refresh clears to spent-final. *Watchdog-execution remainder landed
+   2026-07-05 (`feat/submit-lifecycle-driver`), driven through the §5.3
+   `SubmitLifecycleDriver` over a hermetic `StubHost`/`StubDaemon`, and
+   the presence names moved with the relay-state ladder:*
+   escape-ladder ordering (`probe_precedes_the_held_overdue_alarm`,
+   `held_overdue_alarms_once_and_does_not_probe_again`), presence branching
+   (`absent_reoffer_is_held_and_asked_again`,
+   `published_lookback_runs_from_the_first_observation`,
+   `in_chain_waits_until_the_proof_life_ceiling`), confirmed-absent release
    (`terminal_probe_releases_confirmed_absent`), retryable-rejection alarm
    (`retryable_rejection_alarms_needs_rebuild`), restart degradation
    (`missing_bytes_degrade_probe_to_alarm`), health gating
-   (`peerless_daemon_alarms_without_probing`, `syncing_daemon_waits`,
+   (`peerless_daemon_alarms_without_probing`, `syncing_daemon_still_probes`,
+   `published_unmined_waits_while_unsynced`,
    `health_failure_makes_no_decision`), and held-bytes pruning
    (`held_bytes_pruned_on_confirmation`).
 9. **Conceal constant-work (F41), one obligation per enforcement layer

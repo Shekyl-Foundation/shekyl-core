@@ -16,10 +16,12 @@ use shekyl_daemon_rpc::submit::{
     ChainSource, DaemonTxVerifier, RustPoolShim, ShimFault, SubmitCaller, SubmitEngine,
 };
 use shekyl_mempool::Pool;
-use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_rpc_types::{PoolRelay, RejectCause, SubmitVerdict};
 use shekyl_types::UnixSeconds;
 
+use crate::chain_drive::RELAY_FEE_REPRICE_STEPS;
 use crate::pool_door_tests::{matured, paying_the_floor, AT};
+use crate::scenario_shard::FILL_FROM_COINBASE;
 use crate::schedule::ChainRules;
 use crate::test_support::{h, tmp};
 
@@ -47,10 +49,61 @@ pub(crate) fn hex(tx: &shekyl_wire::Transaction) -> String {
     tx.serialize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// A spend paying the floor is accepted and held by the pool, not public
-/// (the engine's own submit is a relay origination); the same bytes again
-/// are `AlreadyInPool`, the identity the shim's facts carry; a spend paying
-/// one atomic unit is refused on its fee.
+/// The pool the submit shim shares with the ingest service keeps admitting
+/// after a panic poisoned its lock: the service takes such a lock back, and
+/// a shim that faulted on it would refuse every later submit for good (the
+/// review of #1165, M7). Red edit: the shim maps a poisoned lock to a fault.
+#[tokio::test]
+async fn a_poisoned_pool_still_admits() {
+    let (mut scenario, mined) = matured("pool-poisoned").await;
+    let paid = paying_the_floor(&mut scenario, &mined, 0).await;
+    let path = tmp("pool-poisoned-pool");
+    let verdict = scenario
+        .with_store(|store, rules| {
+            let chain = Store { store, rules };
+            let pool = chain
+                .read(|snapshot, rule_set| {
+                    Pool::open(
+                        &path,
+                        shekyl_types::UnixSeconds::from_raw(1),
+                        &SnapshotView::new(snapshot),
+                        rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("open")
+                    .0
+                })
+                .expect("a snapshot");
+            let pool = Arc::new(std::sync::Mutex::new(pool));
+            let poisoner = Arc::clone(&pool);
+            let panicked = std::thread::spawn(move || {
+                let _held = poisoner.lock();
+                panic!("a panic under the pool's lock");
+            })
+            .join();
+            assert!(
+                panicked.is_err() && pool.is_poisoned(),
+                "the lock is poisoned"
+            );
+            let shim = Arc::new(RustPoolShim::new(
+                chain,
+                pool,
+                AdmissionPolicy::GENESIS,
+                || UnixSeconds::from_raw(1),
+                shekyl_network::HARNESS_NETWORK_ID,
+            ));
+            SubmitEngine::new(shim, DaemonTxVerifier).submit(&hex(&paid), SubmitCaller::Owner)
+        })
+        .await;
+    scenario.close().await;
+    assert_eq!(verdict.expect("no engine fault"), SubmitVerdict::Accepted);
+}
+
+/// A spend paying the floor is accepted and held by the pool, not public.
+/// The same bytes again are `AlreadyInPool`. This harness installs no
+/// origin observer, so the facts carry no origin row and the owner is
+/// told `untracked`. A spend paying one atomic unit is refused on its fee.
 #[tokio::test]
 async fn the_engine_submits_through_the_rust_pool_and_its_door() {
     let (mut scenario, mined) = matured("pool-submit").await;
@@ -73,6 +126,7 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
                         shekyl_types::UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -81,27 +135,31 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
                 .expect("a snapshot");
             let shim = Arc::new(RustPoolShim::new(
                 chain,
-                pool,
+                std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
+                shekyl_network::HARNESS_NETWORK_ID,
             ));
             let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
             let first = engine.submit(&hex(&paid), SubmitCaller::Owner);
             let again = engine.submit(&hex(&paid), SubmitCaller::Owner);
             let below = engine.submit(&hex(&cheap), SubmitCaller::Owner);
-            let held = shim.with_pool(|pool| pool.record(&txid)).expect("the lock");
+            let held = shim.with_pool(|pool| pool.record(&txid));
             (first, again, below, held)
         })
         .await;
     assert_eq!(first.expect("no engine fault"), SubmitVerdict::Accepted);
     assert_eq!(
         again.expect("no engine fault"),
-        SubmitVerdict::AlreadyInPool
+        SubmitVerdict::AlreadyInPool {
+            relay: PoolRelay::Untracked,
+        }
     );
     assert_eq!(
         below.expect("no engine fault"),
         SubmitVerdict::Rejected {
-            cause: RejectCause::FeeTooLow
+            cause: RejectCause::FeeTooLow,
+            row: None,
         }
     );
     let held = held.expect("the pool holds the accepted spend");
@@ -109,7 +167,6 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
         !held.public,
         "a submit is an origination: not public until fluffed"
     );
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -141,6 +198,7 @@ async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
                         shekyl_types::UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -148,9 +206,13 @@ async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
                 })
                 .expect("a snapshot");
             let engine = SubmitEngine::new(
-                RustPoolShim::new(chain, pool, AdmissionPolicy::GENESIS, || {
-                    UnixSeconds::from_raw(1)
-                }),
+                RustPoolShim::new(
+                    chain,
+                    std::sync::Arc::new(std::sync::Mutex::new(pool)),
+                    AdmissionPolicy::GENESIS,
+                    || UnixSeconds::from_raw(1),
+                    shekyl_network::HARNESS_NETWORK_ID,
+                ),
                 DaemonTxVerifier,
             );
             (
@@ -163,10 +225,10 @@ async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
     assert_eq!(
         second.expect("no engine fault"),
         SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+            cause: RejectCause::DoubleSpendConflict,
+            row: None,
         }
     );
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -191,7 +253,7 @@ async fn closed_shards_lane(
     let rules = levered_rules();
     let mut scenario = Scenario::open_under(name, FreeHash, rules);
     let mut mined = scenario.mine(first_spending_height().to_raw()).await;
-    let filled = close_shards(&mut scenario, &mut mined, 10, 2).await;
+    let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 2).await;
     let shards: Vec<u64> = filled.closed.iter().map(|c| c.shard.to_raw()).collect();
     let connecting = inside_one_epoch(
         filled
@@ -203,15 +265,7 @@ async fn closed_shards_lane(
         2,
     );
     mine_to(&mut scenario, &mut mined, connecting).await;
-    let floor = scenario
-        .read_chain(|view, _| {
-            let next = Tip::connecting_height(view.tip().expect("tip").as_ref());
-            match shekyl_chain_rules::relay_floor_window(view, next).expect("floors") {
-                shekyl_chain_rules::AtHeight::Recorded(f) => f.into_iter().min().expect("a window"),
-                shekyl_chain_rules::AtHeight::AboveTip => unreachable!("the connecting height"),
-            }
-        })
-        .await;
+    let floor = scenario.connecting_relay_floor().await;
     (scenario, mined, shards, connecting, floor)
 }
 
@@ -225,7 +279,7 @@ fn priced_post(
     post: &shekyl_harness_spender::PostedBond<'_>,
 ) -> shekyl_wire::Transaction {
     let mut fee = crate::archival_driver::FEE;
-    for _ in 0..8 {
+    for _ in 0..RELAY_FEE_REPRICE_STEPS {
         let tx = spender.spend_coinbase_posting(
             wallet,
             shekyl_types::BlockHeight::from_raw(coinbase),
@@ -248,7 +302,7 @@ fn priced_post(
 /// chain's floor, are accepted through the shim — the BP3 record-absent
 /// fact the shim reads off the store, the validator's door at commit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "fills two shards with real proofs; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored join_posts_are_accepted_through"]
+#[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn join_posts_are_accepted_through_the_rust_pool_shim() {
     use crate::archival_driver::ENDPOINT;
     use crate::scenario_archival::{complete_tree, shard_set, Persona};
@@ -285,6 +339,7 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
                         shekyl_types::UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -292,9 +347,13 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
                 })
                 .expect("a snapshot");
             let engine = SubmitEngine::new(
-                RustPoolShim::new(chain, pool, AdmissionPolicy::GENESIS, || {
-                    UnixSeconds::from_raw(1)
-                }),
+                RustPoolShim::new(
+                    chain,
+                    std::sync::Arc::new(std::sync::Mutex::new(pool)),
+                    AdmissionPolicy::GENESIS,
+                    || UnixSeconds::from_raw(1),
+                    shekyl_network::HARNESS_NETWORK_ID,
+                ),
                 DaemonTxVerifier,
             );
             listed
@@ -306,7 +365,6 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
     for verdict in verdicts {
         assert_eq!(verdict.expect("no engine fault"), SubmitVerdict::Accepted);
     }
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -317,7 +375,7 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
 /// conflicted on G10 (neither refused nor evicted), selects the other
 /// persona's post beside it, and the block it lists connects.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "fills two shards with real proofs; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored two_posts_by_one_persona"]
+#[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
     use crate::archival_driver::ENDPOINT;
     use crate::scenario_archival::{complete_tree, shard_set, Persona};
@@ -355,6 +413,7 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
             )
             .expect("open")
@@ -383,11 +442,7 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
         .await;
     assert!(selected.refused.is_empty(), "{:?}", selected.refused);
     assert!(selected.stale.is_empty());
-    let chosen: Vec<_> = selected
-        .transactions
-        .iter()
-        .map(|(txid, _)| *txid)
-        .collect();
+    let chosen: Vec<_> = selected.transactions.iter().map(|body| body.id).collect();
     assert_eq!(
         chosen.len(),
         2,
@@ -404,13 +459,12 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
     let bodies = selected
         .transactions
         .into_iter()
-        .map(|(_, tx)| tx)
+        .map(|body| body.tx)
         .collect();
     scenario
         .mine_listing(bodies)
         .await
         .unwrap_or_else(|o| panic!("the selected template connects: {o}"));
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -451,6 +505,7 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
                         UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -459,9 +514,10 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
                 .expect("a snapshot");
             let shim = Arc::new(RustPoolShim::new(
                 chain,
-                pool,
+                std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
+                shekyl_network::HARNESS_NETWORK_ID,
             ));
             let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
             let counted = |tx: &shekyl_wire::Transaction, caller| {
@@ -477,8 +533,7 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
                 counted(&twin, SubmitCaller::Foreign),
                 counted(&fresh, SubmitCaller::Foreign),
                 counted(&cheap, SubmitCaller::Foreign).0,
-                shim.with_pool(|pool| (pool.len(), pool.record(&twin.txid_parts().hash).is_some()))
-                    .expect("the lock"),
+                shim.with_pool(|pool| (pool.len(), pool.record(&twin.txid_parts().hash).is_some())),
             );
             assert!(shim.fluffed(&paid.txid_parts().hash).expect("fluffed"));
             let after = (
@@ -503,7 +558,8 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
     assert_eq!(
         below,
         SubmitVerdict::Rejected {
-            cause: RejectCause::FeeTooLow
+            cause: RejectCause::FeeTooLow,
+            row: None,
         }
     );
     assert!(!twin_held, "the concealed twin is not admitted");
@@ -517,15 +573,21 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
         accepted.1 .0 > 0,
         "the subject exists: proofs were verified"
     );
-    assert_eq!(after.0, SubmitVerdict::AlreadyInPool, "fluffed: disclosed");
+    assert_eq!(
+        after.0,
+        SubmitVerdict::AlreadyInPool {
+            relay: PoolRelay::Published,
+        },
+        "fluffed: disclosed"
+    );
     assert_eq!(
         after.1,
         SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+            cause: RejectCause::DoubleSpendConflict,
+            row: None,
         },
         "fluffed: the conflict is disclosed"
     );
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -561,6 +623,7 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
                         UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -572,9 +635,10 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
             });
             let shim = Arc::new(RustPoolShim::new(
                 chain,
-                pool,
+                std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
+                shekyl_network::HARNESS_NETWORK_ID,
             ));
             let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
             let submit = |tx: &shekyl_wire::Transaction, caller| {
@@ -583,9 +647,8 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
             let owned = submit(&held, SubmitCaller::Owner);
             let duplicate = submit(&held, SubmitCaller::Foreign);
             let fresh = submit(&peer, SubmitCaller::Foreign);
-            let unpublished = shim
-                .with_pool(|pool| pool.record(&held.txid_parts().hash).map(|r| r.public))
-                .expect("the lock");
+            let unpublished =
+                shim.with_pool(|pool| pool.record(&held.txid_parts().hash).map(|r| r.public));
             (owned, duplicate, fresh, unpublished)
         })
         .await;
@@ -598,11 +661,147 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
     assert_eq!(
         fresh,
         SubmitVerdict::Rejected {
-            cause: RejectCause::FeeTooLow
+            cause: RejectCause::FeeTooLow,
+            row: None,
         },
         "a fresh spend at its rate finds no room"
     );
     assert_eq!(duplicate, fresh, "and so does the held one, concealed");
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
+}
+
+/// A lone regtest node's own transaction (DX-Q3, Q9; no opt-in, rule 71):
+/// submitted through the node's one pool, it enters in its stem phase and
+/// the node's template does not list it; once the relay's entry marks it
+/// shown (`RustPoolShim::fluffed`, what the relay driver calls at embargo
+/// expiry), the node's next template lists it. The transaction is submitted
+/// before the service starts, so the first job is built over it; every
+/// observation is taken before the service stops and judged after, so a
+/// failure reports instead of hanging the runtime's drop. Red edit: let the
+/// producer list an entry in its stem phase.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lone_nodes_own_transaction_is_listed_once_the_relay_shows_it() {
+    use crate::follower::Posting;
+    use crate::service::{Arrival, ArrivalTag, Follow, Origin, PoolWiring, Reply, Service};
+    let (mut scenario, mined) = matured("lone-own-tx").await;
+    let paid = paying_the_floor(&mut scenario, &mined, 0).await;
+    let txid = paid.txid_parts().hash;
+    let copy = tmp("lone-own-tx-node");
+    scenario
+        .reopen(|path| {
+            std::fs::copy(path, &copy).expect("a copy of the chain");
+        })
+        .await;
+    // The tip the node will meet next: mined after the copy was taken.
+    let next = scenario.mine(1).await;
+    let store = Arc::new(crate::test_support::open_store_under(
+        &copy,
+        &crate::scenario::RULES.in_force(h(0)),
+        shekyl_chain_store::apply_policy::ApplyPolicy::Full,
+    ));
+    let pool_path = tmp("lone-own-tx-pool");
+    let chain = Store {
+        store: &store,
+        rules: crate::scenario::RULES,
+    };
+    let pool = chain
+        .read(|snapshot, rule_set| {
+            Pool::open(
+                &pool_path,
+                UnixSeconds::from_raw(1),
+                &SnapshotView::new(snapshot),
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &AdmissionPolicy::GENESIS,
+            )
+            .expect("open")
+            .0
+        })
+        .expect("a snapshot");
+    let pool = Arc::new(std::sync::Mutex::new(pool));
+    let board = Arc::new(shekyl_miner::JobBoard::new());
+    let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
+    let (seat, _sender, mut posting) =
+        crate::test_support::job_seat(&board, Some(crate::test_support::harness_keys()), sync);
+    let shim = Arc::new(RustPoolShim::new(
+        Store {
+            store: &store,
+            rules: crate::scenario::RULES,
+        },
+        Arc::clone(&pool),
+        AdmissionPolicy::GENESIS,
+        || UnixSeconds::from_raw(1),
+        shekyl_network::HARNESS_NETWORK_ID,
+    ));
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    assert_eq!(
+        engine
+            .submit(&hex(&paid), SubmitCaller::Owner)
+            .expect("no engine fault"),
+        SubmitVerdict::Accepted
+    );
+    let service = Service::start(
+        Arc::clone(&store),
+        crate::scenario::RULES,
+        Arc::new(crate::service::service_tests::Gated::new()),
+        crate::service::ServiceConfig::default(),
+        shekyl_hash_budget::Budget::of_host(),
+        Follow {
+            job: Some(seat),
+            pool: Some(PoolWiring {
+                pool: Arc::clone(&pool),
+                policy: AdmissionPolicy::GENESIS,
+                wall: Arc::new(|| UnixSeconds::from_raw(1)),
+                departed: None,
+            }),
+            ..Default::default()
+        },
+    );
+    let listed_now = |board: &shekyl_miner::JobBoard| {
+        board
+            .posted()
+            .map(|(_, job)| job.listed.iter().any(|body| body.id == txid))
+    };
+    let posted = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        posting.wait_for(|now| matches!(now, Posting::Posted(_))),
+    )
+    .await
+    .is_ok_and(|seen| seen.is_ok());
+    let at_wait = posting.borrow().clone();
+    let first = listed_now(&board);
+    let shown = shim.fluffed(&txid).expect("the lock");
+    let connected = service
+        .door()
+        .offer(Arrival {
+            tag: ArrivalTag(1),
+            origin: Origin::Local,
+            block: next[0].template.block.serialize(),
+            bodies: Vec::new(),
+            attestation_witness: Vec::new(),
+        })
+        .expect("room")
+        .reply()
+        .await
+        .reply;
+    let started = std::time::Instant::now();
+    let mut later = listed_now(&board);
+    while later != Some(true) && started.elapsed() < std::time::Duration::from_secs(60) {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        later = listed_now(&board);
+    }
+    service.stop().await.expect("stops");
+    scenario.close().await;
+    assert!(posted, "the node posts a job; the board reads {at_wait:?}");
+    assert_eq!(first, Some(false), "a stem entry is not listed");
+    assert!(shown, "the relay shows it");
+    assert!(
+        matches!(connected, Reply::Connected { .. }),
+        "{connected:?}"
+    );
+    assert_eq!(
+        later,
+        Some(true),
+        "the next template lists the shown transaction"
+    );
 }

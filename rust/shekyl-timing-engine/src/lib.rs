@@ -11,14 +11,15 @@
 //! commands and never wait for them to be applied.
 //!
 //! A [`Tick`] is nanoseconds since the clock's origin. [`MonotonicClock`] is
-//! the production clock. [`ManualClock`] is the one tests move by hand.
+//! the production clock, one origin for the whole process. [`ManualClock`]
+//! is the one tests move by hand.
 
 #![deny(unsafe_code)]
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Nanoseconds since the clock's origin.
@@ -39,12 +40,46 @@ impl Tick {
     }
 }
 
+/// An instant a [`Clock`] read, and nothing else can make.
+///
+/// A [`Tick`] can be built from any number, so two of them say nothing
+/// about whether they are comparable. This one is minted only by
+/// [`Clock::stamp`], and only this crate's two clocks implement
+/// [`Clock`]. Every [`MonotonicClock`] in a process reads from the one
+/// process origin, so a stamp the dialer takes and one the Tor supervisor
+/// takes are on one timeline whichever clock each was handed
+/// (`DIALER_OUTAGE_EVIDENCE.md` §6.1). A [`ManualClock`] keeps its own
+/// time, for tests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Stamp(Tick);
+
+impl Stamp {
+    /// The instant, as the clock's tick.
+    pub const fn tick(self) -> Tick {
+        self.0
+    }
+}
+
+mod sealed {
+    /// Only this crate's clocks are clocks: a [`super::Stamp`] is then
+    /// always one a real clock read.
+    pub trait Sealed {}
+    impl Sealed for super::ManualClock {}
+    impl Sealed for super::MonotonicClock {}
+}
+
 /// Something that can say what time it is.
 ///
 /// `wait_for` is how the service thread sleeps. `set_now` is how a test
 /// moves a hand clock. A clock that advances by itself ignores `set_now`.
-pub trait Clock {
+/// Sealed: [`ManualClock`] and [`MonotonicClock`] are the clocks.
+pub trait Clock: sealed::Sealed {
     fn now(&self) -> Tick;
+
+    /// [`Self::now`], as an instant only a clock can mint.
+    fn stamp(&self) -> Stamp {
+        Stamp(self.now())
+    }
 
     /// How long to sleep before `deadline`.
     ///
@@ -96,20 +131,26 @@ impl Clock for ManualClock {
     }
 }
 
-/// Production clock. The origin is the moment of construction.
+/// The process origin every [`MonotonicClock`] measures from: the first
+/// instant any of them was built.
+static PROCESS_ORIGIN: OnceLock<Instant> = OnceLock::new();
+
+/// Production clock. Every instance reads the one process origin, so two
+/// clocks built at different times give comparable ticks; the instance
+/// holds no time of its own.
 ///
 /// `Instant` on Linux is `CLOCK_MONOTONIC`. That clock does not advance
 /// while the system is suspended, so a deadline is not late by the time
 /// the machine spent suspended.
 #[derive(Clone, Debug)]
 pub struct MonotonicClock {
-    origin: Instant,
+    origin: &'static Instant,
 }
 
 impl MonotonicClock {
     pub fn new() -> Self {
         Self {
-            origin: Instant::now(),
+            origin: PROCESS_ORIGIN.get_or_init(Instant::now),
         }
     }
 }
@@ -149,9 +190,11 @@ pub enum OwnerClass {
     Discovery,
     Housekeeping,
     Interim,
+    /// Chain sync's request deadlines (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q8).
+    Sync,
 }
 
-const CLASS_COUNT: usize = 7;
+const CLASS_COUNT: usize = 8;
 
 impl OwnerClass {
     /// Every class, in index order: what a periodic lateness report walks.
@@ -163,6 +206,7 @@ impl OwnerClass {
         Self::Discovery,
         Self::Housekeeping,
         Self::Interim,
+        Self::Sync,
     ];
 
     const fn index(self) -> usize {
@@ -174,19 +218,21 @@ impl OwnerClass {
             Self::Discovery => 4,
             Self::Housekeeping => 5,
             Self::Interim => 6,
+            Self::Sync => 7,
         }
     }
 
     #[cfg(test)]
     fn from_index(index: u8) -> Self {
-        match index % 7 {
+        match index % 8 {
             0 => Self::Relay,
             1 => Self::Transport,
             2 => Self::TimedSync,
             3 => Self::Peerlist,
             4 => Self::Discovery,
             5 => Self::Housekeeping,
-            _ => Self::Interim,
+            6 => Self::Interim,
+            _ => Self::Sync,
         }
     }
 }

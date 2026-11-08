@@ -28,13 +28,13 @@
 //! ([`normal_tx_archival_bytes`]), so the sim cannot drift from the partition
 //! (`SHT-Q2`; `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F step 3).
 
-use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
 use shekyl_tx_weight::{
     predict_archival_len, predict_weight, InputCount, OutputCount, MAX_TREE_DEPTH,
 };
 use shekyl_types::{shard_of, ArchivalLength, SHARD_LENGTH};
 
 use crate::calibration::{tree_depth_for_leaves, PerByteRate, Shape};
+use crate::engine::SimParams;
 
 /// Atomic units per SKL, from the units crate that generates it
 /// (`config/consensus_constants.json` `coin`).
@@ -88,11 +88,11 @@ pub fn normal_tx_archival_bytes(chain_leaves: u64) -> u64 {
 }
 
 /// Fee of one ordinary (1-in / 2-out) transaction when the curve tree holds
-/// `chain_leaves` outputs and weight is priced at `rate`. The fee is the
-/// unrounded fixed point of `rate × weight(fee)`
-/// ([`shekyl_tx_weight::converge_weight_fee`], through [`Shape::tx_fee_atomic`]).
+/// `chain_leaves` outputs and weight is priced at `rate`. The rate carries
+/// its pricer ([`Shape::tx_fee_atomic`](crate::calibration::Shape::tx_fee_atomic)).
+/// `None` when that fee does not fit in `u64`.
 #[must_use]
-pub(crate) fn ordinary_tx_fee(chain_leaves: u64, rate: PerByteRate) -> u64 {
+pub(crate) fn ordinary_tx_fee(chain_leaves: u64, rate: PerByteRate) -> Option<u64> {
     let (n_in, n_out) = normal_tx_shape();
     Shape { n_in, n_out }.tx_fee_atomic(tree_depth_for_leaves(chain_leaves), rate)
 }
@@ -232,8 +232,8 @@ pub const OPP_COST_RATE_BAND: [f64; 3] = [0.02, 0.05, 0.10];
 /// exogenous opportunity-cost rate is the *only* float, applied once in
 /// [`bond_opp_cost_skl`].
 #[must_use]
-pub fn locked_bond_atomic(n: u64) -> u128 {
-    u128::from(ARCHIVAL_BOND_FLOOR_ATOMIC) * u128::from(REPLICAS_PER_SHARD) * u128::from(n)
+pub fn locked_bond_atomic(n: u64, run: &SimParams) -> u128 {
+    u128::from(run.archival().bond_floor_atomic) * u128::from(REPLICAS_PER_SHARD) * u128::from(n)
 }
 
 /// Annual opportunity cost of the locked bond capital, SKL (F-G). The locked
@@ -241,8 +241,8 @@ pub fn locked_bond_atomic(n: u64) -> u128 {
 /// rate multiply — the SKL result is a reporting/comparison quantity, not an
 /// algorithm-zone intermediate (DQ-2G).
 #[must_use]
-pub fn bond_opp_cost_skl(n: u64, opp_cost_rate: f64) -> f64 {
-    (locked_bond_atomic(n) as f64 / COIN as f64) * opp_cost_rate
+pub fn bond_opp_cost_skl(n: u64, opp_cost_rate: f64, run: &SimParams) -> f64 {
+    (locked_bond_atomic(n, run) as f64 / COIN as f64) * opp_cost_rate
 }
 
 /// The DQ-2B storage-cost-decline band. Annual fractional decline in fiat

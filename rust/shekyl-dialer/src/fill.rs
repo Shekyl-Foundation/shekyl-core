@@ -12,26 +12,9 @@
 //! The rule decides the list and the aim. It does not pick the address:
 //! the draw is the peer lists', uniform over the candidates.
 
-/// The most dials one connector has in flight at once.
-///
-/// **Assumption** (`DAEMON_RELAY_PRIVACY.md` §97): the interim bound, one
-/// dial per connector (2026-10-08). The fill is one dial per wake, so the
-/// interim needs no measurement. It is measured and raised on the Rust
-/// path after the cutover.
-pub const IN_FLIGHT_BOUND: usize = 1;
-
-/// What a dial is for. The aim is input; the outcome is what the dial
-/// became. The handshake owner does not infer one from the other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DialAim {
-    /// Keep the session. The handshake checks have already passed; the
-    /// strand is notified afterwards and does not answer.
-    Keep,
-    /// Confirm the address and close in Rust. No adopt, no post, no row.
-    /// The dial does not count toward the outbound target and the relay
-    /// is not flipped.
-    Confirm,
-}
+/// What a dial is for: the session layer's own aim. The aim is input; the
+/// outcome is what the dial became, and neither is inferred from the other.
+pub use shekyl_p2p_session::DialAim;
 
 /// Which list the draw is from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,7 +79,9 @@ pub struct Plan {
 /// nothing.
 ///
 /// `floor` is the white diversity floor and `refill_line` the refill
-/// line; both are `shekyl-peerlist`'s.
+/// line; both are `shekyl-peerlist`'s. `bound` is the connector's
+/// in-flight bound (`dial_profile(connector).in_flight_bound`): with that
+/// many dials in flight, nothing more.
 ///
 /// A list "holds at least the floor" by its size, and is drawn only when
 /// it has a candidate. A white list at the floor whose every address is
@@ -107,8 +92,8 @@ pub struct Plan {
 /// legal cap, and an operator who sets it asked for no outbound sessions;
 /// a confirm-and-close dial under (c) is still an outbound connection.
 #[must_use]
-pub fn plan(census: &Census, floor: usize, refill_line: usize) -> Option<Plan> {
-    if census.target == 0 || census.in_flight >= IN_FLIGHT_BOUND {
+pub fn plan(census: &Census, floor: usize, refill_line: usize, bound: usize) -> Option<Plan> {
+    if census.target == 0 || census.in_flight >= bound {
         return None;
     }
     let white_at_floor = census.white >= floor && census.white_candidates > 0;

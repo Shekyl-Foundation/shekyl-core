@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use shekyl_sp_t3_spike::capacity::{Capacity, HOLDING_TABLE, LIST_BOUND};
 use shekyl_sp_t3_spike::ceiling::{
     completion_line, fit, floor_device_read, soak_ladder, Fit, FloorDeviceRead, SizeReading,
-    HEAVIEST_SHARD_BYTES,
+    OVERSHOOT_BYTES, RECORDED_HEAVIEST_SHARD_BYTES,
 };
 use shekyl_sp_t3_spike::compare::{judge, Statistic, Verdict};
 use shekyl_sp_t3_spike::measure::Observation;
@@ -140,14 +140,25 @@ fn the_device_fit_is_as_recorded() {
     };
     assert!(close(line.t_fixed_s, 7.377, 5e-4), "{line:?}");
     assert!(close(line.bytes_per_s, 254_684.0, 0.5), "{line:?}");
-    assert!(close(w_max_bytes, 28_533_771.0, 1.0), "{w_max_bytes}");
+    // The 2026-10-02 print was 28_533_771 after subtracting the limit then
+    // in force. The line before that subtraction is what the soak measured;
+    // the live ceiling subtracts [`OVERSHOOT_BYTES`].
+    const LINE_BEFORE_OVERSHOOT: f64 = 28_533_771.0 + (300_000.0 / 2.0 - 600.0);
+    assert!(
+        close(
+            w_max_bytes,
+            LINE_BEFORE_OVERSHOOT - f64::from(OVERSHOOT_BYTES),
+            1.0
+        ),
+        "{w_max_bytes}"
+    );
     assert!(extrapolated);
     assert!(
         close(line.off_per_cent, 0.1, 0.05),
         "the middle point's residual"
     );
     assert!(
-        close(line.at(HEAVIEST_SHARD_BYTES), 19.7, 0.05),
+        close(line.at(RECORDED_HEAVIEST_SHARD_BYTES), 19.7, 0.05),
         "t70 at the heaviest shard"
     );
 
@@ -157,7 +168,10 @@ fn the_device_fit_is_as_recorded() {
         .map(|(bytes, observations)| (*bytes, observations.as_slice()))
         .collect();
     let p99 = completion_line(&ladder_view, 99).expect("the p99 line is kept");
-    assert!(close(p99.at(HEAVIEST_SHARD_BYTES), 96.8, 0.05), "{p99:?}");
+    assert!(
+        close(p99.at(RECORDED_HEAVIEST_SHARD_BYTES), 96.8, 0.05),
+        "{p99:?}"
+    );
 }
 
 /// The device against its same-window control, reported and not judged:

@@ -30,6 +30,7 @@ use axum::{Json, Router};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
 use shekyl_rpc_transport::network_posture::{DaemonDisclosures, ProxyResolution};
+use shekyl_rpc_types::endpoint::{unrouted_path, JSON_RPC_PATH};
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -334,10 +335,16 @@ async fn browser_boundary(
 /// judged only after every gate. A browser-driven request is refused by the
 /// boundary before a credential is compared; a non-JSON request never
 /// reaches the handler.
+///
+/// JSON-RPC is served at [`JSON_RPC_PATH`] only, the path the daemon uses;
+/// there is no alias at `/` (rule 83). Any other path gets the shared
+/// [`unrouted_path`] answer, behind the same layers: an unauthenticated
+/// request is refused before it learns which path is served.
 pub fn build_router(state: Arc<AppState>) -> Router {
     let auth = Arc::clone(&state.auth);
     Router::new()
-        .route("/", post(json_rpc_handler))
+        .route(JSON_RPC_PATH, post(json_rpc_handler))
+        .fallback(unrouted)
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&auth),
             require_basic_auth,
@@ -351,6 +358,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // Reopen only for an explicit web-client deployment (rule 21).
         .layer(CorsLayer::new())
         .with_state(state)
+}
+
+/// The answer to a path no route serves: HTTP 404 with the shared
+/// JSON-RPC error body, which names [`JSON_RPC_PATH`].
+async fn unrouted(uri: axum::http::Uri) -> (StatusCode, Json<serde_json::Value>) {
+    (StatusCode::NOT_FOUND, Json(unrouted_path(uri.path())))
 }
 
 async fn json_rpc_handler(
@@ -1238,8 +1251,7 @@ mod tests {
         #[cfg(windows)]
         {
             let err = ListenAddr::parse("uds:///tmp/x.sock")
-                .err()
-                .expect("uds:// must be refused on Windows");
+                .expect_err("uds:// must be refused on Windows");
             assert!(err.contains("Windows"), "{err}");
         }
         // Empty path is refused everywhere; the TCP form parses everywhere.

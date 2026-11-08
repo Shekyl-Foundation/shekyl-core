@@ -42,6 +42,7 @@ use shekyl_fcmp_proofs::{
     Curves, FcmpMembershipOnly, FcmpPlusPlus, InputVerification, Output, FCMP_PARAMS,
     HELIOS_FCMP_GENERATORS, SELENE_FCMP_GENERATORS,
 };
+use shekyl_types::{CurveTreeRoot, TxSignableHash};
 
 /// Re-export of [`shekyl_crypto_pq::key_image::KeyImage`] so callers of
 /// [`verify`] can name the type without taking a direct dependency on
@@ -526,9 +527,9 @@ fn prove_membership_circuit<R: RngCore + CryptoRng>(
 pub fn prove_with_rng<R: RngCore + CryptoRng>(
     rng: &mut R,
     inputs: &[ProveInput],
-    _tree_root: &[u8; 32],
+    _tree_root: &CurveTreeRoot,
     tree_depth: u8,
-    signable_tx_hash: [u8; 32],
+    signable_tx_hash: TxSignableHash,
 ) -> Result<ProveResult, ProveError> {
     if inputs.is_empty() {
         return Err(ProveError::EmptyInputs);
@@ -623,16 +624,16 @@ pub fn prove_with_rng<R: RngCore + CryptoRng>(
 }
 
 /// Construct an FCMP++ proof for a set of inputs, drawing all randomness from a
-/// fresh [`OsRng`]. This is the production entry point (`shekyl-ffi`'s prove FFI).
+/// fresh [`OsRng`]. This is the production entry point (`shekyl-tx-builder`'s signing path).
 ///
 /// A thin wrapper over [`prove_with_rng`]; see there for why the RNG is
 /// parameterized (deterministic instruction-count benches).
 #[allow(non_snake_case)]
 pub fn prove(
     inputs: &[ProveInput],
-    tree_root: &[u8; 32],
+    tree_root: &CurveTreeRoot,
     tree_depth: u8,
-    signable_tx_hash: [u8; 32],
+    signable_tx_hash: TxSignableHash,
 ) -> Result<ProveResult, ProveError> {
     prove_with_rng(&mut OsRng, inputs, tree_root, tree_depth, signable_tx_hash)
 }
@@ -662,9 +663,9 @@ pub fn prove(
 #[allow(non_snake_case)]
 pub fn prove_membership_only(
     inputs: &[ProveInput],
-    _tree_root: &[u8; 32],
+    _tree_root: &CurveTreeRoot,
     tree_depth: u8,
-    signable_tx_hash: [u8; 32],
+    signable_tx_hash: TxSignableHash,
     context: &[u8],
 ) -> Result<ProveResult, ProveError> {
     if inputs.is_empty() {
@@ -904,9 +905,9 @@ pub fn verify(
     key_images: &[KeyImage],
     pseudo_outs: &[[u8; 32]],
     pqc_keys: &[PqcKeyScalar],
-    tree_root: &[u8; 32],
+    tree_root: &CurveTreeRoot,
     tree_depth: u8,
-    signable_tx_hash: [u8; 32],
+    signable_tx_hash: TxSignableHash,
 ) -> Result<bool, VerifyError> {
     let num_inputs = proof.num_inputs as usize;
     // Self-defending arity cap (mirrors `verify_membership_only`): a crafted
@@ -944,7 +945,7 @@ pub fn verify(
 
     let layers = tree_depth as usize;
 
-    let tree = deserialize_tree_root(tree_root, layers).ok_or_else(|| {
+    let tree = deserialize_tree_root(tree_root.as_bytes(), layers).ok_or_else(|| {
         tracing::debug!(layers, "deserialize_tree_root failed");
         VerifyError::InvalidTreeRoot
     })?;
@@ -1051,9 +1052,9 @@ pub fn verify_membership_only(
     proof: &ShekylFcmpProof,
     pseudo_outs: &[[u8; 32]],
     pqc_keys: &[PqcKeyScalar],
-    tree_root: &[u8; 32],
+    tree_root: &CurveTreeRoot,
     tree_depth: u8,
-    signable_tx_hash: [u8; 32],
+    signable_tx_hash: TxSignableHash,
 ) -> Result<bool, VerifyError> {
     let num_inputs = proof.num_inputs as usize;
     // Self-defending arity cap: a crafted `proof.num_inputs` sizes the batch verifiers, so an
@@ -1085,7 +1086,7 @@ pub fn verify_membership_only(
 
     let layers = tree_depth as usize;
 
-    let tree = deserialize_tree_root(tree_root, layers).ok_or_else(|| {
+    let tree = deserialize_tree_root(tree_root.as_bytes(), layers).ok_or_else(|| {
         tracing::debug!(layers, "deserialize_tree_root failed");
         VerifyError::InvalidTreeRoot
     })?;
@@ -1293,7 +1294,12 @@ mod tests {
     #[test]
     fn prove_rejects_too_many_inputs() {
         let inputs: Vec<ProveInput> = (0..9).map(|_| dummy_prove_input()).collect();
-        let result = prove(&inputs, &[0; 32], 8, [0; 32]);
+        let result = prove(
+            &inputs,
+            &CurveTreeRoot::from_bytes([0; 32]),
+            8,
+            TxSignableHash::from_bytes([0; 32]),
+        );
         assert!(matches!(result, Err(ProveError::TooManyInputs(9))));
     }
 
@@ -1339,7 +1345,12 @@ mod tests {
 
     #[test]
     fn prove_rejects_empty_inputs() {
-        let result = prove(&[], &[0; 32], 8, [0; 32]);
+        let result = prove(
+            &[],
+            &CurveTreeRoot::from_bytes([0; 32]),
+            8,
+            TxSignableHash::from_bytes([0; 32]),
+        );
         assert!(matches!(result, Err(ProveError::EmptyInputs)));
     }
 
@@ -1358,9 +1369,9 @@ mod tests {
                 PqcKeyScalar::from_pqc_public_key(b"test key"),
                 PqcKeyScalar::from_pqc_public_key(b"test key"),
             ],
-            &[0; 32],
+            &CurveTreeRoot::from_bytes([0; 32]),
             8,
-            [0; 32],
+            TxSignableHash::from_bytes([0; 32]),
         );
         assert!(matches!(
             result,
@@ -1380,9 +1391,9 @@ mod tests {
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
             &[PqcKeyScalar::from_pqc_public_key(b"test key")],
-            &[0; 32],
+            &CurveTreeRoot::from_bytes([0; 32]),
             10,
-            [0; 32],
+            TxSignableHash::from_bytes([0; 32]),
         );
         assert!(matches!(result, Err(VerifyError::InvalidTreeRoot)));
     }
@@ -1413,7 +1424,7 @@ mod tests {
         use shekyl_curve_generators::SELENE_HASH_INIT;
 
         let tree_depth: u8 = 1;
-        let signable_tx_hash = [0xABu8; 32];
+        let signable_tx_hash = TxSignableHash::from_bytes([0xABu8; 32]);
 
         let x = Scalar::random(&mut OsRng);
         let y = Scalar::random(&mut OsRng);
@@ -1444,7 +1455,7 @@ mod tests {
                 ),
                 (h_pqc_field, generators[3]),
             ]);
-        let tree_root: [u8; 32] = tree_root_point.to_bytes();
+        let tree_root = CurveTreeRoot::from_bytes(tree_root_point.to_bytes());
 
         let o_bytes = O.to_bytes();
         let i_bytes = I.to_bytes();
@@ -1544,8 +1555,9 @@ mod tests {
         }
 
         // Wrong tree root must fail
-        let mut bad_root = tree_root;
+        let mut bad_root = tree_root.to_bytes();
         bad_root[0] ^= 0xFF;
+        let bad_root = CurveTreeRoot::from_bytes(bad_root);
         let wrong_root = verify(
             &result.proof,
             &key_images,
@@ -1611,7 +1623,15 @@ mod tests {
                 num_inputs: u32::try_from(bad).expect("test bad-count fits u32"),
                 tree_depth: 1,
             };
-            let r = verify(&proof, &[], &[], &[], &[0u8; 32], 1, [0u8; 32]);
+            let r = verify(
+                &proof,
+                &[],
+                &[],
+                &[],
+                &CurveTreeRoot::from_bytes([0u8; 32]),
+                1,
+                TxSignableHash::from_bytes([0u8; 32]),
+            );
             assert!(
                 matches!(r, Err(VerifyError::DeserializationFailed)),
                 "num_inputs={bad} must reject as DeserializationFailed, got {r:?}"
@@ -1627,7 +1647,7 @@ mod tests {
         use shekyl_curve_generators::SELENE_HASH_INIT;
 
         let tree_depth: u8 = 1;
-        let signable_tx_hash = [0xABu8; 32];
+        let signable_tx_hash = TxSignableHash::from_bytes([0xABu8; 32]);
         let context = b"shekyl-emission-membership-only-context".to_vec();
 
         let x = Scalar::random(&mut OsRng);
@@ -1657,7 +1677,7 @@ mod tests {
                 ),
                 (h_pqc_field, generators[3]),
             ]);
-        let tree_root: [u8; 32] = tree_root_point.to_bytes();
+        let tree_root = CurveTreeRoot::from_bytes(tree_root_point.to_bytes());
 
         let o_bytes = O.to_bytes();
         let i_bytes = I.to_bytes();
@@ -1794,7 +1814,7 @@ mod tests {
         // confirms the seed yields a convertible, non-identity leaf point).
         let mut rng = ChaCha20Rng::seed_from_u64(0xC75_0002_0000);
         let tree_depth: u8 = 2;
-        let signable_tx_hash = [0xABu8; 32];
+        let signable_tx_hash = TxSignableHash::from_bytes([0xABu8; 32]);
 
         let x = Scalar::random(&mut rng);
         let y = Scalar::random(&mut rng);
@@ -1864,8 +1884,13 @@ mod tests {
             }],
         };
 
-        let result = prove(&[input], &tree_root, tree_depth, signable_tx_hash)
-            .expect("prove over a partial branch chunk should succeed");
+        let result = prove(
+            &[input],
+            &CurveTreeRoot::from_bytes(tree_root),
+            tree_depth,
+            signable_tx_hash,
+        )
+        .expect("prove over a partial branch chunk should succeed");
 
         let key_images = [KeyImage::from_canonical_bytes(L.to_bytes())];
         let ok = verify(
@@ -1873,7 +1898,7 @@ mod tests {
             &key_images,
             &result.pseudo_outs,
             &[pqc.key],
-            &tree_root,
+            &CurveTreeRoot::from_bytes(tree_root),
             tree_depth,
             signable_tx_hash,
         );
@@ -1886,14 +1911,24 @@ mod tests {
     #[test]
     fn prove_rejects_max_plus_one_inputs() {
         let inputs: Vec<ProveInput> = (0..=MAX_INPUTS).map(|_| dummy_prove_input()).collect();
-        let result = prove(&inputs, &[0; 32], 8, [0; 32]);
+        let result = prove(
+            &inputs,
+            &CurveTreeRoot::from_bytes([0; 32]),
+            8,
+            TxSignableHash::from_bytes([0; 32]),
+        );
         assert!(matches!(result, Err(ProveError::TooManyInputs(_))));
     }
 
     #[test]
     fn prove_at_max_inputs_count() {
         let inputs: Vec<ProveInput> = (0..MAX_INPUTS).map(|_| dummy_prove_input()).collect();
-        let result = prove(&inputs, &[0; 32], 8, [0; 32]);
+        let result = prove(
+            &inputs,
+            &CurveTreeRoot::from_bytes([0; 32]),
+            8,
+            TxSignableHash::from_bytes([0; 32]),
+        );
         assert!(
             !matches!(result, Err(ProveError::TooManyInputs(_))),
             "MAX_INPUTS should be accepted (may fail for other reasons)"
@@ -1905,7 +1940,12 @@ mod tests {
         let mut input = dummy_prove_input();
         input.spend_key_x = Scalar::random(&mut OsRng).to_repr();
         input.spend_key_y = Scalar::random(&mut OsRng).to_repr();
-        let result = prove(&[input], &[0; 32], 8, [0; 32]);
+        let result = prove(
+            &[input],
+            &CurveTreeRoot::from_bytes([0; 32]),
+            8,
+            TxSignableHash::from_bytes([0; 32]),
+        );
         assert!(
             result.is_err(),
             "input with empty leaf_chunk_outputs should fail"
@@ -1924,9 +1964,9 @@ mod tests {
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
             &[PqcKeyScalar::from_pqc_public_key(b"test key")],
-            &[0; 32],
+            &CurveTreeRoot::from_bytes([0; 32]),
             8,
-            [0; 32],
+            TxSignableHash::from_bytes([0; 32]),
         );
         assert!(result.is_err(), "empty proof data should be rejected");
     }
@@ -1943,9 +1983,9 @@ mod tests {
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32], [0; 32]],
             &[PqcKeyScalar::from_pqc_public_key(b"test key")],
-            &[0; 32],
+            &CurveTreeRoot::from_bytes([0; 32]),
             8,
-            [0; 32],
+            TxSignableHash::from_bytes([0; 32]),
         );
         assert!(
             result.is_err(),
@@ -1968,9 +2008,9 @@ mod tests {
                 PqcKeyScalar::from_pqc_public_key(b"test key"),
                 PqcKeyScalar::from_pqc_public_key(b"test key"),
             ],
-            &[0; 32],
+            &CurveTreeRoot::from_bytes([0; 32]),
             8,
-            [0; 32],
+            TxSignableHash::from_bytes([0; 32]),
         );
         assert!(
             result.is_err(),
@@ -1990,9 +2030,9 @@ mod tests {
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
             &[PqcKeyScalar::from_pqc_public_key(b"test key")],
-            &[0; 32],
+            &CurveTreeRoot::from_bytes([0; 32]),
             0,
-            [0; 32],
+            TxSignableHash::from_bytes([0; 32]),
         );
         assert!(result.is_err(), "tree depth 0 should be rejected");
     }
@@ -2010,9 +2050,9 @@ mod tests {
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
             &[PqcKeyScalar::from_pqc_public_key(b"test key")],
-            &[0; 32],
+            &CurveTreeRoot::from_bytes([0; 32]),
             bad_depth,
-            [0; 32],
+            TxSignableHash::from_bytes([0; 32]),
         );
         assert!(
             matches!(result, Err(VerifyError::TreeDepthTooLarge(d)) if d == bad_depth),
@@ -2032,9 +2072,9 @@ mod tests {
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
             &[PqcKeyScalar::from_pqc_public_key(b"test key")],
-            &[0; 32],
+            &CurveTreeRoot::from_bytes([0; 32]),
             8,
-            [0; 32],
+            TxSignableHash::from_bytes([0; 32]),
         );
         assert!(
             result.is_err() || matches!(result, Ok(false)),
@@ -2050,7 +2090,7 @@ mod tests {
         use shekyl_curve_generators::SELENE_HASH_INIT;
 
         let tree_depth: u8 = 1;
-        let signable_tx_hash = [0xABu8; 32];
+        let signable_tx_hash = TxSignableHash::from_bytes([0xABu8; 32]);
 
         let x = Scalar::random(&mut OsRng);
         let y = Scalar::random(&mut OsRng);
@@ -2080,7 +2120,7 @@ mod tests {
                 ),
                 (h_pqc_field, generators[3]),
             ]);
-        let tree_root: [u8; 32] = tree_root_point.to_bytes();
+        let tree_root = CurveTreeRoot::from_bytes(tree_root_point.to_bytes());
 
         let o_bytes = O.to_bytes();
         let i_bytes = I.to_bytes();
@@ -2115,7 +2155,7 @@ mod tests {
             &[pqc.key],
             &tree_root,
             tree_depth,
-            different_hash,
+            TxSignableHash::from_bytes(different_hash),
         );
         assert!(
             wrong_hash.is_err() || matches!(wrong_hash, Ok(false)),
@@ -2161,7 +2201,7 @@ mod tests {
                 ),
                 (h_pqc_field, generators[3]),
             ]);
-        let tree_root: [u8; 32] = tree_root_point.to_bytes();
+        let tree_root = CurveTreeRoot::from_bytes(tree_root_point.to_bytes());
 
         let o_bytes = O.to_bytes();
         let i_bytes = I.to_bytes();
@@ -2184,7 +2224,12 @@ mod tests {
             c2_branch_layers: vec![],
         };
 
-        let result = prove(&[input], &tree_root, tree_depth, signable_tx_hash);
+        let result = prove(
+            &[input],
+            &tree_root,
+            tree_depth,
+            TxSignableHash::from_bytes(signable_tx_hash),
+        );
         assert!(
             result.is_err(),
             "O=xG with y=mask (nonzero) must fail at OpenedInputTuple::open"
@@ -2231,7 +2276,7 @@ mod tests {
                 ),
                 (h_pqc_field, generators[3]),
             ]);
-        let tree_root: [u8; 32] = tree_root_point.to_bytes();
+        let tree_root = CurveTreeRoot::from_bytes(tree_root_point.to_bytes());
 
         let o_bytes = O.to_bytes();
         let i_bytes = I.to_bytes();
@@ -2254,8 +2299,13 @@ mod tests {
             c2_branch_layers: vec![],
         };
 
-        let result = prove(&[input], &tree_root, tree_depth, signable_tx_hash)
-            .expect("prove with O=xG+yT and real y must succeed");
+        let result = prove(
+            &[input],
+            &tree_root,
+            tree_depth,
+            TxSignableHash::from_bytes(signable_tx_hash),
+        )
+        .expect("prove with O=xG+yT and real y must succeed");
 
         let key_images = [KeyImage::from_canonical_bytes(L.to_bytes())];
         let ok = verify(
@@ -2265,7 +2315,7 @@ mod tests {
             &[pqc.key],
             &tree_root,
             tree_depth,
-            signable_tx_hash,
+            TxSignableHash::from_bytes(signable_tx_hash),
         )
         .expect("verify must not error");
         assert!(ok, "valid two-component proof must verify");

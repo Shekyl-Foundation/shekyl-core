@@ -16,7 +16,7 @@ use shekyl_archival_retention::{
     BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindScan, LastServedScan,
     SettlementSchedule, ShardClose,
 };
-use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount, CurveTreeRoot, PCanonicalId, TxHash};
 
 use crate::submit::certificate::VerificationCertificate;
 
@@ -54,13 +54,28 @@ pub struct ReferenceFacts {
     /// Height of the reference block on the main chain.
     pub height: BlockHeight,
     /// Curve-tree root at that height.
-    pub root: [u8; 32],
+    pub root: CurveTreeRoot,
     /// Current curve-tree depth in the consensus/LMDB convention
     /// (`curve_trees_tree_depth` = layer count − 1) — the row-K10 upper
     /// bound for the wire `tree_depth`. The verifier reconstructs its
     /// layer count as `wire tree_depth + 1`, exactly as the C++ caller
     /// does (`blockchain.cpp:4119`).
     pub tree_depth: u8,
+}
+
+/// This node's judgment of its own unpublished transaction.
+///
+/// Duplicated at this boundary so `shekyl-daemon-rpc` does not depend on
+/// `shekyl-relay`. The node maps the relay crate's enum onto this one.
+/// `None` on [`SubmitFacts::origin_publication`] means the zone holds no
+/// origin row: the transaction has fluffed, it is a relay position, or
+/// the zone has not recorded it yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OriginPublication {
+    /// Unpublished, inside the daemon's publication budget.
+    Held,
+    /// Unpublished at or past the daemon's publication budget.
+    HeldOverdue,
 }
 
 /// The Phase-B POD fact snapshot (§3.1 Phase B / §4.1), taken under one
@@ -90,6 +105,11 @@ pub struct SubmitFacts {
     /// from foreigners exactly as the inherited identity check concealed it.
     /// The C++ side asks `relay_category::broadcasted`.
     pub in_pool_broadcast: bool,
+    /// This node's origin hold for the submitted txid, judged on the
+    /// relay task's clock. `None` when the zone holds no origin row.
+    /// Broadcast presence ([`in_pool_broadcast`](Self::in_pool_broadcast))
+    /// outranks a stale hold: a fluffed transaction is published.
+    pub origin_publication: Option<OriginPublication>,
     /// `Some(height)` iff the submitted txid is in the main chain,
     /// confirmed at `height` — the F40 confirming-block height, read under
     /// the same lock scope as the membership fact so the pair cannot be
@@ -100,14 +120,10 @@ pub struct SubmitFacts {
     pub key_image_conflicts: Vec<KeyImageConflict>,
     /// Reference-block facts, iff the hash is known to the daemon.
     pub reference: Option<ReferenceFacts>,
-    /// Dynamic per-byte fee floor parameter (moves every block — F34).
-    pub fee_per_byte: u64,
     /// The relay floor window at the connecting height (FL-R23's lookback,
-    /// `shekyl_chain_rules::relay_floor_window`), when the shim reads it:
-    /// the engine then judges the fee by the door's own predicate,
-    /// `relay_floor_admits` (CEN-M3), and `fee_per_byte` is not read for
-    /// the gate. `None` from the C++ shim, whose tip-floor rule stands
-    /// until the flip deletes it (DX-Q10; the review of #1102, S5).
+    /// `shekyl_chain_rules::relay_floor_window`). The engine judges the fee
+    /// by `relay_floor_admits` (CEN-M3) over this window. `None` refuses
+    /// (DX-Q10: the one-floor path left with the C++ shim).
     pub fee_floor_window: Option<Vec<u64>>,
     /// Whether CEN-M10's rising minimum refuses a fresh submission of this
     /// transaction's weight and fee against the pool as it stands
@@ -118,7 +134,7 @@ pub struct SubmitFacts {
     /// C++ shim and at Phase B.
     pub pool_refuses_for_room: Option<bool>,
     /// Transaction weight limit (compile-time constant on Shekyl:
-    /// `min_block_weight / 2 − COINBASE_BLOB_RESERVED_SIZE` = 149 400; §3.1).
+    /// `min_block_weight / 2 −` the derived coinbase reserve; §3.1).
     pub weight_limit: u64,
     /// Chain block **count** (`m_db->height()`), the consensus basis for
     /// the ref-age window arithmetic. Typed [`ChainCount`], not
@@ -449,7 +465,7 @@ pub struct EmissionBondFacts {
 }
 
 /// E7: one frozen as-of-`E` gather snapshot
-/// (`ShekylArchivalEmissionEpochSnapshot`'s owned twin; the verifier
+/// (the owned twin of the FFI's emission-epoch snapshot, deleted with the archival C++ path, `DEL-008`; the verifier
 /// borrows these into `EpochCloseInputs::verify_view`, the single-sourced
 /// view constructor the C++ oracle's FFI shim also uses).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -501,7 +517,7 @@ pub enum EpochClaimStanding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmissionCloseBondFacts {
     pub join_settlement_epoch: u64,
-    pub is_foundation_complete_tree: bool,
+    pub is_support_complete_tree: bool,
     pub bad_intervals: Vec<BadInterval>,
 }
 
@@ -539,10 +555,6 @@ pub struct TxMeta {
     pub weight: u64,
     /// Transaction fee (`Ct::Fcmp` fee field).
     pub fee: u64,
-    /// Whether the transaction carries a JoinMarket bond post: the one
-    /// fact about its kind a commit backend may have no decoder for
-    /// ([`CommitOutcome::JoinMarketUnsupported`]).
-    pub carries_join_market: bool,
 }
 
 /// Outcome of the Phase-D check-and-commit (§3.2 / §4.2).
@@ -557,21 +569,23 @@ pub enum CommitOutcome {
     /// the snapshot the enum's dominant variant); **Rust classifies**,
     /// most-terminal-first (§3.1) — the shim never chooses a verdict.
     Raced(Box<SubmitFacts>),
+    /// The pool door refused a chain-bound consensus row at commit. Carries
+    /// the fresh facts like [`Self::Raced`]: a premise that moved under the
+    /// refusal (a competing spend, CEN-I7; a duplicate; a stale root) is
+    /// classified first, most-terminal-first and with the same concealment,
+    /// and only when none did does the engine answer the row the verifier
+    /// does not judge (CEN-J15 is the first): `Rejected { ConsensusRule,
+    /// row }` (RPC 3.63; Rick, 2026-10-29).
+    ChainRefused {
+        /// The row that refused.
+        row: shekyl_chain_rules::CenRow,
+        /// The facts at the commit lock.
+        fresh: Box<SubmitFacts>,
+    },
     /// The insert tail succeeded but the tail's `prune()` evicted the tx
     /// under pool pressure (F23 / defect 0.7) — classified
     /// `Rejected{FeeTooLow}` (pool-pressure variant).
     PrunedOnInsert,
-    /// The backend cannot hold a JoinMarket bond post and did not try.
-    /// Phases A–C passed. Phase D's mutable re-checks do not run: the C++
-    /// commit step decodes no JoinMarket form that carries a receipt key
-    /// (`FN_DSA_HYBRID.md` `FND-20`) and returns before
-    /// `shekyl_submit_commit_tx`. The capability refusal is the verdict.
-    /// A fresh post and a foreign duplicate get the same answer, and a
-    /// key-image or fee race during Phase C is reported as this outcome.
-    /// Retrying the same bytes against this daemon fails the same way.
-    /// Classified `Rejected{JoinMarketUnsupported}`. Deleted with the C++
-    /// commit shim at `DEL-008`.
-    JoinMarketUnsupported,
     /// Internal inconsistency (§3.4: release-mode txid divergence between
     /// the engine hash and C++ `get_transaction_hash` over the same blob,
     /// or a marshalling fault). Never a verdict: surfaced as a loud
@@ -583,6 +597,12 @@ pub enum CommitOutcome {
 /// The engine's seam to pool/blockchain state (§3.2). See the module docs
 /// for the reversion shape.
 pub trait SubmitStateShim {
+    /// The id of the network this node is on. Every submission's
+    /// signatures are judged under it (CEN-I17, `NETWORK_IDENTITY.md`
+    /// NI-Q4), the release pre-gate's included, which runs before any
+    /// snapshot.
+    fn network_id(&self) -> shekyl_network::NetworkId;
+
     /// Phase B: one short pool→blockchain lock scope, reads only (§4.1).
     ///
     /// `bond_probe` is `Some` for a bond-post submission and names which
@@ -613,7 +633,7 @@ pub trait SubmitStateShim {
 
     /// Phase D: one short pool→blockchain lock scope — release-mode txid
     /// check first, then the §3.1 re-check list (identity, key images,
-    /// hash-anchored reference + age window, root compare, `check_fee`
+    /// hash-anchored reference + age window, root compare, the fee predicate
     /// re-gate against fresh params), then the existing `add_tx` insert
     /// tail with certificate-gated `fcmp_verified` attestation (§3.5) and
     /// the post-prune membership check (§4.2).
@@ -638,6 +658,10 @@ pub trait SubmitStateShim {
 // shape; without this, every out-of-crate implementor hits the orphan rule
 // wrapping its mock in `Arc`.
 impl<T: SubmitStateShim + ?Sized> SubmitStateShim for std::sync::Arc<T> {
+    fn network_id(&self) -> shekyl_network::NetworkId {
+        (**self).network_id()
+    }
+
     fn snapshot_facts(
         &self,
         txid: &TxHash,

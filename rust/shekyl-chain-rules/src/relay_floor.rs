@@ -28,8 +28,8 @@
 //! the flip deletes.
 
 use shekyl_economics::{
-    fee_ladder_from, relay_floor_from, CirculatingSupply, FeeLadder, FeeOperands,
-    RELAY_FLOOR_LOOKBACK,
+    fee_ladder_from, relay_floor_from, relay_policy, CirculatingSupply, FeeLadder, FeeOperands,
+    RelayPolicy,
 };
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
@@ -126,8 +126,22 @@ pub fn relay_floor_at<'id, V: ChainView<'id>>(
     view: &V,
     height: BlockHeight,
 ) -> Result<AtHeight<u64>, ViewRead<V::Fault>> {
+    relay_floor_under(view, height, relay_policy())
+}
+
+/// [`relay_floor_at`] under `policy` (its `w_ref`). Production passes
+/// [`relay_policy`]; a test or a fold passes its own.
+///
+/// # Errors
+///
+/// As [`relay_floor_at`].
+pub fn relay_floor_under<'id, V: ChainView<'id>>(
+    view: &V,
+    height: BlockHeight,
+    policy: &RelayPolicy,
+) -> Result<AtHeight<u64>, ViewRead<V::Fault>> {
     match fee_operands_at(view, height)? {
-        AtHeight::Recorded(operands) => relay_floor_from(operands, economics())
+        AtHeight::Recorded(operands) => relay_floor_from(operands, economics(), policy)
             .map(AtHeight::Recorded)
             .ok_or(ViewRead::Corrupt(Corrupt::RelayFloorUnpriceable {
                 at: height,
@@ -153,12 +167,14 @@ pub fn fee_ladder_at<'id, V: ChainView<'id>>(
     height: BlockHeight,
 ) -> Result<AtHeight<FeeLadder>, ViewRead<V::Fault>> {
     match fee_operands_at(view, height)? {
-        AtHeight::Recorded(operands) => fee_ladder_from(operands, economics())
-            .map(AtHeight::Recorded)
-            .ok_or(ViewRead::Corrupt(Corrupt::RelayFloorUnpriceable {
-                at: height,
-                operands,
-            })),
+        AtHeight::Recorded(operands) => {
+            fee_ladder_from(operands, economics(), shekyl_economics::relay_policy())
+                .map(AtHeight::Recorded)
+                .ok_or(ViewRead::Corrupt(Corrupt::RelayFloorUnpriceable {
+                    at: height,
+                    operands,
+                }))
+        }
         AtHeight::AboveTip => Ok(AtHeight::AboveTip),
     }
 }
@@ -167,10 +183,7 @@ pub fn fee_ladder_at<'id, V: ChainView<'id>>(
 /// `F(h)` for `h` in `max(0, connecting − G) ..= connecting`, oldest
 /// first. Fewer than `G + 1` only while the chain is shorter than `G`.
 ///
-/// The live C++ submit path still admits on one floor: `fee_meets_floor` is
-/// `relay_floor_admits` over the tip floor alone. The Rust pool's door, and
-/// `fee_clears` when the shim supplies this window, already admit on it.
-/// The DRS-X store flip deletes the one-floor arm with the C++ ring.
+/// `fee_clears` admits on this window. A snapshot with no window refuses.
 ///
 /// # Errors
 ///
@@ -179,11 +192,31 @@ pub fn relay_floor_window<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
 ) -> Result<AtHeight<Vec<u64>>, ViewRead<V::Fault>> {
+    relay_floor_window_under(view, connecting, relay_policy())
+}
+
+/// [`relay_floor_window`] under `policy`: its lookback `G` sets the depth,
+/// and each floor is priced under it ([`relay_floor_under`]). Production
+/// passes [`relay_policy`].
+///
+/// # Errors
+///
+/// As [`relay_floor_window`].
+pub fn relay_floor_window_under<'id, V: ChainView<'id>>(
+    view: &V,
+    connecting: BlockHeight,
+    policy: &RelayPolicy,
+) -> Result<AtHeight<Vec<u64>>, ViewRead<V::Fault>> {
     let newest = connecting.to_raw();
-    let oldest = newest.saturating_sub(RELAY_FLOOR_LOOKBACK as u64);
-    let mut floors = Vec::with_capacity(RELAY_FLOOR_LOOKBACK + 1);
+    let depth = policy.lookback;
+    let oldest = newest.saturating_sub(depth);
+    let mut floors = Vec::with_capacity(
+        usize::try_from(depth)
+            .unwrap_or(usize::MAX)
+            .saturating_add(1),
+    );
     for h in oldest..=newest {
-        match relay_floor_at(view, BlockHeight::from_raw(h))? {
+        match relay_floor_under(view, BlockHeight::from_raw(h), policy)? {
             AtHeight::Recorded(floor) => floors.push(floor),
             AtHeight::AboveTip => return Ok(AtHeight::AboveTip),
         }

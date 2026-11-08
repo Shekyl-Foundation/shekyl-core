@@ -9,7 +9,15 @@
 //!
 //! ```text
 //! payload(i)     = pruned_segment ‖ prunable_hash ‖ pqc_header(i) ‖ key_hashes
-//! signed_hash(i) = keccak256(payload(i))
+//! ```
+//!
+//! and, from the same fields, what the network-bound signatures are over
+//! (the signing envelope §2.2):
+//!
+//! ```text
+//! tx_signable    = frame("shekyl/tx-signable-v1", id, [prefix_hash, ct_base_hash])
+//! signed_hash(i) = frame("shekyl/fcmp-spend-signing-v2", id,
+//!                        [tx_signable, pqc_header(i), key_hashes, prunable_hash])
 //! ```
 //!
 //! `tests/fixtures/pqc_signing_preimage_v1.json` holds, for each of eight
@@ -27,7 +35,7 @@
 //! because consensus forbids it `pqc_auths` (CEN-H20) and its hybrid
 //! countersignature is over the pass record, by the bond's registered key,
 //! with the Ed25519 leg on the vin and the ML-DSA leg in the pruned record
-//! (`shekyl_archival_verify_serve_credit_vin`, CEN-J10). Its zero entry here
+//! (the serve-credit verifier, CEN-J10, pending in `shekyl-chain-rules`). Its zero entry here
 //! is that boundary recorded, and it is why CEN-I18 is vacuous on the form.
 //!
 //! **Why a fixture and not a live comparison.** The payload was assembled in
@@ -42,8 +50,10 @@
 //! against the specification, not against the program that produced it:
 //! the same bytes today, and the claim that outlives the C++.
 //!
-//! The Rust leg below holds [`PqcSigningPreimage`] — the payload bytes, input
-//! by input — and [`Transaction::pqc_signing_payload_hashes`] to the fixture.
+//! The Rust leg below holds the captured payloads to this crate's segments,
+//! and [`Transaction::tx_signable`] and
+//! [`Transaction::pqc_signing_payload_hashes`] to the pins the independent
+//! oracle derives from those payloads.
 //! The C++ leg (`tests/unit_tests/pqc_signing_preimage_kat.cpp`) held the
 //! C++ assembly to it while the assembly existed.
 
@@ -341,18 +351,19 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
             .iter()
             .map(|p| hex_bytes(p.as_str().expect("hex")))
             .collect();
-        let hashes: Vec<SigningPayloadHash> = entry["signed_hashes_hex"]
+        // The C++ capture's keccak256 of each payload: its own consistency
+        // check, not a hash anything signs now.
+        let hashes: Vec<[u8; 32]> = entry["signed_hashes_hex"]
             .as_array()
             .expect("signed_hashes_hex")
             .iter()
             .map(|h| <[u8; 32]>::try_from(hex_bytes(h.as_str().expect("hex"))).expect("32 bytes"))
-            .map(SigningPayloadHash::from_bytes)
             .collect();
         assert_eq!(payloads.len(), hashes.len(), "{name}: one hash per payload");
         for (i, (payload, hash)) in payloads.iter().zip(&hashes).enumerate() {
             assert_eq!(
                 keccak256(payload),
-                hash.to_bytes(),
+                *hash,
                 "{name} input {i}: the fixture's own hash is of its own payload"
             );
         }
@@ -366,33 +377,81 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
         }
         let tx = Transaction::from_bytes(&tx_bytes)
             .unwrap_or_else(|e| panic!("{name}: the pinned bytes parse: {e}"));
-        // The derivation of record, against the specification's output:
-        // the payload bytes input by input, then the hashes the production
-        // callers take.
-        if let Some(preimage) = PqcSigningPreimage::of(&tx) {
-            let Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
-                panic!("{name}: a preimage exists only for an Fcmp body");
-            };
-            assert_eq!(
-                pqc_auths.len(),
-                payloads.len(),
-                "{name}: one payload per auth"
-            );
-            for (i, (auth, payload)) in pqc_auths.iter().zip(&payloads).enumerate() {
+        // The captured payloads are where the envelope's fields come from:
+        // each starts with this crate's pruned segment, then the txid's
+        // prunable component — the bytes `tx_signable` and the spend hash
+        // frame (the signing envelope §2.2).
+        if !payloads.is_empty() {
+            let segments = tx.write_segments().expect("the body segments");
+            for (i, payload) in payloads.iter().enumerate() {
+                assert!(
+                    payload.starts_with(&segments.pruned),
+                    "{name} input {i}: the captured payload starts with the pruned segment"
+                );
                 assert_eq!(
-                    preimage.payload(auth),
-                    *payload,
-                    "{name} input {i}: payload bytes"
+                    payload[segments.pruned.len()..segments.pruned.len() + 32],
+                    tx.prunable_hash().to_bytes(),
+                    "{name} input {i}: then the prunable hash"
                 );
             }
-        } else {
-            assert!(payloads.is_empty(), "{name}: no preimage, no payloads");
         }
+        let Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
+            panic!("{name}: every subject is an Fcmp body");
+        };
         assert_eq!(
-            tx.pqc_signing_payload_hashes(),
-            hashes,
-            "{name}: signed hashes"
+            pqc_auths.len(),
+            payloads.len(),
+            "{name}: one payload per auth"
         );
+        // The network-bound message and every input's hash, pinned per
+        // network against `scripts/kat/spend_signing_hash_oracle.py`, which
+        // shares no code with this crate and takes the captured payloads
+        // apart itself (`NETWORK_IDENTITY.md` NI-Q4, NI-F12 (b)).
+        let mut per_network = Vec::new();
+        for net in shekyl_network::Network::ALL {
+            let id = net.network_id();
+            if !payloads.is_empty() {
+                let pinned = entry["tx_signable_by_network"][net.name()]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{name}: no {net} tx_signable pinned"));
+                assert_eq!(
+                    hex_str(tx.tx_signable(&id).as_bytes()),
+                    pinned,
+                    "{name}: tx_signable on {net}"
+                );
+                assert!(
+                    PqcSigningPreimage::of(&tx, &id).is_some(),
+                    "{name}: a body with payloads has a preimage"
+                );
+            } else {
+                assert!(
+                    PqcSigningPreimage::of(&tx, &id).is_none(),
+                    "{name}: no payloads, no preimage"
+                );
+            }
+            let pinned: Vec<SigningPayloadHash> = entry["signed_hashes_by_network"][net.name()]
+                .as_array()
+                .unwrap_or_else(|| panic!("{name}: no {net} hashes pinned"))
+                .iter()
+                .map(|h| {
+                    <[u8; 64]>::try_from(hex_bytes(h.as_str().expect("hex"))).expect("64 bytes")
+                })
+                .map(SigningPayloadHash::from_bytes)
+                .collect();
+            assert_eq!(
+                tx.pqc_signing_payload_hashes(&id),
+                pinned,
+                "{name}: signed hashes on {net}"
+            );
+            per_network.push(pinned);
+        }
+        if !payloads.is_empty() {
+            for (i, a) in per_network.iter().enumerate() {
+                for b in &per_network[i + 1..] {
+                    assert_ne!(a, b, "{name}: two networks sign over the same hash");
+                }
+            }
+        }
         input_counts.push((name.to_owned(), tx.prefix.inputs.len(), payloads.len()));
     }
     // The shapes the fixture exists for are all here: a single input, several,

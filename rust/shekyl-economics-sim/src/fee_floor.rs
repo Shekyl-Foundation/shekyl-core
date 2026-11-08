@@ -39,8 +39,8 @@
 //!
 //! §1.9 discipline: `C` comes from the owners through
 //! [`fee_ladder::correction_factor_ratio`]. The floor formula's owner is
-//! `shekyl_economics::relay_fee_floor`, and the daemon's
-//! `get_current_fee_per_byte` calls it.
+//! `shekyl_economics::relay_fee_floor`. The daemon's admission calls that
+//! owner.
 //!
 //! [`floor_rate`] is NOT simply replaced by it, and the reason is the
 //! instrument's subject rather than inertia: the owner returns atomic
@@ -57,7 +57,7 @@ use core::fmt::Write as _;
 use serde::Serialize;
 use shekyl_economics::params::TX_VOLUME_WINDOW;
 use shekyl_economics::{
-    base_block_reward, EconomicParams, TxVolume, BLOCKS_PER_YEAR, RELAY_FLOOR_LOOKBACK,
+    base_block_reward, EconomicParams, RelayPolicy, TxVolume, BLOCKS_PER_YEAR,
     RELAY_FLOOR_REFERENCE_TX_WEIGHT,
 };
 
@@ -70,12 +70,16 @@ use crate::volume_window::VolumeWindow;
 
 const VOLUME_WINDOW: u64 = TX_VOLUME_WINDOW;
 
-/// FL-R23's lookback depth as re-derived at review A-1: the hot-session gap
+/// The shipped lookback ([`RelayPolicy::SHIPPED`]): the hot-session gap
 /// (0–2 blocks) + the network height spread at relay (2) + one block of
 /// slack. The identity the predicate delivers is per receiving node — a
 /// quote at `h` is admitted by identity at every node whose tip is in
-/// `[h, h+G]`.
-pub const LOOKBACK_G: usize = RELAY_FLOOR_LOOKBACK;
+/// `[h, h+G]`. [`LOOKBACK_SWEEP`] is the analysis grid of `G`.
+///
+// CLIPPY: cast_possible_truncation — u64-to-usize loses bits only on a
+// target narrower than 64 bits. The shipped depth is 5.
+#[allow(clippy::cast_possible_truncation)]
+pub const LOOKBACK_G: usize = RelayPolicy::SHIPPED.lookback as usize;
 /// FL-E4's sweep: the first draft's `G` = 3, the re-derived 5, and the
 /// point between, so the grace curve — not the derivation alone — is on
 /// record.
@@ -362,11 +366,20 @@ pub struct FeeFloorReport {
 pub fn report() -> FeeFloorReport {
     let params = EconomicParams::default();
     let zone = FULL_REWARD_ZONE;
-    let ages: [u64; 5] = [0, 1, 4, 12, 30];
-    let states: Vec<AgeState> = ages.iter().map(|&a| age_state(a, &params)).collect();
+    // The §1.8 age grid prices FL-E1's feedback cells. The slew traces run
+    // on to the saturation plateau: from about year 80 the burn sits at its
+    // cap and `C` at its structural maximum, so the roll-ups' worst case is
+    // the chain's and not the grid's edge (`ECONOMICS_SIM_PHASE0.md` §P0.1).
+    let feedback_ages: [u64; 5] = [0, 1, 4, 12, 30];
+    let slew_ages: [u64; 7] = [0, 1, 4, 12, 30, 60, 80];
+    let states: Vec<AgeState> = feedback_ages
+        .iter()
+        .map(|&a| age_state(a, &params))
+        .collect();
+    let slew_states: Vec<AgeState> = slew_ages.iter().map(|&a| age_state(a, &params)).collect();
 
     let mut slew = Vec::new();
-    for &st in &states {
+    for &st in &slew_states {
         for &(label, m0, m1, step) in SLEW_SCENARIOS {
             slew.push(slew_scenario(label, m0, m1, step, st, &params));
         }
@@ -522,6 +535,7 @@ mod tests {
                         RELAY_FLOOR_REFERENCE_TX_WEIGHT,
                         FeeCorrection::from_scaled(c),
                         &params,
+                        shekyl_economics::relay_policy(),
                     );
                     let owned = u128::from(ladder.economy);
                     assert_eq!(
@@ -543,5 +557,26 @@ mod tests {
         assert_eq!(whole_transactions(49.5), 50);
         assert_eq!(whole_transactions(-3.0), 0);
         assert_eq!(whole_transactions(0.0), 0);
+    }
+
+    /// FL-E1 on the exact window, held by no test until Phase 0
+    /// (`ECONOMICS_SIM_PHASE0.md` §P0.1): 600 cells on the §1.8 age grid,
+    /// four of them not converged under the 50 bp bar, all at age 12 with
+    /// `eps` = 3, `D` = 400 and the displaced start, worst tail amplitude
+    /// 87 bp. The fee-floor report is this crate's instrument, not a fold.
+    #[test]
+    fn fl_e1_has_four_unconverged_cells_at_age_twelve_and_a_worst_of_87_bp() {
+        let report = report();
+        assert_eq!(report.feedback.len(), 600);
+        let unconverged: Vec<_> = report.feedback.iter().filter(|f| !f.converged).collect();
+        assert_eq!(unconverged.len(), 4);
+        for cell in &unconverged {
+            assert_eq!(cell.age_years, 12);
+            assert_eq!(cell.elasticity_milli, 3_000);
+            assert_eq!(cell.demand_scale, 400);
+            assert_eq!(cell.tail_amplitude_bp, 87);
+        }
+        let worst = report.feedback.iter().map(|f| f.tail_amplitude_bp).max();
+        assert_eq!(worst, Some(87));
     }
 }

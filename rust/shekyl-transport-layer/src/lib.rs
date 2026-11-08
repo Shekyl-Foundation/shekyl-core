@@ -23,6 +23,7 @@
 const _: () = assert!(shekyl_p2p_transport::INITIATOR_FLIGHT_LEN == 1_224);
 const _: () = assert!(shekyl_p2p_transport::RESPONDER_FLIGHT_LEN == 1_160);
 
+mod accept_rate;
 mod admission;
 mod ban;
 mod budget;
@@ -30,15 +31,25 @@ mod cause;
 mod clock;
 mod declaration;
 mod dial;
+mod failure;
 mod link;
+mod profile;
 pub mod spans;
 
-pub use admission::{
-    CloseResult, Direction, ObservedEndpoint, OpenError, OpenSocket, SocketId, Sockets,
+pub use accept_rate::{
+    accept_bound, clearnet_linger_descriptors, linger_cap, AcceptBound, AcceptGate, AcceptRate,
+    HostKey, RateRefusal,
 };
-pub use ban::{deadline_after, BanLeft, BanList, Ipv4Subnet, ListedBan};
+pub use admission::{
+    AcceptRefusals, CloseResult, Direction, ObservedEndpoint, OpenError, OpenSocket, SocketId,
+    Sockets,
+};
+pub use ban::{
+    deadline_after, BanEntry, BanEvent, BanFeed, BanLeft, BanList, BanRings, BanSet, Ipv4Subnet,
+    ListedBan,
+};
 pub use budget::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};
-pub use cause::{c_header, socks_reply_is_our_request, CloseCause, CloseKind, Phase};
+pub use cause::{CloseCause, CloseKind, Phase};
 pub use clock::{monotonic_ms, recv_mark_ms, unix_ms_of};
 pub use declaration::{
     addressing_of, connector_for, declaration, stack_plan, AddedLayer, Addressing, Assessment,
@@ -47,5 +58,13 @@ pub use declaration::{
     StackPlan, StreamKind, YesNo,
 };
 pub use dial::check_dial;
-pub use link::{DownCause, Link, Links, Outbound, Route, RoutePublish, Subscription, Watcher};
+pub use failure::{DialEnd, DialFailure, Evidence, Proof, ProofKind, Reached, Retry, StreamEnd};
+pub use link::{
+    DownCause, InboundCause, InboundFacet, Link, Links, Outbound, Route, RoutePublish,
+    Subscription, Watcher,
+};
+pub use profile::{
+    dial_profile, AttemptsPerTest, Cooldown, Corroboration, DialProfile, FailureJudging,
+    JitteredSpan, RetryWaits, SessionTraffic, StreamOpens, WindowSource,
+};
 pub use shekyl_net_address::NetworkAddress;

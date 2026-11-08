@@ -16,6 +16,8 @@ build = "build.rs"
 serde_json = "1"
 
 [dependencies]
+# The network id the wallet's spends sign under (NETWORK_IDENTITY.md NI-Q4).
+shekyl-network = { path = "../shekyl-network" }
 shekyl-scanner = { path = "../shekyl-scanner" }
 # Canonical, spec-faithful block/transaction parse (`GENESIS_TX_WIRE_FORMAT.md`).
 # Backs `DaemonEngine::fetch_scannable_block` (`engine/block_fetch.rs`) and the
@@ -119,9 +121,17 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # names no engine type, which is what lets the pinner seam be the only path
 # to a `ServeSet`.
 shekyl-p-host = { path = "../shekyl-p-host" }
-# `P`'s encrypted body store (`WSS-Q1`(a)). StakeEngine owns the writer;
-# the serving host takes a BodyStoreReader. A non-staker does not open one.
+# `P`'s encrypted body store (`WSS-Q1`(a)). Its own actor owns it, beside the
+# stake actor; the serving host reads by message (`WSS-Q13`). A non-staker
+# does not open one.
 shekyl-p-store = { path = "../shekyl-p-store" }
+# The body-store actor's runtime (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8).
+# One worker, threads lowered at start, ledger row included. First-party;
+# its only edges are `tokio` (already here) and `shekyl-thread-ledger`.
+shekyl-runtime = { path = "../shekyl-runtime" }
+# `lower_current_thread`, the same call the serving runtime's threads make.
+# No new third-party edge: libc and windows-sys are already in the lockfile.
+shekyl-thread-priority = { path = "../shekyl-thread-priority" }
 # The OA-1 operator alarm channel, re-exported from this crate's root
 # (`src/lib.rs`), alongside `shekyl-address`'s payment-URI codec. A leaf that
 # names no engine type — the dependency runs engine-core -> operator-alarm and
@@ -253,15 +263,28 @@ kameo = { workspace = true }
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# `test-tamper` compiles `CurveTreeClient::test_tamper_poison`, which the
+# curve-tree actor's in-place recovery tests poison a client with. Test
+# builds only (resolver v2); production keeps the plain dependency above.
+shekyl-curve-tree = { path = "../shekyl-curve-tree", features = ["test-tamper"] }
 # Test doubles answer with the daemon's own wire types (RK-D1), so a double
 # cannot drift from the contract the way a hand-written JSON literal can.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# The regtest walks' simulated Levin peer (`regtest_e2e_peer.rs`): the
+# adversary lives in the test, speaking the daemon's own codec and its
+# network id derivation. Both are workspace crates already in the graph.
+shekyl-levin = { path = "../shekyl-levin" }
+shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 # Self dev-dep (the scanner crate's own bench idiom): enables `test-helpers`
 # for this crate's integration tests, so `tests/sp_r0_arm1_fire.rs` compiles
 # the DQ-F fire harness into the lib-under-test on a plain `cargo test`
 # (no silently-skipped `required-features` lane).
 shekyl-engine-core = { path = ".", features = ["test-helpers"] }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
+# `BoundTx::whole` / `BoundTx::modify` for the unit tests' fixture bodies
+# (TEST_ONLY, check_test_only_features.py). Dev edge only: the
+# `test-helpers` lib surface binds through the scanner's `bound` instead.
+shekyl-wire = { path = "../shekyl-wire", features = ["test-fixtures"] }
 # The serving-task lifecycle tests bind a host to `RefusingKey` (a key that
 # says no), which lives on `shekyl-p-host`'s dev-only `test-signer` edge with
 # `TestKeySigner`; `check_p_fetch_dep_cut.py` holds that edge off every
@@ -337,7 +360,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # for a given binary, so retries cannot clear it (see
 # `docs/investigation/2026-05-09-bench-baseline-flake.md` and the
 # key-dispatch baseline bench's module doc).
-gungraun = { version = "0.19", features = ["client_requests"] }
+gungraun = "0.19"
 tempfile = "3"
 # `test-util` enables `#[tokio::test(start_paused = true)]` and the
 # in-test `tokio::time` virtualization that `wallet::refresh`'s
@@ -396,7 +419,7 @@ proptest = "1"
 #     `multiexp = "0.4"`, `ciphersuite = "0.4"`,
 #     `dalek-ff-group = "0.5"`, `rand_core = "0.6"`. Each is
 #     already present at the same pin in `shekyl-fcmp`,
-#     `shekyl-tx-builder`, `shekyl-ffi`, and/or `shekyl-crypto-pq`;
+#     `shekyl-tx-builder`, and/or `shekyl-crypto-pq`;
 #     no new third-party supply-chain surface enters here.
 #
 # `shekyl-fcmp` is currently `optional = true` in production
@@ -426,6 +449,15 @@ ciphersuite = "0.4"
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 dalek-ff-group = "0.5"
 rand_core = "0.6"
+
+# `client_requests` builds `valgrind-requests`, whose build script refuses
+# a target Valgrind does not support, Windows among them, so it is
+# Unix-only: every `--all-targets` lane on the Windows runner failed on it
+# (feature unification carries it to every crate in a workspace build).
+# The benches' Callgrind start/stop calls are `cfg(unix)` to match; the
+# benches compile on Windows and run only where Valgrind does.
+[target.'cfg(unix)'.dev-dependencies]
+gungraun = { version = "0.19", features = ["client_requests"] }
 
 [[bench]]
 name = "refresh_snapshot"

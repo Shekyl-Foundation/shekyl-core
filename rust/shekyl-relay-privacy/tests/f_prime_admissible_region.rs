@@ -447,12 +447,12 @@ fn dependents_at_each_candidate_boundary() {
     );
     assert_eq!(
         shipped_clear, 190,
-        "the shipped clearnet embargo is pinned at 190 s (dandelionpp_ffi.rs); this \
+        "the shipped clearnet embargo is pinned at 190 s (EmbargoTimer::adopted); this \
          derivation gives {shipped_clear} s"
     );
     assert_eq!(
         shipped_anon, 499,
-        "the shipped anonymity embargo is pinned at 499 s (dandelionpp_ffi.rs); this \
+        "the shipped anonymity embargo is pinned at 499 s (EmbargoTimer::adopted); this \
          derivation gives {shipped_anon} s"
     );
     assert_eq!(

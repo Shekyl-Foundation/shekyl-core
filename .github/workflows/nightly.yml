@@ -13,6 +13,9 @@ on:
           - proptest-exhaustive
           - store-ignored
           - economics-sim-ignored
+          - chain-ingest-ignored
+          - wire-ignored
+          - producer-gate
         default: all
       ref:
         description: "Run over this one ref (a branch or a commit) in place of main and dev. For proving a lane on a branch."
@@ -30,6 +33,13 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # No lane here caches cargo's registry or `rust/target`. On the
+  # 2026-11-07 schedule all ten legs missed their cache, restore keys
+  # included, and seven saved a multi-GB `rust/target` anyway: the
+  # repository's caches sit over the 10 GB quota, so by the next night
+  # GitHub has evicted what a lane saved. The saves only pushed the
+  # per-PR jobs' caches out, which are the ones that hit. A lane builds
+  # from source; a nightly has the time and a PR does not.
   proptest-exhaustive:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'proptest-exhaustive' }}
     # Scheduled workflows always execute from the default branch (main), so the
@@ -64,16 +74,6 @@ jobs:
         # checked-out `ref` above, so each matrix branch uses its own
         # copy.
         uses: ./.github/actions/install-rust
-
-      - name: Cache cargo registry + build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: nightly-proptest-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: nightly-proptest-${{ matrix.branch }}-
 
       - name: Run proptest (200 000 cases)
         working-directory: rust
@@ -117,10 +117,12 @@ jobs:
     # is about half an hour in release on a workstation, the boundary test
     # 140 s, the slash bench 25 s, plus the release build.
     #
-    # Same matrix and same caveat as above: the schedule runs main's copy of
-    # this file over both branches, so the `main` leg is red until the
-    # release that carries the test (and threads onto one tracking issue
-    # until then); `workflow_dispatch` with ref=dev runs the newer config.
+    # Same matrix as above. The schedule runs main's copy of this file over
+    # both branches, but the set is read from the checked-out ref's
+    # scripts/ci/ignored_set_chain_store.sh, so each leg is judged by its
+    # own tree; `workflow_dispatch` with `ref` proves one branch's set.
+    # The per-PR Rust job runs this script with `--check` and stops after
+    # that judgement.
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -139,44 +141,50 @@ jobs:
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
 
-      - name: Cache cargo registry + build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: nightly-store-ignored-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: nightly-store-ignored-${{ matrix.branch }}-
-
       - name: Run the chain store's ignored set
-        working-directory: rust
-        # Rule 47: the lane asserts every subject it owns is in the set
-        # before running it — a renamed, deleted or un-ignored member fails
-        # here by name, not by passing a run that no longer contains it. The
-        # four names are the lane's charter; a fifth ignored test runs too
-        # and is counted, and joins the list when it is this lane's to own.
-        # The benches run at their defaults: a default that builds a chain
-        # the constants refuse is exactly what this lane exists to see.
+        # The set and its assertions are scripts/ci/ignored_set_chain_store.sh,
+        # in the tree under test: each branch judges itself (the header says
+        # why the list no longer lives here).
         env:
           BRANCH: ${{ matrix.branch }}
-        run: |
-          set -eu
-          list=$(cargo test --locked --release -p shekyl-chain-store --lib -- --list --ignored)
-          for subject in \
-            'store::prune_tests::the_boundary_batch_discards_closed_shards_on_real_spends' \
-            'store::slash_scan_bench_tests::slash_scan_bench' \
-            'store::slash_scan_bench_tests::the_window_stops_at_the_retention_horizon' \
-            'store::weights_read_bench_tests::weights_read_bench'
-          do
-            printf '%s\n' "$list" | grep -qx "${subject}: test" \
-              || { echo "::error::${subject} is not in shekyl-chain-store's ignored set"; exit 1; }
-          done
-          printf '%s\n' "$list" | grep -c ': test$'
-          START=$(date +%s)
-          cargo test --locked --release -p shekyl-chain-store --lib -- --ignored --nocapture 2>&1
-          END=$(date +%s)
-          echo "::notice::Chain store ignored set completed on ${BRANCH} in $((END - START))s (budget 120m)"
+        run: bash scripts/ci/ignored_set_chain_store.sh
+
+  producer-gate:
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'producer-gate' }}
+    # The bundle producer's gate (`SO-D12` increment 4c,
+    # `ARCHIVAL_SETTLEMENT_WRITER.md` §16.11): a bundle the producer made is
+    # admitted by 4a's verifier on a driven chain and connects through the
+    # staged door, with its support-stream twin. The cutover (4b) does not
+    # land until they hold, so a lane runs them every night. They are
+    # `#[ignore]`d because they fill a shard with real proofs and mine long
+    # epochs; the script runs exactly them, in release, after asserting
+    # each is in the ignored listing.
+    #
+    # Same matrix as above; the script is read from the checked-out ref.
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: Run the bundle producer's gate
+        # The subject and its assertion are scripts/ci/producer_gate.sh, in
+        # the tree under test.
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: bash scripts/ci/producer_gate.sh
 
   economics-sim-ignored:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored' }}
@@ -189,17 +197,15 @@ jobs:
     # green until a fresh clone ran the tests by hand two commits later
     # (e3d0931d77).
     #
-    # The crate's other two ignored tests, `regen_baseline_fixture` and
-    # `regen_stage2_narration_fixtures`, WRITE the committed fixtures. They
-    # are named below as helpers and never run here: a lane that
-    # regenerated the fixtures and then compared against them would pass
-    # every night.
+    # The crate's two regeneration helpers WRITE the committed fixtures and
+    # are never run here; the script names them so the set is exact.
     #
-    # Same matrix and same caveat as above: the schedule runs main's copy of
-    # this file over both branches, so the `main` leg is red until the
-    # release that carries the tests it names (and threads onto one tracking
-    # issue until then); `workflow_dispatch` with ref=dev runs the newer
-    # config.
+    # Same matrix as above. The schedule runs main's copy of this file over
+    # both branches, but the set is read from the checked-out ref's
+    # scripts/ci/ignored_set_economics_sim.sh, so each leg is judged by its
+    # own tree; `workflow_dispatch` with `ref` proves one branch's set.
+    # The per-PR Rust job runs this script with `--check` and stops after
+    # that judgement.
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -218,80 +224,110 @@ jobs:
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
 
-      - name: Cache cargo registry + build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: nightly-economics-sim-ignored-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: nightly-economics-sim-ignored-${{ matrix.branch }}-
-
       - name: Run the economics sim's ignored tests
-        working-directory: rust
-        # Rule 47: the lane asserts its subject before running it. The
-        # crate's ignored set must be EXACTLY the tests run here plus the
-        # two regeneration helpers. A renamed, deleted or un-ignored member
-        # fails by name; a new ignored test fails too, until someone decides
-        # here whether it is run or is a helper. The tests are passed by
-        # exact name, so the helpers cannot be reached by a filter.
-        #
-        # The crate is a binary with no library target: the tests are in
-        # `--bin shekyl-economics-sim`.
+        # The set, the helpers and their assertions are
+        # scripts/ci/ignored_set_economics_sim.sh, in the tree under test:
+        # each branch judges itself.
         env:
           BRANCH: ${{ matrix.branch }}
-        run: |
-          set -eu
-          run_tests='stage2::tests::stage2_narration_matches_the_committed_fixture
-          stage2::tests::stage2_narration_flat_control_matches_the_committed_fixture
-          secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders'
-          helpers='record::tests::regen_baseline_fixture
-          stage2::tests::regen_stage2_narration_fixtures'
-          run_tests=$(printf '%s\n' "$run_tests" | sed 's/^ *//')
-          helpers=$(printf '%s\n' "$helpers" | sed 's/^ *//')
+        run: bash scripts/ci/ignored_set_economics_sim.sh
 
-          listing=$(cargo test --locked --release -p shekyl-economics-sim --bin shekyl-economics-sim -- --list --ignored)
-          found=$(printf '%s\n' "$listing" | sed -n 's/: test$//p' | sort)
-          expected=$(printf '%s\n%s\n' "$run_tests" "$helpers" | sort)
-          if [ "$found" != "$expected" ]; then
-            echo "::error::shekyl-economics-sim's ignored set is not the one this lane was written for."
-            echo "expected (the tests run, then the helpers that are not):"
-            printf '%s\n' "$expected"
-            echo "found:"
-            printf '%s\n' "$found"
-            echo "Decide in nightly.yml whether each new ignored test is run here or is a regeneration helper."
-            exit 1
-          fi
+  chain-ingest-ignored:
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'chain-ingest-ignored' }}
+    # The chain-ingest crate's `#[ignore]`d set: the scenarios that fill
+    # shards with real proofs (the emission claims, the levered slash chain,
+    # the join, the pool-shim posts), the miner over real RandomX, the
+    # captured-chain replay under the production substrate, and the
+    # measurements (the switch at the genesis cap, the miner's rate, the H19
+    # batch cost). This job is the lane that invokes them. Before it none
+    # did: their ignore strings named a "live lane" no workflow ran, and its
+    # first run (DRS-X PR 3e) found five red on dev: the switch-timing tests
+    # asserted an alt table the death rule (0999f8726) had since emptied, and
+    # the five-block miner test never pinned the seed the miner requires
+    # (e1c39b882). Budget: 44 minutes on a loaded 16-core workstation; 240
+    # for a 4-vCPU runner.
+    # The figures a shared runner prints decide nothing (rule 76); what the
+    # lane asserts is that every ignored test still passes.
+    #
+    # Same matrix as above. The set is read from the checked-out ref's
+    # scripts/ci/ignored_set_chain_ingest.sh, so each leg is judged by its
+    # own tree; `workflow_dispatch` with `ref` proves one branch's set.
+    # The per-PR Rust job runs this script with `--check` and stops after
+    # that judgement.
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
 
-          START=$(date +%s)
-          # The verdict does not travel through a pipe (rule 46): the log
-          # is written, the exit kept, then the log shown.
-          status=0
-          # shellcheck disable=SC2086 # one test name per word, by design
-          cargo test --locked --release -p shekyl-economics-sim --bin shekyl-economics-sim -- \
-            --ignored --exact --nocapture $run_tests > sim-ignored.log 2>&1 || status=$?
-          cat sim-ignored.log
-          if [ "$status" -ne 0 ]; then
-            echo "::error::economics-sim-ignored: a named test failed. If a narration drifted, regenerate with regen_stage2_narration_fixtures only if the sim change is intended; otherwise the sim drifted from its record."
-            exit "$status"
-          fi
-          ran=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' sim-ignored.log | tail -1)
-          want=$(printf '%s\n' "$run_tests" | grep -c .)
-          if [ "$ran" != "$want" ]; then
-            echo "::error::${ran:-0} of ${want} named tests ran: a name above no longer matches a test exactly."
-            exit 1
-          fi
-          END=$(date +%s)
-          echo "::notice::Economics sim ignored tests completed on ${BRANCH} in $((END - START))s (budget 180m)"
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: Run the chain-ingest ignored set
+        # The set and its assertions are scripts/ci/ignored_set_chain_ingest.sh,
+        # in the tree under test: each branch judges itself.
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: bash scripts/ci/ignored_set_chain_ingest.sh
+
+  wire-ignored:
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'wire-ignored' }}
+    # shekyl-wire's `#[ignore]`d set: the RT-W10 listed-tx parse harness,
+    # run with RT_W10_OUT unset so it writes a few samples to a scratch
+    # directory and removes it (the run proves the harness works; its
+    # figures come from the floor device), and the input-cap measurement
+    # (BA-I30). This job is the lane that invokes them. Before it none did.
+    #
+    # The crate's fixture and vector writers WRITE committed files and are
+    # never run here; the script names them so the set is exact.
+    #
+    # Same matrix as above. The set is read from the checked-out ref's
+    # scripts/ci/ignored_set_wire.sh, so each leg is judged by its own tree;
+    # `workflow_dispatch` with `ref` proves one branch's set.
+    runs-on: ubuntu-latest
+    # Not yet timed: a release build of shekyl-wire's test targets and two
+    # tests of seconds each. Size it from the first runs.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: Run shekyl-wire's ignored tests
+        # The set, the helpers and their assertions are
+        # scripts/ci/ignored_set_wire.sh, in the tree under test: each
+        # branch judges itself.
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: bash scripts/ci/ignored_set_wire.sh
 
   report-red:
     # A nightly tier without a route to a human "joins a silence"
     # (`run_live_daemon_gates.sh` header, PR #660): these lanes exist
     # because unrun ignored tests rotted unreported, and a red nobody reads
-    # is the same silence one hop later. For each red leg of the two
-    # ignored-test lanes this opens a tracking issue, or comments on the
-    # open one so repeats thread.
+    # is the same silence one hop later. For each red leg of the lanes in
+    # `needs` this opens a tracking issue, or comments on the open one so
+    # repeats thread.
     #
     # Its own job, with the only write permission in this workflow: the
     # lanes above run the code of the ref they check out, and no job that
@@ -299,9 +335,10 @@ jobs:
     #
     # Scheduled runs report. A dispatched run reports only when asked
     # (`report`): the person who dispatched it is reading it.
-    needs: [store-ignored, economics-sim-ignored]
+    needs: [store-ignored, economics-sim-ignored, chain-ingest-ignored, wire-ignored, producer-gate]
     if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
     permissions:
       actions: read
       issues: write
@@ -310,19 +347,40 @@ jobs:
         with:
           script: |
             const lanes = {
+              'chain-ingest-ignored': {
+                title: 'nightly chain-ingest ignored set RED',
+                lines: [
+                  'The `chain-ingest-ignored` job (shekyl-chain-ingest `--ignored`: the real-proof scenarios, the miner, the captured-chain replay and the measurements) failed.',
+                  'If the job stopped before running anything, the crate\'s ignored set and the lane\'s list disagree (the error names each test): a new `#[ignore]` is added to `scripts/ci/ignored_set_chain_ingest.sh` or stops being ignored; a listed test that was renamed, deleted or un-ignored is corrected there.',
+                ],
+              },
               'store-ignored': {
                 title: 'nightly chain-store ignored set RED',
                 lines: [
-                  'The `store-ignored` job (shekyl-chain-store `--ignored`: the real-spend shard-boundary deletion test and the two benches) failed.',
+                  'The `store-ignored` job (shekyl-chain-store `--ignored`: the real-spend shard-boundary deletion test, the two benches and the RT-W10 coinbase harness) failed.',
                   'Either an ignored test no longer builds a chain its constants admit, or the boundary test\'s deletions disagree with the calendar.',
+                ],
+              },
+              'producer-gate': {
+                title: 'nightly bundle producer gate RED',
+                lines: [
+                  'The `producer-gate` job failed. It runs `bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects_through_the_staged_door` and its support-stream twin `a_produced_support_bundle_is_admitted_and_connects_through_the_staged_door` in `shekyl-chain-ingest` (SO-D12 increments 4c and 4b item 3): a produced bundle admitted by the queue and connected through the staged door on a driven chain.',
+                  'If the job stopped before running anything, the test was renamed or un-ignored: point `scripts/ci/producer_gate.sh` at it.',
+                ],
+              },
+              'wire-ignored': {
+                title: 'nightly wire ignored tests RED',
+                lines: [
+                  'The `wire-ignored` job failed. It runs two `#[ignore]`d tests of `shekyl-wire`: `rt_w10_listed_tx_parse` (the RT-W10 harness, with `RT_W10_OUT` unset) and `the_input_caps_cost_is_measured_not_inherited` (BA-I30).',
+                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_wire.sh` whether the new test is run or is a helper.',
                 ],
               },
               'economics-sim-ignored': {
                 title: 'nightly economics-sim ignored tests RED',
                 lines: [
-                  'The `economics-sim-ignored` job failed. It runs three `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture` and `the_esr11_timing_set_runs_and_the_table_renders`.',
+                  'The `economics-sim-ignored` job failed. It runs four `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture`, `the_esr11_timing_set_runs_and_the_table_renders` and `every_declared_reader_moves_its_report` (a field a mode declares as read that does not move its report fails by name).',
                   'If a narration drifted: regenerate with `regen_stage2_narration_fixtures` only if the sim change is intended; otherwise the sim drifted from its record.',
-                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `nightly.yml` whether the new test is run or is a regeneration helper.',
+                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_economics_sim.sh` whether the new test is run or is a regeneration helper.',
                 ],
               },
             };

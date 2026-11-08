@@ -278,19 +278,19 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
         key_image_conflicts: vec![KeyImageConflict::Free; parsed.key_images.len()],
         reference: Some(ReferenceFacts {
             height: BlockHeight::from_raw(150),
-            root: FIXTURE_ROOT,
+            root: shekyl_types::CurveTreeRoot::from_bytes(FIXTURE_ROOT),
             tree_depth: 8,
         }),
-        fee_per_byte: 1,
-        fee_floor_window: None,
+        fee_floor_window: Some(vec![1]),
         pool_refuses_for_room: None,
-        weight_limit: 149_400,
+        weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT).unwrap(),
         chain_height: ChainCount::from_raw(200),
         bond_record_exists: None,
         bond_record_bonded_total: None,
         release: None,
         emission: None,
         emission_claim_conflict: None,
+        origin_publication: None,
     }
 }
 
@@ -370,6 +370,10 @@ impl MockShim {
 }
 
 impl SubmitStateShim for MockShim {
+    fn network_id(&self) -> shekyl_network::NetworkId {
+        shekyl_network::HARNESS_NETWORK_ID
+    }
+
     fn snapshot_facts(
         &self,
         txid: &TxHash,
@@ -408,7 +412,7 @@ impl SubmitStateShim for MockShim {
             cert_txid: *cert.txid(),
             cert_reference_block: *cert.reference_block(),
             cert_ref_height: cert.ref_height(),
-            cert_root: *cert.root(),
+            cert_root: cert.root().to_bytes(),
             expected: expected.clone(),
         });
         self.commit_outcome
@@ -454,7 +458,12 @@ impl MockVerifier {
 }
 
 impl TxVerifier for MockVerifier {
-    fn verify(&self, _parsed: &ParsedSubmission, _facts: &SubmitFacts) -> Result<(), VerifyReject> {
+    fn verify(
+        &self,
+        _parsed: &ParsedSubmission,
+        _facts: &SubmitFacts,
+        _network: &shekyl_network::NetworkId,
+    ) -> Result<(), VerifyReject> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.result.clone()
     }

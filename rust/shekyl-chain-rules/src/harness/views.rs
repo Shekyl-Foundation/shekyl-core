@@ -18,7 +18,7 @@ use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_types::archival::{
     BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, Holdings, IndexedDraw, IssuedDigest,
     LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
-    SlashLogEntry,
+    SlashLogEntry, SupportSeats,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -526,6 +526,14 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
         floor: BlockDrawsFloor,
     ) -> Result<Option<BlockDraws>, Infallible> {
         self.inner.block_draws(height, floor)
+    }
+
+    fn support_block_seats(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportSeats>, Infallible> {
+        self.inner.support_block_seats(height, floor)
     }
 
     fn drawable_digest(

@@ -3,15 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `D_max`, the consensus reorg cap (`PDM-Q11`) — **the genesis rule set's
+//! `D_max`, the reorg cap (`PDM-Q11`) — **the genesis rule set's
 //! value**; the cap in force is `RuleSet::reorg_cap` — and the journal
 //! horizon derived from it (`PDM-Q-F19`).
 //!
 //! # One number, three derivations
 //!
 //! `PDM-Q11` (RULED 2026-09-17, `ARCHIVAL_PRUNED_DAEMON_MODE.md`) froze the
-//! *shape* — a detectability boundary, home `CEN-E2` (`is_alternative_block_allowed`
-//! above the checkpoint) — and pinned the *numeric* **PROVISIONAL** on the
+//! *shape* as a detectability boundary. S1 (2026-11-03) rejected the
+//! consensus row that would have refused an alternative past it (CEN-E2):
+//! the cap is the switch's local limit (`PopBeyondReorgCap`) and the floor
+//! under undo retention, not a verdict. The *numeric* is **PROVISIONAL** on the
 //! `bond_duration` precedent. Three surfaces derive from it: F10's discard
 //! predicate (now the epoch calendar, `DRS_E1_SPRUNE.md` §2), F19's journal
 //! horizon ([`journal_horizon`]), and the store's undo-log retention
@@ -28,8 +30,9 @@
 //! requester anchors so an admitted pass survives any legal reorg, owner
 //! E4 / pass admission (`SF-D8`, `pass_anchor.rs`
 //! `PASS_ANCHOR_DEPTH_BLOCKS`), requirement *depth ≥ cap (+ L)* — and it is
-//! the **reorg cap**, owner consensus (`PDM-Q11`, `CEN-E2`), a
-//! detectability boundary on Q11's own requirement. The value was tuned
+//! the **reorg cap**, the switch's local limit and the retention floor
+//! (`PDM-Q11`; CEN-E2 rejected), a detectability boundary on Q11's own
+//! requirement. The value was tuned
 //! for the first job (the key predates Q11; its comment names the cap as a
 //! consumer), so the two are not one number by rationale: the depth's
 //! requirement is `≥ cap`, not `= cap`. The split — the depth on its own
@@ -46,18 +49,16 @@
 //! The retention prune's pop floor (`DRS_E1_SPRUNE.md` §7) is a belt
 //! *because* the undo floor `tip − D_max` sits strictly above the body
 //! horizon's `h_scarce + 1`, and that ordering is exactly
-//! `SETTLEMENT_EPOCH_BLOCKS > D_max`. Asserted at compile time on the
-//! production constants. The cap is rule-set data (`RuleSet::reorg_cap`;
-//! `GENESIS` carries this constant, a Fakechain set names its own), and
+//! `SETTLEMENT_EPOCH_BLOCKS > D_max`. `ArchivalParams::validate` holds it,
+//! and the shipped set is asserted to pass it at compile time. The cap is rule-set data (`RuleSet::reorg_cap`;
+//! `GENESIS` carries this constant, a levered set names its own), and
 //! the store's undo retention is boxed between them — at least the
 //! in-force set's cap, strictly inside the session's epoch — at open and at
 //! every connect, so a regtest that shortens the epoch runs a rule set
 //! whose cap fits (rule 71: nettype selects data, the data satisfies the
 //! same invariant).
 
-use shekyl_archival_retention::{
-    ARCHIVAL_REORG_DEPTH_BLOCKS, FAILURE_WINDOW_N, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
-};
+use shekyl_archival_retention::{archival_params, ARCHIVAL_REORG_DEPTH_BLOCKS, SLASH_GRACE_EPOCHS};
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockCount, BlockHeight};
 
@@ -70,11 +71,9 @@ use shekyl_types::{BlockCount, BlockHeight};
 /// `SEB > D_max` assertion below.
 pub const D_MAX: BlockCount = BlockCount::from_raw(ARCHIVAL_REORG_DEPTH_BLOCKS);
 
-const _: () = assert!(
-    SETTLEMENT_EPOCH_BLOCKS > D_MAX.to_raw(),
-    "SETTLEMENT_EPOCH_BLOCKS <= D_MAX: the retention prune's undo floor (tip - D_max) would not \
-     sit above the body horizon (DRS_E1_SPRUNE.md §3, §7); re-pin one with the other"
-);
+// `SETTLEMENT_EPOCH_BLOCKS > D_MAX` is `ArchivalParams::validate`'s
+// (`EpochNotPastReorg`; DRS_E1_SPRUNE.md §3, §7), and the shipped set is
+// const-asserted to pass it.
 
 const _: () = assert!(
     D_MAX.to_raw() > 0,
@@ -94,11 +93,11 @@ const _: () = assert!(
 /// a [`SlashLogFloor`] under the rule set in hand: the slash pass's read
 /// (`SLK-Q1`, SI-26) and the boundary batch's retirement. This production
 /// form is the expression on the genesis pair for documentation and tests;
-/// `shekyl_archival_failure_window_params` is *not* this — it returns the
+/// the retention crate's failure-window params accessor is *not* this — it returns the
 /// m-of-n `(m, n, serve_budget)`.
 #[must_use]
 pub fn journal_horizon(tip: BlockHeight) -> Option<BlockHeight> {
-    journal_horizon_under(tip, SETTLEMENT_EPOCH_BLOCKS, D_MAX)
+    journal_horizon_under(tip, archival_params().settlement_epoch_blocks, D_MAX)
 }
 
 /// The slash log's retirement floor at a tip, under a schedule and a reorg
@@ -185,7 +184,8 @@ pub fn journal_horizon_under(
 /// `u64::from` would be the idiomatic widening of `n` but is not `const`.
 #[allow(clippy::cast_lossless)]
 const fn window_blocks(epoch_blocks: u64, reorg_cap: BlockCount) -> Option<u64> {
-    let Some(epochs) = SLASH_GRACE_EPOCHS.checked_add(FAILURE_WINDOW_N as u64) else {
+    let Some(epochs) = SLASH_GRACE_EPOCHS.checked_add(archival_params().failure_window_n as u64)
+    else {
         return None;
     };
     let Some(blocks) = epochs.checked_mul(epoch_blocks) else {
@@ -197,6 +197,7 @@ const fn window_blocks(epoch_blocks: u64, reorg_cap: BlockCount) -> Option<u64> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_archival_retention::{FAILURE_WINDOW_N, SETTLEMENT_EPOCH_BLOCKS};
 
     #[test]
     fn the_cap_is_the_anchor_depth_and_below_the_epoch() {

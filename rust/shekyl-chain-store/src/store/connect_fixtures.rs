@@ -22,8 +22,8 @@ use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::target_claim;
 use shekyl_chain_rules::{
     form, validate, validate_with_memo, AtHeight, Candidate, ChainValid, ChainView, Corrupt,
-    DrawableMemo, Fault, FormAttempt, HeaderView, PaidEmission, ReferenceClaims, RuleSet,
-    StructurallyValid, Substrate, Target, Trust, ViewRead, Weights,
+    DrawableMemo, Fault, FormAttempt, FormClaims, HeaderView, PaidEmission, ReferenceClaims,
+    RuleSet, StructurallyValid, Substrate, Target, Trust, ViewRead, Weights,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
@@ -217,7 +217,7 @@ pub(super) fn formed<'id, V: HeaderView<'id>>(
     formed_under(view, candidate, &RuleSet::GENESIS)
 }
 
-/// [`formed`] under an explicit rule set (a Fakechain set for tests that
+/// [`formed`] under an explicit rule set (a levered set for tests that
 /// run a shortened schedule).
 pub(super) fn formed_under<'id, V: HeaderView<'id>>(
     view: &V,
@@ -230,11 +230,14 @@ pub(super) fn formed_under<'id, V: HeaderView<'id>>(
     Ok(
         match form(
             candidate,
-            rules,
+            &FormClaims {
+                rule_set: rules,
+                seed,
+                target: expected_target(view, rules)?,
+                references: &references,
+                network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+            },
             &FixtureSubstrate,
-            seed,
-            expected_target(view, rules)?,
-            &references,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,
@@ -290,7 +293,7 @@ pub(super) fn judge_or_corrupt<'b, 'id>(
         formed_under(view, candidate, rules)?,
         view,
         rules,
-        &Trust::UNANCHORED,
+        &Trust::UNPINNED,
     ) {
         Ok(verdict) => Ok(Ok(verdict.expect("the fixtures satisfy every landed rule"))),
         Err(Fault::View(fault)) => Err(fault),
@@ -312,7 +315,7 @@ pub(super) fn judge_with_memo<'b, 'id>(
         formed_under(view, candidate, rules)?,
         view,
         rules,
-        &Trust::UNANCHORED,
+        &Trust::UNPINNED,
         memo,
     ) {
         Ok(verdict) => Ok(verdict.expect("the fixtures satisfy every landed rule")),

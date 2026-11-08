@@ -10,16 +10,7 @@ All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
 | `shekyld` | Full-node daemon (P2P, consensus, RPC) |
 | `shekyl-cli` | Interactive command-line wallet (Rust) |
 | `shekyl-wallet-rpc` | Headless wallet exposed via JSON-RPC |
-| `shekyl-gen-ssl-cert` | TLS certificate / key generator for RPC |
-| `shekyl-blockchain-import` | Import a bootstrap file into the chain DB |
-| `shekyl-blockchain-export` | Export chain DB to a bootstrap file |
-| `shekyl-blockchain-usage` | Output-reuse histogram |
-| `shekyl-blockchain-ancestry` | Trace output ancestry graphs |
-| `shekyl-blockchain-depth` | Measure transaction depth to coinbase (historical/analytical) |
-| `shekyl-blockchain-stats` | Time-series chain statistics |
-| `shekyl-mdb-copy` | Compact a stopped daemon's LMDB database |
 | `shekyl-utils-deserialize` | Decode hex blobs to human-readable JSON |
-| `shekyl-utils-object-sizes` | Print sizeof for core data structures |
 
 The `shekyl-utils-*` executables are only built when `BUILD_DEBUG_UTILITIES=ON`.
 
@@ -61,6 +52,7 @@ file is TOML with the same names (see the example in `USER_GUIDE.md`).
 |--------|------|---------|-------|---------|-------------|
 | `help` | switch | — | command line | no | Print the options and exit. |
 | `version` | switch | — | command line | no | Print the version and the operating system, and exit. |
+| `config-verify` | switch | — | command line | no | Check the configuration as a start would and exit without starting: nothing is created, no lock is taken and no network is joined. Prints the account checked and the effective configuration; a refusal is start's own. |
 | `network` | `mainnet` / `testnet` / `stagenet` / `regtest` | `mainnet` | command line | no | The network to run: mainnet, testnet, stagenet or regtest. Chooses the configuration file. |
 | `config-file` | absolute path | /etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows | command line | no | The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused. |
 | `data-dir` | absolute path | the daemon's root and the network's subdirectory | both | no | The data directory. An explicit path is used as given. |
@@ -88,54 +80,45 @@ file is TOML with the same names (see the example in `USER_GUIDE.md`).
 | `p2p-ban-file` | absolute path | — | both | no | A file of addresses to refuse, one per line. |
 | `p2p-upload-max` | rate, such as `1MiB/s` (at least 1), or `unlimited` | `unlimited` | both | yes | The upload rate limit, or `unlimited`. |
 | `p2p-download-max` | rate, such as `1MiB/s` (at least 1), or `unlimited` | `unlimited` | both | yes | The download rate limit, or `unlimited`. |
-| `txpool-weight-max` | bytes, such as `512MiB` (at least 1) | `648000000B` | both | no | The transaction pool's weight bound. |
 | `notify-block` | command (an array of words; placeholders `{height}`, `{hash}`) | — | file | no | A command to run on a new block, with {height} and {hash}. |
 | `notify-reorg` | command (an array of words; placeholders `{split-height}`, `{height}`, `{added}`, `{removed}`) | — | file | no | A command to run on a reorganization, with {split-height}, {height}, {added} and {removed}. |
 | `notify-block-rate` | command (an array of words; placeholders `{window}`, `{observed}`, `{expected}`) | — | file | no | A command to run on a block-rate warning, with {window}, {observed} and {expected}. |
-| `mine-address` | Shekyl address | — | both | no | Mine to this address from start. |
+| `mine` | `on` / `off` | `off` | both | no | Start the miner at start, to mine-address. |
+| `mine-address` | Shekyl address | — | both | no | The address the miner pays. |
 | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both | no | The mining thread count, or `auto`. |
 | `rpc-admin-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 127.0.0.1 and the network's rpc port | both | no | The plaintext full-access listeners, loopback only; `none` is no admin listener. |
 | `rpc-view-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only. |
 | `rpc-cors-origin` | list of web origin (`none` for empty) | `none` | both | no | Web origins allowed to call the RPC; `none` denies all. `*` is refused. |
 | `rpc-connections-max` | integer ≥ 1 | `25` | both | no | The RPC connection cap. |
-| `console` | switch | — | command line | no | Run the interactive console. |
-<!-- development rows, live on the named networks only and not in --help: dev-clearnet-encrypt (testnet, stagenet, regtest); dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->
+<!-- development rows, live on the named networks only and not in --help: dev-clearnet-encrypt (testnet, stagenet, regtest); dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-rpc (regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->
 <!-- shekyld-options: end -->
 
-### Interactive console commands
+### Daemon commands
 
-With `--console`, the daemon provides a command console on its own
-terminal. Under a service manager (systemd, launchd, Task Scheduler, or
-the GUI wallet's Tauri sidecar) nothing reads the daemon's stdin, so no
-flag is needed there:
+The daemon has no console and reads nothing from stdin. Its commands are
+`shekyl-cli` words, sent over the daemon's RPC; none needs an open wallet.
+Mining (`mine start`, `mine stop`, `mine status`) and the node's health
+(`chain`) are listed with the rest of `shekyl-cli`'s words
+[below](#interactive-commands); `help` in `shekyl-cli` lists every word.
 
 | Command | Description |
 |---------|-------------|
-| `help` | List available commands |
-| `status` | Current sync height, network, hashrate |
-| `print_height` | Current blockchain height |
-| `print_bc <start> [end]` | Print block range |
-| `print_block <hash\|height>` | Print a single block |
-| `print_tx <txid>` | Print transaction details |
-| `print_pl` | Print peer list |
-| `print_cn` | Print active connections |
-| `print_net_stats` | Network traffic statistics |
-| `print_pool` | Full transaction pool contents |
-| `print_pool_sh` | Short transaction pool summary |
-| `print_pool_stats` | Pool statistics |
-| `start_mining <addr> [threads]` | Start mining to an address |
-| `stop_mining` | Stop mining |
-| `mining_status` | Current mining status |
-| `diff` | Current network difficulty |
-| `sync_info` | Blockchain sync progress and peer states |
-| `bans` | List banned peers |
-| `ban <ip> [seconds]` | Ban an IP address |
-| `unban <ip>` | Remove a ban |
-| `flush_txpool [txid]` | Remove transactions from the pool |
-| `pop_blocks <n>` | Remove the top N blocks (for recovery) |
-| `version` | Print daemon version |
-| `save` | Force a blockchain save |
-| `exit` / `stop_daemon` | Shut down the daemon |
+| `daemon status` | Height against the network's, network, mining state, hash rate, connections, uptime |
+| `daemon stop` | Stop the daemon |
+| `sync status` | Sync progress and peer states |
+| `peer list [--white] [--gray] [--max <n>]` | The daemon's peer lists |
+| `peer stats` | Peer-list counts |
+| `peer connections` | Open connections |
+| `p2p stats` | Network traffic statistics |
+| `txpool list [--short]` | The transaction pool's contents |
+| `txpool stats` | Transaction pool statistics |
+| `txpool flush [id]` | Remove one transaction, or all, from the pool |
+| `ban list` | Banned peers |
+| `ban add <ip> [--duration <quantity>]` | Ban an address |
+| `ban remove <ip>` | Lift a ban |
+| `ban show <ip>` | One address's ban |
+| `option show [<name>]` | The daemon's options and their values |
+| `option set <name> <value>` | Change an option whose Runtime column above says yes, such as `log-level` |
 
 ### Examples
 
@@ -182,13 +165,12 @@ shekyl-cli [options]
 | Option | Description |
 |--------|-------------|
 | `--daemon-address <host:port\|url>` | Daemon to connect to. Default: this machine's daemon at the RPC port for `--network` (`11029` / `12029` / `13029`). With `--rpc-url` the self-hosted wallet RPC is not started, but the REPL still queries the daemon at this address directly. A daemon that is not loopback is disclosed on stderr at startup (USER_GUIDE "Connecting to a daemon"; `RPC_TRANSPORT_POSTURE.md` §1) |
-| `--rpc-url <url>` | Connect to an external `shekyl-wallet-rpc` instead of self-hosting one (`http://host:port`, or `uds:///path/to.sock` on Unix) |
+| `--rpc-url <url>` | Connect to an external `shekyl-wallet-rpc` instead of self-hosting one (`http://host:port`, or `uds:///path/to.sock` on Unix). The URL names the server; calls go to its `/json_rpc` |
 | `--network <type>` | Network the self-hosted wallet server binds to: `mainnet` (default), `testnet`, `stagenet`. With `--rpc-url` that server is not started, and the flag is then read only to supply the default daemon port for the REPL's own daemon queries — so a run that names its own `--daemon-address` never consults it |
 | `--testnet` / `--stagenet` | Shorthand for `--network testnet` / `--network stagenet` — the same flags `shekyld` takes (CU-1). The prompt names the selected network |
 | `--wallet-dir <path>` | Directory for wallet files. Default: the per-network `~/.shekyl/wallets/<network>/`, created on demand, so wallets on different networks never share a directory (CU-1). Ignored with `--rpc-url`. `--engine-dir` is a hidden alias (CU-2) |
 | `--wallet <name>` | Open a wallet immediately on startup. `--engine-file` is a hidden alias (CU-2) |
-| `--proxy <socks5h://host:port>` | SOCKS proxy for the daemon connections. Prefer `socks5h://`: the REPL's direct daemon queries honor the scheme, and `socks5://` resolves the hostname locally (a DNS leak, warned at startup) |
-| `--daemon-ca-cert <pem>` | PEM CA certificate for an `https://` daemon with a custom CA |
+| `--proxy <socks5h://host:port>` | SOCKS proxy for the daemon connections. Prefer `socks5h://`: the REPL's direct daemon queries honor the scheme, and `socks5://` resolves the hostname locally (a DNS leak, warned at startup). An `https://` daemon uses the system root store |
 | `--debug` | Show structured RPC error details on failures |
 
 ### Interactive commands
@@ -268,15 +250,17 @@ is [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 
 | Command | Description |
 |---------|-------------|
-| `mine start [threads\|auto]` | Start mining on the local daemon, paying to this wallet (default threads: `min(cores, 4)`; the daemon owns the threads, so mining keeps running after the CLI exits) |
+| `mine start [threads\|auto]` | Start mining on the daemon, paying its `mine-address` (default threads: `min(cores, 4)`; the shell sends only the thread count; the daemon owns the threads, so mining keeps running after the CLI exits) |
 | `mine stop` | Stop mining on the daemon |
 | `mine status` | Mining state, thread count, and hash rate |
 
 The retired spellings `start_mining`, `stop_mining` and `mining_status`
-do not run; each names its `mine` replacement. Requires an open wallet,
-the unrestricted RPC listener, and a daemon on the same network as the
-CLI. The default daemon is loopback (the recommended posture); a remote
-`--daemon-address` is allowed and `mine start` reminds you of the risk.
+do not run; each names its `mine` replacement. Does not require an open
+wallet. Requires the unrestricted RPC listener and a daemon on the same
+network as the CLI. The default daemon is loopback. A remote
+`--daemon-address` is
+allowed, and `mine start` reminds you that mining will run on that
+machine's CPU.
 A still-syncing daemon refuses `mine start` until it is caught up.
 
 **Proofs and message signing**
@@ -353,6 +337,7 @@ shekyl-wallet-rpc [--wallet-dir <dir>] [--rpc-bind <addr>] [--rpc-login <user:pa
 | `--proxy <socks5h://host:port>` | SOCKS5h proxy for the daemon connection; the proxy resolves the hostname |
 | `--network <mainnet\|testnet\|stagenet>` | Network every create/open binds to (default `mainnet`) |
 | `--log-file <path>` | Optional file sink for `tracing` events |
+| `--version` | Print the release version (the daemon's string, e.g. `3.1.0-alpha.11-release`) and exit |
 
 ### Why the two bind refusals exist
 
@@ -389,190 +374,7 @@ shekyl-wallet-rpc --wallet-dir ~/wallets \
                   --rpc-login user:password
 ```
 
-## 4. `shekyl-gen-ssl-cert` — TLS Certificate Generator
-
-Generates an RSA TLS certificate and private key. No Shekyl RPC binary consumes them any more (the C++ `--rpc-ssl-*` surface is retired, §3); the output suits a TLS terminator you run in front of the daemon.
-Prints the SHA-256 fingerprint of the generated certificate.
-
-### Usage
-
-```
-shekyl-gen-ssl-cert --certificate-filename=<file> --private-key-filename=<file> [options]
-```
-
-### Options
-
-| Option | Description |
-|--------|-------------|
-| `--certificate-filename <file>` | Output path for the PEM certificate (required) |
-| `--private-key-filename <file>` | Output path for the PEM private key (required) |
-| `--passphrase <pass>` | Encrypt the private key with a passphrase |
-| `--passphrase-file <file>` | Read passphrase from a file |
-| `--prompt-for-passphrase` | Interactively prompt for a passphrase |
-
-### Example
-
-```bash
-shekyl-gen-ssl-cert \
-    --certificate-filename /etc/shekyl/rpc.crt \
-    --private-key-filename /etc/shekyl/rpc.key
-# → prints SHA-256 fingerprint. No Shekyl RPC binary takes `--rpc-ssl-*` any
-#   more (see §3); the output is for a TLS terminator you run in front.
-```
-
----
-
-## 5. Blockchain Utilities
-
-These tools operate directly on the LMDB blockchain database. The node must be
-stopped before running any tool that opens the database in read-write mode.
-
-### `shekyl-blockchain-import`
-
-Imports a raw blockchain bootstrap file into the LMDB database.
-
-```bash
-# Import with full verification
-shekyl-blockchain-import --input-file blockchain.raw
-
-# Fast import (skip verification — dangerous)
-shekyl-blockchain-import --input-file blockchain.raw --dangerous-unverified-import 1
-
-# Count blocks in a bootstrap file without importing
-shekyl-blockchain-import --input-file blockchain.raw --count-blocks
-
-# Import to testnet database
-shekyl-blockchain-import --testnet --input-file blockchain.raw
-
-# Pop the last 100 blocks (recovery)
-shekyl-blockchain-import --pop-blocks 100
-```
-
-Key options: `--input-file`, `--data-dir`, `--batch-size`, `--resume` /
-`--no-resume`, `--block-stop`, `--count-blocks`, `--pop-blocks`,
-`--dangerous-unverified-import`.
-
-### `shekyl-blockchain-export`
-
-Exports the chain database to a portable bootstrap file.
-
-```bash
-# Export the full chain
-shekyl-blockchain-export --output-file blockchain.raw
-
-# Export a specific block range
-shekyl-blockchain-export --block-start 0 --block-stop 500000
-
-```
-
-Key options: `--output-file`, `--data-dir`, `--block-start`, `--block-stop`.
-
-### `shekyl-blockchain-usage`
-
-Prints a histogram of output reuse — how many times each output appears as a
-ring member in transaction inputs. FCMP++ inputs carry no ring-member
-references, so this tool has no substrate on post-genesis data; it is a
-deletion-audit candidate (`docs/FOLLOWUPS.md`, V3.2 legacy spend-graph
-utilities entry).
-
-```bash
-shekyl-blockchain-usage ~/.shekyl/lmdb
-shekyl-blockchain-usage ~/.shekyl/lmdb --rct-only
-```
-
-Key options: positional `<input path>`, `--rct-only`.
-
-### `shekyl-blockchain-ancestry`
-
-Traces the ancestry graph of transaction outputs to understand output
-provenance. FCMP++ spends do not reveal which output they consume, so
-ancestry tracing has no substrate on post-genesis transactions; this tool is
-a deletion-audit candidate (`docs/FOLLOWUPS.md`, V3.2 legacy spend-graph
-utilities entry).
-
-```bash
-# Refresh the ancestry cache, then query by txid
-shekyl-blockchain-ancestry --refresh --txid <hash>
-
-# Query ancestry at a specific block height
-shekyl-blockchain-ancestry --height 150000
-```
-
-Key options: `--data-dir`, `--txid`, `--output <amount/offset>`, `--height`,
-`--refresh`, `--include-coinbase`, `--cache-outputs`, `--cache-txes`.
-
-### `shekyl-blockchain-depth`
-
-For a given transaction or block, walks inputs back to coinbase and reports
-the minimum depth. FCMP++ spends do not reveal which output they consume, so
-input-walking has no substrate on post-genesis transactions; this tool is a
-deletion-audit candidate (`docs/FOLLOWUPS.md`, V3.2 legacy spend-graph
-utilities entry).
-
-```bash
-# Depth of a specific transaction
-shekyl-blockchain-depth --txid <hash>
-
-# Average depth for all transactions in a block
-shekyl-blockchain-depth --height 200000
-```
-
-Key options: `--data-dir`, `--txid`, `--height`, `--include-coinbase`.
-
-### `shekyl-blockchain-stats`
-
-Outputs tab-separated chain statistics suitable for plotting and analysis.
-
-```bash
-# Full stats with emission and difficulty data
-shekyl-blockchain-stats --with-emission --with-diff --with-fees
-
-# Stats for a specific block range
-shekyl-blockchain-stats --block-start 100000 --block-stop 200000
-
-# Include hourly transaction distribution
-shekyl-blockchain-stats --with-hours --with-inputs --with-outputs
-```
-
-Key options: `--data-dir`, `--block-start`, `--block-stop`, `--with-inputs`,
-`--with-outputs`, `--with-hours`, `--with-emission`, `--with-fees`,
-`--with-diff`. Note: `--with-ringsize` has been removed (not applicable to
-FCMP++ transactions).
-
-### `shekyl-mdb-copy`
-
-Compacts a stopped daemon's LMDB database by copying it without its free
-pages (upstream LMDB's `mdb_copy`, built from the vendored source). The
-stripe engine that used to free those pages (`--prune-blockchain`) was
-deleted 2026-09-21 (`PDM-Q7`). No daemon path discards tx bodies today:
-the C++ depth-based discard was deleted 2026-09-22 as well, and the uniform
-discard is S-PRUNE, still a skeleton (`docs/design/DRS_E1_SPRUNE.md`). The tool
-reclaims whatever free pages the store already holds. You temporarily need
-disk space for both copies.
-
-```bash
-# Stop shekyld first; the destination directory must exist and be empty
-mkdir /path/to/compacted
-shekyl-mdb-copy -c ~/.shekyl/lmdb /path/to/compacted/
-
-# Then replace the old lmdb directory with the compacted copy
-```
-
-Run it as the user that owns the data directory (the copy opens the
-database read-only but still needs write access to the source's
-reader-lock file, `lock.mdb`; a `sudo` run leaves the compacted copy
-root-owned, so the daemon cannot use it after the swap), and always pass
-both paths — with the destination omitted the tool streams the entire
-database to standard output.
-
-The former `shekyl-blockchain-prune` (schema-aware pruned copy) and
-`shekyl-blockchain-prune-known-spent-data` (spend-graph pruning, no substrate
-under FCMP++) were retired; the daemon's in-place prune plus this
-schema-agnostic compaction replace them.
-
----
-
-## 6. Debug Utilities
+## 4. Debug Utilities
 
 Built only when `BUILD_DEBUG_UTILITIES=ON` is set at CMake configure time.
 
@@ -584,18 +386,6 @@ human-readable JSON.
 ```bash
 shekyl-utils-deserialize --input <hex-string>
 ```
-
-### `shekyl-utils-object-sizes`
-
-Prints `sizeof` for the major data structures used throughout the codebase
-(P2P messages, transaction types, wallet structures, etc.). Useful for
-profiling memory layout and detecting struct bloat.
-
-```bash
-shekyl-utils-object-sizes
-```
-
-No options — simply run and inspect the output.
 
 ---
 

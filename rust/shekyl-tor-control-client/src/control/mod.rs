@@ -33,49 +33,64 @@
 //! [`events`] parses one asynchronous `650` line. The quoted-field lexer it
 //! reads with stays private to this module: a keyword counts only at the start
 //! of a token, before any quote is opened. [`upload_rounds`] is the supervisor's
-//! policy over parsed `HS_DESC` events (`TSR-Q5`). Nothing in production sends
-//! `SETEVENTS` yet; the policy stays because the later increments are its caller.
+//! policy over parsed `HS_DESC` events (`TSR-Q5`). The daemon's supervisor
+//! sends one `SETEVENTS` on each managed Tor it launches and reads that
+//! policy from the subscription. The wallet does not subscribe.
 
 pub mod actor;
 pub mod auth;
 pub mod bootstrap;
 pub mod consensus;
+pub mod descriptor;
 pub mod encoding;
 mod event_lex;
 pub mod events;
 pub mod framing;
 pub(crate) mod launch;
 pub mod listeners;
+pub mod network;
 pub mod onion;
 pub mod ready;
 pub mod safecookie;
 pub mod stream;
+pub mod traffic;
 pub mod upload_rounds;
 pub mod vanguards;
 
 pub use actor::{
-    BootstrapReadiness, Command, CommandResult, ControlError, DeathSignal, EventReceiver,
-    EventSink, ManagedTor, Signal, SocksPort, SystemDirectoryError, TorControlClient,
-    TorControlClientConfig, TorExit, TorLaunch, EVENT_QUEUE_EVENTS,
+    BootstrapReadiness, Command, CommandResult, ControlError, DeathSignal, DiskWrites,
+    EventReceiver, EventSink, Fed, ManagedTor, Signal, SocksPort, SocksTimeout,
+    SystemDirectoryError, TorControlClient, TorControlClientConfig, TorExit, TorLaunch,
+    EVENT_QUEUE_EVENTS,
 };
 pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, ServerNonce};
 pub use bootstrap::{parse_bootstrap_progress, BootstrapState};
+pub use descriptor::{
+    parse_consensus_valid_after, parse_service_descriptor, revision_counter, HsDescContent,
+    ServiceDescriptor,
+};
 pub use events::{
     parse_event, Bootstrap, BootstrapProblem, ClientStatus, ClockSkew, GeneralStatus, HsDescAction,
-    HsDescEvent, Liveness, LogEvent, LogSeverity, Recommendation, Severity, TorEvent,
-    VersionReason, SUPERVISOR_EVENTS,
+    HsDescEvent, HsDescFailure, Liveness, LogEvent, LogSeverity, Recommendation, Severity,
+    TorEvent, VersionReason, SUPERVISOR_EVENTS,
 };
 pub use framing::{
     ControlReply, Framed, FramingError, ReplyBudget, ReplyFramer, ASYNC_EVENT_STATUS,
     BULK_REPLY_BYTES, ORDINARY_REPLY_BYTES,
 };
+pub use launch::LOG_FILE_NAME;
 pub use listeners::parse_socks_listeners;
+pub use network::{parse_network_view, NetworkView, Reported};
 pub use onion::{
     evaluate_add_onion_reply, parse_service_id, AddOnion, AddOnionReplyError, OnionFlags, OnionKey,
     OnionPort, OnionPow, ServiceId, ONION_KEY_BYTES, SERVICE_ID_CHARS,
 };
-pub use ready::{ask_timed, wait_until_ready, AskError, WaitReadyError};
+pub use ready::{
+    ask_timed, resume_lateness, wait_until_ready, AskError, Asked, Resume, WaitReadyError,
+    RESUMED_AFTER,
+};
 pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};
 pub use stream::{parse_stream_event, CircId, StreamEvent, StreamStatus};
-pub use upload_rounds::{RoundMark, UploadRounds};
+pub use traffic::parse_traffic_read;
+pub use upload_rounds::{RoundMark, UploadRounds, UploadedTo};
 pub use vanguards::{HsLayerPins, RelayFingerprint, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS};

@@ -10,11 +10,9 @@
 //! shape this module implements (`H_seal`/`H_fire`, one challenge per
 //! pair-epoch) is superseded by the secret draw
 //! (`ARCHIVAL_SERVE_CREDIT_SPEC.md`). The public urn that was the interim
-//! assignment is deleted. This module is still the live serve-credit
-//! admission path (through `shekyl-ffi` into `blockchain.cpp`'s
-//! serve-credit gate and `db_lmdb.cpp`'s slash-eligibility consumer) until
-//! that draw's admission replaces it. Receipt signing under scheme 3 is
-//! the FN-DSA lane's increment, not this deletion.
+//! assignment is deleted. No admission path in the workspace calls this
+//! module; its callers are this crate's gate-2 KAT tests. Receipt signing
+//! under scheme 3 is the FN-DSA lane's increment, not this deletion.
 //!
 //! # The leaf-opening half IS deletion-bound — `RF-D8` (i) RETRACTED 2026-08-26
 //!
@@ -59,6 +57,8 @@
 //! Extend the *new* mechanism, never the beacon half.
 
 use crate::constants::CHALLENGE_BEACON_SEAL_BLOCKS;
+use shekyl_types::BlockHash;
+
 use crate::hash::cshake256_32;
 
 /// cSHAKE256 customization for leaf index derivation (§3.3, `PC-D3`).
@@ -77,12 +77,6 @@ use crate::hash::cshake256_32;
 /// migrate; the bump exists so **one label never names two functions**, which is
 /// the failure a second implementation would hit and not notice.
 pub const CHALLENGE_LEAF_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-challenge-leaf-v2";
-
-/// The retired `-v1` label, kept **only** so the negative control in this
-/// module's tests can assert the new derivation does not reproduce the old
-/// one. It has no caller outside those tests and must never acquire one.
-#[cfg(test)]
-const CHALLENGE_LEAF_CUSTOMIZATION_V1_RETIRED: &[u8] = b"shekyl/archival-serve-challenge-leaf-v1";
 
 /// cSHAKE256 customization for fire-time beacon (§3.4).
 pub const CHALLENGE_FIRE_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-challenge-fire-v1";
@@ -129,7 +123,7 @@ pub fn challenge_leaf_index(
     p_id: &[u8; 32],
     shard_id: u64,
     settlement_epoch: u64,
-    prev_block_hash: &[u8; 32],
+    prev_block_hash: &BlockHash,
     segment_leaf_count: u64,
 ) -> u32 {
     if segment_leaf_count == 0 {
@@ -148,7 +142,7 @@ pub fn challenge_leaf_index(
     //
     // Appended last so the `(P, s, E)` prefix stays where every reader of this
     // preimage already expects it.
-    input.extend_from_slice(prev_block_hash);
+    input.extend_from_slice(prev_block_hash.as_bytes());
     let tau = cshake256_32(CHALLENGE_LEAF_CUSTOMIZATION, &input);
     let idx = uint64_from_hash(&tau) % segment_leaf_count;
     u32::try_from(idx).unwrap_or(u32::MAX)
@@ -170,7 +164,7 @@ pub fn challenge_leaf_index(
 pub fn challenge_fire_height(
     h_open: u64,
     h_close: u64,
-    block_hash_at_seal: &[u8; 32],
+    block_hash_at_seal: &BlockHash,
     p_id: &[u8; 32],
     shard_id: u64,
     settlement_epoch: u64,
@@ -180,7 +174,7 @@ pub fn challenge_fire_height(
     let modulus = span.saturating_sub(1).max(1);
 
     let mut input = Vec::with_capacity(32 + 32 + 8 + 8);
-    input.extend_from_slice(block_hash_at_seal);
+    input.extend_from_slice(block_hash_at_seal.as_bytes());
     input.extend_from_slice(p_id);
     input.extend_from_slice(&shard_id.to_le_bytes());
     input.extend_from_slice(&settlement_epoch.to_le_bytes());
@@ -203,16 +197,16 @@ mod tests {
     #[test]
     fn leaf_index_is_deterministic() {
         let p = [0x42u8; 32];
-        let a = challenge_leaf_index(&p, 7, 100, &FIXED_BLOCK, 26_000);
-        let b = challenge_leaf_index(&p, 7, 100, &FIXED_BLOCK, 26_000);
+        let a = challenge_leaf_index(&p, 7, 100, &BlockHash::from_bytes(FIXED_BLOCK), 26_000);
+        let b = challenge_leaf_index(&p, 7, 100, &BlockHash::from_bytes(FIXED_BLOCK), 26_000);
         assert_eq!(a, b);
     }
 
     #[test]
     fn leaf_index_changes_with_epoch() {
         let p = [0x42u8; 32];
-        let a = challenge_leaf_index(&p, 7, 100, &FIXED_BLOCK, 26_000);
-        let b = challenge_leaf_index(&p, 7, 101, &FIXED_BLOCK, 26_000);
+        let a = challenge_leaf_index(&p, 7, 100, &BlockHash::from_bytes(FIXED_BLOCK), 26_000);
+        let b = challenge_leaf_index(&p, 7, 101, &BlockHash::from_bytes(FIXED_BLOCK), 26_000);
         assert_ne!(a, b);
     }
 
@@ -220,7 +214,7 @@ mod tests {
     fn leaf_index_within_segment() {
         let p = [0x11u8; 32];
         let count = 26_000u64;
-        let idx = challenge_leaf_index(&p, 3, 50, &FIXED_BLOCK, count);
+        let idx = challenge_leaf_index(&p, 3, 50, &BlockHash::from_bytes(FIXED_BLOCK), count);
         assert!(u64::from(idx) < count);
     }
 
@@ -230,7 +224,8 @@ mod tests {
         let hash = [0xABu8; 32];
         let h_open = 1_000_000u64;
         let h_close = h_open + 9_999;
-        let h_fire = challenge_fire_height(h_open, h_close, &hash, &p, 1, 42);
+        let h_fire =
+            challenge_fire_height(h_open, h_close, &BlockHash::from_bytes(hash), &p, 1, 42);
         assert!(h_fire > challenge_seal_height(h_open));
         assert!(h_fire <= h_close);
     }
@@ -239,8 +234,8 @@ mod tests {
     fn fire_height_is_deterministic_given_seal_hash() {
         let p = [0x55u8; 32];
         let hash = [0xCDu8; 32];
-        let a = challenge_fire_height(500, 14_499, &hash, &p, 2, 9);
-        let b = challenge_fire_height(500, 14_499, &hash, &p, 2, 9);
+        let a = challenge_fire_height(500, 14_499, &BlockHash::from_bytes(hash), &p, 2, 9);
+        let b = challenge_fire_height(500, 14_499, &BlockHash::from_bytes(hash), &p, 2, 9);
         assert_eq!(a, b);
     }
 
@@ -269,8 +264,8 @@ mod tests {
             h2[0] = i;
             h1[1] = 0xAA;
             h2[1] = 0xBB;
-            let a = challenge_leaf_index(&p, 7, 3, &h1, SEGMENT_LEAF_COUNT);
-            let b = challenge_leaf_index(&p, 7, 3, &h2, SEGMENT_LEAF_COUNT);
+            let a = challenge_leaf_index(&p, 7, 3, &BlockHash::from_bytes(h1), SEGMENT_LEAF_COUNT);
+            let b = challenge_leaf_index(&p, 7, 3, &BlockHash::from_bytes(h2), SEGMENT_LEAF_COUNT);
             if a != b {
                 differing += 1;
             }
@@ -289,43 +284,8 @@ mod tests {
         let p = [0x22u8; 32];
         let h = [0x5Au8; 32];
         assert_eq!(
-            challenge_leaf_index(&p, 9, 4, &h, SEGMENT_LEAF_COUNT),
-            challenge_leaf_index(&p, 9, 4, &h, SEGMENT_LEAF_COUNT)
-        );
-    }
-
-    /// **The negative control on the domain separator.**
-    ///
-    /// A domain separator that ships is a consensus fact — it is the one
-    /// irreversible item in this round, and "it compiled and the tests passed"
-    /// cannot distinguish a correct derivation from a differently-wrong one.
-    /// So this asserts the new label does not reproduce the old one on the
-    /// same preimage: if someone reverts `-v2` to `-v1`, or a second
-    /// implementation keeps the retired label, this fails rather than
-    /// silently agreeing on a different function.
-    #[test]
-    fn the_v2_label_does_not_reproduce_the_retired_v1_derivation() {
-        let p = [0x33u8; 32];
-        let h = [0x77u8; 32];
-
-        let mut input = Vec::with_capacity(32 + 8 + 8 + 32);
-        input.extend_from_slice(&p);
-        input.extend_from_slice(&9u64.to_le_bytes());
-        input.extend_from_slice(&4u64.to_le_bytes());
-        input.extend_from_slice(&h);
-
-        let under_v2 = cshake256_32(CHALLENGE_LEAF_CUSTOMIZATION, &input);
-        let under_v1 = cshake256_32(CHALLENGE_LEAF_CUSTOMIZATION_V1_RETIRED, &input);
-
-        assert_ne!(
-            under_v2, under_v1,
-            "the -v2 label reproduced the -v1 derivation on the same preimage: the \
-             separator is not separating, so two implementations could disagree \
-             about which function a single label names"
-        );
-        assert_eq!(
-            CHALLENGE_LEAF_CUSTOMIZATION, b"shekyl/archival-serve-challenge-leaf-v2",
-            "the shipped label is a consensus fact; changing it is a re-pin, not an edit"
+            challenge_leaf_index(&p, 9, 4, &BlockHash::from_bytes(h), SEGMENT_LEAF_COUNT),
+            challenge_leaf_index(&p, 9, 4, &BlockHash::from_bytes(h), SEGMENT_LEAF_COUNT)
         );
     }
 
@@ -368,7 +328,7 @@ mod tests {
             0x3C, 0x3D, 0x3E, 0x3F,
         ];
         assert_eq!(
-            challenge_leaf_index(&p, 7, 100, &prev, 25_992),
+            challenge_leaf_index(&p, 7, 100, &BlockHash::from_bytes(prev), 25_992),
             13_125,
             "the -v2 derivation disagrees with an independent implementation of \
              its specification; one of the two is wrong and it is not \
@@ -381,7 +341,7 @@ mod tests {
     #[test]
     fn empty_segment_is_index_zero() {
         assert_eq!(
-            challenge_leaf_index(&[0x44u8; 32], 1, 1, &[0x99u8; 32], 0),
+            challenge_leaf_index(&[0x44u8; 32], 1, 1, &BlockHash::from_bytes([0x99u8; 32]), 0),
             0
         );
     }

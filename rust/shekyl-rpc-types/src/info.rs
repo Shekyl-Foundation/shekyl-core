@@ -224,17 +224,45 @@ pub struct InfoEconomics {
 }
 
 /// The pool, as far as this reply goes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InfoPool {
-    /// Pool entries this node has **broadcast**. One quantity, for every
-    /// caller.
-    ///
-    /// An entry this node holds and has not yet broadcast is not counted
-    /// here, whoever asks: it is in [`InfoHost`]. That includes a
-    /// transaction on its stem, which has been relayed to one peer and not
-    /// broadcast. Until 3.50 this member was the broadcast set for a
-    /// restricted caller and every entry for any other (RK-Q10).
-    pub tx_pool_size: u64,
+///
+/// On the wire: `tx_pool_size` always, a number when the pool answers and
+/// `null` when it is retired, beside `"pool_retired": true`. A live reply
+/// carries no `pool_retired`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InfoPool {
+    /// The pool answers.
+    Live {
+        /// Pool entries this node has **broadcast**. One quantity, for
+        /// every caller.
+        ///
+        /// An entry this node holds and has not yet broadcast is not
+        /// counted here, whoever asks: it is in [`InfoHost`]. That includes
+        /// a transaction on its stem, which has been relayed to one peer
+        /// and not broadcast. Until 3.50 this member was the broadcast set
+        /// for a restricted caller and every entry for any other (RK-Q10).
+        tx_pool_size: u64,
+    },
+    /// The node retired its pool when the pool's file faulted, and holds
+    /// none until it restarts. No pool count is an answer, so none is
+    /// given (RK-D23); the chain's members of the reply are unaffected.
+    Retired,
+}
+
+impl InfoPool {
+    /// The broadcast count, when the pool answers.
+    #[must_use]
+    pub const fn tx_pool_size(&self) -> Option<u64> {
+        match self {
+            Self::Live { tx_pool_size } => Some(*tx_pool_size),
+            Self::Retired => None,
+        }
+    }
+
+    /// Whether the node has retired its pool.
+    #[must_use]
+    pub const fn is_retired(&self) -> bool {
+        matches!(self, Self::Retired)
+    }
 }
 
 /// What only the host's own administrator is told (`RPC_CHANNEL.md` §6.1,
@@ -245,7 +273,11 @@ pub struct InfoHost {
     /// transactions and the ones it is carrying on a stem. Whether such an
     /// entry exists says where a transaction originated, which is what the
     /// relay's stem phase hides, so it is told to nobody else.
-    pub tx_pool_unbroadcast_count: u64,
+    ///
+    /// `None` exactly when the pool is [`InfoPool::Retired`]: the part is
+    /// shown, and the count has no answer (`null` on the wire). The decoder
+    /// refuses a count that disagrees with the pool's state.
+    pub tx_pool_unbroadcast_count: Option<u64>,
 }
 
 /// What describes this node and not the network: its build, its uptime, its
@@ -296,15 +328,82 @@ impl InfoP2p {
     }
 }
 
-/// Per-connector transport and peerlist detail of a daemon whose P2P runs.
+/// Transport and peerlist detail of a daemon whose P2P runs: one row per
+/// connector the daemon runs, in connector order (3.70).
+///
+/// A connector the daemon does not run has no row. A missing row says the
+/// connector is not configured; it is not a zero. A daemon running P2P runs
+/// at least one connector (with both off it is offline, IG-Q3), so there is
+/// always a row. The rows are built only through [`Self::new`], which
+/// refuses no row, a connector out of order, and a connector named twice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoPeers {
-    pub public_incoming_socket_count: u64,
-    pub public_outgoing_socket_count: u64,
-    pub tor_incoming_socket_count: u64,
-    pub tor_outgoing_socket_count: u64,
+    connectors: Vec<InfoConnectorPeers>,
+}
+
+impl InfoPeers {
+    /// The rows: at least one, each connector at most once, in
+    /// [`InfoConnector`] order.
+    ///
+    /// # Errors
+    /// [`GetInfoShapeError::NoConnectorRow`] for no row;
+    /// [`GetInfoShapeError::ConnectorsOutOfOrder`] when a row's connector
+    /// is not after the one before it.
+    pub fn new(connectors: Vec<InfoConnectorPeers>) -> Result<Self, GetInfoShapeError> {
+        if connectors.is_empty() {
+            return Err(GetInfoShapeError::NoConnectorRow);
+        }
+        if connectors
+            .windows(2)
+            .any(|pair| pair[0].connector >= pair[1].connector)
+        {
+            return Err(GetInfoShapeError::ConnectorsOutOfOrder);
+        }
+        Ok(Self { connectors })
+    }
+
+    /// The rows, in connector order.
+    #[must_use]
+    pub fn connectors(&self) -> &[InfoConnectorPeers] {
+        &self.connectors
+    }
+
+    /// The row of `connector`, when the daemon runs it.
+    #[must_use]
+    pub fn connector(&self, connector: InfoConnector) -> Option<&InfoConnectorPeers> {
+        self.connectors
+            .iter()
+            .find(|row| row.connector == connector)
+    }
+}
+
+/// A connector, as `get_info`'s Peers rows name it. The order of the
+/// variants is the rows' order: the node's connector declaration order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum InfoConnector {
+    #[serde(rename = "clearnet")]
+    Clearnet,
+    #[serde(rename = "tor")]
+    Tor,
+}
+
+/// One connector's sockets and peer lists.
+///
+/// The row is the unit of the Peers part's all-or-none rule: every member
+/// is required and no other is accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InfoConnectorPeers {
+    pub connector: InfoConnector,
+    /// Sockets this connector accepted.
+    pub incoming_sockets: u64,
+    /// Sockets this connector dialed.
+    pub outgoing_sockets: u64,
+    /// The white list's size for this connector, counted against the
+    /// addresses the dialer holds, as the disclosure does.
     pub white_peerlist_size: u64,
-    pub grey_peerlist_size: u64,
+    /// The gray list's size for this connector.
+    pub gray_peerlist_size: u64,
 }
 
 /// Result of `get_info` (REST `/get_info`, `/getinfo`; JSON-RPC `get_info`).
@@ -325,7 +424,9 @@ pub struct GetInfoResponse {
     /// administrator.
     pub host: Hidden<InfoHost>,
     /// Whether the caller was answered as a restricted one. Transitional:
-    /// the RPC channel's handshake returns the grant instead (RT-W10).
+    /// on the RPC channel, the client knows its effective grant from the
+    /// handshake (the request clamped to the ceiling message 4 returns,
+    /// RT-O30), and this field retires (RT-W10).
     pub restricted: bool,
 }
 
@@ -349,6 +450,11 @@ pub enum GetInfoShapeError {
     /// A Peers count arrived without `p2p`, which says what the counts are
     /// of.
     CountWithoutP2p { key: &'static str },
+    /// The Peers rows name a connector out of connector order, or twice.
+    ConnectorsOutOfOrder,
+    /// `"p2p": "running"` with no connector row. A daemon with both
+    /// connectors off is offline (IG-Q3), so a running one has a row.
+    NoConnectorRow,
     /// `p2p` disagrees with Health's `offline`: both read the daemon's
     /// configuration, so they cannot differ.
     P2pDisagreesWithOffline { offline: bool },
@@ -358,6 +464,12 @@ pub enum GetInfoShapeError {
     /// The Status part's connection counts disagree with `offline`: absent
     /// for an offline daemon, both present for a running one.
     ConnectionsDisagreeWithOffline { offline: bool },
+    /// A pool count disagrees with `pool_retired`: `null` exactly when the
+    /// pool is retired, a number exactly when it is not.
+    PoolCountDisagreesWithRetired {
+        key: &'static str,
+        pool_retired: bool,
+    },
 }
 
 impl core::fmt::Display for GetInfoShapeError {
@@ -380,6 +492,14 @@ impl core::fmt::Display for GetInfoShapeError {
                 f,
                 "`{key}` arrived without `p2p`: the Peers part says first whether P2P runs"
             ),
+            Self::NoConnectorRow => f.write_str(
+                "`p2p` is running and `connectors` has no row: a daemon running no connector \
+                 is offline",
+            ),
+            Self::ConnectorsOutOfOrder => f.write_str(
+                "the Peers part's `connectors` rows are out of connector order or name a \
+                 connector twice: one row per connector the daemon runs, clearnet before tor",
+            ),
             Self::P2pDisagreesWithOffline { offline } => write!(
                 f,
                 "`p2p` disagrees with `offline: {offline}`: both are the daemon's configuration"
@@ -393,6 +513,11 @@ impl core::fmt::Display for GetInfoShapeError {
                 f,
                 "the connection counts disagree with `offline: {offline}`: an offline daemon \
                  carries none, and a running one carries both"
+            ),
+            Self::PoolCountDisagreesWithRetired { key, pool_retired } => write!(
+                f,
+                "`{key}` disagrees with `pool_retired: {pool_retired}`: a retired pool's counts \
+                 are null, and a live pool's are numbers"
             ),
         }
     }
@@ -446,8 +571,11 @@ struct GetInfoWire {
     total_burned: AtomicUnitsString,
     staker_emission_share_effective: u64,
 
-    // Pool.
-    tx_pool_size: u64,
+    // Pool. `pool_retired` is written only when true, so a live reply is
+    // the shape it was before the pool could be retired.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pool_retired: bool,
+    tx_pool_size: Nullable<u64>,
 
     // Status.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -469,25 +597,24 @@ struct GetInfoWire {
 
     // Peers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    public_incoming_socket_count: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    public_outgoing_socket_count: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    tor_incoming_socket_count: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    tor_outgoing_socket_count: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     p2p: Option<P2pWire>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    white_peerlist_size: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    grey_peerlist_size: Option<u64>,
+    connectors: Option<Vec<InfoConnectorPeers>>,
 
-    // Host.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    tx_pool_unbroadcast_count: Option<u64>,
+    // Host. Absent is withheld; `null` is shown with no answer, when the
+    // pool is retired.
+    #[serde(
+        default,
+        deserialize_with = "crate::nullable::present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    tx_pool_unbroadcast_count: Option<Nullable<u64>>,
 
     restricted: bool,
+}
+
+const fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// `p2p` on the wire.
@@ -548,6 +675,7 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             burn_pct,
             total_burned,
             staker_emission_share_effective,
+            pool_retired,
             tx_pool_size,
             start_time,
             free_space,
@@ -557,13 +685,8 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             incoming_connections_count,
             alt_blocks_count,
             rpc_connections_count,
-            public_incoming_socket_count,
-            public_outgoing_socket_count,
-            tor_incoming_socket_count,
-            tor_outgoing_socket_count,
             p2p,
-            white_peerlist_size,
-            grey_peerlist_size,
+            connectors,
             tx_pool_unbroadcast_count,
             restricted,
         } = wire;
@@ -650,42 +773,23 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
         if node.shown().is_some_and(|status| status.version.is_empty()) {
             return Err(GetInfoShapeError::EmptyVersion);
         }
-        let counts = [
-            ("public_incoming_socket_count", public_incoming_socket_count),
-            ("public_outgoing_socket_count", public_outgoing_socket_count),
-            ("tor_incoming_socket_count", tor_incoming_socket_count),
-            ("tor_outgoing_socket_count", tor_outgoing_socket_count),
-            ("white_peerlist_size", white_peerlist_size),
-            ("grey_peerlist_size", grey_peerlist_size),
-        ];
-        let first_count = counts.iter().find(|(_, v)| v.is_some()).map(|(k, _)| *k);
-        let peers = match p2p {
-            None => match first_count {
-                None => Hidden::Withheld,
-                Some(key) => return Err(GetInfoShapeError::CountWithoutP2p { key }),
-            },
-            Some(P2pWire::Offline) => match first_count {
-                None => Hidden::Shown(InfoP2p::Offline),
-                Some(key) => return Err(GetInfoShapeError::CountWhileOffline { key }),
-            },
-            Some(P2pWire::Running) => {
-                let mut values = [0u64; 6];
-                for (slot, (key, value)) in values.iter_mut().zip(counts) {
-                    *slot = value.ok_or(GetInfoShapeError::PartialPart {
-                        part: "peers",
-                        missing: key,
-                    })?;
-                }
-                let [public_incoming_socket_count, public_outgoing_socket_count, tor_incoming_socket_count, tor_outgoing_socket_count, white_peerlist_size, grey_peerlist_size] =
-                    values;
-                Hidden::Shown(InfoP2p::Running(InfoPeers {
-                    public_incoming_socket_count,
-                    public_outgoing_socket_count,
-                    tor_incoming_socket_count,
-                    tor_outgoing_socket_count,
-                    white_peerlist_size,
-                    grey_peerlist_size,
-                }))
+        let peers = match (p2p, connectors) {
+            (None, None) => Hidden::Withheld,
+            (None, Some(_)) => {
+                return Err(GetInfoShapeError::CountWithoutP2p { key: "connectors" })
+            }
+            (Some(P2pWire::Offline), None) => Hidden::Shown(InfoP2p::Offline),
+            (Some(P2pWire::Offline), Some(_)) => {
+                return Err(GetInfoShapeError::CountWhileOffline { key: "connectors" })
+            }
+            (Some(P2pWire::Running), None) => {
+                return Err(GetInfoShapeError::PartialPart {
+                    part: "peers",
+                    missing: "connectors",
+                })
+            }
+            (Some(P2pWire::Running), Some(rows)) => {
+                Hidden::Shown(InfoP2p::Running(InfoPeers::new(rows)?))
             }
         };
         if let Hidden::Shown(state) = &peers {
@@ -693,13 +797,32 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 return Err(GetInfoShapeError::P2pDisagreesWithOffline { offline });
             }
         }
+        let pool = match (pool_retired, tx_pool_size.into_option()) {
+            (false, Some(tx_pool_size)) => InfoPool::Live { tx_pool_size },
+            (true, None) => InfoPool::Retired,
+            _ => {
+                return Err(GetInfoShapeError::PoolCountDisagreesWithRetired {
+                    key: "tx_pool_size",
+                    pool_retired,
+                })
+            }
+        };
         let host = hidden_part!(
             "host",
             [tx_pool_unbroadcast_count],
             InfoHost {
-                tx_pool_unbroadcast_count,
+                tx_pool_unbroadcast_count: tx_pool_unbroadcast_count.into_option(),
             }
         );
+        if host
+            .shown()
+            .is_some_and(|h| h.tx_pool_unbroadcast_count.is_none() != pool_retired)
+        {
+            return Err(GetInfoShapeError::PoolCountDisagreesWithRetired {
+                key: "tx_pool_unbroadcast_count",
+                pool_retired,
+            });
+        }
 
         Ok(Self {
             status,
@@ -729,7 +852,7 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 total_burned: total_burned.to_atomic_units(),
                 staker_emission_share_effective,
             },
-            pool: InfoPool { tx_pool_size },
+            pool,
             node,
             peers,
             host,
@@ -781,7 +904,8 @@ impl From<GetInfoResponse> for GetInfoWire {
             burn_pct: economics.burn_pct,
             total_burned: economics.total_burned.into(),
             staker_emission_share_effective: economics.staker_emission_share_effective,
-            tx_pool_size: pool.tx_pool_size,
+            pool_retired: pool.is_retired(),
+            tx_pool_size: Nullable::from(pool.tx_pool_size()),
             start_time: node.as_ref().map(|n| n.start_time),
             free_space: node.as_ref().map(|n| n.free_space),
             database_size: node.as_ref().map(|n| n.database_size),
@@ -796,14 +920,11 @@ impl From<GetInfoResponse> for GetInfoWire {
             alt_blocks_count: node.as_ref().map(|n| n.alt_blocks_count),
             rpc_connections_count: node.as_ref().map(|n| n.rpc_connections_count),
             version: node.map(|n| n.version),
-            public_incoming_socket_count: peers.as_ref().map(|p| p.public_incoming_socket_count),
-            public_outgoing_socket_count: peers.as_ref().map(|p| p.public_outgoing_socket_count),
-            tor_incoming_socket_count: peers.as_ref().map(|p| p.tor_incoming_socket_count),
-            tor_outgoing_socket_count: peers.as_ref().map(|p| p.tor_outgoing_socket_count),
             p2p,
-            white_peerlist_size: peers.as_ref().map(|p| p.white_peerlist_size),
-            grey_peerlist_size: peers.as_ref().map(|p| p.grey_peerlist_size),
-            tx_pool_unbroadcast_count: host.shown().map(|h| h.tx_pool_unbroadcast_count),
+            connectors: peers.map(|p| p.connectors),
+            tx_pool_unbroadcast_count: host
+                .shown()
+                .map(|h| Nullable::from(h.tx_pool_unbroadcast_count)),
             restricted,
         }
     }

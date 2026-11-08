@@ -89,8 +89,22 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # claim-source, serde-default and dual-list rows took RPC_WIRE.md as owner
 # (the KV doc's retirement, #1116) and merged with dev's, the list's length;
 # 295 on 2026-10-19 when the PWD-T7 compression-gate row went with
-# compression itself (#1134), the list's length.
-GRANDFATHER_CEILING = 295
+# compression itself (#1134), the list's length; 294 on 2026-11-01 when the
+# store's dead-table rows closed with the tables (layout 34); 288 the same
+# day when the docs sweep's closed rows (the C++ template fill, the
+# C++-anchored gates, `bi_cum_rct`) merged with it, the list's length;
+# 285 on 2026-11-03 when CS-5's two rows (the 2004 continuation closed as
+# built, the bucket-length row given an owner) merged with dev's
+# unbond-journal close (#1237), the list's length; 284 on 2026-11-05 when
+# the truncated credit-wire headline (already re-filed under the
+# attestation-ordering row) went with the C++ file it linked (the p2p
+# remnant cutover), the list's length; 275 on 2026-11-07 when the C++
+# removal closed the rows whose subject it deleted (shekyl-ffi's docs and
+# symbol rename, epee's wipeable_string, the performance tests) with the
+# three it found already resolved (DRS-W16's LMDB cursor, the PoW test
+# seam, the M1 C++ test-support seam), and two rows that had left the list
+# earlier were counted, the list's length.
+GRANDFATHER_CEILING = 275
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

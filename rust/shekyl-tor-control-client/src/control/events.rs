@@ -39,10 +39,11 @@ use super::vanguards::RelayFingerprint;
 /// The event types the supervisor subscribes to, in the order its one `SETEVENTS`
 /// names them (§4.2). Nothing else sends `SETEVENTS` on that connection, because
 /// `SETEVENTS` replaces the whole subscription.
-pub const SUPERVISOR_EVENTS: [&str; 7] = [
+pub const SUPERVISOR_EVENTS: [&str; 8] = [
     "STATUS_GENERAL",
     "STATUS_CLIENT",
     "HS_DESC",
+    "HS_DESC_CONTENT",
     "NETWORK_LIVENESS",
     "NOTICE",
     "WARN",
@@ -52,8 +53,9 @@ pub const SUPERVISOR_EVENTS: [&str; 7] = [
 impl Command {
     /// The supervisor's one `SETEVENTS`: [`SUPERVISOR_EVENTS`].
     ///
-    /// Nothing in production sends it yet. The wallet's managed tor stays
-    /// unsubscribed (`EventSink::unsubscribed`): SP-T0 §3b withdrew its subscription,
+    /// The daemon's supervisor sends this on each managed Tor it launches.
+    /// The wallet's managed tor stays unsubscribed
+    /// (`EventSink::unsubscribed`): SP-T0 §3b withdrew its subscription,
     /// and that retraction stands for the wallet.
     #[must_use]
     pub fn supervisor_events() -> Self {
@@ -82,6 +84,8 @@ pub enum TorEvent {
     NetworkLiveness(Liveness),
     /// `HS_DESC`.
     HsDesc(HsDescEvent),
+    /// `HS_DESC_CONTENT`: the copy one directory returned.
+    HsDescContent(super::descriptor::HsDescContent),
     /// A log event: `NOTICE`, `WARN` or `ERR`.
     Log(LogEvent),
     /// An event type outside [`SUPERVISOR_EVENTS`]. It carries nothing: the supervisor
@@ -200,6 +204,10 @@ pub struct BootstrapProblem {
     pub count: Option<u32>,
     /// `RECOMMENDATION=`. Tor sends `warn` from the tenth problem at a phase.
     pub recommendation: Recommendation,
+    /// `HOSTID=`, the relay the failed connection was to. `None` when Tor
+    /// sent `?` (the problem had no relay connection) or the value is not a
+    /// fingerprint.
+    pub host: Option<RelayFingerprint>,
 }
 
 /// A bootstrap problem's `RECOMMENDATION=`.
@@ -235,12 +243,60 @@ pub struct HsDescEvent {
     /// The HSDir, from tor's `$<fingerprint>~<nickname>`. `None` when tor wrote
     /// `UNKNOWN` (a `CREATED` event names none).
     pub hsdir: Option<RelayFingerprint>,
-    /// The descriptor id, when the action carries one. An upload's end (`UPLOADED`,
-    /// and `FAILED` for an upload) carries none; a fetch's `FAILED` does, which is how
-    /// the two `FAILED`s are told apart.
+    /// The descriptor id, when the action carries one. Tor 0.4.9.14's upload
+    /// `FAILED` carries the blinded key (`dirclient.c:2815`), as a fetch's
+    /// `FAILED` does. `UPLOADED` carries none. Which `FAILED` belongs to an
+    /// upload is [`Self::failure`], and for `UNEXPECTED` also whether an
+    /// upload of that descriptor is still open ([`crate::control::UploadRounds`]).
     pub descriptor_id: Option<String>,
-    /// `REASON=`, on a `FAILED`.
+    /// `REASON=`, on a `FAILED`. [`Self::failure`] is the one reading of it.
     pub reason: Option<String>,
+}
+
+/// Why an `HS_DESC FAILED` happened, as Tor names `REASON=` (tor 0.4.9.14).
+///
+/// One classification. The round coalescer and the directory check both
+/// read this; neither matches the reason string itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HsDescFailure {
+    /// `REASON=UPLOAD_REJECTED`: the directory refused the upload (HTTP 400).
+    /// Always an upload's end, and it carries the descriptor id.
+    UploadRejected,
+    /// `REASON=UNEXPECTED`: an unexpected HTTP status. An upload
+    /// (`dirclient.c:2824`) and a fetch can both carry it. An open upload of
+    /// that descriptor to that directory is the upload's; otherwise it is a
+    /// fetch's.
+    Unexpected,
+    /// `REASON=NOT_FOUND`: a fetch, and the directory does not have it.
+    NotFound,
+    /// Any other reason, or none. An upload's end that names no descriptor
+    /// is this. A fetch's `BAD_DESC` names one.
+    Other,
+}
+
+/// Tor's `REASON=` for an upload a directory refused.
+const REASON_UPLOAD_REJECTED: &str = "UPLOAD_REJECTED";
+
+/// Tor's `REASON=` for an unexpected HTTP status, on an upload or a fetch.
+const REASON_UNEXPECTED: &str = "UNEXPECTED";
+
+/// Tor's `REASON=` for a fetch whose directory does not have the descriptor.
+const REASON_NOT_FOUND: &str = "NOT_FOUND";
+
+impl HsDescEvent {
+    /// This event's failure, when it is `FAILED`. The one reading of `REASON=`.
+    #[must_use]
+    pub fn failure(&self) -> Option<HsDescFailure> {
+        if self.action != HsDescAction::Failed {
+            return None;
+        }
+        Some(match self.reason.as_deref() {
+            Some(REASON_UPLOAD_REJECTED) => HsDescFailure::UploadRejected,
+            Some(REASON_UNEXPECTED) => HsDescFailure::Unexpected,
+            Some(REASON_NOT_FOUND) => HsDescFailure::NotFound,
+            _ => HsDescFailure::Other,
+        })
+    }
 }
 
 /// An `HS_DESC` action.
@@ -319,6 +375,7 @@ fn parse_event_line(line: &str) -> TorEvent {
             _ => Liveness::Other,
         }),
         "HS_DESC" => TorEvent::HsDesc(hs_desc(&Fields::of(rest))),
+        "HS_DESC_CONTENT" => TorEvent::HsDescContent(super::descriptor::hs_desc_content(rest)),
         "NOTICE" => log(LogSeverity::Notice, rest),
         "WARN" => log(LogSeverity::Warn, rest),
         "ERR" => log(LogSeverity::Err, rest),
@@ -402,6 +459,7 @@ fn bootstrap(fields: &Fields) -> Bootstrap {
             Some("warn") => Recommendation::Warn,
             _ => Recommendation::Other,
         },
+        host: fields.value("HOSTID").and_then(RelayFingerprint::parse),
     });
     Bootstrap {
         // A percentage: a number above 100 is malformed, as `bootstrap` reads it.
@@ -508,6 +566,7 @@ mod tests {
                 "STATUS_GENERAL",
                 "STATUS_CLIENT",
                 "HS_DESC",
+                "HS_DESC_CONTENT",
                 "NETWORK_LIVENESS",
                 "NOTICE",
                 "WARN",
@@ -519,7 +578,7 @@ mod tests {
                 .to_wire()
                 .expect("renders")
                 .as_str(),
-            "SETEVENTS STATUS_GENERAL STATUS_CLIENT HS_DESC NETWORK_LIVENESS NOTICE WARN ERR"
+            "SETEVENTS STATUS_GENERAL STATUS_CLIENT HS_DESC HS_DESC_CONTENT NETWORK_LIVENESS NOTICE WARN ERR"
         );
     }
 
@@ -562,9 +621,28 @@ mod tests {
                     reason: Some("CONNECTREFUSED".to_owned()),
                     count: Some(10),
                     recommendation: Recommendation::Warn,
+                    host: RelayFingerprint::parse("24E2F139121D4394C54B5BCC368B3B411857C413"),
                 }),
             })
         );
+    }
+
+    /// A problem with no relay connection carries `HOSTID="?"`: no relay.
+    #[test]
+    fn a_problem_without_a_relay_names_none() {
+        let (_, status) = client(
+            "STATUS_CLIENT WARN BOOTSTRAP PROGRESS=5 TAG=conn SUMMARY=\"Connecting to a relay\" \
+             WARNING=\"No route to host\" REASON=NOROUTE COUNT=1 RECOMMENDATION=warn \
+             HOSTID=\"?\" HOSTADDR=\"?\"",
+        );
+        let ClientStatus::Bootstrap(Bootstrap {
+            problem: Some(problem),
+            ..
+        }) = status
+        else {
+            panic!("a bootstrap problem: {status:?}");
+        };
+        assert_eq!(problem.host, None);
     }
 
     #[test]
@@ -753,19 +831,26 @@ mod tests {
         );
     }
 
-    /// `control_events.c`, `control_event_hs_descriptor_upload_end`:
-    /// `"650 HS_DESC %s %s UNKNOWN %s%s"` with ` REASON=%s`, and the fetch form
-    /// `event_hs_descriptor_receive_end`: `"650 HS_DESC %s %s %s %s%s%s"`, which
-    /// carries the descriptor id.
+    /// Tor 0.4.9.14 ends an upload in `handle_response_upload_hsdesc`
+    /// (`dirclient.c:2803-2827`): `UPLOADED` carries no descriptor id, and
+    /// `FAILED` carries the blinded key with `REASON=UPLOAD_REJECTED` (HTTP
+    /// 400) or `REASON=UNEXPECTED` (any other status). A fetch's `FAILED`
+    /// (`event_hs_descriptor_receive_end`) carries the id too, with its own
+    /// reasons. The id does not say which `FAILED` it is; [`HsDescEvent::failure`]
+    /// does.
     #[test]
     fn source_hs_desc_failures_upload_and_fetch() {
         let upload = hs_desc_event(&format!(
-            "HS_DESC FAILED {CAPTURED_ONION} UNKNOWN \
-             $9E67E885D46AE284534EBA3B71A2DFE13A0E4783~Torr4Tor REASON=UPLOAD_REJECTED"
+            "HS_DESC FAILED {CAPTURED_ONION} NO_AUTH \
+             $9E67E885D46AE284534EBA3B71A2DFE13A0E4783~Torr4Tor \
+             6PZZop7jRpfFu0Wf1bew3nmlfJEewJOL4lg5nilPDNM REASON=UPLOAD_REJECTED"
         ));
         assert_eq!(upload.action, HsDescAction::Failed);
-        assert_eq!(upload.descriptor_id, None);
-        assert_eq!(upload.reason.as_deref(), Some("UPLOAD_REJECTED"));
+        assert_eq!(
+            upload.descriptor_id.as_deref(),
+            Some("6PZZop7jRpfFu0Wf1bew3nmlfJEewJOL4lg5nilPDNM")
+        );
+        assert_eq!(upload.failure(), Some(HsDescFailure::UploadRejected));
 
         let fetch = hs_desc_event(&format!(
             "HS_DESC FAILED {CAPTURED_ONION} NO_AUTH \
@@ -773,7 +858,14 @@ mod tests {
              GOkbpjFN0/2R6w08BkOWd3Zj62ZDCvu7bVmkseOLvcY REASON=NOT_FOUND"
         ));
         assert!(fetch.descriptor_id.is_some());
-        assert_eq!(fetch.reason.as_deref(), Some("NOT_FOUND"));
+        assert_eq!(fetch.failure(), Some(HsDescFailure::NotFound));
+
+        let unexpected = hs_desc_event(&format!(
+            "HS_DESC FAILED {CAPTURED_ONION} NO_AUTH \
+             $9E67E885D46AE284534EBA3B71A2DFE13A0E4783~Torr4Tor \
+             6PZZop7jRpfFu0Wf1bew3nmlfJEewJOL4lg5nilPDNM REASON=UNEXPECTED"
+        ));
+        assert_eq!(unexpected.failure(), Some(HsDescFailure::Unexpected));
     }
 
     #[test]

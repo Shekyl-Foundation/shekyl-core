@@ -169,18 +169,21 @@ polling. The alarm clears on the next observed advance. Legs do not
 fire while stalled — firing against a known-stale view is the thing
 the tick base exists to prevent.
 
-**Seconds-denominated horizons are evaluated against observation.**
-The submit leg's escape horizon (`DAEMON_RE_RELAY_CUTOFF_SECONDS`,
-converted to ~540 blocks for intuition only) is measured against
-observed chain progress, not a free-running timer — the existing
-`WatchdogConfig::from_block_target` block-denominated conversion
-already has this shape and is kept. A consequence worth stating
+**Horizons are evaluated against observation.**
+The submit leg asks for relay state on the tick. An origin the daemon
+has judged overdue, and a pool row with no origin, alarm on the next
+tick that sees that state. The wallet does not time them. A published
+transaction's lookback is blocks since publication was first observed.
+The proof-life ceiling (`WatchdogConfig::production`,
+`DISPATCHED_PROOF_LIFE` minus one block) is when an in-chain
+observation is asked again. A consequence worth stating
 before a reviewer flags it: **the submit watchdog goes quiet exactly
 when the chain does.** That is correct, not the watchdog sleeping
-through its own failure mode — its horizons are progress-denominated,
-so nothing accrues against a held tx while nothing advances, and the
-stall itself is surfaced by the `ChainProgress` alarm rather than by
-legs firing against a stale view.
+through its own failure mode — its block questions are
+progress-denominated, so nothing accrues against a published or
+in-chain transaction while nothing advances, and the stall itself is
+surfaced by the `ChainProgress` alarm rather than by legs firing
+against a stale view.
 
 **Tip source.** The driver reads the same daemon the engine holds
 (`self.daemon`), not a persona-isolated transport: the tick base is
@@ -402,24 +405,34 @@ ride the refusal because they are recomputed inside derivation and
 are no longer derivable once the window expires an epoch — the leg
 needs them to price a forfeit honestly. The floor reaches the
 assembly as a field on `AssembleEmissionClaim`, passed by its sole
-production sender (the claim orchestrator) from
-`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR` — a parameter for the
-same reason `assemble_claims` takes its size budget: testable at
-exact boundaries.
+production sender (the claim orchestrator) as
+`claim_value_floor(live fee, hold)` — a parameter for the same reason
+`assemble_claims` takes its size budget: testable at exact
+boundaries.
 
 ### The floor and the window
 
-- **Value floor:** the claim fee the assembly would pay, compared
-  against Σreward of the candidate set. The fee-floor input is a
-  **compiled-in constant in a shared crate**
-  (`shekyl-economics::fee`, next to the ladder it summarizes),
-  uniform across wallets — anti-fingerprint: a per-wallet knob or a
-  config value partitions the anonymity set by fee policy. It is
-  **not** `config/consensus_constants.json`: freezing a wallet
-  fee-policy threshold into consensus buys nothing and costs a
-  consensus retune to adjust. Not a per-wallet setting (rule 00 §2:
-  privacy is never a setting). The constant's doc carries rationale
-  and safe-adjustment bounds (rule 75).
+- **Value floor:** `Σreward ≥ max(live fee, hold)` over the candidate
+  set (`claim_value_floor`, ruling 9, 2026-10-24; built in the ESR-16
+  completion). The live fee is the fee the leg prices the claim at, so
+  a claim at the gate nets zero or more. The hold is
+  `RelayPolicy::emission_claim_fee_floor`, generated from
+  `config/relay_policy.json`: the fee on the shipped lattice for the
+  claim leg's priced weight (`EMISSION_NON_CLAIMS_RESERVE_BYTES` +
+  `CLAIM_VIN_ALLOWANCE_BYTES` = 51 200) at the chain's genesis Economy
+  rung (27 306 atomic per weight unit), 1 398 068 000 atomic, about
+  1.40 SKL. `shekyl-engine-core` recomputes it from `relay_floor_from`
+  at the genesis operands and that weight, so a change to either fails
+  a test. Both operands are chain state and a uniform constant, so
+  every wallet reaches the same decision — anti-fingerprint: a
+  per-wallet knob or a config value partitions the anonymity set by
+  fee policy. The hold is **not** in `config/consensus_constants.json`
+  or any digest: freezing a wallet fee-policy threshold into consensus
+  buys nothing and costs a consensus retune to adjust; only a release
+  changes it, after a ruling. Not a per-wallet setting (rule 00 §2:
+  privacy is never a setting). The weight is an allowance, not the
+  claim's predicted weight; the predictor is a `FOLLOWUPS.md` row, and
+  when it lands the hold's test reads its weight.
 - **At the window floor: evaluate-and-forfeit, never force.** The
   claim window is bounded by the existing prune horizon
   (`prune_below_epoch_at_height`). When held epochs reach the window

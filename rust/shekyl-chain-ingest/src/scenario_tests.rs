@@ -116,7 +116,7 @@ async fn a_rewind_pops_to_the_target_and_mining_resumes_on_the_new_tip() {
         .rewind_to(BlockHeight::from_raw(2))
         .await
         .expect("rewinds");
-    assert_eq!(rewound.popped, 2);
+    assert_eq!(rewound.popped(), 2);
     assert_eq!(
         scenario
             .hash_at(BlockHeight::from_raw(3))
@@ -173,7 +173,7 @@ async fn a_rewind_pops_to_the_target_and_mining_resumes_on_the_new_tip() {
 /// hash admits is one the real hash admits at difficulty one. `#[ignore]`d
 /// for the live lane — the cache derivation is seconds, not milliseconds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "real RandomX; seconds. Run in the live lane: cargo test -p shekyl-chain-ingest scenario -- --ignored"]
+#[ignore = "real RandomX; seconds; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_chain_mines_under_the_production_substrate() {
     use std::sync::Arc;
 
@@ -197,13 +197,14 @@ async fn a_chain_mines_under_the_production_substrate() {
 fn the_scenario_rules_are_regtest_at_difficulty_one() {
     // Pinned so the free longhash and a real one agree: any hash satisfies
     // a target of one, and the subject of every scenario stays the chain.
-    assert!(matches!(
-        RULES,
-        crate::schedule::ChainRules::Regtest {
-            fixed_difficulty: Some(d),
-            schedule,
-        } if d.get() == 1 && schedule.is_production()
-    ));
+    assert_eq!(RULES.network(), shekyl_network::Network::Regtest);
+    assert_eq!(
+        RULES.fixed_difficulty().map(core::num::NonZeroU128::get),
+        Some(1)
+    );
+    assert!(RULES.schedule().is_production());
+    // The driver mines its own block 0, so its chain is held to none.
+    assert_eq!(RULES.trust(), shekyl_chain_rules::Trust::UNPINNED);
 }
 
 /// DRS-E3 commit 7 (`DRS_E3_CURVE_WRITER.md` §2.3, §6 row 7): the driver

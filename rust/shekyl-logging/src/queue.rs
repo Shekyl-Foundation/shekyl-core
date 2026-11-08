@@ -148,6 +148,14 @@ impl Producer {
             }
         }
     }
+
+    /// Queue `line` as one message, or drop and count it when the queue is
+    /// full or the writer has stopped. Never waits.
+    fn enqueue(&self, line: Vec<u8>) {
+        if self.tx.try_send(Msg::Line(line)).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
 
 /// The answer to a marker or a stop, until `deadline`. A writer that ended
@@ -164,9 +172,7 @@ impl Write for Producer {
     /// Queue `buf` as one line, or drop and count it when the queue is
     /// full or the writer has stopped. Never waits.
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.tx.try_send(Msg::Line(buf.to_vec())).is_err() {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-        }
+        self.enqueue(buf.to_vec());
         Ok(buf.len())
     }
 
@@ -200,14 +206,56 @@ impl Drop for SinkGuard {
     }
 }
 
-/// The sinks the installed subscriber writes to, for [`flush`].
-static INSTALLED: Mutex<Vec<Producer>> = Mutex::new(Vec::new());
+/// The sinks of the installed subscriber. Standard error is always
+/// present; the file sink is present when one was configured.
+#[derive(Clone)]
+struct Installed {
+    stderr: Producer,
+    file: Option<Producer>,
+}
 
-/// Record the installed subscriber's sinks.
-pub(crate) fn install(producers: Vec<Producer>) {
+/// The sinks the installed subscriber writes to, for [`flush`] and
+/// [`announce`].
+static INSTALLED: Mutex<Option<Installed>> = Mutex::new(None);
+
+/// Record the installed subscriber's sinks. A later call replaces them.
+pub(crate) fn install(stderr: Producer, file: Option<Producer>) {
     *INSTALLED
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = producers;
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Installed { stderr, file });
+}
+
+fn installed() -> Option<Installed> {
+    INSTALLED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// Queue one line on each installed sink, exactly, with a newline added.
+///
+/// `stderr` is the standard-error line and `file` is the log-file line,
+/// each without a trailing newline. Neither receives a level tag or a
+/// timestamp, and the log level does not filter them. A full queue drops
+/// that sink's line and counts the drop. The call does not wait on a sink;
+/// [`flush`] is the wait. With no subscriber installed, both lines are
+/// discarded. With no file sink, `file` is discarded.
+pub fn announce(stderr: &str, file: &str) {
+    let Some(installed) = installed() else {
+        return;
+    };
+    installed.stderr.enqueue(announced_line(stderr));
+    if let Some(file_sink) = installed.file {
+        file_sink.enqueue(announced_line(file));
+    }
+}
+
+/// `text` plus the newline a sink line ends with.
+fn announced_line(text: &str) -> Vec<u8> {
+    let mut line = Vec::with_capacity(text.len() + 1);
+    line.extend_from_slice(text.as_bytes());
+    line.push(b'\n');
+    line
 }
 
 /// Wait until every line logged before this call has reached its sink, or
@@ -215,13 +263,15 @@ pub(crate) fn install(producers: Vec<Producer>) {
 /// installed there is nothing queued: [`Flushed::Done`].
 pub fn flush(within: Duration) -> Flushed {
     let deadline = Instant::now() + within;
-    let producers = INSTALLED
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
+    let Some(installed) = installed() else {
+        return Flushed::Done;
+    };
     let mut flushed = Flushed::Done;
-    for producer in &producers {
-        if producer.flush_until(deadline) == Flushed::DeadlinePassed {
+    if installed.stderr.flush_until(deadline) == Flushed::DeadlinePassed {
+        flushed = Flushed::DeadlinePassed;
+    }
+    if let Some(file) = installed.file {
+        if file.flush_until(deadline) == Flushed::DeadlinePassed {
             flushed = Flushed::DeadlinePassed;
         }
     }
@@ -745,5 +795,93 @@ mod tests {
             Flushed::Done
         );
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// The announcement tests share the process-wide sink table.
+    fn hold_installed() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Clear the process-wide sink table when the test ends, including a panic.
+    struct RestoreInstalled;
+
+    impl Drop for RestoreInstalled {
+        fn drop(&mut self) {
+            *INSTALLED
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
+    }
+
+    /// **Each sink is given its own line.** Standard error and the log file
+    /// do not have to carry the same text. Red edit: write one line to both.
+    #[test]
+    fn an_announcement_is_the_line_each_sink_was_given() {
+        let _hold = hold_installed();
+        let _restore = RestoreInstalled;
+        let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+        let file_buf = Arc::new(Mutex::new(Vec::new()));
+        let (stderr, stderr_guard) = queued(
+            Record {
+                refuse_writes: 0,
+                fail_flushes: false,
+                buf: Arc::clone(&stderr_buf),
+            },
+            Sink::Stderr,
+            4,
+        )
+        .expect("stderr writer");
+        let (file, file_guard) = queued(
+            Record {
+                refuse_writes: 0,
+                fail_flushes: false,
+                buf: Arc::clone(&file_buf),
+            },
+            Sink::File,
+            4,
+        )
+        .expect("file writer");
+        install(stderr, Some(file));
+        announce(
+            "shekyld: stop requested by SIGTERM",
+            "stop requested by SIGTERM",
+        );
+        assert_eq!(flush(Duration::from_secs(2)), Flushed::Done);
+        let stderr_text = String::from_utf8(stderr_buf.lock().expect("stderr").clone()).unwrap();
+        let file_text = String::from_utf8(file_buf.lock().expect("file").clone()).unwrap();
+        assert_eq!(stderr_text, "shekyld: stop requested by SIGTERM\n");
+        assert_eq!(file_text, "stop requested by SIGTERM\n");
+        drop(stderr_guard);
+        drop(file_guard);
+    }
+
+    /// **An announcement does not wait on a stalled sink.** The line is
+    /// queued; the closing flush is the wait. Red edit: write the sink
+    /// inside `announce`.
+    #[test]
+    fn an_announcement_does_not_wait_on_a_stalled_sink() {
+        let _hold = hold_installed();
+        let _restore = RestoreInstalled;
+        let SlowQueue {
+            producer,
+            guard,
+            gate,
+            buf,
+            ..
+        } = slow(Duration::ZERO, false, 4);
+        install(producer, None);
+        let started = Instant::now();
+        announce("shekyld: stop requested by SIGTERM", "unused");
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "announce waited on the sink"
+        );
+        open_gate(&gate);
+        assert_eq!(flush(Duration::from_secs(2)), Flushed::Done);
+        let written = String::from_utf8(buf.lock().expect("slow").clone()).unwrap();
+        assert_eq!(written, "shekyld: stop requested by SIGTERM\n");
+        drop(guard);
     }
 }

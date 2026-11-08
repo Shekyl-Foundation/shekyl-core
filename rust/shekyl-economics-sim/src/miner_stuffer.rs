@@ -20,9 +20,10 @@
 //!   him in ([`stuffer_cost_per_shard_atomic`]).
 //! - **Miner.** He lists his own bodies in the block the honest fold built.
 //!   Today the relay floor does not apply to them; once it is enforced, every
-//!   one of them pays it. His cost is the cheapest integer packing: how many
+//!   one of them pays it. His cost is the cheapest integer packing: which
 //!   honest bodies to drop and how many of his own to add, with the final
-//!   weight inside the block bound. Cost and the blocks a shard takes come
+//!   weight inside the block bound. The listing keeps each body's build
+//!   weight, so the drops are searched by weight ([`HonestBodies`]). Cost and the blocks a shard takes come
 //!   from that one packing. The cost is the fall in his payout — the miner
 //!   leg of the emission and his fee income. The staker's loss is an
 //!   externality, not his outlay. A self-archiver also recovers part of the
@@ -51,18 +52,19 @@ use std::collections::HashSet;
 
 use shekyl_block_template::Fill;
 use shekyl_economics::{
-    burn::calc_burn_pct_at, penalty_free_weight, price_emission, CirculatingSupply,
-    ClosedShardCount, EconomicParams, EmissionInputs, PaidEmission,
+    burn::calc_burn_pct_at, price_emission, CirculatingSupply, ClosedShardCount, EconomicParams,
+    EmissionInputs, PaidEmission, RelayPolicy,
 };
 use shekyl_tx_weight::predict_weight;
 use shekyl_types::SHARD_LENGTH;
 
+use crate::block_space::ListedBodies;
 use crate::calibration::{
-    all_shapes, stuffer_cost_per_shard_atomic, stuffer_shape, tree_depth_for_leaves, PerByteRate,
-    Shape,
+    all_shapes, required_price, stuffer_cost_per_shard_atomic, stuffer_shape,
+    tree_depth_for_leaves, PerByteRate, Shape,
 };
 use crate::engine::SimParams;
-use crate::fee_model::FeePoint;
+use crate::fee_model::{FeePoint, OrdinaryTx};
 use crate::stage2::LastBlock;
 
 /// How the cheapest packing changed the block.
@@ -349,7 +351,6 @@ fn price_weight(
 /// at.
 struct Block<'a> {
     at: FeePoint<'a>,
-    economic: &'a EconomicParams,
     depth: u8,
     median: u64,
     honest: Fill<'a>,
@@ -358,15 +359,19 @@ struct Block<'a> {
     height: u64,
     supply: CirculatingSupply,
     closed_shards: ClosedShardCount,
-    honest_weight: u64,
-    honest_fee: u64,
+    /// The bodies the fold listed, cohort by cohort at the fee and weight
+    /// each was built with, in the fold's order.
+    listed: Vec<ListedBodies>,
+    /// The ordinary transaction at this block, for a listing with nothing
+    /// in it.
+    ordinary: OrdinaryTx,
     /// The block as the fold listed it, priced once. A packing prices only
     /// the block it would list, against this.
     honest_paid: PaidEmission,
 }
 
 impl<'a> Block<'a> {
-    fn new(last: &LastBlock, economic: &'a EconomicParams) -> Self {
+    fn new(last: &LastBlock, economic: &'a EconomicParams, relay: &'a RelayPolicy) -> Self {
         let at = FeePoint {
             already_generated: last.already_generated,
             volume: last.volume,
@@ -375,6 +380,7 @@ impl<'a> Block<'a> {
             burn_pct_scaled: last.burn_pct_scaled,
             chain_leaves: last.chain_leaves,
             params: economic,
+            relay,
         };
         assert_eq!(
             last.burn_pct_scaled,
@@ -382,8 +388,10 @@ impl<'a> Block<'a> {
             "the block's burn is production's at its volume and supply"
         );
         let median = last.medians.effective_median.to_raw();
+        let coinbase = u64::try_from(shekyl_wire::transaction::COINBASE_RESERVE).expect("fits");
         let honest = Fill::listed(
             median,
+            coinbase,
             last.already_generated,
             last.volume,
             economic,
@@ -391,9 +399,7 @@ impl<'a> Block<'a> {
             last.fees,
         )
         .expect("the fold listed this block");
-        let room = penalty_free_weight(median, economic)
-            .min(honest.bodies_weight_bound())
-            .saturating_sub(honest.bodies_weight());
+        let room = honest.penalty_free_body_room();
         let supply = last.supply;
         let closed_shards = ClosedShardCount::new(last.closed_shards);
         let honest_paid = price_weight(
@@ -402,12 +408,11 @@ impl<'a> Block<'a> {
             &at,
             supply,
             closed_shards,
-            honest.bodies_weight(),
+            honest.block_weight(),
             honest.fees(),
         );
         Self {
             at,
-            economic,
             depth: tree_depth_for_leaves(last.chain_leaves),
             median,
             honest,
@@ -415,22 +420,26 @@ impl<'a> Block<'a> {
             height: last.chain_height,
             supply,
             closed_shards,
-            honest_weight: last.honest_tx.weight,
-            honest_fee: last.honest_tx.fee_atomic,
+            listed: last.listed.clone(),
+            ordinary: last.honest_tx,
             honest_paid,
         }
     }
 
     /// The block at `bodies_weight` listing `total_fees`, as production
-    /// prices it.
+    /// prices it: the coinbase weight the honest fill carries is part of
+    /// the block.
     fn priced_at(&self, bodies_weight: u64, total_fees: u64) -> PaidEmission {
+        let block_weight = bodies_weight
+            .checked_add(self.honest.coinbase_weight())
+            .expect("a packing's block weight fits");
         price_weight(
             self.height,
             self.median,
             &self.at,
             self.supply,
             self.closed_shards,
-            bodies_weight,
+            block_weight,
             total_fees,
         )
     }
@@ -438,24 +447,31 @@ impl<'a> Block<'a> {
     /// The relay stuffer: the rate that gets his bodies listed, and his
     /// campaign's cost for one shard at it.
     fn relay(&self, floor: PerByteRate) -> (PerByteRate, bool, u128) {
-        let shape = stuffer_shape(self.depth, floor);
+        let shape = required_price(stuffer_shape(self.depth, floor));
         let mut after_honest = self.honest;
         let at_floor = after_honest.admit(
-            shape.tx_weight(self.depth, floor),
-            shape.tx_fee_atomic(self.depth, floor),
+            required_price(shape.tx_weight(self.depth, floor)),
+            required_price(shape.tx_fee_atomic(self.depth, floor)),
         );
         let rate = if at_floor {
             floor
         } else {
-            // Outrank the honest bodies: one atomic unit per byte above their
-            // rate, which the pool offers first and the fill rule lists under
-            // the median in their place.
-            PerByteRate::from_atomic(self.honest_fee / self.honest_weight.max(1) + 1)
+            // Outrank the honest bodies: one atomic unit per byte above the
+            // richest listed, which the pool offers first and the fill rule
+            // lists under the median in their place. The pricer stays the
+            // floor's.
+            let richest = self
+                .listed
+                .iter()
+                .map(|bodies| bodies.fee / bodies.weight.max(1))
+                .max()
+                .unwrap_or(self.ordinary.fee_atomic / self.ordinary.weight.max(1));
+            floor.with_atomic(richest + 1)
         };
         (
             rate,
             at_floor,
-            stuffer_cost_per_shard_atomic(self.at.chain_leaves, rate),
+            required_price(stuffer_cost_per_shard_atomic(self.at.chain_leaves, rate)),
         )
     }
 
@@ -499,7 +515,7 @@ impl<'a> Block<'a> {
             if !seen.insert(body) {
                 continue;
             }
-            self.consider(&mut best, honest, body, recovery);
+            self.consider(&mut best, &honest, body, recovery);
         }
         best.expect("the shape space has a body the bound can hold")
     }
@@ -507,17 +523,14 @@ impl<'a> Block<'a> {
     fn consider(
         &self,
         best: &mut Option<PricedPacking>,
-        honest: HonestBodies,
+        honest: &HonestBodies,
         body: StuffingBody,
         recovery: PoolShare,
     ) {
         let bound = self.honest.bodies_weight_bound();
-        let free_ceiling = penalty_free_weight(self.median, self.economic).min(bound);
-        for dropped in 0..=honest.count {
-            let Some(kept_weight) = honest.kept_weight(dropped) else {
-                continue;
-            };
-            let Some(room) = bound.checked_sub(kept_weight) else {
+        let free_ceiling = self.honest.penalty_free_bodies();
+        for kept in honest.drops() {
+            let Some(room) = bound.checked_sub(kept.weight) else {
                 continue;
             };
             let max_stuffed = room / body.weight;
@@ -528,14 +541,14 @@ impl<'a> Block<'a> {
             // fee schedule. Cost per archival byte then falls as more bodies
             // are listed, so only the fullest packing of that region is a
             // candidate. Past it, every count is priced.
-            let free_stuffed = free_ceiling.saturating_sub(kept_weight) / body.weight;
+            let free_stuffed = free_ceiling.saturating_sub(kept.weight) / body.weight;
             let free_full = free_stuffed.min(max_stuffed);
             if free_full >= 1 {
-                self.offer(best, honest, dropped, free_full, body, recovery);
+                self.offer(best, kept, free_full, body, recovery);
             }
             if max_stuffed > free_stuffed {
                 for stuffed in free_stuffed.saturating_add(1)..=max_stuffed {
-                    self.offer(best, honest, dropped, stuffed, body, recovery);
+                    self.offer(best, kept, stuffed, body, recovery);
                 }
             }
         }
@@ -544,13 +557,12 @@ impl<'a> Block<'a> {
     fn offer(
         &self,
         best: &mut Option<PricedPacking>,
-        honest: HonestBodies,
-        dropped: u64,
+        kept: Kept,
         stuffed: u64,
         body: StuffingBody,
         recovery: PoolShare,
     ) {
-        let Some(packing) = self.packing_at(honest, dropped, stuffed, body, recovery) else {
+        let Some(packing) = self.packing_at(kept, stuffed, body, recovery) else {
             return;
         };
         if best.as_ref().is_none_or(|held| packing.beats(held)) {
@@ -558,26 +570,24 @@ impl<'a> Block<'a> {
         }
     }
 
+    /// `stuffed` of `body` listed beside the honest bodies `kept` leaves.
     fn packing_at(
         &self,
-        honest: HonestBodies,
-        dropped: u64,
+        kept: Kept,
         stuffed: u64,
         body: StuffingBody,
         recovery: PoolShare,
     ) -> Option<PricedPacking> {
-        if stuffed == 0 || dropped > honest.count {
+        if stuffed == 0 {
             return None;
         }
-        let kept_weight = honest.kept_weight(dropped)?;
-        let kept_fees = honest.kept_fees(dropped)?;
         let added_weight = stuffed.checked_mul(body.weight)?;
         let own_fees = stuffed.checked_mul(body.fee)?;
-        let total_weight = kept_weight.checked_add(added_weight)?;
+        let total_weight = kept.weight.checked_add(added_weight)?;
         if total_weight > self.honest.bodies_weight_bound() {
             return None;
         }
-        let total_fees = kept_fees.checked_add(own_fees)?;
+        let total_fees = kept.fees.checked_add(own_fees)?;
         let after = self.priced_at(total_weight, total_fees);
         let net_before = miner_net(&self.honest_paid, self.honest.fees(), 0, recovery);
         let net_after = miner_net(&after, total_fees, own_fees, recovery);
@@ -585,7 +595,7 @@ impl<'a> Block<'a> {
         Some(PricedPacking {
             block_cost,
             block_bytes: u128::from(stuffed) * u128::from(body.archival),
-            dropped,
+            dropped: kept.dropped,
             stuffed,
             weight: body.weight,
             reward_before: self.honest_paid.paid.to_raw(),
@@ -594,26 +604,15 @@ impl<'a> Block<'a> {
         })
     }
 
-    /// The honest bodies as identical transactions, plus a remainder the
-    /// fill did not count as one of them.
+    /// The honest bodies the block listed, by weight.
     fn honest_bodies(&self) -> HonestBodies {
-        let weight = self.honest_weight;
-        let count = if weight == 0 {
-            0
-        } else {
-            self.honest.bodies_weight() / weight
-        };
-        let counted_weight = count.saturating_mul(weight);
-        let counted_fees = count
-            .saturating_mul(self.honest_fee)
-            .min(self.honest.fees());
-        HonestBodies {
-            count,
-            weight,
-            fee: self.honest_fee,
-            remainder_weight: self.honest.bodies_weight() - counted_weight,
-            remainder_fees: self.honest.fees() - counted_fees,
-        }
+        let honest = HonestBodies::of(&self.listed);
+        debug_assert_eq!(
+            honest.all().weight,
+            self.honest.bodies_weight(),
+            "the listing is the fill's"
+        );
+        honest
     }
 }
 
@@ -631,7 +630,10 @@ impl StuffingBody {
     /// The body `shape` lists at `depth` when `floor` is the rate the
     /// approach charges. Nothing, when the shape has no weight.
     fn from_shape(shape: Shape, depth: u8, floor: Option<PerByteRate>) -> Option<Self> {
-        let fee = floor.map_or(0, |rate| shape.tx_fee_atomic(depth, rate));
+        let fee = match floor {
+            Some(rate) => shape.tx_fee_atomic(depth, rate)?,
+            None => 0,
+        };
         let weight = u64::try_from(predict_weight(shape.n_in, shape.n_out, depth, fee)).ok()?;
         if weight == 0 {
             return None;
@@ -644,26 +646,131 @@ impl StuffingBody {
     }
 }
 
-/// The honest bodies a packing may drop, as a count of one transaction.
-#[derive(Clone, Copy)]
+/// The honest bodies a packing may drop, by weight.
+///
+/// Bodies of one weight free the same room whichever of them goes, and the
+/// miner keeps the most fee income by dropping the cheapest: his share of a
+/// block's fees, `fees − ⌊fees · burn⌋`, never falls as the fees rise. So
+/// within a class the cheapest go first. Across classes no one order holds:
+/// a heavier body paying more per weight can free room a lighter, cheaper
+/// one cannot, so every split of the drops among the classes is a candidate
+/// ([`HonestBodies::drops`]). With one class, a block whose bodies were all
+/// built at one weight, that is the cheapest-first prefix.
+///
+/// A self-archiver's recovery reads the kept fees only through the floors
+/// of his pool share, so the order within a class is exact for every
+/// attacker up to those floors' few atomic units.
 struct HonestBodies {
-    count: u64,
+    classes: Vec<WeightClass>,
+}
+
+/// The listed bodies of one weight.
+struct WeightClass {
     weight: u64,
-    fee: u64,
-    remainder_weight: u64,
-    remainder_fees: u64,
+    /// `dropped_fees[d]` is the fees of the `d` cheapest bodies, for `d`
+    /// from none to every body of this weight.
+    dropped_fees: Vec<u64>,
+}
+
+impl WeightClass {
+    fn count(&self) -> u64 {
+        u64::try_from(self.dropped_fees.len() - 1).expect("a block's body count fits")
+    }
+
+    fn fees(&self) -> u64 {
+        *self
+            .dropped_fees
+            .last()
+            .expect("a class holds its empty prefix")
+    }
+}
+
+/// The honest bodies one choice of drops leaves: how many went, and the
+/// weight and fees that stay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Kept {
+    dropped: u64,
+    weight: u64,
+    fees: u64,
 }
 
 impl HonestBodies {
-    fn kept_weight(self, dropped: u64) -> Option<u64> {
-        let kept = self.count.checked_sub(dropped)?;
-        kept.checked_mul(self.weight)?
-            .checked_add(self.remainder_weight)
+    fn of(listed: &[ListedBodies]) -> Self {
+        let mut sorted = listed.to_vec();
+        sorted.sort_by_key(|bodies| (bodies.weight, bodies.fee));
+        let mut classes: Vec<WeightClass> = Vec::new();
+        for bodies in sorted {
+            if classes
+                .last()
+                .is_none_or(|class| class.weight != bodies.weight)
+            {
+                classes.push(WeightClass {
+                    weight: bodies.weight,
+                    dropped_fees: vec![0],
+                });
+            }
+            let class = classes.last_mut().expect("pushed above");
+            for _ in 0..bodies.count {
+                let total = class.fees();
+                class
+                    .dropped_fees
+                    .push(total.checked_add(bodies.fee).expect("a block's fees fit"));
+            }
+        }
+        Self { classes }
     }
 
-    fn kept_fees(self, dropped: u64) -> Option<u64> {
-        let kept = self.count.checked_sub(dropped)?;
-        kept.checked_mul(self.fee)?.checked_add(self.remainder_fees)
+    /// Every body kept.
+    fn all(&self) -> Kept {
+        self.kept(&vec![0; self.classes.len()])
+            .expect("dropping nothing is a choice")
+    }
+
+    /// What stays when `drops[i]` of class `i`'s cheapest bodies go.
+    /// Nothing, when a class has fewer bodies than that.
+    fn kept(&self, drops: &[u64]) -> Option<Kept> {
+        if drops.len() != self.classes.len() {
+            return None;
+        }
+        let mut kept = Kept {
+            dropped: 0,
+            weight: 0,
+            fees: 0,
+        };
+        for (class, &dropped) in self.classes.iter().zip(drops) {
+            let count = class.count();
+            let stays = count.checked_sub(dropped)?;
+            let dropped_index = usize::try_from(dropped).ok()?;
+            kept.dropped = kept.dropped.checked_add(dropped)?;
+            kept.weight = kept.weight.checked_add(stays.checked_mul(class.weight)?)?;
+            kept.fees = kept
+                .fees
+                .checked_add(class.fees() - class.dropped_fees[dropped_index])?;
+        }
+        Some(kept)
+    }
+
+    /// Every split of the drops among the classes, the cheapest of each
+    /// class first.
+    fn drops(&self) -> Vec<Kept> {
+        let mut drops = vec![0u64; self.classes.len()];
+        let mut choices = Vec::new();
+        loop {
+            choices.push(self.kept(&drops).expect("each count is within its class"));
+            // The next split, the first class counting fastest.
+            let mut class = 0;
+            loop {
+                let Some(count) = self.classes.get(class).map(WeightClass::count) else {
+                    return choices;
+                };
+                if drops[class] < count {
+                    drops[class] += 1;
+                    break;
+                }
+                drops[class] = 0;
+                class += 1;
+            }
+        }
     }
 }
 
@@ -755,9 +862,9 @@ pub(crate) fn print_envelope(
     folded: &[crate::stage2::FoldedScenario],
 ) -> core::fmt::Result {
     let budgets = [
-        ("epoch", shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS),
-        ("year", params.blocks_per_year),
-        ("decade", 10 * params.blocks_per_year),
+        ("epoch", params.archival().settlement_epoch_blocks),
+        ("year", params.blocks_per_year()),
+        ("decade", 10 * params.blocks_per_year()),
     ];
     writeln!(
         out,
@@ -781,7 +888,7 @@ pub(crate) fn print_envelope(
         "miner U",
         "(placement)",
         "miner E",
-        "self 1/100",
+        format!("self 1/{CO_HOLDERS}"),
         "self all",
         "today",
         "fixed"
@@ -796,10 +903,10 @@ pub(crate) fn print_envelope(
         let Some(agg) = scenario.aggs.iter().find(|a| a.year == year) else {
             continue;
         };
-        let last = agg.last_block;
-        let e = envelope_at(&last, params);
+        let last = &agg.last_block;
+        let e = envelope_at(last, params);
         let economic = params.economic();
-        let block = Block::new(&last, &economic);
+        let block = Block::new(last, economic, params.relay());
         let unenforced = e.miner(AttackKind::MinerUnenforced);
         let (relay_rate, relay_at_floor, relay_atomic) = match e.attack(AttackKind::Relay).cost {
             AttackCost::Relay {
@@ -861,7 +968,7 @@ pub(crate) fn print_envelope(
 /// Every attacker at the block a fold ended a year on.
 pub(crate) fn envelope_at(last: &LastBlock, params: &SimParams) -> Envelope {
     let economic = params.economic();
-    let block = Block::new(last, &economic);
+    let block = Block::new(last, economic, params.relay());
     let floor = params.fee.admission_rate(&block.at);
     // Column order is the approach list. A match arm that numbers a column
     // differently from [`AttackKind::ALL`] fails this before the report prints.
@@ -880,22 +987,21 @@ mod tests {
     use shekyl_block_template::Fill;
     use shekyl_chain_rules::medians_from;
     use shekyl_economics::{
-        burn::calc_burn_pct_at, compute_burn_split_at, emission_share_at, paid_block_reward,
-        split_block_emission, TxVolume, BLOCKS_PER_YEAR,
+        burn::calc_burn_pct_at, compute_burn_split_at, paid_block_reward, split_block_emission,
+        TxVolume,
     };
     use shekyl_units::AtomicUnits;
-
-    use crate::fee_model::OrdinaryTx;
 
     /// A block whose honest demand is `offered` identical transactions, listed
     /// by the fill rule. The stuffer reads the listing, it does not re-offer.
     fn block_at(offered: u64, params: &SimParams) -> LastBlock {
         let economic = params.economic();
         let zone = economic.full_reward_zone;
-        let volume = TxVolume::per_block(params.tx_volume_baseline);
-        // The share and the burn are production's at these operands, as
-        // the cursor's are: the payout reprices the block from them.
-        let chain_height = 2 * BLOCKS_PER_YEAR;
+        let volume = TxVolume::per_block(params.economic().tx_volume_baseline);
+        // The share is the run's schedule at this height, as the cursor's
+        // is. The burn is production's at these operands. The payout
+        // reprices the block from them.
+        let chain_height = 2 * params.blocks_per_year();
         let already_generated = economic.emission_curve_asymptote / 3;
         let supply = CirculatingSupply::derive(
             AtomicUnits::from_raw(already_generated),
@@ -906,21 +1012,23 @@ mod tests {
             already_generated,
             volume,
             long_term_median: zone,
-            sigma_scaled: emission_share_at(chain_height),
-            burn_pct_scaled: calc_burn_pct_at(volume, supply, &economic),
+            sigma_scaled: economic.emission_schedule().share_at(chain_height),
+            burn_pct_scaled: calc_burn_pct_at(volume, supply, economic),
             chain_leaves: 50_000_000,
-            params: &economic,
+            params: economic,
+            relay: params.relay(),
         };
         let honest_tx: OrdinaryTx = params.fee.ordinary_tx(&at);
-        let medians = medians_from(zone, zone);
+        let medians = medians_from(zone, zone, economic);
         let mut fill = Fill::empty(
             medians.effective_median.to_raw(),
+            u64::try_from(shekyl_wire::transaction::COINBASE_RESERVE).expect("fits"),
             at.already_generated,
             volume,
-            &economic,
+            economic,
         )
         .expect("priced");
-        fill.admit_up_to(honest_tx.weight, honest_tx.fee_atomic, offered);
+        let admitted = fill.admit_up_to(honest_tx.weight, honest_tx.fee_atomic, offered);
         LastBlock {
             chain_height,
             supply,
@@ -934,6 +1042,11 @@ mod tests {
             honest_tx,
             bodies_weight: fill.bodies_weight(),
             fees: fill.fees(),
+            listed: vec![ListedBodies {
+                fee: honest_tx.fee_atomic,
+                weight: honest_tx.weight,
+                count: admitted,
+            }],
         }
     }
 
@@ -951,16 +1064,16 @@ mod tests {
         assert_eq!(roomy_miner.cost_atomic, 0);
         assert_eq!(roomy_miner.placement, Placement::FreeRoom);
         let economic = params.economic();
-        let block = Block::new(&block_at(5, &params), &economic);
+        let block = Block::new(
+            &block_at(5, &params),
+            economic,
+            shekyl_economics::relay_policy(),
+        );
         let chosen = block.cheapest_packing(None, PoolShare::NONE);
-        let free = penalty_free_weight(block.median, block.economic)
-            .min(block.honest.bodies_weight_bound())
-            .saturating_sub(
-                block
-                    .honest_bodies()
-                    .kept_weight(0)
-                    .expect("nothing dropped"),
-            );
+        let free = block
+            .honest
+            .penalty_free_bodies()
+            .saturating_sub(block.honest_bodies().all().weight);
         assert_eq!(
             chosen.stuffed,
             free / chosen.weight,
@@ -1041,12 +1154,11 @@ mod tests {
         let params = SimParams::default();
         let last = block_at(1_000, &params);
         let economic = params.economic();
-        let block = Block::new(&last, &economic);
+        let block = Block::new(&last, economic, shekyl_economics::relay_policy());
         let weight = 20_000;
         let packing = block
             .packing_at(
-                block.honest_bodies(),
-                0,
+                block.honest_bodies().all(),
                 1,
                 StuffingBody {
                     weight,
@@ -1062,13 +1174,15 @@ mod tests {
                 w,
                 last.already_generated,
                 last.volume,
-                &economic,
+                economic,
             )
             .expect("priced")
         };
-        let before = split_block_emission(owed(block.honest.bodies_weight()), last.sigma_scaled).0;
+        // The penalty reads the block, coinbase included. The body's weight
+        // is added to that block weight; the coinbase's own weight stays.
+        let before = split_block_emission(owed(block.honest.block_weight()), last.sigma_scaled).0;
         let after = split_block_emission(
-            owed(block.honest.bodies_weight() + weight),
+            owed(block.honest.block_weight() + weight),
             last.sigma_scaled,
         )
         .0;
@@ -1085,7 +1199,7 @@ mod tests {
         let params = SimParams::default();
         let last = block_at(1_000, &params);
         let economic = params.economic();
-        let block = Block::new(&last, &economic);
+        let block = Block::new(&last, economic, shekyl_economics::relay_policy());
         let dropped = 3;
         let stuffed = 2;
         let weight = 20_000;
@@ -1093,8 +1207,7 @@ mod tests {
         let share = PoolShare::ONE_OF_MANY;
         let packing = block
             .packing_at(
-                block.honest_bodies(),
-                dropped,
+                block.honest_bodies().kept(&[dropped]).expect("one class"),
                 stuffed,
                 StuffingBody {
                     weight,
@@ -1104,11 +1217,12 @@ mod tests {
                 share,
             )
             .expect("the packing fits");
-        let honest = block.honest_bodies();
-        let kept = honest.count - dropped;
+        assert_eq!(block.listed.len(), 1, "one cohort listed");
+        let only = block.listed[0];
+        let kept = only.count - dropped;
         let fees_before = block.honest.fees();
-        let fees_after = kept * honest.fee + honest.remainder_fees + stuffed * fee;
-        let weight_after = kept * honest.weight + honest.remainder_weight + stuffed * weight;
+        let fees_after = kept * only.fee + stuffed * fee;
+        let weight_after = kept * only.weight + stuffed * weight;
         let reward_before = block.honest.reward();
         let reward_after = block
             .honest
@@ -1119,7 +1233,7 @@ mod tests {
         let payout = |reward: u64, fees: u64, own: u64| -> i128 {
             let miner_emission = split_block_emission(reward, last.sigma_scaled).0;
             let split =
-                compute_burn_split_at(fees, last.burn_pct_scaled, block.closed_shards, &economic);
+                compute_burn_split_at(fees, last.burn_pct_scaled, block.closed_shards, economic);
             let recovered = if fees == 0 || own == 0 {
                 0
             } else {
@@ -1140,5 +1254,171 @@ mod tests {
         );
         assert_eq!(packing.dropped, dropped);
         assert_eq!(packing.stuffed, stuffed);
+    }
+
+    /// Every choice of drops, cohort by cohort: each cohort's count from
+    /// none to all, read off the listing without [`HonestBodies`].
+    fn every_drop(listed: &[ListedBodies]) -> Vec<Kept> {
+        let mut drops = vec![0u64; listed.len()];
+        let mut out = Vec::new();
+        loop {
+            let mut kept = Kept {
+                dropped: 0,
+                weight: 0,
+                fees: 0,
+            };
+            for (bodies, &gone) in listed.iter().zip(&drops) {
+                kept.dropped += gone;
+                kept.weight += (bodies.count - gone) * bodies.weight;
+                kept.fees += (bodies.count - gone) * bodies.fee;
+            }
+            out.push(kept);
+            let mut i = 0;
+            loop {
+                if i == listed.len() {
+                    return out;
+                }
+                if drops[i] < listed[i].count {
+                    drops[i] += 1;
+                    break;
+                }
+                drops[i] = 0;
+                i += 1;
+            }
+        }
+    }
+
+    /// The drops a cheapest-per-weight prefix allows: the first `d` bodies
+    /// in fee-per-weight order, for every `d`.
+    fn prefix_drops(listed: &[ListedBodies]) -> Vec<Kept> {
+        let mut bodies: Vec<(u64, u64)> = listed
+            .iter()
+            .flat_map(|b| (0..b.count).map(move |_| (b.fee, b.weight)))
+            .collect();
+        bodies.sort_by(|a, b| {
+            (u128::from(a.0) * u128::from(b.1)).cmp(&(u128::from(b.0) * u128::from(a.1)))
+        });
+        let (mut weight, mut fees): (u64, u64) = bodies
+            .iter()
+            .fold((0, 0), |(w, f), &(fee, wt)| (w + wt, f + fee));
+        let mut out = vec![Kept {
+            dropped: 0,
+            weight,
+            fees,
+        }];
+        for (dropped, &(fee, wt)) in (1u64..).zip(&bodies) {
+            weight -= wt;
+            fees -= fee;
+            out.push(Kept {
+                dropped,
+                weight,
+                fees,
+            });
+        }
+        out
+    }
+
+    /// The cheapest packing over `choices`, trying every stuffed count.
+    fn cheapest_over(
+        block: &Block<'_>,
+        choices: &[Kept],
+        floor: Option<PerByteRate>,
+        recovery: PoolShare,
+    ) -> PricedPacking {
+        let mut best: Option<PricedPacking> = None;
+        let mut seen = HashSet::new();
+        for shape in all_shapes() {
+            let Some(body) = StuffingBody::from_shape(shape, block.depth, floor) else {
+                continue;
+            };
+            if !seen.insert(body) {
+                continue;
+            }
+            for &kept in choices {
+                let Some(room) = block.honest.bodies_weight_bound().checked_sub(kept.weight) else {
+                    continue;
+                };
+                for stuffed in 1..=room / body.weight {
+                    let packing = block
+                        .packing_at(kept, stuffed, body, recovery)
+                        .expect("within the bound");
+                    if best.as_ref().is_none_or(|held| packing.beats(held)) {
+                        best = Some(packing);
+                    }
+                }
+            }
+        }
+        best.expect("a body fits")
+    }
+
+    /// A block whose bodies were built at two weights: one light body
+    /// paying the least per weight, and the rest at the ordinary weight.
+    /// Dropping the light body frees too little room for any stuffing body,
+    /// so the cheapest-per-weight prefix pays its fee for nothing on its way
+    /// to the bodies that do free room. Every miner column's search matches
+    /// every choice of drops cohort by cohort, and the prefix does not.
+    #[test]
+    fn mixed_build_weights_are_searched_by_class_not_by_prefix() {
+        let params = SimParams::default();
+        let economic = params.economic();
+        let mut last = block_at(1_000, &params);
+        let ordinary = last.listed[0];
+        let light_weight = 1_000;
+        // 95 % of the ordinary rate: the cheapest per weight.
+        let light_fee = u64::try_from(
+            u128::from(ordinary.fee) * u128::from(light_weight) * 95
+                / (u128::from(ordinary.weight) * 100),
+        )
+        .expect("fits");
+        // One heavy body carries what the light one does not, so the
+        // listing's weight and fees stay the fill's.
+        last.listed = vec![
+            ListedBodies {
+                fee: light_fee,
+                weight: light_weight,
+                count: 1,
+            },
+            ListedBodies {
+                count: ordinary.count - 2,
+                ..ordinary
+            },
+            ListedBodies {
+                fee: 2 * ordinary.fee - light_fee,
+                weight: 2 * ordinary.weight - light_weight,
+                count: 1,
+            },
+        ];
+        let block = Block::new(&last, economic, shekyl_economics::relay_policy());
+        assert_eq!(block.honest_bodies().classes.len(), 3, "three weights");
+        let floor = params.fee.admission_rate(&block.at);
+        let every = every_drop(&last.listed);
+        let prefixes = prefix_drops(&last.listed);
+        for kind in AttackKind::ALL {
+            let Approach::Miner(terms) = kind.terms() else {
+                continue;
+            };
+            let floor = terms.pay_floor.then_some(floor);
+            let search = block.cheapest_packing(floor, terms.recovery);
+            let exhaustive = cheapest_over(&block, &every, floor, terms.recovery);
+            let prefix = cheapest_over(&block, &prefixes, floor, terms.recovery);
+            let per_byte = |packing: &PricedPacking, other: &PricedPacking| {
+                cost_per_byte_ord(
+                    packing.block_cost,
+                    packing.block_bytes,
+                    other.block_cost,
+                    other.block_bytes,
+                )
+            };
+            assert_eq!(
+                per_byte(&search, &exhaustive),
+                Ordering::Equal,
+                "{kind:?}: the search is the cheapest choice of drops"
+            );
+            assert_eq!(
+                per_byte(&prefix, &exhaustive),
+                Ordering::Greater,
+                "{kind:?}: the prefix overstates the cheapest attack"
+            );
+        }
     }
 }

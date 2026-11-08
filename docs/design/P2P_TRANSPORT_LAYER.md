@@ -182,12 +182,8 @@ In this increment:
   when an entry is looked up. A new ban closes live sockets to that
   host. Nothing in the RPC calls it yet. That call is the seam, when
   Rust owns the sockets.
-- One `CloseCause` is the D12 table. The discriminants in
-  `src/shekyl/close_cause.h` are generated from that enum, and the
-  header's size and field offsets are the `repr(C)` struct's.
-  `shekyl_ffi.h` includes it. The test fails if the header drifts, and
-  the C++ build fails if the typedef no longer matches that layout.
-  There is no second table to edit.
+- One `CloseCause` is the D12 table (`shekyl-transport-layer`). No C++
+  reads it, and there is no second table to edit.
 
 Not in that increment: sockets, a thread count, a deadline, an accept
 rate, the seam, the differential harness, and cutover. The constructor
@@ -356,6 +352,12 @@ names them.
 
 ## Seam — construction contract (RULED 2026-09-28)
 
+*Superseded 2026-11-05: the seam, its strands, the executor and the
+chain-sync router are deleted with the C++ host. The boundary is the
+session layer (`shekyl-p2p-session`; `P2P_3_REMNANT_CUTOVER_BRIEF.md`
+§7), and each command's owner is named in its dispatch table. What
+follows is the record of the seam as it was built and ruled.*
+
 Both connectors are in. The seam is the handler boundary they attach to:
 one `Sockets` table, the connector's `Session`, and the posts onto that
 connection's strand. A `Dial` is how a channel is born. Zone bind, which
@@ -417,14 +419,25 @@ holds a count, so the destroy post has not run.
   closes both session ends with the cause. The seam inbound drive
   records that cause. `PeerClosed` is the reader's end-of-file and
   nothing else. A silent acceptor is `LevinHandshakeTimeout`. A peer
-  that sends FIN is `PeerClosed`. Forgetting the address is
-  `implicates_address` with the connector: a destination-naming cause
-  counts where the connector's declaration says the destination is
-  authenticated (Rick, 2026-10-13). The naming causes are a rejected
-  Levin handshake and a proxy reply of `0x04`, `0x05`, `0xF0`, `0xF1`,
-  or `0xF2`. So no clearnet cause counts (R2, 2026-10-12), Tor counts
-  those six, and a refused connect counts nowhere. *Records-was: a
-  refused dial and a rejected handshake counted on every connector.*
+  that sends FIN is `PeerClosed`. The cause carries four marks in
+  its spare byte, worth a retry, names the destination, proves
+  misbehaviour (2026-10-24), and a timeout of the dial's own window
+  (2026-10-26: the dial deadline's `TransportTimeout`, and every Tor
+  reply worth a retry, since Tor answers its own timeout with the onion
+  code it last recorded on the stream; the dialer reads it against the attempt's run time, and a Tor
+  timeout at or after `SocksTimeout` is final within its test): per
+  kind by default, handed in by the
+  connector for a proxy refusal (the Tor connector's reply table,
+  `shekyl-tor/src/replies.rs`; this crate keeps no SOCKS knowledge), and
+  the dialer stamps proof on a Levin rejection or a refused
+  list only where the connector's declaration says the destination is
+  authenticated. The lists read only the marks: proof drops the address,
+  anything else cools it. *Records-was: forgetting the address was
+  `implicates_address` with the connector, counting a rejected Levin
+  handshake and a proxy reply of `0x04`, `0x05`, `0xF0`, `0xF1`, or
+  `0xF2` on Tor (Rick, 2026-10-13) and nothing on clearnet (R2,
+  2026-10-12); before that, a refused dial and a rejected handshake
+  counted on every connector.*
 - Rust records the D12 cause through `Sockets::close`. The first
   `CloseResult::Recorded` wins. `AlreadyClosed` leaves that cause
   where the first call put it.
@@ -570,6 +583,52 @@ Rust posts these onto the connection's strand, and the strand runs them:
   follows as the close rule above says. `cause` is the `repr(C)`
   `CloseCause` already in the FFI header.
 
+**The post sink is the chain-sync router** (`shekyl_chain_sync_runtime::router`,
+CS-3, `P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q8). The hub hands every post to it
+under the table lock, and it never calls back into the hub. The daemon
+builds it **attached** to the node's sync owner. Every successful bind
+requires that owner, including a Rust test, which installs a stand-in
+(`install_test_owner`) before it binds. A bind with no owner and a
+second bind are both refused. Attached, it reads
+each session's Levin bucket headers (command, flags, length) and never
+a payload:
+
+- **To the owner, whole:** 2011–2014 (`SyncCommand`), as a notify (`Q`,
+  no `S`, not a fragment, no response expected), with no undefined flag,
+  within the command's cap. The C++ ingress never admits them. And 2008,
+  an announced block, and 2009, a request for an announced block's
+  missing transactions, on the same terms within their caps:
+  announcements are chain sync's, and the owner serves 2009.
+- **To the C++ handler, byte for byte:** every other bucket. That is
+  `DefinedCommand`'s set (1001 handshake, 1002 timed sync, 2002 new
+  transactions, 2010 pool complement) except 2008 and 2009, which the
+  owner keeps, and any bucket the router does not admit, which the C++
+  ingress refuses as it does today. `established`, `closed` and the
+  handshake result go to the C++ handler as well, and the owner gets its
+  own copy.
+- **A bucket header that does not read** sends that session's bytes raw
+  to the C++ handler from there on, and its ingress refuses them: the
+  transport's refusal, as today.
+- **One delivery in, at most one out.** The C++ handler's bytes from one
+  delivery are forwarded as one `deliver`, so each delivery still gets
+  exactly one `delivery_finished`. A delivery that carried nothing for
+  the C++ handler is finished by the owner, from its own task, while the
+  owner is there. When the owner is gone, the sink finishes that
+  delivery itself, so the row returns to open without waiting for a task
+  that will not answer.
+- An owner that is gone ends the daemon: the node reports its end to the
+  stop owner as a fatal cause. Until the stop, the router keeps
+  splitting, drops what was the owner's and forwards the handler's
+  bytes; nothing is handed back to the C++ handler.
+- **The claim tap.** An attached router copies the payload of an inbound
+  handshake request and of either direction's timed sync to the owner,
+  which decodes the peer's sync payload as the session's claim. The
+  bytes reach the C++ handler unchanged, and the router reads only the
+  bucket header. Slice 4 deletes the tap when the hub posts the inbound
+  handshake's result.
+
+The cutover deletes this forwarding together with the C++ sync half.
+
 The strand calls back:
 
 - `handler_armed(id, ok)` — `ok` false records `LocalClose` and wakes
@@ -664,19 +723,20 @@ records the new count.
 
 **Configuration the six calls leave to the side.**
 
-- `block_host`, `unblock_host`, and `get_blocked_hosts` call the Rust
-  ban list. A ban closes the sockets the list returns. It does not
-  walk the Levin registry. RPC speaks in durations: `setbans` takes
+- The ban list is Rust's, written through `shekyl_ban_*` (the RPC's
+  `set_bans`, the ban file); the C++ ban calls (`block_host`,
+  `unblock_host`, `get_blocked_hosts` and the rest) were deleted with the
+  automatic ban (2026-11-01). A ban closes the sockets the list returns.
+  It does not walk the Levin registry. RPC speaks in durations: `setbans` takes
   seconds, and `getbans` returns seconds remaining. At cutover the
   conversion is `now + duration` onto the monotonic clock, and the
   remaining time is computed back from it. No `time_t` crosses the
   boundary. A duration that does not fit a `Tick` is refused by
   `setbans`. `--ban-list` is a different kind: those entries are
   permanent, with no deadline, and `getbans` reports them as
-  permanent rather than as a number of seconds. The
-  session layer is the second writer, through the same duration: ban
-  this host for this long. A transport close does not write the list
-  and does not call `add_host_fail`.
+  permanent rather than as a number of seconds. No other layer writes
+  the list: the session layer's automatic ban was deleted (2026-11-01),
+  so no peer can make a ban. A transport close does not write the list.
 - Socket admission reserves inside `accept_clearnet`
   (`admission.rs:273-283`) and `accept_tor` (`:310-312`): the ceiling
   check and the mint hold one table lock. `socket_count` is the
@@ -781,7 +841,7 @@ constant at `:1001-1004`. `is_local` is RFC 1918 (`local_ip.h:41-62`).
 A peer in that class holds the socket for 20 minutes before any Levin
 session exists, then has a 30-minute idle timer. D14 refuses that split.
 
-`P2P_DEFAULT_CONNECTION_TIMEOUT` at `src/cryptonote_config.h:195` is
+`P2P_DEFAULT_CONNECTION_TIMEOUT` at `src/cryptonote_config.h` at `ac3836de90` (line 195) is
 **5,000 ms**, not 10 seconds. `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT` at
 `:199` is also 5,000 ms. The 10-second figure and the 5-second figure
 are different clocks. D9 re-derives both; neither number is adopted as
@@ -790,7 +850,7 @@ a connector deadline.
 Send-queue caps, read at `abstract_tcp_server2.h:72-73`: 1,000 messages
 and `100 * 1024 * 1024` bytes.
 
-Outbound dialing is serial: one dial in flight per connector (the Rust dialer, PR-3; *records-was:* `connections_maker` at `net_node.inl:2009`, deleted 2026-10-13). It reaches
+Outbound dialing is concurrent up to a per-connector bound, Tor 5 and clearnet 1, each attempt a task on the transport runtime (the dialer in-flight bound, revision 2, 2026-10-25; *records-was:* one dial in flight per connector, the Rust dialer from PR-3; before that `connections_maker` at `net_node.inl:2009`, deleted 2026-10-13). It reaches
 `try_to_connect_and_handshake_with_new_peer` (`net_node.inl:1544`) at
 the call sites `:1917` and `:1970`. A transport handshake adds a round
 trip to every dial. A stalled peer holds that loop for the whole
@@ -841,17 +901,17 @@ LV-3 (D14).
 **Each layer owns its own admission.** The transport layer owns socket
 admission: may this socket exist? That is the ban list and the inbound
 ceiling, enforced in Rust at accept and before dialing. The ceiling
-comes from `shekyl-peer-policy`. The ban list has two writers, both
-in durations (corrected 2026-09-28): the operator, through RPC, and
-the session layer, through one call that bans a host for a duration.
-The session layer judges misbehaviour. The transport layer enforces
-the ban. It does not score a host, and a transport close does not
-call `add_host_fail`. The session layer (Levin framing and the p2p
-protocol) owns session admission: may this peer have a session? That
-is `network_id`, the self-detection nonce, and
-PWD-B3's per-command caps, in `handle_handshake`, plus the judgment
-that issues the ban call. Neither layer reads the other's state to
-decide. No wall-clock time crosses that call.
+comes from `shekyl-peer-policy`. The ban list has one writer
+(corrected 2026-11-01, #1250): the operator, through RPC `set_bans`
+and the ban file. A peer cannot make a ban. The transport layer
+enforces the list at accept and before dialing. It does not score a
+host, and a transport close does not write the list. The session
+layer (Levin framing and the p2p protocol) owns session admission:
+may this peer have a session? That is `network_id`, the
+self-detection nonce, and PWD-B3's per-command caps, in
+`handle_handshake`. Misbehaviour closes that session. It does not
+ban the host. Neither layer reads the other's state to decide. No
+wall-clock time crosses the boundary.
 
 **Decoupling rule.** Levin framing, the p2p protocol, and the cryptonote
 protocol run over the transport contract and nothing else. The transport
@@ -936,15 +996,15 @@ and the mechanism does not. "Refuse" means it does not survive.
 
 | Duty | Read at this pin | Disposition |
 | --- | --- | --- |
-| Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | **Enforce socket admission at accept, in Rust, with no C++ call.** The ceiling comes from `shekyl-peer-policy`. Ban entries come from the operator and from the session layer's ban call. The transport layer does not own those values and does not score. It does not call into C++ admission. |
-| Ban list | `block_host` at `net_node.inl:256`. The registry sweep that drops live connections is `foreach_connection` at `:302`. RPC callers: `core_rpc_server.cpp:193`, `:997` (`get_blocked_hosts`), `:1101`, `:1103`. Discovery's pre-dial check is `is_remote_host_allowed` at `net_node.inl:1902`. Automatic scoring is `add_host_fail` at `net_node.inl:413` | **Move the list to Rust**, keyed on the observed host, carrying IPv4 subnets and expiry. Two writers, both in durations (corrected 2026-09-28): the operator's RPC (`block_host`, `unblock_host`, `get_blocked_hosts`) and the session layer's call to ban a host for a duration. A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. A transport close does not write the list. |
-| Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h:189`); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
+| Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | **Enforce socket admission at accept, in Rust, with no C++ call.** The ceiling comes from `shekyl-peer-policy`. Ban entries come from the operator. The transport layer does not own those values and does not score. It does not call into C++ admission. |
+| Ban list | *Records-was, deleted 2026-11-01 (#1250):* `block_host` at `net_node.inl:256`, the registry sweep `foreach_connection` at `:302`, RPC callers `core_rpc_server.cpp:193`, `:997`, `:1101`, `:1103`, `is_remote_host_allowed` at `net_node.inl:1902`, and `add_host_fail` at `net_node.inl:413`. The list is `BanList` in `shekyl-transport-layer`. | **The list is Rust's**, keyed on the observed host, carrying IPv4 subnets and expiry. One writer (corrected 2026-11-01, #1250): the operator, through RPC `set_bans` and the ban file. A peer cannot make a ban. A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. A transport close does not write the list. |
+| Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h` at `ac3836de90` (line 189)); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
 | SOCKS dial clock | A SOCKS dial is the proxy handshake, then the overlay circuit build and rendezvous. `src/net/socks*` has its own timeout | **A proxied clearnet dial uses the Tor dial clock (120 s): the worst measured SOCKS path, pending its own D9 distribution.** The three clearnet legs had no proxy, and a Tor-exit dial is 3–6 s. It does not inherit the timeout from `src/net/socks`. |
 | SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust through `shekyl-socks`. `shekyl-p-fetch` and `shekyl-rpc-transport` call it with `Isolation::Principal`. `shekyl-p-transport` still enables `ureq/socks-proxy` (`socks` 0.3.4). Moving that HTTP client is a FOLLOWUPS row. |
 | Overlay inbound attribution | `set_default_remote` at `net_node.inl:678` (`--anonymous-inbound`) and `:885` (`tor_address::unknown()`); applied at `abstract_tcp_server2.inl:1905-1908` | **Carry for Tor now, and for I2P when an I2P connector exists (D14 item 2).** Do not attribute from the socket. Inbound arrives on the local router's loopback socket. The observed endpoint is "this zone, no address", never `127.0.0.1`. Attributing from the socket would collapse admission's per-host view into one host. This is where LV-3's OBSERVED endpoint originates. |
 | Tor forward listener | `net_node.inl:863-880` | Carry. Bound to `127.0.0.1` on port 0. The OS-assigned port is read back with `get_binded_port` (`:881`) and handed to Tor control. Bind failure erases the zone (`:878`). |
 | Local versus remote timers | `m_local` at `abstract_tcp_server2.inl:992`; timers at `:100-112` and `:1001-1004`. Local new-connection is 1,200,000 ms (20 minutes), not the "2 minutes" comment on `:60` | **Refuse (D14).** D2 already refuses a timeout whose only justification is that epee uses it. The class is loopback or RFC 1918, so any LAN host gets 20 minutes before a Levin session, against 10 seconds for everyone else. Container port-forwarding makes this worse: inbound peers arrive from the bridge gateway's private address, every peer looks local, and admission's per-host view collapses to one host. A test rig that needs a longer timer sets it explicitly. |
-| Gap from channel established to session established | Outbound Levin invoke is 5 s (`P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT`, `cryptonote_config.h:199`). Inbound has the 256 KiB pre-session byte cap and then the idle timer | **A per-connector timer, derived under D9.** Once the C++ object exists, epee's new-connection timer no longer covers this gap. An inbound peer that finishes the transport handshake and then sends nothing holds a slot until the idle timer (5 minutes on the path that remains after D14 refuses the local split). Each connector owns one deadline for its peers, beside PWD-B3's byte cap for command 1001. |
+| Gap from channel established to session established | Outbound Levin invoke is 5 s (`P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT`, `cryptonote_config.h` at `ac3836de90` (line 199)). Inbound has the 256 KiB pre-session byte cap and then the idle timer | **A per-connector timer, derived under D9.** Once the C++ object exists, epee's new-connection timer no longer covers this gap. An inbound peer that finishes the transport handshake and then sends nothing holds a slot until the idle timer (5 minutes on the path that remains after D14 refuses the local split). Each connector owns one deadline for its peers, beside PWD-B3's byte cap for command 1001. |
 | Dual-stack bind and port 0 | `init_server` at `net_node.inl:1065` takes IPv4 and IPv6 ports and addresses plus `m_use_ipv6` / `m_require_ipv4` | Carry. A port-0 bind reads the assigned port back. The Tor listener above is the port-0 case that must not abort the rest of the boot. |
 | Worker pool | `run_server`'s thread count; `set_threads_prefix` | Carry the pool as a stated size, not as "however many epee used". D6 sizes the socketless executor separately. |
 | Graceful stop | `send_stop_signal`, then connections drained, then `deinit_server` (`net_node.inl:1187` is one `deinit_server` site) | Carry the order: stop accepting, drain or cancel live connections, then tear the listeners down. |
@@ -959,7 +1019,7 @@ and the mechanism does not. "Refuse" means it does not survive.
 | FIN versus RST, linger | epee close / shutdown | **One behaviour for every failure before the channel exists:** close after zero bytes written, FIN, no linger and no RST variant. Step 7 asserts those failures are indistinguishable from the far side. |
 | `add_ref` / `release`, `request_callback`, `send_done` | `i_service_endpoint` | The adapter's contract (D4). Not a copy of epee's refcount. |
 | Executor for invoke timers and idle handlers | `levin_protocol_handler_async.h:229` takes `get_io_context()` for the invoke timer. The pool is 10 threads (`net_node.inl:1150`) | **D6, ruled.** A socketless `io_context` is the interim until the timing engine lands. Its pool is a measured budget, not 10. |
-| Serial outbound dialing | *Records-was* `connections_maker` at `net_node.inl:2009`, call at `:1917`; the Rust dialer's `IN_FLIGHT_BOUND` of one per connector since PR-3 (2026-10-13) | **Stayed serial through the cutover.** The transport layer exposes an asynchronous dial and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7. |
+| Serial outbound dialing | *Records-was* `connections_maker` at `net_node.inl:2009`, call at `:1917`; the Rust dialer's one dial per connector from PR-3 (2026-10-13) to 2026-10-25 | **Stayed serial through the cutover, then concurrent up to a per-connector bound (Tor 5, clearnet 1; the dialer in-flight bound, revision 2).** The transport layer exposes an asynchronous dial (`Dial::connect_async`) and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7. |
 | SSL | `m_state.ssl` on the connection | **Refuse.** |
 
 ## Rate limit is four jobs (RULED 2026-09-28)
@@ -973,7 +1033,7 @@ open design.
 | --- | --- | --- | --- | --- |
 | Operator link budget | The operator's link is metered, shared, or small | Wire bytes, per direction, for the whole node, across every connector. Once the flip lands, the count includes Noise overhead | Transport layer | Backpressure against a budget refilled from the engine's clock. Connections share it. Unlimited unless the operator sets one |
 | What a peer can make us do | A peer inside a session | Work, per connection, charged on every dispatch before the payload is decoded | Session layer | PWD-B1. Its refill, capacity, initial fill, per-command cost, and exhaustion action stay owed in that section. This row does not settle them. PWD-B3 is the per-command size cap, which is a different bound |
-| Who can reach us | Anyone who can open a TCP connection or a Tor rendezvous | Connections, and the cryptographic work before a session exists | Transport layer | The accept-rate bound before cryptography, the admission ceiling, pre-channel deadlines, and Tor proof-of-work (D4, D10). Already built |
+| Who can reach us | Anyone who can open a TCP connection or a Tor rendezvous | Connections, and the cryptographic work before a session exists | Transport layer | The accept-rate bound before cryptography, the admission ceiling, pre-channel deadlines, and Tor proof-of-work (D4, D10). The ceiling, the deadlines and the proof-of-work are built. The accept-rate bound is built, with clearnet's rates written as Assumptions until the step 7 flood measurement re-derives them (D10.3) |
 | What goes first when the link is full | Saturation, under a budget or at the link's own limit | Message class | The session layer names the class. The transport writer schedules it | The writer takes a class on each send. New blocks and relay go ahead of bulk such as historical sync replies, and relay-lane conformance holds under saturation. The class list, who assigns a class, and the order among classes are the open design |
 
 **The operator's budget is the carried duty.** `--limit-rate-up`,
@@ -1074,14 +1134,12 @@ type deleted, and the pipe branch deleted.
   cause. On a simultaneous close, the first recorded cause wins.
   A transport cause (`PrefixMismatch`, `RecordRejected`,
   `TransportTimeout`, `SendQueueFull`, and every other transport
-  close) does not ban the host and does not call `add_host_fail`.
-  Scoring is the session layer's judgment, issued as its own ban
-  call, not by this close.
-- **The ban list has two writers (corrected 2026-09-28).** The
-  operator writes through RPC. The session layer writes through one
-  call, ban this host for this long, after it has judged
-  misbehaviour. Both pass a duration. The transport layer enforces
-  the entry at accept and before dialing.
+  close) does not ban the host. The session layer closes its own
+  session. It does not write the list.
+- **The ban list has one writer (corrected 2026-11-01, #1250).** The
+  operator writes through RPC `set_bans` and the ban file. A peer
+  cannot make a ban. The transport layer enforces the entry at
+  accept and before dialing.
 - **FFI (rule 40).** Every call names its direction and who owns the
   buffer. A callback context is not a raw `this`.
 
@@ -1551,8 +1609,8 @@ Pi-4 C5 run, 2026-09-26, the floor device (aarch64, 4 cores), about 90 seconds:
 [`p2p_c5_pi4_20260926T005507Z.txt`](../benchmarks/p2p_c5_pi4_20260926T005507Z.txt).
 Initiator 928 µs, responder 685 µs, one rekey 5.06 µs, seal/open of
 65,535 bytes 889 µs. The responder figure is the per-connection cost
-D10.3's clearnet accept-rate bound is derived from. The bound waits on
-a stated CPU budget. No rate is written here. Clearnet deadline milliseconds are the
+D10.3's clearnet accept-rate bound is derived from; its rates are
+Assumptions against a proposed CPU budget of about 1 % of a core (D10.3). Clearnet deadline milliseconds are the
 2026-09-30 update below. Tor's stay in the benchmark record.
 
 UPDATE 2026-09-29: each deadline is the p99 of honest completions on
@@ -1683,23 +1741,95 @@ listener, and so a connection in the gap phase.
    failure still
    closes the same way: FIN after zero bytes written. Step 7 measures
    that.
+   **A refusal at accept lingers half-closed** (Rick, 2026-10-30/31).
+   Linux answers a close with unread bytes in the receive queue with
+   RST, and answers bytes that reach a closed socket with RST too. A
+   Noise initiator writes its first flight as soon as it connects, so on
+   the internet that flight usually arrives after an accept-time refusal,
+   which takes microseconds. Every refusal in `accept_clearnet` (the ban,
+   the ceilings, the accept rate) therefore shuts its write side at once
+   (the FIN) and stays open for reading until one initiator flight
+   (item 1's bound) has arrived and been dropped, or until the
+   connector's handshake span passes (1.426 s on clearnet). Only then is
+   it closed, with nothing unread. One task for the connector holds every
+   lingering socket of every accept loop, with one owner on the timing
+   engine carrying the earliest deadline (every socket lingers for the
+   same span, so the earliest is the oldest); no socket has a task of its
+   own. Two listen endpoints therefore share the cap the daemon reserves
+   once.
+   **The cap.** At most the connector's accept-rate burst plus the
+   tokens it refills across the span may linger at once
+   (`AcceptGate::linger_cap`): what the connector admits in one span.
+   With the written rates and the 1.426 s clearnet handshake span that
+   cap is 34. A lingering socket holds a descriptor outside the inbound
+   occupancy, so the daemon reserves the cap with the rest of its
+   descriptors (`reserved_descriptors`, `shekyl-daemon`) when clearnet
+   is on, and the inbound ceiling makes room for it (Rick, 2026-10-31).
+   The reservation and the gate read one formula over the row
+   (`linger_cap`).
+   **Residual (stated, accepted).** A refusal beyond the cap closes at
+   once, after dropping what has already arrived. A flight that reaches
+   it later is answered with RST, so under a flood past the cap a refused
+   peer can tell a refusal at accept from a refusal after it. A peer that writes
+   after its flight, or after the span, gets RST from any closed socket,
+   on every path. `close_tests.rs` pins the kernel's RST on an undrained
+   close and the FIN on the drained one; `tests.rs` pins a flight written
+   50 ms after the refusal ending with FIN, the third refusal past a cap
+   of two ending with RST while the two held end with FIN, and two
+   listeners sharing that cap so a refusal on the second listener, once
+   the first has filled it, ends with RST. The
+   refusals after accept, inside the handshake, are step 7 item 7's
+   capture matrix: they get the same close if it shows them resetting.
 
 3. **Clearnet accept rate is owned here.** This document owns the
    FOLLOWUPS row on connection admission before the channel exists. The
    mechanism is an accept-rate bound at accept, before any cryptographic
    work, per connector and per host, because clearnet's declaration says
    inbound peers have an observable address. Whether to aggregate hosts
-   by subnet is a policy question for measurement. The values come from
-   the measured per-connection crypto cost against a stated CPU budget.
-   No number is written before that measurement (rule 26 B9). The
-   responder side of a handshake is 685 µs on the Pi 4 (C5, 2026-09-26).
-   That is the per-connection cost. The accept-rate values still wait
-   on the stated CPU budget. The handshake's cryptography runs on the
-   runtime's blocking pool (clearnet connector, RULED 2026-09-27), so
-   the blocking cap bounds how many handshakes compute at once. The
-   flood test measures that, in addition to the accept-rate bound. No
-   rate is written. The bound is clearnet-only: Tor inbound
-   does no Noise work on our side.
+   by subnet is a policy question for measurement; an IPv6 host is its
+   /64 (Rick, 2026-10-30). The responder side of a handshake is 685 µs
+   on the Pi 4 (C5, 2026-09-26): the per-connection cost.
+   **The rates are Assumptions, written ahead of the flood measurement**
+   (Rick, 2026-10-31; `DAEMON_RELAY_PRIVACY.md` §97): the connector's
+   bucket one token every 100 ms with a burst of 20, the host's one
+   token every 6 s with a burst of 3. At the full connector rate the
+   responder spends about 0.7 % of a floor-device core (684.5 µs × 10 a
+   second), which proposes a CPU budget of about 1 % of a core; honest
+   arrivals sit about two hundred times below the rate; a host's burst
+   holds a dial and a white redial, or a few nodes behind one NAT. The
+   linger cap these give is 34 descriptors (D10.2 above). The step 7
+   record's item 6, the flood measured against this limiter, re-derives
+   them. The handshake's cryptography runs on the runtime's blocking
+   pool (clearnet connector, RULED 2026-09-27), so the blocking cap
+   bounds how many handshakes compute at once; the flood test measures
+   that too. The bound is clearnet-only: Tor inbound does no Noise work
+   on our side.
+   **Built: the mechanism** (Rick, 2026-10-30: its own PR, merged before
+   the rehearsal). `AcceptGate` in `shekyl-transport-layer`
+   (`accept_rate.rs`) is two token buckets, the connector's and the
+   host's, checked in `Sockets::accept_clearnet` under the socket
+   table's lock, after the ban and the ceilings and before a socket is
+   reserved. The in-memory loopback harness takes the same accept on a
+   table built with no gate (`Sockets::with_clearnet_gate(None)`), since
+   it admits at a fixed tick. An accept spends a token from both or from
+   neither, so a
+   host whose own bucket is empty does not drain the connector's. A
+   host is an IPv4 address, or an IPv6 /64; an IPv4 address carried in
+   IPv6, as a dual-stack listener reports it, is that IPv4 host. The
+   host table holds an entry only while its bucket is refilling, and
+   an entry is made only when the connector's bucket pays, so a
+   flooder walking addresses grows it no faster than the connector's
+   rate admits. A refusal is `AcceptRateExceeded` (D12), with no marks.
+   The socket table counts every accept refusal — the rate, a ban, a
+   ceiling, a cap — at the decision, and the node names those counts
+   once a minute, never once per connection. One linger task is shared
+   by every clearnet listener (D10.2). The rates are protocol data in
+   `accept_bound`, beside
+   the declaration, the same on every node (rule 71): Tor's row is the
+   onion's proof-of-work (item 4), and clearnet's row carries the two
+   buckets above. The build refuses a connector whose inbound peers have
+   an address but whose bound is not assessed, and one whose inbound
+   peers are the zone but which carries a daemon-side limiter.
 
 4. **Tor is defended by Tor's proof-of-work, not by a daemon-side
    limiter.** Onion-service PoW is enabled on every onion service we
@@ -1829,7 +1959,7 @@ hand-kept copy.
 
 | Phase | Causes |
 | --- | --- |
-| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `InboundNotAccepted`, `DialFailed`, `ProxyRefused`, `ProxyUnavailable`, `LocalClose` |
+| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `InboundNotAccepted`, `AcceptRateExceeded`, `DialFailed`, `ProxyRefused`, `ProxyUnavailable`, `LocalClose` |
 | Channel exists, Levin handshake not done | `LevinHandshakeTimeout`, `LevinHandshakeRejected`, `LocalClose` |
 | Any time after the channel exists | `PeerClosed`, `RecordRejected`, `SessionRefused`, `IoError`, `SendQueueFull`, `LocalClose` |
 
@@ -1840,7 +1970,14 @@ connector cap that is positive and full. `InboundNotAccepted` is a
 ceiling of 0 or a connector cap of 0: this node will not take the
 accept. A zero bound is named even when a positive cap is already
 full. The seam info line on this node names whichever of the two was
-returned. The accept closes the socket before any handshake byte.
+returned. `AcceptRateExceeded` is an inbound clearnet connection that
+the connector's or the host's accept-rate bucket could not pay for
+(D10.3). This node names all three refusals once a minute, by cause,
+never one line per connection (Rick, 2026-10-30): a warning when the
+accept rate refused anything, and an info line when only the ceilings
+or the ban list did, because a node at its ceiling refuses in ordinary
+service. The accept closes the socket before any handshake byte, with
+FIN and no RST up to the linger cap (D10.2 below).
 The dialer records its own before-channel cause for that close. It
 does not learn which refusal this node chose: this table is not on
 the pipe. `DialFailed` is an outbound TCP connect that did not complete.
@@ -1872,7 +2009,7 @@ The set:
 - `contrib/epee/include/net/abstract_tcp_server2.h`
 - `contrib/epee/include/net/abstract_tcp_server2.inl`
 - `connection_basic.hpp` / `connection_basic.cpp` and `network_throttle*`, after the rate-limit calls move in this same cutover. Today `core_rpc_server.cpp` calls `connection_basic::get_rate_*` / `set_rate_*`, `rpc_facts_ffi.cpp` reads `network_throttle_manager`, and `cryptonote_protocol_handler-base.cpp` sleeps and accounts through the global out-throttle. Those three call the operator link budget in "Rate limit is four jobs": default unlimited, backpressure, no close. The files go only once that `rg` is empty.
-- the SOCKS dial: `socks_connect.cpp`, `socks_connect.h`, and the client `net_node` calls. Not a wildcard over `src/net/socks*`. `parse.cpp` parses a proxy URL (`src/net/parse.cpp:34`, the `socks` parser at `:260`), and `tests/unit_tests/net.cpp` exercises that API. The endpoint type those use stays, or moves with them in this cutover. The deletion gate is no remaining dial, not an empty `socks.h` while the parser still includes it.
+- the SOCKS dial: `socks_connect.cpp`, `socks_connect.h`, and the client `net_node` calls. Not a wildcard over `src/net/socks*`. `parse.cpp` parses a proxy URL (`get_network_address`, line 158 of `src/net/parse.cpp` at `dc46e903f0`, the `socks` parser at line 257), and `tests/unit_tests/net.cpp` exercises that API. The endpoint type those use stays, or moves with them in this cutover. The deletion gate is no remaining dial, not an empty `socks.h` while the parser still includes it.
 - `network_pipe_ops` and `set_network_pipe`
 - `rust/shekyl-p2p-transport/src/pipe.rs`, and its module and re-export in `rust/shekyl-p2p-transport/src/lib.rs`
 - `rust/shekyl-ffi/src/clearnet_transport_ffi.rs`, and `pub mod clearnet_transport_ffi` in `rust/shekyl-ffi/src/lib.rs`

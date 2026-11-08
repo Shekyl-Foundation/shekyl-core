@@ -77,6 +77,7 @@ use shekyl_archival_retention::{
     emission_vin_verify_claims_under, p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin,
     ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext, EpochCloseInputs,
 };
+use shekyl_network::NetworkId;
 use shekyl_types::archival::CompleteTreeSet;
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
@@ -192,8 +193,8 @@ struct GatheredEpoch<'r> {
 impl J23 {
     /// Gather every claimed epoch, in claim order. `Ok(Err)` is this row's
     /// refusal; `Err` is the view's fault.
-    fn gather<'id, 'r, V: ChainView<'id>>(
-        cx: &TxContext<'_>,
+    fn gather<'id, 'r, N, V: ChainView<'id>>(
+        cx: &TxContext<'_, N>,
         view: &V,
         rule_set: &RuleSet,
         vin: &ArchivalRewardEmissionVin,
@@ -354,7 +355,7 @@ pub struct EpochCloseBondFacts {
     /// The bond's join epoch.
     pub join_settlement_epoch: u64,
     /// The foundation's complete-tree bond.
-    pub is_foundation_complete_tree: bool,
+    pub is_support_complete_tree: bool,
     /// Its bad intervals.
     pub bad_intervals: Vec<shekyl_types::archival::BadInterval>,
 }
@@ -426,7 +427,7 @@ pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
                         .iter()
                         .map(|bond| EpochCloseBondFacts {
                             join_settlement_epoch: bond.join_settlement_epoch,
-                            is_foundation_complete_tree: bond.is_foundation_complete_tree,
+                            is_support_complete_tree: bond.is_support_complete_tree,
                             bad_intervals: bond.bad_intervals.to_vec(),
                         })
                         .collect(),
@@ -457,8 +458,8 @@ pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
     Ok(out)
 }
 
-/// CEN-J25: the coarse verify — `shekyl_emission_vin_verify`
-/// (`blockchain.cpp:4015`), here the retention crate's three legs and
+/// CEN-J25: the coarse verify — the C++'s one FFI crossing, deleted by
+/// `DEL-008` — here the retention crate's three legs and
 /// their join: [`emission_vin_verify_claims_under`] (`REWARD_EMISSION_LEG.md`
 /// §7.1 claims 1–5: alignment, the claim window against the connecting
 /// height, the claimant's bond posture and holdings, dedup against the
@@ -495,8 +496,8 @@ impl J25 {
     /// (SI-32), and a claim's epochs are the sender's to choose. An expired
     /// claim is this row's refusal, as it was when the verify reached it
     /// first; the verify still checks the window itself.
-    fn window(
-        cx: &TxContext<'_>,
+    fn window<N>(
+        cx: &TxContext<'_, N>,
         rule_set: &RuleSet,
         vin: &ArchivalRewardEmissionVin,
         connecting: BlockHeight,
@@ -520,7 +521,7 @@ impl J25 {
         reason = "the claim, its context, and the connecting height the window was checked at"
     )]
     fn verify<'id, V: ChainView<'id>>(
-        cx: &TxContext<'_>,
+        cx: &TxContext<'_, NetworkId>,
         view: &V,
         rule_set: &RuleSet,
         vin: &ArchivalRewardEmissionVin,
@@ -541,6 +542,7 @@ impl J25 {
                     &g.snapshot.bonds,
                     &g.snapshot.shards,
                     &g.snapshot.pairs,
+                    shekyl_archival_retention::archival_params(),
                 ),
                 persisted_sigma_work_milli: g.sigma_work_milli,
                 claimant_bond_idx: g.snapshot.claimant_bond_idx,
@@ -573,10 +575,14 @@ impl J25 {
             Ok(None) => return Ok(refuse()),
             Err(refused) => return Ok(Err(refused)),
         };
-        let Some(signable) = J22::signable_hash(cx) else {
+        // J22's signable prefix hash exists only for the emission class;
+        // the message both the backing proof and the auths prove over is the
+        // transaction's one tx_signable, framed over it (the signing envelope
+        // §2.2).
+        if J22::signable_hash(cx).is_none() {
             return Ok(refuse());
-        };
-        let signable = signable.to_bytes();
+        }
+        let signable = cx.tx.tx_signable(cx.network());
         let Some(layers) = reference.tree_depth.checked_add(1) else {
             return Ok(refuse());
         };
@@ -592,12 +598,11 @@ impl J25 {
         let Ok(claims) = emission_vin_verify_claims_under(schedule, vin, &ctx, &sources) else {
             return Ok(refuse());
         };
-        let Ok(backing) =
-            emission_vin_verify_backing(vin, reference.anchor.as_bytes(), layers, signable)
+        let Ok(backing) = emission_vin_verify_backing(vin, &reference.anchor, layers, &signable)
         else {
             return Ok(refuse());
         };
-        let Ok(auth) = emission_vin_verify_auth(vin, &commits, &signable) else {
+        let Ok(auth) = emission_vin_verify_auth(vin, &commits, &signable, cx.network()) else {
             return Ok(refuse());
         };
         // The join is the verdict. Its yield (`epochs_to_commit`,
@@ -652,7 +657,7 @@ const CLAIM_ROWS: [CenRow; 2] = [CenRow::J23, CenRow::J25];
 /// reads; [`ViewRead::Corrupt`] from the gather's shard-close placement
 /// ([`crate::Corrupt::ShardCloseUnplaced`]).
 pub(crate) fn judge_emission_claim<'id, V: ChainView<'id>>(
-    cx: &TxContext<'_>,
+    cx: &TxContext<'_, NetworkId>,
     view: &V,
     rule_set: &RuleSet,
     reference: Option<&ReferenceContext>,

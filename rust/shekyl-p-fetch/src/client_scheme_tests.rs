@@ -163,7 +163,10 @@ async fn an_identity_target_refuses_a_valid_receipt_response() {
 
 /// A receipt target is handed a whole, valid **identity-scheme** response.
 /// It reads 1,356 bytes of envelope, so 2,029 bytes of the identity
-/// signature are read as frame.
+/// signature are read as frame: the whole frame parses and exactly those
+/// bytes are left over, which is how the bundle producer recognises the
+/// serving side's scheme. Red edit: report the frame's own excess as zero
+/// — the count is not the envelopes' difference.
 #[tokio::test]
 async fn a_receipt_target_refuses_a_valid_identity_response() {
     let body = big_body();
@@ -171,7 +174,11 @@ async fn a_receipt_target_refuses_a_valid_identity_response() {
     let response = ok_response(&identity_envelope(&identity, &body), &body);
     let err = fetch_as(response, receipt_keys().public).await.unwrap_err();
     assert!(
-        matches!(err, FetchError::Malformed(Malformed::FrameLong)),
+        matches!(
+            err,
+            FetchError::Malformed(Malformed::FrameLong { left })
+                if left == (IDENTITY_ENVELOPE_LEN - RECEIPT_ENVELOPE_LEN) as u64
+        ),
         "{err:?}"
     );
 }

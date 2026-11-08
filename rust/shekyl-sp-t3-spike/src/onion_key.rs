@@ -9,7 +9,7 @@
 //!
 //! SPIKE-F-4's carry is complete. The seed derivation was already relocated to
 //! `shekyl_crypto_pq::archival_p::derive_p_hs_id_seed` (the GF-9 HS-identity
-//! label, frozen under `ARCHIVAL_P_DERIVE_V1`); the **v3-onion encoding** — RFC
+//! label, frozen under `ARCHIVAL_P_DERIVE_V2`); the **v3-onion encoding** — RFC
 //! 8032 seed expansion to tor's `ED25519-V3` blob and the rend-spec-v3 §6
 //! `.onion` address construction — has now followed it into production, as
 //! [`shekyl_tor_control_client::onion_identity::OnionIdentity`], its rightful home alongside
@@ -27,17 +27,17 @@
 //! discipline is unchanged: nothing is written to disk; the key is
 //! reproduced on demand and handed to tor via `ADD_ONION`.
 
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+use shekyl_crypto_pq::account::Network;
 use shekyl_crypto_pq::archival_p::derive_p_hs_id_seed;
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use shekyl_types::PSlot;
 
 /// Derive persona `p_slot`'s onion identity from a wallet master seed under an
-/// explicit derivation context — the spike's `(master_seed, net, fmt, p_slot)
+/// explicit derivation context — the spike's `(master_seed, net, p_slot)
 /// → OnionIdentity` composition.
 ///
 /// The 32-byte seed is the **production** GF-9 HS-identity seed
-/// ([`derive_p_hs_id_seed`], frozen under `ARCHIVAL_P_DERIVE_V1`); the
+/// ([`derive_p_hs_id_seed`], frozen under `ARCHIVAL_P_DERIVE_V2`); the
 /// expansion to tor's `ED25519-V3` identity is the **production**
 /// [`OnionIdentity::from_hs_id_seed`]. `net`/`fmt` select the derivation
 /// context exactly as the production path does. The derived seed is consumed
@@ -49,11 +49,10 @@ use shekyl_types::PSlot;
 #[must_use]
 pub fn derive_onion_identity(
     master_seed_64: &[u8; 64],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: PSlot,
 ) -> OnionIdentity {
-    let seed = derive_p_hs_id_seed(master_seed_64, net, fmt, p_slot.to_raw());
+    let seed = derive_p_hs_id_seed(master_seed_64, net, p_slot.to_raw());
     OnionIdentity::from_hs_id_seed(&seed)
 }
 
@@ -64,17 +63,12 @@ mod tests {
     const SEED: [u8; 64] = [0x5au8; 64];
 
     /// Derive under one fixed context so these unit tests exercise the
-    /// composition without repeating `(net, fmt)` at every call. The context
+    /// composition without repeating the network at every call. The context
     /// choice is irrelevant to what they assert (the encoding's own KATs live
     /// with `OnionIdentity` in `shekyl-tor-control-client`; the seed's cross-arch pins live
-    /// in `shekyl-crypto-pq`'s `kat_archival_p_derive_v1`).
+    /// in `shekyl-crypto-pq`'s `kat_archival_p_derive_v2`).
     fn identity(seed: &[u8; 64], slot: u32) -> OnionIdentity {
-        derive_onion_identity(
-            seed,
-            DerivationNetwork::Mainnet,
-            SeedFormat::Bip39,
-            PSlot::from_raw(slot),
-        )
+        derive_onion_identity(seed, Network::Mainnet, PSlot::from_raw(slot))
     }
 
     #[test]

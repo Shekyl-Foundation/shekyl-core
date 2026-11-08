@@ -5,10 +5,9 @@
 
 //! Tests for the archival codecs (`codec::archival`): the bond record's round
 //! trip at every genesis-frozen cap, each decode refusal on its own axis,
-//! and the **v7 cross-check** — the C++ `ArchivalBondValue` corpus
-//! (`docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json`, written and asserted
-//! by `tests/unit_tests/archival_bond_record_v7_corpus.cpp`) rebuilt as
-//! [`BondRecord`]s field by field, so the re-specified codec is shown to
+//! and the **v7 cross-check** — the frozen `ArchivalBondValue` corpus
+//! (`docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json`; frozen, no regenerator)
+//! rebuilt as [`BondRecord`]s field by field, so the re-specified codec is shown to
 //! carry the *same record*, not merely to round-trip itself
 //! (`DRS_E1_SARCH.md` §7, ruled on PR #840).
 
@@ -26,7 +25,7 @@ use shekyl_units::AtomicUnits;
 
 use super::archival::{
     AttestationWitnessBytes, BondRecord, CompleteTreeSet, FirstPayingHeight, HeldShard, Holdings,
-    HoldingsError, RMarket, SigmaWorkMilli, MAX_BOND_KEY_BYTES,
+    HoldingsError, RMarket, SigmaWorkMilli, SupportSeats, MAX_BOND_KEY_BYTES,
 };
 
 fn invalid(reason: &'static str) -> CodecError {
@@ -382,6 +381,54 @@ fn the_complete_tree_set_refuses_an_order_the_type_cannot_hold() {
     );
 }
 
+/// A block's support seats (`SO-D12` S1): the empty row is a count of zero
+/// and reads back as a value, and the decode refuses each shape the type
+/// cannot hold — a repeat, a descent, a count past the bytes, a trailing
+/// byte. Seat `j` is bit `j` of the support bitmap, so an order the type
+/// sorted away would renumber the draws. Red edit: decode through
+/// `FromIterator`, which sorts — the descent then round-trips into a
+/// different encoding.
+#[test]
+fn the_support_seats_refuse_an_order_the_type_cannot_hold() {
+    let id = |b: u8| shekyl_types::PCanonicalId::from_bytes([b; 32]);
+    let invalid = |reason: &'static str| CodecError::Invalid {
+        codec: SupportSeats::NAME,
+        reason,
+    };
+    assert_eq!(SupportSeats::EMPTY.encode(), [0, 0, 0, 0]);
+    assert_eq!(SupportSeats::decode(&[0, 0, 0, 0]), Ok(SupportSeats::EMPTY));
+    let two = SupportSeats::new(vec![id(1), id(2)]).expect("ascending");
+    assert_eq!(SupportSeats::decode(&two.encode()), Ok(two.clone()));
+
+    let raw = |ids: &[u8]| {
+        let mut out = u32::try_from(ids.len())
+            .expect("fits")
+            .to_le_bytes()
+            .to_vec();
+        for &b in ids {
+            out.extend_from_slice(&[b; 32]);
+        }
+        out
+    };
+    let unordered = invalid("personas are not strictly increasing");
+    assert_eq!(SupportSeats::decode(&raw(&[1, 1])), Err(unordered));
+    assert_eq!(SupportSeats::decode(&raw(&[2, 1])), Err(unordered));
+    let mut short = raw(&[1, 2]);
+    short.truncate(4 + 32);
+    assert_eq!(
+        SupportSeats::decode(&short),
+        Err(invalid(
+            "element count exceeds what the row's bytes can hold"
+        ))
+    );
+    let mut long = two.encode();
+    long.push(0);
+    assert_eq!(
+        SupportSeats::decode(&long),
+        Err(invalid("trailing bytes after the support seats"))
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The v7 cross-check
 // ---------------------------------------------------------------------------
@@ -471,8 +518,8 @@ fn record_from_v7_fields(f: &serde_json::Value) -> BondRecord {
 fn the_v7_corpus_maps_onto_the_record_without_loss() {
     let text = fs::read_to_string(corpus_path()).unwrap_or_else(|e| {
         panic!(
-            "the v7 corpus is missing ({e}); it is written by \
-             tests/unit_tests/archival_bond_record_v7_corpus.cpp with SHEKYL_WRITE_V7_CORPUS=1"
+            "the v7 corpus is missing ({e}); it is frozen and has no regenerator \
+             (docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json)"
         )
     });
     let doc: serde_json::Value = serde_json::from_str(&text).expect("corpus is JSON");

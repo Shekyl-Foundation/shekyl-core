@@ -27,12 +27,10 @@
 //! store's size was read for every caller, because a restricted reply
 //! carried it rounded up; that read ended with the stand-ins.
 //!
-//! **This trait is the contract the store cutover inherits.** Today its one
-//! implementation reads the C++ core through the facts shim. When the Rust
-//! store replaces the C++ one, the implementation changes and this does
-//! not — which is why the rules that matter are stated here, on the trait,
-//! and tested against a double, rather than left to the C++ side to get
-//! right. Three in particular:
+//! **This trait is the contract the store cutover inherits.** The live
+//! implementation is [`crate::store_facts::StoreFacts`]. The rules that
+//! matter are stated here, on the trait, and tested against a double.
+//! Three in particular:
 //!
 //! - [`InfoFacts::chain`] describes **one** chain state. Everything it
 //!   returns that comes from the chain store is read under one lock and
@@ -40,21 +38,18 @@
 //! - [`InfoFacts::store_size`] reports a size it could not read as
 //!   [`FactsFault::StoreUnreadable`], never as `0` (RK-D23). The size is
 //!   read on this side, by [`store_file_size`], for that reason.
-//! - [`InfoFacts::sessions`] reports a p2p layer that is not up as
-//!   [`FactsFault::HubAbsent`], never as zero sessions. It is read from
-//!   the seam board, which is Rust's, without visiting C++, and it is
-//!   **one** snapshot: `has_peers` and the two connection counts describe
-//!   the same board.
+//! - [`InfoFacts::sessions`] is read from the session layer's board, and it
+//!   is **one** snapshot: `has_peers` and the two connection counts describe
+//!   the same board. It is not read for an offline node, whose
+//!   [`SessionCounts::NONE`] is configuration, not a count (RK-D23).
 
 use std::path::Path;
-use std::sync::Arc;
 
 use shekyl_economics::TxVolume;
 use shekyl_types::{BlockHash, ChainCount};
 use shekyl_units::AtomicUnits;
 
-use crate::chain_facts::{decode_target_count, FactsFault};
-use crate::core::CoreRpc;
+use crate::chain_facts::FactsFault;
 
 /// The chain at its tip, with the node's own view of whether it is caught
 /// up. Read for every caller.
@@ -104,26 +99,15 @@ pub struct InfoStatusFacts {
     pub version: String,
 }
 
-/// The Peers part's facts: whether P2P runs, and when it does, its counts
-/// (Rick, 2026-10-14). [`InfoPeersFacts`] is reached only through
-/// [`PeerFacts::Running`]; a daemon started offline has no counts to
-/// read, and [`PeerFacts::Offline`] carries nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The Peers part's facts: whether P2P runs, and when it does, one row
+/// per connector it runs (Rick, 2026-10-14; 3.70). The rows are reached
+/// only through [`PeerFacts::Running`]; a daemon started offline has no
+/// counts to read, and [`PeerFacts::Offline`] carries nothing. Read only
+/// for a caller who is shown Peers.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerFacts {
-    Running(InfoPeersFacts),
+    Running(shekyl_rpc_types::InfoPeers),
     Offline,
-}
-
-/// Per-connector transport and peerlist detail of a daemon whose P2P runs.
-/// Read only for a caller who is shown Peers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InfoPeersFacts {
-    pub public_incoming_sockets: u64,
-    pub public_outgoing_sockets: u64,
-    pub tor_incoming_sockets: u64,
-    pub tor_outgoing_sockets: u64,
-    pub white_peerlist_size: u64,
-    pub grey_peerlist_size: u64,
 }
 
 /// Which of the pool's two counts a caller is owed.
@@ -162,6 +146,23 @@ pub struct PoolCounts {
     pub unbroadcast: Option<u64>,
 }
 
+/// A pool read's answer, or the state in which the pool has none.
+///
+/// Only the Rust node retires its pool: when the pool's file faults, the
+/// node stops reading the pool until it restarts, while it goes on
+/// following the chain. A read that would need the pool answers
+/// [`PoolState::Retired`] where a reply can carry "no answer" for the pool
+/// alone (`get_info`'s counts, `get_transactions`' pool lookups), and
+/// faults where it cannot (`is_key_image_spent`: an unknown pool spend
+/// must not read as unspent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PoolState<T> {
+    /// The pool answered.
+    Live(T),
+    /// The node has retired its pool.
+    Retired,
+}
+
 /// The reads behind `get_info`.
 pub trait InfoFacts: Send + Sync {
     /// The chain at its tip. One chain state: see the module docs.
@@ -169,7 +170,8 @@ pub trait InfoFacts: Send + Sync {
     /// The pool's population. With [`PoolScope::WithUnbroadcast`] both
     /// counts are of one pool state, read under one hold of the pool's lock;
     /// with [`PoolScope::Broadcast`] the second is not counted at all.
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault>;
+    /// [`PoolState::Retired`] when the node has retired its pool.
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault>;
     /// The chain store's size on disk, in bytes.
     ///
     /// # Errors
@@ -184,11 +186,11 @@ pub trait InfoFacts: Send + Sync {
     /// [`PeerFacts::Offline`] for a daemon started offline; an online
     /// daemon with no peer lists is a fault.
     fn peers(&self) -> Result<PeerFacts, FactsFault>;
-    /// The node's sessions, per direction, from one snapshot of the seam
+    /// The node's sessions, per direction, from one snapshot of the session
     /// board. Read for every caller of an online node: Health's `has_peers`
     /// is whether there is one, and Health is never withheld. Not read for
-    /// a node that [`InfoChainFacts::offline`] says is offline, which binds
-    /// no hub and has no sessions by configuration.
+    /// a node that [`InfoChainFacts::offline`] says is offline, which has
+    /// no sessions by configuration.
     ///
     /// The two counts are also Status members. They and `has_peers` are
     /// this one read and one definition of a session, so a reply cannot say
@@ -196,9 +198,8 @@ pub trait InfoFacts: Send + Sync {
     ///
     /// # Errors
     ///
-    /// [`FactsFault::HubAbsent`] when the p2p hub is not up. Zero sessions
-    /// is an answer — a node with nobody to talk to — and is never returned
-    /// for a hub that is not there.
+    /// A fault of the read. Zero sessions is an answer — a node with nobody
+    /// to talk to — and is never a fault's stand-in.
     fn sessions(&self) -> Result<SessionCounts, FactsFault>;
 }
 
@@ -233,39 +234,6 @@ impl SessionCounts {
     }
 }
 
-/// The seam board's session counts.
-///
-/// # Errors
-///
-/// [`FactsFault::HubAbsent`] when no hub is bound; [`FactsFault::Unknown`]
-/// for a code the export does not document.
-pub fn sessions() -> Result<SessionCounts, FactsFault> {
-    // Values no board can hold: if the export claimed success without
-    // writing, the answer would not pass for small counts.
-    let mut counts = crate::ffi::SeamSessionCountsFfi {
-        outbound: u64::MAX,
-        inbound: u64::MAX,
-    };
-    // SAFETY: `counts` is a valid, writable struct of the export's layout.
-    let code = unsafe { crate::ffi::shekyl_seam_session_counts(&raw mut counts) };
-    sessions_from(code, counts)
-}
-
-/// What a return code of the board's count export means.
-fn sessions_from(
-    code: i32,
-    counts: crate::ffi::SeamSessionCountsFfi,
-) -> Result<SessionCounts, FactsFault> {
-    match code {
-        crate::ffi::SHEKYL_SEAM_COUNT_OK => Ok(SessionCounts {
-            outbound: counts.outbound,
-            inbound: counts.inbound,
-        }),
-        crate::ffi::SHEKYL_SEAM_COUNT_ERR_NO_HUB => Err(FactsFault::HubAbsent),
-        other => Err(FactsFault::Unknown(other)),
-    }
-}
-
 /// The size of the chain store's data file.
 ///
 /// This is the whole of the size read, and it lives here so that it is the
@@ -293,134 +261,23 @@ pub fn store_file_size(path: &Path) -> Result<u64, FactsFault> {
     }
 }
 
-/// Production [`InfoFacts`] over the live core handle.
-pub struct FfiInfoFacts {
-    core: Arc<CoreRpc>,
-}
-
-impl FfiInfoFacts {
-    pub fn new(core: Arc<CoreRpc>) -> Self {
-        Self { core }
-    }
-}
-
-impl InfoFacts for FfiInfoFacts {
-    fn chain(&self) -> Result<InfoChainFacts, FactsFault> {
-        let pod = self.core.info_chain().map_err(FactsFault::from_code)?;
-        Ok(InfoChainFacts {
-            chain_height: ChainCount::from_raw(pod.chain_height),
-            top_hash: BlockHash::from_bytes(pod.top_hash),
-            difficulty: u128::from(pod.difficulty_hi) << 64 | u128::from(pod.difficulty_lo),
-            cumulative_difficulty: u128::from(pod.cumulative_difficulty_hi) << 64
-                | u128::from(pod.cumulative_difficulty_lo),
-            difficulty_target: pod.difficulty_target,
-            total_transactions: pod.total_transactions,
-            block_weight_limit: pod.block_weight_limit,
-            block_weight_median: pod.block_weight_median,
-            adjusted_time: pod.adjusted_time,
-            already_generated_coins: AtomicUnits::from_raw(pod.already_generated_coins),
-            total_burned: AtomicUnits::from_raw(pod.total_burned),
-            tx_volume: TxVolume::window(pod.tx_volume_count_sum, pod.tx_volume_blocks),
-            core_target_height: decode_target_count(pod.core_target_height),
-            synchronized: pod.synchronized != 0,
-            busy_syncing: pod.busy_syncing != 0,
-            offline: pod.offline != 0,
-            following_degraded: pod.following_degraded != 0,
-            protocol_version: u64::from(pod.protocol_version),
-        })
-    }
-
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
-        let (broadcast, unbroadcast) = self
-            .core
-            .info_pool_counts(scope == PoolScope::WithUnbroadcast)
-            .map_err(FactsFault::from_code)?;
-        Ok(PoolCounts {
-            broadcast,
-            unbroadcast,
-        })
-    }
-
-    fn store_size(&self) -> Result<u64, FactsFault> {
-        let path = self.core.info_store_file().map_err(FactsFault::from_code)?;
-        store_file_size(&path)
-    }
-
-    fn status(&self) -> Result<InfoStatusFacts, FactsFault> {
-        let (pod, version) = self.core.info_status().map_err(FactsFault::from_code)?;
-        // The build always has a version. An empty one is a shim that did
-        // not write it, and the reply type refuses it on the reading side;
-        // it is a fault here and not a reply nobody could decode.
-        if version.is_empty() {
-            return Err(FactsFault::Inconsistent);
-        }
-        Ok(InfoStatusFacts {
-            start_time: pod.start_time,
-            free_space: pod.free_space,
-            alt_blocks_count: pod.alt_blocks_count,
-            version,
-        })
-    }
-
-    fn peers(&self) -> Result<PeerFacts, FactsFault> {
-        // The two list sizes come from the Rust peer lists, not the core,
-        // and are read first: a daemon started offline answers that
-        // there, and no count is read for it.
-        let (white_peerlist_size, grey_peerlist_size) =
-            match crate::core::CoreRpc::peerlist_sizes().map_err(FactsFault::from_code)? {
-                crate::core::P2pRead::Offline => return Ok(PeerFacts::Offline),
-                crate::core::P2pRead::Running(sizes) => sizes,
-            };
-        let pod = self.core.info_peers().map_err(FactsFault::from_code)?;
-        Ok(PeerFacts::Running(InfoPeersFacts {
-            public_incoming_sockets: pod.public_incoming_sockets,
-            public_outgoing_sockets: pod.public_outgoing_sockets,
-            tor_incoming_sockets: pod.tor_incoming_sockets,
-            tor_outgoing_sockets: pod.tor_outgoing_sockets,
-            white_peerlist_size,
-            grey_peerlist_size,
-        }))
-    }
-
-    fn sessions(&self) -> Result<SessionCounts, FactsFault> {
-        sessions()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// **A missing hub is a fault, and zero sessions is an answer.** The
-    /// two are different return codes of the board's export and stay
-    /// different here; a code the export does not document is not guessed
-    /// at.
+    /// **Zero sessions is an answer**, the one an offline node carries, and
+    /// a fault of the read is a [`FactsFault`], not a count: the two do not
+    /// share a value.
     #[test]
-    fn a_missing_hub_is_a_fault_and_zero_sessions_is_an_answer() {
-        use crate::ffi::{
-            SeamSessionCountsFfi, SHEKYL_SEAM_COUNT_ERR_NO_HUB, SHEKYL_SEAM_COUNT_OK,
-        };
-
-        let pod = |outbound, inbound| SeamSessionCountsFfi { outbound, inbound };
+    fn zero_sessions_is_an_answer() {
         assert_eq!(
-            sessions_from(SHEKYL_SEAM_COUNT_OK, pod(0, 0)),
-            Ok(SessionCounts::NONE)
+            SessionCounts::NONE,
+            SessionCounts {
+                outbound: 0,
+                inbound: 0,
+            }
         );
-        assert_eq!(
-            sessions_from(SHEKYL_SEAM_COUNT_OK, pod(8, 12)),
-            Ok(SessionCounts {
-                outbound: 8,
-                inbound: 12,
-            }),
-            "each count lands in its own member"
-        );
-        assert_eq!(
-            sessions_from(SHEKYL_SEAM_COUNT_ERR_NO_HUB, pod(0, 0)),
-            Err(FactsFault::HubAbsent),
-            "no hub is not zero sessions, whatever the slots hold"
-        );
-        assert_eq!(sessions_from(-1, pod(0, 0)), Err(FactsFault::Unknown(-1)));
-        assert_eq!(sessions_from(1, pod(3, 3)), Err(FactsFault::Unknown(1)));
+        assert!(!SessionCounts::NONE.has_peers());
     }
 
     /// `has_peers` is a session in either direction, and only that.
@@ -439,13 +296,6 @@ mod tests {
                 "{outbound} out, {inbound} in"
             );
         }
-    }
-
-    /// The unit-test binary links no hub, and the stub that stands in for
-    /// the export says so. The read through it is the fault, not zeros.
-    #[test]
-    fn the_read_with_no_hub_linked_is_the_fault() {
-        assert_eq!(sessions(), Err(FactsFault::HubAbsent));
     }
 
     /// A scratch directory under the system temp dir, removed on drop.

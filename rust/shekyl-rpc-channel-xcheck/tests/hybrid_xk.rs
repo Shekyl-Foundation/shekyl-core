@@ -62,10 +62,12 @@ const NETWORK_ID: NetworkId = [
 ];
 const OTHER_NETWORK_ID: NetworkId = [0x0f; 16];
 
-/// Message 3 carries the grant request and message 4 the grant. Their
-/// encoding is RT-W10's; these are stand-ins of fixed, different lengths.
+/// Message 3 carries the grant request and message 4 the ceiling (RT-O30).
+/// The handshake carries both as opaque bytes; these are stand-ins of fixed,
+/// different lengths, not RT-O31's encoding, and the pinned vectors hold
+/// their bytes.
 const GRANT_REQUEST: &[u8] = b"grant-request:view";
-const GRANT: &[u8] = b"grant:view";
+const CEILING: &[u8] = b"grant:view";
 const FIRST_REQUEST: &[u8] = b"first transport record, client to daemon";
 const FIRST_REPLY: &[u8] = b"first transport record, daemon to client";
 
@@ -134,7 +136,7 @@ fn run<const C: u8, const D: u8>(pattern: &HandshakePattern, prologue: &[u8]) ->
     .expect("daemon handshake");
 
     let name = client.get_name().as_str().to_owned();
-    let payloads: [&[u8]; 4] = [&[], &[], GRANT_REQUEST, GRANT];
+    let payloads: [&[u8]; 4] = [&[], &[], GRANT_REQUEST, CEILING];
     let mut wire = vec![0u8; 8192];
     let mut plain = vec![0u8; 8192];
     let mut messages = Vec::new();
@@ -229,7 +231,7 @@ fn build() -> Value {
             "",
             "",
             hex::encode(GRANT_REQUEST),
-            hex::encode(GRANT),
+            hex::encode(CEILING),
         ],
         "messages_hex": hexes(&run.messages),
         "handshake_hash_hex": hex::encode(&run.handshake_hash),
@@ -303,7 +305,7 @@ fn messages_have_the_sizes_the_design_states() {
     );
     assert_eq!(messages[2].len(), 1264 + GRANT_REQUEST.len());
     // 4: the skem ciphertext, encrypted, then the payload.
-    assert_eq!(messages[3].len(), 1120 + GRANT.len());
+    assert_eq!(messages[3].len(), 1120 + CEILING.len());
 }
 
 /// Named edit: another seed. Every message must move, or the vectors do not

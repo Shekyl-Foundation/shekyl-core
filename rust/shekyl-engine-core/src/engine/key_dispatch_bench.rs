@@ -56,7 +56,7 @@
 use std::collections::HashMap;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
-use shekyl_crypto_pq::account::{generate_account_from_raw_seed, AllKeysBlob, DerivationNetwork};
+use shekyl_crypto_pq::account::{account_from_seed, AllKeysBlob, Network};
 use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::output::construct_output;
 use shekyl_curve_primitives::Commitment;
@@ -65,7 +65,7 @@ use shekyl_engine_state::{
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
-use shekyl_types::{BlockHeight, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use crate::engine::key_actor::KeyEngineHandle;
 use crate::engine::local_keys::LocalKeys;
@@ -86,7 +86,7 @@ const DISPATCH_BENCH_STRANGER_SEED: [u8; 32] = [0x9Eu8; 32];
 /// ciphertext), so any fixed non-zero value is fine.
 const DISPATCH_BENCH_TX_KEY_SECRET: [u8; 32] = [0x11u8; 32];
 
-/// Rederive a fresh [`AllKeysBlob`] from `seed` (testnet, raw32).
+/// Rederive a fresh [`AllKeysBlob`] from `seed` (testnet).
 ///
 /// Duplicated from the `key_actor` / `local_keys` test helpers per the
 /// bench-fixture duplication discipline (`STAGE_0_HARNESS.md` §4.2:
@@ -96,8 +96,8 @@ const DISPATCH_BENCH_TX_KEY_SECRET: [u8; 32] = [0x11u8; 32];
 /// and the `LocalKeys` baseline share key material despite `AllKeysBlob`
 /// being non-`Clone`.
 fn make_blob(seed: [u8; 32]) -> AllKeysBlob {
-    let (_master_seed, blob) = generate_account_from_raw_seed(&seed, DerivationNetwork::Testnet)
-        .expect("bench rederivation succeeds for raw32 testnet seeds");
+    let (_master_seed, blob) = account_from_seed(&seed, Network::Testnet)
+        .expect("bench derivation succeeds for a testnet seed");
     blob
 }
 
@@ -108,7 +108,7 @@ fn build_output_paid_to(
     recipient: &AllKeysBlob,
     output_index: u64,
     amount: u64,
-    tx_hash: [u8; 32],
+    tx_hash: TxHash,
 ) -> OutputDetectionInput {
     let constructed = construct_output(
         &DISPATCH_BENCH_TX_KEY_SECRET,
@@ -182,10 +182,12 @@ impl KeyDispatchBenchHarness {
         let actor_blob = make_blob(DISPATCH_BENCH_SEED);
         let local = LocalKeys::from_test_seed(DISPATCH_BENCH_SEED);
 
-        let mine_input = build_output_paid_to(&actor_blob, 0, 1_337, [0x33u8; 32]);
+        let mine_input =
+            build_output_paid_to(&actor_blob, 0, 1_337, TxHash::from_bytes([0x33u8; 32]));
 
         let stranger = make_blob(DISPATCH_BENCH_STRANGER_SEED);
-        let not_mine_input = build_output_paid_to(&stranger, 0, 42, [0x44u8; 32]);
+        let not_mine_input =
+            build_output_paid_to(&stranger, 0, 42, TxHash::from_bytes([0x44u8; 32]));
 
         let handle = KeyEngineHandle::spawn(actor_blob);
 
@@ -271,7 +273,7 @@ impl KeyBaselineBenchFixture {
     pub fn new() -> Self {
         let blob = make_blob(DISPATCH_BENCH_SEED);
         let local = LocalKeys::from_test_seed(DISPATCH_BENCH_SEED);
-        let mine_input = build_output_paid_to(&blob, 0, 1_337, [0x33u8; 32]);
+        let mine_input = build_output_paid_to(&blob, 0, 1_337, TxHash::from_bytes([0x33u8; 32]));
         Self { local, mine_input }
     }
 
@@ -398,10 +400,18 @@ impl MergeProjectionBenchFixture {
             transfers.push(td);
         }
 
-        let tip = BlockchainTip::new(BlockHeight::from_raw(1_000_000), [0xAA; 32]);
+        let tip = BlockchainTip::new(
+            BlockHeight::from_raw(1_000_000),
+            BlockHash::from_bytes([0xAA; 32]),
+        );
         let reorg_blocks = ReorgBlocks {
             blocks: (999_990..=1_000_000)
-                .map(|h| (BlockHeight::from_raw(h), [(h & 0xff) as u8; 32]))
+                .map(|h| {
+                    (
+                        BlockHeight::from_raw(h),
+                        BlockHash::from_bytes([(h & 0xff) as u8; 32]),
+                    )
+                })
                 .collect(),
         };
         let ledger = LedgerBlock::new(transfers, tip, reorg_blocks);

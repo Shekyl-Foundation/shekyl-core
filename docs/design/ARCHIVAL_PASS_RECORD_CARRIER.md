@@ -41,11 +41,11 @@ dense tag `0x02`, and is **read by consensus**:
 
 | Site | What it does |
 | --- | --- |
-| [`cryptonote_basic.h:278-301`](../../src/cryptonote_basic/cryptonote_basic.h#L278-L301) | the struct + its `BEGIN_SERIALIZE_OBJECT` |
-| [`cryptonote_basic.h:334`](../../src/cryptonote_basic/cryptonote_basic.h#L334) | in `txin_v` |
-| [`cryptonote_basic.h:989`](../../src/cryptonote_basic/cryptonote_basic.h#L989) *(tag scheme)* | `VARIANT_TAG(binary_archive, …, 0x02)` |
-| [`blockchain_db.cpp:265-268`](../../src/blockchain_db/blockchain_db.cpp#L265-L268) | `set_archival_serve_credit_bit(p_canonical_id, shard_id, settlement_epoch)` |
-| [`blockchain_db.cpp:816-818`](../../src/blockchain_db/blockchain_db.cpp#L816-L818) | the removal/unwind twin |
+| `cryptonote_basic.h` at `ac3836de90` (lines 278–301) | the struct + its `BEGIN_SERIALIZE_OBJECT` |
+| `cryptonote_basic.h` at `ac3836de90` (line 334) | in `txin_v` |
+| `cryptonote_basic.h` at `ac3836de90` (line 989) *(tag scheme)* | `VARIANT_TAG(binary_archive, …, 0x02)` |
+| `blockchain_db.cpp:265-268` | `set_archival_serve_credit_bit(p_canonical_id, shard_id, settlement_epoch)` |
+| `blockchain_db.cpp:816-818` | the removal/unwind twin |
 | `json_object.cpp:402,460,615,631` | JSON codecs both directions |
 
 So **"is the pass record a vin?" answers *yes, already*** — and the round's
@@ -84,10 +84,10 @@ sized, one auth per input, which is what a per-record countersignature is"* —
 is the right *shape*, and the slot is nonetheless **carved out** for exactly
 this tx class:
 
-- [`blockchain.cpp:3726`](../../src/cryptonote_core/blockchain.cpp#L3726) —
+- `blockchain.cpp:3726` —
   `if (!is_archival_serve_credit_only && tx.pqc_auths.size() != num_inputs)`.
   A pure serve-credit-response tx is **exempted from the count check**.
-- [`cryptonote_basic.h:620-621`](../../src/cryptonote_basic/cryptonote_basic.h#L620-L621)
+- `cryptonote_basic.h` at `ac3836de90` (lines 620–621)
   — serialization, by contrast, does `PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(),
   pqc_auths); if (pqc_auths.size() != vin.size()) return false;`
 
@@ -104,18 +104,18 @@ if (is_archival_serve_credit_only) {
       " must not carry pqc_auths (signature is on the vin)");
 ```
 
-So [`:3726`](../../src/cryptonote_core/blockchain.cpp#L3726) is **not an
+So `:3726` is **not an
 exemption from a rule — it is a substitution of a stricter one.** The generic
 rule is *one auth per input*; serve-credit's rule is *zero auths, ever*. The
 count check is skipped **because** the emptiness check supersedes it.
-[`:3630`](../../src/cryptonote_core/blockchain.cpp#L3630) completes the picture,
+`:3630` completes the picture,
 skipping the whole spend-verification arm for these txs — *"non-spending
 archival vins; hybrid signature lives on the vin (gate-2 §5)"*.
 
 The serialization demand at
-[`cryptonote_basic.h:620-621`](../../src/cryptonote_basic/cryptonote_basic.h#L620-L621)
+`cryptonote_basic.h` at `ac3836de90` (lines 620–621)
 is then satisfied trivially: the gate at
-[`:605`](../../src/cryptonote_basic/cryptonote_basic.h#L605) means `pqc_auths` is
+`cryptonote_basic.h` at `ac3836de90` (line 605) means `pqc_auths` is
 only read when the region is present, and a serve-credit tx never writes one.
 
 **The appearance of tension came from reading `:3726` alone.** The two sites are
@@ -141,7 +141,7 @@ dissolves.** There is no live exemption to remove, because the slot is no longer
 wanted. `:3630`, `:3726` and `:3746` all survive unchanged.
 
 **Dissolved:** the coinbase-guard worry
-([`:605`](../../src/cryptonote_basic/cryptonote_basic.h#L605), `pqc_auths`
+(`cryptonote_basic.h` at `ac3836de90` (line 605), `pqc_auths`
 skipped for `txin_gen`) does not apply. Under derived assignment there is no
 challenge set in the coinbase — assignments are a pure function of
 `block_hash(h−1)` and nothing is recorded — so the pass record rides an
@@ -161,21 +161,21 @@ ordinary transaction (§2 step 4) and the guard needs no change.
 > `serialize_ctsig_prunable`, never appended — is unchanged, and
 > `tx_prunable_region_sole_occupant.cpp` still guards it.
 
-[`calculate_transaction_prunable_hash`](../../src/cryptonote_basic/cryptonote_format_utils.cpp#L1135)
+`calculate_transaction_prunable_hash` (`src/cryptonote_basic/cryptonote_format_utils.cpp` at `ac3836de90` (line 1135))
 computes the prunable-region hash two ways:
 
 - **blob path** — `get_blob_hash(blob->data() + unprunable_size, blob->size() - unprunable_size)`: the whole tail, wholesale.
 - **re-serialize path** — `ct_signatures.p.serialize_ctsig_prunable(...)`: only `ct_signatures.p`.
 
 **They agree today only because `ctsig_prunable` is the last thing written** —
-[`cryptonote_basic.h:645-648`](../../src/cryptonote_basic/cryptonote_basic.h#L645-L648),
+`cryptonote_basic.h` at `ac3836de90` (lines 645–648),
 where the object closes immediately after it. The equivalence is **positional,
 and it has no name and no test.**
 
 Append anything *after* `ctsig_prunable` and the two paths silently diverge: a
 node holding the blob computes one prunable hash, a node re-serializing from
 the parsed struct computes another. The failure surfaces at
-[`:1166`](../../src/cryptonote_basic/cryptonote_format_utils.cpp#L1166) as
+`cryptonote_format_utils.cpp` at `ac3836de90` (line 1166) as
 `"tx hash cash integrity failure"` — **a throw, on some nodes and not others,
 depending on whether they kept the blob.** A moving split point would at least
 be a visible consequence; this is not.

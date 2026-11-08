@@ -5,7 +5,7 @@
 
 //! CT-5a commit-1 contract tests for [`CurveTreeActor`] / [`CurveTreeHandle`].
 //! These pin the actor scaffold and message protocol; the behavioral
-//! ingest / rollback KATs (root-matches-the-CT-2-oracle, reorg, respawn)
+//! ingest / rollback KATs (root-matches-the-CT-2-oracle, reorg, recovery)
 //! land in later commits where the real `ScannableBlock → BlockLeaves`
 //! decode and fixtures exist.
 
@@ -31,8 +31,8 @@ fn fresh_client() -> (TempDir, CurveTreeClient) {
 /// than passing tests until a deadlock interleaving in production.
 #[test]
 fn actor_constructed_from_only_the_client() {
-    fn assert_args_is_client<A: Actor<Args = CurveTreeClient>>() {}
-    assert_args_is_client::<CurveTreeActor>();
+    fn assert_actor_args_are_curve_tree_client<A: Actor<Args = CurveTreeClient>>() {}
+    assert_actor_args_are_curve_tree_client::<CurveTreeActor>();
 }
 
 /// kameo requires the actor and its messages to be `Send`. (The replies are
@@ -45,6 +45,7 @@ fn actor_and_messages_are_send() {
     assert_send::<IngestBlock>();
     assert_send::<RollbackToFork>();
     assert_send::<IngestedTipHeight>();
+    assert_send::<Recover>();
     assert_send::<VerifyRoot>();
     assert_send::<RootAndDepthAt>();
     assert_send::<AssembleTx>();
@@ -73,121 +74,126 @@ async fn spawns_and_is_alive() {
     assert!(handle.actor_ref().is_alive(), "actor is alive after spawn");
 }
 
-/// **R1-Q4 respawn happy path + shared-cell propagation (O3, §3.3).** The
-/// load-bearing KAT for commit 5: a fail-stopped actor is healed by
-/// [`CurveTreeHandle::respawn`], which (a) resumes a writer over the
-/// same open store (D2 resume-from-store, no genesis replay, no file
-/// reopen), and (b) swaps the fresh actor into the **shared cell** so a
-/// clone taken *before* the respawn — modelling the
-/// [`LocalPendingTx`](super::super::local_pending_tx) spend-gate clone —
-/// observes the new actor too. Without the shared cell the clone would
-/// keep pointing at the dead actor and fail forever (the partial-heal
-/// hazard this handle shape forecloses).
-///
-/// Blocks are empty-leaf (no coinbase) — accepted by `ingest_block`, which
-/// advances the height cursor regardless of leaf count; the same shape the
-/// merge-path reorg KAT relies on. Behavioral leaf/root correctness is the
-/// CT-2-oracle KAT (commit 6) / Tier-B completeness (CT-5c), not here.
-#[tokio::test]
-async fn respawn_resumes_from_store_and_propagates_to_clones() {
-    let dir = TempDir::new().expect("tempdir");
-    let path = dir.path().join("curve_tree.redb");
-    let client = CurveTreeClient::open(&path).expect("open fresh client");
-    let handle = CurveTreeHandle::spawn(client);
-
-    // Ingest empty blocks 0..=2 → persisted cursor at height 2.
-    for h in 0..=2 {
+/// Ingest empty blocks `0..=tip` through `handle`. Empty-leaf blocks are
+/// accepted by `ingest_block`, which advances the height cursor regardless
+/// of leaf count (the shape the merge-path reorg KAT relies on). Behavioral
+/// leaf/root correctness is the CT-2-oracle KAT / Tier-B completeness.
+async fn ingest_empty_through(handle: &CurveTreeHandle, tip: u64) {
+    for h in 0..=tip {
         handle
             .ingest(BlockHeight::from_raw(h), Arc::new(Vec::new()))
             .await
             .expect("ingest empty block");
     }
-    assert_eq!(
-        handle.ingested_tip_height().await.expect("cursor read"),
-        Some(BlockHeight::from_raw(2)),
-        "three consecutive ingests leave the cursor at height 2"
-    );
+}
 
-    // A clone taken BEFORE the respawn — the spend-gate-clone analogue.
+/// **A poisoned client recovers in place, for every clone (O3, §3.3).** The
+/// actor rebuilds its client over the store it owns ([`Recover`]); no file
+/// reopen, no second writer, and no clone needs repointing, because a clone
+/// is a mailbox address. A clone taken *before* the poison, modelling the
+/// [`LocalPendingTx`](super::super::local_pending_tx) spend-gate clone, sees
+/// the recovered client and the persisted cursor.
+#[tokio::test]
+async fn a_poisoned_client_recovers_in_place_for_every_clone() {
+    let (_dir, client) = fresh_client();
+    let handle = CurveTreeHandle::spawn(client);
+    ingest_empty_through(&handle, 2).await;
     let clone = handle.clone();
 
-    // Simulate the fail-stop: both the original and the pre-respawn clone
-    // now collapse to Unavailable (they share the one — now dead — actor).
-    handle.kill_and_wait_for_test().await;
+    handle.poison_for_test().await;
     assert!(
         matches!(
-            handle.ingested_tip_height().await,
-            Err(CurveTreeHandleError::Unavailable)
+            clone
+                .ingest(BlockHeight::from_raw(3), Arc::new(Vec::new()))
+                .await,
+            Err(CurveTreeHandleError::Client(ClientError::Poisoned))
         ),
-        "a fail-stopped actor makes the original handle Unavailable"
-    );
-    assert!(
-        matches!(
-            clone.ingested_tip_height().await,
-            Err(CurveTreeHandleError::Unavailable)
-        ),
-        "the pre-respawn clone shares the dead actor and is Unavailable too"
+        "a poisoned client refuses the ingest on every clone"
     );
 
-    // Respawn via the original handle: same store Arc, fresh writer.
-    handle
-        .respawn()
-        .await
-        .expect("respawn resumes over the held store");
+    handle.recover().await.expect("the store resumes in place");
 
-    // (a) resume-from-store: the persisted cursor survived the fail-stop.
-    assert_eq!(
-        handle.ingested_tip_height().await.expect("cursor read"),
-        Some(BlockHeight::from_raw(2)),
-        "respawn resumes from the persisted store cursor (no genesis replay)"
-    );
-    // (b) propagation: the clone taken before the respawn observes the
-    // fresh actor through the shared cell — whole heal, not partial.
     assert_eq!(
         clone.ingested_tip_height().await.expect("cursor read"),
         Some(BlockHeight::from_raw(2)),
-        "the pre-respawn clone observes the respawned actor via the shared cell"
+        "the rebuild resumes from the persisted store cursor (no genesis replay)"
     );
-    // And ingest resumes at cursor+1 through the clone.
     clone
         .ingest(BlockHeight::from_raw(3), Arc::new(Vec::new()))
         .await
-        .expect("ingest resumes at cursor+1 after respawn");
+        .expect("ingest resumes at cursor+1 through the pre-poison clone");
     assert_eq!(
         handle.ingested_tip_height().await.expect("cursor read"),
         Some(BlockHeight::from_raw(3)),
-        "post-respawn ingest advances the shared cursor seen by every clone"
+        "every clone reaches the one actor"
     );
 }
 
-/// Respawn must keep the store a serving host would hold. This bites
-/// against a path-reopen (different `Arc`, and `DatabaseAlreadyOpen`
-/// once a host is live); it does NOT cover cursor resume or clone
-/// propagation (`respawn_resumes_from_store_and_propagates_to_clones`).
+/// **A stopped actor is terminal.** It is not restarted, so every clone
+/// reports [`CurveTreeHandleError::Unavailable`] and recovery cannot revive
+/// it; reopening the wallet is the remedy, as for the key and stake actors.
 #[tokio::test]
-async fn respawn_keeps_the_store_a_serving_reader_holds() {
+async fn a_stopped_actor_is_unavailable_to_every_clone_for_good() {
     let (_dir, client) = fresh_client();
     let handle = CurveTreeHandle::spawn(client);
-
-    let before = handle
-        .pin_serve_set(Vec::new(), Vec::new())
-        .await
-        .expect("pin before respawn")
-        .reader;
+    let clone = handle.clone();
 
     handle.kill_and_wait_for_test().await;
-    handle.respawn().await.expect("respawn");
 
-    let after = handle
-        .pin_serve_set(Vec::new(), Vec::new())
-        .await
-        .expect("pin after respawn")
-        .reader;
+    assert!(matches!(
+        clone.ingested_tip_height().await,
+        Err(CurveTreeHandleError::Unavailable)
+    ));
+    assert!(matches!(
+        handle.recover().await,
+        Err(CurveTreeHandleError::Unavailable)
+    ));
+}
 
-    assert!(
-        before.same_store(&after),
-        "respawn must resume over the same open store a serving host holds"
-    );
+/// **An awaited shutdown closes the store** (`CURVE_TREE_CLIENT.md` §11):
+/// `on_stop` drops the client before `wait_for_shutdown` resolves, so the
+/// moment [`CurveTreeHandle::shutdown`] returns, the file opens again, with
+/// no retry anywhere and a clone of the handle still alive. Repeated on a
+/// multi-thread runtime, where the old drop-with-the-actor-value raced the
+/// reopen.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_awaited_shutdown_closes_the_store_for_an_immediate_reopen() {
+    let dir = TempDir::new().expect("tempdir");
+    let path = dir.path().join("curve_tree.redb");
+    let mut client = CurveTreeClient::open(&path).expect("open fresh client");
+    // A store holding only an empty genesis resumes as fresh, so each round
+    // persists a block above it and the reopen has a tip to resume.
+    client
+        .ingest_block(BlockLeaves {
+            height: BlockHeight::from_raw(0),
+            txs: &[],
+        })
+        .expect("ingest genesis");
+    for round in 1u64..=25 {
+        let handle = CurveTreeHandle::spawn(client);
+        handle
+            .ingest(BlockHeight::from_raw(round), Arc::new(Vec::new()))
+            .await
+            .expect("ingest the next empty block");
+        let clone = handle.clone();
+
+        handle.shutdown().await;
+
+        assert!(
+            matches!(
+                clone.ingested_tip_height().await,
+                Err(CurveTreeHandleError::Unavailable)
+            ),
+            "round {round}: a stopped actor answers no clone"
+        );
+        client = CurveTreeClient::open(&path)
+            .unwrap_or_else(|e| panic!("round {round}: the file must reopen at once: {e:?}"));
+        assert_eq!(
+            client.ingested_tip_height(),
+            Some(BlockHeight::from_raw(round)),
+            "round {round}: the reopen resumes what the actor persisted"
+        );
+    }
 }
 
 /// Cursor-read `ask` round-trip on a fresh client returns `None` — the

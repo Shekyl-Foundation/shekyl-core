@@ -1,12 +1,11 @@
 //! Pure consensus-state computation for emission reads (ARCHIVAL_CONSENSUS_STATE.md §3–§5).
 //!
-//! No LMDB. This module is the **single implementation** of the epoch-close
-//! consensus semantics: the C++ daemon gathers raw rows from LMDB, calls
-//! [`epoch_close_compute`] through `shekyl-ffi`, and stores the returned
-//! `R_market` / `Σwork` values. C++ performs no consensus arithmetic of its
-//! own (`20-rust-vs-cpp-policy.mdc` §4; `40-ffi-discipline.mdc` coarse-call rule).
+//! No store. This module is the **single implementation** of the epoch-close
+//! consensus semantics: the validator's close (`shekyl-chain-rules`,
+//! `archival::close`) gathers the raw rows from its store view, calls
+//! [`epoch_close_compute`], and writes the returned `R_market` / `Σwork`
+//! values. The gather performs no consensus arithmetic of its own.
 
-use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 #[cfg(test)]
 use crate::constants::SETTLEMENT_EPOCH_BLOCKS;
 use crate::reward_arithmetic::{
@@ -19,8 +18,8 @@ mod settlement_schedule;
 pub use settlement_schedule::SettlementSchedule;
 
 // The process-latched entry points — [`SettlementSchedule::effective`]'s
-// geometry, for the C++ daemon (through `shekyl-ffi`), the wallet and the
-// admission gather, none of which holds a rule set. Each is the method of
+// geometry, for the wallet, the submit verifier and the other callers that
+// hold no rule set. Each is the method of
 // the same name on the type; the validator reads the type off `RuleSet`.
 
 /// [`SettlementSchedule::epoch_at_height`] under the process-latched
@@ -108,9 +107,9 @@ pub fn market_member_at_epoch(
     join_settlement_epoch: u64,
     settlement_epoch: u64,
     bad_intervals: &[BadInterval],
-    is_foundation_complete_tree: bool,
+    is_support_complete_tree: bool,
 ) -> bool {
-    if is_foundation_complete_tree {
+    if is_support_complete_tree {
         return false;
     }
     good_through(join_settlement_epoch, settlement_epoch, bad_intervals)
@@ -197,7 +196,7 @@ pub fn sigma_work_milli(per_p_work_milli: &[u64], market_mask: &[bool]) -> u64 {
 /// A zero-work member contributes nothing by arithmetic.
 ///
 /// Sourced here so the persisted denominator ([`sigma_work_milli`]), the
-/// emission numerator FFI (`shekyl_archival_emission_epoch_work`), and the
+/// emission numerator (once an FFI, deleted by `DEL-008`), and the
 /// verify body (`emission_verify`) cannot drift on the membership gate — the
 /// M-2 sourcing-divergence the WS-1 design makes unrepresentable rather than
 /// tested-against.
@@ -390,7 +389,7 @@ impl ShardClose {
 #[derive(Debug, Clone)]
 pub struct EpochCloseBond<'a> {
     pub join_settlement_epoch: u64,
-    pub is_foundation_complete_tree: bool,
+    pub is_support_complete_tree: bool,
     pub bad_intervals: &'a [BadInterval],
 }
 
@@ -433,7 +432,7 @@ pub struct EpochCloseInputs<'a> {
 
 impl<'a> EpochCloseInputs<'a> {
     /// The close under `schedule`: the epoch length from the schedule the
-    /// caller holds, the age weight from the compiled constants — the
+    /// caller holds, the age weight from `params` — the
     /// **single** source every view draws from, so the validator's close,
     /// the close FFI shim and the verify views cannot drift on a param (the
     /// `SETTLEMENT_EPOCH_BLOCKS → effective_settlement_epoch_blocks()`
@@ -449,12 +448,13 @@ impl<'a> EpochCloseInputs<'a> {
         bonds: &'a [EpochCloseBond<'a>],
         shards: &'a [EpochCloseShard],
         credit_pairs: &'a [CreditPair],
+        params: &crate::ArchivalParams,
     ) -> Self {
         Self {
             settlement_epoch,
             close_block_height,
             settlement_epoch_blocks: schedule.blocks().get(),
-            age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+            age_weight_milli: params.reward_age_weight_milli,
             bonds,
             shards,
             credit_pairs,
@@ -463,7 +463,8 @@ impl<'a> EpochCloseInputs<'a> {
 
     /// The close-path construction for callers without a rule set (the
     /// close FFI shim): [`Self::under_schedule`] over
-    /// [`SettlementSchedule::effective`].
+    /// [`SettlementSchedule::effective`] and the shipped
+    /// [`crate::archival_params`].
     #[must_use]
     pub fn close_view(
         settlement_epoch: u64,
@@ -479,6 +480,7 @@ impl<'a> EpochCloseInputs<'a> {
             bonds,
             shards,
             credit_pairs,
+            crate::archival_params(),
         )
     }
 
@@ -604,7 +606,7 @@ pub fn as_of_e_served_work(
                 b.join_settlement_epoch,
                 inputs.settlement_epoch,
                 b.bad_intervals,
-                b.is_foundation_complete_tree,
+                b.is_support_complete_tree,
             )
         })
         .collect();
@@ -726,6 +728,7 @@ pub const FOUNDATION_EXCLUDED_FROM_MARKET: bool = true;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 
     /// A block index from a literal, for the tables below.
     const fn bh(index: u64) -> BlockHeight {
@@ -877,7 +880,7 @@ mod tests {
     fn epoch_close_single_member_full_pipeline() {
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &[],
         }];
         let shards = [shard(7, bh(0))];
@@ -900,7 +903,7 @@ mod tests {
         let bonds: Vec<EpochCloseBond<'_>> = (0..=crowd)
             .map(|_| EpochCloseBond {
                 join_settlement_epoch: 0,
-                is_foundation_complete_tree: false,
+                is_support_complete_tree: false,
                 bad_intervals: &[],
             })
             .collect();
@@ -979,7 +982,7 @@ mod tests {
         const N_SHARDS: usize = 40;
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &[],
         }];
         // `ClosedAt(0)` so the age term is LIVE — open, the age is zeroed
@@ -1100,7 +1103,7 @@ mod tests {
     fn epoch_close_complete_tree_excluded_from_market_and_sigma() {
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: true,
+            is_support_complete_tree: true,
             bad_intervals: &[],
         }];
         let shards = [shard(7, bh(0))];
@@ -1124,7 +1127,7 @@ mod tests {
         // consult, and this KAT is the regression guard on that deletion.
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &[],
         }];
         let shards = [shard(7, bh(0))];
@@ -1157,12 +1160,12 @@ mod tests {
         let bonds = [
             EpochCloseBond {
                 join_settlement_epoch: 0,
-                is_foundation_complete_tree: false,
+                is_support_complete_tree: false,
                 bad_intervals: &[],
             },
             EpochCloseBond {
                 join_settlement_epoch: 0,
-                is_foundation_complete_tree: false,
+                is_support_complete_tree: false,
                 bad_intervals: &[],
             },
         ];
@@ -1230,12 +1233,13 @@ mod tests {
 
     // The close/verify shared-sourcing identity — that summing the emission
     // numerator's per-P `Curve(work_P)` terms reproduces the persisted Σwork(E)
-    // denominator exactly — is pinned end-to-end through the real FFI numerator
-    // in `shekyl-ffi::archival_ffi::emission_epoch_work_sums_to_persisted_sigma`
-    // (distinct per-P terms, non-members zeroed). A unit-level restatement here
-    // could only re-run `epoch_close_compute`'s own `sigma_work_milli` +
-    // `as_of_e_served_work` expressions against themselves (tautological), so it
-    // is deliberately not duplicated at this layer.
+    // denominator exactly — is exercised end-to-end for one bond by
+    // `shekyl-chain-ingest`'s `the_drivers_emission_claim_connects_and_pays_the_persona`
+    // (ignored lane). No test pins it with distinct per-P terms and non-members
+    // zeroed. A unit-level restatement here could only re-run
+    // `epoch_close_compute`'s own `sigma_work_milli` + `as_of_e_served_work`
+    // expressions against themselves (tautological), so it is not written at
+    // this layer.
 
     #[test]
     fn epoch_close_bad_interval_excludes_bond_everywhere() {
@@ -1245,7 +1249,7 @@ mod tests {
         }];
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &bad,
         }];
         let shards = [shard(7, bh(0))];
@@ -1262,7 +1266,7 @@ mod tests {
     fn epoch_close_open_shard_zeroes_age_not_scarcity() {
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &[],
         }];
         let shards = [EpochCloseShard {
@@ -1284,7 +1288,7 @@ mod tests {
     fn epoch_close_shared_shard_splits_scarcity() {
         let bond = EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &[],
         };
         let bonds = [bond.clone(), bond];
@@ -1456,5 +1460,42 @@ mod tests {
                 .map(core::num::NonZeroU64::get),
             Some(5)
         );
+    }
+
+    /// The slash-settle operand for epoch `E` (the first block above its
+    /// slash deadline) is STRICTLY greater than `E`'s close-write height.
+    /// Equal is not enough: chain-rules' archival transition scans slashes
+    /// before it closes (`archival::transition`), so at an equal height the
+    /// slash scan would read settlement state the close has not written
+    /// yet.
+    ///
+    /// The two heights are separate derivations
+    /// ([`SettlementSchedule::close_height`] and
+    /// [`SettlementSchedule::slash_deadline_height`]), so this test is their
+    /// coupling: it fires if either one's shape changes, even in a
+    /// direction that stays positive at small epochs. Both are affine in
+    /// `E` with slope `SEB`, so strictness at sampled epochs plus an equal
+    /// difference at every sample holds the property at every epoch.
+    #[test]
+    fn slash_settle_strictly_follows_close_write_at_every_epoch() {
+        let diff_at = |e: u64| {
+            let close_write = epoch_close_height(e).expect("no overflow at test epochs");
+            let slash_settle = settlement_epoch_slash_deadline_height(e) + 1;
+            assert!(
+                slash_settle > close_write,
+                "epoch {e}: slash settles at {slash_settle} but close writes at \
+                 {close_write} - the slash-then-close order would read unsettled state"
+            );
+            slash_settle - close_write
+        };
+        let d0 = diff_at(0);
+        for e in [1u64, 2, 25, 10_000] {
+            assert_eq!(
+                d0,
+                diff_at(e),
+                "slash/close derivations diverge in slope at epoch {e} - one of \
+                 the two separate formulas changed shape"
+            );
+        }
     }
 }

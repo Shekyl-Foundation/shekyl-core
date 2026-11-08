@@ -29,6 +29,10 @@ shekyl-economics = { path = "../shekyl-economics" }
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-units = { path = "../shekyl-units" }
+# The deepest retention the store keeps (`timing_cluster::deepest_retention_epochs`),
+# asked of the validator's `EpochFloor` rather than restated as a horizon.
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+shekyl-types = { path = "../shekyl-types" }
 # GF-7 measurement pipeline (`docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md` §4/§5):
 # this crate is the ONLY home of a recording `BroadcastTimelineObserver` impl
 # (layer 2 of the no-emit guard — a standalone binary no production crate

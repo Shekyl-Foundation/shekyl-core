@@ -12,6 +12,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# A network row's permit for the replay writes (NETWORK_IDENTITY.md NI-R6):
+# the store holds the permit, never the network (rule 71).
+shekyl-network = { path = "../shekyl-network" }
 redb = { workspace = true }
 # The shared redb value contract (CTS-Q2, ruled 2026-09-18): `Canonical`,
 # `CodecError`, the four value shapes, and the codecs for types this crate
@@ -37,6 +40,12 @@ shekyl-units = { path = "../shekyl-units" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 # The block and transaction shapes the store persists as judged.
 shekyl-wire = { path = "../shekyl-wire" }
+# The bundle queue's values (`codec::bundle`): a reference and a body are
+# the retention crate's encodings, carried whole, and the queue's
+# admission window is its schedule. Already a normal dependency of
+# shekyl-chain-rules (rule 17). The slash bench and the admission tests
+# read its constants too.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 
 [features]
 # The pool file can refuse its next commit after the caller's closure has
@@ -76,7 +85,7 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # consensus-visible from either.
 shekyl-harness-spender = { path = "../shekyl-harness-spender" }
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
-# The release-admission tests open under `ReleaseAnchors::for_network`.
+# The release-admission tests open under `GenesisPin::for_network`.
 # The store admits a table and does not know which networks exist (rule
 # 71); the test needs the type that selects the production tables. Already
 # a normal dependency of shekyl-chain-rules (rule 17); test-only here.
@@ -87,18 +96,16 @@ shekyl-address = { path = "../shekyl-address" }
 # dependency of shekyl-chain-rules (rule 17); test-only here — the store
 # derives nothing consensus-visible.
 shekyl-economics = { path = "../shekyl-economics" }
-# The slash geometry the B9 bench (`store::slash_scan_bench_tests`) builds
-# its chain against — the resolution window, the failure window's `M`, the
-# bond floor it asserts left each slashed record. Already a normal
-# dependency of shekyl-chain-rules (rule 17); test-only here, for the same
-# reason as `shekyl-economics`.
-shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # The leaf-chunk width the leaf-read tests derive their tree shape from
 # (how many leaves fit the first chunk, so where the frontier's depth
 # moves): read from the crate that owns it, not restated. Already a normal
 # dependency of shekyl-chain-rules (rule 17); test-only here, for the same
 # reason as `shekyl-economics`.
 shekyl-fcmp = { path = "../shekyl-fcmp" }
+# Each test store's own directory (`test_paths.rs`), which takes the
+# store's sidecar files with it when the test ends, and the RT-W10
+# harness's scratch output (`store/rt_w10_cost.rs`).
+tempfile = { workspace = true }
 # The v7 cross-check corpus (`codec::archival_tests`) is JSON written by the
 # C++ unit test that still owns the decoder; read with the workspace's
 # serde_json (rule 17: already a workspace dependency, no new crate).

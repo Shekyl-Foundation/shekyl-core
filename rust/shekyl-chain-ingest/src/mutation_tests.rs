@@ -29,14 +29,12 @@ use crate::scenario_archival::{complete_tree, Persona};
 use crate::schedule::ChainRules;
 use crate::source::IngestEvent;
 use crate::test_support::{
-    bare_chain, block_with_nonce, chain, cleanup, h, open_store, tmp, trace_of, Family, Growing,
-    Scripted, FIRST_SPEND_HEIGHT,
+    bare_chain, block_with_nonce, chain, h, open_store, tmp, trace_of, Family, Growing, Scripted,
+    FIRST_SPEND_HEIGHT,
 };
 
-const GENESIS_RULES: ChainRules = ChainRules::Regtest {
-    fixed_difficulty: None,
-    schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
-};
+const GENESIS_RULES: ChainRules =
+    ChainRules::harness_regtest(None, shekyl_chain_rules::CappedEpoch::PRODUCTION);
 
 /// D1's target for the mined chain: half of all hashes pass.
 const MINED_DIFFICULTY: u128 = 2;
@@ -51,10 +49,10 @@ const NONCE_BUDGET: u32 = 1 << 16;
 const WRONG_SEED: [u8; 32] = [0xbb; 32];
 
 fn mined_rules() -> ChainRules {
-    ChainRules::Regtest {
-        fixed_difficulty: Some(NonZeroU128::new(MINED_DIFFICULTY).expect("non-zero")),
-        schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
-    }
+    ChainRules::harness_regtest(
+        Some(NonZeroU128::new(MINED_DIFFICULTY).expect("non-zero")),
+        shekyl_chain_rules::CappedEpoch::PRODUCTION,
+    )
 }
 
 /// A seed-sensitive mock longhash: `keccak256(blob ‖ seed)`. Deterministic,
@@ -241,10 +239,10 @@ async fn judge(
         PipelineConfig {
             window: NonZeroUsize::new(4).expect("non-zero"),
             hashers: NonZeroUsize::new(2).expect("non-zero"),
+            digest_each_commit: false,
         },
     )
     .await;
-    cleanup(&path);
     match out {
         Ok(report) => Outcome::Report(Box::new(report)),
         Err(fault) => Outcome::Fault(fault),
@@ -598,7 +596,8 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
         | Mutation::SubstitutedBody
         | Mutation::RelistedTransaction
         | Mutation::DoubledListing
-        | Mutation::ForgedSignature => {
+        | Mutation::ForgedSignature
+        | Mutation::TooManyInputs => {
             let chain = chain(n);
             let outcome = judge(
                 &format!("{mutation:?}").to_lowercase(),
@@ -667,7 +666,6 @@ async fn the_mined_chain_replays_clean_under_the_seeded_hasher() {
         report.exercised.contains("CEN-D1"),
         "D1 was judged, not skipped"
     );
-    cleanup(&path);
 }
 
 /// Numbering, one mutated block, and the faults raised before a row is judged.

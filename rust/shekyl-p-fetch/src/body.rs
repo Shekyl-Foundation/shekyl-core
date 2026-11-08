@@ -156,8 +156,9 @@ pub(crate) async fn read_frame<S: AsyncRead + Unpin>(
             return Ok((checker, Some(mismatch)));
         }
     }
-    if reader.content_remaining() != 0 {
-        return Err(FetchError::Malformed(Malformed::FrameLong));
+    let left = reader.content_remaining();
+    if left != 0 {
+        return Err(FetchError::Malformed(Malformed::FrameLong { left }));
     }
     Ok((checker, None))
 }

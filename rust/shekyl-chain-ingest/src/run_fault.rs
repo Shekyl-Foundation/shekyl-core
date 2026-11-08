@@ -9,10 +9,9 @@
 //! messages share, so a new message maps a fault by calling [`fault_reply`]
 //! rather than growing another copy of the stale arms.
 
-use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
 use shekyl_chain_rules::{Corrupt, Fault, ReferenceMismatch, Retry, Stale, Target, TxSlot};
-use shekyl_chain_store::store::{StoreError, StoreInvariant};
+use shekyl_chain_store::store::{ChainStore, StoreError, StoreInvariant};
 use shekyl_types::{BlockHash, BlockHeight, SettlementEpoch};
 
 /// Why the writer is over: store-terminal faults only. `Copy` data, so it
@@ -37,11 +36,12 @@ impl RunEnd {
             | RunFault::StaleTarget { .. }
             | RunFault::StaleReference { .. }
             | RunFault::StaleRuleSet { .. }
+            | RunFault::StaleNetwork { .. }
             | RunFault::HeightClaim { .. }
             | RunFault::NoNextHeight { .. }
             | RunFault::RewindTarget { .. }
-            | RunFault::InjectOffRegtest { .. }
-            | RunFault::IssueOffRegtest { .. }
+            | RunFault::InjectNotPermitted { .. }
+            | RunFault::IssueNotPermitted { .. }
             | RunFault::NotAlternative { .. }
             | RunFault::StalePlan { .. }
             | RunFault::PlanMismatch { .. }
@@ -146,6 +146,20 @@ pub enum RunFault {
         /// The connecting height.
         height: BlockHeight,
     },
+    /// `form` bound signatures under a network id other than the one
+    /// `validate` was given. A driver defect, the same class as
+    /// [`Self::StaleRuleSet`]; the writer stays up.
+    #[error("driver defect: network id handed to form at height {height} was {formed_under:?}, validate holds {in_force:?} ({retry:?})")]
+    StaleNetwork {
+        /// The connecting height.
+        height: BlockHeight,
+        /// What `form` bound.
+        formed_under: shekyl_network::NetworkId,
+        /// What `validate` was given.
+        in_force: shekyl_network::NetworkId,
+        /// What the validator would allow next.
+        retry: Retry,
+    },
     /// The source's height for an `Extend` is not the height the chain
     /// connects at (`tip + 1` on the batch's view). Nothing is judged: the
     /// rule set and the record are both keyed by the connecting height,
@@ -175,27 +189,27 @@ pub enum RunFault {
         /// The tip at the time.
         tip: Option<BlockHeight>,
     },
-    /// An [`super::Inject`] under rules other than regtest. The out-of-band
-    /// write has one producer — the regtest injector — and no chain but a
-    /// regtest chain can carry one (DRS-E4 §3.8 item 3); refused here,
-    /// before the store sees it, so a source that carries one into a
-    /// scheduled replay is a driver fault and not a store-terminal one.
-    #[error("inject for {persona} (shard {shard}, epoch {epoch}) under {rules:?}: the out-of-band serve credit is regtest-only", persona = credit.persona, shard = credit.shard, epoch = credit.epoch)]
-    InjectOffRegtest {
+    /// An [`super::Inject`] under rules whose network's row does not permit
+    /// the write (DRS-E4 §3.8 item 3; `NETWORK_IDENTITY.md` NI-R6): refused
+    /// here, before the store sees it, so a source that carries one into a
+    /// replay of another network is a driver fault and not a store-terminal
+    /// one.
+    #[error("inject for {persona} (shard {shard}, epoch {epoch}) on {network}: its row does not permit the serve-credit write", persona = credit.persona, shard = credit.shard, epoch = credit.epoch)]
+    InjectNotPermitted {
         /// The credit refused.
         credit: ServeCredit,
-        /// The rules the connector runs under.
-        rules: ChainRules,
+        /// The network the connector runs on.
+        network: shekyl_network::Network,
     },
-    /// An [`super::IssueDraws`] under rules other than regtest: the door has
-    /// one producer, as [`super::Inject`]'s has, and is refused here for the
-    /// same reason.
-    #[error("issue of draws for epoch {epoch} under {rules:?}: the out-of-band draw issue is regtest-only")]
-    IssueOffRegtest {
+    /// An [`super::IssueDraws`] under rules whose network's row does not
+    /// permit the write, refused here for the same reason as
+    /// [`Self::InjectNotPermitted`].
+    #[error("issue of draws for epoch {epoch} on {network}: its row does not permit the issued-draws write")]
+    IssueNotPermitted {
         /// The epoch the draws were for.
         epoch: SettlementEpoch,
-        /// The rules the connector runs under.
-        rules: ChainRules,
+        /// The network the connector runs on.
+        network: shekyl_network::Network,
     },
     /// An [`super::OfferAlt`] for a block whose parent is the recorded tip:
     /// an extension, which is an [`super::Apply`]'s. A driver defect; the
@@ -232,7 +246,8 @@ pub enum RunFault {
 ///
 /// `arm_corrupt` is the one difference between the two sites: on the connect
 /// batch the refusal is `batch.refuse_corrupt` inside the live write; over a
-/// snapshot the refusal is a write whose only job is to arm the halt.
+/// snapshot the refusal is [`halt_on_corrupt`], a write whose only job is
+/// to arm the halt.
 pub(crate) fn fault_reply(
     height: BlockHeight,
     fault: Fault<StoreError>,
@@ -274,5 +289,81 @@ pub(crate) fn fault_reply(
             retry,
         },
         Fault::Stale(Stale::RuleSet { .. }) => RunFault::StaleRuleSet { height },
+        Fault::Stale(Stale::Network {
+            formed_under,
+            in_force,
+            retry,
+        }) => RunFault::StaleNetwork {
+            height,
+            formed_under,
+            in_force,
+            retry,
+        },
+    }
+}
+
+/// Arm the shared writer halt for a chain a snapshot found corrupt, and
+/// return that halt.
+///
+/// The write commits nothing. [`WriteBatch::refuse_corrupt`](shekyl_chain_store::store::WriteBatch::refuse_corrupt)
+/// notes the connecting height and arms the invariant; the closure fails;
+/// [`ChainStore::write`] prefers the invariant, aborts the batch, and
+/// latches [`ChainStore::connect_state`]. A learn or a queue classification
+/// that finds nothing wrong calls nothing here.
+pub(crate) fn halt_on_corrupt(store: &ChainStore, corrupt: Corrupt) -> RunFault {
+    let halted: Result<(), RunFault> =
+        store.write(|batch| Err(RunFault::Store(batch.refuse_corrupt(corrupt))));
+    halted.expect_err("an armed invariant halts the writer")
+}
+
+#[cfg(test)]
+mod tests {
+    use shekyl_chain_rules::Corrupt;
+    use shekyl_chain_store::store::{ConnectState, StoreCannot, StoreError, StoreInvariant};
+    use shekyl_types::archival::SettlementEpochBlocks;
+    use shekyl_types::BlockHeight;
+
+    use super::*;
+
+    /// A corrupt snapshot arms the halt the wallets read, and the batch
+    /// that armed it committed nothing. Red edit: return the invariant
+    /// without `refuse_corrupt` — `connect_state` stays live.
+    #[test]
+    fn a_corrupt_snapshot_arms_the_shared_halt_and_commits_nothing() {
+        let path = crate::test_support::tmp("halt-on-corrupt");
+        let store = ChainStore::create(
+            &path,
+            SettlementEpochBlocks::new(10_000).expect("a non-zero epoch"),
+        )
+        .expect("create");
+        assert!(store.connect_state().is_live());
+
+        let fault = halt_on_corrupt(&store, Corrupt::CumulativeDifficultyOverflow);
+        let row = StoreInvariant::FoldOverflow {
+            cell: "block_info.cumulative_difficulty",
+        };
+        assert!(
+            matches!(fault, RunFault::Store(StoreError::InvariantViolated(got)) if got == row),
+            "{fault:?}"
+        );
+        assert_eq!(
+            store.connect_state(),
+            ConnectState::Halted {
+                at_height: BlockHeight::ZERO,
+                row,
+            }
+        );
+
+        let refused = store.write(|_batch| Ok::<(), StoreError>(()));
+        assert!(
+            matches!(
+                refused,
+                Err(StoreError::Cannot(StoreCannot::WriterHalted { .. }))
+            ),
+            "{refused:?}"
+        );
+        let tip = store.begin_read().expect("read").tip().expect("tip");
+        assert!(tip.recorded.is_none(), "the arm committed no block");
+        assert_eq!(tip.connect, store.connect_state());
     }
 }

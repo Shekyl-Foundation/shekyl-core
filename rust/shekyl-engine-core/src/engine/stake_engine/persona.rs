@@ -192,7 +192,7 @@ impl Message<PersonaOnionIdentityOf> for StakeEngine {
 /// A copy of it in the serving role would be restricted at the API, not by the
 /// key — one edit from a serving task that signs a claim. So **the secret does
 /// not cross the actor boundary at all**: the serving role sends the
-/// 112-byte transcript in and receives the signature out, per served shard
+/// 113-byte transcript in and receives the signature out, per served shard
 /// (`SF-D13`, "injection, not custody"; `SH2_RESIDENT_KEY_AUDIT.md` §3 Q1).
 ///
 /// The domain is fixed by [`sign_pass_transcript`] itself, the only signing
@@ -245,7 +245,7 @@ impl Message<SignPassTranscript> for StakeEngine {
 /// in the change that makes a verifier accept scheme-3 receipts.
 ///
 /// The shape is [`SignPassTranscript`]'s for the same reason: the secret
-/// does not cross the actor boundary. The 112-byte transcript goes in, the
+/// does not cross the actor boundary. The 113-byte transcript goes in, the
 /// signature comes out. The domain is fixed by
 /// [`shekyl_p_host::sign_receipt_transcript`], which
 /// [`HeldPersona::sign_receipt_transcript`] calls, so this handler cannot
@@ -310,49 +310,6 @@ impl Message<ReceiptKeyIsBuilt> for StakeEngine {
         self.held
             .get(&msg.p_slot)
             .map(|held| held.receipt_key().built().is_some())
-    }
-}
-
-/// The read-only handle on the actor's body store.
-///
-/// The writer stays on the actor (`WSS-Q1`(a)). The reader still holds the
-/// store key and decrypts on the serve path, so this is not `WSS-Q13`.
-pub(crate) struct ServingBodies;
-
-impl Message<ServingBodies> for StakeEngine {
-    type Reply = Result<shekyl_p_store::BodyStoreReader, StakeEngineError>;
-
-    async fn handle(
-        &mut self,
-        _msg: ServingBodies,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self.body_store.reader())
-    }
-}
-
-/// Erase body-store rows the pin-release gate has cleared (`WSS-Q8`).
-///
-/// The writer stays on this actor. The serving host asks; it does not
-/// hold the store key.
-pub(crate) struct EraseReleasedShards {
-    pub shard_ids: Vec<u64>,
-}
-
-impl Message<EraseReleasedShards> for StakeEngine {
-    type Reply = Result<(), String>;
-
-    async fn handle(
-        &mut self,
-        msg: EraseReleasedShards,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        for id in msg.shard_ids {
-            self.body_store
-                .erase_shard(shekyl_types::ShardId::from_raw(id))
-                .map_err(|e| e.to_string())?;
-        }
-        Ok(())
     }
 }
 

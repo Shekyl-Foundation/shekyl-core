@@ -14,7 +14,10 @@
 //! a fresh file (SCW-17). Fixtures live in `connect_fixtures.rs`.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::{Corrupt, Fault, RowStatus, RuleSet, RuleSetId, Trust};
+use shekyl_archival_retention::{BundleKept, PassBitmap};
+use shekyl_chain_rules::{
+    Admitted, Corrupt, DrawableMemo, Fault, RowStatus, RuleSet, RuleSetId, Trust,
+};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
@@ -25,7 +28,7 @@ use super::connect_fixtures::{
     judge, key_images, prefix_to, priced_on, spend, spend_paying, spendable_prefix,
     FIRST_SPEND_HEIGHT,
 };
-use super::store_tests::{cleanup, production_horizons, tmp, TestErr, EPOCH};
+use super::store_tests::{production_horizons, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
 use super::*;
 use crate::codec::{
@@ -35,9 +38,9 @@ use crate::codec::{
 use crate::ids::OutputSlot;
 use crate::lmdb_order::{Hash32, LmdbHashKey};
 use crate::schema::{
-    BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
-    OUTPUT_TXS, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES,
-    TX_OUTPUTS, UNDO_LOG,
+    BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, OUTPUT_AMOUNTS, OUTPUT_TXS,
+    RULE_SET_IN_FORCE, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED,
+    TX_INDICES, TX_OUTPUTS, UNDO_LOG,
 };
 use shekyl_chain_rules::harness::fixture;
 
@@ -52,12 +55,13 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     // miner tx: spent_keys 0, tx_indices 1, txs_pruned 1, txs_prunable 1,
     // txs_prunable_hash 1, output_txs 1, output_amounts 1, tx_outputs 1;
     // leaf count 1 (DRS-E3, every connect); root 1; blocks 1,
-    // block_heights 1, block_info 1; hf_versions 1; the open epoch's
+    // block_heights 1, block_info 1; rule_set_in_force 1; the open epoch's
     // `archival_budget_accruing` upsert 1 (DRS-E4 commit 5, every connect
     // that is not a close); the recorded PoW 1 (`block_pow`); the drawable
     // digest of epoch 0, which genesis opens, 1 (`SO-D12` increment 2);
-    // the draw row at genesis, 1 (`SO-D12` increment 3).
-    assert_eq!(connected.journaled, 17, "no pqc_auths row, no burn rows");
+    // the draw row at genesis, 1 (`SO-D12` increment 3);
+    // the support count at genesis, 1 (`ARCHIVAL_SUPPORT_DRAW.md` §5).
+    assert_eq!(connected.journaled, 18, "no pqc_auths row, no burn rows");
 
     let miner = &block.miner_transaction;
     let miner_hash = Hash32::from(miner.hash());
@@ -126,13 +130,13 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         weights.weight.to_raw()
     );
     assert_eq!(
-        snap.open_table(HF_VERSIONS)
+        snap.open_table(RULE_SET_IN_FORCE)
             .expect("t")
             .get(0)
             .expect("g")
             .map(|g| g.value().decode().expect("decodes")),
         Some(RuleSetInForce(RuleSetId::GENESIS)),
-        "hf_versions[h] is the rule set in force's id (SCW-16; the id, not the set — RD-Q10)"
+        "rule_set_in_force[h] is the rule set in force's id (SCW-16; the id, not the set — RD-Q10)"
     );
     assert_eq!(
         snap.open_table(CURVE_TREE_ROOTS)
@@ -285,11 +289,12 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         .value()
         .decode()
         .expect("decodes");
-    assert_eq!(undo.0.len(), 17);
+    assert_eq!(undo.0.len(), 18);
     // Genesis opens epoch 0 and writes its drawable digest: the empty
     // set's, since no bond joins before epoch 0. A row, not an absence.
     let empty = shekyl_chain_rules::DrawableEpoch::new(
         shekyl_types::SettlementEpoch::from_raw(0),
+        None,
         Vec::<(
             shekyl_types::PCanonicalId,
             shekyl_types::archival::ReceiptSignPk,
@@ -305,6 +310,12 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         .expect("read"),
         Some(empty.digest())
     );
+    assert_eq!(
+        snap.support_block_seats(BlockHeight::ZERO, shekyl_chain_rules::BlockDrawsFloor::NONE,)
+            .expect("read"),
+        Some(shekyl_types::archival::SupportSeats::EMPTY),
+        "genesis records that it issued no support draws"
+    );
     // The recorded PoW (`block_pow`, layout 26): one row at genesis, under
     // the null seed CEN-D3 names below the first epoch.
     let pow: crate::codec::RecordedPow = snap
@@ -317,7 +328,6 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         .decode()
         .expect("decodes");
     assert_eq!(pow.seed, BlockHash::NULL);
-    cleanup(&path);
 }
 
 /// *Records-was:* `two_blocks_in_one_batch_with_a_spend_and_a_burn` until
@@ -378,10 +388,11 @@ fn two_blocks_in_one_batch_with_a_spend() {
     // image + the same 4 tx rows + the 4-part txid's txs_pqc_auths segment
     // and txs_pqc_auth_hash row + its txs_archival_len row (`SHT-Q2`; the
     // coinbase carries no length and writes none) + 2 outputs × (output_txs
-    // + member) + tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 +
+    // + member) + tx_outputs) + leaf count 1 + root 1 + block 3 +
+    // rule_set_in_force 1 +
     // the open epoch's `archival_budget_accruing` upsert 1 (DRS-E4 commit
     // 5) + the recorded PoW 1 (`block_pow`) + the draw row 1 (`SO-D12`
-    // increment 3) = 29, plus the drain: `s` is past the unlock window, so block
+    // increment 3) + the support count 1 = 30, plus the drain: `s` is past the unlock window, so block
     // `s − W`'s coinbase matures here — one leaf (its leaf row and the two
     // position-map rows, `grow.rs` 3a), the chunk it lands in and the root
     // chunk over it (the tree's `s − W` leaves fit one chunk: two layer
@@ -390,7 +401,7 @@ fn two_blocks_in_one_batch_with_a_spend() {
     assert_eq!(drained_leaves, 1, "block s − W's coinbase alone");
     assert_eq!(layer_writes, 2, "a one-chunk tree: its chunk and the root");
     let drain_rows = 3 * drained_leaves + layer_writes + 1;
-    assert_eq!(c1.journaled, 29 + drain_rows);
+    assert_eq!(c1.journaled, 30 + drain_rows);
     // Dense store ids: one coinbase per block through the spend block
     // (tx_ids `0..=s`, output_ids likewise), then the spend (tx_id `s + 1`,
     // output_ids `s + 1`, `s + 2`); amount_index under 0 equals output_id.
@@ -492,7 +503,6 @@ fn two_blocks_in_one_batch_with_a_spend() {
             .map(|g| g.value().bytes().to_vec()),
         Some(expected_prunable)
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -582,7 +592,6 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
         .get(next)
         .expect("g")
         .is_none());
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------- belts
@@ -629,7 +638,6 @@ fn a_block_whose_parent_is_not_the_tip_is_si2() {
             row: StoreInvariant::TipMismatch,
         }
     );
-    cleanup(&path);
 }
 
 /// Genesis, plant through `plant`, connect block 1 — SI-9 poisons and
@@ -660,7 +668,6 @@ fn plant_then_connect_is_si9(
             row: StoreInvariant::IdNotFresh,
         }
     );
-    cleanup(&path);
 }
 
 fn slot(amount: u64, index: u64) -> OutputSlot {
@@ -780,7 +787,6 @@ fn a_key_image_recorded_under_a_judged_token_is_si1() {
         s,
         "nothing landed"
     );
-    cleanup(&path);
 }
 
 /// Reach the SI-3 belt. Since E6 slice 7 commit 7 CEN-G1 refuses a listed
@@ -830,7 +836,6 @@ fn the_same_transaction_in_two_blocks_is_si3() {
         Ok(batch.connect(judged, RuleSet::GENESIS)?)
     });
     expect_row(&out, StoreInvariant::TxHashNotFresh);
-    cleanup(&path);
 }
 
 /// A `total_burned` register seeded at `u64::MAX` — the pre-image of the
@@ -857,7 +862,7 @@ fn a_total_burned_register_above_the_emission_halts_the_writer_before_the_fold()
         let view = batch.chain_view();
         let formed =
             super::connect_fixtures::formed(&view, candidate(1, genesis.hash(), Vec::new()))?;
-        match shekyl_chain_rules::validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+        match shekyl_chain_rules::validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
             Err(Fault::Corrupt(corrupt)) => {
                 assert!(
                     matches!(corrupt, Corrupt::BurnExceedsEmission { .. }),
@@ -889,7 +894,6 @@ fn a_total_burned_register_above_the_emission_halts_the_writer_before_the_fold()
         Some(AtomicUnits::from_raw(u64::MAX)),
         "unchanged: the batch aborted"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -911,7 +915,6 @@ fn a_root_already_recorded_at_the_connecting_height_is_si4() {
         )?)
     });
     expect_row(&out, StoreInvariant::RootRewritten);
-    cleanup(&path);
 }
 
 // -------------------------------------------------------- provenance
@@ -1006,7 +1009,6 @@ fn a_partial_validators_connect_taints_the_files_provenance_with_its_coverage_ga
     let ro = ChainStore::open_read_only(&path, production_horizons()).expect("ro");
     assert_eq!(ro.provenance(), prov);
     assert_eq!(ro.provenance().artifact_stamp(), prov.artifact_stamp());
-    cleanup(&path);
 }
 
 #[test]
@@ -1046,7 +1048,6 @@ fn coverage_gaps_widen_in_the_committing_batch_and_never_narrow() {
     });
     assert_eq!(out, Ok(()));
     assert_eq!(store.provenance(), prov);
-    cleanup(&path);
 }
 
 // `deleted_by_and_the_persisted_field_names_are_one_list` and
@@ -1055,3 +1056,51 @@ fn coverage_gaps_widen_in_the_committing_batch_and_never_narrow() {
 // fields still passed through — seven until E6 slice 2, six until DRS-E3,
 // five until E6 slice 7 commit 5, one until wave B. Both left with the
 // types on 2026-09-29: there is no field to count.
+
+/// An admission fault halts at the block being connected.
+///
+/// The block row is already in `BLOCK_INFO` when admission runs. Building
+/// the view through `chain_view` would note `tip + 1` and halt the writer
+/// at the next height. The bundle names the next epoch's open, which this
+/// chain has not recorded, so the journal faults SI-36 `RowAbsent`.
+#[test]
+fn an_admission_fault_halts_at_the_admitting_block() {
+    use super::error::AdmissionWriteFault;
+
+    let path = tmp("connect-admission-halt");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let (_, genesis) = connect_genesis(&store);
+    let block = candidate(1, genesis.hash(), Vec::new());
+    let schedule = RuleSet::GENESIS.settlement_schedule();
+    let admitting = BlockHeight::from_raw(1);
+    let unrecorded =
+        BlockHeight::from_raw(schedule.open_height(schedule.epoch_at(admitting).to_raw() + 1));
+    let admitted = [Admitted {
+        kept: BundleKept {
+            h: unrecorded,
+            seed: [0x11; 32],
+            passes: PassBitmap::from_passes(0, []).expect("an empty bitmap"),
+            support: PassBitmap::none(),
+        },
+        draws: Vec::new(),
+        support: Vec::new(),
+    }];
+    let memo = DrawableMemo::new();
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let judged = judge(&view, block)?;
+        Ok(batch.connect_admitting(judged, RuleSet::GENESIS, Some((&memo, &admitted)))?)
+    });
+    let row = StoreInvariant::AdmissionWrite {
+        height: unrecorded,
+        observed: AdmissionWriteFault::RowAbsent,
+    };
+    expect_row(&out, row);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: admitting,
+            row,
+        }
+    );
+}

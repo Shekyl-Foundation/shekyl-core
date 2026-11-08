@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use shekyl_engine_core::Capability;
+use shekyl_engine_core::{Capability, Network};
 use shekyl_rpc_types::Nullable;
 
 use crate::error::WalletRpcError;
@@ -214,6 +214,20 @@ pub fn capability_mode_str(cap: Capability) -> &'static str {
     }
 }
 
+/// The wallet-rpc wire spelling of a network. Uppercase and frozen:
+/// `MAINNET`, `TESTNET`, `STAGENET`, `REGTEST`
+/// (`docs/api/wallet_rpc.yaml`). The operator grammar is
+/// [`Network::name`], lowercase.
+#[must_use]
+pub(crate) fn network_wire(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => "MAINNET",
+        Network::Testnet => "TESTNET",
+        Network::Stagenet => "STAGENET",
+        Network::Regtest => "REGTEST",
+    }
+}
+
 /// `WalletHandle` returned by lifecycle methods that leave a wallet open.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WalletHandle {
@@ -221,7 +235,7 @@ pub struct WalletHandle {
     pub name: String,
     /// Capability mode. Always `FULL` — the only capability (rule 23).
     pub capability: String,
-    /// Network (`MAINNET` / `TESTNET` / `STAGENET`).
+    /// Network (`MAINNET` / `TESTNET` / `STAGENET` / `REGTEST`).
     pub network: String,
     /// Present when open reconstructed state from `restore_height_hint`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -332,9 +346,11 @@ pub struct VerifyMessageResult {
 /// `get_height` result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetHeightResult {
-    /// Wallet synced height (always available — read from local state).
+    /// Blocks the wallet has scanned through, counted like `daemon_height`:
+    /// `0` before the first scan, and equal to `daemon_height` once synced
+    /// (always available — read from local state).
     pub wallet_height: i64,
-    /// Daemon chain height, or `null` when the daemon is unreachable. The
+    /// Daemon chain height (its block count), or `null` when the daemon is unreachable. The
     /// wallet height is still returned in that case so an offline/​syncing
     /// node does not hide the wallet's own status.
     pub daemon_height: Option<i64>,
@@ -479,13 +495,13 @@ pub struct GetWalletInfoResult {
     pub name: String,
     /// Capability mode. Always `FULL` — the only capability (rule 23).
     pub capability: String,
-    /// Network (`MAINNET` / `TESTNET` / `STAGENET`).
+    /// Network (`MAINNET` / `TESTNET` / `STAGENET` / `REGTEST`).
     pub network: String,
     /// Primary address.
     pub address: String,
-    /// Wallet synced height.
+    /// Wallet synced height, counted like `daemon_height` (as `get_height`).
     pub wallet_height: i64,
-    /// Daemon height, or `null` when unreachable.
+    /// Daemon height (its block count), or `null` when unreachable.
     pub daemon_height: Option<i64>,
     /// Scan floor (`restore_from_height`) for this wallet.
     pub restore_height: i64,
@@ -521,7 +537,8 @@ pub struct RefreshResult {
     pub blocks_processed: i64,
     /// Detected transfers ingested this call.
     pub transfers_detected: i64,
-    /// Wallet synced height after the refresh.
+    /// Wallet synced height after the refresh, counted as `get_height`'s
+    /// `wallet_height`.
     pub synced_height: i64,
     /// Present iff a reorg was detected and rewound this refresh.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -545,7 +562,8 @@ pub struct RescanBlockchainResult {
     pub blocks_processed: i64,
     /// Detected transfers ingested this call.
     pub transfers_detected: i64,
-    /// Wallet synced height after the rescan.
+    /// Wallet synced height after the rescan, counted as `get_height`'s
+    /// `wallet_height`.
     pub synced_height: i64,
 }
 
@@ -805,7 +823,7 @@ pub struct StakingInfoResult {
     /// The last ending per kind of staking action (WR-Q2). Empty means none.
     pub outcomes: Vec<StakingOutcomeEntry>,
     /// What the serving host is currently obligated to serve
-    /// (`"market"` / `"foundation_complete_tree"`), or `null` when no host
+    /// (`"market"` / `"support_complete_tree"`), or `null` when no host
     /// is running — see the contract's `StakingInfoResult.posture`.
     /// Required: "no host" is an answer (rule 43).
     ///

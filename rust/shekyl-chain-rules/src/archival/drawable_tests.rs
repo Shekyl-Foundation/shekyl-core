@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_types::archival::{ReceiptSignPk, SlashLogEntry};
-use shekyl_types::{ArchivalLength, SHARD_LENGTH};
+use shekyl_types::{ArchivalLength, BlockHash, SHARD_LENGTH};
 use shekyl_units::AtomicUnits;
 
 use shekyl_archival_retention::SLASH_GRACE_EPOCHS;
@@ -182,9 +182,21 @@ fn height_zero_and_all_of_epoch_zero_issue_no_draw() {
         SETTLEMENT_EPOCH_BLOCKS / 2,
         SETTLEMENT_EPOCH_BLOCKS - 1,
     ] {
-        let horizon = draw_horizon(r, SETTLEMENT_EPOCH_BLOCKS, CHALLENGE_RESPONSE_BLOCKS);
-        let (count, next) = draw_count(d, shortfall, horizon, SETTLEMENT_EPOCH_BLOCKS, carry)
-            .expect("the schedule's epoch and horizon are non-zero");
+        let horizon = draw_horizon(
+            r,
+            SETTLEMENT_EPOCH_BLOCKS,
+            CHALLENGE_RESPONSE_BLOCKS,
+            shekyl_archival_retention::archival_params(),
+        );
+        let (count, next) = draw_count(
+            d,
+            shortfall,
+            horizon,
+            SETTLEMENT_EPOCH_BLOCKS,
+            carry,
+            shekyl_archival_retention::archival_params(),
+        )
+        .expect("the schedule's epoch and horizon are non-zero");
         assert_eq!(count, 0, "no draw at block {r} of epoch 0");
         carry = next;
     }
@@ -192,7 +204,7 @@ fn height_zero_and_all_of_epoch_zero_issue_no_draw() {
 
     // Whatever seed a block committed to, and whatever it hashes to, there
     // is no pair for a draw to select.
-    const BLOCK_HASH: [u8; 32] = [0x22; 32];
+    const BLOCK_HASH: BlockHash = BlockHash::from_bytes([0x22; 32]);
     for seed in [[0u8; 32], [0x11; 32]] {
         assert_eq!(
             select_draw(&seed, &BLOCK_HASH, 0, d, |_| Ok::<_, ()>(true)),
@@ -227,16 +239,13 @@ fn compact_holdings_keep_only_final_shards_and_sort_canonically() {
     assert_eq!(emitted(E1, &records, 2), [pair(P1, 1), pair(P2, 0)]);
 }
 
-/// Pin 2 on a complete tree: it expands to the closed-and-final prefix at
-/// `h_open`, not to every shard and not to tip's registry. Red edit: expand
-/// to a count read anywhere but the open.
+/// A complete tree is a support role and contributes no economy pair, at
+/// any final count. Red edit: expand it over `0..final_count`.
 #[test]
-fn complete_tree_expands_the_closed_and_final_prefix() {
-    assert_eq!(
-        emitted(E1, &[complete(P1, 0)], 2),
-        [pair(P1, 0), pair(P1, 1)]
-    );
+fn a_complete_tree_is_not_in_the_economy_set() {
+    assert!(emitted(E1, &[complete(P1, 0)], 2).is_empty());
     assert!(emitted(E1, &[complete(P1, 0)], 0).is_empty());
+    assert!(emitted(E1, &[complete(P1, 0)], 64).is_empty());
 }
 
 /// A persona with no drawable pair contributes no key: its key is not
@@ -597,6 +606,7 @@ fn the_recorded_digest_is_missing_unopened_or_drift() {
     let h_open = BlockHeight::from_raw(200);
     let empty = DrawableEpoch::new(
         epoch,
+        None,
         Vec::<(PCanonicalId, ReceiptSignPk)>::new(),
         Vec::<DrawablePair>::new(),
     )

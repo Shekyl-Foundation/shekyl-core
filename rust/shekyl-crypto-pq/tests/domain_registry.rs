@@ -28,8 +28,9 @@
 //! `salt|info`, because a derivation's
 //! separation comes from the (salt, info) pair, not the info alone: the three
 //! shared info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) appear as both a
-//! const (composed `salt_for` salt) and an inline `SeedDerivation` (fixed
-//! `shekyl-master-derive-v1` salt) — legitimately distinct derivations that a
+//! const (composed `salt_for` salt) and the harness fixture wallet's inline
+//! `fixture_expand` (fixed `shekyl-master-derive-v1` salt, test-only) —
+//! legitimately distinct derivations that a
 //! bare-info test would wrongly report as a collision, and which SA-3b is NOT
 //! permitted to "fix" (it mutates zero domain values).
 //!
@@ -54,6 +55,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+#[path = "support/registry_parse.rs"]
+mod registry_parse;
+
+use registry_parse::{parse_rows, Row};
+
 const REGISTRY: &str = include_str!("../../../docs/design/CRYPTO_DOMAIN_REGISTRY.tsv");
 
 /// Pinned census: (mech, shekyl-live rows, frozen-inherited rows). Update when
@@ -61,8 +67,8 @@ const REGISTRY: &str = include_str!("../../../docs/design/CRYPTO_DOMAIN_REGISTRY
 /// The CBOM table (docs/CRYPTOGRAPHIC_INVENTORY.md §3) is a dated snapshot of
 /// these numbers.
 const PRODUCTION_PINS: [(&str, usize, usize); 7] = [
-    ("1", 53, 0), // SO-D12 increment 2: +1 (archival-drawable-epoch-v1); FCMP++ batch weights (R3): +2 (fcmp-pp-batch-weights-v1, fcmp-membership-only-batch-weights-v1); CEN-H19 (ruling R3): +1 (bp-plus-batch-weights-v1); bundle verifier: +4 (archival-witness-bundle-scheme-v1, scheme 3; archival-serve-credit-bundle-v1, archival-bundle-prunable-v1, archival-bundle-root-v1); RT-W8: +2 (rpc-rendezvous-name-v1, rpc-static-fingerprint-v1); public urn deleted: -1 (archival-challenge-assignment-v1); Slice C: +4 (archival-draw-v1, archival-draw-commit-v1, archival-challenge-nonce-v1, archival-serve-credit-batch-v1); WSS-Q1: +2 (p-store-aead-v1, p-store-slot-v1); FN-DSA hybrid: +2 (archival-receipt-scheme-v1, archival-witness-carrier-scheme-v1, both scheme 3); settlement: +2 (archival-settlement-select-v1, archival-issued-index-v1); PL-D3: +2 (pqc-leaf-key-v1, pqc-leaf-record-v1); DRS-P0d: +3 (chain-digest/v0{,/chain,/spent-elem}); SF-D8: -1 (attestation-nonce-v1 retired); S-CHAIN-W: +1 (chain-store/undo-log/post-image-v1); PWD-T5: +1 (p2p-wire-prefix-v1); network id: +1 (p2p-network-id-v1); SF-D8 v3: +1 (archival-pass-delivery-digest-v1); SV-D1: +1 (archival-shard-view-hash-v1)
-    ("2", 48, 0), // persona SLH-DSA key deleted (2026-10-18, FND-25): -1 (archival-p msg-sign identity); receipt key: +2 (archival-p-receipt-ed25519-v1, archival-p-receipt-fn-dsa-1024-v1); PL-D3: +2 (pqc-leaf-blind, pqc-leaf-record-blind); fork-(ii) layout: +1 (archival-p msg-sign identity, the 7th P label)
+    ("1", 59, 0), // no retired rows before genesis: -2 (archival-serve-credit-batch-v1, archival-witness-carrier-scheme-v1; the test-only archival-serve-challenge-leaf-v1 went too); proofs on the envelope: +4 (tx-proof-outbound-v1, tx-proof-inbound-v1, reserve-proof-message-v1, reserve-proof-dleq-context-v1); message signing on the envelope: -1 (msg-hash-v1 retired; msg-sign-v1 became -v2 in place); the signing envelope §2.2: +1 (tx-signable-v1; fcmp-spend-signing-v1 became -v2 in place); NI-Q4: +1 (fcmp-spend-signing-v1); network name: +1 (network-name-v1, the signing envelope §2.6); support stream: +2 (archival-support-draw-v1, archival-support-challenge-nonce-v1); SO-D12 increment 2: +1 (archival-drawable-epoch-v1); FCMP++ batch weights (R3): +2 (fcmp-pp-batch-weights-v1, fcmp-membership-only-batch-weights-v1); CEN-H19 (ruling R3): +1 (bp-plus-batch-weights-v1); bundle verifier: +4 (archival-witness-bundle-scheme-v1, scheme 3; archival-serve-credit-bundle-v1, archival-bundle-prunable-v1, archival-bundle-root-v1); RT-W8: +2 (rpc-rendezvous-name-v1, rpc-static-fingerprint-v1); public urn deleted: -1 (archival-challenge-assignment-v1); Slice C: +4 (archival-draw-v1, archival-draw-commit-v1, archival-challenge-nonce-v1, archival-serve-credit-batch-v1); WSS-Q1: +2 (p-store-aead-v1, p-store-slot-v1); FN-DSA hybrid: +2 (archival-receipt-scheme-v1, archival-witness-carrier-scheme-v1, both scheme 3); settlement: +2 (archival-settlement-select-v1, archival-issued-index-v1); PL-D3: +2 (pqc-leaf-key-v1, pqc-leaf-record-v1); DRS-P0d: +3 (chain-digest/v0{,/chain,/spent-elem}); SF-D8: -1 (attestation-nonce-v1 retired); S-CHAIN-W: +1 (chain-store/undo-log/post-image-v1); PWD-T5: +1 (p2p-wire-prefix-v1); network id: +1 (p2p-network-id-v1); SF-D8 v3: +1 (archival-pass-delivery-digest-v1); SV-D1: +1 (archival-shard-view-hash-v1)
+    ("2", 44, 0), // one derivation (NI-R7, 2026-11-03): -4 (the fixed-salt seed derivation left production for the harness fixture wallet: shekyl-master-derive-v1 + its three infos, now test-only); persona SLH-DSA key deleted (2026-10-18, FND-25): -1 (archival-p msg-sign identity); receipt key: +2 (archival-p-receipt-ed25519-v1, archival-p-receipt-fn-dsa-1024-v1); PL-D3: +2 (pqc-leaf-blind, pqc-leaf-record-blind); fork-(ii) layout: +1 (archival-p msg-sign identity, the 7th P label)
     ("3", 1, 3),
     ("4", 8, 0), // PL-D3: -1 (shekyl-pqc-leaf retired; the leaf key hash is mech 1 now)
     ("5", 6, 8), // SA-3c: -1 (snapshot-id left mechanism 5)
@@ -70,98 +76,21 @@ const PRODUCTION_PINS: [(&str, usize, usize); 7] = [
     ("7", 4, 0), // RT-W8: the RPC channel's Noise prologue label (rpc-channel-v1); mac1 (2026-10-20): +1 (rpc-mac1-v1, the mac1 key's label); +1 (rpc-busy-v1, the busy reply's label); RT-W9 step 5: +1 (noise-record-header-v1, ClassedRecord's header-protection key)
 ];
 /// Pinned counts for the non-production sections.
-const EXCLUDED_EXPECTED: usize = 8;
-const TEST_ONLY_EXPECTED: usize = 8;
-// PC-D3: +1 — the retired `-v1` leaf label, kept only so the negative control
-// can assert the `-v2` derivation does not reproduce it.
+// RT-W9 step 6: +2 (the two Noise protocol names, one reason: the RPC
+// channel's hybridXK and the P2P handshake's NNhfs).
+const EXCLUDED_EXPECTED: usize = 10;
+// One derivation (NI-R7): +4 (the harness fixture wallet's fixed salt and its three infos).
+const TEST_ONLY_EXPECTED: usize = 11;
+/// Labels mainnet used and then retired: none before genesis (Rick,
+/// 2026-11-05). The binding gate refuses their reuse in code.
+const RETIRED_EXPECTED: usize = 0;
 
-/// Well-formed mechanism ids: `1`..=`7` (live mechanisms) or `x` (excluded).
-fn is_valid_mech(mech: &str) -> bool {
-    matches!(mech, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "x")
+/// A row that participates in production distinctness (live or frozen).
+fn is_production(row: &Row<'_>) -> bool {
+    matches!(row.status, "shekyl-live" | "frozen-inherited")
 }
 
-fn is_valid_status(status: &str) -> bool {
-    matches!(
-        status,
-        "shekyl-live" | "frozen-inherited" | "excluded" | "test-only"
-    )
-}
-
-struct Row<'a> {
-    mech: &'a str,
-    literal: &'a str,
-    file: &'a str,
-    status: &'a str,
-    key: &'a str,
-}
-
-impl Row<'_> {
-    /// A row that participates in production distinctness (live or frozen).
-    fn is_production(&self) -> bool {
-        matches!(self.status, "shekyl-live" | "frozen-inherited")
-    }
-}
-
-fn parse_rows(text: &str) -> Result<Vec<Row<'_>>, String> {
-    let mut rows = Vec::new();
-    for (lineno, line) in text.lines().enumerate() {
-        let line_no = lineno + 1;
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let f: Vec<&str> = line.split('\t').collect();
-        // mech  literal  file  const  status  key  notes
-        let mech = f.first().copied().unwrap_or("").trim();
-        if mech.is_empty() || mech.starts_with('#') {
-            continue;
-        }
-        if !is_valid_mech(mech) {
-            return Err(format!(
-                "line {line_no}: bad mechanism id {mech:?} — expected 1..7 or x"
-            ));
-        }
-        if f.len() < 5 {
-            return Err(format!(
-                "line {line_no}: expected at least 5 columns (mech, literal, file, const, status), got {}",
-                f.len()
-            ));
-        }
-        let literal = f[1];
-        let file = f[2];
-        if literal.is_empty() || file.is_empty() {
-            return Err(format!(
-                "line {line_no}: literal and file columns must be non-empty"
-            ));
-        }
-        let status = f[4].trim();
-        if !is_valid_status(status) {
-            return Err(format!(
-                "line {line_no}: bad status {status:?} — expected shekyl-live | \
-                 frozen-inherited | excluded | test-only"
-            ));
-        }
-        // The excluded bucket and the excluded status must agree — a typo'd
-        // mech id cannot smuggle a row out of (or into) distinctness scope.
-        if (mech == "x") != (status == "excluded") {
-            return Err(format!(
-                "line {line_no}: mech {mech:?} / status {status:?} mismatch — \
-                 mech x rows must be status excluded, and vice versa"
-            ));
-        }
-        let key = f.get(5).copied().unwrap_or("").trim();
-        rows.push(Row {
-            mech,
-            literal,
-            file,
-            status,
-            key,
-        });
-    }
-    Ok(rows)
-}
-
-/// Parse the registry or fail the calling test with the parser's diagnostic.
-/// Single owner of the parse-and-validate step for every test below.
+/// Parse the registry or fail the calling test with the shared parser's diagnostic.
 fn parsed_registry() -> Vec<Row<'static>> {
     parse_rows(REGISTRY).expect("registry must parse with valid mech ids, columns, and statuses")
 }
@@ -243,13 +172,15 @@ fn registry_census_matches_pins() {
     let mut frozen: HashMap<&str, usize> = HashMap::new();
     let mut excluded = 0usize;
     let mut test_only = 0usize;
+    let mut retired = 0usize;
     for row in &rows {
         match row.status {
             "shekyl-live" => *live.entry(row.mech).or_default() += 1,
             "frozen-inherited" => *frozen.entry(row.mech).or_default() += 1,
             "excluded" => excluded += 1,
             "test-only" => test_only += 1,
-            other => unreachable!("parse_rows validated status, got {other:?}"),
+            "retired" => retired += 1,
+            other => unreachable!("registry parser validated status, got {other:?}"),
         }
     }
 
@@ -274,6 +205,10 @@ fn registry_census_matches_pins() {
         "excluded (mech x) row count drifted from the pin"
     );
     assert_eq!(
+        retired, RETIRED_EXPECTED,
+        "retired-after-genesis row count drifted from the pin"
+    );
+    assert_eq!(
         test_only, TEST_ONLY_EXPECTED,
         "test-only row count drifted from the pin — register new test domains \
          (or update the pin when one is deleted)"
@@ -289,7 +224,7 @@ fn intra_mechanism_domains_are_distinct() {
     // (test-vs-test collisions are legitimate).
     let mut by_mech: HashMap<&str, Vec<(Vec<u8>, &str)>> = HashMap::new();
     for row in &rows {
-        if !row.is_production() {
+        if !is_production(row) {
             continue;
         }
         by_mech
@@ -340,7 +275,7 @@ fn test_domains_are_segregated_from_production() {
 
     let production: HashSet<(&str, Vec<u8>)> = rows
         .iter()
-        .filter(|r| r.is_production())
+        .filter(|r| is_production(r))
         .map(|r| (r.mech, identity(r)))
         .collect();
 
@@ -366,7 +301,7 @@ fn test_domains_are_segregated_from_production() {
 }
 
 /// Guards the mechanism-2 model itself: the three shared info labels MUST still
-/// appear as two rows each (const site + inline SeedDerivation), distinct only by
+/// appear as two rows each (const site + the harness's inline fixture_expand), distinct only by
 /// salt. If a future edit collapses one, this fails — surfacing that the
 /// salt-keyed distinctness model no longer matches the code, rather than letting
 /// the main test pass on a silently-changed shape.

@@ -9,17 +9,16 @@
 //! [`the_corpus_carries_exactly_these_archival_inputs`] reads every archival
 //! input off the captured chains and holds them to a table written from the
 //! first run: height, slot, kind, and the facts the 4.J rows judge (the hint
-//! recomputes; the credit's epoch against the join's; the claim's epochs).
+//! recomputes; the post's money terms; a credit's shard and epoch; a claim's
+//! epochs).
 //! The positive witnesses are a list: a rule that refuses one of these blocks
 //! has refused a named input. The four chains with no archival input are the
 //! empty list, so a capture that grows one fails the table.
 
 use std::path::Path;
 
-use shekyl_archival_retention::{
-    p_canonical_id_from_hybrid_pubkey, serve_credit_epoch_ok, BondPostKind as RetentionKind,
-};
-use shekyl_chain_rules::{ArchivalKey, SettlementEpochBlocks, SettlementSchedule};
+use shekyl_archival_retention::{p_canonical_id_from_hybrid_pubkey, BondPostKind as RetentionKind};
+use shekyl_chain_rules::ArchivalKey;
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId};
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
 use shekyl_wire::Input;
@@ -49,8 +48,7 @@ enum Archival {
         credit: u64,
         debit: u64,
     },
-    /// A serve-credit **vin** (none in the corpus today — the injected
-    /// credit is a record, below).
+    /// A serve-credit **vin** (none in the corpus today).
     CreditVin {
         height: BlockHeight,
         slot: usize,
@@ -75,21 +73,10 @@ enum Archival {
 /// Every archival input of the chain at `dir`, in corpus order, with the
 /// persona each names — so the table can say *the claim is the join's
 /// persona* rather than carry two hashes.
-fn enumerate(dir: &Path) -> (Vec<(PCanonicalId, Archival)>, SettlementSchedule) {
-    let manifest_text = std::fs::read_to_string(dir.join("manifest.json")).expect("manifest");
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_text).expect("json");
-    let seb = manifest["settlement_epoch_blocks"]
-        .as_u64()
-        .expect("the manifest names its schedule");
-    let schedule = SettlementSchedule::new(SettlementEpochBlocks::new(seb).expect("non-zero"));
-
+fn enumerate(dir: &Path) -> Vec<(PCanonicalId, Archival)> {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
-    // Read up to a retired keyless JoinMarket and no further
-    // (`vectors_tests/retired_keyless_join.rs`, `RETIRED_KEYLESS_JOINS`): the block that lists one
-    // does not parse, and the reader is sequential.
-    let mut reader = crate::vectors_tests::UntilRetiredJoin::new(
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
-    );
+    let mut reader =
+        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let mut height = reader.first_height();
     let mut tip: Option<BlockHeight> = None;
     let mut found = Vec::new();
@@ -182,52 +169,41 @@ fn enumerate(dir: &Path) -> (Vec<(PCanonicalId, Archival)>, SettlementSchedule) 
             )),
         }
     }
-    reader.finish(
-        dir.file_name()
-            .and_then(|n| n.to_str())
-            .expect("a captured chain's directory is its shape"),
-    );
-    (found, schedule)
+    found
 }
 
-/// What the corpus carries, read off the two chains on 2026-10-04 and
-/// held. **Both directions:** every chain in the corpus is here, the four
-/// with no archival input as the empty list, so a capture that grows one
-/// fails this table rather than slipping past it.
+/// What the corpus carries, read off the Rust daemon's `bond-post`
+/// capture at the E2 re-baseline (2026-11-01) and held. **Both
+/// directions:** every chain in the corpus is here, the four with no
+/// archival input as the empty list, so a capture that grows one fails
+/// this table rather than slipping past it.
 ///
-/// The facts the 4.J rows will judge, as the corpus has them today:
+/// The facts the 4.J rows judge, as the corpus has them:
 ///
-/// - **J11** — both posts' hints recompute from their `hybrid_public_key`.
-/// - **J14** — both joins carry `credit == bonded_total == one floor`:
-///   the complete tree's floor and a one-shard compact set's are the same
-///   number (`bond_floor_of`), so the corpus does **not** distinguish a
-///   per-shard floor from a flat one; a rule that gets the multiplier
-///   wrong passes the corpus. The driver's two-shard join and its
-///   one-floor negative (`scenario_archival_tests`) are the witnesses
-///   that do.
-/// - **J5** — the one credit is the injector's, at epoch `E_join + 1`,
-///   written while epoch 0 was still open (tip 115 of a 512-block epoch):
-///   a credit *for* an epoch that has not begun. It is a record, not a
-///   vin, so J4–J6 never read it; its epoch arithmetic is the injector's
-///   contract (`Inject`'s law), not 4.J's.
-/// - **J19/J20** — the one claim names the credited epoch and no other,
-///   two epochs after the join, by the join's persona.
-/// - **No serve-credit vin and no Release or Reinstate** anywhere in the
-///   corpus: J4–J6, J13, J18 have no corpus-positive witness, which is why
-///   (b)–(d) build theirs on the driver.
+/// - **J11** — the post's hint recomputes from its `hybrid_public_key`.
+/// - **J14** — the join carries `credit == bonded_total == one floor` on
+///   the complete tree. The corpus has no compact join, so it does **not**
+///   distinguish a per-shard floor from a flat one; the driver's two-shard
+///   join and its one-floor negative (`scenario_archival_tests`) are the
+///   witnesses that do.
+/// - **No serve-credit vin, no credit, no claim, and no Release or
+///   Reinstate** anywhere in the corpus: J4–J6, J13, J18–J20 have no
+///   corpus-positive witness, which is why (b)–(d) build theirs on the
+///   driver. No captured chain crosses a settlement epoch; `emission-claim`
+///   returns with SO-D12 4b's evidence run (`docs/FOLLOWUPS.md`).
 fn expected(shape: &str) -> Vec<Archival> {
     match shape {
-        // *Was* (until 2026-10-12): `bond-post` carried one JoinMarket at 98
-        // (complete tree, one floor), and `emission-claim` a compact
-        // JoinMarket at 98, an injected credit at tip 115 and a claim at
-        // 1025. Both joins are keyless (`post_kind` 0), which no longer
-        // parses, and every archival input these chains carry sits at or
-        // above that block — so none can be read from them any more
-        // (`vectors_tests/retired_keyless_join.rs`, `RETIRED_KEYLESS_JOINS`). The JoinMarket, the
-        // credit and the Release are witnessed on driven chains
-        // (`scenario_archival_tests`, `scenario_join_tests`).
-        "bond-post" | "emission-claim" | "limit-full" | "median-full" | "spend-1in-2out"
-        | "spend-depth3" => Vec::new(),
+        "bond-post" => vec![Archival::Post {
+            height: BlockHeight::from_raw(98),
+            slot: 0,
+            kind: "JoinMarket",
+            hint_recomputes: true,
+            holdings: WireHoldings::CompleteTree,
+            bonded_total: 750_000_000,
+            credit: 750_000_000,
+            debit: 0,
+        }],
+        "limit-full" | "median-full" | "spend-1in-2out" | "spend-depth3" => Vec::new(),
         other => panic!("a chain this table does not know: {other}"),
     }
 }
@@ -235,9 +211,9 @@ fn expected(shape: &str) -> Vec<Archival> {
 #[test]
 fn the_corpus_carries_exactly_these_archival_inputs() {
     let chains = captured_chains();
-    assert_eq!(chains.len(), 6, "the corpus has six chains");
+    assert_eq!(chains.len(), 5, "the corpus has five chains");
     for (dir, manifest) in chains {
-        let (found, schedule) = enumerate(&dir);
+        let found = enumerate(&dir);
         let inputs: Vec<&Archival> = found.iter().map(|(_, input)| input).collect();
         let expected = expected(&manifest.shape);
         assert_eq!(
@@ -255,18 +231,5 @@ fn the_corpus_carries_exactly_these_archival_inputs() {
             manifest.shape,
             personas.len()
         );
-        if manifest.shape == "emission-claim" {
-            // The injected credit sits at `E_join + 1` — the epoch J5 will
-            // accept — and the claim lands after that epoch settled.
-            let join_epoch = schedule.epoch_at_height(98);
-            assert_eq!(join_epoch, 0);
-            assert!(serve_credit_epoch_ok(1, join_epoch));
-            assert_eq!(
-                schedule.epoch_at_height(115),
-                0,
-                "injected before its epoch opened"
-            );
-            assert_eq!(schedule.epoch_at_height(1025), 2);
-        }
     }
 }

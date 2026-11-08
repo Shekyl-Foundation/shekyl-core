@@ -10,6 +10,11 @@
 //! holds the spend secret `x`; only the view key `y` is threshold-shared
 //! via `ThresholdKeys<Ed25519T>`.
 //!
+//! This is the designed FCMP++ multisig spend path, and its consumer is not
+//! built yet: `docs/FOLLOWUPS.md`, "Multisig FROST spend path needs the
+//! single-sig spend-path consensus fixes" and "Threshold signatures: one
+//! missing primitive, two named customers".
+//!
 //! ## Signing Protocol
 //!
 //! 1. **Session creation**: Each signer creates a `FrostSalSession` per input.
@@ -33,6 +38,7 @@ use dalek_ff_group::{EdwardsPoint, Scalar};
 use transcript::{RecommendedTranscript, Transcript};
 
 use modular_frost::{algorithm::Algorithm, Participant, ThresholdKeys, ThresholdView};
+use shekyl_types::TxSignableHash;
 
 pub use shekyl_fcmp_proofs::sal::multisig::{Ed25519T, SalAlgorithm};
 use shekyl_fcmp_proofs::sal::{RerandomizedOutput, SpendAuthAndLinkability};
@@ -70,7 +76,11 @@ pub struct FrostSalInput {
     pub key_image_gen: [u8; 32],
     pub commitment: [u8; 32],
     pub spend_key_x: [u8; 32],
-    pub signable_tx_hash: [u8; 32],
+    /// The transaction's `tx_signable`, its one network-bound message
+    /// (`shekyl_wire::tx_signable`; the signing envelope §2.2): the FROST
+    /// SAL proves over it like the single-signer SAL, so a multisig spend
+    /// commits to its network itself.
+    pub tx_signable: TxSignableHash,
 }
 
 /// Result of FROST preprocessing (round 1).
@@ -129,13 +139,8 @@ impl FrostSalSession {
         // §5) and its registry row (CRYPTO_DOMAIN_REGISTRY.tsv, mechanism 3).
         let transcript = RecommendedTranscript::new(b"Shekyl FROST SAL v1");
 
-        let algorithm = SalAlgorithm::new(
-            rng,
-            transcript,
-            input_data.signable_tx_hash,
-            rerand.clone(),
-            x,
-        );
+        let algorithm =
+            SalAlgorithm::new(rng, transcript, input_data.tx_signable, rerand.clone(), x);
 
         Ok(Self {
             original_output: output,
@@ -599,7 +604,7 @@ mod tests {
             key_image_gen: [0; 32],
             commitment: [0; 32],
             spend_key_x: [0; 32],
-            signable_tx_hash: [0; 32],
+            tx_signable: TxSignableHash::from_bytes([0; 32]),
         };
         let result = FrostSalSession::new(&input);
         assert!(result.is_err());
@@ -619,7 +624,7 @@ mod tests {
             key_image_gen: i.to_bytes(),
             commitment: c.to_bytes(),
             spend_key_x: x.to_repr(),
-            signable_tx_hash: [0xAB; 32],
+            tx_signable: TxSignableHash::from_bytes([0xAB; 32]),
         };
 
         let session = FrostSalSession::new(&input);
@@ -646,7 +651,7 @@ mod tests {
             key_image_gen: i.to_bytes(),
             commitment: c.to_bytes(),
             spend_key_x: x.to_repr(),
-            signable_tx_hash: [0xCD; 32],
+            tx_signable: TxSignableHash::from_bytes([0xCD; 32]),
         };
 
         let s1 = FrostSalSession::new(&input).unwrap();
@@ -841,7 +846,7 @@ mod tests {
             key_image_gen: i.to_bytes(),
             commitment: c.to_bytes(),
             spend_key_x: x.to_repr(),
-            signable_tx_hash: [0xEF; 32],
+            tx_signable: TxSignableHash::from_bytes([0xEF; 32]),
         };
 
         let mut session = FrostSalSession::new(&input).unwrap();

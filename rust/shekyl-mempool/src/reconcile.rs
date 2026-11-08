@@ -26,6 +26,7 @@
 //! pool after a restart, after a switch and after a connect is the pool the
 //! door would build from the same transactions.
 
+use shekyl_network::NetworkId;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -35,7 +36,7 @@ use shekyl_types::{TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
 
 use crate::door::{self, Judged};
-use crate::evict::Limits;
+use crate::policy::Limits;
 use crate::pool::{Held, Pool, PoolFault};
 use crate::view::KeyImages;
 
@@ -88,10 +89,11 @@ impl Pool {
         now: UnixSeconds,
         chain: &V,
         rule_set: &RuleSet,
+        network: &NetworkId,
         policy: &AdmissionPolicy,
     ) -> Result<(Self, PoolOpen, Reconciled), PoolFault<V::Fault>> {
         let limits = Limits::at(chain).map_err(PoolFault::Chain)?;
-        let (mut pool, how) = Self::create(path, limits)?;
+        let (mut pool, how) = Self::create(path, limits, *network)?;
         let latest = ReceivedHour::of(now);
         let mut dropped = Vec::new();
         let snapshot = pool.store().begin_read()?;
@@ -147,6 +149,9 @@ impl Pool {
         rule_set: &RuleSet,
         policy: &AdmissionPolicy,
     ) -> Result<Reconciled, PoolFault<V::Fault>> {
+        let tip = chain
+            .tip()
+            .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?;
         // Taken before the held borrow: step 1 was planted outside this lock.
         let mut planted = self.take_planted();
         let mut order: Vec<(&TxHash, &Held)> = self.held().iter().collect();
@@ -185,6 +190,7 @@ impl Pool {
                     chain,
                     &key_images,
                     rule_set,
+                    self.network(),
                     policy,
                     prior.as_ref(),
                 )
@@ -205,6 +211,7 @@ impl Pool {
                 .write(|batch| removals.iter().try_for_each(|txid| batch.remove(txid)))?;
         }
         self.install(&judged_all, key_images);
+        self.note_reconciled(chain, tip);
         Ok(reconciled)
     }
 }

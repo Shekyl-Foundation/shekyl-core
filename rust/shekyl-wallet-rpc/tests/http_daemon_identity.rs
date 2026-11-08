@@ -23,8 +23,8 @@ use serde_json::{json, Value};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
 use shekyl_rpc_types::{
-    genesis_hash_for, DaemonNetwork, GetVersionResponse, HashHex, RpcStatus,
-    CONSENSUS_CONSTANTS_DIGEST_HASH, CORE_RPC_VERSION,
+    genesis_hash_for, GetVersionResponse, HashHex, RpcStatus, CONSENSUS_CONSTANTS_DIGEST_HASH,
+    CORE_RPC_VERSION,
 };
 use shekyl_wallet_rpc::auth::AuthConfig;
 use shekyl_wallet_rpc::server::{build_router, AppState};
@@ -34,7 +34,7 @@ use tokio::sync::Notify;
 use tower::ServiceExt;
 
 /// The network the wallet RPC under test serves.
-const SERVED: DaemonNetwork = DaemonNetwork::Stagenet;
+const SERVED: Network = Network::Stagenet;
 
 /// A port nothing listens on: the "no answer" control.
 const SILENT_DAEMON: &str = "http://127.0.0.1:1";
@@ -103,7 +103,7 @@ async fn rpc(state: Arc<AppState>, method: &str, params: Value) -> Value {
     let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
     let request = Request::builder()
         .method("POST")
-        .uri("/")
+        .uri("/json_rpc")
         .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).expect("encode")))
@@ -146,8 +146,8 @@ async fn refresh_error(daemon_address: String) -> Value {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_daemon_on_another_network_names_both_networks() {
     let error = refresh_error(fake_daemon(version_reply(|r| {
-        r.nettype = DaemonNetwork::Mainnet;
-        r.genesis_hash = HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Mainnet));
+        r.nettype = Network::Mainnet;
+        r.genesis_hash = HashHex::from_bytes(genesis_hash_for(Network::Mainnet));
     })))
     .await;
     assert_eq!(error["code"], -29207, "{error}");

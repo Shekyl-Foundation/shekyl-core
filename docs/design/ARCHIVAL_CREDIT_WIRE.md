@@ -189,7 +189,7 @@ shape 4.**
 
 **AMENDMENT (2026-08-04) — SUPERSEDES the shape-4 residence below: a `block_header`
 field, not a tx-merkle leaf.** The C++ map surfaced a fact the shape 1/2/3/4
-enumeration never had in view: `curve_tree_root` (`cryptonote_basic.h:843`) is
+enumeration never had in view: `curve_tree_root` (`cryptonote_basic.h` at `ac3836de90` (line 843)) is
 already a `crypto::hash` **block-header field**, mined because
 `get_block_hashing_blob` serializes the whole `block_header` into the PoW
 preimage, defaulting to `null_hash`. `attestation_root` is the same object, so it
@@ -324,7 +324,7 @@ commitment. **4** dominates all three: the block-level merkle root self-enforces
 totality, the coinbase stays a normal coinbase, and attestations are not a
 transaction at all.
 
-**3.3 The verify entrypoint that replaces `shekyl_archival_verify_serve_credit_vin`
+**3.3 The verify entrypoint that replaces `shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`)
 (shape 4).** Its contract inverts: instead of a path opening, for each of the `k`
 records it (a) takes the witness-carried requester nonce and anchor height and
 reads the anchor **hash** from the connecting chain at that height, requiring

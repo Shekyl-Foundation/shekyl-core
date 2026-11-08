@@ -44,6 +44,7 @@
 use core::fmt;
 
 use shekyl_fcmp::LeafInput;
+use shekyl_network::NetworkId;
 use shekyl_types::{
     BlockHash, BlockHeight, GlobalOutputIndex, PCanonicalId, SettlementEpoch, ShardId,
 };
@@ -90,10 +91,10 @@ pub enum Stale {
         retry: Retry,
     },
     /// The rule set `form` judged under is not the one in force at the
-    /// connecting height. Compared by **value** — a Fakechain `Fixed`
+    /// connecting height. Compared by **value** — a levered `Fixed`
     /// target reuses [`RuleSetId::GENESIS`](crate::RuleSetId::GENESIS), so
-    /// the id alone cannot tell `GENESIS` from `fakechain(n)`, or two
-    /// different `n`.
+    /// the id alone cannot tell `GENESIS` from `with_levers(Some(n), …)`,
+    /// or two different `n`.
     ///
     /// **This arm is what sized [`Fault`]** (112 bytes at slice 5 with
     /// `RuleSet` at 48): it carries two rule sets by value, so every byte
@@ -106,7 +107,7 @@ pub enum Stale {
     /// joined the set (PR #861: `RuleSet` 56, `Fault` past clippy's 128;
     /// `tx_spendable_age` took it to 64 at DRS-E3 commit 2, absorbed) and
     /// the fix is the one written here in advance — **the payload is
-    /// boxed**, which keeps the by-value comparison the Fakechain caveat
+    /// boxed**, which keeps the by-value comparison the lever caveat
     /// requires — not shrinking `RuleSet`, and not keeping limits off it
     /// that a schedule step could vary (slice 5 Q5, corrected). `Fault` and
     /// `Stale` are `Clone`, not `Copy`, for this box.
@@ -115,6 +116,20 @@ pub enum Stale {
         formed_under: Box<RuleSet>,
         /// What `validate` was given.
         in_force: Box<RuleSet>,
+        /// Whether `form` may be run again.
+        retry: Retry,
+    },
+    /// The network id `form` bound every signature and proof under is not
+    /// the id `validate` was given (`trust.network_id()`). A signature is
+    /// valid on one network (NI-Q4). A mismatch means the two stages
+    /// described different networks — a driver defect, the same class as
+    /// [`Self::RuleSet`]. A fault, never a refusal. The id is sixteen
+    /// bytes, so both values travel by value.
+    Network {
+        /// What `form` bound.
+        formed_under: NetworkId,
+        /// What `validate` was given.
+        in_force: NetworkId,
         /// Whether `form` may be run again.
         retry: Retry,
     },
@@ -513,6 +528,15 @@ pub enum DrawableEpochFault {
         /// `h_open(E)`.
         h_open: BlockHeight,
     },
+    /// The snapshot handed in for a height of this epoch is another
+    /// epoch's. The memo is keyed by the epoch and its opening hash, so a
+    /// conforming lookup cannot return one; a caller that reads the support
+    /// seats of a height over the wrong snapshot would seat another epoch's
+    /// members.
+    OtherEpoch {
+        /// The epoch the snapshot is for.
+        held: SettlementEpoch,
+    },
 }
 
 impl fmt::Display for DrawableEpochFault {
@@ -535,6 +559,10 @@ impl fmt::Display for DrawableEpochFault {
                 f,
                 "the epoch has not opened: h_open {h_open} is above this view's tip, so there \
                  is no post-state to rebuild"
+            ),
+            Self::OtherEpoch { held } => write!(
+                f,
+                "the snapshot read for this epoch's support seats is epoch {held}'s"
             ),
         }
     }
@@ -560,6 +588,14 @@ pub enum SettlementCheck {
         persona: PCanonicalId,
         /// The shard of the pair.
         shard: ShardId,
+    },
+    /// The support fold counted more passes for a tree than support draws
+    /// it was issued. One row per tree, so the fault names the tree. The
+    /// same shape as [`Self::PassesExceedCounted`]: a defect of the fold,
+    /// halted on, never clamped.
+    SupportPassesExceedCounted {
+        /// The tree.
+        persona: PCanonicalId,
     },
     /// The settlement beacon's block is not strictly below the connecting
     /// height. The slash grace is at least the response window on every
@@ -751,6 +787,14 @@ impl fmt::Display for Stale {
                 f,
                 "stale rule set: formed under {formed_under:?}, {in_force:?} is in force ({retry})"
             ),
+            Self::Network {
+                formed_under,
+                in_force,
+                retry,
+            } => write!(
+                f,
+                "stale network: formed under {formed_under:?}, {in_force:?} is in force ({retry})"
+            ),
             Self::Target {
                 claimed,
                 expected,
@@ -848,6 +892,11 @@ impl fmt::Display for Corrupt {
                     f,
                     "settling ({persona}, {shard}) for epoch {epoch} counted more passes than \
                      draws selected (SI-25)"
+                ),
+                SettlementCheck::SupportPassesExceedCounted { persona } => write!(
+                    f,
+                    "settling complete tree {persona} for epoch {epoch} counted more passes \
+                     than support draws issued (SI-25)"
                 ),
                 SettlementCheck::BeaconNotRecorded => write!(
                     f,

@@ -27,27 +27,55 @@
 //! when one leaves (CEN-M10), which go into a template, and the pool file
 //! (S-POOL) with its reconcile at open.
 //!
-//! # Nothing here is wired live
+//! # Policy without the store
 //!
-//! The C++ `tx_memory_pool` is the daemon's pool until the DRS-X flip,
-//! which wires this crate in and deletes the C++ (`DEL-010`). No FFI crate
-//! depends on this one (DX-Q5, DX-Q7).
+//! [`policy`] is CEN-M10's arithmetic and orders with nothing stored: the
+//! fee per weight, the eviction and template orders, the weight limit and
+//! the two eviction walks. It builds without the `pool` feature (the
+//! default), which carries the store, the network and the wire, so the
+//! economics sim calls the pool's policy without taking a store.
+//!
+//! # The door's caller
+//!
+//! The pool's door is the ingest service in `shekyl-chain-ingest`
+//! (DX-Q5), which runs the pool's steps beside its cache slots.
 
+#[cfg(feature = "pool")]
 mod block;
+#[cfg(feature = "pool")]
 mod door;
+#[cfg(feature = "pool")]
 mod evict;
+pub mod policy;
+#[cfg(feature = "pool")]
 mod pool;
-mod rate;
+#[cfg(feature = "pool")]
 mod reconcile;
+#[cfg(feature = "pool")]
 mod relay;
+#[cfg(feature = "pool")]
+mod resolve;
+#[cfg(feature = "pool")]
 mod template;
+#[cfg(feature = "pool")]
 mod view;
 
+#[cfg(feature = "pool")]
 pub use block::Offers;
+#[cfg(feature = "pool")]
 pub use door::{judge, stateless, DoorFault, Judged};
-pub use evict::{Evicted, Limits};
+#[cfg(feature = "pool")]
+pub use evict::Evicted;
+pub use policy::Limits;
+#[cfg(feature = "pool")]
 pub use pool::{Admission, Duplicate, Pool, PoolFault};
+#[cfg(feature = "pool")]
 pub use reconcile::{Reconciled, Removed};
-pub use relay::{shown, Listed, RelayView};
-pub use template::{select, Selected};
+#[cfg(feature = "pool")]
+pub use relay::{shown, Entry, Listed, RelayView};
+#[cfg(feature = "pool")]
+pub use resolve::resolve_shown;
+#[cfg(feature = "pool")]
+pub use template::{select, select_admitting, select_shown, ListedTx, Selected, ShownBody};
+#[cfg(feature = "pool")]
 pub use view::{KeyImages, PoolView};

@@ -390,7 +390,7 @@ constant and its golden vector.
    observer.**
    - **Own-origin broadcast over Tor is designed and default-on.** The
      default P2P posture runs clearnet and Tor together
-     (`INPUT_GRAMMAR.md:363`, IG-Q3). A node's own transactions ride a
+     (`INPUT_GRAMMAR.md:364`, IG-Q3). A node's own transactions ride a
      stem slot drawn from its hidden-address (Tor) outbound sessions when
      it has any (`TOR_COVER_POSTURE.md:53-66`; shipped in PR-1, #1018). The
      first stem peer receives the transaction over Tor, so the
@@ -599,9 +599,9 @@ object from a window ("uniform from funding").
 - Rule 2 in the dispatch driver: the terminal arm
   (`engine/pscan/dispatch.rs:794-803`) stops sending and keeps the record
   and the reservation.
-- **Rewrite the shipped `STAKING_UNAVAILABLE_ON_THIS_DAEMON` sentence**
-  (`engine/pscan/dispatch.rs:53-56`). Its "its funds are spendable
-  again" is false under Rule 2: the funds return at `funds_return_at`.
+- The dispatch log's "its funds are spendable again" sentence: false
+  under Rule 2 (the funds return at `funds_return_at`); the sentence and
+  the refusal it answered went with the C++ daemon at the store flip.
 - The BD-Q5 deletion (`MIN_COLD_START_SPACING`, `EconomicSpacing`,
   `SebSpan`), with the drifted citation at `engine/stake_timing.rs:160-163`
   and the 2C2B inventory of landed types
@@ -686,6 +686,16 @@ built. Each carry below is recorded in both documents (rule 26 A5);
   date; whether the owner then sees a post-by bound is WR-Q5's to reopen.
 
 ---
+
+## 6.1 Acquisition of a new holding — reported 2026-10-22
+
+`ARCHIVAL_SUPPORT_DRAW.md` §8. Not fixed in that PR. Each read already
+dials its own circuit. Nothing spreads a holding-set's fetches over time
+or across sources, and a complete tree can be the holder a need finishes
+on when no drawn holder of the shard remains. A server asked for many
+shards of one new holding sees that set, and a later bond for the same
+set is the link this delay's jitter is there to break. BD-Q4's window
+width is still open; this is an input to it.
 
 ## 7. What this round does not do
 

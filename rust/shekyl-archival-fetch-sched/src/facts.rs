@@ -24,7 +24,7 @@
 //! rows, not deciding anything.
 
 use shekyl_crypto_pq::signature::HybridPublicKey;
-use shekyl_p_fetch::{ExpectedShard, FetchTarget};
+use shekyl_p_fetch::{ExpectedShard, FetchTarget, PassVerifyingKey};
 use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, PCanonicalId, ShardId};
 
 /// Why a facts read could not be served. The scheduler never guesses a
@@ -47,12 +47,19 @@ pub enum FactsFault {
 
 /// A holder the draw may pick: a persona bonded to the shard, read from its
 /// bond record.
+///
+/// `K` is the scheme the exchange is closed with. Every holder a
+/// [`HolderSource`] returns is the live scheme's, the bond identity key.
+/// A caller that names its own persona — a challenge read, through
+/// [`FetchScheduler::read_from_nonce`](crate::FetchScheduler::read_from_nonce)
+/// — may name it under another scheme, and the read it gets back holds
+/// that scheme's signature.
 #[derive(Clone, Debug)]
-pub struct Holder {
+pub struct Holder<K: PassVerifyingKey = HybridPublicKey> {
     /// The persona's canonical id — what a pass record and a log line name.
     pub id: PCanonicalId,
     /// Where to dial it and whose signature to accept.
-    pub target: FetchTarget<HybridPublicKey>,
+    pub target: FetchTarget<K>,
 }
 
 /// Where a closed shard's transactions sit on the chain, read from the
@@ -178,4 +185,18 @@ pub trait HolderSource: Send + Sync {
     ///
     /// [`FactsFault`]: the store could not answer.
     fn holders_of(&self, shard_id: ShardId) -> Result<Vec<Holder>, FactsFault>;
+
+    /// Complete trees that hold the whole archive, as a best-effort source
+    /// beside [`Self::holders_of`] (`ARCHIVAL_SUPPORT_DRAW.md` §7).
+    ///
+    /// The scheduler tries these only after the drawn holders, and only
+    /// when no drawn holder of the shard is left untried. The default is
+    /// none: a source that has not split the two sets stays drawn-only.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault`]: the store could not answer.
+    fn support_holders_of(&self, _shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
+        Ok(Vec::new())
+    }
 }

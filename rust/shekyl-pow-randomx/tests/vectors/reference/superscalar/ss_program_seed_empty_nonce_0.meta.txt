@@ -43,6 +43,7 @@ Total bytes for this vector: 3592 = 8 header + 8 * 448 instructions.
 Generator
 ---------
 source      = ./_generator/gen.cpp
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/Makefile (`make gen`)
 command     = ./gen prog_v1
 output_size = 3592 bytes

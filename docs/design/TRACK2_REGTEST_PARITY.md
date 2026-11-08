@@ -21,7 +21,7 @@ sent over the real RPC transport, is accepted by `shekyld`'s consensus
   `build_layers` root == daemon header root at every height.
 - **Submit/verify parity is the new surface.** The verify code is the same Rust
   `shekyl_fcmp::proof::verify` the daemon calls via FFI
-  (`shekyl_ffi.h:368` → `shekyl-ffi/src/lib.rs:1485`), and the wallet and daemon
+  (`shekyl_ffi.h` at `ac3836de90` (line 368) → `shekyl-ffi/src/lib.rs:1485`), and the wallet and daemon
   also share the tree-construction FFI (`grow_curve_tree` → `shekyl_curve_tree_*`).
   So parity is **structural** — the in-process #162 result should carry to the
   daemon by transitivity.
@@ -42,7 +42,7 @@ regtest spend path) and the depth-3+ verify validation deferred by #162.
 | Capability | Where | Status |
 |---|---|---|
 | FAKECHAIN net mode, ephemeral `/fake` datadir | `cryptonote_config.h:328-335,372`, `cryptonote_core.cpp:472-539` | exists |
-| `generateblocks` (FAKECHAIN-gated) + `pop_blocks` | `core_rpc_server.cpp:2259` | exists |
+| `generateblocks` + `pop_blocks` (armed test levers, served with `--dev-rpc`; `RPC_CHANNEL.md` §6.1) | `core_rpc_server.cpp` `on_generateblocks`, `rust/shekyl-rpc-types/src/methods.rs` `admit_armed` | exists |
 | `--fixed-difficulty` (instant mining) | `cryptonote_core.cpp:94`, `blockchain.cpp:1008` | exists |
 | Live header carries **real** root; per-height root table written on add-block | `blockchain.cpp:1959-1961`, `blockchain_db.cpp:453-458` | exists |
 | Daemon `shekyl_fcmp_verify` == Rust `verify` via FFI; pool + block-accept | `blockchain.cpp:3998/4126`, `tx_pool.cpp:239` | exists |

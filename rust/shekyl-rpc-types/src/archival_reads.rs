@@ -34,7 +34,7 @@ pub struct GetArchivalEmissionClaimSourceRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimBondRow {
     pub join_settlement_epoch: u64,
-    pub is_foundation_complete_tree: bool,
+    pub is_support_complete_tree: bool,
     /// The bad intervals, flattened `[start, end_exclusive, …]`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bad_intervals_flat: Vec<u64>,

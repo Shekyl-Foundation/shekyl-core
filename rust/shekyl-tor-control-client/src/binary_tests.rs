@@ -161,7 +161,12 @@ fn refusals_render_as_single_spaced_sentences() {
     let path = PathBuf::from("/x/tor");
     let errors = [
         TorBinaryError::Unavailable { reason: "r" },
-        TorBinaryError::NotFound,
+        TorBinaryError::NotFound {
+            searched: vec![path.clone(), PathBuf::from("/y/tor")],
+        },
+        TorBinaryError::NotFound {
+            searched: Vec::new(),
+        },
         TorBinaryError::NotAFile(path.clone()),
         TorBinaryError::NotExecutable(path.clone()),
         TorBinaryError::NotTheExecutable(path.clone()),
@@ -644,4 +649,61 @@ fn bundled_tor_matches_recorded_pin() {
          re-run the full checklist procedure (GPG-verify first), never record a hash \
          from an unverified file",
     );
+}
+
+/// Discovery's candidates, in precedence order: beside the executable, then
+/// the system candidate. A platform with no system candidate (Windows) lists
+/// only the first, and an unknown executable directory drops it.
+#[test]
+fn candidates_are_the_tiers_this_platform_has_in_order() {
+    let exe_dir = Path::new("/srv/shekyl/bin");
+    let system = Path::new("/sys-candidate/tor");
+    assert_eq!(
+        candidates(Some(exe_dir), Some(system), "tor"),
+        vec![exe_dir.join("tor").join("tor"), system.to_path_buf()]
+    );
+    assert_eq!(
+        candidates(Some(exe_dir), None, "tor.exe"),
+        vec![exe_dir.join("tor").join("tor.exe")]
+    );
+    assert_eq!(
+        candidates(None, Some(system), "tor"),
+        vec![system.to_path_buf()]
+    );
+    assert!(candidates(None, None, "tor").is_empty());
+}
+
+/// A NotFound names exactly the paths discovery tried, and no place it did
+/// not look: a Windows-shaped list (beside only) never mentions a Unix system
+/// directory.
+#[test]
+fn not_found_names_the_searched_paths_and_no_others() {
+    let beside = PathBuf::from("/srv/shekyl/bin/tor/tor.exe");
+    let message = TorBinaryError::NotFound {
+        searched: vec![beside.clone()],
+    }
+    .to_string();
+    assert!(message.contains(&beside.display().to_string()), "{message}");
+    assert!(!message.contains("/opt"), "{message}");
+    assert!(message.contains("tor-file"), "{message}");
+
+    let system = PathBuf::from("/sys-candidate/tor");
+    let both = TorBinaryError::NotFound {
+        searched: vec![beside.clone(), system.clone()],
+    }
+    .to_string();
+    assert!(
+        both.contains(&format!("{} or {}", beside.display(), system.display())),
+        "{both}"
+    );
+}
+
+/// On this build target, the system candidate exists exactly where the
+/// platform has the convention, so the message follows the platform.
+#[test]
+fn the_system_candidate_follows_the_platform() {
+    if let TorDisposition::Pinned(pin) = CURRENT_DISPOSITION {
+        let candidate = well_known_candidate(&pin);
+        assert_eq!(candidate.is_some(), cfg!(unix), "{candidate:?}");
+    }
 }

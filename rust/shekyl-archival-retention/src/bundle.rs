@@ -52,9 +52,7 @@
 //! is the pure verifier in `shekyl-chain-rules` (`archival::bundle`), which
 //! `SO-D12`'s cutover increment calls at admission
 //! ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../../../docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
-//! §9.6, §11). The carrier's set commitment
-//! ([`serve_credit_batch_commitment`](crate::secret_draw::serve_credit_batch_commitment))
-//! is what this replaces; it stays beside it until that lane deletes it.
+//! §9.6, §11).
 //!
 //! # No secrets
 //!
@@ -66,13 +64,18 @@ use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockHeight, SettlementEpoch};
 
+use shekyl_network::envelope::{IdDomain, W64};
+use shekyl_network::NetworkId;
+
 use crate::hash::cshake256_32;
-use crate::secret_draw::COUNT_CAP_BASE_MULTIPLE;
+use crate::ArchivalParams;
 use crate::SettlementSchedule;
 
-/// cSHAKE256 customization for [`bundle_commitment`] (rule 30: one label,
-/// one message, versioned).
-pub const BUNDLE_COMMITMENT_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-credit-bundle-v1";
+/// The envelope domain of [`bundle_commitment`]: two fields under the
+/// network's id, 64 bytes wide because a hybrid signature signs it (the
+/// signing envelope §2.4, §2.7).
+pub const BUNDLE_COMMITMENT: IdDomain<2, W64> =
+    IdDomain::new(b"shekyl/archival-serve-credit-bundle-v2");
 
 /// cSHAKE256 customization for [`bundle_prunable_hash`].
 pub const BUNDLE_PRUNABLE_CUSTOMIZATION: &[u8] = b"shekyl/archival-bundle-prunable-v1";
@@ -105,13 +108,6 @@ pub const BUNDLE_KEPT_FIXED_LEN: usize = BUNDLE_SEED_LEN + 8 + 4;
 /// A reference before its bitmap: the kept part's fixed bytes and the
 /// 32-byte hash of the prunable part.
 pub const BUNDLE_REF_FIXED_LEN: usize = BUNDLE_KEPT_FIXED_LEN + 32;
-
-/// The section budget's multiple of the count cap, `c`.
-///
-/// **PROVISIONAL** (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §13.2 V6, `SCS-P20`).
-/// Reopen when it binds on the first build, or when section bytes,
-/// propagation to Tor peers, the orphan rate or `BA-T33` say otherwise.
-pub const BUNDLE_SECTION_BUDGET_MULTIPLE: u64 = 2;
 
 // The specification's widths (§6.2, §7.2, §7.4), as numbers, against the
 // widths derived from the scheme. A scheme whose key or signature has a
@@ -154,19 +150,20 @@ pub enum BundleWireError {
         /// The block's draw count.
         count: u32,
     },
-    /// The kept part is the seed, `h`, `count`, and a bitmap of exactly
-    /// `count` bits. `expected` is the length the stated count implies, or
-    /// the 44 fixed bytes when there are too few to state one.
+    /// The kept part is the seed, `h`, the economy count and bitmap, and
+    /// the support count and bitmap. `expected` is the length those fields
+    /// imply from what has been read, or the 44 fixed bytes when the input
+    /// is too short to state a count.
     #[error("the kept part is {expected} bytes for the count it states, not {found}")]
     KeptLength {
-        /// `44 + ⌈count / 8⌉`.
+        /// The length the fields read so far imply.
         expected: usize,
         /// The bytes offered.
         found: usize,
     },
-    /// A reference is its kept part and a 32-byte hash: exactly
-    /// `76 + ⌈count / 8⌉` bytes for the count it states.
-    #[error("a reference is 76 bytes and the bitmap its count implies, not {found} bytes")]
+    /// A reference is its kept part and a 32-byte hash. With both bitmaps
+    /// empty that is 80 bytes; each bitmap adds `⌈its count / 8⌉`.
+    #[error("a reference is its kept part and a 32-byte hash, not {found} bytes")]
     ReferenceLength {
         /// The bytes offered.
         found: usize,
@@ -227,6 +224,15 @@ impl PassBitmap {
             count,
             bytes: bytes.to_vec(),
         })
+    }
+
+    /// A bitmap of no draws.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            count: 0,
+            bytes: Vec::new(),
+        }
     }
 
     /// The bitmap of `count` bits with exactly `passes` set — the
@@ -294,18 +300,21 @@ pub struct BundleKept {
     pub h: BlockHeight,
     /// The revealed draw seed.
     pub seed: [u8; BUNDLE_SEED_LEN],
-    /// The stated count and its bits.
+    /// The stated economy count and its bits.
     pub passes: PassBitmap,
+    /// The stated support count and its bits. Not part of
+    /// [`Self::charge`].
+    pub support: PassBitmap,
 }
 
 impl BundleKept {
-    /// The bytes [`Self::encode`] returns: `44 + ⌈count / 8⌉`.
+    /// The bytes [`Self::encode`] returns: `48 + ⌈count / 8⌉ + ⌈support / 8⌉`.
     #[must_use]
     pub fn encoded_len(&self) -> usize {
-        BUNDLE_KEPT_FIXED_LEN + self.passes.as_bytes().len()
+        BUNDLE_KEPT_FIXED_LEN + self.passes.as_bytes().len() + 4 + self.support.as_bytes().len()
     }
 
-    /// `seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap[⌈count / 8⌉]`.
+    /// `seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap ‖ support_count_le[4] ‖ support_bitmap`.
     ///
     /// The one encoding of the kept part. The reference opens with these
     /// bytes, the header root hashes them inside each reference, and the
@@ -323,6 +332,8 @@ impl BundleKept {
         out.extend_from_slice(&self.h.to_raw().to_le_bytes());
         out.extend_from_slice(&self.passes.count().to_le_bytes());
         out.extend_from_slice(self.passes.as_bytes());
+        out.extend_from_slice(&self.support.count().to_le_bytes());
+        out.extend_from_slice(self.support.as_bytes());
     }
 
     /// The kept part these bytes are. The count is read from the bytes.
@@ -333,34 +344,63 @@ impl BundleKept {
     /// `44 + ⌈count / 8⌉` long for the count it states;
     /// [`BundleWireError::BitmapPadding`] for a set padding bit.
     pub fn decode(bytes: &[u8]) -> Result<Self, BundleWireError> {
-        let Some((fixed, bitmap)) = bytes.split_at_checked(BUNDLE_KEPT_FIXED_LEN) else {
+        let Some((fixed, rest)) = bytes.split_at_checked(BUNDLE_KEPT_FIXED_LEN) else {
             return Err(BundleWireError::KeptLength {
                 expected: BUNDLE_KEPT_FIXED_LEN,
                 found: bytes.len(),
             });
         };
-        let (seed, rest) = fixed.split_at(BUNDLE_SEED_LEN);
-        let (h, count) = rest.split_at(8);
+        let (seed, tail) = fixed.split_at(BUNDLE_SEED_LEN);
+        let (h, count) = tail.split_at(8);
         let count = u32::from_le_bytes(count.try_into().expect("4 bytes"));
-        let passes = PassBitmap::new(count, bitmap).map_err(|refusal| match refusal {
+        let economy_len = PassBitmap::byte_len(count);
+        let Some((economy, after_economy)) = rest.split_at_checked(economy_len) else {
+            return Err(BundleWireError::KeptLength {
+                expected: BUNDLE_KEPT_FIXED_LEN.saturating_add(economy_len),
+                found: bytes.len(),
+            });
+        };
+        let Some((support_count, support_bytes)) = after_economy.split_at_checked(4) else {
+            return Err(BundleWireError::KeptLength {
+                expected: BUNDLE_KEPT_FIXED_LEN
+                    .saturating_add(economy_len)
+                    .saturating_add(4),
+                found: bytes.len(),
+            });
+        };
+        let support_count = u32::from_le_bytes(support_count.try_into().expect("4 bytes"));
+        let passes = PassBitmap::new(count, economy).map_err(|refusal| match refusal {
             BundleWireError::BitmapLength { expected, .. } => BundleWireError::KeptLength {
                 expected: BUNDLE_KEPT_FIXED_LEN.saturating_add(expected),
                 found: bytes.len(),
             },
             other => other,
         })?;
+        let support =
+            PassBitmap::new(support_count, support_bytes).map_err(|refusal| match refusal {
+                BundleWireError::BitmapLength { expected, .. } => BundleWireError::KeptLength {
+                    expected: BUNDLE_KEPT_FIXED_LEN
+                        .saturating_add(economy_len)
+                        .saturating_add(4)
+                        .saturating_add(expected),
+                    found: bytes.len(),
+                },
+                other => other,
+            })?;
         Ok(Self {
             h: BlockHeight::from_raw(u64::from_le_bytes(h.try_into().expect("8 bytes"))),
             seed: seed.try_into().expect("32 bytes"),
             passes,
+            support,
         })
     }
 
     /// [`bundle_commitment`] over this kept part and `records`, the
-    /// records' bytes in order ([`BundleBody::records_bytes`]).
+    /// records' bytes in order ([`BundleBody::records_bytes`]), on the
+    /// network whose id is `network_id`.
     #[must_use]
-    pub fn commitment(&self, records: &[u8]) -> [u8; 32] {
-        bundle_commitment(self, records)
+    pub fn commitment(&self, network_id: &NetworkId, records: &[u8]) -> [u8; 64] {
+        bundle_commitment(network_id, self, records)
     }
 
     /// [`bundle_charge`] of this bundle's stated count.
@@ -400,9 +440,8 @@ impl BundleRef {
         }
     }
 
-    /// `seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap ‖ prunable_hash[32]`: the
-    /// kept part ([`BundleKept::encode`]), then the hash. `76 + ⌈count /
-    /// 8⌉` bytes.
+    /// The kept part ([`BundleKept::encode`]), then the prunable hash.
+    /// `80 + ⌈economy count / 8⌉ + ⌈support count / 8⌉` bytes.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.kept.encoded_len() + 32);
@@ -420,7 +459,7 @@ impl BundleRef {
     /// # Errors
     ///
     /// [`BundleWireError::ReferenceLength`] unless `bytes` is exactly
-    /// `76 + ⌈count / 8⌉` long for the count it states;
+    /// the kept part plus 32 bytes for the counts it states;
     /// [`BundleWireError::BitmapPadding`] for a set padding bit.
     pub fn decode(bytes: &[u8]) -> Result<Self, BundleWireError> {
         let length = BundleWireError::ReferenceLength { found: bytes.len() };
@@ -481,14 +520,17 @@ impl BundleRef {
         self.kept.charge()
     }
 
-    /// The length of the body this reference names: the witness key and
-    /// signature, and one record per set bit. The reference fixes it, so a
-    /// longer fetch is refused before it completes (§7.5).
+    /// The length of the body this reference names: the witness, then one
+    /// record per set bit of the economy bitmap and of the support bitmap.
+    /// The reference fixes it, so a longer fetch is refused before it
+    /// completes (§7.5).
     #[must_use]
     pub fn body_len(&self) -> u64 {
-        // At most 2^32 set bits of 1,397 bytes each: no overflow in `u64`.
-        BUNDLE_WITNESS_LEN as u64
-            + u64::from(self.kept.passes.popcount()) * BUNDLE_RECORD_LEN as u64
+        // Each popcount is a `u32`. Their sum times [`BUNDLE_RECORD_LEN`]
+        // fits `u64`: two bitmaps, each with every bit set.
+        let records =
+            u64::from(self.kept.passes.popcount()) + u64::from(self.kept.support.popcount());
+        BUNDLE_WITNESS_LEN as u64 + records * BUNDLE_RECORD_LEN as u64
     }
 }
 
@@ -648,28 +690,87 @@ impl BundleBody {
     }
 }
 
+/// A bundle as its producer files it: the commitment over the kept part
+/// and the records, the witness signature over that commitment, the body,
+/// and the reference that names the body by its prunable hash
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.1–§7.3).
+///
+/// `records` are the set bits' records in bitmap order, economy first and
+/// support after. `sign` is the witness's signing capability: it is handed
+/// the 64-byte commitment on the network whose id is `network_id` and
+/// returns the canonical scheme-3 signature
+/// under `SCHEME_DOMAIN_WITNESS_BUNDLE` ([`sign_bundle_commitment`] over a
+/// held key). The secret key itself never enters this function, so the
+/// producer's ring can keep it. The fixture producer
+/// (`shekyl-chain-rules`'s `harness::bundle`) assembles through here too.
+///
+/// Nothing is checked: a bitmap that disagrees with the records is a
+/// bundle the verifier refuses, and the queue's admission is that check.
+///
+/// # Errors
+///
+/// Whatever `sign` returns.
+pub fn assemble_bundle<E>(
+    network_id: &NetworkId,
+    kept: &BundleKept,
+    records: &[BundleRecord],
+    witness_public_key: &[u8; BUNDLE_WITNESS_KEY_LEN],
+    sign: impl FnOnce(&[u8; 64]) -> Result<[u8; BUNDLE_SIGNATURE_LEN], E>,
+) -> Result<(BundleRef, BundleBody), E> {
+    let records_bytes: Vec<u8> = records.iter().flat_map(BundleRecord::encode).collect();
+    let signature = sign(&kept.commitment(network_id, &records_bytes))?;
+    let body = BundleBody::new(witness_public_key, &signature, records);
+    Ok((BundleRef::of(kept, &body), body))
+}
+
+/// The witness signature over a bundle commitment: scheme 3 under
+/// `SCHEME_DOMAIN_WITNESS_BUNDLE`, the domain the verifier's step 5 opens.
+///
+/// # Errors
+///
+/// The scheme's signer failed, or returned a signature that is not the
+/// canonical width.
+pub fn sign_bundle_commitment(
+    secret: &shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSecretKey,
+    commitment: &[u8; 64],
+) -> Result<[u8; BUNDLE_SIGNATURE_LEN], shekyl_crypto_pq::CryptoError> {
+    use shekyl_crypto_pq::signature::SignatureScheme as _;
+    let signature = shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa.sign(
+        secret,
+        shekyl_crypto_pq::signature::SCHEME_DOMAIN_WITNESS_BUNDLE,
+        commitment,
+    )?;
+    signature.to_canonical_bytes().try_into().map_err(|_| {
+        shekyl_crypto_pq::CryptoError::SerializationError(
+            "a scheme-3 signature is not the canonical width".into(),
+        )
+    })
+}
+
 /// The bundle commitment: what the witness signs, under
 /// `SCHEME_DOMAIN_WITNESS_BUNDLE` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.3,
 /// `SCS-P35`).
 ///
 /// ```text
-/// cSHAKE256_32("shekyl/archival-serve-credit-bundle-v1",
-///              seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap ‖ r₁ ‖ … ‖ rₙ)
+/// frame("shekyl/archival-serve-credit-bundle-v2", network_id, [kept, records])[..64]
+/// kept    = seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap
+///           ‖ support_count_le[4] ‖ support_bitmap
+/// records = r₁ ‖ … ‖ rₙ
 /// ```
 ///
-/// That is **the kept part followed by the records**: the preimage opens
-/// with [`BundleKept::encode`], the same bytes a reference opens with, and
-/// `records` follows — the records' bytes in order, each
-/// [`BUNDLE_RECORD_LEN`] wide. The hash does not check the records'
-/// length: the verifier holds their number to the bitmap's set bits before
-/// it compares. Nothing is framed because nothing needs to be (module
-/// docs).
+/// Field 1 is [`BundleKept::encode`], the same bytes a reference opens
+/// with; field 2 the records' bytes in order, each [`BUNDLE_RECORD_LEN`]
+/// wide. The hash does not check the records' length: the verifier holds
+/// their number to the bitmap's set bits before it compares.
+///
+/// The network's id is at position 0 because nothing else in the message
+/// is network-bound: the seed is the witness's own random value, and the
+/// draw commitment that binds it to block `h` is checked beside this
+/// signature, not inside it. With the id, a witness signature made on one
+/// network verifies on no other (the signing envelope §2.4).
 #[must_use]
-pub fn bundle_commitment(kept: &BundleKept, records: &[u8]) -> [u8; 32] {
-    let mut input = Vec::with_capacity(kept.encoded_len() + records.len());
-    kept.encode_into(&mut input);
-    input.extend_from_slice(records);
-    cshake256_32(BUNDLE_COMMITMENT_CUSTOMIZATION, &input)
+pub fn bundle_commitment(network_id: &NetworkId, kept: &BundleKept, records: &[u8]) -> [u8; 64] {
+    BUNDLE_COMMITMENT.frame(network_id, [&kept.encode(), records])
 }
 
 /// The hash of a bundle's prunable bytes: what its reference carries, and
@@ -692,7 +793,8 @@ pub fn bundle_prunable_hash(prunable: &[u8]) -> [u8; 32] {
 ///
 /// ```text
 /// cSHAKE256_32("shekyl/archival-bundle-root-v1", n_le[4] ‖ ref₁ ‖ … ‖ refₙ)
-/// refᵢ = seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap[⌈count / 8⌉] ‖ prunable_hash[32]
+/// refᵢ = seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap[⌈count / 8⌉]
+///        ‖ support_count_le[4] ‖ support_bitmap[⌈support / 8⌉] ‖ prunable_hash[32]
 /// ```
 ///
 /// Each bundle contributes its kept bytes and the hash of its prunable
@@ -776,18 +878,57 @@ pub const fn bundle_charge(count: u32) -> u64 {
 /// ```
 ///
 /// `d_max` is the largest `D` among the epochs of the bundles in the
-/// section, and `c` is [`BUNDLE_SECTION_BUDGET_MULTIPLE`] in production.
-/// `⌊9·D / SEB⌋ + 1` is the count cap: the per-block target is at most
-/// `9·D / SEB` and the carry adds less than one. The `9` is
-/// [`COUNT_CAP_BASE_MULTIPLE`], the one the count rule caps at. The `+ 1` is what lets a
-/// network below `SEB / 9` pairs admit a bundle at all.
+/// section, and `c` is `params`'
+/// [`bundle_section_budget_multiple`](ArchivalParams::bundle_section_budget_multiple)
+/// (2, `SCS-P20`, PROVISIONAL §13.2 V6). `⌊9·D / SEB⌋ + 1` is the count
+/// cap: the per-block target is at most `9·D / SEB` and the carry adds less
+/// than one. The `9` is the set's
+/// [`count_cap_base_multiple`](ArchivalParams::count_cap_base_multiple), the
+/// one the count rule caps at. The `+ 1` is what lets a network below
+/// `SEB / 9` pairs admit a bundle at all.
 ///
 /// Computed in 128 bits and saturated: a budget above `u64::MAX` binds
 /// nothing a `u64` sum can reach.
 #[must_use]
-pub fn section_budget(c: u64, d_max: u64, seb: SettlementEpochBlocks) -> u64 {
-    let cap = u128::from(d_max) * u128::from(COUNT_CAP_BASE_MULTIPLE) / u128::from(seb.get()) + 1;
-    u64::try_from(u128::from(c).saturating_mul(cap)).unwrap_or(u64::MAX)
+pub fn section_budget(
+    params: &ArchivalParams,
+    d_max: u64,
+    seb: SettlementEpochBlocks,
+) -> SectionBudget {
+    let cap = u128::from(d_max) * u128::from(params.count_cap_base_multiple())
+        / u128::from(seb.get())
+        + 1;
+    let c = u128::from(params.bundle_section_budget_multiple);
+    SectionBudget(u64::try_from(c.saturating_mul(cap)).unwrap_or(u64::MAX))
+}
+
+/// The section budget, in draws: [`section_budget`]'s result.
+///
+/// A charge is compared with one of these and with nothing else, so a raw
+/// count cannot be passed off as the cap (`SO-D12` increment 2, finding 4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SectionBudget(u64);
+
+impl core::fmt::Display for SectionBudget {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl SectionBudget {
+    /// A budget of `draws`. [`section_budget`] is how a section obtains one.
+    /// A comparison that names its own cap — a test — goes through this;
+    /// the section check does not.
+    #[must_use]
+    pub const fn from_draws(draws: u64) -> Self {
+        Self(draws)
+    }
+
+    /// The budget, in draws.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
 }
 
 /// The `D` a section's budget is computed from: [`section_budget`]'s

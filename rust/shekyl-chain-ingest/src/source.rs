@@ -41,7 +41,7 @@
 //! height it was attributed to is a pipeline fault, not a pop (the bit is
 //! not block-owned, so no pop can carry it away). The corpus is its sole
 //! carrier and the generator's injector its sole producer; it appears in
-//! no captured chain but `emission-claim`.
+//! no captured chain.
 //!
 //! The corpus source (E2's first) carries all three kinds; the mutation
 //! family is Extend-only; the reorg family emits `Rewind`. The live daemon's

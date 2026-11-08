@@ -30,30 +30,29 @@
 
 use crate::bind::BoundListener;
 use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener};
-use crate::core::CoreRpc;
 use crate::handlers::{binary, json, json_rpc, submit};
 use crate::handles::Handles;
 use crate::middleware::DEFAULT_BODY_LIMIT;
 use crate::options::{OptionsAbsent, OptionsFacts};
 use crate::shard_view::{ShardViewFacts, SkeletonAbsent};
-use crate::submit::{DaemonSubmitEngine, DaemonTxVerifier, FfiSubmitShim, SubmitEngine};
+use crate::submit::DaemonSubmitEngine;
 
-use axum::http::{HeaderValue, Method};
+use crate::authority::Authority;
+use crate::hash_budget::HashBudget;
+use axum::http::{HeaderValue, Method, StatusCode};
 use axum::routing::{get, post, MethodRouter};
-use axum::Router;
-use std::future::IntoFuture as _;
+use axum::{Json, Router};
 use std::sync::Arc;
-use tokio::sync::watch;
+use std::time::Instant;
+use tokio::sync::{watch, Semaphore};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::info;
 
 pub struct AppState {
-    pub core: Arc<CoreRpc>,
     /// The Rust admission engine behind `POST /submit_transaction`
     /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §3).
     pub submit_engine: Arc<DaemonSubmitEngine>,
-    pub restricted: bool,
     /// Live connection accounting; shared with the [`LimitedListener`] and read
     /// by `get_info` to report `rpc_connections_count`.
     pub conn_tracker: Arc<ConnTracker>,
@@ -62,9 +61,14 @@ pub struct AppState {
     /// What `option_set` and `option_show` read and write
     /// (`options::OptionsFacts`, RT-O26); the composition root supplies it.
     pub options: Arc<dyn OptionsFacts>,
-    /// The node's handles (N1). Present, and not yet what the live routes
-    /// read: those keep the C++ `core` until the store flip.
+    /// The node's handles (N1): every route reads through them, the p2p
+    /// facts included.
     pub handles: Handles,
+    /// One hash budget for every bounded caller (§6.3).
+    pub hash_budget: Arc<HashBudget>,
+    /// Bounded `get_coinbase_tx_sum` reads, one at a time. Cold reads wait
+    /// on disk; the permit is taken before the blocking-pool task.
+    pub coinbase_reads: Arc<Semaphore>,
 }
 
 pub struct ServerConfig {
@@ -74,13 +78,16 @@ pub struct ServerConfig {
     /// Concurrent-connection caps enforced by the [`LimitedListener`].
     pub conn_limits: ConnLimits,
     /// The shard view's facts source. The composition root that can compose
-    /// a `ViewDesk` (the daemon image, `SV-D9`) supplies it; the default is
+    /// a `ViewDesk` (the `shekyld` binary crate, `SV-D9`) supplies it; the default is
     /// [`SkeletonAbsent`], a daemon that serves no shard view.
     pub shard_view: Arc<dyn ShardViewFacts>,
     /// The options handle (RT-O26); the default serves no options.
     pub options: Arc<dyn OptionsFacts>,
     /// The node's handles. The default is absent: every call is not ready.
     pub handles: Handles,
+    /// The node's armed-lever switch (`dev-rpc`, `RPC_CHANNEL.md` §6.1): the
+    /// admin listener serves the armed test levers only while it is on.
+    pub armed: bool,
 }
 
 impl Default for ServerConfig {
@@ -92,6 +99,7 @@ impl Default for ServerConfig {
             shard_view: Arc::new(SkeletonAbsent),
             options: Arc::new(OptionsAbsent),
             handles: Handles::absent(),
+            armed: false,
         }
     }
 }
@@ -132,12 +140,13 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 // ---------------------------------------------------------------------------
 // Route table (§55 / §69 / §70)
 //
-// ONE table. Each row names an endpoint, the path(s) it answers on, and which
-// listener serves it. [`served_paths`] applies the restricted gate; a total
-// match ([`handler_for`]) binds what runs; [`assemble`] registers the first
-// with the second, and [`build_router`] is `assemble` plus layers — so the
-// gate tests build the shipping router with a dummy handler and assert
-// selection by *serving requests*, not by re-reading a const.
+// ONE table. Each row names an endpoint and the path(s) it answers on. A
+// total match ([`handler_for`]) binds what runs; [`assemble`] registers every
+// row with it, and [`build_router`] is `assemble` plus the request layer that
+// stamps the connection's authority and admits each path against its row in
+// the method table (`crate::authority::stamp`) — so the gate tests build the
+// shipping router with a dummy handler and assert admission by *serving
+// requests*, not by re-reading a const.
 //
 // Two properties are structural rather than tested, because the table is keyed
 // by an enum:
@@ -145,28 +154,21 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 //   * A route with no handler does not compile. `handler_for` matches
 //     [`Endpoint`] exhaustively with no wildcard, so adding a row without
 //     binding it is a compile error, not a `panic!` at daemon start (§70.1).
-//   * A path cannot be admin-only *and* public. Visibility is a field of the
-//     row, not membership in one of two lists that could both contain it.
+//   * A path has exactly one policy: its one row's in the method table
+//     (`shekyl_rpc_types::methods`, RW-Q7), not membership in one of two
+//     lists that could both contain it.
 //
 // Handlers stay out of the table (and out of anything a unit test calls)
-// because naming a handler pulls `core_rpc_ffi_*` into the link set; lib tests
-// build no daemon image. `assemble`'s generic handler parameter is what keeps
-// that true while still letting a test route the real table.
+// so a test can route the real table without an `AppState` behind it: the
+// handlers read the node handle, which a route test has no business
+// building. (Until 2026-11-05 naming a handler also pulled the C++ remnant's
+// `core_rpc_ffi_*` exports into the link set; that half is gone, the shape
+// stays.) `assemble`'s generic handler parameter is what keeps that true
+// while still letting a test route the real table.
 //
 // The tests assert against a specification written out separately (§70): an
 // oracle that iterates this table cannot fail when the table changes.
 // ---------------------------------------------------------------------------
-
-/// Which listener serves a route.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Visibility {
-    /// Both listeners — the wallet-facing and sync surface.
-    Always,
-    /// The unrestricted (admin) listener only; never the restricted (public)
-    /// one. §55: `/get_stem_tallies` is the anonymity graph, the rest are node
-    /// administration.
-    AdminOnly,
-}
 
 /// An endpoint the daemon RPC serves.
 ///
@@ -192,9 +194,7 @@ pub(crate) enum Endpoint {
     StartMining,
     StopMining,
     MiningStatus,
-    SaveBc,
     GetPeerList,
-    SetLogHashRate,
     StopDaemon,
     GetNetStats,
     PopBlocks,
@@ -206,39 +206,33 @@ pub(crate) struct Route {
     /// Paths this endpoint answers on. More than one = epee-compatibility
     /// aliases, which share a handler by construction.
     pub(crate) paths: &'static [&'static str],
-    pub(crate) visibility: Visibility,
 }
 
 /// The daemon RPC route table — the single source of *what is served where*.
 ///
-/// Handler-free so tests can read it without linking `core_rpc_ffi_*`.
-/// [`served_paths`] applies the gate; [`build_router`] registers the result.
+/// Handler-free so tests can read it without an `AppState`.
+/// [`build_router`] registers every row; the request layer admits each path.
 pub(crate) const ROUTES: &[Route] = &[
     Route {
         endpoint: Endpoint::JsonRpc,
-        paths: &["/json_rpc"],
-        visibility: Visibility::Always,
+        paths: &[shekyl_rpc_types::endpoint::JSON_RPC_PATH],
     },
     // JSON REST (with aliases) -- GET + POST to match epee behaviour.
     Route {
         endpoint: Endpoint::GetHeight,
         paths: &["/get_height", "/getheight"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetTransactions,
         paths: &["/get_transactions", "/gettransactions"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetAltBlocksHashes,
         paths: &["/get_alt_blocks_hashes"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::IsKeyImageSpent,
         paths: &["/is_key_image_spent"],
-        visibility: Visibility::Always,
     },
     // The typed submit route (DAEMON_SUBMIT_VERDICT.md §2.4) is the only
     // submit surface; the legacy /send_raw_transaction proxy was deleted
@@ -246,113 +240,72 @@ pub(crate) const ROUTES: &[Route] = &[
     Route {
         endpoint: Endpoint::SubmitTransaction,
         paths: &["/submit_transaction"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetTransactionPool,
         paths: &["/get_transaction_pool"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetTransactionPoolHashes,
         paths: &["/get_transaction_pool_hashes"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetTransactionPoolStats,
         paths: &["/get_transaction_pool_stats"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetInfo,
         paths: &["/get_info", "/getinfo"],
-        visibility: Visibility::Always,
     },
     // Binary endpoints.
     Route {
         endpoint: Endpoint::GetBlocksByHeightBin,
         paths: &["/get_blocks_by_height.bin", "/getblocks_by_height.bin"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetOIndexesBin,
         paths: &["/get_o_indexes.bin"],
-        visibility: Visibility::Always,
     },
     // §55: anonymity graph — the peer set is the sensitive part.
     Route {
         endpoint: Endpoint::GetStemTallies,
         paths: &["/get_stem_tallies"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::StartMining,
         paths: &["/start_mining"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::StopMining,
         paths: &["/stop_mining"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::MiningStatus,
         paths: &["/mining_status"],
-        visibility: Visibility::AdminOnly,
-    },
-    Route {
-        endpoint: Endpoint::SaveBc,
-        paths: &["/save_bc"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::GetPeerList,
         paths: &["/get_peer_list"],
-        visibility: Visibility::AdminOnly,
-    },
-    Route {
-        endpoint: Endpoint::SetLogHashRate,
-        paths: &["/set_log_hash_rate"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::StopDaemon,
         paths: &["/stop_daemon"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::GetNetStats,
         paths: &["/get_net_stats"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::PopBlocks,
         paths: &["/pop_blocks"],
-        visibility: Visibility::AdminOnly,
     },
 ];
 
-/// Rows this listener serves.
-///
-/// **Single source of the restricted gate.** [`build_router`] registers what
-/// this yields; the gate tests read it. Do not re-encode the gate as a filter
-/// at a call site — deleting the gate here must fail the tests that call here.
-pub(crate) fn served_routes(restricted: bool) -> impl Iterator<Item = &'static Route> {
-    ROUTES
-        .iter()
-        .filter(move |route| !(restricted && route.visibility == Visibility::AdminOnly))
-}
-
-/// Paths this listener serves — [`served_routes`] flattened over aliases.
-///
-/// Test-only *view*, not a second gate: it delegates to [`served_routes`], so
-/// deleting the `restricted` check there still fails every assertion written
-/// against this. The router registers rows (it needs the [`Endpoint`] to bind
-/// a handler); the specification is written in paths, because paths are what a
-/// remote caller can reach.
+/// Every path the router answers on, over aliases. Test-only view of
+/// [`ROUTES`]; what a connection is *admitted* to is the request layer's.
 #[cfg(test)]
-pub(crate) fn served_paths(restricted: bool) -> impl Iterator<Item = &'static str> {
-    served_routes(restricted).flat_map(|route| route.paths.iter().copied())
+pub(crate) fn served_paths() -> impl Iterator<Item = &'static str> {
+    ROUTES.iter().flat_map(|route| route.paths.iter().copied())
 }
 
 /// Handler bound to an endpoint.
@@ -363,9 +316,9 @@ pub(crate) fn served_paths(restricted: bool) -> impl Iterator<Item = &'static st
 /// the same mistake a startup abort — green CI, then a daemon that does not
 /// come up (§70.1).
 ///
-/// Deliberately not called from unit tests — naming a handler pulls
-/// `core_rpc_ffi_*` into the test binary (`#[ignore]` skips execution, not
-/// linking), which is why [`assemble`] takes the binding as a parameter.
+/// Deliberately not called from unit tests — a real handler needs the
+/// `AppState` behind it, which is why [`assemble`] takes the binding as a
+/// parameter.
 fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
     match endpoint {
         Endpoint::JsonRpc => post(json_rpc::handle),
@@ -388,15 +341,13 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
         Endpoint::GetInfo => get(json::get_info).post(json::get_info),
         Endpoint::GetBlocksByHeightBin => post(binary::get_blocks_by_height),
         Endpoint::GetOIndexesBin => post(binary::get_o_indexes),
-        // Admin-only (listener selection is the row's `visibility`, not this
+        // Admin-only (listener selection is the method table's grant, not this
         // match). §55: anonymity graph — the peer set is the sensitive part.
         Endpoint::GetStemTallies => get(json::get_stem_tallies).post(json::get_stem_tallies),
         Endpoint::StartMining => get(json::start_mining).post(json::start_mining),
         Endpoint::StopMining => get(json::stop_mining).post(json::stop_mining),
         Endpoint::MiningStatus => get(json::mining_status).post(json::mining_status),
-        Endpoint::SaveBc => get(json::save_bc).post(json::save_bc),
         Endpoint::GetPeerList => get(json::get_peer_list).post(json::get_peer_list),
-        Endpoint::SetLogHashRate => get(json::set_log_hash_rate).post(json::set_log_hash_rate),
         Endpoint::StopDaemon => get(json::stop_daemon).post(json::stop_daemon),
         Endpoint::GetNetStats => get(json::get_net_stats).post(json::get_net_stats),
         Endpoint::PopBlocks => get(json::pop_blocks).post(json::pop_blocks),
@@ -407,73 +358,91 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
 ///
 /// Generic over the handler binding **so tests can build the real router**.
 /// [`build_router`] passes [`handler_for`]; the gate tests pass a dummy
-/// handler, which keeps `core_rpc_ffi_*` out of the test link set while still
-/// exercising the thing that ships: `Router::route` over [`served_paths`].
+/// handler, which keeps the `AppState` out of the test while still
+/// exercising the thing that ships: `Router::route` over every row.
 /// Route selection is then asserted by *serving requests* rather than by
 /// re-reading a const — and axum's duplicate-path panic fires here as a test
 /// failure instead of at daemon start.
-fn assemble<S, F>(restricted: bool, handler: F) -> Router<S>
+fn assemble<S, F>(handler: F) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
     F: Fn(Endpoint) -> MethodRouter<S>,
 {
     let mut router = Router::new();
-    for route in served_routes(restricted) {
+    for route in ROUTES {
         for path in route.paths {
             router = router.route(path, handler(route.endpoint));
         }
     }
-    router
+    // A path no row serves gets the shared answer, which names
+    // `/json_rpc`, instead of an empty 404 (the wallet RPC mounts the same).
+    router.fallback(unrouted)
 }
 
-/// Build the Axum router. `cors_origins` empty ⇒ default-deny CORS.
+/// The answer to a path no route serves: HTTP 404 with the shared
+/// JSON-RPC error body (`shekyl_rpc_types::endpoint`).
+async fn unrouted(uri: axum::http::Uri) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(shekyl_rpc_types::endpoint::unrouted_path(uri.path())),
+    )
+}
+
+/// Build the Axum router for one listener. `cors_origins` empty ⇒
+/// default-deny CORS.
 ///
-/// Routes come only from [`served_paths`] (via [`assemble`]); handlers only
-/// from [`handler_for`].
-///
-/// **Residue, deliberately named:** `state.restricted` is the one expression
-/// no lib test reaches — building an [`AppState`] needs a [`CoreRpc`], which
-/// links the FFI. Everything downstream of that boolean is covered by
-/// [`assemble`]'s tests; the boolean itself is covered only by review.
-pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
-    assemble(state.restricted, handler_for)
+/// Routes come only from [`assemble`]; handlers only from [`handler_for`].
+/// Every request is stamped with `authority`, which every gate reads
+/// (`crate::authority`, RT-O32).
+pub fn build_router(state: Arc<AppState>, cors_origins: &[String], authority: Authority) -> Router {
+    gate(assemble(handler_for), authority)
         .layer(RequestBodyLimitLayer::new(DEFAULT_BODY_LIMIT))
         .layer(cors_layer(cors_origins))
         .with_state(state)
 }
 
-/// Serves the RPC section's two listener sets on one core: `admin` at the
-/// admin preset (every route) and `view` at the view preset (the routes
-/// `served_routes(true)` admits), with one submit engine and ONE connection
+/// `router` with the request layer that stamps `authority` and admits each
+/// path. One function, so the gate tests apply exactly what ships.
+fn gate<S>(router: Router<S>, authority: Authority) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    router.layer(axum::middleware::from_fn(move |request, next| {
+        crate::authority::stamp(authority, request, next)
+    }))
+}
+
+/// Serves the RPC section's two listener sets on one node: `admin` at the
+/// admin listener's authority (every grant, and the host's) and `view` at the
+/// view listener's (`crate::authority::Authority::VIEW_LISTENER`), with one
+/// submit engine and ONE connection
 /// tracker between them: the cap is per daemon, as the section says, and
 /// `get_info` must count every socket. A tracker per listener made a cap of
 /// N admit 2N — the same mistake `submit/gate.rs` records for the F39
 /// verification cap ("one cap per daemon, not per listener"), re-made here
 /// once already. An empty set serves nothing; both empty is a daemon with no
 /// RPC, which returns once the stop arrives.
-pub async fn serve_presets(
-    core: Arc<CoreRpc>,
+pub async fn serve_listeners(
     config: ServerConfig,
+    submit_engine: Arc<DaemonSubmitEngine>,
     admin: Vec<BoundListener>,
     view: Vec<BoundListener>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let submit_engine = Arc::new(SubmitEngine::new(
-        FfiSubmitShim::new(core.clone()),
-        DaemonTxVerifier,
-    ));
     let conn_tracker = ConnTracker::new(config.conn_limits);
-    let router_at = |restricted: bool| {
+    let hash_budget = Arc::new(HashBudget::new(Instant::now()));
+    let coinbase_reads = Arc::new(Semaphore::new(1));
+    let router_at = |authority: Authority| {
         let state = Arc::new(AppState {
-            core: core.clone(),
             submit_engine: submit_engine.clone(),
-            restricted,
             conn_tracker: conn_tracker.clone(),
             shard_view: config.shard_view.clone(),
             options: config.options.clone(),
             handles: config.handles.clone(),
+            hash_budget: Arc::clone(&hash_budget),
+            coinbase_reads: Arc::clone(&coinbase_reads),
         });
-        build_router(state, &config.cors_origins)
+        build_router(state, &config.cors_origins, authority)
     };
     // Surface the CORS posture at startup. Default-deny is intentional (a
     // browser cannot reach an unconfigured daemon cross-origin), but it changed
@@ -490,6 +459,17 @@ pub async fn serve_presets(
             config.cors_origins.len()
         );
     }
+    // The armed test levers' switch, logged at every start whichever way it
+    // is set (`RPC_CHANNEL.md` §6.1): only `dev-rpc` enables them, and the
+    // operator reads which it is.
+    if config.armed {
+        tracing::warn!(
+            "RPC armed test levers: ON (dev-rpc): generateblocks and \
+             /pop_blocks are served to the host's administrator"
+        );
+    } else {
+        info!("RPC armed test levers: off (dev-rpc not set)");
+    }
     if config.conn_limits != ConnLimits::default() {
         info!(
             "RPC connection cap: {} (0 = unlimited)",
@@ -499,8 +479,12 @@ pub async fn serve_presets(
 
     serve_bound(
         vec![
-            (Preset::Admin, router_at(false), admin),
-            (Preset::View, router_at(true), view),
+            (
+                Listener::Admin,
+                router_at(Authority::admin_listener(config.armed)),
+                admin,
+            ),
+            (Listener::View, router_at(Authority::VIEW_LISTENER), view),
         ],
         conn_tracker,
         shutdown,
@@ -508,14 +492,17 @@ pub async fn serve_presets(
     .await
 }
 
-/// The preset a listener set serves, named in its startup line.
+/// Which listener a bound socket is. An enrolment preset
+/// (`shekyl_rpc_grants::Preset`) is a different thing: the view listener
+/// also serves submit and mining work until RT-W12, which the enrolment
+/// preset `View` does not.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum Preset {
+pub(crate) enum Listener {
     Admin,
     View,
 }
 
-impl Preset {
+impl Listener {
     fn name(self) -> &'static str {
         match self {
             Self::Admin => "admin",
@@ -524,9 +511,9 @@ impl Preset {
     }
 }
 
-/// The lifecycle half of [`serve_presets`], independent of the core so it
-/// can be tested as one: one `axum::serve` per bound socket, every accepted
-/// connection admitted through the shared tracker, and every acceptor
+/// The lifecycle half of [`serve_listeners`], independent of the core so it
+/// can be tested as one: one plaintext HTTP/1 serve per bound socket, every
+/// accepted connection admitted through the shared tracker, and every acceptor
 /// stopped by the same level-triggered signal — including one that has not
 /// been polled when the signal arrives, which is the ordering that used to
 /// hang `shekyl_daemon_rpc_stop`. An acceptor that fails must not leave the
@@ -535,16 +522,16 @@ impl Preset {
 /// returned once every acceptor has finished
 /// ([`first_error_stops_the_rest`]).
 pub(crate) async fn serve_bound(
-    sets: Vec<(Preset, Router, Vec<BoundListener>)>,
+    sets: Vec<(Listener, Router, Vec<BoundListener>)>,
     conn_tracker: Arc<ConnTracker>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (fail_tx, fail_rx) = watch::channel(false);
     let mut serves = tokio::task::JoinSet::new();
-    for (preset, app, bound) in sets.into_iter().flat_map(|(preset, app, listeners)| {
+    for (role, app, bound) in sets.into_iter().flat_map(|(role, app, listeners)| {
         listeners
             .into_iter()
-            .map(move |bound| (preset, app.clone(), bound))
+            .map(move |bound| (role, app.clone(), bound))
     }) {
         // The operator's startup line, in the category the daemon shows at
         // default verbosity (`global=info`, where the C++ `MGINFO` this
@@ -552,9 +539,9 @@ pub(crate) async fn serve_bound(
         // there, and a bound socket must not need --log-level 1 to be seen.
         info!(
             target: "global",
-            "shekyl-daemon-rpc listening on {} ({} preset)",
+            "shekyl-daemon-rpc listening on {} ({} listener)",
             bound.local_addr(),
-            preset.name()
+            role.name()
         );
         let (_, listener) = bound.into_parts();
         // Every accepted connection is admitted through (and accounted in)
@@ -562,20 +549,20 @@ pub(crate) async fn serve_bound(
         let listener = LimitedListener::new(listener, conn_tracker.clone());
         let mut stop = shutdown.clone();
         let mut fail = fail_rx.clone();
-        serves.spawn(
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    // Either signal is a stop, and either outcome of each is
-                    // too (the value turned true, or its sender is gone).
-                    // `wait_for` is level-triggered: a send that happened
-                    // before this future was first polled is still observed.
-                    tokio::select! {
-                        _signal = stop.wait_for(|&stop| stop) => {}
-                        _signal = fail.wait_for(|&fail| fail) => {}
-                    }
-                })
-                .into_future(),
-        );
+        serves.spawn(crate::listener_http::serve_plaintext(
+            listener,
+            app,
+            async move {
+                // Either signal is a stop, and either outcome of each is
+                // too (the value turned true, or its sender is gone).
+                // `wait_for` is level-triggered: a send that happened
+                // before this future was first polled is still observed.
+                tokio::select! {
+                    _signal = stop.wait_for(|&stop| stop) => {}
+                    _signal = fail.wait_for(|&fail| fail) => {}
+                }
+            },
+        ));
     }
     first_error_stops_the_rest(&mut serves, &fail_tx).await
 }
@@ -632,14 +619,14 @@ mod tests {
     // a reviewer reads and a maintainer must justify.
     // -----------------------------------------------------------------------
 
-    /// Paths that must be served on **both** listeners.
-    const SPECIFIED_ALWAYS_PATHS: &[&str] = &[
+    /// Paths the view listener is admitted to (RT-O33: today's set, less
+    /// `/get_alt_blocks_hashes`, which §6.1 moves to `status`).
+    const SPECIFIED_VIEW_PATHS: &[&str] = &[
         "/json_rpc",
         "/get_height",
         "/getheight",
         "/get_transactions",
         "/gettransactions",
-        "/get_alt_blocks_hashes",
         "/is_key_image_spent",
         "/submit_transaction",
         "/get_transaction_pool",
@@ -652,32 +639,32 @@ mod tests {
         "/get_o_indexes.bin",
     ];
 
-    /// Paths that must **never** be served on the restricted (view-only)
-    /// listener. §55: `/get_stem_tallies` is the anonymity graph; the rest are
-    /// node administration (mine, ban, shut down, roll back).
+    /// Paths the view listener is **refused**. §55: `/get_stem_tallies` is the
+    /// anonymity graph; `/get_alt_blocks_hashes` and `/get_net_stats` are
+    /// `status`; the rest are node administration (mine, peers, shut down,
+    /// roll back).
     const SPECIFIED_ADMIN_ONLY_PATHS: &[&str] = &[
+        "/get_alt_blocks_hashes",
         "/get_stem_tallies",
         "/start_mining",
         "/stop_mining",
         "/mining_status",
-        "/save_bc",
         "/get_peer_list",
-        "/set_log_hash_rate",
         "/stop_daemon",
         "/get_net_stats",
         "/pop_blocks",
     ];
 
-    /// The served surface equals the specification, path for path.
+    /// The router answers on exactly the specified paths, and the view
+    /// listener is admitted to exactly its specified set.
     ///
     /// One assertion covers four drift directions the per-path arms cannot:
-    /// a path **dropped** from a list (registered nowhere, 404 at runtime with
-    /// a clean startup log), a path **added** without review, a path
-    /// **migrated** between listeners, and a **duplicate** — which axum turns
-    /// into a panic before the daemon binds.
+    /// a path **dropped** from the table, a path **added** without review, a
+    /// path **moved** into or out of the view listener's grants, and a
+    /// **duplicate** — which axum turns into a panic before the daemon binds.
     #[test]
     fn route_table_matches_the_specification() {
-        let served: Vec<&str> = served_paths(false).collect();
+        let served: Vec<&str> = served_paths().collect();
         let unique: BTreeSet<&str> = served.iter().copied().collect();
         assert_eq!(
             unique.len(),
@@ -686,7 +673,7 @@ mod tests {
              route, so this aborts the daemon at startup"
         );
 
-        let specified: BTreeSet<&str> = SPECIFIED_ALWAYS_PATHS
+        let specified: BTreeSet<&str> = SPECIFIED_VIEW_PATHS
             .iter()
             .chain(SPECIFIED_ADMIN_ONLY_PATHS)
             .copied()
@@ -697,110 +684,70 @@ mod tests {
              change is intended, change the specification in the same commit"
         );
 
-        let public: BTreeSet<&str> = served_paths(true).collect();
-        let specified_public: BTreeSet<&str> = SPECIFIED_ALWAYS_PATHS.iter().copied().collect();
+        let view: BTreeSet<&str> = served
+            .iter()
+            .copied()
+            .filter(|path| {
+                shekyl_rpc_types::methods::rest_path(path)
+                    .is_some_and(|row| Authority::VIEW_LISTENER.admit(row).is_ok())
+            })
+            .collect();
+        let specified_view: BTreeSet<&str> = SPECIFIED_VIEW_PATHS.iter().copied().collect();
         assert_eq!(
-            public, specified_public,
-            "restricted (public) listener diverged from the specification"
+            view, specified_view,
+            "the view listener's admitted paths diverged from the specification"
         );
     }
 
-    /// Deleted decoy surface must not reappear on *either* listener.
-    ///
-    /// Assert against [`served_paths`] (the full served surface), not only the
-    /// `Visibility::Always` rows — absence from those alone would still pass
-    /// if the route landed on an admin row.
+    /// Deleted decoy surface must not reappear.
     #[test]
     fn output_distribution_bin_not_registered() {
-        assert!(
-            served_paths(false).all(|p| p != "/get_output_distribution.bin"),
-            "decoy distribution binary route must stay deleted on every listener"
-        );
         // wallet2's batch sync, retired in RK-4x with the pool departure
-        // history behind it. Re-registering either route turns this red.
+        // history behind it, and the decoy distribution binary. Registering
+        // any of them again turns this red.
         for path in [
+            "/get_output_distribution.bin",
             "/get_blocks.bin",
             "/getblocks.bin",
             "/get_hashes.bin",
             "/gethashes.bin",
         ] {
             assert!(
-                !served_paths(false).any(|p| p == path),
+                !served_paths().any(|p| p == path),
                 "{path} was retired and must not be served"
             );
-            assert!(
-                !served_paths(true).any(|p| p == path),
-                "{path} was retired and must not be served on the restricted listener"
-            );
         }
         assert!(
-            served_paths(true).any(|p| p == "/get_o_indexes.bin"),
-            "control: live binary surface still served on the restricted listener"
+            served_paths().any(|p| p == "/get_o_indexes.bin"),
+            "control: live binary surface still served"
         );
     }
 
-    /// Dual-arm gate via the same function [`build_router`] iterates.
+    /// A router with the real route table, the real gate and dummy handlers.
     ///
-    /// *restricted ⇒ absent* alone passes for a route that never existed.
-    /// *unrestricted ⇒ present* proves the path is spelled right and selected,
-    /// which is what makes the absence mean **gated** rather than **missing**.
-    /// Both arms call [`served_paths`] — re-encoding the gate as set algebra
-    /// over the consts would miss a deleted `if !restricted` inside that
-    /// function.
-    #[test]
-    fn stem_tallies_is_gated_by_restricted() {
-        assert!(
-            served_paths(false).any(|p| p == "/get_stem_tallies"),
-            "unrestricted arm: the anonymity-graph readout must be selected, \
-             or the restricted arm proves nothing"
-        );
-        assert!(
-            served_paths(true).all(|p| p != "/get_stem_tallies"),
-            "restricted arm: the anonymity graph must never reach the public \
-             listener (§55)"
-        );
-        assert!(
-            served_paths(true).any(|p| p == "/get_info"),
-            "control: the restricted surface is non-empty, so the absence above is real"
-        );
+    /// This is [`build_router`]'s own assembly — the same [`assemble`] and
+    /// [`gate`] calls — with only the handler binding swapped, because a
+    /// real handler needs the `AppState` behind it. Both
+    /// methods are bound so an unrouted path answers 404 rather than 405.
+    fn probe_router(authority: Authority) -> Router {
+        gate(
+            assemble(|_| get(|| async { "ok" }).post(|| async { "ok" })),
+            authority,
+        )
     }
 
-    /// Every admin-only path is selected only when unrestricted.
-    ///
-    /// Driven by [`SPECIFIED_ADMIN_ONLY_PATHS`], **not** by the
-    /// `Visibility::AdminOnly` rows of [`ROUTES`]: a loop over the production
-    /// table stops visiting a path the moment that row's visibility flips, so
-    /// it would stay silent through exactly the edit that exposes
-    /// `/stop_daemon` to unauthenticated remote callers.
-    #[test]
-    fn admin_paths_are_absent_from_the_restricted_listener() {
-        for path in SPECIFIED_ADMIN_ONLY_PATHS {
-            assert!(
-                served_paths(false).any(|p| p == *path),
-                "{path} is specified admin-only but is not selected when unrestricted"
-            );
-            assert!(
-                served_paths(true).all(|p| p != *path),
-                "{path} is admin-only but is selected on the restricted listener"
-            );
-        }
+    /// What a request for `path` gets: served (the dummy handler's `ok`),
+    /// refused by the gate with the JSON-RPC error object (its code), or not
+    /// routed (404).
+    #[derive(Debug, PartialEq, Eq)]
+    enum Probe {
+        Served,
+        Refused(i64),
+        NotFound,
     }
 
-    /// A router with the real route table and dummy handlers.
-    ///
-    /// This is [`build_router`]'s own assembly — the same [`assemble`] call
-    /// over the same [`served_paths`] — with only the handler binding swapped,
-    /// because naming a real handler pulls `core_rpc_ffi_*` into the test link
-    /// set. Both methods are bound so an unrouted path answers 404 rather than
-    /// 405; a 405 read as "absent" would be a vacuous pass.
-    fn probe_router(restricted: bool) -> Router {
-        assemble(restricted, |_| {
-            get(|| async { "ok" }).post(|| async { "ok" })
-        })
-    }
-
-    async fn probe(restricted: bool, path: &str) -> StatusCode {
-        probe_router(restricted)
+    async fn probe(authority: Authority, path: &str) -> Probe {
+        let response = probe_router(authority)
             .oneshot(
                 Request::builder()
                     .method("GET")
@@ -809,75 +756,128 @@ mod tests {
                     .unwrap(),
             )
             .await
-            .unwrap()
-            .status()
+            .unwrap();
+        if response.status() == StatusCode::NOT_FOUND {
+            return Probe::NotFound;
+        }
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        if body.as_ref() == b"ok" {
+            return Probe::Served;
+        }
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("a JSON refusal");
+        Probe::Refused(value["error"]["code"].as_i64().expect("an error code"))
     }
 
-    /// The gate, asserted on the router that ships rather than on the list it
-    /// is built from.
-    ///
-    /// [`served_paths`] returning the right strings is necessary but not
-    /// sufficient: this exercises `Router::route` over those strings, so a
-    /// registration that silently fails to bind is caught too. Dual-armed —
-    /// the unrestricted 200 is what makes the restricted 404 mean **gated**
-    /// rather than **misspelled**.
+    /// A path no row serves is told where JSON-RPC is: HTTP 404 with the
+    /// shared body, never an empty one. Both listeners, both methods, and a
+    /// path the wallet RPC used to serve (`/`) among them.
+    #[tokio::test]
+    async fn an_unrouted_path_is_told_where_json_rpc_is() {
+        for authority in [Authority::admin_listener(false), Authority::VIEW_LISTENER] {
+            for (method, path) in [
+                ("POST", "/"),
+                ("GET", "/no_such_endpoint"),
+                ("POST", "/json_rpc/"),
+            ] {
+                let response = probe_router(authority)
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(path)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let value: serde_json::Value =
+                    serde_json::from_slice(&body).expect("a JSON body, not an empty 404");
+                assert_eq!(
+                    value,
+                    shekyl_rpc_types::endpoint::unrouted_path(path),
+                    "{method} {path}"
+                );
+            }
+        }
+    }
+
+    const OUTSIDE_THE_GRANT: i64 = -32_002;
+
+    /// The gate, asserted on the router that ships. Dual-armed: the admin
+    /// listener's `Served` is what makes the view listener's refusal mean
+    /// **gated** rather than **misspelled**.
     #[tokio::test]
     async fn assembled_router_gates_the_anonymity_graph() {
+        let admin = Authority::admin_listener(false);
         assert_eq!(
-            probe(false, "/get_stem_tallies").await,
-            StatusCode::OK,
-            "unrestricted arm: the anonymity-graph readout must be routed, \
-             or the restricted arm proves nothing"
+            probe(admin, "/get_stem_tallies").await,
+            Probe::Served,
+            "admin arm: the anonymity-graph readout must be served, or the \
+             view arm proves nothing"
         );
         assert_eq!(
-            probe(true, "/get_stem_tallies").await,
-            StatusCode::NOT_FOUND,
-            "restricted arm: the anonymity graph must never reach the public \
-             listener (§55)"
+            probe(Authority::VIEW_LISTENER, "/get_stem_tallies").await,
+            Probe::Refused(OUTSIDE_THE_GRANT),
+            "view arm: the anonymity graph is host-only data (§55)"
         );
-        // Control: the restricted router is a real, populated router.
-        assert_eq!(probe(true, "/get_info").await, StatusCode::OK);
-        assert_eq!(probe(false, "/get_info").await, StatusCode::OK);
+        assert_eq!(
+            probe(Authority::VIEW_LISTENER, "/get_info").await,
+            Probe::Served
+        );
+        assert_eq!(probe(admin, "/get_info").await, Probe::Served);
     }
 
-    /// Every specified path is reachable on the listener that owns it, and
-    /// every admin path 404s on the public one — checked by serving requests.
+    /// Every specified path is served to the authority that holds it and
+    /// refused, with the grant class, to the one that does not — checked by
+    /// serving requests.
     #[tokio::test]
     async fn assembled_router_serves_exactly_the_specified_surface() {
-        for path in SPECIFIED_ALWAYS_PATHS {
+        let admin = Authority::admin_listener(true);
+        for path in SPECIFIED_VIEW_PATHS {
             assert_eq!(
-                probe(true, path).await,
-                StatusCode::OK,
-                "{path} is specified for both listeners but is not routed on \
-                 the restricted one"
+                probe(Authority::VIEW_LISTENER, path).await,
+                Probe::Served,
+                "{path}"
             );
-            assert_eq!(probe(false, path).await, StatusCode::OK, "{path}");
+            assert_eq!(probe(admin, path).await, Probe::Served, "{path}");
         }
         for path in SPECIFIED_ADMIN_ONLY_PATHS {
+            assert_eq!(probe(admin, path).await, Probe::Served, "{path}");
             assert_eq!(
-                probe(false, path).await,
-                StatusCode::OK,
-                "{path} is specified admin-only but is not routed on the \
-                 unrestricted listener"
-            );
-            assert_eq!(
-                probe(true, path).await,
-                StatusCode::NOT_FOUND,
-                "{path} is admin-only but the public listener routes it"
+                probe(Authority::VIEW_LISTENER, path).await,
+                Probe::Refused(OUTSIDE_THE_GRANT),
+                "{path} is refused to the view listener"
             );
         }
         assert_eq!(
-            probe(false, "/get_output_distribution.bin").await,
-            StatusCode::NOT_FOUND,
-            "control: an unspecified path must 404, or the OK assertions above \
-             are vacuous"
+            probe(admin, "/get_output_distribution.bin").await,
+            Probe::NotFound,
+            "control: a path with no row is not a method, so the router answers 404"
+        );
+    }
+
+    /// An armed lever is refused to the host's administrator too while the
+    /// switch is off.
+    #[tokio::test]
+    async fn pop_blocks_needs_the_armed_switch() {
+        assert_eq!(
+            probe(Authority::admin_listener(false), "/pop_blocks").await,
+            Probe::Refused(OUTSIDE_THE_GRANT)
+        );
+        assert_eq!(
+            probe(Authority::admin_listener(true), "/pop_blocks").await,
+            Probe::Served
         );
     }
 
     #[tokio::test]
     async fn cors_default_deny_omits_allow_origin() {
-        // Exercise `cors_layer` without `AppState` / C++ FFI (lib tests cannot
-        // link `core_rpc_ffi_*`).
+        // Exercise `cors_layer` without an `AppState`.
         let app = Router::new()
             .route("/get_info", get(|| async { "ok" }))
             .layer(cors_layer(&[]));
@@ -934,7 +934,7 @@ mod tests {
 
 #[cfg(test)]
 mod lifecycle_tests {
-    use super::{first_error_stops_the_rest, serve_bound, Preset};
+    use super::{first_error_stops_the_rest, serve_bound, Listener};
     use crate::bind::bind_listener;
     use crate::conn_limit::{ConnLimits, ConnTracker};
     use std::time::Duration;
@@ -979,7 +979,7 @@ mod lifecycle_tests {
     /// view socket, through one `serve_bound` over both sets (the shape the
     /// one RPC start builds from its section, §2.3).
     #[tokio::test]
-    async fn each_preset_serves_its_own_router_on_its_own_sockets() {
+    async fn each_listener_serves_its_own_router_on_its_own_sockets() {
         let admin_listener = bind_listener("127.0.0.1:0".parse().unwrap()).await.unwrap();
         let view_listener = bind_listener("127.0.0.1:0".parse().unwrap()).await.unwrap();
         let admin_addr = admin_listener.local_addr();
@@ -990,8 +990,8 @@ mod lifecycle_tests {
         let (tx, rx) = tokio::sync::watch::channel(false);
         let serving = tokio::spawn(serve_bound(
             vec![
-                (Preset::Admin, admin, vec![admin_listener]),
-                (Preset::View, router(), vec![view_listener]),
+                (Listener::Admin, admin, vec![admin_listener]),
+                (Listener::View, router(), vec![view_listener]),
             ],
             ConnTracker::new(ConnLimits::default()),
             rx,
@@ -1025,7 +1025,7 @@ mod lifecycle_tests {
         tokio::time::timeout(
             Duration::from_secs(5),
             serve_bound(
-                vec![(Preset::Admin, router(), listeners)],
+                vec![(Listener::Admin, router(), listeners)],
                 ConnTracker::new(ConnLimits::default()),
                 rx,
             ),
@@ -1073,7 +1073,7 @@ mod lifecycle_tests {
             let listeners = two_loopback_listeners().await;
             let (tx, rx) = tokio::sync::watch::channel(false);
             let serving = tokio::spawn(serve_bound(
-                vec![(Preset::Admin, router(), listeners)],
+                vec![(Listener::Admin, router(), listeners)],
                 ConnTracker::new(ConnLimits::default()),
                 rx,
             ));
@@ -1088,6 +1088,36 @@ mod lifecycle_tests {
                 .expect("every acceptor must stop")
                 .expect("the serve task must not panic")
                 .expect("a clean stop is Ok");
+        }
+    }
+
+    /// RW-Q7's gate for REST: every route's paths are one row's names in the
+    /// method table, and every REST row is a route. A path served without a
+    /// row, or a row nothing serves, fails here.
+    #[test]
+    fn every_route_is_one_method_row_and_every_rest_row_is_routed() {
+        use shekyl_rpc_types::methods::{rest_path, Surface, METHODS};
+        for route in crate::server::ROUTES {
+            let row = rest_path(route.paths[0])
+                .unwrap_or_else(|| panic!("{} has no row in the method table", route.paths[0]));
+            let mut routed: Vec<&str> = route.paths.to_vec();
+            let mut named: Vec<&str> = row.names().collect();
+            routed.sort_unstable();
+            named.sort_unstable();
+            assert_eq!(
+                routed, named,
+                "{}: the route's paths are its row's names",
+                row.name
+            );
+        }
+        for row in METHODS.iter().filter(|row| row.surface == Surface::Rest) {
+            assert!(
+                crate::server::ROUTES
+                    .iter()
+                    .any(|route| route.paths.contains(&row.name)),
+                "{} is a REST row that no route serves",
+                row.name
+            );
         }
     }
 }

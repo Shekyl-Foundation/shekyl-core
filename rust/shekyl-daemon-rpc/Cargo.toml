@@ -1,21 +1,22 @@
 [package]
 name = "shekyl-daemon-rpc"
-description = "Rust daemon RPC server over C++ core_rpc_server via FFI"
+description = "The daemon's RPC server over the node's handles"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# rlib only: this crate is never linked as its own staticlib. It reaches
-# the daemon inside the single Rust image built by
-# `rust/shekyl-daemon-image` (one archive, one `tracing-core`
-# dispatcher; see V3_WALLET_DECISION_LOG.md single-image contract and
-# the nm gate in src/daemon/CMakeLists.txt).
+# rlib only: the `shekyld` binary crate links it through `shekyl-daemon`
+# (one image, one `tracing-core` dispatcher; see V3_WALLET_DECISION_LOG.md
+# single-image contract).
 [lib]
 name = "shekyl_daemon_rpc"
 crate-type = ["lib"]
 
 [dependencies]
+# The network id a submission's signatures are judged under
+# (NETWORK_IDENTITY.md NI-Q4).
+shekyl-network = { path = "../shekyl-network" }
 serde = { workspace = true }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -63,13 +64,9 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # Also the store-backed facts' derivations (DRS-X PR 3): the next target,
 # the medians, the volume window and the fee ladder.
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
-# CEN-M9's prepared reversion (`submit/rust_pool_shim.rs`): the
-# `SubmitStateShim` over the Rust pool, reading the committed chain through
-# the store's `SnapshotView`. Not routed until the DRS-X flip, but linked:
-# `shekyl-daemon-image`, the shekyld binary's one Rust image, depends on
-# this crate, so both crates link into shekyld. No C++ reaches them — no
-# FFI export names the pool, and `shekyl-ffi` does not depend on this
-# crate. Also the store-backed facts' one snapshot per call (DRS-X PR 3).
+# `submit/rust_pool_shim.rs`: the `SubmitStateShim` over the Rust pool,
+# reading the committed chain through the store's `SnapshotView`. Also the
+# store-backed facts' one snapshot per call (DRS-X PR 3).
 shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-mempool = { path = "../shekyl-mempool" }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
@@ -80,12 +77,8 @@ shekyl-units = { path = "../shekyl-units" }
 # (DAEMON_RPC_KV_GET_INFO.md §4.3, RK-D19); the handler calls it and does
 # nothing else with economics.
 shekyl-economics = { path = "../shekyl-economics" }
-# The `shekyld <command>` control client (`ctl_client.rs`): the outbound
-# half of the daemon's HTTP surface rides the same first-party transport the
-# wallet dials the daemon with, replacing epee's `http_simple_client`.
-# `shekyl-rpc-client` supplies the `Rpc` trait that names `post`.
+# The listener (`bind.rs`): a hostname is refused by construction.
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
-shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, features = ["std"] }
 # The one daemon runtime constructor. Worker and blocking counts are this
 # caller's structural floor (the transport's 2 and 1), not Tokio's unset
 # defaults. The D5 pin replaces them.
@@ -97,11 +90,17 @@ shekyl-runtime = { path = "../shekyl-runtime" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 # calc_pow's hash, under a cache the daemon's one CacheStore already holds:
 # the RPC calls `lookup` and `compute_hash`, never a derivation (ruled
-# 2026-10-17). In the graph already through shekyl-ffi and the ingest.
+# 2026-10-17). In the graph already through the ingest.
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 # The daemon's one hasher budget (PR2-Q3): calc_pow hashes under a permit
 # in its class, below the chain's and above the miner's.
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+# Plaintext listeners set hyper's header-read timer. Axum's `serve` does not
+# expose it. The listener is hyper's HTTP/1 builder: that timer is HTTP/1's,
+# and HTTP/2 is not a feature of this crate. Its preface has no such timer,
+# and linking `h2` brought in RUSTSEC-2026-0258.
+hyper = { version = "1", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["tokio", "service"] }
 
 [dev-dependencies]
 # Real consensus-valid spend fixture for the production-verifier oracle test
@@ -121,6 +120,9 @@ rand_chacha = { workspace = true }
 rand_core = { version = "0.6", features = ["std"] }
 tower = { version = "0.5", features = ["util"] }
 http = "1"
+# `start_paused` for the plaintext header-bound and write-stall tests.
+# Production tokio stays `full` without `test-util`.
+tokio = { version = "1", features = ["full", "test-util"] }
 
 [build-dependencies]
 # Consensus-constant generation from config/consensus_constants.json (the

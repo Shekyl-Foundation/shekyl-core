@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-09-04 (§7 step 2 anchor source reconciled — CEN-I12; step 1 rationale's retired staked arm removed — CEN-L12)
+> **Last updated:** 2026-11-06 (§12 checkpoints: the store records the tree at every height; the C++ interval constant is deleted)
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -410,8 +410,9 @@ Returns the current curve tree state summary.
 
 ### `get_curve_tree_checkpoint` JSON-RPC
 
-Retrieves a stored checkpoint at a specific block height (for fast-sync).
-Checkpoints are stored every `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` blocks.
+Retrieves the curve tree after the block at a specific height (for
+fast-sync). The chain store records the tree at every height, so any height
+through the tip answers.
 
 **Request:** `{ "block_height": uint64 }`
 
@@ -889,23 +890,25 @@ the secret key — no secret material is returned.
 
 ### Wallet Restore from Seed
 
-Key derivation follows the frozen v1 pipeline implemented in
-`rust/shekyl-crypto-pq/src/account.rs` (the single source of truth; see
-the crate docstring for the full diagram and the
-`docs/V3_WALLET_DECISION_LOG.md` key-signature freeze entry for the
-rationale). In outline:
+Key derivation is implemented in `rust/shekyl-crypto-pq/src/account.rs`
+(the single source of truth; see the crate docstring for the full
+diagram, and [`NETWORK_IDENTITY.md`](design/NETWORK_IDENTITY.md) NI-R7 and
+NI-R10 for the rulings). It is pinned by the `ADDRESS_DERIVATION_V3`
+vector suite and its independent oracle. In outline:
 
 ```text
-seed input            mainnet/stagenet: BIP-39 24-word mnemonic
-                        (NFKD, PBKDF2-HMAC-SHA512 @ 2048 iters -> 64 B;
-                         passphrase opt-in, defaults to empty)
-                      testnet/fakechain: raw 32-byte seed
+seed                = 32 random bytes, on every network: the wallet's
+                      one secret, shown to the user as BIP-39's 24 words
+                      (the words spell the bytes; no PBKDF2 step, no
+                      passphrase)
 
 master_seed_64      = HKDF-SHA-512(salt="shekyl-seed-normalize-v1",
-                                   ikm=seed-input output, L=64)
-                      (the only secret the wallet file persists)
+                                   ikm=seed, L=64)
 
-salt                = "shekyl-master-derive-v1-<network>-<format>"
+name_id             = cSHAKE256(S="shekyl/network-name-v1",
+                                X=tag)[..16]
+                      (tag = the network's name, "shekyl/<network>")
+salt                = name_id || "shekyl-master-derive-v3"
 spend_wide          = HKDF-SHA-512(salt, ikm=master_seed_64,
                                    info="shekyl-ed25519-spend", L=64)
 view_wide           = HKDF-SHA-512(salt, ikm=master_seed_64,
@@ -919,22 +922,16 @@ ml_kem_768 (ek,dk)  = keygen(SeededRng::from_seed(
                       (those bytes are what ChaCha20Rng::from_seed produces)
 ```
 
-All key material — classical and PQC — is therefore a pure function of
-the master seed, the network, and the seed format. On wallet open the
-full keypair set is rederived from `master_seed_64` via
-`shekyl_account_rederive`, and the recomputed classical address is
-checked against the wallet file's expected-address bytes (see
-`docs/WALLET_FILE_FORMAT_V1.md` for the failure taxonomy).
+All key material, classical and PQC, is therefore a pure function of
+the seed and the network's name. The wallet file stores the 32-byte
+seed (`docs/WALLET_FILE_FORMAT_V1.md` §2.2); every open rederives the
+full key set from it and checks the recomputed classical address
+against the file's expected-address bytes.
 
 On restore, the wallet re-scans the chain for owned outputs. Per-output
 PQC shared secrets are recomputed during the scan by decapsulating with
 the account-level ML-KEM decapsulation key; nothing per-output needs to
-be present in the wallet file for restore to succeed. (The legacy C++
-`wallet2` scan path still caches a per-output combined shared secret in
-`transfer_details` as an implementation detail; that cache — and
-`wallet2.cpp` itself — is a deletion target at Phase 5 of
-`docs/design/WALLET_REWRITE_PLAN.md` and is not part of this
-specification.)
+be present in the wallet file for restore to succeed.
 
 ---
 
@@ -1011,15 +1008,11 @@ HRPs. There are no remaining Base58 code paths.
 
 ### Curve Tree Checkpoints
 
-The curve tree is checkpointed every `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL`
-(10,000) blocks during `add_block`. Each checkpoint stores:
-
-```text
-checkpoint = root[32 bytes] + depth[1 byte] + leaf_count[8 bytes]
-```
-
-Checkpoints are stored in the `curve_tree_checkpoints` LMDB table
-(MDB_INTEGERKEY, keyed by block height).
+The Rust chain store keeps the tree's root and leaf count at every height
+(`curve_tree_roots`, `curve_tree_leaf_counts`; `shekyl-chain-store`
+`schema.rs`), and `get_curve_tree_checkpoint` answers from them for any
+height through the tip. There is no separate interval checkpoint table: it
+would be a second source for rows that already exist (CTW-Q3).
 
 **Purpose:** Fast-sync resumption. A syncing node can skip to the latest
 checkpoint and rebuild only the tree state from that point forward, rather
@@ -1267,7 +1260,6 @@ Do not reintroduce them. Archival emission is a different vin
 | `FCMP_REFERENCE_BLOCK_MAX_AGE` | 100 | `cryptonote_config.h` |
 | `FCMP_REFERENCE_BLOCK_MIN_AGE` | 5 (reorg safety margin) | `cryptonote_config.h` |
 | `FCMP_MAX_INPUTS_PER_TX` | 8 | `cryptonote_config.h` |
-| `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` | 10,000 | `cryptonote_config.h` |
 | `CTTypeFcmpPlusPlusPqc` | 1 | `ct_types.h` |
 | `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | 0x06 | `shekyl-wire/src/tx_extra.rs` |
 | `TX_EXTRA_TAG_PQC_LEAF_ENTRIES` | 0x07 | `shekyl-wire/src/tx_extra.rs` |

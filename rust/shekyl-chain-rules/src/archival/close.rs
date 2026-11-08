@@ -402,7 +402,7 @@ pub(crate) fn gather_epoch_snapshot<'id, 'r, V: ChainView<'id>>(
         }
         bonds.push(EpochCloseBond {
             join_settlement_epoch: record.join_settlement_epoch.to_raw(),
-            is_foundation_complete_tree: complete_trees.contains(persona),
+            is_support_complete_tree: complete_trees.contains(persona),
             bad_intervals: &record.bad_intervals,
         });
         for shard in shards_credited {
@@ -690,6 +690,7 @@ fn fold_epoch(
         &snapshot.bonds,
         &snapshot.shards,
         &snapshot.pairs,
+        shekyl_archival_retention::archival_params(),
     );
     let result = epoch_close_compute(&inputs)
         .expect("every credit pair indexes the bonds and shards it was built from");

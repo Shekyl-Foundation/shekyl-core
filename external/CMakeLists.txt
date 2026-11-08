@@ -29,9 +29,6 @@
 # Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 
-
-add_subdirectory(db_drivers)
-add_subdirectory(qrcodegen)
 # external/randomx (v1) is no longer configured: its last linker
 # (cncrypto's rx-slow-hash.c) was deleted with the claim-era v1 hashing
 # machinery. The submodule itself stays checked out — tevador's v1 test

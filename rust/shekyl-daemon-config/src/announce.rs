@@ -16,8 +16,10 @@ use crate::resolve::Resolved;
 use crate::sections::{Clearnet, DaemonConfig, Tor};
 
 /// Every value and its source, in table order, as one line. A secret shows
-/// as `set`, never its text. The configuration file read, or the default
-/// path at which none was found, leads.
+/// as `set`, never its text; `mine-address` shows shortened to its first
+/// and last eight characters, and `option show` gives the full value under
+/// its grant (Rick, 2026-11-02). The configuration file read, or the
+/// default path at which none was found, leads.
 #[must_use]
 pub fn effective_configuration(
     table: &Table,
@@ -44,10 +46,26 @@ pub fn effective_configuration(
                 Source::Runtime => "runtime".to_owned(),
                 Source::Machine => "machine".to_owned(),
             };
-            parts.push(format!("{}={} ({shown})", row.name, value.render()));
+            let value = match row.name {
+                "mine-address" => shortened(&value.render()),
+                _ => value.render(),
+            };
+            parts.push(format!("{}={value} ({shown})", row.name));
         }
     }
     format!("effective configuration: {}", parts.join(" "))
+}
+
+/// The first and last eight characters of an address, joined by `…`; an
+/// address of sixteen or fewer is whole.
+fn shortened(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= 16 {
+        return text.to_owned();
+    }
+    let head: String = chars[..8].iter().collect();
+    let tail: String = chars[chars.len() - 8..].iter().collect();
+    format!("{head}…{tail}")
 }
 
 /// One line per development lever set (IG-8).
@@ -100,6 +118,49 @@ pub fn posture(config: &DaemonConfig) -> String {
         Tor::Off => {}
     }
     format!("posture: {}", parts.join("; "))
+}
+
+/// The lines a start announces and the configuration check repeats
+/// (IG-14, IG-Q61).
+///
+/// The effective configuration leads. The development levers, the posture
+/// and the walk's warnings follow, in that order. No line carries the
+/// `shekyld:` prefix: standard error, the log and the check each add it.
+pub struct Announcements {
+    /// The effective-configuration line.
+    pub effective: String,
+    /// Development levers, the posture, then the walk's warnings.
+    pub rest: Vec<String>,
+}
+
+impl Announcements {
+    /// Every line, the effective configuration first.
+    #[must_use]
+    pub fn into_lines(self) -> Vec<String> {
+        let mut lines = Vec::with_capacity(1 + self.rest.len());
+        lines.push(self.effective);
+        lines.extend(self.rest);
+        lines
+    }
+}
+
+/// [`Announcements`] for one resolution and the warnings the walk carried.
+#[must_use]
+pub fn announcements(
+    table: &Table,
+    resolved: &Resolved,
+    config_file: Option<&Path>,
+    default_path: &Path,
+    config: &DaemonConfig,
+    warnings: &[String],
+) -> Announcements {
+    let mut rest = dev_levers(table, resolved);
+    rest.push(posture(config));
+    rest.extend(warnings.iter().cloned());
+    Announcements {
+        effective: effective_configuration(table, resolved, config_file, default_path),
+        rest,
+    }
 }
 
 #[cfg(test)]
@@ -195,19 +256,62 @@ mod tests {
             "{line}"
         );
         assert!(
-            line.contains("clearnet-listen=0.0.0.0:11021 (default)"),
+            line.contains("clearnet-listen=0.0.0.0:14021 (default)"),
             "{line}"
         );
         assert!(
-            line.contains("rpc-admin-listen=127.0.0.1:11029 (default)"),
+            line.contains("rpc-admin-listen=127.0.0.1:14029 (default)"),
             "{line}"
         );
         assert!(!line.contains("tor-file="), "{line}");
         assert!(resolved.get("tor-file").is_none());
+        assert!(line.contains("mine=off (default)"), "{line}");
+        assert!(
+            !line.contains("mine-address="),
+            "unset rows do not print: {line}"
+        );
         let levers = dev_levers(&TABLE, &resolved);
         assert_eq!(
             levers,
             vec!["development lever set: dev-difficulty=7".to_owned()]
+        );
+    }
+
+    /// `mine-address` prints shortened: the first and last eight characters
+    /// and nothing of the middle. Red edit: print the full address.
+    #[test]
+    fn the_mine_address_prints_shortened() {
+        let text = shekyl_address::ShekylAddress::new(
+            shekyl_address::Network::Mainnet,
+            [0xaa; 32],
+            [0xbb; 32],
+            [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+            vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+        )
+        .encode()
+        .unwrap();
+        let (resolved, _) = setup(&["--mine-address", &text, "--tor", "off"], "");
+        let line = effective_configuration(&TABLE, &resolved, None, Path::new("/etc/x.toml"));
+        let want = format!(
+            "mine-address={}…{} (cli)",
+            &text[..8],
+            &text[text.len() - 8..]
+        );
+        assert!(line.contains(&want), "{line}");
+        assert!(!line.contains(&text[8..text.len() - 8]), "{line}");
+        assert_eq!(shortened("sixteen-chars-ok"), "sixteen-chars-ok");
+    }
+
+    /// The armed-lever switch announces itself in exactly this text.
+    /// Harnesses match the line, and
+    /// `scripts/ci/check_armed_lever_launchers.py` holds every copy of it
+    /// to this assertion.
+    #[test]
+    fn the_armed_lever_switch_announces_itself() {
+        let (resolved, _) = setup(&["--network", "regtest", "--tor", "off", "--dev-rpc"], "");
+        assert_eq!(
+            dev_levers(&TABLE, &resolved),
+            vec!["development lever set: dev-rpc=true".to_owned()]
         );
     }
 
@@ -221,5 +325,37 @@ mod tests {
         assert_eq!(posture(&c), "posture: clearnet-only: Tor is off; clearnet dial-only: no listener; clearnet address not advertised");
         let _ = RunMode::User;
         let _ = Network::Mainnet;
+    }
+
+    /// Start and the check share this order: the effective configuration,
+    /// then the levers, the posture and the walk's warnings.
+    #[test]
+    fn the_announcements_lead_with_the_effective_configuration() {
+        let (resolved, config) = setup(&["--network", "regtest", "--dev-difficulty", "7"], "");
+        let warnings = vec!["warning: managed Tor: example".to_owned()];
+        let announced = announcements(
+            &TABLE,
+            &resolved,
+            None,
+            Path::new("/etc/shekyl/shekyld-regtest.toml"),
+            &config,
+            &warnings,
+        );
+        assert!(announced.effective.starts_with("effective configuration: "));
+        let posture_at = announced
+            .rest
+            .iter()
+            .position(|line| line.starts_with("posture:"))
+            .expect("the posture is one of the lines");
+        assert!(announced.rest[..posture_at]
+            .iter()
+            .any(|line| line.starts_with("development lever set: ")));
+        assert_eq!(
+            announced.rest.last().map(String::as_str),
+            Some("warning: managed Tor: example")
+        );
+        let lines = announced.into_lines();
+        assert!(lines[0].starts_with("effective configuration: "));
+        assert!(lines.len() > 1);
     }
 }

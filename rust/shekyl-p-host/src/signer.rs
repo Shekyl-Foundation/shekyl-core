@@ -20,7 +20,7 @@
 //! anchors the persona has not seen. So `p` is not an argument, and the
 //! only question is which reading the host takes.
 //!
-//! It used to be [`ServingReader::sync_tip_height`](shekyl_curve_tree::ServingReader::sync_tip_height)
+//! It used to be `ServingReader::sync_tip_height`
 //! — the height the
 //! **principal's block scan** had advanced the served store to. The
 //! argument was that the store being read is the store being signed for, so
@@ -135,6 +135,21 @@ where
     pub(crate) fn new(tip: Arc<DaemonTipCache>, key: Arc<dyn PassKey<W>>) -> Self {
         Self { tip, key }
     }
+}
+
+/// The host signer over a tip cache the caller stamps: a test whose chain
+/// moves (the bundle producer's gate test) stamps it as each block lands,
+/// as production stamps it from the wallet's daemon.
+#[cfg(any(test, feature = "test-signer"))]
+#[must_use]
+pub fn signer_over_tip<const W: usize>(
+    tip: Arc<DaemonTipCache>,
+    key: Arc<dyn PassKey<W>>,
+) -> Arc<dyn PassSigner<W>>
+where
+    PassEnvelope: EnvelopeWidth<W>,
+{
+    Arc::new(HostSigner::new(tip, key))
 }
 
 /// The host signer over a tip stamped once, at `top_block_height`.

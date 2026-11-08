@@ -36,11 +36,16 @@ fn test_address() -> ShekylAddress {
 fn canonical_address_bytes_layout_is_pinned() {
     let addr = test_address();
     let bytes = canonical_address_bytes(&addr);
-    assert_eq!(bytes.len(), 1 + 32 + 32 + 1184);
-    assert_eq!(bytes[0], Network::Mainnet.as_u8());
-    assert_eq!(&bytes[1..33], &[0xAA; 32]);
-    assert_eq!(&bytes[33..65], &[0xBB; 32]);
-    assert_eq!(&bytes[65..], &[0xCC; 1184][..]);
+    assert_eq!(bytes.len(), 32 + 32 + 1184);
+    assert_eq!(&bytes[..32], &[0xAA; 32]);
+    assert_eq!(&bytes[32..64], &[0xBB; 32]);
+    assert_eq!(&bytes[64..], &[0xCC; 1184][..]);
+    // An address and only an address: the network a proof is valid on is the
+    // envelope's binding, not these bytes (the signing envelope §2.3), so the
+    // same keys on another network are the same bytes.
+    let mut other = addr.clone();
+    other.network = Network::Testnet;
+    assert_eq!(canonical_address_bytes(&other), bytes);
 }
 
 // ── tx-proof framing ─────────────────────────────────────────────
@@ -358,16 +363,14 @@ mod check_workflows {
                                     .expect("txid is 32 bytes of hex"),
                                 as_hex: String::new(),
                                 pruned_as_hex: (*body_hex).clone(),
-                                prunable_as_hex: String::new(),
                                 prunable_hash: shekyl_rpc_types::HashHex::ZERO,
+                                pqc_auth_hash: shekyl_rpc_types::Nullable::NULL,
                                 archival_len: 0,
-                                as_json: String::new(),
-                                pruned: false,
                                 double_spend_seen: false,
                                 location: if self.pooled.contains(h.as_str()) {
                                     shekyl_rpc_types::TxLocation::Pooled {
                                         relayed: true,
-                                        received_timestamp: 1,
+                                        received_timestamp: Some(1),
                                     }
                                 } else {
                                     shekyl_rpc_types::TxLocation::Mined {
@@ -395,6 +398,8 @@ mod check_workflows {
                         status: shekyl_rpc_types::RpcStatus::ok(),
                         txs,
                         missed_tx: missed,
+                        unavailable_tx: Vec::new(),
+                        archived: Vec::new(),
                     })
                     .expect("wire type serializes")
                 }
@@ -424,7 +429,8 @@ mod check_workflows {
                                 .pointer("/params/height")
                                 .and_then(serde_json::Value::as_u64)
                                 .expect("height is a number");
-                            let mut hash = crate::engine::test_support::test_block_hash_at(height);
+                            let mut hash =
+                                crate::engine::test_support::test_block_hash_at(height).to_bytes();
                             if self.witness_replaced {
                                 hash[0] ^= 0xff;
                             }
@@ -568,7 +574,11 @@ mod check_workflows {
         // exactly where it lands. The mock serves `prunable_hash: ZERO`, so
         // that is the digest the identity mixes.
         let txid = tx
-            .hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]), ArchivalLength::ZERO)
+            .hash_with_supplied_components(
+                None,
+                PrunableHash::from_bytes([0u8; 32]),
+                ArchivalLength::ZERO,
+            )
             .to_bytes();
         let mut txs = BTreeMap::new();
         txs.insert(hex::encode(txid), hex::encode(tx.serialize()));
@@ -598,6 +608,7 @@ mod check_workflows {
         let bytes = proof_bridge::generate_inbound_proof(
             &fx.local,
             &InboundProofRequest {
+                network_id: fx.address.network.network_id(),
                 txid: fx.txid,
                 address_bytes: canonical_address_bytes(&fx.address),
                 message: MSG.as_bytes().to_vec(),
@@ -641,6 +652,7 @@ mod check_workflows {
         let bytes = proof_bridge::generate_reserve_proof(
             &fx.local,
             &ReserveProofRequest {
+                network_id: fx.address.network.network_id(),
                 address_bytes: canonical_address_bytes(&fx.address),
                 message: MSG.as_bytes().to_vec(),
                 outputs: fx
@@ -703,6 +715,7 @@ mod check_workflows {
         // both outputs, exactly what `generate_outbound` produces
         // after vout discovery.
         let bytes = generate_outbound_proof(
+            &fx.address.network.network_id(),
             &TX_KEY_SECRET,
             &fx.txid,
             &canonical_address_bytes(&fx.address),
@@ -851,6 +864,7 @@ mod check_workflows {
         let bytes = proof_bridge::generate_reserve_proof(
             &fx.local,
             &ReserveProofRequest {
+                network_id: fx.address.network.network_id(),
                 address_bytes: canonical_address_bytes(&fx.address),
                 message: MSG.as_bytes().to_vec(),
                 outputs: vec![dup(0), dup(0)],
@@ -890,7 +904,11 @@ mod check_workflows {
         let mut second = base.clone();
         second.prefix.unlock_time = 1;
         let txid2 = second
-            .hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]), ArchivalLength::ZERO)
+            .hash_with_supplied_components(
+                None,
+                PrunableHash::from_bytes([0u8; 32]),
+                ArchivalLength::ZERO,
+            )
             .to_bytes();
         assert_ne!(txid2, fx.txid, "the second body must be a different tx");
         let mut txs = (*fx.rpc.txs).clone();
@@ -937,7 +955,8 @@ mod check_workflows {
             let mut tx = base.clone();
             tx.prefix.unlock_time = i;
             let id = tx
-                .hash_with_supplied_prunable(
+                .hash_with_supplied_components(
+                    None,
                     PrunableHash::from_bytes([0u8; 32]),
                     ArchivalLength::ZERO,
                 )
@@ -1184,6 +1203,7 @@ mod check_workflows {
 
         let address_bytes = canonical_address_bytes(&fx.address);
         let with_secrets = generate_outbound_proof_with_secrets(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &TX_KEY_SECRET,
             &fx.txid,
             &address_bytes,
@@ -1192,6 +1212,7 @@ mod check_workflows {
         )
         .expect("with-secrets generation succeeds");
         let rederived = generate_outbound_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &TX_KEY_SECRET,
             &fx.txid,
             &address_bytes,
@@ -1207,6 +1228,7 @@ mod check_workflows {
         assert_eq!(with_secrets[97..], rederived[97..]);
 
         let verified = verify_outbound_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &with_secrets,
             &fx.txid,
             &address_bytes,

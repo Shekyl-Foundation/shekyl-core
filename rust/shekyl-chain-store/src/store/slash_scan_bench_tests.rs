@@ -13,7 +13,7 @@
 //! — one more epoch of grace. The cost of a slash is `M + 1` epochs, plus
 //! one, whatever the epoch is.
 //!
-//! The chain, under `RuleSet::fakechain(fixed 7, SEB 100 / cap 50)`:
+//! The chain, under `RuleSet::GENESIS.with_levers(fixed 7, SEB 100 / cap 50)`:
 //! `P` complete-tree personas join in epoch 0 — one **real** bond post
 //! per block from [`FIRST_SPEND_HEIGHT`], each spending the coinbase that
 //! matured for its height (CEN-J27, since slice 6's 4.J row: a bond post
@@ -124,9 +124,7 @@ use std::time::{Duration, Instant};
 use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, FAILURE_WINDOW_M, FAILURE_WINDOW_N};
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{
-    Corrupt, FakechainSchedule, RuleSet, SettlementCheck, SlashLogFloor, Trust,
-};
+use shekyl_chain_rules::{CappedEpoch, Corrupt, RuleSet, SettlementCheck, SlashLogFloor};
 use shekyl_crypto_hash::keccak256;
 use shekyl_harness_spender::Persona;
 use shekyl_types::archival::{
@@ -138,10 +136,11 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Transaction};
 
 use super::connect_fixtures::{Grown, Listed, FIRST_SPEND_HEIGHT};
-use super::store_tests::{cleanup, tmp, TestErr};
+use super::store_tests::{tmp, TestErr};
 use super::*;
 use crate::archival_snapshot::{hex, ArchivalSnapshot, SnapshotFamily};
 use crate::codec::{Canonical, SettlementEpochBlocks, SlashLogEntry};
+use crate::test_paths::TestPath;
 use shekyl_chain_rules::EpochFloor;
 
 const SEB: u64 = 100;
@@ -149,16 +148,16 @@ const RETENTION: u64 = 50;
 /// Fixed difficulty: over a thousand blocks at the fixture's constant
 /// spacing LWMA would floor the difficulty, and the fixture's zero longhash
 /// passes any fixed target.
-const RULES: RuleSet = RuleSet::fakechain(NonZeroU128::new(7), pair(SEB, RETENTION));
+const RULES: RuleSet = RuleSet::GENESIS.with_levers(NonZeroU128::new(7), pair(SEB, RETENTION));
 /// The witness's persona count: enough that the per-persona loop is a loop,
 /// few enough that the chain builds in the unit lane in debug.
 const WITNESS_PERSONAS: u64 = 4;
 
-const fn pair(seb: u64, cap: u64) -> FakechainSchedule {
+const fn pair(seb: u64, cap: u64) -> CappedEpoch {
     let Some(epoch) = SettlementEpochBlocks::new(seb) else {
         panic!("a zero epoch");
     };
-    match FakechainSchedule::new(epoch, BlockCount::from_raw(cap)) {
+    match CappedEpoch::new(epoch, BlockCount::from_raw(cap)) {
         Ok(pair) => pair,
         Err(_) => panic!("the cap is not inside the epoch"),
     }
@@ -425,7 +424,7 @@ fn issue(store: &ChainStore, epoch: u64, personas: u64, plan: Plan) {
         .expect("read");
     store
         .regtest_issue_draws(
-            Trust::UNANCHORED,
+            super::store_tests::issue_permit(),
             epoch,
             &draws,
             folded(digest, epoch, &draws),
@@ -452,7 +451,8 @@ fn mean(timings: &[Timing]) -> Timing {
 /// asserts and then reads the timings.
 struct SlashedChain {
     store: ChainStore,
-    path: std::path::PathBuf,
+    /// The store's directory, removed when this drops (after the store).
+    _path: TestPath,
     personas: u64,
     /// `M`, the slashing epoch's raw value.
     m: u64,
@@ -553,7 +553,7 @@ impl SlashedChain {
         );
         Self {
             store,
-            path,
+            _path: path,
             personas,
             m,
             slashing_height,
@@ -789,15 +789,10 @@ impl SlashedChain {
         let back = ArchivalSnapshot::read_body(&mut body.as_slice()).expect("reads");
         assert_eq!(back, got);
     }
-
-    fn finish(self) {
-        drop(self.store);
-        cleanup(&self.path);
-    }
 }
 
 /// `keccak256(body)` of the `0x04` body at the witness's slashing tip
-/// under `RULES`, `WITNESS_PERSONAS` personas: 18 836 bytes, 60 rows — four
+/// under `RULES`, `WITNESS_PERSONAS` personas: 26 184 bytes, 60 rows — four
 /// bonds, the twenty-two padding credits, thirteen closed epochs' budget
 /// rows and the twelve settled epochs' Σwork rows, and the slash families above. A fingerprint of bytes,
 /// not a domain: the plain hash, so the pin registers nothing in
@@ -817,7 +812,7 @@ impl SlashedChain {
 /// inflow; and every Σwork row is zero and no `R_market` row exists, as
 /// before, because a complete-tree persona is not a market member
 /// (`shekyl_archival_retention::market_member_at_epoch`:
-/// `is_foundation_complete_tree ⇒ false`),
+/// `is_support_complete_tree ⇒ false`),
 /// so its credits earn no work and count in no shard. Re-pinned
 /// 2026-10-08 again at CEN-J27: the joins became real bond posts, so the
 /// four personas are the harness's (`Persona::at(0..4)`, whose keys and
@@ -838,7 +833,16 @@ impl SlashedChain {
 /// personas' joins commit theirs — 4 × 1 837 = 7 348 bytes, the whole delta
 /// from 18 836, the row count unchanged at 60. Nothing else moved: the slash
 /// families are spelled and asserted above, and the credit, budget and
-/// Σwork rows do not read a bond's keys. *Records-was:*
+/// Σwork rows do not read a bond's keys. Re-pinned 2026-11-03 with the
+/// wallet derivation change (`NI-R7` / `NI-R10`, `NETWORK_IDENTITY.md`:
+/// the HKDF salt is the network's tag with no seed-format component), so
+/// `Persona::at` derives new keys and ids from the same master seed. No
+/// codec changed: same 26 184 bytes, same 60 rows in every family. The
+/// parent's body maps onto this one byte for byte by substituting each
+/// persona's id, identity key, bond-spend key and receipt key; the only
+/// other movement is order — the bond and slash-applied rows sort by the
+/// new ids, and the slash-log `seq` follows bond-table order, so it
+/// renumbers. The budget and Σwork rows are byte-identical. *Records-was:*
 /// `6b1d14e89834bee02ad080ca3e9809ef3bd39e4411513d9ee474c1f2c501f76a`
 /// (ARW-Q18); `2af8d16279df18ccd9dde4d8e889150e68679634d87e71791970cef8167fba11`
 /// (speed factor alone); `283d9d1e126bfed44003d412e2e93b65652e56929038ddb549d56e30db7a1e2d`
@@ -849,9 +853,16 @@ impl SlashedChain {
 /// `4d44488217508fac2d48422da0312ef31fdbe958935d0903832e05edb3fcb0a4`
 /// (CEN-J27, 18 856 bytes, 61 rows, until `SO-D11`);
 /// `ec2d0b760803781c389d97d7e019933ca84e5b7e01c3f067e5c8510fd797f001`
-/// (`SO-D11`, 18 836 bytes, 60 rows, until the receipt key).
+/// (`SO-D11`, 18 836 bytes, 60 rows, until the receipt key);
+/// `937f578b349f5815e27b2a6f8228a7338478b39b1ecd7556122a4b732dcafb2f`
+/// (the receipt key, 26 184 bytes, 60 rows, until `NI-R7` / `NI-R10`);
+/// `ae8dc7a86f9a1a1597dd7805221da8ebb9dc36de3c4364b2388036de9db81a71`
+/// (`NI-R7` / `NI-R10`, 26 184 bytes, 60 rows, until the salt
+/// `name_id ‖ shekyl-master-derive-v3`, 2026-11-04: again only the persona
+/// keys and ids moved, with the same size and row counts, and every
+/// family's section still equal to its own derivation above).
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
-    "937f578b349f5815e27b2a6f8228a7338478b39b1ecd7556122a4b732dcafb2f";
+    "2a73b959226a3ad761c596d21355b090e4ad39ab7d5cdc6c00657d6da181f5c8";
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own
@@ -889,7 +900,6 @@ fn slash_writes_land_at_the_m_epoch_deadline() {
     chain.assert_nothing_slashed_before_m();
     chain.assert_slashed();
     chain.assert_snapshot_pins_the_slash_families();
-    chain.finish();
 }
 
 #[test]
@@ -935,7 +945,6 @@ fn slash_scan_bench() {
         "  slashing judge / ordinary judge = {:.2}",
         slashing.judge.as_secs_f64() / ordinary.judge.as_secs_f64().max(f64::EPSILON)
     );
-    chain.finish();
 }
 
 #[path = "settlement_slash_tests.rs"]

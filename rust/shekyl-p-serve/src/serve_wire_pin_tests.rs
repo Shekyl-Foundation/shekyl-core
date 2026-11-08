@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature,
@@ -63,8 +63,7 @@ fn body() -> Vec<u8> {
 }
 
 fn pinned_keys() -> (HybridPublicKey, HybridSecretKey) {
-    let keys = derive_archival_p_keys(&KEY_SEED, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
-        .expect("derivation");
+    let keys = derive_archival_p_keys(&KEY_SEED, Network::Mainnet, 0).expect("derivation");
     (keys.hybrid_bond_id().clone(), keys.hybrid_sign_sk.clone())
 }
 
@@ -196,6 +195,7 @@ async fn a_served_response_is_the_pinned_bytes() {
     );
     verify_pass_transcript(
         &pinned_keys().0,
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,

@@ -62,6 +62,7 @@ use serde::{Deserialize, Serialize};
 use sha3::digest::core_api::CoreWrapper;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{CShake256, CShake256Core};
+use shekyl_types::TxHash;
 use std::fmt;
 use zeroize::Zeroize;
 
@@ -186,13 +187,13 @@ impl fmt::Debug for OutputHandle {
 /// serialized into 8 little-endian bytes for the cSHAKE input.
 pub fn derive_output_handle(
     view_secret: &[u8; 32],
-    tx_hash: &[u8; 32],
+    tx_hash: &TxHash,
     output_index: u64,
 ) -> OutputHandle {
     let core = CShake256Core::new(OUTPUT_HANDLE_CUSTOMIZATION);
     let mut hasher: CShake256 = CoreWrapper::from_core(core);
     hasher.update(view_secret);
-    hasher.update(tx_hash);
+    hasher.update(tx_hash.as_bytes());
     hasher.update(&output_index.to_le_bytes());
     let mut reader = hasher.finalize_xof();
     let mut out = [0u8; OUTPUT_HANDLE_LEN];
@@ -296,7 +297,8 @@ mod tests {
         for (i, (view_secret, tx_hash, output_index, expected_hex)) in
             REFERENCE_VECTORS.iter().enumerate()
         {
-            let handle = derive_output_handle(view_secret, tx_hash, *output_index);
+            let handle =
+                derive_output_handle(view_secret, &TxHash::from_bytes(**tx_hash), *output_index);
             let expected = parse_hex_16(expected_hex);
             assert_eq!(
                 handle.as_bytes(),
@@ -313,16 +315,16 @@ mod tests {
         let view_secret = [0xa5u8; 32];
         let tx_hash = [0x5au8; 32];
         let output_index = 7u64;
-        let h1 = derive_output_handle(&view_secret, &tx_hash, output_index);
-        let h2 = derive_output_handle(&view_secret, &tx_hash, output_index);
+        let h1 = derive_output_handle(&view_secret, &TxHash::from_bytes(tx_hash), output_index);
+        let h2 = derive_output_handle(&view_secret, &TxHash::from_bytes(tx_hash), output_index);
         assert_eq!(h1, h2);
     }
 
     #[test]
     fn divergence_view_secret_change_changes_handle() {
         let tx_hash = [0u8; 32];
-        let h_a = derive_output_handle(&[0xaau8; 32], &tx_hash, 0);
-        let h_b = derive_output_handle(&[0xabu8; 32], &tx_hash, 0);
+        let h_a = derive_output_handle(&[0xaau8; 32], &TxHash::from_bytes(tx_hash), 0);
+        let h_b = derive_output_handle(&[0xabu8; 32], &TxHash::from_bytes(tx_hash), 0);
         assert_ne!(
             h_a, h_b,
             "single-bit view_secret change must produce a distinct handle",
@@ -332,8 +334,8 @@ mod tests {
     #[test]
     fn divergence_tx_hash_change_changes_handle() {
         let view_secret = [0u8; 32];
-        let h_a = derive_output_handle(&view_secret, &[0xaau8; 32], 0);
-        let h_b = derive_output_handle(&view_secret, &[0xabu8; 32], 0);
+        let h_a = derive_output_handle(&view_secret, &TxHash::from_bytes([0xaau8; 32]), 0);
+        let h_b = derive_output_handle(&view_secret, &TxHash::from_bytes([0xabu8; 32]), 0);
         assert_ne!(
             h_a, h_b,
             "single-bit tx_hash change must produce a distinct handle",
@@ -344,8 +346,8 @@ mod tests {
     fn divergence_output_index_change_changes_handle() {
         let view_secret = [0u8; 32];
         let tx_hash = [0u8; 32];
-        let h_a = derive_output_handle(&view_secret, &tx_hash, 0);
-        let h_b = derive_output_handle(&view_secret, &tx_hash, 1);
+        let h_a = derive_output_handle(&view_secret, &TxHash::from_bytes(tx_hash), 0);
+        let h_b = derive_output_handle(&view_secret, &TxHash::from_bytes(tx_hash), 1);
         assert_ne!(
             h_a, h_b,
             "single-bit output_index change must produce a distinct handle",
@@ -364,7 +366,8 @@ mod tests {
         let tx_hash = [0u8; 32];
         let output_index = 0u64;
 
-        let v1_handle = derive_output_handle(&view_secret, &tx_hash, output_index);
+        let v1_handle =
+            derive_output_handle(&view_secret, &TxHash::from_bytes(tx_hash), output_index);
 
         // Hand-rolled v2 invocation: same shape, different
         // customization string.
@@ -389,7 +392,7 @@ mod tests {
 
     #[test]
     fn debug_truncates_handle_to_two_bytes() {
-        let handle = derive_output_handle(&[0u8; 32], &[0u8; 32], 0);
+        let handle = derive_output_handle(&[0u8; 32], &TxHash::from_bytes([0u8; 32]), 0);
         let debug_str = format!("{handle:?}");
         // Format: "OutputHandle(XXXX..)" where XXXX is 4 hex chars
         // (2 bytes). Strict-string match prevents accidental

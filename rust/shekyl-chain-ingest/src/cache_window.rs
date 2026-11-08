@@ -26,8 +26,7 @@
 //! slot, and every build takes a hasher permit.
 
 use shekyl_chain_rules::{
-    anchor_band, seed_height, AnchorBand, AtHeight, CenRow, Corrupt, Fork, InvalidBlock, Locus,
-    PerHeightRecord, RuleSet, Trust, ViewRead, D_MAX,
+    seed_height, AtHeight, Corrupt, Fork, PerHeightRecord, RuleSet, ViewRead, D_MAX,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError};
 use shekyl_difficulty::SEEDHASH_EPOCH_BLOCKS;
@@ -58,10 +57,28 @@ fn reach_above(cap: BlockCount) -> BlockCount {
     }
 }
 
+/// How many recorded blocks a reorg may pop below `connecting`: the cap,
+/// and never past `floor`, the store's lowest poppable height (genesis is
+/// never popped, nor anything the undo journal has retired). The window's
+/// lower end and [`spend`]'s depth refusal both read this one bound, so
+/// the window never names a seed that only a block the store will not pop
+/// hashes under (A2: the null seed, once genesis is connected), and a fork
+/// the window does not cover is refused before its seed is looked for.
+fn pop_reach(cap: BlockCount, connecting: BlockHeight, floor: BlockHeight) -> BlockCount {
+    let poppable = connecting.checked_sub(floor).unwrap_or(BlockCount::ZERO);
+    if poppable.to_raw() < cap.to_raw() {
+        poppable
+    } else {
+        cap
+    }
+}
+
 /// The seeds the two slots hold: the connecting height's, and the other
-/// endpoint of the serviceable window when it differs.
+/// endpoint of the serviceable window when it differs. Published on
+/// [`Door::seeds`](crate::service::Door::seeds) once pinned, so a reader
+/// that saw it holds a seed can look that seed up and find it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SeedPair {
+pub struct SeedPair {
     /// The seed a block connecting at the tip's successor hashes under.
     /// The canonical slot.
     pub(crate) canonical: BlockHash,
@@ -72,7 +89,7 @@ pub(crate) struct SeedPair {
 impl SeedPair {
     /// Whether `seed` is one of the two this pair holds.
     #[must_use]
-    pub(crate) fn holds(self, seed: &BlockHash) -> bool {
+    pub fn holds(self, seed: &BlockHash) -> bool {
         self.canonical == *seed || self.transient == Some(*seed)
     }
 }
@@ -89,11 +106,8 @@ pub(crate) enum AltSpend {
     /// arrival's permit, never pinned, and hash with the cache that
     /// returns.
     Prepare,
-    /// Below a reached checkpoint, or past the cap on an anchored chain.
-    /// CEN-E2. Nothing is stored.
-    Refused(InvalidBlock),
-    /// Past the cap on a chain where the cap does not bind as consensus.
-    /// Local. Nothing is stored and nothing is hashed.
+    /// Past the reorg cap. Local, not a consensus verdict: this node cannot
+    /// switch that deep. Nothing is stored and nothing is hashed.
     BeyondCap(PopBeyondReorgCap),
     /// A seed below the fork that the pair does not hold. The window's
     /// arithmetic says it cannot happen inside the cap: a driver defect,
@@ -130,7 +144,7 @@ pub(crate) fn seeds_on(
     let tip = snap.tip()?.recorded;
     let connecting = shekyl_chain_rules::Tip::connecting_height(tip.as_ref());
     let cap = rules.in_force(connecting).reorg_cap();
-    let low = connecting.saturating_sub_count(cap);
+    let low = connecting.saturating_sub_count(pop_reach(cap, connecting, snap.undo_floor()?));
     let high = connecting.saturating_add(reach_above(cap));
     // The connecting height's seed lags the tip, or is the null hash
     // before any block exists. The window's far end can name the next
@@ -204,6 +218,12 @@ pub(crate) enum SeedSide {
 /// Whether `fork`'s block, hashing under `seed` (which lies on `side`) at
 /// `height`, may be hashed against `window`, and how. Records nothing.
 /// Builds nothing.
+///
+/// `floor` is the store's lowest poppable height on the snapshot `window`
+/// was read from. A fork that would pop below it is past the reach the
+/// window was built for ([`pop_reach`]), so it is refused as past the cap:
+/// this node cannot switch that deep. Its seed is never looked for, so it
+/// cannot be a [`AltSpend::SeedNotInWindow`] fault.
 #[must_use]
 pub(crate) fn spend(
     fork: &Fork,
@@ -211,22 +231,21 @@ pub(crate) fn spend(
     side: SeedSide,
     height: BlockHeight,
     rule_set: &RuleSet,
-    trust: &Trust,
     window: &SeedPair,
+    floor: BlockHeight,
 ) -> AltSpend {
-    match anchor_band(fork, rule_set, trust) {
-        Some(AnchorBand::BelowAnchor { .. } | AnchorBand::BeyondCap { .. }) => {
-            AltSpend::Refused(InvalidBlock::new(CenRow::E2, Locus::Block))
-        }
-        None if fork.pops() > rule_set.reorg_cap() => AltSpend::BeyondCap(PopBeyondReorgCap {
+    let connecting = fork.recorded_tip().height.saturating_add(BlockCount::ONE);
+    let reach = pop_reach(rule_set.reorg_cap(), connecting, floor);
+    if fork.pops() > reach {
+        return AltSpend::BeyondCap(PopBeyondReorgCap {
             depth: fork.pops(),
-            cap: rule_set.reorg_cap(),
-        }),
-        None => match side {
-            SeedSide::OnBranch => AltSpend::Prepare,
-            SeedSide::BelowFork if window.holds(seed) => AltSpend::Hash,
-            SeedSide::BelowFork => AltSpend::SeedNotInWindow { height },
-        },
+            cap: reach,
+        });
+    }
+    match side {
+        SeedSide::OnBranch => AltSpend::Prepare,
+        SeedSide::BelowFork if window.holds(seed) => AltSpend::Hash,
+        SeedSide::BelowFork => AltSpend::SeedNotInWindow { height },
     }
 }
 
@@ -235,6 +254,9 @@ mod tests {
     use super::*;
     use shekyl_chain_rules::Tip;
     use shekyl_types::BlockCount;
+
+    /// The store's lowest poppable height while nothing is retired.
+    const GENESIS_FLOOR: BlockHeight = BlockHeight::from_raw(1);
 
     fn tip(height: BlockHeight, fill: u8) -> Tip {
         Tip {
@@ -253,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unanchored_fork_past_the_cap_is_not_hashed_and_not_an_invalid_block() {
+    fn a_fork_past_the_cap_is_not_hashed_and_not_an_invalid_block() {
         let fork = popping(BlockCount::from_raw(D_MAX.to_raw() + 1));
         let window = SeedPair {
             canonical: BlockHash::NULL,
@@ -265,8 +287,8 @@ mod tests {
             SeedSide::BelowFork,
             BlockHeight::from_raw(1),
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
             &window,
+            GENESIS_FLOOR,
         );
         assert!(
             matches!(spend, AltSpend::BeyondCap(beyond) if beyond.cap == D_MAX),
@@ -286,15 +308,14 @@ mod tests {
         };
         let other = BlockHash::from_bytes([9; 32]);
         let at = BlockHeight::from_raw(2);
-        let rules = (&RuleSet::GENESIS, &Trust::UNANCHORED);
         let below = spend(
             &fork,
             &other,
             SeedSide::BelowFork,
             at,
-            rules.0,
-            rules.1,
+            &RuleSet::GENESIS,
             &window,
+            GENESIS_FLOOR,
         );
         assert!(
             matches!(below, AltSpend::SeedNotInWindow { height } if height == at),
@@ -305,9 +326,9 @@ mod tests {
             &other,
             SeedSide::OnBranch,
             at,
-            rules.0,
-            rules.1,
+            &RuleSet::GENESIS,
             &window,
+            GENESIS_FLOOR,
         );
         assert!(matches!(branch, AltSpend::Prepare), "{branch:?}");
     }
@@ -326,11 +347,11 @@ mod tests {
             SeedSide::BelowFork,
             BlockHeight::from_raw(2),
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
             &window,
+            GENESIS_FLOOR,
         );
         assert!(matches!(gated, AltSpend::Hash), "{gated:?}");
-        // At the cap, still hashed: the cap binds only when anchored.
+        // At the cap, still hashed: the cap refuses only past it.
         let at_cap = popping(D_MAX);
         assert!(matches!(
             spend(
@@ -339,8 +360,8 @@ mod tests {
                 SeedSide::BelowFork,
                 BlockHeight::from_raw(2),
                 &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
                 &window,
+                GENESIS_FLOOR,
             ),
             AltSpend::Hash
         ));
@@ -378,6 +399,81 @@ mod tests {
         );
         let held = BlockHash::from_bytes([6; 32]);
         assert!(matches!(required_seed(Some(held), connecting), Ok(seed) if seed == held));
+    }
+
+    /// A2: the pop reach never passes the store's floor. Until the chain
+    /// is a cap deep, a reorg reaches block 1 and no lower: genesis is
+    /// never popped, so the window's lower end is never height 0, whose
+    /// seed is the null hash that only genesis hashes under.
+    #[test]
+    fn the_pop_reach_stops_at_the_floor() {
+        let cap = BlockCount::from_raw(10);
+        for connecting in 0..=cap.to_raw() + 3 {
+            let connecting = BlockHeight::from_raw(connecting);
+            let reach = pop_reach(cap, connecting, GENESIS_FLOOR);
+            let low = connecting.saturating_sub_count(reach);
+            if connecting.is_zero() {
+                assert_eq!(low, BlockHeight::ZERO, "an empty chain: genesis connects");
+            } else {
+                assert!(
+                    low >= GENESIS_FLOOR,
+                    "connecting {connecting:?}: low {low:?}"
+                );
+                assert!(seed_height(low).is_some(), "the null seed is not named");
+            }
+            assert!(reach <= cap);
+        }
+        // A cap deep, the cap binds again.
+        let deep = BlockHeight::from_raw(500);
+        assert_eq!(pop_reach(cap, deep, GENESIS_FLOOR), cap);
+        // A retired journal raises the floor above the cap's reach: an
+        // operator's pop left the tip within a cap of it.
+        let raised = BlockHeight::from_raw(495);
+        assert_eq!(pop_reach(cap, deep, raised), BlockCount::from_raw(5));
+    }
+
+    /// A2's other half: a fork that would pop below the floor is refused
+    /// as past the cap, before its seed is looked for, so a window built to
+    /// the floor cannot turn it into a `SeedNotInWindow` fault.
+    #[test]
+    fn a_fork_below_the_floor_is_refused_before_its_seed_is_read() {
+        // Root 0, tip 5: pops five, inside the cap; block 1 is the lowest
+        // it would pop. A floor at 3 (heights 1 and 2 retired) refuses it.
+        let fork = popping(BlockCount::from_raw(5));
+        let window = SeedPair {
+            canonical: BlockHash::from_bytes([4; 32]),
+            transient: None,
+        };
+        let unheld = BlockHash::from_bytes([9; 32]);
+        let refused = spend(
+            &fork,
+            &unheld,
+            SeedSide::BelowFork,
+            BlockHeight::from_raw(3),
+            &RuleSet::GENESIS,
+            &window,
+            BlockHeight::from_raw(3),
+        );
+        assert!(
+            matches!(refused, AltSpend::BeyondCap(beyond)
+                if beyond.depth.to_raw() == 5 && beyond.cap.to_raw() == 3),
+            "{refused:?}"
+        );
+        // The same fork over the genesis floor is in reach, and its unheld
+        // below-fork seed is the defect it always was.
+        let in_reach = spend(
+            &fork,
+            &unheld,
+            SeedSide::BelowFork,
+            BlockHeight::from_raw(3),
+            &RuleSet::GENESIS,
+            &window,
+            GENESIS_FLOOR,
+        );
+        assert!(
+            matches!(in_reach, AltSpend::SeedNotInWindow { .. }),
+            "{in_reach:?}"
+        );
     }
 
     #[test]

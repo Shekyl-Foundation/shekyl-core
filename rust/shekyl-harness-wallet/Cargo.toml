@@ -23,10 +23,13 @@ license.workspace = true
 # the sibling crate's, which depends on this one and never the reverse.
 [dependencies]
 # `construct_output` (output key, commitment, encrypted amount and label,
-# KEM ciphertexts, PQC leaf entry), the hybrid KEM key types, and the
-# seed derivations the deterministic wallet is built from. Already in the
-# rules crate's closure.
+# KEM ciphertexts, PQC leaf entry), the hybrid KEM key types and the
+# ML-KEM keygen. Already in the rules crate's closure.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# The fixture derivation's HKDF-SHA-512 (`fixture_expand`). The same
+# versions `shekyl-crypto-pq` uses, so no new crate enters the closure.
+hkdf = "0.12"
+sha2 = "0.10"
 # `Transaction` and the coinbase `tx_extra` grammar's one constructor
 # (`build_coinbase_extra`). Already in the rules crate's closure.
 shekyl-wire = { path = "../shekyl-wire" }

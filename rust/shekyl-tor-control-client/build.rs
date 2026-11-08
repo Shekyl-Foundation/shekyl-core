@@ -164,6 +164,40 @@ fn pinned_expr(row: &Value, os: &str, context: &str) -> String {
         None => {}
     }
 
+    // Tor's own bytes, which a macOS row's signed files are tied to (TB-11).
+    // The binary checks the signed files (`files`); the packaging tool checks
+    // the tie. A macOS row without them, or another row with them, does not
+    // compile, so the two readers agree on what a row is.
+    match row.get("upstream") {
+        Some(upstream) if os == "macos" => {
+            let upstream = upstream
+                .as_array()
+                .filter(|list| !list.is_empty())
+                .unwrap_or_else(|| panic!("{context}: \"upstream\" is not a non-empty list"));
+            let mut upstream_names: Vec<String> = Vec::new();
+            for file in upstream {
+                let name = checked_file_name(str_field(file, "name", context), context);
+                let _ = digest_literal(str_field(file, "sha256", context), context);
+                upstream_names.push(name.to_string());
+            }
+            upstream_names.sort();
+            let mut shipped_names = names.clone();
+            shipped_names.sort();
+            assert!(
+                upstream_names == shipped_names,
+                "{context}: \"upstream\" and \"files\" name different files"
+            );
+        }
+        None if os == "macos" => panic!(
+            "{context}: a pinned macOS target lists Tor's own files as \"upstream\", beside \
+             the signed files it ships"
+        ),
+        Some(_) => {
+            panic!("{context}: \"upstream\" is for files Shekyl signs; only a macOS row has it")
+        }
+        None => {}
+    }
+
     format!(
         "TorDisposition::Pinned(TorPin {{ bundle_version: {:?}, bundle_target: {:?}, \
          tor_version: {:?}, executable: {:?}, case_insensitive_names: {}, files: &[{}] }})",
@@ -174,6 +208,41 @@ fn pinned_expr(row: &Value, os: &str, context: &str) -> String {
         os == "windows",
         files_expr,
     )
+}
+
+/// An identifier from a registered family, such as `TB-11` or `CA-1`: the
+/// form of a row's `pending` and `switched_off` fields, which a gate reads.
+/// ASCII uppercase, a hyphen, ASCII digits; `scripts/release/tor_bundle.py`
+/// `is_work_item` holds the same rule, as the regex `[A-Z]+-[0-9]+`.
+fn is_work_item(value: &Value) -> bool {
+    value
+        .as_str()
+        .and_then(|v| v.rsplit_once('-'))
+        .is_some_and(|(family, number)| {
+            !family.is_empty()
+                && family.bytes().all(|b| b.is_ascii_uppercase())
+                && !number.is_empty()
+                && number.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
+/// `switched_off` is a closed shape, or it is absent.
+///
+/// Absent: the row is in the release matrix. Present: the row is
+/// `unavailable`, it carries no `pending`, and the value is a work-item id
+/// naming the ruling that took the target out (riscv64 Linux: `CA-1`).
+/// `scripts/release/tor_bundle.py` `load_pins` holds the same rule, so a
+/// row the gate accepted compiles here. The gate, not this script, holds
+/// that no descriptor builds a marked row.
+fn check_switched_off(row: &Value, disposition: &str, context: &str) {
+    let Some(record) = row.get("switched_off") else {
+        return;
+    };
+    assert!(
+        disposition == "unavailable" && row.get("pending").is_none() && is_work_item(record),
+        "{context}: \"switched_off\" belongs on an unavailable row that is not pending, \
+         and names the record of a ruling such as CA-1, got {record}"
+    );
 }
 
 fn main() {
@@ -220,7 +289,9 @@ fn main() {
     );
 
     let context = format!("{} [{os}/{arch}]", pins_path.display());
-    let disposition = match str_field(row, "disposition", &context) {
+    let disposition_name = str_field(row, "disposition", &context);
+    check_switched_off(row, disposition_name, &context);
+    let disposition = match disposition_name {
         "pinned" => {
             assert!(
                 row.get("pending").is_none(),
@@ -233,21 +304,14 @@ fn main() {
             assert!(!reason.trim().is_empty(), "{context}: an empty reason");
             // A row may carry `pending`: the work item that will pin it.
             // It compiles as `Unavailable`, which is what this binary does.
-            // `check_tor_pin_targets.py` prints each pending row. An
-            // unavailable target is a gap to close (TB-4). A missing managed
-            // Tor is announced, never a startup refusal (TB-2).
+            // `check_tor_pin_targets.py` prints each pending row. A pending
+            // row is a gap to close (TB-4). A switched-off row is not: it
+            // left the release matrix, and `check_switched_off` already
+            // refused it carrying `pending` too. A missing managed Tor is
+            // announced, never a startup refusal (TB-2).
             if let Some(pending) = row.get("pending") {
-                let ok = pending
-                    .as_str()
-                    .and_then(|p| p.rsplit_once('-'))
-                    .is_some_and(|(family, number)| {
-                        !family.is_empty()
-                            && family.bytes().all(|b| b.is_ascii_uppercase())
-                            && !number.is_empty()
-                            && number.bytes().all(|b| b.is_ascii_digit())
-                    });
                 assert!(
-                    ok,
+                    is_work_item(pending),
                     "{context}: \"pending\" names a work item such as TB-11, got {pending}"
                 );
             }

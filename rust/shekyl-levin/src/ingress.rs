@@ -10,9 +10,7 @@
 //! bits (PWC-A6). This module is the **ingress** check: a field this
 //! protocol does not define is not a field it forwards, stores, or sizes a
 //! buffer from. Placement is after the header is parsed, in
-//! [`crate::BucketReader`] and — on the live C++ receive path — via the
-//! `shekyl_levin_ingress_admit` FFI that `cryptonote_connection_context`
-//! forwards into `handle_recv`.
+//! [`crate::BucketReader`].
 //!
 //! # Discriminator (PWD-B3a)
 //!
@@ -22,7 +20,7 @@
 //!   noise / fragment class. The command field is filler (often 0). Bound
 //!   is the packet / framing limit. Do **not** reject on the id.
 //! - Flags carry Q or S → dispatch. The command must convert to
-//!   [`DefinedCommand`], and the payload is then bounded by that command's
+//!   [`Command`], and the payload is then bounded by that command's
 //!   cap.
 //! - Bits outside the five defined flags are rejected on **every**
 //!   bucket, including noise. A bit this protocol does not define is not a
@@ -33,23 +31,32 @@
 //!
 //! # Caps (PWD-B3)
 //!
-//! Each [`DefinedCommand`] arm has a named cap. Derivations that have a
-//! length bound (handshake peerlist, hash lists) terminate on that bound.
-//! 2008 / 2007 / 2009 / 2010 keep their inherited envelopes until a tighter
-//! bound exists on this seam — they do **not** take the packet limit.
-//! 2002 (PWD-B12) and 2004 (byte budget owed) are the only arms that sit
-//! at [`DEFAULT_MAX_PACKET_SIZE`]. `NOTIFY_NEW_BLOCK` (2001) is deleted
-//! (PWD-B6) and `COMMAND_PING` (1003) is deleted (PWD-B10); a Q/S-flagged
-//! either is unknown dispatch.
+//! Each [`Command`] arm has a named cap. The handshake peerlist's
+//! derivation terminates on its length bound. 2008 / 2009 / 2010 keep their
+//! inherited envelopes until a tighter bound exists on this seam — they do
+//! **not** take the packet limit. 2002 (PWD-B12) is the only arm that sits
+//! at [`DEFAULT_MAX_PACKET_SIZE`].
+//!
+//! # Retired
+//!
+//! `NOTIFY_NEW_BLOCK` (2001, PWD-B6), `COMMAND_PING` (1003, PWD-B10),
+//! `COMMAND_REQUEST_SUPPORT_FLAGS` (1007, 2026-10-19), and the inherited
+//! block and chain requests `NOTIFY_REQUEST_GET_OBJECTS` (2003),
+//! `NOTIFY_RESPONSE_GET_OBJECTS` (2004), `NOTIFY_REQUEST_CHAIN` (2006) and
+//! `NOTIFY_RESPONSE_CHAIN_ENTRY` (2007), which chain sync's cutover (CS-5)
+//! replaced with 2011–2014. A Q/S-flagged bucket naming any of them is
+//! unknown dispatch, and the ingress refuses it as it refuses any
+//! undefined command.
 
 use shekyl_peer_bounds::DISCLOSE_COUNT;
 
 use crate::header::{Flags, DEFAULT_MAX_PACKET_SIZE};
 use crate::{
-    Error, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT,
-    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_CHAIN,
-    NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_RESPONSE_CHAIN_ENTRY,
-    NOTIFY_RESPONSE_GET_OBJECTS,
+    Error, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS,
+    COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT,
+    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_BODIES,
+    NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_HEADERS, NOTIFY_RESPONSE_BODIES,
+    NOTIFY_RESPONSE_HEADERS,
 };
 
 /// The four defined Levin flag bits. Bits outside this mask are unknown at
@@ -83,6 +90,7 @@ pub const HANDSHAKE_FIXED_MAX_BYTES: u64 = 239;
 pub const MAX_OBJECT_REQUEST_COUNT: u64 = 100;
 
 /// `BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT` (`cryptonote_config.h`).
+/// The locator's cap: how many block ids a short history may name.
 pub const BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT: u64 = 25_000;
 
 /// Portable-storage over-bound for an array of `count` 32-byte hashes:
@@ -100,20 +108,8 @@ pub(crate) const fn hash_list_cap(count: u64) -> u64 {
 const CAP_HANDSHAKE: u64 =
     DISCLOSE_COUNT as u64 * PEERLIST_ENTRY_MAX_ENCODED_BYTES + HANDSHAKE_FIXED_MAX_BYTES;
 
-const CAP_REQUEST_GET_OBJECTS: u64 = hash_list_cap(MAX_OBJECT_REQUEST_COUNT);
-const CAP_REQUEST_CHAIN: u64 = hash_list_cap(BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT);
-
-/// PWD-B12 has not bound the fluff batch; 2002 is not bounded below 2004.
+/// PWD-B12 has not bound the fluff batch.
 const CAP_NEW_TRANSACTIONS: u64 = DEFAULT_MAX_PACKET_SIZE;
-
-/// 2004's byte budget is owed (FOLLOWUPS / PWC-A2). The inherited 128 MiB
-/// table entry already sat above the packet limit, so this is the effective
-/// bound that was already in force.
-const CAP_RESPONSE_GET_OBJECTS: u64 = DEFAULT_MAX_PACKET_SIZE;
-
-/// Inherited 4 MiB envelope. `first_block` is a block blob, so a hash-list
-/// derivation is too small; widening to the packet limit is refused.
-const CAP_RESPONSE_CHAIN_ENTRY: u64 = 1024 * 1024 * 4;
 
 /// Inherited 4 MiB compact-announce envelope until `entry_max` can take
 /// consensus state. Not the packet limit — PWD-B3 refused that 25× jump.
@@ -130,42 +126,60 @@ const CAP_COMPACT_MISSING_TX: u64 = 1024 * 1024;
 const CAP_TXPOOL_COMPLEMENT: u64 = 1024 * 1024 * 4;
 
 const _: () = assert!(CAP_HANDSHAKE < 65_536);
-const _: () = assert!(CAP_REQUEST_GET_OBJECTS == 5_056);
-const _: () = assert!(CAP_REQUEST_CHAIN == 1_200_256);
 const _: () = assert!(CAP_NEW_COMPACT_BLOCK == 4 * 1024 * 1024);
-const _: () = assert!(CAP_RESPONSE_CHAIN_ENTRY == 4 * 1024 * 1024);
 const _: () = assert!(HASH_SIZE == 32);
 
-/// Commands this protocol defines at ingress. Wire ids stay `u32` on the
-/// header; converting a dispatch command through [`DefinedCommand::from_wire`]
-/// is the closed set a Q/S-flagged bucket may name. `COMMAND_PING` (1003),
-/// `COMMAND_REQUEST_SUPPORT_FLAGS` (1007) and `NOTIFY_NEW_BLOCK` (2001) are
-/// deleted and are **not** in this set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DefinedCommand {
+/// The closed set of Levin commands this protocol speaks: the ten live
+/// commands, each with its wire id and its payload cap. Wire ids stay
+/// `u32` on the header; [`Command::from_wire`] is the one place an unknown
+/// id becomes `None`, and that is the set a Q/S-flagged bucket may name.
+/// The retired commands (module docs) are **not** in this set.
+///
+/// The session layer's dispatch table is an exhaustive `match` over this
+/// enum (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §7.2): a new command is a new arm
+/// here, and every dispatch site then fails to build until it names an
+/// owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Command {
     /// `COMMAND_HANDSHAKE` (1001).
     Handshake,
     /// `COMMAND_TIMED_SYNC` (1002).
     TimedSync,
     /// `NOTIFY_NEW_TRANSACTIONS` (2002).
     NewTransactions,
-    /// `NOTIFY_REQUEST_GET_OBJECTS` (2003).
-    RequestGetObjects,
-    /// `NOTIFY_RESPONSE_GET_OBJECTS` (2004).
-    ResponseGetObjects,
-    /// `NOTIFY_REQUEST_CHAIN` (2006).
-    RequestChain,
-    /// `NOTIFY_RESPONSE_CHAIN_ENTRY` (2007).
-    ResponseChainEntry,
     /// `NOTIFY_NEW_COMPACT_BLOCK` (2008).
     NewCompactBlock,
     /// `NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009).
     RequestCompactMissingTx,
     /// `NOTIFY_GET_TXPOOL_COMPLEMENT` (2010).
     GetTxpoolComplement,
+    /// `NOTIFY_REQUEST_HEADERS` (2011).
+    RequestHeaders,
+    /// `NOTIFY_RESPONSE_HEADERS` (2012).
+    ResponseHeaders,
+    /// `NOTIFY_REQUEST_BODIES` (2013).
+    RequestBodies,
+    /// `NOTIFY_RESPONSE_BODIES` (2014).
+    ResponseBodies,
 }
 
-impl DefinedCommand {
+impl Command {
+    /// Every arm, in declaration order. [`Self::wire_id`] and
+    /// [`Self::from_wire`] match the same set, so a new command is a new
+    /// arm in all three.
+    pub const ALL: [Self; 10] = [
+        Self::Handshake,
+        Self::TimedSync,
+        Self::NewTransactions,
+        Self::NewCompactBlock,
+        Self::RequestCompactMissingTx,
+        Self::GetTxpoolComplement,
+        Self::RequestHeaders,
+        Self::ResponseHeaders,
+        Self::RequestBodies,
+        Self::ResponseBodies,
+    ];
+
     /// Wire id this arm speaks.
     #[must_use]
     pub const fn wire_id(self) -> u32 {
@@ -173,31 +187,31 @@ impl DefinedCommand {
             Self::Handshake => COMMAND_HANDSHAKE,
             Self::TimedSync => COMMAND_TIMED_SYNC,
             Self::NewTransactions => NOTIFY_NEW_TRANSACTIONS,
-            Self::RequestGetObjects => NOTIFY_REQUEST_GET_OBJECTS,
-            Self::ResponseGetObjects => NOTIFY_RESPONSE_GET_OBJECTS,
-            Self::RequestChain => NOTIFY_REQUEST_CHAIN,
-            Self::ResponseChainEntry => NOTIFY_RESPONSE_CHAIN_ENTRY,
             Self::NewCompactBlock => NOTIFY_NEW_COMPACT_BLOCK,
             Self::RequestCompactMissingTx => NOTIFY_REQUEST_COMPACT_MISSING_TX,
             Self::GetTxpoolComplement => NOTIFY_GET_TXPOOL_COMPLEMENT,
+            Self::RequestHeaders => NOTIFY_REQUEST_HEADERS,
+            Self::ResponseHeaders => NOTIFY_RESPONSE_HEADERS,
+            Self::RequestBodies => NOTIFY_REQUEST_BODIES,
+            Self::ResponseBodies => NOTIFY_RESPONSE_BODIES,
         }
     }
 
     /// Convert a wire command id into the closed set, or `None` if this
-    /// protocol does not define it (including retired 1003, 1007 and 2001).
+    /// protocol does not define it (including the retired, module docs).
     #[must_use]
     pub const fn from_wire(command: u32) -> Option<Self> {
         match command {
             COMMAND_HANDSHAKE => Some(Self::Handshake),
             COMMAND_TIMED_SYNC => Some(Self::TimedSync),
             NOTIFY_NEW_TRANSACTIONS => Some(Self::NewTransactions),
-            NOTIFY_REQUEST_GET_OBJECTS => Some(Self::RequestGetObjects),
-            NOTIFY_RESPONSE_GET_OBJECTS => Some(Self::ResponseGetObjects),
-            NOTIFY_REQUEST_CHAIN => Some(Self::RequestChain),
-            NOTIFY_RESPONSE_CHAIN_ENTRY => Some(Self::ResponseChainEntry),
             NOTIFY_NEW_COMPACT_BLOCK => Some(Self::NewCompactBlock),
             NOTIFY_REQUEST_COMPACT_MISSING_TX => Some(Self::RequestCompactMissingTx),
             NOTIFY_GET_TXPOOL_COMPLEMENT => Some(Self::GetTxpoolComplement),
+            NOTIFY_REQUEST_HEADERS => Some(Self::RequestHeaders),
+            NOTIFY_RESPONSE_HEADERS => Some(Self::ResponseHeaders),
+            NOTIFY_REQUEST_BODIES => Some(Self::RequestBodies),
+            NOTIFY_RESPONSE_BODIES => Some(Self::ResponseBodies),
             _ => None,
         }
     }
@@ -209,13 +223,13 @@ impl DefinedCommand {
         match self {
             Self::Handshake | Self::TimedSync => CAP_HANDSHAKE,
             Self::NewTransactions => CAP_NEW_TRANSACTIONS,
-            Self::RequestGetObjects => CAP_REQUEST_GET_OBJECTS,
-            Self::ResponseGetObjects => CAP_RESPONSE_GET_OBJECTS,
-            Self::RequestChain => CAP_REQUEST_CHAIN,
-            Self::ResponseChainEntry => CAP_RESPONSE_CHAIN_ENTRY,
             Self::NewCompactBlock => CAP_NEW_COMPACT_BLOCK,
             Self::RequestCompactMissingTx => CAP_COMPACT_MISSING_TX,
             Self::GetTxpoolComplement => CAP_TXPOOL_COMPLEMENT,
+            Self::RequestHeaders => CAP_REQUEST_HEADERS,
+            Self::ResponseHeaders => CAP_RESPONSE_HEADERS,
+            Self::RequestBodies => CAP_REQUEST_BODIES,
+            Self::ResponseBodies => CAP_RESPONSE_BODIES,
         }
     }
 }
@@ -229,7 +243,7 @@ impl DefinedCommand {
 ///
 /// [`Error::UnknownFlags`] if any bit outside [`FLAGS_DEFINED`] is set.
 /// [`Error::UnknownCommand`] if this is a dispatch whose command is not
-/// a [`DefinedCommand`].
+/// a [`Command`].
 pub fn ingress_payload_cap(command: u32, flags: Flags) -> Result<u64, Error> {
     if flags.difference(FLAGS_DEFINED).bits() != 0 {
         return Err(Error::UnknownFlags {
@@ -239,8 +253,8 @@ pub fn ingress_payload_cap(command: u32, flags: Flags) -> Result<u64, Error> {
     if !flags.intersects(Flags::REQUEST.union(Flags::RESPONSE)) {
         return Ok(u64::MAX);
     }
-    DefinedCommand::from_wire(command)
-        .map(DefinedCommand::payload_cap)
+    Command::from_wire(command)
+        .map(Command::payload_cap)
         .ok_or(Error::UnknownCommand { command })
 }
 
@@ -248,42 +262,31 @@ pub fn ingress_payload_cap(command: u32, flags: Flags) -> Result<u64, Error> {
 mod tests {
     use super::*;
 
-    const ALL_DEFINED: &[DefinedCommand] = &[
-        DefinedCommand::Handshake,
-        DefinedCommand::TimedSync,
-        DefinedCommand::NewTransactions,
-        DefinedCommand::RequestGetObjects,
-        DefinedCommand::ResponseGetObjects,
-        DefinedCommand::RequestChain,
-        DefinedCommand::ResponseChainEntry,
-        DefinedCommand::NewCompactBlock,
-        DefinedCommand::RequestCompactMissingTx,
-        DefinedCommand::GetTxpoolComplement,
-    ];
-
     #[test]
-    fn defined_set_has_ten_arms() {
+    fn the_command_set_has_ten_arms() {
         // 10 live commands: ping gone (PWD-B10), support flags gone
-        // (2026-10-19), 2001 gone (PWD-B6).
-        assert_eq!(ALL_DEFINED.len(), 10);
-        assert!(DefinedCommand::from_wire(1003).is_none());
-        assert!(DefinedCommand::from_wire(1007).is_none());
-        assert!(DefinedCommand::from_wire(2001).is_none());
-        assert!(DefinedCommand::from_wire(0).is_none());
+        // (2026-10-19), 2001 gone (PWD-B6), and 2003, 2004, 2006 and 2007
+        // retired by chain sync's cutover (CS-5), whose 2011–2014 are in
+        // the one set (RC-Q1: one dispatch table, one command enum).
+        assert_eq!(Command::ALL.len(), 10);
+        for retired in [1003, 1007, 2001, 2003, 2004, 2006, 2007] {
+            assert!(Command::from_wire(retired).is_none(), "{retired}");
+        }
+        assert!(Command::from_wire(0).is_none());
         assert_eq!(
-            DefinedCommand::from_wire(NOTIFY_NEW_COMPACT_BLOCK),
-            Some(DefinedCommand::NewCompactBlock)
+            Command::from_wire(NOTIFY_NEW_COMPACT_BLOCK),
+            Some(Command::NewCompactBlock)
         );
         assert_eq!(
-            DefinedCommand::from_wire(NOTIFY_REQUEST_COMPACT_MISSING_TX),
-            Some(DefinedCommand::RequestCompactMissingTx)
+            Command::from_wire(NOTIFY_REQUEST_COMPACT_MISSING_TX),
+            Some(Command::RequestCompactMissingTx)
         );
     }
 
     #[test]
     fn from_wire_roundtrips_every_arm() {
-        for cmd in ALL_DEFINED {
-            assert_eq!(DefinedCommand::from_wire(cmd.wire_id()), Some(*cmd));
+        for cmd in Command::ALL {
+            assert_eq!(Command::from_wire(cmd.wire_id()), Some(cmd));
             assert!(cmd.payload_cap() > 0);
         }
     }
@@ -371,13 +374,19 @@ mod tests {
         assert_ne!(CAP_NEW_COMPACT_BLOCK, DEFAULT_MAX_PACKET_SIZE);
     }
 
+    /// The inherited block and chain requests are retired (CS-5): a peer
+    /// that still sends one, in either direction, is dispatching an
+    /// unknown command, and the ingress refuses it as it refuses any.
     #[test]
-    fn chain_response_keeps_the_inherited_envelope() {
-        assert_eq!(
-            ingress_payload_cap(NOTIFY_RESPONSE_CHAIN_ENTRY, Flags::RESPONSE).unwrap(),
-            CAP_RESPONSE_CHAIN_ENTRY
-        );
-        assert_ne!(CAP_RESPONSE_CHAIN_ENTRY, DEFAULT_MAX_PACKET_SIZE);
+    fn the_retired_chain_commands_are_unknown_dispatch() {
+        for command in [2003, 2004, 2006, 2007] {
+            for flags in [Flags::REQUEST, Flags::RESPONSE] {
+                assert_eq!(
+                    ingress_payload_cap(command, flags),
+                    Err(Error::UnknownCommand { command })
+                );
+            }
+        }
     }
 
     /// The support-flags request (1007) went with the word it carried
@@ -404,14 +413,6 @@ mod tests {
         assert_eq!(
             ingress_payload_cap(COMMAND_TIMED_SYNC, Flags::RESPONSE).unwrap(),
             cap
-        );
-    }
-
-    #[test]
-    fn get_objects_request_derives_from_the_hash_count() {
-        assert_eq!(
-            ingress_payload_cap(NOTIFY_REQUEST_GET_OBJECTS, Flags::REQUEST).unwrap(),
-            CAP_REQUEST_GET_OBJECTS
         );
     }
 }

@@ -5,7 +5,7 @@
 //! the M_r-neutral view (`max(curve, TAIL)`) used as the fee-ladder operand,
 //! not a stage of the paid pipeline.
 
-use crate::params::EconomicParams;
+use crate::params::{EconomicParams, SCALE};
 use crate::volume::TxVolume;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -108,13 +108,34 @@ pub fn penalty_free_weight(median_weight: u64, params: &EconomicParams) -> u64 {
 /// is no post-tail era in which it would recover — which is why the
 /// penalty is the LAST operator, not an emission stage.
 ///
-/// Shape (per the C2a port, arithmetic unchanged): the effective median is
-/// [`penalty_free_weight`]; at or below it no penalty; above twice it the
-/// block is rejected ([`EmissionError::BlockTooBig`]); otherwise
-/// `amount·(2m − c)·c/m²` in `u128`, fail-closed on overflow. The zone is
-/// read from `params`, never taken from the caller: a consensus constant a
-/// caller could vary per call is a second source (E6 slice 4 §3.1 S8 — the
-/// C++ used to supply it on every call).
+/// Shape: the effective median `M` is [`penalty_free_weight`]; at or below
+/// it no penalty; above the limit `k·M` ([`block_weight_limit`], `k` the
+/// set's [`EconomicParams::block_weight_limit_multiple`]) the block is
+/// rejected ([`EmissionError::BlockTooBig`]); otherwise the reward is
+/// `amount · (1 − ((w − M)/((k − 1)·M))²)`, zero at the limit. With
+/// `k − 1 = e / s` in lowest terms and `x = w − M`:
+///
+/// ```text
+/// reward = ⌊⌊amount · (e·M − s·x) · (e·M + s·x) / (e·M)⌋ / (e·M)⌋
+/// ```
+///
+/// At the shipped `k = 2`, `e = s = 1`, the factors are `2M − w` and `w`,
+/// and the divisor is `M` twice: the C2a port's `amount·(2m − c)·c/m²`
+/// term for term, the same intermediate magnitudes and the same refusals
+/// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26, the penalty at a
+/// multiple). Every product is checked: an overflow is
+/// [`EmissionError::Overflow`], never a wrap. The product is largest at
+/// `x → 0`, where it is about `amount · e² · M²`, so it is refused only
+/// when that reaches `2¹²⁸`. With `amount < 2⁴¹` (the largest paid reward,
+/// `M_r` at its top rail on the first curve block, is below it) the
+/// shipped `e = 1` is safe for every `M < 2⁴³·⁵` (about 1.2·10¹³ bytes),
+/// and the largest `e` a set can carry, 29 (`k = 3.9`: `k − 1 = 29/10` in
+/// lowest terms; the tenths grain up to
+/// [`MAX_BLOCK_WEIGHT_LIMIT_MULTIPLE`](crate::block_weight::MAX_BLOCK_WEIGHT_LIMIT_MULTIPLE)
+/// gives no larger numerator), for every `M < 2³⁸·⁶` (about 4·10¹¹ bytes). The medians' clamps do not
+/// bound `M` over a chain's life (the long-term median may rise 1.7× a
+/// window); these are thresholds a chain would have to grow past, refused
+/// in the same way the shipped arithmetic refuses them.
 pub(crate) fn apply_weight_penalty(
     amount: u64,
     median_weight: u64,
@@ -126,29 +147,47 @@ pub(crate) fn apply_weight_penalty(
     if current_block_weight <= median {
         return Ok(amount);
     }
-    // `2 * median` in u128: the comparison must not wrap for medians above
-    // u64::MAX / 2, which consensus never produces but the FFI edge cannot
+    // The limit in u128: the comparison must not wrap for medians near
+    // u64::MAX, which consensus never produces but the FFI edge cannot
     // assume away.
-    let double_median = u128::from(median) * 2;
-    if u128::from(current_block_weight) > double_median {
+    let median = u128::from(median);
+    let current = u128::from(current_block_weight);
+    if current > median * u128::from(params.block_weight_limit_multiple) / u128::from(SCALE) {
         return Err(EmissionError::BlockTooBig);
     }
 
-    let current = u128::from(current_block_weight);
-    // Cannot overflow and so is deliberately unguarded: `double_median -
-    // current` is below `median` (we are past the `current <= median`
-    // return), and `current <= 2 * median`, so the product stays under
-    // `2 * u64::MAX^2 < u128::MAX`.
-    let multiplicand = (double_median - current) * current;
-    let median = u128::from(median);
-
+    let (e, s) = limit_excess_in_lowest_terms(params);
+    let em = e * median;
+    let sx = s * (current - median);
+    // `sx ≤ em` because `current` is at most the limit, so this does not
+    // underflow; at `e = s = 1` it is `2M − w`.
+    let multiplicand = (em - sx)
+        .checked_mul(em + sx)
+        .ok_or(EmissionError::Overflow)?;
     let numerator = u128::from(amount)
         .checked_mul(multiplicand)
         .ok_or(EmissionError::Overflow)?;
-    let reward = numerator / median / median;
+    let reward = numerator / em / em;
 
     let capped = reward.min(u128::from(amount));
     Ok(u64::try_from(capped).unwrap_or(amount))
+}
+
+/// `k − 1` of the set's limit multiple, in lowest terms over [`SCALE`]:
+/// `(e, s)` with `(k − SCALE) / SCALE = e / s`. `(1, 1)` at the shipped
+/// `k = 2·SCALE`. A set that passed
+/// [`EconomicParams::validate`] has `k > SCALE`, on a grain of `SCALE/10`,
+/// so `s ≤ 10` and `e ≤ 30`.
+fn limit_excess_in_lowest_terms(params: &EconomicParams) -> (u128, u128) {
+    let d = params
+        .block_weight_limit_multiple
+        .saturating_sub(SCALE)
+        .max(1);
+    let (mut a, mut b) = (d, SCALE);
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    (u128::from(d / a), u128::from(SCALE / a))
 }
 
 /// **THE one owner of the paid block reward** (FL-R12′, signed round 8):
@@ -216,6 +255,86 @@ impl PrePenaltyEmission {
         params: &EconomicParams,
     ) -> Result<u64, EmissionError> {
         apply_weight_penalty(self.0, median_weight, current_block_weight, params)
+    }
+
+    /// How many bodies of `weight`, laid one after another on a block of
+    /// `block_weight` past the penalty-free weight, each cost no more than
+    /// `fee` on the penalty's real-valued curve. A producer offering
+    /// identical bodies admits at least this many before the penalty
+    /// refuses one (the lemma below). Bodies past the limit are not
+    /// excluded here: the caller bounds the count by the limit.
+    ///
+    /// With `M` the [`penalty_free_weight`], `k − 1 = e / s` the set's
+    /// excess multiple in lowest terms, `D = e·M`, `A` this emission and
+    /// `x = w − M` a block's excess, [`Self::penalised`] is one floor of
+    /// one quotient, since `⌊⌊N/D⌋/D⌋ = ⌊N/D²⌋`:
+    ///
+    /// ```text
+    /// R(x) = ⌊A·(D² − s²x²) / D²⌋ = A − ⌈c·x²⌉,   c = A·s² / D²
+    /// ```
+    ///
+    /// Body `j`, from excess `x_{j−1}` to `x_j = x_{j−1} + w`, costs the
+    /// real `δ_j = c·w·(2·x_{j−1} + w)` and the integer
+    /// `Δ_j = ⌈c·x_j²⌉ − ⌈c·x_{j−1}²⌉ ≤ ⌈δ_j⌉`, because a ceiling is
+    /// subadditive. So `δ_j ≤ fee` gives `Δ_j ≤ fee`: the body's fee covers
+    /// the reward it costs, and the floor never refuses a body the real
+    /// curve admits. `δ_j` is linear in `j`, so the bodies it covers are a
+    /// prefix, counted exactly in integers:
+    ///
+    /// ```text
+    /// δ_j ≤ fee  ⇔  A·s²·w·(2·x_{j−1} + w) ≤ fee·D²
+    /// ```
+    ///
+    /// `Some(u64::MAX)` when nothing bounds the run: a zero emission, or a
+    /// fee of at least the emission, which no body within the limit can
+    /// cost (`δ_j ≤ c·x_j² ≤ c·(D/s)² = A`). `None` when `weight` is zero,
+    /// when `block_weight` is below the penalty-free weight, or when `fee·D`,
+    /// `A·s²·w` or `A·s²·w·D` leaves `u128`. With a body inside the limit
+    /// (`s·w ≤ D`) the last is at most `A·s·D²`, so `None` comes only near
+    /// where the penalty's own product refuses ([`Self::penalised`]'s
+    /// [`EmissionError::Overflow`]). A caller handed `None` offers the
+    /// bodies one at a time.
+    #[must_use]
+    pub fn bodies_the_fee_covers(
+        self,
+        median_weight: u64,
+        block_weight: u64,
+        weight: u64,
+        fee: u64,
+        params: &EconomicParams,
+    ) -> Option<u64> {
+        let median = penalty_free_weight(median_weight, params);
+        let excess = block_weight.checked_sub(median)?;
+        if weight == 0 {
+            return None;
+        }
+        if self.0 == 0 || fee >= self.0 {
+            return Some(u64::MAX);
+        }
+        let (e, s) = limit_excess_in_lowest_terms(params);
+        let d = e.checked_mul(u128::from(median))?;
+        let per_step = u128::from(self.0)
+            .checked_mul(s * s)?
+            .checked_mul(u128::from(weight))?;
+        // `2·x_{j−1} + w ≤ ⌊fee·D² / per_step⌋`, floored because the left
+        // side is an integer. `fee·D²` itself can leave `u128` while the
+        // quotient does not, so it is taken in two steps: with
+        // `fee·D = q·per_step + r`, the quotient is `q·D + ⌊r·D / per_step⌋`.
+        // A `q·D` past `u128` is a reach past every block, so it saturates.
+        // `r·D` is below `A·s²·w·D`, which is the bound named below.
+        let fee_d = u128::from(fee).checked_mul(d)?;
+        let (q, r) = (fee_d / per_step, fee_d % per_step);
+        let reach = match q.checked_mul(d) {
+            Some(whole) => whole.saturating_add(r.checked_mul(d)? / per_step),
+            None => u128::MAX,
+        };
+        let w = u128::from(weight);
+        let first = 2 * u128::from(excess) + w;
+        let Some(spare) = reach.checked_sub(first) else {
+            return Some(0);
+        };
+        // `x_{j−1} = x_0 + (j − 1)·w`, so `j − 1 ≤ spare / (2w)`.
+        Some(u64::try_from(spare / (2 * w) + 1).unwrap_or(u64::MAX))
     }
 
     /// The amount, atomic units.
@@ -351,7 +470,9 @@ pub fn block_reward_with_penalty(
     )
 }
 
-/// The block weight limit implied by an effective median: `2 * max(median, zone)`.
+/// The block weight limit implied by an effective median: `k · max(median,
+/// zone)`, `k` the set's [`EconomicParams::block_weight_limit_multiple`] in
+/// [`SCALE`] units (`2 · max(median, zone)` at the shipped `k`).
 ///
 /// Exposed so a caller that must REPORT the limit it rejected against reads it
 /// from the same place the rejection came from, instead of recomputing the
@@ -359,7 +480,9 @@ pub fn block_reward_with_penalty(
 /// Saturating: the true limit above `u64::MAX / 2` is unrepresentable, and a
 /// saturated value is only ever used for diagnostics.
 pub fn block_weight_limit(median_weight: u64, params: &EconomicParams) -> u64 {
-    median_weight.max(params.full_reward_zone).saturating_mul(2)
+    let median = u128::from(median_weight.max(params.full_reward_zone));
+    let limit = median * u128::from(params.block_weight_limit_multiple) / u128::from(SCALE);
+    u64::try_from(limit).unwrap_or(u64::MAX)
 }
 
 /// Advance `already_generated_coins` by a block reward.
@@ -1347,5 +1470,293 @@ mod tests {
         // The empty window is the 0.8 rail either way (genesis / FAKECHAIN).
         assert_eq!(paid(TxVolume::ZERO), paid(TxVolume::per_block(0)));
         assert_eq!(paid(TxVolume::ZERO), 409_600_000_000);
+    }
+
+    /// The penalty at the shipped multiple (2×), pinned as literals: each arm
+    /// (under the median, inside the band, at the limit, past it) and the
+    /// `u128` overflow refusal. These were computed against the body the
+    /// generalised penalty replaced, `amount·(2m − c)·c/m²`, which agreed on
+    /// these and on 50 000 randomised `(R, M, w)` before it was deleted
+    /// (E16-11, `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26.2). A change to the
+    /// penalty at the shipped multiple moves one of them.
+    #[test]
+    fn the_penalty_at_the_shipped_multiple_is_pinned() {
+        let p = EconomicParams::default();
+        let z = p.full_reward_zone;
+        assert_eq!(z, 300_000, "the vectors are written at the shipped zone");
+        for (amount, median, w, want) in [
+            (1_000_000_000_000, z, z, Ok(1_000_000_000_000)),
+            (1_000_000_000_000, z, z + z / 2, Ok(750_000_000_000)),
+            (1_000_000_000_000, z, 2 * z, Ok(0)),
+            (
+                1_000_000_000_000,
+                z,
+                2 * z + 1,
+                Err(EmissionError::BlockTooBig),
+            ),
+            (409_600_000_000, 7 * z, 7 * z + 12_345, Ok(409_585_845_206)),
+            (409_600_000_000, 7 * z, 13 * z + 999, Ok(108_335_262_081)),
+            // A median below the zone is floored at it.
+            (1_331_200_000_000, 0, z + 1, Ok(1_331_199_999_985)),
+            (u64::MAX, 3 * z, 5 * z, Ok(10_248_191_152_060_862_008)),
+            (
+                u64::MAX,
+                u64::MAX / 2,
+                u64::MAX / 2 + u64::MAX / 8,
+                Err(EmissionError::Overflow),
+            ),
+        ] {
+            assert_eq!(
+                apply_weight_penalty(amount, median, w, &p),
+                want,
+                "amount {amount}, median {median}, weight {w}"
+            );
+        }
+    }
+
+    /// E16-7: the limit multiple is read from the set. At 3× the limit is
+    /// three medians, the penalty reaches zero there and not before, and a
+    /// block past it is refused.
+    #[test]
+    fn the_limit_and_the_penalty_read_the_sets_multiple() {
+        let mut p = EconomicParams {
+            block_weight_limit_multiple: 3 * SCALE,
+            ..EconomicParams::default()
+        };
+        p.validate().expect("3x is a valid multiple");
+        let m = p.full_reward_zone;
+        assert_eq!(block_weight_limit(m, &p), 3 * m);
+        let amount = 1_000_000_000_000;
+        assert_eq!(apply_weight_penalty(amount, m, 3 * m, &p), Ok(0));
+        assert!(apply_weight_penalty(amount, m, 2 * m, &p).unwrap() > 0);
+        assert_eq!(
+            apply_weight_penalty(amount, m, 3 * m + 1, &p),
+            Err(EmissionError::BlockTooBig)
+        );
+        // Halfway to the limit, the penalty is a quarter: (1 − (1/2)²).
+        assert_eq!(
+            apply_weight_penalty(amount, m, 2 * m, &p),
+            Ok(750_000_000_000)
+        );
+        // A multiple on the tenth grain reduces with s > 1: 2.5× is e/s = 3/2.
+        p.block_weight_limit_multiple = 25 * SCALE / 10;
+        assert_eq!(limit_excess_in_lowest_terms(&p), (3, 2));
+        assert_eq!(apply_weight_penalty(amount, m, 5 * m / 2, &p), Ok(0));
+    }
+
+    /// The least `t` with `t·(t − 1)·A·s²·w² ≥ (e·M)²`: one more than the
+    /// most bodies [`PrePenaltyEmission::bodies_the_fee_covers`]'s caller
+    /// can admit past the root (`B = t − 1`, proved on `Fill::admit_up_to`).
+    fn bound_t(amount: u128, s: u128, weight: u128, d: u128) -> u128 {
+        let step = amount * s * s * weight * weight;
+        let reaches = |t: u128| t * (t - 1) * step >= d * d;
+        let mut high = 2;
+        while !reaches(high) {
+            high *= 2;
+        }
+        let mut low = high / 2;
+        while high - low > 1 {
+            let mid = low + (high - low) / 2;
+            if reaches(mid) {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        if reaches(low) {
+            low
+        } else {
+            high
+        }
+    }
+
+    /// `bodies_the_fee_covers` against the penalty itself, body by body:
+    /// the count is the real root exactly (the inequality holds at it and
+    /// fails one past it); every body it counts is admitted by the integer
+    /// penalty (`Δ ≤ fee`, the lemma); and the first body the integer
+    /// penalty refuses lies within `t` bodies past the root. Over the
+    /// limit multiples 1.5 to the validator's 4 (`s` of 1, 2 and 10), the
+    /// zone and medians to 12 MB, the curve's start and the tail, a tail
+    /// of 6 atomic where the floor moves by single units, and fees from
+    /// nothing past the emission.
+    #[test]
+    fn the_fee_covers_the_bodies_to_the_real_root_and_refuses_within_the_bound() {
+        let mut cases = 0u64;
+        let mut widest = 0u128;
+        for tenths in [15u64, 20, 25, 39, 40] {
+            for (zone, per_minute) in [(300_000u64, 300_000_000), (64, 3)] {
+                let p = EconomicParams {
+                    block_weight_limit_multiple: tenths * SCALE / 10,
+                    full_reward_zone: zone,
+                    final_subsidy_per_minute: per_minute,
+                    ..EconomicParams::default()
+                };
+                let (e, s) = limit_excess_in_lowest_terms(&p);
+                let v = TxVolume::per_block(p.tx_volume_baseline);
+                for median in [zone, 3 * zone, 40 * zone] {
+                    let m = u128::from(median);
+                    let d = e * m;
+                    let limit = block_weight_limit(median, &p);
+                    for ag in [0, p.emission_curve_asymptote + 1] {
+                        let emission = PrePenaltyEmission::of(ag, v, &p).expect("priced");
+                        let amount = u128::from(emission.to_raw());
+                        for start in [median, median + 1, median + median / 3] {
+                            for weight in [1u64, 7, 61, 2_999, 12_595] {
+                                let steps = (limit.saturating_sub(start) / weight).min(1 << 16);
+                                for fee in [0u64, 1, 2, 1_000, 1_000_000, 3_000_000_000]
+                                    .into_iter()
+                                    .chain([emission.to_raw(), emission.to_raw() + 1])
+                                {
+                                    let Some(covered) = emission
+                                        .bodies_the_fee_covers(median, start, weight, fee, &p)
+                                    else {
+                                        panic!("in u128: median {median} fee {fee}");
+                                    };
+                                    let w = u128::from(weight);
+                                    let real_cost_fits = |j: u64| {
+                                        let x = u128::from(start - median) + u128::from(j - 1) * w;
+                                        amount * s * s * w * (2 * x + w) <= u128::from(fee) * d * d
+                                    };
+                                    let at = format!(
+                                        "k {tenths}/10 zone {zone} median {median} ag {ag} \
+                                         start {start} weight {weight} fee {fee}"
+                                    );
+                                    if covered == u64::MAX {
+                                        assert!(fee >= emission.to_raw() || amount == 0, "{at}");
+                                    } else {
+                                        assert!(covered == 0 || real_cost_fits(covered), "{at}");
+                                        assert!(!real_cost_fits(covered + 1), "{at}");
+                                    }
+                                    let reward =
+                                        |j: u64| emission.penalised(median, start + j * weight, &p);
+                                    let mut refused = None;
+                                    for j in 1..=steps {
+                                        let cost = reward(j - 1).expect("in the limit")
+                                            - reward(j).expect("in the limit");
+                                        if cost > fee {
+                                            refused = Some(j);
+                                            break;
+                                        }
+                                    }
+                                    let Some(refused) = refused else {
+                                        cases += 1;
+                                        continue;
+                                    };
+                                    assert!(refused > covered, "the lemma: {at}");
+                                    if amount > 0 {
+                                        let past = u128::from(refused - covered - 1);
+                                        let t = bound_t(amount, s, w, d);
+                                        assert!(past < t, "{past} past the root, t {t}: {at}");
+                                        widest = widest.max(past);
+                                    }
+                                    cases += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 4_000, "the grid ran ({cases})");
+        // The bound is not a constant: on the 6-atomic tail a one-byte body
+        // is refused thousands of bodies past the root, inside its `t`.
+        assert!(
+            widest > 1_000,
+            "the widest refusal past the root ({widest})"
+        );
+    }
+
+    /// `a·b` in 256 bits, as `(high, low)` halves: the oracle's arithmetic,
+    /// independent of the quotient the helper takes.
+    fn wide(a: u128, b: u128) -> (u128, u128) {
+        let lo = |x: u128| x & u128::from(u64::MAX);
+        let (a1, a0, b1, b0) = (a >> 64, lo(a), b >> 64, lo(b));
+        let low = a0 * b0;
+        let mid1 = a1 * b0;
+        let mid2 = a0 * b1;
+        let mid = (low >> 64) + lo(mid1) + lo(mid2);
+        let high = a1 * b1 + (mid1 >> 64) + (mid2 >> 64) + (mid >> 64);
+        (high, (mid << 64) | lo(low))
+    }
+
+    /// At the growth schedule's medians (2⁴⁰ to 2⁴⁹ bytes, where `fee·D²`
+    /// leaves `u128`), the count is still given and is the real root
+    /// exactly, against a 256-bit comparison of `A·s²·w·(2x + w)` with
+    /// `fee·D²`; and the integer penalty admits every body it counts and
+    /// refuses within the bound past it.
+    #[test]
+    fn the_count_is_exact_at_the_growth_schedules_medians() {
+        let mut cases = 0u64;
+        for tenths in [15u64, 20, 25, 40] {
+            let p = EconomicParams {
+                block_weight_limit_multiple: tenths * SCALE / 10,
+                ..EconomicParams::default()
+            };
+            let (e, s) = limit_excess_in_lowest_terms(&p);
+            let v = TxVolume::per_block(p.tx_volume_baseline);
+            for median in [1u64 << 40, 1 << 44, 1 << 47, 1 << 49] {
+                let d = e * u128::from(median);
+                for ag in [
+                    0,
+                    p.emission_curve_asymptote / 2,
+                    p.emission_curve_asymptote + 1,
+                ] {
+                    let emission = PrePenaltyEmission::of(ag, v, &p).expect("priced");
+                    let amount = u128::from(emission.to_raw());
+                    // Deep in the zone, near the limit, `A·D²` leaves `u128`
+                    // while the penalty's product at the start does not.
+                    let deep = block_weight_limit(median, &p) - (median >> 8);
+                    for start in [median + 1, median + median / 7, deep] {
+                        // The penalty's product must be formed at the start,
+                        // as the fill's run forms it at the body that
+                        // crosses the median.
+                        if emission.penalised(median, start, &p).is_err() {
+                            continue;
+                        }
+                        for weight in [median >> 18, median >> 14, median >> 10] {
+                            for fee in [1u64, 1 << 20, 1 << 30, 1 << 36, 1 << 40, 1 << 50] {
+                                let at = format!(
+                                    "k {tenths}/10 median {median} ag {ag} start {start} \
+                                     weight {weight} fee {fee}"
+                                );
+                                let covered = emission
+                                    .bodies_the_fee_covers(median, start, weight, fee, &p)
+                                    .unwrap_or_else(|| panic!("counted: {at}"));
+                                if covered == u64::MAX {
+                                    assert!(fee >= emission.to_raw(), "{at}");
+                                    cases += 1;
+                                    continue;
+                                }
+                                let w = u128::from(weight);
+                                let fits = |j: u64| {
+                                    let x = u128::from(start - median) + u128::from(j - 1) * w;
+                                    let cost = wide(amount * s * s * w, 2 * x + w);
+                                    cost <= wide(u128::from(fee) * d, d)
+                                };
+                                assert!(covered == 0 || fits(covered), "{at}");
+                                assert!(!fits(covered + 1), "{at}");
+                                let limit = block_weight_limit(median, &p);
+                                let steps = (limit - start) / weight;
+                                let reward =
+                                    |j: u64| emission.penalised(median, start + j * weight, &p);
+                                let last = steps.min(covered.saturating_add(1 << 16));
+                                let refused = (1..=last).find(|&j| {
+                                    reward(j - 1).expect("in the limit")
+                                        - reward(j).expect("in the limit")
+                                        > fee
+                                });
+                                if let Some(refused) = refused {
+                                    assert!(refused > covered, "the lemma: {at}");
+                                    let t = bound_t(amount, s, w, d);
+                                    assert!(u128::from(refused - covered - 1) < t, "{at}");
+                                }
+                                cases += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 400, "the grid ran ({cases})");
     }
 }

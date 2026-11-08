@@ -6,14 +6,15 @@
 //! Chain-sync commands 2011–2014 (CS-Q3).
 //!
 //! Pins the encoded bytes, the cap checked before the codec runs, and the
-//! body-response partition. The ids are not [`DefinedCommand`] arms.
+//! body-response partition. The ids are [`Command`] arms.
 
 use shekyl_levin::{
-    body_budget_bytes, plan_bodies, BodiesFormFault, DefinedCommand, PayloadError, PortableMap,
-    RequestBodies, RequestHeaders, ResponseBodies, ResponseHeaders, BODIES_RESPONSE_BYTES,
-    CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS, HASH_SIZE,
-    HEADERS_RESPONSE_BYTES, NOTIFY_REQUEST_BODIES, NOTIFY_REQUEST_HEADERS, NOTIFY_RESPONSE_BODIES,
-    NOTIFY_RESPONSE_HEADERS,
+    body_budget_bytes, plan_bodies, BodiesFormFault, BodyPlanner, Command, PayloadError,
+    PortableMap, RequestBodies, RequestHeaders, ResponseBodies, ResponseHeaders,
+    BODIES_RESPONSE_BYTES, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES,
+    CAP_RESPONSE_HEADERS, HASH_SIZE, HEADERS_RESPONSE_BYTES, MIN_TX_SECTION_BYTES,
+    NOTIFY_REQUEST_BODIES, NOTIFY_REQUEST_HEADERS, NOTIFY_RESPONSE_BODIES, NOTIFY_RESPONSE_HEADERS,
+    RESPONSE_BODIES_MAX_OBJECTS, RESPONSE_BODIES_MAX_STRINGS, RESPONSE_HEADERS_MAX_STRINGS,
 };
 use shekyl_portable_storage::{store_to_binary, Array, Section, Value};
 use shekyl_types::{ArchivalLength, PqcAuthHash, PrunableHash};
@@ -79,16 +80,23 @@ fn carried(block: Vec<u8>) -> BlockBody {
     }
 }
 
-/// The new ids are named and are not dispatched. Ingress admits a command
-/// for a handler, and none exists until the cutover.
+/// The chain-sync ids are named and the C++ ingress does not dispatch them:
+/// the router hands them to chain sync's owner.
 #[test]
-fn sync_commands_are_not_admitted_at_ingress() {
+fn sync_commands_are_admitted_at_ingress_under_their_caps() {
     assert_eq!(NOTIFY_REQUEST_HEADERS, 2011);
     assert_eq!(NOTIFY_RESPONSE_HEADERS, 2012);
     assert_eq!(NOTIFY_REQUEST_BODIES, 2013);
     assert_eq!(NOTIFY_RESPONSE_BODIES, 2014);
-    for id in 2011..=2014 {
-        assert_eq!(DefinedCommand::from_wire(id), None);
+    for (id, cap) in [
+        (2011, CAP_REQUEST_HEADERS),
+        (2012, CAP_RESPONSE_HEADERS),
+        (2013, CAP_REQUEST_BODIES),
+        (2014, CAP_RESPONSE_BODIES),
+    ] {
+        let command = Command::from_wire(id).expect("a chain-sync command is a Command");
+        assert_eq!(command.wire_id(), id);
+        assert_eq!(command.payload_cap(), cap);
     }
 }
 
@@ -492,6 +500,26 @@ fn the_planner_sends_the_first_held_block_then_fits_the_budget() {
     assert!(plan.deferred.is_empty());
 }
 
+/// The incremental planner: a held hash deferred by the responder without
+/// charging it defers every later held hash, however small, and a missed
+/// hash after it is still missed. `deferring` says when bodies stop being
+/// needed.
+#[test]
+fn a_planner_that_defers_once_defers_every_later_held_hash() {
+    let have = ids(4);
+    let mut planner = BodyPlanner::new();
+    assert!(planner.charge(have[0], 10));
+    assert!(!planner.deferring());
+    planner.defer(have[1]);
+    assert!(planner.deferring());
+    assert!(!planner.charge(have[2], 1), "a small body after a deferral");
+    planner.miss(have[3]);
+    let plan = planner.finish();
+    assert_eq!(plan.send, vec![have[0]]);
+    assert_eq!(plan.deferred, vec![have[1], have[2]]);
+    assert_eq!(plan.missed, vec![have[3]]);
+}
+
 fn sized_body(block_len: usize) -> BlockBody {
     BlockBody {
         block: vec![0; block_len],
@@ -698,4 +726,200 @@ fn mix(state: &mut u64) -> u64 {
     *state ^= state.wrapping_shr(7);
     *state ^= state.wrapping_shl(17);
     *state
+}
+
+/// Portable-storage varint, the codec's own widths.
+fn ps_varint(out: &mut Vec<u8>, val: usize) {
+    let val = u64::try_from(val).expect("count");
+    if val <= 63 {
+        out.push(u8::try_from(val << 2).expect("small"));
+    } else if val <= 16_383 {
+        let packed = u16::try_from((val << 2) | 1).expect("mid");
+        out.extend_from_slice(&packed.to_le_bytes());
+    } else {
+        let packed = u32::try_from((val << 2) | 2).expect("wide");
+        out.extend_from_slice(&packed.to_le_bytes());
+    }
+}
+
+/// One field `a` holding `count` empty sections, padded out to `cap`.
+fn object_array_at_cap(count: usize, cap: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(cap);
+    out.extend_from_slice(&shekyl_portable_storage::HEADER);
+    ps_varint(&mut out, 1);
+    out.push(1);
+    out.push(b'a');
+    out.push(0x8c);
+    ps_varint(&mut out, count);
+    out.resize(out.len() + count, 0);
+    assert!(out.len() <= cap, "the declared objects fit in the cap");
+    out.resize(cap, 0);
+    out
+}
+
+/// One field `a` holding `count` empty strings. `array_len` asks for two
+/// bytes per string before it counts them, so the body is `2 * count`
+/// bytes; the strings themselves are one byte each. Padded out to `cap`.
+fn string_array_at_cap(count: usize, cap: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(cap);
+    out.extend_from_slice(&shekyl_portable_storage::HEADER);
+    ps_varint(&mut out, 1);
+    out.push(1);
+    out.push(b'a');
+    out.push(0x8a);
+    ps_varint(&mut out, count);
+    let body = count.checked_mul(2).expect("body");
+    out.resize(out.len() + body, 0);
+    assert!(out.len() <= cap, "the declared strings fit in the cap");
+    out.resize(cap, 0);
+    out
+}
+
+#[test]
+fn the_crafted_array_matches_the_codec_for_one_element() {
+    let mut objects = Section::new();
+    objects.insert("a", Value::Array(Array::Object(vec![Section::new()])));
+    assert_eq!(
+        store_to_binary(&objects).expect("objects"),
+        object_array_at_cap(1, store_to_binary(&objects).expect("len").len())
+    );
+}
+
+#[test]
+fn the_minimum_sections_are_the_sizes_the_limits_use() {
+    let segment = vec![0u8; shekyl_wire::MIN_PRUNED_SEGMENT];
+    let mut full = Section::new();
+    full.insert("blob", Value::Bytes(segment.clone()));
+    full.insert("form", Value::UInt8(1));
+    let full_len =
+        store_to_binary(&full).expect("full").len() - shekyl_portable_storage::HEADER.len();
+    assert_eq!(full_len, MIN_TX_SECTION_BYTES);
+
+    let mut skeleton = Section::new();
+    skeleton.insert("archival_len", Value::UInt64(0));
+    skeleton.insert("form", Value::UInt8(2));
+    skeleton.insert("pqc_auth_hash", Value::Bytes(vec![0u8; 32]));
+    skeleton.insert("prunable_hash", Value::Bytes(vec![0u8; 32]));
+    skeleton.insert("unprunable", Value::Bytes(segment));
+    let skeleton_len =
+        store_to_binary(&skeleton).expect("skeleton").len() - shekyl_portable_storage::HEADER.len();
+    assert!(skeleton_len > MIN_TX_SECTION_BYTES);
+}
+
+/// A cap-sized array of one-byte objects is refused before the decoder
+/// allocates it. The count is one past the derived object limit.
+#[test]
+fn a_cap_of_one_byte_objects_is_too_many() {
+    let cap = usize::try_from(CAP_RESPONSE_BODIES).expect("cap");
+    let bytes = object_array_at_cap(RESPONSE_BODIES_MAX_OBJECTS + 1, cap);
+    assert_eq!(bytes.len(), cap);
+    match ResponseBodies::decode(&bytes) {
+        Err(PayloadError::Storage(shekyl_portable_storage::Error::TooManyObjects { .. })) => {}
+        other => panic!("expected TooManyObjects, got {other:?}"),
+    }
+}
+
+/// A cap-sized array of empty strings is refused before the decoder
+/// allocates it.
+#[test]
+fn a_cap_of_empty_strings_is_too_many() {
+    let cap = usize::try_from(CAP_RESPONSE_HEADERS).expect("cap");
+    let bytes = string_array_at_cap(RESPONSE_HEADERS_MAX_STRINGS + 1, cap);
+    assert_eq!(bytes.len(), cap);
+    match ResponseHeaders::decode(&bytes) {
+        Err(PayloadError::Storage(shekyl_portable_storage::Error::TooManyStrings { .. })) => {}
+        other => panic!("expected TooManyStrings, got {other:?}"),
+    }
+    let body_cap = usize::try_from(CAP_RESPONSE_BODIES).expect("cap");
+    let bodies = string_array_at_cap(RESPONSE_BODIES_MAX_STRINGS + 1, body_cap);
+    assert_eq!(bodies.len(), body_cap);
+    match ResponseBodies::decode(&bodies) {
+        Err(PayloadError::Storage(shekyl_portable_storage::Error::TooManyStrings { .. })) => {}
+        other => panic!("expected TooManyStrings, got {other:?}"),
+    }
+}
+
+/// One hundred bodies of minimum skeletons fill the body budget and still
+/// decode. That is the honest maximum the derived limits have to admit.
+#[test]
+fn a_budget_of_minimum_skeletons_decodes() {
+    let segment = {
+        let tx = shekyl_wire::Transaction {
+            prefix: shekyl_wire::TxPrefix {
+                unlock_time: 0,
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                extra: Vec::new(),
+            },
+            ct: shekyl_wire::Ct::Null(shekyl_wire::CtBase {
+                enc_amounts: Vec::new(),
+                enc_labels: Vec::new(),
+                commitments: Vec::new(),
+            }),
+        };
+        let bytes = tx.serialize();
+        assert_eq!(bytes.len(), shekyl_wire::MIN_PRUNED_SEGMENT);
+        bytes
+    };
+    let skeleton = TxBody::Skeleton(SkeletonTx {
+        unprunable: segment,
+        prunable_hash: PrunableHash::from_bytes([1u8; 32]),
+        pqc_auth_hash: None,
+        archival_len: ArchivalLength::from_raw(0),
+    });
+    let one = BlockBody {
+        block: vec![0x11],
+        txs: vec![skeleton.clone()],
+        attestation_witness: Vec::new(),
+    };
+    let each = body_budget_bytes(&one) - one.block.len();
+    let budget = usize::try_from(BODIES_RESPONSE_BYTES).expect("budget");
+    let blocks = 100usize;
+    let total = (budget - blocks) / each;
+    assert!(
+        total >= blocks,
+        "a minimum skeleton is smaller than the budget"
+    );
+    let base = total / blocks;
+    let extra = total % blocks;
+    let bodies = (0..blocks)
+        .map(|i| {
+            let n = base + usize::from(i < extra);
+            BlockBody {
+                block: vec![0x11],
+                txs: vec![skeleton.clone(); n],
+                attestation_witness: Vec::new(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let charged: usize = bodies.iter().map(body_budget_bytes).sum();
+    assert!(charged <= budget);
+    assert!(budget - charged < each);
+    let msg = ResponseBodies {
+        bodies,
+        deferred: Vec::new(),
+        missed_ids: Vec::new(),
+    };
+    let bytes = msg.store().expect("an honest maximum stores");
+    assert_eq!(ResponseBodies::decode(&bytes).expect("and decodes"), msg);
+}
+
+/// The four chain-sync commands are arms of the one set: each id
+/// round-trips and each cap is the one its decoder uses.
+#[test]
+fn the_four_sync_commands_carry_their_decoders_caps() {
+    use shekyl_levin::{
+        CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS,
+    };
+    let sync = [
+        (2011, Command::RequestHeaders, CAP_REQUEST_HEADERS),
+        (2012, Command::ResponseHeaders, CAP_RESPONSE_HEADERS),
+        (2013, Command::RequestBodies, CAP_REQUEST_BODIES),
+        (2014, Command::ResponseBodies, CAP_RESPONSE_BODIES),
+    ];
+    for (id, command, cap) in sync {
+        assert_eq!(Command::from_wire(id), Some(command), "{id}");
+        assert_eq!(command.wire_id(), id);
+        assert_eq!(command.payload_cap(), cap, "{id}");
+    }
 }

@@ -213,6 +213,7 @@ impl PhaseAReject {
     pub fn verdict(&self) -> SubmitVerdict {
         SubmitVerdict::Rejected {
             cause: RejectCause::Malformed,
+            row: None,
         }
     }
 }
@@ -364,7 +365,7 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
 
     // Emission statics (§8.7.2). E1: the opaque vin must decode and
     // validate under the canonical `emission_wire` codec — the same reader
-    // the C++ oracle reaches through `shekyl_archival_emission_vin_extract`
+    // the deleted C++ oracle reached through `shekyl_archival_retention`'s emission-vin parse (`DEL-008`)
     // — parsed once here and carried on the submission. EV3: the loud
     // reward vout sum must be non-zero (wire validate() already pinned it
     // overflow-free).
@@ -379,11 +380,11 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
         let mut cursor = bytes.as_slice();
         let vin = ArchivalRewardEmissionVin::read(&mut cursor)
             .map_err(|e| PhaseAReject::new(format!("emission vin decode failed: {e:?}")))?;
-        // Length-exact, mirroring the C++ oracle's `parse_emission_vin`
-        // (shekyl-ffi): trailing bytes inside the opaque blob are invisible
-        // to the outer tx's byte-canonicality check, and the commit-path
-        // re-extract rejects them — enforce the same bound here so the
-        // divergence class is unrepresentable past Phase A.
+        // Length-exact, as the block validator's parse is
+        // (`shekyl-chain-rules`, `tx_emission`): trailing bytes inside the
+        // opaque blob are invisible to the outer tx's byte-canonicality
+        // check, and the block path rejects them — enforce the same bound
+        // here so the divergence class is unrepresentable past Phase A.
         if !cursor.is_empty() {
             return Err(PhaseAReject::new(format!(
                 "emission vin carries {} trailing byte(s)",

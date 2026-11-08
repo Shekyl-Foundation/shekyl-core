@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use shekyl_address::ShekylAddress;
+use shekyl_crypto_pq::account::account_from_seed;
 use shekyl_crypto_pq::account::AllKeysBlob;
-use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
 use shekyl_curve_tree::{
     select_reference_height, AssembleInput, BlockHash, BlockHeight, CurveTreeClient, CurveTreeRoot,
     Gindex, ReferenceBlock, REF_ANCHOR_AGE,
@@ -53,7 +53,7 @@ use crate::engine::transaction_submitter::{
 use crate::engine::tx_counts::{InputCount, OutputCount};
 use crate::engine::LocalLedger;
 
-/// Deterministic raw32 test seed. Distinct from `SIGNER_TEST_MASTER_SEED`
+/// Deterministic 32-byte test seed. Distinct from `SIGNER_TEST_MASTER_SEED`
 /// (`engine/signer.rs`) so pending-tx tests do not share derivation state
 /// with the C4α `LocalSigner` fixtures.
 const PENDING_TX_TEST_RAW_SEED: [u8; 32] = {
@@ -69,9 +69,8 @@ const PENDING_TX_TEST_RAW_SEED: [u8; 32] = {
 const TEST_OUTPUT_TX_KEY: [u8; 32] = [11u8; 32];
 
 fn test_account_blob() -> AllKeysBlob {
-    let (_master, blob) =
-        generate_account_from_raw_seed(&PENDING_TX_TEST_RAW_SEED, DerivationNetwork::Testnet)
-            .expect("testnet raw32 rederivation succeeds");
+    let (_master, blob) = account_from_seed(&PENDING_TX_TEST_RAW_SEED, Network::Testnet)
+        .expect("testnet derivation succeeds");
     blob
 }
 
@@ -246,7 +245,7 @@ fn advance_ledger_empty_blocks(ledger: &LocalLedger, from: u64, to: u64) {
         let _ = indexes.process_scanned_outputs(
             ledger_block,
             shekyl_types::BlockHeight::from_raw(h),
-            hash,
+            BlockHash::from_bytes(hash),
             Timelocked::from_vec(Vec::new()),
         );
     }
@@ -269,7 +268,7 @@ fn populate_ledger(
     let inserted_range = indexes.process_scanned_outputs(
         ledger_block,
         shekyl_types::BlockHeight::from_raw(block_height),
-        block_hash,
+        BlockHash::from_bytes(block_hash),
         timelocked,
     );
     assert!(!inserted_range.is_empty() || ledger_block.transfer_count() == 0);
@@ -278,7 +277,7 @@ fn populate_ledger(
         let _ = indexes.process_scanned_outputs(
             ledger_block,
             shekyl_types::BlockHeight::from_raw(h),
-            hash,
+            BlockHash::from_bytes(hash),
             Timelocked::from_vec(Vec::new()),
         );
     }
@@ -316,7 +315,7 @@ fn populate_ledger(
         td.source_ciphertext = Some(ciphertext.clone());
         td.output_handle = Some(derive_output_handle(
             blob.view_sk.as_canonical_bytes(),
-            td.tx_hash.as_bytes(),
+            &td.tx_hash,
             output_index,
         ));
 
@@ -361,7 +360,7 @@ type TestPendingTx = LocalPendingTx<
     LocalLedger,
 >;
 
-fn test_pending_tx(ledger: Arc<LocalLedger>) -> TestPendingTx {
+fn test_pending_tx_on(ledger: Arc<LocalLedger>, network: Network) -> TestPendingTx {
     LocalPendingTx::new(
         Arc::new(LocalSigner::new(test_signer_handle())),
         WalletGreedyOutputSelector,
@@ -372,8 +371,12 @@ fn test_pending_tx(ledger: Arc<LocalLedger>) -> TestPendingTx {
         None,
         Arc::new(TracingDiagnosticSink),
         ReservationTTLConfig::default(),
-        Network::Mainnet,
+        network,
     )
+}
+
+fn test_pending_tx(ledger: Arc<LocalLedger>) -> TestPendingTx {
+    test_pending_tx_on(ledger, Network::Mainnet)
 }
 
 fn test_pending_tx_with_sink(
@@ -406,6 +409,90 @@ fn funded_ledger() -> Arc<LocalLedger> {
         20,
     );
     ledger
+}
+
+/// What one payment asks for in the recipient-refusal cases below. The
+/// ledger that answers them holds less than this, so a build that skipped
+/// the address check would report insufficient funds.
+const RECIPIENT_REFUSAL_ASK_ATOMIC: u64 = 1_000;
+
+/// The same ledger's one output. Small enough that `RECIPIENT_REFUSAL_ASK_ATOMIC`
+/// cannot be paid, large enough that selection has a balance to mis-report.
+const RECIPIENT_REFUSAL_HELD_ATOMIC: u64 = 10;
+
+async fn assert_recipient_refused(pending: &TestPendingTx, request: TxRequest, reason: &str) {
+    let err = pending.build(request).await.unwrap_err();
+    assert!(
+        matches!(err, SendError::InvalidRecipient { reason: got } if got == reason),
+        "expected {reason}, got {err:?}"
+    );
+    assert_eq!(pending.outstanding(), 0, "a refusal selects nothing");
+}
+
+/// `LocalPendingTx::build` refuses a recipient before it looks at the
+/// balance. The same small synced ledger pays a real address with
+/// `InsufficientFunds` and refuses the others as `InvalidRecipient`.
+///
+/// Deleting both `check_recipients` calls (`build` and `build_select_sync`)
+/// turns the bad-address cases into `InsufficientFunds` and lets the empty
+/// list reach selection. Accepting the display form in
+/// `PaymentAddress::decode` does the same to that case. The selection
+/// helper does not call `check_recipients`; this is the production door.
+#[tokio::test]
+async fn build_refuses_a_bad_recipient_before_the_balance() {
+    let ledger = Arc::new(test_ledger());
+    populate_ledger(
+        ledger.as_ref(),
+        1,
+        vec![make_recovered_output(1, 100, RECIPIENT_REFUSAL_HELD_ATOMIC)],
+        20,
+    );
+    let pending = test_pending_tx(Arc::clone(&ledger));
+
+    let mut garbage = standard_request(RECIPIENT_REFUSAL_ASK_ATOMIC);
+    garbage.recipients[0].destination = TxDestination::Address("notanaddress".into());
+    assert_recipient_refused(&pending, garbage, "recipient is not a Shekyl address").await;
+
+    let display = ShekylAddress::decode(&test_payment_address())
+        .expect("the test address decodes")
+        .encode_classical_display()
+        .expect("the display form encodes");
+    let mut display_req = standard_request(RECIPIENT_REFUSAL_ASK_ATOMIC);
+    display_req.recipients[0].destination = TxDestination::Address(display);
+    assert_recipient_refused(
+        &pending,
+        display_req,
+        "recipient address cannot receive a payment",
+    )
+    .await;
+
+    let testnet = test_pending_tx_on(Arc::clone(&ledger), Network::Testnet);
+    assert_recipient_refused(
+        &testnet,
+        standard_request(RECIPIENT_REFUSAL_ASK_ATOMIC),
+        "recipient address is for another network",
+    )
+    .await;
+
+    assert_recipient_refused(
+        &pending,
+        TxRequest {
+            recipients: Vec::new(),
+            priority: FeePriority::Standard,
+        },
+        "TxRequest must carry at least one recipient",
+    )
+    .await;
+
+    let err = pending
+        .build(standard_request(RECIPIENT_REFUSAL_ASK_ATOMIC))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, SendError::InsufficientFunds { .. }),
+        "a real address on this ledger is short of funds, not an invalid recipient: {err:?}"
+    );
+    assert_eq!(pending.outstanding(), 0);
 }
 
 // --- CT-5a commit 4b-1: curve-tree spend-gate KATs (D1/D3) --------------
@@ -1561,10 +1648,11 @@ async fn ambiguous_verdict_keeps_dispatch_persisted_record() {
 ///
 /// The persisted baseline is the claimed height **clamped to the
 /// wallet's synced height** (§2.5(a) as amended): the claim is
-/// untrusted, and the watchdog horizon is measured as `synced −
-/// baseline`, so a baseline the wallet has not reached is a horizon it
-/// cannot reach. The verdict still carries the raw claim to the
-/// consumer — this pins that the two are read from different places.
+/// untrusted. An unread sight does not read the baseline, so the claim
+/// cannot park the status probe. The clamp still keeps a height this
+/// wallet has not reached out of the journal. The verdict still carries
+/// the raw claim to the consumer — this pins that the two are read from
+/// different places.
 #[tokio::test]
 async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
     let sink = Arc::new(AssertionSink::new());
@@ -1632,8 +1720,7 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
                 lock.accepted_at_height,
                 shekyl_types::BlockHeight::from_raw(20),
                 "the lock is baselined at a height the wallet has reached — \
-                 the claimed 25 clamped to the synced 20, so the watchdog \
-                 horizon stays measurable"
+                 the claimed 25 clamped to the synced 20"
             );
             assert_eq!(
                 row.lock_baseline,
@@ -1825,22 +1912,18 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
     }
 }
 
-/// The lie-high damage cap (§7.2 rider row `AlreadyInChain.height`) is
-/// "released by the §2.6 confirmed-absent watchdog horizon (bounded
-/// liveness cost)". Asserted on the axis the cap actually lives on —
-/// horizon *reachability*, not the stored number: a daemon claiming
-/// `u64::MAX` must not be able to park `escape_ladder_step` on
-/// `HorizonNotReached` forever, because the F14 lock it places is
-/// persisted and nothing else would ever release it (refresh cannot
-/// observe a spend that never reached the chain).
-///
-/// The negative control is the unclamped value itself: fed as a
-/// baseline, `u64::MAX` fails this same assertion at every height, so
-/// the test cannot pass by accident.
+/// The lie-high damage cap (§7.2 rider row `AlreadyInChain.height`).
+/// A fresh projection is unread, and an unread sight is asked on the
+/// next chain advance whatever baseline was stored. A daemon claiming
+/// `u64::MAX` therefore cannot park the status probe. The stored
+/// baseline is still the wallet's synced height: the journal does not
+/// keep a height this wallet has not reached. An in-chain sight counts
+/// the proof-life ceiling from the baseline a probe records, and a
+/// baseline of `u64::MAX` on that sight would wait forever.
 #[tokio::test]
 async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reachable() {
     use crate::engine::submit_watchdog::{
-        escape_ladder_step, held_submits, HeldSubmit, WaitReason, WatchdogConfig, WatchdogStep,
+        escape_ladder_step, held_submits, HeldSubmit, WatchdogConfig, WatchdogStep,
     };
     use crate::engine::traits::DaemonHealth;
 
@@ -1882,31 +1965,26 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
         }
     );
 
-    // Horizon reachability, the property the §7.2 cap names.
-    let config = WatchdogConfig::from_block_target(120);
+    // An unread sight is asked at the wallet's height and at the
+    // unclamped claim. The height cannot park the ladder.
+    let config = WatchdogConfig::production();
     let healthy = DaemonHealth {
         p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
         height: 20,
         synchronized: true,
     };
-    let horizon_reached = 20 + config.escape_horizon_blocks;
-    assert_ne!(
-        escape_ladder_step(held, horizon_reached, healthy, config),
-        WatchdogStep::Wait(WaitReason::HorizonNotReached),
-        "a lock baselined at a reached height must clear the horizon once \
-         the wallet syncs past it — otherwise the escape ladder never runs \
-         and the persisted lock strands the inputs permanently"
+    assert_eq!(
+        escape_ladder_step(held, 20, healthy, config),
+        WatchdogStep::ProbeResubmitSameBytes
     );
-    // Negative control: the unclamped claim is exactly what would break it.
     let unclamped = HeldSubmit {
         baseline_height: u64::MAX,
         ..*held
     };
     assert_eq!(
-        escape_ladder_step(&unclamped, horizon_reached, healthy, config),
-        WatchdogStep::Wait(WaitReason::HorizonNotReached),
-        "sanity: the unclamped baseline is unreachable, so this assertion \
-         discriminates rather than passing for any input"
+        escape_ladder_step(&unclamped, 20, healthy, config),
+        WatchdogStep::ProbeResubmitSameBytes,
+        "an unread sight is asked whatever baseline a height claim wrote"
     );
 }
 
@@ -2503,13 +2581,12 @@ struct RealTreeBondProofs {
     spend_key_x: [u8; 32],
     fee: u64,
     floor: u64,
-    signable_tx_hash: shekyl_types::PrefixHash,
 }
 
 async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
-    use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
+    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_crypto_pq::output::construct_output;
@@ -2517,18 +2594,13 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     use shekyl_tx_builder::{sign_transaction_with_terms, LeafEntry, SpendInput, TreeContext};
 
     // ── Bond persona `P` + holdings → bond floor ─────────────────────
-    let p_keys = derive_archival_p_keys(
-        &[0x33u8; MASTER_SEED_BYTES],
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        0,
-    )
-    .expect("derive archival P keys");
+    let p_keys = derive_archival_p_keys(&[0x33u8; MASTER_SEED_BYTES], Network::Mainnet, 0)
+        .expect("derive archival P keys");
     let holdings = HoldingsDescriptor {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     assert!(
         floor > 0,
         "bond floor must be positive for fixture holdings"
@@ -2537,7 +2609,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let fee: u64 = 1_000;
     // Funding covers the change output, the fee, and the bond credit.
     let input_amount: u64 = floor + fee + 1_000_000;
-    let signable_tx_hash = shekyl_types::PrefixHash::from_bytes([0xC3u8; 32]);
+    let prefix_hash = shekyl_types::PrefixHash::from_bytes([0xC3u8; 32]);
 
     // ── A real, consistent ledger+tree (depth 2: two drained leaves) ─
     // The bond spends gindex 0 (the first leaf); the second leaf makes the
@@ -2584,7 +2656,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let reference = ReferenceBlock {
         height: rh,
         curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-        block_hash: BlockHash::from_bytes(block_hash),
+        block_hash,
     };
 
     // ── Assemble the REAL membership path for the funding output ─────
@@ -2685,7 +2757,8 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     // ── Prove over the REAL tree: bond_credit is the sole cleartext term ─
     let credit_term = built.credit_term();
     let signed = sign_transaction_with_terms(
-        signable_tx_hash,
+        &shekyl_network::HARNESS_NETWORK_ID,
+        prefix_hash,
         &inputs,
         &outputs,
         AtomicUnits::from_raw(fee),
@@ -2711,7 +2784,6 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         spend_key_x: *bundle.spend_key_x,
         fee,
         floor,
-        signable_tx_hash,
     }
 }
 
@@ -2739,7 +2811,6 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
         output_key,
         pqc_public_key,
         spend_key_x,
-        signable_tx_hash,
         ..
     } = real_tree_bond_post_proofs().await;
 
@@ -2761,9 +2832,10 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
         &key_images,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        tree_ctx.tree_root.as_bytes(),
+        &tree_ctx.tree_root,
         tree_ctx.tree_depth,
-        signable_tx_hash.to_bytes(),
+        // The message the proof was made over (the signing envelope §2.2).
+        signed.tx_signable,
     );
     assert!(
         matches!(fcmp_result, Ok(true)),
@@ -3501,7 +3573,7 @@ fn populate_ledger_scan_only(
     let inserted_range = indexes.process_scanned_outputs(
         ledger_block,
         shekyl_types::BlockHeight::from_raw(block_height),
-        block_hash,
+        BlockHash::from_bytes(block_hash),
         timelocked,
     );
     assert!(!inserted_range.is_empty() || ledger_block.transfer_count() == 0);
@@ -3510,7 +3582,7 @@ fn populate_ledger_scan_only(
         let _ = indexes.process_scanned_outputs(
             ledger_block,
             shekyl_types::BlockHeight::from_raw(h),
-            hash,
+            BlockHash::from_bytes(hash),
             Timelocked::from_vec(Vec::new()),
         );
     }
@@ -3595,7 +3667,8 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
         InputCount::clamped(1),
         OutputCount::clamped(request.recipients.len()),
         1,
-    );
+    )
+    .expect("the fee fits");
     // The `gindex` must equal the output's `global_output_index` (100) so the
     // index-stability guard passes and the missing-`key_image` check inside
     // `input_context_from_transfer` is reached. The path is unused before
@@ -3673,7 +3746,8 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
         OutputCount::clamped(n_out),
         2,
         seed,
-    );
+    )
+    .expect("the built shape's fee fits");
     assert_eq!(
         built.fee_atomic_units.to_raw(),
         expected_fee,

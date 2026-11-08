@@ -50,7 +50,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use rand_core::{OsRng, RngCore};
-use shekyl_noise::Direction;
+use shekyl_noise::RecvDirection;
 use shekyl_rpc_channel::budget::HandshakeBudget;
 use shekyl_rpc_channel::handshake::{
     Client, Daemon, Message1Admission, StaticKeypair, StaticPublic, MESSAGE1_WIRE_LEN,
@@ -210,7 +210,9 @@ fn serve_one(
     let mut first = vec![0u8; RECORD_LEN];
     stream.read_exact(&mut first).map_err(|_| stamps)?;
     let (mut session, opened) = pending
-        .open_first_message(|recv: &mut Direction| recv.open(&first, TRANSPORT_AD).map(|(p, _)| p))
+        .open_first_message(|recv: &mut RecvDirection| {
+            recv.open(&first, TRANSPORT_AD).map(|(p, _)| p)
+        })
         .map_err(|_| stamps)?;
     stamps[4] = Some(ns(accepted));
     let number: [u8; 8] = opened

@@ -135,10 +135,10 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (dated snapshot, 2026-10-18, counted from the TSV's production rows): 127 registered rows across the five mechanisms —
-129 including the two one-entry micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
+**Census (dated snapshot, 2026-11-04, counted from the TSV's production rows): 126 registered rows across the five mechanisms —
+131 including the two micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
 measure of the blind spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below
-sums to 129: the five mechanisms 127, plus the two 1-entry micro-buckets.) **This table is a
+sums to 131: the five mechanisms 126, plus the two micro-buckets, 1 + 4.) **This table is a
 snapshot, not the checked copy** — the per-mechanism counts are pinned once, against
 the parsed TSV rows, in `domain_registry.rs::PRODUCTION_PINS`; when the registry
 legitimately changes, that pin fails and this table is refreshed with a new as-of
@@ -213,7 +213,25 @@ verifies. The fourth is `shekyl/archival-drawable-epoch-v1`, the digest of
 an epoch's drawable set that the settlement writer writes at the epoch's
 open and checks at its settlement (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5
 check 2; `SO-D12` increment 2). It is a local store check, never read by a
-consensus rule.
+consensus rule. The 2026-11-01 refresh replaces it with
+`shekyl/archival-drawable-epoch-v2`, one function and one site: the
+digest now also covers the archive width and the support stream's
+members with their receipt keys (`SO-D12q`), so the encoding changed and
+the version moved with it (rule 30). The 2026-11-04/05 refresh is the
+signing envelope (`NETWORK_IDENTITY.md` §2.4.1, NI-R17): every
+network-bound mechanism-1 domain is framed through one function, and the
+rows are `shekyl/network-name-v1`, `shekyl/tx-signable-v1`,
+`shekyl/fcmp-spend-signing-v2` (the hash every hybrid spend signature is
+over, 64 bytes), `shekyl/msg-sign-v2` (`shekyl/msg-hash-v1` retired), the
+four proof frames `shekyl/tx-proof-{outbound,inbound}-v1`,
+`shekyl/reserve-proof-message-v1` and `shekyl/reserve-proof-dleq-context-v1`,
+`shekyl/multisig-address-v3`,
+`shekyl/archival-emission-auth-{backing,claim}-v4` and
+`shekyl/archival-serve-credit-bundle-v2` (the bundle commitment, now
+64 bytes under the network's id; `-v1` goes). No row is kept retired
+before genesis (Rick, 2026-11-05): `shekyl/archival-serve-credit-batch-v1`,
+`shekyl/archival-witness-carrier-scheme-v1` and the test-only
+`shekyl/archival-serve-challenge-leaf-v1` are deleted with their code.
 
 The 2026-10-18 refresh removes one mechanism-2 info label,
 `shekyl-archival-p-msg-sign-slh-dsa-192s-v1`: a persona has no address, so
@@ -221,21 +239,28 @@ nothing needs its SLH-DSA key and the bundle no longer derives it
 (`FN_DSA_HYBRID.md` `FND-25`). The same refresh recounts every row from the
 TSV.
 
+The 2026-11-04 refresh adds one mechanism-1 row, `shekyl/network-name-v1`
+(`name_id`, the network name's 16-byte binding), and moves the mechanism-2
+salt label from `shekyl-master-derive-v2-` to `shekyl-master-derive-v3`, the
+salt being `name_id ‖ purpose` (`NETWORK_IDENTITY.md`; the signing envelope
+§2.6, Rick's ruling of 2026-11-04).
+
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
-| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 53 | 0 |
-| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 8 salts + 40 infos | 0 |
+| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 56 | 0 |
+| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 7 salts + 37 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 8 | 0 |
 | 5 — keccak / schnorr challenge DST | schnorr domain; `keccak256(..)` hash-to-point/scalar prefix | 14 | 8 |
 | 6 — SHA3-256 direct-prefix (micro-bucket) | prefix fed straight to `Sha3_256` | 1 | 0 |
-| 7 — Noise prologue label (micro-bucket) | a label's own bytes mixed into a Noise handshake hash as prologue | 1 | 0 |
+| 7 — Noise prologue label (micro-bucket) | a label's own bytes mixed into a Noise handshake hash as prologue | 4 | 0 |
 
 Distinctness identity is per-mechanism; mechanism 2 is keyed by `(salt, info)`, since
-three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused across two
-derivations that differ only by salt — legitimately distinct, not a collision.
+three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused by the wallet
+derivation and the harness fixture wallet's test-only derivation, which differ only by
+salt — legitimately distinct, not a collision.
 
-**Frozen vs. live.** 11 of the 129 are **frozen-inherited** (mech-3: the FROST
+**Frozen vs. live.** 11 of the 130 are **frozen-inherited** (mech-3: the FROST
 ciphersuite id/context and the SAL-multisig transcript root; mech-5: the FCMP++
 generator and Bulletproof(+) DSTs). Frozen strings are byte-identical to the
 un-vendored upstream, are pinned by derived-output KATs, and are **rule-93
@@ -278,6 +303,15 @@ exclusions and the sub-label rule are stated in the TSV header.
   `shekyl-fcmp-proofs`); and a frozen-doc cross-check (every frozen-inherited row has
   its entry in `FROZEN_DOMAIN_SEPARATORS.md`). Anchored on the mechanism call site /
   registered literal, never the `shekyl/` prefix.
+- **Binding gate** — `rust/shekyl-crypto-pq/tests/domain_binding.rs`: every production
+  row's `binding`, `width` and `role` columns (`NETWORK_IDENTITY.md` §2.4.1), held to
+  the code by parsing it: `id`/`name` cSHAKE rows are `IdDomain`/`NameDomain` constants
+  of that kind and width, HKDF `name` rows sit beside `salt_for`, both Noise prologues
+  come from a `&NetworkId`, `input:<type>` sites take the type, `local` is refused on
+  authenticity evidence, `derived:` names a census rule, `enclosed-by` stays off
+  Shekyl-owned rows, signed content is 64 bytes, and no retired label is reused. Rows
+  it cannot hold yet are in `docs/design/DOMAIN_BINDING_RATCHET.tsv`, which only
+  shrinks and must be empty at v3.1.0.
 
 **Honest scope — completeness for mech 2/4/5/6 is a review duty.** The gate catches
 drift and deletion of *registered* domains, and additions on always-domain entry

@@ -255,8 +255,7 @@ pub(crate) async fn get_wallet_info(
         // stay coherent with the balance summary under ONE ledger guard.
         let snapshot = tokio::task::block_in_place(|| {
             engine.stake().balance_snapshot_with(|wallet| {
-                let wallet_height =
-                    i64::try_from(wallet.ledger.height().to_raw()).unwrap_or(i64::MAX);
+                let wallet_height = crate::project::wallet_height(&wallet.ledger);
                 let restore_height = i64::try_from(wallet.sync_state.restore_from_height.to_raw())
                     .unwrap_or(i64::MAX);
                 (wallet_height, restore_height)
@@ -264,6 +263,7 @@ pub(crate) async fn get_wallet_info(
         })
         .map_err(crate::staking::map_balance_view)?;
         let (wallet_height, restore_height) = snapshot.extra;
+        let wallet_height = wallet_height?;
         let staking_view = snapshot.staking;
 
         let address = engine
@@ -271,12 +271,7 @@ pub(crate) async fn get_wallet_info(
             .encode()
             .map_err(|e| WalletRpcError::InternalError(format!("encode address: {e}")))?;
         let capability = capability_mode_str(engine.capability()).to_owned();
-        let network = match engine.network() {
-            shekyl_engine_core::Network::Mainnet => "MAINNET",
-            shekyl_engine_core::Network::Testnet => "TESTNET",
-            shekyl_engine_core::Network::Stagenet => "STAGENET",
-        }
-        .to_owned();
+        let network = crate::types::network_wire(engine.network()).to_owned();
 
         // WI-RPC-5: the one-glance balance projects its staking fields from
         // the same authoritative view the staking block reads — the two
@@ -405,8 +400,7 @@ pub(crate) async fn get_height(
     let shared = require_open_engine(tenants).await?;
     let (wallet_height, daemon) = {
         let engine = shared.read().await;
-        let wallet_height =
-            i64::try_from(engine.ledger().ledger.height().to_raw()).unwrap_or(i64::MAX);
+        let wallet_height = crate::project::wallet_height(&engine.ledger().ledger)?;
         (wallet_height, engine.daemon().clone())
     };
 

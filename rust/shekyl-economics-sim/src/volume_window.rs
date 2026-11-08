@@ -22,7 +22,7 @@
 
 use std::collections::VecDeque;
 
-use shekyl_chain_rules::tx_volume_span;
+use shekyl_chain_rules::tx_volume_span_of;
 use shekyl_economics::params::TX_VOLUME_WINDOW;
 use shekyl_economics::TxVolume;
 use shekyl_types::BlockHeight;
@@ -30,7 +30,7 @@ use shekyl_types::BlockHeight;
 /// The prefix sums of a fold's transaction counts, as far back as CEN-F20's
 /// window can reach, and the height of the next block to be priced.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct VolumeWindow {
+pub(crate) struct VolumeFold<const W: u64> {
     /// `prefix[i]` is the cumulative transaction count through height
     /// `next - prefix.len() + i`. At most `W + 1` entries: the window's
     /// upper term and its lower term are `W` apart.
@@ -39,10 +39,14 @@ pub(crate) struct VolumeWindow {
     next: u64,
 }
 
-impl VolumeWindow {
+/// The shipped window. EUP-5's window-length stress builds [`VolumeFold`]
+/// at another length (`ECONOMICS_SIM_PHASE0.md`, the const-generic window).
+pub(crate) type VolumeWindow = VolumeFold<{ TX_VOLUME_WINDOW }>;
+
+impl<const W: u64> VolumeFold<W> {
     /// The validator's operand for the block at the next height.
     pub(crate) fn operand(&self) -> TxVolume {
-        let span = tx_volume_span(BlockHeight::from_raw(self.next));
+        let span = tx_volume_span_of::<W>(BlockHeight::from_raw(self.next));
         let Some(upper) = span.upper else {
             return TxVolume::window(0, 0);
         };
@@ -56,7 +60,7 @@ impl VolumeWindow {
     pub(crate) fn push(&mut self, txs: u64) {
         let cumulative = self.prefix.back().copied().unwrap_or(0).saturating_add(txs);
         self.prefix.push_back(cumulative);
-        if self.prefix.len() as u64 > TX_VOLUME_WINDOW + 1 {
+        if self.prefix.len() as u64 > W + 1 {
             self.prefix.pop_front();
         }
         self.next += 1;

@@ -25,11 +25,11 @@
 //! shard list that drifts from the record is the silent-slash path the whole
 //! serving arc is built to close.
 //!
-//! **The pins and the reader** come from one [`CurveTreeHandle::pin_serve_set`]
-//! round trip, because pinning is a store write and the curve-tree actor is
-//! the store's single writer. One `ask` returns both, so a respawn between two
-//! calls cannot hand back a reader for a different client than the one that
-//! pinned.
+//! **The pins and the store's readings** go through one curve-tree actor,
+//! because pinning is a store write and the actor is the store's one owner
+//! (`CURVE_TREE_CLIENT.md` §11). Every report and reading names that actor's
+//! store ([`CurveTreeHandle::store_identity`]), and the witness refuses a
+//! reading of any other.
 //!
 //! # Transport
 //!
@@ -48,22 +48,15 @@
 //! This type still does not create transports; it takes one. The bound decides
 //! *which kind*, the construction site decides *whose*.
 
-use kameo::actor::ActorRef;
 use shekyl_archival_retention::HoldingsKind;
-use shekyl_curve_tree::{BlockHeight, ServingReader};
-use shekyl_p_host::{PinReport, ServeSetPinner};
-#[cfg(test)]
-use shekyl_p_store::BodyStore;
-#[cfg(test)]
-use shekyl_types::ShardId;
+use shekyl_curve_tree::BlockHeight;
+use shekyl_p_host::{PinReport, ServeSetPinner, StoreFacts, StoreIdentity};
 
-use super::actor::StakeEngine;
-use super::persona::EraseReleasedShards;
+use super::body_store_actor::BodyStoreHandle;
 
 use crate::engine::curve_tree_actor::CurveTreeHandle;
 
 use super::departure_ledger::{Continuity, DepartureLedger, Obligation, EPOCHS_BEFORE_PIN_RELEASE};
-use shekyl_types::BlockHash;
 
 use crate::engine::daemon::synced_chain_facts::{AnchoredView, TimelineBreak};
 use crate::engine::emission_source::fetch_vouched_claim_source;
@@ -101,50 +94,21 @@ pub(crate) struct EngineServeSetPinner<R: PersonaIsolatedTransport> {
     /// The store's pin set as of the last reconcile — the other half of the
     /// release input, kept here so a refresh costs one actor round trip.
     last_pinned: std::sync::Mutex<Vec<u64>>,
-    /// Where a released shard's body row is erased (`WSS-Q8`). Production
-    /// asks the stake actor, which keeps the writer. Tests hold a store
-    /// because they have no actor.
-    rows: ReleasedRows,
-}
-
-/// The body rows a pin release erases.
-pub(crate) enum ReleasedRows {
-    /// A store in this process. Tests have no stake actor.
-    #[cfg(test)]
-    Store(BodyStore),
-    /// The stake actor's writer. The serving host never holds the key.
-    Actor(ActorRef<StakeEngine>),
-}
-
-impl ReleasedRows {
-    async fn erase(&self, ids: &[u64]) -> Result<(), String> {
-        match self {
-            #[cfg(test)]
-            Self::Store(store) => {
-                for id in ids {
-                    store
-                        .erase_shard(ShardId::from_raw(*id))
-                        .map_err(|e| e.to_string())?;
-                }
-                Ok(())
-            }
-            Self::Actor(actor) => actor
-                .ask(EraseReleasedShards {
-                    shard_ids: ids.to_vec(),
-                })
-                .await
-                .map_err(|e| e.to_string()),
-        }
-    }
+    /// The body store's owning actor (`CURVE_TREE_CLIENT.md` §11.1,
+    /// `WSS-Q8`). A pin-release erase is a message to it. This pinner
+    /// holds neither the store nor its key, and neither does the stake
+    /// actor: the body-store actor is the one owner.
+    bodies: BodyStoreHandle,
 }
 
 impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
-    /// Bind a pinner to one persona's canonical id and its own transport.
+    /// Bind a pinner to one persona's canonical id, its transport, and the
+    /// body store's owner.
     pub(crate) fn new(
         curve_tree: CurveTreeHandle,
         rpc: R,
         p_id: [u8; 32],
-        rows: ReleasedRows,
+        bodies: BodyStoreHandle,
     ) -> Self {
         Self {
             curve_tree,
@@ -152,7 +116,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
             p_id,
             absent_since: std::sync::Mutex::new(DepartureLedger::default()),
             last_pinned: std::sync::Mutex::new(Vec::new()),
-            rows,
+            bodies,
         }
     }
 
@@ -186,9 +150,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
             None => Continuity::FirstObservation,
             Some(anchor) => match usize::try_from(anchor.height.to_raw()) {
                 Ok(number) => match self.rpc.get_block_hash(number).await {
-                    Ok(bytes) => Continuity::Verified {
-                        canonical_now: BlockHash::from_bytes(bytes),
-                    },
+                    Ok(canonical_now) => Continuity::Verified { canonical_now },
                     Err(_) => Continuity::Unverifiable,
                 },
                 Err(_) => Continuity::Unverifiable,
@@ -222,26 +184,23 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     /// accepts (the next refresh grows it — D-5); a rollback after the
     /// read makes it overstate, which the witness refuses loudly
     /// (`FrozenCountExceedsCursor`) so the caller re-acquires.
-    async fn report_prefix(&self) -> Result<(shekyl_p_host::ReportedSet, ServingReader), String> {
+    async fn report_prefix(&self) -> Result<shekyl_p_host::ReportedSet, String> {
         let reply = self
             .curve_tree
             .pin_complete_tree_prefix()
             .await
             // Names the whole operation, not its first step: this one
-            // round trip declares the posture, reads the freeze cursor
-            // and takes the reader, and it collapses a dead actor into
+            // round trip declares the posture and reads the freeze cursor,
+            // and it collapses a dead actor into
             // the same error. "posture declaration failed" would send
             // an operator to the prune-disabled flag for a fault that
             // never touched it (rule 82's misdiagnosis guard); the
             // cause rides along in `{e:?}`.
             .map_err(|e| format!("complete-tree prefix derivation failed: {e:?}"))?;
-        Ok((
-            shekyl_p_host::ReportedSet::CompleteTreePrefix {
-                frozen_count: reply.frozen_count,
-                declaration: reply.declaration,
-            },
-            reply.reader,
-        ))
+        Ok(shekyl_p_host::ReportedSet::CompleteTreePrefix {
+            frozen_count: reply.frozen_count,
+            declaration: reply.declaration,
+        })
     }
 
     /// Explicit-holdings list arm: pin the record's shard list, release
@@ -259,7 +218,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         &self,
         shard_ids: &[u64],
         releasable: Vec<u64>,
-    ) -> Result<(shekyl_p_host::ReportedSet, ServingReader), String> {
+    ) -> Result<shekyl_p_host::ReportedSet, String> {
         let shard_ids = shard_ids.to_vec();
 
         // Erase before the pin is released. A failed erase leaves the pins
@@ -268,7 +227,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         // while the body row remained, and the clock — spent or restarted
         // after a process restart — would not see an unpinned row again.
         // A missing row is success.
-        self.rows.erase(&releasable).await?;
+        self.bodies.erase(releasable.clone()).await?;
         let reply = self
             .curve_tree
             .pin_serve_set(shard_ids.clone(), releasable.clone())
@@ -297,13 +256,10 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
                  their bytes"
             );
         }
-        Ok((
-            shekyl_p_host::ReportedSet::ShardList {
-                shard_ids,
-                outcomes: reply.outcomes,
-            },
-            reply.reader,
-        ))
+        Ok(shekyl_p_host::ReportedSet::ShardList {
+            shard_ids,
+            outcomes: reply.outcomes,
+        })
     }
 }
 
@@ -474,7 +430,7 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
             // already applied at acquisition, on every path.
             None => Vec::new(),
         };
-        let (set, reader) = match source.bond.as_ref() {
+        let set = match source.bond.as_ref() {
             Some(bond) => match bond.holdings.kind {
                 // Owing everything releases nothing, by construction of the
                 // obligation; the prefix arm has no release to carry.
@@ -490,8 +446,40 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
         Ok(PinReport {
             set,
             as_of_height,
-            reader,
+            store: self.store(),
         })
+    }
+
+    async fn store_facts(&self, claimed: Vec<u64>) -> Result<StoreFacts, String> {
+        let facts = self
+            .curve_tree
+            .store_facts(claimed)
+            .await
+            .map_err(|e| format!("curve-tree store read failed: {e:?}"))?;
+        Ok(StoreFacts {
+            store: self.store(),
+            sync_tip_height: facts.sync_tip_height,
+            prune_disabled: facts.prune_disabled,
+            next_freeze_seg: facts.next_freeze_seg,
+            members_missing_pins: facts.members_missing_pins,
+        })
+    }
+
+    async fn pruned_frozen_segments(&self) -> Result<(StoreIdentity, Vec<u64>), String> {
+        let pruned = self
+            .curve_tree
+            .pruned_frozen_segments()
+            .await
+            .map_err(|e| format!("corpus integrity scan failed: {e:?}"))?;
+        Ok((self.store(), pruned))
+    }
+}
+
+impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
+    /// The store every report and reading of this pinner is about: its
+    /// curve-tree actor's.
+    fn store(&self) -> StoreIdentity {
+        StoreIdentity::new(self.curve_tree.store_identity())
     }
 }
 

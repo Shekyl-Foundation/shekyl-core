@@ -81,7 +81,7 @@ the daemon's exact order.
 | Output order within tx | **`vout[0..n-1]`** ascending; `local_index = i` passed to `add_output`. | `blockchain_db.cpp:242-268` |
 | FCMP replay order | Same: `collect_outputs(blk.miner_tx, true)` then `for (tx : txs) collect_outputs(tx, false)`, `next_output_seq++` per vout. | `blockchain_db.cpp:359-361`, `417-420` |
 | What "global index" the wallet sees | `m_global_output_index` = `amount_index` in **bucket 0**; under v3 (all `vout.amount == 0`) this **equals `output_id`**. | `wallet2.cpp:2672`, `LMDB_SCHEMA.md:278-279`, `blockchain.cpp:3322` |
-| Filtering (indexed set) | **All `vout` entries indexed** (no amount-0 filter in `add_transaction`). v3+ non-coinbase outputs must have `amount == 0` (consensus); coinbase amount forced to 0 at index time; unsupported output target ⇒ block-add **throws**. | `blockchain.cpp:3443-3448`, `db_lmdb.cpp:1167-1169`, `cryptonote_format_utils.cpp:754-763` |
+| Filtering (indexed set) | **All `vout` entries indexed** (no amount-0 filter in `add_transaction`). v3+ non-coinbase outputs must have `amount == 0` (consensus); coinbase amount forced to 0 at index time; unsupported output target ⇒ block-add **throws**. | `blockchain.cpp:3443-3448`, `db_lmdb.cpp:1167-1169`, `cryptonote_format_utils.cpp` at `ac3836de90` (lines 754–763) |
 | Index ≠ tree position | `OutputIndex` is **NOT** `TreePosition`; drain reorders by `(maturity, gindex)`. | `shekyl_types.h:94-97`, `FCMP_PLUS_PLUS.md:49-55` |
 
 **Replication rule (byte-exact global index).** Per height: miner outputs
@@ -147,12 +147,12 @@ x-coords are Wei25519 via `ed25519_point_to_selene_scalar`
 | Question | Rule | Source |
 |----------|------|--------|
 | Is coinbase a tree leaf? | **Yes** — `collect_outputs(blk.miner_tx, true)`; deferred, maturity `+60`. | `blockchain_db.cpp:417-420`, `372-374` |
-| Coinbase commitment `C` | **Real** `C = z*G + amount*H` (`z` from HKDF in `shekyl_construct_output`); `CTTypeNull` still serializes real `outPk`. | `output.rs:288-293`, `ct_types.h:207-210`, `cryptonote_tx_utils.cpp:179`,`743` |
-| Trivial-commitment rejection | Consensus **rejects** `C == zeroCommit(amount)` (mask=1), `C == identity()`, `C == G` for coinbase. So a coinbase leaf is **never** a zero/identity commitment. | `blockchain.cpp:3402-3425`, `ct_ops.cpp:322-333` |
+| Coinbase commitment `C` | **Real** `C = z*G + amount*H` (`z` from HKDF in `shekyl_construct_output`); `CTTypeNull` still serializes real `outPk`. | `output.rs:288-293`, `ct_types.h` at `ac3836de90` (lines 207–210), `cryptonote_tx_utils.cpp:179`,`743` |
+| Trivial-commitment rejection | Consensus **rejects** `C == zeroCommit(amount)` (mask=1), `C == identity()`, `C == G` for coinbase. So a coinbase leaf is **never** a zero/identity commitment. | `blockchain.cpp:3402-3425`, `ct_ops.cpp` at `ac3836de90` (lines 322–333) |
 | Coinbase leaf commitment | **Real per-output `CM = H_ℓ(hybrid_pk)·G_k + r·J`** (`PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2, 2026-09-14); formerly the Blake2b key hash `h_pqc`), computed by `shekyl_construct_output` (miner self-KEM, per-output) and stored **on-chain in `tx_extra` tag `0x07`** (`TX_EXTRA_TAG_PQC_LEAF_ENTRIES`, `N×64` entries `CM ‖ record` in vout order). | `derivation.rs` (`derive_pqc_leaf`), `cryptonote_tx_utils.cpp` |
 | Where the tree reads the commitment | `extract_leaf_hashes` parses `tx.extra` and takes the **single** `tx_extra_pqc_leaf_hashes` field (blob `N×64` in vout order); `collect_outputs` slices `blob + i*64` and hands the entry's leading 32 bytes (`CM`) to the shared leaf constructor, which extracts `CM.x`. **Since 2026-09-06 (CEN-I19) there is no fallback:** admission rejects any transaction with outputs that does not carry exactly one correctly-sized field, and since `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2, 2026-09-14) also any entry whose point is not admissible; the collector aborts on either. | `blockchain_db.cpp` (`extract_leaf_hashes`, `collect_outputs`) |
 | Leaf branch on rct type? | **No.** `collect_outputs` uses one path for miner and normal txs; only `is_miner` changes maturity. | `blockchain_db.cpp:369-407` |
-| Accepted ct types | Only `CTTypeNull = 0` (coinbase) and `CTTypeFcmpPlusPlusPqc = 1`. | `ct_types.h:163-170`, `blockchain.cpp:3451-3456`,`1523` |
+| Accepted ct types | Only `CTTypeNull = 0` (coinbase) and `CTTypeFcmpPlusPlusPqc = 1`. | `ct_types.h` at `ac3836de90` (lines 163–170), `blockchain.cpp:3451-3456`,`1523` |
 
 ### 3.1 Replication obligation — the leaf commitment is on-chain, not recomputable
 
@@ -253,8 +253,8 @@ Leaves enter the tree at maturity; an off-by-one shifts every later position.
 | Drain trigger | **Inclusive** `maturity <= current_height`; the drain cursor breaks on `maturity > current_height`. | `db_lmdb.cpp:4940-4942`, `blockchain_db.h:1977-1984` |
 | `current_height` | `prev_height + 1` (the block being connected); `prev_height = height()` before the connect. | `blockchain_db.cpp:290-329`, `414` |
 | Stored maturity | `(prev_height+1) + N`. A leaf created at 0-indexed block `h` drains on connect of block **`h + N`** ⇒ `eligible_height = block_height + N`. | `blockchain_db.cpp:372-390` |
-| `N` — regular | `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE = 10`. | `cryptonote_config.h:51`, `transfer.rs:22-24` |
-| `N` — **coinbase** | `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW = 60` (**not 10**). | `cryptonote_config.h:47`, `shekyl_types.h:99-101` |
+| `N` — regular | `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE = 10`. | `cryptonote_config.h` at `ac3836de90` (line 51), `transfer.rs:22-24` |
+| `N` — **coinbase** | `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW = 60` (**not 10**). | `cryptonote_config.h` at `ac3836de90` (line 47), `shekyl_types.h:99-101` |
 | `N` — staked | `max(block_height + shekyl_stake_lock_blocks(tier), block_height + 10)`. | `blockchain_db.cpp:387-390`, `FCMP_PLUS_PLUS.md:1025-1027` |
 | Drain-then-grow order | Drain matured leaves **before** adding the current block's outputs to pending; then `grow_curve_tree`. | `blockchain_db.cpp:411-420` |
 | Batch order (multi-drain) | Strictly **`(maturity ASC, global_output_index ASC)`**, enforced by composite key `BE(maturity) ‖ BE(output)` (16 B) + LMDB byte-order cursor scan. `DUPSORT` removed in DB v7 (was a consensus-nondeterminism bug). | `shekyl_types.h:111`,`137-148`, `db_lmdb.cpp:4937-4965`, `LMDB_SCHEMA.md:491-495` |
@@ -266,7 +266,7 @@ an output created at 0-indexed block `h` has stored maturity `M`, and drains the
 first time a block is connected with `current_height == M` — which is the
 connect of 0-indexed block **`h + N`**. The unit tests assert exactly this
 boundary: a maturity-50 leaf drains at `drain_pending_tree_leaves(50)` and not at
-49 (`tests/unit_tests/deferred_insertion.cpp:95-130`). The wallet must drain
+49 (`tests/unit_tests/deferred_insertion.cpp`). The wallet must drain
 inclusively (`maturity <= height`), never one block early or late.
 
 ---
@@ -423,7 +423,7 @@ what is drivable **today**:
   (`wallet/wallet2.cpp:9974`) routes through `create_transactions_2` — it
   **spends** the staker's existing outputs into a `txout_to_staked_key`
   (`cryptonote_tx_utils.cpp:484`). Cleartext staking is **consensus-live from
-  HF1** (`txout_to_staked_key`, tag `0x4`; `cryptonote_config.h:189`), so the
+  HF1** (`txout_to_staked_key`, tag `0x4`; `cryptonote_config.h` at `ac3836de90` (line 189)), so the
   staked class is **not** gated on Phase 2b — but minting one is gated on the
   spend path exactly like a `+10` output. *(This corrects the Gap-1 framing: the
   staked case is not "deferred pending staking ships"; staking has shipped. It
@@ -434,7 +434,7 @@ what is drivable **today**:
   `+60` leaves with no spend. A reorg whose churned span contains `+10`/staked
   leaves inherits the spend dependency.
 - **In-process chaingen is not the generator.** `chaingen`'s FCMP++ tx
-  construction was removed (`tests/core_tests/chaingen_main.cpp:106-110`) and its
+  construction was removed (`tests/core_tests/chaingen_main.cpp`) and its
   `TestDB` stubs the curve tree to no-ops (`chaingen.cpp:160-171`); the fork
   tests are disabled. So the recommended generator is a **real regtest daemon**
   (§8.3), which sidesteps chaingen entirely and is the only path that can build

@@ -81,7 +81,7 @@ use crate::harness::{
 use crate::policy::policy_form;
 use crate::rule_set::{AdmissionPolicy, RuleSet};
 use crate::trust::Trust;
-use crate::validate::{form, tx_form, validate};
+use crate::validate::{form, tx_form, validate, FormClaims};
 use crate::verdict::{ChainValid, Locus, TxSlot, Verdict};
 use shekyl_wire::{Ct, Transaction};
 
@@ -420,7 +420,7 @@ const SITES: &[Site] = &[
     read_rule(
         "output count {n_outputs} exceeds {MAX_OUTPUTS}",
         CenRow::H19,
-        "`BULLETPROOF_PLUS_MAX_OUTPUTS`: the C++ refuses it as the BP+ max-amounts clause (`ct_types.cpp:245`), which the census carries under H19",
+        "`BULLETPROOF_PLUS_MAX_OUTPUTS`: the C++ refusal is the BP+ max-amounts clause (`ct_types.cpp` at `ac3836de90` (line 245)), which the census carries under H19",
     ),
     read_rule(
         "transaction version {version} != {TX_VERSION}",
@@ -696,11 +696,14 @@ fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
     let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -708,13 +711,8 @@ fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
         Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
     };
     chain.with_view(|view| {
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .map(|_valid: ChainValid<_>| ())
+        judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .map(|_valid: ChainValid<_>| ())
     })
 }
 

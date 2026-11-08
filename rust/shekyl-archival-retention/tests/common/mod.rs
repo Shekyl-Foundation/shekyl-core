@@ -37,7 +37,7 @@ impl BondOwned {
     pub fn as_bond(&self) -> EpochCloseBond<'_> {
         EpochCloseBond {
             join_settlement_epoch: self.join,
-            is_foundation_complete_tree: self.complete,
+            is_support_complete_tree: self.complete,
             bad_intervals: &self.bad,
         }
     }

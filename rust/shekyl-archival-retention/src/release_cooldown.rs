@@ -37,8 +37,6 @@
 //! one-block race by requiring the scheduler's settled watermark to have reached
 //! the anchor before the release verifies.
 
-use crate::bond_floor::RELEASE_COOLDOWN_EPOCHS;
-
 /// The whole-record last-served settlement epoch: the max over the record's current
 /// shards of each shard's last-served epoch (P2B-8 Q2 — the `Release` cooldown
 /// anchor). `None` when the persona has never served any shard.
@@ -57,7 +55,8 @@ pub fn whole_record_last_served(per_shard_served: &[u64]) -> Option<u64> {
 /// *past* the last served epoch — sized so every epoch up to the anchor reaches its
 /// slash deadline before the release can verify).
 ///
-/// Elapsed iff `current_settlement_epoch >= last_served_epoch + RELEASE_COOLDOWN_EPOCHS`.
+/// Elapsed iff `current_settlement_epoch >= last_served_epoch + cooldown`, the cooldown
+/// `params`' (`RELEASE_COOLDOWN_EPOCHS` at the shipped set).
 /// `RELEASE_COOLDOWN_EPOCHS` covers the slash grace by construction
 /// (`ARCHIVAL_TIMING_CONSTANTS.md` §2.2 L16 pin: `RELEASE_COOLDOWN_EPOCHS >
 /// SLASH_GRACE_EPOCHS`, both in epochs, so it holds on every schedule). A
@@ -73,6 +72,7 @@ pub fn whole_record_last_served(per_shard_served: &[u64]) -> Option<u64> {
 pub fn release_cooldown_elapsed(
     last_served_epoch: Option<u64>,
     current_settlement_epoch: u64,
+    params: &crate::ArchivalParams,
 ) -> bool {
     match last_served_epoch {
         None => true,
@@ -80,7 +80,7 @@ pub fn release_cooldown_elapsed(
         // `last + RELEASE_COOLDOWN_EPOCHS` overflows `u64` it is unreachable, so the
         // cooldown is reported not-elapsed (fail-closed) rather than saturating to a
         // false "elapsed" that would let a `Release` dodge the slashing window.
-        Some(last) => match last.checked_add(RELEASE_COOLDOWN_EPOCHS) {
+        Some(last) => match last.checked_add(params.release_cooldown_epochs) {
             Some(boundary) => current_settlement_epoch >= boundary,
             None => false,
         },
@@ -129,6 +129,7 @@ pub fn slashes_settled_through(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bond_floor::RELEASE_COOLDOWN_EPOCHS;
 
     // `RELEASE_COOLDOWN_EPOCHS` is generated from config (genesis value 2); the tests
     // read the constant rather than the literal so a re-pin re-derives them.
@@ -162,24 +163,44 @@ mod tests {
     fn cooldown_elapsed_at_the_boundary_epoch() {
         // Anchor E: earliest Release epoch is E + COOLDOWN (inclusive).
         let e = 100;
-        assert!(release_cooldown_elapsed(Some(e), e + COOLDOWN));
+        assert!(release_cooldown_elapsed(
+            Some(e),
+            e + COOLDOWN,
+            &crate::ArchivalParams::SHIPPED
+        ));
     }
 
     #[test]
     fn cooldown_not_elapsed_one_epoch_before_the_boundary() {
         let e = 100;
-        assert!(!release_cooldown_elapsed(Some(e), e + COOLDOWN - 1));
-        assert!(!release_cooldown_elapsed(Some(e), e)); // same epoch as last serve
+        assert!(!release_cooldown_elapsed(
+            Some(e),
+            e + COOLDOWN - 1,
+            &crate::ArchivalParams::SHIPPED
+        ));
+        assert!(!release_cooldown_elapsed(
+            Some(e),
+            e,
+            &crate::ArchivalParams::SHIPPED
+        )); // same epoch as last serve
     }
 
     #[test]
     fn cooldown_elapsed_well_past_the_boundary() {
-        assert!(release_cooldown_elapsed(Some(100), 1_000));
+        assert!(release_cooldown_elapsed(
+            Some(100),
+            1_000,
+            &crate::ArchivalParams::SHIPPED
+        ));
     }
 
     #[test]
     fn never_served_cooldown_is_vacuously_elapsed() {
-        assert!(release_cooldown_elapsed(None, 0));
+        assert!(release_cooldown_elapsed(
+            None,
+            0,
+            &crate::ArchivalParams::SHIPPED
+        ));
     }
 
     #[test]
@@ -211,7 +232,15 @@ mod tests {
         // A last-served anchor so high that `last + RELEASE_COOLDOWN_EPOCHS` overflows
         // u64 has an unreachable boundary epoch: report not-elapsed (fail-closed), never
         // a saturated false "elapsed".
-        assert!(!release_cooldown_elapsed(Some(u64::MAX), u64::MAX));
-        assert!(!release_cooldown_elapsed(Some(u64::MAX - 1), u64::MAX));
+        assert!(!release_cooldown_elapsed(
+            Some(u64::MAX),
+            u64::MAX,
+            &crate::ArchivalParams::SHIPPED
+        ));
+        assert!(!release_cooldown_elapsed(
+            Some(u64::MAX - 1),
+            u64::MAX,
+            &crate::ArchivalParams::SHIPPED
+        ));
     }
 }

@@ -21,7 +21,14 @@ const SHARD: u64 = 7;
 const DIGEST: [u8; PASS_DELIVERY_DIGEST_LEN] = [0x5a; PASS_DELIVERY_DIGEST_LEN];
 
 fn transcript() -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-    pass_countersignature_message(&NONCE, ANCHOR, &ANCHOR_HASH, SHARD, &DIGEST)
+    pass_countersignature_message(
+        crate::pass_anchor::PassStream::Economy,
+        &NONCE,
+        ANCHOR,
+        &ANCHOR_HASH,
+        SHARD,
+        &DIGEST,
+    )
 }
 
 fn receipt_keypair(
@@ -40,6 +47,7 @@ fn verify(
 ) -> Result<(), PassCountersignatureError> {
     verify_receipt_transcript(
         public,
+        crate::pass_anchor::PassStream::Economy,
         &NONCE,
         ANCHOR,
         &ANCHOR_HASH,
@@ -64,6 +72,7 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
+            crate::pass_anchor::PassStream::Economy,
             &[0x12; PASS_NONCE_LEN],
             ANCHOR,
             &ANCHOR_HASH,
@@ -76,6 +85,7 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
+            crate::pass_anchor::PassStream::Economy,
             &NONCE,
             BlockHeight::from_raw(1_001),
             &ANCHOR_HASH,
@@ -88,6 +98,7 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
+            crate::pass_anchor::PassStream::Economy,
             &NONCE,
             ANCHOR,
             &[0x23; PASS_ANCHOR_HASH_LEN],
@@ -100,6 +111,7 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
+            crate::pass_anchor::PassStream::Economy,
             &NONCE,
             ANCHOR,
             &ANCHOR_HASH,
@@ -112,6 +124,7 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
+            crate::pass_anchor::PassStream::Economy,
             &NONCE,
             ANCHOR,
             &ANCHOR_HASH,
@@ -155,6 +168,7 @@ fn an_identity_signature_is_not_a_receipt_and_a_receipt_is_not_one() {
         .expect("sign");
     verify_pass_transcript(
         &identity_public,
+        crate::pass_anchor::PassStream::Economy,
         &NONCE,
         ANCHOR,
         &ANCHOR_HASH,

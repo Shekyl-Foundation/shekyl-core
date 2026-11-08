@@ -34,9 +34,9 @@ pub enum SendError {
         available: u64,
     },
 
-    /// The `TxRequest` named a destination that does not parse as a
-    /// Shekyl address for the wallet's network, or that is on a
-    /// different network than the wallet itself.
+    /// The `TxRequest` named a destination this wallet will not pay:
+    /// not a Shekyl address, one for another network, the display-only
+    /// form, a damaged address, or a version this wallet does not pay.
     #[error("invalid recipient: {reason}")]
     InvalidRecipient {
         /// Human-readable reason. (Intentionally a `&'static str` so
@@ -128,9 +128,9 @@ pub enum SendError {
     /// [`Self::SpendUnavailableRebuilding`]: that is the *benign, self-healing*
     /// "tree is behind" state (the cursor read **succeeded** and returned a
     /// height below `synced_height`); this is a *hard* infrastructure failure
-    /// (the cursor read **failed** — the actor is fail-stopped). It is terminal
-    /// until the engine-side actor respawn (R1-Q4) lands; a retry against a
-    /// dead actor reproduces it.
+    /// (the cursor read **failed** — the actor has stopped). It is terminal
+    /// for the session: the actor is not restarted, so a retry reproduces it
+    /// and reopening the wallet is the remedy.
     #[error("curve-tree unavailable: {detail}")]
     CurveTreeUnavailable {
         /// Stringified [`CurveTreeHandleError`](crate::engine::curve_tree_actor::CurveTreeHandleError).
@@ -227,8 +227,8 @@ pub enum PendingTxError {
         built: BlockHeight,
         /// `wallet.synced_height` observed at submit time.
         current: BlockHeight,
-        /// Network's `max_reorg_depth` per `NetworkSafetyConstants`
-        /// (after any per-wallet override).
+        /// The wallet's `max_reorg_depth` (`WalletSafetyConstants`, after
+        /// any session override).
         max_reorg: BlockCount,
     },
 

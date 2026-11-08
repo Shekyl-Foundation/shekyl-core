@@ -18,9 +18,9 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, NetworkAddress, NoBans,
-    Peerlist, RangeV4, RangeV6, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT,
-    REFUSED_V4, REFUSED_V6,
+    white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, NetworkAddress, NoSessions,
+    Peerlist, RangeV4, RangeV6, Refusal, RefusedSet, SessionRow, Source, Tick, Verdict,
+    DISCLOSE_COUNT, REFUSED_V4, REFUSED_V6,
 };
 
 const PORT: u16 = 18080;
@@ -151,7 +151,7 @@ fn refused_clearnet() -> Vec<(NetworkAddress, String)> {
 /// uniform gray draw, and a kept session.
 fn promote(list: &mut Peerlist, address: &NetworkAddress, rng: &mut SplitMix64) {
     assert_eq!(
-        list.admit_gray(address, Source::Operator, now(), &mut NoBans, rng),
+        list.admit_gray(address, Source::Operator, now(), rng),
         Ok(true),
         "{address:?}"
     );
@@ -161,9 +161,19 @@ fn promote(list: &mut Peerlist, address: &NetworkAddress, rng: &mut SplitMix64) 
         if drawn == *address {
             break;
         }
-        list.apply(&DialOutcome::PayloadRefused(drawn), now(), rng);
+        list.apply(
+            &DialOutcome::PayloadRefused(drawn),
+            now(),
+            Verdict::Counted,
+            rng,
+        );
     }
-    list.apply(&DialOutcome::SessionAccepted(address.clone()), now(), rng);
+    list.apply(
+        &DialOutcome::SessionAccepted(address.clone()),
+        now(),
+        Verdict::Counted,
+        rng,
+    );
     assert!(list.is_white(address), "{address:?} is white");
 }
 
@@ -183,7 +193,7 @@ fn a_network_learned_address_in_the_refused_set_is_refused_at_the_door() {
     for (address, why) in refused_clearnet() {
         let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         assert_eq!(
-            list.admit_gray(&address, clearnet_session(), now(), &mut NoBans, &mut rng),
+            list.admit_gray(&address, clearnet_session(), now(), &mut rng),
             Err(Refusal::NotGlobal),
             "{why}: {address:?}"
         );
@@ -196,12 +206,12 @@ fn a_network_learned_address_in_the_refused_set_is_refused_at_the_door() {
     }
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     assert_eq!(
-        list.admit_gray(&onion(0), tor_session(), now(), &mut NoBans, &mut rng),
+        list.admit_gray(&onion(0), tor_session(), now(), &mut rng),
         Err(Refusal::NotGlobal),
         "port 0 on an onion address"
     );
     assert_eq!(
-        list.admit_gray(&onion(PORT), tor_session(), now(), &mut NoBans, &mut rng),
+        list.admit_gray(&onion(PORT), tor_session(), now(), &mut rng),
         Ok(true),
         "an onion address with a port is not in the set"
     );
@@ -237,7 +247,7 @@ fn the_address_beside_each_private_range_is_admitted() {
             connector: ConnectorId::Clearnet,
         };
         assert_eq!(
-            list.admit_gray(&address, source, now(), &mut NoBans, &mut rng),
+            list.admit_gray(&address, source, now(), &mut rng),
             Ok(true),
             "{address:?} is global"
         );
@@ -247,7 +257,7 @@ fn the_address_beside_each_private_range_is_admitted() {
         port: PORT,
     };
     assert_eq!(
-        list.admit_gray(&v6, clearnet_session(), now(), &mut NoBans, &mut rng),
+        list.admit_gray(&v6, clearnet_session(), now(), &mut rng),
         Ok(true)
     );
 }
@@ -266,7 +276,6 @@ fn one_refused_entry_refuses_the_whole_received_list() {
                     connector: ConnectorId::Clearnet
                 },
                 now(),
-                &mut NoBans,
                 &mut rng
             ),
             Err(Refusal::PeerlistRefused),
@@ -286,7 +295,7 @@ fn the_operator_may_name_a_refused_address() {
     for (address, why) in refused_clearnet() {
         let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         assert_eq!(
-            list.admit_gray(&address, Source::Operator, now(), &mut NoBans, &mut rng),
+            list.admit_gray(&address, Source::Operator, now(), &mut rng),
             Ok(true),
             "{why}: {address:?}"
         );
@@ -305,7 +314,7 @@ fn a_refused_address_in_white_is_never_disclosed() {
     for seed in 0..200 {
         let mut rng = SplitMix64::new(seed);
         let mut list = white_list(RefusedSet::NON_GLOBAL, &private, &mut rng);
-        let sample = list.disclose(ConnectorId::Clearnet, now(), &mut NoBans, &mut rng);
+        let sample = list.disclose(ConnectorId::Clearnet, now(), &mut NoSessions, &mut rng);
         assert_eq!(sample.len(), DISCLOSE_COUNT, "seed {seed}: a full sample");
         assert!(
             !sample.contains(&private),
@@ -331,7 +340,7 @@ fn a_refused_own_address_is_never_disclosed() {
         let mut list = white_list(RefusedSet::NON_GLOBAL, &global(9000), &mut rng);
         list.set_own_address(ConnectorId::Clearnet, Some(own.clone()))
             .expect("clearnet address");
-        let sample = list.disclose(ConnectorId::Clearnet, now(), &mut NoBans, &mut rng);
+        let sample = list.disclose(ConnectorId::Clearnet, now(), &mut NoSessions, &mut rng);
         assert!(!sample.contains(&own), "seed {seed}");
     }
 }
@@ -346,7 +355,7 @@ fn allow_local_ip_admits_the_session_offer_and_discloses_it() {
     for (address, why) in refused_clearnet() {
         let mut list = Peerlist::new(RefusedSet::EMPTY);
         assert_eq!(
-            list.admit_gray(&address, clearnet_session(), now(), &mut NoBans, &mut rng),
+            list.admit_gray(&address, clearnet_session(), now(), &mut rng),
             Ok(true),
             "{why}: admitted under the empty set"
         );
@@ -360,7 +369,6 @@ fn allow_local_ip_admits_the_session_offer_and_discloses_it() {
                 connector: ConnectorId::Clearnet
             },
             now(),
-            &mut NoBans,
             &mut rng
         ),
         Ok(2)
@@ -368,7 +376,7 @@ fn allow_local_ip_admits_the_session_offer_and_discloses_it() {
     let disclosed = (0..200).any(|seed| {
         let mut rng = SplitMix64::new(seed);
         let mut list = white_list(RefusedSet::EMPTY, &private, &mut rng);
-        list.disclose(ConnectorId::Clearnet, now(), &mut NoBans, &mut rng)
+        list.disclose(ConnectorId::Clearnet, now(), &mut NoSessions, &mut rng)
             .contains(&private)
     });
     assert!(disclosed, "the private address appears in a sample");
@@ -386,7 +394,7 @@ fn the_file_holds_no_refused_address_and_restore_refuses_one() {
     let mut strict = Peerlist::new(RefusedSet::NON_GLOBAL);
     for address in [global(1), private.clone()] {
         strict
-            .admit_gray(&address, Source::Operator, now(), &mut NoBans, &mut rng)
+            .admit_gray(&address, Source::Operator, now(), &mut rng)
             .expect("operator");
     }
     assert_eq!(strict.persistable(), vec![global(1)]);
@@ -394,7 +402,7 @@ fn the_file_holds_no_refused_address_and_restore_refuses_one() {
     // Under the flag it is written.
     let mut open = Peerlist::new(RefusedSet::EMPTY);
     for address in [global(1), private.clone()] {
-        open.admit_gray(&address, Source::Operator, now(), &mut NoBans, &mut rng)
+        open.admit_gray(&address, Source::Operator, now(), &mut rng)
             .expect("operator");
     }
     let mut file = open.persistable();

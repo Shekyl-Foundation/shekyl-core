@@ -86,11 +86,9 @@ impl ServingConfig {
     /// The staleness bound is **derived, not picked**: it is
     /// [`STALENESS_BOUND_REFRESHES`] refresh cadences expressed in blocks, which
     /// needs the chain's block target. That is taken as an argument rather than
-    /// read from a constant here, the same shape
-    /// [`WatchdogConfig::from_block_target`](crate::engine::submit_watchdog) uses
-    /// for the same reason — a wallet-side horizon in blocks is a function of a
-    /// consensus parameter, and burying that parameter in this module would
-    /// fork it.
+    /// read from a constant here: a wallet-side horizon in blocks derived from a
+    /// seconds cadence is a function of a consensus parameter, and burying that
+    /// parameter in this module would fork it.
     ///
     /// # Panics
     ///
@@ -132,14 +130,14 @@ impl ServingConfig {
 ///
 /// **Do not reconstruct this from the store's prune-disabled flag.** That
 /// flag is one-way and survives Release (Q-5's named residue), so a former
-/// foundation node would report `FoundationCompleteTree` forever — a
+/// foundation node would report `SupportCompleteTree` forever — a
 /// retention fact misread as a posture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServingPosture {
     /// Ordinary market staking: the record's explicit shard list.
     Market,
     /// The Foundation whole-corpus backstop: the frozen prefix.
-    FoundationCompleteTree,
+    SupportCompleteTree,
 }
 
 /// One read of a parked serving lifecycle (`SH-3`).
@@ -449,81 +447,102 @@ async fn run_serving_task<P>(
     // which an operator reads "not serving" while the onion is published —
     // which is precisely the misreading this channel exists to prevent, and it
     // would have lasted a full refresh cadence. Read rather than refresh:
-    // `start` just pinned, so a refresh here would be a redundant actor round
-    // trip to re-derive what the witness already holds.
-    report(&alarms, read(&host, bound));
+    // `start` just pinned, so a refresh here would re-pin and re-derive what
+    // the witness already holds.
+    //
+    // The read is an actor round trip with no timeout, same as a refresh, so
+    // it stays under `cancel`. A store that stops answering after the host
+    // is up must not hold `ServingHandle::shutdown` open. Dropping the read
+    // leaves the witness `start` already installed. The probes below are
+    // not spawned until the read returns, so a cancel during it tears down
+    // only the host, the posture translator, and the priority warning.
+    let mut health = None;
+    let mut disk = None;
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => {}
+        observation = read(&host, bound) => {
+            report(&alarms, observation);
 
-    // TJ-D's operator surface (`SF-D6`): the host's serve counters, windowed
-    // per cadence so the board answers "is the key refusing *now*". Own
-    // task, sampling through the host's detached reader rather than through
-    // `&host`: the loop below awaits `refresh` for as long as the store
-    // actor takes (only `cancel` interrupts it), and a key that starts
-    // refusing while a refresh is wedged on that actor is exactly the
-    // reading this row exists to carry. First reading is
-    // immediate, so a published onion never sits `NotServing` for a cadence.
-    let counters = host.counter_reader();
-    let health = spawn_health_probe(
-        move || ServeCounters::read(&counters),
-        config.refresh_cadence,
-        Arc::clone(&alarms),
-        cancel.clone(),
-    );
+            // TJ-D's operator surface (`SF-D6`): the host's serve counters, windowed
+            // per cadence so the board answers "is the key refusing *now*". Own
+            // task, sampling through the host's detached reader rather than through
+            // `&host`: the loop below awaits `refresh` for as long as the store
+            // actor takes (only `cancel` interrupts it), and a key that starts
+            // refusing while a refresh is wedged on that actor is exactly the
+            // reading this row exists to carry. First reading is
+            // immediate, so a published onion never sits `NotServing` for a cadence.
+            let counters = host.counter_reader();
+            health = Some(spawn_health_probe(
+                move || ServeCounters::read(&counters),
+                config.refresh_cadence,
+                Arc::clone(&alarms),
+                cancel.clone(),
+            ));
 
-    // Own task: the probe is not a serve-set reading, and a wedged
-    // refresh must not also silence the volume check. First reading is
-    // immediate, so the board is not unwatched for a full cadence.
-    let disk = spawn_disk_probe(
-        store_fs_path,
-        DISK_HEADROOM_WARN_BYTES,
-        config.refresh_cadence,
-        Arc::clone(&alarms),
-        cancel.clone(),
-    );
+            // Own task: the probe is not a serve-set reading, and a wedged
+            // refresh must not also silence the volume check. First reading is
+            // immediate, so the board is not unwatched for a full cadence.
+            disk = Some(spawn_disk_probe(
+                store_fs_path,
+                DISK_HEADROOM_WARN_BYTES,
+                config.refresh_cadence,
+                Arc::clone(&alarms),
+                cancel.clone(),
+            ));
 
-    let mut ticker = tokio::time::interval(config.refresh_cadence);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // The first tick completes immediately, and the line above already reported
-    // that state; consume it so the loop starts one cadence out.
-    ticker.tick().await;
+            let mut ticker = tokio::time::interval(config.refresh_cadence);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // The first tick completes immediately, and the line above already reported
+            // that state; consume it so the loop starts one cadence out.
+            ticker.tick().await;
 
-    loop {
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => break,
-            _ = ticker.tick() => {}
+            loop {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    _ = ticker.tick() => {}
+                }
+
+                // The refresh is an actor round trip with no timeout, so it stays
+                // under `cancel` too: a refresh wedged on the store actor must not
+                // hold `ServingHandle::shutdown` open. Dropping it mid-flight is
+                // safe — `PersonaServingHost::refresh` swaps the witness only after
+                // the pin returns, so an abandoned attempt leaves the previous pins
+                // in place, and the teardown below reports `NotServing` over
+                // whatever this tick would have said.
+                let observation = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    observation = observe(&host, bound) => observation,
+                };
+                report(&alarms, observation);
+                // Re-read after every refresh so a host whose obligation *arm*
+                // changes is not stuck on the start snapshot. The type is the
+                // arm, not the size — a growing prefix does not change what we
+                // publish.
+                publish_posture(&serving_posture, &host);
+            }
         }
-
-        // The refresh is an actor round trip with no timeout, so it stays
-        // under `cancel` too: a refresh wedged on the store actor must not
-        // hold `ServingHandle::shutdown` open. Dropping it mid-flight is
-        // safe — `PersonaServingHost::refresh` swaps the witness only after
-        // the pin returns, so an abandoned attempt leaves the previous pins
-        // in place, and the teardown below reports `NotServing` over
-        // whatever this tick would have said.
-        let observation = tokio::select! {
-            biased;
-            () = cancel.cancelled() => break,
-            observation = observe(&host, bound) => observation,
-        };
-        report(&alarms, observation);
-        // Re-read after every refresh so a host whose obligation *arm*
-        // changes is not stuck on the start snapshot. The type is the
-        // arm, not the size — a growing prefix does not change what we
-        // publish.
-        publish_posture(&serving_posture, &host);
     }
 
     // Ordered teardown: tor first, then the listener (§9.7 item 4).
+    // Reached whether the post-start read finished or cancel won it.
     host.shutdown().await;
     posture.abort();
-    // Drain the probes and the priority warning before disarming. A late
-    // measured reading must not overwrite `NotServing` after the host is
-    // gone, and a warning already woken must be said before this task
-    // returns — dropping the join handle would detach it. Cancel has
-    // already fired; the warning task prefers a ready refusal over that
-    // cancel, so the line is not lost on the way out.
-    let _disk = disk.await;
-    let _health = health.await;
+    // Drain the probes that were spawned, and the priority warning, before
+    // disarming. A late measured reading must not overwrite `NotServing`
+    // after the host is gone, and a warning already woken must be said
+    // before this task returns — dropping the join handle would detach it.
+    // Cancel has already fired; the warning task prefers a ready refusal
+    // over that cancel, so the line is not lost on the way out. A cancel
+    // during the post-start read never spawned the probes.
+    if let Some(disk) = disk {
+        let _disk = disk.await;
+    }
+    if let Some(health) = health {
+        let _health = health.await;
+    }
     let _priority_warning = priority_warning.await;
     // Nothing is watched once the host is gone. Disarm rather than clear: a
     // closed wallet is not a healthy serve-set, and a live pruned-bytes report
@@ -558,7 +577,7 @@ fn publish_posture<P>(
     let pinned = host.pinned_serve_set();
     let posture = match pinned.serve_set().obligation() {
         ServeObligation::ShardList(_) => ServingPosture::Market,
-        ServeObligation::CompleteTreePrefix { .. } => ServingPosture::FoundationCompleteTree,
+        ServeObligation::CompleteTreePrefix { .. } => ServingPosture::SupportCompleteTree,
     };
     let _sent = serving_posture.send(Some(posture));
 }
@@ -579,7 +598,7 @@ where
             },
         };
     }
-    read(host, bound)
+    read(host, bound).await
 }
 
 /// Read the current witness without refreshing.
@@ -587,13 +606,14 @@ where
 /// Split from [`observe`] for the post-start report: the host has just pinned,
 /// so the state is known and a refresh would only re-derive it. Keeping the two
 /// separate is also what stops "report the current state" from silently
-/// acquiring a network round trip later.
-fn read<P>(host: &PersonaServingHost<P>, bound: StalenessBound) -> ServeSetObservation
+/// acquiring a network round trip later. Its reads are of the local store,
+/// through the curve-tree actor.
+async fn read<P>(host: &PersonaServingHost<P>, bound: StalenessBound) -> ServeSetObservation
 where
     P: ServeSetPinner,
 {
     let pinned = host.pinned_serve_set();
-    match caught_up(&pinned) {
+    match caught_up(host, &pinned).await {
         Some(false) => return ServeSetObservation::CatchingUp,
         // The store could not be read at all. That is a refresh-side fault, not
         // a reason to report health.
@@ -605,7 +625,7 @@ where
         Some(true) => {}
     }
 
-    match host.staleness(bound) {
+    match host.staleness(bound).await {
         Ok(staleness) => ServeSetObservation::Refreshed {
             staleness,
             already_pruned: count(pinned.already_pruned().len()),
@@ -712,11 +732,15 @@ where
 /// Whether the wallet has ingested close enough to the chain for the staleness
 /// bound to mean anything. `None` when the store could not be read.
 ///
-/// Both operands come off the witness: `as_of_height` is the chain height the
-/// bond record was read at, `sync_tip_height` is what this wallet has ingested.
-fn caught_up(pinned: &PinnedServeSet) -> Option<bool> {
+/// `as_of_height` is the chain height the bond record was read at, off the
+/// witness; the ingest tip is what this wallet has ingested, read from the
+/// served store through the host's pinner.
+async fn caught_up<P: ServeSetPinner>(
+    host: &PersonaServingHost<P>,
+    pinned: &PinnedServeSet,
+) -> Option<bool> {
     let chain = pinned.serve_set().as_of_height().to_raw();
-    let ingested = pinned.reader().sync_tip_height().ok()?.to_raw();
+    let ingested = host.ingested_tip().await.ok()?.to_raw();
     Some(chain.saturating_sub(ingested) <= CAUGHT_UP_SLACK_BLOCKS)
 }
 

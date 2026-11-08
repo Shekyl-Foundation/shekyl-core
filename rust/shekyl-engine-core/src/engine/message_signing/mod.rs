@@ -57,13 +57,11 @@
 //! — keys and bound bytes are the same object.
 
 use shekyl_address::{BoundClassicalSegment, ShekylAddress};
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
 use shekyl_crypto_pq::message_signing::{self, MessageSigError};
 use shekyl_engine_file::WalletFile;
 
 use super::error::KeyEngineError;
 use super::key_actor::KeyEngineHandle;
-use super::lifecycle::network_to_derivation;
 use super::local_ledger::LocalLedger;
 use super::signer::EngineSignerKind;
 use super::traits::key::KeyEngine;
@@ -77,12 +75,10 @@ use super::Engine;
 pub(crate) struct MessageSignCtx<'a> {
     /// Key-actor handle — classical half of the nested hybrid.
     pub key: &'a KeyEngineHandle,
-    /// Open wallet file — transient master-seed borrow for the PQ half,
-    /// and the declared seed format the identity derivation is scoped by.
+    /// Open wallet file — transient master-seed borrow for the PQ half.
     pub file: &'a WalletFile,
-    /// Wallet network. Resolved to a [`DerivationNetwork`] here so the
-    /// signing identity and the signing transcript are scoped by the
-    /// same value rather than by two independently-derived bytes.
+    /// Wallet network: the signing identity and the signing transcript
+    /// are scoped by this one value.
     pub network: shekyl_address::Network,
 }
 
@@ -143,22 +139,6 @@ pub enum VerifyMessageError {
     Crypto(#[from] MessageSigError),
 }
 
-/// The `(network, seed_format)` pair the signing identity is scoped by —
-/// read from the same places wallet open reads them, so a message
-/// signature is derived under the identical scoping as every other key
-/// this wallet holds.
-fn derivation_scope(
-    ctx: &MessageSignCtx<'_>,
-) -> Result<(DerivationNetwork, SeedFormat), SignMessageError> {
-    let declared = ctx.file.opened_keys().seed_format;
-    let seed_format = SeedFormat::from_u8(declared).ok_or_else(|| {
-        SignMessageError::Internal(format!(
-            "wallet file declares unknown seed format {declared:#04x}"
-        ))
-    })?;
-    Ok((network_to_derivation(ctx.network), seed_format))
-}
-
 /// Assemble the bound classical segment this wallet's signatures bind
 /// (SM-R-3): the same bytes `ShekylAddress::encode` puts in the address,
 /// by construction — `BoundClassicalSegment` owns that layout.
@@ -186,7 +166,7 @@ pub(crate) async fn sign_message(
     ctx: &MessageSignCtx<'_>,
     message: &[u8],
 ) -> Result<String, SignMessageError> {
-    let (network, seed_format) = derivation_scope(ctx)?;
+    let network = ctx.network;
     let segment = bound_segment(ctx)?;
 
     // Single-flight: one multi-second PQ job per wallet at a time
@@ -219,7 +199,6 @@ pub(crate) async fn sign_message(
         message_signing::sign_message_pq_half(
             &inputs.master_seed_64,
             network,
-            seed_format,
             &segment,
             &owned_message,
         )
@@ -258,7 +237,7 @@ pub fn verify_message(
     let address = decode_signer_address(address, network)?;
     let segment = address.bound_classical_segment();
 
-    message_signing::verify_message(&segment, network_to_derivation(network), message, &sig)?;
+    message_signing::verify_message(&segment, network, message, &sig)?;
     Ok(())
 }
 

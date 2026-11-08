@@ -265,16 +265,28 @@ impl ResponderReady {
 }
 
 impl<const INITIATOR: bool> Established<INITIATOR> {
-    /// The record halves for this role. Dropping them drops the session.
-    #[must_use = "the record halves are the session"]
-    pub fn split(self) -> (SendHalf, RecvHalf) {
-        let role = if INITIATOR {
+    /// Which `Split` half this role sends on.
+    const fn role() -> SplitRole {
+        if INITIATOR {
             SplitRole::Initiator
         } else {
             SplitRole::Responder
-        };
-        let (send, recv) = self.sym.into_directions(role);
+        }
+    }
+
+    /// The record halves for this role. Dropping them drops the session.
+    #[must_use = "the record halves are the session"]
+    pub fn split(self) -> (SendHalf, RecvHalf) {
+        let (send, recv) = self.sym.into_directions(Self::role());
         channel::session(send, recv)
+    }
+
+    /// The raw directions, with no framer: the C5 bench's one-window
+    /// seal and open. The `c5-bench` module is the only caller, and that
+    /// module is compiled only with the same feature.
+    #[cfg(feature = "c5-bench")]
+    pub(crate) fn directions(self) -> (shekyl_noise::SendDirection, shekyl_noise::RecvDirection) {
+        self.sym.into_directions(Self::role())
     }
 }
 

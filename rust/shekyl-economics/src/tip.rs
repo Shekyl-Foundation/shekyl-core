@@ -20,7 +20,6 @@
 use shekyl_units::AtomicUnits;
 
 use crate::burn::calc_burn_pct_at;
-use crate::emission_share::emission_share_at;
 use crate::params::EconomicParams;
 use crate::release::calc_release_multiplier;
 use crate::supply::{CirculatingSupply, SupplyInvariantViolation};
@@ -55,12 +54,16 @@ pub struct TipEconomics {
     /// `Err` when more has been burned than generated: the store has
     /// contradicted itself, and there is no percentage to report.
     pub burn_pct: Result<u64, SupplyInvariantViolation>,
-    /// The staker emission share at [`TipOperands::chain_height`],
-    /// fixed-point at `SCALE`.
+    /// The staker emission share at [`TipOperands::chain_height`] on
+    /// `params`'s schedule, fixed-point at `SCALE`.
     pub staker_emission_share: u64,
 }
 
 /// Project the economics at the tip from the store's operands and `params`.
+///
+/// The staker share is `params`'s schedule at the chain height. The
+/// shipped schedule is [`crate::emission_share_at`], which is what
+/// [`crate::economic_params`] projects.
 #[must_use]
 pub fn project_at_tip(operands: &TipOperands, params: &EconomicParams) -> TipEconomics {
     let release_multiplier = calc_release_multiplier(
@@ -76,7 +79,7 @@ pub fn project_at_tip(operands: &TipOperands, params: &EconomicParams) -> TipEco
         total_burned: operands.total_burned,
         release_multiplier,
         burn_pct,
-        staker_emission_share: emission_share_at(operands.chain_height),
+        staker_emission_share: params.emission_schedule().share_at(operands.chain_height),
     }
 }
 
@@ -128,7 +131,11 @@ mod tests {
         );
         assert_eq!(
             tip.staker_emission_share,
-            emission_share_at(op.chain_height)
+            params.emission_schedule().share_at(op.chain_height)
+        );
+        assert_eq!(
+            tip.staker_emission_share,
+            crate::emission_share_at(op.chain_height)
         );
     }
 
@@ -155,5 +162,22 @@ mod tests {
         assert!(project_at_tip(&op, &EconomicParams::default())
             .burn_pct
             .is_ok());
+    }
+
+    /// The reported share is the set's schedule. The release and the burn
+    /// stay on the same operands.
+    #[test]
+    fn a_replaced_schedule_is_the_share_the_tip_reports() {
+        let op = operands();
+        let shipped = project_at_tip(&op, &EconomicParams::default());
+        let quiet = EconomicParams {
+            staker_emission_share: 0,
+            ..EconomicParams::default()
+        };
+        let replaced = project_at_tip(&op, &quiet);
+        assert_eq!(replaced.staker_emission_share, 0);
+        assert!(shipped.staker_emission_share > 0);
+        assert_eq!(replaced.release_multiplier, shipped.release_multiplier);
+        assert_eq!(replaced.burn_pct, shipped.burn_pct);
     }
 }

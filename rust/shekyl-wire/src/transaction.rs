@@ -45,7 +45,9 @@ use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
 use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
-use shekyl_types::{ArchivalLength, BlockHash, PCanonicalId, PrefixHash, MAX_HOLDINGS_SHARDS};
+use shekyl_types::{
+    ArchivalLength, BlockHash, CtBaseHash, PCanonicalId, PrefixHash, MAX_HOLDINGS_SHARDS,
+};
 
 use crate::bytes::{read_array, read_byte};
 use crate::tx_extra::{check_tx_extra_shape, parse as parse_tx_extra, ExtraSubject};
@@ -54,6 +56,21 @@ use crate::READ_LEN_CAP;
 
 /// Genesis transaction version (kept deliberately; `V4` = future lattice-only).
 pub const TX_VERSION: u64 = 3;
+
+/// A canonical varint of a value below 128. Version 3, a zero count and a
+/// zero length are each one byte.
+const VARINT_BELOW_128: usize = 1;
+
+/// The shortest pruned segment [`Transaction::from_pruned_bytes`] accepts,
+/// and the shortest blob [`Transaction::from_bytes`] accepts: version 3, an
+/// empty prefix, and a null confidential section with no outputs. The base
+/// arrays are sized by the output count, so none of them is present.
+pub const MIN_PRUNED_SEGMENT: usize = VARINT_BELOW_128 // version
+    + VARINT_BELOW_128 // unlock time
+    + VARINT_BELOW_128 // input count
+    + VARINT_BELOW_128 // output count
+    + VARINT_BELOW_128 // extra length
+    + 1; // null ct type; the base contributes nothing
 
 // Genesis dense tag scheme (GENESIS_TX_WIRE_FORMAT.md §2.0 / §5 gate-(c)). Tags are
 // numbered dense from 0x00; matches the renumbered C++ oracle VARIANT_TAGs and ct enum.
@@ -77,9 +94,10 @@ pub const TAG_INPUT_BOND_POST: u8 = 0x03;
 /// `txin_archival_reward_emission` tag (C-1) — an opaque canonical blob whose
 /// codec is owned by `shekyl-archival-retention::emission_wire`
 /// (`VIN_TYPE_ARCHIVAL_REWARD_EMISSION`); mirrors the C++
-/// `TXIN_ARCHIVAL_REWARD_EMISSION_WIRE_TAG` (`cryptonote_basic.h:296`). The blob's
-/// **leading byte echoes this tag** — the transport guard the C++ deserializer
-/// enforces (`cryptonote_basic.h:302-310`) and [`Input::read`] mirrors.
+/// `TXIN_ARCHIVAL_REWARD_EMISSION_WIRE_TAG` (`cryptonote_basic.h` at `ac3836de90`
+/// (line 298)). The blob's **leading byte echoes this tag** — the transport guard
+/// the C++ deserializer enforces (`cryptonote_basic.h` at `ac3836de90`
+/// (lines 308–311)) and [`Input::read`] mirrors.
 pub const TAG_INPUT_ARCHIVAL_REWARD_EMISSION: u8 = 0x04;
 
 /// `post_kind` value for a JoinMarket archival bond post — the one wire
@@ -151,7 +169,8 @@ pub const HOLDINGS_SHARD_SET_COMPACT: u8 = 0;
 pub const HOLDINGS_COMPLETE_TREE: u8 = 1;
 
 /// Transport bound on the emission `canonical_bytes` blob
-/// (`config::ARCHIVAL_EMISSION_VIN_MAX_BYTES`, `src/cryptonote_config.h:308`).
+/// (`config::ARCHIVAL_EMISSION_VIN_MAX_BYTES`, `src/cryptonote_config.h` at
+/// `ac3836de90` (line 251)).
 /// Deliberately the C++ transport cap verbatim (1 MiB > [`MAX_TX_SIZE`]): the wire
 /// layer mirrors the oracle's accept/reject exactly, and the tx-size bound rejects
 /// the oversized *transaction* independently.
@@ -183,7 +202,11 @@ const _: () = assert!(
     MAX_OUTPUTS.is_power_of_two(),
     "MAX_BP_LR_LEN derivation requires MAX_OUTPUTS to be a power of two"
 );
-/// Max `tx_extra` bytes for a non-coinbase tx (`MAX_TX_EXTRA_SIZE`).
+/// Max `tx_extra` bytes for a non-coinbase tx. FCMP++ adds per-output
+/// `tx_extra` (tags `0x06`/`0x07`): the hybrid KEM ciphertext (~1 120 B) and
+/// the PQC leaf hash (32 B) each, plus pubkey, nonce and padding. The
+/// worst case, `MAX_OUTPUTS` (16), needs on the order of 20 KiB; 24 KiB
+/// leaves headroom. There is no C++ copy.
 pub const MAX_TX_EXTRA: usize = 24_576;
 /// Max serialized transaction size (`CRYPTONOTE_MAX_TX_SIZE`) — the hard
 /// parse/DoS cap. The **binding** relay/consensus bound for a single tx is
@@ -199,23 +222,62 @@ include!(concat!(env!("OUT_DIR"), "/block_weight_generated.rs"));
 /// the JSON because the wire format cannot depend on `shekyl-economics`.
 /// [`TX_WEIGHT_LIMIT`] is half of this minus the coinbase reserve.
 pub const MIN_BLOCK_WEIGHT: usize = GENERATED_FULL_REWARD_ZONE_USIZE;
-/// Coinbase blob reserve (`CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE`)
-/// subtracted from the per-tx weight limit.
-pub const COINBASE_BLOB_RESERVED_SIZE: usize = 600;
+
+/// How many outputs the reserve's coinbase carries.
+///
+/// CEN-F4 admits exactly one above genesis. Genesis is exempt and is not
+/// the largest coinbase: its extra omits the KEM and the leaf when it has
+/// no output. A second output is a consensus change, and it re-runs
+/// [`max_coinbase_weight`].
+const COINBASE_OUTPUTS: usize = 1;
+
+/// Weight of the largest coinbase the grammar allows.
+///
+/// The prefix with every free varint at its widest (`u64` amount, height
+/// and unlock time), one [`Input::Gen`], one [`Output`], [`Ct::Null`], and
+/// the extra at [`crate::tx_extra::coinbase_extra_len`] for [`COINBASE_OUTPUTS`].
+/// Counts and the version are the grammar's, so their varints are the
+/// widths [`crate::varint::varint_len`] gives those values, not ten bytes. The Bp+
+/// clawback is zero on `Ct::Null`, so the weight is the serialized length.
+#[must_use]
+pub const fn max_coinbase_weight() -> usize {
+    let extra = crate::tx_extra::coinbase_extra_len(COINBASE_OUTPUTS);
+    let version = crate::varint::varint_len(TX_VERSION);
+    let unlock = crate::varint::MAX_VARINT_LEN;
+    let n_inputs = crate::varint::varint_len(1);
+    // Tag byte, then the height at its widest.
+    let gen = 1 + crate::varint::MAX_VARINT_LEN;
+    let n_outputs = crate::varint::varint_len(COINBASE_OUTPUTS as u64);
+    let output = crate::varint::MAX_VARINT_LEN + 1 + OUTPUT_KEY_LEN + OUTPUT_VIEW_TAG_LEN;
+    let extra_len = crate::varint::varint_len(extra as u64);
+    // Type byte, then one encrypted amount, one encrypted label, one commitment.
+    let ct = 1 + CT_ENC_FIELD_LEN + CT_ENC_FIELD_LEN + CT_COMMITMENT_LEN;
+    version + unlock + n_inputs + gen + n_outputs + output + extra_len + extra + ct
+}
+
+/// Bytes past [`max_coinbase_weight`] the reserve keeps.
+///
+/// The varint slack is the only thing that separates a real coinbase from
+/// the grammar's maximum, and it is already inside [`max_coinbase_weight`].
+/// Any other growth — a new tag, a second output — is a consensus change
+/// that re-runs this derivation.
+pub const COINBASE_RESERVE_MARGIN: usize = 0;
+
+/// Bytes a block holds for its coinbase when [`TX_WEIGHT_LIMIT`] is derived.
+///
+/// The largest coinbase the grammar allows, plus [`COINBASE_RESERVE_MARGIN`].
+/// `shekyl-chain-rules` pins this value.
+pub const COINBASE_RESERVE: usize = max_coinbase_weight() + COINBASE_RESERVE_MARGIN;
+
 /// Per-transaction weight limit (`get_transaction_weight_limit`,
 /// `src/cryptonote_core/tx_verification_utils.cpp`): half the minimum block
-/// weight minus the coinbase reserve. A compile-time constant on Shekyl
-/// (the half-weight arm is unconditional from genesis; the daemon-rpc submit
-/// facts pin the same 149 400 value from the C++ side). Tx weight is the serialized size plus the Bp+ verification
-/// clawback ([`bp_plus_weight_clawback`]); the mempool refuses any tx whose
-/// weight exceeds this, so builders must bound against it, never against
-/// [`MAX_TX_SIZE`].
-pub const TX_WEIGHT_LIMIT: usize = MIN_BLOCK_WEIGHT / 2 - COINBASE_BLOB_RESERVED_SIZE;
-const _: () = assert!(
-    TX_WEIGHT_LIMIT == 149_400,
-    "TX_WEIGHT_LIMIT must equal the C++ get_transaction_weight_limit value \
-     pinned by the daemon-rpc submit facts"
-);
+/// weight minus the coinbase reserve. The zone is the inherited
+/// full-reward zone; it moves again when EUP-5 G rules the capacity leg.
+/// The reserve does not read the zone. Tx weight is the serialized size
+/// plus the Bp+ verification clawback ([`bp_plus_weight_clawback`]); the
+/// mempool refuses any tx whose weight exceeds this, so builders must
+/// bound against it, never against [`MAX_TX_SIZE`].
+pub const TX_WEIGHT_LIMIT: usize = MIN_BLOCK_WEIGHT / 2 - COINBASE_RESERVE;
 /// `unlock_time` block-height sentinel: `>=` this is the (rejected) timestamp form.
 pub const UNLOCK_TIME_BLOCK_SENTINEL: u64 = 500_000_000;
 
@@ -271,12 +333,13 @@ pub const PQC_MAX_PUBLIC_KEY_BLOB: usize = 16384;
 pub const PQC_MAX_SIGNATURE_BLOB: usize = 32768;
 
 /// The Bp+ weight clawback as a pure function of the padded output count — the C++
-/// `get_transaction_weight_clawback` (`cryptonote_format_utils.cpp:93`); `0` for ≤ 2
-/// padded outputs. This is the single source of the formula: [`Transaction::weight`]
-/// applies it to the count derived from the proof, and the wallet fee predictor
-/// (`shekyl-engine-core`) applies it to the count derived a-priori from `n_out`, so the
-/// two can never drift. Callers pass an already-bounded `n_padded_outputs`
-/// (≤ [`MAX_OUTPUTS`] for any valid tx); `saturating_mul` keeps it overflow-safe.
+/// `get_transaction_weight_clawback` (`cryptonote_format_utils.cpp` at `ac3836de90`
+/// (lines 73–89)); `0` for ≤ 2 padded outputs. This is the single source of the
+/// formula: [`Transaction::weight`] applies it to the count derived from the proof,
+/// and the wallet fee predictor (`shekyl-engine-core`) applies it to the count
+/// derived a-priori from `n_out`, so the two can never drift. Callers pass an
+/// already-bounded `n_padded_outputs` (≤ [`MAX_OUTPUTS`] for any valid tx);
+/// `saturating_mul` keeps it overflow-safe.
 #[must_use]
 pub fn bp_plus_weight_clawback(n_padded_outputs: usize) -> usize {
     if n_padded_outputs <= 2 {
@@ -417,19 +480,22 @@ pub enum Input {
     /// Archival reward-emission (dense tag `0x04`, C-1) — the complete Rust
     /// canonical encoding as an **opaque blob**, leading wire tag `0x04` included.
     /// This crate is transport only, matching the C++ posture
-    /// (`cryptonote_basic.h:283-311`): `shekyl-archival-retention::emission_wire`
+    /// (`cryptonote_basic.h` at `ac3836de90` (lines 285–313)):
+    /// `shekyl-archival-retention::emission_wire`
     /// owns the codec, the parse, and every structural bound; the transport guard
     /// here is the allocation bound + the wire-tag echo, and a blob passing it can
     /// still be garbage — the emission parser is the validator. Like a bond-post,
     /// this input occupies a `pqc_auths` slot but no pseudo-out slot (module
-    /// header; C++ `count_spend_inputs`, `cryptonote_basic.h:322`).
+    /// header; C++ `count_spend_inputs`, `cryptonote_basic.h` at `ac3836de90`
+    /// (lines 324–331)).
     ArchivalRewardEmission {
         /// The complete `emission_wire.rs` canonical encoding (leading `0x04` included).
         canonical_bytes: Vec<u8>,
     },
 }
 
-/// The emission-blob transport guard (`cryptonote_basic.h:302-310`): length in
+/// The emission-blob transport guard (`cryptonote_basic.h` at `ac3836de90`
+/// (lines 308–311)): length in
 /// `2..=`[`ARCHIVAL_EMISSION_VIN_MAX_BYTES`], leading byte echoing the wire tag.
 /// One source for the two sites that must agree — [`Input::read`] (accept/reject
 /// parity with the C++ deserializer) and `validate_context_free_pruned`'s per-arm
@@ -839,6 +905,15 @@ impl BondPost {
     }
 }
 
+/// One-time output key on a `tagged_key` (`Output::write`'s key).
+pub const OUTPUT_KEY_LEN: usize = 32;
+/// The view-tag byte `Output::write` emits after the key.
+pub const OUTPUT_VIEW_TAG_LEN: usize = 1;
+/// Encrypted amount or label on a committed base: 8 ciphertext bytes and a tag.
+pub const CT_ENC_FIELD_LEN: usize = 9;
+/// Output commitment (`outPk`) on a committed base.
+pub const CT_COMMITMENT_LEN: usize = 32;
+
 /// A transaction output (`tagged_key`).
 ///
 /// `view_tag` is mandatory — `tagged_key` is the sole genesis output type
@@ -850,7 +925,7 @@ pub struct Output {
     /// Cleartext amount for the coinbase output; `0` for confidential outputs.
     pub amount: u64,
     /// The one-time output key.
-    pub key: [u8; 32],
+    pub key: [u8; OUTPUT_KEY_LEN],
     /// Scan fast-reject prefilter byte.
     pub view_tag: u8,
 }
@@ -885,15 +960,44 @@ impl Output {
 ///
 /// Present for **both** the coinbase `Null` type and the `Fcmp` spend — the C++
 /// `serialize_ctsig_base` writes `enc_amounts` / `enc_labels` / `outPk` for both
-/// so every output gets a tree-leaf commitment (ct_types.h:209-280).
+/// so every output gets a tree-leaf commitment (`ct_types.h` at `ac3836de90`
+/// (lines 209–280)).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CtBase {
     /// Per-output encrypted amounts (8-byte value + 1-byte tag).
-    pub enc_amounts: Vec<[u8; 9]>,
+    pub enc_amounts: Vec<[u8; CT_ENC_FIELD_LEN]>,
     /// Per-output encrypted labels (fixed-size, real-or-zero, never elided; §2.3).
-    pub enc_labels: Vec<[u8; 9]>,
+    pub enc_labels: Vec<[u8; CT_ENC_FIELD_LEN]>,
     /// Per-output commitments.
-    pub commitments: Vec<[u8; 32]>,
+    pub commitments: Vec<[u8; CT_COMMITMENT_LEN]>,
+}
+
+/// The FCMP++ base segment: `CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block
+/// ‖ base` — the one serializer [`Ct::write_base`] and [`fcmp_base_hash`]
+/// share, so a builder that has not assembled the transaction yet hashes
+/// the same bytes the txid will.
+fn write_fcmp_base<W: Write>(
+    fee: u64,
+    reference_block: &BlockHash,
+    base: &CtBase,
+    w: &mut W,
+) -> io::Result<()> {
+    w.write_all(&[CT_TYPE_FCMP])?;
+    write_varint(fee, w)?;
+    w.write_all(reference_block.as_bytes())?;
+    base.write(w)
+}
+
+/// `H(base)` of an FCMP++ body from its parts: what [`Ct::base_hash`]
+/// returns for `Ct::Fcmp { fee, reference_block, base, .. }`, by the same
+/// serializer. The signer reads it before the proofs exist (they are not in
+/// the base), so the message it proves over is the one the verifier derives
+/// from the finished transaction.
+#[must_use]
+pub fn fcmp_base_hash(fee: u64, reference_block: &BlockHash, base: &CtBase) -> CtBaseHash {
+    let mut buf = Vec::new();
+    write_fcmp_base(fee, reference_block, base, &mut buf).expect("writing to a Vec is infallible");
+    CtBaseHash::from_bytes(keccak256(&buf))
 }
 
 impl CtBase {
@@ -914,10 +1018,10 @@ impl CtBase {
         let mut enc_amounts = Vec::new();
         let mut enc_labels = Vec::new();
         for _ in 0..outputs {
-            enc_amounts.push(read_array::<9, _>(r)?);
+            enc_amounts.push(read_array::<CT_ENC_FIELD_LEN, _>(r)?);
         }
         for _ in 0..outputs {
-            enc_labels.push(read_array::<9, _>(r)?);
+            enc_labels.push(read_array::<CT_ENC_FIELD_LEN, _>(r)?);
         }
         Ok(CtBase {
             enc_amounts,
@@ -1068,7 +1172,8 @@ impl BpPlus {
         let s1 = read_array(r)?;
         let d1 = read_array(r)?;
         // Parse-parity with the C++ deserializer: `serialize_ctsig_prunable`
-        // (ct_types.h:338) fails deserialization unless every proof has
+        // (`ct_types.h` at `ac3836de90` (lines 360–361)) fails deserialization
+        // unless every proof has
         // `6 <= |L| == |R| <= 6 + log2(BULLETPROOF_PLUS_MAX_OUTPUTS)`
         // (`n_bulletproof_plus_max_amounts` returns 0 otherwise). The remaining
         // output-count coupling — `|L| == 6 + ceil(log2(next_pow2(n_out)))` —
@@ -1220,8 +1325,9 @@ pub enum Ct {
         /// pass record instead — Ed25519 leg on the vin, ML-DSA leg in the
         /// pruned record; CEN-J10).
         pqc_auths: Vec<PqcAuth>,
-        /// Prunable region. `None` only for the storage-pruned *spend* form
-        /// (daemon `get_transactions prune:true`). Serve-credit carries
+        /// Prunable region. `None` only for a *spend* body parsed from a
+        /// skeleton's bytes (daemon `get_transactions prune:true`, `SB-Q2`)
+        /// or from the `serialize_base` framing. Serve-credit carries
         /// [`Some`] with only `serve_credit_pruned` populated.
         prunable: Option<Prunable>,
     },
@@ -1249,13 +1355,20 @@ impl Ct {
                 reference_block,
                 base,
                 ..
-            } => {
-                w.write_all(&[CT_TYPE_FCMP])?;
-                write_varint(*fee, w)?;
-                w.write_all(reference_block.as_bytes())?;
-                base.write(w)
-            }
+            } => write_fcmp_base(*fee, reference_block, base, w),
         }
+    }
+
+    /// `H(base)`: `keccak256` of the base segment ([`Self::write_base`]),
+    /// the txid's second component (GENESIS_TX_WIRE_FORMAT.md §11). The
+    /// txid and [`TxSignableHash`](shekyl_types::TxSignableHash) both read
+    /// it here.
+    #[must_use]
+    pub fn base_hash(&self) -> CtBaseHash {
+        let mut buf = Vec::new();
+        self.write_base(&mut buf)
+            .expect("writing to a Vec is infallible");
+        CtBaseHash::from_bytes(keccak256(&buf))
     }
 
     /// The tx-level `pqc_auths`: count == nvin, no length prefix (empty in
@@ -1357,13 +1470,14 @@ impl Ct {
         else {
             return Ok(base);
         };
-        // EOF-tolerant tail (§9.8 / §4). A genuine spend that ends
-        // after the base is the storage-pruned form with empty
-        // `pqc_auths` *and* no prunable — only reachable on a
-        // malformed blob; the live storage-pruned spend still
-        // carries `pqc_auths` and hits the second EOF check below.
-        // Serve-credit is **not** this case: after RF-D1 it has a
-        // prunable region, so bytes remain after the base.
+        // EOF-tolerant tail (§9.8 / §4). A spend that ends after the
+        // base is the **skeleton** — the one pruned form the daemon
+        // serves (`SB-Q2`): the store's `txs_pruned` row, with both
+        // discardable regions gone and their digests carried beside
+        // the bytes (`SkeletonTx`). Its identity is not `hash()` but
+        // `hash_with_supplied_components`, which `SkeletonTx::bind`
+        // computes. Serve-credit is **not** this case: after RF-D1 it
+        // has a prunable region, so bytes remain after the base.
         if r.fill_buf()?.is_empty() {
             return Ok(Ct::Fcmp {
                 fee,
@@ -1384,10 +1498,10 @@ impl Ct {
                 pqc_auths.push(PqcAuth::read(r)?);
             }
         }
-        // EOF after pqc_auths ⇒ the **storage-pruned full-spend form**:
-        // the daemon's pruned fetch (`get_transactions prune:true`)
-        // keeps consensus pqc_auths but drops the prunable proof
-        // (cryptonote_basic.h gates `rctsig_prunable` on `!pruned`).
+        // EOF after pqc_auths ⇒ the `serialize_base` framing (prunable
+        // dropped, `pqc_auths` kept): the C++ serializer's boundary,
+        // which `pruned_tx_hash_parity` pins. No daemon serves it
+        // (`SB-Q2`: the pruned form on the wire is the skeleton above).
         // Serve-credit never takes this arm: it skipped pqc_auths
         // and still has pruned-record bytes to read.
         let prunable = if r.fill_buf()?.is_empty() {
@@ -1525,11 +1639,11 @@ pub struct Transaction {
 mod txid;
 pub use txid::{
     carries_archival_good, empty_region_prunable_hash, pqc_auth_hash_of, prunable_hash_of,
-    TxidParts, TxidSegments,
+    TxidParts,
 };
 
 mod signing_preimage;
-pub use signing_preimage::PqcSigningPreimage;
+pub use signing_preimage::{tx_signable, PqcSigningPreimage, FCMP_SPEND_SIGNING, TX_SIGNABLE};
 
 /// A transaction's bytes as the chain store's three segments.
 ///
@@ -1587,6 +1701,33 @@ fn archival_len_of(pqc_auths: &[u8], prunable: &[u8]) -> ArchivalLength {
 }
 
 impl Transaction {
+    /// Where the prefix's `extra` bytes begin in [`write`](Self::write)'s
+    /// output: after the version, the unlock time, the inputs, the outputs
+    /// and the extra's own length. A block template adds this to the
+    /// coinbase's offset in the block blob to find the extra nonce.
+    #[must_use]
+    pub fn extra_offset(&self) -> usize {
+        let mut before = Vec::new();
+        write_varint(TX_VERSION, &mut before).expect("writing to a Vec is infallible");
+        write_varint(self.prefix.unlock_time, &mut before).expect("writing to a Vec is infallible");
+        write_varint(self.prefix.inputs.len(), &mut before)
+            .expect("writing to a Vec is infallible");
+        for input in &self.prefix.inputs {
+            input
+                .write(&mut before)
+                .expect("writing to a Vec is infallible");
+        }
+        write_varint(self.prefix.outputs.len(), &mut before)
+            .expect("writing to a Vec is infallible");
+        for output in &self.prefix.outputs {
+            output
+                .write(&mut before)
+                .expect("writing to a Vec is infallible");
+        }
+        write_varint(self.prefix.extra.len(), &mut before).expect("writing to a Vec is infallible");
+        before.len()
+    }
+
     /// Write the transaction.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         write_varint(TX_VERSION, w)?;
@@ -1639,25 +1780,6 @@ impl Transaction {
         self.write_segments()
             .expect("write_segments writes into Vecs; Vec writes are infallible")
             .archival_len()
-    }
-
-    /// The archival length of the transaction this **storage-pruned** body
-    /// belongs to, given the prunable region held beside it: this body's
-    /// `pqc_auths` segment plus `prunable`'s bytes, by the one measurement
-    /// ([`TxSegments::archival_len`]).
-    ///
-    /// For a holder of both halves that has them apart — a daemon serving a
-    /// pruned reply out of a store that kept the region — so the length it
-    /// serves is measured from the bytes, not carried (`SHT-Q2`). `prunable`
-    /// must be the transaction's whole region: a caller without it has no
-    /// length to measure, and supplies the stored one instead.
-    #[must_use]
-    pub fn archival_len_with_prunable(&self, prunable: &[u8]) -> ArchivalLength {
-        let mut pqc_auths = Vec::new();
-        self.ct
-            .write_pqc_auths(&mut pqc_auths)
-            .expect("Vec write is infallible");
-        archival_len_of(&pqc_auths, prunable)
     }
 
     /// Version, prefix and the committed base. [`Self::read`] continues
@@ -1717,7 +1839,8 @@ impl Transaction {
 
     /// The consensus **transaction weight** — the serialized size **plus** the
     /// bulletproof-plus clawback, mirroring the C++ `get_transaction_weight`
-    /// (`blob_size + bp_clawback`, `cryptonote_format_utils.cpp:292`). The clawback is
+    /// (`blob_size + bp_clawback`, `cryptonote_format_utils.cpp` at `ac3836de90`
+    /// (line 296)). The clawback is
     /// a verification-cost *penalty* added for a Bp+ covering more than two (padded)
     /// outputs — so weight is **not** the serialized length, and weight ≥ size always.
     /// It is `0` for the genesis ≤2-output spend shapes and for any non-spend (coinbase
@@ -2253,9 +2376,11 @@ impl Transaction {
                     // `|L| == |R| == 6 + ceil(log2(next_pow2(n_out)))`. The daemon
                     // enforces both directions: `n_padded >= n_out` at parse
                     // (`n_bulletproof_plus_max_amounts < outputs` fails
-                    // deserialization, ct_types.h:338) and `n_padded < 2·n_out` at
+                    // deserialization, `ct_types.h` at `ac3836de90` (lines 360–361))
+                    // and `n_padded < 2·n_out` at
                     // verify (`n_bulletproof_amounts_base`'s V/L tightness,
-                    // ct_types.cpp:234-235, with `V` restored from outPk == n_out).
+                    // `ct_types.cpp` at `ac3836de90` (lines 234–235), with `V`
+                    // restored from outPk == n_out).
                     // Without this a tx with a valid output count but an
                     // inconsistent `|L|` passes local validation and dies at the
                     // daemon — a local↔daemon divergence surfacing at submit.
@@ -2402,5 +2527,45 @@ impl core::ops::Deref for FullTransaction {
     type Target = Transaction;
     fn deref(&self) -> &Transaction {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod min_segment_tests {
+    use super::*;
+
+    fn empty_null() -> Transaction {
+        Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                extra: Vec::new(),
+            },
+            ct: Ct::Null(CtBase {
+                enc_amounts: Vec::new(),
+                enc_labels: Vec::new(),
+                commitments: Vec::new(),
+            }),
+        }
+    }
+
+    /// The empty null transaction is the shortest blob both entries accept.
+    #[test]
+    fn the_empty_null_transaction_is_the_minimum_segment() {
+        let bytes = empty_null().serialize();
+        assert_eq!(bytes.len(), MIN_PRUNED_SEGMENT);
+        assert_eq!(
+            Transaction::from_bytes(&bytes).expect("full").serialize(),
+            bytes
+        );
+        assert_eq!(
+            Transaction::from_pruned_bytes(&bytes)
+                .expect("pruned")
+                .serialize(),
+            bytes
+        );
+        assert!(Transaction::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+        assert!(Transaction::from_pruned_bytes(&bytes[..bytes.len() - 1]).is_err());
     }
 }

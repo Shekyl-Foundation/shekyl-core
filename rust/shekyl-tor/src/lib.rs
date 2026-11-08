@@ -14,10 +14,13 @@
 //! with the gap as one arm of the wait. Onion-service proof-of-work and
 //! `MaxStreams` are the accept bound. This crate does not add another.
 //!
-//! `--tx-proxy` and `--anonymous-inbound` stay parsed in C++. They arrive
-//! here as [`Config`]. A bind failure returns before a listener exists,
-//! which is the zone not being inserted. The 60-second Tor liveness poll
-//! in `idle_worker` is a timing-table item and is not this connector's.
+//! The operator's Tor is configured in Rust (`shekyl-daemon-config`,
+//! `INPUT_GRAMMAR.md` IG-Q18): `tor-socks` is the SOCKS endpoint outbound
+//! dials through, and `tor-onion` with `tor-onion-listen` is the operator's
+//! own onion and the local endpoint its Tor forwards to. A bind failure
+//! returns before a listener exists, so nothing is left listening.
+//! Whether the managed Tor is alive is the managed-Tor supervisor's
+//! liveness sample (`TOR_SUPERVISOR.md` §4.11), not this connector's.
 
 #![deny(unsafe_code)]
 
@@ -29,16 +32,22 @@ use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::Pool;
 use shekyl_timing_engine::{Clock, Handle, Tick};
-use shekyl_transport_layer::{CloseCause, CloseKind, Sockets};
+use shekyl_transport_layer::{CloseCause, CloseKind, DialEnd, Sockets};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 mod drive;
 mod publish;
+mod replies;
 
 pub use publish::{publish_forward, publish_with_control, InboundPosture, PublishFault};
+pub use replies::{
+    refused, reply_end, socks_reply_is_our_request, stamp_reply, stamp_stream_end, Observed,
+};
 
-pub use drive::{accept_inbound, accept_one, dial_one, Accept, Admitted, Dial, Inbound};
+pub use drive::{
+    accept_inbound, accept_one, dial_one, publish_on, Accept, Admitted, Dial, Inbound, Publish,
+};
 
 /// Caller inputs. The dial span, the gap span, and the send-queue byte
 /// cap are unmeasured until a measurement names them.
@@ -46,9 +55,10 @@ pub struct Config {
     /// The SOCKS5 proxy outbound dials go through, with the pair it asks
     /// for, if any.
     pub proxy: shekyl_socks::Proxy,
-    /// Binds from `--anonymous-inbound`. These are the operator's onions.
-    /// They are not a [`ForwardAddr`], so [`publish_forward`] cannot name them.
-    pub anonymous_inbound: Vec<OperatorInbound>,
+    /// The local binds of the operator's own onions (`tor-onion-listen`).
+    /// The operator's Tor published them; they are not a [`ForwardAddr`], so
+    /// [`publish_forward`] cannot name them.
+    pub operator_onion_binds: Vec<OperatorInbound>,
     pub ceiling: InboundCeiling,
     /// Covers the SOCKS exchange, circuit build, and rendezvous.
     pub dial_within: Tick,
@@ -219,9 +229,12 @@ where
             sockets: self.sockets.clone(),
             dial_within: self.dial_within,
             gap_within: self.gap_within,
-            on_cause: Arc::clone(&self.on_cause),
+            on_end: {
+                let on_cause = Arc::clone(&self.on_cause);
+                Arc::new(move |end: DialEnd| on_cause(end.cause()))
+            },
             send_queue_bytes: self.send_queue_bytes,
-            admitted: self.admitted_tx.clone(),
+            admitted: publish_on(self.admitted_tx.clone()),
         };
         let engine = self.engine.clone();
         self.handle.spawn(dial_one(dial, engine));
@@ -236,14 +249,14 @@ impl<C: Clock + Clone> Drop for Listener<C> {
     }
 }
 
-/// Bind the loopback forward target and any anonymous-inbound addresses.
+/// Bind the loopback forward target and the operator's onion binds.
 ///
 /// `sockets` is the process-wide admission table. Clones share it, and
 /// the ceiling counts every connector on that table. This function keeps
 /// a clone and does not mint a table.
 ///
 /// One failed bind drops the listeners that succeeded and returns the
-/// error. The caller does not insert the zone. An accepted socket is
+/// error. Nothing is left listening. An accepted socket is
 /// handed to admission directly. There is no queue of sockets ahead of
 /// that check.
 pub fn listen<C>(
@@ -256,7 +269,7 @@ where
     C: Clock + Clone + Send + Sync + 'static,
 {
     let handle = pool.handle().clone();
-    let (forward_listener, extras) = pool.block_on(bind_all(&config.anonymous_inbound))?;
+    let (forward_listener, extras) = pool.block_on(bind_all(&config.operator_onion_binds))?;
     let forward = ForwardAddr::from_bound(forward_listener.local_addr()?)?;
     let mut extra_addrs = Vec::with_capacity(extras.len());
     for listener in &extras {
@@ -294,7 +307,7 @@ where
             gap_within,
             on_cause: Arc::clone(&on_cause),
             send_queue_bytes,
-            admitted: admitted_tx.clone(),
+            admitted: publish_on(admitted_tx.clone()),
             backoff,
         };
         let engine = engine.clone();

@@ -277,7 +277,7 @@ pub enum StakePosture {
     /// deleted in the same change that made this arm opt-in, so no code
     /// state ever existed where an ordinary staker silently owed the
     /// corpus.
-    FoundationCompleteTree,
+    SupportCompleteTree,
 }
 
 /// First-stake refusal/failure taxonomy (rule 82;
@@ -394,7 +394,7 @@ pub enum FirstStakeError {
     /// be assembled.
     ///
     /// **Not** an invitation to pass
-    /// [`StakePosture::FoundationCompleteTree`] instead: that posture is a
+    /// [`StakePosture::SupportCompleteTree`] instead: that posture is a
     /// permanent, non-earning, unbounded-storage obligation, and choosing
     /// it to route around this refusal is precisely the mistake D-4's
     /// warning gate exists to prevent.
@@ -416,14 +416,14 @@ impl StakePosture {
     /// (`bond_post.rs`, floor-zero protection) — so the alternative to
     /// this refusal is not a smaller bond, it is an invalid one.
     ///
-    /// [`StakePosture::FoundationCompleteTree`] is the whole-corpus
+    /// [`StakePosture::SupportCompleteTree`] is the whole-corpus
     /// backstop: `CompleteTree` carries no shard list by wire rule
     /// (`BondPostError::CompleteTreeWithShardIds`), so the empty set
     /// here is the obligation's *encoding*, not its size.
     pub(crate) fn holdings(self) -> Result<HoldingsDescriptor, FirstStakeError> {
         match self {
             Self::Market => Err(FirstStakeError::NoShardsAvailable),
-            Self::FoundationCompleteTree => Ok(HoldingsDescriptor {
+            Self::SupportCompleteTree => Ok(HoldingsDescriptor {
                 kind: HoldingsKind::CompleteTree,
                 shard_ids: ShardSet::empty(),
             }),
@@ -443,7 +443,7 @@ use super::Engine;
 pub(crate) async fn anchored_reference_block(
     curve_tree: &CurveTreeHandle,
     chain_tip: shekyl_types::BlockHeight,
-    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<[u8; 32]>,
+    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<BlockHash>,
 ) -> Result<ReferenceBlock, BondAssemblyError> {
     let covered_through = curve_tree
         .ingested_tip_height()
@@ -475,7 +475,7 @@ pub(crate) async fn anchored_reference_block(
     Ok(ReferenceBlock {
         height: reference_height,
         curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-        block_hash: BlockHash::from_bytes(block_hash),
+        block_hash,
     })
 }
 
@@ -726,7 +726,7 @@ where
         store: &PendingPostStore<WalletFilePendingSealStore<S, D, L, E, R, P>>,
         curve_tree: &CurveTreeHandle,
         chain_tip: BlockHeight,
-        tip_hash_at: impl FnOnce(BlockHeight) -> Option<[u8; 32]>,
+        tip_hash_at: impl FnOnce(BlockHeight) -> Option<BlockHash>,
         p_slot: PSlot,
         holdings: &HoldingsDescriptor,
         fee: AtomicUnits,
@@ -756,7 +756,10 @@ where
             .map(|s| s.funding_outputs().to_vec())
             .unwrap_or_default();
 
-        let floor = AtomicUnits::from_raw(bond_floor(holdings));
+        let floor = AtomicUnits::from_raw(bond_floor(
+            holdings,
+            shekyl_archival_retention::archival_params(),
+        ));
         // Align with the wire builder / retention verifier: a zero floor is
         // structurally invalid holdings, not a sweep-to-empty success that
         // would later index an empty `paths` vector. Typed refusal before

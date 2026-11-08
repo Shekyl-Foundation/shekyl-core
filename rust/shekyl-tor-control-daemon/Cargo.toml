@@ -20,6 +20,9 @@ publish = false
 # depends on shekyl-tor-control-wallet: the wallet's supervisor, vanguards and
 # cross-incarnation state are exactly what the daemon posture must not touch.
 shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+# The probe of this node's own onion dials through the managed Tor's SOCKS
+# port with its own isolation pair (`TOR_SUPERVISOR.md` §4.5).
+shekyl-socks = { path = "../shekyl-socks" }
 
 # The start sequence: tokio for the bootstrap-gate timers and teardown bounds;
 # kameo for the control actor handle it drives. Both are the workspace's

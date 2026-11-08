@@ -38,14 +38,14 @@ use std::time::Instant;
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
-    form, seed_height, validate, AtHeight, Candidate, ChainValid, Fault, FormAttempt, HeaderView,
-    RuleSet, Substrate, Trust,
+    form, seed_height, validate, AtHeight, Candidate, ChainValid, Fault, FormAttempt, FormClaims,
+    HeaderView, RuleSet, Substrate, Trust,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, BlockHeader};
 
 use super::connect_fixtures::{batch_root_going_into, priced};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::view::BatchView;
 use super::*;
 use crate::schema::BLOCK_INFO;
@@ -62,9 +62,9 @@ const SPACING: u64 = 120;
 /// constant 120 s spacing the live LWMA floors a small difficulty to zero
 /// over enough blocks (D6 refused at height ~8 000), and off-target spacing
 /// drifts it without bound. The bench measures a read, not the DAA.
-const RULES: RuleSet = RuleSet::fakechain(
+const RULES: RuleSet = RuleSet::GENESIS.with_levers(
     core::num::NonZeroU128::new(7),
-    shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+    shekyl_chain_rules::CappedEpoch::PRODUCTION,
 );
 
 struct BenchSubstrate {
@@ -118,18 +118,21 @@ fn judge<'b, 'id>(
         shekyl_chain_rules::ReferenceClaims::from_headers(view, connecting, &candidate)?;
     let formed = match form(
         candidate,
-        &RULES,
+        &FormClaims {
+            rule_set: &RULES,
+            seed,
+            target,
+            references: &references,
+            network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+        },
         substrate,
-        seed,
-        target,
-        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
         Ok(Err(refused)) => panic!("the bench chain satisfies every stateless rule: {refused}"),
         Err(never) => match never {},
     };
-    match validate(formed, view, &RULES, &Trust::UNANCHORED) {
+    match validate(formed, view, &RULES, &Trust::UNPINNED) {
         Ok(verdict) => Ok(verdict.expect("the bench chain satisfies every landed rule")),
         Err(Fault::View(fault)) => Err(fault),
         Err(Fault::Stale(stale)) => panic!("bench claim went stale: {stale}"),
@@ -290,5 +293,4 @@ fn weights_read_bench() {
     );
     drop(snap);
     drop(store);
-    cleanup(&path);
 }

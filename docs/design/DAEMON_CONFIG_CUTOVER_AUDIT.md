@@ -22,7 +22,7 @@ Rick, 2026-10-15, when the cutover started:
 
 The brief's steps 6 and 9 name the supervisor; until its increment 5 lands,
 the call site they describe drives `DaemonTorControl`
-([`rust/shekyl-tor-control-daemon/src/ephemeral.rs`](../../rust/shekyl-tor-control-daemon/src/ephemeral.rs)).
+([`rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs`](../../rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs)).
 §7 below records how.
 
 ## 1. Re-pin and census (§9 item 1)
@@ -99,12 +99,13 @@ the peer lists' own entry (§2.8), where the handshake owner reads it
 
 At the pin a daemon store is the LMDB environment, `lmdb/data.mdb` under the
 data directory
-([`src/cryptonote_config.h:215`](../../src/cryptonote_config.h),
-[`src/blockchain_db/lmdb/db_lmdb.cpp:2016`](../../src/blockchain_db/lmdb/db_lmdb.cpp)),
+(`src/cryptonote_config.h` at `d26148535e` (line 215),
+`src/blockchain_db/lmdb/db_lmdb.cpp`),
 and `p2pstate.bin`
-([`src/cryptonote_config.h:217`](../../src/cryptonote_config.h)), which PR-3
-made the Rust dialer's address file under the same name
-([`src/p2p/net_node.inl:123`](../../src/p2p/net_node.inl)). The marker
+(`src/cryptonote_config.h` at `d26148535e` (line 217)), which PR-3
+made the Rust dialer's address file under the same name (then line 123 of
+`src/p2p/net_node.inl`, at `e8838b0095`; now `ADDRESS_FILE`,
+`rust/shekyl-daemon/src/network.rs:30`). The marker
 treats either as a store.
 
 ## 4. Dependencies (§9 item 4, rule 17)
@@ -149,29 +150,31 @@ The test reproduces the syscall, not the C++ path, because a Rust test
 cannot link `tools::spawn` and the defect is the disposition, whoever sets
 it. It is a binary of its own because a disposition is process-wide.
 Commit (d) added the positive twin,
-[`rust/shekyl-ffi/tests/dc_f12_runner_reaps_its_children.rs`](../../rust/shekyl-ffi/tests/dc_f12_runner_reaps_its_children.rs):
+[`rust/shekyl-daemon/tests/dc_f12_runner_reaps_its_children.rs`](../../rust/shekyl-daemon/tests/dc_f12_runner_reaps_its_children.rs)
+(under `shekyl-ffi` until the p2p remnant cutover, 2026-11-05):
 the Rust runner runs one command of each kind and awaits each, and a tokio
 child spawned afterwards still returns its status from `wait()`. A binary
 of its own, for the same reason as the negative one.
 
 ## 7. Decisions the implementation takes inside the brief
 
-- **Where the entry lives.** The start and stop logic is a new safe crate,
-  `shekyl-daemon`, over `shekyl-daemon-config`, `shekyl-logging`,
-  `shekyl-ffi`'s Rust surface and `shekyl-runtime`. Its one C symbol,
-  `shekyl_daemon_main`, is defined there and carried into the archive by
-  `shekyl-daemon-image`, the composition root §2.1 names, as
-  `shekyl-ffi`'s exports are: `shekyl-ffi` cannot define it without
-  depending on crates that depend on `shekyl-ffi`. The C++ defines no
-  symbol Rust imports: `main()` hands the entry a `ShekylDaemonEntry` of
-  the version strings and two function pointers, `run` and `stop`, so no
-  Rust crate links against the daemon's objects, every Rust test drives
-  the entry with a fake pair, and the signature gate's rule that every
-  declared `shekyl_` function is a Rust export holds. The entry, the entry
-  types and the snapshot are `rust/shekyl-daemon/src/entry.rs`, a gate
-  surface; `shekyl_daemon_snapshot_field_count` is the export the C++
-  asserts, and the two `no_mangle` items carry the crate's only
-  `allow(unsafe_code)`, each scoped to itself.
+- **Where the entry lives.** `shekyld` is a rustc-linked binary
+  (`rust/shekyld`, `DAEMON_CONFIG_CUTOVER.md` DC-Q19): its `main` calls
+  `shekyl_daemon::main` with the remnant pair, and the start and stop
+  logic is the safe crate `shekyl-daemon`, over `shekyl-daemon-config`,
+  `shekyl-logging`, `shekyl-ffi`'s Rust surface and `shekyl-runtime`. The
+  C++ remnant is the callee, reached through `shekyl_remnant_run` /
+  `shekyl_remnant_stop` (`src/daemon/daemon.cpp`), bound in
+  `rust/shekyl-daemon/src/remnant.rs`; every Rust test drives the entry
+  with a fake pair. The snapshot is
+  `rust/shekyl-ffi/src/daemon_snapshot_ffi.rs`;
+  `shekyl_daemon_snapshot_field_count` is the export the C++ asserts. The
+  argument vector is `rust/shekyl-ffi/src/argument_vector.rs`:
+  `from_os_strings` over `std::env::args_os` for the daemon and
+  `from_narrow_argv` for the snapshot export. `shekyl-daemon` denies
+  `unsafe_code` and allows it on its `no_mangle` exports alone
+  (`shekyl_daemon_request_stop`); the one call of the remnant's `unsafe`
+  `run` is `SnapshotData::call` in `shekyl-ffi`, with its `SAFETY` comment.
 - **The daemon at each intermediate commit.** From commit (b) Rust owns
   `argv` and parses it with the grammar. Until commit (e) deletes the last
   C++ reader, C++ still reads options through `boost::program_options`, so
@@ -189,8 +192,8 @@ of its own, for the same reason as the negative one.
   the last act of §2.2 step 7, so its completion is the one signal that
   the core exists; no second export is needed for it. One server, one
   connection tracker, two routers: `rpc-admin-listen` at the admin
-  preset, `rpc-view-listen` at the view preset
-  (`rust/shekyl-daemon-rpc/src/server.rs`, `serve_presets`). The C++
+  listener, `rpc-view-listen` at the view listener
+  (`rust/shekyl-daemon-rpc/src/server.rs`, `serve_listeners`). The C++
   `core_rpc_server` is one object with no posture of its own: a bridged
   call carries its listener's posture as one of two origins
   (`core_rpc_ffi.cpp`, `rpc_origin`), `caller_is_restricted` reads the
@@ -213,7 +216,7 @@ of its own, for the same reason as the negative one.
   sequence runs on the main thread outside the owner's `block_on`: the
   RPC's stop blocks on its own runtime's drain, and a runtime cannot be
   entered from inside another's `block_on`.
-- **The managed Tor at steps 6, 8 and 9** (`rust/shekyl-daemon/src/tor.rs`).
+- **The managed Tor at steps 6, 8 and 9** (`rust/shekyl-daemon/src/tor/mod.rs`).
   Step 6 spawns `DaemonTorControl::start` on the owner's runtime, so
   discovery and bootstrap overlap the core's construction, and step 8
   awaits it after the RPC rendezvous; nothing blocks the remnant's start
@@ -311,7 +314,8 @@ of its own, for the same reason as the negative one.
   and is absent from both; `option_show` refuses it by name with
   `config.dev.network`, the startup parse's own refusal.
 - **The notify runner (commit (d), §2.10, DC-Q14).** The runner
-  ([`rust/shekyl-ffi/src/notify_ffi.rs`](../../rust/shekyl-ffi/src/notify_ffi.rs))
+  ([`rust/shekyl-daemon/src/notify.rs`](../../rust/shekyl-daemon/src/notify.rs);
+  `shekyl-ffi`'s `notify_ffi.rs` until the p2p remnant cutover, 2026-11-05)
   is installed by the Rust `main()` from the notify section beside the RPC
   configure, before the core exists, and its children run on the signal
   owner's runtime, so they are awaited by the process that spawned them and
@@ -577,13 +581,12 @@ of its own, for the same reason as the negative one.
   mining replies all passed `false`. The Rust loop's below-daemon OS
   priority (DRS-X PR 3) replaces it by design; the foreground loop stays,
   the live miner until the DRS-X flip routes the Rust loop.
-- **The C++ exports Rust imports are gated.** `check_ffi_signatures.sh`
-  covers Rust exports; `scripts/ci/check_cpp_import_signatures.py` covers
-  the other direction (the `extern "C"` block of
-  `shekyl-daemon-rpc/src/ffi.rs` against the headers under `src/`),
-  comparing arity and type classes, with test-module link stubs not
-  counted as exports. It was bitten on the posture parameter the one RPC
-  start needed.
+- **Rust imports no C++.** `scripts/ci/check_rust_only_daemon.py` holds
+  it on the Linux build: the staged `shekyld` needs no C++ runtime and
+  carries none of our C++'s symbols, and no `extern` block under `rust/`
+  imports a C-linkage name declared under `src/`.
+  `check_ffi_signatures.sh` covers the Rust exports the C++ tests and
+  debug utilities call.
 - **A test for every §6 row.** Commit (a) carries a table from each §6 row
   to its test. A row that only Windows can exercise names where it runs:
   the Windows CI job, or the Windows seat by hand. A `cfg(windows)` test

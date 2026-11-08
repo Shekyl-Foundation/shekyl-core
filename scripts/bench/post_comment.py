@@ -65,6 +65,13 @@ def _fmt_verdict_badge(verdict: str) -> str:
     }.get(verdict, verdict)
 
 
+def _fmt_moved_from(entry: dict[str, Any]) -> str:
+    """The cell suffix for an entry compared across a crate move."""
+    if "moved_from" not in entry:
+        return ""
+    return f" (moved from `{entry['moved_from'].split('/', 1)[0]}`)"
+
+
 def _fmt_host_line(host: dict[str, Any]) -> str:
     parts = []
     if host.get("cpu_model"):
@@ -113,6 +120,11 @@ def render(report: dict[str, Any], profile_artifact_url: str | None) -> str:
         lines.append(
             f"- **Missing in PR (treated as `fail`):** "
             f"{len(summary['missing_in_pr'])} entries — see table."
+        )
+    if summary.get("moved"):
+        lines.append(
+            f"- **Moved crate (compared across the move):** "
+            f"{len(summary['moved'])} entries — gated like any other."
         )
     if summary["added_in_pr"]:
         lines.append(
@@ -169,7 +181,7 @@ def render(report: dict[str, Any], profile_artifact_url: str | None) -> str:
     for e in sorted(report["entries"], key=_sort_key):
         lines.append(
             f"| {_fmt_verdict_badge(e['verdict'])} "
-            f"| `{e['full_id']}` "
+            f"| `{e['full_id']}`{_fmt_moved_from(e)} "
             f"| {e['class']} "
             f"| {e['baseline']:,} "
             f"| {e['pr']:,} "

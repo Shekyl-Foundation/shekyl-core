@@ -47,6 +47,7 @@ use ed25519_dalek::{
 use fips204::ml_dsa_65;
 use fips204::traits::{SerDes as _, Signer as _, Verifier as _};
 use serde::{Deserialize, Serialize};
+use shekyl_types::SigningPayloadHash;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub const HYBRID_KEY_VERSION: u8 = 1;
@@ -116,26 +117,17 @@ pub const SCHEME_DOMAIN_EMISSION_BACKING: &[u8] = b"shekyl/archival-emission-bac
 pub const SCHEME_DOMAIN_ATTESTATION: &[u8] = b"shekyl/archival-attestation-scheme-v3";
 /// Serve-credit response (surface F).
 pub const SCHEME_DOMAIN_SERVE_CREDIT: &[u8] = b"shekyl/archival-serve-credit-scheme-v1";
-/// A serve receipt, under scheme 3: `P`'s signature over the 112-byte
+/// A serve receipt, under scheme 3: `P`'s signature over the 113-byte
 /// delivery transcript with its **receipt key**
 /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6). Distinct from
 /// [`SCHEME_DOMAIN_ATTESTATION`], which names the same transcript under the
 /// identity key and scheme 1: one label never names two schemes.
 pub const SCHEME_DOMAIN_RECEIPT: &[u8] = b"shekyl/archival-receipt-scheme-v1";
-/// **SUPERSEDED** by [`SCHEME_DOMAIN_WITNESS_BUNDLE`] (`SCS-P16`): the
-/// witness's signature over a carrier's set commitment, under scheme 3.
-/// No signer and no verifier uses it; it stays registered so the label is
-/// never minted again for another message.
-pub const SCHEME_DOMAIN_WITNESS_CARRIER: &[u8] = b"shekyl/archival-witness-carrier-scheme-v1";
 /// The witness's signature over a bundle's commitment, under scheme 3 with
 /// the key generated fresh for the block and committed in its `0x0C`
 /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6.2, §7.3). The message is the 32-byte
 /// `shekyl/archival-serve-credit-bundle-v1` commitment
 /// (`shekyl_archival_retention::bundle_commitment`).
-///
-/// Distinct from the superseded [`SCHEME_DOMAIN_WITNESS_CARRIER`]: the
-/// bundle commitment is a different message from the carrier's set
-/// commitment, and one label never names two messages.
 pub const SCHEME_DOMAIN_WITNESS_BUNDLE: &[u8] = b"shekyl/archival-witness-bundle-scheme-v1";
 // Surface B (bond-post vin) has no scheme domain: the SA-2b reconciliation
 // (SIGNATURE_ALIGNMENT.md §2.2) ruled the bond vin's on-chain auth rides the
@@ -391,10 +383,11 @@ impl HybridEd25519MlDsa {
 }
 
 // Test-support surface (F-7). Behind `test-utils` (or `cfg(test)` in-crate).
-// **Not** a production isolation gate: `shekyl-ffi` enables `test-utils` so the
-// C++ unit tests can link the same archive as production — cargo feature
-// unification keeps these symbols in that artifact. The structural gate
-// (separate test-only archive / cmake feature) is tracked in FOLLOWUPS F-7.
+// **Not** a production isolation gate: `shekyl-p-serve`'s `test-signer` feature
+// forwards `test-utils` on a normal dependency edge, and cargo feature
+// unification keeps these symbols in any artifact built beside an enabler
+// (`scripts/ci/check_test_only_features.py`). The structural gate is tracked in
+// FOLLOWUPS F-7.
 // Names announce test-only intent; do not call from production paths.
 #[cfg(any(test, feature = "test-utils"))]
 impl HybridEd25519MlDsa {
@@ -508,7 +501,9 @@ impl SignatureScheme for HybridEd25519MlDsa {
 /// Anything else is [`PqcVerifyError::SchemeMismatch`]. Structural pins on
 /// the slot's *other* fields (`auth_version`, `flags`) are the wire's
 /// business (CEN-I16), not this function's: it is given the three blobs and
-/// the message and answers whether the signature is valid for them.
+/// the message and answers whether the signature is valid for them. The
+/// message is the input's [`SigningPayloadHash`] by type: that is what binds
+/// the slot to its network (`DOMAIN_BINDING_RATCHET.tsv`).
 ///
 /// `Result<()>`, never `Result<bool>` (SA-R-1): there is no `Ok(false)` to
 /// mishandle. The error is the discriminant the FFI has always exported —
@@ -522,7 +517,7 @@ pub fn verify_pqc_auth(
     scheme_id: u8,
     public_key: &[u8],
     signature: &[u8],
-    message: &[u8],
+    message: &SigningPayloadHash,
 ) -> Result<(), PqcVerifyError> {
     match scheme_id {
         HYBRID_SCHEME_ID_ED25519_ML_DSA_65 => {
@@ -531,7 +526,12 @@ pub fn verify_pqc_auth(
             let signature = HybridSignature::from_canonical_bytes(signature)
                 .map_err(|_| PqcVerifyError::DeserializationFailed)?;
             HybridEd25519MlDsa
-                .verify(&public_key, SCHEME_DOMAIN_PQC_AUTH_TX, message, &signature)
+                .verify(
+                    &public_key,
+                    SCHEME_DOMAIN_PQC_AUTH_TX,
+                    message.as_bytes(),
+                    &signature,
+                )
                 .map_err(|_| PqcVerifyError::CryptoVerifyFailed)
         }
         crate::multisig::HYBRID_SCHEME_ID_MULTISIG => {
@@ -570,6 +570,54 @@ mod tests {
         out
     }
 
+    /// The classical half is verified strictly. Under the identity key
+    /// (small order) the Ed25519 equation holds for `(R = [s]B, S = s)` over
+    /// any message, so a plain verify accepts this forgery; the strict
+    /// verify refuses it. The post-quantum half is a real signature, so the
+    /// classical check is the only thing that can refuse.
+    #[test]
+    fn hybrid_refuses_a_small_order_classical_key() {
+        use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+        let (pk, sk) = kp();
+        let msg = b"strict classical half";
+        let honest = scheme().sign(&sk, D, msg).unwrap();
+
+        let s = Scalar::from(7u64);
+        let mut forged_ed = (ED25519_BASEPOINT_POINT * s).compress().to_bytes().to_vec();
+        forged_ed.extend_from_slice(s.as_bytes());
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+
+        let weak_pk = HybridPublicKey {
+            ed25519: identity,
+            ml_dsa: pk.ml_dsa.clone(),
+        };
+        let forged = HybridSignature {
+            ed25519: forged_ed,
+            ml_dsa: honest.ml_dsa.clone(),
+        };
+        assert!(scheme().verify(&weak_pk, D, msg, &forged).is_err());
+    }
+
+    /// A classical key spelled non-canonically (y at or above p) is refused
+    /// by its encoding, before any signature check: `y = p + 1` decodes to
+    /// the same point as `y = 1`, and a key's bytes are signed content.
+    #[test]
+    fn hybrid_refuses_a_non_canonical_classical_key() {
+        let (mut pk, sk) = kp();
+        let msg = b"canonical key";
+        let sig = scheme().sign(&sk, D, msg).unwrap();
+        // p + 1 = 2^255 - 18, little-endian.
+        let mut p_plus_one = [0xffu8; 32];
+        p_plus_one[0] = 0xee;
+        p_plus_one[31] = 0x7f;
+        pk.ed25519 = p_plus_one;
+        assert!(matches!(
+            scheme().verify(&pk, D, msg, &sig),
+            Err(CryptoError::InvalidKeyMaterial)
+        ));
+    }
+
     #[test]
     fn keygen_sign_verify_roundtrip() {
         let scheme = scheme();
@@ -588,7 +636,7 @@ mod tests {
     fn verify_pqc_auth_dispatches_and_refuses_by_discriminant() {
         let scheme = scheme();
         let (pk, sk) = kp();
-        let msg = [0x5a; 32];
+        let msg = [0x5a; 64];
         let sig = scheme.sign(&sk, SCHEME_DOMAIN_PQC_AUTH_TX, &msg).unwrap();
         let pk_bytes = pk.to_canonical_bytes().unwrap();
         let sig_bytes = sig.to_canonical_bytes().unwrap();
@@ -596,7 +644,7 @@ mod tests {
             HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
             &pk_bytes,
             &sig_bytes,
-            &msg,
+            &SigningPayloadHash::from_bytes(msg),
         )
         .expect("a slot signed under the tx-auth domain verifies");
         assert_eq!(
@@ -604,7 +652,7 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes,
                 &sig_bytes,
-                &[0x5b; 32]
+                &SigningPayloadHash::from_bytes([0x5b; 64])
             ),
             Err(PqcVerifyError::CryptoVerifyFailed),
             "a different message"
@@ -612,7 +660,12 @@ mod tests {
         let mut forged = sig_bytes.clone();
         *forged.last_mut().unwrap() ^= 0x01;
         assert_eq!(
-            verify_pqc_auth(HYBRID_SCHEME_ID_ED25519_ML_DSA_65, &pk_bytes, &forged, &msg),
+            verify_pqc_auth(
+                HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                &pk_bytes,
+                &forged,
+                &SigningPayloadHash::from_bytes(msg)
+            ),
             Err(PqcVerifyError::CryptoVerifyFailed),
             "a well-formed signature that does not verify"
         );
@@ -621,7 +674,7 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes,
                 &sig_bytes[1..],
-                &msg
+                &SigningPayloadHash::from_bytes(msg)
             ),
             Err(PqcVerifyError::DeserializationFailed),
             "a signature that does not parse"
@@ -631,13 +684,18 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes[1..],
                 &sig_bytes,
-                &msg
+                &SigningPayloadHash::from_bytes(msg)
             ),
             Err(PqcVerifyError::DeserializationFailed),
             "a key that does not parse"
         );
         assert_eq!(
-            verify_pqc_auth(0x7f, &pk_bytes, &sig_bytes, &msg),
+            verify_pqc_auth(
+                0x7f,
+                &pk_bytes,
+                &sig_bytes,
+                &SigningPayloadHash::from_bytes(msg)
+            ),
             Err(PqcVerifyError::SchemeMismatch),
             "an unknown scheme"
         );
@@ -651,7 +709,7 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes,
                 &other.to_canonical_bytes().unwrap(),
-                &msg
+                &SigningPayloadHash::from_bytes(msg)
             ),
             Err(PqcVerifyError::CryptoVerifyFailed),
             "another surface's domain"

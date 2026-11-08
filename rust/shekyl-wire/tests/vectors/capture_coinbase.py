@@ -26,6 +26,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # checkout root (this file is rust/shekyl-wire/tests/vectors/ → 4 levels up). In a
 # git worktree the C++ build is usually in the main checkout; set SHEKYLD_BIN.
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+import armed_lever  # noqa: E402
 SHEKYLD = os.environ.get("SHEKYLD_BIN", os.path.join(ROOT, "build", "bin", "shekyld"))
 # Default to a freshly-derived current-format regtest address committed beside the
 # vectors (regenerate via `cargo test -p shekyl-wire --test emit_regtest_addr
@@ -63,22 +65,28 @@ def rpc(url, method, params=None):
     return res["result"]
 
 
-def start_daemon(workdir, attempts=5):
+def start_daemon(workdir, addr, attempts=5):
     """Launch shekyld, retrying on a fresh port if it dies before its RPC is ready.
 
     `free_port()` has an inherent TOCTOU race — the port can be claimed between the
     probe and shekyld's bind — which surfaces as the daemon exiting early. Detect that
     (and a plain readiness timeout) and retry on a new port instead of failing the whole
-    capture. Returns (daemon, url, log); raises if every attempt fails.
+    capture. A daemon that is up and did not announce the armed row is stopped and
+    the capture fails at once: that is the binary, not the port.
+    Returns (daemon, url, log); raises if every attempt fails.
     """
     last = "unknown"
+    unannounced = False
     for attempt in range(attempts):
         port = free_port()
         url = f"http://127.0.0.1:{port}/json_rpc"
         log = open(os.path.join(workdir, f"daemon.{attempt}.log"), "w")
+        # generateblocks is an armed test lever. The row is set on this
+        # spawn, and the announcement is checked once RPC is up.
         daemon = subprocess.Popen(
             [SHEKYLD, "--network", "regtest", "--clearnet", "off", "--tor", "off",
-             "--dev-difficulty", "1", "--data-dir", workdir,
+             "--dev-difficulty", "1", armed_lever.FLAG, "--mine-address", addr,
+             "--data-dir", workdir,
              "--log-file", os.path.join(workdir, "shekyld.log"),
              "--rpc-admin-listen", f"127.0.0.1:{port}", "--log-level", "warn"],
             stdout=log, stderr=subprocess.STDOUT)
@@ -88,10 +96,20 @@ def start_daemon(workdir, attempts=5):
                         "— likely a port conflict")
                 break
             try:
-                if rpc(url, "get_info").get("status") == "OK":
-                    return daemon, url, log
+                ready = rpc(url, "get_info").get("status") == "OK"
             except Exception:
-                pass
+                ready = False
+            if ready:
+                if armed_lever.announced_since(log.name, 0):
+                    return daemon, url, log
+                # Up, and this spawn did not announce the row. Retrying the
+                # same binary will not announce it either, so stop here.
+                last = (
+                    f"the daemon did not announce {armed_lever.ANNOUNCEMENT!r} "
+                    f"at start; see {log.name}"
+                )
+                unannounced = True
+                break
             time.sleep(0.5)
         else:
             last = f"daemon RPC not ready after ~60s on port {port} (see {log.name})"
@@ -102,16 +120,39 @@ def start_daemon(workdir, attempts=5):
             except subprocess.TimeoutExpired:
                 daemon.kill()
         log.close()
+        if unannounced:
+            raise RuntimeError(last)
     raise RuntimeError(f"shekyld failed to start after {attempts} attempts: {last}")
+
+
+def await_posted(url, timeout_s=60):
+    """Wait for the daemon's first posted template.
+
+    A regtest daemon with no peers reads Synced at open and posts a template
+    once its follower has looped; a `generateblocks` sent before that is
+    refused `mine.not_synced` (`no_view`), honestly. Ready is the first posted
+    job, as in the Rust harness (`regtest_e2e.rs` `await_posted`).
+    """
+    deadline = time.monotonic() + timeout_s
+    last = "no answer"
+    while time.monotonic() < deadline:
+        try:
+            rpc(url, "get_miner_data")
+            return
+        except Exception as e:  # refused until the first post
+            last = str(e)
+        time.sleep(0.1)
+    raise RuntimeError(f"the daemon posted no template within {timeout_s}s; last answer: {last}")
 
 
 def main():
     with open(MINING_RECIPIENTS_PATH) as f:
         addr = json.load(f)["recipients"][0]["address"]
     workdir = tempfile.mkdtemp(prefix="cbcap_")
-    daemon, url, log = start_daemon(workdir)
+    daemon, url, log = start_daemon(workdir, addr)
     try:
-        rpc(url, "generateblocks", {"amount_of_blocks": N_BLOCKS, "wallet_address": addr})
+        await_posted(url)
+        rpc(url, "generateblocks", {"count": N_BLOCKS})
         hashes = {}
         for h in CAPTURE_HEIGHTS:
             blk = rpc(url, "get_block", {"height": h})

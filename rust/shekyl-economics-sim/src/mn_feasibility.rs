@@ -45,11 +45,9 @@
 
 use core::fmt;
 
-use shekyl_archival_retention::{
-    FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_N_GATHER_BOUND, MAX_HOLDINGS_SHARDS,
-    SETTLEMENT_EPOCH_BLOCKS,
-};
+use shekyl_archival_retention::{FAILURE_WINDOW_N_GATHER_BOUND, MAX_HOLDINGS_SHARDS};
 
+use crate::engine::SimParams;
 use crate::proxy::A5_REWARD_HORIZON_EPOCHS;
 
 /// Hard ceiling on `n`: production's prune-horizon bound, the largest window
@@ -77,6 +75,13 @@ const CAP_PAIR_BAND: [f64; 5] = [5_000.0, 10_000.0, 20_000.0, 40_000.0, 100_000.
 /// builds every [`MissModel`] through [`MissSources::at_coverage`], so a call
 /// site cannot hand the region a nominal `λ` where cap-delivered coverage
 /// belongs.
+/// The W₂ size ladder's measured single-attempt misses the 0.30 bound rests
+/// on (`ARCHIVAL_SHARD_T_DERIVATION.md` §10.6): with PoW on, on the worst day
+/// observed, and that day's 95 % upper bound. Inputs the report quotes.
+pub const W2_RIG_POW_ON_MISS: f64 = 0.041;
+pub const W2_RIG_WORST_DAY_MISS: f64 = 0.20;
+pub const W2_RIG_WORST_DAY_UPPER: f64 = 0.238;
+
 #[derive(Debug, Clone, Copy)]
 pub struct MissSources {
     /// Per-attempt transport failure. **0.30, retained and measured-supported**
@@ -390,13 +395,13 @@ impl FeasibilityTargets {
     /// - projection `40_000` pairs (twice the `k_cap` knee at 20 k, so the
     ///   cap bind is material: delivered = half the target)
     #[must_use]
-    pub fn operative_defaults() -> Self {
+    pub fn operative_defaults(run: &SimParams) -> Self {
         Self {
-            lambda_target: f64::from(shekyl_archival_retention::CHALLENGES_PER_PAIR_PER_EPOCH),
+            lambda_target: f64::from(crate::secret_draw::COUNTED_DRAWS),
             false_slash_target: 1e-3,
             free_ride_bound: 0.80,
             k_cap: 6.0,
-            seb: SETTLEMENT_EPOCH_BLOCKS as f64,
+            seb: run.archival().settlement_epoch_blocks as f64,
             projected_pairs: 40_000.0,
         }
     }
@@ -501,6 +506,7 @@ pub fn evaluate(
     sources: &MissSources,
     bond_life_epochs: f64,
     targets: &FeasibilityTargets,
+    run: &SimParams,
 ) -> FeasibilitySnapshot {
     let FeasibilityTargets {
         lambda_target,
@@ -522,7 +528,12 @@ pub fn evaluate(
         0.0
     };
 
-    let shipped = PinExposure::at(FAILURE_WINDOW_M, FAILURE_WINDOW_N, q, observation_ceiling);
+    let shipped = PinExposure::at(
+        run.archival().failure_window_m,
+        run.archival().failure_window_n,
+        q,
+        observation_ceiling,
+    );
 
     let mut sensitivity = Vec::with_capacity(SENSITIVITY_ATTEMPTS.len() * SENSITIVITY_F.len());
     for &attempts in &SENSITIVITY_ATTEMPTS {
@@ -535,8 +546,8 @@ pub fn evaluate(
             };
             let q_probe = probe.miss_given_observation();
             let pin = PinExposure::at(
-                FAILURE_WINDOW_M,
-                FAILURE_WINDOW_N,
+                run.archival().failure_window_m,
+                run.archival().failure_window_n,
                 q_probe,
                 observation_ceiling,
             );
@@ -558,8 +569,8 @@ pub fn evaluate(
         let probe = sources.at_coverage(lam);
         let q_probe = probe.miss_given_observation();
         let pin = PinExposure::at(
-            FAILURE_WINDOW_M,
-            FAILURE_WINDOW_N,
+            run.archival().failure_window_m,
+            run.archival().failure_window_n,
             q_probe,
             observation_ceiling,
         );
@@ -645,7 +656,11 @@ fn region_edges(
 
 /// Format a precomputed [`FeasibilitySnapshot`]. Prefer [`evaluate`] + this
 /// when the numbers are needed without prose.
-pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fmt::Result {
+pub fn write_report(
+    out: &mut impl fmt::Write,
+    snap: &FeasibilitySnapshot,
+    run: &SimParams,
+) -> fmt::Result {
     let t = &snap.targets;
     let model = &snap.model;
     let floor = t.false_slash_target;
@@ -659,8 +674,8 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
          DELIVERED lambda={DL:.3} (projection {PP:.0} pairs; k_cap binds past\n\
          {KNEE:.0} pairs, so target and delivered coincide only below that knee);\n\
          p_attempt={P:.3} (RETAINED 2026-10-02, measured-supported: the W2 size\n\
-         ladder's worst observed day missed 0.20, 95% upper bound 0.238, and its\n\
-         PoW-on window 0.041; reopens if a measured window's upper bound exceeds\n\
+         ladder's worst observed day missed {WD:.2}, 95% upper bound {WU:.3}, and its\n\
+         PoW-on window {PW:.3}; reopens if a measured window's upper bound exceeds\n\
          it), attempts={A} (ONE credited, deliberately: bad-day misses were mostly\n\
          circuit failures, correlated within a window, so a retry is not an\n\
          independent draw and is margin, not calibration),\n\
@@ -672,6 +687,9 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
         P = model.p_attempt,
         A = model.attempts,
         FI = model.fabrication_intensity,
+        WD = W2_RIG_WORST_DAY_MISS,
+        WU = W2_RIG_WORST_DAY_UPPER,
+        PW = W2_RIG_POW_ON_MISS,
     )?;
     writeln!(
         out,
@@ -686,8 +704,8 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
          coverage's version is independent (j miners, j circuits vs a attempts on\n\
          one client in one window).",
         OR = snap.observation_rate,
-        N = FAILURE_WINDOW_N,
-        SPAN = f64::from(FAILURE_WINDOW_N) / snap.observation_rate,
+        N = run.archival().failure_window_n,
+        SPAN = f64::from(run.archival().failure_window_n) / snap.observation_rate,
     )?;
     writeln!(
         out,
@@ -731,7 +749,7 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
     // P(any) is the operative frame: a slash opens a record-scoped bad
     // interval (excludes the whole record from r_market, blocks HoldingsUpdate
     // until Reinstate). Expected pairs lost prices only the burn.
-    let bond_floor_skl = crate::proxy::bond_at_risk_skl();
+    let bond_floor_skl = crate::proxy::bond_at_risk_skl(run);
     writeln!(
         out,
         "  EXPOSURE FRAMING — RULED: P(any pair slashed) is the operative frame,\n\
@@ -763,8 +781,8 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
          floor must be read against the targeted one. Rows are evaluated at the\n\
          operative delivered coverage; r stays unpinned pending the PoW-enabled\n\
          rig re-run.",
-        SM = FAILURE_WINDOW_M,
-        SN = FAILURE_WINDOW_N,
+        SM = run.archival().failure_window_m,
+        SN = run.archival().failure_window_n,
     )?;
     writeln!(
         out,
@@ -893,8 +911,9 @@ pub fn mn_feasibility_report(
     sources: &MissSources,
     bond_life_epochs: f64,
     targets: &FeasibilityTargets,
+    run: &SimParams,
 ) -> fmt::Result {
-    write_report(out, &evaluate(sources, bond_life_epochs, targets))
+    write_report(out, &evaluate(sources, bond_life_epochs, targets, run), run)
 }
 
 #[cfg(test)]
@@ -906,15 +925,22 @@ mod tests {
         evaluate(
             &default_sources(),
             BOND_LIFE_EPOCHS,
-            &FeasibilityTargets::operative_defaults(),
+            &FeasibilityTargets::operative_defaults(&SimParams::default()),
+            &SimParams::default(),
         )
     }
 
     #[test]
     fn shipped_pin_clearance_is_a_snapshot_property() {
         let snap = default_snapshot();
-        assert_eq!(snap.shipped.m, FAILURE_WINDOW_M);
-        assert_eq!(snap.shipped.n, FAILURE_WINDOW_N);
+        assert_eq!(
+            snap.shipped.m,
+            SimParams::default().archival().failure_window_m
+        );
+        assert_eq!(
+            snap.shipped.n,
+            SimParams::default().archival().failure_window_n
+        );
         // Clearance and region membership are snapshot booleans — not report
         // string scraping.
         let clears = snap.shipped.clears_floor(snap.targets.false_slash_target);
@@ -944,7 +970,7 @@ mod tests {
         let row = snap
             .region
             .iter()
-            .find(|r| r.n == FAILURE_WINDOW_N)
+            .find(|r| r.n == SimParams::default().archival().failure_window_n)
             .expect("region includes shipped n");
         // Either the shipped m is inside the band, or the row is infeasible /
         // m is outside — both are legitimate snapshot outcomes; the contract
@@ -1007,10 +1033,13 @@ mod tests {
 
     #[test]
     fn union_bound_is_an_upper_bound_and_tight_where_it_matters() {
-        let (m, n) = (FAILURE_WINDOW_M, FAILURE_WINDOW_N);
+        let (m, n) = (
+            SimParams::default().archival().failure_window_m,
+            SimParams::default().archival().failure_window_n,
+        );
         let obs = 120u64;
         for &q in &[1e-4_f64, 1e-3, 1e-2] {
-            let exact = first_slash_probability(q, obs);
+            let exact = first_slash_probability(q, obs, &SimParams::default());
             let bound = false_slash_bound(m, n, q, obs as f64);
             assert!(
                 exact > 0.0,
@@ -1066,7 +1095,10 @@ mod tests {
             };
             let rate = m.observation_rate();
             assert!(rate < 1.0 && rate > 0.0);
-            assert!(f64::from(FAILURE_WINDOW_N) / rate > f64::from(FAILURE_WINDOW_N));
+            assert!(
+                f64::from(SimParams::default().archival().failure_window_n) / rate
+                    > f64::from(SimParams::default().archival().failure_window_n)
+            );
         }
     }
 
@@ -1092,11 +1124,15 @@ mod tests {
     fn the_bound_holds_against_the_worst_realized_observation_count() {
         // Ceiling = bond_life dominates every realizable count; expectation
         // pricing is strictly smaller and would void the upper-bound claim.
-        let (m, n, q) = (FAILURE_WINDOW_M, FAILURE_WINDOW_N, 1e-2_f64);
+        let (m, n, q) = (
+            SimParams::default().archival().failure_window_m,
+            SimParams::default().archival().failure_window_n,
+            1e-2_f64,
+        );
         let bond_life = 131.0_f64;
         let bound = false_slash_bound(m, n, q, bond_life);
         for realized in [60u64, 100, 131] {
-            let exact = first_slash_probability(q, realized);
+            let exact = first_slash_probability(q, realized, &SimParams::default());
             assert!(exact > 0.0, "kernel returned no mass at {realized} draws");
             assert!(
                 bound + 1e-18 >= exact,
@@ -1184,7 +1220,7 @@ mod tests {
     fn write_report_emits_ceiling_wording_not_arrow_equality() {
         let snap = default_snapshot();
         let mut buf = String::new();
-        write_report(&mut buf, &snap).unwrap();
+        write_report(&mut buf, &snap, &SimParams::default()).unwrap();
         assert!(
             buf.contains("union-bound ceiling"),
             "report must name the ceiling, not imply bond_life = E[obs]"

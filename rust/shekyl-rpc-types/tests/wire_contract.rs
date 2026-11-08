@@ -12,15 +12,35 @@
 //! frozen (§8 freeze rule), is a coordinated wire-version bump per the §2.3
 //! schema-evolution rule, never an incidental edit.
 
-use shekyl_rpc_types::{RejectCause, SubmitTransactionRequest, SubmitVerdict};
+use shekyl_rpc_types::{PoolRelay, RejectCause, SubmitTransactionRequest, SubmitVerdict};
 
 /// Every verdict variant, with its frozen wire representation.
 fn frozen_corpus() -> Vec<(SubmitVerdict, &'static str)> {
     vec![
         (SubmitVerdict::Accepted, r#"{"verdict":"accepted"}"#),
         (
-            SubmitVerdict::AlreadyInPool,
-            r#"{"verdict":"already_in_pool"}"#,
+            SubmitVerdict::AlreadyInPool {
+                relay: PoolRelay::Held,
+            },
+            r#"{"verdict":"already_in_pool","relay":"held"}"#,
+        ),
+        (
+            SubmitVerdict::AlreadyInPool {
+                relay: PoolRelay::HeldOverdue,
+            },
+            r#"{"verdict":"already_in_pool","relay":"held_overdue"}"#,
+        ),
+        (
+            SubmitVerdict::AlreadyInPool {
+                relay: PoolRelay::Published,
+            },
+            r#"{"verdict":"already_in_pool","relay":"published"}"#,
+        ),
+        (
+            SubmitVerdict::AlreadyInPool {
+                relay: PoolRelay::Untracked,
+            },
+            r#"{"verdict":"already_in_pool","relay":"untracked"}"#,
         ),
         (
             SubmitVerdict::AlreadyInChain { height: 1_234_567 },
@@ -29,44 +49,53 @@ fn frozen_corpus() -> Vec<(SubmitVerdict, &'static str)> {
         (
             SubmitVerdict::Rejected {
                 cause: RejectCause::Malformed,
+                row: None,
             },
             r#"{"verdict":"rejected","cause":"malformed"}"#,
         ),
         (
             SubmitVerdict::Rejected {
                 cause: RejectCause::FeeTooLow,
+                row: None,
             },
             r#"{"verdict":"rejected","cause":"fee_too_low"}"#,
         ),
         (
             SubmitVerdict::Rejected {
                 cause: RejectCause::DoubleSpendConflict,
+                row: None,
             },
             r#"{"verdict":"rejected","cause":"double_spend_conflict"}"#,
         ),
         (
             SubmitVerdict::Rejected {
                 cause: RejectCause::StaleRoot,
+                row: None,
             },
             r#"{"verdict":"rejected","cause":"stale_root"}"#,
         ),
         (
             SubmitVerdict::Rejected {
                 cause: RejectCause::ReferenceTooRecent,
+                row: None,
             },
             r#"{"verdict":"rejected","cause":"reference_too_recent"}"#,
         ),
         (
             SubmitVerdict::Rejected {
                 cause: RejectCause::ReferenceNotFound,
+                row: None,
             },
             r#"{"verdict":"rejected","cause":"reference_not_found"}"#,
         ),
+        // 3.63: a consensus row refused at the pool's commit, the row as the
+        // reply's diagnostic parameter.
         (
             SubmitVerdict::Rejected {
-                cause: RejectCause::JoinMarketUnsupported,
+                cause: RejectCause::ConsensusRule,
+                row: Some("CEN-J15".to_owned()),
             },
-            r#"{"verdict":"rejected","cause":"join_market_unsupported"}"#,
+            r#"{"verdict":"rejected","cause":"consensus_rule","row":"CEN-J15"}"#,
         ),
         // `Unrecognized` is deserialize-side only in the protocol (a daemon
         // never authors it), but the type can express it and its
@@ -74,6 +103,7 @@ fn frozen_corpus() -> Vec<(SubmitVerdict, &'static str)> {
         (
             SubmitVerdict::Rejected {
                 cause: RejectCause::Unrecognized,
+                row: None,
             },
             r#"{"verdict":"rejected","cause":"unrecognized"}"#,
         ),
@@ -109,9 +139,15 @@ fn tag_position_is_not_load_bearing() {
     assert_eq!(
         parsed,
         SubmitVerdict::Rejected {
-            cause: RejectCause::StaleRoot
+            cause: RejectCause::StaleRoot,
+            row: None,
         }
     );
+}
+
+#[test]
+fn already_in_pool_without_a_relay_is_a_deserialization_error() {
+    assert!(serde_json::from_str::<SubmitVerdict>(r#"{"verdict":"already_in_pool"}"#).is_err());
 }
 
 #[test]

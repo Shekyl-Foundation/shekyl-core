@@ -54,7 +54,7 @@
 //!
 //! # Value types
 //!
-//! Every **map** value is one of four named shapes (`codec::shape`;
+//! Every **map** value is one of three named shapes (`codec::shape`;
 //! `DAEMON_REDB_STORE.md` §11.1(f)) — `&[u8]` is not a value type:
 //!
 //! - [`Coded<V>`] — rows are `V::encode` under a [`Canonical`] codec; the
@@ -67,11 +67,6 @@
 //!   [`BlobKind`] names the kind.
 //! - [`Present`] — a set-table: the key is the member, the value is a
 //!   zero-width witness (`spent_keys`).
-//! - [`Unshaped`] — a censused table no Rust writer has reached. Its row
-//!   type is uninhabited: catalogued (it has an ordinal), refused by the
-//!   journal replay, **not seal-created** (`Restorable::SEALED = false`),
-//!   **not insertable**. The increment that first writes the
-//!   table replaces this with its codec and bumps `SCHEMA_VERSION`.
 //!
 //! There is no multimap in the catalogue: LMDB's one `DUPSORT` table,
 //! `output_amounts`, is a keyed `(amount, amount_index)` tuple (S-OUT-KI
@@ -146,16 +141,16 @@
 //! entry that names a twin no other file defines is red as well. The class
 //! table stays the LMDB inventory: both keep their `Excluded` rows there.
 //!
-//! # The seal creates every table with a writer
+//! # The seal creates every catalogued table
 //!
-//! From S-CHAIN-R's layout commit (amendment A2, SCR-17) `header::seal` opens
-//! — and so creates — every table whose value shape is not [`Unshaped`], in
-//! the create transaction, and `header::verify` refuses a sealed file that
-//! lacks one (SI-7, the table named as the cell). So a reader that meets
+//! From S-CHAIN-R's layout commit (amendment A2, SCR-17) `header::seal`
+//! opens — and so creates — every catalogued table, in the create
+//! transaction, and `header::verify` refuses a sealed file that lacks one
+//! (SI-7, the table named as the cell). So a reader that meets
 //! `TableDoesNotExist` on a chain table is looking at a file this store did
-//! not write, and *absent table* never has to be read as *empty table*. The
-//! set is derived from the shapes, not kept as a second list: a table gets a
-//! writer by leaving `Unshaped`, and is sealed by the same edit.
+//! not write, and *absent table* never has to be read as *empty table*. A
+//! table enters the catalogue with its writer and its codec, so there is no
+//! second list of tables the seal covers.
 
 use redb::{TableDefinition, TableHandle, TypeName};
 
@@ -168,11 +163,12 @@ use shekyl_units::AtomicUnits;
 use crate::codec::{
     AltBlock, AltBodies, AttestationWitnessBytes, Blob, BlockBody, BlockDraws, BlockInfo,
     BondRecord, Coded, CompleteTreeSet, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw,
-    LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RecordedPow,
-    RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry, TxIndex, TxOutputIndices,
-    TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
+    LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, QueuedBody, QueuedBundle,
+    RMarket, RecordedPow, RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    SupportCount, SupportIssued, SupportSeats, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
+    TxPrunableSegment, TxPrunedSegment, UndoLog,
 };
-use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple};
+use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple, SupportIssuedTuple};
 use crate::lmdb_order::LmdbHashKey;
 use crate::store::undo::UndoTarget;
 
@@ -238,8 +234,8 @@ pub(crate) fn undo_target(ordinal: TableOrdinal) -> Option<&'static dyn UndoTarg
 /// must **not** have a definition in this file, its twin must be a
 /// definition in `crate::pool::schema`, and two entries must not name the
 /// same twin; `check_redb_schema_key_types.py` has no definition here to
-/// constrain and is told so. The class table (`accumulator/class.rs`) is
-/// the LMDB inventory and keeps a row for each.
+/// constrain and is told so. The class table names the Rust twin, not
+/// this LMDB spelling.
 pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
     (
         "txpool_meta",
@@ -265,8 +261,7 @@ pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
 /// must **not** have a definition in this file, and its host must be a
 /// definition in this file; `check_redb_schema_key_types.py` has no
 /// definition here to constrain and its floor moved with the fold. The
-/// class table (`accumulator/class.rs`) is the LMDB inventory and keeps a
-/// row for each.
+/// class table names the host table, not this LMDB spelling.
 pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
     "archival_alt_attestation_witness",
     "alt_blocks",
@@ -288,11 +283,10 @@ pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
 /// relationships that the gate cannot tell apart and a reader must: a
 /// journal whose function `undo_log` performs (the data is there, as
 /// pre-images) and a table retired by ruling (the data is nowhere, and
-/// nothing was lost). Each reason leads with which. The class table
-/// (`accumulator/class.rs`) is the LMDB inventory and keeps a row for each.
-/// This is not a deletion register — the C++ tables live until cutover — it
-/// is the record that the Rust store answered the requirement without the
-/// table, and why.
+/// nothing was lost). Each reason leads with which. The class table does
+/// not name these LMDB spellings. The C++ tables were deleted with the
+/// store. This is the record that the Rust store answered the requirement
+/// without the table, and why.
 pub const NOT_PORTED: &[(&str, &str)] = &[
     (
         "archival_emission_claim_log",
@@ -301,24 +295,9 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
          was a reversal-only journal, a materialised view of that log (DRS-E4 ARW-2, ARW-Q2)",
     ),
     (
-        "archival_bond_unbond_log",
-        "held by `undo_log`, as the record's and the total's pre-images: the C++ pop journal \
-         for a Release (db_lmdb.cpp:6198, `release_pop` reconstructs the pre-image) rebuilt \
-         what the log stores outright, and the pop fold has no caller (DRS-E4 ARW-2, ARW-Q2). \
-         The record's pre-image is also kept past the undo window, as history, by the Rust-only \
-         archival_release_journal: a different key and retention, read by the walk that \
-         rebuilds an epoch's drawable set and never by pop (SO-D12 increment 2)",
-    ),
-    (
-        "archival_bond_holdings_update_log",
-        "held nowhere, and nothing was lost — the table was empty by construction: \
-         HoldingsUpdate is REJECTED (immutable bond, 2026-09-20), its appliers are no-ops and \
-         its revert a named no-op (db_lmdb.cpp:6270, blockchain_db.cpp:773) (DRS-E4 ARW-14)",
-    ),
-    (
         "archival_bond_reinstate_log",
         "held by `undo_log`, as the record's pre-image: the C++ pop journal for a Reinstate \
-         (db_lmdb.cpp:6342, `reinstate_pop`) was a view of that log (DRS-E4 ARW-2, ARW-Q2)",
+         was a view of that log, and is deleted (DRS-E4 ARW-2, ARW-Q2; DEL-008)",
     ),
     (
         "archival_epoch_close_log",
@@ -339,7 +318,8 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
         "held nowhere; retired by ruling (PDM-Q12, 2026-09-18), never a fact of this store, \
          nothing migrated: a shard is `[k*W, (k+1)*W)` of `cumulative_archival_len`, closed \
          by `shekyl_types::shard_of` (`SHT-Q2`, DRS-E4 §3.7), so a freeze registry has no \
-         job; the C++ J-segment table lives until cutover (CEN-L10; DRS-E4 ARW-4, SAR-5)",
+         job; the C++ J-segment table was deleted with the store flip \
+         (CEN-L10, bucket 3, 2026-10-28; DRS-E4 ARW-4, SAR-5)",
     ),
     (
         "pending_tree_leaves",
@@ -374,12 +354,10 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
 ];
 
 /// Tables this crate defines that have **no** X-macro twin, each with the
-/// reason it exists. Read by `check_redb_schema_bijection.py` (a definition
-/// is either mirrored or named here — never silently extra) and by
-/// `check_redb_schema_key_types.py` (no LMDB flags to derive a key type
-/// from). Out of the digest domain by construction: the accumulator's
-/// class table is the LMDB inventory, and a table absent from it with a
-/// reason here is a named exclusion, not an omission.
+/// reason it exists. The bijection gate compares definitions to the class
+/// table and does not read this list. Out of the digest domain by
+/// construction: each of these tables is `Excluded` in the class table,
+/// and the reason here is why.
 pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
     (
         "archival_budget_accruing",
@@ -472,9 +450,8 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          h_open of the settling family's oldest kept epoch (SO-D12h): the walk that \
          rebuilds an epoch's drawable set at its settlement, two \
          epochs after it opened, restores it, as it gives back the shards the slash log says \
-         were taken. The undo log holds the same pre-image only for its window. The C++ \
-         archival_bond_unbond_log is a pop journal with no reader past pop (NOT_PORTED), so \
-         LMDB holds nothing a reader past the window can use",
+         were taken. The undo log holds the same pre-image only for its window, and no other \
+         table keeps it past that window",
     ),
     (
         "archival_complete_trees",
@@ -483,6 +460,48 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          fact, since a complete tree slashed or released afterwards holds a compact set, so a \
          claim's re-gather reads the flag here. The C++ gathers at the epoch close and reads \
          the records as they are now, so LMDB never holds it",
+    ),
+    (
+        "archival_support_unissued",
+        "one complete tree's unissued support draws in one epoch, capped at c \
+         (ARCHIVAL_SUPPORT_DRAW.md §5): a scheduled block the producer did not file. It is not \
+         the economy's shortfall and it is not issued_short. The C++ draws no support stream, \
+         so LMDB never holds it",
+    ),
+    (
+        "archival_support_block",
+        "the complete trees one block seated on the support stream, in persona order \
+         (ARCHIVAL_SUPPORT_DRAW.md §5; SO-D12 S1): its length is the width of that block's \
+         support bitmap. The C++ draws no support stream, so LMDB never holds it",
+    ),
+    (
+        "archival_support_issued",
+        "one complete tree's issued support draws in one epoch (ARCHIVAL_SUPPORT_DRAW.md §3): \
+         the shard each draw selected and whether a pass was admitted. The settlement row is \
+         one per tree, so the shard is the value. The C++ draws no support stream, so LMDB \
+         never holds it",
+    ),
+    (
+        "archival_support_settlement",
+        "what one complete tree settled for one epoch (ARCHIVAL_SUPPORT_DRAW.md §3): the same \
+         three-byte settlement row the economy writes per pair. Keyed by the tree and the \
+         epoch, not by a shard. The C++ draws no support stream, so LMDB never holds it",
+    ),
+    (
+        "archival_bundle_queue",
+        "the pool's own structure for serve-credit bundles (ARCHIVAL_SERVE_CREDIT_SPEC.md §7.5, \
+         SO-D12 increment 4c): one admitted bundle reference per block height inside the \
+         response window, with the tip it was judged against. The C++ has no bundle and no \
+         queue: its challenge path is the public urn deleted with its consensus role \
+         (DEL-008), so LMDB never holds it. Not chain state: Excluded from every digest, as \
+         alt_blocks is",
+    ),
+    (
+        "archival_bundle_body",
+        "a bundle's prunable bytes keyed by the hash its reference names (§7.5): a block will \
+         carry references, never bodies, and pull a body from here by that hash. Every body \
+         has a holder (SI-41). Absent from LMDB for the reason archival_bundle_queue is. Not \
+         chain state: Excluded from every digest",
     ),
 ];
 
@@ -557,9 +576,6 @@ tables! {
     /// `block_info` — zerokval collapse: dup height (`compare_uint64`) becomes the key.
     pub const BLOCK_INFO: TableDefinition<u64, Coded<BlockInfo>> = TableDefinition::new("block_info");
 
-    /// `txs` — INTEGERKEY. Dead (DRS-W4): no runtime rows.
-    pub const TXS: TableDefinition<u64, Unshaped> = TableDefinition::new("txs");
-
     /// `txs_pruned` — INTEGERKEY; tx_id → pruned blob.
     pub const TXS_PRUNED: TableDefinition<u64, Blob<TxPrunedSegment>> = TableDefinition::new("txs_pruned");
 
@@ -605,13 +621,10 @@ tables! {
     pub const ALT_BLOCKS: TableDefinition<LmdbHashKey, Coded<AltBlock>> =
         TableDefinition::new("alt_blocks");
 
-    /// `hf_starting_heights` — default flags. Dead (DRS-W5): no runtime rows.
-    pub const HF_STARTING_HEIGHTS: TableDefinition<&[u8], Unshaped> =
-        TableDefinition::new("hf_starting_heights");
-
-    /// `hf_versions` — INTEGERKEY; height → hf version.
-    pub const HF_VERSIONS: TableDefinition<u64, Coded<RuleSetInForce>> =
-        TableDefinition::new("hf_versions");
+    /// `rule_set_in_force` — height → the rule set in force there (CEN-B3's
+    /// belt), the rules crate's id as its raw `u8`.
+    pub const RULE_SET_IN_FORCE: TableDefinition<u64, Coded<RuleSetInForce>> =
+        TableDefinition::new("rule_set_in_force");
 
     /// `properties` — `compare_string` == byte-lex + length tiebreak == `&str` order.
     /// The one per-key codec: each `PropertyCell` names its value's, so the
@@ -866,6 +879,59 @@ tables! {
     /// not settled. Appended last (ordinal 45).
     pub const ARCHIVAL_COMPLETE_TREES: TableDefinition<u64, Coded<CompleteTreeSet>> =
         TableDefinition::new("archival_complete_trees");
+
+    /// `archival_support_unissued` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// `(persona, epoch)` → the [`SupportCount`] of support draws scheduled
+    /// for that tree in that epoch and not filed, capped at `c`
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Not the economy's shortfall.
+    /// Ordinal 44.
+    pub const ARCHIVAL_SUPPORT_UNISSUED: TableDefinition<([u8; 32], u64), Coded<SupportCount>> =
+        TableDefinition::new("archival_support_unissued");
+
+    /// `archival_support_block` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// height → the [`SupportSeats`] that block seated: the complete trees
+    /// in persona order, whose length is the width of its support bitmap
+    /// (`SO-D12` S1). Written when the block connects, insert-once (SI-40),
+    /// the empty row included: a block that seated nobody still has a row.
+    /// A height with no row was not connected. Retired with
+    /// [`ARCHIVAL_BLOCK_DRAWS`] on the draw rows' floor (SI-34). Ordinal 45.
+    pub const ARCHIVAL_SUPPORT_BLOCK: TableDefinition<u64, Coded<SupportSeats>> =
+        TableDefinition::new("archival_support_block");
+
+    /// `archival_support_issued` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// `(epoch, persona, height, draw)` → the [`SupportIssued`] row: the
+    /// shard the draw selected and whether a pass was admitted
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Epoch-major, so one tree's epoch
+    /// is one range in `(height, draw)` order. Ordinal 46.
+    pub const ARCHIVAL_SUPPORT_ISSUED: TableDefinition<SupportIssuedTuple, Coded<SupportIssued>> =
+        TableDefinition::new("archival_support_issued");
+
+    /// `archival_support_settlement` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// `(persona, epoch)` → the [`SettlementRow`] of that tree in that
+    /// epoch. One row per tree, not per shard. Written by the slash pass
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Ordinal 47.
+    pub const ARCHIVAL_SUPPORT_SETTLEMENT: TableDefinition<([u8; 32], u64), Coded<SettlementRow>> =
+        TableDefinition::new("archival_support_settlement");
+
+    /// `archival_bundle_queue` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// height `h` → the [`QueuedBundle`]: the reference of the one bundle
+    /// for `h` the queue admitted, and the tip it judged it against
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5, `SO-D12` increment 4c). One
+    /// entry per `h`, the first valid one; at most `W₂` entries, since an
+    /// entry leaves when its window closes. Not chain state: written
+    /// outside any pop recording, as `alt_blocks` is. Its body is in
+    /// [`ARCHIVAL_BUNDLE_BODY`] (SI-41). Appended last but one (ordinal 50).
+    pub const ARCHIVAL_BUNDLE_QUEUE: TableDefinition<u64, Coded<QueuedBundle>> =
+        TableDefinition::new("archival_bundle_queue");
+
+    /// `archival_bundle_body` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// prunable hash → the [`QueuedBody`]: a bundle's prunable bytes, keyed
+    /// by the hash its reference names (§7.5). Every body has a holder
+    /// (SI-41): in 4c the queue; an alternative block and a main-chain
+    /// block not past `D_max` are 4b's holders. Not chain state, as the
+    /// queue is not. Appended last (ordinal 51).
+    pub const ARCHIVAL_BUNDLE_BODY: TableDefinition<[u8; 32], Coded<QueuedBody>> =
+        TableDefinition::new("archival_bundle_body");
 }
 
 #[cfg(test)]
@@ -905,15 +971,19 @@ mod tests {
             ("blocks", 0),
             ("block_heights", 1),
             ("block_info", 2),
-            ("tx_indices", 8),
-            ("output_amounts", 11),
-            ("spent_keys", 12),
+            ("tx_indices", 7),
+            ("output_amounts", 10),
+            ("spent_keys", 11),
             // Layout 12: `txpool_meta` (13) and `txpool_blob` (14) left for
             // the pool file (S-POOL), so everything after `spent_keys`
             // moved up by two — the bump this test exists to make visible.
-            ("hf_versions", 15),
-            ("properties", 16),
-            ("block_burn", 17),
+            // Layout 34: the dead `txs` (3) and `hf_starting_heights` (14)
+            // left, so everything after `block_info` moved up by one and
+            // everything after `spent_keys` by two; `hf_versions` became
+            // `rule_set_in_force`.
+            ("rule_set_in_force", 13),
+            ("properties", 14),
+            ("block_burn", 15),
             // Layout 13: `archival_alt_attestation_witness` (21) folded
             // into `alt_blocks` (S-ALT), so everything after it moved up by
             // one. Layout 15: four tree-side tables **not ported** (DRS-E3,
@@ -927,30 +997,38 @@ mod tests {
             // (22), the four revert logs (25–28), `archival_epoch_close_log`
             // (31), `archival_budget_accrual` (32) — and `archival_budget_accruing`
             // born at 27, so everything from `output_to_leaf` moved up by six.
-            ("archival_slash_applied", 22),
-            ("archival_slash_log", 23),
-            ("archival_budget_accruing", 27),
-            ("output_to_leaf", 28),
-            ("curve_tree_roots", 33),
-            ("curve_tree_leaf_counts", 34),
-            ("undo_log", 35),
-            ("txs_pqc_auth_hash", 36),
-            ("txs_archival_len", 37),
+            ("archival_slash_applied", 20),
+            ("archival_slash_log", 21),
+            ("archival_budget_accruing", 25),
+            ("output_to_leaf", 26),
+            ("curve_tree_roots", 31),
+            ("curve_tree_leaf_counts", 32),
+            ("undo_log", 33),
+            ("txs_pqc_auth_hash", 34),
+            ("txs_archival_len", 35),
             // Layout 22 (`SO-D10`) and layout 23 (`SO-D12`): four
             // Rust-only tables appended, two at a time.
-            ("archival_issued_draw", 38),
-            ("archival_issued_digest", 39),
-            ("archival_block_draws", 40),
-            ("archival_drawable_digest", 41),
+            ("archival_issued_draw", 36),
+            ("archival_issued_digest", 37),
+            ("archival_block_draws", 38),
+            ("archival_drawable_digest", 39),
             // Layout 26 (DRS-E5 switch PR): the recorded proof-of-work.
-            ("block_pow", 42),
+            ("block_pow", 40),
             // Layout 27 (DRS-E5 PR-b): an alternative block's bodies.
-            ("alt_block_bodies", 43),
+            ("alt_block_bodies", 41),
             // Layout 28 (`SO-D12` increment 2): the Release journal.
-            ("archival_release_journal", 44),
+            ("archival_release_journal", 42),
             // Layout 29 (`SO-D12h`): the complete trees a settled epoch's
             // market excluded, frozen at its slash pass.
-            ("archival_complete_trees", 45),
+            ("archival_complete_trees", 43),
+            ("archival_support_unissued", 44),
+            ("archival_support_block", 45),
+            ("archival_support_issued", 46),
+            ("archival_support_settlement", 47),
+            // Layout 33 (`SO-D12` increment 4c): the bundle queue and the
+            // body store.
+            ("archival_bundle_queue", 48),
+            ("archival_bundle_body", 49),
         ];
         for &(name, index) in pinned {
             assert_eq!(
@@ -983,8 +1061,12 @@ mod tests {
                 "{name}: a mirrored table's reason is a sentence, not a token"
             );
             assert!(
-                crate::accumulator::class_for_table(name).is_some(),
-                "{name}: the class table is the LMDB inventory and keeps this row"
+                crate::accumulator::class_for_table(twin).is_some(),
+                "{twin}: the pool twin has no class row"
+            );
+            assert!(
+                crate::accumulator::class_for_table(name).is_none(),
+                "{name}: the LMDB spelling is not a Rust table"
             );
         }
     }
@@ -1007,8 +1089,12 @@ mod tests {
                 "{name}: a folded table's reason is a sentence, not a token"
             );
             assert!(
-                crate::accumulator::class_for_table(name).is_some(),
-                "{name}: the class table is the LMDB inventory and keeps this row"
+                crate::accumulator::class_for_table(host).is_some(),
+                "{host}: the host table has no class row"
+            );
+            assert!(
+                crate::accumulator::class_for_table(name).is_none(),
+                "{name}: a folded LMDB name is not a Rust table"
             );
         }
     }
@@ -1026,9 +1112,10 @@ mod tests {
                 reason.split_whitespace().count() >= 8,
                 "{name}: a Rust-only table's reason is a sentence, not a token"
             );
-            assert!(
-                crate::accumulator::class_for_table(name).is_none(),
-                "{name}: a Rust-only table has no LMDB class row; its exclusion is the reason here"
+            assert_eq!(
+                crate::accumulator::class_for_table(name),
+                Some(crate::accumulator::AccumulatorClass::Excluded),
+                "{name}: a table LMDB never had is excluded from the digest"
             );
         }
     }

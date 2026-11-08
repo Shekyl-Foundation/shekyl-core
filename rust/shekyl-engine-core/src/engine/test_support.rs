@@ -415,10 +415,10 @@ fn default_fee_estimates() -> FeeEstimates {
 /// continuity check is exactly the comparison between them. Four fixtures
 /// with four derivations would make that agreement a coincidence to
 /// maintain. A fork fixture answers something else on purpose.
-pub fn test_block_hash_at(height: u64) -> [u8; 32] {
+pub fn test_block_hash_at(height: u64) -> BlockHash {
     let mut h = [0xB1u8; 32];
     h[..8].copy_from_slice(&height.to_le_bytes());
-    h
+    BlockHash::from_bytes(h)
 }
 
 /// How far above its chain count a syncing test daemon places
@@ -439,7 +439,7 @@ pub(crate) fn daemon_get_info(chain_count: u64, syncing: bool) -> serde_json::Va
         chain_count: ChainCount::from_raw(chain_count),
         target_height,
         synchronized: !syncing,
-        top_hash: BlockHash::from_bytes(test_block_hash_at(chain_count.saturating_sub(1))),
+        top_hash: test_block_hash_at(chain_count.saturating_sub(1)),
         has_peers: true,
     }
     .to_value()
@@ -745,7 +745,7 @@ impl Rpc for TestDaemon {
     fn get_block_hash(
         &self,
         number: usize,
-    ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+    ) -> impl Send + std::future::Future<Output = Result<shekyl_types::BlockHash, RpcError>> {
         async move { Ok(test_block_hash_at(number as u64)) }
     }
 
@@ -772,13 +772,11 @@ impl DaemonEngine for TestDaemon {
     /// Serve the in-memory chain directly, overriding the single fetch
     /// override point (the [`block_fetch`](super::block_fetch) default
     /// would drive the real RPC transport `TestDaemon::post` panics on).
-    /// The synthetic chain stores full bodies (nothing is ever pruned), so
-    /// the body `form` is irrelevant here — the same lookup serves both,
-    /// and the scripted error/reorg queues fire identically on either.
-    fn fetch_scannable_block_in_form(
+    /// The synthetic chain's bodies are whole and already bound
+    /// (`BoundTx::whole`); the scripted error/reorg queues fire here.
+    fn fetch_scannable_block(
         &self,
         number: usize,
-        _form: super::block_fetch::TxBodyForm,
     ) -> impl Send + std::future::Future<Output = Result<ScannableBlock, RpcError>> {
         let state = self.state.clone();
         async move {
@@ -873,7 +871,10 @@ impl DaemonEngine for TestDaemon {
             if state.submitted_hashes.insert(hash) {
                 Ok(TxSubmitOutcome::Submitted { hash })
             } else {
-                Ok(TxSubmitOutcome::AlreadyInPool { hash })
+                Ok(TxSubmitOutcome::AlreadyInPool {
+                    hash,
+                    relay: shekyl_rpc_types::PoolRelay::Published,
+                })
             }
         }
     }
@@ -1072,7 +1073,7 @@ pub(crate) fn seeded_tx_leaves(
 use crate::engine::{
     Credentials, DaemonClient, Engine, EngineCreateParams, OpenedEngine, SoloSigner,
 };
-use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+use shekyl_crypto_pq::account::SEED_BYTES;
 use shekyl_engine_file::SafetyOverrides;
 use shekyl_types::PSlot;
 use tempfile::TempDir;
@@ -1089,10 +1090,10 @@ pub(crate) fn dummy_daemon() -> DaemonClient {
     DaemonClient::new(rpc)
 }
 
-/// Deterministic master seed; `multiplier` keeps distinct suites on
+/// Deterministic wallet seed; `multiplier` keeps distinct suites on
 /// distinct wallets (each former private copy had its own).
-pub(crate) fn fixed_seed(multiplier: u8) -> [u8; MASTER_SEED_BYTES] {
-    let mut s = [0u8; MASTER_SEED_BYTES];
+pub(crate) fn fixed_seed(multiplier: u8) -> [u8; SEED_BYTES] {
+    let mut s = [0u8; SEED_BYTES];
     for (i, b) in s.iter_mut().enumerate() {
         *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(multiplier);
     }
@@ -1119,7 +1120,7 @@ pub(crate) fn non_staker_engine(seed_multiplier: u8) -> (TempDir, Engine<SoloSig
 /// `staking_enabled`, then reopens so the `StakeEngine` spawns). Idle — the
 /// caller activates a persona if it needs one
 /// ([`activate_persona`]).
-pub(crate) fn staker_engine(slot: u32, seed_multiplier: u8) -> (TempDir, Engine<SoloSigner>) {
+pub(crate) async fn staker_engine(slot: u32, seed_multiplier: u8) -> (TempDir, Engine<SoloSigner>) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let base = tmp.path().join("wallet");
     let (creds, seed) = (test_creds(), fixed_seed(seed_multiplier));
@@ -1129,7 +1130,7 @@ pub(crate) fn staker_engine(slot: u32, seed_multiplier: u8) -> (TempDir, Engine<
     engine
         .persist_bond_record(PSlot::from_raw(slot))
         .expect("persist bond record → staking_enabled");
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
     let opened = Engine::<SoloSigner>::open_full(
         &base,
         &creds,
@@ -1433,8 +1434,8 @@ mod tests {
 
         let expected = TxHash::from_bytes(shekyl_crypto_hash::keccak256(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
-        assert!(matches!(second, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
-        assert!(matches!(third, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
+        assert!(matches!(second, TxSubmitOutcome::AlreadyInPool { hash, .. } if hash == expected));
+        assert!(matches!(third, TxSubmitOutcome::AlreadyInPool { hash, .. } if hash == expected));
         assert_eq!(daemon.submitted_count(), 1, "dedup keeps the set size at 1");
     }
 
@@ -1489,7 +1490,7 @@ mod tests {
         let expected = TxHash::from_bytes(shekyl_crypto_hash::keccak256(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
         assert!(
-            matches!(second_via_clone, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected)
+            matches!(second_via_clone, TxSubmitOutcome::AlreadyInPool { hash, .. } if hash == expected)
         );
     }
 

@@ -39,7 +39,7 @@ use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 use shekyl_tx_builder::TreeContext;
 use shekyl_units::AtomicUnits;
 
-use shekyl_types::PCanonicalId;
+use shekyl_types::{PCanonicalId, SigningPayloadHash};
 
 use crate::engine::bond_assembly::{BondAssemblyError, FundingInputContext, PBoundBytes};
 use crate::engine::emission_source::{ClaimSourceFor, ServeAnchor, SlashWatermark};
@@ -165,14 +165,18 @@ impl ReleaseRecordState {
         // Both predicates are called unconditionally, on the operand form
         // `as_verify_operand` produces and nothing else. A tempting shortening
         // is to note that neither can refuse a never-served record
-        // (`release_cooldown_elapsed(None, _)` and `slashes_settled_through(_,
+        // (`release_cooldown_elapsed(None, _, shekyl_archival_retention::archival_params())` and `slashes_settled_through(_,
         // None)` are both `true`) and wrap the pair in a `ServedAt` match. That
         // trades a wrong message for a missing check: if either absent arm ever
         // moved, the match would *skip* the predicate instead of running it.
         // The refusals carry the anchor as read, so no branch here has to
         // restate what consensus does with `None`.
         let anchor = self.last_served.as_verify_operand();
-        if !release_cooldown_elapsed(anchor, self.current_settlement_epoch) {
+        if !release_cooldown_elapsed(
+            anchor,
+            self.current_settlement_epoch,
+            shekyl_archival_retention::archival_params(),
+        ) {
             return Err(ReleaseNotReady::CooldownNotElapsed {
                 last_served: self.last_served,
                 current_settlement_epoch: self.current_settlement_epoch,
@@ -393,6 +397,7 @@ impl Message<AssembleRelease> for StakeEngine {
 
         let assembled = assemble_signed_bond_post(
             BondPostAssembleArgs {
+                network: self.network,
                 keys,
                 persona,
                 funding: msg.funding,
@@ -405,7 +410,7 @@ impl Message<AssembleRelease> for StakeEngine {
                 bond_auth_pk,
                 output_site: "exit-output construction",
             },
-            |payload_hash| {
+            |payload_hash: &SigningPayloadHash| {
                 let sig = HybridEd25519MlDsa
                     .sign(
                         &keys.bond_spend_sk,

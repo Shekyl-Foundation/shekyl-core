@@ -148,7 +148,7 @@ pub(crate) struct ConsumerHeldEntry {
     /// Engine `synced_height` at build (defense-in-depth checks).
     pub built_at_height: shekyl_types::BlockHeight,
     /// `block_hash_at(built_at_height)` at build.
-    pub built_at_tip_hash: [u8; 32],
+    pub built_at_tip_hash: shekyl_types::BlockHash,
     /// Serialized signed transaction for daemon broadcast.
     pub tx_bytes: Vec<u8>,
     /// CT-5d: the original build request (recipients + priority). Re-anchor
@@ -192,7 +192,7 @@ impl ConsumerHeldEntry {
             created_at: Instant::now(),
             snapshot_id: SnapshotId([0u8; 16]),
             built_at_height: shekyl_types::BlockHeight::ZERO,
-            built_at_tip_hash: [0u8; 32],
+            built_at_tip_hash: BlockHash::from_bytes([0u8; 32]),
             tx_bytes,
             request: TxRequest {
                 recipients: Vec::new(),
@@ -419,9 +419,9 @@ impl SubmitLoopBreaker {
     /// the escalation point; there is never a third build.
     const TRIP_THRESHOLD: u8 = 2;
 
-    /// Which terminal kinds the breaker scopes over. `DoubleSpend` and
-    /// `JoinMarketUnsupported` are excluded: their disposition is terminal
-    /// release with no rebuild prescription, so there is no loop to break.
+    /// Which terminal kinds the breaker scopes over. `DoubleSpend` is
+    /// excluded: its disposition is terminal release with no rebuild
+    /// prescription, so there is no loop to break.
     pub(super) fn in_scope(kind: TerminalErrorKind) -> bool {
         matches!(
             kind,

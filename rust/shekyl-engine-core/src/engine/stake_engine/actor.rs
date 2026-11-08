@@ -66,17 +66,14 @@ pub(crate) struct StakeEngine {
     /// into a bond post. **Never persisted**; cleared per-record when the
     /// task's held list drops the record.
     pub(crate) watch_quarantine: BTreeSet<shekyl_types::GlobalOutputIndex>,
-    /// `P`'s serving body store (`WSS-Q1`(a)). Fill (`WSS-Q4`) is not
-    /// written. Erase at the second absent epoch (`WSS-Q8`) is an ask
-    /// this actor handles; the serving host does not hold the writer.
-    /// `ServingBodies` hands the serve task a reader, which still decrypts,
-    /// so `WSS-Q13` is not met. A per-chunk ask on this actor would stall
-    /// bond signing on bulk redb I/O; the decrypt task is a later increment.
-    pub(crate) body_store: shekyl_p_store::BodyStore,
     /// GF-7 measurement-hook observer (injected via [`StakeEngineArgs`];
     /// see the field docs there). Feature-gated out of default builds.
     #[cfg(feature = "gf7-hooks")]
     pub(crate) observer: Box<dyn BroadcastTimelineObserver>,
+    /// The id of the network the wallet's personas are on: every spend this
+    /// engine assembles (bond post, emission claim, drain) signs under it
+    /// (`NETWORK_IDENTITY.md` NI-Q4).
+    pub(crate) network: shekyl_network::NetworkId,
 }
 
 impl StakeEngine {
@@ -582,9 +579,9 @@ impl Actor for StakeEngine {
             generation: 0,
             watch_cache: KeyImageWatchSet::new(),
             watch_quarantine: BTreeSet::new(),
-            body_store: args.bodies,
             #[cfg(feature = "gf7-hooks")]
             observer: args.observer,
+            network: args.network,
         })
     }
 

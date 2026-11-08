@@ -57,17 +57,18 @@
 //!
 //! A round trip of this codec against itself proves it self-consistent, not
 //! that it is the same record. `docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json`
-//! holds real `ArchivalBondValue` v7 blobs with the fields the **C++
-//! decoder** read from them; the daemon store's `codec::archival_tests`
+//! holds frozen `ArchivalBondValue` v7 blobs (no regenerator) with the fields
+//! recorded from the C++ decoder; the daemon store's `codec::archival_tests`
 //! builds a `BondRecord` from each field set and asserts nothing is lost.
 
 use shekyl_types::archival::{
     BadInterval, BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, FirstPayingHeight,
     HeldShard, Holdings, HoldingsError, HoldingsKind, IssuedDigest, IssuedDraw, RMarket,
     ReceiptSignPk, SettlementRow, SettlementRowError, SigmaWorkMilli, SlashLogEntry,
-    SlashedHolding, BLOCK_DRAWS_LEN, DRAWABLE_DIGEST_LEN, ISSUED_DIGEST_LEN,
-    MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS,
-    MAX_HOLDINGS_SHARDS, RECEIPT_SIGN_PK_LEN, SETTLEMENT_ROW_LEN,
+    SlashedHolding, SupportCount, SupportIssued, SupportSeats, BLOCK_DRAWS_LEN,
+    DRAWABLE_DIGEST_LEN, ISSUED_DIGEST_LEN, MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES,
+    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, RECEIPT_SIGN_PK_LEN,
+    SETTLEMENT_ROW_LEN,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -456,6 +457,91 @@ impl Canonical for IssuedDigest {
 /// ```
 ///
 /// A third value of the flag, or trailing bytes, is refused.
+/// `support_count`: one `u32` LE. The unissued counter of one tree in one
+/// epoch, and the support draws one block issued. The same width, two
+/// tables (`ARCHIVAL_SUPPORT_DRAW.md` §5).
+/// `archival_support_issued`'s row (`ARCHIVAL_SUPPORT_DRAW.md` §3).
+/// Layout:
+///
+/// ```text
+/// shard    u64 LE   the shard the draw selected
+/// passed   u8       0 = no pass record admitted, 1 = one admitted
+/// ```
+///
+/// A third value of the flag, or trailing bytes, is refused.
+impl Canonical for SupportIssued {
+    const NAME: &'static str = "support_issued";
+    const FIXED_WIDTH: Option<usize> = Some(SupportIssued::LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.shard.to_raw().to_le_bytes());
+        out.push(u8::from(self.passed));
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let shard = ShardId::from_raw(r.u64()?);
+        let passed = match r.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(r.invalid("pass flag is neither 0 nor 1")),
+        };
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the support draw"));
+        }
+        Ok(Self { shard, passed })
+    }
+}
+
+impl Canonical for SupportCount {
+    const NAME: &'static str = "support_count";
+    const FIXED_WIDTH: Option<usize> = Some(SupportCount::LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.get().to_le_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let n = r.u32()?;
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the support count"));
+        }
+        Ok(Self::new(n))
+    }
+}
+
+/// `archival_support_block`'s row: the seats a block's support stream
+/// issued. Layout: `count_le4 ‖ count × persona[32]`, the personas strictly
+/// increasing. A repeated or out-of-order persona, a short buffer, or
+/// trailing bytes are refused.
+impl Canonical for SupportSeats {
+    const NAME: &'static str = "support_seats";
+    const FIXED_WIDTH: Option<usize> = None;
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        put_count(out, self.len());
+        for persona in self.as_slice() {
+            out.extend_from_slice(persona.as_bytes());
+        }
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let n = r.count_bounded(32, usize::MAX, "unreachable: usize::MAX cap")?;
+        let mut ids = Vec::with_capacity(n);
+        for _ in 0..n {
+            ids.push(PCanonicalId::from_bytes(
+                r.array::<32>("buffer ends inside a persona")?,
+            ));
+        }
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the support seats"));
+        }
+        SupportSeats::new(ids).map_err(|_| r.invalid("personas are not strictly increasing"))
+    }
+}
+
 impl Canonical for BlockDraws {
     const NAME: &'static str = "block_draws";
     const FIXED_WIDTH: Option<usize> = Some(BLOCK_DRAWS_LEN);

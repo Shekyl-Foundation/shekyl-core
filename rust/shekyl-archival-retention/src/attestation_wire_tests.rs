@@ -93,6 +93,7 @@ fn signed_pass(
     let sig = att_sign(
         sk,
         &pass_countersignature_message(
+            crate::pass_anchor::PassStream::Economy,
             &nonce,
             anchor_height,
             &chain_hash(anchor_height.to_raw()),
@@ -149,8 +150,9 @@ fn pass_record_message_matches_free_function() {
     let rec = pass_record([3u8; 32], 4, 5, [9u8; 32], bh(77), sig);
     let hash = [0xDDu8; 32];
     assert_eq!(
-        rec.countersignature_message(&hash),
+        rec.countersignature_message(crate::pass_anchor::PassStream::Economy, &hash),
         pass_countersignature_message(
+            crate::pass_anchor::PassStream::Economy,
             &rec.nonce,
             bh(77),
             &hash,
@@ -218,7 +220,14 @@ fn a_fabricated_anchor_hash_fails_against_the_chains_hash() {
     let anchor = H - 722;
     let lied = att_sign(
         &secret,
-        &pass_countersignature_message(&[0x55u8; 32], bh(anchor), &[0xFFu8; 32], 42, &DIGEST),
+        &pass_countersignature_message(
+            crate::pass_anchor::PassStream::Economy,
+            &[0x55u8; 32],
+            bh(anchor),
+            &[0xFFu8; 32],
+            42,
+            &DIGEST,
+        ),
     );
     let rec = pass_record(p_id, 42, 1000, [0x55u8; 32], bh(anchor), lied);
     assert_eq!(
@@ -297,7 +306,14 @@ fn a_retired_domain_signature_does_not_verify_under_v3() {
     let p_id = p_id_of(&pubkey);
     let nonce = [0x44u8; 32];
     let anchor = H - 720;
-    let msg = pass_countersignature_message(&nonce, bh(anchor), &chain_hash(anchor), 42, &DIGEST);
+    let msg = pass_countersignature_message(
+        crate::pass_anchor::PassStream::Economy,
+        &nonce,
+        bh(anchor),
+        &chain_hash(anchor),
+        42,
+        &DIGEST,
+    );
     for retired in [
         &b"shekyl/archival-attestation-scheme-v1"[..],
         &b"shekyl/archival-attestation-scheme-v2"[..],
@@ -330,11 +346,19 @@ fn a_signature_over_the_delivered_bytes_refuses_any_other_bytes() {
     let digest = pass_delivery_digest(&nonce, &body);
     let sig = att_sign(
         &secret,
-        &pass_countersignature_message(&nonce, bh(anchor), &hash, 42, &digest),
+        &pass_countersignature_message(
+            crate::pass_anchor::PassStream::Economy,
+            &nonce,
+            bh(anchor),
+            &hash,
+            42,
+            &digest,
+        ),
     );
     let check = |n: &[u8; 32], b: &[u8]| {
         verify_pass_transcript(
             &pubkey,
+            crate::pass_anchor::PassStream::Economy,
             n,
             bh(anchor),
             &hash,

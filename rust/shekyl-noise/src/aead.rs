@@ -14,7 +14,7 @@
 //! `Split` and rekey; three for `MixKeyAndHash`. The two-output bytes are
 //! the first two of the three-output form.
 
-use blake2::digest::Digest;
+use blake2::digest::{Digest, Output};
 use blake2::Blake2s256;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
@@ -33,8 +33,16 @@ pub(crate) fn hash(data: &[u8]) -> [u8; HASH_LEN] {
 /// RFC 2104 HMAC over BLAKE2s-256.
 ///
 /// `Hmac<Blake2s256>` does not implement `Mac` (BLAKE2 finalizes lazily).
-/// `SimpleHmac` does, and it does not wipe its keyed state. The pads here
-/// are `Zeroizing` because this runs on the Noise chaining key.
+/// `SimpleHmac` does, and it does not wipe its keyed state. The pads and
+/// both digests here are `Zeroizing` because this runs on the Noise
+/// chaining key.
+///
+/// **A limit, stated (close-out F4):** BLAKE2s's own hasher state is not
+/// wiped. `blake2` 0.10 has no `zeroize` for it, so the compression state
+/// that absorbed `ipad` or `opad` (the key, XORed with a constant) is left
+/// on the stack when the hasher is dropped. With empty `data`, as in
+/// `Split`, the block buffer holds `key ⊕ ipad` itself. Wiping it needs a
+/// hasher that zeroizes, which `blake2` 0.11 provides.
 fn hmac_blake2s(key: &[u8], data: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
     const BLOCK: usize = 64;
     let mut key_block = Zeroizing::new([0u8; BLOCK]);
@@ -50,16 +58,20 @@ fn hmac_blake2s(key: &[u8], data: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
         ipad[i] ^= key_block[i];
         opad[i] ^= key_block[i];
     }
+    // Both digests go straight into wiped buffers: the inner one is keyed
+    // material, and the outer one is the derived key.
+    let mut inner_digest = Zeroizing::new([0u8; HASH_LEN]);
     let mut inner = Blake2s256::new();
     inner.update(&ipad[..]);
     inner.update(data);
-    let inner = inner.finalize();
+    let inner_out: &mut Output<Blake2s256> = (&mut *inner_digest).into();
+    inner.finalize_into(inner_out);
+    let mut out = Zeroizing::new([0u8; HASH_LEN]);
     let mut outer = Blake2s256::new();
     outer.update(&opad[..]);
-    outer.update(inner);
-    let digest = outer.finalize();
-    let mut out = Zeroizing::new([0u8; HASH_LEN]);
-    out.copy_from_slice(&digest);
+    outer.update(&inner_digest[..]);
+    let out_ref: &mut Output<Blake2s256> = (&mut *out).into();
+    outer.finalize_into(out_ref);
     out
 }
 
@@ -135,8 +147,8 @@ pub(crate) fn open(key: &[u8; HASH_LEN], n: u64, ad: &[u8], ciphertext: &[u8]) -
 
 /// Run one rekey derivation, `HKDF(chaining_key, record_key)`, and discard it.
 ///
-/// [`crate::Direction`] runs that same derivation when its nonce reaches the
-/// rekey boundary. This function exists so the C5 bench can time those three
+/// A transport direction runs that same derivation when its nonce reaches
+/// the rekey boundary. This function exists so the C5 bench can time those three
 /// HMAC-BLAKE2s apart from a session. The derived keys do not leave this crate.
 #[cfg(feature = "rekey-timing")]
 pub fn rekey_hkdf(chaining_key: &[u8; HASH_LEN], record_key: &[u8; HASH_LEN]) {

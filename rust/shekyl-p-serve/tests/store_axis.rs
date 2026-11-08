@@ -59,6 +59,7 @@ async fn bind(provider: Arc<dyn ShardProvider>) -> (PServeEndpoint, Arc<TestKeyS
 async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
     let mut s = TcpStream::connect(addr).await.expect("connect");
     let header = encode_request_header(&pass_request_header_bytes(
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         BlockHeight::from_raw(ANCHOR_HEIGHT),
         &ANCHOR_HASH,
@@ -92,7 +93,7 @@ fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
 async fn served_shard_is_the_put_frame() {
     let store = BodyStore::open_ephemeral(key()).expect("open");
     store.put_shard(shard(0), FRAME).expect("put");
-    let provider = StoreShardProvider::new(store.reader());
+    let provider = StoreShardProvider::new(Arc::new(store));
     let (ep, signer) = bind(Arc::new(provider)).await;
 
     let response = fetch(ep.addr(), "/shard/0").await;
@@ -100,6 +101,7 @@ async fn served_shard_is_the_put_frame() {
 
     verify_pass_transcript(
         signer.public_key(),
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         BlockHeight::from_raw(ANCHOR_HEIGHT),
         &ANCHOR_HASH,
@@ -118,7 +120,7 @@ async fn served_shard_is_the_put_frame() {
 async fn missing_shards_are_indistinguishable_404s() {
     let store = BodyStore::open_ephemeral(key()).expect("open");
     store.put_shard(shard(0), FRAME).expect("put");
-    let (ep, _) = bind(Arc::new(StoreShardProvider::new(store.reader()))).await;
+    let (ep, _) = bind(Arc::new(StoreShardProvider::new(Arc::new(store)))).await;
 
     let never_held = fetch(ep.addr(), "/shard/1").await;
     let unknown = fetch(ep.addr(), "/shard/77").await;
@@ -136,7 +138,7 @@ async fn erase_makes_a_held_shard_an_ordinary_404() {
     store.put_shard(shard(0), FRAME).expect("put");
     store.erase_shard(shard(0)).expect("erase");
 
-    let (ep, _) = bind(Arc::new(StoreShardProvider::new(store.reader()))).await;
+    let (ep, _) = bind(Arc::new(StoreShardProvider::new(Arc::new(store)))).await;
     let gone = fetch(ep.addr(), "/shard/0").await;
     assert!(
         gone.starts_with(b"HTTP/1.1 404 "),
@@ -150,7 +152,7 @@ async fn erase_makes_a_held_shard_an_ordinary_404() {
 fn provider_body_is_exactly_the_put_bytes() {
     let store = BodyStore::open_ephemeral(key()).expect("open");
     store.put_shard(shard(0), FRAME).expect("put");
-    let provider = StoreShardProvider::new(store.reader());
+    let provider = StoreShardProvider::new(Arc::new(store));
     let mut body = provider
         .shard_bytes(0)
         .expect("lookup")

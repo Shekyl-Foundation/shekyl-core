@@ -89,11 +89,12 @@
 //! hole there is a [`ViewRead`] at the function that walked the heights.
 
 pub(crate) mod alt;
-pub(crate) mod anchors;
 pub(crate) mod attestation;
 pub(crate) mod block_weight;
 pub(crate) mod body;
+pub(crate) mod bundle_admission;
 pub(crate) mod difficulty;
+pub(crate) mod genesis;
 pub(crate) mod header;
 pub(crate) mod miner;
 pub(crate) mod pow;
@@ -123,6 +124,7 @@ use crate::rules::tx::TxClass;
 use crate::trust::Trust;
 use crate::verdict::{Locus, TxSlot, Verdict};
 use crate::view::{AtHeight, ChainView, HeaderRecord, HeaderView, RecordedBlock, Tip};
+use shekyl_network::NetworkId;
 use shekyl_types::BlockHeight;
 use shekyl_wire::Transaction;
 
@@ -227,9 +229,9 @@ pub(crate) struct BlockContext<'a> {
     /// caller's claim of it; a mismatch with this derivation is
     /// `Stale::Target`, not a second proof check.
     pub(crate) target: Target,
-    /// What this node takes on the release's word — the anchors (E1 reads
-    /// them at anchored heights); from slice 6, the posture the 4.I rows
-    /// read.
+    /// The genesis pin this node holds a height-0 candidate to (CEN-E1).
+    /// Nothing above genesis is pinned, and there is no posture arm
+    /// (S1, design review 2026-11-03).
     pub(crate) trust: &'a Trust,
 }
 
@@ -290,7 +292,7 @@ impl<'a> BlockContext<'a> {
         self.formed.candidate()
     }
 
-    /// Isolated-rule tests that read neither the target nor the anchors.
+    /// Isolated-rule tests that read neither the target nor the genesis pin.
     /// Production `validate` always passes D4's target and the driver's
     /// `Trust`.
     #[cfg(test)]
@@ -304,7 +306,7 @@ impl<'a> BlockContext<'a> {
             tip,
             mtp_window,
             Target::GENESIS_BLOCK,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         )
     }
 }
@@ -351,7 +353,7 @@ pub(crate) struct HeaderContext<'a, P> {
     pub(crate) tip: Option<Tip>,
     /// C3's window. `None` at genesis.
     pub(crate) mtp_window: Option<&'a MtpWindow>,
-    /// The anchors E1 reads.
+    /// The genesis pin E1 reads.
     pub(crate) trust: &'a Trust,
 }
 
@@ -549,6 +551,11 @@ impl TxScope {
     }
 }
 
+/// The network binding a [`TxContext`] does not carry yet. Shape rules
+/// (`tx_form`) judge this form: they read the transaction, never a network.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Unbound;
+
 /// What a **stateless per-transaction** rule may read: the transaction and
 /// its kind. No view, by construction — a rule that needs one is a
 /// `tx_against` rule (the view-bound half of 4.I, slice 6), whatever chapter
@@ -558,7 +565,14 @@ impl TxScope {
 /// limit joins `RuleSet` when a schedule step can name a different one, and
 /// the first such row adds the field. A struct so the set can grow without
 /// moving any rule's signature, as [`FormContext`] is.
-pub(crate) struct TxContext<'a> {
+///
+/// `N` is whether this judgement has named its network. [`Unbound`] is the
+/// shape context. [`NetworkId`] is the signature, proof and emission-auth
+/// context, bound by [`TxContext::on_network`] from the id the caller took
+/// once — the trust's, or the pool's for its lifetime. A function that
+/// hashes the network asks for `TxContext<'_, NetworkId>`, so an unbound
+/// context cannot sign.
+pub(crate) struct TxContext<'a, N = Unbound> {
     /// The transaction, exactly as parsed.
     pub(crate) tx: &'a Transaction,
     /// The slot the transaction occupies — where a refusal points.
@@ -569,12 +583,22 @@ pub(crate) struct TxContext<'a> {
     /// ([`TxClass::derive`]), judging CEN-H5 and CEN-H6 as it goes, and read
     /// by every rule whose shape depends on it (H14, H20–H22).
     pub(crate) class: TxClass,
+    network: N,
 }
 
-impl<'a> TxContext<'a> {
-    /// Build the context, deriving the class. A refusal here is H5's or
-    /// H6's, at `slot`; both rows are recorded in `coverage` when they pass
-    /// — at their derivation site, the CEN-B6 arrangement.
+impl<'a, N> TxContext<'a, N> {
+    /// Where this transaction's refusals point.
+    pub(crate) const fn locus(&self) -> Locus {
+        Locus::Tx { slot: self.slot }
+    }
+}
+
+impl<'a> TxContext<'a, Unbound> {
+    /// Build the shape context, deriving the class. A refusal here is H5's
+    /// or H6's, at `slot`; both rows are recorded in `coverage` when they
+    /// pass — at their derivation site, the CEN-B6 arrangement. The network
+    /// is not named yet: [`on_network`](Self::on_network) binds it for the
+    /// signature and proof judgement.
     pub(crate) fn derive(
         tx: &'a Transaction,
         slot: TxSlot,
@@ -587,12 +611,28 @@ impl<'a> TxContext<'a> {
             slot,
             kind,
             class,
+            network: Unbound,
         })
     }
 
-    /// Where this transaction's refusals point.
-    pub(crate) const fn locus(&self) -> Locus {
-        Locus::Tx { slot: self.slot }
+    /// Name the network this judgement's signatures, proofs and emission
+    /// auths bind. The id is the caller's, taken once.
+    #[must_use]
+    pub(crate) const fn on_network(self, network: NetworkId) -> TxContext<'a, NetworkId> {
+        TxContext {
+            tx: self.tx,
+            slot: self.slot,
+            kind: self.kind,
+            class: self.class,
+            network,
+        }
+    }
+}
+
+impl TxContext<'_, NetworkId> {
+    /// The network the signatures and proofs of this judgement bind.
+    pub(crate) const fn network(&self) -> &NetworkId {
+        &self.network
     }
 }
 
@@ -647,16 +687,19 @@ pub(crate) trait TxAgainstRule: Rule {
     /// Which transactions this rule judges.
     const SCOPE: TxScope;
 
-    /// Judge `cx.tx` against `view`.
-    fn check<'id, V: ChainView<'id>>(cx: &TxContext<'_>, view: &V)
-        -> Result<Verdict<()>, V::Fault>;
+    /// Judge `cx.tx` against `view`. The network binding is the caller's:
+    /// this rule reads the chain, not the id.
+    fn check<'id, N, V: ChainView<'id>>(
+        cx: &TxContext<'_, N>,
+        view: &V,
+    ) -> Result<Verdict<()>, V::Fault>;
 }
 
 /// Run one view-bound per-transaction rule and, if it passed, record its
 /// row. An out-of-scope kind is recorded **vacuous** — as [`run_tx`] does —
 /// so coverage says the row was evaluated at every slot.
-pub(crate) fn run_tx_against<'id, R: TxAgainstRule, V: ChainView<'id>>(
-    cx: &TxContext<'_>,
+pub(crate) fn run_tx_against<'id, R: TxAgainstRule, V: ChainView<'id>, N>(
+    cx: &TxContext<'_, N>,
     view: &V,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<()>, V::Fault> {
@@ -709,7 +752,7 @@ pub fn recorded<'id, V: ChainView<'id>>(
 /// [`recorded`]'s header-facts half: the [`HeaderRecord`] at `height`,
 /// which is below the connecting height and therefore present on a
 /// conforming view — the read every [`HeaderRule`] makes for a parent-side
-/// fact (C3's window, D3's seed, D4's window and work, E1's anchors, B4's
+/// fact (C3's window, D3's seed, D4's window and work, E1's pin, B4's
 /// anchor window). The hole is the same SI-7 under
 /// [`PerHeightRecord::Header`], so the store halts against `block_info`.
 pub fn recorded_header<'id, H: HeaderView<'id>>(

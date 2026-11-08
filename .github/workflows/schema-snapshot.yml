@@ -51,16 +51,8 @@
 name: ci/schema-snapshot
 
 on:
-  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
-  # not only the branch head — the class of failure neither PR's CI can
-  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
-  # filter, so this runs on every group regardless of the PR filter above
-  # or below.
-  merge_group:
-    types: [checks_requested]
-    branches: [dev]
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened]
     paths:
       # The gate's subject is every crate whose code can change a byte a
       # `.snap` pins: the codecs themselves (`shekyl-store-codec`, the chain
@@ -81,7 +73,7 @@ on:
       - "rust/**"
       - ".github/workflows/schema-snapshot.yml"
 
-# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+# Superseded-run cancellation (house pattern: build.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
 # run behind the old one — with the shared runner pool, repeated pushes
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
@@ -97,6 +89,7 @@ jobs:
   assert-snapshots:
     name: "Assert committed schema snapshots"
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 3.5 min over 22 runs; the floor
     steps:
       - uses: actions/checkout@v5
 
@@ -156,6 +149,7 @@ jobs:
   enforce-version-bump:
     name: "Enforce paired block_version bump"
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.6 min over 24 runs; the floor
     steps:
       - uses: actions/checkout@v5
         with:
@@ -166,10 +160,8 @@ jobs:
 
       - name: Compute paired-change verdict
         env:
-          # Under the merge queue the PR payload is absent; the group's
-          # base/head are the `dev` tip and the merge result — the same pair.
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
 

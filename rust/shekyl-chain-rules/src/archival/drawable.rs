@@ -28,10 +28,15 @@
 //!
 //! # The filters both apply
 //!
-//! [`emit`] holds the three pins of the proposal's §7.4 for both: a bond
-//! that joined in `E` or later is excluded (pin 1); a complete tree expands
-//! to the shards closed and final at `h_open(E)`, not at tip (pin 2); and
-//! the pairs are in canonical order (pin 3, [`DrawablePair`]'s `Ord`).
+//! [`emit`] holds the three pins of the proposal's §7.4 for both, with pin
+//! 2 restated by `ARCHIVAL_SUPPORT_DRAW.md`: a bond that joined in `E` or
+//! later is excluded (pin 1); a complete tree is a support role and
+//! contributes no pair (pin 2), and is instead a member of the epoch's
+//! support roster with its receipt key; and the pairs are in canonical
+//! order (pin 3, [`DrawablePair`]'s `Ord`). The roster's width, the set a
+//! support draw selects from, is `final_count`, and an archive with no
+//! closed shard has no roster (`SO-D12` S1, 2026-11-01; width zero ratified
+//! 2026-11-02).
 //!
 //! Closed and final at `h_open` is one count for both arms. Shards close
 //! in order, so the shards closed and final at `h_open` are the prefix
@@ -70,7 +75,7 @@
 //! tip, so the walk stays above it when
 //! `(k + 1)·SEB + reorg_cap ≤ (k + n)·SEB + reorg_cap`. Both sides scale
 //! with `SEB` and carry the same cap, so the relation is in epochs and
-//! holds under every schedule, Fakechain's included:
+//! holds under every schedule, a levered one included:
 //! [`WALK_BACK_EPOCHS`] against that floor's epochs, asserted at compile
 //! time. The Release journal is retired at [`crate::ReleaseJournalFloor`],
 //! one above `h_open` of the oldest epoch the settling family keeps,
@@ -80,8 +85,10 @@
 
 use std::collections::BTreeMap;
 
+use std::num::NonZeroU64;
+
 use shekyl_archival_retention::{
-    DrawableEpoch, DrawablePair, SettlementSchedule, FAILURE_WINDOW_N, SLASH_GRACE_EPOCHS,
+    DrawableEpoch, DrawablePair, SettlementSchedule, SupportRoster, SLASH_GRACE_EPOCHS,
 };
 use shekyl_types::archival::{
     BondRecord, DrawableDigest, HeldShard, Holdings, LoggedSlash, ReleasedRecord, SlashedHolding,
@@ -105,12 +112,12 @@ pub const WALK_BACK_EPOCHS: u64 = 1 + SLASH_GRACE_EPOCHS;
 // floor is [`ReleaseJournalFloor`], derived from the settling family, and
 // the pass's walk starts at it. Re-pinning the grace or the window so the
 // slash-log half reaches below its floor fails here.
-#[allow(clippy::cast_lossless)] // `u64::from` is not const.
-const _: () = assert!(WALK_BACK_EPOCHS <= SLASH_GRACE_EPOCHS + FAILURE_WINDOW_N as u64);
+// `1 + k ≤ k + n` is `n ≥ 1`, which `ArchivalParams::validate` holds
+// (`m ≥ 1`, `n ≥ m`).
 
 /// The count of shards closed and final at `h_open`: the prefix both
-/// derivations expand a complete tree to and keep a compact shard inside
-/// (module docs, *The filters both apply*).
+/// derivations keep a compact shard inside. A complete tree contributes
+/// no pair (module docs, *The filters both apply*).
 pub(crate) fn final_count_at_open<'id, V: ChainView<'id>>(
     view: &V,
     h_open: BlockHeight,
@@ -328,8 +335,9 @@ fn unslashed(holdings: &Holdings, shard: ShardId, took: SlashedHolding) -> Optio
     }
 }
 
-/// The emitter both derivations share: pins 1 to 3 over `records`, and
-/// each persona's receipt key, into the one constructor.
+/// The emitter both derivations share: pins 1 to 3 over `records`, each
+/// persona's receipt key, the support members and the archive width, into
+/// the one constructor.
 fn emit<'r>(
     epoch: SettlementEpoch,
     records: impl IntoIterator<Item = (&'r PCanonicalId, &'r BondRecord)>,
@@ -337,18 +345,18 @@ fn emit<'r>(
 ) -> Result<DrawableEpoch, DrawableEpochFault> {
     let mut pairs = Vec::new();
     let mut keys = Vec::new();
+    let mut members = Vec::new();
     for (&persona, record) in records {
         if record.join_settlement_epoch >= epoch {
             continue;
         }
         let held = pairs.len();
         match &record.holdings {
-            Holdings::CompleteTree => {
-                pairs.extend((0..final_count).map(|shard| DrawablePair {
-                    persona,
-                    shard: ShardId::from_raw(shard),
-                }));
-            }
+            // A complete tree is a support role: drawn on its own stream,
+            // not a member of `D`. It is a member of the epoch's support
+            // roster, with its receipt key (`ARCHIVAL_SUPPORT_DRAW.md` §6;
+            // `SO-D12` S1).
+            Holdings::CompleteTree => members.push((persona, &record.receipt_sign_pk)),
             Holdings::ShardSet(set) => {
                 pairs.extend(
                     set.iter()
@@ -364,7 +372,14 @@ fn emit<'r>(
             keys.push((persona, &record.receipt_sign_pk));
         }
     }
-    DrawableEpoch::new(epoch, keys, pairs).map_err(DrawableEpochFault::Construction)
+    // The roster exists only over an archive with a closed shard: no
+    // shards, no support stream this epoch (Rick, 2026-11-02). That is the
+    // one place width zero is decided.
+    let roster = NonZeroU64::new(final_count)
+        .map(|width| SupportRoster::new(width, members))
+        .transpose()
+        .map_err(DrawableEpochFault::Construction)?;
+    DrawableEpoch::new(epoch, roster, keys, pairs).map_err(DrawableEpochFault::Construction)
 }
 
 #[cfg(test)]

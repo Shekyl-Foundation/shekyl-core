@@ -30,16 +30,13 @@
 //! end-to-end, in-process, by `tests/fcmp_spend_e2e.rs` — it builds a real
 //! multi-layer-tree spend and self-validates every field against the consensus
 //! verifier (`shekyl_fcmp::proof::verify`, CT balance, and the
-//! Bulletproof+) before round-tripping it through this serializer. There is no
-//! **C++** spend oracle to capture — that path never produced a daemon-accepted
-//! transaction, and capturing its output would enshrine broken logic — so the
+//! Bulletproof+) before round-tripping it through this serializer. The
 //! authoritative oracle for *these vectors* is the Rust verifier itself.
 //!
-//! That reasoning is about the C++ path and remains correct; it does **not**
-//! mean no daemon-accepted spend exists. One has since PR #193 (2026-06-27):
+//! A daemon-accepted spend exists as well:
 //! `e2e_fcmp_spend_accepted_by_daemon` builds a spend with the production
 //! `Engine` and a live `shekyld` accepts it. The live-oracle KAT captured
-//! from that run (`live_oracle_spend_v1.json`, both language legs in
+//! from that run (`live_oracle_spend_v1.json`, read by
 //! `pruned_tx_hash_parity`) binds the serializer to a chain rather than only
 //! to the Rust verifier.
 //!
@@ -68,11 +65,14 @@ mod hash;
 /// Shared by every count/length read across the crate so the bound has one source.
 pub(crate) const READ_LEN_CAP: usize = 1_000_000;
 
-pub use block::{identity_of_pow_blob, Block, BlockHeader, PowBlob, MIN_POW_BLOB_SIZE};
-pub use sync_body::{BlockBody, SkeletonTx, TxBody};
+pub use block::{
+    identity_of_pow_blob, BlobOffsets, Block, BlockHeader, PowBlob, MIN_POW_BLOB_SIZE,
+};
+pub use sync_body::{BlockBody, BoundTx, SkeletonTx, TxBody};
 pub use transaction::{
-    carries_archival_good, empty_region_prunable_hash, is_join_market_post_kind, pqc_auth_hash_of,
-    prunable_hash_of, BondPost, BondPostKind, BpPlus, Ct, CtBase, FullTransaction, Holdings, Input,
-    Output, PqcAuth, PqcSigningPreimage, Prunable, PrunedError, RetiredKeylessJoinMarket,
-    Transaction, TxPrefix, TxSegments, TxidParts, TxidSegments,
+    carries_archival_good, empty_region_prunable_hash, fcmp_base_hash, is_join_market_post_kind,
+    pqc_auth_hash_of, prunable_hash_of, tx_signable, BondPost, BondPostKind, BpPlus, Ct, CtBase,
+    FullTransaction, Holdings, Input, Output, PqcAuth, PqcSigningPreimage, Prunable, PrunedError,
+    RetiredKeylessJoinMarket, Transaction, TxPrefix, TxSegments, TxidParts, FCMP_SPEND_SIGNING,
+    MIN_PRUNED_SEGMENT, TX_SIGNABLE,
 };

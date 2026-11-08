@@ -320,9 +320,15 @@ mod tests {
         wallet.sync_state.pending_tx_hashes.push([9u8; 32]);
 
         wallet.ledger.transfers.push(sample_transfer(1));
-        wallet.ledger.tip = BlockchainTip::new(BlockHeight::from_raw(50), [1u8; 32]);
+        wallet.ledger.tip = BlockchainTip::new(
+            BlockHeight::from_raw(50),
+            shekyl_types::BlockHash::from_bytes([1u8; 32]),
+        );
         wallet.ledger.reorg_blocks = ReorgBlocks {
-            blocks: vec![(shekyl_types::BlockHeight::from_raw(40), [2u8; 32])],
+            blocks: vec![(
+                shekyl_types::BlockHeight::from_raw(40),
+                shekyl_types::BlockHash::from_bytes([2u8; 32]),
+            )],
         };
 
         let txid = [3u8; 32];
@@ -457,7 +463,10 @@ mod tests {
     #[test]
     fn reset_expires_payment_request_past_its_expiry() {
         let mut wallet = WalletLedger::empty();
-        wallet.ledger.tip = BlockchainTip::new(BlockHeight::from_raw(500), [8u8; 32]);
+        wallet.ledger.tip = BlockchainTip::new(
+            BlockHeight::from_raw(500),
+            shekyl_types::BlockHash::from_bytes([8u8; 32]),
+        );
         wallet.bookkeeping.payment_requests.push(PaymentRequest {
             id: PaymentRequestId(0x00_00_00_00_00_07),
             label: LocalLabel::from_str("stale invoice"),
@@ -510,7 +519,7 @@ mod start_rescan_integration_tests {
 
     use std::sync::Arc;
 
-    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+    use shekyl_crypto_pq::account::SEED_BYTES;
     use shekyl_engine_state::BlockchainTip;
     use shekyl_rpc_transport::HttpRpc;
     use tempfile::TempDir;
@@ -530,7 +539,7 @@ mod start_rescan_integration_tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let base_path = tmp.path().join("wallet");
         let creds = Credentials::password_only(b"start-rescan integration tests");
-        let mut seed = [0u8; MASTER_SEED_BYTES];
+        let mut seed = [0u8; SEED_BYTES];
         for (i, b) in seed.iter_mut().enumerate() {
             *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(7);
         }
@@ -564,8 +573,10 @@ mod start_rescan_integration_tests {
     {
         let engine = arc.write().await;
         let mut guard = engine.ledger.write();
-        guard.ledger.ledger.tip =
-            BlockchainTip::new(shekyl_types::BlockHeight::from_raw(500), [0xAB; 32]);
+        guard.ledger.ledger.tip = BlockchainTip::new(
+            shekyl_types::BlockHeight::from_raw(500),
+            shekyl_types::BlockHash::from_bytes([0xAB; 32]),
+        );
         500
     }
 

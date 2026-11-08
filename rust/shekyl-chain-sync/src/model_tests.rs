@@ -1,0 +1,646 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The coordinator's own tests: claim admission, derived state, and one
+//! header request.
+
+use std::convert::Infallible;
+use std::time::{Duration, Instant};
+
+use core::num::NonZeroU128;
+
+use shekyl_chain_rules::{
+    AtHeight, CappedEpoch, DifficultyRule, HeaderRecord, HeaderView, RuleSet, Tip, Trust,
+};
+use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
+use shekyl_draw_rng::RelayRng;
+use shekyl_levin::BODIES_RESPONSE_BYTES;
+use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, ChainCount, CurveTreeRoot};
+use shekyl_wire::BlockHeader;
+
+use super::{body_deadline, Command, Event, Sync, SYNC_RATE_FLOOR};
+use crate::{ClaimError, PayloadRefused, PeerClaim, SyncState};
+
+struct NoDraw;
+
+impl RelayRng for NoDraw {
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+}
+
+struct Empty;
+
+impl HeaderView<'static> for Empty {
+    type Fault = Infallible;
+
+    fn tip(&self) -> Result<Option<Tip>, Infallible> {
+        Ok(None)
+    }
+
+    fn header_at(&self, _: BlockHeight) -> Result<AtHeight<HeaderRecord>, Infallible> {
+        Ok(AtHeight::AboveTip)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct StoreDown;
+
+struct Faults;
+
+impl HeaderView<'static> for Faults {
+    type Fault = StoreDown;
+
+    fn tip(&self) -> Result<Option<Tip>, StoreDown> {
+        Err(StoreDown)
+    }
+
+    fn header_at(&self, _: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreDown> {
+        Err(StoreDown)
+    }
+}
+
+fn issued(_: BlockHeight) -> RuleSet {
+    RuleSet::GENESIS
+}
+
+/// Fire the opening's deadline (CS-Q2 step 8) as the owner's timer would.
+fn fire_opening<R: Fn(BlockHeight) -> RuleSet>(sync: &mut Sync<u8, R>) -> Vec<Command<u8>> {
+    let crate::model::Opening::Open { id } = sync.opening else {
+        panic!("no opening is unresolved: {:?}", sync.opening);
+    };
+    let mut out = Vec::new();
+    sync.handle(
+        Event::Deadline {
+            session: 1,
+            request: id,
+        },
+        &Empty,
+        std::time::Instant::now(),
+        &mut NoDraw,
+        &mut out,
+    )
+    .expect("the view answers");
+    out
+}
+
+fn open<R: Fn(BlockHeight) -> RuleSet>(sync: &mut Sync<u8, R>, session: u8) -> Vec<Command<u8>> {
+    let mut out = Vec::new();
+    sync.handle(
+        Event::SessionOpened {
+            session,
+            transit: Duration::from_secs(30),
+        },
+        &Empty,
+        std::time::Instant::now(),
+        &mut NoDraw,
+        &mut out,
+    )
+    .expect("the view answers");
+    out
+}
+
+fn hint<R: Fn(BlockHeight) -> RuleSet>(
+    sync: &mut Sync<u8, R>,
+    peer: PeerClaim,
+) -> Result<(), ClaimError<Infallible>> {
+    let mut out = Vec::new();
+    sync.claim(
+        1,
+        peer,
+        &Empty,
+        std::time::Instant::now(),
+        &mut NoDraw,
+        &mut out,
+    )
+}
+
+fn claim(count: u64, work: u128) -> PeerClaim {
+    PeerClaim {
+        count: ChainCount::from_raw(count),
+        work: CumulativeDifficulty::from_raw(work),
+        top: BlockHash::NULL,
+    }
+}
+
+#[test]
+fn a_genesis_only_claim_is_admitted() {
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
+    // One block, target 1.
+    assert_eq!(hint(&mut sync, claim(1, 1)), Ok(()));
+    assert_eq!(sync.state(), SyncState::NoView);
+}
+
+#[test]
+fn a_block_count_of_zero_is_refused() {
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
+    assert_eq!(
+        hint(&mut sync, claim(0, 1)),
+        Err(ClaimError::Refused(PayloadRefused::Height))
+    );
+    assert_eq!(
+        hint(&mut sync, claim(0, 0)),
+        Err(ClaimError::Refused(PayloadRefused::Height))
+    );
+}
+
+#[test]
+fn work_below_the_block_count_is_refused() {
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
+    assert_eq!(
+        hint(&mut sync, claim(3, 2)),
+        Err(ClaimError::Refused(PayloadRefused::Work))
+    );
+    assert_eq!(hint(&mut sync, claim(3, 3)), Ok(()));
+}
+
+/// Height 0 is target 1 under a fixed target, and each later block is
+/// the fixed target. That sum is an honest claim.
+#[test]
+fn a_regtest_fixed_target_admits_an_honest_claim() {
+    let fixed = NonZeroU128::new(7).expect("7");
+    let rules = RuleSet::GENESIS.with_levers(Some(fixed), CappedEpoch::PRODUCTION);
+    let DifficultyRule::Fixed(target) = rules.difficulty() else {
+        panic!("the regtest set names a fixed target");
+    };
+    let per_block = target.difficulty().to_raw();
+    assert_eq!(per_block, 7);
+    let count = 3u64;
+    // Block 0 is `Target::GENESIS_BLOCK` (1) under Fixed, as under
+    // every rule set. The two blocks above it are the fixed target.
+    let work = 1 + u128::from(count - 1) * per_block;
+    assert!(
+        work < GENESIS_DIFFICULTY,
+        "this chain's work is the fixed targets, not the DAA constant"
+    );
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
+    assert_eq!(hint(&mut sync, claim(count, work)), Ok(()));
+}
+
+/// **A claim holds the opening and never grants a state** (CS-Q2 step 8,
+/// Rick 2026-11-01). A session opening on an open network arms the
+/// opening's bound and publishes nothing: no view yet. A claim of more
+/// work than the node holds, never answered, keeps it `NoView`; the bound
+/// resolves it, and only then is the node synced and asks for the pool's
+/// complement. A claim after that moves nothing.
+#[test]
+fn a_claim_holds_the_opening_and_never_grants_a_state() {
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
+    let opened = open(&mut sync, 1);
+    assert!(
+        !opened
+            .iter()
+            .any(|command| matches!(command, Command::Publish { .. })),
+        "{opened:?}"
+    );
+    assert!(
+        opened
+            .iter()
+            .any(|command| matches!(command, Command::ArmOpening { session: 1, .. })),
+        "{opened:?}"
+    );
+    assert!(
+        !opened
+            .iter()
+            .any(|command| matches!(command, Command::RequestComplement { .. })),
+        "{opened:?}"
+    );
+    assert_eq!(sync.transit(1), Some(Duration::from_secs(30)));
+    hint(&mut sync, claim(9_000, u128::MAX)).unwrap();
+    assert_eq!(sync.state(), SyncState::NoView, "a claim granted a state");
+    let resolved = fire_opening(&mut sync);
+    assert!(
+        resolved.iter().any(|command| matches!(
+            command,
+            Command::Publish {
+                state: SyncState::Synced
+            }
+        )),
+        "{resolved:?}"
+    );
+    assert!(
+        resolved
+            .iter()
+            .any(|command| matches!(command, Command::RequestComplement { session: 1 })),
+        "{resolved:?}"
+    );
+    hint(&mut sync, claim(9_500, u128::MAX)).unwrap();
+    assert_eq!(
+        sync.state(),
+        SyncState::Synced,
+        "a later claim moved the state"
+    );
+}
+
+/// **A closed or offline node with no session is synced** (CS-Q2 step 8):
+/// the declaration is the operator naming the node's whole network, so the
+/// last session closing leaves it synced, where an open node returns to
+/// `NoView`.
+#[test]
+fn a_declared_node_with_no_session_is_synced() {
+    for declaration in [crate::Declaration::Offline, crate::Declaration::Closed] {
+        let mut sync = Sync::new(Trust::UNPINNED, issued).with_declaration(declaration);
+        assert_eq!(sync.state(), SyncState::Synced, "{declaration:?}");
+        open(&mut sync, 1);
+        assert_eq!(
+            sync.state(),
+            SyncState::NoView,
+            "{declaration:?}: the opening"
+        );
+        fire_opening(&mut sync);
+        assert_eq!(sync.state(), SyncState::Synced, "{declaration:?}");
+        let mut out = Vec::new();
+        sync.handle(
+            Event::SessionClosed { session: 1 },
+            &Empty,
+            std::time::Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("the view answers");
+        assert_eq!(sync.state(), SyncState::Synced, "{declaration:?}");
+        assert!(out.is_empty(), "{declaration:?}: {out:?}");
+    }
+    let open_network = Sync::<u8, _>::new(Trust::UNPINNED, issued);
+    assert_eq!(open_network.state(), SyncState::NoView);
+}
+
+#[test]
+fn the_last_session_closing_returns_to_no_view() {
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
+    open(&mut sync, 1);
+    open(&mut sync, 2);
+    fire_opening(&mut sync);
+    assert_eq!(sync.state(), SyncState::Synced);
+    let mut out = Vec::new();
+    sync.handle(
+        Event::SessionClosed { session: 1 },
+        &Empty,
+        std::time::Instant::now(),
+        &mut NoDraw,
+        &mut out,
+    )
+    .expect("the view answers");
+    assert!(out.is_empty(), "one session still has a view");
+    sync.handle(
+        Event::SessionClosed { session: 2 },
+        &Empty,
+        std::time::Instant::now(),
+        &mut NoDraw,
+        &mut out,
+    )
+    .expect("the view answers");
+    assert!(matches!(
+        out.as_slice(),
+        [Command::Publish {
+            state: SyncState::NoView,
+        }]
+    ));
+}
+
+#[test]
+fn a_short_fill_is_following_and_the_latch_does_not_withhold_synced() {
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
+    open(&mut sync, 1);
+    fire_opening(&mut sync);
+    let mut out = Vec::new();
+    sync.handle(
+        Event::Fill {
+            frontier: BlockHeight::from_raw(4),
+        },
+        &Empty,
+        std::time::Instant::now(),
+        &mut NoDraw,
+        &mut out,
+    )
+    .expect("the view answers");
+    assert_eq!(
+        sync.state(),
+        SyncState::Following {
+            verified_to: BlockHeight::from_raw(4),
+        }
+    );
+    let published = out.len();
+    sync.handle(
+        Event::Latch { set: true },
+        &Empty,
+        std::time::Instant::now(),
+        &mut NoDraw,
+        &mut out,
+    )
+    .expect("the view answers");
+    assert!(sync.alarm());
+    assert_eq!(out.len(), published, "the latch is not the state");
+    assert_eq!(
+        sync.state(),
+        SyncState::Following {
+            verified_to: BlockHeight::from_raw(4),
+        }
+    );
+    sync.handle(
+        Event::Fill {
+            frontier: BlockHeight::ZERO,
+        },
+        &Empty,
+        std::time::Instant::now(),
+        &mut NoDraw,
+        &mut out,
+    )
+    .expect("the view answers");
+    assert_eq!(sync.state(), SyncState::Synced);
+}
+
+#[test]
+fn a_store_fault_reaches_the_caller() {
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
+    let mut out = Vec::new();
+    let fault = sync
+        .handle(
+            Event::SessionOpened {
+                session: 1,
+                transit: Duration::from_secs(1),
+            },
+            &Faults,
+            std::time::Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect_err("tip's fault");
+    assert_eq!(fault, StoreDown);
+    // The session is held, so its opening's bound is armed; nothing is
+    // published.
+    assert!(
+        matches!(out.as_slice(), [Command::ArmOpening { session: 1, .. }]),
+        "a failed read published: {out:?}"
+    );
+    let armed = out.len();
+
+    struct HeaderFaults;
+    impl HeaderView<'static> for HeaderFaults {
+        type Fault = StoreDown;
+        fn tip(&self) -> Result<Option<Tip>, StoreDown> {
+            Ok(Some(Tip {
+                height: BlockHeight::from_raw(0),
+                hash: BlockHash::from_bytes([1; 32]),
+            }))
+        }
+        fn header_at(&self, _: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreDown> {
+            Err(StoreDown)
+        }
+    }
+    let fault = sync
+        .handle(
+            Event::Tip {
+                tip: Tip {
+                    height: BlockHeight::from_raw(0),
+                    hash: BlockHash::from_bytes([1; 32]),
+                },
+            },
+            &HeaderFaults,
+            std::time::Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect_err("header_at's fault");
+    assert_eq!(fault, StoreDown);
+    assert_eq!(out.len(), armed, "a failed read published: {out:?}");
+}
+
+#[test]
+fn a_tip_is_read_from_the_chain() {
+    struct One {
+        work: CumulativeDifficulty,
+    }
+
+    impl HeaderView<'static> for One {
+        type Fault = Infallible;
+
+        fn tip(&self) -> Result<Option<Tip>, Infallible> {
+            Ok(Some(Tip {
+                height: BlockHeight::from_raw(3),
+                hash: BlockHash::from_bytes([1; 32]),
+            }))
+        }
+
+        fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Infallible> {
+            if height != BlockHeight::from_raw(3) {
+                return Ok(AtHeight::AboveTip);
+            }
+            Ok(AtHeight::Recorded(HeaderRecord {
+                hash: BlockHash::from_bytes([1; 32]),
+                header: BlockHeader {
+                    major_version: 1,
+                    minor_version: 0,
+                    timestamp: 1,
+                    previous: BlockHash::from_bytes([0; 32]),
+                    nonce: 0,
+                    curve_tree_root: CurveTreeRoot::from_bytes([0; 32]),
+                    attestation_root: AttestationRoot::from_bytes([0; 32]),
+                },
+                cumulative_difficulty: self.work,
+            }))
+        }
+    }
+
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
+    open(&mut sync, 1);
+    fire_opening(&mut sync);
+    let mut out = Vec::new();
+    sync.handle(
+        Event::Tip {
+            tip: Tip {
+                height: BlockHeight::from_raw(3),
+                hash: BlockHash::from_bytes([1; 32]),
+            },
+        },
+        &One {
+            work: CumulativeDifficulty::from_raw(50),
+        },
+        std::time::Instant::now(),
+        &mut NoDraw,
+        &mut out,
+    )
+    .expect("the view answers");
+    // The local chain is the best chain, so the state stays synced. No
+    // session supplied the new tip, so it relays to every session.
+    assert!(
+        matches!(
+            out.as_slice(),
+            [Command::Relay { hash, from: None }] if *hash == BlockHash::from_bytes([1; 32])
+        ),
+        "{out:?}"
+    );
+    assert_eq!(sync.state(), SyncState::Synced);
+}
+
+/// One header request extends `H*`. A second source waits until that
+/// request's session closes, and then it is drawn.
+#[test]
+fn one_header_request_extends_the_frontier() {
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
+    open(&mut sync, 1);
+    open(&mut sync, 2);
+    let mut out = Vec::new();
+    let mut rng = Words(vec![0, 0, 0]);
+    sync.claim(
+        1,
+        claim(2, 2),
+        &Empty,
+        std::time::Instant::now(),
+        &mut rng,
+        &mut out,
+    )
+    .unwrap();
+    assert_eq!(requests(&out), vec![1]);
+    out.clear();
+    sync.claim(
+        2,
+        claim(2, 3),
+        &Empty,
+        std::time::Instant::now(),
+        &mut rng,
+        &mut out,
+    )
+    .unwrap();
+    assert!(requests(&out).is_empty(), "a request is already out");
+    sync.handle(
+        Event::SessionClosed { session: 1 },
+        &Empty,
+        std::time::Instant::now(),
+        &mut rng,
+        &mut out,
+    )
+    .unwrap();
+    assert_eq!(requests(&out), vec![2]);
+}
+
+struct Words(Vec<u64>);
+
+impl RelayRng for Words {
+    fn next_u64(&mut self) -> u64 {
+        self.0.remove(0)
+    }
+}
+
+fn requests(out: &[Command<u8>]) -> Vec<u8> {
+    out.iter()
+        .filter_map(|command| match command {
+            Command::RequestHeaders { session, .. } => Some(*session),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_body_deadline_is_the_body_budget_at_the_rate_floor() {
+    let now = Instant::now();
+    let transit = Duration::from_secs(7);
+    let deadline = body_deadline(now, transit);
+    let secs = BODIES_RESPONSE_BYTES / SYNC_RATE_FLOOR;
+    assert_eq!(deadline, now + transit + Duration::from_secs(secs));
+}
+
+/// **A refused latch write is retried until the latch is set** (the CS-5
+/// tune-up). The write keeps its evidence through a refusal: the model
+/// asks for a retry `ALARM_RETRY` later, raises the same evidence again
+/// when it fires, and is done only when the latch watch reports the latch
+/// set. A refusal or a retry after that asks for nothing.
+#[test]
+fn a_refused_latch_write_is_retried_until_the_latch_is_set() {
+    use super::{AlarmWrite, Evidence, ALARM_RETRY};
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
+    let evidence = Evidence {
+        fork_at: BlockHeight::from_raw(3),
+        tip: BlockHash::from_bytes([7; 32]),
+        work: CumulativeDifficulty::from_raw(99),
+    };
+    let mut out = Vec::new();
+    sync.raise_alarm(evidence, &mut out);
+    assert!(matches!(out.as_slice(), [Command::RaiseAlarm { .. }]));
+    let now = Instant::now();
+    let step = |sync: &mut Sync<u8, _>, event: Event<u8>| {
+        let mut out = Vec::new();
+        sync.handle(event, &Empty, now, &mut NoDraw, &mut out)
+            .expect("the view answers");
+        out
+    };
+
+    let refused = step(&mut sync, Event::AlarmRefused);
+    assert!(
+        matches!(refused.as_slice(), [Command::ArmAlarmRetry { deadline }] if *deadline == now + ALARM_RETRY),
+        "a refusal did not arm the retry: {refused:?}"
+    );
+    assert!(!sync.alarm, "a refused write set the latch");
+
+    let retried = step(&mut sync, Event::AlarmRetry);
+    assert!(
+        matches!(
+            retried.as_slice(),
+            [Command::RaiseAlarm { fork_at, tip, work }]
+                if *fork_at == evidence.fork_at && *tip == evidence.tip && *work == evidence.work
+        ),
+        "the retry did not raise the same evidence: {retried:?}"
+    );
+
+    let written = step(&mut sync, Event::Latch { set: true });
+    assert!(
+        sync.alarm,
+        "the latch is not set after the successful write"
+    );
+    assert_eq!(sync.alarm_write, AlarmWrite::Written);
+    assert!(
+        !written.iter().any(|command| matches!(
+            command,
+            Command::RaiseAlarm { .. } | Command::ArmAlarmRetry { .. }
+        )),
+        "{written:?}"
+    );
+    // The same two steps with no chain view. The owner applies them this
+    // way when the store cannot be read.
+    let mut direct = Sync::<u8, _>::new(Trust::UNPINNED, issued);
+    direct.raise_alarm(evidence, &mut Vec::new());
+    let mut bare_refused = Vec::new();
+    direct.alarm_refused(now, &mut bare_refused);
+    assert!(
+        matches!(bare_refused.as_slice(), [Command::ArmAlarmRetry { deadline }] if *deadline == now + ALARM_RETRY),
+        "a refusal without a view did not arm the retry: {bare_refused:?}"
+    );
+    let mut bare_retried = Vec::new();
+    direct.alarm_retry(&mut bare_retried);
+    assert!(
+        matches!(
+            bare_retried.as_slice(),
+            [Command::RaiseAlarm { fork_at, tip, work }]
+                if *fork_at == evidence.fork_at && *tip == evidence.tip && *work == evidence.work
+        ),
+        "the retry without a view did not raise the same evidence: {bare_retried:?}"
+    );
+    // The watch's report, also with no chain view. The owner records it
+    // this way when the store cannot be read: the write is done, and a
+    // later refusal or retry asks for nothing.
+    let mut reported = Sync::<u8, _>::new(Trust::UNPINNED, issued);
+    reported.raise_alarm(evidence, &mut Vec::new());
+    reported.latch_reported(true);
+    assert!(reported.alarm(), "the latch is not set after the report");
+    assert_eq!(reported.alarm_write, AlarmWrite::Written);
+    let mut after_report = Vec::new();
+    reported.alarm_refused(now, &mut after_report);
+    reported.alarm_retry(&mut after_report);
+    assert!(
+        after_report.is_empty(),
+        "a reported latch was asked for again: {after_report:?}"
+    );
+
+    for event in [Event::AlarmRefused, Event::AlarmRetry] {
+        let after = step(&mut sync, event);
+        assert!(
+            !after.iter().any(|command| matches!(
+                command,
+                Command::RaiseAlarm { .. } | Command::ArmAlarmRetry { .. }
+            )),
+            "a written latch was asked for again: {after:?}"
+        );
+    }
+}

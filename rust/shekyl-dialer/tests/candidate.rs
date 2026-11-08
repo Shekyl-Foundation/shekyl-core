@@ -7,14 +7,11 @@
 //! count of pending attempts and kept sessions.
 
 use std::collections::BTreeSet;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::Ipv4Addr;
 
-use shekyl_dialer::memory::FIRST_WINDOW_NANOS;
-use shekyl_dialer::{Attempts, CandidateFilter, DialAim, FailedAddresses, Skip};
+use shekyl_dialer::{Attempts, CandidateFilter, DialAim, Skip};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_peerlist::{
-    BanQuery, CloseCause, CloseKind, DialOutcome, Host, NetworkAddress, NoBans, Tick,
-};
+use shekyl_peerlist::{DialOutcome, Host, NetworkAddress};
 
 fn peer(n: u8, port: u16) -> NetworkAddress {
     NetworkAddress::Ipv4 {
@@ -33,19 +30,6 @@ fn onion(n: u8) -> NetworkAddress {
 /// An outcome constructor that takes only the address.
 type MakeOutcome = fn(NetworkAddress) -> DialOutcome;
 
-fn at(nanos: u64) -> Tick {
-    Tick::new(nanos)
-}
-
-/// Bans exactly one host.
-struct OneBan(IpAddr);
-
-impl BanQuery for OneBan {
-    fn is_banned(&mut self, host: IpAddr, _now: Tick) -> bool {
-        host == self.0
-    }
-}
-
 /// Everything the filter reads, empty unless a test fills it.
 #[derive(Default)]
 struct World {
@@ -53,24 +37,15 @@ struct World {
     sessions: BTreeSet<NetworkAddress>,
     outbound_hosts: BTreeSet<Host>,
     attempts: Attempts,
-    failed: FailedAddresses,
 }
 
 impl World {
-    fn check(
-        &self,
-        address: &NetworkAddress,
-        bans: &mut dyn BanQuery,
-        now: Tick,
-    ) -> Result<(), Skip> {
+    fn check(&self, address: &NetworkAddress) -> Result<(), Skip> {
         CandidateFilter {
             own: &self.own,
             sessions: &self.sessions,
             outbound_hosts: &self.outbound_hosts,
             attempts: &self.attempts,
-            failed: &self.failed,
-            bans,
-            now,
         }
         .check(address)
     }
@@ -79,8 +54,8 @@ impl World {
 #[test]
 fn an_address_nothing_names_is_a_candidate() {
     let world = World::default();
-    assert_eq!(world.check(&peer(1, 18080), &mut NoBans, at(0)), Ok(()));
-    assert_eq!(world.check(&onion(1), &mut NoBans, at(0)), Ok(()));
+    assert_eq!(world.check(&peer(1, 18080)), Ok(()));
+    assert_eq!(world.check(&onion(1)), Ok(()));
 }
 
 #[test]
@@ -89,48 +64,33 @@ fn our_own_address_is_not_a_candidate() {
         own: vec![peer(1, 18080), onion(1)],
         ..World::default()
     };
-    assert_eq!(
-        world.check(&peer(1, 18080), &mut NoBans, at(0)),
-        Err(Skip::OwnAddress)
-    );
-    assert_eq!(
-        world.check(&onion(1), &mut NoBans, at(0)),
-        Err(Skip::OwnAddress)
-    );
-    assert_eq!(world.check(&peer(2, 18080), &mut NoBans, at(0)), Ok(()));
+    assert_eq!(world.check(&peer(1, 18080)), Err(Skip::OwnAddress));
+    assert_eq!(world.check(&onion(1)), Err(Skip::OwnAddress));
+    assert_eq!(world.check(&peer(2, 18080)), Ok(()));
 }
 
 #[test]
 fn an_address_already_in_use_is_not_a_candidate() {
     let mut world = World::default();
     world.sessions.insert(peer(3, 18080));
-    assert_eq!(
-        world.check(&peer(3, 18080), &mut NoBans, at(0)),
-        Err(Skip::InUse)
-    );
+    assert_eq!(world.check(&peer(3, 18080)), Err(Skip::InUse));
 }
 
 #[test]
 fn a_host_with_an_outbound_session_is_not_a_candidate_on_another_port() {
     let mut world = World::default();
     world.outbound_hosts.insert(peer(4, 18080).host());
-    assert_eq!(
-        world.check(&peer(4, 28080), &mut NoBans, at(0)),
-        Err(Skip::HostHasOutbound)
-    );
-    assert_eq!(world.check(&peer(5, 28080), &mut NoBans, at(0)), Ok(()));
+    assert_eq!(world.check(&peer(4, 28080)), Err(Skip::HostHasOutbound));
+    assert_eq!(world.check(&peer(5, 28080)), Ok(()));
 }
 
 #[test]
 fn a_pending_attempt_and_its_host_are_not_candidates() {
     let mut world = World::default();
     assert!(world.attempts.begin(&peer(6, 18080), DialAim::Confirm));
+    assert_eq!(world.check(&peer(6, 18080)), Err(Skip::Pending));
     assert_eq!(
-        world.check(&peer(6, 18080), &mut NoBans, at(0)),
-        Err(Skip::Pending)
-    );
-    assert_eq!(
-        world.check(&peer(6, 28080), &mut NoBans, at(0)),
+        world.check(&peer(6, 28080)),
         Err(Skip::HostHasOutbound),
         "the pending attempt's host, on another port"
     );
@@ -139,54 +99,8 @@ fn a_pending_attempt_and_its_host_are_not_candidates() {
     world
         .attempts
         .finish(&DialOutcome::Confirmed(peer(6, 18080)));
-    assert_eq!(world.check(&peer(6, 18080), &mut NoBans, at(0)), Ok(()));
-    assert_eq!(world.check(&peer(6, 28080), &mut NoBans, at(0)), Ok(()));
-}
-
-#[test]
-fn a_banned_host_is_not_a_candidate() {
-    let world = World::default();
-    let mut bans = OneBan(IpAddr::V4(Ipv4Addr::new(11, 11, 0, 7)));
-    assert_eq!(
-        world.check(&peer(7, 18080), &mut bans, at(0)),
-        Err(Skip::Banned)
-    );
-    assert_eq!(world.check(&peer(8, 18080), &mut bans, at(0)), Ok(()));
-    assert_eq!(
-        world.check(&onion(7), &mut bans, at(0)),
-        Ok(()),
-        "an onion has no IP to ban"
-    );
-}
-
-#[test]
-fn a_recently_failed_onion_is_skipped_until_its_window_ends() {
-    let mut world = World::default();
-    let refused = DialOutcome::DialFailed(onion(9), CloseCause::proxy_refused(0x05));
-    world.failed.observe(&refused, at(100));
-    assert_eq!(
-        world.check(&onion(9), &mut NoBans, at(100 + FIRST_WINDOW_NANOS)),
-        Err(Skip::RecentlyFailed)
-    );
-    assert_eq!(
-        world.check(&onion(9), &mut NoBans, at(100 + FIRST_WINDOW_NANOS + 1)),
-        Ok(())
-    );
-}
-
-/// R2: no clearnet candidate is ever skipped for a past failure, because
-/// nothing writes the memory on clearnet.
-#[test]
-fn a_clearnet_address_is_never_skipped_for_a_past_failure() {
-    let mut world = World::default();
-    for kind in [CloseKind::DialFailed, CloseKind::LevinHandshakeRejected] {
-        let failed = DialOutcome::DialFailed(peer(10, 18080), CloseCause::new(kind));
-        world.failed.observe(&failed, at(100));
-    }
-    world
-        .failed
-        .observe(&DialOutcome::PeerlistRefused(peer(10, 18080)), at(100));
-    assert_eq!(world.check(&peer(10, 18080), &mut NoBans, at(100)), Ok(()));
+    assert_eq!(world.check(&peer(6, 18080)), Ok(()));
+    assert_eq!(world.check(&peer(6, 28080)), Ok(()));
 }
 
 // ---- the dialer's own counts --------------------------------------------
@@ -206,11 +120,22 @@ fn a_pending_keep_counts_toward_the_target_and_a_pending_confirm_does_not() {
 
 #[test]
 fn only_session_accepted_leaves_a_kept_session_and_every_outcome_ends_the_attempt() {
-    let cause = CloseCause::new(CloseKind::LevinHandshakeTimeout);
+    let cause = shekyl_transport_layer::DialEnd::levin_handshake_timeout().failure();
     let outcomes: [(MakeOutcome, usize); 4] = [
         (DialOutcome::SessionAccepted, 1),
         (DialOutcome::Confirmed, 0),
-        (DialOutcome::PeerlistRefused, 0),
+        (
+            (|a| {
+                DialOutcome::DialFailed(
+                    a,
+                    shekyl_transport_layer::DialFailure::refused_by_peer(
+                        shekyl_peerlist::ConnectorId::Clearnet,
+                        shekyl_transport_layer::Reached::StreamOpened,
+                    ),
+                )
+            }) as MakeOutcome,
+            0,
+        ),
         (DialOutcome::PayloadRefused, 0),
     ];
     for (make, kept) in outcomes {

@@ -34,8 +34,9 @@ use crate::READ_LEN_CAP;
 mod coinbase;
 
 pub use coinbase::{
-    build_coinbase_extra, check_coinbase_extra_shape, check_tx_extra_shape, CoinbaseBuildError,
-    CoinbaseGrammarError, ExtraSubject, COINBASE_NONCE_BYTES, COINBASE_NONCE_OFFSET_FROM_PUBKEY,
+    build_coinbase_extra, check_coinbase_extra_shape, check_tx_extra_shape, coinbase_extra_len,
+    CoinbaseBuildError, CoinbaseGrammarError, ExtraSubject, COINBASE_NONCE_BYTES,
+    COINBASE_NONCE_OFFSET_FROM_PUBKEY, COINBASE_NONCE_OFFSET_IN_EXTRA,
 };
 
 /// `0x00` — padding (a run of zero bytes to the end of `extra`).
@@ -485,8 +486,8 @@ pub fn pqc_leaf_entries_per_output(blob: &[u8]) -> io::Result<Vec<[u8; PQC_LEAF_
 
 /// Which of the two CEN-I19 fields a shape verdict is about.
 ///
-/// The verdict names the field, not a raw tag, so the FFI code table is a
-/// total match on this enum.
+/// The verdict names the field, not a raw tag, so a match on it is total
+/// over the two fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PqcExtraField {
     /// `0x06`, [`HYBRID_KEM_CT_BYTES`] bytes per output.
@@ -519,10 +520,9 @@ impl PqcExtraField {
 ///
 /// Every variant names its field, and every variant whose defect is a count
 /// or a length names those numbers — a rejected transaction says what was
-/// expected. The daemon logs this type's [`Display`] verbatim across the FFI
-/// (`shekyl_tx_extra_shape_of`), so the log line and a port's error are the
-/// same sentence. The coinbase grammar is [`CoinbaseGrammarError`], not a
-/// reuse of these variants.
+/// expected. Its [`Display`](std::fmt::Display) is that sentence, so a log
+/// line and a port's error read the same. The coinbase grammar is
+/// [`CoinbaseGrammarError`], not a reuse of these variants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PqcFieldShapeError {
     /// A tagged field is present on a transaction with no outputs.

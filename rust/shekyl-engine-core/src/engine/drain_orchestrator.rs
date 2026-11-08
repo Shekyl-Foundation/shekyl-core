@@ -486,8 +486,8 @@ pub(crate) enum DrainOrchestrationError {
     #[error(transparent)]
     Plan(#[from] DrainError),
     /// A curve-tree handle call failed while assembling membership paths (a
-    /// client refusal or a stopped actor) — terminal until the engine
-    /// respawns the actor, or a resync for a lagging-ingest refusal.
+    /// client refusal or a stopped actor) — a stopped actor is terminal for
+    /// the session; a lagging-ingest refusal clears on a resync.
     #[error("curve tree unavailable or refused: {0:?}")]
     Tree(CurveTreeHandleError),
     /// The path assembly returned a set that does not match the selection
@@ -752,7 +752,7 @@ fn scoped_records(
 pub(crate) async fn orchestrate_drain(
     handle: PersonaHandle,
     ctx: DrainCtx<'_>,
-    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<[u8; 32]>,
+    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<shekyl_types::BlockHash>,
 ) -> Result<OrchestratedDrain, DrainOrchestrationError> {
     // 1. Anchor one ReferenceBlock via the ordinary send-path procedure
     //    (shared with the bond path — never a hand-rolled `tip − age`, WI-2

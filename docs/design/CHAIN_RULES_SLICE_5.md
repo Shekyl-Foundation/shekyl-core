@@ -40,8 +40,8 @@ this slice's to build (§6).
 
 What makes this slice different from slice 4: **the rule content already
 exists in Rust, in the wrong crate.** `shekyl_wire::Transaction::validate`
-and `validate_context_free_pruned` (`rust/shekyl-wire/src/transaction.rs:1673`,
-`:1984`) implement, by this pre-flight's count, **fourteen** of the
+and `validate_context_free_pruned` (`rust/shekyl-wire/src/transaction.rs:2297`,
+`:1960`) implement, by this pre-flight's count, **fourteen** of the
 twenty-four rows as a parse-adjacent validator that the **wallet** calls
 (`engine/block_fetch.rs:200`, `:256`, `:258`) and the **daemon's Rust never
 does** — `chain-ingest`'s corpus reader parses with `from_bytes`

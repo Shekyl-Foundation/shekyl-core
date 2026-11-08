@@ -40,7 +40,7 @@
 //!   `min(packet limit, per-command cap)` after the PWD-B3a flag-class
 //!   discriminator ([`crate::ingress_payload_cap`]): unknown flag bits are
 //!   rejected; a Q/S-flagged bucket whose command is not a
-//!   [`crate::DefinedCommand`] is rejected; a noise/fragment bucket (neither
+//!   [`crate::Command`] is rejected; a noise/fragment bucket (neither
 //!   Q nor S) is bounded only by the packet limit, so cover traffic with
 //!   command 0 is not treated as an unknown command. The packet limit is
 //!   256 KiB before the handshake and 100 MB after (the caller raises it
@@ -199,10 +199,8 @@ impl BucketReader {
     /// out of bytes already consumed or a burst of buckets is O(n²). The
     /// proportional trigger below bounds each drain's memmove by the bytes
     /// consumed since the previous one, making a stream amortized O(n) for
-    /// any feed size. (The oracle's `epee::net_utils::buffer::erase`,
-    /// `contrib/epee/include/net/buffer.h`, only advances an offset and
-    /// resets storage when the buffer is fully consumed — the fully-consumed
-    /// branch here is that case.)
+    /// any feed size. A fully consumed buffer resets its storage instead of
+    /// moving an empty tail.
     fn compact(&mut self) {
         if self.read_pos == 0 {
             return;

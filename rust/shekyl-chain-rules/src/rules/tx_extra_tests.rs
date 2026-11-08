@@ -150,6 +150,27 @@ fn i19_a_nonce_off_the_coinbase_is_refused_on_i19() {
     refused_listed(&listed_with_extra(with_nonce), CenRow::I19);
 }
 
+/// A second `0x07` leaf field on the coinbase is refused at `Miner` on
+/// I19, as the shape function the coinbase routes to refuses it on a listed
+/// transaction (`Duplicate`). The extra is the conforming five-field
+/// coinbase extra with the leaf field repeated, so the refusal is the
+/// duplicate's. Supersedes the C++ `tx_extra_pqc_field_shape` case
+/// `coinbase_with_duplicate_leaf_entry_field_is_rejected_before_writing`.
+#[test]
+fn i19_a_duplicate_leaf_field_on_the_coinbase_is_refused_at_miner() {
+    let n = 1;
+    let extra = tx_extra::serialize(&[
+        TxExtraField::PubKey(G),
+        TxExtraField::Nonce(vec![0; COINBASE_NONCE_BYTES]),
+        TxExtraField::DrawCommitment(CONFORMING_DRAW_COMMITMENT),
+        TxExtraField::PqcKemCiphertext(vec![0x5A; HYBRID_KEM_CT_BYTES * n]),
+        TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n)),
+        TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n)),
+    ])
+    .expect("six fields serialize");
+    refused_at_miner(&coinbase_with_extra(extra), CenRow::I19);
+}
+
 /// I19 on the coinbase judges the PQC fields alone: a coinbase with the
 /// right fields but no pubkey is I20's refusal, not I19's.
 #[test]

@@ -4,8 +4,8 @@
 // BSD-3-Clause
 
 //! The daemon's exit statuses for a refusal and a failure (IG-11), and the
-//! one way a refusal reaches the operator. The daemon's start and the
-//! snapshot export (`shekyl-ffi`) both refuse through here.
+//! one way a refusal reaches the operator. The daemon's start
+//! (`shekyl-daemon`'s `run`) refuses through here.
 
 use std::io::Write;
 

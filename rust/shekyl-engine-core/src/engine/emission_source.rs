@@ -6,13 +6,12 @@
 //! Emission claim-source RPC client: request shape + response decode
 //! (`EMISSION_CLAIM_BUILDER.md` §7, PR 1).
 //!
-//! The daemon-side handler (`src/rpc/archival_claim_source.cpp`) serializes
-//! the single landed gather (`gather_archival_emission_epoch_snapshot`) for
-//! every epoch in the claim window, unconditionally. This module is the
+//! The daemon-side handler (`shekyl-daemon-rpc`'s
+//! `get_archival_emission_claim_source`) serializes the gathered snapshot
+//! for every epoch in the claim window, unconditionally. This module is the
 //! wallet-side twin: it decodes that response into **exactly** the structs
 //! verify already consumes — [`EmissionEpochSource`] + [`ClaimantBondRecord`]
-//! views over owned rows — via the same two-pass shape as the verify FFI shim
-//! (`shekyl-ffi/src/archival_ffi.rs`). No builder-private mirror of either
+//! views over owned rows. No builder-private mirror of either
 //! struct exists here (§7.3 decode-locus pin: the §2 step-7 self-check must
 //! consume the same decoded values the assembly consumed).
 //!
@@ -26,9 +25,7 @@
 //! Untrusted-daemon posture (`20-rust-vs-cpp-policy.mdc` §3): scalar and
 //! bool fields are mandatory — a response missing one is a malformed reply,
 //! loudly rejected, never silently defaulted. Array fields decode absent as
-//! empty, matching epee KV serialization's omit-empty-container behavior on
-//! the daemon side (the C++ wire-contract test pins that behavior). The
-//! decode also enforces `status == "OK"` (a `BUSY`/error-shaped body must
+//! empty. The decode also enforces `status == "OK"` (a `BUSY`/error-shaped body must
 //! never decode as a valid zeroed source) and the invariants the consumers
 //! rely on: `claimed_settlement_epochs` strictly increasing (the
 //! `claimed_epochs_contains` binary-search operand), `epochs` in strictly
@@ -51,7 +48,7 @@ use crate::engine::daemon::synced_chain_facts::{
     fetch_synced_chain_facts, AnchoredView, BracketedChainFacts, CoherentChainView,
     SyncedChainFacts, TimelineBreak,
 };
-use shekyl_types::{BlockHash, ChainCount, PCanonicalId};
+use shekyl_types::{ChainCount, PCanonicalId};
 
 /// The daemon JSON-RPC method name (registered on both the epee and
 /// Rust/Axum transports in PR 1's daemon half).
@@ -81,7 +78,7 @@ pub enum EmissionSourceError {
 #[derive(Debug, Clone)]
 pub struct BondRow {
     pub join_settlement_epoch: u64,
-    pub is_foundation_complete_tree: bool,
+    pub is_support_complete_tree: bool,
     pub bad_intervals: Vec<BadInterval>,
 }
 
@@ -293,7 +290,7 @@ impl EpochSnapshot {
             .iter()
             .map(|b| EpochCloseBond {
                 join_settlement_epoch: b.join_settlement_epoch,
-                is_foundation_complete_tree: b.is_foundation_complete_tree,
+                is_support_complete_tree: b.is_support_complete_tree,
                 bad_intervals: &b.bad_intervals,
             })
             .collect()
@@ -397,7 +394,7 @@ fn decode_bond_row(v: &Value) -> Result<BondRow, EmissionSourceError> {
         .collect();
     Ok(BondRow {
         join_settlement_epoch: req_u64(v, "join_settlement_epoch")?,
-        is_foundation_complete_tree: req_bool(v, "is_foundation_complete_tree")?,
+        is_support_complete_tree: req_bool(v, "is_support_complete_tree")?,
         bad_intervals,
     })
 }
@@ -691,9 +688,9 @@ impl VouchedClaimSource {
         let facts = crate::engine::daemon::synced_chain_facts::SyncedChainFacts::new(
             source.chain_height,
             true,
-            shekyl_types::BlockHash::from_bytes(crate::engine::test_support::test_block_hash_at(
+            crate::engine::test_support::test_block_hash_at(
                 source.chain_height.to_raw().saturating_sub(1),
-            )),
+            ),
         )
         .expect("test vouching is synchronized by construction");
         let bracketed = facts
@@ -790,7 +787,7 @@ async fn bracket_after_record<R: Rpc>(
         .get_block_hash(number)
         .await
         .map_err(|e| TimelineBreak::from_facts_error(&e))?;
-    facts.bracket(BlockHash::from_bytes(at_tip_now))
+    facts.bracket(at_tip_now)
 }
 
 /// A claim-source response **paired with the `P` it was actually requested

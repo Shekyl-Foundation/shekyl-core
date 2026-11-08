@@ -23,9 +23,9 @@
 //! [`Reorganize`]: crate::connector::Reorganize
 
 use shekyl_chain_rules::{
-    form, Candidate, FormAttempt, InvalidBlock, ReferenceClaims, StructurallyValid, Substrate,
+    form, Candidate, FormAttempt, FormClaims, InvalidBlock, ReferenceClaims, StructurallyValid,
+    Substrate,
 };
-use shekyl_difficulty::ForkChoiceVerdict;
 use shekyl_types::BlockHash;
 
 use crate::connector::{PlannedBlock, SwitchPlan};
@@ -35,7 +35,7 @@ use crate::substrate::Recalled;
 /// The blocks a plan named, formed, in its order.
 #[derive(Debug)]
 pub struct FormedPlan {
-    /// The demoted blocks, ascending; empty for `ForcedSwitch`.
+    /// The demoted blocks, ascending.
     pub demoted: Vec<StructurallyValid>,
     /// The alt entries, ascending.
     pub promoted: Vec<StructurallyValid>,
@@ -86,14 +86,11 @@ where
     G: Fn() -> R + Sync,
     R: Send,
 {
-    let mut work: Vec<(Candidate, PlannedBlock, ReferenceClaims)> = Vec::new();
-    if plan.verdict != ForkChoiceVerdict::ForcedSwitch {
-        work.extend(
-            plan.demoted
-                .iter()
-                .map(|d| (d.candidate.clone(), d.at.clone(), ReferenceClaims::EMPTY)),
-        );
-    }
+    let mut work: Vec<(Candidate, PlannedBlock, ReferenceClaims)> = plan
+        .demoted
+        .iter()
+        .map(|d| (d.candidate.clone(), d.at.clone(), ReferenceClaims::EMPTY))
+        .collect();
     let demoted_len = work.len();
     work.extend(plan.promoted.iter().map(|p| {
         let candidate = Candidate::new(p.block.clone(), p.transactions.clone())
@@ -182,11 +179,14 @@ where
                         let _permit = permit();
                         match form(
                             candidate,
-                            &rules.in_force(at.height),
+                            &FormClaims {
+                                rule_set: &rules.in_force(at.height),
+                                seed: at.seed,
+                                target: at.target,
+                                references: &references,
+                                network: rules.trust().network_id(),
+                            },
                             substrate,
-                            at.seed,
-                            at.target,
-                            &references,
                             FormAttempt::FIRST,
                         ) {
                             Ok(Ok(valid)) => formed.push(valid),

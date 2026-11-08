@@ -60,6 +60,10 @@ const TAG_LEN: usize = 1;
 pub const COINBASE_NONCE_OFFSET_FROM_PUBKEY: usize =
     TX_EXTRA_PUBKEY_LEN + TAG_LEN + COINBASE_NONCE_LENGTH_WIDTH;
 
+/// Bytes from the first byte of a coinbase's extra to the first nonce
+/// payload byte: the `0x01` tag, then [`COINBASE_NONCE_OFFSET_FROM_PUBKEY`].
+pub const COINBASE_NONCE_OFFSET_IN_EXTRA: usize = TAG_LEN + COINBASE_NONCE_OFFSET_FROM_PUBKEY;
+
 /// Tags the grammar admits, in canonical order. The leafless layout is the
 /// prefix (pubkey, nonce, draw commitment); an output-bearing coinbase is
 /// the whole array.
@@ -70,6 +74,34 @@ const COINBASE_TAGS: [u8; 5] = [
     TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT,
     TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
 ];
+
+/// Serialized length of a coinbase `extra` with `n_outputs` outputs.
+///
+/// The grammar's layout, summed from the lengths the codec writes: the
+/// pubkey, the fixed nonce, the draw commitment, and — once there is an
+/// output — one KEM blob and one leaf blob, each with its tag and its
+/// length varint. CEN-F4 admits one output above genesis, so the reserve
+/// asks for [`coinbase_extra_len`]`(1)`. A second output is a consensus
+/// change; this length is what that change moves.
+#[must_use]
+pub const fn coinbase_extra_len(n_outputs: usize) -> usize {
+    let pubkey = TAG_LEN + TX_EXTRA_PUBKEY_LEN;
+    let nonce =
+        TAG_LEN + crate::varint::varint_len(COINBASE_NONCE_BYTES as u64) + COINBASE_NONCE_BYTES;
+    let commitment = TAG_LEN + super::DRAW_COMMITMENT_LEN;
+    let head = pubkey + nonce + commitment;
+    if n_outputs == 0 {
+        return head;
+    }
+    let kem = super::HYBRID_KEM_CT_BYTES * n_outputs;
+    let leaf = super::PQC_LEAF_ENTRY_LEN * n_outputs;
+    head + TAG_LEN
+        + crate::varint::varint_len(kem as u64)
+        + kem
+        + TAG_LEN
+        + crate::varint::varint_len(leaf as u64)
+        + leaf
+}
 
 /// Which transaction the shape rule is admitting.
 ///

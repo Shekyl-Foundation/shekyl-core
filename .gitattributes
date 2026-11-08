@@ -1,5 +1,23 @@
 .git* export-ignore
 cmake/Version.cmake export-subst
+# One line ending in the tree: LF. A file a Windows editor saved with
+# CRLF is normalised on commit, and a checkout on Windows gets LF, so a
+# fixture `include_str!`-ed or compared byte-for-byte reads the same on
+# every platform (DAEMON_CONFIG_CUTOVER.md DC-F40, DC-F42). The product
+# does not depend on it: `shekyld` reads a CRLF `shekyld.toml` as it
+# reads an LF one (`a_crlf_file_builds_what_its_lf_twin_builds`). The
+# `-text` entries below are exempt, each for its own reason.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+# Captured as CRLF or mixed before this rule and kept as captured: a
+# benchmark record, a quoted upstream issue. Not renormalised.
+docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011_captures/laptop_samples.tsv -text
+docs/benchmarks/rt_p4_mlkem_decaps_timing_20261023_captures/example_rustc_line.txt -text
+docs/benchmarks/rt_p4_mlkem_decaps_timing_20261023_captures/laptop_x86_disasm_excerpts_crt_static.txt -text
+docs/design/refs/zawy12_issue_24_history.md -text
+docs/design/refs/zawy12_issue_3_lwma1.md -text
+docs/design/refs/zawy12_issue_3_lwma3.md -text
 # KAT corpora are byte-load-bearing fixtures (ADDRESS_DERIVATION_V1 is
 # hash-pinned via include_str! in address_derivation_freeze.rs). Never
 # apply EOL conversion: working-tree bytes must equal committed bytes.
@@ -11,3 +29,7 @@ rust/shekyl-rpc-types/tests/vectors/rpc/** -text
 # textual diffs too, so a reviewer sees "binary files differ" rather than a
 # mangled rendering that invites an edit. `-text` is already applied above.
 rust/shekyl-rpc-types/tests/vectors/rpc/*.bin -diff
+# Frozen numeric oracle (`the_long_term_weight_follows_the_generators_trajectory`).
+# A trailing CR fails the last field's parse, and that panic is the failure.
+# Checkout must not rewrite the line endings.
+rust/shekyl-chain-rules/tests/vectors/block_weight_trajectory/trajectory.txt -text

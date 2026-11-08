@@ -120,10 +120,11 @@ use crate::schema;
 use super::{
     post_image, AltBlock, AltBlockFacts, AltBodies, BlockDraws, BlockInfo, BondRecord, Canonical,
     Coded, CompleteTreeSet, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight,
-    HeldShard, Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx, PoolRecord,
-    ProbeCell, PropertyCell, RMarket, RecordedPow, RuleSetInForce, SchemaVersion,
-    SettlementEpochBlocks, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth,
-    TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    FollowingDegraded, HeldShard, Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey,
+    OutTx, PoolRecord, ProbeCell, PropertyCell, QueuedBody, QueuedBundle, RMarket, RecordedPow,
+    RuleSetInForce, SchemaVersion, SettlementEpochBlocks, SettlementRow, SigmaWorkMilli,
+    SlashLogEntry, SlashedHolding, SupportCount, SupportIssued, SupportSeats, TreeDepth, TxIndex,
+    TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::pool::PoolSchemaVersion;
@@ -543,6 +544,31 @@ impl Fixtures for TreeLeaf {
     }
 }
 
+impl Fixtures for FollowingDegraded {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "genesis_fork",
+                FollowingDegraded {
+                    fork_at: BlockHeight::ZERO,
+                    tip: shekyl_types::BlockHash::from_bytes([0xd1; 32]),
+                    work: shekyl_difficulty::CumulativeDifficulty::from_raw(1),
+                },
+            ),
+            (
+                "byte_order",
+                FollowingDegraded {
+                    fork_at: BlockHeight::from_raw(0x0102_0304_0506_0708),
+                    tip: shekyl_types::BlockHash::from_bytes([0xd2; 32]),
+                    work: shekyl_difficulty::CumulativeDifficulty::from_raw(
+                        0x1112_1314_1516_1718_191a_1b1c_1d1e_1f20,
+                    ),
+                },
+            ),
+        ]
+    }
+}
+
 impl Fixtures for CurveTreeState {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![
@@ -801,6 +827,68 @@ impl Fixtures for IssuedDigest {
         ]
     }
 }
+impl Fixtures for QueuedBundle {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        use shekyl_archival_retention::{BundleKept, BundleRef, PassBitmap};
+        // Inline literals (rule 42): a kept part of nine economy draws with
+        // two passes and two support draws with one, and a prunable hash
+        // whose every byte is distinct.
+        let kept = |count: u32, passes: &[u32], support: PassBitmap| BundleKept {
+            h: BlockHeight::from_raw(0x0102_0304),
+            seed: core::array::from_fn(|i| u8::try_from(0x40 + i).expect("fits")),
+            passes: PassBitmap::from_passes(count, passes.iter().copied()).expect("in range"),
+            support,
+        };
+        let prunable: [u8; 32] = core::array::from_fn(|i| u8::try_from(0x80 + i).expect("fits"));
+        let at = |kept: BundleKept| QueuedBundle {
+            reference: BundleRef::new(kept, prunable),
+            tip_height: BlockHeight::from_raw(0x1112_1314),
+            tip_hash: shekyl_types::BlockHash::from_bytes(core::array::from_fn(|i| {
+                u8::try_from(0xC0 + i).expect("fits")
+            })),
+        };
+        vec![
+            (
+                "economy_and_support",
+                at(kept(
+                    9,
+                    &[0, 8],
+                    PassBitmap::from_passes(2, [1]).expect("in range"),
+                )),
+            ),
+            ("no_draws", at(kept(0, &[], PassBitmap::none()))),
+        ]
+    }
+}
+
+impl Fixtures for QueuedBody {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        use shekyl_archival_retention::{
+            BundleBody, BundleRecord, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
+        };
+        // Inline literals (rule 42): the codec carries the bytes and does
+        // not parse the key or the signatures, so fills stand for them.
+        let key = [0x5Au8; BUNDLE_WITNESS_KEY_LEN];
+        let signature = [0xA5u8; BUNDLE_SIGNATURE_LEN];
+        let record = BundleRecord {
+            attempt: 2,
+            anchor_height: BlockHeight::from_raw(0x2122_2324),
+            delivery_digest: core::array::from_fn(|i| u8::try_from(i).expect("fits")),
+            receipt: [0x3Cu8; BUNDLE_SIGNATURE_LEN],
+        };
+        vec![
+            (
+                "no_records",
+                QueuedBody(BundleBody::new(&key, &signature, &[])),
+            ),
+            (
+                "one_record",
+                QueuedBody(BundleBody::new(&key, &signature, &[record])),
+            ),
+        ]
+    }
+}
+
 impl Fixtures for RecordedPow {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![(
@@ -838,6 +926,52 @@ impl Fixtures for BlockDraws {
             ),
             ("in_flight", row(false)),
             ("revealed", row(true)),
+        ]
+    }
+}
+impl Fixtures for SupportIssued {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "unpassed",
+                SupportIssued {
+                    shard: ShardId::from_raw(7),
+                    passed: false,
+                },
+            ),
+            (
+                "passed",
+                SupportIssued {
+                    shard: ShardId::from_raw(64),
+                    passed: true,
+                },
+            ),
+        ]
+    }
+}
+
+impl Fixtures for SupportSeats {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("empty", SupportSeats::EMPTY),
+            (
+                "two",
+                SupportSeats::new(vec![
+                    PCanonicalId::from_bytes([0x10; 32]),
+                    PCanonicalId::from_bytes([0x30; 32]),
+                ])
+                .expect("ascending"),
+            ),
+        ]
+    }
+}
+
+impl Fixtures for SupportCount {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("none", SupportCount::new(0)),
+            ("capped", SupportCount::new(10)),
+            ("wide", SupportCount::new(0x0102_0304)),
         ]
     }
 }
@@ -1467,6 +1601,7 @@ snapshotted_codecs! {
     LeafCount => codec_snapshot_leaf_count in Chain,
     TreeLeaf => codec_snapshot_tree_leaf in Chain,
     CurveTreeState => codec_snapshot_curve_tree_state in Chain,
+    FollowingDegraded => codec_snapshot_following_degraded in Chain,
     LayerHash => codec_snapshot_layer_hash in Chain,
     BondRecord => codec_snapshot_bond_record in Chain,
     RMarket => codec_snapshot_r_market in Chain,
@@ -1476,6 +1611,9 @@ snapshotted_codecs! {
     IssuedDraw => codec_snapshot_issued_draw in Chain,
     IssuedDigest => codec_snapshot_issued_digest in Chain,
     BlockDraws => codec_snapshot_block_draws in Chain,
+    SupportCount => codec_snapshot_support_count in Chain,
+    SupportSeats => codec_snapshot_support_seats in Chain,
+    SupportIssued => codec_snapshot_support_issued in Chain,
     DrawableDigest => codec_snapshot_drawable_digest in Chain,
     CompleteTreeSet => codec_snapshot_complete_tree_set in Chain,
     SettlementEpoch => codec_snapshot_settlement_epoch in Chain,
@@ -1484,6 +1622,8 @@ snapshotted_codecs! {
     AltBlock => codec_snapshot_alt_block in Chain,
     AltBodies => codec_snapshot_alt_bodies in Chain,
     RecordedPow => codec_snapshot_recorded_pow in Chain,
+    QueuedBundle => codec_snapshot_queued_bundle in Chain,
+    QueuedBody => codec_snapshot_queued_body in Chain,
     PoolRecord => codec_snapshot_pool_record in Pool,
     PoolSchemaVersion => codec_snapshot_pool_schema_version in Pool,
 }

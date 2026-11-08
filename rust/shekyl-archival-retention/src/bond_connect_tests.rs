@@ -11,7 +11,6 @@ use crate::consensus_state::good_through;
 
 const E_RELEASE: u64 = 42;
 const RECORD_BONDED: u64 = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC;
-const TOTAL_BONDED: u64 = 5 * ARCHIVAL_BOND_FLOOR_ATOMIC;
 
 fn record_holdings() -> HoldingsDescriptor {
     HoldingsDescriptor {
@@ -40,9 +39,12 @@ fn connect_full_release_effect() {
     assert_eq!(effect.post_holdings.kind, HoldingsKind::ShardSetCompact);
     assert!(effect.post_holdings.shard_ids.is_empty());
     assert_eq!(effect.interval_close, clean_interval_close(E_RELEASE));
-    // §4.3 identity: refund == debit == bond_floor(record's current holdings).
+    // §4.3 identity: refund == debit == bond_floor(record's current holdings, &crate::ArchivalParams::SHIPPED).
     assert_eq!(effect.refund_atomic, RECORD_BONDED);
-    assert_eq!(effect.refund_atomic, bond_floor(&record_holdings()));
+    assert_eq!(
+        effect.refund_atomic,
+        bond_floor(&record_holdings(), &crate::ArchivalParams::SHIPPED)
+    );
 }
 
 #[test]
@@ -169,108 +171,6 @@ fn connect_appends_below_the_cap() {
     .is_ok());
 }
 
-#[test]
-fn pop_restores_total_bonded_exactly() {
-    // Connect ∘ pop is the identity on the C++ store's global counter (§5
-    // pop twin): the store debits the fold's refund at connect and the pop
-    // re-credits the journaled pre-image.
-    let effect = ok_connect();
-    let restored = release_pop(
-        effect.post_bonded_total,
-        effect.post_holdings.shard_ids.len(),
-        Some(effect.interval_close),
-        E_RELEASE,
-        RECORD_BONDED,
-        TOTAL_BONDED - effect.refund_atomic,
-    )
-    .expect("valid pop");
-    assert_eq!(restored, TOTAL_BONDED);
-}
-
-#[test]
-fn pop_rejects_record_not_exited() {
-    assert_eq!(
-        release_pop(
-            1,
-            0,
-            Some(clean_interval_close(E_RELEASE)),
-            E_RELEASE,
-            RECORD_BONDED,
-            0,
-        ),
-        Err(ReleasePopError::RecordNotExited)
-    );
-    assert_eq!(
-        release_pop(
-            0,
-            1,
-            Some(clean_interval_close(E_RELEASE)),
-            E_RELEASE,
-            RECORD_BONDED,
-            0,
-        ),
-        Err(ReleasePopError::RecordNotExited)
-    );
-}
-
-#[test]
-fn pop_rejects_missing_or_mismatched_clean_close() {
-    assert_eq!(
-        release_pop(0, 0, None, E_RELEASE, RECORD_BONDED, 0),
-        Err(ReleasePopError::MissingCleanClose)
-    );
-    // Wrong epoch.
-    assert_eq!(
-        release_pop(
-            0,
-            0,
-            Some(clean_interval_close(E_RELEASE + 1)),
-            E_RELEASE,
-            RECORD_BONDED,
-            0,
-        ),
-        Err(ReleasePopError::MissingCleanClose)
-    );
-    // An open interval is not a clean close.
-    assert_eq!(
-        release_pop(
-            0,
-            0,
-            Some(BadInterval {
-                start_epoch: E_RELEASE,
-                end_exclusive: u64::MAX,
-            }),
-            E_RELEASE,
-            RECORD_BONDED,
-            0,
-        ),
-        Err(ReleasePopError::MissingCleanClose)
-    );
-}
-
-#[test]
-fn pop_rejects_empty_pre_image() {
-    assert_eq!(
-        release_pop(0, 0, Some(clean_interval_close(E_RELEASE)), E_RELEASE, 0, 0),
-        Err(ReleasePopError::PreImageEmpty)
-    );
-}
-
-#[test]
-fn pop_rejects_total_bonded_overflow() {
-    assert_eq!(
-        release_pop(
-            0,
-            0,
-            Some(clean_interval_close(E_RELEASE)),
-            E_RELEASE,
-            RECORD_BONDED,
-            u64::MAX,
-        ),
-        Err(ReleasePopError::TotalBondedOverflow)
-    );
-}
-
 // ── Reinstate connect/pop (P2B-9) ────────────────────────────────────────────
 
 const RB_EPOCH: u64 = 20;
@@ -298,6 +198,7 @@ fn reinstate_connect_closes_the_open_interval_and_moves_nothing() {
         &intervals,
         &[7, 9],
         RB_EPOCH,
+        crate::archival_params(),
     )
     .unwrap();
     assert_eq!(e.closed_interval_index, 1);
@@ -307,7 +208,14 @@ fn reinstate_connect_closes_the_open_interval_and_moves_nothing() {
 #[test]
 fn reinstate_connect_rejects_growth() {
     assert_eq!(
-        reinstate_connect(0, &[], &[rb_open(5)], &[7, 11], RB_EPOCH),
+        reinstate_connect(
+            0,
+            &[],
+            &[rb_open(5)],
+            &[7, 11],
+            RB_EPOCH,
+            crate::archival_params()
+        ),
         Err(ReinstateConnectError::HoldingsChanged)
     );
 }
@@ -316,7 +224,7 @@ fn reinstate_connect_rejects_growth() {
 fn reinstate_connect_rejects_shape_and_invariant_breaches() {
     let intervals = [rb_open(5)];
     assert_eq!(
-        reinstate_connect(0, &[], &intervals, &[], RB_EPOCH),
+        reinstate_connect(0, &[], &intervals, &[], RB_EPOCH, crate::archival_params()),
         Err(ReinstateConnectError::EmptyPost)
     );
     assert_eq!(
@@ -326,6 +234,7 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &intervals,
             &[7, 13], // swap
             RB_EPOCH,
+            crate::archival_params(),
         ),
         Err(ReinstateConnectError::HoldingsChanged)
     );
@@ -336,6 +245,7 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &intervals,
             &[7, 9],
             RB_EPOCH,
+            crate::archival_params(),
         ),
         Err(ReinstateConnectError::RecordFloorInvariantBroken)
     );
@@ -346,6 +256,7 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &[rb_closed(2, 3)], // nothing open
             &[7, 9],
             RB_EPOCH,
+            crate::archival_params(),
         ),
         Err(ReinstateConnectError::NoOpenInterval)
     );
@@ -356,6 +267,7 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &[rb_open(5), rb_open(5)], // coalescing invariant broken
             &[7, 9],
             RB_EPOCH,
+            crate::archival_params(),
         ),
         Err(ReinstateConnectError::MultipleOpenIntervals)
     );
@@ -366,6 +278,7 @@ fn reinstate_connect_rejects_shape_and_invariant_breaches() {
             &[rb_open(RB_EPOCH + 5)], // slash start after the close point
             &[7, 9],
             RB_EPOCH,
+            crate::archival_params(),
         ),
         Err(ReinstateConnectError::IntervalOrdering)
     );
@@ -421,30 +334,14 @@ fn reinstate_connect_rejects_oversize_post() {
     // a record the codec cannot encode.
     let post: Vec<u64> = (0..=(MAX_HOLDINGS_SHARDS as u64)).collect();
     assert_eq!(
-        reinstate_connect(0, &[], &[rb_open(5)], &post, RB_EPOCH),
-        Err(ReinstateConnectError::PostOversize)
-    );
-}
-
-#[test]
-fn reinstate_pop_accepts_unchanged_balance() {
-    assert_eq!(
-        reinstate_pop(
-            2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-            2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+        reinstate_connect(
+            0,
+            &[],
+            &[rb_open(5)],
+            &post,
+            RB_EPOCH,
+            crate::archival_params()
         ),
-        Ok(())
-    );
-}
-
-#[test]
-fn reinstate_pop_rejects_any_balance_move() {
-    assert_eq!(
-        reinstate_pop(ARCHIVAL_BOND_FLOOR_ATOMIC, 2 * ARCHIVAL_BOND_FLOOR_ATOMIC,),
-        Err(ReinstatePopError::NotReinstateDelta)
-    );
-    assert_eq!(
-        reinstate_pop(3 * ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_BOND_FLOOR_ATOMIC,),
-        Err(ReinstatePopError::NotReinstateDelta)
+        Err(ReinstateConnectError::PostOversize)
     );
 }

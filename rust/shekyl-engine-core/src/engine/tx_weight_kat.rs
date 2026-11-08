@@ -173,6 +173,7 @@ pub(crate) mod support {
         );
 
         sign_transaction(
+            &shekyl_network::Network::Testnet.network_id(),
             prefix_hash,
             &spend_inputs,
             &[output],

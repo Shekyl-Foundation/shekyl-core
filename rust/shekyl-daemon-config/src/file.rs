@@ -18,12 +18,15 @@
 //!
 //! The permitted principals are root and the daemon's account on Unix, and
 //! for reading a file that holds a secret also the daemon's group (Rick,
-//! 2026-10-19): a service install keeps the file `root:<daemon group>` `0640`
-//! under `/etc/shekyl` `root:root` `0755`, written by root only and read by
-//! root, the daemon and its group; a per-account install keeps it owner-only
-//! `0600`. One file, no separate secrets file. The mode bits are that whole
-//! policy only when the access-control list names nobody else; a list that
-//! does, or a probe that cannot be read, refuses.
+//! 2026-10-19), when the daemon's account is that group's only member
+//! (Rick, 2026-10-22): a service install keeps the file `root:<daemon
+//! group>` `0640` under `/etc/shekyl` `root:root` `0755`, written by root
+//! only and read by root and the daemon; a per-account install keeps it
+//! owner-only `0600`. One file, no separate secrets file. The mode bits are
+//! that whole policy only when the access-control list names nobody else
+//! and the group holds nobody else (its member list, and every account
+//! whose primary group it is); a list or a membership that does, or one
+//! that cannot be read, refuses.
 //!
 //! On Windows the check is an allowlist: SYSTEM, Administrators,
 //! TrustedInstaller (the servicing account a default `C:\` grants full
@@ -77,8 +80,9 @@ const PERMITTED: &str = "SYSTEM, Administrators, TrustedInstaller and the daemon
 
 /// Who may read a file that holds a secret, as a refusal names them.
 #[cfg(unix)]
-const READ_PERMITTED: &str = "root, the daemon's account and the daemon's group \
-    (root:<daemon group> 0640 for a service, or 0600 owned by the daemon's account)";
+const READ_PERMITTED: &str = "root, the daemon's account and the daemon's group when that \
+    account is its only member (root:<daemon group> 0640 for a service, or 0600 owned by the \
+    daemon's account)";
 #[cfg(windows)]
 const READ_PERMITTED: &str = PERMITTED;
 
@@ -150,11 +154,13 @@ pub(crate) mod unix {
     //! The Unix rule: the owner is root or the daemon's account, and no
     //! group or other write bit is set, on the file and on every directory
     //! above it. A file that holds a secret is also refused when its
-    //! access-control list names a reader the mode bits do not.
+    //! access-control list names a reader the mode bits do not, or when
+    //! the group that can read it holds an account besides the daemon's.
 
     use std::path::Path;
 
     pub(crate) use crate::acl::AclProbe;
+    pub(crate) use crate::group::Membership;
 
     /// A probe that could not be read. The same words name an unreadable
     /// directory, a file whose metadata could not be read, and a list that
@@ -203,8 +209,9 @@ pub(crate) mod unix {
         ///
         /// The owner is root or the daemon's account, which the write check
         /// has already required. A secret file is judged by [`secret_reader`],
-        /// which also takes the access-control list: these bits are the whole
-        /// read policy only when that list is [`AclProbe::ModeOnly`].
+        /// which also takes the access-control list and the group's
+        /// membership: these bits are the whole read policy only when that
+        /// list is [`AclProbe::ModeOnly`] and the group is the daemon alone.
         pub fn reader(self, my_group: u32) -> Option<String> {
             if self.mode & OTHER_READ != 0 {
                 return Some("every account (world-readable)".to_owned());
@@ -214,15 +221,50 @@ pub(crate) mod unix {
             }
             None
         }
+
+        /// Whether the daemon's own group can read: the one case the
+        /// group's membership decides.
+        fn readable_by_my_group(self, my_group: u32) -> bool {
+            self.mode & GROUP_READ != 0 && self.gid == my_group
+        }
     }
 
     /// Who outside the permitted set can read a secret file: the mode bits,
-    /// unless the access-control list names someone else or could not be read.
-    pub(crate) fn secret_reader(entry: Entry, my_group: u32, acl: AclProbe) -> Option<String> {
+    /// unless the access-control list names someone else or could not be
+    /// read; and when the daemon's own group can read, `members` is asked
+    /// who else is in it (Rick, 2026-10-22). The membership is read only
+    /// then, so a private file never consults it.
+    pub(crate) fn secret_reader(
+        entry: Entry,
+        my_group: u32,
+        acl: AclProbe,
+        members: &dyn Fn() -> Result<Membership, String>,
+    ) -> Option<String> {
         match acl {
-            AclProbe::Named => Some(ACL_NAMED.to_owned()),
-            AclProbe::Unreadable => Some(UNREADABLE.to_owned()),
-            AclProbe::ModeOnly => entry.reader(my_group),
+            AclProbe::Named => return Some(ACL_NAMED.to_owned()),
+            AclProbe::Unreadable => return Some(UNREADABLE.to_owned()),
+            AclProbe::ModeOnly => {}
+        }
+        if let Some(who) = entry.reader(my_group) {
+            return Some(who);
+        }
+        if !entry.readable_by_my_group(my_group) {
+            return None;
+        }
+        match members() {
+            Ok(Membership::Sole) => None,
+            Ok(Membership::Listed(name)) => Some(format!(
+                "its group, gid {}, which lists the account {name}",
+                entry.gid
+            )),
+            Ok(Membership::Primary(name)) => Some(format!(
+                "its group, gid {}, which is the primary group of the account {name}",
+                entry.gid
+            )),
+            Err(why) => Some(format!(
+                "its group, gid {}, whose membership could not be read ({why})",
+                entry.gid
+            )),
         }
     }
 
@@ -275,11 +317,17 @@ fn writer_outside_permitted(file: &File, path: &Path) -> Option<(String, String)
 
 #[cfg(unix)]
 fn reader_outside_permitted(file: &File, _path: &Path) -> Option<String> {
+    let me = rustix::process::geteuid().as_raw();
     let my_group = rustix::process::getegid().as_raw();
     let Ok(meta) = file.metadata() else {
         return Some(unix::UNREADABLE.to_owned());
     };
-    unix::secret_reader(unix::entry_of(&meta), my_group, crate::acl::probe(file))
+    unix::secret_reader(
+        unix::entry_of(&meta),
+        my_group,
+        crate::acl::probe(file),
+        &|| crate::group::members_besides_me(my_group, me),
+    )
 }
 
 #[cfg(windows)]
@@ -321,13 +369,18 @@ fn reader_outside_permitted(_file: &File, path: &Path) -> Option<String> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::unix::{
-        secret_reader, writer_outside_permitted, AclProbe, Entry, ACL_NAMED, UNREADABLE,
+        secret_reader, writer_outside_permitted, AclProbe, Entry, Membership, ACL_NAMED, UNREADABLE,
     };
     use super::*;
+    use crate::group::AccountName;
     use std::collections::BTreeMap;
     use std::os::unix::fs::PermissionsExt;
 
     const ME: u32 = 1000;
+
+    fn account_name(bytes: &[u8]) -> AccountName {
+        AccountName::new(bytes).expect("a test name is non-empty")
+    }
 
     /// `S_IFREG` and `S_IFDIR`. The rules never read the file type; the
     /// described trees carry it so a mode still looks like a mode.
@@ -459,15 +512,68 @@ mod tests {
         const MINE: u32 = 50;
         let private = entry(ME, ME, reg(0o600));
         let service = entry(0, MINE, reg(0o640));
-        assert_eq!(secret_reader(private, MINE, AclProbe::ModeOnly), None);
-        assert_eq!(secret_reader(service, MINE, AclProbe::ModeOnly), None);
+        let sole = || Ok(Membership::Sole);
         assert_eq!(
-            secret_reader(service, MINE, AclProbe::Named).as_deref(),
+            secret_reader(private, MINE, AclProbe::ModeOnly, &sole),
+            None
+        );
+        assert_eq!(
+            secret_reader(service, MINE, AclProbe::ModeOnly, &sole),
+            None
+        );
+        assert_eq!(
+            secret_reader(service, MINE, AclProbe::Named, &sole).as_deref(),
             Some(ACL_NAMED)
         );
         assert_eq!(
-            secret_reader(private, MINE, AclProbe::Unreadable).as_deref(),
+            secret_reader(private, MINE, AclProbe::Unreadable, &sole).as_deref(),
             Some(UNREADABLE)
+        );
+    }
+
+    /// The daemon's group may read a secret only while the daemon's account
+    /// is its only member (Rick, 2026-10-22): a listed second member, a
+    /// second account whose primary group it is, and a membership that
+    /// cannot be read each refuse, naming what was found. A file the group
+    /// cannot read never asks.
+    #[test]
+    fn a_group_readable_secret_needs_the_daemon_as_the_groups_only_member() {
+        const MINE: u32 = 50;
+        let service = entry(0, MINE, reg(0o640));
+        let judge = |members: Result<Membership, String>| {
+            secret_reader(service, MINE, AclProbe::ModeOnly, &|| members.clone())
+        };
+        assert_eq!(judge(Ok(Membership::Sole)), None);
+        assert_eq!(
+            judge(Ok(Membership::Listed(account_name(b"alice")))).as_deref(),
+            Some("its group, gid 50, which lists the account alice")
+        );
+        assert_eq!(
+            judge(Ok(Membership::Primary(account_name(b"backup")))).as_deref(),
+            Some("its group, gid 50, which is the primary group of the account backup")
+        );
+        assert_eq!(
+            judge(Err(
+                "the system's account list could not be read: boom".to_owned()
+            ))
+            .as_deref(),
+            Some(
+                "its group, gid 50, whose membership could not be read \
+                 (the system's account list could not be read: boom)"
+            )
+        );
+        // A file the group cannot read never consults the membership, and
+        // another group's read is refused as that group before any read.
+        let never = || -> Result<Membership, String> {
+            panic!("a membership was read for a file the group cannot read")
+        };
+        assert_eq!(
+            secret_reader(entry(ME, ME, reg(0o600)), MINE, AclProbe::ModeOnly, &never),
+            None
+        );
+        assert_eq!(
+            secret_reader(entry(0, 9, reg(0o640)), MINE, AclProbe::ModeOnly, &never).as_deref(),
+            Some("its group, gid 9")
         );
     }
 

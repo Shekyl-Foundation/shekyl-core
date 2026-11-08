@@ -62,9 +62,9 @@
 //! endpoint binds `127.0.0.1:0` only; reachability comes from the
 //! `ADD_ONION` mapping `shekyl-p-host` wires in. This crate holds no key
 //! material — the signer is the host's object, and the serve loop sees
-//! only the signature it returns — and, since [`StoreShardProvider`] is
-//! built from a read-only `BodyStoreReader`, it cannot write to the store
-//! either.
+//! only the signature it returns — and, since [`StoreShardProvider`] reads
+//! through a [`HeldShardSource`] that returns plaintext chunk copies, it can
+//! neither write to the store nor decrypt it.
 //!
 //! **Is not:** a pass-record builder, a key holder, the *definition* of a
 //! wire format (the body is the provider's; `shekyl-wire` owns its frame),
@@ -127,7 +127,7 @@ pub use countersign::{
 };
 #[cfg(any(test, feature = "test-signer"))]
 pub use countersign::{TestKeySigner, TestReceiptKeySigner};
-pub use provider::{ProviderError, ShardBody, ShardProvider, StoreShardProvider};
+pub use provider::{HeldShardSource, ProviderError, ShardBody, ShardProvider, StoreShardProvider};
 #[cfg(any(test, feature = "bench-internals"))]
 pub use serve::{prehead_in_memory, read_and_fold_in_memory, serve_one_in_memory, InMemoryServe};
 pub use serve::{

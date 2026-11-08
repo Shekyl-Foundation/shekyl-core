@@ -15,8 +15,8 @@
 //! | Pop-undo journal (`undo_log`) | rows below `tip − retention` | every boundary; `retention` is `D_max` in production |
 //! | Slash log (`archival_slash_log`) | rows below `tip − ((k + n)·SEB + reorg_cap)` | every boundary whose session applies `SlashLog`; the cap is the in-force rule set's (`SLK-Q1`, `ARW-9`) |
 //! | Release journal (`archival_release_journal`) | rows at or below `h_open` of the settling family's oldest kept epoch | every boundary whose session applies `Bond` ([`ReleaseJournalFloor`], SI-28) |
-//! | Draw rows (`archival_block_draws`) | rows strictly below `(B − 1)·SEB + 1 − W₂`, or `(B − 1)·SEB` when the schedule has no window | every boundary ([`BlockDrawsFloor`], SI-34) |
-//! | Per-epoch tables (`archival_sigma_work`, `archival_budget`, `archival_complete_trees`, `archival_settlement`; `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied`; `archival_r_market`) | rows of epochs below their family's floor, `(B − 1) − LAG` at the boundary of `B` | every boundary; a table whose family the session stubs is not opened (`ARW-9`) (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`) |
+//! | Draw rows (`archival_block_draws`, `archival_support_block`) | rows strictly below `(B − 1)·SEB + 1 − W₂`, or `(B − 1)·SEB` when the schedule has no window | every boundary ([`BlockDrawsFloor`], SI-34) |
+//! | Per-epoch tables (`archival_sigma_work`, `archival_budget`, `archival_complete_trees`, `archival_settlement`, `archival_support_settlement`; `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied`, `archival_support_issued`; `archival_r_market`) | rows of epochs below their family's floor, `(B − 1) − LAG` at the boundary of `B` | every boundary; a table whose family the session stubs is not opened (`ARW-9`) (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`) |
 //!
 //! The body horizon is a rule of the epoch calendar — there is no constant
 //! to name and no watermark to store. So are the per-epoch horizons
@@ -70,8 +70,8 @@
 //! presence read that *selected* what to discard would be a second,
 //! node-local source (§8), and the whole point is that every node computes
 //! the same `D(E)` whether it discarded last epoch, skeleton-synced or just
-//! booted: the cell and the length rows are what a pruned node and an
-//! archival node both hold. Every epoch comparison is a branch or an
+//! booted: the cell and the length rows are what every node holds, before
+//! and after the boundary. Every epoch comparison is a branch or an
 //! addition, never `E − 2` on a `u64` (§4, Bugbot 2026-09-23).
 //!
 //! # Every block the discard rests on is checked (SI-13, SI-24)
@@ -108,7 +108,7 @@
 //! # Not journaled, by design (§4, §7)
 //!
 //! A discard is not pop-reversible: the bytes are gone from every node at
-//! the same boundary, and `Prunable::Discarded` is the one state for
+//! the same boundary, and `ArchivalGood::Discarded` is the one state for
 //! *discarded* and *never held* (§7.7 leg iii). So the batch writes through
 //! the raw tables after the connect's recording is sealed, and the undo row
 //! for the boundary block carries the block's writes and none of the
@@ -139,37 +139,23 @@ use core::ops::Range;
 
 use redb::{ReadableTable, WriteTransaction};
 use shekyl_chain_rules::{BlockDrawsFloor, ReleaseJournalFloor, RuleSet, SlashLogFloor};
-use shekyl_types::{
-    shard_floor, shard_of, storage_ids_through, ArchivalLength, BlockCount, BlockHeight,
-};
+use shekyl_types::{shard_floor, shard_of, ArchivalLength, BlockCount, BlockHeight};
 
 use crate::apply_policy::ArchivalFamily;
 use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
 use crate::ids::{ReleaseJournalKey, ReleaseJournalTuple, SlashLogKey, SlashLogTuple};
 use crate::schema::{
-    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES,
-    TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
+    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK,
+    PROPERTIES, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
 };
 
 pub use super::epoch_retire::EpochFloors;
 
+use super::archival_fold::{self, ARCHIVAL_LEN_CELL};
 use super::chain_reads::{self, ReadFault, ReadTables};
 use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant, UndoFault};
 use super::header;
 use super::write::WriteBatch;
-
-/// The `block_info` cell as faults name it.
-const BLOCK_INFO_CELL: &str = "block_info";
-
-/// The listed-transaction fold inside that cell. SI-8 and SI-13 name it.
-const TX_COUNT_CELL: &str = "block_info.cumulative_tx_count";
-
-/// The archival-length fold inside that cell (`SHT-Q2`). SI-8, SI-13 and
-/// SI-24 name it.
-const ARCHIVAL_LEN_CELL: &str = "block_info.cumulative_archival_len";
-
-/// The per-transaction length rows, as a decode fault names them.
-const ARCHIVAL_LEN_ROW: &str = "txs_archival_len";
 
 /// The pop floor before anything has been retired: genesis is never
 /// poppable, so the lowest poppable height is `1`.
@@ -196,7 +182,7 @@ pub(super) const FIRST_PRUNING_EPOCH: u64 = 2;
 /// pair here as it hands the set to `connect`, and the set carries the
 /// same pair (`RuleSet::settlement_schedule`, `RuleSet::reorg_cap`).
 /// Production runs `D_max` on both sides; a regtest under a shortened
-/// epoch runs a Fakechain rule set naming that epoch and a cap inside it.
+/// epoch runs a levered rule set naming that epoch and a cap inside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Horizons {
     epoch: SettlementEpochBlocks,
@@ -241,7 +227,7 @@ impl Horizons {
     /// # Errors
     ///
     /// [`StoreCannot::RetentionNotInsideEpoch`] if `epoch ≤ D_max` — a
-    /// shortened schedule runs a Fakechain rule set and names its retention
+    /// shortened schedule runs a levered rule set and names its retention
     /// against that set's cap.
     pub fn production(epoch: SettlementEpochBlocks) -> Result<Self, StoreCannot> {
         let cap = RuleSet::GENESIS.reorg_cap();
@@ -252,7 +238,7 @@ impl Horizons {
     /// settlement epoch, and an undo retention of exactly its reorg cap —
     /// the least retention `connect` accepts under it
     /// ([`Self::check_against`]). `under(&RuleSet::GENESIS)` is
-    /// [`production`](Self::production) at the genesis epoch; a Fakechain
+    /// [`production`](Self::production) at the genesis epoch; a levered
     /// set under a shortened schedule gets the horizons that schedule
     /// implies, so a replay driver and a test open a store the same way a
     /// daemon does — off the set, not off a second copy of its numbers.
@@ -260,7 +246,7 @@ impl Horizons {
     /// # Errors
     ///
     /// As [`new`](Self::new); a well-formed set's pair
-    /// (`FakechainSchedule` holds `0 < cap < SEB`) does not fail it.
+    /// (`CappedEpoch` holds `0 < cap < SEB`) does not fail it.
     pub fn under(in_force: &RuleSet) -> Result<Self, StoreCannot> {
         let cap = in_force.reorg_cap();
         Self::new(in_force.settlement_schedule().blocks(), cap, cap)
@@ -408,7 +394,7 @@ impl WriteBatch<'_, '_> {
         // same family, by epoch, inside `retire_epoch_rows`.
         let floors = EpochFloors::at_boundary(height, schedule);
         self.retire_release_rows(ReleaseJournalFloor::of(floors.settling, schedule))?;
-        self.retire_block_draws(floors.draws)?;
+        self.retire_draw_rows(floors.draws)?;
         let epochs = self.retire_epoch_rows(floors)?;
         Ok(Some(Pruned {
             shard_start: discard.shards.start,
@@ -419,21 +405,26 @@ impl WriteBatch<'_, '_> {
         }))
     }
 
-    /// Delete `archival_block_draws` rows strictly below `floor`. Every
-    /// connect writes the row, so the retirement is not gated on an
-    /// archival family. Nothing while the floor retires nothing. Not
-    /// pop-reversible, for [`Self::retire_slash_rows`]'s reason. A read
-    /// below the same floor is SI-34.
-    fn retire_block_draws(&self, floor: BlockDrawsFloor) -> Result<(), StoreError> {
+    /// Delete the draw-family rows strictly below `floor`:
+    /// `archival_block_draws` and `archival_support_block`. Every connect
+    /// writes both, so the retirement is not gated on an archival family.
+    /// Nothing while the floor retires nothing. Not pop-reversible, for
+    /// [`Self::retire_slash_rows`]'s reason. A read below the same floor
+    /// is SI-34.
+    fn retire_draw_rows(&self, floor: BlockDrawsFloor) -> Result<(), StoreError> {
         let Some(kept_from) = floor.height() else {
             return Ok(());
         };
-        let mut table = self
-            .txn()
+        let below = ..kept_from.to_raw();
+        self.txn()
             .open_table(ARCHIVAL_BLOCK_DRAWS)
-            .map_err(EngineError::Table)?;
-        table
-            .retain_in::<u64, _>(..kept_from.to_raw(), |_, _| false)
+            .map_err(EngineError::Table)?
+            .retain_in::<u64, _>(below, |_, _| false)
+            .map_err(EngineError::Storage)?;
+        self.txn()
+            .open_table(ARCHIVAL_SUPPORT_BLOCK)
+            .map_err(EngineError::Table)?
+            .retain_in::<u64, _>(below, |_, _| false)
             .map_err(EngineError::Storage)?;
         Ok(())
     }
@@ -647,7 +638,7 @@ fn archival_before<T: ReadTables>(txn: &T, height: u64) -> Result<ArchivalLength
 }
 
 /// SI-13 on the archival fold: the row at `height` is below the one before
-/// it — the same reading the listed fold's [`fold_not_monotone`] names.
+/// it. The listed fold is the same invariant, named by its own cell.
 fn archival_not_monotone(height: u64) -> ReadFault {
     ReadFault::Invariant(StoreInvariant::FoldNotMonotone {
         cell: ARCHIVAL_LEN_CELL,
@@ -736,14 +727,10 @@ impl<'t, T: ReadTables> Descent<'t, T> {
 }
 
 /// Check block `height` against its parent's row (`None` at genesis) and
-/// place `offset` in it. SI-13 on both folds — on the raw listed samples,
-/// before the coinbase term is added, because a decrease of one derives to
-/// an empty id range rather than an inverted one (Copilot, PR #861). Then
-/// its ids are walked in issue order from the parent's archival cell,
-/// adding each `txs_archival_len` row (absent ⇔ `0`), and the sum must land
-/// on the block's own cell: a disagreement is SI-24, a length row and the
-/// fold built from it no longer agreeing. Returns the first id at or past
-/// `offset`, or the block's end id when every transaction starts below it.
+/// place `offset` in it. The check and the sum are
+/// [`block_span`](super::archival_fold::block_span): SI-13 on both folds,
+/// then the rows, then SI-24. Returns the first id at or past `offset`, or
+/// the block's end id when every transaction starts below it.
 fn walk_block<T: ReadTables>(
     txn: &T,
     height: u64,
@@ -751,82 +738,14 @@ fn walk_block<T: ReadTables>(
     parent: Option<&BlockInfo>,
     offset: ArchivalLength,
 ) -> Result<u64, ReadFault> {
-    let (before, listed_before) = parent.map_or((ArchivalLength::ZERO, 0), |p| {
-        (p.cumulative_archival_len, p.cumulative_tx_count)
-    });
-    if info.cumulative_archival_len < before {
-        return Err(archival_not_monotone(height));
-    }
-    if info.cumulative_tx_count < listed_before {
-        return Err(fold_not_monotone(height));
-    }
-    let first = first_tx_id(height, listed_before)?;
-    let end = ids_from(info.cumulative_tx_count, height)?;
-    let lens = txn.table(TXS_ARCHIVAL_LEN)?;
-    let mut at = before;
-    let mut found = None;
-    for id in first..end {
-        if found.is_none() && at >= offset {
-            found = Some(id);
-        }
-        let len = match lens.get(id)? {
-            Some(guard) => guard
-                .value()
-                .decode()
-                .map_err(|cause| chain_reads::undecodable(ARCHIVAL_LEN_ROW, cause))?,
-            None => ArchivalLength::ZERO,
-        };
-        at = at
-            .checked_add(len)
-            .ok_or(ReadFault::Invariant(StoreInvariant::FoldOverflow {
-                cell: ARCHIVAL_LEN_CELL,
-            }))?;
-    }
-    if at != info.cumulative_archival_len {
-        return Err(ReadFault::Invariant(
-            StoreInvariant::ArchivalLengthsDisagree {
-                height,
-                rows: at.to_raw(),
-                cell: info.cumulative_archival_len.to_raw(),
-            },
-        ));
-    }
-    Ok(found.unwrap_or(end))
-}
-
-/// `first_tx_id(h)`: the storage id of the first transaction at height `h`,
-/// from the listed total before it — `0` at genesis; otherwise
-/// [`storage_ids_through`] at `h − 1` (every id issued before `h`).
-fn first_tx_id(height: u64, listed_before: u64) -> Result<u64, ReadFault> {
-    let Some(parent) = height.checked_sub(1) else {
-        return Ok(0);
-    };
-    ids_from(listed_before, parent)
-}
-
-/// Storage ids issued through height `h` inclusive, given the listed total
-/// at `h`: the coinbase term is [`storage_ids_through`].
-fn ids_from(listed: u64, height: u64) -> Result<u64, ReadFault> {
-    storage_ids_through(listed, height).ok_or_else(|| {
-        ReadFault::Invariant(StoreInvariant::FoldOverflow {
-            cell: TX_COUNT_CELL,
-        })
-    })
-}
-
-/// SI-13: the listed-transaction fold decreased. `height` is the later sample.
-fn fold_not_monotone(height: u64) -> ReadFault {
-    ReadFault::Invariant(StoreInvariant::FoldNotMonotone {
-        cell: TX_COUNT_CELL,
-        height,
-    })
+    let span = archival_fold::block_span(txn, BlockHeight::from_raw(height), info, parent)?;
+    Ok(span.id_reaching(offset))
 }
 
 /// A `block_info` row the calendar says exists: absent is SI-7 (the table
 /// is dense below the tip), as is a row that does not decode.
 fn block_info_at<T: ReadTables>(txn: &T, height: u64) -> Result<BlockInfo, ReadFault> {
-    chain_reads::cell(txn, BLOCK_INFO, height, BLOCK_INFO_CELL)?
-        .ok_or_else(|| chain_reads::absent(BLOCK_INFO_CELL))
+    archival_fold::block_info(txn, BlockHeight::from_raw(height))
 }
 
 /// `h_scarce` at `tip` (§4, §7): the `close_height` of the last shard with
@@ -877,6 +796,25 @@ fn discard_range<V: redb::Value + 'static>(
 }
 
 impl super::read::ReadSnapshot<'_> {
+    /// The lowest **poppable** height: the persisted undo floor, or `1`
+    /// while nothing has been retired (genesis is never poppable) — the
+    /// bound [`WriteBatch::pop`] holds, read before a pop is asked for. A
+    /// snapshot returns a fault plain; it does not halt the writer.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 when the floor cell does not decode; engine errors.
+    pub fn undo_floor(&self) -> Result<BlockHeight, StoreError> {
+        let table = self
+            .txn()
+            .open_table(PROPERTIES)
+            .map_err(EngineError::Table)?;
+        Ok(
+            header::get::<UndoLogFloorCell>(&table)?
+                .unwrap_or(BlockHeight::from_raw(GENESIS_FLOOR)),
+        )
+    }
+
     /// `h_scarce` at the recorded tip: the `close_height` of the last shard
     /// the calendar has discarded — `PDM-Q5`'s band-2 edge, the same number
     /// on every node. `None` on an empty chain, in epochs 0–1, and before
@@ -947,7 +885,7 @@ mod horizon_tests {
                 Horizons::production(seb(50)),
                 Err(StoreCannot::RetentionNotInsideEpoch { .. })
             ),
-            "a shortened epoch runs a Fakechain set and names its retention against its cap"
+            "a shortened epoch runs a levered set and names its retention against its cap"
         );
     }
 

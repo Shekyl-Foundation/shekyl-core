@@ -35,6 +35,7 @@ use shekyl_chain_rules::{
 };
 use shekyl_types::archival::{
     BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest,
+    SupportSeats,
     LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
     SlashLogEntry,
 };
@@ -230,6 +231,13 @@ impl<'id, T> ChainView<'id> for Stub<T> {
         _: BlockHeight,
         _: BlockDrawsFloor,
     ) -> Result<Option<BlockDraws>, Infallible> {
+        Ok(None)
+    }
+    fn support_block_seats(
+        &self,
+        _: BlockHeight,
+        _: BlockDrawsFloor,
+    ) -> Result<Option<SupportSeats>, Infallible> {
         Ok(None)
     }
     fn drawable_digest(

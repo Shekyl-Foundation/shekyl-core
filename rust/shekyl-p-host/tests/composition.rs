@@ -27,15 +27,16 @@ use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_NAME};
 use shekyl_curve_tree::{
     leaves_per_segment, BlockHeight, Gindex, LeafEntry, LeafStore, OutputIdentity,
-    PostureDeclaration, SegmentPin, ServingReader, TargetKind, TreePosition,
+    PostureDeclaration, SegmentPin, TargetKind, TreePosition,
 };
 use shekyl_p_host::{
     DaemonTipCache, HostError, PassKey, PersonaServing, PersonaServingHost, PinError, PinReport,
     PinnedServeSet, PriorityFailures, RefusingKey, ReportedSet, ServeCounters, ServeObligation,
-    ServeSetPinner, Staleness, StalenessBound,
+    ServeSetPinner, Staleness, StalenessBound, StoreFacts, StoreIdentity,
 };
+use shekyl_p_serve::HeldShardSource;
 use shekyl_p_serve::{TestKeySigner, IDENTITY_ENVELOPE_LEN};
-use shekyl_p_store::{BodyStore, BodyStoreReader, StoreKey};
+use shekyl_p_store::{BodyStore, StoreKey};
 use shekyl_tor_control_wallet::service::{
     EventSink, OnionIdentity, ServingPosture, SupervisorPolicy, TorBinarySource, TorPosture,
     WalletTorControlConfig,
@@ -69,6 +70,42 @@ fn segment_entries() -> Vec<LeafEntry> {
             }
         })
         .collect()
+}
+
+/// A test store's identity: its allocation, unique while it is open, which
+/// every store here is for its whole test.
+fn identity_of(store: &Arc<LeafStore>) -> StoreIdentity {
+    StoreIdentity::new(u64::try_from(Arc::as_ptr(store).addr()).expect("address fits u64"))
+}
+
+/// A test store's facts, read straight off it — what the engine's pinner
+/// asks the curve-tree actor for.
+fn facts_of(store: &Arc<LeafStore>, claimed: &[u64]) -> Result<StoreFacts, String> {
+    let read = |e: shekyl_curve_tree::StoreError| format!("{e:?}");
+    Ok(StoreFacts {
+        store: identity_of(store),
+        sync_tip_height: store.sync_tip_height().map_err(read)?,
+        prune_disabled: store.prune_disabled().map_err(read)?,
+        next_freeze_seg: store.next_freeze_seg().map_err(read)?,
+        members_missing_pins: store.members_missing_pins(claimed).map_err(read)?,
+    })
+}
+
+/// The read half of a [`ServeSetPinner`] over `self.store`.
+macro_rules! reads_its_store {
+    () => {
+        async fn store_facts(&self, claimed: Vec<u64>) -> Result<StoreFacts, String> {
+            facts_of(&self.store, &claimed)
+        }
+
+        async fn pruned_frozen_segments(&self) -> Result<(StoreIdentity, Vec<u64>), String> {
+            let pruned = self
+                .store
+                .pruned_frozen_segments()
+                .map_err(|e| format!("{e:?}"))?;
+            Ok((identity_of(&self.store), pruned))
+        }
+    };
 }
 
 /// A pinner over a real store — the production shape, minus the actor hop
@@ -111,6 +148,8 @@ impl StorePinner {
 }
 
 impl ServeSetPinner for StorePinner {
+    reads_its_store!();
+
     async fn pin_serve_set(&self) -> Result<PinReport, String> {
         if *self.fail.lock().expect("lock") {
             return Err("pinner is down".into());
@@ -120,15 +159,15 @@ impl ServeSetPinner for StorePinner {
             .store
             .pin_serve_set(&shard_ids)
             .map_err(|e| format!("{e:?}"))?;
-        // Both halves off the one store — the production implementor takes
-        // them from the one `CurveTreeClient` it owns, for the same reason.
+        // Both halves off the one store — the production implementor pins
+        // through the one curve-tree actor that owns it, for the same reason.
         Ok(PinReport {
             set: ReportedSet::ShardList {
                 shard_ids,
                 outcomes,
             },
             as_of_height,
-            reader: ServingReader::new(Arc::clone(&self.store)),
+            store: identity_of(&self.store),
         })
     }
 }
@@ -147,6 +186,8 @@ struct SlowSecondCallPinner {
 }
 
 impl ServeSetPinner for SlowSecondCallPinner {
+    reads_its_store!();
+
     async fn pin_serve_set(&self) -> Result<PinReport, String> {
         let generation = {
             let mut calls = self.calls.lock().expect("lock");
@@ -172,7 +213,7 @@ impl ServeSetPinner for SlowSecondCallPinner {
                 outcomes,
             },
             as_of_height: BlockHeight::from_raw(generation * 1_000),
-            reader: ServingReader::new(Arc::clone(&self.store)),
+            store: identity_of(&self.store),
         })
     }
 }
@@ -184,12 +225,23 @@ impl ServeSetPinner for DeadPinner {
     async fn pin_serve_set(&self) -> Result<PinReport, String> {
         Err("curve-tree actor unavailable".into())
     }
+
+    async fn store_facts(&self, _claimed: Vec<u64>) -> Result<StoreFacts, String> {
+        Err("curve-tree actor unavailable".into())
+    }
+
+    async fn pruned_frozen_segments(&self) -> Result<(StoreIdentity, Vec<u64>), String> {
+        Err("curve-tree actor unavailable".into())
+    }
 }
 
 /// Reports outcomes that do not describe the set it reported. `SHORT` drops a
 /// member, `REORDER` permutes, `SUBSTITUTE` keeps the right COUNT and the
 /// wrong members — the last is the negative control that keeps the check
 /// about identity rather than arithmetic.
+///
+/// Its store is fictional: one fixed identity, and facts that would pass
+/// every other check, so the coverage check is the only one that can fire.
 struct IncoherentPinner {
     shard_ids: Vec<u64>,
     mode: Incoherence,
@@ -226,9 +278,27 @@ impl ServeSetPinner for IncoherentPinner {
                 outcomes,
             },
             as_of_height: BlockHeight::from_raw(1),
-            reader: ServingReader::new(Arc::new(LeafStore::open_ephemeral().expect("open store"))),
+            store: Self::STORE,
         })
     }
+
+    async fn store_facts(&self, _claimed: Vec<u64>) -> Result<StoreFacts, String> {
+        Ok(StoreFacts {
+            store: Self::STORE,
+            sync_tip_height: BlockHeight::from_raw(0),
+            prune_disabled: false,
+            next_freeze_seg: 0,
+            members_missing_pins: Vec::new(),
+        })
+    }
+
+    async fn pruned_frozen_segments(&self) -> Result<(StoreIdentity, Vec<u64>), String> {
+        Ok((Self::STORE, Vec::new()))
+    }
+}
+
+impl IncoherentPinner {
+    const STORE: StoreIdentity = StoreIdentity::new(7);
 }
 
 /// A supervisor config whose binary cannot pass the gate, with a backoff
@@ -261,14 +331,14 @@ fn identity() -> OnionIdentity {
 /// Opaque frame the composition tests put and expect back.
 const HELD_FRAME: &[u8] = b"\x01held-shard-frame-for-composition";
 
-fn empty_bodies() -> BodyStoreReader {
-    BodyStore::open_ephemeral(StoreKey::from_bytes([0x11; 32]))
-        .expect("ephemeral body store")
-        .reader()
+fn empty_bodies() -> Arc<dyn HeldShardSource> {
+    Arc::new(
+        BodyStore::open_ephemeral(StoreKey::from_bytes([0x11; 32])).expect("ephemeral body store"),
+    )
 }
 
-fn bodies_holding(ids: &[u64]) -> BodyStoreReader {
-    bodies_writer_holding(ids).reader()
+fn bodies_holding(ids: &[u64]) -> Arc<dyn HeldShardSource> {
+    Arc::new(bodies_writer_holding(ids))
 }
 
 fn bodies_writer_holding(ids: &[u64]) -> BodyStore {
@@ -352,9 +422,14 @@ fn is_refused(response: &[u8]) -> bool {
 }
 
 /// One request as a daemon at `own_height` sends it: the ruled route plus
-/// the 72-byte request header the countersignature binds.
+/// the 73-byte request header the countersignature binds.
 async fn fetch(addr: SocketAddr, path: &str, own_height: u64) -> Vec<u8> {
-    let header = pass_request_header_bytes(&NONCE, anchor_for(own_height), &ANCHOR_HASH);
+    let header = pass_request_header_bytes(
+        shekyl_archival_retention::PassStream::Economy,
+        &NONCE,
+        anchor_for(own_height),
+        &ANCHOR_HASH,
+    );
     let mut s = TcpStream::connect(addr).await.expect("connect");
     s.write_all(
         format!(
@@ -569,6 +644,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     let (signature, framed) = envelope_of(&first);
     verify_pass_transcript(
         key.public_key(),
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         anchor_for(10_000),
         &ANCHOR_HASH,
@@ -582,6 +658,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     assert!(
         verify_pass_transcript(
             key.public_key(),
+            shekyl_archival_retention::PassStream::Economy,
             &NONCE,
             anchor_for(10_000),
             &ANCHOR_HASH,
@@ -632,6 +709,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     );
     verify_pass_transcript(
         key.public_key(),
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         anchor_for(10_000),
         &ANCHOR_HASH,
@@ -793,7 +871,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     // Hoisted: this test advances the chain, so it must advance the gate's
     // view of the chain too (see `tip_at`).
     let tip = tip_at(10_000);
-    let bodies = bodies_writer_holding(&[0]);
+    let bodies = Arc::new(bodies_writer_holding(&[0]));
 
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
@@ -804,7 +882,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
             max_streams: 8,
             key: test_key(),
             tip: Arc::clone(&tip),
-            bodies: bodies.reader(),
+            bodies: Arc::clone(&bodies) as Arc<dyn HeldShardSource>,
         },
         &pinner,
         &PriorityFailures::new(),
@@ -855,7 +933,10 @@ async fn staleness_reads_one_clock_twice_with_independent_drivers() {
 
     let bound = StalenessBound::blocks(100);
     assert_eq!(
-        pinned.staleness(bound).expect("read staleness"),
+        pinned
+            .staleness(&pinner, bound)
+            .await
+            .expect("read staleness"),
         Staleness::Current { lag: 0 },
         "a store that has ingested nothing cannot be stale against anything"
     );
@@ -864,7 +945,10 @@ async fn staleness_reads_one_clock_twice_with_independent_drivers() {
     store
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("ingest");
-    let stale = pinned.staleness(bound).expect("read staleness");
+    let stale = pinned
+        .staleness(&pinner, bound)
+        .await
+        .expect("read staleness");
     assert!(stale.is_stale(), "10_000 blocks of ingest, no refresh");
     assert_eq!(stale.lag(), Some(10_000));
     // Rule 82: the message names the check the operator should make.
@@ -874,7 +958,10 @@ async fn staleness_reads_one_clock_twice_with_independent_drivers() {
     pinner.holdings_became(&[], BlockHeight::from_raw(10_000));
     let refreshed = pinned.refreshed(&pinner).await.expect("refresh");
     assert_eq!(
-        refreshed.staleness(bound).expect("read staleness"),
+        refreshed
+            .staleness(&pinner, bound)
+            .await
+            .expect("read staleness"),
         Staleness::Current { lag: 0 }
     );
 }
@@ -898,7 +985,10 @@ async fn staleness_measures_local_ingest_not_the_distance_to_the_daemon() {
 
     let bound = StalenessBound::blocks(100);
     assert_eq!(
-        pinned.staleness(bound).expect("read staleness"),
+        pinned
+            .staleness(&pinner, bound)
+            .await
+            .expect("read staleness"),
         Staleness::Current { lag: 0 },
         "nothing ingested since the pin, however far below the daemon this wallet sits"
     );
@@ -909,7 +999,10 @@ async fn staleness_measures_local_ingest_not_the_distance_to_the_daemon() {
         .expect("ingest");
 
     assert_eq!(
-        pinned.staleness(bound).expect("read staleness"),
+        pinned
+            .staleness(&pinner, bound)
+            .await
+            .expect("read staleness"),
         Staleness::Stale {
             lag: 10_000,
             bound: 100
@@ -938,7 +1031,10 @@ async fn a_store_rollback_beneath_the_pins_is_its_own_reading() {
 
     let bound = StalenessBound::blocks(100);
     assert_eq!(
-        pinned.staleness(bound).expect("read staleness"),
+        pinned
+            .staleness(&pinner, bound)
+            .await
+            .expect("read staleness"),
         Staleness::Current { lag: 0 }
     );
 
@@ -951,7 +1047,10 @@ async fn a_store_rollback_beneath_the_pins_is_its_own_reading() {
     // measured condition rather than the inferred one: `PinsDropped` outranks
     // `RolledBack` because it reports an exposure that exists now, and a tip
     // that happens to be low is only evidence that one might.
-    let reading = pinned.staleness(bound).expect("read staleness");
+    let reading = pinned
+        .staleness(&pinner, bound)
+        .await
+        .expect("read staleness");
     assert_eq!(
         reading,
         Staleness::PinsDropped {
@@ -967,7 +1066,10 @@ async fn a_store_rollback_beneath_the_pins_is_its_own_reading() {
         "the store un-ingested; there is no lag to report and 0 would be a lie"
     );
     assert_eq!(
-        pinned.dropped_pins().expect("list dropped pins"),
+        pinned
+            .dropped_pins(&pinner)
+            .await
+            .expect("list dropped pins"),
         vec![0],
         "the ids stay available for a log line even though the status is a ratio"
     );
@@ -997,7 +1099,10 @@ async fn re_ingest_past_the_baseline_does_not_clear_a_dropped_pin() {
 
     let bound = StalenessBound::blocks(100);
     assert_eq!(
-        pinned.staleness(bound).expect("read staleness"),
+        pinned
+            .staleness(&pinner, bound)
+            .await
+            .expect("read staleness"),
         Staleness::Current { lag: 0 }
     );
 
@@ -1024,7 +1129,10 @@ async fn re_ingest_past_the_baseline_does_not_clear_a_dropped_pin() {
         "the premise of this test is that the tip climbed back ABOVE the baseline"
     );
 
-    let reading = pinned.staleness(bound).expect("read staleness");
+    let reading = pinned
+        .staleness(&pinner, bound)
+        .await
+        .expect("read staleness");
     assert_eq!(
         reading,
         Staleness::PinsDropped {
@@ -1041,7 +1149,10 @@ async fn re_ingest_past_the_baseline_does_not_clear_a_dropped_pin() {
     // And it clears only by actually re-pinning — the structural latch.
     let refreshed = pinned.refreshed(&pinner).await.expect("re-pin");
     assert_eq!(
-        refreshed.staleness(bound).expect("read staleness"),
+        refreshed
+            .staleness(&pinner, bound)
+            .await
+            .expect("read staleness"),
         Staleness::Current { lag: 0 },
         "a successful re-pin is the one thing that restores a healthy reading"
     );
@@ -1158,7 +1269,7 @@ async fn a_failing_refresh_is_visible_when_both_store_clocks_are_frozen() {
 
     let bound = StalenessBound::blocks(100);
     assert_eq!(
-        host.staleness(bound).expect("read staleness"),
+        host.staleness(bound).await.expect("read staleness"),
         Staleness::Current { lag: 0 }
     );
 
@@ -1166,14 +1277,14 @@ async fn a_failing_refresh_is_visible_when_both_store_clocks_are_frozen() {
     pinner.fail_next();
     host.refresh().await.expect_err("the pinner is down");
     assert_eq!(
-        host.staleness(bound).expect("read staleness"),
+        host.staleness(bound).await.expect("read staleness"),
         Staleness::RefreshFailing { consecutive: 1 },
         "the store clocks are frozen and agree; only the attempt count moved"
     );
 
     host.refresh().await.expect_err("still down");
     host.refresh().await.expect_err("still down");
-    let reading = host.staleness(bound).expect("read staleness");
+    let reading = host.staleness(bound).await.expect("read staleness");
     assert_eq!(
         reading,
         Staleness::RefreshFailing { consecutive: 3 },
@@ -1189,7 +1300,7 @@ async fn a_failing_refresh_is_visible_when_both_store_clocks_are_frozen() {
     pinner.recovered();
     host.refresh().await.expect("the transport came back");
     assert_eq!(
-        host.staleness(bound).expect("read staleness"),
+        host.staleness(bound).await.expect("read staleness"),
         Staleness::Current { lag: 0 }
     );
 
@@ -1289,27 +1400,76 @@ async fn a_refresh_that_pins_a_different_store_keeps_the_previous_witness() {
     .await
     .expect("pin");
 
-    struct OtherStorePinner;
+    struct OtherStorePinner {
+        store: Arc<LeafStore>,
+    }
     impl ServeSetPinner for OtherStorePinner {
+        reads_its_store!();
+
         async fn pin_serve_set(&self) -> Result<PinReport, String> {
-            let other = Arc::new(LeafStore::open_ephemeral().expect("other store"));
             Ok(PinReport {
                 set: ReportedSet::ShardList {
                     shard_ids: vec![0],
                     outcomes: vec![(0, SegmentPin::PinnedServable)],
                 },
                 as_of_height: BlockHeight::from_raw(2),
-                reader: ServingReader::new(other),
+                store: identity_of(&self.store),
             })
         }
     }
 
     let err = pinned
-        .refreshed(&OtherStorePinner)
+        .refreshed(&OtherStorePinner {
+            store: Arc::new(LeafStore::open_ephemeral().expect("other store")),
+        })
         .await
         .expect_err("pins in a different store cannot replace this witness");
     assert!(matches!(err, PinError::PinnerStoreMismatch));
     assert_eq!(pinned.serve_set().as_of_height(), BlockHeight::from_raw(1));
+}
+
+#[tokio::test]
+async fn a_reading_of_another_store_is_refused() {
+    // The witness's checks read the store, not the report. A pinner that
+    // pins in one store and answers those reads from another would vouch
+    // for retention with facts about a store nobody pinned — a posture
+    // flag or a freeze cursor that says nothing about the served bytes.
+    struct SplitStorePinner {
+        pinned: Arc<LeafStore>,
+        read: Arc<LeafStore>,
+    }
+    impl ServeSetPinner for SplitStorePinner {
+        async fn pin_serve_set(&self) -> Result<PinReport, String> {
+            let outcomes = self
+                .pinned
+                .pin_serve_set(&[])
+                .map_err(|e| format!("{e:?}"))?;
+            Ok(PinReport {
+                set: ReportedSet::ShardList {
+                    shard_ids: Vec::new(),
+                    outcomes,
+                },
+                as_of_height: BlockHeight::from_raw(1),
+                store: identity_of(&self.pinned),
+            })
+        }
+
+        async fn store_facts(&self, claimed: Vec<u64>) -> Result<StoreFacts, String> {
+            facts_of(&self.read, &claimed)
+        }
+
+        async fn pruned_frozen_segments(&self) -> Result<(StoreIdentity, Vec<u64>), String> {
+            Ok((identity_of(&self.read), Vec::new()))
+        }
+    }
+
+    let err = PinnedServeSet::acquire(&SplitStorePinner {
+        pinned: Arc::new(LeafStore::open_ephemeral().expect("pinned store")),
+        read: Arc::new(LeafStore::open_ephemeral().expect("read store")),
+    })
+    .await
+    .expect_err("a reading of another store cannot back a witness");
+    assert!(matches!(err, PinError::PinnerStoreMismatch), "got {err:?}");
 }
 
 #[tokio::test]
@@ -1341,14 +1501,14 @@ async fn host_staleness_uses_the_live_witness() {
 
     let bound = StalenessBound::blocks(100);
     assert_eq!(
-        host.staleness(bound).expect("read host staleness"),
+        host.staleness(bound).await.expect("read host staleness"),
         Staleness::Current { lag: 0 }
     );
 
     store
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("ingest");
-    let stale = host.staleness(bound).expect("read host staleness");
+    let stale = host.staleness(bound).await.expect("read host staleness");
     assert!(
         stale.is_stale(),
         "ingest without refresh is stale on the host"
@@ -1372,6 +1532,8 @@ struct PrefixPinner {
 }
 
 impl ServeSetPinner for PrefixPinner {
+    reads_its_store!();
+
     async fn pin_serve_set(&self) -> Result<PinReport, String> {
         // Declare-before-report: the contract's ordering, and the store's
         // answer is the loss detector the report must carry.
@@ -1386,19 +1548,21 @@ impl ServeSetPinner for PrefixPinner {
                 declaration,
             },
             as_of_height: BlockHeight::from_raw(10_000),
-            reader: ServingReader::new(Arc::clone(&self.store)),
+            store: identity_of(&self.store),
         })
     }
 }
 
 /// A defective implementor: reports the prefix without ever declaring the
 /// posture (and lies `AlreadyDeclared`). The witness must catch it against
-/// the store, not the report — the reader is the authority.
+/// the store, not the report — the store's own reading is the authority.
 struct UndeclaredPrefixPinner {
     store: Arc<LeafStore>,
 }
 
 impl ServeSetPinner for UndeclaredPrefixPinner {
+    reads_its_store!();
+
     async fn pin_serve_set(&self) -> Result<PinReport, String> {
         let frozen_count = self.store.next_freeze_seg().map_err(|e| format!("{e:?}"))?;
         Ok(PinReport {
@@ -1407,15 +1571,15 @@ impl ServeSetPinner for UndeclaredPrefixPinner {
                 declaration: PostureDeclaration::AlreadyDeclared,
             },
             as_of_height: BlockHeight::from_raw(10_000),
-            reader: ServingReader::new(Arc::clone(&self.store)),
+            store: identity_of(&self.store),
         })
     }
 }
 
 /// The prefix arm's precondition, both directions: a report over an
 /// undeclared store refuses with the typed error naming the remedy — even
-/// when the report *claims* the posture was declared, because the reader is
-/// the authority — and the contract-following pinner acquires. The
+/// when the report *claims* the posture was declared, because the store's
+/// reading is the authority — and the contract-following pinner acquires. The
 /// membership boundary is asserted on the resulting witness (`k-1` in, `k`
 /// out), plus the accessors that keep the two-empties hazard closed:
 /// `shard_ids()` is `None` for a whole-corpus obligation, never an empty
@@ -1467,7 +1631,10 @@ async fn prefix_acquire_requires_the_declared_posture_and_bounds_membership() {
     assert!(pinned.not_yet_frozen_at_last_pin().is_empty());
     assert!(pinned.already_pruned().is_empty());
     assert!(matches!(
-        pinned.staleness(StalenessBound::blocks(64)).expect("read"),
+        pinned
+            .staleness(&pinner, StalenessBound::blocks(64))
+            .await
+            .expect("read"),
         Staleness::Current { .. }
     ));
 }
@@ -1531,7 +1698,7 @@ async fn prefix_over_an_unfrozen_store_is_empty_and_still_acquires() {
     );
     assert!(!pinned.serve_set().contains(0));
     assert!(
-        pinned.dropped_pins().expect("read").is_empty(),
+        pinned.dropped_pins(&pinner).await.expect("read").is_empty(),
         "no per-member pins exist to drop on the prefix arm"
     );
 }
@@ -1553,6 +1720,8 @@ async fn prefix_overstating_the_cursor_refuses_and_understating_it_does_not() {
         frozen_count: u64,
     }
     impl ServeSetPinner for LyingPrefixPinner {
+        reads_its_store!();
+
         async fn pin_serve_set(&self) -> Result<PinReport, String> {
             Ok(PinReport {
                 set: ReportedSet::CompleteTreePrefix {
@@ -1560,7 +1729,7 @@ async fn prefix_overstating_the_cursor_refuses_and_understating_it_does_not() {
                     declaration: PostureDeclaration::AlreadyDeclared,
                 },
                 as_of_height: BlockHeight::from_raw(10_000),
-                reader: ServingReader::new(Arc::clone(&self.store)),
+                store: identity_of(&self.store),
             })
         }
     }
@@ -1612,16 +1781,20 @@ async fn prefix_posture_loss_is_posture_lost_not_pins_dropped() {
         .expect("tamper the one-way flag");
 
     assert_eq!(
-        pinned.staleness(StalenessBound::blocks(64)).expect("read"),
+        pinned
+            .staleness(&pinner, StalenessBound::blocks(64))
+            .await
+            .expect("read"),
         Staleness::PostureLost { frozen_count: 1 },
         "posture loss is its own diagnosis, not a fake pin-row drop"
     );
     assert!(
-        pinned.dropped_pins().expect("read").is_empty(),
+        pinned.dropped_pins(&pinner).await.expect("read").is_empty(),
         "PinsDropped's id list stays empty: there are no pin rows"
     );
     assert!(pinned
-        .staleness(StalenessBound::blocks(64))
+        .staleness(&pinner, StalenessBound::blocks(64))
+        .await
         .expect("read")
         .is_stale());
 }
@@ -1653,7 +1826,8 @@ async fn prefix_refresh_repairs_a_lost_posture_and_verifies_the_corpus() {
     assert!(refreshed.already_pruned().is_empty());
     assert!(matches!(
         refreshed
-            .staleness(StalenessBound::blocks(64))
+            .staleness(&pinner, StalenessBound::blocks(64))
+            .await
             .expect("read"),
         Staleness::Current { .. }
     ));
@@ -1735,7 +1909,7 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
     // under the old reading this fetch is refused; under the ruled one it is
     // served. That gap is the whole finding, and it is what makes this test a
     // falsifier rather than a restatement: re-point `HostSigner::own_height`
-    // at `ServingReader::sync_tip_height` and this goes red.
+    // at the store's ingest tip and this goes red.
     const SCAN_TIP: u64 = 10_000;
     const CHAIN_TIP: u64 = 10_006;
     // Compile-time: the fixture must put the scan tip OUTSIDE the gate, or
@@ -1792,6 +1966,7 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
     let (signature, framed) = envelope_of(&served);
     verify_pass_transcript(
         key.public_key(),
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         anchor_for(CHAIN_TIP),
         &ANCHOR_HASH,

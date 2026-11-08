@@ -27,7 +27,9 @@ use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
 use shekyl_fcmp::PqcLeafScalar;
-use shekyl_types::{PrefixHash, SigningPayloadHash};
+use shekyl_network::NetworkId;
+use shekyl_types::{BlockHash, PrefixHash, SigningPayloadHash, TxSignableHash};
+use shekyl_wire::CtBase;
 
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION};
@@ -59,6 +61,7 @@ use crate::validate::validate_inputs;
 ///   header field). The proof crate takes those bytes at this call; a
 ///   [`shekyl_types::BlockHash`] cannot be passed in its place.
 pub fn sign_transaction(
+    network_id: &NetworkId,
     tx_prefix_hash: PrefixHash,
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
@@ -66,7 +69,16 @@ pub fn sign_transaction(
     tree: &TreeContext,
 ) -> Result<SignedProofs, TxBuilderError> {
     // The common transfer path carries no extra cleartext balance terms.
-    sign_transaction_with_terms(tx_prefix_hash, inputs, outputs, fee, &[], &[], tree)
+    sign_transaction_with_terms(
+        network_id,
+        tx_prefix_hash,
+        inputs,
+        outputs,
+        fee,
+        &[],
+        &[],
+        tree,
+    )
 }
 
 /// Construct the proof portion of an FCMP++ transaction that carries extra
@@ -86,7 +98,12 @@ pub fn sign_transaction(
 ///
 /// This crate stays bond-agnostic: it never names "bond", it consumes generic
 /// typed-side terms (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7.2).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the signing boundary: each argument is a distinct typed part of the message or the balance"
+)]
 pub fn sign_transaction_with_terms(
+    network_id: &NetworkId,
     tx_prefix_hash: PrefixHash,
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
@@ -130,14 +147,7 @@ pub fn sign_transaction_with_terms(
     // these points directly, so both sides must be the real ×1 commitment;
     // `pseudo_outs` below are `C_tilde = a*G + amount_in*H` (real ×1), so the
     // output side must not be cofactor-scaled.
-    let out_commitments: Vec<[u8; 32]> = outputs
-        .iter()
-        .zip(masks.iter())
-        .map(|(out, mask)| {
-            let c = Commitment::new(*mask, out.amount.to_raw());
-            c.calculate().compress().to_bytes()
-        })
-        .collect();
+    let out_commitments: Vec<[u8; 32]> = outputs.iter().map(output_commitment).collect();
 
     // ── 4. Pre-computed encrypted amounts (HKDF k_amount XOR + tag) ─
     // Carried as `EncryptedOutputField`, not unwrapped to `[u8; 9]`. This was
@@ -172,15 +182,20 @@ pub fn sign_transaction_with_terms(
         .collect::<Result<_, _>>()?;
 
     // ── 7. FCMP++ prove ──────────────────────────────────────────────
-    let prove_result = proof::prove(
-        &prove_inputs,
-        // Proof-crate boundary: both the root and the signable hash are
-        // bytes here (RAW_TYPE_NEWTYPE_MIGRATION.md original PR E).
-        tree.tree_root.as_bytes(),
-        tree.tree_depth,
-        tx_prefix_hash.to_bytes(),
-    )
-    .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
+    // Over `tx_signable`: the prefix and the base just built (the outputs'
+    // commitments, encrypted amounts and labels, the fee and the reference
+    // block), framed under the network's id (the signing envelope §2.2).
+    let tx_signable = signable_of(
+        network_id,
+        tx_prefix_hash,
+        fee,
+        &tree.reference_block,
+        &out_commitments,
+        &enc_amounts,
+        &enc_labels,
+    );
+    let prove_result = proof::prove(&prove_inputs, &tree.tree_root, tree.tree_depth, tx_signable)
+        .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
 
     // ── 8. Construct-side balance self-verify ────────────────────────
     // Run the *same* commitment-sum balance equation the daemon runs, over the
@@ -216,7 +231,74 @@ pub fn sign_transaction_with_terms(
         pqc_auths: Vec::new(),
         reference_block: tree.reference_block,
         tree_depth: tree.tree_depth,
+        tx_signable,
     })
+}
+
+/// An output's real commitment, `C = mask*G + amount*H` (compressed, no
+/// cofactor scaling): the form [`sign_transaction_with_terms`] writes into
+/// the base and [`tx_signable_for`] frames.
+fn output_commitment(out: &OutputInfo) -> [u8; 32] {
+    let mask = Zeroizing::new(
+        Scalar::from_canonical_bytes(out.commitment_mask)
+            .expect("commitment_mask is not a valid scalar"),
+    );
+    Commitment::new(*mask, out.amount.to_raw())
+        .calculate()
+        .compress()
+        .to_bytes()
+}
+
+/// `tx_signable` from its parts: the base assembled as the wire will carry
+/// it and hashed by `shekyl-wire`'s own base serializer
+/// ([`shekyl_wire::fcmp_base_hash`]), then framed with the prefix hash.
+fn signable_of(
+    network_id: &NetworkId,
+    prefix_hash: PrefixHash,
+    fee: shekyl_units::AtomicUnits,
+    reference_block: &BlockHash,
+    commitments: &[[u8; 32]],
+    enc_amounts: &[EncryptedOutputField],
+    enc_labels: &[EncryptedOutputField],
+) -> TxSignableHash {
+    let base = CtBase {
+        enc_amounts: enc_amounts.iter().map(|f| f.to_bytes()).collect(),
+        enc_labels: enc_labels.iter().map(|f| f.to_bytes()).collect(),
+        commitments: commitments.to_vec(),
+    };
+    shekyl_wire::tx_signable(
+        network_id,
+        prefix_hash,
+        shekyl_wire::fcmp_base_hash(fee.to_raw(), reference_block, &base),
+    )
+}
+
+/// The transaction's `tx_signable` (the signing envelope §2.2) before it
+/// is proved: what [`sign_transaction_with_terms`] proves the spend inputs
+/// over, for a caller that proves something else over the same message
+/// first (an emission's backing proof). `prefix_hash` is the prefix the
+/// message covers; the base is `outputs`' commitments and encrypted
+/// fields with `fee` and `reference_block`.
+#[must_use]
+pub fn tx_signable_for(
+    network_id: &NetworkId,
+    prefix_hash: PrefixHash,
+    fee: shekyl_units::AtomicUnits,
+    reference_block: &BlockHash,
+    outputs: &[OutputInfo],
+) -> TxSignableHash {
+    let commitments: Vec<[u8; 32]> = outputs.iter().map(output_commitment).collect();
+    let enc_amounts: Vec<EncryptedOutputField> = outputs.iter().map(|o| o.enc_amount).collect();
+    let enc_labels: Vec<EncryptedOutputField> = outputs.iter().map(|o| o.enc_label).collect();
+    signable_of(
+        network_id,
+        prefix_hash,
+        fee,
+        reference_block,
+        &commitments,
+        &enc_amounts,
+        &enc_labels,
+    )
 }
 
 /// Produce PQC authentication signatures for each input.
@@ -325,7 +407,7 @@ pub struct MembershipOnlyProof {
 pub fn prove_backing_membership(
     input: &SpendInput,
     tree: &TreeContext,
-    signable_tx_hash: PrefixHash,
+    tx_signable: TxSignableHash,
 ) -> Result<MembershipOnlyProof, TxBuilderError> {
     // The blind is not read on the membership-only path: pseudo-out blinds
     // are a full-path (key-image) concern; the membership-only pseudo-out
@@ -334,9 +416,9 @@ pub fn prove_backing_membership(
 
     let result = proof::prove_membership_only(
         &[prove_input],
-        tree.tree_root.as_bytes(),
+        &tree.tree_root,
         tree.tree_depth,
-        signable_tx_hash.to_bytes(),
+        tx_signable,
         tree.tree_root.as_bytes(),
     )
     .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;

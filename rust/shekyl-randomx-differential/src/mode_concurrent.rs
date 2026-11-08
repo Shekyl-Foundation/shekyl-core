@@ -207,7 +207,9 @@ pub const WALL_CLOCK_BUDGET: Duration = Duration::from_secs(30 * 60);
 /// to non-4 KiB Linux CI must replace this constant with a runtime
 /// `sysconf(_SC_PAGESIZE)` (via `libc::sysconf`); the harness
 /// would gain a new direct dep on `libc` per
-/// `17-dependency-discipline.mdc` review at that point.
+/// `17-dependency-discipline.mdc` review at that point. Linux only, as
+/// its one reader is.
+#[cfg(target_os = "linux")]
 const PAGE_SIZE_BYTES: u64 = 4096;
 
 /// Successful run summary surfaced on the stdout report path.

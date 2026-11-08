@@ -35,7 +35,7 @@ use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
 use shekyl_rpc_types::{
     CalcPowRequest, GetArchivalEmissionClaimSourceRequest, GetCoinbaseTxSumRequest,
     GetCurveTreeCheckpointRequest, HashHex, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
-    CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE, CORE_RPC_ERROR_CODE_WRONG_PARAM,
+    CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Ct, Transaction};
@@ -47,9 +47,11 @@ use crate::rpc_store_facts_tests::{
 };
 use crate::scenario::{Mined, Scenario, RULES};
 use crate::substrate::ProductionSubstrate;
-use crate::test_support::{
-    cleanup, h, open_store, open_store_under, tmp, Family, FIRST_SPEND_HEIGHT,
-};
+use crate::test_support::{h, open_store, open_store_under, tmp, Family, FIRST_SPEND_HEIGHT};
+
+fn hash_budget() -> shekyl_daemon_rpc::hash_budget::HashBudget {
+    shekyl_daemon_rpc::hash_budget::HashBudget::new(std::time::Instant::now())
+}
 
 /// The fee a listed body pays.
 fn fee_of(tx: &Transaction) -> u64 {
@@ -215,8 +217,11 @@ async fn the_claim_source_lists_the_window_and_gathers_what_the_gate_admits() {
         let settled = levered_schedule().epoch_at(h(connecting)).to_raw();
         assert_eq!(source.current_settled_epoch, settled);
         assert!(!source.has_bond_record);
-        let window: Vec<u64> =
-            (shekyl_archival_retention::claim_window_floor(settled)..settled).collect();
+        let window: Vec<u64> = (shekyl_archival_retention::claim_window_floor(
+            settled,
+            shekyl_archival_retention::archival_params(),
+        )..settled)
+            .collect();
         assert_eq!(
             source
                 .epochs
@@ -267,6 +272,100 @@ async fn the_claim_source_lists_the_window_and_gathers_what_the_gate_admits() {
             Err(RpcFault::Refused(RpcRefusal::wrong_param(P_ID_REFUSAL)))
         );
         drop(snap);
+        drop(facts);
+        drop(store);
+    })
+    .await;
+    s.close().await;
+}
+
+/// The claim window is cause-blind: a persona that holds a bond is listed
+/// the same window as one that holds none. On a levered chain with one
+/// bonded persona, the claim source for that persona and for a stranger
+/// list the same epochs with the same budget, `Σwork`, gather flag and
+/// bonds; only the bond record and the claimant's index differ. The twin
+/// of the no-bond test above; supersedes the C++ `archival_claim_source_rpc`
+/// case `window_is_unconditional_and_cause_blind`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_claim_window_is_the_same_for_a_persona_with_a_bond() {
+    use crate::archival_driver::{first_spending_height, ENDPOINT, FEE};
+    use crate::scenario::FreeHash;
+    use crate::scenario_archival::{complete_tree, Persona};
+    use crate::scenario_shard::levered_rules;
+    use shekyl_types::ChainCount;
+    let rules = levered_rules();
+    let mut s = Scenario::open_under("rpc-reads-claim-source-bond", FreeHash, rules);
+    let connecting = first_spending_height();
+    let mut mined = s
+        .mine(ChainCount::from_next_height(connecting).to_raw())
+        .await;
+    let spender = Spender::over(&mined);
+    let persona = Persona::at(1);
+    let join = persona.join(complete_tree(), ENDPOINT);
+    let joined = s
+        .mine_listing(vec![spender.spend_coinbase_posting(
+            s.wallet(),
+            BlockHeight::ZERO,
+            connecting,
+            FEE,
+            Some(&join),
+        )])
+        .await
+        .unwrap_or_else(|outcome| panic!("the join connects: {outcome}"));
+    mined.push(joined);
+    mined.extend(s.mine(40).await);
+    let bonded = hex::encode(persona.id().to_bytes());
+    s.reopen(|path| {
+        let store = Arc::new(open_store_under(
+            path,
+            &rules.in_force(BlockHeight::ZERO),
+            shekyl_chain_store::apply_policy::ApplyPolicy::Full,
+        ));
+        let facts = facts_over(Arc::clone(&store), path, rules);
+        let ask = |p_id: &str| {
+            get_archival_emission_claim_source(
+                &facts,
+                &GetArchivalEmissionClaimSourceRequest {
+                    p_id: p_id.to_owned(),
+                },
+            )
+            .expect("a claim source")
+        };
+        let with_bond = ask(&bonded);
+        let without = ask(&"11".repeat(32));
+        assert!(with_bond.has_bond_record, "the joined persona holds a bond");
+        assert!(!without.has_bond_record, "the stranger holds none");
+        assert!(!with_bond.epochs.is_empty(), "the window lists epochs");
+        let window = |source: &shekyl_rpc_types::GetArchivalEmissionClaimSourceResponse| {
+            source
+                .epochs
+                .iter()
+                .map(|e| {
+                    (
+                        e.settlement_epoch,
+                        e.budget_atomic,
+                        e.sigma_work_milli,
+                        e.has_budget_row,
+                        e.close_block_height,
+                        e.bonds.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            window(&with_bond),
+            window(&without),
+            "the window does not branch on the bond"
+        );
+        assert_eq!(with_bond.chain_height, without.chain_height);
+        assert_eq!(
+            with_bond.current_settled_epoch,
+            without.current_settled_epoch
+        );
+        assert!(without
+            .epochs
+            .iter()
+            .all(|e| e.claimant_bond_idx == u64::MAX));
         drop(facts);
         drop(store);
     })
@@ -533,7 +632,7 @@ async fn calc_pow_waits_for_a_hasher_permit_in_its_class() {
         };
         let held = budget.acquire(Class::Chain);
         std::thread::scope(|scope| {
-            let asked = scope.spawn(|| calc_pow(&facts, &request));
+            let asked = scope.spawn(|| calc_pow(&facts, &request, false, &hash_budget()));
             let started = std::time::Instant::now();
             while budget.waiting(Class::CalcPow) == 0 {
                 assert!(
@@ -658,7 +757,7 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
 /// node recorded when it judged the block, and where it no longer does
 /// (genesis's, replaced by the next seed) the request is refused. A held seed the
 /// caller names is answered the same way. A seed height above the tip, a
-/// blob that is not hex or is larger than any block, and a seed that is not
+/// blob that is not hex or is longer than a hashing blob, and a seed that is not
 /// 32 bytes are refused with the C++ codes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
@@ -677,6 +776,8 @@ async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
                     block_blob: blob.to_owned(),
                     seed_hash: seed.to_owned(),
                 },
+                false,
+                &hash_budget(),
             )
         };
         // The driver pins each connecting seed before the hash. Genesis
@@ -717,6 +818,38 @@ async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
             ask(BlockHeight::ZERO, &hex::encode(&blob), &hex::encode(named.to_bytes())),
             Ok(hex::encode(compute_hash(&held, &blob)))
         );
+        // One shared bucket. The first bounded hash spends the one hash
+        // the bucket holds. The second is empty and spends nothing. The
+        // host hashes from an empty bucket.
+        let budget = hash_budget();
+        let priced = CalcPowRequest {
+            height: mined[2].height.to_raw(),
+            block_blob: hex::encode(&blob),
+            seed_hash: String::new(),
+        };
+        assert!(calc_pow(&facts, &priced, true, &budget).is_ok());
+        match calc_pow(&facts, &priced, true, &budget) {
+            Err(RpcFault::Refused(refusal)) => {
+                assert_eq!(
+                    refusal.code,
+                    shekyl_rpc_types::errors::ErrorClass::OverResourceBound.code()
+                );
+                assert_eq!(
+                    refusal
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("code"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("rpc.bound.budget")
+                );
+            }
+            other => panic!("the second hash finds an empty bucket: {other:?}"),
+        }
+        let empty = shekyl_daemon_rpc::hash_budget::HashBudget::empty(std::time::Instant::now());
+        assert!(
+            calc_pow(&facts, &priced, false, &empty).is_ok(),
+            "the host does not pay"
+        );
         let far = 1_000_000u64;
         let seed_height = shekyl_chain_rules::seed_height(BlockHeight::from_raw(far))
             .expect("not genesis")
@@ -736,14 +869,15 @@ async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
                 data: None,
             }))
         );
-        let oversize = vec![0u8; shekyl_wire::block::MAX_BLOCK_BLOB_SIZE + 1];
+        let oversize = vec![0u8; shekyl_wire::block::MAX_POW_BLOB_SIZE + 1];
         assert_eq!(
-            ask(h(1), &hex::encode(oversize), ""),
-            Err(RpcFault::Refused(RpcRefusal {
-                code: CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
-                message: "Block blob size is too big, rejecting block".to_owned(),
-                data: None,
-            }))
+            ask(h(1), &hex::encode(&oversize), ""),
+            Err(shekyl_daemon_rpc::methods::bound_fault(
+                "calc_pow",
+                "bytes",
+                u64::try_from(shekyl_wire::block::MAX_POW_BLOB_SIZE).unwrap(),
+                u64::try_from(oversize.len()).unwrap(),
+            ))
         );
         assert!(matches!(
             ask(h(1), &hex::encode(&blob), "abcd"),
@@ -780,15 +914,20 @@ async fn calc_pow_never_derives_a_cache() {
         let facts = facts_with_caches(Arc::clone(&store), path, RULES, Arc::clone(&caches));
         let blob = hex::encode(mined[2].template.block.pow_blob());
         let fresh = BlockHash::from_bytes([7; 32]);
+        let not_held_request = CalcPowRequest {
+            height: 2,
+            block_blob: blob.clone(),
+            seed_hash: hex::encode(fresh.to_bytes()),
+        };
         assert_eq!(
-            calc_pow(
-                &facts,
-                &CalcPowRequest {
-                    height: 2,
-                    block_blob: blob.clone(),
-                    seed_hash: hex::encode(fresh.to_bytes()),
-                }
-            ),
+            calc_pow(&facts, &not_held_request, false, &hash_budget()),
+            not_held(fresh)
+        );
+        // An empty bucket and a seed that will not hash is the parameter
+        // refusal, not the empty bucket. The spend sits after admission.
+        let empty = shekyl_daemon_rpc::hash_budget::HashBudget::empty(std::time::Instant::now());
+        assert_eq!(
+            calc_pow(&facts, &not_held_request, true, &empty),
             not_held(fresh)
         );
         let named_by_height = mined[2].seed;
@@ -799,7 +938,9 @@ async fn calc_pow_never_derives_a_cache() {
                     height: 2,
                     block_blob: blob,
                     seed_hash: String::new(),
-                }
+                },
+                false,
+                &hash_budget(),
             ),
             not_held(named_by_height)
         );
@@ -845,11 +986,12 @@ fn an_empty_store_has_no_chain_reads_and_hashes_nothing() {
                 height: 5,
                 block_blob: "00".to_owned(),
                 seed_hash: hex::encode(seed.to_bytes()),
-            }
+            },
+            false,
+            &hash_budget(),
         ),
         not_held(seed)
     );
     drop(facts);
     drop(store);
-    cleanup(&path);
 }

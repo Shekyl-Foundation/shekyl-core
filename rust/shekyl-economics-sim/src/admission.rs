@@ -36,7 +36,8 @@ use shekyl_archival_retention::{
 
 use std::fmt;
 
-use crate::population::{AGE_MILLI, AGE_WEIGHT_MILLI};
+use crate::engine::SimParams;
+use crate::population::AGE_MILLI;
 use crate::stranding::mean_replication;
 
 /// Safety multiple applied to the forecast-`r` floor. `r` is a forecast, and
@@ -49,8 +50,8 @@ pub const MIN_HOLDING_SAFETY_MULTIPLE: u64 = 2;
 /// viability boundary. Computed through the **production** scarcity/floor chain,
 /// not the closed form, so it cannot drift from consensus arithmetic.
 #[must_use]
-pub fn min_viable_holding(r_market: u64) -> u64 {
-    let s = scarcity_micro(r_market, AGE_MILLI, AGE_WEIGHT_MILLI);
+pub fn min_viable_holding(r_market: u64, run: &SimParams) -> u64 {
+    let s = scarcity_micro(r_market, AGE_MILLI, run.archival().reward_age_weight_milli);
     if s == 0 {
         // Beyond even one-milli-per-whole-corpus; the closed form is unbounded.
         return MAX_HOLDINGS_SHARDS as u64;
@@ -62,8 +63,8 @@ pub fn min_viable_holding(r_market: u64) -> u64 {
 /// Sanity: does `holding` actually credit non-zero work at `r`? Runs the exact
 /// production path the consensus reward uses.
 #[must_use]
-pub fn credits_nonzero(holding: u64, r_market: u64) -> bool {
-    let s = scarcity_micro(r_market, AGE_MILLI, AGE_WEIGHT_MILLI);
+pub fn credits_nonzero(holding: u64, r_market: u64, run: &SimParams) -> bool {
+    let s = scarcity_micro(r_market, AGE_MILLI, run.archival().reward_age_weight_milli);
     work_milli_from_micro(s.saturating_mul(holding)) > 0
 }
 
@@ -71,10 +72,10 @@ pub fn credits_nonzero(holding: u64, r_market: u64) -> bool {
 /// safety multiple applied. Clamped to `MAX_HOLDINGS_SHARDS` (a floor above the
 /// wire cap would admit nothing — see [`composes_with_wire_cap`]).
 #[must_use]
-pub fn recommend_min_holding(r_samples: &[u64]) -> u64 {
+pub fn recommend_min_holding(r_samples: &[u64], run: &SimParams) -> u64 {
     let worst = r_samples
         .iter()
-        .map(|&r| min_viable_holding(r))
+        .map(|&r| min_viable_holding(r, run))
         .max()
         .unwrap_or(1);
     worst
@@ -101,26 +102,27 @@ pub fn composes_with_wire_cap(min_holding: u64) -> bool {
 /// at the floor is not incentivised**. Returns the milli lost by splitting `holding`
 /// into `min_holding`-sized bonds — the size of that anti-splitting pressure.
 #[must_use]
-pub fn splitting_loss_milli(holding: u64, min_holding: u64, r_market: u64) -> u64 {
-    whole_credit_milli(holding, r_market).saturating_sub(split_credit_milli(
+pub fn splitting_loss_milli(holding: u64, min_holding: u64, r_market: u64, run: &SimParams) -> u64 {
+    whole_credit_milli(holding, r_market, run).saturating_sub(split_credit_milli(
         holding,
         min_holding,
         r_market,
+        run,
     ))
 }
 
 /// Credited milli holding `holding` shards as ONE bond at `r_market`.
 #[must_use]
-pub fn whole_credit_milli(holding: u64, r_market: u64) -> u64 {
-    let s = scarcity_micro(r_market, AGE_MILLI, AGE_WEIGHT_MILLI);
+pub fn whole_credit_milli(holding: u64, r_market: u64, run: &SimParams) -> u64 {
+    let s = scarcity_micro(r_market, AGE_MILLI, run.archival().reward_age_weight_milli);
     work_milli_from_micro(s.saturating_mul(holding))
 }
 
 /// Credited milli holding `holding` shards split into `min_holding`-sized bonds,
 /// each floored independently — the split an actor would make under a floor.
 #[must_use]
-pub fn split_credit_milli(holding: u64, min_holding: u64, r_market: u64) -> u64 {
-    let s = scarcity_micro(r_market, AGE_MILLI, AGE_WEIGHT_MILLI);
+pub fn split_credit_milli(holding: u64, min_holding: u64, r_market: u64, run: &SimParams) -> u64 {
+    let s = scarcity_micro(r_market, AGE_MILLI, run.archival().reward_age_weight_milli);
     let m = min_holding.max(1);
     let mut total = 0u64;
     let mut left = holding;
@@ -138,6 +140,7 @@ pub fn oq2_report(
     out: &mut impl fmt::Write,
     archiver_band: &[u64],
     n_samples: &[u64],
+    run: &SimParams,
 ) -> fmt::Result {
     writeln!(
         out,
@@ -163,7 +166,7 @@ pub fn oq2_report(
         for &a in archiver_band {
             let r = mean_replication(a, n);
             r_samples.push(r);
-            let mv = min_viable_holding(r);
+            let mv = min_viable_holding(r, run);
             writeln!(
                 out,
                 "{:<10} {:>9} {:>9} {:>14} {:>14}",
@@ -171,11 +174,11 @@ pub fn oq2_report(
                 n,
                 r,
                 mv,
-                splitting_loss_milli(MAX_HOLDINGS_SHARDS as u64, mv, r),
+                splitting_loss_milli(MAX_HOLDINGS_SHARDS as u64, mv, r, run),
             )?;
         }
     }
-    let rec = recommend_min_holding(&r_samples);
+    let rec = recommend_min_holding(&r_samples, run);
     writeln!(
         out,
         "  -> RECOMMENDED provisional min_holding = {REC} shards ({SM}x the worst swept\n\
@@ -193,7 +196,7 @@ pub fn oq2_report(
         REC = rec,
         SM = MIN_HOLDING_SAFETY_MULTIPLE,
         OK = composes_with_wire_cap(rec)
-            && credits_nonzero(rec, *r_samples.iter().max().unwrap_or(&1)),
+            && credits_nonzero(rec, *r_samples.iter().max().unwrap_or(&1), run),
         CAP = MAX_HOLDINGS_SHARDS,
     )?;
 
@@ -208,7 +211,11 @@ mod tests {
     fn boundary_matches_the_quantization_cliff() {
         // min_holding(r) ≈ ceil(r/1000) — the mirror of r > ~1000 × shards_held.
         for (r, expect) in [(6u64, 1u64), (1_000, 1), (5_000, 5), (100_000, 100)] {
-            assert_eq!(min_viable_holding(r), expect, "min_viable_holding({r})");
+            assert_eq!(
+                min_viable_holding(r, &SimParams::default()),
+                expect,
+                "min_viable_holding({r}, &SimParams::default())"
+            );
         }
     }
 
@@ -217,23 +224,29 @@ mod tests {
         // At the boundary the holding credits; one shard below it does not. This is
         // what makes the floor a *correct* admission rule rather than a guess.
         for r in [500u64, 5_000, 20_000, 100_000] {
-            let h = min_viable_holding(r);
-            assert!(credits_nonzero(h, r), "h={h} must credit at r={r}");
+            let h = min_viable_holding(r, &SimParams::default());
+            assert!(
+                credits_nonzero(h, r, &SimParams::default()),
+                "h={h} must credit at r={r}"
+            );
             if h > 1 {
-                assert!(!credits_nonzero(h - 1, r), "h-1 must NOT credit at r={r}");
+                assert!(
+                    !credits_nonzero(h - 1, r, &SimParams::default()),
+                    "h-1 must NOT credit at r={r}"
+                );
             }
         }
     }
 
     #[test]
     fn recommendation_composes_with_the_wire_cap() {
-        let rec = recommend_min_holding(&[6, 100, 5_000, 20_000]);
+        let rec = recommend_min_holding(&[6, 100, 5_000, 20_000], &SimParams::default());
         assert!(
             composes_with_wire_cap(rec),
             "floor {rec} must sit strictly below the wire cap"
         );
         // And it must actually cover the worst case it was sized against.
-        assert!(credits_nonzero(rec, 20_000));
+        assert!(credits_nonzero(rec, 20_000, &SimParams::default()));
     }
 
     #[test]
@@ -246,16 +259,24 @@ mod tests {
         // remainder, so the loss is legitimately ZERO — the ideal case, not a
         // counterexample. What must never happen is split > whole.)
         for r in [500u64, 5_000, 20_000] {
-            let m = min_viable_holding(r);
+            let m = min_viable_holding(r, &SimParams::default());
             for h in [64u64, 512, 4_096] {
                 assert!(
-                    split_credit_milli(h, m, r) <= whole_credit_milli(h, r),
+                    split_credit_milli(h, m, r, &SimParams::default())
+                        <= whole_credit_milli(h, r, &SimParams::default()),
                     "splitting must never pay: h={h} m={m} r={r}"
                 );
             }
         }
         // A split that does NOT divide the boundary strictly discards remainders.
         let r = 5_000;
-        assert!(splitting_loss_milli(4_096, min_viable_holding(r) + 2, r) > 0);
+        assert!(
+            splitting_loss_milli(
+                4_096,
+                min_viable_holding(r, &SimParams::default()) + 2,
+                r,
+                &SimParams::default()
+            ) > 0
+        );
     }
 }

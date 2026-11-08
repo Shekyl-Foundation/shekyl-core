@@ -174,6 +174,24 @@ const _: () = assert!(
     "a compact holdings set holds at least one shard"
 );
 
+/// The archival reorg depth `D_max` in blocks (`PDM-Q11`): how far behind the
+/// tip the chain is still treated as reorg-able. A segment freezes, a bond's
+/// assembly window closes and a pass anchors only below it, so a segment
+/// frozen and served inside a depth the rest of the system re-orgs was the
+/// hazard this one value prevents.
+///
+/// Sourced from `config/consensus_constants.json`
+/// (`archival_reorg_depth_blocks`, via this crate's `build.rs`); this is its
+/// one Rust home. `shekyl-curve-tree` (`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`)
+/// and `shekyl-archival-retention` (`ARCHIVAL_REORG_DEPTH_BLOCKS`) read it
+/// here. Structural, not swept (ESR-16 completion, ruling 3).
+pub const ARCHIVAL_REORG_DEPTH_BLOCKS: u64 = GENERATED_ARCHIVAL_REORG_DEPTH_BLOCKS;
+
+const _: () = assert!(
+    ARCHIVAL_REORG_DEPTH_BLOCKS > 0,
+    "a positive reorg depth: a zero margin freezes the tip"
+);
+
 /// Storage ids issued through `height` inclusive.
 ///
 /// `listed` is `cumulative_tx_count` at that height: non-coinbase
@@ -591,7 +609,7 @@ impl BadInterval {
 /// instance of the module's placement argument): the daemon store **pins**
 /// it in its header at create and refuses a session under another value
 /// (S-CHAIN-W SCW-2); the rule set **carries** it — the genesis constant on
-/// every issued set, the regtest lever's value on a Fakechain set — so the
+/// every issued set, the regtest lever's value on a levered set — so the
 /// validator derives epochs, closes and slash deadlines from the rules in
 /// force and never from a process's environment (rule 71: nettype selects
 /// data, never control flow); and `shekyl-archival-retention` **computes**
@@ -643,9 +661,9 @@ pub use release::ReleasedRecord;
 pub use serve::{PassCount, ServedShard};
 pub use settlement::{
     BlockDraws, DrawCommitment, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw,
-    SettlementOutcome, SettlementRow, SettlementRowError, BLOCK_DRAWS_LEN, COUNTED_DRAWS,
-    DRAWABLE_DIGEST_LEN, DRAW_COMMITMENT_LEN, ISSUED_DIGEST_LEN, SERVE_THRESHOLD_PASSES,
-    SETTLEMENT_ROW_LEN,
+    SettlementOutcome, SettlementRow, SettlementRowError, SupportCount, SupportIssued,
+    SupportSeats, SupportSeatsError, BLOCK_DRAWS_LEN, COUNTED_DRAWS, DRAWABLE_DIGEST_LEN,
+    DRAW_COMMITMENT_LEN, ISSUED_DIGEST_LEN, SERVE_THRESHOLD_PASSES, SETTLEMENT_ROW_LEN,
 };
 pub use slash::{LoggedSlash, SlashLogEntry, SlashedHolding};
 pub use view::ShardView;

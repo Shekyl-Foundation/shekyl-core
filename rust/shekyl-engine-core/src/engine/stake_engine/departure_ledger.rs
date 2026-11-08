@@ -25,11 +25,12 @@
 //!    during it, and departed again after it carries a pre-gap timestamp that
 //!    describes an absence which *ended*. Clocking from it can release
 //!    immediately.
-//! 2. **A rollback.** The daemon's `synchronized` flag is **sticky** — the
-//!    inherited C++ sets it `false → true` exactly once
-//!    (`cryptonote_protocol_handler.inl:2465`, the only mutation; the
-//!    constructor at `:219` is the only other write) and never clears it on a
-//!    pop or reorg. So a rollback between the sync read and the record read
+//! 2. **A rollback.** The daemon's `synchronized` flag does not witness a
+//!    pop: on the C++ daemon this was written against it was **sticky** (the
+//!    inherited `cryptonote_protocol_handler.inl`, deleted 2026-11-05, set it
+//!    `false → true` exactly once and never cleared it), and the Rust
+//!    daemon's flag follows the chain-sync view, which a rollback of the
+//!    local tip does not change either. So a rollback between the sync read and the record read
 //!    leaves a witness whose height is *above* the record's, and reading the
 //!    ledger's clock off the witness counts epoch opens the current record
 //!    never crossed.
@@ -58,7 +59,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_types::BlockHash;
 
-use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
+use shekyl_archival_retention::SettlementSchedule;
 
 use crate::engine::daemon::synced_chain_facts::{AnchoredView, ChainAnchor, TimelineBreak};
 
@@ -233,14 +234,17 @@ impl DepartureLedger {
         self.absent_since
             .retain(|&shard_id, _| !obligation.owes(shard_id));
 
-        let now_epoch = view.at().to_raw() / SETTLEMENT_EPOCH_BLOCKS;
+        // The process's schedule: the shipped epoch, or a regtest wallet's
+        // armed lever, as every other wallet epoch read takes it.
+        let schedule = SettlementSchedule::effective();
+        let now_epoch = schedule.epoch_at_height(view.at().to_raw());
         let mut releasable = Vec::new();
         for &shard_id in pinned {
             if obligation.owes(shard_id) {
                 continue;
             }
             let first_absent = *self.absent_since.entry(shard_id).or_insert(view);
-            let absent_epoch = first_absent.at().to_raw() / SETTLEMENT_EPOCH_BLOCKS;
+            let absent_epoch = schedule.epoch_at_height(first_absent.at().to_raw());
             if now_epoch.saturating_sub(absent_epoch) >= EPOCHS_BEFORE_PIN_RELEASE {
                 releasable.push(shard_id);
             }

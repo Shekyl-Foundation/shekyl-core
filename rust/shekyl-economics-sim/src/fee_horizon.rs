@@ -14,7 +14,6 @@
 
 use std::fmt;
 
-use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
 use shekyl_economics::{burn::calc_burn_pct, params::SCALE, TxVolume};
 
 use crate::burden::{
@@ -48,9 +47,10 @@ pub fn fee_horizon_years(
     rate: f64,
     bytes_per_tx: u64,
     shard_bytes: u64,
+    run: &SimParams,
 ) -> f64 {
     let fee_skl = fee_per_tx_atomic as f64 / COIN;
-    let bond_skl = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN;
+    let bond_skl = run.archival().bond_floor_atomic as f64 / COIN;
     fee_skl * base_fraction * share_fraction * shard_bytes as f64
         / (bond_skl * REPLICAS_PER_SHARD as f64 * rate * bytes_per_tx as f64)
 }
@@ -61,11 +61,11 @@ pub fn fee_horizon_years(
 pub(crate) fn fee_era_burn_pct(params: &SimParams, tx_per_block: u64) -> u64 {
     calc_burn_pct(
         TxVolume::per_block(tx_per_block),
-        params.tx_volume_baseline,
-        params.emission_curve_asymptote,
-        params.emission_curve_asymptote,
-        params.burn_base_rate,
-        params.burn_cap,
+        params.economic().tx_volume_baseline,
+        params.economic().emission_curve_asymptote,
+        params.economic().emission_curve_asymptote,
+        params.economic().burn_base_rate,
+        params.economic().burn_cap,
     )
 }
 
@@ -80,16 +80,16 @@ pub(crate) fn fee_era_burn_fraction(params: &SimParams, tx_per_block: u64) -> f6
 /// with traffic. Walks up from the baseline one tx/block at a time; the cap is
 /// a few multiples of the baseline, so the walk is short.
 fn burn_cap_volume(params: &SimParams) -> u64 {
-    let baseline = params.tx_volume_baseline;
+    let baseline = params.economic().tx_volume_baseline;
     (baseline..=baseline.saturating_mul(10_000))
-        .find(|&v| fee_era_burn_pct(params, v) >= params.burn_cap)
+        .find(|&v| fee_era_burn_pct(params, v) >= params.economic().burn_cap)
         .expect("burn_cap is reached within 10,000x the baseline volume")
 }
 
 /// Shards the whole perpetual tail funds at a rate, if every tail SKL went to
 /// archival bonds' opportunity cost.
-pub(crate) fn shards_funded_by_tail(tail_skl_per_year: f64, rate: f64) -> f64 {
-    let bond_skl = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN;
+pub(crate) fn shards_funded_by_tail(tail_skl_per_year: f64, rate: f64, run: &SimParams) -> f64 {
+    let bond_skl = run.archival().bond_floor_atomic as f64 / COIN;
     tail_skl_per_year / (bond_skl * REPLICAS_PER_SHARD as f64 * rate)
 }
 
@@ -124,15 +124,15 @@ fn write_closed_form(out: &mut impl fmt::Write, params: &SimParams, fee: u64) ->
          (calc_burn_pct, supply emitted) until burn_cap binds at V = {cap_v} tx/block, so H\n\
          rises with traffic up to the cap ({cap_ratio:.1}x the baseline figure) and is flat above:",
         fee = fee as f64 / COIN,
-        bond = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN,
+        bond = params.archival().bond_floor_atomic as f64 / COIN,
         R = REPLICAS_PER_SHARD,
         bpt = bytes_per_tx,
         cap_v = cap_volume,
-        cap_ratio = params.burn_cap as f64 / params.burn_base_rate as f64,
+        cap_ratio = params.economic().burn_cap as f64 / params.economic().burn_base_rate as f64,
     )?;
     let volumes = [
         ("scen. 9 tail", SCENARIO_9_TAIL_TX_PER_BLOCK),
-        ("baseline", params.tx_volume_baseline),
+        ("baseline", params.economic().tx_volume_baseline),
         ("at burn_cap", cap_volume),
     ];
     let horizons = |base: f64, share: f64| -> String {
@@ -141,14 +141,14 @@ fn write_closed_form(out: &mut impl fmt::Write, params: &SimParams, fee: u64) ->
             .map(|&r| {
                 format!(
                     "{:.0}y @{:.0}%",
-                    fee_horizon_years(fee, base, share, r, bytes_per_tx, w),
+                    fee_horizon_years(fee, base, share, r, bytes_per_tx, w, params),
                     r * 100.0
                 )
             })
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let flat = floor_share() as f64 / SCALE as f64;
+    let flat = floor_share(params) as f64 / SCALE as f64;
     let flat_label = format!("burn x flat {:.0}%", flat * 100.0);
     for (label, share) in [(flat_label.as_str(), flat), ("burn x 100%", 1.0)] {
         for (vlabel, v) in volumes {
@@ -189,11 +189,11 @@ mod tests {
         // all-fees lever's H is. Both read off the same closed form, which
         // exists only on the flat arm.
         let params = SimParams::section_12_14_control();
-        let baseline = params.tx_volume_baseline;
+        let baseline = params.economic().tx_volume_baseline;
         let cap_v = burn_cap_volume(&params);
         assert!(cap_v > baseline);
-        assert_eq!(fee_era_burn_pct(&params, cap_v), params.burn_cap);
-        assert!(fee_era_burn_pct(&params, cap_v - 1) < params.burn_cap);
+        assert_eq!(fee_era_burn_pct(&params, cap_v), params.economic().burn_cap);
+        assert!(fee_era_burn_pct(&params, cap_v - 1) < params.economic().burn_cap);
 
         let bytes = normal_tx_archival_bytes(honest_leaves_at_closed_shards(KNEE_BAND[2]));
         let w = shekyl_types::SHARD_LENGTH.to_raw();
@@ -205,10 +205,11 @@ mod tests {
             fee_horizon_years(
                 fee,
                 fee_era_burn_fraction(&params, v),
-                floor_share() as f64 / SCALE as f64,
+                floor_share(&SimParams::default()) as f64 / SCALE as f64,
                 0.10,
                 bytes,
                 w,
+                &SimParams::default(),
             )
         };
         let h_tail = h_at(SCENARIO_9_TAIL_TX_PER_BLOCK);
@@ -227,10 +228,10 @@ mod tests {
         // Above the cap, flat.
         assert_eq!(h_at(cap_v * 10), h_cap);
         // The cap/base ratio from the params is where it tops out.
-        let top = params.burn_cap as f64 / params.burn_base_rate as f64;
+        let top = params.economic().burn_cap as f64 / params.economic().burn_base_rate as f64;
         assert!(((h_cap / h_base) - top).abs() < 0.01);
         // All fees: the same at every volume.
-        let all = |_v: u64| fee_horizon_years(fee, 1.0, 1.0, 0.10, bytes, w);
+        let all = |_v: u64| fee_horizon_years(fee, 1.0, 1.0, 0.10, bytes, w, &SimParams::default());
         assert_eq!(all(SCENARIO_9_TAIL_TX_PER_BLOCK), all(cap_v * 10));
     }
 }

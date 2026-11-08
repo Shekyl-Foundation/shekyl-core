@@ -27,7 +27,7 @@ digest_auth = { version = "0.3", default-features = false }
 # sync = Mutex (auth serialization), time = request timeout, net = the TCP
 # stream the SOCKS connector dials. Previously pulled in transitively via
 # simple-request; made explicit now that it is gone.
-tokio = { version = "1", default-features = false, features = ["sync", "time", "net", "io-util"] }
+tokio = { version = "1", default-features = false, features = ["sync", "time", "net", "io-util", "rt"] }
 
 # Small hyper client owned in `http_client` (re-absorbed from simple-request so
 # a SOCKS5h connector can be added). Feature flags mirror what simple-request's
@@ -42,6 +42,12 @@ tower-service = { version = "0.3", default-features = false }
 shekyl-socks = { path = "../shekyl-socks" }
 
 shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, features = ["std"] }
+# The one JSON-RPC framing (`SyncDaemon::json_rpc`) reads a refusal through
+# `read_error_object` (RW-Q3). This crate already reaches the types through
+# `shekyl-rpc-client`; the direct edge is the call.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # rt for #[tokio::test]; io-util for the in-test SOCKS5 acceptor's

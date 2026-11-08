@@ -60,6 +60,7 @@ use serde::Serialize;
 use shekyl_archival_retention::{
     select_draw, CHALLENGE_RESPONSE_BLOCKS, DRAW_ATTEMPTS, SETTLEMENT_EPOCH_BLOCKS,
 };
+use shekyl_types::BlockHash;
 
 use crate::rng::SplitMix64;
 use crate::secret_draw::{
@@ -267,7 +268,7 @@ impl Visible {
 pub struct BlockTrace<'a> {
     pub h: u64,
     pub seed: &'a [u8; 32],
-    pub block_hash: &'a [u8; 32],
+    pub block_hash: &'a BlockHash,
     /// The visible issued counts at `h`, before this block's draws.
     pub visible: &'a [u16],
     pub shortfall: u64,
@@ -481,7 +482,7 @@ fn run_epochs_observed(
         run.blocks_at_cap += u64::from(capped_at(pairs, shortfall, in_flight, rel));
 
         let block_seed = rng.bytes32();
-        let block_hash = rng.bytes32();
+        let block_hash = BlockHash::from_bytes(rng.bytes32());
         let rolls = Rolls {
             dropout: rng.below(1000) as u32,
             lag: rng.below(w2 - timing.margin + 1),
@@ -892,11 +893,12 @@ pub fn render_summary(out: &mut impl std::fmt::Write, report: &Report) -> std::f
         out,
         "columns: M = margin in blocks; lat = inclusion latency, uniform on the range; R = reorg \
          depth; p_re = p_reorg; drn/pr, iss/pr = draws per pair made, issued; cap sum = blocks \
-         where the cap bound (D*H + SEB*u > 9*D*H, production's draw_target), summed over the \
+         where the cap bound (D*H + SEB*u > {CAPM}*D*H, production's draw_target), summed over the \
          cell's {SEEDS} seeds: divide by {SEEDS} for blocks per epoch; obs = 1 - short; epochs = epochs to m misses for a pair \
          that never serves; adm/never/late/lost = where the blocks' bundles went; att/dr, max, \
          last = select_draw attempts per draw, the most, and draws that reached attempt \
-         {DRAW_ATTEMPTS}"
+         {DRAW_ATTEMPTS}",
+        CAPM = shekyl_archival_retention::archival_params().count_cap_base_multiple(),
     )?;
     writeln!(
         out,
@@ -954,7 +956,7 @@ mod tests {
     /// One block of a run, kept.
     struct Kept {
         seed: [u8; 32],
-        block_hash: [u8; 32],
+        block_hash: BlockHash,
         visible: Vec<u16>,
         shortfall: u64,
         in_flight: u64,
@@ -1037,8 +1039,15 @@ mod tests {
         // The function is production's, argument for argument.
         assert_eq!(
             count_at(4_096, 9_000, 1_234, 4_321, 77),
-            draw_count(4_096, 9_000 - 1_234, draw_horizon(4_321, SEB, W2), SEB, 77)
-                .expect("H and SEB")
+            draw_count(
+                4_096,
+                9_000 - 1_234,
+                draw_horizon(4_321, SEB, W2, shekyl_archival_retention::archival_params()),
+                SEB,
+                77,
+                shekyl_archival_retention::archival_params()
+            )
+            .expect("H and SEB")
         );
     }
 
@@ -1198,9 +1207,10 @@ mod tests {
             let (count, next) = draw_count(
                 u64::from(D),
                 shortfall.saturating_sub(in_flight),
-                draw_horizon(h64, SEB, W2),
+                draw_horizon(h64, SEB, W2, shekyl_archival_retention::archival_params()),
                 SEB,
                 carry,
+                shekyl_archival_retention::archival_params(),
             )
             .expect("H and SEB");
             assert_eq!(

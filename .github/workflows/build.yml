@@ -1,29 +1,26 @@
 name: ci/gh-actions/cli
 
 on:
-  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
-  # not only the branch head — the class of failure neither PR's CI can
-  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
-  # filter, so this runs on every group regardless of the PR filter above
-  # or below.
-  merge_group:
-    types: [checks_requested]
-    branches: [dev]
   push:
-    # `main` only. PRs are covered by `pull_request` (the merge commit into
-    # the base — the stronger signal). A push-to-dev trigger used to
-    # double-run this workflow on every merge (~the OS matrix plus the
-    # Ubuntu test rebuild). Branches without a PR get CI by opening a
-    # draft PR. The weekly Arch / MSYS2 matrix lives in
+    # `dev` and `main`. A pull request's run tests its head merged onto the
+    # `dev` of its last push; the run on `dev` tests what the merges
+    # actually made, the one place two pull requests each green alone can
+    # show red together (06-branching.mdc). Branches without a PR get CI
+    # by opening a draft PR. The weekly Arch / MSYS2 matrix lives in
     # `.github/workflows/weekly-os.yml`.
-    branches: [main]
+    branches: [dev, main]
   pull_request:
+    types: [opened, synchronize, reopened]
 
-# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+# Superseded-run cancellation (the house pattern the other workflows cite).
 # Without a concurrency group, every push to an open PR stacks a full new
 # run behind the old one — with the shared runner pool, repeated pushes
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
 # unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
+# Every push to `dev` shares one ref, so a merge cancels the run of the
+# merge before it and a burst is tested once, at its newest commit. The
+# `changes` job measures a push from the last green run, not from the
+# previous push, so a cancelled run's commits are still in scope.
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
@@ -35,7 +32,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # ARCH="default" (not "native") ensures, that a different execution host can execute binaries compiled elsewhere.
-  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
+  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
   # clang + libclang-dev: the live-daemon gates step runs
   # `cargo test -p shekyl-engine-core --lib`, and lib tests build the crate's
   # dev-dependencies -- which include gungraun with `client_requests`, whose
@@ -44,16 +41,13 @@ env:
   # "stdbool.h file not found" otherwise). GitHub-hosted runners ship clang,
   # which is why the Rust workflow never needed this; these jobs run in bare
   # ubuntu containers, which do not.
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev ccache git curl clang libclang-dev'
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
     Acquire::http::Timeout "120";
     Acquire::ftp::Timeout "120";
     EOF
-  CCACHE_SETTINGS: |
-    ccache --max-size=150M
-    ccache --set-config=compression=true
 
 jobs:
   # Change scope, computed once and consumed by every job below.
@@ -63,8 +57,8 @@ jobs:
   # and branch protection waits forever for a context nobody will report. That
   # is a required check that CANNOT PASS: loud, but a hard deadlock. A job-level
   # `if:` instead produces a check that reports "skipping", which protection
-  # accepts -- the same shape `codeql.yml`'s `analyze-cpp` / `analyze-python`
-  # already rely on for two other required contexts in this repo.
+  # accepts -- the same shape `codeql.yml`'s `analyze-python` already relies
+  # on for another required context in this repo.
   #
   # No third-party action: `git diff` against the base does this, and a
   # change-detection action would be a new supply-chain surface in CI (rule 17).
@@ -76,26 +70,32 @@ jobs:
   changes:
     name: 'Change scope'
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.6 min over 23 runs; the floor
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
+    # `actions: read` lists this workflow's earlier runs for a push's base.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - id: scope
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -u
-          base=""
+          head="${{ github.sha }}"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
-          elif [ "${{ github.event_name }}" = "merge_group" ]; then
-            # The queue's group: its base is the `dev` tip the group merges onto.
-            base="${{ github.event.merge_group.base_sha }}"
           else
-            base="${{ github.event.before }}"
+            # A push is measured from the last commit this workflow passed
+            # on, not from `before`: see scripts/ci/push_scope_base.sh. No
+            # base prints nothing, and the classifier then runs everything.
+            base=$(scripts/ci/push_scope_base.sh build.yml "${{ github.ref_name }}" "$head")
           fi
-          head="${{ github.sha }}"
 
           # The classifier is scripts/ci/change_scope.py: it fails closed
           # (docs_only=false) on anything it cannot decide, and a crash of the
@@ -109,6 +109,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.4 min over 17 runs; the floor
     steps:
       - uses: actions/checkout@v5
       - name: reject eprintln!/dbg!/println! in production Rust
@@ -172,43 +173,13 @@ jobs:
         run: scripts/ci/check_randomx_fpu_rounding.sh
       - name: enforce RandomX crate-level isolation invariants
         run: scripts/ci/check_randomx_crate_invariants.sh
-      - name: reject BOOST_FOREACH in C++
-        run: |
-          HITS=$(grep -rn 'BOOST_FOREACH' src/ tests/ --include='*.cpp' --include='*.h' --include='*.hpp' || true)
-          if [ -n "$HITS" ]; then
-            echo "FATAL: BOOST_FOREACH found — use range-based for loops:"
-            echo "$HITS"
-            exit 1
-          fi
-          echo "No BOOST_FOREACH — OK"
-      - name: reject direct POSIX-header includes in src/
-        run: |
-          # The three POSIX headers owned by src/common/compat.h:
-          #   unistd.h, dlfcn.h, sys/mman.h
-          # Every new site should #include "common/compat.h" instead of
-          # repeating the _WIN32 / _MSC_VER guard dance inline.
-          #
-          # Allow-list (files whose direct include has an architectural
-          # reason — OS-specific arms, vendored ref10 code, or compat.h
-          # itself). Keep this list tight; prefer migrating new sites.
-          ALLOW='^(src/common/compat\.h|src/common/compat/glibc_compat\.cpp|src/common/password\.cpp|src/cryptonote_basic/miner\.cpp|src/crypto/random\.c|src/crypto/oaes_lib\.c|src/crypto/crypto_ops_builder/randombytes\.c|src/crypto/slow-hash\.c):'
-          HITS=$(grep -rnE '^[[:space:]]*#include[[:space:]]*<(unistd|dlfcn|sys/mman)\.h>' \
-                 src/ --include='*.c' --include='*.cpp' --include='*.h' --include='*.hpp' \
-                 | grep -vE "$ALLOW" || true)
-          if [ -n "$HITS" ]; then
-            echo "FATAL: direct POSIX-header include — use #include \"common/compat.h\":"
-            echo "$HITS"
-            exit 1
-          fi
-          echo "No unguarded POSIX-header includes outside compat.h — OK"
 
   build-macos:
     name: 'macOS (brew)'
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: macOS-latest
-    env:
-      CCACHE_TEMPDIR: /tmp/.ccache-temp
+    timeout-minutes: 45  # p90 20.4 min over 13 runs
     steps:
       - uses: actions/checkout@v5
         with:
@@ -228,24 +199,28 @@ jobs:
             exit 1
           fi
           echo "Cargo path portability guard passed."
-      - uses: actions/cache@v5
-        with:
-          path: /Users/runner/Library/Caches/ccache
-          key: ccache-${{ runner.os }}-build-${{ github.sha }}
-          restore-keys: ccache-${{ runner.os }}-build-
       - uses: ./.github/actions/set-make-job-count
       - name: install dependencies
         run: |
           brew uninstall cmake
           brew update
-          brew install --quiet cmake boost openssl libpgm libunwind-headers ccache
+          brew install --quiet cmake
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
       - uses: dtolnay/rust-toolchain@1.94.0
       - name: build
+        run: make -j${{env.MAKE_JOB_COUNT}}
+      # The Mach-O half of the hardening gate (MH_PIE, no executable stack,
+      # no LC_RPATH) on the three staged Rust binaries; otool is Xcode's.
+      # The Makefile's build directory carries the OS and the branch name
+      # (`build/Darwin/<branch>/release`), so the staged directory is found,
+      # and the gate itself fails on a path that is not a file.
+      - name: binary hardening on the staged binaries (otool)
         run: |
-          ${{env.CCACHE_SETTINGS}}
-          make -j${{env.MAKE_JOB_COUNT}}
+          staged=$(find build -type f -name shekyld -path '*/release/bin/*' -print -quit)
+          if [ -z "$staged" ]; then echo "no staged shekyld under build/" >&2; exit 1; fi
+          bindir=$(dirname "$staged")
+          scripts/ci/check_binary_hardening.sh "$bindir/shekyld" "$bindir/shekyl-cli" "$bindir/shekyl-wallet-rpc"
 
   # Windows MSYS2 and Arch Linux moved to `.github/workflows/weekly-os.yml`.
   # PR Windows coverage is the MSVC daemon job below (the only runner that
@@ -268,26 +243,24 @@ jobs:
     #
     # Cost on a docs-only PR: two runner allocations that finish in seconds.
     runs-on: ubuntu-latest
+    timeout-minutes: 90  # p90 44.7 min over 15 runs (the 24.04 leg)
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Minimum supported Ubuntu LTS (Boost >= 1.74). Compile-only —
-          # the test job consumes the 24.04 artifact (same Release
-          # BUILD_TESTS=ON tree) rather than rebuilding twice.
+          # The oldest supported Ubuntu LTS builds and checks the binaries;
+          # the live-daemon and symbol gates run on 24.04 alone.
           - name: Ubuntu 22.04
             container: ubuntu:22.04
-            pack_ctest: false
+            live_gates: false
 
           - name: Ubuntu 24.04
             container: ubuntu:24.04
-            pack_ctest: true
+            live_gates: true
     container:
       image: ${{ matrix.container }}
       env:
         DEBIAN_FRONTEND: noninteractive
-        CCACHE_TEMPDIR: /tmp/.ccache-temp
-        CCACHE_DIR: ~/.ccache
     steps:
       - name: set apt conf
         if: needs.changes.outputs.docs_only != 'true'
@@ -316,21 +289,13 @@ jobs:
         # checkout — a `./`-referenced local action does not exist on
         # the runner until the repo is checked out.
         uses: ./.github/actions/install-rust
-      - uses: actions/cache@v5
-        if: needs.changes.outputs.docs_only != 'true'
-        with:
-          path: ~/.ccache
-          key: ccache-${{ matrix.container }}-build-${{ github.sha }}
-          restore-keys: ccache-${{ matrix.container }}-build-
       - uses: ./.github/actions/set-make-job-count
         if: needs.changes.outputs.docs_only != 'true'
       - name: build
         if: needs.changes.outputs.docs_only != 'true'
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: |
-          ${{env.CCACHE_SETTINGS}}
-          ${{env.BUILD_DEFAULT_LINUX}}
+        run: ${{env.BUILD_DEFAULT_LINUX}}
       # Armed #[ignore]d regtest_e2e gates against the shekyld just built.
       # Runs here rather than in the test job because that job installs no
       # Rust by design, and here the binary and the toolchain already coexist.
@@ -348,116 +313,42 @@ jobs:
       # reference of the PoW test setter cannot merge on a green source
       # grep alone. nm is binutils, pulled in by build-essential.
       - name: symbol isolation on linked daemon (nm)
-        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
+        if: matrix.live_gates && needs.changes.outputs.docs_only != 'true'
         shell: bash
         run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
+      # The hardening the link flags claim, read off the staged ELF binaries
+      # (PIE, non-executable stack, full RELRO, no run path). The three are
+      # Rust binaries built by one cargo invocation; no CMake flag list
+      # reaches them, so the result is what is asserted. readelf is binutils.
+      - name: binary hardening on the staged binaries (readelf)
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: bash
+        run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc
+      # The C++ removal's end state (Rick, 2026-11-06), on what this job
+      # built: the staged shekyld needs no C++ runtime and holds no C++
+      # symbol. The tree half (no first-party C or C++ tracked, no CMake
+      # target compiling any) runs in the grep gates. Selftest first, so a
+      # gate that cannot fail is caught before it passes.
+      - name: the daemon holds no C++ (no C++ runtime, no C++ symbol)
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: bash
+        run: |
+          python3 scripts/ci/check_no_first_party_c.py --selftest
+          python3 scripts/ci/check_no_first_party_c.py --binary build/bin/shekyld
       - name: live-daemon gates
-        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
-        # `shell: bash` like the CTest-artifact step below, and for the same
-        # reason: the job's default shell in this container is dash, which
-        # rejects `set -o pipefail` outright — the script dies on line 1
-        # before running anything.
+        if: matrix.live_gates && needs.changes.outputs.docs_only != 'true'
+        # `shell: bash`: the job's default shell in this container is dash,
+        # which rejects `set -o pipefail` outright — the script dies on line
+        # 1 before running anything.
         shell: bash
         run: scripts/ci/run_live_daemon_gates.sh
-
-      # Pack the CTest tree for the 24.04 test job. Same shape as
-      # economics-c2a-prime.yml: internal libraries are always static
-      # (CMakeLists.txt refuses BUILD_SHARED_LIBS), so test binaries are
-      # statically linked against in-tree libraries and the tar can drop
-      # *.o / *.a / CMakeFiles.
-      # They still need SYSTEM libraries (boost, ssl, sodium, unwind)
-      # that the test job installs. CMake bakes absolute paths into
-      # CTestTestfile.cmake; both jobs use container ubuntu:24.04 +
-      # actions/checkout, so github.workspace is `/__w/shekyl-core/shekyl-core`
-      # on both sides. tests/data/ is repo-tracked — the test job reads
-      # it from checkout, not this tarball.
-      - name: Pack CTest tree
-        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
-        run: |
-          tar --exclude='**/CMakeFiles' --exclude='**/*.o' --exclude='**/*.a' \
-            -czf ubuntu-24.04-ctest.tar.gz build/
-      - name: Verify CTest artifact
-        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          listing="$(tar tzf ubuntu-24.04-ctest.tar.gz)"
-          if ! grep -qx 'build/CTestTestfile.cmake' <<< "$listing"; then
-            echo "FATAL: ubuntu-24.04-ctest.tar.gz missing build/CTestTestfile.cmake" >&2
-            echo "tar tf (first 40 entries):" >&2
-            head -40 <<< "$listing" >&2
-            exit 1
-          fi
-          # Fail closed if the GNU tar excludes above silently missed
-          # (rule 47: absence of CTestTestfile is not the only signal;
-          # CMakeFiles/*.o/*.a must also be absent). Same exclude set
-          # as economics-c2a-prime.yml; this assertion is the check
-          # that they took effect, not a rewrite of the pack command.
-          leaked="$(grep -E '(^|/)CMakeFiles(/|$)|\.(o|a)$' <<< "$listing" || true)"
-          if [ -n "$leaked" ]; then
-            echo "FATAL: ubuntu-24.04-ctest.tar.gz still contains CMakeFiles/*.o/*.a" >&2
-            echo "$leaked" | head -20 >&2
-            exit 1
-          fi
-          echo "OK: artifact contains CTestTestfile.cmake and excludes CMakeFiles/*.o/*.a"
-      - uses: actions/upload-artifact@v4
-        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
-        with:
-          name: ubuntu-24.04-ctest
-          path: ubuntu-24.04-ctest.tar.gz
-          retention-days: 1
-
-  test-ubuntu:
-    name: "Ubuntu 24.04 (tests)"
-    needs: [changes, build-ubuntu]
-    if: needs.changes.outputs.docs_only != 'true'
-    runs-on: ubuntu-latest
-    container:
-      image: ubuntu:24.04
-      env:
-        DEBIAN_FRONTEND: noninteractive
-      # Setting up a loop device (losetup) requires additional capabilities.
-      # tests/create_test_disks.sh
-      options: --privileged
-    steps:
-      - name: set apt conf
-        run: ${{env.APT_SET_CONF}}
-      - name: update apt
-        run: apt update
-      - name: install runtime + test dependencies
-        # No compiler, no cmake rebuild, no Rust. APT_INSTALL_LINUX is the
-        # same package set the 24.04 build job used, so the DT_NEEDED
-        # system libraries the statically-linked-against-in-tree binaries
-        # still require are present. Python packages are for functional
-        # tests that ctest launches.
-        run: |
-          ${{env.APT_INSTALL_LINUX}}
-          apt install -y python3-requests python3-psutil python3-monotonic python3-deepdiff
-      - name: configure git
-        run: git config --global --add safe.directory '*'
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
-      - uses: actions/download-artifact@v4
-        with:
-          name: ubuntu-24.04-ctest
-      - name: Unpack CTest tree
-        run: tar -xzf ubuntu-24.04-ctest.tar.gz
-      - name: create dummy disk drives for testing
-        run: tests/create_test_disks.sh >> $GITHUB_ENV
-      - name: tests
-        env:
-          CTEST_OUTPUT_ON_FAILURE: ON
-        # ctest, not `cmake --build --target test`: the latter would
-        # notice unpacked timestamps and try to rebuild. The build job
-        # already compiled everything.
-        run: ctest --test-dir build --output-on-failure
 
   build-windows-msvc:
     name: 'Windows (MSVC, daemon)'
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: windows-2025-vs2026
+    timeout-minutes: 180  # p90 89.2 min over 13 runs
     steps:
       - uses: actions/checkout@v5
         with:
@@ -520,8 +411,42 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --locked --no-deps --lib -p shekyl-win-sec
 
-      # TB-7 part 2 on Windows. This is the only job that compiles this
-      # crate's Windows code, so clippy for it lives here too.
+      # Clippy on a Windows target, every lane the Linux gate runs
+      # (`rust-audit-test.yml`, `multisig-feature.yml`), with the same
+      # commands. The Linux gate never compiles a `cfg(windows)` arm, and
+      # before this step only `shekyl-win-sec` and `shekyl-tor-control-client`
+      # were linted here: a Windows sweep for #1293 found eight crates
+      # failing `-D warnings` and every `--all-targets` lane failing to build
+      # (gungraun's `client_requests`, now `cfg(unix)`). Every lane runs
+      # whatever the earlier ones did, its exit read from $LASTEXITCODE
+      # (rule 46), and the step exits with the first failure. The
+      # `shekyl-win-sec` step above keeps its `test-utils` lane.
+      - name: "clippy -D warnings, the Linux gate's lanes (Windows target)"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $first_failure = 0
+          foreach ($argv in @(
+            @('--workspace', '--all-targets', '--keep-going'),
+            @('-p', 'shekyl-engine-core', '--all-targets', '--features', 'gf7-hooks'),
+            @('-p', 'shekyl-engine-core', '--all-targets', '--features', 'bench-internals'),
+            @('-p', 'shekyl-chain-ingest', '-p', 'shekyl-chain-rules', '-p', 'shekyl-chain-store', '-p', 'shekyl-chain-sync-runtime', '-p', 'shekyl-curve-tree', '-p', 'shekyl-mempool', '-p', 'shekyl-draw-rng', '-p', 'shekyl-p-host', '-p', 'shekyl-p2p-session', '-p', 'shekyl-tor-control-client', '-p', 'shekyl-wire', '--lib'),
+            @('-p', 'shekyl-engine-core', '-p', 'shekyl-fcmp', '-p', 'shekyl-fcmp-proofs', '--features', 'multisig', '--all-targets', '--keep-going'),
+            @('-p', 'shekyl-multisig', '--all-targets', '--keep-going')
+          )) {
+            $shown = 'cargo clippy --locked ' + ($argv -join ' ') + ' -- -D warnings'
+            Write-Host "::group::$shown"
+            cargo clippy --locked @argv -- -D warnings
+            $code = $LASTEXITCODE
+            Write-Host "::endgroup::"
+            Write-Host "$shown -> exit $code"
+            if ($code -ne 0 -and $first_failure -eq 0) { $first_failure = $code }
+          }
+          exit $first_failure
+
+      # TB-7 part 2 on Windows. Clippy for this crate's Windows code is in
+      # the workspace step above.
       #
       # `the_managed_launch_environment_is_exact` reads `Command::get_envs`,
       # which lists variables the builder set and cannot see `env_clear`.
@@ -532,11 +457,6 @@ jobs:
       #
       # `--exact` plus "1 passed": a renamed test matches nothing and cargo
       # exits 0, which is not a pass.
-      - name: "TB-7: clippy -D warnings (shekyl-tor-control-client, Windows)"
-        shell: pwsh
-        working-directory: rust
-        run: cargo clippy --locked -p shekyl-tor-control-client --all-targets -- -D warnings
-
       - name: "TB-7: the managed launch environment pair list"
         shell: pwsh
         working-directory: rust
@@ -587,6 +507,57 @@ jobs:
           if (-not $passed -or $passed -lt 6) {
             Write-Error "the launch module ran $passed tests on Windows; the floor is 6"
             exit 1
+          }
+
+      # DC-F39 / DC-F40 / DC-F42 (DAEMON_CONFIG_CUTOVER.md §11): the daemon
+      # crates' tests on MSVC, the RPC crate among them (review 3 §3). Nothing ran them here before, and the first Windows
+      # run found a lib test that did not link (link.exe resolves every
+      # symbol an object references before it discards anything, where GNU
+      # ld and lld drop the unreferenced ones) and nine tests whose fixtures
+      # assumed `/` paths and LF line ends. BLOCKING, with a floor per lib
+      # test binary so a crate whose tests were cfg'd away or filtered out
+      # fails here instead of passing as nothing run (rule 47). shekyl-process's
+      # `dc_q21_a_fault_ends_with_its_code` writes a scratch per-application
+      # `LocalDumps` policy under HKLM for its own binary (DC-F44) and so
+      # needs an elevated session, which this runner is; it refuses with the
+      # reason, never skips, when it is not.
+      - name: "DC-F39: the daemon crates' tests link and pass on MSVC"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-process --no-fail-fast *> daemon-crates.out
+          $rc = $LASTEXITCODE
+          Get-Content daemon-crates.out
+          if ($rc -ne 0) { exit $rc }
+          # A floor is per test binary, keyed by its name under deps\. The
+          # libs are the crates' own; shekyl-process's lib tests are all Unix
+          # (core limits, dumpable, procctl), so its Windows floor is the
+          # integration test that faults a child under hardening. Windows
+          # counts at the p2p cutover (2026-11-05): options 31, daemon 44,
+          # daemon-config 63, daemon-rpc 180,
+          # dc_q21_a_fault_ends_with_its_code 4. shekyl-cli, which took
+          # daemon-rpc's console tests (R8), is covered by the Rust workspace
+          # job, not this MSVC link step.
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 170; 'dc_q21_a_fault_ends_with_its_code-' = 4 }
+          $lines = Get-Content daemon-crates.out
+          foreach ($binary in $floors.Keys) {
+            $at = ($lines | Select-String -Pattern ("Running .*\\deps\\" + [regex]::Escape($binary)) | Select-Object -First 1).LineNumber
+            if (-not $at) { Write-Error "no test binary ran for $binary"; exit 1 }
+            # This binary's own block: up to the next binary's Running line
+            # or cargo's Doc-tests header, so a missing result is never read
+            # off what follows. Case-sensitive: Select-String ignores case by
+            # default, and libtest's own "running N tests" line is the
+            # block's second.
+            $next = ($lines[$at..($lines.Length - 1)] | Select-String -CaseSensitive -Pattern '^\s*(Running|Doc-tests) ' | Select-Object -First 1).LineNumber
+            $end = if ($next) { $at + $next - 2 } else { $lines.Length - 1 }
+            $result = $lines[$at..$end] | Select-String -Pattern 'test result: ok\. (\d+) passed' | Select-Object -First 1
+            if (-not $result) { Write-Error "no passing result line in the $binary tests"; exit 1 }
+            $passed = [int]$result.Matches[0].Groups[1].Value
+            if ($passed -lt $floors[$binary]) {
+              Write-Error "the $binary tests passed $passed on Windows; the floor is $($floors[$binary])"
+              exit 1
+            }
           }
 
       # The pre-registered probes (docs/design/WINDOWS_WALLET_PROBE_SHEET.md).
@@ -702,57 +673,29 @@ jobs:
           $results | Format-Table -AutoSize | Out-String | Write-Host
           exit $first_failure
 
-      - name: restore vcpkg cache
-        uses: actions/cache/restore@v5
-        id: vcpkg-cache
-        with:
-          path: |
-            C:\vcpkg\downloads
-            C:\vcpkg\installed
-            C:\vcpkg\archives
-          key: vcpkg-x64-windows-static-${{ hashFiles('.github/workflows/build.yml', 'vcpkg-overlay/**') }}
-          restore-keys: vcpkg-x64-windows-static-
-      - name: install vcpkg dependencies
-        shell: pwsh
-        env:
-          VCPKG_BINARY_SOURCES: clear;files,C:\vcpkg\archives,readwrite
-        run: |
-          vcpkg install --triplet x64-windows-static --overlay-ports="${{ github.workspace }}/vcpkg-overlay/ports" boost openssl libsodium lmdb
-      - name: save vcpkg cache
-        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            C:\vcpkg\downloads
-            C:\vcpkg\installed
-            C:\vcpkg\archives
-          key: vcpkg-x64-windows-static-${{ hashFiles('.github/workflows/build.yml', 'vcpkg-overlay/**') }}
       - name: configure
         shell: pwsh
         run: |
           cmake -S . -B build `
             -G "Visual Studio 18 2026" -A x64 `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DSTATIC=ON `
-            -DBUILD_SHARED_LIBS=OFF `
-            -DBUILD_TESTS=ON `
-            -DSTACK_TRACE=OFF `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows-static
-      # Daemon only. The C++ wallet stack was deleted at Phase 5, and the
-      # Rust wallet binaries are not built for Windows targets — see
-      # docs/design/WINDOWS_WALLET_SUPPORT.md. The Windows wallet gap is
-      # neither caused nor widened here: the `wallet` target built a binary
-      # that has not shipped since the C1/C2 install cutover (#500). Slice
-      # WP-W5 of that design round owns renaming this job back.
+            -DCMAKE_BUILD_TYPE=Release
+      # Daemon only: the Rust wallet binaries are not built for Windows
+      # targets — see docs/design/WINDOWS_WALLET_SUPPORT.md. Slice WP-W5 of
+      # that design round owns renaming this job back.
       - name: build daemon
         shell: pwsh
-        # mdb_copy rides along (one vendored C file): the daemon's prune
-        # warning names shekyl-mdb-copy, so its MSVC compile-fit is gated
-        # here. The link gate itself is the script: the three Rust-linking
-        # binaries exist, and the link log has no LNK4098.
+        # The link gate is the script: shekyld exists, and the link log
+        # has no LNK4098.
         run: |
           pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage link
+      # The PE half of the hardening gate on the linked daemon: PE32+ and
+      # DllCharacteristics with DYNAMIC_BASE, HIGH_ENTROPY_VA and NX_COMPAT
+      # (DAEMON_CONFIG_CUTOVER.md DC-Q21). The runner image's LLVM supplies
+      # llvm-readobj; the script also reads dumpbin's shape inside a
+      # developer shell. `/GS` leaves no header mark and is not read here.
+      - name: binary hardening on the linked daemon (PE headers)
+        shell: bash
+        run: scripts/ci/check_binary_hardening.sh build/bin/Release/shekyld.exe
       - name: smoke-test daemon boot and stop
         shell: pwsh
         # The daemon's runtime gate on Windows: boot the built shekyld.exe
@@ -774,16 +717,11 @@ jobs:
         # and its one stop path; a second daemon on the same data directory
         # refused by the lock; a config directory whose access list grants
         # Users write refused with exit 2; another network's data directory
-        # refused by the marker. RT-W14 later adds a service-manager case
-        # (install, start, SERVICE_RUNNING, stop).
+        # refused by the marker; and a daemon in its own process group sent
+        # Ctrl-Break takes its one stop path (Rick, 2026-10-22). RT-W14 later
+        # adds a service-manager case (install, start, SERVICE_RUNNING, stop).
         run: |
           pwsh -NoProfile -File scripts/ci/daemon_boot_stop_smoke.ps1 -Daemon 'build\bin\Release\shekyld.exe'
-      - name: core_tests on MSVC
-        shell: pwsh
-        # The link gate's run half. The script requires the suite's own
-        # report: a positive run count and zero failures.
-        run: |
-          pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage core-tests
 
   source-archive:
     name: "source archive"
@@ -796,6 +734,7 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/main')
       || (github.event_name == 'pull_request' && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # not timed: runs only toward main; about 1 min (comment above)
     container:
       image: ubuntu:22.04
       env:
@@ -832,3 +771,22 @@ jobs:
         with:
           name: ${{ env.OUTPUT }}
           path: ${{ env.OUTPUT }}
+
+  # A red push run on `dev` opens or threads a tracking issue
+  # (`report-dev-red.yml`). `needs` lists every other job in this file, so
+  # a red in any of them reports; scripts/ci/check_dev_red_reporter.py
+  # holds the list and this condition to the file. Only a push run on
+  # `dev` reports: a pull request's red is read on the pull request. A job
+  # past its `timeout-minutes` is cancelled, not failed, and `failure()`
+  # does not see it, so the condition reads each needed job's result: a
+  # failed or cancelled one reports, unless the whole run was cancelled
+  # (a newer merge superseded it), which `!cancelled()` leaves out.
+  report-dev-red:
+    needs: [changes, lint-rust-debug-macros, build-macos, build-ubuntu, build-windows-msvc, source-archive]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/report-dev-red.yml

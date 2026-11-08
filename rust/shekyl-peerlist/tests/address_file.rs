@@ -16,7 +16,7 @@ use shekyl_peerlist::address_file::{
     decode, encode, AddressFileError, ADDRESS_FILE_MAGIC, ADDRESS_FILE_VERSION, MAX_ENTRIES,
 };
 use shekyl_peerlist::{
-    ConnectorId, DialOutcome, NetworkAddress, NoBans, Peerlist, RefusedSet, Source, Tick,
+    ConnectorId, DialOutcome, NetworkAddress, Peerlist, RefusedSet, Source, Tick, Verdict,
 };
 
 fn now() -> Tick {
@@ -88,7 +88,7 @@ fn a_restart_puts_every_address_on_gray() {
     let mut rng = SplitMix64::new(1);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     for address in mixed() {
-        list.admit_gray(&address, Source::Operator, now(), &mut NoBans, &mut rng)
+        list.admit_gray(&address, Source::Operator, now(), &mut rng)
             .expect("admitted");
     }
     // One address reaches white, the only way there is.
@@ -99,11 +99,17 @@ fn a_restart_puts_every_address_on_gray() {
         if drawn == v4(1) {
             break drawn;
         }
-        list.apply(&DialOutcome::PayloadRefused(drawn), now(), &mut rng);
+        list.apply(
+            &DialOutcome::PayloadRefused(drawn),
+            now(),
+            Verdict::Counted,
+            &mut rng,
+        );
     };
     list.apply(
         &DialOutcome::SessionAccepted(white.clone()),
         now(),
+        Verdict::Counted,
         &mut rng,
     );
     assert!(list.is_white(&white));
@@ -144,7 +150,7 @@ fn a_file_of_another_version_is_dropped_whole() {
         );
 
         let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
-        list.admit_gray(&v4(9), Source::Operator, now(), &mut NoBans, &mut rng)
+        list.admit_gray(&v4(9), Source::Operator, now(), &mut rng)
             .expect("admitted");
         assert_eq!(
             list.restore_file(&file, &mut rng),
@@ -231,7 +237,7 @@ fn the_file_carries_no_refused_address_without_the_flag() {
     let mut open = Peerlist::new(RefusedSet::EMPTY);
     for list in [&mut strict, &mut open] {
         for address in [v4(1), private.clone()] {
-            list.admit_gray(&address, Source::Operator, now(), &mut NoBans, &mut rng)
+            list.admit_gray(&address, Source::Operator, now(), &mut rng)
                 .expect("operator");
         }
     }

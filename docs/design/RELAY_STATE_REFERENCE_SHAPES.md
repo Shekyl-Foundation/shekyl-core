@@ -30,7 +30,7 @@ silently rolled back on every invocation — Dandelion++ timing state was never
 durable. Classified as a privacy regression (origin-disclosure class), not a
 consensus or fund-safety bug ([`CHANGELOG.md`](../CHANGELOG.md), the
 "Dandelion++ relay timestamp rollback" entry; the fix is the `lock.commit()`
-at `src/cryptonote_core/tx_pool.cpp:1232`, re-verified intact by
+at `src/cryptonote_core/tx_pool.cpp`, re-verified intact by
 [`LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md), the
 `get_relayable_transactions` row).
 
@@ -165,7 +165,7 @@ this section and `DRS_E1_SPOOL.md` SPL-18; §92.4 carries a pointer here.
 
 ## 4. SPL-14 — no relay state is reachable by fall-through
 
-**The finding.** `src/blockchain_db/blockchain_db.h:126–130`, in a comment
+**The finding.** `src/blockchain_db/blockchain_db.h`, in a comment
 justifying a different decision: *"a zeroed record decodes to `fluff`, NOT
 `none` (`get_relay_method` falls through state 0 to the `fluff` return)."*
 An unreadable or zeroed relay byte resolves to the broadcast-to-everyone

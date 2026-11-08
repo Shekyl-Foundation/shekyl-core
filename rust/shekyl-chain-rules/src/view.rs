@@ -66,7 +66,7 @@ use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
     BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest,
     LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
-    SlashLogEntry,
+    SlashLogEntry, SupportSeats,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
@@ -673,6 +673,34 @@ pub trait ChainView<'id>: HeaderView<'id> {
         floor: EpochFloor<Settling>,
     ) -> Result<Vec<IndexedDraw>, Self::Fault>;
 
+    /// Support draws issued to complete trees in `epoch`, in
+    /// `(persona, height, draw)` order. Empty until a block admits a
+    /// support bitmap. The settlement row is one per tree, not one per
+    /// shard (`ARCHIVAL_SUPPORT_DRAW.md` §3).
+    ///
+    /// `floor`: the settling family's ([`EpochFloor`]; SI-32).
+    fn support_issued(
+        &self,
+        _epoch: SettlementEpoch,
+        _floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, Self::Fault> {
+        Ok(Vec::new())
+    }
+
+    /// The support row `(persona, epoch)` an earlier pass stored. `None`
+    /// is no row, not a miss. One row per tree
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3).
+    ///
+    /// `floor`: the claimable family's ([`EpochFloor`]; SI-32).
+    fn support_settlement(
+        &self,
+        _persona: &PCanonicalId,
+        _epoch: SettlementEpoch,
+        _floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SettlementRow>, Self::Fault> {
+        Ok(None)
+    }
+
     /// **A16.** The running digest of the draws issued in `epoch`, as
     /// folded when each was indexed. [`IssuedDigest::ZERO`] for an epoch
     /// with none: the digest of no draws.
@@ -724,6 +752,20 @@ pub trait ChainView<'id>: HeaderView<'id> {
         height: BlockHeight,
         floor: crate::BlockDrawsFloor,
     ) -> Result<Option<BlockDraws>, Self::Fault>;
+
+    /// **A23.** The complete trees the block at `height` seated on the
+    /// support stream, in persona order (`ARCHIVAL_SUPPORT_DRAW.md` §5;
+    /// `SO-D12` S1). `None` for a block no row was written for.
+    /// [`SupportSeats::EMPTY`] is a block that seated nobody: absence is
+    /// not that empty row.
+    ///
+    /// `floor`: the draw rows' ([`BlockDrawsFloor`]; SI-34), the same
+    /// window as [`Self::block_draws`]. A read below it is refused.
+    fn support_block_seats(
+        &self,
+        height: BlockHeight,
+        floor: crate::BlockDrawsFloor,
+    ) -> Result<Option<SupportSeats>, Self::Fault>;
 
     /// **A19.** The digest of `epoch`'s drawable set, as written when the
     /// epoch opened (`SO-D10g`). `None` for an epoch whose set was never

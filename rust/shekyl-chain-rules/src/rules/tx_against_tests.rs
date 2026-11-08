@@ -103,6 +103,7 @@ fn i7_a_spent_key_image_is_refused_and_a_fresh_one_records() {
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 None,
                 FormAttempt::FIRST,
             )),
@@ -114,9 +115,10 @@ fn i7_a_spent_key_image_is_refused_and_a_fresh_one_records() {
         );
         let fresh = listed_on(&chain, point(10));
         let mut coverage = RuleCoverage::EMPTY;
-        let cx =
-            TxContext::derive(&fresh, TxSlot::Lone, &mut coverage).expect("a spend classifies");
-        let Ok(verdict) = run_tx_against::<I7, _>(&cx, &view, &mut coverage);
+        let cx = TxContext::derive(&fresh, TxSlot::Lone, &mut coverage)
+            .expect("a spend classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
+        let Ok(verdict) = run_tx_against::<I7, _, _>(&cx, &view, &mut coverage);
         verdict.expect("an unspent image passes");
         assert!(coverage.contains(CenRow::I7));
     });
@@ -139,12 +141,7 @@ fn i7_at_a_listed_slot_the_refusal_names_the_slot() {
         let block = candidate_on(&chain, vec![listed_on(&chain, point(11))]);
         let formed = formed_on(&chain, block);
         assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
-            )),
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
             CenRow::I7,
             Locus::Input {
                 slot: TxSlot::Listed(0),
@@ -200,6 +197,7 @@ fn i7_looks_up_an_archival_shapes_funding_spend_too() {
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 None,
                 FormAttempt::FIRST,
             )),
@@ -226,13 +224,8 @@ fn i7_is_vacuous_on_the_coinbase() {
     let chain = MockChain::default();
     chain.with_view(|view| {
         let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("a block of one coinbase");
+        let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .expect("a block of one coinbase");
         assert!(valid.coverage().contains(CenRow::I7));
         assert!(valid.coverage().contains(CenRow::L1));
     });
@@ -249,6 +242,7 @@ fn i7_propagates_a_view_fault() {
             TxSlot::Lone,
             &view,
             &RuleSet::GENESIS,
+            &shekyl_network::HARNESS_NETWORK_ID,
             None,
             FormAttempt::FIRST
         )
@@ -364,6 +358,7 @@ fn i10_refuses_an_unrecorded_reference() {
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 None,
                 FormAttempt::FIRST,
             )),
@@ -389,7 +384,8 @@ fn i10_i11_i12_are_vacuous_on_a_serve_credit() {
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
         let cx = TxContext::derive(&credit, TxSlot::Lone, &mut coverage)
-            .expect("a serve-credit-only body classifies");
+            .expect("a serve-credit-only body classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
         let context = judged(judge_reference(
             &cx,
             &view,
@@ -426,6 +422,7 @@ fn i12_a_missing_root_at_the_reference_height_is_corrupt_not_a_verdict() {
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 None,
                 FormAttempt::FIRST
             ),
@@ -488,6 +485,7 @@ fn j21_refuses_an_unrecorded_reference_and_one_the_window_refuses() {
                     TxSlot::Lone,
                     &view,
                     &RuleSet::GENESIS,
+                    &shekyl_network::HARNESS_NETWORK_ID,
                     None,
                     FormAttempt::FIRST,
                 )),
@@ -523,7 +521,8 @@ fn j21_refuses_a_declared_depth_the_reference_does_not_hold() {
         for tx in [anchored, declared_one, pruned] {
             let mut coverage = RuleCoverage::EMPTY;
             let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
-                .expect("an emission classifies");
+                .expect("an emission classifies")
+                .on_network(crate::HARNESS_NETWORK_ID);
             assert_refused(
                 judged(judge_reference(
                     &cx,
@@ -570,6 +569,7 @@ fn j21_a_missing_root_or_leaf_count_at_the_reference_is_corrupt_not_a_verdict() 
                     TxSlot::Lone,
                     &view,
                     &RuleSet::GENESIS,
+                    &shekyl_network::HARNESS_NETWORK_ID,
                     None,
                     FormAttempt::FIRST
                 ),
@@ -614,7 +614,8 @@ fn j27_refuses_an_unrecorded_reference_and_one_the_window_refuses() {
         for tx in [join(), referencing(join(), tip)] {
             let mut coverage = RuleCoverage::EMPTY;
             let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
-                .expect("a bond post classifies");
+                .expect("a bond post classifies")
+                .on_network(crate::HARNESS_NETWORK_ID);
             assert_refused(
                 judged(judge_reference(
                     &cx,
@@ -660,7 +661,8 @@ fn j27_refuses_a_declared_depth_the_reference_does_not_hold() {
         for tx in [anchored, declared_one, pruned] {
             let mut coverage = RuleCoverage::EMPTY;
             let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
-                .expect("a bond post classifies");
+                .expect("a bond post classifies")
+                .on_network(crate::HARNESS_NETWORK_ID);
             assert_refused(
                 judged(judge_reference(
                     &cx,
@@ -761,8 +763,9 @@ fn j27_refuses_a_proof_the_yielded_context_does_not_verify() {
     let (reference, claim) = honest_claim(&chain, &tx);
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
-        let cx =
-            TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("a bond post classifies");
+        let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+            .expect("a bond post classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
         let mut steps = RuleCoverage::EMPTY;
         let context = defined(reference_context(
             &cx,
@@ -818,7 +821,8 @@ fn i12_a_claim_the_chain_does_not_yield_is_stale_not_a_verdict() {
         ] {
             let mut coverage = RuleCoverage::EMPTY;
             let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
-                .expect("a bond post classifies");
+                .expect("a bond post classifies")
+                .on_network(crate::HARNESS_NETWORK_ID);
             match judge_reference(&cx, &view, verified, FormAttempt::FIRST, &mut coverage) {
                 Err(Fault::Stale(Stale::Reference {
                     slot,
@@ -846,8 +850,9 @@ fn i12_a_claim_the_chain_does_not_yield_is_stale_not_a_verdict() {
         // The honest claim: the comparison agrees and the context is
         // yielded with the row's steps recorded.
         let mut coverage = RuleCoverage::EMPTY;
-        let cx =
-            TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("a bond post classifies");
+        let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+            .expect("a bond post classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
         let context = judged(judge_reference(
             &cx,
             &view,
@@ -879,9 +884,14 @@ fn i17_derives_the_wires_signing_preimage_and_records_the_row() {
     let chain = spendable_chain();
     let tx = listed_on(&chain, KI);
     let mut coverage = RuleCoverage::EMPTY;
-    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("a spend classifies");
+    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+        .expect("a spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     let hashes = I17::signed_hashes(&cx, &mut coverage);
-    assert_eq!(hashes, tx.pqc_signing_payload_hashes());
+    assert_eq!(
+        hashes,
+        tx.pqc_signing_payload_hashes(&crate::HARNESS_NETWORK_ID)
+    );
     assert_eq!(
         hashes.len(),
         tx.prefix.inputs.len(),
@@ -927,7 +937,8 @@ fn i17_reads_none_of_a_serve_credits_pass_record_and_yields_only_where_pqc_auths
     for (name, tx) in [("intact", &intact), ("corrupt record", &corrupt)] {
         let mut coverage = RuleCoverage::EMPTY;
         let cx = TxContext::derive(tx, TxSlot::Lone, &mut coverage)
-            .expect("a serve-credit-only body classifies");
+            .expect("a serve-credit-only body classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
         assert!(
             matches!(cx.class, crate::rules::tx::TxClass::ServeCreditOnly { .. }),
             "{name}: the class the zero-yield follows from"
@@ -953,13 +964,17 @@ fn i17_reads_none_of_a_serve_credits_pass_record_and_yields_only_where_pqc_auths
     // one hash per input, so an empty yield can only be one of the two.
     let mut coverage = RuleCoverage::EMPTY;
     let cb = coinbase(1);
-    let cx = TxContext::derive(&cb, TxSlot::Miner, &mut coverage).expect("a coinbase classifies");
+    let cx = TxContext::derive(&cb, TxSlot::Miner, &mut coverage)
+        .expect("a coinbase classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     assert!(
         I17::signed_hashes(&cx, &mut coverage).is_empty(),
         "the coinbase yields nothing"
     );
     let spend = listed_on(&chain, KI);
-    let cx = TxContext::derive(&spend, TxSlot::Lone, &mut coverage).expect("a spend classifies");
+    let cx = TxContext::derive(&spend, TxSlot::Lone, &mut coverage)
+        .expect("a spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     assert_eq!(
         I17::signed_hashes(&cx, &mut coverage).len(),
         spend.prefix.inputs.len(),
@@ -982,17 +997,22 @@ fn i18_an_anchored_spends_signatures_verify_and_the_row_is_recorded() {
     let Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
         panic!("a spend is Fcmp");
     };
-    for (auth, hash) in pqc_auths.iter().zip(tx.pqc_signing_payload_hashes()) {
+    for (auth, hash) in pqc_auths
+        .iter()
+        .zip(tx.pqc_signing_payload_hashes(&crate::HARNESS_NETWORK_ID))
+    {
         shekyl_crypto_pq::signature::verify_pqc_auth(
             auth.scheme_id,
             &auth.hybrid_public_key,
             &auth.hybrid_signature,
-            hash.as_bytes(),
+            &hash,
         )
         .expect("the fixture's slot verifies through the shared body");
     }
     let mut coverage = RuleCoverage::EMPTY;
-    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("a spend classifies");
+    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+        .expect("a spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     judge_signatures(&cx, &mut coverage).expect("a signed spend's signatures verify");
     assert!(coverage.contains(CenRow::I17));
     assert!(coverage.contains(CenRow::I18), "recorded by the sequence");
@@ -1029,8 +1049,9 @@ fn i18_refuses_a_forged_signature_at_its_input() {
         .last_mut()
         .expect("a signature") ^= 0x01;
     let mut coverage = RuleCoverage::EMPTY;
-    let cx =
-        TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("the forged spend classifies");
+    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+        .expect("the forged spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     assert_refused(
         judge_signatures(&cx, &mut coverage),
         CenRow::I18,
@@ -1046,8 +1067,9 @@ fn i18_refuses_a_forged_signature_at_its_input() {
         "a signature that does not verify does not record the row"
     );
     let mut coverage = RuleCoverage::EMPTY;
-    let cx =
-        TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("the forged spend classifies");
+    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+        .expect("the forged spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     let hashes = I17::signed_hashes(&cx, &mut coverage);
     assert!(I18::check(&cx, &hashes, &mut coverage).is_err());
     assert!(
@@ -1056,7 +1078,9 @@ fn i18_refuses_a_forged_signature_at_its_input() {
     );
     let mut coverage = RuleCoverage::EMPTY;
     let intact = listed_on(&chain, KI);
-    let cx = TxContext::derive(&intact, TxSlot::Lone, &mut coverage).expect("a spend classifies");
+    let cx = TxContext::derive(&intact, TxSlot::Lone, &mut coverage)
+        .expect("a spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     assert!(I18::check(&cx, &[], &mut coverage).is_err());
     assert!(
         !coverage.contains(CenRow::I18),
@@ -1079,7 +1103,9 @@ fn i18_refuses_a_signature_over_a_body_that_has_since_changed() {
     let mut tx = listed_on(&chain, KI);
     tx.prefix.unlock_time += 1;
     let mut coverage = RuleCoverage::EMPTY;
-    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("a spend classifies");
+    let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+        .expect("a spend classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     assert_refused(
         judge_signatures(&cx, &mut coverage),
         CenRow::I18,
@@ -1114,7 +1140,8 @@ fn i18_is_vacuous_on_a_serve_credit_and_does_not_reach_for_its_countersignature(
     }
     let mut coverage = RuleCoverage::EMPTY;
     let cx = TxContext::derive(&corrupt, TxSlot::Lone, &mut coverage)
-        .expect("a serve-credit-only body classifies");
+        .expect("a serve-credit-only body classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     judge_signatures(&cx, &mut coverage)
         .expect("J10's object is not this row's; the verdict does not move");
     assert!(
@@ -1169,7 +1196,9 @@ fn i18_the_identity_signature_covers_the_join_markets_receipt_key() {
     let signed = anchored_on(&chain, join());
 
     let mut coverage = RuleCoverage::EMPTY;
-    let cx = TxContext::derive(&signed, TxSlot::Lone, &mut coverage).expect("a join classifies");
+    let cx = TxContext::derive(&signed, TxSlot::Lone, &mut coverage)
+        .expect("a join classifies")
+        .on_network(crate::HARNESS_NETWORK_ID);
     judge_signatures(&cx, &mut coverage)
         .expect("the identity key signed the post it posted, receipt key included");
     assert!(coverage.contains(CenRow::I18));
@@ -1185,7 +1214,8 @@ fn i18_the_identity_signature_covers_the_join_markets_receipt_key() {
         assert_ne!(tampered, signed);
         let mut coverage = RuleCoverage::EMPTY;
         let cx = TxContext::derive(&tampered, TxSlot::Lone, &mut coverage)
-            .expect("the tampered join classifies");
+            .expect("the tampered join classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
         // Every slot's message binds the whole prefix, so the first slot
         // judged refuses; the post's own slot is held separately below.
         let refused = judge_signatures(&cx, &mut coverage).expect_err("a moved receipt key");
@@ -1200,12 +1230,12 @@ fn i18_the_identity_signature_covers_the_join_markets_receipt_key() {
                 panic!("a join is Fcmp");
             };
             let auth = &pqc_auths[post_input];
-            let hash = tx.pqc_signing_payload_hashes()[post_input];
+            let hash = tx.pqc_signing_payload_hashes(&crate::HARNESS_NETWORK_ID)[post_input];
             shekyl_crypto_pq::signature::verify_pqc_auth(
                 auth.scheme_id,
                 &auth.hybrid_public_key,
                 &auth.hybrid_signature,
-                hash.as_bytes(),
+                &hash,
             )
             .is_ok()
         };
@@ -1313,7 +1343,9 @@ fn the_doors_no_anchor_exits_each_end_in_a_refusal() {
         for (name, tx, row) in exits {
             let claims = ReferenceClaims::for_transaction(&view, connecting, &tx).expect("claims");
             let mut coverage = RuleCoverage::EMPTY;
-            let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("a spend");
+            let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+                .expect("a spend")
+                .on_network(crate::HARNESS_NETWORK_ID);
             let proven = judge_proofs(&cx, &claims, &mut coverage)
                 .unwrap_or_else(|r| panic!("{name}: the proof exit, not a refusal: {r:?}"));
             assert_eq!(proven, None, "{name}: no anchor");
@@ -1322,6 +1354,7 @@ fn the_doors_no_anchor_exits_each_end_in_a_refusal() {
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 proven,
                 FormAttempt::FIRST,
             ) {
@@ -1350,7 +1383,9 @@ fn the_doors_no_anchor_exits_each_end_in_a_refusal() {
             ReferenceClaims::for_transaction(&view, connecting, &in_window).expect("claims");
         assert_eq!(claims.len(), 1, "the window claims it");
         let mut coverage = RuleCoverage::EMPTY;
-        let cx = TxContext::derive(&in_window, TxSlot::Lone, &mut coverage).expect("a spend");
+        let cx = TxContext::derive(&in_window, TxSlot::Lone, &mut coverage)
+            .expect("a spend")
+            .on_network(crate::HARNESS_NETWORK_ID);
         assert!(
             !matches!(judge_proofs(&cx, &claims, &mut coverage), Ok(None)),
             "a claimed reference is verified, not skipped"

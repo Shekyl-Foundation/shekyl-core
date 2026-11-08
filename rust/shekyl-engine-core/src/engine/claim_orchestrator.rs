@@ -104,8 +104,8 @@ pub(crate) enum ClaimOrchestrationError {
     /// or a malformed reply — the untrusted-boundary refusals).
     #[error("claim-source fetch failed: {0}")]
     Source(#[from] EmissionSourceError),
-    /// A curve-tree handle call failed (client refusal or a stopped actor —
-    /// terminal until the engine respawns the actor).
+    /// A curve-tree handle call failed (client refusal, or a stopped actor,
+    /// which is terminal for the session).
     #[error("curve tree unavailable or refused: {0:?}")]
     Tree(CurveTreeHandleError),
     /// No submittable reference can be anchored right now (chain too short,
@@ -168,11 +168,12 @@ pub(crate) struct ClaimAssemblyContext<'a> {
     /// are structurally mandatory — the reward is fully consumed by the loud
     /// vout, so it cannot pay its own fee).
     pub fee: u64,
-    /// The value floor the assembly's value gate holds against
-    /// (`ENGINE_CADENCE_DRIVER.md` §4): policy, threaded — the production
-    /// choke point ([`Engine::submit_emission_claim`]) names
-    /// [`EMISSION_CLAIM_FEE_FLOOR`]; tests exercising other properties
-    /// pass `0` to stand the gate down.
+    /// The hold (`ENGINE_CADENCE_DRIVER.md` §4): policy, threaded — the
+    /// production choke point ([`Engine::submit_emission_claim`]) names the
+    /// relay policy's [`EMISSION_CLAIM_FEE_FLOOR`]. The assembly's value
+    /// gate is [`claim_value_floor`](super::emission_claim::claim_value_floor)
+    /// of it and [`Self::fee`]; tests exercising other properties pass `0`,
+    /// which leaves the gate at the live fee.
     ///
     /// [`Engine::submit_emission_claim`]: super::Engine::submit_emission_claim
     /// [`EMISSION_CLAIM_FEE_FLOOR`]: shekyl_economics::EMISSION_CLAIM_FEE_FLOOR
@@ -250,7 +251,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     rpc: &R,
     handle: PersonaHandle,
     ctx: ClaimAssemblyContext<'_>,
-    block_hash_at: impl Fn(BlockHeight) -> Option<[u8; 32]>,
+    block_hash_at: impl Fn(BlockHeight) -> Option<BlockHash>,
 ) -> Result<OrchestratedClaim, ClaimOrchestrationError> {
     // 1+2a. Fetch the claim source (single-field query over the persona's
     //    OWN transport — the `PersonaIsolatedTransport` bound is the §7.4
@@ -337,7 +338,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     let reference = ReferenceBlock {
         height: reference_height,
         curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-        block_hash: BlockHash::from_bytes(block_hash),
+        block_hash,
     };
     let assemble_inputs: Vec<AssembleInput> = swept
         .path_records()
@@ -374,7 +375,8 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
             handle,
             operands,
             tree_ctx,
-            fee_floor: ctx.fee_floor,
+            // Ruling 9: the set clears the live fee, floored by the hold.
+            fee_floor: super::emission_claim::claim_value_floor(ctx.fee, ctx.fee_floor),
             tx_key: TxKeyDraw::Fresh,
         })
         .await?;
@@ -585,7 +587,8 @@ mod tests {
             fn get_block_hash(
                 &self,
                 number: usize,
-            ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+            ) -> impl Send + std::future::Future<Output = Result<shekyl_types::BlockHash, RpcError>>
+            {
                 async move {
                     Ok(crate::engine::test_support::test_block_hash_at(
                         number as u64,
@@ -612,9 +615,7 @@ mod tests {
                         chain_count: shekyl_types::ChainCount::from_raw(10_000),
                         target_height: (!synced).then_some(1_000_000),
                         synchronized: synced,
-                        top_hash: shekyl_types::BlockHash::from_bytes(
-                            crate::engine::test_support::test_block_hash_at(9_999),
-                        ),
+                        top_hash: crate::engine::test_support::test_block_hash_at(9_999),
                         has_peers: true,
                     }
                     .to_value()
@@ -837,7 +838,7 @@ mod tests {
                 },
                 |height| {
                     assert_eq!(height, expected_reference, "anchor per the two-sided gate");
-                    Some([0xB1u8; 32])
+                    Some(BlockHash::from_bytes([0xB1u8; 32]))
                 },
             )
             .await
@@ -866,7 +867,7 @@ mod tests {
                 .await
                 .expect("reference root resolves");
             let mut cursor: &[u8] = reply.bound_tx.bytes();
-            let mut tx = Transaction::read(&mut cursor).expect("assembled bytes parse whole");
+            let tx = Transaction::read(&mut cursor).expect("assembled bytes parse whole");
             assert!(cursor.is_empty(), "no trailing bytes after the tx");
             let emission_index = tx
                 .prefix
@@ -881,10 +882,16 @@ mod tests {
             };
             let vin = ArchivalRewardEmissionVin::read(&mut canonical_bytes.as_slice())
                 .expect("vin blob parses");
-            tx.prefix.inputs.remove(emission_index);
-            let signable = tx.prefix_hash();
-            emission_vin_verify_backing(&vin, &root, depth, signable.to_bytes())
-                .expect("backing leg verifies against the REAL tree root and depth");
+            // The transaction's one network-bound message, over CEN-J22's
+            // prefix (the wire strips the emission vin itself).
+            let tx_signable = tx.tx_signable(&shekyl_network::HARNESS_NETWORK_ID);
+            emission_vin_verify_backing(
+                &vin,
+                &CurveTreeRoot::from_bytes(root),
+                depth,
+                &tx_signable,
+            )
+            .expect("backing leg verifies against the REAL tree root and depth");
         }
     }
 }

@@ -24,6 +24,7 @@ use shekyl_archival_retention::{
     ARCHIVAL_BOND_FLOOR_ATOMIC, ENDPOINT_BYTES, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
+use shekyl_types::BlockHash;
 
 const GATE2_KAT: &str = include_str!("fixtures/gate2_serve_credit_kat_v1.json");
 const GATE4_KAT: &str = include_str!("fixtures/gate4_lifecycle_kat_v1.json");
@@ -282,7 +283,10 @@ fn gate4_lifecycle_kat_vectors() {
         ArchivalBondPostVin::read_payload_exact(&mut cursor).expect("parse join bond-post");
     verify_join_market_bond_post(&join_vin, false).expect("join verify");
     assert_eq!(
-        bond_floor(&join_vin.holdings),
+        bond_floor(
+            &join_vin.holdings,
+            &shekyl_archival_retention::ArchivalParams::SHIPPED
+        ),
         join["bond_credit"].as_u64().expect("bond_credit")
     );
 
@@ -326,11 +330,11 @@ fn gate4_lifecycle_kat_vectors() {
         &parsed.p_canonical_id,
         parsed.shard_id,
         parsed.settlement_epoch,
-        &decode_hex32(
+        &BlockHash::from_bytes(decode_hex32(
             serve["prev_block_hash_hex"]
                 .as_str()
                 .expect("prev block hash"),
-        ),
+        )),
         segment_leaf_count,
     );
     assert_eq!(
@@ -401,7 +405,7 @@ fn gate4_lifecycle_kat_vectors() {
         challenge_fire_height(
             h_open,
             h_close,
-            &seal_hash,
+            &BlockHash::from_bytes(seal_hash),
             &parsed.p_canonical_id,
             parsed.shard_id,
             parsed.settlement_epoch,

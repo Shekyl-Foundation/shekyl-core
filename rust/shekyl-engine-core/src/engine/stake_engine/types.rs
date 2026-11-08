@@ -139,7 +139,7 @@ impl HeldPersona {
         }
     }
 
-    /// Sign one 112-byte pass transcript with this persona's receipt key,
+    /// Sign one 113-byte pass transcript with this persona's receipt key,
     /// decoding it first if this is the first signature asked of the persona
     /// ([`HeldReceiptKey`]).
     ///
@@ -377,8 +377,12 @@ impl RetirementWitness {
         e_last: SettlementEpoch,
         settled_epoch: SettlementEpoch,
     ) -> Option<Self> {
-        epoch_is_claim_expired(e_last.to_raw(), settled_epoch.to_raw())
-            .then_some(Self { p_canonical_id })
+        epoch_is_claim_expired(
+            e_last.to_raw(),
+            settled_epoch.to_raw(),
+            shekyl_archival_retention::archival_params(),
+        )
+        .then_some(Self { p_canonical_id })
     }
 }
 
@@ -865,11 +869,9 @@ pub(crate) struct StakeEngineArgs {
     /// Must be present in `bundles` when `Some` (the orchestrator guarantees the
     /// current slot is in the derive-forward set).
     pub active: Option<PSlot>,
-    /// The persona body store (`WSS-Q1`(a)). Opened by the orchestrator
-    /// before spawn, so the blocking redb open stays off `on_start`.
-    /// Non-stakers never construct one. Fill and erase stay on this writer;
-    /// the serve path asks for a reader.
-    pub bodies: shekyl_p_store::BodyStore,
+    /// The id of the network the personas are on; the spends the engine
+    /// assembles sign under it (`NETWORK_IDENTITY.md` NI-Q4).
+    pub network: shekyl_network::NetworkId,
     /// **Test + conformance only.** Selects the `on_start` session self-cert (S6)
     /// behavior. Defaults to [`TestSelfCert::Skip`] so the bulk of the stake
     /// tests — which are **not** about the self-cert — do not run a real ~15 ms

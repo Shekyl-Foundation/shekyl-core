@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 
 use shekyl_options::{Code, Diagnostic, Source};
 
+use crate::probe;
+
 /// The lock file's name.
 pub const LOCK_FILE: &str = "shekyld.lock";
 
@@ -31,21 +33,42 @@ impl Lock {
         &self.data_dir
     }
 
+    /// Whether the account could create the data directory and open the
+    /// lock file: the question [`Lock::take`] asks before it creates,
+    /// answered without creating, opening or locking (IG-Q59, IG-F15). A
+    /// lock another process holds is not asked about: the check runs while
+    /// a daemon is up.
+    ///
+    /// # Errors
+    /// `config.data-dir.unusable`, as `take` would refuse.
+    pub fn creatable(data_dir: &Path) -> Result<(), Diagnostic> {
+        let unusable = Self::unusable(data_dir);
+        probe::directory_creatable(data_dir).map_err(&unusable)?;
+        probe::file_openable(&data_dir.join(LOCK_FILE), probe::Need::ReadWrite).map_err(unusable)
+    }
+
+    fn unusable(data_dir: &Path) -> impl Fn(std::io::Error) -> Diagnostic {
+        let shown = data_dir.display().to_string();
+        move |e: std::io::Error| {
+            Diagnostic::new(Code::DataDirUnusable, Source::Machine)
+                .option("data-dir")
+                .param("path", shown.clone())
+                .param("error", e.to_string())
+        }
+    }
+
     /// Creates the data directory if it is missing, then takes the lock.
+    /// [`Lock::creatable`] is asked first, so the decision is written once.
     ///
     /// # Errors
     /// `config.data-dir.unusable` when the directory cannot be created or
     /// the lock file cannot be opened; `config.data-dir.locked` when another
     /// process holds the lock.
     pub fn take(data_dir: &Path) -> Result<Self, Diagnostic> {
+        Self::creatable(data_dir)?;
         let shown = data_dir.display().to_string();
-        let unusable = |e: std::io::Error| {
-            Diagnostic::new(Code::DataDirUnusable, Source::Machine)
-                .option("data-dir")
-                .param("path", shown.clone())
-                .param("error", e.to_string())
-        };
-        std::fs::create_dir_all(data_dir).map_err(unusable)?;
+        let unusable = Self::unusable(data_dir);
+        std::fs::create_dir_all(data_dir).map_err(&unusable)?;
         if !data_dir.is_dir() {
             return Err(unusable(std::io::Error::other("not a directory")));
         }
@@ -55,8 +78,8 @@ impl Lock {
             .create(true)
             .truncate(false)
             .open(data_dir.join(LOCK_FILE))
-            .map_err(unusable)?;
-        if !try_lock(&file).map_err(unusable)? {
+            .map_err(&unusable)?;
+        if !try_lock(&file).map_err(&unusable)? {
             return Err(Diagnostic::new(Code::DataDirLocked, Source::Machine)
                 .option("data-dir")
                 .param("path", shown));
@@ -101,6 +124,44 @@ mod tests {
         let again = Lock::take(&data).unwrap();
         assert_eq!(again.data_dir(), data);
         assert!(data.join(LOCK_FILE).is_file(), "the file is never deleted");
+    }
+
+    #[test]
+    fn creatable_creates_nothing_and_agrees_with_take() {
+        let d = tempfile::tempdir().unwrap();
+        let data = d.path().join("deep").join("data");
+        Lock::creatable(&data).unwrap();
+        assert!(!d.path().join("deep").exists(), "the check created nothing");
+        let held = Lock::take(&data).unwrap();
+        assert!(data.join(LOCK_FILE).is_file());
+        // Held by another process or not, the check is the same answer.
+        Lock::creatable(&data).unwrap();
+        drop(held);
+        let f = d.path().join("file");
+        std::fs::write(&f, b"x").unwrap();
+        let e = Lock::creatable(&f).unwrap_err();
+        assert_eq!(e.code, Code::DataDirUnusable);
+        assert_eq!(e.get("error"), Some("not a directory"));
+        assert_eq!(Lock::take(&f).unwrap_err().code, Code::DataDirUnusable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_the_account_cannot_create_is_refused_before_anything_is_made() {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let sealed = d.path().join("sealed");
+        std::fs::create_dir(&sealed).unwrap();
+        std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let data = sealed.join("data");
+        let e = Lock::creatable(&data).unwrap_err();
+        assert_eq!(e.code, Code::DataDirUnusable);
+        assert_eq!(Lock::take(&data).unwrap_err().code, Code::DataDirUnusable);
+        assert!(!data.exists());
+        std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     #[test]

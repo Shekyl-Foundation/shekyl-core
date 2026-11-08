@@ -30,17 +30,17 @@ pub use commands::{
 pub use error::Error;
 pub use get::HASH_SIZE;
 pub use notifies::{
-    GetTxpoolComplement, NewCompactBlock, NewTransactions, RequestChain, RequestCompactMissingTx,
-    RequestGetObjects, ResponseChainEntry, ResponseGetObjects, NOTIFY_GET_TXPOOL_COMPLEMENT,
-    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_BODIES, NOTIFY_REQUEST_CHAIN,
-    NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_REQUEST_HEADERS,
-    NOTIFY_RESPONSE_BODIES, NOTIFY_RESPONSE_CHAIN_ENTRY, NOTIFY_RESPONSE_GET_OBJECTS,
-    NOTIFY_RESPONSE_HEADERS,
+    GetTxpoolComplement, NewCompactBlock, NewTransactions, RequestCompactMissingTx,
+    NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS,
+    NOTIFY_REQUEST_BODIES, NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_HEADERS,
+    NOTIFY_RESPONSE_BODIES, NOTIFY_RESPONSE_HEADERS,
 };
 pub use sync::{
-    body_budget_bytes, plan_bodies, BodiesFormFault, BodyPlan, RequestBodies, RequestHeaders,
-    ResponseBodies, ResponseHeaders, BODIES_RESPONSE_BYTES, CAP_REQUEST_BODIES,
+    body_budget_bytes, plan_bodies, BodiesFormFault, BodyPlan, BodyPlanner, RequestBodies,
+    RequestHeaders, ResponseBodies, ResponseHeaders, BODIES_RESPONSE_BYTES, CAP_REQUEST_BODIES,
     CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS, HEADERS_RESPONSE_BYTES,
+    MIN_TX_SECTION_BYTES, RESPONSE_BODIES_MAX_FIELDS, RESPONSE_BODIES_MAX_OBJECTS,
+    RESPONSE_BODIES_MAX_STRINGS, RESPONSE_BODIES_MAX_TXS, RESPONSE_HEADERS_MAX_STRINGS,
 };
 pub use types::{BasicNodeData, CoreSyncData, PeerlistEntry};
 

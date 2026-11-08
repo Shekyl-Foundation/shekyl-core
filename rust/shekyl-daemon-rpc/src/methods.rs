@@ -12,26 +12,27 @@
 //! That is what lets one unit test with an in-memory [`ChainFacts`] pin a
 //! method's behaviour for every transport at once.
 
-use crate::core::{P2pRead, TxSlot};
+use crate::core::{FullForm, P2pRead, TxSlot};
 use serde::Deserialize;
+use shekyl_rpc_types::{
+    ArchivedTx, GetTransactionsRequest, GetTransactionsResponse, TxEntry, TxLocation,
+};
 use shekyl_rpc_types::{
     BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
     GetBlockHeaderByHeightResponse, GetBlockRequest, GetBlockResponse, GetHeightResponse,
     GetVersionResponse, HashHex, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
-    CORE_RPC_ERROR_CODE_RESTRICTED, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
-    CORE_RPC_ERROR_CODE_WRONG_PARAM,
+    CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
 use shekyl_rpc_types::{
-    ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
-    GetPeerListRequest, GetPeerListResponse, P2pReply, Peer, SyncInfoPeer, SyncInfoResponse,
-    SyncSpan,
+    ConnectionInfo, GetConnectionsResponse, GetNetStatsResponse, GetPeerListRequest,
+    GetPeerListResponse, P2pReply, Peer, SyncBodyRequest, SyncHeaderRequest, SyncInfoPeer,
+    SyncInfoResponse,
 };
-use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxEntry, TxLocation};
-use shekyl_types::{ArchivalLength, BlockHeight, ChainCount};
+use shekyl_types::{BlockHeight, ChainCount};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Ct, Transaction};
 
 use crate::chain_facts::{BlockLookup, ChainFacts, FactsFault, P2pFacts};
+use crate::sync_facts::{SyncSessionFacts, SyncViewRead};
 use shekyl_rpc_types::{
     BlockHeaderSlot, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
     GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
@@ -131,6 +132,63 @@ impl RpcRefusal {
             data: None,
         }
     }
+
+    /// The JSON-RPC refusal for [`shekyl_rpc_types::errors::RpcError`]: the
+    /// class is the code, and `data` is the typed diagnostic.
+    #[must_use]
+    pub fn of_error(error: &shekyl_rpc_types::errors::RpcError) -> Self {
+        Self {
+            code: error.class.code(),
+            message: error.diagnostic.message.clone(),
+            data: serde_json::to_value(&error.diagnostic).ok(),
+        }
+    }
+
+    /// The JSON-RPC error object every surface serializes (RW-Q3). `id`
+    /// is the request's on `/json_rpc` and null on the other surfaces.
+    #[must_use]
+    pub fn to_json_rpc(&self, id: serde_json::Value) -> crate::types::JsonRpcResponse {
+        crate::types::JsonRpcResponse::error_with_data(
+            id,
+            self.code,
+            self.message.clone(),
+            self.data.clone(),
+        )
+    }
+}
+
+/// A bounded connection asked for more than one request may
+/// (`RPC_CHANNEL.md` §6.3, RT-W10 step 2). The class is
+/// [`ErrorClass::OverResourceBound`]. The message names the bound.
+///
+/// [`ErrorClass::OverResourceBound`]: shekyl_rpc_types::errors::ErrorClass::OverResourceBound
+#[must_use]
+pub fn bound_exceeded(
+    method: &str,
+    unit: &str,
+    bound: u64,
+    asked: u64,
+) -> shekyl_rpc_types::errors::RpcError {
+    use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
+    let message = format!(
+        "{method} accepts at most {bound} {unit} from a bounded connection; \
+         this request asked for {asked}"
+    );
+    RpcError::new(
+        ErrorClass::OverResourceBound,
+        Diagnostic::new("rpc.bound.exceeded", message)
+            .param("method", method)
+            .param("bound", bound.to_string())
+            .param("asked", asked.to_string()),
+    )
+}
+
+/// [`RpcFault::Refused`] for [`bound_exceeded`].
+#[must_use]
+pub fn bound_fault(method: &str, unit: &str, bound: u64, asked: u64) -> RpcFault {
+    RpcFault::Refused(RpcRefusal::of_error(&bound_exceeded(
+        method, unit, bound, asked,
+    )))
 }
 
 /// A failure on the transport's side of a native method — never a fact
@@ -258,7 +316,7 @@ pub fn block_request(params: &serde_json::Value) -> Result<GetBlockRequest, RpcF
 ///
 /// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] for absent
 /// params, a non-object, or an object this method cannot read.
-fn required_object_params<T: serde::de::DeserializeOwned>(
+pub(crate) fn required_object_params<T: serde::de::DeserializeOwned>(
     params: &serde_json::Value,
     expected: &str,
 ) -> Result<T, RpcFault> {
@@ -287,7 +345,7 @@ fn required_object_params<T: serde::de::DeserializeOwned>(
 ///
 /// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
 /// `params` is present but is not an object this method accepts.
-fn object_params<T: serde::de::DeserializeOwned + Default>(
+pub(crate) fn object_params<T: serde::de::DeserializeOwned + Default>(
     params: &serde_json::Value,
     expected: &str,
 ) -> Result<T, RpcFault> {
@@ -481,9 +539,8 @@ fn too_big_height(height: BlockHeight, chain: ChainCount) -> RpcFault {
 /// `INTERNAL_ERROR` and its wording (the shim has already logged the
 /// inconsistency, so the fault is not silent).
 ///
-/// `fill_pow_hash` arrives already ANDed with the listener's entitlement:
-/// the restricted listener never sets it, as the C++ handler enforced with
-/// `req.fill_pow_hash && !restricted`.
+/// `fill_pow_hash` is the caller's request. It reads the hash recorded at
+/// validation; this function includes it whenever it is passed `true`.
 pub fn get_block_header_by_height(
     facts: &dyn ChainFacts,
     height: u64,
@@ -562,21 +619,23 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
 
 // ─── RK-4c: the transaction read set ─────────────────────────────────────────
 
-/// `RESTRICTED_BLOCK_COUNT` — the cap a restricted listener applies to
-/// `get_block_header_by_hash`'s hash list (`core_rpc_server.cpp`).
+/// `RESTRICTED_BLOCK_COUNT` — how many hashes `get_block_header_by_hash`
+/// accepts from a bounded connection, and how many heights
+/// `/get_blocks_by_height.bin` accepts. The number is the inherited cap
+/// (`RPC_CHANNEL.md` §6.3). A bounded connection over it is
+/// `OverResourceBound`.
 pub const RESTRICTED_BLOCK_COUNT: usize = 1000;
 
 /// `RESTRICTED_BLOCK_HEADER_RANGE` — the span cap on
-/// `get_block_headers_range`.
+/// `get_block_headers_range` for a bounded connection. Inherited (§6.3).
 pub const RESTRICTED_BLOCK_HEADER_RANGE: u64 = 1000;
 
-/// `RESTRICTED_TRANSACTIONS_COUNT` — the cap a restricted listener applies to
-/// `/get_transactions`. It fires for the first time in this tree: the C++
-/// gated it on `m_restricted && ctx` while the bridge passed a null `ctx`
-/// (#570 fixed the bridge; this carries the constant to the native handler).
+/// `RESTRICTED_TRANSACTIONS_COUNT` — how many transactions `/get_transactions`
+/// accepts from a bounded connection. Inherited (§6.3).
 pub const RESTRICTED_TRANSACTIONS_COUNT: usize = 100;
 
-/// `RESTRICTED_SPENT_KEY_IMAGES_COUNT` — the same, for `/is_key_image_spent`.
+/// `RESTRICTED_SPENT_KEY_IMAGES_COUNT` — how many key images
+/// `/is_key_image_spent` accepts from a bounded connection. Inherited (§6.3).
 pub const RESTRICTED_SPENT_KEY_IMAGES_COUNT: usize = 5000;
 
 /// The two parse refusals the C++ handler distinguished, kept distinct because
@@ -607,105 +666,56 @@ pub fn parse_request_hashes(hex: &[String], parse_msg: &str) -> Result<Vec<[u8; 
     Ok(out)
 }
 
-/// Project gathered slots into the reply, applying the request's
-/// `(split, prune, decode_as_json)` matrix.
+/// Project gathered slots into the reply in the request's form (`SB-Q2`;
+/// `PDM-Q10`; `IG-Q55`).
 ///
-/// `render` is the epee JSON rendering (RK-D11), injected so this stays a pure
-/// function: the decision of *whether* and *which* rendering to ask for is
-/// here, in Rust, and only the rendering itself is C++.
+/// **Pruned form** (`prune`): every entry is its skeleton — `pruned_as_hex`
+/// is the pruned segment alone, never with `pqc_auths` appended, beside the
+/// three operands `prunable_hash`, `pqc_auth_hash` and `archival_len` that
+/// `SkeletonTx::txid` rebinds. Every node holds this at every horizon, so
+/// no slot is refused in this form.
+///
+/// **Full form** (the default): `as_hex` is the whole body. A transaction
+/// whose archival good this node discarded is answered in the `archived`
+/// list with its shard, and omitted from `txs` — a state of the slot, not
+/// a failure of the request. A transaction with no archival good (a
+/// coinbase) is never `archived`; its whole body is its skeleton.
 ///
 /// **One deliberate divergence.** The C++ echoed the request's hash string
 /// back verbatim (`e.tx_hash = *txhi++`), so a caller sending upper-case hex
 /// got upper-case back. `HashHex` re-encodes canonically, so the reply is
 /// always lower-case. Echoing caller-controlled casing is not a property worth
 /// preserving, and pre-genesis there is no client depending on it (RK-D8).
-/// A rendering the daemon could not produce.
-///
-/// The C++ failed the whole request when `parse_and_validate_tx*_from_blob`
-/// refused a body it had just read out of its own store, and that is the right
-/// answer: a caller who asked for `decode_as_json` and got a successful reply
-/// with an empty `as_json` cannot tell "no JSON" from "the daemon's store
-/// disagrees with its parser".
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RenderFailed {
-    pub txid: String,
-    pub code: i32,
-}
-
-/// A body whose archival length the daemon could not measure.
-///
-/// The length is measured at serve time from the segments the store hands
-/// over (`SHT-Q2`: nothing carries it, so nothing can carry a wrong one).
-/// That needs a pruned half this daemon's parser reads and, for an FCMP++
-/// transaction, the prunable half's bytes. Failing either, the request fails:
-/// the reply's `archival_len` is an operand of the txid, and a guessed value
-/// would hand the client an identity check it cannot pass.
-///
-/// **This is the LMDB store's contract, not every store's.** LMDB never
-/// drops a prunable half in place, so [`TxSlot`] always has the bytes and
-/// carries no length. `shekyl-chain-store` does drop them, and keeps the
-/// `txs_archival_len` row for exactly this reply: a `TxSlot` fed from that
-/// store carries the row's length, and this refusal then covers only a slot
-/// with neither the bytes nor the row.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LengthUnmeasured {
-    pub txid: String,
-}
-
-/// Why a gathered slot could not be projected into the reply.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProjectionFailed {
-    Render(RenderFailed),
-    Length(LengthUnmeasured),
-}
-
-/// The archival length of the transaction the store handed over in two
-/// halves, measured from those bytes — or `None` when they do not hold it.
-///
-/// `pruned` is the prefix, the committed base and the tx-level `pqc_auths`;
-/// `prunable` is the region after them. A coinbase carries no archival good.
-/// An FCMP++ transaction always has a prunable region, so an empty one means
-/// this store does not hold it and its length is not here to measure.
-fn archival_len_at_serve(pruned: &[u8], prunable: &[u8]) -> Option<ArchivalLength> {
-    let body = Transaction::from_bytes(pruned).ok()?;
-    match &body.ct {
-        Ct::Null(_) => Some(ArchivalLength::ZERO),
-        Ct::Fcmp { .. } if prunable.is_empty() => None,
-        Ct::Fcmp { .. } => Some(body.archival_len_with_prunable(prunable)),
-    }
-}
-
-pub fn project_transactions<R>(
+#[must_use]
+pub fn project_transactions(
     request: &GetTransactionsRequest,
     ids: &[[u8; 32]],
     slots: &[TxSlot],
     chain_height: u64,
-    render: R,
-) -> Result<GetTransactionsResponse, ProjectionFailed>
-where
-    R: Fn(&[u8], bool) -> Result<String, i32>,
-{
+) -> GetTransactionsResponse {
     let mut txs = Vec::new();
     let mut missed = Vec::new();
+    let mut archived = Vec::new();
+    let mut unavailable = Vec::new();
 
     for (id, slot) in ids.iter().zip(slots.iter()) {
-        let (pruned, prunable, prunable_hash, location, pruned_flag) = match slot {
+        let tx_hash = HashHex::from_bytes(*id);
+        let (body, location) = match slot {
             TxSlot::Missed => {
-                missed.push(HashHex::from_bytes(*id));
+                missed.push(tx_hash);
+                continue;
+            }
+            TxSlot::PoolUnavailable => {
+                unavailable.push(tx_hash);
                 continue;
             }
             TxSlot::Chain {
-                pruned,
-                prunable,
-                prunable_hash,
+                body,
                 block_height,
                 block_timestamp,
                 output_indices,
-                pruned_flag,
             } => (
-                pruned,
-                prunable,
-                prunable_hash,
+                body,
                 TxLocation::Mined {
                     block_height: *block_height,
                     // Against the tip read once for the whole gather, so two
@@ -714,27 +724,18 @@ where
                     block_timestamp: *block_timestamp,
                     output_indices: output_indices.clone(),
                 },
-                *pruned_flag,
             ),
             TxSlot::Pool {
-                pruned,
-                prunable,
-                prunable_hash,
+                body,
                 double_spend_seen: _,
                 relayed,
                 received_timestamp,
             } => (
-                pruned,
-                prunable,
-                prunable_hash,
+                body,
                 TxLocation::Pooled {
                     relayed: *relayed,
                     received_timestamp: *received_timestamp,
                 },
-                // A pooled transaction is never reported pruned: the C++ set
-                // this from the store's verification data, which a pool entry
-                // has by construction.
-                false,
             ),
         };
         let double_spend_seen = matches!(
@@ -744,92 +745,48 @@ where
                 ..
             }
         );
+        let skeleton = &body.skeleton;
 
-        // The matrix. `split` or `prune` asked for the halves; so does a
-        // transaction the store has no prunable half for, because there is
-        // nothing to concatenate.
-        let split_form = request.split || request.prune || prunable.is_empty();
-        let tx_hash = HashHex::from_bytes(*id);
-        let archival_len = archival_len_at_serve(pruned, prunable).ok_or_else(|| {
-            ProjectionFailed::Length(LengthUnmeasured {
-                txid: tx_hash.to_string(),
-            })
-        })?;
-        let mut entry = TxEntry {
+        let (as_hex, pruned_as_hex) = if request.prune {
+            (String::new(), hex::encode(&skeleton.unprunable))
+        } else {
+            match body.full_form() {
+                FullForm::Whole(full) => (hex::encode(&full), String::new()),
+                FullForm::Archived { shard } => {
+                    archived.push(ArchivedTx {
+                        tx_hash,
+                        shard: shard.to_raw(),
+                    });
+                    continue;
+                }
+            }
+        };
+
+        txs.push(TxEntry {
             tx_hash,
-            as_hex: String::new(),
-            pruned_as_hex: String::new(),
-            prunable_as_hex: String::new(),
-            prunable_hash: HashHex::from_bytes(*prunable_hash),
-            archival_len: archival_len.to_raw(),
-            as_json: String::new(),
-            pruned: pruned_flag,
+            as_hex,
+            pruned_as_hex,
+            prunable_hash: HashHex::from_bytes(skeleton.prunable_hash.to_bytes()),
+            pqc_auth_hash: skeleton
+                .pqc_auth_hash
+                .map(|hash| HashHex::from_bytes(hash.to_bytes()))
+                .into(),
+            archival_len: skeleton.archival_len.to_raw(),
             double_spend_seen,
             location,
-        };
-        if split_form {
-            entry.pruned_as_hex = hex::encode(pruned);
-            if !request.prune {
-                entry.prunable_as_hex = hex::encode(prunable);
-            }
-            if request.decode_as_json {
-                // Base-only rendering when that is all the reply carries.
-                let base_only = request.prune || prunable.is_empty();
-                let blob: Vec<u8> = if base_only {
-                    pruned.clone()
-                } else {
-                    [pruned.as_slice(), prunable.as_slice()].concat()
-                };
-                entry.as_json = render(&blob, base_only).map_err(|code| {
-                    ProjectionFailed::Render(RenderFailed {
-                        txid: entry.tx_hash.to_string(),
-                        code,
-                    })
-                })?;
-            }
-        } else {
-            let full: Vec<u8> = [pruned.as_slice(), prunable.as_slice()].concat();
-            entry.as_hex = hex::encode(&full);
-            if request.decode_as_json {
-                entry.as_json = render(&full, false).map_err(|code| {
-                    ProjectionFailed::Render(RenderFailed {
-                        txid: entry.tx_hash.to_string(),
-                        code,
-                    })
-                })?;
-            }
-        }
-
-        txs.push(entry);
+        });
     }
 
-    Ok(GetTransactionsResponse {
+    GetTransactionsResponse {
         status: RpcStatus::ok(),
         txs,
         missed_tx: missed,
-    })
+        archived,
+        unavailable_tx: unavailable,
+    }
 }
 
 // ── RK-5b: the header remainder ─────────────────────────────────────────────
-
-/// Whether a caller may have the long hash computed for it.
-///
-/// **Refusal, not a blank field.** The C++ wrote `fill_pow_hash && !restricted`
-/// throughout: a restricted caller that asked for a privileged field got an
-/// empty one back with status OK, which reports success about a question it
-/// declined to answer. `5b0c32f51` ruled the other way on the staking-read
-/// path — loud, never the degrade arm — and the one production caller of these
-/// methods passes `false`, so refusing costs nothing.
-fn pow_hash_or_refuse(requested: bool, restricted: bool) -> Result<bool, RpcFault> {
-    if requested && restricted {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_RESTRICTED,
-            message: "fill_pow_hash is not available on the restricted listener".to_owned(),
-            data: None,
-        }));
-    }
-    Ok(requested)
-}
 
 /// The request parsers for the four RK-5b methods.
 ///
@@ -932,9 +889,7 @@ const TIP_READ_ATTEMPTS: usize = 4;
 pub fn get_last_block_header(
     facts: &dyn ChainFacts,
     fill_pow_hash: bool,
-    restricted: bool,
 ) -> Result<GetLastBlockHeaderResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(fill_pow_hash, restricted)?;
     let tip = facts.chain_tip()?;
     // **The readiness check the C++ had, and only here.** `CHECK_CORE_READY()`
     // guarded `on_get_last_block_header` alone among this slice's methods —
@@ -963,7 +918,7 @@ pub fn get_last_block_header(
     // block 0); `newest_block` keeps the empty case total.
     let mut top = newest_block(tip.chain_height);
     for _ in 0..TIP_READ_ATTEMPTS {
-        let at = facts.block_header_at(BlockLookup::Height(top), pow)?;
+        let at = facts.block_header_at(BlockLookup::Height(top), fill_pow_hash)?;
         let Some(header) = at.header else {
             // The height came from a chain height, so it was below the tip
             // when it was chosen. Absent now means either the store cannot
@@ -1003,19 +958,20 @@ pub fn get_last_block_header(
 pub fn get_block_header_by_hash(
     facts: &dyn ChainFacts,
     request: &GetBlockHeaderByHashRequest,
-    restricted: bool,
+    bounded: bool,
 ) -> Result<GetBlockHeaderByHashResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(request.fill_pow_hash, restricted)?;
-    if restricted && request.hashes.len() > RESTRICTED_BLOCK_COUNT {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_RESTRICTED,
-            message: "Too many block headers requested in restricted mode".to_owned(),
-            data: None,
-        }));
+    if bounded && request.hashes.len() > RESTRICTED_BLOCK_COUNT {
+        return Err(bound_fault(
+            "get_block_header_by_hash",
+            "hashes",
+            RESTRICTED_BLOCK_COUNT as u64,
+            request.hashes.len() as u64,
+        ));
     }
     let mut block_headers = Vec::with_capacity(request.hashes.len());
     for hash in &request.hashes {
-        let at = facts.block_header_at(BlockLookup::Hash(hash.to_bytes()), pow)?;
+        let at =
+            facts.block_header_at(BlockLookup::Hash(hash.to_bytes()), request.fill_pow_hash)?;
         block_headers.push(BlockHeaderSlot {
             hash: *hash,
             block_header: at.header.as_ref().map(block_header),
@@ -1031,9 +987,8 @@ pub fn get_block_header_by_hash(
 pub fn get_block_headers_range(
     facts: &dyn ChainFacts,
     request: &GetBlockHeadersRangeRequest,
-    restricted: bool,
+    bounded: bool,
 ) -> Result<GetBlockHeadersRangeResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(request.fill_pow_hash, restricted)?;
     // **Both endpoints are bounded against the tip before any per-height
     // work.** The C++ refused `start > end` *and* either endpoint at or past
     // the chain height in one O(1) test; the first port kept only the
@@ -1068,17 +1023,18 @@ pub fn get_block_headers_range(
     // permits 1001 headers against a cap of 1000 — the same off-by-one the
     // deleted singular `hash` produced on `get_block_header_by_hash`, in the
     // second of the two methods that carry this cap. Found by porting both.
-    if restricted && span > RESTRICTED_BLOCK_HEADER_RANGE {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_RESTRICTED,
-            message: "Too many block headers requested.".to_owned(),
-            data: None,
-        }));
+    if bounded && span > RESTRICTED_BLOCK_HEADER_RANGE {
+        return Err(bound_fault(
+            "get_block_headers_range",
+            "headers",
+            RESTRICTED_BLOCK_HEADER_RANGE,
+            span,
+        ));
     }
     let mut headers = Vec::new();
     for raw in request.start_height..=request.end_height {
         let height = BlockHeight::from_raw(raw);
-        let at = facts.block_header_at(BlockLookup::Height(height), pow)?;
+        let at = facts.block_header_at(BlockLookup::Height(height), request.fill_pow_hash)?;
         let Some(header) = at.header else {
             // **A missing header here can only mean the chain shortened.**
             // On the height path the shim returns `found == 0` for exactly
@@ -1124,49 +1080,12 @@ const ADDRESS_TYPE_IPV4: u8 = 1;
 /// The unit `avg_*` and `current_*` report in.
 const BYTES_PER_KIB: u64 = 1024;
 
-/// Longest run of gap characters [`render_overview`] will emit for one span.
-///
-/// A **deliberate divergence** from the C++, which emitted
-/// `(gap / nblocks)` underscores with no bound. The gap is derived from a
-/// span's `start_block_height`, which comes from peer-advertised heights, so
-/// the unbounded form makes the length of a display string a function of what
-/// a peer claims — an allocation with no ceiling in a reply any admin caller
-/// can ask for. The overview is an ASCII picture for a human; a run longer
-/// than this conveys nothing a shorter one does not, and reproducing an
-/// unbounded loop faithfully would be reproducing the defect.
-const MAX_OVERVIEW_GAP: u64 = 128;
-
-/// Round half up, totally.
-///
-/// The C++ wrote `(uint32_t)(x + 0.5f)`, which is **undefined** when the
-/// result is negative or does not fit — and `rate` is a float the block queue
-/// computes from measured byte counts over measured intervals. This clamps
-/// instead: NaN and negatives become 0, anything past `u32::MAX` saturates.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "the clamp above the cast is what makes it total"
-)]
-#[deny(clippy::arithmetic_side_effects)]
-fn round_half_up(value: f32) -> u32 {
-    if !value.is_finite() || value <= 0.0 {
-        return 0;
-    }
-    let rounded = (f64::from(value) + 0.5).floor();
-    if rounded >= f64::from(u32::MAX) {
-        u32::MAX
-    } else {
-        rounded as u32
-    }
-}
-
 /// Bytes per second as whole KiB per second, totally.
 ///
 /// The C++ divided a `double` by 1024 and let the implicit conversion to
 /// `uint64_t` truncate. That conversion is **undefined** for a NaN, an
 /// infinity, a negative or a value past the integer range, and the input is a
-/// rate estimator's output — the same hazard [`round_half_up`] exists for,
-/// one field away. The division happens in floating point, as it did, so the
+/// rate estimator's output. The division happens in floating point, as it did, so the
 /// answer is `trunc(bytes_per_second / 1024)` and not
 /// `trunc(bytes_per_second) / 1024`.
 #[expect(
@@ -1218,8 +1137,16 @@ fn average_kib(total: u64, seconds: u64) -> u64 {
 /// The subtractions saturate. A `now` earlier than a connection's `started`
 /// means the clock moved backwards, and C++'s unsigned wrap turned that into
 /// an idle time of some hundreds of years; zero is the honest answer.
+///
+/// `session` is chain sync's row for the connection (3.68): the claim's
+/// count and the session's mode. A connection chain sync does not hold,
+/// such as one before its handshake, has neither.
 #[deny(clippy::arithmetic_side_effects)]
-fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionInfo {
+fn project_connection(
+    c: &crate::core::ConnectionFacts,
+    now: u64,
+    session: Option<&SyncSessionFacts>,
+) -> ConnectionInfo {
     let live_time = now.saturating_sub(c.started);
     let ipv4 = c.address_type == ADDRESS_TYPE_IPV4;
     ConnectionInfo {
@@ -1242,11 +1169,7 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         recv_idle_time: now.saturating_sub(c.started.max(c.last_recv)),
         send_count: c.send_count,
         send_idle_time: now.saturating_sub(c.started.max(c.last_send)),
-        state: if c.claims_known {
-            ConnectionState::from(c.state)
-        } else {
-            ConnectionState::Unknown
-        },
+        state: session.map(|session| session.mode),
         live_time,
         avg_download: average_kib(c.recv_count, live_time),
         current_download: kib_per_second(c.current_speed_down),
@@ -1256,57 +1179,9 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         // `epee::string_tools::pod_to_hex` produced for this uuid — and it is
         // the encoder this file already uses four times over.
         connection_id: hex::encode(c.connection_id),
-        height: c.claims_known.then_some(c.height),
+        height: session.and_then(|session| session.claimed_height),
         address_type: c.address_type,
     }
-}
-
-/// The block queue as an ASCII picture, from the same spans the reply lists.
-///
-/// Mirrors `block_queue::get_overview`, which the C++ handler called as a
-/// **second** read of the queue after the one that produced `spans` — so the
-/// picture could describe a queue the span list no longer matched. Rendering
-/// both from one snapshot removes that, which is why `filled` is exported
-/// rather than inferred: the branch below is the only reader of it.
-///
-/// `<` is a span already behind the chain; `_` runs are the gap ahead of the
-/// last span; `.` is requested-not-yet-arrived, `m` the span at the tip, `o`
-/// any other arrived span.
-#[deny(clippy::arithmetic_side_effects)]
-fn render_overview(spans: &[crate::core::SyncSpanFacts], chain_height: u64) -> String {
-    if spans.is_empty() {
-        return "[]".to_owned();
-    }
-    let mut out = String::from("[");
-    let mut expected = chain_height;
-    for span in spans {
-        if expected > span.start_block_height {
-            out.push('<');
-            continue;
-        }
-        if expected < span.start_block_height {
-            let stride = if span.nblocks == 0 { 1 } else { span.nblocks };
-            let gap = span
-                .start_block_height
-                .saturating_sub(expected)
-                .checked_div(stride)
-                .unwrap_or(1)
-                .clamp(1, MAX_OVERVIEW_GAP);
-            for _ in 0..gap {
-                out.push('_');
-            }
-        }
-        out.push(if !span.filled {
-            '.'
-        } else if span.start_block_height == chain_height {
-            'm'
-        } else {
-            'o'
-        });
-        expected = span.start_block_height.saturating_add(span.nblocks);
-    }
-    out.push(']');
-    out
 }
 
 /// `/get_net_stats`: process start plus the global throttle counters.
@@ -1326,17 +1201,21 @@ pub fn get_net_stats(facts: &dyn P2pFacts) -> Result<GetNetStatsResponse, RpcFau
 /// A daemon started offline answers `offline` alone (Rick,
 /// 2026-10-14): it has no connections by configuration, and an empty list
 /// would read as a running node with none.
-pub fn get_connections(facts: &dyn P2pFacts) -> Result<P2pReply<GetConnectionsResponse>, RpcFault> {
+pub fn get_connections(
+    facts: &dyn P2pFacts,
+    view: &dyn SyncViewRead,
+) -> Result<P2pReply<GetConnectionsResponse>, RpcFault> {
     if facts.p2p_state()? == P2pRead::Offline {
         return Ok(P2pReply::Offline);
     }
     let snapshot = facts.connections()?;
+    let view = view.sync_view()?;
     Ok(P2pReply::Running(GetConnectionsResponse {
         status: RpcStatus::ok(),
         connections: snapshot
             .connections
             .iter()
-            .map(|c| project_connection(c, snapshot.now))
+            .map(|c| project_connection(c, snapshot.now, view.session(&c.connection_id)))
             .collect(),
     }))
 }
@@ -1382,55 +1261,73 @@ pub fn get_peer_list(
     }))
 }
 
-/// `sync_info` (JSON-RPC, admin-only): where this node is in its download.
+/// `/get_stem_tallies` (host-only): the relay's floor diagnostic and the
+/// per-successor stem counts. The value is the response body. It carries
+/// no status envelope.
+pub fn get_stem_tallies(facts: &dyn P2pFacts) -> Result<shekyl_rpc_types::StemTallies, RpcFault> {
+    Ok(facts.stem_tallies()?)
+}
+
+/// `sync_info` (JSON-RPC, admin-only): chain sync's view (3.68). Whether
+/// the node is syncing, toward what, from whom and how fast, and whether it
+/// is stuck.
 ///
-/// The one method in this slice that reads both fact sources, and it takes
-/// them as two arguments so that stays visible. They are not synchronised
-/// with each other — the C++ handler read the chain, the connection list and
-/// the queue in three separate acquisitions too, and closing that would mean
-/// holding a p2p lock across a chain read.
+/// Three reads: the chain's tip, the sync owner's view and the board, for
+/// each session's address. They are not one snapshot: a session the view
+/// lists and the board no longer holds has closed since, and is left out.
 ///
-/// A daemon started offline answers `offline` alone: it downloads
-/// from no peer, so it has no sync to report.
+/// A daemon started offline answers `offline` alone: it syncs from no
+/// peer, so it has no sync to report.
 pub fn sync_info(
     chain: &dyn ChainFacts,
+    view: &dyn SyncViewRead,
     p2p: &dyn P2pFacts,
 ) -> Result<P2pReply<SyncInfoResponse>, RpcFault> {
     if p2p.p2p_state()? == P2pRead::Offline {
         return Ok(P2pReply::Offline);
     }
     let tip = chain.chain_tip()?;
-    let connections = p2p.connections()?;
-    let queue = p2p.sync_spans()?;
-    let height = tip.chain_height.to_raw();
+    let view = view.sync_view()?;
+    let board = p2p.connections()?;
+    let peers = view
+        .sessions
+        .iter()
+        .filter_map(|session| {
+            let row = board
+                .connections
+                .iter()
+                .find(|c| c.connection_id == session.connection_id)?;
+            Some(SyncInfoPeer {
+                connection_id: hex::encode(session.connection_id),
+                address: row.address.clone(),
+                claimed_height: session.claimed_height,
+                mode: session.mode,
+                header_request: session.header_request.map(|timing| SyncHeaderRequest {
+                    age_ms: timing.age_ms,
+                    due_in_ms: timing.due_in_ms,
+                }),
+                body_requests: session
+                    .body_requests
+                    .iter()
+                    .map(|span| SyncBodyRequest {
+                        start_height: span.start_height,
+                        count: span.count,
+                        planned_bytes: span.planned_bytes,
+                        age_ms: span.timing.age_ms,
+                        due_in_ms: span.timing.due_in_ms,
+                    })
+                    .collect(),
+                rate: session.rate,
+            })
+        })
+        .collect();
     Ok(P2pReply::Running(SyncInfoResponse {
         status: RpcStatus::ok(),
-        height,
-        // The same member `get_version` and `get_info` report: the core's
-        // target, `null` when it has none.
-        target_height: tip.target_height.map(ChainCount::to_raw).into(),
-        peers: connections
-            .connections
-            .iter()
-            .map(|c| SyncInfoPeer {
-                info: project_connection(c, connections.now),
-            })
-            .collect(),
-        spans: queue
-            .spans
-            .iter()
-            .map(|s| SyncSpan {
-                start_block_height: s.start_block_height,
-                nblocks: s.nblocks,
-                connection_id: hex::encode(s.connection_id),
-                rate: round_half_up(s.rate),
-                // 0..1 on the queue, a percentage on the wire.
-                speed: round_half_up(s.speed_fraction * 100.0),
-                size: s.size,
-                remote_address: s.remote_address.clone(),
-            })
-            .collect(),
-        overview: render_overview(&queue.spans, height),
+        height: tip.chain_height.to_raw(),
+        target_height: view.target,
+        state: view.state,
+        stalled: view.stalled,
+        peers,
     }))
 }
 
@@ -1441,12 +1338,15 @@ pub(crate) mod tests {
         decode_target_count, BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts,
         ChainTip, DaemonIdentity, FeeEstimate, NetStats,
     };
-    use crate::core::{ConnectionsSnapshot, SyncSpansSnapshot};
+    use crate::core::{ArchivalGood, ConnectionsSnapshot, TxBody};
+    use crate::sync_facts::{BodySpanFacts, RequestTiming, SyncSessionFacts, SyncViewFacts};
     use serde_json::json;
     use shekyl_rpc_types::Nullable;
+    use shekyl_rpc_types::{ChainSyncState, SyncMode};
     use shekyl_types::{
         AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
     };
+    use shekyl_wire::Transaction;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     /// In-memory facts: what a store-backed implementation will look like.
@@ -1516,7 +1416,7 @@ pub(crate) mod tests {
         fn identity(&self) -> Result<DaemonIdentity, FactsFault> {
             self.identity.clone().unwrap_or_else(|| {
                 Ok(DaemonIdentity {
-                    nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
+                    nettype: shekyl_rpc_types::Network::Mainnet,
                     genesis_hash: shekyl_types::BlockHash::from_bytes([0x11; 32]),
                 })
             })
@@ -1749,288 +1649,236 @@ pub(crate) mod tests {
         assert_eq!(ours, oracle);
     }
 
-    // ── the get_transactions projection matrix ───────────────────────────
+    // ── the get_transactions projection ─────────────────────────────────
 
-    /// A real transaction in the two halves the store hands over, with the
-    /// archival length the wire crate's fixture pins for it.
-    struct StoredTx {
-        pruned: Vec<u8>,
-        prunable: Vec<u8>,
-        archival_len: u64,
+    /// A real transaction as the store hands it over: its skeleton and its
+    /// archival good, cut by the wire crate's own segmenter and bound by
+    /// its own `txid_parts`.
+    fn stored(full: &[u8]) -> TxBody {
+        let tx = Transaction::from_bytes(full).expect("a real transaction");
+        let segments = tx.write_segments().expect("segments");
+        let parts = tx.txid_parts();
+        TxBody {
+            skeleton: shekyl_wire::SkeletonTx {
+                unprunable: segments.pruned,
+                prunable_hash: parts.prunable_hash,
+                pqc_auth_hash: parts.pqc_auth_hash,
+                archival_len: parts.archival_len,
+            },
+            good: ArchivalGood::Retained {
+                pqc_auths: parts.pqc_auth_hash.map(|_| segments.pqc_auths),
+                prunable: segments.prunable,
+            },
+        }
     }
 
-    /// The pinned parity spend (`shekyl-wire`'s `pruned_tx_hash_parity_v1`):
-    /// prefix, base and `pqc_auths` in the pruned half, the prunable region
-    /// after it.
-    fn stored_spend() -> StoredTx {
+    /// The pinned parity spend (`shekyl-wire`'s `pruned_tx_hash_parity_v1`),
+    /// with the archival length the fixture pins for it.
+    fn stored_spend() -> (TxBody, u64) {
         let pin: serde_json::Value = serde_json::from_str(include_str!(
             "../../shekyl-wire/tests/fixtures/pruned_tx_hash_parity_v1.json"
         ))
         .expect("parity fixture");
         let full = hex::decode(pin["tx_hex"].as_str().expect("tx_hex")).expect("hex");
-        let pruned = hex::decode(pin["pruned_hex"].as_str().expect("pruned_hex")).expect("hex");
-        assert!(full.starts_with(&pruned), "the pruned half is a prefix");
-        StoredTx {
-            prunable: full[pruned.len()..].to_vec(),
-            pruned,
-            archival_len: pin["archival_len"].as_u64().expect("archival_len"),
-        }
+        (
+            stored(&full),
+            pin["archival_len"].as_u64().expect("archival_len"),
+        )
     }
 
-    /// A real coinbase: one half, no prunable region, no archival good.
-    fn stored_coinbase() -> StoredTx {
+    /// A real coinbase: no `pqc_auths`, an empty prunable region, no
+    /// archival good.
+    fn stored_coinbase() -> TxBody {
         let block = shekyl_wire::Block::from_bytes(include_bytes!(
             "../../shekyl-wire/tests/vectors/regtest_coinbase_h1.block"
         ))
         .expect("block vector");
-        StoredTx {
-            pruned: block.miner_transaction.serialize(),
-            prunable: Vec::new(),
-            archival_len: 0,
-        }
+        stored(&block.miner_transaction.serialize())
     }
 
-    fn chain_slot(tx: &StoredTx) -> TxSlot {
+    fn chain_slot(body: TxBody) -> TxSlot {
         TxSlot::Chain {
-            pruned: tx.pruned.clone(),
-            prunable: tx.prunable.clone(),
-            prunable_hash: [0x11; 32],
+            body,
             block_height: 7,
             block_timestamp: 1_700_000_000,
             output_indices: vec![3, 4],
-            pruned_flag: false,
         }
     }
 
-    /// Renders a marker naming the arguments it was handed, so a test can
-    /// assert **what** was rendered and with which `base_only`, not merely
-    /// that something was.
-    ///
-    /// Returns the closure rather than being one: the `Result` is the
-    /// projection's bound, not this renderer's own failure mode, and stating
-    /// it as `impl Fn(..) -> Result<..>` puts that requirement where a reader
-    /// sees it.
-    fn echo_render() -> impl Fn(&[u8], bool) -> Result<String, i32> {
-        |blob: &[u8], base_only: bool| Ok(format!("{}|base_only={base_only}", hex::encode(blob)))
+    fn archived(body: &TxBody, shard: u64) -> TxBody {
+        TxBody {
+            skeleton: body.skeleton.clone(),
+            good: ArchivalGood::Discarded {
+                shard: shekyl_types::ShardId::from_raw(shard),
+            },
+        }
     }
 
-    fn req(split: bool, prune: bool, decode_as_json: bool) -> GetTransactionsRequest {
+    fn req(prune: bool) -> GetTransactionsRequest {
         GetTransactionsRequest {
             txs_hashes: vec![],
-            decode_as_json,
             prune,
-            split,
         }
     }
 
-    /// **The projection matrix, driven across every axis that changes a
-    /// field.** This replaced a C++ matrix, and the parity vectors do not
-    /// reach it — they build `TxEntry` directly — so without this the
-    /// behaviour is unpinned on all three request flags at once.
-    ///
-    /// The archival length is on no axis: it is the same in every cell,
-    /// **including the cells that withhold the prunable half**. That is the
-    /// cell a wallet reads — it rebuilds the txid from the pruned body, the
-    /// digest and this length (`SHT-Q2`).
+    /// **The pruned form is the skeleton, and the full form is the whole
+    /// body.** `pruned_as_hex` is the pruned segment alone — the `pqc_auths`
+    /// region is archival good and is never appended to it — and the three
+    /// operands are carried in both forms, identically: a wallet rebinds the
+    /// txid from them (`SB-Q2`; `SHT-Q2`).
     #[test]
-    fn projection_matrix_over_split_prune_and_decode() {
-        let tx = stored_spend();
-        let pruned_hex = hex::encode(&tx.pruned);
-        let prunable_hex = hex::encode(&tx.prunable);
-        let full_hex = format!("{pruned_hex}{prunable_hex}");
-        let full_json = format!("{full_hex}|base_only=false");
-        let base_json = format!("{pruned_hex}|base_only=true");
+    fn the_pruned_form_is_the_skeleton_and_the_full_form_the_whole_body() {
+        let (body, pinned_len) = stored_spend();
+        let ArchivalGood::Retained {
+            pqc_auths,
+            prunable,
+        } = &body.good
+        else {
+            unreachable!("the fixture is retained");
+        };
+        let pqc_auths = pqc_auths.as_ref().expect("the pinned spend is 4-part");
+        assert!(!pqc_auths.is_empty() && !prunable.is_empty());
+        let pruned_hex = hex::encode(&body.skeleton.unprunable);
+        let full_hex = format!(
+            "{pruned_hex}{}{}",
+            hex::encode(pqc_auths),
+            hex::encode(prunable)
+        );
 
-        // (split, prune, decode) -> (as_hex, pruned_as_hex, prunable_as_hex, as_json)
-        let cases: [(bool, bool, bool, &str, &str, &str, &str); 6] = [
-            // Neither flag: the whole transaction, concatenated, one field.
-            (false, false, false, &full_hex, "", "", ""),
-            (false, false, true, &full_hex, "", "", &full_json),
-            // `split`: the halves, both carried; json still covers both.
-            (true, false, false, "", &pruned_hex, &prunable_hex, ""),
-            (
-                true,
-                false,
-                true,
-                "",
-                &pruned_hex,
-                &prunable_hex,
-                &full_json,
-            ),
-            // `prune`: the prunable half is withheld, and json is base-only —
-            // rendering the full blob here would leak what `prune` withheld.
-            (false, true, false, "", &pruned_hex, "", ""),
-            (false, true, true, "", &pruned_hex, "", &base_json),
-        ];
-
-        for (split, prune, decode, as_hex, pruned_as_hex, prunable_as_hex, as_json) in cases {
-            let out = project_transactions(
-                &req(split, prune, decode),
-                &[[0x01; 32]],
-                &[chain_slot(&tx)],
-                9,
-                echo_render(),
-            )
-            .expect("projection succeeds");
-            let e = &out.txs[0];
-            let label = format!("split={split} prune={prune} decode={decode}");
-            assert_eq!(e.as_hex, as_hex, "as_hex @ {label}");
-            assert_eq!(e.pruned_as_hex, pruned_as_hex, "pruned_as_hex @ {label}");
+        let pruned =
+            project_transactions(&req(true), &[[0x01; 32]], &[chain_slot(body.clone())], 9);
+        let full = project_transactions(&req(false), &[[0x01; 32]], &[chain_slot(body.clone())], 9);
+        let (p, f) = (&pruned.txs[0], &full.txs[0]);
+        assert_eq!(p.pruned_as_hex, pruned_hex, "the pruned segment alone");
+        assert!(p.as_hex.is_empty());
+        assert_eq!(f.as_hex, full_hex, "pruned ‖ pqc_auths ‖ prunable");
+        assert!(f.pruned_as_hex.is_empty());
+        for (label, e) in [("prune", p), ("full", f)] {
+            assert_eq!(e.archival_len, pinned_len, "archival_len @ {label}");
             assert_eq!(
-                e.prunable_as_hex, prunable_as_hex,
-                "prunable_as_hex @ {label}"
+                e.prunable_hash,
+                HashHex::from_bytes(body.skeleton.prunable_hash.to_bytes()),
+                "prunable_hash @ {label}"
             );
-            assert_eq!(e.as_json, as_json, "as_json @ {label}");
-            assert_eq!(e.archival_len, tx.archival_len, "archival_len @ {label}");
+            assert_eq!(
+                e.pqc_auth_hash.into_option(),
+                body.skeleton
+                    .pqc_auth_hash
+                    .map(|hash| HashHex::from_bytes(hash.to_bytes())),
+                "pqc_auth_hash @ {label}"
+            );
         }
+        assert!(pruned.archived.is_empty() && full.archived.is_empty());
     }
 
-    /// **A transaction with no prunable half takes the split form even
-    /// unasked**, because there is nothing to concatenate — and its json is
-    /// base-only for the same reason. This is the branch the live console
-    /// test reaches (the genesis transaction), and the only one it reaches. A
-    /// coinbase carries no archival good, so its length is zero.
+    /// **A discarded good answers `archived` in the full form, and the
+    /// skeleton in the pruned form** (`PDM-Q10`). The id leaves `txs` for
+    /// the side list with its shard; it is not a miss and not a failure. The
+    /// skeleton served under `prune` is byte-identical before and after the
+    /// discard: the pruned form never depended on the good.
     #[test]
-    fn a_coinbase_is_split_form_renders_base_only_and_has_no_archival_length() {
-        let tx = stored_coinbase();
-        let pruned_hex = hex::encode(&tx.pruned);
-        let out = project_transactions(
-            &req(false, false, true),
-            &[[0x02; 32]],
-            &[chain_slot(&tx)],
-            9,
-            echo_render(),
-        )
-        .expect("projection succeeds");
-        let e = &out.txs[0];
-        assert!(e.as_hex.is_empty(), "no concatenated form exists");
-        assert_eq!(e.pruned_as_hex, pruned_hex);
-        assert!(e.prunable_as_hex.is_empty());
-        assert_eq!(e.as_json, format!("{pruned_hex}|base_only=true"));
-        assert_eq!(e.archival_len, 0);
+    fn a_discarded_good_is_archived_in_the_full_form_and_a_skeleton_under_prune() {
+        let (held, _) = stored_spend();
+        let gone = archived(&held, 3);
+        let id = [0x05; 32];
+
+        let full = project_transactions(&req(false), &[id], &[chain_slot(gone.clone())], 9);
+        assert!(full.txs.is_empty(), "an archived id is not an entry");
+        assert!(full.missed_tx.is_empty(), "nor a miss");
+        assert_eq!(
+            full.archived,
+            vec![ArchivedTx {
+                tx_hash: HashHex::from_bytes(id),
+                shard: 3,
+            }]
+        );
+
+        let before = project_transactions(&req(true), &[id], &[chain_slot(held)], 9);
+        let after = project_transactions(&req(true), &[id], &[chain_slot(gone)], 9);
+        assert_eq!(before, after, "one shape under prune, whatever the good");
+        assert!(after.archived.is_empty());
     }
 
-    /// Chain, pool and miss land in their own places: the first two become
-    /// entries carrying their location, the third only a `missed_tx` id.
+    /// A coinbase has no archival good, so it is never `archived`: its
+    /// whole body is its skeleton, its `pqc_auth_hash` is null and its
+    /// length zero, in both forms.
+    #[test]
+    fn a_coinbase_answers_its_whole_body_in_both_forms() {
+        let body = stored_coinbase();
+        let pruned_hex = hex::encode(&body.skeleton.unprunable);
+        let full = project_transactions(&req(false), &[[0x02; 32]], &[chain_slot(body.clone())], 9);
+        let pruned = project_transactions(&req(true), &[[0x02; 32]], &[chain_slot(body)], 9);
+        assert_eq!(full.txs[0].as_hex, pruned_hex);
+        assert_eq!(pruned.txs[0].pruned_as_hex, pruned_hex);
+        for e in [&full.txs[0], &pruned.txs[0]] {
+            assert_eq!(e.pqc_auth_hash, shekyl_rpc_types::Nullable::NULL);
+            assert_eq!(e.archival_len, 0);
+        }
+        assert!(full.archived.is_empty());
+    }
+
+    /// **No good is the pruned segment, not an empty retained region and
+    /// not `archived`.** This is the coinbase after the range delete has
+    /// removed its empty `txs_prunable` row: the store's physical state is
+    /// absence, and the projection must not invent segments to stand in
+    /// for a good the record does not carry (`SB-Q2`).
+    #[test]
+    fn a_body_that_carries_no_good_answers_its_pruned_segment() {
+        let held = stored_coinbase();
+        let body = TxBody {
+            skeleton: held.skeleton,
+            good: ArchivalGood::CarriesNone,
+        };
+        let pruned_hex = hex::encode(&body.skeleton.unprunable);
+        let full = project_transactions(&req(false), &[[0x02; 32]], &[chain_slot(body.clone())], 9);
+        let pruned = project_transactions(&req(true), &[[0x02; 32]], &[chain_slot(body)], 9);
+        assert_eq!(full.txs[0].as_hex, pruned_hex);
+        assert!(full.txs[0].pruned_as_hex.is_empty());
+        assert_eq!(pruned.txs[0].pruned_as_hex, pruned_hex);
+        assert!(full.archived.is_empty() && pruned.archived.is_empty());
+    }
+
+    /// Chain, pool, miss and an unavailable pool lookup land in their own
+    /// places: the first two become entries carrying their location, the
+    /// third only a `missed_tx` id, the fourth only an `unavailable_tx` id.
     #[test]
     fn chain_pool_and_missed_slots_are_projected_to_their_own_places() {
-        let tx = stored_spend();
+        let (body, pinned_len) = stored_spend();
         let out = project_transactions(
-            &req(true, false, false),
-            &[[0x01; 32], [0x02; 32], [0x03; 32]],
+            &req(true),
+            &[[0x01; 32], [0x02; 32], [0x03; 32], [0x04; 32]],
             &[
-                chain_slot(&tx),
+                chain_slot(body.clone()),
                 TxSlot::Pool {
-                    pruned: tx.pruned.clone(),
-                    prunable: tx.prunable.clone(),
-                    prunable_hash: [0x22; 32],
+                    body,
                     double_spend_seen: true,
                     relayed: true,
-                    received_timestamp: 1_700_000_001,
+                    received_timestamp: Some(1_700_000_001),
                 },
                 TxSlot::Missed,
+                TxSlot::PoolUnavailable,
             ],
             9,
-            echo_render(),
-        )
-        .expect("projection succeeds");
+        );
 
         assert_eq!(out.txs.len(), 2, "the miss must not become an entry");
-        assert_eq!(out.missed_tx.len(), 1);
+        assert_eq!(out.missed_tx, vec![HashHex::from_bytes([0x03; 32])]);
+        assert_eq!(
+            out.unavailable_tx,
+            vec![HashHex::from_bytes([0x04; 32])],
+            "an unavailable lookup is neither an entry nor a miss"
+        );
         assert!(matches!(out.txs[0].location, TxLocation::Mined { .. }));
         assert!(matches!(out.txs[1].location, TxLocation::Pooled { .. }));
         assert!(
             out.txs[1].double_spend_seen,
             "the pool's double-spend flag must survive the projection"
         );
-        assert!(
-            !out.txs[1].pruned,
-            "a pooled transaction is never reported pruned"
-        );
         assert_eq!(
-            out.txs[1].archival_len, tx.archival_len,
-            "a pooled transaction's length is measured like a mined one's"
+            out.txs[1].archival_len, pinned_len,
+            "a pooled transaction's operands are the same as a mined one's"
         );
-    }
-
-    /// A renderer failure names the transaction it failed on and fails the
-    /// whole reply — it is not swallowed into an empty `as_json`.
-    #[test]
-    fn a_renderer_failure_names_its_transaction_and_fails_the_reply() {
-        let err = project_transactions(
-            &req(false, false, true),
-            &[[0x09; 32]],
-            &[chain_slot(&stored_spend())],
-            9,
-            |_, _| Err(-7),
-        )
-        .expect_err("a failing renderer must fail the reply");
-        assert_eq!(
-            err,
-            ProjectionFailed::Render(RenderFailed {
-                txid: HashHex::from_bytes([0x09; 32]).to_string(),
-                code: -7,
-            })
-        );
-    }
-
-    /// The length is measured or the reply fails. An FCMP++ body the store
-    /// holds no prunable half for has no bytes to measure, and a half that is
-    /// not a transaction cannot be measured at all: neither is answered with
-    /// a length, because the client mixes that length into the txid it checks
-    /// the body against.
-    #[test]
-    fn a_body_whose_length_cannot_be_measured_fails_the_reply() {
-        let spend = stored_spend();
-        let unmeasurable = [
-            (
-                "an FCMP++ body with no prunable half",
-                StoredTx {
-                    pruned: spend.pruned.clone(),
-                    prunable: Vec::new(),
-                    archival_len: 0,
-                },
-            ),
-            (
-                "a pruned half that is not a transaction",
-                StoredTx {
-                    pruned: vec![0xAA, 0xBB],
-                    prunable: vec![0xCC],
-                    archival_len: 0,
-                },
-            ),
-        ];
-        for (what, tx) in unmeasurable {
-            let err = project_transactions(
-                &req(true, true, false),
-                &[[0x0A; 32]],
-                &[chain_slot(&tx)],
-                9,
-                echo_render(),
-            )
-            .expect_err(what);
-            assert_eq!(
-                err,
-                ProjectionFailed::Length(LengthUnmeasured {
-                    txid: HashHex::from_bytes([0x0A; 32]).to_string(),
-                }),
-                "{what}"
-            );
-        }
-    }
-
-    /// The serve-time measurement is the wire crate's: the pinned spend's
-    /// two halves measure to its pinned archival length, which is the
-    /// `pqc_auths` segment inside the pruned half plus the prunable half.
-    #[test]
-    fn the_served_length_is_the_pinned_archival_length() {
-        let tx = stored_spend();
-        let measured = archival_len_at_serve(&tx.pruned, &tx.prunable).expect("measurable");
-        assert_eq!(measured.to_raw(), tx.archival_len);
-        assert!(
-            measured.to_raw() > u64::try_from(tx.prunable.len()).expect("fits"),
-            "the pqc_auths segment counts, so the length exceeds the prunable half"
-        );
+        assert_eq!(out.txs[0].pruned_as_hex, out.txs[1].pruned_as_hex);
     }
 
     #[test]
@@ -2063,7 +1911,7 @@ pub(crate) mod tests {
             shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
             "the reply must carry this build's own digest, not a stored one"
         );
-        assert_eq!(out.nettype, shekyl_rpc_types::DaemonNetwork::Mainnet);
+        assert_eq!(out.nettype, shekyl_rpc_types::Network::Mainnet);
         assert_eq!(
             out.genesis_hash,
             shekyl_rpc_types::HashHex::from_bytes([0x11; 32]),
@@ -2071,10 +1919,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v36` = 3.59). A bump that
+        // Head of the `get_version` chain (`_v47` = 3.70). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v36.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v47.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -2604,26 +2452,34 @@ pub(crate) mod tests {
 
     // ── RK-5b: the header remainder ────────────────────────────────────────
 
-    /// Every method in this slice refuses `fill_pow_hash` under restriction
-    /// rather than answering with an empty field and status OK.
+    /// `fill_pow_hash` is the hash recorded at validation. Asking includes
+    /// it. Not asking leaves the field empty.
     #[test]
-    fn a_restricted_caller_asking_for_the_pow_hash_is_refused_not_blanked() {
-        // Synchronized, because `get_last_block_header` refuses an
-        // unsynchronised node outright — see the test below.
+    fn fill_pow_hash_is_the_recorded_hash() {
         let f = facts(true, 0);
-        for restricted in [true, false] {
-            let out = get_last_block_header(&f, true, restricted);
-            if restricted {
-                assert!(
-                    matches!(out, Err(RpcFault::Refused(_))),
-                    "a privileged field must be refused, not emptied"
-                );
-            } else {
-                assert!(out.is_ok());
-            }
-        }
-        // And not asking for it is fine on either listener.
-        assert!(get_last_block_header(&f, false, true).is_ok());
+        let filled = get_last_block_header(&f, true).expect("the recorded hash");
+        assert!(filled.block_header.pow_hash.is_some());
+        let bare = get_last_block_header(&f, false).expect("no hash asked");
+        assert!(bare.block_header.pow_hash.is_none());
+    }
+
+    /// A bounded range within the header cap, asking for the recorded hash
+    /// on every header, is served. The hash is a store read.
+    #[test]
+    fn a_bounded_header_range_serves_the_recorded_hash() {
+        let f = facts(false, 0);
+        let out = get_block_headers_range(
+            &f,
+            &GetBlockHeadersRangeRequest {
+                start_height: 0,
+                end_height: 2,
+                fill_pow_hash: true,
+            },
+            true,
+        )
+        .expect("three headers are inside the 1,000-header cap");
+        assert_eq!(out.headers.len(), 3);
+        assert!(out.headers.iter().all(|header| header.pow_hash.is_some()));
     }
 
     /// A block arriving between choosing the tip and projecting it does not
@@ -2644,7 +2500,7 @@ pub(crate) mod tests {
         let before = f.tip.as_ref().expect("a tip").chain_height;
         f.tip_growth_remaining.store(1, Ordering::Relaxed);
 
-        let out = get_last_block_header(&f, false, false).expect("the tip, after one retry");
+        let out = get_last_block_header(&f, false).expect("the tip, after one retry");
         // The header returned is the *new* tip, not the height chosen from
         // the pre-growth snapshot. One growth makes the old exclusive end
         // (`next_height`) the new tip ordinal.
@@ -2664,7 +2520,7 @@ pub(crate) mod tests {
     fn a_chain_that_never_settles_is_refused_rather_than_spun_on() {
         let f = facts(true, 0);
         f.tip_growth_remaining.store(u64::MAX, Ordering::Relaxed);
-        let out = get_last_block_header(&f, false, false);
+        let out = get_last_block_header(&f, false);
         assert!(
             matches!(&out, Err(RpcFault::Refused(r)) if r.code == CORE_RPC_ERROR_CODE_CORE_BUSY),
             "{out:?}"
@@ -2694,7 +2550,7 @@ pub(crate) mod tests {
     #[test]
     fn an_unsynchronized_node_refuses_to_report_a_tip() {
         let unsynced = facts(false, 900_000);
-        let out = get_last_block_header(&unsynced, false, false);
+        let out = get_last_block_header(&unsynced, false);
         assert!(
             matches!(&out, Err(RpcFault::Refused(r)) if r.code == CORE_RPC_ERROR_CODE_CORE_BUSY),
             "{out:?}"
@@ -2719,7 +2575,7 @@ pub(crate) mod tests {
                 hashes: vec![],
                 fill_pow_hash: false,
             },
-            false
+            false,
         )
         .is_ok());
     }
@@ -2891,7 +2747,6 @@ pub(crate) mod tests {
     pub(crate) struct FakeP2p {
         pub net: Result<NetStats, FactsFault>,
         pub connections: Result<ConnectionsSnapshot, FactsFault>,
-        pub spans: Result<SyncSpansSnapshot, FactsFault>,
         pub peers: Result<P2pRead<Vec<crate::core::PeerEntry>>, FactsFault>,
         pub state: Result<P2pRead<()>, FactsFault>,
         pub asked_public_only: AtomicBool,
@@ -2911,7 +2766,6 @@ pub(crate) mod tests {
                     now: 0,
                     connections: Vec::new(),
                 }),
-                spans: Ok(SyncSpansSnapshot { spans: Vec::new() }),
                 peers: Ok(P2pRead::Running(Vec::new())),
                 state: Ok(P2pRead::Running(())),
                 asked_public_only: AtomicBool::new(false),
@@ -2926,9 +2780,6 @@ pub(crate) mod tests {
         fn connections(&self) -> Result<ConnectionsSnapshot, FactsFault> {
             self.connections.clone()
         }
-        fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault> {
-            self.spans.clone()
-        }
         fn peer_list(
             &self,
             public_only: bool,
@@ -2938,6 +2789,59 @@ pub(crate) mod tests {
         }
         fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault> {
             self.state.clone()
+        }
+        fn stem_tallies(&self) -> Result<shekyl_rpc_types::StemTallies, FactsFault> {
+            Ok(shekyl_rpc_types::StemTallies::default())
+        }
+    }
+
+    /// In-memory chain sync view.
+    pub(crate) struct FakeView(pub Result<SyncViewFacts, FactsFault>);
+
+    impl FakeView {
+        /// No session: a node chain sync holds nothing for.
+        pub(crate) fn empty() -> Self {
+            Self(Ok(SyncViewFacts {
+                state: ChainSyncState::NoView,
+                stalled: false,
+                target: 1_234_567,
+                sessions: Vec::new(),
+            }))
+        }
+
+        /// One session, for [`connection_facts`]'s connection: it claims
+        /// 1,234,567 blocks and its header run is reachable.
+        pub(crate) fn one() -> Self {
+            Self(Ok(SyncViewFacts {
+                state: ChainSyncState::Behind,
+                stalled: false,
+                target: 1_234_600,
+                sessions: vec![SyncSessionFacts {
+                    connection_id: connection_facts().connection_id,
+                    claimed_height: Some(1_234_567),
+                    mode: SyncMode::Reachable,
+                    header_request: Some(RequestTiming {
+                        age_ms: 250,
+                        due_in_ms: 257_750,
+                    }),
+                    body_requests: vec![BodySpanFacts {
+                        start_height: 1_234_568,
+                        count: 20,
+                        planned_bytes: 8_388_608,
+                        timing: RequestTiming {
+                            age_ms: 1_500,
+                            due_in_ms: 1_022_500,
+                        },
+                    }],
+                    rate: Some(4096),
+                }],
+            }))
+        }
+    }
+
+    impl crate::sync_facts::SyncViewRead for FakeView {
+        fn sync_view(&self) -> Result<SyncViewFacts, FactsFault> {
+            self.0.clone()
         }
     }
 
@@ -2961,10 +2865,7 @@ pub(crate) mod tests {
             send_count: 600 * 1024,
             current_speed_down: 4096.0,
             current_speed_up: 2048.0,
-            height: 1_234_567,
             port: 18080,
-            state: 3,
-            claims_known: true,
             address_type: ADDRESS_TYPE_IPV4,
             incoming: true,
             localhost: false,
@@ -2995,7 +2896,7 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let res = get_connections(&facts)
+        let res = get_connections(&facts, &FakeView::one())
             .expect("connections")
             .into_running()
             .expect("P2P runs");
@@ -3011,41 +2912,38 @@ pub(crate) mod tests {
         assert_eq!(c.current_upload, 2);
         // Zero-padded to 16, as `peerid_to_string` pads.
         assert_eq!(c.connection_id, "151c232a31383f464d545b626970777e");
-        assert_eq!(c.state, ConnectionState::Normal);
+        // The claim's count and the session's mode, from chain sync's view.
+        assert_eq!(c.state, Some(SyncMode::Reachable));
         assert_eq!(c.height, Some(1_234_567));
         // ipv4: `ip` echoes the host and `port` is the number as a string.
         assert_eq!(c.ip, "192.0.2.7");
         assert_eq!(c.port, "18080");
     }
 
-    /// A claim that has not landed is unknown. Zero height and a real state
-    /// would read as a peer that had answered.
+    /// A connection chain sync does not hold, such as one before its
+    /// handshake, has no claim and no mode: both are null, never a zero
+    /// height or some mode's name.
     #[test]
-    fn an_unknown_claim_is_null_height_and_unknown_state() {
-        let mut raw = connection_facts();
-        raw.claims_known = false;
-        raw.height = 1_234_567;
-        raw.state = 3;
+    fn a_connection_chain_sync_does_not_hold_has_null_height_and_state() {
         let facts = FakeP2p {
             connections: Ok(ConnectionsSnapshot {
                 now: 1600,
-                connections: vec![raw],
+                connections: vec![connection_facts()],
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts)
+        let c = &get_connections(&facts, &FakeView::empty())
             .expect("connections")
             .into_running()
             .expect("P2P runs")
             .connections[0];
-        assert_eq!(c.state, ConnectionState::Unknown);
+        assert_eq!(c.state, None);
         assert_eq!(c.height, None);
         let json = serde_json::to_value(c).expect("json");
         assert!(json["height"].is_null());
-        // `support_flags` left the P2P wire (2026-10-19), and with it the
-        // only source this field had.
+        assert!(json["state"].is_null());
+        // `support_flags` left the P2P wire (2026-10-19).
         assert!(json.get("support_flags").is_none());
-        assert_eq!(json["state"], "unknown");
     }
 
     /// A connection younger than a second divides by zero in the naive form.
@@ -3059,7 +2957,7 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts)
+        let c = &get_connections(&facts, &FakeView::empty())
             .expect("connections")
             .into_running()
             .expect("P2P runs")
@@ -3081,7 +2979,7 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts)
+        let c = &get_connections(&facts, &FakeView::empty())
             .expect("connections")
             .into_running()
             .expect("P2P runs")
@@ -3106,7 +3004,7 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts)
+        let c = &get_connections(&facts, &FakeView::empty())
             .expect("connections")
             .into_running()
             .expect("P2P runs")
@@ -3115,23 +3013,6 @@ pub(crate) mod tests {
         assert_eq!(c.port, "");
         assert_eq!(c.address, "abcdefghijklmnop.onion:18080");
         assert_eq!(c.host, "abcdefghijklmnop.onion");
-    }
-
-    /// Every state the C++ enum defines, plus the `default:` arm it falls
-    /// through to. A raw value outside the enum is `Unknown` and not some
-    /// other state's name.
-    #[test]
-    fn every_protocol_state_maps_to_its_own_name() {
-        for (raw, expected) in [
-            (0u8, ConnectionState::BeforeHandshake),
-            (1, ConnectionState::Synchronizing),
-            (2, ConnectionState::Standby),
-            (3, ConnectionState::Normal),
-            (4, ConnectionState::Unknown),
-            (255, ConnectionState::Unknown),
-        ] {
-            assert_eq!(ConnectionState::from(raw), expected, "raw {raw}");
-        }
     }
 
     /// `include_blocked` is applied here, on the request, and the white/gray
@@ -3196,18 +3077,20 @@ pub(crate) mod tests {
     fn an_offline_daemon_answers_the_state_on_every_p2p_method() {
         let off = FakeP2p {
             connections: Err(FactsFault::Internal),
-            spans: Err(FactsFault::Internal),
             peers: Ok(P2pRead::Offline),
             state: Ok(P2pRead::Offline),
             ..FakeP2p::default()
         };
-        assert_eq!(get_connections(&off).expect("a state"), P2pReply::Offline);
+        assert_eq!(
+            get_connections(&off, &FakeView::empty()).expect("a state"),
+            P2pReply::Offline
+        );
         assert_eq!(
             get_peer_list(&GetPeerListRequest::default(), &off).expect("a state"),
             P2pReply::Offline
         );
         assert_eq!(
-            sync_info(&facts(false, 0), &off).expect("a state"),
+            sync_info(&facts(false, 0), &FakeView::empty(), &off).expect("a state"),
             P2pReply::Offline
         );
     }
@@ -3217,13 +3100,13 @@ pub(crate) mod tests {
     #[test]
     fn an_unreadable_p2p_state_is_a_fault_not_an_empty_reply() {
         let broken = FakeP2p {
-            peers: Err(FactsFault::NullHandle),
+            peers: Err(FactsFault::Internal),
             state: Err(FactsFault::NotReady),
             ..FakeP2p::default()
         };
-        assert!(get_connections(&broken).is_err());
+        assert!(get_connections(&broken, &FakeView::empty()).is_err());
         assert!(get_peer_list(&GetPeerListRequest::default(), &broken).is_err());
-        assert!(sync_info(&facts(false, 0), &broken).is_err());
+        assert!(sync_info(&facts(false, 0), &FakeView::empty(), &broken).is_err());
     }
 
     /// The lifetime average, including the two inputs that would divide by
@@ -3258,121 +3141,60 @@ pub(crate) mod tests {
         );
     }
 
-    /// Round half up, on the values the C++ cast was undefined for.
+    /// `sync_info` is chain sync's view (3.68): the chain's height, the
+    /// view's target, state and stall, and one row per session the board
+    /// still holds, with its address from the board.
     #[test]
-    fn rates_round_half_up_and_never_leave_the_range() {
-        assert_eq!(round_half_up(0.0), 0);
-        assert_eq!(round_half_up(0.4), 0);
-        assert_eq!(round_half_up(0.5), 1);
-        assert_eq!(round_half_up(4095.6), 4096);
-        assert_eq!(round_half_up(-1.0), 0, "negative is clamped, not cast");
-        assert_eq!(round_half_up(f32::NAN), 0);
-        assert_eq!(round_half_up(f32::INFINITY), 0, "not finite");
-        assert_eq!(round_half_up(1e30), u32::MAX, "saturates rather than wraps");
-    }
-
-    fn span(start: u64, nblocks: u64, filled: bool) -> crate::core::SyncSpanFacts {
-        crate::core::SyncSpanFacts {
-            remote_address: "192.0.2.7:18080".to_owned(),
-            start_block_height: start,
-            nblocks,
-            size: 4096,
-            connection_id: [0u8; 16],
-            rate: 4096.0,
-            speed_fraction: 0.75,
-            filled,
-        }
-    }
-
-    /// Every character the overview can emit, in one picture.
-    #[test]
-    fn the_overview_renders_each_span_state() {
-        // Chain at 100. A span behind it is `<`; the span at the tip that has
-        // arrived is `m`; a later arrived span is `o`; an outstanding one is
-        // `.`; and the gap before a far span is underscores.
-        let spans = vec![
-            span(50, 10, true),
-            span(100, 10, true),
-            span(110, 10, true),
-            span(120, 10, false),
-        ];
-        assert_eq!(render_overview(&spans, 100), "[<mo.]");
-        assert_eq!(render_overview(&[], 100), "[]", "an empty queue is `[]`");
-    }
-
-    /// The gap run: `(start - expected) / nblocks`, at least one.
-    #[test]
-    fn the_overview_fills_the_gap_ahead_of_a_span() {
-        // Chain at 100, span starts at 150, 10 blocks wide: five underscores.
-        assert_eq!(render_overview(&[span(150, 10, true)], 100), "[_____o]");
-        // A gap smaller than one span still gets one underscore.
-        assert_eq!(render_overview(&[span(105, 10, true)], 100), "[_o]");
-    }
-
-    /// The divergence this rendering makes on purpose. A span's
-    /// `start_block_height` follows peer-advertised heights, so the C++
-    /// `(gap / nblocks)` loop had no ceiling — a peer claiming a height far
-    /// ahead sized a string with its claim. The run is clamped.
-    #[test]
-    fn an_absurd_gap_cannot_size_the_overview() {
-        let rendered = render_overview(&[span(u64::MAX / 2, 1, true)], 0);
-        assert_eq!(
-            u64::try_from(rendered.len()).expect("length fits"),
-            MAX_OVERVIEW_GAP + 3,
-            "clamped run, plus the brackets and the span's own character"
-        );
-    }
-
-    /// `sync_info` reads both sources and reports the core's target, synced
-    /// or not. Writing 0 for the synced case made the two states one value.
-    #[test]
-    fn sync_info_reports_the_core_target() {
+    fn sync_info_renders_the_view_and_joins_the_board() {
         let p2p = FakeP2p {
-            spans: Ok(SyncSpansSnapshot {
-                spans: vec![span(100, 10, true)],
-            }),
             connections: Ok(ConnectionsSnapshot {
                 now: 1600,
                 connections: vec![connection_facts()],
             }),
             ..FakeP2p::default()
         };
-
-        let behind = facts(false, 1_234_600);
-        let res = sync_info(&behind, &p2p)
+        let res = sync_info(&facts(false, 0), &FakeView::one(), &p2p)
             .expect("sync info")
             .into_running()
             .expect("P2P runs");
         assert_eq!(res.height, 1_234_567);
-        assert_eq!(res.target_height, Nullable::value(1_234_600));
-        assert_eq!(
-            res.peers.len(),
-            1,
-            "peers carry the connection under `info`"
-        );
-        assert_eq!(res.spans.len(), 1);
-        assert_eq!(res.spans[0].rate, 4096);
-        assert_eq!(res.spans[0].speed, 75, "0.75 becomes a percentage");
+        assert_eq!(res.target_height, 1_234_600);
+        assert_eq!(res.state, ChainSyncState::Behind);
+        assert!(!res.stalled);
+        assert_eq!(res.peers.len(), 1);
+        let peer = &res.peers[0];
+        assert_eq!(peer.connection_id, "151c232a31383f464d545b626970777e");
+        assert_eq!(peer.address, "192.0.2.7:18080");
+        assert_eq!(peer.claimed_height, Some(1_234_567));
+        assert_eq!(peer.mode, SyncMode::Reachable);
+        assert_eq!(peer.header_request.map(|r| r.due_in_ms), Some(257_750));
+        assert_eq!(peer.body_requests.len(), 1);
+        assert_eq!(peer.body_requests[0].start_height, 1_234_568);
+        assert_eq!(peer.rate, Some(4096));
+    }
 
-        let synced = facts(true, 1_234_600);
-        let res = sync_info(&synced, &p2p)
+    /// A session the view lists and the board no longer holds closed
+    /// between the two reads: it is left out, not shown without an address.
+    #[test]
+    fn a_session_gone_from_the_board_is_left_out() {
+        let res = sync_info(&facts(false, 0), &FakeView::one(), &FakeP2p::default())
             .expect("sync info")
             .into_running()
             .expect("P2P runs");
-        assert_eq!(res.target_height, Nullable::value(1_234_600));
+        assert!(res.peers.is_empty());
+    }
 
-        // No target is `null` on this method too, the same encoding as
-        // `get_version` and `get_info` (RK-Q7).
-        for synchronized in [true, false] {
-            let res = sync_info(&facts(synchronized, 0), &p2p)
-                .expect("sync info")
-                .into_running()
-                .expect("P2P runs");
-            assert_eq!(res.target_height, Nullable::NULL);
-            assert_eq!(
-                serde_json::to_value(&res).unwrap()["target_height"],
-                serde_json::Value::Null
-            );
-        }
+    /// A stalled view says so on the wire.
+    #[test]
+    fn a_stall_is_reported() {
+        let mut view = FakeView::empty().0.expect("a view");
+        view.state = ChainSyncState::Behind;
+        view.stalled = true;
+        let res = sync_info(&facts(false, 0), &FakeView(Ok(view)), &FakeP2p::default())
+            .expect("sync info")
+            .into_running()
+            .expect("P2P runs");
+        assert!(res.stalled);
+        assert_eq!(serde_json::to_value(&res).unwrap()["stalled"], true);
     }
 }

@@ -593,7 +593,7 @@ impl Grown {
     }
 }
 
-/// Price a genesis candidate's coinbase at [`GENESIS_ENDOWMENT`] with the
+/// Price a genesis candidate's coinbase at [`genesis_endowment`] with the
 /// wallet's [`repay`] — amount, commitment and ciphertext together — so it
 /// is a coinbase the miner's scan recovers and a spend can be built over.
 pub(in super::super) fn endow_genesis(genesis: &mut Candidate) {
@@ -602,7 +602,7 @@ pub(in super::super) fn endow_genesis(genesis: &mut Candidate) {
         repay(
             &mut genesis.block.miner_transaction,
             MinerWallet::harness().recipient(),
-            GENESIS_ENDOWMENT,
+            genesis_endowment(),
         ),
         "the fixture's genesis coinbase is one `repay` prices"
     );
@@ -703,7 +703,7 @@ static PROVED: Mutex<BTreeMap<ProvedKey, Transaction>> = Mutex::new(BTreeMap::ne
 /// into its height ([`batch_root_going_into`], the derived root of the
 /// previous connect — CEN-B5), so a caller lists [`spend`]s and the
 /// reference, the proof and the root are written where they are known.
-/// Genesis is **endowed** ([`GENESIS_ENDOWMENT`]): a coinbase built by
+/// Genesis is **endowed** ([`genesis_endowment`]): a coinbase built by
 /// `candidate_over` pays zero, genesis's stands as built (CEN-F11), and a
 /// zero-amount coinbase is not an input a spend can be signed over — so
 /// without the endowment the chain's first matured coinbase, the one
@@ -723,7 +723,9 @@ pub(in super::super) fn connect_chain(store: &ChainStore, listed: &[Vec<Listed>]
 /// curve still prices every later height) and enough for a one-coin fee to
 /// destroy a visible amount. The same endowment is what makes genesis's
 /// coinbase spendable at all ([`connect_chain`]).
-const GENESIS_ENDOWMENT: u64 = shekyl_economics::EMISSION_CURVE_ASYMPTOTE / 4;
+fn genesis_endowment() -> u64 {
+    shekyl_economics::economic_params().emission_curve_asymptote / 4
+}
 
 /// [`connect_chain`], also returning the burn the verdict derived for each
 /// block (CEN-F17 / G11's `actually_destroyed` — what `connect` wrote as

@@ -23,7 +23,7 @@
 //! **Deliberately excluded (P0e / §7.1.1):** archival journals
 //! (`archival_*`), the txpool (which since layout 12 is not in this file at
 //! all — `crate::pool`, S-POOL), alt-chain, txs, outputs, `curve_tree_roots`
-//! history, `hf_versions`, and every other table. A backend that omits
+//! history, `rule_set_in_force`, and every other table. A backend that omits
 //! archival apply/revert still passes this digest — that is why
 //! §7.1.1 forbids extracting S-ARCH until those journals are in the
 //! digest (or a named exclusion with a replacement KAT). This module
@@ -78,6 +78,7 @@
 //! version bump.
 
 use shekyl_crypto_hash::cshake256_32;
+use shekyl_types::{BlockHash, CurveTreeRoot, KeyImage};
 
 /// Format-version tag prefixed to the outer preimage. Bump on any
 /// change to the field set, order, widths, or domain strings.
@@ -105,9 +106,9 @@ pub const DIGEST_PREIMAGE_LEN: usize = 1 + 8 + 8 + 32 + 32 + 32;
 /// load-bearing. `curve_root` is the live 32-byte Selene root.
 #[must_use]
 pub fn digest_v0(
-    block_hashes: &[[u8; 32]],
-    spent_keys: &[[u8; 32]],
-    curve_root: &[u8; 32],
+    block_hashes: &[BlockHash],
+    spent_keys: &[KeyImage],
+    curve_root: &CurveTreeRoot,
 ) -> [u8; 32] {
     let preimage = canonical_preimage(block_hashes, spent_keys, curve_root);
     cshake256_32(OUTER_CUSTOMIZATION, &preimage)
@@ -119,9 +120,9 @@ pub fn digest_v0(
 /// layout independently of the cSHAKE output.
 #[must_use]
 pub fn canonical_preimage(
-    block_hashes: &[[u8; 32]],
-    spent_keys: &[[u8; 32]],
-    curve_root: &[u8; 32],
+    block_hashes: &[BlockHash],
+    spent_keys: &[KeyImage],
+    curve_root: &CurveTreeRoot,
 ) -> [u8; DIGEST_PREIMAGE_LEN] {
     let mut buf = [0u8; DIGEST_PREIMAGE_LEN];
     buf[0] = DIGEST_FORMAT_VERSION;
@@ -131,7 +132,7 @@ pub fn canonical_preimage(
     buf[9..17].copy_from_slice(&n_spent.to_le_bytes());
     buf[17..49].copy_from_slice(&chain_component(block_hashes));
     buf[49..81].copy_from_slice(&spent_accumulator(spent_keys));
-    buf[81..113].copy_from_slice(curve_root);
+    buf[81..113].copy_from_slice(curve_root.as_bytes());
     buf
 }
 
@@ -141,12 +142,12 @@ pub fn canonical_preimage(
 /// byte string — so a future "forget the count" encoder cannot collide
 /// with genesis-only by accident of cSHAKE(empty).
 #[must_use]
-pub fn chain_component(block_hashes: &[[u8; 32]]) -> [u8; 32] {
+pub fn chain_component(block_hashes: &[BlockHash]) -> [u8; 32] {
     let n = u64::try_from(block_hashes.len()).expect("block count fits u64");
     let mut input = Vec::with_capacity(8 + block_hashes.len() * 32);
     input.extend_from_slice(&n.to_le_bytes());
     for hash in block_hashes {
-        input.extend_from_slice(hash);
+        input.extend_from_slice(hash.as_bytes());
     }
     cshake256_32(CHAIN_CUSTOMIZATION, &input)
 }
@@ -155,10 +156,10 @@ pub fn chain_component(block_hashes: &[[u8; 32]]) -> [u8; 32] {
 ///
 /// Empty set → 32 zero bytes. Order-independent by construction.
 #[must_use]
-pub fn spent_accumulator(spent_keys: &[[u8; 32]]) -> [u8; 32] {
+pub fn spent_accumulator(spent_keys: &[KeyImage]) -> [u8; 32] {
     let mut acc = [0u8; 32];
     for ki in spent_keys {
-        let leaf = cshake256_32(SPENT_ELEM_CUSTOMIZATION, ki);
+        let leaf = cshake256_32(SPENT_ELEM_CUSTOMIZATION, ki.as_bytes());
         for (dst, src) in acc.iter_mut().zip(leaf.iter()) {
             *dst ^= *src;
         }
@@ -170,11 +171,11 @@ pub fn spent_accumulator(spent_keys: &[[u8; 32]]) -> [u8; 32] {
 mod tests {
     use super::*;
 
-    const HASH_A: [u8; 32] = [0x11; 32];
-    const HASH_B: [u8; 32] = [0x12; 32];
-    const KI_A: [u8; 32] = [0x22; 32];
-    const KI_B: [u8; 32] = [0x33; 32];
-    const ROOT: [u8; 32] = [0x44; 32];
+    const HASH_A: BlockHash = BlockHash::from_bytes([0x11; 32]);
+    const HASH_B: BlockHash = BlockHash::from_bytes([0x12; 32]);
+    const KI_A: KeyImage = KeyImage::from_bytes([0x22; 32]);
+    const KI_B: KeyImage = KeyImage::from_bytes([0x33; 32]);
+    const ROOT: CurveTreeRoot = CurveTreeRoot::from_bytes([0x44; 32]);
 
     /// Self-pinned tripwire for the documented fixture
     /// (`[HASH_A]`, `[KI_A, KI_B]`, `ROOT`). Not a KAT (rule 50): the
@@ -199,7 +200,7 @@ mod tests {
         assert_eq!(pre[0], DIGEST_FORMAT_VERSION);
         assert_eq!(&pre[1..9], 1u64.to_le_bytes());
         assert_eq!(&pre[9..17], 2u64.to_le_bytes());
-        assert_eq!(&pre[81..113], &ROOT);
+        assert_eq!(&pre[81..113], ROOT.as_bytes());
     }
 
     #[test]
@@ -221,7 +222,7 @@ mod tests {
         assert_ne!(one, empty);
         // XOR is its own inverse: the leaf of KI_A, XORed twice, is empty.
         let mut restored = one;
-        let leaf = cshake256_32(SPENT_ELEM_CUSTOMIZATION, &KI_A);
+        let leaf = cshake256_32(SPENT_ELEM_CUSTOMIZATION, KI_A.as_bytes());
         for (dst, src) in restored.iter_mut().zip(leaf.iter()) {
             *dst ^= *src;
         }
@@ -251,7 +252,7 @@ mod tests {
     #[test]
     fn curve_root_is_covered() {
         let a = digest_v0(&[], &[], &ROOT);
-        let b = digest_v0(&[], &[], &[0x55; 32]);
+        let b = digest_v0(&[], &[], &CurveTreeRoot::from_bytes([0x55; 32]));
         assert_ne!(a, b);
     }
 

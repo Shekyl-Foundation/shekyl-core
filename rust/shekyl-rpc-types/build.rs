@@ -56,9 +56,9 @@ use std::path::PathBuf;
 /// that a node holding `L = 3` rejects as `ANCHOR_OUT_OF_WINDOW`, and the
 /// genesis threshold `depth + L` below which any pass record is refused moves
 /// with it. A split, so the key belongs here; it is read by
-/// `rust/shekyl-archival-retention/build.rs` (the single Rust authority — C++
-/// sizes the window through `shekyl_archival_pass_anchor_window`, holding no
-/// copy). The same change also re-commented `archival_reorg_depth_blocks`
+/// `rust/shekyl-archival-retention/build.rs` (the single Rust authority; the
+/// C++ held no copy, and the export it sized the window through is deleted
+/// with the archival C++ path, DEL-008). The same change also re-commented `archival_reorg_depth_blocks`
 /// (value unchanged at 720): `_comment_*` keys are outside the canonical
 /// form, so that edit alone would not have moved this digest.
 ///
@@ -185,7 +185,37 @@ use std::path::PathBuf;
 /// it now reads 22, the design's (`DESIGN_CONCEPTS.md` §3). Every block
 /// reward above genesis changes, so this is a different chain, not a pure
 /// rename (`EconomicParams::emission_speed_factor_per_block`).
-const PINNED_DIGEST: &str = "4bad8c3eafe2a03224238d2140e3a5ef3d72ce73c75837d6726d37112f15f54f";
+///
+/// **Re-pinned 2026-10-28 (ESR-16): a KEY was removed.**
+/// `shekyl_blocks_per_year` left this file. The year length is
+/// `365 × 86_400 / daa_target_seconds` (262_800 at the shipped 120 s
+/// target), so a second key was a second chain identity for one
+/// derivation. **No production behaviour changes** — the derived length
+/// equals the deleted key.
+///
+/// **Re-pinned 2026-10-30 (ESR-16 completion, #1218;
+/// `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.26, ruled 2026-10-29 and on review
+/// 2026-10-30): six keys ADDED, one REMOVED.** Added:
+/// `block_weight_limit_multiple_scaled = 2000000` and
+/// `block_weight_long_term_clamp_scaled = 1700000` (`SCALE` units), and the
+/// draw count rule's `archival_draw_catch_up_permille = 700`,
+/// `archival_draw_horizon_floor_blocks = 200`, `archival_count_cap_multiple =
+/// 3` and `archival_bundle_section_budget_multiple = 2`. The chain question,
+/// for each: a different limit multiple admits a different heaviest block and
+/// pays a different penalty; a different clamp is a different long-term
+/// weight and so a different median; a different catch-up point, horizon
+/// floor or cap is a different draw count at some block, so a different set
+/// of admissible bundle records; a different section multiple admits a
+/// different section. Each is a split. The values are the ones every node ran:
+/// the literal `2` at four Rust sites and the C++ `median * 2`,
+/// `long_term_weight`'s `10 / 17` and `7 / 10`, the count rule's `7 / 10`,
+/// `DRAW_HORIZON_FLOOR`, `COUNT_CAP_MULTIPLE` and
+/// `BUNDLE_SECTION_BUDGET_MULTIPLE`. Removed: `retention_horizon_blocks`,
+/// which no consensus code read (the built prune sweep retires each table at
+/// its last reader's reach, `SO-D12h`). The limit and clamp are
+/// `EconomicParams` fields, so the params digest moved to format `0x06` in
+/// the same change. **No production behaviour changes.**
+const PINNED_DIGEST: &str = "2227f8a01a4a47c9f42e46d3a7c01fc900d4927c03ec71bbbfc74d6be69829bd";
 
 fn main() {
     let manifest_dir =

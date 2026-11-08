@@ -86,7 +86,6 @@ use core::ffi::CStr;
 
 use shekyl_types::BlockHeight;
 
-use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
 use crate::consensus_state::{shard_work_micro, ShardClose};
 use crate::constants::effective_settlement_epoch_blocks;
@@ -290,12 +289,16 @@ pub fn admission_code_static_str(code: u8) -> &'static str {
 }
 
 impl ParentStateHoldings<'_> {
-    /// Production constructor: age weight is the compiled consensus constant.
+    /// The holdings under `params`' age weight. Production passes
+    /// [`crate::archival_params`].
     #[must_use]
-    pub fn with_consensus_age_weight(shards: &[AdmissionShard]) -> ParentStateHoldings<'_> {
+    pub fn with_consensus_age_weight<'s>(
+        shards: &'s [AdmissionShard],
+        params: &crate::ArchivalParams,
+    ) -> ParentStateHoldings<'s> {
         ParentStateHoldings {
             shards,
-            age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+            age_weight_milli: params.reward_age_weight_milli,
         }
     }
 }

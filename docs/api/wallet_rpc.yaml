@@ -13,7 +13,8 @@
 # specified shape lands here first (or in the same PR as) the implementation
 # change.
 #
-# Transport: JSON-RPC 2.0 over HTTP POST / or a Unix domain socket. UDS with
+# Transport: JSON-RPC 2.0 over HTTP POST /json_rpc (the daemon's path, the
+# only one: no alias at /) or a Unix domain socket. UDS with
 # filesystem-permission auth is the recommended deployment mode
 # (docs/WALLET_RPC_README.md); HTTP basic auth remains available for tooling.
 #
@@ -459,7 +460,11 @@ info:
   # ending of that kind at or below the height shown. -29521 now means only
   # a refusal before any byte was sent; a daemon's terminal verdict on a
   # sent exit is -29522, held until its end date. api_version stays 1.
-  version: 0.14.0
+  # 0.15.0: the staking posture `foundation_complete_tree` is renamed
+  # `support_complete_tree` on the bond request, the -29506 refusal, and
+  # the serving-posture response. The obligation is unchanged: the
+  # whole-corpus archival backstop. api_version stays 1.
+  version: 0.15.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -564,10 +569,18 @@ x-shekyl-error-ranges:
   - { start: -29900, end: -29999, subject: server / transport / tenancy, status: SPECIFIED }
 
 paths:
-  /:
+  /json_rpc:
     post:
       operationId: jsonRpcCall
       summary: JSON-RPC 2.0 envelope; the `method` member selects the operation.
+      description: >-
+        The one path JSON-RPC is served at, spelled as the daemon spells it
+        (rule 83: no alias). A request to any other path, once past the
+        Content-Type, `Host` and authentication checks below, gets HTTP 404
+        with a JSON-RPC error object: `id` null, `code` -32601, and `data`
+        the diagnostic `rpc.path.unrouted` with the parameters `path` (the
+        path asked for) and `json_rpc` (`/json_rpc`). The daemon answers an
+        unrouted path the same way.
       requestBody:
         required: true
         description: >-
@@ -870,8 +883,9 @@ components:
           -29015 CURVE_TREE_UNAVAILABLE   build/refresh: the wallet's curve-tree
                                           membership data is unavailable for
                                           this session (its actor stopped, or
-                                          its store would not resume; a
-                                          respawn did not recover it). Close
+                                          its store would not resume; an
+                                          in-place rebuild did not recover
+                                          it). Close
                                           and reopen the wallet; a store that
                                           cannot be used is then -29016
           -29016 CURVE_TREE_STORE_UNUSABLE open: the wallet's curve-tree store
@@ -887,8 +901,8 @@ components:
                                           from the seed (that is -29011, for
                                           the wallet's own files)
 
-          -29100 INVALID_RECIPIENT        build/proofs: address parse or
-                                          network check failed
+          -29100 INVALID_RECIPIENT        build/proofs: the address is not
+                                          one this wallet can pay
           -29101 INSUFFICIENT_FUNDS       build: spendable balance too low
           -29102 FEE_ESTIMATION_FAILED    build: daemon fee query failed
           -29103 RESERVATION_NOT_FOUND    submit: unknown/expired handle
@@ -1205,7 +1219,7 @@ components:
                                           whose funding is fine
           -29506 STAKE_FOUNDATION_UNACKNOWLEDGED
                                           stake: posture
-                                          "foundation_complete_tree" was
+                                          "support_complete_tree" was
                                           requested without
                                           acknowledge_non_earning_unbounded.
                                           The refusal MESSAGE IS THE WARNING
@@ -1614,7 +1628,7 @@ components:
           $ref: "#/components/schemas/CapabilityMode"
         network:
           type: string
-          enum: [MAINNET, TESTNET, STAGENET]
+          enum: [MAINNET, TESTNET, STAGENET, REGTEST]
         restore_height_hint:
           type: integer
           format: int64
@@ -1637,39 +1651,28 @@ components:
       required: [wallet]
       description: >
         On success the wallet is open. Backup material is returned exactly
-        once: BIP-39 `mnemonic` on mainnet/stagenet, or `raw_seed_hex` on
-        testnet (32-byte entropy, lowercase hex). Clients must persist the
-        backup before discarding the response; the server does not re-emit it.
+        once: the wallet's 24-word BIP-39 `mnemonic`, on every network
+        (NETWORK_IDENTITY.md NI-R7). Clients must persist the backup before
+        discarding the response; the server does not re-emit it.
       properties:
         wallet:
           $ref: "#/components/schemas/WalletHandle"
         mnemonic:
           type: string
           description: >
-            24-word BIP-39 English mnemonic (mainnet/stagenet). Absent on
-            testnet. Equally secret with the master seed — never log.
-        raw_seed_hex:
-          type: string
-          pattern: "^[0-9a-f]{64}$"
-          description: >
-            32-byte raw seed as lowercase hex (testnet only). Absent on
-            mainnet/stagenet.
+            24-word BIP-39 English mnemonic: the spelling of the wallet's
+            32-byte seed. Equally secret with the seed — never log.
 
     RestoreWalletParams:
       type: object
       required: [name, password, mnemonic]
       description: >
         Recreate a wallet from its seed backup (WI-RPC-2a). The name must
-        not collide with an existing wallet file (-29002). Seed format is
-        NETWORK-GOVERNED, mirroring create's output: mainnet/stagenet
-        take the 24-word BIP-39 mnemonic; testnet takes the 32-byte raw
-        seed as 64-char hex (exactly CreateWalletResult.raw_seed_hex) —
-        ratified through the WI-RPC-2a high-review pass 2026-07-23;
-        contract reconciled to the shipped lifecycle.rs behavior
-        2026-07-24 (the earlier "testnet refuses with -32602" text
-        contradicted dev). Format failures refuse with -32602; the
-        invalid-seed error messages are stable and never reflect the
-        supplied material.
+        not collide with an existing wallet file (-29002). Every network
+        takes the wallet's 24-word BIP-39 mnemonic, exactly
+        CreateWalletResult.mnemonic (NETWORK_IDENTITY.md NI-R7). Anything
+        else refuses with -32602; the error message is stable and never
+        reflects the supplied material.
       properties:
         name:
           type: string
@@ -1679,10 +1682,8 @@ components:
         mnemonic:
           type: string
           description: >
-            Network-governed seed material: 24-word BIP-39 English
-            mnemonic (mainnet/stagenet) or 64-hex raw seed (testnet),
-            from CreateWalletResult. Equally secret with the master
-            seed — never log.
+            The wallet's 24-word BIP-39 English mnemonic, from
+            CreateWalletResult. Equally secret with the seed — never log.
         restore_height:
           type: integer
           format: int64
@@ -1695,8 +1696,7 @@ components:
           type: string
           default: en
           description: >
-            BIP-39 wordlist language of the supplied mnemonic
-            (mainnet/stagenet path only; ignored for testnet raw seeds).
+            BIP-39 wordlist language of the supplied mnemonic.
 
     RestoreWalletResult:
       type: object
@@ -1771,12 +1771,12 @@ components:
             open. Crosses a local transport only.
         posture:
           type: string
-          enum: [market, foundation_complete_tree]
+          enum: [market, support_complete_tree]
           default: market
           description: >
             Which archival obligation this bond takes on. `market` is an
             ordinary per-shard staking position inside the reward market.
-            `foundation_complete_tree` is the whole-corpus archival
+            `support_complete_tree` is the whole-corpus archival
             backstop: permanently excluded from the reward market by
             holdings shape, unbounded and monotone in disk, and fully
             inside the penalty economy. Absent means `market`, which is
@@ -1788,7 +1788,7 @@ components:
           default: false
           description: >
             Required to be `true` for posture
-            `foundation_complete_tree`; ignored for `market`. Its absence
+            `support_complete_tree`; ignored for `market`. Its absence
             is not a validation nicety — it is the warning gate (D-4):
             the -29506 refusal body carries the full statement of terms,
             so a client either shows the operator those terms or
@@ -2364,7 +2364,7 @@ components:
           $ref: "#/components/schemas/CapabilityMode"
         network:
           type: string
-          enum: [MAINNET, TESTNET, STAGENET]
+          enum: [MAINNET, TESTNET, STAGENET, REGTEST]
         address:
           type: string
         wallet_height:
@@ -2402,6 +2402,7 @@ components:
         synced_height:
           type: integer
           format: int64
+          description: The wallet's height after the scan, as get_height's wallet_height.
         reorg_fork_height:
           type: integer
           format: int64
@@ -2445,6 +2446,7 @@ components:
         synced_height:
           type: integer
           format: int64
+          description: The wallet's height after the scan, as get_height's wallet_height.
 
     # ── Node info ────────────────────────────────────────────────────
     GetHeightParams:
@@ -2458,13 +2460,20 @@ components:
         wallet_height:
           type: integer
           format: int64
-          description: Wallet synced height; always present (local state).
+          description: >-
+            Blocks the wallet has scanned through, counted like
+            daemon_height: 0 before the first scan, the newest scanned
+            block's height plus one after it, so a synced wallet equals
+            daemon_height. Always present (local state). refresh's and
+            rescan_blockchain's synced_height, and get_wallet_info's
+            wallet_height, are this number.
         daemon_height:
           type: integer
           format: int64
           nullable: true
           description: >-
-            Daemon chain height, or null when the daemon is unreachable. The
+            Daemon chain height (its block count, the daemon's own
+            get_height), or null when the daemon is unreachable. The
             wallet_height is still returned in that case so an offline or
             still-syncing node does not hide the wallet's own status.
 
@@ -2478,7 +2487,11 @@ components:
       properties:
         version:
           type: string
-          description: shekyl-wallet-rpc semver.
+          description: >-
+            The release this shekyl-wallet-rpc was built as, in the daemon's
+            spelling (3.1.0-alpha.11-release from a tagged build, the commit
+            in place of "release" otherwise). A bare cargo build is told no
+            release and reports 3.1.0-unknown.
         api_version:
           type: integer
           description: >
@@ -2894,7 +2907,7 @@ components:
             as either posture. Required: "no host" is an answer (rule 43).
 
             Values defined at this contract version: `market`,
-            `foundation_complete_tree`.
+            `support_complete_tree`.
 
             **Deliberately an open string, not a closed enum.** A serving
             posture is added by a later round, and a *response* enum would

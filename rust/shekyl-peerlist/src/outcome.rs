@@ -8,7 +8,7 @@
 
 use shekyl_net_address::NetworkAddress;
 use shekyl_relay_privacy::ConnectionId;
-use shekyl_transport_layer::{CloseCause, ConnectorId};
+use shekyl_transport_layer::{ConnectorId, DialFailure};
 
 /// Where an address offered to gray came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,17 +67,16 @@ pub enum DialOutcome {
     /// keeps its clock: the session did not stay. Anything else leaves the
     /// lists unchanged.
     Confirmed(NetworkAddress),
-    /// The channel never reached a well-formed response, or the peer is on
-    /// another network. An outstanding gray draw is dropped; a white
-    /// address stays white.
-    ///
-    /// The cause is the one the connector closed with, its proxy reply
-    /// code included. The lists do not read it. The dialer's
-    /// failed-address memory does, from this same report, so the list
-    /// write and the memory write cannot disagree about what happened.
-    DialFailed(NetworkAddress, CloseCause),
-    /// The peer's list was refused. As `DialFailed` for the lists.
-    PeerlistRefused(NetworkAddress),
+    /// The attempt failed. The channel never reached a well-formed response,
+    /// the peer is on another network, or the peer's list was refused.
+    /// The failure is the judge's input, as the layer that observed it
+    /// stamped it (`DIALER_OUTAGE_EVIDENCE.md` §2.2); what it does to the
+    /// address is the judge's verdict, which the lists perform. A refused
+    /// list is this variant: it carries the Levin layer's
+    /// [`DialFailure::refused_by_peer`], and the lists have no second arm
+    /// for it.
+    /// *`PeerlistRefused` — DELETED (2026-11-02, #1235).*
+    DialFailed(NetworkAddress, DialFailure),
     /// A payload was refused. No promotion and no demotion. An outstanding
     /// draw returns to drawable gray.
     PayloadRefused(NetworkAddress),
@@ -91,7 +90,6 @@ impl DialOutcome {
             Self::SessionAccepted(a)
             | Self::Confirmed(a)
             | Self::DialFailed(a, _)
-            | Self::PeerlistRefused(a)
             | Self::PayloadRefused(a) => a,
         }
     }

@@ -26,8 +26,8 @@
 //!
 //! **Boundary as of RP-2a.** Timing/measurement helpers and the feature-gated
 //! conformance suite remain library-side instruments. [`StemMap`] is
-//! production-linked: `shekyl-ffi` exposes it to C++ `net::dandelionpp::connection_map`,
-//! and the daemon's live stem routing executes this map. Epoch/fluff schedule
+//! production-linked: `shekyl-relay`'s epoch map holds it, and the daemon's
+//! live stem routing executes this map. Epoch/fluff schedule
 //! and embargo cuts are RP-3/RP-4. Do not treat a `stem_map` change as
 //! measurement-only.
 //!
@@ -144,6 +144,13 @@
 //! asio/tokio seam to maintain. Reason 2 is broken *then*, by the removal, not
 //! now — and doing it before the removal would buy the seam and pay for it until
 //! the C++ leaves.
+//!
+//! **2026-11-05: the removal happened.** The C++ relay path and its asio
+//! strand left with the C++ p2p host (`P2P_3_REMNANT_CUTOVER_BRIEF.md`). The
+//! relay owner, `shekyl-relay::owner`, is a tokio actor over this crate's
+//! `&mut self` state machines, so the p2p path has one reactor again —
+//! tokio's — and this crate is still a library the owner calls, which is the
+//! shape reason 2 prescribed.
 //!
 //! Cuprate's `net/levin` and `net/epee-encoding` were a genuinely different
 //! question. The levin half is LV-1 (`shekyl-levin`). The epee half is LV-2

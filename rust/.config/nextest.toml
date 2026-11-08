@@ -1,0 +1,60 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+# cargo-nextest settings for this workspace. nextest reads this file from
+# `.config/nextest.toml` under the workspace root. The `default` profile is
+# nextest's own and is left unchanged for local runs.
+#
+# CI's Rust job runs the workspace tests with `--profile ci`
+# (`.github/workflows/rust-audit-test.yml`). nextest runs each test in its
+# own process and runs tests from every test binary at once; `cargo test`
+# ran the binaries one after another, so a slow binary held the whole step.
+
+[profile.ci]
+# Run every test and report every failure, not just the first.
+fail-fast = false
+# A failing test runs once more. A test that then passes does not fail the
+# run, and it is not hidden either: `scripts/ci/nextest_report.py` lists
+# it under "Flaky" in the job summary and raises a warning on the pull
+# request. A test that fails both times fails the run.
+retries = 1
+# Name a test that is still running after a minute, again each minute, and
+# kill it at the thirtieth. The kill is a failure, so the retry above runs
+# it once more: a hung test fails by name within an hour, not at the job's
+# timeout five hours on. Thirty is about twice the slowest
+# green test seen: in #1285's run (2026-11-07), with every binary running
+# at once, the chain-rules trybuild test took 15m05s and six others 11m49s
+# to 14m40s.
+slow-timeout = { period = "60s", terminate-after = 30 }
+# The closing summary lists slow tests as well as failures, so the run
+# names the tests that set the step's length.
+final-status-level = "slow"
+# A failing test's output is printed when it fails and again after the
+# summary, where it is easy to find.
+failure-output = "immediate-final"
+
+[profile.ci.junit]
+# Written to target/nextest/ci/junit.xml, with each test's time. The Rust
+# job uploads it.
+path = "junit.xml"
+
+# The trybuild tests each run `cargo build` in one shared directory
+# (target/tests/trybuild), and cargo locks it for each build, so they
+# contend for it. The first to build on a cold directory compiles every
+# dependency there. In the first local nextest run the chain-rules one ran
+# 50 minutes, and the logging and mempool ones, waiting in test slots,
+# finished within seconds of it. The group gives them one slot, so none
+# sits in a lock wait holding another; the priority starts them first,
+# so the dependency compile happens at the start of the run, not in its
+# middle. This runs all five one after another; whether that chain beats
+# the slowest binary on CI's 4-core runner is for its JUnit timings to
+# say, and the group goes if it does not.
+[test-groups]
+trybuild = { max-threads = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(trybuild)'
+test-group = 'trybuild'
+priority = 100

@@ -41,14 +41,14 @@ use core::convert::Infallible;
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::{
-    challenge_nonce, draw_commit, pass_countersignature_message, select_draw, BundleBody,
-    BundleKept, BundleRecord, BundleRef, DrawableEpoch, DrawablePair, PassBitmap,
-    BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
+    assemble_bundle, challenge_nonce, draw_commit, pass_countersignature_message, select_draw,
+    sign_bundle_commitment, BundleBody, BundleKept, BundleRecord, BundleRef, DrawableEpoch,
+    DrawablePair, PassBitmap, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
 };
-use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSecretKey, HybridEd25519FnDsa};
-use shekyl_crypto_pq::signature::{
-    SignatureScheme as _, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE,
+use shekyl_crypto_pq::fn_dsa_hybrid::{
+    FnDsaHybridPublicKey, FnDsaHybridSecretKey, HybridEd25519FnDsa,
 };
+use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_RECEIPT};
 use shekyl_types::archival::ReceiptSignPk;
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
@@ -71,6 +71,12 @@ pub enum BundleRead {
     Revealed,
     /// [`BundleView::drawable_epoch`].
     DrawableEpoch,
+    /// [`BundleView::support_count`].
+    SupportCount,
+    /// [`BundleView::support_roster`].
+    SupportRoster,
+    /// [`BundleView::archive_width`].
+    ArchiveWidth,
 }
 
 /// The fault a [`FixtureBundleView`] raises, naming the read that failed.
@@ -89,13 +95,17 @@ pub struct FixtureBundleView {
     /// `count(h)`. A height with no entry has no draw state.
     pub counts: BTreeMap<BlockHeight, u32>,
     /// Each block's `0x0C`.
-    pub commitments: BTreeMap<BlockHeight, [u8; 32]>,
+    pub commitments: BTreeMap<BlockHeight, shekyl_types::archival::DrawCommitment>,
     /// The `(h, index)` at which a pair is visibly short.
     pub short: BTreeSet<(BlockHeight, u64)>,
     /// The blocks whose bundle is already admitted.
     pub revealed: BTreeSet<BlockHeight>,
     /// The `h_open(E)` drawable epochs, by the epoch asked for.
     pub drawable_epochs: BTreeMap<SettlementEpoch, DrawableEpoch>,
+    /// Complete trees scheduled at a block, in bitmap order.
+    pub support_roster: BTreeMap<BlockHeight, Vec<crate::archival::SupportSeat>>,
+    /// The archive width a support draw selects from.
+    pub archive_width: BTreeMap<BlockHeight, std::num::NonZeroU64>,
     /// The one read that faults, if any.
     pub fault: Option<BundleRead>,
     /// Every read made, in order.
@@ -161,7 +171,10 @@ impl BundleView for FixtureBundleView {
         Ok(self.counts.get(&h).copied())
     }
 
-    fn draw_commitment(&self, h: BlockHeight) -> Result<Option<[u8; 32]>, BundleReadFaulted> {
+    fn draw_commitment(
+        &self,
+        h: BlockHeight,
+    ) -> Result<Option<shekyl_types::archival::DrawCommitment>, BundleReadFaulted> {
         self.read(BundleRead::DrawCommitment)?;
         Ok(self.commitments.get(&h).copied())
     }
@@ -188,6 +201,32 @@ impl BundleView for FixtureBundleView {
         self.read(BundleRead::DrawableEpoch)?;
         Ok(self.drawable_epochs.get(&epoch))
     }
+
+    fn support_count(&self, h: BlockHeight) -> Result<Option<u32>, BundleReadFaulted> {
+        self.read(BundleRead::SupportCount)?;
+        Ok(Some(
+            u32::try_from(self.support_roster.get(&h).map(Vec::len).unwrap_or(0))
+                .unwrap_or(u32::MAX),
+        ))
+    }
+
+    fn support_roster(
+        &self,
+        h: BlockHeight,
+    ) -> Result<Option<Vec<crate::archival::SupportSeat>>, BundleReadFaulted> {
+        self.read(BundleRead::SupportRoster)?;
+        Ok(Some(
+            self.support_roster.get(&h).cloned().unwrap_or_default(),
+        ))
+    }
+
+    fn archive_width(
+        &self,
+        h: BlockHeight,
+    ) -> Result<Option<std::num::NonZeroU64>, BundleReadFaulted> {
+        self.read(BundleRead::ArchiveWidth)?;
+        Ok(self.archive_width.get(&h).copied())
+    }
 }
 
 /// One persona of the fixture: its id, its receipt key pair, the shards
@@ -202,6 +241,70 @@ pub struct FixturePersona {
     pub receipt_secret_key: FnDsaHybridSecretKey,
     /// The shards it holds at `h_open(E)`.
     pub shards: Vec<u64>,
+}
+
+impl FixturePersona {
+    /// The persona's receipt key, parsed, as a seat carries it.
+    ///
+    /// # Panics
+    ///
+    /// Never for a fixture persona: its key came from a keypair.
+    #[must_use]
+    pub fn receipt_key(&self) -> FnDsaHybridPublicKey {
+        FnDsaHybridPublicKey::from_receipt_sign_pk(&self.receipt_public_key)
+            .expect("a fixture key parses")
+    }
+}
+
+/// A record's anchor: the block a read was anchored to, and its hash.
+#[derive(Clone, Copy, Debug)]
+pub struct Anchor {
+    /// Below the issuing block (`anchor_height < h`).
+    pub height: BlockHeight,
+    /// The anchor block's hash on the chain the bundle is judged against.
+    pub hash: BlockHash,
+}
+
+/// The record a pass files, with the receipt `P` would have signed: the
+/// receipt is `secret_key`'s signature, under the receipt scheme's domain,
+/// over the pass transcript of `stream`, `nonce`, `anchor`, `shard_id` and
+/// a fixed delivery digest. What stands in for `P` serving the read, for a
+/// fixture that drives admission without a serving host; the verifier
+/// checks the receipt and the anchor, never the bytes served.
+///
+/// # Panics
+///
+/// If signing fails.
+#[must_use]
+pub fn signed_record(
+    secret_key: &FnDsaHybridSecretKey,
+    stream: shekyl_archival_retention::PassStream,
+    nonce: &[u8; 32],
+    anchor: Anchor,
+    shard_id: u64,
+    attempt: u8,
+) -> BundleRecord {
+    let delivery_digest = [0xDD; 32];
+    let transcript = pass_countersignature_message(
+        stream,
+        nonce,
+        anchor.height,
+        anchor.hash.as_bytes(),
+        shard_id,
+        &delivery_digest,
+    );
+    let receipt: [u8; BUNDLE_SIGNATURE_LEN] = HybridEd25519FnDsa
+        .sign(secret_key, SCHEME_DOMAIN_RECEIPT, &transcript)
+        .expect("fixture receipt signing")
+        .to_canonical_bytes()
+        .try_into()
+        .expect("the canonical signature length");
+    BundleRecord {
+        attempt,
+        anchor_height: anchor.height,
+        delivery_digest,
+        receipt,
+    }
 }
 
 /// A producer, three personas and the chain they are on: enough to build
@@ -282,8 +385,17 @@ impl BundleWorld {
             .expect("the canonical key length");
 
         let epoch = rule_set.settlement_schedule().epoch_at(h);
+        // The archive spans every fixture shard; no complete tree is a
+        // member (a test seats one through `support_roster`).
+        let roster = personas
+            .iter()
+            .flat_map(|p| p.shards.iter().copied())
+            .max()
+            .and_then(|top| std::num::NonZeroU64::new(top + 1))
+            .map(shekyl_archival_retention::SupportRoster::empty);
         let drawable = DrawableEpoch::new(
             epoch,
+            roster,
             personas.iter().map(|p| (p.persona, &p.receipt_public_key)),
             personas.iter().flat_map(|p| {
                 p.shards.iter().map(|shard| DrawablePair {
@@ -299,8 +411,13 @@ impl BundleWorld {
             ..FixtureBundleView::default()
         };
         view.counts.insert(h, count);
-        view.commitments
-            .insert(h, draw_commit(&witness_public_key, &seed));
+        view.commitments.insert(
+            h,
+            shekyl_types::archival::DrawCommitment::from_bytes(draw_commit(
+                &witness_public_key,
+                &seed,
+            )),
+        );
         view.drawable_epochs.insert(epoch, drawable);
 
         Self {
@@ -350,7 +467,7 @@ impl BundleWorld {
         // `Err` arm is uninhabited, so the `let` is irrefutable.
         let Ok(selected) = select_draw(
             &self.seed,
-            hash.as_bytes(),
+            &hash,
             draw,
             self.drawable_epoch().len(),
             |index| Ok::<_, Infallible>(self.view.short.contains(&(self.h, index))),
@@ -377,7 +494,7 @@ impl BundleWorld {
             .view
             .chain_block_hash(self.h)
             .expect("the block is at or below the fixture chain's tip");
-        let nonce = challenge_nonce(&self.seed, hash.as_bytes(), draw, attempt);
+        let nonce = challenge_nonce(&self.seed, &hash, draw, attempt);
         let index = self.selected(draw);
         self.record_signed_over(index, attempt, anchor, &nonce)
     }
@@ -409,6 +526,7 @@ impl BundleWorld {
             pair.shard.to_raw(),
             attempt,
             anchor,
+            shekyl_archival_retention::PassStream::Economy,
             nonce,
         )
     }
@@ -428,32 +546,24 @@ impl BundleWorld {
         shard_id: u64,
         attempt: u8,
         anchor: BlockHeight,
+        stream: shekyl_archival_retention::PassStream,
         nonce: &[u8; 32],
     ) -> BundleRecord {
-        let delivery_digest = [0xDD; 32];
         let anchor_hash = self
             .view
             .chain_block_hash(anchor)
             .expect("anchor is at or below the fixture chain's tip");
-        let transcript = pass_countersignature_message(
+        signed_record(
+            secret_key,
+            stream,
             nonce,
-            anchor,
-            anchor_hash.as_bytes(),
+            Anchor {
+                height: anchor,
+                hash: anchor_hash,
+            },
             shard_id,
-            &delivery_digest,
-        );
-        let receipt: [u8; BUNDLE_SIGNATURE_LEN] = HybridEd25519FnDsa
-            .sign(secret_key, SCHEME_DOMAIN_RECEIPT, &transcript)
-            .expect("fixture receipt signing")
-            .to_canonical_bytes()
-            .try_into()
-            .expect("the canonical signature length");
-        BundleRecord {
             attempt,
-            anchor_height: anchor,
-            delivery_digest,
-            receipt,
-        }
+        )
     }
 
     /// The bundle an honest producer files when exactly `passes` passed,
@@ -485,24 +595,56 @@ impl BundleWorld {
         passes: PassBitmap,
         records: &[BundleRecord],
     ) -> (BundleRef, BundleBody) {
+        self.assemble_support(passes, PassBitmap::none(), records)
+    }
+
+    /// A record signed by persona `index` for `shard` under `stream`.
+    #[must_use]
+    pub fn persona_record(
+        &self,
+        index: usize,
+        shard: u64,
+        stream: shekyl_archival_retention::PassStream,
+        nonce: &[u8; 32],
+    ) -> BundleRecord {
+        let persona = &self.personas[index];
+        self.record_signed_by(
+            &persona.receipt_secret_key,
+            shard,
+            0,
+            self.honest_anchor(),
+            stream,
+            nonce,
+        )
+    }
+
+    /// [`Self::assemble`] with a support bitmap. Economy records come
+    /// first; support records follow, one per set support bit. Assembled
+    /// by the production assembler, signed with the world's witness key.
+    ///
+    /// # Panics
+    ///
+    /// If signing fails.
+    #[must_use]
+    pub fn assemble_support(
+        &self,
+        passes: PassBitmap,
+        support: PassBitmap,
+        records: &[BundleRecord],
+    ) -> (BundleRef, BundleBody) {
         let kept = BundleKept {
             h: self.h,
             seed: self.seed,
             passes,
+            support,
         };
-        let records_bytes: Vec<u8> = records.iter().flat_map(BundleRecord::encode).collect();
-        let commitment = kept.commitment(&records_bytes);
-        let signature: [u8; BUNDLE_SIGNATURE_LEN] = HybridEd25519FnDsa
-            .sign(
-                &self.witness_secret_key,
-                SCHEME_DOMAIN_WITNESS_BUNDLE,
-                &commitment,
-            )
-            .expect("fixture witness signing")
-            .to_canonical_bytes()
-            .try_into()
-            .expect("the canonical signature length");
-        let body = BundleBody::new(&self.witness_public_key, &signature, records);
-        (BundleRef::of(&kept, &body), body)
+        assemble_bundle(
+            &crate::HARNESS_NETWORK_ID,
+            &kept,
+            records,
+            &self.witness_public_key,
+            |commitment| sign_bundle_commitment(&self.witness_secret_key, commitment),
+        )
+        .expect("fixture witness signing")
     }
 }

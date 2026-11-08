@@ -40,8 +40,8 @@ Three consequences follow immediately:
   Both re-draw per epoch. A hidden-address pool of one is a degraded state
   the node reports (`hop-0 edge cannot rotate`), not a configuration it
   accepts quietly. **UPDATE 2026-10-07:** that pool's target is
-  `MIN_PROVISIONED_OUT_PEERS` (12). The warning is a pool of one, and it
-  does not name a target. *Records-was: the managed Tor zone opens
+  `MIN_PROVISIONED_OUT_PEERS` (12). The report is a pool of one, an info
+  line (`DAEMON_RELAY_PRIVACY.md` §98.5), and it does not name a target. *Records-was: the managed Tor zone opens
   `HOP0_OUTBOUND_TARGET` (4) outbound connections so that pool has the
   paper's degree to rotate over.*
   `--out-peers` does not change the address-hiding target. A live own-edge is not
@@ -327,3 +327,13 @@ Discharged in the 2026-09-12 recording change that landed this document.
   claim, not a new ruling.
 - [`FOLLOWUPS.md`](../FOLLOWUPS.md): one pre-genesis row for the §8 measurement,
   blocker named as the falsifier chain's first link.
+
+## 10. A complete-tree fetch can show a holding set — reported 2026-10-22
+
+`ARCHIVAL_SUPPORT_DRAW.md` §8. Each read builds its own circuit
+(`SF-D3`). Nothing spreads the fetches of one new holding over time or
+across sources, so a complete-tree server asked for many shards of that
+holding sees the set. A later bond for the same set is the link the
+bond-post delay is there to break. Reported to that round
+(`ARCHIVAL_BOND_POST_DELAY.md` §6.1). Not fixed here. BD-Q4's window
+width is still open.

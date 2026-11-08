@@ -8,6 +8,7 @@
 
 use crate::diagnostic::{Code, Diagnostic, Source};
 use crate::kind::Kind;
+use shekyl_network::{Lever, Network, Staging};
 
 /// Where a row may be given (IG-7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,29 +35,22 @@ impl Surface {
     }
 }
 
-/// The grant under which `option show` discloses a row (IG-9, RT-O24).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Grant {
-    /// What a client needs to decide whether it can use the node now.
-    Health,
-    /// This node's own settings that say nothing lasting about it.
-    Status,
-    /// The peer, closed-peer and ban rows.
-    Peers,
-    /// Everything else; the default.
-    Config,
-}
+/// The grant under which `option show` discloses a row (IG-9, RT-O24): the
+/// daemon RPC's own grants (`shekyl-rpc-grants`), one vocabulary for the RPC
+/// and the option table. Rows name `Health`, `Status`, `Peers` or `Config`;
+/// `Config` is the default.
+pub use shekyl_rpc_grants::Grant;
 
 /// Whether a name is live, and how it is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Visibility {
     /// Accepted and in help.
     Public,
-    /// A development lever (IG-8): accepted only on the named networks,
-    /// never on mainnet, hidden from help, announced when set.
+    /// A development lever (IG-8): accepted only on the networks whose row
+    /// admits its gate, hidden from help, announced when set.
     Dev {
-        /// The networks the lever is accepted on.
-        networks: &'static [&'static str],
+        /// What admits it: the network's row decides (NI-R6, NI-R9).
+        gate: DevGate,
     },
     /// A feature deliberately refused (IG-10); never accepted.
     Rejected {
@@ -68,6 +62,41 @@ pub enum Visibility {
         /// What the name is held for, and where that is ruled.
         reason: &'static str,
     },
+}
+
+/// What admits a development row: a lever the network's row permits
+/// (`NETWORK_IDENTITY.md` NI-R6), or a staging flag it stages (NI-R9). The
+/// row is the one place that answers; mainnet's row admits nothing, which
+/// `shekyl-network`'s invariant tests hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DevGate {
+    /// A test lever.
+    Lever(Lever),
+    /// A candidate mainnet behaviour staged on the test networks.
+    Staging(Staging),
+}
+
+impl DevGate {
+    /// Whether `network`'s row admits it.
+    #[must_use]
+    pub fn admits(self, network: Network) -> bool {
+        match self {
+            Self::Lever(lever) => network.permits(lever),
+            Self::Staging(flag) => network.stages(flag),
+        }
+    }
+
+    /// The networks that admit it, by name, comma-separated: what a refusal
+    /// and the rendered table say.
+    #[must_use]
+    pub fn networks(self) -> String {
+        Network::ALL
+            .into_iter()
+            .filter(|n| self.admits(*n))
+            .map(Network::name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// A row's default (IG-9).
@@ -175,10 +204,11 @@ impl Table {
     }
 
     /// The table's own defects: a malformed name (IG-1), a name defined
-    /// twice (IG-5), a switch that is on by default (IG-4), a runtime row
-    /// that is a secret or has no default value (IG-12), a development
-    /// lever that names no network or names mainnet (IG-8). Empty means the
-    /// table is well formed.
+    /// twice (IG-5), a grant that does not disclose an option row (RT-O24),
+    /// a switch that is on by default (IG-4), a runtime row that is a
+    /// secret or has no default value (IG-12), a development lever that
+    /// names no network or names mainnet (IG-8). Empty means the table is
+    /// well formed.
     #[must_use]
     pub fn defects(&self) -> Vec<String> {
         let mut out = Vec::new();
@@ -194,6 +224,14 @@ impl Table {
             }
             if self.rows[..i].iter().any(|r| r.name == name) {
                 out.push(format!("`{name}` is defined twice"));
+            }
+            // Every row, including one that is not live: a reserved name
+            // still says which grant would disclose it.
+            if !row.grant.discloses_option_row() {
+                out.push(format!(
+                    "`{name}` names the {} grant, which does not disclose an option row",
+                    row.grant.name()
+                ));
             }
             if !row.is_live() {
                 continue;
@@ -219,14 +257,9 @@ impl Table {
                     "`{name}` is a file-only kind given another surface"
                 ));
             }
-            if let Visibility::Dev { networks } = row.visibility {
+            if let Visibility::Dev { .. } = row.visibility {
                 if !name.starts_with("dev-") {
                     out.push(format!("`{name}` is a development lever not under `dev`"));
-                }
-                if networks.is_empty() || networks.contains(&"mainnet") {
-                    out.push(format!(
-                        "development lever `{name}` must name networks, never mainnet"
-                    ));
                 }
             } else if name.starts_with("dev-") && row.is_live() {
                 out.push(format!(
@@ -292,7 +325,7 @@ mod tests {
             runtime: false,
             grant: Grant::Config,
             visibility: Visibility::Dev {
-                networks: &["regtest"],
+                gate: DevGate::Lever(Lever::Difficulty),
             },
             help: "",
         },
@@ -329,6 +362,31 @@ mod tests {
     #[test]
     fn the_test_table_is_well_formed() {
         assert_eq!(TABLE.defects(), Vec::<String>::new());
+    }
+
+    /// A row's grant is one of the four that disclose an option, and a
+    /// reserved row is not exempt: the name still says what would show it.
+    #[test]
+    fn a_row_that_names_chain_is_a_defect_even_when_reserved() {
+        const ROWS: &[Row] = &[Row {
+            name: "held",
+            kind: Kind::Switch,
+            default: Default::Unset,
+            surface: Surface::File,
+            runtime: false,
+            grant: Grant::Chain,
+            visibility: Visibility::Reserved { reason: "held" },
+            help: "",
+        }];
+        let defects = Table {
+            binary: "test",
+            rows: ROWS,
+        }
+        .defects();
+        assert_eq!(
+            defects,
+            vec!["`held` names the chain grant, which does not disclose an option row".to_owned()]
+        );
     }
 
     #[test]
@@ -388,7 +446,7 @@ mod tests {
                 runtime: false,
                 grant: Grant::Config,
                 visibility: Visibility::Dev {
-                    networks: &["mainnet"],
+                    gate: DevGate::Lever(Lever::Sync),
                 },
                 help: "",
             },
@@ -411,7 +469,6 @@ mod tests {
         let all = defects.join("\n");
         for needle in [
             "must default to off",
-            "never mainnet",
             "runtime and a secret",
             "no default value",
             "file-only kind",

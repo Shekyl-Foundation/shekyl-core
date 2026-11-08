@@ -31,6 +31,12 @@ shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 # The regtest handshake advertises the id derived from fakechain's genesis
 # pin. Dev-only: production Levin does not know which network it is on.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# The live gates pace at clearnet's accept row (`accept_bound`). Dev-only:
+# production Levin does not admit sockets.
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+# Bind a simulated peer to its own loopback address before connecting,
+# without unsafe code. Already in the workspace lockfile (through tokio).
+socket2 = "0.6"
 
 [lints]
 workspace = true

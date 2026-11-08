@@ -28,6 +28,7 @@ use shekyl_mempool::{judge, Admission, Duplicate, Judged, KeyImages, Pool};
 use shekyl_types::{BlockHeight, UnixSeconds};
 use shekyl_wire::Transaction;
 
+use crate::chain_drive::RELAY_FEE_REPRICE_STEPS;
 use crate::scenario::{FreeHash, Mined, Scenario, StepOutcome};
 use crate::test_support::{h, tmp, Family, FIRST_SPEND_HEIGHT};
 
@@ -76,6 +77,7 @@ async fn door(scenario: &mut Scenario<FreeHash>, tx: &Transaction) -> (Verdict, 
                 view,
                 &KeyImages::default(),
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
                 None,
             )
@@ -116,26 +118,23 @@ pub(crate) async fn paying_the_floor(
     mined: &[Mined],
     coinbase: u64,
 ) -> Transaction {
-    let floor = scenario
-        .read_chain(|view, _| {
-            let connecting = shekyl_chain_rules::Tip::connecting_height(
-                shekyl_chain_rules::HeaderView::tip(view)
-                    .expect("tip")
-                    .as_ref(),
-            );
-            match shekyl_chain_rules::relay_floor_window(view, connecting).expect("floors") {
-                shekyl_chain_rules::AtHeight::Recorded(floors) => {
-                    floors.into_iter().min().expect("a window")
-                }
-                shekyl_chain_rules::AtHeight::AboveTip => unreachable!("the connecting height"),
-            }
-        })
-        .await;
+    paying_the_floor_at(scenario, mined, coinbase, h(AT)).await
+}
+
+/// [`paying_the_floor`] listed in the block connecting at `connecting`, so
+/// its reference is the newest one admissible there.
+pub(crate) async fn paying_the_floor_at(
+    scenario: &mut Scenario<FreeHash>,
+    mined: &[Mined],
+    coinbase: u64,
+    connecting: BlockHeight,
+) -> Transaction {
+    let floor = scenario.connecting_relay_floor().await;
     let spender = Spender::over(mined);
     let wallet = scenario.wallet();
     let mut fee = Family::Main.fee();
-    for _ in 0..8 {
-        let tx = spender.spend_coinbase(wallet, h(coinbase), h(AT), fee);
+    for _ in 0..RELAY_FEE_REPRICE_STEPS {
+        let tx = spender.spend_coinbase(wallet, h(coinbase), connecting, fee);
         let weight = u64::try_from(tx.weight()).expect("a weight fits");
         let needed = shekyl_economics::quantized_fee(weight, floor).expect("priceable");
         if needed == fee {
@@ -287,6 +286,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("open");
@@ -357,6 +357,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("reopen");
@@ -370,7 +371,6 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
         })
         .await;
     assert_eq!(mined_dup, Admission::Duplicate(Duplicate::OnChain));
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -393,6 +393,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("open");
@@ -412,7 +413,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 (
                     pool.listing().any(|(id, _)| id == txid),
                     pool.peer_sync().any(|(id, _)| id == txid),
-                    template.transactions.iter().any(|(id, _)| *id == txid),
+                    template.transactions.iter().any(|body| body.id == txid),
                     pool.unpublished().any(|(id, _)| id == txid),
                 )
             };
@@ -426,6 +427,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("reopen");
@@ -443,6 +445,5 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
         "fluffed: in the listing, peer sync and the template"
     );
     assert_eq!(reopened, after, "the public bit survives a restart");
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }

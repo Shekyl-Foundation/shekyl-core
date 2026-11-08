@@ -438,7 +438,7 @@ mod tx_weight_kat;
 pub mod view_material;
 
 pub use capability::Capability;
-pub use daemon::{DaemonClient, DaemonExpectation, FakechainPolicy};
+pub use daemon::{DaemonClient, DaemonExpectation};
 pub use diagnostics::{
     BuildErrorKind, BuildRequestSummary, DaemonOp, DiagnosticSink, DiscardReason, MalformedKind,
     NoopDiagnosticSink, PendingTxDiagnostic, ProtocolErrorKind, RefreshDiagnostic, SuppressedClass,
@@ -642,11 +642,14 @@ pub struct Engine<
     /// which owns the FCMP++ [`CurveTreeClient`](shekyl_curve_tree::CurveTreeClient)
     /// — the `redb`-backed leaf store living beside the wallet files (CT-5,
     /// `docs/design/CT5_ENGINE_WIRING.md` §3.1). Opened and spawned in
-    /// [`assemble`](Self::assemble); its `Drop` (last handle clone going away)
-    /// stops the actor and closes the store on engine close. Unlike `key` the
-    /// curve tree carries **no secret** (public on-chain material only), so the
-    /// actor has no `on_stop` zeroization; durability is per-ingest, not
-    /// at-close, so the async actor shutdown loses nothing.
+    /// [`assemble`](Self::assemble); [`Engine::release`] stops the actor and
+    /// awaits it, and the actor drops the store in `on_stop`, so the file is
+    /// closed when the release returns (`CURVE_TREE_CLIENT.md` §11). Unlike
+    /// `key` the curve tree carries **no secret** (public on-chain material
+    /// only); durability is per-ingest, not at-close. *Premise refuted
+    /// (2026-11-02):* this said the handle's drop closed the store on engine
+    /// close and that the unawaited shutdown lost nothing; it lost the file
+    /// lock's release, which a reopen then raced.
     //
     // The handle is read on the merge ingest path (`handle.ingest` /
     // `rollback_to_fork`, CT-5a commits 4–5) and the spend-gate cursor read, so

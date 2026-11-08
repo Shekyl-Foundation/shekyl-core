@@ -22,20 +22,24 @@ use shekyl_capped_stream::{
 };
 use shekyl_levin::{HandshakeFrame, HandshakeKind};
 use shekyl_net_address::NetworkAddress;
-use shekyl_p2p_transport::NetworkId;
+use shekyl_p2p_transport::{NetworkId, INITIATOR_FLIGHT_LEN};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_socks::{connect as socks_connect, Destination, Proxy, ProxyWarn, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, OwnerHandle, Tick};
 use shekyl_transport_layer::{
-    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, OpenSocket, Sockets,
+    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, DialEnd, OpenError, OpenSocket,
+    Sockets,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::handshake::{self, Setup};
+use crate::linger::Linger;
 use crate::seam::{SeamRecv, SeamSend};
+use crate::sizes::{SizeTap, Way};
+use crate::stamping::{read_side_end, write_side_end, Observed};
 use crate::{ChannelChoice, HandshakeTally, Session};
 
 #[derive(Clone, Copy)]
@@ -61,6 +65,18 @@ pub struct Admitted {
     pub gap: Option<oneshot::Sender<()>>,
 }
 
+/// Where a connected socket is published.
+///
+/// Called on the accept or dial task. `false` means the publisher is gone
+/// and the connector ends the connection as its own failure.
+pub type Publish = Arc<dyn Fn(Admitted) -> bool + Send + Sync>;
+
+/// Publish onto a channel. `false` is a closed receiver.
+#[must_use]
+pub fn publish_on(tx: mpsc::UnboundedSender<Admitted>) -> Publish {
+    Arc::new(move |admitted| tx.send(admitted).is_ok())
+}
+
 pub struct Dial {
     pub address: NetworkAddress,
     pub proxy: Option<Proxy>,
@@ -78,14 +94,19 @@ pub struct Dial {
     /// waiting on this socket.
     pub gap_within: Option<Tick>,
     pub tally: Arc<HandshakeTally>,
-    pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
+    /// How the dial ended, stamped by this connector: the first call is the
+    /// dial's failure before the channel, or the session's end after it.
+    pub on_end: Arc<dyn Fn(DialEnd) + Send + Sync>,
     pub send_queue_bytes: usize,
     /// The one place a connected socket is published.
-    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub admitted: Publish,
 }
 
 pub struct Accept {
     pub stream: TcpStream,
+    /// Where a refused accept is closed: half-closed until its first
+    /// flight arrives (D10.2).
+    pub linger: Linger,
     pub sockets: Sockets,
     pub ceiling: InboundCeiling,
     pub kind: ChannelChoice,
@@ -97,13 +118,16 @@ pub struct Accept {
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
     /// The one place a connected socket is published.
-    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub admitted: Publish,
 }
 
 /// What an accept loop needs besides the socket it just took.
 ///
 /// `ceiling` is read on every accept, so a later change is visible.
 /// `gap_within` of `None` publishes the connection with no Levin deadline.
+/// `linger` is the connector's one task (D10.2): every accept loop clones
+/// the same handle, so the cap the daemon reserved once is the cap they
+/// share.
 pub struct Inbound<F> {
     pub sockets: Sockets,
     pub ceiling: F,
@@ -114,7 +138,8 @@ pub struct Inbound<F> {
     pub tally: Arc<HandshakeTally>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
-    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub admitted: Publish,
+    pub linger: Linger,
     pub backoff: Duration,
 }
 
@@ -138,6 +163,7 @@ where
         };
         let accept = Accept {
             stream,
+            linger: inbound.linger.clone(),
             sockets: inbound.sockets.clone(),
             ceiling: (inbound.ceiling)(),
             kind: inbound.kind,
@@ -158,7 +184,8 @@ where
     C: Clock + Clone + Send + 'static,
 {
     let Accept {
-        mut stream,
+        stream,
+        linger,
         sockets,
         ceiling,
         kind,
@@ -171,23 +198,24 @@ where
         admitted,
     } = accept;
     let Ok(peer) = stream.peer_addr() else {
-        finish_before_channel(&mut stream, &on_cause, CloseKind::TransportHandshakeFailed).await;
+        finish_before_channel(stream, &on_cause, CloseKind::TransportHandshakeFailed).await;
         return;
     };
     let now = engine.clock().now();
     let reserved = match sockets.accept_clearnet(peer.ip(), ceiling, now) {
         Ok(open) => open,
         Err(OpenError::Refused(cause)) => {
-            drop(stream.shutdown().await);
+            linger.close(stream).await;
             on_cause(cause);
             return;
         }
         Err(OpenError::Exhausted) => {
-            finish_before_channel(&mut stream, &on_cause, CloseKind::AdmissionRefused).await;
+            linger.close(stream).await;
+            on_cause(CloseCause::new(CloseKind::AdmissionRefused));
             return;
         }
     };
-    let cause = serve(
+    let end = serve(
         stream,
         engine,
         &reserved,
@@ -204,8 +232,8 @@ where
         },
     )
     .await;
-    settle(reserved, cause);
-    on_cause(cause);
+    settle(reserved, end.cause());
+    on_cause(end.cause());
 }
 
 /// The operator's clearnet SOCKS proxy refused the dial's authentication,
@@ -215,7 +243,7 @@ static AUTH_WARN: std::sync::Mutex<ProxyWarn> = std::sync::Mutex::new(ProxyWarn:
 /// The proxy refused this node's authentication (`DAEMON_CONFIG_CUTOVER.md`
 /// DC-Q7): this node's own proxy failing, so it names the rows that fix it
 /// and not the peer, and its kind does not feed the peer's forget.
-fn proxy_refused_authentication(proxy: &Proxy, error: &SocksError) -> CloseCause {
+fn proxy_refused_authentication(proxy: &Proxy, error: &SocksError) -> Observed {
     let due = AUTH_WARN
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -225,7 +253,7 @@ fn proxy_refused_authentication(proxy: &Proxy, error: &SocksError) -> CloseCause
     {
         tracing::warn!(failed_dials_since_last_warning = unnamed, "{text}");
     }
-    CloseCause::new(CloseKind::ProxyUnavailable)
+    Observed::ProxyAuthentication
 }
 
 pub async fn dial_one<C>(dial: Dial, engine: Handle<C>)
@@ -243,24 +271,39 @@ where
         handshake_within,
         gap_within,
         tally,
-        on_cause,
+        on_end,
         send_queue_bytes,
         admitted,
     } = dial;
-    if let Err(cause) = check_dial(ConnectorId::Clearnet, &address) {
-        on_cause(cause);
+    // An address this connector cannot dial is this node's own failure.
+    if check_dial(ConnectorId::Clearnet, &address).is_err() {
+        on_end(Observed::OwnFailure.end());
         return;
     }
     let Some((ip, port)) = socket_of(&address) else {
-        on_cause(CloseCause::new(CloseKind::LocalClose));
+        on_end(Observed::OwnFailure.end());
         return;
     };
     let dest = SocketAddr::new(ip, port);
     let target = proxy.as_ref().map_or(dest, Proxy::at);
+    // Admission before the connect: a host banned between the draw and
+    // here is refused with no SYN sent, and the socket's slot is held for
+    // the connect as its descriptor is.
+    let reserved = match sockets.open_clearnet(ip) {
+        Ok(open) => open,
+        Err(OpenError::Refused(cause)) => {
+            on_end(Observed::RefusedHere(cause).end());
+            return;
+        }
+        Err(OpenError::Exhausted) => {
+            on_end(Observed::OwnFailure.end());
+            return;
+        }
+    };
     // The engine refused. That is the host, not the peer, so it does not
     // feed the address forget the way DialFailed does.
     let Ok(owner) = engine.register(OwnerClass::Transport) else {
-        on_cause(CloseCause::new(CloseKind::LocalClose));
+        settle_dial(reserved, Observed::OwnFailure.end(), &on_end);
         return;
     };
     let now = owner.clock().now();
@@ -276,7 +319,7 @@ where
     let deadline = Tick::new(now.get().saturating_add(within.get()));
     if owner.arm(deadline).is_err() {
         ignore(owner.deregister());
-        on_cause(CloseCause::new(CloseKind::LocalClose));
+        settle_dial(reserved, Observed::OwnFailure.end(), &on_end);
         return;
     }
     tracing::debug!(
@@ -288,30 +331,24 @@ where
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let connect = async {
         let dialed = Instant::now();
-        let mut stream = match TcpStream::connect(target).await {
+        // `target` is the proxy when one is configured, and the peer when it
+        // is not (`Observed::connect_error`). A socket the system cannot make
+        // is read as the connect's own error, as `TcpStream::connect` reported
+        // it: an address family this host lacks depends on the destination.
+        let socket = match dial_socket(target, proxy.is_none()) {
+            Ok(socket) => socket,
+            Err(err) => return Err(Observed::connect_error(err.kind(), proxy.is_some())),
+        };
+        let mut stream = match socket.connect(target).await {
             Ok(stream) => stream,
-            Err(err) => {
-                // `target` is the proxy when one is configured, and the peer
-                // when it is not. A closed SOCKS port is this node. On a
-                // direct dial, only the peer's RST names the address.
-                // Network unreachable, address not available, and permission
-                // denied are this node's link.
-                let kind = if proxy.is_some() {
-                    CloseKind::LocalClose
-                } else if err.kind() == std::io::ErrorKind::ConnectionRefused {
-                    CloseKind::DialFailed
-                } else {
-                    CloseKind::LocalClose
-                };
-                return Err(CloseCause::new(kind));
-            }
+            Err(err) => return Err(Observed::connect_error(err.kind(), proxy.is_some())),
         };
         if let Some(proxy) = &proxy {
             match socks_connect(&mut stream, proxy.isolation(), Destination::Ip(dest)).await {
                 Ok(()) => {}
                 Err(SocksError::Refused { reply }) => {
                     drop(stream.shutdown().await);
-                    return Err(CloseCause::proxy_refused(u16::from(reply)));
+                    return Err(Observed::ProxyReply(reply));
                 }
                 Err(error @ (SocksError::AuthRejected { .. } | SocksError::AuthFailed { .. })) => {
                     drop(stream.shutdown().await);
@@ -319,7 +356,7 @@ where
                 }
                 Err(SocksError::Io(_) | SocksError::Malformed) => {
                     drop(stream.shutdown().await);
-                    return Err(CloseCause::new(CloseKind::LocalClose));
+                    return Err(Observed::ProxyMalformed);
                 }
             }
         }
@@ -328,33 +365,17 @@ where
     tokio::pin!(connect);
     let connected = tokio::select! {
         biased;
-        result = wake.as_mut() => {
-            let kind = match result {
-                Ok(_) => CloseKind::TransportTimeout,
-                Err(_) => CloseKind::LocalClose,
-            };
-            Err(CloseCause::new(kind))
-        }
+        result = wake.as_mut() => Err(match result {
+            Ok(_) => Observed::Deadline,
+            Err(_) => Observed::OwnFailure,
+        }),
         result = &mut connect => result,
     };
     ignore(owner.deregister());
-    let (mut stream, connect_ns) = match connected {
+    let (stream, connect_ns) = match connected {
         Ok(pair) => pair,
-        Err(cause) => {
-            on_cause(cause);
-            return;
-        }
-    };
-    let now = engine.clock().now();
-    let reserved = match sockets.open_clearnet(ip, now) {
-        Ok(open) => open,
-        Err(OpenError::Refused(cause)) => {
-            drop(stream.shutdown().await);
-            on_cause(cause);
-            return;
-        }
-        Err(OpenError::Exhausted) => {
-            finish_before_channel(&mut stream, &on_cause, CloseKind::LocalClose).await;
+        Err(observed) => {
+            settle_dial(reserved, observed.end(), &on_end);
             return;
         }
     };
@@ -364,7 +385,7 @@ where
         proxied = proxy.is_some(),
         "clearnet dial connected"
     );
-    let cause = serve(
+    let end = serve(
         stream,
         engine,
         &reserved,
@@ -381,8 +402,12 @@ where
         },
     )
     .await;
-    settle(reserved, cause);
-    on_cause(cause);
+    settle_dial(reserved, end, &on_end);
+}
+
+fn settle_dial(open: OpenSocket, end: DialEnd, on_end: &Arc<dyn Fn(DialEnd) + Send + Sync>) {
+    settle(open, end.cause());
+    on_end(end);
 }
 
 fn settle(open: OpenSocket, cause: CloseCause) {
@@ -400,12 +425,52 @@ fn socket_of(address: &NetworkAddress) -> Option<(IpAddr, u16)> {
 }
 
 async fn finish_before_channel(
-    stream: &mut TcpStream,
+    stream: TcpStream,
     on_cause: &Arc<dyn Fn(CloseCause) + Send + Sync>,
     kind: CloseKind,
 ) {
-    drop(stream.shutdown().await);
+    close_before_channel(stream).await;
     on_cause(CloseCause::new(kind));
+}
+
+/// Close a connection refused at accept: FIN after zero bytes written, and
+/// never RST (D10.2's one behaviour for every failure before the channel).
+///
+/// Linux answers a close with unread bytes in the receive queue with RST,
+/// and a peer refused at accept has usually sent its first flight already.
+/// So the write side is shut first (the FIN), then what has already
+/// arrived, at most one initiator flight (D10.1), is read and dropped
+/// without waiting, and only then is the socket closed. Nothing here
+/// waits for the peer: a refused connection holds no task.
+pub(crate) async fn close_before_channel(mut stream: TcpStream) {
+    drop(stream.shutdown().await);
+    // `into_std` leaves the socket non-blocking, so each read takes only
+    // what the kernel already holds.
+    let Ok(socket) = stream.into_std() else {
+        return;
+    };
+    drain_initiator_flight(socket, INITIATOR_FLIGHT_LEN);
+}
+
+/// Drop up to `left` bytes the kernel already holds, without waiting.
+///
+/// The socket is non-blocking (`TcpStream::into_std` extracts the fd and
+/// does not clear that flag). A read therefore takes only what has
+/// arrived. Bytes still unread when the socket is dropped are what Linux
+/// answers with RST (D10.2), so both closes that must end in FIN — a
+/// refusal that does not linger, and a linger that has finished — drain
+/// here before the drop.
+pub(crate) fn drain_initiator_flight(mut socket: std::net::TcpStream, left: usize) {
+    let mut flight = [0u8; INITIATOR_FLIGHT_LEN];
+    let mut left = left.min(flight.len());
+    while left > 0 {
+        match std::io::Read::read(&mut socket, &mut flight[..left]) {
+            Ok(0) => break,
+            Ok(read) => left = left.saturating_sub(read),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
 }
 
 struct ChannelOpen {
@@ -437,7 +502,7 @@ struct ArmedGap<C: Clock> {
     established: oneshot::Sender<()>,
 }
 
-fn arm_gap<C>(engine: &Handle<C>, within: Option<Tick>) -> Result<Option<ArmedGap<C>>, CloseCause>
+fn arm_gap<C>(engine: &Handle<C>, within: Option<Tick>) -> Result<Option<ArmedGap<C>>, Observed>
 where
     C: Clock + Clone,
 {
@@ -446,12 +511,12 @@ where
     };
     let owner = engine
         .register(OwnerClass::Transport)
-        .map_err(|_| CloseCause::new(CloseKind::LocalClose))?;
+        .map_err(|_| Observed::OwnFailure)?;
     let now = owner.clock().now();
     let deadline = Tick::new(now.get().saturating_add(within.get()));
     if owner.arm(deadline).is_err() {
         ignore(owner.deregister());
-        return Err(CloseCause::new(CloseKind::LocalClose));
+        return Err(Observed::OwnFailure);
     }
     tracing::debug!(
         owner = ?owner.id(),
@@ -506,9 +571,9 @@ async fn serve<C>(
     stream: TcpStream,
     engine: Handle<C>,
     open: &OpenSocket,
-    admitted: &mpsc::UnboundedSender<Admitted>,
+    admitted: &Publish,
     job: ChannelOpen,
-) -> CloseCause
+) -> DialEnd
 where
     C: Clock + Clone + Send + 'static,
 {
@@ -533,18 +598,24 @@ where
     .await;
     let (mut writer, recv) = match opened {
         Ok(opened) => opened,
-        Err(kind) => {
-            let cause = CloseCause::new(kind);
-            inbound.seal(&hold, cause);
+        Err(observed) => {
+            let end = observed.end();
+            inbound.seal(&hold, end);
             drop(hold);
-            return cause;
+            return end;
         }
     };
     let (watch, gap_tx) = match arm_gap(&engine, job.gap_within) {
         Ok(Some(armed)) => (Some(armed.watch), Some(armed.established)),
         Ok(None) => (None, None),
-        Err(cause) => {
-            return end_connection(hold, &inbound, WriteJoin::Pending(&mut writer), cause).await;
+        Err(observed) => {
+            return end_connection(
+                hold,
+                &inbound,
+                WriteJoin::Pending(&mut writer),
+                observed.end(),
+            )
+            .await;
         }
     };
     let published = Admitted {
@@ -554,12 +625,12 @@ where
         port: job.peer.port(),
         gap: gap_tx,
     };
-    if admitted.send(published).is_err() {
+    if !admitted(published) {
         return end_connection(
             hold,
             &inbound,
             WriteJoin::Pending(&mut writer),
-            CloseCause::new(CloseKind::LocalClose),
+            Observed::OwnFailure.end(),
         )
         .await;
     }
@@ -593,7 +664,7 @@ where
                     hold,
                     &inbound_close,
                     WriteJoin::Pending(&mut writer),
-                    read_cause,
+                    read_side_end(read_cause),
                 )
                 .await;
             }
@@ -608,7 +679,7 @@ where
                             hold,
                             &inbound_close,
                             WriteJoin::Pending(&mut writer),
-                            CloseCause::new(CloseKind::LocalClose),
+                            DialEnd::local_close_after_channel(),
                         )
                         .await;
                     }
@@ -617,18 +688,18 @@ where
                             hold,
                             &inbound_close,
                             WriteJoin::Pending(&mut writer),
-                            CloseCause::new(CloseKind::LevinHandshakeTimeout),
+                            DialEnd::levin_handshake_timeout(),
                         )
                         .await;
                     }
                 }
             }
             write_cause = &mut writer => {
-                let cause = write_cause
+                let end = write_cause
                     .ok()
                     .flatten()
-                    .unwrap_or(CloseCause::new(CloseKind::LocalClose));
-                return end_connection(hold, &inbound_close, WriteJoin::Finished, cause).await;
+                    .map_or_else(DialEnd::local_close_after_channel, write_side_end);
+                return end_connection(hold, &inbound_close, WriteJoin::Finished, end).await;
             }
         }
     }
@@ -648,15 +719,15 @@ async fn end_connection(
     hold: QueueHold,
     inbound: &InboundEnd,
     writer: WriteJoin<'_>,
-    cause: CloseCause,
-) -> CloseCause {
-    inbound.seal(&hold, cause);
+    end: DialEnd,
+) -> DialEnd {
+    inbound.seal(&hold, end);
     drop(hold);
     if let WriteJoin::Pending(writer) = writer {
         writer.abort();
         drop(writer.await);
     }
-    cause
+    end
 }
 
 async fn open_channel<C>(
@@ -667,7 +738,7 @@ async fn open_channel<C>(
     outbound: ByteQueue,
     overfull: Arc<Overfull>,
     conn: u64,
-) -> Result<(tokio::task::JoinHandle<Option<CloseCause>>, SeamRecv), CloseKind>
+) -> Result<(tokio::task::JoinHandle<Option<CloseCause>>, SeamRecv), Observed>
 where
     C: Clock + Clone + Send + 'static,
 {
@@ -709,10 +780,10 @@ where
             .await
             {
                 Ok(recv) => Ok((writer, recv)),
-                Err(kind) => {
+                Err(observed) => {
                     drop(setup_tx);
                     drop(writer.await);
-                    Err(kind)
+                    Err(observed)
                 }
             }
         }
@@ -736,7 +807,7 @@ where
                 })
                 .is_err()
             {
-                return Err(CloseKind::LocalClose);
+                return Err(Observed::OwnFailure);
             }
             Ok((writer, recv))
         }
@@ -779,6 +850,7 @@ async fn write_half(
         }
     };
     let mut stall = shekyl_capped_stream::WriteStall::new(conn);
+    let mut sizes = SizeTap::new(Way::Sent, conn);
     let cause = write_capped(
         &mut write,
         &outbound,
@@ -786,6 +858,7 @@ async fn write_half(
         &node_gate(),
         &mut stall,
         |plain| {
+            sizes.feed(plain);
             seam.encode(plain)
                 .map(Cow::Owned)
                 .map_err(|_| CloseKind::RecordRejected)
@@ -807,6 +880,7 @@ async fn read_half(
 ) -> CloseCause {
     // The responder's timestamps (Rick, 2026-10-14): first byte read.
     let mut first_read = true;
+    let mut sizes = SizeTap::new(Way::Received, conn);
     // The peer's handshake frame, over the plaintext the seam hands up: it
     // ends the handshake gap.
     read_capped(&mut read, inbound, &overfull, &node_gate(), conn, |chunk| {
@@ -815,6 +889,9 @@ async fn read_half(
             tracing::debug!(conn, "clearnet first bytes read");
         }
         let plain = seam.push(chunk).map_err(|_| CloseKind::RecordRejected)?;
+        for piece in &plain {
+            sizes.feed(piece);
+        }
         if !handshake.complete() && plain.iter().any(|piece| handshake.feed(piece)) {
             frame.store(true, Ordering::Release);
         }
@@ -853,16 +930,117 @@ pub fn zero_tally() -> HandshakeTally {
     }
 }
 
+/// A direct dial's SYN retransmissions, where the system lets the dial set
+/// them (Windows): one resend of a lost SYN, at +1.0 s inside the 1.415 s
+/// direct dial deadline, as Linux makes, and one retry after a reset, so a
+/// refusal is reported in about 0.5 s. Windows' default retries a refusal for
+/// about 2.0 s, past that deadline, and a refusing peer then ended as the
+/// deadline's timeout instead of its refusal (measured on Windows 11,
+/// shekyl-dev `data/windows-refused-connect/`, 2026-11-03). The value is the
+/// direct deadline's: a dial to the operator's proxy runs against the proxied
+/// deadline, the Tor dial's 120 s, which the system's own retries fit inside,
+/// so its socket keeps them.
+#[cfg(windows)]
+const SYN_RETRANSMISSIONS: u8 = 1;
+
+/// The socket for one dial to `target`: the peer when `direct`, or the
+/// operator's proxy. Only a direct dial's socket takes
+/// [`SYN_RETRANSMISSIONS`].
+fn dial_socket(target: SocketAddr, direct: bool) -> std::io::Result<TcpSocket> {
+    let socket = if target.is_ipv4() {
+        TcpSocket::new_v4()?
+    } else {
+        TcpSocket::new_v6()?
+    };
+    #[cfg(windows)]
+    if direct {
+        cap_syn_retransmissions(&socket);
+    }
+    #[cfg(not(windows))]
+    let _ = direct;
+    Ok(socket)
+}
+
+/// Apply [`SYN_RETRANSMISSIONS`]. A system that refuses the option still
+/// dials, with its default retries, and says so once.
+#[cfg(windows)]
+fn cap_syn_retransmissions(socket: &TcpSocket) {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if let Err(err) = shekyl_win_sec::cap_syn_retransmissions(socket, SYN_RETRANSMISSIONS) {
+        if !WARNED.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                "clearnet: the system refused the dial socket's SYN retry cap ({err}); a refused connect then takes about 2 s and ends as the dial deadline's timeout"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "close_tests.rs"]
+mod close_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How long a connect from a `dial_socket` takes to be refused, and what
+    /// it ends with.
+    #[cfg(windows)]
+    /// `direct`'s socket, refused by a port this test holds bound and not
+    /// listening. The port stays ours through the connect, so a parallel test
+    /// cannot accept it, including between Windows' SYN retries.
+    async fn refused_after(direct: bool) -> (std::io::ErrorKind, Duration) {
+        let refusing = TcpSocket::new_v4().expect("socket");
+        refusing
+            .bind(SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0)))
+            .expect("bind");
+        let target = refusing.local_addr().expect("addr");
+        let started = Instant::now();
+        let err = dial_socket(target, direct)
+            .expect("a socket")
+            .connect(target)
+            .await
+            .expect_err("nothing listens");
+        drop(refusing);
+        (err.kind(), started.elapsed())
+    }
+
+    /// On Windows a direct dial's refused connect is reported well inside the
+    /// 1.415 s dial deadline: about 0.5 s at the cap of one SYN retry, where
+    /// the system's default takes about 2.0 s. Dropping the cap from
+    /// `dial_socket` makes this red on Windows.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_refused_direct_connect_is_reported_inside_the_dial_deadline() {
+        let (kind, took) = refused_after(true).await;
+        assert_eq!(kind, std::io::ErrorKind::ConnectionRefused);
+        assert!(took < Duration::from_secs(1), "refused after {took:?}");
+    }
+
+    /// A dial to the operator's proxy keeps the system's SYN retries: its
+    /// deadline is the proxied one, which they fit inside. On Windows the
+    /// default refusal takes about 2.0 s. Capping the proxy's socket too makes
+    /// this red on Windows.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_proxy_dial_keeps_the_systems_syn_retries() {
+        let (kind, took) = refused_after(false).await;
+        assert_eq!(kind, std::io::ErrorKind::ConnectionRefused);
+        assert!(took >= Duration::from_secs(1), "refused after {took:?}");
+    }
 
     #[tokio::test]
     async fn a_joined_writer_is_not_polled_again() {
         let ends = StreamEnds::open(8);
         let mut writer = tokio::spawn(async { Some(CloseCause::new(CloseKind::IoError)) });
         let joined = (&mut writer).await.ok().flatten().expect("writer cause");
-        let cause = end_connection(ends.hold, &ends.inbound, WriteJoin::Finished, joined).await;
-        assert_eq!(cause.kind(), CloseKind::IoError);
+        let end = end_connection(
+            ends.hold,
+            &ends.inbound,
+            WriteJoin::Finished,
+            write_side_end(joined),
+        )
+        .await;
+        assert_eq!(end.cause().kind(), CloseKind::IoError);
     }
 }

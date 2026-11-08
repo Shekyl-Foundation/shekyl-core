@@ -60,7 +60,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use shekyl_archival_retention::pass_anchor::{pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS};
+use shekyl_archival_retention::pass_anchor::{
+    pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+};
 use shekyl_archival_retention::pass_delivery_digest;
 use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{leaves_per_segment, BlockHeight};
@@ -149,6 +151,7 @@ fn size_of(shard_id: u64) -> (&'static str, usize) {
 
 fn request_head(shard_id: u64, nonce: [u8; 32]) -> Vec<u8> {
     let header = encode_request_header(&pass_request_header_bytes(
+        shekyl_archival_retention::PassStream::Economy,
         &nonce,
         BlockHeight::from_raw(ANCHOR_HEIGHT),
         &[0xc3; 32],
@@ -461,7 +464,7 @@ impl Served {
                 .expect("put shard 0");
         }
         let provider = Arc::new(Shards {
-            store: StoreShardProvider::new(store.reader()),
+            store: StoreShardProvider::new(Arc::new(store)),
             one_leaf: synthetic(size_of(1).1),
             eighth: synthetic(size_of(2).1),
             full: synthetic(size_of(3).1),
@@ -644,7 +647,7 @@ fn isolated_phases(served: &Served, label: &str, n: usize) {
         }
     }
     for i in 0..n {
-        let mut message = [0x33u8; 112];
+        let mut message = [0x33u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN];
         message[..32].copy_from_slice(&nonce(0x33, i));
         let t = Instant::now();
         let signature = served.signer.sign_pass(&message).expect("sign");

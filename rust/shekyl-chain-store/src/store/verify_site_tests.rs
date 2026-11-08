@@ -18,7 +18,7 @@
 use shekyl_chain_rules::{probes, validate, RuleSet, Trust};
 
 use super::connect_fixtures::{formed, priced, Grown, Listed};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 
 /// Fee the matured coinbase pays; not a consensus figure.
@@ -68,7 +68,7 @@ fn validate_verifies_no_proof_and_no_signature_and_form_verifies_both() {
             "the token carries what the proof was verified against"
         );
 
-        let valid = match validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+        let valid = match validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
             Ok(Ok(valid)) => valid,
             other => panic!("the spend connects: {other:?}"),
         };
@@ -83,5 +83,4 @@ fn validate_verifies_no_proof_and_no_signature_and_form_verifies_both() {
     });
     out.expect("the spending block connects");
     drop(store);
-    cleanup(&path);
 }

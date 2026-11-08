@@ -23,17 +23,9 @@
 name: ci/doc-claims
 
 on:
-  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
-  # not only the branch head — the class of failure neither PR's CI can
-  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
-  # filter, so this runs on every group regardless of the PR filter above
-  # or below.
-  merge_group:
-    types: [checks_requested]
-    branches: [dev]
   pull_request:
-    branches: [dev]
-    paths:
+    types: [opened, synchronize, reopened]
+    paths: &paths
       - "docs/**"
       # The gate resolves file:line citations against the tree, so a source
       # move can invalidate a documentation claim with no docs edit in the
@@ -61,6 +53,13 @@ on:
       - ".gitmodules"
       - "docs/ci/doc-claims-baseline.txt"
       - ".github/workflows/doc-claims.yml"
+  # `dev` too: the citation leg reads the whole tree, so one pull request
+  # moving a file that another one's document cites is green on each and
+  # red on `dev` (06-branching.mdc). The ratchet then compares the merge
+  # with the `dev` it landed on.
+  push:
+    branches: [dev]
+    paths: *paths
 
 concurrency:
   group: doc-claims-${{ github.ref }}
@@ -72,6 +71,7 @@ permissions:
 jobs:
   doc-claims:
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.8 min over 23 runs; the floor
     steps:
       - uses: actions/checkout@v4
         with:
@@ -111,7 +111,7 @@ jobs:
             exit 0
           fi
           git fetch --no-tags --depth=1 origin \
-            "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+            "${{ github.event.pull_request.base.sha || github.event.before }}"
 
       - name: Run the documentation claim audit
         env:
@@ -121,10 +121,9 @@ jobs:
           # branch fixed that but still names a moving target. Comparing
           # against the wrong revision while reporting "checked" is worse than
           # not checking, because the output names a ref it did not read.
-          # Under the merge queue the PR payload is absent and the group's
-          # `base_sha` is the `dev` tip the group merges onto — the same
-          # referent, a SHA either way.
-          DOC_CLAIMS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          # On a push to `dev` there is no pull request; `before` is the
+          # `dev` commit the merge landed on, a SHA as well.
+          DOC_CLAIMS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: python3 scripts/ci/check_doc_claims.py
 
       - name: Re-falsify the gate's own failure paths

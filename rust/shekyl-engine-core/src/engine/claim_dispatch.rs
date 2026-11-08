@@ -353,10 +353,10 @@ where
                 reserved,
                 p_canonical_id,
                 fee: fee.to_raw(),
-                // The production floor (`ENGINE_CADENCE_DRIVER.md` §4):
+                // The production hold (`ENGINE_CADENCE_DRIVER.md` §4):
                 // every production claim rides this choke point, so the
-                // constant is named exactly once.
-                fee_floor: shekyl_economics::EMISSION_CLAIM_FEE_FLOOR,
+                // shipped policy's hold is named exactly once.
+                fee_floor: shekyl_economics::relay_policy().emission_claim_fee_floor,
             },
             block_hash_at,
         )

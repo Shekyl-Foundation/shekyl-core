@@ -11,7 +11,9 @@
 #   - an undefined term: a segment no glossary table defines;
 #   - a non-edge: an adjacent pair that is not a parent -> child edge;
 #   - a misplaced qualifier: `max` or `min` anywhere but last;
-#   - a duplicate definition: a term with two defining rows;
+#   - a duplicate definition: a term with two defining rows, counting every
+#     `| Term | Parents |` table in the document, as the daemon's own grammar
+#     test does, so a staging table left beside §19 is caught here too;
 #   - a cycle: a term that is its own ancestor (IG-2);
 #   - a method that does not end in a command: its last term must be a view
 #     or a verb under the parent its walk used, read from the Kind column
@@ -118,6 +120,23 @@ def glossary(doc: str, errors: list[str]):
                     errors.append(f"kind drift: {where}: `{term}` is marked *{'*/*'.join(sorted(prose))}* in its meaning and has no Kind cell")
                 elif prose != written and (prose or written):
                     errors.append(f"kind drift: {where}: `{term}`'s meaning marks {sorted(prose)} and its Kind cell says {sorted(written)}")
+    # Any other `| Term | Parents |` table defines terms too: the daemon's
+    # grammar test (shekyl-daemon-config/tests/grammar_names.rs) reads every
+    # one, so a staging table outside the sections above is a second home.
+    spans = [(doc.index(start), doc.index(end, doc.index(start))) for _, start, end in GLOSSARY]
+    lines = doc.split("\n")
+    offset, table_line = 0, None
+    for n, line in enumerate(lines, 1):
+        inside = any(a <= offset < b for a, b in spans)
+        if line.startswith("| Term | Parents |") and not inside:
+            table_line = n
+        elif table_line and not line.startswith("|"):
+            table_line = None
+        elif table_line and not inside:
+            m = ROW.match(line)
+            if m:
+                defined.setdefault(m.group(1), []).append(f"the table at line {table_line}")
+        offset += len(line) + 1
     for term, wheres in sorted(defined.items()):
         if len(wheres) > 1:
             errors.append(f"duplicate definition: `{term}` is defined in {', '.join(wheres)}")
@@ -285,6 +304,9 @@ def selftest(doc: str) -> int:
         ("a misplaced qualifier: `weight_max_total`", add_name("`txpool`", "weight_max_total"), "misplaced qualifier"),
         ("a duplicate definition: `height` again in §19",
          add_row("**New terms:**", "| height | block | a duplicate |"), "duplicate definition"),
+        ("a staging table outside §19 that defines `hiding` again",
+         doc.replace("## 23. Part E", "| Term | Parents | Meaning |\n|---|---|---|\n| hiding | daemon | a duplicate |\n\n## 23. Part E", 1),
+         "duplicate definition"),
         ("add a cycle: `block` under `header`",
          add_row("**Terms of §3", "| block | header | a cycle |"), "cycle"),
         ("drift: §18 gives `pace`, the walk table drops it",

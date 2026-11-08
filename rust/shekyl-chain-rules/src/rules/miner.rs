@@ -56,11 +56,9 @@
 //! parent state ([`closed_shards_before`]): the shards of `W` archival
 //! bytes the parent chain's fold has filled (`SHT-Q2`;
 //! `ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q6 item 4; DRS-E4 `ARW-Q6`). The
-//! C++ template still reads its own partition — the curve tree's frozen
-//! J-segment count (`Blockchain::parent_frozen_segment_count`), the
-//! divergence CEN-L10 rules deliberate: the LMDB store keeps no archival
-//! fold, the escalation ships flat so the split is bit-identical, and the
-//! C++ is deleted at cutover rather than taught a second fold. The
+//! C++ template read its own partition — the curve tree's frozen
+//! J-segment count — the divergence CEN-L10 rules deliberate. That
+//! reader was deleted with the C++ chain (bucket 3, 2026-10-28). The
 //! arithmetic bodies for all of them are Rust already (`shekyl-economics`,
 //! adopted by the slice-4 precursor).
 //!
@@ -73,13 +71,11 @@
 //! with a parameter the penalty reads, and the lift belongs to the slice
 //! that needs it (rule 21 — no pre-provisioned field without a consumer).
 
-use std::sync::OnceLock;
-
 use shekyl_ct_balance::{check_commitment_masks, check_output_keys, MaskSubject};
 use shekyl_economics::params::TX_VOLUME_WINDOW;
 use shekyl_economics::{
-    base_block_reward, effective_emission, tail_subsidy_per_block, CirculatingSupply,
-    ClosedShardCount, EconomicParams, TxVolume,
+    base_block_reward, economic_params, effective_emission, CirculatingSupply, ClosedShardCount,
+    EconomicParams, TxVolume,
 };
 use shekyl_types::{shard_of, BlockHeight};
 use shekyl_units::AtomicUnits;
@@ -97,23 +93,13 @@ const MINER: Locus = Locus::Tx {
     slot: TxSlot::Miner,
 };
 
-/// The economic parameters the 4.F derivations price with: the
-/// build-generated set (`config/economics_params.json` →
-/// `EconomicParams::default()`), resolved once and checked once — a set
-/// whose tail subsidy does not fit cannot price any block, and stops here
-/// rather than in a rule (module docs). See the module docs for why this
-/// is not a `RuleSet` field yet.
+/// The economic parameters the 4.F derivations price with.
+///
+/// The one accessor is [`economic_params`]: it resolves the shipped set
+/// once and checks that the tail subsidy fits. This is not a `RuleSet`
+/// field (module docs).
 pub(crate) fn economics() -> &'static EconomicParams {
-    static PARAMS: OnceLock<EconomicParams> = OnceLock::new();
-    PARAMS.get_or_init(|| {
-        let params = EconomicParams::default();
-        assert!(
-            tail_subsidy_per_block(&params).is_ok(),
-            "config/economics_params.json: final_subsidy_per_minute × (daa_target_seconds / 60) \
-             does not fit u64 — the tail subsidy cannot be priced"
-        );
-        params
-    })
+    economic_params()
 }
 
 // ---------------------------------------------------------------------------
@@ -737,6 +723,14 @@ impl TxVolumeSpan {
 /// [`TxVolumeSpan`] at `connecting`: `n = min(h, W)` blocks, `[h − n, h − 1]`.
 #[must_use]
 pub fn tx_volume_span(connecting: BlockHeight) -> TxVolumeSpan {
+    tx_volume_span_of::<TX_VOLUME_WINDOW>(connecting)
+}
+
+/// [`tx_volume_span`] at a window length. Production passes
+/// [`TX_VOLUME_WINDOW`]. EUP-5's window-length stress builds another
+/// (`ECONOMICS_SIM_PHASE0.md`, the const-generic window).
+#[must_use]
+pub fn tx_volume_span_of<const W: u64>(connecting: BlockHeight) -> TxVolumeSpan {
     let h = connecting.to_raw();
     let Some(parent) = h.checked_sub(1) else {
         return TxVolumeSpan {
@@ -745,7 +739,7 @@ pub fn tx_volume_span(connecting: BlockHeight) -> TxVolumeSpan {
             lower: None,
         };
     };
-    let blocks = h.min(TX_VOLUME_WINDOW);
+    let blocks = h.min(W);
     // `h >= blocks`, so `h - blocks` is the first height in the window;
     // its predecessor's prefix sum is the lower term, absent when the
     // window starts at genesis.

@@ -20,6 +20,10 @@ license.workspace = true
 # (CONSENSUS_C2_R8_STORE_PLACEMENT.md §9.1) — a dependency that reaches a
 # store is the inversion R8 banned.
 [dependencies]
+# The network id: `Trust` derives it from the genesis pin, and the spend
+# signature's hash binds it (NETWORK_IDENTITY.md NI-Q4). Data, never a
+# network the rules branch on (rule 71).
+shekyl-network = { path = "../shekyl-network" }
 # Chain identities and the recorded facts a rule reads: BlockHeight,
 # BlockHash, TxHash, KeyImage, CurveTreeRoot.
 shekyl-types = { path = "../shekyl-types" }

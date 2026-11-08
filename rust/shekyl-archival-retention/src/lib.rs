@@ -74,6 +74,7 @@ pub mod debit_auth;
 pub mod distinct;
 pub mod drawable_epoch;
 pub mod drawable_pair;
+pub mod emission_auth;
 pub mod emission_kat_shape;
 pub mod emission_verify;
 pub mod emission_wire;
@@ -82,6 +83,7 @@ pub mod failure_window;
 pub mod hash;
 pub mod held_at_height;
 pub mod id;
+pub mod params;
 pub mod pass_anchor;
 pub mod path;
 pub mod release_cooldown;
@@ -92,6 +94,7 @@ pub mod serve_eligibility;
 pub mod settlement_select;
 pub mod shard_coverage;
 pub mod shard_view_hash;
+pub mod support_draw;
 pub mod wire;
 
 pub use admission::codes as admission_codes;
@@ -113,10 +116,9 @@ pub use attestation_wire::{
     WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
 };
 pub use bond_connect::{
-    clean_interval_close, is_clean_interval_close, reinstate_connect, reinstate_pop,
-    release_connect, release_pop, slash_open_interval_to_append, ReinstateConnect,
-    ReinstateConnectError, ReinstatePopError, ReleaseConnect, ReleaseConnectError, ReleasePopError,
-    MAX_BOND_BAD_INTERVALS,
+    clean_interval_close, is_clean_interval_close, reinstate_connect, release_connect,
+    slash_open_interval_to_append, ReinstateConnect, ReinstateConnectError, ReleaseConnect,
+    ReleaseConnectError, MAX_BOND_BAD_INTERVALS,
 };
 pub use bond_ct_balance::{
     verify_bond_post_ct_balance, BondCtBalanceError, BondTerm, BondTermError,
@@ -125,7 +127,7 @@ pub use bond_duration::{bond_duration, ShardAgeAtAdd};
 pub use bond_floor::{
     bond_floor, ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS, ARCHIVAL_BOND_FLOOR_ATOMIC,
     ARCHIVAL_REORG_DEPTH_BLOCKS, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, BOND_DURATION_AGE_SCALE,
-    BOND_DURATION_BASE_EPOCHS, MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS,
+    BOND_DURATION_BASE_EPOCHS, MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS,
 };
 pub use bond_post::{
     bond_post_block_unique, bond_post_funding_floor_met, release_pre_cooldown_guards,
@@ -139,12 +141,12 @@ pub use bond_wire::{
     VIN_TYPE_ARCHIVAL_BOND_POST,
 };
 pub use bundle::{
-    bundle_charge, bundle_commitment, bundle_prunable_hash, bundle_root, section_budget,
-    section_d_max, BundleBody, BundleKept, BundleRecord, BundleRef, BundleWireError, PassBitmap,
-    TooManyReferences, BUNDLE_COMMITMENT_CUSTOMIZATION, BUNDLE_KEPT_FIXED_LEN,
-    BUNDLE_PRUNABLE_CUSTOMIZATION, BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN,
-    BUNDLE_ROOT_CUSTOMIZATION, BUNDLE_SECTION_BUDGET_MULTIPLE, BUNDLE_SEED_LEN,
-    BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN, BUNDLE_WITNESS_LEN,
+    assemble_bundle, bundle_charge, bundle_commitment, bundle_prunable_hash, bundle_root,
+    section_budget, section_d_max, sign_bundle_commitment, BundleBody, BundleKept, BundleRecord,
+    BundleRef, BundleWireError, PassBitmap, SectionBudget, TooManyReferences, BUNDLE_COMMITMENT,
+    BUNDLE_KEPT_FIXED_LEN, BUNDLE_PRUNABLE_CUSTOMIZATION, BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN,
+    BUNDLE_ROOT_CUSTOMIZATION, BUNDLE_SEED_LEN, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
+    BUNDLE_WITNESS_LEN,
 };
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,
@@ -170,16 +172,18 @@ pub use consensus_state::{
 pub use conservation::{verify_conservation_snapshot, ConservationError, ConservationSnapshot};
 pub use constants::{
     arm_settlement_epoch_override, arm_settlement_epoch_override_for_regtest,
-    effective_archival_reorg_depth_blocks, effective_settlement_epoch_blocks,
-    parse_reorg_cap_override, parse_settlement_epoch_override, settlement_epoch_override_floor,
-    settlement_epoch_override_ignored, settlement_epoch_override_present,
-    SettlementEpochOverrideError, CHALLENGES_PER_PAIR_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
+    check_settlement_epoch_override, effective_archival_reorg_depth_blocks,
+    effective_settlement_epoch_blocks, parse_reorg_cap_override, parse_settlement_epoch_override,
+    settlement_epoch_override_floor, settlement_epoch_override_ignored,
+    settlement_epoch_override_present, SettlementEpochOverrideError, CHALLENGE_BEACON_SEAL_BLOCKS,
     CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
 };
 pub use debit_auth::{
     cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,
 };
-pub use drawable_epoch::{DrawableEpoch, DrawableEpochError, DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION};
+pub use drawable_epoch::{
+    DrawableEpoch, DrawableEpochError, SupportRoster, DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION,
+};
 pub use drawable_pair::DrawablePair;
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{
@@ -192,8 +196,8 @@ pub use emission_verify::{
 pub use pass_anchor::{
     anchor_depth_covers_response_window, pass_countersignature_message, pass_delivery_digest,
     pass_request_header_bytes, response_window_outrunning_anchor, PassAnchorWindow,
-    PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader, PASS_ANCHOR_DEPTH_BLOCKS,
-    PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
+    PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader, PassStream,
+    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
     PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
     PASS_DELIVERY_DIGEST_CUSTOMIZATION, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
     PASS_REQUEST_HEADER_LEN,
@@ -206,8 +210,8 @@ pub use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 pub use emission_wire::{
     ArchivalRewardEmissionVin, EmissionAuthMsgs, EmissionAuthRole, MembershipOnlyBacking,
     RewardCommit, ShardWorkEntry, WireError as EmissionWireError, WorkEpochClaim,
-    EMISSION_AUTH_BACKING_CUSTOMIZATION, EMISSION_AUTH_CLAIM_CUSTOMIZATION,
-    MAX_BACKING_PROOF_BYTES, MAX_SETTLEMENT_EPOCHS_PER_EMISSION, VIN_TYPE_ARCHIVAL_REWARD_EMISSION,
+    EMISSION_AUTH_BACKING, EMISSION_AUTH_CLAIM, MAX_BACKING_PROOF_BYTES,
+    MAX_SETTLEMENT_EPOCHS_PER_EMISSION, VIN_TYPE_ARCHIVAL_REWARD_EMISSION,
 };
 pub use error::VerifyError;
 pub use failure_window::{
@@ -218,6 +222,7 @@ pub use failure_window::{
 };
 pub use held_at_height::holds_shard_at;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
+pub use params::{archival_params, ArchivalParams, ArchivalParamsError};
 pub use path::{
     challenged_leaf_bytes, verify_segment_path, SegmentPathOpening, CHALLENGED_LEAF_LEN,
 };
@@ -228,15 +233,13 @@ pub use reward_arithmetic::{
     WORK_MILLI_SCALE,
 };
 pub use secret_draw::{
-    challenge_nonce, draw_commit, draw_count, draw_horizon, draw_target, select_draw,
-    serve_credit_batch_commitment, DrawTarget, SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION,
-    CHALLENGE_READS, COUNT_CAP_BASE_MULTIPLE, COUNT_CAP_MULTIPLE, DRAW_ATTEMPTS,
-    DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION, DRAW_HORIZON_FLOOR,
-    SERVE_CREDIT_BATCH_CUSTOMIZATION,
+    challenge_nonce, draw_commit, draw_count, draw_horizon, draw_target, select_draw, DrawTarget,
+    SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION, CHALLENGE_READS, DRAW_ATTEMPTS,
+    DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION,
 };
 pub use segment_freeze::{
-    challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, frozen_segment_count,
-    LeafChunkBounds, SEGMENT_LEAF_COUNT,
+    challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, LeafChunkBounds,
+    SEGMENT_LEAF_COUNT,
 };
 pub use serve_eligibility::serve_credit_epoch_ok;
 pub use shard_coverage::{
@@ -244,6 +247,12 @@ pub use shard_coverage::{
 };
 pub use shard_view_hash::{
     shard_view_hash, ArchivalTx, ShardViewHasher, SHARD_VIEW_HASH_CUSTOMIZATION,
+};
+pub use support_draw::{
+    select_support_shard, settle_support, support_challenge_nonce, support_counted, support_offset,
+    support_seated_at, support_slot, support_span, SupportSettlementKey, SupportUnissued,
+    SUPPORT_CHALLENGE_NONCE_CUSTOMIZATION, SUPPORT_DRAWS_PER_EPOCH, SUPPORT_DRAW_CUSTOMIZATION,
+    SUPPORT_SELECT_SHARD,
 };
 pub use wire::{
     encode_path, hybrid_countersignature, split_countersignature, ArchivalServeCreditPruned,

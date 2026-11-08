@@ -58,8 +58,8 @@ use crate::onion_service::{publish_onion, OnionPublishAbort};
 use crate::vanguard_rotation::{VanguardManager, VanguardsAbort};
 use shekyl_tor_control_client::binary::{self, VerifiedTorBinary};
 use shekyl_tor_control_client::control::{
-    parse_socks_listeners, BootstrapReadiness, BootstrapState, Command, ManagedTor, SocksPort,
-    TorControlClient, TorControlClientConfig, TorLaunch,
+    parse_socks_listeners, BootstrapReadiness, BootstrapState, Command, DiskWrites, ManagedTor,
+    SocksPort, SocksTimeout, TorControlClient, TorControlClientConfig, TorLaunch,
 };
 
 // Config/error types live next to their owners; re-exported here so a
@@ -596,7 +596,9 @@ async fn supervise(
                 tor_binary: verified,
                 data_dir: config.data_dir.clone(),
                 socks_port: SocksPort::Auto,
+                socks_timeout: SocksTimeout::TorDefault,
                 disable_network: config.disable_network,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
             }),
             events: config.events.clone(),
@@ -1066,7 +1068,9 @@ mod tests {
     #[test]
     fn classify_maps_binary_to_trust_everything_else_transient() {
         assert_eq!(
-            classify(&ServiceFailure::Binary(TorBinaryError::NotFound)),
+            classify(&ServiceFailure::Binary(TorBinaryError::NotFound {
+                searched: Vec::new()
+            })),
             FailureClass::Trust
         );
         assert_eq!(
@@ -1213,7 +1217,9 @@ mod live_tests {
     /// finished bootstrapping, and the panic says "did not bootstrap", the
     /// phrase the lane retries on. Any other posture — never spawned, died,
     /// restarting, degraded — is the supervisor's doing and is reported as
-    /// that, with the posture, and is not retried.
+    /// that, with the posture, and is not retried. Unix only, as the tests
+    /// that call it are.
+    #[cfg(unix)]
     async fn await_ready<F: Fn(&TorPosture) -> bool>(
         rx: &mut watch::Receiver<TorPosture>,
         secs: u64,

@@ -15,27 +15,34 @@
 
 #![deny(unsafe_code)]
 
+pub mod account;
 #[cfg(unix)]
 mod acl;
 pub mod announce;
 pub mod docs;
 pub mod exit;
 pub mod file;
+#[cfg(unix)]
+mod group;
 pub mod load;
 pub mod lock;
 pub mod marker;
 pub mod network;
 pub mod paths;
 pub mod platform;
+mod probe;
 pub mod resolve;
 pub mod sections;
 pub mod table;
 
 pub use load::{load, Loaded};
 pub use lock::Lock;
-pub use marker::{MarkerOutcome, NetworkId};
+pub use marker::{MarkerOutcome, MarkerRead, NetworkId};
 pub use network::Network;
 pub use platform::{Platform, RunMode};
 pub use resolve::{choosers, resolve, Resolved};
-pub use sections::{apply_logging, build, link_limits, Clearnet, DaemonConfig, Tor};
+pub use sections::{
+    apply_logging, build, link_limits, log_location_creatable, log_location_writable, Clearnet,
+    DaemonConfig, Tor,
+};
 pub use table::{runtime_owner, RuntimeOwner, LEVELS, NETWORKS, TABLE};

@@ -7,8 +7,10 @@
 //! the planned reversion (`DAEMON_SUBMIT_VERDICT.md` §11: "`SubmitStateShim`
 //! over C++ FFI | The Rust mempool lands | Swap the trait impl; engine,
 //! contract, wallet untouched"), **prepared, not routed** (DRS-E5 PR-b b3).
-//! Production constructs [`FfiSubmitShim`](super::FfiSubmitShim) until the
-//! DRS-X flip routes this one.
+//! Production constructs this shim (`install_production`, from the node's
+//! open) over the node's one pool. A pool-file fault on the commit retires
+//! that pool through the hook the node supplied, the same flag the service
+//! and the pool handle read.
 //!
 //! # Facts are the chain's and the pool's, read once
 //!
@@ -47,40 +49,106 @@
 //! - anything else — a refusal on the bytes, or by M4/M5, after the engine's
 //!   own Phase A–C passed it, or a fault — is
 //!   [`CommitOutcome::InternalFault`]: two judgements of one transaction
-//!   disagreed, which is a daemon defect, never a verdict.
+//!   disagreed, which is a daemon defect, never a verdict. The Rust pool
+//!   holds a JoinMarket like any post.
 //!
-//! [`CommitOutcome::JoinMarketUnsupported`] is the C++ commit's: the Rust
-//! pool holds a JoinMarket like any post.
-//!
-//! [`SubmitStateShim::relay`] does nothing here: at the flip the relay's
-//! driver takes what the pool holds unpublished, and a nudge from the
-//! engine is that driver's to wire.
+//! [`SubmitStateShim::relay`] hands the committed bytes to the node's
+//! nudge. The engine calls it only after [`CommitOutcome::Committed`].
 
-use std::sync::Mutex;
+use shekyl_network::NetworkId;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use shekyl_archival_retention::{
     cold_authority_pin, BondPostKind as RetentionBondPostKind, HoldingsDescriptor,
     HoldingsKindScan, ShardSet,
 };
 use shekyl_chain_rules::{
-    emission_epoch_facts, relay_floor_at, relay_floor_window, release_last_served, AdmissionPolicy,
-    AtHeight, ChainView, EmissionEpochStanding, HeaderView, PolicyRow, RuleSet, Tip,
+    emission_epoch_facts, relay_floor_window, release_last_served, AdmissionPolicy, AtHeight,
+    ChainView, EmissionEpochStanding, HeaderView, PolicyRow, RuleSet, Tip,
 };
-use shekyl_chain_store::store::{ReadSnapshot, SnapshotView};
+use shekyl_chain_store::store::{ChainStore, ReadSnapshot, SnapshotView, StoreError};
 use shekyl_mempool::{shown, stateless, Admission, Judged, Pool, RelayView};
 use shekyl_types::archival::{BondRecord, Holdings, MAX_BOND_BAD_INTERVALS};
 use shekyl_types::{
     BlockHash, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, TxHash, UnixSeconds,
 };
 
+use crate::store_facts::RulesAt;
 use crate::submit::certificate::VerificationCertificate;
 use crate::submit::facts::{
     BondProbe, CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
     EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, EpochClaimStanding,
-    KeyImageConflict, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts, ShimFault, SubmitFacts,
-    SubmitStateShim, TxMeta,
+    KeyImageConflict, OriginPublication, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts,
+    ShimFault, SubmitFacts, SubmitStateShim, TxMeta,
 };
 use crate::submit::phase_a::parse_submission;
+
+/// One committed snapshot of the node's chain, and the rule set in force
+/// at the height the next block connects at.
+#[derive(Clone)]
+pub struct StoreChain {
+    store: Arc<ChainStore>,
+    rules: Arc<dyn RulesAt>,
+}
+
+impl StoreChain {
+    /// The chain `store` holds, judged under `rules`.
+    #[must_use]
+    pub fn new(store: Arc<ChainStore>, rules: Arc<dyn RulesAt>) -> Self {
+        Self { store, rules }
+    }
+}
+
+impl ChainSource for StoreChain {
+    fn read<R>(&self, f: impl FnOnce(&ReadSnapshot<'_>, &RuleSet) -> R) -> Result<R, ShimFault> {
+        let snap = self.store.begin_read().map_err(|_| ShimFault)?;
+        let view = SnapshotView::new(&snap);
+        let tip = HeaderView::tip(&view).map_err(|_| ShimFault)?;
+        let height = Tip::connecting_height(tip.as_ref());
+        let rule_set = self.rules.in_force(height);
+        Ok(f(&snap, &rule_set))
+    }
+}
+
+/// Retires the service's pool when the submit path meets a pool-file fault.
+pub type RetirePool = Arc<dyn Fn(&StoreError) + Send + Sync>;
+
+/// Set by the node: a transaction this node committed is due to the relay.
+/// The engine calls it only for [`CommitOutcome::Committed`], never for a
+/// concealed accept.
+pub type RelayNudge = Arc<dyn Fn(&TxHash, &[u8]) + Send + Sync>;
+
+/// Set by the node: ids that left the pool on this commit (CEN-M10
+/// eviction). The pool lock is not held across the call. The same hook
+/// the ingest service uses for a mined departure (`pool_ffi::note_left`).
+pub type PoolDeparted = Arc<dyn Fn(&[TxHash]) + Send + Sync>;
+
+/// Set by the node: this node's judgment of one origin hold. The hook
+/// locks the relay's publication map, not the pool, so a caller reads it
+/// before taking the pool lock.
+pub type OriginHold = Arc<dyn Fn(&TxHash) -> Option<OriginPublication> + Send + Sync>;
+
+fn lock_production() -> MutexGuard<'static, Option<RustPoolShim<StoreChain>>> {
+    PRODUCTION.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+static PRODUCTION: Mutex<Option<RustPoolShim<StoreChain>>> = Mutex::new(None);
+
+/// Install the node's submit shim. A second install replaces the first.
+pub fn install_production(shim: RustPoolShim<StoreChain>) {
+    *lock_production() = Some(shim);
+}
+
+/// The installed shim, for the RPC start. `None` before the node opens.
+#[must_use]
+pub fn production() -> Option<RustPoolShim<StoreChain>> {
+    lock_production().clone()
+}
+
+/// Clear the installed shim. The node's stop calls this.
+pub fn clear_production() {
+    *lock_production() = None;
+}
 
 /// One committed snapshot of the chain and the rule set in force at the
 /// height the next block connects at — what the shim reads, as one
@@ -98,9 +166,38 @@ pub trait ChainSource {
 /// The submit engine's seam over the Rust pool (module docs).
 pub struct RustPoolShim<C> {
     chain: C,
-    pool: Mutex<Pool>,
+    /// The node's one pool, shared with the ingest service (N1).
+    pool: Arc<Mutex<Pool>>,
     policy: AdmissionPolicy,
     clock: fn() -> UnixSeconds,
+    /// Set by the node: a pool-file fault here retires the service's pool.
+    retire: Option<RetirePool>,
+    /// Set by the node: a committed transaction is due to the relay.
+    nudge: Option<RelayNudge>,
+    /// Set by the node: ids that left the pool on this commit.
+    departed: Option<PoolDeparted>,
+    /// Set by the node: this node's origin-hold judgment. Read before the
+    /// pool lock.
+    origins: Option<OriginHold>,
+    /// The id of the node's network: a submission's signatures are judged
+    /// under it (`NETWORK_IDENTITY.md` NI-Q4).
+    network: NetworkId,
+}
+
+impl<C: Clone> Clone for RustPoolShim<C> {
+    fn clone(&self) -> Self {
+        Self {
+            chain: self.chain.clone(),
+            pool: Arc::clone(&self.pool),
+            policy: self.policy,
+            clock: self.clock,
+            retire: self.retire.clone(),
+            nudge: self.nudge.clone(),
+            departed: self.departed.clone(),
+            origins: self.origins.clone(),
+            network: self.network,
+        }
+    }
 }
 
 impl<C> core::fmt::Debug for RustPoolShim<C> {
@@ -110,16 +207,75 @@ impl<C> core::fmt::Debug for RustPoolShim<C> {
 }
 
 impl<C: ChainSource> RustPoolShim<C> {
-    /// The shim over `chain` and `pool`, admitting under `policy`, with
-    /// `clock` the wall clock an admission is stamped by.
+    /// The shim over `chain` and the node's `pool`, admitting under
+    /// `policy`, with `clock` the wall clock an admission is stamped by,
+    /// on the network whose id is `network`. The pool is the one the ingest
+    /// service holds, not a second one over the same file.
     #[must_use]
-    pub fn new(chain: C, pool: Pool, policy: AdmissionPolicy, clock: fn() -> UnixSeconds) -> Self {
+    pub fn new(
+        chain: C,
+        pool: Arc<Mutex<Pool>>,
+        policy: AdmissionPolicy,
+        clock: fn() -> UnixSeconds,
+        network: NetworkId,
+    ) -> Self {
         Self {
             chain,
-            pool: Mutex::new(pool),
+            pool,
             policy,
             clock,
+            retire: None,
+            nudge: None,
+            departed: None,
+            origins: None,
+            network,
         }
+    }
+
+    /// `retire` runs when a commit meets a pool-file fault, so the service
+    /// and the pool handle stop reading that pool (the review of #1165, M5).
+    #[must_use]
+    pub fn retiring(mut self, retire: RetirePool) -> Self {
+        self.retire = Some(retire);
+        self
+    }
+
+    /// `nudge` runs when this node commits a transaction, with its id and
+    /// wire bytes. The pool lock is not held across the call.
+    #[must_use]
+    pub fn nudging(mut self, nudge: RelayNudge) -> Self {
+        self.nudge = Some(nudge);
+        self
+    }
+
+    /// `departed` runs after a commit that evicted pool entries to make
+    /// room, with those ids. The pool lock is not held across the call.
+    #[must_use]
+    pub fn departing(mut self, departed: PoolDeparted) -> Self {
+        self.departed = Some(departed);
+        self
+    }
+
+    /// `origins` answers this node's judgment of one origin hold. The
+    /// shim reads it before taking the pool lock.
+    #[must_use]
+    pub fn observing_origin(mut self, origins: OriginHold) -> Self {
+        self.origins = Some(origins);
+        self
+    }
+
+    /// The installed origin judgment for `txid`, if the node set a hook.
+    fn origin_publication(&self, txid: &TxHash) -> Option<OriginPublication> {
+        self.origins.as_ref().and_then(|hook| hook(txid))
+    }
+
+    /// The node's pool, locked under the service's policy: a panic that
+    /// poisoned the lock left the pool as the file has it (every write is
+    /// the file's first), so the guard is taken back, as the ingest service
+    /// takes it. One policy for the one pool: otherwise a panic on the
+    /// service's side would fail every later submit for good.
+    fn pool(&self) -> MutexGuard<'_, Pool> {
+        self.pool.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The relay's fluff event for `txid`, through the shim's lock
@@ -128,22 +284,16 @@ impl<C: ChainSource> RustPoolShim<C> {
     ///
     /// # Errors
     ///
-    /// [`ShimFault`] when the lock is poisoned or the pool file faults.
+    /// [`ShimFault`] when the pool file faults.
     pub fn fluffed(&self, txid: &TxHash) -> Result<bool, ShimFault> {
-        let mut pool = self.pool.lock().map_err(|_| ShimFault)?;
-        pool.fluffed(txid).map_err(|_| ShimFault)
+        self.pool().fluffed(txid).map_err(|_| ShimFault)
     }
 
     /// Read the pool under the shim's lock, as the relay reads it
     /// ([`RelayView`]: every entry, the stem phase included — never for an
     /// answer to a peer or a foreign caller; the review of #1102, S6).
-    ///
-    /// # Errors
-    ///
-    /// [`ShimFault`] when the lock is poisoned.
-    pub fn with_pool<R>(&self, f: impl FnOnce(RelayView<'_>) -> R) -> Result<R, ShimFault> {
-        let pool = self.pool.lock().map_err(|_| ShimFault)?;
-        Ok(f(pool.relay_view()))
+    pub fn with_pool<R>(&self, f: impl FnOnce(RelayView<'_>) -> R) -> R {
+        f(self.pool().relay_view())
     }
 }
 
@@ -337,7 +487,7 @@ fn emission_facts(
                         .into_iter()
                         .map(|bond| EmissionCloseBondFacts {
                             join_settlement_epoch: bond.join_settlement_epoch,
-                            is_foundation_complete_tree: bond.is_foundation_complete_tree,
+                            is_support_complete_tree: bond.is_support_complete_tree,
                             bad_intervals: bond.bad_intervals,
                         })
                         .collect();
@@ -386,6 +536,7 @@ fn gather(
     reference_block: &BlockHash,
     bond_probe: Option<BondProbe<'_>>,
     emission_probe: Option<(&[u8; 32], &[u64])>,
+    origin_publication: Option<OriginPublication>,
 ) -> Result<SubmitFacts, ShimFault> {
     let fault = |_| ShimFault;
     let view = SnapshotView::new(snapshot);
@@ -410,16 +561,11 @@ fn gather(
         ) {
             (AtHeight::Recorded(root), AtHeight::Recorded(tree_depth)) => Some(ReferenceFacts {
                 height,
-                root: *root.as_bytes(),
+                root,
                 tree_depth,
             }),
             _ => return Err(ShimFault),
         },
-    };
-    let AtHeight::Recorded(fee_per_byte) =
-        relay_floor_at(&view, connecting).map_err(|_| ShimFault)?
-    else {
-        return Err(ShimFault);
     };
     // The door's fee predicate's operand: the engine judges the fee by
     // CEN-M3's own rule over the window (the review of #1102, S5).
@@ -433,10 +579,10 @@ fn gather(
     let mut facts = SubmitFacts {
         in_pool,
         in_pool_broadcast,
+        origin_publication,
         in_chain,
         key_image_conflicts,
         reference,
-        fee_per_byte,
         fee_floor_window: Some(fee_floor_window),
         pool_refuses_for_room: None,
         weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT)
@@ -477,6 +623,10 @@ fn gather(
 }
 
 impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
+    fn network_id(&self) -> NetworkId {
+        self.network
+    }
+
     fn snapshot_facts(
         &self,
         txid: &TxHash,
@@ -485,8 +635,12 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
         bond_probe: Option<BondProbe<'_>>,
         emission_probe: Option<(&[u8; 32], &[u64])>,
     ) -> Result<SubmitFacts, ShimFault> {
-        let pool = self.pool.lock().map_err(|_| ShimFault)?;
+        // The origin map before either lock: the hook does not take the pool.
+        let origin_publication = self.origin_publication(txid);
+        // The snapshot first, then the pool: the order every reader of
+        // both keeps (`shekyl-chain-ingest`'s `live_pool`).
         self.chain.read(|snapshot, rule_set| {
+            let pool = self.pool();
             gather(
                 snapshot,
                 rule_set,
@@ -496,6 +650,7 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
                 reference_block,
                 bond_probe,
                 emission_probe,
+                origin_publication,
             )
         })?
     }
@@ -519,25 +674,47 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
         // guards the view-bound half alone (the review of #1102, S1). Every
         // submit pays it, a duplicate the pool holds unpublished included,
         // so a concealed answer costs what a fresh accept does (B2).
+        let network = self.network;
         let prior = self
             .chain
             .read(|snapshot, rule_set| {
-                stateless(&parsed.tx, &SnapshotView::new(snapshot), rule_set, None)
+                stateless(
+                    &parsed.tx,
+                    &SnapshotView::new(snapshot),
+                    rule_set,
+                    &network,
+                    None,
+                )
             })
             .ok()
             .and_then(Result::ok)
             .and_then(Result::ok);
-        let Ok(mut pool) = self.pool.lock() else {
-            return CommitOutcome::InternalFault;
-        };
         let now = (self.clock)();
+        let origin_publication = self.origin_publication(txid);
+        let retire = self.retire.clone();
+        let mut departed_ids = Vec::new();
         let outcome = self.chain.read(|snapshot, rule_set| {
+            let mut pool = self.pool();
             let view = SnapshotView::new(snapshot);
             let admitted =
                 pool.admit_judged(parsed.tx.clone(), prior, now, &view, rule_set, &self.policy);
             match admitted {
-                Ok(Admission::Admitted { .. }) => CommitOutcome::Committed,
-                Ok(Admission::Duplicate(_) | Admission::Refused(Judged::Chain { .. })) => {
+                Ok(Admission::Admitted { evicted }) => {
+                    departed_ids = evicted;
+                    CommitOutcome::Committed
+                }
+                // A duplicate, or a chain-bound row the door judges and the
+                // engine's verifier does not: both carry the facts at the
+                // lock, and the engine classifies (a premise that moved
+                // outranks the row; otherwise the row is the verdict,
+                // `Rejected { ConsensusRule, row }`).
+                Ok(
+                    admission @ (Admission::Duplicate(_) | Admission::Refused(Judged::Chain(_))),
+                ) => {
+                    let chain_row = match &admission {
+                        Admission::Refused(Judged::Chain(refused)) => Some(refused.rule),
+                        _ => None,
+                    };
                     let emission_probe = parsed.emission_probe();
                     match gather(
                         snapshot,
@@ -548,13 +725,18 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
                         &parsed.reference_block,
                         parsed.bond_probe(),
                         emission_probe.as_ref().map(|(id, epochs)| (id, *epochs)),
+                        origin_publication,
                     ) {
                         Ok(mut fresh) => {
                             // The rising minimum against the pool as it
                             // stands, for a concealed answer to apply.
                             fresh.pool_refuses_for_room =
                                 Some(pool.relay_view().refuses_for_room(&parsed.tx));
-                            CommitOutcome::Raced(Box::new(fresh))
+                            let fresh = Box::new(fresh);
+                            match chain_row {
+                                Some(row) => CommitOutcome::ChainRefused { row, fresh },
+                                None => CommitOutcome::Raced(fresh),
+                            }
                         }
                         Err(ShimFault) => CommitOutcome::InternalFault,
                     }
@@ -568,13 +750,42 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
                 // paying at least as much — the C++ insert-tail prune's
                 // answer.
                 Ok(Admission::PoolFull) => CommitOutcome::PrunedOnInsert,
+                Err(shekyl_mempool::PoolFault::Store(fault)) => {
+                    if let Some(retire) = &retire {
+                        retire(&fault);
+                    }
+                    CommitOutcome::InternalFault
+                }
                 Ok(Admission::Refused(_)) | Err(_) => CommitOutcome::InternalFault,
             }
         });
-        outcome.unwrap_or(CommitOutcome::InternalFault)
+        let outcome = outcome.unwrap_or(CommitOutcome::InternalFault);
+        if matches!(outcome, CommitOutcome::Committed) {
+            if let Some(departed) = &self.departed {
+                if !departed_ids.is_empty() {
+                    departed(&departed_ids);
+                }
+            }
+        }
+        outcome
     }
 
-    fn relay(&self, _txid: &TxHash) {}
+    fn relay(&self, txid: &TxHash) {
+        let Some(nudge) = self.nudge.clone() else {
+            return;
+        };
+        // Drop the pool lock before the nudge. The departure hook takes
+        // the responsibility map and then the pool, and the nudge takes
+        // the map.
+        let blob = self.with_pool(|view| {
+            view.entries()
+                .find(|entry| entry.id == *txid)
+                .map(|entry| entry.tx.serialize())
+        });
+        if let Some(blob) = blob {
+            nudge(txid, &blob);
+        }
+    }
 }
 
 #[cfg(test)]

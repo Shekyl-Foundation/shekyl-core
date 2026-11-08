@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 use std::ffi::OsString;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
 use shekyl_options::{Code, Diagnostic, Source, Value};
@@ -18,9 +18,28 @@ use crate::platform::{Platform, RunMode};
 use crate::resolve::{choosers, resolve};
 use crate::table::TABLE;
 
+/// A fixture path that is absolute on the host running the test: `unix`
+/// as written on Unix, `C:` and backslashes on Windows, where `/srv/op` is
+/// not absolute and the path kinds refuse it (DC-F40). A TOML fixture
+/// quotes the result with `'…'`, the literal string, so the backslashes
+/// are not escapes.
+fn abs(unix: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{}", unix.replace('/', "\\"))
+    } else {
+        unix.to_owned()
+    }
+}
+
+/// The per-account root under the fixture home: `Shekyl` on Windows,
+/// `.shekyl` elsewhere (IG-13).
+fn home_root() -> PathBuf {
+    PathBuf::from(abs("/srv/op")).join(if cfg!(windows) { "Shekyl" } else { ".shekyl" })
+}
+
 fn platform() -> Platform {
     Platform {
-        home: Some(PathBuf::from("/srv/op")),
+        home: Some(PathBuf::from(abs("/srv/op"))),
         program_data: None,
     }
 }
@@ -45,12 +64,12 @@ fn codes(r: Result<DaemonConfig, Vec<Diagnostic>>) -> Vec<(Code, String)> {
 fn the_defaults_build_a_managed_tor_clearnet_node_on_mainnet() {
     let c = build_from(&[], "").unwrap();
     assert_eq!(c.network, Network::Mainnet);
-    assert_eq!(c.data_dir, PathBuf::from("/srv/op/.shekyl"));
+    assert_eq!(c.data_dir, home_root());
     assert_eq!(
         c.logging.file,
-        PathBuf::from("/srv/op/.shekyl/logs/shekyld-mainnet.log")
+        home_root().join("logs").join("shekyld-mainnet.log")
     );
-    assert_eq!(c.logging.directive(), "warn");
+    assert_eq!(c.logging.directive().as_str(), "warn");
     assert_eq!(c.tor, Tor::Managed { binary: None });
     assert!(
         matches!(&c.clearnet, Clearnet::On { listen, socks: None, advertise } if listen.len() == 1 && listen[0].port() == 11021 && advertise.is_empty())
@@ -58,29 +77,27 @@ fn the_defaults_build_a_managed_tor_clearnet_node_on_mainnet() {
     assert_eq!(c.rpc.admin_listen, vec!["127.0.0.1:11029".parse().unwrap()]);
     assert!(c.rpc.view_listen.is_empty());
     assert_eq!(c.rpc.connections_max.get(), 25);
-    assert_eq!(c.txpool_weight_max, 648_000_000);
     assert_eq!(c.p2p.upload_max, None);
     assert!(c.dev.sync);
     assert!(!c.offline());
-    assert!(!c.is_client());
 }
 
 #[test]
 fn explicit_paths_are_taken_as_given_and_defaults_follow_the_network() {
     let c = build_from(
-        &["--network", "testnet", "--data-dir", "/srv/chain"],
-        "log-file = \"/var/log/s.log\"\n",
+        &["--network", "testnet", "--data-dir", &abs("/srv/chain")],
+        &format!("log-file = '{}'\n", abs("/var/log/s.log")),
     )
     .unwrap();
-    assert_eq!(c.data_dir, PathBuf::from("/srv/chain"));
-    assert_eq!(c.logging.file, PathBuf::from("/var/log/s.log"));
+    assert_eq!(c.data_dir, PathBuf::from(abs("/srv/chain")));
+    assert_eq!(c.logging.file, PathBuf::from(abs("/var/log/s.log")));
     assert!(matches!(&c.clearnet, Clearnet::On { listen, .. } if listen[0].port() == 12021));
     assert_eq!(c.rpc.admin_listen[0].port(), 12029);
 }
 
 #[test]
 fn no_home_refuses_each_path_that_needs_it_and_not_an_explicit_one() {
-    let args: Vec<OsString> = ["--data-dir", "/srv/chain"]
+    let args: Vec<OsString> = ["--data-dir", &abs("/srv/chain")]
         .iter()
         .map(OsString::from)
         .collect();
@@ -172,7 +189,10 @@ fn a_connector_that_is_off_cannot_carry_its_endpoints_or_its_peers() {
         "",
     ));
     assert_eq!(d, vec![(Code::ValueConflict, "p2p-peer".into())]);
-    let d = codes(build_from(&["--tor-file", "/opt/tor", "--tor", "off"], ""));
+    let d = codes(build_from(
+        &["--tor-file", &abs("/opt/tor"), "--tor", "off"],
+        "",
+    ));
     assert_eq!(d, vec![(Code::ValueConflict, "tor-file".into())]);
     let c = build_from(&["--clearnet", "off", "--tor", "off"], "").unwrap();
     assert!(c.offline());
@@ -342,39 +362,39 @@ fn log_categories_become_the_owners_directive() {
     )
     .unwrap();
     let d = c.logging.directive();
-    assert!(d.starts_with("info,"), "{d}");
+    assert!(d.as_str().starts_with("info,"), "{d}");
     assert!(
-        d.contains("shekyl_dialer=debug") && d.contains("shekyl_daemon_rpc=trace"),
+        d.as_str().contains("shekyl_dialer=debug")
+            && d.as_str().contains("shekyl_daemon_rpc=trace"),
         "{d}"
     );
     let sink = c.logging.file_sink();
     assert_eq!(sink.filename_prefix, "shekyld-mainnet.log");
 }
 
+/// A C++ log category is not a subsystem: the key is refused where it is
+/// read, on the command line and in the file, so a configuration written
+/// for the C++ daemon fails at start instead of filtering nothing.
 #[test]
-fn positional_words_make_a_client_that_needs_an_admin_endpoint() {
-    let c = build_from(&["status"], "").unwrap();
-    assert!(c.is_client());
-    assert_eq!(
-        c.session.client_endpoint,
-        Some(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 11029))
-    );
-    let d = codes(build_from(&["--rpc-admin-listen", "none", "status"], ""));
-    assert_eq!(d, vec![(Code::ClientNoEndpoint, "rpc-admin-listen".into())]);
+fn a_cxx_log_category_is_refused_as_a_key() {
+    let cli = build_from(&["--log-category", "net=debug"], "").unwrap_err();
+    assert_eq!(cli[0].option.as_deref(), Some("log-category"), "{cli:?}");
+    let file = build_from(&[], "log-category = { blockchain = \"debug\" }\n").unwrap_err();
+    assert_eq!(file[0].option.as_deref(), Some("log-category"), "{file:?}");
+    // The same form with a subsystem key is the user guide's example, and
+    // builds: the refusal is the key's.
+    let ok = build_from(&[], "log-category = { p2p = \"debug\", tor = \"trace\" }\n").unwrap();
+    assert!(ok
+        .logging
+        .directive()
+        .as_str()
+        .contains("shekyl_dialer=debug"));
 }
 
-/// The console dials IPv4. A daemon may bind an IPv6 admin listener; a
-/// client command to one is refused at parse, with the grammar's range code.
 #[test]
-fn a_client_refuses_an_admin_endpoint_the_console_cannot_dial() {
-    let d = codes(build_from(
-        &["--rpc-admin-listen", "[::1]:11029", "status"],
-        "",
-    ));
-    assert_eq!(d, vec![(Code::ValueRange, "rpc-admin-listen".into())]);
+fn an_ipv6_admin_listener_is_accepted() {
     let c = build_from(&["--rpc-admin-listen", "[::1]:11029"], "").unwrap();
     assert_eq!(c.rpc.admin_listen, vec!["[::1]:11029".parse().unwrap()]);
-    assert!(c.session.client_endpoint.is_none());
 }
 
 #[test]
@@ -430,16 +450,56 @@ fn notify_commands_and_levers_are_carried() {
             "--dev-sync",
             "off",
         ],
-        "notify-block = [\"/usr/bin/logger\", \"{height}\"]\n",
+        &format!(
+            "notify-block = ['{}', '{{height}}']\n",
+            abs("/usr/bin/logger")
+        ),
     )
     .unwrap();
     assert_eq!(
         c.notify.block.as_deref(),
-        Some(&["/usr/bin/logger".to_owned(), "{height}".to_owned()][..])
+        Some(&[abs("/usr/bin/logger"), "{height}".to_owned()][..])
     );
     assert_eq!(c.dev.difficulty, Some(1));
     assert!(!c.dev.sync);
     assert_eq!(c.mine.threads, None, "auto");
+}
+
+/// `mine` defaults off; `on` needs `mine-address`, refused at parse naming
+/// that row (IG-11; Rick, 2026-11-02); an address alone starts nothing.
+/// Red edit: let `mine = on` build without an address.
+#[test]
+fn mine_on_needs_an_address_and_an_address_alone_starts_nothing() {
+    let c = build_from(&[], "").unwrap();
+    assert!(!c.mine.start);
+    assert_eq!(
+        codes(build_from(&["--mine", "on"], "")),
+        vec![(Code::ValueRequires, "mine".into())]
+    );
+    let refused = build_from(&["--mine", "on"], "").unwrap_err();
+    assert_eq!(
+        refused[0].params,
+        vec![("requires", "mine-address".to_owned())]
+    );
+    assert_eq!(
+        codes(build_from(&["--mine", "maybe"], "")),
+        vec![(Code::ValueWord, "mine".into())]
+    );
+    let text = shekyl_address::ShekylAddress::new(
+        shekyl_address::Network::Mainnet,
+        [0xaa; 32],
+        [0xbb; 32],
+        [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+        vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+    )
+    .encode()
+    .unwrap();
+    let c = build_from(&["--mine-address", &text], "").unwrap();
+    assert!(!c.mine.start, "an address alone starts nothing");
+    let c = build_from(&["--mine", "on", "--mine-address", &text], "").unwrap();
+    assert!(c.mine.start);
+    let c = build_from(&["--mine", "off", "--mine-address", &text], "").unwrap();
+    assert!(!c.mine.start);
 }
 
 /// The decode's keys stay with the address. The miner assembles from them
@@ -460,6 +520,68 @@ fn a_mining_address_keeps_the_decoded_keys() {
     assert_eq!(mined.spend, [0xaa; 32]);
     assert_eq!(mined.view, [0xbb; 32]);
     assert_eq!(mined.ml_kem, vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN]);
+    assert_eq!(
+        mined.x25519,
+        shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk(&[0xbb; 32]).unwrap(),
+        "the coinbase's X25519 half is the view key's image"
+    );
+}
+
+/// An address whose keys no coinbase can pay is refused at the row, once:
+/// the C++ decode's checks (`coinbase_recipient`), and the full address.
+#[test]
+fn a_mining_address_a_coinbase_cannot_pay_is_refused() {
+    let off_curve = (2u8..=255)
+        .map(|y| {
+            let mut bytes = [0u8; 32];
+            bytes[0] = y;
+            bytes
+        })
+        .find(|bytes| {
+            shekyl_crypto_pq::account::coinbase_recipient(
+                bytes,
+                &[0xbb; 32],
+                &[0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+            ) == Err(shekyl_crypto_pq::account::RecipientRefused::SpendKeyNotAPoint)
+        })
+        .expect("about half of all encodings are not points");
+    let address = |spend: [u8; 32], ml_kem: Vec<u8>| {
+        shekyl_address::ShekylAddress::new(
+            shekyl_address::Network::Mainnet,
+            spend,
+            [0xbb; 32],
+            [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+            ml_kem,
+        )
+    };
+    let full = address(off_curve, vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN])
+        .encode()
+        .unwrap();
+    let malformed = address([0xaa; 32], vec![0xff; shekyl_address::PQC_PAYLOAD_LEN])
+        .encode()
+        .unwrap();
+    let display = address([0xaa; 32], vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN])
+        .encode_classical_display()
+        .unwrap();
+    for (text, reason) in [
+        (full, "spend key is not a valid curve point"),
+        (malformed, "ML-KEM-768 key is not a well-formed"),
+        (display, "mine to the full address"),
+    ] {
+        let refused = build_from(&["--mine-address", &text], "").expect_err("refused");
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert_eq!(refused[0].code, Code::ValueSyntax);
+        assert_eq!(refused[0].option.as_deref(), Some("mine-address"));
+        let expected = refused[0]
+            .params
+            .iter()
+            .find(|(key, _)| *key == "expected")
+            .map(|(_, value)| value.as_str());
+        assert!(
+            expected.is_some_and(|said| said.contains(reason)),
+            "{reason}: {expected:?}"
+        );
+    }
 }
 
 /// A row the table fills is not replaced with a quieter default when it is
@@ -582,5 +704,38 @@ fn derived_defaults_are_in_the_map_and_clearnet_off_names_no_listen() {
     assert_eq!(
         off.get("rpc-admin-listen").map(Value::render).as_deref(),
         Some("127.0.0.1:11029")
+    );
+}
+
+/// A `shekyld.toml` saved by a Windows editor ends its lines with CRLF.
+/// `file::open` reads the bytes as they are (`read_to_string`, no
+/// conversion) and `read_file` parses them as TOML, which treats CRLF as
+/// a newline, so the CRLF text builds the same configuration as its LF
+/// twin, and a refusal in it names the same line (review 3 §3 of the
+/// Rust-binary PR; DC-F42). Red edit: make the parser refuse `\r`.
+#[test]
+fn a_crlf_file_builds_what_its_lf_twin_builds() {
+    let lf = format!(
+        "log-level = 'debug'\nmine-threads = 2\nnotify-block = ['{}', '{{height}}']\n",
+        abs("/usr/bin/logger")
+    );
+    let crlf = lf.replace('\n', "\r\n");
+    assert!(crlf.contains("\r\n") && !lf.contains('\r'));
+    let from_lf = build_from(&[], &lf).unwrap();
+    let from_crlf = build_from(&[], &crlf).unwrap();
+    assert_eq!(from_crlf, from_lf);
+    assert_eq!(from_crlf.mine.threads.map(std::num::NonZero::get), Some(2));
+
+    let bad = "log-level = 'debug'\r\nmine-threads = 'two'\r\n";
+    let refused = build_from(&[], bad).unwrap_err();
+    assert_eq!(
+        refused[0].option.as_deref(),
+        Some("mine-threads"),
+        "{refused:?}"
+    );
+    assert!(
+        matches!(&refused[0].source, Source::File { line: 2, .. }),
+        "{:?}",
+        refused[0].source
     );
 }

@@ -750,7 +750,7 @@ establishes **≤ 1 open interval** as a machine-checkable invariant, which is w
 round):** the coalescing *decision* and the interval shape live Rust-side
 (`bond_connect::slash_open_interval_to_append`, KAT-covered — the invariant the Rust `Reinstate`
 verify depends on is exercised by the Rust suite), reached via
-`shekyl_archival_slash_open_interval_to_append`; the C++ slash-apply site appends exactly what
+`shekyl_archival_slash_open_interval_to_append` (deleted, `DEL-008`); the C++ slash-apply site appends exactly what
 the fold returns and decides nothing. The remaining slash *writer* body migrates with the
 slash cutover as pinned (P2B-8 implementation locus).
 
@@ -919,7 +919,7 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
   enable flip and the next slice before `HoldingsUpdate`.
 - **2026-07-12 (b):** **`Release` connect fold + pop twin landed Rust-native**
   (`shekyl-archival-retention::bond_connect`, driven over
-  `shekyl_archival_release_connect` / `shekyl_archival_release_pop`; C++ dispatch
+  `shekyl_archival_release_connect` (deleted, `DEL-008`) / `shekyl_archival_release_pop` (deleted, `DEL-008`); C++ dispatch
   wiring is the follow-on increment). The §4.3 clean interval-close is landed as a
   **zero-length interval `[E_release, E_release)`** in the record's interval log —
   `good_through`-inert by construction (KAT-pinned), records the exit epoch for the

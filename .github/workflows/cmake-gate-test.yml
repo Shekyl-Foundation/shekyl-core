@@ -16,16 +16,8 @@
 name: cmake-gate-test
 
 on:
-  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
-  # not only the branch head — the class of failure neither PR's CI can
-  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
-  # filter, so this runs on every group regardless of the PR filter above
-  # or below.
-  merge_group:
-    types: [checks_requested]
-    branches: [dev]
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened]
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
@@ -43,7 +35,7 @@ on:
       - "tests/build-target-refusal/**"
       - ".github/workflows/cmake-gate-test.yml"
 
-# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+# Superseded-run cancellation (house pattern: build.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
 # run behind the old one — with the shared runner pool, repeated pushes
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is

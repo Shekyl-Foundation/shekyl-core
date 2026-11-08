@@ -9,14 +9,14 @@
 //!
 //! Admission in this file is [`check_section`] or
 //! [`check_section_until_switch`]. [`SectionCharge`] is the arithmetic
-//! and is not a section result. Sibling of `bundle_tests`, which judges
-//! one bundle. Every test names the edit that turns it red.
+//! and is not a section result. The template's pack is `bundle_fill_tests`.
+//! Sibling of `bundle_tests`, which judges one bundle. Every test names
+//! the edit that turns it red.
 
 use std::sync::OnceLock;
 
 use shekyl_archival_retention::{
-    bundle_root, section_budget, BundleRef, DrawableEpoch, DrawablePair, PassBitmap,
-    BUNDLE_SECTION_BUDGET_MULTIPLE,
+    bundle_root, section_budget, BundleRef, DrawableEpoch, DrawablePair, PassBitmap, SectionBudget,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_types::archival::ReceiptSignPk;
@@ -24,23 +24,24 @@ use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use super::*;
 use crate::harness::bundle::{with_hash, BundleRead, BundleReadFaulted, FixtureBundleView};
-use crate::rule_set::{FakechainSchedule, SettlementEpochBlocks};
+use crate::rule_set::{CappedEpoch, SettlementEpochBlocks};
 use shekyl_types::BlockCount;
 
 /// A reference at `h` to a bundle of `count` draws, none passed.
-fn reference_at(h: u64, count: u32) -> BundleRef {
+pub(in crate::archival::bundle) fn reference_at(h: u64, count: u32) -> BundleRef {
     BundleRef::new(
         shekyl_archival_retention::BundleKept {
             h: BlockHeight::from_raw(h),
             seed: [0x5E; 32],
             passes: PassBitmap::from_passes(count, []).expect("no passes"),
+            support: PassBitmap::none(),
         },
         [0xAB; 32],
     )
 }
 
 /// A section of bundles with these counts, at ascending heights.
-fn section_of(counts: &[u32]) -> Vec<BundleRef> {
+pub(in crate::archival::bundle) fn section_of(counts: &[u32]) -> Vec<BundleRef> {
     counts
         .iter()
         .zip(100u64..)
@@ -50,7 +51,7 @@ fn section_of(counts: &[u32]) -> Vec<BundleRef> {
 
 /// [`bundle_root`] over a section a test holds: far fewer than 2³²
 /// references, so its one refusal is not this helper's.
-fn root_of(refs: &[BundleRef]) -> [u8; 32] {
+pub(in crate::archival::bundle) fn root_of(refs: &[BundleRef]) -> [u8; 32] {
     bundle_root(refs).expect("a test section's count fits 32 bits")
 }
 
@@ -62,12 +63,12 @@ fn h_incl_of(refs: &[BundleRef]) -> BlockHeight {
     BlockHeight::from_raw(refs.last().map_or(101, |r| r.h().to_raw() + 1))
 }
 
-/// A Fakechain rule set whose epoch is `blocks` long, so `W₂` is
+/// A levered rule set whose epoch is `blocks` long, so `W₂` is
 /// `blocks / 20`, with a reorg cap of 10.
 pub(in crate::archival::bundle) fn rules_of(blocks: u64) -> RuleSet {
-    RuleSet::fakechain(
+    RuleSet::GENESIS.with_levers(
         None,
-        FakechainSchedule::new(
+        CappedEpoch::new(
             SettlementEpochBlocks::new(blocks).expect("non-zero"),
             BlockCount::from_raw(10),
         )
@@ -250,9 +251,8 @@ fn a_section_whose_root_does_not_recompute_refuses() {
 #[test]
 fn a_section_at_its_budget_admits_and_one_over_refuses() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
-    let c = BUNDLE_SECTION_BUDGET_MULTIPLE;
     let rules = rules_of(seb.get());
-    let over = |counts: &[u32], budget: u64| {
+    let over = |counts: &[u32], budget: SectionBudget| {
         let refs = section_of(counts);
         Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
             charge: SectionCharge::of(&refs),
@@ -268,8 +268,8 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
     };
 
     // `D` = 8: `⌊72 / 10,000⌋` is zero, the count cap is 1, the budget 2.
-    let small = section_budget(c, 8, seb);
-    assert_eq!(small, 2);
+    let small = section_budget(shekyl_archival_retention::archival_params(), 8, seb);
+    assert_eq!(small, SectionBudget::from_draws(2));
     let small_view = view_holding(&[(0, 8)]);
     admit(&[1, 1], &small_view);
     admit(&[2], &small_view);
@@ -286,8 +286,8 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
     // `D` = 324,000 is the large network's cap of 292 and budget of 584;
     // that figure is [`section_budget`]'s, and a section of 584 references
     // does not fit the window (the zero-draw test).
-    let wide = section_budget(c, 10_000, seb);
-    assert_eq!(wide, 20);
+    let wide = section_budget(shekyl_archival_retention::archival_params(), 10_000, seb);
+    assert_eq!(wide, SectionBudget::from_draws(20));
     let wide_view = view_holding(&[(0, 10_000)]);
     admit(&[10, 10], &wide_view);
     admit(&[4, 6, 10], &wide_view);
@@ -295,8 +295,8 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
         judged(&section_of(&[10, 11]), &wide_view, &rules),
         over(&[10, 11], wide)
     );
-    let large = section_budget(c, 324_000, seb);
-    assert_eq!(large, 584);
+    let large = section_budget(shekyl_archival_retention::archival_params(), 324_000, seb);
+    assert_eq!(large, SectionBudget::from_draws(584));
     assert!(SectionCharge::of(&section_of(&[292, 292])).within(large));
     assert!(!SectionCharge::of(&section_of(&[292, 293])).within(large));
 }
@@ -320,10 +320,9 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
 #[test]
 fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
-    let c = BUNDLE_SECTION_BUDGET_MULTIPLE;
     let rules = rules_of(seb.get());
     let zeros = |n: usize| section_of(&vec![0u32; n]);
-    let over = |refs: &[BundleRef], budget: u64| {
+    let over = |refs: &[BundleRef], budget: SectionBudget| {
         Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
             charge: SectionCharge::of(refs),
             budget,
@@ -338,8 +337,8 @@ fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
 
     // The small network: budget 2. Five hundred zero-draw bundles are
     // inside `W₂` and over that budget.
-    let small = section_budget(c, 8, seb);
-    assert_eq!(small, 2);
+    let small = section_budget(shekyl_archival_retention::archival_params(), 8, seb);
+    assert_eq!(small, SectionBudget::from_draws(2));
     let view = view_holding(&[(0, 8)]);
     admit(&zeros(1), &view);
     admit(&zeros(2), &view);
@@ -350,8 +349,8 @@ fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
 
     // 584 is the large network's budget, and it is not an admission: 501
     // and 584 references put the oldest outside `W₂`.
-    let large = section_budget(c, 324_000, seb);
-    assert_eq!(large, 584);
+    let large = section_budget(shekyl_archival_retention::archival_params(), 324_000, seb);
+    assert_eq!(large, SectionBudget::from_draws(584));
     let priced = SectionCharge::of(&zeros(584));
     assert_eq!(priced.get(), 584);
     assert!(priced.within(large));
@@ -399,9 +398,9 @@ fn a_section_awaiting_its_budget_keeps_its_charge() {
     let charge = standing.charge();
     assert_eq!(charge.get(), 586);
     // The number the switch's cap is compared with.
-    assert!(!charge.within(584));
-    assert!(charge.within(586));
-    assert!(charge.within(u64::MAX));
+    assert!(!charge.within(SectionBudget::from_draws(584)));
+    assert!(charge.within(SectionBudget::from_draws(586)));
+    assert!(charge.within(SectionBudget::from_draws(u64::MAX)));
 
     assert_eq!(
         check_section_until_switch(&[], &root_of(&[]), h_incl_of(&[]), &RuleSet::GENESIS),
@@ -468,7 +467,7 @@ fn of_two_section_defects_the_earlier_check_refuses() {
         outcome,
         Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
             charge: SectionCharge::of(&refs),
-            budget: 2,
+            budget: SectionBudget::from_draws(2),
         }))
     );
     assert_eq!(reads, [BundleRead::DrawableEpoch]);
@@ -493,6 +492,7 @@ fn drawable(epoch: u64, pairs: u64) -> DrawableEpoch {
     let keys = (pairs > 0).then(|| (PERSONA, receipt_key()));
     DrawableEpoch::new(
         epoch,
+        std::num::NonZeroU64::new(pairs).map(shekyl_archival_retention::SupportRoster::empty),
         keys,
         (0..pairs).map(|shard| DrawablePair {
             persona: PERSONA,
@@ -532,9 +532,12 @@ fn the_cap_is_the_largest_d_among_the_sections_epochs() {
         reference_at(boundary, 1),
     ];
     assert_eq!(SectionCharge::of(&spanning).get(), 4);
-    let small_cap = section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, 0, seb);
-    let large_cap = section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, boundary, seb);
-    assert_eq!((small_cap, large_cap), (2, 20));
+    let small_cap = section_budget(shekyl_archival_retention::archival_params(), 0, seb);
+    let large_cap = section_budget(shekyl_archival_retention::archival_params(), boundary, seb);
+    assert_eq!(
+        (small_cap, large_cap),
+        (SectionBudget::from_draws(2), SectionBudget::from_draws(20))
+    );
 
     let both = view_holding(&[(0, 0), (1, boundary)]);
     both.take_reads();
@@ -657,7 +660,7 @@ fn a_reference_outside_the_window_is_refused_before_the_budget() {
         check_section(&over, &root_of(&over), h_incl, &view, &rules),
         Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
             charge: SectionCharge::of(&over),
-            budget: 2,
+            budget: SectionBudget::from_draws(2),
         }))
     );
 

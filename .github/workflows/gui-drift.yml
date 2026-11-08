@@ -26,15 +26,8 @@
 name: ci/gh-actions/gui-drift
 
 on:
-  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
-  # not only the branch head — the class of failure neither PR's CI can
-  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
-  # filter, so this runs on every group regardless of the PR filter above
-  # or below.
-  merge_group:
-    types: [checks_requested]
-    branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened]
     paths:
       - 'rust/**'
       - '.github/workflows/gui-drift.yml'
@@ -55,12 +48,7 @@ jobs:
   wallet-ref:
     name: wallet ref
     runs-on: ubuntu-latest
-    # `contents: read` cannot call the pulls API. The merge-queue path
-    # reads the pull request's head branch; without this scope that call
-    # is rejected and the job always builds wallet dev.
-    permissions:
-      contents: read
-      pull-requests: read
+    timeout-minutes: 10  # p90 0.1 min over 24 runs; the floor
     outputs:
       ref: ${{ steps.pick.outputs.ref }}
     steps:
@@ -70,34 +58,9 @@ jobs:
           # pull_request: the head branch (`github.head_ref`).
           # push: dev or main, which the case below keeps on wallet dev —
           # wallet main is expected to lag core dev.
-          # merge_group: `head_ref` is the queue ref
-          # `gh-readonly-queue/<base>/pr-<number>-<sha>`, not the PR branch.
-          # The number is parsed and the branch is read from the pull
-          # request, then matched against the wallet the same way.
-          GH_TOKEN: ${{ github.token }}
-          CANDIDATE: ${{ github.head_ref || github.event.merge_group.head_ref || github.ref_name }}
+          CANDIDATE: ${{ github.head_ref || github.ref_name }}
         run: |
           set -euo pipefail
-          CANDIDATE=${CANDIDATE#refs/heads/}
-          case "$CANDIDATE" in
-            gh-readonly-queue/*)
-              tail=${CANDIDATE##*/}
-              pr=${tail#pr-}
-              pr=${pr%%-*}
-              case "$pr" in
-                ''|*[!0-9]*)
-                  echo "merge queue ref has no pull request number: $CANDIDATE" >&2
-                  CANDIDATE=dev
-                  ;;
-                *)
-                  if ! CANDIDATE=$(gh api --jq .head.ref "repos/${GITHUB_REPOSITORY}/pulls/${pr}"); then
-                    echo "could not read pull request ${pr}; using wallet dev" >&2
-                    CANDIDATE=dev
-                  fi
-                  ;;
-              esac
-              ;;
-          esac
           case "$CANDIDATE" in
             main|dev|"")
               REF=dev
@@ -170,13 +133,7 @@ jobs:
       # per-pull-request refs stop two branches from cancelling each other's
       # runs the way two same-named refs could.
       #
-      # Under the merge queue the group is published the same way — a real
-      # ref, `refs/heads/gh-readonly-queue/dev/pr-N-<sha>`, fetchable by its
-      # full name for the life of the group, which is the life of this run.
-      # `github.ref` is that full name; `github.ref_name` would hand the
-      # callee a short name it cannot fetch (#886 review).
-      #
       # One line deliberately: in a folded scalar (`>-`) a more-indented
       # continuation is kept literal rather than folded, so wrapping this
       # expression embeds newlines inside `${{ }}`. Observed while writing it.
-      core_ref: "${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.event_name == 'merge_group' && github.ref || github.ref_name }}"
+      core_ref: "${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref_name }}"

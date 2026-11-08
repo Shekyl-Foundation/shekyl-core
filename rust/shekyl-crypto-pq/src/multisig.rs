@@ -9,6 +9,7 @@
 
 use crate::error::PqcVerifyError;
 use crate::signature::{HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme};
+use shekyl_types::SigningPayloadHash;
 
 /// Largest multisig group served (MSW-G, settled 2026-07-15: 2f+1 at f=2;
 /// withdrew the same-day MAX=8 pick). The value is the *correctness* cap —
@@ -329,8 +330,9 @@ pub fn verify_multisig(
     scheme_id: u8,
     key_blob: &[u8],
     sig_blob: &[u8],
-    message: &[u8],
+    message: &SigningPayloadHash,
 ) -> Result<(), PqcVerifyError> {
+    let message = message.as_bytes();
     // Check 1: scheme match
     if scheme_id != HYBRID_SCHEME_ID_MULTISIG {
         return Err(PqcVerifyError::SchemeMismatch);
@@ -401,6 +403,13 @@ mod tests {
     use super::*;
     use crate::signature::HybridEd25519MlDsa;
 
+    /// A test's message: its label, zero-padded to a signing payload hash.
+    fn payload(label: &[u8]) -> SigningPayloadHash {
+        let mut bytes = [0u8; 64];
+        bytes[..label.len()].copy_from_slice(label);
+        SigningPayloadHash::from_bytes(bytes)
+    }
+
     fn gen_keypairs(n: usize) -> Vec<(HybridPublicKey, crate::signature::HybridSecretKey)> {
         let scheme = HybridEd25519MlDsa;
         (0..n)
@@ -442,12 +451,16 @@ mod tests {
     fn sign_multisig(
         pairs: &[(HybridPublicKey, crate::signature::HybridSecretKey)],
         signer_indices: &[u8],
-        message: &[u8],
+        message: &SigningPayloadHash,
     ) -> MultisigSigContainer {
         let scheme = HybridEd25519MlDsa;
         let sigs: Vec<HybridSignature> = signer_indices
             .iter()
-            .map(|&idx| scheme.sign(&pairs[idx as usize].1, MSD, message).unwrap())
+            .map(|&idx| {
+                scheme
+                    .sign(&pairs[idx as usize].1, MSD, message.as_bytes())
+                    .unwrap()
+            })
             .collect();
         MultisigSigContainer {
             sig_count: sigs.len() as u8,
@@ -476,7 +489,7 @@ mod tests {
     #[test]
     fn sig_container_roundtrip() {
         let pairs = gen_keypairs(3);
-        let msg = b"test-roundtrip";
+        let msg = &payload(b"test-roundtrip");
         let sc = sign_multisig(&pairs, &[0, 2], msg);
         let blob = sc.to_canonical_bytes().unwrap();
         assert_eq!(blob.len(), 1 + 2 * SINGLE_SIG_CANONICAL_LEN + 2);
@@ -493,7 +506,7 @@ mod tests {
     fn valid_2_of_3() {
         let pairs = gen_keypairs(3);
         let kc = make_key_container(&pairs, 2);
-        let msg = b"tx-payload-hash-2of3";
+        let msg = &payload(b"tx-payload-hash-2of3");
         let sc = sign_multisig(&pairs, &[0, 2], msg);
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
@@ -505,7 +518,7 @@ mod tests {
     fn valid_1_of_1() {
         let pairs = gen_keypairs(1);
         let kc = make_key_container(&pairs, 1);
-        let msg = b"1-of-1-edge-case";
+        let msg = &payload(b"1-of-1-edge-case");
         let sc = sign_multisig(&pairs, &[0], msg);
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
@@ -523,14 +536,14 @@ mod tests {
     fn single_sig_domain_signature_rejected_as_multisig_participant() {
         let pairs = gen_keypairs(1);
         let kc = make_key_container(&pairs, 1);
-        let msg = b"cross-domain-separation";
+        let msg = &payload(b"cross-domain-separation");
         // Sign under the SINGLE-SIG domain instead of the multisig one.
         let scheme = HybridEd25519MlDsa;
         let wrong_domain_sig = scheme
             .sign(
                 &pairs[0].1,
                 crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-                msg,
+                msg.as_bytes(),
             )
             .unwrap();
         let sc = MultisigSigContainer {
@@ -557,7 +570,7 @@ mod tests {
         // MSW-G = 5: the largest legal group verifies end to end.
         let pairs = gen_keypairs(5);
         let kc = make_key_container(&pairs, 5);
-        let msg = b"5-of-5-max";
+        let msg = &payload(b"5-of-5-max");
         let sc = sign_multisig(&pairs, &[0, 1, 2, 3, 4], msg);
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
@@ -588,7 +601,7 @@ mod tests {
             assert_eq!(kc2.spend_auth_pubkeys, kc.spend_auth_pubkeys);
 
             let indices: Vec<u8> = (0..n).collect();
-            let sc = sign_multisig(&pairs, &indices, b"msw1-kat");
+            let sc = sign_multisig(&pairs, &indices, &payload(b"msw1-kat"));
             let sblob = sc.to_canonical_bytes().unwrap();
             assert_eq!(
                 sblob.len(),
@@ -668,7 +681,7 @@ mod tests {
     fn check1_scheme_mismatch() {
         let pairs = gen_keypairs(2);
         let kc = make_key_container(&pairs, 2);
-        let msg = b"bad-scheme";
+        let msg = &payload(b"bad-scheme");
         let sc = sign_multisig(&pairs, &[0, 1], msg);
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
@@ -733,7 +746,7 @@ mod tests {
     #[test]
     fn check4_sig_blob_truncated() {
         let pairs = gen_keypairs(3);
-        let msg = b"truncated-sig";
+        let msg = &payload(b"truncated-sig");
         let sc = sign_multisig(&pairs, &[0, 1], msg);
         let mut blob = sc.to_canonical_bytes().unwrap();
         blob.truncate(blob.len() - 1);
@@ -747,7 +760,7 @@ mod tests {
     fn check5_threshold_mismatch() {
         let pairs = gen_keypairs(3);
         let kc = make_key_container(&pairs, 2);
-        let msg = b"threshold-mismatch";
+        let msg = &payload(b"threshold-mismatch");
         let sc = sign_multisig(&pairs, &[0, 1, 2], msg);
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
@@ -762,13 +775,13 @@ mod tests {
     fn check6_index_out_of_range() {
         let pairs = gen_keypairs(3);
         let kc = make_key_container(&pairs, 2);
-        let msg = b"idx-oor";
+        let msg = &payload(b"idx-oor");
         let scheme = HybridEd25519MlDsa;
         let sc = MultisigSigContainer {
             sig_count: 2,
             sigs: vec![
-                scheme.sign(&pairs[0].1, MSD, msg).unwrap(),
-                scheme.sign(&pairs[1].1, MSD, msg).unwrap(),
+                scheme.sign(&pairs[0].1, MSD, msg.as_bytes()).unwrap(),
+                scheme.sign(&pairs[1].1, MSD, msg.as_bytes()).unwrap(),
             ],
             signer_indices: vec![0, 3],
         };
@@ -785,13 +798,13 @@ mod tests {
     fn check7_indices_not_ascending() {
         let pairs = gen_keypairs(3);
         let kc = make_key_container(&pairs, 2);
-        let msg = b"unsorted-idx";
+        let msg = &payload(b"unsorted-idx");
         let scheme = HybridEd25519MlDsa;
         let sc = MultisigSigContainer {
             sig_count: 2,
             sigs: vec![
-                scheme.sign(&pairs[1].1, MSD, msg).unwrap(),
-                scheme.sign(&pairs[0].1, MSD, msg).unwrap(),
+                scheme.sign(&pairs[1].1, MSD, msg.as_bytes()).unwrap(),
+                scheme.sign(&pairs[0].1, MSD, msg.as_bytes()).unwrap(),
             ],
             signer_indices: vec![1, 0],
         };
@@ -815,13 +828,13 @@ mod tests {
             keys: vec![pairs[0].0.clone(), pairs[1].0.clone(), pairs[0].0.clone()],
             spend_auth_pubkeys: sa_pks,
         };
-        let msg = b"dup-keys";
+        let msg = &payload(b"dup-keys");
         let scheme = HybridEd25519MlDsa;
         let sc = MultisigSigContainer {
             sig_count: 2,
             sigs: vec![
-                scheme.sign(&pairs[0].1, MSD, msg).unwrap(),
-                scheme.sign(&pairs[1].1, MSD, msg).unwrap(),
+                scheme.sign(&pairs[0].1, MSD, msg.as_bytes()).unwrap(),
+                scheme.sign(&pairs[1].1, MSD, msg.as_bytes()).unwrap(),
             ],
             signer_indices: vec![0, 1],
         };
@@ -838,13 +851,13 @@ mod tests {
     fn check10_crypto_verify_wrong_message() {
         let pairs = gen_keypairs(3);
         let kc = make_key_container(&pairs, 2);
-        let msg = b"correct-message";
+        let msg = &payload(b"correct-message");
         let sc = sign_multisig(&pairs, &[0, 1], msg);
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
 
         assert_eq!(
-            verify_multisig(2, &key_blob, &sig_blob, b"wrong-message").unwrap_err(),
+            verify_multisig(2, &key_blob, &sig_blob, &payload(b"wrong-message")).unwrap_err(),
             PqcVerifyError::CryptoVerifyFailed
         );
     }
@@ -853,13 +866,13 @@ mod tests {
     fn check10_crypto_verify_wrong_signer() {
         let pairs = gen_keypairs(3);
         let kc = make_key_container(&pairs, 2);
-        let msg = b"wrong-signer";
+        let msg = &payload(b"wrong-signer");
         let scheme = HybridEd25519MlDsa;
         let sc = MultisigSigContainer {
             sig_count: 2,
             sigs: vec![
-                scheme.sign(&pairs[0].1, MSD, msg).unwrap(),
-                scheme.sign(&pairs[0].1, MSD, msg).unwrap(), // signed with key 0, but index says 1
+                scheme.sign(&pairs[0].1, MSD, msg.as_bytes()).unwrap(),
+                scheme.sign(&pairs[0].1, MSD, msg.as_bytes()).unwrap(), // signed with key 0, but index says 1
             ],
             signer_indices: vec![0, 1],
         };
@@ -877,10 +890,10 @@ mod tests {
     #[test]
     fn nested_hedged_signing_produces_different_sigs() {
         let pairs = gen_keypairs(1);
-        let msg = b"non-determinism";
+        let msg = &payload(b"non-determinism");
         let scheme = HybridEd25519MlDsa;
-        let sig1 = scheme.sign(&pairs[0].1, MSD, msg).unwrap();
-        let sig2 = scheme.sign(&pairs[0].1, MSD, msg).unwrap();
+        let sig1 = scheme.sign(&pairs[0].1, MSD, msg.as_bytes()).unwrap();
+        let sig2 = scheme.sign(&pairs[0].1, MSD, msg.as_bytes()).unwrap();
         // ML-DSA uses hedged signing: same message, same key -> different σ_pq.
         assert_ne!(sig1.ml_dsa, sig2.ml_dsa);
         // Under the nested combiner the Ed25519 half signs `inner ‖ σ_pq`, so a
@@ -889,8 +902,12 @@ mod tests {
         // deterministic here because it signed the bare message independently.
         assert_ne!(sig1.ed25519, sig2.ed25519);
         // Both must verify.
-        scheme.verify(&pairs[0].0, MSD, msg, &sig1).unwrap();
-        scheme.verify(&pairs[0].0, MSD, msg, &sig2).unwrap();
+        scheme
+            .verify(&pairs[0].0, MSD, msg.as_bytes(), &sig1)
+            .unwrap();
+        scheme
+            .verify(&pairs[0].0, MSD, msg.as_bytes(), &sig2)
+            .unwrap();
     }
 
     // -- Edge cases --
@@ -899,7 +916,7 @@ mod tests {
     fn valid_1_of_5() {
         let pairs = gen_keypairs(5);
         let kc = make_key_container(&pairs, 1);
-        let msg = b"1-of-5";
+        let msg = &payload(b"1-of-5");
         let sc = sign_multisig(&pairs, &[3], msg);
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
@@ -911,7 +928,7 @@ mod tests {
     fn skip_group_id_check_with_none() {
         let pairs = gen_keypairs(2);
         let kc = make_key_container(&pairs, 2);
-        let msg = b"no-group-check";
+        let msg = &payload(b"no-group-check");
         let sc = sign_multisig(&pairs, &[0, 1], msg);
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
@@ -924,7 +941,7 @@ mod tests {
         let pairs = gen_keypairs(5);
         let kc = make_key_container(&pairs, 3);
         let key_blob = kc.to_canonical_bytes().unwrap();
-        let msg = b"subset-signing-3of5";
+        let msg = &payload(b"subset-signing-3of5");
 
         let subsets: &[&[u8]] = &[&[0, 1, 2], &[0, 2, 4], &[2, 3, 4]];
 

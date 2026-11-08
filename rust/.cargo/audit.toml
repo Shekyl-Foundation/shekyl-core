@@ -8,15 +8,18 @@
 # `rust/audit.toml`.
 
 [advisories]
-# Every entry below is an "unmaintained" INFO notice (not a vulnerability)
-# on a transitive, non-consensus, non-secret dependency that cannot be
-# dropped without an upstream crate moving first. `cargo audit` reports
+# Every entry below except RUSTSEC-2026-0387 is an "unmaintained" INFO
+# notice (not a vulnerability) on a transitive, non-consensus, non-secret
+# dependency that cannot be dropped without an upstream crate moving
+# first. `cargo audit` reports
 # unmaintained as a warning; we ignore these documented cases so the audit
 # signal stays actionable -- a real vulnerability or a newly-fixable notice
 # stands out instead of being buried under perennial notices. Each carries
 # an explicit reopen criterion per
 # .cursor/rules/21-reversion-clause-discipline.mdc: when the named upstream
-# change lands, drop the ignore and let the dep fall out.
+# change lands, drop the ignore and let the dep fall out. RUSTSEC-2026-0387
+# is a vulnerability ignored by explicit ruling; its block, after the
+# notices, carries the exposure and the reopen criteria.
 #
 # paste 1.0.15 -- RUSTSEC-2024-0436: unmaintained. Compile-time-only
 # proc-macro for token concatenation; emits no runtime code and never
@@ -49,4 +52,52 @@
 # Crate-level advisory (every version is "unmaintained"), so bumping cannot
 # clear it -- only dropping it can. Reopen when `ab_glyph`/`imageproc` move
 # off `ttf-parser`, or when `shekyl-shard-visual` replaces `imageproc`.
-ignore = ["RUSTSEC-2024-0436", "RUSTSEC-2023-0089", "RUSTSEC-2026-0192"]
+#
+# --- Vulnerability ignored by ruling (not an unmaintained notice) ---
+#
+# crypto-bigint 0.5.5 -- RUSTSEC-2026-0387 (crypto-failure, 2026-10-23),
+# crypto audit row CA-1 (docs/design/CRYPTO_AUDIT.md), ignored by Rick's
+# ruling of 2026-10-24:
+# timing variability in operations meant to be constant-time (subtraction,
+# zero counting, division, Montgomery multiplication). Patched only in
+# 0.7.6; the advisory lists no affected functions, so it covers every 0.5.x.
+# Lockfile consumers:
+#   dalek-ff-group 0.4.6 and 0.5.0 (crates.io, serai)
+#   elliptic-curve 0.13.8 and minimal-ed448 0.4.2 (via ciphersuite 0.4.2)
+#   helioselene, ec-divisors (vendored shekyl-oxide), shekyl-curve-generators
+# Where it matters: `helioselene::Field25519` IS
+# `dalek_ff_group::FieldElement`, whose arithmetic is crypto-bigint's
+# `Residue` (Montgomery mul/sub) and whose wide reduction is `U512::rem`.
+# That field carries the FCMP++ prover's secret witness on the wallet
+# side, so the exposure is a co-located timing/microarchitectural observer
+# of the proving machine. Verification (daemon) handles public data only.
+# `HelioseleneField` takes only U256 limb plumbing from crypto-bigint
+# (sbb/adc, wide mul, ct_eq/ct_lt, conditional_select); its only division
+# calls are under `cfg(test)`.
+# Why it cannot be bumped: no RELEASED dalek-ff-group or ciphersuite uses
+# crypto-bigint 0.7 (latest 0.5.0 / 0.4.2). serai's `next` branch
+# (2026-09-22) has already moved dalek-ff-group onto a new `prime-field`
+# crate on crypto-bigint 0.7, unreleased; so the fix is a bump to that
+# branch pinned by git rev, with every pinned FCMP++/curve-tree vector held
+# byte-identical, not a port of our own.
+# Measured 2026-10-24 with cargo-checkct/BINSEC (docs/formal/checkct):
+# every crypto-bigint 0.5.5 operation dalek-ff-group uses, and every
+# Field25519 operation, is branchless on x86_64 (and on the riscv32imac /
+# thumbv7em stand-ins) under the tool's nightly and under the LLVM 21 line
+# 1.94.0 ships. HelioseleneField: branchless for 10 of 12 operations on
+# x86_64 and 12 of 12 on the stand-ins; its `pow` (public exponent in
+# production) and `sqrt` (reached only through point decompression and
+# transcript sampling, on public inputs; the secret-path sqrt is
+# Field25519's, measured) are NOT ASSESSED on x86_64 (BINSEC timeout).
+# 0.5.5's own `Residue::pow` with a SECRET exponent does branch
+# (riscv32imac; x86_64 under LLVM 21), and nothing in our stack calls it
+# that way. aarch64 and riscv64 are outside the tool's reach (aarch64 gets a
+# dynamic row; riscv64 is not assessed).
+# Reopen when ANY of: (a) serai releases dalek-ff-group/ciphersuite on
+# crypto-bigint >= 0.7.6 -- bump, re-run the harness against the new
+# field, drop this; (b) the toolchain is bumped -- re-measure in the same
+# PR (scripts/ci/check_checkct_toolchain.py makes a bump without it red);
+# (c) a static or dynamic row on a shipped target shows a branch or a
+# class difference in an operation we reach with a secret -- the pin
+# becomes blocking for the next release, not optional.
+ignore = ["RUSTSEC-2024-0436", "RUSTSEC-2023-0089", "RUSTSEC-2026-0192", "RUSTSEC-2026-0387"]

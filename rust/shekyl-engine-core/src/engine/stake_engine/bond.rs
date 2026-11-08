@@ -13,6 +13,7 @@ use shekyl_archival_retention::HoldingsDescriptor;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 use shekyl_tor_control_wallet::service::OnionIdentity;
 use shekyl_tx_builder::TreeContext;
+use shekyl_types::SigningPayloadHash;
 
 use crate::engine::bond_assembly::{BondAssemblyError, FundingInputContext, PBoundBytes};
 
@@ -158,6 +159,7 @@ impl Message<AssembleBond> for StakeEngine {
         // would close over `bond_spend_sk` instead.
         let assembled = assemble_signed_bond_post(
             BondPostAssembleArgs {
+                network: self.network,
                 keys,
                 persona,
                 funding: msg.funding,
@@ -170,7 +172,7 @@ impl Message<AssembleBond> for StakeEngine {
                 bond_auth_pk: hybrid_pk_bytes,
                 output_site: "change-output construction",
             },
-            |payload_hash| {
+            |payload_hash: &SigningPayloadHash| {
                 let sig = HybridEd25519MlDsa
                     .sign(
                         &keys.hybrid_sign_sk,

@@ -188,7 +188,7 @@ pub(super) struct BuiltPendingMeta {
     pub(super) fee: AtomicUnits,
     pub(super) selected: SelectedOutputs,
     pub(super) synced: shekyl_types::BlockHeight,
-    pub(super) tip_hash: [u8; 32],
+    pub(super) tip_hash: BlockHash,
     /// Output locks are held from assembly until `consumer_held` commit.
     pub(super) reservation_id: ReservationId,
 }
@@ -286,12 +286,12 @@ where
     /// many intervening reorgs for free, since it compares against the *current*
     /// canonical hash, not a retained fork history.
     pub(super) fn reference_orphaned(&self, reference: &ReferenceBlock) -> bool {
-        self.ledger_block_hash(reference.height) != Some(reference.block_hash.to_bytes())
+        self.ledger_block_hash(reference.height) != Some(reference.block_hash)
     }
 
     /// Hash at an inclusive ordinal, if the reorg window still holds it.
     /// One sync ledger read (F-J).
-    fn ledger_block_hash(&self, height: BlockHeight) -> Option<[u8; 32]> {
+    fn ledger_block_hash(&self, height: BlockHeight) -> Option<BlockHash> {
         self.ledger
             .with_ledger_block(|ledger| ledger.block_hash_at(height).copied())
     }
@@ -361,7 +361,7 @@ where
         reference: Option<ReferenceBlock>,
         tree_depth: u8,
     ) -> Result<BuildSelected, SendError> {
-        if let Err(err) = request.check_recipients() {
+        if let Err(err) = request.check_recipients(self.network) {
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
                 PendingTxDiagnostic::BuildFailed {
@@ -733,7 +733,10 @@ where
             InputCount::clamped(selected.indices.len()),
             OutputCount::clamped(payment_count),
             tree_depth,
-        );
+        )
+        .ok_or(SendError::BuildInvariant {
+            reason: "the fee does not fit in u64",
+        })?;
 
         let candidate_indices: HashSet<OutputId> = candidates.iter().map(|c| c.index).collect();
         for index in &selected.indices {
@@ -1120,7 +1123,7 @@ where
                 Some(block_hash) => ReferenceBlock {
                     height: reference_ordinal,
                     curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-                    block_hash: BlockHash::from_bytes(block_hash),
+                    block_hash,
                 },
                 None => {
                     return Err(ReanchorError::ReferenceResyncing {
@@ -1200,7 +1203,10 @@ where
                 InputCount::clamped(selected_indices.len()),
                 OutputCount::clamped(payment_count),
                 depth,
-            );
+            )
+            .ok_or(ReanchorError::Failed(SendError::BuildInvariant {
+                reason: "the fee does not fit in u64",
+            }))?;
 
             // --- phase 2 (prover, lock-free): assemble + fold + sign ---
             let paths = handle
@@ -1276,7 +1282,7 @@ where
             let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
             let reference_ordinal = reference_height;
             let still_canonical =
-                self.ledger_block_hash(reference_ordinal) == Some(reference.block_hash.to_bytes());
+                self.ledger_block_hash(reference_ordinal) == Some(reference.block_hash);
             if !still_canonical || should_reanchor(current_tip, reference_height) {
                 last_resync = Some(ReanchorError::ReferenceResyncing {
                     detail: "reference re-staled during the prover run",

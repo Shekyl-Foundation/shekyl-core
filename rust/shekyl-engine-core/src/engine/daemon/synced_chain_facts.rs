@@ -563,7 +563,7 @@ impl GetInfoDocument {
                 total_burned: shekyl_units::AtomicUnits::ZERO,
                 staker_emission_share_effective: 0,
             },
-            pool: InfoPool { tx_pool_size: 0 },
+            pool: InfoPool::Live { tx_pool_size: 0 },
             node: Hidden::Shown(InfoStatus {
                 start_time: 1_700_000_000,
                 free_space: 1 << 40,
@@ -576,14 +576,16 @@ impl GetInfoDocument {
                 alt_blocks_count: 0,
                 rpc_connections_count: 1,
             }),
-            peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(InfoPeers {
-                public_incoming_socket_count: 0,
-                public_outgoing_socket_count: 0,
-                tor_incoming_socket_count: 0,
-                tor_outgoing_socket_count: 0,
-                white_peerlist_size: 0,
-                grey_peerlist_size: 0,
-            })),
+            peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(
+                InfoPeers::new(vec![shekyl_rpc_types::InfoConnectorPeers {
+                    connector: shekyl_rpc_types::InfoConnector::Clearnet,
+                    incoming_sockets: 0,
+                    outgoing_sockets: 0,
+                    white_peerlist_size: 0,
+                    gray_peerlist_size: 0,
+                }])
+                .expect("one row is in order"),
+            )),
             // The wallet is never the daemon's host administrator.
             host: Hidden::Withheld,
             restricted: false,

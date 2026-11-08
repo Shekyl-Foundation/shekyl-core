@@ -14,11 +14,11 @@
 //! view: a signed record below the anchor threshold, and one whose persona
 //! has no bond record. A hole in the window and a stored key that is not
 //! canonical are `Corrupt`, witnessed by the mock's two job-3 instruments,
-//! not refusals. The accept of a signed record runs the same body
-//! the daemon's FFI pins (`shekyl-ffi`, `attestation_verify_tests::
-//! valid_block_verifies`); a chain that posts the bond and mints the
-//! `0x0B` field is not mintable under CEN-I20's grammar today (slice 8
-//! §5.1, row 10 finding), so the arm is not re-witnessed here.
+//! not refusals. The accept of a signed record is not witnessed: a chain
+//! that posts the bond and mints the `0x0B` field is not mintable under
+//! CEN-I20's grammar today (slice 8 §5.1, row 10 finding), and only the
+//! per-record signature check is pinned, in `shekyl-archival-retention`
+//! (`attestation_wire_tests`).
 
 use super::*;
 use crate::block::Candidate;
@@ -100,7 +100,14 @@ fn signed_record(chain: &MockChain, anchor: BlockHeight) -> SignedRecord {
         Ok(AtHeight::AboveTip) => unreachable!("the anchor is on the chain"),
         Err(never) => match never {},
     });
-    let msg = pass_countersignature_message(&NONCE, anchor, &anchor_hash, SHARD, &DIGEST);
+    let msg = pass_countersignature_message(
+        shekyl_archival_retention::PassStream::Economy,
+        &NONCE,
+        anchor,
+        &anchor_hash,
+        SHARD,
+        &DIGEST,
+    );
     let signed = sign_pqc_auth_for_output(&[0xA7; 64], 0, SCHEME_DOMAIN_ATTESTATION, &msg)
         .expect("a fixture seed signs");
     let p_id = *p_canonical_id_from_hybrid_pubkey(&signed.hybrid_public_key).as_bytes();
@@ -169,14 +176,9 @@ fn cen_b4_empty_set_against_the_empty_root_is_a_judged_pass() {
     assert_eq!(check_alone_on(&chain, &candidate), Ok(()));
     let formed = formed_on(&chain, candidate);
     let valid = chain.with_view(|view| {
-        *judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("the fixture candidate is valid")
-        .coverage()
+        *judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .expect("the fixture candidate is valid")
+            .coverage()
     });
     assert!(
         valid.contains(CenRow::B4),

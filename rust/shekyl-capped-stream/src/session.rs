@@ -8,40 +8,39 @@
 
 use std::sync::{Arc, Mutex};
 
-use shekyl_transport_layer::{CloseCause, CloseKind};
+use shekyl_transport_layer::{CloseCause, CloseKind, DialEnd};
 use tokio::sync::mpsc;
 
 use crate::queue::{ByteQueue, Overfull, PushError};
 
-/// The sender the connector's reader uses, and the cause that closes it.
+/// The sender the connector's reader uses, and the end that closes it.
 ///
-/// [`Self::close`] records the first cause. Dropping every clone ends
-/// [`Session::recv`]. The cause is whatever [`Self::close`] stored.
-/// A drop that never called [`Self::close`] is [`CloseKind::LocalClose`],
-/// not a peer close: [`CloseKind::PeerClosed`] is only the reader's
-/// end-of-file.
+/// [`Self::close`] records the first end: the connector's own stamp of how
+/// the stream ended. Dropping every clone ends [`Session::recv`]. A drop
+/// that never called [`Self::close`] is this node's own close, not a peer
+/// close.
 #[derive(Clone)]
 pub struct InboundEnd {
     tx: mpsc::Sender<Vec<u8>>,
-    cause: Arc<Mutex<Option<CloseCause>>>,
+    end: Arc<Mutex<Option<DialEnd>>>,
 }
 
 impl InboundEnd {
-    /// Record `cause` if none is recorded yet.
-    pub fn close(&self, cause: CloseCause) {
-        let mut slot = self.cause.lock().expect("inbound cause");
+    /// Record `end` if none is recorded yet.
+    pub fn close(&self, end: DialEnd) {
+        let mut slot = self.end.lock().expect("inbound end");
         if slot.is_none() {
-            *slot = Some(cause);
+            *slot = Some(end);
         }
     }
 
-    /// Record `cause` on this end and on the outbound queue.
+    /// Record `end` on this end, and its D12 cause on the outbound queue.
     ///
-    /// The first cause on each end stands. The connection task calls this
+    /// The first end on each side stands. The connection task calls this
     /// once, then aborts the other half. A later drop does not replace it.
-    pub fn seal(&self, hold: &QueueHold, cause: CloseCause) {
-        self.close(cause);
-        hold.close_with(cause);
+    pub fn seal(&self, hold: &QueueHold, end: DialEnd) {
+        self.close(end);
+        hold.close_with(end.cause());
     }
 
     /// Hand one decoded frame to the session.
@@ -131,9 +130,9 @@ impl Drop for QueueHold {
 pub struct Session {
     inbound: mpsc::Receiver<Vec<u8>>,
     queue: ByteQueue,
-    /// The cause [`InboundEnd::close`] stored. Read after [`Self::recv`]
+    /// The end [`InboundEnd::close`] stored. Read after [`Self::recv`]
     /// returns `None`.
-    cause: Arc<Mutex<Option<CloseCause>>>,
+    end: Arc<Mutex<Option<DialEnd>>>,
 }
 
 impl Drop for Session {
@@ -144,7 +143,7 @@ impl Drop for Session {
 
 impl Session {
     /// The next frame the connector decoded. `None` means the inbound end
-    /// closed. [`Self::close_cause`] is the cause the connector stored.
+    /// closed. [`Self::close_end`] is the end the connector stored.
     pub async fn recv(&mut self) -> Option<Vec<u8>> {
         self.inbound.recv().await
     }
@@ -155,17 +154,36 @@ impl Session {
         self.inbound.blocking_recv()
     }
 
-    /// The cause that closed this session.
-    ///
-    /// [`CloseKind::PeerClosed`] only when the connector's reader saw
-    /// end-of-file and stored that cause. A close that stored nothing is
-    /// [`CloseKind::LocalClose`].
+    /// The end that closed this session, as the connector stamped it. A
+    /// close that stored nothing is this node's own close after the
+    /// channel.
+    #[must_use]
+    pub fn close_end(&self) -> DialEnd {
+        self.stored_end()
+            .unwrap_or_else(DialEnd::local_close_after_channel)
+    }
+
+    /// [`Self::close_end`]'s D12 cause: [`CloseKind::PeerClosed`] only when
+    /// the connector saw end-of-file and stored that end, and
+    /// [`CloseKind::LocalClose`] when nothing was stored.
     #[must_use]
     pub fn close_cause(&self) -> CloseCause {
-        self.cause
-            .lock()
-            .expect("inbound cause")
-            .unwrap_or_else(|| CloseCause::new(CloseKind::LocalClose))
+        self.close_end().cause()
+    }
+
+    /// The end the connector stored when it closed the inbound end, if it
+    /// has: a peer that closed is seen without reading the frames still
+    /// queued. `None` while the inbound end is open, and after a close that
+    /// stored nothing.
+    #[must_use]
+    pub fn stored_end(&self) -> Option<DialEnd> {
+        *self.end.lock().expect("inbound end")
+    }
+
+    /// [`Self::stored_end`]'s D12 cause.
+    #[must_use]
+    pub fn stored_cause(&self) -> Option<CloseCause> {
+        self.stored_end().map(DialEnd::cause)
     }
 
     /// A send handle that does not close the queue when dropped.
@@ -198,8 +216,8 @@ pub struct StreamEnds {
     pub hold: QueueHold,
     /// The full-queue signal the copy selects on: the queue's own.
     pub overfull: Arc<Overfull>,
-    /// The reader sends decoded frames here. [`InboundEnd::close`] names
-    /// why the session ended, before the last sender is dropped.
+    /// The reader sends decoded frames here. [`InboundEnd::close`] records
+    /// how the session ended, before the last sender is dropped.
     pub inbound: InboundEnd,
 }
 
@@ -210,18 +228,18 @@ impl StreamEnds {
         let queue = ByteQueue::new(send_queue_bytes);
         let overfull = queue.overfull();
         let (tx, inbound_rx) = mpsc::channel(UNREAD_FRAMES);
-        let cause = Arc::new(Mutex::new(None));
+        let end = Arc::new(Mutex::new(None));
         let session = Session {
             inbound: inbound_rx,
             queue: queue.clone(),
-            cause: Arc::clone(&cause),
+            end: Arc::clone(&end),
         };
         Self {
             session,
             writer_queue: queue.clone(),
             hold: QueueHold { queue },
             overfull,
-            inbound: InboundEnd { tx, cause },
+            inbound: InboundEnd { tx, end },
         }
     }
 }

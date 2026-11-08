@@ -22,20 +22,12 @@
 name: ci/rpc-route-liveness
 
 on:
-  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
-  # not only the branch head — the class of failure neither PR's CI can
-  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
-  # filter, so this runs on every group regardless of the PR filter above
-  # or below.
-  merge_group:
-    types: [checks_requested]
-    branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened]
     paths: &paths
       - "rust/shekyl-daemon-rpc/**"
       - "rust/shekyl-rpc-client/**"
       - "rust/shekyl-engine-core/**"
-      - "src/rpc/**"
       - "utils/python-rpc/**"
       - "scripts/ci/check_rpc_route_liveness.sh"
       - ".github/workflows/rpc-route-liveness.yml"
@@ -54,6 +46,7 @@ jobs:
   rpc-route-liveness:
     name: "RK: every served RPC route has a consumer"
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.2 min over 25 runs; the floor
     steps:
       - uses: actions/checkout@v5
       - name: check RPC route liveness

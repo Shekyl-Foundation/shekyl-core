@@ -69,7 +69,7 @@ pub enum RowStatus {
     /// enforces it at a site other than the per-block stages, so no
     /// per-block coverage could ever contain it (`CHAIN_RULES_SLICE_3.md`
     /// Q4). The first is CEN-E5, run once by the writer at open
-    /// (`ReleaseAnchors::conflict_with`).
+    /// (`GenesisPin::conflict_with`).
     ///
     /// The registry entry carries the citation — `enforced_at(path, "test")`
     /// — and that is the only copy. The path is compile-pinned; the gate
@@ -379,7 +379,7 @@ census_rows! {
         D3 implemented(crate::rules::pow::D3),
         // D4 the target definition, recorded at `D4::target`; D6 held by the
         // `Target` type (`NonZeroU128`), recorded at every production path
-        // (`D6::record` / `D6::mint`) so Fakechain `Fixed` and genesis-block
+        // (`D6::record` / `D6::mint`) so levered `Fixed` and genesis-block
         // `1` cover the row as well as LWMA-1 (slice 2 Q4). D5 is D4's
         // algorithm over the stitched view — `D5::target` wraps `D4::target`
         // and records the row at the one site that feeds D4 an alt view,
@@ -387,20 +387,20 @@ census_rows! {
         D4 implemented(crate::rules::difficulty::D4),
         D5 enforced_at(crate::rules::alt::D5, "the_alt_target_follows_the_window_it_is_fed"),
         D6 implemented(crate::rules::difficulty::D6),
-        // D7 as data on a Fakechain rule set (`DifficultyRule::Fixed`), the
+        // D7 as data on a levered rule set (`DifficultyRule::Fixed`), the
         // override arm D4 consults on every block (slice 2 Q10, arm (d)).
         D7 implemented(crate::rules::difficulty::D7),
-        // 4.E Checkpoints and fast-sync trust — the anchor model's rows
-        // (`CHAIN_RULES_SLICE_3.md` §0; `PDM-Q5`).
-        E1 implemented(crate::rules::anchors::E1),
-        // E2 the anchor floor and the rolling reorg cap, judged over the fork
-        // an alternative would cause (`E2::check`, `alt_against`, DRS-E5
-        // slice 9). The main chain satisfies both by construction, so the
-        // row is the alt tier's alone — `enforced_at`, not per block.
-        E2 enforced_at(crate::rules::alt::E2, "an_alternative_rooted_below_the_anchor_is_refused_and_one_at_or_above_it_is_not"),
+        // 4.E The genesis pin (`genesis_pin.rs`); no coded checkpoints (S1,
+        // design review 2026-11-03).
+        E1 implemented(crate::rules::genesis::E1),
+        // E2 is bucket 3 (REJECTED, S1 2026-11-03): no coded checkpoints,
+        // so no anchor floor; the reorg cap bound only when anchored, and
+        // `D_max` stays a local limit of the switch (`PopBeyondReorgCap`).
+        // The census keeps the id marked REJECTED; this registry does not.
+        // CEN-F12 is the precedent.
         // E5 is enforced once, by the writer at open — not per block
         // (slice 3 Q4 (a)); the test named is the refusal fixture.
-        E5 enforced_at(crate::rules::anchors::E5, "a_recorded_block_that_is_not_the_anchor_is_the_conflict"),
+        E5 enforced_at(crate::rules::genesis::E5, "a_foreign_genesis_is_the_conflict_at_height_zero"),
         // 4.F Miner transaction (structure and emission)
         F1 implemented(crate::rules::miner::F1),
         F2 by_construction(shekyl_wire::transaction::TX_VERSION, "f2_the_wire_admits_one_transaction_version"),
@@ -566,13 +566,12 @@ census_rows! {
         J26 implemented(crate::rules::tx_emission_against::J26),
         // J29–J37 (minted 2026-10-12, STAGED): the serve-credit bundle's
         // admission checks, a block-level section (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
-        // §9.1). The pure verifier that names them as refusals is built
-        // (`crate::archival::check_section`, `crate::archival::verify_bundle`)
-        // and nothing on the connect path calls it, so no rule type is
-        // bound and each row is `pending`: in the denominator, in no
-        // coverage. `SO-D12`'s cutover increment binds them. J28 is filed
-        // with the bond-post key-shape rows above, where increment 3
-        // minted it. J17 stays unregistered (bucket 3).
+        // §9.1). The pure verifier is built, and increment 4a adds the rule
+        // types `rules::bundle_admission::J29` through `J37`. They are not
+        // bound: no `implemented` entry names them, nothing on the connect
+        // path calls `judge_bundles`, and each row stays `pending` until 4b.
+        // J28 is filed with the bond-post key-shape rows above. J17 stays
+        // unregistered (bucket 3).
         J29 pending,
         J30 pending,
         J31 pending,
@@ -604,7 +603,7 @@ census_rows! {
         K5 held_by_store("shekyl-chain-ingest", "a_promoted_block_that_fails_validate_rolls_back_and_removes_its_suffix"),
         K5b held_by_store("shekyl-chain-ingest", "a_tampered_witness_on_an_alt_row_fails_promotion_k5b"),
         K6 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
-        K7 held_by_store("shekyl-chain-ingest", "a_checkpoint_forced_switch_discards_the_demoted_chain"),
+        K7 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
         K8 held_by_store("shekyl-chain-store", "an_alt_row_has_no_supply_word"),
         // K9: an alternative block's bodies (DRS-E5 PR-b b4; the review of
         // #1102, B1) — held by the store beside its row and promoted from
@@ -628,7 +627,8 @@ census_rows! {
         L7 implemented(crate::archival::L7),
         L8 by_construction(crate::archival::accrue, "l8_an_accrual_that_overflows_is_a_corrupt_view"),
         L9 by_construction(crate::archival::apply_slash, "l9_slashing_a_shard_the_record_does_not_hold_is_a_corrupt_view"),
-        L10 pending,
+        // L10 left this registry when the store flip deleted the C++
+        // freeze (PDM-Q12; SAR-5). The row is bucket 3 in the census.
         // L11/L12: growth has no rule type (E3 Round 1, `drain.rs`'s module
         // docs). The rows still bind, because B5 judges the next header's
         // root against the root `tree_after` derives from the chain below:

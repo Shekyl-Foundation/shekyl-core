@@ -36,7 +36,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::consensus_digest::DaemonNetwork;
+use crate::consensus_digest::Network;
 use crate::hash::HashHex;
 use crate::nullable::Nullable;
 
@@ -143,8 +143,8 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// per-amount output-count query over caller-chosen unlock and recency
 /// windows is a statistical disclosure surface with no consumer on a chain
 /// without rings (`DRS_E1_SOUT_KI.md` SOK-Q3, ruled B; census U-7). 3.32:
-/// `calc_pow` drops leftover `major_version` (RandomX-only longhash; C++
-/// daemon RPC is still live via `core_rpc_ffi`). 3.31: `get_archival_shard_coverage` and
+/// `calc_pow` drops leftover `major_version` (RandomX-only longhash; the
+/// C++ daemon RPC was then still live via `core_rpc_ffi`). 3.31: `get_archival_shard_coverage` and
 /// `request_archival_shard` (`ARCHIVAL_SHARD_SELECTION_LIST.md` `SL-D`).
 /// 3.30: `get_fee_estimate.fees` drops the dead
 /// fourth slot — three priced tiers, one slot each (FL-R25; the RK-5 bridge
@@ -199,7 +199,79 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// other source. A row from a 3.58 daemon carries the key, which this
 /// version's `ConnectionInfo` refuses, so the identity check reports the
 /// contract before a reply is decoded.
-pub const CORE_RPC_VERSION_MINOR: u32 = 59;
+/// 3.60: a claim-source bond row names `is_support_complete_tree`. A 3.59
+/// daemon still sends `is_foundation_complete_tree`, which this version
+/// refuses. `get_version` gains nothing.
+/// 3.61: a node whose pool is retired answers the chain's reads.
+/// `get_info` carries `pool_retired: true` with `tx_pool_size` (and the
+/// host's `tx_pool_unbroadcast_count`) `null`; `get_transactions` lists an
+/// id the chain does not hold under `unavailable_tx`. A 3.60 reader decodes
+/// `tx_pool_size` as a number and knows neither key. `get_version` gains
+/// nothing.
+/// 3.62: a refusal by grant is the JSON-RPC error object on every surface
+/// (`RPC_WIRE.md` RW-Q3): class `OutsideTheGrant` (-32002) with its typed
+/// diagnostic, where a gated JSON-RPC method was HTTP 403 with -32601 and a
+/// gated REST path was a 404. A path or a name that is not a method stays
+/// not found. The view listener refuses
+/// `/get_alt_blocks_hashes` (`status`), and `calc_pow` and
+/// `get_coinbase_tx_sum` are refused to a bounded caller as
+/// `OverResourceBound` (-32003) until their bounds are set (RT-W10).
+/// `get_version` gains nothing.
+/// 3.63: the flip's client shapes (FLIP-Q4). `start_mining` takes
+/// `{ threads }` and no address. `generateblocks` takes `{ count }`.
+/// `get_block_template` takes no parameters. A retired pool's
+/// `tx_pool_size` is null. `join_market_unsupported` leaves the
+/// `send_raw_transaction` reject-cause set: the Rust daemon admits a
+/// JoinMarket bond post, and no daemon authors the cause. `get_version`
+/// gains nothing.
+/// 3.64: a transaction's body has two forms and both bind (`SB-Q2`,
+/// `PDM-Q10`). A `get_transactions` entry carries `pqc_auth_hash`
+/// (nullable) beside `prunable_hash` and `archival_len`; under `prune` its
+/// `pruned_as_hex` is the pruned segment only, never with `pqc_auths`
+/// appended. A full body this node has discarded is listed under
+/// `archived` as `{ tx_hash, shard }`, not failed. `split`,
+/// `decode_as_json`, `prunable_as_hex`, `as_json` and `pruned` retire
+/// (IG-Q55). `get_blocks_by_height.bin` takes `prune` and carries each
+/// archived body as a per-slot state rather than failing the height.
+/// `get_version` gains nothing.
+/// 3.65: `mining_status.speed` is the hash count over its window of
+/// complete seconds. A whole-hash quotient read `0` for a miner below
+/// one hash a second. `get_version` gains nothing.
+/// 3.66: a bounded connection over an inherited list cap, or asking for
+/// `fill_pow_hash`, is `OverResourceBound` (-32003) with the bound named.
+/// The four caps stay 1000, 1000, 100 and 5000. `calc_pow` and
+/// `get_coinbase_tx_sum` stay refused to a bounded caller until their
+/// costs are set. `get_version` gains nothing.
+/// 3.67: `calc_pow` and `get_coinbase_tx_sum` are served to a bounded
+/// caller. `calc_pow` hashes a blob no longer than the hashing-blob
+/// format (`MAX_POW_BLOB_SIZE`) and pays one hash from the shared budget.
+/// `fill_pow_hash` returns the hash recorded at validation and does not
+/// pay; a bounded header read stays within the 1,000-header cap. A request
+/// for more than one hash, or one hash while the budget is empty, is
+/// `OverResourceBound`. A bounded `get_coinbase_tx_sum` waits for the one
+/// coinbase-read permit. `get_version` gains nothing.
+/// 3.68: chain sync's cutover (CS-5 §7). `sync_info` carries the sync
+/// owner's view under its own names: `height`, `target_height` (now always
+/// a count), `state`, `stalled`, and `peers[]` with `connection_id`,
+/// `address`, `claimed_height`, `mode`, `header_request`, `body_requests`
+/// and `rate`. `spans` and `overview`, which rendered the deleted block
+/// queue, are gone, and a 3.67 reader refuses the reply. `get_connections`
+/// takes `height` (the claim's count) and `state` (the session's mode, or
+/// null) from the view. `get_version` gains nothing.
+/// 3.69: `already_in_pool` carries a required `relay` (`held`,
+/// `held_overdue`, `published`, or `untracked`), the owner tier's relay
+/// state. The daemon judges `held_overdue` when that state is read, on
+/// its own clock. A missing origin row is `untracked`. `get_version`
+/// gains nothing.
+/// 3.70: `get_info`'s Peers part reports one row per connector the daemon
+/// runs, `connectors: [{connector, incoming_sockets, outgoing_sockets,
+/// white_peerlist_size, gray_peerlist_size}]`, `clearnet` before `tor`.
+/// A connector the daemon does not run has no row. The six flat keys
+/// (`public_*`/`tor_*` socket counts, `white_peerlist_size`,
+/// `grey_peerlist_size`) are gone; the list sizes they gave were the
+/// clearnet lists alone, so a Tor-only node read `white 0`. A 3.69 reader
+/// refuses the reply. `get_version` gains nothing.
+pub const CORE_RPC_VERSION_MINOR: u32 = 70;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -253,6 +325,38 @@ impl RpcStatus {
     pub fn is_offline(&self) -> bool {
         self.0 == Self::OFFLINE
     }
+
+    /// Which of the named statuses this is.
+    ///
+    /// Callers match [`StatusKind`]. The free-text arm is [`StatusKind::Other`];
+    /// its spelling stays on this value for the line that prints it, and is
+    /// not a string a caller compares.
+    #[must_use]
+    pub fn kind(&self) -> StatusKind {
+        if self.is_ok() {
+            StatusKind::Ok
+        } else if self.0 == Self::BUSY {
+            StatusKind::Busy
+        } else if self.is_offline() {
+            StatusKind::Offline
+        } else {
+            StatusKind::Other
+        }
+    }
+}
+
+/// The statuses a reply's `status` field is known to be, until RW-Q3
+/// removes the field at `CORE_RPC_VERSION` 4.0.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusKind {
+    /// `"OK"`.
+    Ok,
+    /// `"BUSY"`: the core is not ready.
+    Busy,
+    /// `"offline"`: the daemon was started offline.
+    Offline,
+    /// A handler's own text. Read it from [`RpcStatus`], do not match it.
+    Other,
 }
 
 /// JSON-RPC error code for a malformed request (`CORE_RPC_ERROR_CODE_WRONG_PARAM`).
@@ -266,11 +370,9 @@ pub const CORE_RPC_ERROR_CODE_WRONG_PARAM: i64 = -1;
 /// (`CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT`).
 pub const CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT: i64 = -2;
 
-/// JSON-RPC error code for a request the restricted listener declines
-/// (`CORE_RPC_ERROR_CODE_RESTRICTED`) — a cap exceeded, or a privileged field
-/// asked for. **A refusal, never a silently emptied field**: the C++ answered
-/// `fill_pow_hash` under restriction with an empty string and status OK,
-/// reporting success about a question it had declined.
+/// JSON-RPC error code the C++ restricted listener used (`-19`). As of
+/// 3.66 a cap and `fill_pow_hash` refuse as `OverResourceBound` (-32003).
+/// This constant remains so a client can still name the old code.
 pub const CORE_RPC_ERROR_CODE_RESTRICTED: i64 = -19;
 /// JSON-RPC error code for a daemon-side failure the method has a contract
 /// for (`CORE_RPC_ERROR_CODE_INTERNAL_ERROR`) — e.g. a store that reports a
@@ -514,7 +616,7 @@ pub struct GetVersionResponse {
     /// An unrecognised value is a deserialization error, never a default: a
     /// daemon reporting a network this build does not know is a daemon this
     /// build cannot vouch for.
-    pub nettype: DaemonNetwork,
+    pub nettype: Network,
     /// Hash of block 0 — the **genesis** axis.
     ///
     /// Carried here rather than read from `on_get_block_hash([0])`
@@ -618,11 +720,31 @@ mod tests {
         // `data`, and retires the four runtime endpoints
         // (DAEMON_CONFIG_CUTOVER §2.7). Both branches had written 57, so the
         // later merge took the next minor, as 3.44 did. 3.59 drops
-        // `support_flags` from the connection rows (PWD-T7).
-        assert_eq!(CORE_RPC_VERSION, 196_667);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 59);
+        // `support_flags` from the connection rows (PWD-T7). 3.60 renames
+        // the claim-source bond field to `is_support_complete_tree`. 3.61
+        // answers the chain's reads over a retired pool. 3.62 makes a grant
+        // refusal the error object (RT-W10 step 1). 3.63 is the flip's
+        // client shapes: `start_mining` takes threads and no address,
+        // `generateblocks` takes a count (FLIP-Q4), and the reject cause
+        // `join_market_unsupported` leaves the set. 3.64 makes a
+        // `get_transactions` entry the skeleton (`pqc_auth_hash`; `split`,
+        // `as_json`, `pruned`, `prunable_as_hex` retire), lists a discarded
+        // full body under `archived`, and gives `get_blocks_by_height.bin`
+        // its `prune` switch (SB-Q2, PDM-Q10). Both branches had written
+        // 64, so `mining_status.speed` carrying the hash count over its
+        // window took the next minor, as 3.44 did. 3.66 makes a bounded
+        // connection's list cap and `fill_pow_hash` `OverResourceBound`.
+        // 3.67 serves `calc_pow` and `get_coinbase_tx_sum` to a bounded
+        // caller, within the hash budget and the one coinbase-read permit.
+        // 3.68 is chain sync's cutover: `sync_info` is the sync owner's view
+        // (CS-5 §7); it had written 66, and took the minor after both.
+        // 3.69 gives `already_in_pool` its required `relay` field
+        // (`held`, `held_overdue`, `published`, `untracked`). 3.70 makes
+        // `get_info`'s Peers part one row per connector the daemon runs.
+        assert_eq!(CORE_RPC_VERSION, 196_678);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 70);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 59);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 70);
     }
 
     #[test]

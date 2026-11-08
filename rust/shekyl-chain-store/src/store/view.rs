@@ -94,7 +94,7 @@ use shekyl_chain_rules::{
 };
 use shekyl_types::archival::{
     BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
-    SettlementRow,
+    SettlementRow, SupportSeats,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -149,6 +149,34 @@ impl<'b, 'id> BatchView<'b, 'id> {
     /// classify absence against it.
     fn tip_row(&self) -> Result<Option<(u64, BlockInfo)>, StoreError> {
         chain_reads::tip_of(self.batch.txn()).map_err(|f| self.arm(f))
+    }
+
+    /// Arm a store invariant on this batch. The admission view uses it for
+    /// a memo miss (SI-35), an index past `D` (SI-37), a recorded coinbase
+    /// extra that does not yield one draw commitment (SI-38), and a visible
+    /// count past `u32` (SI-39). None of those is a read of a table.
+    pub(super) fn arm_row(&self, row: StoreInvariant) -> StoreError {
+        self.batch.poison().arm(row)
+    }
+
+    /// The block recorded at `height`, parsed from `blocks` and checked
+    /// against `block_info`. Above the tip is [`AtHeight::AboveTip`]. A
+    /// missing or unreadable row at or below the tip is SI-7.
+    ///
+    /// [`ChainView::block_at`] drops the miner transaction. The admission
+    /// view reads the coinbase extra from this block, and it scans that
+    /// extra itself: one `0x0C` field, not the coinbase grammar.
+    pub(super) fn recorded_block_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<shekyl_wire::Block>, StoreError> {
+        let tip = self.tip_row()?;
+        let body = chain_reads::block_body(self.batch.txn(), tip.as_ref(), height.to_raw())
+            .map_err(|f| self.arm(f))?;
+        Ok(match body {
+            AtHeight::AboveTip => AtHeight::AboveTip,
+            AtHeight::Recorded((_, block)) => AtHeight::Recorded(block),
+        })
     }
 }
 
@@ -449,6 +477,24 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         archival_reads::issued_draws(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
+    fn support_issued(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::support_issued(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
+    }
+
+    fn support_settlement(
+        &self,
+        persona: &PCanonicalId,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SettlementRow>, StoreError> {
+        archival_reads::support_settlement(self.batch.txn(), persona, epoch, floor)
+            .map_err(|f| self.arm(f))
+    }
+
     fn issued_digest(
         &self,
         epoch: SettlementEpoch,
@@ -472,6 +518,15 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         floor: BlockDrawsFloor,
     ) -> Result<Option<BlockDraws>, StoreError> {
         archival_reads::block_draws(self.batch.txn(), height, floor).map_err(|f| self.arm(f))
+    }
+
+    fn support_block_seats(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportSeats>, StoreError> {
+        archival_reads::support_block_seats(self.batch.txn(), height, floor)
+            .map_err(|f| self.arm(f))
     }
 
     fn drawable_digest(

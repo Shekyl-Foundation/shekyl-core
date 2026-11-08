@@ -25,14 +25,14 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
+use super::super::submit_watchdog::{RelaySight, PROBE_CEILING_BLOCKS};
 use super::super::traits::FeeEstimates;
 use shekyl_rpc_client::{Rpc, RpcError};
+use shekyl_rpc_types::PoolRelay;
 
-/// Block target 120 s → escape horizon 540 blocks. Derived by
-/// [`WatchdogConfig::from_block_target`], not hard-coded into the
-/// driver; the constant here mirrors the kernel test's `CFG`.
-const BLOCK_TARGET_SECS: u64 = 120;
-const HORIZON: u64 = 540;
+/// The production block ceiling the driver runs at
+/// ([`PROBE_CEILING_BLOCKS`]), read rather than re-typed.
+const CEILING: u64 = PROBE_CEILING_BLOCKS;
 
 fn txid(seed: u8) -> TxHash {
     TxHash::from_bytes([seed; 32])
@@ -42,12 +42,12 @@ fn held(seed: u8, baseline: u64) -> HeldSubmit {
     HeldSubmit {
         tx_hash: txid(seed),
         baseline_height: baseline,
-        probed_this_epoch: false,
+        relay: RelaySight::Unread,
     }
 }
 
 fn driver() -> SubmitLifecycleDriver {
-    SubmitLifecycleDriver::new(BLOCK_TARGET_SECS)
+    SubmitLifecycleDriver::new()
 }
 
 // ----------------------------------------------------------------
@@ -61,7 +61,7 @@ fn driver() -> SubmitLifecycleDriver {
 struct HostState {
     held: Vec<HeldSubmit>,
     synced: u64,
-    block_hashes: HashMap<u64, [u8; 32]>,
+    block_hashes: HashMap<u64, shekyl_types::BlockHash>,
     held_bytes: HashMap<TxHash, Vec<u8>>,
     rescan_queue: Vec<RescanRequest>,
     released: HashSet<TxHash>,
@@ -93,7 +93,11 @@ impl StubHost {
     }
 
     fn with_block_hash(self, height: u64, hash: [u8; 32]) -> Self {
-        self.state.lock().unwrap().block_hashes.insert(height, hash);
+        self.state
+            .lock()
+            .unwrap()
+            .block_hashes
+            .insert(height, shekyl_types::BlockHash::from_bytes(hash));
         self
     }
 
@@ -145,7 +149,7 @@ impl WatchdogHost for StubHost {
         BlockHeight::from_raw(self.state.lock().unwrap().synced)
     }
 
-    fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]> {
+    fn block_hash_at(&self, height: BlockHeight) -> Option<shekyl_types::BlockHash> {
         self.state
             .lock()
             .unwrap()
@@ -196,7 +200,7 @@ impl WatchdogHost for StubHost {
 struct DaemonState {
     health: DaemonHealth,
     health_fail: bool,
-    block_hashes: HashMap<u64, [u8; 32]>,
+    block_hashes: HashMap<u64, shekyl_types::BlockHash>,
     block_hash_err: HashSet<u64>,
     submit: VecDeque<Result<TxSubmitOutcome, RpcError>>,
     submit_calls: usize,
@@ -234,7 +238,11 @@ impl StubDaemon {
     }
 
     fn set_block_hash(&self, height: u64, hash: [u8; 32]) {
-        self.state.lock().unwrap().block_hashes.insert(height, hash);
+        self.state
+            .lock()
+            .unwrap()
+            .block_hashes
+            .insert(height, shekyl_types::BlockHash::from_bytes(hash));
     }
 
     fn push_submit(&self, outcome: Result<TxSubmitOutcome, RpcError>) {
@@ -263,7 +271,7 @@ impl Rpc for StubDaemon {
     fn get_block_hash(
         &self,
         number: usize,
-    ) -> impl Send + Future<Output = Result<[u8; 32], RpcError>> {
+    ) -> impl Send + Future<Output = Result<shekyl_types::BlockHash, RpcError>> {
         let state = self.state.clone();
         async move {
             let s = state.lock().unwrap();
@@ -298,7 +306,10 @@ impl DaemonEngine for StubDaemon {
             s.submit_calls += 1;
             s.submit
                 .pop_front()
-                .unwrap_or(Ok(TxSubmitOutcome::AlreadyInPool { hash: txid(0) }))
+                .unwrap_or(Ok(TxSubmitOutcome::AlreadyInPool {
+                    hash: txid(0),
+                    relay: PoolRelay::Held,
+                }))
         }
     }
 
@@ -356,20 +367,21 @@ fn first_alarm_index(events: &[PendingTxDiagnostic]) -> usize {
 // Escape ladder
 // ================================================================
 
-/// §10 item 8 ladder ordering through the driver: a held tx
-/// present-past-horizon is *probed first* (the resubmit-same-bytes
-/// rung), and only then — on the `AlreadyInPool` verdict (F31: no
-/// relay pulse) — escalated to the operator alarm. Rung 3 (rebuild)
-/// is unrepresentable: [`WatchdogStep`] cannot express it, so the
-/// driver has no path to it by construction.
+/// Below the proof-life ceiling the driver still probes first. A
+/// `held_overdue` answer then alarms. Rung 3 (rebuild) is
+/// unrepresentable: [`WatchdogStep`] cannot express it, so the driver
+/// has no path to it.
 #[tokio::test]
-async fn probe_precedes_alarm_present_past_horizon() {
+async fn probe_precedes_the_held_overdue_alarm() {
     let tx = txid(1);
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000)
         .with_held(held(1, 1_000))
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
-    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool { hash: tx }));
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
+        hash: tx,
+        relay: PoolRelay::HeldOverdue,
+    }));
     let mut d = driver();
 
     d.tick(&host, &daemon).await;
@@ -382,31 +394,40 @@ async fn probe_precedes_alarm_present_past_horizon() {
     );
     assert_eq!(
         alarm_reasons(&events),
-        vec![WatchdogAlarmReason::PresentButUnconfirmedPastHorizon]
+        vec![WatchdogAlarmReason::HeldOverdue]
     );
-    assert!(host.is_held(&tx), "present-but-unconfirmed never releases");
+    assert!(host.is_held(&tx), "held-overdue never releases");
     assert!(host.released().is_empty());
 }
 
-/// The alarm latch is edge-triggered: a persistently
-/// present-past-horizon tx alarms exactly once, and the second tick
-/// (kernel goes straight to the alarm rung, `probed_this_epoch` set)
-/// neither re-probes nor re-alarms — the §5.3 alarm-fatigue bound.
+/// The alarm latch is edge-triggered. Once the daemon has judged the
+/// origin overdue, the next tick returns that alarm before probing
+/// again, and the latch emits the alarm once.
 #[tokio::test]
-async fn alarm_is_edge_triggered_and_probe_not_repeated() {
+async fn held_overdue_alarms_once_and_does_not_probe_again() {
     let tx = txid(1);
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000)
         .with_held(held(1, 1_000))
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
-    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool { hash: tx }));
-    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool { hash: tx }));
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
+        hash: tx,
+        relay: PoolRelay::HeldOverdue,
+    }));
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
+        hash: tx,
+        relay: PoolRelay::HeldOverdue,
+    }));
     let mut d = driver();
 
     d.tick(&host, &daemon).await;
     d.tick(&host, &daemon).await;
 
-    assert_eq!(daemon.submit_calls(), 1, "F31: no second resubmit");
+    assert_eq!(
+        daemon.submit_calls(),
+        1,
+        "overdue is already judged; the next tick does not probe"
+    );
     assert_eq!(
         alarm_reasons(&host.events()).len(),
         1,
@@ -415,18 +436,22 @@ async fn alarm_is_edge_triggered_and_probe_not_repeated() {
 }
 
 /// Presence branching — absent leg: the probe returns `Submitted`
-/// (the tx was evicted / never landed, the resubmit *is* the remedy),
-/// so the wait restarts from the probe height. No alarm; a follow-up
-/// tick at the same height is inside the fresh horizon and does not
-/// re-probe.
+/// (the tx was evicted / never landed, the resubmit *is* the remedy)
+/// and records a fresh hold. No alarm. The next chain advance asks
+/// again, because a hold is a status read, and that answer does not
+/// alarm either.
 #[tokio::test]
-async fn absent_reoffer_restarts_the_wait() {
+async fn absent_reoffer_is_held_and_asked_again() {
     let tx = txid(1);
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000)
         .with_held(held(1, 1_000))
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     daemon.push_submit(Ok(TxSubmitOutcome::Submitted { hash: tx }));
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
+        hash: tx,
+        relay: PoolRelay::Held,
+    }));
     let mut d = driver();
 
     d.tick(&host, &daemon).await;
@@ -436,13 +461,11 @@ async fn absent_reoffer_restarts_the_wait() {
         "a re-offer is a remedy, not an alarm"
     );
 
-    // Second tick: baseline advanced to the probe height, so we are
-    // back inside the horizon → wait, no second probe.
     d.tick(&host, &daemon).await;
     assert_eq!(
         daemon.submit_calls(),
-        1,
-        "the restarted wait suppresses re-probe"
+        2,
+        "a fresh hold is asked again on the next chain advance"
     );
     assert!(alarm_reasons(&host.events()).is_empty());
 }
@@ -454,12 +477,13 @@ async fn absent_reoffer_restarts_the_wait() {
 #[tokio::test]
 async fn terminal_probe_releases_confirmed_absent() {
     let tx = txid(1);
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000 + CEILING)
         .with_held(held(1, 1_000))
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     daemon.push_submit(Ok(TxSubmitOutcome::Rejected {
         cause: RejectCause::DoubleSpendConflict,
+        row: None,
     }));
     let mut d = driver();
 
@@ -483,7 +507,7 @@ async fn terminal_probe_releases_confirmed_absent() {
 async fn missing_bytes_degrade_probe_to_alarm() {
     let tx = txid(1);
     // No `with_bytes` → held-bytes absent (restart crossed the await).
-    let host = StubHost::new(1_000 + HORIZON).with_held(held(1, 1_000));
+    let host = StubHost::new(1_000 + CEILING).with_held(held(1, 1_000));
     let daemon = StubDaemon::new();
     let mut d = driver();
 
@@ -506,12 +530,13 @@ async fn missing_bytes_degrade_probe_to_alarm() {
 #[tokio::test]
 async fn retryable_rejection_alarms_needs_rebuild() {
     let tx = txid(1);
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000 + CEILING)
         .with_held(held(1, 1_000))
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     daemon.push_submit(Ok(TxSubmitOutcome::Rejected {
         cause: RejectCause::StaleRoot,
+        row: None,
     }));
     let mut d = driver();
 
@@ -530,7 +555,7 @@ async fn retryable_rejection_alarms_needs_rebuild() {
 /// without spending a probe.
 #[tokio::test]
 async fn peerless_daemon_alarms_without_probing() {
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000 + CEILING)
         .with_held(held(1, 1_000))
         .with_bytes(txid(1), vec![0xAB; 8]);
     let daemon = StubDaemon::new();
@@ -554,28 +579,36 @@ async fn peerless_daemon_alarms_without_probing() {
     );
 }
 
-/// Health gating: a daemon that says it has not caught up sync-gates the ladder —
-/// "unconfirmed at this daemon" is uninformative until it syncs — so
-/// the driver waits, never probing or alarming.
+/// A status probe is a local relay fact. It runs while the daemon says
+/// it has not caught up. The default held answer does not alarm.
 #[tokio::test]
-async fn syncing_daemon_waits() {
-    let host = StubHost::new(1_000 + HORIZON)
+async fn syncing_daemon_still_probes() {
+    let tx = txid(1);
+    let host = StubHost::new(1_000)
         .with_held(held(1, 1_000))
-        .with_bytes(txid(1), vec![0xAB; 8]);
+        .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     daemon.set_health(DaemonHealth {
         p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
         height: 5_000,
         synchronized: false,
     });
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
+        hash: tx,
+        relay: PoolRelay::Held,
+    }));
     let mut d = driver();
 
     d.tick(&host, &daemon).await;
 
-    assert_eq!(daemon.submit_calls(), 0);
+    assert_eq!(
+        daemon.submit_calls(),
+        1,
+        "sync does not gate a status probe"
+    );
     assert!(
-        host.events().is_empty(),
-        "syncing → wait, no observable action"
+        alarm_reasons(&host.events()).is_empty(),
+        "held while syncing is not an alarm"
     );
 }
 
@@ -584,7 +617,7 @@ async fn syncing_daemon_waits() {
 /// peerless", so the driver makes no decision this tick.
 #[tokio::test]
 async fn health_failure_makes_no_decision() {
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000 + CEILING)
         .with_held(held(1, 1_000))
         .with_bytes(txid(1), vec![0xAB; 8]);
     let daemon = StubDaemon::new();
@@ -604,8 +637,8 @@ async fn health_failure_makes_no_decision() {
 #[tokio::test]
 async fn held_bytes_pruned_on_confirmation() {
     let tx = txid(1);
-    // Baseline == synced → inside the horizon → the ladder waits, so
-    // this exercises pruning in isolation from the probe.
+    // The status probe returns held, which does not alarm and does not
+    // release the bytes. Pruning follows the live set.
     let host = StubHost::new(5_000)
         .with_held(held(1, 5_000))
         .with_bytes(tx, vec![0xAB; 8]);
@@ -623,6 +656,142 @@ async fn held_bytes_pruned_on_confirmation() {
     assert!(!host.is_held(&tx));
 }
 
+fn lookback() -> u64 {
+    shekyl_economics::relay_policy().lookback
+}
+
+/// The published-unmined lookback runs from the first observation of
+/// publication, not from the accept baseline. The tick that crosses it
+/// already knows the sight, so it does not submit again.
+#[tokio::test]
+async fn published_lookback_runs_from_the_first_observation() {
+    let tx = txid(1);
+    let observed = 1_030;
+    let host = StubHost::new(observed)
+        .with_held(held(1, 0))
+        .with_bytes(tx, vec![0xAB; 8]);
+    let daemon = StubDaemon::new();
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
+        hash: tx,
+        relay: PoolRelay::Published,
+    }));
+    let mut d = driver();
+
+    d.tick(&host, &daemon).await;
+    assert_eq!(daemon.submit_calls(), 1);
+    assert!(
+        alarm_reasons(&host.events()).is_empty(),
+        "the first observation is age zero, whatever the accept baseline"
+    );
+
+    host.set_synced(observed + lookback() - 1);
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
+        hash: tx,
+        relay: PoolRelay::Published,
+    }));
+    d.tick(&host, &daemon).await;
+    assert_eq!(daemon.submit_calls(), 2);
+    assert!(alarm_reasons(&host.events()).is_empty());
+
+    host.set_synced(observed + lookback());
+    d.tick(&host, &daemon).await;
+    assert_eq!(
+        daemon.submit_calls(),
+        2,
+        "the crossing tick judges the sight it already holds"
+    );
+    assert_eq!(
+        alarm_reasons(&host.events()),
+        vec![WatchdogAlarmReason::PublishedUnmined]
+    );
+}
+
+/// Sync gates the published-unmined alarm and nothing else on that arm.
+/// The crossing tick does not probe while the daemon is behind, and it
+/// alarms once the daemon is synchronized.
+#[tokio::test]
+async fn published_unmined_waits_while_unsynced() {
+    let tx = txid(1);
+    let observed = 1_030;
+    let host = StubHost::new(observed)
+        .with_held(held(1, 0))
+        .with_bytes(tx, vec![0xAB; 8]);
+    let daemon = StubDaemon::new();
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
+        hash: tx,
+        relay: PoolRelay::Published,
+    }));
+    let mut d = driver();
+    d.tick(&host, &daemon).await;
+    assert!(alarm_reasons(&host.events()).is_empty());
+
+    host.set_synced(observed + lookback());
+    daemon.set_health(DaemonHealth {
+        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+        height: 5_000,
+        synchronized: false,
+    });
+    d.tick(&host, &daemon).await;
+    assert_eq!(
+        daemon.submit_calls(),
+        1,
+        "unsynced does not probe at the lookback"
+    );
+    assert!(alarm_reasons(&host.events()).is_empty());
+
+    daemon.set_health(DaemonHealth {
+        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+        height: 10_000,
+        synchronized: true,
+    });
+    d.tick(&host, &daemon).await;
+    assert_eq!(daemon.submit_calls(), 1);
+    assert_eq!(
+        alarm_reasons(&host.events()),
+        vec![WatchdogAlarmReason::PublishedUnmined]
+    );
+}
+
+/// In chain waits until the proof-life ceiling, then asks again.
+#[tokio::test]
+async fn in_chain_waits_until_the_proof_life_ceiling() {
+    let tx = txid(1);
+    let observed = 1_000;
+    let host = StubHost::new(observed)
+        .with_held(held(1, 0))
+        .with_bytes(tx, vec![0xAB; 8]);
+    let daemon = StubDaemon::new();
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInChain {
+        hash: tx,
+        height: observed,
+    }));
+    let mut d = driver();
+
+    d.tick(&host, &daemon).await;
+    assert_eq!(daemon.submit_calls(), 1);
+    assert!(alarm_reasons(&host.events()).is_empty());
+
+    d.tick(&host, &daemon).await;
+    assert_eq!(
+        daemon.submit_calls(),
+        1,
+        "the same height does not ask again"
+    );
+
+    host.set_synced(observed + CEILING - 1);
+    d.tick(&host, &daemon).await;
+    assert_eq!(daemon.submit_calls(), 1);
+
+    host.set_synced(observed + CEILING);
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInChain {
+        hash: tx,
+        height: observed + CEILING,
+    }));
+    d.tick(&host, &daemon).await;
+    assert_eq!(daemon.submit_calls(), 2, "the ceiling asks again");
+    assert!(alarm_reasons(&host.events()).is_empty());
+}
+
 // ================================================================
 // F40 targeted re-scan + R2 breaker
 // ================================================================
@@ -638,9 +807,11 @@ async fn r2_breaker_trips_after_threshold_never_releases() {
     let tx = txid(1);
     let claimed = 4_000;
     let block = [0xAA; 32];
-    // Baseline == synced → the escape ladder waits (isolates R2).
+    // The status probe returns held and does not alarm, so the breaker
+    // stays the only signal.
     let host = StubHost::new(5_000)
         .with_held(held(1, 5_000))
+        .with_bytes(tx, vec![0xAB; 8])
         .with_block_hash(claimed, block);
     let daemon = StubDaemon::new();
     daemon.set_block_hash(claimed, block); // matches → fruitless each tick
@@ -681,6 +852,7 @@ async fn divergent_hash_never_counts_or_releases() {
     let claimed = 4_000;
     let host = StubHost::new(5_000)
         .with_held(held(1, 5_000))
+        .with_bytes(tx, vec![0xAB; 8])
         .with_block_hash(claimed, [0xAA; 32]);
     let daemon = StubDaemon::new();
     daemon.set_block_hash(claimed, [0xBB; 32]); // differs → divergence
@@ -711,10 +883,11 @@ async fn above_synced_never_fruitless_until_scanned() {
     let tx = txid(1);
     let claimed = 6_000;
     let block = [0xAA; 32];
-    // Baseline high enough that the escape ladder waits at both synced
-    // heights used below (isolates the guard from the ladder).
+    // The status probe returns held at both synced heights. The guard
+    // is what this test isolates.
     let host = StubHost::new(5_000)
         .with_held(held(1, 6_000))
+        .with_bytes(tx, vec![0xAB; 8])
         .with_block_hash(claimed, block);
     let daemon = StubDaemon::new();
     daemon.set_block_hash(claimed, block); // would be fruitless IF checked
@@ -753,8 +926,11 @@ async fn above_synced_never_fruitless_until_scanned() {
 async fn missing_ledger_hash_defers_without_counting() {
     let tx = txid(1);
     let claimed = 4_000;
-    // No `with_block_hash` on the host → ledger hash absent.
-    let host = StubHost::new(5_000).with_held(held(1, 5_000));
+    // No `with_block_hash` on the host → ledger hash absent. Bytes are
+    // present so the status probe does not alarm beside the deferral.
+    let host = StubHost::new(5_000)
+        .with_held(held(1, 5_000))
+        .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     daemon.set_block_hash(claimed, [0xAA; 32]);
     host.enqueue_rescan(tx, claimed);
@@ -780,6 +956,7 @@ async fn confirmation_reaps_the_rescan_target() {
     let block = [0xAA; 32];
     let host = StubHost::new(5_000)
         .with_held(held(1, 5_000))
+        .with_bytes(tx, vec![0xAB; 8])
         .with_block_hash(claimed, block);
     let daemon = StubDaemon::new();
     daemon.set_block_hash(claimed, block);

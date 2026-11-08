@@ -100,11 +100,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
-use shekyl_address::Network;
+use shekyl_address::{AddressError, Network, PaymentAddress};
 use shekyl_crypto_pq::archival_p::PersonaDestination;
 #[cfg(test)]
-use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SendJournalBlock};
+use shekyl_engine_state::{LedgerBlock, SendJournalBlock, WalletSafetyConstants};
 use shekyl_engine_state::{PaymentRequestId, SendDestination};
 use shekyl_units::AtomicUnits;
 
@@ -294,9 +293,10 @@ impl SubmitOutcome {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TxDestination {
     /// An address in canonical Shekyl encoding — the user-send case. The
-    /// only arm ever parsed: the sign pass decodes and network-checks it
-    /// before building the output, and refuses one that does not decode
-    /// for the wallet's network.
+    /// only arm ever parsed: [`TxRequest::check_recipients`] refuses one
+    /// that is not a payment address for the wallet's network before any
+    /// selection, and the sign pass decodes it again for the keys it
+    /// builds the output to.
     Address(String),
     /// This wallet's own active staking persona (`stake_in`): the payment
     /// keys the stake engine hands over. A persona has no address, so
@@ -344,17 +344,29 @@ pub struct TxRequest {
 }
 
 impl TxRequest {
-    /// The refusals that need no ledger, no network and no permit, run
-    /// first on every build path: an empty recipient list, and a `rid` the
-    /// label cannot echo. The latter is refused here, at the request, not
+    /// The refusals that need no ledger, no daemon and no permit, run
+    /// first on every build path. `network` is the wallet's own, not a
+    /// daemon query. An empty recipient list, an address that cannot be
+    /// paid on that network, and a `rid` the label cannot echo are each
+    /// refused here, at the request, not discovered after selection and
+    /// proving as a signer failure: a bad address behind an empty wallet
+    /// would otherwise read as insufficient funds. A `rid` is also not
     /// downgraded to the sentinel at sign time — the payer asked for
-    /// attribution and would silently not get it — and not discovered
-    /// after selection and proving as a signer failure.
-    pub fn check_recipients(&self) -> Result<(), SendError> {
+    /// attribution and would silently not get it.
+    pub fn check_recipients(&self, network: Network) -> Result<(), SendError> {
         if self.recipients.is_empty() {
             return Err(SendError::InvalidRecipient {
                 reason: "TxRequest must carry at least one recipient",
             });
+        }
+        for recipient in &self.recipients {
+            if let TxDestination::Address(address) = &recipient.destination {
+                if let Err(err) = PaymentAddress::decode(address, network) {
+                    return Err(SendError::InvalidRecipient {
+                        reason: recipient_reason(&err),
+                    });
+                }
+            }
         }
         if self.recipients.iter().any(|r| {
             r.rid
@@ -365,6 +377,27 @@ impl TxRequest {
             });
         }
         Ok(())
+    }
+}
+
+/// The sentence a payer sees for an address the wallet will not pay.
+///
+/// One arm per [`AddressError`]. A catch-all here is how a damaged
+/// address and an unsupported version used to read as "not a Shekyl
+/// address".
+fn recipient_reason(err: &AddressError) -> &'static str {
+    match err {
+        AddressError::NetworkMismatch { .. } => "recipient address is for another network",
+        AddressError::UnsupportedVersion { .. } => {
+            "recipient address uses a version this wallet does not pay"
+        }
+        AddressError::EkBindMismatch => "recipient address is damaged",
+        AddressError::DisplayOnly => "recipient address cannot receive a payment",
+        AddressError::Encoding(_)
+        | AddressError::WrongHrp { .. }
+        | AddressError::BadLength { .. }
+        | AddressError::BadSegmentCount(_)
+        | AddressError::UnknownHrp(_) => "recipient is not a Shekyl address",
     }
 }
 
@@ -467,7 +500,7 @@ pub(crate) struct Reservation {
     /// time. The reorg-rewind invariant in
     /// [`PendingTxError::ChainStateChanged`] compares this against
     /// the wallet's current view at submit time.
-    pub built_at_tip_hash: [u8; 32],
+    pub built_at_tip_hash: shekyl_types::BlockHash,
     /// [`SnapshotId`] derived at build time over the wallet's
     /// ledger snapshot. C5β's rewritten `submit` handler compares
     /// this against the engine's `current_snapshot` and emits
@@ -532,7 +565,7 @@ pub struct PendingTx {
     pub built_at_height: shekyl_types::BlockHeight,
     /// Engine's recorded block hash at `built_at_height` at build
     /// time.
-    pub built_at_tip_hash: [u8; 32],
+    pub built_at_tip_hash: shekyl_types::BlockHash,
     /// Fee in atomic units captured at build time, resolved through
     /// the `FeeEstimator` seam against a validated daemon snapshot.
     pub fee_atomic_units: AtomicUnits,
@@ -717,6 +750,11 @@ pub(crate) struct InFlightSubmit {
 ///
 /// See [`Engine::build_pending_tx`] for the contract; legacy helper for
 /// `pending` module unit tests (C7 migrates to [`LocalPendingTx`]).
+///
+/// Recipient refusals are not this helper's. [`LocalPendingTx::build`]
+/// owns them; a caller here passes a request [`TxRequest::check_recipients`]
+/// already accepts. Putting the check back would make this stand-in the
+/// proof of a door it does not share with production.
 #[cfg(test)]
 pub(crate) fn build_pending_tx_in_state(
     ledger: &LedgerBlock,
@@ -724,8 +762,6 @@ pub(crate) fn build_pending_tx_in_state(
     next_id: &mut u64,
     request: &TxRequest,
 ) -> Result<PendingTx, SendError> {
-    request.check_recipients()?;
-
     let synced = ledger.height();
     let Some(tip_hash) = ledger.block_hash_at(synced).copied() else {
         return Err(SendError::NotSynced);
@@ -851,15 +887,13 @@ pub(crate) fn build_pending_tx_in_state(
 pub(crate) fn submit_pending_tx_in_state(
     ledger: &mut LedgerBlock,
     reservations: &mut BTreeMap<ReservationId, Reservation>,
-    network: Network,
     id: ReservationId,
 ) -> Result<TxHash, PendingTxError> {
     let Some(entry) = reservations.get(&id) else {
         return Err(PendingTxError::UnknownHandle);
     };
 
-    let safety = NetworkSafetyConstants::for_network(network);
-    let max_reorg = safety.max_reorg_depth;
+    let max_reorg = WalletSafetyConstants::DEFAULTS.max_reorg_depth;
     let synced = ledger.height();
     let built = entry.built_at_height;
 

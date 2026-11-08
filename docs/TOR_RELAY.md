@@ -38,36 +38,33 @@ relay Tor whose volume never sees those cells.
   inside the daemon process would turn the daemon's uptime into a probeable
   signal. You must be able to restart the node without restarting the relay,
   and the reverse. Do not add relay flags to the daemon-spawned managed Tor.
-- **Same Tor process as the node's client.** Point the daemon's tor-zone
-  SOCKS at **this** instance with `--tx-proxy`. That names the dial
-  SOCKS and does not turn off the per-boot onion, which is published by
-  the daemon's managed Tor — a second process. To keep inbound on this
-  relay and no second client, pass `--anonymous-inbound` (a stable
-  onion on this process) or `--no-ephemeral-tor` (no overlay inbound).
-  `--tx-proxy` to a SocksPort that is not this relay is still uncovered.
-  `--out-peers` does not set the address-hiding outbound target. That
-  target is `MIN_PROVISIONED_OUT_PEERS` (12): the hidden outbound
-  sessions, those whose connector hides this node's address, from which
-  the relay draws the hidden stem slot that this node's own
-  transactions ride (`DAEMON_RELAY_PRIVACY.md` §95.3). *Records-was:
-  "the pool an originated transaction rotates over";
-  `HOP0_OUTBOUND_TARGET`, 4.*
-  The D-5 receiver's outbound count stayed
-  0 because its one dial closed before the handshake. Omit the clearnet
-  outbound count (the default satisfies the floor of 12; an explicit
-  count below 12 is refused at start). Overlay inbound on this
-  process is the mixing topology for inbound — inbound on a second Tor
-  is uncovered inbound.
+- **Same Tor process as the node's client.** Set `tor = operator` and point
+  `tor-socks` at **this** instance's SocksPort. With `tor = operator` the
+  daemon starts no Tor of its own, so there is no second client. For
+  inbound on this relay, publish an onion service on this process and name
+  it with `tor-onion` and `tor-onion-listen` (a stable onion). Without
+  `tor-onion` the node is dial-only over Tor. `tor-socks` pointing at a
+  SocksPort that is not this relay is still uncovered.
+  The address-hiding outbound target is not an option. It is
+  `MIN_PROVISIONED_OUT_PEERS` (12): the hidden outbound sessions, those
+  whose connector hides this node's address, from which the relay draws
+  the hidden stem slot that this node's own transactions ride
+  (`DAEMON_RELAY_PRIVACY.md` §95.3). *Records-was: "the pool an
+  originated transaction rotates over"; `HOP0_OUTBOUND_TARGET`, 4.*
+  The D-5 receiver's outbound count stayed 0 because its one dial closed
+  before the handshake. Overlay inbound on this process is the mixing
+  topology for inbound — inbound on a second Tor is uncovered inbound.
 
 ```bash
-./shekyld --tx-proxy tor,127.0.0.1:9050 \
-          --anonymous-inbound <your-onion>.onion:<virt>,127.0.0.1:<local>
+./shekyld --tor operator --tor-socks 127.0.0.1:9050 \
+          --tor-onion <your-onion>.onion:11021 --tor-onion-listen 127.0.0.1:<local>
 ```
 
 SocksPort `9050` here is the **relay process's** SOCKS, not a second Tor.
-Replace with that instance's actual SocksPort. `--anonymous-inbound` is the
-HiddenService this same process publishes; taking it opts into a stable onion
-address and the per-boot publish yields to it. `--tx-proxy` alone does not.
+Replace it with that instance's actual SocksPort. `tor-onion` is the
+HiddenService this same process publishes, with the virtual port peers dial
+(the network's P2P port, 11021 on mainnet, is the usual choice), and
+`tor-onion-listen` is the local endpoint its `HiddenServicePort` forwards to.
 
 - **Not a Shekyl setting, flag, or consensus input.** Do not look for a
   daemon option that "enables cover." Path selection stays entirely Tor's.

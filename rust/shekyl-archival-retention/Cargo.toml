@@ -13,10 +13,16 @@ license.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+# ArchivalParams' serde door (`params.rs`): a fold builds a run's set by
+# name and deserializes it through `validate`, as EconomicParams does.
+serde = { workspace = true }
 sha3 = { version = "0.10", default-features = false }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# The network id the emission auth message starts with (NETWORK_IDENTITY.md
+# NI-F11).
+shekyl-network = { path = "../shekyl-network" }
 curve25519-dalek = "4"
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 # Single-sourced CT balance equation + typed-side terms (bond_ct_balance wraps
@@ -45,7 +51,7 @@ shekyl-archival-retention = { path = ".", features = ["consensus-kat"] }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 serde_json = { workspace = true }
-# ARCHIVAL_P_DERIVE_V1 p_canonical_id cross-check: derive `P` via
+# ARCHIVAL_P_DERIVE_V2 p_canonical_id cross-check: derive `P` via
 # `shekyl-crypto-pq::archival_p` and confirm `id::p_canonical_id_from_hybrid_pubkey`
 # reproduces the KAT-pinned value (the second of the two independent cSHAKE256
 # paths the crypto-pq KAT establishes).

@@ -141,8 +141,12 @@ SCOPE = (
 # the merge of 2026-10-10 is where the ceiling reads both); 148 at DRS-E5
 # a3 (2026-10-11: the alt fixtures `alt` and `side_block` became
 # `pub(super)` for the `AltView` tests, and a touched site is typed —
-# both take `BlockHeight` — not re-recorded).
-GRANDFATHER_CEILING = 148
+# both take `BlockHeight` — not re-recorded); 147 at the E2 re-baseline
+# (2026-11-01: the grader left with the reconciliation register). The
+# ceiling stood at 144 over a list of 141. 139 after `plant_listed` and
+# `plant_archival` took `BlockHeight` (2026-11-07): widening their path
+# parameter touched the recorded lines, and a touched site is typed.
+GRANDFATHER_CEILING = 139
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

@@ -192,45 +192,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "asn1-rs"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56624a96882bb8c26d61312ae18cb45868e5a9992ea73c58e45c3101e56a1e60"
-dependencies = [
- "asn1-rs-derive",
- "asn1-rs-impl",
- "displaydoc",
- "nom 7.1.3",
- "num-traits",
- "rusticata-macros",
- "thiserror",
- "time",
-]
-
-[[package]]
-name = "asn1-rs-derive"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3109e49b1e4909e9db6515a30c633684d68cdeaa252f215214cb4fa1a5bfee2c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
- "synstructure",
-]
-
-[[package]]
-name = "asn1-rs-impl"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "atomic-polyfill"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1032,12 +993,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "data-encoding"
-version = "2.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
-
-[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1045,20 +1000,6 @@ checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
  "const-oid",
  "zeroize",
-]
-
-[[package]]
-name = "der-parser"
-version = "10.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07da5016415d5a3c4dd39b11ed26f915f52fc4e0dc197d87908bc916e51bc1a6"
-dependencies = [
- "asn1-rs",
- "displaydoc",
- "nom 7.1.3",
- "num-bigint",
- "num-traits",
- "rusticata-macros",
 ]
 
 [[package]]
@@ -1905,7 +1846,7 @@ dependencies = [
  "hash32",
  "rustc_version",
  "serde",
- "spin 0.9.8",
+ "spin 0.9.9",
  "stable_deref_trait",
 ]
 
@@ -1943,9 +1884,6 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "hex-conservative"
@@ -2791,15 +2729,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oid-registry"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12f40cff3dde1b6087cc5d5f5d4d65712f34016a03ed60e9c08dcc392736b5b7"
-dependencies = [
- "asn1-rs",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2902,16 +2831,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 
 [[package]]
-name = "pem"
-version = "3.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
-dependencies = [
- "base64",
- "serde_core",
-]
-
-[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2983,6 +2902,7 @@ dependencies = [
  "cpufeatures 0.2.17",
  "opaque-debug",
  "universal-hash",
+ "zeroize",
 ]
 
 [[package]]
@@ -3354,24 +3274,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "rcgen"
-version = "0.14.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10b99e0098aa4082912d4c649628623db6aba77335e4f4569ff5083a6448b32e"
-dependencies = [
- "pem",
- "ring",
- "rustls-pki-types",
- "time",
- "x509-parser",
- "yasna",
-]
-
-[[package]]
 name = "redb"
-version = "4.1.0"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e925444704b5f17d32bf42f5b6e2df050bceebc3dcd6e71cc73dafe8092e839"
+checksum = "39178e0a867f9e3eaa6292a4ab1dd3613f2519c5b564341e1e7b29b270736cc4"
 dependencies = [
  "libc",
 ]
@@ -3479,15 +3385,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
-]
-
-[[package]]
-name = "rusticata-macros"
-version = "4.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "faf0c4a6ece9950b9abdb62b1cfcf2a68b3b67a10ba445b3bb85be2a293d0632"
-dependencies = [
- "nom 7.1.3",
 ]
 
 [[package]]
@@ -3827,8 +3724,10 @@ version = "3.1.0"
 dependencies = [
  "bech32",
  "serde",
+ "serde_json",
  "shekyl-crypto-hash",
  "shekyl-encoding",
+ "shekyl-network",
  "tempfile",
  "thiserror",
 ]
@@ -3869,6 +3768,7 @@ version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
  "hex",
+ "serde",
  "serde_json",
  "sha3",
  "shekyl-archival-retention",
@@ -3878,6 +3778,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-fcmp",
+ "shekyl-network",
  "shekyl-types",
  "shekyl-units",
  "thiserror",
@@ -3888,6 +3789,7 @@ name = "shekyl-block-template"
 version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
+ "proptest",
  "shekyl-archival-retention",
  "shekyl-chain-rules",
  "shekyl-crypto-pq",
@@ -3914,6 +3816,25 @@ dependencies = [
  "shekyl-curve-primitives",
  "std-shims",
  "thiserror",
+ "zeroize",
+]
+
+[[package]]
+name = "shekyl-bundle-producer"
+version = "3.1.0"
+dependencies = [
+ "rand 0.8.6",
+ "shekyl-archival-fetch-sched",
+ "shekyl-archival-retention",
+ "shekyl-chain-rules",
+ "shekyl-crypto-pq",
+ "shekyl-difficulty",
+ "shekyl-network",
+ "shekyl-p-loopback",
+ "shekyl-p-serve",
+ "shekyl-types",
+ "thiserror",
+ "tokio",
  "zeroize",
 ]
 
@@ -3945,26 +3866,36 @@ dependencies = [
  "curve25519-dalek",
  "hex",
  "kameo",
+ "rand 0.8.6",
  "redb",
  "serde",
  "serde_json",
  "shekyl-address",
+ "shekyl-archival-fetch-sched",
  "shekyl-archival-retention",
  "shekyl-block-template",
+ "shekyl-bundle-producer",
  "shekyl-chain-rules",
  "shekyl-chain-store",
+ "shekyl-chain-sync",
+ "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-daemon-rpc",
  "shekyl-difficulty",
  "shekyl-economics",
+ "shekyl-engine-core",
  "shekyl-fcmp",
  "shekyl-harness-spender",
  "shekyl-harness-wallet",
  "shekyl-hash-budget",
  "shekyl-mempool",
  "shekyl-miner",
+ "shekyl-network",
+ "shekyl-p-host",
+ "shekyl-p-loopback",
+ "shekyl-p-serve",
  "shekyl-pow-randomx",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
@@ -3975,6 +3906,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",
@@ -4001,6 +3933,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-genesis-tool",
  "shekyl-harness-wallet",
+ "shekyl-network",
  "shekyl-rpc-types",
  "shekyl-types",
  "shekyl-units",
@@ -4023,11 +3956,52 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-harness-spender",
  "shekyl-harness-wallet",
+ "shekyl-network",
  "shekyl-store-codec",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "tempfile",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "shekyl-chain-sync"
+version = "3.1.0"
+dependencies = [
+ "proptest",
+ "shekyl-chain-ingest",
+ "shekyl-chain-rules",
+ "shekyl-difficulty",
+ "shekyl-draw-rng",
+ "shekyl-levin",
+ "shekyl-pow-randomx",
+ "shekyl-types",
+ "shekyl-wire",
+]
+
+[[package]]
+name = "shekyl-chain-sync-runtime"
+version = "3.1.0"
+dependencies = [
+ "shekyl-chain-ingest",
+ "shekyl-chain-rules",
+ "shekyl-chain-store",
+ "shekyl-chain-sync",
+ "shekyl-difficulty",
+ "shekyl-draw-rng",
+ "shekyl-hash-budget",
+ "shekyl-levin",
+ "shekyl-p2p-session",
+ "shekyl-peer-policy",
+ "shekyl-pow-randomx",
+ "shekyl-runtime",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
+ "shekyl-types",
+ "shekyl-wire",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4043,6 +4017,7 @@ dependencies = [
  "shekyl-socks",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
+ "shekyl-win-sec",
  "tokio",
  "tracing",
 ]
@@ -4051,22 +4026,37 @@ dependencies = [
 name = "shekyl-cli"
 version = "3.1.0"
 dependencies = [
+ "base64",
  "clap",
  "dirs",
+ "hex",
  "proptest",
  "rpassword",
  "rustyline",
  "serde",
  "serde_json",
+ "shekyl-address",
  "shekyl-crypto-pq",
+ "shekyl-daemon-config",
+ "shekyl-daemon-rpc",
+ "shekyl-economics",
+ "shekyl-engine-core",
+ "shekyl-engine-file",
+ "shekyl-engine-prefs",
  "shekyl-logging",
+ "shekyl-options",
+ "shekyl-peerlist",
+ "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-shard-visual",
+ "shekyl-tor-control-client",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-version",
  "shekyl-wallet-rpc",
  "shekyl-win-sec",
+ "shekyl-wire",
  "tempfile",
  "time",
  "tokio",
@@ -4120,6 +4110,7 @@ dependencies = [
  "hmac",
  "postcard-schema",
  "proptest",
+ "quote",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "serde",
@@ -4132,8 +4123,10 @@ dependencies = [
  "shekyl-curve-generators",
  "shekyl-curve-primitives",
  "shekyl-fcmp",
+ "shekyl-network",
  "shekyl-stats",
  "shekyl-types",
+ "syn 2.0.117",
  "thiserror",
  "trybuild",
  "x25519-dalek",
@@ -4211,50 +4204,47 @@ dependencies = [
 name = "shekyl-daemon"
 version = "3.1.0"
 dependencies = [
+ "rustix",
+ "shekyl-address",
+ "shekyl-archival-retention",
  "shekyl-daemon-config",
  "shekyl-daemon-rpc",
- "shekyl-ffi",
+ "shekyl-difficulty",
  "shekyl-logging",
  "shekyl-node",
  "shekyl-onion-v3",
  "shekyl-options",
+ "shekyl-p2p",
+ "shekyl-process",
  "shekyl-runtime",
  "shekyl-socks",
+ "shekyl-timing-engine",
  "shekyl-tor-control-client",
  "shekyl-tor-control-daemon",
+ "shekyl-types",
+ "shekyl-version",
+ "shekyl-win-sec",
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
 name = "shekyl-daemon-config"
 version = "3.1.0"
 dependencies = [
+ "libc",
  "rustix",
  "shekyl-address",
+ "shekyl-crypto-pq",
  "shekyl-logging",
+ "shekyl-network",
  "shekyl-onion-v3",
  "shekyl-options",
  "shekyl-win-sec",
  "tempfile",
  "toml 0.8.23",
-]
-
-[[package]]
-name = "shekyl-daemon-image"
-version = "3.1.0"
-dependencies = [
- "shekyl-archival-fetch-sched",
- "shekyl-chain-rules",
- "shekyl-chain-store",
- "shekyl-crypto-pq",
- "shekyl-daemon",
- "shekyl-daemon-rpc",
- "shekyl-ffi",
- "shekyl-p-fetch",
- "shekyl-types",
- "shekyl-wire",
 ]
 
 [[package]]
@@ -4265,6 +4255,8 @@ dependencies = [
  "curve25519-dalek",
  "hex",
  "http",
+ "hyper",
+ "hyper-util",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "serde",
@@ -4286,10 +4278,10 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-hash-budget",
  "shekyl-mempool",
+ "shekyl-network",
  "shekyl-options",
  "shekyl-peerlist",
  "shekyl-pow-randomx",
- "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-runtime",
@@ -4309,14 +4301,17 @@ name = "shekyl-dialer"
 version = "3.1.0"
 dependencies = [
  "shekyl-capped-stream",
+ "shekyl-clearnet",
+ "shekyl-dialer",
  "shekyl-draw-rng",
  "shekyl-levin",
+ "shekyl-network",
  "shekyl-onion-v3",
+ "shekyl-p2p-session",
  "shekyl-peer-policy",
  "shekyl-peerlist",
- "shekyl-relay-privacy",
- "shekyl-seam",
  "shekyl-timing-engine",
+ "shekyl-tor",
  "shekyl-transport-layer",
  "tempfile",
  "tokio",
@@ -4330,6 +4325,7 @@ version = "3.1.0"
 dependencies = [
  "proptest",
  "serde_json",
+ "sha2",
  "shekyl-types",
 ]
 
@@ -4357,12 +4353,17 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-block-template",
  "shekyl-chain-rules",
+ "shekyl-chain-store",
  "shekyl-curve-tree",
  "shekyl-economics",
  "shekyl-fcmp",
+ "shekyl-mempool",
+ "shekyl-rpc-types",
  "shekyl-tx-weight",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-wire",
+ "thiserror",
 ]
 
 [[package]]
@@ -4417,18 +4418,23 @@ dependencies = [
  "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
+ "shekyl-levin",
  "shekyl-multisig",
+ "shekyl-network",
  "shekyl-operator-alarm",
  "shekyl-p-host",
  "shekyl-p-loopback",
  "shekyl-p-store",
  "shekyl-p-transport",
+ "shekyl-p2p-transport",
  "shekyl-proofs",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
+ "shekyl-runtime",
  "shekyl-scanner",
  "shekyl-standoff",
+ "shekyl-thread-priority",
  "shekyl-tor-control-client",
  "shekyl-tor-control-wallet",
  "shekyl-tx-builder",
@@ -4557,86 +4563,8 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "shekyl-curve-generators",
- "std-shims",
- "zeroize",
-]
-
-[[package]]
-name = "shekyl-ffi"
-version = "3.1.0"
-dependencies = [
- "ciphersuite",
- "criterion",
- "curve25519-dalek",
- "dalek-ff-group 0.5.0",
- "ec-divisors",
- "gungraun",
- "helioselene",
- "hex",
- "libc",
- "modular-frost",
- "multiexp",
- "postcard",
- "rand 0.8.6",
- "rand_core 0.6.4",
- "rcgen",
- "serde",
- "serde_json",
- "shekyl-address",
- "shekyl-archival-retention",
- "shekyl-bulletproofs",
- "shekyl-capped-stream",
- "shekyl-chacha",
- "shekyl-chain-ingest",
- "shekyl-chain-rules",
- "shekyl-chain-store",
- "shekyl-clearnet",
- "shekyl-consensus",
- "shekyl-crypto-hash",
- "shekyl-crypto-pq",
- "shekyl-ct-balance",
- "shekyl-curve-generators",
- "shekyl-curve-io",
- "shekyl-curve-primitives",
- "shekyl-curve-tree",
- "shekyl-daemon-config",
- "shekyl-dialer",
- "shekyl-difficulty",
- "shekyl-draw-rng",
- "shekyl-economics",
- "shekyl-encoding",
- "shekyl-fcmp",
- "shekyl-fcmp-proofs",
- "shekyl-hash-budget",
- "shekyl-levin",
- "shekyl-logging",
- "shekyl-net-address",
- "shekyl-onion-v3",
- "shekyl-options",
- "shekyl-p2p-transport",
- "shekyl-peer-policy",
- "shekyl-peerlist",
- "shekyl-pow-randomx",
- "shekyl-proofs",
- "shekyl-relay",
- "shekyl-relay-privacy",
- "shekyl-rpc-types",
- "shekyl-runtime",
- "shekyl-seam",
- "shekyl-socks",
- "shekyl-thread-ledger",
- "shekyl-timing-engine",
- "shekyl-tor",
- "shekyl-tor-control-client",
- "shekyl-transport-layer",
- "shekyl-tx-builder",
  "shekyl-types",
- "shekyl-units",
- "shekyl-win-sec",
- "shekyl-wire",
- "tempfile",
- "tokio",
- "tracing",
+ "std-shims",
  "zeroize",
 ]
 
@@ -4654,9 +4582,9 @@ dependencies = [
  "shekyl-address",
  "shekyl-archival-retention",
  "shekyl-consensus",
- "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-fcmp",
+ "shekyl-network",
  "shekyl-types",
  "shekyl-wire",
  "thiserror",
@@ -4675,6 +4603,7 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-fcmp",
  "shekyl-harness-wallet",
+ "shekyl-network",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
@@ -4686,6 +4615,8 @@ name = "shekyl-harness-wallet"
 version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
+ "hkdf",
+ "sha2",
  "shekyl-crypto-pq",
  "shekyl-wire",
  "zeroize",
@@ -4707,8 +4638,10 @@ dependencies = [
  "shekyl-peer-bounds",
  "shekyl-portable-storage",
  "shekyl-rpc-types",
+ "shekyl-transport-layer",
  "shekyl-types",
  "shekyl-wire",
+ "socket2",
  "thiserror",
 ]
 
@@ -4722,7 +4655,6 @@ dependencies = [
  "time",
  "tracing",
  "tracing-appender",
- "tracing-core",
  "tracing-subscriber",
  "trybuild",
 ]
@@ -4734,6 +4666,8 @@ dependencies = [
  "redb",
  "shekyl-chain-rules",
  "shekyl-chain-store",
+ "shekyl-difficulty",
+ "shekyl-network",
  "shekyl-store-codec",
  "shekyl-types",
  "shekyl-units",
@@ -4745,6 +4679,7 @@ dependencies = [
 name = "shekyl-miner"
 version = "3.1.0"
 dependencies = [
+ "curve25519-dalek",
  "shekyl-address",
  "shekyl-block-template",
  "shekyl-crypto-pq",
@@ -4754,6 +4689,7 @@ dependencies = [
  "shekyl-thread-ledger",
  "shekyl-thread-priority",
  "shekyl-types",
+ "shekyl-units",
  "shekyl-wire",
  "tracing",
 ]
@@ -4780,6 +4716,15 @@ name = "shekyl-net-address"
 version = "3.1.0"
 
 [[package]]
+name = "shekyl-network"
+version = "3.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "shekyl-crypto-hash",
+]
+
+[[package]]
 name = "shekyl-node"
 version = "3.1.0"
 dependencies = [
@@ -4787,29 +4732,40 @@ dependencies = [
  "redb",
  "rustix",
  "shekyl-address",
+ "shekyl-archival-fetch-sched",
+ "shekyl-block-template",
+ "shekyl-bundle-producer",
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-chain-store",
+ "shekyl-chain-sync",
+ "shekyl-chain-sync-runtime",
+ "shekyl-crypto-pq",
  "shekyl-daemon-config",
  "shekyl-daemon-rpc",
  "shekyl-difficulty",
- "shekyl-ffi",
  "shekyl-genesis-tool",
  "shekyl-hash-budget",
  "shekyl-mempool",
  "shekyl-miner",
+ "shekyl-onion-v3",
  "shekyl-options",
+ "shekyl-p2p",
+ "shekyl-p2p-transport",
  "shekyl-pow-randomx",
+ "shekyl-relay",
  "shekyl-rpc-types",
  "shekyl-runtime",
  "shekyl-store-codec",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
  "shekyl-types",
+ "shekyl-units",
  "shekyl-win-sec",
  "shekyl-wire",
  "tempfile",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 
@@ -4820,6 +4776,7 @@ dependencies = [
  "blake2",
  "chacha20",
  "chacha20poly1305",
+ "poly1305",
  "x25519-dalek",
  "zeroize",
 ]
@@ -4845,7 +4802,9 @@ dependencies = [
 name = "shekyl-options"
 version = "3.1.0"
 dependencies = [
+ "shekyl-network",
  "shekyl-onion-v3",
+ "shekyl-rpc-grants",
  "strsim",
  "toml 0.8.23",
  "zeroize",
@@ -4942,16 +4901,84 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-p2p"
+version = "3.1.0"
+dependencies = [
+ "libc",
+ "shekyl-capped-stream",
+ "shekyl-clearnet",
+ "shekyl-dialer",
+ "shekyl-draw-rng",
+ "shekyl-levin",
+ "shekyl-network",
+ "shekyl-onion-v3",
+ "shekyl-p2p-session",
+ "shekyl-peer-policy",
+ "shekyl-peerlist",
+ "shekyl-relay",
+ "shekyl-runtime",
+ "shekyl-socks",
+ "shekyl-thread-ledger",
+ "shekyl-timing-engine",
+ "shekyl-tor",
+ "shekyl-tor-control-client",
+ "shekyl-transport-layer",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "shekyl-p2p-harness"
 version = "3.1.0"
 dependencies = [
+ "serde_json",
+ "shekyl-block-template",
+ "shekyl-bundle-producer",
+ "shekyl-capped-stream",
+ "shekyl-chain-ingest",
+ "shekyl-chain-rules",
+ "shekyl-chain-store",
+ "shekyl-chain-sync",
+ "shekyl-chain-sync-runtime",
  "shekyl-clearnet",
+ "shekyl-difficulty",
+ "shekyl-draw-rng",
+ "shekyl-harness-wallet",
+ "shekyl-hash-budget",
  "shekyl-levin",
+ "shekyl-miner",
+ "shekyl-network",
+ "shekyl-p2p-session",
  "shekyl-peer-policy",
+ "shekyl-pow-randomx",
  "shekyl-runtime",
+ "shekyl-timing-engine",
+ "shekyl-tor",
+ "shekyl-transport-layer",
+ "shekyl-types",
+ "shekyl-wire",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "shekyl-p2p-session"
+version = "3.1.0"
+dependencies = [
+ "shekyl-capped-stream",
+ "shekyl-draw-rng",
+ "shekyl-levin",
+ "shekyl-net-address",
+ "shekyl-onion-v3",
+ "shekyl-p2p-session",
+ "shekyl-peer-policy",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4965,6 +4992,7 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-levin",
+ "shekyl-network",
  "shekyl-noise",
  "x25519-dalek",
  "zeroize",
@@ -5010,6 +5038,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-process"
+version = "3.1.0"
+dependencies = [
+ "libc",
+ "shekyl-daemon-config",
+ "shekyl-tor-control-client",
+ "shekyl-win-sec",
+ "tempfile",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "shekyl-proofs"
 version = "3.1.0"
 dependencies = [
@@ -5022,6 +5063,7 @@ dependencies = [
  "sha2",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
+ "shekyl-network",
  "thiserror",
  "zeroize",
 ]
@@ -5030,24 +5072,34 @@ dependencies = [
 name = "shekyl-randomx-differential"
 version = "3.1.0"
 dependencies = [
+ "hex",
  "rand_chacha 0.3.1",
  "randomx-v2-sys",
  "serde",
  "serde_json",
  "sha2",
  "shekyl-crypto-hash",
+ "shekyl-genesis-tool",
+ "shekyl-network",
  "shekyl-pow-randomx",
  "shekyl-types",
+ "shekyl-wire",
 ]
 
 [[package]]
 name = "shekyl-relay"
 version = "3.1.0"
 dependencies = [
+ "rand 0.8.6",
  "shekyl-draw-rng",
+ "shekyl-levin",
+ "shekyl-p2p-session",
+ "shekyl-peer-policy",
  "shekyl-relay-privacy",
+ "shekyl-timing-engine",
  "shekyl-transport-layer",
  "shekyl-types",
+ "tokio",
  "tracing",
 ]
 
@@ -5111,6 +5163,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-rpc-grants"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-rpc-stream"
 version = "3.1.0"
 dependencies = [
@@ -5124,6 +5180,7 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-wire",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -5136,8 +5193,11 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "serde",
+ "serde_json",
  "shekyl-address",
  "shekyl-rpc-client",
+ "shekyl-rpc-types",
  "shekyl-socks",
  "tokio",
  "tower-service",
@@ -5152,7 +5212,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shekyl-address",
+ "shekyl-network",
  "shekyl-portable-storage",
+ "shekyl-rpc-grants",
  "shekyl-units",
  "shekyl-wire",
 ]
@@ -5195,19 +5258,6 @@ dependencies = [
  "tokio",
  "tracing",
  "zeroize",
-]
-
-[[package]]
-name = "shekyl-seam"
-version = "3.1.0"
-dependencies = [
- "shekyl-capped-stream",
- "shekyl-onion-v3",
- "shekyl-peer-policy",
- "shekyl-timing-engine",
- "shekyl-transport-layer",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -5273,9 +5323,11 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-archival-retention",
+ "shekyl-chain-rules",
  "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-standoff",
+ "shekyl-types",
  "shekyl-units",
 ]
 
@@ -5353,6 +5405,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shekyl-onion-v3",
+ "shekyl-timing-engine",
  "shekyl-win-sec",
  "tempfile",
  "tokio",
@@ -5366,6 +5419,7 @@ version = "3.1.0"
 dependencies = [
  "getrandom 0.2.17",
  "kameo",
+ "shekyl-socks",
  "shekyl-tor-control-client",
  "tempfile",
  "tokio",
@@ -5416,11 +5470,8 @@ dependencies = [
  "ed25519-dalek",
  "fips204",
  "gungraun",
- "hex",
  "rand 0.8.6",
  "rand_core 0.6.4",
- "serde",
- "serde_json",
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
@@ -5429,6 +5480,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-fcmp",
+ "shekyl-network",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
@@ -5447,6 +5499,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-io",
  "shekyl-curve-primitives",
+ "shekyl-economics",
  "shekyl-fcmp",
  "shekyl-scanner",
  "shekyl-tx-builder",
@@ -5477,6 +5530,37 @@ dependencies = [
  "serde_json",
  "zeroize",
 ]
+
+[[package]]
+name = "shekyl-verify-cost"
+version = "3.1.0"
+dependencies = [
+ "ciphersuite",
+ "criterion",
+ "curve25519-dalek",
+ "dalek-ff-group 0.5.0",
+ "ec-divisors",
+ "gungraun",
+ "helioselene",
+ "multiexp",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+ "shekyl-bulletproofs",
+ "shekyl-crypto-pq",
+ "shekyl-ct-balance",
+ "shekyl-curve-generators",
+ "shekyl-curve-io",
+ "shekyl-curve-primitives",
+ "shekyl-fcmp",
+ "shekyl-fcmp-proofs",
+ "shekyl-pow-randomx",
+ "shekyl-types",
+ "shekyl-wire",
+]
+
+[[package]]
+name = "shekyl-version"
+version = "3.1.0"
 
 [[package]]
 name = "shekyl-wallet-contract"
@@ -5524,6 +5608,7 @@ dependencies = [
  "shekyl-scanner",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-version",
  "shekyl-wallet-contract",
  "shekyl-win-sec",
  "subtle",
@@ -5564,9 +5649,11 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-fcmp",
+ "shekyl-network",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
+ "tempfile",
 ]
 
 [[package]]
@@ -5591,9 +5678,24 @@ dependencies = [
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-tx-weight",
+ "shekyl-types",
  "shekyl-wire",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "shekyld"
+version = "3.1.0"
+dependencies = [
+ "shekyl-archival-fetch-sched",
+ "shekyl-chain-ingest",
+ "shekyl-clearnet",
+ "shekyl-daemon",
+ "shekyl-daemon-rpc",
+ "shekyl-relay",
+ "shekyl-transport-layer",
+ "shekyl-types",
 ]
 
 [[package]]
@@ -5684,18 +5786,18 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.9.8"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 dependencies = [
  "lock_api",
 ]
 
 [[package]]
 name = "spin"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
+checksum = "023a211cb3138dbc438680b32560ad89f699977624c9f8dbb95a47d5b4c07dd3"
 
 [[package]]
 name = "spki"
@@ -5721,7 +5823,7 @@ checksum = "227c4f8561598188d0df96dbe749824576174bba278b5b6bb2eacff1066067d0"
 dependencies = [
  "hashbrown 0.16.1",
  "rustversion",
- "spin 0.10.0",
+ "spin 0.10.1",
 ]
 
 [[package]]
@@ -5790,17 +5892,6 @@ name = "sync_wrapper"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
-
-[[package]]
-name = "synstructure"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
 
 [[package]]
 name = "tap"
@@ -5959,9 +6050,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.51.0"
+version = "1.51.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bd1c4c0fc4a7ab90fc15ef6daaa3ec3b893f004f915f2392557ed23237820cd"
+checksum = "a13e32eacd0222f9658be2ccbd83b718bfd9bfb0d54b5921913c184cb86124a5"
 dependencies = [
  "bytes",
  "libc",
@@ -6889,37 +6980,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "x509-parser"
-version = "0.18.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d43b0f71ce057da06bc0851b23ee24f3f86190b07203dd8f567d0b706a185202"
-dependencies = [
- "asn1-rs",
- "data-encoding",
- "der-parser",
- "lazy_static",
- "nom 7.1.3",
- "oid-registry",
- "ring",
- "rusticata-macros",
- "thiserror",
- "time",
-]
-
-[[package]]
 name = "y4m"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
-
-[[package]]
-name = "yasna"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
-dependencies = [
- "time",
-]
 
 [[package]]
 name = "zerocopy"

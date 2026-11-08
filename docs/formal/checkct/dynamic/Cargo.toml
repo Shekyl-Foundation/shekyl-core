@@ -1,0 +1,27 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Dynamic (dudect-style) timing test for the CA-1 field arithmetic on the
+# shipped targets BINSEC cannot decode (aarch64, riscv64). Not a workspace
+# member: it pins the audited crypto-bigint and is built for the device.
+[package]
+name = "ct-dynamic"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+crypto-bigint = { version = "=0.5.5", default-features = false, features = ["zeroize"] }
+dalek-ff-group = { version = "=0.5.0", default-features = false }
+helioselene = { path = "../../../../rust/shekyl-oxide/crypto/helioselene", default-features = false }
+ff = { version = "0.13", default-features = false, features = ["bits"] }
+subtle = { version = "2", default-features = false }
+
+[profile.release]
+# Parity with rust/Cargo.toml [profile.release].
+panic = "abort"
+overflow-checks = true

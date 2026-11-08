@@ -1,0 +1,643 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The gray lifecycle (Rick, 2026-10-24): an address leaves gray only on
+//! authenticated proof of misbehaviour, never for a connection problem,
+//! and every restart is a fresh look.
+//!
+//! Item 1, white expiry follows the connection: a kept session is contact,
+//! so expiry skips an address with a live one and counts from the close.
+//! Item 4, the cooldown in place of the drop: a failed test that proves no
+//! misbehaviour cools the address, doubling per consecutive failure and
+//! capped at an hour, and a restart retests every cooled address. Each
+//! test here is red at the base this PR was cut from.
+
+use std::collections::BTreeSet;
+use std::net::{IpAddr, Ipv4Addr};
+
+use shekyl_draw_rng::SplitMix64;
+use shekyl_peerlist::address_file::decode;
+use shekyl_peerlist::{
+    BanEntry, ConnectorId, DialOutcome, Ipv4Subnet, KeptSessions, NetworkAddress, NoSessions,
+    Peerlist, RefusedSet, Source, Tick, Verdict, EXPIRATION_PERIOD_NANOS, GRAY_CAP,
+};
+use shekyl_transport_layer::{DialFailure, Reached, Retry};
+
+/// The cooldown ladder these clearnet addresses cool on: the clearnet
+/// connector's dial profile.
+const COOLDOWN_FIRST_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Clearnet)
+    .cooldown
+    .first_nanos;
+const COOLDOWN_CAP_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Clearnet)
+    .cooldown
+    .cap_nanos;
+
+const CLEARNET: ConnectorId = ConnectorId::Clearnet;
+const HOUR: u64 = 60 * 60 * 1_000_000_000;
+const MINUTE: u64 = 60 * 1_000_000_000;
+
+fn v4(n: u8) -> NetworkAddress {
+    NetworkAddress::Ipv4 {
+        ip: Ipv4Addr::new(11, 0, 1, n),
+        port: 18080,
+    }
+}
+
+/// The `n`th of many distinct global addresses, for filling gray to its cap.
+fn v4_many(n: usize) -> NetworkAddress {
+    let [_, b, c, d] = u32::try_from(n).expect("fits").to_be_bytes();
+    NetworkAddress::Ipv4 {
+        ip: Ipv4Addr::new(12, b, c, d),
+        port: 18080,
+    }
+}
+
+fn onion(n: u8) -> NetworkAddress {
+    NetworkAddress::Tor {
+        host: format!("{n:0>56}.onion"),
+        port: 18080,
+    }
+}
+
+fn at(nanos: u64) -> Tick {
+    Tick::new(nanos)
+}
+
+fn at_hours(h: u64) -> Tick {
+    at(h * HOUR)
+}
+
+/// Draw from gray until `address` is the outstanding draw, as the dialer
+/// would when the uniform draw lands on it.
+fn draw_until(list: &mut Peerlist, address: &NetworkAddress, now: Tick, rng: &mut SplitMix64) {
+    for _ in 0..10_000 {
+        match list.draw_gray(CLEARNET, rng) {
+            Some(drawn) if drawn == *address => return,
+            Some(other) => list.apply(
+                &DialOutcome::PayloadRefused(other),
+                now,
+                Verdict::Counted,
+                rng,
+            ),
+            None => panic!("gray ran out before {address:?} was drawn"),
+        }
+    }
+    panic!("{address:?} was never drawn");
+}
+
+/// Admit `address`, draw it, and keep it at `now`: a white address whose
+/// clock reads `now`.
+fn kept_at(list: &mut Peerlist, address: &NetworkAddress, now: Tick, rng: &mut SplitMix64) {
+    assert_eq!(
+        list.admit_gray(address, Source::Operator, now, rng),
+        Ok(true)
+    );
+    draw_until(list, address, now, rng);
+    list.apply(
+        &DialOutcome::SessionAccepted(address.clone()),
+        now,
+        Verdict::Counted,
+        rng,
+    );
+    assert!(list.is_white(address));
+}
+
+/// A connection problem on clearnet: a timeout, which proves nothing.
+fn connection_problem(address: &NetworkAddress) -> DialOutcome {
+    DialOutcome::DialFailed(
+        address.clone(),
+        DialFailure::uncertain(Retry::AgainInsideWindow, Reached::NoStream),
+    )
+}
+
+/// Settle the list at `now`. `kept` is the dialer's kept set: expiry skips
+/// it, and a ban is a separate question. These tests ban nothing.
+fn white_after_settle(
+    list: &mut Peerlist,
+    address: &NetworkAddress,
+    now: Tick,
+    kept: &mut dyn KeptSessions,
+    rng: &mut SplitMix64,
+) -> bool {
+    list.white_count(CLEARNET, now, kept, rng);
+    list.is_white(address)
+}
+
+#[test]
+fn a_session_held_for_thirty_hours_stays_white() {
+    let mut rng = SplitMix64::new(1);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let peer = v4(1);
+    kept_at(&mut list, &peer, at_hours(0), &mut rng);
+    // Thirty hours in, the session is still up: the address is contact,
+    // not a stale entry, whatever its clock reads.
+    assert!(white_after_settle(
+        &mut list,
+        &peer,
+        at_hours(30),
+        &mut BTreeSet::from([peer.clone()]),
+        &mut rng
+    ));
+    // The same clock with no live session is six hours past expiry.
+    assert!(!white_after_settle(
+        &mut list,
+        &peer,
+        at_hours(30),
+        &mut NoSessions,
+        &mut rng
+    ));
+}
+
+#[test]
+fn an_address_expires_twenty_four_hours_after_its_session_closes() {
+    let mut rng = SplitMix64::new(2);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let peer = v4(2);
+    kept_at(&mut list, &peer, at_hours(0), &mut rng);
+    // The session ends at hour 30: the clock moves to the close.
+    assert!(list.session_ended(&peer, at_hours(30)));
+    assert!(white_after_settle(
+        &mut list,
+        &peer,
+        at(30 * HOUR + EXPIRATION_PERIOD_NANOS - 1),
+        &mut NoSessions,
+        &mut rng
+    ));
+    assert!(!white_after_settle(
+        &mut list,
+        &peer,
+        at(30 * HOUR + EXPIRATION_PERIOD_NANOS),
+        &mut NoSessions,
+        &mut rng
+    ));
+    assert!(list.is_gray(&peer), "expired to gray, not dropped");
+}
+
+#[test]
+fn a_confirm_dial_still_holds_the_clock() {
+    let mut rng = SplitMix64::new(3);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let peer = v4(3);
+    kept_at(&mut list, &peer, at_hours(0), &mut rng);
+    assert!(list.session_ended(&peer, at_hours(1)));
+    // A confirm-and-close at hour 20 does not extend the lifetime (brief
+    // §5); the clock still reads the close at hour 1.
+    list.apply(
+        &DialOutcome::Confirmed(peer.clone()),
+        at_hours(20),
+        Verdict::Counted,
+        &mut rng,
+    );
+    assert!(!white_after_settle(
+        &mut list,
+        &peer,
+        at(HOUR + EXPIRATION_PERIOD_NANOS),
+        &mut NoSessions,
+        &mut rng
+    ));
+    // The clock of an address that is not white does not move.
+    assert!(!list.session_ended(&peer, at_hours(40)));
+}
+
+/// 2, 4, 8, 16, 32 and 60 minutes, each stretched by up to half again, and
+/// the address is never dropped: a connection problem is never proof.
+#[test]
+fn a_clearnet_address_failing_every_test_cools_on_the_ladder_and_is_never_dropped() {
+    let mut rng = SplitMix64::new(4);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let peer = v4(4);
+    assert_eq!(
+        list.admit_gray(&peer, Source::Operator, at(0), &mut rng),
+        Ok(true)
+    );
+    assert_eq!(COOLDOWN_FIRST_NANOS, 2 * MINUTE);
+    assert_eq!(COOLDOWN_CAP_NANOS, 60 * MINUTE);
+    let rungs = [2u64, 4, 8, 16, 32, 60, 60, 60];
+    let mut now = 0u64;
+    for (failures, minutes) in (1u32..).zip(rungs) {
+        // The test fails at `now`.
+        draw_until(&mut list, &peer, at(now), &mut rng);
+        list.apply(
+            &connection_problem(&peer),
+            at(now),
+            Verdict::Counted,
+            &mut rng,
+        );
+        assert!(list.is_gray(&peer), "failure {failures}: still gray");
+        assert!(list.is_cooling(&peer), "failure {failures}: cooling");
+        assert_eq!(list.failed_tests(&peer), failures);
+        let base = minutes * MINUTE;
+        // Not drawable at the rung's base, drawable past its jitter.
+        list.white_count(CLEARNET, at(now + base - 1), &mut NoSessions, &mut rng);
+        assert!(
+            list.is_cooling(&peer),
+            "failure {failures}: still cooling just before {minutes} min"
+        );
+        assert!(list.draw_gray(CLEARNET, &mut rng).is_none());
+        now += base + base / 2 + 1;
+        list.white_count(CLEARNET, at(now), &mut NoSessions, &mut rng);
+        assert!(
+            !list.is_cooling(&peer),
+            "failure {failures}: thawed after {minutes} min and the jitter"
+        );
+    }
+    assert!(list.is_gray(&peer), "eight failed tests, never dropped");
+    // A completed handshake clears the ladder.
+    draw_until(&mut list, &peer, at(now), &mut rng);
+    list.apply(
+        &DialOutcome::Confirmed(peer.clone()),
+        at(now),
+        Verdict::Counted,
+        &mut rng,
+    );
+    assert_eq!(list.failed_tests(&peer), 0);
+}
+
+/// Hold the rung (`OE-D6`): an excused failure on an address with counted
+/// failures neither climbs nor descends, and it cools at its current rung,
+/// not shorter. The edit that makes this red is cooling an excused failure
+/// for the outage retry, or for the first rung, whatever its count.
+#[test]
+fn an_excused_failure_holds_the_rung() {
+    let mut rng = SplitMix64::new(11);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let peer = v4(11);
+    assert_eq!(
+        list.admit_gray(&peer, Source::Operator, at(0), &mut rng),
+        Ok(true)
+    );
+    let mut now = 0u64;
+    for _ in 0..4 {
+        draw_until(&mut list, &peer, at(now), &mut rng);
+        list.apply(
+            &connection_problem(&peer),
+            at(now),
+            Verdict::Counted,
+            &mut rng,
+        );
+        now += COOLDOWN_CAP_NANOS + COOLDOWN_CAP_NANOS / 2 + 1;
+        list.white_count(CLEARNET, at(now), &mut NoSessions, &mut rng);
+        assert!(!list.is_cooling(&peer));
+    }
+    assert_eq!(list.failed_tests(&peer), 4);
+
+    draw_until(&mut list, &peer, at(now), &mut rng);
+    list.apply(
+        &connection_problem(&peer),
+        at(now),
+        Verdict::Excused,
+        &mut rng,
+    );
+    assert_eq!(
+        list.failed_tests(&peer),
+        4,
+        "the count neither climbs nor descends"
+    );
+    assert!(list.is_cooling(&peer));
+
+    // The fourth rung's cooldown before its jitter: still cooling, so the
+    // excusal did not cut the address's wait short.
+    let fourth = COOLDOWN_FIRST_NANOS << 3;
+    list.white_count(CLEARNET, at(now + fourth - 1), &mut NoSessions, &mut rng);
+    assert!(list.is_cooling(&peer), "it cools at its current rung");
+    assert!(list.draw_gray(CLEARNET, &mut rng).is_none());
+
+    now += fourth + fourth / 2 + 1;
+    list.white_count(CLEARNET, at(now), &mut NoSessions, &mut rng);
+    assert!(!list.is_cooling(&peer), "thawed after its rung and jitter");
+    assert_eq!(list.failed_tests(&peer), 4, "thaw keeps the count");
+}
+
+/// An excused failure on an address with no counted failure waits only the
+/// connector's `outage_retry` (`OE-D6`), and its count stays zero. The edit
+/// that makes this red is cooling it for the first rung.
+#[test]
+fn an_excused_failure_with_no_count_waits_the_outage_retry() {
+    let mut rng = SplitMix64::new(12);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let peer = v4(12);
+    assert_eq!(
+        list.admit_gray(&peer, Source::Operator, at(0), &mut rng),
+        Ok(true)
+    );
+    draw_until(&mut list, &peer, at(0), &mut rng);
+    list.apply(
+        &connection_problem(&peer),
+        at(0),
+        Verdict::Excused,
+        &mut rng,
+    );
+    assert_eq!(list.failed_tests(&peer), 0);
+    assert!(list.is_cooling(&peer));
+    let retry = shekyl_peerlist::dial_profile(CLEARNET).judging.outage_retry;
+    list.white_count(
+        CLEARNET,
+        at(retry.base_nanos - 1),
+        &mut NoSessions,
+        &mut rng,
+    );
+    assert!(list.is_cooling(&peer), "inside the outage retry");
+    let after = retry.base_nanos + retry.jitter_nanos + 1;
+    assert!(
+        after < COOLDOWN_FIRST_NANOS,
+        "the retry is shorter than the first rung"
+    );
+    list.white_count(CLEARNET, at(after), &mut NoSessions, &mut rng);
+    assert!(!list.is_cooling(&peer), "thawed after the outage retry");
+    assert_eq!(list.failed_tests(&peer), 0);
+}
+
+/// `off_draw` counts both holds the draw skips, and neither is a session: a
+/// counted cooldown in gray, and a white address an excusal holds back.
+/// The edit that makes this red is counting only the ladder, or counting
+/// a kept session in the same number.
+#[test]
+fn off_draw_counts_a_counted_cooldown_and_an_excusal() {
+    let mut rng = SplitMix64::new(21);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let cooled = v4(21);
+    let excused = v4(22);
+    assert_eq!(
+        list.admit_gray(&cooled, Source::Operator, at(0), &mut rng),
+        Ok(true)
+    );
+    draw_until(&mut list, &cooled, at(0), &mut rng);
+    list.apply(
+        &connection_problem(&cooled),
+        at(0),
+        Verdict::Counted,
+        &mut rng,
+    );
+    assert!(list.is_cooling(&cooled));
+    assert!(
+        !list.is_excused(&cooled),
+        "a counted cooldown is not an excusal"
+    );
+
+    assert_eq!(
+        list.admit_gray(&excused, Source::Operator, at(0), &mut rng),
+        Ok(true)
+    );
+    assert_eq!(list.draw_gray(CLEARNET, &mut rng), Some(excused.clone()));
+    list.apply(
+        &DialOutcome::Confirmed(excused.clone()),
+        at(0),
+        Verdict::Counted,
+        &mut rng,
+    );
+    list.apply(
+        &connection_problem(&excused),
+        at(0),
+        Verdict::Excused,
+        &mut rng,
+    );
+    assert!(list.is_white(&excused) && list.is_excused(&excused));
+    assert!(
+        !list.is_cooling(&excused),
+        "an excusal on white is not gray cooling"
+    );
+
+    let census = list
+        .settle(CLEARNET, at(0), &mut NoSessions, &mut rng)
+        .census(&mut |_| true);
+    assert_eq!(census.off_draw, 2, "{census:?}");
+    assert_eq!(census.gray, 1, "{census:?}");
+    assert_eq!(census.white, 1, "{census:?}");
+    assert_eq!(census.gray_candidates, 0, "{census:?}");
+    assert_eq!(census.white_candidates, 0, "{census:?}");
+}
+
+#[test]
+fn a_restart_retests_every_cooled_address() {
+    let mut rng = SplitMix64::new(5);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let cooled = v4(5);
+    let fresh = v4(6);
+    for peer in [&cooled, &fresh] {
+        assert_eq!(
+            list.admit_gray(peer, Source::Operator, at(0), &mut rng),
+            Ok(true)
+        );
+    }
+    for _ in 0..3 {
+        draw_until(&mut list, &cooled, at(0), &mut rng);
+        list.apply(
+            &connection_problem(&cooled),
+            at(0),
+            Verdict::Counted,
+            &mut rng,
+        );
+        list.white_count(CLEARNET, at(2 * HOUR), &mut NoSessions, &mut rng);
+    }
+    draw_until(&mut list, &cooled, at(2 * HOUR), &mut rng);
+    list.apply(
+        &connection_problem(&cooled),
+        at(2 * HOUR),
+        Verdict::Counted,
+        &mut rng,
+    );
+    assert!(list.is_cooling(&cooled));
+    assert_eq!(list.failed_tests(&cooled), 4);
+
+    // The file carries the address and nothing about its cooldown.
+    let bytes = list.to_file_bytes();
+    let mut restarted = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let admitted = restarted
+        .restore_file(&bytes, &mut rng)
+        .expect("the file reads");
+    assert_eq!(admitted, 2);
+    assert!(restarted.is_gray(&cooled));
+    assert!(!restarted.is_cooling(&cooled), "a fresh look: no cooldown");
+    assert_eq!(restarted.failed_tests(&cooled), 0, "no ladder either");
+    // Both are drawable at once.
+    let mut drawn = BTreeSet::new();
+    for _ in 0..2 {
+        drawn.insert(restarted.draw_gray(CLEARNET, &mut rng).expect("drawable"));
+    }
+    assert_eq!(drawn, BTreeSet::from([cooled, fresh]));
+}
+
+/// Admit `count` addresses to gray and fail a test of each, so every one
+/// is cooling at `now`.
+fn fill_cooling(
+    list: &mut Peerlist,
+    count: usize,
+    now: Tick,
+    rng: &mut SplitMix64,
+) -> Vec<NetworkAddress> {
+    let addresses: Vec<NetworkAddress> = (0..count).map(v4_many).collect();
+    for address in &addresses {
+        assert_eq!(
+            list.admit_gray(address, Source::Operator, now, rng),
+            Ok(true)
+        );
+    }
+    for _ in 0..count {
+        let drawn = list.draw_gray(CLEARNET, rng).expect("a drawable seat");
+        list.apply(&connection_problem(&drawn), now, Verdict::Counted, rng);
+    }
+    for address in &addresses {
+        assert!(list.is_cooling(address));
+    }
+    addresses
+}
+
+/// **Cooling seats are evictable (Rick, 2026-10-24).** Gray full of cooling
+/// seats takes a hundred more admissions and stays at the cap: a cooldown
+/// is a delay, not protection. Dead addresses fed within D-S1 would
+/// otherwise accumulate immune to eviction and push the honest ones out.
+#[test]
+fn gray_full_of_cooling_seats_stays_at_the_cap_under_more_admissions() {
+    let mut rng = SplitMix64::new(6);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let cooling = fill_cooling(&mut list, GRAY_CAP, at(0), &mut rng);
+    assert_eq!(list.gray_count(CLEARNET), GRAY_CAP);
+    for n in 0..100 {
+        let fresh = v4_many(GRAY_CAP + n);
+        assert_eq!(
+            list.admit_gray(&fresh, Source::Operator, at(0), &mut rng),
+            Ok(true)
+        );
+        assert!(list.is_gray(&fresh), "the address just admitted stays");
+    }
+    assert_eq!(list.gray_count(CLEARNET), GRAY_CAP, "bounded by the cap");
+    let still = cooling.iter().filter(|a| list.is_cooling(a)).count();
+    assert!(still < GRAY_CAP, "some cooling seats were evicted");
+    assert!(still >= GRAY_CAP - 100);
+}
+
+/// Half the seats cooling and half drawable: evictions hit both in
+/// proportion. Each admission over the cap evicts one uniform seat among
+/// every evictable one, so after a thousand admissions each half has lost
+/// about the same number, within a statistical bound.
+#[test]
+fn evictions_hit_cooling_and_drawable_seats_in_proportion() {
+    let mut rng = SplitMix64::new(7);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let half = GRAY_CAP / 2;
+    let cooling = fill_cooling(&mut list, half, at(0), &mut rng);
+    let drawable: Vec<NetworkAddress> = (half..GRAY_CAP).map(v4_many).collect();
+    for address in &drawable {
+        assert_eq!(
+            list.admit_gray(address, Source::Operator, at(0), &mut rng),
+            Ok(true)
+        );
+    }
+    assert_eq!(list.gray_count(CLEARNET), GRAY_CAP);
+    let admitted = 1000;
+    for n in 0..admitted {
+        let fresh = v4_many(GRAY_CAP + n);
+        assert_eq!(
+            list.admit_gray(&fresh, Source::Operator, at(0), &mut rng),
+            Ok(true)
+        );
+    }
+    assert_eq!(list.gray_count(CLEARNET), GRAY_CAP);
+    let cooling_lost = cooling.iter().filter(|a| !list.is_gray(a)).count();
+    let drawable_lost = drawable.iter().filter(|a| !list.is_gray(a)).count();
+    // Each half expects about half the evictions that fall on the original
+    // seats (a little under 500 each, the fresh seats taking the rest).
+    // The bound is loose: a difference of 150 is over six standard
+    // deviations for a thousand uniform picks.
+    assert!(cooling_lost >= 300, "cooling lost {cooling_lost}");
+    assert!(drawable_lost >= 300, "drawable lost {drawable_lost}");
+    assert!(
+        cooling_lost.abs_diff(drawable_lost) < 150,
+        "cooling lost {cooling_lost}, drawable lost {drawable_lost}"
+    );
+}
+
+/// **Banned addresses are not written to the file (Rick ruled (ii),
+/// 2026-10-24).** A clearnet address a ban the lists hold covers at the
+/// moment of the write is left out; the ban itself is never in the file;
+/// the list still holds the address. The file carries addresses, never
+/// judgements.
+#[test]
+fn a_clearnet_address_under_an_active_ban_is_absent_from_the_file() {
+    let mut rng = SplitMix64::new(8);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let banned = v4(7);
+    let free = v4(8);
+    for peer in [&banned, &free] {
+        assert_eq!(
+            list.admit_gray(peer, Source::Operator, at(0), &mut rng),
+            Ok(true)
+        );
+    }
+    list.ban(BanEntry::Host(IpAddr::V4(Ipv4Addr::new(11, 0, 1, 7))));
+    let written = decode(&list.to_file_bytes()).expect("the file reads");
+    assert_eq!(written, vec![free], "the banned address is left out");
+    assert!(list.is_gray(&banned), "the list still holds it");
+}
+
+#[test]
+fn a_clearnet_address_whose_ban_is_lifted_is_written() {
+    let mut rng = SplitMix64::new(9);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let peer = v4(9);
+    assert_eq!(
+        list.admit_gray(&peer, Source::Operator, at(0), &mut rng),
+        Ok(true)
+    );
+    let entry = BanEntry::Host(IpAddr::V4(Ipv4Addr::new(11, 0, 1, 9)));
+    list.ban(entry);
+    assert_eq!(decode(&list.to_file_bytes()).expect("reads"), vec![]);
+    list.lift(entry);
+    assert_eq!(decode(&list.to_file_bytes()).expect("reads"), vec![peer]);
+}
+
+/// Nothing on Tor can be banned (D7: only an address with an IP), so a
+/// ban on every IPv4 address leaves every onion in the file.
+#[test]
+fn a_tor_address_is_unaffected_by_bans_in_the_file() {
+    let mut rng = SplitMix64::new(10);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let tor = onion(1);
+    assert_eq!(
+        list.admit_gray(&tor, Source::Operator, at(0), &mut rng),
+        Ok(true)
+    );
+    assert_eq!(
+        list.admit_gray(&v4(10), Source::Operator, at(0), &mut rng),
+        Ok(true)
+    );
+    let everything = Ipv4Subnet::new(Ipv4Addr::UNSPECIFIED, 0).expect("prefix 0");
+    list.ban(BanEntry::Subnet(everything));
+    let written = decode(&list.to_file_bytes()).expect("reads");
+    assert_eq!(written, vec![tor]);
+}
+
+/// A cooldown that has ended frees the seat for a targeted draw too, with
+/// no settle in between: a direct dial past the cooldown draws the address
+/// (the dialer's `dial` draws through `draw_gray_where`).
+#[test]
+fn a_targeted_draw_past_the_cooldown_draws_the_address() {
+    let mut rng = SplitMix64::new(11);
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+    let peer = v4(11);
+    assert_eq!(
+        list.admit_gray(&peer, Source::Operator, at(0), &mut rng),
+        Ok(true)
+    );
+    draw_until(&mut list, &peer, at(0), &mut rng);
+    list.apply(
+        &connection_problem(&peer),
+        at(0),
+        Verdict::Counted,
+        &mut rng,
+    );
+    assert!(list.is_cooling(&peer));
+    let target = peer.clone();
+    assert_eq!(
+        list.draw_gray_where(CLEARNET, at(MINUTE), &mut |a| *a == target, &mut rng),
+        None,
+        "inside the cooldown"
+    );
+    assert_eq!(
+        list.draw_gray_where(CLEARNET, at(2 * HOUR), &mut |a| *a == target, &mut rng),
+        Some(peer),
+        "past it, with no settle between"
+    );
+}

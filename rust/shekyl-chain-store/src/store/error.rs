@@ -34,14 +34,15 @@
 //! to owe later.
 
 use crate::apply_policy::ArchivalFamily;
-use shekyl_chain_rules::{AnchorConflict, RuleSet};
-use shekyl_types::{BlockHash, PCanonicalId, TxHash};
+use shekyl_chain_rules::{GenesisConflict, RuleSet};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, TxHash};
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
 pub use super::invariant::{
-    AccrualFault, CellFault, DigestFault, DrawRowFault, DrawableFault, EdgeFault, FrozenFault,
-    LeafCountFault, LeafDensity, SettlementFault, SlashFault, StoreInvariant, UndoFault,
+    AccrualFault, AdmissionWriteFault, BodyHolderFault, CellFault, DigestFault, DrawRowFault,
+    DrawableFault, EdgeFault, FrozenFault, HeldRegion, LeafCountFault, LeafDensity,
+    SettlementFault, SlashFault, StoreInvariant, UndoFault,
 };
 
 /// Why a store operation failed, by class.
@@ -313,17 +314,13 @@ pub enum StoreCannot {
         /// The schedule this session runs.
         session: SettlementEpochBlocks,
     },
-    /// The recorded chain contradicts a pin this binary carries (CEN-E5).
+    /// The recorded chain's genesis is not the one this binary pins
+    /// (CEN-E5): the file is another network's, or a remint.
     ///
     /// The file is coherent; this session is the wrong one for it — the
-    /// same class as [`Self::SettlementEpochMismatch`]. Genesis
-    /// ([`AnchorConflict::remedy`] is refuse-to-run) is another network's
-    /// file, or a remint. A later checkpoint carries a pop the ingest
-    /// driver still owes; this open reports that conflict and does not
-    /// pop, so a session cannot start on a chain that disagrees with its
-    /// pins and then forget to rewind. The payload is the rules crate's
-    /// conflict, not a second shape of it.
-    ReleasePin(AnchorConflict),
+    /// same class as [`Self::SettlementEpochMismatch`]. The payload is the
+    /// rules crate's conflict, not a second shape of it.
+    ForeignGenesis(GenesisConflict),
     /// The session's undo-log retention is not strictly inside its
     /// settlement epoch — zero, or `≥ SEB` (DRS-E1 S-PRUNE, `DRS_E1_SPRUNE.md`
     /// §3, §12). `tip − retention` has to sit above the body horizon, which
@@ -343,7 +340,7 @@ pub enum StoreCannot {
     /// set it runs under (S-CHAIN-W SCW-7: retention `≥ D_max`, or a legal
     /// reorg returns [`PopBelowFloor`](Self::PopBelowFloor)). Refused at
     /// open against the cap the caller names, and by `connect` against the
-    /// set in force at every height — a Fakechain regtest runs a rule set
+    /// set in force at every height — a levered regtest runs a rule set
     /// whose cap fits its retention, never a store field the validator
     /// defers to (PR #861 review).
     RetentionBelowReorgCap {
@@ -363,7 +360,7 @@ pub enum StoreCannot {
         /// The height the block would have been recorded at.
         height: u64,
         /// The rule set the verdict was minted under — the set, not its id:
-        /// two Fakechain sets share `RuleSetId::GENESIS`, and the refusal
+        /// two levered sets share `RuleSetId::GENESIS`, and the refusal
         /// must be able to say which differed (RD-Q10). Boxed, as
         /// `shekyl_chain_rules::Stale::RuleSet`'s are: two sets by value
         /// sized every `Result` in the store past clippy's 128 bytes once
@@ -376,14 +373,17 @@ pub enum StoreCannot {
     /// `pop`, or the regtest injection, on a store with no block recorded
     /// (nothing to pop; no tip to attribute an injected bit to).
     ChainEmpty,
-    /// The regtest serve-credit injection
-    /// (`ChainStore::regtest_inject_serve_credit`, DRS-E4 §3.8 item 3) was
-    /// asked for under a [`Trust`](shekyl_chain_rules::Trust) that carries
-    /// a release's anchors — a public network's posture. The door writes
-    /// a bit the rules did not admit and opens on Fakechain only, as the
-    /// C++'s `regtest_inject_archival_serve_credit` refuses off
-    /// `FAKECHAIN` (`blockchain.cpp:4715`).
-    InjectionOffFakechain,
+    /// A replay write (`ChainStore::regtest_inject_serve_credit`,
+    /// `regtest_issue_draws`; DRS-E4 §3.8 item 3) was handed a network
+    /// row's permit for another lever. Each door writes what the rules did
+    /// not admit and opens only on its own lever's permit, which only
+    /// regtest's row grants (`NETWORK_IDENTITY.md` NI-R6).
+    PermitForAnotherLever {
+        /// The lever the permit is for.
+        given: shekyl_network::Lever,
+        /// The lever the write needs.
+        wanted: shekyl_network::Lever,
+    },
     /// The regtest serve-credit injection named a persona with no bond
     /// record. The door writes the one row the rules did not admit, but
     /// it does not mint a file the reads refuse: every serve-credit read
@@ -457,6 +457,33 @@ pub enum StoreCannot {
     /// An alt-chain store refusal (DRS-E1 S-ALT, `DRS_E1_SALT.md` §3.2) —
     /// the store's decisions on `alt_blocks`, none of them a fault in it.
     Alt(AltCannot),
+    /// A bundle-queue refusal (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5) — the
+    /// queue's decisions about what it was asked to hold.
+    Queue(QueueCannot),
+}
+
+/// The bundle queue's typed refusals — decisions, not faults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueueCannot {
+    /// The queue already holds a bundle for `h`. One per `h`; the first
+    /// valid one wins (§7.5).
+    Held {
+        /// The block the offered bundle is for.
+        h: BlockHeight,
+    },
+    /// The body does not hash to the reference's prunable hash. A body is
+    /// held under the hash its reference names, and accepted on equality.
+    BodyNotReferenced {
+        /// The block the offered bundle is for.
+        h: BlockHeight,
+    },
+    /// The queue holds its bound of entries. The window keeps no more
+    /// heights than that open, so a full queue is a closed window the
+    /// caller did not remove first.
+    Full {
+        /// The bound, `W₂`.
+        capacity: u64,
+    },
 }
 
 /// The alt-chain store's typed refusals — decisions, not faults
@@ -475,8 +502,8 @@ pub enum AltCannot {
     /// `previous` chain reaches neither a recorded row nor another alt row
     /// — CEN-K2's orphan. `at` is the first hash the store does not hold.
     /// Not a fault: the chain the caller named does not connect, and the
-    /// ingest door answers the peer accordingly (the C++'s orphan branch,
-    /// `SHEKYL_BLOCK_INGEST_ORPHANED`).
+    /// ingest door answers the peer accordingly
+    /// (`shekyl_peer_policy::BlockIngest::Orphaned`).
     Unlinked {
         /// The first hash on the walk that neither table holds.
         at: BlockHash,
@@ -566,9 +593,11 @@ impl core::fmt::Display for StoreCannot {
                  force at height {height}; re-validate under the rule set in force"
             ),
             Self::ChainEmpty => f.write_str("the chain store has no block recorded"),
-            Self::InjectionOffFakechain => f.write_str(
-                "regtest injection refused: the node's trust carries a release's anchors, so \
-                 this is not a Fakechain",
+            Self::PermitForAnotherLever { given, wanted } => write!(
+                f,
+                "a replay write needs the permit for {}; it was handed the permit for {}",
+                wanted.name(),
+                given.name()
             ),
             Self::InjectionForUnbondedPersona { persona } => write!(
                 f,
@@ -609,8 +638,8 @@ impl core::fmt::Display for StoreCannot {
             } => write!(
                 f,
                 "undo-log retention {} is below the in-force rule set's reorg cap of {}: a legal \
-                 reorg would meet PopBelowFloor (S-CHAIN-W SCW-7); raise the retention, or run a \
-                 Fakechain rule set whose cap fits it",
+                 reorg would meet PopBelowFloor (S-CHAIN-W SCW-7); raise the retention, or shorten \
+                 the reorg cap so it fits inside the retention",
                 retention.to_raw(),
                 reorg_cap.to_raw()
             ),
@@ -620,26 +649,16 @@ impl core::fmt::Display for StoreCannot {
                  session runs {session}: persisted join epochs and serve-credit windows would be \
                  silently mislabeled; reopen under the pinned schedule or use a fresh data directory"
             ),
-            Self::ReleasePin(conflict) => match conflict.recorded {
-                Some(recorded) => write!(
-                    f,
-                    "block {height} is {recorded} but this binary pins {expected}; \
-                     the file is not this release's chain ({remedy:?})",
-                    height = conflict.height,
-                    expected = conflict.expected,
-                    remedy = conflict.remedy(),
-                ),
-                None => write!(
-                    f,
-                    "block {height} is absent below the tip but this binary pins {expected}; \
-                     the file is not this release's chain ({remedy:?})",
-                    height = conflict.height,
-                    expected = conflict.expected,
-                    remedy = conflict.remedy(),
-                ),
-            },
+            Self::ForeignGenesis(conflict) => write!(
+                f,
+                "block 0 is {recorded} but this binary pins {expected}; \
+                 the file is another network's chain, and this node does not run on it",
+                recorded = conflict.recorded,
+                expected = conflict.expected,
+            ),
             Self::Pool(cannot) => write!(f, "pool store: {cannot}"),
             Self::Alt(cannot) => write!(f, "alt-chain store: {cannot}"),
+            Self::Queue(cannot) => write!(f, "bundle queue: {cannot}"),
             Self::PoolFileForeign => f.write_str(
                 "pool file is not one this store wrote and not one it may recreate (no redb \
                  database, no pool header, or a header that does not decode): refused, not \
@@ -689,6 +708,27 @@ impl core::error::Error for AltCannot {}
 impl From<AltCannot> for StoreError {
     fn from(cannot: AltCannot) -> Self {
         Self::Cannot(StoreCannot::Alt(cannot))
+    }
+}
+
+impl core::fmt::Display for QueueCannot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Held { h } => write!(f, "a bundle for height {h} is already queued"),
+            Self::BodyNotReferenced { h } => write!(
+                f,
+                "the body offered for height {h} is not the one its reference names"
+            ),
+            Self::Full { capacity } => write!(f, "the queue holds its bound of {capacity}"),
+        }
+    }
+}
+
+impl core::error::Error for QueueCannot {}
+
+impl From<QueueCannot> for StoreError {
+    fn from(cannot: QueueCannot) -> Self {
+        Self::Cannot(StoreCannot::Queue(cannot))
     }
 }
 

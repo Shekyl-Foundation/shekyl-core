@@ -26,10 +26,12 @@ use std::time::{Duration, Instant};
 use curve25519_dalek::{EdwardsPoint, Scalar};
 use shekyl_address::{Network, ShekylAddress, MSG_SIGN_PK_LEN};
 use shekyl_block_template::MinerKeys;
-use shekyl_chain_rules::{CenRow, FakechainSchedule, Substrate};
+use shekyl_chain_rules::{CappedEpoch, CenRow, Substrate};
 use shekyl_difficulty::{check_hash, Difficulty};
 use shekyl_harness_wallet::MinerWallet;
-use shekyl_miner::{found_blocks, Job, JobBoard, Miner, MinerConfig, MiningAddress, RATE_WINDOW};
+use shekyl_miner::{
+    found_blocks, Job, JobBoard, Miner, MinerConfig, MiningAddress, SearchBound, RATE_WINDOW,
+};
 use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
 use shekyl_thread_ledger::RowKind;
 
@@ -42,10 +44,7 @@ use crate::substrate::ProductionSubstrate;
 static MINER_LANE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Regtest at a fixed difficulty of eight: a block takes a search.
-const RULES: ChainRules = ChainRules::Regtest {
-    fixed_difficulty: NonZeroU128::new(8),
-    schedule: FakechainSchedule::PRODUCTION,
-};
+const RULES: ChainRules = ChainRules::harness_regtest(NonZeroU128::new(8), CappedEpoch::PRODUCTION);
 
 /// How long a test waits for a block at difficulty eight before calling the
 /// search broken: generous for a debug build's light-mode hash.
@@ -85,6 +84,16 @@ fn job_for(next: &NextBlock) -> Job {
         height: next.height,
         seed: next.seed,
         difficulty: next.target.difficulty(),
+        offsets: next
+            .template
+            .block
+            .blob_offsets()
+            .expect("a built coinbase reserves the extra nonce"),
+        next_seed: None,
+        reward: shekyl_units::AtomicUnits::ZERO,
+        median_weight: 0,
+        already_generated: shekyl_units::AtomicUnits::ZERO,
+        listed: Vec::new(),
     }
 }
 
@@ -166,6 +175,7 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
         &MinerConfig {
             address: address.clone(),
             threads: NonZeroUsize::new(2).expect("two"),
+            bound: SearchBound::Unbounded,
         },
         Arc::clone(&board),
         Arc::clone(&caches),
@@ -260,21 +270,99 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
         status.per_thread.iter().map(|r| r.hashes).sum::<u64>()
     );
 
-    miner.stop();
+    miner.stop().join();
     // The join is the ledger's: a row leaves after its thread is joined.
     // (`/proc` can still list a joined thread until the kernel reaps it.)
-    assert_eq!(miner_rows(), 0, "stopping joins every worker");
+    assert_eq!(
+        miner_rows(),
+        0,
+        "joining the stopped workers removes every row"
+    );
+    s.close().await;
+}
+
+/// A miner started [`SearchBound::Until`] a height mines no block above
+/// it (`generateblocks`' exact count). The bound is height one: posted
+/// that height's job, the one worker finds the block, which connects.
+/// Posted the next template's, at height two, that worker parks: after a
+/// full rate window the miner has hashed nothing and found nothing. One
+/// worker, because a second can still be hashing the bound-height job
+/// when the block is delivered, and that hash is recorded when it
+/// finishes — inside the later window — before the superseded generation
+/// is dropped. Red edit: drop the bound check in the worker loop; the job
+/// at height two is searched and its block found. Red edit: start a
+/// second worker.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_miner_searching_until_a_height_mines_no_block_above_it() {
+    let _lane = MINER_LANE.lock().await;
+    let caches = Arc::new(CacheStore::new());
+    let pow = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
+    let substrate = pow.clone();
+    let mut s = Scenario::open_under("miner-until", pow, RULES);
+    let until = shekyl_types::BlockHeight::from_raw(1);
+
+    let board = Arc::new(JobBoard::new());
+    let (sink, found) = found_blocks();
+    let miner = Miner::start(
+        &MinerConfig {
+            address: MiningAddress::decode(&harness_address(), Network::Mainnet)
+                .expect("the harness address"),
+            threads: NonZeroUsize::MIN,
+            bound: SearchBound::Until(until),
+        },
+        Arc::clone(&board),
+        Arc::clone(&caches),
+        shekyl_hash_budget::Budget::of_host(),
+        sink,
+    )
+    .expect("the workers start");
+
+    // Genesis is the driver's; height one, the bound, is the miner's.
+    s.mine(1).await;
+    let mut next = s.next_template(Vec::new()).await.expect("a template");
+    assert_eq!(next.height, until);
+    pin_job_seed(&substrate, &caches, &next);
+    let posted = board.publish(job_for(&next));
+    let block = found
+        .recv_timeout(FIND_WITHIN)
+        .expect("the block at the bound is found");
+    assert_eq!(block.generation, posted);
+    assert_eq!(block.height, until);
+    next.template.block = block.block.clone();
+    s.connect_template(next)
+        .await
+        .unwrap_or_else(|outcome| panic!("the block at the bound connects: {outcome}"));
+
+    // Height two is above it: posted, not searched.
+    let above = s.next_template(Vec::new()).await.expect("a template");
+    assert_eq!(above.height.to_raw(), 2);
+    pin_job_seed(&substrate, &caches, &above);
+    board.publish(job_for(&above));
+    assert!(
+        found
+            .recv_timeout(RATE_WINDOW + Duration::from_secs(1))
+            .is_err(),
+        "no block above the bound"
+    );
+    assert_eq!(
+        miner.status().rate.hashes,
+        0,
+        "the worker parked on the job above the bound: not one hash in a full window"
+    );
+
+    miner.stop().join();
     s.close().await;
 }
 
 /// Five blocks in a row, each mined by the loop from the template over the
 /// last and connected — the live lane's end to end.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "real RandomX, five searches; minutes in a debug build. Live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored miner"]
+#[ignore = "real RandomX, five searches; minutes in a debug build; run by nightly.yml's chain-ingest-ignored job"]
 async fn the_miner_extends_the_chain_block_after_block() {
     let _lane = MINER_LANE.lock().await;
     let caches = Arc::new(CacheStore::new());
     let pow = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
+    let substrate = pow.clone();
     let mut s = Scenario::open_under("miner-five", pow, RULES);
     let board = Arc::new(JobBoard::new());
     let (sink, found) = found_blocks();
@@ -283,9 +371,10 @@ async fn the_miner_extends_the_chain_block_after_block() {
             address: MiningAddress::decode(&harness_address(), Network::Mainnet)
                 .expect("the harness address"),
             threads: NonZeroUsize::new(2).expect("two"),
+            bound: SearchBound::Unbounded,
         },
         Arc::clone(&board),
-        caches,
+        Arc::clone(&caches),
         shekyl_hash_budget::Budget::of_host(),
         sink,
     )
@@ -294,6 +383,9 @@ async fn the_miner_extends_the_chain_block_after_block() {
     for expected in 1..6u64 {
         let mut next = s.next_template(Vec::new()).await.expect("a template");
         assert_eq!(next.height.to_raw(), expected);
+        // The workers leave a job whose seed the cache does not hold
+        // (`pin_job_seed`), so each post pins first, as the pipeline does.
+        pin_job_seed(&substrate, &caches, &next);
         board.publish(job_for(&next));
         let block = found.recv_timeout(FIND_WITHIN).expect("a block is found");
         next.template.block = block.block;
@@ -301,7 +393,7 @@ async fn the_miner_extends_the_chain_block_after_block() {
             .await
             .unwrap_or_else(|outcome| panic!("block {expected} connects: {outcome}"));
     }
-    miner.stop();
+    miner.stop().join();
     s.close().await;
 }
 
@@ -331,6 +423,7 @@ fn a_form_takes_the_permit_the_miner_left_free() {
             address: MiningAddress::decode(&harness_address(), Network::Mainnet)
                 .expect("the harness address"),
             threads: NonZeroUsize::MIN,
+            bound: SearchBound::Unbounded,
         },
         Arc::clone(&board),
         Arc::clone(&caches),
@@ -339,6 +432,14 @@ fn a_form_takes_the_permit_the_miner_left_free() {
     )
     .expect("the worker starts");
     board.publish(Job {
+        offsets: template
+            .blob_offsets()
+            .expect("a built coinbase reserves the extra nonce"),
+        next_seed: None,
+        reward: shekyl_units::AtomicUnits::ZERO,
+        median_weight: 0,
+        already_generated: shekyl_units::AtomicUnits::ZERO,
+        listed: Vec::new(),
         block: template,
         height: shekyl_types::BlockHeight::from_raw(1),
         seed,
@@ -365,7 +466,7 @@ fn a_form_takes_the_permit_the_miner_left_free() {
         "the miner keeps the permit it already holds"
     );
     drop(permit);
-    miner.stop();
+    miner.stop().join();
 }
 
 /// The loop's hash rate per worker, for the report: one worker, then every
@@ -373,7 +474,7 @@ fn a_form_takes_the_permit_the_miner_left_free() {
 /// release — a debug build's rate says nothing about the daemon's:
 /// `cargo test --release -p shekyl-chain-ingest --features pipeline -- --ignored --nocapture the_miners_rate`.
 #[test]
-#[ignore = "a measurement, in release: see the doc comment"]
+#[ignore = "a measurement in release (see the doc comment); run by nightly.yml's chain-ingest-ignored job"]
 fn the_miners_rate_per_worker() {
     let _lane = MINER_LANE.blocking_lock();
     let caches = Arc::new(CacheStore::new());
@@ -398,6 +499,7 @@ fn the_miners_rate_per_worker() {
                 address: MiningAddress::decode(&harness_address(), Network::Mainnet)
                     .expect("the harness address"),
                 threads: NonZeroUsize::new(threads).expect("non-zero"),
+                bound: SearchBound::Unbounded,
             },
             Arc::clone(&board),
             Arc::clone(&caches),
@@ -410,6 +512,14 @@ fn the_miners_rate_per_worker() {
             height: shekyl_types::BlockHeight::from_raw(1),
             seed,
             difficulty: Difficulty::from_raw(u128::MAX),
+            offsets: template
+                .blob_offsets()
+                .expect("a built coinbase reserves the extra nonce"),
+            next_seed: None,
+            reward: shekyl_units::AtomicUnits::ZERO,
+            median_weight: 0,
+            already_generated: shekyl_units::AtomicUnits::ZERO,
+            listed: Vec::new(),
         });
         std::thread::sleep(RATE_WINDOW + Duration::from_secs(2));
         let status = miner.status();
@@ -425,44 +535,7 @@ fn the_miners_rate_per_worker() {
             rates.join(", "),
             status.not_lowered
         );
-        miner.stop();
-    }
-}
-
-/// The tip follower's template source in tests (`follower` module docs):
-/// the scenario's template over the harness miner, stamped from the
-/// service's own clock, one tick past the chain's median so CEN-C2 holds.
-struct ScenarioSource {
-    clock: Arc<crate::scenario::Clocked<ProductionSubstrate>>,
-    miner: MinerKeys,
-    counter: std::sync::atomic::AtomicU64,
-}
-
-impl crate::follower::TemplateSource for ScenarioSource {
-    fn template(
-        &self,
-        facts: &crate::connector::ChainFacts,
-    ) -> Option<(shekyl_wire::Block, Vec<shekyl_wire::Transaction>)> {
-        let mut now = self.clock.tick();
-        if let Some(median) = facts.median_timestamp {
-            while now <= median {
-                now = self.clock.tick();
-            }
-        }
-        let counter = self
-            .counter
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        let template = crate::scenario::build_template(
-            RULES,
-            &shekyl_economics::EconomicParams::default(),
-            &self.miner,
-            counter,
-            facts,
-            now,
-            &[],
-        )
-        .ok()?;
-        Some((template.block, template.transactions))
+        miner.stop().join();
     }
 }
 
@@ -475,7 +548,6 @@ impl crate::follower::TemplateSource for ScenarioSource {
 /// arrival and connects.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_block() {
-    use crate::follower::{JobSeat, MinerFeed};
     use crate::service::{Arrival, ArrivalTag, Follow, Origin, Service, ServiceConfig};
     let _lane = MINER_LANE.lock().await;
     let caches = Arc::new(CacheStore::new());
@@ -495,18 +567,11 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
     );
     let budget = shekyl_hash_budget::Budget::of_host();
     let board = Arc::new(JobBoard::new());
-    let (sink, found) = found_blocks();
-    let (_synced_tx, synced) = tokio::sync::watch::channel(true);
-    let recipient = MinerWallet::harness().recipient();
-    let source = ScenarioSource {
-        clock: Arc::clone(&clock),
-        miner: MinerKeys {
-            spend_public: recipient.spend_public,
-            x25519_pk: recipient.x25519_pk,
-            ml_kem_ek: recipient.ml_kem_ek.clone(),
-        },
-        counter: std::sync::atomic::AtomicU64::new(1),
-    };
+    let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
+    // The node's own producer builds every job, paying the harness wallet,
+    // stamped from the service's clock.
+    let (seat, sink, _posting) =
+        crate::test_support::job_seat(&board, Some(crate::test_support::harness_keys()), sync);
     let service = Service::start(
         Arc::new(store),
         RULES,
@@ -514,15 +579,9 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
         ServiceConfig::default(),
         budget.clone(),
         Follow {
-            job: Some(JobSeat {
-                board: Arc::clone(&board),
-                miner: Some(MinerFeed {
-                    source: Arc::new(source),
-                    synced,
-                    found,
-                }),
-            }),
+            job: Some(seat),
             pool: None,
+            ..Default::default()
         },
     );
     let miner = Miner::start(
@@ -530,6 +589,7 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
             address: MiningAddress::decode(&harness_address(), Network::Mainnet)
                 .expect("the harness address"),
             threads: NonZeroUsize::new(2).expect("two"),
+            bound: SearchBound::Unbounded,
         },
         Arc::clone(&board),
         Arc::clone(&caches),
@@ -545,6 +605,7 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
             origin: Origin::Local,
             block: genesis[0].template.block.serialize(),
             bodies: Vec::new(),
+            attestation_witness: Vec::new(),
         })
         .expect("room")
         .reply()
@@ -575,10 +636,9 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
             .is_some(),
         "the new epoch's seed is held"
     );
-    miner.stop();
+    miner.stop().join();
     service.stop().await.expect("stops");
     y.close().await;
-    crate::test_support::cleanup(&path);
 }
 
 /// A one-permit budget never grants the miner a permit: it leaves the
@@ -592,6 +652,7 @@ fn a_miner_on_a_one_permit_budget_is_refused() {
             address: MiningAddress::decode(&harness_address(), Network::Mainnet)
                 .expect("the harness address"),
             threads: NonZeroUsize::new(1).expect("one"),
+            bound: SearchBound::Unbounded,
         },
         Arc::new(JobBoard::new()),
         Arc::new(CacheStore::new()),

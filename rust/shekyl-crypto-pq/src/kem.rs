@@ -46,6 +46,23 @@ pub const HYBRID_KEM_CT_LEN: usize = X25519_KEM_CT_LEN + ML_KEM_768_CT_LEN;
 /// Domain separator for KEM shared-secret combination.
 pub const KEM_DOMAIN_SALT: &[u8] = b"shekyl-kem-v1";
 
+/// Check that `ek` is a well-formed ML-KEM-768 encapsulation key: 1184
+/// bytes whose 12-bit coefficients each decode below `q` (FIPS 203 §7.2,
+/// the encapsulation key's modulus check). A key that fails cannot be
+/// encapsulated to, so no output can be paid to it.
+///
+/// # Errors
+///
+/// [`CryptoError::InvalidKeyMaterial`] for the wrong length or a
+/// coefficient at or above `q`.
+pub fn check_ml_kem_768_ek(ek: &[u8]) -> Result<(), CryptoError> {
+    let bytes: [u8; ML_KEM_768_EK_LEN] =
+        ek.try_into().map_err(|_| CryptoError::InvalidKeyMaterial)?;
+    ml_kem_768::EncapsKey::try_from_bytes(bytes)
+        .map(drop)
+        .map_err(|_| CryptoError::InvalidKeyMaterial)
+}
+
 /// ML-KEM-768 decapsulation key parsed once for batch chain scan.
 ///
 /// FA-6 runs universal decap on every output. Callers scanning many outputs
@@ -293,53 +310,6 @@ pub(crate) fn combine_shared_secrets(
     Ok(SharedSecret(okm))
 }
 
-/// Derive all key material from a master seed (genesis wallet format).
-///
-/// ```text
-/// master_seed
-///   ├── HKDF-Expand("shekyl-ed25519-spend", seed) → Ed25519 spend keypair
-///   ├── HKDF-Expand("shekyl-ed25519-view", seed)  → Ed25519 view keypair
-///   └── HKDF-Expand("shekyl-ml-kem-768", seed)    → ML-KEM-768 decap/encap keypair
-/// ```
-pub struct SeedDerivation;
-
-impl SeedDerivation {
-    /// Derive an Ed25519 spend secret key from the master seed.
-    pub fn derive_ed25519_spend(seed: &[u8; 32]) -> [u8; 32] {
-        Self::hkdf_expand_32(seed, b"shekyl-ed25519-spend")
-    }
-
-    /// Derive an Ed25519 view secret key from the master seed.
-    pub fn derive_ed25519_view(seed: &[u8; 32]) -> [u8; 32] {
-        Self::hkdf_expand_32(seed, b"shekyl-ed25519-view")
-    }
-
-    /// Derive ML-KEM-768 keypair seed material from the master seed.
-    /// The 64-byte output is used as the `d || z` input to ML-KEM keygen.
-    pub fn derive_ml_kem_seed(seed: &[u8; 32]) -> [u8; 64] {
-        Self::hkdf_expand_64(seed, b"shekyl-ml-kem-768")
-    }
-
-    /// Fixed HKDF salt for master-seed child-key derivation.
-    const HKDF_SALT_MASTER_DERIVE: &'static [u8] = b"shekyl-master-derive-v1";
-
-    fn hkdf_expand_32(seed: &[u8; 32], info: &[u8]) -> [u8; 32] {
-        let hk = Hkdf::<Sha512>::new(Some(Self::HKDF_SALT_MASTER_DERIVE), seed);
-        let mut okm = [0u8; 32];
-        hk.expand(info, &mut okm)
-            .expect("32 bytes < max HKDF output");
-        okm
-    }
-
-    fn hkdf_expand_64(seed: &[u8; 32], info: &[u8]) -> [u8; 64] {
-        let hk = Hkdf::<Sha512>::new(Some(Self::HKDF_SALT_MASTER_DERIVE), seed);
-        let mut okm = [0u8; 64];
-        hk.expand(info, &mut okm)
-            .expect("64 bytes < max HKDF output");
-        okm
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,27 +416,5 @@ mod tests {
         assert_eq!(pk.ml_kem.len(), ML_KEM_768_EK_LEN);
         assert_eq!(sk.x25519.len(), 32);
         assert_eq!(sk.ml_kem.len(), ML_KEM_768_DK_LEN);
-    }
-
-    #[test]
-    fn seed_derivation_deterministic() {
-        let seed = [0xab; 32];
-        let spend1 = SeedDerivation::derive_ed25519_spend(&seed);
-        let spend2 = SeedDerivation::derive_ed25519_spend(&seed);
-        assert_eq!(spend1, spend2);
-
-        let view1 = SeedDerivation::derive_ed25519_view(&seed);
-        let view2 = SeedDerivation::derive_ed25519_view(&seed);
-        assert_eq!(view1, view2);
-    }
-
-    #[test]
-    fn seed_derivation_different_domains() {
-        let seed = [0xab; 32];
-        let spend = SeedDerivation::derive_ed25519_spend(&seed);
-        let view = SeedDerivation::derive_ed25519_view(&seed);
-        let kem_seed = SeedDerivation::derive_ml_kem_seed(&seed);
-        assert_ne!(spend, view);
-        assert_ne!(spend.as_slice(), &kem_seed[..32]);
     }
 }

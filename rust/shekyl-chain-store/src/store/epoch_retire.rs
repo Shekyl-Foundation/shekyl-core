@@ -18,11 +18,11 @@ use shekyl_chain_rules::{
 use shekyl_types::{BlockHeight, SettlementEpoch};
 
 use crate::apply_policy::ArchivalFamily;
-use crate::ids::{IssuedDrawKey, IssuedDrawTuple};
+use crate::ids::{IssuedDrawKey, IssuedDrawTuple, SupportIssuedKey, SupportIssuedTuple};
 use crate::schema::{
     ARCHIVAL_BUDGET, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
     ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK,
-    ARCHIVAL_SLASH_APPLIED,
+    ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SUPPORT_ISSUED, ARCHIVAL_SUPPORT_SETTLEMENT,
 };
 
 use super::error::{EngineError, StoreError};
@@ -97,12 +97,20 @@ impl WriteBatch<'_, '_> {
                     .map_err(EngineError::Table)?
                     .retain(|(_, _, epoch), _| epoch >= kept)
                     .map_err(EngineError::Storage)?;
+                txn.open_table(ARCHIVAL_SUPPORT_SETTLEMENT)
+                    .map_err(EngineError::Table)?
+                    .retain(|(_, epoch), _| epoch >= kept)
+                    .map_err(EngineError::Storage)?;
             }
         }
         if let Some(kept) = floors.settling.kept_from() {
             txn.open_table(ARCHIVAL_ISSUED_DRAW)
                 .map_err(EngineError::Table)?
                 .retain_in::<IssuedDrawTuple, _>(IssuedDrawKey::below(kept), |_, _| false)
+                .map_err(EngineError::Storage)?;
+            txn.open_table(ARCHIVAL_SUPPORT_ISSUED)
+                .map_err(EngineError::Table)?
+                .retain_in::<SupportIssuedTuple, _>(SupportIssuedKey::below(kept), |_, _| false)
                 .map_err(EngineError::Storage)?;
             retire_epochs_below(txn, ARCHIVAL_ISSUED_DIGEST, kept.to_raw())?;
             retire_epochs_below(txn, ARCHIVAL_DRAWABLE_DIGEST, kept.to_raw())?;

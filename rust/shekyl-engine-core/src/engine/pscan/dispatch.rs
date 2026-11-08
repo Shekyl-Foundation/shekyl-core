@@ -47,17 +47,7 @@ use crate::engine::stake_timing::OsRngGapAdapter;
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
 
 use crate::engine::bond_assembly::PBoundBytes;
-use crate::engine::error::TerminalErrorKind;
 use crate::engine::transaction_submitter::{BroadcastSubmitError, SubmitSuccess, SubmitterError};
-
-/// What the wallet log tells a staker when this daemon cannot hold a
-/// JoinMarket (FND-20). The dispatch test pins this sentence, so deleting
-/// the branch fails that test.
-const STAKING_UNAVAILABLE_ON_THIS_DAEMON: &str = "\
-staking is not available on this daemon: it cannot accept the transaction \
-that joins the archival market yet. The pending stake is held, and its funds \
-become spendable again once its transaction can no longer be mined; \
-staking_info shows the height. Stake again once the daemon is updated";
 
 // ---------------------------------------------------------------------------
 // The sealed-block store (trait + locked write path)
@@ -198,27 +188,26 @@ pub(crate) trait BondBroadcast: Send + Sync + 'static {
 ///
 /// **Default rationale (rule 75), resolving `ARCHIVAL_BOND_WI3_DISPATCH.md`
 /// §6(b).** §6(b) proposed reusing the submit-watchdog's escape horizon;
-/// verification at source rejects that: the watchdog bound is
-/// `DAEMON_RE_RELAY_CUTOFF_SECONDS / 2 / block_target` ≈ 540 blocks, but the
-/// pscan cannot confirm a bond post until it is **reorg-deep** — at least
-/// [`ARCHIVAL_REORG_DEPTH_BLOCKS`] (720) blocks behind tip — so the
-/// watchdog's own lower-bound rule ("comfortably above the confirmation
-/// floor") is violated by its own value in the `P` context: a normally-mined
-/// post would trip a 540-block horizon before confirmation is *possible*, a
-/// guaranteed false alarm. The bound here is derived instead, inheriting the
-/// watchdog's two-constraint shape with `P`'s own constants:
+/// verification at source rejects that: the watchdog's block ceiling
+/// (`WatchdogConfig::production`, the dispatched proof's life minus one block)
+/// measures a probe of bytes still in the pool, but the pscan cannot confirm
+/// a reservation until it is **reorg-deep** — at least
+/// [`ARCHIVAL_REORG_DEPTH_BLOCKS`] (720) blocks behind tip — so a normally-mined
+/// record would trip the watchdog's horizon before confirmation is
+/// *possible*, a guaranteed false alarm. The bound here is derived instead,
+/// with `P`'s own constants:
 ///
 /// - *Lower bound:* strictly above `ARCHIVAL_REORG_DEPTH_BLOCKS` (720, the
 ///   confirmation floor) plus ordinary mine latency and a sweep cadence of
 ///   slack — anything lower alarms on the normal path.
-/// - *Upper bound:* below the daemon's re-relay cutoff in blocks
-///   (`DAEMON_RE_RELAY_CUTOFF_SECONDS / block_target` ≈ 1080 at a 120 s
-///   target) — past it an in-pool tx is held-but-no-longer-relayed, so a
-///   later alarm inspects a tx the network has stopped seeing (the F35
-///   shape).
+/// - *What lies past it:* a dispatched transaction mines within
+///   `PROOF_VALIDITY_HORIZON` (94) blocks of its build or never — after
+///   that its reference has left the window and the pool removes it
+///   (CEN-M10). So a reservation still unsettled at 720 + 94 = 814 blocks
+///   cannot settle; an alarm past that is late, never false.
 ///
 /// The default is the confirmation floor plus a 25 % margin: 900 blocks
-/// (~30 h at 120 s), sitting between both bounds with margin each way.
+/// (~30 h at 120 s), above both.
 pub(crate) const DISPATCH_ALARM_HORIZON_BLOCKS: u64 =
     ARCHIVAL_REORG_DEPTH_BLOCKS + ARCHIVAL_REORG_DEPTH_BLOCKS / 4;
 
@@ -827,21 +816,15 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                     })
                     .await
                     .map_err(|e| DispatchError::Store(Box::new(e)))?;
-                if kind == TerminalErrorKind::JoinMarketUnsupported {
-                    // FND-20: nothing was wrong with the post. Say so, in
-                    // the words a staker can act on.
-                    tracing::error!(attempts, "{STAKING_UNAVAILABLE_ON_THIS_DAEMON}");
-                } else {
-                    tracing::error!(
-                        ?kind,
-                        attempts,
-                        "bond-post dispatch ALARM: terminal verify rejection — sending stops; \
-                         the record and its funding reservation are HELD to the post's end \
-                         date, where the chain decides (a daemon verdict never releases a \
-                         submitted record). Re-anchor is a fresh assemble after that, never \
-                         automatic"
-                    );
-                }
+                tracing::error!(
+                    ?kind,
+                    attempts,
+                    "bond-post dispatch ALARM: terminal verify rejection — sending stops; \
+                     the record and its funding reservation are HELD to the post's end \
+                     date, where the chain decides (a daemon verdict never releases a \
+                     submitted record). Re-anchor is a fresh assemble after that, never \
+                     automatic"
+                );
             }
             // Retryable / ambiguous: unknown or transient outcome. The state
             // already says `Dispatched` (sealed before the send), so the

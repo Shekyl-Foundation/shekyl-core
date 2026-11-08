@@ -56,8 +56,8 @@ use std::sync::Arc;
 use kameo::actor::PreparedActor;
 use kameo::error::SendError;
 use shekyl_chain_rules::{
-    form, FormAttempt, InvalidBlock, PaidEmission, ReferenceClaims, StructurallyValid, Substrate,
-    Verdict, Weights,
+    form, FormAttempt, FormClaims, InvalidBlock, PaidEmission, ReferenceClaims, StructurallyValid,
+    Substrate, Verdict, Weights,
 };
 use shekyl_chain_store::archival_snapshot::SnapshotDiff;
 use shekyl_chain_store::store::{ChainStore, StoreError};
@@ -70,9 +70,8 @@ use tokio::task::JoinSet;
 
 use crate::connector::{
     Apply, CheckpointState, Connector, ConnectorArgs, Digest, HashAt, HeaderAt, Inject,
-    ObserveTarget, Rewind, RunFault,
+    ObserveTarget, Rewind, Rewound, RunFault,
 };
-use crate::grader::Observations;
 use crate::metrics::{Concurrency, Metrics, MetricsArtifact};
 use crate::schedule::ChainRules;
 use crate::seed::{SeedClaim, SeedLedger};
@@ -90,6 +89,12 @@ pub struct PipelineConfig {
     pub window: NonZeroUsize,
     /// `form` workers hashing at once.
     pub hashers: NonZeroUsize,
+    /// Record [`crate::trace::Digest`] at every committed height. Legal
+    /// only when each [`Apply`] connects one block: a wider commit writes
+    /// the batch in one transaction, and a digest read after it names only
+    /// the batch tip. The baseline that asks for a row per height sets this
+    /// and a window of one. A normal run leaves it off and pays no scan.
+    pub digest_each_commit: bool,
 }
 
 impl PipelineConfig {
@@ -118,6 +123,7 @@ impl Default for PipelineConfig {
         Self {
             window: Self::DEFAULT_WINDOW,
             hashers: Self::default_hashers(),
+            digest_each_commit: false,
         }
     }
 }
@@ -127,6 +133,13 @@ impl Default for PipelineConfig {
 pub struct RunReport {
     /// Blocks connected, in order.
     pub connected: Vec<(BlockHeight, BlockHash)>,
+    /// `logical_state_digest_v0` at every height committed one block at a
+    /// time, and at each rewind's `to`. Empty unless
+    /// [`PipelineConfig::digest_each_commit`]: the scan is the store's own
+    /// read, and a run that did not ask for the table does not take it.
+    /// Keyed by height so a rewind drops the branch it popped and a
+    /// re-extension replaces those rows.
+    pub digests: BTreeMap<BlockHeight, crate::trace::Digest>,
     /// The census rows the connected blocks' verdicts exercised — the union
     /// of every `ChainValid`'s coverage.
     pub exercised: BTreeSet<&'static str>,
@@ -142,37 +155,36 @@ pub struct RunReport {
     /// trace's `0x04` record, family by family, from the same read as
     /// `checkpoint` and `None` exactly when it is.
     pub archival: Option<ArchivalCheckpoint>,
-    /// The derived-vs-trace root comparison, per connected height the trace
-    /// has facts for (DRS-E3 CTW-5, `DRS_E3_CURVE_WRITER.md` §3.8): how many
-    /// heights were compared, and every one that disagreed. **Every**
-    /// covered height of the **canonical** chain, never a sample — this
-    /// comparison exists only while the LMDB trace does. The trace is
-    /// indexed by height and describes the chain the daemon ended on, so a
-    /// height an abandoned branch connected is not a comparison against
-    /// anything: a `Rewind { to }` retracts every result above `to`, and the
+    /// The derived-vs-baseline root comparison, per connected height the
+    /// trace has facts for (DRS-E3 CTW-5, `DRS_E3_CURVE_WRITER.md` §3.8):
+    /// how many heights were compared, and every one that disagreed.
+    /// **Every** covered height of the **canonical** chain, never a sample.
+    /// The trace is the Rust baseline [`crate::rebaseline`] wrote, indexed
+    /// by height and describing the chain that run ended on, so a height an
+    /// abandoned branch connected is not a comparison against anything: a
+    /// `Rewind { to }` retracts every result above `to`, and the
     /// re-extension compares afresh. Zero compared on a trace with facts is
     /// a run that connected nothing, which the connected count already
-    /// says; a gate over this field asserts the count first (rule 47).
+    /// says; a gate over this field asserts the count first (rule 47). An
+    /// empty trace ([`crate::trace::Trace::empty`]) compares nothing.
     pub roots: RootComparisons,
-    /// The derived-vs-trace **weights** comparison (CEN-G6/G6b, slice 7
+    /// The derived-vs-baseline **weights** comparison (CEN-G6/G6b, slice 7
     /// commit 4), the same shape and the same canonical-heights-only
     /// discipline as `roots`: at every connected height the trace has
     /// facts for, the verdict's `weight`, `long_term_weight` and
-    /// `long_term_effective_median` against the C++'s two `block_info`
-    /// columns and the exporter's re-derived median. The parity pin for
-    /// the two medians over every captured chain, taken while the LMDB
-    /// trace exists; a divergence is recorded, never patched.
+    /// `long_term_effective_median` against the baseline's three weight
+    /// facts. A divergence is a change in what the Rust derives, recorded
+    /// and never patched.
     pub weights: WeightComparisons,
-    /// The derived-vs-trace **emission** comparison (CEN-F14b / G12, slice
-    /// 7 commit 5; CEN-F17 / G11, wave B), the same shape: at every
+    /// The derived-vs-baseline **emission** comparison (CEN-F14b / G12,
+    /// slice 7 commit 5; CEN-F17 / G11, wave B), the same shape: at every
     /// connected height the trace has facts for, the verdict's
-    /// `coins_generated` against the C++'s `block_info.bi_coins` and the
-    /// verdict's burn against its `block_burn`. Consecutive accumulator
-    /// rows differ by the paid reward, so this is the penalty's parity
-    /// oracle wherever a captured block is over the median (`median-full`'s
-    /// block 211 is the one on record); the burn column is the fee split's
-    /// — the burn ratio over the FL-R16c supply and the escalation operand
-    /// — wherever a captured block carries a fee.
+    /// `coins_generated` and burn against the baseline's. Consecutive
+    /// accumulator rows differ by the paid reward, so this holds the
+    /// penalty wherever a captured block is over the median (`median-full`'s
+    /// block 211 is the one on record); the burn holds the fee split — the
+    /// burn ratio over the FL-R16c supply and the escalation operand —
+    /// wherever a captured block carries a fee.
     pub emission: EmissionComparisons,
     /// The RandomX measurement (RD-F11), as of the run's end.
     pub metrics: MetricsArtifact,
@@ -244,7 +256,8 @@ pub struct RootDivergence {
     pub at: BlockHeight,
     /// The verdict's derivation, recorded at `curve_tree_roots[at + 1]`.
     pub ours: CurveTreeRoot,
-    /// The trace's `root_after` — what the C++ grower left.
+    /// The baseline's `root_after` — the root the store recorded after this
+    /// block's drain.
     pub theirs: CurveTreeRoot,
 }
 
@@ -292,14 +305,13 @@ impl WeightComparisons {
     }
 }
 
-/// The trace's three weight facts for one height — what the C++ recorded
-/// (`block_info.bi_weight`, `bi_long_term_block_weight`) and what the
-/// exporter re-derived with the daemon's own rolling median.
+/// The baseline's three weight facts for one height: the block weight, the
+/// long-term weight, and the long-term effective median the store recorded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordedWeightFacts {
-    /// `block_info.bi_weight`.
+    /// The block's weight.
     pub weight: BlockWeight,
-    /// `block_info.bi_long_term_block_weight`.
+    /// The block's long-term weight.
     pub long_term_weight: LongTermWeight,
     /// The long-term effective median in force for the block.
     pub long_term_effective_median: LongTermWeight,
@@ -367,17 +379,16 @@ impl EmissionComparisons {
     }
 }
 
-/// The two emission values the trace records per height, as the oracle
-/// compares them: the C++'s accumulator (`block_info.bi_coins`, CEN-G12)
-/// and its destroyed amount (`block_burn`, CEN-F17 / G11 — the fee split
-/// over the same parent-state operands, so a match here is the burn ratio,
-/// the supply definition and the escalation operand agreeing, not the
-/// accumulator alone).
+/// The two emission values the baseline records per height: the
+/// accumulator (`coins_generated`, CEN-G12) and the destroyed amount
+/// (`burned`, CEN-F17 / G11 — the fee split over the same parent-state
+/// operands, so a match here is the burn ratio, the supply definition and
+/// the escalation operand agreeing, not the accumulator alone).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordedEmissionFacts {
-    /// The trace's `coins_generated`.
+    /// The baseline's `coins_generated`.
     pub coins_generated: AtomicUnits,
-    /// The trace's `burned`.
+    /// The baseline's `burned`.
     pub burned: AtomicUnits,
 }
 
@@ -411,7 +422,8 @@ pub struct Checkpoint {
     pub at: BlockHeight,
     /// The redb-side logical state.
     pub ours: crate::trace::Digest,
-    /// The trace's expectation (the LMDB side).
+    /// The baseline's expectation: the digest the trace recorded at this
+    /// height.
     pub theirs: crate::trace::Digest,
 }
 
@@ -428,8 +440,8 @@ impl Checkpoint {
 pub struct ArchivalCheckpoint {
     /// The height after which both sides' rows were taken.
     pub at: BlockHeight,
-    /// The redb rows against the trace's, per family: `ours` is the redb
-    /// side, `theirs` the trace's (the LMDB side).
+    /// The redb rows against the baseline's, per family: `ours` is this
+    /// run's redb side, `theirs` the trace's.
     pub diff: SnapshotDiff,
 }
 
@@ -478,9 +490,9 @@ pub enum Disagreement {
         at: BlockHeight,
     },
     /// The derived curve-tree root after a block differed from the root
-    /// the trace recorded for it (DRS-E3 CTW-5). Adjudicated against the
-    /// spec, never patched around: the fixtures are chains the C++
-    /// accepted and the root is the validator's.
+    /// the baseline recorded for it (DRS-E3 CTW-5). Adjudicated against the
+    /// spec, never patched around: the fixtures are chains a previous run
+    /// connected and the root is this run's derivation.
     RootDiverged {
         /// The connected height.
         at: BlockHeight,
@@ -507,35 +519,6 @@ impl RunReport {
     #[must_use]
     pub fn popped(&self) -> u64 {
         self.switches.iter().map(|s| s.popped).sum()
-    }
-
-    /// What the grader reads (RD-Q9), derived from the report so the two
-    /// cannot disagree: exercised rows, the refusal, the covered-tip digest,
-    /// the per-height root oracle (CTW-5), and the archival oracle at the
-    /// checkpoint (DRS-E4 §3.8.1). The digest and the oracles stay
-    /// separate. The digest carries only the live root, so an interior
-    /// miss is invisible to it, and it carries no archival state;
-    /// `digest_identical` is `None` and `archival.compared` is `false`
-    /// when no checkpoint was compared.
-    #[must_use]
-    pub fn observations(&self) -> Observations {
-        Observations {
-            exercised: self.exercised.clone(),
-            refused: self
-                .refused
-                .as_ref()
-                .map(|(height, verdict)| (verdict.rule.as_str(), *height)),
-            digest_identical: self.checkpoint.as_ref().map(Checkpoint::identical),
-            roots: crate::grader::RootOracle {
-                compared: self.roots.compared(),
-                diverged_at: self.roots.diverged().map(|d| d.at).collect(),
-            },
-            archival: self
-                .archival
-                .as_ref()
-                .map(|a| crate::grader::ArchivalOracle::from_diff(a.at, &a.diff))
-                .unwrap_or_default(),
-        }
     }
 
     /// Every way the run disagreed with the chain, in the order they can
@@ -660,6 +643,30 @@ pub enum PipelineFault<SrcF, SubF> {
         /// The bit.
         credit: ServeCredit,
     },
+    /// The source's `Rewind { to }` would pop a block below the lowest
+    /// poppable height. The writer refused it before any pop; a source
+    /// that asks for it is defective.
+    #[error("rewind to {to} would pop below the lowest poppable height {floor} (tip {tip})")]
+    RewindBelowFloor {
+        /// The rewind's target.
+        to: BlockHeight,
+        /// The tip, unchanged.
+        tip: BlockHeight,
+        /// The lowest poppable height.
+        floor: BlockHeight,
+    },
+    /// [`PipelineConfig::digest_each_commit`] needs one block per commit.
+    /// A wider window can put several blocks in one transaction, and a
+    /// digest read after that transaction names only the batch tip. The
+    /// run refuses that window before it connects anything, and refuses
+    /// again if an apply still covers more than one block.
+    #[error(
+        "a digest at every height needs one block per commit; {connected} blocks would share one"
+    )]
+    DigestWindow {
+        /// How many blocks one commit would cover.
+        connected: usize,
+    },
 }
 
 /// A barrier event waiting for the stage ahead of it to drain: no `Extend`
@@ -724,6 +731,14 @@ where
     S: Substrate + Send + Sync + 'static,
     S::Fault: Send + 'static,
 {
+    // A per-height digest is the digest after that height's own commit.
+    // Refusing a wider window here leaves the store untouched: the check
+    // inside the apply is the backstop if a one-block window still batches.
+    if cfg.digest_each_commit && cfg.window != NonZeroUsize::MIN {
+        return Err(PipelineFault::DigestWindow {
+            connected: cfg.window.get(),
+        });
+    }
     let form_at = next_height(store.begin_read()?.tip()?.recorded.map(|t| t.height));
     if source.first_height() != form_at {
         return Err(PipelineFault::Misaligned {
@@ -977,15 +992,19 @@ where
         }
         let substrate = Arc::clone(&self.substrate);
         let metrics = Arc::clone(self.metrics);
+        let network = self.rules.trust().network_id();
         self.in_flight.spawn_blocking(move || {
             let started = std::time::Instant::now();
             let verdict = form(
                 *candidate,
-                &in_force,
+                &FormClaims {
+                    rule_set: &in_force,
+                    seed,
+                    target,
+                    references: &references,
+                    network,
+                },
                 &*substrate,
-                seed,
-                target,
-                &references,
                 FormAttempt::FIRST,
             );
             metrics.block_formed(started.elapsed());
@@ -1147,15 +1166,41 @@ where
         if let Some(refused) = applied.refused {
             self.report.refused = Some(refused);
         }
+        if self.cfg.digest_each_commit {
+            self.record_commit_digest(&applied.connected).await?;
+        }
+        Ok(())
+    }
+
+    /// The digest at the one height `connected` names. An empty connect
+    /// committed nothing (a refusal) and records nothing. More than one
+    /// block in the commit is [`PipelineFault::DigestWindow`]: those
+    /// heights were not committed on their own.
+    async fn record_commit_digest(
+        &mut self,
+        connected: &[(BlockHeight, BlockHash)],
+    ) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+        let height = match connected {
+            [(height, _)] => *height,
+            [] => return Ok(()),
+            several => {
+                return Err(PipelineFault::DigestWindow {
+                    connected: several.len(),
+                });
+            }
+        };
+        let digest = self.connector.ask(Digest).await.map_err(collapse)?;
+        self.report.digests.insert(height, digest);
         Ok(())
     }
 
     /// The covered-tip checkpoint (RD-F18; DRS-E4 §3.8.1), both encodings
     /// in one read, taken **after the run's last committed event**. The
-    /// trace's walker read one LMDB snapshot after the daemon's last write
-    /// — blocks and the regtest injector's out-of-band row alike — and the
-    /// redb side is read the same way: once, at the end, through
-    /// [`CheckpointState`]. Not when the covered tip connects: an `Inject`
+    /// baseline's two checkpoint records came from one read of the store
+    /// that wrote them — blocks and the regtest injector's out-of-band row
+    /// alike — and this run's redb side is read the same way: once, at the
+    /// end, through [`CheckpointState`]. Not when the covered tip connects:
+    /// an `Inject`
     /// attributed to that tip is a barrier that commits *after* the block
     /// it is attributed to, so a comparison at the connect would hold the
     /// trace's rows (credit included) against a redb side that had not yet
@@ -1243,12 +1288,19 @@ where
             });
         }
         let rewound = self.connector.ask(Rewind { to }).await.map_err(collapse)?;
+        if let Rewound::Refused { tip, floor } = rewound {
+            return Err(PipelineFault::RewindBelowFloor { to, tip, floor });
+        }
         let digest = self.connector.ask(Digest).await.map_err(collapse)?;
         self.report.switches.push(Switch {
             to,
-            popped: rewound.popped,
+            popped: rewound.popped(),
             digest,
         });
+        if self.cfg.digest_each_commit {
+            self.report.digests.retain(|height, _| *height <= to);
+            self.report.digests.insert(to, digest);
+        }
         // The popped heights' root comparisons were against the trace's
         // rows for a branch the chain has now left; the re-extension will
         // compare the canonical blocks at those heights.

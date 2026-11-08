@@ -316,17 +316,17 @@ impl RuleSetId {
 pub struct RuleSet { id: RuleSetId, enforced: &'static [CenRow], header_major_version: u8, difficulty: DifficultyRule,
                      mined_money_unlock_window: BlockCount, reorg_cap: BlockCount, tx_spendable_age: BlockCount,
                      settlement_schedule: SettlementSchedule }   // the archival epoch geometry is rule-set data (DRS-E4 ARW-15, 2026-09-30)
-pub enum DifficultyRule { Lwma1, Fixed(Target) } // `Fixed` only via `RuleSet::fakechain(..)` — CEN-D7 as data (slice 2 §4.5); `RuleSetId` is then NOT a proxy for rule-set equality
-/// Fakechain's two schedule levers as one validated pair, `0 < reorg_cap < settlement` (SPR-9); `PRODUCTION` is the genesis pins.
-pub struct FakechainSchedule { settlement: SettlementEpochBlocks, reorg_cap: BlockCount }
+pub enum DifficultyRule { Lwma1, Fixed(Target) } // `Fixed` only via `RuleSet::with_levers(..)` — CEN-D7 as data (slice 2 §4.5); `RuleSetId` is then NOT a proxy for rule-set equality
+/// The settlement epoch and the reorg cap as one validated pair, `0 < reorg_cap < settlement` (SPR-9); `PRODUCTION` is the genesis pins. Every network carries it; a levered pair is `with_levers`.
+pub struct CappedEpoch { settlement: SettlementSchedule, reorg_cap: BlockCount }
 impl RuleSet {
     pub const GENESIS: Self;                           // enforced: CenRow::ALL
     const ISSUED: &'static [Self];                     // every rule set a schedule may name
     /// The rule set an id names; `None` for an id no schedule has issued.
     pub fn for_id(id: RuleSetId) -> Option<Self>;
-    /// Fakechain only: GENESIS with `Fixed(d)` for `Some(d)` and the pair's epoch and cap;
-    /// `fakechain(None, FakechainSchedule::PRODUCTION) == GENESIS`.
-    pub const fn fakechain(fixed: Option<NonZeroU128>, schedule: FakechainSchedule) -> Self;
+    /// `GENESIS` under the levers: `Fixed(d)` for `Some(d)`, and the pair's epoch and cap.
+    /// `GENESIS.with_levers(None, CappedEpoch::PRODUCTION) == GENESIS`. Which network may pull a lever is `ChainRules::new` (NI-R6), not this function.
+    pub const fn with_levers(self, fixed: Option<NonZeroU128>, schedule: CappedEpoch) -> Self;
     pub const fn id(&self) -> RuleSetId;
     /// The consensus rows this rule set enforces, in census order.
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_;
@@ -334,11 +334,11 @@ impl RuleSet {
     pub const fn settlement_schedule(&self) -> SettlementSchedule;    // what `archival::transition` and the store's connect belt read
 }
 
-/// Height → rule set, per network. Nettype selects **data** (rule 71): three
-/// schedule values, one `rules_at`, no `match network` anywhere a rule runs.
+/// Height → rule set, per network. Nettype selects **data** (rule 71): one
+/// schedule per network, one `rules_at`, no `match network` anywhere a rule runs.
 /// The schedule is the identity: every network, every height → `GENESIS`.
 /// There is no fork table. A later activation is a design document before a
-/// step is added ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5).
+/// step is added ([`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuleSchedule {
     genesis: RuleSetId,                                // in force from ZERO — not optional
@@ -889,31 +889,26 @@ pub fn validate<'id, V: ChainView<'id>>(
 ) -> Result<Verdict<ChainValid<'id, V>>, Fault<V::Fault>>;
 
 /// What this node takes on the release's word — orthogonal to `RuleSet`
-/// (PDM-Q5 / PDM-Q-F27; slice 3 Q1). Carries the release anchors (CEN-E1
-/// reads them per block); slice 6 adds the posture arm by a second
-/// constructor, `Trust::below_anchor(anchors)` (PDM-Q5 :293: band 1's
-/// skeleton), and no existing caller changes.
-pub struct Trust { anchors: ReleaseAnchors /* , posture — slice 6 */ }
-impl Trust { pub const UNANCHORED: Self; pub const fn full(anchors: ReleaseAnchors) -> Self; pub const fn anchors(&self) -> &ReleaseAnchors; }
+/// (slice 3 Q1). Carries the genesis pin (CEN-E1 reads it per block). No
+/// coded checkpoints (S1, 2026-11-03), so there is no posture arm.
+pub struct Trust { genesis: GenesisPin }
+impl Trust { pub const UNPINNED: Self; pub const fn full(genesis: GenesisPin) -> Self; pub const fn genesis_pin(&self) -> &GenesisPin; }
 
-/// The release-carried anchor table, per network — `const` data shipped with
-/// the binary (PDM-Q5 "trusted with the binary"; never an operator-editable
-/// carrier), strictly ascending, const-asserted well formed. Empty on every
-/// network today (`no_release_has_shipped_an_anchor_yet` pins it).
-pub struct Anchor { pub height: BlockHeight, pub hash: BlockHash }
-pub struct ReleaseAnchors { entries: &'static [Anchor] }
-impl ReleaseAnchors {
-    pub const EMPTY: Self;
+/// The release-carried genesis pin, per network — `const` data shipped with
+/// the binary, never an operator-editable carrier. `FAKECHAIN` is the block a
+/// regtest node connects; `NONE` pins nothing (harness chains).
+pub struct GenesisPin { genesis: Option<BlockHash> }
+impl GenesisPin {
+    pub const NONE: Self;
+    pub const FAKECHAIN: Self;
     pub const fn for_network(network: Network) -> Self;
-    pub fn expected_at(&self, height: BlockHeight) -> Option<BlockHash>;   // CEN-E1's read
-    pub const fn current(&self) -> Option<Anchor>;                           // `C`
-    pub fn covers(&self, height: BlockHeight) -> bool;                       // band 1: `height ≤ C`
-    /// CEN-E5, run once by the writer at open; the remedy is the writer's.
-    pub fn conflict_with<'id, H: HeaderView<'id>>(&self, view: &H) -> Result<Option<AnchorConflict>, H::Fault>;   // `HeaderView` since DRS-E5 a2
+    pub fn expected_at(&self, height: BlockHeight) -> Option<BlockHash>;   // CEN-E1's read: genesis at 0, nothing above
+    /// CEN-E5's comparison. `None` is an empty file, which contradicts nothing.
+    pub fn conflict(&self, recorded: Option<BlockHash>) -> Option<GenesisConflict>;
+    /// [`conflict`](GenesisPin::conflict) over a view: reads block 0 and calls it.
+    pub fn conflict_with<'id, H: HeaderView<'id>>(&self, view: &H) -> Result<Option<GenesisConflict>, H::Fault>;
 }
-pub struct AnchorConflict { pub height: BlockHeight, pub expected: BlockHash, pub recorded: Option<BlockHash> }
-impl AnchorConflict { pub const fn remedy(&self) -> Remedy; }
-pub enum Remedy { RefuseToRun /* at genesis */, PopTo(ChainCount) /* stop at max(h − 2, 1) blocks; the tip is count.tip() */ }
+pub struct GenesisConflict { pub expected: BlockHash, pub recorded: BlockHash }
 
 pub enum Fault<V> { View(V), Stale(Stale), Corrupt(Corrupt) }
 pub enum Stale {
@@ -1324,7 +1319,7 @@ the same machine and load):
 An invalid block also pays the locus walk, one batch of one per proof: at
 `limit-full`'s density that is about 45 × 4.7 ms beside the 98 ms batch.
 For scale, GAP-7's dev-box per-transaction admission term is 22.8 ms at
-shape 1/2 (`shekyl-ffi` `benches/block_connect_verify.rs`, an uncontended
+shape 1/2 (`shekyl-verify-cost` `benches/block_connect_verify.rs`, an uncontended
 run), so the range proof is the smaller per-transaction term. That bench
 timed the same verifier with an `OsRng` weight at 2.82 ms per two-output
 proof, so contention likely accounts for most of the gap to this run's
@@ -1349,6 +1344,14 @@ header alone. None of these mint a `ChainValid`.
 | `judge_header_cheap` | `derive` (D3, D4, D1b), then A2, C1, C2, E1 | D1, and F4, F5, F6 |
 | `judge_header` | the cheap rows, over a header D1 has accepted | F4, F5, F6 |
 | `bind_body` | B6, G2, B4's parse-and-root half | B4's countersignatures |
+
+`HeaderJudged` is sealed: private fields, built only by `judge_header`,
+and it carries the proof. `bind_body` takes that value. `form` and
+`form_header` share `prove_header` (B6, D2, D1, in `form`'s order).
+`form_judged` is the body entry: it checks the candidate's identity
+against the sealed proof and runs the same body rows, and it does not
+hash. `validate` still faults a seed, target or rule set the token does
+not match.
 
 `HeaderFacts<P>` carries the proof as a type: `Unproven` or `Proven`.
 `D1` accepts only `Proven`, so a header without a longhash cannot reach
@@ -2126,11 +2129,11 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
   `25-rust-architecture.mdc` does **not** enumerate crates (verified) — no edit.
   `rust/Cargo.toml`'s member comment said `build.yml`; corrected to the
   `rust-audit-test.yml` belt script (same correction as §6.5).
-- Crate `//!`: staging note (STAGED; consumer S-CHAIN-W), the graded-oracle
-  hook (E2's replay harness routes disagreement through
-  `shekyl_chain_store::conformance::grade` keyed by `CenRow::as_str()`; this
-  crate never imports it), the consumer map (connect, pool via `PoolView`), the
-  fault channel.
+- Crate `//!`: staging note (STAGED; consumer S-CHAIN-W), the replay hook
+  (E2's replay holds every captured block to the chain's Rust baseline; the
+  graded oracle through `shekyl_chain_store::conformance::grade` it first
+  named left with the C++ side, `DAEMON_REDB_STORE.md` §12.1), the consumer
+  map (connect, pool via `PoolView`), the fault channel.
 
 ---
 
@@ -2142,7 +2145,7 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
 | Q2 | Root type on `root_at` — bare array, mint in `shekyl-types`, or here? | **RULED 2026-09-15 — override:** mint `CurveTreeRoot` in `shekyl-types` now. "Rule 18's home is the redb-bearing curve-tree crate" is the reason to reject the default — the rules crate would depend on a store-bearing crate to *name a value*, the inversion R8 banned arriving through a type. Computation stays in the tree crate. |
 | Q3 | Payloads of `block_at` / `output_at` | **RULED 2026-09-15 — default, with a binding condition:** every field is justified by a named CEN row when introduced; `ChainView`'s narrowness is what keeps rules mockable and the mock smaller than the store. **Applied (round 2):** `output_at` has no justifiable field and is dropped (§3.3); `has_output_key` is the shape the output-key row will need. |
 | Q4 | Policy rows — same enum + `Flag`, or sibling enum? | **RULED 2026-09-15 — override:** sibling enums. A `Flag` field is a check someone can forget; two enums make proximity promotion unrepresentable; two coverage bitsets and two denominators are exactly the two-line record. §7.5.1's gate bullet names the hazard ("a policy row counted toward consensus coverage is proximity promotion arriving through the instrument"). |
-| Q5 | `RuleSetId` representation | **RULED 2026-09-15 — accept `RuleSetId(u8)`, `GENESIS = 1`, but not defined as the header major version:** its own space with an explicit `rules_at(nettype, height) -> RuleSetId` seeded as identity. The 1:1 was then true only because the hardfork table had one entry — the same inertness that hid the `on_block_popped` defect; a function preserves the distinction, equality erases it. **UPDATE 2026-10-09:** that table is deleted ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5). The 1:1 remains because there is one rule set and one block version, not because a table has one row. |
+| Q5 | `RuleSetId` representation | **RULED 2026-09-15 — accept `RuleSetId(u8)`, `GENESIS = 1`, but not defined as the header major version:** its own space with an explicit `rules_at(nettype, height) -> RuleSetId` seeded as identity. The 1:1 was then true only because the hardfork table had one entry — the same inertness that hid the `on_block_popped` defect; a function preserves the distinction, equality erases it. **UPDATE 2026-10-09:** that table is deleted ([`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §5). The 1:1 remains because there is one rule set and one block version, not because a table has one row. |
 | Q6 | `InvalidBlock` locus shape | **RULED 2026-09-15 — default.** No `detail` field: an unbounded string is not evidence (the `ReviewedDivergence` reason). |
 | Q7 | Census-parser reuse by import | **RULED 2026-09-15 — default, follow-up named not filed:** import now; extract to `_census.py` after #751 merges (blocker #751; falsifier `gh pr view 751 --json state`). **DISCHARGED 2026-09-15:** #751 merged; `scripts/ci/_census.py` extracted in this PR, both gates import it (§6.1). |
 | Q8 | Harness visibility for doctests | **RULED 2026-09-15 — default** (`cfg(any(test, doctest))`). **AMENDED BY FINDING 2026-09-15 (commit 6):** the default's premise fails — `cfg(doctest)` items are not visible to doctest snippets (§8.3); `harness` is `#[cfg(test)]`, the cross-view pin uses an inline view. Disclosed in the commit-6 message. |
@@ -2264,10 +2267,12 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   `connector.rs:271`, PR #806). **LANDED as the parameter, slice 3 c3
   (2026-09-20):** `Trust { anchors }`, `Trust::full` / `Trust::UNANCHORED`,
   `validate(formed, view, rule_set, trust)`; CEN-E1 is its first reader.
-  **Still owed to slice 6:** the posture arm (`Trust::below_anchor`, band 1
-  per `PDM-Q5` `:293`), the 4.I skip it governs, and this item's falsifier —
-  which needs a proof row to skip and a **skeleton candidate type** a
-  band-1 block can be (slice 3 F10; `Candidate` holds full transactions).
+  **REJECTED with the checkpoints (S1, design review 2026-11-03):** the
+  posture arm (`Trust::below_anchor`, band 1 per `PDM-Q5` `:293`), the 4.I
+  skip it would have governed, and this item's falsifier. Nothing is
+  assumed. `Trust` carries only the genesis pin (`full` / `UNPINNED`).
+  Reopen only if a later design names a reason to skip proof rows that is
+  not a coded checkpoint.
 - **`TxIdentity::pqc_auth_hash: Option<PqcAuthHash>`** — **LANDED in the
   `tip()` PR (slice 1, 2026-09-17)**, items 1 **and** 2 of
   `DAEMON_REDB_STORE.md` §7.7's plan for `PDM-Q-F26` (PR #765): the
@@ -2275,10 +2280,10 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   `TxIdentity`, populated from `Transaction::txid_parts()` (one
   construction: each discardable region hashed once, the txid mixed from
   those values); and, in `shekyl-wire`, `Transaction::pqc_auth_hash()`
-  (`None` ⇔ the txid is 3-part) plus the two-supplied form
-  `hash_with_supplied_components(pqc_auth, prunable)`, of which `hash()`
-  is `txid_parts().hash` as bytes and `hash_with_supplied_prunable` is the
-  one-supplied mixer. The mixer's arity is the `Option` after
+  (`None` ⇔ the txid is 3-part) plus the one supplied form
+  `hash_with_supplied_components(pqc_auth, prunable, archival_len)`, of
+  which `hash()` is `txid_parts().hash` as bytes; there is no
+  one-supplied form. The mixer's arity is the `Option` after
   `prefix_carries_pqc_component` drops a `Some` the prefix cannot carry,
   so a supplied component on a 3-part prefix is dropped, not mixed, and
   the skeleton (`PDM-Q-F28`: neither region held)

@@ -21,7 +21,7 @@ use crate::harness::{
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, BlockRule};
 use crate::trust::Trust;
-use crate::validate::{form, validate};
+use crate::validate::{form, validate, FormClaims};
 use crate::verdict::{ChainValid, Locus};
 use crate::Target;
 use shekyl_types::BlockHash;
@@ -64,11 +64,14 @@ fn judge_at(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> 
     };
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -76,13 +79,8 @@ fn judge_at(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> 
         Err(Faulted) => unreachable!("the mock substrate never faults"),
     };
     chain.with_view(|view| {
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .map(|_valid: ChainValid<_>| ())
+        judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .map(|_valid: ChainValid<_>| ())
     })
 }
 
@@ -95,11 +93,14 @@ fn check_alone<R: BlockRule>(chain: &MockChain, candidate: Candidate, clock: u64
     };
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -114,7 +115,7 @@ fn check_alone<R: BlockRule>(chain: &MockChain, candidate: Candidate, clock: u64
                 chain.tip(),
                 window,
                 Target::GENESIS_BLOCK,
-                &Trust::UNANCHORED,
+                &Trust::UNPINNED,
             ),
             &view,
         ))
@@ -328,7 +329,7 @@ fn a_hole_below_the_tip_is_the_halting_fault_not_a_panic() {
         );
         // Through the stage: the same fault, in `Fault`'s clothing.
         let formed = formed_on(&chain, candidate_at(&chain, 500));
-        let outcome = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED);
+        let outcome = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED);
         assert!(
             matches!(
                 outcome,
@@ -367,23 +368,21 @@ fn at_genesis_all_three_rows_record_as_applied_and_refuse_nothing() {
     };
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: BlockHash::NULL,
+            target: expected_target(&chain, &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        BlockHash::NULL,
-        expected_target(&chain, &RuleSet::GENESIS),
-        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     )
     .expect("no fault")
     .expect("passes the stateless stage");
     chain.with_view(|view| {
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("genesis is exempt from both timestamp legs");
+        let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .expect("genesis is exempt from both timestamp legs");
         for row in [CenRow::C1, CenRow::C2, CenRow::C3] {
             assert!(valid.coverage().contains(row), "{row} recorded at genesis");
         }
@@ -409,7 +408,7 @@ fn a_well_formed_candidate_covers_the_timestamp_rows() {
             formed_on(&chain, candidate_at(&chain, CLOCK)),
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("passes");
         for row in [CenRow::C1, CenRow::C2, CenRow::C3] {

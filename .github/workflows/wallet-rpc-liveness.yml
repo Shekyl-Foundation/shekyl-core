@@ -23,15 +23,8 @@
 name: ci/wallet-rpc-liveness
 
 on:
-  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
-  # not only the branch head — the class of failure neither PR's CI can
-  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
-  # filter, so this runs on every group regardless of the PR filter above
-  # or below.
-  merge_group:
-    types: [checks_requested]
-    branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened]
     paths: &paths
       - "docs/api/wallet_rpc.yaml"
       - "rust/shekyl-wallet-rpc/**"
@@ -54,6 +47,7 @@ jobs:
   wallet-rpc-liveness:
     name: "wallet RPC: registry and dispatch agree in both directions"
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.2 min over 25 runs; the floor
     steps:
       - uses: actions/checkout@v5
       - name: check wallet RPC liveness

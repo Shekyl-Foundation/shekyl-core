@@ -151,6 +151,11 @@ bench's cost depends on crates other than its own):
 - An iai-callgrind entry **missing** from the PR's envelope is
   treated as `fail` (a deleted bench is the most dangerous
   regression — a "regression" that no longer exists to be caught).
+- A bench that **moved crate** (the same bench target, group,
+  function and run id under another crate, matched one to one) is
+  not missing: it is compared across the move under the same
+  thresholds, so a move that also changed the workload still fails.
+  An ambiguous match is not paired and stays missing.
 - An entry present in the PR but not the baseline is
   informational; the first merge to `dev` seeds it into the
   rolling baseline.
@@ -211,7 +216,7 @@ sorted largest delta first. Next steps:
 `drs_bench_ibd_*.json` are produced by `scripts/bench/drs_bench.py measure` and
 consumed by `drs_bench.py check`, which routes two of them through the IBD floor
 frozen in `docs/design/DAEMON_REDB_STORE.md` §1.3. The gate itself —
-schema, refusals, comparator, redb-engine probe — lives in
+schema, refusals, comparator, durability readback — lives in
 `scripts/bench/drs_artifact.py`. They are **not** part of the
 `shekyl_rust_v0` envelope and are not read by `compare.py`: that script is
 iai-callgrind only by construction, and its
@@ -223,19 +228,38 @@ dated record of one run on one machine, kept because §1.3's absolute "N hours"
 was deferred until a first LMDB baseline landed in-tree.
 
 **They are conditions-first, by refusal.** `measure` will not emit, and `check`
-will not compare, an artifact missing any of: DRS-D9 durability (with the argv
-that imposed it), CPU / RAM / disk class / **filesystem type**, the height
-actually reached, which verification the fixture exercised, and the peer count.
-`check` additionally refuses two artifacts that disagree about any of those —
-§1.3's floor is a ratio on one machine with one binary, engine being the only
-difference, so a ratio across differing conditions measures the difference and
-not the engine.
+will not compare, an artifact missing any of: DRS-D9 durability (read back from
+the daemon, with the argv the run had), CPU / RAM / disk class / **filesystem
+type**, the height actually reached, which verification the fixture exercised,
+and the peer count. `check` additionally refuses two artifacts that disagree
+about any of those — §1.3's floor is a ratio on one machine, two binaries with
+one backend each, engine being the only difference, so a ratio across differing
+conditions measures the difference and not the engine.
+
+**Durability is read back, not labelled, and the engine follows the line.**
+Neither binary takes a sync-mode option: each opens its one store at a constant
+and logs what it opened with, and `measure` reads that line from the generating
+seed before any block is generated and from the subject before its sync is
+timed. The C++ daemon's line is
+`Database sync: flags=0x1 (safe), sync_mode=3, threshold=1 blocks` (the `safe`
+open at `db_nosync`, no `MDB_NOSYNC` / `MDB_MAPASYNC`); the Rust store's is
+`Store durability: immediate (an fsync per commit, DRS-D9; redb Durability::Immediate)`.
+Both are DRS-D9, an fsync per commit, each in its engine's spelling: an
+artifact records `sync_mode: "safe"` for `engine: lmdb` and
+`sync_mode: "immediate"` for `engine: redb`, and the gate refuses a label that
+is not its engine's spelling, a line that is not its engine's DRS-D9, and a
+label over the other engine's line. The `engine` itself is derived from which
+line the daemon wrote — one backend per build, never a switch — and
+`engine_selected_by` says so. `check` compares the policy the two artifacts
+share (`DRS-D9 full-fsync-per-commit`, observed), not the engine-specific
+`sync_mode` / line / readback text, which differ between the two binaries by
+construction.
 
 Two refusals are worth knowing before you run it:
 
 - **A store on `tmpfs` or `ramfs` is refused, before any daemon starts.** fsync
-  there has no backing store to flush, so `--db-sync-mode=safe` is
-  indistinguishable from `MDB_NOSYNC` and the result is a RAM-disk number
+  there has no backing store to flush, so neither `safe` nor `immediate` is
+  distinguishable from no fsync at all and the result is a RAM-disk number
   wearing a strict-durability label. The harness's own first artifact was
   exactly that, from a scratch directory that happened to be a large tmpfs.
 - **`disk_class` must be `hdd` or `ssd_or_nvme`.** "unknown" is refused: §1.3
@@ -247,8 +271,7 @@ is cached and topped up via `--seed-dir` rather than regenerated. Only the
 subject is wiped per run — it is the thing being measured, and an IBD that
 starts from a partial chain is a different experiment.
 
-`scripts/bench/test_drs_bench.py` is the selftest; it and `drs_bench.py
-blockers` run in `docs-gates.yml`.
+`scripts/bench/test_drs_bench.py` is the selftest; it runs in `docs-gates.yml`.
 
 ## Measurement ledger
 

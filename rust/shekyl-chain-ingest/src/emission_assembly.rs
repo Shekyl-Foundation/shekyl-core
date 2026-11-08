@@ -60,10 +60,10 @@ use shekyl_crypto_pq::signature::{
 use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_tx_builder::{
     open_spend, prove_backing_membership, sign_transaction_with_terms,
-    tx_prefix_hash_from_parts_with_extra, AuthSlots, InputTerm, OutputInfo, SpendInput,
-    SpendLayout, TreeContext,
+    tx_prefix_hash_from_parts_with_extra, tx_signable_for, AuthSlots, InputTerm, OutputInfo,
+    SpendInput, SpendLayout, TreeContext,
 };
-use shekyl_types::{HoldingsDescriptor, PCanonicalId, PrefixHash};
+use shekyl_types::{HoldingsDescriptor, PCanonicalId, SigningPayloadHash, TxSignableHash};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::tx_extra::{serialize, TxExtraField};
 use shekyl_wire::Input;
@@ -86,12 +86,11 @@ pub struct ClaimTerms {
 pub struct AssembledClaim {
     /// The transaction as the production encoder emitted it.
     pub bytes: Vec<u8>,
-    /// The signable hash (F-C1c): the prefix with the emission vin erased
-    /// wholesale — what the backing proof and both auth legs bind.
-    pub signable: PrefixHash,
-    /// The full prefix hash, emission vin included — what the fee spends'
-    /// FCMP and the Bulletproof+ were proved over.
-    pub prefix_hash: PrefixHash,
+    /// The transaction's one network-bound message, framed over CEN-J22's
+    /// signable prefix (the prefix with the emission vin erased wholesale):
+    /// what the backing proof, both auth legs and the fee spends' FCMP all
+    /// prove over (the signing envelope §2.2).
+    pub tx_signable: TxSignableHash,
     /// The vin as encoded into the prefix.
     pub vin: ArchivalRewardEmissionVin,
     /// The one reward commit the auth digest bound (the loud vout).
@@ -302,6 +301,15 @@ fn assemble(
         &tx_extra,
     )
     .expect("the signable prefix hashes");
+    // The transaction's one network-bound message (the signing envelope
+    // §2.2), over that prefix and the base the outputs commit.
+    let tx_signable = tx_signable_for(
+        &shekyl_network::HARNESS_NETWORK_ID,
+        signable,
+        AtomicUnits::from_raw(fee),
+        &tree.reference_block,
+        &output_infos,
+    );
 
     // Steps 10–11: the backing's output-derived key and its membership-only
     // proof over the signable hash.
@@ -309,8 +317,8 @@ fn assemble(
     let backing_index = backing.output_index;
     let backing_pubkey = derive_pqc_public_key(&backing_combined, backing_index)
         .expect("the backing's hybrid key derives");
-    let membership =
-        prove_backing_membership(&backing, tree, signable).expect("the backing proves membership");
+    let membership = prove_backing_membership(&backing, tree, tx_signable)
+        .expect("the backing proves membership");
     drop(backing);
 
     // Steps 12–13: the vin with placeholder auths at canonical length, then
@@ -337,7 +345,11 @@ fn assemble(
         auth_claim: vec![0u8; SINGLE_SIG_CANONICAL_LEN],
     };
     let auth_msgs = vin
-        .auth_msgs(&reward_commits, signable.as_bytes())
+        .auth_msgs(
+            &shekyl_network::HARNESS_NETWORK_ID,
+            &reward_commits,
+            &tx_signable,
+        )
         .expect("the auth binding messages derive");
     let auth_b = sign_pqc_auth_for_output(
         &backing_combined,
@@ -365,20 +377,14 @@ fn assemble(
     let extra_inputs = vec![Input::ArchivalRewardEmission {
         canonical_bytes: vin.serialize().expect("the vin encodes"),
     }];
-    let prefix_hash = tx_prefix_hash_from_parts_with_extra(
-        &key_images,
-        &extra_inputs,
-        &output_keys,
-        &output_amounts,
-        &view_tags,
-        &tx_extra,
-    )
-    .expect("the prefix hashes");
 
     // Step 15: the fee-side proving, the mint as the input-side cleartext
     // term — `Σ pseudoOuts + total_reward·H = Σ masks + fee·H` (CEN-H22).
     let mut signed = sign_transaction_with_terms(
-        prefix_hash,
+        &shekyl_network::HARNESS_NETWORK_ID,
+        // J22's prefix: the signer frames the tx_signable the backing proof
+        // and the auths were made over.
+        signable,
         &spend_inputs,
         &output_infos,
         AtomicUnits::from_raw(fee),
@@ -414,11 +420,12 @@ fn assemble(
                 extra: vec![hybrid_pk_bytes],
             },
         },
+        &shekyl_network::HARNESS_NETWORK_ID,
     )
     .expect("the fee side opens");
     drop(spend_inputs);
     let emission_sig = {
-        let payload = open
+        let payload: &SigningPayloadHash = open
             .sole_extra_payload()
             .expect("the emission slot has a payload");
         HybridEd25519MlDsa
@@ -440,8 +447,7 @@ fn assemble(
 
     AssembledClaim {
         bytes,
-        signable,
-        prefix_hash,
+        tx_signable,
         vin,
         reward_commits,
         persona,

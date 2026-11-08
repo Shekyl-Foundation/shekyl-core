@@ -28,8 +28,9 @@
 //! (non-reject arms) or the paired [`BlockIngest::write_reject_form`]
 //! family (reject arms) and never switches on them. The questions it is
 //! allowed to ask of this type are the predicates below. What P2P should
-//! *do* with the two slots is [`crate::BlockAnnounceAction`] /
-//! [`crate::BlockSyncAction`], not a C++ if-else over these predicates.
+//! *do* with the two slots was never a C++ if-else over these predicates.
+//! The C++ writers went with the handler's sync half (CS-5); chain sync
+//! maps the ingest entry's reply through [`crate::SyncReplyAction`].
 //! An unrecognised byte is [`Self::Unclassified`]: not added, not
 //! rejected, not missing-txs, not orphaned — and, because drop is a
 //! different slot, not a reason to sever.
@@ -38,8 +39,12 @@ use crate::DropVerdict;
 
 /// What happened when we tried to take a block.
 ///
-/// Discriminants are the C ABI (`SHEKYL_BLOCK_INGEST_*` in
-/// `src/shekyl/shekyl_ffi.h`). Zero is the value-initialised C++ struct.
+/// Kept, and to be extended, by CS-Q1's ruling
+/// (`P2P_3_CHAIN_SYNC_BRIEF.md`, CS-Q1's disposition table): chain sync's
+/// mapping from an ingest outcome to an action is built on it, under
+/// PWD-B7's tri-state verdict (CS-Q4). No C++ writes it since CS-5
+/// deleted the handler's sync half; the discriminants keep their values,
+/// and zero is the default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum BlockIngest {
@@ -79,11 +84,10 @@ pub enum BlockIngest {
     /// [`DropVerdict`] on the same context, not this arm.
     Rejected = 7,
 
-    /// Refused because the PoW does not meet the target. Same drop
-    /// question as [`Self::Rejected`]; the extra score weight is the
-    /// only operational difference (`P2P_IP_FAILS_BEFORE_BLOCK`).
-    /// Unrepresentable together with [`Self::MissingTxs`]: PoW runs
-    /// first.
+    /// Refused because the PoW does not meet the target. The drop
+    /// question is the same as [`Self::Rejected`]. The action arm is
+    /// distinct so a later close cause can name PoW. Unrepresentable
+    /// together with [`Self::MissingTxs`]: PoW runs first.
     RejectedBadPow = 8,
 }
 
@@ -145,7 +149,7 @@ impl BlockIngest {
         matches!(self, Self::Rejected | Self::RejectedBadPow)
     }
 
-    /// Should a drop (if any) carry the heavier PoW-DoS score?
+    /// Whether this outcome is the bad-PoW refusal.
     #[must_use]
     pub const fn is_bad_pow(self) -> bool {
         matches!(self, Self::RejectedBadPow)

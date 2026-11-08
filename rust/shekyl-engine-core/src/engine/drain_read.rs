@@ -416,7 +416,7 @@ mod tests {
     /// makes this test runnable offline.
     #[tokio::test(flavor = "multi_thread")]
     async fn aggregate_is_zero_when_no_active_persona() {
-        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        let (_tmp, engine) = staker_engine(3, SEED_MULT).await;
         let arc = Arc::new(RwLock::new(engine));
         let balance = Engine::drain_balance_aggregate(arc)
             .await
@@ -434,7 +434,7 @@ mod tests {
         use shekyl_engine_state::pscan_cursor::PScanCursor;
         use shekyl_engine_state::pscan_state::PScanState;
 
-        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        let (_tmp, engine) = staker_engine(3, SEED_MULT).await;
         activate_persona(&engine, 3).await;
 
         // Seal a funding set through the engine's own persistence handle.

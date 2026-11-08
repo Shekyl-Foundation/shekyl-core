@@ -17,25 +17,28 @@ use shekyl_chain_rules::{AtHeight, SlashLogFloor};
 use shekyl_store_codec::Coded;
 use shekyl_types::archival::{
     BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
-    SettlementRow, BLOCK_DRAWS_LEN, MAX_ATTESTATION_WITNESS_BYTES,
+    SettlementRow, SupportIssued, BLOCK_DRAWS_LEN, MAX_ATTESTATION_WITNESS_BYTES,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::connect_chain;
 use super::error::{CellFault, StoreError, StoreInvariant};
-use super::store_tests::{cleanup, tmp, EPOCH};
+use super::store_tests::{tmp, EPOCH};
 use super::*;
 use crate::codec::{
     ArchivalLastSlashEpochCell, AttestationWitnessBytes, BondRecord, Canonical, Holdings, Present,
     PropertyCell, RMarket, Raw, SigmaWorkMilli, SlashLogEntry, SlashedHolding,
 };
-use crate::ids::{IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
+use crate::ids::{
+    IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey, SupportIssuedKey,
+};
 use crate::schema::{
     ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
     ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
     ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT,
-    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
+    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_ISSUED,
+    ARCHIVAL_SUPPORT_SETTLEMENT,
 };
 use shekyl_chain_rules::{BlockDrawsFloor, EpochFloor};
 
@@ -70,7 +73,8 @@ pub(super) fn record() -> BondRecord {
 
 /// Plant rows raw: `f` receives the open write transaction. Shared with
 /// `prune_tests`, which plants slash rows across the retirement floor.
-pub(super) fn plant(path: &std::path::Path, f: impl FnOnce(&redb::WriteTransaction)) {
+pub(super) fn plant(path: impl AsRef<std::path::Path>, f: impl FnOnce(&redb::WriteTransaction)) {
+    let path: &std::path::Path = path.as_ref();
     let db = redb::Database::open(path).expect("open raw");
     let txn = db.begin_write().expect("write");
     f(&txn);
@@ -144,7 +148,6 @@ fn a1_absent_is_none_present_decodes_and_a_bad_row_is_si7() {
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let err = store.begin_read().unwrap().bond_record(&p).unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_bond"), "{err}");
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +267,6 @@ fn a2_is_the_personas_rows_strictly_above_the_height_in_log_order() {
             .unwrap(),
         vec![at_400, at_last]
     );
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -309,7 +311,6 @@ fn a3_last_served_is_the_latest_epoch_per_shard_and_none_when_never_served() {
         snap.last_served_epoch(&persona(0xff), shard(7)).unwrap(),
         None
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -355,7 +356,6 @@ fn a4_served_shards_hops_one_seek_per_shard_and_is_empty_for_a_stranger() {
         "shard order is the key's, each with its latest epoch"
     );
     assert!(snap.served_shards(&persona(0xfe)).unwrap().is_empty());
-    cleanup(&path);
 }
 
 #[test]
@@ -383,7 +383,6 @@ fn a5_pass_count_counts_the_pair_epoch_prefix_only() {
     );
     assert!(snap.pass_count(&p, shard(7), epoch(4)).unwrap().any());
     assert!(!PassCount::ZERO.any());
-    cleanup(&path);
 }
 
 #[test]
@@ -413,7 +412,6 @@ fn si15_serve_credit_rows_for_a_persona_with_no_record_are_a_fault_on_every_walk
         snap.pass_count(&orphan, shard(7), epoch(5)).unwrap(),
         PassCount::ZERO
     );
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -473,7 +471,6 @@ fn a6_to_a8_tell_no_row_from_a_written_zero() {
         Some(AtomicUnits::from_raw(1_000))
     );
     assert_eq!(snap.budget(epoch(6), EpochFloor::NONE).unwrap(), None);
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -510,7 +507,6 @@ fn a9_absent_is_none_never_a_sentinel() {
             .unwrap(),
         Some(epoch(12))
     );
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -546,7 +542,6 @@ fn a10_tells_above_tip_from_a_recorded_block_with_no_witness_from_one_with() {
             .unwrap(),
         AtHeight::AboveTip
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -581,7 +576,6 @@ fn a10_an_empty_or_over_cap_row_is_si7() {
         is_si7_undecodable(&over, "archival_attestation_witness"),
         "{over}"
     );
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -629,7 +623,6 @@ fn a11_bond_records_is_every_record_in_persona_key_order() {
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let err = store.begin_read().unwrap().bond_records().unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_bond"), "{err}");
-    cleanup(&path);
 }
 
 #[test]
@@ -663,7 +656,6 @@ fn a12_slash_applied_is_membership_of_the_exact_triple() {
     assert!(!snap
         .slash_applied(&persona(0xa3), shard(7), epoch(3), EpochFloor::NONE)
         .unwrap());
-    cleanup(&path);
 }
 
 #[test]
@@ -694,7 +686,6 @@ fn a13_budget_accruing_is_the_open_epochs_row_and_none_otherwise() {
     );
     assert_eq!(snap.budget_accruing(epoch(3)).unwrap(), None);
     assert_eq!(snap.budget_accruing(epoch(5)).unwrap(), None);
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -770,7 +761,6 @@ fn a14_settlement_row_is_the_exact_triple_and_absent_is_not_a_miss() {
         .settlement_row(&p, shard(7), epoch(3), EpochFloor::NONE)
         .unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_settlement"), "{err}");
-    cleanup(&path);
 }
 
 #[test]
@@ -857,7 +847,79 @@ fn a15_issued_draws_is_one_epoch_in_pair_then_height_then_draw_order() {
         .issued_draws(epoch(5), EpochFloor::NONE)
         .unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_issued_draw"), "{err}");
-    cleanup(&path);
+}
+
+/// One tree's support draws in an epoch come back in `(h, j)` order, and
+/// the settlement row is the tree's, not a shard's.
+#[test]
+fn support_draws_of_one_tree_are_one_epoch_and_one_row() {
+    let path = tmp("arch-support-issued");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    assert!(store
+        .begin_read()
+        .unwrap()
+        .support_issued(epoch(5), EpochFloor::NONE)
+        .unwrap()
+        .is_empty());
+    drop(store);
+
+    let tree = persona(0x3c);
+    let other = persona(0x11);
+    plant(&path, |txn| {
+        let mut issued = txn.open_table(ARCHIVAL_SUPPORT_ISSUED).expect("t");
+        let mut put = |e, p: PCanonicalId, h, j, shard_n, passed| {
+            let row = SupportIssued {
+                shard: shard(shard_n),
+                passed,
+            };
+            issued
+                .insert(
+                    SupportIssuedKey::new(epoch(e), p, BlockHeight::from_raw(h), j).key(),
+                    row.encoded().as_encoded(),
+                )
+                .expect("insert");
+        };
+        put(5, tree, 100, 1, 9, true);
+        put(5, tree, 100, 0, 4, false);
+        put(5, other, 90, 0, 2, true);
+        put(4, tree, 80, 0, 1, true);
+        drop(issued);
+        let mut settled = txn.open_table(ARCHIVAL_SUPPORT_SETTLEMENT).expect("t");
+        let row = SettlementRow::settle(2, 3).expect("served");
+        settled
+            .insert((tree.to_bytes(), 5u64), row.encoded().as_encoded())
+            .expect("row");
+    });
+
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().unwrap();
+    let draws = snap.support_issued(epoch(5), EpochFloor::NONE).unwrap();
+    assert_eq!(draws.len(), 3);
+    assert_eq!(draws[0].persona, other);
+    assert_eq!(draws[0].shard, shard(2));
+    assert!(draws[0].state.passed);
+    assert_eq!(draws[1].persona, tree);
+    assert_eq!(draws[1].draw, 0);
+    assert_eq!(draws[1].shard, shard(4));
+    assert!(!draws[1].state.passed);
+    assert_eq!(draws[2].draw, 1);
+    assert_eq!(draws[2].shard, shard(9));
+    assert!(draws[2].state.passed);
+    assert_eq!(
+        snap.support_issued(epoch(4), EpochFloor::NONE)
+            .unwrap()
+            .len(),
+        1
+    );
+    let row = snap
+        .support_settlement(&tree, epoch(5), EpochFloor::NONE)
+        .unwrap()
+        .expect("the tree's row");
+    assert_eq!(row.outcome(), SettlementOutcome::Served);
+    assert!(snap
+        .support_settlement(&other, epoch(5), EpochFloor::NONE)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -893,7 +955,6 @@ fn a16_issued_digest_is_the_epochs_cell_and_zero_when_nothing_was_folded() {
         snap.issued_digest(epoch(6), EpochFloor::NONE).unwrap(),
         IssuedDigest::ZERO
     );
-    cleanup(&path);
 }
 
 /// `(P, 0, 0)..=(P, MAX, MAX)`. The hop is this range; a hand-built tuple
@@ -1018,7 +1079,6 @@ fn a17_served_at_hops_shards_and_point_reads_the_cited_epochs() {
         .served_at(&p, &BTreeSet::from([epoch(9)]), EpochFloor::NONE)
         .unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_settlement"), "{err}");
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -1119,7 +1179,6 @@ fn archival_snapshot_is_every_family_as_rows_with_the_projections_applied() {
     // The body round-trips, so what the trace carries is what the read saw.
     let back = ArchivalSnapshot::read_body(&mut got.body().as_slice()).unwrap();
     assert_eq!(back, got);
-    cleanup(&path);
 }
 
 #[test]
@@ -1143,7 +1202,6 @@ fn archival_snapshot_refuses_a_second_accruing_row_as_si23() {
         ),
         "{err}"
     );
-    cleanup(&path);
 }
 
 // A18, A19 — the draw's per-block state and the drawable set's digest
@@ -1211,7 +1269,6 @@ fn a18_block_draws_reads_the_row_or_none() {
         .block_draws(at, BlockDrawsFloor::NONE)
         .unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_block_draws"), "{err}");
-    cleanup(&path);
 }
 
 /// A19 tells an absent digest from an all-zero one. Zero is a digest like
@@ -1256,5 +1313,4 @@ fn a19_an_all_zero_drawable_digest_is_a_digest_not_an_absence() {
     // bytes are a digest, so the table cannot hold a row the codec refuses.
     drop(snap);
     drop(store);
-    cleanup(&path);
 }

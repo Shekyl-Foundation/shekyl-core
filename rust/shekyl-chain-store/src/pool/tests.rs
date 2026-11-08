@@ -17,21 +17,14 @@ use super::*;
 use shekyl_store_codec::Canonical;
 
 use crate::codec::{PropertyCellBytes, SCHEMA_VERSION};
+use crate::redb_recovery::{
+    bytes_and_mtime, mark_recovery_required, read_only_open_is_repair_aborted,
+};
 use crate::store::{
-    ErrorClass, PoolCannot, StoreCannot, StoreInvariant, DURABILITY, TWO_PHASE_COMMIT,
+    EngineError, ErrorClass, PoolCannot, StoreCannot, StoreInvariant, DURABILITY, TWO_PHASE_COMMIT,
 };
 
-fn tmp(name: &str) -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!(
-        "shekyl-pool-store-{}-{}-{:?}.redb",
-        name,
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    drop(std::fs::remove_file(&p));
-    p
-}
+use crate::test_paths::tmp;
 
 fn txid(n: u8) -> TxHash {
     TxHash::from_bytes([n; 32])
@@ -84,7 +77,6 @@ fn create_then_open_then_every_read_on_the_empty_file() {
     drop(store);
     let (_store, how) = PoolStore::create(&path).unwrap();
     assert_eq!(how, PoolOpen::Opened);
-    drop(std::fs::remove_file(&path));
 }
 
 #[test]
@@ -137,7 +129,6 @@ fn insert_publish_remove_and_their_refusals() {
     store.write(|b| b.remove(&h)).unwrap();
     store.write(|b| b.remove(&h)).unwrap();
     assert_eq!(store.begin_read().unwrap().len().unwrap(), 0);
-    drop(std::fs::remove_file(&path));
 }
 
 #[test]
@@ -155,7 +146,6 @@ fn an_err_from_the_closure_aborts_the_whole_batch() {
         0,
         "nothing landed"
     );
-    drop(std::fs::remove_file(&path));
 }
 
 #[test]
@@ -184,7 +174,6 @@ fn entries_enumerate_in_key_order_with_blobs_on_demand() {
     let public = entries.iter().filter(|e| e.record.public).count();
     assert_eq!(public, 2);
     assert_eq!(snap.len().unwrap(), 3);
-    drop(std::fs::remove_file(&path));
 }
 
 /// SI-16, both directions, named by the read that found it.
@@ -253,7 +242,6 @@ fn an_unpaired_entry_is_si16() {
     store
         .write(|b| b.insert(txid(3), &admitted(), b"three"))
         .unwrap();
-    drop(std::fs::remove_file(&path));
 }
 
 #[test]
@@ -282,7 +270,6 @@ fn an_undecodable_meta_row_is_si7() {
         }
         other => panic!("expected SI-7, got {other:?}"),
     }
-    drop(std::fs::remove_file(&path));
 }
 
 /// `SPL-Q8`: a sealed pool file at another version is recreated; a file
@@ -365,17 +352,13 @@ fn another_version_recreates_and_everything_else_is_refused() {
         txn.commit().unwrap();
     }
     drop(store);
-    let before = std::fs::metadata(&path).unwrap().len();
+    let before = bytes_and_mtime(&path);
     let err = PoolStore::create(&path).expect_err("undecodable header");
     assert!(matches!(
         err,
         StoreError::Cannot(StoreCannot::PoolFileForeign)
     ));
-    assert_eq!(
-        std::fs::metadata(&path).unwrap().len(),
-        before,
-        "not deleted"
-    );
+    assert_eq!(bytes_and_mtime(&path), before, "refused unwritten");
     drop(std::fs::remove_file(&path));
 
     // (3) A redb file with no pool header at all: refused, kept.
@@ -390,12 +373,13 @@ fn another_version_recreates_and_everything_else_is_refused() {
         }
         txn.commit().unwrap();
     }
+    let before = bytes_and_mtime(&path);
     let err = PoolStore::create(&path).expect_err("no header");
     assert!(matches!(
         err,
         StoreError::Cannot(StoreCannot::PoolFileForeign)
     ));
-    assert!(path.exists(), "not deleted");
+    assert_eq!(bytes_and_mtime(&path), before, "refused unwritten");
     drop(std::fs::remove_file(&path));
 
     // (3b) A sealed file at the current version whose table set is not the
@@ -422,33 +406,122 @@ fn another_version_recreates_and_everything_else_is_refused() {
             txn.commit().unwrap();
         }
         drop(store);
-        let before = std::fs::metadata(&path).unwrap().len();
+        let before = bytes_and_mtime(&path);
         let err = PoolStore::create(&path).expect_err("tampered table set");
         assert!(
             matches!(err, StoreError::Cannot(StoreCannot::PoolFileForeign)),
             "{label}: {err:?}"
         );
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().len(),
-            before,
-            "{label}: not deleted"
-        );
-        drop(std::fs::remove_file(&path));
+        // Judged on a read-only open: a writable one would have written
+        // the engine's allocator state into the file as it closed.
+        assert_eq!(bytes_and_mtime(&path), before, "{label}: refused unwritten");
     }
 
     // (4) Not a redb database at all: refused, kept, byte for byte.
     let path = tmp("notredb");
     std::fs::write(&path, b"this is not a redb file, and it is somebody's").unwrap();
+    let before = bytes_and_mtime(&path);
     let err = PoolStore::create(&path).expect_err("not redb");
     assert!(
         matches!(err, StoreError::Cannot(StoreCannot::PoolFileForeign)),
         "{err:?}"
     );
-    assert_eq!(
-        std::fs::read(&path).unwrap(),
-        b"this is not a redb file, and it is somebody's"
+    assert_eq!(bytes_and_mtime(&path), before, "refused unwritten");
+}
+
+/// A reader holding the file stops a recreate, and the file stays byte for
+/// byte.
+///
+/// The writable open is the exclusive claim, and the engine takes that
+/// lock before it writes, so the refusal is unwritten. Skipping the open
+/// and renaming under the reader fails this test: the recreate succeeds,
+/// or the bytes change. Dropping the claim before `retire` does not. The
+/// reader never lets the open succeed, so the rename is not reached. The
+/// claim is held across `retire` because a shared lock does not stop a
+/// rename once the open has the file.
+#[test]
+fn a_live_reader_stops_a_recreate_and_the_file_stays() {
+    let path = tmp("reader");
+    let (store, _) = PoolStore::create(&path).unwrap();
+    store
+        .write(|b| b.insert(txid(1), &admitted(), b"one"))
+        .unwrap();
+    {
+        let txn = store.db.begin_write().unwrap();
+        {
+            let mut header = txn.open_table(POOL_HEADER).unwrap();
+            let other = PoolSchemaVersion::new(POOL_SCHEMA_VERSION.get() + 1);
+            header
+                .insert(
+                    POOL_VERSION_KEY,
+                    Raw::<PropertyCellBytes>::new(&other.encode()),
+                )
+                .unwrap();
+        }
+        txn.commit().unwrap();
+    }
+    drop(store);
+
+    let before = bytes_and_mtime(&path);
+    let reader = redb::Builder::new().open_read_only(&path).unwrap();
+    let err = PoolStore::create(&path).expect_err("a reader holds the file");
+    assert!(
+        matches!(
+            err,
+            StoreError::Engine(EngineError::Open(redb::DatabaseError::DatabaseAlreadyOpen))
+        ),
+        "{err:?}"
     );
-    drop(std::fs::remove_file(&path));
+    assert_eq!(
+        bytes_and_mtime(&path),
+        before,
+        "the refused recreate wrote nothing"
+    );
+    drop(reader);
+
+    let (store, how) = PoolStore::create(&path).unwrap();
+    assert_eq!(
+        how,
+        PoolOpen::Recreated {
+            from: PoolSchemaVersion::new(POOL_SCHEMA_VERSION.get() + 1)
+        }
+    );
+    assert_eq!(store.begin_read().unwrap().len().unwrap(), 0);
+    drop(store);
+}
+
+/// A cleanly shut-down file with redb's recovery bit set is `RepairAborted`
+/// to a read-only open, and the writable open returns the committed row.
+///
+/// Mapping that error to a hard refusal fails this test. Shortening the
+/// file does not construct the condition: with the bit clear, a short file
+/// is corruption, not recovery.
+#[test]
+fn a_recovery_bit_reopens_the_committed_row() {
+    let path = tmp("repair");
+    let (store, _) = PoolStore::create(&path).unwrap();
+    store
+        .write(|b| b.insert(txid(9), &admitted(), b"kept"))
+        .unwrap();
+    drop(store);
+
+    mark_recovery_required(&path);
+    assert!(
+        read_only_open_is_repair_aborted(&path),
+        "the bit is the repair arm, not a foreign file"
+    );
+    let (store, how) = PoolStore::create(&path).unwrap();
+    assert_eq!(how, PoolOpen::Opened);
+    assert_eq!(
+        store
+            .begin_read()
+            .unwrap()
+            .blob(&txid(9))
+            .unwrap()
+            .as_deref(),
+        Some(b"kept".as_slice())
+    );
+    drop(store);
 }
 
 /// A layout recreate overwrites the old file before unlinking it (S7): the
@@ -460,14 +533,13 @@ fn the_old_file_is_overwritten_before_it_is_unlinked() {
         .map(|i| u8::try_from(i % 251 + 1).expect("below 252"))
         .collect();
     std::fs::write(&path, &bytes).unwrap();
-    super::header::overwrite(&path).unwrap();
+    super::header::overwrite(path.path()).unwrap();
     let after = std::fs::read(&path).unwrap();
     assert_eq!(after.len(), bytes.len());
     assert!(
         after.iter().all(|b| *b == 0),
         "nothing of the old file remains"
     );
-    drop(std::fs::remove_file(&path));
 }
 
 /// A recreate interrupted at any step leaves a pool that opens (Copilot,
@@ -476,7 +548,7 @@ fn the_old_file_is_overwritten_before_it_is_unlinked() {
 /// would refuse as foreign, and every open finishes a discard left behind.
 #[test]
 fn an_interrupted_recreate_leaves_a_pool_that_opens() {
-    let discard = |path: &std::path::Path| super::header::discard_path(path);
+    let discard = |path: &crate::test_paths::TestPath| super::header::discard_path(path.path());
 
     // Interrupted mid-wipe: the old file sits at the discard path with its
     // header zeroed, and the pool's path is empty. The open creates a fresh
@@ -537,5 +609,131 @@ fn an_interrupted_recreate_leaves_a_pool_that_opens() {
     ));
     assert_eq!(std::fs::read(&path).unwrap(), b"not a pool");
     assert!(!discard(&path).exists());
-    drop(std::fs::remove_file(&path));
+}
+
+/// What a power loss between the engine's first commit and the seal leaves
+/// behind: a valid redb file with no table at all, which PB-S2's first
+/// replay (2026-11-01) found refused as foreign. The next open seals it in
+/// place, and the one after opens it. Red edit: drop the
+/// `creation_interrupted` branch from `open_or_create`, and the open
+/// refuses with `PoolFileForeign`.
+#[test]
+fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
+    let path = tmp("interrupted-create");
+    {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        drop(redb::Builder::new().create_file(file).unwrap());
+    }
+    let (store, how) = PoolStore::create(&path).expect("the creation is finished");
+    assert_eq!(how, PoolOpen::Finished);
+    drop(store);
+    let (_store, how) = PoolStore::create(&path).expect("reopens");
+    assert_eq!(how, PoolOpen::Opened);
+}
+
+/// The two shapes a power loss leaves before the engine has finished
+/// initializing the pool file: empty, and the header the engine flushes
+/// before its magic. Each is moved aside, never deleted, and a fresh pool
+/// created at the path (`crate::creation`); the next open is an ordinary
+/// one. Red edit: drop the `set_aside_unfinished_init` arm from
+/// `open_or_create`, and both are refused as `PoolFileForeign`.
+#[test]
+fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
+    for (label, bytes) in [
+        ("empty-at-path", Vec::new()),
+        ("magic-unwritten", crate::creation::pre_magic_image()),
+    ] {
+        let path = tmp(label);
+        std::fs::write(&path, &bytes).unwrap();
+        let (store, how) =
+            PoolStore::create(&path).unwrap_or_else(|e| panic!("{label}: created: {e:?}"));
+        let PoolOpen::SetAside { to } = how else {
+            panic!("{label}: {how:?}");
+        };
+        assert_eq!(std::fs::read(&to).unwrap(), bytes, "{label}: kept aside");
+        drop(store);
+        let (_store, how) = PoolStore::create(&path).unwrap();
+        assert_eq!(how, PoolOpen::Opened, "{label}");
+    }
+}
+
+/// Two opens of one empty pool file finish it once. The creation lock
+/// holds the second until the first's store exists, so the second finds
+/// the file already open, and a later open is ordinary. Exactly one aside
+/// file. Red edit: drop the creation lock from `open_or_create`.
+#[test]
+fn two_openers_of_one_unfinished_pool_finish_it_once() {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    let path = tmp("two-openers");
+    std::fs::write(&path, b"").unwrap();
+    let go = Arc::new(Barrier::new(2));
+    let spawn = |path: std::path::PathBuf, go: Arc<Barrier>| {
+        thread::spawn(move || {
+            go.wait();
+            PoolStore::create(&path)
+        })
+    };
+    let left = spawn(path.path().to_path_buf(), Arc::clone(&go));
+    let right = spawn(path.path().to_path_buf(), go);
+    let results = [left.join().unwrap(), right.join().unwrap()];
+    let mut finished = 0;
+    let mut busy = 0;
+    let mut aside = None;
+    for result in results {
+        match result {
+            Ok((store, PoolOpen::SetAside { to })) => {
+                finished += 1;
+                aside = Some(to);
+                drop(store);
+            }
+            Err(StoreError::Engine(EngineError::Open(
+                redb::DatabaseError::DatabaseAlreadyOpen,
+            ))) => busy += 1,
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+    assert_eq!((finished, busy), (1, 1));
+    let to = aside.unwrap();
+    assert_eq!(std::fs::read(&to).unwrap(), b"");
+    let (_store, how) = PoolStore::create(&path).unwrap();
+    assert_eq!(how, PoolOpen::Opened);
+}
+
+/// A zero-filled file of the initialization length, and a sealed pool
+/// whose magic was cleared, stay foreign and byte for byte. Red edit:
+/// accept a clear magic slot at the initialization length.
+#[test]
+fn a_file_that_only_looks_unfinished_is_refused_untouched() {
+    let zeroed = tmp("zeroed-init");
+    let zeros = vec![0u8; usize::try_from(crate::creation::ENGINE_INIT_LEN).unwrap()];
+    std::fs::write(&zeroed, &zeros).unwrap();
+
+    let cleared = tmp("magic-cleared");
+    drop(PoolStore::create(&cleared).unwrap().0);
+    let mut punched = std::fs::read(&cleared).unwrap();
+    assert_eq!(punched.len() as u64, crate::creation::ENGINE_INIT_LEN);
+    punched[..9].fill(0);
+    std::fs::write(&cleared, &punched).unwrap();
+
+    for (path, bytes) in [(&zeroed, zeros.as_slice()), (&cleared, punched.as_slice())] {
+        let err = PoolStore::create(path).expect_err("not an unfinished creation");
+        assert!(
+            matches!(err, StoreError::Cannot(StoreCannot::PoolFileForeign)),
+            "{}: {err:?}",
+            path.path().display()
+        );
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            bytes,
+            "{}",
+            path.path().display()
+        );
+    }
 }

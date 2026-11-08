@@ -87,9 +87,6 @@
 # The download rate limit, or `unlimited`.
 # p2p-download-max = "unlimited"
 
-# The transaction pool's weight bound.
-# txpool-weight-max = "648000000B"
-
 # A command to run on a new block, with {height} and {hash}.
 # notify-block = ["/path/to/command", "{height}"]
 
@@ -101,7 +98,10 @@
 # {expected}.
 # notify-block-rate = ["/path/to/command", "{window}"]
 
-# Mine to this address from start.
+# Start the miner at start, to mine-address.
+# mine = "off"
+
+# The address the miner pays.
 # mine-address = "<address>"
 
 # The mining thread count, or `auto`.

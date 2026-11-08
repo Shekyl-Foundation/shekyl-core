@@ -52,15 +52,17 @@ use std::time::Duration;
 use kameo::actor::{ActorRef, PreparedActor};
 use shekyl_chain_rules::{AdmissionPolicy, InvalidBlock, Substrate};
 use shekyl_chain_store::store::{ChainStore, StoreError};
-use shekyl_hash_budget::Budget;
+use shekyl_hash_budget::{Budget, Class};
 use shekyl_mempool::{Pool, PoolFault};
-use shekyl_types::{BlockHash, BlockHeight, UnixSeconds};
+use shekyl_types::{BlockHash, BlockHeight, TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::task::JoinSet;
 
 use crate::admission::{ArrivalBound, Buckets};
-use crate::connector::{Connector, ConnectorArgs, PopBeyondReorgCap, RunFault, WatchTip};
+use crate::connector::{
+    Connector, ConnectorArgs, PopBeyondReorgCap, PopBlocks, Rewound, RunFault, WatchTip,
+};
 use crate::follower::JobSeat;
 use crate::schedule::ChainRules;
 
@@ -100,6 +102,62 @@ pub struct Arrival {
     pub block: Vec<u8>,
     /// The listed bodies it carried, as blobs, in any order.
     pub bodies: Vec<Vec<u8>>,
+    /// The attestation witness carried beside the block; empty when none.
+    pub attestation_witness: Vec<u8>,
+}
+
+/// One block chain sync has already proven: its header passed
+/// `form_header` and `judge_header` in the sync owner, and its body was bound
+/// to that header before the offer (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2 steps
+/// 3 and 6; CS2-Q1). The service forms it with `form_judged`, which consumes
+/// the proof and does not hash, so it takes no hasher permit and pins no
+/// seed.
+///
+/// It is seated as a solicited arrival however the body reached the owner.
+/// The owner admits an announcement itself (one unproved announce per
+/// session, proved under the hasher's unsolicited class) and offers only
+/// bodies on `H*`'s path within the room [`Door::room`] reported, so the
+/// door's unsolicited share and bucket have nothing left to decide for it:
+/// until 2026-11-02 they did decide, and a span of more announced bodies
+/// than the share was `NoRoom` in an empty window (the sync owner's
+/// `Event::Room` docs).
+#[derive(Clone, Debug)]
+pub struct BoundArrival {
+    /// The caller's name for it.
+    pub tag: ArrivalTag,
+    /// The session that served the body.
+    pub session: SessionId,
+    /// The header the sync owner's proof accepted.
+    pub judged: shekyl_chain_rules::HeaderJudged,
+    /// The block blob.
+    pub block: Vec<u8>,
+    /// The listed bodies, as blobs, in the block's order.
+    pub bodies: Vec<Vec<u8>>,
+    /// The attestation witness carried beside the block; empty for an empty
+    /// set.
+    pub attestation_witness: Vec<u8>,
+}
+
+impl BoundArrival {
+    /// The bytes the door bounds for this arrival
+    /// ([`ArrivalLengths::bytes`]).
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        self.lengths().bytes()
+    }
+
+    fn lengths(&self) -> ArrivalLengths {
+        ArrivalLengths {
+            tag: self.tag,
+            origin: Origin::Peer {
+                session: self.session,
+                solicited: true,
+            },
+            block_len: self.block.len(),
+            body_lens: self.bodies.iter().map(Vec::len).collect(),
+            witness_len: self.attestation_witness.len(),
+        }
+    }
 }
 
 /// The lengths of one arrival, which is all the door needs before the
@@ -114,15 +172,32 @@ pub struct ArrivalLengths {
     pub block_len: usize,
     /// Each carried body's length, in the order the caller listed them.
     pub body_lens: Vec<usize>,
+    /// The attestation witness's length; zero when none was carried.
+    /// Bounded by [`shekyl_types::MAX_ATTESTATION_WITNESS_BYTES`], not by
+    /// [`crate::admission::ArrivalBound`].
+    pub witness_len: usize,
 }
 
 impl ArrivalLengths {
+    /// The bytes the door bounds against [`Door::max_arrival_bytes`]: the
+    /// block and the bodies it carried. The attestation witness is a
+    /// sidecar with its own cap
+    /// ([`shekyl_types::MAX_ATTESTATION_WITNESS_BYTES`]); it is not these
+    /// bytes.
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        self.body_lens
+            .iter()
+            .fold(self.block_len, |total, len| total.saturating_add(*len))
+    }
+
     fn of(arrival: &Arrival) -> Self {
         Self {
             tag: arrival.tag,
             origin: arrival.origin,
             block_len: arrival.block.len(),
             body_lens: arrival.bodies.iter().map(Vec::len).collect(),
+            witness_len: arrival.attestation_witness.len(),
         }
     }
 }
@@ -140,6 +215,9 @@ pub enum Refusal {
     /// An arrival is larger than any valid block near this tip can be
     /// (`admission` module docs).
     Oversize,
+    /// The door could not read the store to bound the arrival. The service
+    /// meets the same read and stops on it, so waiting does not help.
+    StoreUnreadable,
 }
 
 /// Why this node cannot follow a heavier chain it stored and judged: the
@@ -214,6 +292,8 @@ pub enum Reply {
     /// Listed bodies neither the arrival carried nor the pool shows, by
     /// their index in the block's list: ask for them and offer it again.
     MissingBodies {
+        /// The block whose list they are: what the re-request names.
+        hash: BlockHash,
         /// The indices, ascending.
         indices: Vec<usize>,
     },
@@ -260,15 +340,6 @@ impl Ticket {
             reply: self.reply.await.unwrap_or(Reply::Stopped),
         }
     }
-
-    /// [`reply`](Self::reply) from a thread that is not the runtime's: the
-    /// found-block sink's.
-    pub(crate) fn blocking_reply(self) -> Tagged {
-        Tagged {
-            tag: self.tag,
-            reply: self.reply.blocking_recv().unwrap_or(Reply::Stopped),
-        }
-    }
 }
 
 /// Where an accepted arrival's one reply goes. Dropped without a reply, it
@@ -302,13 +373,89 @@ impl Drop for ReplySlot {
     }
 }
 
+/// How an accepted arrival is formed.
+///
+/// A hashed arrival takes one permit of its class. A judged arrival
+/// carries the proof chain sync already paid for, and `form_judged`
+/// consumes it without a hash.
+#[derive(Clone)]
+enum Proof {
+    /// Hashed here, under one permit of `class`.
+    Hash {
+        /// The budget class the permit is taken from.
+        class: Class,
+    },
+    /// Proven already.
+    Judged(Box<shekyl_chain_rules::HeaderJudged>),
+}
+
+impl Proof {
+    /// The class a hash waits in. A judged arrival does not hash.
+    const fn hash_class(&self) -> Option<Class> {
+        match self {
+            Self::Hash { class } => Some(*class),
+            Self::Judged(_) => None,
+        }
+    }
+}
+
+/// The hasher class an arrival's `form` waits in: a block this node asked
+/// for or made is the chain's; an announcement is unsolicited.
+const fn class_of(origin: Origin) -> Class {
+    match origin {
+        Origin::Peer {
+            solicited: false, ..
+        } => Class::Unsolicited,
+        Origin::Peer {
+            solicited: true, ..
+        }
+        | Origin::Local => Class::Chain,
+    }
+}
+
+/// One arrival a reservation accepts, before its seat is attached.
+struct Staged {
+    tag: ArrivalTag,
+    block: Vec<u8>,
+    bodies: Vec<Vec<u8>>,
+    proof: Proof,
+    witness: Vec<u8>,
+}
+
+impl Staged {
+    fn hashed(arrival: Arrival) -> Self {
+        Self {
+            tag: arrival.tag,
+            block: arrival.block,
+            bodies: arrival.bodies,
+            proof: Proof::Hash {
+                class: class_of(arrival.origin),
+            },
+            witness: arrival.attestation_witness,
+        }
+    }
+
+    fn judged(arrival: BoundArrival) -> Self {
+        Self {
+            tag: arrival.tag,
+            block: arrival.block,
+            bodies: arrival.bodies,
+            proof: Proof::Judged(Box::new(arrival.judged)),
+            witness: arrival.attestation_witness,
+        }
+    }
+}
+
 /// An accepted arrival, parsed or not.
 struct Accepted {
     slot: ReplySlot,
     tag: ArrivalTag,
-    origin: Origin,
     block: Vec<u8>,
     bodies: Vec<Vec<u8>>,
+    /// How this arrival is formed.
+    proof: Proof,
+    /// The witness carried beside the block; empty when none was.
+    witness: Vec<u8>,
 }
 
 /// The service's knobs, each with its reason. How many `form` workers hash
@@ -360,7 +507,9 @@ pub enum ServiceFault<F> {
     #[error("pool: {0:?}")]
     Pool(PoolFault<StoreError>),
     /// The tip attendant ended while the service had not stopped, or it
-    /// panicked. The miner must not keep hashing a job nothing will refresh.
+    /// panicked, or a blocking task of the follower's panicked: the seed
+    /// window's install, the pool's judging, the template producer. The
+    /// miner must not keep hashing a job nothing will refresh.
     #[error("the tip follower ended")]
     FollowerEnded,
     /// An in-cap alternative named a seed below its fork that the window
@@ -404,7 +553,10 @@ pub(crate) struct Shared<S: Substrate> {
     /// The first fault a span task met; the service ends on it.
     fault: Mutex<Option<ServiceFault<S::Fault>>>,
     /// Serializes cache pins. Taken after a hasher permit, never before.
-    pin_lock: Arc<Mutex<()>>,
+    /// Holds the seed window last installed: the only seeds a later
+    /// install may release (A2). A run's pins and a branch preparation
+    /// take the lock and leave it as it is.
+    pin_lock: Arc<Mutex<Option<crate::cache_window::SeedPair>>>,
     /// Serialises every form under a branch's own seed (B2): an alternative
     /// arrival's, and a switch that promotes past its branch's seed point.
     /// Taken before any permit, so the order is gate, permit, `pin_lock`.
@@ -415,14 +567,26 @@ pub(crate) struct Shared<S: Substrate> {
     seeds: tokio::sync::watch::Sender<Option<crate::cache_window::SeedPair>>,
     /// The last `TipChanged` publication the tip attendant acted on.
     followed: tokio::sync::watch::Sender<u64>,
+    /// The live phases' measurement sink ([`Follow::metrics`]).
+    metrics: Option<Arc<crate::metrics::Metrics>>,
+    /// The postings the follower has written and not yet dropped. The
+    /// follower and the found-block sink share this map: a generation's
+    /// job and the bodies it listed are one record.
+    kept: crate::follower::Postings,
     /// The pool, when one is wired.
     pool: Option<PoolWiring>,
     /// Cleared when the pool file faults. Block ingest does not stop.
     pool_live: Arc<AtomicBool>,
     /// Bodies a span parked because the tip moved under the pool door.
     pending: Mutex<Vec<Transaction>>,
-    /// Wakes the attendant to judge [`pending`](Self::pending).
-    pending_ready: Arc<tokio::sync::Notify>,
+    /// Wakes the attendant: parked bodies, and a shown-set change at this
+    /// tip (Q9: once the relay marks an entry shown, the next template
+    /// lists it — N2 rebuilds the posted job, not only on a tip move).
+    pending_ready: Arc<Notify>,
+    /// What a test does to the pool between the producer's two locks.
+    /// The build clones it, so a test can replace it between wakes.
+    #[cfg(test)]
+    pub(crate) between_locks: Mutex<Option<Arc<crate::template::HeldBetweenLocks>>>,
 }
 
 impl<S: Substrate> Shared<S>
@@ -448,6 +612,12 @@ where
     /// The tip attendant acted on publication `seq`.
     pub(crate) fn followed(&self, seq: u64) {
         self.followed.send_replace(seq);
+    }
+
+    /// The publication record the follower writes and the found-block sink
+    /// reads.
+    pub(crate) fn postings(&self) -> crate::follower::Postings {
+        Arc::clone(&self.kept)
     }
 
     /// The seeds the slots hold now, including while the service is stopping.
@@ -509,10 +679,6 @@ where
         self.branch_gate.lock().await
     }
 
-    pub(crate) const fn connector(&self) -> &ActorRef<Connector> {
-        &self.connector
-    }
-
     pub(crate) const fn store(&self) -> &Arc<ChainStore> {
         &self.store
     }
@@ -548,16 +714,41 @@ where
         self.pool.is_some() && self.pool_live.load(Ordering::Acquire)
     }
 
+    /// The relay's hook for ids this reconcile took out of the pool.
+    pub(crate) fn note_departed(&self, ids: &[TxHash]) {
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(hook) = self
+            .pool
+            .as_ref()
+            .and_then(|wiring| wiring.departed.as_ref())
+        {
+            hook(ids);
+        }
+    }
+
+    /// The pool, when it is wired and live. A caller that also reads the
+    /// chain begins its snapshot before it locks this, as [`with_pool`]
+    /// does.
+    pub(crate) fn live_pool(&self) -> Option<&Mutex<Pool>> {
+        if !self.pool_is_live() {
+            return None;
+        }
+        self.pool.as_ref().map(|wiring| &*wiring.pool)
+    }
+
+    /// Whether a pool is wired and its file has faulted.
+    pub(crate) fn pool_retired(&self) -> bool {
+        self.pool.is_some() && !self.pool_live.load(Ordering::Acquire)
+    }
+
     /// The pool file faulted. Block ingest continues; the pool is not read
     /// or written again until a restart opens the file afresh. The file is
     /// discardable (`SPL-Q8`), but one this process cannot read is refused
     /// at open, never deleted, so the remedy is the operator's restart.
     pub(crate) fn pool_dead(&self, fault: &StoreError) {
-        tracing::error!(
-            "the pool file faulted: the node keeps following the chain without a \
-             transaction pool until it restarts: {fault}"
-        );
-        self.pool_live.store(false, Ordering::Release);
+        retire_pool(&self.pool_live, fault);
     }
 
     /// Park `bodies` for the attendant and wake it.
@@ -569,6 +760,15 @@ where
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .extend(bodies);
+        self.pending_ready.notify_one();
+    }
+
+    /// A shown-set change at this tip that did not come through the relay's
+    /// hook: a body a pop or a switch returned to the pool, admitted public.
+    /// Q9: the posted job is rebuilt on a shown-set change, not only on a
+    /// tip move; the wake is the attendant's one pending `Notify`, so a
+    /// batch of returns costs at most one rebuild in flight.
+    pub(crate) fn shown_changed(&self) {
         self.pending_ready.notify_one();
     }
 
@@ -595,8 +795,9 @@ where
         )
     }
 
-    /// The attendant waits on this beside the tip.
-    pub(crate) fn pending_ready(&self) -> &tokio::sync::Notify {
+    /// The attendant waits on this beside the tip: parked bodies, and a
+    /// shown-set change at this tip (Q9).
+    pub(crate) fn pending_ready(&self) -> &Notify {
         &self.pending_ready
     }
 
@@ -609,6 +810,46 @@ where
         first.get_or_insert(fault);
         drop(first);
         self.request_stop();
+    }
+}
+
+/// The sync owner's way to the `following_degraded` latch: the connector's
+/// [`RaiseAlarm`](crate::connector::RaiseAlarm), cloneable.
+#[derive(Clone)]
+pub struct Alarm {
+    connector: kameo::actor::ActorRef<Connector>,
+}
+
+/// Why an [`Alarm`] was not written.
+#[derive(Debug, thiserror::Error)]
+pub enum AlarmFault {
+    /// The connector replied with a fault.
+    #[error("connector: {0}")]
+    Connector(RunFault),
+    /// The connector's mailbox is gone.
+    #[error("connector unreachable")]
+    Mailbox,
+}
+
+impl Alarm {
+    /// Write the latch with `evidence`. `true` when this call set it.
+    ///
+    /// # Errors
+    ///
+    /// [`AlarmFault`].
+    pub async fn raise(
+        &self,
+        evidence: shekyl_chain_store::codec::FollowingDegraded,
+    ) -> Result<bool, AlarmFault> {
+        match self
+            .connector
+            .ask(crate::connector::RaiseAlarm(evidence))
+            .await
+        {
+            Ok(set) => Ok(set),
+            Err(kameo::error::SendError::HandlerError(fault)) => Err(AlarmFault::Connector(fault)),
+            Err(_) => Err(AlarmFault::Mailbox),
+        }
     }
 }
 
@@ -627,6 +868,10 @@ struct Admission {
     clock: Clock,
     /// Set once the service exists, so a failed read stops it.
     on_read_fault: Mutex<Option<ReadFault>>,
+    /// A test makes the bound read fail; the chain store has no read
+    /// fault of its own to inject.
+    #[cfg(test)]
+    refuse_reads: std::sync::atomic::AtomicBool,
 }
 
 /// The door: the one way in (module docs). Cheap to clone.
@@ -635,9 +880,19 @@ pub struct Door {
     spans: mpsc::UnboundedSender<Vec<Accepted>>,
     room: Arc<crate::room::Room>,
     admission: Arc<Admission>,
+    seeds: tokio::sync::watch::Receiver<Option<SeedPair>>,
 }
 
 impl Door {
+    /// The seed window as last pinned and published: the pair the
+    /// lookup-only longhash answers from. `None` until the first pair is
+    /// pinned. A caller whose proof found a seed absent waits on this for
+    /// the slots to change, and reads it to see whether they already have.
+    #[must_use]
+    pub fn seeds(&self) -> tokio::sync::watch::Receiver<Option<SeedPair>> {
+        self.seeds.clone()
+    }
+
     /// Seats a sync caller can take now. Zero when the door is closed.
     #[must_use]
     pub fn room(&self) -> usize {
@@ -659,24 +914,53 @@ impl Door {
         self.admission.bound().ok().map(|bound| bound.0)
     }
 
-    /// Whether [`Service::stop`](crate::service::Service::stop) has closed the door.
-    #[must_use]
-    pub(crate) fn is_closed(&self) -> bool {
-        self.room.is_closed()
-    }
-
-    /// Block until a block this node mined can take a seat, or the door closes.
-    ///
-    /// `false` is a closed door: the wait woke because the service is
-    /// stopping, and a seat will not appear.
-    pub(crate) fn wait_for_local_seat(&self) -> bool {
-        self.room.wait_local();
-        !self.is_closed()
-    }
-
     /// Close the door and wake a miner waiting for a seat.
     pub(crate) fn close(&self) {
         self.room.close();
+    }
+
+    /// The local-arrival entry (`DRS_X_STORE_FLIP.md` DX-Q3, Q6): a block this
+    /// node mined, was submitted, or is connecting at genesis. It waits for
+    /// the local seat while the window is full, offers the block as
+    /// [`Origin::Local`], and awaits its one reply. A door that closes while
+    /// it waits answers [`Reply::Stopped`]: the service is stopping, and the
+    /// block was not accepted.
+    ///
+    /// The miner's sink, `submit_block`, `generateblocks` and the node's
+    /// genesis connect all enter here, so a local block has one path in.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::Oversize`]: the block is larger than any valid block near
+    /// the tip; [`Refusal::StoreUnreadable`]: the door could not read the
+    /// store. Waiting changes neither, so neither is waited out.
+    pub async fn offer_local(
+        &self,
+        tag: ArrivalTag,
+        block: Vec<u8>,
+        bodies: Vec<Vec<u8>>,
+    ) -> Result<Tagged, Refusal> {
+        let arrival = Arrival {
+            tag,
+            origin: Origin::Local,
+            block,
+            bodies,
+            attestation_witness: Vec::new(),
+        };
+        loop {
+            match self.offer(arrival.clone()) {
+                Ok(ticket) => return Ok(ticket.reply().await),
+                Err(Refusal::NoRoom) => {
+                    if !self.room.wait_local().await {
+                        return Ok(Tagged {
+                            tag,
+                            reply: Reply::Stopped,
+                        });
+                    }
+                }
+                Err(refused) => return Err(refused),
+            }
+        }
     }
 
     /// Offer one arrival: a span of one.
@@ -704,6 +988,21 @@ impl Door {
     pub fn offer_span(&self, span: Vec<Arrival>) -> Result<Vec<Ticket>, Refusal> {
         let lengths: Vec<ArrivalLengths> = span.iter().map(ArrivalLengths::of).collect();
         Ok(self.reserve(&lengths)?.commit(span))
+    }
+
+    /// Offer a span of [`BoundArrival`]s, chain sync's typed entry: every
+    /// arrival is accepted, or none is, judged exactly as
+    /// [`Door::offer_span`] judges a solicited span. An accepted arrival is
+    /// formed with `form_judged`, never `form`, so no second longhash runs.
+    /// The tickets and replies are the same.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal`].
+    pub fn offer_bound(&self, span: Vec<BoundArrival>) -> Result<Vec<Ticket>, Refusal> {
+        let lengths: Vec<ArrivalLengths> = span.iter().map(BoundArrival::lengths).collect();
+        let staged = span.into_iter().map(Staged::judged).collect();
+        Ok(self.reserve(&lengths)?.accept(staged))
     }
 }
 
@@ -764,7 +1063,25 @@ pub struct Follow {
     pub job: Option<JobSeat>,
     /// The pool.
     pub pool: Option<PoolWiring>,
+    /// The bundle producer, when the node mines and has a fetch path
+    /// (`SO-D12` increment 4c). It files from the job seat's ring.
+    #[cfg(feature = "producer")]
+    pub producer: Option<crate::bundle_producer::ProducerSeat>,
+    /// Wakes the tip follower when the pool's shown set changes at this
+    /// tip (`DRS_X_STORE_FLIP.md` Q9). The composition root hands the same
+    /// [`Notify`] the pool door's fluff hook fires. `None` is a private
+    /// notify: tests that admit through the pool lock wake it themselves.
+    pub shown: Option<Arc<Notify>>,
+    /// The measurement sink the live phases are timed into: each
+    /// `form_judged`, and each run the connector applies
+    /// (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-5, the per-block profile). The
+    /// composition root hands the substrate's own sink. `None` times
+    /// nothing.
+    pub metrics: Option<Arc<crate::metrics::Metrics>>,
 }
+
+/// Told the ids that left the pool on a reconcile.
+pub type Departed = Arc<dyn Fn(&[TxHash]) + Send + Sync>;
 
 /// The pool, as a consumer of the connector (`DRS_X_STORE_FLIP.md` DX-Q5;
 /// the brief's c6): reconciled by the tip follower after every committed
@@ -780,6 +1097,106 @@ pub struct PoolWiring {
     pub policy: AdmissionPolicy,
     /// The wall clock its door stamps arrivals with.
     pub wall: Arc<dyn Fn() -> UnixSeconds + Send + Sync>,
+    /// Told the ids that left on this reconcile: evicted to make room, and
+    /// removed because the chain took them or the door now refuses them.
+    /// The relay releases its responsibility for each (`DRS_X_STORE_FLIP.md`
+    /// §2). Absent in a test that does not track responsibilities.
+    pub departed: Option<Departed>,
+}
+
+/// Pops blocks for `pop_blocks` (`DRS_X_STORE_FLIP.md` DX-Q3, Q7), held
+/// apart from the service ([`Service::rewinder`]).
+pub struct Rewinder<S: Substrate>
+where
+    S::Fault: core::fmt::Debug,
+{
+    shared: Arc<Shared<S>>,
+}
+
+impl<S: Substrate> Clone for Rewinder<S>
+where
+    S::Fault: core::fmt::Debug,
+{
+    fn clone(&self) -> Self {
+        Self {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+}
+
+impl<S> Rewinder<S>
+where
+    S: Substrate + Send + Sync + 'static,
+    S::Fault: core::fmt::Debug + Send + 'static,
+{
+    /// Pop `count` blocks from the tip ([`PopBlocks`]). A count that would
+    /// pop genesis or a retired block is refused before any pop, and the
+    /// writer stays up. After a pop, the popped blocks' bodies are offered
+    /// through the pool's door, as a switch's demoted bodies are.
+    ///
+    /// # Errors
+    ///
+    /// [`ServiceFault::Connector`] for a store fault; [`ServiceFault::Mailbox`]
+    /// when the connector is gone.
+    pub async fn pop_blocks(&self, count: u64) -> Result<Rewound, ServiceFault<S::Fault>> {
+        let rewound = self
+            .shared
+            .connector
+            .ask(PopBlocks { count })
+            .await
+            .map_err(|error| match error {
+                kameo::error::SendError::HandlerError(fault) => ServiceFault::Connector(fault),
+                _ => ServiceFault::Mailbox,
+            })?;
+        if let Rewound::Popped { bodies, .. } = &rewound {
+            if !bodies.is_empty() {
+                span::offer_carried(&self.shared, span::Carried::Bodies(bodies.clone())).await;
+            }
+        }
+        Ok(rewound)
+    }
+}
+
+/// The pool file faulted: the one retirement, whoever met the fault.
+fn retire_pool(live: &AtomicBool, fault: &StoreError) {
+    tracing::error!(
+        "the pool file faulted: the node keeps following the chain without a \
+         transaction pool until it restarts: {fault}"
+    );
+    live.store(false, Ordering::Release);
+}
+
+/// Whether the pool file has faulted ([`Service::pool_health`]), and the
+/// way to say it has: a writer outside the service that meets a fault on
+/// the pool file retires the service's pool, not a copy.
+#[derive(Clone, Debug)]
+pub struct PoolHealth {
+    wired: bool,
+    live: Arc<AtomicBool>,
+}
+
+impl PoolHealth {
+    /// The health of a node with no pool wired: never retired.
+    #[must_use]
+    pub fn unwired() -> Self {
+        Self {
+            wired: false,
+            live: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// A pool is wired and its file has faulted.
+    #[must_use]
+    pub fn retired(&self) -> bool {
+        self.wired && !self.live.load(Ordering::Acquire)
+    }
+
+    /// The pool file faulted under a writer outside the service: the
+    /// service reads and writes the pool no more, as when it meets the
+    /// fault itself.
+    pub fn retire(&self, fault: &StoreError) {
+        retire_pool(&self.live, fault);
+    }
 }
 
 /// The running service (module docs).
@@ -841,6 +1258,8 @@ where
             buckets: Buckets::new(Duration::from_secs(shekyl_difficulty::T_SECONDS)),
             clock,
             on_read_fault: Mutex::new(None),
+            #[cfg(test)]
+            refuse_reads: std::sync::atomic::AtomicBool::new(false),
         });
         let prepared = PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
         let connector = prepared.actor_ref().clone();
@@ -857,14 +1276,18 @@ where
             stop_flag: Arc::new(AtomicBool::new(false)),
             stop: tokio::sync::watch::Sender::new(false),
             fault: Mutex::new(None),
-            pin_lock: Arc::new(Mutex::new(())),
+            pin_lock: Arc::new(Mutex::new(None)),
             branch_gate: tokio::sync::Mutex::new(()),
             seeds: tokio::sync::watch::Sender::new(None),
             followed: tokio::sync::watch::Sender::new(0),
+            metrics: follow.metrics,
+            kept: crate::follower::Postings::default(),
             pool: follow.pool,
             pool_live: Arc::new(AtomicBool::new(true)),
             pending: Mutex::new(Vec::new()),
-            pending_ready: Arc::new(tokio::sync::Notify::new()),
+            pending_ready: follow.shown.unwrap_or_else(|| Arc::new(Notify::new())),
+            #[cfg(test)]
+            between_locks: Mutex::new(None),
         });
         {
             let shared = Arc::clone(&shared);
@@ -882,6 +1305,7 @@ where
             spans: spans_tx,
             room: crate::room::Room::new(config.room.get()),
             admission,
+            seeds: shared.seeds.subscribe(),
         };
         let loop_shared = Arc::clone(&shared);
         let loop_door = door.clone();
@@ -889,6 +1313,22 @@ where
         let attendant_shared = Arc::clone(&shared);
         let attendant_door = door.clone();
         let job = follow.job;
+        #[cfg(feature = "producer")]
+        let producing = follow.producer.map(|seat| {
+            let parts = crate::bundle_producer::ProducerParts {
+                connector: shared.connector.clone(),
+                store: Arc::clone(&shared.store),
+                rules: shared.rules,
+            };
+            let stop = shared.stop_signal();
+            tokio::spawn(async move {
+                let Ok(tips) = parts.connector.ask(WatchTip).await else {
+                    return;
+                };
+                let (progress, _) = tokio::sync::watch::channel(Default::default());
+                crate::bundle_producer::run(parts, tips, stop, seat, progress).await;
+            })
+        });
         let task = tokio::spawn(async move {
             let attendant = tokio::spawn(async move {
                 let Ok(tips) = attendant_shared.connector.ask(WatchTip).await else {
@@ -935,6 +1375,12 @@ where
                 drop(span);
             }
             while spans.join_next().await.is_some() {}
+            #[cfg(feature = "producer")]
+            if let Some(producing) = producing {
+                if let Err(join) = producing.await {
+                    tracing::error!("the bundle producer ended on a panic: {join}");
+                }
+            }
             if !attendant_ended {
                 let result = attendant.await;
                 if result.is_err()
@@ -972,6 +1418,54 @@ where
             .map_err(|_| ServiceFault::Mailbox)
     }
 
+    /// A receiver of the `following_degraded` latch (`DRS_X_STORE_FLIP.md`
+    /// DX-Q2 item 8): `None` is clear, `Some` is the evidence that set it.
+    ///
+    /// # Errors
+    ///
+    /// The connector is gone.
+    pub async fn watch_latch(
+        &self,
+    ) -> Result<
+        tokio::sync::watch::Receiver<Option<shekyl_chain_store::codec::FollowingDegraded>>,
+        ServiceFault<S::Fault>,
+    > {
+        self.shared
+            .connector
+            .ask(crate::connector::WatchLatch)
+            .await
+            .map_err(|_| ServiceFault::Mailbox)
+    }
+
+    /// Chain sync's past-cap evidence (`P2P_3_CHAIN_SYNC_BRIEF.md` §A item
+    /// 7): the connector writes the latch in its own transaction. `true`
+    /// when this call set it; a latch already set keeps its first evidence.
+    ///
+    /// # Errors
+    ///
+    /// The connector is gone, or the store refused the write.
+    pub async fn raise_alarm(
+        &self,
+        evidence: shekyl_chain_store::codec::FollowingDegraded,
+    ) -> Result<bool, ServiceFault<S::Fault>> {
+        self.alarm()
+            .raise(evidence)
+            .await
+            .map_err(|fault| match fault {
+                AlarmFault::Connector(fault) => ServiceFault::Connector(fault),
+                AlarmFault::Mailbox => ServiceFault::Mailbox,
+            })
+    }
+
+    /// A cloneable handle on [`Self::raise_alarm`], for the sync owner, which
+    /// does not hold the service.
+    #[must_use]
+    pub fn alarm(&self) -> Alarm {
+        Alarm {
+            connector: self.shared.connector.clone(),
+        }
+    }
+
     /// The last `TipChanged` publication the tip follower acted on: what a
     /// caller waits on to know the pool and the miner's job are the tip's.
     #[must_use]
@@ -984,7 +1478,25 @@ where
     /// a restart. What `get_info` and `mining_status` report (PR 3b).
     #[must_use]
     pub fn pool_retired(&self) -> bool {
-        self.shared.pool.is_some() && !self.shared.pool_live.load(Ordering::Acquire)
+        self.shared.pool_retired()
+    }
+
+    /// What pops blocks for `pop_blocks`, held apart from the service.
+    #[must_use]
+    pub fn rewinder(&self) -> Rewinder<S> {
+        Rewinder {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+
+    /// The same reading, held apart from the service: what the node's
+    /// mining control reports after the service is gone.
+    #[must_use]
+    pub fn pool_health(&self) -> PoolHealth {
+        PoolHealth {
+            wired: self.shared.pool.is_some(),
+            live: Arc::clone(&self.shared.pool_live),
+        }
     }
 
     /// The door.
@@ -1030,13 +1542,16 @@ mod span;
 mod window;
 
 pub use window::Reservation;
+
+pub use crate::cache_window::SeedPair;
 pub(crate) use window::{
-    divide_pool_faults, install_window, record_store_read, with_pool, PoolDivision,
+    divide_pool_faults, install_window, record_store_read, record_window_stop, with_pool,
+    PoolDivision,
 };
 
 #[cfg(test)]
 #[path = "service_tests.rs"]
-mod service_tests;
+pub(crate) mod service_tests;
 
 #[cfg(test)]
 #[path = "service_pool_tests.rs"]

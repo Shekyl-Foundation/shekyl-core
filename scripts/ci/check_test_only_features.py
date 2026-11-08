@@ -121,10 +121,8 @@ has joined `GOVERNED_OWNERS` may not also be listed. Three of the fifteen are
 findings rather than chores — a feature whose name says test-only, enabled
 on a **normal** edge. Two are hygiene (move the edge, or rule PERMANENT with
 the reason) and share the governance FOLLOWUPS row; the third,
-`shekyl-crypto-pq/test-utils` enabled by `shekyl-ffi` directly and by
-`shekyl-p-serve` through forwarding, is **FOLLOWUPS F-7**'s — its exports are unconditional
-`extern "C"` in the production header, so categorizing the feature changes
-nothing and the fix is the structural gate that row already names.
+`shekyl-crypto-pq/test-utils` enabled on a normal edge only through
+`shekyl-p-serve`'s forwarding `test-signer` feature, is **FOLLOWUPS F-7**'s.
 
 # The production-shape lint lane lives next door
 
@@ -173,6 +171,26 @@ from pathlib import Path
 # feature without a row leaves it ungated, so add both in the same commit.
 TEST_ONLY: dict[tuple[str, str], str] = {
     (
+        "shekyl-curve-tree",
+        "test-tamper",
+    ): "LeafStore::test_tamper_clear_prune_disabled and "
+    "CurveTreeClient::test_tamper_poison: the tampering fixtures behind "
+    "shekyl-p-host's posture-loss KATs and the engine's in-place recovery "
+    "tests (CURVE_TREE_CLIENT.md §11). The prune-disabled posture is one-way "
+    "by ruling, so its clear path must not exist in shipped code; enabled "
+    "from the p-host and engine-core dev edges only",
+    (
+        "shekyl-wire",
+        "test-fixtures",
+    ): "BoundTx::whole and BoundTx::modify: a fixture's whole body bound to "
+    "the identity it hashes to itself. Production constructs a BoundTx "
+    "through SkeletonTx::bind alone (DRS_SB_BELOW_HORIZON.md SB-Q2), so the "
+    "whole-body constructor is out of every production build. Enabled from "
+    "the scanner's, the engine's and the ingest's dev edges for their unit "
+    "tests; the lib-level fixture surfaces (shekyl-scanner/test-utils, "
+    "shekyl-engine-core/test-helpers) bind through the production path "
+    "(bench_fixtures::bound) and forward nothing",
+    (
         "shekyl-tor-control-client",
         "unpinned-tor-for-tests",
     ): "forges VerifiedTorBinary, the SP-T0c hash-pin witness, for lifecycle "
@@ -186,6 +204,24 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "Enabled from shekyl-mempool's dev-dependency edge only. The pool's "
     "reconcile does not know the test exists, and a shipped write commits "
     "exactly what its closure returned",
+    (
+        "shekyl-chain-sync-runtime",
+        "publish-for-test",
+    ): "Running::publish_for_test asks the sync owner to publish a state. "
+    "The owner task remains the only publisher; the node's tests use it "
+    "while the seam is unbound, which is before the task accepts any "
+    "other input. cfg(test) does not cross that crate boundary. Enabled "
+    "from shekyl-node's dev-dependency edge only; a shipped owner "
+    "publishes only what the model derives",
+    (
+        "shekyl-mempool",
+        "pool-commit-fault",
+    ): "Pool::plant holds an entry without the door, and "
+    "Pool::refuse_next_commit forwards to PoolStore's, so shekyl-node's "
+    "test can show a flush whose pool-file write faults retires the pool "
+    "for the service too. Enabled from shekyl-node's dev-dependency edge "
+    "only; a shipped pool admits only through its door and commits what "
+    "its closure returned",
     (
         "shekyl-chain-rules",
         "harness",
@@ -222,6 +258,15 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "A driver that shipped would be a second producer (the crate's own "
     "docs); this row is what keeps it in tests",
     (
+        "shekyl-p2p-session",
+        "harness",
+    ): "the in-memory peer and the scripted frames (Loopback, Wire, the "
+    "1001/1002/2002 builders). The session crate's own tests enable it on "
+    "the crate's dev edge, and shekyl-p2p-harness's tests enable it on "
+    "theirs; the harness library builds its own 1001 from the public Levin "
+    "types, so no normal edge names the feature. A shipped session has no "
+    "in-memory peer",
+    (
         "shekyl-draw-rng",
         "splitmix",
     ): "compiles SplitMix64, the seeded reference generator the relay, "
@@ -230,8 +275,16 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "conformance features are the float graders. The type is "
     "cfg(any(test, feature = \"splitmix\")), so with this feature held to "
     "dev edges no production build can name it: a production draw from "
-    "SplitMix64 is a compile error. The production generator is shekyl-ffi's "
+    "SplitMix64 is a compile error. The production generator is shekyl-relay's "
     "SecureRelayRng over OS entropy",
+    (
+        "shekyl-relay-privacy",
+        "conformance",
+    ): "compiles the float goodness-of-fit grader and the timeline "
+    "measurement. The daemon-linked build is the integer draws. Enabled "
+    "from shekyl-relay's dev edge, which pins the origin publication "
+    "budget to the recovery cycle count, and from this crate's own dev "
+    "edge for its instruments. A shipped relay does not grade",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -250,6 +303,16 @@ CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
         "(BA-I22). The derived keys stay in the crate; the function returns "
         "nothing. The bench is the one caller, and the feature dies with it",
     ),
+    (
+        "randomx-v2-sys",
+        "full-dataset",
+    ): (
+        "shekyl-randomx-differential",
+        "the five miner symbols (randomx_get_flags and the dataset functions) "
+        "exist for the Hole-1 parity harness. The light oracle build does not "
+        "enable them. A second crate enabling the feature is the isolation "
+        "failure this row exists to catch, and the feature dies with the harness",
+    ),
 }
 
 # (owning crate, feature) → why it is an ordinary, permanent feature. The third
@@ -257,13 +320,36 @@ CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
 # categorized without forcing every feature into the two special classes.
 # `shekyl-chain-ingest`'s three (its manifest's own words): the pipeline's
 # actor runtime, the corpus fetcher's RPC client, and the replay CLI — the
-# production surfaces its consumers choose between (`shekyl-ffi` compiles the
-# trace writer alone with `default-features = false`).
+# production surfaces its consumers choose between (`shekyl-chain-sync-runtime`
+# and `shekyl-p2p-harness` take `pipeline` alone with `default-features =
+# false`; `shekyl-chain-sync` takes none).
 PERMANENT: dict[tuple[str, str], str] = {
+    (
+        "shekyl-mempool",
+        "pool",
+    ): "the pool itself: the store, the door, the relay bit, the reconcile "
+    "and template selection. On by default, so every daemon-side consumer "
+    "takes it; the economics sim takes the crate with default features off "
+    "for CEN-M10's store-free policy (the limit, the two orders, the "
+    "eviction walks), which ESR-17 calls rather than restates",
+    (
+        "shekyl-network",
+        "serde",
+    ): "the network's lowercase name on the wire and in files: shekyl-address "
+    "and shekyl-rpc-types serialize the one Network type with it (the RPC's "
+    "`regtest`, NETWORK_IDENTITY.md NI-Q1). A production surface, not a test "
+    "seam",
+    (
+        "shekyl-chain-sync",
+        "cs2-long-run",
+    ): "the floor-device job's selector: the cs2-long-run workflow passes it "
+    "on the command line, and no crate enables it. It gates one "
+    "cfg(all(test, feature)) module (long_run.rs), so it adds nothing to "
+    "any build but that job's test binary",
     (
         "shekyl-chain-ingest",
         "pipeline",
-    ): "the sequencer, the validate+connect actor and the grader (kameo/tokio) "
+    ): "the sequencer and the validate+connect actor (kameo/tokio) "
     "— the one stateful stage is an actor (RD-Q11)",
     (
         "shekyl-chain-ingest",
@@ -274,6 +360,21 @@ PERMANENT: dict[tuple[str, str], str] = {
         "replay-cli",
     ): "the shekyl-chain-replay binary: argument parsing, HTTP transport, "
     "and the settlement schedule the replay resolves rules from",
+    (
+        "shekyl-chain-ingest",
+        "producer",
+    ): "the bundle producer's read path (SO-D12 increment 4c): the fetch "
+    "scheduler, its store-backed facts and the producer's task. The node "
+    "takes it by default; a crate that takes `pipeline` alone "
+    "(shekyl-chain-sync-runtime, shekyl-p2p-harness) has no shard-fetch "
+    "client in its graph (SF-D4)",
+    (
+        "shekyl-bundle-producer",
+        "fetch",
+    ): "the producer's challenge read over the fetch scheduler. Off by "
+    "default because the ring alone is linked through the ingest crate's "
+    "`pipeline`, which shekyl-chain-sync-runtime and shekyl-p2p-harness take "
+    "alone; the ingest crate's `producer` feature turns it on for the node",
 }
 
 # Crates whose feature table must be exhaustively categorized (third limb).
@@ -292,6 +393,24 @@ PERMANENT: dict[tuple[str, str], str] = {
 # it: `splitmix` is its only feature and is enabled across a crate boundary
 # from its first day (three dev edges). The name is the generator. It is not
 # the `conformance` grader feature those consumers also carry.
+# `shekyl-chain-sync` joined 2026-10-23 (CS-3). It is the pure model; its
+# one feature is the floor job's `cs2-long-run`, and its runtime half is the
+# separate crate `shekyl-chain-sync-runtime` (Rick, 2026-10-23).
+# `shekyl-chain-sync-runtime` joined 2026-11-04, the commit that declared
+# `publish-for-test` for shekyl-node's follower tests. That is its only
+# feature, and it is test-only.
+# `shekyl-bundle-producer` joined 2026-10-25, the commit whose ingest
+# feature first enables its `fetch` (`SO-D12` increment 4c).
+# `shekyl-p2p-session` joined 2026-11-05 (the p2p remnant cutover, PR #1272):
+# its `harness` feature is enabled across a crate boundary by
+# shekyl-p2p-harness's tests. That is its only feature, and it is test-only.
+# `randomx-v2-sys` joined 2026-11-06, the commit that declared
+# `full-dataset` for shekyl-randomx-differential's Hole-1 bins. That is
+# its only feature. It is consumer-owned: the light differential build
+# does not enable it, and the feature dies with the harness.
+# `shekyl-relay-privacy` joined 2026-11-06: `conformance` is its only
+# feature, and shekyl-relay's dev edge enables it for the origin-budget
+# pin. The crate's own tests enable it too; no normal edge does.
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -305,6 +424,7 @@ PERMANENT: dict[tuple[str, str], str] = {
 # the trigger is a different, nearly free thing, and it is what landed.)
 GOVERNED_OWNERS: frozenset[str] = frozenset(
     {
+        "shekyl-wire",
         "shekyl-chain-store",
         "shekyl-tor-control-client",
         "shekyl-chain-rules",
@@ -312,6 +432,15 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-chain-ingest",
         "shekyl-draw-rng",
         "shekyl-noise",
+        "shekyl-chain-sync",
+        "shekyl-chain-sync-runtime",
+        "shekyl-mempool",
+        "shekyl-bundle-producer",
+        "shekyl-curve-tree",
+        "shekyl-p2p-session",
+        "shekyl-relay-privacy",
+        "shekyl-network",
+        "randomx-v2-sys",
     }
 )
 
@@ -323,8 +452,8 @@ Hit = tuple[str, str, str]  # feature, consumer, edge kind
 # consumer, edge kind) — so a new feature or enabler on a listed crate is red,
 # and a vanished hit is red until deleted. Shrink-only: a crate leaves this
 # list by joining GOVERNED_OWNERS
-# with its features categorized (FOLLOWUPS "Fourteen crates meet the feature-
-# governance trigger ungoverned", Target: pre-genesis; the fifteenth entry,
+# with its features categorized (FOLLOWUPS "Thirteen crates meet the feature-
+# governance trigger ungoverned", Target: pre-genesis; the fourteenth entry,
 # shekyl-crypto-pq, leaves via FOLLOWUPS F-7). Entries marked FINDING enable
 # a test-named feature on a NORMAL edge — the very shape TEST_ONLY refuses —
 # and are governed first. Forwarding raised the count from twelve to fifteen
@@ -334,13 +463,10 @@ Hit = tuple[str, str, str]  # feature, consumer, edge kind
 MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = {
     "shekyl-crypto-pq": (
         "FINDING owned by FOLLOWUPS F-7, not the governance row: test-utils reaches "
-        "shekyl-ffi on a NORMAL edge directly and shekyl-p-serve on a NORMAL edge by "
-        "forwarding (its test-signer feature); the FFI exports that call it are "
-        "unconditional extern \"C\" in the production header, so categorizing changes "
-        "nothing. Leaves this list when F-7 lands.",
+        "shekyl-p-serve on a NORMAL edge by forwarding (its test-signer feature, "
+        "itself a FINDING in shekyl-p-serve's entry). Leaves this list when F-7 lands.",
         frozenset({
             ("test-utils", "shekyl-archival-retention", "dev"),
-            ("test-utils", "shekyl-ffi", "normal"),
             ("test-utils", "shekyl-p-fetch", "dev"),
             ("test-utils", "shekyl-p-serve", "normal"),
             ("test-utils", "shekyl-tx-builder", "dev"),
@@ -370,22 +496,11 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
             ("std", "shekyl-scanner", "normal"),
         }),
     ),
-    "shekyl-curve-tree": (
-        "categorization only",
-        frozenset({
-            ("test-tamper", "shekyl-p-host", "dev"),
-        }),
-    ),
     "shekyl-engine-core": (
         "categorization only",
         frozenset({
             ("test-helpers", "shekyl-wallet-rpc", "dev"),
-        }),
-    ),
-    "shekyl-fcmp": (
-        "categorization only",
-        frozenset({
-            ("multisig", "shekyl-ffi", "normal"),
+            ("test-helpers", "shekyl-chain-ingest", "dev"),
         }),
     ),
     "shekyl-fcmp-proofs": (
@@ -402,9 +517,13 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
     ),
     "shekyl-p-serve": (
         "FINDING: test-signer enabled on NORMAL edges by shekyl-sp-t3-spike (direct) and shekyl-p-host (forwarded via its own test-signer). "
-        "The shekyl-archival-fetch-sched dev edge (2026-10-08) is the scheduler's loopback test signing a real serve behind the SOCKS shim — the same shape as shekyl-p-fetch's.",
+        "The shekyl-archival-fetch-sched dev edge (2026-10-08) is the scheduler's loopback test signing a real serve behind the SOCKS shim — the same shape as shekyl-p-fetch's. "
+        "The shekyl-bundle-producer dev edge (2026-10-25, SO-D12 increment 4c) is the producer's challenge read against a receipt-signing serve behind the same shim — the same shape again; "
+        "the shekyl-chain-ingest dev edge (same date) is the producer's gate test, whose live-path arm serves under an identity test key.",
         frozenset({
+            ("test-signer", "shekyl-chain-ingest", "dev"),
             ("test-signer", "shekyl-archival-fetch-sched", "dev"),
+            ("test-signer", "shekyl-bundle-producer", "dev"),
             ("test-signer", "shekyl-p-fetch", "dev"),
             ("test-signer", "shekyl-p-host", "normal"),
             ("test-signer", "shekyl-sp-t3-spike", "normal"),
@@ -417,9 +536,10 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         }),
     ),
     "shekyl-rpc-client": (
-        "categorization only",
+        "categorization only. The console client's `std` hit left with "
+        "shekyl-daemon-ctl (R8); the remaining hits are the ones that crate's "
+        "deletion did not own.",
         frozenset({
-            ("std", "shekyl-daemon-rpc", "normal"),
             ("std", "shekyl-engine-core", "normal"),
             ("std", "shekyl-rpc-transport", "normal"),
             ("std", "shekyl-scanner", "normal"),

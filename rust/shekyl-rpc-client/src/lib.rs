@@ -25,7 +25,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use shekyl_rpc_types::core_rpc_version_string;
-use shekyl_types::ChainCount;
+use shekyl_types::{BlockHash, ChainCount};
 
 pub mod tx_fee;
 
@@ -44,6 +44,11 @@ pub enum RpcError {
     /// Requested transactions weren't found.
     #[error("transactions not found")]
     TransactionsNotFound(Vec<[u8; 32]>),
+    /// Requested transactions are not in the daemon's chain, and its pool
+    /// cannot be read until it restarts (`unavailable_tx`): whether they
+    /// exist has no answer from this daemon. Not "not found".
+    #[error("transactions unavailable: not in the daemon's chain, and its pool is retired")]
+    TransactionsUnavailable(Vec<[u8; 32]>),
     /// The transaction was pruned.
     ///
     /// Pruned transactions are not supported at this time.
@@ -121,7 +126,9 @@ impl RpcError {
     #[must_use]
     pub const fn fault(&self) -> DaemonFault {
         match self {
-            Self::ConnectionError(_) => DaemonFault::Unreachable,
+            // A lookup the daemon could not make is one it did not answer:
+            // retry once it has restarted, or ask another daemon.
+            Self::ConnectionError(_) | Self::TransactionsUnavailable(_) => DaemonFault::Unreachable,
             Self::IdentityMismatch(mismatch) => DaemonFault::Identity(*mismatch),
             Self::InvalidNode(_)
             | Self::TransactionsNotFound(_)
@@ -135,9 +142,9 @@ impl RpcError {
 
 /// This wallet's wording of an identity refusal, one sentence per axis.
 ///
-/// The console words the same verdict its own way
-/// (`shekyl-daemon-rpc`'s `console_identity_message`); the axes themselves
-/// are compared once, in [`shekyl_rpc_types::IdentityExpectation::read`].
+/// The shell words the same verdict its own way
+/// (`shekyl-cli`'s `identity_line`); the axes themselves are compared once,
+/// in [`shekyl_rpc_types::IdentityExpectation::read`].
 fn identity_refusal(mismatch: &IdentityMismatch) -> String {
     match *mismatch {
         IdentityMismatch::Wire { ours, theirs } => {
@@ -311,16 +318,6 @@ struct JsonRpcEnvelope<T> {
     error: Option<JsonRpcRefusal>,
 }
 
-fn rpc_hex(value: &str) -> Result<Vec<u8>, RpcError> {
-    hex::decode(value).map_err(|_| RpcError::InvalidNode("expected hex wasn't hex".to_string()))
-}
-
-fn hash_hex(hash: &str) -> Result<[u8; 32], RpcError> {
-    rpc_hex(hash)?
-        .try_into()
-        .map_err(|_| RpcError::InvalidNode("hash wasn't 32-bytes".to_string()))
-}
-
 // The submit wire contract is defined once in `shekyl-rpc-types`
 // (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.3's single-Rust-definition
 // rule) and re-exported here so wallet-side consumers reach it through
@@ -328,12 +325,12 @@ fn hash_hex(hash: &str) -> Result<[u8; 32], RpcError> {
 // dependency. The legacy `TxRelayResponse` (a lossy projection of the
 // deleted `send_raw_transaction` boolean-flag reply) is replaced by the
 // typed [`SubmitVerdict`]; see [`Rpc::publish_transaction`].
-pub use shekyl_rpc_types::{RejectCause, SubmitTransactionRequest, SubmitVerdict};
+pub use shekyl_rpc_types::{PoolRelay, RejectCause, SubmitTransactionRequest, SubmitVerdict};
 
 // The identity verdict [`RpcError::IdentityMismatch`] and
 // [`DaemonFault::Identity`] carry, with the types inside it, for the same
 // reason: a consumer that names the verdict reaches it through this crate.
-pub use shekyl_rpc_types::{DaemonNetwork, HashHex, IdentityAxis, IdentityMismatch};
+pub use shekyl_rpc_types::{HashHex, IdentityAxis, IdentityMismatch, Network};
 
 /// The HTTP `Content-Type` a daemon route expects: EPEE binary routes (`*.bin`,
 /// e.g. `get_o_indexes.bin`, `get_blocks_by_height.bin`) are
@@ -533,7 +530,7 @@ pub trait Rpc: Sync + Clone {
     fn get_block_hash(
         &self,
         number: usize,
-    ) -> impl Send + Future<Output = Result<[u8; 32], RpcError>> {
+    ) -> impl Send + Future<Output = Result<BlockHash, RpcError>> {
         async move {
             // The wire type is `shekyl-rpc-types`'s (RK-D1).
             let reply: shekyl_rpc_types::GetBlockHeaderByHeightResponse = self
@@ -561,7 +558,7 @@ pub trait Rpc: Sync + Clone {
             }
             // No re-parse: the wire type already validated the hex on the
             // way in (RK-3's `HashHex`), so the edge is just naming the bytes.
-            Ok(reply.block_header.hash.to_bytes())
+            Ok(BlockHash::from_bytes(reply.block_header.hash.to_bytes()))
         }
     }
 
@@ -650,37 +647,34 @@ pub trait Rpc: Sync + Clone {
         }
     }
 
-    /// Generate blocks, with the specified address receiving the block reward.
+    /// Generate `block_count` blocks. The daemon pays its configured
+    /// mining address. `address` is not on the wire (N2).
     ///
-    /// Returns the hashes of the generated blocks and the last block's number.
+    /// The count is the chain's block count, the same quantity
+    /// [`Self::get_height`] returns: the tip's height plus one.
     fn generate_blocks(
         &self,
         address: &str,
         block_count: usize,
-    ) -> impl Send + Future<Output = Result<(Vec<[u8; 32]>, usize), RpcError>> {
-        let address = String::from(address);
+    ) -> impl Send + Future<Output = Result<(Vec<[u8; 32]>, ChainCount), RpcError>> {
+        let _ = address;
         async move {
-            #[derive(Debug, Deserialize)]
-            struct BlocksResponse {
-                blocks: Vec<String>,
-                height: usize,
-            }
-
-            let res = self
-                .json_rpc_call::<BlocksResponse>(
+            let reply = self
+                .json_rpc_call::<shekyl_rpc_types::mining::GenerateBlocksResponse>(
                     "generateblocks",
                     Some(json!({
-                      "wallet_address": address,
-                      "amount_of_blocks": block_count
+                      "count": block_count
                     })),
                 )
                 .await?;
-
-            let mut blocks = Vec::with_capacity(res.blocks.len());
-            for block in res.blocks {
-                blocks.push(hash_hex(&block)?);
+            if !reply.status.is_ok() {
+                return Err(RpcError::InvalidNode(format!(
+                    "generateblocks refused: {}",
+                    reply.status.0
+                )));
             }
-            Ok((blocks, res.height))
+            let blocks = reply.blocks.iter().map(|block| block.to_bytes()).collect();
+            Ok((blocks, ChainCount::from_raw(reply.height)))
         }
     }
 
@@ -717,7 +711,7 @@ pub trait Rpc: Sync + Clone {
 #[cfg(test)]
 mod tests {
     use super::{
-        fee_tier_for, DaemonFault, DaemonNetwork, FeePriority, HashHex, IdentityMismatch, RpcError,
+        fee_tier_for, DaemonFault, FeePriority, HashHex, IdentityMismatch, Network, RpcError,
     };
     use shekyl_rpc_types::FeeTier;
 
@@ -726,8 +720,8 @@ mod tests {
     #[test]
     fn every_failure_is_classified_by_its_remedy() {
         let wrong_network = IdentityMismatch::Network {
-            ours: DaemonNetwork::Mainnet,
-            theirs: DaemonNetwork::Testnet,
+            ours: Network::Mainnet,
+            theirs: Network::Testnet,
         };
         for (err, fault) in [
             (
@@ -742,6 +736,10 @@ mod tests {
             (
                 RpcError::TransactionsNotFound(vec![[0; 32]]),
                 DaemonFault::Protocol,
+            ),
+            (
+                RpcError::TransactionsUnavailable(vec![[0; 32]]),
+                DaemonFault::Unreachable,
             ),
             (RpcError::PrunedTransaction, DaemonFault::Protocol),
             (RpcError::InvalidTransaction([0; 32]), DaemonFault::Protocol),
@@ -789,8 +787,8 @@ mod tests {
             ),
             (
                 IdentityMismatch::Network {
-                    ours: DaemonNetwork::Mainnet,
-                    theirs: DaemonNetwork::Testnet,
+                    ours: Network::Mainnet,
+                    theirs: Network::Testnet,
                 },
                 &["network mismatch:", "the daemon runs testnet"][..],
             ),
@@ -798,7 +796,7 @@ mod tests {
                 IdentityMismatch::Genesis {
                     ours: digest(3),
                     theirs: digest(4),
-                    network: DaemonNetwork::Mainnet,
+                    network: Network::Mainnet,
                 },
                 &["genesis block mismatch:", "different chain"][..],
             ),

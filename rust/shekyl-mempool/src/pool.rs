@@ -16,20 +16,25 @@
 //! discardable by ruling (`SPL-Q8`): a pool that loses it loses only the
 //! transactions it held, never a fact the chain needs.
 
+use shekyl_network::NetworkId;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, InvalidBlock, RuleSet, StatelessPass};
+use shekyl_chain_rules::{
+    AdmissionPolicy, AtHeight, ChainView, Fault, HeaderView, InvalidBlock, RuleSet, StatelessPass,
+    Tip,
+};
 use shekyl_chain_store::pool::{PoolOpen, PoolRecord, PoolStore, ReceivedHour};
 use shekyl_chain_store::store::StoreError;
+use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHeight, KeyImage, TxHash, UnixSeconds};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{Ct, Input};
 use shekyl_wire::Transaction;
 
 use crate::door::{self, DoorFault, Judged};
-use crate::evict::Limits;
-use crate::rate::{AdmissionRank, FeeRate};
+use crate::policy::Limits;
+use crate::policy::{AdmissionRank, FeeRate};
 use crate::view::KeyImages;
 
 /// Step 1 of the door, relative to the pool lock.
@@ -172,7 +177,7 @@ impl Held {
     }
 
     /// This entry in the order eviction and template selection share.
-    pub(crate) fn rank(&self, txid: TxHash) -> AdmissionRank {
+    pub(crate) fn rank(&self, txid: TxHash) -> AdmissionRank<ReceivedHour> {
         AdmissionRank::new(self.rate(), self.record.received, txid)
     }
 }
@@ -200,6 +205,27 @@ pub struct Pool {
     /// Step 1 already run outside the pool lock, consumed by the next
     /// reconcile. Not durable: the file must not supply a pass.
     prepared: HashMap<TxHash, Result<StatelessPass, InvalidBlock>>,
+    /// The tip the entries were last judged against, with the work that
+    /// ordered it. `None` when they were not judged at one tip.
+    /// [`Pool::judged_at`] is the tip a template compares to its parent.
+    judged_at: Option<JudgedTip>,
+    /// The one network this pool judges under for its lifetime (NI-Q4).
+    /// Taken at [`Pool::create`] / [`Pool::open`]; admission, reconcile, and
+    /// a template selection over this pool read it here rather than taking
+    /// it again beside the rule set.
+    network: NetworkId,
+}
+
+/// A tip the pool judged against, and the fork-choice work through it.
+///
+/// Work, not height, orders two tips: a reorg can land at the same height
+/// or a shorter one and still be the chain. A stale snapshot of the lighter
+/// tip must not move this, and must not leave it naming the lighter tip
+/// after a heavier one was judged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct JudgedTip {
+    tip: Tip,
+    work: CumulativeDifficulty,
 }
 
 impl core::fmt::Debug for Pool {
@@ -212,10 +238,12 @@ impl core::fmt::Debug for Pool {
 
 impl Pool {
     /// The pool file at `path`, with nothing in memory yet — [`Pool::open`]'s
-    /// first step, which then reads the file back and reconciles it.
+    /// first step, which then reads the file back and reconciles it. `network`
+    /// is the id every later judgement of this pool uses.
     pub(crate) fn create(
         path: impl AsRef<Path>,
         limits: Limits,
+        network: NetworkId,
     ) -> Result<(Self, PoolOpen), StoreError> {
         let (store, how) = PoolStore::create(path)?;
         Ok((
@@ -225,15 +253,23 @@ impl Pool {
                 held: BTreeMap::new(),
                 limits,
                 prepared: HashMap::new(),
+                judged_at: None,
+                network,
             },
             how,
         ))
     }
 
+    /// The network this pool was opened on.
+    #[must_use]
+    pub const fn network(&self) -> &NetworkId {
+        &self.network
+    }
+
     /// Admit `tx`, relayed — from a peer or this node's own submit — at
-    /// `now`, against `chain` under `rule_set` and `policy`: the one way
-    /// into the pool from outside it. Not public until the relay's fluff
-    /// event says so.
+    /// `now`, against `chain` under `rule_set` and `policy`, on this pool's
+    /// network: the one way into the pool from outside it. Not public until
+    /// the relay's fluff event says so.
     ///
     /// CEN-M1 first: a transaction the pool or the chain already holds is
     /// a [`Duplicate`] and nothing is judged. Then CEN-M10's rising
@@ -294,6 +330,33 @@ impl Pool {
         )
     }
 
+    /// Whether `txid` is a duplicate: the pool holds it, or the chain
+    /// carries it. Admission answers this first, before any judgement. A
+    /// door that verifies outside the pool's lock asks it before verifying,
+    /// so a transaction this node already has costs a peer that re-sends it
+    /// no proofs. The answer can change once the lock is released, and
+    /// admission asks again under it.
+    ///
+    /// # Errors
+    ///
+    /// The chain view's fault.
+    pub fn duplicate<'id, V: ChainView<'id>>(
+        &self,
+        txid: &TxHash,
+        chain: &V,
+    ) -> Result<Option<Duplicate>, PoolFault<V::Fault>> {
+        if self.held.contains_key(txid) {
+            return Ok(Some(Duplicate::InPool));
+        }
+        if chain
+            .has_transaction(txid)
+            .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?
+        {
+            return Ok(Some(Duplicate::OnChain));
+        }
+        Ok(None)
+    }
+
     /// Admission by `arrival`. A held transaction a block carries is made
     /// public (P2): a block has published it on every node, and a pool
     /// that kept it hidden would answer peer sync differently for a
@@ -315,18 +378,20 @@ impl Pool {
     ) -> Result<Admission, PoolFault<V::Fault>> {
         let txid = tx.txid_parts().hash;
         let carried = arrival == Arrival::Carried;
-        if let Some(held) = self.held.get_mut(&txid) {
-            if carried && !held.record.public {
-                self.store.write(|batch| batch.publish(&txid))?;
-                held.record.public = true;
+        match self.duplicate(&txid, chain)? {
+            Some(Duplicate::InPool) => {
+                if carried {
+                    if let Some(held) = self.held.get_mut(&txid) {
+                        if !held.record.public {
+                            self.store.write(|batch| batch.publish(&txid))?;
+                            held.record.public = true;
+                        }
+                    }
+                }
+                return Ok(Admission::Duplicate(Duplicate::InPool));
             }
-            return Ok(Admission::Duplicate(Duplicate::InPool));
-        }
-        if chain
-            .has_transaction(&txid)
-            .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?
-        {
-            return Ok(Admission::Duplicate(Duplicate::OnChain));
+            Some(duplicate) => return Ok(Admission::Duplicate(duplicate)),
+            None => {}
         }
         // CEN-M10's rising minimum, before the door's crypto: a full pool
         // holds nothing it would give up for a candidate paying no more per
@@ -351,6 +416,7 @@ impl Pool {
             chain,
             &self.key_images,
             rule_set,
+            self.network(),
             policy,
             prior.as_ref(),
         )
@@ -374,7 +440,45 @@ impl Pool {
             self.drop_held(gone);
         }
         self.hold(txid, Held::of(tx, record, Some(*pass)));
+        if let Ok(Some(tip)) = chain.tip() {
+            self.note_admitted(chain, tip);
+        }
         Ok(Admission::Admitted { evicted })
+    }
+
+    /// Record that this admission judged at `tip`.
+    ///
+    /// A heavier tip replaces the marker, so a template still holding the
+    /// lighter snapshot sees a different parent and evicts nothing. The same
+    /// tip refreshes it. Equal work under another hash clears it: the two
+    /// chains are not ordered. A lighter tip leaves the marker, so a stale
+    /// snapshot cannot blank a heavier one or restore the old identity.
+    fn note_admitted<'id, V: HeaderView<'id>>(&mut self, chain: &V, tip: Tip) {
+        self.judged_at = match tip_with_work(chain, tip) {
+            Some(admitted) => judged_tip_after(self.judged_at, admitted),
+            None => None,
+        };
+    }
+
+    /// The reconcile re-judged every entry at `tip`. That tip is the marker,
+    /// including when it is lighter than the one an earlier admission saw:
+    /// the entries now agree with it. No readable work means they do not.
+    pub(crate) fn note_reconciled<'id, V: HeaderView<'id>>(&mut self, chain: &V, tip: Option<Tip>) {
+        self.judged_at = tip.and_then(|tip| tip_with_work(chain, tip));
+    }
+
+    /// The tip the entries were last judged against. `None` before any
+    /// judgement against a chain with a tip, when the last judgement was
+    /// against a chain of equal work and a different hash, or when that
+    /// tip's work could not be read. A template selects only when this is
+    /// its own parent; otherwise it would refuse, and evict, entries valid
+    /// at the tip they were judged at.
+    #[must_use]
+    pub const fn judged_at(&self) -> Option<Tip> {
+        match self.judged_at {
+            Some(JudgedTip { tip, .. }) => Some(tip),
+            None => None,
+        }
     }
 
     /// Put `held` in the index and its key images in the map (CEN-M7).
@@ -407,7 +511,7 @@ impl Pool {
                     let claims = shekyl_chain_rules::ReferenceClaims::for_transaction(
                         chain, connecting, &held.tx,
                     )?;
-                    pass.holds_under(&held.tx, rule_set, &claims)
+                    pass.holds_under(&held.tx, rule_set, self.network(), &claims)
                 }
             };
             if !holds {
@@ -469,6 +573,14 @@ impl Pool {
         self.key_images = key_images;
     }
 
+    /// The next write to the pool file whose closure returns `Ok` aborts as
+    /// a commit failure ([`PoolStore::refuse_next_commit`]). Test builds
+    /// only (`pool-commit-fault`).
+    #[cfg(feature = "pool-commit-fault")]
+    pub fn refuse_next_commit(&self) {
+        self.store.refuse_next_commit();
+    }
+
     /// The pool file.
     pub(crate) const fn store(&self) -> &PoolStore {
         &self.store
@@ -525,12 +637,17 @@ impl Pool {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "pool-commit-fault"))]
 impl Pool {
     /// Hold `tx` under `record` without the door — for the tests of what the
-    /// pool does with what it holds (eviction's arithmetic), never of what
-    /// it admits. Written to the file and the index as `admit` would.
-    pub(crate) fn plant(&mut self, tx: Transaction, record: PoolRecord) -> TxHash {
+    /// pool does with what it holds (eviction's arithmetic, a write that
+    /// faults), never of what it admits. Written to the file and the index
+    /// as `admit` would. Test builds only (`pool-commit-fault`).
+    ///
+    /// # Panics
+    ///
+    /// When the pool file refuses the write.
+    pub fn plant(&mut self, tx: Transaction, record: PoolRecord) -> TxHash {
         let txid = tx.txid_parts().hash;
         let blob = tx.serialize();
         self.store
@@ -538,6 +655,32 @@ impl Pool {
             .expect("plant");
         self.hold(txid, Held::of(tx, record, None));
         txid
+    }
+}
+
+/// The admission's tip with the work through its own header, or `None`
+/// when this view does not record that header.
+fn tip_with_work<'id, V: HeaderView<'id>>(chain: &V, tip: Tip) -> Option<JudgedTip> {
+    match chain.header_at(tip.height) {
+        Ok(AtHeight::Recorded(record)) if record.hash == tip.hash => Some(JudgedTip {
+            tip,
+            work: record.cumulative_difficulty,
+        }),
+        _ => None,
+    }
+}
+
+/// The marker after an admission judged at `admitted`.
+///
+/// Heavier work replaces it. The same tip refreshes it. Equal work under
+/// another hash clears it. Lighter work leaves it.
+fn judged_tip_after(recorded: Option<JudgedTip>, admitted: JudgedTip) -> Option<JudgedTip> {
+    match recorded {
+        None => Some(admitted),
+        Some(at) if at.tip == admitted.tip => Some(admitted),
+        Some(at) if admitted.work > at.work => Some(admitted),
+        Some(at) if admitted.work == at.work => None,
+        Some(at) => Some(at),
     }
 }
 

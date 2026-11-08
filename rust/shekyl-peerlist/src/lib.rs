@@ -63,14 +63,17 @@ pub mod conformance;
 pub use outcome::{DialOutcome, ListName, Refusal, SessionRow, Source};
 
 pub use partition::{DiscloseEarly, DiscloseEarlyEnd};
-pub use peerlist::{BanQuery, NoBans, Peerlist, SeatCensus, Settled, Snapshot};
+pub use peerlist::{KeptSessions, NoSessions, Peerlist, SeatCensus, Settled, Snapshot};
 pub use shekyl_net_address::{Host, NetworkAddress};
 /// A daemon connection. The type is `shekyl_relay_privacy::ConnectionId`;
 /// re-exported so a peerlist session and a stem source are one id. F4 moves
 /// that vocabulary; this re-export does not.
 pub use shekyl_relay_privacy::ConnectionId;
 pub use shekyl_timing_engine::Tick;
-pub use shekyl_transport_layer::{connector_for, CloseCause, CloseKind, ConnectorId, Direction};
+pub use shekyl_transport_layer::{
+    connector_for, dial_profile, BanEntry, ConnectorId, Cooldown, DialFailure, Direction,
+    Ipv4Subnet,
+};
 pub use validity::{RangeV4, RangeV6, RefusedSet, REFUSED_V4, REFUSED_V6};
 
 /// The disclosure count (D3): how many white addresses one disclosure
@@ -122,6 +125,47 @@ pub const WHITE_CAP: usize = 1000;
 
 /// Nanoseconds in one hour.
 const HOUR_NANOS: u64 = 60 * 60 * 1_000_000_000;
+
+/// The cooldown after `consecutive` failed tests in a row (at least one),
+/// on the ladder `cooldown` declares (the connector's dial profile,
+/// `shekyl_transport_layer::dial_profile`): its first step doubled per
+/// failure after the first, capped at its cap, then stretched by a uniform
+/// draw over `[0, 50%]` of itself, so the nodes that failed the same
+/// address at the same moment do not retest it in step. The doublings
+/// saturate, so a counter that kept growing cannot wrap and hand the short
+/// cooldown back to an address that has failed thousands of times.
+///
+/// **Assumption** (§97): the jitter width is a starting value.
+pub fn cooldown_nanos<R: shekyl_draw_rng::RelayRng + ?Sized>(
+    cooldown: Cooldown,
+    consecutive: u32,
+    rng: &mut R,
+) -> u64 {
+    let doublings = consecutive.saturating_sub(1).min(u64::BITS - 1);
+    let base = cooldown
+        .first_nanos
+        .saturating_mul(1u64 << doublings)
+        .min(cooldown.cap_nanos);
+    base.saturating_add(shekyl_draw_rng::bounded_uniform(rng, base / 2))
+}
+
+/// What a failed test does to its address: the judge's verdict
+/// (`DIALER_OUTAGE_EVIDENCE.md` §4.1, `OE-D8`). The dialer decides it, once,
+/// when it records the test; the peer list only performs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// The failure counts: a gray test steps its consecutive count and
+    /// cools for that rung ([`cooldown_nanos`]); a white address moves to
+    /// gray at the first rung (white is known-working, Rick 2026-10-26).
+    Counted,
+    /// The failure is excused (`OE-D6`, hold the rung): the count neither
+    /// climbs nor descends. A gray address with counted failures cools at
+    /// its current rung; one with none, and a white address, wait the
+    /// connector's `outage_retry` and stay where they are.
+    Excused,
+    /// Authenticated proof of misbehaviour: the address leaves the lists.
+    Drop,
+}
 
 /// The white expiry: a white address with no contact this node initiated
 /// for this long returns to gray (brief §2, `EXPIRATION_PERIOD`). In

@@ -176,7 +176,7 @@ pub fn build_join_market_vin(
     holdings: HoldingsDescriptor,
     endpoint: [u8; ENDPOINT_BYTES],
 ) -> Result<JoinMarketVin, BondBuildError> {
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     if floor == 0 {
         return Err(BondBuildError::BondFloorZero);
     }

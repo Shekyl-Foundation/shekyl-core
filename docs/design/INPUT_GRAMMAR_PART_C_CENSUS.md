@@ -1,6 +1,6 @@
 # Input grammar Part C — the field census (appendix)
 
-**Status:** RULED 2026-10-19 with [`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) Part C — the evidence for its §17–§18. A read-only census from source of every served method's parameters and reply fields, taken at `945e80dad`; every cited file is unchanged at `42c133186`. Nothing here was captured from a running daemon. It goes with the rename PR (`RPC_WIRE.md` RW-Q8), whose generated field table replaces it.
+**Status:** RULED 2026-10-19 with [`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) Part C — the evidence for its §17–§18. A read-only census from source of every served method's parameters and reply fields, taken at `945e80dad`; every cited file was unchanged at `42c133186`, and a row re-taken since names the RPC minor it was taken at (3.61, 3.63, 3.64) with its citations at that source. Nothing here was captured from a running daemon. It goes with the rename PR (`RPC_WIRE.md` RW-Q8), whose generated field table replaces it.
 
 **Path abbreviations used in citations**
 
@@ -20,7 +20,7 @@
 | `bool` | JSON boolean |
 | `string` | JSON string |
 | `hash64` | a 64-char lowercase hex string (`HashHex`; on deserialize it accepts either case and refuses any other length): `T/hash.rs:168-191` |
-| `hex128` | `"0x"` followed by minimal lowercase hex of a u128. Rust: `HexU128`, `T/hex128.rs:127-138`. C++: `cryptonote::hex`, `src/cryptonote_basic/difficulty.cpp:93`, through `store_128` at `S:74-79` |
+| `hex128` | `"0x"` followed by minimal lowercase hex of a u128. Rust: `HexU128`, `T/hex128.rs:127-138`. C++: `cryptonote::hex`, `src/cryptonote_basic/difficulty.cpp` at `ac3836de90` (line 93), through `store_128` at `S:74-79` |
 | `hexstr` | a free-length lowercase hex string (`buff_to_hex_nodelimer` / `hex::encode`) |
 | `atomic-dec` | a decimal string of atomic units (`AtomicUnitsString`, `rust/shekyl-units/src/wire.rs:40`) |
 | `nullable<T>` | the key is always present, and its value is `T` or `null` (`Nullable`, `T/nullable.rs:67-70`) |
@@ -49,8 +49,8 @@
 |---|---|---|
 | `on_get_block_hash` | bare `hash64` string | `D/methods.rs:447-451` |
 | `calc_pow` | bare `hash64` string | `H:414` (`typedef std::string response`); `S:604`; `F:226-245` |
-| `/submit_transaction` | a tagged `verdict` object | `T/lib.rs:165-206` |
-| `/get_stem_tallies` | a hand-built `{floor,tallies}` object | `src/p2p/net_node.inl:772-826` |
+| `/submit_transaction` | a tagged `verdict` object | `T/lib.rs:189-244` |
+| `/get_stem_tallies` | a hand-built `{floor,tallies}` object | `rust/shekyl-node/src/p2p_facts.rs:218-245` (`project_stem_tallies`; was `stem_tallies_json` in `shekyl-p2p`, and lines 545 to 599 of `src/p2p/net_node.inl` at `e8838b0095`) |
 | `option_set`, `option_show` | `{options:[…]}` | `D/options.rs:347-352` |
 
 #### JSON-RPC envelope (`POST /json_rpc`)
@@ -178,26 +178,31 @@ Used as `get_connections.connections[]` and as `sync_info.peers[].info`.
 
 ### 1.7 `TxEntry` (`/get_transactions` `txs[]`)
 
-The wire form is the flat `RawTxEntry` (`T/transactions.rs:139-167`). `in_pool` selects which arm's keys are present.
+The wire form is the flat `RawTxEntry` (`T/transactions.rs:175-198`, at 3.64). `in_pool` selects which arm's keys are present. An entry is one of two forms, chosen by the request's `prune`: the full form fills `as_hex`; the pruned form fills `pruned_as_hex` with the pruned segment alone — never with the `pqc_auths` bytes appended — and is the skeleton, one shape at every horizon (`DRS_SB_BELOW_HORIZON.md` SB-Q2). The three txid operands ride in both forms. `prunable_as_hex`, `as_json` and `pruned` left the entry at 3.64 with the request's `split` and `decode_as_json`.
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `tx_hash` | hash64 | | `T/transactions.rs:142` |
-| `as_hex` | hexstr | always emitted, even `""` | `T/transactions.rs:143` |
-| `pruned_as_hex` | hexstr | always emitted | `T/transactions.rs:144` |
-| `prunable_as_hex` | hexstr | always emitted | `T/transactions.rs:145` |
-| `prunable_hash` | hash64 | | `T/transactions.rs:146` |
-| `archival_len` | u64 | bytes | `T/transactions.rs:115-122,147` |
-| `as_json` | string (embedded JSON text) | epee rendering; always emitted | `T/transactions.rs:148` |
-| `pruned` | bool? | omitted when false | `T/transactions.rs:149-150` |
-| `in_pool` | bool | arm selector | `T/transactions.rs:151` |
-| `double_spend_seen` | bool | | `T/transactions.rs:152` |
-| `block_height` | u64 | mined arm only | `T/transactions.rs:154-155` |
-| `confirmations` | u64 | mined arm only | `T/transactions.rs:156-157` |
-| `block_timestamp` | u64 | mined arm only | `T/transactions.rs:158-159` |
-| `output_indices` | [u64]? | mined arm; omitted when empty | `T/transactions.rs:160-161` |
-| `relayed` | bool | pool arm only | `T/transactions.rs:163-164` |
-| `received_timestamp` | u64 | pool arm only | `T/transactions.rs:165-166` |
+| `tx_hash` | hash64 | | `T/transactions.rs:176` |
+| `as_hex` | hexstr | always emitted; the whole serialization in the full form, `""` under `prune` | `T/transactions.rs:137-139,177` |
+| `pruned_as_hex` | hexstr | always emitted; the pruned segment only under `prune`, `""` in the full form | `T/transactions.rs:140-143,178` |
+| `prunable_hash` | hash64 | the prunable region's digest, the txid's second operand | `T/transactions.rs:144-146,179` |
+| `pqc_auth_hash` | nullable\<hash64\> | the `pqc_auths` region's digest, the txid's third operand; `null` for a 3-part txid (the coinbase); required, so an absent member is refused (RK-D23) | `T/transactions.rs:147-152,180` |
+| `archival_len` | u64 | bytes: the prunable region plus the `pqc_auths` segment | `T/transactions.rs:153-160,181` |
+| `in_pool` | bool | arm selector | `T/transactions.rs:182` |
+| `double_spend_seen` | bool | | `T/transactions.rs:183` |
+| `block_height` | u64 | mined arm only | `T/transactions.rs:185-186` |
+| `confirmations` | u64 | mined arm only | `T/transactions.rs:187-188` |
+| `block_timestamp` | u64 | mined arm only | `T/transactions.rs:189-190` |
+| `output_indices` | [u64]? | mined arm; omitted when empty | `T/transactions.rs:191-192` |
+| `relayed` | bool | pool arm only | `T/transactions.rs:194-195` |
+| `received_timestamp` | u64? | pool arm only; absent where the pool keeps no receive time | `T/transactions.rs:196-197` |
+
+**`ArchivedTx`** (`/get_transactions` `archived[]`, 3.64; `T/transactions.rs:321-334`): a mined transaction asked in the full form whose archival good this node discarded with its shard at the archival horizon (`PDM-Q9`, `PDM-Q10`). Never populated under `prune`.
+
+| key | wire type | notes | source |
+|---|---|---|---|
+| `tx_hash` | hash64 | | `T/transactions.rs:331` |
+| `shard` | u64 | the archival shard, `shekyl_types::shard_of` over the cumulative archival length before the transaction | `T/transactions.rs:332-333` |
 
 ### 1.8 C++ pool shapes (`/get_transaction_pool`, `/get_transaction_pool_stats`)
 
@@ -206,7 +211,7 @@ The wire form is the flat `RawTxEntry` (`T/transactions.rs:139-167`). `in_pool` 
 | key | wire type | notes | source |
 |---|---|---|---|
 | `id_hash` | hash64 | | `H:552` |
-| `tx_json` | string (embedded JSON) | `obj_to_json_str` | `H:553`, `src/cryptonote_core/tx_pool.cpp:1577` |
+| `tx_json` | string (embedded JSON) | `obj_to_json_str` | `H:553`, `src/cryptonote_core/tx_pool.cpp` |
 | `blob_size` | u64 | | `H:554` |
 | `weight` | u64? | `KV_SERIALIZE_OPT(weight,0)` | `H:555` |
 | `fee` | u64 | | `H:556` |
@@ -329,7 +334,7 @@ Rust mirrors live in `T/archival_reads.rs`; the C++ structs are canonical for th
 | key | wire type | notes | source |
 |---|---|---|---|
 | `join_settlement_epoch` | u64 | | `H:1130` |
-| `is_foundation_complete_tree` | bool | | `H:1131` |
+| `is_support_complete_tree` | bool | | `H:1131` |
 | `bad_intervals_flat` | [u64] | **flattened** `[start, end_exclusive, …]` pairs | `H:1126-1132` |
 
 **`shard_row_t`** (`H:1137-1148`):
@@ -374,12 +379,25 @@ Rust mirrors live in `T/archival_reads.rs`; the C++ structs are canonical for th
 
 ### 1.12 `.bin` shapes (portable_storage, not JSON)
 
-**`BlockEntry`** (`T/bin_commands.rs:216-221,245-249`):
+**`BlockEntry`** (`T/bin_commands.rs:345-353,376-383`, at 3.64):
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `block` | blob (raw bytes) | | `T/bin_commands.rs:246` |
-| `txs` | [blob]? | an array of raw byte strings; omitted when empty | `T/bin_commands.rs:247-249` |
+| `block` | blob (raw bytes) | | `T/bin_commands.rs:378` |
+| `txs` | [section]? | one `BlockTx` section per listed transaction, in the block's order; omitted when empty | `T/bin_commands.rs:379-382` |
+
+**`BlockTx`** (`T/bin_commands.rs:216-312`): a tagged section; `form` selects which other keys are present (SB-Q2). The full form (`prune` clear) carries `Full` and, for a body this node discarded at the archival horizon, `Archived`; the pruned form (`prune` set) carries `Skeleton` for every transaction, so no slot is ever archived under it.
+
+| key | wire type | notes | source |
+|---|---|---|---|
+| `form` | u8 | `1` full, `2` skeleton, `3` archived | `T/bin_commands.rs:216-220,291-295` |
+| `blob` | blob (raw bytes) | form 1: the whole serialization | `T/bin_commands.rs:265-267,297` |
+| `unprunable` | blob (raw bytes) | form 2: the pruned segment only | `T/bin_commands.rs:269-271,299` |
+| `prunable_hash` | blob (32 raw bytes) | form 2 | `T/bin_commands.rs:272-275,300` |
+| `pqc_auth_hash` | blob (32 raw bytes)? | form 2; absent for a 3-part txid (the coinbase) | `T/bin_commands.rs:276-278,301-304` |
+| `archival_len` | u64 | form 2; bytes | `T/bin_commands.rs:279,305` |
+| `tx_hash` | blob (32 raw bytes) | form 3 | `T/bin_commands.rs:281-283,308` |
+| `shard` | u64 | form 3: the archival shard | `T/bin_commands.rs:284,309` |
 
 ---
 
@@ -390,7 +408,7 @@ Rust mirrors live in `T/archival_reads.rs`; the C++ structs are canonical for th
 | value | meaning |
 |---|---|
 | `both` | served on the restricted (view) and admin listeners |
-| `admin` (JSON-RPC) | in `RESTRICTED_METHODS` (`D/handlers/json_rpc.rs:49-66`); the restricted listener answers HTTP 403 with `-32601 "Method not allowed in restricted mode"` |
+| `admin` (JSON-RPC) | a `HostOnly` row of the method table (`T/methods.rs`, RW-Q7), whose grant column dispatch reads; the restricted listener answers HTTP 403 with `-32601 "Method not allowed in restricted mode"` |
 | `admin` (REST) | `Visibility::AdminOnly` in `D/server.rs:209-326`; the path is not registered, so the restricted listener answers 404 |
 
 ### Rust-native JSON-RPC methods
@@ -677,50 +695,51 @@ A refusal is error -26 with `data` set to `[Refusal]` (`D/options.rs:440-457`).
 | aliases | `/getinfo` (REST only) |
 | params | ignored |
 
-The serializer is the flat `GetInfoWire` (`T/info.rs:408-491`). It goes through `try_from`/`into`, so the Rust part names (`health`, `chain`, …) are not keys.
+The serializer is the flat `GetInfoWire` (`T/info.rs:453-542`). It goes through `try_from`/`into`, so the Rust part names (`health`, `chain`, …) are not keys.
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `status` | string | | `T/info.rs:411` |
-| `height` | u64 | Health | `T/info.rs:414` |
-| `top_block_hash` | hash64 | Health | `T/info.rs:415` |
-| `target_height` | nullable<u64> | Health | `T/info.rs:416` |
-| `synchronized` | bool | Health | `T/info.rs:417` |
-| `busy_syncing` | bool | Health | `T/info.rs:418` |
-| `offline` | bool | Health | `T/info.rs:419` |
-| `following_degraded` | bool | Health | `T/info.rs:420` |
-| `has_peers` | bool? | omitted iff `offline` | `T/info.rs:421-422` |
-| `protocol_version` | u64 | Identity | `T/info.rs:425` |
-| `wide_difficulty` | hex128 | Chain. **No low-64 / top64 siblings here** | `T/info.rs:428` |
-| `wide_cumulative_difficulty` | hex128 | Chain | `T/info.rs:429` |
-| `target` | u64 | seconds | `T/info.rs:430` |
-| `tx_count` | u64 | | `T/info.rs:431` |
-| `block_weight_limit` | u64 | written even at 0 | `T/info.rs:434` |
-| `block_weight_median` | u64 | | `T/info.rs:435` |
-| `adjusted_time` | u64 | | `T/info.rs:436` |
-| `already_generated_coins` | **atomic-dec** | Economics | `T/info.rs:443` |
-| `release_multiplier` | u64 | | `T/info.rs:444` |
-| `burn_pct` | u64 | | `T/info.rs:445` |
-| `total_burned` | **atomic-dec** | | `T/info.rs:446` |
-| `staker_emission_share_effective` | u64 | | `T/info.rs:447` |
-| `tx_pool_size` | u64 | Pool | `T/info.rs:450` |
-| `start_time` | u64? | Status part; admin only | `T/info.rs:453-454` |
-| `free_space` | u64? | Status | `T/info.rs:455-456` |
-| `database_size` | u64? | Status | `T/info.rs:457-458` |
-| `version` | string? | Status; a build string, unlike `get_version.version` (u32) | `T/info.rs:459-460` |
-| `outgoing_connections_count` | u64? | Status; omitted if offline | `T/info.rs:461-462` |
-| `incoming_connections_count` | u64? | Status | `T/info.rs:463-464` |
-| `alt_blocks_count` | u64? | Status | `T/info.rs:465-466` |
-| `rpc_connections_count` | u64? | Status | `T/info.rs:467-468` |
-| `public_incoming_socket_count` | u64? | Peers part; admin only | `T/info.rs:471-472` |
-| `public_outgoing_socket_count` | u64? | Peers | `T/info.rs:473-474` |
-| `tor_incoming_socket_count` | u64? | Peers | `T/info.rs:475-476` |
-| `tor_outgoing_socket_count` | u64? | Peers | `T/info.rs:477-478` |
-| `p2p` | string enum? | `running` / `offline`; Peers | `T/info.rs:479-480,494-499` |
-| `white_peerlist_size` | u64? | Peers | `T/info.rs:481-482` |
-| `grey_peerlist_size` | u64? | Peers | `T/info.rs:483-484` |
-| `tx_pool_unbroadcast_count` | u64? | Host part; admin only | `T/info.rs:487-488` |
-| `restricted` | bool | the listener's posture | `T/info.rs:490` |
+| `status` | string | | `T/info.rs:454` |
+| `height` | u64 | Health | `T/info.rs:457` |
+| `top_block_hash` | hash64 | Health | `T/info.rs:458` |
+| `target_height` | nullable<u64> | Health | `T/info.rs:459` |
+| `synchronized` | bool | Health | `T/info.rs:460` |
+| `busy_syncing` | bool | Health | `T/info.rs:461` |
+| `offline` | bool | Health | `T/info.rs:462` |
+| `following_degraded` | bool | Health | `T/info.rs:463` |
+| `has_peers` | bool? | omitted iff `offline` | `T/info.rs:464-465` |
+| `protocol_version` | u64 | Identity | `T/info.rs:468` |
+| `wide_difficulty` | hex128 | Chain. **No low-64 / top64 siblings here** | `T/info.rs:471` |
+| `wide_cumulative_difficulty` | hex128 | Chain | `T/info.rs:472` |
+| `target` | u64 | seconds | `T/info.rs:473` |
+| `tx_count` | u64 | | `T/info.rs:474` |
+| `block_weight_limit` | u64 | written even at 0 | `T/info.rs:477` |
+| `block_weight_median` | u64 | | `T/info.rs:478` |
+| `adjusted_time` | u64 | | `T/info.rs:479` |
+| `already_generated_coins` | **atomic-dec** | Economics | `T/info.rs:486` |
+| `release_multiplier` | u64 | | `T/info.rs:487` |
+| `burn_pct` | u64 | | `T/info.rs:488` |
+| `total_burned` | **atomic-dec** | | `T/info.rs:489` |
+| `staker_emission_share_effective` | u64 | | `T/info.rs:490` |
+| `pool_retired` | bool? | Pool; written only when `true`: the node retired its pool (its file faulted) | `T/info.rs:494-495` |
+| `tx_pool_size` | nullable<u64> | Pool; `null` exactly when `pool_retired` | `T/info.rs:496` |
+| `start_time` | u64? | Status part; admin only | `T/info.rs:499-500` |
+| `free_space` | u64? | Status | `T/info.rs:501-502` |
+| `database_size` | u64? | Status | `T/info.rs:503-504` |
+| `version` | string? | Status; a build string, unlike `get_version.version` (u32) | `T/info.rs:505-506` |
+| `outgoing_connections_count` | u64? | Status; omitted if offline | `T/info.rs:507-508` |
+| `incoming_connections_count` | u64? | Status | `T/info.rs:509-510` |
+| `alt_blocks_count` | u64? | Status | `T/info.rs:511-512` |
+| `rpc_connections_count` | u64? | Status | `T/info.rs:513-514` |
+| `public_incoming_socket_count` | u64? | Peers part; admin only | `T/info.rs:517-518` |
+| `public_outgoing_socket_count` | u64? | Peers | `T/info.rs:519-520` |
+| `tor_incoming_socket_count` | u64? | Peers | `T/info.rs:521-522` |
+| `tor_outgoing_socket_count` | u64? | Peers | `T/info.rs:523-524` |
+| `p2p` | string enum? | `running` / `offline`; Peers | `T/info.rs:525-526,549-554` |
+| `white_peerlist_size` | u64? | Peers | `T/info.rs:527-528` |
+| `grey_peerlist_size` | u64? | Peers | `T/info.rs:529-530` |
+| `tx_pool_unbroadcast_count` | nullable<u64>? | Host part; admin only; `null` exactly when `pool_retired` | `T/info.rs:534-539` |
+| `restricted` | bool | the listener's posture | `T/info.rs:541` |
 
 ### C++-table JSON-RPC methods
 
@@ -852,7 +871,7 @@ Dispatch: `get_jsonrpc_table`, `F:248-280`. Handlers are in `S`. Results pass th
 |---|---|
 | transport | JSON-RPC |
 | owner | C++ |
-| visibility | **both**: it is not in `RESTRICTED_METHODS`; the handler gates it on nettype (regtest / FAKECHAIN) |
+| visibility | **admin**: a `HostOnly` row, and an armed lever, in the method table (`T/methods.rs:135`); the handler also gates it on nettype (regtest / FAKECHAIN) |
 | aliases | none |
 | handler | `S:739` |
 
@@ -1168,16 +1187,18 @@ The DJSON rows (C++ REST) are in `F:170-181`. **For the DJSON rows, a bodyless r
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `txs_hashes` | [string] | hash64 text, not typed | `T/transactions.rs:41-50` |
-| `decode_as_json` | bool | default false; **selects a representation** (`as_json`) | `T/transactions.rs:51-52` |
-| `prune` | bool? | `OPT false`; **selects a representation** | `T/transactions.rs:53-55` |
-| `split` | bool? | `OPT false`; **selects a representation** (`pruned_as_hex` / `prunable_as_hex` against `as_hex`) | `T/transactions.rs:56-58` |
+| `txs_hashes` | [string] | hash64 text, not typed | `T/transactions.rs:70-77` |
+| `prune` | bool? | `OPT false`; **selects the form**: set, every entry is the skeleton (§1.7); clear, the whole body, and a body this node discarded is `archived` (3.64, SB-Q2). `decode_as_json` and `split` left at 3.64 | `T/transactions.rs:78-82` |
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `status` | string | | `T/transactions.rs:311` |
-| `txs` | [TxEntry] (§1.7)? | | `T/transactions.rs:312-313` |
-| `missed_tx` | [hash64]? | | `T/transactions.rs:314-316` |
+| `status` | string | | `T/transactions.rs:354` |
+| `txs` | [TxEntry] (§1.7)? | | `T/transactions.rs:355-356` |
+| `missed_tx` | [hash64]? | | `T/transactions.rs:357-359` |
+| `archived` | [ArchivedTx] (§1.7)? | full form only: mined, the archival good discarded with its shard; never under `prune` (3.64) | `T/transactions.rs:360-364` |
+| `unavailable_tx` | [hash64]? | not in the chain, asked while the pool is retired | `T/transactions.rs:365-375` |
+
+Each requested id lands in exactly one of the four lists.
 
 #### 2.37 `/get_alt_blocks_hashes`
 
@@ -1231,9 +1252,10 @@ The reply is tagged and has **no `status`**.
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `verdict` | string enum | `accepted` / `already_in_pool` / `already_in_chain` / `rejected` | `T/lib.rs:165-206` |
-| `height` | u64 | `already_in_chain` only | `T/lib.rs:195-198` |
-| `cause` | string enum | `rejected` only: `malformed`, `fee_too_low`, `double_spend_conflict`, `stale_root`, `reference_too_recent`, `reference_not_found`, `join_market_unsupported`; `unrecognized` is only the client's `#[serde(other)]` decode fallback for an unknown value; the daemon never sends it | `T/lib.rs:202-205,218-266` |
+| `verdict` | string enum | `accepted` / `already_in_pool` / `already_in_chain` / `rejected` | `T/lib.rs:189-244` |
+| `relay` | string enum | `already_in_pool` only, required: `held` / `held_overdue` / `published` / `untracked`. The daemon judges `held_overdue` when the state is read, on its own clock. A missing origin row is `untracked` | `T/lib.rs` `PoolRelay` |
+| `height` | u64 | `already_in_chain` only | `T/lib.rs:227-230` |
+| `cause` | string enum | `rejected` only: `malformed`, `fee_too_low`, `double_spend_conflict`, `stale_root`, `reference_too_recent`, `reference_not_found`, `consensus_rule` (3.63; its `row` names the consensus row, `"CEN-J15"`); `join_market_unsupported` left the set at 3.63; `unrecognized` is only the client's `#[serde(other)]` decode fallback for an unknown value; the daemon never sends it | `T/lib.rs:258-305` |
 
 A request error is HTTP 400 plain text. An internal fault is HTTP 500 plain text (`D/handlers/submit.rs:29-94`).
 
@@ -1298,12 +1320,13 @@ Same reply as §2.15.
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `heights` | uint64 array? | omitted when empty | `T/bin_commands.rs:164-198` |
+| `heights` | uint64 array? | omitted when empty | `T/bin_commands.rs:165,183-185,201-205` |
+| `prune` | bool? | omitted when false; **selects the form** of every listed body (§1.12 `BlockTx`): set, skeletons; clear, whole bodies with a discarded one `archived` in its slot, and the height does not fail for it (3.64, SB-Q2) | `T/bin_commands.rs:166-171,186-188,206-210` |
 
 | key | wire type | notes | source |
 |---|---|---|---|
-| `status` | string (bytes) | | `T/bin_commands.rs:241` |
-| `blocks` | [section `{block, txs?}`]? | BlockEntry (§1.12) | `T/bin_commands.rs:242-253` |
+| `status` | string (bytes) | | `T/bin_commands.rs:373` |
+| `blocks` | [section `{block, txs?}`]? | BlockEntry (§1.12) | `T/bin_commands.rs:374-385` |
 
 #### 2.45 `/get_o_indexes.bin`
 
@@ -1328,7 +1351,7 @@ Same reply as §2.15.
 | attribute | value |
 |---|---|
 | transport | REST |
-| owner | C++ (hand-built JSON; `D/handlers/json.rs:598` → `S:786-789` → `src/p2p/net_node.inl:772-826`) |
+| owner | Rust since the p2p remnant cutover (PR #1272, 2026-11-05): `D/handlers/json.rs:440` → `facts.stem_tallies()` at `rust/shekyl-node/src/p2p_facts.rs:105` → `project_stem_tallies` at `:218`, the same JSON the C++ built (was `D/handlers/json.rs:598` → `S:786-789` → lines 545 to 599 of `src/p2p/net_node.inl` at `e8838b0095`) |
 | visibility | **admin** |
 | aliases | none |
 | params | none |
@@ -1343,9 +1366,9 @@ The reply has **no `status`**.
 | `floor[].floor` | u32 | **same key as its parent array** | `net_node.inl:810-811` |
 | `floor[].below` | bool | | `net_node.inl:812-813` |
 | `tallies` | [object] | per peer | `net_node.inl:816-822` |
-| `tallies[].peer` | hexstr | the peer id's 16 bytes, so 32 hex chars (`levin_notify.h:185`) | `src/cryptonote_protocol/levin_notify.cpp:1796-1801` |
+| `tallies[].peer` | hexstr | the peer id's 16 bytes, so 32 hex chars | `rust/shekyl-node/src/p2p_facts.rs:237` (was lines 1796 to 1801 of `src/cryptonote_protocol/levin_notify.cpp` at `e8838b0095`) |
 | `tallies[].connector` | string | `"unnamed"` if unknown | `levin_notify.cpp:1802-1806` |
-| `tallies[].propagated` | u64 | count | `levin_notify.cpp:1807-1808`, `src/cryptonote_protocol/levin_notify.h:186` |
+| `tallies[].propagated` | u64 | count | `rust/shekyl-node/src/p2p_facts.rs:239` (was `levin_notify.cpp` lines 1807 to 1808 and line 186 of `src/cryptonote_protocol/levin_notify.h` at `e8838b0095`) |
 | `tallies[].silent` | u64 | count | `levin_notify.cpp:1809-1810`, `levin_notify.h:187` |
 | `tallies[].distinct_sources` | u64 | count | `levin_notify.cpp:1811-1812`, `levin_notify.h:188` |
 
@@ -1515,10 +1538,10 @@ The reply has **no `status`**.
 
 | family | instances |
 |---|---|
-| `_as_hex` | `TxEntry.as_hex`, `pruned_as_hex`, `prunable_as_hex` |
-| `as_json` / `json` / `_json` (embedded JSON text in a string) | `TxEntry.as_json`, `get_block.json`, `tx_info.tx_json` |
+| `_as_hex` | `TxEntry.as_hex`, `pruned_as_hex` (`prunable_as_hex` left at 3.64) |
+| `as_json` / `json` / `_json` (embedded JSON text in a string) | `get_block.json`, `tx_info.tx_json` (`TxEntry.as_json` left at 3.64) |
 | `blob` / `_blob` (hex on JSON, raw bytes on `.bin`) | `get_block.blob`; `tx_blob` (in `/submit_transaction` and `tx_info`); `block_blob` (`calc_pow`); `blocktemplate_blob`; `blockhashing_blob`. On `.bin`: `block`, `txs`, and `txid` (raw 32 bytes), with no suffix at all |
-| `_hash` / `_id` / `_id_hash` (hash64) | `prev_hash`, `miner_tx_hash`, `pow_hash`, `prunable_hash`, `genesis_hash`, `top_block_hash`, `shard_hash`, `seed_hash`, `next_seed_hash`, `id_hash`, `max_used_block_id_hash`, `last_failed_id_hash`, `block_id`, `prev_id`, `p_id`, `p_canonical_id`, `main_chain_parent_block` (no suffix), `block_hash` |
+| `_hash` / `_id` / `_id_hash` (hash64) | `prev_hash`, `miner_tx_hash`, `pow_hash`, `prunable_hash`, `pqc_auth_hash` (nullable), `genesis_hash`, `top_block_hash`, `shard_hash`, `seed_hash`, `next_seed_hash`, `id_hash`, `max_used_block_id_hash`, `last_failed_id_hash`, `block_id`, `prev_id`, `p_id`, `p_canonical_id`, `main_chain_parent_block` (no suffix), `block_hash` |
 | `wide_` + `_top64` (the 128-bit triple) | `wide_difficulty` / `difficulty_top64`, `wide_cumulative_difficulty` / `cumulative_difficulty_top64`, `wide_emission_amount` / `emission_amount_top64`, `wide_fee_amount` / `fee_amount_top64`. `get_info` carries `wide_*` **alone**, typed `HexU128`, with no low-64 or top-64 siblings |
 | `_atomic` | `budget_atomic`, `bonded_total_atomic`, `expected_profit_atomic`. Other atomic amounts have **no suffix**: `reward`, `expected_reward`, `block_reward`, `fee`, `fee_total`, `emission_amount`, `fee_amount`, `already_generated_coins`, `total_burned` |
 | `_milli` / `_micro` / `_pct` | `sigma_work_milli`, `join_scarcity_micro`, `burn_pct`, `histo_98pc` |
@@ -1530,12 +1553,12 @@ The reply has **no `status`**.
 
 ### 3.2 Booleans that select a representation or a policy
 
-- **`decode_as_json`, `prune`, `split`** (`/get_transactions`) choose which of `as_hex` / `pruned_as_hex` / `prunable_as_hex` / `as_json` are filled. All four keys are always emitted, possibly `""`.
+- **`prune`** (`/get_transactions`, `/get_blocks_by_height.bin`) chooses the form of every body: the skeleton, or the whole body with a discarded one `archived` (3.64, SB-Q2). On `/get_transactions` both `as_hex` and `pruned_as_hex` are always emitted and exactly one is filled; `decode_as_json` and `split` left at 3.64.
 - **`fill_pow_hash`** has two incompatible restricted-listener policies for one key:
   - `get_block` and `get_block_header_by_height` **blank it silently**. The reply is `pow_hash: ""` with status OK (`D/handlers/json_rpc.rs:183`).
   - `get_last_block_header`, `get_block_header_by_hash` and `get_block_headers_range` **refuse with -19** (`D/methods.rs:823`).
 - **`public_only`** defaults to `true`, which is the one inverted default. **`include_blocked`** and **`bad_blocks`** are filters. **`visible`** toggles a log setting.
-- **`pruned`** (in the reply) is omitted when false, but `in_pool` is always present. **`in_pool`** selects which of the six arm keys exist.
+- **`in_pool`** is always present and selects which of the six arm keys exist (`pruned` left the reply at 3.64: the request's `prune` says).
 - **`offline`** in `get_info` decides whether `has_peers` and the connection counts are present. **`p2p`** is a two-value string that says the same thing as `offline` again (`T/info.rs:691-695`).
 
 ### 3.3 Positional (array) forms
@@ -1602,7 +1625,7 @@ The reply has **no `status`**.
 
 ### 3.8 Surface notes
 
-- `inject_archival_serve_credit` is served on the restricted listener. It is gated only by nettype in the handler, not by `RESTRICTED_METHODS`.
+- `inject_archival_serve_credit` is host-only and an armed lever in the method table (`T/methods.rs:135`), and its handler gates it on nettype as well.
 - `get_block_template`, `get_miner_data`, `submit_block` and `get_txpool_backlog` are also served on both listeners.
 - C++ JSON-RPC aliases: `getblocktemplate` and `submitblock`. Rust aliases: `getblockcount`, `on_getblockhash`, `getblockheaderbyheight`, `getblock`, `getlastblockheader`, `getblockheaderbyhash`, `getblockheadersrange`. REST aliases: `/getheight`, `/gettransactions`, `/getinfo`, `/getblocks_by_height.bin`.
 

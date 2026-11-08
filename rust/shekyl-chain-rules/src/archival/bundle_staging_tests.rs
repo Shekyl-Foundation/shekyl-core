@@ -6,8 +6,8 @@
 //! The bundle rows' census registration, and the falsifier that the
 //! verifier is still staged.
 //!
-//! Sibling of `bundle_tests` and `bundle_section_tests`. Every test names
-//! the edit that turns it red.
+//! Sibling of `bundle_tests`, `bundle_section_tests`, and
+//! `bundle_fill_tests`. Every test names the edit that turns it red.
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +23,7 @@ fn reference_of(count: u32) -> BundleRef {
             h: BlockHeight::from_raw(100),
             seed: [0x5E; 32],
             passes: PassBitmap::from_passes(count, []).expect("no passes"),
+            support: PassBitmap::none(),
         },
         [0xAB; 32],
     )
@@ -42,10 +43,14 @@ fn every_refusal_names_its_census_row() {
     assert_eq!(
         SectionRefused::OverBudget {
             charge: SectionCharge::of(std::slice::from_ref(&reference_of(3))),
-            budget: 2
+            budget: shekyl_archival_retention::SectionBudget::from_draws(2)
         }
         .row(),
         CenRow::J30
+    );
+    assert_eq!(
+        SectionRefused::TooManyReferences { found: usize::MAX }.row(),
+        CenRow::J29
     );
     assert_eq!(
         SectionRefused::OutsideWindow { position: 0 }.row(),
@@ -108,10 +113,17 @@ fn the_bundle_rows_are_pending_until_the_cutover() {
 /// - `harness.rs` and `harness/`: the fixture that implements
 ///   `BundleView` for these tests — `cfg(test)` or the `harness` feature,
 ///   never on the production surface.
-/// - `archival/bundle.rs` and `archival/bundle_section.rs`: the module
-///   under test. The section file is exempt only while it still holds
-///   the section checker; the test asserts that, so deleting the file or
-///   emptying it is red.
+/// - `archival/bundle.rs`, `archival/bundle_targets.rs`,
+///   `archival/bundle_admission.rs`, `archival/bundle_records.rs`,
+///   `archival/bundle_section.rs` and `archival/support_carry.rs`: the
+///   module under test. The targets file is exempt only while it still
+///   holds `draw_targets`, the admission file only while it still holds
+///   `judge_bundles`, the section file only while it still holds the
+///   section checker, the record file only while it still holds the
+///   shared pass check, and the carry file only while it still holds
+///   `seats_with_carry` (`SO-D12` S2: the carry joins the transition with
+///   admission); the test asserts each, so deleting a file or emptying it
+///   is red.
 /// - `census.rs`: the registry's comment on the nine `pending` rows names
 ///   the functions as the rows' refusals. It is held to a narrower check
 ///   instead: no `implemented`, `enforced_at` or `by_construction` entry
@@ -129,8 +141,10 @@ fn the_bundle_rows_are_pending_until_the_cutover() {
 /// module's banner, the census rows' status and the specification's §2
 /// moving with it. Does not cover a caller outside this crate: the store
 /// and the ingest driver are other crates, and `SO-D12`'s cutover is where
-/// they change. The cutover deletes this test in the change that wires
-/// the rule.
+/// they change. The bundle queue (increment 4c) is such a caller, live in
+/// the ingest connector; it judges against the tip and is not the connect
+/// path, so it does not move this test. The cutover deletes this test in
+/// the change that wires the rule.
 #[test]
 fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -141,6 +155,11 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
         "open_body",
         "open_reference",
         "BundleView",
+        "judge_bundles",
+        "draw_targets",
+        "fill_section",
+        "seats_with_carry",
+        "SupportCarry",
     ];
 
     // Rule 47: the connect path's files, by name, each with the identifier
@@ -177,8 +196,36 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
         "archival/bundle_section.rs no longer holds the section checker"
     );
     assert!(
+        section_text.contains("pub fn fill_section<"),
+        "archival/bundle_section.rs no longer holds the template's section"
+    );
+    assert!(
         section_text.contains("fn inside_window"),
         "archival/bundle_section.rs no longer holds the window the verifier shares"
+    );
+    let records = src.join("archival").join("bundle_records.rs");
+    let records_text = std::fs::read_to_string(&records).expect("archival/bundle_records.rs");
+    assert!(
+        records_text.contains("fn judge_passes"),
+        "archival/bundle_records.rs no longer holds the shared pass check"
+    );
+    let targets = src.join("archival").join("bundle_targets.rs");
+    let targets_text = std::fs::read_to_string(&targets).expect("archival/bundle_targets.rs");
+    assert!(
+        targets_text.contains("pub fn draw_targets"),
+        "archival/bundle_targets.rs no longer holds the draw derivation"
+    );
+    let carry = src.join("archival").join("support_carry.rs");
+    let carry_text = std::fs::read_to_string(&carry).expect("archival/support_carry.rs");
+    assert!(
+        carry_text.contains("pub fn seats_with_carry"),
+        "archival/support_carry.rs no longer holds the support carry"
+    );
+    let admission = src.join("archival").join("bundle_admission.rs");
+    let admission_text = std::fs::read_to_string(&admission).expect("archival/bundle_admission.rs");
+    assert!(
+        admission_text.contains("pub fn judge_bundles"),
+        "archival/bundle_admission.rs no longer holds the section admission"
     );
 
     let exporting = [src.join("archival").join("mod.rs"), src.join("lib.rs")];
@@ -206,6 +253,10 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
             .iter()
             .any(|entry| line.contains(entry))
     };
+    assert!(
+        census.contains("rules::bundle_admission::J29"),
+        "the staged rule types are named on the pending rows"
+    );
     for line in census.lines().filter(binds) {
         assert!(
             !line.contains("bundle"),
@@ -221,7 +272,11 @@ fn connect_path_sources(src: &Path) -> Vec<PathBuf> {
         src.join("harness.rs"),
         src.join("census.rs"),
         src.join("archival").join("bundle.rs"),
+        src.join("archival").join("bundle_targets.rs"),
+        src.join("archival").join("bundle_admission.rs"),
+        src.join("archival").join("bundle_records.rs"),
         src.join("archival").join("bundle_section.rs"),
+        src.join("archival").join("support_carry.rs"),
     ];
     let exempt_dir = src.join("harness");
     let mut files = Vec::new();
@@ -279,4 +334,55 @@ fn without_staged_export(source: &str, names: &[&str]) -> String {
     );
     let (start, end) = spans[0];
     format!("{}{}", &source[..start], &source[end..])
+}
+
+/// Each staged type's row is the verifier's name for that refusal.
+/// Constructing the types is what keeps them live while unbound.
+#[test]
+fn the_staged_rule_types_name_the_verifier_rows() {
+    use crate::census::CenRow;
+    use crate::rules::bundle_admission::{J29, J30, J31, J32, J33, J34, J35, J36, J37};
+    use crate::rules::Rule;
+    use shekyl_archival_retention::SectionBudget;
+
+    let _ = (J29, J30, J31, J32, J33, J34, J35, J36, J37);
+    let charge = SectionCharge::of(&[]);
+    let budget = SectionBudget::from_draws(0);
+    let section = [
+        (SectionRefused::Malformed { position: 0 }.row(), J29::ROW),
+        (SectionRefused::OutOfOrder { position: 1 }.row(), J29::ROW),
+        (
+            SectionRefused::TooManyReferences { found: usize::MAX }.row(),
+            J29::ROW,
+        ),
+        (SectionRefused::Root.row(), J29::ROW),
+        (
+            SectionRefused::OverBudget { charge, budget }.row(),
+            J30::ROW,
+        ),
+        (
+            SectionRefused::OutsideWindow { position: 0 }.row(),
+            J31::ROW,
+        ),
+    ];
+    for (named, row) in section {
+        assert_eq!(named, row);
+    }
+    let bundles = [
+        (BundleInvalid::OutsideWindow.row(), J31::ROW),
+        (BundleInvalid::AlreadyRevealed.row(), J31::ROW),
+        (BundleInvalid::BodyMalformed.row(), J32::ROW),
+        (BundleInvalid::Count.row(), J32::ROW),
+        (BundleInvalid::RecordCount.row(), J32::ROW),
+        (BundleInvalid::Commitment.row(), J33::ROW),
+        (BundleInvalid::WitnessSignature.row(), J34::ROW),
+        (BundleInvalid::Attempt { draw: 0 }.row(), J35::ROW),
+        (BundleInvalid::Anchor { draw: 0 }.row(), J36::ROW),
+        (BundleInvalid::Receipt { draw: 0 }.row(), J37::ROW),
+    ];
+    for (named, row) in bundles {
+        assert_eq!(named, row);
+    }
+    assert_eq!(J29::ROW, CenRow::J29);
+    assert_eq!(J37::ROW, CenRow::J37);
 }

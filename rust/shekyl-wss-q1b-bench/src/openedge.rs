@@ -13,7 +13,7 @@
 //! fetch path refuted the model before it was built.
 //!
 //! [`shekyl_engine_core::DaemonClient::fetch_scannable_block`] resolves to
-//! `engine::block_fetch::fetch_scannable_block_with_form`, which is **strictly
+//! `engine::block_fetch::default_fetch_scannable_block`, which is **strictly
 //! per-block** and issues, sequentially and with no pipelining:
 //!
 //! 1. `get_block` (JSON-RPC; the block arrives **hex-encoded**),

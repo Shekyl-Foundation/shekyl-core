@@ -61,6 +61,7 @@ fn j4_refuses_a_credit_for_a_persona_with_no_record_at_the_pool_slot() {
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 None,
                 FormAttempt::FIRST,
             )),
@@ -87,12 +88,7 @@ fn j4_refuses_the_same_credit_listed_before_the_fold_reaches_it() {
             candidate_on(&chain, vec![anchored_on(&chain, serve_credit_only(P))]),
         );
         assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
-            )),
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
             CenRow::J4,
             Locus::Input {
                 slot: TxSlot::Listed(0),
@@ -270,6 +266,7 @@ fn j13_a_join_signs_with_the_identity_key() {
                     TxSlot::Lone,
                     &view,
                     &RuleSet::GENESIS,
+                    &shekyl_network::HARNESS_NETWORK_ID,
                     None,
                     FormAttempt::FIRST,
                 )),
@@ -288,6 +285,7 @@ fn j13_a_join_signs_with_the_identity_key() {
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 None,
                 FormAttempt::FIRST,
             )),
@@ -362,6 +360,7 @@ fn j14_refuses_a_join_whose_statics_fail_the_verify() {
                     TxSlot::Lone,
                     &view,
                     &RuleSet::GENESIS,
+                    &shekyl_network::HARNESS_NETWORK_ID,
                     None,
                     FormAttempt::FIRST,
                 )),
@@ -385,12 +384,7 @@ fn j14_refuses_the_same_under_bonded_join_listed() {
         });
         let formed = formed_on(&chain, candidate_on(&chain, vec![join]));
         assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
-            )),
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
             CenRow::J14,
             Locus::Input {
                 slot: TxSlot::Listed(0),
@@ -417,12 +411,7 @@ fn j13_refuses_the_same_mis_keyed_join_listed() {
         let join = signed_as(anchored_on(&chain, join_market(BOND_KI, WHO)), &stranger);
         let formed = formed_on(&chain, candidate_on(&chain, vec![join]));
         assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
-            )),
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
             CenRow::J13,
             Locus::Input {
                 slot: TxSlot::Listed(0),
@@ -533,6 +522,7 @@ fn j15_admits_a_compact_join_of_a_closed_final_priced_shard() {
                     TxSlot::Lone,
                     &view,
                     &RuleSet::GENESIS,
+                    &shekyl_network::HARNESS_NETWORK_ID,
                     None,
                     FormAttempt::FIRST,
                 )),
@@ -620,6 +610,7 @@ fn j15_refuses_a_compact_join_one_operand_from_admissible() {
                     TxSlot::Lone,
                     &view,
                     &RuleSet::GENESIS,
+                    &shekyl_network::HARNESS_NETWORK_ID,
                     None,
                     FormAttempt::FIRST,
                 )),
@@ -647,12 +638,7 @@ fn j15_refuses_the_same_unpriced_join_listed() {
         let join = compact_join(&chain, 0);
         let formed = formed_on(&chain, candidate_on(&chain, vec![join]));
         assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
-            )),
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
             CenRow::J15,
             Locus::Input {
                 slot: TxSlot::Listed(0),
@@ -705,6 +691,7 @@ fn j16_a_release_with_no_record_is_refused_on_the_missing_record() {
                     TxSlot::Lone,
                     &view,
                     &RuleSet::GENESIS,
+                    &shekyl_network::HARNESS_NETWORK_ID,
                     None,
                     FormAttempt::FIRST,
                 )),
@@ -747,6 +734,7 @@ fn j18_a_reinstate_with_no_record_is_refused_on_the_missing_record() {
                     TxSlot::Lone,
                     &view,
                     &RuleSet::GENESIS,
+                    &shekyl_network::HARNESS_NETWORK_ID,
                     None,
                     FormAttempt::FIRST,
                 )),
@@ -780,6 +768,7 @@ fn an_unnamed_kind_is_l7_in_the_sequence() {
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 None,
                 FormAttempt::FIRST,
             )),

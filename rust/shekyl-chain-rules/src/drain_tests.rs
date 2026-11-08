@@ -207,6 +207,52 @@ fn a_bad_leaf_commitment_names_that_point() {
     );
 }
 
+/// CEN-L11's commitment arm: a recorded output whose amount commitment is
+/// not a point the leaf builder can encode halts the drain, naming that
+/// point, rather than drop the output or mint a root over it. A block
+/// carrying such an output never connects: CEN-H17 refuses a commitment that
+/// is not a canonical prime-order point at the transaction
+/// (`h17_trivial_or_invalid_or_miscounted_masks_are_refused`). So the only
+/// way one reaches the drain is a store that no longer conforms, and the
+/// verdict halts. The bytes are the C++ case's `0xCC` fill.
+///
+/// Supersedes `archival_substrate_lmdb`'s
+/// `cen_l11_refuses_commitment_the_leaf_builder_cannot_encode` (at
+/// `eb5be7767`), with the admission half held by H17.
+///
+/// Red edit: let `construct_leaf` read an undecodable commitment as zero
+/// (`unwrap_or([0; 32])` in place of `ok_or(LeafInput::Commitment)?` in
+/// `shekyl-fcmp`'s `tree.rs`) — the drain grows the tree over it.
+#[test]
+fn a_bad_amount_commitment_names_that_point() {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as G;
+    use curve25519_dalek::scalar::Scalar;
+    let point = |k: u64| (Scalar::from(k) * G).compress().to_bytes();
+    let source = LeafSource {
+        output: GlobalOutputIndex::from_raw(5),
+        key: point(1),
+        commitment: [0xCC; 32],
+        pqc_leaf_commitment: point(3),
+    };
+    let view = OutputsOnly(move |height| {
+        if height == h(90) {
+            AtHeight::Recorded(BlockOutputs {
+                coinbase: Vec::new(),
+                listed: vec![source],
+            })
+        } else {
+            AtHeight::Recorded(BlockOutputs::default())
+        }
+    });
+    assert_eq!(
+        drain(&view, h(100), &RuleSet::GENESIS),
+        Err(ViewRead::Corrupt(Corrupt::LeafNotConstructible {
+            output: GlobalOutputIndex::from_raw(5),
+            input: shekyl_fcmp::LeafInput::Commitment,
+        }))
+    );
+}
+
 #[test]
 fn real_points_grow_the_tree_from_empty() {
     use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as G;

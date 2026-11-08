@@ -104,7 +104,9 @@ class NodeMetrics:
     curve_tree_root: str = ""
     curve_tree_depth: int = 0
     leaf_count: int = 0
-    tx_pool_size: int = 0
+    # None when the node reports its pool retired (`pool_retired`): no count,
+    # which is not an empty pool.
+    tx_pool_size: int | None = 0
     difficulty: int = 0
     block_validation_times_ms: list[float] = field(default_factory=list)
     error: str | None = None
@@ -163,7 +165,14 @@ def collect_node_metrics(daemon: DaemonRPC) -> NodeMetrics:
         # The entries the node has broadcast: one quantity whoever asks, so
         # it compares across nodes. Required: a reply without it is not a
         # get_info reply, and reading that as an empty pool would hide it.
+        # A node that retired its pool (its pool file faulted) says so and
+        # answers null: kept as None, never read as zero.
+        retired = info.get("pool_retired", False)
         m.tx_pool_size = info["tx_pool_size"]
+        if (m.tx_pool_size is None) != retired:
+            raise ValueError(
+                f"tx_pool_size {m.tx_pool_size!r} disagrees with pool_retired {retired!r}"
+            )
 
         tree = daemon.get_curve_tree_info()
         m.curve_tree_root = tree.get("root", "")
@@ -253,7 +262,7 @@ def print_status_table(metrics: list[NodeMetrics]) -> None:
             m.height,
             m.leaf_count,
             root_short,
-            m.tx_pool_size,
+            "retired" if m.tx_pool_size is None else m.tx_pool_size,
             status,
         ])
 

@@ -103,7 +103,6 @@ pub(crate) fn anchor_ledger_block(
     anchor: BlockHeight,
     tip_hash: BlockHash,
 ) -> Result<(), RefreshError> {
-    let tip_hash = tip_hash.to_bytes();
     // The ledger already being past the anchor height is a satisfied
     // anchor with nothing to do. This must be checked *before* the
     // empty-transfer precondition: a concurrent refresh may have advanced
@@ -294,10 +293,10 @@ mod tests {
         anchor_ledger_block(&mut ledger, ordinal(999), BlockHash::from_bytes([0xAB; 32]))
             .expect("anchor");
         assert_eq!(ledger.height(), BlockHeight::from_raw(999));
-        assert_eq!(ledger.tip.tip_hash, Some([0xAB; 32]));
+        assert_eq!(ledger.tip.tip_hash, Some(BlockHash::from_bytes([0xAB; 32])));
         assert_eq!(
             ledger.block_hash_at(BlockHeight::from_raw(999)),
-            Some(&[0xAB; 32])
+            Some(&BlockHash::from_bytes([0xAB; 32]))
         );
     }
 
@@ -312,10 +311,10 @@ mod tests {
         anchor_ledger_block(&mut ledger, ordinal(999), BlockHash::from_bytes([0xCD; 32]))
             .expect("re-anchor overwrites");
         assert_eq!(ledger.height(), BlockHeight::from_raw(999));
-        assert_eq!(ledger.tip.tip_hash, Some([0xCD; 32]));
+        assert_eq!(ledger.tip.tip_hash, Some(BlockHash::from_bytes([0xCD; 32])));
         assert_eq!(
             ledger.block_hash_at(BlockHeight::from_raw(999)),
-            Some(&[0xCD; 32])
+            Some(&BlockHash::from_bytes([0xCD; 32]))
         );
         // No duplicate reorg-window entry for the anchor height.
         assert_eq!(

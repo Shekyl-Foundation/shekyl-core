@@ -44,7 +44,7 @@ use shekyl_engine_state::{
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 /// Mirrors `shekyl-engine-state::ledger_block::tests::sample_transfer`
 /// — the canonical "lightweight transfer for tests" shape. Reproduced
@@ -87,7 +87,7 @@ fn sample_transfer(seed: u64) -> TransferDetails {
         }),
         output_handle: Some(derive_output_handle(
             &[lo.wrapping_add(3); 32],
-            &tx_hash,
+            &TxHash::from_bytes(tx_hash),
             internal_output_index,
         )),
         eligible_height: shekyl_types::BlockHeight::from_raw(100) + SPENDABLE_AGE,
@@ -107,10 +107,18 @@ fn build_ledger(n: usize) -> LedgerBlock {
     for i in 0..n {
         transfers.push(sample_transfer(i as u64));
     }
-    let tip = BlockchainTip::new(BlockHeight::from_raw(1_000_000), [0xAA; 32]);
+    let tip = BlockchainTip::new(
+        BlockHeight::from_raw(1_000_000),
+        BlockHash::from_bytes([0xAA; 32]),
+    );
     let reorg_blocks = ReorgBlocks {
         blocks: (999_990..=1_000_000)
-            .map(|h| (BlockHeight::from_raw(h), [(h & 0xff) as u8; 32]))
+            .map(|h| {
+                (
+                    BlockHeight::from_raw(h),
+                    BlockHash::from_bytes([(h & 0xff) as u8; 32]),
+                )
+            })
             .collect(),
     };
     LedgerBlock::new(transfers, tip, reorg_blocks)

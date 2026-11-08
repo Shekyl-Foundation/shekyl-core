@@ -336,7 +336,64 @@ use super::{Canonical, CodecError};
 ///   every connect now writes the row, and the boundary batch retires
 ///   below the draw-rows floor. A `29` file is refused at open. Rebuild
 ///   from the block corpus, as at every bump.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(30);
+/// - `31` — the support stream (`ARCHIVAL_SUPPORT_DRAW.md` §5).
+///   `archival_support_unissued` (`(persona, epoch) → support_count`) and
+///   `archival_support_block` (`height → support_count`) are born
+///   Rust-only, appended at ordinals 46 and 47, and with them
+///   `archival_support_issued` (`(epoch, persona, height, draw) →
+///   support_issued`) and `archival_support_settlement`
+///   (`(persona, epoch) → settlement_row`) at ordinals 48 and 49. A `30`
+///   file lacks all four, so a support settlement would read a row the
+///   file cannot hold; the bump refuses it at open. `support_count.snap`
+///   and `support_issued.snap` are new and `tables.snap` gains the four
+///   rows. Rebuild from the block corpus, as at every bump.
+/// - `32` — the `following_degraded` latch (`DRS_X_STORE_FLIP.md` DX-Q2
+///   item 8; `P2P_3_CHAIN_SYNC_BRIEF.md` §A item 7). One engine-local
+///   `properties` cell whose value is the evidence (`following_degraded`:
+///   the fork height, the heavier tip, its work). No table changes and no
+///   row moves; `properties.snap` gains the cell and `following_degraded.snap`
+///   is new. A `31` binary does not know the cell, so the bump refuses a
+///   `32` file under it. Rebuild from the block corpus, as at every bump.
+/// - `33` — the bundle queue and the body store
+///   (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5, `SO-D12` increment 4c).
+///   `archival_bundle_queue` (`h → queued_bundle`) and
+///   `archival_bundle_body` (`prunable_hash → queued_body`) are born
+///   Rust-only, appended at ordinals 50 and 51. A `32` file lacks both, and
+///   a `32` binary would open a `33` file without reconciling a queue it
+///   does not know, so the bump refuses either at open. `queued_bundle.snap`
+///   and `queued_body.snap` are new and `tables.snap` gains the two rows.
+///   Rebuild from the block corpus, as at every bump.
+/// - `34` — two archival families for kinds that do not exist leave
+///   (`DAEMON_REDB_STORE.md` §7; rule 23): `archival_bond_unbond_log`
+///   (`Unbond` is `Release`'s old name) and `archival_bond_holdings_update_log`
+///   (`HoldingsUpdate` REJECTED 2026-09-20). Neither had a table in this
+///   store (`NOT_PORTED`), but each held a bit in [`FamilySet`], so every
+///   family after them moves down two bits and a stored apply-policy or
+///   provenance cell would name the wrong families; `family_set.snap`
+///   re-pins. In the same bump the catalogue drops its two dead tables,
+///   `txs` (never written, DRS-W4) and `hf_starting_heights` (never
+///   written, DRS-W5), so every ordinal from `txs`' (3) on moves and an
+///   undo-log entry written under `33` would name the wrong
+///   table; and `hf_versions` is renamed `rule_set_in_force`, what its
+///   rows are (CEN-B3's belt), so a `33` binary would not find it by name.
+///   With no table left `Unshaped`, every catalogued table is sealed.
+///   `tables.snap` re-pins. No row's bytes move. A `33` file is refused at
+///   open. Rebuild from the block corpus, as at every bump.
+///
+/// - `35` — the support schedule joins the connect path (`SO-D12` 4b §5.1
+///   item 3; S1, ruled 2026-11-01). `archival_support_block`'s value goes
+///   from a `support_count` (four bytes) to the block's `support_seats`
+///   (`count_le4 ‖ count × persona[32]`, strictly increasing), so a `34`
+///   row does not decode as one; `support_seats.snap` is new and
+///   `tables.snap` re-pins the row. In the same bump the epoch snapshot
+///   gains its support members and archive width under the
+///   `shekyl/archival-drawable-epoch-v2` digest, so every
+///   `archival_drawable_digest` row a `34` binary wrote is a `-v1` digest
+///   the settlement compare would refuse. A `34` file is refused at open.
+///   Rebuild from the block corpus, as at every bump.
+///
+/// [`FamilySet`]: crate::family_set::FamilySet
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(35);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -393,10 +450,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(30));
-        assert_eq!(SCHEMA_VERSION.encode(), [30, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(35));
+        assert_eq!(SCHEMA_VERSION.encode(), [35, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[30, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[35, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

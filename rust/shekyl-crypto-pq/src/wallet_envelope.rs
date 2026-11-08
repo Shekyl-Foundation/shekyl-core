@@ -18,7 +18,7 @@
 //!   offset  size  contents
 //!   ------  ----  --------
 //!   [0..8)   8   magic = "SHEKYLWT"                       ┐
-//!   [8..9)   1   file_version = 0x01                      │ AAD, every AEAD
+//!   [8..9)   1   file_version = 0x02                      │ AAD, every AEAD
 //!   [9..10)  1   kdf_algo = 0x01 (Argon2id)               │       ┐
 //!   [10..11) 1   kdf_m_log2                               │       │ AAD,
 //!   [11..12) 1   kdf_t                                    │       │ wrap AEAD
@@ -32,19 +32,18 @@
 //!                                   aad      = bytes [0..29)
 //!   [102..126) 24 region1_nonce
 //!   [126..N)   _  region1_ct_with_tag = AEAD(plaintext, tag)  under wrap_key_region_1
-//!                                       wrap_key_region_1 = HKDF(file_kek, "shekyl-region1-aead-v1")
+//!                                       wrap_key_region_1 = HKDF(file_kek, "shekyl-region1-aead-v2")
 //!                                       nonce = region1_nonce
 //!                                       aad   = bytes [0..9)
 //!
-//!   region 1 plaintext (length = 82 + cap_content_len):
+//!   region 1 plaintext (length = 81 + cap_content_len):
 //!     [0..1)     mode_byte
-//!     [1..2)     network
-//!     [2..3)     seed_format
-//!     [3..68)    expected_classical_address[65]
-//!     [68..70)   cap_content_len (u16 LE)
-//!     [70..70+L) cap_content
-//!     [70+L..78+L)  creation_timestamp (u64 LE)
-//!     [78+L..82+L)  restore_height_hint (u32 LE)
+//!     [1..2)     network (the network's code)
+//!     [2..67)    expected_classical_address[65]
+//!     [67..69)   cap_content_len (u16 LE)
+//!     [69..69+L) cap_content (FULL: the wallet's 32-byte seed)
+//!     [69+L..77+L)  creation_timestamp (u64 LE)
+//!     [77+L..81+L)  restore_height_hint (u32 LE)
 //! ```
 //!
 //! ## `<name>.wallet`
@@ -60,7 +59,7 @@
 //!   [8..9)   1   state_version = 0x01                      │ AAD
 //!   [9..33)  24  region2_nonce (fresh per save)
 //!   [33..M)  _   region2_ct_with_tag = AEAD(state, tag)    under wrap_key_region_2
-//!                                       wrap_key_region_2 = HKDF(file_kek, "shekyl-region2-aead-v1" || addr)
+//!                                       wrap_key_region_2 = HKDF(file_kek, "shekyl-region2-aead-v2" || addr)
 //!                                       nonce = region2_nonce
 //!                                       aad   = bytes [0..9)
 //!                                               || state_tag_of_seed_block[16]
@@ -80,7 +79,7 @@
 //!
 //! - **Stance Minimum-Leak**: AAD carries only what a reader needs before
 //!   attempting decryption (magic, version, KDF parameters). Everything else
-//!   — capability mode, network, seed format, address — is encrypted.
+//!   — capability mode, network, address — is encrypted.
 //!   Poly1305 over the ciphertext catches any tampering; no integrity is
 //!   lost by encrypting fields that are read after decrypt. See
 //!   `.cursor/rules/36-secret-locality.mdc` for the secret-material policy.
@@ -120,8 +119,12 @@ pub const KEYS_FILE_MAGIC: &[u8; 8] = b"SHEKYLWT";
 pub const STATE_FILE_MAGIC: &[u8; 8] = b"SHEKYLWS";
 
 /// Version of the file format emitted by this implementation. Bumps on any
-/// layout change; the parser refuses files whose `file_version` is greater.
-pub const WALLET_FILE_FORMAT_VERSION: u8 = 0x01;
+/// layout change; the parser refuses a file of any other version, newer
+/// or older, with a typed reason, and never reinterprets one.
+///
+/// 0x02 (`NETWORK_IDENTITY.md` NI-R7): region 1 stores the wallet's
+/// 32-byte seed and no seed format.
+pub const WALLET_FILE_FORMAT_VERSION: u8 = 0x02;
 pub const STATE_FILE_FORMAT_VERSION: u8 = 0x01;
 
 /// KDF algorithm identifier. Only Argon2id is defined; `kdf_algo` is a byte
@@ -155,10 +158,12 @@ const FILE_KEK_BYTES: usize = 32;
 /// HKDF `info` label for region 1 AEAD. Label-only (no `|| addr`) so open
 /// can derive the decrypt key before reading `addr` from ciphertext.
 /// Normative: [`docs/WALLET_FILE_FORMAT_V1.md`](../../docs/WALLET_FILE_FORMAT_V1.md) §2.6.
-pub const HKDF_INFO_REGION1_AEAD_V1: &[u8] = b"shekyl-region1-aead-v1";
+/// The suffix follows `file_version` (0x02), so a region key is never
+/// shared across file formats.
+pub const HKDF_INFO_REGION1_AEAD_V2: &[u8] = b"shekyl-region1-aead-v2";
 
 /// HKDF `info` prefix for region 2 AEAD; implementations concatenate `addr`.
-pub const HKDF_INFO_REGION2_AEAD_V1: &[u8] = b"shekyl-region2-aead-v1";
+pub const HKDF_INFO_REGION2_AEAD_V2: &[u8] = b"shekyl-region2-aead-v2";
 /// Argon2id-derived wrap_key length, matching XChaCha20-Poly1305 key size.
 const WRAP_KEY_BYTES: usize = 32;
 /// Argon2id salt length. 16 bytes is above the birthday bound for any
@@ -188,13 +193,15 @@ const OFF_REGION1_CT: usize = OFF_REGION1_NONCE + AEAD_NONCE_BYTES; // 126
 // the on-disk file).
 const R1_OFF_MODE: usize = 0;
 const R1_OFF_NETWORK: usize = 1;
-const R1_OFF_SEED_FORMAT: usize = 2;
-const R1_OFF_EXPECTED_ADDR: usize = 3;
-const R1_OFF_CAP_LEN: usize = R1_OFF_EXPECTED_ADDR + EXPECTED_CLASSICAL_ADDRESS_BYTES; // 68
-const R1_OFF_CAP: usize = R1_OFF_CAP_LEN + 2; // 70
-const R1_FIXED_HEAD_BYTES: usize = R1_OFF_CAP; // 70
+const R1_OFF_EXPECTED_ADDR: usize = 2;
+const R1_OFF_CAP_LEN: usize = R1_OFF_EXPECTED_ADDR + EXPECTED_CLASSICAL_ADDRESS_BYTES; // 67
+const R1_OFF_CAP: usize = R1_OFF_CAP_LEN + 2; // 69
+const R1_FIXED_HEAD_BYTES: usize = R1_OFF_CAP; // 69
 const R1_TRAILER_BYTES: usize = 8 + 4; // creation_timestamp + restore_height_hint
-const R1_MIN_PLAINTEXT_BYTES: usize = R1_FIXED_HEAD_BYTES + R1_TRAILER_BYTES; // 82
+const R1_MIN_PLAINTEXT_BYTES: usize = R1_FIXED_HEAD_BYTES + R1_TRAILER_BYTES; // 81
+
+/// The FULL capability's content: the wallet's seed.
+const FULL_CAP_CONTENT_BYTES: usize = crate::account::SEED_BYTES;
 
 // `.wallet` file offsets.
 const S_OFF_MAGIC: usize = 0;
@@ -225,6 +232,14 @@ pub enum WalletEnvelopeError {
 
     #[error("format version {got:#x} is newer than this build supports (max {max:#x})")]
     FormatVersionTooNew { got: u8, max: u8 },
+
+    /// A file from before the current format: refused, never
+    /// reinterpreted (`NETWORK_IDENTITY.md` NI-Q8).
+    #[error(
+        "wallet file format {got:#x} predates this build's format {current:#x} and cannot be \
+         opened; restore the wallet from its 24 seed words"
+    )]
+    FormatVersionRetired { got: u8, current: u8 },
 
     #[error("unsupported KDF algorithm {0:#x}")]
     UnsupportedKdfAlgo(u8),
@@ -302,10 +317,11 @@ impl KdfParams {
 /// 2026-09-07) — the enum shape is kept because it is the seal-side parse
 /// boundary a ratified future capability would join through.
 pub enum CapabilityContent<'a> {
-    /// FULL wallet: can spend. Contains the 64-byte master seed; everything
-    /// else (spend_sk, view_sk, ml_kem_dk) is rederived on every open via
-    /// `shekyl_account_rederive`.
-    Full { master_seed_64: &'a [u8; 64] },
+    /// FULL wallet: can spend. Contains the wallet's 32-byte seed, from
+    /// which every key is rederived on open and the 24 words are shown.
+    Full {
+        seed: &'a [u8; FULL_CAP_CONTENT_BYTES],
+    },
 }
 
 impl CapabilityContent<'_> {
@@ -317,13 +333,13 @@ impl CapabilityContent<'_> {
 
     fn serialized_len(&self) -> usize {
         match self {
-            Self::Full { .. } => 64,
+            Self::Full { .. } => FULL_CAP_CONTENT_BYTES,
         }
     }
 
     fn write_into(&self, out: &mut Vec<u8>) {
         match self {
-            Self::Full { master_seed_64 } => out.extend_from_slice(master_seed_64.as_slice()),
+            Self::Full { seed } => out.extend_from_slice(seed.as_slice()),
         }
     }
 }
@@ -346,7 +362,6 @@ pub struct KeysFileHeaderView {
 pub struct OpenedKeysFile {
     pub capability_mode: u8,
     pub network: u8,
-    pub seed_format: u8,
     pub expected_classical_address: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
     pub creation_timestamp: u64,
     pub restore_height_hint: u32,
@@ -384,7 +399,6 @@ impl std::fmt::Debug for OpenedKeysFile {
         f.debug_struct("OpenedKeysFile")
             .field("capability_mode", &self.capability_mode)
             .field("network", &self.network)
-            .field("seed_format", &self.seed_format)
             .field("expected_classical_address", &"[..65 bytes..]")
             .field("creation_timestamp", &self.creation_timestamp)
             .field("restore_height_hint", &self.restore_height_hint)
@@ -443,7 +457,7 @@ fn hkdf_expand_32(file_kek: &[u8; FILE_KEK_BYTES], info: &[u8]) -> Zeroizing<[u8
 pub fn derive_wrap_key_region_1(
     file_kek: &[u8; FILE_KEK_BYTES],
 ) -> Zeroizing<[u8; FILE_KEK_BYTES]> {
-    hkdf_expand_32(file_kek, HKDF_INFO_REGION1_AEAD_V1)
+    hkdf_expand_32(file_kek, HKDF_INFO_REGION1_AEAD_V2)
 }
 
 /// Region 2 AEAD key per WALLET_FILE_FORMAT_V1 §2.6 (`info || addr`).
@@ -452,8 +466,8 @@ pub fn derive_wrap_key_region_2(
     expected_classical_address: &[u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
 ) -> Zeroizing<[u8; FILE_KEK_BYTES]> {
     let mut info =
-        Vec::with_capacity(HKDF_INFO_REGION2_AEAD_V1.len() + EXPECTED_CLASSICAL_ADDRESS_BYTES);
-    info.extend_from_slice(HKDF_INFO_REGION2_AEAD_V1);
+        Vec::with_capacity(HKDF_INFO_REGION2_AEAD_V2.len() + EXPECTED_CLASSICAL_ADDRESS_BYTES);
+    info.extend_from_slice(HKDF_INFO_REGION2_AEAD_V2);
     info.extend_from_slice(expected_classical_address);
     hkdf_expand_32(file_kek, &info)
 }
@@ -601,6 +615,12 @@ fn parse_header_view(bytes: &[u8]) -> Result<KeysFileHeaderView, WalletEnvelopeE
             max: WALLET_FILE_FORMAT_VERSION,
         });
     }
+    if ver < WALLET_FILE_FORMAT_VERSION {
+        return Err(WalletEnvelopeError::FormatVersionRetired {
+            got: ver,
+            current: WALLET_FILE_FORMAT_VERSION,
+        });
+    }
     let algo = bytes[OFF_KDF_ALGO];
     if algo != KDF_ALGO_ARGON2ID {
         return Err(WalletEnvelopeError::UnsupportedKdfAlgo(algo));
@@ -645,7 +665,7 @@ fn write_keys_file_header(out: &mut Vec<u8>, kdf: KdfParams, wrap_salt: &[u8; WR
 fn validate_cap_content(mode: u8, cap_len: u16) -> Result<(), WalletEnvelopeError> {
     match mode {
         CAPABILITY_FULL => {
-            if usize::from(cap_len) == 64 {
+            if usize::from(cap_len) == FULL_CAP_CONTENT_BYTES {
                 Ok(())
             } else {
                 Err(WalletEnvelopeError::CapContentLenMismatch { mode, len: cap_len })
@@ -665,7 +685,6 @@ fn validate_cap_content(mode: u8, cap_len: u16) -> Result<(), WalletEnvelopeErro
 pub fn seal_keys_file(
     password: &[u8],
     network: u8,
-    seed_format: u8,
     capability: &CapabilityContent<'_>,
     creation_timestamp: u64,
     restore_height_hint: u32,
@@ -679,7 +698,6 @@ pub fn seal_keys_file(
     seal_keys_file_with_entropy(
         password,
         network,
-        seed_format,
         capability,
         creation_timestamp,
         restore_height_hint,
@@ -706,7 +724,6 @@ pub fn seal_keys_file(
 pub(crate) fn seal_keys_file_with_entropy(
     password: &[u8],
     network: u8,
-    seed_format: u8,
     capability: &CapabilityContent<'_>,
     creation_timestamp: u64,
     restore_height_hint: u32,
@@ -747,7 +764,6 @@ pub(crate) fn seal_keys_file_with_entropy(
     ));
     region1_plain.push(capability.mode_byte());
     region1_plain.push(network);
-    region1_plain.push(seed_format);
     region1_plain.extend_from_slice(expected_classical_address);
     region1_plain.extend_from_slice(&cap_len.to_le_bytes());
     capability.write_into(&mut region1_plain);
@@ -801,7 +817,6 @@ pub fn open_keys_file(
     }
     let mode = region1_plain[R1_OFF_MODE];
     let network = region1_plain[R1_OFF_NETWORK];
-    let seed_format = region1_plain[R1_OFF_SEED_FORMAT];
     let mut expected_addr = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
     expected_addr.copy_from_slice(
         &region1_plain
@@ -834,7 +849,6 @@ pub fn open_keys_file(
     Ok(OpenedKeysFile {
         capability_mode: mode,
         network,
-        seed_format,
         expected_classical_address: expected_addr,
         creation_timestamp,
         restore_height_hint,
@@ -1200,12 +1214,12 @@ mod tests {
     #[test]
     fn hkdf_golden_outputs_pinned_tripwire() {
         const R1: [u8; FILE_KEK_BYTES] = [
-            146, 74, 110, 113, 243, 58, 14, 95, 184, 29, 119, 97, 7, 191, 250, 191, 14, 164, 133,
-            22, 152, 170, 137, 68, 159, 190, 195, 234, 226, 85, 160, 18,
+            150, 50, 252, 9, 2, 156, 4, 138, 204, 20, 94, 103, 28, 200, 30, 84, 138, 205, 132, 198,
+            20, 115, 108, 118, 227, 115, 212, 98, 253, 14, 78, 132,
         ];
         const R2: [u8; FILE_KEK_BYTES] = [
-            200, 171, 223, 169, 7, 117, 109, 9, 112, 251, 12, 186, 60, 96, 136, 137, 182, 233, 134,
-            176, 218, 122, 95, 106, 251, 69, 182, 143, 58, 49, 203, 65,
+            246, 110, 246, 15, 231, 139, 172, 84, 255, 124, 83, 138, 167, 45, 28, 237, 130, 116,
+            78, 48, 34, 16, 229, 212, 227, 24, 180, 95, 54, 79, 240, 101,
         ];
         let r1 = derive_wrap_key_region_1(&FIXTURE_FILE_KEK_SEED);
         let r2 = derive_wrap_key_region_2(&FIXTURE_FILE_KEK_SEED, &TRIPWIRE_ADDR);
@@ -1242,9 +1256,9 @@ mod tests {
 
         // Spec §2.6 "Normative info labels" table: byte-exact, 22 bytes
         // each. Spelled here from the spec, independently of the module's
-        // HKDF_INFO_REGION{1,2}_AEAD_V1 constants.
-        const SPEC_LABEL_R1: &[u8] = b"shekyl-region1-aead-v1";
-        const SPEC_LABEL_R2: &[u8] = b"shekyl-region2-aead-v1";
+        // HKDF_INFO_REGION{1,2}_AEAD_V2 constants.
+        const SPEC_LABEL_R1: &[u8] = b"shekyl-region1-aead-v2";
+        const SPEC_LABEL_R2: &[u8] = b"shekyl-region2-aead-v2";
         assert_eq!(SPEC_LABEL_R1.len(), 22, "spec table pins 22 bytes");
         assert_eq!(SPEC_LABEL_R2.len(), 22, "spec table pins 22 bytes");
 
@@ -1291,27 +1305,15 @@ mod tests {
 
     #[test]
     fn roundtrip_full_mainnet() {
-        let seed = [0x11u8; 64];
+        let seed = [0x11u8; 32];
         let pw = b"correct horse battery staple";
-        let cap = CapabilityContent::Full {
-            master_seed_64: &seed,
-        };
+        let cap = CapabilityContent::Full { seed: &seed };
         let addr = dummy_address();
-        let bytes = seal_keys_file(
-            pw,
-            0,
-            0,
-            &cap,
-            1_700_000_000,
-            2_500_000,
-            &addr,
-            fixture_kdf(),
-        )
-        .expect("seal");
+        let bytes = seal_keys_file(pw, 0, &cap, 1_700_000_000, 2_500_000, &addr, fixture_kdf())
+            .expect("seal");
         let opened = open_keys_file(pw, &bytes).expect("open");
         assert_eq!(opened.capability_mode, CAPABILITY_FULL);
         assert_eq!(opened.network, 0);
-        assert_eq!(opened.seed_format, 0);
         assert_eq!(&opened.expected_classical_address, &addr);
         assert_eq!(opened.creation_timestamp, 1_700_000_000);
         assert_eq!(opened.restore_height_hint, 2_500_000);
@@ -1320,15 +1322,13 @@ mod tests {
 
     #[test]
     fn password_rotation_preserves_seed_region_bytes() {
-        let seed = [0x77u8; 64];
+        let seed = [0x77u8; 32];
         let pw_old = b"old pw";
         let pw_new = b"new pw";
-        let cap = CapabilityContent::Full {
-            master_seed_64: &seed,
-        };
+        let cap = CapabilityContent::Full { seed: &seed };
         let addr = dummy_address();
         let bytes_before =
-            seal_keys_file(pw_old, 0, 0, &cap, 0, 0, &addr, fixture_kdf()).expect("seal");
+            seal_keys_file(pw_old, 0, &cap, 0, 0, &addr, fixture_kdf()).expect("seal");
         let bytes_after =
             rewrap_keys_file_password(pw_old, pw_new, &bytes_before, None).expect("rewrap");
 
@@ -1356,23 +1356,19 @@ mod tests {
 
     #[test]
     fn wrong_password_rejected() {
-        let seed = [0u8; 64];
-        let cap = CapabilityContent::Full {
-            master_seed_64: &seed,
-        };
+        let seed = [0u8; 32];
+        let cap = CapabilityContent::Full { seed: &seed };
         let bytes =
-            seal_keys_file(b"right", 0, 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
+            seal_keys_file(b"right", 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
         let err = open_keys_file(b"wrong", &bytes).unwrap_err();
         assert!(matches!(err, WalletEnvelopeError::InvalidPasswordOrCorrupt));
     }
 
     #[test]
     fn tamper_magic_fails() {
-        let cap = CapabilityContent::Full {
-            master_seed_64: &[0u8; 64],
-        };
+        let cap = CapabilityContent::Full { seed: &[0u8; 32] };
         let mut bytes =
-            seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
+            seal_keys_file(b"pw", 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
         bytes[0] ^= 0x80;
         assert!(matches!(
             inspect_keys_file(&bytes),
@@ -1382,11 +1378,9 @@ mod tests {
 
     #[test]
     fn tamper_kdf_params_fails_authentication() {
-        let cap = CapabilityContent::Full {
-            master_seed_64: &[0u8; 64],
-        };
+        let cap = CapabilityContent::Full { seed: &[0u8; 32] };
         let mut bytes =
-            seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
+            seal_keys_file(b"pw", 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
         bytes[OFF_KDF_T] = 0x05; // legitimate value, but not the one sealed with
                                  // parse_header_view now uses the wrong kdf_t; Argon2id derives a
                                  // different wrap_key; wrap AEAD fails; we see InvalidPasswordOrCorrupt.
@@ -1396,11 +1390,9 @@ mod tests {
 
     #[test]
     fn tamper_region1_ciphertext_fails() {
-        let cap = CapabilityContent::Full {
-            master_seed_64: &[0u8; 64],
-        };
+        let cap = CapabilityContent::Full { seed: &[0u8; 32] };
         let mut bytes =
-            seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
+            seal_keys_file(b"pw", 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
         // Flip a bit somewhere inside region 1 ciphertext.
         let mid = OFF_REGION1_CT + 5;
         bytes[mid] ^= 1;
@@ -1432,13 +1424,10 @@ mod tests {
     /// The result is correctly MACed end to end — a refusal at open is the
     /// capability gate, not the AEAD.
     fn seal_raw_mode_for_test(mode: u8) -> Vec<u8> {
-        let master_seed = [0x5Au8; 64];
-        let cap = CapabilityContent::Full {
-            master_seed_64: &master_seed,
-        };
+        let master_seed = [0x5Au8; 32];
+        let cap = CapabilityContent::Full { seed: &master_seed };
         let bytes = seal_keys_file_with_entropy(
             FIXTURE_PASSWORD,
-            0,
             0,
             &cap,
             FIXTURE_CREATION_TIMESTAMP,
@@ -1456,9 +1445,8 @@ mod tests {
         let mut region1_plain: Vec<u8> = Vec::new();
         region1_plain.push(mode);
         region1_plain.push(0); // network
-        region1_plain.push(0); // seed_format
         region1_plain.extend_from_slice(&TRIPWIRE_ADDR);
-        region1_plain.extend_from_slice(&64u16.to_le_bytes());
+        region1_plain.extend_from_slice(&32u16.to_le_bytes());
         region1_plain.extend_from_slice(&master_seed);
         region1_plain.extend_from_slice(&FIXTURE_CREATION_TIMESTAMP.to_le_bytes());
         region1_plain.extend_from_slice(&FIXTURE_RESTORE_HEIGHT.to_le_bytes());
@@ -1493,7 +1481,7 @@ mod tests {
         let full = seal_raw_mode_for_test(CAPABILITY_FULL);
         let opened = open_keys_file(FIXTURE_PASSWORD, &full).expect("full-mode control must open");
         assert_eq!(opened.capability_mode, CAPABILITY_FULL);
-        assert_eq!(opened.cap_content.as_slice(), &[0x5Au8; 64]);
+        assert_eq!(opened.cap_content.as_slice(), &[0x5Au8; 32]);
 
         for mode in [0x02u8, 0x03, 0x04, 0x7F] {
             let bytes = seal_raw_mode_for_test(mode);
@@ -1507,35 +1495,29 @@ mod tests {
 
     #[test]
     fn reject_format_version_too_new() {
-        let cap = CapabilityContent::Full {
-            master_seed_64: &[0u8; 64],
-        };
+        let cap = CapabilityContent::Full { seed: &[0u8; 32] };
         let mut bytes =
-            seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
+            seal_keys_file(b"pw", 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
         bytes[OFF_FILE_VERSION] = 0xFF;
         assert!(matches!(
             inspect_keys_file(&bytes),
             Err(WalletEnvelopeError::FormatVersionTooNew {
                 got: 0xFF,
-                max: 0x01
+                max: WALLET_FILE_FORMAT_VERSION
             })
         ));
     }
 
     #[test]
     fn state_file_roundtrip_and_swap_detection() {
-        let seed_a = [0xAAu8; 64];
-        let seed_b = [0xBBu8; 64];
+        let seed_a = [0xAAu8; 32];
+        let seed_b = [0xBBu8; 32];
         let pw = b"shared pw";
-        let cap_a = CapabilityContent::Full {
-            master_seed_64: &seed_a,
-        };
-        let cap_b = CapabilityContent::Full {
-            master_seed_64: &seed_b,
-        };
+        let cap_a = CapabilityContent::Full { seed: &seed_a };
+        let cap_b = CapabilityContent::Full { seed: &seed_b };
         let addr = dummy_address();
-        let keys_a = seal_keys_file(pw, 0, 0, &cap_a, 0, 0, &addr, fixture_kdf()).unwrap();
-        let keys_b = seal_keys_file(pw, 0, 0, &cap_b, 0, 0, &addr, fixture_kdf()).unwrap();
+        let keys_a = seal_keys_file(pw, 0, &cap_a, 0, 0, &addr, fixture_kdf()).unwrap();
+        let keys_b = seal_keys_file(pw, 0, &cap_b, 0, 0, &addr, fixture_kdf()).unwrap();
 
         let state_a_plain = b"state payload A";
         let state_a = seal_state_file(pw, &keys_a, state_a_plain).unwrap();
@@ -1552,14 +1534,12 @@ mod tests {
 
     #[test]
     fn state_file_survives_password_rotation() {
-        let seed = [0xCCu8; 64];
+        let seed = [0xCCu8; 32];
         let pw_old = b"old";
         let pw_new = b"new";
-        let cap = CapabilityContent::Full {
-            master_seed_64: &seed,
-        };
+        let cap = CapabilityContent::Full { seed: &seed };
         let addr = dummy_address();
-        let keys_v1 = seal_keys_file(pw_old, 0, 0, &cap, 0, 0, &addr, fixture_kdf()).unwrap();
+        let keys_v1 = seal_keys_file(pw_old, 0, &cap, 0, 0, &addr, fixture_kdf()).unwrap();
         let state_plain = b"state across rotation";
         let state_v1 = seal_state_file(pw_old, &keys_v1, state_plain).unwrap();
 
@@ -1583,12 +1563,10 @@ mod tests {
 
     #[test]
     fn auto_save_state_file_has_fresh_nonce() {
-        let seed = [0xDDu8; 64];
+        let seed = [0xDDu8; 32];
         let pw = b"pw";
-        let cap = CapabilityContent::Full {
-            master_seed_64: &seed,
-        };
-        let keys = seal_keys_file(pw, 0, 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
+        let cap = CapabilityContent::Full { seed: &seed };
+        let keys = seal_keys_file(pw, 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
         let s1 = seal_state_file(pw, &keys, b"payload").unwrap();
         let s2 = seal_state_file(pw, &keys, b"payload").unwrap();
         // Same plaintext, same key, different nonce ⇒ different ciphertext.
@@ -1615,12 +1593,10 @@ mod tests {
         // bit of every byte outside the bytes we explicitly expect to be
         // AAD-unbound (there are none in this layout — even the wrap-only AAD
         // bytes invalidate the wrap AEAD).
-        let seed = [0x99u8; 64];
+        let seed = [0x99u8; 32];
         let pw: &[u8] = b"tamper-pw";
-        let cap = CapabilityContent::Full {
-            master_seed_64: &seed,
-        };
-        let bytes = seal_keys_file(pw, 0, 0, &cap, 1, 2, &dummy_address(), fixture_kdf()).unwrap();
+        let cap = CapabilityContent::Full { seed: &seed };
+        let bytes = seal_keys_file(pw, 0, &cap, 1, 2, &dummy_address(), fixture_kdf()).unwrap();
 
         // Check a representative byte in each region rather than every byte
         // (would bloat test time with many Argon2 calls). One byte per region
@@ -1658,7 +1634,7 @@ mod tests {
         // 65 bytes the caller sealed in. Deriving the real address bytes
         // from master_seed is the caller's job (wallet2.cpp cross-checks
         // against the derivation pipeline in shekyl_crypto_pq::account).
-        let seed = [0xEEu8; 64];
+        let seed = [0xEEu8; 32];
         let expected_addr = {
             let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
             a[0] = 0x01; // version byte
@@ -1666,10 +1642,8 @@ mod tests {
             a[33..65].copy_from_slice(&[0xBB; 32]); // view_pk
             a
         };
-        let cap = CapabilityContent::Full {
-            master_seed_64: &seed,
-        };
-        let bytes = seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &expected_addr, fixture_kdf()).unwrap();
+        let cap = CapabilityContent::Full { seed: &seed };
+        let bytes = seal_keys_file(b"pw", 0, &cap, 0, 0, &expected_addr, fixture_kdf()).unwrap();
         let opened = open_keys_file(b"pw", &bytes).unwrap();
         assert_eq!(opened.expected_classical_address, expected_addr);
         assert_eq!(opened.cap_content.as_slice(), &seed);
@@ -1715,16 +1689,12 @@ mod tests {
         0x6E, 0x6F,
     ];
     const FIXTURE_PASSWORD: &[u8] = b"shekyl-kat-pw-v1";
-    /// Wire bytes the fixture seals: mainnet, BIP-39. These are the
-    /// production-valid values (`SeedFormat::from_u8(0)` is `None`, so
-    /// the pre-2026-09-07 fixture's `seed_format = 0` described a wallet
-    /// that could not exist).
+    /// The network byte the fixture seals: mainnet's code.
     const FIXTURE_NETWORK: u8 = 0;
-    const FIXTURE_SEED_FORMAT: u8 = crate::account::SEED_FORMAT_BIP39;
 
     /// The fixture wallet's expected classical address: the 65-byte
     /// `version ‖ spend_pk ‖ view_pk` prefix derived from
-    /// [`fixture_full_seed`] on (Mainnet, Bip39) through the production
+    /// [`fixture_full_seed`] on mainnet through the production
     /// account derivation — the same path the engine open flow runs. The
     /// sealed fixture is therefore a *composition* vector (its address
     /// really derives from its seed), not a counting pattern;
@@ -1734,10 +1704,9 @@ mod tests {
         use std::sync::OnceLock;
         static ADDR: OnceLock<[u8; EXPECTED_CLASSICAL_ADDRESS_BYTES]> = OnceLock::new();
         ADDR.get_or_init(|| {
-            let blob = crate::account::rederive_account(
+            let (_master, blob) = crate::account::account_from_seed(
                 &fixture_full_seed(),
-                crate::account::DerivationNetwork::Mainnet,
-                crate::account::SeedFormat::Bip39,
+                crate::account::Network::Mainnet,
             )
             .expect("fixture seed derives");
             let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
@@ -1753,8 +1722,8 @@ mod tests {
     ];
     const FIXTURE_STATE_PAYLOAD: &[u8] = b"shekyl-kat-state-v1";
 
-    fn fixture_full_seed() -> [u8; 64] {
-        let mut s = [0u8; 64];
+    fn fixture_full_seed() -> [u8; 32] {
+        let mut s = [0u8; 32];
         for (i, b) in s.iter_mut().enumerate() {
             *b = 0x80 | u8::try_from(i & 0x7f).expect("masked");
         }
@@ -1763,13 +1732,10 @@ mod tests {
 
     fn seal_fixture_full() -> Vec<u8> {
         let seed = fixture_full_seed();
-        let cap = CapabilityContent::Full {
-            master_seed_64: &seed,
-        };
+        let cap = CapabilityContent::Full { seed: &seed };
         seal_keys_file_with_entropy(
             FIXTURE_PASSWORD,
             FIXTURE_NETWORK,
-            FIXTURE_SEED_FORMAT,
             &cap,
             FIXTURE_CREATION_TIMESTAMP,
             FIXTURE_RESTORE_HEIGHT,
@@ -1793,14 +1759,17 @@ mod tests {
         .expect("fixture state seal")
     }
 
-    // Frozen fixture bytes. See docs/test_vectors/WALLET_FILE_FORMAT_V1/.
+    // Frozen fixture bytes. See docs/test_vectors/WALLET_FILE_FORMAT_V2/.
     // The bytes are checked in alongside this test module; any drift in
     // seal_keys_file_with_entropy vs. these fixtures constitutes a
     // wire-format break and must land as an explicit format-version bump.
     const PINNED_FULL_HEX: &str =
-        include_str!("../../../docs/test_vectors/WALLET_FILE_FORMAT_V1/full.hex");
+        include_str!("../../../docs/test_vectors/WALLET_FILE_FORMAT_V2/full.hex");
     const PINNED_STATE_HEX: &str =
-        include_str!("../../../docs/test_vectors/WALLET_FILE_FORMAT_V1/state_for_full.hex");
+        include_str!("../../../docs/test_vectors/WALLET_FILE_FORMAT_V2/state_for_full.hex");
+    /// The retired format's frozen file: refused, never reinterpreted.
+    const RETIRED_V1_FULL_HEX: &str =
+        include_str!("../../../docs/test_vectors/WALLET_FILE_FORMAT_V1/full.hex");
 
     fn decode_hex_fixture(s: &str) -> Vec<u8> {
         let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
@@ -1818,7 +1787,6 @@ mod tests {
         let opened = open_keys_file(FIXTURE_PASSWORD, &bytes).expect("open pinned fixture");
         assert_eq!(opened.capability_mode, CAPABILITY_FULL);
         assert_eq!(opened.network, FIXTURE_NETWORK);
-        assert_eq!(opened.seed_format, FIXTURE_SEED_FORMAT);
         assert_eq!(opened.creation_timestamp, FIXTURE_CREATION_TIMESTAMP);
         assert_eq!(opened.restore_height_hint, FIXTURE_RESTORE_HEIGHT);
         assert_eq!(
@@ -1828,26 +1796,41 @@ mod tests {
         assert_eq!(opened.cap_content.as_slice(), &fixture_full_seed());
     }
 
+    /// NI-Q8: a file of the retired format 0x01 is refused with its
+    /// reason, before any decryption: never reinterpreted.
+    #[test]
+    fn a_retired_format_file_is_refused_with_its_reason() {
+        let bytes = decode_hex_fixture(RETIRED_V1_FULL_HEX);
+        assert_eq!(bytes[OFF_FILE_VERSION], 0x01, "the frozen V1 file");
+        match open_keys_file(FIXTURE_PASSWORD, &bytes) {
+            Err(WalletEnvelopeError::FormatVersionRetired { got, current }) => {
+                assert_eq!((got, current), (0x01, WALLET_FILE_FORMAT_VERSION));
+            }
+            other => panic!("expected FormatVersionRetired, got {other:?}"),
+        }
+        assert!(matches!(
+            inspect_keys_file(&bytes),
+            Err(WalletEnvelopeError::FormatVersionRetired { .. })
+        ));
+    }
+
     /// Composition check against the **frozen** fixture bytes (oracle:
     /// independent, tier 2 — the production account derivation
     /// [`crate::account::rederive_account`] vouches for the value): the
     /// address stored inside `full.hex` really is the 65-byte
     /// `version ‖ spend_pk ‖ view_pk` prefix derived from the seed
-    /// stored next to it, under the wire (network, seed_format) the
-    /// fixture declares. This bites against a fixture regenerated with a
+    /// stored next to it, under the network the fixture declares. This bites against a fixture regenerated with a
     /// made-up address or invalid wire bytes; it does NOT cover the
     /// envelope byte layout itself (the pinned round-trips do that).
     #[test]
     fn pinned_fixture_address_derives_from_fixture_seed() {
         let opened = open_keys_file(FIXTURE_PASSWORD, &decode_hex_fixture(PINNED_FULL_HEX))
             .expect("open pinned fixture");
-        let net = crate::account::DerivationNetwork::from_u8(opened.network)
+        let net = crate::account::Network::from_code(opened.network)
             .expect("fixture network byte must be a real network");
-        let fmt = crate::account::SeedFormat::from_u8(opened.seed_format)
-            .expect("fixture seed_format byte must be a real seed format");
-        let mut seed = [0u8; 64];
+        let mut seed = [0u8; 32];
         seed.copy_from_slice(opened.cap_content.as_slice());
-        let blob = crate::account::rederive_account(&seed, net, fmt).expect("derive");
+        let (_master, blob) = crate::account::account_from_seed(&seed, net).expect("derive");
         assert_eq!(
             &blob.classical_address_bytes[..EXPECTED_CLASSICAL_ADDRESS_BYTES],
             &opened.expected_classical_address,
@@ -1887,7 +1870,7 @@ mod tests {
         // Refuse to run without a decision-log citation. The format is
         // "YYYY-MM-DD <rationale>"; the date names the decision-log entry.
         let decision = crate::test_support::regen_decision_or_refuse(
-            "the WALLET_FILE_FORMAT_V1 pinned vectors",
+            "the WALLET_FILE_FORMAT_V2 pinned vectors",
         );
         eprintln!("regenerating pinned vectors under decision: {decision}");
         eprintln!(
@@ -1896,11 +1879,11 @@ mod tests {
         );
         eprintln!(
             "reminder: commit the decision-log entry and update \
-             docs/test_vectors/WALLET_FILE_FORMAT_V1/manifest.json in the same change"
+             docs/test_vectors/WALLET_FILE_FORMAT_V2/manifest.json in the same change"
         );
 
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../docs/test_vectors/WALLET_FILE_FORMAT_V1");
+            .join("../../docs/test_vectors/WALLET_FILE_FORMAT_V2");
         fs::create_dir_all(&dir).expect("mkdir -p");
         let write = |name: &str, bytes: &[u8]| {
             let path = dir.join(name);

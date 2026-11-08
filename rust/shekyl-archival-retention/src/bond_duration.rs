@@ -63,7 +63,6 @@
 
 use shekyl_types::BlockHeight;
 
-use crate::bond_floor::{BOND_DURATION_AGE_SCALE, BOND_DURATION_BASE_EPOCHS};
 use crate::consensus_state::{epoch_close_height, shard_age_milli};
 use crate::constants::effective_settlement_epoch_blocks;
 use crate::reward_arithmetic::WORK_MILLI_SCALE;
@@ -142,15 +141,16 @@ impl ShardAgeAtAdd {
 /// GENESIS-FROZEN consensus formula, integer-canonical (see the module docs):
 /// `d = base·(1 + scale·age)` with `age = age_milli / WORK_MILLI_SCALE`, computed in
 /// exact integer milli as `base·(WORK_MILLI_SCALE + scale·age_milli)`, rounded
-/// half-up, floored at 1.
+/// half-up, floored at 1. `base` and `scale` are `params`'.
 #[must_use]
-pub fn bond_duration(age: ShardAgeAtAdd) -> u64 {
+pub fn bond_duration(age: ShardAgeAtAdd, params: &crate::ArchivalParams) -> u64 {
     let den = WORK_MILLI_SCALE;
     // base·(den + scale·age_milli): exact integer, no float. Saturating guards a
     // pathological re-pin; the genesis 4/4 values keep this far below u64::MAX for
     // age_milli ∈ [0, den].
-    let scaled = BOND_DURATION_BASE_EPOCHS
-        .saturating_mul(den.saturating_add(BOND_DURATION_AGE_SCALE.saturating_mul(age.age_milli)));
+    let scaled = params.bond_duration_base_epochs.saturating_mul(
+        den.saturating_add(params.bond_duration_age_scale.saturating_mul(age.age_milli)),
+    );
     // Round half up: (scaled + den/2) / den — matches f64 round-half-away-from-zero
     // for the non-negative values here. Floored at 1 so any deep shard commits.
     let rounded = scaled.saturating_add(den / 2) / den;
@@ -160,6 +160,7 @@ pub fn bond_duration(age: ShardAgeAtAdd) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bond_floor::{BOND_DURATION_AGE_SCALE, BOND_DURATION_BASE_EPOCHS};
     use crate::constants::effective_settlement_epoch_blocks;
 
     // Construct a raw age for the pure-formula sweeps (bypasses `from_add`; the
@@ -179,16 +180,22 @@ mod tests {
     #[test]
     fn bond_duration_endpoints_and_midpoint() {
         // age 0 → BASE (youngest-deep minimum); age 1 → BASE·(1+SCALE); age 0.5 → BASE·(1+SCALE/2).
-        assert_eq!(bond_duration(age(0)), 4);
-        assert_eq!(bond_duration(age(WORK_MILLI_SCALE)), 20);
-        assert_eq!(bond_duration(age(WORK_MILLI_SCALE / 2)), 12);
+        assert_eq!(bond_duration(age(0), &crate::ArchivalParams::SHIPPED), 4);
+        assert_eq!(
+            bond_duration(age(WORK_MILLI_SCALE), &crate::ArchivalParams::SHIPPED),
+            20
+        );
+        assert_eq!(
+            bond_duration(age(WORK_MILLI_SCALE / 2), &crate::ArchivalParams::SHIPPED),
+            12
+        );
     }
 
     #[test]
     fn bond_duration_is_monotone_nondecreasing_in_age() {
         let mut prev = 0;
         for m in 0..=WORK_MILLI_SCALE {
-            let d = bond_duration(age(m));
+            let d = bond_duration(age(m), &crate::ArchivalParams::SHIPPED);
             assert!(d >= prev, "non-monotone at age_milli={m}: {d} < {prev}");
             prev = d;
         }
@@ -198,7 +205,7 @@ mod tests {
     fn bond_duration_floored_at_one() {
         // Even a degenerate near-zero base commits for at least one epoch.
         // (Uses the real constants; the floor is unconditional in the formula.)
-        assert!(bond_duration(age(0)) >= 1);
+        assert!(bond_duration(age(0), &crate::ArchivalParams::SHIPPED) >= 1);
     }
 
     /// F2 parity: the integer artifact must equal the sim's f64 model over the full
@@ -222,7 +229,7 @@ mod tests {
         for m in 0..=WORK_MILLI_SCALE {
             let a = m as f64 / den;
             let sim = (base * (1.0 + scale * a)).round().max(1.0) as u64;
-            let got = bond_duration(age(m));
+            let got = bond_duration(age(m), &crate::ArchivalParams::SHIPPED);
             assert_eq!(
                 got, sim,
                 "F2 divergence at age_milli={m}: integer {got} vs sim f64 {sim} — \
@@ -259,7 +266,7 @@ mod tests {
         // reward path's "genesis-band shard is oldest" (shard_age_milli KAT).
         let a = ShardAgeAtAdd::from_add(10, 0);
         assert_eq!(a.age_milli(), WORK_MILLI_SCALE);
-        assert_eq!(bond_duration(a), 20);
+        assert_eq!(bond_duration(a, &crate::ArchivalParams::SHIPPED), 20);
     }
 
     #[test]
@@ -271,7 +278,7 @@ mod tests {
         let close = (add_epoch + 1) * seb;
         let a = ShardAgeAtAdd::from_add(add_epoch, close - 1);
         assert_eq!(a.age_milli(), 0);
-        assert_eq!(bond_duration(a), 4);
+        assert_eq!(bond_duration(a, &crate::ArchivalParams::SHIPPED), 4);
     }
 
     #[test]
@@ -287,10 +294,20 @@ mod tests {
         for freeze in [close, close + 1, close + 10 * seb] {
             let a = ShardAgeAtAdd::from_add(add_epoch, freeze);
             assert_eq!(a.age_milli(), WORK_MILLI_SCALE, "freeze={freeze}");
-            assert_eq!(bond_duration(a), 20, "freeze={freeze}");
+            assert_eq!(
+                bond_duration(a, &crate::ArchivalParams::SHIPPED),
+                20,
+                "freeze={freeze}"
+            );
         }
         // The C++ sentinel corner (no freeze row → 0) is the genesis-band arm,
         // already the oldest age — the two corners agree at 20.
-        assert_eq!(bond_duration(ShardAgeAtAdd::from_add(add_epoch, 0)), 20);
+        assert_eq!(
+            bond_duration(
+                ShardAgeAtAdd::from_add(add_epoch, 0),
+                &crate::ArchivalParams::SHIPPED
+            ),
+            20
+        );
     }
 }

@@ -20,8 +20,6 @@ pub struct Resolved {
     /// The value of each row that has one: given, or the row's default
     /// value. A row with no default and no value is absent.
     pub values: BTreeMap<&'static str, (Value, Source)>,
-    /// The words that are not options.
-    pub positional: Vec<String>,
 }
 
 impl Resolved {
@@ -53,7 +51,7 @@ pub fn choosers(cli: &Cli) -> (Network, RunMode) {
         .iter()
         .find(|g| g.row.name == "network")
         .and_then(|g| match &g.value {
-            Value::Word(w) => Network::from_word(w),
+            Value::Word(w) => Network::from_name(w),
             _ => None,
         })
         .unwrap_or(Network::Mainnet);
@@ -82,8 +80,8 @@ pub fn resolve(
     // A development lever off its networks is refused when given (below) and
     // has no default either: on mainnet no `dev-` row exists (IG-8).
     for row in table.rows.iter().filter(|r| r.is_live()) {
-        if let Visibility::Dev { networks } = row.visibility {
-            if !networks.contains(&network.name()) {
+        if let Visibility::Dev { gate } = row.visibility {
+            if !gate.admits(network) {
                 continue;
             }
         }
@@ -102,12 +100,12 @@ pub fn resolve(
         }
     }
     for given in file.into_iter().chain(cli.given) {
-        if let Visibility::Dev { networks } = given.row.visibility {
-            if !networks.contains(&network.name()) {
+        if let Visibility::Dev { gate } = given.row.visibility {
+            if !gate.admits(network) {
                 faults.push(
                     Diagnostic::new(Code::DevNetwork, given.source.clone())
                         .option(given.row.name)
-                        .param("networks", networks.join(", "))
+                        .param("networks", gate.networks())
                         .param("network", network.name()),
                 );
                 continue;
@@ -116,10 +114,7 @@ pub fn resolve(
         values.insert(given.row.name, (given.value, given.source));
     }
     if faults.is_empty() {
-        Ok(Resolved {
-            values,
-            positional: cli.positional,
-        })
+        Ok(Resolved { values })
     } else {
         Err(faults)
     }
@@ -214,5 +209,22 @@ mod tests {
         assert_eq!(d[0].code, Code::DevNetwork);
         let cli = shekyl_options::read_cli(&TABLE, args(&["--dev-difficulty", "1"])).unwrap();
         assert!(resolve(&TABLE, Network::Regtest, cli, Vec::new()).is_ok());
+    }
+
+    /// NI-R8: `dev-rpc`, the armed RPC levers, is regtest's alone. A
+    /// testnet or stagenet daemon given it is refused at load, so it never
+    /// starts armed; the live harness spawns testnet without it.
+    #[test]
+    fn dev_rpc_is_refused_on_every_network_but_regtest() {
+        for network in Network::ALL {
+            let cli = shekyl_options::read_cli(&TABLE, args(&["--dev-rpc"])).unwrap();
+            let verdict = resolve(&TABLE, network, cli, Vec::new());
+            if network == Network::Regtest {
+                assert!(verdict.is_ok(), "regtest admits dev-rpc");
+            } else {
+                let d = verdict.unwrap_err();
+                assert_eq!(d[0].code, Code::DevNetwork, "{network}");
+            }
+        }
     }
 }

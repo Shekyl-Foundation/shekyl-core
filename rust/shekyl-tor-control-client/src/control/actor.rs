@@ -86,7 +86,7 @@ use super::framing::{
 use super::launch;
 use super::onion::{AddOnion, ServiceId};
 use super::safecookie::verify_server_hash;
-use super::vanguards::HsLayerPins;
+use super::vanguards::{HsLayerPins, RelayFingerprint};
 use crate::binary::VerifiedTorBinary;
 
 /// Per-read bound on a hung control port — a handshake read that does not complete
@@ -96,9 +96,10 @@ const HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// Read-chunk size for draining the socket into the framer.
 const READ_CHUNK: usize = 4096;
 
-/// How long a **managed** `tor` gets to exit on `SIGTERM` before the shutdown escalates
-/// to `SIGKILL`. `tor` flushes and exits within ~a second; this is the bound that makes
-/// "SIGTERM + wait" a *bounded* wait, never an unbounded hang if `tor` wedges.
+/// How long a managed `tor` gets to exit after the owning connection is closed
+/// before shutdown escalates to a kill. On Unix the close is followed by
+/// `SIGTERM`. `tor` flushes and exits within about a second; this bound keeps
+/// the wait from hanging if `tor` ignores both.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 /// The read half of a control connection, whatever carries it: a TCP connection to an
@@ -237,31 +238,45 @@ impl std::fmt::Display for ControlError {
 
 impl std::error::Error for ControlError {}
 
-/// Where asynchronous `650` events (`STREAM`, `STATUS_CLIENT`, …) are routed: the
-/// bootstrap gate, the measurement consumer, and the supervisor. The actor only ever
-/// *sends* into it.
+/// Where asynchronous `650` events (`STREAM`, `STATUS_CLIENT`, …) are routed.
+/// The actor only ever *sends* into it, and never waits
+/// (`TOR_SUPERVISOR.md` `TSR-F2`).
 ///
 /// Carries [`ControlReply`]s, a forensic surface, so it is not `Debug`.
 ///
-/// **Bounded, and the actor never waits on it** (`TOR_SUPERVISOR.md` `TSR-F2`). It holds
-/// [`EVENT_QUEUE_EVENTS`]; an event that arrives while it is full is dropped and counted,
-/// and the count is the consumer's to read ([`EventReceiver::dropped`]). Anyone who can
-/// make tor log can make events arrive, including a peer misbehaving at our onion, so an
-/// unbounded queue would be a memory channel an outsider can fill. Waiting instead of
-/// dropping would stall the read loop, and with it every command reply.
+/// Three ways to make one, and each holds at most [`EVENT_QUEUE_EVENTS`]:
 ///
-/// `Clone` so a supervisor can hand each incarnation the same long-lived sink: the
-/// consumer's receiver and the drop count survive restarts, and senders are
-/// per-incarnation. **Consequence for consumers:** because the supervisor retains a
-/// sender clone across restarts, the receiver does *not* observe all-senders-dropped
-/// when an incarnation dies. A supervised consumer must detect incarnation death through
-/// the supervisor's posture watch (the wallet's `WalletTorControl`, or the daemon's
-/// supervisor once it exists), not through `recv() == None`, which is correct only for a
-/// directly spawned, sole-sender actor.
+/// - [`Self::bounded`] keeps the events in its own queue and hands back the
+///   [`EventReceiver`]. `Clone` shares that queue and its drop count. The
+///   receiver does not see all-senders-dropped when one clone goes: incarnation
+///   death is the supervisor's posture, not `recv() == None`.
+/// - [`Self::feeding`] takes each event into a queue the consumer already
+///   keeps. The daemon's supervisor does this, so every discrete input lands
+///   in one inbox (`TOR_SUPERVISOR.md` §5). The feed says [`Fed::Full`] past
+///   the bound, and the sink counts that drop ([`Self::dropped`]).
+/// - [`Self::unsubscribed`] is the sink for a caller that does not issue
+///   `SETEVENTS`: stake serving, an ephemeral control connection, the spikes.
+///   It drops every event and counts none.
+///
+/// Anyone who can make tor log can make events arrive, including a peer
+/// misbehaving at our onion, so neither queue is unbounded. Waiting instead
+/// of dropping would stall the read loop, and with it every command reply.
 #[derive(Clone)]
 pub struct EventSink {
-    sender: mpsc::Sender<ControlReply>,
+    feed: Arc<dyn Fn(ControlReply) -> Fed + Send + Sync>,
     dropped: Arc<AtomicU64>,
+}
+
+/// What a feed did with one event ([`EventSink::feeding`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fed {
+    /// The consumer holds it.
+    Held,
+    /// The consumer already holds [`EVENT_QUEUE_EVENTS`]: the event is
+    /// dropped and counted.
+    Full,
+    /// The consumer is gone: the event is discarded, not counted.
+    Gone,
 }
 
 /// The consumer's end of an [`EventSink`]: the held events, and how many were dropped
@@ -276,33 +291,46 @@ impl EventSink {
     #[must_use]
     pub fn bounded() -> (Self, EventReceiver) {
         let (sender, receiver) = mpsc::channel(EVENT_QUEUE_EVENTS);
-        let dropped = Arc::new(AtomicU64::new(0));
-        (
-            Self {
-                sender,
-                dropped: Arc::clone(&dropped),
-            },
-            EventReceiver { receiver, dropped },
-        )
+        let sink = Self::feeding(move |reply| match sender.try_send(reply) {
+            Ok(()) => Fed::Held,
+            Err(mpsc::error::TrySendError::Full(_)) => Fed::Full,
+            Err(mpsc::error::TrySendError::Closed(_)) => Fed::Gone,
+        });
+        let dropped = Arc::clone(&sink.dropped);
+        (sink, EventReceiver { receiver, dropped })
     }
 
-    /// A sink with no consumer: **the correct production value today**, and a
-    /// place to notice when it stops being one.
+    /// A sink whose events `feed` takes into a queue the consumer keeps. The
+    /// feed holds at most [`EVENT_QUEUE_EVENTS`] and never waits: it says
+    /// [`Fed::Full`] when it holds that many, and the sink counts the drop.
+    /// It is called on the control read loop.
+    pub fn feeding(feed: impl Fn(ControlReply) -> Fed + Send + Sync + 'static) -> Self {
+        Self {
+            feed: Arc::new(feed),
+            dropped: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// How many events were dropped because the consumer was full, since the
+    /// sink was made, across every incarnation that shared it. It never
+    /// decreases.
+    #[must_use]
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    /// A sink for a caller that does not issue [`Command::SetEvents`].
     ///
-    /// Async `650` events arrive only after a `SETEVENTS`
-    /// ([`Command::SetEvents`]), and no production call site issues one: the
-    /// DQ-T0.4 `STREAM` measurement is a harness, and §3c's retraction settled
-    /// that bootstrap readiness is a `GETINFO` **poll**, not a subscription
-    /// ("a `GETINFO` poll is a command, not a subscription, so it never touches
-    /// `SETEVENTS`"). The daemon's supervisor will subscribe; until it exists, this
-    /// sink receives nothing, and wiring a consumer to it would be wiring a consumer
-    /// to silence.
+    /// Async `650` events arrive only after that command. Stake serving, an
+    /// ephemeral control connection, and the spikes do not subscribe, so this
+    /// is the sink they hold. The daemon's supervisor does subscribe, through
+    /// [`Self::feeding`], into its own inbox. Bootstrap readiness stays a
+    /// `GETINFO` poll, not a subscription.
     ///
     /// This exists rather than an inline `let (sink, _receiver) = EventSink::bounded()`
     /// because that shape is indistinguishable from a caller who dropped the
-    /// receiver by accident. Whoever adds the first production `SETEVENTS` has
-    /// to replace a call named `unsubscribed`, which is a question a reviewer
-    /// can see; deleting an anonymous `_receiver` is not.
+    /// receiver by accident. A caller that does not subscribe names
+    /// [`Self::unsubscribed`].
     ///
     /// The returned sink drops every event and counts none: routing treats a
     /// closed receiver as "the consumer is gone", which is not an overflow.
@@ -317,10 +345,13 @@ impl EventSink {
     /// Route an async event to the consumer, never waiting. A full queue drops the event
     /// and counts it. A closed receiver means the consumer is gone, so the event is
     /// discarded and not counted: nobody is left to read the count.
-    fn route(&self, reply: ControlReply) {
-        match self.sender.try_send(reply) {
-            Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
+    ///
+    /// The control read loop is the production caller. A caller that already
+    /// holds a framed reply uses this same write.
+    pub fn route(&self, reply: ControlReply) {
+        match (self.feed)(reply) {
+            Fed::Held | Fed::Gone => {}
+            Fed::Full => {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -393,14 +424,40 @@ pub enum Command {
     /// `DEL_ONION <service-id>` — tear the service down. Issued on the actor's
     /// shutdown path as well as on demand.
     DelOnion(ServiceId),
+    /// `HSFETCH <service-id>`: fetch the descriptor of this v3 onion again, so
+    /// Tor's client view of that one address is refreshed and no other stream
+    /// is touched (`TOR_SUPERVISOR.md` §4.5: the probe's refetch after a
+    /// miss). The result arrives as `HS_DESC` `REQUESTED`, `RECEIVED` or
+    /// `FAILED` events carrying the descriptor id, which the upload-round
+    /// coalescer never counts. The id is a validated [`ServiceId`], so the
+    /// line cannot carry a second command.
+    HsFetch(ServiceId),
+    /// `HSFETCH <service-id> SERVER=<$fingerprint>`: fetch this onion's
+    /// descriptor from that one directory (`TOR_SUPERVISOR.md` §4.5, the
+    /// probe's directory check). Tor fetches from each `SERVER` named and
+    /// ignores its client cache (tor 0.4.9.14 `control_cmd.c:1464-1494`,
+    /// `hs_client.c:504-507`); the answer arrives as `HS_DESC` `RECEIVED` or
+    /// `FAILED` from that directory. One directory per command: Tor refuses
+    /// the whole command (552) at the first `SERVER` missing from its
+    /// consensus, before fetching any. Both values are typed, so the line
+    /// cannot carry a second command.
+    HsFetchFrom {
+        /// The onion.
+        service: ServiceId,
+        /// The directory to ask.
+        server: RelayFingerprint,
+    },
     /// `SETCONF HSLayer2Nodes=… HSLayer3Nodes=…` — pin layer-2/layer-3
     /// vanguard guards (VG-1). The **wallet** supervisor drives this; the
     /// daemon's ephemeral onion has no vanguard state. Built from typed
-    /// [`RelayFingerprint`](super::vanguards::RelayFingerprint)s, so — like
+    /// [`RelayFingerprint`]s, so — like
     /// `ADD_ONION` — it cannot render a line that injects a second command,
     /// which is what makes it safe to add `SETCONF` (the dangerous verb) to
     /// this surface without a validated-string path.
     SetConf(HsLayerPins),
+    /// `SETCONF AvoidDiskWrites=0|1`. This is the only configuration key
+    /// this command can name.
+    SetConfDiskWrites(DiskWrites),
     /// `SIGNAL <name>` — deliver one of tor's control signals. Typed as a
     /// closed enum ([`Signal`]) so, like the onion commands, the arm cannot
     /// render a token that is not a signal name.
@@ -485,9 +542,23 @@ impl Command {
             // Infallible by construction — no validation step exists to fail.
             Self::AddOnion(add) => return Ok(add.to_wire_line()),
             Self::DelOnion(id) => return Ok(Zeroizing::new(format!("DEL_ONION {}", id.as_str()))),
+            Self::HsFetch(id) => return Ok(Zeroizing::new(format!("HSFETCH {}", id.as_str()))),
+            Self::HsFetchFrom { service, server } => {
+                return Ok(Zeroizing::new(format!(
+                    "HSFETCH {} SERVER={}",
+                    service.as_str(),
+                    server.to_specifier()
+                )));
+            }
             // Also infallible: every value is a `$hex` specifier that cannot
             // carry a space or control byte (see `vanguards`).
             Self::SetConf(pins) => return Ok(Zeroizing::new(pins.to_wire_line())),
+            Self::SetConfDiskWrites(writes) => {
+                return Ok(Zeroizing::new(format!(
+                    "SETCONF AvoidDiskWrites={}",
+                    writes.as_arg()
+                )))
+            }
             // A closed enum of signal names: nothing to validate.
             Self::Signal(signal) => {
                 return Ok(Zeroizing::new(format!("SIGNAL {}", signal.as_str())))
@@ -608,6 +679,73 @@ impl SocksPort {
     }
 }
 
+/// How long the managed tor holds a SOCKS request it cannot attach before it
+/// answers (`SocksTimeout`). A typed knob like [`SocksPort`]: the launch renders
+/// it and nothing else can.
+///
+/// The daemon sets it below its own Tor dial deadline (`TOR_SUPERVISOR.md`
+/// §4.2). Tor's default equals that deadline, so on a blocked link whether
+/// Tor's reply (`0x06`, a link failure) or the dial's own deadline (a
+/// timeout) ended a dial was a race; below it, Tor's reply always comes
+/// first. Tor applies it locally: nothing on the network changes (`TSR-Q9`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocksTimeout {
+    /// Tor's own default, two minutes. The wallet's tor, harnesses and tests.
+    TorDefault,
+    /// [`Self::MARGIN`] below the caller's dial deadline.
+    Below {
+        /// The deadline the caller's dials through this tor run under.
+        dial_deadline: std::time::Duration,
+    },
+}
+
+impl SocksTimeout {
+    /// How far below the dial deadline Tor answers. A stream Tor attaches
+    /// just before its timeout can still be detached and retried once
+    /// (Tor's stream schedule starts at 10 s, then 15 s) inside it.
+    pub const MARGIN: std::time::Duration = std::time::Duration::from_secs(15);
+
+    /// How long Tor holds a SOCKS request it cannot attach, in whole
+    /// seconds, or `None` for Tor's default. Never more than half the
+    /// deadline away from it. The one computation of the window: the launch
+    /// renders it ([`Self::as_arg`]) and the dialer reads its
+    /// [`Self::earliest_expiry`].
+    #[must_use]
+    pub fn window(self) -> Option<std::time::Duration> {
+        match self {
+            Self::TorDefault => None,
+            Self::Below { dial_deadline } => {
+                let timeout = dial_deadline
+                    .saturating_sub(Self::MARGIN)
+                    .max(dial_deadline / 2);
+                Some(std::time::Duration::from_secs(timeout.as_secs().max(1)))
+            }
+        }
+    }
+
+    /// The earliest an attempt can see Tor give up at [`Self::window`]: one
+    /// second inside it. Tor counts a stream's age in whole seconds,
+    /// `time(NULL)` against a `time_t` creation stamp (Tor 0.4.9.14
+    /// `src/core/or/connection_edge.c:1194`, `:1210`), so its
+    /// `>= SocksTimeout` check (`:1222`) can fire after as little as
+    /// `SocksTimeout - 1` real seconds; on the floor device a `0x06` from a
+    /// 105 s timeout arrived at 104.97 s (2026-10-26). An attempt that ran
+    /// this long and timed out may have used Tor's whole window, and the
+    /// dialer treats it so.
+    #[must_use]
+    pub fn earliest_expiry(self) -> Option<std::time::Duration> {
+        self.window()
+            .map(|window| window.saturating_sub(std::time::Duration::from_secs(1)))
+    }
+
+    /// The `--SocksTimeout` value in whole seconds, or `None` for Tor's
+    /// default: [`Self::window`], rendered.
+    #[must_use]
+    pub fn as_arg(self) -> Option<String> {
+        self.window().map(|window| window.as_secs().to_string())
+    }
+}
+
 /// A managed `tor` to spawn (DQ-T0.1). The actor launches it with the caller's
 /// `DataDirectory` and `SocksPort`, and hands it one end of a connected socket pair as
 /// its owning, already-authenticated control connection (`TSR-Q7`). Tor opens no
@@ -637,6 +775,9 @@ pub struct ManagedTor {
     /// port can race the previous incarnation's dying socket on restart. Harnesses
     /// pick [`SocksPort::Fixed`].
     pub socks_port: SocksPort,
+    /// This instance's `SocksTimeout`: [`SocksTimeout::Below`] the daemon's Tor
+    /// dial deadline; Tor's default elsewhere.
+    pub socks_timeout: SocksTimeout,
     /// Spawn `tor` with `--DisableNetwork 1` — an offline instance (opens its control port
     /// and SOCKS port, but never touches the network, so it never bootstraps). The
     /// child-lifecycle test sets this to isolate spawn+shutdown from a real bootstrap;
@@ -651,6 +792,11 @@ pub struct ManagedTor {
     /// is added as further **typed, safe-by-construction** knobs, so the control-plane
     /// invariant stays *structural* rather than validated.
     pub disable_network: bool,
+    /// `AvoidDiskWrites`. [`DiskWrites::Prompt`] is the daemon's launch, so
+    /// the first `state` file holds the guard sample (`TSR-Q9`). The wallet
+    /// keeps [`DiskWrites::Deferred`]. The daemon switches to deferred with
+    /// one `SETCONF` after that file appears.
+    pub disk_writes: DiskWrites,
     /// Optional exit observer — the **production telemetry hook**. Once the child is
     /// reaped, the watcher reports how it ended ([`TorExit`]): a stop the actor asked
     /// for ([`TorExit::Reaped`], or [`TorExit::Killed`] when tor wedged past the grace
@@ -663,6 +809,30 @@ pub struct ManagedTor {
     /// never see this field.
     #[cfg(test)]
     pub(crate) leak: Option<launch::LeakTorEnd>,
+}
+
+/// Whether tor writes `state` promptly.
+///
+/// The launch passes this as `--AvoidDiskWrites`. [`Command::SetConfDiskWrites`]
+/// is the same key on the owning connection, and nothing else: a free
+/// `SETCONF` string is not a command this client will render.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiskWrites {
+    /// `0`. Tor writes `state` as a stock client does.
+    Prompt,
+    /// `1`. Tor defers writes.
+    Deferred,
+}
+
+impl DiskWrites {
+    /// The argument tor takes for `AvoidDiskWrites`.
+    #[must_use]
+    pub const fn as_arg(self) -> &'static str {
+        match self {
+            Self::Prompt => "0",
+            Self::Deferred => "1",
+        }
+    }
 }
 
 /// The control-port actor. Owns the write half and the
@@ -870,14 +1040,14 @@ async fn watch_child<N, F>(
     }
 }
 
-/// Shut the child down: **`SIGTERM` → bounded wait → kill → reap**.
+/// Shut the child down after [`TorControlClient::on_stop`] has closed the owning
+/// connection.
 ///
-/// Tolerant of a child that has just exited: the `SIGTERM` is then a harmless `ESRCH`
-/// and the wait reaps at once. The kill escalation is what keeps the wait *bounded*:
-/// "SIGTERM + wait" without it would hang the wallet forever if `tor` ever wedged.
+/// The close is the graceful route: tor's `lost_owning_controller` runs
+/// `tor_cleanup`. On Unix, `SIGTERM` is a second nudge and is harmless if the
+/// child has already exited (`ESRCH`). The wait is bounded by [`SHUTDOWN_GRACE`];
+/// a child still running is killed and reported as [`TorExit::Killed`].
 async fn shut_down(child: &mut Child) -> TorExit {
-    // Ask tor to exit gracefully (SIGTERM on Unix; DQ-T0.1). A no-op off Unix, where the
-    // timeout → `kill()` escalation is the whole shutdown.
     request_graceful_stop(child);
     match timeout(SHUTDOWN_GRACE, child.wait()).await {
         Ok(Ok(status)) => TorExit::Reaped(status),
@@ -891,7 +1061,7 @@ async fn shut_down(child: &mut Child) -> TorExit {
     }
 }
 
-/// Request a graceful stop of a managed `tor` — `SIGTERM` on Unix (DQ-T0.1). Harmless if
+/// `SIGTERM`, the Unix nudge after the owning connection is closed. Harmless if
 /// the child already exited (`ESRCH`).
 #[cfg(unix)]
 fn request_graceful_stop(child: &Child) {
@@ -905,12 +1075,12 @@ fn request_graceful_stop(child: &Child) {
     }
 }
 
-/// No graceful-stop signal off Unix: the `wait`-timeout → `Child::kill`
-/// (`TerminateProcess`) escalation drives shutdown there instead. Closing the owning
-/// control connection is the ruled graceful route (§4.7) and saves as much: tor logs
-/// the owning controller's close and raises `SIGTERM` itself (`lost_owning_controller`
-/// in `control.c`), so `tor_cleanup` forces the same `state` save on both routes, on
-/// every platform. Increment 3 replaces this `SIGTERM` with that close.
+/// No signal off Unix. [`TorControlClient::on_stop`] has already closed the owning
+/// connection, which is the graceful route on every platform
+/// (`TOR_SUPERVISOR.md` §4.7): tor logs the close and raises `SIGTERM` itself
+/// (`lost_owning_controller` in `control.c`), so `tor_cleanup` runs. A tor that
+/// ignores that close is still killed after [`SHUTDOWN_GRACE`] and reported as
+/// [`TorExit::Killed`]. A kill is not a clean stop.
 #[cfg(not(unix))]
 fn request_graceful_stop(_child: &Child) {}
 
@@ -1008,8 +1178,8 @@ impl Actor for TorControlClient {
         ))
     }
 
-    /// Clean shutdown: withdraw onions this actor published, then kill the
-    /// managed child. `TAKEOWNERSHIP` (landed in PR-2) is the *crash* backstop — a
+    /// Clean shutdown: withdraw onions this actor published, close the owning
+    /// control connection, then reap the managed child. `TAKEOWNERSHIP` (landed in PR-2) is the *crash* backstop — a
     /// panic / SIGKILL sends no `on_stop`, and the control connection dropping then exits
     /// `tor` — but on a clean stop the connection is still open here, so this is the
     /// primary path. Attached mode has no child to kill. (The bootstrap poll task is
@@ -1039,8 +1209,18 @@ impl Actor for TorControlClient {
                 break;
             }
         }
+        // kameo runs `on_stop` after the mailbox loop, so `death` is the signal
+        // the actor already recorded. Copy it before the await and pass that
+        // copy on: the classification is the one decided here. Closing the
+        // write half is §4.7. Tor reads EOF and `lost_owning_controller` runs
+        // `tor_cleanup`. A death already recorded means the connection or the
+        // process ended first, and that stop is not this close.
+        let death = self.death;
+        if death.is_none() {
+            self.writer.as_mut().shutdown().await.ok();
+        }
         if let Some(watch) = self.child.take() {
-            watch.finish(self.death).await;
+            watch.finish(death).await;
         }
         Ok(())
     }
@@ -1124,6 +1304,18 @@ async fn spawn_managed_tor(
     // The directory is owner-only on Unix before any file is written, and a symlink
     // at the final component is refused.
     launch::prepare_data_directory(&managed.data_dir).await?;
+    // Test builds only. The daemon installs one source before this spawn, so
+    // a data directory that already holds a cache file is left alone. A
+    // client that never installs still receives the job lane's seed here.
+    // A production build does not contain the call. The copy is synchronous
+    // file IO, so it runs on the blocking pool.
+    #[cfg(any(test, feature = "unpinned-tor-for-tests"))]
+    {
+        let data_dir = managed.data_dir.clone();
+        tokio::task::spawn_blocking(move || crate::directory_cache::copy_job_cache_into(&data_dir))
+            .await
+            .map_err(|_| ControlError::Spawn)?;
+    }
     // The launch names this file as tor's torrc, defaults torrc and both GeoIP files.
     // Tor refuses a named torrc that does not exist. Rewritten on every spawn, and
     // never by following a symlink or truncating a hard link.
@@ -1394,8 +1586,12 @@ impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControl
                     // on the wire, which is exactly what `ServiceId::parse` exists
                     // to prevent. (The service still dies with the connection.)
                     if in_flight.kind == PendingKind::AddOnion && reply.status() == 250 {
+                        // A republish (`DEL_ONION`, then `ADD_ONION` with the
+                        // same key) records the id once: teardown deletes it once.
                         if let Some(id) = super::onion::parse_service_id(reply.lines()) {
-                            self.published_onions.push(id);
+                            if !self.published_onions.contains(&id) {
+                                self.published_onions.push(id);
+                            }
                         }
                     }
                     tx.send(Ok(reply));
@@ -1618,6 +1814,38 @@ mod tests {
         );
     }
 
+    /// `HSFETCH` names the one onion it refreshes, from a validated id: the
+    /// line is the verb and the 56-character address, nothing else.
+    #[test]
+    fn hsfetch_renders_the_one_address() {
+        let id = super::super::onion::ServiceId::parse(
+            "url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid",
+        )
+        .expect("a v3 id");
+        assert_eq!(
+            Command::HsFetch(id).to_wire().unwrap().as_str(),
+            "HSFETCH url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid"
+        );
+    }
+
+    /// `HSFETCH … SERVER=` names the one onion and the one directory, both
+    /// from typed values.
+    #[test]
+    fn hsfetch_from_renders_the_address_and_one_server() {
+        let service = super::super::onion::ServiceId::parse(
+            "url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid",
+        )
+        .expect("a v3 id");
+        let server = super::super::vanguards::RelayFingerprint::from_bytes([0xAB; 20]);
+        assert_eq!(
+            Command::HsFetchFrom { service, server }
+                .to_wire()
+                .unwrap()
+                .as_str(),
+            "HSFETCH url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid SERVER=$ABABABABABABABABABABABABABABABABABABABAB"
+        );
+    }
+
     #[test]
     fn signal_renders_its_closed_name() {
         assert_eq!(
@@ -1819,8 +2047,8 @@ mod fake_tor {
 #[cfg(test)]
 mod live_tests {
     use super::{
-        BootstrapReadiness, Command, DeathSignal, EventSink, ManagedTor, TorControlClient,
-        TorControlClientConfig, TorExit, TorLaunch,
+        BootstrapReadiness, Command, DeathSignal, DiskWrites, EventSink, ManagedTor,
+        TorControlClient, TorControlClientConfig, TorExit, TorLaunch,
     };
     use kameo::actor::Spawn;
     use std::net::{SocketAddr, TcpListener};
@@ -2035,8 +2263,10 @@ mod live_tests {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: dir.path().to_path_buf(),
                 socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
                 // The whole point: a service that can reach the network.
                 disable_network: false,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
                 leak: None,
             }),
@@ -2186,7 +2416,9 @@ mod live_tests {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: data_dir.clone(),
                 socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
                 disable_network: true,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
                 leak: None,
             }),
@@ -2261,7 +2493,9 @@ mod live_tests {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: data_dir.clone(),
                 socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
                 disable_network: true,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
                 leak: None,
             }),
@@ -2337,7 +2571,9 @@ mod live_tests {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: dir.path().to_path_buf(),
                 socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
                 disable_network: false,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
                 leak: None,
             }),
@@ -2462,7 +2698,9 @@ mod live_tests {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: dir.path().to_path_buf(),
                 socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
                 disable_network: true,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
                 leak: Some(super::super::launch::LeakTorEnd {
                     lives: LEAK_LIVES,
@@ -2577,7 +2815,9 @@ mod live_tests {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: dir.path().to_path_buf(),
                 socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
                 disable_network: true,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
                 leak: None,
             }),
@@ -2606,28 +2846,23 @@ mod live_tests {
             "the managed tor listens on no control port"
         );
 
-        // Shutdown proof: stop → on_stop → SIGTERM + bounded wait → the child is reaped.
+        // Shutdown proof: stop → on_stop closes the owning connection → bounded
+        // wait → the child is reaped. Unix also sends SIGTERM as a nudge.
         actor.stop_gracefully().await.expect("graceful stop");
         actor.wait_for_shutdown().await;
 
         // Truthful reap check: a real `wait()`-yielded exit status delivered through the
-        // observer, not a pid probe (which races PID reuse). The platform-correct outcome:
-        // on Unix a cooperative tor exits on SIGTERM (clean `Reaped`); off Unix there is no
-        // graceful signal, so shutdown escalates to the SIGKILL fallback (`Killed`). Both
-        // are a *reaped* child delivered through the observer — the point of the test.
+        // observer, not a pid probe (which races PID reuse). A cooperative tor exits
+        // because its owning connection closed (`TOR_SUPERVISOR.md` §4.7), on every
+        // platform. A tor that ignores the close is killed, and that outcome is
+        // `TorExit::Killed` — this test is a cooperative stop, so it is `Reaped`.
         let exit = tokio::time::timeout(Duration::from_secs(10), exit_rx)
             .await
             .expect("on_stop reaped the child within the bound")
             .expect("exit observer delivered the outcome");
-        #[cfg(unix)]
         assert!(
             matches!(exit, TorExit::Reaped(_)),
-            "on Unix, SIGTERM reaps with a status, not the SIGKILL fallback: {exit:?}"
-        );
-        #[cfg(not(unix))]
-        assert!(
-            matches!(exit, TorExit::Killed),
-            "off Unix, no graceful signal exists, so shutdown reaps via the SIGKILL fallback: {exit:?}"
+            "closing the owning connection reaps tor with a status: {exit:?}"
         );
     }
 }

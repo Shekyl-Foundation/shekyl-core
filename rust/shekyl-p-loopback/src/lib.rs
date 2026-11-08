@@ -199,6 +199,18 @@ where
     (endpoint, client)
 }
 
+/// A client aimed at `target` through the SOCKS5 shim: whatever listens
+/// there answers every dial. A test that puts its own listener in front of
+/// an endpoint — to record the request bytes a read sends — dials through
+/// this.
+///
+/// # Panics
+///
+/// Panics if the shim cannot bind a loopback port.
+pub async fn client_through(target: SocketAddr, timeouts: Timeouts) -> PFetchClient {
+    PFetchClient::with_timeouts(spawn_forwarder(target).await, timeouts)
+}
+
 /// SOCKS5 proxy. It accepts the persona greeting, then tunnels every
 /// CONNECT to `target`.
 ///

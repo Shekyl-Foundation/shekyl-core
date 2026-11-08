@@ -150,7 +150,7 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xA0; 32],
+            shekyl_types::BlockHash::from_bytes([0xA0; 32]),
             make_timelocked(outputs),
         );
 
@@ -191,7 +191,7 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xA1; 32],
+            shekyl_types::BlockHash::from_bytes([0xA1; 32]),
             make_timelocked(outputs),
         );
 
@@ -211,7 +211,7 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xA2; 32],
+            shekyl_types::BlockHash::from_bytes([0xA2; 32]),
             make_timelocked(outputs),
         );
 
@@ -240,7 +240,7 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xA3; 32],
+            shekyl_types::BlockHash::from_bytes([0xA3; 32]),
             make_timelocked(outputs),
         );
 
@@ -279,7 +279,7 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xA4; 32],
+            shekyl_types::BlockHash::from_bytes([0xA4; 32]),
             make_timelocked(outputs),
         );
 
@@ -315,7 +315,7 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xA5; 32],
+            shekyl_types::BlockHash::from_bytes([0xA5; 32]),
             make_timelocked(outputs),
         );
 
@@ -353,7 +353,7 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xB0; 32],
+            shekyl_types::BlockHash::from_bytes([0xB0; 32]),
             make_timelocked(outputs),
         );
         indexes.check_invariants(&ledger).expect("after process");
@@ -392,19 +392,19 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xC0; 32],
+            shekyl_types::BlockHash::from_bytes([0xC0; 32]),
             make_timelocked(vec![(make_wallet_output(txh(70), 0, 900, 1_000), 1_000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             block(200),
-            [0xC1; 32],
+            shekyl_types::BlockHash::from_bytes([0xC1; 32]),
             make_timelocked(vec![(make_wallet_output(txh(71), 0, 901, 2_000), 2_000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             block(300),
-            [0xC2; 32],
+            shekyl_types::BlockHash::from_bytes([0xC2; 32]),
             make_timelocked(vec![(make_wallet_output(txh(72), 0, 902, 3_000), 3_000)]),
         );
         indexes.check_invariants(&ledger).expect("3 blocks");
@@ -554,7 +554,7 @@ mod ledger_proptest {
                             {
                                 let mut h = [0u8; 32];
                                 h[..8].copy_from_slice(&next_height.to_le_bytes());
-                                h
+                                shekyl_types::BlockHash::from_bytes(h)
                             },
                             Timelocked(outputs),
                         );
@@ -777,7 +777,7 @@ mod sync_bookkeeping {
             indexes.process_scanned_outputs(
                 &mut ledger,
                 block(*height),
-                block_hash(*height),
+                shekyl_types::BlockHash::from_bytes(block_hash(*height)),
                 Timelocked(recovered),
             );
             heights.push(ledger.height().to_raw());
@@ -806,7 +806,7 @@ mod sync_bookkeeping {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(10),
-            block_hash(10),
+            shekyl_types::BlockHash::from_bytes(block_hash(10)),
             Timelocked(vec![o1, o2]),
         );
 
@@ -830,19 +830,19 @@ mod sync_bookkeeping {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(10),
-            block_hash(10),
+            shekyl_types::BlockHash::from_bytes(block_hash(10)),
             Timelocked(vec![mock_output(200, 1000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             block(20),
-            block_hash(20),
+            shekyl_types::BlockHash::from_bytes(block_hash(20)),
             Timelocked(vec![mock_output(201, 2000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             block(30),
-            block_hash(30),
+            shekyl_types::BlockHash::from_bytes(block_hash(30)),
             Timelocked(vec![mock_output(202, 3000)]),
         );
 
@@ -859,7 +859,7 @@ mod sync_bookkeeping {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(20),
-            block_hash(20),
+            shekyl_types::BlockHash::from_bytes(block_hash(20)),
             Timelocked(vec![mock_output(301, 7000)]),
         );
 
@@ -879,7 +879,7 @@ mod sync_bookkeeping {
             indexes.process_scanned_outputs(
                 &mut ledger,
                 block(h),
-                block_hash(h),
+                shekyl_types::BlockHash::from_bytes(block_hash(h)),
                 Timelocked(vec![]),
             );
         }
@@ -901,7 +901,7 @@ mod sync_bookkeeping {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(10),
-            block_hash(10),
+            shekyl_types::BlockHash::from_bytes(block_hash(10)),
             Timelocked(vec![o]),
         );
 

@@ -34,16 +34,8 @@
 name: ci/docs-gates
 
 on:
-  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
-  # not only the branch head — the class of failure neither PR's CI can
-  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
-  # filter, so this runs on every group regardless of the PR filter above
-  # or below.
-  merge_group:
-    types: [checks_requested]
-    branches: [dev]
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened]
     # NO `paths:` FILTER, DELIBERATELY. This job's name is a REQUIRED status
     # context on dev, and a required context that never reports is not a
     # skipped check — it is "Expected — waiting for status to be reported",
@@ -74,6 +66,11 @@ on:
     #
     # Cost of always running: ~25 s (five consecutive runs: 24/25/25/26 s and
     # one 3m31s outlier), on a job already bounded at 10 minutes.
+  # `dev` too: every check here is whole-tree, so a file one pull request
+  # moves and another one links to is green on each and red on `dev`; only
+  # the run on `dev` sees what the merges made (06-branching.mdc).
+  push:
+    branches: [dev]
 
 concurrency:
   group: docs-gates-${{ github.ref }}
@@ -125,57 +122,12 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_doc_headings.py
 
-      - name: Run LMDB schema coverage check
-        # Every table in db_lmdb.cpp's SHEKYL_LMDB_TABLES list must have a
-        # section in docs/LMDB_SCHEMA.md, and the doc's stated total must
-        # match the list. Nine live tables had zero mentions when this gate
-        # was written — absence of a section reads as absence of a table.
-        #
-        # Runs even if earlier checks failed, for the same non-masking
-        # reason as above.
-        if: '!cancelled()'
-        run: python3 scripts/ci/check_lmdb_schema_coverage.py
-
-      - name: Run AFC-1 archival forcing register check
-        # The forcing register (docs/design/archival_forcing_cells.tsv) is the
-        # 34-cell map of which archival apply/revert halves a block sequence
-        # can force. Its value is that its citations RESOLVE, and line anchors
-        # into db_lmdb.cpp drift with every edit — a register of stale anchors
-        # is worse than none, because it reads as checked.
-        #
-        # Extraction is deliberately identical to check_lmdb_schema_coverage's
-        # parse_table_list: two gates pinning one construct with independently
-        # written parsers agree by construction today and diverge silently
-        # later. A looser parser here would MISS a future archival table, which
-        # would then be absent from BOTH sides of the set difference and go
-        # green over a table nothing covers.
-        #
-        # Runs even if earlier checks failed, for the same non-masking reason.
-        if: '!cancelled()'
-        run: python3 scripts/ci/check_archival_forcing_cells.py
-
-      - name: Run AFC-1 forcing register self-test
-        # The gate's four legs were bitten by hand when written; a hand bite
-        # is not a pin. These fixtures hold each leg, including the gate's own
-        # regression: the anchor leg once matched any long word from the
-        # free-text note, so a row could resolve to a comment rather than to
-        # code while reading as checked.
-        if: '!cancelled()'
-        run: python3 scripts/ci/test_check_archival_forcing_cells.py
-
-      - name: Run LMDB schema coverage self-test
-        # The write-pattern leg pins SET membership, not cardinality. A
-        # rotation that keeps the blind-upsert count at 10 and changes
-        # the members must go red — that is the defect that produced the
-        # leg. Instance of 47-gate-subject-assertion.mdc / 50-testing.mdc.
-        if: '!cancelled()'
-        run: python3 scripts/ci/test_check_lmdb_schema_coverage.py
-
       - name: Run DRS-P0d digest-v0 coverage check
         # The logical-state digest v0 must name its three families
-        # (core chain, spent_keys, curve root) at the hasher, the LMDB
-        # walker, the FFI, and the audit read-set — and must record the
-        # archival-journal exclusion. Instance of 47-gate-subject-assertion.mdc.
+        # (core chain, spent_keys, curve root) at the hasher, the FFI,
+        # and the audit read-set — and must record the archival-journal
+        # exclusion. The C++ walker left with the LMDB store.
+        # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_drs_p0d_digest_coverage.py
 
@@ -194,6 +146,26 @@ jobs:
         # checked. Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_internal_information.py
+
+      - name: Run economic-accessor check
+        # ESR-16. Production reads the shipped parameter set through one
+        # accessor. Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_economic_accessors.py
+
+      - name: Run economic-accessor selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_economic_accessors.py --selftest
+
+      - name: Run weight-limit literal check
+        # CEN-H3's limit is derived. The old 600-byte-reserve literal must
+        # not be restated in source. Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_tx_weight_literals.py
+
+      - name: Run weight-limit literal selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_tx_weight_literals.py --selftest
 
       - name: Run forbidden-fossil check
         # Live RCTType* names, GENESIS_STRATEGY.md, privacy-security.mdc in
@@ -225,6 +197,18 @@ jobs:
       - name: Run FOLLOWUPS owner gate selftest
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_owners.py --selftest
+
+      - name: Constant-time harness covers the shipped toolchain (CA-1)
+        # docs/formal/checkct's verdicts are per compiler: the same source was
+        # branchless under one LLVM and branched under another (2026-10-24).
+        # results/measured.toml names the channel the latest run covers; a
+        # rust-toolchain.toml bump without a re-measurement is red here.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_checkct_toolchain.py
+
+      - name: Constant-time harness toolchain gate selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_checkct_toolchain.py --selftest
 
       - name: Change-scope classifier selftest
         # scripts/ci/change_scope.py decides which changes skip the builds,
@@ -259,23 +243,6 @@ jobs:
       - name: Check FOLLOWUPS row prose (selftest)
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_row_prose.py --selftest
-
-      - name: Run the conformance-register extractor self-test
-        # DRS-E2 RD-Q6: the E2 grader's register is the coverage gate's own
-        # parse, serialized. The self-test parses the serialized text back
-        # and asserts the shape the Rust grader reads (keys, sorted unique
-        # ids, the state vocabulary, at least one row).
-        if: '!cancelled()'
-        run: python3 scripts/ci/export_conformance_register.py --selftest
-
-      - name: Check the committed register fixture against the extractor
-        # The Rust grader's tests parse this fixture with `Register::from_json`
-        # (rust/shekyl-chain-ingest/src/grader.rs); this step holds the
-        # fixture equal to what the extractor emits now, so a key rename on
-        # either side goes red here and not after a whole replay has run.
-        # Regenerate with `--out` when the register changes.
-        if: '!cancelled()'
-        run: python3 scripts/ci/export_conformance_register.py --check-fixture rust/shekyl-chain-ingest/fixtures/conformance_register.json
 
       - name: Run pinned-anchor gate
         # A `file:line` citation must resolve in the tree it is PINNED to, not
@@ -359,6 +326,68 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/test_drs_bench.py
 
+      - name: Run DRS-BENCH readback selftest
+        # The durability line is parsed once, the refusal names the file
+        # the line was read from, and `--seed-daemon` is a second binary.
+        # Split from `test_drs_bench.py` so that file stays the refusals
+        # and the comparison. The synthetic artifact both files mutate
+        # lives in `drs_fixture.py`.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_drs_readback.py
+
+      - name: Run the fsync probe selftest
+        # The budget's control channel (DAEMON_REDB_STORE.md §1.3a rule 2):
+        # a stall inside a row's window refuses the row, a probe that missed
+        # the window refuses it, and the 30-minute soak's verdict asks for the
+        # write-cache posture on a microsecond median rather than failing it.
+        if: '!cancelled()'
+        run: python3 scripts/bench/fsync_probe.py --selftest
+
+      - name: Run the regtest session selftest
+        # The durability harnesses compose one session: a published tip is
+        # the chain length minus one, and a header range is read in chunks
+        # of the restricted listener's cap.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_regtest.py --selftest
+
+      - name: Run the catch-up harness selftest
+        # PB-D2 / PB-D3's mode: a catch-up artifact needs its probe window
+        # with no stall, the subject at the seed's tip, the week's block
+        # count at the row's transaction load, and a proof-of-work share,
+        # so a miss at a release cut can name its cause.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_catchup.py --selftest
+
+      - name: Run the crash harness selftest
+        # PB-S1's judge: a reopened tip below the last acknowledged one, a
+        # digest off a clean replay to that tip, or a tip on no known chain
+        # fails the trial. A run under 200 trials or missing one of PB-S1's
+        # points is written and exits non-zero; row_refusals names the gap.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_crash.py --selftest
+
+      - name: Run the transaction source selftest
+        # The bench reads the source's lines: an accept, the depth gate and a
+        # stop are each one event, the test runner's own lines are none, and
+        # a pool missing an accepted submit names it.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_txsource.py --selftest
+
+      - name: Run the power-loss harness selftest
+        # The replay reads replay-log's find answers, rebuilds the device at
+        # every flush and FUA boundary and between them, attributes each
+        # point the flush that had already committed when the tip was
+        # published, and judges it as PB-S1.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_powerloss.py --selftest
+
+      - name: Run RPC column capture selftest
+        # `rpc_capture.py` writes one file per chain read and reserves the
+        # loopback port the kept-chain capture binds. The capture's own
+        # console log is where a bind failure is written.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_rpc_capture.py
+
       - name: Run benchmark comparator tests
         # `scripts/bench/compare.py` decides the per-PR benchmark gate: which
         # delta is a fail, which is a warn, and what a zero baseline means.
@@ -377,6 +406,14 @@ jobs:
         # cannot silently pick a worse table.
         if: '!cancelled()'
         run: python3 scripts/bench/test_rt_p5_classes.py
+
+      - name: Run RT-W10 summary tests
+        # `scripts/bench/rt_w10_summary.py` derives the bounded-request
+        # caps from the shape registered in
+        # `docs/benchmarks/rt_w10_request_cost_20261102.md`. The control
+        # is a complete fixture whose caps the test computes itself.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_rt_w10_summary.py
 
       - name: Run RT-P6 summary tests
         # `scripts/bench/rt_p6_summary.py` loads a run only when it has the
@@ -423,73 +460,9 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/test_check_shell_gate_exits.py
 
-      - name: Run DRS-C surface map gate
-        # Tier-A A9: blockchain.cpp's store vocabulary is partitioned into
-        # named validation surfaces, every method in exactly one. The gate
-        # RE-DERIVES the vocabulary from the tree it runs on rather than
-        # trusting a verification stamp: §3.5's stamp sat at 97 while the tree
-        # had moved to 102, and the membership moved further than the total
-        # (+7/-3 for a net +4).
-        #
-        # It derives the alias SET from `BlockchainDB *`/`&` declarations
-        # instead of matching one token, and takes the call OPERATOR from the
-        # declaration's sigil (`*` -> `->`, `&` -> `.`). The first version
-        # matched `m_db->` -- the same derivation that built the table -- so it
-        # was green BY CONSTRUCTION over calls made through any other name, and
-        # missed three live methods. Receiver shapes the derivation cannot
-        # follow (`get_db` on sight, an `auto` binding of the store, a
-        # dereferenced call) are REFUSED over the DERIVED alias set, so a new
-        # alias or a new shape fails loudly instead of shrinking the vocabulary.
-        # Instance of 47-gate-subject-assertion.mdc.
-        if: '!cancelled()'
-        run: python3 scripts/ci/check_drs_c_surface_map.py
-
-      - name: Self-test the DRS-C surface map gate
-        # That gate has been wrong twice in the same way: a receiver shape its
-        # derivation could not follow, silently absent from the vocabulary,
-        # with the bijection green over the gap. Hand-run negative controls
-        # caught neither, because they were written from the same mental model
-        # as the derivation. Every shape is pinned here as a case -- collected,
-        # refused, and the near-misses that must be neither.
-        if: '!cancelled()'
-        run: python3 scripts/ci/test_check_drs_c_surface_map.py
-
-      - name: Run redb key-type ordering gate
-        # The bijection gate checks that every table is MAPPED; this one checks
-        # the mapping reproduces LMDB's ORDERING. That gap was not theoretical:
-        # review of the first landing found three MDB_INTEGERKEY tables mapped
-        # as &[u8] and one DUPSORT multimap whose values ignored compare_uint64
-        # — names 49/49 while four orderings were wrong.
-        # Default-flag tables are deliberately unconstrained: several store
-        # BE(x) 8-byte keys, where big-endian byte-lex IS numeric order, so both
-        # u64 and &[u8] are correct and a rule would fail correct code.
-        # Instance of 47-gate-subject-assertion.mdc.
-        if: '!cancelled()'
-        run: python3 scripts/ci/check_redb_schema_key_types.py
-
-      - name: Run redb key-type ordering selftest
-        # The rule function is what makes INTEGERKEY and dupsort-hash32
-        # collapse unskippable; run the fixture that a name-set elif
-        # swallowing zerokval-uint64 tables (block_info, output_txs) fails.
-        if: '!cancelled()'
-        run: python3 scripts/ci/check_redb_schema_key_types.py --selftest
-
       - name: Run redb schema bijection gate
-        # DRS-0 slice B: every table in SHEKYL_LMDB_TABLES has exactly one
-        # redb TableDefinition and vice versa, no duplicates on either side.
-        # The X-macro is the only admissible source: a table can exist
-        # without being on BlockchainDB's interface. Until 2026-09-13 the
-        # settlement pair existed only on BlockchainLMDB, so a schema built
-        # from the abstract interface would have omitted a write path LMDB
-        # has; SO-D8 promoted it since, which closes the instance, not the
-        # class (rationale of record: check_redb_schema_bijection.py header).
-        # Checks NAMES, not types — ordering is the key-type gate above;
-        # comparator evidence is in lmdb_order's tests; class evidence is
-        # per-row in the audit's §12.
-        # Since S-CHAIN-W commit 1 the schema also carries tables LMDB never
-        # had (`RUST_ONLY_TABLES`, a {table: reason} map in schema.rs). A
-        # definition with neither a twin nor an entry there is still red
-        # with the original extra-leg refusal; the map is not a mode switch.
+        # The Rust table definitions are the denominator and TABLE_CLASSES
+        # names each of them. Ordering lives in lmdb_order's pinned vectors.
         # Instance of 47-gate-subject-assertion.mdc; --selftest proves each
         # refusal.
         if: '!cancelled()'
@@ -658,29 +631,6 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_block_rule_corrupt_sites.py --selftest
 
-      - name: Run conformance-coverage gate
-        # Every RATIFIED consensus rule (census bucket 1/2) must carry a
-        # conformance record in CONSENSUS_STORE_RECONCILIATION.md §5.4.1, and
-        # the register must not reach outside that set. Counting register rows
-        # proves SELF-CONSISTENCY, never COVERAGE — an absent row has no id to
-        # count — and the ratified denominator has already moved four times,
-        # each move silently reopening a backlog someone had just called closed.
-        # Buckets 3/4 are UNREVIEWED by construction and are NOT demanded.
-        # Instance of 47-gate-subject-assertion.mdc: both parses assert their
-        # own subject, and each side counts its own dropped ids, because an
-        # id-recognition bug that hits BOTH documents equally is invisible to a
-        # set difference.
-        if: '!cancelled()'
-        run: python3 scripts/ci/check_conformance_coverage.py
-
-      - name: Run conformance-coverage gate self-test
-        # Bitten red in both directions, plus the symmetric-drop case the
-        # comparison alone cannot see. Fixtures are deliberately multi-shape:
-        # #704's defects were all at INTERSECTIONS of axes, and its root cause
-        # was single-section fixtures making a limb untestable by their shape.
-        if: '!cancelled()'
-        run: python3 scripts/ci/test_check_conformance_coverage.py
-
       - name: Run index table-shape check
         # GFM drops a surplus cell and blanks a missing one, so a malformed row
         # says one thing in source and another on the page — 5,455 characters
@@ -742,6 +692,14 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_consensus_digest_oracle.py
 
+      - name: Run release-archive docs check
+        # Every gitian descriptor ships docs/USER_GUIDE.md in its archive and
+        # none ships the repository README (alpha.11 bug hunt A10). Instance
+        # of 47-gate-subject-assertion.mdc: a missing descriptor or one with
+        # no `cp ... bin` line fails.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_release_archive_docs.py
+
       - name: Run claim-era basename check
         # docs/design/ must not grow CONFIDENTIAL_STAKING.md or a
         # txin_stake_claim spec. Instance of 47-gate-subject-assertion.mdc.
@@ -799,6 +757,62 @@ jobs:
         # here even though the Rust test would pass.
         if: '!cancelled()'
         run: python3 docs/test_vectors/RPC_CHANNEL_NAMES_V1/generate.py --check
+
+      - name: Run key-derivation vector independent oracle
+        # ADDRESS_DERIVATION_V3 and ARCHIVAL_P_DERIVE_V2 are written by the
+        # Rust they test, so the Rust KAT alone proves determinism, not
+        # correctness (50-testing.mdc, oracle tiers). This recomputes every
+        # HKDF / hash / mod-l / Ed25519 value in both corpora from the
+        # vectors' inputs, with RFC 5869 HKDF written over hmac and the
+        # derivation constants written from the design, and anchors its own
+        # primitives on RFC 5869, RFC 8032 and the base point first. Fails on
+        # any disagreement, and (47-gate-subject-assertion.mdc) when a corpus
+        # or a vector kind it exists to check is absent. Values that need an
+        # ML-KEM / ML-DSA / FN-DSA / SLH-DSA implementation stay self-pinned;
+        # each manifest lists them.
+        if: '!cancelled()'
+        run: python3 -I scripts/kat/address_derivation_v3_oracle.py
+
+      - name: Run the spend signing hash oracle
+        # NETWORK_IDENTITY.md NI-Q4: the hash every hybrid spend signature is
+        # over is cSHAKE256 of the network id and the payload. This
+        # recomputes each pinned hash of pqc_signing_preimage_v1.json on all
+        # four networks with a stdlib Keccak sponge, anchored on hashlib's
+        # SHAKE256 and on PR 1's recorded network ids; exit 1 on a mismatch,
+        # 2 when the fixture lacks a payload to check (rule 47).
+        if: '!cancelled()'
+        run: python3 -I scripts/kat/spend_signing_hash_oracle.py
+
+      - name: Run the message-signing preimage oracle
+        # NETWORK_IDENTITY.md NI-F2: a message signature's preimage binds the
+        # network's 16-byte id (layout version 2). This rebuilds
+        # docs/test_vectors/MSG_SIGN_PREIMAGE_V2.json from fixed inputs with
+        # the same stdlib sponge (scripts/kat/stdlib_cshake.py), anchored the
+        # same way, and requires the pinned file to equal it; exit 1 on a
+        # mismatch, 2 when the file has no case (rule 47).
+        if: '!cancelled()'
+        run: python3 -I scripts/kat/msg_sign_preimage_oracle.py
+
+      - name: Run the emission auth oracle
+        # NETWORK_IDENTITY.md NI-F11: an emission's two auths sign
+        # cSHAKE256-64 of the network id (byte 0, 16 bytes) and the framed
+        # field inventory. This recomputes every pinned per-network digest of
+        # docs/test_vectors/EMISSION_AUTH_MSG_V1 from the pinned framed bytes,
+        # after anchoring those bytes on the digests pinned before the id
+        # entered; exit 1 on a mismatch, 2 when the file has no framed bytes
+        # (rule 47).
+        if: '!cancelled()'
+        run: python3 -I scripts/kat/emission_auth_msg_oracle.py
+
+      - name: Run the multisig fingerprint oracle
+        # NETWORK_IDENTITY.md NI-R15: a multisig address fingerprint is the
+        # signing envelope's frame of the canonical group payload, bound to
+        # the network's name_id. This rebuilds the payload, anchors the
+        # builder on the -v1 fingerprint pinned before the name entered, and
+        # requires docs/test_vectors/MULTISIG_FINGERPRINT_V3.json to equal its
+        # output; exit 1 on a mismatch, 2 when the file pins nothing (rule 47).
+        if: '!cancelled()'
+        run: python3 -I scripts/kat/multisig_fingerprint_oracle.py
 
       - name: Run clatter production-graph gate
         # clatter is an independent implementation of the RPC channel's

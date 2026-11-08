@@ -35,11 +35,12 @@
 
 use shekyl_chain_rules::{
     seed_height, target_claim, AtHeight, Candidate, Corrupt, Fault, HeaderRecord, HeaderView,
-    InvalidBlock, PerHeightRecord, ReferenceClaims, RuleSet, Target, Trust, ViewRead,
+    InvalidBlock, PerHeightRecord, ReferenceClaims, RuleSet, Target, ViewRead,
 };
 use shekyl_chain_store::store::{
     AltCannot, AltChain, AltView, ChainStore, ReadSnapshot, StoreCannot, StoreError,
 };
+use shekyl_network::NetworkId;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::Block;
 
@@ -122,6 +123,9 @@ pub struct Claims {
     pub target: Target,
     /// The third claim: each reference's height and root.
     pub references: ReferenceClaims,
+    /// The id of the network the run is on: every input's signature hash
+    /// binds it (CEN-I17, `NETWORK_IDENTITY.md` NI-Q4).
+    pub network: NetworkId,
 }
 
 /// Why a run's claims stopped at one of its blocks.
@@ -245,6 +249,7 @@ fn claim_one(
         seed,
         target,
         references,
+        network: rules.trust().network_id(),
     })
 }
 
@@ -284,7 +289,6 @@ pub(crate) fn claim_alt(
     store: &ChainStore,
     rules: ChainRules,
     candidate: &Candidate,
-    trust: &Trust,
 ) -> Result<ClaimedAlt, ClaimStop> {
     let snap = store.begin_read()?;
     let window = match cache_window::seeds_on(&snap, rules) {
@@ -320,7 +324,8 @@ pub(crate) fn claim_alt(
             }
         },
     };
-    let outcome = cache_window::spend(&fork, &seed, side, height, &rule_set, trust, &window);
+    let floor = snap.undo_floor().map_err(ClaimStop::Store)?;
+    let outcome = cache_window::spend(&fork, &seed, side, height, &rule_set, &window, floor);
     let prepare = match outcome {
         AltSpend::Hash => false,
         AltSpend::Prepare => true,
@@ -340,29 +345,30 @@ pub(crate) fn claim_alt(
             seed,
             target,
             references: ReferenceClaims::EMPTY,
+            network: rules.trust().network_id(),
         },
         prepare,
     })
 }
 
-/// The claims a producer makes for the block after the recorded tip, on
-/// one snapshot: its height, the seed (CEN-D3) and the target (CEN-D4) —
-/// what the miner's template producer pins and hands the miner.
+/// The claims a producer makes for the block after `snap`'s tip: its
+/// height, the seed (CEN-D3) and the target (CEN-D4) — what the template
+/// producer reads beside the chain facts and the pool's selection, on the
+/// same snapshot, and hands the miner.
 ///
 /// # Errors
 ///
 /// [`ClaimStop`].
-pub fn claim_next(
-    store: &ChainStore,
+pub(crate) fn claim_next(
+    snap: &ReadSnapshot<'_>,
     rules: ChainRules,
 ) -> Result<(BlockHeight, BlockHash, Target), ClaimStop> {
-    let snap = store.begin_read()?;
-    let view = shekyl_chain_store::store::SnapshotView::new(&snap);
+    let view = shekyl_chain_store::store::SnapshotView::new(snap);
     let connecting = shekyl_chain_rules::Tip::connecting_height(view.tip()?.as_ref());
     let rule_set = rules.in_force(connecting);
     let seed = match seed_height(connecting) {
         None => BlockHash::NULL,
-        Some(at) => recorded_hash(&snap, at)?,
+        Some(at) => recorded_hash(snap, at)?,
     };
     match target_claim(&view, connecting, &rule_set) {
         Ok(Ok(target)) => Ok((connecting, seed, target)),
@@ -374,6 +380,34 @@ pub fn claim_next(
         Err(Fault::View(e)) => Err(ClaimStop::Store(e)),
         Err(Fault::Stale(stale)) => unreachable!("a derivation is never stale: {stale}"),
     }
+}
+
+/// The seed of the next RandomX epoch, for a block connecting at
+/// `connecting`: the block id at `next_seedheight` (the seed height
+/// `SEEDHASH_EPOCH_LAG` blocks on), read on `snap`, or `None` while it is
+/// the current seed's height. At or below the tip whenever it differs, so
+/// recorded.
+///
+/// # Errors
+///
+/// [`ClaimStop`]: the store's fault, or [`ClaimStop::Moved`] when the
+/// height is not recorded on `snap`.
+pub(crate) fn next_seed(
+    snap: &ReadSnapshot<'_>,
+    connecting: BlockHeight,
+) -> Result<Option<BlockHash>, ClaimStop> {
+    let Some(current) = seed_height(connecting) else {
+        return Ok(None);
+    };
+    let next = BlockHeight::from_raw(shekyl_difficulty::next_seedheight(
+        connecting.to_raw(),
+        shekyl_difficulty::SEEDHASH_EPOCH_BLOCKS,
+        shekyl_difficulty::SEEDHASH_EPOCH_LAG,
+    ));
+    if next == current {
+        return Ok(None);
+    }
+    recorded_hash(snap, next).map(Some)
 }
 
 /// Whether `run` still extends this snapshot.

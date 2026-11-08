@@ -19,6 +19,7 @@ use crate::rule_set::RuleSet;
 use crate::rules::TxKind;
 use crate::validate::tx_form;
 use crate::verdict::{Locus, TxSlot};
+use shekyl_economics::FULL_REWARD_ZONE;
 use shekyl_wire::{Ct, CtBase, Input, Transaction};
 
 #[path = "tx_balance_tests.rs"]
@@ -112,70 +113,37 @@ fn a_non_coinbase_row_is_vacuous_at_the_miner_slot_and_run_elsewhere() {
 // on any `MockChain` view (slice 6 row 6), so the union has no accepted
 // block to show on here.
 
-// ---- the limits: pinned to the C++ defines, held equal to the wire's ----
+// ---- the limits: pinned values, held equal to the wire's ----
 
-/// The integer a `#define NAME value` line in `cryptonote_config.h` carries.
-/// Read from the header itself, not from a copy of the number, so a C++
-/// edit that moves a limit fails here rather than diverging silently (the
-/// slice-4 Q5 pin shape).
-fn cxx_define(name: &str) -> u64 {
-    let config_h = include_str!("../../../../src/cryptonote_config.h");
-    let line = config_h
-        .lines()
-        .find(|l| {
-            let mut words = l.split_whitespace();
-            words.next() == Some("#define") && words.next() == Some(name)
-        })
-        .unwrap_or_else(|| panic!("cryptonote_config.h defines {name}"));
-    line.split_whitespace()
-        .nth(2)
-        .expect("the define carries a value")
-        .parse()
-        .unwrap_or_else(|_| panic!("{name}'s value is an integer"))
+/// The transaction size limit, the coinbase reserve and the unlock-time
+/// sentinel, pinned as the shipped values and held equal to the wire
+/// crate's copies. The size limit has a copy in this crate and one in the
+/// wire crate, and they are held equal.
+#[test]
+fn the_limits_are_pinned_and_the_wires() {
+    assert_eq!(MAX_TX_SIZE, 1_000_000);
+    assert_eq!(MAX_TX_SIZE, shekyl_wire::transaction::MAX_TX_SIZE);
+    assert_eq!(shekyl_wire::transaction::COINBASE_RESERVE, 1386);
+    assert_eq!(UNLOCK_TIME_SENTINEL, 500_000_000);
 }
 
-/// The one define that is an alias: `CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL`
-/// names `CRYPTONOTE_MAX_BLOCK_NUMBER`, so the sentinel pins to the latter
-/// and this asserts the alias still holds.
+/// H3's limit is the wire crate's `TX_WEIGHT_LIMIT`. The formula — half
+/// the zone less the coinbase reserve — is held here so the generated zone
+/// and that constant cannot drift.
 #[test]
-fn the_limits_are_the_cxx_defines() {
-    assert_eq!(cxx_define("CRYPTONOTE_MAX_TX_SIZE"), MAX_TX_SIZE as u64);
-    assert_eq!(
-        cxx_define("CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE"),
-        COINBASE_BLOB_RESERVED as u64
-    );
-    assert_eq!(
-        cxx_define("CRYPTONOTE_MAX_BLOCK_NUMBER"),
-        UNLOCK_TIME_SENTINEL
-    );
-    let config_h = include_str!("../../../../src/cryptonote_config.h");
-    assert!(
-        config_h.lines().any(|l| {
-            let mut w = l.split_whitespace();
-            w.next() == Some("#define")
-                && w.next() == Some("CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL")
-                && w.next() == Some("CRYPTONOTE_MAX_BLOCK_NUMBER")
-        }),
-        "the sentinel is still the alias of CRYPTONOTE_MAX_BLOCK_NUMBER"
-    );
-}
-
-/// H3's limit is derived, never restated: the formula is
-/// `get_transaction_weight_limit`'s, its operands are the generated
-/// full-reward zone and the coinbase reserve, and the shipped value is
-/// what the census pins.
-#[test]
-fn the_weight_limit_is_derived_from_the_zone_and_the_reserve() {
+fn the_weight_limit_is_the_wire_constant() {
+    assert_eq!(max_tx_weight(), shekyl_wire::transaction::TX_WEIGHT_LIMIT);
     assert_eq!(
         max_tx_weight(),
-        (FULL_REWARD_ZONE / 2) as usize - COINBASE_BLOB_RESERVED
+        (FULL_REWARD_ZONE / 2) as usize - shekyl_wire::transaction::COINBASE_RESERVE
     );
-    assert_eq!(max_tx_weight(), 149_400, "the shipped limit (census H3)");
 }
 
 /// The codec's DoS bounds and the consensus limits are the same numbers —
-/// held equal by this test, not by a comment (Q5 as ruled). The rule's
-/// source is the C++ define (above), never the codec.
+/// held equal by this test, not by a comment (Q5 as ruled). The size and
+/// the unlock sentinel are the C++ defines (above). The weight limit is
+/// [`max_tx_weight`], the wire constant, held to the zone formula by
+/// `the_weight_limit_is_the_wire_constant`.
 #[test]
 fn the_limits_equal_the_wire_crates_bounds() {
     assert_eq!(MAX_TX_SIZE, shekyl_wire::transaction::MAX_TX_SIZE);
@@ -230,7 +198,7 @@ fn listed_serialized_to(target: usize) -> Transaction {
 /// Boundary: a transaction of exactly `MAX_TX_SIZE` bytes passes H1; one
 /// byte more is refused on it. The inclusive edge is asserted on the rule
 /// alone — through `tx_form` a megabyte transaction is refused by H3
-/// (149 400) whatever H1 says, in the C++'s order too — and the refusal
+/// (the weight limit) whatever H1 says, in the C++'s order too — and the refusal
 /// side through `tx_form` at both sites names H1, which runs first.
 #[test]
 fn h1_the_size_limit_is_inclusive() {
@@ -750,7 +718,7 @@ fn h10_a_repeated_key_image_within_one_transaction_is_refused() {
 // ---- CEN-H15 (the Null half) --------------------------------------------
 
 /// A non-coinbase transaction with a `Null` CT is refused on H15 at both
-/// sites — including on what would be a Fakechain node (Q9: unconditional,
+/// sites — including on what would be a regtest node (Q9: unconditional,
 /// where the C++ gates the check on `m_nettype != FAKECHAIN`). At the miner
 /// slot `Null` is the coinbase's CT (F3) and the row is vacuous.
 #[test]

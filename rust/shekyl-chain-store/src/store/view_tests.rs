@@ -18,7 +18,7 @@ use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyIm
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
 use super::connect_fixtures::{formed, priced};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE_ROW};
+use super::store_tests::{tmp, TestErr, EPOCH, PROBE_ROW};
 use super::*;
 use crate::codec::{forged, BlockBody, BlockInfo, Canonical, CodecError, LeafCount, Present, Raw};
 use crate::lmdb_order::LmdbHashKey;
@@ -128,6 +128,7 @@ fn record_draw_row(batch: &WriteBatch<'_, '_>, height: BlockHeight) -> Result<()
 fn record_empty_digest(batch: &WriteBatch<'_, '_>) -> Result<(), StoreError> {
     let digest = shekyl_chain_rules::DrawableEpoch::new(
         shekyl_types::SettlementEpoch::from_raw(0),
+        None,
         Vec::<(
             shekyl_types::PCanonicalId,
             shekyl_types::archival::ReceiptSignPk,
@@ -181,7 +182,6 @@ fn root_at_reads_key_h_and_height_zero_is_the_empty_tree() {
         Ok(())
     });
     assert_eq!(out, Ok(()));
-    cleanup(&path);
 }
 
 #[test]
@@ -198,7 +198,6 @@ fn root_at_on_an_empty_chain_is_the_empty_tree_at_zero_and_above_tip_after() {
         Ok(())
     });
     assert_eq!(out, Ok(()));
-    cleanup(&path);
 }
 
 /// `tip()` is the trait's read of the same `block_info.last()` the other
@@ -240,7 +239,6 @@ fn tip_is_none_on_an_empty_chain_and_the_last_recorded_identity_after() {
         Ok(())
     });
     assert_eq!(out, Ok(()));
-    cleanup(&path);
 }
 
 /// A root row missing **inside** `1..=tip + 1` is store corruption, not
@@ -287,7 +285,6 @@ fn a_root_hole_below_the_tip_is_si7_not_above_tip() {
             },
         }
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -311,7 +308,6 @@ fn block_at_returns_the_identity_and_the_header_parsed_from_the_recorded_blob() 
         Ok(())
     });
     assert_eq!(out, Ok(()));
-    cleanup(&path);
 }
 
 /// A `block_info` row missing below the tip is a hole, not an above-tip
@@ -340,7 +336,6 @@ fn a_block_info_hole_below_the_tip_is_si7_not_above_tip() {
         Ok(())
     });
     assert!(matches!(out, Err(TestErr::Store(_))), "{out:?}");
-    cleanup(&path);
 }
 
 /// The blob must hash to the identity `block_info` records for it: a
@@ -381,7 +376,6 @@ fn a_block_blob_that_does_not_hash_to_block_info_is_si7() {
         Ok(())
     });
     assert!(matches!(out, Err(TestErr::Store(_))), "{out:?}");
-    cleanup(&path);
 }
 
 #[test]
@@ -403,7 +397,6 @@ fn has_key_image_reads_spent_keys_and_sees_the_batch_s_own_writes() {
         Ok(())
     });
     assert_eq!(out, Ok(()));
-    cleanup(&path);
 }
 
 /// The reason the view is a batch projection and not a snapshot: block 1,
@@ -440,7 +433,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
             formed(&view, b1)?,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         )
         .map_err(view_fault)?
         .expect("block 1 built on block 0 satisfies every landed rule");
@@ -455,7 +448,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
             formed(&view, Candidate::new(orphan, Vec::new()))?,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         )
         .map_err(view_fault)?
         else {
@@ -472,7 +465,6 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         Ok(())
     });
     assert_eq!(out, Ok(()));
-    cleanup(&path);
 }
 
 /// A corrupt row read through the view is SI-7, and the batch refuses to
@@ -538,7 +530,6 @@ fn a_corrupt_row_read_through_the_view_is_si7_and_poisons_the_batch() {
         ),
         "{out:?}"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -573,7 +564,6 @@ fn a_block_info_row_with_no_blocks_row_is_si7() {
         Ok(())
     });
     assert!(matches!(out, Err(TestErr::Store(_))), "{out:?}");
-    cleanup(&path);
 }
 
 // --- chain_reads: one body, two transactions (S-CHAIN-R commit 1) --------
@@ -640,7 +630,6 @@ fn the_read_transaction_body_agrees_with_the_batch_body() {
     assert_eq!(batch_above, AtHeight::AboveTip);
     drop(txn);
     drop(db);
-    cleanup(&path);
 }
 
 /// On the read side a hole below the tip is the same SI-7 `Absent` the
@@ -704,12 +693,11 @@ fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
     assert!(none.is_none());
     drop(txn);
     drop(db);
-    cleanup(&path);
 }
 
 /// §11.1(f): a `Coded<V>` table reports `V::FIXED_WIDTH` to the engine, and
-/// the engine **asserts** it in `LeafBuilder::append` (redb 4.1
-/// `btree_base.rs`) — a panic that poisons the transaction lock. So the
+/// the engine **asserts** it in `LeafBuilder::append` (redb 4.4
+/// `btree_base.rs:1191`) — a panic that poisons the transaction lock. So the
 /// scenario this test used to pin — `block_info[tip]` rewritten to 87 bytes,
 /// then SI-7 `Undecodable` on every classified read (the PR #764 review's
 /// case) — has **no representable instance**: the bytes never reach the
@@ -763,7 +751,6 @@ fn a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table() {
         Ok(())
     });
     assert_eq!(out, Ok(()), "the recorded rows are as they were");
-    cleanup(&path);
 }
 
 /// Variable-width `Coded<V>` reports `fixed_width() == None`, so the width
@@ -787,5 +774,4 @@ fn a_variable_width_coded_row_that_does_not_decode_is_refused() {
     .to_string();
     assert_eq!(refused, Err(TestErr::Store(expected)));
     assert_eq!(store.connect_state(), ConnectState::Live);
-    cleanup(&path);
 }

@@ -61,6 +61,9 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # commit for CEN-B4 to pass it (slice 8 row 10). Already in the graph via
 # the rules crate; dev-only for the same reason as that edge.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# The fill's batch offer against the single-offer walk over random
+# operands (`fill.rs`). The workspace's version, already in `Cargo.lock`.
+proptest = "1"
 
 [lints]
 workspace = true

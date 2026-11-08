@@ -12,7 +12,13 @@ publish = false
 # (RPC_CHANNEL.md section 4.4). The adapter does not depend on the
 # handshake, and the handshake does not depend on it (RT-O19).
 shekyl-noise = { path = "../shekyl-noise" }
-tokio = { version = "1", default-features = false, features = ["io-util"] }
+# `io-util` is `AsyncRead` and `AsyncWrite`. `time` is the stall sleep.
+# `rt` is `Handle::try_current`, which tells a poll outside a runtime
+# from one inside it. A library build enables these itself: tests must
+# not be what makes the adapter compile.
+tokio = { version = "1", default-features = false, features = ["io-util", "rt", "time"] }
+# Unsealed payload and opened plaintext are wiped when dropped (rule 35).
+zeroize = { workspace = true }
 
 [dev-dependencies]
 # HTTP over the adapter, as the daemon and its clients will run it: the
@@ -27,7 +33,9 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # (TX_WEIGHT_LIMIT, RT-O6 part 2); a test, not a production edge.
 shekyl-wire = { path = "../shekyl-wire" }
 hex = "0.4"
-tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt"] }
+# `test-util`: the stall tests pause time. A drain is spaced across the
+# stall bound, and a quiet transport is not.
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt", "time", "test-util"] }
 
 [lints]
 workspace = true

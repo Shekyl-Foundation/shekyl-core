@@ -189,7 +189,7 @@ pub(crate) fn serving_wire(status: Option<ServingStatus>) -> (Option<String>, Op
 pub(crate) fn posture_str(posture: Option<ServingPosture>) -> Option<String> {
     match posture {
         Some(ServingPosture::Market) => Some("market".to_owned()),
-        Some(ServingPosture::FoundationCompleteTree) => Some("foundation_complete_tree".to_owned()),
+        Some(ServingPosture::SupportCompleteTree) => Some("support_complete_tree".to_owned()),
         None => None,
     }
 }
@@ -301,8 +301,8 @@ mod tests {
             Some("market")
         );
         assert_eq!(
-            posture_str(Some(ServingPosture::FoundationCompleteTree)).as_deref(),
-            Some("foundation_complete_tree")
+            posture_str(Some(ServingPosture::SupportCompleteTree)).as_deref(),
+            Some("support_complete_tree")
         );
         assert_eq!(posture_str(None), None);
     }

@@ -4,10 +4,9 @@
 // BSD-3-Clause
 
 //! The store-backed facts: [`ChainFacts`] and [`InfoFacts`] over the Rust
-//! chain store (`DRS_X_STORE_FLIP.md` DX-Q3; RK-D7's second
-//! implementation). **Staged:** built and tested here, connected at the
-//! flip. The server keeps [`FfiChainFacts`](crate::chain_facts::FfiChainFacts)
-//! and [`FfiInfoFacts`](crate::info_facts::FfiInfoFacts) until then.
+//! chain store (`DRS_X_STORE_FLIP.md` DX-Q3; RK-D7). The handlers and the
+//! in-process console call this. The C++ chain-facts shim is gone. The
+//! protocol handler's sync reads stay on [`crate::chain_facts::FfiP2pFacts`].
 //!
 //! **One snapshot per facts call.** Every method opens one
 //! [`ReadSnapshot`] and reads everything it returns from it, so a reply
@@ -43,7 +42,7 @@ use shekyl_chain_rules::{
     Fault, RuleSet, ViewRead,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, SnapshotView, StoreError};
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, TxHash};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, KeyImage, TxHash};
 use shekyl_wire::Block;
 
 use crate::chain_facts::{
@@ -52,8 +51,9 @@ use crate::chain_facts::{
 };
 use crate::info_facts::{
     store_file_size, InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope,
-    SessionCounts,
+    PoolState, SessionCounts,
 };
+use crate::sync_facts::{SyncViewFacts, SyncViewRead};
 
 /// The node's state that the chain store does not hold, read per call.
 ///
@@ -63,8 +63,27 @@ use crate::info_facts::{
 pub trait NodeFacts: Send + Sync {
     /// The sync owner's view (DRS-X PR 2's `TipChanged` consumer).
     fn sync(&self) -> Result<SyncFacts, FactsFault>;
-    /// The pool's population (PR-b's Rust pool).
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault>;
+    /// Chain sync's whole view (CS-5 §7): what `sync_info` renders.
+    fn sync_view(&self) -> Result<SyncViewFacts, FactsFault>;
+    /// The pool's population (PR-b's Rust pool), or
+    /// [`PoolState::Retired`].
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault>;
+    /// Whether a transaction the pool shows spends each of `key_images`,
+    /// in order. A stem-phase spend answers `false` (S6).
+    ///
+    /// A retired pool faults here ([`FactsFault::NotReady`]), never
+    /// answers: a spend the pool may hold is unknowable, and "unspent" is
+    /// what a double spend's first step would be told.
+    fn pool_spends(&self, key_images: &[KeyImage]) -> Result<Vec<bool>, FactsFault>;
+    /// The body of each of `ids` the pool holds and `scope` may see, in
+    /// order: any caller sees what the pool shows, the host its stem
+    /// entries too (S6). [`PoolState::Retired`] when the node has retired
+    /// its pool.
+    fn pool_bodies(
+        &self,
+        ids: &[TxHash],
+        scope: PoolScope,
+    ) -> Result<PoolState<Vec<Option<PoolBody>>>, FactsFault>;
     /// The Peers part: transport and peerlist detail (the p2p layer).
     fn peers(&self) -> Result<PeerFacts, FactsFault>;
     /// One snapshot of the seam board's handshaken sessions.
@@ -73,6 +92,15 @@ pub trait NodeFacts: Send + Sync {
     fn free_space(&self) -> Result<u64, FactsFault>;
     /// The wall clock, Unix seconds.
     fn now(&self) -> u64;
+}
+
+/// A pool entry's body, as `get_transactions` reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PoolBody {
+    /// The transaction, serialized whole.
+    pub tx: Vec<u8>,
+    /// Whether the node shows it; `false` is its stem phase.
+    pub shown: bool,
 }
 
 /// What the sync owner and the writer report about the node's progress.
@@ -96,7 +124,7 @@ pub struct SyncFacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeIdentity {
     /// The network this daemon runs.
-    pub nettype: shekyl_rpc_types::DaemonNetwork,
+    pub nettype: shekyl_rpc_types::Network,
     /// Whether this is a release build.
     pub release_build: bool,
     /// The build's version string.
@@ -534,6 +562,12 @@ impl ChainFacts for StoreFacts {
     }
 }
 
+impl SyncViewRead for StoreFacts {
+    fn sync_view(&self) -> Result<SyncViewFacts, FactsFault> {
+        self.node.sync_view()
+    }
+}
+
 impl InfoFacts for StoreFacts {
     fn chain(&self) -> Result<InfoChainFacts, FactsFault> {
         let snap = self.snapshot()?;
@@ -563,7 +597,7 @@ impl InfoFacts for StoreFacts {
             cumulative_difficulty: info.cumulative_difficulty.to_raw(),
             difficulty_target: shekyl_difficulty::T_SECONDS,
             total_transactions: snap.tx_count().map_err(store_fault)?,
-            block_weight_limit: medians.limit().to_raw(),
+            block_weight_limit: medians.limit(shekyl_economics::economic_params()).to_raw(),
             block_weight_median: medians.effective_median.to_raw(),
             adjusted_time: adjusted_time(&view, next, info.timestamp.to_raw(), self.node.now())?,
             already_generated_coins: info.coins_generated,
@@ -578,7 +612,7 @@ impl InfoFacts for StoreFacts {
         })
     }
 
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
         self.node.pool_counts(scope)
     }
 

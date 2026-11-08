@@ -193,6 +193,7 @@ fn on_an_actor_with_stack<W, F>(
                     BTreeSet::from([slot(SLOT)]),
                     Some(slot(SLOT)),
                     ephemeral_body_store(),
+                    [0; 16],
                 );
                 work(stake).await;
             }));

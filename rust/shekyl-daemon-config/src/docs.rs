@@ -41,7 +41,7 @@ pub fn options_markdown(table: &Table) -> String {
         .rows
         .iter()
         .filter_map(|r| match r.visibility {
-            Visibility::Dev { networks } => Some(format!("{} ({})", r.name, networks.join(", "))),
+            Visibility::Dev { gate } => Some(format!("{} ({})", r.name, gate.networks())),
             _ => None,
         })
         .collect();
@@ -135,6 +135,7 @@ fn kind_text(kind: &Kind) -> String {
                 .join(", ")
         ),
         Kind::Origin => "web origin".to_owned(),
+        Kind::Hash => "64 hexadecimal characters".to_owned(),
         Kind::List(item) => format!("list of {} (`none` for empty)", kind_text(item)),
         Kind::Map { value, .. } => format!("map to {}", kind_text(value)),
     }
@@ -208,6 +209,7 @@ fn example_value(kind: &Kind, default: &Default) -> String {
                 .unwrap_or_default()
         ),
         Kind::Origin => "\"https://example.org\"".to_owned(),
+        Kind::Hash => "\"<64 hex characters>\"".to_owned(),
         Kind::List(item) => format!("[{}]", example_value(item, &Default::Unset)),
         Kind::Map { .. } => "{ }".to_owned(),
     }
@@ -250,6 +252,27 @@ mod tests {
             toml::Value::String(s) => s.starts_with('<'),
             toml::Value::Array(items) => items.iter().any(is_placeholder),
             _ => false,
+        }
+    }
+
+    /// The example's `/path` values as the host spells an absolute path:
+    /// as written on Unix, `C:\path` on Windows, where `/path` is not
+    /// absolute and the path kinds refuse it (DC-F40). The example itself
+    /// stays the Unix spelling; it is one file for every platform. It is
+    /// not shipped as a file: no installer or `install` target carries
+    /// `docs/generated/shekyld.example.toml`, and a Windows operator meets
+    /// it as the copy in `docs/USER_GUIDE.md`, where every line is a
+    /// comment and a path value is an illustration to be respelled, not a
+    /// default (review 3 §3 of the Rust-binary PR).
+    fn host_absolute(value: &toml::Value) -> toml::Value {
+        match value {
+            toml::Value::String(s) if cfg!(windows) && s.starts_with('/') => {
+                toml::Value::String(format!("C:{}", s.replace('/', "\\")))
+            }
+            toml::Value::Array(items) => {
+                toml::Value::Array(items.iter().map(host_absolute).collect())
+            }
+            other => other.clone(),
         }
     }
 
@@ -330,7 +353,7 @@ mod tests {
                 continue; // a placeholder for a value the example cannot invent
             }
             row.kind
-                .parse_file(value)
+                .parse_file(&host_absolute(value))
                 .unwrap_or_else(|e| panic!("{key}'s example value is its kind's: {e:?}"));
         }
     }
@@ -344,8 +367,12 @@ mod tests {
             (EXAMPLE_FILE, example_toml(&TABLE)),
         ] {
             let path = generated(name);
+            // A checkout with `core.autocrlf` hands the fragment back with
+            // CRLF line ends; the rendering is the bytes between them
+            // (DC-F40).
             let committed = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("{} is committed: {e}", path.display()));
+                .unwrap_or_else(|e| panic!("{} is committed: {e}", path.display()))
+                .replace("\r\n", "\n");
             assert_eq!(
                 committed,
                 text,

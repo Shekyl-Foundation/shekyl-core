@@ -20,7 +20,7 @@
 //! no tag → the empty blob), reads each distinct pass `p_id`'s bond hybrid
 //! pubkey, fills the SF-D8 anchor window from the connecting chain for the
 //! block's predecessor, and hands all of it to
-//! `shekyl_archival_verify_attestation`, whose body is
+//! the attestation verify (the C++ FFI entry went with `DEL-008`), whose body is
 //! [`AttestationSet`] — parse, root, then
 //! countersignatures.
 //!
@@ -47,9 +47,11 @@
 //! boundary), and the first 725 blocks of any chain commit the empty set.
 //! Today the coinbase grammar CEN-I20 adopts admits no `0x0B` field, so a
 //! block with a non-empty set is refused at I20 after passing here; the
-//! record arm is reachable through this rule alone and witnessed by the
-//! shared body's pins (`shekyl-ffi`, `attestation_verify_tests`). Slice 8
-//! records that as a finding, not a gap in this rule.
+//! record arm is reachable through this rule alone. Slice 8 records that as
+//! a finding, not a gap in this rule. The arm's per-record signature check
+//! (`verify_pass_countersignature`) is pinned in `shekyl-archival-retention`
+//! (`attestation_wire_tests`, `attestation_wire_kat`); no test in the
+//! workspace accepts a block that carries a signed record.
 
 use shekyl_archival_retention::{
     AttestationSet, PassAnchorWindow, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_WINDOW_LEN,

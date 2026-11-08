@@ -163,8 +163,8 @@ fn t14_randomx_v2_sys_sole_consumer() {
         1,
         "randomx-v2-sys must have exactly one workspace consumer per §5.2.5 + R1-D13; \
          found {} consumers: {:?}. The harness's FFI bindings are sole-consumer-locked \
-         to shekyl-randomx-differential per Phase 2F Decision #5 (FFI exports live in \
-         shekyl-ffi; randomx-v2-sys is a differential-harness-only FFI surface). Any \
+         to shekyl-randomx-differential per Phase 2F Decision #5 (randomx-v2-sys is a \
+         differential-harness-only FFI surface). Any \
          additional consumer requires a plan-doc amendment per §5.7 drift-prevention.",
         consumers.len(),
         consumers,

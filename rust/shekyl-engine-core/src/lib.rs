@@ -25,30 +25,29 @@ pub use engine::{
     AcknowledgeOutcomeError, Capability, CapabilityInput, ChangePasswordError, CollectOutcome,
     CollectUnstakedError, Credentials, CurveTreeIngestFault, DaemonClient, DaemonExpectation,
     DaemonOp, DiagnosticSink, DrainBalanceReadError, DrainOutcome, DrainToPrincipalError, Engine,
-    EngineCreateParams, EngineSignerKind, FakechainPolicy, FeePriority, FeeTierQuote,
-    FirstStakeError, FirstStakeOutcome, InFlightRecord, InFlightState, InputCount, IoError,
-    KeyError, LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine,
-    OutputCount, PScanHandle, PScanStartError, PendingTx, PendingTxError, PersistenceError,
-    ProtocolErrorKind, RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions,
-    RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary, ReportedOutcome,
-    ReservationId, ScannableBlock, SendError, SoloSigner, StakeInError, StakePosture,
-    StakedBalance, StakedOutput, StakingLedgerSnapshot, StakingReadError, StakingReadView,
-    StateWrapKey, SubmitOutcome, SuppressedClass, TracingDiagnosticSink, TxDestination, TxError,
-    TxHash, TxRecipient, TxRecipientSummary, TxRequest, TxShapeEstimate, UnstakeError,
-    UnstakeOutcome, ViewMaterial,
+    EngineCreateParams, EngineSignerKind, FeePriority, FeeTierQuote, FirstStakeError,
+    FirstStakeOutcome, InFlightRecord, InFlightState, InputCount, IoError, KeyError, LocalRefresh,
+    MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine, OutputCount, PScanHandle,
+    PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
+    RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
+    RefreshReorgEvent, RefreshSummary, ReportedOutcome, ReservationId, ScannableBlock, SendError,
+    SoloSigner, StakeInError, StakePosture, StakedBalance, StakedOutput, StakingLedgerSnapshot,
+    StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome, SuppressedClass,
+    TracingDiagnosticSink, TxDestination, TxError, TxHash, TxRecipient, TxRecipientSummary,
+    TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial,
 };
 pub use outbound_label::{label_plaintext_for_recipient, RidNotEncodable};
 // The fault [`IoError::CurveTreeStore`] carries, re-exported so a consumer can
 // name it without depending on `shekyl-curve-tree`.
 pub use shekyl_curve_tree::StoreOpenFault;
-// The exclusive upper bound of `stake_in`'s system-drawn cover
-// (`Engine::stake_in` sends `amount + cover`, `cover ~ U[1, bound)`).
-// Re-exported so the RPC/CLI disclosure copy renders the bound from the
-// enforcing constant — a hardcoded "0.75 SKL" twin would silently lie the
-// day the rung moves. The exact per-draw figure is deliberately never
+// The archival parameter set. Its `bond_floor_atomic` is the exclusive
+// upper bound of `stake_in`'s system-drawn cover (`Engine::stake_in` sends
+// `amount + cover`, `cover ~ U[1, bound)`). Re-exported so the RPC/CLI
+// disclosure copy renders the bound from the enforcing value — a hardcoded
+// "0.75 SKL" twin would silently lie the day the rung moves. The exact per-draw figure is deliberately never
 // disclosed pre-send (a discard-and-rebuild loop could steer the submitted
 // cover distribution); only this bound is.
-pub use shekyl_standoff::COVER_RUNG_ATOMIC;
+pub use shekyl_archival_retention::archival_params;
 // Re-exported so the wallet-RPC layer's `make_uri` / `parse_uri` projections
 // can consume the one payment-URI codec without a direct `shekyl-address`
 // dependency — mirroring the `ShekylAddress` re-export in [`engine`].
@@ -156,6 +155,53 @@ pub mod __test_helpers {
         run_arm1_fire, run_arm3_fire, Arm1FireReport, Arm3FireReport,
     };
 
+    /// A stake actor holding one persona's keys, and the actor's staged
+    /// receipt capability over them: the serving route's signer at the
+    /// receipt envelope's width (`FN_DSA_HYBRID.md` §9). The capability is
+    /// the production type, `ResidentReceiptKey`; what is the test's is
+    /// only that it is selected.
+    ///
+    /// Its consumer is the bundle producer's gate test in
+    /// `shekyl-chain-ingest` (`SO-D12` increment 4c): a persona that serves
+    /// its shard with receipts before the cutover selects the capability
+    /// for the live serving task (4b). The actor lives as long as the
+    /// returned [`ReceiptKeyHolder`].
+    ///
+    /// Test-only (feature-gated); never compiled into a default production
+    /// build. Needs an ambient Tokio runtime, as the actor does.
+    pub fn resident_receipt_key(
+        keys: shekyl_crypto_pq::archival_p::ArchivalPKeys,
+        slot: u32,
+    ) -> (
+        ReceiptKeyHolder,
+        std::sync::Arc<dyn shekyl_p_host::PassKey<{ shekyl_p_host::RECEIPT_ENVELOPE_LEN }>>,
+    ) {
+        use crate::engine::stake_engine::serving::receipt_key::ResidentReceiptKey;
+        use crate::engine::stake_engine::StakeEngineHandle;
+        let p_slot = PSlot::from_raw(slot);
+        let bodies = shekyl_p_store::BodyStore::open_ephemeral(
+            shekyl_p_store::StoreKey::from_bytes([0x5a; 32]),
+        )
+        .expect("an ephemeral body store opens");
+        let stake = StakeEngineHandle::spawn(
+            std::collections::BTreeMap::from([(p_slot, keys)]),
+            std::collections::BTreeSet::from([p_slot]),
+            Some(p_slot),
+            bodies,
+            // The holder signs receipts, never a spend: no signature is
+            // made under this id.
+            [0; 16],
+        );
+        let key = ResidentReceiptKey::new(&stake, p_slot);
+        (ReceiptKeyHolder(stake), key)
+    }
+
+    /// Keeps the stake actor behind [`resident_receipt_key`] alive.
+    pub struct ReceiptKeyHolder(
+        #[expect(dead_code, reason = "held for its drop: the actor lives while it does")]
+        crate::engine::stake_engine::StakeEngineHandle,
+    );
+
     /// Turn an open [`Engine`] into a staker: persist a bond record for `slot`,
     /// which sets `staking_enabled` durably, so a subsequent reopen spawns the
     /// [`StakeEngine`](crate::engine::stake_engine::StakeEngine) and the
@@ -249,6 +295,44 @@ pub mod __test_helpers {
         engine
             .persistence()
             .save_pscan_state(engine.state_wrap_key().as_bytes(), &bytes)
+            .map_err(|e| e.to_string())
+    }
+
+    /// The P-scan's exhaustiveness check over fetched blocks
+    /// (`engine/pscan/exhaustiveness.rs`): every listed id is a bound body
+    /// and nothing else is in the batch. Consumer: `SB-Q2`'s falsifier (ii)
+    /// in `shekyl-chain-ingest` (`DRS_SB_BELOW_HORIZON.md` §5), which runs
+    /// it over a real store connected past a discard boundary. The verified
+    /// batch and the error are `pub(crate)`; the verdict is flattened to a
+    /// `String` so neither leaks.
+    ///
+    /// Test-only (feature-gated); never compiled into a default production
+    /// build.
+    pub fn verify_exhaustive_for_test(
+        first_height: shekyl_types::BlockHeight,
+        anchor: shekyl_types::BlockHash,
+        blocks: &[crate::engine::ScannableBlock],
+    ) -> Result<(), String> {
+        crate::engine::pscan::exhaustiveness::verify_exhaustive(first_height, anchor, blocks)
+            .map(|_batch| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// The proof paths' transaction fetch (`engine/proofs_chain_facts.rs`):
+    /// the skeleton under `prune`, bound to `txid`. Consumer: `SB-Q2`'s
+    /// falsifier (iii) in `shekyl-chain-ingest`, a proof fetch for a spend
+    /// whose shard the store discarded. Returns the bound body; the chain
+    /// state and the error are `pub(crate)` and stay so.
+    ///
+    /// Test-only (feature-gated); never compiled into a default production
+    /// build.
+    pub async fn fetch_proof_tx_for_test<R: shekyl_rpc_client::Rpc>(
+        rpc: &R,
+        txid: [u8; 32],
+    ) -> Result<shekyl_wire::Transaction, String> {
+        crate::engine::proofs_chain_facts::fetch_proof_tx(rpc, txid)
+            .await
+            .map(|fetched| fetched.tx)
             .map_err(|e| e.to_string())
     }
 }

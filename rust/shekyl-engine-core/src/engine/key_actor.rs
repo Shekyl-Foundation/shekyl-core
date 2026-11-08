@@ -567,7 +567,7 @@ impl KeyEngine for KeyEngineHandle {
 mod tests {
     //! Stage-2 Step-1 contract tests for [`KeyActor`] / [`KeyEngineHandle`],
     //! per `STAGE_2_KEY_ENGINE_ACTOR.md` §5.2. No mocks: every test runs a real
-    //! [`KeyActor`] over a real [`AllKeysBlob`] (`generate_account_from_raw_seed`
+    //! [`KeyActor`] over a real [`AllKeysBlob`] (`account_from_seed`
     //! against a deterministic testnet seed — the same fixture shape
     //! `LocalKeys` tests use) and exercises it through real messages.
     //!
@@ -600,7 +600,7 @@ mod tests {
 
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
+    use shekyl_crypto_pq::account::{account_from_seed, Network};
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_crypto_pq::output::construct_output;
 
@@ -616,11 +616,10 @@ mod tests {
     /// affect receiver-side recovery (the recipient only sees the ciphertext).
     const TEST_TX_KEY_SECRET: [u8; 32] = [11u8; 32];
 
-    /// Rederive a fresh [`AllKeysBlob`] from `seed` (testnet, raw32).
+    /// Rederive a fresh [`AllKeysBlob`] from `seed` (testnet).
     fn make_blob(seed: [u8; 32]) -> AllKeysBlob {
-        let (_master_seed, blob) =
-            generate_account_from_raw_seed(&seed, DerivationNetwork::Testnet)
-                .expect("test rederivation succeeds for raw32 testnet seeds");
+        let (_master_seed, blob) = account_from_seed(&seed, Network::Testnet)
+            .expect("test derivation succeeds for a testnet seed");
         blob
     }
 
@@ -655,7 +654,7 @@ mod tests {
             enc_label: constructed.enc_label_bytes(),
             label_tag_on_chain: constructed.label_tag(),
             output_index,
-            tx_hash,
+            tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
         }
     }
 
@@ -1001,6 +1000,7 @@ mod tests {
         let handle = KeyEngineHandle::spawn(blob);
         let proof = handle
             .generate_inbound_proof(InboundProofRequest {
+                network_id: shekyl_network::HARNESS_NETWORK_ID,
                 txid: tx_hash,
                 address_bytes: TEST_ADDRESS_BYTES.to_vec(),
                 message: TEST_MESSAGE.to_vec(),
@@ -1013,6 +1013,7 @@ mod tests {
             .expect("actor generates the inbound proof");
 
         let verified = verify_inbound_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &proof,
             &tx_hash,
             TEST_ADDRESS_BYTES,
@@ -1052,6 +1053,7 @@ mod tests {
 
         let proof = handle
             .generate_reserve_proof(ReserveProofRequest {
+                network_id: shekyl_network::HARNESS_NETWORK_ID,
                 address_bytes: TEST_ADDRESS_BYTES.to_vec(),
                 message: TEST_MESSAGE.to_vec(),
                 outputs: vec![ReserveProofOutput {
@@ -1065,6 +1067,7 @@ mod tests {
             .expect("actor generates the reserve proof");
 
         let verified = verify_reserve_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &proof,
             TEST_ADDRESS_BYTES,
             TEST_MESSAGE,
@@ -1081,6 +1084,7 @@ mod tests {
 
         // Message binding: a different challenge message must not verify.
         verify_reserve_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &proof,
             TEST_ADDRESS_BYTES,
             b"a different challenge",

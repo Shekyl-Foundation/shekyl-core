@@ -17,7 +17,7 @@ use crate::harness::{
 };
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
-use crate::validate::{form, validate};
+use crate::validate::{form, validate, FormClaims};
 use crate::verdict::ChainValid;
 use crate::view::AtHeight;
 use shekyl_difficulty::{check_hash, Difficulty, GENESIS_DIFFICULTY};
@@ -32,11 +32,14 @@ fn judge_with(
     let candidate = candidate_on(chain, Vec::new());
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed,
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         substrate,
-        seed,
-        expected_target(chain, &RuleSet::GENESIS),
-        &crate::block::ReferenceClaims::EMPTY,
         attempt,
     ) {
         Ok(Ok(formed)) => formed,
@@ -44,7 +47,7 @@ fn judge_with(
         Err(Faulted) => unreachable!("the mock substrate never faults here"),
     };
     chain.with_view(|view| {
-        validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+        validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)
             .map(|v| v.map(|_valid: ChainValid<_>| ()))
     })
 }
@@ -124,11 +127,14 @@ fn cen_d2_the_longhash_is_computed_in_form_over_the_pow_blob_under_the_seed() {
     let expected_len = candidate.block.pow_blob().len() as u64;
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed,
+            target: expected_target(&chain, &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        seed,
-        expected_target(&chain, &RuleSet::GENESIS),
-        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -156,11 +162,14 @@ fn cen_d2_a_verifier_that_cannot_compute_is_a_fault_not_a_verdict() {
     };
     let result = form(
         candidate_on(&MockChain::default(), Vec::new()),
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: BlockHash::NULL,
+            target: expected_target(&MockChain::default(), &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        BlockHash::NULL,
-        expected_target(&MockChain::default(), &RuleSet::GENESIS),
-        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     );
     assert!(matches!(result, Err(Faulted)), "unproven, not disproven");
@@ -256,23 +265,21 @@ fn cen_d3_records_and_the_pow_rows_cover_on_a_passing_block() {
     let candidate = candidate_on(&chain, Vec::new());
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed,
+            target: expected_target(&chain, &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        seed,
-        expected_target(&chain, &RuleSet::GENESIS),
-        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     )
     .expect("no fault")
     .expect("passes");
     chain.with_view(|view| {
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("passes");
+        let valid =
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)).expect("passes");
         for row in [CenRow::D1, CenRow::D1b, CenRow::D2, CenRow::D3] {
             assert!(valid.coverage().contains(row), "{row}");
         }
