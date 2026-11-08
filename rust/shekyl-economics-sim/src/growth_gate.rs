@@ -8,12 +8,14 @@
 //! Verification instrument. [`rho_scaled`] is production
 //! [`fee_correction`](shekyl_economics::fee_correction) divided by production
 //! [`calc_release_multiplier`](shekyl_economics::calc_release_multiplier), and
-//! the rung in the comparison is [`STANDARD_RUNG_OVER_ECONOMY`], the same
-//! ratio the served ladder multiplies by. A sweep of other fee multipliers
-//! is ESR-10 and is not built here.
+//! the rung in the comparison is the run's
+//! [`RelayPolicy::standard_over_economy`](shekyl_economics::RelayPolicy),
+//! the same ratio the served ladder multiplies by. ESR-10's cells read the
+//! gate at their own Standard multiplier ([`cell_gate`], [`m_star_milli`]).
 //!
 //! `m` in the printed inequality is the effective median. The fee multiplier
-//! ESR-10 writes as `m` is a different operand and does not appear here.
+//! ESR-10 writes as `m` is a different operand; this module calls it the
+//! multiplier.
 
 use std::fmt;
 
@@ -214,7 +216,89 @@ fn per_block(txs: u128, blocks_per_year: u64) -> f64 {
     }
 }
 
-fn year_label(year: Option<u64>) -> String {
+/// The growth gate over one of ESR-10's cells: year 1's operands, the year
+/// `multiplier·ρ` first reaches `θ`, the year blocks grow, and `ρ` that year.
+pub(crate) struct CellGate {
+    pub(crate) rho_y1: f64,
+    pub(crate) theta_y1: f64,
+    /// First year `multiplier·ρ ≥ θ` at equal medians (P2's onset).
+    pub(crate) crossing: Option<u64>,
+    /// First year carried escapes the constrained ceiling.
+    pub(crate) growth: Option<u64>,
+    /// `ρ` at the growth year's last block.
+    pub(crate) rho_at_growth: Option<f64>,
+}
+
+/// `multiplier·ρ ≥ θ` at equal medians, in integers: `multiplier_milli · ρ ·
+/// rung · w_ref ≥ 1000 · w · SCALE`, `ρ` in SCALE units.
+fn multiplied_reaches_theta(
+    block: &GateBlock,
+    rho: u64,
+    multiplier_milli: u64,
+    run: &SimParams,
+) -> bool {
+    let left = u128::from(multiplier_milli)
+        * u128::from(rho)
+        * u128::from(run.relay().standard_over_economy)
+        * u128::from(run.relay().ref_tx_weight);
+    let right = 1_000 * u128::from(block.weight) * u128::from(SCALE);
+    left >= right
+}
+
+/// The gate over `aggs`, one cell's fold of one scenario, at the cell's
+/// Standard `multiplier_milli`.
+pub(crate) fn cell_gate(params: &SimParams, aggs: &[A1YearAgg], multiplier_milli: u64) -> CellGate {
+    let economic = params.economic();
+    let blocks: Vec<GateBlock> = aggs.iter().map(GateBlock::from_agg).collect();
+    let first = blocks
+        .first()
+        .map(|block| fee_gate(block, params, economic));
+    let crossing = aggs
+        .iter()
+        .zip(&blocks)
+        .find(|(_, block)| {
+            multiplied_reaches_theta(block, rho_scaled(block, economic), multiplier_milli, params)
+        })
+        .map(|(agg, _)| agg.year);
+    let traffic: Vec<BlockTraffic> = aggs
+        .iter()
+        .map(|agg| BlockTraffic {
+            year: agg.year,
+            carried_txs: agg.carried_txs(),
+            dropped_txs: agg.dropped_txs(),
+        })
+        .collect();
+    let growth = congestion_escape_year(&traffic, params.blocks_per_year());
+    let rho_at_growth = growth.and_then(|year| {
+        aggs.iter()
+            .zip(&blocks)
+            .find(|(agg, _)| agg.year == year)
+            .map(|(_, block)| rho_scaled(block, economic) as f64 / SCALE as f64)
+    });
+    CellGate {
+        rho_y1: first.as_ref().map_or(0.0, |gate| gate.rho),
+        theta_y1: first
+            .as_ref()
+            .map_or(0.0, |gate| gate.theta_at_equal_medians),
+        crossing,
+        growth,
+        rho_at_growth,
+    }
+}
+
+/// P2's `m*`, in thousandths: `⌈1000·θ/ρ⌉` at `year_one`'s last block, the
+/// least multiplier at which `m*·ρ(y1) ≥ θ(y1)`.
+pub(crate) fn m_star_milli(params: &SimParams, year_one: &A1YearAgg) -> u64 {
+    let block = GateBlock::from_agg(year_one);
+    let rho = rho_scaled(&block, params.economic());
+    let numerator = 1_000 * u128::from(block.weight) * u128::from(SCALE);
+    let denominator = u128::from(params.relay().standard_over_economy)
+        * u128::from(params.relay().ref_tx_weight)
+        * u128::from(rho);
+    u64::try_from(numerator.div_ceil(denominator)).expect("a multiplier fits")
+}
+
+pub(crate) fn year_label(year: Option<u64>) -> String {
     year.map_or_else(|| "-".to_owned(), |year| format!("y{year}"))
 }
 
@@ -275,7 +359,7 @@ pub(crate) fn write_report(
                     out,
                     "       {:>6} {:>8.1} {:>7.0} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>6}",
                     agg.year,
-                    per_block(agg.carried_txs, params.blocks_per_year()),
+                    per_block(agg.carried_txs(), params.blocks_per_year()),
                     agg.long_term_median as f64 / 1_000.0,
                     gate.sigma,
                     gate.supply_ratio,
@@ -313,7 +397,7 @@ pub(crate) fn write_report(
             .iter()
             .map(|agg| BlockTraffic {
                 year: agg.year,
-                carried_txs: agg.carried_txs,
+                carried_txs: agg.carried_txs(),
                 dropped_txs: agg.dropped_txs(),
             })
             .collect();
@@ -528,7 +612,7 @@ mod tests {
             .iter()
             .map(|agg| BlockTraffic {
                 year: agg.year,
-                carried_txs: agg.carried_txs,
+                carried_txs: agg.carried_txs(),
                 dropped_txs: agg.dropped_txs(),
             })
             .collect();

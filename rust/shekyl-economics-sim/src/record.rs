@@ -209,7 +209,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             &sim,
             params,
         );
-        outputs.accrue(priced.filled.included);
+        outputs.accrue(priced.filled.included());
 
         if samples.contains(&block) {
             // One block, one window. The burn the cursor priced and the
@@ -239,7 +239,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
                 base_block_reward: base_block_reward(ag_start, params)
                     .expect("sim neutral trajectory stays within the arithmetic domain"),
                 release_multiplier_milli: multiplier / 1000,
-                tx_volume: priced.filled.included,
+                tx_volume: priced.filled.included(),
                 volume_tx_count_sum: priced.volume.tx_count_sum(),
                 volume_window_blocks: priced.volume.blocks(),
                 circulating_supply: circulating,

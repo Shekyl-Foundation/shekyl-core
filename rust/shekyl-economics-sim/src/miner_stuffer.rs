@@ -1018,7 +1018,8 @@ mod tests {
             params: economic,
             relay: params.relay(),
         };
-        let honest_tx: OrdinaryTx = params.fee.ordinary_tx(&at);
+        let honest_tx: OrdinaryTx = params.fee.rung_txs(&at)[crate::rung_mix::Rung::Standard]
+            .expect("every arm prices Standard");
         let medians = medians_from(zone, zone, economic);
         let mut fill = Fill::empty(
             medians.effective_median.to_raw(),

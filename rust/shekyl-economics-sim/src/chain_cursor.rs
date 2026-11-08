@@ -22,17 +22,20 @@ use shekyl_economics::{
     EmissionInputs, PaidEmission, TxVolume,
 };
 
-use crate::block_space::{BlockSpace, Filled};
+use crate::block_space::{Arrival, BlockSpace, Filled};
 use crate::engine::{net_supply, SimParams};
 use crate::fee_model::{FeePoint, OrdinaryTx};
+use crate::rung_mix::{PerRung, Rung, RungSplit};
 use crate::volume_window::VolumeWindow;
 
-/// The chain state a fold carries from block to block: the volume window
-/// and the pool whose fill the medians price.
+/// The chain state a fold carries from block to block: the volume window,
+/// the pool whose fill the medians price, and the split of demand across
+/// the fee ladder's rungs.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ChainCursor {
     window: VolumeWindow,
     space: BlockSpace,
+    split: RungSplit,
 }
 
 /// What one block offers the cursor. `chain_height` is the consensus height
@@ -64,7 +67,11 @@ pub(crate) struct PricedBlock<'a> {
     pub(crate) burn_pct: u64,
     pub(crate) emission_share: u64,
     pub(crate) fee_point: FeePoint<'a>,
+    /// The Standard rung's ordinary transaction at this block: the one the
+    /// growth gate reads.
     pub(crate) tx: OrdinaryTx,
+    /// The block's demand on each rung, split by the run's mix.
+    pub(crate) demand: PerRung<u64>,
     pub(crate) filled: Filled,
     /// The block as production prices it, at the weight the fill reports:
     /// the bodies and the coinbase reserve, which the node's template passes
@@ -89,9 +96,9 @@ impl ChainCursor {
         self.space.medians(params)
     }
 
-    /// Bodies listed since the last call, by age at inclusion in blocks
-    /// (index = age), and start counting again.
-    pub(crate) fn take_ages(&mut self) -> Vec<u64> {
+    /// Bodies listed since the last call, per rung, by age at inclusion in
+    /// blocks (index = age), and start counting again.
+    pub(crate) fn take_ages(&mut self) -> PerRung<Vec<u64>> {
         self.space.take_ages()
     }
 
@@ -127,13 +134,24 @@ impl ChainCursor {
             params: economic,
             relay: params.relay(),
         };
-        let tx = params.fee.ordinary_tx(&fee_point);
+        let txs = params.fee.rung_txs(&fee_point);
+        let tx = txs[Rung::Standard].expect("every arm prices the Standard rung");
+        let demand = self.split.split(params.fee.mix(), step.demand);
+        let arrivals: Vec<Arrival> = Rung::ADMISSION
+            .into_iter()
+            .filter(|&rung| demand[rung] > 0)
+            .map(|rung| Arrival {
+                rung,
+                count: demand[rung],
+                tx: txs[rung].expect("a rung the mix sends demand to is priced"),
+            })
+            .collect();
         // The pool's heights are the chain's: the reference window and the
         // received hour read them.
         let filled = self
             .space
-            .fill(step.chain_height, medians, step.demand, tx, &fee_point);
-        self.window.push(filled.included);
+            .fill(step.chain_height, medians, &arrivals, &fee_point);
+        self.window.push(filled.included());
         let paid = price_emission(&EmissionInputs {
             height: step.chain_height,
             median_weight: medians.effective_median.to_raw(),
@@ -159,6 +177,7 @@ impl ChainCursor {
             emission_share: share,
             fee_point,
             tx,
+            demand,
             filled,
             paid,
         }
@@ -201,7 +220,7 @@ mod tests {
             );
             generated = generated.saturating_add(u128::from(priced.paid_reward()));
             burned = burned.saturating_add(u128::from(priced.paid.fee_burn.actually_destroyed));
-            leaves = leaves.saturating_add(priced.filled.included.saturating_mul(2));
+            leaves = leaves.saturating_add(priced.filled.included().saturating_mul(2));
         }
     }
 
@@ -253,7 +272,7 @@ mod tests {
             }
             generated = generated.saturating_add(u128::from(priced.paid_reward()));
             burned = burned.saturating_add(u128::from(priced.paid.fee_burn.actually_destroyed));
-            leaves = leaves.saturating_add(priced.filled.included.saturating_mul(2));
+            leaves = leaves.saturating_add(priced.filled.included().saturating_mul(2));
         }
         assert!(
             off_the_shipped_lattice > 0,
@@ -281,7 +300,7 @@ mod tests {
             economic,
         );
         assert_eq!(first.volume, TxVolume::window(0, 0));
-        assert_eq!(first.filled.included, 5, "five fit under the zone");
+        assert_eq!(first.filled.included(), 5, "five fit under the zone");
         let second = chain.price(
             ChainStep {
                 chain_height: 1,

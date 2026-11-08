@@ -44,6 +44,7 @@ use crate::fee_model::OrdinaryTx;
 use crate::population::{
     attacker_capped_work_milli, honest_sigma_work_milli, honest_sigma_work_milli_deleted, DQ2H_TAIL,
 };
+use crate::rung_mix::{PerRung, Rung};
 use crate::scenarios::all_scenarios;
 use shekyl_archival_retention::{reward_share_floor, MAX_HOLDINGS_SHARDS};
 
@@ -233,26 +234,11 @@ pub struct A1YearAgg {
     /// cheapest on the production arm (the floor falls with the reward), so
     /// this is the attacker-favouring sample of the year.
     pub admission_rate: PerByteRate,
-    /// Transactions the year's blocks carried — what the fill rule admitted
-    /// (ESR-6), the count the year's fees were paid on.
-    pub carried_txs: u128,
-    /// Transactions the scenario's schedule offered over the year.
-    pub demand_txs: u128,
-    /// Transactions whose reference left CEN-I11's window unserved over the
-    /// year (ESR-17).
-    pub expired_txs: u128,
-    /// Transactions CEN-M10 evicted over the year: for an arrival paying
-    /// more per weight, or to bring the pool within its limit.
-    pub evicted_txs: u128,
-    /// Arrivals the pool refused over the year: it was full of entries
-    /// paying at least as much per weight.
-    pub refused_txs: u128,
+    /// Each rung's traffic over the year (ESR-10). The year's totals are
+    /// their sums ([`Self::carried_txs`] and its siblings).
+    pub rungs: PerRung<RungYear>,
     /// Transactions waiting after the year's last block.
     pub waiting_at_year_end: u64,
-    /// Bodies listed over the year by age at inclusion, in blocks (index =
-    /// age).
-    #[serde(skip)]
-    pub inclusion_ages: Vec<u64>,
     /// The long-term effective median (CEN-G6) at year end, bytes — the
     /// `M` the next block's fee divides by.
     pub long_term_median: u64,
@@ -262,12 +248,96 @@ pub struct A1YearAgg {
     pub last_block: LastBlock,
 }
 
+/// One rung's traffic over a year.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RungYear {
+    /// Transactions the scenario's schedule offered on this rung.
+    pub demand_txs: u128,
+    /// Transactions the year's blocks carried — what the fill rule admitted
+    /// (ESR-6), the count the year's fees were paid on.
+    pub carried_txs: u128,
+    /// Transactions whose reference left CEN-I11's window unserved (ESR-17).
+    pub expired_txs: u128,
+    /// Transactions CEN-M10 evicted: for an arrival paying more per weight,
+    /// or to bring the pool within its limit.
+    pub evicted_txs: u128,
+    /// Arrivals the pool refused: it was full of entries paying at least as
+    /// much per weight.
+    pub refused_txs: u128,
+    /// Fees the carried transactions paid, atomic units.
+    pub fees_atomic: u128,
+    /// Bodies listed by age at inclusion, in blocks (index = age).
+    #[serde(skip)]
+    pub inclusion_ages: Vec<u64>,
+}
+
+impl RungYear {
+    /// Transactions that left the pool unserved: expired, evicted or refused.
+    #[must_use]
+    pub fn dropped_txs(&self) -> u128 {
+        self.expired_txs + self.evicted_txs + self.refused_txs
+    }
+}
+
 impl A1YearAgg {
+    fn total(&self, field: impl Fn(&RungYear) -> u128) -> u128 {
+        self.rungs.iter().map(field).sum()
+    }
+
+    /// Transactions the year's blocks carried, every rung.
+    #[must_use]
+    pub fn carried_txs(&self) -> u128 {
+        self.total(|r| r.carried_txs)
+    }
+
+    /// Transactions the scenario's schedule offered over the year.
+    #[must_use]
+    pub fn demand_txs(&self) -> u128 {
+        self.total(|r| r.demand_txs)
+    }
+
+    /// Transactions whose reference left CEN-I11's window unserved.
+    #[must_use]
+    pub fn expired_txs(&self) -> u128 {
+        self.total(|r| r.expired_txs)
+    }
+
+    /// Transactions CEN-M10 evicted over the year.
+    #[must_use]
+    pub fn evicted_txs(&self) -> u128 {
+        self.total(|r| r.evicted_txs)
+    }
+
+    /// Arrivals the pool refused over the year.
+    #[must_use]
+    pub fn refused_txs(&self) -> u128 {
+        self.total(|r| r.refused_txs)
+    }
+
     /// Transactions that left the pool unserved over the year: expired,
     /// evicted or refused.
     #[must_use]
     pub fn dropped_txs(&self) -> u128 {
-        self.expired_txs + self.evicted_txs + self.refused_txs
+        self.total(RungYear::dropped_txs)
+    }
+
+    /// Bodies listed over the year by age at inclusion, every rung.
+    #[must_use]
+    pub fn inclusion_ages(&self) -> Vec<u64> {
+        let longest = self
+            .rungs
+            .iter()
+            .map(|r| r.inclusion_ages.len())
+            .max()
+            .unwrap_or(0);
+        (0..longest)
+            .map(|age| {
+                self.rungs
+                    .iter()
+                    .map(|r| r.inclusion_ages.get(age).copied().unwrap_or(0))
+                    .sum()
+            })
+            .collect()
     }
 }
 
@@ -414,11 +484,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
     let mut year_burn_atomic: u128 = 0;
     let mut year_fees_atomic: u128 = 0;
     let mut year_total_emission_atomic: u128 = 0;
-    let mut year_carried: u128 = 0;
-    let mut year_demand: u128 = 0;
-    let mut year_expired: u128 = 0;
-    let mut year_evicted: u128 = 0;
-    let mut year_refused: u128 = 0;
+    let mut year_rungs = PerRung::<RungYear>::default();
     let mut year_n_at_cap: Option<u64> = None;
     let mut aggs = Vec::with_capacity(config.sim_years as usize);
     let mut chain = ChainCursor::default();
@@ -460,7 +526,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             listed: Vec::new(),
         };
         let total_fees = priced.filled.fees;
-        fold.add_block(priced.filled.included);
+        fold.add_block(priced.filled.included());
         note_cap_crossing(&mut year_n_at_cap, fold.closed_shard_count());
         let paid_reward = priced.paid_reward();
         let staker_emission = priced.paid.split.staker_emission;
@@ -473,11 +539,16 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         year_burn_atomic += u128::from(whole_burn);
         year_fees_atomic += u128::from(total_fees);
         year_total_emission_atomic += u128::from(paid_reward);
-        year_carried += u128::from(priced.filled.included);
-        year_demand += u128::from(demand);
-        year_expired += u128::from(priced.filled.expired);
-        year_evicted += u128::from(priced.filled.evicted);
-        year_refused += u128::from(priced.filled.refused);
+        for rung in Rung::ALL {
+            let block = priced.filled.rungs[rung];
+            let year = &mut year_rungs[rung];
+            year.demand_txs += u128::from(priced.demand[rung]);
+            year.carried_txs += u128::from(block.included);
+            year.expired_txs += u128::from(block.expired);
+            year.evicted_txs += u128::from(block.evicted);
+            year.refused_txs += u128::from(block.refused);
+            year.fees_atomic += u128::from(block.fees);
+        }
         let waiting = priced.filled.waiting;
         already_generated += u128::from(paid_reward);
         // The ledger advances by what production destroys at this block's
@@ -503,21 +574,18 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 whole_fees_atomic: year_fees_atomic,
                 total_emission_atomic: year_total_emission_atomic,
                 admission_rate: params.fee.admission_rate(&priced.fee_point),
-                carried_txs: year_carried,
-                demand_txs: year_demand,
-                expired_txs: year_expired,
-                evicted_txs: year_evicted,
-                refused_txs: year_refused,
+                rungs: {
+                    let mut ages = chain.take_ages();
+                    let mut rungs = core::mem::take(&mut year_rungs);
+                    for rung in Rung::ALL {
+                        rungs[rung].inclusion_ages = core::mem::take(&mut ages[rung]);
+                    }
+                    rungs
+                },
                 waiting_at_year_end: waiting,
-                inclusion_ages: chain.take_ages(),
                 long_term_median: chain.medians(economic).long_term_effective_median.to_raw(),
                 last_block,
             });
-            year_carried = 0;
-            year_demand = 0;
-            year_expired = 0;
-            year_evicted = 0;
-            year_refused = 0;
             year_emission_atomic = 0;
             year_burn_atomic = 0;
             year_fees_atomic = 0;
@@ -2080,9 +2148,9 @@ mod tests {
         assert_eq!(short.len(), 1);
         assert_eq!(long.len(), 2);
         let (a, b) = (&short[0], &long[0]);
-        assert_eq!(a.carried_txs, b.carried_txs);
-        assert_eq!(a.demand_txs, b.demand_txs);
-        assert_eq!(a.expired_txs, b.expired_txs);
+        assert_eq!(a.carried_txs(), b.carried_txs());
+        assert_eq!(a.demand_txs(), b.demand_txs());
+        assert_eq!(a.expired_txs(), b.expired_txs());
         assert_eq!(a.n, b.n);
         assert_eq!(a.cumulative_outputs, b.cumulative_outputs);
         assert_eq!(a.cumulative_archival_bytes, b.cumulative_archival_bytes);

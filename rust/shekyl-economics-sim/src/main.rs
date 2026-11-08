@@ -10,6 +10,7 @@ mod chain_cursor;
 mod distribution;
 mod engine;
 mod escalation;
+mod esr10;
 mod fee_bar;
 mod fee_floor;
 mod fee_horizon;
@@ -25,6 +26,7 @@ mod population;
 mod proxy;
 mod redistribution;
 mod rng;
+mod rung_mix;
 mod secret_draw;
 mod secret_draw_production;
 mod stranding;
@@ -108,17 +110,27 @@ fn main() {
     baseline::write_header(&mut header, params.overrides()).expect("String sink is infallible");
     eprint!("{header}");
 
-    // A sweep cell is a `--stage2` run: it alone prints a cell beside its
-    // baseline. Every other mode reads the shipped baseline, so an override
-    // there would change nothing it prints, or change it with no baseline
-    // beside it.
+    // A sweep cell is a `--stage2` or `--esr10` run: each prints a cell
+    // beside its baseline. Every other mode reads the shipped baseline, so
+    // an override there would change nothing it prints, or change it with
+    // no baseline beside it.
     let stage2 = std::env::args().any(|a| a == "--stage2");
-    if !params.overrides().is_empty() && !stage2 {
-        refuse("overrides are read by --stage2 only: it prints a cell beside its baseline");
+    let esr10 = std::env::args().any(|a| a == "--esr10");
+    if !params.overrides().is_empty() && !stage2 && !esr10 {
+        refuse(
+            "overrides are read by --stage2 and --esr10 only: each prints a cell beside its baseline",
+        );
+    }
+    if esr10 && control {
+        refuse("--esr10 runs the production ladder: the flat control fee has no rungs to mix");
     }
     // An override on a field the mode's report does not read would print
     // the baseline, which reads as "no effect": refused before the fold.
-    let (mode, reads) = baseline::stage2_reach(control);
+    let (mode, reads) = if esr10 {
+        baseline::esr10_reach()
+    } else {
+        baseline::stage2_reach(control)
+    };
     if let Err(e) = baseline::check_reach(params.overrides(), params.baseline(), mode, reads) {
         refuse(&e.to_string());
     }
@@ -207,6 +219,40 @@ fn main() {
             secret_draw::SEEDS
         );
         println!("{}", secret_draw_production::evidence_json(&report));
+        return;
+    }
+
+    // ESR-10 (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.29): the fee multiplier
+    // and the rung mix on both `w_ref` arms. The narration to stderr, as
+    // `--stage2`'s; the summary EUP-5 reads as JSON to stdout.
+    if esr10 {
+        let started = std::time::Instant::now();
+        let mut narration = String::new();
+        let rows = esr10::run_esr10(&mut narration, &params, esr10::Scope::Full)
+            .expect("String sink is infallible");
+        if params.overrides().is_empty() {
+            eprint!("{narration}");
+        } else {
+            let mut baseline_narration = String::new();
+            esr10::run_esr10(
+                &mut baseline_narration,
+                &SimParams::default(),
+                esr10::Scope::Full,
+            )
+            .expect("String sink is infallible");
+            eprint!(
+                "{}",
+                baseline::beside_baseline(&narration, &baseline_narration)
+            );
+        }
+        let json = serde_json::to_string_pretty(&rows).expect("JSON serialization failed");
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(json.as_bytes()).expect("write failed");
+        stdout.write_all(b"\n").expect("write failed");
+        eprintln!(
+            "--esr10 wall time: {:.0} s",
+            started.elapsed().as_secs_f64()
+        );
         return;
     }
 

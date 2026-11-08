@@ -34,6 +34,7 @@ use shekyl_economics::{
 
 use crate::burden::{ordinary_tx_fee, ordinary_tx_weight};
 use crate::calibration::PerByteRate;
+use crate::rung_mix::{PerRung, Rung, RungMix};
 
 /// How a run prices an ordinary transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,14 +57,18 @@ pub enum FeeModel {
         /// pays. Flat as well, and for the same reason.
         admission_rate: PerByteRate,
     },
-    /// The Standard rung of the production ladder — four times the relay
-    /// floor, the wallet's default (`FEE_LADDER_DERIVATION.md` §5.5) — at
-    /// the block's own state, times a multiplier.
-    ProductionStandard {
-        /// Thousandths: `1_000` is the rung exactly. Anything else is a
-        /// declared divergence standing in for what users pay above the
-        /// default, which is not knowable before launch.
+    /// The production ladder at the block's own state. Ordinary demand pays
+    /// its rungs in the proportions of `mix`; the default is all Standard,
+    /// four times the relay floor and the wallet's default
+    /// (`FEE_LADDER_DERIVATION.md` §5.5).
+    Production {
+        /// Thousandths on the Standard rung: `1_000` is the rung exactly.
+        /// Anything else is a declared divergence standing in for what users
+        /// pay above the default, which is not knowable before launch.
         multiplier_milli: u64,
+        /// The share of demand on each rung (ESR-10). Not knowable before
+        /// launch either: a declared divergence unless all Standard.
+        mix: RungMix,
     },
 }
 
@@ -120,8 +125,9 @@ impl FeeModel {
     };
 
     /// What the chain's wallets pay by default: the Standard rung, unscaled.
-    pub const PRODUCTION_DEFAULT: Self = Self::ProductionStandard {
+    pub const PRODUCTION_DEFAULT: Self = Self::Production {
         multiplier_milli: MILLI,
+        mix: RungMix::ALL_STANDARD,
     };
 
     /// The flat fee, if this arm charges one. `None` for an arm whose fee
@@ -130,33 +136,47 @@ impl FeeModel {
     pub const fn flat_per_tx_atomic(self) -> Option<u64> {
         match self {
             Self::FlatControl { per_tx_atomic, .. } => Some(per_tx_atomic),
-            Self::ProductionStandard { .. } => None,
+            Self::Production { .. } => None,
         }
     }
 
-    /// Atomic units one ordinary transaction pays at `at`.
+    /// The share of demand on each rung. The control arm charges one fee,
+    /// which the run counts as Standard.
     #[must_use]
-    pub fn per_tx_atomic(self, at: &FeePoint<'_>) -> u64 {
+    pub const fn mix(self) -> RungMix {
         match self {
-            Self::FlatControl { per_tx_atomic, .. } => per_tx_atomic,
-            Self::ProductionStandard { multiplier_milli } => {
-                // The multiplier scales the rate. The fee is the fixed point
-                // of that rate: scaling an already converged fee would price
-                // a varint the payer does not write.
-                let rate = scaled_lattice_rate(ladder_at(at).standard, multiplier_milli, at.relay);
-                ordinary_tx_fee(at.chain_leaves, rate)
-                    .expect("the standard rung does not price an ordinary transaction")
-            }
+            Self::FlatControl { .. } => RungMix::ALL_STANDARD,
+            Self::Production { mix, .. } => mix,
         }
     }
 
-    /// The ordinary transaction at `at`: its fee, and its weight at that fee.
+    /// The ordinary transaction on each rung at `at`, built at that rung's
+    /// rate: Economy the ladder's `economy`, Standard its `standard` times
+    /// the multiplier, Priority its `priority`, each the wallet's lattice
+    /// fixed point (ESR-15). Standard is always priced, because the growth
+    /// gate reads it; another rung is priced only when the mix sends it
+    /// demand. One ladder call serves every rung.
     #[must_use]
-    pub fn ordinary_tx(self, at: &FeePoint<'_>) -> OrdinaryTx {
-        let fee_atomic = self.per_tx_atomic(at);
-        OrdinaryTx {
-            fee_atomic,
-            weight: ordinary_tx_weight(at.chain_leaves, fee_atomic),
+    pub fn rung_txs(self, at: &FeePoint<'_>) -> PerRung<Option<OrdinaryTx>> {
+        match self {
+            Self::FlatControl { per_tx_atomic, .. } => PerRung::from_fn(|rung| {
+                (rung == Rung::Standard).then(|| tx_paying(per_tx_atomic, at))
+            }),
+            Self::Production {
+                multiplier_milli,
+                mix,
+            } => {
+                let ladder = ladder_at(at);
+                PerRung::from_fn(|rung| {
+                    let fee = match rung {
+                        Rung::Standard => standard_fee(ladder, multiplier_milli, at),
+                        _ if !mix.uses(rung) => return None,
+                        Rung::Economy => rung_fee(ladder.economy, at),
+                        Rung::Priority => rung_fee(ladder.priority, at),
+                    };
+                    Some(tx_paying(fee, at))
+                })
+            }
         }
     }
 
@@ -168,9 +188,7 @@ impl FeeModel {
     pub fn admission_rate(self, at: &FeePoint<'_>) -> PerByteRate {
         match self {
             Self::FlatControl { admission_rate, .. } => admission_rate,
-            Self::ProductionStandard { .. } => {
-                PerByteRate::lattice(ladder_at(at).economy, at.relay)
-            }
+            Self::Production { .. } => PerByteRate::lattice(ladder_at(at).economy, at.relay),
         }
     }
 
@@ -183,10 +201,23 @@ impl FeeModel {
                  divergence: the chain charges no flat fee (ECONOMICS_SIM_PRODUCTION_REBASE.md §4).",
                 per_tx_atomic as f64 / crate::burden::COIN as f64
             ),
-            Self::ProductionStandard { multiplier_milli } => format!(
+            Self::Production {
+                multiplier_milli,
+                mix,
+            } if mix == RungMix::ALL_STANDARD => format!(
                 "FEE ARM: production ladder — Standard rung x{:.3} (corrected_fee_ladder at each \
                  block's R, C and long-term median), ordinary 1in/2out weight at chain depth, the \
                  wallet's lattice fixed point of rate x weight.",
+                multiplier_milli as f64 / MILLI as f64,
+            ),
+            Self::Production {
+                multiplier_milli,
+                mix,
+            } => format!(
+                "FEE ARM: production ladder — rung mix Economy/Standard/Priority {mix}, Standard \
+                 x{:.3} (corrected_fee_ladder at each block's R, C and long-term median), ordinary \
+                 1in/2out weight at chain depth, the wallet's lattice fixed point of each rung's \
+                 rate x weight.",
                 multiplier_milli as f64 / MILLI as f64,
             ),
         }
@@ -197,7 +228,7 @@ impl FeeModel {
     pub fn admission_rate_phrase(self, rate: PerByteRate) -> String {
         match self {
             Self::FlatControl { .. } => format!("{} atomic/byte", rate.atomic()),
-            Self::ProductionStandard { .. } => {
+            Self::Production { .. } => {
                 "the production relay floor at each row's point of the baseline chain".to_string()
             }
         }
@@ -209,7 +240,7 @@ impl FeeModel {
     pub fn admission_rate_column(self) -> &'static str {
         match self {
             Self::FlatControl { .. } => "",
-            Self::ProductionStandard { .. } => "  floor (atomic/B)",
+            Self::Production { .. } => "  floor (atomic/B)",
         }
     }
 
@@ -218,7 +249,7 @@ impl FeeModel {
     pub fn admission_rate_cell(self, rate: PerByteRate) -> String {
         match self {
             Self::FlatControl { .. } => String::new(),
-            Self::ProductionStandard { .. } => format!("  {:>16}", rate.atomic()),
+            Self::Production { .. } => format!("  {:>16}", rate.atomic()),
         }
     }
 
@@ -232,7 +263,7 @@ impl FeeModel {
                  one-shot drifts up about 1%, sustained down about 3%. The leaf era's \
                  'cheapest early' is gone with its unit."
             }
-            Self::ProductionStandard { .. } => {
+            Self::Production { .. } => {
                 "The rate is the relay floor at each row, and it follows the block reward, so a \
                  shard is dear to stuff early and cheap late. Rows are the baseline chain at the \
                  year it reaches that shard count, and past its last year they hold that year's \
@@ -246,7 +277,7 @@ impl FeeModel {
     pub fn admission_floor_label(self, rate: PerByteRate) -> String {
         match self {
             Self::FlatControl { .. } => format!("{} atomic/byte", rate.atomic()),
-            Self::ProductionStandard { .. } => "production relay".to_string(),
+            Self::Production { .. } => "production relay".to_string(),
         }
     }
 
@@ -260,7 +291,7 @@ impl FeeModel {
                  its fee burn has destroyed the circulating supply, so burn_pct -> 0 and the fee\n\
                  leg with it) and is read for shape only."
             }
-            Self::ProductionStandard { .. } => {
+            Self::Production { .. } => {
                 "sustained_growth's 20%/yr to 60 y is unphysical (block weight caps it) and is read\n\
                  for shape only."
             }
@@ -273,7 +304,7 @@ impl FeeModel {
     pub fn report_preamble(self) -> Option<&'static str> {
         match self {
             Self::FlatControl { .. } => None,
-            Self::ProductionStandard { .. } => Some(
+            Self::Production { .. } => Some(
                 "The paragraphs below were written against the flat control fee. Where one states a\n\
                  result, the table beside it governs.",
             ),
@@ -296,6 +327,34 @@ fn scaled_lattice_rate(
         u64::try_from(scaled).expect("a scaled rung fits the per-byte rate"),
         relay,
     )
+}
+
+/// An ordinary transaction paying `fee_atomic` at `at`'s depth, at the
+/// weight that fee writes.
+fn tx_paying(fee_atomic: u64, at: &FeePoint<'_>) -> OrdinaryTx {
+    OrdinaryTx {
+        fee_atomic,
+        weight: ordinary_tx_weight(at.chain_leaves, fee_atomic),
+    }
+}
+
+/// The Standard rung's fee: the multiplier scales the rate, and the fee is
+/// the fixed point of that rate. Scaling an already converged fee would
+/// price a varint the payer does not write.
+fn standard_fee(ladder: FeeLadder, multiplier_milli: u64, at: &FeePoint<'_>) -> u64 {
+    let rate = scaled_lattice_rate(ladder.standard, multiplier_milli, at.relay);
+    ordinary_tx_fee(at.chain_leaves, rate)
+        .expect("the standard rung does not price an ordinary transaction")
+}
+
+/// An unscaled rung's fee: the fixed point of its per-byte rate on the
+/// run's lattice.
+fn rung_fee(rate_per_byte: u64, at: &FeePoint<'_>) -> u64 {
+    ordinary_tx_fee(
+        at.chain_leaves,
+        PerByteRate::lattice(rate_per_byte, at.relay),
+    )
+    .expect("a ladder rung does not price an ordinary transaction")
 }
 
 /// The production ladder at `at`: every rung comes from this one call, so
@@ -330,6 +389,13 @@ mod tests {
     use crate::burden::normal_tx_shape;
     use crate::calibration::tree_depth_for_leaves;
 
+    /// What one Standard transaction pays on `arm` at `at`.
+    fn standard_fee_of(arm: FeeModel, at: &FeePoint<'_>) -> u64 {
+        arm.rung_txs(at)[Rung::Standard]
+            .expect("every arm prices Standard")
+            .fee_atomic
+    }
+
     fn point(already_generated: u64, params: &EconomicParams) -> FeePoint<'_> {
         FeePoint {
             already_generated,
@@ -362,7 +428,7 @@ mod tests {
             &params,
         );
         let (n_in, n_out) = normal_tx_shape();
-        let paid = FeeModel::PRODUCTION_DEFAULT.per_tx_atomic(&at);
+        let paid = standard_fee_of(FeeModel::PRODUCTION_DEFAULT, &at);
         let weight = predict_weight(n_in, n_out, tree_depth_for_leaves(1), paid) as u64;
         let product = weight * 4 * floor;
         assert!(paid >= product, "under-pay: {paid} < {product}");
@@ -379,7 +445,10 @@ mod tests {
     fn the_multiplier_scales_the_rate_before_the_fixed_point() {
         let params = EconomicParams::default();
         let at = point(0, &params);
-        let arm = |multiplier_milli| FeeModel::ProductionStandard { multiplier_milli };
+        let arm = |multiplier_milli| FeeModel::Production {
+            multiplier_milli,
+            mix: RungMix::ALL_STANDARD,
+        };
         let base = base_block_reward(0, &params).expect("genesis reward");
         let floor = relay_fee_floor(
             base,
@@ -391,7 +460,7 @@ mod tests {
         let (n_in, n_out) = normal_tx_shape();
         let depth = tree_depth_for_leaves(at.chain_leaves);
         for multiplier_milli in [MILLI / 2, MILLI, 2 * MILLI] {
-            let paid = arm(multiplier_milli).per_tx_atomic(&at);
+            let paid = standard_fee_of(arm(multiplier_milli), &at);
             let weight = u128::from(predict_weight(n_in, n_out, depth, paid) as u64);
             let rate = u128::from(4 * floor) * u128::from(multiplier_milli) / u128::from(MILLI);
             let product = weight * rate;
@@ -419,15 +488,18 @@ mod tests {
         };
         let production = FeeModel::PRODUCTION_DEFAULT;
         let (fee_early, fee_late) = (
-            production.per_tx_atomic(&early),
-            production.per_tx_atomic(&late),
+            standard_fee_of(production, &early),
+            standard_fee_of(production, &late),
         );
         assert!(
             fee_late * 10 < fee_early,
             "production fee must fall with the reward: early {fee_early}, late {fee_late}"
         );
         let control = FeeModel::SECTION_12_14_CONTROL;
-        assert_eq!(control.per_tx_atomic(&early), control.per_tx_atomic(&late));
+        assert_eq!(
+            standard_fee_of(control, &early),
+            standard_fee_of(control, &late)
+        );
         assert_eq!(
             control.flat_per_tx_atomic(),
             Some(SECTION_12_14_FLAT_FEE_ATOMIC)

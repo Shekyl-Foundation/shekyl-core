@@ -38,6 +38,16 @@ fn baseline_tx() -> OrdinaryTx {
     }
 }
 
+/// `count` Standard transactions, each `tx`: one block's demand before
+/// ESR-10.
+fn standard(count: u64, tx: OrdinaryTx) -> [Arrival; 1] {
+    [Arrival {
+        rung: Rung::Standard,
+        count,
+        tx,
+    }]
+}
+
 /// The running total against the cohorts it stands for.
 fn assert_total_is_the_pool(space: &BlockSpace) {
     let pooled: u64 = space.waiting.iter().map(|cohort| cohort.count).sum();
@@ -48,8 +58,13 @@ fn assert_total_is_the_pool(space: &BlockSpace) {
     );
 }
 
-/// A cohort built at an arbitrary block, for the walks below.
+/// A Standard cohort built at an arbitrary block, for the walks below.
 fn cohort(fee: u64, weight: u64, count: u64, hour: u64) -> Cohort {
+    rung_cohort(Rung::Standard, fee, weight, count, hour)
+}
+
+/// A cohort on `rung` built at an arbitrary block.
+fn rung_cohort(rung: Rung, fee: u64, weight: u64, count: u64, hour: u64) -> Cohort {
     Cohort {
         arrived: 1_000,
         reference: 993,
@@ -57,6 +72,7 @@ fn cohort(fee: u64, weight: u64, count: u64, hour: u64) -> Cohort {
         fee,
         weight,
         count,
+        rung,
     }
 }
 
@@ -111,19 +127,29 @@ fn a_cohort_lives_for_the_proof_validity_horizon() {
     let first = 10_000u64;
     let built_on = first - 1;
     let mut space = BlockSpace::default();
-    let (evicted, refused) =
-        space.admit(first, 3, baseline_tx(), u64::MAX, params.daa_target_seconds);
-    assert_eq!((evicted, refused, space.waiting()), (0, 0, 3));
+    let mut evicted = PerRung::default();
+    let [arrival] = standard(3, baseline_tx());
+    let refused = space.admit(
+        first,
+        arrival,
+        u64::MAX,
+        params.daa_target_seconds,
+        &mut evicted,
+    );
+    assert_eq!(
+        (evicted.iter().sum::<u64>(), refused, space.waiting()),
+        (0, 0, 3)
+    );
     let horizon = PROOF_VALIDITY_HORIZON.to_raw();
     for connecting in first..=built_on + horizon {
         assert_eq!(
-            space.expire(connecting),
+            space.expire(connecting).iter().sum::<u64>(),
             0,
             "still listable at {connecting}"
         );
     }
     assert_eq!(
-        space.expire(built_on + horizon + 1),
+        space.expire(built_on + horizon + 1)[Rung::Standard],
         3,
         "refused past the horizon"
     );
@@ -140,17 +166,17 @@ fn a_waiting_transaction_keeps_the_fee_it_was_built_with() {
     let point = at(&run);
     let mut space = BlockSpace::default();
     let built = baseline_tx();
-    let first = space.fill(1_000, space.medians(params), 100, built, &point);
-    assert!(first.included < 100, "some of it waits");
+    let first = space.fill(1_000, space.medians(params), &standard(100, built), &point);
+    assert!(first.included() < 100, "some of it waits");
     let later = OrdinaryTx {
         fee_atomic: built.fee_atomic * 2,
         ..built
     };
-    let second = space.fill(1_001, space.medians(params), 0, later, &point);
-    assert!(second.included > 0);
+    let second = space.fill(1_001, space.medians(params), &standard(0, later), &point);
+    assert!(second.included() > 0);
     assert_eq!(
         second.fees,
-        second.included * built.fee_atomic,
+        second.included() * built.fee_atomic,
         "the listed bodies pay the fee they were built with"
     );
 }
@@ -203,7 +229,9 @@ fn the_cohort_walk_is_the_templates_walk_over_every_transaction() {
 
         let mut space = space_of(pool);
         let mut cohort_fill = empty();
-        let included = space.offer(&mut cohort_fill, 1_000);
+        let mut rungs = PerRung::default();
+        space.offer(&mut cohort_fill, 1_000, &mut rungs);
+        let included: u64 = rungs.iter().map(|r: &RungBlock| r.included).sum();
 
         let mut every = every_transaction(pool);
         every.sort_by(|a, b| a.0.template(b.0));
@@ -283,7 +311,10 @@ fn admission_makes_room_as_the_pool_does() {
         // The pool's cohorts arrived at 1 000; these arrivals at 2 000.
         let connecting = 2_000;
         let mut space = space_of(pool);
-        let (evicted, refused) = space.admit(connecting, *demand, *tx, *limit, 120);
+        let mut evicted_by_rung = PerRung::default();
+        let [arrival] = standard(*demand, *tx);
+        let refused = space.admit(connecting, arrival, *limit, 120, &mut evicted_by_rung);
+        let evicted: u64 = evicted_by_rung.iter().sum();
         assert_total_is_the_pool(&space);
 
         // The pool's own walk, one arrival at a time. `None` marks an arrival.
@@ -384,7 +415,9 @@ fn the_trim_passes_over_the_listing_as_the_pool_does() {
             before[index].count - left.count
         })
         .collect();
-    let trimmed = space.trim(limit);
+    let mut evicted = PerRung::default();
+    space.trim(limit, &mut evicted);
+    let trimmed: u64 = evicted.iter().sum();
 
     let mut every = every_transaction(&before);
     every.sort_by(|a, b| a.0.eviction(b.0));
@@ -444,9 +477,14 @@ fn the_block_takes_what_the_rule_admits_and_the_rest_waits_then_expires() {
     let point = at(&run);
     let mut space = BlockSpace::default();
     let start = 1_000u64;
-    let small = space.fill(start, space.medians(params), 5, baseline_tx(), &point);
+    let small = space.fill(
+        start,
+        space.medians(params),
+        &standard(5, baseline_tx()),
+        &point,
+    );
     assert_eq!(
-        (small.included, space.waiting()),
+        (small.included(), space.waiting()),
         (5, 0),
         "five fit under the zone"
     );
@@ -456,38 +494,211 @@ fn the_block_takes_what_the_rule_admits_and_the_rest_waits_then_expires() {
     let full = space.fill(
         start + 1,
         space.medians(params),
-        demand,
-        baseline_tx(),
+        &standard(demand, baseline_tx()),
         &point,
     );
-    assert_eq!(full.refused, 0, "the pool holds it");
-    assert!(full.included < demand, "the rule refuses past the median");
+    assert_eq!(full.sum(|r| r.refused), 0, "the pool holds it");
+    assert!(full.included() < demand, "the rule refuses past the median");
     assert_total_is_the_pool(&space);
-    assert_eq!(space.waiting(), demand - full.included);
+    assert_eq!(space.waiting(), demand - full.included());
 
     let horizon = PROOF_VALIDITY_HORIZON.to_raw();
-    let mut drained = full.included;
+    let mut drained = full.included();
     let last_listable = start + horizon;
     for height in start + 2..=last_listable {
-        let block = space.fill(height, space.medians(params), 0, baseline_tx(), &point);
-        assert_eq!(block.expired, 0, "nothing has left the window at {height}");
-        drained += block.included;
+        let block = space.fill(
+            height,
+            space.medians(params),
+            &standard(0, baseline_tx()),
+            &point,
+        );
+        assert_eq!(
+            block.sum(|r| r.expired),
+            0,
+            "nothing has left the window at {height}"
+        );
+        drained += block.included();
         assert_total_is_the_pool(&space);
     }
     let last = space.fill(
         last_listable + 1,
         space.medians(params),
-        0,
-        baseline_tx(),
+        &standard(0, baseline_tx()),
         &point,
     );
-    assert!(last.expired > 0, "the rest has left the window");
-    assert_eq!(last.included, 0, "dropped before the block is filled");
+    assert!(last.sum(|r| r.expired) > 0, "the rest has left the window");
+    assert_eq!(last.included(), 0, "dropped before the block is filled");
     assert_eq!(
-        drained + last.expired,
+        drained + last.sum(|r| r.expired),
         demand,
         "every transaction is served or dropped"
     );
     assert_eq!(space.waiting(), 0);
     assert_total_is_the_pool(&space);
+}
+
+/// ESR-10's three rungs: the cohort walk lists what the template's walk over
+/// every transaction lists, rung by rung, on pools where the rungs pay the
+/// ladder's ratios (Priority 50× Standard per byte and a byte heavier for
+/// its fee's longer varint, Standard 4× Economy), with cohorts of every age.
+/// The rung orders nothing: each transaction's rank is its rate, hour and
+/// hash, as the pool's.
+#[test]
+fn the_three_rung_walk_is_the_templates_walk_rung_by_rung() {
+    let run = SimParams::default();
+    let params = run.economic();
+    let point = at(&run);
+    let (e, s, p) = (Rung::Economy, Rung::Standard, Rung::Priority);
+    let pools: [&[Cohort]; 3] = [
+        // The constrained era: a Priority sprinkle, Standard over the room,
+        // Economy behind both, the oldest of each the richest.
+        &[
+            rung_cohort(p, 60_000_000_000, 14_644, 3, 7),
+            rung_cohort(s, 1_200_000_000, 14_643, 40, 5),
+            rung_cohort(s, 1_190_000_000, 14_643, 40, 6),
+            rung_cohort(e, 300_000_000, 14_643, 8, 5),
+            rung_cohort(e, 297_500_000, 14_643, 7, 6),
+        ],
+        // Priority enough to buy into the penalty zone.
+        &[
+            rung_cohort(p, 60_000_000_000, 14_644, 40, 7),
+            rung_cohort(s, 1_200_000_000, 14_643, 30, 5),
+            rung_cohort(e, 300_000_000, 14_643, 10, 5),
+        ],
+        // Room for everything: every rung listed.
+        &[
+            rung_cohort(p, 60_000_000_000, 14_644, 1, 7),
+            rung_cohort(s, 1_200_000_000, 14_643, 8, 5),
+            rung_cohort(e, 300_000_000, 14_643, 2, 5),
+        ],
+    ];
+    for (case, pool) in pools.iter().enumerate() {
+        let medians = BlockSpace::default().medians(params);
+        let empty = || {
+            Fill::empty(
+                medians.effective_median.to_raw(),
+                u64::try_from(COINBASE_RESERVE).expect("fits"),
+                point.already_generated,
+                point.volume,
+                params,
+            )
+            .expect("priced")
+        };
+        let mut space = space_of(pool);
+        let mut cohort_fill = empty();
+        let mut rungs = PerRung::<RungBlock>::default();
+        space.offer(&mut cohort_fill, 1_000, &mut rungs);
+
+        let mut every = every_transaction(pool);
+        every.sort_by(|a, b| a.0.template(b.0));
+        let mut naive = empty();
+        let mut naive_rungs = PerRung::<(u64, u64)>::default();
+        for (_, index) in &every {
+            let c = pool[*index];
+            if naive.admit(c.weight, c.fee) {
+                naive_rungs[c.rung].0 += 1;
+                naive_rungs[c.rung].1 += c.fee;
+            }
+        }
+        for rung in Rung::ALL {
+            assert_eq!(
+                (rungs[rung].included, rungs[rung].fees),
+                naive_rungs[rung],
+                "case {case}: {rung:?}"
+            );
+        }
+        assert_eq!(cohort_fill.fees(), naive.fees(), "case {case}: the fees");
+        assert_total_is_the_pool(&space);
+    }
+}
+
+/// A full pool refuses the cheapest arrival and lets a richer one evict the
+/// cheapest entry, and the pool counts each drop against the rung it was
+/// built on.
+#[test]
+fn a_full_pool_drops_the_cheapest_rung_and_counts_it() {
+    let weight = 10;
+    let pool = [
+        rung_cohort(Rung::Standard, 4_000, weight, 50, 3),
+        rung_cohort(Rung::Economy, 1_000, weight, 30, 3),
+    ];
+    let limit = 80 * weight;
+    let mut space = space_of(&pool);
+    let mut evicted = PerRung::default();
+    let economy = Arrival {
+        rung: Rung::Economy,
+        count: 5,
+        tx: OrdinaryTx {
+            fee_atomic: 990,
+            weight,
+        },
+    };
+    assert_eq!(
+        space.admit(2_000, economy, limit, 120, &mut evicted),
+        5,
+        "the cheapest arrival has nothing cheaper to evict"
+    );
+    let standard_arrival = Arrival {
+        rung: Rung::Standard,
+        count: 12,
+        tx: OrdinaryTx {
+            fee_atomic: 3_990,
+            weight,
+        },
+    };
+    assert_eq!(
+        space.admit(2_000, standard_arrival, limit, 120, &mut evicted),
+        0
+    );
+    assert_eq!(
+        evicted[Rung::Economy],
+        12,
+        "the Standard arrivals evict Economy"
+    );
+    assert_eq!(evicted[Rung::Standard], 0);
+    assert_total_is_the_pool(&space);
+}
+
+/// The order one block's arrivals are admitted in moves a drop's label, not
+/// the pool: Economy admitted first and evicted by Standard leaves the pool
+/// that Economy refused after Standard leaves (§5.29).
+#[test]
+fn the_admission_order_relabels_a_drop_and_leaves_the_pool() {
+    let weight = 10;
+    let pool = [rung_cohort(Rung::Standard, 4_000, weight, 70, 3)];
+    let limit = 80 * weight;
+    let arrival = |rung, count, fee_atomic| Arrival {
+        rung,
+        count,
+        tx: OrdinaryTx { fee_atomic, weight },
+    };
+    let economy = arrival(Rung::Economy, 6, 1_000);
+    let standard_arrival = arrival(Rung::Standard, 7, 3_990);
+    let run = |order: [Arrival; 2]| {
+        let mut space = space_of(&pool);
+        let mut evicted = PerRung::default();
+        let mut refused = PerRung::<u64>::default();
+        for a in order {
+            refused[a.rung] += space.admit(2_000, a, limit, 120, &mut evicted);
+        }
+        let held: Vec<(Rung, u64, u64)> = space
+            .waiting
+            .iter()
+            .map(|c| (c.rung, c.fee, c.count))
+            .collect();
+        (held, evicted, refused)
+    };
+    let (richest_first, evicted_a, refused_a) = run([standard_arrival, economy]);
+    let (cheapest_first, evicted_b, refused_b) = run([economy, standard_arrival]);
+    assert_eq!(richest_first, cheapest_first, "the same pool either way");
+    assert_eq!(
+        (evicted_a[Rung::Economy], refused_a[Rung::Economy]),
+        (0, 3),
+        "richest first: Economy refused"
+    );
+    assert_eq!(
+        (evicted_b[Rung::Economy], refused_b[Rung::Economy]),
+        (3, 0),
+        "cheapest first: Economy admitted, then evicted"
+    );
 }
