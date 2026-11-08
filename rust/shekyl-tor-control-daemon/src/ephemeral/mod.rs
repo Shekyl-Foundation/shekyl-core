@@ -1056,25 +1056,11 @@ pub(crate) mod tests {
         );
     }
 
-    /// The tor process launched with `dir` as its DataDirectory parent.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn tor_under(dir: &std::path::Path) -> Option<u32> {
-        let needle = dir.to_string_lossy().into_owned();
-        std::fs::read_dir("/proc").ok()?.find_map(|entry| {
-            let entry = entry.ok()?;
-            let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
-            let cmdline = std::fs::read(entry.path().join("cmdline")).ok()?;
-            String::from_utf8_lossy(&cmdline)
-                .contains(&needle)
-                .then_some(pid)
-        })
-    }
-
     /// The death edge (`TOR_SUPERVISOR.md` `TSR-F1`): a watcher hears the
-    /// incarnation end. A tor killed from outside is `Exited`. A shutdown is
-    /// `Stopped`.
+    /// incarnation end. A tor killed from outside is `Exited`, and the exit
+    /// code is what [`shekyl_tor_control_client::outside_kill::reaped_exit_code`]
+    /// says that kill leaves. A shutdown is `Stopped`.
     #[tokio::test]
-    #[cfg(target_os = "linux")]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
     async fn a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop() {
         let binary = VerifiedTorBinary::unchecked_for_test(tor_binary());
@@ -1086,18 +1072,21 @@ pub(crate) mod tests {
                 .await
                 .expect("start");
         let death = tokio::spawn(killed.death());
-        let pid = tor_under(dir.path()).expect("the tor under this directory");
         // Under the spawn lock, as every spawn in a crate that launches tor
         // is (TOR_SUPERVISOR.md 4.7): a child started in the launch window
         // would inherit tor's end.
-        let status = shekyl_tor_control_client::spawn_lock::status(
-            std::process::Command::new("kill").args(["-9", &pid.to_string()]),
-        )
-        .expect("kill");
-        assert!(status.success());
+        assert!(
+            shekyl_tor_control_client::outside_kill::kill_tor_named_by(dir.path()),
+            "the tor under this directory was found and killed"
+        );
+        let death = heard(death).await.expect("heard").expect("watcher");
+        let TorDeath::Exited { code } = death else {
+            panic!("a tor killed from outside is Exited, was {death:?}");
+        };
         assert_eq!(
-            heard(death).await.expect("heard").expect("watcher"),
-            TorDeath::Exited { code: None }
+            code,
+            shekyl_tor_control_client::outside_kill::reaped_exit_code(),
+            "the reap reports the outside kill"
         );
         assert!(!killed.is_alive());
         let _exit_after_kill = killed.shutdown().await;

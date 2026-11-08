@@ -328,6 +328,10 @@ test on both platforms is `tor-pin-verify`: its Windows entry and its two
 macOS entries, which run the live tests on the exact signed bytes. §7's
 Windows and macOS cases are the supervisor's acceptance tests, not the pin's
 gate.
+**Run 2026-11-08** (§7, Windows and macOS): every case each host could stage
+passes, with two findings: `TSR-F18` (macOS, fixed by #1310) and the
+repeated clock line (Windows, the next supervisor fix). The cases neither
+host could stage are named in §7.
 Windows run of 2026-10-15 (the Windows development host): the pinned
 `tor.exe` imports 21 libraries, all the operating system's (8 System32
 libraries and 13 UCRT apisets), with no delay-loads; the pin's `imports`
@@ -1256,7 +1260,11 @@ the Windows CI job beside the boot-and-stop smoke test (#1072), and in
 - **Tor down at start, restored address file:** the cause announced, no
   respawn, all six onion entries in gray through the outage.
 - **Disk filled while Running, then a kill:** the respawn into the kept
-  directory came up in 3 s; a respawn needs no new space.
+  directory came up in 3 s. That was the build before the pre-spawn space
+  check. Since that check, a respawn into the kept directory needs Tor's
+  write headroom too (32 MiB, §5, "Data directory unusable"), and on a full
+  disk it is held at each cap until space returns (the Windows and macOS
+  runs of 2026-11-08, below).
 - **Boot on a full disk:** held, then the retry launched Tor anyway (no space
   check), which stuck at 40 % until killed. The pre-spawn space check above
   is the fix.
@@ -1421,6 +1429,96 @@ off; faults on a network namespace's link only; shekyl-dev
   supervisor's behaviour is unchanged.
 - **Stops:** both exited 1.1 s after `SIGTERM`, one after 67 minutes
   including the drop.
+
+**macOS, 2026-11-08** (the macOS build host, Mac mini M2 Pro, macOS 27.0.1,
+arm64; the signed 15.0.26 bundle; `shekyld` built there; testnet, clearnet
+off; shekyl-dev `data/tsr-acceptance/2026-11-08-macos/`, commits `042ef17`,
+`9a48388` and `a3c0f9c`):
+
+- **The first run found `TSR-F18`:** 61 s after a cold start the node's first
+  probe of its own onion made Tor solve a proof-of-work puzzle, and the
+  hardened runtime killed Tor in the compiled hash (§3). Every later case ran
+  on #1310's build, which passes `CompiledProofOfWorkHash 0` on macOS.
+- **Kill:** respawned 1.1 s after `kill -9`; the next probe arrived.
+- **Wedge (`SIGSTOP`):** "Tor stopped answering" 66 s after the stop; a new
+  Tor was up 3 s later.
+- **Crash loop:** respawns 1.1, 2.1, 4.2 and 8.2 s after each kill; a death
+  after 70 s of usable outbound respawned after 1.1 s (the backoff started
+  again), one 5 s after a recovery after 2.1 s (no reset).
+- **Binary replaced, then a kill:** refused by the pin 1 s after the kill,
+  again at the cap; nothing unverified ran; restored, up 3.7 s later.
+- **Disk:** filled while Running then a kill, held at each cap ("has 7.2 MB
+  free and Tor needs 33.6 MB"); a boot on the full disk started no Tor, and
+  Tor started 16 s after space returned.
+- **Stops:** `SIGINT` and `SIGTERM` in 0.16 to 0.17 s, no Tor left, Tor's log
+  kept; after `SIGKILL` of the daemon Tor ended on its own within 31 ms, and
+  the next start swept what was left.
+- **Not run:** outbound blocked, Tor down at start, the slow link and the
+  clock need `sudo` (`pf`, `dnctl`, `date`); suspend, because another
+  session on the host holds a sleep assertion (`TSR-M8` measured the clock
+  across a sleep there). Upload failure and the introduction flood are best
+  effort.
+
+**Windows, 2026-11-08** (Windows Server 2025 Datacenter VM, x86_64; the
+pinned 15.0.25 `tor.exe`; `shekyld` built there at `8d78bbacfb`; testnet,
+clearnet off; shekyl-dev `data/tsr-acceptance/2026-11-08-windows/`, commits
+`6610555`, `bb9c456` and `53f6fec`):
+
+- **Kill (`taskkill /F`):** respawned 1.3 s later, the same onion published
+  6.6 s after the kill; the next probe arrived.
+- **Outbound blocked 10 min (a Windows Firewall rule on `tor.exe`):** no
+  respawn, no cause named, the neutral line once; Tor stated nothing about
+  its network, as on Linux under `TSR-Q14`. A probe arrived 4 min 32 s after
+  the unblock.
+- **Wedge (`NtSuspendProcess`):** "Tor stopped answering" 44 s after the
+  suspend; a new Tor was up 9 s later.
+- **Crash loop:** respawns 1.3, 2.3, 4.3 and 8.4 s; the reset after 70 s of
+  usable outbound and none 5 s after a recovery, as on macOS. The line names
+  the exit code `TerminateProcess` gives ("The last exit code was 1").
+- **Binary replaced, then a kill:** refused 1.2 s after the kill; restored,
+  up 5 s later.
+- **Tor down at start:** no respawn, gray intact (six onion entries at 1 and
+  3 min), Tor up 2 s after the unblock.
+- **Disk (a 300 MB VHD):** as on macOS: held while full, Tor started 17 s
+  after space returned at boot.
+- **Stops:** Ctrl-Break and closing the window in 1.3 to 1.4 s, exit 0, no
+  `tor.exe` left; after `taskkill /F` of the daemon, Tor ended on its own.
+- **Ctrl-C and an inherited ignore:** the acceptance driver's process chain
+  (ssh, then PowerShell) ignored Ctrl-C, and Windows passes that to
+  children. The daemon it started in a console of its own ignored Ctrl-C
+  three times, for 120 s each, and so did Tor, which shares that console.
+  With the attribute cleared in the launcher before the start, Ctrl-C
+  stopped it in 1.2 to 2.1 s, exit 0, no `tor.exe` left. Ruled (Rick,
+  2026-11-08): the node honours an inherited ignore on every platform and
+  says so at start (`DAEMON_CONFIG_CUTOVER.md` §2.2 step 9). Windows has no
+  documented call that reads the attribute, so every Windows start names the
+  stops that work.
+- **Clock a day ahead at start** (`w32time` stopped, the clock moved with
+  `Set-Date`): Tor stated nothing about its clock and nothing was named, as
+  on the Linux VM; no respawn.
+- **Clock three days behind at start:** Tor named the skew (`CLOCK_SKEW`,
+  -259200 s) and the supervisor named the clock; no respawn. **Finding:**
+  the line was said 11 times in 3 min 30 s, three of them inside 12 s, as
+  Tor's skew events arrived with -259200, -259201 and -259094: the cap held
+  some events and not others. The line also carries the cause's sentence
+  with the raw signed seconds ("The clock is off by -259200 seconds. Check
+  time sync.") beside the inbound facet's readable one ("at least 2 d 23 h
+  behind"). Both are the next supervisor fix.
+- **Set back a day while Running, then set right after 5 min:** named in the
+  second Tor reported the backward jump (inbound `ClockBehind`, "at least
+  22 h 52 min behind"); no respawn. Set right, the name cleared in the same
+  second and the onion returned to Publishing. Tor's descriptors from before
+  the jump were still current, so it uploaded nothing in the 45 min watched
+  (its cadence is 60 to 120 min) and no probe ran: the next upload was not
+  waited for. The outside watcher of the Linux VM run was not repeated.
+- **Not run:** the service-control stop, because `shekyld` has no Windows
+  service mode; suspend, which on a Server VM is the hypervisor's (`TSR-M8`
+  measured Modern Standby on a laptop); the slow link.
+
+**Seen on both, not a case:** no outbound session handshook. The testnet
+fleet runs alpha.11, and `dev` is alpha.12's, a regenesis with new network
+ids, so "gray unchanged" in these runs says less than it reads. The
+seven-day soaks run after the alpha.12 fleet deploy (Rick, 2026-11-08).
 
 | Case | Expected | Apparatus |
 | --- | --- | --- |
@@ -1673,9 +1771,10 @@ are fixed before the work starts:
    pass (2026-10-24 and 2026-10-25, after their fixes). Clock skew and
    suspend ran on a VM (2026-10-30; `TSR-M8` measured on Windows and
    macOS) and their findings are fixed; the slow link and a silent drop
-   (under `TSR-Q14`) pass on the floor device (2026-10-31). Open: the VM
-   cases on a build with the fixes, and the Windows and macOS runs
-   (`TSR-F15`). The floor-device soak ran from 2026-10-31 06:17Z to
+   (under `TSR-Q14`) pass on the floor device (2026-10-31). Windows and
+   macOS ran on 2026-11-08 (§7, `TSR-F15`); the cases they could not stage
+   are named there. Open: the VM cases on a build with the fixes. The
+   floor-device soak ran from 2026-10-31 06:17Z to
    2026-11-08 00:01Z at `ffb7259051` (shekyl-dev
    `data/tsr-acceptance/2026-10-31-pi-soak/`):
    - **Tor:** one Tor process the whole week, no respawn and no late timer;
@@ -1686,7 +1785,14 @@ are fixed before the work starts:
      about 75,000 session opens a day.
    - **CPU:** the driver spin (#1274) was running, so its CPU and load are
      not the device's baseline (`TSR-M15` is).
-   - **Open:** Rick's ruling on whether this soak stands as §1's Linux soak.
+   - **Ruled (Rick, 2026-11-08):** this soak does not count. The seven-day
+     soaks on Linux, Windows and macOS run on the alpha.12 fleet after its
+     deploy, with the node's own criteria beside Tor's: height within a few
+     blocks of the network's in at least 99 % of samples, bounded session
+     churn, and the CPU and load baseline recorded. Before the cut, a private
+     network of three or four `dev` nodes shows handshakes over clearnet and
+     over Tor, one node mining and the others syncing, and gray entries
+     moving with real sessions.
 
 ## 13. Review denominator
 
