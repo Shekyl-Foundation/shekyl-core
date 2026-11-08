@@ -5,9 +5,9 @@
 
 //! The archival reward-emission input arm (dense tag `0x04`, C-1).
 //!
-//! The C++ oracle is the *transport* struct `txin_archival_reward_emission`
-//! (`cryptonote_basic.h:298-311`): an opaque varint-length-prefixed blob whose
-//! leading byte echoes the wire tag, bounded to
+//! The transport shape is the C++ struct `txin_archival_reward_emission`
+//! (`cryptonote_basic.h` at `ac3836de90` (lines 300–313)): an opaque
+//! varint-length-prefixed blob whose leading byte echoes the wire tag, bounded to
 //! `2..=ARCHIVAL_EMISSION_VIN_MAX_BYTES`. The blob's *contents* are
 //! `shekyl-archival-retention::emission_wire`'s codec — out of scope here.
 //!
@@ -74,7 +74,7 @@ fn bp(n_out: usize) -> BpPlus {
 /// An emission-shaped tx: the emission vin plus `ToKey` fee inputs, loud-vout
 /// outputs, `pqc_auths == nvin` (the emission vin occupies an auth slot), and
 /// `pseudoOuts == ToKey subset` (the emission vin carries no pseudo-out —
-/// C++ `count_spend_inputs`, `cryptonote_basic.h:322`).
+/// C++ `count_spend_inputs`, `cryptonote_basic.h` at `ac3836de90` (lines 324–331)).
 fn emission_tx(inputs: Vec<Input>, outputs: Vec<Output>) -> Transaction {
     let n_in = inputs.len();
     let n_ki = inputs
@@ -192,7 +192,8 @@ fn emission_blob_shorter_than_two_bytes_rejected_on_read() {
 
 #[test]
 fn emission_blob_wrong_leading_byte_rejected_on_read() {
-    // The blob's first byte must echo the wire tag (cryptonote_basic.h:308).
+    // The blob's first byte must echo the wire tag (`cryptonote_basic.h` at
+    // `ac3836de90` (line 310)).
     let input = Input::ArchivalRewardEmission {
         canonical_bytes: vec![0x00, 0x00],
     };

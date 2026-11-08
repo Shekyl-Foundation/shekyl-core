@@ -2,27 +2,21 @@
 
 **Repo:** https://github.com/Shekyl-Foundation/shekyl-core
 **Org:** https://github.com/Shekyl-Foundation
-**Copyright:** © 2025–2026, The Shekyl Foundation (some inherited C++ under
-`src/` additionally carries Monero/CryptoNote copyright — see
-[`92-copyright-header`](.cursor/rules/92-copyright-header.mdc))
+**Copyright:** © 2025–2026, The Shekyl Foundation (some inherited files, such
+as the top-level `CMakeLists.txt`, additionally carry Monero/CryptoNote
+copyright — see [`92-copyright-header`](.cursor/rules/92-copyright-header.mdc))
 
 Shekyl is privacy-preserving, quantum-resistant money designed to last:
 hybrid post-quantum cryptography from genesis, FCMP++ membership-proof
-privacy, and a PoW chain with staking as an economic primitive. The node
-daemon lives in C++ under `src/` (Rust-forward when touched); the live
-wallet is the Rust stack (`shekyl-cli`, `shekyl-wallet-rpc`,
-`shekyl-engine-core` and siblings under `rust/`). The C++ `wallet2` /
-`simplewallet` / `wallet_rpc_server` path was deleted in Phase 5
-(2026-08-19). The rest of the codebase will follow. The long-term goal is an all-Rust stack, so editing
-C++ is the exception, not the default: new code **and bug fixes** belong in
-Rust (with proper types), advancing the FFI boundary rather than thickening the
-C++ — patching C++ just re-creates debt the Rust rewrite must pay down again,
-and the inherited C++ carries enough accumulated glitches and workarounds that
-"fix it in place" is rarely the right call. This is the canonical policy in
-[`20-rust-vs-cpp-policy`](.cursor/rules/20-rust-vs-cpp-policy.mdc) (when to
-choose Rust) and [`40-ffi-discipline`](.cursor/rules/40-ffi-discipline.mdc) /
-[`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc) (how to move
-the boundary).
+privacy, and a PoW chain with staking as an economic primitive. Everything
+Shekyl ships is Rust under `rust/`: the node daemon `shekyld` and the wallet
+stack (`shekyl-cli`, `shekyl-wallet-rpc`, `shekyl-engine-core` and
+siblings). The tree holds no first-party C or C++; the only C/C++ is
+vendored under `external/` (the RandomX references), and
+`scripts/ci/check_no_first_party_c.py` holds that end state. When to choose
+Rust is [`20-rust-vs-cpp-policy`](.cursor/rules/20-rust-vs-cpp-policy.mdc);
+how the workspace is laid out is
+[`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc).
 
 ---
 
@@ -119,8 +113,8 @@ UX (end-user-facing surfaces)
 
 ## Lineage (so the framing is right)
 
-Shekyl is **v3-from-genesis with no Monero chain history**. Some C++ under
-`src/` is inherited from the Monero/CryptoNote lineage and keeps its original
+Shekyl is **v3-from-genesis with no Monero chain history**. Some files are
+inherited from the Monero/CryptoNote lineage and keep their original
 copyright, but **Monero is not an upstream to track** — the codebases are
 siblings, and inherited data flows that contradict Shekyl's threat model are
 *migrated, not rationalized* ([`16`](.cursor/rules/16-architectural-inheritance.mdc),
@@ -135,14 +129,13 @@ crypto primitives; the rest of that tree's application/protocol code is ours
 
 ```text
 shekyl-core/
-├── src/        # C++ core: daemon, p2p, crypto, rpc (no wallet2)
-├── rust/       # Rust workspace: wallet stack + crypto/consensus crates
+├── rust/       # Rust workspace: daemon, wallet stack, crypto/consensus crates
 ├── cmake/      # CMake modules and the Rust build bridge (BuildRust.cmake)
 ├── config/     # Economics/consensus parameters (build-script source of truth)
 ├── docs/       # Design docs, decision log, FOLLOWUPS, test vectors
-├── external/   # Vendored third-party C/C++ deps (submodules)
-├── tests/      # C++ unit/integration + functional tests
-├── CMakeLists.txt / Makefile   # C++ build entry points
+├── external/   # Vendored third-party C/C++ (the RandomX submodules)
+├── tests/      # CMake gate tests and the stressnet harness (Rust tests live in rust/)
+├── CMakeLists.txt / Makefile   # build entry points: CMake runs cargo for the binaries
 └── CLAUDE.md   # this file
 ```
 
@@ -150,9 +143,9 @@ Key Rust crates: `shekyl-engine-*` (wallet orchestrator/state/file), `shekyl-sca
 `shekyl-tx-builder`, `shekyl-crypto-pq`, `shekyl-proofs`, `shekyl-fcmp`,
 `shekyl-curve-tree`, `shekyl-consensus`, `shekyl-economics`, `shekyl-staking`,
 `shekyl-chain-store` / `shekyl-chain-rules` (daemon store and the consensus
-validator that alone mints what it connects — the two share no code),
-`shekyl-units` / `shekyl-types` (foundational newtypes), and the single FFI
-crate `shekyl-ffi`. See [`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc).
+validator that alone mints what it connects — the two share no code), and
+`shekyl-units` / `shekyl-types` (foundational newtypes). See
+[`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc).
 
 Documentation starts at [`docs/README.md`](docs/README.md). Binding
 history: [`docs/V3_WALLET_DECISION_LOG.md`](docs/V3_WALLET_DECISION_LOG.md).
@@ -186,11 +179,11 @@ path. The workspace `cargo test` lane **unconditionally** excludes
 setting `RANDOMX_V2_INSTALL_DIR` does not re-include it. The dedicated
 `randomx-v2-differential` workflow is the gate for T13/T14/T15.
 
-C++ (Monero-lineage toolchain):
+The release binaries through CMake (it runs cargo and stages `shekyld`,
+`shekyl-cli` and `shekyl-wallet-rpc` in `build/bin/`):
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)
-cd build && ctest --output-on-failure          # C++ tests
 ```
 
 Rust (workspace under `rust/`; gates per [`45`](.cursor/rules/45-rust-lint-checks.mdc), tests per [`50`](.cursor/rules/50-testing.mdc)):

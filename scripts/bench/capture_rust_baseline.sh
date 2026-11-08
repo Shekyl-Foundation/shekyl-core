@@ -105,7 +105,7 @@ BENCHES=(
   # shape. iai-only by design — see the empty-criterion-field note above.
   # A change to FCMP++ verification moves this count, which is the signal
   # that `hop` (and the embargo derived from it) is owed a re-derivation.
-  "shekyl-ffi::relay_admission_verify_iai"
+  "shekyl-verify-cost::relay_admission_verify_iai"
   # BA-T3: the archival serve path. Four functions: one whole response at
   # three shard sizes, the work before the first byte at two, and the
   # read-and-fold loop beside the one-shot digest at three. iai-only: wall

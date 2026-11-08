@@ -21,7 +21,8 @@
 #           "baseline": 12064698,
 #           "pr": 12064698,
 #           "delta_pct": 0.0,
-#           "verdict": "ok" | "warn" | "fail"
+#           "verdict": "ok" | "warn" | "fail",
+#           "moved_from": "<baseline id>"   (only on a crate move)
 #         },
 #         ...
 #       ],
@@ -33,7 +34,8 @@
 #         "has_fail": false,
 #         "has_warn": false,
 #         "unrouted": [],
-#         "baseline_zero": []
+#         "baseline_zero": [],
+#         "moved": [{"from": "<baseline id>", "to": "<PR id>"}]
 #       }
 #     }
 #
@@ -202,6 +204,36 @@ def _iai_full_id(entry: dict[str, Any]) -> str:
     )
 
 
+def _moves(base_ids: set[str], pr_ids: set[str]) -> dict[str, str]:
+    """Benches that moved crate: baseline id -> PR id.
+
+    A bench whose crate changes changes its full id, and the old id
+    reads as missing, which fails the gate because a deleted bench is
+    the most dangerous regression. A move is not a deletion: the same
+    bench target, group, function and run id under another crate. It is
+    paired only when that match is unique in both directions, and a
+    paired move is then COMPARED under the normal thresholds, so a move
+    that also changed the workload still fails. An ambiguous match is
+    not paired, and the old id stays missing.
+    """
+    def rest(full_id: str) -> str:
+        return full_id.split("/", 1)[1]
+
+    missing = sorted(base_ids - pr_ids)
+    added = sorted(pr_ids - base_ids)
+    by_rest_missing: dict[str, list[str]] = {}
+    by_rest_added: dict[str, list[str]] = {}
+    for fid in missing:
+        by_rest_missing.setdefault(rest(fid), []).append(fid)
+    for fid in added:
+        by_rest_added.setdefault(rest(fid), []).append(fid)
+    return {
+        olds[0]: by_rest_added[key][0]
+        for key, olds in by_rest_missing.items()
+        if len(olds) == 1 and len(by_rest_added.get(key, [])) == 1
+    }
+
+
 def _criterion_full_id(entry: dict[str, Any]) -> str:
     return entry["full_id"]
 
@@ -234,9 +266,15 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
     # `list[str]`-shaped because the missing side has no value to
     # carry; here the PR side has a real number.
     baseline_zero: list[dict[str, Any]] = []
+    moves = _moves(set(base_iai), set(pr_iai))
+    moved: list[dict[str, str]] = [{"from": old, "to": new} for old, new in moves.items()]
+    moved_to = {new: old for old, new in moves.items()}
 
     for full_id in sorted(set(base_iai) | set(pr_iai)):
-        b = base_iai.get(full_id)
+        if full_id in moves:
+            # Compared under its PR id, below.
+            continue
+        b = base_iai.get(moved_to.get(full_id, full_id))
         p = pr_iai.get(full_id)
         if b is None:
             added_in_pr.append(full_id)
@@ -274,17 +312,18 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
         else:
             delta_pct = (pr_val - base_val) / base_val
 
-        iai_entries.append(
-            {
-                "full_id": full_id,
-                "class": cls,
-                "metric": GATE_METRIC,
-                "baseline": base_val,
-                "pr": pr_val,
-                "delta_pct": delta_pct,
-                "verdict": verdict_for(cls, delta_pct),
-            }
-        )
+        entry = {
+            "full_id": full_id,
+            "class": cls,
+            "metric": GATE_METRIC,
+            "baseline": base_val,
+            "pr": pr_val,
+            "delta_pct": delta_pct,
+            "verdict": verdict_for(cls, delta_pct),
+        }
+        if full_id in moved_to:
+            entry["moved_from"] = moved_to[full_id]
+        iai_entries.append(entry)
 
     # Criterion passthrough — informational only, no threshold. The
     # median_ns swing is what humans read; mean_ns is included for
@@ -344,6 +383,7 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
         "missing_in_pr": missing_in_pr,
         "added_in_pr": added_in_pr,
         "baseline_zero": baseline_zero,
+        "moved": moved,
     }
     counts["has_fail"] = counts["fail"] > 0 or bool(missing_in_pr)
     counts["has_warn"] = counts["warn"] > 0

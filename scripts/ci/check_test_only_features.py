@@ -121,10 +121,8 @@ has joined `GOVERNED_OWNERS` may not also be listed. Three of the fifteen are
 findings rather than chores — a feature whose name says test-only, enabled
 on a **normal** edge. Two are hygiene (move the edge, or rule PERMANENT with
 the reason) and share the governance FOLLOWUPS row; the third,
-`shekyl-crypto-pq/test-utils` enabled by `shekyl-ffi` directly and by
-`shekyl-p-serve` through forwarding, is **FOLLOWUPS F-7**'s — its exports are unconditional
-`extern "C"` in the production header, so categorizing the feature changes
-nothing and the fix is the structural gate that row already names.
+`shekyl-crypto-pq/test-utils` enabled on a normal edge only through
+`shekyl-p-serve`'s forwarding `test-signer` feature, is **FOLLOWUPS F-7**'s.
 
 # The production-shape lint lane lives next door
 
@@ -277,7 +275,7 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "conformance features are the float graders. The type is "
     "cfg(any(test, feature = \"splitmix\")), so with this feature held to "
     "dev edges no production build can name it: a production draw from "
-    "SplitMix64 is a compile error. The production generator is shekyl-ffi's "
+    "SplitMix64 is a compile error. The production generator is shekyl-relay's "
     "SecureRelayRng over OS entropy",
     (
         "shekyl-relay-privacy",
@@ -322,8 +320,9 @@ CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
 # categorized without forcing every feature into the two special classes.
 # `shekyl-chain-ingest`'s three (its manifest's own words): the pipeline's
 # actor runtime, the corpus fetcher's RPC client, and the replay CLI — the
-# production surfaces its consumers choose between (`shekyl-ffi` compiles the
-# trace writer alone with `default-features = false`).
+# production surfaces its consumers choose between (`shekyl-chain-sync-runtime`
+# and `shekyl-p2p-harness` take `pipeline` alone with `default-features =
+# false`; `shekyl-chain-sync` takes none).
 PERMANENT: dict[tuple[str, str], str] = {
     (
         "shekyl-mempool",
@@ -366,15 +365,16 @@ PERMANENT: dict[tuple[str, str], str] = {
         "producer",
     ): "the bundle producer's read path (SO-D12 increment 4c): the fetch "
     "scheduler, its store-backed facts and the producer's task. The node "
-    "takes it by default; shekyl-ffi, the wallet-side image, stays on "
-    "`pipeline` so the shard-fetch client is not in its graph (SF-D4)",
+    "takes it by default; a crate that takes `pipeline` alone "
+    "(shekyl-chain-sync-runtime, shekyl-p2p-harness) has no shard-fetch "
+    "client in its graph (SF-D4)",
     (
         "shekyl-bundle-producer",
         "fetch",
     ): "the producer's challenge read over the fetch scheduler. Off by "
     "default because the ring alone is linked through the ingest crate's "
-    "`pipeline`, which shekyl-ffi takes; the ingest crate's `producer` "
-    "feature turns it on for the node",
+    "`pipeline`, which shekyl-chain-sync-runtime and shekyl-p2p-harness take "
+    "alone; the ingest crate's `producer` feature turns it on for the node",
 }
 
 # Crates whose feature table must be exhaustively categorized (third limb).
@@ -463,13 +463,10 @@ Hit = tuple[str, str, str]  # feature, consumer, edge kind
 MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = {
     "shekyl-crypto-pq": (
         "FINDING owned by FOLLOWUPS F-7, not the governance row: test-utils reaches "
-        "shekyl-ffi on a NORMAL edge directly and shekyl-p-serve on a NORMAL edge by "
-        "forwarding (its test-signer feature); the FFI exports that call it are "
-        "unconditional extern \"C\" in the production header, so categorizing changes "
-        "nothing. Leaves this list when F-7 lands.",
+        "shekyl-p-serve on a NORMAL edge by forwarding (its test-signer feature, "
+        "itself a FINDING in shekyl-p-serve's entry). Leaves this list when F-7 lands.",
         frozenset({
             ("test-utils", "shekyl-archival-retention", "dev"),
-            ("test-utils", "shekyl-ffi", "normal"),
             ("test-utils", "shekyl-p-fetch", "dev"),
             ("test-utils", "shekyl-p-serve", "normal"),
             ("test-utils", "shekyl-tx-builder", "dev"),
@@ -504,12 +501,6 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         frozenset({
             ("test-helpers", "shekyl-wallet-rpc", "dev"),
             ("test-helpers", "shekyl-chain-ingest", "dev"),
-        }),
-    ),
-    "shekyl-fcmp": (
-        "categorization only",
-        frozenset({
-            ("multisig", "shekyl-ffi", "normal"),
         }),
     ),
     "shekyl-fcmp-proofs": (

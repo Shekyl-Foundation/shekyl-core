@@ -624,7 +624,7 @@ pub fn prove_with_rng<R: RngCore + CryptoRng>(
 }
 
 /// Construct an FCMP++ proof for a set of inputs, drawing all randomness from a
-/// fresh [`OsRng`]. This is the production entry point (`shekyl-ffi`'s prove FFI).
+/// fresh [`OsRng`]. This is the production entry point (`shekyl-tx-builder`'s signing path).
 ///
 /// A thin wrapper over [`prove_with_rng`]; see there for why the RNG is
 /// parameterized (deterministic instruction-count benches).

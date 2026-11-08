@@ -35,7 +35,7 @@ on:
       - "tests/build-target-refusal/**"
       - ".github/workflows/cmake-gate-test.yml"
 
-# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+# Superseded-run cancellation (house pattern: build.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
 # run behind the old one — with the shared runner pool, repeated pushes
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is

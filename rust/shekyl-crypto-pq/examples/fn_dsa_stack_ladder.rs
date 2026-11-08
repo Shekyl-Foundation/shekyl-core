@@ -14,8 +14,8 @@
 //! and the thread-local storage. A thread asked for 16 KiB on the floor
 //! device gets about 132 KiB, so a ladder of thread sizes cannot see any
 //! need below that. Painting the stack, or asking the thread its real size,
-//! would see it, and both need `unsafe`, which this workspace allows only
-//! in `shekyl-ffi` (rules 25 and 45).
+//! would see it, and both need `unsafe`, which this crate denies
+//! (`#![deny(unsafe_code)]`; rules 25 and 45).
 //!
 //! # What this does instead
 //!

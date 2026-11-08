@@ -10,6 +10,11 @@
 //! holds the spend secret `x`; only the view key `y` is threshold-shared
 //! via `ThresholdKeys<Ed25519T>`.
 //!
+//! This is the designed FCMP++ multisig spend path, and its consumer is not
+//! built yet: `docs/FOLLOWUPS.md`, "Multisig FROST spend path needs the
+//! single-sig spend-path consensus fixes" and "Threshold signatures: one
+//! missing primitive, two named customers".
+//!
 //! ## Signing Protocol
 //!
 //! 1. **Session creation**: Each signer creates a `FrostSalSession` per input.

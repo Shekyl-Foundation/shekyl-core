@@ -7,29 +7,18 @@
 # Consensus-invariant checks — Phase 4 of `docs/completed/DAA_LWMA1_PLAN.md`
 # work-items 8, 9, 10 (`docs/completed/DAA_LWMA1.md` §7).
 #
-# Three invariants verified at source level (binary-level `nm` checks
-# require building the C++ daemon and are deferred to a separate
-# hardening pass; absence of the symbol in source is a necessary
-# precondition for absence in the binary, so this gate catches the
-# regression class the binary-level check would catch, just earlier):
+# Invariants verified at source level:
 #
-#   1. Symbol-isolation: no live consumers of the deleted CryptoNote
-#      DAA functions `next_difficulty` and `next_difficulty_64` remain
-#      in the C++ source tree. Comment-only mentions inside files that
-#      document the deletion are allowlisted.
+#   1. No-C-ABI in `rust/shekyl-difficulty`: the algorithm crate defines
+#      no C-ABI surface (`#[no_mangle]`, `extern "C" fn`,
+#      `#[export_name]`). Nothing in the tree calls Rust through a C ABI,
+#      and a pure algorithm crate never grows one.
+#   2. The archival reward gates (`check_archival_reward_gates.sh`).
+#   3. The sync loop's orphan arm re-syncs and never punishes.
 #
-#   2. No-C-ABI in `rust/shekyl-difficulty`: the algorithm crate must
-#      not define C-ABI surface (`#[no_mangle]`, `extern "C" fn`,
-#      `#[export_name]`); the C ABI lives in `rust/shekyl-ffi` per
-#      `25-rust-architecture.mdc`.
-#
-#   3. No-orphaned-magic-numbers: no source references to the
-#      `DIFFICULTY_*`, `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT`,
-#      `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW`, or
-#      `CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1` macros that
-#      Phase 4 deleted from `cryptonote_config.h`. Comment-only
-#      mentions inside files that document the deletion are
-#      allowlisted.
+# The C++ tree's own invariants (no consumer of the deleted CryptoNote
+# difficulty functions or `#define`s) went with the C++: the outcome gate
+# (`check_no_first_party_c.py`) admits no first-party C or C++ at all.
 #
 # The script exits 0 on all invariants passing; non-zero with a
 # pinpoint message on any failure.
@@ -62,10 +51,6 @@ FAIL=0
 # roots is absent. A gate that could not read its subject has not returned
 # a verdict, and must not be read as one.
 #
-# The DOC_ALLOWLIST is the live trigger, not a hypothetical: its entries
-# become `-g "!${f}"` globs, and the FAIL text below instructs readers to
-# add entries. A malformed one silences every invariant permanently.
-#
 # This idiom is LIFTED, not invented -- check_carrier_flag_hidden.sh has
 # split grep's 2 from its 1 (with a comment naming the failure mode) since
 # it was written, and check_ignore_reasons.sh does count-then-FATAL-at-zero.
@@ -97,8 +82,7 @@ rg_verdict() {
     *) echo "FATAL: rg exited ${rc} (scan error, not no-match) during:" >&2
        echo "       rg $*" >&2
        echo "       The gate could not read its subject, so it has NO verdict." >&2
-       echo "       Usual causes: a search root was deleted/renamed, or a" >&2
-       echo "       DOC_ALLOWLIST entry is not a valid glob." >&2
+       echo "       Usual cause: a search root was deleted or renamed." >&2
        exit 2 ;;
   esac
 }
@@ -118,66 +102,9 @@ assert_population() {
 }
 
 # ----------------------------------------------------------------------
-# Allowlists (comment-only mentions of deleted symbols).
-#
-# Each entry is a file path that may legitimately reference a deleted
-# symbol in a documentation comment. New allowlist entries require a
-# review-time justification in the PR description.
+# Invariant 1: no C-ABI declarations in shekyl-difficulty.
 # ----------------------------------------------------------------------
-
-# Files that document the C++ DAA deletion in prose (item 1 / item 3
-# allowlist).
-DOC_ALLOWLIST=(
-  'src/cryptonote_config.h'
-  'src/cryptonote_basic/difficulty.h'
-  'tests/difficulty/CMakeLists.txt'
-  'tests/difficulty/zawy12_lwma1_reference.h'
-  'tests/unit_tests/rpc_target_wire_contract.cpp'
-)
-
-build_glob_excludes() {
-  local args=()
-  for f in "${DOC_ALLOWLIST[@]}"; do
-    args+=(-g "!${f}")
-  done
-  printf '%s\n' "${args[@]}"
-}
-
-# ----------------------------------------------------------------------
-# Invariant 1: no live consumers of deleted DAA functions.
-# ----------------------------------------------------------------------
-echo "[1/5] Symbol-isolation: next_difficulty / next_difficulty_64"
-
-mapfile -t glob_excludes < <(build_glob_excludes)
-
-assert_population "invariant 1 (DAA symbol isolation)" \
-  --type-add 'cpp:*.{c,h,cpp,hpp,cc,inl}' --type cpp \
-  "${glob_excludes[@]}" -g '!build/**' src/ tests/ contrib/
-
-if ! rg_verdict --type-add 'cpp:*.{c,h,cpp,hpp,cc,inl}' --type cpp \
-      "${glob_excludes[@]}" \
-      -g '!build/**' \
-      -n \
-      '\b(next_difficulty|next_difficulty_64)\b' \
-      src/ tests/ contrib/
-then
-  echo "FAIL: live reference(s) to deleted DAA function(s) above."
-  echo
-  echo "If the match is a comment-only mention documenting the deletion,"
-  echo "add the file path to DOC_ALLOWLIST in this script and re-run."
-  echo "If the match is a live consumer, the Phase 4 cutover is"
-  echo "incomplete; rewire the consumer to shekyl_difficulty_lwma1_next"
-  echo "via the lwma1_next_difficulty helper."
-  FAIL=1
-else
-  echo "      OK"
-fi
-echo
-
-# ----------------------------------------------------------------------
-# Invariant 2: no C-ABI declarations in shekyl-difficulty.
-# ----------------------------------------------------------------------
-echo "[2/5] No-C-ABI in rust/shekyl-difficulty/src/"
+echo "[1/3] No-C-ABI in rust/shekyl-difficulty/src/"
 
 assert_population "invariant 2 (no C-ABI in shekyl-difficulty)" \
   --type rust rust/shekyl-difficulty/src/
@@ -189,10 +116,9 @@ if ! rg_verdict --type rust \
 then
   echo "FAIL: C-ABI declaration(s) in shekyl-difficulty above."
   echo
-  echo "The shekyl-difficulty crate is a pure-Rust algorithm crate;"
-  echo "the C ABI lives in rust/shekyl-ffi per 25-rust-architecture.mdc."
-  echo "Move the C-ABI declaration to rust/shekyl-ffi and re-export"
-  echo "shekyl-difficulty's algorithm types through a wrapping fn."
+  echo "The shekyl-difficulty crate is a pure-Rust algorithm crate and"
+  echo "nothing in the tree calls Rust through a C ABI. Call the algorithm"
+  echo "from Rust; delete the C-ABI declaration."
   FAIL=1
 else
   echo "      OK"
@@ -200,45 +126,14 @@ fi
 echo
 
 # ----------------------------------------------------------------------
-# Invariant 3: no orphaned references to deleted #defines.
+# Invariant 2: archival reward gates (mint + integer arithmetic).
 # ----------------------------------------------------------------------
-echo "[3/5] No-orphaned-magic-numbers: DIFFICULTY_* / FTL / MTP legacy"
-
-DELETED_DEFINES='DIFFICULTY_TARGET_V[12]|DIFFICULTY_WINDOW|DIFFICULTY_LAG|DIFFICULTY_CUT|DIFFICULTY_BLOCKS_COUNT|DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN|CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT|BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW|CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1'
-
-assert_population "invariant 3 (deleted #defines)" \
-  --type-add 'cpp:*.{c,h,cpp,hpp,cc,inl}' --type cpp \
-  "${glob_excludes[@]}" -g '!build/**' src/ tests/ contrib/
-
-if ! rg_verdict --type-add 'cpp:*.{c,h,cpp,hpp,cc,inl}' --type cpp \
-      "${glob_excludes[@]}" \
-      -g '!build/**' \
-      -n \
-      "\\b(${DELETED_DEFINES})\\b" \
-      src/ tests/ contrib/
-then
-  echo "FAIL: reference(s) to deleted #define(s) above."
-  echo
-  echo "If the match is a comment-only mention documenting the deletion,"
-  echo "add the file path to DOC_ALLOWLIST in this script and re-run."
-  echo "If the match is a live consumer, the Phase 4 sweep is"
-  echo "incomplete; rewire the consumer to its SHEKYL_DAA_* / generated"
-  echo "JSON-authority equivalent."
-  FAIL=1
-else
-  echo "      OK"
-fi
-echo
-
-# ----------------------------------------------------------------------
-# Invariant 4: archival reward gates (mint + integer arithmetic).
-# ----------------------------------------------------------------------
-echo "[4/5] Archival reward gates"
+echo "[2/3] Archival reward gates"
 run_child scripts/ci/check_archival_reward_gates.sh
 echo
 
 # ----------------------------------------------------------------------
-# 5. C2-R1c-Q3b: the sync-loop orphan arm re-syncs; it never punishes.
+# 3. C2-R1c-Q3b: the sync-loop orphan arm re-syncs; it never punishes.
 #    An in-loop orphan during span processing means OUR store lost the
 #    parent between the span pre-check and the add (checkpoint-rollback
 #    discard, operator pop, Q1a flip-flop discard) -- degradation, not
@@ -246,7 +141,7 @@ echo
 #    bookkeeping-mismatch arm instead. Rule 47: the arm's own marker is
 #    asserted present before its content is judged.
 # ----------------------------------------------------------------------
-echo "[5/5] sync orphan arm re-syncs without penalizing (C2-R1c-Q3b)"
+echo "[3/3] sync orphan arm re-syncs without penalizing (C2-R1c-Q3b)"
 # The decision is chain sync's model since CS-5: the entry's `Unlinked`
 # reply (a body whose parent reaches nothing this node holds) re-locates
 # the supplier with a header request and closes nothing; a refused block
@@ -286,4 +181,4 @@ if [[ "$FAIL" -ne 0 ]]; then
   echo "consensus-invariants: FAIL"
   exit 1
 fi
-echo "consensus-invariants: PASS (5/5)"
+echo "consensus-invariants: PASS (3/3)"

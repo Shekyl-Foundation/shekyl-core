@@ -21,11 +21,9 @@
 //! ## What this module is, and what it is not
 //!
 //! It is the **arithmetic**, the **window contract**, and the Rust slash
-//! pass's gather ([`settlement_window_slashable`]). The C++ block-connect
-//! slash scan (`db_lmdb.cpp`, `process_archival_slash_for_epoch`) still
-//! gathers its own observation sequence from the serve-credit ledger and
-//! calls [`failure_window_slashable`] through `shekyl-ffi`, until
-//! `DEL-008`. It decides nothing (`20-rust-vs-cpp-policy`). The
+//! pass's gather ([`settlement_window_slashable`]), which the validator's
+//! slash pass (`shekyl-chain-rules`, `archival::slash`) calls and which
+//! decides through [`failure_window_slashable`]. The
 //! interval-append the slash performs is unchanged — [`slash_open_interval_to_append`]
 //! still produces exactly what the writer appends; only **whether** it fires
 //! moves here.
@@ -316,8 +314,9 @@ pub const fn settlement_retention_floor(
 /// constant bump. The affine-shape coupling of the two derivations
 /// (`epoch_close_height` and `settlement_epoch_slash_deadline_height`, both
 /// in `consensus_state` since DRS-E4 commit 4 moved the geometry to its one
-/// home) is asserted by test in `shekyl-ffi`'s schedule module, which
-/// imports both.
+/// home) is asserted by `consensus_state`'s
+/// `slash_settle_strictly_follows_close_write_at_every_epoch`; the assert
+/// below pins `k ≥ 1`.
 const _: () = assert!(
     SLASH_GRACE_EPOCHS >= 1,
     "SLASH_GRACE_EPOCHS = 0 lands the slash pass for epoch E on the SAME \

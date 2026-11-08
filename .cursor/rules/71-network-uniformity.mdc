@@ -1,9 +1,6 @@
 ---
 description: Network type selects data, never control flow, on the consensus/validation surface. Apply when adding or reviewing any code that branches on nettype (MAINNET/TESTNET/STAGENET/FAKECHAIN) in cryptonote_core/, checkpoints/, blockchain_db/, or their Rust successors — and when designing test-network seams.
 globs:
-  - src/cryptonote_core/**
-  - src/checkpoints/**
-  - src/blockchain_db/**
   - rust/**
 ---
 

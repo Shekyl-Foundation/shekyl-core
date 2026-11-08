@@ -43,6 +43,7 @@ Total bytes for this vector: 32.
 Generator
 ---------
 source      = ./_generator/phase2c/gen.cpp (mode t3)
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/phase2c/Makefile (`make gen`)
 command     = ./gen t3 > t3_vm_scratchpad_init.bin
 output_size = 32 bytes

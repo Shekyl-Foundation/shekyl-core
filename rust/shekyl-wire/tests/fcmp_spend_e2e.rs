@@ -31,9 +31,8 @@
 //! (`SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH = 38 * 18 = 684`) so it is depth 3
 //! — populating **both** a Selene (`c1`) and a Helios (`c2`) internal branch
 //! layer in the assembled path. That is the exact surface that broke the C++
-//! path (marshaling a real multi-layer branch path into the prover/verifier);
-//! the pre-existing `shekyl-ffi` round-trip only exercises a degenerate
-//! single-leaf tree with empty branch layers, so it never covered it.
+//! path (marshaling a real multi-layer branch path into the prover/verifier),
+//! which a degenerate single-leaf tree with empty branch layers never covers.
 //!
 //! # What the later stages cover
 //!
@@ -594,8 +593,8 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // (Ed25519 + ML-DSA-65) signatures are a separate phase the caller runs
     // after the proofs exist. Run it now so the assembled wire transaction
     // carries real, canonically-sized auth blobs. The signed message is the
-    // prefix hash; the per-input message-binding semantics are exercised by the
-    // dedicated `shekyl-ffi` signing test, not asserted here.
+    // prefix hash; the per-input message-binding semantics are exercised by
+    // `shekyl-daemon-rpc`'s `submit_verifier` suite, not asserted here.
     let pqc_auths = sign_pqc_auths(
         // A stand-in message: the prefix hash's bytes, not the §1.1 per-input
         // payload (`phase1_payload_hashes`). These auths are never verified

@@ -559,13 +559,13 @@ reference; this ruling names no horizon of its own.
 **validates as a skeleton** (F20(c), this ruling's decomposition): every
 node holds the headers, every tx prefix (`vin` key images, `vout` keys),
 `CtSigBase` (`outPk`, `enc_amounts`, `txnFee`, `referenceBlock`;
-`ct_types.h:172-179`) and both hash rows, so a fresh node validates PoW and
+`ct_types.h` at `ac3836de90` (lines 172–179)) and both hash rows, so a fresh node validates PoW and
 difficulty, the txid chain, no-double-spend, fee and emission accounting,
 and every state transition — and rebuilds every derived table — to tip
 with **zero** archiver contact. What it cannot do without bodies is
 **re-run the proof rows** (4.I: FCMP++ membership, BP+ range, `pseudoOuts`
 balance, PQC authorisation, serve-credit pass verification —
-`CtSigPrunable`, `ct_types.h:298-309`, plus `pqc_auths`), which is
+`CtSigPrunable`, `ct_types.h` at `ac3836de90` (lines 298–309), plus `pqc_auths`), which is
 precisely what `Trust::BelowAnchor` already names as not run. So: **full
 verification of `(C, h_scarce]` depends on archivers; chain-following does
 not.** Fill runs **backward from `h_scarce` toward `C`** — the newest
@@ -605,7 +605,7 @@ treated as authoritative per steering. Cites below were re-verified on
 the serve-credit call site that the first item-4 draft had skipped.
 
 **Item 1 — the good.** The archival subject is the transaction's
-prunable region (`CtSigPrunable`, `src/fcmp/ct_types.h:333`) for every
+prunable region (`CtSigPrunable`, `src/fcmp/ct_types.h` at `ac3836de90` (line 333)) for every
 transaction below Q2's body horizon (*re-keyed 2026-09-22 from "`W`"*). The unit of possession is one transaction's
 `CtSigPrunable` bytes; the unit of verification is its
 `txs_prunable_hash`, a txid component every node retains forever.
@@ -1977,8 +1977,8 @@ is read at admission.
 | prefix: `version`, `unlock_time`, `vin` (key images, archival vins), `vout` (`O`), `extra` sans `0x06`/`0x07` | tx prefix | `txs_pruned` | ~0.5 KB | consensus (key images → `spent_keys` rebuild; archival vins → archival tables rebuild; `RF-D1` kept vin read by settlement / slash), wallets | — (original) | KEEP-C |
 | `tx_extra` `0x07` PQC leaf entries (`CM ‖ record`, `PL-D3`) | prefix | `txs_pruned` | 64 B/output | replay (`blockchain_db.cpp:528-557` → leaf) | — | KEEP-D |
 | `tx_extra` `0x06` hybrid KEM ciphertexts | prefix | `txs_pruned` | 1120 B/output (~2.2 KB) | wallets only (scan / restore) | — | KEEP-W |
-| `CtSigBase`: `type`, `txnFee`, `referenceBlock`, `enc_amounts`, `enc_labels`, `outPk` | ct base (`ct_types.h:197`) | `txs_pruned` | ~256 B | replay (`outPk` → commitment → leaf, `:597`; fee → burn / emission), wallets (`enc_amounts`, `enc_labels`) | — | KEEP-C / KEEP-D |
-| `pqc_auths` (hybrid pk + hybrid sig per input) | between base and prunable (`cryptonote_basic.h:492`) | `txs_pqc_auths` | ~5.3 KB/input (~10.6 KB) | **none** — every reader is in `check_tx_inputs` (`blockchain.cpp:3717-4351`); txid uses only `pqc_auth_hash` | — (original) | **GOOD** candidate (F14) — needs a 32 B hash row it does not have |
+| `CtSigBase`: `type`, `txnFee`, `referenceBlock`, `enc_amounts`, `enc_labels`, `outPk` | ct base (`ct_types.h` at `ac3836de90` (line 197)) | `txs_pruned` | ~256 B | replay (`outPk` → commitment → leaf, `:597`; fee → burn / emission), wallets (`enc_amounts`, `enc_labels`) | — | KEEP-C / KEEP-D |
+| `pqc_auths` (hybrid pk + hybrid sig per input) | between base and prunable (`cryptonote_basic.h` at `ac3836de90` (line 492)) | `txs_pqc_auths` | ~5.3 KB/input (~10.6 KB) | **none** — every reader is in `check_tx_inputs` (`blockchain.cpp:3717-4351`); txid uses only `pqc_auth_hash` | — (original) | **GOOD** candidate (F14) — needs a 32 B hash row it does not have |
 | `CtSigPrunable`: `bulletproofs_plus` | prunable (`:349`) | `txs_prunable` | ~1.5 KB | none; hash in `txs_prunable_hash` | — (witness gone) | **GOOD** (F13) |
 | `CtSigPrunable`: `fcmp_pp_proof` + `curve_trees_tree_depth` | prunable (`:367`) | `txs_prunable` | ~2.5 KB/input (~4.5 KB) | none; hash in `txs_prunable_hash` | — (witness gone) | **GOOD** (F13) |
 | `CtSigPrunable`: `pseudoOuts` | prunable (`:384`) | `txs_prunable` | 32 B/input | none | — | **GOOD** (F13) |
@@ -2023,7 +2023,7 @@ pending a hash row (F14).** A ruling that takes both GOOD rows retains
 ### 9.4 Archival / staking state (the 18 `archival_*` tables + `block_burn`)
 
 Everything here is **populated from kept prefix bytes** (archival vins
-are opaque canonical blobs in the tx prefix, `cryptonote_basic.h:190`,
+are opaque canonical blobs in the tx prefix, `cryptonote_basic.h` at `ac3836de90` (line 190),
 `:257`, `:288`) and is therefore rebuildable by replay from the pruned
 corpus. Nothing here is GOOD; the question is only which rows a node
 must keep to *verify new blocks* versus which it may retire.

@@ -26,8 +26,8 @@
 //!
 //! **Boundary as of RP-2a.** Timing/measurement helpers and the feature-gated
 //! conformance suite remain library-side instruments. [`StemMap`] is
-//! production-linked: `shekyl-ffi` exposes it to C++ `net::dandelionpp::connection_map`,
-//! and the daemon's live stem routing executes this map. Epoch/fluff schedule
+//! production-linked: `shekyl-relay`'s epoch map holds it, and the daemon's
+//! live stem routing executes this map. Epoch/fluff schedule
 //! and embargo cuts are RP-3/RP-4. Do not treat a `stem_map` change as
 //! measurement-only.
 //!

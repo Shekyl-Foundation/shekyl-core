@@ -296,7 +296,7 @@ each before the genesis freeze — after it, these are immutable.**
 Block version is the constant 1.0 on every network. The hard-fork table is
 deleted, so there is no fork number, vote, or activation height to freeze.
 A later consensus change is a design document before any code
-(`design/CXX_VERSION_GATES.md` §5, `UPGRADE_POLICY.md`).
+(`completed/CXX_VERSION_GATES.md` §5, `UPGRADE_POLICY.md`).
 
 ---
 

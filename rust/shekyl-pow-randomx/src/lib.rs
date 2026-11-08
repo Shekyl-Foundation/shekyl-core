@@ -10,10 +10,9 @@
 //! [`CacheStore::lookup`] and never derive: a derivation publishes into
 //! the transient slot and evicts the spare, and each of them runs on a
 //! seed it did not pin. [`CacheStore::pin_canonical`] is the fill an epoch
-//! switch owns; the ingest calls it from `pin_seed`. `shekyl-ffi`'s
-//! `shekyl_pow_randomx_v2_hash` serves the C++ parity gates and keeps its
-//! own store. Fast mining is an external miner's job: the Monero RandomX
-//! C/C++ library at `external/randomx-v2/`
+//! switch owns; the ingest calls it from `pin_seed`. Fast mining is an
+//! external miner's job: the Monero RandomX C/C++ library at
+//! `external/randomx-v2/`
 //! (pinned at fork commit `aaafe71`, v2.0.1) is that reference, built only
 //! for the differential harness and never linked into `shekyld`. See
 //! [`RANDOMX_V2_PLAN.md`](../../docs/design/RANDOMX_V2_PLAN.md)'s
@@ -152,9 +151,6 @@
 //!   `tests/perf/per_hash_latency.rs` placeholder landed by Phase
 //!   2c.
 //!
-//! Phase 3 then exposes the verifier through `shekyl-ffi` and rewires
-//! the C++ daemon to it; Phase 4 deletes the C++ verifier path.
-//!
 //! # Scope: public-input verification only
 //!
 //! This crate is designed for **public-input verification** (block
@@ -182,8 +178,7 @@ mod prepared_cache;
 // The seed-epoch *schedule* (`seedheight`, the 2048/64 constants) is
 // consensus arithmetic the validator evaluates, and lives in
 // `shekyl_difficulty::seed_epoch` since 2026-09-19 (DRS-E6 slice 2,
-// CEN-D3); this crate never called it. The env-override clamps live at the
-// FFI boundary that reads the environment (`shekyl-ffi::pow_randomx_ffi`).
+// CEN-D3); this crate never calls it.
 mod seedhash;
 pub(crate) mod superscalar;
 mod vm;

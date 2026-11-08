@@ -25,6 +25,7 @@ output_len  = 0        (omit finalizer; output is the filled memory)
 Generator
 ---------
 source      = ./_generator/gen.c
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/Makefile (`make gen`)
 command     = ./gen raw 64 3 1 "Shekyl RandomX v2 Phase 2a test key"
 output_size = 65536 bytes (64 blocks × 1024 bytes/block)

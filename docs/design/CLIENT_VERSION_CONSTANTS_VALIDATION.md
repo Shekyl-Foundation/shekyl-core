@@ -490,7 +490,7 @@ cleanup is where duplicates die).
 **The FFI cost, re-priced (rule 40) — the original estimate was written
 before `VC-R2` and nobody revisited it.** It read "one `u8`, one field, both
 sides of the boundary in the same slice", and at the time that was nearly
-free: `ChainTipFactsFfi` carries `reserved: [u8; 6]` (`ffi.rs:314-323`), so a
+free: `ChainTipFactsFfi` carries `reserved: [u8; 6]` (`ffi.rs` at `ac3836de90` (lines 314–323)), so a
 `nettype` byte could have landed in reserved space **with no layout movement
 at all**. Then `VC-R2` added a 32-byte genesis hash to the same field list,
 and 32 bytes do not fit in six. The estimate was never revised; §4's slice row
@@ -501,7 +501,7 @@ un-revised number wearing a different face.
 go in their own POD: `ChainTipFactsFfi` does not move, so its layout twins,
 its `_test_fill` / `_rust_fill` seeded indices and its offset pins do not move
 either. The precedent is already in the header — `shekyl_rpc_peerlist_limits`
-(`ffi.rs:741`, `:776`) is a narrow export for facts with no business in a
+(`ffi.rs` at `ac3836de90` (lines 741 and 776)) is a narrow export for facts with no business in a
 bigger POD (`shekyl_rpc_span_pruning_seed` was another until the stripe
 engine's deletion, 2026-09-21).
 `nettype` and the genesis hash are process-lifetime constants — fixed at

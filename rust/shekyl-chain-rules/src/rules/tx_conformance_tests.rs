@@ -420,7 +420,7 @@ const SITES: &[Site] = &[
     read_rule(
         "output count {n_outputs} exceeds {MAX_OUTPUTS}",
         CenRow::H19,
-        "`BULLETPROOF_PLUS_MAX_OUTPUTS`: the C++ refuses it as the BP+ max-amounts clause (`ct_types.cpp:245`), which the census carries under H19",
+        "`BULLETPROOF_PLUS_MAX_OUTPUTS`: the C++ refusal is the BP+ max-amounts clause (`ct_types.cpp` at `ac3836de90` (line 245)), which the census carries under H19",
     ),
     read_rule(
         "transaction version {version} != {TX_VERSION}",

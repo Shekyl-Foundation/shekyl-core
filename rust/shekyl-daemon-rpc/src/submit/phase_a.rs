@@ -380,11 +380,11 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
         let mut cursor = bytes.as_slice();
         let vin = ArchivalRewardEmissionVin::read(&mut cursor)
             .map_err(|e| PhaseAReject::new(format!("emission vin decode failed: {e:?}")))?;
-        // Length-exact, mirroring the C++ oracle's `parse_emission_vin`
-        // (shekyl-ffi): trailing bytes inside the opaque blob are invisible
-        // to the outer tx's byte-canonicality check, and the commit-path
-        // re-extract rejects them — enforce the same bound here so the
-        // divergence class is unrepresentable past Phase A.
+        // Length-exact, as the block validator's parse is
+        // (`shekyl-chain-rules`, `tx_emission`): trailing bytes inside the
+        // opaque blob are invisible to the outer tx's byte-canonicality
+        // check, and the block path rejects them — enforce the same bound
+        // here so the divergence class is unrepresentable past Phase A.
         if !cursor.is_empty() {
             return Err(PhaseAReject::new(format!(
                 "emission vin carries {} trailing byte(s)",

@@ -1,23 +1,20 @@
 # Compiling, debugging and testing efficiently
 
-This document describes ways of compiling, debugging and testing efficiently for various use cases.
-The intended audience are developers, who want to leverage build and test tricks in Shekyl via `CMake`. The document will lower the entry point for these developers.
-Before reading this document, please consult section "Build instructions" in the main README.md.
-Some information from README.md will be repeated here, but the aim is to go beyond it.
+This document describes ways of compiling and testing Shekyl efficiently. The
+intended audience is developers. Before reading it, consult "Compiling Shekyl
+from source" in the main README.md.
 
-PQC and FCMP++ note:
-
-- Shekyl's rebooted chain design depends on Rust-based PQC and FCMP++ components
-- Rust should be treated as required for consensus-valid builds
-- The FCMP++ Rust crates (`shekyl-fcmp`, `shekyl-address`) are required for
-  consensus-valid builds alongside the existing `shekyl-crypto-pq` and
-  `shekyl-ffi` crates
-- The canonical PQC format/spec is documented in
-  `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
+Everything Shekyl ships is Rust: the workspace under `rust/`. CMake and the
+top-level `Makefile` drive one cargo invocation (`cmake/BuildRust.cmake`)
+that builds `shekyld`, `shekyl-cli` and `shekyl-wallet-rpc` and stages them
+in the build directory's `bin/`. The tree holds no first-party C or C++
+(`scripts/ci/check_no_first_party_c.py`). The canonical PQC format is
+documented in `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
 
 ## Rust Reproducible Builds
 
-Shekyl includes three Rust crates in the consensus-critical build path: `shekyl-crypto-pq`, `shekyl-fcmp`, and `shekyl-ffi`. Reproducibility of the Rust static library is essential for release verification.
+Reproducibility of the shipped binaries is essential for release
+verification.
 
 ### Requirements
 
@@ -31,13 +28,16 @@ Shekyl includes three Rust crates in the consensus-critical build path: `shekyl-
 
 ### Verifying determinism locally
 
+CI's determinism check (`.github/workflows/rust-audit-test.yml`) builds the
+daemon twice and compares the hashes:
+
 ```bash
 cd rust
-cargo build --locked --release -p shekyl-ffi
-sha256sum target/release/libshekyl_ffi.a
-cargo clean -p shekyl-ffi --release
-cargo build --locked --release -p shekyl-ffi
-sha256sum target/release/libshekyl_ffi.a
+cargo build --locked --release -p shekyld
+sha256sum target/release/shekyld
+cargo clean -p shekyld --release
+cargo build --locked --release -p shekyld
+sha256sum target/release/shekyld
 # Both hashes must match
 ```
 
@@ -47,249 +47,38 @@ Guix gained improved Rust packaging support in 2025 with Cargo.lock lockfile imp
 
 ## Basic compilation
 
-Shekyl can be compiled via the main `Makefile`, using one of several targets listed there.
-The targets are actually presets for `CMake` calls with various options, plus `make` commands for building or in some cases `make test` for testing.
-It is possible to extract these `CMake` calls and modify them for your specific needs. For example, a minimal external cmake command to compile Shekyl, executed from within a newly created build directory could look like:
+Shekyl can be compiled via the main `Makefile`, using one of several targets
+listed there. The targets are presets for `CMake` calls with various options.
+It is possible to extract these `CMake` calls and modify them for your
+specific needs. For example, a minimal cmake command run from a new build
+directory:
 
 `cmake -S "$DIR_SRC" -DCMAKE_BUILD_TYPE=Release && make`
 
-where the variable `DIR_SRC` is expected to store the path to the Shekyl source code.
+where the variable `DIR_SRC` is expected to store the path to the Shekyl
+source code. When iterating on one crate, `cargo build -p <crate>` and
+`cargo test -p <crate>` from `rust/` are faster than a full CMake build.
 
-## Use cases
+## Testing
 
-### Internal libraries are always static
-
-Every build type links the in-tree C++ libraries statically; `-DBUILD_SHARED_LIBS=ON` is refused at configure time. Shared internal libraries are incompatible with the single-Rust-image contract (`docs/V3_WALLET_DECISION_LOG.md`, 2026-06-11 and 2026-09-10): each `.so` that links the Rust FFI archive is the head of its own link line and embeds its own copy of the Rust image, so process-global Rust state (the `tracing` dispatcher, the regtest settlement-epoch latch, every other `static`) is duplicated and the copies disagree. The failure is silent — the daemon starts, logs normally, and rejects valid work — which is why the configuration is refused rather than defaulted off. Debug builds therefore pay full static link times; iterate on the Rust side with `cargo test -p <crate>` where the change allows it.
-
-### Project generation for IDEs
-
-CMake allows to generate project files for many IDEs. The list of supported project files can be obtained by writing in the console:
-
-`cmake -G`
-
-For instance, in order to generate Makefiles and project files for the Code::Blocks IDE, this part of the call would look like the following:
-
-`cmake -G "CodeBlocks - Unix Makefiles" (...)`
-
-The additional artifact of the above call is the `shekyl.cbp` Code::Blocks project file in the build directory.
-
-### Debugging in Code::Blocks (CB)
-
-First prepare the build directory for debugging using the following example command, assuming, that the path to the source dir is being held in the DIR_SRC variable, and using 2 cores:
-
-`cmake -S "$DIR_SRC" -G "CodeBlocks - Unix Makefiles" -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON && make -j 2`
-
-After a successful build, open the `shekyl.cbp` with CB. From the CB's menu bar select the target, that you want debug. Assuming these are unit tests:
-
-`Build -> Select target -> Select target -> unit_tests`
-
-In order to lower the turnaround times, we will run a specific portion of code of interest, without having to go through all the time costly initialization and execution of unrelated parts. For this we'll use GTest's capabilities of test filtering. From the build directory run the following command to learn all the registered tests:
-
-`tests/unit_tests/unit_tests --gtest_list_tests`
-
-For example, if you're only interested in logging, you'd find in the list the label `logging.` and its subtests. To execute all the logging tests, you'd write in the console:
-
-`tests/unit_tests/unit_tests --gtest_filter="logging.*"`
-
-This parameter is what we need to transfer to CB, in order to reflect the same behaviour in the CB's debugger. From the main menu select:
-
-`Project -> Set program's arguments...`
-
-Then in the `Program's arguments` textbox you'd write in this case:
-
-`--gtest_filter="logging.*"`
-
-Verify if the expected UTs are being properly executed with `F9` or select:
-
-`Build -> Build and run`
-
-If everything looks fine, then after setting some breakpoints of your choice, the target is ready for debugging in CB via:
-
-`Debug -> Start/Continue`
-
-## Windows (MSVC) wallet-core build
-
-The project supports building wallet-core libraries with MSVC on Windows.
-This is primarily used for the GUI wallet (Tauri/Rust) which links the C++
-static libraries.
-
-### Prerequisites
-
-- **Visual Studio 2022 (17.x)** or **Visual Studio 2026 (18.x)** with the
-  C++ Desktop workload.  The CI uses VS 2026 for forward compatibility;
-  VS 2022 is also supported. RECORDS-WAS (pre-2026-09-15): the
-  `CryptonightR_JIT_stub.c` workaround for the PDB ICE (see below)
-  is gone with the CryptoNight deletion; MSVC no longer compiles that TU.
-- vcpkg (for Boost, libsodium, OpenSSL, LMDB)
-- Rust toolchain (`stable-x86_64-pc-windows-msvc`)
-- CMake 3.25+ (or CMake 4.0+ if using VS 2026)
-
-### Build command
-
-```powershell
-cmake -S . -B build\msvc-release -G "Visual Studio 18 2026" -A x64 ^
-  -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake ^
-  -DVCPKG_TARGET_TRIPLET=x64-windows-static ^
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build build\msvc-release --config Release --parallel
-```
-
-### Known MSVC Internal Compiler Error (ICE) history
-
-MSVC has two known ICE triggers in this codebase.  Both have been
-worked around.  The diagnosis is recorded here for future reference.
-
-#### ICE 1: Empty checkpoint array initializers (`obj_blocks`)
-
-**Symptom:** `CL.exe exited with code -529706956` on `obj_blocks.vcxproj`.
-
-**Root cause:** The files `src/blocks/*.dat` are 0 bytes before genesis
-data is populated. The CMake generator (`blocks_generator.cmake`) produced
-`const unsigned char name[]={};` -- an empty array initializer that is
-valid C99/C11 but triggers an MSVC 14.44 parser crash.
-
-**Fix (permanent):** Modified `blocks_generator.cmake` to emit a 1-byte
-placeholder (`{0x00}`) with a separate `_len = 0` sentinel for empty
-`.dat` files.  This is correct on all compilers, not just a workaround:
-
-```c
-const unsigned char checkpoints[]={ 0x00 };
-const size_t checkpoints_len = 0;
-```
-
-Consumers check `_len` rather than `sizeof()` to detect empty data.
-
-#### ICE 2: PDB type server crash (`obj_cncrypto`) — SUPERSEDED 2026-09-16
-
-**Current layout:** `cncrypto` is a single library. CryptonightR / the MSVC
-`OBJECT` split / `obj_cncrypto_rx` do not exist. This section is the ICE
-diagnosis record, not a live build recipe.
-
-**Symptom (historical):** All individual `.c`/`.cpp` files in `src/crypto/` compiled
-successfully, then the compiler crashed during the `Generating Code...`
-phase with:
-
-```text
-INTERNAL COMPILER ERROR in 'CL.exe'
-CL!CloseTypeServerPDB()+0x16ef23
-CL!CloseTypeServerPDB()+0x1b7502
-```
-
-**Diagnosis sequence** (tested on MSVC 14.44 and 14.50):
-
-| Attempt | Flag / Change | Result |
-| --- | --- | --- |
-| Limit parallelism | `/MP1 /FS` | Still crashed |
-| Reduce optimization | `/MP1 /O1` | Still crashed |
-| Disable optimization | `/MP1 /Od` | Still crashed -- ruled out optimizer |
-| Disable SSA optimizer | `/MP1 /d2SSAOptimizer-` | Still crashed, stack trace revealed `CloseTypeServerPDB` |
-| Embed debug info | `/MP1 /Z7` | Still crashed -- PDB type server invoked even with `/Z7` |
-| Split OBJECT library | 5 targets | Reduced blast radius but `obj_cncrypto_rx` still crashed |
-| Guard `CryptonightR_template.h` | exclude from MSVC | Reduced dead symbols; ICE persisted |
-| Upgrade to MSVC 14.50 (VS 2026) | | Still crashed -- same `CloseTypeServerPDB` stack |
-| **Replace `CryptonightR_JIT.c` with stub** | | **Resolved** |
-
-The crash is in MSVC's shared PDB (Program Database) type server.  It
-reproduces on both MSVC 14.44 (VS 2022) and 14.50 (VS 2026).  The root
-cause is `CryptonightR_JIT.c` -- on MSVC, the function body is dead code
-(the entire JIT path is `#ifdef __x86_64__`), but its heavyweight
-includes (`variant4_random_math.h` with 70 unrolled switch cases,
-`CryptonightR_template.h` with 514 assembly symbol declarations)
-overwhelm the PDB type server during the "Generating Code..." phase.
-
-**Fix (SUPERSEDED 2026-09-15):** `src/crypto/CryptonightR_JIT_stub.c`
-provided the same `v4_generate_JIT_code() { return -1; }` stub without
-the problematic includes. Phase 4 deleted CryptoNight (`slow-hash.c`,
-JIT, AES/OAES, hash-extra). The stub, six OBJECT groups, and
-`slow-hash.c` `_M_X64` guard are gone; this section is the ICE
-diagnosis record, not a live build recipe.
-
-**Additional hardening (SUPERSEDED 2026-09-15 — files deleted with
-CryptoNight):**
-
-- `src/crypto/CMakeLists.txt` previously split `cncrypto` into six
-  OBJECT library groups (`hash`, `ops`, `slowhash`, `rx`, `jit`, `cpp`).
-  The remnant two-way split after CryptonightR deletion was collapsed
-  **2026-09-16**; `cncrypto` is one library.
-- `src/crypto/CryptonightR_JIT.c` previously guarded
-  `#include "CryptonightR_template.h"` behind `__x86_64__`.
-- `src/crypto/c_threads.h` includes `<process.h>` on Windows for correct
-  `_beginthreadex` prototype (prevents handle truncation on 64-bit).
-  **This header remains.**
-- `src/crypto/slow-hash.c` previously extended `force_software_aes()`
-  to include `_M_X64`. **DELETED 2026-09-15.**
-
----
-
-## Upstream Monero PRs — triage (April 2026)
-
-### Applied
-
-| PR | Status | Notes |
-| --- | --- | --- |
-| [#6937](https://github.com/monero-project/monero/pull/6937) | Already present | `monero_set_target_no_relink` + `RELINK_TARGETS` option in root `CMakeLists.txt` |
-| [#9762](https://github.com/monero-project/monero/pull/9762) | Already present | `test_p2p_tx_propagation()` uses deadline-based polling with Dandelion++ timeout |
-| [#9795](https://github.com/monero-project/monero/pull/9795) | Applied | `test_p2p_reorg()` rewritten to deadline-based polling (was fixed `sleep(10)` loops) |
-| [#9858](https://github.com/monero-project/monero/pull/9858) | Applied | Extra warnings (`-Wsuggest-override`, `-Wthread-safety`, etc.) and ARM64 branch protection |
-| [#9898](https://github.com/monero-project/monero/pull/9898) | Technique adopted | PR was closed upstream; adopted the author's recommended approach: `-ffunction-sections -fdata-sections` + linker dead-code stripping |
-
-### Track for future work
-
-| PR | Area | Why it matters for Shekyl |
-| --- | --- | --- |
-| [#10157](https://github.com/monero-project/monero/pull/10157) | Perf | Cache mempool input verification results. PQC hybrid verification (ML-DSA-65) is more expensive than classical Ed25519, making the caching benefit proportionally larger. Depends on #10156 and #10172; needs PQC-aware verification IDs. See `STRUCTURAL_TODO.md` re: `txpool_tx_meta_t` padding layout. |
-| [#10084](https://github.com/monero-project/monero/pull/10084) | Arch | `wallet2_basic` library extraction. Shekyl already has `wallet2_ffi.cpp` on a parallel modularization path. Use the upstream type list as a roadmap for wallet Rust migration. |
-| [#9801](https://github.com/monero-project/monero/pull/9801) | Repro | Rust in Guix reproducible builds. Shekyl uses Gitian and lacks `contrib/guix/`. Key constraint: Rust cross-arch builds are NOT bit-identical (x86_64 hosts required). Track for when Rust crate surface area warrants reproducible builds. |
-
-## PQC-focused testing guidance
-
-As PQC code lands, developers should add a dedicated validation loop covering:
-
-- Rust unit tests in `rust/shekyl-crypto-pq`
-- FFI ABI tests in `rust/shekyl-ffi`
-- transaction serialization tests for the reboot-only PQ transaction format
-- wallet sign/core verify integration tests
-- malformed signature and malformed length rejection tests
-- encoded-size regression checks for mempool and RPC consumers
-
-## Running core_tests
-
-The `core_tests` binary exercises consensus rules, chain switching, double-spend
-detection, Bulletproofs+ validation, and txpool behavior through the `chaingen`
-event-replay framework.
+The tests are cargo's. From `rust/`:
 
 ```bash
-# Build and run all core_tests
-cmake --build build/ --target core_tests -- -j"$(nproc)"
-build/tests/core_tests/core_tests --generate_and_play_test_data
+cargo test --workspace --exclude shekyl-randomx-differential
 ```
 
-Filter to a single test:
+`shekyl-randomx-differential` compares the Rust RandomX verifier with the C
+reference and needs the reference built first; its own workflow
+(`.github/workflows/randomx-v2-differential.yml`) is the gate. The tests
+that run against a live regtest daemon are `#[ignore]`d and armed by
+`scripts/ci/run_live_daemon_gates.sh`. `tests/` at the top of the tree holds
+only the CMake gate tests and the stressnet harness (`tests/README.md`).
 
-```bash
-build/tests/core_tests/core_tests --generate_and_play_test_data --filter="gen_chain_switch_1"
-```
-
-### v3-from-genesis design
-
-Shekyl's test suite is adapted for **v3-from-genesis**: all user transactions
-are version 3 with mandatory PQC authentication (hybrid Ed25519 + ML-DSA-65).
-Coinbase transactions also use version 3 (unified with regular txs). Key differences from upstream Monero:
-
-- `FAKECHAIN` tests inject `--fixed-difficulty=1`
-- Transaction construction helpers produce v3 with `use_view_tags=true`
-- Coinbase outputs are indexed under `amount=0` for correct RCT spending
-- Balance verification in callbacks uses RCT ecdhInfo decryption
-- Economic constants (`TESTS_DEFAULT_FEE`) are calibrated for Shekyl's
-  `COIN = 10^9` and the emission curve's factor of 22 per block
-  (`emission_speed_factor_per_block`; the per-minute convention that ran 21
-  per block was retired 2026-10-04)
-- Several legacy tests incompatible with HF1-from-genesis are disabled
-  (see `chaingen_main.cpp` comments)
-
-Currently 80 tests are enabled and passing (including the re-enabled
-`gen_block_reward` test whose reward verification was rewritten to use
-Shekyl's four-component economics formula).
+PQC changes should come with: Rust unit tests in `rust/shekyl-crypto-pq`;
+transaction serialization tests for the PQ transaction format; wallet sign
+and consensus verify integration tests; malformed signature and
+malformed-length rejection tests; and encoded-size regression checks for
+mempool and RPC consumers.
 
 ## Running a source build with Tor
 
@@ -340,9 +129,9 @@ so at start. Run your own Tor and set `tor = operator` with `tor-socks`, and
 
 ## Seed node build (lean daemon)
 
-`make release-seed` builds only the daemon (`shekyld`) with `ARCH=x86-64`
-(portable x86_64), so it runs on any x86_64 host regardless of CPU
-generation (no AVX/SSE4.x required).
+`make release-seed` builds the binaries with `ARCH=x86-64` (portable
+x86_64), so they run on any x86_64 host regardless of CPU generation (no
+AVX/SSE4.x required).
 
 ```bash
 make release-seed
@@ -355,8 +144,7 @@ Equivalent manual cmake invocation:
 ```bash
 cmake -S . -B build/seed-release \
   -DCMAKE_BUILD_TYPE=Release \
-  -DARCH="x86-64" \
-  -DBUILD_TESTS=OFF
+  -DARCH="x86-64"
 cmake --build build/seed-release --target shekyl_rust_bins -- -j"$(nproc)"
 ```
 
@@ -364,11 +152,7 @@ If you previously configured the same build directory with a different `ARCH`
 (for example `native`), delete that build directory before rebuilding so stale
 CMake cache values cannot leak architecture-specific flags.
 
-**Runtime dependencies** for a seed-built binary are reduced to:
-
-- Boost (chrono, date-time, filesystem, program-options, regex, serialization,
-  system, thread)
-- OpenSSL, libsodium, readline
+The binary needs no shared library beyond the C runtime.
 
 See `shekyl-dev/docs/SEED_NODE_DEPLOYMENT.md` for full deployment instructions.
 
@@ -379,73 +163,33 @@ Use out-of-source builds and keep a dedicated release directory for testnet.
 ### 1) Configure once (fresh testnet release build dir)
 
 ```bash
-cmake -S . -B build/testnet-release \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_TESTS=ON
+cmake -S . -B build/testnet-release -DCMAKE_BUILD_TYPE=Release
 ```
 
-If dependencies changed, rerun the configure command before building.
-
-### 2) Build everything (full compile)
+### 2) Build the binaries
 
 ```bash
 cmake --build build/testnet-release -- -j"$(nproc)"
 ```
 
-Equivalent target-explicit form:
+`shekyl_rust_bins` is the one target that builds and stages all three
+binaries; `cmake --build build/testnet-release --target help` lists the
+targets. Straight from cargo, without the CMake staging copy:
 
 ```bash
-cmake --build build/testnet-release --target all -- -j"$(nproc)"
+cd rust && cargo build --release -p shekyld -p shekyl-cli -p shekyl-wallet-rpc
 ```
 
-### 3) Build only specific executables/components
-
-Daemon only:
-
-```bash
-cmake --build build/testnet-release --target shekyl_rust_bins -- -j"$(nproc)"
-```
-
-Wallet CLI and wallet RPC (both Rust, one CMake target since the C1/C2
-install cutover — an ordinary full build produces them too):
-
-```bash
-cmake --build build/testnet-release --target shekyl_rust_bins -- -j"$(nproc)"
-```
-
-Or straight from cargo, if you do not want the CMake staging copy:
-
-```bash
-cargo build -p shekyl-cli -p shekyl-wallet-rpc --release
-```
-
-Primary C++ test binaries:
-
-```bash
-cmake --build build/testnet-release --target unit_tests -- -j"$(nproc)"
-```
-
-Note: if your environment reports an issue with the aggregate `tests` meta-target,
-build `unit_tests` directly as shown above.
-
-### 4) Verify available targets in your build dir
-
-```bash
-cmake --build build/testnet-release --target help
-```
-
-### 5) Fast recovery when you hit many compile errors
-
-Common fix sequence for stale/generated artifacts:
+### 3) Fast recovery from a stale build directory
 
 ```bash
 rm -rf build/testnet-release
-cmake -S . -B build/testnet-release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+cmake -S . -B build/testnet-release -DCMAKE_BUILD_TYPE=Release
 cmake --build build/testnet-release --target shekyl_rust_bins -- -j"$(nproc)"
 ```
 
-### 6) Testnet launch sanity command (runtime, not build)
+### 4) Testnet launch sanity command (runtime, not build)
 
 ```bash
-./build/testnet-release/bin/shekyld --testnet --non-interactive --data-dir /var/lib/shekyl-testnet
+./build/testnet-release/bin/shekyld --network testnet --data-dir /var/lib/shekyl-testnet
 ```

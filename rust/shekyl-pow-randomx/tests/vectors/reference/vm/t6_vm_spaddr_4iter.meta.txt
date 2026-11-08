@@ -60,6 +60,7 @@ Total bytes for this vector: 32 (= 4 × 8).
 Generator
 ---------
 source      = ./_generator/phase2c/gen.cpp (mode t6)
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/phase2c/Makefile (`make gen`)
 command     = ./gen t6 > t6_vm_spaddr_4iter.bin
 output_size = 32 bytes

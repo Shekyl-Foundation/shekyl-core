@@ -330,16 +330,11 @@ Default. Lands before genesis if it should exist at launch.
 - **CEN-A7's per-block transaction-count bound has two undocumented values: `2^28` (`CRYPTONOTE_MAX_TX_PER_BLOCK`, `cryptonote_basic.h:914`, an element count) and `10^6` (`shekyl_wire::READ_LEN_CAP`, `block.rs:163`).** A knowingly-reproduced deviation in the DRS §7.6 three-field form — *reproduced:* two structural bounds on one field, neither derived; *why:* parity first, and no real block approaches either; *correct:* one constant with a derivation record (a count bound derived from the block-weight limit, or ruled unbounded-below-weight), typed as a count rather than a bare integer so a bytes/count misreading is a compile error. Owner: the wire-format port ([`BLOCK_TX_WIRE_FORMAT_PORT.md`](design/BLOCK_TX_WIRE_FORMAT_PORT.md)), where A6/A7's wire-side invariant register also lands. Falsifier: one constant with a derivation record, or the divergence ruled. Found at [`CHAIN_RULES_SLICE_1.md`](completed/CHAIN_RULES_SLICE_1.md) F2; migrates into the E2 repair-backlog query when minted.
   - Target: pre-genesis
 
-- **DRS-W16: `remove_block` deletes at an implicit cursor position its caller sets.** The positioning `mdb_cursor_get(…, MDB_SET)` was removed by inherited commit `22c0fae47b` (subject unrelated to block removal); the delete is correct today only because `BlockchainDB::pop_block` reads the top block through the same write-cursor member one call earlier. Latent, not reachable in this tree — but any `blocks` read inserted between those two calls, or any second caller of `remove_block`, deletes at a valid-but-wrong position, which **succeeds silently** while the explicitly-positioned `block_info` and `block_heights` deletes remove the right rows. Either restore the dropped `MDB_SET` or land the guard at the Rust port. Falsify by `grep -n "MDB_SET" ` over `remove_block` in `src/blockchain_db/lmdb/db_lmdb.cpp`. Mechanism in [`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9.
-  - Target: pre-genesis
 
 - **The replay's burn oracle has three non-zero witnesses in 2 408 heights; nobody chose that distribution.** CEN-F17's burn (E6 slice 7 wave B, 2026-09-29) is compared against the C++'s `block_burn` at every captured height and matches, but the six captured chains burn at exactly three heights (`limit-full` one, `median-full` two — the fee-bearing spends the near-full bodies carry); the other 2 405 are zero against zero. The burn is an operand CEN-F16's split and CEN-G12's accumulator both read, so a leg this thin is the `DoubleSpend` shape again (`CHAIN_RULES_SLICE_7.md` §3.7): the oracle applies, it passes, and the subject population was whatever the shape captures happened to carry. The scenario driver can mine burn-bearing blocks now (`fixture::paying_fee`, the store's `connect_chain_burning`), so a captured chain whose fee volume, supply ratio and frozen-segment count each move the burn across `compute_fee_burn`'s arms costs one capture. Falsify by a vector under `shekyl-chain-ingest/tests/vectors/` whose trace carries a non-zero `burned` at a stated fraction of its heights (tens, not three) with the zero-fee arm, the percentage arm and the escalated arm each witnessed, named in `CAPTURED_SHAPES`.
   - Target: pre-genesis
   - Owner: [`DRS_E2_REPLAY_DRIVER.md`](design/DRS_E2_REPLAY_DRIVER.md) §3.10 (the mutation/reorg corpus family)
 
-- **Most of the hand-written C header is checked against nothing.** `src/shekyl/shekyl_ffi.h` is maintained by hand, and C linkage erases types: a declaration that drifts from its Rust definition compiles, links by name, and is undefined behaviour at run time. The FFI signature gate (`scripts/ci/check_ffi_signatures.sh`) generates declarations from the Rust source and compiles them against the header, for the files in its `SURFACES` list only: the relay surface and the `tx_extra` codec with the coinbase writer (the gate prints the count). Every other export's signature is ungated; the gate does hold, over the whole header, that each declaration names a function Rust exports. The gate's layout limb compares every crossing struct a header under `src/` defines against its `#[repr(C)]` twin. Two are exempt, each with its reason in `ffi_layout_gate.py`. Whole-crate generation is blocked on cbindgen rendering cross-crate constant re-exports as unresolved identifiers. Until that is solved, a file joins `SURFACES` in the change that alters its C ABI (rule 40), which is how the coinbase writer joined.
-  - Target: pre-genesis
-  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) (where the gate was introduced); rule `40-ffi-discipline`
 
 - **The archival attestation path is unbuilt end to end, and its pieces are tracked in rows that do not name each other.** `blockchain.cpp:5140` sets `headers_readable` from the coinbase extra and `:5147`/`:5197` branch consensus on it; with no producer the value is constantly `true` with an empty blob (a parsed extra with no `0x0B` tag is the committed empty set), so the records loop inside `if (headers_readable)` runs on every block with zero records — CEN-I12's shape at the mechanism level. (`ERR_HEADERS_UNREADABLE` itself is reachable: attestation verify precedes the I19 coinbase parse check on both paths, `blockchain.cpp:2242`/`:2248`, `:5299`/`:5428`.) Four rows, one mechanism: **(1)** the producer (a coinbase carrying pass records) — the row below; **(2)** the C++ verify-behind-PoW reorder (two rows down) — required only if the producer lands while the C++ daemon is consensus; in Rust, CEN-B4 sits after D1 in `validate`'s order by construction; **(3)** CEN-B4 in Rust — slice 1 deferred it because bond pairs have no store table until E4 S-ARCH (**landed 2026-10-06**, E6 slice 8 row 10, #983: `rules::attestation::B4` over the retention crate's `attestation_admission::AttestationSet`; the record arm's accept is still the FFI pins' only, because (4)'s grammar admits no record in a coinbase — the producer remains what breaks the cluster); **(4)** the `0x0B` record parser `TXE-Q4` refused (`TX_EXTRA_RUST_CUTOVER.md` §2.2). **What breaks the cluster is the producer**, and its natural home is the block-template writer `TXE-F8` names as unowned: whoever builds the coinbase in Rust builds the record-carrying coinbase, and (2) is then satisfied by Rust's rule order rather than by a C++ reorder. Falsify by `rg 'add_archival_attestation_to_tx_extra\|shekyl_coinbase_extra' src rust` showing a production caller that emits records.
   - Target: pre-genesis
@@ -396,8 +391,6 @@ Default. Lands before genesis if it should exist at launch.
 - **`get_archival_emission_claim_source` walks the entire serve-credit table per unauthenticated RPC** (PR-P4; fix is consensus+LMDB aggregate, not wallet-side).
   - Target: pre-genesis
 
-- **`shekyl-ffi` has 105 undocumented items, so `missing_docs` cannot gate detached-doc drift.**
-  - Target: pre-genesis
 
 - **`release_readiness` query (frozen §2 surface) deferred — blocker: persona addressing.** The exit became reachable with PR-C (the line this one replaces is DISCHARGED: `unstake` + `collect_unstaked` landed on [`StakeFacade`](../rust/shekyl-engine-core/src/engine/stake_facade.rs), wallet-RPC + CLI, 2026-09-03), and its refusals carry the readiness operands (`-29517 data.detail`), so a staker is never blind to WHY an exit refuses. What did NOT land is the standalone pre-flight query `release_readiness(P)` from the frozen §2 surface. The named blocker, not a convenience deferral: the frozen signature is persona-addressed, the RPC surface is forbidden from enumerating personas (`principal_stakes()` is RPC-REJECTED as the P↔principal edge), so the query's wire shape is blocked on a persona-addressing design the multi-slot UX round owns. At genesis scope (single slot) the refusal detail is the same information. [`PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md) §2.
   - Target: pre-genesis
@@ -415,9 +408,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Release-asset manifest signing owed before the first non-RC release tag (added 2026-08-14, SA-6 CBOM close; CORRECTED 2026-08-15 — a wiring task, not an open decision).**
   - Target: pre-genesis
 
-- **F-7 — structural gate for the test-only FFI exports that ship in the production archive; two leak shapes, two remedies, one `nm` gate seeded from a sweep (pre-genesis, priority 1 — raised 2026-10-12: the test seams compiled into the `shekyl-ffi` archive now include ones that mutate key material)** — record: [`design/F7_TEST_ONLY_FFI_EXPORTS.md`](design/F7_TEST_ONLY_FFI_EXPORTS.md) (§5 for the key-mutating seams and the feature edge).
-  - Owner: [`F7_TEST_ONLY_FFI_EXPORTS.md`](design/F7_TEST_ONLY_FFI_EXPORTS.md)
-  - Target: pre-genesis
 
 - **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) — [`design/WALLET_MESSAGE_SIGNING.md`](./design/WALLET_MESSAGE_SIGNING.md)**
   - Target: pre-genesis
@@ -767,8 +757,6 @@ Default. Lands before genesis if it should exist at launch.
 - **`fips204` features-list discipline: drop `default-rng` and [`rust/shekyl-crypto-pq/Cargo.toml`](../rust/shekyl-crypto-pq/Cargo.toml)**
   - Target: pre-genesis
 
-- **`epee::wipeable_string` mlock-backed allocator [`contrib/epee/include/wipeable_string.h:83`](../contrib/epee/include/wipeable_string.h)**
-  - Target: pre-genesis
 
 - **RandomX v2 SHA-256 digest of the 7-symbol `randomx.h` surface** beside `fork-pin-sha` in `randomx-v2-sys`. Reopen: pin-bump of `external/randomx-v2` or a tarball-CI need (checkout-hygiene conjunct fired in PR #754). [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
   - Target: pre-genesis
@@ -782,8 +770,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Miner template conformance vector (bless the interface, not a miner).** Publish a versioned `get_block_template` → blob framing → `submitblock` + seed-epoch vector before genesis seal. Falsify by a third-party miner passing it against `dev`. [`RANDOMX_V2_MINING_ASYMMETRY.md`](./design/RANDOMX_V2_MINING_ASYMMETRY.md) §6.3
   - Target: pre-genesis
 
-- **PoW test seam and isolation checks 3/4/6 across the daemon Rust cutover.** Owner: the PR that moves `src/crypto/pow_randomx.{h,cpp}`. Falsify by that PR recording the seam disposition and re-deriving checks 3/4/6 against the new binary. [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §7
-  - Target: pre-genesis
 
 - **`rust/shekyl-consensus` fold** — six live Cargo consumers; DRS-E* is not the round that removes them. Falsify by `rg -l 'shekyl-consensus' rust/*/Cargo.toml` returning only the crate itself.
   - Target: pre-genesis
@@ -830,8 +816,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Serve-credit decision-site flip: Rust becomes the primary decision site for `blockchain.cpp:4247`/`:4312`/`:4889–4910`**
   - Target: pre-genesis
 
-- **`tests/performance_tests/` — rule-15 deletion-or-adoption audit** (surfaced 2026-07-03, RandomX v2 test-regime benchmark review).
-  - Target: pre-genesis
 
 - **Remove or retain the orphaned `ActivityMetric.total_staked` observable (spawned Stage-1b `stake_factor` delete, commit `7256962`, 2026-07-24).**
   - Target: pre-genesis
@@ -965,9 +949,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) §1 — EUP-5 G, ruled with Q1 leg 1; the ladder's text is [`FEE_LADDER_DERIVATION.md`](design/FEE_LADDER_DERIVATION.md), and CEN-M3 carries the floor that reads it
 
 
-- **Collapse the transaction-version comparisons: the C++ parser still reads version-1 and version-2 blobs.** `transaction_prefix` refuses version 0 and anything above 3 and admits the rest; `ver_non_input_consensus` and `check_tx_inputs` refuse everything but 3 afterwards. So 29 comparisons on the transaction version select one arm for every admitted transaction (19 of them always that arm, including the admission bound whose locals are both 3), and 10 of them (the version-1 serialisation arms among them, and the second statement of the admission bound in `check_tx_inputs`) stay reachable from the wire until the parser refuses first. One PR: the parser refuses every version but 3, the 19 always-true comparisons collapse, the 10 dead ones are deleted, and `grep-gates.yml`'s "no v1/v2 tx version branches" grep, which could not see five of them, goes with them. Validation surface: the transaction wire format (`core_tests`, the wire parity vectors, the Rust parser's refusals). Falsify by: no `transaction version` row left in [`docs/ci/cxx-version-gates.tsv`](ci/cxx-version-gates.tsv) but the parser's.
-  - Target: pre-genesis
-  - Owner: [`CXX_VERSION_GATES.md`](design/CXX_VERSION_GATES.md) §4
 
 - **Measure BP+ verification across padded output counts (2, 4, 8, 16) and set it against `bp_plus_weight_clawback`'s curve — the dimension the clawback prices is unmeasured.** The I4 round varied inputs at two outputs, where the clawback is zero, so it shows BP+ is input-independent and nothing about the output dimension (evidence: [`CHAIN_RULES_SLICE_7.md`](completed/CHAIN_RULES_SLICE_7.md) §3.10). Then one of three: keep with a recorded reason, replace with a term that prices what Shekyl's verifier pays, or delete. Falsify by: the measurement recorded and a sentence at `bp_plus_weight_clawback`'s doc stating the reason, or the clawback's removal, either with the census H-row that owns tx weight updated.
   - Target: pre-genesis
@@ -1129,9 +1110,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §7
 
-- **Four test-data file names are too long for a Windows checkout under a deep path.** `tests/data/account-<128 hex>` is 151 characters from the repository root, so a checkout whose root path is longer than about 108 characters exceeds Windows' 260-character `MAX_PATH` and git cannot write those files unless `core.longpaths` is on. A Windows developer then has a checkout with four files missing. The files date from the inherited tree's first commit, and no file in `tests/`, `src/` or `rust/` names them; if nothing reads them they are deleted (rule 60), otherwise shortened with their reader, or failing both `git config core.longpaths true` is documented where a Windows build is described. Falsify by: every tracked path is under 150 characters, or `COMPILING_DEBUGGING_TESTING.md`'s Windows section names the setting.
-  - Target: pre-genesis
-  - Owner: [`WINDOWS_WALLET_SUPPORT.md`](design/WINDOWS_WALLET_SUPPORT.md)
 
 - **Measure `TSR-M4`'s set-`MaxMemInQueues` arm once increment 3 proposes a value.** The pre-flight measured Tor's memory at the §10 load at Tor's default cap (91.0 MiB on the floor device, 2026-10-19), not under a set one, because there is no candidate value to set yet. Blocker: increment 3, which proposes the value. Falsify by `TOR_SUPERVISOR.md` §10's `TSR-M4` row carrying the floor device's figure under the proposed `MaxMemInQueues`.
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §10 (`TSR-M4`)
@@ -1185,8 +1163,6 @@ Default. Lands before genesis if it should exist at launch.
 - **`WalletFile` handle slimming (post–PR 6 `PersistenceEngine`).**
   - Target: pre-genesis
 
-- **FFI C ABI symbol rename: `shekyl_wallet_*` → `shekyl_engine_*`, [`shekyl-ffi`](../rust/shekyl-ffi/)**
-  - Target: pre-genesis
 
 - **C++ JSON-RPC method-name rename: `wallet_*` → engine-shaped names (folded into Phase 4b's Shekyl-native RPC method-set work).**
   - Target: pre-genesis
@@ -1241,8 +1217,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Workspace-wide `rustdoc -D warnings` CI lane (BLOCKED on pre-existing cross-crate warnings).**
   - Target: pre-genesis
 
-- **M1 reward-gate C++ test-support surface — fold the corruption-injection seam off the production DB API at reward-gate completion (code-review #263, 2026-07-07).**
-  - Target: pre-genesis
 
 - **Segment-freeze pipeline — design round required (opened by `ARCHIVAL_REWARD_GATE_M1.md` [`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)**
   - Target: pre-genesis

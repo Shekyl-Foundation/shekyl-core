@@ -95,7 +95,7 @@ the V3.x daemon-validation port.
 | Files deleted | `tests/core_tests/{tx_validation,fcmp_tests,staking}.{cpp,h}` |
 | Helpers deleted | `apply_fcmp_pipeline` (static, ~340 lines), `construct_fcmp_tx`, `construct_fcmp_staked_tx` from `chaingen.cpp` (no remaining callers after test deletions). |
 | Original symptom | `couldn't fill transaction sources` (from `tests/core_tests/chaingen.cpp::fill_tx_sources_and_destinations`) and / or `Block <hash> failed to pass prevalidation`, preceded by `cn: Shekyl requires tx version >= 3`. |
-| Root cause | `MAKE_GENESIS_BLOCK` / `REWIND_BLOCKS_N` / `MAKE_NEXT_BLOCK` produce v1 coinbase transactions; the daemon rejects them at `cryptonote_format_utils.cpp:295` (Shekyl requires tx version >= 3). No block ever lands; no spendable output ever exists; no chaingen-dependent test that constructs a tx can pass. |
+| Root cause | `MAKE_GENESIS_BLOCK` / `REWIND_BLOCKS_N` / `MAKE_NEXT_BLOCK` produce v1 coinbase transactions; the daemon rejects them at `cryptonote_format_utils.cpp` at `ac3836de90` (line 295) (Shekyl requires tx version >= 3). No block ever lands; no spendable output ever exists; no chaingen-dependent test that constructs a tx can pass. |
 | Migration path | Rust unit tests in `shekyl-engine-state` / `shekyl-tx-builder` / `shekyl-fcmp` for the user-facing invariants; daemon-side prevalidation invariants land when wallet2 / cryptonote_core migrate to Rust (V3.x). Tracked per-cluster in FOLLOWUPS.md. |
 | Close commit | (this PR) |
 

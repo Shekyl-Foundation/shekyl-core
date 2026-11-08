@@ -732,7 +732,7 @@ template above.
 
 ## 11. `crypto_bench_relay_admission_verify`
 
-**Crate.** `shekyl-ffi`.
+**Crate.** `shekyl-chain-rules`.
 **Binaries.** `benches/relay_admission_verify.rs` (criterion — NOT
 registered in the rolling baseline, see below),
 `benches/relay_admission_verify_iai.rs` (iai-callgrind, registered
@@ -740,12 +740,18 @@ as an iai-only row in `capture_rust_baseline.sh`).
 **Class.** `crypto_bench_*` (bidirectional ±5% / ±15%).
 
 **What it measures.** The relay pool-admission verification term —
-the same two `shekyl_*` FFI entry points `blockchain.cpp` calls at
-admission, **in that order**: `shekyl_check_commitment_masks` over
-the output commitments, then `shekyl_fcmp_verify` over the FCMP++
-proof. Pinned to the admission path rather than to a primitive so
-the gate cannot drift from what admission actually costs when the
-calling code changes (`DAEMON_RELAY_PRIVACY.md` §72.6, §70.3).
+two of the bodies the pool door runs (`judge_slot_stateless` at
+`TxSlot::Lone`), **in its order**: CEN-H17's
+`shekyl_ct_balance::check_commitment_masks` over the output
+commitments, then CEN-I15's `shekyl_fcmp::proof::verify` over the
+FCMP++ proof. Pinned to the admission path rather than to a
+primitive so the gate cannot drift from what admission actually
+costs when the calling code changes (`DAEMON_RELAY_PRIVACY.md`
+§72.6, §70.3). The door also runs one hybrid signature verification
+per input (CEN-I18) and the range proof as a batch of one
+(CEN-H19); those terms are outside this count and are timed by
+`block_connect_verify`'s per-term group (the bench header states
+the split).
 
 **Fixture shape.** One fixed cell: `1-in / 2-out`, tree depth 2,
 `ChunkLayout::Shared` — the modal transaction shape and the
@@ -776,9 +782,8 @@ a change to FCMP++ verification moves this count, which is the
 signal that `hop` (and the embargo derived from it) is owed a
 re-derivation.
 
-**Apples-to-oranges against C++.** No C++ counterpart; the C++
-admission path is the *caller* of these FFI entry points, not an
-independent implementation.
+**Apples-to-oranges against C++.** No C++ counterpart; admission is
+Rust end to end.
 
 ## 12. `crypto_bench_serve_*` — the archival serve path (`BA-T3`)
 

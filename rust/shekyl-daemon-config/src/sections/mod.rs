@@ -191,7 +191,7 @@ impl Logging {
     /// The table admits only level words and subsystem keys, and [`build`]
     /// refuses anything else, so a built section's words are in that set.
     #[must_use]
-    pub fn directive(&self) -> String {
+    pub fn directive(&self) -> shekyl_logging::filter::Directive {
         let overrides: Vec<(&str, &str)> = self
             .categories
             .iter()
@@ -481,7 +481,7 @@ pub fn apply_logging(resolved: &Resolved) -> Result<(), Vec<Diagnostic>> {
         .collect();
     let directive = shekyl_logging::subsystem::directive_from_words(level, &overrides)
         .expect("the table admits only level words and subsystem keys");
-    shekyl_logging::subsystem::apply_directive(directive);
+    shekyl_logging::subsystem::apply_directive(&directive);
     Ok(())
 }
 
