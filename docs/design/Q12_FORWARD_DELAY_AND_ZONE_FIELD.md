@@ -78,7 +78,7 @@ all**; F-4/F-5 retired the fluff-delay draw that used it.
 
 ### 2.3 `FORWARD_DELAY_BASE` still has no consumer
 
-[`cryptonote_config.h:164`](../../src/cryptonote_config.h#L164). It was the
+`cryptonote_config.h` at `ac3836de90` (line 164). It was the
 derivation input for `AVERAGE` (`22 ≈ 15 × 3/2`) until Q11-A's decoupling
 replaced both with literals, and was kept deliberately as half of a registered
 open item. **This round decides whether it dies.**

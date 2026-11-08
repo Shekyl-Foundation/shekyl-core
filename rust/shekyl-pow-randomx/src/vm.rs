@@ -2123,9 +2123,8 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
 /// `randomx_calculate_hash` at pin `aaafe71`.
 ///
 /// This is the **single hash-producing entry point** of the
-/// `shekyl-pow-randomx` crate — the public surface the
-/// [`shekyl-ffi`](../../../rust/shekyl-ffi) FFI shim (Phase 3a) and
-/// the daemon's block-validation path consume. No other `pub fn`
+/// `shekyl-pow-randomx` crate — the public surface the daemon's
+/// block-validation path consumes. No other `pub fn`
 /// produces a RandomX hash; no internal API circumvents this
 /// function's chain-of-Blake2b + scratchpad + program-iteration
 /// composition.

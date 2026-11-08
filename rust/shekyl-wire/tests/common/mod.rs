@@ -13,8 +13,7 @@ use shekyl_wire::tx_extra::{
 };
 
 /// A minimal spendable wallet: an Ed25519 spend keypair (`b`, `B = b*G`) plus a
-/// hybrid X25519 + ML-KEM-768 KEM keypair. The typed (non-FFI) analogue of the
-/// wallet in `shekyl-ffi`'s `signing_round_trip` test.
+/// hybrid X25519 + ML-KEM-768 KEM keypair.
 // Each integration-test binary compiles this module separately; binaries
 // that never build a wallet would otherwise flag these items dead.
 #[allow(dead_code)]

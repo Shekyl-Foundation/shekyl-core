@@ -3,25 +3,124 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `EnvFilter` resolution and the legacy-category translator.
+//! Filter directives.
 //!
-//! Two entry points matter to external callers:
-//!
-//! - [`resolve_env_filter`] picks the right source for the process-wide
-//!   filter directive string at startup. It reads `SHEKYL_LOG` (and,
-//!   under the `dev-env-fallback` feature flag, `RUST_LOG`), otherwise
-//!   synthesizes a directive from the caller's `fallback_default`.
-//! - [`directives_from_legacy_categories`] translates a spec expressed in
-//!   the legacy C++ `easylogging++` `log-levels=` grammar to the EnvFilter
-//!   directive string used by `tracing_subscriber`.
-//!
-//! See the crate README and the plan document for design rationale.
+//! A directive is text `EnvFilter` can parse. Free-form text — `SHEKYL_LOG`,
+//! `RUST_LOG` under the `dev-env-fallback` feature, or any other string an
+//! operator wrote — enters through [`Directive::parse`] and nowhere else.
+//! The subsystem builder ([`crate::subsystem::directive`]) produces the same
+//! type, by parsing the string it assembled from live targets.
+//! [`crate::config::Config`] stores a [`Directive`], so a raw string cannot
+//! be installed.
 
-use thiserror::Error;
 use tracing::Level;
-use tracing_subscriber::filter::{EnvFilter, ParseError};
+use tracing_subscriber::filter::{EnvFilter, LevelFilter, ParseError};
 
-use crate::legacy;
+use crate::subsystem;
+
+/// A directive that names no retired target and that `EnvFilter` accepts.
+///
+/// Construct it with [`Directive::parse`]. There is no conversion from
+/// [`String`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Directive(String);
+
+impl Directive {
+    /// Refuse a retired target, then a directive `EnvFilter` itself refuses.
+    ///
+    /// `source_var` is the operator-facing name of where `spec` came from
+    /// (`SHEKYL_LOG`, "the configured log directive").
+    ///
+    /// # Errors
+    ///
+    /// [`FilterError::RetiredTarget`] when `spec` names a retired target or
+    /// uses the retired spelling (a `.`, a `*`, or a `:` outside `::`).
+    /// [`FilterError::Parse`] when the spelling is current but `EnvFilter`
+    /// refuses it.
+    pub fn parse(spec: &str, source_var: &'static str) -> Result<Self, FilterError> {
+        if let Some(target) = retired_in(spec) {
+            return Err(FilterError::RetiredTarget {
+                target,
+                source_var,
+                subsystems: subsystem::names(),
+            });
+        }
+        EnvFilter::try_new(spec).map_err(|source| FilterError::Parse { source_var, source })?;
+        Ok(Self(spec.to_owned()))
+    }
+
+    /// The directive text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The filter this directive installs. [`parse`](Self::parse) already
+    /// accepted the text, so a refusal here is the parser disagreeing with
+    /// itself.
+    pub(crate) fn to_env_filter(&self) -> Result<EnvFilter, ParseError> {
+        EnvFilter::try_new(&self.0)
+    }
+}
+
+impl std::fmt::Display for Directive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Why a directive was refused.
+#[derive(Debug, thiserror::Error)]
+pub enum FilterError {
+    /// The directive names a target nothing in this tree logs under, or
+    /// spells a target the way the C++ logger did. `EnvFilter` would take
+    /// it as a target and filter in silence.
+    #[error(
+        "`{target}` in {source_var} is a log category of the C++ daemon, which is gone; \
+         set a level per subsystem with `log-category` ({subsystems}) or name a Rust target \
+         (`shekyl_chain_sync=debug`)"
+    )]
+    RetiredTarget {
+        /// The refused target, as written.
+        target: String,
+        /// Where the directive came from.
+        source_var: &'static str,
+        /// The subsystem keys, from [`subsystem::Subsystem::ALL`].
+        subsystems: &'static str,
+    },
+    /// `EnvFilter` refused the directive's syntax.
+    #[error("{source_var} is not a filter directive: {source}")]
+    Parse {
+        /// Where the directive came from.
+        source_var: &'static str,
+        /// `EnvFilter`'s reason.
+        source: ParseError,
+    },
+}
+
+/// The first retired target `spec` names, if any.
+///
+/// A directive is `target[span]=level`, comma separated. A bare level has
+/// no target. The retired spelling is a `.` in a target (`net.p2p`), a
+/// `*` (`*:WARNING`), or a `:` that is not part of `::` (`net.p2p:DEBUG`).
+fn retired_in(spec: &str) -> Option<String> {
+    spec.split(',').find_map(|directive| {
+        let target = directive
+            .split(['[', '='])
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if target.is_empty() || target.parse::<LevelFilter>().is_ok() {
+            return None;
+        }
+        (retired_shape(target) || subsystem::is_retired_target(target)).then(|| target.to_owned())
+    })
+}
+
+/// A target spelling the C++ logger used. `::` is a Rust path and stays.
+fn retired_shape(target: &str) -> bool {
+    target.contains('.') || target.contains('*') || target.replace("::", "").contains(':')
+}
 
 /// Env var name consulted by [`resolve_env_filter`].
 ///
@@ -34,75 +133,8 @@ pub const SHEKYL_LOG_ENV: &str = "SHEKYL_LOG";
 /// Env var name consulted only under the `dev-env-fallback` feature flag.
 pub const DEV_FALLBACK_ENV: &str = "RUST_LOG";
 
-/// Structured result of translating a legacy `log-levels=` spec.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TranslationReport {
-    /// The EnvFilter-shaped directive string, ready to hand to
-    /// [`EnvFilter::try_new`]. May be empty; see the "empty spec" edge
-    /// cases in the crate's plan document.
-    pub directive: String,
-
-    /// Category names that appeared in the input but are not recognized.
-    ///
-    /// Reported (not rejected) so callers can choose to surface a warning
-    /// without failing startup. Unknown categories still appear in
-    /// `directive` verbatim.
-    pub unknown: Vec<String>,
-
-    /// Soft-compat messages.
-    ///
-    /// Populated, for example, when a lowercase level name was accepted
-    /// and normalized. Callers (especially the eventual wallet-rpc
-    /// startup path in Chore #2) can render these as a single deprecation
-    /// line.
-    pub warnings: Vec<String>,
-}
-
-/// Errors returned from [`directives_from_legacy_categories`].
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum FilterError {
-    /// A level token was neither a recognized name (`FATAL`, `ERROR`,
-    /// `WARNING`, `INFO`, `DEBUG`, `TRACE` — uppercase or lowercase) nor
-    /// a numeric preset.
-    #[error("unknown log level token: {token:?}")]
-    UnknownLevel {
-        /// The unrecognized token, captured verbatim from the input.
-        token: String,
-    },
-
-    /// A bare-numeric spec fell outside the supported `0..=4` range.
-    #[error("numeric log level {value} is out of range 0..=4")]
-    NumericLevelOutOfRange {
-        /// The out-of-range numeric value.
-        value: i64,
-    },
-
-    /// A suffix-glob spec of the form `*y.z:LEVEL` was rejected.
-    ///
-    /// `tracing_subscriber::EnvFilter` has no native suffix-glob support,
-    /// and expanding against a hardcoded target list would silently rot
-    /// as new Rust modules are added. Callers should enumerate the
-    /// intended targets explicitly or reach for `*:LEVEL` if a wildcard
-    /// was the actual intent.
-    #[error("suffix-glob {original:?} is not supported by the EnvFilter backend")]
-    UnsupportedGlob {
-        /// The glob pattern as it appeared in the input (without the
-        /// trailing `:LEVEL`).
-        original: String,
-        /// If the spec looks like a common prefix-typo (e.g.
-        /// `*.dump:DEBUG`, which is really `dump.*:DEBUG`), this carries
-        /// the suggested rewrite.
-        suggested_rewrite: Option<String>,
-    },
-
-    /// The spec was syntactically malformed (missing level, stray
-    /// separator, etc.).
-    #[error("malformed legacy spec: {reason}")]
-    MalformedSpec {
-        /// Human-readable description of what's wrong.
-        reason: String,
-    },
-}
+/// Where a fallback level's directive says it came from.
+const FALLBACK_SOURCE: &str = "the fallback level";
 
 /// Resolve the process-wide `EnvFilter` at startup.
 ///
@@ -113,22 +145,34 @@ pub enum FilterError {
 ///    enabled — off by default).
 /// 3. A single-level directive derived from `fallback_default`.
 ///
-/// The legacy translator is *not* invoked here. Those inputs arrive via
-/// the runtime `mlog_set_log` / `mlog_set_categories` path wired up in
-/// Chore #2.
-pub fn resolve_env_filter(fallback_default: Level) -> Result<EnvFilter, ParseError> {
+/// # Errors
+///
+/// [`FilterError::RetiredTarget`] when the variable names a retired target;
+/// [`FilterError::Parse`] when `EnvFilter` refuses its syntax.
+pub fn resolve_env_filter(fallback_default: Level) -> Result<EnvFilter, FilterError> {
+    let (directive, source_var) = parsed_directive(fallback_default)?;
+    directive
+        .to_env_filter()
+        .map_err(|source| FilterError::Parse { source_var, source })
+}
+
+fn parsed_directive(fallback_default: Level) -> Result<(Directive, &'static str), FilterError> {
     if let Some(spec) = env_var_non_empty(SHEKYL_LOG_ENV) {
-        return EnvFilter::try_new(&spec);
+        return Ok((Directive::parse(&spec, SHEKYL_LOG_ENV)?, SHEKYL_LOG_ENV));
     }
 
     #[cfg(feature = "dev-env-fallback")]
     {
         if let Some(spec) = env_var_non_empty(DEV_FALLBACK_ENV) {
-            return EnvFilter::try_new(&spec);
+            return Ok((Directive::parse(&spec, DEV_FALLBACK_ENV)?, DEV_FALLBACK_ENV));
         }
     }
 
-    EnvFilter::try_new(level_directive(fallback_default))
+    Ok((
+        Directive::parse(&level_directive(fallback_default), FALLBACK_SOURCE)
+            .expect("a level word is a filter directive"),
+        FALLBACK_SOURCE,
+    ))
 }
 
 fn env_var_non_empty(name: &str) -> Option<String> {
@@ -138,46 +182,6 @@ fn env_var_non_empty(name: &str) -> Option<String> {
     }
 }
 
-/// Translate a spec expressed in the legacy easylogging++ `log-levels=`
-/// grammar to an EnvFilter directive.
-///
-/// Stateful: callers pass the currently-active spec (the one last
-/// accepted) so that `+cat:LEVEL` / `-cat` modifiers can be applied as a
-/// grammar-level textual merge before translation. Process startup
-/// passes `current_spec = None`.
-///
-/// `fallback_default` is consulted only when `current_spec` is `None`
-/// and the translation would otherwise produce an empty directive (for
-/// example, an empty env var or whitespace-only `new_spec`). This
-/// prevents the "empty directive, everything logs at subscriber
-/// baseline" landmine at startup.
-///
-/// When `current_spec` is `Some(..)` and `new_spec` is empty, the
-/// translator emits an `"off"` directive. That matches the legacy C++
-/// contract: `mlog_set_categories("")` at runtime *disables* all logging
-/// (see `TEST(logging, no_logs)` in `tests/unit_tests/logging.cpp`). An
-/// earlier iteration of this function returned an empty directive in
-/// that branch — effectively "no change" — which silently inverted the
-/// legacy behavior and would have planted a landmine for Chore #2's
-/// RPC-driven `set_log_categories` path.
-///
-/// # Reserved target names
-///
-/// The legacy preset strings reference two easylogging++ self-
-/// instrumentation categories, `logging` and `msgwriter`. They survive
-/// translation verbatim because removing them would silently drop the
-/// preset's self-instrumentation overrides, but they are **reserved**:
-/// no new Rust `tracing::*` call site should use `target: "logging"` or
-/// `target: "msgwriter"`. `tests/reserved_names.rs` enforces this at CI
-/// time.
-pub fn directives_from_legacy_categories(
-    current_spec: Option<&str>,
-    new_spec: &str,
-    fallback_default: Level,
-) -> Result<TranslationReport, FilterError> {
-    legacy::translate(current_spec, new_spec, fallback_default)
-}
-
 pub(crate) fn level_directive(level: Level) -> String {
     match level {
         Level::ERROR => "error".to_owned(),
@@ -185,5 +189,64 @@ pub(crate) fn level_directive(level: Level) -> String {
         Level::INFO => "info".to_owned(),
         Level::DEBUG => "debug".to_owned(),
         Level::TRACE => "trace".to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Directive, FilterError};
+
+    const SOURCE: &str = "the configured log directive";
+
+    fn refused(spec: &str) -> String {
+        match Directive::parse(spec, SOURCE) {
+            Err(FilterError::RetiredTarget {
+                target, source_var, ..
+            }) => {
+                assert_eq!(source_var, SOURCE, "{spec}");
+                target
+            }
+            other => panic!("{spec} must be a retired target, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_retired_target_is_refused_by_shape_or_by_name() {
+        for (spec, target) in [
+            ("net.p2p:DEBUG", "net.p2p:DEBUG"),
+            ("info,wallet.wallet2:INFO", "wallet.wallet2:INFO"),
+            ("*:WARNING", "*:WARNING"),
+            ("blockchain=debug", "blockchain"),
+            ("warn,net::p2p=trace", "net::p2p"),
+            ("cn", "cn"),
+            ("daemon::rpc=debug", "daemon::rpc"),
+            ("shekyl_ffi=debug", "shekyl_ffi"),
+            ("miner=debug", "miner"),
+        ] {
+            assert_eq!(refused(spec), target, "{spec}");
+        }
+    }
+
+    #[test]
+    fn live_targets_levels_and_dependencies_parse() {
+        for spec in [
+            "warn",
+            "info,shekyl_wallet_rpc=debug",
+            "shekyl_wallet_rpc::scanner=trace",
+            "info,shekyl_chain_rules=debug,daemon=debug,tor=debug",
+            "daemon=debug,global=info,txpool=trace,tor=warn,notify=info",
+            "warn,hyper=error,tokio=off",
+            "shekyl_chain_sync[connect]=debug",
+            "3",
+        ] {
+            Directive::parse(spec, SOURCE).unwrap_or_else(|e| panic!("{spec}: {e}"));
+        }
+        assert!(
+            !matches!(
+                Directive::parse("", SOURCE),
+                Err(FilterError::RetiredTarget { .. })
+            ),
+            "an empty directive is not a retired target"
+        );
     }
 }

@@ -817,7 +817,7 @@ only because the chain is 7672 blocks long and the fleet is at the tip.
 **The honest background is *absent*, not `0` — which makes the marker maximally
 effective.** Measured on the six seeds 2026-09-21: `get_blockchain_pruning_seed()`
 is `0` everywhere (§2.8.8), and `KV_SERIALIZE_OPT`
-([`keyvalue_serialization.h:89-95`](../../contrib/epee/include/serialization/keyvalue_serialization.h#L89))
+(`keyvalue_serialization.h` at `ac3836de90` (lines 89–95))
 **skips the field on store when it equals the default**, so an archival node's
 gossiped entries omit `pruning_seed` entirely. `sanitize_peerlist`
 ([`net_node.inl:2319`](../../src/p2p/net_node.inl#L2319)) accepts all eight

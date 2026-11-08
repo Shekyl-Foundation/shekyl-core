@@ -586,9 +586,10 @@ fn txid_arity_is_the_predicate_s_not_the_input_arm_s() {
     );
 }
 
-/// The oracle's predicate is `!vin.empty() && vin[0] != gen`
-/// (`cryptonote_format_utils.cpp:1290`): a body with **no inputs** and a
-/// `pqc_auths` entry hashes 3-part in C++. It is malformed — `validate`
+/// The predicate is `!vin.empty() && vin[0] != gen` (the C++
+/// `first_input_is_spend`, `cryptonote_format_utils.cpp` at `ac3836de90`
+/// (line 991)): a body with **no inputs** and a `pqc_auths` entry hashes
+/// 3-part. It is malformed — `validate`
 /// refuses it — but its identity is consensus-visible before that (relay
 /// dedup), so the Rust predicate must agree on it too, not only on valid
 /// shapes. Reading `vin[0] != gen` as "first is not gen" would call this

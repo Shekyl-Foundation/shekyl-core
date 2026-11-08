@@ -273,7 +273,7 @@ And not a consumer of the mining JIT for validation (§1.3).
   `chain_component`, `spent_accumulator`. `ReadSnapshot::key_images` (read.rs
   K2) exists *for* the digest's `spent_keys` scan. **No redb-side assembly**
   walks `block_info` hashes + `key_images` + the live root into `digest_v0`;
-  the only caller is the C++-fed FFI (`chain_digest_ffi.rs:69`). Owed (RD-F5).
+  the only caller is the C++-fed FFI (`chain_digest_ffi.rs` at `ac3836de90` (line 69)). Owed (RD-F5).
 
 ### 3.2 The rules side (`shekyl-chain-rules`, at #785)
 

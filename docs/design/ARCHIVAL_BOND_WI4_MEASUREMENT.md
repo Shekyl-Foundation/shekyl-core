@@ -4678,7 +4678,7 @@ path produces that behavior:
    daemon-relay path adds only wallet-independent noise. **Verified:**
    between the wallet→daemon submit boundary (the only place
    `φ + k·T + d` exists) and the wire sits the inherited Dandelion++
-   diffusion layer (`src/cryptonote_config.h:101-106`,
+   diffusion layer (`src/cryptonote_config.h` at `ac3836de90` (lines 101–106),
    `levin_notify.cpp`) — a per-tx Poisson embargo of mean **39 s**
    (`DANDELIONPP_EMBARGO_AVERAGE`, drawn on the daemon's clock), a
    ~5 s Poisson fluff flush, 2 stem hops at 20% fluff probability,

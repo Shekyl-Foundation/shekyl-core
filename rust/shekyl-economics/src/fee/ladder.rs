@@ -75,8 +75,8 @@ pub fn corrected_fee_ladder(
 }
 
 /// [`corrected_fee_ladder`], or `None` when the scalars cannot form the
-/// rungs' products in `u128`. The fallible arm exists for the `extern "C"`
-/// boundary (rule 40): operands near `u64::MAX` overflow `u128` before any
+/// rungs' products in `u128`. [`super::fee_ladder_from`] serves the ladder
+/// through this arm: operands near `u64::MAX` overflow `u128` before any
 /// conversion fallback can see it.
 #[must_use]
 pub fn checked_corrected_fee_ladder(

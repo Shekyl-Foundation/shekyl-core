@@ -317,5 +317,68 @@ class CompareTest(unittest.TestCase):
         self.assertEqual(len(s["baseline_zero"]), 0)
 
 
+    def _relay(self, crate: str, instructions: int) -> dict[str, Any]:
+        return _iai(
+            crate,
+            "relay_admission_verify_iai",
+            "relay_admission_verify_group",
+            "crypto_bench_relay_admission_verify",
+            "modal",
+            instructions,
+        )
+
+    def test_a_crate_move_is_compared_not_missing(self) -> None:
+        # The same bench under another crate is a move: compared under
+        # the normal thresholds, neither missing nor added.
+        base = _envelope([self._relay("shekyl-ffi", 358_680_540)])
+        pr = _envelope([self._relay("shekyl-chain-rules", 358_987_738)])
+
+        rc, report = _run_compare(base, pr)
+        self.assertEqual(rc, 0)
+        s = report["summary"]
+        self.assertEqual(s["missing_in_pr"], [])
+        self.assertEqual(s["added_in_pr"], [])
+        self.assertEqual(len(s["moved"]), 1)
+        self.assertTrue(s["moved"][0]["from"].startswith("shekyl-ffi/"))
+        self.assertTrue(s["moved"][0]["to"].startswith("shekyl-chain-rules/"))
+        entry = report["entries"][0]
+        self.assertEqual(entry["verdict"], "ok")
+        self.assertEqual(entry["moved_from"], s["moved"][0]["from"])
+
+    def test_a_move_that_changes_the_workload_still_fails(self) -> None:
+        base = _envelope([self._relay("shekyl-ffi", 358_680_540)])
+        pr = _envelope([self._relay("shekyl-chain-rules", 200_000_000)])
+
+        rc, report = _run_compare(base, pr)
+        self.assertEqual(rc, 1)
+        self.assertEqual(report["entries"][0]["verdict"], "fail")
+
+    def test_a_deleted_bench_with_no_successor_is_still_missing(self) -> None:
+        base = _envelope([self._relay("shekyl-ffi", 358_680_540)])
+        pr = _envelope([])
+
+        rc, report = _run_compare(base, pr)
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(report["summary"]["missing_in_pr"]), 1)
+        self.assertEqual(report["summary"]["moved"], [])
+
+    def test_an_ambiguous_move_is_not_paired(self) -> None:
+        # Two candidates for one missing bench: no pairing, so the old
+        # id stays missing and both new ids stay added.
+        base = _envelope([self._relay("shekyl-ffi", 358_680_540)])
+        pr = _envelope(
+            [
+                self._relay("shekyl-chain-rules", 358_987_738),
+                self._relay("shekyl-mempool", 358_987_738),
+            ]
+        )
+
+        rc, report = _run_compare(base, pr)
+        self.assertEqual(rc, 1)
+        s = report["summary"]
+        self.assertEqual(len(s["missing_in_pr"]), 1)
+        self.assertEqual(len(s["added_in_pr"]), 2)
+        self.assertEqual(s["moved"], [])
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1,10 +1,8 @@
 # Copyright (c) 2025-2026, The Shekyl Foundation
 # BuildRust.cmake -- Integrate Cargo workspace into CMake build
 #
-# Two cargo products: the static library `libshekyl_ffi.a` that the C++
-# tests and debug utilities link, and the Rust binaries — the daemon
-# `shekyld` (DAEMON_CONFIG_CUTOVER.md DC-Q19; all Rust since
-# P2P_3_REMNANT_CUTOVER_BRIEF.md) and the wallet binaries `shekyl-cli` and
+# One cargo product: the Rust binaries — the daemon `shekyld`
+# (DAEMON_CONFIG_CUTOVER.md DC-Q19) and the wallet binaries `shekyl-cli` and
 # `shekyl-wallet-rpc`. Supports native builds and cross-compilation
 # (detected via CMAKE_SYSTEM_NAME).
 
@@ -13,7 +11,6 @@ find_program(CARGO_EXECUTABLE cargo HINTS "$ENV{HOME}/.cargo/bin")
 if(NOT CARGO_EXECUTABLE)
     message(STATUS "Cargo not found -- Rust modules will not be built")
     set(SHEKYL_RUST_ENABLED OFF CACHE INTERNAL "Whether Rust workspace build is enabled" FORCE)
-    set(SHEKYL_FFI_LINK_LIBS "" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
     return()
 endif()
 
@@ -100,15 +97,6 @@ else()
     set(RUST_BUILD_DIR "${RUST_SOURCE_DIR}/target/${RUST_PROFILE}")
 endif()
 
-# Determine library name: .a on Unix, .lib on MSVC, .a with mingw
-if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT MSVC)
-    set(SHEKYL_FFI_LIBRARY "${RUST_BUILD_DIR}/libshekyl_ffi.a")
-elseif(MSVC)
-    set(SHEKYL_FFI_LIBRARY "${RUST_BUILD_DIR}/shekyl_ffi.lib")
-else()
-    set(SHEKYL_FFI_LIBRARY "${RUST_BUILD_DIR}/libshekyl_ffi.a")
-endif()
-
 # Build the comment string
 if(RUST_TARGET_TRIPLE)
     set(_rust_comment "Building Shekyl Rust workspace for ${RUST_TARGET_TRIPLE}")
@@ -124,13 +112,12 @@ endif()
 set(_rust_env_clear
     "CC=" "CXX=" "CFLAGS=" "CXXFLAGS=" "LDFLAGS="
     "AR=" "RANLIB=" "NM="
-    # The library this file links is ${RUST_BUILD_DIR}/libshekyl_ffi.a, under
+    # The binaries this file stages are read from ${RUST_BUILD_DIR}, under
     # the workspace's own target directory. cargo builds wherever
     # CARGO_TARGET_DIR points, so a shell that exports it for Rust work would
-    # otherwise build the fresh library elsewhere while the link step picks up
-    # whatever stale copy sits at the linked path: a daemon with new C++ over
-    # old Rust, and nothing to say so. The variable is pinned here to the
-    # path the link reads.
+    # otherwise build the fresh binaries elsewhere while the staging step
+    # copies whatever stale ones sit at the read path, and nothing would say
+    # so. The variable is pinned here to the path the staging reads.
     "CARGO_TARGET_DIR=${RUST_SOURCE_DIR}/target"
 )
 
@@ -206,7 +193,7 @@ if(RUST_TARGET_TRIPLE AND CMAKE_C_COMPILER AND NOT MSVC)
         # it after the forwarded flags is what takes effect.
         #
         # Deliberately aarch64-only: forcing 10.16 on x86_64 would raise
-        # that binary's floor from the 10.15 the C++ side ships to 11.0,
+        # that binary's floor from the 10.15 it ships at to 11.0,
         # dropping macOS versions still supported elsewhere in the build.
         # On arm64 it costs nothing, 11.0 being the floor already.
         if(RUST_TARGET_TRIPLE STREQUAL "aarch64-apple-darwin")
@@ -257,113 +244,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_CROSSCOMPILING)
     endif()
 endif()
 
-# ── Source-change tracking for the cargo custom commands ─────────────────────
 #
-# Each static-library cargo invocation below is wrapped in an
-# `add_custom_command(OUTPUT …)`. The wallet binaries are a custom
-# target that runs on every build: their release string is an
-# environment variable, and an OUTPUT rule skips cargo when the binary
-# is newer than its sources.
-#
-# Without an explicit `DEPENDS` list on a static library, the generator
-# (Ninja/Make) treats the output `.a` as up-to-date for as long as the
-# file exists on disk — it never re-invokes cargo when a source under
-# `rust/` changes. The result is a silently stale archive: the C++ side
-# relinks against a `libshekyl_*.a` that predates the current Rust
-# sources, which is exactly the failure that linked a month-old FFI into
-# the daemon.
-#
-# The dependency set below tracks the inputs that live under `rust/`: every
-# `.rs`, every `Cargo.toml`, the lockfile, `.md` files (which feed the build
-# via `#![doc = include_str!("../README.md")]`), and `.cargo/config.toml`.
-# The globs do not see a dot-directory, so the cargo config is named
-# explicitly. It is the +crt-static flag for the MSVC targets; cargo
-# fingerprints it only once cargo runs, and this list is what makes CMake
-# run cargo. Without it an incremental build keeps archives linked to the
-# dynamic CRT.
-#
-# The set is deliberately *not* a complete model of cargo's inputs —
-# `include_str!` / `include_bytes!` targets that live outside `rust/`
-# (e.g. test vectors under `docs/`, `config/*.json`) are not tracked here.
-# Those are test/doc inputs that affect test binaries and rustdoc, not the
-# linked production archive this file builds (shekyl-ffi), whose
-# `include_*!` uses are confined to `#[cfg(test)]`. A tracked change still
-# triggers a cargo run, and cargo's own fingerprinting then re-checks the
-# full input set and decides whether to rewrite the archive (so a no-op
-# change does not force a C++ relink). The binaries are not in this list's
-# reach: their target runs cargo on every build and cargo's fingerprint
-# decides.
-#
-# `CONFIGURE_DEPENDS` makes the generator re-glob at build time, so newly added
-# source files are picked up without a manual re-configure. The `/target/`
-# filter keeps cargo's own build artifacts out of the dependency set.
-file(GLOB_RECURSE _shekyl_rust_sources CONFIGURE_DEPENDS
-    "${RUST_SOURCE_DIR}/*.rs"
-    "${RUST_SOURCE_DIR}/*.md"
-)
-list(FILTER _shekyl_rust_sources EXCLUDE REGEX "/target/")
-file(GLOB_RECURSE _shekyl_rust_manifests CONFIGURE_DEPENDS "${RUST_SOURCE_DIR}/*Cargo.toml")
-list(FILTER _shekyl_rust_manifests EXCLUDE REGEX "/target/")
-set(_shekyl_rust_deps
-    ${_shekyl_rust_sources}
-    ${_shekyl_rust_manifests}
-    "${RUST_SOURCE_DIR}/Cargo.lock"
-    "${RUST_SOURCE_DIR}/.cargo/config.toml"
-)
-
-# ── shekyl-ffi (crypto, staking, economics, logging — the wallet-side image) ─
-#
-# `shekyl-ffi` folds in the `shekyl-logging` crate (see its Cargo.toml), so
-# `libshekyl_ffi.a` carries the full `shekyl_log_*` C ABI consumed by
-# `contrib/epee/include/misc_log_ex.h` alongside the crypto/wallet FFI — one
-# Rust image, one `tracing-core` GLOBAL_DISPATCH, per the single-image
-# contract (V3_WALLET_DECISION_LOG.md). There is no standalone
-# `libshekyl_logging.a` in the link anywhere; a second archive would carry a
-# second dispatcher and silently drop the other image's tracing events.
-
-add_custom_command(
-    OUTPUT ${SHEKYL_FFI_LIBRARY}
-    COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
-        ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
-        -p shekyl-ffi
-    WORKING_DIRECTORY ${RUST_SOURCE_DIR}
-    DEPENDS ${_shekyl_rust_deps}
-    COMMENT "${_rust_comment} (shekyl-ffi + shekyl-fcmp + shekyl-logging)"
-    VERBATIM
-)
-
-add_custom_target(shekyl_rust ALL DEPENDS ${SHEKYL_FFI_LIBRARY})
-
-add_library(shekyl_ffi STATIC IMPORTED GLOBAL)
-set_target_properties(shekyl_ffi PROPERTIES
-    IMPORTED_LOCATION ${SHEKYL_FFI_LIBRARY}
-)
-add_dependencies(shekyl_ffi shekyl_rust)
-
-# ── The Rust archive's platform tail, for every C++ consumer ─────────────────
-#
-# `SHEKYL_FFI_LINK_LIBS` propagates transitively through the static
-# libraries (cryptonote_basic lists it), so every C++ binary that links
-# them — the tests and the debug utilities — gets the one Rust archive plus
-# the system libraries its code needs. The daemon is not one of those
-# binaries: `shekyld` is a Rust binary (below) that links no C++ at all.
-#
-# The platform tail stays at the end of the list to preserve the
-# left-to-right link-order semantics GNU ld applies to static archives.
-if(UNIX AND NOT APPLE)
-    # `m` (libm): the Rust archive contains `f64` math the compiler lowers to
-    # libm calls (e.g. `log10` in shekyl-relay-privacy, reachable from the
-    # relay FFI exports' link closure). C++ binaries usually inherit libm
-    # through libstdc++, but plain-C consumers (tests/crypto) do not — the
-    # dependency belongs here, on the archive that owns it, not on each
-    # consumer's link line.
-    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;m;pthread;dl" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
-elseif(APPLE)
-    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;-framework Security;-framework CoreFoundation" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
-else()
-    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
-endif()
-
 # ── Rust binaries: shekyld, shekyl-cli, shekyl-wallet-rpc ───────────────────
 #
 # `shekyld` is a Rust binary (DC-Q19) with no C++ in its link since the p2p
@@ -379,10 +260,6 @@ endif()
 # `shekyl-wallet-rpc` in `bin/` was the C++ `wallet_rpc_server` wearing that
 # OUTPUT_NAME, and `shekyl-cli` — which INSTALLATION_GUIDE.md has always
 # listed as a build output — did not exist.
-#
-# The binaries are built and staged here, not in `src/wallet/CMakeLists.txt`,
-# because that file was deleted wholesale with wallet2 at Phase 5: install
-# rules parked there would have had to be re-cut by that commit.
 #
 # Staging into `${CMAKE_BINARY_DIR}/bin` is load-bearing beyond developer
 # convenience: contrib/gitian/gitian-*.yml does not run `make install`, it
@@ -421,9 +298,8 @@ if(NOT IOS)
         set(_shekyl_rust_bins shekyld shekyl-cli shekyl-wallet-rpc)
     endif()
 
-    # Match where the C++ executables land (src/CMakeLists.txt sets
-    # RUNTIME_OUTPUT_DIRECTORY to ${CMAKE_BINARY_DIR}/bin, which multi-config
-    # generators suffix with the config).
+    # Staged in ${CMAKE_BINARY_DIR}/bin, which multi-config generators
+    # suffix with the config.
     if(CMAKE_CONFIGURATION_TYPES)
         set(_shekyl_rust_bin_dir "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
     else()
@@ -497,9 +373,6 @@ if(NOT IOS)
     #
     # Note the Rust profile is chosen at configure time from
     # CMAKE_BUILD_TYPE (see RUST_PROFILE above) and is therefore shared by
-    # every config a multi-config generator builds. That predates this block
-    # — SHEKYL_FFI_LIBRARY resolves the same way — so it is left alone here
-    # rather than fixed for the binaries only, which would leave the
-    # staticlibs and the binaries disagreeing about what `--config` means.
+    # every config a multi-config generator builds.
     install(PROGRAMS ${_shekyl_rust_bin_staged} DESTINATION bin)
 endif()

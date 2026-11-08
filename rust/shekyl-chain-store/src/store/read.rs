@@ -533,8 +533,8 @@ impl ReadSnapshot<'_> {
     /// (`LmdbHashKey`) order — the `spent_keys` scan E2's
     /// `logical_state_digest_v0` needs (SCR-11), and the only consumer
     /// named. Replaces `for_all_key_images`. The digest is order-insensitive
-    /// (`chain_digest_ffi.rs:29`–`:30`, "in any order"); no consumer may
-    /// depend on the order this yields.
+    /// ([`crate::digest_v0::spent_accumulator`] is order-independent by
+    /// construction); no consumer may depend on the order this yields.
     ///
     /// # Errors
     ///

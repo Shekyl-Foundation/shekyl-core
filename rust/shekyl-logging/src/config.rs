@@ -14,6 +14,8 @@ use std::path::PathBuf;
 
 use tracing::Level;
 
+use crate::filter::Directive;
+
 /// Rotation policy for the file sink.
 ///
 /// Four shapes:
@@ -24,10 +26,8 @@ use tracing::Level;
 ///   driven by `tracing_appender` upstream. See the "`0600` caveat"
 ///   section below.
 /// - [`Rotation::Size`] — size-based rotation driven by `shekyl-logging`
-///   itself. Preserves the legacy C++ behavior installed by the
-///   easylogging++ `MaxLogFileSize` + `installPreRollOutCallback` pair
-///   (see `contrib/epee/src/mlog.cpp`). `0600` is re-enforced across
-///   every rename and every newly opened live file.
+///   itself. `0600` is re-enforced across every rename and every newly
+///   opened live file.
 ///
 /// # POSIX `0600` discipline and rotation
 ///
@@ -43,8 +43,8 @@ use tracing::Level;
 /// therefore inherit the process umask (typically `0644`) until another
 /// init, another sweep, or a rotation-aware wrapper runs. **Do not use
 /// these variants when the `0600` discipline must hold for the lifetime
-/// of the process;** prefer [`Rotation::Size`] (which is the variant
-/// the C++ daemon default sink uses) or [`Rotation::Never`].
+/// of the process;** prefer [`Rotation::Size`] (the daemon's sink,
+/// through [`FileSink::within_budget`]) or [`Rotation::Never`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rotation {
     /// No automatic rotation. The file grows unboundedly, and
@@ -59,9 +59,8 @@ pub enum Rotation {
     Daily,
     /// Size-based rotation. When the active file reaches `max_bytes`
     /// the writer closes it, renames it to `{filename_prefix}-{UTC}`
-    /// using the `%Y-%m-%d-%H-%M-%S` format (matching the legacy C++
-    /// `generate_log_filename`), re-enforces `0600` on the rotated
-    /// file, and opens a fresh active file (also `0600`).
+    /// using the `%Y-%m-%d-%H-%M-%S` format, re-enforces `0600` on the
+    /// rotated file, and opens a fresh active file (also `0600`).
     ///
     /// When `max_files > 0`, the rename step is followed by a prune
     /// pass that sorts every prefix-matching file (excluding the live
@@ -70,8 +69,7 @@ pub enum Rotation {
     /// exceed `max_files`. Steady state: `max_files` total files
     /// resident in the directory.
     ///
-    /// `max_bytes == 0` disables the size check entirely and is
-    /// accepted for symmetry with the legacy C++ API; callers that
+    /// `max_bytes == 0` disables the size check entirely; callers that
     /// want "no cap" should prefer [`Rotation::Never`] which is a
     /// cheaper code path.
     Size {
@@ -146,13 +144,11 @@ impl FileSink {
         }
     }
 
-    /// A file sink with size-based rotation. Intended for the C++
-    /// daemon default (100 MB per file, 50 files total) and other
-    /// long-running binaries where the operator wants bounded
-    /// on-disk footprint.
+    /// A file sink with size-based rotation, for long-running binaries
+    /// where the operator wants a bounded on-disk footprint
+    /// ([`Self::within_budget`] builds the daemon's).
     ///
-    /// Rotation semantics mirror the legacy easylogging++ behavior:
-    /// when the active file reaches `max_bytes`, it is renamed to
+    /// When the active file reaches `max_bytes`, it is renamed to
     /// `{filename_prefix}-{UTC %Y-%m-%d-%H-%M-%S}`, the sibling-count
     /// is capped at `max_files - 1`, and a fresh active file is
     /// opened at `{filename_prefix}`. See [`Rotation::Size`] for the
@@ -183,10 +179,10 @@ impl FileSink {
 pub struct Config {
     /// Filter level applied when no `SHEKYL_LOG` env var is set.
     ///
-    /// Passed through to the legacy translator's `fallback_default`
-    /// argument so that unset `SHEKYL_LOG` at startup produces an explicit
-    /// bare-level directive instead of the "empty directive => no filter"
-    /// landmine described in the crate README.
+    /// An unset `SHEKYL_LOG` at startup produces an explicit bare-level
+    /// directive from this ([`crate::filter::resolve_env_filter`]) instead
+    /// of the "empty directive => no filter" landmine described in the
+    /// crate README.
     pub fallback_default: Level,
 
     /// Optional file sink.
@@ -202,23 +198,15 @@ pub struct Config {
     /// * `shekyld` — the Rust `main()` builds [`FileSink::within_budget`]
     ///   from the logging section, so the live file and its archives
     ///   share one byte budget.
-    ///
-    /// The C++ remnant does not consume this struct. `shekyl_log_init_file`
-    /// (see `rust/shekyl-logging/src/ffi.rs`) still constructs a
-    /// [`FileSink::size_rolling`] sink from the `MAX_LOG_FILE_SIZE` /
-    /// `MAX_LOG_FILES` constants in `contrib/epee/include/misc_log_ex.h`,
-    /// and that rotation stays a file count. Integrators mirroring that
-    /// count should therefore construct
-    /// `FileSink::size_rolling(directory, filename_prefix, max_bytes,
-    /// max_files)` with a directory under `~/.shekyl/logs/` rather than
-    /// reaching for `FileSink::daily`.
     pub file_sink: Option<FileSink>,
 
-    /// An explicit `EnvFilter` directive. When set, it is the filter and
-    /// the environment is not read: the daemon's configuration owns its
-    /// filter (`INPUT_GRAMMAR.md` IG-13, `log-level` and `log-category`).
-    /// `None` keeps the `SHEKYL_LOG` precedence the wallet binaries use.
-    pub directive: Option<String>,
+    /// An explicit filter directive. When set, it is the filter and the
+    /// environment is not read: the daemon's configuration owns its filter
+    /// (`INPUT_GRAMMAR.md` IG-13, `log-level` and `log-category`). `None`
+    /// keeps the `SHEKYL_LOG` precedence the wallet binaries use. The
+    /// value is a [`Directive`], so a retired target was refused when the
+    /// directive was parsed.
+    pub directive: Option<Directive>,
 }
 
 impl Config {
@@ -237,8 +225,8 @@ impl Config {
     /// The same configuration with an explicit filter directive, built by
     /// [`crate::subsystem::directive`] or its words form.
     #[must_use]
-    pub fn with_directive(mut self, directive: impl Into<String>) -> Self {
-        self.directive = Some(directive.into());
+    pub fn with_directive(mut self, directive: Directive) -> Self {
+        self.directive = Some(directive);
         self
     }
 
