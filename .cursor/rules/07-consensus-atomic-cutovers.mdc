@@ -219,6 +219,12 @@ Approved:
   at `4456a63cd`. One mixer or the nodes name one transaction two ways.
   LMDB 15 → 16, redb schema 20 → 21. Enumeration: the six greps in the
   PR description. Rollback: revert the merge; both stores refuse at open.
+- **Block-weight surge factor 4 → 3** (C2-R2 Q3 re-signed 2026-11-08) —
+  PR #1323; merge and archive recorded when it lands. A node at S = 4
+  accepts a block over `2·3·LTEM` that a node at S = 3 refuses; the value
+  is one generated key, so there is no intermediate both accept.
+  Enumeration: the greps in the PR description at `08cbc7310d`. Rollback:
+  revert the consensus commit named there (the PR lists each file).
 
 Lessons the next invocation inherits:
 
