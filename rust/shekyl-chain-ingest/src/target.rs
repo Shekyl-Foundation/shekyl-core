@@ -50,17 +50,16 @@
 //! at exactly this height (`ObserveTarget`), so the halt is always the
 //! writer's own observation of its own store.
 //!
-//! **A D6 refusal is the claim's verdict.** When the derivation itself
-//! refuses (CEN-D6: the algorithm derived zero), `validate` would refuse
-//! the block on the same headers. There is no target to claim, and the
-//! driver emits that refusal as the block's verdict without forming it.
+//! Every derivation over a consistent window yields a target: LWMA-1
+//! floors at one, so CEN-D6 has nothing to refuse (`DAA_LWMA1.md` §5.3
+//! step 10).
 
 use core::convert::Infallible;
 use std::collections::BTreeMap;
 
 use shekyl_chain_rules::{
     cumulative_difficulty_after, target_claim, AtHeight, Corrupt, Fault, HeaderRecord, HeaderView,
-    RuleSet, Target, Tip, Verdict, REFERENCE_BLOCK_MAX_AGE,
+    RuleSet, Target, Tip, REFERENCE_BLOCK_MAX_AGE,
 };
 use shekyl_difficulty::N_USIZE;
 use shekyl_types::BlockHeight;
@@ -128,13 +127,9 @@ impl TargetLedger {
     /// least one to their parent's work, so a decrease involves a record the
     /// store supplied — the caller has the writer re-derive over its own
     /// view, which halts on the same observation (`refuse_corrupt`).
-    pub fn claim(
-        &self,
-        connecting: BlockHeight,
-        rule_set: &RuleSet,
-    ) -> Result<Verdict<Target>, Corrupt> {
+    pub fn claim(&self, connecting: BlockHeight, rule_set: &RuleSet) -> Result<Target, Corrupt> {
         match target_claim(self, connecting, rule_set) {
-            Ok(verdict) => Ok(verdict),
+            Ok(target) => Ok(target),
             Err(Fault::View(never)) => match never {},
             Err(Fault::Corrupt(corrupt)) => Err(corrupt),
             Err(Fault::Stale(stale)) => unreachable!("a derivation is never stale: {stale}"),
@@ -258,10 +253,7 @@ mod tests {
         assert!(ledger.missing_for(h(0)).is_empty());
         assert_eq!(
             ledger.claim(h(0), &RuleSet::GENESIS),
-            Ok(Ok(expected_target(
-                &MockChain::default(),
-                &RuleSet::GENESIS
-            )))
+            Ok(expected_target(&MockChain::default(), &RuleSet::GENESIS))
         );
     }
 
@@ -296,10 +288,7 @@ mod tests {
     fn extend_adds_the_claimed_target_to_the_parents_work() {
         let mut ledger = TargetLedger::new();
         ledger.record(h(4), record_at(1_000));
-        let target = ledger
-            .claim(h(5), &RuleSet::GENESIS)
-            .expect("consistent")
-            .expect("a target");
+        let target = ledger.claim(h(5), &RuleSet::GENESIS).expect("consistent");
         let block = candidate(Vec::new()).block;
         ledger.extend(h(5), &block, target).expect("consistent");
         let AtHeight::Recorded(extended) = ledger.header_at(h(5)).expect("infallible") else {
