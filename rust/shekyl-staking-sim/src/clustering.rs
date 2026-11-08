@@ -77,22 +77,24 @@ use crate::rng::SplitMix64;
 use serde::Serialize;
 
 use crate::model::{g_age, AGE_WEIGHT};
+use crate::scenarios;
 
 // ===========================================================================
 // Grounded constants. `AGE_WEIGHT` is the production slope (`model::AGE_WEIGHT`).
-// The rest are the baseline scenario's shape (`scenarios.rs`), retyped so this
-// harness sits on the same substrate. Per-shard `phi` is the one term not in
-// the protocol — the injected sensitivity axis.
+// The rest are the baseline scenario's shape, read from `scenarios.rs`'s named
+// baseline values so this harness sits on the same substrate (Appendix B, R19).
+// Per-shard `phi` is the one term not in the protocol — the injected
+// sensitivity axis.
 // ===========================================================================
 
 /// `age ≥ deep_threshold` ⇒ deep history ⇒ requires a retention bond.
-const DEEP_THRESHOLD: f64 = 0.5;
+const DEEP_THRESHOLD: f64 = scenarios::BASELINE_DEEP_THRESHOLD;
 /// Flat per-deep-shard bond (mid rung).
-const BOND_RATE: f64 = 2.0;
+const BOND_RATE: f64 = scenarios::BASELINE_BOND_RATE;
 /// Flow cost per held shard (storage/bandwidth) — uniform across shards (protocol).
-const STORAGE_UNIT_COST: f64 = 0.03;
+const STORAGE_UNIT_COST: f64 = scenarios::BASELINE_STORAGE_UNIT_COST;
 /// Flow opportunity cost of capital locked in one deep-shard bond.
-const BOND_CARRY: f64 = 0.03;
+const BOND_CARRY: f64 = scenarios::BASELINE_BOND_CARRY;
 /// Reward scale (arbitrary; cancels in every ratio). Sets `value = SCALE/R·g(age)`.
 const REWARD_SCALE: f64 = 1.0;
 /// Storage units a deep shard occupies (iteration-1 uniform value).
@@ -118,8 +120,8 @@ impl Archetype {
     /// `(storage_capacity, capital)` per the baseline scenario.
     fn endowment(self) -> (usize, f64) {
         match self {
-            Archetype::StorageRich => (22, 20.0),
-            Archetype::CapitalRich => (10, 100.0),
+            Archetype::StorageRich => scenarios::BASELINE_STORAGE_RICH,
+            Archetype::CapitalRich => scenarios::BASELINE_CAPITAL_RICH,
         }
     }
 }

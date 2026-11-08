@@ -13,7 +13,9 @@ use crate::fingerprint::{force_deep_portfolio, Ta1Metrics, Ta1Recorder, SEB_DEFA
 use crate::metrics::{
     churn_rate, coverage, coverage_with_r, size_band_under, CoverageMetrics, TargetParams, N_BANDS,
 };
-use crate::model::{r_target, Actor, CompositionParams, EraShape, Shard, World, AGE_WEIGHT};
+use crate::model::{
+    r_target, Actor, CompositionParams, EraShape, Shard, World, AGE_WEIGHT, BOND_FLOOR,
+};
 use crate::participation::{
     admit_entrants, bonded_active_count, foundation_floor_aged, process_exits, ParticipationParams,
 };
@@ -2049,6 +2051,25 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
 /// The high-bond sweep is where capital binds and the empty-window threat (bond high
 /// enough to deter the whale but high enough to price out storage-rich archivers)
 /// surfaces.
+/// The baseline world's values that other harnesses share. Named once here
+/// so `clustering.rs` and the L16 constants read the baseline rather than
+/// retyping it (Appendix B, R19).
+pub(crate) const BASELINE_STORAGE_RICH: (usize, f64) = (22, 20.0);
+pub(crate) const BASELINE_CAPITAL_RICH: (usize, f64) = (10, 100.0);
+pub(crate) const BASELINE_STORAGE_UNIT_COST: f64 = 0.03;
+/// Above the production floor ([`crate::model::BOND_FLOOR`], 0.75): a
+/// declared arm, calibrated against the abstract purse (Appendix B, R8). Its
+/// derivation is repeated at the coupling half.
+pub(crate) const BASELINE_BOND_RATE: f64 = 2.0;
+const _: () = assert!(
+    BASELINE_BOND_RATE > BOND_FLOOR,
+    "the baseline bond is declared above the floor"
+);
+pub(crate) const BASELINE_BOND_CARRY: f64 = 0.03;
+pub(crate) const BASELINE_DEEP_THRESHOLD: f64 = 0.5;
+pub(crate) const BASELINE_TRANSPORT_U_BASE: f64 = 0.9;
+pub(crate) const BASELINE_TRANSPORT_U_K: f64 = 0.07;
+
 pub(crate) fn baseline() -> SimConfig {
     SimConfig {
         name: "baseline".into(),
@@ -2058,10 +2079,10 @@ pub(crate) fn baseline() -> SimConfig {
         age_skew: 1.0, // uniform age distribution
         storage_scale: 1.0,
         frac_storage_rich: 0.5,
-        storage_rich_storage: 22,
-        storage_rich_capital: 20.0,
-        capital_rich_storage: 10,
-        capital_rich_capital: 100.0,
+        storage_rich_storage: BASELINE_STORAGE_RICH.0,
+        storage_rich_capital: BASELINE_STORAGE_RICH.1,
+        capital_rich_storage: BASELINE_CAPITAL_RICH.0,
+        capital_rich_capital: BASELINE_CAPITAL_RICH.1,
         whale: false,
         whale_storage: 150,
         whale_capital: 600.0,
@@ -2072,11 +2093,11 @@ pub(crate) fn baseline() -> SimConfig {
         // Authoritative backend by default (the canonical minting arithmetic);
         // main overrides per `--curve-impl`. Float is opt-in exploration only.
         curve_impl: CurveImpl::Integer,
-        storage_unit_cost: 0.03,
-        bond_rate: 2.0,      // mid
-        bond_age_scale: 0.0, // flat bond is the iteration-1 baseline (L4 sweep varies it)
-        bond_carry: 0.03,
-        deep_threshold: 0.5,
+        storage_unit_cost: BASELINE_STORAGE_UNIT_COST,
+        bond_rate: BASELINE_BOND_RATE, // mid
+        bond_age_scale: 0.0,           // flat bond is the iteration-1 baseline (L4 sweep varies it)
+        bond_carry: BASELINE_BOND_CARRY,
+        deep_threshold: BASELINE_DEEP_THRESHOLD,
         deep_shard_size: 1.0, // one unit per shard = iteration-1 behavior
         size_spread: 1.0,     // flat composition = every pre-F34 scenario, byte-identical
         size_decorrelated: false,
@@ -2172,8 +2193,8 @@ pub(crate) fn baseline() -> SimConfig {
         // scenarios opt in. Defaults: 90% baseline uptime, depression k=0.07 per epoch
         // of deep fetch latency (the onion-rendezvous operating band L2–L6).
         transport_model: false,
-        transport_u_base: 0.9,
-        transport_u_k: 0.07,
+        transport_u_base: BASELINE_TRANSPORT_U_BASE,
+        transport_u_k: BASELINE_TRANSPORT_U_K,
         ta1_model: false,
         settlement_epoch_blocks: SEB_DEFAULT,
         blocks_per_sim_epoch: 2000,
@@ -3434,7 +3455,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // SEB=10_000; 500 sim epochs × 2000 blocks/epoch = 1M blocks ⇒ 100 settlement epochs.
     let ta1_hygiene_base = || {
         let mut c = gate4_fine_base();
-        c.bond_rate = 0.75;
+        c.bond_rate = BOND_FLOOR;
         c.dynamic = true;
         c.epoch_aging = 0.05;
         c.epochs = 800;
@@ -3531,7 +3552,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // (same fixed seed ⇒ numerically identical) as the in-table cross-check. ---
     let layer2_base = || {
         let mut c = gate4_fine_base();
-        c.bond_rate = 0.75;
+        c.bond_rate = BOND_FLOOR;
         c
     };
     for g in [1.5_f64, 2.0, 2.5, 3.0, 3.5, 4.0] {
@@ -3552,7 +3573,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         let mut cc = gate4_fine_coloc_base();
         cc.name = format!("layer2_coloc_g{label}");
         cc.axis = "layer2_band_coloc".into();
-        cc.bond_rate = 0.75;
+        cc.bond_rate = BOND_FLOOR;
         cc.age_weight = g;
         out.push(cc);
     }
@@ -3582,7 +3603,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         let mut c = gate4_fine_coloc_base();
         c.name = format!("layer2_colocbud_g{g:.1}_b130");
         c.axis = "layer2_colocbud".into();
-        c.bond_rate = 0.75;
+        c.bond_rate = BOND_FLOOR;
         c.age_weight = g;
         c.budget = 130.0;
         out.push(c);
@@ -3611,7 +3632,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // give the L13 adaptive purse a 130 ceiling (the Layer-2 +30 % static image).
     let swan_base = || {
         let mut c = l11_base();
-        c.bond_rate = 0.75; // the gate-4 pin (genesis economics, not baseline 2.0)
+        c.bond_rate = BOND_FLOOR; // the gate-4 pin (genesis economics, not baseline 2.0)
         c.dynamic = true;
         c.epoch_aging = 0.05;
         c.init_active_frac = 1.0; // mature healthy network when the shock lands
@@ -3759,7 +3780,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         let mut c = l13_base();
         c.name = "swan2_knee_cascade".into();
         c.axis = "swan2_knee".into();
-        c.bond_rate = 0.75; // pinned genesis economics, as the swan worlds
+        c.bond_rate = BOND_FLOOR; // pinned genesis economics, as the swan worlds
         c.budget_floor = 80.0;
         c.epochs = 240;
         c.shock_at = 150;

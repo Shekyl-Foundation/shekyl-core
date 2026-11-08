@@ -587,6 +587,13 @@ impl World {
     }
 }
 
+/// The production bond floor in model units: `archival_params()`'s
+/// `bond_floor_atomic` at one model unit per SKL (Appendix B, Units), so 0.75.
+/// The lean and gate-4 pins run at it; the baseline's `bond_rate` 2.0 is a
+/// declared arm above it.
+pub const BOND_FLOOR: f64 = shekyl_archival_retention::archival_params().bond_floor_atomic as f64
+    / shekyl_units::ATOMIC_UNITS_PER_SKL as f64;
+
 /// Production age-weight slope, in the units [`g_age`] takes.
 ///
 /// `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI / WORK_MILLI_SCALE`. The milli constant
@@ -908,5 +915,13 @@ mod tests {
         inactive.cooling[0].push((10.0, 2));
         inactive.active[0] = false;
         assert!(!inactive.freeze_blocks_recoverage(0, 10.0));
+    }
+
+    /// The floor the sim reads is production's, at one model unit per SKL.
+    #[test]
+    fn bond_floor_is_production_floor_in_skl() {
+        let atomic = shekyl_archival_retention::archival_params().bond_floor_atomic;
+        assert_eq!(atomic, 750_000_000);
+        assert_eq!(BOND_FLOOR, 0.75);
     }
 }
