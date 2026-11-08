@@ -124,28 +124,94 @@ pub fn fatal(cause: EndCause) {
     latch(StopCause::Fatal(cause));
 }
 
+/// What the program that started this node asked of an interrupt (Rick,
+/// 2026-11-08: honour an inherited ignore on every platform, and say so).
+///
+/// A parent that starts a program in the background asks it to ignore an
+/// interrupt, so that one typed at the parent's terminal leaves it alone. The
+/// node keeps that request and says which stops work instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Interrupt {
+    /// The node owns the interrupt: `SIGINT` or Ctrl-C stops it.
+    Owned,
+    /// `SIGINT` was ignored when the node started. The node leaves it
+    /// ignored and does not open its stream.
+    #[cfg(unix)]
+    IgnoredByParent,
+}
+
+impl Interrupt {
+    /// The request, read before anything in the node installs a handler.
+    /// On Windows it cannot be read: the inherited "ignore Ctrl-C"
+    /// attribute has no documented getter, so the node owns Ctrl-C and
+    /// Windows delivers it or not.
+    #[must_use]
+    pub fn at_start() -> Self {
+        #[cfg(unix)]
+        if shekyl_process::interrupt::interrupt_ignored_at_start() {
+            return Self::IgnoredByParent;
+        }
+        Self::Owned
+    }
+
+    /// The line the start announces about it (IG-14). On Unix, only when
+    /// the parent asked for the interrupt to be ignored. On Windows always:
+    /// the node cannot tell, so it names the stops that work either way.
+    #[must_use]
+    pub fn announcement(self) -> Option<&'static str> {
+        #[cfg(unix)]
+        {
+            match self {
+                Self::Owned => None,
+                Self::IgnoredByParent => Some(
+                    "Ctrl-C is off because the program that started this node asked for it. \
+                     Stop it with SIGTERM or the service stop.",
+                ),
+            }
+        }
+        #[cfg(windows)]
+        {
+            let Self::Owned = self;
+            Some(
+                "Stop this node with Ctrl-Break or by closing its window. Ctrl-C stops it \
+                 too, unless the program that started it asked for Ctrl-C to be ignored, \
+                 which Windows does not let this node read.",
+            )
+        }
+    }
+}
+
 /// Install the owner of the operating system's stop triggers on `handle`:
 /// the streams are opened here, so a platform that refuses one refuses the
 /// start, and held by a task for the process's life. Clears the latch.
+/// `interrupt` is [`Interrupt::at_start`]: on Unix an interrupt the parent
+/// asked to ignore gets no stream, so its disposition stays `SIG_IGN`.
 ///
 /// # Errors
 /// The operating system refused a stream.
-pub fn own(handle: &tokio::runtime::Handle) -> std::io::Result<()> {
+pub fn own(handle: &tokio::runtime::Handle, interrupt: Interrupt) -> std::io::Result<()> {
     *STOP
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
-        let (mut interrupt, mut terminate) = handle.block_on(async {
-            Ok::<_, std::io::Error>((
-                signal(SignalKind::interrupt())?,
-                signal(SignalKind::terminate())?,
-            ))
+        let (interrupt, mut terminate) = handle.block_on(async {
+            let interrupt = match interrupt {
+                Interrupt::Owned => Some(signal(SignalKind::interrupt())?),
+                Interrupt::IgnoredByParent => None,
+            };
+            Ok::<_, std::io::Error>((interrupt, signal(SignalKind::terminate())?))
         })?;
         handle.spawn(async move {
+            let interrupted = async {
+                match interrupt {
+                    Some(mut stream) => stream.recv().await,
+                    None => std::future::pending().await,
+                }
+            };
             tokio::select! {
-                _ = interrupt.recv() => latch(StopCause::Signal(Signal::Interrupt)),
+                _ = interrupted => latch(StopCause::Signal(Signal::Interrupt)),
                 _ = terminate.recv() => latch(StopCause::Signal(Signal::Terminate)),
             }
         });
@@ -153,6 +219,7 @@ pub fn own(handle: &tokio::runtime::Handle) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_logoff, ctrl_shutdown};
+        let Interrupt::Owned = interrupt;
         let (mut c, mut brk, mut close, mut logoff, mut shutdown) = handle.block_on(async {
             Ok::<_, std::io::Error>((
                 ctrl_c()?,
@@ -223,7 +290,7 @@ mod tests {
         let _serial = crate::run::hold_process_table();
         let rt = runtime();
         request_stop();
-        own(rt.handle()).expect("own");
+        own(rt.handle(), Interrupt::Owned).expect("own");
         let waited = rt.block_on(async {
             tokio::time::timeout(std::time::Duration::from_millis(50), stop_requested()).await
         });
@@ -237,5 +304,35 @@ mod tests {
         assert_eq!(cause, StopCause::Requested);
         // Still latched: a second wait answers the same way.
         assert_eq!(rt.block_on(stop_requested()), cause);
+    }
+
+    /// What the start says about an interrupt. On Unix only an ignored
+    /// `SIGINT` is said, with the stop that works; on Windows the request
+    /// cannot be read, so every start names the stops that always work.
+    /// Red edits: say nothing on Windows, or say the Unix line when the node
+    /// owns `SIGINT`.
+    #[test]
+    fn the_start_names_the_stops_that_work() {
+        #[cfg(unix)]
+        {
+            assert_eq!(Interrupt::Owned.announcement(), None);
+            let line = Interrupt::IgnoredByParent
+                .announcement()
+                .expect("an ignored SIGINT is said");
+            assert!(
+                line.contains("Ctrl-C is off") && line.contains("SIGTERM"),
+                "{line}"
+            );
+        }
+        #[cfg(windows)]
+        {
+            let line = Interrupt::Owned
+                .announcement()
+                .expect("every Windows start names its stops");
+            assert!(
+                line.contains("Ctrl-Break") && line.contains("closing its window"),
+                "{line}"
+            );
+        }
     }
 }
