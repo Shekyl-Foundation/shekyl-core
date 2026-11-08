@@ -93,6 +93,23 @@ typed wrapper, never a scratch copy for the caller to wipe
   `getrandom`). Never seed from time, PID, or user input.
 - Never log, serialize to plaintext, or expose key material in error messages.
 
+### Failure looks like success
+
+The adversary is a caller or peer who sees the timing or the shape of a
+failure on a decryption, decapsulation or key-opening path: a wallet RPC
+caller, a handshake peer. ML-KEM's implicit rejection is the model: a
+failure looks like a success.
+
+- A function that takes a secret behaves the same on failure as on
+  success: the same work, and the same writes to its output. It writes the
+  output on every path (zeroed on failure) and returns a typed error after
+  the work, not before.
+- No early return and no branch on a condition that depends on a secret.
+  Secret-dependent selection and comparison use `subtle` (`Choice`,
+  `ConditionallySelectable`, `ConstantTimeEq`).
+- A check on a public input (a length, a version, a missing argument) may
+  return early: it depends on nothing secret.
+
 ## One domain string separates one context (SA-R-2)
 
 A domain-separation string does exactly one job. Two layers — a scheme
