@@ -211,10 +211,11 @@ mod os {
     pub fn assert_unhardened(control: Child) {
         let limit = core_limit(control.id());
         let (mut truss, attached) = truss_attaches(control.id(), Duration::from_secs(2));
-        end(control);
-        // The control is gone: truss reports its end and exits.
+        // truss first: ended by SIGKILL it detaches. A tracee killed under
+        // an attached truss makes truss abort and leave a core.
         drop(truss.kill());
         truss.wait().expect("reap truss");
+        end(control);
         assert!(
             !limit.0.starts_with("0 ") && !limit.1.starts_with("0 "),
             "the control's core limit is {limit:?}: this host gives no core \
