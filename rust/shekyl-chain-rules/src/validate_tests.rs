@@ -622,7 +622,7 @@ fn a_fakechain_rule_set_mints_at_genesis_with_d6_in_coverage() {
         assert!(valid.coverage().contains(CenRow::D6));
         assert_eq!(
             valid.block().target().difficulty(),
-            shekyl_difficulty::Difficulty::from_raw(1),
+            shekyl_difficulty::Difficulty::ONE,
             "height 0 is 1 under a fixed target"
         );
     });

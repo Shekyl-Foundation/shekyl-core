@@ -236,10 +236,6 @@ pub enum Corrupt {
     /// The parent's cumulative difficulty plus this block's target does not
     /// fit the type.
     ///
-    /// (A `ZeroTarget` arm lived here until 2026-09-20. Zero at the mint is
-    /// **not** a corrupt view — LWMA-1 has no output floor and a conforming
-    /// slow chain derives it — so it is CEN-D6's *refusal*, a verdict, and
-    /// no longer a fault: `rules::difficulty` module docs, DRS-E2 RD-F17.)
     CumulativeDifficultyOverflow,
     /// The recorded `cumulative_tx_count` **decreased** between two heights
     /// the volume window spans (CEN-F20). A prefix sum the store folds
