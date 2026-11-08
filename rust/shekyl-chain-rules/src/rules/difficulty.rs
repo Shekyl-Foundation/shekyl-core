@@ -68,7 +68,7 @@ use crate::rules::{recorded_header, Rule};
 use crate::view::HeaderView;
 
 /// The difficulty a candidate must satisfy, as the validator derived it
-/// (CEN-D4), **non-zero by its inner type** (CEN-D6): [`D6::mint`] is the
+/// (CEN-D4), **non-zero by its inner type** (CEN-D6): `D6::mint` is the
 /// one LWMA-1 → [`Target`] edge, and every path that already has a
 /// `Target` (genesis block, levered `Fixed`) still records CEN-D6 through
 /// [`D6::record`](D6::record) so coverage is complete under every rule
