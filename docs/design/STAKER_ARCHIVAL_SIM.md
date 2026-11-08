@@ -2904,6 +2904,113 @@ sync does). Rendezvous is the slowest configuration Tor has. The consequence for
   on the `L2–L6` curve; everything else in transport selection is downstream of it and does
   not change the sim. See ledger item L16.
 
+## EUP-3 check half — the sim against the staking code built so far (2026-11-08)
+
+The check half of the cycle (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §6):
+every place this crate restated or departed from settled production code
+is disposed in that document's Appendix B, and each Incorporate row calls
+its owner. The predictions below were committed before the code that
+grades them. Each outcome is written under its prediction.
+
+**Two reward arms.** `RewardArm::Production` is the default. It credits
+linear work on production's integer operands: `scarcity_micro` per held
+seated shard, summed in micro, floored once by `work_milli_from_micro`,
+gated by `credited_work_milli`, and paid by `reward_share_floor` from a
+purse that crosses into atomic units once. The dust stays unminted.
+`RewardArm::RegisteredPlateau` is the arm L11 and L13 were taken on: float
+work, the banded plateau at cap 8, the pseudonym split and a float price.
+Production deleted the plateau from the reward path (D3/R2), so that arm is
+on the retirement list. Until Rick rules on it, it is the falsifier's
+control: `l11_l13_five_seed_pins` runs it, and the pins must hold after
+every incorporation that does not touch the purse.
+
+**Units.** One model unit is one SKL. The bond floor is
+`archival_params().bond_floor_atomic`, 0.75 units. The baseline's
+`bond_rate` 2.0 is an above-floor arm, calibrated against the abstract
+purse. Its derivation is repeated at the coupling half.
+
+### Predictions (written 2026-11-08, before the incorporating commits)
+
+**P1, one SplitMix64 (`rng.rs`).** The four bodies are one function, so no
+stream moves. The five-seed vector holds bit for bit, and every crate test
+passes unchanged.
+
+**P2, the failure window and the counted draws (`--failure-confirmation`).**
+Before, at `d78000c45`: the default row runs 2 of 5 with one probe per
+epoch.
+- *Observation through `settle_pair`.* The micro-sim's availability is
+  per epoch, so all of a pair's counted draws pass or all fail, and the
+  verdict equals the old probe. No figure moves on this step alone.
+- *Default `(m, n)` 2/5 → 11/13 (`archival_params()`).* 11 of 13 is
+  already the tuned pick, so the default row's sliding transient false
+  slash falls from 0.588 to the tuned row's 0.002. Sliding volR falls from
+  1.74 to below 0.10 (the 10/12 row reads 0.08). The honest sliding slash
+  probability at every uptime falls from 1.000. It stays near 1 at u = 0.50
+  and falls furthest at u = 0.95. The dodge figures do not move (escalate
+  0.000, sliding 1.000): a dodge persona is never online without a
+  recheck, so it misses every epoch and crosses any `m ≤ n`. The explicit
+  window rows do not move.
+- *Free ride on the window.* At 11 of 13 a persona can miss 10 epochs of
+  every 13 and keep its bond: it earns nothing in a missed epoch, but its
+  slot is not freed. At 2 of 5 it could miss 1. That is a property of the
+  window, not a sim figure; it is reported here because the change makes
+  it 10× wider.
+- *Free ride on the counted draws.* A pair is Served at 2 passes of 3. At
+  per-draw failure rate `q` it is Missed with probability
+  `1 − (1−q)³ − 3q(1−q)²`: 0.028 at `q` = 0.1 and 0.156 at `q` = 0.25. A
+  persona can skip one draw in three at no cost. The micro-sim does not
+  model sub-epoch draws, so no sim figure carries this.
+- *Traffic.* The check counts `COUNTED_DRAWS` = 3 draws per pair per epoch,
+  not 1. Its fraction of the block budget triples, 0.00819 → 0.02458, and
+  stays below the 0.05 bar. The 300 000 is read as
+  `shekyl_economics::FULL_REWARD_ZONE`, a declared stand-in for the
+  budget, so that number does not change.
+
+**P3, the bond floor.** A declaration and a read; no figure moves.
+
+**P4, the reward arm (`RewardArm::Production`, the five-seed L11/L13
+vector).**
+- *What changes.* The plateau credited a storage-rich actor's work above
+  4 at half and above 8 at a quarter. That actor holds about 22 shards at
+  `g/r` near 0.4, so about 8.8 of work credited 6.2. Splitting into two
+  pseudonyms at 0.05 each recovered most of the gap, and the registered arm
+  splits. Linear credit pays the whole 8.8 with no split cost. Σ credited
+  work rises, so the price per unit of work falls, for every actor.
+- *Direction.* The agent ranks shards on `price · g / r` against storage
+  and carry costs, so a lower price drops the marginal (high-`r`,
+  low-`g`) holdings first. `cDeepU` rises slightly at the lean point and at
+  the L13 knee, by at most 0.05. `bondA` moves within ±3, below the five
+  seeds' own spread of 13 (L11) and 2.4 (L13 knee). `oUmx` stays within the
+  seed band. Capital-rich actors (10 slots, little work above 4) lose share,
+  and storage-rich actors gain it.
+- *The floor's dust.* `reward_share_floor` floors each member's share, so
+  each epoch leaves less than one atomic unit per credited member unminted:
+  under 240 atomic units of a 100-SKL purse (10¹¹ atomic), a part in 4×10⁸.
+  No printed figure moves by it.
+- *`r` counts seated holders* (R5). L11 and L13 have no fetch latency, so
+  seated equals committed there, and this alone moves nothing.
+
+**P5, A18: a slash burns the bond.** The sim's slash sites are the three
+L17 shock exits. A voluntary exit is a `Release`, which refunds, and the
+sim already left capital whole there.
+- On L11 and L13 no shock fires, so the capital burned over L13's 200
+  epochs is zero, and the five-seed vector holds on both arms. The run
+  counts the burn, so the zero is measured.
+- On the swan scenarios each shock-exited actor re-enters with its bonded
+  deep capital burned: up to `capital` for a capital-poor actor at its
+  bond limit. Post-shock `bondA` recovers more slowly, and recovery-time
+  figures rise.
+
+**P6, A7: a bond on every held shard (production) against deep shards
+only (the default).** Two production-shaped arms beside the default.
+- *Every held shard at 2.0.* A storage-rich actor (capital 20) bonds 10
+  shards in all instead of 10 deep plus 12 hot. Hot holdings collapse,
+  committed capital rises and yield falls. `cDeepU` rises well above the
+  deep-only arm, and `bondA` falls.
+- *Every held shard at the floor, 0.75.* Capital 20 bonds 26 shards, so
+  storage (22) binds before capital. Coverage lands near the deep-only
+  arm at 2.0, and the yield denominator is smaller.
+
 ## L14×L15 — proof-of-archival in harmony with retrieval (specification)
 
 *Specification first, code second (`05-system-thinking.mdc`). This section is the design
