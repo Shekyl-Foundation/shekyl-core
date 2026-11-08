@@ -5,7 +5,7 @@
 
 //! `flush` through the installed subscriber: it returns once every line
 //! logged before it is on the sink, and a stalled sink holds it to its
-//! deadline and no longer. The FFI's `shekyl_log_flush` answers the same.
+//! deadline and no longer.
 
 use std::io::Write;
 use std::sync::{Arc, Condvar, Mutex};
@@ -92,10 +92,9 @@ fn a_flush_waits_for_every_earlier_line_and_no_longer_than_its_deadline() {
     assert!(waited >= WITHIN, "returned before the deadline: {waited:?}");
     assert!(waited < GENEROUS, "held past the deadline: {waited:?}");
 
-    // The C entry point, on the same sinks.
+    // The sink takes writes again: the held line lands and the next flush
+    // finishes.
     set_gate(&gate, true);
-    // SAFETY: no pointer parameters.
-    let code = unsafe { shekyl_logging::ffi::shekyl_log_flush(30_000) };
-    assert_eq!(code, shekyl_logging::ffi::SHEKYL_LOG_OK);
+    assert_eq!(flush(GENEROUS), Flushed::Done);
     assert_eq!(count(&written, "flush-held"), 1);
 }

@@ -330,14 +330,7 @@ mod tests {
     /// without `refuse_corrupt` — `connect_state` stays live.
     #[test]
     fn a_corrupt_snapshot_arms_the_shared_halt_and_commits_nothing() {
-        let path = std::env::temp_dir().join(format!(
-            "shekyl-halt-on-corrupt-{}-{}.redb",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ));
+        let path = crate::test_support::tmp("halt-on-corrupt");
         let store = ChainStore::create(
             &path,
             SettlementEpochBlocks::new(10_000).expect("a non-zero epoch"),
@@ -372,8 +365,5 @@ mod tests {
         let tip = store.begin_read().expect("read").tip().expect("tip");
         assert!(tip.recorded.is_none(), "the arm committed no block");
         assert_eq!(tip.connect, store.connect_state());
-
-        drop(store);
-        std::fs::remove_file(&path).expect("remove the store");
     }
 }

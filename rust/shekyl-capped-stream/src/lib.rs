@@ -34,6 +34,6 @@ pub use session::{
     FrameSender, InboundEnd, QueueHold, SendHalf, Session, StreamEnds, UNREAD_FRAMES,
 };
 pub use stall::{process_write_stall, ProcessWriteStall, WriteStall};
-// The stall-check FFI reads these beside the gate. shekyl-ffi does not
-// depend on shekyl-transport-layer.
+// The gate's clock, re-exported beside it. No crate in the workspace reads
+// it through this path; readers import `shekyl_transport_layer` directly.
 pub use shekyl_transport_layer::{monotonic_ms, recv_mark_ms};

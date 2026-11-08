@@ -106,12 +106,11 @@ spec = [
   "rust/shekyl-fcmp/src",
   "rust/shekyl-fcmp-proofs/src",
   "rust/shekyl-oxide/crypto/fcmps",
-  "rust/shekyl-ffi/src/legacy_fcmp.rs",
-  "rust/shekyl-ffi/src/ct_balance_ffi.rs",
-  "rust/shekyl-ffi/src/legacy_core.rs",
+  "rust/shekyl-chain-rules/src/rules/proofs.rs",
+  "rust/shekyl-ct-balance/src",
+  "rust/shekyl-bulletproofs/src",
   "rust/shekyl-crypto-pq/src/signature.rs",
   "rust/shekyl-pow-randomx/src",
-  "src/fcmp/bulletproofs_plus.cc",
 ]
 stale_through = [
   { through = "20738bf714", note = "PL-D3: the leaf's fourth scalar becomes a Pedersen commitment opened in-circuit. The proof changed for every shape; its verify cost has not been re-measured on the floor." },
@@ -138,6 +137,9 @@ stale_through = [
   { through = "2236763308", note = "Windows clippy (#1293): in this path set, legacy_core.rs's Windows-only page_size passes GetSystemInfo a raw pointer written &raw mut info where it was an implicit borrow. Same call, same pointer; the line is cfg(windows) and the Linux floor never compiles it. No code path the block-verify capture priced changed. Not re-measured; the rows stay stale from PL-D3." },
   { through = "0d23fb567f", note = "A2 (alpha.11 bug hunt): in this path set, cache_store.rs gains CacheStore::release_transient, which empties the transient slot under its write lock; the ingest calls it when the seed window names one seed. No hash, derivation, verify or lookup path changed. Not re-measured; the rows stay stale from PL-D3." },
   { through = "a395a325a1", note = "A2's fix (#1301): CacheStore::release_transient becomes release(seedhash), which empties the transient slot only when it holds that seed. No hash, derivation, verify or lookup path changed. Not re-measured; the rows stay stale from PL-D3." },
+  { through = "50e942a480", note = "C++ removal (#1299): in this path set, signature.rs loses sign_pqc_auth and sign_multisig_participant, the two sign entry points only shekyl-ffi called. The nested verify, the scheme domains and every signing path a caller still uses are unchanged, so nothing the capture priced has moved." },
+  { through = "682d97049c", note = "C++ removal (#1299): one module-doc paragraph in shekyl-fcmp's frost_sal.rs, naming the FOLLOWUPS rows that track the multisig spend path. Comment only; no code path changed, and nothing the capture priced has moved." },
+  { through = "c42ef64a2d", note = "C++ removal (#1299): comments only in shekyl-crypto-pq signature.rs, shekyl-fcmp proof.rs, and shekyl-pow-randomx lib.rs and vm.rs; no code path changed, and nothing the capture priced has moved." },
 ]
 
 [[constant]]
@@ -175,8 +177,8 @@ spec = [
 
 [[constant]]
 name = "fcmp_max_inputs_per_tx"
-defined_in = "src/cryptonote_config.h"
-needle = "#define FCMP_MAX_INPUTS_PER_TX                  8"
+defined_in = "rust/shekyl-wire/src/transaction.rs"
+needle = "pub const MAX_FCMP_INPUTS: usize = 8;"
 measured_by = ["BA-T10"]
 status = "unmeasured"
 carrier = "BA-T10. The 2026-09-24 input-count runs are quoted in CHAIN_RULES_SLICE_6.md section 5.4 and have no capture in the tree; the cap's derivation is owed (FOLLOWUPS, CEN-I4)."
@@ -214,8 +216,8 @@ path_set = "archival-attestation-cap"
 id = "relay-verify-cell"
 spec = [
   "rust/shekyl-fcmp/src",
-  "rust/shekyl-ffi/src/legacy_fcmp.rs",
-  "rust/shekyl-ffi/src/ct_balance_ffi.rs",
+  "rust/shekyl-daemon-rpc/src/submit/verifier.rs",
+  "rust/shekyl-ct-balance/src",
 ]
 
 [[constant]]
@@ -790,6 +792,7 @@ cleared = [
   { through = "c0f6274413", reason = "transport: the inbound reservation that skipped the accept-rate gate is deleted; harness tables are built with no gate and take accept_clearnet. The listener's accept checks the ban, the ceilings and the rate in the same order as before; no dial, handshake or gap I/O changes. Not re-measured." },
   { through = "623fa03dce", reason = "Each connector publishes an admitted socket through a callback in place of the shared admission channel. The library listener still sends on that channel (publish_on), at the same point after the channel exists. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, and no deadline moved, so the 2026-10-14 capture still prices this tree." },
   { through = "63fcdd9d25", reason = "profile.rs: the doc comment on Tor's δ names its 60 s basis as shekyl-p2p-session's TIMED_SYNC_MIN plus half TIMED_SYNC_JITTER, in place of the deleted C++ P2P_DEFAULT_HANDSHAKE_INTERVAL. A comment only; no dial, handshake, gap or shutdown wait changes." },
+  { through = "c42ef64a2d", reason = "C++ removal (#1299): comments only in shekyl-tor publish.rs; no code path changed, and nothing the capture priced has moved." },
 ]
 
 [[constant]]
@@ -966,6 +969,8 @@ stale_through = [
   { through = "7938c51f16", note = "R8 (#1259): one test in shekyl-curve-tree's client.rs is renamed (rollback_to_the_fork_at_the_tip_changes_nothing); the rest of the commit deletes the daemon's console, outside these paths. No production code in these paths changed; nothing the capture prices moved. Not measured." },
   { through = "e3e573d19d", note = "The signing envelope's tx_signable (#1266): in this path set, frost_sal.rs renames the FROST session's message field to tx_signable. The spend's prover takes one 32-byte message as before (the builder now frames it from the prefix and base hashes, one cSHAKE256 outside these paths); tree build, path assembly and the prover do the same work. Not measured; the rows stay stale." },
   { through = "11cff8aeb90695ccd843b62d6fae2231937271cc", note = "DISPATCHED_PROOF_LIFE in shekyl-curve-tree reference.rs is REFERENCE_BLOCK_MAX_AGE minus REBUILD_AT, a const subtraction beside the existing reference constants. No tree build, path assembly or prover work moved. Not measured; the rows stay stale." },
+  { through = "682d97049c", note = "C++ removal (#1299): one module-doc paragraph in shekyl-fcmp's frost_sal.rs, naming the FOLLOWUPS rows that track the multisig spend path. Comment only; no code path changed, and nothing the capture priced has moved." },
+  { through = "c42ef64a2d", note = "C++ removal (#1299): comments only in shekyl-fcmp proof.rs; no code path changed, and nothing the capture priced has moved." },
 ]
 
 [[constant]]
@@ -1040,6 +1045,7 @@ stale_through = [
   { through = "d56e34bda4", note = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, its doc comment is reworded (df9ec749d1), and the test's seed check casts with try_from (d56e34bda4). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
   { through = "0d23fb567f", note = "A2 (alpha.11 bug hunt): CacheStore::release_transient empties the transient slot, and the ingest calls it when the seed window names one seed. Cache derivation is unchanged; what moves is residency: a seed that left the window is no longer held until the next epoch's pin, and the null seed's cache goes once genesis connects. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
   { through = "a395a325a1", note = "A2's fix (#1301): release_transient becomes release(seedhash), emptying the transient slot only when it holds the seed the window stopped naming. Derivation is unchanged; the row stays stale." },
+  { through = "c42ef64a2d", note = "C++ removal (#1299): comments only in shekyl-pow-randomx lib.rs and vm.rs; no code path changed, and nothing the capture priced has moved." },
 ]
 
 [[constant]]
@@ -1061,6 +1067,7 @@ spec = ["rust/shekyl-pow-randomx/src/vm.rs"]
 cleared = [
   { through = "bb7f72df9", reason = "Two commits touch vm.rs after the capture. d27da3ad8 rewrites two `% n == 0` tests as `is_multiple_of`, in a const assertion and a decode predicate, neither on the allocation path. bb7f72df9 changes one comment in this file." },
   { through = "d56e34bda4", reason = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, its doc comment is reworded (df9ec749d1), and the test's seed check casts with try_from (d56e34bda4). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. VM allocation is unchanged." },
+  { through = "c42ef64a2d", reason = "C++ removal (#1299): comments only in shekyl-pow-randomx vm.rs; no code path changed, and nothing the capture priced has moved." },
 ]
 
 [[constant]]
@@ -1216,6 +1223,7 @@ cleared = [
   { through = "d56e34bda4", reason = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, its doc comment is reworded (df9ec749d1), and the test's seed check casts with try_from (d56e34bda4). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. The hash the capture timed is unchanged." },
   { through = "0d23fb567f", reason = "A2 (alpha.11 bug hunt): cache_store.rs gains CacheStore::release_transient, which empties the transient slot; nothing on the hash path calls it. lookup and compute_hash are unchanged, so the per-hash thread CPU the hash budget charges is the capture's." },
   { through = "a395a325a1", reason = "A2's fix (#1301): release_transient becomes release(seedhash), which empties the transient slot only when it holds that seed; nothing on the hash path calls it, and lookup and compute_hash are unchanged." },
+  { through = "c42ef64a2d", reason = "C++ removal (#1299): comments only in shekyl-pow-randomx lib.rs and vm.rs; no code path changed, and nothing the capture priced has moved." },
 ]
 
 [[constant]]

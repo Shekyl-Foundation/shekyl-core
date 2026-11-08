@@ -62,7 +62,6 @@ use crate::metrics::Metrics;
 use crate::pipeline::RunReport;
 use crate::source::{IngestEvent, Injection, Source};
 use crate::substrate::ProductionSubstrate;
-use crate::test_support::cleanup;
 use shekyl_chain_store::apply_policy::{ApplyPolicy, ArchivalFamily};
 use shekyl_pow_randomx::CacheStore;
 
@@ -326,9 +325,8 @@ where
     S: Substrate + Send + Sync + 'static,
     S::Fault: Send + std::fmt::Debug + 'static,
 {
-    let (report, path, _) =
+    let (report, _path, _) =
         replay_keeping_store(dir, manifest, substrate, policy, &policy_tag(policy)).await;
-    cleanup(&path);
     report
 }
 

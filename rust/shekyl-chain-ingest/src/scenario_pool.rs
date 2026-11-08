@@ -128,7 +128,7 @@ where
     ) -> R {
         self.stop_connector().await;
         let out = {
-            let store = (self.opener)(&self.path);
+            let store = (self.opener)(self.path.path());
             f(&store, self.rules)
         };
         self.start_connector();

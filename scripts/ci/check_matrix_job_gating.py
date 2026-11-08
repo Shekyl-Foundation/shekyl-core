@@ -21,7 +21,7 @@
 #
 # Literal-named jobs are unaffected: a skipped job with a literal name reports
 # under that name, which protection accepts — the shape codeql.yml's
-# analyze-cpp / analyze-python already rely on for two other required contexts.
+# analyze-python already relies on for another required context.
 #
 # Run `--selftest` to prove the check can fail; CI runs it before the scan.
 

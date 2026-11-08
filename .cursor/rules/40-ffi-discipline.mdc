@@ -1,11 +1,16 @@
 ---
-description: FFI surface management. Apply when adding or modifying FFI exports.
+description: The deleted FFI surface. Do not add one. The body is why it stayed coarse while it existed.
 globs:
   - rust/shekyl-ffi/**
   - src/shekyl/shekyl_ffi.h
 ---
 
 # FFI discipline
+
+**The FFI surface is deleted.** There is no `shekyl-ffi` and no
+`shekyl_ffi.h`, and the tree holds no first-party C or C++. Do not add a
+C ABI to reach a Rust crate. The notes below are why the surface stayed
+coarse while it existed.
 
 ## The FFI surface is an audit obligation
 

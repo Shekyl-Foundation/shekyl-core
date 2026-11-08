@@ -98,8 +98,13 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # unbond-journal close (#1237), the list's length; 284 on 2026-11-05 when
 # the truncated credit-wire headline (already re-filed under the
 # attestation-ordering row) went with the C++ file it linked (the p2p
-# remnant cutover), the list's length.
-GRANDFATHER_CEILING = 284
+# remnant cutover), the list's length; 275 on 2026-11-07 when the C++
+# removal closed the rows whose subject it deleted (shekyl-ffi's docs and
+# symbol rename, epee's wipeable_string, the performance tests) with the
+# three it found already resolved (DRS-W16's LMDB cursor, the PoW test
+# seam, the M1 C++ test-support seam), and two rows that had left the list
+# earlier were counted, the list's length.
+GRANDFATHER_CEILING = 275
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

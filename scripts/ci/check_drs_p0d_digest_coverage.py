@@ -8,14 +8,13 @@ P0d's deliverable is a layout-independent logical state digest whose
 *minimum* is three families (core chain, spent_keys, live curve-tree
 root) and whose *named exclusion* is the archival journals (§7.1.1).
 A digest that hashed the wrong tables, or silently dropped one of the
-three, would still compile and the C++ tests on a sparse fixture would
-not notice.
+three, would still compile, and tests on a sparse fixture would not
+notice.
 
 Instance of `47-gate-subject-assertion.mdc`: the gate asserts its own
-subject exists (`pub fn digest_v0` in the crate, the FFI symbol) so an
-empty or mis-anchored parse fails loudly instead of passing vacuously
-over nothing. The C++ walker left with the LMDB store; the digest side
-is the remaining subject.
+subject exists (`pub fn digest_v0` in the crate) so an empty or
+mis-anchored parse fails loudly instead of passing vacuously over
+nothing.
 
 This gate does NOT recompute cSHAKE (that is `shekyl-crypto-hash` plus
 the crate's property tests). It asserts the three families are named
@@ -31,8 +30,6 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DIGEST_RS = ROOT / "rust" / "shekyl-chain-store" / "src" / "digest_v0.rs"
-FFI_RS = ROOT / "rust" / "shekyl-ffi" / "src" / "chain_digest_ffi.rs"
-FFI_H = ROOT / "src" / "shekyl" / "shekyl_ffi.h"
 AUDIT = ROOT / "docs" / "LMDB_WRITE_ATOMICITY_AUDIT.md"
 
 # Subject-assertion floors: the files held at least this many bytes when
@@ -57,8 +54,6 @@ def require(cond: bool, msg: str) -> None:
 
 def main() -> None:
     digest = must_read(DIGEST_RS)
-    ffi_rs = must_read(FFI_RS)
-    ffi_h = must_read(FFI_H)
     audit = must_read(AUDIT)
 
     require(len(digest) >= MIN_DIGEST_RS,
@@ -83,11 +78,6 @@ def main() -> None:
     require("§7.1.1" in digest and "archival" in digest.lower(),
             "digest_v0.rs does not record the §7.1.1 archival exclusion")
 
-    require("shekyl_logical_state_digest_v0" in ffi_rs,
-            "FFI rust export shekyl_logical_state_digest_v0 missing")
-    require("shekyl_logical_state_digest_v0" in ffi_h,
-            "FFI header shekyl_logical_state_digest_v0 missing")
-
     # P0b leftover: the digest's inputs are the RAW read set. The audit
     # must name the three v0 families as digest reads so a later writer
     # cannot add a write path that the digest does not observe.
@@ -98,7 +88,7 @@ def main() -> None:
                 f"audit digest-v0 read set does not name {token!r}")
 
     print("PASS: DRS-P0d digest v0 names core chain, spent_keys, curve root; "
-          "archival journals excluded; FFI and audit agree")
+          "archival journals excluded; the audit agrees")
 
 
 if __name__ == "__main__":

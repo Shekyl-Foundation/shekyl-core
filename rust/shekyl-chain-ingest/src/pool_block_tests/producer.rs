@@ -60,7 +60,6 @@ async fn a_body_the_admission_declines_is_passed_over_and_the_next_is_listed() {
     assert!(!listed.contains(&dear_id));
     assert!(selected.refused.is_empty() && selected.conflicted.is_empty());
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -177,7 +176,6 @@ async fn the_producer_prices_its_listing_at_the_built_coinbase_and_the_block_con
         .unwrap_or_else(|outcome| panic!("the producer's block connects: {outcome}"));
     assert_eq!(connected.height, height);
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -257,8 +255,6 @@ async fn a_template_on_an_older_tip_than_the_pools_posts_and_evicts_nothing() {
         .any(|(id, _)| id == txid);
     drop(pool);
     drop(older);
-    drop(std::fs::remove_file(&path));
-    crate::test_support::cleanup(&copy);
     scenario.close().await;
     assert!(
         matches!(produced, Err(NoTemplate::PoolOnAnotherTip)),
@@ -389,8 +385,6 @@ async fn pop_blocks_refuses_genesis_and_returns_two_blocks_bodies_to_the_pool() 
         assert!(matches!(reply, Reply::Connected { .. }), "{reply:?}");
     }
     service.stop().await.expect("stops");
-    drop(std::fs::remove_file(&pool_path));
-    crate::test_support::cleanup(&copy);
     scenario.close().await;
 }
 
@@ -507,7 +501,6 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
     );
     assert!(pool.relay_view().record(&id2).is_some() && pool.relay_view().record(&id3).is_some());
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -587,7 +580,6 @@ async fn a_full_pool_admits_a_better_payer_by_evicting_the_cheapest() {
         "the eviction and the insert were one write"
     );
     drop(store);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -637,7 +629,6 @@ async fn an_admitted_entry_leaves_when_its_reference_leaves_the_window() {
     }
     assert!(pool.relay_view().is_empty());
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -698,7 +689,6 @@ async fn a_connect_under_the_pool_verifies_nothing_again() {
     assert_eq!(reconciled.admitted.len(), 2, "both still admitted");
     assert_eq!(counts, (0, 0, 0), "signatures, range proofs, FCMP++ proofs");
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -752,7 +742,6 @@ async fn a_pass_that_no_longer_holds_is_verified_outside_the_pool_lock() {
     assert_eq!(listed, vec![txid], "a pass that no longer holds is listed");
     assert_eq!(under_lock, 0, "staged: no proof verified under the lock");
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -831,7 +820,6 @@ async fn a_body_flushed_between_the_producers_locks_posts_nothing() {
         .listing()
         .any(|(id, _)| id == second_id);
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
     assert!(
         matches!(produced, Err(NoTemplate::BodyGone)),

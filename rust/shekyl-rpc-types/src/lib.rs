@@ -71,6 +71,7 @@ pub mod bin_commands;
 pub mod chain;
 pub mod chain_reads;
 pub mod consensus_digest;
+pub mod endpoint;
 pub mod errors;
 pub mod hash;
 pub mod headers;

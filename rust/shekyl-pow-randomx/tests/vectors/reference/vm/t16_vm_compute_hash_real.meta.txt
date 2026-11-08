@@ -11,6 +11,7 @@ Provenance
 fork        = external/randomx-v2
 pin         = aaafe71322df6602c21a5c72937ac284724ae561
 generator   = tests/vectors/reference/_generator/phase2c/gen.cpp
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 mode        = t16
 command     = ./gen t16 > t16_vm_compute_hash_real.bin
 

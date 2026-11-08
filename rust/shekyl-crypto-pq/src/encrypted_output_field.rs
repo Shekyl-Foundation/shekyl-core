@@ -38,11 +38,11 @@
 ///
 /// That is the whole list: a value cannot exist without a derivation behind
 /// it. There is deliberately **no** test-only byte
-/// constructor: `feature = "test-utils"` would not have gated one, because
-/// `shekyl-ffi` enables that feature in its *normal* dependency graph and
-/// cargo unifies features across it — this crate's own `Cargo.toml` says so
-/// and adds "do not treat this feature flag as the gate" (FOLLOWUPS F-7 tracks
-/// the structural fix). A constructor behind it would have shipped in the
+/// constructor: `feature = "test-utils"` would not gate one, because
+/// `shekyl-p-serve`'s `test-signer` feature forwards it on a *normal*
+/// dependency edge and cargo unifies features across a build that includes an
+/// enabler (`scripts/ci/check_test_only_features.py` lists them; FOLLOWUPS F-7
+/// tracks the structural fix). A constructor behind it would have shipped in the
 /// production archive, which is exactly the state this type exists to prevent.
 /// Tests build fixtures through `construct_output`, the production path.
 ///

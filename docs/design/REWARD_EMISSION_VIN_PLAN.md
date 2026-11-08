@@ -571,7 +571,7 @@ framing above with "…until **C-1**."
 ### 3.0 Gate-last sequencing — C-1 as the final activating merge
 
 **Source-check (dev, 2026-07-01): consensus default-rejects emission vins.**
-`check_inputs_types_supported` ([`cryptonote_format_utils.cpp:691`](../../src/cryptonote_basic/cryptonote_format_utils.cpp))
+`check_inputs_types_supported` (`cryptonote_format_utils.cpp` at `ac3836de90` (line 691))
 is a whitelist — `{txin_archival_serve_credit_response, txin_archival_bond_post,
 txin_stake_claim, txin_to_key}` — with a default-reject `else` ("wrong variant type").
 So a `txin_archival_reward_emission` added to the `txin_v` variant (PR-E2) is **rejected by
@@ -926,7 +926,7 @@ Q1's two-auth answer.
 
 | Item | Built (verified `dev`) | Open — the lean to ratify |
 |------|------------------------|---------------------------|
-| **Q7** FFI seam | `shekyl_archival_verify_*` **snapshot-by-value** pattern ([`archival_ffi/`](../../rust/shekyl-ffi/src/archival_ffi/) — C++ reads LMDB, marshals scalars/arrays by value, Rust verify pure; see `codes::ShekylArchivalVerifyCtx`) | **resolved by house pattern** — emission verify follows it; work = enumerate the field set |
+| **Q7** FFI seam | `shekyl_archival_verify_*` **snapshot-by-value** pattern (`archival_ffi/` at `ac3836de90` — C++ reads LMDB, marshals scalars/arrays by value, Rust verify pure; see `codes::ShekylArchivalVerifyCtx`) | **resolved by house pattern** — emission verify follows it; work = enumerate the field set |
 | **M-2** numerator as-of-E | `r_market_count` / `sigma_work_milli` / `scarcity` / `curve_milli` + `EpochCloseOutputs` (`consensus_state.rs`); schema implemented 2026-06-12; invariant-2 finalized-immutable-at-E-close | pin the **as-of-E snapshot field set** = the Q7 struct; every field from the frozen E-close materialization, never live |
 | **Q10 `held(P,E)`** | *(two-condition pin below)* | the one genuine design piece |
 | **Q9** dedup atomicity | `claimed_epochs_check_and_set` ([`claimed_epochs.rs:99`](../../rust/shekyl-archival-retention/src/claimed_epochs.rs)) | **PINNED** (§8.0.1) — check/set **fused in tx-connect scope**, mark rolls back with the tx |

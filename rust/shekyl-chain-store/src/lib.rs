@@ -72,7 +72,7 @@
 //! [`schema`], [`codec`] and [`store`] are `pub` so the daemon's other
 //! crates can reach them; they are the daemon's **internal store
 //! contract**, not a supported public API. Pre-genesis, this workspace is
-//! the crate's only consumer — `shekyl-ffi` is its one dependent
+//! the crate's only consumer — its dependents are the daemon's own crates
 //! (`cargo tree -i shekyl-chain-store`) and no sibling repository names
 //! it — so a table definition, a codec type or a re-export changes shape
 //! when the store's own design does, and the compiler finds every caller
@@ -103,6 +103,8 @@ pub mod store;
 
 #[cfg(test)]
 mod redb_recovery;
+#[cfg(test)]
+mod test_paths;
 
 pub use ids::{
     AmountIndex, ChunkIndex, LayerChunk, OutputSlot, OutputStorageId, TreeLayer, TxStorageId,

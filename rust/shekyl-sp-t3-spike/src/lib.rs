@@ -66,8 +66,8 @@
 //! No `ServeCredit` construction, no receipt, no bond binding, no epoch
 //! settlement, no consensus surface, no wire format, no FFI. The measurement is
 //! of a *transport*, and the charter's non-goals are enforced by this crate's
-//! dependency list: it does not depend on `shekyl-wire`, `shekyl-daemon-rpc`,
-//! or `shekyl-ffi`, so it cannot reach a consensus surface even by accident.
+//! dependency list: it does not depend on `shekyl-daemon-rpc`, and it takes
+//! `shekyl-wire` only for `shard_frame` (its `Cargo.toml` says why).
 //!
 //! It **does** countersign and verify, since `SF` (a): the personas sign every
 //! body under an ephemeral test key and the client leg refuses a body that does

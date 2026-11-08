@@ -1350,7 +1350,7 @@ length or version prefix that makes extension clean. It does not.
   Prefixing 32 B (or a version byte) is a format change to a
   genesis-frozen field (rule 42).
 - Empty set = **absent tag**, not an empty blob
-  (`cryptonote_format_utils.cpp:685–701`: parse success with no tag is
+  (`cryptonote_format_utils.cpp` at `ac3836de90` (lines 685–701): parse success with no tag is
   `true` and `blob.clear()`). A witness commitment is per issuing block
   and must exist even when the block includes zero records. Forcing
   `0x0B` always-present to carry it would change the empty-set encoding.
@@ -1383,7 +1383,7 @@ i.i.d. noise the window launders, becomes directly observable and
 attributable. Always-present costs tag + varint length + 32-B commitment
 = 34 B/block (`tx_extra.rs:169–173`: `write_blob` is `[tag] ‖ varint(len)
 ‖ blob`; `len = 32` is a one-byte varint), ≈ 9 MB/year permanent at
-120 s/block (`cryptonote_config.h:50`), and carries **no signal**. That
+120 s/block (`cryptonote_config.h` at `ac3836de90` (line 50)), and carries **no signal**. That
 is the right trade: privacy is the product (`00-mission` commitment 2);
 byte count does not enter. Q13 RULED (§7.8): the CEN row is one
 predicate over one field, five fixtures; it does not re-open
@@ -1540,7 +1540,7 @@ no consumer is a free 32-B covert channel in every user transaction.
 
 **Dedicated parser `parse_archival_witness_commitment_from_extra`.** It
 must not follow `parse_archival_attestation_from_extra`. That function
-documents (`cryptonote_format_utils.cpp:687–692`) that a successful
+documents (`cryptonote_format_utils.cpp` at `ac3836de90` (lines 687–692)) that a successful
 parse with no attestation tag returns **true with an empty blob** — the
 committed empty set — distinguished from parse failure, because
 collapsing the two would let a malformed coinbase extra pass for the
@@ -1553,10 +1553,10 @@ The divergence belongs in a comment at the `0x0C` site as carefully
 argued as the one it is deliberately not copying.
 
 **"Exactly one" is a count, not first-wins.**
-`find_tx_extra_field_by_type` (`cryptonote_format_utils.h:70–77`) takes
+`find_tx_extra_field_by_type` (`cryptonote_format_utils.h` at `ac3836de90` (lines 70–77)) takes
 `index` defaulting to 0: `!index--` skips until the index hits 0, then
 returns. It is first-wins, not reject-on-duplicate. The `0x0B` path
-calls it at `cryptonote_format_utils.cpp:699` with the default. A
+calls it at `cryptonote_format_utils.cpp` at `ac3836de90` (line 699) with the default. A
 second `0x0C` is silently ignored unless something counts. The parser
 counts; first-wins is the red edit.
 
@@ -1586,7 +1586,7 @@ as the **non-coinbase** extra cap (`shekyl-wire`
 `transaction.rs:131–132`) and is checked only on
 `construct_tx_with_tx_key` (`cryptonote_tx_utils.cpp:585`).
 `construct_miner_tx` does not check it. `COINBASE_BLOB_RESERVED_SIZE` =
-600 (`cryptonote_config.h:60`) is a **weight reserve subtracted from
+600 (`cryptonote_config.h` at `ac3836de90` (line 60)) is a **weight reserve subtracted from
 `TX_WEIGHT_LIMIT`** (`transaction.rs:141–143`), not an extra cap. The
 attestation cap itself records the fact
 (`cryptonote_config.h:440–442`): *"the coinbase has no other tx_extra
@@ -2011,10 +2011,10 @@ so where it applies.
     (32, `SCS-P1`), coinbase only,
     **present**, from genesis unconditionally. Dedicated parser
     `parse_archival_witness_commitment_from_extra` — must **not** copy
-    `0x0B`'s empty-set convention (`cryptonote_format_utils.cpp:687–692`);
+    `0x0B`'s empty-set convention (`cryptonote_format_utils.cpp` at `ac3836de90` (lines 687–692));
     absent rejects. "Exactly one" is a count;
     `find_tx_extra_field_by_type`
-    (`cryptonote_format_utils.h:70–77`) is first-wins and is the red
+    (`cryptonote_format_utils.h` at `ac3836de90` (lines 70–77)) is first-wins and is the red
     edit for duplicates. Predicate co-located with `0x0B`'s concern;
     site is a chain-rules CEN row at Slice C (Q15). `:5306` is
     records-was of the LMDB 0x0B read. Surface-free; E6-landable

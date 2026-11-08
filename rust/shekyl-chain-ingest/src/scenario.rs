@@ -44,7 +44,6 @@
 //! against, and the producer's ledger of what it priced (`Priced`, handed
 //! to `connect` through `Composed`) went with the last of them.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use kameo::actor::ActorRef;
@@ -75,7 +74,7 @@ use crate::connector::{
 };
 use crate::schedule::ChainRules;
 use crate::target::TargetLedger;
-use crate::test_support::{cleanup, open_store, open_store_under, tmp};
+use crate::test_support::{open_store, open_store_under, tmp, TestPath};
 
 #[path = "scenario_types.rs"]
 mod types;
@@ -100,7 +99,6 @@ fn spawn_connector(args: ConnectorArgs) -> (ActorRef<Connector>, ConnectorTask) 
 /// The driver. Owns the connector (and through it the store) and the
 /// clock; every block it mines pays the harness miner.
 pub struct Scenario<P> {
-    path: PathBuf,
     connector: ActorRef<Connector>,
     /// The connector's task, joined on [`close`](Self::close) and
     /// [`reopen`](Self::reopen) so the store it owns is dropped before the
@@ -134,6 +132,10 @@ pub struct Scenario<P> {
     /// A commitment the next template carries instead, once: a test that
     /// holds the witness key and seed itself.
     next_commitment: Option<shekyl_types::archival::DrawCommitment>,
+    /// The directory this scenario's store lives in. Last, so it drops
+    /// after the store this struct holds. [`Self::close`] joins the
+    /// connector; dropping the task handle detaches that task.
+    path: TestPath,
 }
 
 /// The rules every scenario runs under: regtest at fixed difficulty one,
@@ -162,7 +164,7 @@ where
 {
     /// A scenario over `pow`'s longhash, at a fresh store named `name`.
     pub fn open_with(name: &str, pow: P) -> Self {
-        Self::open_under_with(name, pow, RULES, open_store)
+        Self::open_under_with(name, pow, RULES, |path| open_store(path))
     }
 
     /// A scenario under `rules` rather than [`RULES`] — a levered regtest
@@ -188,13 +190,12 @@ where
         store: impl Fn(&std::path::Path) -> ChainStore + Send + Sync + 'static,
     ) -> Self {
         let path = tmp(name);
-        let opened: Arc<ChainStore> = store(&path).into();
+        let opened: Arc<ChainStore> = store(path.path()).into();
         let (connector, task) = spawn_connector(ConnectorArgs {
             store: Arc::clone(&opened),
             rules,
         });
         Self {
-            path,
             connector,
             task: Some(task),
             opener: Box::new(store),
@@ -215,6 +216,7 @@ where
             store: Some(opened),
             witness: None,
             next_commitment: None,
+            path,
         }
     }
 
@@ -738,7 +740,7 @@ where
 
     /// A fresh connector over the store at [`Self`]'s path, under the same rules.
     fn start_connector(&mut self) {
-        let opened: Arc<ChainStore> = (self.opener)(&self.path).into();
+        let opened: Arc<ChainStore> = (self.opener)(self.path.path()).into();
         let (connector, task) = spawn_connector(ConnectorArgs {
             store: Arc::clone(&opened),
             rules: self.rules,
@@ -751,7 +753,6 @@ where
     /// Stop the connector, release the store, remove the file.
     pub async fn close(mut self) {
         self.stop_connector().await;
-        cleanup(&self.path);
     }
 
     /// Stop the connector and release the store, run `edit` on the file —
@@ -760,7 +761,7 @@ where
     /// wallet and the template counter carry over.
     pub async fn reopen(&mut self, edit: impl FnOnce(&std::path::Path)) {
         self.stop_connector().await;
-        edit(&self.path);
+        edit(self.path.path());
         self.start_connector();
     }
 

@@ -25,7 +25,7 @@ use super::connect_fixtures::{
     at, candidate, candidate_over, connect_chain, formed, judge, priced_on, root_going_into, spend,
     spendable_prefix, FIRST_SPEND_HEIGHT,
 };
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE};
+use super::store_tests::{tmp, TestErr, EPOCH, PROBE};
 use super::*;
 use crate::codec::{forged, AltBlock, AltBlockFacts, AltBodies, Canonical, CodecError, Encoded};
 use crate::lmdb_order::LmdbHashKey;
@@ -265,7 +265,6 @@ fn insert_read_enumerate_remove_and_drop() {
         store.connect_state().is_live(),
         "alt writes are not chain work; nothing halts"
     );
-    cleanup(&path);
 }
 
 /// Plant `bodies` under `key` in `alt_block_bodies` alone, around AL1.
@@ -386,7 +385,6 @@ fn the_bodies_are_written_read_and_removed_with_the_row() {
         snap.alt_block_bodies(&stray).expect_err("no row"),
         "alt_blocks"
     ));
-    cleanup(&path);
 }
 
 /// A removal takes the closure — the rows it selects and every row built
@@ -460,7 +458,6 @@ fn a_removed_row_takes_every_row_built_on_it() {
         .alt_block(&e_id)
         .expect("read")
         .is_none());
-    cleanup(&path);
 }
 
 /// A block id has one home (module docs): AL1 refuses a hash the main
@@ -487,7 +484,6 @@ fn a_recorded_block_is_refused_as_an_alt_row() {
     );
     drop(snap);
     assert_eq!(alt_count(&store), 0);
-    cleanup(&path);
 }
 
 /// The connect's half: a block the alt table holds leaves it in the write
@@ -530,7 +526,6 @@ fn a_connect_takes_its_block_out_of_the_alt_table() {
         "the child hangs from the main chain"
     );
     drop(snap);
-    cleanup(&path);
 }
 
 #[test]
@@ -572,7 +567,6 @@ fn insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals() {
     let snap = store.begin_read().expect("read");
     assert!(snap.has_alt_block(&a).expect("has"));
     assert!(store.connect_state().is_live());
-    cleanup(&path);
 }
 
 #[test]
@@ -615,7 +609,6 @@ fn a_row_that_does_not_decode_is_si7_on_both_readers() {
         store.connect_state().is_live(),
         "alt corruption aborts the batch and does not halt the writer"
     );
-    cleanup(&path);
 }
 
 /// A well-formed row planted under a key that is not the block's hash.
@@ -669,7 +662,6 @@ fn a_row_whose_block_does_not_hash_to_its_key_is_si7() {
         store.connect_state().is_live(),
         "a mis-keyed alt row does not halt the writer"
     );
-    cleanup(&path);
 }
 
 /// SAL-1: pop to the split, demote, promote, remove — one closure. Then the
@@ -832,7 +824,6 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         "the insert did not land"
     );
     assert!(store.connect_state().is_live(), "a refusal is not a halt");
-    cleanup(&path);
 }
 
 /// SAL-15: the alt surface is *not chain state* (§11.2) — a fact every
@@ -883,7 +874,6 @@ fn an_alt_block_with_a_witness_moves_no_digest() {
             .expect("digest"),
         before
     );
-    cleanup(&path);
 }
 
 /// SI-27's arm: a demotion the cheap tier refused halts the writer at that
@@ -924,5 +914,4 @@ fn a_refused_demotion_halts_the_writer_si27() {
     );
     assert!(store.begin_read().is_ok(), "reads stay open");
     drop(store);
-    cleanup(&path);
 }

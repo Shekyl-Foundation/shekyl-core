@@ -14,11 +14,11 @@
 //! view: a signed record below the anchor threshold, and one whose persona
 //! has no bond record. A hole in the window and a stored key that is not
 //! canonical are `Corrupt`, witnessed by the mock's two job-3 instruments,
-//! not refusals. The accept of a signed record runs the same body
-//! the daemon's FFI pins (`shekyl-ffi`, `attestation_verify_tests::
-//! valid_block_verifies`); a chain that posts the bond and mints the
-//! `0x0B` field is not mintable under CEN-I20's grammar today (slice 8
-//! §5.1, row 10 finding), so the arm is not re-witnessed here.
+//! not refusals. The accept of a signed record is not witnessed: a chain
+//! that posts the bond and mints the `0x0B` field is not mintable under
+//! CEN-I20's grammar today (slice 8 §5.1, row 10 finding), and only the
+//! per-record signature check is pinned, in `shekyl-archival-retention`
+//! (`attestation_wire_tests`).
 
 use super::*;
 use crate::block::Candidate;

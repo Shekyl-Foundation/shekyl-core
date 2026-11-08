@@ -39,9 +39,9 @@ use crate::submit::DaemonSubmitEngine;
 
 use crate::authority::Authority;
 use crate::hash_budget::HashBudget;
-use axum::http::{HeaderValue, Method};
+use axum::http::{HeaderValue, Method, StatusCode};
 use axum::routing::{get, post, MethodRouter};
-use axum::Router;
+use axum::{Json, Router};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{watch, Semaphore};
@@ -215,7 +215,7 @@ pub(crate) struct Route {
 pub(crate) const ROUTES: &[Route] = &[
     Route {
         endpoint: Endpoint::JsonRpc,
-        paths: &["/json_rpc"],
+        paths: &[shekyl_rpc_types::endpoint::JSON_RPC_PATH],
     },
     // JSON REST (with aliases) -- GET + POST to match epee behaviour.
     Route {
@@ -374,7 +374,18 @@ where
             router = router.route(path, handler(route.endpoint));
         }
     }
-    router
+    // A path no row serves gets the shared answer, which names
+    // `/json_rpc`, instead of an empty 404 (the wallet RPC mounts the same).
+    router.fallback(unrouted)
+}
+
+/// The answer to a path no route serves: HTTP 404 with the shared
+/// JSON-RPC error body (`shekyl_rpc_types::endpoint`).
+async fn unrouted(uri: axum::http::Uri) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(shekyl_rpc_types::endpoint::unrouted_path(uri.path())),
+    )
 }
 
 /// Build the Axum router for one listener. `cors_origins` empty ⇒
@@ -757,6 +768,42 @@ mod tests {
         }
         let value: serde_json::Value = serde_json::from_slice(&body).expect("a JSON refusal");
         Probe::Refused(value["error"]["code"].as_i64().expect("an error code"))
+    }
+
+    /// A path no row serves is told where JSON-RPC is: HTTP 404 with the
+    /// shared body, never an empty one. Both listeners, both methods, and a
+    /// path the wallet RPC used to serve (`/`) among them.
+    #[tokio::test]
+    async fn an_unrouted_path_is_told_where_json_rpc_is() {
+        for authority in [Authority::admin_listener(false), Authority::VIEW_LISTENER] {
+            for (method, path) in [
+                ("POST", "/"),
+                ("GET", "/no_such_endpoint"),
+                ("POST", "/json_rpc/"),
+            ] {
+                let response = probe_router(authority)
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(path)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let value: serde_json::Value =
+                    serde_json::from_slice(&body).expect("a JSON body, not an empty 404");
+                assert_eq!(
+                    value,
+                    shekyl_rpc_types::endpoint::unrouted_path(path),
+                    "{method} {path}"
+                );
+            }
+        }
     }
 
     const OUTSIDE_THE_GRANT: i64 = -32_002;

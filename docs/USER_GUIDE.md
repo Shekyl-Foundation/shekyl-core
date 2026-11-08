@@ -1211,29 +1211,36 @@ about your wallet activity lands on disk beside the wallet.
 
 ## Logging
 
-Shekyl has completed the migration from the unmaintained C++
-`easylogging++` library to a unified Rust logger — the
-`shekyl-logging` crate, built on [`tracing`] and
-[`tracing-subscriber`]. The migration shipped in two chores: V3.1
-alpha.4 landed Chore #1 (Rust-side consolidation) and V3.x alpha.0
-landed Chore #2 (C++ shim + `easylogging++` retirement +
-`MONERO_*` env-var sweep). All binaries — `shekyl-cli`,
-`shekyl-wallet-rpc`, and `shekyld` — now share a single subscriber,
-a single env var, and a single on-disk layout.
-
-This section has two distinct audiences. If you just run Shekyl
-binaries and want to know which env var tunes log verbosity, read
-only "For operators." If you maintain downstream code or script
-`shekyld`-style deployments, read "For integrators" too.
+Every Shekyl binary logs through the `shekyl-logging` crate, built on
+[`tracing`] and [`tracing-subscriber`]. How you set the level depends on
+the binary.
 
 ### For operators
 
-`SHEKYL_LOG` is the single env var that controls logging across
-every Shekyl binary. Shipping a change to this section of the
-docs is a tell that the knob changed; nothing else is needed.
+**`shekyld`** takes its levels from its configuration, never from the
+environment:
 
-`SHEKYL_LOG` accepts standard [`tracing-subscriber`
-`EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
+- `log-level` is the base level: `error`, `warn` (the default), `info`,
+  `debug` or `trace`.
+- `log-category` sets a level for one subsystem, as `subsystem=level`:
+  `daemon`, `p2p`, `sync`, `chain`, `store`, `txpool`, `relay`, `rpc`,
+  `tor`, `miner`, `notify` or `archival`. Another key is refused when the
+  configuration is read. For example, in `shekyld-<network>.toml`:
+
+  ```toml
+  log-level = "info"
+  log-category = { p2p = "debug", tor = "trace" }
+  ```
+
+  Both are runtime options, so a change takes effect without a restart.
+
+`shekyld` writes standard error and its log file (`log-file`, by default
+`logs/shekyld-<network>.log` under the daemon's root). `log-size-max`
+bounds the disk the live file and its archives use together. The file and
+every archive are created with POSIX mode `0600`.
+
+**`shekyl-cli` and `shekyl-wallet-rpc`** read `SHEKYL_LOG`, in
+[`tracing-subscriber` `EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
 syntax:
 
 ```
@@ -1242,83 +1249,33 @@ SHEKYL_LOG=info,shekyl_wallet_rpc=debug          # level per target
 SHEKYL_LOG=shekyl_wallet_rpc::scanner=trace      # nested module target
 ```
 
-The legacy easylogging++ category grammar is also accepted
-(`net.p2p:DEBUG,wallet.wallet2:INFO`, numeric `0..=4` presets,
-`+`/`-` modifiers) because the C++ shim still round-trips through
-the Rust-side translator. Suffix globs (`*y.z:TRACE`) are rejected
-with a structured error and, where possible, a rewrite suggestion
-— no silent acceptance.
+A target is a Rust module path. A log category of the old C++ daemon
+(`net.p2p:DEBUG`, `blockchain`, `*:WARNING`) names nothing, and
+`SHEKYL_LOG` refuses it by name at start rather than filtering in silence.
+`RUST_LOG` and the `MONERO_LOGS` / `MONERO_LOG_FORMAT` variables are not
+read.
 
-Defaults (when `SHEKYL_LOG` is unset) are per-binary and match the
-pre-migration behavior: `shekyl-cli` defaults to `WARN`,
-`shekyl-wallet-rpc` to `INFO`, and `shekyld` applies the rich
-level-0 preset (`*:WARNING,net:FATAL,net.http:FATAL,…,global:INFO`)
-that the daemon has always used. `RUST_LOG` and the historical
-`MONERO_LOGS` / `MONERO_LOG_FORMAT` variables are intentionally
-*not* honored — `SHEKYL_LOG` is the single supported knob. Scripts
-or systemd units that still set the retired `MONERO_*` names must
-be updated before upgrading past V3.x alpha.0.
+Unset, `shekyl-cli` logs warnings and up and `shekyl-wallet-rpc` info and
+up. `shekyl-cli` writes standard error only; redirect with `2> path` if
+you want a file. `shekyl-wallet-rpc` writes standard error, and a file too
+when you pass `--log-file <PATH>`: the parent directory is created with
+mode `0700` and the file with `0600` on POSIX, and the file is not
+rotated.
 
-File sinks follow the binary's role:
-
-- `shekyl-cli` writes stderr only. Redirect with `2> path` if you
-  want a file.
-- `shekyl-wallet-rpc` writes stderr only unless you pass
-  `--log-file <PATH>`. When `--log-file` is supplied, the parent
-  directory is created with `0700` perms and the file with `0600`
-  perms on POSIX. No rotation is performed on the opt-in path —
-  the operator owns file lifecycle.
-- `shekyld` writes both stderr *and* a rotated file sink. The
-  default file lives at `~/.shekyl/logs/shekyld.log` (suffixed
-  `-testnet` / `-stagenet` / `-regtest` for non-mainnet runs),
-  rotated at ~100 MB with 50 archives retained. The live file and
-  every rotated archive are forced to POSIX mode `0600` by the
-  Rust side before the filename becomes visible. Override the
-  path with `--log-file`, rotation with `--max-log-file-size`
-  and `--max-log-files` (set max-log-files to `0` to disable
-  pruning).
+Lines are `tracing-subscriber`'s format: an RFC 3339 UTC timestamp, the
+level as a full word, and the target.
 
 ### For integrators
 
-The Rust `shekyl-logging` crate is the hinge. Read
+The `shekyl-logging` crate is the hinge. Read
 [`rust/shekyl-logging/README.md`](../rust/shekyl-logging/README.md)
-before writing new Rust binaries; in particular, note the
-`LoggerGuard` footgun (dropping the guard silently loses buffered
-events; the crate uses `#[must_use]` + a workspace-wide
+before writing a new Rust binary; in particular, note the `LoggerGuard`
+footgun (dropping the guard silently loses buffered events; the crate
+uses `#[must_use]` and a workspace-wide
 `clippy::let_underscore_must_use = "deny"` lint to catch the common
-shape).
-
-C++ callers route through the existing `MINFO` / `MDEBUG` /
-`MWARNING` / etc. macros in `contrib/epee/include/misc_log_ex.h`.
-The macros now expand to `shekyl_log_emit` / `shekyl_log_level_enabled`
-via the FFI declared in `src/shekyl/shekyl_log.h`; the vendored
-`external/easylogging++/` tree and the `easylogging++.h` umbrella
-header have been removed. The `el::` namespace survives only as a
-thin compatibility shim (`el::Level`, `el::Color`,
-`el::base::DispatchAction`) to keep existing call sites compiling
-— new code must not rely on it.
-
-Behavior changes to be aware of when upgrading:
-
-1. **Output format.** The default `fmt::layer` from
-   `tracing-subscriber` replaces the custom easylogging++ format
-   string. Timestamps are RFC 3339 UTC (not local time with
-   microseconds), the level token is full words (`ERROR` rather
-   than `E`), and the category appears as a structured target.
-   Log-scraping tooling that parsed the prior format byte-for-byte
-   must be updated.
-2. **`MLOG_SET_THREAD_NAME` is a no-op.** The macro still accepts
-   its argument so existing call sites (`abstract_tcp_server2.inl`,
-   `miner.cpp`) keep compiling, but the label
-   (`[SRV_MAIN]`, `[miner 3]`) no longer appears in the log
-   stream. Restoring semantic thread labels via
-   `pthread_setname_np` / equivalent is tracked in
-   `docs/FOLLOWUPS.md` as a minor follow-up.
-3. **`MONERO_LOGS` / `MONERO_LOG_FORMAT` are retired.** The C++
-   shim no longer reads either name; `SHEKYL_LOG` is the single
-   input. `MONERO_LOG_FORMAT` in particular has no replacement
-   — formatting is owned by the subscriber's layer stack and is
-   not operator-tunable.
+shape). A subsystem's targets are listed in
+`rust/shekyl-logging/src/subsystem.rs`; a crate rename changes that list,
+never an operator's configuration.
 
 [`tracing`]: https://docs.rs/tracing
 [`tracing-subscriber`]: https://docs.rs/tracing-subscriber

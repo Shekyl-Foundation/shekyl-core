@@ -38,6 +38,7 @@ register output convention.
 Generator
 ---------
 source      = ./_generator/gen.cpp
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/Makefile (`make gen`)
 command     = ./gen exec_v1
 output_size = 64 bytes

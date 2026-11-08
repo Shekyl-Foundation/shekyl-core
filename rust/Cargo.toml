@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "shekyl-ffi",
     "shekyl-fcmp",
 
     # V3.1 multisig — Option E′ (MS-5). The FROST spend-ceremony FSM, blob
@@ -30,6 +29,12 @@ members = [
     # the production graph may depend on it; `scripts/ci/check_bench_not_a_dependency.py`
     # is what enforces that.
     "shekyl-wss-q1b-bench",
+
+    # Verification-cost instruments (GAP-7 connect, §72 admission). NOT a
+    # spike: the floor gate and the instruction-count drift gate re-run
+    # these, so the crate must keep compiling. Nothing in the production
+    # graph may depend on it; the same gate enforces that.
+    "shekyl-verify-cost",
 
     # DISPOSABLE measurement spike (§94): Tor transit, onion-to-onion, one-way.
     # Named `-spike` on purpose -- nothing in it is canonical and it is deleted
@@ -184,8 +189,7 @@ members = [
     "shekyl-archival-bond-builder",
 
     # The daemon binary (DAEMON_CONFIG_CUTOVER.md DC-Q19): a Rust `main`
-    # over `shekyl-daemon`'s sequence. All Rust since the p2p cutover
-    # (2026-11-05): it links no C++ and does not depend on `shekyl-ffi`.
+    # over `shekyl-daemon`'s sequence. It links no C++.
     # One Rust dependency graph, so one tracing-core dispatcher; the staged
     # binary's nm gate asserts it.
     "shekyld",
@@ -343,7 +347,7 @@ members = [
     # The network composition: connectors per configuration, the session
     # layer and its owners, the process engine and transport runtime, the
     # stop order, the RPC's facts from the board (brief §2). The node builds
-    # one `Network`; nothing above it reaches shekyl-ffi.
+    # one `Network`.
     "shekyl-p2p",
     # P2P conformance harness (P2P_DIFFERENTIAL_HARNESS.md). The scripted
     # peer, the seam host, the transcript comparator, and check-goldens.
@@ -378,8 +382,8 @@ members = [
     "shekyl-p-loopback",
 
     # Daemon-only operator scheduler of `shekyl-p-fetch` (SF-D1). Linked
-    # from the `shekyld` binary crate only — never from `shekyl-ffi` or an
-    # RPC crate (`check_p_fetch_dep_cut.py`).
+    # from the `shekyld` binary crate only — never from an RPC crate
+    # (`check_p_fetch_dep_cut.py`).
     "shekyl-archival-fetch-sched",
 
     # The serve-credit bundle producer (SO-D12 increment 4c): the witness
@@ -464,7 +468,8 @@ members = [
     "shekyl-node",
 
     # Pure-software RandomX v2 verifier (docs/design/RANDOMX_V2_PLAN.md,
-    # RANDOMX_V2_RUST.md). Consumed by shekyl-ffi (Phase 3); not the miner.
+    # RANDOMX_V2_RUST.md). Light and cache-only: the daemon's crates and
+    # `shekyl-miner` hash through it; fast mining is an external miner's job.
     "shekyl-pow-randomx",
 
     # Phase 2g Rust/C differential harness substrate: hand-written
@@ -634,14 +639,17 @@ sha2 = "0.10"
 # asserts all 11 fields are present in the parsed map.
 serde_json = "1"
 
-# The RT-W10 harnesses' scratch output directory (`shekyl-chain-store`
-# `store/rt_w10_cost.rs`, `shekyl-wire` `tests/rt_w10_tx_parse.rs`; dev-only
-# in both). Verified at source (3.27.0, rule 17): `Builder::tempdir` makes the
-# directory with a non-recursive `DirBuilder::create` under a random name,
-# retrying a name that exists, so a planted path or symlink is never written
-# into or deleted; `TempDir::close` removes it and reports the error, and
-# `Drop` removes it on a panic. Already in Cargo.lock at this version
-# (through proptest), so the edge adds no crate.
+# A test's own temp directory, removed when it drops: every store the
+# chain-store, chain-ingest and p2p-harness tests open lives in one, and the
+# RT-W10 harnesses write their scratch output to one (`shekyl-chain-store`
+# `store/rt_w10_cost.rs`, `shekyl-wire` `tests/rt_w10_tx_parse.rs`). Dev-only,
+# except in `shekyl-p2p-harness` (`publish = false`, no dependents). Verified
+# at source (3.27.0, rule 17): `Builder::tempdir` makes the directory with a
+# non-recursive `DirBuilder::create` under a random name, retrying a name
+# that exists, so a planted path or symlink is never written into or
+# deleted; `TempDir::close` removes it and reports the error, and `Drop`
+# removes it on a panic. Already in Cargo.lock at this version (through
+# proptest), so the edge adds no crate.
 tempfile = "3.27"
 
 # CT-1 `shekyl-curve-tree` LeafStore persistence (`docs/design/CT1_ROUND1_PINS.md`).

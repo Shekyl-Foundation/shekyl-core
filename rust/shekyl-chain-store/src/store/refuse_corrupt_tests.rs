@@ -11,7 +11,7 @@ use shekyl_chain_rules::{FrontierFault, HeaderView, LeafInput, RuleSet};
 use shekyl_types::{BlockHeight, GlobalOutputIndex, ShardId};
 
 use super::connect_fixtures::{candidate, connect_chain, judge};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 
 fn expect_row<T: core::fmt::Debug + PartialEq>(out: &Result<T, TestErr>, want: StoreInvariant) {
@@ -59,7 +59,6 @@ fn a_corrupt_seen_by_the_validator_poisons_the_batch_and_halts_the_writer() {
         Ok(batch.connect(judge(&view, cand)?, RuleSet::GENESIS)?)
     });
     assert!(again.is_err(), "the writer stays halted: {again:?}");
-    cleanup(&path);
 }
 
 #[test]
@@ -89,7 +88,6 @@ fn refusing_a_corrupt_is_chain_work_even_when_nothing_else_in_the_batch_was() {
             row: StoreInvariant::WorkNotIncreasing { height: 0 },
         }
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -115,7 +113,6 @@ fn a_cumulative_difficulty_overflow_is_the_fold_belt_not_a_new_row() {
             row: overflow,
         }
     );
-    cleanup(&path);
 }
 
 /// CEN-F20's fault — a `cumulative_tx_count` prefix sum that decreases — is
@@ -147,7 +144,6 @@ fn a_decreasing_tx_count_is_the_fold_belt_observed_by_the_validator() {
             row,
         }
     );
-    cleanup(&path);
 }
 
 /// The close's age fault — the archival fold does not place a closed
@@ -182,7 +178,6 @@ fn an_unplaced_shard_close_is_the_fold_monotone_belt_observed_by_the_validator()
             row,
         }
     );
-    cleanup(&path);
 }
 
 /// A rule's parent-side read answered `AboveTip` below the connecting
@@ -229,7 +224,6 @@ fn a_hole_below_the_tip_seen_by_the_validator_is_si7_and_halts_the_writer() {
         Ok(batch.connect(judge(&view, cand)?, RuleSet::GENESIS)?)
     });
     assert!(again.is_err(), "the writer stays halted: {again:?}");
-    cleanup(&path);
 }
 
 /// A relay floor the arithmetic cannot price is SI-7 on the `block_info`
@@ -271,7 +265,6 @@ fn an_unpriceable_relay_floor_keeps_the_rows_height_on_si7() {
             row,
         }
     );
-    cleanup(&path);
 }
 
 fn relay_floor_operands(at: BlockHeight) -> shekyl_economics::FeeOperands {
@@ -318,7 +311,6 @@ fn a_missing_root_below_the_tip_is_si7_on_curve_tree_roots() {
             row,
         }
     );
-    cleanup(&path);
 }
 
 /// `O` fails to decompress: the point lives on `output_amounts`. `CM` is a
@@ -346,7 +338,6 @@ fn an_output_key_that_does_not_decompress_halts_on_output_amounts() {
             }),
         },
     );
-    cleanup(&path);
 }
 
 /// `C` fails to decompress: same cell as `O`, a different point.
@@ -373,7 +364,6 @@ fn an_amount_commitment_that_does_not_decompress_halts_on_output_amounts() {
             }),
         },
     );
-    cleanup(&path);
 }
 
 /// `CM` fails to decompress: the point lives in the pruned transaction's
@@ -401,7 +391,6 @@ fn a_leaf_commitment_that_does_not_decompress_halts_on_txs_pruned() {
             }),
         },
     );
-    cleanup(&path);
 }
 
 /// A last-chunk hash off its curve is the layer table. A frontier whose
@@ -429,7 +418,6 @@ fn a_served_frontier_halts_on_the_cell_that_disagreed() {
             }),
         },
     );
-    cleanup(&path);
 
     let path = tmp("connect-refuse-corrupt-frontier-shape");
     let store = ChainStore::create(&path, EPOCH).expect("create");
@@ -454,7 +442,6 @@ fn a_served_frontier_halts_on_the_cell_that_disagreed() {
             }),
         },
     );
-    cleanup(&path);
 }
 
 /// A bond record the retention folds refuse as a record
@@ -490,7 +477,6 @@ fn a_bond_record_the_folds_refuse_is_si7_on_archival_bond() {
             row,
         }
     );
-    cleanup(&path);
 }
 
 /// A bond record whose hybrid key is not canonical
@@ -518,7 +504,6 @@ fn a_bond_whose_hybrid_key_is_not_canonical_is_si7_on_archival_bond() {
     };
     expect_row(&out, row);
     assert_eq!(row.row(), 7);
-    cleanup(&path);
 }
 
 /// The accruing budget overflowing (`Corrupt::AccrualOverflow`, CEN-L8's
@@ -541,7 +526,6 @@ fn an_accrual_overflow_is_the_fold_overflow_belt_on_budget_accruing() {
     };
     expect_row(&out, row);
     assert_eq!(row.row(), 8);
-    cleanup(&path);
 }
 
 /// A claim's re-gather that finds `Σwork(E)` and no frozen complete-tree
@@ -566,7 +550,6 @@ fn a_settled_epoch_without_its_complete_tree_set_is_si31() {
     };
     expect_row(&out, row);
     assert_eq!(row.row(), 31);
-    cleanup(&path);
 }
 
 /// Settlement's integrity checks that the validator observes
@@ -614,7 +597,6 @@ fn a_settlement_integrity_fault_is_si25_under_the_check_it_failed() {
         let row = StoreInvariant::SettlementNotSound { epoch, observed };
         expect_row(&out, row);
         assert_eq!(row.row(), 25);
-        cleanup(&path);
     }
 }
 
@@ -632,7 +614,6 @@ fn inspect_aborts_so_a_later_write_still_runs() {
     let again: Result<(), TestErr> = store.write(|_batch| Ok(()));
     assert!(again.is_ok(), "the slot was released: {again:?}");
     assert_eq!(store.connect_state(), ConnectState::Live);
-    cleanup(&path);
 }
 
 /// Poison inside `inspect` halts the writer and commits nothing, the same
@@ -664,5 +645,4 @@ fn inspect_of_a_hole_halts_the_writer() {
     );
     let again: Result<(), TestErr> = store.write(|_batch| Ok(()));
     assert!(again.is_err(), "the writer stays halted: {again:?}");
-    cleanup(&path);
 }

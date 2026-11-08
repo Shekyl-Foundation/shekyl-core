@@ -29,7 +29,7 @@ use shekyl_chain_store::store::{SnapshotView, StoreError};
 use shekyl_mempool::{judge, Judged, KeyImages};
 
 use super::{captured_chains, mock_with_the_real_clock, replay_keeping_store};
-use crate::test_support::{cleanup, h, open_store_under};
+use crate::test_support::{h, open_store_under};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn every_captured_body_passes_the_doors_consensus_halves_against_its_parent() {
@@ -87,7 +87,6 @@ async fn every_captured_body_passes_the_doors_consensus_halves_against_its_paren
             }
         }
         drop(store);
-        cleanup(&path);
     }
     // The subject exists: the captured chains list bodies, and the door
     // judged every one of them.

@@ -419,7 +419,7 @@ proptest = "1"
 #     `multiexp = "0.4"`, `ciphersuite = "0.4"`,
 #     `dalek-ff-group = "0.5"`, `rand_core = "0.6"`. Each is
 #     already present at the same pin in `shekyl-fcmp`,
-#     `shekyl-tx-builder`, `shekyl-ffi`, and/or `shekyl-crypto-pq`;
+#     `shekyl-tx-builder`, and/or `shekyl-crypto-pq`;
 #     no new third-party supply-chain surface enters here.
 #
 # `shekyl-fcmp` is currently `optional = true` in production

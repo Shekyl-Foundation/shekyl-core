@@ -325,7 +325,7 @@ impl TxRule for H16 {
 
 /// CEN-H9: the amounts sum without overflow on **both** sides
 /// (`check_money_overflow` = `check_inputs_overflow && check_outs_overflow`,
-/// `cryptonote_format_utils.cpp:593–632`). The input side sums only
+/// `cryptonote_format_utils.cpp` at `ac3836de90` (lines 571–611)). The input side sums only
 /// `txin_to_key.amount` — `gen` and the three archival vins are skipped,
 /// their value being CT-side or opaque — exactly as the census row states.
 /// Run on the coinbase too (`prevalidate_miner_transaction`, where CEN-F7

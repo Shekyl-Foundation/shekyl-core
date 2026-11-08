@@ -111,7 +111,7 @@ async fn rpc(state: Arc<AppState>, method: &str, params: Value) -> Value {
     let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
     let request = Request::builder()
         .method("POST")
-        .uri("/")
+        .uri("/json_rpc")
         .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).expect("encode")))

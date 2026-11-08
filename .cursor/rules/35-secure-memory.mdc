@@ -2,11 +2,6 @@
 description: Secure memory wiping conventions for cryptographic secrets.
 globs:
   - rust/**
-  - src/crypto/**
-  - src/wallet/**
-  - src/device/**
-  - src/fcmp/**
-  - src/shekyl/**
 ---
 
 # Secure Memory Wiping

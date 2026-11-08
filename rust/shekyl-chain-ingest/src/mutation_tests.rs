@@ -29,8 +29,8 @@ use crate::scenario_archival::{complete_tree, Persona};
 use crate::schedule::ChainRules;
 use crate::source::IngestEvent;
 use crate::test_support::{
-    bare_chain, block_with_nonce, chain, cleanup, h, open_store, tmp, trace_of, Family, Growing,
-    Scripted, FIRST_SPEND_HEIGHT,
+    bare_chain, block_with_nonce, chain, h, open_store, tmp, trace_of, Family, Growing, Scripted,
+    FIRST_SPEND_HEIGHT,
 };
 
 const GENESIS_RULES: ChainRules =
@@ -243,7 +243,6 @@ async fn judge(
         },
     )
     .await;
-    cleanup(&path);
     match out {
         Ok(report) => Outcome::Report(Box::new(report)),
         Err(fault) => Outcome::Fault(fault),
@@ -667,7 +666,6 @@ async fn the_mined_chain_replays_clean_under_the_seeded_hasher() {
         report.exercised.contains("CEN-D1"),
         "D1 was judged, not skipped"
     );
-    cleanup(&path);
 }
 
 /// Numbering, one mutated block, and the faults raised before a row is judged.

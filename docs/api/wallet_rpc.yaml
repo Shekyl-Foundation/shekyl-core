@@ -13,7 +13,8 @@
 # specified shape lands here first (or in the same PR as) the implementation
 # change.
 #
-# Transport: JSON-RPC 2.0 over HTTP POST / or a Unix domain socket. UDS with
+# Transport: JSON-RPC 2.0 over HTTP POST /json_rpc (the daemon's path, the
+# only one: no alias at /) or a Unix domain socket. UDS with
 # filesystem-permission auth is the recommended deployment mode
 # (docs/WALLET_RPC_README.md); HTTP basic auth remains available for tooling.
 #
@@ -568,10 +569,18 @@ x-shekyl-error-ranges:
   - { start: -29900, end: -29999, subject: server / transport / tenancy, status: SPECIFIED }
 
 paths:
-  /:
+  /json_rpc:
     post:
       operationId: jsonRpcCall
       summary: JSON-RPC 2.0 envelope; the `method` member selects the operation.
+      description: >-
+        The one path JSON-RPC is served at, spelled as the daemon spells it
+        (rule 83: no alias). A request to any other path, once past the
+        Content-Type, `Host` and authentication checks below, gets HTTP 404
+        with a JSON-RPC error object: `id` null, `code` -32601, and `data`
+        the diagnostic `rpc.path.unrouted` with the parameters `path` (the
+        path asked for) and `json_rpc` (`/json_rpc`). The daemon answers an
+        unrouted path the same way.
       requestBody:
         required: true
         description: >-
