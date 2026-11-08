@@ -28,10 +28,11 @@
 >   K_COVER` comparison site are DEAD.** Those files and that site no
 >   longer exist; a reader running the "verified at source" checks in
 >   §16/§17 will find nothing.
-> - **`shekyl-staking-sim` deliberately RETAINS live-looking `K_COVER`
->   code** as the historical reference that this was built and then
->   rejected on the merits. §14.4/§17 readers sent into that crate are
->   reading a retained artifact, not live machinery.
+> - **`shekyl-staking-sim`'s withdrawn arms are deleted (2026-11-08).**
+>   The GF-7 correlator and its fail-closed verdict, `--gf7-breakeven`,
+>   and `--partition-adversary` with its riders were last at `76677fcfa`, the
+>   citation for §13/§14/§17's sim pointers. `--gf7-seal` stays as the
+>   §19.10.3 dispersal tripwire, and `--gf7-timeline` as the recorder.
 > - **The measurement findings themselves STAND.** §13.2's `r = 3.54`
 >   cold-start thin-cover result is retained and re-dispositioned to a
 >   market-funded founder schedule plus the wallet thin-market entry
@@ -810,10 +811,10 @@ valid** (positive `P(link)=0.996 ≥ 0.80`; negative `P(link)=0.102`,
 > which *is* derivable. The window is wallet-side, golden-vector-pinned, not
 > consensus: a change is a wallet release plus a golden re-freeze, not a fork.
 >
-> **The instrument is retained fail-closed, as record.** The
-> `shekyl-staking-sim` GF-7 arm emits `GF7_FAIL_CLOSED`, never a verdict; the
-> §14.4 partition arm (withdrawn separately, PR #354) emits its own named
-> withdrawal. Method note 8 and pass-4 (d) in `ARCHIVAL_FIREWALL_GATE6.md` are
+> **The instrument is deleted.** The `shekyl-staking-sim` GF-7 arm, which
+> emitted `GF7_FAIL_CLOSED` and never a verdict, and the §14.4 partition arm
+> (withdrawn separately, PR #354) were deleted 2026-11-08 and were last at
+> `76677fcfa`. Method note 8 and pass-4 (d) in `ARCHIVAL_FIREWALL_GATE6.md` are
 > the retirement's rationale and stand. Everything below this banner is the
 > historical record of the withdrawn grading round — read it as what was built
 > and measured under the strawman observer, **not** as a live verdict. Do not
@@ -1056,7 +1057,7 @@ preserve:
   event rate with plenty of personas*.
 
   **The sensitivity sweep, run (2026-07-16; `shekyl-staking-sim
-  --gf7-breakeven`, `gf7_breakeven.rs` — mechanism-class under method
+  --gf7-breakeven`, `gf7_breakeven.rs` (deleted 2026-11-08, last at `76677fcfa`) — mechanism-class under method
   note 3, a property of the model, no testnet, no economics input;
   reading corrected same day, per review).** The sweep grades the
   gate-relevant posture at `N ∈ {2..10, 12, 14, 16}`, per-`N` validity
@@ -1482,7 +1483,7 @@ the constant is allowed to price in.
 >    `ARCHIVAL_REWARD_GATE_M1.md` **§13** (the retirement record). The arm
 >    measures a posture that no longer exists.
 > 3. **The feature dictionary is a strawman — 70% of it is non-observable.** The
->    ten-feature dictionary (`PairRaw::features` in `partition_adversary.rs`)
+>    ten-feature dictionary (`PairRaw::features` in `partition_adversary.rs`) (deleted 2026-11-08, last at `76677fcfa`)
 >    declares itself "chain-visible observables only," but is built over
 >    `PairRaw::observable` = `{funding, bond, per_p, drain, resume}`, and
 >    **funding** is the unnamed
@@ -1692,7 +1693,7 @@ the null distribution then models.
   > per-aimed-member for all five controls. Until decided, the run
   > reports **INVALID-with-pins** (bound 3 as written), never a
   > silent pass; the measured record lives in
-  > `shekyl-staking-sim --partition-adversary`.
+  > `shekyl-staking-sim --partition-adversary` (deleted 2026-11-08, last at `76677fcfa`).
   >
   > **UPDATE 2026-07-11 — RESOLVED, but not by picking (a) or (b).**
   > Both options above were grading-rule edits; review correctly
@@ -1700,7 +1701,7 @@ the null distribution then models.
   > property of the deployed statistic, and required the
   > T-computation-rule fact to be pulled at source *before* any
   > disposition. **The verified T-site fact
-  > (`partition_adversary.rs`):** `T` is a raw max over per-member
+  > (`partition_adversary.rs`) (deleted 2026-11-08, last at `76677fcfa`):** `T` is a raw max over per-member
   > Jaccard agreements — *no* cross-member consensus (the
   > "Jaccard-consensus swallows single-member signal" hypothesis is
   > falsified) — but the operating verdict read only `T − null(T)`,
@@ -1921,7 +1922,7 @@ section** — the same spec-first checkpoint the main gate ran on.
 > from the production `FounderConfig`, compile-time un-constructible per
 > §17.7 finding 4). Family members 1–7, the named feature dictionary,
 > the max-statistic `T` with its permutation null, and controls M-a…M-e
-> are implemented and graded (`--partition-adversary`): deployed bound 1
+> are implemented and graded (`--partition-adversary`) (deleted 2026-11-08, last at `76677fcfa`): deployed bound 1
 > holds; whole-set controls clear bound 2; the single-member-targeted
 > controls surface the pinned bound-2 question above. Riders landed in
 > the same round: §16.7 N-sweep (`r < 2` at every swept `N`; measured
@@ -4712,12 +4713,11 @@ withdrawn.** The `K_COVER` seal is re-dispositioned in
 #### 19.10.2a The §19.4 in-model leg, same scope
 
 The §19.4 harness-timestamp sweep (`wallclock_leg.rs`) grades the same
-`K = 2` sibling construction in-model, and its PROVISIONAL-PASS rides
-the `--gf7-timeline` criterion-9.9 conjunction. The same foreclosure
-applies: its rows stand as **model records** (the sub-`T` cliff, the
-dispersal-range shape), and its contribution to the timeline
-conjunction is retained as a **model-consistency check** — not a
-channel grade. Its module doc carries this scope note; no code change
+`K = 2` sibling construction in-model. The same foreclosure applies: its
+rows stand as **model records** (the sub-`T` cliff, the dispersal-range
+shape), and `--gf7-timeline` reports the leg as a **model-consistency
+check**, not a channel grade. The criterion-9.9 conjunction it rode was
+deleted with the correlator (2026-11-08, last at `76677fcfa`). Its module doc carries this scope note; no code change
 (the sim is hermetic and its verdict strings are already
 status-neutral).
 

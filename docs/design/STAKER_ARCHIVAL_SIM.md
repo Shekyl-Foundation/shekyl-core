@@ -3921,6 +3921,9 @@ over candidate-set size = 1 target + Poisson background funding-shaped decoys.
 > two adversary arms (funding-seam-fusing vs. funding-seam-blind — the blind arm isolates how much
 > the *other* two axes leak on their own). The **measurement round** — grading `P(link | T_obs)`
 > under threshold — remains the open genesis-gate obligation (`docs/FOLLOWUPS.md`).
+> *(The graded round was withdrawn with the order coin; its correlator and arms were deleted
+> 2026-11-08 and were last at `76677fcfa`. `--gf7-timeline` now records the timeline and reports its
+> coverage and the wallclock leg.)*
 
 **Homeostasis is analytical, not re-simmed.** Economic dynamics are epoch-quantized
 (`SETTLEMENT_EPOCH_BLOCKS = 10_000` ≈ 13.9 d); the standoff adds at most `window_blocks` of entry

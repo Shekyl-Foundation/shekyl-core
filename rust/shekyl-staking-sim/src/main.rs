@@ -16,20 +16,13 @@
 //!
 //! Modes: `--timing-cluster` (ARCHIVAL_TIMING_CONSTANTS pin);
 //! `--failure-confirmation` (L14b Round-1 policy comparator per
-//! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); `--gf7-timeline` (the GF-7 graded
-//! measurement round — joint three-axis correlator + three arms + validity
-//! controls, graded against the a-priori `r < 2` bound per
-//! ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4); `--gf7-breakeven` (the
-//! effective-cover sensitivity sweep — `r(N)`/`P(link)` at the gate posture,
-//! the WI-4 §13.5 fifth conditional's measured shape; not a gate, and its
-//! parity line is an arithmetic identity, not a threshold);
+//! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); `--gf7-timeline` (the GF-7 joint
+//! timeline recorded through production's broadcast seam, its axis coverage,
+//! and the §19 leg-(b) wall-clock arm; ARCHIVAL_BOND_WI4_MEASUREMENT.md, WI-4);
 //! `--gf7-seal <artifact>` (also `--gf7-seal=<artifact>`; the §19.8 leg-(b)
-//! SEALING form — grades the receipts artifact the `shekyl-engine-core`
-//! `gf7_sealing_run` harness wrote from a live-driver run, same circular
-//! statistic and `r < 2` bound; per WI-4 §19.10 a dispersal-regression
-//! tripwire, no longer a K_COVER seal input); `--partition-adversary` (the §14.4
-//! founder-cover partition-adversary arm — gating lemma + witness-typed
-//! controls, per the same doc's §14/§17 launch-posture round).
+//! sealing-form grader of the receipts artifact the `shekyl-engine-core`
+//! `gf7_sealing_run` harness writes from a live-driver run; per WI-4 §19.10.3
+//! a dispersal-regression tripwire).
 
 mod agent;
 mod audit;
@@ -39,16 +32,13 @@ mod curve;
 mod f34_heavy_era;
 mod failure_confirmation;
 mod fingerprint;
-mod gf7_breakeven;
 mod gf7_seal;
 mod gf7_timeline;
 mod metrics;
 mod model;
 mod participation;
-mod partition_adversary;
 mod retrieval;
 mod reward;
-mod riders;
 mod rng;
 use reward::{CurveImpl, RewardArm};
 #[cfg(test)]
@@ -916,115 +906,16 @@ fn print_gf7_seal_report(report: &gf7_seal::GF7SealReport) {
 
 fn print_gf7_timeline_report() {
     let report = gf7_timeline::run_full_report();
-    eprintln!(
-        "shekyl-staking-sim — GF-7 measurement round (ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4)"
-    );
-    eprintln!(
-        "VERDICT WITHDRAWN (fail-closed; GF-7 coin retirement): the order coin and the funding-"
-    );
-    eprintln!(
-        "  send event this correlator graded were retired, so the entry-seam channel has no input"
-    );
-    eprintln!("  and the sim cannot emit a valid entry-seam verdict. Rows below are context only.");
-    eprintln!();
-    eprintln!(
-        "GRADED genesis gate for principal↔P funding-seam unlinkability. A-priori bound (§3,"
-    );
-    eprintln!(
-        "  committed before this correlator existed): r = P(link)·N < {:.1} — the modeled",
-        report.ratio_bound
-    );
-    eprintln!("  observer may at most double blind guessing (additive advantage A < 1/N).");
-    eprintln!(
-        "  N={} (baseline 1/N={:.3}, absolute bar P(link)<{:.3}), trials/point={}.",
-        report.n_principals,
-        1.0 / report.n_principals as f64,
-        report.ratio_bound / report.n_principals as f64,
-        report.trials,
-    );
+    eprintln!("shekyl-staking-sim — GF-7 joint timeline (ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4)");
+    eprintln!("  The sim's recorder of the production broadcast seam: one principal↔P timeline");
+    eprintln!("  through draw_entry_gap and bounded_uniform, all three GF-7 axes recorded. No");
+    eprintln!("  correlator and no verdict: the graded round was withdrawn with the order coin.");
     eprintln!(
         "  Axis coverage (one sample timeline): bond-post={} perP={} lifecycle={}.",
         report.coverage.axis_i_bond_post_events,
         report.coverage.axis_ii_per_p_submits,
         report.coverage.axis_iii_lifecycle_events
     );
-    eprintln!("  Conditional on: isolation holds (post-isolation timing residual); pessimistic");
-    eprintln!("  near-periodic lifecycle; N is realized cover (rate-driven, not a wallet choice).");
-    eprintln!();
-
-    // Controls gate the run's validity (§5).
-    eprintln!("Controls (must both pass or the run is INVALID — §5):");
-    for c in &report.controls {
-        eprintln!(
-            "  [{}] {:<28} P(link)={:.3} baseline={:.3}  ({})",
-            if c.passed { "ok" } else { "FAIL" },
-            c.name,
-            c.p_link,
-            c.baseline,
-            c.expectation,
-        );
-    }
-    eprintln!();
-    eprintln!(
-        "  Observer is POSTURE-CONDITIONED (§4.1): under the recommended local-daemon posture,"
-    );
-    eprintln!(
-        "  wallet session/refresh markers are loopback-invisible and are NOT direct anchors;"
-    );
-    eprintln!("  their cadence still reaches the observer through the chain-visible events it");
-    eprintln!("  co-triggers (funding/bond/drain/resume ride the session lattice — graded, see");
-    eprintln!("  blind at window 0). A remote/non-isolated daemon REOPENS this: markers become");
-    eprintln!("  anchors and the gate must be re-graded with them in (pre-fix shape: r≈5, fail).");
-    eprintln!();
-    eprintln!(
-        "  Arms: blind = funding-seam-blind null (§2 failure mode, observable cadence only);"
-    );
-    eprintln!("  s3 = modeled S-3 (joint MAP fusion). The funding seam is retired (GF-7 coin");
-    eprintln!("  retirement), so the S-3 fused set is the observable lifecycle cadence — the same");
-    eprintln!("  set blind scores, so blind == s3 now; lr = stress PANEL, an oracle-union upper");
-    eprintln!("  bound over {{MAP, density-corrected MAP}} — ≥ s3 by construction (the exact");
-    eprintln!("  seam-consistency-gated member is retired with the seam it filtered on).");
-    eprintln!("  The per-row grades are retained as context of the retracted arm; there is no");
-    eprintln!("  gate for any row to be relevant to — the entry-seam verdict is WITHDRAWN");
-    eprintln!("  (fail-closed) regardless of any row's score.");
-    eprintln!();
-    eprintln!(
-        "{:<10} {:>4} {:>5} {:>6} {:>6} | {:>7} {:>7} {:>7} | {:>4} {:>4}",
-        "group", "win", "disp", "draw", "regime", "blind", "s3", "lr", "r_lr", "pass",
-    );
-    for r in &report.rows {
-        eprintln!(
-            "{:<10} {:>4} {:>5} {:>6} {:>6} | {:>7.3} {:>7.3} {:>7.3} | {:>4.2} {:>4}",
-            r.group,
-            r.window_blocks,
-            r.dispersal_bound,
-            r.draw_shape,
-            r.regime,
-            r.blind.p_link,
-            r.modeled_s3.p_link,
-            r.lr_stress.p_link,
-            r.lr_stress.ratio,
-            if r.pass { "Y" } else { "N" },
-        );
-    }
-    eprintln!();
-    eprintln!("Gate status: {}", report.gate_status);
-    eprintln!(
-        "  Entry-seam verdict WITHDRAWN (fail-closed; GF-7 coin retirement) — the rows are \
-         context, not a pass/fail gate (§3.2/§3.3):"
-    );
-    eprintln!("  - low-activity/cold-start FAILS the bound, and cold-start is the genesis regime:");
-    eprintln!("    disposition is the §14 founder-cover launch posture (refuse the regime —");
-    eprintln!("    production-path-identical staggered founder cover, shard-schedule structural");
-    eprintln!("    gate, §14.4 partition-adversary arm; spec-committed, measurement gated on");
-    eprintln!(
-        "    review). This row stays graded as the counterfactual bracket — never a bar move."
-    );
-    eprintln!(
-        "  - the block-unit dispersal>0 rows are a coarse-tick counterfactual: real WI-3 dispersal"
-    );
-    eprintln!("    is U[0,60s) (sub-block), so the realistic block-time gate sits at dispersal=0.");
-    eprintln!("    The wall-clock sub-block channel is graded by the leg-(b) arm below (§19).");
     eprintln!();
 
     // Leg-(b) wall-clock sweep-phase arm (measurement doc §19).
@@ -1081,327 +972,10 @@ fn print_gf7_timeline_report() {
         );
     }
     eprintln!("  Leg-(b) status: {}", leg.status);
-    eprintln!();
-    if report.provisional {
-        eprintln!(
-            "  PROVISIONAL: grades the sim's synthesized dispatch (incl. modeled WI-3 dispersal"
-        );
-        eprintln!("  and the §19 wall-clock layer). Sealing re-run against WI-3's live emission =");
-        eprintln!("  reconvergence leg (b) sealing form (§19.1), tracked in docs/FOLLOWUPS.md.");
-    }
+    eprintln!("  A model-consistency check (WI-4 §19.10.2a), not a channel grade.");
     match serde_json::to_string_pretty(&report) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("error serializing gf7-timeline report: {e}"),
-    }
-}
-
-fn print_gf7_breakeven_report() {
-    let report = gf7_breakeven::run_full_report();
-    eprintln!(
-        "shekyl-staking-sim — GF-7 effective-cover sensitivity sweep (WI-4 §13.5 fifth conditional)"
-    );
-    eprintln!("Verdict: {}", report.verdict);
-    eprintln!("NOT A GATE. The WI-4 verdict (r = 1.86 < 2 at N = 10) it referenced is WITHDRAWN");
-    eprintln!("  (fail-closed; GF-7 coin retirement). It was computed at NOMINAL");
-    eprintln!("  cover (Gate-6 §11 qualifier (iv): an upper bound); effective post-isolation");
-    eprintln!("  cover is economics (§11.8 method note 3) — unmeasurable pre-genesis. This sweep");
-    eprintln!("  measures how the model's own r(N) and P(link) move with cover at the gate");
-    eprintln!("  posture — a property of the model (mechanism-class), derivable now.");
-    eprintln!(
-        "  Bound r < {:.1}; trials/point={}. Worst arm per row; controls re-run per N.",
-        report.ratio_bound, report.trials,
-    );
-    eprintln!();
-    eprintln!("  FINDING: r < 2 is structurally blind to cover — the ratio renormalizes by the");
-    eprintln!("  degraded baseline, so thin-cover harm cannot move it (r <= N caps it; a low-N");
-    eprintln!("  row 'clearing' the ratio is not passing in any useful sense). The exposure");
-    eprintln!(
-        "  figure {:.2} is the ratio bar evaluated at nominal N={} — back-derived arithmetic,",
-        report.nominal_exposure_identity, report.nominal_n,
-    );
-    eprintln!("  NOT a committed bound; the parity line below restates the nominal-cover");
-    eprintln!("  assumption and carries no independent content.");
-    eprintln!();
-    eprintln!(
-        "  {:>4} {:>6} {:>8} | {:>7} {:>7} {:>7} | {:>8} {:>9} {:>6}",
-        "N", "ctrls", "baseline", "blind", "s3", "lr", "worst_r", "worst_P", "clears",
-    );
-    for r in &report.rows {
-        eprintln!(
-            "  {:>4} {:>6} {:>8.3} | {:>7.3} {:>7.3} {:>7.3} | {:>8.2} {:>9.3} {:>6}",
-            r.n,
-            if r.controls_valid { "ok" } else { "FAIL" },
-            r.baseline,
-            r.blind.p_link,
-            r.modeled_s3.p_link,
-            r.lr_stress.p_link,
-            r.worst_ratio,
-            r.worst_p_link,
-            if r.clears_bound { "Y" } else { "N" },
-        );
-    }
-    eprintln!();
-    // A `None` selection is ambiguous between "every valid row misses" and
-    // "no row was valid at all" (controls failed everywhere — the sweep
-    // observed nothing); the two must never print as the same sentence.
-    let any_valid_rows = report.rows.iter().any(|r| r.controls_valid);
-    match (report.ratio_threshold_n, any_valid_rows) {
-        (Some(t), _) => eprintln!(
-            "  Ratio breakeven: worst arm clears r < {:.1} down to N = {} — if that is the \
-             bottom of the sweep, the relative leak is scale-invariant in-model (no ratio \
-             breakeven in range; cover was never gated by r).",
-            report.ratio_bound, t,
-        ),
-        (None, true) => eprintln!("  Ratio breakeven: NONE — every valid row breaches the bound."),
-        (None, false) => eprintln!(
-            "  Ratio breakeven: NO VALID ROWS — controls failed at every N; the sweep \
-             graded nothing and no conclusion about the bound was observed.",
-        ),
-    }
-    match (&report.nominal_parity, any_valid_rows) {
-        (Some(p), _) => eprintln!(
-            "  Nominal-exposure parity (arithmetic identity, not a threshold): worst-arm \
-             P(link) stays <= {:.2} down to N = {} (P = {:.3} there). Under flat r this must \
-             sit at N = nominal * (r / bound) by identity — it restates the nominal-cover \
-             assumption. Lifetime exposure is the aspiration's quantity (F-D4 Sect. 13.3); \
-             its instrument is the S-2 ledger, not this number.",
-            report.nominal_exposure_identity, p.n, p.worst_p_link,
-        ),
-        (None, true) => eprintln!(
-            "  Nominal-exposure parity: NONE — every valid row realizes more than the \
-             nominal-cover exposure.",
-        ),
-        (None, false) => eprintln!(
-            "  Nominal-exposure parity: NO VALID ROWS — controls failed at every N; \
-             nothing was observed.",
-        ),
-    }
-    if !report.failing_n.is_empty() {
-        eprintln!(
-            "  Failing cover levels (valid rows): {:?}",
-            report.failing_n
-        );
-    }
-    match serde_json::to_string_pretty(&report) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing gf7-breakeven report: {e}"),
-    }
-}
-
-fn print_partition_adversary_report() {
-    let report = partition_adversary::run_gating_witness_report();
-    eprintln!(
-        "shekyl-staking-sim — §14.4 partition-adversary arm (ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4)"
-    );
-    eprintln!(
-        "Co-first deliverables (R4/R5, committed before any sweep grades — §17.6 f.1 / §17.7 f.4):"
-    );
-    eprintln!();
-    eprintln!("Gating lemma — a-priori i.i.d. founder-clustering bound (no user-cohort reliance):");
-    eprintln!(
-        "  P(all M anchors within span c) ≤ M·((c+1)/(W+1))^(M−1) for M i.i.d. uniform draws"
-    );
-    eprintln!(
-        "  over {{0..W}}. At M={} c={} W={} (production entry-gap window, K-invariant per §17 P2):",
-        report.founder_count, report.cluster_span_blocks, report.entry_gap_window
-    );
-    eprintln!(
-        "  committed bound = {:.4e}  (exact range CDF {:.4e}; ceiling {:.0e}) — derivably small: {}",
-        report.gating_lemma_bound,
-        report.gating_lemma_exact,
-        report.gating_lemma_ceiling,
-        if report.derivably_small { "YES" } else { "NO" },
-    );
-    eprintln!("  Cited by: P2 no-mechanism disposition + §16.2 obligation-3 strip-row floor.");
-    eprintln!();
-    eprintln!(
-        "Witness-typed controls (compile-time un-constructible from the production founder-config"
-    );
-    eprintln!(
-        "  constructor — distinct ControlWitness type, no From bridge; deployed window = {} blk):",
-        report.deployed_window
-    );
-    for c in &report.controls {
-        eprintln!(
-            "  [{}] {:<30} aims at family member {}",
-            if c.witness_typed { "ok" } else { "FAIL" },
-            c.label,
-            c.aimed_member,
-        );
-    }
-    eprintln!();
-
-    // The graded arm: family members 1–7, the feature dictionary, the
-    // max-over-family statistic T, its permutation null, and bounds 1–3.
-    let graded = partition_adversary::run_partition_report();
-    eprintln!(
-        "Graded arm — N={} founders={} trials={} perms={} (bound 1 |lift|≤{:.2} AND no member \
-         flags; bound 2 whole-set lift≥{:.2} AND aimed flags / single-member aimed flags; \
-         any-member arm at family-wise α={:.2}, Bonferroni α/7, exact rank p):",
-        graded.n,
-        graded.founder_count,
-        graded.trials,
-        graded.permutations,
-        graded.bound1_tol,
-        graded.bound2_lift,
-        partition_adversary::FAMILY_ALPHA,
-    );
-    eprintln!(
-        "  Feature dictionary (§14.4, chain-visible only): seam |bond−funding|, dispatch phase,"
-    );
-    eprintln!(
-        "  sorted inter-event gap vector, cadence period, event count, resume spacing (z-scored)."
-    );
-    eprintln!(
-        "  Family: 1 k-means · 2 per-feature top-M · 3 cohesion-subset · 4 spectral · 5 seeded-NN"
-    );
-    eprintln!("          · 6 whitened joint-density isolation · 7 most-regular-subset.");
-    eprintln!();
-    eprintln!(
-        "  {:<26} {:>6} {:>6} {:>7} {:>5}  aimed  {:>6}   verdict",
-        "scenario", "T", "null", "lift", "bnd", "aimLft",
-    );
-    let row = |s: &partition_adversary::PartitionScenario| {
-        eprintln!(
-            "  {:<26} {:>6.3} {:>6.3} {:>+7.3} {:>5}  m{:<4} {:>+6.3}   {}",
-            s.label,
-            s.t_obs,
-            s.null_mean,
-            s.lift,
-            if s.aimed_member == 0 { "1" } else { "2" },
-            s.aimed_member,
-            s.aimed_member_lift,
-            if s.passed { "PASS" } else { "fail" },
-        );
-    };
-    row(&graded.deployed);
-    for c in &graded.controls {
-        row(c);
-    }
-    eprintln!();
-    eprintln!("  per-member agreement vs null (m1..m7), deployed then controls;");
-    eprintln!("  flg marks the any-member arm (rank p ≤ α/7 vs the member's own null-of-mean):");
-    let members = |s: &partition_adversary::PartitionScenario| {
-        let agr: Vec<String> = s
-            .member_agreements
-            .iter()
-            .map(|x| format!("{x:.2}"))
-            .collect();
-        let nul: Vec<String> = s
-            .member_null_means
-            .iter()
-            .map(|x| format!("{x:.2}"))
-            .collect();
-        let flg: Vec<String> = s
-            .member_flags
-            .iter()
-            .zip(s.member_p.iter())
-            .map(|(f, p)| {
-                if *f {
-                    format!("*{p:.3}")
-                } else {
-                    format!(" {p:.3}")
-                }
-            })
-            .collect();
-        eprintln!("    {:<12} agr=[{}]", s.scenario, agr.join(" "));
-        eprintln!("    {:<12} nul=[{}]", "", nul.join(" "));
-        eprintln!("    {:<12} flg=[{}]", "", flg.join(" "));
-    };
-    members(&graded.deployed);
-    for c in &graded.controls {
-        members(c);
-    }
-    eprintln!();
-    eprintln!("  STATUS: {}", graded.status);
-    for p in &graded.pinned_underspecifications {
-        eprintln!("  PIN: {p}");
-    }
-    eprintln!();
-
-    // The §14.4-round riders (same generator, extra axes): §16.7 N-sweep and
-    // M6.2 coupling control, §18.3-narrowed bridge grading, §18.4 lifetime
-    // accumulation.
-    let riders = riders::run_riders_report();
-    eprintln!(
-        "Riders (§16.7 items 2/4, §18.3 as narrowed by §18.8, §18.4) — \
-         sweep/coupling trials={} r-bound={:.1}:",
-        riders.trials, riders.ratio_bound,
-    );
-    eprintln!("  N-sweep (r < 2 at every swept N; growth with N = redesign signal):");
-    for row in &riders.n_sweep {
-        eprintln!(
-            "    N={:<3} baseline={:.3}  blind r={:.3}  s3 r={:.3}  lr r={:.3}  {}",
-            row.n,
-            row.baseline,
-            row.blind.ratio,
-            row.modeled_s3.ratio,
-            row.lr_stress.ratio,
-            if row.pass { "PASS" } else { "FAIL" },
-        );
-    }
-    eprintln!(
-        "  M6.2 coupling control: blind@window-0 P(link)={:.3} vs floor 2/N={:.3} — {}",
-        riders.coupling.blind_p_link,
-        riders.coupling.floor,
-        if riders.coupling.passed {
-            "coupled (ok)"
-        } else {
-            "DECOUPLED — INVALID"
-        },
-    );
-    eprintln!(
-        "  Attribute-bridge grading (strata as candidate bridge axes, never crowds; \
-         trials={} perms={}):",
-        riders.bridge_trials, riders.bridge_perms,
-    );
-    for b in &riders.bridge {
-        eprintln!(
-            "    {:<42} |corr|={:.3} null={:.3}  {}  [{}]",
-            b.scenario,
-            b.bridge_stat,
-            b.null_mean,
-            if b.passed { "ok" } else { "FAIL" },
-            b.expectation,
-        );
-    }
-    eprintln!(
-        "  Lifetime accumulation (per-post p={:.3}, strongest posture arm; §18.4 form):",
-        riders.lifetime_per_post_p,
-    );
-    for l in &riders.lifetime {
-        eprintln!(
-            "    events={:<3} cumulative={:.3}{}",
-            l.events,
-            l.cumulative,
-            if l.founder_anchor {
-                "  <- founder/long-lived pessimistic anchor"
-            } else {
-                ""
-            },
-        );
-    }
-    eprintln!();
-    eprintln!("  RIDERS STATUS: {}", riders.status);
-    eprintln!();
-
-    // Named-field envelope, not a tuple: a bare 3-array is not
-    // self-describing, and every other report on this binary serializes a
-    // keyed object — downstream parsers should never have to know positions.
-    #[derive(serde::Serialize)]
-    struct PartitionAdversaryArtifact<'a> {
-        gating_witness: &'a partition_adversary::GatingWitnessReport,
-        graded_arm: &'a partition_adversary::PartitionReport,
-        riders: &'a riders::RidersReport,
-    }
-    let artifact = PartitionAdversaryArtifact {
-        gating_witness: &report,
-        graded_arm: &graded,
-        riders: &riders,
-    };
-    match serde_json::to_string_pretty(&artifact) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing partition-adversary report: {e}"),
     }
 }
 
@@ -1600,15 +1174,10 @@ fn main() {
         return;
     }
 
-    if std::env::args().any(|a| a == "--gf7-breakeven") {
-        print_gf7_breakeven_report();
-        return;
-    }
-
     // Both documented forms: `--gf7-seal=<path>` and `--gf7-seal <path>`.
     // A bare `--gf7-seal` with no path fails loudly — main() otherwise falls
-    // through to the default simulation, and a silently-wrong report on the
-    // K_COVER seal path is exactly what this mode must never produce.
+    // through to the default simulation, and a silently-wrong report from the
+    // dispersal tripwire is exactly what this mode must never produce.
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args
         .iter()
@@ -1627,11 +1196,6 @@ fn main() {
             });
         let report = gf7_seal::run(&artifact);
         print_gf7_seal_report(&report);
-        return;
-    }
-
-    if std::env::args().any(|a| a == "--partition-adversary") {
-        print_partition_adversary_report();
         return;
     }
 

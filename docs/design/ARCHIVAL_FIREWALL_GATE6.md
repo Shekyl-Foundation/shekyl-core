@@ -2056,7 +2056,7 @@ so it is **reclassified as the fifth WI-4 §13.5 standing conditional** (§12.8;
 source that the `1.86` was computed on nominal cover, so the conditional is load-bearing
 against the 7% margin). **The hit's follow-through (same day): the conditional's *shape*
 was then measured, because the sensitivity sweep is mechanism even though the level is
-economics** — `shekyl-staking-sim --gf7-breakeven` sweeps the model's own `r(N)` at the
+economics** — `shekyl-staking-sim --gf7-breakeven` (deleted 2026-11-08, last at `76677fcfa`) sweeps the model's own `r(N)` at the
 gate posture (a property of the model, not the world). Result: worst-arm `r` is flat
 ≈1.86 across `N ∈ [2, 16]` — **`r < 2` is structurally blind to cover**, so cover was
 never gated by `r` and no per-event monitoring threshold exists to derive (the candidate
@@ -2830,7 +2830,7 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   on this side. Scope narrowing: thin-cover-as-regime is already L12 with a design-away
   disposition (M1 reward-gate refuses the regime), so what this conditional carries is
   effective-vs-nominal **at steady state**. (2) *Sweep:* `shekyl-staking-sim
-  --gf7-breakeven` (mechanism-class under method note 3: a property of the model, no
+  --gf7-breakeven` (deleted 2026-11-08, last at `76677fcfa`) (mechanism-class under method note 3: a property of the model, no
   economics input) sweeps `r(N)` at the gate posture, `N ∈ [2, 16]`. Finding: worst-arm
   `r` clears the bound at every row (≈1.46–1.83) and never trends toward the bar as
   cover thins — **`r < 2` is structurally blind to cover**. The ratio renormalizes by
@@ -3335,14 +3335,14 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   on-chain). F-W family extended F-W1…F-W8 → F-W9 (index row 97).
 
 - **2026-07-16 (GF-7 fifth conditional: kind sharpened, sensitivity sweep run —
-  `--gf7-breakeven`; reading corrected same day, per review):** Follow-through on the
+  `--gf7-breakeven` (deleted 2026-11-08, last at `76677fcfa`); reading corrected same day, per review):** Follow-through on the
   reclassification below. (1) *Kind corrected:* "the isolation-conditioning kind" got
   permanence right and shape wrong — isolation conditions a channel; effective cover
   conditions **the number itself** (`1.86` was computed at nominal cover, an upper bound;
   honest characterization is stacked marginals of opposite sign — pessimistic adversary
   panel × optimistic cover). Scope narrowed: thin-cover-as-regime is already
   L12/design-away; the conditional carries effective-vs-nominal **at steady state**.
-  (2) *Sweep run* (`shekyl-staking-sim --gf7-breakeven`, `gf7_breakeven.rs` —
+  (2) *Sweep run* (`shekyl-staking-sim --gf7-breakeven`, `gf7_breakeven.rs` (deleted 2026-11-08, last at `76677fcfa`) —
   mechanism-class under method note 3, a property of the model): worst-arm `r`
   **clears the bound at every row of `N ∈ [2, 16]`, never trending toward the bar as
   cover thins** — **`r < 2` is structurally blind to cover** (hit probability and

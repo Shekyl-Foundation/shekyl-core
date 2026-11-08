@@ -33,9 +33,8 @@
 //! This leg grades the `K = 2` sibling construction **in-model**. Per the
 //! §19.10 scope correction the concurrently-posting-sibling premise is
 //! design-foreclosed; these rows stand as model records (the sub-`T`
-//! cliff, the dispersal-range shape) and the leg's contribution to the
-//! `--gf7-timeline` conjunction is a model-consistency check, not a
-//! channel grade.
+//! cliff, the dispersal-range shape), and `--gf7-timeline` reports the leg
+//! as a model-consistency check, not a channel grade.
 //!
 //! # A-priori bound (committed §19.2, before this code existed)
 //!
