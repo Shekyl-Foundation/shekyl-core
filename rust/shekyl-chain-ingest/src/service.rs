@@ -553,7 +553,10 @@ pub(crate) struct Shared<S: Substrate> {
     /// The first fault a span task met; the service ends on it.
     fault: Mutex<Option<ServiceFault<S::Fault>>>,
     /// Serializes cache pins. Taken after a hasher permit, never before.
-    pin_lock: Arc<Mutex<()>>,
+    /// Holds the seed window last installed: the only seeds a later
+    /// install may release (A2). A run's pins and a branch preparation
+    /// take the lock and leave it as it is.
+    pin_lock: Arc<Mutex<Option<crate::cache_window::SeedPair>>>,
     /// Serialises every form under a branch's own seed (B2): an alternative
     /// arrival's, and a switch that promotes past its branch's seed point.
     /// Taken before any permit, so the order is gate, permit, `pin_lock`.
@@ -1273,7 +1276,7 @@ where
             stop_flag: Arc::new(AtomicBool::new(false)),
             stop: tokio::sync::watch::Sender::new(false),
             fault: Mutex::new(None),
-            pin_lock: Arc::new(Mutex::new(())),
+            pin_lock: Arc::new(Mutex::new(None)),
             branch_gate: tokio::sync::Mutex::new(()),
             seeds: tokio::sync::watch::Sender::new(None),
             followed: tokio::sync::watch::Sender::new(0),

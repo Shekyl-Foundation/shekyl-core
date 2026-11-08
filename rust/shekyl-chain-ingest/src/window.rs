@@ -6,7 +6,8 @@
 //! The two cache slots, and the pool steps that run beside them.
 //!
 //! [`install_blocking`] reads the seeds the reorg cap can name and pins
-//! them, transient then canonical, under one chain permit. A hash looks a
+//! them, transient then canonical, under one chain permit, and releases a
+//! seed the window it replaces named and it does not. A hash looks a
 //! cache up; it does not build one. A pool-file fault retires the pool.
 //! A chain-store fault stops the service.
 
@@ -55,7 +56,7 @@ where
         return Ok(());
     };
     {
-        let _gate = shared
+        let mut installed = shared
             .pin_lock
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -65,6 +66,22 @@ where
             shared.substrate.pin_seed(&transient);
         }
         shared.substrate.pin_seed(&pair.canonical);
+        // A seed the previous window named and this one does not is
+        // released: nothing else would empty its slot before the next
+        // epoch's pin (A2). Only those. A run in flight pins the seeds of
+        // blocks it has not committed yet, and this window, read at the
+        // committed tip, cannot name them; a release by "whatever the
+        // second slot holds" evicted them under the run's forms.
+        if let Some(previous) = installed.replace(pair) {
+            for seed in [Some(previous.canonical), previous.transient]
+                .into_iter()
+                .flatten()
+            {
+                if !pair.holds(&seed) {
+                    shared.substrate.release_seed(&seed);
+                }
+            }
+        }
     }
     if !shared.stopping() {
         shared.seeds.send_replace(Some(pair));
