@@ -1722,10 +1722,10 @@ two. Every route they replace is a REST path today.
   `init` registers the filter's reload handle once, for the life of the
   process ([`lib.rs:245`](../../rust/shekyl-logging/src/lib.rs)), and the
   apply, `subsystem::apply_directive`, returns nothing
-  ([`subsystem.rs:228-237`](../../rust/shekyl-logging/src/subsystem.rs)).
+  ([`subsystem.rs:281-290`](../../rust/shekyl-logging/src/subsystem.rs)).
   The swap's two `Err`s are a process with no subscriber and a reload layer
   that is gone
-  ([`reload.rs:40-49`](../../rust/shekyl-logging/src/reload.rs)), and a
+  ([`reload.rs:41-51`](../../rust/shekyl-logging/src/reload.rs)), and a
   daemon reaches neither after start; the apply reports either one on
   standard error and leaves the filter as it was.
 - **What a change does to traffic already running** (same ruling). A

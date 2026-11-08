@@ -17,6 +17,8 @@ use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::reload;
 use tracing_subscriber::Registry;
 
+use crate::filter::Directive;
+
 /// The handle for the process-global reload layer wrapping the `EnvFilter`.
 pub(crate) type FilterReloadHandle = reload::Handle<EnvFilter, Registry>;
 
@@ -32,17 +34,17 @@ pub(crate) fn register(handle: FilterReloadHandle) {
     drop(HANDLE.set(handle));
 }
 
-/// Swaps the live filter for `directive`. The runtime owner
-/// ([`crate::subsystem::apply`]) builds the directive from typed words, so
-/// it is always one `EnvFilter` accepts; the two `Err`s are a subscriber
-/// that was never installed and a reload layer that is gone, neither of
-/// which a daemon reaches after start.
-pub(crate) fn reload_directive(directive: &str) -> Result<(), String> {
+/// Swaps the live filter for `directive`. The directive was parsed when
+/// it was built ([`Directive::parse`]), so the only `Err`s a caller
+/// reaches are a subscriber that was never installed and a reload layer
+/// that is gone, neither of which a daemon reaches after start.
+pub(crate) fn reload_directive(directive: &Directive) -> Result<(), String> {
     let Some(handle) = HANDLE.get() else {
         return Err("no subscriber is installed".to_owned());
     };
-    let filter = EnvFilter::try_new(directive)
-        .map_err(|e| format!("the directive {directive:?} is not a filter: {e}"))?;
+    let filter = directive
+        .to_env_filter()
+        .map_err(|e| format!("the directive {directive} is not a filter: {e}"))?;
     handle
         .reload(filter)
         .map_err(|e| format!("the reload layer is gone: {e}"))

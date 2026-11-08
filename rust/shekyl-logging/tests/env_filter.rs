@@ -107,11 +107,13 @@ fn a_cxx_log_category_is_refused_by_name() {
     with_env(
         &[(SHEKYL_LOG_ENV, Some("info,net.p2p:DEBUG"))],
         || match resolve_env_filter(Level::WARN) {
-            Err(FilterError::CxxCategory { target, source_var }) => {
+            Err(FilterError::RetiredTarget {
+                target, source_var, ..
+            }) => {
                 assert_eq!(target, "net.p2p:DEBUG");
                 assert_eq!(source_var, SHEKYL_LOG_ENV);
             }
-            other => panic!("a C++ category must be refused, got {other:?}"),
+            other => panic!("a retired target must be refused, got {other:?}"),
         },
     );
 }

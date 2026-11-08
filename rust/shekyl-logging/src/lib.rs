@@ -108,7 +108,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use colour::NoColor;
 
 use thiserror::Error;
-use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -267,9 +266,9 @@ fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
     colour: LineColour,
 ) -> Result<(LoggerGuard, reload::FilterReloadHandle), InitError> {
     let filter = match &config.directive {
-        Some(directive) => {
-            EnvFilter::try_new(directive).map_err(|e| InitError::FilterParse(e.to_string()))
-        }
+        Some(directive) => directive
+            .to_env_filter()
+            .map_err(|e| InitError::FilterParse(e.to_string())),
         None => filter::resolve_env_filter(config.fallback_default)
             .map_err(|e| InitError::FilterParse(e.to_string())),
     }?;

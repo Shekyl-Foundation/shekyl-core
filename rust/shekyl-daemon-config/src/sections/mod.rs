@@ -191,7 +191,7 @@ impl Logging {
     /// The table admits only level words and subsystem keys, and [`build`]
     /// refuses anything else, so a built section's words are in that set.
     #[must_use]
-    pub fn directive(&self) -> String {
+    pub fn directive(&self) -> shekyl_logging::filter::Directive {
         let overrides: Vec<(&str, &str)> = self
             .categories
             .iter()

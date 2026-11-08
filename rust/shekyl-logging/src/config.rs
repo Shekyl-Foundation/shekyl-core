@@ -14,6 +14,8 @@ use std::path::PathBuf;
 
 use tracing::Level;
 
+use crate::filter::Directive;
+
 /// Rotation policy for the file sink.
 ///
 /// Four shapes:
@@ -198,11 +200,13 @@ pub struct Config {
     ///   share one byte budget.
     pub file_sink: Option<FileSink>,
 
-    /// An explicit `EnvFilter` directive. When set, it is the filter and
-    /// the environment is not read: the daemon's configuration owns its
-    /// filter (`INPUT_GRAMMAR.md` IG-13, `log-level` and `log-category`).
-    /// `None` keeps the `SHEKYL_LOG` precedence the wallet binaries use.
-    pub directive: Option<String>,
+    /// An explicit filter directive. When set, it is the filter and the
+    /// environment is not read: the daemon's configuration owns its filter
+    /// (`INPUT_GRAMMAR.md` IG-13, `log-level` and `log-category`). `None`
+    /// keeps the `SHEKYL_LOG` precedence the wallet binaries use. The
+    /// value is a [`Directive`], so a retired target was refused when the
+    /// directive was parsed.
+    pub directive: Option<Directive>,
 }
 
 impl Config {
@@ -221,8 +225,8 @@ impl Config {
     /// The same configuration with an explicit filter directive, built by
     /// [`crate::subsystem::directive`] or its words form.
     #[must_use]
-    pub fn with_directive(mut self, directive: impl Into<String>) -> Self {
-        self.directive = Some(directive.into());
+    pub fn with_directive(mut self, directive: Directive) -> Self {
+        self.directive = Some(directive);
         self
     }
 

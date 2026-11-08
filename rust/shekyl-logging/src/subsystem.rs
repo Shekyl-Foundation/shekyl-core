@@ -19,7 +19,7 @@ use std::io::Write;
 
 use tracing::Level;
 
-use crate::filter::level_directive;
+use crate::filter::{level_directive, Directive};
 
 /// One subsystem.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -167,11 +167,64 @@ pub fn is_subsystem(name: &str) -> bool {
     Subsystem::from_name(name).is_some()
 }
 
+/// The subsystem keys, in [`Subsystem::ALL`] order, comma separated.
+/// The retired-target error names them from here, so the list cannot
+/// drift from the keys the table admits.
+#[must_use]
+pub(crate) fn names() -> &'static str {
+    use std::sync::OnceLock;
+    static NAMES: OnceLock<String> = OnceLock::new();
+    NAMES.get_or_init(|| Subsystem::ALL.map(Subsystem::name).join(", "))
+}
+
+/// Targets no Rust code logs under. A free-form directive naming one, or
+/// a module path below one, is the C++ daemon's category. `daemon`,
+/// `global`, `txpool`, `tor` and `notify` are live targets and are not
+/// here. `miner` is a subsystem key whose targets are
+/// `shekyl_block_template` and `shekyl_pow_randomx`; the bare name was a
+/// C++ category and is retired.
+const RETIRED_TARGETS: &[&str] = &[
+    "net",
+    "cn",
+    "blockchain",
+    "bcutil",
+    "checkpoints",
+    "difficulty",
+    "verify",
+    "miner",
+    "spawn",
+    "stacktrace",
+    "util",
+    "default",
+    "wallet",
+    "perf",
+    "shekyl_ffi",
+];
+
+/// Retired even though the root is a live target. `daemon` is the process
+/// target; `daemon::rpc` was the C++ RPC category.
+const RETIRED_EXACT: &[&str] = &["daemon::rpc"];
+
+/// Whether `target` is retired: equal to a retired root, or a module path
+/// below one (`net` covers `net::p2p` and does not cover `notify`).
+#[must_use]
+pub(crate) fn is_retired_target(target: &str) -> bool {
+    if RETIRED_EXACT.contains(&target) {
+        return true;
+    }
+    RETIRED_TARGETS.iter().any(|retired| {
+        target == *retired
+            || target
+                .strip_prefix(retired)
+                .is_some_and(|rest| rest.starts_with("::"))
+    })
+}
+
 /// The `EnvFilter` directive for a base level and per-subsystem overrides:
 /// the base first, then every covered target at its subsystem's level.
-/// Returns something `EnvFilter::try_new` accepts for every input.
+/// The result has been through [`Directive::parse`].
 #[must_use]
-pub fn directive(base: Level, overrides: &[(Subsystem, Level)]) -> String {
+pub fn directive(base: Level, overrides: &[(Subsystem, Level)]) -> Directive {
     let mut parts = vec![level_directive(base)];
     for (subsystem, level) in overrides {
         let level = level_directive(*level);
@@ -179,7 +232,8 @@ pub fn directive(base: Level, overrides: &[(Subsystem, Level)]) -> String {
             parts.push(format!("{target}={level}"));
         }
     }
-    parts.join(",")
+    Directive::parse(&parts.join(","), "a subsystem directive")
+        .expect("subsystem targets are live and parse")
 }
 
 /// The five level words the grammar spells (`log-level`, `log-category`).
@@ -199,7 +253,7 @@ pub fn level_from_word(word: &str) -> Option<Level> {
 /// `(subsystem, level)` pairs. `None` when a word is not a level or a
 /// subsystem, which the table refuses before this is reached.
 #[must_use]
-pub fn directive_from_words(base: &str, overrides: &[(&str, &str)]) -> Option<String> {
+pub fn directive_from_words(base: &str, overrides: &[(&str, &str)]) -> Option<Directive> {
     let base = level_from_word(base)?;
     let mut pairs = Vec::with_capacity(overrides.len());
     for (subsystem, level) in overrides {
@@ -217,15 +271,14 @@ pub fn apply(base: Level, overrides: &[(Subsystem, Level)]) {
 /// Installs one directive on the live filter: the runtime owner of
 /// `log-level` and `log-category` (IG-12, `DAEMON_CONFIG_CUTOVER.md` §2.7).
 ///
-/// The directive is the string [`directive`] and
-/// [`directive_from_words`] build, so a caller that already holds that
-/// string does not convert the words a second time. The swap goes through
-/// the handle the one `init` registered for the life of the process. The
-/// apply cannot fail on a directive those functions built; the only failure
-/// is a process with no subscriber, which is reported to standard error and
-/// leaves the filter as it was, so a caller that built its values first
-/// stays all or nothing.
-pub fn apply_directive(directive: &str) {
+/// The directive is what [`directive`] and [`directive_from_words`] build,
+/// so a caller that already holds it does not convert the words a second
+/// time. The swap goes through the handle the one `init` registered for
+/// the life of the process. The apply cannot fail on a directive those
+/// functions built; the only failure is a process with no subscriber,
+/// which is reported to standard error and leaves the filter as it was,
+/// so a caller that built its values first stays all or nothing.
+pub fn apply_directive(directive: &Directive) {
     if let Err(reason) = crate::reload::reload_directive(directive) {
         // No subscriber is the failure, so this cannot go through tracing.
         // The line is the operator's, on standard error.
@@ -240,7 +293,6 @@ pub fn apply_directive(directive: &str) {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
-    use tracing_subscriber::EnvFilter;
 
     #[test]
     fn names_are_distinct_lowercase_words_and_round_trip() {
@@ -297,7 +349,10 @@ mod tests {
         assert!(Subsystem::Tor.targets().contains(&"tor"));
         let directive = directive_from_words("info", &[("tor", "debug")]).expect("known words");
         assert!(
-            directive.split(',').any(|part| part == "tor=debug"),
+            directive
+                .as_str()
+                .split(',')
+                .any(|part| part == "tor=debug"),
             "{directive}"
         );
     }
@@ -318,8 +373,25 @@ mod tests {
         let all: Vec<(Subsystem, Level)> =
             Subsystem::ALL.iter().map(|s| (*s, Level::TRACE)).collect();
         let d = directive(Level::WARN, &all);
-        assert!(d.starts_with("warn,"), "{d}");
-        EnvFilter::try_new(&d).expect("every target parses");
-        assert_eq!(directive(Level::INFO, &[]), "info");
+        assert!(d.as_str().starts_with("warn,"), "{d}");
+        assert_eq!(directive(Level::INFO, &[]).as_str(), "info");
+    }
+
+    #[test]
+    fn no_live_target_is_retired() {
+        for subsystem in Subsystem::ALL {
+            for target in subsystem.targets() {
+                assert!(
+                    !is_retired_target(target),
+                    "{target} ({}) is both live and retired",
+                    subsystem.name()
+                );
+            }
+        }
+        assert!(is_retired_target("miner"));
+        assert!(is_retired_target("net::p2p"));
+        assert!(!is_retired_target("daemon"));
+        assert!(is_retired_target("daemon::rpc"));
+        assert!(!is_retired_target("notify"));
     }
 }

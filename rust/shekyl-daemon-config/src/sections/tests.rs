@@ -69,7 +69,7 @@ fn the_defaults_build_a_managed_tor_clearnet_node_on_mainnet() {
         c.logging.file,
         home_root().join("logs").join("shekyld-mainnet.log")
     );
-    assert_eq!(c.logging.directive(), "warn");
+    assert_eq!(c.logging.directive().as_str(), "warn");
     assert_eq!(c.tor, Tor::Managed { binary: None });
     assert!(
         matches!(&c.clearnet, Clearnet::On { listen, socks: None, advertise } if listen.len() == 1 && listen[0].port() == 11021 && advertise.is_empty())
@@ -362,9 +362,10 @@ fn log_categories_become_the_owners_directive() {
     )
     .unwrap();
     let d = c.logging.directive();
-    assert!(d.starts_with("info,"), "{d}");
+    assert!(d.as_str().starts_with("info,"), "{d}");
     assert!(
-        d.contains("shekyl_dialer=debug") && d.contains("shekyl_daemon_rpc=trace"),
+        d.as_str().contains("shekyl_dialer=debug")
+            && d.as_str().contains("shekyl_daemon_rpc=trace"),
         "{d}"
     );
     let sink = c.logging.file_sink();
@@ -383,7 +384,11 @@ fn a_cxx_log_category_is_refused_as_a_key() {
     // The same form with a subsystem key is the user guide's example, and
     // builds: the refusal is the key's.
     let ok = build_from(&[], "log-category = { p2p = \"debug\", tor = \"trace\" }\n").unwrap();
-    assert!(ok.logging.directive().contains("shekyl_dialer=debug"));
+    assert!(ok
+        .logging
+        .directive()
+        .as_str()
+        .contains("shekyl_dialer=debug"));
 }
 
 #[test]
