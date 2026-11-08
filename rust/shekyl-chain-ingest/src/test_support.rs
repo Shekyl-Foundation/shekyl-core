@@ -86,29 +86,64 @@ pub const EPOCH: SettlementEpochBlocks = match SettlementEpochBlocks::new(10_000
     None => unreachable!(),
 };
 
-/// A fresh temp path for a store.
+/// A store path inside a directory the test owns.
 ///
-/// A redb store is **one file**, so a stale one is removed with
-/// `remove_file`; `remove_dir_all` on a file fails with `NotADirectory`,
-/// which is how an earlier version of this helper left every store behind
-/// and would have handed a same-named test a *reopened* stale store rather
-/// than a fresh one (`ChainStore::create` reopens an existing path).
-pub fn tmp(name: &str) -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!("shekyl-ingest-{}-{name}", std::process::id()));
-    cleanup(&p);
-    assert!(
-        !p.exists(),
-        "stale store at {} could not be removed",
-        p.display()
-    );
-    p
+/// The directory is created under the system temp directory with a random
+/// name, by a `mkdir` that refuses an existing path, so a test never
+/// reopens a store another test or an earlier run left behind
+/// (`ChainStore::create` reopens an existing path). When this drops, the
+/// directory goes with everything in it: the store, and the files a store
+/// keeps beside itself (`.creation-lock`, `.discard`, `.unfinished-*`). A
+/// panicking test drops it too.
+///
+/// The directory outlives the open store.
+///
+/// - A local is declared before the store. Locals drop in reverse
+///   declaration order, so the store drops first.
+/// - A field is declared after the store. Fields drop in declaration
+///   order, so the store drops first.
+///
+/// An owner that holds both stays whole. A struct pattern drops its
+/// bindings in reverse pattern order, so naming the directory last in the
+/// pattern removes it before the store.
+///
+/// The file is [`Self::path`]. A function that takes `impl AsRef<Path>`
+/// accepts this value. A function that takes `&Path` is handed
+/// [`Self::path`]. Bind this value, then borrow it: chaining on the
+/// temporary ends the directory at the end of that statement.
+pub struct TestPath {
+    path: std::path::PathBuf,
+    _dir: tempfile::TempDir,
 }
 
-/// Remove the store at `p` (a file — or a directory, should a helper ever
-/// make one). Absence is not an error.
-pub fn cleanup(p: &std::path::Path) {
-    let _gone = std::fs::remove_file(p).or_else(|_| std::fs::remove_dir_all(p));
+impl TestPath {
+    /// The store file inside the directory this owns.
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+/// A fresh `<name>.redb` path in a directory of its own.
+///
+/// # Panics
+///
+/// The directory cannot be created.
+pub fn tmp(name: &str) -> TestPath {
+    let dir = tempfile::Builder::new()
+        .prefix("shekyl-chain-ingest-")
+        .tempdir()
+        .expect("create a test directory");
+    TestPath {
+        path: dir.path().join(format!("{name}.redb")),
+        _dir: dir,
+    }
+}
+
+impl AsRef<std::path::Path> for TestPath {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.path
+    }
 }
 
 pub fn h(n: u64) -> BlockHeight {
@@ -627,7 +662,7 @@ pub fn expected_state(chain: &[(Block, Vec<Transaction>)]) -> Digest {
     digest_of(chain, &GrownTree::over(chain).root_after(h(last)))
 }
 
-pub fn open_store(path: &std::path::Path) -> ChainStore {
+pub fn open_store(path: impl AsRef<std::path::Path>) -> ChainStore {
     ChainStore::create(path, EPOCH).expect("create")
 }
 
@@ -644,7 +679,7 @@ pub fn open_store(path: &std::path::Path) -> ChainStore {
 /// [`ApplyPolicy`]: shekyl_chain_store::apply_policy::ApplyPolicy
 /// [`ApplyPolicy::Full`]: shekyl_chain_store::apply_policy::ApplyPolicy::Full
 pub fn open_store_under(
-    path: &std::path::Path,
+    path: impl AsRef<std::path::Path>,
     in_force: &RuleSet,
     policy: shekyl_chain_store::apply_policy::ApplyPolicy,
 ) -> ChainStore {

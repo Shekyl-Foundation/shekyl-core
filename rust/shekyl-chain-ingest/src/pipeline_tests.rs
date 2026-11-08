@@ -33,7 +33,7 @@ use crate::schedule::ChainRules;
 use crate::sequencer::SequenceError;
 use crate::source::{IngestEvent, SequenceNo, Sequenced};
 use crate::test_support::{
-    at, bare_chain, block_with_nonce, chain, cleanup, corpus_from, corpus_of, corpus_of_reorg,
+    at, bare_chain, block_with_nonce, chain, corpus_from, corpus_of, corpus_of_reorg,
     expected_state, h, key_image, open_store, reorg, reorg_of, spent_keys_of, tmp, trace_of,
     Family, GrownTree, JoinedConnector, Scripted, FIRST_SPEND_HEIGHT,
 };
@@ -102,7 +102,8 @@ fn candidate(b: &shekyl_wire::Block, txs: &[shekyl_wire::Transaction]) -> Candid
     Candidate::new(b.clone(), txs.to_vec())
 }
 
-fn tip_of(path: &std::path::Path) -> Option<(shekyl_types::BlockHeight, BlockHash)> {
+fn tip_of(path: impl AsRef<std::path::Path>) -> Option<(shekyl_types::BlockHeight, BlockHash)> {
+    let path: &std::path::Path = path.as_ref();
     let reopened = open_store(path);
     let tip = reopened
         .begin_read()
@@ -256,7 +257,6 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     assert_eq!(reopened.connect_state(), ConnectState::Live);
     drop(reopened);
     assert_eq!(tip_of(&path).map(|t| t.0), Some(h(0)));
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------ the run
@@ -304,7 +304,6 @@ async fn an_inject_off_regtest_is_refused_before_the_store_is_asked() {
     // `ChainEmpty`, a different refusal), and the connector is not over.
     joined.actor.ask(Digest).await.expect("the writer is up");
     joined.stop_and_join().await;
-    cleanup(&path);
 }
 
 /// The draw-issue door is regtest-only as `Inject` is, refused at the
@@ -345,7 +344,6 @@ async fn an_issue_of_draws_off_regtest_is_refused_before_the_store_is_asked() {
     );
     joined.actor.ask(Digest).await.expect("the writer is up");
     joined.stop_and_join().await;
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -392,7 +390,6 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
     );
     assert_eq!(report.metrics.blocks_formed, 5);
     assert_eq!(tip_of(&path).map(|t| t.0), Some(h(4)));
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -421,7 +418,6 @@ async fn a_one_block_window_records_the_store_digest_at_every_height() {
         expected_state(&chain),
         "the last row is the store's digest of the whole chain"
     );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -447,7 +443,6 @@ async fn a_wider_commit_refuses_to_invent_a_digest_per_height() {
         matches!(fault, PipelineFault::DigestWindow { connected: 2 }),
         "{fault:?}"
     );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -506,7 +501,6 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     assert!(applied.refused.is_none());
     connector.stop_gracefully().await.expect("stop");
     connector.wait_for_shutdown().await;
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -560,7 +554,6 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
     assert!(applied.refused.is_none());
     connector.stop_gracefully().await.expect("stop");
     connector.wait_for_shutdown().await;
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -596,7 +589,6 @@ async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
     assert_eq!(applied.connected.len(), 1);
     connector.stop_gracefully().await.expect("stop");
     connector.wait_for_shutdown().await;
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -640,7 +632,6 @@ async fn a_refusal_ends_the_run_and_is_a_disagreement_the_report_names() {
         report.disagreements().collect::<Vec<_>>(),
         vec![crate::pipeline::Disagreement::Refused { height, verdict }]
     );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -706,12 +697,12 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
         Some(h(n)),
         "block N + 1 did not land"
     );
-    cleanup(&path);
 }
 
 /// Rewrite `block_info[height].cumulative_difficulty` in the store at
 /// `path`, the way the SI-10 test plants its decrease.
-fn plant_work(path: &std::path::Path, height: shekyl_types::BlockHeight, work: u128) {
+fn plant_work(path: impl AsRef<std::path::Path>, height: shekyl_types::BlockHeight, work: u128) {
+    let path: &std::path::Path = path.as_ref();
     let db = redb::Database::open(path).expect("open raw");
     let txn = db.begin_write().expect("write");
     {
@@ -780,7 +771,6 @@ async fn an_overflowing_parent_halts_the_writer_on_its_own_observation() {
         Some(h(2)),
         "block 3 did not land"
     );
-    cleanup(&path);
 }
 
 /// The floor on the claim itself, with another block behind it. `N + 1`
@@ -846,7 +836,6 @@ async fn a_slow_window_claims_one_and_the_chain_goes_on() {
         Some(h(n + 2)),
         "blocks N + 1 and N + 2 landed past the slow window"
     );
-    cleanup(&path);
 }
 
 /// `ObserveTarget` judges only the height the store connects at next. A
@@ -896,7 +885,6 @@ async fn the_writer_observes_a_target_only_at_its_own_next_height() {
         .expect("a consistent window at the store's next height");
     joined.actor.ask(Digest).await.expect("the writer is up");
     joined.stop_and_join().await;
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -930,7 +918,6 @@ async fn a_misaligned_source_is_refused_before_anything_is_formed() {
         "{err:?}"
     );
     assert_eq!(tip_of(&path), None, "nothing was formed or connected");
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -976,7 +963,6 @@ async fn a_hole_in_the_sources_numbering_is_a_loud_fault_not_a_hang() {
         ),
         "{err:?}"
     );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1043,7 +1029,6 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
     assert_eq!(ours, theirs);
     assert_eq!(ours, expected_state(&r.after));
     assert_eq!(tip_of(&path), Some((h(f + 2), fork_b.hash())));
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1095,7 +1080,6 @@ async fn a_rewind_across_a_seed_epoch_step_claims_the_seed_from_the_store() {
     assert_eq!(at, h(boundary + 1));
     assert_eq!(ours, theirs, "the fork's tip matches its own trace");
     assert_eq!(ours, expected_state(&r.after));
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1175,7 +1159,6 @@ async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
     assert_eq!(report.roots.diverged().count(), 0);
     let Checkpoint { ours, theirs, .. } = report.checkpoint.expect("covered-tip checkpoint");
     assert_eq!(ours, theirs);
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1218,7 +1201,6 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
     );
     drop(snap);
     drop(reopened);
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1288,7 +1270,6 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
         .expect("fits"),
         "every row the fixture accrued was compared"
     );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1340,7 +1321,6 @@ async fn a_wrong_checkpoint_goes_red_and_the_run_names_it() {
         report.disagreements().collect::<Vec<_>>(),
         vec![crate::pipeline::Disagreement::Diverged { at: h(2) }]
     );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1418,7 +1398,6 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
         report.disagreements().collect::<Vec<_>>(),
         vec![Disagreement::RootDiverged { at: h(1) }]
     );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1513,7 +1492,6 @@ async fn a_wrong_recorded_median_at_one_height_goes_red_and_names_the_height() {
         report.disagreements().collect::<Vec<_>>(),
         vec![Disagreement::WeightsDiverged { at: h(1) }]
     );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1594,7 +1572,6 @@ async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_heigh
         report.disagreements().collect::<Vec<_>>(),
         vec![Disagreement::EmissionDiverged { at: h(2) }]
     );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1662,7 +1639,6 @@ async fn a_wrong_recorded_burn_at_one_height_goes_red_and_names_the_height() {
         report.disagreements().collect::<Vec<_>>(),
         vec![Disagreement::EmissionDiverged { at: h(2) }]
     );
-    cleanup(&path);
 }
 
 /// The store side of the negative control: replay a chain whose trace
@@ -1715,7 +1691,6 @@ async fn digest_after_replay_and_mutation(
         .logical_state_digest_v0()
         .expect("digest");
     drop(reopened);
-    cleanup(&path);
     (checkpoint.theirs, after)
 }
 

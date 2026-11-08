@@ -50,7 +50,8 @@ async fn offer_branch(x: &Scenario<FreeHash>, branch: &[Mined]) -> crate::Switch
 }
 
 /// An empty pool at `path`, over `x`'s chain.
-async fn open_pool(x: &mut Scenario<FreeHash>, path: &std::path::Path) -> Pool {
+async fn open_pool(x: &mut Scenario<FreeHash>, path: impl AsRef<std::path::Path>) -> Pool {
+    let path: &std::path::Path = path.as_ref();
     x.read_chain(|view, rule_set| {
         Pool::open(
             path,
@@ -116,7 +117,6 @@ async fn a_switchs_returns_run_the_door_and_the_floor_refuses_one_below_it() {
     assert!(record.public, "a block carried it");
     assert!(shown(&record), "and the node shows it");
     drop(pool);
-    drop(std::fs::remove_file(&path));
     x.close().await;
     y.close().await;
 }
@@ -208,7 +208,6 @@ async fn a_returned_spend_the_chain_refuses_is_dropped_and_the_store_keeps_its_b
         .len()
         .expect("len");
     assert_eq!(filed, 0, "nothing was filed");
-    drop(std::fs::remove_file(&path));
     x.close().await;
     y.close().await;
 }
@@ -319,9 +318,15 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
     assert!(carried.public, "a block published it");
     assert!(shown(&carried));
 
-    // The pool file is discardable (SPL-Q8): discard it.
+    // The pool file is discardable (SPL-Q8): discard it before the switch.
+    // Closing the pool leaves the file; the directory guard removes it only
+    // when the test ends.
     drop(pool);
-    drop(std::fs::remove_file(&path));
+    std::fs::remove_file(&path).expect("the operator discards the pool file");
+    assert!(
+        !path.path().exists(),
+        "the pool file is gone before the switch"
+    );
     let plan = offer_branch(&x, &b[1..]).await;
     let switched = x.reorganize(&plan).await.expect("switch");
     assert!(
@@ -387,7 +392,6 @@ async fn a_switch_back_promotes_a_demoted_body_the_door_refused() {
     );
     assert_eq!(x.digest().await.expect("d"), z.digest().await.expect("d"));
     drop(pool);
-    drop(std::fs::remove_file(&path));
     x.close().await;
     y.close().await;
     z.close().await;
@@ -572,7 +576,6 @@ async fn a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it(
         .await;
     assert_eq!(same, (0, vec![txid]), "the cache spares the proof");
     assert_eq!(reopened, (1, vec![txid]), "an open trusts no anchor");
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 

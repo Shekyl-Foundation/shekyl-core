@@ -31,7 +31,8 @@ const RECOVERY_REQUIRED: u8 = 2;
 /// # Panics
 ///
 /// Panics if `path` is not a redb file or the bit cannot be written.
-pub(crate) fn mark_recovery_required(path: &Path) {
+pub(crate) fn mark_recovery_required(path: impl AsRef<Path>) {
+    let path: &Path = path.as_ref();
     let mut file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -56,7 +57,8 @@ pub(crate) fn mark_recovery_required(path: &Path) {
 ///
 /// Panics if the file cannot be read or its modification time is
 /// unavailable. A refusal test is comparing this with itself.
-pub(crate) fn bytes_and_mtime(path: &Path) -> (Vec<u8>, SystemTime) {
+pub(crate) fn bytes_and_mtime(path: impl AsRef<Path>) -> (Vec<u8>, SystemTime) {
+    let path: &Path = path.as_ref();
     (
         std::fs::read(path).expect("bytes"),
         std::fs::metadata(path)
@@ -67,7 +69,8 @@ pub(crate) fn bytes_and_mtime(path: &Path) -> (Vec<u8>, SystemTime) {
 }
 
 /// Whether a read-only open of `path` is the repair arm.
-pub(crate) fn read_only_open_is_repair_aborted(path: &Path) -> bool {
+pub(crate) fn read_only_open_is_repair_aborted(path: impl AsRef<Path>) -> bool {
+    let path: &Path = path.as_ref();
     matches!(
         redb::Builder::new().open_read_only(path),
         Err(redb::DatabaseError::RepairAborted)

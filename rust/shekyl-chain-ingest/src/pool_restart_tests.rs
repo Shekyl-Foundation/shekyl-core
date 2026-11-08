@@ -97,7 +97,6 @@ async fn a_restart_reconciles_the_pool_file_against_the_chain() {
         "the file was reconciled the first time"
     );
     assert_eq!(second.admitted, vec![idb]);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -159,7 +158,6 @@ async fn a_stem_phase_entry_survives_a_restart_unpublished_at_its_hour() {
     assert_eq!(record.received, ReceivedHour::of(received), "to the hour");
     assert!(unpublished, "the relay's view holds it back");
     assert!(!listed, "and the node shows it to no one");
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -219,7 +217,6 @@ async fn a_blob_without_its_record_is_dropped_at_open_and_the_spend_admitted_aga
         },
         "and the spend is admitted again"
     );
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -283,7 +280,6 @@ async fn the_pool_file_can_be_discarded() {
         digest_before,
         "the chain never read the pool file"
     );
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -360,7 +356,6 @@ async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
         }
         other => panic!("both leave, each on the door's answer: {other:?}"),
     }
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -407,6 +402,5 @@ async fn an_open_clamps_a_receive_time_from_the_future() {
         .await;
     assert_eq!(received, ReceivedHour::of(now));
     assert_eq!(listed.weight, u64::try_from(spend.weight()).expect("fits"));
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }

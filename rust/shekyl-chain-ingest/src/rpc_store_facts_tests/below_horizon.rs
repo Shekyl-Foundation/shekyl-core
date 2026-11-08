@@ -51,9 +51,10 @@ use crate::schedule::ChainRules;
 /// The store at `path`, opened under the levered rules, and the
 /// store-backed facts over it.
 fn facts_at(
-    path: &std::path::Path,
+    path: impl AsRef<std::path::Path>,
     rules: ChainRules,
 ) -> (Arc<ChainStore>, Arc<super::StoreFacts>) {
+    let path: &std::path::Path = path.as_ref();
     let store = Arc::new(open_store_under(
         path,
         &rules.in_force(BlockHeight::ZERO),
@@ -383,9 +384,6 @@ async fn the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded() {
     assert_eq!(entry.archival_len, spend.archival_len().to_raw());
     drop(facts);
     drop(store);
-
-    crate::test_support::cleanup(&before);
-    crate::test_support::cleanup(&after);
 }
 
 /// One operand of the served skeleton for `target` changed, each its own

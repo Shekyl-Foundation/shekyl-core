@@ -28,7 +28,7 @@ use super::connect_fixtures::{
     judge, key_images, prefix_to, priced_on, spend, spend_paying, spendable_prefix,
     FIRST_SPEND_HEIGHT,
 };
-use super::store_tests::{cleanup, production_horizons, tmp, TestErr, EPOCH};
+use super::store_tests::{production_horizons, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
 use super::*;
 use crate::codec::{
@@ -328,7 +328,6 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         .decode()
         .expect("decodes");
     assert_eq!(pow.seed, BlockHash::NULL);
-    cleanup(&path);
 }
 
 /// *Records-was:* `two_blocks_in_one_batch_with_a_spend_and_a_burn` until
@@ -504,7 +503,6 @@ fn two_blocks_in_one_batch_with_a_spend() {
             .map(|g| g.value().bytes().to_vec()),
         Some(expected_prunable)
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -594,7 +592,6 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
         .get(next)
         .expect("g")
         .is_none());
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------- belts
@@ -641,7 +638,6 @@ fn a_block_whose_parent_is_not_the_tip_is_si2() {
             row: StoreInvariant::TipMismatch,
         }
     );
-    cleanup(&path);
 }
 
 /// Genesis, plant through `plant`, connect block 1 — SI-9 poisons and
@@ -672,7 +668,6 @@ fn plant_then_connect_is_si9(
             row: StoreInvariant::IdNotFresh,
         }
     );
-    cleanup(&path);
 }
 
 fn slot(amount: u64, index: u64) -> OutputSlot {
@@ -792,7 +787,6 @@ fn a_key_image_recorded_under_a_judged_token_is_si1() {
         s,
         "nothing landed"
     );
-    cleanup(&path);
 }
 
 /// Reach the SI-3 belt. Since E6 slice 7 commit 7 CEN-G1 refuses a listed
@@ -842,7 +836,6 @@ fn the_same_transaction_in_two_blocks_is_si3() {
         Ok(batch.connect(judged, RuleSet::GENESIS)?)
     });
     expect_row(&out, StoreInvariant::TxHashNotFresh);
-    cleanup(&path);
 }
 
 /// A `total_burned` register seeded at `u64::MAX` — the pre-image of the
@@ -901,7 +894,6 @@ fn a_total_burned_register_above_the_emission_halts_the_writer_before_the_fold()
         Some(AtomicUnits::from_raw(u64::MAX)),
         "unchanged: the batch aborted"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -923,7 +915,6 @@ fn a_root_already_recorded_at_the_connecting_height_is_si4() {
         )?)
     });
     expect_row(&out, StoreInvariant::RootRewritten);
-    cleanup(&path);
 }
 
 // -------------------------------------------------------- provenance
@@ -1018,7 +1009,6 @@ fn a_partial_validators_connect_taints_the_files_provenance_with_its_coverage_ga
     let ro = ChainStore::open_read_only(&path, production_horizons()).expect("ro");
     assert_eq!(ro.provenance(), prov);
     assert_eq!(ro.provenance().artifact_stamp(), prov.artifact_stamp());
-    cleanup(&path);
 }
 
 #[test]
@@ -1058,7 +1048,6 @@ fn coverage_gaps_widen_in_the_committing_batch_and_never_narrow() {
     });
     assert_eq!(out, Ok(()));
     assert_eq!(store.provenance(), prov);
-    cleanup(&path);
 }
 
 // `deleted_by_and_the_persisted_field_names_are_one_list` and
@@ -1114,5 +1103,4 @@ fn an_admission_fault_halts_at_the_admitting_block() {
             row,
         }
     );
-    cleanup(&path);
 }

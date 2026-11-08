@@ -45,7 +45,7 @@ use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHa
 use shekyl_wire::{Block, BlockHeader};
 
 use super::connect_fixtures::{batch_root_going_into, priced};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::view::BatchView;
 use super::*;
 use crate::schema::BLOCK_INFO;
@@ -292,5 +292,4 @@ fn weights_read_bench() {
     );
     drop(snap);
     drop(store);
-    cleanup(&path);
 }

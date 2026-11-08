@@ -103,6 +103,8 @@ pub mod store;
 
 #[cfg(test)]
 mod redb_recovery;
+#[cfg(test)]
+mod test_paths;
 
 pub use ids::{
     AmountIndex, ChunkIndex, LayerChunk, OutputSlot, OutputStorageId, TreeLayer, TxStorageId,

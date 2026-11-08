@@ -96,7 +96,6 @@ async fn a_poisoned_pool_still_admits() {
             SubmitEngine::new(shim, DaemonTxVerifier).submit(&hex(&paid), SubmitCaller::Owner)
         })
         .await;
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
     assert_eq!(verdict.expect("no engine fault"), SubmitVerdict::Accepted);
 }
@@ -168,7 +167,6 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
         !held.public,
         "a submit is an origination: not public until fluffed"
     );
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -231,7 +229,6 @@ async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
             row: None,
         }
     );
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -368,7 +365,6 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
     for verdict in verdicts {
         assert_eq!(verdict.expect("no engine fault"), SubmitVerdict::Accepted);
     }
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -469,7 +465,6 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
         .mine_listing(bodies)
         .await
         .unwrap_or_else(|o| panic!("the selected template connects: {o}"));
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -593,7 +588,6 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
         },
         "fluffed: the conflict is disclosed"
     );
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -673,7 +667,6 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
         "a fresh spend at its rate finds no room"
     );
     assert_eq!(duplicate, fresh, "and so does the held one, concealed");
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -798,8 +791,6 @@ async fn a_lone_nodes_own_transaction_is_listed_once_the_relay_shows_it() {
         later = listed_now(&board);
     }
     service.stop().await.expect("stops");
-    drop(std::fs::remove_file(&pool_path));
-    crate::test_support::cleanup(&copy);
     scenario.close().await;
     assert!(posted, "the node posts a job; the board reads {at_wait:?}");
     assert_eq!(first, Some(false), "a stem entry is not listed");

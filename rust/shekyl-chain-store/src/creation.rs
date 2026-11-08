@@ -511,20 +511,10 @@ mod tests {
 
     use super::*;
 
-    fn tmp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "shekyl-creation-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join(name)
-    }
+    use crate::test_paths::tmp;
 
-    fn untouched(path: &Path) -> (Vec<u8>, std::time::SystemTime) {
+    fn untouched(path: impl AsRef<Path>) -> (Vec<u8>, std::time::SystemTime) {
+        let path: &Path = path.as_ref();
         (
             std::fs::read(path).unwrap(),
             std::fs::metadata(path).unwrap().modified().unwrap(),
@@ -532,7 +522,8 @@ mod tests {
     }
 
     /// One move, under the path guard the open would be holding.
-    fn move_aside(path: &Path) -> Option<Replaced> {
+    fn move_aside(path: impl AsRef<Path>) -> Option<Replaced> {
+        let path: &Path = path.as_ref();
         let guard = PathGuard::acquire(path).unwrap();
         set_aside_unfinished_init(&guard).unwrap()
     }
@@ -558,9 +549,10 @@ mod tests {
                 .unwrap()
                 .to_string_lossy()
                 .into_owned();
-            assert!(name.starts_with(&format!("{label}.unfinished-")), "{name}");
+            let store = path.path().file_name().unwrap().to_string_lossy();
+            assert!(name.starts_with(&format!("{store}.unfinished-")), "{name}");
             assert!(
-                creation_lock_path(&path).is_file(),
+                creation_lock_path(path.path()).is_file(),
                 "{label}: the path lock"
             );
             drop(replaced.file);
@@ -618,14 +610,14 @@ mod tests {
         for path in [&foreign, &store] {
             let before = untouched(path);
             assert!(move_aside(path).is_none());
-            assert_eq!(untouched(path), before, "{}", path.display());
+            assert_eq!(untouched(path), before, "{}", path.path().display());
         }
         let held = tmp("held");
         std::fs::write(&held, b"").unwrap();
         let holder = File::open(&held).unwrap();
         holder.lock().unwrap();
         assert!(move_aside(&held).is_none(), "held");
-        assert!(held.exists());
+        assert!(held.path().exists());
     }
 
     /// A young store whose magic slot was cleared is the case the length

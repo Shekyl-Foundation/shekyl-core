@@ -20,7 +20,7 @@ use super::{captured_chains, mock_with_the_real_clock, Manifest};
 use crate::corpus::CorpusReader;
 use crate::pipeline::RunReport;
 use crate::rebaseline::trace_of;
-use crate::test_support::cleanup;
+use crate::test_support::TestPath;
 use crate::trace::Trace;
 
 /// The chains a replay reads to the tip: every capture. The subject is
@@ -42,7 +42,7 @@ async fn replay_corpus(
     manifest: &Manifest,
     trace: Trace,
     tag: &str,
-) -> (RunReport, std::path::PathBuf) {
+) -> (RunReport, TestPath) {
     let source = CorpusReader::open(std::io::Cursor::new(corpus)).expect("open corpus");
     let (report, path, _rules) = replay_open(
         manifest,
@@ -86,13 +86,11 @@ async fn a_chain_replays_against_its_own_rust_baseline() {
         .expect("reopen");
         let bytes = trace_of(&store.begin_read().expect("read"), Vec::new()).expect("trace");
         drop(store);
-        cleanup(&path);
         let trace =
             Trace::read(std::io::Cursor::new(bytes.as_slice())).expect("the baseline reads back");
 
         // The replay against it: every height compared, every oracle agrees.
-        let (second, path) = replay_corpus(&corpus, &manifest, trace, "check").await;
-        cleanup(&path);
+        let (second, _path) = replay_corpus(&corpus, &manifest, trace, "check").await;
         let connected = u64::try_from(second.connected.len()).expect("small");
         assert_eq!(
             connected, manifest.block_count,

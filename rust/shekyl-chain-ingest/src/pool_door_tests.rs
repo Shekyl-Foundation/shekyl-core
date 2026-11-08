@@ -371,7 +371,6 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
         })
         .await;
     assert_eq!(mined_dup, Admission::Duplicate(Duplicate::OnChain));
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -446,6 +445,5 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
         "fluffed: in the listing, peer sync and the template"
     );
     assert_eq!(reopened, after, "the public bit survives a restart");
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }

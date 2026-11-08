@@ -47,9 +47,7 @@ use crate::rpc_store_facts_tests::{
 };
 use crate::scenario::{Mined, Scenario, RULES};
 use crate::substrate::ProductionSubstrate;
-use crate::test_support::{
-    cleanup, h, open_store, open_store_under, tmp, Family, FIRST_SPEND_HEIGHT,
-};
+use crate::test_support::{h, open_store, open_store_under, tmp, Family, FIRST_SPEND_HEIGHT};
 
 fn hash_budget() -> shekyl_daemon_rpc::hash_budget::HashBudget {
     shekyl_daemon_rpc::hash_budget::HashBudget::new(std::time::Instant::now())
@@ -996,5 +994,4 @@ fn an_empty_store_has_no_chain_reads_and_hashes_nothing() {
     );
     drop(facts);
     drop(store);
-    cleanup(&path);
 }

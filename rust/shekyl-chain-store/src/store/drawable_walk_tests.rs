@@ -239,7 +239,6 @@ fn the_two_derivations_agree_at_every_height_across_releases() {
         epoch_3.is_empty(),
         "releasing a complete tree does not put one into D"
     );
-    chain.finish();
 }
 
 /// Whether a block connecting at `connecting` may still walk `epoch`: the
@@ -301,7 +300,6 @@ fn a_release_journals_the_record_it_replaced() {
         .expect("read")
         .is_empty());
     drop(snap);
-    chain.finish();
 }
 
 /// **A journal or a digest that changed after the open halts the
@@ -474,7 +472,6 @@ fn a_journal_that_changed_after_the_open_halts_the_settlement() {
             panic!("{label}: aborted, not refused");
         };
         assert!(refused.contains(message), "{label}: {refused}");
-        chain.finish();
     }
 }
 
@@ -518,7 +515,6 @@ fn popping_an_open_removes_its_digest_and_reconnecting_writes_it_again() {
     connect(&mut chain, &releases_at(h_open(3)));
     assert_eq!(recorded(&chain.store, 3), Some(digest));
     assert_eq!(journal(&chain.store).len(), 1);
-    chain.finish();
 }
 
 /// A walk whose floor is above its open is refused at the enumerator, and
@@ -599,7 +595,6 @@ fn a_walk_below_the_floor_is_refused_and_so_is_the_read() {
         "{log:?}"
     );
     drop(snap);
-    chain.finish();
 }
 
 /// The first persona of a planted compact bond: a slot none of the
@@ -776,7 +771,6 @@ fn a_slash_row_naming_another_shard_halts_the_settlement_as_drift() {
         refused.contains("does not digest to archival_drawable_digest"),
         "{refused}"
     );
-    chain.finish();
 }
 
 #[path = "block_draws_chain_tests.rs"]

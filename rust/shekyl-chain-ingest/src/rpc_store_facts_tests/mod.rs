@@ -51,7 +51,7 @@ use crate::connector::Offered;
 use crate::scenario::{Mined, Scenario, RULES};
 use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
-use crate::test_support::{cleanup, open_store, open_store_under, tmp};
+use crate::test_support::{open_store, open_store_under, tmp};
 
 mod below_horizon;
 mod reads;
@@ -172,7 +172,12 @@ fn identity() -> NodeIdentity {
 }
 
 /// The store-backed facts over the store at `path`, under `rules`.
-pub(crate) fn facts_over(store: Arc<ChainStore>, path: &Path, rules: ChainRules) -> StoreFacts {
+pub(crate) fn facts_over(
+    store: Arc<ChainStore>,
+    path: impl AsRef<Path>,
+    rules: ChainRules,
+) -> StoreFacts {
+    let path: &Path = path.as_ref();
     facts_with_caches(store, path, rules, Arc::new(CacheStore::new()))
 }
 
@@ -639,7 +644,6 @@ fn an_empty_store_is_not_ready_and_never_a_zero_tip() {
     );
     drop(facts);
     drop(store);
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -878,7 +882,6 @@ async fn the_store_facts_report_the_baseline_on_every_captured_chain() {
         }
         drop(facts);
         drop(store);
-        cleanup(&path);
     }
     assert!(heights_read > 0, "the captured chains were read (rule 47)");
     for d in &differences {

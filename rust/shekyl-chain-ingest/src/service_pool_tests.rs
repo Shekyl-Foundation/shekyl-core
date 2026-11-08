@@ -23,14 +23,16 @@ use super::service_tests::{arrival, offer_all, Gated};
 use super::{Follow, PoolWiring, Reply, Service, ServiceConfig};
 use crate::pool_door_tests::{matured, paying_the_floor, AT};
 use crate::scenario::{Mined, Scenario, RULES};
-use crate::test_support::{cleanup, open_store, tmp};
+use crate::test_support::{open_store, tmp, TestPath};
 
 /// A service over a fresh store with a pool wired, and the pool.
 struct Pooled {
     service: Service<Gated>,
     pool: Arc<Mutex<Pool>>,
-    store_path: std::path::PathBuf,
-    pool_path: std::path::PathBuf,
+    /// The two stores' directories, removed when this drops (after the
+    /// service and the pool above).
+    _store_path: TestPath,
+    _pool_path: TestPath,
 }
 
 impl Pooled {
@@ -73,8 +75,8 @@ impl Pooled {
         Self {
             service,
             pool,
-            store_path,
-            pool_path,
+            _store_path: store_path,
+            _pool_path: pool_path,
         }
     }
 
@@ -132,8 +134,6 @@ impl Pooled {
     async fn stop(self) {
         self.service.stop().await.expect("stops");
         drop(self.pool);
-        cleanup(&self.store_path);
-        cleanup(&self.pool_path);
     }
 }
 
