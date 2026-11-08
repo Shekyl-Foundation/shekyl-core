@@ -3051,6 +3051,104 @@ supply invariant allows.
 The registered tables stay at `ONSET_HORIZON_YEARS = 60`. Turning on the
 135-year horizon is not part of this change.
 
+### 5.29 ESR-10, the fee multiplier and the rung mix on both `w_ref` arms, predicted before it is built (2026-11-08)
+
+Written against `dev` at `8d78bbacf`, before any ESR-10 code. Nothing
+below is a result.
+
+**The registered set** is [`ESR10_PREDICTIONS.md`](ESR10_PREDICTIONS.md),
+amended in this commit against ESR-17's fixture. Every operand it reads
+re-reads unchanged: `n` = 22, `ρ(y1)` 0.879, `θ(y1)` 1.188, the crossing in
+year 19 (boom-bust year 15), the post-ratchet median 733 KB and 765 KB from
+year 23. In substance:
+
+- **Inherited arm** (`w_ref` 3 000, zone 300 KB):
+  - **P1.** The `×1` all-Standard cell is the default report, byte for byte.
+  - **P2.** One `θ` gates growth in every multiplier cell; the growth year is
+    the first with `m·ρ ≥ θ`. `m*` = `θ(y1)/ρ(y1)` ≈ 1.35 (1.30–1.40)
+    removes the constrained era.
+  - **P3.** 15/80/5 does not grow blocks from genesis: 2.5 Priority and
+    19.5 Standard of 22, and Economy is never carried. Fee revenue is about
+    6.6× all-Standard, Priority 85–90 % of it. The ratchet moves by at most
+    a year.
+  - **P4.** After the ratchet on 15/80/5, Economy is never carried; blocks
+    plateau near 42.5 transactions' weight (≈ 624 KB, ≈ 651 KB from year
+    23), and Priority's share of fees reaches about 89 %. The drop is
+    refusal or eviction, not expiry (the owner's restatement for ESR-17).
+    The agent's arithmetic, registered beside it, expects expiry after the
+    ratchet, where only Economy waits and the cap cannot bind.
+  - **P5.** 15/85/0 equals P1 up to the ratchet year and departs exactly
+    there, plateauing at 42.5 carried with 7.5 Economy dropped a block.
+  - **P6.** The rung mix moves every onset later; the leg split at onset is
+    printed so the shift is attributed. No size is registered.
+- **Re-derived arm** (`w_ref′`, `zone′` = 100·`w_ref′`):
+  - **R1.** The baseline carries 50 of 50 from genesis with nothing dropped.
+  - **R2.** No constrained era in any scenario at any `m ≥ 1`; the sweep
+    moves fees only.
+  - **R3.** The year-1 Standard fee is 0.25–0.30× the inherited arm's,
+    crossing to 1.2–1.45× once the inherited arm ratchets.
+  - **R4.** Emission runs at `M_r` 1.0 from genesis; after the inherited
+    ratchet the inherited reward is 1.25–1.35× this arm's.
+  - **R5.** Closed shards at year 10 ≈ 523 841 ± 5 %; `final_n` at year 60
+    ≈ 1.10–1.15× the inherited arm's.
+  - **R6.** 15/80/5 carries all three rungs on the baseline; Priority's
+    share of fees is about 75 %.
+  - **R7 (weak).** A1 onsets earlier by 1–5 years on the baseline.
+
+**The ceiling the run reports against** (umbrella §4, Usability,
+ratified 2026-11-06): the year-1 Standard-rung fee for an ordinary
+1-in/2-out transaction is at most 0.05 % of the year-1 block reward,
+496 289 839 atomic. The run derives it from
+`shekyl_economics::projected_already_generated` over the first year's
+blocks and pins it in a test. ESR-17 measured the inherited arm's year-1
+fee at about 1.19 SKL, 2.4× the ceiling.
+
+**Choices stated before the run.**
+
+- **The demand split.** `RungMix` holds three thousandths summing to
+  1 000. A block's demand splits by largest remainder on the cumulative
+  target: each rung's share of all demand so far, less what it has been
+  given. A per-block largest remainder fails on the registered mix: 15/80/5
+  of 50 is 7.5/40/2.5, two equal remainders, so a fixed tie-break gives the
+  same rung the extra transaction every block and it drifts 500 in 1 000
+  blocks. Carried, the remainder alternates. Integers only.
+- **The arrival order within a block.** Production's arrival process does
+  not fix how one block's three classes interleave. The sim admits them
+  richest first: Priority, then Standard, then Economy. The order changes
+  only the label of a drop, not the pool. Where room runs out within a
+  block, Economy admitted first and then evicted by a richer arrival is the
+  same pool as Economy refused after it; this order counts the second.
+- **The offer order** is ESR-17's, the template's, with no rung-first walk.
+  On the shipped ladder it is the rung order (`ESR10_PREDICTIONS.md` §0.1,
+  restated in the amendment): Priority pays `M/(2·w_ref)` = 50 times
+  Standard per byte on both arms, every swept Standard multiplier pays more
+  than Economy, and within a rung the oldest is the richest.
+- **Each rung's fee** is the one fee loop (ESR-15) at that rung's rate at
+  the block it was built in: Economy the ladder's `economy`, Standard the
+  multiplier times its `standard`, Priority its `priority`, each on the
+  run's lattice. The sim composes no ladder arithmetic. A mix with no
+  demand on a rung prices nothing for it, so the all-Standard mix prices
+  the Standard rung alone, as today.
+- **P1 is wired, not compared.** `--stage2` runs through the rung pool at
+  0/1 000/0, so the unregenerated `--stage2` fixtures are P1's falsifier.
+- **The re-derived pair.** `w_ref′` is the ordinary transaction's weight at
+  genesis depth (`tree_depth_for_leaves(0)`), at the Standard fee the fold
+  prices at its first block under the pair itself: a fixed point, iterated
+  until the weight repeats, because the fee's varint is in the weight.
+  `zone′ = 100·w_ref′`, the ratio inherited and declared.
+- **The `m*` cell** runs at `⌈1000·θ(y1)/ρ(y1)⌉` thousandths, from the
+  inherited arm's year-1 gate.
+- **Definitions the report prints in its header:**
+  - the year-1 Standard fee is the Standard fees carried in year 1 over
+    the Standard transactions carried, ESR-17's measure;
+  - the crossing is the first year `m·ρ ≥ θ` at the cell's multiplier
+    (`m` = 1 for the mixes), and the growth year is the growth gate's
+    "blocks grow" year;
+  - the queue first empties in the first year whose last block leaves
+    nothing waiting;
+  - Economy's served fraction is Economy carried over Economy demanded,
+    over the 60 years.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 Under the cycle ruling (§0), staking is being designed now, and the
