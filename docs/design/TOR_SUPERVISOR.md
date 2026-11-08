@@ -1467,7 +1467,7 @@ the record. PR-3's hundred-stop rig is not an acceptance basis.
 | Plant in the parent directory | a symlink named under the sweep's prefix | `std::fs::remove_dir_all` does not follow a symlink; the parent is daemon-owned and the `DataDirectory` 0700; a test plants a symlink to an outside directory and asserts the target survives |
 | Outlive the daemon | the daemon dies, including under `panic = "abort"` | parent death closes the owning socket (C5, measured 2026-10-15); §7's `SIGKILL` case |
 | Hide Tor's death | hold a copy of Tor's socket end, so our read never sees EOF | `TSR-F16`: the supervisor also waits on Tor's process; the Windows inheritance window admits no other spawn (§4.7) |
-| Learn the onion from the log | Tor's log events in the daemon's log | `TSR-M9`; Tor's `SafeLogging` stays at its default |
+| Learn the onion from the log | Tor's log events in the daemon's log | `TSR-M9`; the launch pins `SafeLogging 1`, so the scrubbing does not rest on Tor's default (§4.10) |
 
 ## 9. What this deletes
 
