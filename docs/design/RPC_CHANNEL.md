@@ -1718,15 +1718,16 @@ two. Every route they replace is a REST path today.
   used: it would make the live value the snapshot's rather than the
   owner's (DC-Q16), and couple every subsystem to one shared object.
   The startup parse runs the same constructors: one rule on both
-  surfaces (IG-12). *From the tree:* the logging owner does not meet
-  step 2 yet. Its runtime path swaps the filter through a reload handle whose
-  `reload` returns a `Result`
-  (`ffi.rs` at `ac3836de90` (line 639)), and the handle
-  is reached only through the FFI module. The implementing PR gives the
-  owner a Rust interface that holds the handle for the life of the process.
-  PR #1069 (every log sink queued, so a log call never blocks) changed
-  the sinks and left the filter and the reload path as they are, so this
-  finding stands and the interface is built on its result.
+  surfaces (IG-12). *From the tree:* the logging owner meets step 2.
+  `init` registers the filter's reload handle once, for the life of the
+  process ([`lib.rs:245`](../../rust/shekyl-logging/src/lib.rs)), and the
+  apply, `subsystem::apply_directive`, returns nothing
+  ([`subsystem.rs:228-237`](../../rust/shekyl-logging/src/subsystem.rs)).
+  The swap's two `Err`s are a process with no subscriber and a reload layer
+  that is gone
+  ([`reload.rs:40-49`](../../rust/shekyl-logging/src/reload.rs)), and a
+  daemon reaches neither after start; the apply reports either one on
+  standard error and leaves the filter as it was.
 - **What a change does to traffic already running** (same ruling). A
   rate limit takes effect on the next transfer and never aborts one in
   flight.

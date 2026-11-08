@@ -104,7 +104,7 @@ DRS-D12 — no store handle by construction).
 | Phantom tables in schema/audit | **none** (P0a). At the pin: `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}`; their sections died with the claim-era wire deletion, and the gate's ghost leg refuses their return |
 | `m_db->` sites / distinct methods | **253** in `blockchain.cpp`; **97** distinct methods (same 97 across all files — no extra methods outside that vocabulary) |
 | Atomicity audit | **rewritten by P0b (2026-09-05)** — covers all **declared** tables (matrix gate-pinned; declared, not runtime — DRS-W5 records that a writable `open()` deletes `hf_starting_heights`, leaving 46), all **three** prune shapes — one atomic, two checkpointed — and the store lifecycle (`open()`, `reset()`, `migrate()`); was: 183 lines, April 2026, **0** archival hits vs **702** in `db_lmdb.cpp` (22 of the live tables post-dated it) |
-| Hardfork pop | **Closed:** the C++ hard-fork mechanism and LMDB left with the flip, and this store's table of the rule set in force per height is `rule_set_in_force` (layout 34; it was `hf_versions`, a name it shared with Monero's fork table). **UPDATE 2026-10-08:** `HardFork` and the `set`/`get` interface are deleted ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5). **UPDATE 2026-10-06:** `on_block_popped` and the reorg rescan are deleted with the vote window, so nothing reads `hf_versions` above the tip. `HardFork::add` still writes the scheduled version on connect. The interface still has **set/get only**, no delete (`blockchain_db.h:1938,1947`); the row goes with the class |
+| Hardfork pop | **Closed:** the C++ hard-fork mechanism and LMDB left with the flip, and this store's table of the rule set in force per height is `rule_set_in_force` (layout 34; it was `hf_versions`, a name it shared with Monero's fork table). **UPDATE 2026-10-08:** `HardFork` and the `set`/`get` interface are deleted ([`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §5). **UPDATE 2026-10-06:** `on_block_popped` and the reorg rescan are deleted with the vote window, so nothing reads `hf_versions` above the tip. `HardFork::add` still writes the scheduled version on connect. The interface still has **set/get only**, no delete (`blockchain_db.h:1938,1947`); the row goes with the class |
 
 ### Oracles of record — status
 
@@ -639,7 +639,7 @@ methods deleted under `PDM-Q7`, and `prune_tx_data` no longer reached — its
 only callers were that engine; 95 → 93 on 2026-10-05:
 `get_block_cumulative_rct_outputs` and `get_output_distribution` deleted with
 the callerless chain SCR-2 and SOK-4/5 had left unported,
-[`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §6; 93 → 91 on 2026-10-08:
+[`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §6; 93 → 91 on 2026-10-08:
 `set_hard_fork` deleted with the hard-fork mechanism, and `get_top_block` no
 longer reached, its only caller there being the start-up loop that popped
 blocks made under an older fork), 10 surfaces, no method in two and none in none.

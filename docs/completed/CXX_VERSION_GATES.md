@@ -1,16 +1,17 @@
 # The C++ version gates — the sweep and its inventory
 
-**Status:** OPEN — the sweep was executed 2026-10-05 at `b998f484a1`
-(approved by Rick, 2026-10-05, as work item (a) of
-[`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2). It closes when
-the inventory is empty or the C++ is gone, whichever comes first; the gate
-and the inventory are deleted then.
+**Status:** CLOSED-as-record, archived 2026-11-07. The sweep was executed
+2026-10-05 at `b998f484a1` (approved by Rick, 2026-10-05, as work item (a)
+of [`ECONOMY_UMBRELLA_PLAN.md`](../design/ECONOMY_UMBRELLA_PLAN.md) §3.2).
+Its close condition was the inventory empty or the C++ gone; the C++ is
+gone (PR #1299), and the gate and the inventory were deleted with it. Do
+not implement from this record. The ruling it carries that still binds is
+§5's: Shekyl has no fork table.
 
-The inventory is `docs/ci/cxx-version-gates.tsv` at `ac3836de90`.
-`scripts/ci/check_cxx_version_gates.py` holds the tree to it in both
-directions on every pull request. This document says what the rows mean. It
-does not repeat them: a second copy of the table would drift from the one
-the gate reads.
+The inventory is `docs/ci/cxx-version-gates.tsv` at `ac3836de90`, and the
+gate that held the tree to it in both directions is
+`scripts/ci/check_cxx_version_gates.py` at `ac3836de90`. This document says
+what the rows meant. It does not repeat them.
 
 Not a new identifier family. A row is addressed by its path and its code
 text.
@@ -24,7 +25,7 @@ version at 1, so a branch behind `version >= N` with `N ≥ 2` never runs and
 its `else` arm is what ships. The reward-aware template fill sat dead behind
 `version >= 5` from the reboot, and by 2026-10-04 the economics
 sim had modelled it as production
-([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.1). Nothing had
+([`ECONOMY_UMBRELLA_PLAN.md`](../design/ECONOMY_UMBRELLA_PLAN.md) §3.1). Nothing had
 classified the other comparisons. This sweep does, and the gate keeps a new
 one from arriving unclassified.
 
@@ -178,7 +179,7 @@ character literals are blanked before a line is judged: an error message that
 says "tx version < 3" is prose, and two such rows left the inventory on
 2026-10-06 when that was made so.
 
-## 8. Changing the inventory
+## 8. Changing the inventory — retired with the gate, 2026-11-07
 
 Run `python3 scripts/ci/check_cxx_version_gates.py --dump` for the tree's
 hits. A new comparison needs a row: its operand, what it evaluates to at
