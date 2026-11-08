@@ -628,8 +628,9 @@ pub const fn transit_ms_for_connector(connector: MeasuredConnector) -> Derivatio
 ///
 /// **Provenance, and why it survives its own section.** §63.2 swept the
 /// anonymity path to *"ten times clearnet latency"*, `hop = 1750 ms`, as its
-/// worst case. Pairing this constant with the shared verification floor
-/// reproduces that hop exactly (124.5 + 1625 = 1749.5 → 1750).
+/// worst case. This constant is that hop less the membership-proof cell it
+/// was swept beside (1750 − 124.5 = 1625.5 → 1625); paired with the door's
+/// whole sequence (§72.2, BA-Q9) the Tor hop is 1786 ms.
 ///
 /// **§63.2's conclusion is retired and its sweep is not, and the distinction is
 /// the whole reason this citation is usable.** What §63.2 concluded — that the
@@ -834,32 +835,29 @@ mod tests {
         }
     }
 
-    /// The adopted modal hop reproduces the priced value: the Pi modal cell
-    /// plus the 50 ms transit assumption is 175 ms — numerically equal to
-    /// the inherited constant, by the arithmetic §71.3 noted (the inherited
-    /// number was never pure transit: ~80 ms Monero-era verification + one
-    /// ocean crossing; ours is 124.5 ms FCMP++ verification + the same
-    /// crossing). Same value, different provenance — which is the entire
-    /// point of the landing. If a table cell or the transit assumption
-    /// moves, this pin moves with the §80.2 price list, deliberately.
+    /// The adopted modal hop is the priced value: the modal cell's door
+    /// sequence (160.49 ms: 124.5 membership proof and masks, 0.97 one hybrid
+    /// signature, 35.02 the lone range proof), plus 0.96 ms of node crypto
+    /// over its 13,311 B message, plus the 50 ms transit assumption, is
+    /// 211.45 ms, 211. If a table cell or the transit assumption moves, this
+    /// pin moves with the §80.2 price list, deliberately.
     ///
-    /// **2026-08-23: the tail endpoint moved 449 -> 453**, and the modal one
-    /// did not move at all. Folding the node-crypto term into `f_ms` adds
-    /// 0.94 ms at the modal shape (175.44, still 175) and 4.26 ms at the
-    /// 8-input shape (453.46, was 449.2). The modal pin surviving is not luck
-    /// — it is the same fact the fold rests on: the crypto term scales with
-    /// message size, so it is small exactly where the message is.
+    /// The inherited `175` it replaced was ~80 ms of Monero-era verification
+    /// plus one ocean crossing (§71.3); the masks-and-proof cell alone plus
+    /// the same crossing reproduced it, and the door's two further terms
+    /// (§72.2) are the 36 ms between them.
     #[test]
-    fn the_adopted_modal_hop_is_the_priced_175() {
+    fn the_adopted_modal_hop_is_the_priced_211() {
         assert_eq!(
             adopted_hop_ms(1, GENESIS_TREE_DEPTH).map(DerivationMs::ms),
-            Ok(175)
+            Ok(211)
         );
-        // And the tail endpoint at genesis: 399.2 + 50 + 4.26 ms node crypto
-        // over that shape's 59,344 B message.
+        // And the tail endpoint at genesis: 441.81 ms door sequence
+        // (399.2 + 8 × 0.97228 + 34.827) + 4.24 ms node crypto over that
+        // shape's 58,897 B message + 50 ms transit = 496.04.
         assert_eq!(
             adopted_hop_ms(8, GENESIS_TREE_DEPTH).map(DerivationMs::ms),
-            Ok(453)
+            Ok(496)
         );
     }
 
@@ -925,10 +923,11 @@ mod tests {
     /// per-shape from that shape's own message — so the numbers below cannot
     /// drift silently even though no bar guards them.
     ///
-    /// For the record, like-for-like at the four populated cells: 0.75 %,
-    /// 0.78 %, **1.07 %** (8-in at genesis depth, the worst), 0.58 %. The worst
-    /// cell is max-inputs-at-min-depth because verification grows faster with
-    /// depth than message size does, so the cheapest verification pairs with an
+    /// For the record, like-for-like at the four populated cells: 0.60 %
+    /// (1-in, genesis), 0.59 % (1-in, depth 7), **0.96 %** (8-in at genesis
+    /// depth, the worst), 0.54 % (8-in, depth 7). The worst cell is
+    /// max-inputs-at-min-depth because verification grows faster with depth
+    /// than message size does, so the cheapest verification pairs with an
     /// already-large message — and it is a shape that exists today.
     ///
     /// What edit reds this: changing `NODE_CRYPTO_PASSES`,
@@ -949,9 +948,9 @@ mod tests {
             "the worst crypto fraction should be max-inputs at min-depth"
         );
         assert!(
-            (0.0105..0.0110).contains(&worst.2),
+            (0.0094..0.0098).contains(&worst.2),
             "worst-cell crypto fraction is {:.4} — outside the recorded \
-             1.07 % band, so the arithmetic moved",
+             0.96 % band, so the arithmetic moved",
             worst.2
         );
     }

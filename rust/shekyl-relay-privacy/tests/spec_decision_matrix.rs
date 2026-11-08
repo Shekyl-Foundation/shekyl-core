@@ -158,27 +158,20 @@ const TRANSIT_MS: [f64; 3] = [25.0, 50.0, 100.0];
 /// change to `derive_embargo`, to `DandelionParams::inherited()`, or to the
 /// measured `f` must be forced to restate.
 ///
-/// The 1-input→8-input spread they give (57 / 55 / 52 s) is what §80.2 states
-/// as *"a scalar leaves ~56 s uncovered across the whole legal shape domain"*
-/// — and it survives the switch from the scaled stand-ins to the spec
-/// machine's own cells, which is why §80.3's choice does not move with it.
-/// **Re-priced 2026-08-23** when the node-crypto term folded into `f_ms`.
-/// The 1-input column did not move at any transit point; the 8-input column
-/// moved **0 s at 25 ms transit, +1 s at 50, and +12 s at 100** — not uniformly,
-/// and the 12-second jump is the embargo step structure, not the crypto term.
-/// A 4.26 ms input change producing a 12 s output change is `derive_embargo`
-/// being high-gain near a step (`derive::next_embargo_step`), which is why the
-/// re-derivation round must call it at the actual hop rather than interpolate —
-/// and why that round lands the input in a commit that moves no pin, then
-/// moves the pins mechanically (`DAEMON_RELAY_PRIVACY.md` §94.10).
-/// That the columns move differently at all is the fold's own
-/// premise showing up in the output: the crypto term scales with message size,
-/// so it is 0.94 ms at the modal shape's 13,118 B message and 4.26 ms at the
-/// 8-input shape's 59,344 B one. §80.2's "~56 s uncovered across the legal
-/// shape domain" reading is unchanged in substance — the gap between the two
-/// columns moves from 55 s to 56 s at the shipped transit point.
+/// The 1-input→8-input spread they give (58 / 53 / 55 s) is what §80.2 reads
+/// as *"a scalar leaves ~56 s uncovered across the whole legal shape domain"*,
+/// and §80.3's choice of a per-shape table over a scalar rests on that gap
+/// being large; it does not move.
+///
+/// **Re-priced 2026-11-08 (BA-Q9)**: each cell is the pool door's whole
+/// sequence (§72.2), so the modal cell is 160.49 ms and the 8-input cell
+/// 441.81 ms. The input landed in its own commit and these pins moved in the
+/// next, as `DAEMON_RELAY_PRIVACY.md` §94.10 requires: `derive_embargo` is
+/// high-gain near a step (`derive::next_embargo_step`), so a few
+/// milliseconds of hop can move the embargo by seconds, and the re-derivation
+/// calls it at the actual hop rather than interpolating.
 const DECIDED_SPEC_PRICE_LIST: [(f64, u64, u64); 3] =
-    [(25.0, 184, 241), (50.0, 190, 246), (100.0, 198, 262)];
+    [(25.0, 191, 249), (50.0, 197, 250), (100.0, 211, 266)];
 
 fn embargo_secs(hop_ms: u32) -> u64 {
     let mut p = DandelionParams::inherited();

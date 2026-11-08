@@ -1,7 +1,7 @@
 # Benchmark alignment — inventory, gaps, proposed tracked set, rulings needed
 
 **Status: OPEN — round 0, assessment (2026-10-05).** Ruled so far: BA-Q1,
-BA-Q3, BA-Q8, BA-Q21 and BA-Q23; BA-Q2 is done (§6). Everything else is unruled: every other
+BA-Q3, BA-Q8, BA-Q21 and BA-Q23, and BA-Q9's hop half; BA-Q2 is done (§6). Everything else is unruled: every other
 disposition in §2 and row of §5 is a *proposal*. No workflow, baseline or
 threshold changes with this document. One tracked benchmark has been built
 since: BA-T3, the serve-path gate (§5, 2026-10-06). BA-T33's T1 arm, added
@@ -750,6 +750,18 @@ on review of PR #964; the change lands in its own PR.
 **BA-Q9 — Scope of the pool-admission bench (BA-D7).** Default: correct
 §72.2 to what admission runs, add the hybrid-signature and Bulletproofs+
 terms to BA-T1, and re-derive the hop from BA-T10's floor figures.
+**RULED 2026-11-08 for §72.2 and the hop; BA-T1's scope is not ruled.**
+§72.2 is amended to the Rust door's sequence. Each `SPEC_VERIFY_COST` cell
+is that sequence on the floor device: §85.3's masks-and-proof term, plus
+`n_in` hybrid signatures (971.86 µs per input at 1 input, 972.28 µs at 8)
+and the lone range proof at 2 outputs (35.017 ms, 34.827 ms), the last two
+from `docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt`
+(`DAEMON_RELAY_PRIVACY.md` §72.2's table). The modal cell is 160.49 ms,
+the clearnet hop 211 ms, the Tor hop 1786 ms; the embargoes 197 s and
+513 s; the wallet wait 2362 s. Every value derived from the cells moved
+with them, through the production derivation (`DAEMON_RELAY_PRIVACY.md`
+§97's register). BA-T10's floor run re-times the door's sequence, and the
+masks-and-proof term with it, after `PL-D3`.
 
 **BA-Q10 — Re-measure verify cost on the floor after `PL-D3`.** Default: one
 BA-T10 run serves the surge factor, the zone, the hop surface and the input

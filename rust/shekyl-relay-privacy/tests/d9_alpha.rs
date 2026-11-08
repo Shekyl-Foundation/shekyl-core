@@ -47,11 +47,20 @@ const SEEDS: [u64; 6] = [
 const NODES: usize = 512;
 const MEAN_QUARTER_SECS: u32 = 20;
 
-/// The shipped embargo, in ticks: 190 s at the 250 ms tick.
-const SHIPPED_EMBARGO_SECS: u32 = 190;
+/// The shipped embargo, in ticks: 197 s at the 250 ms tick.
+const SHIPPED_EMBARGO_SECS: u32 = 197;
 fn shipped_mean_ticks() -> u32 {
+    // The literal is the shipped clearnet embargo, read back from the
+    // production derivation so it cannot drift from it: a stale literal here
+    // measures alpha against an embargo nothing ships.
+    assert_eq!(
+        SHIPPED_EMBARGO_SECS,
+        shekyl_relay_privacy::schedule::EmbargoTimer::adopted(&DandelionParams::adopted())
+            .mean_secs(),
+        "the shipped clearnet embargo moved; re-pin it from the derivation"
+    );
     let embargo_ms = u64::from(SHIPPED_EMBARGO_SECS) * 1000;
-    // Exact divisibility asserted, not assumed: 190 000 ms / 250 ms = 760
+    // Exact divisibility asserted, not assumed: 197 000 ms / 250 ms = 788
     // today, but a tick that stops dividing the embargo would make `/`
     // truncate SILENTLY, shifting the embargo every alpha in the table is
     // measured against by an amount nothing else would flag. This value is

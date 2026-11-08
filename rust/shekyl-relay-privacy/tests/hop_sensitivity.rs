@@ -56,16 +56,20 @@ fn embargo_secs(p: &DandelionParams) -> u64 {
 fn hop_sensitivity() {
     let mut seen: Vec<(u32, u64)> = Vec::new();
     println!("\n  hop_ms   embargo(s)   vs shipped");
-    let base_s = embargo_secs(&DandelionParams::inherited());
-    for hop in [175_u32, 300, 500, 875, 1050, 1750] {
+    // The shipped clearnet hop: the modal cell's door sequence plus the 50 ms
+    // transit assumption (§72.2). The other rows are the F-12 multiples of
+    // the inherited 175 ms.
+    let shipped_hop = DandelionParams::adopted().time_between_hop_ms.ms();
+    let base_s = embargo_secs(&DandelionParams::adopted());
+    for hop in [shipped_hop, 300, 500, 875, 1050, 1750] {
         let mut p = DandelionParams::inherited();
         p.time_between_hop_ms = DerivationMs::model(hop);
         let s = embargo_secs(&p);
         println!(
             "  {hop:>6}   {s:>8}   {:>+7.0}%{}",
             (s as f64 / base_s as f64 - 1.0) * 100.0,
-            if hop == 175 {
-                "   <- shipped (assumed, unmeasured)"
+            if hop == shipped_hop {
+                "   <- shipped (verification measured, transit assumed)"
             } else {
                 ""
             }
@@ -73,13 +77,13 @@ fn hop_sensitivity() {
         seen.push((hop, s));
     }
 
-    // The shipped row must BE the arc's adopted embargo. §44 landed 190 s and
-    // every section since quotes it; a table here reading 189 s would be the
-    // same number with two values, which is how a rounding choice made in a
-    // test leaks into a design document as a second fact.
+    // The shipped row must BE the adopted embargo every section quotes; a
+    // table here reading a second value would be the same number with two
+    // values, which is how a rounding choice made in a test leaks into a
+    // design document as a second fact.
     assert_eq!(
-        base_s, 190,
-        "shipped row must match §44's adopted 190 s embargo"
+        base_s, 197,
+        "shipped row must match the adopted 197 s clearnet embargo"
     );
 
     // Monotone in hop: a longer stem needs a longer embargo, so any

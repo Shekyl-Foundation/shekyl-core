@@ -948,7 +948,7 @@ de-risking the multi-daemon reopen in advance.
 
 1. **Origin re-send, then residence.** The relay re-sends the node's own
    transaction only on its embargo: each stem send arms a deadline of
-   `origin_retry_secs` (1,148 s at the shipped terms); the first fire
+   `origin_retry_secs` (1,181 s at the shipped terms); the first fire
    re-stems to the source's alternate, the second fluffs and publishes
    (`shekyl-relay` `graph/embargo.rs`). An origin that never sent is
    re-planned every 300 s, at once on turning synchronised and at once on
@@ -971,7 +971,7 @@ de-risking the multi-daemon reopen in advance.
    send arms a deadline; the first fire re-stems to the source's frozen
    alternate; the second fire, or a first fire with no live alternate,
    fluffs to every session but the source and marks the transaction
-   shown. An origin's deadline is `origin_retry_secs` (1,148 s at the
+   shown. An origin's deadline is `origin_retry_secs` (1,181 s at the
    shipped terms, pinned in that crate's embargo tests); a relay position
    draws its connector's memoryless embargo. An origin that never sent
    is held unsent and re-planned every 300 s (`NEVER_SENT_RETRY_MS`),

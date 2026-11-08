@@ -136,7 +136,7 @@ fn every_peer_passive_leak_falls_with_the_embargo() {
     println!("{}", "-".repeat(50));
 
     let mut clearnet_rates = Vec::new();
-    for secs in [31_u32, 50, 144, 190, 300, 500] {
+    for secs in [31_u32, 50, 144, 197, 300, 500] {
         let ticks = u32::try_from(u64::from(secs) * 1000 / DEFAULT_EMBARGO_TICK_MILLIS).unwrap();
         let e = EmbargoTimer::geometric_from_ticks(ticks, DEFAULT_EMBARGO_TICK_MILLIS);
 
@@ -187,22 +187,22 @@ fn every_peer_passive_leak_falls_with_the_embargo() {
             w[1].1
         );
     }
-    // Non-negligible at the adopted 190 s embargo (the F-7-derived pair that
-    // ships; 144 s stays on the printed ladder as the pre-F-7 point) — a real
+    // Non-negligible at the adopted 197 s clearnet embargo (the shipped pair;
+    // 144 s stays on the printed ladder as the pre-F-7 point) — a real
     // channel, not noise.
-    let at_190 = clearnet_rates.iter().find(|(s, _)| *s == 190).unwrap().1;
+    let at_adopted = clearnet_rates.iter().find(|(s, _)| *s == 197).unwrap().1;
     assert!(
-        at_190 > 0.005,
+        at_adopted > 0.005,
         "the production passive channel should be non-negligible at the adopted \
-         embargo, got {at_190:.5}"
+         embargo, got {at_adopted:.5}"
     );
     // The RD-1/RD-4 corrections already helped here: the 31 s (pre-correction)
-    // rate is several times the adopted 190 s rate.
+    // rate is several times the adopted 197 s rate.
     let at_31 = clearnet_rates.iter().find(|(s, _)| *s == 31).unwrap().1;
     assert!(
-        at_31 > at_190 * 3.0,
+        at_31 > at_adopted * 3.0,
         "correct provisioning should have cut the passive leak severalfold: \
-         31s={at_31:.5} vs 190s={at_190:.5}"
+         31s={at_31:.5} vs 197s={at_adopted:.5}"
     );
 
     println!(

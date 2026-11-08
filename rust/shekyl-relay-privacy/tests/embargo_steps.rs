@@ -38,12 +38,15 @@ use shekyl_relay_privacy::verify_cost::{
 ///
 /// # The finding this carries
 ///
-/// The **shipped interim** anonymity hop is 1 ms from a 12-second step.
-/// Whether that instance is exercised is the checklist at §89.8.4, not
-/// restated here.
+/// Every shipped hop's next step is a +1 s quantization step: the clearnet
+/// modal hop (211 ms) 8 ms away, the shipped anonymity modal hop (1786 ms)
+/// 6 ms, its 8-input hop 1 ms. A hop within milliseconds of a resonance step
+/// (many `h` crossing a tick together, +11 s or more) is the case this
+/// records; no shipped hop's next step is one. Whether a step instance is
+/// exercised is the checklist at §89.8.4, not restated here.
 ///
-/// And the two genesis shapes sit at different distances, so **hop sensitivity
-/// is shape-dependent** — §89.3's zone-disclosure question one axis over, with
+/// And the shapes sit at different distances, so **hop sensitivity is
+/// shape-dependent** — §89.3's zone-disclosure question one axis over, with
 /// numbers instead of a hypothesis. Raised there, not ruled here.
 ///
 /// What edit reds this: any change to a transit assumption, a verify-cost cell,
@@ -99,16 +102,13 @@ fn the_distance_from_each_shipped_hop_to_the_next_embargo_step_is_recorded() {
     // ordinary quantization of a solver that answers in whole seconds, while a
     // +12 s step is the resonance — many `h` crossing a tick boundary together.
     let want = [
-        ("clearnet modal", 4_u32, 1_i64),
-        // THE SHIPPED INTERIM, and the reason this test exists: one
-        // millisecond from an eleven-second jump. Liveness is the checklist
-        // at §89.8.4, not restated here.
-        ("SHIPPED anon modal", 1, 11),
-        ("SHIPPED anon 8-input", 4, 1),
-        ("candidate anon modal", 3, 1),
-        // And the shape-dependence, live at the candidate: the modal shape is
-        // 3 ms from a 1 s step while this one is 7 ms from a 12 s step.
-        ("candidate anon 8-input", 7, 12),
+        ("clearnet modal", 8_u32, 1_i64),
+        // THE SHIPPED INTERIM, and the reason this test exists. Liveness is
+        // the checklist at §89.8.4, not restated here.
+        ("SHIPPED anon modal", 6, 1),
+        ("SHIPPED anon 8-input", 1, 1),
+        ("candidate anon modal", 21, 1),
+        ("candidate anon 8-input", 3, 1),
     ];
     for ((label, _, step), (want_label, want_d, want_delta)) in seen.iter().zip(want) {
         assert_eq!(*label, want_label, "row order");

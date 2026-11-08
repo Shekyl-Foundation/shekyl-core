@@ -397,7 +397,8 @@ pub type EmbargoDistribution = DelayFamily;
 ///
 /// # The shipped value, and why it is not 39 s
 ///
-/// The daemon draws from [`Self::adopted`] — **mean 190 s, memoryless** — and
+/// The daemon draws from [`Self::adopted`] — **mean 197 s on clearnet,
+/// memoryless** — and
 /// carries no embargo constant of its own (`DAEMON_RELAY_PRIVACY.md` §17). It
 /// replaced an inherited `39 s` that was wrong three ways, each of which this
 /// type is shaped to prevent recurring:
@@ -410,7 +411,8 @@ pub type EmbargoDistribution = DelayFamily;
 /// - The closed form substituted `E[K]` into an expression in `K(K-1)`; stem
 ///   length is geometric, so `E[K(K-1)] = 2·E[K](E[K]-1)` and the value
 ///   under-provisioned at every `q`. The exact solve gives 190 s at the
-///   F-7-corrected `fluff_return_ms` (144 s at the old, defective input). **F-3.**
+///   F-7-corrected `fluff_return_ms` and the inherited 175 ms hop (144 s at
+///   the old, defective input). **F-3.**
 ///
 /// The lesson the type encodes: a timing constant and its derivation must live
 /// in the same place. Anything that needs a number from this distribution
@@ -468,9 +470,9 @@ pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
 /// is the cheapest thing to remove. Do not make it per-zone, and do not grow it
 /// — the reasoning lives in §89.6, not here.
 ///
-/// Cost of the interim, stated: a clearnet send reports failure at ~38 minutes
+/// Cost of the interim, stated: a clearnet send reports failure at ~39 minutes
 /// rather than ~15.
-pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_297;
+pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_362;
 
 /* `ADOPTED_FORWARD_DELAY_MEAN_SECS` and `ForwardDelay` were here, and Q12-U2
 deleted them with `relay_method::forward`.
