@@ -95,6 +95,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust -> target
+          # Saved by the `dev` push run only; a pull request restores it.
+          # A pull request's save is readable by that pull request alone
+          # and evicts caches the others restore from
+          # (rust-audit-test.yml's cache step).
+          save-if: ${{ github.event_name == 'push' }}
 
       # Each stage is TWO invocations, not one. `--features multisig` belongs only
       # to the packages that DEFINE it (engine-core, where it gates
