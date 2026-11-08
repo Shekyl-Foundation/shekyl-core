@@ -116,11 +116,10 @@ impl K4 {
 /// entries above it, ending at the candidate's parent.
 ///
 /// The arithmetic is [`D4::target`](crate::rules::difficulty::D4::target)'s
-/// and is not restated: D4 records its own row (and CEN-D6's zero guard,
-/// whose refusal is the C++'s height-0 sentinel made a verdict). D5 is the
-/// fact that the window came from an alternative chain. It is recorded by
-/// the alt tier only when that call produced a target — a D6 refusal is
-/// D4's verdict, and this row did not run. A main-chain `validate` never
+/// and is not restated: D4 records its own row (and CEN-D6's, held by the
+/// target's type). D5 is the fact that the window came from an
+/// alternative chain, recorded by the alt tier with the target that call
+/// produced. A main-chain `validate` never
 /// records it.
 pub(crate) struct D5;
 

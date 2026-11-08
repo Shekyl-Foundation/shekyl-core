@@ -474,9 +474,7 @@ where
             AtHeight::AboveTip => panic!("the seed height is on the branch"),
         },
     };
-    let target = target_claim(view, connecting, rules)
-        .expect("the view answers")
-        .expect("the window has a target");
+    let target = target_claim(view, connecting, rules).expect("the view answers");
     let pow = PowBlob::read(&block.pow_blob()).expect("preimage");
     form_header(
         &pow,

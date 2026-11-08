@@ -61,7 +61,7 @@ impl ConsensusProof for RandomXProof {
         // — do not grow this ConsensusProof stub into a second DAA
         // (rule 70).
         if chain.height == 0 {
-            return Ok(Difficulty::from_raw(1));
+            return Ok(Difficulty::ONE);
         }
         Err(ConsensusError::DifficultyError(
             "RandomXProof is not the DAA; next-block target is shekyl_difficulty::lwma1_next"
@@ -132,7 +132,7 @@ mod tests {
         };
         assert_eq!(
             rx.difficulty_for_next_block(&chain).unwrap(),
-            Difficulty::from_raw(1)
+            Difficulty::ONE
         );
     }
 
