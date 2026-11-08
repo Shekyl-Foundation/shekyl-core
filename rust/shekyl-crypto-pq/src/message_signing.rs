@@ -339,7 +339,8 @@ pub fn message_preimage(network: Network, classical_segment: &[u8], message: &[u
 /// scalar.
 pub fn sign_outer_with_spend_scalar(
     spend_sk: &[u8; 32],
-    outer: &OuterMessage,
+    preimage: &Framed64,
+    sig_pq: &[u8; SLH_192S_SIG_LEN],
 ) -> Result<[u8; CLASSICAL_SIG_LEN], MessageSigError> {
     let secret: Scalar =
         Option::from(Scalar::from_canonical_bytes(*spend_sk)).ok_or(MessageSigError::InvalidKey)?;
@@ -348,38 +349,23 @@ pub fn sign_outer_with_spend_scalar(
         MSG_SIGN_OUTER_DOMAIN,
         &secret,
         &public,
-        outer.to_bytes().as_ref(),
+        outer_bytes(preimage, sig_pq).as_ref(),
     ))
 }
 
-/// The outer message the classical half signs: `preimage ‖ σ_pq` — the
-/// covering that makes stripping the PQ half structurally invalidating.
-/// The preimage is the envelope's [`Framed64`], so it is a frame output by
-/// type; the PQ half is heap-allocated so the ~16 KB blob does not ride
-/// the stack through async boundaries.
-pub struct OuterMessage {
-    preimage: Framed64,
-    sig_pq: Box<[u8; SLH_192S_SIG_LEN]>,
-}
-
-impl OuterMessage {
-    /// `preimage ‖ σ_pq`, [`OUTER_MSG_LEN`] bytes.
-    #[must_use]
-    pub fn to_bytes(&self) -> Box<[u8; OUTER_MSG_LEN]> {
-        let mut outer = Box::new([0u8; OUTER_MSG_LEN]);
-        outer[..MSG_PREIMAGE_LEN].copy_from_slice(self.preimage.as_bytes());
-        outer[MSG_PREIMAGE_LEN..].copy_from_slice(self.sig_pq.as_ref());
-        outer
-    }
-}
-
-/// The outer message over `preimage` and the PQ half that signed it.
+/// `preimage ‖ σ_pq`, [`OUTER_MSG_LEN`] bytes: the message the classical
+/// half signs. The preimage is a frame output, so the first
+/// [`MSG_PREIMAGE_LEN`] bytes are bound to one network. Sign and verify
+/// both go through here, so the two halves cannot disagree about the join.
 #[must_use]
-pub fn outer_message(preimage: &Framed64, sig_pq: &[u8; SLH_192S_SIG_LEN]) -> OuterMessage {
-    OuterMessage {
-        preimage: *preimage,
-        sig_pq: Box::new(*sig_pq),
-    }
+pub fn outer_bytes(
+    preimage: &Framed64,
+    sig_pq: &[u8; SLH_192S_SIG_LEN],
+) -> Box<[u8; OUTER_MSG_LEN]> {
+    let mut outer = Box::new([0u8; OUTER_MSG_LEN]);
+    outer[..MSG_PREIMAGE_LEN].copy_from_slice(preimage.as_bytes());
+    outer[MSG_PREIMAGE_LEN..].copy_from_slice(sig_pq);
+    outer
 }
 
 /// The PQ half of a signature: preimage + hedged SLH-DSA signature with
@@ -455,8 +441,7 @@ pub fn sign_message(
     message: &[u8],
 ) -> Result<String, MessageSigError> {
     let (preimage, sig_pq) = sign_message_pq_half(master_seed, network, segment, message)?;
-    let outer = outer_message(&preimage, &sig_pq);
-    let sig_cl = sign_outer_with_spend_scalar(spend_sk, &outer)?;
+    let sig_cl = sign_outer_with_spend_scalar(spend_sk, &preimage, &sig_pq)?;
     Ok(assemble_armored(&sig_pq, &sig_cl))
 }
 
@@ -629,11 +614,10 @@ pub fn verify_message(
 
     // Outer half: the spend-scalar Schnorr over preimage ‖ σ_pq —
     // stripping the PQ half structurally invalidates this one.
-    let outer = outer_message(&preimage, &sig.sig_pq);
     if !schnorr::verify_compressed(
         MSG_SIGN_OUTER_DOMAIN,
         segment.spend_key(),
-        outer.to_bytes().as_ref(),
+        outer_bytes(&preimage, &sig.sig_pq).as_ref(),
         &sig.sig_cl,
     ) {
         return Err(MessageSigError::VerifyFailed);
@@ -1098,8 +1082,7 @@ mod tests {
                 .expect("sign with wrong ctx"),
         );
 
-        let outer = outer_message(&preimage, &sig_pq_bad_ctx);
-        let sig_cl = sign_outer_with_spend_scalar(&spend_sk(), &outer).unwrap();
+        let sig_cl = sign_outer_with_spend_scalar(&spend_sk(), &preimage, &sig_pq_bad_ctx).unwrap();
         let s = assemble_armored(&sig_pq_bad_ctx, &sig_cl);
 
         assert_eq!(
@@ -1132,12 +1115,12 @@ mod tests {
     }
 
     /// Outer-message construction is exactly preimage ‖ σ_pq at the
-    /// compile-time length the actor gate / type boundary relies on.
+    /// compile-time length the actor gate relies on.
     #[test]
-    fn outer_message_is_the_preimage_then_the_pq_half() {
+    fn outer_bytes_are_the_preimage_then_the_pq_half() {
         let preimage = message_preimage(NET, &[0xAB], b"m");
         let sig_pq = Box::new([0xCDu8; SLH_192S_SIG_LEN]);
-        let outer = outer_message(&preimage, &sig_pq).to_bytes();
+        let outer = outer_bytes(&preimage, &sig_pq);
         assert_eq!(outer.len(), OUTER_MSG_LEN);
         assert_eq!(&outer[..MSG_PREIMAGE_LEN], preimage.as_bytes());
         assert_eq!(&outer[MSG_PREIMAGE_LEN..], &sig_pq[..]);
