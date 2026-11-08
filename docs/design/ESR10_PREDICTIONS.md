@@ -1,8 +1,10 @@
 # ESR-10 prediction set — fee multiplier and rung mix, on both constant arms
 
-**Status:** OPEN — predictions written 2026-10-17, before the run. Outcomes
-land in [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
-§5 when ESR-10 runs. Nothing here is a result.
+**Status:** CLOSED — the record of ESR-10's registered predictions,
+written 2026-10-17 before the run and amended 2026-11-08 before any ESR-10
+code. Graded 2026-11-08 in
+[`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.29.1. Nothing here is a result.
 
 Design-owner predictions for ESR-10 (`ECONOMICS_SIM_PRODUCTION_REBASE.md`, §3 row and the 2026-10-03 amendment), written against `dev@06690efab` before any ESR-10 code exists; corrected 2026-10-17 against `dev@d2ac8b45` (growth conditions on `ρ`, not `C`; see §1). Year-1 operands were set 2026-10-18 from that document's growth-gate table, not from §5.6's older figures: `ρ = 0.879` and `θ = 1.188`. The Standard multiplier that removes the constrained era is `θ(y1)/ρ(y1) ≈ 1.35`, registered as 1.30–1.40. Those are ESR-9 measurements used as inputs, not ESR-10 outcomes. The agent registers them in the rebase doc's §5 **before the first run**, verbatim in substance, and reports outcomes in a following "what the run said" table. Nothing here authorizes a production change; §0 names the two places where ESR-10 needs one.
 
