@@ -280,14 +280,15 @@ pub struct DandelionParams {
     /// relay owner stems or fluffs a 2002 batch only after the pool has
     /// admitted it (`shekyl-relay`'s `owner`), and the pool's door is
     /// `shekyl_chain_rules::judge_slot_stateless` at `TxSlot::Lone`. The term
-    /// is that door's sequence: one hybrid Ed25519 + ML-DSA-65 signature
-    /// verification per input (CEN-I18), the FCMP++ membership proof
-    /// (scaling with input count) with the per-output mask check, and the
-    /// range proof as a batch of one (CEN-H19) (§72.2, amended 2026-11-08).
-    /// It is not a rounding error, and **it
-    /// moves when the proof system moves** — this is not a network constant
-    /// that can be measured once, which is why an instruction-count gate on the
-    /// admission path belongs beside it rather than a comment.
+    /// is that door's sequence: one authorization check per input (CEN-I18;
+    /// one hybrid Ed25519 + ML-DSA-65 verification for a single-signer input,
+    /// M of them for an M-of-N multisig input, M ≤ 5), the FCMP++ membership
+    /// proof (scaling with input count) with the per-output mask check, and
+    /// the range proof as a batch of one (CEN-H19) (§72.2, amended
+    /// 2026-11-08). It is not a rounding error, and **it moves when the proof
+    /// system moves** — this is not a network constant that can be measured
+    /// once, which is why an instruction-count gate on the admission path
+    /// belongs beside it rather than a comment.
     ///
     /// The inherited `175` already carried a processing term: §21 records its
     /// whole justification as *"a testrun from a recent Intel laptop took

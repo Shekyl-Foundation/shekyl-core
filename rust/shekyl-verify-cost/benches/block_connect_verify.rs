@@ -82,9 +82,11 @@
 //!   tree-depth axis — this bench pins depth 2 / `Spread`, today's
 //!   production topology, and does not re-sweep that axis).
 //! - **`pqc_per_input`** — one hybrid Ed25519+ML-DSA-65 verification
-//!   (`shekyl_crypto_pq::signature::verify_pqc_auth`), which `form` runs
-//!   **per input** (CEN-I18, `judge_signatures`) for every transaction but
-//!   the coinbase and the serve credit. The relay bench's sequence leaves
+//!   (`shekyl_crypto_pq::signature::verify_pqc_auth` on a single-signer,
+//!   scheme-1 slot). `form` runs one authorization check **per input**
+//!   (CEN-I18, `judge_signatures`) for every transaction but the coinbase
+//!   and the serve credit: this term for a single-signer input, M of it for
+//!   an M-of-N multisig input (scheme 2, M ≤ 5). The relay bench's sequence leaves
 //!   this term out; the pool door pays it as well (see that bench).
 //! - **`bp_lone`** — Bp+ aggregate verification over `n_out` commitments,
 //!   as a batch of one: `shekyl_bulletproofs::verify_batch`, CEN-H19's
