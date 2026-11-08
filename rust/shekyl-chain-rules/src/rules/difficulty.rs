@@ -27,28 +27,23 @@
 //! store persists the cumulative work it implies (Q5) so `connect` derives
 //! `cumulative_difficulty` instead of being handed it.
 //!
-//! D6 — *"a zero next-block difficulty rejects the block"* — is held **by
-//! the type**: [`Target`] wraps [`NonZeroU128`], the one `Difficulty` →
-//! [`Target`] edge is [`D6::mint`], and every already-valid target
-//! (genesis-block `1`, levered `Fixed`) records the row through
+//! D6 — the next-block difficulty is never zero — is held **by the
+//! type**, end to end. `shekyl_difficulty::Difficulty` is non-zero by
+//! construction and LWMA-1 floors its output at one (`DAA_LWMA1.md` §5.3
+//! step 10, Rick 2026-11-07: a difficulty is the expected number of hashes
+//! per block, and a block costs at least one). [`Target`] wraps it; the
+//! one LWMA-1 → [`Target`] edge is [`D6::mint`], and every already-valid
+//! target (genesis-block `1`, levered `Fixed`) records the row through
 //! [`D6::record`] so a levered verdict can mint.
 //!
-//! **What zero at the mint IS (premise refuted 2026-09-20, DRS-E2 RD-F17).**
-//! Slice 2 wrote zero as a corrupt-view fault on the premise that LWMA-1
-//! floors its output and no conforming view can derive it. It does not,
-//! and one can: the formula's tail is `avg_D · 99·N·(N+1)·T / 200·L` with
-//! no floor, and with every solvetime at the `+6T` clamp it is **zero for
-//! `avg_D ≤ 6`** (`400 → 66` per maximally slow window, so a conforming chain
-//! walks there). The C++ at that point **refuses the block**
-//! (`blockchain.cpp:5494`, `CHECK_AND_ASSERT_MES(current_diffic, false, …)`)
-//! — which is what the census ratified, and is the parity behaviour. So
-//! `D6::mint` yields a **verdict**: zero refuses the block as CEN-D6, never
-//! a fault, and never a store-invariant halt (the store's work strictly
-//! increased; nothing about the file is corrupt — SI-10 is D4's window walk,
-//! not this). That the DAA can drive itself to zero at all — and that a
-//! refused block there refuses every successor — is a consensus finding
-//! for the DAA's owner, recorded in `FOLLOWUPS.md`; this crate reproduces
-//! the ratified behaviour and does not add a floor (rule 71, C2-R8 Q4).
+//! **What changed (2026-11-07).** LWMA-1's tail `avg_D · 99·N·(N+1)·T /
+//! 200·L` is zero for `avg_D ≤ 6` with every solvetime at the `+6T` clamp
+//! (DRS-E2 RD-F17), and the census ratified the C++'s answer there:
+//! refuse the block (`blockchain.cpp:5494`). A refused block at zero
+//! refuses every successor, so a chain that mined slowly enough died. The
+//! floor replaces that refusal; this crate no longer has a zero to refuse
+//! and so no CEN-D6 verdict to return. The floor lives in the algorithm,
+//! not here: the validator still adds no rule of its own (rule 71).
 //!
 //! # The window is the view's
 //!
@@ -70,27 +65,19 @@ use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault};
 use crate::rule_set::{DifficultyRule, RuleSet};
 use crate::rules::{recorded_header, Rule};
-use crate::verdict::{InvalidBlock, Locus, Verdict};
 use crate::view::HeaderView;
 
-/// The difficulty a candidate must satisfy, **non-zero by construction**
-/// (CEN-D6). The inner type is [`NonZeroU128`]: a zero target cannot be
-/// assembled, only refused — `D6::mint` is the one `Difficulty` →
-/// [`Target`] edge, and every path that already has a `Target` (genesis
-/// block, levered `Fixed`) still records CEN-D6 through
+/// The difficulty a candidate must satisfy, as the validator derived it
+/// (CEN-D4), **non-zero by its inner type** (CEN-D6): `D6::mint` is the
+/// one LWMA-1 → [`Target`] edge, and every path that already has a
+/// `Target` (genesis block, levered `Fixed`) still records CEN-D6 through
 /// [`D6::record`](D6::record) so coverage is complete under every rule
-/// set. No public constructor and no `From<Difficulty>`.
+/// set. No public constructor and no `From<Difficulty>`: a `Target` is a
+/// difficulty the validator vouches for at a height, not any difficulty.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Target(NonZeroU128);
+pub struct Target(Difficulty);
 
 impl Target {
-    /// One, as a non-zero. Named so block 0's PoW difficulty cannot be
-    /// spelled as a raw `1` beside the DAA's genesis constant.
-    const ONE: NonZeroU128 = match NonZeroU128::new(1) {
-        Some(n) => n,
-        None => unreachable!(),
-    };
-
     /// The **genesis block's own** PoW difficulty. Block 0 has no tip, so
     /// the DAA is never consulted for it: its nonce satisfies `check_hash`
     /// at `1` (`shekyl-genesis-tool/src/builder.rs`), and `shekyl-difficulty`
@@ -98,13 +85,13 @@ impl Target {
     /// keep the two apart — `GENESIS_DIFFICULTY` is the DAA's short-circuit
     /// for heights `1..N`, not block 0's target. The C++ forces the same
     /// `1` at height 0 under `--fixed-difficulty` (`blockchain.cpp:975`).
-    pub(crate) const GENESIS_BLOCK: Self = Self(Self::ONE);
+    pub(crate) const GENESIS_BLOCK: Self = Self(Difficulty::ONE);
 
     /// The difficulty value, for the comparison (`check_hash`) and the
     /// store's fold.
     #[must_use]
     pub const fn difficulty(self) -> Difficulty {
-        Difficulty::from_raw(self.0.get())
+        self.0
     }
 
     /// A target at `difficulty` that no header chain derived, for a test
@@ -118,7 +105,7 @@ impl Target {
     /// A fixed target (`RuleSet::with_levers`, CEN-D7). Non-zero by the
     /// argument's type.
     pub(crate) const fn fixed(fixed: NonZeroU128) -> Self {
-        Self(fixed)
+        Self(Difficulty::from_nonzero(fixed))
     }
 
     /// Whether `pow` satisfies this target under CEN-D1b (`check_hash`:
@@ -149,9 +136,8 @@ impl fmt::Display for Target {
 /// the check cannot spell the difficulty algorithm differently (the
 /// [`seed_height`](crate::seed_height) precedent).
 ///
-/// `Ok(Err(refused))` is CEN-D6: the algorithm derived zero, which
-/// `validate` refuses on the same headers; a caller has no target to claim
-/// and that refusal is the block's verdict.
+/// Every derivation yields a target: LWMA-1 floors at one, so there is no
+/// zero for CEN-D6 to refuse (module docs).
 ///
 /// # Errors
 ///
@@ -161,7 +147,7 @@ pub fn target_claim<'id, H: HeaderView<'id>>(
     view: &H,
     connecting: BlockHeight,
     rule_set: &RuleSet,
-) -> Result<Verdict<Target>, Fault<H::Fault>> {
+) -> Result<Target, Fault<H::Fault>> {
     // The derivation records D4/D6/D7 as it runs; a claim records nothing.
     let mut unrecorded = RuleCoverage::EMPTY;
     D4::target(view, connecting, rule_set, &mut unrecorded)
@@ -186,8 +172,9 @@ pub fn cumulative_difficulty_after<'id, H: HeaderView<'id>>(
     D4::cumulative_after(view, connecting, target)
 }
 
-/// CEN-D6: a zero next-block difficulty rejects the block. Held by the
-/// [`Target`] type: this is its one constructor.
+/// CEN-D6: the next-block difficulty is never zero. Held by the types —
+/// `Difficulty` is non-zero and LWMA-1 floors at one — so this row records
+/// coverage and refuses nothing.
 pub(crate) struct D6;
 
 impl Rule for D6 {
@@ -204,16 +191,11 @@ impl D6 {
         target
     }
 
-    /// The `Difficulty` → [`Target`] edge. Zero **refuses the block** as
-    /// CEN-D6 — the census's ratified behaviour and the C++'s
-    /// (`blockchain.cpp:5494`). It is a verdict, not a fault: the view is
-    /// conforming (module docs), the derivation is honest, and the number
-    /// is what the ratified algorithm produced. Records this row either way.
-    pub(crate) fn mint(difficulty: Difficulty, coverage: &mut RuleCoverage) -> Verdict<Target> {
+    /// The LWMA-1 → [`Target`] edge, recording this row. Infallible: the
+    /// difficulty is non-zero by its type.
+    pub(crate) fn mint(difficulty: Difficulty, coverage: &mut RuleCoverage) -> Target {
         coverage.insert(Self::ROW);
-        NonZeroU128::new(difficulty.to_raw())
-            .map(Target)
-            .ok_or_else(|| InvalidBlock::new(Self::ROW, Locus::Block))
+        Target(difficulty)
     }
 }
 
@@ -244,13 +226,13 @@ impl D4 {
         connecting: BlockHeight,
         rule_set: &RuleSet,
         coverage: &mut RuleCoverage,
-    ) -> Result<Verdict<Target>, Fault<H::Fault>> {
+    ) -> Result<Target, Fault<H::Fault>> {
         coverage.insert(Self::ROW);
         if let Some(fixed) = D7::fixed_target(rule_set, connecting, coverage) {
-            return Ok(Ok(D6::record(fixed, coverage)));
+            return Ok(D6::record(fixed, coverage));
         }
         let Some(chain_height) = connecting.to_raw().checked_sub(1) else {
-            return Ok(Ok(D6::record(Target::GENESIS_BLOCK, coverage)));
+            return Ok(D6::record(Target::GENESIS_BLOCK, coverage));
         };
         let chain_height = BlockHeight::from_raw(chain_height);
         let window = Self::window(view, chain_height)?;

@@ -196,9 +196,8 @@ where
         AtHeight::Recorded(record) => record.hash,
         AtHeight::AboveTip => BlockHash::NULL,
     };
-    let target = shekyl_chain_rules::target_claim(view, connecting, rules)
-        .expect("the view answers")
-        .expect("the target is claimed");
+    let target =
+        shekyl_chain_rules::target_claim(view, connecting, rules).expect("the view answers");
     let mut passed = None;
     for nonce in 0..64u32 {
         block.header.nonce = nonce;

@@ -22,6 +22,14 @@
 //! there (zawy12 issue #24 item 14); Shekyl's own value on those two is
 //! pinned in `spec_vectors.rs`.
 //!
+//! Vectors 8–9 cross-check the floor (§5.3 step 10, Shekyl's departure: a
+//! difficulty is never below one). The transliteration stays line for line;
+//! [`zawy12_lwma1_floored`] applies step 10 to its output, which is the only
+//! difference the spec states. Vector 8: where zawy12's reference returns
+//! zero, the floored oracle and `lwma1_next` both return one, and above
+//! zero all three agree. Vector 9: from a window at the floor, all three
+//! agree on the tenfold climb, which needs no floor.
+//!
 //! Provenance is checked when the test runs, not claimed here: the capture
 //! (`docs/design/refs/zawy12_issue_3_lwma1.md`) must hash to the SHA-256
 //! its anchors file pins, and the function the oracle was transliterated
@@ -119,21 +127,41 @@ fn zawy12_lwma1(
     next_d
 }
 
+/// Shekyl's step 10 (`DAA_LWMA1.md` §5.3) over zawy12's output:
+/// `max(next_D, 1)`. Nothing else in the reference changes.
+fn zawy12_lwma1_floored(timestamps: &[u64], cumulative_difficulties: &[u64]) -> u64 {
+    zawy12_lwma1_at(timestamps, cumulative_difficulties).max(1)
+}
+
 const B: u64 = 1_700_000_000;
 const AVG_D: u64 = 1_000_000;
 
-/// The oracle at the cross-check's operating point: chain height N (past
-/// the genesis window), fork height 0, the genesis difficulty as the guess.
-fn oracle(ts: &[u64]) -> u64 {
-    let cd: Vec<u64> = (0..=N).map(|i| i * AVG_D).collect();
+/// The cumulative difficulties of a window whose every block is `avg_d`.
+fn window_of(avg_d: u64) -> Vec<u64> {
+    (0..=N).map(|i| i * avg_d).collect()
+}
+
+/// The reference at the cross-check's operating point: chain height N
+/// (past the genesis window), fork height 0, the genesis difficulty as the
+/// guess.
+fn zawy12_lwma1_at(ts: &[u64], cd: &[u64]) -> u64 {
     let guess = u64::try_from(GENESIS_DIFFICULTY).expect("the genesis difficulty fits u64");
-    zawy12_lwma1(ts, &cd, T_SECONDS, N, N, 0, guess)
+    zawy12_lwma1(ts, cd, T_SECONDS, N, N, 0, guess)
+}
+
+fn oracle(ts: &[u64]) -> u64 {
+    zawy12_lwma1_at(ts, &window_of(AVG_D))
 }
 
 fn ours(ts: &[u64]) -> u64 {
+    ours_at(ts, AVG_D)
+}
+
+fn ours_at(ts: &[u64], avg_d: u64) -> u64 {
     let ts: Vec<Timestamp> = ts.iter().copied().map(Timestamp::from_raw).collect();
-    let cd: Vec<CumulativeDifficulty> = (0..=N)
-        .map(|i| CumulativeDifficulty::from_raw(u128::from(i * AVG_D)))
+    let cd: Vec<CumulativeDifficulty> = window_of(avg_d)
+        .into_iter()
+        .map(|c| CumulativeDifficulty::from_raw(u128::from(c)))
         .collect();
     let next = lwma1_next(BlockHeight::from_raw(N), &ts, &cd).expect("a full window computes");
     u64::try_from(next.to_raw()).expect("no §8.1 vector overflows u64")
@@ -240,4 +268,65 @@ fn vector_7_a_selfish_mine_diverges() {
     ts[n - 1] = B + (N - 2) * T_SECONDS + 1000 * T_SECONDS;
     ts[n] = B + (N - 2) * T_SECONDS + T_SECONDS;
     diverge("7-selfish-mine", &ts, 911_000, 1_040_000);
+}
+
+/// Vector 8, the floor: every solvetime at the `+6T` clamp. zawy12's
+/// reference returns zero for `avg_D <= 6`; the floored oracle and ours
+/// return one; above that all three agree.
+#[test]
+fn vector_8_the_floor_where_zawy12_returns_zero() {
+    let ts = stepped(7 * T_SECONDS);
+    for (avg_d, zawy, want) in [
+        (1, 0, 1),
+        (2, 0, 1),
+        (3, 0, 1),
+        (4, 0, 1),
+        (5, 0, 1),
+        (6, 0, 1),
+        (7, 1, 1),
+        (13, 2, 2),
+        (400, 66, 66),
+    ] {
+        let cd = window_of(avg_d);
+        assert_eq!(
+            zawy12_lwma1_at(&ts, &cd),
+            zawy,
+            "8-floor avg_D = {avg_d}: zawy12's reference"
+        );
+        assert_eq!(
+            zawy12_lwma1_floored(&ts, &cd),
+            want,
+            "8-floor avg_D = {avg_d}: the reference with step 10"
+        );
+        assert_eq!(
+            ours_at(&ts, avg_d),
+            want,
+            "8-floor avg_D = {avg_d}: lwma1_next"
+        );
+    }
+}
+
+/// Vector 9, the climb from the floor: every timestamp equal. The floor
+/// plays no part, so the reference, the floored reference and ours agree.
+#[test]
+fn vector_9_the_climb_from_the_floor() {
+    let ts: Vec<u64> = (0..=N).map(|_| B).collect();
+    for (avg_d, want) in [(1, 10), (10, 100), (100, 1_000)] {
+        let cd = window_of(avg_d);
+        assert_eq!(
+            zawy12_lwma1_at(&ts, &cd),
+            want,
+            "9-climb avg_D = {avg_d}: zawy12's reference"
+        );
+        assert_eq!(
+            zawy12_lwma1_floored(&ts, &cd),
+            want,
+            "9-climb avg_D = {avg_d}: the reference with step 10"
+        );
+        assert_eq!(
+            ours_at(&ts, avg_d),
+            want,
+            "9-climb avg_D = {avg_d}: lwma1_next"
+        );
+    }
 }
