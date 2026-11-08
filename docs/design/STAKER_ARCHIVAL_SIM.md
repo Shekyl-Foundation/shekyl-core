@@ -2965,7 +2965,7 @@ stream moves. The five-seed vector holds bit for bit, and every crate test
 passes unchanged.
 
 **P2, the failure window and the counted draws (`--failure-confirmation`).**
-Before, at `d78000c45`: the default row runs 2 of 5 with one probe per
+Before, at `3533e9405`: the default row runs 2 of 5 with one probe per
 epoch.
 - *Observation through `settle_pair`.* The micro-sim's availability is
   per epoch, so all of a pair's counted draws pass or all fail, and the
@@ -3044,7 +3044,7 @@ only (the default).** Two production-shaped arms beside the default.
 
 | # | Prediction | Outcome | Grade |
 | --- | --- | --- | --- |
-| P1 | No stream moves | All 21 modes byte-identical between the merge head and the one-body build, the 6 MB default sweep included. The five-seed vector holds. A test pins seed 0 to SplitMix64's reference stream | Held |
+| P1 | No stream moves | All 21 modes byte-identical between `714f47c6f` and the one-body build, the 6 MB default sweep included. The five-seed vector holds. A test pins seed 0 to SplitMix64's reference stream | Held |
 | P2 | Default row's sliding false slash 0.588 → 0.002; volR below 0.10; honest slash falls from 1.000, furthest at u = 0.95; dodge and explicit window rows unchanged; traffic 0.00819 → 0.02458 | 0.588 → 0.002; volR 1.74 → 0.06; honest sliding slash 0.969 at u = 0.50, 0.910, 0.773, 0.504, 0.219, 0.082 at u = 0.95; dodge 0.000 / 1.000 and every explicit window row unchanged; traffic 0.02458. Not predicted: the rows that inherit the default window moved with it (the lognormal-tail row's sliding false slash 0.479 → 0.021, gaming-thin 0.006 → 0.000) | Held; the inheriting rows were missed |
 | P3 | No figure moves | The five-seed vector holds, and the default sweep's 388 shock-free scenarios are identical | Held |
 | P4 | Dust under 240 atomic per epoch; `cDeepU` up by at most 0.05; `bondA` within ±3; `oUmx` within the seed band | Dust at most 133 atomic in any epoch. `cDeepU` **falls**: by 0.05–0.19 at the lean point (mean −0.12) and 0.07 on average at the L13 knee. `oUmx` falls to 0 at the lean point on four seeds of five. `bondA` moves −5.7 to +6.2 | Dust held; direction wrong |
