@@ -137,6 +137,7 @@ stale_through = [
   { through = "7222a8a450", note = "FFI sign parses a signing payload hash (#1282): in this path set, signature.rs adds sign_pqc_auth, which calls the existing hybrid sign under SCHEME_DOMAIN_PQC_AUTH_TX on the payload bytes, and legacy_core.rs's shekyl_pqc_sign parses the caller message as a SigningPayloadHash and fails closed on any other length before that call. shekyl_pqc_verify parses with SigningPayloadHash::try_from_slice, the same length check and 64-byte copy 42911e567a already recorded. verify_pqc_auth is unchanged, and block verification prices that verify. Not re-measured; the rows stay stale from PL-D3." },
   { through = "2236763308", note = "Windows clippy (#1293): in this path set, legacy_core.rs's Windows-only page_size passes GetSystemInfo a raw pointer written &raw mut info where it was an implicit borrow. Same call, same pointer; the line is cfg(windows) and the Linux floor never compiles it. No code path the block-verify capture priced changed. Not re-measured; the rows stay stale from PL-D3." },
   { through = "0d23fb567f", note = "A2 (alpha.11 bug hunt): in this path set, cache_store.rs gains CacheStore::release_transient, which empties the transient slot under its write lock; the ingest calls it when the seed window names one seed. No hash, derivation, verify or lookup path changed. Not re-measured; the rows stay stale from PL-D3." },
+  { through = "a395a325a1", note = "A2's fix (#1301): CacheStore::release_transient becomes release(seedhash), which empties the transient slot only when it holds that seed. No hash, derivation, verify or lookup path changed. Not re-measured; the rows stay stale from PL-D3." },
 ]
 
 [[constant]]
@@ -1038,6 +1039,7 @@ stale_through = [
   { through = "3e75b28d9a", note = "Doc comments only in lib.rs and CacheStore::pin_canonical: the deleted FFI pin is no longer named as a second caller. Cache derivation is unchanged. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
   { through = "d56e34bda4", note = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, its doc comment is reworded (df9ec749d1), and the test's seed check casts with try_from (d56e34bda4). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
   { through = "0d23fb567f", note = "A2 (alpha.11 bug hunt): CacheStore::release_transient empties the transient slot, and the ingest calls it when the seed window names one seed. Cache derivation is unchanged; what moves is residency: a seed that left the window is no longer held until the next epoch's pin, and the null seed's cache goes once genesis connects. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
+  { through = "a395a325a1", note = "A2's fix (#1301): release_transient becomes release(seedhash), emptying the transient slot only when it holds the seed the window stopped naming. Derivation is unchanged; the row stays stale." },
 ]
 
 [[constant]]
@@ -1213,6 +1215,7 @@ cleared = [
   { through = "6d9cc0f756", reason = "The spend is judged at the caller's instant, so a test can hold time still. The charge is still one HASH_CPU_NANOS. The RandomX sources this row watches are unchanged." },
   { through = "d56e34bda4", reason = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, its doc comment is reworded (df9ec749d1), and the test's seed check casts with try_from (d56e34bda4). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. The hash the capture timed is unchanged." },
   { through = "0d23fb567f", reason = "A2 (alpha.11 bug hunt): cache_store.rs gains CacheStore::release_transient, which empties the transient slot; nothing on the hash path calls it. lookup and compute_hash are unchanged, so the per-hash thread CPU the hash budget charges is the capture's." },
+  { through = "a395a325a1", reason = "A2's fix (#1301): release_transient becomes release(seedhash), which empties the transient slot only when it holds that seed; nothing on the hash path calls it, and lookup and compute_hash are unchanged." },
 ]
 
 [[constant]]
