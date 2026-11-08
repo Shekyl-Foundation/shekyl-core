@@ -641,6 +641,11 @@ pub struct Core {
     posted: Shown,
     since: u64,
     announcements: Announcements,
+    /// Whether the last announcement told the operator that a local origin
+    /// leaves: what the sentence said, not what the relay says now. `None`
+    /// before anything is said. A recovery is said only as the pair of a loss
+    /// the operator saw ([`Self::origin_verdict`]).
+    origin_said: Option<bool>,
     respawn_count: u32,
     launch_failures: u32,
     backoff: Backoff,
@@ -715,6 +720,7 @@ impl Core {
             posted: Shown::Restarting,
             since: now,
             announcements: Announcements::new(),
+            origin_said: None,
             respawn_count: 0,
             launch_failures: 0,
             backoff: Backoff::new(),
@@ -884,6 +890,7 @@ impl Core {
             self.repeats_announcement(),
             pin_due,
         ) {
+            self.origin_said = Some(self.origin.origin_leaves());
             actions.push(Action::Announce);
         }
         if pin_due {
@@ -1326,6 +1333,7 @@ impl Core {
             self.cap(),
             self.repeats_announcement(),
         ) {
+            self.origin_said = Some(self.origin.origin_leaves());
             vec![Action::Announce]
         } else {
             Vec::new()
@@ -1337,10 +1345,14 @@ impl Core {
     }
 
     /// The relay's verdict moved. The posture sentence follows whether a
-    /// local origin leaves, so only that change is said: a recovery at once,
-    /// a loss once under the cap. The class moving on its own says nothing.
-    /// The same routable state again is not a change. Health still follows
-    /// the stored verdict.
+    /// local origin leaves, so only that change is said: a loss once under the
+    /// cap, and a recovery at once, but only as the pair of a loss the
+    /// operator saw (Rick, 2026-11-08), or as the first posture line after a
+    /// start, when nothing has been said. A recovery from a loss still held
+    /// under the cap says nothing and forgives that loss's owed sentence, so
+    /// session churn says nothing at all. The class moving on its own says
+    /// nothing. The same routable state again is not a change. Health still
+    /// follows the stored verdict.
     fn origin_verdict(&mut self, verdict: OriginVerdict, now: u64) -> Vec<Action> {
         let was_leaving = self.origin.origin_leaves();
         let leaves = verdict.origin_leaves();
@@ -1348,7 +1360,17 @@ impl Core {
         if was_leaving == leaves {
             return Vec::new();
         }
-        self.say(now, if leaves { Cadence::Now } else { Cadence::Once })
+        if !leaves {
+            return self.say(now, Cadence::Once);
+        }
+        // Nothing said yet is not a recovery already heard: the first posture
+        // line after a start says the origin leaves.
+        if self.origin_said != Some(true) {
+            return self.say(now, Cadence::Now);
+        }
+        let repeats = self.repeats_announcement();
+        self.announcements.forgive_once(repeats);
+        Vec::new()
     }
 
     fn repeats_announcement(&self) -> bool {

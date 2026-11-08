@@ -935,6 +935,54 @@ fn the_relays_verdict_decides_own_tx_and_health_and_is_said_under_the_cap() {
     assert_eq!(core.status().own_tx, OwnTx::AddressHiding);
 }
 
+/// **Churn with no announced loss says nothing** (Rick, 2026-11-08). The
+/// relay's verdict flips to held and back inside the cap, as session churn
+/// does: the loss was never said, so the recovery says nothing, and the
+/// loss's owed sentence is forgiven rather than said at the cap. The floor
+/// device's soak said "Tor is carrying this node's traffic." 19,352 times
+/// under churn. Red edits: say every recovery at once (the first
+/// assertion fails); keep the owed sentence (the second fails).
+#[test]
+fn churn_with_no_announced_loss_says_nothing() {
+    let (mut core, _) = Core::start(policy(), managed(false), 0);
+    reach_usable(&mut core);
+    let cap = duration_ns(policy().cap);
+    for flip in 0..5 {
+        let at = 1 + flip * 2;
+        assert_eq!(announces(&core.on(held(), at)), 0, "a loss inside the cap");
+        assert_eq!(
+            announces(&core.on(carrying(), at + 1)),
+            0,
+            "a recovery from a loss the operator never saw"
+        );
+    }
+    assert_eq!(
+        announces(&core.on_deadline(cap)),
+        0,
+        "the forgiven loss is not said at the cap"
+    );
+    assert_eq!(core.status().own_tx, OwnTx::AddressHiding);
+}
+
+/// **An announced loss followed by a recovery says the recovery once.** The
+/// loss is said at the cap; the recovery is said at once, and a second
+/// routable verdict is not a change.
+#[test]
+fn an_announced_loss_is_paired_with_one_recovery() {
+    let (mut core, _) = Core::start(policy(), managed(false), 0);
+    reach_usable(&mut core);
+    let cap = duration_ns(policy().cap);
+    core.on(held(), 1);
+    assert_eq!(announces(&core.on_deadline(cap)), 1, "the loss is said");
+    assert_eq!(
+        announces(&core.on(carrying(), cap + 1)),
+        1,
+        "then the recovery"
+    );
+    assert!(core.on(carrying(), cap + 2).actions.is_empty());
+    assert_eq!(announces(&core.on_deadline(cap * 2 + 1)), 0);
+}
+
 /// A loss after the cap has passed is said at once: the warning is not held
 /// for a second cap.
 #[test]
