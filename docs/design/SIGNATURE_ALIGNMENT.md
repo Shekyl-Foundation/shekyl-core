@@ -64,25 +64,24 @@ verification semantics change with zero edits to `multisig.rs`. The
 message signed under scheme 1 and scheme 2 has **identical signing input**
 (cross-scheme confusion, a genuine weakness — see SA-R-5).
 
-### 1.3 FFI boundary (verified at the C++ side)
+### 1.3 Signing and verification boundary
 
-- `shekyl_pqc_sign` has **no production C++ caller** — all callers are in
-  `tests/unit_tests/fcmp.cpp`. Production C++ never signs and never holds a
-  hybrid secret key outside tests (rule 36 holds).
-- The one production consumer is verify-only and on consensus: the Rust
-  verifier's `verify_pqc_auth_slot` (`rust/shekyl-daemon-rpc/src/submit/verifier.rs`).
-  The C++ `tx_pqc_verify.cpp:148` at this row's era (deleted with the C++
-  chain in DRS-X) passed `scheme_id` as a *dispatch parameter* to
-  `shekyl_pqc_verify`, and the message was the input's 32-byte signed hash —
-  since 2026-09-25 (E6 slice 6 commit 7) derived by `shekyl-wire` through
-  `shekyl_tx_pqc_signing_payload_hashes`, no longer a `get_blob_hash` over a
-  C++-assembled payload. That preimage covers the auth's header
-  (`auth_version ‖ scheme_id ‖ flags ‖ len ‖ pk`; `shekyl-wire`
+- No C or C++ calls the hybrid scheme; the tree has no first-party C or C++
+  (`scripts/ci/check_no_first_party_c.py`). Signing is Rust-only (rule 36):
+  the spend signer is `sign_pqc_auth_for_output`
+  (`rust/shekyl-crypto-pq/src/output.rs`), driven by `shekyl-tx-builder`.
+- The consensus consumers are verify-only: the validator's CEN-I18
+  (`rust/shekyl-chain-rules/src/rules/proofs.rs`) and the submit path's
+  `verify_pqc_auth_slot` (`rust/shekyl-daemon-rpc/src/submit/verifier.rs`),
+  both through `verify_pqc_auth` (`rust/shekyl-crypto-pq/src/signature.rs`),
+  which reads `scheme_id` as a dispatch discriminant. The message is the
+  input's 32-byte signed hash, derived by `shekyl-wire`
+  (`Transaction::pqc_signing_payload_hashes`). That preimage covers the auth's
+  header (`auth_version ‖ scheme_id ‖ flags ‖ len ‖ pk`; `shekyl-wire`
   `transaction.rs`), so the scheme is bound by the signature even though the
   verifier reads it as a discriminant.
-- Consequence for SA-R-2: the fix at this boundary is the rule-40 move — the
-  Rust export becomes context-specific and **owns its domain constant**; C++
-  never carries a domain string it could get wrong.
+- Consequence for SA-R-2: the signer and the verifier own the domain
+  constant; no caller carries a domain string it could get wrong.
 
 ### 1.4 Blast-radius facts for the nested conversion
 
