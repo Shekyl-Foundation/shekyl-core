@@ -276,14 +276,15 @@ pub struct DandelionParams {
     /// hop  =  A→B transit  +  B's verification  +  B's scheduling
     /// ```
     ///
-    /// **Verification is inside the critical path**, not beside it:
-    /// `cryptonote_protocol_handler.inl` calls `handle_incoming_tx` in the
-    /// per-transaction loop and reaches `relay_transactions` only after that
-    /// loop closes. The term is **FCMP++ membership-proof verification**
-    /// (`shekyl_fcmp_verify`, scaling with input count) plus a per-output
-    /// prime-order check (`shekyl_check_commitment_masks`) — **not** ML-DSA-65,
-    /// whose public-key hashes are bound into the proof as scalars rather than
-    /// verified as signatures (§72.2). It is not a rounding error, and **it
+    /// **Verification is inside the critical path**, not beside it: the
+    /// relay owner stems or fluffs a 2002 batch only after the pool has
+    /// admitted it (`shekyl-relay`'s `owner`), and the pool's door is
+    /// `shekyl_chain_rules::judge_slot_stateless` at `TxSlot::Lone`. The term
+    /// is that door's sequence: one hybrid Ed25519 + ML-DSA-65 signature
+    /// verification per input (CEN-I18), the FCMP++ membership proof
+    /// (scaling with input count) with the per-output mask check, and the
+    /// range proof as a batch of one (CEN-H19) (§72.2, amended 2026-11-08).
+    /// It is not a rounding error, and **it
     /// moves when the proof system moves** — this is not a network constant
     /// that can be measured once, which is why an instruction-count gate on the
     /// admission path belongs beside it rather than a comment.

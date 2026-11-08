@@ -261,6 +261,19 @@
 //! is read as the shipped figure. Direction: the Bp+ term can only have
 //! grown, so `surge_max` below can only fall.
 //!
+//! **Interim until that re-run (2026-11-08, ruled by Rick): an Assumption,
+//! not a measurement.** Scale the C++ batched Bp+ term by the measured
+//! single-proof ratio, 2.56 (1.745 → 4.47 ms/proof), assuming the batch
+//! amortises the Rust verifier as it did the C++ one. Per argmax tx that
+//! adds 2.72 ms: verify_floor ≈ 131.49 ms/tx (≈ 10.11 µs per weight-byte),
+//! 46.13 argmax txs per 600 kB zone block, RandomX 1.2845 s per block, and
+//! `surge_max = (f·T − RandomX) / (zone fill)`. The tiers become ≈ 6.38 at
+//! d2, ≈ 5.58 at d7 and **≈ 3.92 at d24**, against the composition below
+//! (6.52 / 5.69 / 3.97, quoted as 6.5 / 5.7 / 4.0). The signed ×4 is the
+//! d24 figure, so under this interim it sits above its own bound. The
+//! conservative bracket, the Rust single-proof cost (34.8 ms) in place of
+//! the batched term, gives ≈ 3.43 at d24.
+//!
 //! **Regime note:** the sweep was measured with the FA-6 §8.2 flags; a
 //! one-point comparison against the shipping configuration (generic
 //! aarch64 — no repo `target-cpu`, verified) showed flagless 3.2% FASTER
