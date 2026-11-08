@@ -1125,10 +1125,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
 
-- **The wallet's Tor recovery has never run on Windows: three live respawn tests are `#[cfg(unix)]`.** `crash_is_survived_respawn_reaches_ready_again`, `onion_is_republished_on_every_incarnation` and `degraded_episode_clears_only_after_sustained_ready` (`rust/shekyl-tor-control-wallet/src/service.rs`) kill the managed tor with `pkill`, which Windows does not have, so `tor-pin-verify`'s Windows entry runs one wallet live test, not four. The GUI wallet is the primary Windows wallet, so the supervisor's crash, respawn and degraded-episode paths are the ones Windows users will meet first. Needs a Windows termination path for the tests (the managed tor's process, terminated by its handle or PID), then the three tests ungated and the Windows wallet floor raised to 4. Falsify by: the Windows entry of `tor-pin-verify` running all four wallet live tests green. — [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-11`
-  - Target: pre-genesis
-  - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §7
-
 - **Four test-data file names are too long for a Windows checkout under a deep path.** `tests/data/account-<128 hex>` is 151 characters from the repository root, so a checkout whose root path is longer than about 108 characters exceeds Windows' 260-character `MAX_PATH` and git cannot write those files unless `core.longpaths` is on. A Windows developer then has a checkout with four files missing. The files date from the inherited tree's first commit, and no file in `tests/`, `src/` or `rust/` names them; if nothing reads them they are deleted (rule 60), otherwise shortened with their reader, or failing both `git config core.longpaths true` is documented where a Windows build is described. Falsify by: every tracked path is under 150 characters, or `COMPILING_DEBUGGING_TESTING.md`'s Windows section names the setting.
   - Target: pre-genesis
   - Owner: [`WINDOWS_WALLET_SUPPORT.md`](design/WINDOWS_WALLET_SUPPORT.md)
