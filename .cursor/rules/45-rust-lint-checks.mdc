@@ -75,13 +75,6 @@ Each carries `#![allow(unsafe_code)]` at its root with the reason stated
 beside it, and still a `// SAFETY:` comment on each `unsafe` block. No other
 crate joins them.
 
-**Not yet meeting it (2026-11-08):** `shekyl-process`,
-`shekyl-thread-priority`, `shekyl-tor-control-client`, `shekyl-logging` and
-`shekyl-engine-prefs` make operating-system calls under no crate-level deny,
-and the two exceptions do not yet state their reason at the root. The
-`unsafe` scoping PR, after the secrets-storage PR, gives each of the five the
-deny with item-level allows and `SAFETY`, and the two their stated allow.
-
 ## Patterns clippy will catch that matter
 
 These show up often in CryptoNote-derived code and are real bugs, not

@@ -72,7 +72,3 @@ RPC caller, a file) follows these rules.
   on a daemon, a lost session in a wallet. `panic!`, `unwrap` and `expect`
   are for programmer invariants the input cannot influence, and the
   message names the invariant, not the input.
-
-The source-scan gate that holds decoders to the first rule lands in the
-`unsafe` scoping PR (`SSR-R2`,
-[`SECRET_STORAGE.md`](../../docs/design/SECRET_STORAGE.md)).
