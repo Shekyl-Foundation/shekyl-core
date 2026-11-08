@@ -39,7 +39,7 @@ Degenerate caps (`cap ≤ 0`, non-finite) credit **zero** on both backends, matc
 |--------|-----------|------|
 | Per-work `Curve` float vs integer | `|Δ| ≤ 0.002` credited work units | `reconciliation_curve_float_vs_integer` |
 | Plateau value | exact milli match | `reconciliation_plateau_cross_check` |
-| Gini / attractor rank (full sweeps) | homeostasis-frame PASS, PR 1.5 2026-06-13 | `--curve-impl=integer` vs float |
+| Gini / attractor rank (full sweeps) | homeostasis-frame PASS, PR 1.5 2026-06-13 | `--curve-impl=integer` vs float, now under `--reward-arm=registered-plateau` |
 
 PR 1.5 (`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`) ran the full sweep on a homeostasis
 frame: the integer `Curve` keeps `spread` 325/325 clean and is **not worse** than
