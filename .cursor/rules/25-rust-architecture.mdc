@@ -1,5 +1,5 @@
 ---
-description: How Rust code is structured in Shekyl. Workspace layout and dependency rules.
+description: How Rust code is structured in Shekyl. Workspace layout, dependency rules, and how a decoder treats untrusted bytes.
 globs:
   - rust/**
   - cmake/BuildRust.cmake
@@ -46,3 +46,31 @@ New functionality:
   crates for all CI platforms before merge.
 - **Vendored dependencies (`shekyl-oxide`) live under `rust/` as path
   dependencies**, not git deps. See `SHEKYL_OXIDE_VENDORING.md`.
+
+## Decoding untrusted bytes
+
+Every decoder of bytes from outside the process (a peer, the network, an
+RPC caller, a file) follows these rules.
+
+- **Bound a count before it sizes an allocation.** A count read from the
+  input is bounded before `Vec::with_capacity`, `reserve` or `vec![_; n]`
+  uses it. The bound has two axes: the backing bound (a count the
+  remaining bytes cannot back is malformed) and, for cheap-per-element
+  counts, a protocol ceiling (a fully backed input can still buy
+  amplification at a few bytes per element; `MAX_TREE_DEPTH` on branch
+  layers is the precedent). Apply whichever is tighter; never cap at an
+  arbitrary large constant.
+- **No crate- or module-wide allow of the cast lints in a decoder.** It
+  overrides the workspace deny exactly where a length or count conversion
+  matters. Allows are per site, each with a one-line rationale for why the
+  value is preserved.
+- **Refuse, never panic.** Malformed input decodes to `None` or a typed
+  error, and the caller returns its own failure shape. A panic on hostile
+  input is a crash the operator did not choose: a remote denial of service
+  on a daemon, a lost session in a wallet. `panic!`, `unwrap` and `expect`
+  are for programmer invariants the input cannot influence, and the
+  message names the invariant, not the input.
+
+The source-scan gate that holds decoders to the first rule lands in the
+`unsafe` scoping PR (`SSR-R2`,
+[`SECRET_STORAGE.md`](../../docs/design/SECRET_STORAGE.md)).

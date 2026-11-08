@@ -27,6 +27,11 @@ the questions the round answers; it does not answer them yet.
   `shekyl-randomx-differential` keep a crate-level allow with the reason
   stated at the root
   ([`45-rust-lint-checks`](../../.cursor/rules/45-rust-lint-checks.mdc)).
+  The same PR lands the decoder gate: a source scan that refuses an
+  allocation sized by a count read from untrusted bytes with no bound
+  before it
+  ([`25-rust-architecture`](../../.cursor/rules/25-rust-architecture.mdc),
+  §"Decoding untrusted bytes"; ruled by Rick, 2026-11-08).
 
 ## 2. Inputs
 
