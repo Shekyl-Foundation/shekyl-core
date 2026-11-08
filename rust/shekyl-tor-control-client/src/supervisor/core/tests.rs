@@ -940,8 +940,8 @@ fn the_relays_verdict_decides_own_tx_and_health_and_is_said_under_the_cap() {
 /// does: the loss was never said, so the recovery says nothing, and the
 /// loss's owed sentence is forgiven rather than said at the cap. The floor
 /// device's soak said "Tor is carrying this node's traffic." 19,352 times
-/// under churn. Red edits: say every recovery at once (the first
-/// assertion fails); keep the owed sentence (the second fails).
+/// under churn. Red edits: say every recovery at once (the recovery
+/// assertion fails); keep the owed sentence (the deadline assertion fails).
 #[test]
 fn churn_with_no_announced_loss_says_nothing() {
     let (mut core, _) = Core::start(policy(), managed(false), 0);

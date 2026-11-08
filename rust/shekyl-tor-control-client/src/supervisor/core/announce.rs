@@ -107,14 +107,19 @@ impl Announcements {
         self.pending = None;
     }
 
-    /// Drop an owed [`PendingSay::Once`]: what it owed is no longer true. The
-    /// origin verdict is the only [`Cadence::Once`], and a change of key is
-    /// said at once, so an owed once is the origin's loss. The phase's own
-    /// repeat, which the once replaced, comes back at the same time while the
-    /// phase repeats.
-    pub(super) fn forgive_once(&mut self, repeats: bool) {
+    /// Retire an armed [`PendingSay::Once`]. Returns whether one was armed.
+    ///
+    /// While `repeats`, the phase's repeat takes that once's deadline: the
+    /// once had replaced it. A pending repeat is left where it is. The origin
+    /// loss is the only [`Cadence::Once`] this supervisor arms, so a retired
+    /// once is that unsaid loss.
+    #[must_use]
+    pub(super) fn forgive_once(&mut self, repeats: bool) -> bool {
         if let Some(PendingSay::Once { at }) = self.pending {
             self.pending = repeats.then_some(PendingSay::Repeat { at });
+            true
+        } else {
+            false
         }
     }
 
