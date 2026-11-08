@@ -328,15 +328,82 @@ impl InfoP2p {
     }
 }
 
-/// Per-connector transport and peerlist detail of a daemon whose P2P runs.
+/// Transport and peerlist detail of a daemon whose P2P runs: one row per
+/// connector the daemon runs, in connector order (3.70).
+///
+/// A connector the daemon does not run has no row. A missing row says the
+/// connector is not configured; it is not a zero. A daemon running P2P runs
+/// at least one connector (with both off it is offline, IG-Q3), so there is
+/// always a row. The rows are built only through [`Self::new`], which
+/// refuses no row, a connector out of order, and a connector named twice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoPeers {
-    pub public_incoming_socket_count: u64,
-    pub public_outgoing_socket_count: u64,
-    pub tor_incoming_socket_count: u64,
-    pub tor_outgoing_socket_count: u64,
+    connectors: Vec<InfoConnectorPeers>,
+}
+
+impl InfoPeers {
+    /// The rows: at least one, each connector at most once, in
+    /// [`InfoConnector`] order.
+    ///
+    /// # Errors
+    /// [`GetInfoShapeError::NoConnectorRow`] for no row;
+    /// [`GetInfoShapeError::ConnectorsOutOfOrder`] when a row's connector
+    /// is not after the one before it.
+    pub fn new(connectors: Vec<InfoConnectorPeers>) -> Result<Self, GetInfoShapeError> {
+        if connectors.is_empty() {
+            return Err(GetInfoShapeError::NoConnectorRow);
+        }
+        if connectors
+            .windows(2)
+            .any(|pair| pair[0].connector >= pair[1].connector)
+        {
+            return Err(GetInfoShapeError::ConnectorsOutOfOrder);
+        }
+        Ok(Self { connectors })
+    }
+
+    /// The rows, in connector order.
+    #[must_use]
+    pub fn connectors(&self) -> &[InfoConnectorPeers] {
+        &self.connectors
+    }
+
+    /// The row of `connector`, when the daemon runs it.
+    #[must_use]
+    pub fn connector(&self, connector: InfoConnector) -> Option<&InfoConnectorPeers> {
+        self.connectors
+            .iter()
+            .find(|row| row.connector == connector)
+    }
+}
+
+/// A connector, as `get_info`'s Peers rows name it. The order of the
+/// variants is the rows' order: the node's connector declaration order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum InfoConnector {
+    #[serde(rename = "clearnet")]
+    Clearnet,
+    #[serde(rename = "tor")]
+    Tor,
+}
+
+/// One connector's sockets and peer lists.
+///
+/// The row is the unit of the Peers part's all-or-none rule: every member
+/// is required and no other is accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InfoConnectorPeers {
+    pub connector: InfoConnector,
+    /// Sockets this connector accepted.
+    pub incoming_sockets: u64,
+    /// Sockets this connector dialed.
+    pub outgoing_sockets: u64,
+    /// The white list's size for this connector, counted against the
+    /// addresses the dialer holds, as the disclosure does.
     pub white_peerlist_size: u64,
-    pub grey_peerlist_size: u64,
+    /// The gray list's size for this connector.
+    pub gray_peerlist_size: u64,
 }
 
 /// Result of `get_info` (REST `/get_info`, `/getinfo`; JSON-RPC `get_info`).
@@ -383,6 +450,11 @@ pub enum GetInfoShapeError {
     /// A Peers count arrived without `p2p`, which says what the counts are
     /// of.
     CountWithoutP2p { key: &'static str },
+    /// The Peers rows name a connector out of connector order, or twice.
+    ConnectorsOutOfOrder,
+    /// `"p2p": "running"` with no connector row. A daemon with both
+    /// connectors off is offline (IG-Q3), so a running one has a row.
+    NoConnectorRow,
     /// `p2p` disagrees with Health's `offline`: both read the daemon's
     /// configuration, so they cannot differ.
     P2pDisagreesWithOffline { offline: bool },
@@ -419,6 +491,14 @@ impl core::fmt::Display for GetInfoShapeError {
             Self::CountWithoutP2p { key } => write!(
                 f,
                 "`{key}` arrived without `p2p`: the Peers part says first whether P2P runs"
+            ),
+            Self::NoConnectorRow => f.write_str(
+                "`p2p` is running and `connectors` has no row: a daemon running no connector \
+                 is offline",
+            ),
+            Self::ConnectorsOutOfOrder => f.write_str(
+                "the Peers part's `connectors` rows are out of connector order or name a \
+                 connector twice: one row per connector the daemon runs, clearnet before tor",
             ),
             Self::P2pDisagreesWithOffline { offline } => write!(
                 f,
@@ -517,19 +597,9 @@ struct GetInfoWire {
 
     // Peers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    public_incoming_socket_count: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    public_outgoing_socket_count: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    tor_incoming_socket_count: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    tor_outgoing_socket_count: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     p2p: Option<P2pWire>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    white_peerlist_size: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    grey_peerlist_size: Option<u64>,
+    connectors: Option<Vec<InfoConnectorPeers>>,
 
     // Host. Absent is withheld; `null` is shown with no answer, when the
     // pool is retired.
@@ -615,13 +685,8 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             incoming_connections_count,
             alt_blocks_count,
             rpc_connections_count,
-            public_incoming_socket_count,
-            public_outgoing_socket_count,
-            tor_incoming_socket_count,
-            tor_outgoing_socket_count,
             p2p,
-            white_peerlist_size,
-            grey_peerlist_size,
+            connectors,
             tx_pool_unbroadcast_count,
             restricted,
         } = wire;
@@ -708,42 +773,23 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
         if node.shown().is_some_and(|status| status.version.is_empty()) {
             return Err(GetInfoShapeError::EmptyVersion);
         }
-        let counts = [
-            ("public_incoming_socket_count", public_incoming_socket_count),
-            ("public_outgoing_socket_count", public_outgoing_socket_count),
-            ("tor_incoming_socket_count", tor_incoming_socket_count),
-            ("tor_outgoing_socket_count", tor_outgoing_socket_count),
-            ("white_peerlist_size", white_peerlist_size),
-            ("grey_peerlist_size", grey_peerlist_size),
-        ];
-        let first_count = counts.iter().find(|(_, v)| v.is_some()).map(|(k, _)| *k);
-        let peers = match p2p {
-            None => match first_count {
-                None => Hidden::Withheld,
-                Some(key) => return Err(GetInfoShapeError::CountWithoutP2p { key }),
-            },
-            Some(P2pWire::Offline) => match first_count {
-                None => Hidden::Shown(InfoP2p::Offline),
-                Some(key) => return Err(GetInfoShapeError::CountWhileOffline { key }),
-            },
-            Some(P2pWire::Running) => {
-                let mut values = [0u64; 6];
-                for (slot, (key, value)) in values.iter_mut().zip(counts) {
-                    *slot = value.ok_or(GetInfoShapeError::PartialPart {
-                        part: "peers",
-                        missing: key,
-                    })?;
-                }
-                let [public_incoming_socket_count, public_outgoing_socket_count, tor_incoming_socket_count, tor_outgoing_socket_count, white_peerlist_size, grey_peerlist_size] =
-                    values;
-                Hidden::Shown(InfoP2p::Running(InfoPeers {
-                    public_incoming_socket_count,
-                    public_outgoing_socket_count,
-                    tor_incoming_socket_count,
-                    tor_outgoing_socket_count,
-                    white_peerlist_size,
-                    grey_peerlist_size,
-                }))
+        let peers = match (p2p, connectors) {
+            (None, None) => Hidden::Withheld,
+            (None, Some(_)) => {
+                return Err(GetInfoShapeError::CountWithoutP2p { key: "connectors" })
+            }
+            (Some(P2pWire::Offline), None) => Hidden::Shown(InfoP2p::Offline),
+            (Some(P2pWire::Offline), Some(_)) => {
+                return Err(GetInfoShapeError::CountWhileOffline { key: "connectors" })
+            }
+            (Some(P2pWire::Running), None) => {
+                return Err(GetInfoShapeError::PartialPart {
+                    part: "peers",
+                    missing: "connectors",
+                })
+            }
+            (Some(P2pWire::Running), Some(rows)) => {
+                Hidden::Shown(InfoP2p::Running(InfoPeers::new(rows)?))
             }
         };
         if let Hidden::Shown(state) = &peers {
@@ -874,13 +920,8 @@ impl From<GetInfoResponse> for GetInfoWire {
             alt_blocks_count: node.as_ref().map(|n| n.alt_blocks_count),
             rpc_connections_count: node.as_ref().map(|n| n.rpc_connections_count),
             version: node.map(|n| n.version),
-            public_incoming_socket_count: peers.as_ref().map(|p| p.public_incoming_socket_count),
-            public_outgoing_socket_count: peers.as_ref().map(|p| p.public_outgoing_socket_count),
-            tor_incoming_socket_count: peers.as_ref().map(|p| p.tor_incoming_socket_count),
-            tor_outgoing_socket_count: peers.as_ref().map(|p| p.tor_outgoing_socket_count),
             p2p,
-            white_peerlist_size: peers.as_ref().map(|p| p.white_peerlist_size),
-            grey_peerlist_size: peers.as_ref().map(|p| p.grey_peerlist_size),
+            connectors: peers.map(|p| p.connectors),
             tx_pool_unbroadcast_count: host
                 .shown()
                 .map(|h| Nullable::from(h.tx_pool_unbroadcast_count)),

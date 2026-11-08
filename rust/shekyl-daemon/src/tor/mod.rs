@@ -40,7 +40,8 @@ use shekyl_tor_control_client::binary::{
 use shekyl_tor_control_client::control::{
     parse_bootstrap_progress, parse_consensus_valid_after, parse_event, parse_network_view,
     parse_socks_listeners, parse_traffic_read, resume_lateness, BootstrapState, Command,
-    ControlError, ControlReply, EventSink, Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
+    ControlError, ControlReply, EventSink, LogEvent, LogSeverity, Resume, ServiceId, SocksTimeout,
+    TorEvent, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
     clock_evidence_of, directory_content_input_of, held_at_start_sentence, input_of,
@@ -49,7 +50,8 @@ use shekyl_tor_control_client::supervisor::{
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
-    DaemonTorStartError, IsolationPair, KeptDataDir, OnionPow, OnionSeed, SpawnError, TorDeath,
+    DaemonTorStartError, IsolationPair, KeptDataDir, KeptLog, OnionPow, OnionSeed, Retirement,
+    SpawnError, TombstoneEnd, TorDeath,
 };
 use tokio::task::JoinHandle;
 
@@ -242,6 +244,67 @@ pub fn begin(
     Some(Supervisor { owner, task })
 }
 
+/// Tor's log line in the daemon's log, under `tor` at Tor's severity
+/// (§4.10). `TSR-M9` found no onion address in these lines at `notice`.
+fn say_tor_log(line: &LogEvent) {
+    let text = tor_log_text(&line.message);
+    match line.severity {
+        LogSeverity::Notice => tracing::info!(target: "tor", "Tor: {text}"),
+        LogSeverity::Warn => tracing::warn!(target: "tor", "Tor: {text}"),
+        LogSeverity::Err => tracing::error!(target: "tor", "Tor: {text}"),
+    }
+}
+
+/// Tor's text with every control character replaced: the text can carry what
+/// relays sent, and the daemon's log is read in a terminal.
+fn tor_log_text(message: &str) -> String {
+    message
+        .chars()
+        .map(|c| {
+            if c.is_control() {
+                char::REPLACEMENT_CHARACTER
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// Say what became of a retired directory. Tor's kept log is where a run
+/// looks for why Tor stopped (§4.10); a failure leaves the next start's sweep
+/// to finish.
+fn say_retirement(retirement: &Retirement) {
+    match &retirement.log {
+        KeptLog::Kept(path) => tracing::info!(
+            target: "tor",
+            "Tor's log is kept at {}",
+            path.display()
+        ),
+        KeptLog::Absent => {}
+        KeptLog::NotMoved(error) => tracing::warn!(
+            target: "tor",
+            "Tor's log was not kept ({error}); it is removed with Tor's directory"
+        ),
+    }
+    match &retirement.tombstone {
+        TombstoneEnd::Deleted => {}
+        TombstoneEnd::Outlived(path) => tracing::debug!(
+            target: "tor",
+            "Tor's old directory {} is still being deleted; the next start removes what is left",
+            path.display()
+        ),
+        TombstoneEnd::NotDeleted(path, error) => tracing::warn!(
+            target: "tor",
+            "Tor's old directory {} was not deleted ({error}); the next start tries again",
+            path.display()
+        ),
+        TombstoneEnd::NotRenamed(error) => tracing::warn!(
+            target: "tor",
+            "Tor's directory was not renamed for deletion ({error}); the next start removes it"
+        ),
+    }
+}
+
 fn dial_tally(tally: TorLinkTally) -> DialTally {
     DialTally {
         opened: tally.opened,
@@ -428,6 +491,14 @@ impl Drive {
                     "Tor's directory cache was not saved ({error}); the next start fetches the network directory again"
                 );
             }
+            if let Some(retirement) = teardown.retirement {
+                say_retirement(&retirement);
+            }
+        }
+        // Tor was down at the stop: the directory held for its respawn ends
+        // here, the same way.
+        if let Some(kept) = self.kept.take() {
+            say_retirement(&kept.retire().await);
         }
     }
 
@@ -777,6 +848,11 @@ impl Drive {
                     inputs.extend(directory_content_input_of(content));
                 }
             }
+            // Tor's own log line, in the daemon's log (§4.10). A run reads
+            // why Tor did what it did here, after the daemon has stopped.
+            if let TorEvent::Log(line) = &parsed {
+                say_tor_log(line);
+            }
             // Evidence first: a problem that is also the blocked link is
             // judged against the clock it may already name.
             if let Some(input) = clock_evidence_of(&parsed) {
@@ -822,21 +898,23 @@ impl Drive {
 
     async fn spawn(&mut self, fresh_directory: bool) -> Input {
         // A fault reaps before the next pin. A child still held here is kept,
-        // not dropped: dropping the control wipes the directory.
+        // not dropped: dropping the control retires the directory.
         if self.control.is_some() {
             self.reap().await;
         }
-        // Known before the drop. A kept directory wears the leftover name,
-        // so the sweep runs only after that drop.
         let fresh = fresh_directory || self.kept.is_none();
+        let mut swept = false;
         if fresh_directory {
-            self.kept.take();
+            if let Some(old) = self.kept.take() {
+                say_retirement(&old.replace().await);
+                swept = true;
+            }
         }
         let Some(binary) = self.pinned.clone() else {
             return Input::PinRefused;
         };
-        if fresh {
-            sweep_stale_data_dirs(&self.data_dir);
+        if fresh && !swept {
+            sweep_stale_data_dirs(&self.data_dir, None);
         }
         if let Some(short) = self.space_short(fresh) {
             return short;
@@ -1442,5 +1520,79 @@ mod tests {
         assert!(line.contains("was not started"));
         assert!(line.contains("/srv/tor-dir"));
         assert!(line.contains(&held_at_start_sentence(false)));
+    }
+
+    /// What `f` writes to the log, one line per event, without times.
+    fn logged(f: impl FnOnce()) -> String {
+        #[derive(Clone, Default)]
+        struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("capture").extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+            type Writer = Self;
+            fn make_writer(&'a self) -> Self {
+                self.clone()
+            }
+        }
+        let captured = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .with_ansi(false)
+            .without_time()
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = captured.0.lock().expect("capture").clone();
+        String::from_utf8(bytes).expect("utf-8")
+    }
+
+    /// Tor's log lines reach the daemon's log under `tor`, each at Tor's own
+    /// severity (§4.10). Red edit: log every line at `info`, and the warning
+    /// and the error read as notices.
+    #[test]
+    fn tors_log_lines_reach_the_daemons_log_at_tors_severity() {
+        let line = |severity, message: &str| LogEvent {
+            severity,
+            message: message.to_owned(),
+        };
+        let out = logged(|| {
+            say_tor_log(&line(LogSeverity::Notice, "Bootstrapped 100% (done): Done"));
+            say_tor_log(&line(LogSeverity::Warn, "Problem bootstrapping."));
+            say_tor_log(&line(LogSeverity::Err, "Couldn't open file for 'Log'"));
+        });
+        let lines: Vec<&str> = out.lines().map(str::trim).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "INFO tor: Tor: Bootstrapped 100% (done): Done",
+                "WARN tor: Tor: Problem bootstrapping.",
+                "ERROR tor: Tor: Couldn't open file for 'Log'",
+            ]
+        );
+    }
+
+    /// A control character in Tor's text, which can carry what a relay sent,
+    /// does not reach the log as itself. Red edit: log the text as Tor sent
+    /// it, and the escape sequence is in the log.
+    #[test]
+    fn a_control_character_in_tors_text_is_replaced() {
+        let out = logged(|| {
+            say_tor_log(&LogEvent {
+                severity: LogSeverity::Notice,
+                message: "relay \u{1b}[31mred\u{7} said hi".to_owned(),
+            });
+        });
+        assert!(!out.chars().any(|c| c.is_control() && c != '\n'), "{out:?}");
+        assert!(
+            out.contains("relay \u{fffd}[31mred\u{fffd} said hi"),
+            "{out:?}"
+        );
     }
 }

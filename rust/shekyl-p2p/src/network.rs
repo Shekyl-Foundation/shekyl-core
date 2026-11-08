@@ -53,7 +53,7 @@ use tokio::sync::watch;
 use crate::bans::{self, BanSpan, Bans};
 use crate::descriptors;
 use crate::dial::{ClearnetReady, Connectors, Spans, ACCEPT_BACKOFF};
-use crate::facts::{self, LinkTotals, ListedAddress, PeerCounts, SocketTraffic};
+use crate::facts::{self, ConnectorCounts, LinkTotals, ListedAddress, SocketTraffic};
 use crate::peers::{self, OwnerLoops, Peers};
 use crate::plan::{LinkLimits, NetworkPlan, TorPlan};
 use crate::tor::{SupervisorFeeds, TorLink, TOR_SOCKS_TIMEOUT};
@@ -170,6 +170,9 @@ struct Inner {
     relay: RelayHandle,
     layer: Layer,
     connectors: Arc<Connectors>,
+    /// The connectors the plan starts, in declaration order. `get_info`
+    /// reports one row for each and none for the others.
+    running: Vec<ConnectorId>,
     tor_link: Arc<TorLink>,
     bans: Bans,
     listening: Listening,
@@ -343,6 +346,7 @@ impl Network {
                 relay: relay.handle,
                 layer,
                 connectors,
+                running: plan.connectors(),
                 tor_link,
                 bans,
                 listening: Listening::default(),
@@ -615,11 +619,11 @@ impl Network {
         self.inner.relay.snapshot()
     }
 
-    /// The sockets per connector and direction, and the clearnet list
-    /// sizes.
+    /// One row per connector this network runs, in declaration order: its
+    /// sockets per direction and its white and gray list sizes.
     #[must_use]
-    pub fn peer_counts(&self) -> PeerCounts {
-        facts::peer_counts(&self.inner.sockets, &self.inner.dialer)
+    pub fn peer_counts(&self) -> Vec<ConnectorCounts> {
+        facts::peer_counts(&self.inner.sockets, &self.inner.dialer, &self.inner.running)
     }
 
     /// Established sessions, outbound then inbound.

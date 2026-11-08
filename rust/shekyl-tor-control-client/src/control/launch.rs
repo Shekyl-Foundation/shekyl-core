@@ -85,8 +85,10 @@ pub(crate) const BLANK_FILE_NAME: &str = "blank";
 
 /// Tor's notice log, inside the data directory. The path is passed unquoted:
 /// `Log <severity> file <FILENAME>` takes the remainder of the value as the
-/// filename, so a quote would become part of the name.
-pub(crate) const LOG_FILE_NAME: &str = "tor.log";
+/// filename, so a quote would become part of the name. The daemon's teardown
+/// moves this file out of the directory before it retires it
+/// (`TOR_SUPERVISOR.md` §4.10).
+pub const LOG_FILE_NAME: &str = "tor.log";
 
 /// Owner read/write. Applied again after create, so the umask cannot loosen it.
 #[cfg(unix)]
