@@ -26,7 +26,15 @@
 //!   off, the refusal would be the system's, so the control fails first.
 //! - **macOS.** No tool reads another process's limit, so the arm observes
 //!   the effect: `SIGABRT` to the control writes the core `kern.corefile`
-//!   names, and `SIGABRT` to the binary writes none. It needs
+//!   names, and `SIGABRT` to the binary writes none. The kernel writes a
+//!   core only for a process signed with the
+//!   `com.apple.security.get-task-allow` entitlement (macOS 27.0.1, arm64,
+//!   observed: the same binary dumps with it and not without it), and
+//!   cargo's ad-hoc signature carries none. So both the control and the
+//!   binary run as copies signed with it ([`raised`]), and the hardening
+//!   call is the one difference between them. A binary signed without the
+//!   entitlement gets no core from the system whatever its limit; this arm
+//!   observes the binary's own limit, not that. It also needs
 //!   `kern.coredump=1` and a core directory this account can write; without
 //!   either the control writes nothing and the test fails saying so. Every
 //!   core it finds is deleted.
@@ -49,10 +57,14 @@ const CONTROL_MARKER: &str = "SHEKYL_HARDENING_CONTROL";
 /// The line a control prints once it runs.
 const READY: &str = "control ready";
 
-/// A command that starts `program` through [`RAISE_THEN_EXEC`].
+/// A command that starts `program` through [`RAISE_THEN_EXEC`]. On macOS
+/// the program started is a copy signed to be allowed a core
+/// (`os::observable`).
 pub fn raised(program: &str) -> Command {
     let mut command = Command::new("sh");
-    command.args(["-c", RAISE_THEN_EXEC, program]);
+    command
+        .args(["-c", RAISE_THEN_EXEC])
+        .arg(os::observable(program));
     command
 }
 
@@ -109,6 +121,11 @@ pub fn assert_hardened(child: &mut Child) {
 mod os {
     use super::{end, Child};
 
+    /// The program as it is: this arm reads the limit itself.
+    pub fn observable(program: &str) -> &str {
+        program
+    }
+
     /// `/proc/<pid>/limits`' core row, soft and hard, as spelled there.
     fn core_limit(pid: u32) -> (String, String) {
         const ROW: &str = "Max core file size";
@@ -149,6 +166,11 @@ mod os {
     use std::time::{Duration, Instant};
 
     use super::{end, Child};
+
+    /// The program as it is: this arm reads the limit itself.
+    pub fn observable(program: &str) -> &str {
+        program
+    }
 
     /// `procstat -l`'s `coredumpsize` row, soft and hard: `infinity`, or a
     /// number with its unit (`0 B`).
@@ -308,6 +330,68 @@ mod os {
         }
     }
 
+    /// The entitlement without which this kernel writes no core.
+    const GET_TASK_ALLOW: &str = "com.apple.security.get-task-allow";
+
+    /// `program`, copied beside itself as `<name>.get-task-allow` and
+    /// ad-hoc signed with [`GET_TASK_ALLOW`]. The copy is built under a
+    /// per-process name and renamed into place, so two tests cannot see a
+    /// half-signed file; the signature is read back before it is used.
+    pub fn observable(program: &str) -> PathBuf {
+        let original = Path::new(program);
+        let name = original
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("a UTF-8 program name");
+        let staged =
+            original.with_file_name(format!("{name}.get-task-allow.{}", std::process::id()));
+        let plist = staged.with_extension("plist");
+        let copy = original.with_file_name(format!("{name}.get-task-allow"));
+        std::fs::copy(original, &staged)
+            .unwrap_or_else(|e| panic!("copy {} to {}: {e}", program, staged.display()));
+        std::fs::write(
+            &plist,
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+                 \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+                 <plist version=\"1.0\"><dict><key>{GET_TASK_ALLOW}</key><true/></dict></plist>\n"
+            ),
+        )
+        .unwrap_or_else(|e| panic!("write {}: {e}", plist.display()));
+        let signed = Command::new("codesign")
+            .args(["-s", "-", "-f", "--entitlements"])
+            .arg(&plist)
+            .arg(&staged)
+            .output()
+            .expect("run codesign");
+        std::fs::remove_file(&plist).unwrap_or_else(|e| panic!("remove {}: {e}", plist.display()));
+        assert!(
+            signed.status.success(),
+            "codesign {} failed: {}",
+            staged.display(),
+            String::from_utf8_lossy(&signed.stderr)
+        );
+        let read = Command::new("codesign")
+            .args(["-d", "--entitlements", "-"])
+            .arg(&staged)
+            .output()
+            .expect("run codesign -d");
+        let shown = format!(
+            "{}{}",
+            String::from_utf8_lossy(&read.stdout),
+            String::from_utf8_lossy(&read.stderr)
+        );
+        assert!(
+            read.status.success() && shown.contains(GET_TASK_ALLOW),
+            "the signed copy {} does not carry {GET_TASK_ALLOW}: {shown}",
+            staged.display()
+        );
+        std::fs::rename(&staged, &copy)
+            .unwrap_or_else(|e| panic!("rename {} to {}: {e}", staged.display(), copy.display()));
+        copy
+    }
+
     pub fn assert_unhardened(mut control: Child) {
         let coredump = sysctl("kern.coredump");
         if coredump != "1" {
@@ -321,9 +405,10 @@ mod os {
         abort(&mut control);
         assert!(
             take_core(&path),
-            "SIGABRT to the unhardened control left no core at {}; the core \
-             directory must be writable by this account ({}), or the check \
-             would pass for nothing",
+            "SIGABRT to the unhardened control left no core at {}, though \
+             it carries {GET_TASK_ALLOW}; the core directory must be \
+             writable by this account ({}), or the check would pass for \
+             nothing",
             path.display(),
             describe_directory(&path)
         );

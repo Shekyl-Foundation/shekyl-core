@@ -543,7 +543,7 @@ This section contains general instructions for debugging failed installs or runt
 
 ### Obtaining stack traces on Unix systems
 
-`shekyld`, `shekyl-cli` and `shekyl-wallet-rpc` harden their process before they read an argument: the core-file limit is zero on both bounds, so no crash writes a core file. `ulimit -c unlimited` changes nothing, because the process cannot raise the limit again, and `coredumpctl` has nothing to show. On Linux the process is also not dumpable, so only root can attach a debugger to it. On FreeBSD tracing is disabled for every process, root included. On macOS the core limit is the only restriction.
+`shekyld`, `shekyl-cli` and `shekyl-wallet-rpc` harden their process before they read an argument: the core-file limit is zero on both bounds, so no crash writes a core file. `ulimit -c unlimited` changes nothing, because the process cannot raise the limit again, and `coredumpctl` has nothing to show. On Linux the process is also not dumpable, so only root can attach a debugger to it. On FreeBSD tracing is disabled for every process, root included. On macOS the core limit is the only restriction the binary sets; macOS itself writes a core only for a program signed with the `com.apple.security.get-task-allow` entitlement, which a release build does not carry.
 
 What each binary prints on its way down:
 
