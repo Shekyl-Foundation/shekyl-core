@@ -750,6 +750,21 @@ where
         self.store = Some(opened);
     }
 
+    /// Space the next blocks `seconds` apart instead of the DAA's target:
+    /// a chain mined faster or slower than its difficulty asks.
+    pub fn space_blocks(&self, seconds: core::num::NonZeroU64) {
+        self.substrate.set_interval(seconds);
+    }
+
+    /// Stop the connector and start it again over the same store under
+    /// `rules`: the chain so far, continued under another rule set (a
+    /// window built at a fixed difficulty, then judged by LWMA-1).
+    pub async fn continue_under(&mut self, rules: ChainRules) {
+        self.stop_connector().await;
+        self.rules = rules;
+        self.start_connector();
+    }
+
     /// Stop the connector, release the store, remove the file.
     pub async fn close(mut self) {
         self.stop_connector().await;
@@ -810,8 +825,7 @@ where
         let target = self
             .targets
             .claim(height, &rule_set)
-            .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"))
-            .map_err(StepOutcome::Refused)?;
+            .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"));
         Ok((seed, target))
     }
 

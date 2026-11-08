@@ -133,8 +133,6 @@ pub enum Unbuilt {
     NoNonceSlot,
     /// The tip is the last height there is.
     LastHeight,
-    /// The chain's own headers refuse the next block's target.
-    TargetRefused,
     /// A seed block is not on the snapshot it was read from.
     SeedMissing,
     /// The follower builds once more at this tip. See [`Rebuild`].
@@ -199,7 +197,6 @@ impl core::fmt::Display for Unbuilt {
             Self::Pricing => "the block could not be priced",
             Self::NoNonceSlot => "the coinbase reserves no extra nonce",
             Self::LastHeight => "the tip is the last height there is",
-            Self::TargetRefused => "the chain's own headers refuse its target",
             Self::SeedMissing => "a seed block is not on the snapshot",
             Self::Retry(reason) => return reason.fmt(f),
             Self::ProducerPanicked => "the template producer panicked",
@@ -228,7 +225,6 @@ impl Unbuilt {
             Self::Pricing => "pricing",
             Self::NoNonceSlot => "no_nonce_slot",
             Self::LastHeight => "last_height",
-            Self::TargetRefused => "target_refused",
             Self::SeedMissing => "seed_missing",
             Self::Retry(reason) => reason.code(),
             Self::ProducerPanicked => "producer_panicked",
@@ -847,12 +843,6 @@ impl Unposted {
             Self::Template(NoTemplate::Facts(FactsStop::NoNextHeight { tip })) => {
                 tracing::error!("no template: the tip {tip:?} is the last height there is");
                 why(Unbuilt::LastHeight)
-            }
-            Self::Template(NoTemplate::Claim(ClaimStop::Refused { refused, .. })) => {
-                tracing::error!(
-                    "no template: the chain's own headers refuse its target: {refused:?}"
-                );
-                why(Unbuilt::TargetRefused)
             }
             Self::Template(NoTemplate::Claim(ClaimStop::Moved)) => {
                 tracing::error!(

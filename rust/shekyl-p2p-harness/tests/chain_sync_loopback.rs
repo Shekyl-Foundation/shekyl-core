@@ -353,9 +353,7 @@ async fn a_forged_header_closes_on_its_first_real_hash() {
     let view = SnapshotView::new(&snap);
     let connecting = BlockHeight::from_raw(1);
     let rule_set = rules.in_force(connecting);
-    let target = target_claim(&view, connecting, &rule_set)
-        .expect("a read")
-        .expect("a target");
+    let target = target_claim(&view, connecting, &rule_set).expect("a read");
     drop(snap);
     prover.pin_seed(&genesis.hash());
     let passes = |block: &Block, prover: &ProductionSubstrate| {

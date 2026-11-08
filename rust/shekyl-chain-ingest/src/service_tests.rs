@@ -830,12 +830,19 @@ async fn no_room_is_refused_before_acceptance_and_a_stop_answers_stopped() {
         .offer_span(vec![arrival(30, 1, &blocks[2]), arrival(31, 1, &blocks[3])])
         .expect("room");
     gate.until_held().await;
+    // The span's two arrivals hold both seats, so the room reads zero
+    // before any stop: the room can't say the stop has begun.
+    assert_eq!(door.room(), 0, "the span holds every seat");
+    let mut stopping = service.shared.stop_signal();
     let stop = tokio::spawn(service.stop());
-    // The held `form` finishes and its block may connect; the stop answers
-    // the rest.
-    while !stop.is_finished() && door.room() != 0 {
-        tokio::task::yield_now().await;
-    }
+    // Wait for the stop itself. Opening the gate before it is seen lets
+    // both blocks form and connect, which is right for a service that has
+    // not been stopped. Once it is seen, the held `form` finishes and its
+    // block may connect; the stop answers the rest.
+    assert!(*stopping
+        .wait_for(|stopping| *stopping)
+        .await
+        .expect("the service holds its stop signal"));
     gate.open(blocks[2].hash);
     stop.await.expect("joins").expect("stops");
     for ticket in tickets {
@@ -2087,7 +2094,7 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
         block: blocks[2].template.block.clone(),
         height: blocks[2].height,
         seed: BlockHash::NULL,
-        difficulty: shekyl_difficulty::Difficulty::from_raw(1),
+        difficulty: shekyl_difficulty::Difficulty::ONE,
         offsets: blocks[2]
             .template
             .block
@@ -2299,7 +2306,7 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
                     block: block.clone(),
                     height: BlockHeight::from_raw(1),
                     seed: BlockHash::from_bytes([1; 32]),
-                    difficulty: shekyl_difficulty::Difficulty::from_raw(1),
+                    difficulty: shekyl_difficulty::Difficulty::ONE,
                     offsets: block
                         .blob_offsets()
                         .expect("a built coinbase reserves the extra nonce"),
@@ -2365,9 +2372,7 @@ where
             AtHeight::AboveTip => BlockHash::NULL,
         },
     };
-    let target = target_claim(&view, connecting, &rule_set)
-        .expect("view")
-        .expect("a target");
+    let target = target_claim(&view, connecting, &rule_set).expect("view");
     let pow = shekyl_wire::PowBlob::read(&mined.template.block.pow_blob()).expect("preimage");
     let formed = form_header(&pow, &rule_set, gate, seed, target, FormAttempt::FIRST)
         .expect("the substrate answers")

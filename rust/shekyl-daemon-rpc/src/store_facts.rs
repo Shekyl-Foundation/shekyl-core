@@ -578,16 +578,10 @@ impl InfoFacts for StoreFacts {
         };
         let view = SnapshotView::new(&snap);
         let next = connecting(tip);
-        let difficulty =
-            match target_claim(&view, next, &self.rules.in_force(next)).map_err(claim_fault)? {
-                Ok(target) => target.difficulty().to_raw(),
-                Err(refused) => {
-                    // CEN-D6 on the chain's own headers: the next block has no
-                    // target, which no conforming chain derives.
-                    tracing::error!(%refused, "the next block's target does not derive");
-                    return Err(FactsFault::Inconsistent);
-                }
-            };
+        let difficulty = target_claim(&view, next, &self.rules.in_force(next))
+            .map_err(claim_fault)?
+            .difficulty()
+            .to_raw();
         let medians = effective_median_at(&view, next).map_err(derivation_fault)?;
         let sync = self.node.sync()?;
         Ok(InfoChainFacts {

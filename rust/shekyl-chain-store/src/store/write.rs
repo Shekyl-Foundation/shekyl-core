@@ -187,9 +187,8 @@ pub struct WriteBatch<'store, 'id> {
 /// (The arms between are documented inline on the match.)
 ///
 /// A zero next-block target is **not** in this table and never was a
-/// store matter: LWMA-1 has no output floor and a conforming slow chain
-/// derives zero, so it is CEN-D6's refusal of the block — a verdict the
-/// validator returns, which the store never sees (RD-F17, 2026-09-20).
+/// store matter: a `Difficulty` is non-zero by its type and LWMA-1 floors
+/// at one (`DAA_LWMA1.md` §5.3 step 10, 2026-11-07).
 ///
 /// **This is the one place the store names a validator fault type**, and
 /// it names only `Corrupt`: never `InvalidBlock` (the conversion ban),
