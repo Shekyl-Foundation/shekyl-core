@@ -812,12 +812,19 @@ async fn no_room_is_refused_before_acceptance_and_a_stop_answers_stopped() {
         .offer_span(vec![arrival(30, 1, &blocks[2]), arrival(31, 1, &blocks[3])])
         .expect("room");
     gate.until_held().await;
+    // The span's two arrivals hold both seats, so the room reads zero
+    // before any stop: the room can't say the stop has begun.
+    assert_eq!(door.room(), 0, "the span holds every seat");
+    let mut stopping = service.shared.stop_signal();
     let stop = tokio::spawn(service.stop());
-    // The held `form` finishes and its block may connect; the stop answers
-    // the rest.
-    while !stop.is_finished() && door.room() != 0 {
-        tokio::task::yield_now().await;
-    }
+    // Wait for the stop itself. Opening the gate before it is seen lets
+    // both blocks form and connect, which is right for a service that has
+    // not been stopped. Once it is seen, the held `form` finishes and its
+    // block may connect; the stop answers the rest.
+    assert!(*stopping
+        .wait_for(|stopping| *stopping)
+        .await
+        .expect("the service holds its stop signal"));
     gate.open(blocks[2].hash);
     stop.await.expect("joins").expect("stops");
     for ticket in tickets {
