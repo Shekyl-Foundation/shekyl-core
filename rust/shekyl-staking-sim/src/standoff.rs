@@ -97,6 +97,7 @@
 //! `shekyl_archival_retention::release_cooldown_elapsed` is the verify-path
 //! predicate), which is slashability plumbing, not a privacy mechanism.
 
+use crate::rng::SplitMix64;
 use serde::Serialize;
 
 use crate::timing_cluster::{BLOCK_TIME_SEC, SETTLEMENT_EPOCH_BLOCKS};
@@ -169,56 +170,6 @@ pub struct StandoffResult {
     pub homeostasis_free: bool,
 }
 
-/// SplitMix64 — small, seeded, reproducible. No `rand` dependency (keeps the
-/// crate's minimal-dep posture; the harness must be deterministic for replay).
-/// `pub(crate)`: the GF-7 joint-timeline scenario (`gf7_timeline`) reuses the
-/// same reproducible stream so both harnesses replay from a seed.
-pub(crate) struct SplitMix64(pub(crate) u64);
-
-impl SplitMix64 {
-    pub(crate) fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    fn unit(&mut self) -> f64 {
-        // 53-bit mantissa in [0, 1).
-        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
-    }
-
-    fn gaussian(&mut self) -> f64 {
-        // Box-Muller; one of the pair is enough here.
-        let u1 = self.unit().max(1e-12);
-        let u2 = self.unit();
-        (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
-    }
-
-    /// Poisson draw. Knuth for small means; normal approximation for large means
-    /// (where exp(-λ) underflows and Knuth's loop is slow).
-    fn poisson(&mut self, mean: f64) -> u64 {
-        if mean <= 0.0 {
-            return 0;
-        }
-        if mean > 30.0 {
-            let v = mean + mean.sqrt() * self.gaussian();
-            return v.round().max(0.0) as u64;
-        }
-        let l = (-mean).exp();
-        let mut k = 0u64;
-        let mut p = 1.0;
-        loop {
-            k += 1;
-            p *= self.unit();
-            if p <= l {
-                return k - 1;
-            }
-        }
-    }
-}
-
 /// The sim's reproducible PRNG satisfies the standoff draw conformance trait,
 /// so this crate's reference streams (the `run()` smoke test and the GF-7
 /// joint-timeline scenario) are the same one the wallet self-certifies
@@ -259,7 +210,7 @@ fn run(cfg: &StandoffConfig) -> StandoffResult {
     };
     let decoy_mean = decoy_rate * decoy_width;
 
-    let mut rng = SplitMix64(cfg.seed);
+    let mut rng = SplitMix64::new(cfg.seed);
     let mut sets: Vec<f64> = Vec::with_capacity(cfg.trials as usize);
     let mut link_sum = 0.0;
     let mut thin = 0u64;
@@ -585,7 +536,7 @@ mod tests {
         // CSPRNG (uniform spread, fair order, serial independence). The full
         // distributional + instrument-validity vector lives in
         // `shekyl-standoff/tests/conformance_grading.rs`.
-        let mut rng = SplitMix64(0xC0FF_EE12_3456_789A);
+        let mut rng = SplitMix64::new(0xC0FF_EE12_3456_789A);
         let report = shekyl_standoff::conformance::certify_draw(&mut rng, 600, 200_000);
         // No report formatting in the assert message: CodeQL
         // `rust/cleartext-logging` treats assert-format sinks as log writes

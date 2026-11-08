@@ -38,7 +38,7 @@
 use serde::Serialize;
 
 use crate::gf7_timeline::{grade, ArmResult, SynthParams, GF7_FAIL_CLOSED, RATIO_BOUND};
-use crate::standoff::SplitMix64;
+use crate::rng::SplitMix64;
 
 /// The swept anonymity-set sizes (§16.7 item 4).
 pub const SWEPT_N: [usize; 3] = [10, 20, 50];
@@ -237,7 +237,7 @@ fn grade_bridge(
 /// Run every rider and compute the conjunction verdict.
 pub fn run_riders_report() -> RidersReport {
     let trials = 400u32;
-    let mut rng = SplitMix64(0x9A7C_1667_2C2B_0004);
+    let mut rng = SplitMix64::new(0x9A7C_1667_2C2B_0004);
     let posture = SynthParams::posture();
 
     // Rider 1 (§16.7 item 4): the N-sweep. Same generator, one extra axis.

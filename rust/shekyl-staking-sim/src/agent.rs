@@ -16,8 +16,8 @@
 //! more capital to bond — L4). `price` is the previous epoch's work→reward exchange
 //! rate, carrying the competitive-share servo's dilution into the marginal decision.
 
-use crate::model::Rng;
 use crate::model::{bond_age, bond_duration, fetch_latency, g_age, CompositionParams, World};
+use crate::rng::SplitMix64;
 
 #[derive(Debug, Clone)]
 pub struct AgentParams {
@@ -348,7 +348,7 @@ pub fn run_epoch(
     price: f64,
     ap: &AgentParams,
     age_weight: f64,
-    rng: &mut Rng,
+    rng: &mut SplitMix64,
 ) -> usize {
     let before: Vec<Vec<bool>> = world.holdings.clone();
 

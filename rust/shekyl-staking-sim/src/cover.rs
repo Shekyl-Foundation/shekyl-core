@@ -78,6 +78,7 @@
 //! rejected — it is not a live sizing input. It uses `f64` freely, like
 //! `standoff.rs`.
 
+use crate::rng::SplitMix64;
 use serde::Serialize;
 
 use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
@@ -158,73 +159,6 @@ pub struct CoverResult {
     /// Worst-case tax = the rung-1 staker's `k / 1 = k` — a deterministic bound on
     /// the smallest staker's burden (§7.3), not a sample-dependent max.
     pub tax_worst: f64,
-}
-
-/// SplitMix64 — small, seeded, reproducible; no `rand` dependency (the standoff's
-/// posture — the harness must be deterministic for replay).
-struct SplitMix64(u64);
-
-impl SplitMix64 {
-    fn new(seed: u64) -> Self {
-        SplitMix64(seed)
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    /// 53-bit mantissa in `[0, 1)`.
-    fn unit(&mut self) -> f64 {
-        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
-    }
-
-    fn gaussian(&mut self) -> f64 {
-        // Box-Muller; one of the pair is enough here.
-        let u1 = self.unit().max(1e-12);
-        let u2 = self.unit();
-        (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
-    }
-
-    /// Poisson draw — Knuth for small means, normal approximation for large.
-    fn poisson(&mut self, mean: f64) -> u64 {
-        if mean <= 0.0 {
-            return 0;
-        }
-        if mean > 30.0 {
-            let v = mean + mean.sqrt() * self.gaussian();
-            return v.round().max(0.0) as u64;
-        }
-        let l = (-mean).exp();
-        let mut k = 0u64;
-        let mut p = 1.0;
-        loop {
-            k += 1;
-            p *= self.unit();
-            if p <= l {
-                return k - 1;
-            }
-        }
-    }
-
-    /// Geometric draw with the given **mean** (number of failures before the
-    /// first success): `P(j) = (1−p)^j · p`, `mean = (1−p)/p`, so `p = 1/(mean+1)`.
-    /// Inverse-CDF: `j = ⌊ln(U) / ln(1−p)⌋`. Heavy right tail ⇒ `CV ≈ 1`.
-    fn geometric(&mut self, mean: f64) -> u64 {
-        if mean <= 0.0 {
-            return 0;
-        }
-        let p = 1.0 / (mean + 1.0);
-        let denom = (1.0 - p).ln();
-        if denom == 0.0 {
-            return 0;
-        }
-        let u = self.unit().max(1e-12);
-        (u.ln() / denom).floor().max(0.0) as u64
-    }
 }
 
 /// One staker's shard count `≥ 1` under the scenario's mean and spread.

@@ -19,51 +19,6 @@
 //! evade the per-pseudonym cap looks egalitarian under a pseudonym-level Gini and
 //! concentrated under the actor-level one (see `metrics.rs`).
 
-/// A deterministic small-state PRNG (splitmix64). Inlined to avoid a new
-/// dependency (per `17-dependency-discipline.mdc`); determinism is load-bearing so
-/// sweep results are reproducible across runs.
-pub struct Rng {
-    state: u64,
-}
-
-impl Rng {
-    pub fn new(seed: u64) -> Self {
-        Self { state: seed }
-    }
-
-    pub fn next_u64(&mut self) -> u64 {
-        // splitmix64
-        self.state = self.state.wrapping_add(0x9E3779B97F4A7C15);
-        let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-        z ^ (z >> 31)
-    }
-
-    /// Uniform f64 in `[0, 1)`.
-    pub fn next_f64(&mut self) -> f64 {
-        // 53-bit mantissa
-        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
-    }
-
-    /// Uniform integer in `[0, n)`.
-    pub fn below(&mut self, n: usize) -> usize {
-        if n == 0 {
-            return 0;
-        }
-        (self.next_u64() % n as u64) as usize
-    }
-
-    /// In-place Fisher–Yates shuffle.
-    pub fn shuffle<T>(&mut self, slice: &mut [T]) {
-        let len = slice.len();
-        for i in (1..len).rev() {
-            let j = self.below(i + 1);
-            slice.swap(i, j);
-        }
-    }
-}
-
 /// A shard of historical curve-tree state. `age ∈ [0, 1]`: 0 = hot/recent
 /// (widely held anyway), 1 = deepest history (irreplaceable). `query_rate` decays
 /// with age but is *not* a reward input (reward is retention-based, not

@@ -14,7 +14,7 @@
 //! - Escalation's predictable post-miss recheck is the dodge surface; sliding has none.
 //! - **`P(slash)` vs `u` sweep** names the not-durably-absent slope (honest hosting).
 
-use crate::model::Rng;
+use crate::rng::SplitMix64;
 use crate::timing_cluster::SETTLEMENT_EPOCH_BLOCKS;
 use crate::transport::{effective_uptime, regime_latency_epochs};
 use serde::Serialize;
@@ -75,7 +75,7 @@ impl DownDurationLaw {
         }
     }
 
-    fn sample_down_epochs(&self, rng: &mut Rng) -> u32 {
+    fn sample_down_epochs(&self, rng: &mut SplitMix64) -> u32 {
         match self {
             Self::Exponential { mean_epochs } => sample_exp_epochs(*mean_epochs, rng),
             Self::Lognormal { mean_epochs, sigma } => {
@@ -181,7 +181,7 @@ impl OutageProcess {
     }
 
     /// Renewal schedule with explicit down-segment lengths from `true_law`.
-    pub fn simulate_availability(&self, epochs: usize, rng: &mut Rng) -> Vec<bool> {
+    pub fn simulate_availability(&self, epochs: usize, rng: &mut SplitMix64) -> Vec<bool> {
         let mut up = true;
         let mut remaining = sample_exp_epochs(self.mean_up_epochs, rng);
         let mut avail = Vec::with_capacity(epochs);
@@ -380,17 +380,17 @@ struct SimOutcome {
     forced_online_epochs: u32,
 }
 
-fn sample_exp_epochs(mean: f64, rng: &mut Rng) -> u32 {
-    let u = rng.next_f64().max(f64::EPSILON);
+fn sample_exp_epochs(mean: f64, rng: &mut SplitMix64) -> u32 {
+    let u = rng.unit().max(f64::EPSILON);
     (-mean * u.ln()).ceil().max(1.0) as u32
 }
 
-fn sample_lognormal_epochs(mean: f64, sigma: f64, rng: &mut Rng) -> u32 {
+fn sample_lognormal_epochs(mean: f64, sigma: f64, rng: &mut SplitMix64) -> u32 {
     // E[exp(N(μ,σ²))] = exp(μ + σ²/2) = mean  ⇒  μ = ln(mean) − σ²/2
     let mu = mean.ln() - sigma * sigma / 2.0;
     let z: f64 = {
-        let u1 = rng.next_f64().max(f64::EPSILON);
-        let u2 = rng.next_f64().max(f64::EPSILON);
+        let u1 = rng.unit().max(f64::EPSILON);
+        let u2 = rng.unit().max(f64::EPSILON);
         (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
     };
     (z * sigma + mu).exp().ceil().max(1.0) as u32
@@ -410,7 +410,7 @@ fn schedule_recheck_window(
     assumed_law: DownDurationLaw,
     quantile: f64,
     width: u32,
-    rng: &mut Rng,
+    rng: &mut SplitMix64,
 ) -> RecheckWindow {
     let start = miss_epoch + assumed_law.assumed_residual_start_epochs(quantile);
     let width = width.max(1);
@@ -442,7 +442,7 @@ fn can_serve(
     }
 }
 
-fn transient_window(epochs: u32, law: DownDurationLaw, rng: &mut Rng) -> (u32, u32) {
+fn transient_window(epochs: u32, law: DownDurationLaw, rng: &mut SplitMix64) -> (u32, u32) {
     let start = (epochs / 3).max(1);
     let len = law.sample_down_epochs(rng);
     (start, len)
@@ -453,7 +453,7 @@ fn run_escalate(
     avail: &[bool],
     params: &Round1Params,
     transient: Option<(u32, u32)>,
-    rng: &mut Rng,
+    rng: &mut SplitMix64,
 ) -> SimOutcome {
     let epochs = params.epochs as u32;
     let mut out = SimOutcome::default();
@@ -613,12 +613,12 @@ fn paired_for_truth(
     let mut slide = Vec::with_capacity(params.seeds as usize);
     for i in 0..params.seeds {
         let seed = base_seed.wrapping_add(i as u64);
-        let mut rng_avail = Rng::new(seed);
+        let mut rng_avail = SplitMix64::new(seed);
         let avail = params
             .outage
             .simulate_availability(params.epochs, &mut rng_avail);
         let transient = if truth == GroundTruth::TransientOnce {
-            let mut rng_tr = Rng::new(seed.wrapping_add(0x5452_414E_5349_454E));
+            let mut rng_tr = SplitMix64::new(seed.wrapping_add(0x5452_414E_5349_454E));
             Some(transient_window(
                 params.epochs as u32,
                 params.outage.true_law,
@@ -627,7 +627,7 @@ fn paired_for_truth(
         } else {
             None
         };
-        let mut rng_esc = Rng::new(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
+        let mut rng_esc = SplitMix64::new(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
         esc.push(run_escalate(truth, &avail, params, transient, &mut rng_esc));
         slide.push(run_sliding(truth, &avail, params, transient));
     }
