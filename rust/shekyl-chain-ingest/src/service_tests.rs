@@ -2698,7 +2698,7 @@ async fn the_slots_hold_no_seed_the_window_does_not_name() {
     let blocks = y.mine(3).await;
     let genesis = blocks[0].hash;
     let gate = Arc::new(Gated::new());
-    let (service, path) = service(
+    let service = service(
         "service-null-seed",
         Arc::clone(&gate),
         ServiceConfig::default(),
@@ -2739,7 +2739,6 @@ async fn the_slots_hold_no_seed_the_window_does_not_name() {
     );
     service.stop().await.expect("stops");
     y.close().await;
-    cleanup(&path);
 }
 
 /// A2's release names its seed. A run in flight pins the seeds of blocks
@@ -2753,7 +2752,7 @@ async fn the_slots_hold_no_seed_the_window_does_not_name() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_window_install_leaves_a_runs_uncommitted_seed_resident() {
     let gate = Arc::new(Gated::new());
-    let (service, path) = service(
+    let service = service(
         "service-run-seed-kept",
         Arc::clone(&gate),
         ServiceConfig::default(),
@@ -2781,5 +2780,4 @@ async fn a_window_install_leaves_a_runs_uncommitted_seed_resident() {
         "the run's seed is still resident beside the window's"
     );
     service.stop().await.expect("stops");
-    cleanup(&path);
 }
