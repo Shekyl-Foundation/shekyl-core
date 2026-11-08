@@ -2464,21 +2464,23 @@ mod live_tests {
         );
     }
 
-    /// The pinned tor runs with the launch's safety options. `GETINFO
-    /// config-text` lists every option that differs from Tor's default. It
-    /// must carry `DisableNetwork 1`, which this launch sets: a reply with
-    /// no configuration in it would pass every absence check below without
-    /// reading anything. On macOS it carries `CompiledProofOfWorkHash 0`:
-    /// the hardened runtime kills Tor when it runs the compiled hash
-    /// (`TOR_SUPERVISOR.md` `TSR-F18`). Elsewhere the option is at its
-    /// default and absent. No `SafeLogging` other than Tor's default `1` is
-    /// in force; that Tor started at all says it accepted the launch's
-    /// `--SafeLogging 1`. Red edits: drop the macOS line from the launch,
+    /// Tor reports the launch's proof-of-work hash. `GETINFO config-text`
+    /// lists every option that differs from Tor's default. The framer folds
+    /// that `+` data block into one string. The reply must carry
+    /// `DisableNetwork 1`, which this launch sets: a body with no
+    /// configuration would pass the absence check on other platforms without
+    /// reading anything. On macOS the body carries `CompiledProofOfWorkHash
+    /// 0` (`TOR_SUPERVISOR.md` `TSR-F18`). Elsewhere the option is at its
+    /// default and absent.
+    ///
+    /// `SafeLogging 1` is Tor's default, so this reply cannot show that pin.
+    /// `the_launch_pins_safe_logging_and_the_macos_proof_of_work_hash` reads
+    /// it off the command. Red edits: drop the macOS line from the launch,
     /// and this fails on macOS against the signed bytes; read an empty
     /// reply, and the `DisableNetwork` check fails on every platform.
     #[tokio::test]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
-    async fn the_managed_tor_runs_with_the_launchs_safety_options() {
+    async fn the_managed_tor_reports_the_pinned_proof_of_work_hash() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (readiness, _ready_rx) = BootstrapReadiness::new();
         let (events, _events) = EventSink::bounded();
@@ -2506,29 +2508,31 @@ mod live_tests {
         actor.wait_for_shutdown().await;
         await_reap_before_drop(exit_rx).await;
 
-        let set: Vec<&str> = reply
+        // One folded data block, then the closing `OK`.
+        let reported: Vec<&str> = reply
             .lines()
             .iter()
             .flat_map(|line| line.lines())
             .map(str::trim)
             .collect();
         assert!(
-            set.contains(&"DisableNetwork 1"),
-            "config-text carries the launch's own DisableNetwork 1: {set:?}"
+            reported.contains(&"DisableNetwork 1"),
+            "config-text carries the launch's own DisableNetwork 1: {reported:?}"
         );
-        let pow: Vec<&&str> = set
+        let pow: Vec<&str> = reported
             .iter()
+            .copied()
             .filter(|line| line.starts_with("CompiledProofOfWorkHash"))
             .collect();
         if cfg!(target_os = "macos") {
-            assert_eq!(pow, [&"CompiledProofOfWorkHash 0"], "config-text: {set:?}");
+            assert_eq!(
+                pow,
+                ["CompiledProofOfWorkHash 0"],
+                "config-text: {reported:?}"
+            );
         } else {
-            assert!(pow.is_empty(), "config-text: {set:?}");
+            assert!(pow.is_empty(), "config-text: {reported:?}");
         }
-        assert!(
-            !set.iter().any(|line| line.starts_with("SafeLogging")),
-            "SafeLogging is at Tor's default 1; config-text: {set:?}"
-        );
     }
 
     /// The managed launch hands the pinned tor its control end and nothing else of

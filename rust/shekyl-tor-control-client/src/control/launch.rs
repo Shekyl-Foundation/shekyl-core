@@ -90,6 +90,20 @@ pub(crate) const BLANK_FILE_NAME: &str = "blank";
 /// (`TOR_SUPERVISOR.md` §4.10).
 pub const LOG_FILE_NAME: &str = "tor.log";
 
+/// `--SafeLogging` value: scrub addresses in Tor's log.
+///
+/// Tor's own default. Pinned because those lines reach the daemon's log
+/// (`TOR_SUPERVISOR.md` §4.10, `TSR-M9`).
+const SAFE_LOGGING_SCRUB_ADDRESSES: &str = "1";
+
+/// `--CompiledProofOfWorkHash` value: HashX's interpreter.
+///
+/// The signed macOS `tor` runs under the hardened runtime, which kills a page
+/// HashX maps writable and then executable without `MAP_JIT`
+/// (`TOR_SUPERVISOR.md` `TSR-F18`).
+#[cfg(target_os = "macos")]
+const INTERPRETED_PROOF_OF_WORK_HASH: &str = "0";
+
 /// Owner read/write. Applied again after create, so the umask cannot loosen it.
 #[cfg(unix)]
 const BLANK_FILE_OWNER_ONLY: u32 = 0o600;
@@ -225,12 +239,8 @@ pub(crate) fn managed_tor_command(
             "notice file {}",
             managed.data_dir.join(LOG_FILE_NAME).display()
         ))
-        // Addresses scrubbed from Tor's log. Tor's lines reach the daemon's
-        // log (`TOR_SUPERVISOR.md` §4.10), which operators paste into bug
-        // reports, so the scrubbing is pinned here rather than left to Tor's
-        // default (Rick, 2026-11-08). `TSR-M9` measured what it scrubs.
         .arg("--SafeLogging")
-        .arg("1")
+        .arg(SAFE_LOGGING_SCRUB_ADDRESSES)
         .kill_on_drop(true)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -239,19 +249,11 @@ pub(crate) fn managed_tor_command(
     if let Some(timeout) = managed.socks_timeout.as_arg() {
         cmd.arg("--SocksTimeout").arg(timeout);
     }
-    // On macOS, never run the compiled proof-of-work hash. HashX compiles
-    // each puzzle's hash to machine code in a page it maps writable and then
-    // makes executable, without `MAP_JIT`. The shipped `tor` is signed with
-    // the hardened runtime, which kills a process that executes such a page
-    // (`CODESIGNING`, "Invalid Page"; `TSR-F18`, measured 2026-11-08 on the
-    // macOS build host in `equix_solver_solve`). So a solve or a verify at
-    // any nonzero effort ended Tor. `auto` is no fallback: the compile
-    // succeeds and the kill comes at execution. `0` is the interpreter,
-    // about 20 times slower per hash. The rejected alternative is signing
-    // with `com.apple.security.cs.allow-unsigned-executable-memory`, which
-    // gives up most of what the hardened runtime protects.
+    // Interpreted hash on macOS: the hardened runtime kills HashX's compiled
+    // page (`TSR-F18`).
     #[cfg(target_os = "macos")]
-    cmd.arg("--CompiledProofOfWorkHash").arg("0");
+    cmd.arg("--CompiledProofOfWorkHash")
+        .arg(INTERPRETED_PROOF_OF_WORK_HASH);
     // Every file tor would otherwise find by itself is named, and named as
     // ours: one zero-length file in the data directory. With no `--torrc-file`
     // tor loads its default torrc, and with no `--defaults-torrc` its default
@@ -1223,20 +1225,23 @@ mod tests {
     /// Tor's log scrubs addresses, pinned on the launch rather than left to
     /// Tor's default, because its lines reach the daemon's log. On macOS the
     /// proof-of-work hash is interpreted, never compiled (`TSR-F18`); on the
-    /// other platforms the option is absent and Tor's default stands. Red
-    /// edits: drop `--SafeLogging`, or the macOS line; each fails here, and
-    /// the second also fails the macOS live check of what Tor runs with.
+    /// other platforms the option is absent and Tor's default stands. The
+    /// values are written out: they are the oracle for the constants the
+    /// launch passes. Red edits: drop `--SafeLogging`, or the macOS line;
+    /// each fails here, and the second also fails the macOS run of
+    /// `the_managed_tor_reports_the_pinned_proof_of_work_hash`.
     #[test]
     fn the_launch_pins_safe_logging_and_the_macos_proof_of_work_hash() {
         let args = launch_arguments(false);
         let value = |option: &str| {
             args.iter()
                 .position(|arg| arg == option)
-                .map(|at| args[at + 1].clone())
+                .and_then(|at| args.get(at + 1).map(String::as_str))
         };
-        assert_eq!(value("--SafeLogging").as_deref(), Some("1"));
+        // Written out, not read from the constants: a changed pin fails here.
+        assert_eq!(value("--SafeLogging"), Some("1"));
         let expected = cfg!(target_os = "macos").then_some("0");
-        assert_eq!(value("--CompiledProofOfWorkHash").as_deref(), expected);
+        assert_eq!(value("--CompiledProofOfWorkHash"), expected);
     }
 
     /// `SocksTimeout` renders below the dial deadline by the margin, never
