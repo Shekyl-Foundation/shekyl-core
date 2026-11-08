@@ -291,10 +291,10 @@ pub fn verify_join_market_bond_post(
 /// It holds the original sequence **including** [`release_vin_statics`], and
 /// that is not tidiness: an earlier revision extracted only the record-keyed
 /// guards, which moved `DebitNotFullBalance` ahead of `NotFullRelease` for a vin
-/// invalid in both ways. `shekyl-ffi` pins that mapping and went red. A
-/// refactor that changes which error a caller sees is not a refactor, so the
-/// whole pre-cooldown block moves together and the order is preserved by
-/// construction.
+/// invalid in both ways. A refactor that changes which error a caller sees is
+/// not a refactor, so the whole pre-cooldown block moves together and the order
+/// is preserved by construction. No test pins that precedence for a vin invalid
+/// in both ways; the construction is what holds it.
 ///
 /// The caller supplies `current_bonded` already unwrapped, because record
 /// ABSENCE is a different verdict on the submit path (a competing exit,

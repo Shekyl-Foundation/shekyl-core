@@ -324,7 +324,8 @@ pub(crate) fn claim_alt(
             }
         },
     };
-    let outcome = cache_window::spend(&fork, &seed, side, height, &rule_set, &window);
+    let floor = snap.undo_floor().map_err(ClaimStop::Store)?;
+    let outcome = cache_window::spend(&fork, &seed, side, height, &rule_set, &window, floor);
     let prepare = match outcome {
         AltSpend::Hash => false,
         AltSpend::Prepare => true,

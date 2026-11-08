@@ -41,6 +41,7 @@ the `[u8; 16]` layout of `aes-0.9.0::Block`).
 Generator
 ---------
 source      = ./_generator/gen.cpp
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/Makefile (`make gen`)
 command     = ./gen round_enc
 output_size = 48 bytes

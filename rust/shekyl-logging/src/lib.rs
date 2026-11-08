@@ -19,10 +19,9 @@
 //! - File sinks are optional, per-binary, and POSIX-mode `0600` on the
 //!   active file at init time (see [`config::FileSink`] for the
 //!   rotation caveat).
-//! - A translator ([`filter::directives_from_legacy_categories`]) converts
-//!   the legacy C++ easylogging++ `log-levels=` grammar to EnvFilter
-//!   directives so the unified logger can absorb configuration shipped by
-//!   the soon-to-be-retired C++ shim.
+//! - The daemon's `log-level` / `log-category` change the live filter at
+//!   runtime through [`subsystem::apply`], without reinstalling the
+//!   subscriber.
 //!
 //! # What this crate is not
 //!
@@ -64,10 +63,6 @@
 //!   cannot interrupt (a stalled disk) keeps the process from exiting, and
 //!   anything else writing to the same stalled stderr blocks with it. The
 //!   service manager's stop timeout is the bound.
-//! - **Before init.** The FFI's pre-init passthrough (WARNING and above,
-//!   straight to stderr; see [`ffi`]) stays synchronous: a stalled stderr
-//!   blocks those calls. It serves only the lines logged before the
-//!   subscriber is installed.
 //! - **The bound is lines, not bytes.** [`SINK_QUEUE_LINES`] counts lines,
 //!   so a queue of long lines holds more memory than the figure suggests.
 //! - **The thread ledger does not count them.** This crate spawns the two
@@ -92,24 +87,20 @@
 #![warn(missing_docs)]
 
 pub mod config;
-pub mod ffi;
 pub mod filter;
 pub mod subsystem;
 
 mod appender;
 mod colour;
-mod legacy;
 mod queue;
+mod reload;
 
 pub use queue::{announce, flush, Flushed, FLUSH_WITHIN, SINK_QUEUE_LINES};
 
 #[doc(hidden)]
 pub use colour::LineColour;
 pub use config::{Config, FileSink, Rotation};
-pub use ffi::{install_tracing_forwarder, ForwarderError};
-pub use filter::{
-    directives_from_legacy_categories, FilterError, TranslationReport, SHEKYL_LOG_ENV,
-};
+pub use filter::SHEKYL_LOG_ENV;
 
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -117,49 +108,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use colour::NoColor;
 
 use thiserror::Error;
-use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::reload;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Registry;
 
-/// First-caller reservation for [`install_subscriber`].
+/// First-caller reservation for [`init`].
 ///
 /// Flipped true at the *start* of an install attempt so a concurrent
 /// second caller gets [`InitError::AlreadyInitialized`] rather than
 /// racing `try_init`. Cleared if the attempt fails, so a later call
-/// can retry. This is not "the subscriber is live" — that is
-/// [`SUBSCRIBER_INSTALLED`]. The two facts have different lifetimes:
-/// a reservation can unwind, a successful `set_global_default` cannot.
-///
-/// `pub(crate)` so the FFI init path in [`crate::ffi`] can coordinate
-/// against the same flag — only one subscriber per process, whether
-/// it was installed from Rust or from C.
-pub(crate) static INITIALIZED: AtomicBool = AtomicBool::new(false);
-
-/// Whether [`install_reserved`] has successfully called `try_init`.
-///
-/// Set only after `try_init` returns Ok, and never cleared —
-/// `set_global_default` has no uninstall. FFI emit, enabled, and the
-/// tracing-forwarder pin consult this flag. Consulting [`INITIALIZED`]
-/// instead would treat the reservation window (filter parse, file
-/// open, `try_init`) as "already live" and dispatch WARNING+ against
-/// the still-empty default dispatcher, dropping the events the
-/// pre-init passthrough exists to keep audible.
-pub(crate) static SUBSCRIBER_INSTALLED: AtomicBool = AtomicBool::new(false);
-
-/// Handle for the process-global reload layer wrapping the `EnvFilter`.
-///
-/// Needed by the FFI path so `shekyl_log_set_categories` (called from
-/// the C++ RPC `on_set_log_*` handlers via the shim) can swap the
-/// filter at runtime without tearing down the subscriber.
-///
-/// The handle is `Clone` and cheap, so `init` stashes a copy here and
-/// also returns the caller its [`LoggerGuard`]. The FFI module is the
-/// only consumer of this alias; keeping it `pub(crate)` keeps the
-/// Rust public API surface unchanged.
-pub(crate) type FilterReloadHandle = reload::Handle<EnvFilter, Registry>;
+/// can retry. A successful install leaves it set for the life of the
+/// process: `set_global_default` has no uninstall.
+static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// RAII guard for the non-blocking writer thread(s) spawned by [`init`].
 ///
@@ -195,15 +155,13 @@ pub(crate) type FilterReloadHandle = reload::Handle<EnvFilter, Registry>;
 pub struct LoggerGuard {
     // One field per sink. Drop flushes that sink's queue. The fields are
     // never read: moving a guard out would take the writer thread out of
-    // the value that shuts it down. `pub(crate)` so the FFI path in
-    // [`crate::ffi`] can hold the guard and drop it on
-    // `shekyl_log_shutdown`.
+    // the value that shuts it down.
     /// stderr's writer thread. stderr is always queued.
     #[allow(dead_code)]
-    pub(crate) stderr: queue::SinkGuard,
+    stderr: queue::SinkGuard,
     /// The file sink's writer thread, when a file sink is configured.
     #[allow(dead_code)]
-    pub(crate) file: Option<queue::SinkGuard>,
+    file: Option<queue::SinkGuard>,
 }
 
 /// Errors returned from [`init`].
@@ -252,47 +210,28 @@ pub enum InitError {
 ///
 /// Subsequent calls in the same process return
 /// [`InitError::AlreadyInitialized`].
-pub fn init(config: Config) -> Result<LoggerGuard, InitError> {
-    let (guard, reload_handle) = install_subscriber(config)?;
-    // Rust callers don't currently need the reload handle; stash a
-    // clone for the FFI path in case a C caller wants to drive
-    // `shekyl_log_set_categories` against a subscriber that was
-    // installed from the Rust side (e.g. an integration test that
-    // links both paths).
-    ffi::__register_reload_handle(reload_handle);
-    Ok(guard)
-}
-
-/// Install the subscriber and hand back both the guard *and* the
-/// reload handle. [`init`], the FFI path, and the test hook all enter
-/// through [`install_reserved`], so the reservation ([`INITIALIZED`])
-/// and the successful install ([`SUBSCRIBER_INSTALLED`]) stay one protocol.
 ///
-/// Stderr's colour is [`LineColour::stderr`] on this process's stderr.
-/// The test hook passes its own [`LineColour`]: a stand-in writer is not
-/// that stderr.
-pub(crate) fn install_subscriber(
-    config: Config,
-) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
+/// Stderr is coloured only when it is a terminal and `NO_COLOR` is unset or
+/// empty.
+pub fn init(config: Config) -> Result<LoggerGuard, InitError> {
     let stderr = std::io::stderr();
     let colour = LineColour::stderr(stderr.is_terminal(), NoColor::from_env());
     install_reserved(config, stderr, queue::SINK_QUEUE_LINES, colour)
 }
 
 /// Reserve the process subscriber, then install `config` with `stderr`
-/// queued at `lines`, rendering stderr as `colour`.
+/// queued at `lines`, rendering stderr as `colour`, and register the
+/// filter's reload handle for [`subsystem::apply`].
 ///
-/// One reservation for every caller. A failed attempt clears
-/// [`INITIALIZED`] so a later call can retry. Success leaves the
-/// reservation set for the process lifetime and flips
-/// [`SUBSCRIBER_INSTALLED`], so emit, enabled, and the forwarder stop
-/// using the pre-init stderr passthrough.
+/// [`init`] and the test hook both enter here, so there is one
+/// reservation. A failed attempt clears [`INITIALIZED`] so a later call
+/// can retry; success leaves it set for the life of the process.
 fn install_reserved<W: std::io::Write + Send + 'static>(
     config: Config,
     stderr: W,
     lines: usize,
     colour: LineColour,
-) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
+) -> Result<LoggerGuard, InitError> {
     if INITIALIZED
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
@@ -300,13 +239,16 @@ fn install_reserved<W: std::io::Write + Send + 'static>(
         return Err(InitError::AlreadyInitialized);
     }
 
-    let result = install_subscriber_with_stderr(config, stderr, lines, colour);
-    if result.is_err() {
-        INITIALIZED.store(false, Ordering::SeqCst);
-    } else {
-        SUBSCRIBER_INSTALLED.store(true, Ordering::SeqCst);
+    match install_subscriber_with_stderr(config, stderr, lines, colour) {
+        Ok((guard, reload_handle)) => {
+            reload::register(reload_handle);
+            Ok(guard)
+        }
+        Err(e) => {
+            INITIALIZED.store(false, Ordering::SeqCst);
+            Err(e)
+        }
     }
-    result
 }
 
 /// The subscriber itself. `stderr` is the stderr sink. Every sink is
@@ -322,17 +264,19 @@ fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
     stderr: W,
     lines: usize,
     colour: LineColour,
-) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
+) -> Result<(LoggerGuard, reload::FilterReloadHandle), InitError> {
     let filter = match &config.directive {
-        Some(directive) => EnvFilter::try_new(directive),
-        None => filter::resolve_env_filter(config.fallback_default),
-    }
-    .map_err(|e| InitError::FilterParse(e.to_string()))?;
+        Some(directive) => directive
+            .to_env_filter()
+            .map_err(|e| InitError::FilterParse(e.to_string())),
+        None => filter::resolve_env_filter(config.fallback_default)
+            .map_err(|e| InitError::FilterParse(e.to_string())),
+    }?;
 
-    // Wrap the resolved `EnvFilter` in a reload layer so later
-    // `shekyl_log_set_categories` calls from C (via the FFI) can
-    // swap filters without tearing the subscriber down.
-    let (reloadable_filter, reload_handle) = reload::Layer::new(filter);
+    // Wrap the resolved `EnvFilter` in a reload layer so a runtime
+    // `log-level` / `log-category` change ([`subsystem::apply`]) swaps
+    // the filter without tearing the subscriber down.
+    let (reloadable_filter, reload_handle) = tracing_subscriber::reload::Layer::new(filter);
 
     // Queued like every sink: a log call never waits on stderr. The
     // line's fields are unchanged; colour is the `colour` argument.
@@ -384,8 +328,7 @@ fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
 /// cannot be implemented for an in-memory sink, so the test passes the
 /// [`LineColour`] it is asserting.
 ///
-/// Enters through [`install_reserved`], the same reservation as [`init`]
-/// and the FFI path.
+/// Enters through [`install_reserved`], the same reservation as [`init`].
 #[doc(hidden)]
 pub fn __test_only_init_with_stderr<W: std::io::Write + Send + 'static>(
     config: Config,
@@ -393,34 +336,7 @@ pub fn __test_only_init_with_stderr<W: std::io::Write + Send + 'static>(
     lines: usize,
     colour: LineColour,
 ) -> Result<LoggerGuard, InitError> {
-    let (guard, reload_handle) = install_reserved(config, stderr, lines, colour)?;
-    ffi::__register_reload_handle(reload_handle);
-    Ok(guard)
-}
-
-/// Test-only hook: raise the reservation flag without installing a subscriber.
-///
-/// This is the window inside [`install_subscriber`] after the first-caller
-/// CAS and before `try_init` returns. Pre-init emit / enabled / forwarder
-/// must stay on the stderr passthrough; if they consult [`INITIALIZED`]
-/// they silently drop WARNING+. Pair with [`__test_only_reset_init_flag`]
-/// before a real init or the reservation will make that init return
-/// [`InitError::AlreadyInitialized`].
-#[doc(hidden)]
-pub fn __test_only_reserve_init() {
-    INITIALIZED.store(true, Ordering::SeqCst);
-}
-
-/// Test-only hook: clear the reservation flag so a fresh `init` call can
-/// run the first-caller CAS.
-///
-/// Does **not** clear [`SUBSCRIBER_INSTALLED`] and does **not** uninstall
-/// the subscriber — `set_global_default` has no un-install. A follow-up
-/// `init` will still fail at `try_init` if a subscriber is already live;
-/// this helper only re-opens the reservation path.
-#[doc(hidden)]
-pub fn __test_only_reset_init_flag() {
-    INITIALIZED.store(false, Ordering::SeqCst);
+    install_reserved(config, stderr, lines, colour)
 }
 
 /// Test-only hook: re-apply `0600` POSIX mode to any file in `dir`

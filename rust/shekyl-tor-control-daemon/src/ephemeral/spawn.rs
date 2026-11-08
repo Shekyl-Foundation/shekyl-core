@@ -6,8 +6,9 @@
 //! Spawning one incarnation and keeping its data directory across a respawn.
 //!
 //! A failed spawn returns the directory. [`DaemonTorControl::stop_for_respawn`]
-//! stops the child and returns it too. Dropping the directory wipes it, which
-//! is the daemon's stop, not a respawn (`TSR-Q1`).
+//! stops the child and returns it too. A directory that is not spawned into
+//! again is retired ([`KeptDataDir::retire`]): Tor's log is kept beside it and
+//! the rest becomes a tombstone (`TSR-Q1`, `TOR_SUPERVISOR.md` §4.7).
 
 use std::io;
 use std::net::SocketAddr;
@@ -26,10 +27,11 @@ use shekyl_tor_control_client::control::{
 };
 use shekyl_tor_control_client::directory_cache;
 
-use super::{DaemonTorConfig, DaemonTorControl, DaemonTorStartError};
-use crate::data_dir::{EphemeralDataDir, CACHE_DIR_NAME};
+use super::{retire, DaemonTorConfig, DaemonTorControl, DaemonTorStartError, Retirement};
+use crate::data_dir::{sweep_stale_data_dirs, EphemeralDataDir, CACHE_DIR_NAME};
 
-/// A data directory kept across a respawn. Dropping it wipes the directory.
+/// A data directory kept across a respawn. [`Self::retire`] ends it; a drop
+/// retires it too and leaves the tombstone to the next start's sweep.
 pub struct KeptDataDir {
     dir: EphemeralDataDir,
 }
@@ -40,13 +42,35 @@ impl KeptDataDir {
     pub fn path(&self) -> &Path {
         self.dir.path()
     }
+
+    /// Keep Tor's log beside the directory, rename the directory to its
+    /// tombstone and delete that under
+    /// [`super::TOMBSTONE_DELETE_BOUND`]. For a directory no later
+    /// incarnation uses: the daemon's stop while Tor is down, and the switch
+    /// to a fresh directory after a run of failed launches.
+    pub async fn retire(self) -> Retirement {
+        retire(self.dir).await
+    }
+
+    /// End this directory for a fresh one: sweep what earlier incarnations
+    /// left beside it, sparing this one, then [`Self::retire`] it. The order
+    /// keeps this incarnation's log, the last dead one's evidence, which the
+    /// sweep would otherwise remove (`TOR_SUPERVISOR.md` §4.10). The
+    /// tombstone's delete may still be running when the caller next reads
+    /// the disk; a later sweep that meets the same tree finds it gone.
+    pub async fn replace(self) -> Retirement {
+        if let Some(parent) = self.path().parent() {
+            sweep_stale_data_dirs(parent, Some(self.path()));
+        }
+        self.retire().await
+    }
 }
 
 /// A spawn that did not come up, with the directory still on disk.
 pub struct LaunchFailure {
     /// Why it did not come up.
     pub error: DaemonTorStartError,
-    /// The directory. Drop it to wipe, or spawn into it again.
+    /// The directory. Retire it, or spawn into it again.
     pub directory: KeptDataDir,
 }
 
@@ -70,12 +94,15 @@ impl DaemonTorControl {
             .map_err(SpawnError::Launch)
     }
 
-    /// [`Self::spawn_keeping`], wiping the directory when the spawn fails.
+    /// [`Self::spawn_keeping`], retiring the directory when the spawn fails.
     pub async fn launch(config: DaemonTorConfig) -> Result<Self, DaemonTorStartError> {
         match Self::spawn_keeping(config).await {
             Ok(up) => Ok(up),
             Err(SpawnError::DataDir(error)) => Err(DaemonTorStartError::DataDir(error)),
-            Err(SpawnError::Launch(failure)) => Err(failure.error),
+            Err(SpawnError::Launch(failure)) => {
+                failure.directory.retire().await;
+                Err(failure.error)
+            }
         }
     }
 

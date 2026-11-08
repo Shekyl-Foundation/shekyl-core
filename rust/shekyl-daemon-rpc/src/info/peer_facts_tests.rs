@@ -9,7 +9,7 @@
 use std::sync::atomic::Ordering;
 
 use super::super::{get_info, Disclosure, FactsFault, RpcFault, StatusConnections};
-use super::{ours, synced_facts};
+use super::{ours, synced_facts, with_sockets};
 use crate::info_facts::{PeerFacts, SessionCounts};
 
 // ── RK-D14: has_peers ──────────────────────────────────────────────────
@@ -40,16 +40,12 @@ fn has_peers_is_a_handshaken_session_and_nothing_else() {
     dialing.sessions = SessionCounts::NONE;
     let reply = ours(&dialing, Disclosure::FULL);
     assert_eq!(reply["has_peers"], false);
-    assert_eq!(reply["public_outgoing_socket_count"], 10);
-    assert_eq!(reply["white_peerlist_size"], 500);
+    assert_eq!(reply["connectors"][0]["outgoing_sockets"], 10);
+    assert_eq!(reply["connectors"][0]["white_peerlist_size"], 500);
 
     // No socket counted, one handshaken session: a peer.
     let mut facts = synced_facts();
-    let PeerFacts::Running(peers) = &mut facts.peers else {
-        unreachable!("the fixture's P2P runs")
-    };
-    peers.public_incoming_sockets = 0;
-    peers.public_outgoing_sockets = 0;
+    facts.peers = with_sockets(&facts.peers, 0, 0);
     facts.sessions = SessionCounts {
         outbound: 1,
         inbound: 0,

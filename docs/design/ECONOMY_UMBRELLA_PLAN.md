@@ -152,7 +152,7 @@ The walk found a fourth operand: **the hard-fork version.** Monero gates
 behaviour on its fork numbers. Shekyl's block version is the constant 1
 (`CURRENT_BLOCK_MAJOR_VERSION`) on every network, so a branch gated on a
 Monero number at 2 or above never ran, and those arms are deleted
-([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5).
+([`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §5).
 
 **The walk.** Each row is answered from its record, read at source at
 `e9b41e3115`. "Derived" means a ruling on record used Shekyl's operand.
@@ -167,8 +167,8 @@ Monero number at 2 or above never ran, and those arms are deleted
 | Transaction weight cap, 149,400 = zone/2 − reserve | The two rows above | **Formula derived; its stated guarantee is 131 B short.** Two maximal transactions and a coinbase are 300,131 B: a sliver of penalty, not a failure | C2-R2 Q7; rides the two rows above |
 | Tail, 0.6 per block | Reward against supply | **Not derived, and not derivable: its size is a ruling.** The same 0.6 as Monero's, on an asymptote of 2³² SKL: 157,680 SKL a year is 0.0037 % of it, where Monero's is about 0.86 % of its supply. FL-R12′ ruled the tail perpetual; no record sizes it. What a tail buys in hash depends on SKL's price, so no chain-internal quantity sizes it. The governance-free form of the choice is a ratio, the tail as a fraction of the asymptote per year, and Rick chooses it. §4's goal 2 is a share test and cannot | FL-V11 ("inherited-unexamined"). **RULED** (§3.2, 3): a criterion, in §4 |
 | Template fill, `decide_listed_body` | Hard-fork version | **Not derived: the reward-aware fill does not run.** The version test is deleted. The daemon's scan lists bodies in fee order, passes one that would exceed 13/10 of the median minus the 600-byte reserve, and stops once listed weight is past the median. `shekyl_block_template::Fill` is the reward-aware policy and is not that scan | **New. RULED** (§3.2, 1): the reward-aware fill is the design; the fill moves to Rust; `FOLLOWUPS.md` |
-| Cumulative output count, `db_lmdb.cpp` `major_version >= 4` | Hard-fork version | **Was not derived; deleted 2026-10-05.** `bi_cum_rct` accumulated only from version 4, so each block stored its own count. Its reader, `get_output_distribution`, had no caller, so the surface was deleted and not repaired | [`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §6 |
-| Peer top-version check, `cryptonote_protocol_handler.inl` `version >= 6` | Hard-fork version | **Was not derived; deleted 2026-10-05.** A peer advertising a block version other than the ideal one was refused only from version 6, so never | [`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §4 |
+| Cumulative output count, `db_lmdb.cpp` `major_version >= 4` | Hard-fork version | **Was not derived; deleted 2026-10-05.** `bi_cum_rct` accumulated only from version 4, so each block stored its own count. Its reader, `get_output_distribution`, had no caller, so the surface was deleted and not repaired | [`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §6 |
+| Peer top-version check, `cryptonote_protocol_handler.inl` `version >= 6` | Hard-fork version | **Was not derived; deleted 2026-10-05.** A peer advertising a block version other than the ideal one was refused only from version 6, so never | [`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §4 |
 | Input cap, 8 | Verifier time per input | **Not derived.** Carried as inherited and unjustified | CEN-I4; `FOLLOWUPS.md` |
 | Coinbase unlock, 60 blocks | Block time | **Not re-derived**; the operand is unchanged | CEN-F6, `pinned-not-re-derived` |
 | Long-term clamp 1.7×, 100,000-block window | Block time; growth rate | **Derived.** Traced on Shekyl's machinery, two-regime rationale countersigned, checked against the retention horizon | C2-R2 Q2 |
@@ -274,7 +274,7 @@ the three operands.
 
 | # | Work | Gate |
 | --- | --- | --- |
-| a | The version-gate sweep: every version comparison in the C++, classified by operand, with a gate holding the inventory. **Done 2026-10-05** ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md)): the block-version gates are deleted or collapsed, bar the fill (d); the transaction-version collapse is its own PR | before EUP-4 |
+| a | The version-gate sweep: every version comparison in the C++, classified by operand, with a gate holding the inventory. **Done 2026-10-05** ([`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md)): the block-version gates are deleted or collapsed, bar the fill (d); the transaction-version collapse is its own PR | before EUP-4 |
 | b | `Fill::admit_up_to` admits the penalty-free part and the penalty zone in closed form, held to the single-offer walk. **Built 2026-11-06**, the first EUP-4 prep PR (ruling 5, 2026-10-24; [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md) §5.28) | EUP-4 prep. The 135-year horizon for the registered tables waits on §4's ratification |
 | c | The coinbase reserve, derived. **Done 2026-10-22** on the inherited 300,000 B zone (reserve 1,386; `TX_WEIGHT_LIMIT` 148,614). The cover is the codec test `the_maximal_coinbase_weighs_what_the_grammar_sums`. The zone's capacity leg remains EUP-5 G and moves the limit again | with the zone's capacity leg; before (d) |
 | d | The Rust fill prices and bounds the weight the block carries, coinbase included, and the sim records that weight. **Done 2026-10-22.** The C++ fill deletes with `tx_pool.cpp` at the DRS-X flip (DEL-010), not in this change | after (c) |

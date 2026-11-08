@@ -8,7 +8,9 @@
 //! [`DaemonTorControl::spawn_keeping`] creates a data directory under the
 //! caller-named parent and returns when `GETINFO version` answers. Bootstrap
 //! is not a gate. The directory is kept across a respawn in the same boot
-//! and wiped when the daemon stops (`TSR-Q1`).
+//! (`TSR-Q1`) and retired when the daemon stops: Tor's log is kept beside it,
+//! the directory becomes a tombstone, and the tombstone is deleted off the
+//! stop path under [`TOMBSTONE_DELETE_BOUND`] (`TOR_SUPERVISOR.md` §4.7).
 //!
 //! The boot's onion seed is minted once, with [`DaemonTorControl::mint_seed`],
 //! and passed to every [`DaemonTorControl::publish`]. A publish failure
@@ -33,7 +35,7 @@ use shekyl_tor_control_client::control::{
 use shekyl_tor_control_client::directory_cache;
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 
-use crate::data_dir::EphemeralDataDir;
+use crate::data_dir::{EphemeralDataDir, KeptLog};
 
 mod spawn;
 
@@ -46,6 +48,19 @@ pub use spawn::{KeptDataDir, LaunchFailure, SpawnError};
 /// connection, whose close exits tor, backstop the child reap.
 const REAP_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// The longest delete of a used `DataDirectory` on the floor device, in
+/// milliseconds (`TSR-M10`, measured 2026-10-19: 100 used directories, max
+/// 13 ms; x86 max 7 ms).
+const FLOOR_DELETE_MAX_MS: u64 = 13;
+
+/// How long a stop waits for a tombstone's delete: ten times
+/// [`FLOOR_DELETE_MAX_MS`], provisioned at the floor device. A delete that
+/// outlives it costs nothing but disk until the next start's sweep, so the
+/// bound need not cover every delete, only keep the stop from waiting on a
+/// stalled card. The daemon's runtime ends without waiting for a delete still
+/// running (`shutdown_background`).
+pub const TOMBSTONE_DELETE_BOUND: Duration = Duration::from_millis(FLOOR_DELETE_MAX_MS * 10);
+
 /// `DEL_ONION` removed the service.
 const DEL_ONION_REMOVED: u16 = 250;
 /// `DEL_ONION` named a service Tor does not hold (`552 Unknown Onion
@@ -56,7 +71,7 @@ const DEL_ONION_UNKNOWN: u16 = 552;
 ///
 /// Every instance-identifying input is a parameter (PWD-E9): the binary
 /// witness and the DataDirectory *parent* arrive from the caller; this crate
-/// creates a unique subdirectory and wipes it on teardown. The onion's ports
+/// creates a unique subdirectory and retires it on teardown. The onion's ports
 /// are *not* here — they belong to [`DaemonTorControl::publish`], which runs
 /// after the caller has bound its inbound listener.
 pub struct DaemonTorConfig {
@@ -200,8 +215,8 @@ pub enum TorDeath {
 /// after a successful [`Self::publish`] — an onion service published. Dropping
 /// the handle without [`DaemonTorControl::shutdown`] still reaps the child
 /// (`kill_on_drop`, and the owning control connection, whose close exits tor) and
-/// wipes the DataDirectory, but the
-/// bounded graceful path is the intended exit.
+/// retires the DataDirectory, leaving its tombstone to the next start's sweep,
+/// but the bounded graceful path is the intended exit.
 pub struct DaemonTorControl {
     actor: kameo::actor::ActorRef<TorControlClient>,
     /// The reap, once the child watcher has published it. The bridge task
@@ -225,7 +240,7 @@ pub struct DaemonTorControl {
     /// Bootstrap as the actor's poll reports it. The supervisor reads it;
     /// launch does not wait on it.
     ready: watch::Receiver<BootstrapState>,
-    /// Declared last so a plain drop wipes the directory after the actor
+    /// Declared last so a plain drop retires the directory after the actor
     /// (and therefore the child) has been dropped.
     data_dir: Option<EphemeralDataDir>,
 }
@@ -263,7 +278,7 @@ impl DaemonTorControl {
     }
 
     /// This incarnation's data directory, while the control still holds it.
-    /// `None` after a stop or a wipe has taken it.
+    /// `None` after a stop has taken it.
     #[must_use]
     pub fn data_path(&self) -> Option<&Path> {
         self.data_dir.as_ref().map(EphemeralDataDir::path)
@@ -513,24 +528,27 @@ impl DaemonTorControl {
         }
     }
 
-    /// Bounded teardown: graceful actor stop (which `DEL_ONION`s the published
-    /// service and SIGTERM→wait→SIGKILL→reaps the child), then the exit
-    /// telemetry, then the DataDirectory wipe. On a wedged actor, kill and
-    /// proceed — the child reap is backstopped by `kill_on_drop` and by the owning
-    /// control connection, whose close exits tor.
+    /// Bounded teardown at the daemon's stop (`TOR_SUPERVISOR.md` §4.7): the
+    /// actor's graceful stop, which closes the owning control connection and
+    /// reaps the child within `SHUTDOWN_GRACE`, killing it past that; then the
+    /// cache write-back; then the directory is retired and its tombstone
+    /// deleted under [`TOMBSTONE_DELETE_BOUND`]. On a wedged actor, kill and
+    /// proceed — the child reap is backstopped by `kill_on_drop` and by the
+    /// owning control connection, whose close exits tor.
     pub async fn shutdown(mut self) -> Teardown {
-        self.teardown().await
-    }
-
-    async fn teardown(&mut self) -> Teardown {
         let exit = self.stop_actor().await;
-        // After the reap, before the directory goes away. A crash (Tor died,
+        // After the reap, before the directory is retired. A crash (Tor died,
         // or we had to kill it) saves nothing: the previous cache stays.
         let cache = self.save_if_clean(&exit).await;
-        if let Some(dir) = self.data_dir.take() {
-            dir.wipe();
+        let retirement = match self.data_dir.take() {
+            Some(dir) => Some(retire(dir).await),
+            None => None,
+        };
+        Teardown {
+            exit,
+            cache,
+            retirement,
         }
-        Teardown { exit, cache }
     }
 
     async fn save_if_clean(&self, exit: &Option<TorExit>) -> CacheSave {
@@ -580,6 +598,57 @@ pub struct Teardown {
     pub exit: Option<TorExit>,
     /// The public directory cache's write-back (`TSR-Q8`).
     pub cache: CacheSave,
+    /// What became of the directory and Tor's log. `None` when the control
+    /// held no directory.
+    pub retirement: Option<Retirement>,
+}
+
+/// A retired directory: where Tor's log went and what became of the
+/// tombstone. This crate does not log; the caller says what failed.
+#[derive(Debug)]
+pub struct Retirement {
+    /// Tor's log, kept beside the directory until the next start's sweep.
+    pub log: KeptLog,
+    /// The directory's end.
+    pub tombstone: TombstoneEnd,
+}
+
+/// What became of a retired directory.
+#[derive(Debug)]
+pub enum TombstoneEnd {
+    /// Deleted within [`TOMBSTONE_DELETE_BOUND`].
+    Deleted,
+    /// The delete was still running at the bound. It goes on, and whatever
+    /// the process exit cuts short is swept at the next start.
+    Outlived(PathBuf),
+    /// The delete failed. The next start's sweep tries again.
+    NotDeleted(PathBuf, std::io::Error),
+    /// The rename failed (on Windows, a scanner holding a file). The
+    /// directory stays under its live name for the next start's sweep.
+    NotRenamed(std::io::Error),
+}
+
+/// Retire `dir` and delete its tombstone on the blocking pool, waiting at
+/// most [`TOMBSTONE_DELETE_BOUND`]. The two renames are metadata operations
+/// and run here; the delete is the part that can stall.
+async fn retire(dir: EphemeralDataDir) -> Retirement {
+    let (log, renamed) = dir.retire();
+    let tombstone = match renamed {
+        Ok(tombstone) => delete_within_bound(tombstone).await,
+        Err(error) => TombstoneEnd::NotRenamed(error),
+    };
+    Retirement { log, tombstone }
+}
+
+async fn delete_within_bound(tombstone: PathBuf) -> TombstoneEnd {
+    let target = tombstone.clone();
+    let delete = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(target));
+    match tokio::time::timeout(TOMBSTONE_DELETE_BOUND, delete).await {
+        Ok(Ok(Ok(()))) => TombstoneEnd::Deleted,
+        Ok(Ok(Err(error))) => TombstoneEnd::NotDeleted(tombstone, error),
+        Ok(Err(joined)) => TombstoneEnd::NotDeleted(tombstone, std::io::Error::other(joined)),
+        Err(_bound) => TombstoneEnd::Outlived(tombstone),
+    }
 }
 
 /// The directory cache's write-back at a teardown. This crate does not log;
@@ -748,14 +817,52 @@ pub(crate) mod tests {
             Err(DaemonTorStartError::Control(_) | DaemonTorStartError::Died(_)) => {}
             other => panic!("expected Control/Died, got {other:?}"),
         }
-        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        // A failed start retires its directory. A tombstone may remain when
+        // its delete outlived the bound; a live directory may not.
+        let leftovers: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
-            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect();
         assert!(
-            leftovers.is_empty(),
-            "a failed start must wipe the per-boot DataDirectory, leftover: {leftovers:?}"
+            leftovers.iter().all(|name| name.ends_with(".tomb")),
+            "a failed start must retire the per-boot DataDirectory, leftover: {leftovers:?}"
         );
+    }
+
+    /// Switching to a fresh directory sweeps what earlier incarnations left
+    /// and keeps the log of the one it replaces, the last dead incarnation's
+    /// evidence (`TOR_SUPERVISOR.md` §4.10). Red edit: retire before the
+    /// sweep, and the sweep removes the log just kept.
+    #[tokio::test]
+    async fn a_fresh_directory_keeps_the_replaced_incarnations_log() {
+        let parent = tempfile::tempdir().unwrap();
+        let older = parent.path().join("ephemeral-tor-0000000000000000.log");
+        std::fs::write(&older, b"an older incarnation").unwrap();
+        let config = config_with(
+            VerifiedTorBinary::unchecked_for_test(PathBuf::from("/nonexistent/tor")),
+            parent.path().to_path_buf(),
+        );
+        let old = match DaemonTorControl::spawn_keeping(config).await {
+            Err(SpawnError::Launch(failure)) => failure.directory,
+            Err(SpawnError::DataDir(error)) => panic!("the directory was not created: {error}"),
+            Ok(_) => panic!("a missing binary does not come up"),
+        };
+        std::fs::write(
+            old.path()
+                .join(shekyl_tor_control_client::control::LOG_FILE_NAME),
+            b"the replaced incarnation",
+        )
+        .unwrap();
+
+        let retirement = old.replace().await;
+        let KeptLog::Kept(kept) = retirement.log else {
+            panic!(
+                "the replaced incarnation's log is kept: {:?}",
+                retirement.log
+            );
+        };
+        assert_eq!(std::fs::read(&kept).unwrap(), b"the replaced incarnation");
+        assert!(!older.exists(), "the older incarnation's log is swept");
     }
 
     impl std::fmt::Debug for DaemonTorControl {
@@ -823,9 +930,9 @@ pub(crate) mod tests {
             .await
             .expect("first boot publish");
         assert_eq!(first_id.as_str().len(), 56);
-        let exit = boot1.shutdown().await.exit;
-        assert!(exit.is_some(), "teardown must observe a real reap");
-        assert_only_directory_cache(parent.path());
+        let teardown = boot1.shutdown().await;
+        assert!(teardown.exit.is_some(), "teardown must observe a real reap");
+        assert_retired_beside_the_cache(parent.path(), &teardown);
 
         let mut boot2 = DaemonTorControl::launch(config_with(binary, parent.path().to_path_buf()))
             .await
@@ -880,11 +987,9 @@ pub(crate) mod tests {
             "the cold boot has nothing to copy"
         );
         wait_for_the_network(&mut boot).await;
-        assert!(
-            boot.shutdown().await.exit.is_some(),
-            "the stop observes a real reap"
-        );
-        assert_only_directory_cache(parent.path());
+        let teardown = boot.shutdown().await;
+        assert!(teardown.exit.is_some(), "the stop observes a real reap");
+        assert_retired_beside_the_cache(parent.path(), &teardown);
         // The lane's seed is the cache a clean stop wrote. Copying it while
         // Tor still held the data directory would publish a journal Tor was
         // still appending.
@@ -905,16 +1010,40 @@ pub(crate) mod tests {
         })
     }
 
-    fn assert_only_directory_cache(parent: &std::path::Path) {
+    /// After a clean stop the parent holds the cache, Tor's kept log, and a
+    /// tombstone only when its delete outlived the bound; no live directory
+    /// (`TOR_SUPERVISOR.md` §4.7, §4.10). The kept log is Tor's own: it says
+    /// Tor bootstrapped.
+    fn assert_retired_beside_the_cache(parent: &std::path::Path, teardown: &Teardown) {
+        let retirement = teardown
+            .retirement
+            .as_ref()
+            .expect("the stop retired a directory");
+        let KeptLog::Kept(log) = &retirement.log else {
+            panic!("Tor's log is kept: {:?}", retirement.log);
+        };
+        let said = std::fs::read_to_string(log).expect("the kept log");
+        assert!(said.contains("Bootstrapped 100%"), "Tor's own log: {said}");
+        let mut expected = vec![
+            std::ffi::OsString::from(crate::data_dir::CACHE_DIR_NAME),
+            log.file_name().expect("named").to_owned(),
+        ];
+        match &retirement.tombstone {
+            TombstoneEnd::Deleted => {}
+            TombstoneEnd::Outlived(tombstone) => {
+                expected.push(tombstone.file_name().expect("named").to_owned());
+            }
+            other => panic!("the tombstone ends: {other:?}"),
+        }
+        expected.sort();
         let mut names: Vec<_> = std::fs::read_dir(parent)
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
         names.sort();
         assert_eq!(
-            names,
-            vec![std::ffi::OsString::from(crate::data_dir::CACHE_DIR_NAME)],
-            "shutdown wipes the per-boot directory and leaves the cache"
+            names, expected,
+            "shutdown retires the per-boot directory and leaves the cache"
         );
         let cache = parent.join(crate::data_dir::CACHE_DIR_NAME);
         assert!(!cache.join("state").exists(), "state is not a cache file");

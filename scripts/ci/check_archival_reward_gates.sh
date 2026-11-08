@@ -4,14 +4,15 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# Archival reward gates — mint + integer arithmetic discipline.
+# Archival reward gates — integer arithmetic discipline.
 # Invoked from check_consensus_invariants.sh and CI.
+#
+# The reward arithmetic is pure fixed-width integer (below). Connect, and
+# with it any mint path, is Rust's (rust/shekyl-chain-rules).
 
 set -euo pipefail
 
-# Resolve from the script, not the caller's cwd. The comment stripper is a
-# sibling file; `$0` is relative when the parent gate invokes us, so reading
-# it after a cd-to-root would look for the helper under the repo root.
+# Resolve from the script, not the caller's cwd.
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd) || exit 2
 cd "${here}/../.." || exit 2
 
@@ -19,11 +20,6 @@ if ! command -v rg >/dev/null 2>&1; then
   echo "FAIL: ripgrep (rg) not found — the gate cannot enforce its contract" >&2
   exit 2
 fi
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "FAIL: python3 not found — the comment stripper cannot run" >&2
-  exit 2
-fi
-
 FAIL=0
 
 # rg exit-code discipline: 0 = matches, 1 = no matches, >1 = scan error.
@@ -42,84 +38,6 @@ scan() {
   fi
   return 0
 }
-
-# Comment-stripped body. A stripper failure is not a match-less file (rule 47).
-code_only() { python3 "$here/strip_c_comments.py" "$1"; }
-
-# path:line:content hits in FILE after comments are stripped. Empty output is
-# no hit. Uses the shared stripper (trailing `// TODO`, block-disabled code,
-# and `*out = reward_P` are all live code — a line-regex on rg -n output is
-# not). Stripper failure exits 2; it is not a clean scan.
-stripped_hits() {
-  local file="$1" pattern="$2" body hits
-  body=$(code_only "$file") || {
-    echo "FATAL: comment stripper failed on ${file} — an unreadable file is not a clean scan" >&2
-    exit 2
-  }
-  hits=$(printf '%s' "$body" | scan -n "$pattern")
-  if [[ -n "$hits" ]]; then
-    while IFS= read -r line; do
-      printf '%s:%s\n' "$file" "$line"
-    done <<< "$hits"
-  fi
-}
-
-# The mint / accrual arms read the stripper's output, so a stripper regression
-# would widen both in the passing direction at once.
-if ! python3 "$here/strip_c_comments.py" --self-test >/dev/null; then
-  echo "FAIL: the comment stripper failed its own regression cases; mint and" >&2
-  echo "      accrual checks read its output, so their verdicts cannot be trusted." >&2
-  exit 2
-fi
-
-MINT_PATTERN='reward_P|archival.*emission.*mint|mint.*archival.*reward'
-# The C++ that could have carried a mint path: src/fcmp is what is left of it
-# since the C++ block-connect host (src/cryptonote_core) was deleted on
-# 2026-11-05 with the p2p remnant cutover; connect is Rust's
-# (rust/shekyl-chain-rules), outside this C++-only grep.
-MINT_ROOTS=(src/fcmp)
-
-# Negative controls for comment handling (rule 50). A regression here is a
-# silent green on the tree: refuse to judge until these hold.
-mint_predicate_self_test() {
-  local d f hits
-  d=$(mktemp -d) || return 2
-  f="$d/probe.cpp"
-
-  _expect() {
-    local want="$1" label="$2" src="$3"
-    printf '%s\n' "$src" > "$f"
-    hits=$(stripped_hits "$f" "$MINT_PATTERN")
-    if [[ "$want" == hit && -z "$hits" ]]; then
-      echo "SELF-TEST FAIL: ${label}: expected a hit" >&2
-      return 1
-    fi
-    if [[ "$want" == miss && -n "$hits" ]]; then
-      echo "SELF-TEST FAIL: ${label}: expected no hit, got:" >&2
-      printf '%s' "$hits" >&2
-      return 1
-    fi
-    return 0
-  }
-
-  local rc=0
-  _expect miss "line comment"            '// reward_P = 1;'                          || rc=1
-  _expect miss "block comment"           '/* reward_P = 1; */'                       || rc=1
-  _expect miss "block-disabled code"     '/* uint64_t x = reward_P; */'              || rc=1
-  _expect hit  "bare assignment"         'uint64_t reward_P = 2;'                    || rc=1
-  _expect hit  "trailing TODO"           'reward_P = 1; // TODO: move to rust'       || rc=1
-  _expect hit  "trailing word comment"   'void h() { reward_P = 2; } // no comment here' || rc=1
-  _expect hit  "pointer write"           '*out = reward_P;'                          || rc=1
-  _expect hit  "indented pointer write"  '  *out = reward_P;'                        || rc=1
-  unset -f _expect
-  rm -rf "$d"
-  return "$rc"
-}
-
-if ! mint_predicate_self_test; then
-  echo "FAIL: mint-predicate self-test failed; refusing to judge the tree." >&2
-  exit 2
-fi
 
 REWARD_ARITH="rust/shekyl-archival-retention/src/reward_arithmetic.rs"
 
@@ -163,40 +81,6 @@ if [[ -n "$NONFIXED_HITS" ]]; then
   echo "FAIL: non-fixed-width / non-deterministic type in reward_arithmetic.rs" >&2
   echo "  (pure-integer contract underwrites cross-arch bit-identity; see gate comment)" >&2
   printf '%s\n' "$NONFIXED_HITS" >&2
-  FAIL=1
-fi
-
-# Mint gate: no live emission vin crediting outputs (provisional bands).
-# Verdict is comment-stripped content, never rg's exit status. Comments are
-# excluded by being comments, not by containing a word; a code line with a
-# trailing TODO is still a mint path.
-for d in "${MINT_ROOTS[@]}"; do
-  if [[ ! -d "$d" ]]; then
-    echo "FATAL: ${d} not found — mint gate cannot read its subject" >&2
-    echo "  (if the tree moved, update MINT_ROOTS; do not let it pass silently)" >&2
-    exit 2
-  fi
-done
-
-MINT_HITS=""
-for d in "${MINT_ROOTS[@]}"; do
-  files=$(scan --files "$d" --glob '*.cpp' --glob '*.h')
-  if [[ -z "$files" ]]; then
-    echo "FATAL: ${d} enumerates no C++ files (*.cpp/*.h) — the mint gate" >&2
-    echo "       would pass over an empty set (rule 47)." >&2
-    exit 2
-  fi
-  while IFS= read -r f; do
-    hits=$(stripped_hits "$f" "$MINT_PATTERN")
-    if [[ -n "$hits" ]]; then
-      MINT_HITS+="${hits}"$'\n'
-    fi
-  done <<< "$files"
-done
-
-if [[ -n "$MINT_HITS" ]]; then
-  echo "FAIL: possible live archival reward mint path in C++ (grep hit)" >&2
-  printf '%s' "$MINT_HITS" >&2
   FAIL=1
 fi
 

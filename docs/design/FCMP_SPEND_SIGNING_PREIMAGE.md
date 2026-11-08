@@ -85,7 +85,7 @@ that shares no code with the Rust.
 - **pqc_header(i)** = the i-th auth's header — see §1.5 (no signature bytes).
 - **all_key_hashes** = `‖ over all auths: keccak256(hybrid_public_key)` (binds every input's key).
 
-### 1.2 transaction_prefix (`src/cryptonote_basic/cryptonote_basic.h:368-374`)
+### 1.2 transaction_prefix (`src/cryptonote_basic/cryptonote_basic.h` at `ac3836de90` (lines 368–374))
 ```
 VARINT(version)        # = 3 at genesis (Q12)   ← present in prefix_blob
 VARINT(unlock_time)
@@ -97,7 +97,7 @@ The prefix hash = `keccak256(serialize(transaction_prefix))` — **also includes
 `version=3`** — is the first field of `tx_signable` (§1.1), which is what the
 membership/SAL proof signs.
 
-### 1.3 CtSigBase (`src/fcmp/ct_types.h:198-…`)
+### 1.3 CtSigBase (`src/fcmp/ct_types.h` at `ac3836de90` (from line 198))
 ```
 FIELD(type)                       # 1 byte: CTTypeNull(coinbase) | CTTypeFcmpPlusPlusPqc
 if Fcmp:
@@ -108,7 +108,7 @@ enc_labels                        # outputs × 9 bytes,            no len prefix
 outPk                             # outputs × 32 bytes (commitments), no len prefix
 ```
 
-### 1.4 CtSigPrunable (`src/fcmp/ct_types.h:348-…`)
+### 1.4 CtSigPrunable (`src/fcmp/ct_types.h` at `ac3836de90` (from line 348))
 ```
 VARINT(nbp)                       # bulletproof+ count (= 1 at genesis)
 bulletproofs_plus[nbp]            # Bp+ structure

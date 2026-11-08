@@ -67,6 +67,7 @@ Total bytes for this vector: 512 (= 8 × 64).
 Generator
 ---------
 source      = ./_generator/phase2c/gen.cpp (mode t2)
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/phase2c/Makefile (`make gen`)
 command     = ./gen t2 > t2_cache_derive_item_batch.bin
 output_size = 512 bytes

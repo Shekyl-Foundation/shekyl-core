@@ -5,8 +5,6 @@ globs:
   - rust/shekyl-proofs/**
   - rust/shekyl-fcmp/**
   - rust/monero-oxide/**
-  - src/crypto/**
-  - src/fcmp/**
 ---
 
 # Cryptography rules

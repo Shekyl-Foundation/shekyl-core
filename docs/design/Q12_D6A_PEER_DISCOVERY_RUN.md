@@ -1247,7 +1247,7 @@ subsequent selection of that address:
 | --- | --- |
 | a failed connect records the address | `record_addr_failed` → `m_conn_fails_cache[addr.host_str()] = now` ([`net_node.inl:1404-1408`](../../src/p2p/net_node.inl#L1404)) |
 | the filter | `is_addr_recently_failed` returns true until `now - t > P2P_FAILED_ADDR_FORGET_SECONDS` ([`:1411-1421`](../../src/p2p/net_node.inl#L1411)) |
-| the constant | `#define P2P_FAILED_ADDR_FORGET_SECONDS (60*60)` ([`cryptonote_config.h:201`](../../src/cryptonote_config.h#L201)) |
+| the constant | `#define P2P_FAILED_ADDR_FORGET_SECONDS (60*60)` (`cryptonote_config.h` at `ac3836de90` (line 201)) |
 | where it bites | white/gray selection `:1439`, the maintainer's candidate loop `:1698`, and peerlist appending `:2135` — the log line `No available peer in white list filtered by 1` **is** this filter |
 
 **The cache is keyed on `host_str()`, so an onion is filtered by its full
@@ -1373,8 +1373,8 @@ residual, measure it, and report it.
 
 | quantity | value | source |
 | --- | --- | --- |
-| patience for a SOCKS connect | **45 s** | `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT` ([`cryptonote_config.h:191`](../../src/cryptonote_config.h#L191)), applied at [`net_node.cpp:415-419`](../../src/p2p/net_node.cpp#L415) |
-| penalty for exceeding it | **3600 s** | `P2P_FAILED_ADDR_FORGET_SECONDS` ([`:201`](../../src/cryptonote_config.h#L201)) |
+| patience for a SOCKS connect | **45 s** | `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT` (`cryptonote_config.h` at `ac3836de90` (line 191)), applied at [`net_node.cpp:415-419`](../../src/p2p/net_node.cpp#L415) |
+| penalty for exceeding it | **3600 s** | `P2P_FAILED_ADDR_FORGET_SECONDS` (`cryptonote_config.h` at `ac3836de90` (line 201)) |
 | ratio | **1 : 80** | — |
 
 A node waits 45 seconds for a descriptor fetch and, on missing it, buys an hour

@@ -650,7 +650,7 @@ multisig surfaces). Disposition: **confirm / sharpen / push back**.
 - `expected_blob_len(7) = 14199`; `PQC_MAX_PUBLIC_KEY_BLOB = 13974`
   (`cryptonote_config.h:290`, `shekyl-wire` twin). Sig twin:
   `23703 > 23697`. Arithmetic matches the review.
-- Reject site is deserialize (`cryptonote_basic.h:458`), before verify.
+- Reject site is deserialize (`cryptonote_basic.h` at `ac3836de90` (line 458)), before verify.
 - **"Correction, not growth"** holds: container layout already encodes
   14199; the ceiling was written for a pre-version/`spend_auth`
   formula.
@@ -718,7 +718,7 @@ per-output container hash.
 - `pqc_auth_weight()` hardcodes solo lengths
   (`tx_fee_model.rs:151-158`).
 - `v31/intent.rs MAX_INPUTS = 128` vs `shekyl_fcmp::MAX_INPUTS = 8` /
-  `FCMP_MAX_INPUTS_PER_TX`. Note: `cryptonote_config.h:200-207`
+  `FCMP_MAX_INPUTS_PER_TX`. Note: `cryptonote_config.h` at `ac3836de90` (lines 200–207)
   comments about intent.rs/`build.rs` sync refer to **reference-block
   age** constants, **not** this 128 — so 128 is real drift, not a
   synced authority.

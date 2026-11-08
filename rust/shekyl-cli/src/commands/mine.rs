@@ -460,14 +460,16 @@ mod tests {
                 alt_blocks_count: 0,
                 rpc_connections_count: 0,
             }),
-            peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(InfoPeers {
-                public_incoming_socket_count: 0,
-                public_outgoing_socket_count: 0,
-                tor_incoming_socket_count: 0,
-                tor_outgoing_socket_count: 0,
-                white_peerlist_size: 0,
-                grey_peerlist_size: 0,
-            })),
+            peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(
+                InfoPeers::new(vec![shekyl_rpc_types::InfoConnectorPeers {
+                    connector: shekyl_rpc_types::InfoConnector::Clearnet,
+                    incoming_sockets: 0,
+                    outgoing_sockets: 0,
+                    white_peerlist_size: 0,
+                    gray_peerlist_size: 0,
+                }])
+                .expect("one row is in order"),
+            )),
             host: Hidden::Withheld,
             restricted: false,
         })

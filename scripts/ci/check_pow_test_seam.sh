@@ -40,8 +40,10 @@ if ! rg -q 'compute_hash' rust/shekyl-chain-ingest/src/substrate.rs; then
   exit 1
 fi
 
+# The rc is taken outside the substitution: `|| rc=$?` inside `$( )` sets a
+# subshell's variable, and a scan error would read as no hit.
 rc=0
-hits="$(rg -n 'set_pow_hash_override_for_tests' src tests rust || rc=$?)"
+hits="$(rg -n 'set_pow_hash_override_for_tests' rust)" || rc=$?
 if (( rc > 1 )); then
   echo "FAIL: rg exited ${rc} scanning for the deleted seam" >&2
   exit 1

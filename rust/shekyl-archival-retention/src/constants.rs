@@ -47,12 +47,10 @@ pub const SLASH_GRACE_EPOCHS: u64 = 1;
 /// **Retired-mechanism constant.** The fire-beacon challenge shape
 /// (`H_seal`/`H_fire`, gate-2 §3.4) is superseded by derived assignment
 /// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §2: `assignment(h)` seeds from
-/// `block_hash(h−1)`, no seal lag). This constant still feeds the **live
-/// interim serve-credit gate** (`challenge.rs` → `shekyl-ffi` →
-/// `blockchain.cpp`/`db_lmdb.cpp`), which keeps admitting the interim wire
-/// until the format round freezes the replacement response wire — it
-/// deletes with that round's deletion surface, not before, because today it
-/// is the only admission path standing.
+/// `block_hash(h−1)`, no seal lag). Its one reader is
+/// [`crate::challenge_seal_height`], whose callers are this crate's gate-2
+/// KAT tests; no admission path in the workspace reads it. It deletes with
+/// the format round's deletion surface.
 pub const CHALLENGE_BEACON_SEAL_BLOCKS: u64 = 1;
 
 /// W₂ — blocks after a challenge's issuing block to accept its serve-credit

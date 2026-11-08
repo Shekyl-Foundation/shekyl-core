@@ -18,19 +18,20 @@ license.workspace = true
 # validator never names the store (G1); the pipeline names all three and
 # wires them.
 #
-# Features keep the FFI lean: `shekyl-ffi` depends with
-# `default-features = false, features = ["pipeline"]` — the trace writer
-# and the ingest service its one arrival entry offers into, not the corpus
-# fetcher (RPC) or the replay CLI (clap / HTTP / settlement epoch). The
-# pipeline (kameo/tokio and the service's pool, miner and hasher-budget
-# edges), the fetcher and the CLI are optional. Default enables all three
-# so `cargo test -p shekyl-chain-ingest` is the full crate.
+# Features let a consumer take part of the crate: `shekyl-chain-sync-runtime`
+# and `shekyl-p2p-harness` depend with `default-features = false, features =
+# ["pipeline"]` — the trace writer and the ingest service, not the corpus
+# fetcher (RPC) or the replay CLI (clap / HTTP / settlement epoch), and
+# `shekyl-chain-sync` takes none of them. The pipeline (kameo/tokio and the
+# service's pool, miner and hasher-budget edges), the fetcher and the CLI are
+# optional. Default enables all of them, so `cargo test -p
+# shekyl-chain-ingest` is the full crate and the node takes everything.
 #
 # `producer` is the bundle producer's read path (SO-D12 increment 4c): the
 # fetch scheduler, its store-backed shard facts, and the task that reads,
 # assembles and files. It is the one feature that brings the shard-fetch
-# client into this crate's graph, so `shekyl-ffi` (the wallet-side image,
-# `pipeline` only) never has it (SF-D4). The witness ring the template
+# client into this crate's graph, so a `pipeline`-only consumer never has it
+# (SF-D4). The witness ring the template
 # draws from is in `pipeline`: it holds secrets and fetches nothing.
 [features]
 default = ["pipeline", "fetch", "replay-cli", "producer"]

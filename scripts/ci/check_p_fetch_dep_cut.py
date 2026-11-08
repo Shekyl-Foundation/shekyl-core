@@ -136,9 +136,9 @@ NO_SOCKS = (
 RPC_SENTINELS = ("shekyl-daemon-rpc", "shekyl-rpc-transport")
 
 # The one shipped root that cannot leave `BuildRust.cmake` without the file
-# being rewritten: the wallet-side image. Its presence in the parsed set is
-# how the gate knows the parse read the file it thinks it read.
-ROOT_SENTINEL = "shekyl-ffi"
+# being rewritten: the daemon. Its presence in the parsed set is how the
+# gate knows the parse read the file it thinks it read.
+ROOT_SENTINEL = "shekyld"
 
 # (crate, feature) pairs that must not be in any shipped root's resolved
 # feature set. `shekyl-p-host/test-signer` forwards to
@@ -433,9 +433,9 @@ def selftest() -> int:
                 bad = 1
                 print(f"FAIL selftest [{label}]: expected detected={expect}, got {got}")
     cmake = (
-        'cargo build -p shekyl-ffi\nset(_shekyl_rust_bins shekyld shekyl-cli shekyl-wallet-rpc)\n-p "${_bin}"\n'
+        'cargo build -p shekyl-tool\nset(_shekyl_rust_bins shekyld shekyl-cli shekyl-wallet-rpc)\n-p "${_bin}"\n'
     )
-    if shipped_roots(cmake) != ["shekyl-cli", "shekyl-ffi", "shekyl-wallet-rpc", "shekyld"]:
+    if shipped_roots(cmake) != ["shekyl-cli", "shekyl-tool", "shekyl-wallet-rpc", "shekyld"]:
         bad = 1
         print(f"FAIL selftest [cmake parse]: {shipped_roots(cmake)}")
     if not bad:

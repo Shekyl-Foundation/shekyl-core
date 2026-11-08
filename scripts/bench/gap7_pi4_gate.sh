@@ -24,10 +24,14 @@
 # (rust/shekyl-pow-randomx/src/lib.rs:46-72). Recorded in the header so the
 # mode is part of verify_floor, not an implementation detail.
 #
-# Phases (run separately; the C++ build is hours on a Pi):
+# Phases (run separately):
 #   ./scripts/bench/gap7_pi4_gate.sh pins   # fixture positive limbs on aarch64 (run FIRST)
 #   ./scripts/bench/gap7_pi4_gate.sh rust   # terms sweep + multi-point budget fill + pow
-#   ./scripts/bench/gap7_pi4_gate.sh cpp    # shipped-BP+ microbench (needs unit_tests built)
+#
+# Both run `shekyl-verify-cost`'s instrument (`benches/block_connect_verify.rs`,
+# `tests/block_connect_pins.rs`). The Bp+ verifier it times is the shipped
+# one (`shekyl_bulletproofs::verify_batch`, CEN-H19's body), alone and as a
+# block's fold, so the floor's Bp+ figures come from the `rust` phase.
 #
 # RUSTFLAGS: leave UNSET — the shipping configuration is generic aarch64
 # (no repo target-cpu; BuildRust.cmake passes linker args only), and the
@@ -47,8 +51,8 @@ RUST_ROOT="${REPO_ROOT}/rust"
 OUT_DIR="${REPO_ROOT}/docs/benchmarks"
 
 PHASE="${1:-}"
-if [[ -z "${PHASE}" ]] || [[ ! "${PHASE}" =~ ^(pins|rust|cpp)$ ]]; then
-  echo "usage: $0 pins|rust|cpp" >&2
+if [[ -z "${PHASE}" ]] || [[ ! "${PHASE}" =~ ^(pins|rust)$ ]]; then
+  echo "usage: $0 pins|rust" >&2
   exit 2
 fi
 
@@ -95,44 +99,12 @@ case "${PHASE}" in
   pins)
     # Positive limbs ON THE FLOOR first: a fixture that fails to verify on
     # aarch64 would make every later timing a measurement of a reject path.
-    (cd "${RUST_ROOT}" && cargo test --release -p shekyl-ffi --test block_connect_pins) 2>&1 | tee -a "${OUT_FILE}"
+    (cd "${RUST_ROOT}" && cargo test --release -p shekyl-verify-cost --test block_connect_pins) 2>&1 | tee -a "${OUT_FILE}"
     ;;
   rust)
     # Terms sweep + FULL multi-point budget fill + pow — the increments are
     # measured here (rule 76 §4), not scaled from anywhere.
-    (cd "${RUST_ROOT}" && cargo bench -p shekyl-ffi --bench block_connect_verify) 2>&1 | tee -a "${OUT_FILE}"
-    ;;
-  cpp)
-    BIN="${REPO_ROOT}/build/tests/unit_tests/unit_tests"
-    if [[ ! -x "${BIN}" ]]; then
-      echo "unit_tests not built. Build first (expect HOURS on a Pi; -j2 to avoid OOM at link):" | tee -a "${OUT_FILE}"
-      echo "  cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON && cmake --build build -j2 --target unit_tests" | tee -a "${OUT_FILE}"
-      exit 3
-    fi
-    # Rule 47: the gate asserts its SUBJECT, not just an executable file —
-    # an executable-only check let a stale, Debug, or test-less binary be
-    # archived as the shipped-verifier floor result (review finding; three
-    # stale-binary incidents in one day made this a pattern).
-    # (1) Provenance sidecar, written by the build/ship step: build type
-    #     must be Release and the revision must match this checkout.
-    INFO="${BIN}.buildinfo"
-    if [[ ! -f "${INFO}" ]]; then
-      echo "FATAL: ${INFO} missing — ship it with the binary: printf 'build_type=Release\ngit_rev=<rev>\ncompiler=<id>\n'" | tee -a "${OUT_FILE}"
-      exit 4
-    fi
-    grep -q '^build_type=Release$' "${INFO}" || { echo "FATAL: binary is not a Release build (${INFO})" | tee -a "${OUT_FILE}"; exit 4; }
-    WANT_REV="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
-    grep -q "^git_rev=${WANT_REV}$" "${INFO}" || { echo "FATAL: binary rev != checkout ${WANT_REV} (${INFO})" | tee -a "${OUT_FILE}"; exit 4; }
-    cat "${INFO}" | sed 's/^/# buildinfo /' | tee -a "${OUT_FILE}"
-    # (2) The subject must EXIST in the binary before running.
-    "${BIN}" --gtest_list_tests --gtest_filter='gap7_bp_bench.*' 2>/dev/null | grep -q 'DISABLED_shipped_verifier_cost' \
-      || { echo "FATAL: gap7_bp_bench.DISABLED_shipped_verifier_cost absent from binary — stale build" | tee -a "${OUT_FILE}"; exit 4; }
-    # The timing instrument is DISABLED_ in default ctest runs (correctness
-    # coverage lives in bulletproofs_plus.cpp); this gate opts in.
-    "${BIN}" --gtest_filter='gap7_bp_bench.*' --gtest_also_run_disabled_tests 2>&1 | tee -a "${OUT_FILE}"
-    # (3) The measurement must have RUN: a vacuous pass is not a capture.
-    grep -q '\[gap7_bp_bench\] shipped single-proof' "${OUT_FILE}" \
-      || { echo "FATAL: measurement sentinel absent — the bench did not run" | tee -a "${OUT_FILE}"; exit 4; }
+    (cd "${RUST_ROOT}" && cargo bench -p shekyl-verify-cost --bench block_connect_verify) 2>&1 | tee -a "${OUT_FILE}"
     ;;
 esac
 

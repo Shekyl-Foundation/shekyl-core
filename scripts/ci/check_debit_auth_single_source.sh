@@ -60,16 +60,12 @@ for fn_name in debit_auth_pin requires_cold_authority cold_authority_pin; do
 done
 
 # Each REQUIRED site by name, not a count. A count cannot tell a removed
-# checkpoint call from a new unrelated one, and it counts comments; both were
-# true of the previous version. These are the three places consensus decides a
-# value-out is authorized, and each is asserted to reach the shared predicate
-# (a fourth -- the per-block-checkpoint fast path's "block fast-check debit"
-# belt -- was deleted with its whole mechanism in C2-R1a: with the fast path
-# gone the per-tx verify below is unconditional at block connect, so the
-# belt's job is covered by the primary; CEN-G8 retired):
+# call from a new unrelated one, and it counts comments. These are the places
+# a value-out is authorized, and each is asserted to reach the shared
+# predicate:
 #
-#   blockchain.cpp   "Release"                 per-tx debit verify
-#   daemon_submit_ffi.cpp                     the submit gather's work gate
+#   shekyl-chain-rules  rules/tx_bond.rs        block connect, CEN-J13
+#   shekyl-daemon-rpc   submit/verifier.rs      the submit battery, UB3
 #
 # Comments are stripped first, so a mention in prose cannot stand in for a
 # call. Adding a fifth value-out arm means adding its row here — deliberately,
@@ -111,12 +107,9 @@ if ! python3 "$here/strip_c_comments.py" --self-test; then
   exit 1
 fi
 
-# The C++ Release verifier and the submit gather arm left with the chain.
-# The Rust submit battery is the production caller. It could inline its
-# own comparison and pass a gate that only scanned C++.
-# Comment-stripped like the C++ arms: reading the raw file let a commented-out
-# call satisfy the gate. Rust line comments are `//` too, so `code_only` works
-# unchanged.
+# The Rust submit battery is the production caller. Comment-stripped:
+# reading the raw file let a commented-out call satisfy the gate. Rust line
+# comments are `//` too, so `code_only` works unchanged.
 rust_body=$(statements_of rust/shekyl-daemon-rpc/src/submit/verifier.rs)
 rust_pin=$(printf '%s\n' "$rust_body" \
            | rg -c 'cold_authority_pin\([^;]*record\.bond_spend_pk\(\)' || true)
@@ -127,22 +120,35 @@ if [ "${rust_pin:-0}" -lt 1 ]; then
   fail=1
 fi
 
-# ── The invariant: no C++ STATEMENT compares an auth key to a stored key ──
+connect_body=$(statements_of rust/shekyl-chain-rules/src/rules/tx_bond.rs)
+connect_pin=$(printf '%s\n' "$connect_body" \
+              | rg -c 'cold_authority_pin\([^;]*record\.bond_spend_pk' || true)
+if [ "${connect_pin:-0}" -lt 1 ]; then
+  echo "FAIL: block connect (chain-rules CEN-J13) no longer calls cold_authority_pin."
+  echo "      It is consensus's authorization of a Release; an inlined"
+  echo "      comparison there is a second implementation of the predicate."
+  fail=1
+fi
+
+# ── The invariant: no Rust STATEMENT compares an auth key to a stored key ──
 #
 # Statement-scoped, not line-scoped. The first draft matched `bond_spend_pk`
 # and a comparison operator on the same physical line, with the receiver
 # spelled literally `record` -- so it caught the shape I happened to bite it
 # with and missed the ones a real re-implementation would take: the operands
 # reversed, the comparison wrapped across lines, or the record held in a
-# variable named anything else. clang-format wraps at 100 columns, and this
+# variable named anything else. rustfmt wraps at 100 columns, and this
 # predicate is longer than that, so the split form is the LIKELY one.
 #
 # So: strip comments, join each statement onto one line, then require a
 # statement to mention a bond_spend_pk, a comparison operator, AND an auth
 # key (pqc_auths / auth_pubkey / auth_key). That last conjunct is what keeps
-# the §9.11 vin belt out of the net -- `bond.bond_spend_pk.size() != LEN`
-# asks whether the WIRE carried a key, names no auth key, and is a different
-# question from who is authorized.
+# the §9.11 vin belt out of the net -- a length check on bond_spend_pk asks
+# whether the WIRE carried a key, names no auth key, and is a different
+# question from who is authorized. A statement that calls
+# `cold_authority_pin` passes the stored key to the one implementation and
+# is not a copy, whatever else it compares. The implementation itself
+# (`debit_auth.rs`) and test code are out of the scan.
 #
 # HONEST LIMIT, because a gate advertised as complete is worse than one whose
 # reach is written down: this cannot catch a copy split across statements
@@ -151,20 +157,32 @@ fi
 # the realistic accident -- someone re-spelling the predicate inline, the way
 # it was already spelled three times -- and the call-site count above catches
 # an arm dropping the shared pin entirely. Structural enforcement would need
-# a clang-based check over the AST; that is the reopening criterion (rule 21)
+# a check over the syntax tree; that is the reopening criterion (rule 21)
 # if a split-statement copy ever lands.
 # Same stripper as the call-site arms: a re-implementation parked inside a
 # block comment is not a live copy, and matching it would be a spurious red.
-statements=$(rg --files src/ -g '*.cpp' -g '*.h' \
+# Rule 47: the scanned population is asserted non-empty before it is read.
+sources=$(rg --files rust -g '*.rs' -g '!**/target/**' -g '!rust/shekyl-oxide/**' \
+            -g '!rust/shekyl-archival-retention/src/debit_auth.rs' \
+            -g '!*_tests.rs' -g '!**/tests/**' -g '!**/benches/**') || {
+  echo "FAIL: rg could not list the Rust sources (a scan error is not a verdict)."
+  exit 2
+}
+if [ -z "$sources" ]; then
+  echo "FAIL: no Rust source was listed; the scan below would pass over nothing."
+  exit 2
+fi
+statements=$(printf '%s\n' "$sources" \
               | while IFS= read -r f; do code_only "$f"; done \
               | tr '\n' ' ' \
               | sed 's:;:;\n:g')
 hits=$(printf '%s\n' "$statements" \
         | rg 'bond_spend_pk' \
         | rg '(==|!=)' \
-        | rg '(pqc_auths|auth_pubkey|auth_key)' || true)
+        | rg '(pqc_auths|auth_pubkey|auth_key)' \
+        | rg -v 'cold_authority_pin\(' || true)
 if [ -n "$hits" ]; then
-  echo "FAIL: a C++ statement compares an auth key against a stored bond_spend_pk."
+  echo "FAIL: a Rust statement compares an auth key against a stored bond_spend_pk."
   echo "      The debit-auth predicate has one implementation"
   echo "      (shekyl-archival-retention::cold_authority_pin); call"
   echo "      it instead of re-deriving it."
