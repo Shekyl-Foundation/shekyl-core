@@ -62,6 +62,9 @@ pub struct SimConfig {
     pub curve_impl: CurveImpl,
     /// Which mechanism pays (`reward::RewardArm`). Production by default.
     pub reward_arm: RewardArm,
+    /// A7: bond every held shard (production's shape) instead of deep shards
+    /// only (the default). `AgentParams::bonds`.
+    pub bond_every_held_shard: bool,
     pub storage_unit_cost: f64,
     pub bond_rate: f64,
     /// Age-scaling of the bond (L4): 0 = flat, >0 = older shards bond higher.
@@ -689,6 +692,7 @@ impl SimConfig {
             release_cooldown_epochs: self.release_cooldown_epochs,
             dodge_pref: self.dodge_pref,
             reward_arm: self.reward_arm,
+            bond_every_held_shard: self.bond_every_held_shard,
         }
     }
     /// The composition axis this scenario runs under.
@@ -2125,6 +2129,7 @@ pub(crate) fn baseline() -> SimConfig {
         // Production pays: linear credited work on its integer operands. The
         // registered plateau arm is the L11/L13 pins' control.
         reward_arm: RewardArm::Production,
+        bond_every_held_shard: false,
         storage_unit_cost: BASELINE_STORAGE_UNIT_COST,
         bond_rate: BASELINE_BOND_RATE, // mid
         bond_age_scale: 0.0,           // flat bond is the iteration-1 baseline (L4 sweep varies it)
@@ -2960,6 +2965,39 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.adaptive_share = true;
         c.share_gain = 8.0;
         c.budget_ceiling = 200.0; // adequate fee-market capacity
+        out.push(c);
+    }
+
+    // A7 (EUP-3 check half, for Rick): which shards post a bond. Production
+    // bonds every held shard at the floor (`bond_floor_of`); the model bonds
+    // deep shards only. Three arms beside each base, the lean point
+    // (`l11_fill`) and the L13 knee (`l13_decay_knee`), which are themselves
+    // the deep-only arm at the baseline's 2.0: every held shard at 2.0, every
+    // held shard at the floor, deep shards only at the floor.
+    for (base_label, every, rate, rate_label) in [
+        ("l11", true, BASELINE_BOND_RATE, "b200"),
+        ("l11", true, BOND_FLOOR, "floor"),
+        ("l11", false, BOND_FLOOR, "floor"),
+        ("l13", true, BASELINE_BOND_RATE, "b200"),
+        ("l13", true, BOND_FLOOR, "floor"),
+        ("l13", false, BOND_FLOOR, "floor"),
+    ] {
+        let mut c = if base_label == "l11" {
+            let mut c = l11_base();
+            c.init_active_frac = 0.0;
+            c.reservation_lo = 0.02;
+            c.reservation_hi = 0.02;
+            c
+        } else {
+            let mut c = l13_base();
+            c.budget_floor = 80.0;
+            c
+        };
+        let scope = if every { "all" } else { "deep" };
+        c.name = format!("a7_{base_label}_{scope}_{rate_label}");
+        c.axis = "a7_bond_scope".into();
+        c.bond_every_held_shard = every;
+        c.bond_rate = rate;
         out.push(c);
     }
 
