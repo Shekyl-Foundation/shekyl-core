@@ -178,6 +178,29 @@ impl<'a> AggregateRangeStatement<'a> {
         Some((scalars, A + multiexp_vartime(&A_terms)))
     }
 
+    /// Bold-vector length for `commitments` outputs: the count rounded up to
+    /// a power of two, times [`COMMITMENT_BITS`].
+    ///
+    /// The prover and both verifiers reduce their generators to this
+    /// ([`Self::generators_for`]). [`Self::A_hat_terms`] builds `g_bold` and
+    /// `h_bold` at it. One length, so a non-power-of-two output count cannot
+    /// give the terms a longer vector than the statement has generators.
+    fn padded_bold_len(commitments: usize) -> usize {
+        padded_pow_of_2(commitments) * COMMITMENT_BITS
+    }
+
+    /// [`BpPlusGenerators::reduce`] of [`Self::padded_bold_len`].
+    ///
+    /// `reduce` rounds a bit-length up to a power of two. This length is
+    /// already a power of two when [`COMMITMENT_BITS`] is, and the assert
+    /// pins that the view came back at the length the bold vectors use.
+    fn generators_for(generators: &BpPlusGenerators, commitments: usize) -> BpPlusGenerators {
+        let bold_len = Self::padded_bold_len(commitments);
+        let generators = generators.reduce(bold_len);
+        debug_assert_eq!(generators.len(), bold_len);
+        generators
+    }
+
     /// The verifier's `Â`, as terms over the batch's slots (never evaluated):
     /// `A` and each real commitment in `other`, `−z` on every `G_i`,
     /// `d_y_z[i]` on every `H_i`, and the constant on `g`. `V` is unpadded and
@@ -206,13 +229,16 @@ impl<'a> AggregateRangeStatement<'a> {
             other.push((y_mn_plus_one * z_pow[j], *commitment));
         }
 
+        let bold_len = Self::padded_bold_len(V.len());
+        // `ScalarVector` zeroizes on drop, so the coefficients are taken out.
+        let h_bold = core::mem::take(&mut d_descending_y_plus_z.0);
+        debug_assert_eq!(h_bold.len(), bold_len);
         Some((
             y,
             BatchTerms {
                 g,
-                g_bold: vec![-z; padded * COMMITMENT_BITS],
-                // `ScalarVector` zeroizes on drop, so the coefficients are taken out.
-                h_bold: core::mem::take(&mut d_descending_y_plus_z.0),
+                g_bold: vec![-z; bold_len],
+                h_bold,
                 other,
             },
         ))
@@ -234,18 +260,16 @@ impl<'a> AggregateRangeStatement<'a> {
         (transcript, cleared)
     }
 
-    /// [`Self::prepare_commitments`], then the generators reduced to that
+    /// [`Self::prepare_commitments`], then [`Self::generators_for`] at that
     /// commitment count. Both verifiers open a statement this way. The prover
-    /// pads before it reduces, so it calls [`Self::prepare_commitments`] itself.
-    ///
-    /// `reduce` borrows the generator list (a view of the static table), so
-    /// this takes a reference and returns the reduced view.
+    /// pads before it reduces, so it calls [`Self::prepare_commitments`] and
+    /// [`Self::generators_for`] itself.
     fn open_verifier(
         generators: &BpPlusGenerators,
         V: &[EdwardsPoint],
     ) -> (Scalar, Vec<EdwardsPoint>, BpPlusGenerators) {
         let (transcript, points) = Self::prepare_commitments(V);
-        let generators = generators.reduce(points.len() * COMMITMENT_BITS);
+        let generators = Self::generators_for(generators, points.len());
         (transcript, points, generators)
     }
 
@@ -272,7 +296,7 @@ impl<'a> AggregateRangeStatement<'a> {
             V.push(EdwardsPoint::identity());
         }
 
-        let generators = generators.reduce(V.len() * COMMITMENT_BITS);
+        let generators = Self::generators_for(&generators, V.len());
 
         let mut d_js = Vec::with_capacity(V.len());
         let mut a_l = ScalarVector(Vec::with_capacity(V.len() * COMMITMENT_BITS));
