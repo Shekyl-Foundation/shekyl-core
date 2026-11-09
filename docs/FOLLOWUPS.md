@@ -823,9 +823,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Wallet file backup-exclusion markers (PR 6 lessons canvass §5.12 F1).** [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](./completed/STAGE_1_PR_6_PERSISTENCE_ENGINE.md)
   - Target: pre-genesis
 
-- **Process core-dump disable at wallet-RPC startup (PR 6 §5.12 F2).**
-  - Target: pre-genesis
-
 - **Argon2 stack-resident secret copies — cryptographer review (PR 6 §5.12 F3).**
   - Target: pre-genesis
 
@@ -1101,11 +1098,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Show the Tor posture in `shekyl-cli`, and report a held send as held.** `shekyl-cli` renders Status through the one renderer (`TSR-Q13`) and the send flow reads `OwnTx`, reporting `Held` as held and a `ClearnetOnly` send as sent, falsified by §11's two cases once increment 3's typed read and the RW field names exist, with the GUI's display tracked in `shekyl-gui-wallet`. — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
   - Target: pre-genesis
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
-
-- **The wallet's Tor recovery has never run on Windows: three live respawn tests are `#[cfg(unix)]`.** `crash_is_survived_respawn_reaches_ready_again`, `onion_is_republished_on_every_incarnation` and `degraded_episode_clears_only_after_sustained_ready` (`rust/shekyl-tor-control-wallet/src/service.rs`) kill the managed tor with `pkill`, which Windows does not have, so `tor-pin-verify`'s Windows entry runs one wallet live test, not four. The GUI wallet is the primary Windows wallet, so the supervisor's crash, respawn and degraded-episode paths are the ones Windows users will meet first. Needs a Windows termination path for the tests (the managed tor's process, terminated by its handle or PID), then the three tests ungated and the Windows wallet floor raised to 4. Falsify by: the Windows entry of `tor-pin-verify` running all four wallet live tests green. — [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-11`
-  - Target: pre-genesis
-  - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §7
-
 
 - **Measure `TSR-M4`'s set-`MaxMemInQueues` arm once increment 3 proposes a value.** The pre-flight measured Tor's memory at the §10 load at Tor's default cap (91.0 MiB on the floor device, 2026-10-19), not under a set one, because there is no candidate value to set yet. Blocker: increment 3, which proposes the value. Falsify by `TOR_SUPERVISOR.md` §10's `TSR-M4` row carrying the floor device's figure under the proposed `MaxMemInQueues`.
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §10 (`TSR-M4`)
@@ -1429,6 +1421,10 @@ Default. Lands before genesis if it should exist at launch.
 
 - **The Ed25519 field arithmetic under FCMP++ runs on crypto-bigint 0.5.5, which RUSTSEC-2026-0387 flags for timing variability; `cargo audit` ignores it by ruling (`CA-1`).** `helioselene::Field25519` is `dalek_ff_group::FieldElement` (crypto-bigint `Residue` Montgomery arithmetic), and it carries the wallet-side prover's secret witness. The fix is crypto-bigint >= 0.7.6, which no released `dalek-ff-group`/`ciphersuite` uses; serai's `next` branch (2026-09-22) already has `dalek-ff-group` on a `prime-field` crate over crypto-bigint 0.7, unreleased, so clearing it means pinning that branch by git rev with every pinned FCMP++/curve-tree vector held byte-identical. `HelioseleneField` is not part of it: it takes only U256 limb plumbing from crypto-bigint and stays on 0.5.5 with upstream monero-oxide. Measured 2026-10-24 (`docs/formal/checkct`): every operation we reach with a secret is branchless on x86_64 under both toolchains run; aarch64's dynamic row and riscv64 are the open cells. Blocked on serai releasing that branch, or on scheduling the pin; the pin's acceptance is the same harness green against `prime-field`'s field.
   - Owner: `CA-1` — [`CRYPTO_AUDIT.md`](design/CRYPTO_AUDIT.md) §1 (exposure, consumers, reopen criteria; the ignore is in `rust/.cargo/audit.toml`)
+  - Target: pre-genesis
+
+- **S interim: `block_weight_short_term_surge_factor` re-derived at BA-T10 (floor re-run of the batched Bp+ term); closes when the measured d24 `surge_max` is recorded and S re-signed.** The interim (an Assumption, 2026-11-08) scales the C++ batched Bp+ term by 2.56× to the Rust verifier and puts d24 at about 3.92, under the signed S = 4; the conservative bracket on the single-proof Rust term is 3.43. The constant is unchanged until the floor run records the measured d24 value.
+  - Owner: `BA-T10` — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (the floor verify surface); the interim's arithmetic is in `rust/shekyl-verify-cost/benches/block_connect_verify.rs`
   - Target: pre-genesis
 
 

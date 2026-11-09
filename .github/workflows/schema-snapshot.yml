@@ -8,7 +8,8 @@
 # store by DRS-E1 increment 2 (`docs/design/DAEMON_REDB_STORE.md` §11.1).
 #
 # Converts the `block_version` discipline from cultural invariant to
-# mechanical check. Two jobs, one trigger:
+# mechanical check. Two jobs; the second reads a pull request's diff
+# and runs on pull requests only:
 #
 #   pull_request → dev
 #     - assert-snapshots:       runs the `schema_snapshot` tests in
@@ -53,7 +54,9 @@ name: ci/schema-snapshot
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    paths:
+    # One anchored list, aliased into `push` below, so the two triggers
+    # cannot drift apart.
+    paths: &paths
       # The gate's subject is every crate whose code can change a byte a
       # `.snap` pins: the codecs themselves (`shekyl-store-codec`, the chain
       # store's own, the wallet's in `shekyl-engine-state`) and everything
@@ -72,6 +75,11 @@ on:
       # change, which is under the same pattern.
       - "rust/**"
       - ".github/workflows/schema-snapshot.yml"
+  # The push run on `dev` saves the build cache the pull requests restore
+  # (the cache step below), and tests the snapshots on what the merges made.
+  push:
+    branches: [dev]
+    paths: *paths
 
 # Superseded-run cancellation (house pattern: build.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
@@ -101,8 +109,13 @@ jobs:
         # cargo invocation anyway).
         uses: ./.github/actions/install-rust
 
-      - name: Cache cargo registry and target
-        uses: actions/cache@v4
+      # Restored on every run, saved by the `dev` push run only (the save
+      # step at the end of this job). A cache a pull request saves is
+      # readable by that pull request alone, and at 1.3 GB each those
+      # copies evict the caches the others restore from.
+      - name: Restore cargo registry and target
+        id: cargo-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -146,8 +159,20 @@ jobs:
           # the snapshot directory, the source and the constant.
           cargo test -p shekyl-peerlist address_file::snapshot --no-fail-fast
 
+      - name: Save cargo registry and target
+        if: github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-schema-snapshot-${{ hashFiles('rust/Cargo.lock') }}
+
   enforce-version-bump:
     name: "Enforce paired block_version bump"
+    # The verdict is a pull request's diff against its base; a push has none.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.6 min over 24 runs; the floor
     steps:
