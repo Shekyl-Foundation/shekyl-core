@@ -175,6 +175,9 @@ id = "bp-verify"
 spec = [
   "rust/shekyl-bulletproofs/src",
 ]
+cleared = [
+  { through = "d6e8da7d44", reason = "`#![deny(unsafe_code)]` at the crate root: a lint attribute that compiles to nothing. The 2026-11-08 folded capture still prices this tree." },
+]
 
 [[path_set]]
 id = "fcmp-inputs"
