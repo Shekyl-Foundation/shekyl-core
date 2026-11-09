@@ -962,8 +962,9 @@ parent chain extends `k` blocks past it.
 3. **The sound bound, both operands receiver-local:**
    **`margin(k) = min(2^k, S·LTEM/EM)`, S = the ratified surge factor** —
    the proved single-step bound iterated, cut by the surge clamp's
-   absolute ceiling (`EM ≤ S·LTEM`; S = 50 in today's code, but Q3's
-   amendment REFUTED ×50 and **the signed re-derivation is S = 3 (d24
+   absolute ceiling (`EM ≤ S·LTEM`; S = 50 in the code this section was
+   drafted against, but Q3's amendment REFUTED ×50 and **the signed
+   re-derivation is S = 3 (d24
    denomination, re-signed 2026-11-08)** — carry the symbol, never the literal,
    so no legal announce ever exceeds `2·S·LTEM` regardless of lag). The
    receiver computes both `EM` (its `m_current_block_cumul_weight_limit/2`)
@@ -980,38 +981,66 @@ parent chain extends `k` blocks past it.
    while real blocks are tiny — the additive `entry_max` terms dominate).
 5. **Ceiling (reference):** `L ≤ 2·S·LTEM` — at the signed S = 3 (Q3,
    re-signed 2026-11-08) this is `6·LTEM` (1.8 MB at launch LTEM; the
-   code's unfixed S = 50 would give `100·LTEM` = 30 MB, the refuted figure); LTEM itself moves ≤ ×1.7 per 50 000 blocks (Q2).
+   code's unfixed S = 50 would give `100·LTEM` = 30 MB, the refuted figure); LTEM's full-window rate is ≤ ×1.7 per 50 000 blocks (Q2). Movement inside an announce lag is the discrete residual below, not that rate.
 
 **Handoff:** `margin(k) = min(2^k, S·LTEM/EM)` with S = the ratified
 surge factor (signed S = 3, Q3 re-signed 2026-11-08), computed live; the
 P2P row states its assumed announce-lag `k` (for `k = 2` with EM at the
 floor: multiplier 3 — the clamp arm binds at the assumed lag, so its
 receiver-local LTEM staleness below applies inside it, not only beyond).
-**Staleness of the receiver-local LTEM, quantified (review finding — the
-clamp arm substitutes LTEM_h where the bound at h+k is S·LTEM_{h+k}):**
-LTEM's growth over the lag is bounded by its own ratified rate,
-`LTEM_{h+k}/LTEM_h ≤ 1.7^(k / ⌈min(h,100 000)/2⌉)` — at full window this
-is ≤ 1.00003 for k ≤ 2 (invisible); in the worst ramp-in case (h = 100,
-k = 2) it is ≤ 1.7^(1/25) ≈ 1.022. The error direction is the familiar
-liveness one (a too-small cap rejects a legal announce, never admits an
-oversized one). **The shortfall is NOT absorbed by `entry_max`'s additive
-witness term** — 866 568 B budgets the announce's own independently-capped
-witness, and a legal announce can consume all of it while its body sits at
-the true (grown-LTEM) limit, so that term has no slack to lend; an earlier
-revision claimed absorption and double-counted the budget (review
-finding, 2026-09-06). What actually holds: within the stated announce-lag
-assumption `k ≤ 2` the cap under-admits by up to the ≈ 13 kB shortfall on
-a ≈ 600 kB-scale term — a bounded liveness cost, accepted. Beyond the
-assumed lag (the latched `is_synchronized()` enforces no numeric `k`) the
-shortfall grows with LTEM's ratified rate and is unbounded in `k` — but
-the consequence stays liveness-shaped: a far-behind receiver drops a tip
+**Staleness of the receiver-local LTEM (review finding — the clamp arm
+substitutes LTEM_h where the bound at h+k is S·LTEM_{h+k}):** the
+half-window exponent `1.7^(k / ⌈min(h,100 000)/2⌉)` is the rate §2 states
+for a monotone saturating history (×1.7 per doubled chain length while the
+window fills; ×1.7 per 50 000 blocks once it is full). It is not a bound
+on LTEM movement inside an announce lag. The same class of mistake as
+point 2: a smooth history-rate standing in for the discrete median. While
+the long window is still the chain, one sample crossing the middle order
+statistics moves LTEM by a full clamp step inside `k = 2`. The error
+direction is unchanged and liveness-shaped: a too-small cap rejects a
+legal announce and never admits an oversized one. The short-median arm
+`min(2^k, S·LTEM/EM)` is not touched.
+**The shortfall is NOT absorbed by `entry_max`'s additive witness term** —
+866 568 B budgets the announce's own independently-capped witness, and a
+legal announce can consume all of it while its body sits at the true
+(grown-LTEM) limit, so that term has no slack to lend; an earlier revision
+claimed absorption and double-counted the budget (review finding,
+2026-09-06).
+What the discrete median does is exhibited, not closed. Zone 300 000,
+S = 3, the code's clamps (long median floored at the zone; an even count
+is the floor of the mean of the two middle elements, with no sum; a
+block's long-term weight is clamped to `LTEM + ⌊LTEM·7/10⌋`). One hundred
+blocks at the zone weight, then blocks at the legal maximum, on the
+growing window:
+
+- Heights 199→201. At 199 the window holds 199 samples, LTEM is still the
+  zone 300 000, the effective median is 600 000 and the limit is
+  1 200 000. `margin(2) = min(4, 3·300 000/600 000) = 1.5`, so the cap is
+  1 800 000. At 201 LTEM is 510 000, the effective median is 1 050 000 and
+  the legal limit is 2 100 000. Shortfall 300 000 bytes.
+- Heights 399→401, same trace. The effective median is on the surge
+  ceiling (1 530 000), so `S·LTEM/EM = 1` and `margin(2) = 1`. The cap is
+  the limit at 399, 3 060 000. The legal limit at 401 is 4 131 000.
+  Shortfall 1 071 000 bytes. While the effective median sits at `S·LTEM`
+  the clamp arm is 1 for every k, and LTEM growth during the lag is
+  entirely a liveness cost.
+
+An empty chain of maximal blocks, heights 0→2, is the other shape. The
+empty-window floor is not a sample, so LTEM moves 300 000 → 688 500
+(×2.295) and on that trace the cap meets the legal limit (shortfall 0).
+Neither shortfall is claimed maximal. No closed form replaces the
+withdrawn exponent; the ≈ 13 kB figure and the 2.2 % residual are
+withdrawn with it.
+Beyond the assumed lag (the latched `is_synchronized()` enforces no
+numeric `k`) the shortfall is not given by the half-window exponent. The
+consequence stays liveness-shaped: a far-behind receiver drops a tip
 announce it could not use anyway and recovers by the block-sync path
 (2002/2004, byte-budgeted separately), which is that node's designed path
 regardless. If the announce path is ever required to serve far-behind
 receivers, the fix is a bounded-lag check at the announce gate — already
 routed with the PWD-B7 announce-arm item in `docs/FOLLOWUPS.md` — not a
-bigger cap. Recorded so the substitution is a stated approximation with
-its true consequence, not an unnoticed unsoundness.
+bigger cap. Recorded so the substitution is a stated gap with its true
+consequence, not an unnoticed unsoundness.
 **The clamp arm is load-bearing, not a safety belt** (P2P-2 lane's
 grounding, verified at this pin): the announce path ignores announces
 unless `state_normal` and `is_synchronized()`
@@ -1020,8 +1049,8 @@ unless `state_normal` and `is_synchronized()`
 `cryptonote_protocol_handler.h:111`), not a within-`k`-of-tip check — a
 synced-then-partitioned node processes announces while arbitrarily far
 behind, so no code enforces a numeric `k` and `S·LTEM/EM` is what holds
-when the lag assumption fails (S = 50 in the shipped C++ today; signed
-S = 4). **Error direction, for the reviewer when
+when the lag assumption fails (S = 3, the signed factor, which is the
+factor the code clamps with). **Error direction, for the reviewer when
 the falsifier fires:** a bound that is too tight here **rejects a legal
 announce** (the receiver's EM is the crash valley while the announced
 block is legally larger) — a *liveness* failure, not a safety one; an

@@ -3236,6 +3236,14 @@ decides how a drop is labelled, not what the chain carries.
 declared order that can move the pool. No other line of either `--esr10`
 fixture moved, and the `--stage2` fixtures did not move.
 
+**2026-11-09: `baseline_steady_state.json` regenerated for its
+`params_digest` only** (rule 50). The consensus surge re-sign moved the
+parameter-set digest to
+`blake2b:50376bfff9b581026383deb54bc4848541658efc3eb7b12bf22f6f8544dfbf6e`.
+No recorded row moved. The sim's behavior did not change; the fixture's
+header names the parameter set it was folded under, and that set's surge
+factor is the re-signed 3.
+
 **Cost.** The full narration, 144 folds of 60 years, takes 379 s wall and
 85 CPU-minutes on 16 threads (load 5 to 16). The nightly lane already runs
 80–120 minutes on `dev` against its 180, so it runs the baseline and the
