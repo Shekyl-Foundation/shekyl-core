@@ -2575,6 +2575,77 @@ mod live_tests {
         );
     }
 
+    /// Tor reports the launch's proof-of-work hash. `GETINFO config-text`
+    /// lists every option that differs from Tor's default. The framer folds
+    /// that `+` data block into one string. The reply must carry
+    /// `DisableNetwork 1`, which this launch sets: a body with no
+    /// configuration would pass the absence check on other platforms without
+    /// reading anything. On macOS the body carries `CompiledProofOfWorkHash
+    /// 0` (`TOR_SUPERVISOR.md` `TSR-F18`). Elsewhere the option is at its
+    /// default and absent.
+    ///
+    /// `SafeLogging 1` is Tor's default, so this reply cannot show that pin.
+    /// `the_launch_pins_safe_logging_and_the_macos_proof_of_work_hash` reads
+    /// it off the command. Red edits: drop the macOS line from the launch,
+    /// and this fails on macOS against the signed bytes; read an empty
+    /// reply, and the `DisableNetwork` check fails on every platform.
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
+    async fn the_managed_tor_reports_the_pinned_proof_of_work_hash() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (readiness, _ready_rx) = BootstrapReadiness::new();
+        let (events, _events) = EventSink::bounded();
+        let (exit_tx, exit_rx) = oneshot::channel();
+        let actor = TorControlClient::spawn(TorControlClientConfig {
+            launch: TorLaunch::Managed(ManagedTor {
+                tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
+                data_dir: dir.path().to_path_buf(),
+                socks_port: super::SocksPort::Fixed(free_port()),
+                socks_timeout: super::SocksTimeout::TorDefault,
+                disable_network: true,
+                disk_writes: DiskWrites::Deferred,
+                exit_observer: Some(exit_tx),
+                leak: None,
+            }),
+            events,
+            readiness,
+        });
+        let reply = actor
+            .ask(Command::GetInfo(vec!["config-text".to_owned()]))
+            .await
+            .expect("GETINFO config-text against the actor-spawned tor");
+        assert_eq!(reply.status(), 250);
+        actor.stop_gracefully().await.expect("graceful stop");
+        actor.wait_for_shutdown().await;
+        await_reap_before_drop(exit_rx).await;
+
+        // One folded data block, then the closing `OK`.
+        let reported: Vec<&str> = reply
+            .lines()
+            .iter()
+            .flat_map(|line| line.lines())
+            .map(str::trim)
+            .collect();
+        assert!(
+            reported.contains(&"DisableNetwork 1"),
+            "config-text carries the launch's own DisableNetwork 1: {reported:?}"
+        );
+        let pow: Vec<&str> = reported
+            .iter()
+            .copied()
+            .filter(|line| line.starts_with("CompiledProofOfWorkHash"))
+            .collect();
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                pow,
+                ["CompiledProofOfWorkHash 0"],
+                "config-text: {reported:?}"
+            );
+        } else {
+            assert!(pow.is_empty(), "config-text: {reported:?}");
+        }
+    }
+
     /// The managed launch hands the pinned tor its control end and nothing else of
     /// this process's (`DAEMON_CONFIG_CUTOVER.md` §2.10): a file opened without
     /// close-on-exec, as C++ in the daemon's process opens one, is not in tor's
