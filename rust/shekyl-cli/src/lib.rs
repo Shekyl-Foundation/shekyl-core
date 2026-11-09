@@ -5,6 +5,7 @@
 
 //! shekyl-cli internals, exposed as a library so integration tests can
 //! drive the RPC session directly. The binary entry point is `main.rs`.
+#![deny(unsafe_code)]
 
 pub mod catalog;
 pub mod commands;

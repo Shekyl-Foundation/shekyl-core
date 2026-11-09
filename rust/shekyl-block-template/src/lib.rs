@@ -94,6 +94,7 @@
 //! template's own operands, so the producer and the validator's derived
 //! arm share one composition. Byte-parity with `create_block_template` is
 //! a separate witness (`CHAIN_RULES_SLICE_6.md` §5.3), not this file's.
+#![deny(unsafe_code)]
 
 use core::fmt;
 

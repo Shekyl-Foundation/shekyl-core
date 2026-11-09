@@ -60,6 +60,7 @@
 //! **property** (uniform, fair, serially independent), not on emitting any
 //! particular sequence: the fixed seed in the KAT is *reference determinism*,
 //! not a PRNG mandate.
+#![deny(unsafe_code)]
 
 pub mod cover;
 pub mod draw;

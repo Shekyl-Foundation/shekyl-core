@@ -276,7 +276,8 @@ pub enum EmissionClaimError {
     /// disagrees with the pair-indexed accumulation; a reward sum
     /// overflowing `u64`; a window epoch whose close height does not
     /// exist) — malformed input from an untrusted daemon, refused loudly
-    /// (`20-rust-vs-cpp-policy.mdc` §3), never skipped-and-continued: a
+    /// (`25-rust-architecture.mdc`, §"Decoding untrusted bytes"), never
+    /// skipped-and-continued: a
     /// daemon that mis-serializes one epoch cannot be trusted for the
     /// window.
     #[error("epoch {epoch}: claim-source rows are internally inconsistent")]

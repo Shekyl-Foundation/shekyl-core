@@ -1,9 +1,14 @@
----
-description: Shekyl logic is Rust. The tree has no first-party C or C++.
-alwaysApply: true
----
+# Rule 20, Rust vs. C++ — the retired rule
 
-# Rust vs. C++: decision policy
+**Status:** CLOSED-as-record, retired 2026-11-08 (ruled by Rick). It chose
+between Rust and C++, and the C++ is deleted: the tree holds no first-party
+C or C++ (PR #1299), so one option is left. What still binds moved:
+"no first-party C, no C ABI" and the gate that holds it are
+[`25-rust-architecture`](../../.cursor/rules/25-rust-architecture.mdc)'s
+opening; §"A new subsystem is its own change" is
+[`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)'s.
+Do not implement from this record; the body below is the policy as it
+stood, and the design records that cite "rule 20" read against it.
 
 The tree holds no first-party C or C++. New logic is Rust. The companion
 file `25-rust-architecture.mdc` covers how a crate is added; this file
@@ -32,16 +37,3 @@ not add a C ABI to reach a Rust crate.
 
 When a change matches any of the four cases above, it is Rust with the type
 that makes the wrong value unrepresentable. A bug fix is not an exception.
-
-## A new subsystem is its own change
-
-A new crate, or a change of consensus boundary, has:
-
-- Its own design document
-- Its own review
-- Its own test gates
-- Its own PR, separate from unrelated feature work
-
-Folding that into a feature PR produces unreviewable changes. Don't.
-`15-deletion-and-debt.mdc` is the scope guardrail: the touching PR's scope
-stays the change it set out to make.

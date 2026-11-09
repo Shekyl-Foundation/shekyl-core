@@ -16,7 +16,7 @@ V3.0 according to their attack-surface profile.
 **Related rules:**
 [30-cryptography.mdc](../.cursor/rules/30-cryptography.mdc) ·
 [35-secure-memory.mdc](../.cursor/rules/35-secure-memory.mdc) ·
-[40-ffi-discipline.mdc](../.cursor/rules/40-ffi-discipline.mdc) ·
+[40-ffi-discipline.mdc](completed/RULE_40_FFI_DISCIPLINE.md) ·
 [80-usability.mdc](../.cursor/rules/80-usability.mdc) ·
 [82-failure-mode-ux.mdc](../.cursor/rules/82-failure-mode-ux.mdc).
 

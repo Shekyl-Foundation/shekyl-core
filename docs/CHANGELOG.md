@@ -26164,7 +26164,7 @@ production callers.
   in any reviewer-convenient order), and a consolidated 15-item
   open-questions list as the Round 2 agenda. **Markdown-only; no
   code changes.** Per
-  [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc),
+  [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](completed/RULE_20_RUST_VS_CPP.md),
   the document runs through 4–6 review rounds against `dev` before
   any Rust lands. Round 1 draft only — open questions are written
   down with tentative answers, not closed.

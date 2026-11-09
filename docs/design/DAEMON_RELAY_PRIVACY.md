@@ -80,7 +80,7 @@ recommendation rests on a measurement, not on reasoning. §11 anchors every find
 Core source. Decisions D-1…D-7 stand as amended; §7 is the Round-3 agenda.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (FFI-boundary-moving), and
-[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md)
 §"Migration is a planning activity" — this document exists so the port is not
 folded into feature work.
 **Spec-first per** [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc).

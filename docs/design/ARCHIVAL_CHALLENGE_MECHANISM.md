@@ -985,8 +985,9 @@ the round kept trying to add forensics underneath it.
    - Hot-tree exposure is accepted and stated: P signs every request, so
      the attestation key is necessarily hot on the internet-facing host,
      and host compromise already yields serve-and-sign-as-P. Custody
-     note: `shekyl-tor-control-wallet` generates the onion keypair and hands it via
-     `ADD_ONION` — our process holds it, a different exposure than
+     note: the persona bundle holds the keypair (`shekyl-onion-key`) and the
+     wallet hands that credential to Tor via `ADD_ONION` — our process holds
+     it, a different exposure than
      Tor-native key handling, stated and accepted.
    Correlation risk, sized honestly: properly generated independent keys
    do not correlate — the exposure is generation-side (shared RNG state,

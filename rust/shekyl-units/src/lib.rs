@@ -42,6 +42,7 @@
 //! should).
 
 #![no_std]
+#![deny(unsafe_code)]
 
 // `alloc`, not `std` (the `shekyl-types` posture, adopted 2026-09-29 so that
 // crate can depend on this one): the SKL string forms need `String`; nothing

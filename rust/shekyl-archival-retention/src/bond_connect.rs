@@ -6,24 +6,21 @@
 //! Bond-post block-connect state transitions (gate-4 §4.3/§4.5/§5;
 //! `PHASE_2B_FSM_RETOOL.md` P2B-8 implementation locus).
 //!
-//! The connect site — the Rust validator's archival transition
-//! (`shekyl-chain-rules::archival`, DRS-E4 `ARW-Q1`) and, until cutover, the
-//! C++ connect that marshals the record's current state across the FFI —
-//! calls this module as the **single implementation** of what the connect
-//! writes: the post-connect record fields and the interval-log append are
-//! *outputs* of the fold here, so no consensus arithmetic lives in C++
-//! (`20-rust-vs-cpp-policy`). The folds are functions of the **record**; the
-//! global bonded total is a view over the records (`ARW-Q9`), and the C++
-//! store that still maintains one debits the fold's `refund_atomic` at the
-//! FFI edge. Every connect fold has a pop twin (gate-4 §5 all-types-atomic
-//! pop); the pop restores the record from the connect's pre-image journal
-//! (C++ byte-copy) and this module owns the counter re-credit plus the
+//! The connect site, the Rust validator's archival transition
+//! (`shekyl-chain-rules::archival`, DRS-E4 `ARW-Q1`), calls this module as
+//! the **single implementation** of what the connect writes: the
+//! post-connect record fields and the interval-log append are *outputs* of
+//! the fold here, so the consensus arithmetic has one home. The folds are
+//! functions of the **record**; the global bonded total is a view over the
+//! records (`ARW-Q9`). Every connect fold has a pop twin (gate-4 §5
+//! all-types-atomic pop); the pop restores the record from the connect's
+//! pre-image and this module owns the counter re-credit plus the
 //! state-consistency checks.
 //!
-//! Errors here are **connect-time invariant breaches** — conditions the §3.5
-//! verify (plus the block-level per-`P` pass) already rejected. The C++ caller
-//! maps them to a FATAL abort, never a soft skip (the emission-connect §6.2
-//! posture): a block must not connect with a half-applied bond release.
+//! Errors here are **connect-time** conditions. The validator refuses the
+//! block on one that says the post is wrong for the record, and reports one
+//! that says the record itself is broken as a record invariant, never a
+//! soft skip: a block must not connect with a half-applied bond release.
 
 use thiserror::Error;
 
@@ -95,8 +92,8 @@ pub fn is_clean_interval_close(interval: &BadInterval, epoch: u64) -> bool {
 /// its in-place close depend on.
 ///
 /// The decision and the interval shape are consensus semantics, so they live
-/// here — the C++ slash writer appends exactly what this returns
-/// (`20-rust-vs-cpp-policy`; the [`clean_interval_close`] placement's twin).
+/// here: the slash writer appends exactly what this returns (the
+/// [`clean_interval_close`] placement's twin).
 #[must_use]
 pub fn slash_open_interval_to_append(
     record_bad_intervals: &[BadInterval],

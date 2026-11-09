@@ -7,6 +7,7 @@
 
 use super::*;
 use shekyl_curve_tree::{BlockHeight, LeafStore};
+use shekyl_onion_key::OnionKeypair;
 use shekyl_operator_alarm::{AlarmCondition, Arming, ConditionState, DisarmedReason};
 use shekyl_p_host::{PinReport as HostPinReport, StoreFacts, StoreIdentity};
 use shekyl_tor_control_wallet::service::OnionIdentity;
@@ -177,7 +178,7 @@ fn churning_tor(dir: &tempfile::TempDir) -> WalletTorControlConfig {
 
 fn serving_identity() -> PersonaServing {
     PersonaServing {
-        identity: OnionIdentity::from_hs_id_seed(&[7u8; 32]),
+        identity: OnionIdentity::from_keypair(OnionKeypair::ephemeral().expect("OS CSPRNG")),
         virtual_port: SERVING_VIRTUAL_PORT,
         max_streams: SERVING_MAX_STREAMS,
         key: std::sync::Arc::new(shekyl_p_host::RefusingKey),

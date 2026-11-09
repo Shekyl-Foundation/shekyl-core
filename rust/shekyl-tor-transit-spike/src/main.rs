@@ -54,11 +54,13 @@
 //! hindsight. The runner is deliberately kept out of the repo: it is
 //! machine-specific glue (absolute tor-binary and worktree paths), and a
 //! committed script with a hardcoded `$HOME` is the debt rule 15/16 forbids.
+#![deny(unsafe_code)]
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kameo::actor::{ActorRef, Spawn as _};
+use shekyl_onion_key::OnionKeypair;
 use shekyl_tor_control_client::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow};
 use shekyl_tor_control_client::control::{
     BootstrapReadiness, BootstrapState, Command, DiskWrites, EventSink, TorControlClient,
@@ -114,26 +116,10 @@ const MAX_ADMISSIBLE_BYTES: usize = 16_651;
 ///
 /// Pinning bought tidiness and nothing else. Freshness costs nothing, since
 /// nothing in the measurement depends on which address it is.
-fn fresh_rig_seed() -> Result<[u8; 32], String> {
-    // `read_exact` of 32 bytes, NOT `fs::read`.
-    //
-    // `fs::read` reads to EOF, and `/dev/urandom` never reaches one: it is an
-    // infinite stream. The first version of this function called it and grew to
-    // **107 GB RSS** before the OOM killer took the process — which is the
-    // `EXIT=137` (SIGKILL) the cron session recorded, and the reason four
-    // consecutive sessions produced zero samples. Every one of those failures
-    // was misread at the time as teardown, volatile storage, or a slow
-    // bootstrap; instrumenting the bring-up is what finally located it, by
-    // showing both daemons Ready in ~14 s and the hang landing *after* them.
-    //
-    // A device file that never ends turns "read the file" into "consume all
-    // memory", and it is silent until the machine notices.
-    use std::io::Read as _;
-    let mut f = std::fs::File::open("/dev/urandom").map_err(|e| format!("urandom open: {e}"))?;
-    let mut seed = [0u8; 32];
-    f.read_exact(&mut seed)
-        .map_err(|e| format!("urandom read: {e}"))?;
-    Ok(seed)
+fn fresh_rig_identity() -> Result<OnionIdentity, String> {
+    OnionKeypair::ephemeral()
+        .map(OnionIdentity::from_keypair)
+        .map_err(|e| format!("onion keypair: {e}"))
 }
 
 const VIRTUAL_PORT: u16 = 80;
@@ -403,7 +389,7 @@ async fn run(
         .map_err(|e| e.to_string())?;
     let local = listener.local_addr().map_err(|e| e.to_string())?;
 
-    let identity = OnionIdentity::from_hs_id_seed(&fresh_rig_seed()?);
+    let identity = fresh_rig_identity()?;
     let port = OnionPort::loopback(VIRTUAL_PORT, local).ok_or("listener must be loopback")?;
     let request = AddOnion::new(identity.mint_onion_key(), port, 8)
         .with_flags(OnionFlags { discard_pk: true })

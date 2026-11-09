@@ -400,6 +400,19 @@ members = [
     # two Tor *instances* stay separate; this is the one transform).
     "shekyl-onion-v3",
 
+    # RFC 8032 expansion of a v3 onion seed: the `ED25519-V3` blob and its
+    # public key. Secret-byte operations live here (rule 36), so the Tor
+    # control client can mint a key without compiling the account stack.
+    # A persona seed is still derived in `shekyl-crypto-pq`
+    # (`derive_p_onion_keypair`); this crate expands a seed it is given.
+    "shekyl-onion-key",
+
+    # A fixed-length secret at one heap address, wiped there on drop.
+    # `shekyl-crypto-pq` (an FN-DSA secret) and `shekyl-onion-key` (an
+    # expanded onion secret) both hold one, and neither takes the other's
+    # crate to do it.
+    "shekyl-heap-secret",
+
     # Capability families (PWD-E9): the client speaks the protocol for any
     # owner; the wallet crate is archival-P's Tor instance (`WalletTorControl`);
     # the daemon crate is the P2P overlay's ephemeral-per-boot instance

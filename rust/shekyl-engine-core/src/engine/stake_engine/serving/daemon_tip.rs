@@ -236,7 +236,7 @@ pub(crate) enum TipReading {
 /// wire until the channel's grants replace it (RK-Q5); this module has
 /// stopped depending on it first.
 ///
-/// # Untrusted input (rule 20 §3)
+/// # Untrusted input
 ///
 /// Each absence has a named direction, and none of them is the convenient
 /// one by accident:
