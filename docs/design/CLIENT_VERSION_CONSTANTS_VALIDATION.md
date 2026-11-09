@@ -770,7 +770,7 @@ not mean (§1).
 
 Rejected with `VC-D4`: no C++ consumer exists. **Reopening criterion:** a C++
 consumer of the digest appears — which, given the direction of the FFI
-boundary ([`20-rust-vs-cpp-policy`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)),
+boundary ([`20-rust-vs-cpp-policy`](../completed/RULE_20_RUST_VS_CPP.md)),
 should first be asked whether it ought to be Rust.
 
 ### 3.10 `VC-D10` — no intra-binary agreement check

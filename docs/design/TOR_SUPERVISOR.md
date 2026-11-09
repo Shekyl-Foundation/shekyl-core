@@ -142,7 +142,10 @@ publishes `OriginVerdict` after every session change, epoch rebuild and plan,
 into the supervisor's verdict cell (`SupervisorFeeds::verdict`, the relay's
 `VerdictSink`); the supervisor folds `Input::AddressHidingOrigin`. Health is
 `hides_address`, every state but `Absent`. `OwnTx` reads `Routable`. A
-recovery is said at once, a loss once under the announcement cap. Whether
+loss is said once under the announcement cap. A recovery is said at once,
+but only as the pair of a loss the operator saw, or as the first posture
+line after a start; a recovery from a loss still held under the cap says
+nothing and forgives it, so session churn says nothing (Rick, 2026-11-08). Whether
 the node is waiting for Tor is what the link carries (`Status::carriage`):
 the core reads it from the phase and the outbound facet, never from the
 §4.3 projection, which shows an onion peers cannot reach, or any cause, as
@@ -172,7 +175,7 @@ says which and why.
 | The supervisor sends one `SETEVENTS` and reads the parsed events. Bootstrap readiness is still the actor's `GETINFO` poll | `rust/shekyl-tor-control-client/src/control/events.rs` `Command::supervisor_events`; `rust/shekyl-tor-control-client/src/control/actor.rs` `bootstrap_poll_loop` |
 | The event sink holds `EVENT_QUEUE_EVENTS` (256); an event past it is dropped and counted, and the read loop never waits (`TSR-F2`) | `rust/shekyl-tor-control-client/src/control/actor.rs` `EVENT_QUEUE_EVENTS`, `EventSink` |
 | Death has two signals: a watcher waits on the child beside the control connection's end, and either stops the actor (`TSR-F16`) | `rust/shekyl-tor-control-client/src/control/actor.rs` `watch_child` and the `ChildExited` handler |
-| Teardown is `DEL_ONION`, `SIGTERM`, 5 s, `SIGKILL`, reap, synchronous wipe | `rust/shekyl-tor-control-client/src/control/actor.rs` `SHUTDOWN_GRACE`, `shut_down`, `request_graceful_stop`, `kill_and_reap`; `rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs` `teardown` |
+| Teardown closes the owning connection, waits 5 s, kills and reaps; then the tombstone (§4.7). `DEL_ONION` goes only to an attached Tor, and no signal is sent. A read-side fault still closes the write half before the wait | `rust/shekyl-tor-control-client/src/control/actor.rs` `ProcessOwnership::teardown_lines`, `end_owning_connection`, `SHUTDOWN_GRACE`, `shut_down`, `kill_and_reap`; `rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs` `shutdown` |
 | The managed tor inherits its owning control connection (`__OwningControllerFD`); it opens no control port and writes no cookie. The launch surface is a closed, tested option list | `rust/shekyl-tor-control-client/src/control/launch.rs` `managed_tor_command`, `tor_end`, and its test `launch_option_names` |
 | `SocksPort` is `auto ExtendedErrors`, so onion failures come back as `0xF0`–`0xF7` | `rust/shekyl-tor-control-client/src/control/actor.rs` `SocksPort` (`Auto` renders `auto ExtendedErrors`) |
 | The pin is checked before every spawn, including a respawn | `rust/shekyl-daemon/src/tor/mod.rs` `pin` |
@@ -367,6 +370,30 @@ tries to open `GeoIPFile` and `GeoIPv6File` at their compiled-in defaults,
 planted there. The launch therefore also passes `GeoIPFile` and `GeoIPv6File`,
 each naming the empty file; with them, Tor opens only that file (measured
 2026-10-15). This joins the launcher fix's scope.
+
+**TSR-F18 (high; Tor lane; fixed).** On macOS the hardened runtime kills Tor
+when it runs a proof-of-work puzzle. Measured 2026-11-08 on the macOS build
+host (macOS 27.0.1, arm64; the signed 15.0.26 `tor`; `shekyld` at
+`8d78bbacfb`): 61 s after a cold start, the node's first probe of its own onion
+made Tor solve a puzzle, and Tor ended with `SIGKILL (Code Signature
+Invalid)`, `CODESIGNING` "Invalid Page", in `equix_solver_solve` under
+`hs_pow_solve` (shekyl-dev `data/tsr-acceptance/2026-11-08-macos/`). HashX
+compiles each puzzle's hash to machine code in a page it maps writable and
+then makes executable, without `MAP_JIT`; the hardened runtime forbids
+executing that page. A client solves at any nonzero effort, either the
+onion's suggested effort or its own after a failed introduction, and a
+service under load verifies the same way, so on macOS Tor would end
+whenever either happened. The daemon publishes its onion with
+proof-of-work on, and the probe dials that onion. Why this probe solved and
+later ones did not is not pinned down. Tor's `auto` is no fallback: the compile succeeds and the kill
+comes at execution. The launch passes `CompiledProofOfWorkHash 0` on macOS,
+Tor's interpreter, about 20 times slower per hash; it covers the wallet's
+Tor too, which has the same launch. Rejected: signing with
+`com.apple.security.cs.allow-unsigned-executable-memory`, which gives up
+most of what the hardened runtime protects (`allow-jit` would not help:
+HashX does not use `MAP_JIT`). `tor-pin-verify`'s macOS entries read the
+option back from the signed bytes. The missing `MAP_JIT` is upstream's;
+whether to report it to the Tor Project is Rick's.
 
 ## 4. Design
 
@@ -962,7 +989,17 @@ with its test (`the_managed_launch_surface_is_the_typed_options`).
 Teardown, as ruled: close the owning control connection (Tor exits on its
 close and, in the specification's words, "does not wait a while for circuits
 to close"), wait within `SHUTDOWN_GRACE`, kill (`TerminateProcess` on
-Windows), reap. The routine is one; the directory's disposition follows from
+Windows), reap. No `DEL_ONION` precedes the close and no `SIGTERM` follows
+it (Rick, 2026-11-08): the owned Tor's onions end with it, Tor raises
+`SIGTERM` in itself when its owning connection closes, and Windows has no
+signal to send. `DEL_ONION` follows `ProcessOwnership`, not the caller: an
+attached Tor, which is not ours to end, still gets one per published onion
+(`ProcessOwnership::teardown_lines`). A read-side fault records a death while
+the write half is still open; that half is closed before the wait, and the
+recorded death only classifies the exit. On Windows a copy of Tor's socket
+end leaked into another child keeps the connection open (`TSR-F16`); the
+grace's kill bounds that.
+The routine is one; the directory's disposition follows from
 why it ran. At a respawn the directory is kept (`TSR-Q1`), and after the run
 of consecutive launch failures §1 names the next launch takes a fresh one. At
 boot end it is renamed to a tombstone in the same parent (one metadata
@@ -1036,7 +1073,9 @@ with `O_APPEND`), so the log of every incarnation in a directory's life is
 in it. The
 pinned Tor writes no onion address at `notice` or `info` (measured for the
 wallet, `WALLET_SIDE_STORE.md:634`); the daemon's instance is re-measured once
-(`TSR-M9`).
+(`TSR-M9`). The launch passes `SafeLogging 1`, Tor's default, so that the
+scrubbing `TSR-M9` measured does not rest on the default (Rick, 2026-11-08):
+operators paste the daemon's log into bug reports.
 
 ### 4.11 Runtime and timers
 
@@ -1538,15 +1577,15 @@ the record. PR-3's hundred-stop rig is not an acceptance basis.
 | Plant in the parent directory | a symlink named under the sweep's prefix | `std::fs::remove_dir_all` does not follow a symlink; the parent is daemon-owned and the `DataDirectory` 0700; a test plants a symlink to an outside directory and asserts the target survives |
 | Outlive the daemon | the daemon dies, including under `panic = "abort"` | parent death closes the owning socket (C5, measured 2026-10-15); §7's `SIGKILL` case |
 | Hide Tor's death | hold a copy of Tor's socket end, so our read never sees EOF | `TSR-F16`: the supervisor also waits on Tor's process; the Windows inheritance window admits no other spawn (§4.7) |
-| Learn the onion from the log | Tor's log events in the daemon's log | `TSR-M9`; Tor's `SafeLogging` stays at its default |
+| Learn the onion from the log | Tor's log events in the daemon's log | `TSR-M9`; the launch pins `SafeLogging 1`, so the scrubbing does not rest on Tor's default (§4.10) |
 
 ## 9. What this deletes
 
 | Deleted | Where | Replaced by |
 | --- | --- | --- |
 | The no-respawn disposition | `rust/shekyl-tor-control-daemon/src/lib.rs:40-46` | §4.4 |
-| `DEL_ONION` on stop (the daemon's path; the wallet keeps its own) | `rust/shekyl-tor-control-client/src/control/actor.rs:1042-1052` | §4.7 |
-| `SIGTERM` in the managed shutdown | `rust/shekyl-tor-control-client/src/control/actor.rs:889-908` | §4.7 |
+| `DEL_ONION` on stop of an owned Tor (the attached posture keeps it) | **Deleted** (Rick, 2026-11-08): `on_stop` writes it only for `ProcessOwnership::Attached` | §4.7 |
+| `SIGTERM` in the managed shutdown | **Deleted** (Rick, 2026-11-08): `request_graceful_stop` is gone; closing the owning connection is the one graceful route | §4.7 |
 | The per-publish seed, minted and dropped inside `publish` so that Tor is the key's only holder | `rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs:298-304` | the boot's seed in secure memory, republished on each respawn (`TSR-Q1`) |
 | The synchronous wipe in teardown and on drop | `rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs:431-439`; `data_dir.rs` `wipe`, `Drop` | the tombstone (§4.7) |
 | `EventSink::unsubscribed()` on the daemon's path | `rust/shekyl-daemon/src/tor/mod.rs:282` | §4.2 |

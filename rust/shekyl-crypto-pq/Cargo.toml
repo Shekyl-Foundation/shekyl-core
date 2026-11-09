@@ -194,6 +194,14 @@ shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 # hardcodes index `0` for signing (`output_spend_offset_scalar`); see
 # `docs/completed/PRIMARY_CLAIM_DERIVATION_RENAME.md`.
 shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+# The onion keypair a persona bundle holds. Expansion and the public key
+# live in `shekyl-onion-key`, so the Tor control client can mint one
+# without compiling this crate. The persona seed stays here
+# (`derive_p_onion_keypair`).
+shekyl-onion-key = { path = "../shekyl-onion-key" }
+# FN-DSA secret halves. The onion keypair holds the same buffer type, so
+# the type is not this crate's.
+shekyl-heap-secret = { path = "../shekyl-heap-secret" }
 # Typed wallet-state JSON ser/des (WALLET_FILE_FORMAT_V1 region 2). Versioned
 # by `state_schema_version`; mismatched version refuses to load, never silently
 # migrates. JSON field names are the wire format; see wallet_state.rs.

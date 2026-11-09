@@ -16,11 +16,11 @@ use fn_dsa::{SigningKey as _, SigningKey1024};
 use rand::{CryptoRng, RngCore};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::heap_secret::HeapSecret;
 use crate::rng::HedgedOsRng;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::seeded_rng::SeededRng;
 use crate::CryptoError;
+use shekyl_heap_secret::HeapSecret;
 
 use super::{
     nest_fn_dsa_signature, sign_decoded_key, FnDsaHybridSecretKey, FnDsaHybridSignature,

@@ -17,6 +17,7 @@
     clippy::cast_precision_loss,
     clippy::cast_lossless
 )]
+#![deny(unsafe_code)]
 
 mod aggregate;
 mod candidate;

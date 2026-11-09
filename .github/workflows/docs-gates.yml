@@ -167,6 +167,18 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_tx_weight_literals.py --selftest
 
+      - name: Run secret-byte locality check
+        # Rule 36: secret bytes are clamped and reduced only in the
+        # crypto-owning crates; every other production site is a row in
+        # docs/ci/secret-byte-locality.tsv, held in both directions.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_secret_byte_locality.py
+
+      - name: Run secret-byte locality selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_secret_byte_locality.py --selftest
+
       - name: Run forbidden-fossil check
         # Live RCTType* names, GENESIS_STRATEGY.md, privacy-security.mdc in
         # always-applied rules. Instance of 47-gate-subject-assertion.mdc.

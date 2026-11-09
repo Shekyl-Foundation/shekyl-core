@@ -17,26 +17,28 @@
 //! wiped there on drop. The length stays in the type.
 //!
 //! The bytes are borrowed through [`HeapSecret::as_array`] and
-//! [`HeapSecret::as_array_mut`]. There is no [`Deref`]: `[u8; N]` is `Copy`,
+//! [`HeapSecret::as_array_mut`]. There is no [`std::ops::Deref`]: `[u8; N]`
+//! is `Copy`,
 //! and a deref would let `*secret` rebuild the stack copy this type exists
 //! to prevent. A copy is `*secret.as_array()`, which is visible at the call.
-//! That is the same boundary [`crate::keys`] draws with `as_canonical_bytes`.
 //!
 //! It is its own type, and not `Zeroizing<Box<[u8; N]>>`, because `zeroize`
 //! implements `Zeroize` for `Box<[Z]>` and not for `Box<[Z; N]>`, and the
 //! orphan rule keeps that implementation out of this crate. `Zeroizing<Box<[u8]>>`
 //! compiles and loses the length.
 //!
-//! Crate-private. [`crate::archival_p::ArchivalPKeys::hs_id_seed`] is the
-//! public borrow of the one value other crates read. A crate that does not
-//! depend on this one does not gain a dependency to hold its own secrets
-//! this way; the type moves when such a crate needs it.
+//! The type clamps nothing and reduces nothing, so it is not a crypto crate
+//! (rule 36). `shekyl-crypto-pq` holds an FN-DSA secret in one, and
+//! `shekyl-onion-key` holds an onion's expanded secret in one. A crate takes
+//! the dependency when a secret it owns moves with its owner.
+
+#![deny(unsafe_code)]
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// `N` secret bytes at one heap address, wiped on drop. No `Clone`, no
 /// `Copy`, and a `Debug` that prints nothing of the contents.
-pub(crate) struct HeapSecret<const N: usize>(Box<[u8; N]>);
+pub struct HeapSecret<const N: usize>(Box<[u8; N]>);
 
 impl<const N: usize> HeapSecret<N> {
     /// `N` zero bytes, allocated on the heap without an `N`-byte array ever
@@ -44,7 +46,7 @@ impl<const N: usize> HeapSecret<N> {
     /// becomes a boxed array by a conversion that checks the length and
     /// moves nothing.
     #[must_use]
-    pub(crate) fn zeroed() -> Self {
+    pub fn zeroed() -> Self {
         let boxed: Box<[u8; N]> = vec![0u8; N]
             .into_boxed_slice()
             .try_into()
@@ -55,7 +57,7 @@ impl<const N: usize> HeapSecret<N> {
     /// A copy of `bytes` at a fresh heap address. The source is borrowed, so
     /// whoever owns it still owns wiping it.
     #[must_use]
-    pub(crate) fn copied_from(bytes: &[u8; N]) -> Self {
+    pub fn copied_from(bytes: &[u8; N]) -> Self {
         let mut secret = Self::zeroed();
         secret.as_array_mut().copy_from_slice(bytes);
         secret
@@ -63,13 +65,13 @@ impl<const N: usize> HeapSecret<N> {
 
     /// The buffer. A copy of the secret is `*secret.as_array()`.
     #[must_use]
-    pub(crate) fn as_array(&self) -> &[u8; N] {
+    pub fn as_array(&self) -> &[u8; N] {
         &self.0
     }
 
     /// The buffer, writable in place. Key generation writes through this
     /// rather than returning an array.
-    pub(crate) fn as_array_mut(&mut self) -> &mut [u8; N] {
+    pub fn as_array_mut(&mut self) -> &mut [u8; N] {
         &mut self.0
     }
 }
@@ -100,6 +102,10 @@ impl<const N: usize> std::fmt::Debug for HeapSecret<N> {
 mod tests {
     use super::*;
 
+    /// Past a small key. This is the FN-DSA-1024 secret length, the size
+    /// that made an inline secret copy on every move of its owner.
+    const LONG_SECRET_BYTES: usize = 2369;
+
     /// The property the type exists for: it is a pointer, whatever `N` is,
     /// so moving it copies no secret byte.
     #[test]
@@ -109,7 +115,7 @@ mod tests {
             std::mem::size_of::<usize>()
         );
         assert_eq!(
-            std::mem::size_of::<HeapSecret<2369>>(),
+            std::mem::size_of::<HeapSecret<LONG_SECRET_BYTES>>(),
             std::mem::size_of::<usize>()
         );
     }

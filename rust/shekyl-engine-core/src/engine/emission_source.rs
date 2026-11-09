@@ -22,7 +22,7 @@
 //! and enforces this). The request carries `p_id` **only**: no epoch selector,
 //! no range, no claimable-subset encoding (§7.2 transport cause-blindness).
 //!
-//! Untrusted-daemon posture (`20-rust-vs-cpp-policy.mdc` §3): scalar and
+//! Untrusted-daemon posture (the daemon's reply is untrusted bytes): scalar and
 //! bool fields are mandatory — a response missing one is a malformed reply,
 //! loudly rejected, never silently defaulted. Array fields decode absent as
 //! empty. The decode also enforces `status == "OK"` (a `BUSY`/error-shaped body must

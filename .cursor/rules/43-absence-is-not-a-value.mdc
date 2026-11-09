@@ -1,8 +1,7 @@
 ---
-description: Zero is a value; "no result" is None / null. Never encode the absence of a result as an in-range value (0, u64::MAX, "", -1), in a Rust type, across the FFI, on an RPC wire, or in a persisted format. Apply when adding or reviewing any field, return value, FFI export, serde attribute, or wire schema.
+description: Zero is a value; "no result" is None / null. Never encode the absence of a result as an in-range value (0, u64::MAX, "", -1), in a Rust type, on an RPC wire, or in a persisted format. Apply when adding or reviewing any field, return value, serde attribute, or wire schema.
 globs:
   - "**/*.rs"
-  - src/**
   - docs/api/**
   - docs/design/**
 ---
@@ -23,7 +22,7 @@ computation is a fault, not a value: Rick 2026-10-09).
 
 ## The rule
 
-1. **No in-band sentinels at a boundary.** A type, FFI export, RPC field or
+1. **No in-band sentinels at a boundary.** A type, a function's return, an RPC field or
    persisted field never uses a member of its value domain to mean
    "absent", "unknown", "not applicable", "refused" or "hidden". That
    includes `0`, `u64::MAX`, `-1`, `""`, an all-zero hash, and an empty
@@ -32,9 +31,6 @@ computation is a fault, not a value: Rick 2026-10-09).
    - Rust: `Option<T>`. Not a newtype with a magic constant, not a
      `bool` beside a value.
    - JSON wire: `null`.
-   - C ABI (no `Option`): an explicit discriminant — a `has_<field>` byte
-     in the POD, or a distinct return code — never an in-band value
-     ([`40-ffi-discipline`](40-ffi-discipline.mdc): distinct return codes).
    - Persisted (postcard / redb codecs): `Option<T>`, versioned per
      [`42-serialization-policy`](42-serialization-policy.mdc).
 3. **A refusal is not a result.** A computation that refuses (overflow,
@@ -64,12 +60,11 @@ computation is a fault, not a value: Rick 2026-10-09).
      is a decode error, not "withheld";
    - `#[serde(default)]` on a reply field is allowed only when the omitted
      form and the default **mean the same thing** (below).
-6. **Convert inherited sentinels at the boundary, once.** C++ that still
-   writes a sentinel is not patched in place
-   ([`20-rust-vs-cpp-policy`](20-rust-vs-cpp-policy.mdc)); the facts shim
-   that reads it maps it to `Option` and holds no other policy (C5's shape:
-   the core's `0` target decodes as `None` and never reaches a `ChainCount`).
-   The sentinel does not survive into any Rust type.
+6. **Convert inherited sentinels at the boundary, once.** An inherited
+   format that writes a sentinel is read by one decoder, which maps it to
+   `Option` and holds no other policy (C5's shape: a `0` target decodes as
+   `None` and never reaches a `ChainCount`). The sentinel does not survive
+   into any Rust type.
 
 ## What this does not forbid
 
@@ -97,7 +92,7 @@ computation is a fault, not a value: Rick 2026-10-09).
   for an answer?
 - Is a reply field `Option<T>` where a missing key should be an error?
 - Is a flattened optional part allowed to arrive partially?
-- Does an FFI export return `0` for "the subsystem is not there"?
+- Does a function return `0` for "the subsystem is not there"?
 
 ## Known instances (checked at source 2026-10-13, `feat/rk5c-get-info-wire-cleanup@473c447d9`)
 

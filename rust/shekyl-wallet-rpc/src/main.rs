@@ -10,6 +10,7 @@
 //! `shekyl-engine-rpc` wallet2-FFI bridge before it. The flag reference is
 //! `docs/EXECUTABLES.md` §3; the listen posture is
 //! `docs/design/RPC_TRANSPORT_POSTURE.md`.
+#![deny(unsafe_code)]
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -90,10 +91,21 @@ struct Cli {
     log_file: Option<PathBuf>,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let cli = Cli::parse();
+/// The first statement is the process hardening (rule 35, DC-Q21), as in
+/// `shekyld`: no core and no same-account tracer, before an argument is
+/// read, the runtime started, or a wallet opened. A process that cannot
+/// apply it reports the step and exits 1 without starting.
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Err(e) = shekyl_process::harden::harden_process() {
+        return Err(format!("process hardening {e}; not starting").into());
+    }
+    serve(Cli::parse())
+}
 
+/// Everything after the hardening: the log, the listen and auth posture,
+/// and the server, on the runtime this function starts.
+#[tokio::main]
+async fn serve(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = if let Some(ref path) = cli.log_file {
         if path.exists() && path.is_dir() {
             return Err(format!(

@@ -53,6 +53,7 @@
 //!
 //! The schedule's numbers are PROVISIONAL (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
 //! §13.2, rule 21): testnet measurement reopens them.
+#![deny(unsafe_code)]
 
 mod outcome;
 pub mod plan;

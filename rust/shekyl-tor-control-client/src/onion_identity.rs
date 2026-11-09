@@ -3,143 +3,91 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! v3 onion identity encoding: expand a **derived** 32-byte HS-identity
-//! seed into tor's `ED25519-V3` key blob, and compute the `.onion` address
-//! that key implies. The caller supplies the seed; this crate does not know
-//! whether it is archival-P's durable identity or the daemon's ephemeral one.
+//! v3 onion identity: an onion keypair as Tor takes it, the `ED25519-V3` key
+//! blob from its expanded secret and the `.onion` address from its public
+//! key. The caller supplies the keypair; this crate does not know whether it
+//! is a persona's durable onion or the daemon's ephemeral one.
 //!
-//! Relocated from the SP-T3 spike's `onion_key.rs` (its own SPIKE-F-4 note:
-//! *"That is transport surface, not key derivation — in production it belongs
-//! in `shekyl-tor-control-wallet`"*). What lives here is **encoding only**: RFC 8032 §5.1.5
-//! seed expansion (`SHA-512` + clamp) and the rend-spec-v3 §6 address
-//! construction. The seed itself comes from
-//! `shekyl_crypto_pq::archival_p::derive_p_hs_id_seed` — the GF-9 serving
+//! The keypair is `shekyl_onion_key::OnionKeypair`. The RFC 8032 expansion
+//! and the public key are secret-byte operations and live there (rule 36):
+//! a persona's comes from
+//! `shekyl_crypto_pq::archival_p::derive_p_onion_keypair` (the GF-9 serving
 //! label, network-scoped and `p_slot`-bound, frozen under
-//! `ARCHIVAL_P_DERIVE_V2` — and that derivation stays in `shekyl-crypto-pq`
-//! on the **wallet** side of the custody boundary.
+//! `ARCHIVAL_P_DERIVE_V2`), the daemon's from `OnionKeypair::ephemeral`. This
+//! crate hashes, clamps and multiplies nothing secret: it encodes the address
+//! from the public key (rend-spec-v3 §6) and hands the expanded secret to Tor.
 //!
 //! # The custody boundary is the API (`ARCHIVAL_CHALLENGE_MECHANISM.md` §7.2(iii))
 //!
-//! Two concentric constraints:
-//!
-//! 1. **No master seed in this crate.** Expansion takes only the already-
-//!    derived 32-byte HS-identity seed ([`OnionIdentity::from_hs_id_seed`]);
-//!    nothing here accepts a wallet master seed.
-//! 2. **Serving config takes an [`OnionIdentity`], never a seed.** The seed
-//!    is consumed at expansion time and dies with the call; the value that
-//!    crosses into the supervisor is this identity (expanded key + address).
-//!    See `shekyl-tor-control-wallet`'s `onion_service::OnionServiceSpec` (wallet-owned).
-//!
-//! Holding `master_seed` — or holding the derived seed and inviting the
-//! convenient "just pass the seed" wiring — is one edit away from also
-//! holding `bond_spend_pk`'s authority. The type boundary makes that edit
-//! unrepresentable on the serving path.
-//!
-//! # The `Scalar` trap (verified against a real tor, kept from the spike)
-//!
-//! `curve25519_dalek::Scalar::from_bytes_mod_order(clamp_integer(b))`
-//! **reduces mod ℓ**, and a clamped integer is ≥ 2²⁵⁴ > ℓ — so a `Scalar`
-//! round-trip yields a *different* (still valid) key and an unreachable
-//! address. The clamp here is applied to raw bytes and never round-tripped
-//! through a `Scalar`. The SP-T3 spike's live apparatus asserts a real tor
-//! reports byte-identical `ServiceID` for this expansion (the
-//! `published != service_id` fail-stop in its `bring_up_with_pow`, on the
-//! `SHEKYL_TEST_TOR_BINARY` lane).
+//! The serving path holds only the keypair, which is what it hands Tor. No
+//! seed exists outside `shekyl-crypto-pq`, and nothing here accepts a wallet
+//! master seed. Serving config takes an [`OnionIdentity`]; see
+//! `shekyl-tor-control-wallet`'s `onion_service::OnionServiceSpec`
+//! (wallet-owned). A serving process holding `master_seed` would be one edit
+//! away from also holding `bond_spend_pk`'s authority, and the type boundary
+//! makes that edit unrepresentable on the serving path.
 
-use ed25519_dalek::VerifyingKey;
-use sha2::{Digest as _, Sha512};
-use zeroize::Zeroizing;
+use shekyl_onion_key::{OnionKeypair, ONION_EXPANDED_SECRET_BYTES};
 
 use crate::control::onion::{OnionKey, ServiceId, ONION_KEY_BYTES};
 
-/// A persona's onion identity: the **expanded** serving key plus the public
-/// service id it implies — derived **once** in the wallet context and handed
-/// to the serving supervisor as the least-privilege credential.
+// Tor's key blob is the expanded secret, byte for byte.
+const _: () = assert!(ONION_KEY_BYTES == ONION_EXPANDED_SECRET_BYTES);
+
+/// An onion identity: the keypair plus the public service id it implies,
+/// built once and handed to the serving supervisor as the least-privilege
+/// credential.
 ///
-/// # Why this, and not a seed, is the boundary type
+/// # Why this is the boundary type
 ///
 /// The custody ruling (§7.2(iii)) is a property of *which secret crosses
-/// into the serving role*, not of the derivation tree: the wallet's flat
-/// HKDF siblings are independent, but they all derive from `master_seed`,
-/// so a serving process holding `master_seed` — or holding the derived
-/// `hs_id_seed` and thereby inviting the convenient "just pass the seed"
-/// wiring — is one edit away from also holding `bond_spend_pk`'s authority.
-/// So the expansion runs here, on the wallet side ([`Self::from_hs_id_seed`]
-/// consumes the derived seed and it dies at the end of that call), and the
-/// value that reaches the supervisor is this identity: the expanded onion
-/// key (which authorizes exactly one thing — publishing this onion) and its
-/// address. `OnionServiceSpec::new` takes an `OnionIdentity`, never a seed,
-/// so `master_seed` cannot enter the serving config by construction.
+/// into the serving role*. What reaches the supervisor is this identity: the
+/// expanded onion key (which authorizes exactly one thing — publishing this
+/// onion) and its address. `OnionServiceSpec::new` takes an `OnionIdentity`,
+/// so no seed can enter the serving config by construction.
 ///
-/// # Why it holds expanded bytes rather than an [`OnionKey`]
+/// # Why it holds the keypair rather than an [`OnionKey`]
 ///
 /// [`OnionKey`] is deliberately one-shot (non-`Clone`, consumed by
 /// `AddOnion`), but a supervised onion must be **re-published on every
 /// incarnation** (`Detach` is unrepresentable, so the onion dies with its
-/// control connection). This identity therefore holds the expanded bytes and
-/// mints a fresh one-shot [`OnionKey`] per incarnation
-/// ([`Self::mint_onion_key`]) — the `OnionKey` posture is unchanged, and the
-/// re-mintable secret lives behind the same `Zeroizing`/redacting-`Debug`
-/// discipline.
+/// control connection). This identity therefore holds the keypair and mints
+/// a fresh one-shot [`OnionKey`] per incarnation ([`Self::mint_onion_key`]).
 ///
 /// # Not `Clone`
 ///
-/// Same secret posture as [`OnionKey`]: holding these expanded bytes *is*
-/// the persona on the network. Accidental copies are not free; the type is
-/// moved into `shekyl-tor-control-wallet`'s `onion_service::OnionServiceSpec` and remints keys by
-/// reference. Shared ownership, if ever needed, must be an explicit
-/// `Arc<OnionIdentity>` at the call site.
+/// Same secret posture as [`OnionKey`]: holding the expanded secret *is* the
+/// persona on the network. The type is moved into the serving spec and
+/// remints keys by reference. Shared ownership, if ever needed, must be an
+/// explicit `Arc<OnionIdentity>` at the call site.
 pub struct OnionIdentity {
-    expanded: Zeroizing<[u8; ONION_KEY_BYTES]>,
-    /// Ed25519 public key (the JoinMarket serving endpoint). Public, unwrapped.
-    public_key: [u8; 32],
+    keypair: OnionKeypair,
     service_id: ServiceId,
 }
 
 impl OnionIdentity {
-    /// Expand a **derived** 32-byte HS-identity seed (GF-9,
-    /// `derive_p_hs_id_seed`) into the identity tor publishes.
-    ///
-    /// **This function retains nothing**: it borrows the seed for the
-    /// expansion, and the returned identity carries only the expanded key and
-    /// the address.
-    ///
-    /// Whether the *seed* outlives the call is the caller's business, and both
-    /// shapes are legitimate. A wallet-side derivation expands and drops it
-    /// immediately. The `StakeEngine` deliberately keeps it in the persona's
-    /// `ArchivalPKeys` — on the heap, wiped when the bundle drops, and under
-    /// the actor's stop wipe — because [`OnionIdentity`] is not `Clone` and the credential is
-    /// therefore re-minted per request rather than cached. An earlier wording
-    /// here said the seed "does not outlive this call", which described the
-    /// first caller rather than this function; the property that holds for
-    /// every caller is that nothing is retained *here*.
-    ///
-    /// This is the one place a seed touches the onion path — see the type
-    /// doc's custody note.
+    /// The identity for `keypair`: its address, computed here from the
+    /// public key, and the keypair itself, kept for minting.
     #[must_use]
-    pub fn from_hs_id_seed(seed: &[u8; 32]) -> Self {
-        let expanded = expand_seed(seed);
-        let verifying = verifying_key_from_seed(seed);
-        let public_key = verifying.to_bytes();
-        let service_id = service_id_from_pubkey(&public_key);
+    pub fn from_keypair(keypair: OnionKeypair) -> Self {
+        let service_id = service_id_from_pubkey(&keypair.public_key());
         Self {
-            expanded,
-            public_key,
+            keypair,
             service_id,
         }
     }
 
-    /// Raw 32-byte ed25519 public key (JoinMarket serving endpoint).
+    /// Raw 32-byte ed25519 public key (the JoinMarket serving endpoint).
     /// The secret half stays behind [`Self::mint_onion_key`].
     #[must_use]
     pub fn public_key(&self) -> [u8; 32] {
-        self.public_key
+        self.keypair.public_key()
     }
 
     /// The `.onion` service id this key publishes at — authoritative because
-    /// it was computed from the key during derivation, so the supervisor can
-    /// advertise it and fail-stop any incarnation tor publishes differently
-    /// without recomputing anything.
+    /// it was computed from the key when the identity was built, so the
+    /// supervisor can advertise it and fail-stop any incarnation tor
+    /// publishes differently without recomputing anything.
     #[must_use]
     pub fn service_id(&self) -> &ServiceId {
         &self.service_id
@@ -151,49 +99,17 @@ impl OnionIdentity {
     /// `AddOnion`).
     #[must_use]
     pub fn mint_onion_key(&self) -> OnionKey {
-        OnionKey::from_expanded_bytes(*self.expanded)
+        OnionKey::from_expanded_bytes(*self.keypair.expanded_secret())
     }
 }
 
-// Both fields are secret-or-secret-adjacent (the expanded key, and the
-// service id which is the persona's public network identity); render only
-// the type name so neither reaches a log or panic message.
+// The keypair is secret and the service id is the persona's public network
+// identity; render only the type name so neither reaches a log or panic
+// message.
 impl std::fmt::Debug for OnionIdentity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("OnionIdentity(<redacted>)")
     }
-}
-
-/// RFC 8032 §5.1.5 expansion: `SHA-512(seed)`, with the low 32 bytes
-/// clamped.
-///
-/// This is tor's `ED25519-V3` `KeyBlob` payload (before base64). The clamp
-/// is applied to **raw bytes**, never via a `curve25519_dalek::Scalar` —
-/// see the module doc's trap note.
-fn expand_seed(seed: &[u8; 32]) -> Zeroizing<[u8; ONION_KEY_BYTES]> {
-    let mut out = Zeroizing::new([0u8; ONION_KEY_BYTES]);
-    // Copy straight out of the digest into the `Zeroizing` destination. The
-    // digest's own `GenericArray` is not `Zeroize`-able, so it is consumed
-    // immediately rather than bound to a named local that would outlive the
-    // copy (rule 35's hand-off discipline).
-    out.copy_from_slice(&Sha512::digest(seed));
-    out[0] &= 248;
-    out[31] &= 127;
-    out[31] |= 64;
-    out
-}
-
-/// The ed25519 public key for `seed`.
-///
-/// Goes through `SigningKey`, which performs the identical RFC 8032
-/// expansion internally — so the public key here and the secret key tor
-/// receives are two views of one key, and the service id computed below is
-/// the address tor will report.
-fn verifying_key_from_seed(seed: &[u8; 32]) -> VerifyingKey {
-    // `SigningKey` is `ZeroizeOnDrop` in its own right (the `zeroize`
-    // feature is enabled in Cargo.toml), so it wipes when this scope ends.
-    let signing = ed25519_dalek::SigningKey::from_bytes(seed);
-    signing.verifying_key()
 }
 
 /// The v3 `.onion` service id for an ed25519 public key.
@@ -213,65 +129,39 @@ fn service_id_from_pubkey(pubkey: &[u8; 32]) -> ServiceId {
 mod tests {
     use super::*;
 
-    #[test]
-    fn expansion_clamps_and_is_not_a_reduced_scalar() {
-        // The module doc's trap, as an assertion. The clamped low half must
-        // carry the ed25519 clamp bits *unreduced*: bit 254 set, bits 0-2
-        // and 255 clear. A `Scalar::to_bytes()` round-trip would reduce
-        // mod l and clear bit 254, producing a different (still valid) key
-        // and an unreachable address.
-        let seed = [0x11u8; 32];
-        let expanded = expand_seed(&seed);
-        assert_eq!(expanded[0] & 0b0000_0111, 0, "low three bits cleared");
-        assert_eq!(expanded[31] & 0b1000_0000, 0, "bit 255 cleared");
-        assert_eq!(expanded[31] & 0b0100_0000, 0x40, "bit 254 set");
-        // The high half is the untouched PRF secret (SHA-512's tail).
-        let raw = Sha512::digest(seed);
-        assert_eq!(&expanded[32..], &raw[32..]);
+    fn identity() -> OnionIdentity {
+        OnionIdentity::from_keypair(OnionKeypair::ephemeral().expect("OS CSPRNG"))
     }
 
-    /// Golden KAT: a fixed derived seed pins the exact `.onion` string, so
-    /// any drift in expansion, checksum, or alphabet fails byte-exactly
-    /// here instead of surfacing as an unreachable service in the field.
-    /// (The seed→pubkey half of this pipeline is additionally pinned
-    /// cross-arch by `kat_archival_p_derive_v2`'s `hs_id_pubkey` vectors in
-    /// `shekyl-crypto-pq`; the live tor cross-check is the SP-T3 spike's
-    /// `bring_up_with_pow` published-vs-derived fail-stop.)
-    #[test]
-    fn service_id_golden_kat() {
-        let identity = OnionIdentity::from_hs_id_seed(&[0x42u8; 32]);
-        assert_eq!(
-            identity.service_id().as_str(),
-            "efjprum3peosirjsilqv6lvlns3476t3njpngaexsyhangeb3mjo7sad",
-            "the v3 address for the fixed seed"
-        );
-    }
+    // The expansion, the public key and the fixed-seed address are pinned in
+    // `shekyl-onion-key`, and a persona seed's public key in
+    // `kat_archival_p_derive_v2`'s `hs_id_pubkey` vectors.
 
     #[test]
     fn public_key_is_the_service_ids_preimage() {
         // The wire carries the key (EU-D3); the address is a display form a
         // reader reconstructs. If these ever disagree, the endpoint a bond
         // advertises is not the address tor serves.
-        let id = OnionIdentity::from_hs_id_seed(&[7u8; 32]);
+        let keypair = OnionKeypair::ephemeral().expect("OS CSPRNG");
+        let public_key = keypair.public_key();
+        let id = OnionIdentity::from_keypair(keypair);
+        assert_eq!(id.public_key(), public_key);
         assert_eq!(service_id_from_pubkey(&id.public_key()), *id.service_id());
-        assert_eq!(
-            id.public_key(),
-            verifying_key_from_seed(&[7u8; 32]).to_bytes()
-        );
     }
 
     #[test]
-    fn identity_is_deterministic_and_seed_bound() {
-        let a = OnionIdentity::from_hs_id_seed(&[0x5au8; 32]);
-        let a2 = OnionIdentity::from_hs_id_seed(&[0x5au8; 32]);
-        let b = OnionIdentity::from_hs_id_seed(&[0x5bu8; 32]);
-        assert_eq!(a.service_id(), a2.service_id());
-        assert_ne!(a.service_id(), b.service_id());
+    fn the_identity_is_the_keypairs() {
+        let keypair = OnionKeypair::ephemeral().expect("OS CSPRNG");
+        let same = keypair.duplicate();
+        let a = OnionIdentity::from_keypair(keypair);
+        let b = OnionIdentity::from_keypair(same);
+        assert_eq!(a.service_id(), b.service_id());
+        assert_ne!(a.service_id(), identity().service_id());
     }
 
     #[test]
     fn service_id_is_a_wellformed_v3_address() {
-        let id = OnionIdentity::from_hs_id_seed(&[0x77u8; 32]);
+        let id = identity();
         let s = id.service_id().as_str();
         assert_eq!(s.len(), 56);
         assert!(s
@@ -284,7 +174,7 @@ mod tests {
 
     #[test]
     fn identity_debug_redacts() {
-        let id = OnionIdentity::from_hs_id_seed(&[0x33u8; 32]);
+        let id = identity();
         let rendered = format!("{id:?}");
         assert!(!rendered.contains(id.service_id().as_str()));
         assert!(rendered.contains("<redacted>"));

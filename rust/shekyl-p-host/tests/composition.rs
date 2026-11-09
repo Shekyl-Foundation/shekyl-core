@@ -29,6 +29,7 @@ use shekyl_curve_tree::{
     leaves_per_segment, BlockHeight, Gindex, LeafEntry, LeafStore, OutputIdentity,
     PostureDeclaration, SegmentPin, TargetKind, TreePosition,
 };
+use shekyl_onion_key::OnionKeypair;
 use shekyl_p_host::{
     DaemonTipCache, HostError, PassKey, PersonaServing, PersonaServingHost, PinError, PinReport,
     PinnedServeSet, PriorityFailures, RefusingKey, ReportedSet, ServeCounters, ServeObligation,
@@ -325,7 +326,7 @@ fn churning_tor(dir: &tempfile::TempDir) -> WalletTorControlConfig {
 }
 
 fn identity() -> OnionIdentity {
-    OnionIdentity::from_hs_id_seed(&[9u8; 32])
+    OnionIdentity::from_keypair(OnionKeypair::ephemeral().expect("OS CSPRNG"))
 }
 
 /// Opaque frame the composition tests put and expect back.

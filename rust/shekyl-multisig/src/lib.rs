@@ -30,6 +30,7 @@
 //! The E′ spend ceremony itself — the FROST `SigningCeremony` FSM and its nonce
 //! typestates — lands in this crate under MS-5; the format modules below are its
 //! substrate.
+#![deny(unsafe_code)]
 
 pub mod ceremony;
 pub mod encryption;
