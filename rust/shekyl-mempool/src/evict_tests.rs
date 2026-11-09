@@ -8,6 +8,8 @@
 //! minimum at admission, the cheapest leaving first under weight pressure,
 //! and the template's refusals.
 
+use std::ops::{Deref, DerefMut};
+
 use shekyl_chain_rules::harness::fixture::{listed, paying_fee, spendable_chain};
 use shekyl_chain_rules::{AdmissionPolicy, RuleSet};
 use shekyl_chain_store::pool::{PoolRecord, ReceivedHour};
@@ -23,14 +25,37 @@ const ROOMY: Limits = Limits {
     max_weight: u64::MAX,
 };
 
-/// A pool at a fresh path, and the directory that path lives in. The
-/// directory comes first, so a caller's tuple pattern drops the pool before
-/// the directory.
-fn pool(name: &str, limits: Limits) -> (TestPath, Pool) {
+/// A pool and the directory its file lives in.
+///
+/// The pool is the first field. Fields drop in declaration order, so the
+/// pool closes the file before the directory is removed. Hold this value.
+/// A pattern that names the directory last drops the directory first.
+struct OpenedPool {
+    pool: Pool,
+    _path: TestPath,
+}
+
+impl Deref for OpenedPool {
+    type Target = Pool;
+
+    fn deref(&self) -> &Pool {
+        &self.pool
+    }
+}
+
+impl DerefMut for OpenedPool {
+    fn deref_mut(&mut self) -> &mut Pool {
+        &mut self.pool
+    }
+}
+
+/// A pool at a fresh path. The directory is the second field, so it
+/// outlives the pool.
+fn pool(name: &str, limits: Limits) -> OpenedPool {
     let path = tmp(&format!("evict-{name}"));
     let (pool, _) =
         Pool::create(&path, limits, shekyl_chain_rules::HARNESS_NETWORK_ID).expect("create");
-    (path, pool)
+    OpenedPool { pool, _path: path }
 }
 
 const RECORD: PoolRecord = PoolRecord {
@@ -69,7 +94,7 @@ fn a_full_pool_refuses_at_or_below_its_cheapest_before_the_door() {
     let limits = Limits {
         max_weight: weight(),
     };
-    let (_path, mut pool) = pool("full", limits);
+    let mut pool = pool("full", limits);
     let held = pool.plant(tx(5), RECORD);
     let chain = spendable_chain();
     let offer = |pool: &mut Pool, fee: u64| {
@@ -103,7 +128,7 @@ fn a_full_pool_refuses_at_or_below_its_cheapest_before_the_door() {
 /// Under weight pressure the entries paying least per weight leave first.
 #[test]
 fn the_cheapest_leave_first_under_weight_pressure() {
-    let (_path, mut pool) = pool("cheapest", ROOMY);
+    let mut pool = pool("cheapest", ROOMY);
     let dear = pool.plant(tx(9), RECORD);
     let cheap = pool.plant(tx(3), RECORD);
     let middle = pool.plant(tx(7), RECORD);
@@ -130,7 +155,7 @@ fn the_cheapest_leave_first_under_weight_pressure() {
 /// pass ignores `listed`.
 #[test]
 fn a_listed_body_survives_the_over_weight_pass() {
-    let (_path, mut pool) = pool("listed-kept", ROOMY);
+    let mut pool = pool("listed-kept", ROOMY);
     let dear = pool.plant(tx(9), RECORD);
     let cheap = pool.plant(tx(3), RECORD);
     let middle = pool.plant(tx(7), RECORD);
@@ -149,7 +174,7 @@ fn a_listed_body_survives_the_over_weight_pass() {
 /// images; a refusal naming nothing the pool holds evicts nothing.
 #[test]
 fn the_templates_refusals_evict_their_entries_and_images() {
-    let (_path, mut pool) = pool("refused", ROOMY);
+    let mut pool = pool("refused", ROOMY);
     let refused_tx = tx(1);
     let image = crate::pool::key_images_of(&refused_tx)[0];
     let refused = pool.plant(refused_tx, RECORD);
@@ -173,7 +198,7 @@ fn the_templates_refusals_evict_their_entries_and_images() {
 /// flushed once or not at all; the rest stay.
 #[test]
 fn a_flush_removes_the_named_entries_tagged_flushed() {
-    let (_path, mut pool) = pool("flush", ROOMY);
+    let mut pool = pool("flush", ROOMY);
     let flushed_tx = tx(1);
     let image = crate::pool::key_images_of(&flushed_tx)[0];
     let flushed = pool.plant(flushed_tx, RECORD);
@@ -204,7 +229,7 @@ fn a_flush_removes_the_named_entries_tagged_flushed() {
 /// not list it at all (RT-O9.3).
 #[test]
 fn a_stem_entry_is_listed_to_the_host_only() {
-    let (_path, mut pool) = pool("listing", ROOMY);
+    let mut pool = pool("listing", ROOMY);
     let public = pool.plant(tx(1), RECORD);
     let stem = pool.plant(
         tx(2),

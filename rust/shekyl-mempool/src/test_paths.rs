@@ -18,12 +18,22 @@ use tempfile::TempDir;
 /// `.creation-lock` the store keeps beside it. A panicking test drops it
 /// too.
 ///
-/// The directory outlives the open pool: declare this before the pool, or
-/// return it ahead of the pool in a tuple, so the pool drops first.
+/// The directory outlives the open pool.
 ///
-/// [`AsRef<Path>`] is the pool file: every opener in this crate takes
-/// `impl AsRef<Path>`. Bind this value, then borrow it: chaining on the
-/// temporary ends the directory at the end of that statement.
+/// - A local is declared before the pool. Locals drop in reverse
+///   declaration order, so the pool drops first.
+/// - A field is declared after the pool. Fields drop in declaration
+///   order, so the pool drops first.
+///
+/// An owner that holds both stays whole. A struct pattern drops its
+/// bindings in reverse pattern order, so naming the directory last in the
+/// pattern removes it before the pool. A stored `(TestPath, Pool)` is that
+/// field order: dropping the tuple removes the directory while the pool
+/// file is still open.
+///
+/// [`AsRef<Path>`] is the pool file. Bind this value, then borrow it:
+/// chaining on the temporary ends the directory at the end of that
+/// statement.
 pub(crate) struct TestPath {
     path: PathBuf,
     _dir: TempDir,
