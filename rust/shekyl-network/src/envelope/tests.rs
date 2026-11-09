@@ -3,6 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
+use shekyl_crypto_hash::cshake256_32;
+
 use super::*;
 use crate::Network;
 

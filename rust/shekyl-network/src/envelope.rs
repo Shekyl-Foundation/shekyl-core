@@ -32,8 +32,6 @@
 //! says 64. A digest that is itself the signed content of a hybrid
 //! signature keeps 64 (`shekyl_crypto_hash::cshake256_64`'s reason).
 
-use shekyl_crypto_hash::{cshake256_32, cshake256_64};
-
 use crate::{NameId, NetworkId};
 
 /// The binding's width: a [`NetworkId`] or a [`NameId`].
@@ -43,16 +41,42 @@ pub const BINDING_LEN: usize = 16;
 ///
 /// Each names its output type. A [`Framed32`] or [`Framed64`] comes only out
 /// of a `frame` call, so a signer or proof that takes one takes a value this
-/// envelope bound to a network, never bytes a caller assembled.
+/// envelope bound to a network, never bytes a caller assembled. One width is
+/// one output type: two domains of the same width share it, which is the
+/// ruling (2026-11-07). The hash that produces it is sealed, so a width
+/// outside this module cannot exist and a caller cannot hash for itself.
 pub trait Width: sealed::Sealed {
-    /// The digest `frame` returns for this width.
+    /// The digest `frame` returns for this width. `frame` returns it only
+    /// when it is the same type the sealed hash produces.
     type Out;
 }
 
 mod sealed {
-    pub trait Sealed {}
-    impl Sealed for super::W32 {}
-    impl Sealed for super::W64 {}
+    use shekyl_crypto_hash::{cshake256_32, cshake256_64};
+
+    /// The hash `frame` runs. Private, so the only construction of a frame
+    /// output is the `frame` method on [`super::IdDomain`] and
+    /// [`super::NameDomain`].
+    pub trait Sealed {
+        type Out;
+        fn hash(customization: &[u8], input: &[u8]) -> Self::Out;
+    }
+
+    impl Sealed for super::W32 {
+        type Out = super::Framed32;
+
+        fn hash(customization: &[u8], input: &[u8]) -> Self::Out {
+            super::Framed32(cshake256_32(customization, input))
+        }
+    }
+
+    impl Sealed for super::W64 {
+        type Out = super::Framed64;
+
+        fn hash(customization: &[u8], input: &[u8]) -> Self::Out {
+            super::Framed64(cshake256_64(customization, input))
+        }
+    }
 }
 
 /// 32-byte output, the default.
@@ -122,14 +146,6 @@ impl Width for W64 {
     type Out = Framed64;
 }
 
-fn framed32(customization: &[u8], x: &[u8]) -> Framed32 {
-    Framed32(cshake256_32(customization, x))
-}
-
-fn framed64(customization: &[u8], x: &[u8]) -> Framed64 {
-    Framed64(cshake256_64(customization, x))
-}
-
 /// A domain bound to the network's id: signed or proved against the chain.
 /// `N` is its field count, `W` its output width.
 #[derive(Debug)]
@@ -182,35 +198,29 @@ macro_rules! domain_common {
 domain_common!(IdDomain);
 domain_common!(NameDomain);
 
-impl<const N: usize> IdDomain<N, W32> {
-    /// `frame(self, id, fields)`, 32 bytes.
+// The equality is a bound on `frame`, not on `Width`. Naming
+// `Sealed<Out = Self::Out>` as a supertrait cycles while rustc computes
+// `Width`'s supertraits (E0391). `W::Out` is ambiguous (E0221): both
+// traits declare `Out`, so the return type is `<W as Width>::Out`.
+impl<const N: usize, W> IdDomain<N, W>
+where
+    W: Width<Out = <W as sealed::Sealed>::Out>,
+{
+    /// `frame(self, id, fields)` at this domain's width.
     #[must_use]
-    pub fn frame(&self, id: &NetworkId, fields: [&[u8]; N]) -> Framed32 {
-        framed32(self.customization, &input(id, &fields))
+    pub fn frame(&self, id: &NetworkId, fields: [&[u8]; N]) -> <W as Width>::Out {
+        <W as sealed::Sealed>::hash(self.customization, &input(id, &fields))
     }
 }
 
-impl<const N: usize> IdDomain<N, W64> {
-    /// `frame(self, id, fields)`, 64 bytes.
+impl<const N: usize, W> NameDomain<N, W>
+where
+    W: Width<Out = <W as sealed::Sealed>::Out>,
+{
+    /// `frame(self, name_id, fields)` at this domain's width.
     #[must_use]
-    pub fn frame(&self, id: &NetworkId, fields: [&[u8]; N]) -> Framed64 {
-        framed64(self.customization, &input(id, &fields))
-    }
-}
-
-impl<const N: usize> NameDomain<N, W32> {
-    /// `frame(self, name_id, fields)`, 32 bytes.
-    #[must_use]
-    pub fn frame(&self, name: &NameId, fields: [&[u8]; N]) -> Framed32 {
-        framed32(self.customization, &input(name.as_bytes(), &fields))
-    }
-}
-
-impl<const N: usize> NameDomain<N, W64> {
-    /// `frame(self, name_id, fields)`, 64 bytes.
-    #[must_use]
-    pub fn frame(&self, name: &NameId, fields: [&[u8]; N]) -> Framed64 {
-        framed64(self.customization, &input(name.as_bytes(), &fields))
+    pub fn frame(&self, name: &NameId, fields: [&[u8]; N]) -> <W as Width>::Out {
+        <W as sealed::Sealed>::hash(self.customization, &input(name.as_bytes(), &fields))
     }
 }
 
