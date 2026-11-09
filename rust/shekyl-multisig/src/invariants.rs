@@ -283,14 +283,13 @@ mod tests {
 
     #[test]
     fn invariant_id_roundtrip() {
-        for i in [1u8, 2, 3, 4, 7] {
+        for i in [1u8, 2, 3, 4] {
             let id = InvariantId::from_u8(i).unwrap();
             assert_eq!(id as u8, i);
             assert!(!id.description().is_empty());
         }
-        // 0 and 8 are out of range; 5/6 were I5ProverAssignment /
-        // I6AssemblyConsensus, removed with the Option-D prover lineage.
-        for i in [0u8, 5, 6, 8] {
+        // 0 and 8 are out of range; 5, 6 and 7 are not assigned.
+        for i in [0u8, 5, 6, 7, 8] {
             assert!(InvariantId::from_u8(i).is_none());
         }
     }

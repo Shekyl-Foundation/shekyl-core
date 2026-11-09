@@ -492,10 +492,9 @@ mod tests {
     fn canonical_roundtrip_2_of_3() {
         let payload = make_test_payload(3, 2);
         let bytes = payload.to_canonical_bytes();
-        assert_eq!(
-            bytes.len(),
-            HEADER_LEN + 2 * GROUP_POINT_LEN + 3 * PER_PARTICIPANT_LEN
-        );
+        // PQC_MULTISIG.md §6.2's table: 70 + 4 · 1216.
+        assert_eq!(bytes.len(), 4934);
+        assert_eq!(bytes.len(), MultisigAddressPayload::canonical_len_for(3));
         let decoded = MultisigAddressPayload::from_canonical_bytes(&bytes).unwrap();
         assert_eq!(payload, decoded);
     }
@@ -504,10 +503,9 @@ mod tests {
     fn canonical_roundtrip_1_of_1() {
         let payload = make_test_payload(1, 1);
         let bytes = payload.to_canonical_bytes();
-        assert_eq!(
-            bytes.len(),
-            HEADER_LEN + 2 * GROUP_POINT_LEN + PER_PARTICIPANT_LEN
-        );
+        // PQC_MULTISIG.md §6.2's table: 70 + 2 · 1216.
+        assert_eq!(bytes.len(), 2502);
+        assert_eq!(bytes.len(), MultisigAddressPayload::canonical_len_for(1));
         let decoded = MultisigAddressPayload::from_canonical_bytes(&bytes).unwrap();
         assert_eq!(payload, decoded);
     }
@@ -516,11 +514,11 @@ mod tests {
     fn canonical_roundtrip_5_of_5() {
         let payload = make_test_payload(MAX_MULTISIG_PARTICIPANTS, MAX_MULTISIG_PARTICIPANTS);
         let bytes = payload.to_canonical_bytes();
+        // PQC_MULTISIG.md §6.2's table: 70 + 6 · 1216.
+        assert_eq!(bytes.len(), 7366);
         assert_eq!(
             bytes.len(),
-            HEADER_LEN
-                + 2 * GROUP_POINT_LEN
-                + (MAX_MULTISIG_PARTICIPANTS as usize) * PER_PARTICIPANT_LEN
+            MultisigAddressPayload::canonical_len_for(MAX_MULTISIG_PARTICIPANTS)
         );
         let decoded = MultisigAddressPayload::from_canonical_bytes(&bytes).unwrap();
         assert_eq!(payload, decoded);
