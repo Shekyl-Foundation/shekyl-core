@@ -36,12 +36,6 @@ pub const N_MARKET_ARCHIVERS: u64 = 2_000;
 pub const SHARDS_PER_P: u64 = 6;
 /// Order-of-magnitude pure archival serve-credit vin size (bytes).
 pub const CHALLENGE_VIN_BYTES: u64 = 2_048;
-/// The block budget the traffic check divides by: the penalty-free zone,
-/// `shekyl_economics::FULL_REWARD_ZONE`. A declared stand-in, not the limit.
-/// The hard limit is `block_weight_limit`, `k · max(median, zone)`, twice the
-/// zone at genesis, so dividing by the zone overstates the fraction by at most
-/// 2× (Appendix B, R13).
-pub const BLOCK_BUDGET_STAND_IN_BYTES: u64 = shekyl_economics::FULL_REWARD_ZONE;
 /// Fraction of per-SEB block-weight budget above which challenge traffic is binding.
 /// Order-of-magnitude check only; per-P micro-sim cannot settle absolute volume.
 pub const VOLUME_BINDING_FRACTION: f64 = 0.05;
@@ -276,8 +270,11 @@ pub struct PolicyRunStats {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BindingAnalysis {
+    /// Issuance ceiling: count-cap draws per pair per settlement epoch.
     pub challenges_per_p_per_epoch_upper: f64,
+    /// That ceiling across the market, in vin bytes, for one settlement epoch.
     pub challenge_weight_per_seb: u64,
+    /// Genesis block-weight limit over one settlement epoch.
     pub block_weight_budget_per_seb: u64,
     pub volume_fraction_of_block_budget: f64,
     pub volume_binding: bool,
@@ -734,32 +731,86 @@ fn paired_stats(esc: &[SimOutcome], slide: &[SimOutcome]) -> PairedActorStats {
     }
 }
 
+/// Draws the count rule may issue to one pair during one settlement epoch.
+///
+/// Built only from [`ArchivalParams::count_cap_base_multiple`](shekyl_archival_retention::ArchivalParams::count_cap_base_multiple).
+/// That product caps the base rate `D/SEB`, so across one settlement epoch
+/// it is this many draws per pair. [`COUNTED_DRAWS`] is the sample
+/// [`settle_pair`] folds into one row, and the sim's probe grid is the
+/// micro-sim's schedule. Neither converts into this ceiling: the draws
+/// above the sample are shortfall top-ups, and they still take block weight
+/// (Appendix B, R14).
+#[derive(Clone, Copy)]
+struct PairEpochDrawCap(u64);
+
+impl PairEpochDrawCap {
+    fn from_shipped_params() -> Self {
+        Self(shekyl_archival_retention::archival_params().count_cap_base_multiple())
+    }
+
+    fn draws(self) -> u64 {
+        self.0
+    }
+
+    fn market_weight(self) -> u64 {
+        N_MARKET_ARCHIVERS * SHARDS_PER_P * self.0 * CHALLENGE_VIN_BYTES
+    }
+}
+
+/// Bytes one settlement epoch may carry when the median sits at the zone.
+///
+/// [`block_weight_limit`](shekyl_economics::emission::block_weight_limit) is
+/// `k · max(median, zone)`, read from the shipped [`EconomicParams`](shekyl_economics::EconomicParams).
+/// At genesis the median sits at the zone, so the limit is `k` times the
+/// zone. The zone alone is smaller by that multiple, and at the shipped set
+/// the count cap's share of the zone is over [`VOLUME_BINDING_FRACTION`]
+/// while its share of this budget is under it (Appendix B, R13).
+#[derive(Clone, Copy)]
+struct GenesisEpochWeightBudget(u64);
+
+impl GenesisEpochWeightBudget {
+    fn from_shipped_params() -> Self {
+        let economics = shekyl_economics::EconomicParams::default();
+        let per_block =
+            shekyl_economics::emission::block_weight_limit(economics.full_reward_zone, &economics);
+        Self(per_block * SETTLEMENT_EPOCH_BLOCKS)
+    }
+
+    fn bytes(self) -> u64 {
+        self.0
+    }
+}
+
 /// Absolute block-space check (arithmetic; not settled by per-P micro-sim).
+///
+/// `baseline_period` and `recheck_width` are the micro-sim's probe grid.
+/// The chain's count rule does not follow that grid, so neither scales the
+/// ceiling. Both are named in the rationale, which is the report of that
+/// fact.
 pub fn binding_analysis(baseline_period: u32, recheck_width: u32) -> BindingAnalysis {
-    let baseline_rate = 1.0 / baseline_period as f64;
-    // Per observed settlement epoch, production issues `COUNTED_DRAWS` draws
-    // to each (P, shard) pair and settles them into one row; a recheck is
-    // conditional (Appendix B, R14).
-    let challenges_per_p_per_epoch = baseline_rate * COUNTED_DRAWS as f64;
-    let slots_per_epoch = N_MARKET_ARCHIVERS * SHARDS_PER_P;
-    let challenges_per_seb = (slots_per_epoch as f64 * challenges_per_p_per_epoch) as u64;
-    let weight_per_seb = challenges_per_seb * CHALLENGE_VIN_BYTES;
-    let budget_per_seb = BLOCK_BUDGET_STAND_IN_BYTES * SETTLEMENT_EPOCH_BLOCKS;
+    let cap = PairEpochDrawCap::from_shipped_params();
+    let budget = GenesisEpochWeightBudget::from_shipped_params();
+    let weight_per_seb = cap.market_weight();
+    let budget_per_seb = budget.bytes();
     let fraction = weight_per_seb as f64 / budget_per_seb as f64;
     let volume_binding = fraction >= VOLUME_BINDING_FRACTION;
-    // Foundation durability floor: Δslash of a few epochs is not network-load-bearing.
+    // A few epochs of slash latency are not network-load-bearing.
     let latency_binding = false;
+    let probe = format!("probe every {baseline_period} epoch(s), recheck width {recheck_width}");
+    let share = format!("{fraction:.4}");
     let rationale = if volume_binding {
         format!(
-            "challenge weight ≈ {fraction:.4} of block budget per SEB (≥ {VOLUME_BINDING_FRACTION})"
+            "count-cap weight ≈ {share} of the genesis block-weight limit per SEB \
+             (≥ {VOLUME_BINDING_FRACTION}; {probe})"
         )
     } else {
         format!(
-            "challenge weight ≈ {fraction:.4} of block budget per SEB — volume not binding (w={recheck_width})"
+            "count-cap weight ≈ {share} of the genesis block-weight limit per SEB \
+             — volume not binding ({probe})"
         )
     };
     BindingAnalysis {
-        challenges_per_p_per_epoch_upper: challenges_per_p_per_epoch,
+        challenges_per_p_per_epoch_upper: cap.draws() as f64,
         challenge_weight_per_seb: weight_per_seb,
         block_weight_budget_per_seb: budget_per_seb,
         volume_fraction_of_block_budget: fraction,
@@ -1497,17 +1548,53 @@ mod tests {
     }
 
     #[test]
-    fn traffic_counts_the_counted_draws_against_the_zone() {
-        let b = binding_analysis(1, 3);
-        assert_eq!(b.challenges_per_p_per_epoch_upper, COUNTED_DRAWS as f64);
-        assert_eq!(
-            b.block_weight_budget_per_seb,
-            shekyl_economics::FULL_REWARD_ZONE * SETTLEMENT_EPOCH_BLOCKS
+    fn traffic_counts_the_count_cap_against_the_genesis_limit() {
+        let cap = shekyl_archival_retention::archival_params().count_cap_base_multiple();
+        assert!(
+            cap > COUNTED_DRAWS as u64,
+            "the issuance cap is wider than the settlement sample"
         );
+        let b = binding_analysis(1, 3);
+        assert_eq!(b.challenges_per_p_per_epoch_upper, cap as f64);
         assert_eq!(
             b.challenge_weight_per_seb,
-            N_MARKET_ARCHIVERS * SHARDS_PER_P * COUNTED_DRAWS as u64 * CHALLENGE_VIN_BYTES
+            N_MARKET_ARCHIVERS * SHARDS_PER_P * cap * CHALLENGE_VIN_BYTES
         );
+        let economics = shekyl_economics::EconomicParams::default();
+        let per_block =
+            shekyl_economics::emission::block_weight_limit(economics.full_reward_zone, &economics);
+        assert_eq!(
+            b.block_weight_budget_per_seb,
+            per_block * SETTLEMENT_EPOCH_BLOCKS
+        );
+        let zone_budget = shekyl_economics::FULL_REWARD_ZONE * SETTLEMENT_EPOCH_BLOCKS;
+        let zone_fraction = b.challenge_weight_per_seb as f64 / zone_budget as f64;
+        assert!(
+            zone_fraction >= VOLUME_BINDING_FRACTION,
+            "the zone stand-in would call the cap binding ({zone_fraction})"
+        );
+        assert!(b.block_weight_budget_per_seb > zone_budget);
+        assert!(b.volume_fraction_of_block_budget < VOLUME_BINDING_FRACTION);
+        assert!(!b.volume_binding);
+
+        // The chain's count rule does not follow the sim's probe grid.
+        let thin = binding_analysis(5, 9);
+        assert_eq!(
+            thin.challenges_per_p_per_epoch_upper,
+            b.challenges_per_p_per_epoch_upper
+        );
+        assert_eq!(thin.challenge_weight_per_seb, b.challenge_weight_per_seb);
+        assert_eq!(
+            thin.block_weight_budget_per_seb,
+            b.block_weight_budget_per_seb
+        );
+        assert_eq!(
+            thin.volume_fraction_of_block_budget,
+            b.volume_fraction_of_block_budget
+        );
+        assert!(b.rationale.contains("probe every 1"));
+        assert!(thin.rationale.contains("probe every 5"));
+        assert!(thin.rationale.contains("recheck width 9"));
     }
 
     #[test]
