@@ -835,10 +835,13 @@ jobs:
         # that names an AI coding tool fails here even when the local hook
         # was skipped. Needs the full history this job already fetches.
         # Instance of 47-gate-subject-assertion.mdc: an empty range is exit 2.
+        # The range is the pull request's on a pull_request event, and the
+        # push's (`before`..`sha`) on a push to dev, so a merge is checked
+        # rather than failing on a missing base.
         if: '!cancelled()'
         env:
-          COMMIT_MSG_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-          COMMIT_MSG_HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+          COMMIT_MSG_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          COMMIT_MSG_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python3 scripts/ci/check_commit_messages.py --base "$COMMIT_MSG_BASE" --head "$COMMIT_MSG_HEAD"
 
       - name: Run commit-message authorship gate selftest
