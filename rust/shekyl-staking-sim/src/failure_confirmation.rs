@@ -22,7 +22,6 @@ use shekyl_archival_retention::settlement_select::settle_pair;
 use shekyl_types::archival::{IssuedDraw, SettlementOutcome, COUNTED_DRAWS};
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use std::collections::VecDeque;
-use std::sync::OnceLock;
 
 /// L16 onion band-ceiling operating point (scalar `u_eff` does not pin tail shape).
 pub const L16_U_BASE: f64 = crate::scenarios::BASELINE_TRANSPORT_U_BASE;
@@ -46,6 +45,25 @@ pub const BLOCK_BUDGET_STAND_IN_BYTES: u64 = shekyl_economics::FULL_REWARD_ZONE;
 /// Fraction of per-SEB block-weight budget above which challenge traffic is binding.
 /// Order-of-magnitude check only; per-P micro-sim cannot settle absolute volume.
 pub const VOLUME_BINDING_FRACTION: f64 = 0.05;
+
+// Stream distinguishers for the paired L14b runs.
+//
+// A salt is added to one scenario seed so that stream is not the availability
+// stream. A seed is the origin of a whole paired run. The values are the tags
+// of those roles. Several are the ASCII of the role (TRANSIEN, DODGE_, TRANSI,
+// U_SW, HT_HON, DEAD_P). The dodge-sweep origin is not.
+//
+// ESCALATION_STREAM_SALT has the same bits as SplitMix64's per-draw increment.
+// That match is a coincidence. The tag is not the increment: a change to the
+// mix step must not move the escalation stream.
+const TRANSIENT_WINDOW_SALT: u64 = 0x5452_414E_5349_454E;
+const ESCALATION_STREAM_SALT: u64 = 0x9E37_79B9_7F4A_7C15;
+const DODGE_SWEEP_SEED: u64 = 0x000D_0D6E_51D6;
+const DODGE_SERVING_SEED: u64 = 0x444F_4447_455F;
+const TRANSIENT_ONCE_SEED: u64 = 0x5452_414E_5349;
+const HONEST_U_SWEEP_SEED: u64 = 0x555F_5357;
+const HONEST_HOSTING_SEED: u64 = 0x4854_5F48_4F4E;
+const NOT_SERVING_SEED: u64 = 0x4445_4144_5F50;
 
 /// Production's failure window `(m, n)`, from `archival_params()`: the default
 /// every scenario starts from. The other windows in this module are a declared
@@ -409,6 +427,9 @@ fn sample_exp_epochs(mean: f64, rng: &mut SplitMix64) -> u32 {
 fn sample_lognormal_epochs(mean: f64, sigma: f64, rng: &mut SplitMix64) -> u32 {
     // E[exp(N(μ,σ²))] = exp(μ + σ²/2) = mean  ⇒  μ = ln(mean) − σ²/2
     let mu = mean.ln() - sigma * sigma / 2.0;
+    // Local Box–Muller: both uniforms floored at EPSILON, angle in 2π.
+    // `SplitMix64::gaussian` floors one side at 1e-12 and uses τ, so this
+    // outage law does not share that helper.
     let z: f64 = {
         let u1 = rng.unit().max(f64::EPSILON);
         let u2 = rng.unit().max(f64::EPSILON);
@@ -467,15 +488,11 @@ fn can_serve(
 /// (`settle_pair`, `SERVE_THRESHOLD_PASSES` of `COUNTED_DRAWS`).
 ///
 /// The micro-sim's availability is per epoch: an available pair passes every
-/// counted draw and an absent one passes none, so the verdict cannot depend
-/// on which draws the selection counts. Both verdicts are computed once,
-/// through `settle_pair`, and `settle_pair_verdict_is_selection_invariant`
-/// holds the invariance the cache relies on (Appendix B, R14).
+/// counted draw and an absent one passes none. The persona, shard, epoch, and
+/// beacon below stand for any selection.
+/// `settle_pair_verdict_is_selection_invariant` is that proof (Appendix B, R14).
 fn observed_served(available: bool) -> bool {
-    static VERDICTS: OnceLock<[bool; 2]> = OnceLock::new();
-    let verdicts = VERDICTS
-        .get_or_init(|| [false, true].map(|passed| settle_served(passed, [0; 32], 0, 0, 0)));
-    verdicts[usize::from(available)]
+    settle_served(available, [0; 32], 0, 0, 0)
 }
 
 /// `settle_pair` on `COUNTED_DRAWS` issued draws, every one `passed` or not.
@@ -672,7 +689,7 @@ fn paired_for_truth(
             .outage
             .simulate_availability(params.epochs, &mut rng_avail);
         let transient = if truth == GroundTruth::TransientOnce {
-            let mut rng_tr = SplitMix64::new(seed.wrapping_add(0x5452_414E_5349_454E));
+            let mut rng_tr = SplitMix64::new(seed.wrapping_add(TRANSIENT_WINDOW_SALT));
             Some(transient_window(
                 params.epochs as u32,
                 params.outage.true_law,
@@ -681,7 +698,7 @@ fn paired_for_truth(
         } else {
             None
         };
-        let mut rng_esc = SplitMix64::new(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
+        let mut rng_esc = SplitMix64::new(seed.wrapping_add(ESCALATION_STREAM_SALT));
         esc.push(run_escalate(truth, &avail, params, transient, &mut rng_esc));
         slide.push(run_sliding(truth, &avail, params, transient));
     }
@@ -767,7 +784,7 @@ fn dodge_stats(params: &Round1Params) -> DodgeStats {
     for &period in &params.gaming_baseline_sweep {
         let mut p = params.clone();
         p.baseline_period = period;
-        let (esc, _) = paired_for_truth(GroundTruth::DodgeServing, &p, 0x000D_0D6E_51D6);
+        let (esc, _) = paired_for_truth(GroundTruth::DodgeServing, &p, DODGE_SWEEP_SEED);
         let forced = esc.iter().map(|o| o.forced_online_epochs).sum::<u32>() as f64
             / (esc.len() as f64 * params.epochs as f64);
         if forced > best_forced {
@@ -776,7 +793,7 @@ fn dodge_stats(params: &Round1Params) -> DodgeStats {
         }
     }
     let (dodge_esc, dodge_slide) =
-        paired_for_truth(GroundTruth::DodgeServing, params, 0x444F_4447_455F);
+        paired_for_truth(GroundTruth::DodgeServing, params, DODGE_SERVING_SEED);
     let escalate_slash_rate =
         dodge_esc.iter().filter(|o| o.slashed).count() as f64 / dodge_esc.len() as f64;
     let sliding_slash_rate =
@@ -794,7 +811,8 @@ fn dodge_stats(params: &Round1Params) -> DodgeStats {
 }
 
 fn transient_false_slash_sliding(params: &Round1Params) -> f64 {
-    let (_, trans_slide) = paired_for_truth(GroundTruth::TransientOnce, params, 0x5452_414E_5349);
+    let (_, trans_slide) =
+        paired_for_truth(GroundTruth::TransientOnce, params, TRANSIENT_ONCE_SEED);
     stats_from(&trans_slide).false_slashes as f64 / params.seeds as f64
 }
 
@@ -866,7 +884,8 @@ pub fn run_u_sweep(seeds: u32, epochs: usize) -> Vec<USlashPoint> {
             baseline_period: 1,
             gaming_baseline_sweep: vec![1],
         };
-        let (esc, slide) = paired_for_truth(GroundTruth::HonestHosting, &params, 0x555F_5357);
+        let (esc, slide) =
+            paired_for_truth(GroundTruth::HonestHosting, &params, HONEST_U_SWEEP_SEED);
         let esc_rate = stats_from(&esc).slashes as f64 / seeds as f64;
         let slide_rate = stats_from(&slide).slashes as f64 / seeds as f64;
         out.push(USlashPoint {
@@ -1053,11 +1072,11 @@ pub fn run_round1(params: &Round1Params) -> Round1Result {
     let binding = binding_analysis(params.baseline_period, params.recheck_window_width_epochs);
 
     let (honest_esc, honest_slide) =
-        paired_for_truth(GroundTruth::HonestHosting, params, 0x4854_5F48_4F4E);
+        paired_for_truth(GroundTruth::HonestHosting, params, HONEST_HOSTING_SEED);
     let (trans_esc, trans_slide) =
-        paired_for_truth(GroundTruth::TransientOnce, params, 0x5452_414E_5349);
+        paired_for_truth(GroundTruth::TransientOnce, params, TRANSIENT_ONCE_SEED);
     let (dead_esc, dead_slide) =
-        paired_for_truth(GroundTruth::NotServing, params, 0x4445_4144_5F50);
+        paired_for_truth(GroundTruth::NotServing, params, NOT_SERVING_SEED);
     let dodge = dodge_stats(params);
 
     let honest = paired_stats(&honest_esc, &honest_slide);
@@ -1460,9 +1479,9 @@ mod tests {
         );
     }
 
-    /// The cache in `observed_served` holds only if `settle_pair`'s verdict
-    /// on all-pass or all-fail draws does not depend on the selection's
-    /// operands. Sweep them.
+    /// `settle_pair`'s verdict on all-pass or all-fail draws does not depend
+    /// on the selection's operands, so `observed_served` may stand in with
+    /// one persona, shard, epoch, and beacon.
     #[test]
     fn settle_pair_verdict_is_selection_invariant() {
         for epoch in [0u64, 1, 7, 26, 1_000, u64::from(u32::MAX)] {
