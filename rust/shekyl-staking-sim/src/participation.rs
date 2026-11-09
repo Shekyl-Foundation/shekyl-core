@@ -10,7 +10,7 @@
 //!
 //! where `reward_a` is the realized servo share (`reward.rs`), `flow_costs_a` is the
 //! per-epoch storage + bond-carry + pseudonym-split cost, and the denominator is the
-//! capital the actor has actually deployed into deep-shard bonds. An actor stays a
+//! capital the actor has actually deployed into bonds. An actor stays a
 //! bonded archiver only while `apr_a ≥ reservation_a` (its opportunity cost); it also
 //! exits if it deploys *no* bond capital (it came to stake and couldn't — idle capital
 //! pursues its alternative). Exit is hysteretic (a `patience` window) to damp
@@ -84,15 +84,45 @@ pub(crate) fn slash_exit(world: &mut World, a: usize, ap: &AgentParams) -> f64 {
     burned
 }
 
+/// One actor's per-epoch flow cost, split by the unit it is paid in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FlowCost {
+    /// The capital carry on the posted bond ([`CarryShape::Split`]): a rate on
+    /// token capital, like the reservation it adds to, so no price level
+    /// changes it.
+    tokens: f64,
+    /// Storage on every held shard, the operating cost per held shard,
+    /// pseudonym upkeep, and the registered arm's flat carry: the expenses a
+    /// scenario with `flow_cost_fiat` pays in fiat.
+    fiat: f64,
+}
+
+impl FlowCost {
+    /// The cost in tokens. With `flow_cost_fiat`, the fiat part is converted
+    /// at `token_price` (fiat per token); without it, every term is in tokens.
+    fn in_tokens(self, flow_cost_fiat: bool, token_price: f64) -> f64 {
+        let fiat = if flow_cost_fiat {
+            self.fiat / token_price
+        } else {
+            self.fiat
+        };
+        self.tokens + fiat
+    }
+}
+
 /// Per-epoch flow cost for actor `a`: storage on every held shard, the carry
 /// ([`CarryShape`]), and the split cost of any extra pseudonyms.
+///
+/// The registered arm's flat carry is in the fiat part, as its figures were
+/// taken (D1); its token part is exactly 0.0, so its cost is the sum it
+/// always was.
 fn flow_cost(
     world: &World,
     a: usize,
     ap: &AgentParams,
     pseudonyms: usize,
     pp: &ParticipationParams,
-) -> f64 {
+) -> FlowCost {
     let mut shards = 0.0;
     let mut bonded = 0.0;
     for (s, &held) in world.holdings[a].iter().enumerate() {
@@ -103,16 +133,22 @@ fn flow_cost(
             }
         }
     }
-    let carry = match ap.carry {
+    let (tokens, fiat_carry) = match ap.carry {
         CarryShape::Split {
             capital_rate,
             operating_per_shard,
-        } => capital_rate * committed_bond_capital(world, a, ap) + shards * operating_per_shard,
-        CarryShape::FlatPerBond(per_bond) => bonded * per_bond,
+        } => (
+            capital_rate * committed_bond_capital(world, a, ap),
+            shards * operating_per_shard,
+        ),
+        CarryShape::FlatPerBond(per_bond) => (0.0, bonded * per_bond),
     };
-    shards * ap.storage_unit_cost
-        + carry
-        + (pseudonyms.saturating_sub(1)) as f64 * pp.pseudonym_cost
+    FlowCost {
+        tokens,
+        fiat: shards * ap.storage_unit_cost
+            + fiat_carry
+            + (pseudonyms.saturating_sub(1)) as f64 * pp.pseudonym_cost,
+    }
 }
 
 /// Admit up to `entry_per_epoch` currently-inactive actors (lowest index first, so the
@@ -159,15 +195,18 @@ pub fn admit_entrants(world: &mut World, pp: &ParticipationParams) {
 /// `reward_a` and the bond are token-denominated, so they cancel in the ratio and only
 /// *expected* depreciation (the `reservation_add` channel) bites — **if every term is
 /// token-denominated**. But the operational flow cost (bandwidth, storage hardware) is
-/// paid in fiat regardless of token price. When `flow_cost_fiat` is set, the flow cost
-/// is divided by the token price before netting:
+/// paid in fiat regardless of token price. When `flow_cost_fiat` is set, the fiat part
+/// of the flow cost ([`FlowCost`]) is divided by the token price before netting; the
+/// capital carry `K` stays in tokens (P11):
 ///
-/// `apr = (reward_a − flow_cost_a / token_price) / committed_a = R/B − F/(B·p)`
+/// `apr = (reward_a − K_a − F_a / token_price) / committed_a = R/B − K/B − F/(B·p)`
 ///
 /// so a *low static price* raises the real flow-cost drag and can force exit with **no
 /// trust-loss trigger** (`reservation_add = 0`) — a level-driven ignition the
 /// expectation channel does not model. `token_price = 1.0` ⇒ identical to the
-/// token-denominated case; `flow_cost_fiat = false` ⇒ legacy (price never consulted).
+/// token-denominated case; `flow_cost_fiat = false` ⇒ the price is never consulted.
+/// The registered arm has no `K`: its flat carry is in `F`, as its figures were
+/// taken.
 // The exit rule composes one channel per crisis leg (trust bump, acute stress, fiat
 // price); a parameter struct would only relocate the argument list.
 #[allow(clippy::too_many_arguments)]
@@ -192,14 +231,11 @@ pub fn process_exits(
             // Deployed no capital — came to stake, couldn't. Idle capital exits.
             true
         } else {
-            let fcost = flow_cost(world, a, ap, eval.pseudonyms[a], pp);
             // Fiat flow cost (P2): the fiat burden in token terms rises as the price
-            // falls. `token_price = 1.0` (and `!flow_cost_fiat`) reduce to the legacy net.
-            let net = if flow_cost_fiat {
-                eval.rewards[a] - fcost / token_price
-            } else {
-                eval.rewards[a] - fcost
-            };
+            // falls; the capital carry does not (P11).
+            let net = eval.rewards[a]
+                - flow_cost(world, a, ap, eval.pseudonyms[a], pp)
+                    .in_tokens(flow_cost_fiat, token_price);
             let apr = net / committed;
             apr < world.actors[a].reservation * reservation_mult + reservation_add
         };
@@ -349,5 +385,46 @@ mod tests {
             crate::scenarios::BASELINE_CAPITAL_CARRY_RATE * crate::scenarios::BASELINE_BOND_RATE,
             crate::scenarios::BASELINE_BOND_CARRY
         );
+    }
+
+    /// P11: under a fiat flow cost, the split carry's capital term stays in
+    /// tokens and only the fiat expenses are divided by the price. The
+    /// registered flat carry is a fiat expense, as its figures were taken.
+    #[test]
+    fn a_fiat_flow_cost_converts_the_expenses_and_not_the_capital_carry() {
+        let pp = ParticipationParams {
+            entry_per_epoch: 0,
+            patience: 1,
+            pseudonym_cost: 0.05,
+        };
+        let actor = Actor {
+            storage_capacity: 4,
+            capital: 20.0,
+            is_whale: false,
+            reservation: 0.0,
+        };
+        let mut world = World::new(vec![shard(0.9), shard(0.1)], vec![actor]);
+        world.holdings[0] = vec![true, true];
+        let price = 0.25;
+
+        let mut ap = baseline().agent_params();
+        ap.carry = CarryShape::Split {
+            capital_rate: 0.015,
+            operating_per_shard: 0.002,
+        };
+        let bond = committed_bond_capital(&world, 0, &ap);
+        let cost = flow_cost(&world, 0, &ap, 2, &pp);
+        assert_eq!(cost.tokens, 0.015 * bond);
+        let expenses = 2.0 * ap.storage_unit_cost + 2.0 * 0.002 + 0.05;
+        assert_eq!(cost.fiat, expenses);
+        assert_eq!(cost.in_tokens(true, price), 0.015 * bond + expenses / price);
+        assert_eq!(cost.in_tokens(false, price), 0.015 * bond + expenses);
+
+        ap.carry = CarryShape::FlatPerBond(0.03);
+        let cost = flow_cost(&world, 0, &ap, 2, &pp);
+        assert_eq!(cost.tokens, 0.0);
+        let registered = 2.0 * ap.storage_unit_cost + 2.0 * 0.03 + 0.05;
+        assert_eq!(cost.in_tokens(true, price), registered / price);
+        assert_eq!(cost.in_tokens(false, price), registered);
     }
 }
