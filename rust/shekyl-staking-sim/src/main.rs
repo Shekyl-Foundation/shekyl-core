@@ -23,6 +23,7 @@
 //! sealing-form grader of the receipts artifact the `shekyl-engine-core`
 //! `gf7_sealing_run` harness writes from a live-driver run; per WI-4 §19.10.3
 //! a dispersal-regression tripwire).
+#![deny(unsafe_code)]
 
 mod agent;
 mod audit;
