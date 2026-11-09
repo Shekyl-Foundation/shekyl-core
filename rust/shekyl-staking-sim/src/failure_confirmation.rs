@@ -481,15 +481,37 @@ fn can_serve(
     }
 }
 
-/// One pair's settlement verdict for one epoch, through production's fold
+/// Production's settlement verdicts for one paired run, through its fold
 /// (`settle_pair`, `SERVE_THRESHOLD_PASSES` of `COUNTED_DRAWS`).
 ///
 /// The micro-sim's availability is per epoch: an available pair passes every
-/// counted draw and an absent one passes none. The persona, shard, epoch, and
-/// beacon below stand for any selection.
-/// `settle_pair_verdict_is_selection_invariant` is that proof (Appendix B, R14).
-fn observed_served(available: bool) -> bool {
-    settle_served(available, [0; 32], 0, 0, 0)
+/// counted draw and an absent one passes none, so a run needs only those two
+/// verdicts. The persona, shard, epoch, and beacon they are settled at stand
+/// for any selection; `settle_pair_verdict_is_selection_invariant` is that
+/// proof (Appendix B, R14). Each run settles its own pair of verdicts and
+/// passes them to both policies, so the fold is not re-run on every epoch.
+#[derive(Clone, Copy)]
+struct ObservedVerdicts {
+    available: bool,
+    absent: bool,
+}
+
+impl ObservedVerdicts {
+    fn settle() -> Self {
+        Self {
+            available: settle_served(true, [0; 32], 0, 0, 0),
+            absent: settle_served(false, [0; 32], 0, 0, 0),
+        }
+    }
+
+    /// One pair's verdict for one epoch.
+    fn served(self, available: bool) -> bool {
+        if available {
+            self.available
+        } else {
+            self.absent
+        }
+    }
 }
 
 /// `settle_pair` on `COUNTED_DRAWS` issued draws, every one `passed` or not.
@@ -521,6 +543,7 @@ fn run_escalate(
     avail: &[bool],
     params: &Round1Params,
     transient: Option<(u32, u32)>,
+    verdicts: ObservedVerdicts,
     rng: &mut SplitMix64,
 ) -> SimOutcome {
     let epochs = params.epochs as u32;
@@ -545,7 +568,7 @@ fn run_escalate(
                 out.forced_online_epochs += w.end - w.start + 1;
             }
             out.challenges += 1;
-            let serve = observed_served(can_serve(truth, epoch, avail, transient, dodge_window));
+            let serve = verdicts.served(can_serve(truth, epoch, avail, transient, dodge_window));
             pending = None;
             if serve {
                 continue;
@@ -558,7 +581,7 @@ fn run_escalate(
 
         if baseline_due && pending.is_none() {
             out.challenges += 1;
-            let serve = observed_served(can_serve(truth, epoch, avail, transient, None));
+            let serve = verdicts.served(can_serve(truth, epoch, avail, transient, None));
             if serve {
                 continue;
             }
@@ -623,6 +646,7 @@ fn run_sliding(
     avail: &[bool],
     params: &Round1Params,
     transient: Option<(u32, u32)>,
+    verdicts: ObservedVerdicts,
 ) -> SimOutcome {
     let epochs = params.epochs as u32;
     let mut out = SimOutcome::default();
@@ -635,7 +659,7 @@ fn run_sliding(
     // `index · baseline_period` — walk it with `step_by` rather than storing it.
     let missed: Vec<bool> = (0..epochs)
         .step_by(params.baseline_period as usize)
-        .map(|epoch| !observed_served(can_serve(truth, epoch, avail, transient, None)))
+        .map(|epoch| !verdicts.served(can_serve(truth, epoch, avail, transient, None)))
         .collect();
 
     let slash_at = sliding_window_first_slash_baseline(
@@ -679,6 +703,7 @@ fn paired_for_truth(
 ) -> (Vec<SimOutcome>, Vec<SimOutcome>) {
     let mut esc = Vec::with_capacity(params.seeds as usize);
     let mut slide = Vec::with_capacity(params.seeds as usize);
+    let verdicts = ObservedVerdicts::settle();
     for i in 0..params.seeds {
         let seed = base_seed.wrapping_add(i as u64);
         let mut rng_avail = SplitMix64::new(seed);
@@ -696,8 +721,15 @@ fn paired_for_truth(
             None
         };
         let mut rng_esc = SplitMix64::new(seed.wrapping_add(ESCALATION_STREAM_SALT));
-        esc.push(run_escalate(truth, &avail, params, transient, &mut rng_esc));
-        slide.push(run_sliding(truth, &avail, params, transient));
+        esc.push(run_escalate(
+            truth,
+            &avail,
+            params,
+            transient,
+            verdicts,
+            &mut rng_esc,
+        ));
+        slide.push(run_sliding(truth, &avail, params, transient, verdicts));
     }
     (esc, slide)
 }
@@ -1531,8 +1563,8 @@ mod tests {
     }
 
     /// `settle_pair`'s verdict on all-pass or all-fail draws does not depend
-    /// on the selection's operands, so `observed_served` may stand in with
-    /// one persona, shard, epoch, and beacon.
+    /// on the selection's operands, so `ObservedVerdicts` may settle at one
+    /// persona, shard, epoch, and beacon.
     #[test]
     fn settle_pair_verdict_is_selection_invariant() {
         for epoch in [0u64, 1, 7, 26, 1_000, u64::from(u32::MAX)] {
@@ -1543,8 +1575,9 @@ mod tests {
                 }
             }
         }
-        assert!(observed_served(true));
-        assert!(!observed_served(false));
+        let verdicts = ObservedVerdicts::settle();
+        assert!(verdicts.served(true));
+        assert!(!verdicts.served(false));
     }
 
     #[test]
