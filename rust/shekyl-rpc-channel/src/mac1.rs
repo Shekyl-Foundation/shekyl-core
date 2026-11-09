@@ -20,15 +20,17 @@
 //! bundle, which §4.3 already treats as a probing capability.
 //!
 //! Each label is held at its input's type: the key derives from a
-//! [`StaticPublic`] bundle, and a busy reply answers a [`Mac1Tag`], which
-//! only [`Mac1Key::mac1`] makes and [`Mac1Key::verify`] hands back.
+//! [`StaticPublic`] bundle, and a busy reply is a method of the
+//! [`Mac1Tag`] that [`Mac1Key::mac1`] made or [`Mac1Key::verify`] handed
+//! back. The tag borrows that key, so a reply is under the key that
+//! proved the tag and no other.
 
 use blake2::digest::consts::U16;
 use blake2::digest::{Digest, Mac};
 use blake2::{Blake2s256, Blake2sMac};
 use subtle::ConstantTimeEq;
 
-use crate::handshake::StaticPublic;
+use crate::static_public::StaticPublic;
 use crate::{BUSY_LEN, MAC1_LEN};
 
 /// The label the mac1 key is derived from: the key is BLAKE2s-256 of these
@@ -47,17 +49,35 @@ const MAC1_KEY_LEN: usize = 32;
 /// The mac1 key of one daemon's bundle.
 pub(crate) struct Mac1Key([u8; MAC1_KEY_LEN]);
 
-/// The mac1 of one message 1: made under a bundle's key, or read off the
-/// wire and proved by recomputing it. There is no way to make one from
-/// bytes, so a busy reply answers only a message 1 that passed mac1.
+/// The mac1 of one message 1, bound to the key that produced it.
+///
+/// Made by [`Mac1Key::mac1`], or handed back by [`Mac1Key::verify`] after
+/// the wire bytes match the recomputation. There is no constructor from
+/// bytes. [`Self::busy`] answers under `key`, so a tag proved by one
+/// bundle cannot be answered by another.
 #[derive(Clone, Copy)]
-pub struct Mac1Tag([u8; MAC1_LEN]);
+pub(crate) struct Mac1Tag<'a> {
+    key: &'a Mac1Key,
+    bytes: [u8; MAC1_LEN],
+}
 
-impl Mac1Tag {
+impl Mac1Tag<'_> {
     /// The tag as it travels after the Noise message.
     #[must_use]
-    pub fn as_bytes(&self) -> &[u8; MAC1_LEN] {
-        &self.0
+    pub(crate) fn as_bytes(&self) -> &[u8; MAC1_LEN] {
+        &self.bytes
+    }
+
+    /// The busy reply to the message 1 this tag authenticates: keyed
+    /// BLAKE2s-128 over [`BUSY_DST`] then these bytes, under the key that
+    /// produced the tag. It answers one message 1 only, since every
+    /// message 1 carries a fresh ephemeral and so a fresh mac1.
+    #[must_use]
+    pub(crate) fn busy(&self) -> [u8; BUSY_LEN] {
+        let mut mac = self.key.keyed();
+        mac.update(BUSY_DST);
+        mac.update(&self.bytes);
+        mac.finalize().into_bytes().into()
     }
 }
 
@@ -76,30 +96,24 @@ impl Mac1Key {
         <Blake2sMac<U16> as Mac>::new_from_slice(&self.0).expect("a 32-byte BLAKE2s key")
     }
 
-    /// The mac1 of a Noise message 1.
-    pub(crate) fn mac1(&self, noise_message1: &[u8]) -> Mac1Tag {
+    /// The mac1 of a Noise message 1. The tag borrows this key.
+    pub(crate) fn mac1(&self, noise_message1: &[u8]) -> Mac1Tag<'_> {
         let mut mac = self.keyed();
         mac.update(noise_message1);
-        Mac1Tag(mac.finalize().into_bytes().into())
+        Mac1Tag {
+            key: self,
+            bytes: mac.finalize().into_bytes().into(),
+        }
     }
 
-    /// The tag, when `tag` is the mac1 of `noise_message1`: compared in
-    /// constant time, so the time taken does not say how many leading bytes
-    /// of a forgery were right.
-    pub(crate) fn verify(&self, noise_message1: &[u8], tag: &[u8]) -> Option<Mac1Tag> {
+    /// The recomputed tag, when `tag` is the mac1 of `noise_message1`:
+    /// compared in constant time, so the time taken does not say how many
+    /// leading bytes of a forgery were right. The returned tag borrows
+    /// this key, not the wire bytes.
+    pub(crate) fn verify(&self, noise_message1: &[u8], tag: &[u8]) -> Option<Mac1Tag<'_>> {
         let expected = self.mac1(noise_message1);
-        (tag.len() == MAC1_LEN && bool::from(tag.ct_eq(expected.0.as_slice()))).then_some(expected)
-    }
-
-    /// The busy reply to the message 1 whose mac1 is `tag`: keyed
-    /// BLAKE2s-128 over [`BUSY_DST`] then that mac1. It answers one message
-    /// 1 only, since every message 1 carries a fresh ephemeral and so a
-    /// fresh mac1.
-    pub(crate) fn busy(&self, tag: &Mac1Tag) -> [u8; BUSY_LEN] {
-        let mut mac = self.keyed();
-        mac.update(BUSY_DST);
-        mac.update(&tag.0);
-        mac.finalize().into_bytes().into()
+        (tag.len() == MAC1_LEN && bool::from(tag.ct_eq(expected.bytes.as_slice())))
+            .then_some(expected)
     }
 }
 
@@ -171,9 +185,30 @@ mod tests {
             hex::encode(tag.as_bytes()),
             "81422da8958bceb200e31cb50c35f639"
         );
-        assert_eq!(
-            hex::encode(key.busy(&tag)),
-            "d0bc52c26a1c24ad22c8ee575a786b52"
-        );
+        assert_eq!(hex::encode(tag.busy()), "d0bc52c26a1c24ad22c8ee575a786b52");
+    }
+
+    /// A busy reply is under the key that proved the tag. The same tag
+    /// bytes under another bundle's key are a different reply, and there
+    /// is no production function that computes that reply.
+    #[test]
+    fn a_busy_reply_is_under_the_key_that_proved_the_tag() {
+        let key = Mac1Key::of(&bundle([0x11; X25519_PUBLIC_LEN], [0x22; MLKEM768_EK_LEN]));
+        let mut other_ek = [0x22; MLKEM768_EK_LEN];
+        other_ek[0] ^= 1;
+        let other = Mac1Key::of(&bundle([0x33; X25519_PUBLIC_LEN], other_ek));
+        let tag = key.mac1(&[0x5a; 64]);
+        assert_eq!(busy_over(&key, tag.as_bytes()), tag.busy());
+        assert_ne!(busy_over(&other, tag.as_bytes()), tag.busy());
+    }
+
+    /// What a busy reply would be if a key could answer a tag it did not
+    /// prove. Production has no such function: [`Mac1Tag::busy`] uses the
+    /// key inside the tag.
+    fn busy_over(key: &Mac1Key, tag: &[u8; MAC1_LEN]) -> [u8; BUSY_LEN] {
+        let mut mac = key.keyed();
+        mac.update(BUSY_DST);
+        mac.update(tag);
+        mac.finalize().into_bytes().into()
     }
 }

@@ -96,7 +96,8 @@ mod identity;
 
 use identity::{dh, Ephemeral};
 
-pub use identity::{InvalidStaticPublic, StaticKeypair, StaticPublic};
+pub use crate::static_public::{InvalidStaticPublic, StaticPublic};
+pub use identity::StaticKeypair;
 
 /// The Noise protocol name. It is hashed into the transcript, so it is part
 /// of the wire format.
@@ -288,7 +289,7 @@ impl Client {
         // skem: encapsulate to the daemon's static key. No cipher key yet,
         // so the ciphertext travels in the clear and is hashed.
         let (shared, ciphertext) = daemon
-            .mlkem_ek
+            .encaps_key()
             .try_encaps_with_rng(rng)
             .map_err(|_| HandshakeError::Local)?;
         let sent = sym
@@ -321,9 +322,9 @@ impl Client {
         // mac1, outside the Noise message: proof to the daemon that the
         // sender holds its bundle, checked before any long-term key is used.
         let key = Mac1Key::of(daemon);
-        let tag = key.mac1(&message);
-        message.extend_from_slice(tag.as_bytes());
-        let busy = key.busy(&tag);
+        let mac1 = key.mac1(&message);
+        message.extend_from_slice(mac1.as_bytes());
+        let busy = mac1.busy();
         Ok((
             ClientAwaitingMessage2 {
                 sym,
@@ -590,7 +591,7 @@ impl<'a> Daemon<'a> {
         match budget.present(&mac1, now) {
             Admission::Replay => return Err(fail),
             Admission::Busy => {
-                return Ok(Message1Admission::Busy(self.own.busy_reply(&mac1)));
+                return Ok(Message1Admission::Busy(mac1.busy()));
             }
             Admission::Admitted => {}
         }
@@ -783,7 +784,7 @@ impl DaemonReadyForMessage4 {
         // sealed.
         let (shared, ciphertext) = self
             .client
-            .mlkem_ek
+            .encaps_key()
             .try_encaps_with_rng(rng)
             .map_err(|_| fail)?;
         let sealed = self
@@ -1093,7 +1094,7 @@ mod support {
     /// check after mac1 uses this, so the message reaches that check.
     pub(super) fn remac(daemon: &StaticKeypair, wire: &mut [u8]) {
         let (noise, mac1) = wire.split_at_mut(MESSAGE1_LEN);
-        mac1.copy_from_slice(daemon.public().mac1(noise).as_bytes());
+        mac1.copy_from_slice(&daemon.mac1(noise));
     }
 
     /// A budget that never runs out within a test.

@@ -172,7 +172,7 @@ impl HandshakeBudget {
     /// Present `mac1` at `now`. A repeat is [`Admission::Replay`] and does
     /// not move the balance. A first presentation is charged, and remembered
     /// until a ruled burst of newer mac1s has followed it.
-    pub(crate) fn present(&self, mac1: &Mac1Tag, now: Instant) -> Admission {
+    pub(crate) fn present(&self, mac1: &Mac1Tag<'_>, now: Instant) -> Admission {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         // A repeat returns before the refill, so `last` stays where the
         // previous first presentation left it and the next new mac1 still
@@ -229,35 +229,41 @@ fn nanos(d: Duration) -> u64 {
     u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
 
-/// The mac1 of `n`'s bytes under one fixed bundle: a distinct tag per `n`.
+/// One bundle's mac1 key. A tag borrows it, so a test owns the key and
+/// asks for each tag, instead of rebuilding the bundle per tag.
 #[cfg(test)]
-fn tag(n: u64) -> Mac1Tag {
+fn test_key() -> crate::mac1::Mac1Key {
     use crate::handshake::StaticPublic;
     use crate::{MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
     let bundle = StaticPublic::from_parts([0x11; X25519_PUBLIC_LEN], [0x22; MLKEM768_EK_LEN])
         .expect("a valid test bundle");
-    crate::mac1::Mac1Key::of(&bundle).mac1(&n.to_le_bytes())
+    crate::mac1::Mac1Key::of(&bundle)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn mac(key: &crate::mac1::Mac1Key, n: u64) -> crate::mac1::Mac1Tag<'_> {
+        key.mac1(&n.to_le_bytes())
+    }
+
     /// The ruled budget admits 115 at once and 115 a second after, and the
     /// replay window is that same burst.
     #[test]
     fn the_ruled_budget_is_115_handshakes_a_second() {
+        let key = test_key();
         let t0 = Instant::now();
         let budget = HandshakeBudget::new(t0);
         assert_eq!(budget.burst_admissions(), 115);
         assert_eq!(HANDSHAKE_REPLAY_SLOTS, 115);
         let admitted = (0..1_000)
-            .filter(|i| budget.present(&tag(*i), t0) == Admission::Admitted)
+            .filter(|i| budget.present(&mac(&key, *i), t0) == Admission::Admitted)
             .count();
         assert_eq!(admitted, 115, "the burst, then nothing");
         let later = t0 + Duration::from_secs(1);
         let admitted = (0..1_000)
-            .filter(|i| budget.present(&tag(1_000 + *i), later) == Admission::Admitted)
+            .filter(|i| budget.present(&mac(&key, 1_000 + *i), later) == Admission::Admitted)
             .count();
         assert_eq!(admitted, 115, "one second earns one second's share");
     }
@@ -266,6 +272,7 @@ mod tests {
     /// of the window plus the burst, however the attempts are spaced.
     #[test]
     fn admitted_charges_never_exceed_the_share_plus_the_burst() {
+        let key = test_key();
         let t0 = Instant::now();
         let budget = HandshakeBudget::new(t0);
         let window = Duration::from_secs(10);
@@ -273,7 +280,7 @@ mod tests {
         let attempts = 100_000u64;
         for i in 0..attempts {
             let now = t0 + window * u32::try_from(i).unwrap() / u32::try_from(attempts).unwrap();
-            admitted += u64::from(budget.present(&tag(i), now) == Admission::Admitted);
+            admitted += u64::from(budget.present(&mac(&key, i), now) == Admission::Admitted);
         }
         let spent = admitted * HANDSHAKE_DAEMON_CPU_NANOS;
         let allowed = nanos(window) * HANDSHAKE_CPU_SHARE_PERMILLE / 1_000
@@ -288,21 +295,25 @@ mod tests {
     /// Time that runs backwards earns nothing and spends nothing extra.
     #[test]
     fn an_earlier_instant_earns_nothing() {
+        let key = test_key();
         let t0 = Instant::now() + Duration::from_secs(5);
         let budget = HandshakeBudget::new(t0);
         let burst = budget.burst_admissions();
         for i in 0..burst {
-            assert_eq!(budget.present(&tag(i), t0), Admission::Admitted);
+            assert_eq!(budget.present(&mac(&key, i), t0), Admission::Admitted);
         }
         assert_eq!(
-            budget.present(&tag(burst), t0.checked_sub(Duration::from_secs(1)).unwrap()),
+            budget.present(
+                &mac(&key, burst),
+                t0.checked_sub(Duration::from_secs(1)).unwrap()
+            ),
             Admission::Busy,
             "time that runs backwards earns no admission"
         );
         // Nor does it move the clock back: presenting at t0 again earns
         // nothing for the second it went backwards.
         assert_eq!(
-            budget.present(&tag(burst + 1), t0),
+            budget.present(&mac(&key, burst + 1), t0),
             Admission::Busy,
             "a later presentation at t0 earns nothing for the backwards step"
         );
@@ -313,11 +324,12 @@ mod tests {
     /// ruled burst of newer mac1s is what lets the first be presented again.
     #[test]
     fn a_mac1_is_charged_once_until_the_window_forgets_it() {
+        let key = test_key();
         let t0 = Instant::now();
         let two = Duration::from_nanos(HANDSHAKE_DAEMON_CPU_NANOS * 2);
         let budget = HandshakeBudget::with_share(1_000, two, t0);
         assert_eq!(budget.burst_admissions(), 2);
-        let first = tag(u64::MAX);
+        let first = mac(&key, u64::MAX);
         assert_eq!(budget.present(&first, t0), Admission::Admitted);
         assert_eq!(budget.present(&first, t0), Admission::Replay);
         assert_eq!(
@@ -326,16 +338,16 @@ mod tests {
             "time passing does not make a remembered mac1 fresh"
         );
         assert_eq!(
-            budget.present(&tag(1), t0),
+            budget.present(&mac(&key, 1), t0),
             Admission::Admitted,
             "the replay did not spend the second admission"
         );
-        assert_eq!(budget.present(&tag(2), t0), Admission::Busy);
+        assert_eq!(budget.present(&mac(&key, 2), t0), Admission::Busy);
 
         let wide = HandshakeBudget::with_share(1_000, Duration::from_secs(3_600), t0);
         assert_eq!(wide.present(&first, t0), Admission::Admitted);
         for n in 0..HANDSHAKE_REPLAY_SLOTS {
-            assert_eq!(wide.present(&tag(n), t0), Admission::Admitted);
+            assert_eq!(wide.present(&mac(&key, n), t0), Admission::Admitted);
         }
         assert_eq!(
             wide.present(&first, t0),
@@ -348,12 +360,13 @@ mod tests {
     /// the first is still refused as a replay.
     #[test]
     fn the_window_holds_exactly_the_ruled_burst() {
+        let key = test_key();
         let t0 = Instant::now();
         let wide = HandshakeBudget::with_share(1_000, Duration::from_secs(3_600), t0);
-        let first = tag(u64::MAX - 1);
+        let first = mac(&key, u64::MAX - 1);
         assert_eq!(wide.present(&first, t0), Admission::Admitted);
         for n in 0..HANDSHAKE_REPLAY_SLOTS - 1 {
-            assert_eq!(wide.present(&tag(n), t0), Admission::Admitted);
+            assert_eq!(wide.present(&mac(&key, n), t0), Admission::Admitted);
         }
         assert_eq!(
             wide.present(&first, t0),
@@ -367,12 +380,13 @@ mod tests {
     /// refilled, the same message 1 is a replay, not a fresh admission.
     #[test]
     fn a_mac1_answered_busy_is_remembered() {
+        let key = test_key();
         let t0 = Instant::now();
         let none = HandshakeBudget::with_share(1_000, Duration::ZERO, t0);
         let one = Duration::from_nanos(HANDSHAKE_DAEMON_CPU_NANOS);
         let refilling = HandshakeBudget::with_share(1_000, one, t0);
-        assert_eq!(refilling.present(&tag(0), t0), Admission::Admitted);
-        let answered = tag(u64::MAX - 2);
+        assert_eq!(refilling.present(&mac(&key, 0), t0), Admission::Admitted);
+        let answered = mac(&key, u64::MAX - 2);
         assert_eq!(refilling.present(&answered, t0), Admission::Busy);
         assert_eq!(
             refilling.present(&answered, t0 + Duration::from_secs(1)),

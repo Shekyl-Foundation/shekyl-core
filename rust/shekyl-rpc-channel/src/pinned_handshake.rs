@@ -108,7 +108,7 @@ fn run() -> Run {
     let (noise_message1, mac1) = message1.split_at(MESSAGE1_LEN);
     assert_eq!(
         mac1,
-        daemon_static.public().mac1(noise_message1).as_bytes(),
+        daemon_static.mac1(noise_message1).as_slice(),
         "message 1's mac1 is the daemon bundle's, over the Noise message"
     );
     let budget = HandshakeBudget::new(std::time::Instant::now());

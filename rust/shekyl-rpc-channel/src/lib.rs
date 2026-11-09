@@ -33,8 +33,7 @@ pub mod deadline;
 pub mod handshake;
 mod mac1;
 pub mod retry;
-
-pub use mac1::Mac1Tag;
+mod static_public;
 
 /// First part of the handshake prologue. Not a hash customization: the bytes
 /// themselves are mixed into the handshake transcript, followed by the

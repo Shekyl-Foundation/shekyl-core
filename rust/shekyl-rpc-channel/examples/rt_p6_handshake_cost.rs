@@ -501,8 +501,8 @@ mod linux {
         // mac1 and reaches them.
         let tag_start = MESSAGE1_LEN - TAG_LEN;
         body[tag_start + TAG_LEN - 1] ^= TAG_BYTE_FLIP;
-        let mac1 = daemon_id.public().mac1(&body[..MESSAGE1_LEN]);
-        body[MESSAGE1_LEN..].copy_from_slice(mac1.as_bytes());
+        let mac1 = daemon_id.mac1(&body[..MESSAGE1_LEN]);
+        body[MESSAGE1_LEN..].copy_from_slice(&mac1);
         body
     }
 

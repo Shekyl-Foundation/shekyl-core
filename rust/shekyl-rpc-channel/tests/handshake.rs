@@ -36,7 +36,7 @@ fn budget() -> HandshakeBudget {
 /// check after mac1 that it names.
 fn remac(daemon: &StaticKeypair, wire: &mut [u8]) {
     let (noise, mac1) = wire.split_at_mut(MESSAGE1_LEN);
-    mac1.copy_from_slice(daemon.public().mac1(noise).as_bytes());
+    mac1.copy_from_slice(&daemon.mac1(noise));
 }
 
 /// Read message 1 on a budget that does not run out. Busy is a test failure:
