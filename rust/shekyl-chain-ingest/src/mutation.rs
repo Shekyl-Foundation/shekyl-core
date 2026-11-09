@@ -61,7 +61,7 @@ use core::fmt;
 use shekyl_chain_rules::{ArchivalKey, Candidate, CenRow};
 use shekyl_difficulty::{check_hash, is_timestamp_below_ftl, Difficulty, FTL_SECONDS};
 use shekyl_types::{
-    AttestationRoot, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp,
+    BlockCount, BlockHash, BlockHeight, BundleRoot, CurveTreeRoot, PowHash, Timestamp,
 };
 use shekyl_wire::transaction::MAX_FCMP_INPUTS;
 use shekyl_wire::{Ct, Input, Transaction};
@@ -93,12 +93,12 @@ const ORPHAN_PARENT: [u8; 32] = [0x77; 32];
 const UNHELD_ROOT_FILL: u8 = 0x5a;
 pub(crate) const UNHELD_ROOT: [u8; 32] = [UNHELD_ROOT_FILL; 32];
 
-/// An `attestation_root` no attestation set recomputes to when nothing is
-/// supplied — [`Mutation::WrongAttestationRoot`]'s. A block carrying no
-/// witness and no `0x0B` field commits the empty set, whose root is a
-/// hash (`empty_attestation_root`); a constant fill is not it, and
-/// `mutation_tests` pins the inequality.
-pub(crate) const UNHELD_ATTESTATION_ROOT: [u8; 32] = [0x5b; 32];
+/// A `bundle_root` no section recomputes to when the block admits no
+/// bundle — [`Mutation::WrongBundleRoot`]'s. A block that admits none
+/// commits the empty section, whose root is a hash (`empty_bundle_root`);
+/// a constant fill is not it, and `mutation_source_tests` pins the
+/// inequality.
+pub(crate) const UNHELD_BUNDLE_ROOT: [u8; 32] = [0x5b; 32];
 
 /// A `referenceBlock` no chain holds — [`Mutation::UnknownReference`]'s.
 /// Its own value, like [`ORPHAN_PARENT`]: this module is production code
@@ -165,13 +165,13 @@ pub enum Mutation {
     Orphan,
     /// `curve_tree_root` replaced by a root the tree never had.
     WrongRoot,
-    /// `attestation_root` replaced, nothing else: no witness, no `0x0B`
+    /// `bundle_root` replaced, nothing else: no witness, no `0x0B`
     /// field, so the set is empty and the mined root is not the empty
     /// set's. CEN-B4's empty-witness arm — CEN-A3's falsifier — at the
     /// block (`CHAIN_RULES_SLICE_8.md` §5 row 10). The record arm has no
     /// mutation: CEN-I20's coinbase grammar admits no `0x0B` field, so no
     /// driven block carries a record to corrupt (slice 8's finding).
-    WrongAttestationRoot,
+    WrongBundleRoot,
     /// `timestamp` = `clock + FTL + 1`: one second past the future-time
     /// limit the substrate's clock allows. Closes §5's FTL row.
     /// [`Unmutable`] at genesis and when that instant does not fit.
@@ -325,7 +325,7 @@ impl Mutation {
         Self::HeaderVersion,
         Self::Orphan,
         Self::WrongRoot,
-        Self::WrongAttestationRoot,
+        Self::WrongBundleRoot,
         Self::FutureTimestamp,
         Self::StaleTimestamp,
         Self::PowUnderWrongSeed,
@@ -353,7 +353,7 @@ impl Mutation {
             Self::HeaderVersion => CenRow::B1,
             Self::Orphan => CenRow::A2,
             Self::WrongRoot => CenRow::B5,
-            Self::WrongAttestationRoot => CenRow::B4,
+            Self::WrongBundleRoot => CenRow::B4,
             Self::FutureTimestamp => CenRow::C1,
             Self::StaleTimestamp => CenRow::C2,
             Self::PowUnderWrongSeed => CenRow::D1,
@@ -381,7 +381,7 @@ impl Mutation {
             Self::HeaderVersion
             | Self::Orphan
             | Self::WrongRoot
-            | Self::WrongAttestationRoot
+            | Self::WrongBundleRoot
             | Self::FutureTimestamp
             | Self::StaleTimestamp
             // F14's evidence is the block's summed weight (slice 7 Q8).
@@ -451,9 +451,8 @@ impl Mutation {
             Self::WrongRoot => {
                 candidate.block.header.curve_tree_root = CurveTreeRoot::from_bytes(UNHELD_ROOT);
             }
-            Self::WrongAttestationRoot => {
-                candidate.block.header.attestation_root =
-                    AttestationRoot::from_bytes(UNHELD_ATTESTATION_ROOT);
+            Self::WrongBundleRoot => {
+                candidate.block.header.bundle_root = BundleRoot::from_bytes(UNHELD_BUNDLE_ROOT);
             }
             Self::FutureTimestamp => {
                 self.refuse_genesis(at)?;

@@ -49,13 +49,13 @@
 //! ```compile_fail
 //! // HEIGHT_SEMANTICS.md C9: `BlockHeaderFacts.depth` is a span, not an ordinal.
 //! use shekyl_daemon_rpc::chain_facts::BlockHeaderFacts;
-//! use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, TxHash};
+//! use shekyl_types::{BundleRoot, BlockHash, BlockHeight, CurveTreeRoot, TxHash};
 //! let _ = BlockHeaderFacts {
 //!     hash: BlockHash::from_bytes([0u8; 32]),
 //!     prev_hash: BlockHash::from_bytes([0u8; 32]),
 //!     miner_tx_hash: TxHash::from_bytes([0u8; 32]),
 //!     curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
-//!     attestation_root: AttestationRoot::from_bytes([0u8; 32]),
+//!     bundle_root: BundleRoot::from_bytes([0u8; 32]),
 //!     pow_hash: None,
 //!     height: BlockHeight::from_raw(1),
 //!     depth: BlockHeight::from_raw(0),
@@ -74,7 +74,7 @@
 //! ```
 
 use shekyl_types::{
-    AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
+    BlockCount, BlockHash, BlockHeight, BundleRoot, ChainCount, CurveTreeRoot, TxHash,
 };
 
 use crate::core::{ConnectionsSnapshot, P2pRead, PeerEntry};
@@ -149,7 +149,7 @@ pub struct BlockHeaderFacts {
     /// 40); the facts layer is where each root's kind is known, so it is
     /// named here and stays named until the handler renders hex.
     pub curve_tree_root: CurveTreeRoot,
-    pub attestation_root: AttestationRoot,
+    pub bundle_root: BundleRoot,
     /// `None` unless the caller asked for it and was entitled to. Raw bytes:
     /// a proof-of-work hash is not any block's identity.
     pub pow_hash: Option<[u8; 32]>,

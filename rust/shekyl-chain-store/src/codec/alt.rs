@@ -449,7 +449,7 @@ impl Canonical for AltBodies {
 /// this snapshot's own literals and nothing else's.
 #[cfg(test)]
 pub(crate) fn test_block_bytes(height: u64) -> Vec<u8> {
-    use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot};
+    use shekyl_types::{BlockHash, BundleRoot, CurveTreeRoot};
     use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
     // The snapshot's own bytes. `UNLOCK_OFFSET` happens to equal the genesis
     // unlock window and `KEY` / `MASK` the harness's `G` / `2·G` at the pin;
@@ -474,7 +474,7 @@ pub(crate) fn test_block_bytes(height: u64) -> Vec<u8> {
             previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 7,
             curve_tree_root: CurveTreeRoot::EMPTY,
-            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+            bundle_root: BundleRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: Transaction {
             prefix: TxPrefix {

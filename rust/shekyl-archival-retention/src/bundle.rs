@@ -874,6 +874,16 @@ pub fn bundle_root(refs: &[BundleRef]) -> Result<[u8; 32], TooManyReferences> {
     Ok(cshake256_32(BUNDLE_ROOT_CUSTOMIZATION, &input))
 }
 
+/// The root of a section with no references: what the header commits to
+/// on a block that admits no bundle, genesis included (§7.3, `SCS-P34`).
+#[must_use]
+pub fn empty_bundle_root() -> [u8; 32] {
+    match bundle_root(&[]) {
+        Ok(root) => root,
+        Err(_) => unreachable!("an empty section's count fits"),
+    }
+}
+
 /// A section holds more references than the root's `n_le[4]` can count.
 ///
 /// The wire's condition, owned here: §7.3 fixes the count's width at four

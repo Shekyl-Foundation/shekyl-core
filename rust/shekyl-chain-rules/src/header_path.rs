@@ -350,7 +350,7 @@ pub fn bind_body(header: &HeaderJudged, body: &BlockBody) -> Verdict<()> {
         carried.push(hash);
     }
     G2::listed_match(&block.transaction_hashes, &carried)?;
-    let root = *block.header.attestation_root.as_bytes();
+    let root = *block.header.bundle_root.as_bytes();
     B4::bind_root(
         &block.miner_transaction.prefix.extra,
         &body.attestation_witness,

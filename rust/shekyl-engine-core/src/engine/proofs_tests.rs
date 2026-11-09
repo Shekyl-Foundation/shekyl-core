@@ -336,7 +336,7 @@ mod check_workflows {
             long_term_weight: 0,
             miner_tx_hash: zero,
             curve_tree_root: zero,
-            attestation_root: zero,
+            bundle_root: zero,
         }
     }
 

@@ -417,8 +417,8 @@ mod tests {
             previous: shekyl_types::BlockHash::NULL,
             nonce: 0,
             curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes([0u8; 32]),
-            attestation_root: shekyl_types::AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
+            bundle_root: shekyl_types::BundleRoot::from_bytes(
+                shekyl_archival_retention::empty_bundle_root(),
             ),
         };
         let miner_tx = null_tx(vec![tagged_output([7u8; 32])], vec![[0u8; 32]], None);

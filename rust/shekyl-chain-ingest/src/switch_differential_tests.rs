@@ -245,8 +245,8 @@ async fn a_tampered_witness_on_an_alt_row_fails_promotion_k5b() {
     // CEN-K5b: the witness a promoted block is judged with is the one its
     // alt row carries. The scenario mints no attestation records, so every
     // honest row's witness is `None`; plant a witness on B's second row and
-    // CEN-B4, run by promotion's `validate`, refuses it against the
-    // header's empty attestation root. The switch rolls back and the
+    // CEN-B4, run by promotion's `validate`, refuses it: the header
+    // commits no record. The switch rolls back and the
     // suffix from that block leaves.
     let mut x = with_prefix("switch-k5b-x", PREFIX).await;
     let mut y = with_prefix("switch-k5b-y", PREFIX).await;

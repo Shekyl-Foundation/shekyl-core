@@ -1,6 +1,6 @@
 {
   "headers": [{
-    "attestation_root": "353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e",
+    "bundle_root": "353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e",
     "block_size": 98765,
     "block_weight": 98765,
     "cumulative_difficulty": 99,
@@ -25,7 +25,7 @@
     "wide_cumulative_difficulty": "0x800000000000000063",
     "wide_difficulty": "0x400000000000003039"
   },{
-    "attestation_root": "353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e",
+    "bundle_root": "353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e",
     "block_size": 98765,
     "block_weight": 98765,
     "cumulative_difficulty": 99,

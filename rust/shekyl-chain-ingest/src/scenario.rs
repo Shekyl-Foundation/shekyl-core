@@ -60,8 +60,7 @@ use shekyl_economics::EconomicParams;
 use shekyl_harness_wallet::MinerWallet;
 use shekyl_types::archival::BondRecord;
 use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, SettlementEpoch,
-    Timestamp,
+    BlockHash, BlockHeight, BundleRoot, CurveTreeRoot, PCanonicalId, SettlementEpoch, Timestamp,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
@@ -902,9 +901,7 @@ pub(crate) fn build_template(
         // 0x0B field on the coinbase), so every template commits the
         // empty set's root — the arm CEN-B4 judges a witness-less block
         // against (slice 8 row 10).
-        attestation_root: AttestationRoot::from_bytes(
-            shekyl_archival_retention::empty_attestation_root(),
-        ),
+        bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
         major_version: rule_set.header_major_version(),
         now,
         median_timestamp: facts.median_timestamp,

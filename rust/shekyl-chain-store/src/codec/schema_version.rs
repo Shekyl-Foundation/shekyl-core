@@ -392,8 +392,16 @@ use super::{Canonical, CodecError};
 ///   the settlement compare would refuse. A `34` file is refused at open.
 ///   Rebuild from the block corpus, as at every bump.
 ///
+/// - `36` — the switch (`SO-D12` 4b; `ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.3,
+///   `SCS-P34`): the header's last 32 bytes are the bundle root, a root
+///   over the references of the bundles a block admits, and every
+///   network's genesis commits the empty section's root, so every genesis
+///   hash and network id moved. No codec's bytes move here; a `35` file
+///   holds a chain whose genesis no network has. A `35` file is refused at
+///   open. Rebuild from the block corpus, as at every bump.
+///
 /// [`FamilySet`]: crate::family_set::FamilySet
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(35);
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(36);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -450,10 +458,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(35));
-        assert_eq!(SCHEMA_VERSION.encode(), [35, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(36));
+        assert_eq!(SCHEMA_VERSION.encode(), [36, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[35, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[36, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

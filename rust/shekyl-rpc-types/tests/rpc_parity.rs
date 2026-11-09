@@ -58,7 +58,7 @@ fn block_vector_header(orphan: bool, pow: Option<HashHex>) -> BlockHeader {
         long_term_weight: 87654,
         miner_tx_hash: tagged_hash(31),
         curve_tree_root: tagged_hash(41),
-        attestation_root: tagged_hash(53),
+        bundle_root: tagged_hash(53),
     }
 }
 
@@ -328,7 +328,7 @@ fn block_header_full_matches_the_oracle() {
             long_term_weight: 87654,
             miner_tx_hash: tagged_hash(31),
             curve_tree_root: tagged_hash(41),
-            attestation_root: tagged_hash(53),
+            bundle_root: tagged_hash(53),
         },
     };
     assert_parity(
@@ -369,7 +369,7 @@ fn block_header_defaults_matches_the_oracle() {
             long_term_weight: 0,
             miner_tx_hash: tagged_hash(31),
             curve_tree_root: HashHex::ZERO,
-            attestation_root: HashHex::ZERO,
+            bundle_root: HashHex::ZERO,
         },
     };
     assert_parity(
@@ -459,7 +459,7 @@ fn get_block_without_transactions_omits_the_list() {
             long_term_weight: 0,
             miner_tx_hash: tagged_hash(31),
             curve_tree_root: HashHex::ZERO,
-            attestation_root: HashHex::ZERO,
+            bundle_root: HashHex::ZERO,
         },
         miner_tx_hash: tagged_hash(31),
         tx_hashes: Vec::new(),

@@ -496,7 +496,7 @@ pub struct BlockHeader {
     pub long_term_weight: u64,
     pub miner_tx_hash: HashHex,
     pub curve_tree_root: HashHex,
-    pub attestation_root: HashHex,
+    pub bundle_root: HashHex,
 }
 
 /// Params of `get_block` (alias `getblock`).

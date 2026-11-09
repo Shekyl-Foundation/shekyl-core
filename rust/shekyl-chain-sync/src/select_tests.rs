@@ -17,9 +17,7 @@ use shekyl_chain_rules::{
 use shekyl_difficulty::{CumulativeDifficulty, N};
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{PortableMap, ResponseHeaders, HEADERS_RESPONSE_BYTES};
-use shekyl_types::{
-    AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot,
-};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, BundleRoot, ChainCount, CurveTreeRoot};
 use shekyl_wire::{BlockHeader, PowBlob};
 
 use crate::model::{Event, Proved, Sync, SYNC_RATE_FLOOR};
@@ -70,7 +68,7 @@ fn header_record(hash: BlockHash, work: CumulativeDifficulty, previous: BlockHas
             previous,
             nonce: 0,
             curve_tree_root: CurveTreeRoot::from_bytes([0; 32]),
-            attestation_root: AttestationRoot::from_bytes([0; 32]),
+            bundle_root: BundleRoot::from_bytes([0; 32]),
         },
         cumulative_difficulty: work,
     }

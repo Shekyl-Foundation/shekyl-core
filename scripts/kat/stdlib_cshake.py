@@ -42,10 +42,10 @@ NETWORK_ID_DST = b"shekyl/p2p-network-id-v1"
 # The ids rust/shekyl-network/src/tests.rs records (`RECORDED`), written out:
 # the derivation below must reproduce them before it is trusted.
 RECORDED_IDS = {
-    "mainnet": "9e77dd8ef64faef2c43c42b1cf5bc554",
-    "testnet": "4e948cf2481473d8949da645692464de",
-    "stagenet": "3a6b9b9ff5b7327cb44b192cc1d98ec8",
-    "regtest": "399064298436b76e7349df0a18cfbadf",
+    "mainnet": "7e3f3a942e40b64e1dd7282d0f7dbe84",
+    "testnet": "c2b6ad87de2c554007bc546e8465efbd",
+    "stagenet": "fb751c941b828e4affe36b723f066d6c",
+    "regtest": "757196fba508401a7a1361631da11c96",
 }
 
 # ---- Keccak-f[1600] -------------------------------------------------------

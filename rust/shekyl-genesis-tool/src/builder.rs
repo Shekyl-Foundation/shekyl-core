@@ -30,7 +30,7 @@ use shekyl_wire::tx_extra::{
 use crate::recipients::{Recipient, GENESIS_TOTAL_ATOMIC};
 use crate::txkey::{derive_genesis_tx_secret, tx_pubkey};
 use crate::{invalid, GenesisToolError};
-use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash};
+use shekyl_types::{BlockHash, BundleRoot, CurveTreeRoot, TxHash};
 
 /// Genesis block major version (`CURRENT_BLOCK_MAJOR_VERSION`,
 /// `src/cryptonote_config.h`).
@@ -192,11 +192,9 @@ pub const GENESIS_HEADER_NONCE: u32 = 0;
 /// Assemble the genesis block around a built coinbase tx: major
 /// [`GENESIS_BLOCK_MAJOR_VERSION`], minor [`HEADER_MINOR_VERSION`],
 /// timestamp 0, zero previous hash, the empty curve-tree root, the empty
-/// attestation root, and nonce [`GENESIS_HEADER_NONCE`]. The same header on
-/// every network.
+/// bundle root (genesis admits no bundle), and nonce
+/// [`GENESIS_HEADER_NONCE`]. The same header on every network.
 pub fn genesis_block(tx: Transaction) -> Result<Block, GenesisToolError> {
-    let attestation_root = shekyl_archival_retention::attestation_wire::attestation_root(&[])
-        .map_err(|e| invalid(format!("empty attestation root: {e:?}")))?;
     Ok(Block {
         header: BlockHeader {
             major_version: GENESIS_BLOCK_MAJOR_VERSION,
@@ -205,7 +203,7 @@ pub fn genesis_block(tx: Transaction) -> Result<Block, GenesisToolError> {
             previous: BlockHash::NULL,
             nonce: GENESIS_HEADER_NONCE,
             curve_tree_root: CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
-            attestation_root: AttestationRoot::from_bytes(attestation_root),
+            bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
         },
         miner_transaction: tx,
         transaction_hashes: Vec::new(),

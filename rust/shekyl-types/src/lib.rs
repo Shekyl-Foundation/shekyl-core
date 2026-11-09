@@ -800,13 +800,15 @@ hash32! {
 }
 
 hash32! {
-    /// The block-header **attestation root** (archival credit-wire witness
-    /// commitment), not a [`CurveTreeRoot`] and not a [`BlockHash`].
+    /// The block-header **bundle root** (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+    /// §7.3, `SCS-P34`): `cSHAKE256_32` over the references of the bundles
+    /// the block admits, in ascending `h`. Not a [`CurveTreeRoot`] and not a
+    /// [`BlockHash`].
     ///
     /// The wire header field is this type (`shekyl_wire::BlockHeader`). The
     /// codec reads and writes the 32 bytes via [`Self::from_bytes`] /
     /// [`Self::as_bytes`].
-    AttestationRoot
+    BundleRoot
 }
 
 hash32! {

@@ -1071,16 +1071,15 @@ pub fn header() -> BlockHeader {
         previous: BlockHash::from_bytes([0x11; 32]),
         nonce: 7,
         curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
-        attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+        bundle_root: BundleRoot::from_bytes([0x33; 32]),
     }
 }
 
 /// A well-formed candidate **on `chain`'s tip**: `previous` is the tip's
 /// hash (the null hash on an empty chain — CEN-A2), `curve_tree_root`
 /// is the tree state at the connecting height (`root_at(tip + 1)`; the
-/// empty tree at genesis — CEN-B5), `attestation_root` is the empty
-/// set's (no sidecar, no `0x0B` field in the coinbase — CEN-B4's
-/// empty-witness arm); the header lists exactly the bodies it carries.
+/// empty tree at genesis — CEN-B5), `bundle_root` is the empty
+/// section's (no sidecar, no `0x0B` field in the coinbase — CEN-B4); the header lists exactly the bodies it carries.
 /// Mutate one field to build a negative fixture. A corrupt
 /// parent read leaves the coinbase as [`coinbase`] built it, so
 /// `validate` is the function that reports the fault.
@@ -1095,9 +1094,7 @@ pub fn candidate_on(chain: &MockChain, listed: Vec<Transaction>) -> Candidate {
         header: BlockHeader {
             previous: tip.map_or(BlockHash::NULL, |t| t.hash),
             curve_tree_root: root,
-            attestation_root: AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
-            ),
+            bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
             ..header()
         },
         miner_transaction: coinbase(connecting.to_raw()),

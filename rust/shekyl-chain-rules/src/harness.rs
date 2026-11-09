@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
 use shekyl_types::archival::{CompleteTreeSet, RMarket, SigmaWorkMilli};
 use shekyl_types::{
-    AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage,
+    BlockCount, BlockHash, BlockHeight, BlockWeight, BundleRoot, CurveTreeRoot, KeyImage,
     LongTermWeight, SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;

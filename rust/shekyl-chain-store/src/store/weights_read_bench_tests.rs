@@ -41,7 +41,7 @@ use shekyl_chain_rules::{
     form, seed_height, validate, AtHeight, Candidate, ChainValid, Fault, FormAttempt, FormClaims,
     HeaderView, RuleSet, Substrate, Trust,
 };
-use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
+use shekyl_types::{BlockHash, BlockHeight, BundleRoot, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, BlockHeader};
 
 use super::connect_fixtures::{batch_root_going_into, priced};
@@ -163,9 +163,7 @@ fn candidate(height: u64, previous: BlockHash, root: CurveTreeRoot) -> Candidate
             // from before B4 landed (2026-10-06, slice 8 row 10) — B4 then
             // refused the bench's block 0, and no lane ran the bench to say
             // so until `nightly.yml`'s `store-ignored` job did (PR #1003).
-            attestation_root: AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
-            ),
+            bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
         },
         miner_transaction: fixture::coinbase(height),
         transaction_hashes: Vec::new(),

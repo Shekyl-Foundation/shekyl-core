@@ -246,7 +246,7 @@ pub fn found_blocks() -> (FoundBlocks, FoundInbox) {
 
 #[cfg(test)]
 mod tests {
-    use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash};
+    use shekyl_types::{BlockHash, BlockHeight, BundleRoot, CurveTreeRoot, PowHash};
     use shekyl_wire::transaction::{Ct, CtBase, Input, TxPrefix};
     use shekyl_wire::{Block, BlockHeader, Transaction};
 
@@ -264,7 +264,7 @@ mod tests {
                     previous: BlockHash::from_bytes([0x11; 32]),
                     nonce,
                     curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
-                    attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+                    bundle_root: BundleRoot::from_bytes([0x33; 32]),
                 },
                 miner_transaction: Transaction {
                     prefix: TxPrefix {

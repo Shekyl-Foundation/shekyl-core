@@ -43,7 +43,7 @@ fn edge_round_trip() {
     );
     assert!(SigningPayloadHash::try_from_slice(&wide[..wide.len() - 1]).is_none());
     assert!(SigningPayloadHash::try_from_slice(&[0u8; SigningPayloadHash::LEN + 1]).is_none());
-    assert_eq!(AttestationRoot::from_bytes(bytes).as_bytes(), &bytes);
+    assert_eq!(BundleRoot::from_bytes(bytes).as_bytes(), &bytes);
     assert_eq!(OneTimePubkey::from_bytes(bytes).to_bytes(), bytes);
     fn via_trait<T: Hash32Bytes>(bytes: [u8; 32]) -> [u8; 32] {
         T::from_bytes(bytes).to_bytes()

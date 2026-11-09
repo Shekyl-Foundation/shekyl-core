@@ -115,10 +115,10 @@ pub struct Candidate {
     /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.2 phase 5): the C++ sync wire's
     /// `block_complete_entry::attestation_witness`, `None` for an empty
     /// attestation set. CEN-B4's operand (`rules::attestation`, E6 slice 8
-    /// row 10): `None` is judged as the empty set against the header's
-    /// `attestation_root`, `Some` as the recompute over the coinbase's kept
-    /// headers and every record's countersignature; the verdict carries it
-    /// to the store, which records it at the block's height.
+    /// row 10): `None` is the empty set, and `Some` must parse to an empty
+    /// set too, since the header's `bundle_root` commits to no record; the
+    /// verdict carries it to the store, which records it at the block's
+    /// height.
     pub attestation_witness: Option<AttestationWitness>,
 }
 

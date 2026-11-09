@@ -748,7 +748,7 @@ fn the_block_header_renders_line_for_line() {
         long_term_weight: 176_470,
         miner_tx_hash: HashHex::from_bytes([9u8; 32]),
         curve_tree_root: HashHex::ZERO,
-        attestation_root: HashHex::ZERO,
+        bundle_root: HashHex::ZERO,
     };
     let seven = HashHex::from_bytes([7u8; 32]).to_string();
     let nine = HashHex::from_bytes([9u8; 32]).to_string();
@@ -1160,7 +1160,7 @@ fn header_at(height: u64) -> shekyl_rpc_types::BlockHeader {
         long_term_weight: 100,
         miner_tx_hash: HashHex::ZERO,
         curve_tree_root: HashHex::ZERO,
-        attestation_root: HashHex::ZERO,
+        bundle_root: HashHex::ZERO,
     }
 }
 

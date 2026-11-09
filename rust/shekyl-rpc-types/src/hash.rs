@@ -19,8 +19,8 @@
 //! newtypes exist to prevent. Rule 18 already settles this: *RPC* wire
 //! structs store the raw bytes and convert at their edge. (The consensus
 //! header in `shekyl-wire` types those fields — `previous` is `BlockHash`,
-//! `curve_tree_root` is `CurveTreeRoot`, `attestation_root` is
-//! `AttestationRoot` — because that crate *does* know which kind each
+//! `curve_tree_root` is `CurveTreeRoot`, `bundle_root` is
+//! `BundleRoot` — because that crate *does* know which kind each
 //! field is.) A consumer that knows which kind a `HashHex` holds names it
 //! there — `BlockHash::from_bytes(h.to_bytes())` — and that knowledge stays
 //! where it is actually available.

@@ -14,7 +14,7 @@ use shekyl_types::{BlockHeight, CurveTreeRoot, Timestamp};
 
 use crate::mutation::{
     Before, Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Unmutable,
-    UNHELD_ATTESTATION_ROOT, UNHELD_ROOT,
+    UNHELD_BUNDLE_ROOT, UNHELD_ROOT,
 };
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{h, GrownTree, Scripted, FIRST_SPEND_HEIGHT};
@@ -177,7 +177,7 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_those_the_plan_lists() {
             (Mutation::Orphan, ExpectedPlace::Block),
             (Mutation::WrongRoot, ExpectedPlace::Block),
             // Slice 8 row 10: B4 names the block, as the header rows do.
-            (Mutation::WrongAttestationRoot, ExpectedPlace::Block),
+            (Mutation::WrongBundleRoot, ExpectedPlace::Block),
             (Mutation::FutureTimestamp, ExpectedPlace::Block),
             (Mutation::StaleTimestamp, ExpectedPlace::Block),
             (Mutation::PowUnderWrongSeed, ExpectedPlace::Block),
@@ -284,18 +284,13 @@ fn the_unheld_root_is_not_a_fixture_root() {
 }
 
 #[test]
-fn the_unheld_attestation_root_is_not_the_empty_sets() {
-    // The mutation's whole claim: a block supplying nothing commits the
-    // empty set, so a root that is not the empty set's is CEN-B4's
+fn the_unheld_bundle_root_is_not_the_empty_sections() {
+    // The mutation's whole claim: a block admitting no bundle commits the
+    // empty section, so a root that is not the empty section's is CEN-B4's
     // refusal. Pinned against the retention crate's recompute, which the
-    // production module cannot name (`UNHELD_ATTESTATION_ROOT` docs).
+    // production module cannot name (`UNHELD_BUNDLE_ROOT` docs).
     let chain = crate::test_support::chain(CHAIN_LEN);
-    let mut source = Mutated::new(
-        scripted(&chain),
-        h(AT),
-        Mutation::WrongAttestationRoot,
-        env(),
-    );
+    let mut source = Mutated::new(scripted(&chain), h(AT), Mutation::WrongBundleRoot, env());
     for _ in 0..AT {
         source.next().expect("blocks below the mutation");
     }
@@ -304,11 +299,11 @@ fn the_unheld_attestation_root_is_not_the_empty_sets() {
         panic!("Extend-only");
     };
     assert!(candidate.attestation_witness.is_none(), "nothing supplied");
-    let root = candidate.block.header.attestation_root;
-    assert_eq!(root.as_bytes(), &UNHELD_ATTESTATION_ROOT);
+    let root = candidate.block.header.bundle_root;
+    assert_eq!(root.as_bytes(), &UNHELD_BUNDLE_ROOT);
     assert_ne!(
         *root.as_bytes(),
-        shekyl_archival_retention::empty_attestation_root()
+        shekyl_archival_retention::empty_bundle_root()
     );
 }
 

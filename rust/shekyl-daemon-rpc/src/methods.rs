@@ -613,7 +613,7 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
         long_term_weight: facts.long_term_weight.unwrap_or(0),
         miner_tx_hash: HashHex::from_bytes(facts.miner_tx_hash.to_bytes()),
         curve_tree_root: HashHex::from_bytes(facts.curve_tree_root.to_bytes()),
-        attestation_root: HashHex::from_bytes(facts.attestation_root.to_bytes()),
+        bundle_root: HashHex::from_bytes(facts.bundle_root.to_bytes()),
     }
 }
 
@@ -1344,7 +1344,7 @@ pub(crate) mod tests {
     use shekyl_rpc_types::Nullable;
     use shekyl_rpc_types::{ChainSyncState, SyncMode};
     use shekyl_types::{
-        AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
+        BlockCount, BlockHash, BlockHeight, BundleRoot, ChainCount, CurveTreeRoot, TxHash,
     };
     use shekyl_wire::Transaction;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -1601,7 +1601,7 @@ pub(crate) mod tests {
             prev_hash: tagged_hash(3),
             miner_tx_hash: TxHash::from_bytes(tagged_bytes(31)),
             curve_tree_root: CurveTreeRoot::from_bytes(tagged_bytes(41)),
-            attestation_root: AttestationRoot::from_bytes(tagged_bytes(53)),
+            bundle_root: BundleRoot::from_bytes(tagged_bytes(53)),
             pow_hash: None,
             height: BlockHeight::from_raw(1_234_567),
             depth: BlockCount::from_raw(42),

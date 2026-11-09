@@ -39,7 +39,7 @@
 use std::sync::{Mutex, PoisonError};
 
 use rand::RngCore;
-use shekyl_archival_retention::empty_attestation_root;
+use shekyl_archival_retention::empty_bundle_root;
 use shekyl_block_template::{
     build, EmissionOperands, Fill, MinerKeys, Template, TemplateContext, TemplateError,
 };
@@ -49,7 +49,7 @@ use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreError};
 use shekyl_economics::EconomicParams;
 use shekyl_mempool::{select_shown, Evicted, Pool};
 use shekyl_miner::{Job, ListedBody};
-use shekyl_types::{AttestationRoot, BlockHash, Timestamp, TxHash};
+use shekyl_types::{BlockHash, BundleRoot, Timestamp, TxHash};
 use shekyl_wire::transaction::COINBASE_RESERVE;
 use shekyl_wire::tx_extra::COINBASE_NONCE_BYTES;
 use shekyl_wire::Transaction;
@@ -350,7 +350,7 @@ impl Secrets {
             curve_tree_root: facts.curve_tree_root,
             // This node mints no attestation records, so every template
             // commits the empty set's root (CEN-B4's witness-less arm).
-            attestation_root: AttestationRoot::from_bytes(empty_attestation_root()),
+            bundle_root: BundleRoot::from_bytes(empty_bundle_root()),
             major_version: rule_set.header_major_version(),
             now: producer.now,
             median_timestamp: facts.median_timestamp,

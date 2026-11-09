@@ -410,7 +410,7 @@ fn header_facts(
         prev_hash: block.header.previous,
         miner_tx_hash: block.miner_transaction.hash(),
         curve_tree_root: block.header.curve_tree_root,
-        attestation_root: block.header.attestation_root,
+        bundle_root: block.header.bundle_root,
         pow_hash: place.pow_hash,
         height: place.height,
         depth: place.depth,

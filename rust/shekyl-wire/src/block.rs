@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! Block       := BlockHeader Transaction(miner) V(n_tx) n_tx×Hash[32]
-//! BlockHeader := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32] attestation_root[32]
+//! BlockHeader := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32] bundle_root[32]
 //! ```
 //!
 //! The miner transaction is embedded inline; `n_tx` counts the *other*
@@ -19,7 +19,7 @@ use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
 
-use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash, TxTreeHash};
+use shekyl_types::{BlockHash, BundleRoot, CurveTreeRoot, TxHash, TxTreeHash};
 
 use crate::bytes::read_array;
 use crate::hash::merkle_root;
@@ -85,10 +85,11 @@ pub struct BlockHeader {
     /// this block's outputs (CEN-B5, wording corrected 2026-09-05). The root
     /// *after* this block is the next header's.
     pub curve_tree_root: CurveTreeRoot,
-    /// The archival credit-wire attestation root over this block's pass records
-    /// (`ARCHIVAL_CREDIT_WIRE.md` §3). A `block_header` field alongside
-    /// `curve_tree_root`, mined via the header being the PoW preimage.
-    pub attestation_root: AttestationRoot,
+    /// The root over the references of the bundles this block admits, in
+    /// ascending `h` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.3, `SCS-P34`). A
+    /// `block_header` field alongside `curve_tree_root`, mined via the
+    /// header being the PoW preimage.
+    pub bundle_root: BundleRoot,
 }
 
 impl BlockHeader {
@@ -100,7 +101,7 @@ impl BlockHeader {
         w.write_all(self.previous.as_bytes())?;
         w.write_all(&self.nonce.to_le_bytes())?;
         w.write_all(self.curve_tree_root.as_bytes())?;
-        w.write_all(self.attestation_root.as_bytes())
+        w.write_all(self.bundle_root.as_bytes())
     }
 
     /// Where [`nonce`](Self::nonce)'s four little-endian bytes sit in
@@ -128,7 +129,7 @@ impl BlockHeader {
             previous: BlockHash::from_bytes(read_array(r)?),
             nonce: u32::from_le_bytes(read_array::<4, _>(r)?),
             curve_tree_root: CurveTreeRoot::from_bytes(read_array(r)?),
-            attestation_root: AttestationRoot::from_bytes(read_array(r)?),
+            bundle_root: BundleRoot::from_bytes(read_array(r)?),
         })
     }
 }
@@ -371,7 +372,7 @@ pub fn identity_of_pow_blob(blob: &[u8]) -> BlockHash {
 const PREIMAGE_HASH_BYTES: usize = 32;
 /// Varints that open a header. Each is one byte when the value is below 128.
 const HEADER_LEADING_VARINTS: usize = 3;
-/// `previous`, `curve_tree_root`, `attestation_root`.
+/// `previous`, `curve_tree_root`, `bundle_root`.
 const HEADER_HASH_FIELD_COUNT: usize = 3;
 /// Those three hashes.
 const HEADER_HASH_FIELDS: usize = HEADER_HASH_FIELD_COUNT * PREIMAGE_HASH_BYTES;
@@ -490,9 +491,9 @@ impl PowBlob {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_archival_retention::empty_attestation_root;
+    use shekyl_archival_retention::empty_bundle_root;
 
-    fn header(attestation_root: [u8; 32]) -> BlockHeader {
+    fn header(bundle_root: [u8; 32]) -> BlockHeader {
         BlockHeader {
             major_version: 1,
             minor_version: 0,
@@ -500,7 +501,7 @@ mod tests {
             previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 0xDEAD_BEEF,
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
-            attestation_root: AttestationRoot::from_bytes(attestation_root),
+            bundle_root: BundleRoot::from_bytes(bundle_root),
         }
     }
 
@@ -521,7 +522,7 @@ mod tests {
         )
         .expect("a leafless coinbase extra");
         let block = Block {
-            header: header(empty_attestation_root()),
+            header: header(empty_bundle_root()),
             miner_transaction: Transaction {
                 prefix: TxPrefix {
                     unlock_time: 300,
@@ -568,7 +569,7 @@ mod tests {
                 previous: BlockHash::from_bytes([0; 32]),
                 nonce: 0,
                 curve_tree_root: CurveTreeRoot::from_bytes([0; 32]),
-                attestation_root: AttestationRoot::from_bytes([0; 32]),
+                bundle_root: BundleRoot::from_bytes([0; 32]),
             },
             tx_tree_hash: TxTreeHash::from_bytes([0; 32]),
             tx_count: 1,
@@ -596,7 +597,7 @@ mod tests {
                 previous: BlockHash::from_bytes([0xff; 32]),
                 nonce: u32::MAX,
                 curve_tree_root: CurveTreeRoot::from_bytes([0xff; 32]),
-                attestation_root: AttestationRoot::from_bytes([0xff; 32]),
+                bundle_root: BundleRoot::from_bytes([0xff; 32]),
             },
             tx_tree_hash: TxTreeHash::from_bytes([0xff; 32]),
             tx_count: MAX_POW_TX_COUNT,
@@ -611,8 +612,8 @@ mod tests {
     }
 
     #[test]
-    fn attestation_root_roundtrips_and_is_the_final_header_field() {
-        let empty = empty_attestation_root();
+    fn bundle_root_roundtrips_and_is_the_final_header_field() {
+        let empty = empty_bundle_root();
         let h = header(empty);
         let mut bytes = Vec::new();
         h.write(&mut bytes).unwrap();
@@ -621,7 +622,7 @@ mod tests {
         assert_eq!(&bytes[bytes.len() - 32..], &empty);
         let back = BlockHeader::read(&mut &bytes[..]).unwrap();
         assert_eq!(back, h);
-        assert_eq!(back.attestation_root, AttestationRoot::from_bytes(empty));
+        assert_eq!(back.bundle_root, BundleRoot::from_bytes(empty));
     }
 
     /// The four bytes at `nonce_offset` in the PoW preimage are the nonce:
@@ -634,7 +635,7 @@ mod tests {
             let mut block = Block {
                 header: BlockHeader {
                     timestamp,
-                    ..header(empty_attestation_root())
+                    ..header(empty_bundle_root())
                 },
                 miner_transaction: Transaction {
                     prefix: crate::transaction::TxPrefix {
@@ -660,14 +661,14 @@ mod tests {
     }
 
     #[test]
-    fn attestation_root_is_committed_by_the_wire() {
-        // Two headers differing ONLY in attestation_root serialize differently and
+    fn bundle_root_is_committed_by_the_wire() {
+        // Two headers differing ONLY in bundle_root serialize differently and
         // to equal length — the field is on the wire (hence in the PoW/block-hash
         // preimage, since the header is the preimage prefix), never dropped.
         let mut a = Vec::new();
         let mut b = Vec::new();
         header([0u8; 32]).write(&mut a).unwrap();
-        header(empty_attestation_root()).write(&mut b).unwrap();
+        header(empty_bundle_root()).write(&mut b).unwrap();
         assert_ne!(a, b);
         assert_eq!(a.len(), b.len());
     }

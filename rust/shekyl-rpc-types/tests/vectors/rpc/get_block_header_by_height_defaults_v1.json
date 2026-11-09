@@ -1,6 +1,6 @@
 {
   "block_header": {
-    "attestation_root": "0000000000000000000000000000000000000000000000000000000000000000",
+    "bundle_root": "0000000000000000000000000000000000000000000000000000000000000000",
     "block_size": 0,
     "cumulative_difficulty": 1,
     "cumulative_difficulty_top64": 0,
