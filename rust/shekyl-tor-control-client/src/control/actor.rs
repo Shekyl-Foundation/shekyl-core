@@ -97,9 +97,9 @@ const HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_CHUNK: usize = 4096;
 
 /// How long a managed `tor` gets to exit after the owning connection is closed
-/// before shutdown escalates to a kill. On Unix the close is followed by
-/// `SIGTERM`. `tor` flushes and exits within about a second; this bound keeps
-/// the wait from hanging if `tor` ignores both.
+/// before shutdown escalates to a kill. Tor flushes and exits within about a
+/// second of EOF on that connection; this bound keeps the wait from hanging
+/// if Tor ignores the close.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 /// The read half of a control connection, whatever carries it: a TCP connection to an
@@ -627,8 +627,8 @@ pub struct TorControlClientConfig {
 
 /// How the [`TorControlClient`] actor gets its control port (DQ-T0.1 process ownership).
 pub enum TorLaunch {
-    /// The actor **spawns and owns** the `tor` process — the production path. It kills
-    /// the child on shutdown (`SIGTERM` → bounded wait → `SIGKILL` → reap).
+    /// The actor **spawns and owns** the `tor` process — the production path. Shutdown
+    /// closes the owning connection, waits `SHUTDOWN_GRACE`, then kills and reaps.
     Managed(ManagedTor),
     /// Connect to an **already-running** control port the actor does *not* own — the
     /// test path (tor spawned externally), and any bring-your-own-`tor` deployment.
@@ -861,8 +861,9 @@ pub struct TorControlClient {
     /// so the encoded key must be wiped when the entry is dropped rather than left
     /// in a freed allocation.
     queue: VecDeque<(Zeroizing<String>, ReplySender<CommandResult>, InFlight)>,
-    /// Onion services this actor published, torn down with `DEL_ONION` on the
-    /// shutdown path.
+    /// Onion services this actor published. A clean stop withdraws them with
+    /// `DEL_ONION` against an attached Tor; a managed Tor drops them when the
+    /// owning connection closes ([`ProcessOwnership::teardown_lines`]).
     ///
     /// **Why the actor tracks them rather than the caller:** the services are
     /// bound to *this control connection* (no `Detach` is expressible — see
@@ -895,11 +896,12 @@ struct TorChild {
 /// How a managed `tor` child ended (observed via [`ManagedTor::exit_observer`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TorExit {
-    /// The actor was asked to stop, and tor exited on `SIGTERM` within the
-    /// `SHUTDOWN_GRACE` window and was reaped with this status: the clean path.
+    /// The actor was asked to stop, and tor exited within the `SHUTDOWN_GRACE`
+    /// window after the owning connection closed, and was reaped with this
+    /// status: the clean path.
     Reaped(std::process::ExitStatus),
     /// The actor was asked to stop, and tor was not cleanly reaped with a status:
-    /// either it wedged past the `SIGTERM` grace window and was killed, or the grace
+    /// either it wedged past the grace window and was killed, or the grace
     /// `wait` itself errored. Either way the child was killed and reaped: an
     /// **unclean** shutdown.
     Killed,
@@ -1040,15 +1042,78 @@ async fn watch_child<N, F>(
     }
 }
 
+/// Whether this actor owns Tor's process. The stop's onion lines follow it,
+/// and the child watch is the only record of ownership.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessOwnership {
+    /// The actor spawned Tor. The process, and its onions, end with the
+    /// owning connection.
+    Owned,
+    /// The actor attached to a Tor it does not end. Published onions would
+    /// outlive the actor.
+    Attached,
+}
+
+impl ProcessOwnership {
+    /// Presence of the managed-child watch is ownership.
+    fn from_child<T>(child: Option<&T>) -> Self {
+        match child {
+            Some(_) => Self::Owned,
+            None => Self::Attached,
+        }
+    }
+
+    /// The lines a clean stop writes before it closes the owning connection.
+    /// An owned Tor ends with that connection, so it is sent nothing. An
+    /// attached Tor is withdrawn one `DEL_ONION` per published onion, in
+    /// publish order.
+    fn teardown_lines(self, published: &[ServiceId]) -> Vec<Zeroizing<String>> {
+        match self {
+            Self::Owned => Vec::new(),
+            Self::Attached => published
+                .iter()
+                .map(|id| Zeroizing::new(format!("DEL_ONION {}", id.as_str())))
+                .collect(),
+        }
+    }
+}
+
+/// Withdraw onions for `ownership`, close the write half, then run
+/// `wait_for_child`.
+///
+/// The close is the one graceful route, so it always runs. A death already
+/// recorded is not an input: it classifies the child's exit inside
+/// `wait_for_child` and does not keep this half open. A read-side fault
+/// leaves the write half open until here, and the child wait is after the
+/// close, so Tor sees EOF before [`SHUTDOWN_GRACE`].
+async fn end_owning_connection<W>(
+    writer: &mut ControlWrite,
+    ownership: ProcessOwnership,
+    published: &[ServiceId],
+    wait_for_child: W,
+) where
+    W: std::future::Future<Output = ()> + Send,
+{
+    for line in ownership.teardown_lines(published) {
+        if write_line(writer, &line).await.is_err() {
+            break;
+        }
+    }
+    writer.as_mut().shutdown().await.ok();
+    wait_for_child.await;
+}
+
 /// Shut the child down after [`TorControlClient::on_stop`] has closed the owning
 /// connection.
 ///
-/// The close is the graceful route: tor's `lost_owning_controller` runs
-/// `tor_cleanup`. On Unix, `SIGTERM` is a second nudge and is harmless if the
-/// child has already exited (`ESRCH`). The wait is bounded by [`SHUTDOWN_GRACE`];
-/// a child still running is killed and reported as [`TorExit::Killed`].
+/// The close is the one graceful route on every platform (`TOR_SUPERVISOR.md`
+/// §4.7; Rick, 2026-11-08): Tor reads EOF on its owning connection, and
+/// `lost_owning_controller` raises `SIGTERM` in Tor itself, so `tor_cleanup`
+/// runs. No signal is sent from here: Windows has none to send, and on Unix a
+/// second one added nothing the close does not do. The wait is bounded by
+/// [`SHUTDOWN_GRACE`]; a child still running is killed and reported as
+/// [`TorExit::Killed`]. A kill is not a clean stop.
 async fn shut_down(child: &mut Child) -> TorExit {
-    request_graceful_stop(child);
     match timeout(SHUTDOWN_GRACE, child.wait()).await {
         Ok(Ok(status)) => TorExit::Reaped(status),
         // The grace `wait` errored or timed out (tor wedged): kill and reap
@@ -1060,29 +1125,6 @@ async fn shut_down(child: &mut Child) -> TorExit {
         }
     }
 }
-
-/// `SIGTERM`, the Unix nudge after the owning connection is closed. Harmless if
-/// the child already exited (`ESRCH`).
-#[cfg(unix)]
-fn request_graceful_stop(child: &Child) {
-    if let Some(pid) = child.id().and_then(|pid| libc::pid_t::try_from(pid).ok()) {
-        // SAFETY: `kill(2)` with a pid this process owns and a constant signal number; it
-        // reads/writes no memory. A stale pid returns `ESRCH`, ignored. (`try_from` guards
-        // the u32→pid_t width — unreachable for a real pid, but honest about it.)
-        unsafe {
-            libc::kill(pid, libc::SIGTERM);
-        }
-    }
-}
-
-/// No signal off Unix. [`TorControlClient::on_stop`] has already closed the owning
-/// connection, which is the graceful route on every platform
-/// (`TOR_SUPERVISOR.md` §4.7): tor logs the close and raises `SIGTERM` itself
-/// (`lost_owning_controller` in `control.c`), so `tor_cleanup` runs. A tor that
-/// ignores that close is still killed after [`SHUTDOWN_GRACE`] and reported as
-/// [`TorExit::Killed`]. A kill is not a clean stop.
-#[cfg(not(unix))]
-fn request_graceful_stop(_child: &Child) {}
 
 /// SIGKILL a managed child and reap it — a best-effort signal, then an **unconditional**
 /// `wait`, so no path leaves a running process or a zombie. `start_kill` (not `kill()`)
@@ -1178,50 +1220,54 @@ impl Actor for TorControlClient {
         ))
     }
 
-    /// Clean shutdown: withdraw onions this actor published, close the owning
-    /// control connection, then reap the managed child. `TAKEOWNERSHIP` (landed in PR-2) is the *crash* backstop — a
-    /// panic / SIGKILL sends no `on_stop`, and the control connection dropping then exits
-    /// `tor` — but on a clean stop the connection is still open here, so this is the
-    /// primary path. Attached mode has no child to kill. (The bootstrap poll task is
-    /// aborted in `Drop`.)
+    /// Clean shutdown: withdraw onions according to `ProcessOwnership`, close
+    /// the owning control connection, then reap the managed child.
+    /// `TAKEOWNERSHIP` (landed in PR-2) is the *crash* backstop — a panic /
+    /// SIGKILL sends no `on_stop`, and the control connection dropping then
+    /// exits `tor` — but on a clean stop the connection is still open here, so
+    /// this is the primary path. (The bootstrap poll task is aborted in `Drop`.)
     ///
-    /// **`DEL_ONION` runs first, and the order is load-bearing.** Killing the child
-    /// first would take the services down too, but only for a *managed* tor; against an
-    /// **attached** tor (`TorLaunch::Attached` — bring-your-own-`tor`, and every
-    /// integration harness) there is no child to kill, so without this step the
-    /// services would keep running inside someone else's long-lived tor after this
-    /// actor closed — still publishing descriptors that assert the service is online
-    /// while nothing is left to serve a byte. That is the same orphan-advertisement
-    /// failure `Detach` is excluded to prevent, arriving by a different route.
+    /// **`DEL_ONION` follows `ProcessOwnership`, not the caller.** An
+    /// **attached** Tor (`TorLaunch::Attached`: bring-your-own `tor`, the
+    /// wallet's attached posture, every integration harness) is not ours to
+    /// end, so without the withdrawal the services would keep running inside
+    /// someone else's long-lived Tor after this actor closed, still publishing
+    /// descriptors that say the service is online while nothing is left to
+    /// serve a byte. That is the orphan advertisement `Detach` is excluded to
+    /// prevent, arriving by a different route. A **managed** Tor ends with the
+    /// owning connection, and its onions with it, so the actor sends nothing
+    /// first. Descriptors already uploaded stay with the directories until
+    /// they expire either way.
     ///
-    /// Failures are swallowed: shutdown is best-effort by nature (the connection may
-    /// already be dying, which is *why* we are stopping), and a `DEL_ONION` that cannot
-    /// be written is one whose services tor is about to drop anyway when the connection
-    /// closes.
+    /// The close always runs, including when `death` is already set.
+    /// A read-side fault records [`DeathSignal::ControlClosed`] while this
+    /// write half is still open; skipping the close would leave Tor with no
+    /// EOF through the grace, then a kill. The recorded death is handed to
+    /// the watcher and only classifies [`TorExit`].
+    ///
+    /// Failures are swallowed: shutdown is best-effort (the connection may
+    /// already be dying, which is *why* we are stopping), and a `DEL_ONION`
+    /// that cannot be written is one whose services tor is about to drop
+    /// anyway when the connection closes.
     async fn on_stop(
         &mut self,
         _actor_ref: WeakActorRef<Self>,
         _reason: ActorStopReason,
     ) -> Result<(), Self::Error> {
-        for id in std::mem::take(&mut self.published_onions) {
-            let line = Zeroizing::new(format!("DEL_ONION {}", id.as_str()));
-            if write_line(&mut self.writer, &line).await.is_err() {
-                break;
-            }
-        }
+        let published = std::mem::take(&mut self.published_onions);
+        let ownership = ProcessOwnership::from_child(self.child.as_ref());
         // kameo runs `on_stop` after the mailbox loop, so `death` is the signal
-        // the actor already recorded. Copy it before the await and pass that
-        // copy on: the classification is the one decided here. Closing the
-        // write half is §4.7. Tor reads EOF and `lost_owning_controller` runs
-        // `tor_cleanup`. A death already recorded means the connection or the
-        // process ended first, and that stop is not this close.
+        // the actor already recorded. It classifies the exit. It does not
+        // decide the close: [`end_owning_connection`] shuts the write half
+        // before the child wait.
         let death = self.death;
-        if death.is_none() {
-            self.writer.as_mut().shutdown().await.ok();
-        }
-        if let Some(watch) = self.child.take() {
-            watch.finish(death).await;
-        }
+        let child = self.child.take();
+        end_owning_connection(&mut self.writer, ownership, &published, async move {
+            if let Some(watch) = child {
+                watch.finish(death).await;
+            }
+        })
+        .await;
         Ok(())
     }
 }
@@ -1753,8 +1799,8 @@ mod tests {
 
     /// The actor went away without `on_stop`, so the watcher's stop request was dropped:
     /// the child is killed and reaped at once, not given the graceful window a stop gets.
-    /// A tor that ignores `SIGTERM` is reaped well inside `SHUTDOWN_GRACE` (Copilot on
-    /// #1091). Through a graceful shutdown this would take the whole window.
+    /// The child ignores `SIGTERM`, so a signal would not move it. Dropping the request
+    /// kills it inside a fraction of [`SHUTDOWN_GRACE`] (Copilot on #1091).
     #[cfg(unix)]
     #[tokio::test]
     async fn a_dropped_stop_request_kills_the_child_at_once() {
@@ -1812,6 +1858,71 @@ mod tests {
             cmd.to_wire().unwrap().as_str(),
             "SETEVENTS STREAM STATUS_CLIENT"
         );
+    }
+
+    /// The ids two published onions would carry.
+    fn two_published() -> Vec<ServiceId> {
+        [
+            "url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid",
+            "gvzl6fb7ivhujb3tdhps7i6um32r42qslktklq2v6xysjzskqfoxmcyd",
+        ]
+        .into_iter()
+        .map(|id| ServiceId::parse(id).expect("a v3 id"))
+        .collect()
+    }
+
+    /// Bytes written by [`end_owning_connection`] before it closes the write
+    /// half. The read runs inside the child wait, so a close that waits for
+    /// the child first, or that never comes, times out.
+    async fn stop_bytes(ownership: ProcessOwnership, published: &[ServiceId]) -> String {
+        let (write, mut read) = tokio::io::duplex(512);
+        let mut writer: ControlWrite = Box::pin(write);
+        let mut got = Vec::new();
+        end_owning_connection(&mut writer, ownership, published, async {
+            timeout(Duration::from_millis(200), read.read_to_end(&mut got))
+                .await
+                .expect("the write half closes before the child wait")
+                .expect("read the write half");
+        })
+        .await;
+        String::from_utf8(got).expect("control commands are ASCII")
+    }
+
+    /// An owned teardown writes no `DEL_ONION`: the managed Tor ends with the
+    /// owning connection, and its onions with it (Rick, 2026-11-08). The
+    /// close is observed inside the child wait, so skipping it when a death
+    /// was already recorded fails here too: the close takes no death signal.
+    /// Red edit: withdraw whatever the ownership, and this fails. Invert
+    /// [`ProcessOwnership::from_child`] and the owned case writes the lines.
+    #[tokio::test]
+    async fn an_owned_teardown_writes_no_del_onion() {
+        assert_eq!(
+            ProcessOwnership::from_child(Some(&())),
+            ProcessOwnership::Owned
+        );
+        let bytes = stop_bytes(ProcessOwnership::from_child(Some(&())), &two_published()).await;
+        assert!(bytes.is_empty(), "{bytes}");
+    }
+
+    /// An attached teardown writes one `DEL_ONION` per published onion, in
+    /// the order they were published, then closes before the child wait: the
+    /// Tor is not ours, and its services would outlive this actor. Red edit:
+    /// withdraw nothing when attached, and this fails.
+    #[tokio::test]
+    async fn an_attached_teardown_withdraws_each_published_onion() {
+        assert_eq!(
+            ProcessOwnership::from_child(None::<&()>),
+            ProcessOwnership::Attached
+        );
+        let bytes = stop_bytes(ProcessOwnership::from_child(None::<&()>), &two_published()).await;
+        assert_eq!(
+            bytes,
+            "\
+DEL_ONION url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid\r\n\
+DEL_ONION gvzl6fb7ivhujb3tdhps7i6um32r42qslktklq2v6xysjzskqfoxmcyd\r\n"
+        );
+        let empty = stop_bytes(ProcessOwnership::Attached, &[]).await;
+        assert!(empty.is_empty(), "{empty}");
     }
 
     /// `HSFETCH` names the one onion it refreshes, from a validated id: the
@@ -2918,7 +3029,7 @@ mod live_tests {
         );
 
         // Shutdown proof: stop → on_stop closes the owning connection → bounded
-        // wait → the child is reaped. Unix also sends SIGTERM as a nudge.
+        // wait → the child is reaped. No signal is sent.
         actor.stop_gracefully().await.expect("graceful stop");
         actor.wait_for_shutdown().await;
 

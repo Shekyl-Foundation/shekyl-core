@@ -36,10 +36,11 @@
 //! - **The door does verify ML-DSA-65.** §72.2 excluded a lattice term on
 //!   the ground that the PQ material enters only as the leaf key scalar bound
 //!   into the proof. On the Rust door that ground is gone: `judge_slot_stateless`
-//!   runs CEN-I17/I18 — one hybrid Ed25519+ML-DSA-65 verification per input
-//!   — before the proof, and at `Lone` the range proof as a batch of one
-//!   (CEN-H19) after it. This sequence keeps the masks-and-proof pair the
-//!   surface below was measured on, and the drift gate's subject; the two
+//!   runs CEN-I17/I18 — one authorization check per input: one hybrid
+//!   Ed25519+ML-DSA-65 verification for a single-signer input, M of them for
+//!   an M-of-N multisig input (M ≤ 5) — before the proof, and at `Lone` the
+//!   range proof as a batch of one (CEN-H19) after it. This sequence keeps
+//!   the masks-and-proof pair the surface below was measured on, and the drift gate's subject; the two
 //!   further terms are timed per input and per proof by
 //!   `block_connect_verify.rs`'s `block_connect_terms` group (dev box
 //!   2026-09-04: 178 µs per hybrid verification, 2.82 ms for a 2-output

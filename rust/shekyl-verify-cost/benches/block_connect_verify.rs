@@ -82,9 +82,11 @@
 //!   tree-depth axis — this bench pins depth 2 / `Spread`, today's
 //!   production topology, and does not re-sweep that axis).
 //! - **`pqc_per_input`** — one hybrid Ed25519+ML-DSA-65 verification
-//!   (`shekyl_crypto_pq::signature::verify_pqc_auth`), which `form` runs
-//!   **per input** (CEN-I18, `judge_signatures`) for every transaction but
-//!   the coinbase and the serve credit. The relay bench's sequence leaves
+//!   (`shekyl_crypto_pq::signature::verify_pqc_auth` on a single-signer,
+//!   scheme-1 slot). `form` runs one authorization check **per input**
+//!   (CEN-I18, `judge_signatures`) for every transaction but the coinbase
+//!   and the serve credit: this term for a single-signer input, M of it for
+//!   an M-of-N multisig input (scheme 2, M ≤ 5). The relay bench's sequence leaves
 //!   this term out; the pool door pays it as well (see that bench).
 //! - **`bp_lone`** — Bp+ aggregate verification over `n_out` commitments,
 //!   as a batch of one: `shekyl_bulletproofs::verify_batch`, CEN-H19's
@@ -260,6 +262,23 @@
 //! inside `budget_fill`), and `verify_floor` is owed that re-run before it
 //! is read as the shipped figure. Direction: the Bp+ term can only have
 //! grown, so `surge_max` below can only fall.
+//!
+//! **Interim until that re-run (2026-11-08, ruled by Rick): an Assumption,
+//! not a measurement.** Scale the C++ batched Bp+ term by the measured
+//! single-proof ratio, 2.56 (1.745 → 4.47 ms/proof), assuming the batch
+//! amortises the Rust verifier as it did the C++ one. Per argmax tx that
+//! adds 2.72 ms: verify_floor ≈ 131.49 ms/tx (≈ 10.11 µs per weight-byte),
+//! 46.13 argmax txs per 600 kB zone block, RandomX 1.2845 s per block, and
+//! `surge_max = (f·T − RandomX) / (zone fill)`. The tiers become ≈ 6.38 at
+//! d2, ≈ 5.58 at d7 and **≈ 3.92 at d24**, against the composition below
+//! (6.52 / 5.69 / 3.97, quoted as 6.5 / 5.7 / 4.0). The signed ×4 is the
+//! d24 figure, so under this interim it sits above its own bound. The
+//! conservative bracket, the Rust single-proof cost (34.8 ms) in place of
+//! the batched term, gives ≈ 3.43 at d24. **Correction:** the shipped
+//! verifier evaluates `Â` with a multiscalar multiplication of its own per
+//! proof, so its batch amortises to about 0.6 of a single proof, not as the
+//! C++ one did; the 3.92 overstates `surge_max`, and #1319 folds `Â` into
+//! the batch and measures the term.
 //!
 //! **Regime note:** the sweep was measured with the FA-6 §8.2 flags; a
 //! one-point comparison against the shipping configuration (generic

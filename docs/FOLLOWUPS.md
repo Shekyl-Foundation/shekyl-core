@@ -823,9 +823,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Wallet file backup-exclusion markers (PR 6 lessons canvass §5.12 F1).** [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](./completed/STAGE_1_PR_6_PERSISTENCE_ENGINE.md)
   - Target: pre-genesis
 
-- **Process core-dump disable at wallet-RPC startup (PR 6 §5.12 F2).**
-  - Target: pre-genesis
-
 - **Argon2 stack-resident secret copies — cryptographer review (PR 6 §5.12 F3).**
   - Target: pre-genesis
 
@@ -1424,6 +1421,10 @@ Default. Lands before genesis if it should exist at launch.
 
 - **The Ed25519 field arithmetic under FCMP++ runs on crypto-bigint 0.5.5, which RUSTSEC-2026-0387 flags for timing variability; `cargo audit` ignores it by ruling (`CA-1`).** `helioselene::Field25519` is `dalek_ff_group::FieldElement` (crypto-bigint `Residue` Montgomery arithmetic), and it carries the wallet-side prover's secret witness. The fix is crypto-bigint >= 0.7.6, which no released `dalek-ff-group`/`ciphersuite` uses; serai's `next` branch (2026-09-22) already has `dalek-ff-group` on a `prime-field` crate over crypto-bigint 0.7, unreleased, so clearing it means pinning that branch by git rev with every pinned FCMP++/curve-tree vector held byte-identical. `HelioseleneField` is not part of it: it takes only U256 limb plumbing from crypto-bigint and stays on 0.5.5 with upstream monero-oxide. Measured 2026-10-24 (`docs/formal/checkct`): every operation we reach with a secret is branchless on x86_64 under both toolchains run; aarch64's dynamic row and riscv64 are the open cells. Blocked on serai releasing that branch, or on scheduling the pin; the pin's acceptance is the same harness green against `prime-field`'s field.
   - Owner: `CA-1` — [`CRYPTO_AUDIT.md`](design/CRYPTO_AUDIT.md) §1 (exposure, consumers, reopen criteria; the ignore is in `rust/.cargo/audit.toml`)
+  - Target: pre-genesis
+
+- **S interim: `block_weight_short_term_surge_factor` re-derived at BA-T10 (floor re-run of the batched Bp+ term); closes when the measured d24 `surge_max` is recorded and S re-signed.** The interim (an Assumption, 2026-11-08) scales the C++ batched Bp+ term by 2.56× to the Rust verifier and puts d24 at about 3.92, under the signed S = 4; the conservative bracket on the single-proof Rust term is 3.43. The constant is unchanged until the floor run records the measured d24 value.
+  - Owner: `BA-T10` — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (the floor verify surface); the interim's arithmetic is in `rust/shekyl-verify-cost/benches/block_connect_verify.rs`
   - Target: pre-genesis
 
 
