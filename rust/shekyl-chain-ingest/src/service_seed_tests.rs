@@ -12,8 +12,13 @@
 //! into the transient slot, never pins it, and hashes with the cache the
 //! preparation returned, one branch form at a time.
 //!
-//! The chains are mined once per test binary (about four minutes, the
-//! three drivers in parallel) and each test runs its own service over them.
+//! The chains are mined once (about four minutes on a workstation, the
+//! three drivers in parallel), by the one test this file holds, and each
+//! scenario runs its own service over them. They were three tests sharing
+//! a `OnceCell` until 2026-11-09; nextest runs each test in a process of
+//! its own, so each one mined the chains again, three times the cost for
+//! the same blocks. One test, three scenarios in sequence, mines once; a
+//! scenario's assertions name it.
 
 use std::sync::Arc;
 
@@ -41,35 +46,38 @@ struct Branches {
     w: Vec<Mined>,
 }
 
-static BRANCHES: tokio::sync::OnceCell<Branches> = tokio::sync::OnceCell::const_new();
-
-/// Mine the chains once. `idle` ticks a driver's clock, so z and w build
+/// Mine the chains. `idle` ticks a driver's clock, so z and w build
 /// blocks of their own from the first block after the prefix.
-async fn branches() -> &'static Branches {
-    BRANCHES
-        .get_or_init(|| async {
-            let mut main = Scenario::open("seed-point-main");
-            let mut z = Scenario::open("seed-point-z");
-            let mut w = Scenario::open("seed-point-w");
-            let (prefix, _, _) = tokio::join!(main.mine(PREFIX), z.mine(PREFIX), w.mine(PREFIX));
-            z.idle();
-            w.idle();
-            w.idle();
-            let (main_branch, z_branch, w_branch) =
-                tokio::join!(main.mine(MAIN), z.mine(Z), w.mine(W));
-            for s in [main, z, w] {
-                s.close().await;
-            }
-            assert_ne!(main_branch[8].hash, z_branch[8].hash, "z is its own branch");
-            assert_ne!(z_branch[8].hash, w_branch[8].hash, "w is its own branch");
-            Branches {
-                prefix,
-                main: main_branch,
-                z: z_branch,
-                w: w_branch,
-            }
-        })
-        .await
+async fn branches() -> Branches {
+    let mut main = Scenario::open("seed-point-main");
+    let mut z = Scenario::open("seed-point-z");
+    let mut w = Scenario::open("seed-point-w");
+    let (prefix, _, _) = tokio::join!(main.mine(PREFIX), z.mine(PREFIX), w.mine(PREFIX));
+    z.idle();
+    w.idle();
+    w.idle();
+    let (main_branch, z_branch, w_branch) = tokio::join!(main.mine(MAIN), z.mine(Z), w.mine(W));
+    for s in [main, z, w] {
+        s.close().await;
+    }
+    assert_ne!(main_branch[8].hash, z_branch[8].hash, "z is its own branch");
+    assert_ne!(z_branch[8].hash, w_branch[8].hash, "w is its own branch");
+    Branches {
+        prefix,
+        main: main_branch,
+        z: z_branch,
+        w: w_branch,
+    }
+}
+
+/// The three scenarios over one mining of the chains, in sequence: the
+/// partition case, the alternating branches, and the concurrent forms.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn branches_past_their_seed_points() {
+    let chains = branches().await;
+    a_heavier_branch_past_its_own_seed_point_is_followed(&chains).await;
+    two_branches_alternating_derive_once_per_alternation(&chains).await;
+    branch_forms_run_one_at_a_time(&chains).await;
 }
 
 /// The blocks of `branch` from height `from` up to, not including, `to`.
@@ -102,9 +110,7 @@ async fn on_main(name: &str, chains: &Branches) -> (Running, Arc<Gated>) {
 /// heavier side passes `S + 64`. The lighter node follows it: it stores the
 /// branch past its own seed point, switches when it is heavier, and once
 /// the follower has run the branch's seed block is canonical.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_heavier_branch_past_its_own_seed_point_is_followed() {
-    let chains = branches().await;
+async fn a_heavier_branch_past_its_own_seed_point_is_followed(chains: &Branches) {
     let (service, substrate) = on_main("seed-point-follow", chains).await;
     let replies = offer_all(&service.door(), 2, &chains.z).await;
     let past: Vec<_> = chains
@@ -157,9 +163,7 @@ async fn up_to_the_seed_point(service: &super::Service<Gated>, chains: &Branches
 /// the transient slot, with the chain's seed still canonical and nothing
 /// pinned. Two branches alternating cost one derivation per alternation:
 /// each evicts the other's seed from the one transient slot.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn two_branches_alternating_derive_once_per_alternation() {
-    let chains = branches().await;
+async fn two_branches_alternating_derive_once_per_alternation(chains: &Branches) {
     let (service, substrate) = on_main("seed-point-alternate", chains).await;
     up_to_the_seed_point(&service, chains).await;
     let canonical = substrate.canonical();
@@ -221,9 +225,7 @@ async fn two_branches_alternating_derive_once_per_alternation() {
 /// Two branches past their seed points arriving at once: their forms run
 /// one at a time on the branch gate, so at most one cache beyond the two
 /// slots is ever held.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn branch_forms_run_one_at_a_time() {
-    let chains = branches().await;
+async fn branch_forms_run_one_at_a_time(chains: &Branches) {
     let (service, substrate) = on_main("seed-point-one", chains).await;
     up_to_the_seed_point(&service, chains).await;
     let door = service.door();
