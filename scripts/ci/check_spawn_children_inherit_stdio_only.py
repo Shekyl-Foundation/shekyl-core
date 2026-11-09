@@ -24,9 +24,20 @@
 # the one descriptor it keeps. A Windows-only spawn names it too; the call is a
 # no-op there.
 #
-#   Production means under the crate's `src/`, outside any item marked
-#   `#[cfg(test)]` or `#[cfg(all(test, ...))]`, and in a module file whose
-#   declaration (`mod name;`) is not itself so marked, up the module tree.
+#   Production means under the crate's `src/`, outside any item whose
+#   `#[cfg(...)]` cannot hold in a shipped build, and in a module file whose
+#   declaration (`mod name;`) is not itself so marked, up the module tree. A
+#   shipped build has `test` off and `feature = "unpinned-tor-for-tests"`
+#   off. The predicate is evaluated with those two false and every other
+#   option unknown: `cfg(test)`, `cfg(all(test, unix))` and
+#   `cfg(any(test, feature = "unpinned-tor-for-tests"))` come out false and
+#   are test-only; `cfg(any(unix, feature = "unpinned-tor-for-tests"))` and
+#   `cfg(all(unix, not(feature = "unpinned-tor-for-tests")))` come out
+#   unknown and are checked. A predicate the gate cannot parse is checked.
+#   `unpinned-tor-for-tests` is shekyl-tor-control-client's `cfg(test)`
+#   across a crate boundary (`cfg(test)` does not cross it).
+#   `check_test_only_features.py` refuses every edge that is not a
+#   dev-dependency, so the feature is not in a shipped binary.
 #
 #   TEST-ONLY SPAWNS ARE NOT THIS GATE'S SUBJECT: `tests/`, `benches/` and
 #   `examples/`, a build script, a test module, and a file declared only for
@@ -67,7 +78,95 @@ SUBJECTS = (
     "shekyl-daemon/src/notify.rs",
 )
 HELPER = re.compile(r"\binherit::")
-TEST_ATTR = re.compile(r"#\[\s*cfg\s*\(\s*(?:test\b|all\s*\(\s*test\b)")
+# The options a shipped build has off (see the module comment). An item under
+# a cfg that is false with these off is test-only.
+OFF_IN_SHIPPED = {("test", None), ("feature", "unpinned-tor-for-tests")}
+CFG_TOKEN = re.compile(r'\s*(?:([A-Za-z_][A-Za-z0-9_]*)|"((?:[^"\\]|\\.)*)"|([(),=]))')
+
+
+def cfg_tokens(text):
+    """The tokens of a cfg predicate, or None when `text` holds anything else."""
+    tokens, i = [], 0
+    while i < len(text):
+        if text[i:].strip() == "":
+            break
+        match = CFG_TOKEN.match(text, i)
+        if match is None:
+            return None
+        ident, string, punct = match.groups()
+        tokens.append(("ident", ident) if ident else ("str", string) if string is not None else (punct, punct))
+        i = match.end()
+    return tokens
+
+
+def cfg_value(tokens):
+    """The predicate's value in a shipped build: False, or None when it may
+    hold. Raises ValueError on a form it does not know.
+
+    Three-valued: an option in OFF_IN_SHIPPED is False and any other option
+    is unknown (None). `all` is False when a part is False and True when
+    every part is True; `any` is True when a part is True and False when
+    every part is False; `not` swaps True and False. Anything else is None.
+    """
+    at = 0
+
+    def take(kind):
+        nonlocal at
+        if at >= len(tokens) or tokens[at][0] != kind:
+            raise ValueError(kind)
+        at += 1
+        return tokens[at - 1][1]
+
+    def predicate():
+        nonlocal at
+        name = take("ident")
+        if at < len(tokens) and tokens[at][0] == "(":
+            if name not in ("all", "any", "not"):
+                raise ValueError(name)
+            take("(")
+            parts = []
+            while tokens[at][0] != ")":
+                parts.append(predicate())
+                if tokens[at][0] == ",":
+                    take(",")
+            take(")")
+            if name == "not":
+                if len(parts) != 1:
+                    raise ValueError("not")
+                return {True: False, False: True, None: None}[parts[0]]
+            if name == "all":
+                return False if False in parts else (True if all(p is True for p in parts) else None)
+            return True if True in parts else (False if all(p is False for p in parts) else None)
+        value = None
+        if at < len(tokens) and tokens[at][0] == "=":
+            take("=")
+            value = take("str")
+        return False if (name, value) in OFF_IN_SHIPPED else None
+
+    try:
+        result = predicate()
+    except IndexError as exc:
+        raise ValueError("truncated") from exc
+    if at != len(tokens):
+        raise ValueError("trailing")
+    return result
+
+
+def test_only_cfg(original, start, end):
+    """Whether the attribute `original[start:end]` is a `#[cfg(...)]` that is
+    false in a shipped build."""
+    match = re.match(r"#\[\s*cfg\s*\((.*)\)\s*\]\Z", original[start:end], re.S)
+    if match is None:
+        return False
+    tokens = cfg_tokens(match.group(1))
+    if tokens is None:
+        return False
+    try:
+        return cfg_value(tokens) is False
+    except ValueError:
+        return False
+
+
 TEST_DIRS = {"tests", "benches", "examples"}
 
 
@@ -116,12 +215,23 @@ def item_end(code, at):
     return len(code)
 
 
-def production_code(code):
-    """`code` with every test-marked item blanked, newlines kept."""
+def production_code(original):
+    """`original` with every test-marked item blanked, newlines kept.
+
+    A `#[cfg]` counts only where `#[` survives comment and string blanking, so
+    a cfg written in a comment or a string does not hide a spawn. The
+    attribute is then read from `original`: the feature name lives in a
+    string, and the blanked text no longer contains it.
+    """
+    code = code_of(original)
     out = list(code)
-    for match in TEST_ATTR.finditer(code):
-        end = item_end(code, attribute_end(code, match.start()))
-        for k in range(match.start(), end):
+    for match in re.finditer(r"#\[", code):
+        start = match.start()
+        attribute = attribute_end(code, start)
+        if not test_only_cfg(original, start, attribute):
+            continue
+        end = item_end(code, attribute)
+        for k in range(start, end):
             if out[k] != "\n":
                 out[k] = " "
     return "".join(out)
@@ -156,10 +266,11 @@ def declared_for_tests_only(root, rel, seen=None):
         source = root / parent
         if not source.is_file():
             continue
-        code = code_of(source.read_text(encoding="utf-8", errors="replace"))
+        original = source.read_text(encoding="utf-8", errors="replace")
+        code = code_of(original)
         if not declaration.search(code):
             continue
-        if not declaration.search(production_code(code)):
+        if not declaration.search(production_code(original)):
             return True
         return declared_for_tests_only(root, parent, seen)
     return False
@@ -187,7 +298,8 @@ def check(root, watched, subjects):
         if rel.parts and rel.parts[0] in SKIPPED_DIRS:
             continue
         rel = rel.as_posix()
-        code = code_of(path.read_text(encoding="utf-8", errors="replace"))
+        original = path.read_text(encoding="utf-8", errors="replace")
+        code = code_of(original)
         if not SPAWN.search(code):
             continue
         kind = classify(root, rel, watched)
@@ -196,7 +308,7 @@ def check(root, watched, subjects):
         if kind == "test":
             tests.append(rel)
             continue
-        live = production_code(code)
+        live = production_code(original)
         if not SPAWN.search(live):
             tests.append(rel)
             continue
@@ -262,6 +374,75 @@ def selftest():
         "a file declared for tests only": (
             {lib: "mod launch;\n#[cfg(test)]\nmod harness;\n", launch: good, "a/src/harness.rs": bare},
             0,
+        ),
+        "a file declared under the unpinned-tor test feature": (
+            {
+                lib: 'mod launch;\n#[cfg(any(test, feature = "unpinned-tor-for-tests"))]\nmod outside;\n',
+                launch: good,
+                "a/src/outside.rs": bare,
+            },
+            0,
+        ),
+        "a spawn under any(test, unix) is production": (
+            {**base, "a/src/other.rs": "#[cfg(any(test, unix))]\n" + bare},
+            1,
+        ),
+        "a spawn under any(unix, the feature) is production": (
+            {**base, "a/src/other.rs": '#[cfg(any(unix, feature = "unpinned-tor-for-tests"))]\n' + bare},
+            1,
+        ),
+        "a spawn under all(unix, not(the feature)) is production": (
+            {
+                **base,
+                "a/src/other.rs": '#[cfg(all(unix, not(feature = "unpinned-tor-for-tests")))]\n' + bare,
+            },
+            1,
+        ),
+        "a spawn under not(test) is production": (
+            {**base, "a/src/other.rs": "#[cfg(not(test))]\n" + bare},
+            1,
+        ),
+        "a spawn under another feature is production": (
+            {**base, "a/src/other.rs": '#[cfg(feature = "other")]\n' + bare},
+            1,
+        ),
+        "a spawn under a cfg the gate cannot read is production": (
+            {**base, "a/src/other.rs": "#[cfg(test, unix)]\n" + bare},
+            1,
+        ),
+        "a spawn under all(unix, any(test, the feature)) is test-only": (
+            {
+                **base,
+                "a/src/other.rs": '#[cfg(all(unix, any(test, feature = "unpinned-tor-for-tests")))]\n' + bare,
+            },
+            0,
+        ),
+        "a spawn under not(any(not(test), unix)) is test-only": (
+            {**base, "a/src/other.rs": "#[cfg(not(any(not(test), unix)))]\n" + bare},
+            0,
+        ),
+        "a feature-gated spawn does not cover a production one": (
+            {
+                **base,
+                "a/src/other.rs": '#[cfg(feature = "unpinned-tor-for-tests")]\n' + bare + "\n" + bare,
+            },
+            1,
+        ),
+        "a commented feature cfg does not hide a production spawn": (
+            {
+                **base,
+                "a/src/other.rs": '// #[cfg(feature = "unpinned-tor-for-tests")]\n' + bare,
+            },
+            1,
+        ),
+        "the feature named only in a string does not hide a production spawn": (
+            {
+                **base,
+                "a/src/other.rs": (
+                    'const S: &str = "#[cfg(feature = \\"unpinned-tor-for-tests\\")]";\n' + bare
+                ),
+            },
+            1,
         ),
         "a file under a module declared for tests only": (
             {

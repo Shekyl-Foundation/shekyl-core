@@ -85,8 +85,8 @@ fn origin_budget_is_the_recovery_cycle_count_times_the_origin_retry() {
         origin_retry_secs(),
         timer.judge_failed_after_secs(origin_retry_one_in())
     );
-    assert_eq!(origin_retry_secs(), 1_148);
-    assert_eq!(origin_retry_ms(), 1_148_000);
+    assert_eq!(origin_retry_secs(), 1_176);
+    assert_eq!(origin_retry_ms(), 1_176_000);
     let budget_ms = u64::from(origin_retry_secs()) * 1_000 * u64::from(recovery.cycles);
     assert_eq!(origin_publication_budget_ms(), budget_ms);
     assert_ne!(u64::from(recovery.mean_secs) * 1_000, budget_ms);

@@ -101,12 +101,17 @@ const DECIDED_SPEC: &str = "Pi 4";
 
 /// Candidate specs. The Pi 4 row is the decision; the rest bracket it.
 ///
-/// The bracket rows are `x86 × k` and say so. The **Pi 4 row is not**: 124.5
-/// and 399.2 ms are the spec machine's own genesis-depth cells (§85.3). The
-/// scaled stand-ins they replace — `23.182 × 5.56 = 128.9` and
-/// `73.481 × 5.56 = 408.6` — are what §80.2/§80.3 priced the decision with,
-/// and they are 3.5 % and 2.4 % high. Small, and in the over-provisioning
-/// direction, which is exactly why the shortcut survives review.
+/// The bracket rows are `x86 × k` and say so. The **Pi 4 row is not**: it is
+/// the spec machine's own genesis-depth cells, the door's whole sequence
+/// (§72.2, amended 2026-11-08). The scaled stand-ins §80.2/§80.3 priced the
+/// decision with — `23.182 × 5.56 = 128.9` and `73.481 × 5.56 = 408.6` — were
+/// 3.5 % and 2.4 % above §85.3's masks-and-proof term (124.5 and 399.2 ms):
+/// small, and in the over-provisioning direction, which is exactly why the
+/// shortcut survives review.
+///
+/// The x86 arm times the masks-and-proof term alone, so the bracket rows
+/// price that term and the Pi 4 row prices the door's sequence. The bracket
+/// is diagnostic (§84.2) and no derived value reads it.
 const SPECS: [SpecRow; 5] = [
     SpecRow {
         label: "x86 reference",
@@ -153,27 +158,21 @@ const TRANSIT_MS: [f64; 3] = [25.0, 50.0, 100.0];
 /// change to `derive_embargo`, to `DandelionParams::inherited()`, or to the
 /// measured `f` must be forced to restate.
 ///
-/// The 1-input→8-input spread they give (57 / 55 / 52 s) is what §80.2 states
-/// as *"a scalar leaves ~56 s uncovered across the whole legal shape domain"*
-/// — and it survives the switch from the scaled stand-ins to the spec
-/// machine's own cells, which is why §80.3's choice does not move with it.
-/// **Re-priced 2026-08-23** when the node-crypto term folded into `f_ms`.
-/// The 1-input column did not move at any transit point; the 8-input column
-/// moved **0 s at 25 ms transit, +1 s at 50, and +12 s at 100** — not uniformly,
-/// and the 12-second jump is the embargo step structure, not the crypto term.
-/// A 4.26 ms input change producing a 12 s output change is `derive_embargo`
-/// being high-gain near a step (`derive::next_embargo_step`), which is why the
-/// re-derivation round must call it at the actual hop rather than interpolate —
-/// and why that round lands the input in a commit that moves no pin, then
-/// moves the pins mechanically (`DAEMON_RELAY_PRIVACY.md` §94.10).
-/// That the columns move differently at all is the fold's own
-/// premise showing up in the output: the crypto term scales with message size,
-/// so it is 0.94 ms at the modal shape's 13,118 B message and 4.26 ms at the
-/// 8-input shape's 59,344 B one. §80.2's "~56 s uncovered across the legal
-/// shape domain" reading is unchanged in substance — the gap between the two
-/// columns moves from 55 s to 56 s at the shipped transit point.
+/// The 1-input→8-input spread they give (58 / 53 / 55 s) is what §80.2 reads
+/// as *"a scalar leaves ~56 s uncovered across the whole legal shape domain"*,
+/// and §80.3's choice of a per-shape table over a scalar rests on that gap
+/// being large; it does not move.
+///
+/// **Re-priced 2026-11-08 (BA-Q9)**: each cell is the pool door's whole
+/// sequence (§72.2), so the modal cell is 144.31 ms and the 8-input cell
+/// 425.86 ms (the lone range proof measured after `Â` was folded into the
+/// batch). The input landed in its own commit and these pins moved in the
+/// next, as `DAEMON_RELAY_PRIVACY.md` §94.10 requires: `derive_embargo` is
+/// high-gain near a step (`derive::next_embargo_step`), so a few
+/// milliseconds of hop can move the embargo by seconds, and the re-derivation
+/// calls it at the actual hop rather than interpolating.
 const DECIDED_SPEC_PRICE_LIST: [(f64, u64, u64); 3] =
-    [(25.0, 184, 241), (50.0, 190, 246), (100.0, 198, 262)];
+    [(25.0, 190, 246), (50.0, 194, 250), (100.0, 200, 263)];
 
 fn embargo_secs(hop_ms: u32) -> u64 {
     let mut p = DandelionParams::inherited();
@@ -334,29 +333,51 @@ fn the_measured_surface_covers_the_whole_consensus_domain() {
     );
 }
 
-/// §85.3 restated: every cell the production table publishes, with the value
-/// the spec machine actually produced.
+/// Every cell the production table publishes, restated from its sources: the
+/// spec machine's masks-and-proof term (§85.3), the hybrid signature per input
+/// and the lone range proof at 2 outputs (the 2026-09-05 floor capture,
+/// `docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt`; §72.2,
+/// amended 2026-11-08).
 ///
 /// This is the gate `verify_cost.rs` delegates to when it says its own
 /// structural tests do "NOT check the numbers are *correct* Pi measurements —
 /// that is what pinning them against §85.3 in the price-list gate is for".
 /// Nothing else pins the values: `adopted_hop_ms` adds 50 ms and rounds to
-/// `u32`, so `Ok(175)` holds for anything in `[124.5, 125.5)` and `Ok(449)`
-/// for anything in `[398.5, 399.5)` — a cell mis-transcribed as `125.4` would
-/// enter the shipped `DandelionParams` with every test still green.
+/// `u32`, so the modal hop holds for anything within half a millisecond of the
+/// cell — an operand mis-transcribed by a tenth of a millisecond would enter
+/// the shipped `DandelionParams` with every test still green.
+///
+/// Columns: `(n_in, depth, masks_and_proof_ms, signature_per_input_ms,
+/// range_proof_lone_ms, basis)`. The cell is `masks_and_proof + n_in ×
+/// signature + range_proof`, in that order.
 ///
 /// The comparison is set-exhaustive rather than cell-by-cell so the 44 owed
 /// cells cannot land unpinned: a populated cell with no row here fails, and a
 /// row here with no populated cell fails.
-const SPEC_85_3_CELLS: [(usize, u32, f64, TreeBasis); 4] = [
-    (1, 2, 124.5, TreeBasis::Genesis),
-    (1, 7, 143.3, TreeBasis::SynthesizedProjection),
-    (8, 2, 399.2, TreeBasis::Genesis),
-    (8, 7, 791.9, TreeBasis::SynthesizedProjection),
+const SPEC_CELLS: [(usize, u32, f64, f64, f64, TreeBasis); 4] = [
+    (1, 2, 124.5, 0.971_86, 18.838, TreeBasis::Genesis),
+    (
+        1,
+        7,
+        143.3,
+        0.971_86,
+        18.838,
+        TreeBasis::SynthesizedProjection,
+    ),
+    (8, 2, 399.2, 0.972_28, 18.882, TreeBasis::Genesis),
+    (
+        8,
+        7,
+        791.9,
+        0.972_28,
+        18.882,
+        TreeBasis::SynthesizedProjection,
+    ),
 ];
 
 #[test]
-fn every_published_cell_is_its_pinned_85_3_measurement() {
+#[allow(clippy::cast_precision_loss)] // n_in <= 8
+fn every_published_cell_is_its_pinned_door_sequence() {
     let published: Vec<(usize, u32, f64, TreeBasis)> = SPEC_VERIFY_COST
         .populated()
         .map(|(n_in, depth, cell)| {
@@ -371,13 +392,25 @@ fn every_published_cell_is_its_pinned_85_3_measurement() {
         })
         .collect();
 
+    let pinned: Vec<(usize, u32, f64, TreeBasis)> = SPEC_CELLS
+        .iter()
+        .map(
+            |&(n_in, depth, masks_and_proof, signature, range_proof, basis)| {
+                (
+                    n_in,
+                    depth,
+                    masks_and_proof + n_in as f64 * signature + range_proof,
+                    basis,
+                )
+            },
+        )
+        .collect();
     assert_eq!(
-        published.as_slice(),
-        SPEC_85_3_CELLS.as_slice(),
-        "the production verification-cost table no longer matches §85.3. If a \
-         cell moved, it is a re-measurement: update §85.3 and this pin \
-         together. If a cell appeared, transcribe its measured value here — \
-         an unpinned cell is a number nobody checked feeding the shipped \
-         `hop`."
+        published, pinned,
+        "the production verification-cost table no longer matches its sources \
+         (§85.3, the 2026-09-05 and 2026-11-08 floor captures). If an operand moved, it is a \
+         re-measurement: update its source and this pin together. If a cell \
+         appeared, transcribe its measured operands here — an unpinned cell is \
+         a number nobody checked feeding the shipped `hop`."
     );
 }

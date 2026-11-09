@@ -10,6 +10,9 @@
 //! CLI self-hosts an in-process RPC server over a private UDS socket;
 //! `--rpc-url` connects to an external `shekyl-wallet-rpc` daemon instead.
 //! There is no wallet2 / FFI path.
+#![deny(unsafe_code)]
+
+use std::io::Write as _;
 
 use clap::{Parser, Subcommand};
 use shekyl_cli::outcome::{refusal, Presentation, Render, Transcript};
@@ -301,7 +304,19 @@ fn stop_session(
     stop(presentation, command, error);
 }
 
+/// The first statement is the process hardening (rule 35, DC-Q21), as in
+/// `shekyld`: no core and no same-account tracer, before an argument is
+/// read, a wallet opened, or a password asked for. A process that cannot
+/// apply it says so on standard error and exits 1 without starting.
 fn main() {
+    if let Err(e) = shekyl_process::harden::harden_process() {
+        // A closed standard error must not turn the refusal into a panic.
+        drop(writeln!(
+            std::io::stderr(),
+            "shekyl-cli: process hardening {e}; not starting"
+        ));
+        std::process::exit(1);
+    }
     let cli = Cli::parse();
     let json = cli.repl.json;
     let debug = cli.repl.debug;

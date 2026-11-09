@@ -131,3 +131,35 @@ fn a_torsion_component_on_any_commitment_fails_verification() {
         }
     }
 }
+
+/// The verifier folds `Â`'s terms into the batch (`tests::fold`); a torsioned
+/// commitment must be decided exactly as the eager verifier decided it, at
+/// every output count and for each of the seven torsion points: cofactor
+/// clearing behaves the same on a commitment added as a term as on one
+/// evaluated into `Â`.
+#[test]
+fn a_torsioned_commitment_is_decided_as_the_eager_verifier_decided_it() {
+    // Cofactor clearing must behave the same in both: the fold clears it on
+    // the commitments it adds as terms, the oracle on the ones it evaluates.
+    let mut tally = super::fold::Tally::default();
+    for m in [1, 2, 16] {
+        let (proof, commitments) = super::fold::entry(m);
+        for i in 0..m {
+            for (t, torsion) in EIGHT_TORSION.iter().enumerate().skip(1) {
+                let mut c = commitments.clone();
+                let point = c[i].decompress().expect("a real commitment decompresses");
+                c[i] = CompressedPoint::from((point + torsion).compress());
+                let verdict = tally.check(
+                    &format!("{m} outputs, commitment {i} + torsion {t}"),
+                    &[(proof.clone(), c)],
+                );
+                assert_ne!(verdict, super::fold::Verdict::Accepted);
+            }
+        }
+    }
+    assert!(
+        tally.rejected > 0,
+        "no torsioned commitment reached the multiexp: {tally:?}"
+    );
+    eprintln!("torsioned commitments: {tally:?}");
+}

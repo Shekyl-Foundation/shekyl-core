@@ -250,7 +250,8 @@ jobs:
           # which had three known waste modes documented in
           # docs/CI_TIMING_BASELINE.md:
           #   - ~8m post-job upload of the entire target/ even when
-          #     only a few crates changed (Swatinem only writes deltas).
+          #     only a few crates changed (Swatinem skips the save when
+          #     the restore hit its exact key).
           #   - No rustc-version key component (so a 1.94 -> 1.95 bump
           #     would have silently restored a 1.94-built target/).
           #   - No ~/.cargo/bin caching (cargo-audit reinstalled from
@@ -262,6 +263,13 @@ jobs:
             rust/shekyl-fcmp/fuzz -> target
             rust/shekyl-wire/fuzz -> target
             docs/formal/checkct/dynamic -> target
+          # Saved by push runs only (`dev`, `main`); a pull request
+          # restores and never saves. A cache saved by a pull request is
+          # readable by that pull request alone, and each of this job's
+          # is 2.6 GB against the repository's 10 GB, so a pull
+          # request's save evicts the `dev` cache every other pull
+          # request restores from.
+          save-if: ${{ github.event_name == 'push' }}
       - name: install cargo-audit
         # `cargo install --locked` is idempotent: on Swatinem cache
         # hits the binary is already present in ~/.cargo/bin and this
@@ -418,6 +426,10 @@ jobs:
         # module docs state the hybrid schemes' contracts, and it joined when
         # hybrid scheme 3 landed and its eight older warnings were cleared.
         #
+        # `shekyl-onion-key` and `shekyl-heap-secret` joined with the onion
+        # split. The keypair's contract and the buffer's contract are these
+        # docs, and both were clean when they landed.
+        #
         # `shekyl-win-sec` is deliberately NOT here: it is `cfg(windows)` and
         # compiles to nothing on this runner, so documenting it would gate an
         # empty crate and pass forever. Its rustdoc gate runs on the Windows
@@ -428,6 +440,7 @@ jobs:
           -p shekyl-operator-alarm -p shekyl-economics -p shekyl-store-codec
           -p shekyl-capped-stream -p shekyl-crypto-pq -p shekyl-miner -p shekyl-hash-budget
           -p shekyl-node -p shekyl-chain-sync -p shekyl-chain-sync-runtime
+          -p shekyl-onion-key -p shekyl-heap-secret
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp

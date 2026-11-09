@@ -66,5 +66,5 @@ build-clean invariant is the §8.1 C1 bisection-invariant.
   per commit.
 - [`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)
   recommended-against-bindgen rationale (R1-D2 substrate-anchored).
-- [`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+- [`20-rust-vs-cpp-policy.mdc`](../../docs/completed/RULE_20_RUST_VS_CPP.md)
   Rust-side localization of unsafe.

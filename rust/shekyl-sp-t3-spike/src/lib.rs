@@ -76,6 +76,7 @@
 //! look the anchor hash up in a chain — it has none — so the fixed anchor the
 //! apparatus sends is a pass record consensus would reject, and nothing here
 //! ever assembles one. See [`harness`]'s module doc.
+#![deny(unsafe_code)]
 
 pub mod capacity;
 pub mod ceiling;

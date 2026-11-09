@@ -6,6 +6,7 @@ use crate::{verify_batch, BatchEntry, Bulletproof, BulletproofError};
 use shekyl_curve_primitives::Commitment;
 
 mod derived;
+mod fold;
 mod plus;
 mod torsion;
 

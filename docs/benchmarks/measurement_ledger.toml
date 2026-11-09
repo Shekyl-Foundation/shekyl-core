@@ -113,6 +113,7 @@ spec = [
   "rust/shekyl-pow-randomx/src",
 ]
 stale_through = [
+  { through = "334b41b719", note = "BA-Q9 (#1319): the Bp+ verifier adds Â's terms into the batch instead of evaluating Â with its own multiexp. Every verdict is unchanged; the cost falls. On the floor device a lone 2-output proof went 34.80 -> 18.84 ms and a batched one 19.63 -> 3.66 ms per proof (gap7_block_verify_pi4_rust_20261108T232442Z.txt and its eager control). The surge factor's Bp+ term is now that measurement; the capture's other terms are unchanged, and BA-T10 re-runs them." },
   { through = "20738bf714", note = "PL-D3: the leaf's fourth scalar becomes a Pedersen commitment opened in-circuit. The proof changed for every shape; its verify cost has not been re-measured on the floor." },
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
   { through = "48670ca6c9", note = "Three commits to signature.rs. The first moves the Ed25519 + ML-DSA-65 nested sign and verify and the canonical header onto one body shared with a second scheme; the bytes signed and the order of the two halves are unchanged, and the existing vectors pass untouched. The second adds a scheme byte and two domain constants that no transaction path reads. The third edits one doc comment. The gated sign count moved from 7,163,792 to 7,161,994 instructions on an x86 development host (crypto_bench_hybrid_sign_1_input, -0.025 %). Verify has no gated arm and was not measured; no floor run." },
@@ -140,6 +141,7 @@ stale_through = [
   { through = "50e942a480", note = "C++ removal (#1299): in this path set, signature.rs loses sign_pqc_auth and sign_multisig_participant, the two sign entry points only shekyl-ffi called. The nested verify, the scheme domains and every signing path a caller still uses are unchanged, so nothing the capture priced has moved." },
   { through = "682d97049c", note = "C++ removal (#1299): one module-doc paragraph in shekyl-fcmp's frost_sal.rs, naming the FOLLOWUPS rows that track the multisig spend path. Comment only; no code path changed, and nothing the capture priced has moved." },
   { through = "c42ef64a2d", note = "C++ removal (#1299): comments only in shekyl-crypto-pq signature.rs, shekyl-fcmp proof.rs, and shekyl-pow-randomx lib.rs and vm.rs; no code path changed, and nothing the capture priced has moved." },
+  { through = "d6e8da7d44", note = "Rules after the C++ removal (#1308): shekyl-bulletproofs' crate root takes #![deny(unsafe_code)]; the crate holds no unsafe, so the attribute compiles to nothing and nothing the capture priced has moved." },
 ]
 
 [[constant]]
@@ -149,7 +151,7 @@ needle = '"block_weight_short_term_surge_factor": 3'
 measured_by = ["BA-T2", "BA-T10"]
 status = "stale"
 stale_since = "20738bf714"
-carrier = "BA-T10 (BA-G4, BA-Q10). PL-D3 changed the FCMP++ proof nine days after the capture. Interim until the re-run (2026-11-08, an Assumption): the composition's Bp+ term is the C++ batched verifier's, 1.745 ms/proof (docs/benchmarks/gap7_block_verify_pi4_cpp_20260905T053148Z.txt, rev aa63f4ce99), not this capture's; scaled by the shipped verifier's measured 2.56x single-proof ratio, the d24 tier this factor is signed on is about 3.92, and with the Rust single-proof cost in place of the batch (the conservative bracket) 3.43. S = 3 is the integer below that bracket, re-signed 2026-11-08 (C2-R2 Q3) as an Assumption; the floor re-run records the measured d24 surge_max and S is re-signed on it (block_connect_verify.rs, FLOOR RESULTS; census R2)."
+carrier = "BA-T10 (BA-G4, BA-Q10). PL-D3 changed the FCMP++ proof nine days after the capture. The composition's Bp+ term is now measured (BA-Q9, #1319): with Â folded into the batch, 3.659 ms per batched proof (docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt), in place of the C++ batched verifier's 1.745 ms (gap7_block_verify_pi4_cpp_20260905T053148Z.txt); the d24 tier this factor is signed on is about 3.93, and the conservative bracket 3.67. S = 3 is the integer below that bracket, re-signed 2026-11-08 (C2-R2 Q3) as an Assumption; BA-T10 re-runs the full sweep and S is re-signed on its d24 value (block_connect_verify.rs, FLOOR RESULTS; census R2). The other terms are this capture's."
 capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
 capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
 rev_source = "capture header"
@@ -167,6 +169,12 @@ capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
 capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
 rev_source = "capture header"
 path_set = "block-weight"
+
+[[path_set]]
+id = "bp-verify"
+spec = [
+  "rust/shekyl-bulletproofs/src",
+]
 
 [[path_set]]
 id = "fcmp-inputs"
@@ -223,11 +231,59 @@ spec = [
 [[constant]]
 name = "spec_verify_cost_modal_cell"
 defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
-needle = "cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis, 13_311));"
+needle = "door_sequence_ms(124.5, 1, SIG_1, BP_1),"
 measured_by = ["BA-T1", "BA-T10"]
 status = "unmeasured"
-carrier = "BA-T10. The 2026-08-05 floor grids are not in the tree, and the cell's own comment says the floor re-measurement is owed after PL-D3 (BA-G4; FOLLOWUPS, the 48-cell surface)."
+carrier = "BA-T10. The cell is the door's sequence (BA-Q9, 2026-11-08): this masks-and-proof term plus the signature and lone range-proof terms below. The 2026-08-05 floor grids this term comes from are not in the tree, and the cell's own comment says the floor re-measurement is owed after PL-D3 (BA-G4; FOLLOWUPS, the 48-cell surface)."
 path_set = "relay-verify-cell"
+
+[[constant]]
+name = "pi4_hybrid_sig_1in_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
+needle = "const PI4_HYBRID_SIG_1IN_MS: f64 = 0.971_86;"
+measured_by = ["BA-T10"]
+status = "stale"
+stale_since = "20738bf714"
+carrier = "BA-T10 (BA-Q9). The pqc_per_input median at the 1-input shape, the term of every SPEC_VERIFY_COST cell the pool door pays per input. Shares the block-weight path set and its capture, so it is stale from the same commit; the hybrid verify itself changed at bf2fcbe091 (verify_strict), acknowledged there."
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
+capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
+rev_source = "capture header"
+path_set = "block-weight"
+
+[[constant]]
+name = "pi4_hybrid_sig_8in_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
+needle = "const PI4_HYBRID_SIG_8IN_MS: f64 = 0.972_28;"
+measured_by = ["BA-T10"]
+status = "stale"
+stale_since = "20738bf714"
+carrier = "BA-T10 (BA-Q9). The pqc_per_input median at the 8-input shape; as pi4_hybrid_sig_1in_ms."
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
+capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
+rev_source = "capture header"
+path_set = "block-weight"
+
+[[constant]]
+name = "pi4_range_proof_lone_1in_2out_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
+needle = "const PI4_RANGE_PROOF_LONE_1IN_2OUT_MS: f64 = 18.838;"
+measured_by = ["BA-T10"]
+status = "current"
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt"
+capture_rev = "78de6a14e2ac732fc3298f4d77db7aae43136db8"
+rev_source = "capture header. bp_lone at the 1-input 2-output shape: verify_batch over a batch of one, what the pool door pays at TxSlot::Lone, on the verifier that folds Â into the batch (BA-Q9, #1319). The same session's eager control read 34.80 ms (gap7_block_verify_pi4_rust_eager_20261108T231752Z.txt), against 35.017 ms in the 2026-09-05 capture."
+path_set = "bp-verify"
+
+[[constant]]
+name = "pi4_range_proof_lone_8in_2out_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
+needle = "const PI4_RANGE_PROOF_LONE_8IN_2OUT_MS: f64 = 18.882;"
+measured_by = ["BA-T10"]
+status = "current"
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt"
+capture_rev = "78de6a14e2ac732fc3298f4d77db7aae43136db8"
+rev_source = "capture header. bp_lone at the 8-input 2-output shape: verify_batch over a batch of one, what the pool door pays at TxSlot::Lone, on the verifier that folds Â into the batch (BA-Q9, #1319). The same session's eager control read 34.61 ms (gap7_block_verify_pi4_rust_eager_20261108T231752Z.txt), against 34.827 ms in the 2026-09-05 capture."
+path_set = "bp-verify"
 
 [[path_set]]
 id = "relay-aes"
@@ -383,6 +439,7 @@ stale_through = [
   { through = "d85697a328", note = "The body-store actor leaves the engine runtime for its own one-worker runtime, sk-body-store, whose threads lower themselves to serving nice before they take work. The redb read and the chunk decrypt of a served body run there for the whole session. The endpoint thread still only waits, and the fetch client is unchanged. Not re-measured; the rows stay stale." },
   { through = "ec931d5858", note = "Only test files and the identity wire-pin fixtures changed: the fixtures were re-recorded because the derived persona keys moved (NI-R7). No serving or fetch code changed. Not re-measured." },
   { through = "a867b6840c", note = "Test fixtures only: the p-fetch and p-serve identity wire pins (src/wire_pin/*.hex) re-recorded because the derivation salt name_id || purpose moved the pinned persona keys. No serve or fetch code changed, no cost moved. Not re-measured." },
+  { through = "d6e8da7d44", note = "Rules after the C++ removal (#1308): shekyl-p-fetch's crate root takes #![deny(unsafe_code)]; the crate holds no unsafe, so the attribute compiles to nothing and nothing the captures priced has moved." },
 ]
 
 [[constant]]
@@ -793,6 +850,7 @@ cleared = [
   { through = "623fa03dce", reason = "Each connector publishes an admitted socket through a callback in place of the shared admission channel. The library listener still sends on that channel (publish_on), at the same point after the channel exists. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, and no deadline moved, so the 2026-10-14 capture still prices this tree." },
   { through = "63fcdd9d25", reason = "profile.rs: the doc comment on Tor's δ names its 60 s basis as shekyl-p2p-session's TIMED_SYNC_MIN plus half TIMED_SYNC_JITTER, in place of the deleted C++ P2P_DEFAULT_HANDSHAKE_INTERVAL. A comment only; no dial, handshake, gap or shutdown wait changes." },
   { through = "c42ef64a2d", reason = "C++ removal (#1299): comments only in shekyl-tor publish.rs; no code path changed, and nothing the capture priced has moved." },
+  { through = "1cd88d18ba", reason = "The onion keypair moves into shekyl-crypto-pq: OnionIdentity is built from a keypair and the daemon holds one for the boot instead of a seed, so an ADD_ONION no longer expands a seed first. The publish path only; no SOCKS dial, gap, shutdown wait or deadline changes, so the 2026-10-14 capture still prices this tree." },
 ]
 
 [[constant]]
@@ -1019,6 +1077,7 @@ cleared = [
   { through = "fc2d5eeba", reason = "SV-D (PR #1015): a doc comment on ShardAggregate::shard_hash names the view hash. No code changed on the render path." },
   { through = "ca38266f8", reason = "SV-D (PR #1015): a new binary, shekyl-shard-render, behind the `cli` feature, which calls the library's render_candidate_png on a JSON view from stdin; the crate doc is rewritten. The library's render path is untouched, and the binary is not on the shipped graph of any wallet." },
   { through = "5f857fadf", reason = "Doc comments in candidate.rs and params.rs, re-keyed off the Stage 5 framing. No code changed." },
+  { through = "d6e8da7d44", reason = "Rules after the C++ removal (#1308): shekyl-shard-visual's crate root takes #![deny(unsafe_code)]; the crate holds no unsafe, so the attribute compiles to nothing and the capture still prices this tree." },
 ]
 
 [[constant]]

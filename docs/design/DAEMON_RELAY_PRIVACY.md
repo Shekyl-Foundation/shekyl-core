@@ -80,7 +80,7 @@ recommendation rests on a measurement, not on reasoning. §11 anchors every find
 Core source. Decisions D-1…D-7 stand as amended; §7 is the Round-3 agenda.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (FFI-boundary-moving), and
-[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md)
 §"Migration is a planning activity" — this document exists so the port is not
 folded into feature work.
 **Spec-first per** [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc).
@@ -12611,23 +12611,53 @@ They are a separate surface and a separate curve.)*
 > times one scheme-1 verification; the same at 1 and 8 inputs), under 1 % of
 > the 124.5 ms 1-in genesis cell. A multisig input is about M × 972 µs, up to
 > 4.86 ms at M = 5 (derived, not measured: M of the timed verifications, under
-> the multisig domain, plus the container parse). The range proof is
-> 35.0 ms at 2 outputs and 193.4 ms at 16 (`bp_proxy`, the shipped
-> single-proof verifier).
+> the multisig domain, plus the container parse). The range proof as a
+> batch of one is 18.84 ms at 2 outputs and 107.3 ms at 16
+> (`docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt`, `bp_lone`,
+> rev `78de6a14e2`), the verifier that adds `Â`'s terms into the batch
+> rather than evaluating `Â` with a multiscalar multiplication of its own.
+> Before that fold it was 35.0 ms and 193.4 ms (`bp_proxy` in the 2026-09-05
+> capture; 34.80 ms and 196.3 ms in a control run of the eager verifier in
+> the 2026-11-08 session, under the same load).
 >
 > **What it changes.** §71's structure is unchanged: verification is inside
 > `hop`'s critical path, the door verifies before the relay forwards, and
-> `hop` moves when the verification moves. The pinned cells of
-> `SPEC_VERIFY_COST` (§85.3) are the masks-and-proof pair alone (the 2026-08
-> sweep left the signature out on this section's original ground, and the
-> range proof was never in §72.1's table), so they omit both terms: about
-> 36 ms at the modal 1-in/2-out shape on the floor device, against 124.5 ms.
-> Omitted work under-states `hop`, the privacy-losing direction (§71.3). The
-> cells price the single-signer input, the modal one; a multisig input adds
-> about (M − 1) × 972 µs to its transaction's verification, about 3.89 ms per
-> input at M = 5 (derived as above).
-> Re-deriving the floor over the door's whole sequence is BA-Q9
-> (`BENCHMARK_ALIGNMENT.md`).
+> `hop` moves when the verification moves. §85.3's sweep timed the
+> masks-and-proof pair alone (it left the signature out on this section's
+> original ground, and the range proof was never in §72.1's table). Omitted
+> work under-states `hop`, the privacy-losing direction (§71.3), so each
+> cell of `SPEC_VERIFY_COST` is the door's whole sequence (BA-Q9,
+> ruled 2026-11-08): §85.3's masks-and-proof term, plus `n_in` hybrid
+> signatures, plus the lone range proof, each measured on the floor device
+> (`verify_cost.rs`, `door_sequence_ms`). The signature term prices the
+> single-signer input, the modal one; a multisig input adds about
+> (M − 1) × 972 µs to its transaction's verification, about 3.89 ms per
+> input at M = 5 (derived as above). The signature and range proof
+> read no tree, so the depth-7 cells add the terms measured at depth 2.
+>
+> | cell | masks + proof (§85.3) | signatures | range proof, lone | cell |
+> | --- | --- | --- | --- | --- |
+> | 1-in, depth 2 | 124.5 ms | 1 × 0.97186 ms | 18.838 ms | 144.31 ms |
+> | 1-in, depth 7 | 143.3 ms | 1 × 0.97186 ms | 18.838 ms | 163.11 ms |
+> | 8-in, depth 2 | 399.2 ms | 8 × 0.97228 ms | 18.882 ms | 425.86 ms |
+> | 8-in, depth 7 | 791.9 ms | 8 × 0.97228 ms | 18.882 ms | 818.56 ms |
+>
+> The signature operands are criterion's point estimates in the 2026-09-05
+> capture (`pqc_per_input`), the range-proof operands in the 2026-11-08 one
+> (`bp_lone`), at that shape. The sum is composed, not timed as one
+> call; what it leaves out is µs-class (`tx_form`'s parse, 4.9 µs at 1 input
+> and 19.9 µs at 8 in the same capture, and CEN-H18's cleartext balance). The
+> same capture's `adm` term, the masks-and-proof pair re-timed on the Rust
+> verifier at depth 2, reads 126.05 ms at 1 input and 402.11 ms at 8, 1.2 %
+> and 0.7 % above §85.3's cells; the cells keep §85.3's figures until
+> BA-T10 (ruled 2026-11-08), because §85.3 is the only sweep with the
+> depth-7 column, and BA-T10 includes the depth sweep.
+>
+> Every value derived from the cells moves with them: the clearnet hop is
+> 195 ms (144.31 + 0.96 ms of node crypto + 50 ms transit) and the Tor hop
+> 1770 ms; the clearnet embargo 194 s and the Tor embargo 511 s; the wallet
+> wait (`ADOPTED_PROPAGATION_TIMEOUT_SECS`) 2352 s; the origin retry
+> 1176 s (§92.5c). §97's register carries them.
 
 §71's *"and ML-DSA-65 signatures"* does not hold for ordinary transactions.
 `shekyl_fcmp_verify` takes `pqc_pk_hashes_ptr` (one key scalar `k = H_ℓ(pk)`
@@ -13968,6 +13998,9 @@ is only visible when it costs you the better story.
 transaction at depth 7 costs **792 ms of verification per hop** on the machine
 the guarantee is provisioned to.
 
+These are the masks-and-proof term. The cells `SPEC_VERIFY_COST` ships add the
+door's signature and range-proof terms to them (§72.2, amended 2026-11-08).
+
 ### 85.4 Second-order: the *marginal* ratio is not 5.56×
 
 The totals hide it. Per-layer:
@@ -14304,9 +14337,12 @@ zone to alias onto.
 > question, and a future reader asking it about shapes should find the numbers
 > rather than re-derive them.
 >
-> **The shipped interim is the live instance**: hop 1750 ms, **1 ms** from an
-> 11-second step. Whether that instance is exercised is the checklist at
-> §89.8.4, not restated here.
+> **The shipped interim**: hop 1770 ms (BA-Q9, 2026-11-08), 6 ms from a
+> 1-second step (`tests/embargo_steps.rs`). Whether a step instance is
+> exercised is the checklist at §89.8.4, not restated here. The §94
+> candidate's modal hop, which does not ship, is now 736 ms and 15 ms from a
+> +12-second step (the same test), which matters only if that candidate is
+> adopted.
 >
 > *(Method note: an earlier draft of this section computed distances from a
 > closed form for the `h = 1` family alone. That form missed the harmonics from
@@ -14505,7 +14541,7 @@ usability cost (rules 80, 82) and becomes an honest disclosure.
 
 ### 89.6.4 Interim, and who owns the fix
 
-**The interim is the worst-zone global — 2297 s, one value, no zone parameter.**
+**The interim is the worst-zone global — 2352 s, one value, no zone parameter.**
 Chosen *because* it requires no machinery: it is the cheapest thing to delete
 when the wallet stops holding a relay constant. The per-zone accessor and the
 per-zone FFI argument added earlier in this round were **removed rather than
@@ -14513,7 +14549,7 @@ left unused**, since the export has exactly one caller and adding structure to a
 deletion target is investment in the wrong direction.
 
 **Cost of the interim, stated rather than buried:** a clearnet send reports
-failure at ~38 minutes instead of ~15. That is the price of not knowing, and
+failure at ~39 minutes instead of ~15. That is the price of not knowing, and
 89.6.3's middle tier is what repays it.
 
 **Ownership: the wallet-rewrite track, not this round.** The decoupling is
@@ -14771,7 +14807,7 @@ unbounded wait turned a red assertion into a CI job timeout with no test named.
 > | # | entry | held harmless by | re-check |
 > | --- | --- | --- | --- |
 > | 1 | §89.8.2's premise (a stem entering the anonymity zone completes there) | originated does not draw; **relayed does** | **verify me first, I may have already been discharged.** Re-grounded 2026-08-23: Q12-U2 deleted the `forward` arm; the draw site already had `zone`; relayed arrivals draw. See below. |
-> | 2 | shipped interim anon hop 1 ms from an 11-second embargo step | **not held harmless on the relayed path** — the draw is live | re-measure the distance with `derive::next_embargo_step` at whatever transit constant is live then; `F` moves the whole step structure |
+> | 2 | shipped interim anon hop near an embargo step: the 1770 ms hop (BA-Q9, 2026-11-08) is 6 ms from a 1-second step, and no shipped hop's next step is a resonance step (`tests/embargo_steps.rs`) | **not held harmless on the relayed path** — the draw is live | re-measure the distance with `derive::next_embargo_step` at whatever transit constant and verification cell are live then; `F` moves the whole step structure |
 >
 > **Re-check rather than re-read**, because §89.8.4's own premises have gone
 > stale once in this arc already. An entry is discharged when the code that
@@ -15572,7 +15608,7 @@ transaction reached a miner.
 **Past that point the pin's sign flips.** Every other node holding that
 transaction admits at `Block`, matches `broadcasted`, and re-relays on the
 ordinary grid. A pinned node does none of those: it sits on `private_req` at the
-derived **1148 s** on the anonymity zone, **alone**, after the transaction is
+derived **1176 s** on the anonymity zone, **alone**, after the transaction is
 already public. That is a behavioural difference keyed on exactly the fact the
 mark is meant to conceal — the **absence-oracle shape** again — and it appears at
 the moment the concealment has stopped being worth anything.
@@ -15763,20 +15799,22 @@ prices them against each other rather than adopting `p` by default.
 *relaying* node decides a stem has probably completed. The origin's retry is the
 same question asked by a different actor, so it is asked at the same confidence:
 `one_in = 1 / (1 - alpha) = 10`, and the 1-in-10 survival quantile of the
-adopted anonymity timer is **1148 s**
-(`shekyl_dandelionpp_origin_retry_interval_seconds`).
+adopted anonymity timer is **1176 s**
+(`shekyl-relay` `origin_retry_secs`, `graph/embargo.rs`).
 
 That is a constant with a live provenance rather than a point inside a bracket:
-if `alpha` moves the interval follows, instead of decoupling silently. It stays
-fixed at 1148 s through the DRS-X flip and the rebuild, and is revisited after
-the rebuild against the Rust relay as built (Rick, 2026-10-30; owner RD, the
-FOLLOWUPS row *Revisit the origin's first retry*). Same
+if `alpha` moves the interval follows, instead of decoupling silently. Its
+derivation stays fixed through the DRS-X flip and the rebuild, and is revisited
+after the rebuild against the Rust relay as built (Rick, 2026-10-30; owner RD,
+the FOLLOWUPS row *Revisit the origin's first retry*). The retry follows the
+derivation, and no literal holds its value (Rick, 2026-11-08): it reads 1176 s
+since BA-Q9 put the door's signature and range proof into the hop it reads. Same
 shape as §94.8's argument for deriving rather than choosing, and it removes the
 self-invented bar this arc has been bitten by twice.
 
-The **emission-count coincidence is a check, not the basis.** 1148 s is also the
-lowest quantile that leaves exactly one retry before the wallet's 2297 s failure
-verdict — which is the right relationship for it to have, and the more robust
+The **emission-count coincidence is a check, not the basis.** 1176 s is also the
+lowest quantile that leaves exactly one retry before the wallet's 2352 s failure
+verdict (the second retry lands at 2352 s, on the verdict, not before it) — which is the right relationship for it to have, and the more robust
 one, because that ceiling has **no live consumer**:
 `shekyl_dandelionpp_propagation_timeout_seconds()` is declared in
 `shekyl_ffi.h` and called by nobody since wallet2's consumer died with
@@ -15838,7 +15876,7 @@ messages behind the front were never offered to the transport at all, and only
 the front one may have had windows accepted. "Launched" is true of at most one
 of them.)*
 
-**So the 1148 s in this section is conditional on the send having happened, and
+**So the 1176 s in this section is conditional on the send having happened, and
 the condition is new.** Item 3's derivation provisions for *"the stem was
 swallowed at hop 1"* — a stem that reached a peer and died there. A carrier
 discard cannot be that class: the complete transaction was never accepted by
@@ -15847,9 +15885,9 @@ as "never reached a peer" — epee reports acceptance into its write queue and
 nothing about receipt, so a partially accepted front message may well have put
 bytes on a socket. What is guaranteed is INCOMPLETE acceptance, and that is
 what makes reassembly impossible.) It must not draw that interval: waiting
-1148 s for a transaction no peer can hold is
+1176 s for a transaction no peer can hold is
 the swallow case inverted, with the origin doing the waiting for an event that
-cannot occur. Wherever this document says an origin re-broadcasts at 1148 s,
+cannot occur. Wherever this document says an origin re-broadcasts at 1176 s,
 read it as *an origin whose transaction was sent*.
 
 **The split is only as good as the bit, and the bit had a lying writer.**
@@ -15875,7 +15913,7 @@ producer's end.
 is settled and the disarm is wired: an origin that sees its transaction
 arrive from anywhere other than the peer it stemmed to stops re-broadcasting.
 
-That changes what 1148 s is *for*, without changing the number. Before, the
+That changes what 1176 s is *for*, without changing the number. Before, the
 interval provisioned against everything, including transactions that were
 propagating perfectly well and whose origin was re-emitting redundantly.
 After, it provisions against exactly the class where **no signal exists**: the
@@ -17317,16 +17355,16 @@ row. Pins below were read at `98fbd20acb`.
 | Gray cooldown: 2 min after the first failed test, doubling per consecutive failed test, capped at 1 h, each with U(0, 50%) jitter. A failure the dialer's judge excuses neither climbs nor descends: an address with counted failures cools at its current rung, one with none waits the connector's outage retry (`DIALER_OUTAGE_EVIDENCE.md` §3.4) | Each connector's dial profile, `shekyl-transport-layer` `dial_profile(connector).cooldown` (the dial profile, Rick 2026-10-27); the ladder, `shekyl-peerlist` `cooldown_nanos` (the gray-lifecycle PR, Rick 2026-10-24); the verdict, `shekyl-dialer/src/judge.rs` and `owner/judging.rs` (`DIALER_OUTAGE_EVIDENCE.md`, #1235) | **Assumption.** Starting values, written down. What the cap means: a dead address costs each node at most about 24 failed tests a day once it reaches the cap (a Tor test is up to three attempts); a failure with no sign of life on the link is excused instead, and never climbs. *Records-was, SUPERSEDED by the judge (#1235):* **the quiet threshold, Derived** (the dial profile, Rick 2026-10-27), on the floor device, at ε = 10⁻³: K is the smallest k with `p_fail^k < ε` at the half-dead fraction, and S is at least one window and the time K attempts take at the connector's bound and pace, computed in the profile (`QuietThreshold::derive`): `ceil(K / bound)` rounds, each up to the connector's dial deadline and its longest wake gap (1.5 s), so S follows if any of them moves. Clearnet (shekyl-dev data `dial-profile/2026-10-27-clearnet-pfail`): 0 of 283 attempts to live peers failed. With no failure observed the estimate is read at its bound: the 95 % upper bound of `q_live` is about 1.1 % (the rule of three), so `p_fail` = 0.505 and K = 11 (the point estimate, 0.5, gives 10); S: eleven rounds at bound 1, each up to the 1.415 s deadline and a 1.5 s wake, 32.065 s. **What the series can and cannot show:** the rig dialed the testnet fleet, our own hosts, from the floor device across internet paths (connects took 18 to 247 ms, none local), on a quiet network. The internet's live-failure rate is higher, with NAT, firewalls and churn, so `q_live` here is a floor for the open network's. **Re-derived from** the testnet fleet's clearnet live-dial outcomes after alpha.11. Tor (`inflight-bound/2026-10-26-final-head`): 189 of 336 attempts failed at half dead, `p_fail` 0.5625, so K = 13; S: thirteen attempts at bound 5 are three rounds, each up to the 120 s dial deadline and a 1.5 s wake, 364.5 s; every full-window reply seen (104 to 113 s) is inside the deadline. A false quiet needed the node to hold nothing, which is the isolated node the wargame accepts. #1235 deleted K, S and `QuietThreshold::derive` with the guard; the posture line's `quiet_after` is now Tor's `SocksTimeout` plus δ (`TOR_SUPERVISOR.md` §4.2) | The lists: a failed test that proves no misbehaviour cools the address instead of dropping it; the dialer cannot draw a cooling address | After the gray-lifecycle PR, on testnet: how often a cooled address succeeds at its first retest, by rung of the ladder |
 | Failure-judging bracket δ, 15 s on Tor and 15 s on clearnet, each its own (`OE-D5`, `OE-D7` ruled 2026-10-31; built by #1235) | Each connector's `DialProfile.judging.bracket_nanos` in `shekyl-transport-layer/src/profile.rs` (`TOR_BRACKET_NANOS`, `CLEARNET_BRACKET_NANOS`); read by the dialer's judge | **Assumption**, per connector (Rick, 2026-10-31). Basis on both: the 60 s mean timed sync (`shekyl-p2p-session/src/timing.rs`, `TIMED_SYNC_MIN` 45 s + U(0, `TIMED_SYNC_JITTER` 30 s), PWD-B2; *records-was* `P2P_DEFAULT_HANDSHAKE_INTERVAL`, `src/cryptonote_config.h` at `ac3836de90` (line 193), deleted 2026-11-05) gives each session about two received messages a minute. **Tor** counts any session and every stream opening (the one guard link); **clearnet** counts outbound sessions only. Prediction under an assumed independent Poisson arrival on each counted session (`DIALER_OUTAGE_EVIDENCE.md` §3.5): one δ-interval is empty with `p = exp(−n · δ / 30 s)`, and the two-sided bracket excuses a healthy link's Uncertain failure with `1 − (1 − p)²`, about 0.50 % at 12 sessions, 9.7 % at 6, 60 % at 2. Re-derived if the timed-sync interval moves. *Records-was: labelled Derived, with the one-sided 0.25 %* | The judge's bracketed corroboration: an Uncertain failure counts only with a sign of life within δ before and within δ after it | The floor-device live runs (`DIALER_OUTAGE_EVIDENCE_BRIEF.md` §7): the fraction of Uncertain failures excused on a healthy link at target, per connector |
 | Excusal retry `outage_retry`, 10 s + U(0, 5 s) on Tor and 10 s + U(0, 5 s) on clearnet, each its own (`OE-D6`, `OE-D7` ruled 2026-10-31; built by #1235) | Each connector's `DialProfile.judging.outage_retry` (`TOR_OUTAGE_RETRY`, `CLEARNET_OUTAGE_RETRY`) | **Assumption**, per connector (Rick, 2026-10-31). An address cooldown, not a recovery bound: how long an excused address with no counted failure waits before it is eligible again; an address with counted failures keeps its rung (hold the rung, `DIALER_OUTAGE_EVIDENCE.md` §3.4). Eligible means drawable when a slot is free. **Tor** basis: under the slot turnover, `window / bound` (21 s at today's 105 s window; the build checks only the deadline's 24 s, necessary not sufficient). **Clearnet** basis: caps redials of an unproven address at one per 10–15 s; the build checks that the shortest retry outlasts one fill round. Recovery after an unblock is a measurement: on clearnet the design bounds the first redial of an excused address at about δ + 15 s plus one dial; on Tor the first redial waits for a slot, and the unblock-to-first-open time is a Pi measurement (brief §7). *Records-was: "recovery after an unblock is at most 15 s plus one dial" on both* | The peer list's excusal of an address with no counted failure; the first sign of life clears it | The floor-device live runs: blackhole recovery time, per connector |
-| Clearnet transit, 50 ms | `verify_cost.rs` `ADOPTED_TRANSIT_ASSUMPTION_MS` and its typed twin `ADOPTED_TRANSIT`; the D7 clearnet column's `transit_ms` (`declaration.rs`) | **Assumption.** §21's "at least 50 ms if crossing an ocean", carried forward labelled at §86.2. Never measured on either path | `adopted_hop_ms` (the clearnet `hop`, 175 ms), the clearnet embargo table (`EmbargoTimer::adopted`, mean 190 s), the flood instrument's clearnet row (`conformance::flood::transit_for`) | After RD, on the Rust path: a quantile, not a mean (§86.2), clearnet to clearnet on an established connection, from a floor-representative connection (§94.6) |
-| Tor transit, 1625 ms | `verify_cost.rs` `ANON_ZONE_TRANSIT_ASSUMPTION_MS` and `ANON_ZONE_TRANSIT`; the D7 Tor column's `transit_ms` | **Assumption.** §63.2's "ten times clearnet" upper bound, taken on faith (§89.5). §94's 2026-08 readings (per-session pooled p90 403.8 to 710.9 ms across the day, 590.6 ms interpolated at the modal shape, §94.10 and §94.5) are **RustPath** readings of the network term, taken by `shekyl-tor-transit-spike` over public Tor with no relay in the path; they are recorded, not adopted, because the tail above the measured 8.4 to 16.6 KB span is unmeasured (§94.5) and the re-derivation is §94.10's two-commit procedure | The Tor `hop` (1750 ms) and embargo table; `longest_transit` and through it `shekyl_dandelionpp_origin_retry_interval_seconds` and `shekyl_dandelionpp_propagation_timeout_seconds`; the flood instrument's Tor row | After RD, on the Rust path, under §94's pre-registration: onion-to-onion rendezvous on an established connection, the floor-representative host, at least 8 h of spread for the diurnal swing, the tail shape included |
+| Clearnet transit, 50 ms | `verify_cost.rs` `ADOPTED_TRANSIT_ASSUMPTION_MS` and its typed twin `ADOPTED_TRANSIT`; the D7 clearnet column's `transit_ms` (`declaration.rs`) | **Assumption.** §21's "at least 50 ms if crossing an ocean", carried forward labelled at §86.2. Never measured on either path | `adopted_hop_ms` (the clearnet `hop`, 195 ms), the clearnet embargo table (`EmbargoTimer::adopted`, mean 194 s), the flood instrument's clearnet row (`conformance::flood::transit_for`) | After RD, on the Rust path: a quantile, not a mean (§86.2), clearnet to clearnet on an established connection, from a floor-representative connection (§94.6) |
+| Tor transit, 1625 ms | `verify_cost.rs` `ANON_ZONE_TRANSIT_ASSUMPTION_MS` and `ANON_ZONE_TRANSIT`; the D7 Tor column's `transit_ms` | **Assumption.** §63.2's "ten times clearnet" upper bound, taken on faith (§89.5). §94's 2026-08 readings (per-session pooled p90 403.8 to 710.9 ms across the day, 590.6 ms interpolated at the modal shape, §94.10 and §94.5) are **RustPath** readings of the network term, taken by `shekyl-tor-transit-spike` over public Tor with no relay in the path; they are recorded, not adopted, because the tail above the measured 8.4 to 16.6 KB span is unmeasured (§94.5) and the re-derivation is §94.10's two-commit procedure | The Tor `hop` (1770 ms) and embargo table (mean 511 s); `longest_transit` and through it `shekyl_dandelionpp_origin_retry_interval_seconds` and `shekyl_dandelionpp_propagation_timeout_seconds`; the flood instrument's Tor row | After RD, on the Rust path, under §94's pre-registration: onion-to-onion rendezvous on an established connection, the floor-representative host, at least 8 h of spread for the diurnal swing, the tail shape included |
 | `hop` scheduling term, 0 | `verify_cost.rs` `adopted_hop_ms` doc; §71.3's composition `hop = transit + verification + scheduling`; §94.7 and §94.9 | **RustPath reading recorded, value not yet adopted (as of 2026-11-05).** The constant still carries 0 as a stated omission; adopting a term is §94.10's two-commit procedure, not this reading. **UPDATE 2026-11-05 (the cutover's fleet run, shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** the timing engine's `Relay`-class lateness is D5's leg 4 on the Rust `Driver`; read over three legs (clearnet, Tor, clearnet with the carrier) on x86 fleet hosts, not the floor device. Decision-to-fire delay on an idle owner (a 4 vCPU cloud host): max 0.206 ms over 22 fires, 0.330 ms over 39, 1.264 ms over 410 (8 of them over 1 ms); on a busy lab host: max 2.27 ms over 83 (31 over 1 ms), 1.95 ms over 39, 12.3 ms over 335 (104 over 1 ms, none over 100 ms). Fire-to-report-back at most 2.7 ms anywhere. **One outlier class:** the origin under the carrier recorded wakes 14.2 s and 26.2 s late (6 over 100 ms of 277) while the sessions' and discovery's classes stayed under 11 ms — the relay owner alone was blocked, coincident with the submit path's check-and-commit outliers on that host's rotational store (7.5–42.7 s against a normal 0.4–1 s); the shared lock is not identified and is reported with the record, not fixed. A floor-device reading is still owed before a term is derived. | `time_between_hop_ms`, through the omission | The floor-device reading of the same instrument, then §94.10's two-commit procedure. |
-| Verification floor: 124.5 ms (1 input, genesis), 399.2 ms (8, genesis); 143.3 and 791.9 ms at depth 7 | `verify_cost.rs` `SPEC_VERIFY_COST`, cells at `:349` to `:353` | **RustPath.** The Rust verifier on the Pi 4 (`Provenance::MeasuredPi4`, §85.3). The depth-7 cells are `TreeBasis::SynthesizedProjection`, a prior against a synthesized tree (§81.2), and 44 of the 48 cells are unpopulated in-tree (FOLLOWUPS, "populate the 48-cell Pi verification surface"). **UPDATE 2026-11-08 (§72.2's amendment):** the cells are the masks-and-proof pair. The Rust door also runs one authorization check per input (one hybrid signature for a single-signer input, 972 µs on the floor device; M of them for an M-of-N multisig input, M ≤ 5) and, at `Lone`, the range proof (35.0 ms at 2 outputs), which the cells omit: about 36 ms at the modal shape, the under-stating direction; BA-Q9 re-derives at the single-signer input | `adopted_hop_ms` (the modal cell is the hop's floor) | Not by RD. §81.3's schedule: re-measure on the spec machine against the actual tree as depth grows, the projection as the prior |
-| `time_between_hop_ms`, 175 ms clearnet, 1750 ms Tor | `params.rs` `DandelionParams::adopted_for_transit_ms`; the field is a `DerivationMs` | **Derived**: RustPath verification plus Assumption transit, plus the CppPath scheduling term above as an omission. `adopted_hop_ms_with_transit` returns a `DerivationMs` with the weakest of its inputs (`AdmissibleBasis`: Assumption, then Model, then RustPath; `VERIFICATION_FLOOR_BASIS` is RustPath), so the adopted hop reads `Assumption`. Outside the crate a value is built only by `assumption`, `model`, or `rust_path`; `derive` is crate-private, held by a `compile_fail,E0624` doctest. `DandelionParams::inherited` stores `INHERITED_HOP` (175 ms, `DerivationMs::assumption`) directly. **UPDATE 2026-11-05:** the scheduling term has its first Rust-path reading (the row above); the adopted hop still reads `Assumption` because nothing was re-derived — the cutover PR records, it does not adopt | `EmbargoTimer::adopted` | Re-derived by §94.10's two-commit procedure (input first, pins second) once the scheduling term's floor-device reading is in |
+| Verification floor, the door's sequence per cell: 160.49 ms (1 input, genesis), 441.81 ms (8, genesis); 179.29 and 834.51 ms at depth 7 | `verify_cost.rs` `SPEC_VERIFY_COST`, cells at `:420` to `:440`, composed by `door_sequence_ms` (`:312`) | **RustPath.** Every operand is the Rust verifier on the Pi 4 (`Provenance::MeasuredPi4`): §85.3's masks-and-proof term (124.5, 399.2; 143.3 and 791.9 at depth 7), plus `n_in` hybrid signatures (971.86 µs per single-signer input at 1 input, 972.28 at 8; an M-of-N multisig input is M of them, M ≤ 5) and the lone range proof at 2 outputs (35.017 ms, 34.827 ms), from `docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt` (§72.2, amended 2026-11-08; BA-Q9). The sum is composed, not timed as one call. The depth-7 cells are `TreeBasis::SynthesizedProjection`, a prior against a synthesized tree (§81.2), and 44 of the 48 cells are unpopulated in-tree (FOLLOWUPS, "populate the 48-cell Pi verification surface") | `adopted_hop_ms` (the modal cell is the hop's floor) | Not by RD. §81.3's schedule: re-measure on the spec machine against the actual tree as depth grows, the projection as the prior; BA-T10 re-times the door's sequence |
+| `time_between_hop_ms`, 195 ms clearnet, 1770 ms Tor | `params.rs` `DandelionParams::adopted_for_transit_ms`; the field is a `DerivationMs` | **Derived**: RustPath verification plus Assumption transit, plus the CppPath scheduling term above as an omission. `adopted_hop_ms_with_transit` returns a `DerivationMs` with the weakest of its inputs (`AdmissibleBasis`: Assumption, then Model, then RustPath; `VERIFICATION_FLOOR_BASIS` is RustPath), so the adopted hop reads `Assumption`. Outside the crate a value is built only by `assumption`, `model`, or `rust_path`; `derive` is crate-private, held by a `compile_fail,E0624` doctest. `DandelionParams::inherited` stores `INHERITED_HOP` (175 ms, `DerivationMs::assumption`) directly. **UPDATE 2026-11-05:** the scheduling term has its first Rust-path reading (the row above); the adopted hop still reads `Assumption` because nothing was re-derived — the cutover PR records, it does not adopt | `EmbargoTimer::adopted` | Re-derived by §94.10's two-commit procedure (input first, pins second) once the scheduling term's floor-device reading is in |
 | `fluff_return_ms`, 3250 ms | `params.rs` `FLUFF_RETURN` (`DerivationMs::model`) | **Model.** F-7's transit-free p90 first passage at degree 12, `FloodReach::OutboundOnly`, provisional under §96 item 2. The C++ transports the flush today, but the number is the instrument's, not a reading of that transport. The value carries the basis | The embargo derivation (`F′`); `ADOPTED_PROPAGATION_TIMEOUT_SECS` | Not re-run as a model. Its operational replacement is §96 item 2, on the Rust path after RD (a Tor-return arm and a clearnet peer). The model re-run with `EveryPeer` reach and Tor transit is the FOLLOWUPS row that item names |
 | Flush averages: `FLUFF_AVERAGE_IN_SECS` 5, `FLUFF_AVERAGE_OUT_QUARTER_SECS` 10, `FLUFF_AVERAGE_IN_QUARTER_SECS` 20 | `params.rs:597` to `:603` | **Assumption** for the parameters: inherited from the paper's implementation, never derived for Shekyl. The **realised** flush distribution (decision to bytes on the wire) is implementation timing, **RustPath since 2026-11-05 (fleet hosts, not the floor device).** **UPDATE 2026-11-05 (shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** on the Rust path the realised flush is the drawn delay plus the `Relay`-class wake delay (the `hop` row: ≤ 0.33 ms idle, ≤ 2.3 ms on a busy lab host without the carrier) plus the transport's write, read at session close as the write-stall histogram with `in_flight_at_close=0` on every session: lab-local sessions finished writes under 4 ms (max 1.1–3.9 ms); the cloud host's inbound sessions across the public internet carried a 17–57 ms tail (2^24–2^25 ns bins, four writes). The implementation adds milliseconds to averages drawn in seconds; a full realised-versus-drawn distribution was not taken (the fluff lines carry no draw). | `FluffScheduler` (`DandelionParams::inherited`), the flood model's flush draw | The parameters are parameters and are not measured. The realised distribution's floor-device reading, with the draw logged beside the write, when the parameters are derived |
 | Dandelion++ epoch: `CRYPTONOTE_DANDELIONPP_MIN_EPOCH` 10 min, `EPOCH_RANGE` 30 s, `STEMS` 2 | `shekyl-relay/src/owner/actor.rs` `RelayConfig::inherited` (`stems` 2, `min_epoch_secs` 600, `epoch_jitter_secs` 30); mirrored by `DandelionParams::inherited`. *Records-was:* `src/cryptonote_config.h` at `ac3836de90` (lines 115–117), read by `public_zone_params()` in `levin_notify.cpp`, deleted 2026-11-05 | **Assumption.** The paper's parameters, inherited. Epoch length is a privacy parameter (§23), not a reading | `EpochScheduler`, `StemMap` width | Not measured. Reopened by a design round, not by a run |
 | Embargo tick, `DEFAULT_EMBARGO_TICK_MILLIS` 250 | `schedule.rs:435` | **Assumption.** A discretisation choice argued on instant preemption; §94.10 says the step-density argument is its own round | `derive_embargo` | Not a measurement. §94.10's tick round |
-| `ADOPTED_PROPAGATION_TIMEOUT_SECS`, 2297 s | `schedule.rs:473` | **Derived** from the Tor transit row, the hop row and `fluff_return_ms`: the longest transit's 1-in-100 survival quantile | `shekyl_dandelionpp_propagation_timeout_seconds` (the wallet's wait) | Moves with its inputs, pins second (§94.10) |
+| `ADOPTED_PROPAGATION_TIMEOUT_SECS`, 2352 s | `schedule.rs:473` | **Derived** from the Tor transit row, the hop row and `fluff_return_ms`: the longest transit's 1-in-100 survival quantile | `shekyl_dandelionpp_propagation_timeout_seconds` (the wallet's wait) | Moves with its inputs, pins second (§94.10) |
 | `INHERITED_EMBARGO_SECS`, 39 s | `params.rs:486` | **Assumption.** The inherited daemon's `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE`, kept as the records-was the tests pin against | Tests only: `adopted_params_change_provenance_not_behaviour` and the FFI's "not the inherited 39 s" assertion. No production consumer | Not measured; it is the number F-1 replaced |
 | Carrier cadence: `NOISE_MIN_DELAY_MS` 3333, `NOISE_DELAY_JITTER_MS` 3334, `MEAN_CADENCE_MS` 5000 | `params/carrier.rs:136`, `:178`, `:189` | **Derived** from the 16 KiB/s bandwidth ceiling, which is a ruling (`COVER_TRAFFIC_RESTORATION.md` §2.8, §3.1), so **Assumption**-based. The realised cadence is **RustPath since 2026-11-05 (fleet hosts, `--dev-relay-cover`, clearnet only).** **UPDATE 2026-11-05 (shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** the relay owner transports each window; the written lines carry timestamp and size only. On a lab host with two open links: 275 windows, gaps per channel n=273 min 3340 p50 5078 p90 6334 max 6663 ms against the drawn 3333 + U(0, 3334) ms (min 3333, mean 5000, max 6667) — the realised cadence is the drawn one end to end; every window 20 480 bytes. On the origin host: 258 windows, gaps n=256 with the same body (min 3339 p50 5083 p90 6466 ms) and two gaps of 28.3 and 32.3 s on both channels at once — the relay-owner stall in the `hop` row, during which the carrier is silent: **an observable timing event on the cover link**, reported with the record. Two things the run also shows: the carrier refuses a Tor-only node (`NoiseWithoutOpenLink`: Tor is volume cover), so no Tor cadence exists to read; and an embargo reshape is written as a direct 2002 outside the windows (`Effect::Stem` → `send_batch`), a non-cadenced write on the link, raised as a design question, not ruled. | `NoiseCadence`, the carrier schedule, behind `set_carrier_development` (off in every shipped build) | §3.1c's budget-versus-actual reading on the floor device, development flag only; and whichever ruling the stall and the reshape questions get |
 | Connector deadlines (`shekyl-transport-layer::spans`; *records-was* `transport_spans` in C++, moved 2026-10-13): clearnet dial 1.415 s, handshake 1.426 s, gap 1.430 s; Tor dial 120 s, gap 37.4 s | `rust/shekyl-transport-layer/src/spans.rs:52` to `:81`; D9 (`P2P_TRANSPORT_LAYER.md`, 2026-09-30); clearnet from `docs/benchmarks/p2p_cutover_crossbuild_20260929.md`, Tor from `docs/benchmarks/p2p_tor_gap_cold_20261014.md` | **Clearnet: CppPath for the adopted values; a RustPath reading recorded 2026-11-05, outside D9's conditions.** **UPDATE 2026-11-05 (shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** the Rust dialer's spans over twelve clearnet dials (two dialers, two targets each, three legs; lab-local and lab-to-cloud across the public internet, x86 hosts): connect 2.3–39.8 ms, handshake 2.0–35.2 ms, dial-to-established 4.3–65.1 ms, every one under the 1.415 s / 1.426 s deadlines by a wide margin. Twelve samples on fleet hosts are not D9's measurement conditions (the floor device, the stated RTT ceiling), so the values stand as written. *Records-was:* **Clearnet: CppPath.** The distributions were taken with the C++ dial path in front (`idle_worker` on the two-worker io pool, the starvation defect the dialer brief records) and the C++ Levin handshake inside the gap. The 700 ms GEO-satellite RTT ceiling in the clearnet form is an **Assumption**, stated. **Tor: RustPath** (`TOR_SPANS_BASIS`; Rick, 2026-10-14): cold first contact on the Rust dialer, 189 sessions pooled from two responders. The dial is bounded by Tor's own SOCKS timeout, where the distribution is censored; the gap is twice the pooled p99, 18.69 s, rounded up. Reopen at 500 pooled Rust-path samples. **Ruled 2026-10-08 (Rick):** each connector's gap is the outbound handshake's only clock, armed by the connector | The connector's armed deadlines (`shekyl_zone_params`), the shutdown wait; the dialer's handshake clock | Clearnet: after PR-3, on the Rust dialer, under D9's measurement conditions; into this register. Tor: at 500 pooled Rust-path samples |

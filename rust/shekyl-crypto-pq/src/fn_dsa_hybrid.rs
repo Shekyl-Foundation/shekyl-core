@@ -95,7 +95,6 @@
 //! stack, and the decode is paid once per key.
 //! Its measurements are on `a_held_key_signs_on_a_small_stack`.
 
-use crate::heap_secret::HeapSecret;
 use crate::hybrid_combiner::{self, decode_canonical, encode_canonical, CANONICAL_OVERHEAD};
 use crate::rng::{key_material32, HedgedOsRng};
 use crate::seeded_rng::SeededRng;
@@ -114,6 +113,7 @@ use fn_dsa::{
     FN_DSA_LOGN_1024, HASH_ID_RAW,
 };
 use rand::{CryptoRng, RngCore};
+use shekyl_heap_secret::HeapSecret;
 use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 
 /// FN-DSA-1024 verifying-key length, from the crate.

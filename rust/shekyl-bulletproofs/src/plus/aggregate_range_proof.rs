@@ -9,13 +9,13 @@ use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_primitives::{keccak256_to_scalar, Commitment, INV_EIGHT};
 
 use crate::{
-    batch_verifier::BulletproofsPlusBatchVerifier,
+    batch_verifier::{BatchTerms, BulletproofsPlusBatchVerifier},
     core::{multiexp, multiexp_vartime, COMMITMENT_BITS, MAX_COMMITMENTS},
     plus::{
         padded_pow_of_2,
         transcript::*,
         u64_decompose,
-        weighted_inner_product::{WipProof, WipStatement, WipWitness},
+        weighted_inner_product::{WipProof, WipStatement, WipVerifierStatement, WipWitness},
         BpPlusGenerators, GeneratorsList, PointVector, ScalarVector,
     },
 };
@@ -57,6 +57,25 @@ struct AHatComputation {
     A_hat: EdwardsPoint,
 }
 
+/// The scalars `Â` is built from, for `padded` commitments (a power of 2):
+///
+/// `Â = A − z·Σ G_i + Σ d_y_z[i]·H_i + y^(mn+1)·Σ_j z^(2j)·V_j + g_const·g`
+///
+/// The prover evaluates it ([`AggregateRangeStatement::compute_A_hat`]); the
+/// verifier adds its terms into the batch ([`AggregateRangeStatement::A_hat_terms`]).
+/// One derivation for both.
+struct AHatScalars {
+    y: Scalar,
+    z: Scalar,
+    /// `z², z⁴, …`, one per padded commitment (and one past the last).
+    z_pow: ScalarVector,
+    /// `d ∘ descending powers of y, + z`: the coefficient of `H_i`.
+    d_descending_y_plus_z: ScalarVector,
+    y_mn_plus_one: Scalar,
+    /// `(Σyⁱ)·z − Σd·y^(mn+1)·z − (Σyⁱ)·z²`: the coefficient of `g`.
+    g: Scalar,
+}
+
 impl<'a> AggregateRangeStatement<'a> {
     pub(crate) fn new(V: &'a [EdwardsPoint]) -> Option<Self> {
         if V.is_empty() || (V.len() > MAX_COMMITMENTS) {
@@ -88,35 +107,26 @@ impl<'a> AggregateRangeStatement<'a> {
         ScalarVector(d_j)
     }
 
-    fn compute_A_hat(
-        mut V: PointVector,
-        generators: &BpPlusGenerators,
-        transcript: &mut Scalar,
-        A: CompressedPoint,
-    ) -> Option<AHatComputation> {
+    /// Draws `y` and `z` from the transcript and derives [`AHatScalars`].
+    fn A_hat_scalars(padded: usize, transcript: &mut Scalar, A: CompressedPoint) -> AHatScalars {
         let (y, z) = Self::transcript_A(transcript, A);
 
-        let A = A.decompress().as_ref().map(EdwardsPoint::mul_by_cofactor)?;
-
-        while V.len() < padded_pow_of_2(V.len()) {
-            V.0.push(EdwardsPoint::identity());
-        }
-        let mn = V.len() * COMMITMENT_BITS;
+        let mn = padded * COMMITMENT_BITS;
 
         // 2, 4, 6, 8... powers of z, of length equivalent to the amount of commitments
-        let mut z_pow = Vec::with_capacity(V.len());
+        let mut z_pow = Vec::with_capacity(padded);
         // z**2
         z_pow.push(z * z);
 
         let mut d = ScalarVector::new(mn);
-        for j in 1..=V.len() {
+        for j in 1..=padded {
             z_pow.push(
                 *z_pow
                     .last()
                     .expect("couldn't get last z_pow despite always being non-empty")
                     * z_pow[0],
             );
-            d = d + &(Self::d_j(j, V.len()) * (z_pow[j - 1]));
+            d = d + &(Self::d_j(j, padded) * (z_pow[j - 1]));
         }
 
         let mut ascending_y = ScalarVector(vec![y]);
@@ -133,6 +143,40 @@ impl<'a> AggregateRangeStatement<'a> {
 
         let y_mn_plus_one = descending_y[0] * y;
 
+        let g = (y_pows * z) - (d.sum() * y_mn_plus_one * z) - (y_pows * (z * z));
+
+        AHatScalars {
+            y,
+            z,
+            z_pow: ScalarVector(z_pow),
+            d_descending_y_plus_z,
+            y_mn_plus_one,
+            g,
+        }
+    }
+
+    /// The prover's `Â`, evaluated.
+    fn compute_A_hat(
+        mut V: PointVector,
+        generators: &BpPlusGenerators,
+        transcript: &mut Scalar,
+        A: CompressedPoint,
+    ) -> Option<AHatComputation> {
+        while V.len() < padded_pow_of_2(V.len()) {
+            V.0.push(EdwardsPoint::identity());
+        }
+
+        let AHatScalars {
+            y,
+            z,
+            z_pow,
+            d_descending_y_plus_z,
+            y_mn_plus_one,
+            g,
+        } = Self::A_hat_scalars(V.len(), transcript, A);
+
+        let A = A.decompress().as_ref().map(EdwardsPoint::mul_by_cofactor)?;
+
         let mut commitment_accum = EdwardsPoint::identity();
         for (j, commitment) in V.0.iter().enumerate() {
             commitment_accum += *commitment * z_pow[j];
@@ -145,19 +189,64 @@ impl<'a> AggregateRangeStatement<'a> {
             A_terms.push((*d_y_z, generators.generator(GeneratorsList::HBold, i)));
         }
         A_terms.push((y_mn_plus_one, commitment_accum));
-        A_terms.push((
-            ((y_pows * z) - (d.sum() * y_mn_plus_one * z) - (y_pows * (z * z))),
-            BpPlusGenerators::g(),
-        ));
+        A_terms.push((g, BpPlusGenerators::g()));
 
         Some(AHatComputation {
             y,
             d_descending_y_plus_z,
             y_mn_plus_one,
             z,
-            z_pow: ScalarVector(z_pow),
+            z_pow,
             A_hat: A + multiexp_vartime(&A_terms),
         })
+    }
+
+    /// The verifier's `Â`, as terms over the batch's slots (never evaluated):
+    /// `A` and each real commitment in `other`, `−z` on every `G_i`,
+    /// `d_y_z[i]` on every `H_i`, and the constant on `g`. `V` is unpadded and
+    /// cofactor-cleared; a padding commitment is the identity and contributes
+    /// nothing, so it is not a term. `None` if `A` does not decompress.
+    fn A_hat_terms(
+        V: &[EdwardsPoint],
+        transcript: &mut Scalar,
+        A: CompressedPoint,
+    ) -> Option<(Scalar, BatchTerms)> {
+        let padded = padded_pow_of_2(V.len());
+        let AHatScalars {
+            y,
+            z,
+            z_pow,
+            mut d_descending_y_plus_z,
+            y_mn_plus_one,
+            g,
+        } = Self::A_hat_scalars(padded, transcript, A);
+
+        let A = A.decompress().as_ref().map(EdwardsPoint::mul_by_cofactor)?;
+
+        let mut other = Vec::with_capacity(1 + V.len());
+        other.push((Scalar::ONE, A));
+        for (j, commitment) in V.iter().enumerate() {
+            other.push((y_mn_plus_one * z_pow[j], *commitment));
+        }
+
+        Some((
+            y,
+            BatchTerms {
+                g,
+                g_bold: vec![-z; padded * COMMITMENT_BITS],
+                h_bold: core::mem::take(&mut d_descending_y_plus_z.0),
+                other,
+            },
+        ))
+    }
+
+    /// `V·8⁻¹` for each commitment, the values the transcript hashes. The
+    /// commitments are public, so this is variable-time; its output is the
+    /// constant-time product's, byte for byte.
+    fn commitments_inv_eight(V: &[EdwardsPoint]) -> Vec<EdwardsPoint> {
+        V.iter()
+            .map(|V| multiexp_vartime(&[(INV_EIGHT(), *V)]))
+            .collect()
     }
 
     pub(crate) fn prove<R: RngCore + CryptoRng>(
@@ -274,6 +363,34 @@ impl<'a> AggregateRangeStatement<'a> {
     ) -> bool {
         let Self { generators, V } = self;
 
+        let V = Self::commitments_inv_eight(V);
+        let mut transcript = initial_transcript(V.iter());
+        let V = V
+            .iter()
+            .map(EdwardsPoint::mul_by_cofactor)
+            .collect::<Vec<_>>();
+
+        let generators = generators.reduce(V.len() * COMMITMENT_BITS);
+
+        let Some((y, A_hat)) = Self::A_hat_terms(&V, &mut transcript, proof.A) else {
+            return false;
+        };
+        WipVerifierStatement::new(generators, A_hat, y).verify(rng, verifier, transcript, proof.wip)
+    }
+
+    /// The verifier as it was before `Â` was folded into the batch: `Â`
+    /// evaluated with its own multiscalar multiplication, and the commitments
+    /// multiplied by `8⁻¹` in constant time. The oracle the fold is held
+    /// against (`tests::fold`); never a production path.
+    #[cfg(test)]
+    pub(crate) fn verify_eager<R: RngCore + CryptoRng>(
+        self,
+        rng: &mut R,
+        verifier: &mut BulletproofsPlusBatchVerifier,
+        proof: AggregateRangeProof,
+    ) -> bool {
+        let Self { generators, V } = self;
+
         let V = V.iter().map(|V| V * INV_EIGHT()).collect::<Vec<_>>();
         let mut transcript = initial_transcript(V.iter());
         let V = V
@@ -288,6 +405,7 @@ impl<'a> AggregateRangeStatement<'a> {
         else {
             return false;
         };
-        WipStatement::new(generators, A_hat, y).verify(rng, verifier, transcript, proof.wip)
+        WipVerifierStatement::new(generators, BatchTerms::point(A_hat), y)
+            .verify(rng, verifier, transcript, proof.wip)
     }
 }

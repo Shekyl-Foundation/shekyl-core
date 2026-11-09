@@ -10,6 +10,7 @@
 #![deny(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(non_snake_case)]
+#![deny(unsafe_code)]
 
 use std_shims::{
     io::{self, Read, Write},

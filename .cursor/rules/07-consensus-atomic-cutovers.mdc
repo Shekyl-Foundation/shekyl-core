@@ -53,7 +53,7 @@ All four criteria must be met. Each is independently testable;
    A flag decomposition only counts as consensus-safe if **both
    flag states are simultaneously valid** — i.e., the flag is
    a daemon-side preference that does not affect consensus
-   output. Build-system flags (which FFI to link), performance-
+   output. Build-system flags (which implementation to link), performance-
    tuning flags (which cache strategy), and instrumentation
    flags (which trace level) qualify; they route the
    implementation without changing the output that consensus
@@ -252,11 +252,11 @@ in the first place.
 - **RandomX v2 Phase 3** (`docs/design/RANDOMX_V2_PLAN.md`).
   The algorithm change itself (v1 → v2) does **not** ship
   in Phase 3; it ships in Phase 1's submodule swap. Phase
-  3's 3a/3b/3c plan is implementation routing: the FFI
-  binding moves from the legacy path to the
-  monero-oxide-vendored path, and the algorithm body is
+  3's 3a/3b/3c plan is implementation routing: the
+  RandomX binding moves from the legacy path to the
+  vendored path, and the algorithm body is
   byte-identical on both sides of the 3a build flag. The
-  3a flag is therefore a **build-system / FFI-routing
+  3a flag is therefore a **build-system routing
   flag**, not a consensus flag — both flag states produce
   identical hash outputs because they call the same
   algorithm via different code paths. Criterion 1 is not

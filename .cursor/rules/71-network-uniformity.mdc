@@ -45,11 +45,11 @@ Nettype selecting a code path is the defect.
    it can never just fall out of an `if`.** If mainnet genuinely needs
    a check that another network cannot run, that is a design decision:
    it gets a ruling with its own falsifier, and the mechanism must be
-   *armed explicitly, pinned, and loud* — the `SEEDHASH_EPOCH`
-   override is the house pattern (must be armed, records its schedule
-   in the datadir and refuses to reopen under a different one, warns
-   loudly that its blocks validate only among nodes running the same
-   override; `blockchain.cpp:644–653`). What is forbidden is
+   *armed explicitly, pinned, and loud* — the regtest settlement-epoch
+   lever is the house pattern (`arm_settlement_epoch_override_for_regtest`,
+   `shekyl-archival-retention`: armed at startup or refused, an invalid
+   or late arm a typed refusal and never a silent fall-back, refused
+   again by the store at open). What is forbidden is
    divergence that announces nothing — the silent skip
    (`CEN-B5`'s FAKECHAIN root-check skip was the counter-example this
    rule was written to retire — retired 2026-09-05, PR #623, once the
@@ -71,8 +71,7 @@ Nettype selecting a code path is the defect.
    `-economics`, `-consensus`, `-mempool`, `-chain-sync`) against an
    annotated allowlist, one for one: every live hit has an entry, every
    entry is hit, and the counts match (a duplicated branch is red on the
-   totals). `!=` guards control flow exactly as `==` does — the deleted C++
-   `core::update_checkpoints` guard is the worked instance. Passing a
+   totals). `!=` guards control flow exactly as `==` does. Passing a
    variant as a value is data and is not a hit. The positive side
    (stronger, owed by the round that touches the surface): the same
    validator tests run against **all** network parameter sets — a

@@ -1111,7 +1111,9 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-curve-generators",
  "shekyl-curve-primitives",
+ "shekyl-heap-secret",
  "shekyl-network",
+ "shekyl-onion-key",
  "shekyl-types",
  "thiserror",
  "x25519-dalek",
@@ -1176,10 +1178,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-heap-secret"
+version = "3.1.0"
+dependencies = [
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-network"
 version = "3.1.0"
 dependencies = [
  "shekyl-crypto-hash",
+]
+
+[[package]]
+name = "shekyl-onion-key"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "rand",
+ "sha2",
+ "shekyl-heap-secret",
+ "zeroize",
 ]
 
 [[package]]

@@ -12,8 +12,9 @@
 //! the directory becomes a tombstone, and the tombstone is deleted off the
 //! stop path under [`TOMBSTONE_DELETE_BOUND`] (`TOR_SUPERVISOR.md` §4.7).
 //!
-//! The boot's onion seed is minted once, with [`DaemonTorControl::mint_seed`],
-//! and passed to every [`DaemonTorControl::publish`]. A publish failure
+//! The boot's onion identity is minted once, with
+//! [`DaemonTorControl::mint_identity`], and passed to every
+//! [`DaemonTorControl::publish`]. A publish failure
 //! leaves the incarnation up: Tor's SOCKS proxy still works, and the caller
 //! serves no overlay inbound until a later publish succeeds.
 
@@ -24,8 +25,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::watch;
-use zeroize::{Zeroize, Zeroizing};
 
+use shekyl_onion_key::OnionKeypair;
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
     ask_timed, evaluate_add_onion_reply, AddOnion, AddOnionReplyError, AskError, Asked,
@@ -130,8 +131,9 @@ pub enum DaemonTorPublishError {
         /// The refused target.
         target: SocketAddr,
     },
-    /// The OS CSPRNG refused to produce the hs-id seed. No fallback by
-    /// design — a weaker source would mint a guessable service key.
+    /// The OS CSPRNG refused to produce a per-boot secret (the onion key,
+    /// or the probe's isolation pair). No fallback by design — a weaker
+    /// source would mint a guessable service key.
     SeedRng,
     /// The control round-trip failed.
     Control(ControlError),
@@ -156,7 +158,7 @@ impl std::fmt::Display for DaemonTorPublishError {
             Self::TargetNotLoopback { target } => {
                 write!(f, "onion target {target} is not a loopback address")
             }
-            Self::SeedRng => write!(f, "OS CSPRNG unavailable for the hs-id seed"),
+            Self::SeedRng => write!(f, "OS CSPRNG unavailable for a per-boot secret"),
             Self::Control(e) => write!(f, "tor control failure: {e:?}"),
             Self::Died => write!(f, "tor died during publish"),
             Self::Publish(e) => write!(f, "ADD_ONION failed: {e:?}"),
@@ -245,31 +247,6 @@ pub struct DaemonTorControl {
     data_dir: Option<EphemeralDataDir>,
 }
 
-/// The hs-id seed for one boot.
-///
-/// The bytes stay inside the `Zeroizing`. There is no `Deref`, so a caller
-/// cannot hold a slice of them in async state. [`DaemonTorControl::publish`]
-/// is the only function that reads them, and it borrows this value.
-pub struct OnionSeed(Zeroizing<[u8; 32]>);
-
-impl OnionSeed {
-    fn bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-impl Drop for OnionSeed {
-    fn drop(&mut self) {
-        self.0.zeroize();
-    }
-}
-
-impl std::fmt::Debug for OnionSeed {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("OnionSeed")
-    }
-}
-
 impl DaemonTorControl {
     /// The bootstrap watch. A clone, so the supervisor can select on it.
     #[must_use]
@@ -321,23 +298,27 @@ impl DaemonTorControl {
         }
     }
 
-    /// The boot's hs-id seed. The supervisor holds one until the daemon stops
-    /// and passes that same value to every [`Self::publish`].
-    pub fn mint_seed() -> Result<OnionSeed, DaemonTorPublishError> {
-        let mut bytes = Zeroizing::new([0u8; 32]);
-        if getrandom::getrandom(bytes.as_mut()).is_err() {
-            return Err(DaemonTorPublishError::SeedRng);
-        }
-        Ok(OnionSeed(bytes))
+    /// The boot's onion identity, from an ephemeral keypair
+    /// (`shekyl_onion_key::OnionKeypair::ephemeral`, which draws its
+    /// seed from the OS CSPRNG and keeps it). The supervisor holds one until
+    /// the daemon stops and passes that same value to every
+    /// [`Self::publish`]; it is the keypair Tor is handed, and nothing more.
+    ///
+    /// # Errors
+    /// [`DaemonTorPublishError::SeedRng`] when the CSPRNG refuses.
+    pub fn mint_identity() -> Result<OnionIdentity, DaemonTorPublishError> {
+        OnionKeypair::ephemeral()
+            .map(OnionIdentity::from_keypair)
+            .map_err(|_| DaemonTorPublishError::SeedRng)
     }
 
-    /// Publish the onion from `seed`. The seed stays with the caller.
+    /// Publish the onion for `identity`, which stays with the caller.
     /// `local_target` (loopback only, enforced structurally by
     /// [`OnionPort::loopback`]). Runs after the caller has bound its inbound
     /// listener, so the target names a port the OS actually granted.
     ///
-    /// The caller keeps `seed` for the boot. This call derives an identity
-    /// from it and drops that identity when the reply has been checked.
+    /// The caller keeps `identity` for the boot. This call mints one
+    /// `ADD_ONION` key from it.
     ///
     /// A failure does **not** tear the incarnation down: tor is up and its
     /// SOCKS proxy works, so the caller's ruled degrade is outbound-only on
@@ -350,7 +331,7 @@ impl DaemonTorControl {
     /// either one and does not send another `ADD_ONION`.
     pub async fn publish(
         &self,
-        seed: &OnionSeed,
+        identity: &OnionIdentity,
         virtual_port: u16,
         local_target: SocketAddr,
         max_streams: u16,
@@ -362,7 +343,6 @@ impl DaemonTorControl {
             },
         )?;
 
-        let identity = OnionIdentity::from_hs_id_seed(seed.bytes());
         let expected = identity.service_id().clone();
         let request = AddOnion::new(identity.mint_onion_key(), port, max_streams)
             .with_flags(OnionFlags { discard_pk: true })
@@ -379,7 +359,7 @@ impl DaemonTorControl {
         Ok(expected)
     }
 
-    /// Publish the onion from `seed` again on this running Tor
+    /// Publish the onion for `identity` again on this running Tor
     /// (`TOR_SUPERVISOR.md` §4.4, Service class): `DEL_ONION`, then
     /// [`Self::publish`]. Tor refuses an `ADD_ONION` for a service it still
     /// holds (`550`, address collision), so a republish that skipped the
@@ -392,15 +372,13 @@ impl DaemonTorControl {
     /// As [`Self::publish`], and a refused delete.
     pub async fn republish(
         &self,
-        seed: &OnionSeed,
+        identity: &OnionIdentity,
         virtual_port: u16,
         local_target: SocketAddr,
         max_streams: u16,
         pow: OnionPow,
     ) -> Result<ServiceId, DaemonTorPublishError> {
-        let held = OnionIdentity::from_hs_id_seed(seed.bytes())
-            .service_id()
-            .clone();
+        let held = identity.service_id().clone();
         let reply = self
             .settle_ask(ask_timed(&self.actor, Command::DelOnion(held), self.reply_deadline).await)
             .map_err(Self::publish_error)?;
@@ -412,7 +390,7 @@ impl DaemonTorControl {
                 ))
             }
         }
-        self.publish(seed, virtual_port, local_target, max_streams, pow)
+        self.publish(identity, virtual_port, local_target, max_streams, pow)
             .await
     }
 
@@ -745,13 +723,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// Debug names the type and not the seed. A derived `Debug` fails this.
-    #[test]
-    fn an_onion_seed_prints_no_bytes() {
-        let seed = OnionSeed(Zeroizing::new([0xab; 32]));
-        assert_eq!(format!("{seed:?}"), "OnionSeed");
-    }
-
     use crate::test_support::tor_binary;
     use shekyl_tor_control_client::binary::VerifiedTorBinary;
     use shekyl_tor_control_client::control::BootstrapState;
@@ -893,7 +864,7 @@ pub(crate) mod tests {
                 .await
                 .expect("first boot start");
         wait_for_the_network(&mut boot1).await;
-        let seed1 = DaemonTorControl::mint_seed().expect("seed");
+        let identity1 = DaemonTorControl::mint_identity().expect("identity");
         assert_eq!(
             boot1.directory_cache_copied().is_empty(),
             !lane_seed_holds_a_file(),
@@ -904,7 +875,7 @@ pub(crate) mod tests {
 
         match boot1
             .publish(
-                &seed1,
+                &identity1,
                 18080,
                 "192.168.1.10:18080".parse().unwrap(),
                 64,
@@ -921,7 +892,7 @@ pub(crate) mod tests {
 
         let first_id = boot1
             .publish(
-                &seed1,
+                &identity1,
                 18080,
                 "127.0.0.1:48080".parse().unwrap(),
                 64,
@@ -942,10 +913,10 @@ pub(crate) mod tests {
             !boot2.directory_cache_copied().is_empty(),
             "the second boot copies the cache the first stop saved"
         );
-        let seed2 = DaemonTorControl::mint_seed().expect("seed");
+        let identity2 = DaemonTorControl::mint_identity().expect("identity");
         let second_id = boot2
             .publish(
-                &seed2,
+                &identity2,
                 18080,
                 "127.0.0.1:48080".parse().unwrap(),
                 64,
@@ -1056,25 +1027,11 @@ pub(crate) mod tests {
         );
     }
 
-    /// The tor process launched with `dir` as its DataDirectory parent.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn tor_under(dir: &std::path::Path) -> Option<u32> {
-        let needle = dir.to_string_lossy().into_owned();
-        std::fs::read_dir("/proc").ok()?.find_map(|entry| {
-            let entry = entry.ok()?;
-            let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
-            let cmdline = std::fs::read(entry.path().join("cmdline")).ok()?;
-            String::from_utf8_lossy(&cmdline)
-                .contains(&needle)
-                .then_some(pid)
-        })
-    }
-
     /// The death edge (`TOR_SUPERVISOR.md` `TSR-F1`): a watcher hears the
-    /// incarnation end. A tor killed from outside is `Exited`. A shutdown is
-    /// `Stopped`.
+    /// incarnation end. A tor killed from outside is `Exited`, and the exit
+    /// code is what [`shekyl_tor_control_client::outside_kill::reaped_exit_code`]
+    /// says that kill leaves. A shutdown is `Stopped`.
     #[tokio::test]
-    #[cfg(target_os = "linux")]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
     async fn a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop() {
         let binary = VerifiedTorBinary::unchecked_for_test(tor_binary());
@@ -1086,18 +1043,21 @@ pub(crate) mod tests {
                 .await
                 .expect("start");
         let death = tokio::spawn(killed.death());
-        let pid = tor_under(dir.path()).expect("the tor under this directory");
         // Under the spawn lock, as every spawn in a crate that launches tor
         // is (TOR_SUPERVISOR.md 4.7): a child started in the launch window
         // would inherit tor's end.
-        let status = shekyl_tor_control_client::spawn_lock::status(
-            std::process::Command::new("kill").args(["-9", &pid.to_string()]),
-        )
-        .expect("kill");
-        assert!(status.success());
+        assert!(
+            shekyl_tor_control_client::outside_kill::kill_tor_named_by(dir.path()),
+            "the tor under this directory was found and killed"
+        );
+        let death = heard(death).await.expect("heard").expect("watcher");
+        let TorDeath::Exited { code } = death else {
+            panic!("a tor killed from outside is Exited, was {death:?}");
+        };
         assert_eq!(
-            heard(death).await.expect("heard").expect("watcher"),
-            TorDeath::Exited { code: None }
+            code,
+            shekyl_tor_control_client::outside_kill::reaped_exit_code(),
+            "the reap reports the outside kill"
         );
         assert!(!killed.is_alive());
         let _exit_after_kill = killed.shutdown().await;

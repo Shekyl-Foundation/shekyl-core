@@ -143,7 +143,7 @@ pub fn serve_credit_tx(fee: u64) -> Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
             inputs: vec![Input::ServeCredit {
-                // Opaque kept half (RF-D1 / rule 40): tag ‖ p_id ‖ shard ‖ epoch ‖ ed25519.
+                // Opaque kept half (RF-D1): tag ‖ p_id ‖ shard ‖ epoch ‖ ed25519.
                 canonical_bytes: {
                     let mut b = vec![TAG_INPUT_SERVE_CREDIT];
                     b.extend_from_slice(&[0x11; 32]);

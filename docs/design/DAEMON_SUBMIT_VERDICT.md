@@ -828,12 +828,12 @@ attestation is a consensus-integrity hazard, not a perf bug. Discipline:
 ## 4. The C++ shims (FFI spec)
 
 Three exported functions, POD-struct interfaces, zero verdict logic. Per
-[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md)
 this is the C++-as-minimal-transport-shim shape.
 
 **FFI boundary (implementation-round pin).** These shims deliberately do
 **not** route through the single `shekyl-ffi` surface that
-[`40-ffi-discipline.mdc`](../../.cursor/rules/40-ffi-discipline.mdc) /
+[`40-ffi-discipline.mdc`](../completed/RULE_40_FFI_DISCIPLINE.md) /
 [`25-rust-architecture.mdc`](../../.cursor/rules/25-rust-architecture.mdc)
 otherwise mandate. They resolve pool/blockchain/protocol from a live
 `core_rpc_server` (`core_rpc_ffi_*`), which is a daemon-only object;
@@ -948,7 +948,7 @@ de-risking the multi-daemon reopen in advance.
 
 1. **Origin re-send, then residence.** The relay re-sends the node's own
    transaction only on its embargo: each stem send arms a deadline of
-   `origin_retry_secs` (1,148 s at the shipped terms); the first fire
+   `origin_retry_secs` (1,176 s at the shipped terms); the first fire
    re-stems to the source's alternate, the second fluffs and publishes
    (`shekyl-relay` `graph/embargo.rs`). An origin that never sent is
    re-planned every 300 s, at once on turning synchronised and at once on
@@ -971,7 +971,7 @@ de-risking the multi-daemon reopen in advance.
    send arms a deadline; the first fire re-stems to the source's frozen
    alternate; the second fire, or a first fire with no live alternate,
    fluffs to every session but the source and marks the transaction
-   shown. An origin's deadline is `origin_retry_secs` (1,148 s at the
+   shown. An origin's deadline is `origin_retry_secs` (1,176 s at the
    shipped terms, pinned in that crate's embargo tests); a relay position
    draws its connector's memoryless embargo. An origin that never sent
    is held unsent and re-planned every 300 s (`NEVER_SENT_RETRY_MS`),
