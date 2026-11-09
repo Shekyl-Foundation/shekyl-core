@@ -271,7 +271,7 @@ For the protocol specification of these properties, see
 ### In-Scope
 
 1. **KDF domain separation** (`shekyl-crypto-pq/src/multisig_output.rs`,
-   `derivation.rs`; `shekyl-multisig/src/member_file.rs`)
+   `derivation.rs`)
    - The member signing seed (`shekyl-v31-hybrid-sign`), the key-hash AEAD key
      (`shekyl-output-multisig-key-hashes`), the key-hash domain
      (`shekyl/multisig-key-hash-v1`) and the transport secret

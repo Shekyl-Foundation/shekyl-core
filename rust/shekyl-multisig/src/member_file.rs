@@ -33,46 +33,33 @@
 //! ```text
 //! magic "SKMF" ‖ version(1) ‖ u32_le(len) ‖ address payload(len) ‖
 //! member_index(1) ‖ b(32) ‖ y_share(32) ‖ verification_share × n (32 each) ‖
-//! group_kem_secret(2432) ‖ member_kem_secret(2432) ‖ transport_secret(32)
+//! group_kem_secret(HYBRID_KEM_SECRET_LEN) ‖ member_kem_secret(HYBRID_KEM_SECRET_LEN) ‖ transport_secret(FIELD_LEN)
 //! ```
 
-use hkdf::Hkdf;
-use sha2::Sha512;
 use shekyl_address::multisig_address::{MultisigAddressError, MultisigAddressPayload};
-use shekyl_address::Network;
 use zeroize::Zeroizing;
 
 /// The file's first four bytes.
 pub const MEMBER_FILE_MAGIC: [u8; 4] = *b"SKMF";
 /// The layout version this module writes and reads.
 pub const MEMBER_FILE_VERSION: u8 = 1;
-/// A hybrid KEM secret: X25519 (32) then ML-KEM-768 decapsulation key (2400).
-pub const HYBRID_KEM_SECRET_LEN: usize = 32 + 2400;
+/// X25519 secret scalar length. Pinned, in the test build, to the classical
+/// half of the hybrid KEM (`shekyl_crypto_pq::kem::X25519_KEM_CT_LEN`: an
+/// X25519 scalar and its Montgomery u-coordinate are the same width).
+const X25519_SECRET_LEN: usize = 32;
+/// ML-KEM-768 decapsulation key length (FIPS 203). Pinned to
+/// `shekyl_crypto_pq::kem::ML_KEM_768_DK_LEN` in the test build.
+const ML_KEM_768_DK_LEN: usize = 2400;
+/// A hybrid KEM secret: the X25519 scalar, then the ML-KEM-768 decapsulation key.
+pub const HYBRID_KEM_SECRET_LEN: usize = X25519_SECRET_LEN + ML_KEM_768_DK_LEN;
 /// Bytes of a scalar, a point, or the transport secret.
 const FIELD_LEN: usize = 32;
 
-/// The HKDF info label the group transport secret expands under
-/// (`CRYPTO_DOMAIN_REGISTRY.tsv`). The salt is `salt_for(network)`, so the
-/// secret is bound to the network's name.
-pub const GROUP_TRANSPORT_LABEL: &[u8] = b"shekyl/multisig-transport-v1";
-
-/// The group transport secret, from the dealer's group seed: HKDF-SHA-512
-/// with salt `salt_for(network)` (the network's `name_id`, then the purpose
-/// label) and info [`GROUP_TRANSPORT_LABEL`]. The dealer derives it once and
-/// writes it into every member file; it keys the ceremony blobs' AEAD
-/// (R-4, slice 3).
-#[must_use]
-pub fn derive_group_transport_secret(
-    network: Network,
-    group_seed: &[u8; 32],
-) -> Zeroizing<[u8; FIELD_LEN]> {
-    let salt = shekyl_crypto_pq::account::salt_for(network);
-    let hk = Hkdf::<Sha512>::new(Some(&salt), group_seed);
-    let mut out = Zeroizing::new([0u8; FIELD_LEN]);
-    hk.expand(GROUP_TRANSPORT_LABEL, out.as_mut())
-        .expect("32 bytes is within HKDF-SHA-512's output");
-    out
-}
+#[cfg(test)]
+const _: () = {
+    assert!(X25519_SECRET_LEN == shekyl_crypto_pq::kem::X25519_KEM_CT_LEN);
+    assert!(ML_KEM_768_DK_LEN == shekyl_crypto_pq::kem::ML_KEM_768_DK_LEN);
+};
 
 /// Why a member file cannot be built or read.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -136,7 +123,8 @@ pub struct MemberSecrets {
     pub group_kem_secret: Zeroizing<Vec<u8>>,
     /// This member's own hybrid KEM secret.
     pub member_kem_secret: Zeroizing<Vec<u8>>,
-    /// The group transport secret ([`derive_group_transport_secret`]).
+    /// The group transport secret. The dealer derives it and passes the
+    /// bytes in; this file stores them and does not derive them.
     pub transport_secret: Zeroizing<[u8; FIELD_LEN]>,
 }
 
@@ -334,6 +322,7 @@ impl<'a> Reader<'a> {
 mod tests {
     use super::*;
     use shekyl_address::multisig_address::HYBRID_KEM_PUBKEY_LEN;
+    use shekyl_address::Network;
 
     fn file(n: u8, index: u8) -> MemberFile {
         let address = MultisigAddressPayload::new(
@@ -355,7 +344,7 @@ mod tests {
                 y_share: Zeroizing::new([0x0F; 32]),
                 group_kem_secret: Zeroizing::new(vec![0x6A; HYBRID_KEM_SECRET_LEN]),
                 member_kem_secret: Zeroizing::new(vec![0x6B; HYBRID_KEM_SECRET_LEN]),
-                transport_secret: derive_group_transport_secret(Network::Testnet, &[0x5E; 32]),
+                transport_secret: Zeroizing::new([0x5E; 32]),
             },
         )
         .unwrap()
@@ -418,23 +407,5 @@ mod tests {
         let shown = format!("{:?}", file(2, 0));
         assert!(shown.contains("REDACTED"));
         assert!(!shown.contains("11, 11"), "{shown}");
-    }
-
-    /// The transport secret is bound to the network's name and the seed.
-    #[test]
-    fn transport_secret_binds_network_and_seed() {
-        let a = derive_group_transport_secret(Network::Testnet, &[1; 32]);
-        assert_eq!(
-            *a,
-            *derive_group_transport_secret(Network::Testnet, &[1; 32])
-        );
-        assert_ne!(
-            *a,
-            *derive_group_transport_secret(Network::Mainnet, &[1; 32])
-        );
-        assert_ne!(
-            *a,
-            *derive_group_transport_secret(Network::Testnet, &[2; 32])
-        );
     }
 }

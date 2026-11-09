@@ -191,7 +191,7 @@ fn a_damaged_or_missing_entry_is_received_but_unspendable() {
     });
     assert_eq!(
         scan_one(&g, 0, damaged),
-        Some(UnspendableReason::PqcLeafMismatch)
+        Some(UnspendableReason::MultisigHashesUndecryptable)
     );
 
     let missing = group_block(&g, Vec::clear);
@@ -204,7 +204,7 @@ fn a_damaged_or_missing_entry_is_received_but_unspendable() {
     );
     assert_eq!(
         scan_one(&g, 1, missing),
-        Some(UnspendableReason::PqcLeafMismatch)
+        Some(UnspendableReason::MultisigEntryAbsent)
     );
 }
 

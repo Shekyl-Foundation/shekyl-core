@@ -315,6 +315,34 @@ pub(crate) fn unspendable_reason_text(reason: &str) -> String {
                                     output; this output can never be spent from here — \
                                     contact the sender"
             .to_owned(),
+        "MULTISIG_ENTRY_ABSENT" => "the sender's transaction paid this group without the \
+                                    group's record; this output can never be spent from \
+                                    here — contact the sender"
+            .to_owned(),
+        "MULTISIG_GROUP_SIZE" => "the sender's transaction names a different group than \
+                                  this wallet; this output can never be spent from here — \
+                                  contact the sender"
+            .to_owned(),
+        "MULTISIG_HASHES_UNDECRYPTABLE" => "the sender's transaction published a group record \
+                                            this wallet cannot open; this output can never be \
+                                            spent from here — contact the sender"
+            .to_owned(),
+        "MULTISIG_MEMBER_DECAP" => "this wallet cannot open its part of the sender's \
+                                    transaction; this output can never be spent from here — \
+                                    contact the sender"
+            .to_owned(),
+        "MULTISIG_MEMBER_KEY_HASH" => "the sender's transaction records a different key for \
+                                       this wallet; this output can never be spent from here — \
+                                       contact the sender"
+            .to_owned(),
+        "MULTISIG_DUPLICATE_KEY_HASH" => "the sender's transaction repeats a member of this \
+                                          group; this output can never be spent from here — \
+                                          contact the sender"
+            .to_owned(),
+        "MULTISIG_LEAF_MISMATCH" => "the sender's transaction published a record that does not \
+                                     match this group; this output can never be spent from \
+                                     here — contact the sender"
+            .to_owned(),
         other => format!("unspendable ({other})"),
     }
 }
@@ -462,5 +490,39 @@ mod tests {
         assert_eq!(parsed.id, "42");
         assert_eq!(parsed.seen_gen, 7);
         assert_eq!(parsed.fee_skl, "0.700000000");
+    }
+
+    /// Each persisted reason is told in the user's terms: the output cannot
+    /// be spent from this wallet, and the sender is who to contact. The
+    /// spelling is the RPC name; an unknown spelling stays visible rather
+    /// than being folded into a known reason.
+    #[test]
+    fn unspendable_reasons_say_the_output_cannot_be_spent() {
+        use super::unspendable_reason_text;
+        for reason in [
+            "PQC_LEAF_MISMATCH",
+            "PQC_LEAF_ENTRY_ABSENT",
+            "MULTISIG_ENTRY_ABSENT",
+            "MULTISIG_GROUP_SIZE",
+            "MULTISIG_HASHES_UNDECRYPTABLE",
+            "MULTISIG_MEMBER_DECAP",
+            "MULTISIG_MEMBER_KEY_HASH",
+            "MULTISIG_DUPLICATE_KEY_HASH",
+            "MULTISIG_LEAF_MISMATCH",
+        ] {
+            let text = unspendable_reason_text(reason);
+            assert!(
+                text.contains("can never be spent"),
+                "{reason} should say the output cannot be spent: {text}"
+            );
+            assert!(
+                text.contains("contact the sender"),
+                "{reason} should name who to contact: {text}"
+            );
+        }
+        assert_eq!(
+            unspendable_reason_text("NOT_A_REASON"),
+            "unspendable (NOT_A_REASON)"
+        );
     }
 }

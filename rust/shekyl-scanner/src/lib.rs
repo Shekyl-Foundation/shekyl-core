@@ -57,6 +57,7 @@ pub mod balance;
 pub mod coin_select;
 pub mod extra;
 pub mod ledger_ext;
+pub mod multisig_scan;
 pub mod output;
 pub mod scan;
 pub mod transfer;

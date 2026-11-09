@@ -53,7 +53,7 @@ pub use intent::{
 pub use invariants::{
     check_pre_signing_invariants, InvariantCheckInput, InvariantCheckResult, InvariantId,
 };
-pub use member_file::{derive_group_transport_secret, MemberFile, MemberFileError, MemberSecrets};
+pub use member_file::{MemberFile, MemberFileError, MemberSecrets};
 pub use messages::{
     DecryptedPayload, EnvelopeError, MessageType, MultisigEnvelope, MAX_PAYLOAD_LEN, MAX_SIG_LEN,
 };

@@ -227,6 +227,29 @@ pub fn derive_multisig_key_hashes_key(
     out
 }
 
+/// Info label for the multisig group's transport secret
+/// (`CRYPTO_DOMAIN_REGISTRY.tsv`). The salt is [`crate::account::salt_for`].
+pub const LABEL_MULTISIG_GROUP_TRANSPORT: &[u8] = b"shekyl/multisig-transport-v1";
+
+/// The group transport secret, from the dealer's group seed.
+///
+/// HKDF-SHA-512 with salt [`crate::account::salt_for`]`(network)` and info
+/// [`LABEL_MULTISIG_GROUP_TRANSPORT`]. The dealer (slice 3) derives it once
+/// and writes the bytes into every member file. The file stores them; it
+/// does not derive them. The ceremony blobs' AEAD (R-4) keys from those bytes.
+#[must_use]
+pub fn derive_group_transport_secret(
+    network: crate::account::Network,
+    group_seed: &[u8; 32],
+) -> zeroize::Zeroizing<[u8; 32]> {
+    let salt = crate::account::salt_for(network);
+    let hk = Hkdf::<Sha512>::new(Some(&salt), group_seed);
+    let mut out = zeroize::Zeroizing::new([0u8; 32]);
+    hk.expand(LABEL_MULTISIG_GROUP_TRANSPORT, out.as_mut())
+        .expect("32 bytes is within HKDF-SHA-512's output");
+    out
+}
+
 /// Derive the on-wire view-tag pre-filter byte from ML-KEM shared secret only.
 ///
 /// FA-6 (T6): the wire tag must not be computable from quantum-recoverable
@@ -338,6 +361,25 @@ fn expand_first_byte(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The transport secret is bound to the network's name and the seed.
+    #[test]
+    fn transport_secret_binds_network_and_seed() {
+        use crate::account::Network;
+        let a = derive_group_transport_secret(Network::Testnet, &[1; 32]);
+        assert_eq!(
+            *a,
+            *derive_group_transport_secret(Network::Testnet, &[1; 32])
+        );
+        assert_ne!(
+            *a,
+            *derive_group_transport_secret(Network::Mainnet, &[1; 32])
+        );
+        assert_ne!(
+            *a,
+            *derive_group_transport_secret(Network::Testnet, &[2; 32])
+        );
+    }
 
     #[test]
     fn derived_key_sizes() {

@@ -2216,7 +2216,7 @@ components:
             (`FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`), so no spend of it
             can ever be proven; the money is on chain, the row is retained,
             and `get_balance.unspendable` totals it. `unspendable_reason`
-            names which half failed. Never flips: a rescan re-derives the
+            names which check failed. Never flips: a rescan re-derives the
             same verdict from the same chain bytes.
 
 
@@ -2230,14 +2230,28 @@ components:
           format: int64
         unspendable_reason:
           type: string
-          enum: [PQC_LEAF_MISMATCH, PQC_LEAF_ENTRY_ABSENT]
+          enum:
+            - PQC_LEAF_MISMATCH
+            - PQC_LEAF_ENTRY_ABSENT
+            - MULTISIG_ENTRY_ABSENT
+            - MULTISIG_GROUP_SIZE
+            - MULTISIG_HASHES_UNDECRYPTABLE
+            - MULTISIG_MEMBER_DECAP
+            - MULTISIG_MEMBER_KEY_HASH
+            - MULTISIG_DUPLICATE_KEY_HASH
+            - MULTISIG_LEAF_MISMATCH
           description: >
             Present exactly when `state` is UNSPENDABLE. PQC_LEAF_MISMATCH:
             the published `0x07` entry (`CM ‖ record`) is not this wallet's
             derivation for the output. PQC_LEAF_ENTRY_ABSENT: the
             transaction carries no `0x07` entry for the output (a shape
             consensus refuses; reachable only from a non-consensus block
-            source).
+            source). The MULTISIG_* values are the same fact for a group
+            wallet, one value per check: the `0x0D` entry is missing, it
+            names a different group size, its key hashes do not decrypt,
+            this member's ciphertext does not open, this member's key hash
+            does not match, two key hashes are the same hash, or the leaf
+            does not commit to the decrypted hashes.
         attribution:
           allOf:
             - $ref: "#/components/schemas/ReceiveAttribution"

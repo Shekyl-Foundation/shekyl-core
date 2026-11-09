@@ -490,10 +490,13 @@ sign:
 | member KEM secret | 2432 B | this member's own, same layout |
 | transport secret | 32 B | keys the ceremony blobs (§12) |
 
-The **transport secret** is HKDF-SHA-512 with salt `salt_for(network)` (the
-network's `name_id`, then `shekyl-master-derive-v3`), input keying material
-the dealer's 32-byte group seed, and info `shekyl/multisig-transport-v1`. The
-dealer derives it once and writes the same value into every member file.
+The **transport secret** is
+`shekyl_crypto_pq::derivation::derive_group_transport_secret`: HKDF-SHA-512
+with salt `salt_for(network)` (the network's `name_id`, then
+`shekyl-master-derive-v3`), input keying material the dealer's 32-byte group
+seed, and info `shekyl/multisig-transport-v1`. The dealer derives it once
+and writes the same value into every member file. The file stores the bytes;
+it does not derive them.
 
 This is the plaintext serialization. Keeping the file encrypted at rest is
 the wallet's job, as for every other key file. Every secret is wiped on
@@ -660,8 +663,10 @@ A sender can always make an output unspendable. Under E′ that shows up as
 an output the group owns (its view pair matches and the amount opens) whose
 `0x0D` entry is missing or wrong, or whose leaf does not commit to the
 entry's hashes. The scanner keeps such an output, names its transaction,
-and marks it received-but-unspendable (`UnspendableReason::PqcLeafMismatch`,
-§8.2). It is never offered to coin selection.
+and marks it received-but-unspendable, naming the check that failed
+(`UnspendableReason::MultisigEntryAbsent` when the `0x0D` entry is
+missing, and one variant per refusal of `open_multisig_entry`; §8.2).
+It is never offered to coin selection.
 
 ### 7.7 Wallet send-side requirements
 
@@ -696,19 +701,30 @@ For each output the group's view pair matches, the member then runs
 `open_multisig_entry` in place of the solo leaf comparison
 (`shekyl-scanner`, `MultisigMemberScan`):
 
-1. Find the `0x0D` entry for the output's index.
-2. Check its `n` is the group's. Decrypt the hashes under the output's group
-   secret (AEAD-authenticated, with `out_idx ‖ n` as associated data).
-3. Decapsulate `ct_i` with the member's own KEM secret, derive `pk_i`, and
-   check `h_i` against it. A sender lying about *this* member is caught here.
-4. Rebuild the committed form from the `n` hashes and the group's `m`, and
-   check that the published `0x07` entry is its leaf commitment. A sender
-   lying about *any other* member is caught here.
+1. Find the `0x0D` entry for the output's index. A missing entry is
+   `UnspendableReason::MultisigEntryAbsent`.
+2. Check its `n` is the group's (`MultisigGroupSize`). Decrypt the hashes
+   under the output's group secret (AEAD-authenticated, with `out_idx ‖ n`
+   as associated data; `MultisigHashesUndecryptable`).
+3. Refuse a repeated decrypted hash (`MultisigDuplicateKeyHash`). Every
+   member sees the whole list, and `verify_multisig` would refuse the same
+   bytes as duplicate keys.
+4. Decapsulate `ct_i` with the member's own KEM secret
+   (`MultisigMemberDecap`), derive `pk_i`, and check `h_i` against it
+   (`MultisigMemberKeyHash`). A sender lying about *this* member is caught
+   here.
+5. Rebuild the committed form from the `n` hashes and the group's `m`, and
+   check that the published `0x07` entry is its leaf commitment
+   (`MultisigLeafMismatch`). A sender lying about *any other* member, while
+   leaving the leaf over the honest list, is caught here. A sender who
+   keeps every `ss_i`, replaces another member's hash, and recomputes the
+   leaf is not caught by this member: that member does not hold the other
+   member's KEM secret. The cosigners refuse that committed form before
+   they sign (slice 3).
 
-Any failure, or a missing entry, marks the output
-`UnspendableReason::PqcLeafMismatch` (§7.6); a missing `0x07` entry stays
-`PqcLeafEntryAbsent`. The solo leaf comparison never runs for a group
-output: its leaf never commits to the solo per-output key.
+A missing `0x07` entry stays `PqcLeafEntryAbsent`. The solo leaf comparison
+never runs for a group output: its leaf never commits to the solo
+per-output key.
 
 ### 8.3 Versions
 
@@ -1838,7 +1854,10 @@ rust/shekyl-engine-core/src/engine/signer.rs
 └── MultisigNonceSink       — engine-core's durable NonceCounterSink impl (body: S2)
 
 rust/shekyl-multisig/src/member_file.rs
-└── MemberFile, derive_group_transport_secret — §6.6
+└── MemberFile — §6.6 (stores the transport secret; does not derive it)
+
+rust/shekyl-crypto-pq/src/derivation.rs
+└── derive_group_transport_secret — §6.6
 
 rust/shekyl-crypto-pq/src/multisig.rs
 ├── MultisigCommittedForm, MultisigKeyBlob     — §7.5
@@ -1850,8 +1869,11 @@ rust/shekyl-crypto-pq/src/multisig_output.rs
 ├── derive_multisig_member_keypair             — §7.2
 └── open_multisig_entry                        — §8.2
 
+rust/shekyl-scanner/src/multisig_scan.rs
+└── MultisigMemberScan — §8.2
+
 rust/shekyl-scanner/src/scan.rs
-└── MultisigMemberScan, Scanner::new_multisig_member — §8.1–§8.2
+└── Scanner::new_multisig_member — §8.1–§8.2
 ```
 
 ### 16.2 New tx_extra tags

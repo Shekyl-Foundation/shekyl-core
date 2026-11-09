@@ -37,7 +37,7 @@ use sha2::Sha512;
 use shekyl_address::multisig_address::{MultisigAddressPayload, HYBRID_KEM_PUBKEY_LEN};
 use shekyl_network::NetworkId;
 use subtle::ConstantTimeEq;
-use zeroize::Zeroizing;
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::derivation::derive_multisig_key_hashes_key;
 use crate::encrypted_output_field::EncryptedOutputField;
@@ -90,10 +90,16 @@ pub fn derive_multisig_member_keypair(
         ed25519: ed_signing.verifying_key().to_bytes(),
         ml_dsa: ml_pk.into_bytes().to_vec(),
     };
-    let secret = HybridSecretKey {
-        ed25519: ed_signing.to_bytes().to_vec(),
-        ml_dsa: ml_sk.into_bytes().to_vec(),
-    };
+    // The serialized halves are secret. `to_bytes` / `into_bytes` return
+    // them by value; wrapping that value in `Zeroizing` wipes the source
+    // array when the copy into `HybridSecretKey` is done (rule 35).
+    let ed_sk_bytes = Zeroizing::new(ed_signing.to_bytes());
+    let ml_sk_bytes = Zeroizing::new(ml_sk.into_bytes());
+    let mut ed25519 = vec![0u8; ed_sk_bytes.len()];
+    ed25519.copy_from_slice(ed_sk_bytes.as_slice());
+    let mut ml_dsa = vec![0u8; ml_sk_bytes.len()];
+    ml_dsa.copy_from_slice(ml_sk_bytes.as_slice());
+    let secret = HybridSecretKey { ed25519, ml_dsa };
     Ok((public, secret))
 }
 
@@ -123,27 +129,48 @@ fn hashes_aad(out_idx: u8, n: u8) -> [u8; 2] {
 ///
 /// The solo fields mean what they mean on [`crate::output::OutputData`];
 /// there is no per-output PQC key (see the module doc). The two encrypted
-/// fields are `pub(crate)` with read accessors, as on `OutputData`.
+/// fields are `pub(crate)` with read accessors, as on `OutputData`. The
+/// sender scalars `y`, `z`, `k_amount` and `k_label` are the same set
+/// `OutputData` keeps, and they are wiped on drop.
+#[derive(ZeroizeOnDrop)]
 pub struct MultisigOutputData {
     /// `O = ho·G + B_group + (y_group + y_kem)·T`.
+    #[zeroize(skip)]
     pub output_key: [u8; 32],
     /// `C = z·G + amount·H`.
+    #[zeroize(skip)]
     pub commitment: [u8; 32],
+    #[zeroize(skip)]
     pub(crate) enc_amount: EncryptedOutputField,
+    #[zeroize(skip)]
     pub(crate) enc_label: EncryptedOutputField,
     /// The ML-KEM view tag.
+    #[zeroize(skip)]
     pub view_tag_prefilter: u8,
     /// The `0x06` ciphertext to the group KEM key: X25519 part.
+    #[zeroize(skip)]
     pub kem_ciphertext_x25519: [u8; 32],
     /// The `0x06` ciphertext to the group KEM key: ML-KEM part.
+    #[zeroize(skip)]
     pub kem_ciphertext_ml_kem: Vec<u8>,
     /// The `0x07` entry: `CM` over the committed form, and its record.
+    /// The blinds inside are secret and wipe with the leaf.
     pub pqc_leaf: PqcLeafCommitment,
-    /// The `0x0D` entry's member ciphertexts (`x25519 ‖ ml_kem`, 1120
-    /// bytes each), member order.
+    /// The `0x0D` entry's member ciphertexts (`x25519 ‖ ml_kem`,
+    /// [`crate::kem::HYBRID_KEM_CT_LEN`] bytes each), member order.
+    #[zeroize(skip)]
     pub member_kem_ciphertexts: Vec<Vec<u8>>,
     /// The `0x0D` entry's encrypted key hashes and their AEAD tag.
+    #[zeroize(skip)]
     pub enc_key_hashes: Vec<u8>,
+    /// HKDF-derived `y` scalar (the same sender scalar [`crate::output::OutputData`] keeps).
+    pub y: [u8; 32],
+    /// HKDF-derived commitment mask `z`.
+    pub z: [u8; 32],
+    /// HKDF-derived amount encryption key.
+    pub k_amount: [u8; 32],
+    /// HKDF-derived label encryption key.
+    pub k_label: [u8; 32],
 }
 
 impl MultisigOutputData {
@@ -167,7 +194,8 @@ impl MultisigOutputData {
 /// # Errors
 ///
 /// [`CryptoError::InvalidKeyMaterial`] for an address point that is not a
-/// prime-order, non-identity point, or a KEM key of the wrong shape;
+/// prime-order, non-identity point, a KEM key of the wrong shape, or a KEM
+/// key that repeats the group key or another member's;
 /// [`CryptoError::InvalidInput`] for an output index above 255 (the `0x0D`
 /// entry names its output in one byte); the solo core's own errors.
 pub fn construct_multisig_output(
@@ -179,6 +207,12 @@ pub fn construct_multisig_output(
 ) -> Result<MultisigOutputData, CryptoError> {
     let out_idx = u8::try_from(output_index)
         .map_err(|_| CryptoError::InvalidInput("multisig output index above 255".into()))?;
+    // The address fields are public, so a value that passed `new` can be
+    // edited into a repeated key. Encapsulation to a repeated key would
+    // make two signing slots the same secret.
+    address
+        .ensure_distinct_kem_keys()
+        .map_err(|_| CryptoError::InvalidKeyMaterial)?;
     let spend_point = group_point(&address.b_group)? + group_point(&address.y_group)?;
     let spend_key = spend_point.compress().to_bytes();
     let (group_x25519, group_ml_kem) = split_kem_pubkey(&address.group_kem_pubkey)?;
@@ -238,6 +272,10 @@ pub fn construct_multisig_output(
         pqc_leaf,
         member_kem_ciphertexts,
         enc_key_hashes,
+        y: core.secrets.y,
+        z: core.secrets.z,
+        k_amount: core.secrets.k_amount,
+        k_label: core.secrets.k_label,
     })
 }
 
@@ -260,6 +298,11 @@ pub enum MultisigReceiveError {
     /// The hash at this member's index is not this member's key's.
     #[error("the entry's key hash for this member is not this member's key")]
     MemberKeyHash,
+    /// Two decrypted key hashes are the same hash. A spend that revealed
+    /// both would be refused as duplicate keys, so the output is unspendable
+    /// as published. Every member can see the decrypted list.
+    #[error("two of the entry's key hashes are the same hash")]
+    DuplicateKeyHash,
     /// The published leaf entry does not open to the committed form built
     /// from the decrypted hashes: a hash for some other member is wrong.
     #[error("the output's leaf does not commit to the entry's key hashes")]
@@ -282,12 +325,21 @@ pub struct MultisigMemberView<'a> {
     pub network: &'a NetworkId,
 }
 
-/// One output's `0x0D` entry, as the scanner hands it over.
+/// One output's `0x0D` entry, as the scanner hands it to one member.
+///
+/// The scanner has already selected this member's ciphertext. The receive
+/// check does not need the other members' ciphertexts: it cannot open them,
+/// and their contribution to the check is the decrypted hash list.
 pub struct MultisigEntryView<'a> {
-    /// The entry's output index byte.
+    /// The entry's output index byte. It is the associated data of the hash
+    /// ciphertext, distinct from the `u64` output index the hash key binds.
     pub out_idx: u8,
-    /// The member ciphertexts, member order, each `x25519 ‖ ml_kem`.
-    pub member_kem_ciphertexts: &'a [&'a [u8]],
+    /// The entry's member count.
+    pub n: u8,
+    /// This member's X25519 ciphertext.
+    pub own_x25519_ct: &'a [u8; X25519_KEM_CT_LEN],
+    /// This member's ML-KEM-768 ciphertext.
+    pub own_ml_kem_ct: &'a [u8],
     /// The encrypted key hashes and their tag.
     pub enc_key_hashes: &'a [u8],
 }
@@ -312,7 +364,7 @@ pub fn open_multisig_entry(
     published_leaf: &[u8; PQC_LEAF_ENTRY_LEN],
 ) -> Result<MultisigCommittedForm, MultisigReceiveError> {
     let n = member.n_total;
-    if entry.member_kem_ciphertexts.len() != usize::from(n) || member.member_index >= n {
+    if entry.n != n || member.member_index >= n {
         return Err(MultisigReceiveError::GroupSize);
     }
 
@@ -331,21 +383,30 @@ pub fn open_multisig_entry(
     if plaintext.len() != usize::from(n) * MULTISIG_KEY_HASH_LEN {
         return Err(MultisigReceiveError::HashesUndecryptable);
     }
-    let key_hashes: Vec<[u8; MULTISIG_KEY_HASH_LEN]> = plaintext
-        .chunks_exact(MULTISIG_KEY_HASH_LEN)
-        .map(|h| h.try_into().expect("chunks_exact width"))
-        .collect();
-
-    let own_ct = entry.member_kem_ciphertexts[usize::from(member.member_index)];
-    if own_ct.len() < X25519_KEM_CT_LEN {
-        return Err(MultisigReceiveError::MemberDecap);
+    // The decrypted hashes are secret until a spend reveals the signers'
+    // subset. The copy stays inside `Zeroizing` on every refusal path.
+    let mut key_hashes = Zeroizing::new(
+        plaintext
+            .chunks_exact(MULTISIG_KEY_HASH_LEN)
+            .map(|h| h.try_into().expect("chunks_exact width"))
+            .collect::<Vec<[u8; MULTISIG_KEY_HASH_LEN]>>(),
+    );
+    // Compare them in constant time, and refuse a repeated hash:
+    // `verify_multisig` would refuse the same bytes as duplicate keys.
+    for (second, hash) in key_hashes.iter().enumerate() {
+        if key_hashes[..second]
+            .iter()
+            .any(|earlier| bool::from(earlier.ct_eq(hash)))
+        {
+            return Err(MultisigReceiveError::DuplicateKeyHash);
+        }
     }
-    let (ct_x25519, ct_ml_kem) = own_ct.split_at(X25519_KEM_CT_LEN);
+
     let member_ss = recover_combined_ss(
         member.member_x25519_sk,
         member.member_ml_kem_dk,
-        ct_x25519.try_into().expect("32 bytes"),
-        ct_ml_kem,
+        entry.own_x25519_ct,
+        entry.own_ml_kem_ct,
     )
     .map_err(|_| MultisigReceiveError::MemberDecap)?;
     let (member_pk, _member_sk) = derive_multisig_member_keypair(&member_ss.0)
@@ -355,7 +416,7 @@ pub fn open_multisig_entry(
         return Err(MultisigReceiveError::MemberKeyHash);
     }
 
-    let committed = MultisigCommittedForm::new(member.m_required, key_hashes)
+    let committed = MultisigCommittedForm::new(member.m_required, std::mem::take(&mut *key_hashes))
         .map_err(|_| MultisigReceiveError::GroupSize)?;
     let leaf = pqc_leaf_commitment(group_combined_ss, output_index, &committed.to_bytes())
         .map_err(|_| MultisigReceiveError::LeafMismatch)?;

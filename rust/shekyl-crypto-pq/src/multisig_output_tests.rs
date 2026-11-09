@@ -88,28 +88,39 @@ fn member_view<'a>(g: &'a Group, i: u8) -> MultisigMemberView<'a> {
     }
 }
 
+fn entry_view<'a>(
+    out: &'a MultisigOutputData,
+    i: u8,
+    out_idx: u8,
+    n: u8,
+    enc_key_hashes: &'a [u8],
+) -> MultisigEntryView<'a> {
+    let ct = &out.member_kem_ciphertexts[usize::from(i)];
+    let (x25519, ml_kem) = ct.split_at(X25519_KEM_CT_LEN);
+    MultisigEntryView {
+        out_idx,
+        n,
+        own_x25519_ct: x25519.try_into().expect("x25519 ciphertext is 32 bytes"),
+        own_ml_kem_ct: ml_kem,
+        enc_key_hashes,
+    }
+}
+
 fn open_as(
     g: &Group,
     out: &MultisigOutputData,
     index: u64,
     i: u8,
+    n: u8,
     enc_key_hashes: &[u8],
     leaf: &[u8; PQC_LEAF_ENTRY_LEN],
 ) -> Result<MultisigCommittedForm, MultisigReceiveError> {
-    let cts: Vec<&[u8]> = out
-        .member_kem_ciphertexts
-        .iter()
-        .map(Vec::as_slice)
-        .collect();
+    let out_idx = u8::try_from(index).unwrap();
     open_multisig_entry(
         &group_ss(g, out),
         index,
         &member_view(g, i),
-        &MultisigEntryView {
-            out_idx: u8::try_from(index).unwrap(),
-            member_kem_ciphertexts: &cts,
-            enc_key_hashes,
-        },
+        &entry_view(out, i, out_idx, n, enc_key_hashes),
         leaf,
     )
 }
@@ -125,8 +136,8 @@ fn member_keypair(
     let ss = recover_combined_ss(
         &sk.x25519,
         &sk.ml_kem,
-        ct[..32].try_into().unwrap(),
-        &ct[32..],
+        ct[..X25519_KEM_CT_LEN].try_into().unwrap(),
+        &ct[X25519_KEM_CT_LEN..],
     )
     .unwrap();
     derive_multisig_member_keypair(&ss.0).unwrap()
@@ -163,7 +174,7 @@ fn every_member_opens_the_output_and_any_m_can_spend() {
 
         let leaf = out.pqc_leaf.entry_bytes();
         let forms: Vec<MultisigCommittedForm> = (0..n)
-            .map(|i| open_as(&g, &out, index, i, &out.enc_key_hashes, &leaf).unwrap())
+            .map(|i| open_as(&g, &out, index, i, n, &out.enc_key_hashes, &leaf).unwrap())
             .collect();
         assert!(forms.windows(2).all(|w| w[0] == w[1]), "{m}-of-{n}");
         let committed = forms[0].clone();
@@ -228,7 +239,7 @@ fn member_ciphertexts_never_share_randomness() {
     let mut ephemerals: Vec<&[u8]> = out
         .member_kem_ciphertexts
         .iter()
-        .map(|ct| &ct[..32])
+        .map(|ct| &ct[..X25519_KEM_CT_LEN])
         .collect();
     ephemerals.push(&out.kem_ciphertext_x25519);
     let count = ephemerals.len();
@@ -243,11 +254,6 @@ fn member_ciphertexts_never_share_randomness() {
 fn a_member_cannot_open_another_members_slot() {
     let g = group(3, 2);
     let out = construct_multisig_output(&tx_key(), &g.address, 1, 0, &NET).unwrap();
-    let cts: Vec<&[u8]> = out
-        .member_kem_ciphertexts
-        .iter()
-        .map(Vec::as_slice)
-        .collect();
     let mut view = member_view(&g, 0);
     view.member_index = 1;
     assert_eq!(
@@ -255,11 +261,7 @@ fn a_member_cannot_open_another_members_slot() {
             &group_ss(&g, &out),
             0,
             &view,
-            &MultisigEntryView {
-                out_idx: 0,
-                member_kem_ciphertexts: &cts,
-                enc_key_hashes: &out.enc_key_hashes,
-            },
+            &entry_view(&out, 1, 0, g.address.n_total, &out.enc_key_hashes),
             &out.pqc_leaf.entry_bytes(),
         ),
         Err(MultisigReceiveError::MemberKeyHash)
@@ -298,12 +300,12 @@ fn a_lie_about_one_members_hash_is_caught_by_every_member() {
         .unwrap();
     let leaf = out.pqc_leaf.entry_bytes();
     assert_eq!(
-        open_as(&g, &out, index, 1, &lied, &leaf),
+        open_as(&g, &out, index, 1, g.address.n_total, &lied, &leaf),
         Err(MultisigReceiveError::MemberKeyHash)
     );
     for i in [0, 2] {
         assert_eq!(
-            open_as(&g, &out, index, i, &lied, &leaf),
+            open_as(&g, &out, index, i, g.address.n_total, &lied, &leaf),
             Err(MultisigReceiveError::LeafMismatch)
         );
     }
@@ -315,52 +317,56 @@ fn a_damaged_entry_or_leaf_is_refused_by_name() {
     let index = 0u64;
     let out = construct_multisig_output(&tx_key(), &g.address, 1, index, &NET).unwrap();
     let leaf = out.pqc_leaf.entry_bytes();
-    assert!(open_as(&g, &out, index, 0, &out.enc_key_hashes, &leaf).is_ok());
+    assert!(open_as(
+        &g,
+        &out,
+        index,
+        0,
+        g.address.n_total,
+        &out.enc_key_hashes,
+        &leaf
+    )
+    .is_ok());
 
     let mut tampered = out.enc_key_hashes.clone();
     tampered[0] ^= 1;
     assert_eq!(
-        open_as(&g, &out, index, 0, &tampered, &leaf),
+        open_as(&g, &out, index, 0, g.address.n_total, &tampered, &leaf),
         Err(MultisigReceiveError::HashesUndecryptable)
     );
     let mut other_leaf = leaf;
     other_leaf[40] ^= 1;
     assert_eq!(
-        open_as(&g, &out, index, 0, &out.enc_key_hashes, &other_leaf),
+        open_as(
+            &g,
+            &out,
+            index,
+            0,
+            g.address.n_total,
+            &out.enc_key_hashes,
+            &other_leaf
+        ),
         Err(MultisigReceiveError::LeafMismatch)
     );
     // The entry's out_idx is authenticated: the hashes do not open as
     // another output's.
-    let cts: Vec<&[u8]> = out
-        .member_kem_ciphertexts
-        .iter()
-        .map(Vec::as_slice)
-        .collect();
     assert_eq!(
         open_multisig_entry(
             &group_ss(&g, &out),
             index,
             &member_view(&g, 0),
-            &MultisigEntryView {
-                out_idx: 1,
-                member_kem_ciphertexts: &cts,
-                enc_key_hashes: &out.enc_key_hashes,
-            },
+            &entry_view(&out, 0, 1, g.address.n_total, &out.enc_key_hashes),
             &leaf,
         ),
         Err(MultisigReceiveError::HashesUndecryptable)
     );
-    // An entry for a different group size.
+    // An entry that names a different group size.
     assert_eq!(
         open_multisig_entry(
             &group_ss(&g, &out),
             index,
             &member_view(&g, 0),
-            &MultisigEntryView {
-                out_idx: 0,
-                member_kem_ciphertexts: &cts[..2],
-                enc_key_hashes: &out.enc_key_hashes,
-            },
+            &entry_view(&out, 0, 0, 2, &out.enc_key_hashes),
             &leaf,
         ),
         Err(MultisigReceiveError::GroupSize)
@@ -382,4 +388,84 @@ fn the_constructor_refuses_bad_inputs() {
         construct_multisig_output(&tx_key(), &bad, 1, 0, &NET),
         Err(CryptoError::InvalidKeyMaterial)
     ));
+
+    let mut overlap = g.address.clone();
+    overlap.hybrid_kem_pubkeys[0] = overlap.group_kem_pubkey.clone();
+    assert_eq!(
+        overlap.ensure_distinct_kem_keys().unwrap_err().to_string(),
+        "group KEM key equals member 0's KEM key"
+    );
+    assert!(matches!(
+        construct_multisig_output(&tx_key(), &overlap, 1, 0, &NET),
+        Err(CryptoError::InvalidKeyMaterial)
+    ));
+
+    let mut duplicated = g.address.clone();
+    duplicated.hybrid_kem_pubkeys[1] = duplicated.hybrid_kem_pubkeys[0].clone();
+    assert_eq!(
+        duplicated
+            .ensure_distinct_kem_keys()
+            .unwrap_err()
+            .to_string(),
+        "member KEM keys 0 and 1 are the same key"
+    );
+    assert!(matches!(
+        construct_multisig_output(&tx_key(), &duplicated, 1, 0, &NET),
+        Err(CryptoError::InvalidKeyMaterial)
+    ));
+}
+
+/// A hash list that repeats a member, even when the leaf is recomputed over
+/// that list, is refused by every member. The spend verifier would refuse
+/// the same bytes as duplicate keys.
+#[test]
+fn duplicate_decrypted_key_hashes_are_refused() {
+    let g = group(3, 2);
+    let index = 0u64;
+    let out = construct_multisig_output(&tx_key(), &g.address, 1, index, &NET).unwrap();
+    let ss = group_ss(&g, &out);
+    let key = derive_multisig_key_hashes_key(&ss, index);
+    let cipher = ChaCha20Poly1305::new((&*key).into());
+    let aad = hashes_aad(0, g.address.n_total);
+    let mut hashes = cipher
+        .decrypt(
+            &Nonce::from(HASHES_NONCE),
+            Payload {
+                msg: &out.enc_key_hashes,
+                aad: &aad,
+            },
+        )
+        .unwrap();
+    let width = MULTISIG_KEY_HASH_LEN;
+    hashes.copy_within(0..width, width);
+    let repeated = cipher
+        .encrypt(
+            &Nonce::from(HASHES_NONCE),
+            Payload {
+                msg: &hashes,
+                aad: &aad,
+            },
+        )
+        .unwrap();
+    let key_hashes: Vec<[u8; MULTISIG_KEY_HASH_LEN]> = hashes
+        .chunks_exact(width)
+        .map(|chunk| chunk.try_into().unwrap())
+        .collect();
+    let committed = MultisigCommittedForm::new(g.address.m_required, key_hashes).unwrap();
+    let leaf = pqc_leaf_commitment(&ss, index, &committed.to_bytes()).unwrap();
+    for i in 0..g.address.n_total {
+        assert_eq!(
+            open_as(
+                &g,
+                &out,
+                index,
+                i,
+                g.address.n_total,
+                &repeated,
+                &leaf.entry_bytes()
+            ),
+            Err(MultisigReceiveError::DuplicateKeyHash),
+            "member {i}"
+        );
+    }
 }

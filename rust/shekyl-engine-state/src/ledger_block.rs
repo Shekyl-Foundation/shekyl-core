@@ -90,7 +90,7 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 ///   (height-semantics Phase 2e, C2; postcard bytes of the transparent
 ///   `u64` are identical; the schema type-name change still bumps per
 ///   rule 42). Pre-genesis: refuse, don't migrate.
-/// - Version `13` (this version) retypes [`ReorgBlocks`] hashes and
+/// - Version `13` retypes [`ReorgBlocks`] hashes and
 ///   [`BlockchainTip::tip_hash`] from `[u8; 32]` to [`BlockHash`], so the
 ///   snapshot id's preimage takes block hashes by type
 ///   (`shekyl/snapshot-id-v1`, `DOMAIN_BINDING_RATCHET.tsv`) and the tip
@@ -98,6 +98,9 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 ///   of the transparent
 ///   array are identical; the schema type-name change still bumps per
 ///   rule 42. Pre-genesis: refuse, don't migrate.
+/// - Version `14` (this version) adds the multisig receive refusals to
+///   [`crate::transfer::UnspendableReason`]. Each refusal keeps its own
+///   variant. A version-13 block is refused; pre-genesis does not migrate it.
 ///
 /// Any field addition / removal / renaming inside the block, or any
 /// transitive change in a nested type's serialized shape, bumps this;
@@ -105,7 +108,7 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 13;
+pub const LEDGER_BLOCK_VERSION: u32 = 14;
 
 /// Pointer to the most recently scanned block — "where the wallet is"
 /// on the chain.

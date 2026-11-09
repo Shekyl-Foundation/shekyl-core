@@ -95,6 +95,28 @@ pub const GROUP_VERSION: u8 = 0x01;
 /// payload lie about its own design.
 pub const SPEND_AUTH_VERSION: u8 = 0x02;
 
+/// The group key and every member key are different keys. A repeated key
+/// collapses two encapsulation slots onto one shared secret: the group
+/// secret would open a member's signing key, or two members would hold the
+/// same signing key.
+fn reject_repeated_kem_keys(
+    group_kem_pubkey: &[u8],
+    hybrid_kem_pubkeys: &[Vec<u8>],
+) -> Result<(), MultisigAddressError> {
+    for (second, member) in hybrid_kem_pubkeys.iter().enumerate() {
+        if member.as_slice() == group_kem_pubkey {
+            return Err(MultisigAddressError::GroupKemKeyRepeatsMember { index: second });
+        }
+        if let Some(first) = hybrid_kem_pubkeys[..second]
+            .iter()
+            .position(|earlier| earlier.as_slice() == member.as_slice())
+        {
+            return Err(MultisigAddressError::DuplicateMemberKemKey { first, second });
+        }
+    }
+    Ok(())
+}
+
 /// Errors specific to multisig address operations.
 #[derive(Debug, thiserror::Error)]
 pub enum MultisigAddressError {
@@ -111,6 +133,18 @@ pub enum MultisigAddressError {
     KemPubkeyLength { index: usize, got: usize },
     #[error("group KEM pubkey has wrong length: expected {HYBRID_KEM_PUBKEY_LEN}, got {got}")]
     GroupKemPubkeyLength { got: usize },
+
+    /// The group KEM key is also some member's key. That member's per-output
+    /// shared secret would equal the group secret, so anyone who holds the
+    /// group secret could sign as that member.
+    #[error("group KEM key equals member {index}'s KEM key")]
+    GroupKemKeyRepeatsMember { index: usize },
+
+    /// Two members were given the same KEM key. Their per-output signing keys
+    /// would be identical, and a spend of both would be refused as duplicate
+    /// keys.
+    #[error("member KEM keys {first} and {second} are the same key")]
+    DuplicateMemberKemKey { first: usize, second: usize },
 
     #[error("payload too short: need at least {HEADER_LEN} bytes, got {got}")]
     PayloadTooShort { got: usize },
@@ -199,6 +233,7 @@ impl MultisigAddressPayload {
                 });
             }
         }
+        reject_repeated_kem_keys(&group_kem_pubkey, &hybrid_kem_pubkeys)?;
 
         Ok(MultisigAddressPayload {
             version: MULTISIG_ADDRESS_VERSION,
@@ -227,6 +262,16 @@ impl MultisigAddressPayload {
     /// Expected canonical byte length for this payload.
     pub fn canonical_len(&self) -> usize {
         Self::canonical_len_for(self.n_total)
+    }
+
+    /// Refuse a group KEM key that repeats a member's, and refuse two members
+    /// sharing one KEM key.
+    ///
+    /// [`Self::new`] and [`Self::from_canonical_bytes`] both call this. The
+    /// fields are public, so a caller that edits them afterwards must call it
+    /// again; the output constructor does.
+    pub fn ensure_distinct_kem_keys(&self) -> Result<(), MultisigAddressError> {
+        reject_repeated_kem_keys(&self.group_kem_pubkey, &self.hybrid_kem_pubkeys)
     }
 
     /// Serialize to canonical bytes.
@@ -312,6 +357,7 @@ impl MultisigAddressPayload {
             offset += HYBRID_KEM_PUBKEY_LEN;
         }
         debug_assert_eq!(offset, data.len());
+        reject_repeated_kem_keys(&group_kem_pubkey, &hybrid_kem_pubkeys)?;
 
         Ok(MultisigAddressPayload {
             version,
@@ -564,7 +610,10 @@ mod tests {
             [0xB1; 32],
             [0x71; 32],
             vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
-            vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
+            vec![
+                vec![0; HYBRID_KEM_PUBKEY_LEN],
+                vec![1; HYBRID_KEM_PUBKEY_LEN]
+            ],
         )
         .is_err());
     }
@@ -581,6 +630,61 @@ mod tests {
             vec![vec![0; 100], vec![0; HYBRID_KEM_PUBKEY_LEN]],
         )
         .is_err());
+    }
+
+    #[test]
+    fn rejects_a_group_key_that_repeats_a_member_and_duplicate_member_keys() {
+        let group_key = vec![0xC0; HYBRID_KEM_PUBKEY_LEN];
+        let member_a = vec![0x01; HYBRID_KEM_PUBKEY_LEN];
+        let overlap = MultisigAddressPayload::new(
+            Network::Mainnet,
+            2,
+            2,
+            [0xB1; 32],
+            [0x71; 32],
+            group_key.clone(),
+            vec![group_key.clone(), member_a.clone()],
+        );
+        assert!(matches!(
+            overlap,
+            Err(MultisigAddressError::GroupKemKeyRepeatsMember { index: 0 })
+        ));
+
+        let duplicated = MultisigAddressPayload::new(
+            Network::Mainnet,
+            2,
+            2,
+            [0xB1; 32],
+            [0x71; 32],
+            group_key.clone(),
+            vec![member_a.clone(), member_a.clone()],
+        );
+        assert!(matches!(
+            duplicated,
+            Err(MultisigAddressError::DuplicateMemberKemKey {
+                first: 0,
+                second: 1
+            })
+        ));
+
+        // The byte parser runs the same check: a payload whose fields were
+        // edited after `new` still fails when it is read back.
+        let mut payload = make_test_payload(2, 2);
+        payload.hybrid_kem_pubkeys[1] = payload.hybrid_kem_pubkeys[0].clone();
+        let bytes = payload.to_canonical_bytes();
+        assert!(matches!(
+            MultisigAddressPayload::from_canonical_bytes(&bytes),
+            Err(MultisigAddressError::DuplicateMemberKemKey {
+                first: 0,
+                second: 1
+            })
+        ));
+        payload.hybrid_kem_pubkeys[0] = payload.group_kem_pubkey.clone();
+        let bytes = payload.to_canonical_bytes();
+        assert!(matches!(
+            MultisigAddressPayload::from_canonical_bytes(&bytes),
+            Err(MultisigAddressError::GroupKemKeyRepeatsMember { index: 0 })
+        ));
     }
 
     #[test]
@@ -847,7 +951,10 @@ mod tests {
             [0xB1; 32],
             [0x71; 32],
             vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
-            vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
+            vec![
+                vec![0; HYBRID_KEM_PUBKEY_LEN],
+                vec![1; HYBRID_KEM_PUBKEY_LEN],
+            ],
         )
         .unwrap();
         let p_test = MultisigAddressPayload::new(
@@ -857,7 +964,10 @@ mod tests {
             [0xB1; 32],
             [0x71; 32],
             vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
-            vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
+            vec![
+                vec![0; HYBRID_KEM_PUBKEY_LEN],
+                vec![1; HYBRID_KEM_PUBKEY_LEN],
+            ],
         )
         .unwrap();
         assert_ne!(p_main.to_canonical_bytes(), p_test.to_canonical_bytes());
