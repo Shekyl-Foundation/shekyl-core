@@ -114,6 +114,9 @@ const LABEL_OUTPUT_LABEL_TAG: &[u8] = b"shekyl-output-label-tag";
 const LABEL_OUTPUT_PQC: &[u8] = b"shekyl-pqc-output";
 const LABEL_OUTPUT_PQC_ED25519: &[u8] = b"shekyl-pqc-ed25519";
 const LABEL_VIEW_TAG_PREFILTER: &[u8] = b"shekyl-view-tag-prefilter";
+/// The key that encrypts a multisig output's member key hashes (`0x0D`;
+/// `docs/PQC_MULTISIG.md` §7.3). Same PRK as every per-output secret.
+const LABEL_OUTPUT_MULTISIG_KEY_HASHES: &[u8] = b"shekyl-output-multisig-key-hashes";
 
 /// All per-output secrets derived from a combined KEM shared secret.
 ///
@@ -202,6 +205,26 @@ pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSec
         ml_dsa_seed,
         ed25519_pqc_seed,
     }
+}
+
+/// The AEAD key for a multisig output's encrypted member key hashes:
+/// `HKDF-Expand(prk, "shekyl-output-multisig-key-hashes" ‖ idx_le64, 32)`
+/// over the group's combined shared secret, the same derivation family as
+/// the output's amount and label keys. One key per output, used once.
+#[must_use]
+pub fn derive_multisig_key_hashes_key(
+    combined_ss: &[u8],
+    output_index: u64,
+) -> zeroize::Zeroizing<[u8; 32]> {
+    let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_OUTPUT_DERIVE), combined_ss);
+    let mut out = zeroize::Zeroizing::new([0u8; 32]);
+    expand_32_into(
+        &hk,
+        LABEL_OUTPUT_MULTISIG_KEY_HASHES,
+        output_index,
+        &mut out,
+    );
+    out
 }
 
 /// Derive the on-wire view-tag pre-filter byte from ML-KEM shared secret only.

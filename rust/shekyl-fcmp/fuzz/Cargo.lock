@@ -1121,6 +1121,7 @@ dependencies = [
  "shekyl-network",
  "shekyl-onion-key",
  "shekyl-types",
+ "subtle",
  "thiserror",
  "x25519-dalek",
  "zeroize",

@@ -24,6 +24,7 @@ use shekyl_wire::{transaction::UNLOCK_TIME_BLOCK_SENTINEL, Block, BoundTx, Ct, T
 use shekyl_crypto_pq::{
     kem::{HybridCiphertext, HYBRID_KEM_CT_LEN, ML_KEM_768_CT_LEN, X25519_KEM_CT_LEN},
     key_image::KeyImage,
+    multisig_output::{open_multisig_entry, MultisigEntryView, MultisigMemberView},
     output::{compute_output_key_image, scan_output_recover_with_ml_kem_dk},
 };
 use shekyl_curve_generators::biased_hash_to_point;
@@ -465,11 +466,112 @@ impl std::fmt::Debug for ScanOutcome {
     }
 }
 
+/// What one member of an Option E′ multisig group brings to a scan beyond
+/// the group's view pair (`docs/PQC_MULTISIG.md` §8).
+///
+/// The group scans as a solo wallet would: its [`ViewPair`] is the group KEM
+/// secret with spend point `B_group + Y_group`, and its spend secret is `b`.
+/// For each output that matches, the member then opens the output's `0x0D`
+/// entry with its own KEM secret and checks that the published leaf commits
+/// to the group's key hashes ([`open_multisig_entry`]). That check replaces
+/// the solo one: a group output's leaf never commits to the solo per-output
+/// key, which every member could derive.
+#[derive(Clone)]
+pub struct MultisigMemberScan {
+    member_index: u8,
+    n_total: u8,
+    m_required: u8,
+    member_x25519_sk: Zeroizing<[u8; 32]>,
+    member_ml_kem_dk: Zeroizing<Vec<u8>>,
+    network: [u8; 16],
+}
+
+impl MultisigMemberScan {
+    /// A member's scan context: its index, the group's size and threshold,
+    /// its own hybrid KEM secret, and the chain's network id (the key
+    /// hashes bind it).
+    #[must_use]
+    pub fn new(
+        member_index: u8,
+        n_total: u8,
+        m_required: u8,
+        member_x25519_sk: Zeroizing<[u8; 32]>,
+        member_ml_kem_dk: Zeroizing<Vec<u8>>,
+        network: [u8; 16],
+    ) -> Self {
+        Self {
+            member_index,
+            n_total,
+            m_required,
+            member_x25519_sk,
+            member_ml_kem_dk,
+            network,
+        }
+    }
+
+    /// The multisig verdict for one output the group's view pair matched.
+    /// Every refusal is [`UnspendableReason::PqcLeafMismatch`]: the leaf
+    /// does not open to anything this group can derive, which is the reason
+    /// the ledger already names (no new persisted variant).
+    fn verdict(
+        &self,
+        recovered: &shekyl_crypto_pq::output::RecoveredOutput,
+        extra: &Extra,
+        vout: usize,
+    ) -> Option<UnspendableReason> {
+        let Some(published) = extra.pqc_leaf_entry(vout) else {
+            return Some(UnspendableReason::PqcLeafEntryAbsent);
+        };
+        // No 0x0D entry: paid to the group's keys as a solo output, whose
+        // leaf commits to a key every member can derive. Not spendable
+        // under the group's M-of-N rules.
+        let Some(entry) = extra.pqc_multisig_entry(vout) else {
+            return Some(UnspendableReason::PqcLeafMismatch);
+        };
+        let cts: Vec<[u8; shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES]> = entry
+            .member_cts()
+            .iter()
+            .map(shekyl_wire::tx_extra::KemCiphertext::to_bytes)
+            .collect();
+        let ct_refs: Vec<&[u8]> = cts.iter().map(<[u8; _]>::as_slice).collect();
+        let opened = open_multisig_entry(
+            &recovered.combined_ss,
+            vout as u64,
+            &MultisigMemberView {
+                member_index: self.member_index,
+                n_total: self.n_total,
+                m_required: self.m_required,
+                member_x25519_sk: &self.member_x25519_sk,
+                member_ml_kem_dk: &self.member_ml_kem_dk,
+                network: &self.network,
+            },
+            &MultisigEntryView {
+                out_idx: entry.out_idx(),
+                member_kem_ciphertexts: &ct_refs,
+                enc_key_hashes: entry.enc_key_hashes(),
+            },
+            published,
+        );
+        match opened {
+            Ok(_) => None,
+            Err(_) => Some(UnspendableReason::PqcLeafMismatch),
+        }
+    }
+}
+
+impl Zeroize for MultisigMemberScan {
+    fn zeroize(&mut self) {
+        self.member_x25519_sk.zeroize();
+        self.member_ml_kem_dk.zeroize();
+    }
+}
+
 #[derive(Clone)]
 struct InternalScanner {
     pair: ViewPair,
     spend_secret: Zeroizing<[u8; 32]>,
     primary_spend_compressed: CompressedPoint,
+    multisig: Option<MultisigMemberScan>,
 }
 
 impl Zeroize for InternalScanner {
@@ -477,6 +579,9 @@ impl Zeroize for InternalScanner {
         self.pair.zeroize();
         self.spend_secret.zeroize();
         self.primary_spend_compressed.zeroize();
+        if let Some(member) = &mut self.multisig {
+            member.zeroize();
+        }
     }
 }
 impl Drop for InternalScanner {
@@ -492,6 +597,7 @@ impl InternalScanner {
             primary_spend_compressed: pair.spend().compress().into(),
             pair,
             spend_secret,
+            multisig: None,
         }
     }
 
@@ -714,14 +820,19 @@ impl InternalScanner {
             // by its transaction, never selectable (rule 82). Constant-time
             // compare for the same reason as the ownership check above: the
             // derived entry is a function of secret scan material.
-            let derived_entry = recovered.pqc_leaf.entry_bytes();
-            let unspendable = match extra.pqc_leaf_entry(o) {
-                None => Some(UnspendableReason::PqcLeafEntryAbsent),
-                Some(published) => {
-                    if bool::from(published.ct_eq(&derived_entry)) {
-                        None
-                    } else {
-                        Some(UnspendableReason::PqcLeafMismatch)
+            let unspendable = match &self.multisig {
+                Some(member) => member.verdict(&recovered, &extra, o),
+                None => {
+                    let derived_entry = recovered.pqc_leaf.entry_bytes();
+                    match extra.pqc_leaf_entry(o) {
+                        None => Some(UnspendableReason::PqcLeafEntryAbsent),
+                        Some(published) => {
+                            if bool::from(published.ct_eq(&derived_entry)) {
+                                None
+                            } else {
+                                Some(UnspendableReason::PqcLeafMismatch)
+                            }
+                        }
                     }
                 }
             };
@@ -971,6 +1082,22 @@ impl Scanner {
     /// (KI = (ho + b) * Hp(O)).
     pub fn new(pair: ViewPair, spend_secret: Zeroizing<[u8; 32]>) -> Self {
         Self(InternalScanner::new(pair, spend_secret))
+    }
+
+    /// A scanner for one member of a multisig group: `pair` is the group's
+    /// (the group KEM secret, spend point `B_group + Y_group`), `b` the
+    /// group-plaintext spend secret, and `member` this member's context.
+    /// Outputs paid to the group are found as a solo wallet finds its own;
+    /// each is then checked as a multisig output
+    /// ([`MultisigMemberScan`]).
+    pub fn new_multisig_member(
+        pair: ViewPair,
+        b: Zeroizing<[u8; 32]>,
+        member: MultisigMemberScan,
+    ) -> Self {
+        let mut inner = InternalScanner::new(pair, b);
+        inner.multisig = Some(member);
+        Self(inner)
     }
 
     /// Scan a block for outputs belonging to this wallet.
