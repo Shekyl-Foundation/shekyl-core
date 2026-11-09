@@ -8,14 +8,26 @@
 //! SplitMix64 over a `u64` state, with no `rand` dependency
 //! (`17-dependency-discipline.mdc`). Every mode replays from its seed, so
 //! the stream is load-bearing: the five-seed L11/L13 pins hold its bits.
-//! Nothing the chain computes is drawn from it. The economics sim's
-//! `rng.rs` is the same body; the two crates do not share a dependency
-//! for it.
+//! Nothing the chain computes is drawn from it.
+//!
+//! The step is Vigna's. The seed is the state, and each draw adds the
+//! golden increment and Stafford-mixes. `shekyl-draw-rng` has that same
+//! `next_u64` step, and only that step, under
+//! `cfg(any(test, feature = "splitmix"))`. The feature is test-only, and
+//! this binary does not depend on that crate: a nightly run builds the
+//! sim without it.
+//!
+//! The economics sim's generator is a different stream. It spreads the
+//! seed (`SEED_SPREAD`, then `+ 1`), rejects modulo bias in `below`, and
+//! draws Poisson from an xorshift64* trace capped near mean 700. This one
+//! uses the seed as state, reduces `below` by modulo (`0` when `n` is
+//! `0`), and draws Poisson here, with a normal approximation past mean 30.
+//! The two crates share the Stafford mix and nothing else.
 //!
 //! It is the crate's one copy (EUP-3 check half, Appendix B N5/R20).
 
 /// `2^64 / φ`. SplitMix64 adds this to its state on every draw.
-pub(crate) const GOLDEN_INCREMENT: u64 = 0x9E37_79B9_7F4A_7C15;
+const GOLDEN_INCREMENT: u64 = 0x9E37_79B9_7F4A_7C15;
 /// Stafford mix multipliers. The shifts 30, 27, 31 are part of that mix.
 const STAFFORD_MIX_1: u64 = 0xBF58_476D_1CE4_E5B9;
 const STAFFORD_MIX_2: u64 = 0x94D0_49BB_1331_11EB;
