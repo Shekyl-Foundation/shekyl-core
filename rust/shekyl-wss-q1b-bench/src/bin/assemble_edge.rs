@@ -24,7 +24,8 @@ use std::process::ExitCode;
 use clap::Parser;
 use shekyl_wss_q1b_bench::assembleedge::{
     plan_at_depth, plan_at_replay_window, read_flatness, rung_floor_is_representable,
-    signed_change_pct, spread_pct, Arm, ArmRole, AssembleRig, FlatnessCriterion, PlanKind,
+    signed_change_pct, spread_pct, window_leaf_ratio, ArmRole, AssembleRig, AssemblyPlan,
+    AssemblyWork, FlatnessCriterion, GradeConvergence, PlanKind, WindowReading,
     LEAF_RATE_MODEL_DEPTH,
 };
 use shekyl_wss_q1b_bench::corpus::worst_case_leaves_per_block;
@@ -53,8 +54,10 @@ struct Args {
 
     /// Measure the shape on this depth's rung instead of the replay-window plan.
     ///
-    /// The replay-window plan is one day of chain (`plan_at_replay_window`).
-    /// It costs hours to ingest, and its seconds are a one-day-old chain's.
+    /// The replay-window plan is the rung one day of chain reaches, with the
+    /// window as a reading beside that rung (`plan_at_replay_window`). It
+    /// costs hours to ingest. `--rung` at the window's own depth runs the same
+    /// four pair arms without the window.
     /// A shallower rung establishes the same shape — flat across a rung, and
     /// a cross-rung step no dearer than one layer — in minutes. Neither plan
     /// is the graded assembly population. That population is a ruled chain
@@ -97,22 +100,29 @@ struct Args {
 /// friends, and an `_`-prefixed binding keeps a value alive to the end of
 /// scope rather than dropping it. Releasing explicitly here, rather than
 /// relying on that distinction at four call sites.
-fn measure_and_release(arm: Arm, leaves_per_block: u64, store_dir: Option<&str>) -> Series {
-    let (rig, series) = measure(arm, leaves_per_block, store_dir);
+fn measure_and_release(
+    label: &'static str,
+    work: AssemblyWork,
+    leaves_per_block: u64,
+    store_dir: Option<&str>,
+) -> Series {
+    let (rig, series) = measure(label, work, leaves_per_block, store_dir);
     drop(rig);
     series
 }
 
-/// Time one arm, building its client first (untimed), and keep the rig.
-fn measure(arm: Arm, leaves_per_block: u64, store_dir: Option<&str>) -> (AssembleRig, Series) {
+/// Time one population, building its client first (untimed), and keep the rig.
+fn measure(
+    label: &'static str,
+    work: AssemblyWork,
+    leaves_per_block: u64,
+    store_dir: Option<&str>,
+) -> (AssembleRig, Series) {
     eprintln!(
-        "  building {:>11}  n={:<10} depth={} k={} ...",
-        arm.role.as_str(),
-        arm.population.leaf_count,
-        arm.population.depth,
-        arm.owned_inputs
+        "  building {label:>11}  n={:<10} depth={} k={} ...",
+        work.population.leaf_count, work.population.depth, work.owned_inputs
     );
-    let rig = AssembleRig::new(arm, leaves_per_block, store_dir.map(std::path::Path::new));
+    let rig = AssembleRig::new(work, leaves_per_block, store_dir.map(std::path::Path::new));
     let series = time(&rig);
     (rig, series)
 }
@@ -128,12 +138,12 @@ fn time(rig: &AssembleRig) -> Series {
     )
 }
 
-fn arm_record(arm: Arm, series: Series) -> AssembleArmRecord {
+fn work_record(role: &'static str, work: AssemblyWork, series: Series) -> AssembleArmRecord {
     AssembleArmRecord {
-        role: arm.role.as_str(),
-        leaf_count: arm.population.leaf_count,
-        depth: arm.population.depth,
-        owned_inputs: arm.owned_inputs,
+        role,
+        leaf_count: work.population.leaf_count,
+        depth: work.population.depth,
+        owned_inputs: work.owned_inputs,
         series,
     }
 }
@@ -149,7 +159,7 @@ fn arm_record(arm: Arm, series: Series) -> AssembleArmRecord {
 /// `outputs_per_node`'s product wraps in a release build, so
 /// [`rung_floor_is_representable`] — a reading of `min_leaves_for_depth`'s
 /// `Option` — is the only place that knows where the ladder ends.
-fn resolve_plan(args: &Args) -> Result<(Vec<Arm>, PlanKind), String> {
+fn resolve_plan(args: &Args) -> Result<(AssemblyPlan, PlanKind), String> {
     match args.rung {
         None => Ok((plan_at_replay_window(), PlanKind::ReplayWindow)),
         Some(depth) => {
@@ -161,106 +171,142 @@ fn resolve_plan(args: &Args) -> Result<(Vec<Arm>, PlanKind), String> {
                      that does not exist. Pick a shallower rung."
                 ));
             }
-            Ok((plan_at_depth(depth), PlanKind::Shape { depth }))
+            Ok((
+                AssemblyPlan::rung_only(plan_at_depth(depth)),
+                PlanKind::Shape { depth },
+            ))
         }
     }
 }
 
+/// One plan, measured. The window series is `None` on a shape plan.
+///
+/// One rig is resident at a time. `rung_top` is the control subject, so it
+/// is built last and timed twice, back to back, on the same client. The two
+/// timings have one sensitivity profile: whatever separates them is the
+/// board. A control across two different arms would not cancel
+/// (`CT6_PROVING_STATE.md` §10.4).
+///
+/// The other arms, and the window reading, finish and their rigs drop before
+/// that client exists. Holding it across them would time `rung_floor` beside
+/// `rung_top`'s working set and shrink the same-rung spread toward `Flat`.
+/// The window is among those earlier readings. It is not among the series
+/// that withhold the grade.
+struct MeasuredPlan {
+    below: Series,
+    floor: Series,
+    top: Series,
+    input_cap: Series,
+    window: Option<Series>,
+    /// `rung_top` timed a second time, on the client `top` just used.
+    control: Series,
+}
+
+fn measure_plan(plan: AssemblyPlan, leaves_per_block: u64, store: Option<&str>) -> MeasuredPlan {
+    let rung = plan.rung;
+    let below = measure_and_release(
+        rung.below.role.as_str(),
+        rung.below.work,
+        leaves_per_block,
+        store,
+    );
+    let floor = measure_and_release(
+        rung.floor.role.as_str(),
+        rung.floor.work,
+        leaves_per_block,
+        store,
+    );
+    let input_cap = measure_and_release(
+        rung.input_cap.role.as_str(),
+        rung.input_cap.work,
+        leaves_per_block,
+        store,
+    );
+    let window = plan.window.map(|reading| {
+        measure_and_release(
+            WindowReading::RECORD_ROLE,
+            reading.work,
+            leaves_per_block,
+            store,
+        )
+    });
+    let (top_rig, top) = measure(
+        rung.top.role.as_str(),
+        rung.top.work,
+        leaves_per_block,
+        store,
+    );
+    eprintln!("  re-timing rung_top as the board control ...");
+    let control = time(&top_rig);
+    drop(top_rig);
+    MeasuredPlan {
+        below,
+        floor,
+        top,
+        input_cap,
+        window,
+        control,
+    }
+}
+
 fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
-    let (arms, plan_kind) = resolve_plan(args)?;
+    let (plan, plan_kind) = resolve_plan(args)?;
     let leaves_per_block = args
         .leaves_per_block
         .unwrap_or_else(|| worst_case_leaves_per_block(LEAF_RATE_MODEL_DEPTH).leaves_per_block);
+    let measured = measure_plan(plan, leaves_per_block, args.store_dir.as_deref());
 
-    let find = |role: ArmRole| {
-        *arms
-            .iter()
-            .find(|a| a.role == role)
-            .expect("the plan carries every role")
-    };
-    let below = find(ArmRole::RungBelow);
-    let floor = find(ArmRole::RungFloor);
-    let top = find(ArmRole::RungTop);
-    // Asserted up front, before any ingest. The loop below measures it.
-    let _cap = find(ArmRole::InputCap);
-
-    // One rig resident at a time. `rung_top` is the control subject, so it is
-    // built last and timed twice, back to back, on the same client. The two
-    // timings have one sensitivity profile: whatever separates them is the
-    // board. A control across two different arms would not cancel
-    // (`CT6_PROVING_STATE.md` §10.4).
-    //
-    // The other arms finish, and their rigs drop, before that client exists.
-    // Holding it across them would time `rung_floor` beside `rung_top`'s
-    // working set and shrink the same-rung spread toward `Flat` — the reading
-    // capture is trying to earn. The control therefore does not span the
-    // earlier arms. Spanning them is the bias it exists to exclude.
-    let store = args.store_dir.as_deref();
-    let mut timed: Vec<(Arm, Series)> = Vec::with_capacity(arms.len());
-    // Every arm except the control subject. The set is the plan, so a new
-    // role is released before `rung_top` exists rather than timed beside it.
-    for arm in arms
-        .iter()
-        .copied()
-        .filter(|arm| arm.role != ArmRole::RungTop)
-    {
-        timed.push((arm, measure_and_release(arm, leaves_per_block, store)));
-    }
-    let (top_rig, top_first) = measure(top, leaves_per_block, store);
-    eprintln!("  re-timing rung_top as the board control ...");
-    let top_again = time(&top_rig);
-    drop(top_rig);
-    timed.push((top, top_first));
-
-    let series_of = |role: ArmRole| {
-        timed
-            .iter()
-            .find(|(arm, _)| arm.role == role)
-            .map(|(_, series)| series)
-            .expect("the plan's roles were all timed")
-    };
-    let median = |role: ArmRole| std::time::Duration::from_secs_f64(series_of(role).median_s);
-
-    let control_divergence_pct = spread_pct(
-        median(ArmRole::RungTop),
-        std::time::Duration::from_secs_f64(top_again.median_s),
-    );
+    let median = |series: &Series| std::time::Duration::from_secs_f64(series.median_s);
+    let control_divergence_pct = spread_pct(median(&measured.top), median(&measured.control));
     let load_control = LoadControl::over(
         [(
             control_divergence_pct,
-            series_of(ArmRole::RungTop).converged && top_again.converged,
+            measured.top.converged && measured.control.converged,
         )],
         DEFAULT_TOLERANCE_PCT,
     );
 
-    // Every series that feeds the reading, including the control's own. A
-    // median from a series that never settled is not yet a cost, so a grade
-    // taken over one would be a reading of an unfinished measurement.
-    let every_series_converged =
-        timed.iter().all(|(_, series)| series.converged) && top_again.converged;
+    // The grade's series are the four pair arms and the control. The window
+    // reading is timed above and recorded below; it is not a field of
+    // `GradeConvergence`, so an unconverged window cannot withhold the pair
+    // grade. The input cap stays: `input_cap_change_pct` is published from it.
+    let convergence = GradeConvergence {
+        below: measured.below.converged,
+        floor: measured.floor.converged,
+        top: measured.top.converged,
+        input_cap: measured.input_cap.converged,
+        control: measured.control.converged,
+    };
     let criterion = FlatnessCriterion::default();
+    let rung = plan.rung;
     let reading = read_flatness(
         criterion,
         load_control.quiet,
-        every_series_converged,
-        (median(ArmRole::RungFloor), median(ArmRole::RungTop)),
-        (median(ArmRole::RungBelow), median(ArmRole::RungFloor)),
-        (below.population.depth, floor.population.depth),
+        convergence.all_converged(),
+        (median(&measured.floor), median(&measured.top)),
+        (median(&measured.below), median(&measured.floor)),
+        (
+            rung.below.work.population.depth,
+            rung.floor.work.population.depth,
+        ),
     );
     let input_cap_change_pct =
-        signed_change_pct(median(ArmRole::RungTop), median(ArmRole::InputCap));
+        signed_change_pct(median(&measured.top), median(&measured.input_cap));
 
-    let arm_records = arms
-        .iter()
-        .map(|arm| {
-            let index = timed
-                .iter()
-                .position(|(timed_arm, _)| timed_arm.role == arm.role)
-                .expect("every plan arm was timed");
-            let (arm, series) = timed.swap_remove(index);
-            arm_record(arm, series)
-        })
-        .collect();
+    let arms = vec![
+        work_record(rung.below.role.as_str(), rung.below.work, measured.below),
+        work_record(rung.floor.role.as_str(), rung.floor.work, measured.floor),
+        work_record(rung.top.role.as_str(), rung.top.work, measured.top),
+        work_record(
+            rung.input_cap.role.as_str(),
+            rung.input_cap.work,
+            measured.input_cap,
+        ),
+    ];
+    let window = plan
+        .window
+        .zip(measured.window)
+        .map(|(reading, series)| work_record(WindowReading::RECORD_ROLE, reading.work, series));
 
     Ok(AssembleEdgeRecord {
         schema_version: SCHEMA_VERSION,
@@ -283,24 +329,64 @@ fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
         plan_note: plan_kind.note(),
         criterion,
         input_cap_change_pct,
+        window,
         reading,
-        control_series: top_again,
-        arms: arm_records,
+        control_series: measured.control,
+        arms,
         load_control,
     })
+}
+
+/// The window's leaf ratio, from the leaves the record stored.
+///
+/// `None` when the plan had no window. This is the print boundary: the ratio
+/// is not a field, and the floor is found by its role because `arms` stays
+/// the pair-arm array a v3 reader already knows.
+fn recorded_window_separation(record: &AssembleEdgeRecord) -> Option<f64> {
+    let window = record.window.as_ref()?;
+    let floor_leaves = record
+        .arms
+        .iter()
+        .find(|arm| arm.role == ArmRole::RungFloor.as_str())
+        .expect("a record with a window reading carries its rung floor")
+        .leaf_count;
+    Some(window_leaf_ratio(window.leaf_count, floor_leaves))
+}
+
+fn write_series(role: &str, leaf_count: u64, depth: u8, owned_inputs: usize, series: &Series) {
+    eprintln!(
+        "  {role:>11}  n={leaf_count:<10} depth={depth}  k={owned_inputs}  {:.4} s/call (converged: {})",
+        series.median_s, series.converged
+    );
+}
+
+fn write_window_separation(separation: Option<f64>) {
+    if let Some(separation) = separation {
+        eprintln!(
+            "  window         {separation:.3}x its rung floor — a reading, not a pair member \
+             (reported, never required)"
+        );
+    }
 }
 
 fn report(r: &AssembleEdgeRecord) {
     eprintln!("\n{} [{}]", r.measurement, r.plan.label());
     for arm in &r.arms {
-        eprintln!(
-            "  {:>11}  n={:<10} depth={}  k={}  {:.4} s/call (converged: {})",
+        write_series(
             arm.role,
             arm.leaf_count,
             arm.depth,
             arm.owned_inputs,
-            arm.series.median_s,
-            arm.series.converged
+            &arm.series,
+        );
+    }
+    if let Some(window) = &r.window {
+        write_series(
+            window.role,
+            window.leaf_count,
+            window.depth,
+            window.owned_inputs,
+            &window.series,
         );
     }
     eprintln!(
@@ -311,6 +397,7 @@ fn report(r: &AssembleEdgeRecord) {
         "  cross rung     {:.3}x measured, {:.3}x the one-layer ceiling (a pass is not a match)",
         r.reading.cross_rung_ratio, r.reading.cross_rung_expected
     );
+    write_window_separation(recorded_window_separation(r));
     eprintln!(
         "  input cap      {:+.1} % to raise k to MAX_INPUTS at one population (#842's n + k; \
          negative means cheaper, so k is lost in n)",
@@ -329,7 +416,7 @@ fn main() -> ExitCode {
     let args = Args::parse();
 
     if args.plan {
-        let (arms, plan_kind) = match resolve_plan(&args) {
+        let (plan, plan_kind) = match resolve_plan(&args) {
             Ok(resolved) => resolved,
             Err(e) => {
                 eprintln!("assemble_edge: {e}");
@@ -341,15 +428,25 @@ fn main() -> ExitCode {
              tree depth is read from its own leaf count"
         );
         eprintln!("plan: {}", plan_kind.label());
-        for arm in arms {
+        for arm in plan.rung.arms() {
             eprintln!(
                 "  {:>11}  n={:<10} depth={}  k={}",
                 arm.role.as_str(),
-                arm.population.leaf_count,
-                arm.population.depth,
-                arm.owned_inputs
+                arm.work.population.leaf_count,
+                arm.work.population.depth,
+                arm.work.owned_inputs
             );
         }
+        if let Some(window) = plan.window {
+            eprintln!(
+                "  {:>11}  n={:<10} depth={}  k={}",
+                WindowReading::RECORD_ROLE,
+                window.work.population.leaf_count,
+                window.work.population.depth,
+                window.work.owned_inputs
+            );
+        }
+        write_window_separation(plan.window_separation());
         return ExitCode::SUCCESS;
     }
 

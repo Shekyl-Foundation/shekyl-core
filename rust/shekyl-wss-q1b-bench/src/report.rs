@@ -107,11 +107,27 @@ use crate::timing::Series;
 ///   match; under `--window-leaves` they do not. The quotient is an observation
 ///   of that run. The measured advance is what a later run may compare.
 ///
+/// **v4 (CT-6, 2026-11-09)** — in a `ReplayWindow` [`AssembleEdgeRecord`],
+///   `rung_top` changed meaning. Through `v3` it was the window itself: the
+///   cited run (`docs/benchmarks/wss-q1b/assemble_edge_20261002T052942Z.json`,
+///   `BENCHMARK_ALIGNMENT.md` BA-I96) reads `rung_top` 765 600, which is
+///   `worst_case_window_leaves` at that day's surge factor. From `v4` the pair
+///   is the rung's own — `rung_top` is `separated_leaves` of the floor — and
+///   the window is [`AssembleEdgeRecord::window`], its own recorded arm, not
+///   an element of `arms` and not a pair role. Its separation from the floor
+///   is the ratio of those two leaf counts: printed, never stored, never a
+///   criterion. No `v4` capture is cited, so this is the shape `v4` ships.
+///   The role string `rung_top` is the same and the population is not, so a
+///   `v3` and a `v4` `rung_top` are not one axis. The bump re-labels spend,
+///   verify and open records whose meaning did not move; that costs a reader
+///   one line of this history, and leaving `rung_top` unflagged would cost
+///   them the comparison.
+///
 /// **No CI arm enforces this constant** — the `schema-snapshot` workflow's
 /// version-bump job covers `shekyl-chain-store`'s persisted schema, not this
 /// record. Bumping it is a reviewer obligation, which is why the history
 /// above is kept here rather than only in the changelog.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// The spend-edge budget's absolute floor, in seconds (§6.3.4 row 2).
 pub const SPEND_DELTA_FLOOR_S: f64 = 2.0;
@@ -566,9 +582,9 @@ pub struct AssembleEdgeRecord {
     pub call_site: &'static str,
     /// Which plan ran, as a type rather than prose.
     ///
-    /// Load-bearing. Every plan's arms carry the same roles and the same
+    /// Load-bearing. Every plan's pairs carry the same roles and the same
     /// criterion, so without this field a reader cannot tell a one-day-old
-    /// chain's figure from a rung chosen to fit in minutes.
+    /// chain's rung from a rung chosen to fit in minutes.
     pub plan: crate::assembleedge::PlanKind,
     /// What [`Self::plan`]'s figures do and do not mean, from
     /// [`crate::assembleedge::PlanKind::note`] — one source for the record and
@@ -576,8 +592,19 @@ pub struct AssembleEdgeRecord {
     pub plan_note: &'static str,
     /// The criterion, fixed before capture existed.
     pub criterion: crate::assembleedge::FlatnessCriterion,
-    /// Every arm, in plan order.
+    /// The four pair arms, in plan order: below, floor, top, input cap.
+    ///
+    /// The window reading is not an element of this list.
     pub arms: Vec<AssembleArmRecord>,
+    /// The replay-window reading, when the plan has one.
+    ///
+    /// Its role string is [`crate::assembleedge::WindowReading::RECORD_ROLE`].
+    /// Timed and recorded. Not a pair member: no criterion reads it, and its
+    /// separation from the floor is the ratio of this arm's leaf count to the
+    /// `rung_floor` arm's, printed from those counts rather than stored. A
+    /// ratio below [`crate::assembleedge::SAME_RUNG_SEPARATION`] says only
+    /// that a pair built on the window could not tell a slope from noise.
+    pub window: Option<AssembleArmRecord>,
     /// Change from the canonical owned count to `MAX_INPUTS` at one
     /// population, in percent — `#842`'s `n + k` claim, measured.
     ///

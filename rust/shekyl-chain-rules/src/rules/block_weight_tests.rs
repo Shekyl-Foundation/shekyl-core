@@ -466,12 +466,13 @@ fn a_withheld_weights_window_below_the_tip_is_corrupt_not_a_verdict() {
 // The trajectory: G6/G6b over the generator's three schedules
 // ---------------------------------------------------------------------------
 
-/// The long-term weight follows `tests/block_weight/block_weight.py`'s
-/// trajectory, block by block, over its three schedules: 10 000 maximal
-/// blocks (twice the effective median), 45 000 pseudorandom ones and 5 000
-/// of 90 bytes. The generator's output is frozen in
-/// `tests/vectors/block_weight_trajectory/` (its manifest names the
-/// invocation); the generator stays the generator.
+/// The long-term weight follows the generator's trajectory
+/// (`tests/vectors/block_weight_trajectory/block_weight.py`, which reads `S`
+/// from `config/consensus_constants.json`), block by block, over its three
+/// schedules: 10 000 maximal blocks (twice the effective median), 45 000
+/// pseudorandom ones and 5 000 of 90 bytes. The generator's output is frozen
+/// beside it in `trajectory.txt` (the manifest names the invocation and the
+/// `S` it was generated at); the generator stays the generator.
 ///
 /// Each block is priced as the validator prices it: [`medians_over`] the
 /// window below it (CEN-G6, and G6b's clamp), then [`long_term_weight`],

@@ -29,21 +29,43 @@ fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
 
+/// The replay window's population, from the function that owns it.
+fn window_population() -> Population {
+    Population::at(worst_case_window_leaves(LEAF_RATE_MODEL_DEPTH))
+}
+
 #[test]
-fn the_window_plan_derives_four_arms_from_the_ladder() {
-    let arms = plan_at_replay_window();
-    assert_eq!(arms.len(), 4, "the plan is four arms");
-    assert_eq!(arms[0].role, ArmRole::RungBelow);
-    assert_eq!(arms[1].role, ArmRole::RungFloor);
-    assert_eq!(arms[2].role, ArmRole::RungTop);
-    assert_eq!(arms[3].role, ArmRole::InputCap);
+fn the_window_plan_is_its_rungs_plan_and_a_reading_beside_it() {
+    // Two jobs, kept apart (CT-6 ruling, 2026-11-09): the pairs are the
+    // window rung's own plan, unchanged, and the window is a reading beside
+    // that rung, not a pair role.
+    let plan = plan_at_replay_window();
+    let window = plan
+        .window
+        .expect("the replay plan carries the window reading");
+    assert_eq!(
+        plan.rung,
+        plan_at_depth(window.work.population.depth),
+        "the pair arms must be the window rung's own plan, not built on the window"
+    );
+    assert_eq!(window.work.population, window_population());
+    assert_eq!(window.work.owned_inputs, CANONICAL_OWNED_INPUTS);
+    assert_eq!(
+        plan.rung.arms().map(|arm| arm.role),
+        [
+            ArmRole::RungBelow,
+            ArmRole::RungFloor,
+            ArmRole::RungTop,
+            ArmRole::InputCap,
+        ]
+    );
 }
 
 #[test]
 fn the_cross_rung_pair_is_adjacent_in_n_and_one_layer_apart() {
-    let arms = plan_at_replay_window();
-    let below = arms[0].population;
-    let floor = arms[1].population;
+    let rung = plan_at_replay_window().rung;
+    let below = rung.below.work.population;
+    let floor = rung.floor.work.population;
     assert_eq!(
         below.leaf_count + 1,
         floor.leaf_count,
@@ -59,17 +81,18 @@ fn the_cross_rung_pair_is_adjacent_in_n_and_one_layer_apart() {
 
 #[test]
 fn the_same_rung_pair_shares_a_depth_and_separates_enough_to_discriminate() {
-    let arms = plan_at_replay_window();
-    let floor = arms[1].population;
-    let top = arms[2].population;
+    let rung = plan_at_replay_window().rung;
+    let floor = rung.floor.work.population;
+    let top = rung.top.work.population;
     assert_eq!(
         floor.depth, top.depth,
         "the same-rung pair must share a depth, or it tests the wrong half"
     );
     // A same-rung pair only discriminates if `n` really grows across it: a
-    // slope in `n` has to be large enough to clear the noise bound. Pinned so
-    // a width change that collapsed the separation fails here rather than
-    // quietly producing a powerless comparison.
+    // slope in `n` has to be large enough to clear the noise bound. The pair
+    // is the rung's floor and `separated_leaves` of it, so the separation is
+    // the plan's choice, never the window's.
+    assert_eq!(top.leaf_count, separated_leaves(floor.leaf_count));
     let separation = top.leaf_count as f64 / floor.leaf_count as f64;
     assert!(
         separation >= SAME_RUNG_SEPARATION,
@@ -80,10 +103,48 @@ fn the_same_rung_pair_shares_a_depth_and_separates_enough_to_discriminate() {
 
 #[test]
 fn the_input_cap_arm_holds_the_population_and_raises_only_k() {
-    let arms = plan_at_replay_window();
-    assert_eq!(arms[3].population, arms[2].population);
-    assert_eq!(arms[2].owned_inputs, CANONICAL_OWNED_INPUTS);
-    assert_eq!(arms[3].owned_inputs, MAX_INPUTS);
+    let rung = plan_at_replay_window().rung;
+    assert_eq!(rung.input_cap.work.population, rung.top.work.population);
+    assert_eq!(rung.top.work.owned_inputs, CANONICAL_OWNED_INPUTS);
+    assert_eq!(rung.input_cap.work.owned_inputs, MAX_INPUTS);
+}
+
+#[test]
+fn the_window_is_a_reading_on_the_rung_not_a_pair_member() {
+    let plan = plan_at_replay_window();
+    let window = plan
+        .window
+        .expect("the replay plan carries the window reading");
+    let floor = plan.rung.floor.work.population;
+    let top = plan.rung.top.work.population;
+    assert_eq!(window.work.population, window_population());
+    assert_eq!(window.work.owned_inputs, CANONICAL_OWNED_INPUTS);
+    // The one thing asserted about the window: it sits on the rung.
+    assert_eq!(window.work.population.depth, top.depth);
+    assert!(window.work.population.leaf_count >= floor.leaf_count);
+    // Its separation is the leaf ratio, and nothing holds it to
+    // `SAME_RUNG_SEPARATION`: where the window falls in its rung moves with
+    // the leaf rate, which is why no pair is built on it.
+    let separation = plan
+        .window_separation()
+        .expect("the window plan reports a separation");
+    let ratio = window_leaf_ratio(window.work.population.leaf_count, floor.leaf_count);
+    assert!(
+        (separation - ratio).abs() < 1e-12,
+        "{separation} != {ratio}"
+    );
+    assert_eq!(
+        AssemblyPlan::rung_only(plan_at_depth(4)).window_separation(),
+        None,
+        "a shape plan has no window, so it reports no window separation"
+    );
+    for role in plan.rung.arms().map(|arm| arm.role.as_str()) {
+        assert_ne!(
+            role,
+            WindowReading::RECORD_ROLE,
+            "the window's record key is not a pair role"
+        );
+    }
 }
 
 #[test]
@@ -193,12 +254,12 @@ fn spread_is_symmetric_in_its_arguments() {
 
 #[test]
 fn the_rig_assembles_one_path_per_owned_input() {
-    let arm = Arm {
-        role: ArmRole::RungTop,
+    let work = AssemblyWork {
         population: Population::at(TEST_LEAVES),
         owned_inputs: CANONICAL_OWNED_INPUTS,
     };
-    let rig = AssembleRig::new(arm, TEST_LEAVES_PER_BLOCK, None);
+    let rig = AssembleRig::new(work, TEST_LEAVES_PER_BLOCK, None);
+    assert_eq!(rig.work(), work);
     assert_eq!(rig.owned_inputs(), CANONICAL_OWNED_INPUTS);
     assert_eq!(rig.assemble_once(), CANONICAL_OWNED_INPUTS);
 }
@@ -207,12 +268,11 @@ fn the_rig_assembles_one_path_per_owned_input() {
 fn the_rig_is_repeatable_across_calls() {
     // The timed call must not consume or mutate the rig: a series of samples
     // has to measure the same work every time.
-    let arm = Arm {
-        role: ArmRole::RungTop,
+    let work = AssemblyWork {
         population: Population::at(TEST_LEAVES),
         owned_inputs: CANONICAL_OWNED_INPUTS,
     };
-    let rig = AssembleRig::new(arm, TEST_LEAVES_PER_BLOCK, None);
+    let rig = AssembleRig::new(work, TEST_LEAVES_PER_BLOCK, None);
     assert_eq!(rig.assemble_once(), CANONICAL_OWNED_INPUTS);
     assert_eq!(rig.assemble_once(), CANONICAL_OWNED_INPUTS);
 }
@@ -244,25 +304,36 @@ fn the_windows_tree_depth_does_not_depend_on_the_rate_model() {
 
 #[test]
 fn an_arms_depth_comes_from_its_population_not_the_rate_model() {
-    let arms = plan_at_replay_window();
-    let top = arms[2].population;
+    let plan = plan_at_replay_window();
+    for arm in plan.rung.arms() {
+        assert_eq!(
+            arm.work.population.depth,
+            layer_count_for_leaves(arm.work.population.leaf_count),
+            "{}'s depth must be read from its leaf count",
+            arm.role.as_str()
+        );
+    }
+    let window = plan.window.expect("the replay plan carries the window");
     assert_eq!(
-        top.depth,
-        layer_count_for_leaves(top.leaf_count),
-        "an arm's depth must be read from its leaf count"
+        window.work.population.depth,
+        layer_count_for_leaves(window.work.population.leaf_count),
+        "the window's depth must be read from its leaf count"
     );
 }
 
 #[test]
-fn a_shape_rung_carries_the_same_four_roles_as_the_window_rung() {
+fn a_shape_rung_carries_the_window_plans_pair_roles() {
     let shape = plan_at_depth(4);
     let window = plan_at_replay_window();
-    let roles: Vec<ArmRole> = shape.iter().map(|a| a.role).collect();
-    let window_roles: Vec<ArmRole> = window.iter().map(|a| a.role).collect();
     assert_eq!(
-        roles, window_roles,
+        shape.arms().map(|arm| arm.role),
+        window.rung.arms().map(|arm| arm.role),
         "a shape run must exercise the same comparisons, or it establishes a \
          different claim than the one it is standing in for"
+    );
+    assert!(
+        AssemblyPlan::rung_only(shape).window.is_none(),
+        "a shape plan has no window reading to filter out"
     );
 }
 
@@ -270,18 +341,20 @@ fn a_shape_rung_carries_the_same_four_roles_as_the_window_rung() {
 fn a_shape_rung_is_cheaper_than_the_window_one_but_separates_as_much() {
     let shape = plan_at_depth(4);
     let window = plan_at_replay_window();
+    let shape_floor = shape.floor.work.population;
+    let shape_top = shape.top.work.population;
     assert!(
-        shape[2].population.leaf_count < window[2].population.leaf_count,
+        shape_top.leaf_count < window.rung.top.work.population.leaf_count,
         "a shape rung that is not cheaper buys nothing"
     );
-    let separation = shape[2].population.leaf_count as f64 / shape[1].population.leaf_count as f64;
+    let separation = shape_top.leaf_count as f64 / shape_floor.leaf_count as f64;
     assert!(
         separation >= SAME_RUNG_SEPARATION,
         "shape separation {separation:.3}x is below {SAME_RUNG_SEPARATION}x"
     );
     assert_eq!(
-        shape[0].population.depth + 1,
-        shape[1].population.depth,
+        shape.below.work.population.depth + 1,
+        shape_floor.depth,
         "the shape rung must still straddle a boundary"
     );
 }
@@ -315,14 +388,24 @@ fn no_plan_here_claims_to_be_the_graded_one() {
     let window = plan_at_replay_window();
     let shape = plan_at_depth(4);
     assert!(
-        shape[2].population.leaf_count < window[2].population.leaf_count,
+        shape.top.work.population.leaf_count < window.rung.top.work.population.leaf_count,
         "the shape rung must sit below the window rung"
     );
+    let model_rung_floor =
+        min_leaves_for_depth(LEAF_RATE_MODEL_DEPTH).expect("rate model rung floor");
+    for arm in window.rung.arms() {
+        assert!(
+            arm.work.population.leaf_count < model_rung_floor,
+            "the window plan's {} must stay below the rate model's rung, or it has \
+             quietly become a claim about the chain",
+            arm.role.as_str()
+        );
+    }
+    let reading = window.window.expect("the replay plan carries the window");
     assert!(
-        window[2].population.leaf_count
-            < min_leaves_for_depth(LEAF_RATE_MODEL_DEPTH).expect("rate model rung floor"),
-        "the window plan must stay below the rate model's rung, or it has quietly \
-         become a claim about the chain"
+        reading.work.population.leaf_count < model_rung_floor,
+        "the window reading must stay below the rate model's rung, or it has \
+         quietly become a claim about the chain"
     );
 }
 
@@ -459,6 +542,47 @@ fn the_recorded_ratio_is_the_ratio_the_grade_judged() {
             assert_eq!(expected, judged_expected);
         }
         other => panic!("a zero shallow arm must overstep, and both doors must agree: {other:?}"),
+    }
+}
+
+/// The grade withholds on each pair series and on the control, and the
+/// window is not a flag it can withhold on.
+#[test]
+fn the_pair_grade_sees_the_four_pair_series_and_the_control() {
+    let settled = GradeConvergence {
+        below: true,
+        floor: true,
+        top: true,
+        input_cap: true,
+        control: true,
+    };
+    assert!(settled.all_converged());
+    for faulted in [
+        GradeConvergence {
+            below: false,
+            ..settled
+        },
+        GradeConvergence {
+            floor: false,
+            ..settled
+        },
+        GradeConvergence {
+            top: false,
+            ..settled
+        },
+        GradeConvergence {
+            input_cap: false,
+            ..settled
+        },
+        GradeConvergence {
+            control: false,
+            ..settled
+        },
+    ] {
+        assert!(
+            !faulted.all_converged(),
+            "a pair series that did not settle must withhold the grade"
+        );
     }
 }
 
