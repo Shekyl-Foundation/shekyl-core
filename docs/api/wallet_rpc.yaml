@@ -464,7 +464,13 @@ info:
   # `support_complete_tree` on the bond request, the -29506 refusal, and
   # the serving-posture response. The obligation is unchanged: the
   # whole-corpus archival backstop. api_version stays 1.
-  version: 0.15.0
+  # 0.16.0: an in_flight entry says what it holds
+  # (WALLET_RPC_STAKING_OUTCOMES.md WR-Q6, ruled 2026-11-07). reserved is
+  # required: the amounts of the record's reserved inputs still unspent,
+  # "0" when nothing is held (a held stake, an empty reservation), and
+  # null when the staking scan has not run yet, so what is held cannot be
+  # read. api_version stays 1.
+  version: 0.16.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -2960,6 +2966,7 @@ components:
         - dispatched_at_height
         - attempts
         - funds_return_at
+        - reserved
         - reason
       description: >
         One staking record in flight. `kind` and `state` are open strings
@@ -3013,6 +3020,17 @@ components:
             which the transaction could be mined. Its funds return once
             pscan_synced_height is greater than it. `null` in the other
             states, where no return is expected.
+        reserved:
+          allOf:
+            - $ref: "#/components/schemas/AtomicUnits"
+          nullable: true
+          description: >
+            What the record still holds (WR-Q6): the amounts of its
+            reserved inputs that are still unspent. A partly spent
+            reservation holds what is left. "0" when nothing is held: a
+            `held` stake, whose every reserved input is spent, and an
+            empty reservation. `null` when the staking scan has not run
+            yet, so what is held cannot be read; it is not "0".
         reason:
           type: string
           nullable: true

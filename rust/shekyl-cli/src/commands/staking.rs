@@ -417,6 +417,32 @@ fn print_staking_work(val: &Value) {
 }
 
 fn in_flight_line(entry: &InFlightEntry) -> String {
+    let line = in_flight_state_line(entry);
+    match held_sentence(entry) {
+        Some(held) => {
+            let line = line.trim_end();
+            let stop = if line.ends_with('.') { "" } else { "." };
+            format!("{line}{stop} {held}")
+        }
+        None => line,
+    }
+}
+
+/// What an entry still holds (WR-Q6), as a sentence. Nothing when it holds
+/// nothing. When the staking scan has not run, the amount is not known yet,
+/// and the line says so rather than imply nothing is held.
+fn held_sentence(entry: &InFlightEntry) -> Option<String> {
+    match entry.reserved.0 {
+        Some(amount) => {
+            let amount = shekyl_units::AtomicUnits::from(amount);
+            (amount != shekyl_units::AtomicUnits::ZERO)
+                .then(|| format!("It holds {}.", format_amount(amount.to_raw())))
+        }
+        None => Some("What it holds shows once the staking scan has run.".to_owned()),
+    }
+}
+
+fn in_flight_state_line(entry: &InFlightEntry) -> String {
     let kind = kind_word(&entry.kind);
     let returns = entry
         .funds_return_at
@@ -743,6 +769,7 @@ mod tests {
             dispatched_at_height: sent.into(),
             attempts: u32::from(sent.is_some()),
             funds_return_at: returns.into(),
+            reserved: Some(shekyl_units::AtomicUnits::ZERO.into()).into(),
             reason: (state == "refused")
                 .then(|| "The node refused its fee as too low.".to_owned())
                 .into(),
@@ -801,6 +828,32 @@ mod tests {
         );
         assert_eq!(kind_word("exit"), "release");
         assert_eq!(kind_word("stake"), "stake");
+    }
+
+    /// WR-Q6: a line says what the entry still holds, says nothing when it
+    /// holds nothing, and says the amount is not known yet rather than
+    /// imply nothing is held.
+    #[test]
+    fn an_in_flight_line_says_what_it_holds() {
+        let holding = |reserved: Option<u64>| {
+            let mut e = entry("pending", None, None);
+            e.reserved = reserved
+                .map(|n| shekyl_units::AtomicUnits::from_raw(n).into())
+                .into();
+            in_flight_line(&e)
+        };
+        assert_eq!(
+            holding(Some(2_500_000_000)),
+            format!(
+                "return: waiting to be sent. It holds {}.",
+                super::format_amount(2_500_000_000)
+            )
+        );
+        assert_eq!(holding(Some(0)), "return: waiting to be sent");
+        assert_eq!(
+            holding(None),
+            "return: waiting to be sent. What it holds shows once the staking scan has run."
+        );
     }
 
     #[test]

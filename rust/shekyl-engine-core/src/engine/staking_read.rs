@@ -483,16 +483,17 @@ impl<
             .map(staked_outputs_from_state)
             .unwrap_or_default();
         let pscan_synced_height = pscan.as_ref().map(PScanState::synced_height);
-        let (in_flight, outcomes) = pending.as_ref().map_or_else(
-            || (Vec::new(), Vec::new()),
-            |block| {
+        let (in_flight, outcomes) = match pending.as_ref() {
+            None => (Vec::new(), Vec::new()),
+            Some(block) => {
                 let scan = staking_outcomes::FundingScan::from_seal(pscan.as_ref());
                 (
-                    staking_outcomes::in_flight(block, ledger_tip, scan.evidence()),
+                    staking_outcomes::in_flight(block, ledger_tip, scan.evidence())
+                        .map_err(|_| StakingReadError::Overflow)?,
                     staking_outcomes::outcomes(block),
                 )
-            },
-        );
+            }
+        };
 
         Ok(StakingReadView {
             staking_enabled,
@@ -858,6 +859,7 @@ mod tests {
                 kind: shekyl_engine_state::pending_post_block::RecordKind::Post,
                 state: super::super::staking_outcomes::InFlightState::Pending,
                 sends: None,
+                reserved: Some(AtomicUnits::from_raw(4_242)),
             }],
             outcomes: vec![ReportedOutcome {
                 kind: shekyl_engine_state::pending_post_block::RecordKind::Drain,
@@ -874,7 +876,8 @@ mod tests {
         assert!(
             !rendered.contains("InFlightRecord")
                 && !rendered.contains("ReportedOutcome")
-                && !rendered.contains("5001"),
+                && !rendered.contains("5001")
+                && !rendered.contains("4242"),
             "the view must redact in-flight records and outcomes, counts included: {rendered}"
         );
     }

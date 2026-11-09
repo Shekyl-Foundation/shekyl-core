@@ -5,7 +5,8 @@ accepted, with the amendments recorded in each ruling (§3). **WR-Q3 amended
 2026-10-16:** no daemon verdict releases a submitted record of any kind
 ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q3).
 **Implemented in #1109** (§7), with the review rulings of 2026-10-17
-(§7.3). One dependency on the bond lane is open (§1.1), recorded in
+(§7.3). **WR-Q6** (what an entry holds, §3) ruled 2026-11-07 and
+implemented 2026-11-09. One dependency on the bond lane is open (§1.1), recorded in
 FOLLOWUPS and posed in the bond lane's Round 0
 ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md)). One
 follow-on is not ruled here (§5).
@@ -14,7 +15,7 @@ follow-on is not ruled here (§5).
 #1075), with the daemon RPC at `CORE_RPC_VERSION` 3.54 (#1057). Every
 `file:line` below was read at that commit.
 
-**Identifier family:** `WR-Q1…WR-Q5` (the questions), registered in
+**Identifier family:** `WR-Q1…WR-Q6` (the questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 at birth. The
 round extends `WI-RPC-1`'s `staking_info` and adds nothing to any other
 family.
@@ -733,6 +734,48 @@ on each start (WR-Q3), which names no persona.
 - A decode test refuses an `acknowledge_staking_outcome` request carrying
   `p_slot`.
 
+### WR-Q6 — How much an entry holds — RULED 2026-11-07
+
+Posed by the GUI lane ("Say when an outstanding staking record holds
+funds"). A new question, not a reopening of WR-Q1.
+
+**Ruling (Rick, 2026-11-07).** Every `in_flight` entry carries a required
+`reserved` field in atomic units: `0` when nothing is held, and for a
+partly spent reservation the amount still held.
+
+**What "held" is.** A record reserves inputs by global output index; the
+record stores no amount. The amount is the sum of the staking scan's
+recovered `amount` over the record's reserved inputs that are still in the
+live funding set. A partly spent reservation therefore holds what is
+left, and a `held` stake, whose every reserved input is spent, holds `0`,
+as does an empty reservation.
+
+**The one case the ruling did not name.** When the staking scan has
+produced no evidence (no scan seal, or a frontier still at zero), the
+funding set cannot be read, so neither can the amount. That is not "0":
+`0` says nothing is held. The field is required and `null` there, the
+contract's convention for an answer that is not known yet (rule 43), as
+`funds_return_at` and `pscan_synced_height` already are. The CLI says
+the amount shows once the staking scan has run.
+
+**What it reveals, and to whom.** The caller is the wallet's owner, as
+in WR-Q5. A per-record amount says how much each piece of staking work
+moves; the totals were already on `staking_info`. No gindex, persona or
+slot reaches the wire. The engine's record redacts the amount from
+`Debug`, as the funding records it is summed from are redacted.
+
+**Overflow.** The inputs are the wallet's own distinct outputs, so a sum
+past `u64` is corrupt state. The read fails closed with the staking
+read's overflow error; a money total is never wrapped.
+
+**Falsifiers.** `an_in_flight_record_reports_what_it_still_holds`
+(engine: all live, partly spent, fully spent, empty, no scan, frontier at
+zero, and the redacted `Debug`); `an_in_flight_entry_carries_what_it_holds`
+(wire: a decimal string, `"0"`, `null`);
+`staking_info_refuses_a_reply_missing_a_required_member` (the field is
+required, `null` decodes, a JSON number does not);
+`an_in_flight_line_says_what_it_holds` (CLI).
+
 ---
 
 ## 4. Proving it
@@ -861,6 +904,7 @@ and the review rulings of 2026-10-17 (§7.3).
 | WR-Q3 / WR-Q4: the release table, every kind | `pending_post_block` tests and `the_release_moves_each_kind_from_in_flight_to_outcomes` |
 | §7.3: a stake with every input spent holds; a partly spent one releases | `the_release_outcome_follows_the_precedence_table`; `a_stake_with_every_input_spent_reads_held` (ledger at the end date while the frontier is still behind it); the alarm from the two seals, `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |
 | §7.3: `spent_elsewhere` clears only on acknowledgement | `spent_elsewhere_survives_a_new_seal_and_a_new_ending`; its alarm survives a new seal in `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |
+| WR-Q6: an entry's `reserved` is what its reserved inputs still hold; `null` with no scan evidence | `staking_outcomes::tests::an_in_flight_record_reports_what_it_still_holds`; `staking::tests::an_in_flight_entry_carries_what_it_holds`; `types::tests::staking_info_refuses_a_reply_missing_a_required_member`; the CLI's `an_in_flight_line_says_what_it_holds` |
 | WR-Q5: no persona, slot, delay or funding output on the wire; `p_slot` refused | `types::tests::staking_outcome_wire_names_no_persona_slot_or_funding_output`, `staking_reads_on_fresh_wallet_are_zero_and_offline` |
 
 ### 7.3 Review rulings — RULED 2026-10-17 (Rick, on #1109 at `c9ac6bf52`)

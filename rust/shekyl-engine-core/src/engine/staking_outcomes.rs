@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! What `staking_info` reports about staking work in flight and how it
-//! ended (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q1, WR-Q2, WR-Q5).
+//! ended (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q1, WR-Q2, WR-Q5, WR-Q6).
 //!
 //! A pure projection over the sealed [`PendingPostBlock`] and the wallet
 //! ledger's synced tip. Every state comes from sealed records, never from the
@@ -14,7 +14,7 @@
 //! delay (WR-Q5): the report says what kind of work it was and where it
 //! stands, and a wallet acts on the active persona.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use shekyl_engine_file::WalletFile;
@@ -25,6 +25,7 @@ use shekyl_engine_state::pending_post_block::{
 use shekyl_engine_state::pscan_state::PScanState;
 use shekyl_engine_state::{PendingPostBlock, PendingPostState};
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
+use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
 use super::local_ledger::LocalLedger;
@@ -36,7 +37,7 @@ use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngin
 use super::Engine;
 
 /// One live pending record, as `staking_info`'s `in_flight` reports it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct InFlightRecord {
     /// Which staking action the record carries.
     pub kind: RecordKind,
@@ -44,6 +45,26 @@ pub struct InFlightRecord {
     pub state: InFlightState,
     /// Its sends so far; `None` when it was never handed to a daemon.
     pub sends: Option<Sends>,
+    /// What the record still holds (WR-Q6): the amounts of its reserved
+    /// inputs that are still unspent. Zero when nothing is held, as for a
+    /// `Held` stake or an empty reservation. `None` when the staking scan
+    /// has produced no evidence yet, so what is held cannot be read; zero
+    /// would say nothing is held.
+    pub reserved: Option<AtomicUnits>,
+}
+
+impl std::fmt::Debug for InFlightRecord {
+    /// Redacts `reserved`: the amount ties a persona's funding to its
+    /// staking work, the same class as the funding records it is summed
+    /// from (`PFundingOutputRecord`).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InFlightRecord")
+            .field("kind", &self.kind)
+            .field("state", &self.state)
+            .field("sends", &self.sends)
+            .field("reserved", &"<redacted>")
+            .finish()
+    }
 }
 
 /// A record's sends: a fact independent of where it stands, so a rejected or
@@ -246,10 +267,12 @@ fn refusal(cause: &TerminalCause) -> std::borrow::Cow<'static, str> {
 /// What the sealed scan contributes to a read. `live` is `Some` only when a
 /// scan exists and its frontier has moved off zero: absence from that set is
 /// a spend. `None` means the scan has not produced evidence, so absence is
-/// not a spend and a fully spent stake is not yet held.
+/// not a spend and a fully spent stake is not yet held. `amounts` holds each
+/// live output's amount, and is read only when `live` is `Some`.
 #[derive(Clone, Copy)]
 pub(crate) struct ScanEvidence<'a> {
     live: Option<&'a BTreeSet<GlobalOutputIndex>>,
+    amounts: &'a BTreeMap<GlobalOutputIndex, AtomicUnits>,
     confirmed_posts: &'a BTreeSet<PCanonicalId>,
 }
 
@@ -259,6 +282,7 @@ impl ScanEvidence<'static> {
     fn unscanned() -> Self {
         Self {
             live: None,
+            amounts: &EMPTY_AMOUNTS,
             confirmed_posts: &EMPTY_CONFIRMED,
         }
     }
@@ -273,6 +297,7 @@ impl<'a> ScanEvidence<'a> {
     ) -> Self {
         Self {
             live: Some(live),
+            amounts: &EMPTY_AMOUNTS,
             confirmed_posts,
         }
     }
@@ -280,11 +305,14 @@ impl<'a> ScanEvidence<'a> {
 
 #[cfg(test)]
 static EMPTY_CONFIRMED: BTreeSet<PCanonicalId> = BTreeSet::new();
+#[cfg(test)]
+static EMPTY_AMOUNTS: BTreeMap<GlobalOutputIndex, AtomicUnits> = BTreeMap::new();
 
 /// The funding set and JoinMarket matches of one sealed scan, or the
 /// absence of evidence when there is no scan or the frontier is still zero.
 pub(crate) struct FundingScan {
     live: Option<BTreeSet<GlobalOutputIndex>>,
+    amounts: BTreeMap<GlobalOutputIndex, AtomicUnits>,
     confirmed_posts: BTreeSet<PCanonicalId>,
 }
 
@@ -296,6 +324,7 @@ impl FundingScan {
         let Some(pscan) = pscan else {
             return Self {
                 live: None,
+                amounts: BTreeMap::new(),
                 confirmed_posts: BTreeSet::new(),
             };
         };
@@ -306,14 +335,16 @@ impl FundingScan {
         {
             return Self {
                 live: None,
+                amounts: BTreeMap::new(),
                 confirmed_posts: BTreeSet::new(),
             };
         }
-        let live = pscan
+        let amounts: BTreeMap<_, _> = pscan
             .funding_outputs()
             .iter()
-            .map(|output| output.gindex)
+            .map(|output| (output.gindex, output.amount))
             .collect();
+        let live = amounts.keys().copied().collect();
         let confirmed_posts = pscan
             .bond_post_matches()
             .iter()
@@ -322,6 +353,7 @@ impl FundingScan {
             .collect();
         Self {
             live: Some(live),
+            amounts,
             confirmed_posts,
         }
     }
@@ -329,6 +361,7 @@ impl FundingScan {
     pub(crate) fn evidence(&self) -> ScanEvidence<'_> {
         ScanEvidence {
             live: self.live.as_ref(),
+            amounts: &self.amounts,
             confirmed_posts: &self.confirmed_posts,
         }
     }
@@ -398,25 +431,62 @@ fn tip_of(at: ChainCount) -> BlockHeight {
     at.tip().unwrap_or(BlockHeight::ZERO)
 }
 
+/// What `record` still holds (WR-Q6): the sum of its reserved inputs'
+/// amounts that are still in the live funding set. `Ok(None)` with no scan
+/// evidence.
+///
+/// # Errors
+///
+/// [`ReservedOverflow`] when the sum overflows `u64`. The inputs are the
+/// wallet's own distinct outputs, so that is corrupt state; a money total
+/// is never wrapped.
+fn reserved_amount(
+    record: &SealedRecord<'_>,
+    evidence: ScanEvidence<'_>,
+) -> Result<Option<AtomicUnits>, ReservedOverflow> {
+    if evidence.live.is_none() {
+        return Ok(None);
+    }
+    AtomicUnits::checked_sum(
+        record
+            .reserved
+            .iter()
+            .filter_map(|gindex| evidence.amounts.get(gindex).copied()),
+    )
+    .map(Some)
+    .ok_or(ReservedOverflow)
+}
+
+/// A record's held amount overflowed `u64`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReservedOverflow;
+
 /// Every live record in `block`, judged at `ledger_tip` (the wallet ledger's
 /// synced height, inclusive) against `evidence`.
+///
+/// # Errors
+///
+/// [`ReservedOverflow`] when a record's held amount overflows `u64`.
 pub(crate) fn in_flight(
     block: &PendingPostBlock,
     ledger_tip: BlockHeight,
     evidence: ScanEvidence<'_>,
-) -> Vec<InFlightRecord> {
+) -> Result<Vec<InFlightRecord>, ReservedOverflow> {
     block
         .sealed_records()
-        .map(|record| InFlightRecord {
-            kind: record.kind,
-            state: project(record, ledger_tip, evidence),
-            sends: match record.state {
-                PendingPostState::Pending => None,
-                PendingPostState::Dispatched { at, attempts } => Some(Sends {
-                    first_at_height: tip_of(at),
-                    attempts,
-                }),
-            },
+        .map(|record| {
+            Ok(InFlightRecord {
+                kind: record.kind,
+                state: project(record, ledger_tip, evidence),
+                sends: match record.state {
+                    PendingPostState::Pending => None,
+                    PendingPostState::Dispatched { at, attempts } => Some(Sends {
+                        first_at_height: tip_of(at),
+                        attempts,
+                    }),
+                },
+                reserved: reserved_amount(&record, evidence)?,
+            })
         })
         .collect()
 }
@@ -513,6 +583,15 @@ where
 mod tests {
     use super::*;
 
+    /// [`super::in_flight`] for tests, whose fixtures cannot overflow.
+    fn in_flight(
+        block: &PendingPostBlock,
+        ledger_tip: BlockHeight,
+        evidence: ScanEvidence<'_>,
+    ) -> Vec<InFlightRecord> {
+        super::in_flight(block, ledger_tip, evidence).expect("a fixture's amounts fit u64")
+    }
+
     use std::collections::BTreeSet;
 
     use shekyl_engine_state::pending_post_block::SealAdmission;
@@ -603,6 +682,7 @@ mod tests {
                 kind: RecordKind::Post,
                 state: InFlightState::Pending,
                 sends: None,
+                reserved: None,
             }]
         );
 
@@ -860,6 +940,100 @@ mod tests {
             left,
             vec![(RecordKind::Drain, 0x73), (RecordKind::Claim, 0x74)],
             "the drain, and the claim written after the height shown, stay"
+        );
+    }
+
+    /// WR-Q6: an entry says what it still holds, the amounts of its
+    /// reserved inputs still in the live funding set. A partly spent
+    /// reservation holds what is left; a fully spent one and an empty one
+    /// hold zero. With no scan evidence, or a frontier still at zero, what
+    /// is held cannot be read, which is not zero.
+    #[test]
+    fn an_in_flight_record_reports_what_it_still_holds() {
+        use shekyl_engine_state::pscan_cursor::PScanCursor;
+        use shekyl_engine_state::pscan_state::PFundingOutputRecord;
+
+        let funding = |g: u64, amount: u64| PFundingOutputRecord {
+            p_slot: PSlot::from_raw(0),
+            index_in_transaction: 0,
+            gindex: GlobalOutputIndex::from_raw(g),
+            output_key: [0; 32],
+            commitment: [0; 32],
+            ciphertext_x25519: [0; 32],
+            ciphertext_ml_kem: Vec::new(),
+            amount: AtomicUnits::from_raw(amount),
+            height: BlockHeight::from_raw(2_000),
+            epoch: shekyl_types::SettlementEpoch::from_raw(1),
+            lineage: shekyl_engine_state::pscan_state::MintLineageOutput::ExternalTransfer,
+            spendable_height: BlockHeight::from_raw(2_010),
+        };
+        // Live: 10 and 11 (the first stake's), 21 (one of the second's), and
+        // 99, which no record reserves.
+        let scan_at = |frontier: u64| {
+            PScanState::new(
+                PScanCursor::at(BlockHeight::from_raw(frontier), [0; 32]),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                vec![
+                    funding(10, 300),
+                    funding(11, 50),
+                    funding(21, 7),
+                    funding(99, 1_000),
+                ],
+                Vec::new(),
+                Default::default(),
+            )
+        };
+        let held = |record: Record, pscan: Option<&PScanState>| {
+            let mut block = PendingPostBlock::empty();
+            seal(&mut block, record);
+            let scan = FundingScan::from_seal(pscan);
+            let reported = in_flight(&block, at(5_010), scan.evidence());
+            assert_eq!(reported.len(), 1);
+            reported[0].reserved
+        };
+        let scanned = scan_at(5_009);
+        let units = |n: u64| Some(AtomicUnits::from_raw(n));
+
+        assert_eq!(
+            held(Record::Post(post(1, &[10, 11])), Some(&scanned)),
+            units(350),
+            "every reserved input is live"
+        );
+        assert_eq!(
+            held(Record::Post(post(2, &[20, 21])), Some(&scanned)),
+            units(7),
+            "a partly spent reservation holds what is left"
+        );
+        assert_eq!(
+            held(Record::Drain(drain(3, &[30])), Some(&scanned)),
+            units(0),
+            "a fully spent reservation holds nothing"
+        );
+        assert_eq!(
+            held(Record::Claim(claim(4, &[])), Some(&scanned)),
+            units(0),
+            "an empty reservation holds nothing"
+        );
+        assert_eq!(
+            held(Record::Post(post(5, &[10, 11])), None),
+            None,
+            "no scan: what is held cannot be read"
+        );
+        assert_eq!(
+            held(Record::Post(post(6, &[10, 11])), Some(&scan_at(0))),
+            None,
+            "a frontier still at zero has shown nothing"
+        );
+
+        let mut block = PendingPostBlock::empty();
+        seal(&mut block, Record::Post(post(7, &[10])));
+        let scan = FundingScan::from_seal(Some(&scanned));
+        let rendered = format!("{:?}", in_flight(&block, at(5_010), scan.evidence())[0]);
+        assert!(
+            rendered.contains("<redacted>") && !rendered.contains("300"),
+            "the held amount never renders: {rendered}"
         );
     }
 
