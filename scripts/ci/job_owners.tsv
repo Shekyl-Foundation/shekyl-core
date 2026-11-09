@@ -113,6 +113,7 @@ scripts/ci/ignored_set_economics_sim.sh	nightly:economics-sim-ignored,nightly:re
 scripts/ci/ignored_set_mode.sh	nightly:chain-ingest-ignored,nightly:economics-sim-ignored,nightly:report-red,nightly:store-ignored,nightly:wire-ignored,rust-audit-test:rust-audit-and-test
 scripts/ci/ignored_set_wire.sh	nightly:report-red,nightly:wire-ignored,rust-audit-test:rust-audit-and-test
 scripts/ci/inland_height_u64_grandfather.txt	grep-gates:grep-gates
+scripts/ci/job_owners.tsv	build:changes,codeql:changes,depends:legs,docs-gates:check-doc-links,grep-gates:grep-gates,rust-audit-test:changes
 scripts/ci/msvc_static_crt.ps1	build:build-windows-msvc
 scripts/ci/nextest_report.py	rust-audit-test:rust-audit-and-test
 scripts/ci/p17_remote_dial.ps1	none
