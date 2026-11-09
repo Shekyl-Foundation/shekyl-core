@@ -3339,6 +3339,39 @@ Without the floor, every coverage figure is the market's. The L12
 cold start reads the market alone: `boot_deep_under_peak` 1.0 and 60 deep
 extinctions; L13 at a terminal floor of 40 loses 553.
 
+**P11, the capital carry stays in tokens when flow cost is fiat.** With
+`flow_cost_fiat`, the exit rule divided the whole flow cost by the token
+price, the capital carry from (a) included, so at p = 0.25 the 0.015
+rate charged as 0.06. The capital carry is a rate on the token bond, the
+same kind of quantity as the reservation it adds to, so a price level
+does not change it. Now only the fiat expenses are divided: storage, the
+operating cost per held shard and pseudonym upkeep,
+`apr = (R − K − F/p) / B` with `K` the capital carry. The registered
+arm's flat carry stays in `F`, the denomination its figures were taken
+with (D1), so the two arms now differ in the carry's unit as well as its
+shape. At baseline (storage 0.03 per held shard, carry 0.03 per bond at
+2.0) the drag per shard at p = 0.25 falls from 0.24 to 0.15.
+- *The falsifier.* Both pin tests hold every bit: no pinned scenario
+  prices flow cost in fiat. The registered sweep is byte-identical.
+- *The production arm without a fiat flow cost, and `p2_fiat_stable`
+  (p = 1).* Byte-identical. The net is summed in a new order, which can
+  differ in the last bit, but a strike moves only if the realized yield
+  sits within a rounding of the reservation.
+- *The production rows whose price falls below 1* (the other eleven of
+  the twelve fiat rows): fewer exits, so `bondA` rises and `cDeepU` falls
+  or stays at 1. The unaided collapses (`p2_fiat_fall` 34.98 / 1.000,
+  `swan_price_gap` 32.6 / 1.000, `swan_perfect` 26.18 / 1.000, as
+  `bondA` / `cDeepU`) keep `cDeepU` at 1: the fiat drag at p = 0.25 is
+  still 2.5 times its parity value. The servo rows (`p2_fiat_fall_servo`
+  72.17 / 0.584, `swan_price_gap_servo` 40.4 / 0.872, `_servo400`
+  59.93 / 0.340, `swan4_servo400_reseed3` 58.05 / 0.370) move most. The
+  V-shape rows (`swan_price_vshape` 88.25 / 0.056, `swan4_vshape_reseed3`
+  94.2 / 0.024, `_reseed12` 88.6 / 0.079) move least, because the price
+  recovers.
+- *Slashes.* On the swan rows the price gaps at the shock, so the path
+  before it runs at p = 1 and is unchanged. `slashed_capital` holds
+  (`swan_perfect` 270.8, `swan_perfect_servo` 172.5).
+
 ## L14×L15 — proof-of-archival in harmony with retrieval (specification)
 
 *Specification first, code second (`05-system-thinking.mdc`). This section is the design
