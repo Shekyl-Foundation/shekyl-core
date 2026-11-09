@@ -47,8 +47,8 @@ use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{
     derive_archival_p_keys, derive_p_account_sign_seed, derive_p_bond_spend_ed_seed,
     derive_p_bond_spend_ml_dsa_seed, derive_p_hs_id_seed, derive_p_kem_d_z, derive_p_ml_dsa_seed,
-    derive_p_receipt_ed_seed, derive_p_receipt_fn_dsa_seed, derive_p_spend_wide,
-    derive_p_view_wide, ArchivalPKeys,
+    derive_p_onion_keypair, derive_p_receipt_ed_seed, derive_p_receipt_fn_dsa_seed,
+    derive_p_spend_wide, derive_p_view_wide, ArchivalPKeys,
 };
 use shekyl_crypto_pq::archival_p_freeze::archival_p_derive_manifest_self_check;
 
@@ -222,26 +222,6 @@ fn run_tier1(v: &Tier1Vector) {
             };
             let exp = v.expected.out_hex.as_deref().expect("out_hex");
             assert_eq!(hex::encode(out.as_slice()), exp, "{}", v.id);
-
-            // SH-2: the persona bundle now CARRIES `hs_id_seed` (the master is
-            // gone after derivation under Model D, so "rederive on each serve"
-            // is not reachable). Two producers of one value is exactly the
-            // drift shape this file exists to stop, so the bundle's field is
-            // asserted against the same pinned vector rather than trusted to
-            // agree with the free function beside it.
-            //
-            // This is a bundle-shape check, not a frozen-surface one: no
-            // label or vector exists for it beyond the pinned seed.
-            if v.kind == "hs_id_seed" {
-                let bundle = derive_archival_p_keys(&master, net, v.p_slot)
-                    .expect("bundle derives for a pinned vector");
-                assert_eq!(
-                    hex::encode(bundle.hs_id_seed()),
-                    exp,
-                    "{}: bundle hs_id_seed diverged from the pinned vector",
-                    v.id
-                );
-            }
         }
         "hs_id_pubkey" => {
             // The GF-9 serving key's Ed25519 PUBLIC key is the v3 `.onion`
@@ -255,6 +235,35 @@ fn run_tier1(v: &Tier1Vector) {
                 .to_bytes();
             let exp = v.expected.out_hex.as_deref().expect("out_hex");
             assert_eq!(hex::encode(pk), exp, "{}", v.id);
+
+            // The keypair production holds computes its public key from the
+            // EXPANDED secret, not through `SigningKey`; it must land on the
+            // same pinned key, so the address a persona advertises is the one
+            // this vector froze. Two producers (the free function and the
+            // persona bundle, which carries the keypair because the master is
+            // gone after derivation under Model D) are each held to it rather
+            // than trusted to agree.
+            let derived = derive_p_onion_keypair(&master, net, v.p_slot);
+            assert_eq!(
+                hex::encode(derived.public_key()),
+                exp,
+                "{}: the onion keypair's public key diverged from the pinned vector",
+                v.id
+            );
+            let bundle = derive_archival_p_keys(&master, net, v.p_slot)
+                .expect("bundle derives for a pinned vector");
+            assert_eq!(
+                hex::encode(bundle.onion_keypair().public_key()),
+                exp,
+                "{}: the bundle's onion keypair diverged from the pinned vector",
+                v.id
+            );
+            assert_eq!(
+                bundle.onion_keypair().expanded_secret(),
+                derived.expanded_secret(),
+                "{}: the bundle's expanded secret is not the derivation's",
+                v.id
+            );
         }
         "hs_id_label_separation" | "receipt_label_separation" | "label_separation" => {
             // Two seeds under one (seed, net, slot). hs-id vs account-sign:

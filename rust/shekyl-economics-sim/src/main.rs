@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 mod admission;
 mod baseline;
 mod block_space;

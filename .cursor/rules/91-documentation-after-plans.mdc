@@ -86,7 +86,7 @@ the changes.
   the wrong premise stays as written, because the finding's *subject* looked
   like a file or a mechanism rather than like the sentence. The next reader
   starts from the sentence. The same premise has been re-derived from the
-  C++ after a row already recorded the correction
+  inherited code after a row already recorded the correction
   (`05-system-thinking.mdc`), and a section has kept "deletes in this
   increment" after a later section re-scheduled the deletion
   (`22-no-lazy-deferral.mdc`). When a finding refutes a premise: `rg` for

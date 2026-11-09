@@ -64,6 +64,9 @@ tokio = { version = "1", default-features = false, features = [
 # under test (which never launches — the composition test drives it with a
 # binary that cannot pass the hash gate).
 tempfile = "3"
+# Composition tests mint an ephemeral onion. Production takes an
+# `OnionIdentity` and does not name the keypair crate.
+shekyl-onion-key = { path = "../shekyl-onion-key" }
 
 [lints]
 workspace = true

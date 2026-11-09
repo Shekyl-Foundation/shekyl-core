@@ -423,7 +423,7 @@ catch whoever appends next.** The test lands with this round whichever option
 wins.
 
 **It is C++, and that is deliberate under
-[`20-rust-vs-cpp-policy`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc).** The
+[`20-rust-vs-cpp-policy`](../completed/RULE_20_RUST_VS_CPP.md).** The
 invariant is a property of the **C++ serializer's ordering**. A Rust test in
 `shekyl-wire` would catch nothing, because a future C++ append is invisible to
 it — the test must live where the defect can be introduced. This is a

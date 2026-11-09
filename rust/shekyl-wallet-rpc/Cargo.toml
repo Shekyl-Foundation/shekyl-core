@@ -59,6 +59,9 @@ shekyl-types = { path = "../shekyl-types" }
 # daemon-identity tests also build replies from its real response types.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-wallet-contract = { path = "../shekyl-wallet-contract" }
+# The process hardening, the first statement of `main` (rule 35, DC-Q21):
+# no core and no same-account tracer before an argument is read.
+shekyl-process = { path = "../shekyl-process" }
 
 # WP-W2: the in-process host's named-pipe listener. The `unsafe`
 # `create_with_security_attributes_raw` call and the owner-only descriptor

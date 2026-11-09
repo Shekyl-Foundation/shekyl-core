@@ -1086,7 +1086,7 @@ exact workspace version, `onion-service-service` (+ `vanguards`, + `restricted-d
 feature plumbing, MSRV vs. workspace, and the **`launch_onion_service_with_hsid` key-injection
 API shape** (load-bearing for §10.7). **Embed-vs-external (Fork #1) is therefore decidable in
 Round 2** — embed Arti, Rust-canonical per
-[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc) — **conditional on**
+[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md) — **conditional on**
 that at-source pin, with the external-daemon-over-SOCKS fallback held as the reversion clause
 ([`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc))
 if the at-source check fails.

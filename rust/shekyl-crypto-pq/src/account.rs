@@ -283,7 +283,8 @@ pub fn ml_kem_chacha_seed_from_d_z(d_z: &[u8; 64]) -> Zeroizing<[u8; 32]> {
 /// wrapper. The wrapper carries `Zeroize + ZeroizeOnDrop`; consumers
 /// receive the secret already inside the typed-wrapper discipline of
 /// `.cursor/rules/18-type-placement.mdc` rather than as raw bytes
-/// they must individually wrap. Per `35-secure-memory.mdc:21-22`,
+/// they must individually wrap. Per `35-secure-memory.mdc`'s hand-off
+/// section (a producer returns the typed wrapper, not raw bytes),
 /// this keeps the decap-key flow within `Zeroize` coverage from
 /// producer to consumer without any call site materialising an
 /// untracked `[u8; ML_KEM_768_DK_LEN]` Copy.
@@ -313,23 +314,25 @@ pub fn ml_kem_keypair_from_d_z(
     Ok((ek_bytes, MlKem768DecapKey::from_zeroizing(dk_zeroizing)))
 }
 
-// --- AllKeysBlob: the C-layout struct crossed over FFI -----------------------
+// --- AllKeysBlob: every key of one account, in a fixed layout ---------------
 
 /// Fixed-layout struct carrying every byte needed to construct a wallet
-/// account from a master seed. The C++ side passes a pointer to an
-/// `mlock`'d allocation of this size; Rust fills the bytes in place.
-/// On any error Rust zeroes the entire struct before returning failure,
-/// so the caller never has to distinguish "untouched" from "partially
-/// written".
+/// account from a master seed. [`rederive_account`] builds it
+/// (`AllKeysBlob::zeroed()`, then each field) and returns it by value;
+/// on an error the partly filled blob is dropped, which wipes it, and the
+/// caller receives only the error. No allocation of it is `mlock`'d or
+/// excluded from core dumps: rule 35's OS-level section requires that of
+/// the long-lived secret types in this crate, and it is not yet met.
 ///
 /// Layout is frozen at v1. Do not add, remove, or reorder fields without
 /// bumping the derivation version and the KAT manifest hash.
 ///
 /// # Wipe-on-drop
 ///
-/// Per `.cursor/rules/35-secure-memory.mdc:23-25` ("Prefer the
-/// derived `Zeroize`/`ZeroizeOnDrop` form over hand-written `Drop`
-/// impls"), the struct derives `Zeroize + ZeroizeOnDrop`. The
+/// Every field implements `Zeroize`, so per
+/// `.cursor/rules/35-secure-memory.mdc` ("`#[derive(ZeroizeOnDrop)]`
+/// **only** if every field implements `Zeroize`") the struct derives
+/// `Zeroize + ZeroizeOnDrop`. The
 /// generated `Drop::drop` calls `self.zeroize()`, which calls
 /// `.zeroize()` on every field once. Field-drop-glue then re-invokes
 /// each field's destructor independently — for fields that are
@@ -352,7 +355,9 @@ pub fn ml_kem_keypair_from_d_z(
 ///
 /// `Clone` on a struct that holds the wallet's spend/view/decap
 /// secrets requires explicit justification per
-/// `.cursor/rules/30-cryptography.mdc` and `35-secure-memory.mdc:26-28`.
+/// `.cursor/rules/30-cryptography.mdc` and `35-secure-memory.mdc`
+/// ("Never derive `Clone` ... unless there is an explicit, documented
+/// reason").
 /// The audit performed for `KEY_ENGINE.md` §7.5 surfaced zero
 /// production `.clone()` callers workspace-wide (verified across
 /// production code and `#[cfg(test)]` blocks via
@@ -412,7 +417,7 @@ pub struct AllKeysBlob {
     ///
     /// Wrapped in [`MlKem768DecapKey`] for
     /// type-system protection and structural wipe-on-drop, per the
-    /// `35-secure-memory.mdc:21-22` "wrap secret scalars and key bytes"
+    /// `35-secure-memory.mdc` "wrap secret scalars and key bytes"
     /// mandate. Read the canonical 2400-byte FIPS 203 representation via
     /// `ml_kem_dk.as_canonical_bytes()`.
     pub ml_kem_dk: MlKem768DecapKey,

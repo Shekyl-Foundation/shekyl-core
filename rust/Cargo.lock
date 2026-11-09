@@ -4046,6 +4046,7 @@ dependencies = [
  "shekyl-logging",
  "shekyl-options",
  "shekyl-peerlist",
+ "shekyl-process",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
@@ -4123,7 +4124,9 @@ dependencies = [
  "shekyl-curve-generators",
  "shekyl-curve-primitives",
  "shekyl-fcmp",
+ "shekyl-heap-secret",
  "shekyl-network",
+ "shekyl-onion-key",
  "shekyl-stats",
  "shekyl-types",
  "syn 2.0.117",
@@ -4422,6 +4425,7 @@ dependencies = [
  "shekyl-levin",
  "shekyl-multisig",
  "shekyl-network",
+ "shekyl-onion-key",
  "shekyl-operator-alarm",
  "shekyl-p-host",
  "shekyl-p-loopback",
@@ -4628,6 +4632,13 @@ name = "shekyl-hash-budget"
 version = "3.1.0"
 
 [[package]]
+name = "shekyl-heap-secret"
+version = "3.1.0"
+dependencies = [
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-levin"
 version = "3.1.0"
 dependencies = [
@@ -4783,6 +4794,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-onion-key"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "rand 0.8.6",
+ "sha2",
+ "shekyl-heap-secret",
+ "shekyl-onion-v3",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-onion-v3"
 version = "3.1.0"
 dependencies = [
@@ -4835,6 +4859,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-crypto-pq",
  "shekyl-curve-tree",
+ "shekyl-onion-key",
  "shekyl-p-host",
  "shekyl-p-serve",
  "shekyl-p-store",
@@ -5394,7 +5419,6 @@ dependencies = [
 name = "shekyl-tor-control-client"
 version = "3.1.0"
 dependencies = [
- "ed25519-dalek",
  "futures-core",
  "getrandom 0.2.17",
  "hex-literal",
@@ -5403,6 +5427,7 @@ dependencies = [
  "libc",
  "serde_json",
  "sha2",
+ "shekyl-onion-key",
  "shekyl-onion-v3",
  "shekyl-timing-engine",
  "shekyl-win-sec",
@@ -5418,6 +5443,7 @@ version = "3.1.0"
 dependencies = [
  "getrandom 0.2.17",
  "kameo",
+ "shekyl-onion-key",
  "shekyl-socks",
  "shekyl-tor-control-client",
  "tempfile",
@@ -5431,6 +5457,7 @@ version = "3.1.0"
 dependencies = [
  "getrandom 0.2.17",
  "kameo",
+ "shekyl-onion-key",
  "shekyl-p-transport",
  "shekyl-tor-control-client",
  "shekyl-types",
@@ -5443,6 +5470,7 @@ name = "shekyl-tor-transit-spike"
 version = "3.1.0"
 dependencies = [
  "kameo",
+ "shekyl-onion-key",
  "shekyl-tor-control-client",
  "tokio",
 ]
@@ -5601,6 +5629,7 @@ dependencies = [
  "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-logging",
+ "shekyl-process",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",

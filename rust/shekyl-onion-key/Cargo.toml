@@ -1,0 +1,39 @@
+[package]
+name = "shekyl-onion-key"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "RFC 8032 expansion of a v3 onion seed: the ED25519-V3 blob and its public key"
+publish = false
+
+[dependencies]
+# Same feature set as `shekyl-crypto-pq`: defaults stay on, so
+# `EdwardsPoint::mul_base_clamped` keeps dalek's precomputed base table,
+# and `zeroize` wipes the scalar copy `mul_base_clamped` cannot.
+# `shekyl-onion-v3` turns defaults off because it only decompresses a
+# public point; copying that set here would drop the table.
+curve25519-dalek = { version = "4", features = ["zeroize"] }
+# The expanded secret. This crate must not depend on `shekyl-crypto-pq`
+# to hold it: the Tor control client depends on this crate, and that
+# client must not compile the account stack.
+shekyl-heap-secret = { path = "../shekyl-heap-secret" }
+# `OsRng` for the per-boot onion. Already in the workspace through
+# `shekyl-crypto-pq` (rule 17).
+rand = "0.8"
+# SHA-512 of the seed (RFC 8032 §5.1.5). sha2 0.10 has no `zeroize`
+# feature; the expansion writes the digest into the heap buffer and
+# says so at the call.
+sha2 = "0.10"
+zeroize = { workspace = true }
+
+[dev-dependencies]
+# Oracle: `SigningKey::from_bytes` expands the same seed. Same spec as
+# `shekyl-crypto-pq`, so the workspace builds one copy.
+ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
+# The address a fixed seed publishes at. Encoding only.
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+
+[lints]
+workspace = true

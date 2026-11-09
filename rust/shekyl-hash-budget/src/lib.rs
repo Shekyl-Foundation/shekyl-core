@@ -50,6 +50,7 @@
 //! lower class grantable. Without the wake, the lower class can go back to
 //! sleep on the higher class's count and stay there while a permit sits
 //! idle.
+#![deny(unsafe_code)]
 
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};

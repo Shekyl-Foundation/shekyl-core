@@ -8,6 +8,7 @@
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
+#![deny(unsafe_code)]
 
 #[allow(unused_imports)]
 use std_shims::prelude::*;
