@@ -460,24 +460,24 @@ loosening of surge_max reopens Q2, not just this row.**
 `BA-T10`.** The verification term the signature priced was not the
 shipped one. The 128.77 ms/tx verify_floor took its Bp+ term from the
 C++ batched verifier (1.745 ms/proof on the floor); the verifier that
-ships is the Rust `verify_batch`, measured 2.56× slower than the C++ one
-single-proof on the same board, and its batched floor cost is unmeasured.
-Two compositions bound it, both on the signed inputs (f·T = 40 s,
-RandomX 1.2845 s per block, 46.13 argmax txs per 600 kB zone block, the
-floor-measured 3.76 ms/layer depth slope):
+ships is the Rust `verify_batch`, which folds `Â` into the batch (BA-Q9,
+#1319) and which the floor device measured, flagless, on 2026-11-08. On
+the signed inputs (f·T = 40 s, RandomX 1.2845 s per block, 46.13 argmax
+txs per 600 kB zone block, the floor-measured 3.76 ms/layer depth slope):
 
 | Bp+ term per argmax tx | basis | d2 | d7 | d24 |
 |---|---|---|---|---|
 | 1.745 ms (C++ batched) | the signature's composition | 6.52 | 5.69 | 3.97 |
-| 4.47 ms (C++ batched × 2.56) | interim: the Rust verifier amortises as the C++ one did | 6.38 | 5.58 | 3.92 |
-| 34.8 ms (Rust single proof) | conservative: no batch amortisation at all | 5.19 | 4.65 | **3.43** |
+| 3.659 ms (Rust, batch of 46) | measured: the shipped verifier's batched term | 6.42 | 5.61 | 3.93 |
+| 18.84 ms (Rust, lone proof) | conservative: no batch amortisation at all | 5.75 | 5.10 | **3.67** |
 
 The signature's own rule — sign the d24 consensus-max tier — puts the
-signed 4 above its bound under both the interim and the bracket. **S is
-the integer below the conservative d24 bracket: ⌊3.43⌋ = 3.** It is an
-Assumption, not a measurement: no row above times the shipped verifier's
-batch on the floor. `BA-T10`'s floor re-run of the batched Bp+ term
-records the measured d24 `surge_max`, and S is re-signed on it
+signed 4 above its bound under both the measured term and the bracket.
+**S is the integer below the conservative d24 bracket: ⌊3.67⌋ = 3.** It
+is an Assumption: the Bp+ term is measured, but the rest of the
+composition is the 2026-09-05 capture's, from before `PL-D3`. `BA-T10`'s
+floor re-run of the full sweep, the depth sweep included, records the
+measured d24 `surge_max`, and S is re-signed on it
 (`docs/FOLLOWUPS.md`, the S-interim row). The coupling above carries
 over unchanged: S = 3 tightens the early-chain bound, so Q2 is not
 reopened; a later re-signature above 3 reopens Q2 as any loosening does.
