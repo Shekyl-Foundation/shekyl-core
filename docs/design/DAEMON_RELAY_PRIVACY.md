@@ -12463,6 +12463,12 @@ membership proofs and ML-DSA-65 signatures** that term is not a rounding error.
 > only**, plus a per-output prime-order check
 > (`shekyl_check_commitment_masks`). The structural claim here is unaffected;
 > only the named proof system narrows.
+>
+> **AMENDED 2026-11-08 (§72.2):** that correction holds for the C++ door it
+> was written against. The Rust door runs one authorization check per input
+> before the proof (one hybrid Ed25519 + ML-DSA-65 verification for a
+> single-signer input, M of them for an M-of-N multisig input), and the lone
+> range proof after it; the term is that whole sequence.
 
 *(Scheduling is the small term: a stem forward is dispatched immediately on the
 zone strand — `dandelionpp_notify` plans and sends with no deliberate per-hop
@@ -12534,7 +12540,12 @@ to an unauthenticated remote caller passed a control I had written and
 believed.** Recorded with the specific failure rather than the abstraction,
 because that clause is what makes the rule survive restatement.
 
-## 72. The verification surface enumerated — ML-DSA-65 is not in it, and the curve is 2-D
+## 72. The verification surface enumerated — ML-DSA-65 is not in it, and the curve is 2-D (the C++ door; amended 2026-11-08, §72.2)
+
+> **AMENDED 2026-11-08:** this section enumerates the C++ door. The Rust door
+> that ships verifies ML-DSA-65 in every input's authorization check, and the
+> lone range proof as well; §72.2's amendment states its sequence and what the
+> pinned cells omit.
 
 **2026-08-05.** §71 defined `hop` to include `B`'s verification and named that
 term *"FCMP++ membership proofs and ML-DSA-65 signatures."* **Enumerating the
@@ -12565,7 +12576,58 @@ The ordinary-transaction admission surface, in call order:
 files but gate on archival/emission input types, not ordinary transactions.
 They are a separate surface and a separate curve.)*
 
-### 72.2 ML-DSA-65 is not verified on this path — corrected
+### 72.2 ML-DSA-65 is not verified on this path — corrected (the C++ door; amended 2026-11-08: the Rust door verifies it)
+
+> **AMENDED 2026-11-08 (the amendment ruled by Rick): on the Rust door,
+> ML-DSA-65 is verified per input.** The text after this block is the C++
+> door's, enumerated 2026-08-05, and stays as that path's record.
+>
+> **What the door runs.** The pool's door is
+> `shekyl_chain_rules::judge_slot_stateless`
+> ([`validate.rs:343-363`](../../rust/shekyl-chain-rules/src/validate.rs)),
+> and the relay owner stems or fluffs a 2002 batch only after the pool has
+> admitted it ([`owner/mod.rs:9-12`](../../rust/shekyl-relay/src/owner/mod.rs)),
+> so the door is inside `hop`. Per transaction it runs `tx_form`; then the
+> signature sequence CEN-I17/I18 (`judge_signatures`,
+> [`proofs.rs:285`](../../rust/shekyl-chain-rules/src/rules/proofs.rs)): one
+> authorization check per input, `verify_pqc_auth`, which dispatches on the
+> slot's scheme. A single-signer input (scheme 1) is one hybrid Ed25519 +
+> ML-DSA-65 verification; an M-of-N multisig input (scheme 2,
+> `verify_multisig`) is M of them, with 1 ≤ M ≤ N ≤ 5
+> ([`multisig.rs`](../../rust/shekyl-crypto-pq/src/multisig.rs),
+> `MAX_MULTISIG_PARTICIPANTS`). Then
+> the proofs (CEN-I15's membership proof over the leaf key scalars, as below,
+> with the output masks); and at `TxSlot::Lone` the range proof as a batch of
+> one (CEN-H19, `H19::verify_lone`). The signatures run in `form` with every
+> verification that needs no store (`CHAIN_RULES_CRATE.md` §4.6, ruled
+> 2026-10-16), and the door is `form`'s per-slot body.
+>
+> **What the two added terms cost.** Dev box: 178 µs per hybrid verification
+> and 2.82 ms for a 2-output range proof, against 22.8 ms for the
+> masks-and-proof pair at 1-in/2-out
+> ([`relay_admission_verify.rs`](../../rust/shekyl-verify-cost/benches/relay_admission_verify.rs)).
+> Floor device (`docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt`,
+> rev `8af70a60a6`): 972 µs per single-signer input (`pqc_per_input`, which
+> times one scheme-1 verification; the same at 1 and 8 inputs), under 1 % of
+> the 124.5 ms 1-in genesis cell. A multisig input is about M × 972 µs, up to
+> 4.86 ms at M = 5 (derived, not measured: M of the timed verifications, under
+> the multisig domain, plus the container parse). The range proof is
+> 35.0 ms at 2 outputs and 193.4 ms at 16 (`bp_proxy`, the shipped
+> single-proof verifier).
+>
+> **What it changes.** §71's structure is unchanged: verification is inside
+> `hop`'s critical path, the door verifies before the relay forwards, and
+> `hop` moves when the verification moves. The pinned cells of
+> `SPEC_VERIFY_COST` (§85.3) are the masks-and-proof pair alone (the 2026-08
+> sweep left the signature out on this section's original ground, and the
+> range proof was never in §72.1's table), so they omit both terms: about
+> 36 ms at the modal 1-in/2-out shape on the floor device, against 124.5 ms.
+> Omitted work under-states `hop`, the privacy-losing direction (§71.3). The
+> cells price the single-signer input, the modal one; a multisig input adds
+> about (M − 1) × 972 µs to its transaction's verification, about 3.89 ms per
+> input at M = 5 (derived as above).
+> Re-deriving the floor over the door's whole sequence is BA-Q9
+> (`BENCHMARK_ALIGNMENT.md`).
 
 §71's *"and ML-DSA-65 signatures"* does not hold for ordinary transactions.
 `shekyl_fcmp_verify` takes `pqc_pk_hashes_ptr` (one key scalar `k = H_ℓ(pk)`
@@ -12750,6 +12812,12 @@ cells, and the depth-1 block (5.51–5.75×) and depth-2 block (5.36–5.67×) a
 arithmetic on the path, AVX2-vs-NEON would have produced a wide and
 shape-dependent spread. EC and hashing work gives a constant factor — which is
 what a path carrying **no** ML-DSA-65 predicts (§72.2).
+
+*Amended 2026-11-08 (§72.2):* that reading holds for the C++-door sweep it
+was taken on. The Rust door adds the lattice term, 972 µs per single-signer
+input on this board against 178 µs on the dev box (5.46×, inside this
+table's band, so a flat ratio no longer tells the two paths apart), and the
+lone range proof.
 
 ### 73.3 §65's conditional is resolved, and not marginally
 
@@ -17252,7 +17320,7 @@ row. Pins below were read at `98fbd20acb`.
 | Clearnet transit, 50 ms | `verify_cost.rs` `ADOPTED_TRANSIT_ASSUMPTION_MS` and its typed twin `ADOPTED_TRANSIT`; the D7 clearnet column's `transit_ms` (`declaration.rs`) | **Assumption.** §21's "at least 50 ms if crossing an ocean", carried forward labelled at §86.2. Never measured on either path | `adopted_hop_ms` (the clearnet `hop`, 175 ms), the clearnet embargo table (`EmbargoTimer::adopted`, mean 190 s), the flood instrument's clearnet row (`conformance::flood::transit_for`) | After RD, on the Rust path: a quantile, not a mean (§86.2), clearnet to clearnet on an established connection, from a floor-representative connection (§94.6) |
 | Tor transit, 1625 ms | `verify_cost.rs` `ANON_ZONE_TRANSIT_ASSUMPTION_MS` and `ANON_ZONE_TRANSIT`; the D7 Tor column's `transit_ms` | **Assumption.** §63.2's "ten times clearnet" upper bound, taken on faith (§89.5). §94's 2026-08 readings (per-session pooled p90 403.8 to 710.9 ms across the day, 590.6 ms interpolated at the modal shape, §94.10 and §94.5) are **RustPath** readings of the network term, taken by `shekyl-tor-transit-spike` over public Tor with no relay in the path; they are recorded, not adopted, because the tail above the measured 8.4 to 16.6 KB span is unmeasured (§94.5) and the re-derivation is §94.10's two-commit procedure | The Tor `hop` (1750 ms) and embargo table; `longest_transit` and through it `shekyl_dandelionpp_origin_retry_interval_seconds` and `shekyl_dandelionpp_propagation_timeout_seconds`; the flood instrument's Tor row | After RD, on the Rust path, under §94's pre-registration: onion-to-onion rendezvous on an established connection, the floor-representative host, at least 8 h of spread for the diurnal swing, the tail shape included |
 | `hop` scheduling term, 0 | `verify_cost.rs` `adopted_hop_ms` doc; §71.3's composition `hop = transit + verification + scheduling`; §94.7 and §94.9 | **RustPath reading recorded, value not yet adopted (as of 2026-11-05).** The constant still carries 0 as a stated omission; adopting a term is §94.10's two-commit procedure, not this reading. **UPDATE 2026-11-05 (the cutover's fleet run, shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** the timing engine's `Relay`-class lateness is D5's leg 4 on the Rust `Driver`; read over three legs (clearnet, Tor, clearnet with the carrier) on x86 fleet hosts, not the floor device. Decision-to-fire delay on an idle owner (a 4 vCPU cloud host): max 0.206 ms over 22 fires, 0.330 ms over 39, 1.264 ms over 410 (8 of them over 1 ms); on a busy lab host: max 2.27 ms over 83 (31 over 1 ms), 1.95 ms over 39, 12.3 ms over 335 (104 over 1 ms, none over 100 ms). Fire-to-report-back at most 2.7 ms anywhere. **One outlier class:** the origin under the carrier recorded wakes 14.2 s and 26.2 s late (6 over 100 ms of 277) while the sessions' and discovery's classes stayed under 11 ms — the relay owner alone was blocked, coincident with the submit path's check-and-commit outliers on that host's rotational store (7.5–42.7 s against a normal 0.4–1 s); the shared lock is not identified and is reported with the record, not fixed. A floor-device reading is still owed before a term is derived. | `time_between_hop_ms`, through the omission | The floor-device reading of the same instrument, then §94.10's two-commit procedure. |
-| Verification floor: 124.5 ms (1 input, genesis), 399.2 ms (8, genesis); 143.3 and 791.9 ms at depth 7 | `verify_cost.rs` `SPEC_VERIFY_COST`, cells at `:349` to `:353` | **RustPath.** The Rust verifier on the Pi 4 (`Provenance::MeasuredPi4`, §85.3). The depth-7 cells are `TreeBasis::SynthesizedProjection`, a prior against a synthesized tree (§81.2), and 44 of the 48 cells are unpopulated in-tree (FOLLOWUPS, "populate the 48-cell Pi verification surface") | `adopted_hop_ms` (the modal cell is the hop's floor) | Not by RD. §81.3's schedule: re-measure on the spec machine against the actual tree as depth grows, the projection as the prior |
+| Verification floor: 124.5 ms (1 input, genesis), 399.2 ms (8, genesis); 143.3 and 791.9 ms at depth 7 | `verify_cost.rs` `SPEC_VERIFY_COST`, cells at `:349` to `:353` | **RustPath.** The Rust verifier on the Pi 4 (`Provenance::MeasuredPi4`, §85.3). The depth-7 cells are `TreeBasis::SynthesizedProjection`, a prior against a synthesized tree (§81.2), and 44 of the 48 cells are unpopulated in-tree (FOLLOWUPS, "populate the 48-cell Pi verification surface"). **UPDATE 2026-11-08 (§72.2's amendment):** the cells are the masks-and-proof pair. The Rust door also runs one authorization check per input (one hybrid signature for a single-signer input, 972 µs on the floor device; M of them for an M-of-N multisig input, M ≤ 5) and, at `Lone`, the range proof (35.0 ms at 2 outputs), which the cells omit: about 36 ms at the modal shape, the under-stating direction; BA-Q9 re-derives at the single-signer input | `adopted_hop_ms` (the modal cell is the hop's floor) | Not by RD. §81.3's schedule: re-measure on the spec machine against the actual tree as depth grows, the projection as the prior |
 | `time_between_hop_ms`, 175 ms clearnet, 1750 ms Tor | `params.rs` `DandelionParams::adopted_for_transit_ms`; the field is a `DerivationMs` | **Derived**: RustPath verification plus Assumption transit, plus the CppPath scheduling term above as an omission. `adopted_hop_ms_with_transit` returns a `DerivationMs` with the weakest of its inputs (`AdmissibleBasis`: Assumption, then Model, then RustPath; `VERIFICATION_FLOOR_BASIS` is RustPath), so the adopted hop reads `Assumption`. Outside the crate a value is built only by `assumption`, `model`, or `rust_path`; `derive` is crate-private, held by a `compile_fail,E0624` doctest. `DandelionParams::inherited` stores `INHERITED_HOP` (175 ms, `DerivationMs::assumption`) directly. **UPDATE 2026-11-05:** the scheduling term has its first Rust-path reading (the row above); the adopted hop still reads `Assumption` because nothing was re-derived — the cutover PR records, it does not adopt | `EmbargoTimer::adopted` | Re-derived by §94.10's two-commit procedure (input first, pins second) once the scheduling term's floor-device reading is in |
 | `fluff_return_ms`, 3250 ms | `params.rs` `FLUFF_RETURN` (`DerivationMs::model`) | **Model.** F-7's transit-free p90 first passage at degree 12, `FloodReach::OutboundOnly`, provisional under §96 item 2. The C++ transports the flush today, but the number is the instrument's, not a reading of that transport. The value carries the basis | The embargo derivation (`F′`); `ADOPTED_PROPAGATION_TIMEOUT_SECS` | Not re-run as a model. Its operational replacement is §96 item 2, on the Rust path after RD (a Tor-return arm and a clearnet peer). The model re-run with `EveryPeer` reach and Tor transit is the FOLLOWUPS row that item names |
 | Flush averages: `FLUFF_AVERAGE_IN_SECS` 5, `FLUFF_AVERAGE_OUT_QUARTER_SECS` 10, `FLUFF_AVERAGE_IN_QUARTER_SECS` 20 | `params.rs:597` to `:603` | **Assumption** for the parameters: inherited from the paper's implementation, never derived for Shekyl. The **realised** flush distribution (decision to bytes on the wire) is implementation timing, **RustPath since 2026-11-05 (fleet hosts, not the floor device).** **UPDATE 2026-11-05 (shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** on the Rust path the realised flush is the drawn delay plus the `Relay`-class wake delay (the `hop` row: ≤ 0.33 ms idle, ≤ 2.3 ms on a busy lab host without the carrier) plus the transport's write, read at session close as the write-stall histogram with `in_flight_at_close=0` on every session: lab-local sessions finished writes under 4 ms (max 1.1–3.9 ms); the cloud host's inbound sessions across the public internet carried a 17–57 ms tail (2^24–2^25 ns bins, four writes). The implementation adds milliseconds to averages drawn in seconds; a full realised-versus-drawn distribution was not taken (the fluff lines carry no draw). | `FluffScheduler` (`DandelionParams::inherited`), the flood model's flush draw | The parameters are parameters and are not measured. The realised distribution's floor-device reading, with the draw logged beside the write, when the parameters are derived |
