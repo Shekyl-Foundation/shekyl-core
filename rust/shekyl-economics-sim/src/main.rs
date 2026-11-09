@@ -7,8 +7,6 @@ mod burden;
 mod calibration;
 mod cartel;
 mod chain_cursor;
-// The committed outputs' comparison and armed regeneration: test only.
-#[cfg(test)]
 mod committed_fixture;
 mod distribution;
 mod engine;

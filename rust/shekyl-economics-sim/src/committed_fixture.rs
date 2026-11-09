@@ -12,6 +12,11 @@
 //! not a command: [`regenerate`] refuses unless the invocation cites the
 //! [`DECISION_LOG`] entry that says what moved and why, as
 //! `SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>"`.
+//!
+//! Test code only: the module says so itself, so it compiles out of the
+//! binary whoever declares it.
+
+#![cfg(test)]
 
 use shekyl_crypto_pq::test_support::regen_decision_in_log_or_refuse;
 
