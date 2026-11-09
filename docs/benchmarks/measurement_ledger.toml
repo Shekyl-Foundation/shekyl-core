@@ -113,6 +113,7 @@ spec = [
   "rust/shekyl-pow-randomx/src",
 ]
 stale_through = [
+  { through = "334b41b719", note = "BA-Q9 (#1319): the Bp+ verifier adds Â's terms into the batch instead of evaluating Â with its own multiexp. Every verdict is unchanged; the cost falls. On the floor device a lone 2-output proof went 34.80 -> 18.84 ms and a batched one 19.63 -> 3.66 ms per proof (gap7_block_verify_pi4_rust_20261108T232442Z.txt and its eager control). The surge factor's Bp+ term is now that measurement; the capture's other terms are unchanged, and BA-T10 re-runs them." },
   { through = "20738bf714", note = "PL-D3: the leaf's fourth scalar becomes a Pedersen commitment opened in-circuit. The proof changed for every shape; its verify cost has not been re-measured on the floor." },
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
   { through = "48670ca6c9", note = "Three commits to signature.rs. The first moves the Ed25519 + ML-DSA-65 nested sign and verify and the canonical header onto one body shared with a second scheme; the bytes signed and the order of the two halves are unchanged, and the existing vectors pass untouched. The second adds a scheme byte and two domain constants that no transaction path reads. The third edits one doc comment. The gated sign count moved from 7,163,792 to 7,161,994 instructions on an x86 development host (crypto_bench_hybrid_sign_1_input, -0.025 %). Verify has no gated arm and was not measured; no floor run." },
@@ -141,6 +142,8 @@ stale_through = [
   { through = "682d97049c", note = "C++ removal (#1299): one module-doc paragraph in shekyl-fcmp's frost_sal.rs, naming the FOLLOWUPS rows that track the multisig spend path. Comment only; no code path changed, and nothing the capture priced has moved." },
   { through = "c42ef64a2d", note = "C++ removal (#1299): comments only in shekyl-crypto-pq signature.rs, shekyl-fcmp proof.rs, and shekyl-pow-randomx lib.rs and vm.rs; no code path changed, and nothing the capture priced has moved." },
   { through = "d6e8da7d44", note = "Rules after the C++ removal (#1308): shekyl-bulletproofs' crate root takes #![deny(unsafe_code)]; the crate holds no unsafe, so the attribute compiles to nothing and nothing the capture priced has moved." },
+  { through = "cebbb746f1", note = "Test-only publics (2026-11-08): in this path set, one doc comment in shekyl-fcmp's tree.rs (leaves_to_bytes no longer says LMDB storage). Comment only; no function, constant or code path changed, and nothing the capture priced has moved." },
+  { through = "ccc7c5f79a", note = "In this path set, shekyl-bulletproofs only. 3f2922f1ce replaces the folded verifier's variable-time multiexp of single-term (INV_EIGHT, P) pairs with one constant-time scalar multiplication per commitment, the product the prover already used. The points are unchanged; the time of that opening moves and has not been re-measured. ccc7c5f79a names the padded bit-length once for the prover and both verifiers and asserts reduce returns it, and adds no multiplication. The surge factor's Bp+ term was measured on the previous opening. The rows stay stale from PL-D3." },
 ]
 
 [[constant]]
@@ -150,7 +153,7 @@ needle = '"block_weight_short_term_surge_factor": 4'
 measured_by = ["BA-T2", "BA-T10"]
 status = "stale"
 stale_since = "20738bf714"
-carrier = "BA-T10 (BA-G4, BA-Q10). PL-D3 changed the FCMP++ proof nine days after the capture. Interim until the re-run (2026-11-08, an Assumption): the composition's Bp+ term is the C++ batched verifier's, 1.745 ms/proof (docs/benchmarks/gap7_block_verify_pi4_cpp_20260905T053148Z.txt, rev aa63f4ce99), not this capture's; scaled by the shipped verifier's measured 2.56x single-proof ratio, the d24 tier this factor is signed on is about 3.92, below 4 (block_connect_verify.rs, FLOOR RESULTS; census R2)."
+carrier = "BA-T10 (BA-G4, BA-Q10). PL-D3 changed the FCMP++ proof nine days after the capture. The composition's Bp+ term is now measured (BA-Q9, #1319): with Â folded into the batch, 3.659 ms per batched proof (docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt), in place of the C++ batched verifier's 1.745 ms (gap7_block_verify_pi4_cpp_20260905T053148Z.txt); the d24 tier this factor is signed on is about 3.93, below 4, and the conservative bracket 3.67 (block_connect_verify.rs, FLOOR RESULTS; census R2). The other terms are this capture's."
 capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
 capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
 rev_source = "capture header"
@@ -168,6 +171,15 @@ capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
 capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
 rev_source = "capture header"
 path_set = "block-weight"
+
+[[path_set]]
+id = "bp-verify"
+spec = [
+  "rust/shekyl-bulletproofs/src",
+]
+stale_through = [
+  { through = "ccc7c5f79a", note = "3f2922f1ce replaces the folded verifier's variable-time multiexp of single-term (INV_EIGHT, P) pairs with one constant-time scalar multiplication per commitment, the product the prover already used. The points are unchanged; the lone cell's time moves by that difference and has not been re-measured. ccc7c5f79a names that padded bit-length once for the prover and both verifiers and asserts reduce returns it. No multiplication is added. d6e8da7d44, in this history, is #![deny(unsafe_code)] at the crate root and compiles to nothing. The 2026-11-08 capture priced the previous opening, so the lone operands go stale here; BA-T10 re-runs them." },
+]
 
 [[path_set]]
 id = "fcmp-inputs"
@@ -224,11 +236,63 @@ spec = [
 [[constant]]
 name = "spec_verify_cost_modal_cell"
 defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
-needle = "cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis, 13_311));"
+needle = "DoorOperands::at(PI4_MASKS_AND_PROOF_1IN_D2_MS, DoorInputCount::One).millis(),"
 measured_by = ["BA-T1", "BA-T10"]
 status = "unmeasured"
-carrier = "BA-T10. The 2026-08-05 floor grids are not in the tree, and the cell's own comment says the floor re-measurement is owed after PL-D3 (BA-G4; FOLLOWUPS, the 48-cell surface)."
+carrier = "BA-T10. The cell is the door's sequence (BA-Q9, 2026-11-08): this masks-and-proof term plus the signature and lone range-proof terms below. The 2026-08-05 floor grids this term comes from are not in the tree, and the cell's own comment says the floor re-measurement is owed after PL-D3 (BA-G4; FOLLOWUPS, the 48-cell surface)."
 path_set = "relay-verify-cell"
+
+[[constant]]
+name = "pi4_hybrid_sig_1in_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost/door.rs"
+needle = "const PI4_HYBRID_SIG_1IN_MS: f64 = 0.971_86;"
+measured_by = ["BA-T10"]
+status = "stale"
+stale_since = "20738bf714"
+carrier = "BA-T10 (BA-Q9). The pqc_per_input median at the 1-input shape, the term of every SPEC_VERIFY_COST cell the pool door pays per input. Shares the block-weight path set and its capture, so it is stale from the same commit; the hybrid verify itself changed at bf2fcbe091 (verify_strict), acknowledged there."
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
+capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
+rev_source = "capture header"
+path_set = "block-weight"
+
+[[constant]]
+name = "pi4_hybrid_sig_8in_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost/door.rs"
+needle = "const PI4_HYBRID_SIG_8IN_MS: f64 = 0.972_28;"
+measured_by = ["BA-T10"]
+status = "stale"
+stale_since = "20738bf714"
+carrier = "BA-T10 (BA-Q9). The pqc_per_input median at the 8-input shape; as pi4_hybrid_sig_1in_ms."
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
+capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
+rev_source = "capture header"
+path_set = "block-weight"
+
+[[constant]]
+name = "pi4_range_proof_lone_1in_2out_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost/door.rs"
+needle = "const PI4_RANGE_PROOF_LONE_1IN_2OUT_MS: f64 = 18.838;"
+measured_by = ["BA-T10"]
+status = "stale"
+stale_since = "3f2922f1ce"
+carrier = "BA-T10 (BA-Q9). The 2026-11-08 bp_lone capture at the 1-input 2-output shape prices the folded verifier before 3f2922f1ce changed its commitment opening from a variable-time multiexp to a constant-time product. The published operand stays that capture; the door's re-measurement is owed."
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt"
+capture_rev = "78de6a14e2ac732fc3298f4d77db7aae43136db8"
+rev_source = "capture header. bp_lone at the 1-input 2-output shape: verify_batch over a batch of one, what the pool door pays at TxSlot::Lone, on the verifier that folds Â into the batch (BA-Q9, #1319). The same session's eager control read 34.80 ms (gap7_block_verify_pi4_rust_eager_20261108T231752Z.txt), against 35.017 ms in the 2026-09-05 capture."
+path_set = "bp-verify"
+
+[[constant]]
+name = "pi4_range_proof_lone_8in_2out_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost/door.rs"
+needle = "const PI4_RANGE_PROOF_LONE_8IN_2OUT_MS: f64 = 18.882;"
+measured_by = ["BA-T10"]
+status = "stale"
+stale_since = "3f2922f1ce"
+carrier = "BA-T10 (BA-Q9). The 2026-11-08 bp_lone capture at the 8-input 2-output shape prices the folded verifier before 3f2922f1ce changed its commitment opening from a variable-time multiexp to a constant-time product. The published operand stays that capture; the door's re-measurement is owed."
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt"
+capture_rev = "78de6a14e2ac732fc3298f4d77db7aae43136db8"
+rev_source = "capture header. bp_lone at the 8-input 2-output shape: verify_batch over a batch of one, what the pool door pays at TxSlot::Lone, on the verifier that folds Â into the batch (BA-Q9, #1319). The same session's eager control read 34.61 ms (gap7_block_verify_pi4_rust_eager_20261108T231752Z.txt), against 34.827 ms in the 2026-09-05 capture."
+path_set = "bp-verify"
 
 [[path_set]]
 id = "relay-aes"
@@ -974,6 +1038,7 @@ stale_through = [
   { through = "11cff8aeb90695ccd843b62d6fae2231937271cc", note = "DISPATCHED_PROOF_LIFE in shekyl-curve-tree reference.rs is REFERENCE_BLOCK_MAX_AGE minus REBUILD_AT, a const subtraction beside the existing reference constants. No tree build, path assembly or prover work moved. Not measured; the rows stay stale." },
   { through = "682d97049c", note = "C++ removal (#1299): one module-doc paragraph in shekyl-fcmp's frost_sal.rs, naming the FOLLOWUPS rows that track the multisig spend path. Comment only; no code path changed, and nothing the capture priced has moved." },
   { through = "c42ef64a2d", note = "C++ removal (#1299): comments only in shekyl-fcmp proof.rs; no code path changed, and nothing the capture priced has moved." },
+  { through = "cebbb746f1", note = "Test-only publics (2026-11-08): in this path set, one doc comment in shekyl-fcmp's tree.rs (leaves_to_bytes no longer says LMDB storage). Comment only; no function, constant or code path changed, and nothing the capture priced has moved." },
 ]
 
 [[constant]]

@@ -54,6 +54,9 @@ serde = { workspace = true }
 serde_json = "1"
 
 [dev-dependencies]
+# The armed regeneration guard (rule 50): a committed narration moves only
+# under a cited decision. Already in the tree through the chain crates.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # `the_received_key_is_the_pools_hour` pins the sim's hour to the pool's
 # received key, `ReceivedHour::of`. Test edge only.
 shekyl-chain-store = { path = "../shekyl-chain-store" }

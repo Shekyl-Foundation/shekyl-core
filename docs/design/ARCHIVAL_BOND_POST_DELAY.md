@@ -41,7 +41,7 @@ bonded `P` service is hard to connect to its funding transaction.
 | The principal funds `P` with an ordinary FCMP++ transfer, `stake_in`, a separate transaction before the stake request. | `engine/principal_stake.rs:153-158` |
 | The stake request (`first_stake`) sweeps `P`'s funding outputs that the P-scan has found, persists the bonded slot, then assembles and signs the post. It does not broadcast. | `engine/bond_orchestrator.rs:833`, `:975-1004`; doc `:803-809` |
 | A funding output can be swept only once its leaf is in the tree at the reference height: `spendable_height ≤ reference_height`. | `engine/backing_set.rs:156` |
-| `spendable_height = height + SPENDABLE_AGE` (10) for an ordinary output. | `shekyl-engine-state/src/transfer.rs:33-34`, `:65-71`; `shekyl-consensus/src/lib.rs:28` |
+| `spendable_height = height + SPENDABLE_AGE` (10) for an ordinary output. | `shekyl-engine-state/src/transfer.rs:33-34`, `:65-71`; `shekyl-consensus/src/lib.rs:22` |
 | The wallet records the funding output's block height and its spendable height. | `shekyl-engine-state/src/pscan_state.rs:237`, `:259` |
 | The stake request sweeps only funding records the sealed P-scan has found (`engine/bond_orchestrator.rs:742-777`), and that scan covers only blocks below `claimed count − ARCHIVAL_REORG_DEPTH_BLOCKS` (720): a funding output at height `h_f` is first sweepable at tip `h_f + 720`. | `engine/pscan/task.rs:245-252`; `engine/pscan/start.rs:91-99` |
 | The delay is drawn at the request: `bond_post_offset_blocks ~ U[0, 600]`, one unbiased draw. | `engine/stake_engine/actor.rs:154-170`; `shekyl-standoff/src/draw.rs:96-98` |

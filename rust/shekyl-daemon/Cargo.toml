@@ -66,6 +66,8 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 [target.'cfg(unix)'.dev-dependencies]
 # The notify tests plant a descriptor without close-on-exec.
 rustix = { version = "1", features = ["fs"] }
+# The inherited-interrupt test sets `SIGINT` between fork and exec.
+libc = "0.2"
 
 [lints]
 workspace = true
