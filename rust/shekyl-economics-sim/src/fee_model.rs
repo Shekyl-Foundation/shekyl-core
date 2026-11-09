@@ -27,6 +27,8 @@
 //!   carry whatever that fold carries (the design document's ESR-3, ESR-4
 //!   and ESR-6).
 
+use core::fmt;
+
 use shekyl_economics::{
     base_block_reward, corrected_fee_ladder, fee_correction, EconomicParams, FeeLadder,
     RelayPolicy, TxVolume,
@@ -62,10 +64,8 @@ pub enum FeeModel {
     /// four times the relay floor and the wallet's default
     /// (`FEE_LADDER_DERIVATION.md` §5.5).
     Production {
-        /// Thousandths on the Standard rung: `1_000` is the rung exactly.
-        /// Anything else is a declared divergence standing in for what users
-        /// pay above the default, which is not knowable before launch.
-        multiplier_milli: u64,
+        /// What the Standard rung is scaled by.
+        multiplier: StandardMultiplier,
         /// The share of demand on each rung (ESR-10). Not knowable before
         /// launch either: a declared divergence unless all Standard.
         mix: RungMix,
@@ -80,8 +80,49 @@ pub const SECTION_12_14_FLAT_FEE_ATOMIC: u64 = 100_000_000;
 /// the relay floor. Kept as the control arm's value and nowhere else.
 pub const SECTION_12_13_ADMISSION_RATE: PerByteRate = PerByteRate::unrounded(300);
 
-/// Thousandths in one: the multiplier that leaves a rung unchanged.
-const MILLI: u64 = 1_000;
+/// Thousandths in one: the unit the fee arm's declared inputs are written
+/// in, the Standard multiplier ([`StandardMultiplier`]) and a rung mix's
+/// shares ([`RungMix`]).
+pub(crate) const MILLI: u64 = 1_000;
+
+/// The Standard rung's multiplier, in thousandths: [`Self::UNIT`] is the
+/// rung exactly. Anything else is a declared divergence (§4 of the design
+/// document) standing in for what users pay above the default, which is not
+/// knowable before launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct StandardMultiplier {
+    milli: u64,
+}
+
+impl StandardMultiplier {
+    /// The rung as production prices it.
+    pub const UNIT: Self = Self::from_milli(MILLI);
+
+    /// `milli` thousandths: `1_250` is ×1.25.
+    #[must_use]
+    pub const fn from_milli(milli: u64) -> Self {
+        Self { milli }
+    }
+
+    /// The multiplier in thousandths.
+    #[must_use]
+    pub const fn milli(self) -> u64 {
+        self.milli
+    }
+
+    /// `per_byte` scaled by the multiplier, rounded down. Exact in `u128`;
+    /// `None` when the result does not fit a per-byte rate.
+    fn scale(self, per_byte: u64) -> Option<u64> {
+        u64::try_from(u128::from(per_byte) * u128::from(self.milli) / u128::from(MILLI)).ok()
+    }
+}
+
+impl fmt::Display for StandardMultiplier {
+    /// `x1.352`: three places, as every report prints it.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "x{}.{:03}", self.milli / MILLI, self.milli % MILLI)
+    }
+}
 
 /// The block state a fee is priced at. Every field is a quantity the fold
 /// calling this already holds for the same block; nothing here is computed
@@ -126,7 +167,7 @@ impl FeeModel {
 
     /// What the chain's wallets pay by default: the Standard rung, unscaled.
     pub const PRODUCTION_DEFAULT: Self = Self::Production {
-        multiplier_milli: MILLI,
+        multiplier: StandardMultiplier::UNIT,
         mix: RungMix::ALL_STANDARD,
     };
 
@@ -162,14 +203,11 @@ impl FeeModel {
             Self::FlatControl { per_tx_atomic, .. } => PerRung::from_fn(|rung| {
                 (rung == Rung::Standard).then(|| tx_paying(per_tx_atomic, at))
             }),
-            Self::Production {
-                multiplier_milli,
-                mix,
-            } => {
+            Self::Production { multiplier, mix } => {
                 let ladder = ladder_at(at);
                 PerRung::from_fn(|rung| {
                     let fee = match rung {
-                        Rung::Standard => standard_fee(ladder, multiplier_milli, at),
+                        Rung::Standard => standard_fee(ladder, multiplier, at),
                         _ if !mix.uses(rung) => return None,
                         Rung::Economy => rung_fee(ladder.economy, at),
                         Rung::Priority => rung_fee(ladder.priority, at),
@@ -201,24 +239,16 @@ impl FeeModel {
                  divergence: the chain charges no flat fee (ECONOMICS_SIM_PRODUCTION_REBASE.md §4).",
                 per_tx_atomic as f64 / crate::burden::COIN as f64
             ),
-            Self::Production {
-                multiplier_milli,
-                mix,
-            } if mix == RungMix::ALL_STANDARD => format!(
-                "FEE ARM: production ladder — Standard rung x{:.3} (corrected_fee_ladder at each \
-                 block's R, C and long-term median), ordinary 1in/2out weight at chain depth, the \
-                 wallet's lattice fixed point of rate x weight.",
-                multiplier_milli as f64 / MILLI as f64,
+            Self::Production { multiplier, mix } if mix == RungMix::ALL_STANDARD => format!(
+                "FEE ARM: production ladder — Standard rung {multiplier} (corrected_fee_ladder at \
+                 each block's R, C and long-term median), ordinary 1in/2out weight at chain depth, \
+                 the wallet's lattice fixed point of rate x weight."
             ),
-            Self::Production {
-                multiplier_milli,
-                mix,
-            } => format!(
+            Self::Production { multiplier, mix } => format!(
                 "FEE ARM: production ladder — rung mix Economy/Standard/Priority {mix}, Standard \
-                 x{:.3} (corrected_fee_ladder at each block's R, C and long-term median), ordinary \
-                 1in/2out weight at chain depth, the wallet's lattice fixed point of each rung's \
-                 rate x weight.",
-                multiplier_milli as f64 / MILLI as f64,
+                 {multiplier} (corrected_fee_ladder at each block's R, C and long-term median), \
+                 ordinary 1in/2out weight at chain depth, the wallet's lattice fixed point of each \
+                 rung's rate x weight."
             ),
         }
     }
@@ -312,23 +342,6 @@ impl FeeModel {
     }
 }
 
-/// The production per-byte rate after the run's multiplier, on the wallet's
-/// lattice. At [`MILLI`] the count is unchanged. The pricer is lattice
-/// because only the production arm scales a rung. The product of two `u64`s
-/// fits in `u128`, so the division is exact; a count that does not fit the
-/// rate is a refusal, not a rate of `u64::MAX`.
-fn scaled_lattice_rate(
-    rate_per_byte: u64,
-    multiplier_milli: u64,
-    relay: &RelayPolicy,
-) -> PerByteRate {
-    let scaled = u128::from(rate_per_byte) * u128::from(multiplier_milli) / u128::from(MILLI);
-    PerByteRate::lattice(
-        u64::try_from(scaled).expect("a scaled rung fits the per-byte rate"),
-        relay,
-    )
-}
-
 /// An ordinary transaction paying `fee_atomic` at `at`'s depth, at the
 /// weight that fee writes.
 fn tx_paying(fee_atomic: u64, at: &FeePoint<'_>) -> OrdinaryTx {
@@ -341,13 +354,17 @@ fn tx_paying(fee_atomic: u64, at: &FeePoint<'_>) -> OrdinaryTx {
 /// The Standard rung's fee: the multiplier scales the rate, and the fee is
 /// the fixed point of that rate. Scaling an already converged fee would
 /// price a varint the payer does not write.
-fn standard_fee(ladder: FeeLadder, multiplier_milli: u64, at: &FeePoint<'_>) -> u64 {
-    let rate = scaled_lattice_rate(ladder.standard, multiplier_milli, at.relay);
-    ordinary_tx_fee(at.chain_leaves, rate)
-        .expect("the standard rung does not price an ordinary transaction")
+/// The pricer is the wallet's lattice, because only the production arm
+/// scales a rung; a scaled rate that does not fit is a refusal, not a rate of
+/// `u64::MAX`.
+fn standard_fee(ladder: FeeLadder, multiplier: StandardMultiplier, at: &FeePoint<'_>) -> u64 {
+    let scaled = multiplier
+        .scale(ladder.standard)
+        .expect("a scaled rung fits the per-byte rate");
+    rung_fee(scaled, at)
 }
 
-/// An unscaled rung's fee: the fixed point of its per-byte rate on the
+/// A rung's fee at `rate_per_byte`: the fixed point of that rate on the
 /// run's lattice.
 fn rung_fee(rate_per_byte: u64, at: &FeePoint<'_>) -> u64 {
     ordinary_tx_fee(
@@ -441,12 +458,20 @@ mod tests {
     /// so the paid fee is that rate's fixed point rather than an integer
     /// multiple of the unscaled fee, and it sits within one lattice step of
     /// the product.
+    /// The multiplier prints as every report has printed it: three places.
+    #[test]
+    fn a_multiplier_prints_three_places() {
+        assert_eq!(StandardMultiplier::UNIT.to_string(), "x1.000");
+        assert_eq!(StandardMultiplier::from_milli(1_352).to_string(), "x1.352");
+        assert_eq!(StandardMultiplier::from_milli(3_050).to_string(), "x3.050");
+    }
+
     #[test]
     fn the_multiplier_scales_the_rate_before_the_fixed_point() {
         let params = EconomicParams::default();
         let at = point(0, &params);
-        let arm = |multiplier_milli| FeeModel::Production {
-            multiplier_milli,
+        let arm = |milli| FeeModel::Production {
+            multiplier: StandardMultiplier::from_milli(milli),
             mix: RungMix::ALL_STANDARD,
         };
         let base = base_block_reward(0, &params).expect("genesis reward");
@@ -459,15 +484,12 @@ mod tests {
         );
         let (n_in, n_out) = normal_tx_shape();
         let depth = tree_depth_for_leaves(at.chain_leaves);
-        for multiplier_milli in [MILLI / 2, MILLI, 2 * MILLI] {
-            let paid = standard_fee_of(arm(multiplier_milli), &at);
+        for milli in [MILLI / 2, MILLI, 2 * MILLI] {
+            let paid = standard_fee_of(arm(milli), &at);
             let weight = u128::from(predict_weight(n_in, n_out, depth, paid) as u64);
-            let rate = u128::from(4 * floor) * u128::from(multiplier_milli) / u128::from(MILLI);
+            let rate = u128::from(4 * floor) * u128::from(milli) / u128::from(MILLI);
             let product = weight * rate;
-            assert!(
-                u128::from(paid) >= product,
-                "under-pay at milli {multiplier_milli}"
-            );
+            assert!(u128::from(paid) >= product, "under-pay at milli {milli}");
             assert!(u128::from(paid) - product < u128::from(FEE_QUANTIZATION_MASK));
             assert_eq!(paid % FEE_QUANTIZATION_MASK, 0);
         }

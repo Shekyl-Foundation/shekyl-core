@@ -11,7 +11,7 @@
 //! the rung in the comparison is the run's
 //! [`RelayPolicy::standard_over_economy`](shekyl_economics::RelayPolicy),
 //! the same ratio the served ladder multiplies by. ESR-10's cells read the
-//! gate at their own Standard multiplier ([`cell_gate`], [`m_star_milli`]).
+//! gate at their own Standard multiplier ([`cell_gate`], [`m_star`]).
 //!
 //! `m` in the printed inequality is the effective median. The fee multiplier
 //! ESR-10 writes as `m` is a different operand; this module calls it the
@@ -24,6 +24,7 @@ use shekyl_economics::{
 };
 
 use crate::engine::SimParams;
+use crate::fee_model::{StandardMultiplier, MILLI};
 use crate::scenarios::BASELINE_STEADY_STATE;
 use crate::stage2::{trunc, A1YearAgg, FoldedScenario};
 
@@ -44,6 +45,17 @@ struct BlockTraffic {
     year: u64,
     carried_txs: u128,
     dropped_txs: u128,
+}
+
+impl BlockTraffic {
+    /// `agg`'s year, every rung.
+    fn of(agg: &A1YearAgg) -> Self {
+        Self {
+            year: agg.year,
+            carried_txs: agg.carried_txs(),
+            dropped_txs: agg.dropped_txs(),
+        }
+    }
 }
 
 /// The year's last block, reduced to the operands the gate reads.
@@ -229,25 +241,37 @@ pub(crate) struct CellGate {
     pub(crate) rho_at_growth: Option<f64>,
 }
 
-/// `multiplier·ρ ≥ θ` at equal medians, in integers: `multiplier_milli · ρ ·
-/// rung · w_ref ≥ 1000 · w · SCALE`, `ρ` in SCALE units.
+/// `multiplier·ρ ≥ θ` at equal medians, in integers: `multiplier.milli() ·
+/// ρ · rung · w_ref ≥ MILLI · w · SCALE`, `ρ` in SCALE units.
 fn multiplied_reaches_theta(
     block: &GateBlock,
     rho: u64,
-    multiplier_milli: u64,
+    multiplier: StandardMultiplier,
     run: &SimParams,
 ) -> bool {
-    let left = u128::from(multiplier_milli)
+    u128::from(multiplier.milli()) * standard_rung_rho(run, rho) >= theta_milli(block)
+}
+
+/// `rung · w_ref · ρ`: the left side of the gate without the multiplier.
+fn standard_rung_rho(run: &SimParams, rho: u64) -> u128 {
+    u128::from(run.relay().standard_over_economy)
+        * u128::from(run.relay().ref_tx_weight)
         * u128::from(rho)
-        * u128::from(run.relay().standard_over_economy)
-        * u128::from(run.relay().ref_tx_weight);
-    let right = 1_000 * u128::from(block.weight) * u128::from(SCALE);
-    left >= right
+}
+
+/// `MILLI · w · SCALE`: `θ`'s side of the gate, in the multiplier's
+/// thousandths.
+fn theta_milli(block: &GateBlock) -> u128 {
+    u128::from(MILLI) * u128::from(block.weight) * u128::from(SCALE)
 }
 
 /// The gate over `aggs`, one cell's fold of one scenario, at the cell's
-/// Standard `multiplier_milli`.
-pub(crate) fn cell_gate(params: &SimParams, aggs: &[A1YearAgg], multiplier_milli: u64) -> CellGate {
+/// Standard `multiplier`.
+pub(crate) fn cell_gate(
+    params: &SimParams,
+    aggs: &[A1YearAgg],
+    multiplier: StandardMultiplier,
+) -> CellGate {
     let economic = params.economic();
     let blocks: Vec<GateBlock> = aggs.iter().map(GateBlock::from_agg).collect();
     let first = blocks
@@ -257,17 +281,10 @@ pub(crate) fn cell_gate(params: &SimParams, aggs: &[A1YearAgg], multiplier_milli
         .iter()
         .zip(&blocks)
         .find(|(_, block)| {
-            multiplied_reaches_theta(block, rho_scaled(block, economic), multiplier_milli, params)
+            multiplied_reaches_theta(block, rho_scaled(block, economic), multiplier, params)
         })
         .map(|(agg, _)| agg.year);
-    let traffic: Vec<BlockTraffic> = aggs
-        .iter()
-        .map(|agg| BlockTraffic {
-            year: agg.year,
-            carried_txs: agg.carried_txs(),
-            dropped_txs: agg.dropped_txs(),
-        })
-        .collect();
+    let traffic: Vec<BlockTraffic> = aggs.iter().map(BlockTraffic::of).collect();
     let growth = congestion_escape_year(&traffic, params.blocks_per_year());
     let rho_at_growth = growth.and_then(|year| {
         aggs.iter()
@@ -286,16 +303,14 @@ pub(crate) fn cell_gate(params: &SimParams, aggs: &[A1YearAgg], multiplier_milli
     }
 }
 
-/// P2's `m*`, in thousandths: `⌈1000·θ/ρ⌉` at `year_one`'s last block, the
-/// least multiplier at which `m*·ρ(y1) ≥ θ(y1)`.
-pub(crate) fn m_star_milli(params: &SimParams, year_one: &A1YearAgg) -> u64 {
+/// P2's `m*`: `⌈MILLI·θ/ρ⌉` thousandths at `year_one`'s last block, the
+/// least multiplier at which `m*·ρ(y1) ≥ θ(y1)` ([`multiplied_reaches_theta`]
+/// read for its multiplier).
+pub(crate) fn m_star(params: &SimParams, year_one: &A1YearAgg) -> StandardMultiplier {
     let block = GateBlock::from_agg(year_one);
     let rho = rho_scaled(&block, params.economic());
-    let numerator = 1_000 * u128::from(block.weight) * u128::from(SCALE);
-    let denominator = u128::from(params.relay().standard_over_economy)
-        * u128::from(params.relay().ref_tx_weight)
-        * u128::from(rho);
-    u64::try_from(numerator.div_ceil(denominator)).expect("a multiplier fits")
+    let milli = theta_milli(&block).div_ceil(standard_rung_rho(params, rho));
+    StandardMultiplier::from_milli(u64::try_from(milli).expect("a multiplier fits"))
 }
 
 pub(crate) fn year_label(year: Option<u64>) -> String {
@@ -360,7 +375,7 @@ pub(crate) fn write_report(
                     "       {:>6} {:>8.1} {:>7.0} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>6}",
                     agg.year,
                     per_block(agg.carried_txs(), params.blocks_per_year()),
-                    agg.long_term_median as f64 / 1_000.0,
+                    crate::stage2::kilobytes(agg.long_term_median),
                     gate.sigma,
                     gate.supply_ratio,
                     gate.burn,
@@ -392,15 +407,7 @@ pub(crate) fn write_report(
             .zip(&gates)
             .find(|(_, gate)| gate.admits_one_more)
             .map(|(agg, _)| agg.year);
-        let traffic: Vec<BlockTraffic> = scenario
-            .aggs
-            .iter()
-            .map(|agg| BlockTraffic {
-                year: agg.year,
-                carried_txs: agg.carried_txs(),
-                dropped_txs: agg.dropped_txs(),
-            })
-            .collect();
+        let traffic: Vec<BlockTraffic> = scenario.aggs.iter().map(BlockTraffic::of).collect();
         let growth = congestion_escape_year(&traffic, params.blocks_per_year());
         writeln!(
             out,
@@ -608,14 +615,7 @@ mod tests {
             .find(|(_, gate)| gate.rho >= gate.theta_at_equal_medians)
             .map(|(agg, _)| agg.year);
         assert_eq!(crossing, Some(19), "rho reaches theta in year 19");
-        let traffic: Vec<BlockTraffic> = aggs
-            .iter()
-            .map(|agg| BlockTraffic {
-                year: agg.year,
-                carried_txs: agg.carried_txs(),
-                dropped_txs: agg.dropped_txs(),
-            })
-            .collect();
+        let traffic: Vec<BlockTraffic> = aggs.iter().map(BlockTraffic::of).collect();
         assert_eq!(
             congestion_escape_year(&traffic, params.blocks_per_year()),
             Some(19),

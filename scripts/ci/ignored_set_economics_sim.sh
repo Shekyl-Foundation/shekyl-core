@@ -18,7 +18,9 @@
 # `regen_stage2_narration_fixtures` and `regen_esr10_narration_fixtures`,
 # WRITE the committed fixtures: they are named as helpers and never run
 # here, because a lane that regenerated the fixtures and then compared
-# against them would pass every night.
+# against them would pass every night. They are armed (rule 50): each
+# refuses unless SHEKYL_PINNED_REGEN_DECISION cites the dated
+# ECONOMICS_SIM_PRODUCTION_REBASE.md entry that records what moved.
 #
 # ESR-10's full narration (144 folds of 60 years, about 85 CPU-minutes) does
 # not fit this lane's budget beside its other tests, so it is named on
@@ -92,7 +94,7 @@ cargo test --locked --release -p shekyl-economics-sim --bin shekyl-economics-sim
   --ignored --exact --nocapture $run_tests > sim-ignored.log 2>&1 || status=$?
 cat sim-ignored.log
 if [ "$status" -ne 0 ]; then
-  echo "::error::economics-sim-ignored: a named test failed. If a narration drifted, regenerate with regen_stage2_narration_fixtures or regen_esr10_narration_fixtures only if the sim change is intended; otherwise the sim drifted from its record."
+  echo "::error::economics-sim-ignored: a named test failed. If a narration drifted and the sim change is intended, record it in ECONOMICS_SIM_PRODUCTION_REBASE.md and regenerate with regen_stage2_narration_fixtures or regen_esr10_narration_fixtures under SHEKYL_PINNED_REGEN_DECISION citing that entry; otherwise the sim drifted from its record."
   exit "$status"
 fi
 ran=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' sim-ignored.log | tail -1)

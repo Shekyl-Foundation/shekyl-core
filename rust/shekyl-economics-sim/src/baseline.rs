@@ -893,20 +893,14 @@ mod tests {
                 pairs.push((format!("{mode}: {}={}", r.path, r.moves_at), b, c));
             }
         }
-        let threads = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
         // A cell whose fold panics is a failure named with the rest, not the
         // end of the run.
-        let mut text: Vec<Option<String>> = Vec::with_capacity(narrations.len());
-        for chunk in narrations.chunks(threads) {
-            let done: Vec<Option<String>> = std::thread::scope(|scope| {
-                let handles: Vec<_> = chunk
-                    .iter()
-                    .map(|(overrides, mode)| scope.spawn(move || narrate(overrides.clone(), *mode)))
-                    .collect();
-                handles.into_iter().map(|h| h.join().ok()).collect()
-            });
-            text.extend(done);
-        }
+        let text: Vec<Option<String>> = crate::parallel::map(&narrations, |(overrides, mode)| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                narrate(overrides.clone(), *mode)
+            }))
+            .ok()
+        });
         let unmoved: Vec<String> = pairs
             .iter()
             .filter_map(|(name, b, c)| match (&text[*b], &text[*c]) {

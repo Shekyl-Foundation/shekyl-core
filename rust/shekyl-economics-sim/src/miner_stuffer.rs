@@ -844,10 +844,14 @@ fn cost_per_byte_ord(cost_a: u128, bytes_a: u128, cost_b: u128, bytes_b: u128) -
 /// Where the report samples the envelope: three eras of the baseline, and a
 /// chain whose demand sits below the zone, where free room exists (§5.10).
 const ROWS: [(&str, u64, &str); 4] = [
-    ("baseline_steady_state", 5, "constrained"),
-    ("baseline_steady_state", 20, "carried"),
-    ("baseline_steady_state", 45, "tail"),
-    ("high_history_low_activity", 50, "below zone"),
+    (crate::scenarios::BASELINE_STEADY_STATE, 5, "constrained"),
+    (crate::scenarios::BASELINE_STEADY_STATE, 20, "carried"),
+    (crate::scenarios::BASELINE_STEADY_STATE, 45, "tail"),
+    (
+        crate::scenarios::HIGH_HISTORY_LOW_ACTIVITY,
+        50,
+        "below zone",
+    ),
 ];
 
 /// Hashrate shares and time budgets (blocks) the shard counts are read at.

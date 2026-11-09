@@ -496,7 +496,7 @@ it is fixed.
 | Control arm: flat `0.1 SKL` per transaction | The fee §12.13–§12.14 were measured on. The two arms of one run differ by the fee and nothing else | Named arm, printed beside the production arm | Arm |
 | Fee multiplier on the Standard rung | What users pay above the default is not knowable before launch | `--stage2` runs `×1`, the production default. `--esr10` sweeps ×1.00, ×1.25, `m*`, ×1.50, ×2.00 and ×3.00, all Standard, on both `w_ref` arms (§5.29) | Behaviour (users) |
 | Rung mix (economy / standard / priority shares) | Same. At the defaulted 15/80/5 mix ([`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §5.5) the 5 % on Priority pay most of the fees | `--stage2` runs all Standard. `--esr10` runs 15/80/5 and 15/85/0 at ×1 on both arms. A block's demand splits by largest remainder on the cumulative target (`rung_mix.rs`), so each rung stays under one transaction from its share | Behaviour (users) |
-| One block's arrivals are admitted Priority, Standard, then Economy | How a block's arrivals on different rungs interleave is the network's and the users'. The order changes a drop's label, never the pool: Economy admitted and then evicted by a richer arrival leaves the pool that Economy refused after it leaves (`the_admission_order_relabels_a_drop_and_leaves_the_pool`) | Stated at `Rung::ADMISSION` and in `--esr10`'s header | Behaviour (users and the network) |
+| One block's arrivals reach the pool Priority, Standard, then Economy | How a block's arrivals on different rungs interleave is the network's and the users'. Each arrival is CEN-M10's `make_room` question in turn, so at equal weights the order moves only a drop's label (`at_equal_weights_the_admission_order_relabels_a_drop_and_leaves_the_pool`), and at unequal weights, which the rungs have through their fees' varints, it can move the pool (`at_unequal_weights_the_admission_order_can_change_the_pool`). Its bias: a richer arrival is never refused for a cheaper one that reached the pool first in the same block. Against the reverse order the run moves drop labels and little else (§5.29.1) | Stated at `Rung::ADMISSION` and in `--esr10`'s header | Behaviour (users and the network) |
 | The re-derived `w_ref` and zone | `w_ref` (3 000) and the 300 KB zone were never derived for Shekyl (EUP-5 G). The arm takes `w_ref′` as the ordinary 1-in/2-out weight at genesis depth at its own genesis Standard fee, and `zone′ = 100 · w_ref′`, the ratio inherited and declared | `--esr10`'s second arm, "re-derived (declared; the owners' ruling replaces it, EUP-5 G)", two overrides derived by `esr10::rederived_pair` | Arm (declared until the owners rule) |
 | Control arm: admission at a flat 300 atomic/byte | The rate §12.13's stuffer and claim were priced at. Nothing in the chain charges it; the chain's admission rate is the relay floor | Part of the control arm; printed in its stuffer table | Arm (the control arm) |
 | The admission rate at a shard count (`AdmissionAtShards`) | Arms that sample the chain by shard count alone have no height, and the rate depends on emission, not on traffic. The pairing is fixed as the baseline scenario's: the rate at the year the baseline reaches that count, and its last year's rate beyond | Stated in the stuffer table's footer | Arm (the shard-count instruments) |
@@ -3124,10 +3124,12 @@ fee at about 1.19 SKL, 2.4× the ceiling.
   blocks. Carried, the remainder alternates. Integers only.
 - **The arrival order within a block.** Production's arrival process does
   not fix how one block's three classes interleave. The sim admits them
-  richest first: Priority, then Standard, then Economy. The order changes
-  only the label of a drop, not the pool. Where room runs out within a
-  block, Economy admitted first and then evicted by a richer arrival is the
-  same pool as Economy refused after it; this order counts the second.
+  richest first: Priority, then Standard, then Economy, a declared order
+  (§4). Each arrival is CEN-M10's `make_room` question in turn, so at equal
+  weights the order moves only a drop's label (Economy admitted and then
+  evicted by a richer arrival is the same pool as Economy refused after it;
+  this order counts the second), and at unequal weights it can move the
+  pool. §5.29.1 measures it against the reverse order.
 - **The offer order** is ESR-17's, the template's, with no rung-first walk.
   On the shipped ladder it is the rung order (`ESR10_PREDICTIONS.md` §0.1,
   restated in the amendment): Priority pays `M/(2·w_ref)` = 50 times
@@ -3201,8 +3203,8 @@ each outcome means):
 | Prediction | Outcome |
 | --- | --- |
 | **P1.** ×1 all-Standard is the default report | **Held.** `--stage2` runs through the rung pool at 0/1 000/0, and both `--stage2` fixtures pass unregenerated. The inherited ×1 cell prints the default report's figures: 22 a block to year 18, closed shards 229 864 at year 10 and 2 716 751 at year 60, onset y31 and y34 |
-| **P2.** One `θ` gates growth; `m*` ≈ 1.35 removes the constrained era | **Held.** In every cell and scenario whose crossing comes after year 1, the year blocks grow is the year `m·ρ` first reaches `θ`: ×1 year 19 (boom-bust 15), ×1.25 year 5 (registered y4–y10), `m*` year 2. At ×1.352 the baseline carries 47.7 of 50 in year 1 and all 50 from year 2; at ×1.5 and above, 49.9 in year 1 and no constrained year at all. The late growth years of sustained growth (y22–y25 inherited at ×1.5 and above, y26–y29 re-derived) are its demand meeting the block weight limit long after `m·ρ` passed `θ` |
-| **P3.** 15/80/5 does not grow blocks from genesis | **Held in shape; the fee ratio is 4 % over.** The baseline carries 0/19.5/2.5 (E/S/P) to year 18 and grows in year 19, as the default. Economy is never carried before the ratchet in any scenario. Fees are 6.84× all-Standard (registered 6.6×; 179.3 against 26.2 SKL a block in year 1), Priority 87.0 % of them. The ratchet year moves by at most a year in every scenario but sustained growth, which grows in year 14 against 19: its Priority demand alone (5 % of 534 a block in year 14) passes the penalty-free room, M3's case |
+| **P2.** One `θ` gates growth; `m*` ≈ 1.35 removes the constrained era | **Held where the gate finds a constrained era.** In every cell and scenario whose crossing comes after year 1 and that has a constrained year, the year blocks grow is the year `m·ρ` first reaches `θ`: ×1 year 19 (boom-bust 15), ×1.25 year 5 (registered y4–y10), `m*` year 2. At ×1.352 the baseline carries 47.7 of 50 in year 1 and all 50 from year 2; at ×1.5 and above, 49.9 in year 1 and no constrained year at all. The late growth years of sustained growth (y22–y25 inherited at ×1.5 and above, y26–y29 re-derived) are its demand meeting the block weight limit long after `m·ρ` passed `θ`. Three cells cross after year 1 with no growth year, and the gate (`congestion_escape_year`) reads them as built: chain bootstrap at `m*` never drops more than one transaction a block, so no year is constrained; the stuffing attack at ×1.25 and `m*` is constrained only in year 1, where the stuffer's own blocks carry 61 against honest demand of 50, so no later year passes the ceiling the stuffer set. None is a growth year that disagrees with its crossing |
+| **P3.** 15/80/5 does not grow blocks from genesis | **Held in shape; the fee ratio is 4 % over.** The baseline carries 0/19.5/2.5 (E/S/P) to year 18 and grows in year 19, as the default. Before the ratchet Economy is carried only where a year's demand fits under the room: boom-bust's troughs carry all 2.2 a block (years 4–12), and congested years carry none. Fees are 6.84× all-Standard (registered 6.6×; 179.3 against 26.2 SKL a block in year 1), Priority 87.0 % of them. The ratchet year moves by at most a year in every scenario but sustained growth, which grows in year 14 against 19: its Priority demand alone (5 % of 534 a block in year 14) passes the penalty-free room, M3's case |
 | **P4.** After the ratchet, Economy is never carried; plateau ≈ 624 KB; drop by refusal or eviction | **Missed in the count and the mechanism, held in the fee share.** On the baseline the ratchet leaves the long-term median at 50 transactions' weight (733 KB in year 20, 735 KB from year 30), and Economy is carried inside it: 7.5 of 7.5 in year 20, 5.5 from year 30, 52 % of Economy demand over 60 years. On the stuffing attack the plateau is 631–659 KB, P4's figure, and Economy is served 4.6 %. The median is neutrally stable anywhere between the non-Economy demand and the full demand: a block carries what fits under the median and keeps it there, so where it settles is the level the ratchet's overshoot leaves. Before the ratchet Economy's drop is expiry, 7.5 a block with nothing refused or evicted: with Priority listed on arrival the pool's stock stays under the cap (the agent's arithmetic registered beside P4 had the direction; it expected about one a block refused, and none was). Refusal is Economy's drop only where demand far exceeds the cap: high-history refuses 22.5–37.5 Economy a block. Priority's share of fees after the ratchet is 87.5–88.1 % (registered about 89 %), and Priority pays 122× Standard per byte at the post-ratchet median (registered 120–127×) |
 | **P5.** 15/85/0 equals P1 to the ratchet, then plateaus at 42.5 | **Held to the ratchet where the chain is congested, missed after it in size.** Carried, fees and the growth year equal the ×1 cell before the ratchet in the six scenarios whose demand exceeds the room; the drop's label moves to Economy (0.7 refused, 1.0 evicted, 5.7 expired a block, where ×1 refuses 1.7–1.9 Standard). Where demand is under the room (boom-bust's bust years, chain bootstrap's year 1, the late-chain tail) Economy is carried at its own rung, so the carried count matches and the fees are lower (boom-bust year 4: 16.57 against 18.67 SKL a block): P5's premise, that Economy expires either way, holds only on a congested chain. The growth year matches in all nine. It departs exactly at the ratchet year. After it the baseline carries 50 in year 20 and 48 from year 30 (5.5 Economy, 2.0 expiring), for P4's reason |
 | **P6.** The mix moves every onset later | **Held.** Flat-25 onset at 10 % moves later in all nine scenarios: baseline y31 → y40, boom-bust y26* → y28*, sustained growth y22 → y27, stuffing y31 → y41, chain bootstrap y30 → y40, late-chain tail y3 → y14, high-history y31 → y37. The leg split at the baseline's onset is 90.2 % fee on 15/80/5 against 30.5 % on ×1 |
@@ -3211,7 +3213,7 @@ each outcome means):
 | **R3.** Year-1 Standard fee 0.25–0.30× the inherited; 1.2–1.45× late | **Missed in size, held in place: inside the ceiling.** 0.332× (0.3944 against 1.1888 SKL), 0.79× the ceiling. Two operands differ from the prediction's: `w_ref′` at genesis depth is 12 595 B (`k` = 4.2, not 4.5–4.8), and the inherited arm's year-1 long-term median is 315 KB, not the zone, which lowers the inherited fee by 0.907. Late, the re-derived per-transaction fee is 1.25× the inherited at year 20, 1.28× at year 30 and 1.26× at year 40 (registered 1.2–1.45×) |
 | **R4.** `M_r` 1.0 from genesis; inherited reward 1.25–1.35× after its ratchet | **Held.** The re-derived arm's year-1 reward is 992.58 SKL a block, the design curve's mean; the inherited arm's is 799.01, the 0.8 floor. From year 20 the inherited reward is 1.258× the re-derived at every sampled year |
 | **R5.** Closed shards at y10 ≈ 523 841; `final_n` 1.10–1.15× | **Held at year 10, missed in size at 60.** 523 841 exactly at year 10. 3 283 051 at year 60, 1.21× the inherited arm's 2 716 751 |
-| **R6.** 15/80/5 on the re-derived baseline carries all three rungs; Priority about 75 % of fees | **Held.** 7.5/40/2.5 every year; Priority 74.9 %. Economy drops only where demand passes the room (boom-bust, high-history), and only until `ρ` passes about 1.07–1.28 (registered `4θ′` = 1) |
+| **R6.** 15/80/5 on the re-derived baseline carries all three rungs; Priority about 75 % of fees | **Held on the baseline.** 7.5/40/2.5 every year, nothing dropped; Priority 74.9 %. Elsewhere Economy expires where demand passes the room: boom-bust and high-history in their first years (8.3 a block in year 1) until `ρ` passes about 1.07–1.28 (registered `4θ′` = 1); the stuffing attack in year 1 (0.5 a block); and sustained growth from year 8, 41.7 a block at year 30 and 18.9 at year 40, once its demand meets the block weight limit (R2's case) |
 | **R7 (weak).** A1 onsets earlier by 1–5 years | **Held.** Baseline flat-25 y31 → y28, best y34 → y32. The emission leg dominates at onset on both arms (69.5 % inherited, 66.6 % re-derived) |
 
 **The demand split** keeps every rung under one transaction from its share
@@ -3219,6 +3221,20 @@ at every block. Over a 1 000-block span the drift is at most one
 transaction on every registered scenario but sustained growth's 15/80/5,
 which reaches 1.15 (Priority) as its demand grows block by block; under
 two is what the split guarantees for any demand.
+
+**The admission order** is declared, not derived (§4): richest first. Run
+against the reverse order (Economy, Standard, Priority) on every scenario,
+66 of the narration's 2 094 lines move, all in the inherited arm's two mix
+cells. Every one moves refused into evicted; 11 move expiry by at most 0.3
+a block, 7 move Standard's p95 age by one block, and 2 move a year's fees
+in the third decimal. No carried count, median, reward, onset, growth
+year, summary row or headline row moves: at the rungs' weights the order
+decides how a drop is labelled, not what the chain carries.
+
+**2026-11-08: the `--esr10` narrations regenerated for one header line**
+(the review of #1321). The header states the admission order as a
+declared order that can move the pool. No other line of either `--esr10`
+fixture moved, and the `--stage2` fixtures did not move.
 
 **Cost.** The full narration, 144 folds of 60 years, takes 379 s wall and
 85 CPU-minutes on 16 threads (load 5 to 16). The nightly lane already runs
@@ -3254,10 +3270,14 @@ plan's EUP-5 row):
   which is path-dependent: 52 % served on the baseline, 4.6 % on the
   stuffing attack.
 
-**Landed 2026-11-08.** ESR-10's code is `rung_mix.rs` (the rungs and the
-split), the rung-tagged pool (`block_space.rs`), per-rung pricing
-(`FeeModel::rung_txs`), and `esr10.rs` (`--esr10`, the re-derived pair, the
-cells, the narration and the reach probe).
+**Landed 2026-11-08.** ESR-10's code is `rung_mix.rs` (the rungs, the
+split, and each rung's traffic for a block and a year), the rung-tagged
+pool (`block_space.rs`), per-rung pricing at a typed Standard multiplier
+(`FeeModel::rung_txs`, `StandardMultiplier`), and `esr10.rs` (`--esr10`:
+the re-derived pair, the cells, the folds and the readings taken of them
+once, the narration and the reach probe). The committed narrations move
+only under a cited decision in this document (`committed_fixture.rs`,
+rule 50).
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 

@@ -7,6 +7,9 @@ mod burden;
 mod calibration;
 mod cartel;
 mod chain_cursor;
+// The committed outputs' comparison and armed regeneration: test only.
+#[cfg(test)]
+mod committed_fixture;
 mod distribution;
 mod engine;
 mod escalation;
@@ -22,6 +25,7 @@ mod median_window;
 mod miner_stuffer;
 mod mn_feasibility;
 mod onset;
+mod parallel;
 mod population;
 mod proxy;
 mod redistribution;
@@ -228,16 +232,17 @@ fn main() {
     if esr10 {
         let started = std::time::Instant::now();
         let mut narration = String::new();
-        let rows = esr10::run_esr10(&mut narration, &params, esr10::Scope::Full)
+        let rows = esr10::run_esr10(&mut narration, &params, &esr10::every_scenario(&params))
             .expect("String sink is infallible");
         if params.overrides().is_empty() {
             eprint!("{narration}");
         } else {
+            let shipped = SimParams::default();
             let mut baseline_narration = String::new();
             esr10::run_esr10(
                 &mut baseline_narration,
-                &SimParams::default(),
-                esr10::Scope::Full,
+                &shipped,
+                &esr10::every_scenario(&shipped),
             )
             .expect("String sink is infallible");
             eprint!(

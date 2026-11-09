@@ -559,7 +559,7 @@ pub fn onset_report(
                         "{:>5.1}/{:<5.1} {:>4.0}K {:>4.1}",
                         per_block(a.carried_txs()),
                         per_block(a.demand_txs()),
-                        a.long_term_median as f64 / 1_000.0,
+                        crate::stage2::kilobytes(a.long_term_median),
                         per_block(a.dropped_txs()),
                     )
                 })
@@ -934,7 +934,7 @@ mod tests {
         // flat arm, where the fee does not fall as the traffic grows.
         let params = SimParams::section_12_14_control();
         let config = in_the_tail_era(all_scenarios(&params).remove(2));
-        assert_eq!(config.name, "sustained_growth");
+        assert_eq!(config.name, crate::scenarios::SUSTAINED_GROWTH);
         let aggs = a1_year_aggs(&params, &config);
         assert_tail_era(&params, &aggs);
         let last = aggs.last().expect("60 years");

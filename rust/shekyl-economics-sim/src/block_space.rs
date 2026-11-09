@@ -44,7 +44,7 @@ use shekyl_wire::transaction::COINBASE_RESERVE;
 
 use crate::fee_model::{FeePoint, OrdinaryTx};
 use crate::median_window::MedianWindow;
-use crate::rung_mix::{PerRung, Rung};
+use crate::rung_mix::{PerRung, Rung, RungTraffic};
 
 /// Seconds in the pool's received key: `ReceivedHour::of` is Unix seconds
 /// over this (`shekyl-chain-store`, `codec/pool.rs`), pinned by
@@ -127,28 +127,13 @@ pub(crate) struct BlockSpace {
     taken: Vec<u64>,
 }
 
-/// One rung's part of a block: what it listed, and what of it left the pool
-/// unserved.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct RungBlock {
-    /// Transactions the block lists.
-    pub(crate) included: u64,
-    /// Transactions whose reference left CEN-I11's window before this block.
-    pub(crate) expired: u64,
-    /// Transactions CEN-M10 evicted at this block: to make room for an
-    /// arrival paying more per weight, or to bring the pool within its limit.
-    pub(crate) evicted: u64,
-    /// Arrivals the pool refused: no strictly cheaper entries freed room.
-    pub(crate) refused: u64,
-    /// The listed bodies' fees.
-    pub(crate) fees: u64,
-}
-
 /// What one block took, and what left the pool unserved.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Filled {
-    /// Each rung's listing and drops.
-    pub(crate) rungs: PerRung<RungBlock>,
+    /// Each rung's traffic at this block: its arrivals, its listing, and its
+    /// drops (an expiry is of a reference that left CEN-I11's window before
+    /// this block).
+    pub(crate) rungs: PerRung<RungTraffic<u64>>,
     /// Transactions waiting after the block.
     pub(crate) waiting: u64,
     /// The penalised gross reward at the block's weight
@@ -158,18 +143,17 @@ pub(crate) struct Filled {
     pub(crate) block_weight: u64,
     /// The listed bodies' weight.
     pub(crate) bodies_weight: u64,
-    /// The listed bodies' fees.
-    pub(crate) fees: u64,
 }
 
 impl Filled {
-    fn sum(&self, field: impl Fn(&RungBlock) -> u64) -> u64 {
-        self.rungs.iter().map(field).sum()
+    /// Transactions the block lists, every rung.
+    pub(crate) fn carried_txs(&self) -> u64 {
+        self.rungs.sum(|rung| rung.carried_txs)
     }
 
-    /// Transactions the block lists, every rung.
-    pub(crate) fn included(&self) -> u64 {
-        self.sum(|r| r.included)
+    /// The listed bodies' fees, every rung.
+    pub(crate) fn fees_atomic(&self) -> u64 {
+        self.rungs.sum(|rung| rung.fees_atomic)
     }
 }
 
@@ -460,7 +444,8 @@ impl BlockSpace {
 
     /// Step 3: offer the pool to `fill` in the template's order; the bodies
     /// listed are recorded in `self.listed` (per group), `self.taken` (per
-    /// entry), `self.ages` and `rungs` (per rung), and taken from the pool.
+    /// entry), `self.ages` and `rungs` (per rung: carried and fees), and
+    /// taken from the pool.
     ///
     /// **The stop rule.** A group is offered with [`Fill::admit_up_to`], and
     /// a refusal ends it. It also ends every later group of the same weight:
@@ -471,7 +456,7 @@ impl BlockSpace {
     /// by fee per weight, so both conditions refuse it as well. A group of
     /// another weight faces a different penalty and limit test and is still
     /// offered, as the template walks every candidate.
-    fn offer(&mut self, fill: &mut Fill<'_>, height: u64, rungs: &mut PerRung<RungBlock>) {
+    fn offer(&mut self, fill: &mut Fill<'_>, height: u64, rungs: &mut PerRung<RungTraffic<u64>>) {
         self.listed.clear();
         self.taken.clear();
         self.taken.resize(self.waiting.len(), 0);
@@ -516,8 +501,8 @@ impl BlockSpace {
                     ages.resize(age + 1, 0);
                 }
                 ages[age] += share;
-                rungs[cohort.rung].included += share;
-                rungs[cohort.rung].fees += share * cohort.fee;
+                rungs[cohort.rung].carried_txs += share;
+                rungs[cohort.rung].fees_atomic += share * cohort.fee;
                 self.taken[index] += share;
                 self.waiting[index].count -= share;
             }
@@ -572,7 +557,7 @@ impl BlockSpace {
     /// Build the block at `height` under `medians` — what [`Self::medians`]
     /// returned for it — from the pool and the block's `arrivals`, each
     /// rung's ordinary transaction priced at `at`, admitted in the order
-    /// given, then record it.
+    /// given ([`Rung::ADMISSION`]), then record it.
     pub(crate) fn fill(
         &mut self,
         height: u64,
@@ -583,9 +568,11 @@ impl BlockSpace {
         let limit = Limits::of_block_limit(medians.limit(at.params).to_raw()).max_weight;
         let expired = self.expire(height);
         let mut evicted = PerRung::<u64>::default();
-        let mut refused = PerRung::<u64>::default();
+        let mut rungs = PerRung::<RungTraffic<u64>>::default();
         for &arrival in arrivals {
-            refused[arrival.rung] += self.admit(
+            let rung = &mut rungs[arrival.rung];
+            rung.demand_txs += arrival.count;
+            rung.refused_txs += self.admit(
                 height,
                 arrival,
                 limit,
@@ -604,31 +591,29 @@ impl BlockSpace {
             at.params,
         )
         .expect("sim trajectory stays within the reward's arithmetic domain");
-        let mut rungs = PerRung::<RungBlock>::default();
         self.offer(&mut fill, height, &mut rungs);
         self.trim(limit, &mut evicted);
         self.drop_empty();
         for rung in Rung::ALL {
-            rungs[rung].expired = expired[rung];
-            rungs[rung].evicted = evicted[rung];
-            rungs[rung].refused = refused[rung];
+            rungs[rung].expired_txs = expired[rung];
+            rungs[rung].evicted_txs = evicted[rung];
         }
-        assert_eq!(
-            rungs.iter().map(|r| r.fees).sum::<u64>(),
-            fill.fees(),
-            "every listed fee is some rung's"
-        );
 
         let weight = fill.block_weight();
         self.medians.push(medians, weight, at.params);
-        Filled {
+        let filled = Filled {
             rungs,
             waiting: self.waiting_total,
             paid_reward: fill.reward(),
             block_weight: weight,
             bodies_weight: fill.bodies_weight(),
-            fees: fill.fees(),
-        }
+        };
+        assert_eq!(
+            filled.fees_atomic(),
+            fill.fees(),
+            "every listed fee is some rung's"
+        );
+        filled
     }
 }
 

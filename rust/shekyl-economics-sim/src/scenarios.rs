@@ -21,6 +21,17 @@ fn default_stake_schedule() -> StakeSchedule {
 /// this, and [`all_scenarios`] lists that scenario first.
 pub const BASELINE_STEADY_STATE: &str = "baseline_steady_state";
 
+/// The other scenarios' names, in [`all_scenarios`]' order. Every reader
+/// that selects a scenario by name reads it from here.
+pub const BOOM_BUST_CYCLE: &str = "boom_bust_cycle";
+pub const SUSTAINED_GROWTH: &str = "sustained_growth";
+pub const STUFFING_ATTACK: &str = "stuffing_attack";
+pub const STAKE_CONCENTRATION: &str = "stake_concentration";
+pub const MASS_UNSTAKING: &str = "mass_unstaking";
+pub const CHAIN_BOOTSTRAP: &str = "chain_bootstrap";
+pub const LATE_CHAIN_TAIL: &str = "late_chain_tail";
+pub const HIGH_HISTORY_LOW_ACTIVITY: &str = "high_history_low_activity";
+
 pub fn scenario_1_baseline(params: &SimParams) -> ScenarioConfig {
     let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
@@ -40,7 +51,7 @@ pub fn scenario_1_baseline(params: &SimParams) -> ScenarioConfig {
 pub fn scenario_2_boom_bust(params: &SimParams) -> ScenarioConfig {
     let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
-        name: "boom_bust_cycle".into(),
+        name: BOOM_BUST_CYCLE.into(),
         description: "3x volume for 1 year, then 0.3x for 1 year, repeating over 10 years".into(),
         sim_years: 10,
         volume: VolumeSchedule {
@@ -63,7 +74,7 @@ pub fn scenario_2_boom_bust(params: &SimParams) -> ScenarioConfig {
 pub fn scenario_3_sustained_growth(params: &SimParams) -> ScenarioConfig {
     let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
-        name: "sustained_growth".into(),
+        name: SUSTAINED_GROWTH.into(),
         description: "Volume increasing 20% per year for 20 years".into(),
         sim_years: 20,
         volume: VolumeSchedule {
@@ -83,7 +94,7 @@ pub fn scenario_3_sustained_growth(params: &SimParams) -> ScenarioConfig {
 pub fn scenario_4_stuffing_attack(params: &SimParams) -> ScenarioConfig {
     let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
-        name: "stuffing_attack".into(),
+        name: STUFFING_ATTACK.into(),
         description: "20% hash power miner generating 5x fake volume for 30 days (blocks 0-21600), then normal".into(),
         sim_years: 2,
         volume: VolumeSchedule {
@@ -108,7 +119,7 @@ pub fn scenario_4_stuffing_attack(params: &SimParams) -> ScenarioConfig {
 pub fn scenario_5_stake_concentration(params: &SimParams) -> ScenarioConfig {
     let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
-        name: "stake_concentration".into(),
+        name: STAKE_CONCENTRATION.into(),
         description: "Single entity staking 30% of supply throughout 10 years".into(),
         sim_years: 10,
         volume: VolumeSchedule {
@@ -126,7 +137,7 @@ pub fn scenario_5_stake_concentration(params: &SimParams) -> ScenarioConfig {
 pub fn scenario_6_mass_unstaking(params: &SimParams) -> ScenarioConfig {
     let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
-        name: "mass_unstaking".into(),
+        name: MASS_UNSTAKING.into(),
         description: "80% of stakers unlock within 25,000 blocks (~35 days) at year 3".into(),
         sim_years: 5,
         volume: VolumeSchedule {
@@ -158,7 +169,7 @@ pub fn scenario_6_mass_unstaking(params: &SimParams) -> ScenarioConfig {
 pub fn scenario_7_bootstrap(params: &SimParams) -> ScenarioConfig {
     let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
-        name: "chain_bootstrap".into(),
+        name: CHAIN_BOOTSTRAP.into(),
         description:
             "First 2 years from genesis with very low organic transaction volume (10% of baseline)"
                 .into(),
@@ -195,7 +206,7 @@ pub fn scenario_7_bootstrap(params: &SimParams) -> ScenarioConfig {
 
 pub fn scenario_8_late_tail(params: &SimParams) -> ScenarioConfig {
     ScenarioConfig {
-        name: "late_chain_tail".into(),
+        name: LATE_CHAIN_TAIL.into(),
         description: "95%+ supply already emitted, high burn, fee-market-dominated economy over 5 years (starting at ~year 30)".into(),
         sim_years: 5,
         volume: VolumeSchedule {
@@ -246,7 +257,7 @@ pub const SCENARIO_9_TAIL_TX_PER_BLOCK: u64 = 15;
 /// with the assessment's run set (`ECONOMY_UMBRELLA_PLAN.md` §4.1).
 pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConfig {
     ScenarioConfig {
-        name: "high_history_low_activity".into(),
+        name: HIGH_HISTORY_LOW_ACTIVITY.into(),
         description: "post-boom settled chain: a large shard corpus accreted in an early boom, then a low-activity tail over 60 years (the staker emission leg decayed to ~0.002 of its share; the curve still mints ~24 SKL/block at year 60) — the §11.2 quadrant where escalation is decisive".into(),
         sim_years: 60,
         volume: VolumeSchedule {

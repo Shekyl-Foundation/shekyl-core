@@ -167,16 +167,16 @@ fn a_waiting_transaction_keeps_the_fee_it_was_built_with() {
     let mut space = BlockSpace::default();
     let built = baseline_tx();
     let first = space.fill(1_000, space.medians(params), &standard(100, built), &point);
-    assert!(first.included() < 100, "some of it waits");
+    assert!(first.carried_txs() < 100, "some of it waits");
     let later = OrdinaryTx {
         fee_atomic: built.fee_atomic * 2,
         ..built
     };
     let second = space.fill(1_001, space.medians(params), &standard(0, later), &point);
-    assert!(second.included() > 0);
+    assert!(second.carried_txs() > 0);
     assert_eq!(
-        second.fees,
-        second.included() * built.fee_atomic,
+        second.fees_atomic(),
+        second.carried_txs() * built.fee_atomic,
         "the listed bodies pay the fee they were built with"
     );
 }
@@ -231,7 +231,7 @@ fn the_cohort_walk_is_the_templates_walk_over_every_transaction() {
         let mut cohort_fill = empty();
         let mut rungs = PerRung::default();
         space.offer(&mut cohort_fill, 1_000, &mut rungs);
-        let included: u64 = rungs.iter().map(|r: &RungBlock| r.included).sum();
+        let included: u64 = rungs.sum(|r| r.carried_txs);
 
         let mut every = every_transaction(pool);
         every.sort_by(|a, b| a.0.template(b.0));
@@ -484,7 +484,7 @@ fn the_block_takes_what_the_rule_admits_and_the_rest_waits_then_expires() {
         &point,
     );
     assert_eq!(
-        (small.included(), space.waiting()),
+        (small.carried_txs(), space.waiting()),
         (5, 0),
         "five fit under the zone"
     );
@@ -497,13 +497,16 @@ fn the_block_takes_what_the_rule_admits_and_the_rest_waits_then_expires() {
         &standard(demand, baseline_tx()),
         &point,
     );
-    assert_eq!(full.sum(|r| r.refused), 0, "the pool holds it");
-    assert!(full.included() < demand, "the rule refuses past the median");
+    assert_eq!(full.rungs.sum(|r| r.refused_txs), 0, "the pool holds it");
+    assert!(
+        full.carried_txs() < demand,
+        "the rule refuses past the median"
+    );
     assert_total_is_the_pool(&space);
-    assert_eq!(space.waiting(), demand - full.included());
+    assert_eq!(space.waiting(), demand - full.carried_txs());
 
     let horizon = PROOF_VALIDITY_HORIZON.to_raw();
-    let mut drained = full.included();
+    let mut drained = full.carried_txs();
     let last_listable = start + horizon;
     for height in start + 2..=last_listable {
         let block = space.fill(
@@ -513,11 +516,11 @@ fn the_block_takes_what_the_rule_admits_and_the_rest_waits_then_expires() {
             &point,
         );
         assert_eq!(
-            block.sum(|r| r.expired),
+            block.rungs.sum(|r| r.expired_txs),
             0,
             "nothing has left the window at {height}"
         );
-        drained += block.included();
+        drained += block.carried_txs();
         assert_total_is_the_pool(&space);
     }
     let last = space.fill(
@@ -526,10 +529,13 @@ fn the_block_takes_what_the_rule_admits_and_the_rest_waits_then_expires() {
         &standard(0, baseline_tx()),
         &point,
     );
-    assert!(last.sum(|r| r.expired) > 0, "the rest has left the window");
-    assert_eq!(last.included(), 0, "dropped before the block is filled");
+    assert!(
+        last.rungs.sum(|r| r.expired_txs) > 0,
+        "the rest has left the window"
+    );
+    assert_eq!(last.carried_txs(), 0, "dropped before the block is filled");
     assert_eq!(
-        drained + last.sum(|r| r.expired),
+        drained + last.rungs.sum(|r| r.expired_txs),
         demand,
         "every transaction is served or dropped"
     );
@@ -586,7 +592,7 @@ fn the_three_rung_walk_is_the_templates_walk_rung_by_rung() {
         };
         let mut space = space_of(pool);
         let mut cohort_fill = empty();
-        let mut rungs = PerRung::<RungBlock>::default();
+        let mut rungs = PerRung::<RungTraffic<u64>>::default();
         space.offer(&mut cohort_fill, 1_000, &mut rungs);
 
         let mut every = every_transaction(pool);
@@ -602,7 +608,7 @@ fn the_three_rung_walk_is_the_templates_walk_rung_by_rung() {
         }
         for rung in Rung::ALL {
             assert_eq!(
-                (rungs[rung].included, rungs[rung].fees),
+                (rungs[rung].carried_txs, rungs[rung].fees_atomic),
                 naive_rungs[rung],
                 "case {case}: {rung:?}"
             );
@@ -659,11 +665,46 @@ fn a_full_pool_drops_the_cheapest_rung_and_counts_it() {
     assert_total_is_the_pool(&space);
 }
 
-/// The order one block's arrivals are admitted in moves a drop's label, not
-/// the pool: Economy admitted first and evicted by Standard leaves the pool
-/// that Economy refused after Standard leaves (§5.29).
+/// What a pool holds after a block's arrivals, and what they dropped.
+struct Admitted {
+    /// The pool's entries, in its order: rung, fee, count.
+    held: Vec<(Rung, u64, u64)>,
+    evicted: PerRung<u64>,
+    refused: PerRung<u64>,
+}
+
+impl Admitted {
+    fn rungs(&self) -> Vec<Rung> {
+        self.held.iter().map(|&(rung, ..)| rung).collect()
+    }
+}
+
+/// Admits each of `order`'s arrivals in turn into a pool holding `pool`
+/// under `limit`.
+fn admit_in_order(pool: &[Cohort], order: &[Arrival], limit: u64) -> Admitted {
+    let mut space = space_of(pool);
+    let mut evicted = PerRung::default();
+    let mut refused = PerRung::<u64>::default();
+    for &a in order {
+        refused[a.rung] += space.admit(2_000, a, limit, 120, &mut evicted);
+    }
+    assert_total_is_the_pool(&space);
+    Admitted {
+        held: space
+            .waiting
+            .iter()
+            .map(|c| (c.rung, c.fee, c.count))
+            .collect(),
+        evicted,
+        refused,
+    }
+}
+
+/// At equal weights the order one block's arrivals reach the pool moves a
+/// drop's label, not the pool: Economy admitted first and evicted by
+/// Standard leaves the pool that Economy refused after Standard leaves.
 #[test]
-fn the_admission_order_relabels_a_drop_and_leaves_the_pool() {
+fn at_equal_weights_the_admission_order_relabels_a_drop_and_leaves_the_pool() {
     let weight = 10;
     let pool = [rung_cohort(Rung::Standard, 4_000, weight, 70, 3)];
     let limit = 80 * weight;
@@ -674,31 +715,74 @@ fn the_admission_order_relabels_a_drop_and_leaves_the_pool() {
     };
     let economy = arrival(Rung::Economy, 6, 1_000);
     let standard_arrival = arrival(Rung::Standard, 7, 3_990);
-    let run = |order: [Arrival; 2]| {
-        let mut space = space_of(&pool);
-        let mut evicted = PerRung::default();
-        let mut refused = PerRung::<u64>::default();
-        for a in order {
-            refused[a.rung] += space.admit(2_000, a, limit, 120, &mut evicted);
-        }
-        let held: Vec<(Rung, u64, u64)> = space
-            .waiting
-            .iter()
-            .map(|c| (c.rung, c.fee, c.count))
-            .collect();
-        (held, evicted, refused)
-    };
-    let (richest_first, evicted_a, refused_a) = run([standard_arrival, economy]);
-    let (cheapest_first, evicted_b, refused_b) = run([economy, standard_arrival]);
-    assert_eq!(richest_first, cheapest_first, "the same pool either way");
+    let richest_first = admit_in_order(&pool, &[standard_arrival, economy], limit);
+    let cheapest_first = admit_in_order(&pool, &[economy, standard_arrival], limit);
     assert_eq!(
-        (evicted_a[Rung::Economy], refused_a[Rung::Economy]),
+        richest_first.held, cheapest_first.held,
+        "the same pool either way"
+    );
+    assert_eq!(
+        (
+            richest_first.evicted[Rung::Economy],
+            richest_first.refused[Rung::Economy]
+        ),
         (0, 3),
         "richest first: Economy refused"
     );
     assert_eq!(
-        (evicted_b[Rung::Economy], refused_b[Rung::Economy]),
+        (
+            cheapest_first.evicted[Rung::Economy],
+            cheapest_first.refused[Rung::Economy]
+        ),
         (3, 0),
         "cheapest first: Economy admitted, then evicted"
+    );
+}
+
+/// At unequal weights the order can change the pool, which is why
+/// [`Rung::ADMISSION`] is a declared assumption. A 20-byte pool holds a
+/// 10-byte Standard entry. Priority (11 bytes) first evicts Standard, and
+/// Economy (9 bytes) then fits beside it. Economy first fits beside
+/// Standard, and Priority then evicts both, the cheapest first, until it
+/// fits.
+#[test]
+fn at_unequal_weights_the_admission_order_can_change_the_pool() {
+    let pool = [rung_cohort(Rung::Standard, 4_000, 10, 1, 3)];
+    let limit = 20;
+    let economy = Arrival {
+        rung: Rung::Economy,
+        count: 1,
+        tx: OrdinaryTx {
+            fee_atomic: 900,
+            weight: 9,
+        },
+    };
+    let priority = Arrival {
+        rung: Rung::Priority,
+        count: 1,
+        tx: OrdinaryTx {
+            fee_atomic: 50_000,
+            weight: 11,
+        },
+    };
+    let richest_first = admit_in_order(&pool, &[priority, economy], limit);
+    let cheapest_first = admit_in_order(&pool, &[economy, priority], limit);
+    assert_eq!(
+        richest_first.rungs(),
+        [Rung::Priority, Rung::Economy],
+        "richest first: Priority and Economy"
+    );
+    assert_eq!(
+        cheapest_first.rungs(),
+        [Rung::Priority],
+        "cheapest first: Priority alone"
+    );
+    assert_eq!(
+        (
+            cheapest_first.evicted[Rung::Economy],
+            cheapest_first.evicted[Rung::Standard]
+        ),
+        (1, 1),
+        "cheapest first: Priority evicts both"
     );
 }

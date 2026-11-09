@@ -70,8 +70,7 @@ pub(crate) struct PricedBlock<'a> {
     /// The Standard rung's ordinary transaction at this block: the one the
     /// growth gate reads.
     pub(crate) tx: OrdinaryTx,
-    /// The block's demand on each rung, split by the run's mix.
-    pub(crate) demand: PerRung<u64>,
+    /// The block's fill, its traffic on each rung, demand included.
     pub(crate) filled: Filled,
     /// The block as production prices it, at the weight the fill reports:
     /// the bodies and the coinbase reserve, which the node's template passes
@@ -151,14 +150,14 @@ impl ChainCursor {
         let filled = self
             .space
             .fill(step.chain_height, medians, &arrivals, &fee_point);
-        self.window.push(filled.included());
+        self.window.push(filled.carried_txs());
         let paid = price_emission(&EmissionInputs {
             height: step.chain_height,
             median_weight: medians.effective_median.to_raw(),
             block_weight: filled.block_weight,
             already_generated: generated,
             tx_volume: volume,
-            total_fees: filled.fees,
+            total_fees: filled.fees_atomic(),
             supply,
             closed_shards: step.closed_shards,
             params: economic,
@@ -177,7 +176,6 @@ impl ChainCursor {
             emission_share: share,
             fee_point,
             tx,
-            demand,
             filled,
             paid,
         }
@@ -220,7 +218,7 @@ mod tests {
             );
             generated = generated.saturating_add(u128::from(priced.paid_reward()));
             burned = burned.saturating_add(u128::from(priced.paid.fee_burn.actually_destroyed));
-            leaves = leaves.saturating_add(priced.filled.included().saturating_mul(2));
+            leaves = leaves.saturating_add(priced.filled.carried_txs().saturating_mul(2));
         }
     }
 
@@ -272,7 +270,7 @@ mod tests {
             }
             generated = generated.saturating_add(u128::from(priced.paid_reward()));
             burned = burned.saturating_add(u128::from(priced.paid.fee_burn.actually_destroyed));
-            leaves = leaves.saturating_add(priced.filled.included().saturating_mul(2));
+            leaves = leaves.saturating_add(priced.filled.carried_txs().saturating_mul(2));
         }
         assert!(
             off_the_shipped_lattice > 0,
@@ -300,7 +298,7 @@ mod tests {
             economic,
         );
         assert_eq!(first.volume, TxVolume::window(0, 0));
-        assert_eq!(first.filled.included(), 5, "five fit under the zone");
+        assert_eq!(first.filled.carried_txs(), 5, "five fit under the zone");
         let second = chain.price(
             ChainStep {
                 chain_height: 1,

@@ -218,7 +218,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
 
         // Fee leg — identical under both dispositions. The burn read the net
         // supply inside the cursor.
-        outputs.accrue(priced.filled.included());
+        outputs.accrue(priced.filled.carried_txs());
 
         // Real ledger advance uses the composition's paid reward (both arms share it).
         let paid_reward = priced.paid_reward();
@@ -238,7 +238,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         emission_a_acc += staker_emission_a as u128;
         emission_b_acc += staker_emission_b as u128;
         fee_acc += fee_split.staker_pool_amount as u128;
-        vol_sum += u128::from(priced.filled.included());
+        vol_sum += u128::from(priced.filled.carried_txs());
         mult_sum += multiplier as u128;
         mult_min = mult_min.min(multiplier);
         blocks_in_epoch += 1;

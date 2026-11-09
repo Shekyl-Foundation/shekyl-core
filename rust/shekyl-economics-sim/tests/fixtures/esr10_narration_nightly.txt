@@ -10,7 +10,7 @@ ARMS:
 CELLS: x1.000 all-Standard, x1.250 all-Standard, x1.352 all-Standard (m*), x1.500 all-Standard, x2.000 all-Standard, x3.000 all-Standard, 15/80/5 x1.000, 15/85/0 x1.000.
   m* = ceil(1000 theta(y1)/rho(y1)) on the inherited arm's year 1. Mixes are Economy/Standard/Priority
   percent; demand splits by largest remainder on the cumulative target, and one block's arrivals are
-  admitted Priority, Standard, Economy (a drop's label, not the pool; §5.29).
+  admitted Priority, Standard, Economy: a declared order, which can move the pool (§5.29).
 CEILING (umbrella §4, ratified 2026-11-06): the year-1 Standard fee <= 0.05% of the year-1 mean block
   reward on the design curve = 496289839 atomic (0.4963 SKL). The year-1 Standard fee is the Standard
   fees carried in year 1 over the Standard transactions carried.
