@@ -337,12 +337,12 @@ census_rows! {
         // what `held_by_store` names; `enforced_at` would be a site here.
         A1 held_by_store("shekyl-chain-ingest", "an_arrival_this_node_holds_is_already_held"),
         A2 implemented(crate::rules::topology::A2),
-        // A3: subsumed by B4's empty-witness arm — never its own rule
-        // (slice 1 Q3). The validator has no witness-less entry to guard:
-        // `Candidate::attestation_witness` is the one door, and B4 judges
-        // `None` as the empty preimage against the header root, so a
-        // non-empty root with nothing supplied refuses as B4 (slice 8
-        // row 10). The second guard the C++ needed is unrepresentable.
+        // A3: subsumed by B4's empty-section arm — never its own rule
+        // (slice 1 Q3). The validator has no sidecar-less entry to guard:
+        // `Candidate::bundle_references` is the one door, and B4 judges
+        // `None` as the empty section against the header root, so a
+        // non-empty root with nothing supplied refuses as B4. The second
+        // guard the C++ needed is unrepresentable.
         A3 by_construction(crate::block::Candidate, "cen_b4_non_empty_root_with_nothing_supplied_is_refused"),
         A4 held_by_store("shekyl-chain-ingest", "an_arrival_whose_parent_is_unheld_is_unlinked_and_not_stored"),
         // A6/A7: wire invariants (R8 arm B), held by `Block::from_bytes`:
@@ -602,7 +602,7 @@ census_rows! {
         K3 held_by_store("shekyl-chain-store", "insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals"),
         K4 enforced_at(crate::rules::alt::K4, "the_cheap_tier_evaluates_the_header_ladder_and_the_alt_arms_and_nothing_else"),
         K5 held_by_store("shekyl-chain-ingest", "a_promoted_block_that_fails_validate_rolls_back_and_removes_its_suffix"),
-        K5b held_by_store("shekyl-chain-ingest", "a_tampered_witness_on_an_alt_row_fails_promotion_k5b"),
+        K5b held_by_store("shekyl-chain-ingest", "tampered_references_on_an_alt_row_fail_promotion_k5b"),
         K6 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
         K7 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
         K8 held_by_store("shekyl-chain-store", "an_alt_row_has_no_supply_word"),

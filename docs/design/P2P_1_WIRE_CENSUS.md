@@ -402,6 +402,16 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 > `rust/shekyl-chain-sync-runtime/src/bundles.rs`). A bundle is fluffed:
 > it has no Dandelion++ stem, because `0x0C` already makes its author
 > public. Caps and their derivations are `SHEKYL_P2P_PROTOCOL.md` PWD-B3.
+>
+> **UPDATE 2026-11-09 — PWC-C4's field is `bundle_references` (the switch's
+> C2; `ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5).** A block's sidecar is its
+> section: an array of strings, one undecoded reference each, the key
+> omitted when the block admits no bundle. It is bounded **at the codec**,
+> as PWC-C4 required of the witness, by count: at most
+> `MAX_BUNDLE_REFERENCES` (500, `W₂`'s ruled upper edge), refused past that
+> on encode and on decode. The witness and its 885,000-byte cap are gone. The
+> same key carries the references on the sync bodies (2014). A reference that
+> does not parse is CEN-J29's refusal of the block, not a framing fault.
 
 > **Ruled 2026-09-09 — `SHEKYL_P2P_PROTOCOL.md` PWD-B6: 2001 `NOTIFY_NEW_BLOCK` is deleted, so eight notify commands survive, not nine.** Both were one handler at this pin; the command id was the only distinction. Live identifiers: `NOTIFY_NEW_COMPACT_BLOCK` (2008) and `NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009). `P2P_SUPPORT_FLAG_FLUFFY_BLOCKS` (0x01) fell with 2001; 0x01 is unassigned.
 

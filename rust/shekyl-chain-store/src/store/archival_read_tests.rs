@@ -17,7 +17,7 @@ use shekyl_chain_rules::{AtHeight, SlashLogFloor};
 use shekyl_store_codec::Coded;
 use shekyl_types::archival::{
     BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
-    SettlementRow, SupportIssued, BLOCK_DRAWS_LEN, MAX_ATTESTATION_WITNESS_BYTES,
+    SettlementRow, SupportIssued, BLOCK_DRAWS_LEN, MAX_SECTION_REFERENCES,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -27,15 +27,15 @@ use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{tmp, EPOCH};
 use super::*;
 use crate::codec::{
-    ArchivalLastSlashEpochCell, AttestationWitnessBytes, BondRecord, Canonical, Holdings, Present,
+    ArchivalLastSlashEpochCell, BondRecord, BundleReferencesBytes, Canonical, Holdings, Present,
     PropertyCell, RMarket, Raw, SigmaWorkMilli, SlashLogEntry, SlashedHolding,
 };
 use crate::ids::{
     IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey, SupportIssuedKey,
 };
 use crate::schema::{
-    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
-    ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
+    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
+    ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
     ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT,
     ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_ISSUED,
     ARCHIVAL_SUPPORT_SETTLEMENT,
@@ -510,70 +510,67 @@ fn a9_absent_is_none_never_a_sentinel() {
 }
 
 // ---------------------------------------------------------------------------
-// A10 — the attestation witness
+// A10 — the bundle references
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a10_tells_above_tip_from_a_recorded_block_with_no_witness_from_one_with() {
+fn a10_tells_above_tip_from_a_recorded_block_with_no_references_from_one_with() {
+    let section =
+        shekyl_types::archival::BundleReferences::new(vec![vec![0xab, 0xcd]]).expect("a section");
     let path = tmp("arch-a10");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     connect_chain(&store, &[vec![], vec![], vec![]]); // tip 2
     drop(store);
     plant(&path, |txn| {
-        let mut t = txn.open_table(ARCHIVAL_ATTESTATION_WITNESS).expect("t");
-        t.insert(1u64, Raw::<AttestationWitnessBytes>::new(&[0xab, 0xcd]))
+        let mut t = txn.open_table(ARCHIVAL_BUNDLE_REFERENCES).expect("t");
+        t.insert(1u64, Raw::<BundleReferencesBytes>::new(&section.encode()))
             .expect("insert");
     });
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
     assert_eq!(
-        snap.attestation_witness_at(BlockHeight::from_raw(1))
-            .unwrap(),
-        AtHeight::Recorded(Some(vec![0xab, 0xcd]))
+        snap.bundle_references_at(BlockHeight::from_raw(1)).unwrap(),
+        AtHeight::Recorded(Some(section))
     );
     assert_eq!(
-        snap.attestation_witness_at(BlockHeight::from_raw(2))
-            .unwrap(),
+        snap.bundle_references_at(BlockHeight::from_raw(2)).unwrap(),
         AtHeight::Recorded(None),
-        "a recorded block whose attestation set was empty has no row"
+        "a recorded block that admitted no bundle has no row"
     );
     assert_eq!(
-        snap.attestation_witness_at(BlockHeight::from_raw(3))
-            .unwrap(),
+        snap.bundle_references_at(BlockHeight::from_raw(3)).unwrap(),
         AtHeight::AboveTip
     );
 }
 
 #[test]
-fn a10_an_empty_or_over_cap_row_is_si7() {
+fn a10_a_row_that_is_not_a_section_is_si7() {
     let path = tmp("arch-a10-ill");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     connect_chain(&store, &[vec![], vec![]]); // tip 1
     drop(store);
     plant(&path, |txn| {
-        let mut t = txn.open_table(ARCHIVAL_ATTESTATION_WITNESS).expect("t");
-        t.insert(0u64, Raw::<AttestationWitnessBytes>::new(&[]))
+        let mut t = txn.open_table(ARCHIVAL_BUNDLE_REFERENCES).expect("t");
+        t.insert(0u64, Raw::<BundleReferencesBytes>::new(&[]))
             .expect("insert");
-        t.insert(
-            1u64,
-            Raw::<AttestationWitnessBytes>::new(&vec![0xab; MAX_ATTESTATION_WITNESS_BYTES + 1]),
-        )
-        .expect("insert");
+        let over = u32::try_from(MAX_SECTION_REFERENCES + 1).expect("fits");
+        t.insert(1u64, Raw::<BundleReferencesBytes>::new(&over.to_le_bytes()))
+            .expect("insert");
     });
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
     let empty = snap
-        .attestation_witness_at(BlockHeight::from_raw(0))
+        .bundle_references_at(BlockHeight::from_raw(0))
         .unwrap_err();
     assert!(
-        is_si7_undecodable(&empty, "archival_attestation_witness"),
+        is_si7_undecodable(&empty, "archival_bundle_references"),
         "{empty}"
     );
     let over = snap
-        .attestation_witness_at(BlockHeight::from_raw(1))
+        .bundle_references_at(BlockHeight::from_raw(1))
         .unwrap_err();
     assert!(
-        is_si7_undecodable(&over, "archival_attestation_witness"),
+        is_si7_undecodable(&over, "archival_bundle_references"),
         "{over}"
     );
 }
@@ -1128,8 +1125,8 @@ fn archival_snapshot_is_every_family_as_rows_with_the_projections_applied() {
         let mut b = txn.open_table(ARCHIVAL_BUDGET).expect("t");
         b.insert(3u64, AtomicUnits::from_raw(9).encoded().as_encoded())
             .expect("insert");
-        let mut a = txn.open_table(ARCHIVAL_ATTESTATION_WITNESS).expect("t");
-        a.insert(1u64, Raw::<AttestationWitnessBytes>::new(&[1, 2, 3]))
+        let mut a = txn.open_table(ARCHIVAL_BUNDLE_REFERENCES).expect("t");
+        a.insert(1u64, Raw::<BundleReferencesBytes>::new(&section_bytes()))
             .expect("insert");
         plant_slash(txn, 1, 0, &entry);
         let mut s = txn.open_table(ARCHIVAL_SLASH_APPLIED).expect("t");
@@ -1160,7 +1157,7 @@ fn archival_snapshot_is_every_family_as_rows_with_the_projections_applied() {
         .unwrap();
     want.push_budget(epoch(3), AtomicUnits::from_raw(9))
         .unwrap();
-    want.push_attestation_witness(BlockHeight::from_raw(1), &[1, 2, 3])
+    want.push_bundle_references(BlockHeight::from_raw(1), &section_bytes())
         .unwrap();
     want.push_slash_log(BlockHeight::from_raw(1), 0, &entry)
         .unwrap();
@@ -1313,4 +1310,11 @@ fn a19_an_all_zero_drawable_digest_is_a_digest_not_an_absence() {
     // bytes are a digest, so the table cannot hold a row the codec refuses.
     drop(snap);
     drop(store);
+}
+
+/// A one-reference section as the store holds it.
+fn section_bytes() -> Vec<u8> {
+    shekyl_types::archival::BundleReferences::new(vec![vec![1, 2, 3]])
+        .expect("a section")
+        .encode()
 }

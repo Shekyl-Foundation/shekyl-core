@@ -3,18 +3,16 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Fixtures for CEN-B4 as the switch's C1 leaves it: the coinbase extra
-//! parses, the attestation set is empty, and the header commits the empty
-//! bundle root. The positive pin is that the pipeline *judges* every
-//! fixture's empty set (B4 is in coverage); the negatives are a root that
-//! is not the empty bundle root, an unreadable coinbase extra (refused
-//! here, before I20 can see it), a header blob or witness that does not
-//! parse, a zero-count sidecar, and a signed pass record under either
-//! root: the header no longer commits to records (`SCS-P34`), so a record
-//! has nothing that binds it. The record arm's own refusals (no anchor
-//! window, no bond, a hole in the window, a non-canonical bond key) left
-//! with the arm; a pass is judged by the bundle's receipts (CEN-J37) from
-//! C3.
+//! Fixtures for CEN-B4 as the switch's C2 leaves it: the coinbase extra
+//! parses, its attestation set is empty, the block carries no bundle
+//! references, and the header commits the empty bundle root. The positive
+//! pin is that the pipeline *judges* every fixture's empty section (B4 is
+//! in coverage); the negatives are a root that is not the empty bundle
+//! root, an unreadable coinbase extra (refused here, before I20 can see
+//! it), a header blob that does not parse, a signed pass record under
+//! either root (the header commits to bundles, `SCS-P34`, so a record has
+//! nothing that binds it), and a block carrying references even under
+//! their own root: admission is not live until C3.
 
 use super::*;
 use crate::block::Candidate;
@@ -28,13 +26,13 @@ use crate::validate::validate;
 use crate::verdict::{Locus, Verdict};
 use crate::view::{AtHeight, HeaderView};
 use shekyl_archival_retention::{
-    attestation_root, empty_bundle_root, p_canonical_id_from_hybrid_pubkey,
-    pass_countersignature_message, AttestationHeader, AttestationKind, BlockAttestationWitness,
-    PassRecord, PassWitness, ATTESTATION_HEADER_LEN, PASS_NONCE_LEN,
+    attestation_root, bundle_root, empty_bundle_root, p_canonical_id_from_hybrid_pubkey,
+    pass_countersignature_message, AttestationHeader, AttestationKind, BundleKept, BundleRef,
+    PassBitmap, PassRecord, ATTESTATION_HEADER_LEN, PASS_NONCE_LEN,
 };
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::{HybridSignature, SCHEME_DOMAIN_ATTESTATION};
-use shekyl_types::archival::AttestationWitness;
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockHeight, BundleRoot};
 use shekyl_wire::tx_extra::{parse, serialize, TxExtraField};
 
@@ -71,11 +69,10 @@ fn with_coinbase_field(mut candidate: Candidate, field: TxExtraField) -> Candida
 
 /// A pass record signed by a fixture persona (seed-derived, the same
 /// signer every archival fixture uses) over the SF-D8 transcript for the
-/// connecting chain's hash at `anchor`, and the header, witness and root
-/// a block carrying exactly that record commits.
+/// connecting chain's hash at `anchor`, and the header and attestation
+/// root a block carrying exactly that record committed before the switch.
 struct SignedRecord {
     header: Vec<u8>,
-    witness: AttestationWitness,
     root: [u8; 32],
 }
 
@@ -109,7 +106,7 @@ fn signed_record(chain: &MockChain, anchor: BlockHeight) -> SignedRecord {
         nonce: NONCE,
         anchor_height: anchor,
         delivery_digest: DIGEST,
-        signature: signature.clone(),
+        signature,
     };
     let header = AttestationHeader {
         p_id,
@@ -117,40 +114,43 @@ fn signed_record(chain: &MockChain, anchor: BlockHeight) -> SignedRecord {
         settlement_epoch: EPOCH,
         kind: AttestationKind::Pass,
     };
-    let witness = BlockAttestationWitness {
-        passes: vec![PassWitness {
-            nonce: NONCE,
-            anchor_height: anchor,
-            delivery_digest: DIGEST,
-            signature,
-        }],
-    }
-    .to_canonical_bytes()
-    .expect("witness bytes");
     SignedRecord {
         header: header.to_canonical_bytes().to_vec(),
-        witness: AttestationWitness::new(witness).expect("a non-empty witness"),
         root: attestation_root(std::slice::from_ref(&record)).expect("root"),
     }
 }
 
 /// A candidate on `chain` carrying exactly `record`: the header in the
-/// coinbase extra, the witness beside the block, the root in the header.
+/// coinbase extra, the record's root in the header.
 fn carrying(chain: &MockChain, record: SignedRecord) -> Candidate {
     let candidate = with_coinbase_field(
         candidate_on(chain, Vec::new()),
         TxExtraField::ArchivalAttestation(record.header),
     );
-    with_root(candidate, record.root).with_attestation_witness(Some(record.witness))
+    with_root(candidate, record.root)
 }
 
-// --- the empty-witness arm (A3) ------------------------------------------
+/// A well-formed reference to a zero-draw bundle for `h`.
+fn reference_for(h: u64) -> BundleRef {
+    let none = PassBitmap::new(0, &[]).expect("an empty bitmap");
+    BundleRef::new(
+        BundleKept {
+            h: BlockHeight::from_raw(h),
+            seed: [0x5E; 32],
+            passes: none.clone(),
+            support: none,
+        },
+        [0x77; 32],
+    )
+}
+
+// --- the empty section (A3) ----------------------------------------------
 
 #[test]
 fn cen_b4_empty_set_against_the_empty_root_is_a_judged_pass() {
     let chain = chain_of(3);
     let candidate = candidate_on(&chain, Vec::new());
-    assert!(candidate.attestation_witness.is_none());
+    assert!(candidate.bundle_references.is_none());
     assert_eq!(
         candidate.block.header.bundle_root.as_bytes(),
         &empty_bundle_root()
@@ -164,12 +164,12 @@ fn cen_b4_empty_set_against_the_empty_root_is_a_judged_pass() {
     });
     assert!(
         valid.contains(CenRow::B4),
-        "B4 is always evaluated — no sidecar is the empty witness, judged"
+        "B4 is always evaluated — no sidecar is the empty section, judged"
     );
 }
 
-/// The A3 falsifier: a root that is not the empty set's, with no sidecar
-/// and no `0x0B` field, is refused here — at B4, by the recompute.
+/// The A3 falsifier: a root that is not the empty section's, with no
+/// sidecar and no `0x0B` field, is refused here — at B4.
 #[test]
 fn cen_b4_non_empty_root_with_nothing_supplied_is_refused() {
     let chain = chain_of(3);
@@ -224,32 +224,37 @@ fn cen_b4_header_blob_not_whole_records_is_refused() {
     assert_refused(check_alone_on(&chain, &candidate), CenRow::B4, Locus::Block);
 }
 
-#[test]
-fn cen_b4_witness_that_does_not_decode_is_refused() {
-    let chain = chain_of(3);
-    let candidate = candidate_on(&chain, Vec::new())
-        .with_attestation_witness(Some(AttestationWitness::new(vec![0xEE; 7]).expect("bytes")));
-    assert_refused(check_alone_on(&chain, &candidate), CenRow::B4, Locus::Block);
-}
+// --- references, before admission is live -------------------------------
 
-/// The empty set's one carrier is `None`. A sidecar spelling it as an
-/// eight-byte zero count would pass the root recompute and reach the store
-/// as a present row for a block whose peers record none — so the block is
-/// refused here, by the codec's canonical form, not recorded.
+/// A block that carries references is refused, even under the root those
+/// references make: no block admits a bundle until C3 replaces this half
+/// of B4 with the section check and the verifier. Red edit: drop the
+/// references check — the block under its own root is admitted.
 #[test]
-fn cen_b4_zero_count_sidecar_is_refused_not_recorded() {
+fn cen_b4_a_block_with_references_is_refused_until_admission_is_live() {
     let chain = chain_of(3);
-    let bytes = 0u64.to_le_bytes().to_vec();
-    assert!(BlockAttestationWitness::from_canonical_bytes(&bytes).is_err());
-    let candidate = candidate_on(&chain, Vec::new())
-        .with_attestation_witness(Some(AttestationWitness::new(bytes).expect("bytes")));
-    assert_eq!(
-        candidate.block.header.bundle_root.as_bytes(),
-        &empty_bundle_root(),
-        "the root alone would admit it: the refusal is the canonical form's"
+    let reference = reference_for(1);
+    let own_root = bundle_root(std::slice::from_ref(&reference)).expect("one reference");
+    let references =
+        BundleReferences::new(vec![reference.encode()]).expect("one non-empty reference");
+    let under_its_own = with_root(candidate_on(&chain, Vec::new()), own_root)
+        .with_bundle_references(Some(references));
+    assert_refused(
+        check_alone_on(&chain, &under_its_own),
+        CenRow::B4,
+        Locus::Block,
     );
-    assert_refused(check_alone_on(&chain, &candidate), CenRow::B4, Locus::Block);
-    assert_refused(judge_on(&chain, candidate), CenRow::B4, Locus::Block);
+    assert_refused(
+        judge_on(&chain, under_its_own.clone()),
+        CenRow::B4,
+        Locus::Block,
+    );
+    let under_empty = with_root(under_its_own, empty_bundle_root());
+    assert_refused(
+        check_alone_on(&chain, &under_empty),
+        CenRow::B4,
+        Locus::Block,
+    );
 }
 
 /// A signed pass record is refused whatever the header's root: under the

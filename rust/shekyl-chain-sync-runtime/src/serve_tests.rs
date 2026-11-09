@@ -20,7 +20,7 @@ fn body(bytes: usize) -> BlockBody {
     BlockBody {
         block: vec![0; bytes],
         txs: Vec::new(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
     }
 }
 

@@ -272,8 +272,8 @@ pub fn block_with_nonce(
             previous,
             nonce,
             curve_tree_root: root,
-            // The empty set's root: a block carrying no witness is judged
-            // against it (CEN-B4, slice 8 row 10).
+            // The empty section's root: a block carrying no references is
+            // judged against it (CEN-B4).
             bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
         },
         miner_transaction,

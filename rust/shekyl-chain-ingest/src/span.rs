@@ -22,6 +22,7 @@ use shekyl_chain_rules::{
 use shekyl_chain_store::store::{AltCannot, SnapshotView, StoreCannot, StoreError};
 use shekyl_hash_budget::{Class, Permit};
 use shekyl_mempool::{stateless, Admission, Duplicate, Pool, PoolFault};
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Block, Transaction};
 use tokio::sync::oneshot;
@@ -44,8 +45,8 @@ struct Parsed {
     bodies: Vec<Transaction>,
     /// How this arrival is formed. A judged proof is not hashed here.
     proof: Proof,
-    /// The witness carried beside the block.
-    witness: Option<shekyl_types::archival::AttestationWitness>,
+    /// The bundle references carried beside the block.
+    references: Option<BundleReferences>,
 }
 
 impl Parsed {
@@ -98,7 +99,7 @@ fn parse(accepted: Accepted) -> Result<Parsed, (ReplySlot, ArrivalTag, InvalidBl
         block,
         bodies,
         proof,
-        witness,
+        references,
     } = accepted;
     let refused = |rule| InvalidBlock::new(rule, shekyl_chain_rules::Locus::Block);
     let Ok(block) = Block::from_bytes(&block) else {
@@ -111,14 +112,10 @@ fn parse(accepted: Accepted) -> Result<Parsed, (ReplySlot, ArrivalTag, InvalidBl
         };
         parsed.push(tx);
     }
-    // A witness that is not one is CEN-B4's: the block cannot carry it.
-    let witness = if witness.is_empty() {
-        None
-    } else {
-        match shekyl_types::archival::AttestationWitness::new(witness) {
-            Ok(witness) => Some(witness),
-            Err(_) => return Err((slot, tag, refused(shekyl_chain_rules::CenRow::B4))),
-        }
+    // References that are not a section are CEN-B4's: the block cannot
+    // carry them. What each reference says is the validator's to open.
+    let Ok(references) = BundleReferences::from_sidecar(references) else {
+        return Err((slot, tag, refused(shekyl_chain_rules::CenRow::B4)));
     };
     Ok(Parsed {
         slot,
@@ -126,7 +123,7 @@ fn parse(accepted: Accepted) -> Result<Parsed, (ReplySlot, ArrivalTag, InvalidBl
         block,
         bodies: parsed,
         proof,
-        witness,
+        references,
     })
 }
 
@@ -153,7 +150,7 @@ fn assemble(parsed: &Parsed, pool: Option<&Pool>) -> Result<Candidate, Vec<usize
     }
     listed.extend(carried.into_iter().flatten().cloned());
     Ok(Candidate::new(parsed.block.clone(), listed)
-        .with_attestation_witness(parsed.witness.clone()))
+        .with_bundle_references(parsed.references.clone()))
 }
 
 /// Work one accepted span.

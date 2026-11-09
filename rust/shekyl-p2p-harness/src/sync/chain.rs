@@ -138,9 +138,8 @@ impl Corpus {
     ///
     /// # Panics
     ///
-    /// The corpus does not read, or a block carries an attestation
-    /// witness: the door's arrival does not carry one, so such a corpus is
-    /// not connected this way.
+    /// The corpus does not read, or a block carries bundle references:
+    /// these steps offer none, so such a corpus is not connected this way.
     #[must_use]
     pub fn steps(&self) -> Vec<Step> {
         self.steps_through(self.tip_height)
@@ -165,8 +164,8 @@ impl Corpus {
                 IngestEvent::Extend(candidate) => {
                     blocks += 1;
                     assert!(
-                        candidate.attestation_witness.is_none(),
-                        "{}: a block with a witness",
+                        candidate.bundle_references.is_none(),
+                        "{}: a block with bundle references",
                         self.shape
                     );
                     steps.push(Step::Block {
@@ -275,7 +274,7 @@ impl Chain {
                             origin: Origin::Local,
                             block: block.clone(),
                             bodies: bodies.clone(),
-                            attestation_witness: Vec::new(),
+                            bundle_references: Vec::new(),
                         }) {
                             Ok(ticket) => break ticket,
                             Err(_) => tokio::task::yield_now().await,

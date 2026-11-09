@@ -493,7 +493,7 @@ fn a_reply_is_the_arrival_it_was_tagged_with() {
         let body = BlockBody {
             block: raw,
             txs: Vec::new(),
-            attestation_witness: Vec::new(),
+            bundle_references: Vec::new(),
         };
         out = drive(
             &mut sync,
@@ -557,7 +557,7 @@ fn a_reply_is_the_arrival_it_was_tagged_with() {
                     bodies: vec![BlockBody {
                         block: raw2,
                         txs: Vec::new(),
-                        attestation_witness: Vec::new(),
+                        bundle_references: Vec::new(),
                     }],
                     deferred: Vec::new(),
                     missed_ids: Vec::new(),

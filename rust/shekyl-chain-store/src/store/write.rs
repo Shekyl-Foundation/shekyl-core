@@ -175,7 +175,6 @@ pub struct WriteBatch<'store, 'id> {
 /// | `CumulativeDifficultyNotMonotone { at }` | `WorkNotIncreasing { height: at }` (SI-10) |
 /// | `CumulativeDifficultyOverflow` | `FoldOverflow { cell: "block_info.cumulative_difficulty" }` (SI-8) |
 /// | `BondRecordInvariant { which, .. }` | `CellCorrupt { key: "archival_bond", .. }` with `which` as the reason (SI-7) |
-/// | `BondHybridKeyMalformed { .. }` | `CellCorrupt { key: "archival_bond", .. }` the hybrid key is not canonical (SI-7) |
 /// | `AccrualOverflow { .. }` | `FoldOverflow { cell: "archival_budget_accruing" }` (SI-8) |
 /// | `SettlementIntegrity { epoch, check }` | `SettlementNotSound { epoch, .. }` with `check` as the fault (SI-25), except the drawable set's two checks below |
 /// | `SettlementIntegrity { epoch, check: DrawableDigestMissing }` | `DrawableDigestNotSingular { epoch, observed: Missing }` (SI-29) |
@@ -350,19 +349,6 @@ pub fn invariant_of(corrupt: Corrupt) -> StoreInvariant {
                         "bonded_total is below one bond floor at a slash"
                     }
                 },
-            }),
-        },
-        // CEN-B4 read a bond record whose hybrid key is not the
-        // canonical grammar. The record is bytes; the key type lives
-        // above `shekyl-types`, so the cell can hold a key admission
-        // would not have written. That is SI-7 on `archival_bond`, the
-        // same cell as a fold invariant, and a different reason: the
-        // key does not decode.
-        Corrupt::BondHybridKeyMalformed { persona: _ } => StoreInvariant::CellCorrupt {
-            key: "archival_bond",
-            fault: CellFault::Undecodable(CodecError::Invalid {
-                codec: "bond_record",
-                reason: "the hybrid public key is not canonical",
             }),
         },
         // The open epoch's accruing budget plus this block's inflow does

@@ -177,6 +177,12 @@ pub const W2_MIN_DEFENSIBLE_BLOCKS: u64 = 200;
 /// Upper edge of the W₂ band — see [`W2_MIN_DEFENSIBLE_BLOCKS`].
 pub const W2_MAX_DEFENSIBLE_BLOCKS: u64 = 500;
 
+// A section names each `h` at most once and every `h` inside the window, so
+// it holds at most `W₂` references: the bound the type that carries a
+// block's references beside it enforces at construction.
+const _: () =
+    assert!(shekyl_types::archival::MAX_SECTION_REFERENCES as u64 == W2_MAX_DEFENSIBLE_BLOCKS);
+
 // The epoch's couplings to W₂ — a multiple of the divisor, W₂ inside the
 // ruled band, the grace covering W₂ — are `ArchivalParams::validate`'s, and
 // the shipped set is const-asserted to pass it (`params.rs`). A re-pin of the

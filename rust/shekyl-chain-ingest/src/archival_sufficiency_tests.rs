@@ -128,9 +128,9 @@ const fn witness(family: ArchivalFamily) -> Witness {
             shape: "spend-1in-2out",
             rows: SnapshotFamily::BudgetAccruing,
         },
-        ArchivalFamily::AttestationWitness => Witness::Unwitnessed {
-            rows: SnapshotFamily::AttestationWitness,
-            why: "no captured chain carries an attestation transaction",
+        ArchivalFamily::BundleReferences => Witness::Unwitnessed {
+            rows: SnapshotFamily::BundleReferences,
+            why: "no captured block admits a bundle",
         },
         ArchivalFamily::SlashLog => Witness::Unwitnessed {
             rows: SnapshotFamily::SlashLog,

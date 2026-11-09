@@ -235,7 +235,7 @@ impl<'id, V> AltValid<'id, V> {
     }
 
     /// The block as received: header, miner transaction, listed bodies
-    /// and the attestation witness beside it.
+    /// and the bundle references beside it.
     #[must_use]
     pub const fn candidate(&self) -> &Candidate {
         &self.candidate

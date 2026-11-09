@@ -95,11 +95,9 @@ DEFAULT_SRC = REPO / "rust" / "shekyl-chain-rules" / "src"
 # when a rule is added here: that every site *propagates* that read's
 # `Corrupt`, and none consumes one.
 CORRUPT_CAPABLE: dict[str, str] = {
-    # `rules/attestation.rs`: `anchor_window` lifts a hole in the predecessor's
-    # anchor window (through `recorded`) to `Corrupt::HoleBelowTip`;
-    # `committed_hybrid_key` lifts a stored bond key the grammar rejects to
-    # `Corrupt::BondHybridKeyMalformed`.
-    "B4": "anchor_window through recorded; committed_hybrid_key",
+    # Empty: no block rule reads a view in a way that can halt the writer.
+    # CEN-B4's record arm was the last (`SO-D12` 4b, C1); a rule that gains
+    # a `Corrupt` path is added here, with the read its halt comes from.
 }
 
 # Fewer rule impls than this, summed over every derived form, and the walk did

@@ -107,8 +107,8 @@ use super::{Canonical, CodecError};
 ///   → `Present` (the 56-byte pack becomes a component-wise key);
 ///   `archival_r_market` → `(u64, u64) → Coded<RMarket>`;
 ///   `archival_sigma_work` → `Coded<SigmaWorkMilli>`; `archival_budget` →
-///   `Coded<AtomicUnits>`; `archival_attestation_witness` →
-///   `Blob<AttestationWitnessBytes>`; and `properties` gains the
+///   `Coded<AtomicUnits>`; `archival_bundle_references` →
+///   `Blob<BundleReferencesBytes>`; and `properties` gains the
 ///   `archival_last_slash_epoch` cell. Five codec fixtures are born
 ///   (`bond_record`, `r_market`, `sigma_work_milli`, `settlement_epoch`,
 ///   `shard_id`). The digest's families do not move (§7.1.1 excludes
@@ -396,9 +396,14 @@ use super::{Canonical, CodecError};
 ///   `SCS-P34`): the header's last 32 bytes are the bundle root, a root
 ///   over the references of the bundles a block admits, and every
 ///   network's genesis commits the empty section's root, so every genesis
-///   hash and network id moved. No codec's bytes move here; a `35` file
-///   holds a chain whose genesis no network has. A `35` file is refused at
-///   open. Rebuild from the block corpus, as at every bump.
+///   hash and network id moved. The block's sidecar becomes its bundle
+///   references (§7.5): `archival_attestation_witness` is
+///   `archival_bundle_references`, keyed by height as before, its value
+///   `BundleReferences::encode` (a length-framed section) where it was
+///   witness bytes, and `alt_block`'s optional witness is the same section.
+///   The table keeps its ordinal; the digest's family keeps its position.
+///   A `35` file is refused at open. Rebuild from the block corpus, as at
+///   every bump.
 ///
 /// [`FamilySet`]: crate::family_set::FamilySet
 pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(36);

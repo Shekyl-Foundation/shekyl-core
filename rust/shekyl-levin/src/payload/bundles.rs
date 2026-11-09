@@ -35,14 +35,9 @@ pub const NOTIFY_REQUEST_BUNDLE_BODIES: u32 = 2016;
 /// `NOTIFY_RESPONSE_BUNDLE_BODIES`: the bodies held, each with its hash.
 pub const NOTIFY_RESPONSE_BUNDLE_BODIES: u32 = 2017;
 
-/// The most hashes one body request names: one block's references.
-///
-/// A section's references all lie in the window `h < h_incl ≤ h + W₂`
-/// (CEN-J31), so a section holds at most `W₂` of them, and `W₂` is at most
-/// `W2_MAX_DEFENSIBLE_BLOCKS` (500) on every rule set
-/// `ArchivalParams::validate` admits. A test pins the two together, since
-/// this crate does not depend on the retention crate.
-pub const MAX_BUNDLE_BODY_REQUEST_COUNT: u64 = 500;
+/// The most hashes one body request names: one block's references,
+/// [`MAX_BUNDLE_REFERENCES`](super::block::MAX_BUNDLE_REFERENCES).
+pub const MAX_BUNDLE_BODY_REQUEST_COUNT: u64 = super::block::MAX_BUNDLE_REFERENCES as u64;
 
 /// Encoded cap of [`RequestBundleBodies`].
 pub const CAP_REQUEST_BUNDLE_BODIES: u64 = hash_list_cap(MAX_BUNDLE_BODY_REQUEST_COUNT);
@@ -166,8 +161,9 @@ mod tests {
     use super::*;
 
     /// The request's count is one block's references, and that is `W₂`'s
-    /// ruled upper edge. Red edit: re-pin the W₂ band's top without this
-    /// constant — this assertion names the drift.
+    /// ruled upper edge (the retention crate const-asserts the section
+    /// bound against it). Red edit: change the section bound — this
+    /// assertion names the drift.
     #[test]
     fn a_body_request_names_at_most_one_sections_references() {
         assert_eq!(

@@ -3,21 +3,22 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Census 4.B — CEN-B4, the block's root and its attestation set, as the
-//! switch's first commit leaves them (`SO-D12` 4b, C1).
+//! Census 4.B — CEN-B4, the block's root and its sidecar, as the switch's
+//! second commit leaves them (`SO-D12` 4b, C2).
 //!
 //! The header's root is the **bundle root** (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
 //! §7.3, `SCS-P34`): it commits to the references of the bundles the block
-//! admits, not to pass records. Until blocks carry references (C2) every
-//! block admits none, so the root is [`empty_bundle_root`] and this rule
-//! holds the header to it. The attestation set beside the block still
-//! parses here — the coinbase extra, its `0x0B` headers and the sidecar
-//! witness — and must be empty: the header no longer commits to a record,
-//! so a record has nothing that binds it. CEN-I20's coinbase grammar
-//! already admitted no `0x0B` field, so no block that connected before
-//! this commit carried one; the record arm that judged them, and its
-//! anchor window, are gone with the root they were bound by. The bundle's
-//! receipts (CEN-J37) are what a pass is judged by from C3.
+//! admits. The references travel beside the block (§7.5), undecoded, in
+//! [`Candidate::bundle_references`](crate::Candidate::bundle_references).
+//! Admission is not live until C3, so a block admits no bundle: it carries
+//! **no references**, and its root is [`empty_bundle_root`]. A block with
+//! references is refused here until C3 replaces this half of the rule
+//! with the section check (CEN-J29 onward) and the bundle verifier.
+//!
+//! The coinbase extra still parses here, and its attestation set (the
+//! `0x0B` headers, with no witness beside them) must be empty: the header
+//! commits to no record, so a record has nothing that binds it. CEN-I20's
+//! coinbase grammar already admits no `0x0B` field.
 //!
 //! **Order.** After D1 and before the slot loop (`validate`): a coinbase
 //! whose extra does not parse is refused **here**, not at CEN-I20 — the
@@ -32,8 +33,8 @@ use crate::rules::{BlockContext, BlockRule, Rule};
 use crate::verdict::{Locus, Verdict};
 use crate::view::ChainView;
 
-/// CEN-B4: the coinbase extra parses, the attestation set it and the
-/// sidecar witness make is empty, and the header's root is the empty
+/// CEN-B4: the coinbase extra parses, its attestation set is empty, the
+/// block carries no bundle references, and the header's root is the empty
 /// bundle root (module docs). Every refusal is this row at
 /// [`Locus::Block`].
 pub(crate) struct B4;
@@ -45,8 +46,9 @@ impl Rule for B4 {
 impl B4 {
     /// The whole rule, and stateless: it reads no view, so `bind_body`
     /// runs it on a body before the block connects. An extra that does not
-    /// parse is refused, never read as empty.
-    pub(crate) fn bind_root(extra: &[u8], witness: &[u8], root: &[u8; 32]) -> Verdict<()> {
+    /// parse is refused, never read as empty. `references` is the sidecar,
+    /// empty when the block carries none.
+    pub(crate) fn bind_root(extra: &[u8], references: &[Vec<u8>], root: &[u8; 32]) -> Verdict<()> {
         let refused = || Err(crate::verdict::InvalidBlock::new(Self::ROW, Locus::Block));
         let Ok(fields) = parse(extra) else {
             return refused();
@@ -58,10 +60,10 @@ impl B4 {
                 _ => None,
             })
             .unwrap_or(&[]);
-        let Ok(set) = AttestationSet::parse(headers, witness) else {
+        let Ok(set) = AttestationSet::parse(headers, &[]) else {
             return refused();
         };
-        if !set.records().is_empty() || *root != empty_bundle_root() {
+        if !set.records().is_empty() || !references.is_empty() || *root != empty_bundle_root() {
             return refused();
         }
         Ok(())
@@ -74,13 +76,13 @@ impl BlockRule for B4 {
         _view: &V,
     ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let candidate = cx.candidate();
-        let witness: &[u8] = candidate
-            .attestation_witness
+        let references: &[Vec<u8>] = candidate
+            .bundle_references
             .as_ref()
-            .map_or(&[], |w| w.as_bytes());
+            .map_or(&[], |references| references.as_slice());
         Ok(Self::bind_root(
             &candidate.block.miner_transaction.prefix.extra,
-            witness,
+            references,
             candidate.block.header.bundle_root.as_bytes(),
         ))
     }

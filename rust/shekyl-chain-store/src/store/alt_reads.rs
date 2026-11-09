@@ -56,7 +56,7 @@ pub(super) const ALT_BODIES_MISMATCH: &str = "alt block bodies are not the ones 
 pub struct AltEntry {
     /// The block's hash — the table key, checked against [`AltBlock::block`].
     pub id: BlockHash,
-    /// Bookkeeping, the parsed block, and the witness.
+    /// Bookkeeping, the parsed block, and its bundle references.
     pub block: AltBlock,
 }
 
@@ -237,8 +237,8 @@ pub(super) fn alt_block_bodies<T: ReadTables>(
 /// Alt-chain reads on a committed snapshot. The bodies above are the ones
 /// the batch calls too (`store/alt.rs`).
 impl ReadSnapshot<'_> {
-    /// **AL4.** `alt_blocks[id]`: bookkeeping, the parsed block, and the
-    /// witness. `None` is "not an alt block".
+    /// **AL4.** `alt_blocks[id]`: bookkeeping, the parsed block, and its
+    /// bundle references. `None` is "not an alt block".
     ///
     /// A row that does not decode is SI-7. A row whose block does not hash
     /// to `id` is the same fault: the key is the block's identity, and the

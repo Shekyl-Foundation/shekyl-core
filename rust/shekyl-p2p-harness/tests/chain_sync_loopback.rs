@@ -409,11 +409,11 @@ async fn a_substituted_body_closes_the_supplier_and_the_header_survives() {
     substituted("subst-body", Bodies::SubstituteBody, "Bind(G2)").await;
 }
 
-/// A witness that is not the block's closes the supplier at CEN-B4; the
+/// References that are not the block's close the supplier at CEN-B4; the
 /// header survives.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_substituted_witness_closes_the_supplier_and_the_header_survives() {
-    substituted("subst-witness", Bodies::SubstituteWitness, "Bind(B4)").await;
+async fn substituted_references_close_the_supplier_and_the_header_survives() {
+    substituted("subst-refs", Bodies::SubstituteReferences, "Bind(B4)").await;
 }
 
 async fn substituted(tag: &str, bodies: Bodies, expected: &str) {
@@ -775,7 +775,7 @@ async fn a_locator_hash_held_only_as_an_alternative_is_skipped() {
             origin: Origin::Local,
             block: sibling.serialize(),
             bodies,
-            attestation_witness: Vec::new(),
+            bundle_references: Vec::new(),
         })
         .expect("room");
     let reply = ticket.reply().await.reply;

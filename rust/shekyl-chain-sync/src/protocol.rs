@@ -99,7 +99,7 @@ pub enum Event<K> {
     Announce {
         /// The session.
         session: K,
-        /// The block, its transactions, and its attestation witness.
+        /// The block, its transactions, and its bundle references.
         body: BlockBody,
     },
     /// The executor's answer to a Prove command this model will issue.
@@ -363,8 +363,9 @@ pub struct OfferedBody {
     pub block: Vec<u8>,
     /// Listed transactions, whole encodings, in the block's order.
     pub txs: Vec<Vec<u8>>,
-    /// The witness beside the block. Empty when the set is empty.
-    pub attestation_witness: Vec<u8>,
+    /// The bundle references beside the block, undecoded. Empty when the
+    /// block admits no bundle.
+    pub bundle_references: Vec<Vec<u8>>,
 }
 
 impl OfferedBody {
@@ -381,7 +382,7 @@ impl OfferedBody {
         Some(Self {
             block: body.block.clone(),
             txs,
-            attestation_witness: body.attestation_witness.clone(),
+            bundle_references: body.bundle_references.clone(),
         })
     }
 }

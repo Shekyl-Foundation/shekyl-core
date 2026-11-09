@@ -7,7 +7,7 @@
 //! `DRS_E4_ARCHIVAL_WRITER.md` §3.2; `ARW-Q1` RULED: the verdict derives
 //! the transition, the store records it). The bodies of the `[E4 hook]`s
 //! in `connect`'s phase list: the bond records and serve credits after the
-//! transactions (phase 2), the attestation witness (phase 5), the slash
+//! transactions (phase 2), the bundle references (phase 5), the slash
 //! burn folded into `total_burned` (phase 8), and the accrual, the slashes
 //! and the epoch close (phase 9).
 //!
@@ -26,7 +26,7 @@
 //! ```text
 //!  2.  records   archival_bond[p] = post-image — Insert (SI-19) / Replace (SI-20)
 //!      credits   archival_serve_credit[(p, s, E, h)] = Present      (SI-15)
-//!  5.  witness   archival_attestation_witness[h] = bytes, non-empty only
+//!  5.  refs      archival_bundle_references[h] = section, non-empty only
 //!  8.  burn      total_burned += emission burn + Σ slash burns       (SI-8)
 //!  9a. accrual   archival_budget_accruing[E] = total — or, at E's close,
 //!                the row is removed                                 (SI-23)
@@ -105,21 +105,21 @@
 
 use shekyl_chain_rules::{ArchivalDelta, ChainValid, ChainView, RecordWriteKind};
 use shekyl_network::{Lever, Permit};
-use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest};
+use shekyl_types::archival::{BundleReferences, IndexedDraw, IssuedDigest};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::apply_policy::ArchivalFamily;
 use crate::codec::{
-    ArchivalLastSlashEpochCell, AttestationWitnessBytes, Canonical, Present, PropertyCell, Raw,
+    ArchivalLastSlashEpochCell, BundleReferencesBytes, Canonical, Present, PropertyCell, Raw,
     TotalBurnedCell,
 };
 use crate::ids::{
     IssuedDrawKey, ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey,
 };
 use crate::schema::{
-    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
-    ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
+    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
+    ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
     ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET,
     ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
     ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_SETTLEMENT, BLOCK_BURN,
@@ -198,8 +198,8 @@ impl<'id> WriteBatch<'_, 'id> {
     /// `archival_release_journal[(h, p)] = pre-image` for every Release the
     /// block connects: the record as it stood before the Release, beside
     /// the post-image [`Self::write_bond_records`] wrote (`SO-D12`
-    /// increment 2). Insert-once on the tip's height, as the attestation
-    /// witness is (SI-2): a row already under `(h, p)` is a connect at the
+    /// increment 2). Insert-once on the tip's height, as the bundle
+    /// references are (SI-2): a row already under `(h, p)` is a connect at the
     /// wrong height, since a persona releases once. Governed with the
     /// records it is the pre-image of, by `ArchivalFamily::Bond`; `pop`
     /// removes it through the journal.
@@ -257,29 +257,29 @@ impl<'id> WriteBatch<'_, 'id> {
         Ok(())
     }
 
-    /// Phase 5: `archival_attestation_witness[h] = witness` when the
-    /// verdict carries one. An empty set is no row — the type cannot hold
-    /// one ([`AttestationWitness::new`]), so the absence is `None` here.
-    /// Insert-once per height on the tip's row (SI-2): a row already at
-    /// `h` is a connect at the wrong height.
-    pub(super) fn record_attestation_witness(
+    /// Phase 5: `archival_bundle_references[h] = references` when the
+    /// verdict carries any. No references is no row — the type cannot hold
+    /// an empty section ([`BundleReferences::new`]), so the absence is
+    /// `None` here. Insert-once per height on the tip's row (SI-2): a row
+    /// already at `h` is a connect at the wrong height.
+    pub(super) fn record_bundle_references(
         &self,
         height: u64,
-        witness: Option<&AttestationWitness>,
+        references: Option<&BundleReferences>,
     ) -> Result<(), StoreError> {
-        let Some(witness) = witness else {
+        let Some(references) = references else {
             return Ok(());
         };
         if !self
             .apply_policy()
-            .applies(ArchivalFamily::AttestationWitness)
+            .applies(ArchivalFamily::BundleReferences)
         {
             return Ok(());
         }
-        self.open_insert_table(ARCHIVAL_ATTESTATION_WITNESS, StoreInvariant::TipMismatch)?
+        self.open_insert_table(ARCHIVAL_BUNDLE_REFERENCES, StoreInvariant::TipMismatch)?
             .insert(
                 height,
-                Raw::<AttestationWitnessBytes>::new(witness.as_bytes()),
+                Raw::<BundleReferencesBytes>::new(&references.encode()),
             )?;
         Ok(())
     }

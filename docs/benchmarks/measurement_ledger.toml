@@ -724,6 +724,7 @@ stale_through = [
   { through = "c0f6274413", note = "transport: the inbound reservation that skipped the accept-rate gate is deleted; harness tables are built with no gate and take accept_clearnet. The listener's accept checks the ban, the ceilings and the rate in the same order as before; no dial, handshake or gap I/O changes. Not re-measured." },
   { through = "623fa03dce", note = "Each connector publishes an admitted socket through a callback in place of the shared admission channel. The library listener still sends on that channel (publish_on), at the same point after the channel exists. The dial, the handshake and the gap do the same I/O, and no span constant moved. Not re-measured. The rows stay stale for the reasons already recorded." },
   { through = "63fcdd9d25", note = "profile.rs: the doc comment on Tor's δ names its 60 s basis as shekyl-p2p-session's TIMED_SYNC_MIN plus half TIMED_SYNC_JITTER, in place of the deleted C++ P2P_DEFAULT_HANDSHAKE_INTERVAL. A comment only; no dial, handshake, gap or shutdown wait changes. Not measured; the rows stay stale." },
+  { through = "a1ed698f8b", note = "The switch's C0 (bundle transport, 2015-2017): sizes.rs gains the bundle_relay traffic class for the three new commands, a name in the per-class byte tally. No dial, handshake or gap I/O changes. Not re-measured." },
 ]
 
 [[constant]]
@@ -936,6 +937,7 @@ stale_through = [
   { through = "f7d958bf2f", note = "SB-Q2 (#1239): ScannableBlock.transactions is Vec<BoundTx>, a body bound to its txid, in place of Vec<Transaction>; the scan takes each body out of its binding with into_tx(), a move. No decapsulation, prefilter or output check is added, removed or reordered, and the rest of the commit is in the wallet and the wire crate. Not re-measured." },
   { through = "ec931d5858", note = "kem::SeedDerivation, a seed derivation the scan path never calls, left the crate (one derivation, NI-R7). The decapsulation and output scan this measures are unchanged. Not re-measured." },
   { through = "7e78ae17bf", note = "In this path set, output.rs deletes compute_output_key_image_from_ho, the key-image entry whose one reader was a deleted FFI export, and its two tests. The scan path calls scan_output_recover and compute_output_key_image, which are unchanged; no decapsulation, derivation or comparison on it is added, removed or reordered. Not re-measured; the rows stay stale." },
+  { through = "4a22840849", note = "The switch's C1: scan.rs renames the header field attestation_root to bundle_root in two test-block fixtures and fills it with the empty bundle root. Decapsulation and the output scan are unchanged. Not re-measured." },
 ]
 
 [[constant]]

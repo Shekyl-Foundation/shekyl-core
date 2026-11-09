@@ -24,8 +24,8 @@
 //!   (SAR-8).
 //! - **A9** [`last_settled_slash_epoch`] — the `properties` cell, `Option`
 //!   where the C++ returned `u64::MAX`.
-//! - **A10** [`attestation_witness_at`] — a recorded block's witness bytes,
-//!   with the two absences the C++ collapsed into one empty blob told apart.
+//! - **A10** [`bundle_references_at`] — a recorded block's bundle
+//!   references, with "no references" and "above the tip" told apart.
 //!
 //! The transition's own reads (DRS-E4 commit 4; `DRS_E4_ARCHIVAL_WRITER.md`
 //! §3.2 phase 9) — over every record, or over a table only the scan reads:
@@ -76,9 +76,9 @@
 //!   place the C++ kept them apart (`has_budget_row`) and is unchanged in
 //!   meaning.
 //! - **`u64::MAX` as "none"** (A9) — gone by the type.
-//! - **An empty witness and an unrecorded height** (A10) — the writer stores
-//!   no row for an empty attestation set, so a recorded block with no row
-//!   is `Recorded(None)`; a height past the tip is `AboveTip`. What a
+//! - **No references and an unrecorded height** (A10) — the writer stores
+//!   no row for a block that admits no bundle, so a recorded block with no
+//!   row is `Recorded(None)`; a height past the tip is `AboveTip`. What a
 //!   *pruned* height reads as is S-PRUNE's to say when it deletes anything
 //!   here; until a prune exists the two states are exhaustive.
 //!
@@ -129,24 +129,24 @@ use shekyl_chain_rules::{
     Settling, SlashLogFloor,
 };
 use shekyl_store_codec::{BlobKind, CodecError};
-use shekyl_types::archival::SettlementOutcome;
 pub use shekyl_types::archival::{
     BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw,
     LoggedSlash, PassCount, ReleasedRecord, ServedShard, SettlementRow, SupportIssued,
     SupportSeats,
 };
+use shekyl_types::archival::{BundleReferences, SettlementOutcome};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::archival_snapshot::{ArchivalSnapshot, SnapshotFamily, SnapshotFault};
-use crate::codec::{AttestationWitnessBytes, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry};
+use crate::codec::{BondRecord, BundleReferencesBytes, RMarket, SigmaWorkMilli, SlashLogEntry};
 use crate::ids::{
     IssuedDrawKey, ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey,
     SupportIssuedKey,
 };
 use crate::schema::{
-    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
-    ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
+    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
+    ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
     ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET,
     ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
     ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_ISSUED,
@@ -207,8 +207,8 @@ fn kept<F: EpochFamily>(
         None => Ok(()),
     }
 }
-/// The `archival_attestation_witness` cell as faults name it.
-const WITNESS: &str = "archival_attestation_witness";
+/// The `archival_bundle_references` cell as faults name it.
+const REFERENCES: &str = "archival_bundle_references";
 /// The `archival_release_journal` cell as faults name it.
 const RELEASE_JOURNAL: &str = "archival_release_journal";
 
@@ -498,40 +498,37 @@ pub(super) fn budget<T: ReadTables>(
     chain_reads::cell(txn, ARCHIVAL_BUDGET, epoch.to_raw(), BUDGET)
 }
 
-/// **A10.** A recorded block's attestation witness bytes. `AboveTip` for a
-/// height the chain has not reached; `Recorded(None)` for a recorded block
-/// whose attestation set was empty (the writer stores no row for it);
-/// `Recorded(Some(bytes))` for a row [`AttestationWitnessBytes`] accepts
-/// (non-empty, within [`MAX_ATTESTATION_WITNESS_BYTES`](shekyl_types::archival::MAX_ATTESTATION_WITNESS_BYTES)).
-/// An empty or over-cap row is SI-7. The store does not parse the witness
-/// (`shekyl-archival-retention::attestation_wire` does).
-pub(super) fn attestation_witness_at<T: ReadTables>(
+/// **A10.** A recorded block's bundle references. `AboveTip` for a height
+/// the chain has not reached; `Recorded(None)` for a recorded block that
+/// admitted no bundle (the writer stores no row for it);
+/// `Recorded(Some(references))` for a row that decodes as a section
+/// ([`BundleReferences::decode`]). Any other row is SI-7. The references
+/// themselves are not opened here (`shekyl-chain-rules` does).
+pub(super) fn bundle_references_at<T: ReadTables>(
     txn: &T,
     height: BlockHeight,
-) -> Result<AtHeight<Option<Vec<u8>>>, ReadFault> {
+) -> Result<AtHeight<Option<BundleReferences>>, ReadFault> {
     let h = height.to_raw();
     match chain_reads::tip_of(txn)? {
         Some((tip, _)) if h <= tip => {}
         _ => return Ok(AtHeight::AboveTip),
     }
-    let table = txn.table(ARCHIVAL_ATTESTATION_WITNESS)?;
+    let table = txn.table(ARCHIVAL_BUNDLE_REFERENCES)?;
     let Some(guard) = table.get(h)? else {
         return Ok(AtHeight::Recorded(None));
     };
-    let bytes = guard.value().bytes();
-    // `Blob::bytes` does not run the kind's check. An empty row is the
-    // absence this read already spells as `Recorded(None)`; a present empty
-    // or over-cap row is a value the writer is not allowed to store.
-    AttestationWitnessBytes::well_formed(bytes).map_err(|reason| {
+    // `Blob::bytes` does not run the kind's check: the decode is it. A row
+    // that is not a section is a value the writer is not allowed to store.
+    let references = BundleReferences::decode(guard.value().bytes()).map_err(|_| {
         undecodable(
-            WITNESS,
+            REFERENCES,
             CodecError::Invalid {
-                codec: AttestationWitnessBytes::NAME,
-                reason,
+                codec: BundleReferencesBytes::NAME,
+                reason: "not a stored section of bundle references",
             },
         )
     })?;
-    Ok(AtHeight::Recorded(Some(bytes.to_vec())))
+    Ok(AtHeight::Recorded(Some(references)))
 }
 
 /// **A11.** Every `archival_bond` row, decoded, in key order — the redb
@@ -839,8 +836,8 @@ pub(super) fn complete_trees<T: ReadTables>(
 ///
 /// Two of the constructors' refusals are reachable from a store and are
 /// invariants, not snapshot faults: a second `archival_budget_accruing` row
-/// is SI-23 ([`StoreInvariant::AccruingNotSingular`]); an empty or over-cap
-/// witness row is SI-7, as in A10. The others (a duplicate key, a key of
+/// is SI-23 ([`StoreInvariant::AccruingNotSingular`]); a references row
+/// that is not a section is SI-7, as in A10. The others (a duplicate key, a key of
 /// the wrong width, a slash-log epoch marker) cannot arise from typed
 /// tables with unique keys and a log the writer never marks; they are
 /// mapped to SI-7 against the family so a reader is never left without a
@@ -902,20 +899,20 @@ pub(super) fn snapshot_rows<T: ReadTables>(txn: &T) -> Result<ArchivalSnapshot, 
             .push_budget(SettlementEpoch::from_raw(key.value()), budget)
             .map_err(|f| refused(&f))?;
     }
-    for row in txn.table(ARCHIVAL_ATTESTATION_WITNESS)?.iter()? {
+    for row in txn.table(ARCHIVAL_BUNDLE_REFERENCES)?.iter()? {
         let (key, value) = row?;
         let bytes = value.value().bytes();
-        AttestationWitnessBytes::well_formed(bytes).map_err(|reason| {
+        BundleReferencesBytes::well_formed(bytes).map_err(|reason| {
             undecodable(
-                WITNESS,
+                REFERENCES,
                 CodecError::Invalid {
-                    codec: AttestationWitnessBytes::NAME,
+                    codec: BundleReferencesBytes::NAME,
                     reason,
                 },
             )
         })?;
         snapshot
-            .push_attestation_witness(BlockHeight::from_raw(key.value()), bytes)
+            .push_bundle_references(BlockHeight::from_raw(key.value()), bytes)
             .map_err(|f| refused(&f))?;
     }
     for row in txn.table(ARCHIVAL_SLASH_LOG)?.iter()? {
@@ -969,7 +966,7 @@ fn refused(fault: &SnapshotFault) -> ReadFault {
         | SnapshotFault::RowTooLong { family, .. }
         | SnapshotFault::RowTooShort { family, .. } => family.name(),
         SnapshotFault::EpochMarkerSeq { .. } => SnapshotFamily::SlashLog.name(),
-        SnapshotFault::WitnessShape { .. } => SnapshotFamily::AttestationWitness.name(),
+        SnapshotFault::ReferencesShape { .. } => SnapshotFamily::BundleReferences.name(),
         SnapshotFault::Truncated | SnapshotFault::Io(_) => "archival_snapshot",
     };
     undecodable(

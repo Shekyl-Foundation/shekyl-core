@@ -98,8 +98,8 @@ archival_families! {
     /// Rust store the family governs the slash pass's row write
     /// (`archival_write.rs`, phase 9; `SO-D10`).
     Settlement => "archival_settlement",
-    /// `archival_attestation_witness`
-    AttestationWitness => "archival_attestation_witness",
+    /// `archival_bundle_references`
+    BundleReferences => "archival_bundle_references",
     /// `archival_alt_attestation_witness`
     AltAttestationWitness => "archival_alt_attestation_witness",
     /// `archival_bond`

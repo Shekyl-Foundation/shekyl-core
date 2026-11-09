@@ -164,7 +164,7 @@ impl WriteBatch<'_, '_> {
     /// for `ChainValid`. The tier and the write stay two operations: the
     /// token is minted on a snapshot, and the snapshot stays live through
     /// the write (a later switch judges, then pops, then inserts). The row
-    /// is [`AltBlock::admitted`] of the verdict — the block, its witness,
+    /// is [`AltBlock::admitted`] of the verdict — the block, its references,
     /// and the height, cumulative difficulty and weight the tier derived —
     /// and its listed bodies go to `alt_block_bodies` under the same key.
     /// The key is the verdict's hash (CEN-B6 over the block it stores), so
@@ -218,8 +218,8 @@ impl WriteBatch<'_, '_> {
             .arm(StoreInvariant::DemotedBlockRefused { height })
     }
 
-    /// **AL2.** Remove the alt block under `id`. Its witness leaves with it —
-    /// the witness is a field of the row (CW-2, structural).
+    /// **AL2.** Remove the alt block under `id`. Its references leave with
+    /// it — they are a field of the row (CW-2, structural).
     ///
     /// # Errors
     ///

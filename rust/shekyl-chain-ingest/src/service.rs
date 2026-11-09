@@ -103,8 +103,9 @@ pub struct Arrival {
     pub block: Vec<u8>,
     /// The listed bodies it carried, as blobs, in any order.
     pub bodies: Vec<Vec<u8>>,
-    /// The attestation witness carried beside the block; empty when none.
-    pub attestation_witness: Vec<u8>,
+    /// The bundle references carried beside the block, undecoded; empty
+    /// when none.
+    pub bundle_references: Vec<Vec<u8>>,
 }
 
 /// One block chain sync has already proven: its header passed
@@ -134,9 +135,9 @@ pub struct BoundArrival {
     pub block: Vec<u8>,
     /// The listed bodies, as blobs, in the block's order.
     pub bodies: Vec<Vec<u8>>,
-    /// The attestation witness carried beside the block; empty for an empty
-    /// set.
-    pub attestation_witness: Vec<u8>,
+    /// The bundle references carried beside the block, undecoded; empty
+    /// when the block admits no bundle.
+    pub bundle_references: Vec<Vec<u8>>,
 }
 
 impl BoundArrival {
@@ -156,7 +157,7 @@ impl BoundArrival {
             },
             block_len: self.block.len(),
             body_lens: self.bodies.iter().map(Vec::len).collect(),
-            witness_len: self.attestation_witness.len(),
+            reference_count: self.bundle_references.len(),
         }
     }
 }
@@ -173,18 +174,20 @@ pub struct ArrivalLengths {
     pub block_len: usize,
     /// Each carried body's length, in the order the caller listed them.
     pub body_lens: Vec<usize>,
-    /// The attestation witness's length; zero when none was carried.
-    /// Bounded by [`shekyl_types::MAX_ATTESTATION_WITNESS_BYTES`], not by
+    /// How many bundle references were carried; zero when none were.
+    /// Bounded by [`shekyl_types::archival::MAX_SECTION_REFERENCES`], not by
     /// [`crate::admission::ArrivalBound`].
-    pub witness_len: usize,
+    pub reference_count: usize,
 }
 
 impl ArrivalLengths {
     /// The bytes the door bounds against [`Door::max_arrival_bytes`]: the
-    /// block and the bodies it carried. The attestation witness is a
-    /// sidecar with its own cap
-    /// ([`shekyl_types::MAX_ATTESTATION_WITNESS_BYTES`]); it is not these
-    /// bytes.
+    /// block and the bodies it carried. The bundle references are a sidecar
+    /// with their own cap, a count
+    /// ([`shekyl_types::archival::MAX_SECTION_REFERENCES`]); their bytes
+    /// are not these bytes. A section is not block weight (§7.1: a bundle
+    /// is not a transaction), so a full block carrying one is not oversize,
+    /// and a peer's arrival is already bounded by the packet it came in.
     #[must_use]
     pub fn bytes(&self) -> usize {
         self.body_lens
@@ -198,7 +201,7 @@ impl ArrivalLengths {
             origin: arrival.origin,
             block_len: arrival.block.len(),
             body_lens: arrival.bodies.iter().map(Vec::len).collect(),
-            witness_len: arrival.attestation_witness.len(),
+            reference_count: arrival.bundle_references.len(),
         }
     }
 }
@@ -420,7 +423,7 @@ struct Staged {
     block: Vec<u8>,
     bodies: Vec<Vec<u8>>,
     proof: Proof,
-    witness: Vec<u8>,
+    references: Vec<Vec<u8>>,
 }
 
 impl Staged {
@@ -432,7 +435,7 @@ impl Staged {
             proof: Proof::Hash {
                 class: class_of(arrival.origin),
             },
-            witness: arrival.attestation_witness,
+            references: arrival.bundle_references,
         }
     }
 
@@ -442,7 +445,7 @@ impl Staged {
             block: arrival.block,
             bodies: arrival.bodies,
             proof: Proof::Judged(Box::new(arrival.judged)),
-            witness: arrival.attestation_witness,
+            references: arrival.bundle_references,
         }
     }
 }
@@ -455,8 +458,9 @@ struct Accepted {
     bodies: Vec<Vec<u8>>,
     /// How this arrival is formed.
     proof: Proof,
-    /// The witness carried beside the block; empty when none was.
-    witness: Vec<u8>,
+    /// The bundle references carried beside the block; empty when none
+    /// were.
+    references: Vec<Vec<u8>>,
 }
 
 /// The service's knobs, each with its reason. How many `form` workers hash
@@ -993,7 +997,7 @@ impl Door {
             origin: Origin::Local,
             block,
             bodies,
-            attestation_witness: Vec::new(),
+            bundle_references: Vec::new(),
         };
         loop {
             match self.offer(arrival.clone()) {

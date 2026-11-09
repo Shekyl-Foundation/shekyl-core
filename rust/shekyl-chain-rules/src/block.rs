@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_network::NetworkId;
-use shekyl_types::archival::AttestationWitness;
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{
     BlockHash, BlockHeight, CurveTreeRoot, PowHash, PqcAuthHash, PrunableHash, Timestamp, TxHash,
 };
@@ -89,20 +89,20 @@ impl TxIdentity {
 }
 
 /// The untrusted input to `validate`: the block as received, plus the bodies
-/// of the transactions its header lists, in listed order, plus the
-/// attestation-witness sidecar that travelled beside them.
+/// of the transactions its header lists, in listed order, plus the bundle
+/// references that travelled beside them.
 ///
 /// Public fields — this is the outside. Nothing about it has been checked,
 /// including whether `transactions` are the bodies `block.transaction_hashes`
 /// names; that is a 4.G rule and lands with its slice. One value rather than
 /// two arguments (round-1 ruling Q9). `#[non_exhaustive]` so a further
 /// component is a constructor-site addition, not a breaking struct literal
-/// (the Q9 "non-breaking" claim; Copilot #753) — the witness was the first
+/// (the Q9 "non-breaking" claim; Copilot #753) — the sidecar was the first
 /// such addition (DRS-E4 commit 5).
 ///
 /// ```compile_fail
 /// use shekyl_chain_rules::Candidate;
-/// let _ = Candidate { block: todo!(), transactions: todo!(), attestation_witness: None };
+/// let _ = Candidate { block: todo!(), transactions: todo!(), bundle_references: None };
 /// ```
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,15 +111,13 @@ pub struct Candidate {
     pub block: Block,
     /// The listed transactions' bodies, in the header's order.
     pub transactions: Vec<Transaction>,
-    /// The attestation witness carried beside the block — **not in it**
-    /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.2 phase 5): the C++ sync wire's
-    /// `block_complete_entry::attestation_witness`, `None` for an empty
-    /// attestation set. CEN-B4's operand (`rules::attestation`, E6 slice 8
-    /// row 10): `None` is the empty set, and `Some` must parse to an empty
-    /// set too, since the header's `bundle_root` commits to no record; the
-    /// verdict carries it to the store, which records it at the block's
-    /// height.
-    pub attestation_witness: Option<AttestationWitness>,
+    /// The bundle references carried beside the block — **not in it**
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5): the section the header's
+    /// `bundle_root` commits, undecoded, `None` when the block admits no
+    /// bundle. CEN-B4's operand (`rules::attestation`): the root must be
+    /// the root of these references. The verdict carries them to the
+    /// store, which records them at the block's height.
+    pub bundle_references: Option<BundleReferences>,
 }
 
 impl Candidate {
@@ -136,8 +134,8 @@ impl Candidate {
     }
 
     /// Assemble a candidate from the block as received and the listed
-    /// bodies, in listed order, with no attestation witness — the shape of
-    /// every block whose attestation set is empty, which is every block a
+    /// bodies, in listed order, with no bundle references — the shape of
+    /// every block that admits no bundle, which is every block a
     /// format-2 capture carries (§3.2 phase 5: the RPC edge the corpus
     /// fetcher uses does not carry the sidecar).
     #[must_use]
@@ -145,14 +143,14 @@ impl Candidate {
         Self {
             block,
             transactions,
-            attestation_witness: None,
+            bundle_references: None,
         }
     }
 
     /// The same candidate with the sidecar attached.
     #[must_use]
-    pub fn with_attestation_witness(mut self, witness: Option<AttestationWitness>) -> Self {
-        self.attestation_witness = witness;
+    pub fn with_bundle_references(mut self, references: Option<BundleReferences>) -> Self {
+        self.bundle_references = references;
         self
     }
 }
@@ -403,7 +401,7 @@ impl fmt::Debug for StructurallyValid {
 ///     weights: todo!(),
 ///     emission: todo!(),
 ///     archival: todo!(),
-///     attestation_witness: todo!(),
+///     bundle_references: todo!(),
 ///     pow: todo!(),
 /// };
 /// ```
@@ -445,13 +443,11 @@ pub struct ValidatedBlock {
     /// future validity and the store computes none of it: `connect` writes
     /// each part through its handle.
     archival: ArchivalDelta,
-    /// The candidate's attestation-witness sidecar, judged by CEN-B4
-    /// (`rules::attestation`, E6 slice 8 row 10) and carried through for
-    /// `connect` to record at the block's height
-    /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.2 phase 5). Bytes a verdict holds
-    /// have passed B4: the empty set against the mined root when `None`,
-    /// the recompute and every countersignature when `Some`.
-    attestation_witness: Option<AttestationWitness>,
+    /// The candidate's bundle references, judged by CEN-B4
+    /// (`rules::attestation`) and carried through for `connect` to record
+    /// at the block's height. References a verdict holds have passed B4:
+    /// the header's root is theirs.
+    bundle_references: Option<BundleReferences>,
     /// The PoW `form` computed under its seed, accepted by this verdict
     /// (CEN-D1/D2/D3). `connect` records it beside the block.
     pow: ProvenPow,
@@ -712,7 +708,7 @@ impl ValidatedBlock {
         let Candidate {
             block,
             transactions,
-            attestation_witness,
+            bundle_references,
         } = candidate;
         let Derived {
             target,
@@ -739,7 +735,7 @@ impl ValidatedBlock {
             weights,
             emission,
             archival,
-            attestation_witness,
+            bundle_references,
             pow,
         }
     }
@@ -750,12 +746,12 @@ impl ValidatedBlock {
         self.pow
     }
 
-    /// The candidate's attestation-witness sidecar, as CEN-B4 judged it
-    /// (the field's docs). `connect` writes `archival_attestation_witness[h]`
-    /// from it when `Some`; `None` writes no row.
+    /// The candidate's bundle references, as CEN-B4 judged them (the
+    /// field's docs). `connect` writes `archival_bundle_references[h]` from
+    /// them when `Some`; `None` writes no row.
     #[must_use]
-    pub const fn attestation_witness(&self) -> Option<&AttestationWitness> {
-        self.attestation_witness.as_ref()
+    pub const fn bundle_references(&self) -> Option<&BundleReferences> {
+        self.bundle_references.as_ref()
     }
 
     /// The block's weight, long-term weight and the medians it was judged

@@ -38,7 +38,7 @@ use shekyl_chain_rules::{
     FormClaims, HeaderView, Locus, RecordWriteKind, ReferenceClaims, RuleSet, Trust, TxSlot,
     Verdict,
 };
-use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest, IssuedDraw};
+use shekyl_types::archival::{BundleReferences, IndexedDraw, IssuedDigest, IssuedDraw};
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_wire::Input;
 
@@ -458,19 +458,14 @@ fn a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers() {
 
 // -------------------------------------------------------------- phase 5
 
-/// The attestation witness row has one persisted form per block (DRS-E4
-/// §3.2 phase 5): the empty set is `None` on the candidate and **no row**
-/// — `Recorded(None)` at the height, `AboveTip` once the block is popped
-/// — and the only other spelling of the empty set, an eight-byte zero
-/// count on the sidecar, is refused at CEN-B4 (`Locus::Block`) before the
-/// writer is handed anything, so no node records a present-but-empty row
-/// for a block its peers record none for. A present row needs a genuine
-/// non-empty witness, which no block can carry until CEN-I20's coinbase
-/// grammar admits the `0x0B` field (`CHAIN_RULES_SLICE_8.md` §5.1, row 10
-/// finding); the write itself is the FFI's and the rules crate's to
-/// witness until then.
+/// The bundle-references row has one persisted form per block: no
+/// references is `None` on the candidate and **no row** — `Recorded(None)`
+/// at the height, `AboveTip` once the block is popped. A block carrying
+/// references is refused at CEN-B4 (`Locus::Block`) before the writer is
+/// handed anything, until admission goes live (the switch's C3); a present
+/// row is that commit's to write.
 #[test]
-fn the_empty_attestation_set_is_no_row_and_a_zero_count_sidecar_is_refused() {
+fn no_references_is_no_row_and_a_block_carrying_references_is_refused() {
     let path = tmp("aw-witness");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let mut grown = Grown::new();
@@ -480,23 +475,22 @@ fn the_empty_attestation_set_is_no_row_and_a_zero_count_sidecar_is_refused() {
     let snap = store.begin_read().expect("read");
     for h in 0..2 {
         assert_eq!(
-            snap.attestation_witness_at(BlockHeight::from_raw(h))
+            snap.bundle_references_at(BlockHeight::from_raw(h))
                 .expect("read"),
             AtHeight::Recorded(None)
         );
     }
     drop(snap);
 
-    // The zero-count sidecar on the block that would connect at height 2.
-    let zero_count = AttestationWitness::new(0u64.to_le_bytes().to_vec())
-        .expect("eight bytes: non-empty, under the cap");
+    // A section on the block that would connect at height 2.
+    let section = BundleReferences::new(vec![vec![0xAB; 80]]).expect("a section");
     let height = grown.height().to_raw();
     let previous = grown.tip();
     let out: Result<Verdict<()>, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let root = batch_root_going_into(&view, height)?;
         let cand = candidate_over(root, height, previous, Vec::new())
-            .with_attestation_witness(Some(zero_count));
+            .with_bundle_references(Some(section));
         Ok(verdict_under(&view, cand, &RuleSet::GENESIS)?)
     });
     assert_refused(out.expect("judging only reads"), CenRow::B4, Locus::Block);
@@ -504,7 +498,7 @@ fn the_empty_attestation_set_is_no_row_and_a_zero_count_sidecar_is_refused() {
     pop(&store);
     let snap = store.begin_read().expect("read");
     assert_eq!(
-        snap.attestation_witness_at(BlockHeight::from_raw(1))
+        snap.bundle_references_at(BlockHeight::from_raw(1))
             .expect("read"),
         AtHeight::AboveTip
     );

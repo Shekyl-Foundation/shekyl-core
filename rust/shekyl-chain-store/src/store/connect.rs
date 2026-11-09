@@ -30,7 +30,7 @@
 //!  4. root         curve_tree_roots[h + 1] = the verdict's root_after (SI-4)
 //!                  — every connect, grown or not (the C++ write at
 //!                  :663–:664 is outside the growth gate; SCW-19)
-//!  5. witness      archival_attestation_witness[h] = the verdict's sidecar,
+//!  5. references   archival_bundle_references[h] = the verdict's sidecar,
 //!                  when non-empty — `archival_write.rs`
 //!  6. block        blocks[h], block_heights[hash], block_info[h] (SI-2)
 //!  7. rule set     rule_set_in_force[h] = in_force (the CEN-B3 belt)
@@ -315,12 +315,11 @@ impl<'id> WriteBatch<'_, 'id> {
         self.open_insert_table(CURVE_TREE_ROOTS, StoreInvariant::RootRewritten)?
             .insert(height + 1, block.root_after().encoded().as_encoded())?;
 
-        // ---- 5. attestation witness (DRS-E4; `archival_write.rs`) -------
-        // The verdict's sidecar, judged by CEN-B4 in `validate` (E6 slice 8
-        // row 10): `None` is the empty set against the mined root, `Some`
-        // the recompute and every record's countersignature. B4 is always
-        // in coverage, so the widening above never names it.
-        self.record_attestation_witness(height, block.attestation_witness())?;
+        // ---- 5. bundle references (`archival_write.rs`) ------------------
+        // The verdict's sidecar, judged by CEN-B4 in `validate`: the header's
+        // root is theirs. B4 is always in coverage, so the widening above
+        // never names it.
+        self.record_bundle_references(height, block.bundle_references())?;
 
         // ---- 6. block --------------------------------------------------
         let hash = BlockHash::from_bytes(*block.hash().as_bytes());

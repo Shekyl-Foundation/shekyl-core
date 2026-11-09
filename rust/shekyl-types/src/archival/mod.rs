@@ -51,6 +51,9 @@
 //!   attestation witness. The retention crate derives the same product from
 //!   the witness layout and const-asserts equality; the wire twin
 //!   `PQC_HYBRID_SINGLE_SIG_LEN` const-asserts the signature factor.
+//! - [`BundleReferences`] — a block's bundle references beside it,
+//!   undecoded, at most [`MAX_SECTION_REFERENCES`]; the retention crate
+//!   const-asserts that bound equals `W₂`'s ruled upper edge.
 //!
 //! The persisted record these words compose into — [`BondRecord`], with
 //! [`Holdings`], [`HeldShard`], [`FirstPayingHeight`] and the two close-row
@@ -271,90 +274,196 @@ pub const MAX_ATTESTATION_WITNESS_BYTES: usize = ATTESTATION_WITNESS_COUNT_LEN
             + ATTESTATION_WITNESS_DIGEST_LEN
             + ATTESTATION_WITNESS_SIGNATURE_LEN);
 
-/// A block's attestation witness as it travels beside the block — the
-/// **sidecar** (`block_complete_entry::attestation_witness` on the C++
-/// sync wire; `shekyl-levin`'s `BlockCompleteEntry::attestation_witness`):
-/// canonical witness bytes the store persists unparsed and
-/// `shekyl-archival-retention::attestation_wire` parses.
-///
-/// Non-empty by construction and at most
-/// [`MAX_ATTESTATION_WITNESS_BYTES`]: an **empty attestation set is no
-/// witness** — `Option<AttestationWitness>::None` — never an empty one, so
-/// the daemon store's rule that an empty witness is no row rather than an
-/// empty row (`blockchain_db.cpp:669–671`) holds by the type, and a reader
-/// that finds a row knows it has bytes to parse. The wire codec gives the
-/// empty set no bytes and refuses a zero count
-/// (`attestation_wire::WitnessError::ZeroCount`), so `Some` of a zero-count
-/// blob is refused by CEN-B4, never recorded. Judged by CEN-B4
-/// (`verify_block_attestation`); until that row lands in `validate` the
-/// bytes are carried and recorded under a coverage gap, not judged
-/// (DRS-E4 `DRS_E4_ARCHIVAL_WRITER.md` §3.2 phase 5).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AttestationWitness(Vec<u8>);
+/// The most bundle references one block's section holds: a section names
+/// each `h` at most once, every `h` inside the window `h < h_incl ≤ h + W₂`
+/// (CEN-J31), and `W₂` is at most `W2_MAX_DEFENSIBLE_BLOCKS` (500) on every
+/// rule set `ArchivalParams::validate` admits. `shekyl-archival-retention`
+/// const-asserts the two equal.
+pub const MAX_SECTION_REFERENCES: usize = 500;
 
-/// Why bytes are not an [`AttestationWitness`].
+/// A block's bundle references as they travel and are stored beside it
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5): the section the header's
+/// `bundle_root` commits, one reference per admitted bundle, in the order
+/// the block gives them.
+///
+/// **Undecoded.** Each reference is opened by `shekyl-chain-rules`
+/// `open_reference`, where one that does not parse is a verdict on the
+/// block (CEN-J29), not a transport fault; the root is recomputed there
+/// from the opened references. So nothing between the wire and the
+/// validator reads inside a reference, and a reference is self-delimiting
+/// (it states its counts, `SCS-P39`) wherever it is cut.
+///
+/// Non-empty by construction and at most [`MAX_SECTION_REFERENCES`]: a
+/// block that admits no bundle has **no references** —
+/// `Option<BundleReferences>::None` — never an empty list, so the store's
+/// rule that an empty section is no row holds by the type, and a reader
+/// that finds a row knows it has references to open. Each reference is
+/// non-empty too: the shortest one, two empty bitmaps, is 80 bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleReferences(Vec<Vec<u8>>);
+
+/// Why a list of byte strings is not a [`BundleReferences`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AttestationWitnessError {
-    /// No bytes: an empty attestation set is the absence of a witness.
+pub enum BundleReferencesError {
+    /// No references: a block that admits no bundle has none.
     Empty,
-    /// More bytes than a canonical witness of
-    /// [`MAX_ATTESTATION_RECORDS`] records can hold.
-    TooLong {
-        /// The length offered.
-        len: usize,
+    /// More references than a section can hold.
+    TooMany {
+        /// The count offered.
+        count: usize,
+    },
+    /// A reference with no bytes.
+    EmptyReference {
+        /// Its position in the section.
+        position: usize,
     },
 }
 
-impl core::fmt::Display for AttestationWitnessError {
+impl core::fmt::Display for BundleReferencesError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Empty => f.write_str("an empty attestation witness is no witness"),
-            Self::TooLong { len } => write!(
+            Self::Empty => f.write_str("a section with no references is no section"),
+            Self::TooMany { count } => write!(
                 f,
-                "attestation witness of {len} bytes exceeds MAX_ATTESTATION_WITNESS_BYTES \
-                 ({MAX_ATTESTATION_WITNESS_BYTES})"
+                "{count} bundle references exceed MAX_SECTION_REFERENCES \
+                 ({MAX_SECTION_REFERENCES})"
             ),
+            Self::EmptyReference { position } => {
+                write!(f, "bundle reference {position} has no bytes")
+            }
         }
     }
 }
 
-impl core::error::Error for AttestationWitnessError {}
+impl core::error::Error for BundleReferencesError {}
 
-impl AttestationWitness {
-    /// Take `bytes` as a witness: non-empty and within the canonical bound.
+impl BundleReferences {
+    /// Take `references` as a section: non-empty, within the bound, and no
+    /// reference empty.
     ///
     /// # Errors
     ///
-    /// [`AttestationWitnessError::Empty`] for no bytes;
-    /// [`AttestationWitnessError::TooLong`] past the bound.
-    pub fn new(bytes: Vec<u8>) -> Result<Self, AttestationWitnessError> {
-        if bytes.is_empty() {
-            return Err(AttestationWitnessError::Empty);
+    /// [`BundleReferencesError::Empty`] for no references;
+    /// [`BundleReferencesError::TooMany`] past the bound;
+    /// [`BundleReferencesError::EmptyReference`] for a reference with no
+    /// bytes.
+    pub fn new(references: Vec<Vec<u8>>) -> Result<Self, BundleReferencesError> {
+        if references.is_empty() {
+            return Err(BundleReferencesError::Empty);
         }
-        if bytes.len() > MAX_ATTESTATION_WITNESS_BYTES {
-            return Err(AttestationWitnessError::TooLong { len: bytes.len() });
+        if references.len() > MAX_SECTION_REFERENCES {
+            return Err(BundleReferencesError::TooMany {
+                count: references.len(),
+            });
         }
-        Ok(Self(bytes))
+        if let Some(position) = references.iter().position(Vec::is_empty) {
+            return Err(BundleReferencesError::EmptyReference { position });
+        }
+        Ok(Self(references))
     }
 
-    /// The sidecar as received: empty bytes are `None`, the rest are a
-    /// witness or [`AttestationWitnessError::TooLong`].
+    /// The section as received: no references are `None`, the rest are a
+    /// section or a [`BundleReferencesError`].
     ///
     /// # Errors
     ///
-    /// [`AttestationWitnessError::TooLong`] past the bound.
-    pub fn from_sidecar(bytes: Vec<u8>) -> Result<Option<Self>, AttestationWitnessError> {
-        if bytes.is_empty() {
+    /// [`BundleReferencesError::TooMany`] or
+    /// [`BundleReferencesError::EmptyReference`].
+    pub fn from_sidecar(references: Vec<Vec<u8>>) -> Result<Option<Self>, BundleReferencesError> {
+        if references.is_empty() {
             return Ok(None);
         }
-        Self::new(bytes).map(Some)
+        Self::new(references).map(Some)
     }
 
-    /// The canonical bytes.
+    /// The references, in the block's order.
     #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
+    pub fn as_slice(&self) -> &[Vec<u8>] {
         &self.0
     }
+
+    /// The references as owned byte strings.
+    #[must_use]
+    pub fn into_inner(self) -> Vec<Vec<u8>> {
+        self.0
+    }
+
+    /// The stored form: `n_le[4]`, then each reference as `len_le[4] ‖
+    /// bytes`, in the block's order. Framed by length, so the store cuts
+    /// the section without reading inside a reference.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let total = self.0.iter().map(|r| 4 + r.len()).sum::<usize>();
+        let mut out = Vec::with_capacity(4 + total);
+        out.extend_from_slice(&frame_len(self.0.len()).to_le_bytes());
+        for reference in &self.0 {
+            out.extend_from_slice(&frame_len(reference.len()).to_le_bytes());
+            out.extend_from_slice(reference);
+        }
+        out
+    }
+
+    /// The section [`Self::encode`] wrote.
+    ///
+    /// # Errors
+    ///
+    /// [`BundleReferencesDecodeError::Framing`] when the frames do not cut
+    /// the bytes exactly; [`BundleReferencesDecodeError::Section`] when
+    /// they cut a list [`Self::new`] refuses.
+    pub fn decode(bytes: &[u8]) -> Result<Self, BundleReferencesDecodeError> {
+        let framing = BundleReferencesDecodeError::Framing;
+        let (count, mut rest) = take_len(bytes).ok_or(framing)?;
+        if count > MAX_SECTION_REFERENCES {
+            return Err(BundleReferencesDecodeError::Section(
+                BundleReferencesError::TooMany { count },
+            ));
+        }
+        let mut references = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (len, after) = take_len(rest).ok_or(framing)?;
+            let (reference, after) = after.split_at_checked(len).ok_or(framing)?;
+            references.push(reference.to_vec());
+            rest = after;
+        }
+        if !rest.is_empty() {
+            return Err(framing);
+        }
+        Self::new(references).map_err(BundleReferencesDecodeError::Section)
+    }
+}
+
+/// Why stored bytes are not a [`BundleReferences`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BundleReferencesDecodeError {
+    /// The length frames do not cut the bytes exactly.
+    Framing,
+    /// The frames cut a list that is not a section.
+    Section(BundleReferencesError),
+}
+
+impl core::fmt::Display for BundleReferencesDecodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Framing => f.write_str("stored bundle references are not exactly framed"),
+            Self::Section(refused) => refused.fmt(f),
+        }
+    }
+}
+
+impl core::error::Error for BundleReferencesDecodeError {}
+
+/// A length the stored form writes in four bytes. A section holds at most
+/// [`MAX_SECTION_REFERENCES`] references, and a reference is never near
+/// 4 GiB: its two bitmaps each hold at most `u32::MAX` bits.
+fn frame_len(len: usize) -> u32 {
+    u32::try_from(len).expect("a section's lengths fit four bytes")
+}
+
+/// The four-byte length at the front of `bytes`, and what follows it.
+fn take_len(bytes: &[u8]) -> Option<(usize, &[u8])> {
+    let (len, rest) = bytes.split_at_checked(4)?;
+    let len = u32::from_le_bytes(len.try_into().ok()?);
+    Some((usize::try_from(len).ok()?, rest))
 }
 
 // ---------------------------------------------------------------------------
@@ -758,5 +867,76 @@ mod tests {
         };
         assert!(open.is_open());
         assert!(!open.is_clean_close());
+    }
+
+    /// A section is one to [`MAX_SECTION_REFERENCES`] non-empty references;
+    /// the sidecar's empty list is no section. Red edit: drop any one
+    /// check in `new` — its row below is admitted.
+    #[test]
+    fn bundle_references_are_a_bounded_non_empty_section() {
+        let one = vec![vec![0xAB; 80]];
+        assert_eq!(
+            BundleReferences::new(one.clone()).map(BundleReferences::into_inner),
+            Ok(one.clone())
+        );
+        assert_eq!(BundleReferences::from_sidecar(Vec::new()), Ok(None));
+        assert_eq!(
+            BundleReferences::from_sidecar(one.clone()).map(|r| r.map(|r| r.as_slice().len())),
+            Ok(Some(1))
+        );
+        assert_eq!(
+            BundleReferences::new(Vec::new()),
+            Err(BundleReferencesError::Empty)
+        );
+        let full = vec![vec![0xAB]; MAX_SECTION_REFERENCES];
+        assert!(BundleReferences::new(full).is_ok());
+        assert_eq!(
+            BundleReferences::from_sidecar(vec![vec![0xAB]; MAX_SECTION_REFERENCES + 1]),
+            Err(BundleReferencesError::TooMany {
+                count: MAX_SECTION_REFERENCES + 1
+            })
+        );
+        assert_eq!(
+            BundleReferences::new(vec![vec![0xAB], Vec::new()]),
+            Err(BundleReferencesError::EmptyReference { position: 1 })
+        );
+    }
+
+    /// The stored form reads back as written, and anything else is refused:
+    /// a short frame, trailing bytes, an empty section, a count past the
+    /// bound. Red edit: drop the trailing-bytes check — the padded form
+    /// decodes.
+    #[test]
+    fn bundle_references_stored_form_round_trips_and_is_exact() {
+        let section = BundleReferences::new(vec![vec![1, 2, 3], vec![4; 80]]).expect("a section");
+        let bytes = section.encode();
+        assert_eq!(&bytes[..4], &2u32.to_le_bytes());
+        assert_eq!(&bytes[4..8], &3u32.to_le_bytes());
+        assert_eq!(BundleReferences::decode(&bytes), Ok(section));
+        let mut padded = bytes.clone();
+        padded.push(0);
+        assert_eq!(
+            BundleReferences::decode(&padded),
+            Err(BundleReferencesDecodeError::Framing)
+        );
+        assert_eq!(
+            BundleReferences::decode(&bytes[..bytes.len() - 1]),
+            Err(BundleReferencesDecodeError::Framing)
+        );
+        assert_eq!(
+            BundleReferences::decode(&0u32.to_le_bytes()),
+            Err(BundleReferencesDecodeError::Section(
+                BundleReferencesError::Empty
+            ))
+        );
+        let over = u32::try_from(MAX_SECTION_REFERENCES + 1).expect("fits");
+        assert_eq!(
+            BundleReferences::decode(&over.to_le_bytes()),
+            Err(BundleReferencesDecodeError::Section(
+                BundleReferencesError::TooMany {
+                    count: MAX_SECTION_REFERENCES + 1
+                }
+            ))
+        );
     }
 }

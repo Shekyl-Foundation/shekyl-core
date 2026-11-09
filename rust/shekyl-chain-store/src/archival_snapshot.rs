@@ -33,7 +33,7 @@
 //! | [`RMarket`](SnapshotFamily::RMarket) | `shard ‖ epoch ‖ r` | `r = 0` rows are **not emitted** (§3.6) |
 //! | [`SigmaWork`](SnapshotFamily::SigmaWork) | `E ‖ Σwork_milli` | — |
 //! | [`Budget`](SnapshotFamily::Budget) | `E ‖ budget` | — |
-//! | [`AttestationWitness`](SnapshotFamily::AttestationWitness) | `h ‖ witness bytes` | an empty set is no row |
+//! | [`BundleReferences`](SnapshotFamily::BundleReferences) | `h ‖ stored references` | a block that admits no bundle is no row |
 //! | [`SlashLog`](SnapshotFamily::SlashLog) | `height ‖ seq u32 ‖ Canonical(SlashLogEntry)` | C++ epoch markers not emitted; the slashed amount projected out (`ARW-Q2`) |
 //! | [`SlashApplied`](SnapshotFamily::SlashApplied) | `p[32] ‖ shard ‖ epoch` | set table, no value |
 //! | [`BudgetAccruing`](SnapshotFamily::BudgetAccruing) | `E_open ‖ total` | zero or one row |
@@ -68,8 +68,7 @@ use shekyl_units::AtomicUnits;
 
 use crate::apply_policy::ArchivalFamily;
 use crate::codec::{
-    AttestationWitnessBytes, BlobKind, BondRecord, Canonical, RMarket, SigmaWorkMilli,
-    SlashLogEntry,
+    BlobKind, BondRecord, BundleReferencesBytes, Canonical, RMarket, SigmaWorkMilli, SlashLogEntry,
 };
 
 /// The families the snapshot carries, in record order. The discriminant
@@ -86,8 +85,8 @@ pub enum SnapshotFamily {
     SigmaWork,
     /// `archival_budget`.
     Budget,
-    /// `archival_attestation_witness`.
-    AttestationWitness,
+    /// `archival_bundle_references`.
+    BundleReferences,
     /// `archival_slash_log`, slash rows only.
     SlashLog,
     /// `archival_slash_applied`.
@@ -111,10 +110,11 @@ pub const EMPTY_BODY_LEN: usize = FAMILY_COUNT * 8;
 /// [`ArchivalSnapshot::insert`] refuses a longer row, so every snapshot that
 /// can be built can be written and read back; [`ArchivalSnapshot::read_body`]
 /// refuses a longer declared length before allocating for it. The largest
-/// real row (a `BondRecord` at every cap, or a witness at
-/// [`MAX_ATTESTATION_WITNESS_BYTES`]) is well under it.
+/// real row (a `BondRecord` at every cap, or a section of
+/// [`MAX_SECTION_REFERENCES`] references, each about 0.8 KB at `D` =
+/// 3,100,000, §7.4's largest tabled `D`) is well under it.
 ///
-/// [`MAX_ATTESTATION_WITNESS_BYTES`]: shekyl_types::archival::MAX_ATTESTATION_WITNESS_BYTES
+/// [`MAX_SECTION_REFERENCES`]: shekyl_types::archival::MAX_SECTION_REFERENCES
 pub const MAX_ROW_BYTES: usize = 1 << 20;
 
 // The body writes each row's length as a `u32`; the insert-side bound is
@@ -129,7 +129,7 @@ impl SnapshotFamily {
         Self::RMarket,
         Self::SigmaWork,
         Self::Budget,
-        Self::AttestationWitness,
+        Self::BundleReferences,
         Self::SlashLog,
         Self::SlashApplied,
         Self::BudgetAccruing,
@@ -145,7 +145,7 @@ impl SnapshotFamily {
             Self::RMarket => "archival_r_market",
             Self::SigmaWork => "archival_sigma_work",
             Self::Budget => "archival_budget",
-            Self::AttestationWitness => "archival_attestation_witness",
+            Self::BundleReferences => "archival_bundle_references",
             Self::SlashLog => "archival_slash_log",
             Self::SlashApplied => "archival_slash_applied",
             Self::BudgetAccruing => "archival_budget_accruing",
@@ -165,7 +165,7 @@ impl SnapshotFamily {
             Self::SlashLog => 8 + 4,
             Self::SigmaWork
             | Self::Budget
-            | Self::AttestationWitness
+            | Self::BundleReferences
             | Self::BudgetAccruing
             | Self::LastSlashEpoch => 8,
         }
@@ -176,7 +176,7 @@ impl SnapshotFamily {
     #[must_use]
     pub const fn value_len(self) -> Option<usize> {
         match self {
-            Self::Bond | Self::AttestationWitness | Self::SlashLog => None,
+            Self::Bond | Self::BundleReferences | Self::SlashLog => None,
             Self::ServeCredit | Self::SlashApplied | Self::LastSlashEpoch => Some(0),
             Self::RMarket | Self::SigmaWork | Self::Budget | Self::BudgetAccruing => Some(8),
         }
@@ -228,7 +228,7 @@ pub const fn disposition(family: ArchivalFamily) -> Disposition {
         ArchivalFamily::RMarket => Disposition::Rows(SnapshotFamily::RMarket),
         ArchivalFamily::SigmaWork => Disposition::Rows(SnapshotFamily::SigmaWork),
         ArchivalFamily::Budget => Disposition::Rows(SnapshotFamily::Budget),
-        ArchivalFamily::AttestationWitness => Disposition::Rows(SnapshotFamily::AttestationWitness),
+        ArchivalFamily::BundleReferences => Disposition::Rows(SnapshotFamily::BundleReferences),
         ArchivalFamily::SlashLog => Disposition::Rows(SnapshotFamily::SlashLog),
         ArchivalFamily::SlashApplied => Disposition::Rows(SnapshotFamily::SlashApplied),
         ArchivalFamily::BudgetAccrual => Disposition::Rows(SnapshotFamily::BudgetAccruing),
@@ -284,9 +284,9 @@ pub enum SnapshotFault {
         /// The height the marker sat at.
         height: u64,
     },
-    /// A witness row the writer could not have stored: empty or over
-    /// `MAX_ATTESTATION_WITNESS_BYTES`.
-    WitnessShape {
+    /// A references row the writer could not have stored: not
+    /// `BundleReferences::encode`'s bytes of a non-empty, bounded section.
+    ReferencesShape {
         /// The height.
         height: u64,
         /// The length offered.
@@ -340,9 +340,9 @@ impl fmt::Display for SnapshotFault {
                 f,
                 "archival_slash_log: epoch-marker row at height {height} is not a slash"
             ),
-            Self::WitnessShape { height, len } => write!(
+            Self::ReferencesShape { height, len } => write!(
                 f,
-                "archival_attestation_witness: {len}-byte row at height {height} is not storable"
+                "archival_bundle_references: {len}-byte row at height {height} is not storable"
             ),
             Self::RowTooLong { family, len } => {
                 write!(f, "{family}: row of {len} bytes exceeds {MAX_ROW_BYTES}")
@@ -559,26 +559,26 @@ impl ArchivalSnapshot {
         )
     }
 
-    /// `archival_attestation_witness[h]`. An empty attestation set is no
-    /// row on either side; an empty or over-cap `bytes` is refused as a row
-    /// the writer could not have stored.
+    /// `archival_bundle_references[h]`. A block that admits no bundle is no
+    /// row on either side; bytes that are not a stored section are refused
+    /// as a row the writer could not have stored.
     ///
     /// # Errors
     ///
-    /// [`SnapshotFault::WitnessShape`] and [`Self::insert`]'s.
-    pub fn push_attestation_witness(
+    /// [`SnapshotFault::ReferencesShape`] and [`Self::insert`]'s.
+    pub fn push_bundle_references(
         &mut self,
         height: BlockHeight,
         bytes: &[u8],
     ) -> Result<(), SnapshotFault> {
-        if AttestationWitnessBytes::well_formed(bytes).is_err() {
-            return Err(SnapshotFault::WitnessShape {
+        if BundleReferencesBytes::well_formed(bytes).is_err() {
+            return Err(SnapshotFault::ReferencesShape {
                 height: height.to_raw(),
                 len: bytes.len(),
             });
         }
         self.insert(
-            SnapshotFamily::AttestationWitness,
+            SnapshotFamily::BundleReferences,
             height.to_raw().to_le_bytes().to_vec(),
             bytes.to_vec(),
         )
@@ -920,7 +920,10 @@ mod tests {
             .unwrap();
         s.push_budget(SettlementEpoch::from_raw(2), AtomicUnits::from_raw(9))
             .unwrap();
-        s.push_attestation_witness(BlockHeight::from_raw(4), &[1, 2, 3, 4, 5, 6, 7, 8, 9])
+        let section = shekyl_types::archival::BundleReferences::new(vec![vec![1, 2, 3, 4, 5]])
+            .unwrap()
+            .encode();
+        s.push_bundle_references(BlockHeight::from_raw(4), &section)
             .unwrap();
         s.push_slash_log(
             BlockHeight::from_raw(1299),
@@ -981,8 +984,8 @@ mod tests {
             Err(SnapshotFault::EpochMarkerSeq { height: 5 })
         );
         assert_eq!(
-            s.push_attestation_witness(BlockHeight::from_raw(1), &[]),
-            Err(SnapshotFault::WitnessShape { height: 1, len: 0 })
+            s.push_bundle_references(BlockHeight::from_raw(1), &[]),
+            Err(SnapshotFault::ReferencesShape { height: 1, len: 0 })
         );
         s.set_last_slash_epoch(SettlementEpoch::from_raw(1))
             .unwrap();

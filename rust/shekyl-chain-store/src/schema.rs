@@ -161,12 +161,12 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    AltBlock, AltBodies, AttestationWitnessBytes, Blob, BlockBody, BlockDraws, BlockInfo,
-    BondRecord, Coded, CompleteTreeSet, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw,
-    LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, QueuedBody, QueuedBundle,
-    RMarket, RecordedPow, RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry,
-    SupportCount, SupportIssued, SupportSeats, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
-    TxPrunableSegment, TxPrunedSegment, UndoLog,
+    AltBlock, AltBodies, Blob, BlockBody, BlockDraws, BlockInfo, BondRecord, BundleReferencesBytes,
+    Coded, CompleteTreeSet, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw, LayerHash,
+    LeafCount, OutKey, OutTx, Present, PropertyCellBytes, QueuedBody, QueuedBundle, RMarket,
+    RecordedPow, RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry, SupportCount,
+    SupportIssued, SupportSeats, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
+    TxPrunedSegment, UndoLog,
 };
 use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple, SupportIssuedTuple};
 use crate::lmdb_order::LmdbHashKey;
@@ -265,10 +265,10 @@ pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
 pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
     "archival_alt_attestation_witness",
     "alt_blocks",
-    "the reorg-survival attestation witness is an attribute of the alt block it is keyed by \
+    "the alt block's sidecar is an attribute of the alt block it is keyed by \
      (ARCHIVAL_CREDIT_WIRE.md §3 CW-2: written beside it, removed with it, never outliving \
      it), so it is a field of `AltBlock` rather than a second hash-keyed table (DRS-E1 S-ALT, \
-     `SAR-Q5`, `SAL-Q2`): `AltBlock::attestation_witness`",
+     `SAR-Q5`, `SAL-Q2`): `AltBlock::bundle_references`",
 )];
 
 /// X-macro tables this crate **does not port**, as `(lmdb_name, reason)`:
@@ -653,11 +653,12 @@ tables! {
     pub const ARCHIVAL_SETTLEMENT: TableDefinition<([u8; 32], u64, u64), Coded<SettlementRow>> =
         TableDefinition::new("archival_settlement");
 
-    /// `archival_attestation_witness` — INTEGERKEY; a block's stored witness
-    /// bytes, absent when the attestation set was empty (never an empty row).
-    /// S-ARCH (A10).
-    pub const ARCHIVAL_ATTESTATION_WITNESS: TableDefinition<u64, Blob<AttestationWitnessBytes>> =
-        TableDefinition::new("archival_attestation_witness");
+    /// `archival_bundle_references` — INTEGERKEY; a block's bundle references
+    /// (`BundleReferences::encode`), absent when the block admitted no
+    /// bundle (never an empty row). The section the header's `bundle_root`
+    /// commits (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5). S-ARCH (A10).
+    pub const ARCHIVAL_BUNDLE_REFERENCES: TableDefinition<u64, Blob<BundleReferencesBytes>> =
+        TableDefinition::new("archival_bundle_references");
 
     /// `archival_bond` — default flags; keyed by the 32-byte `p_canonical_id`,
     /// one `BondRecord` per persona (S-ARCH A1; SI-14 on decode).

@@ -241,7 +241,7 @@ invent them:
   hash lists (commands 2003/2006/2007/2009/2010).
 - **`network_address` union**, including ipv4's store-time `SWAP32LE`,
   plus `block_complete_entry` pruned vs unpruned `txs` and
-  `attestation_witness` `OPT`, are LV-2b. See
+  `bundle_references` (an array of strings, omitted when empty), are LV-2b. See
   [`LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md) §6.
 
 ## Shekyl / CryptoNote specifics

@@ -697,14 +697,22 @@ impl Fixtures for AltBlock {
         };
         let block = super::alt::test_block_bytes(41);
         vec![
-            // Weight is mandatory. The two fixtures differ by the witness.
+            // Weight is mandatory. The two fixtures differ by the references.
             (
-                "weight_no_witness",
+                "weight_no_references",
                 AltBlock::checked(facts(2_048), &block, None).expect("fixture"),
             ),
             (
-                "weight_and_witness",
-                AltBlock::checked(facts(2_048), &block, Some(vec![0xA5; 40])).expect("fixture"),
+                "weight_and_references",
+                AltBlock::checked(
+                    facts(2_048),
+                    &block,
+                    Some(
+                        shekyl_types::archival::BundleReferences::new(vec![vec![0xA5; 80]])
+                            .expect("a section"),
+                    ),
+                )
+                .expect("fixture"),
             ),
         ]
     }

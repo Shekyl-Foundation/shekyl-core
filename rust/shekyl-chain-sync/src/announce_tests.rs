@@ -115,7 +115,7 @@ fn a_header_run_survives_an_announce() {
                 body: BlockBody {
                     block: serialized(&sibling),
                     txs: Vec::new(),
-                    attestation_witness: Vec::new(),
+                    bundle_references: Vec::new(),
                 },
             },
             &view,
@@ -235,7 +235,7 @@ fn unplaced_announcements(heavier: bool) -> (HeaderAsks, HeaderAsks) {
         let body = BlockBody {
             block: serialized(&block),
             txs: Vec::new(),
-            attestation_witness: Vec::new(),
+            bundle_references: Vec::new(),
         };
         let announce = |sync: &mut Sync<u8, _>, out: &mut Vec<Command<u8>>| {
             sync.handle(

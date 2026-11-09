@@ -189,7 +189,7 @@ impl BoundTx {
 }
 
 /// One requested block: the block blob, each transaction in either form,
-/// and the attestation witness the header's root commits.
+/// and the bundle references the header's root commits.
 #[derive(Clone, PartialEq, Eq)]
 pub struct BlockBody {
     /// [`crate::Block::serialize`].
@@ -197,8 +197,10 @@ pub struct BlockBody {
     /// Listed transactions, in the block's order. The coinbase rides inside
     /// `block`.
     pub txs: Vec<TxBody>,
-    /// The witness beside the block. Empty when the set is empty.
-    pub attestation_witness: Vec<u8>,
+    /// The bundle references beside the block, in the block's order,
+    /// undecoded (`shekyl_types::archival::BundleReferences`). Empty when
+    /// the block admits no bundle.
+    pub bundle_references: Vec<Vec<u8>>,
 }
 
 /// A blob in `Debug` is its length and its keccak, never its bytes. A
@@ -241,7 +243,14 @@ impl fmt::Debug for BlockBody {
         f.debug_struct("BlockBody")
             .field("block", &digest(&self.block))
             .field("txs", &self.txs)
-            .field("witness", &digest(&self.attestation_witness))
+            .field(
+                "bundle_references",
+                &self
+                    .bundle_references
+                    .iter()
+                    .map(|reference| digest(reference))
+                    .collect::<Vec<_>>(),
+            )
             .finish()
     }
 }

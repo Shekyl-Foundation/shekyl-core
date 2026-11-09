@@ -897,10 +897,10 @@ pub(crate) fn build_template(
         height: facts.connecting,
         previous: facts.previous,
         curve_tree_root: facts.curve_tree_root,
-        // The driver mints no attestation records (CEN-I20 admits no
-        // 0x0B field on the coinbase), so every template commits the
-        // empty set's root — the arm CEN-B4 judges a witness-less block
-        // against (slice 8 row 10).
+        // The driver's blocks admit no bundle until the template fills a
+        // section (the switch's C4), so every template commits the empty
+        // section's root — the arm CEN-B4 judges a block with no
+        // references against.
         bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
         major_version: rule_set.header_major_version(),
         now,

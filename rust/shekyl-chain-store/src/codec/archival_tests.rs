@@ -16,15 +16,15 @@ use std::path::Path;
 
 use shekyl_store_codec::{BlobKind, Canonical, CodecError};
 use shekyl_types::archival::{
-    BadInterval, HoldingsKind, MAX_ATTESTATION_WITNESS_BYTES, MAX_BOND_BAD_INTERVALS,
-    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
+    BadInterval, BundleReferences, HoldingsKind, MAX_BOND_BAD_INTERVALS, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, MAX_SECTION_REFERENCES,
 };
 use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use super::archival::{
-    AttestationWitnessBytes, BondRecord, CompleteTreeSet, FirstPayingHeight, HeldShard, Holdings,
+    BondRecord, BundleReferencesBytes, CompleteTreeSet, FirstPayingHeight, HeldShard, Holdings,
     HoldingsError, RMarket, SigmaWorkMilli, SupportSeats, MAX_BOND_KEY_BYTES,
 };
 
@@ -309,7 +309,7 @@ fn holdings_answer_held_at_tip_and_project_the_wire_descriptor() {
 }
 
 #[test]
-fn the_close_row_scalars_are_the_raw_le_word_and_the_witness_refuses_empty() {
+fn the_close_row_scalars_are_the_raw_le_word_and_the_references_are_a_section() {
     assert_eq!(RMarket::from_raw(1).encode(), [1, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(RMarket::decode(&[0; 8]), Ok(RMarket::from_raw(0)));
     assert_eq!(
@@ -323,15 +323,19 @@ fn the_close_row_scalars_are_the_raw_le_word_and_the_witness_refuses_empty() {
             ..
         })
     ));
-    assert!(AttestationWitnessBytes::well_formed(&[]).is_err());
-    assert!(AttestationWitnessBytes::well_formed(&[1]).is_ok());
-    assert!(
-        AttestationWitnessBytes::well_formed(&vec![1u8; MAX_ATTESTATION_WITNESS_BYTES]).is_ok()
-    );
-    assert!(
-        AttestationWitnessBytes::well_formed(&vec![1u8; MAX_ATTESTATION_WITNESS_BYTES + 1])
-            .is_err()
-    );
+    // A stored section is `BundleReferences::encode`'s bytes and nothing
+    // else: not empty, not a zero count, not past the bound, not padded.
+    let section = BundleReferences::new(vec![vec![1u8; 80]; MAX_SECTION_REFERENCES])
+        .expect("a full section")
+        .encode();
+    assert!(BundleReferencesBytes::well_formed(&section).is_ok());
+    assert!(BundleReferencesBytes::well_formed(&[]).is_err());
+    assert!(BundleReferencesBytes::well_formed(&0u32.to_le_bytes()).is_err());
+    let over = u32::try_from(MAX_SECTION_REFERENCES + 1).expect("fits");
+    assert!(BundleReferencesBytes::well_formed(&over.to_le_bytes()).is_err());
+    let mut padded = section;
+    padded.push(0);
+    assert!(BundleReferencesBytes::well_formed(&padded).is_err());
 }
 
 /// The frozen complete-tree set (`SO-D12h`): the empty set is written as a

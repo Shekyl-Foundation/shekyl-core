@@ -117,8 +117,8 @@ pub enum Bodies {
     /// Each block carrying a transaction it does not list: a body that is
     /// not its header's (CEN-G2), in a response whose form is sound.
     SubstituteBody,
-    /// Each witness replaced by bytes that are not one.
-    SubstituteWitness,
+    /// Each block's bundle references replaced by one that is not its own.
+    SubstituteReferences,
     /// Every listed transaction as its skeleton.
     Skeleton,
 }
@@ -172,9 +172,9 @@ impl ServingPeer {
                     body.txs.push(TxBody::Full(extra.clone()));
                 }
             }
-            Bodies::SubstituteWitness => {
+            Bodies::SubstituteReferences => {
                 for body in &mut response.bodies {
-                    body.attestation_witness = vec![0xAB; 64];
+                    body.bundle_references = vec![vec![0xAB; 80]];
                 }
             }
             Bodies::Skeleton => {
@@ -371,7 +371,7 @@ pub fn request_headers(locator: Vec<[u8; HASH_SIZE]>) -> Vec<u8> {
 
 /// The block at `height` in `store`, announced as a peer announces it: a
 /// 2008 carrying the block, every listed transaction whole, and its
-/// witness.
+/// bundle references.
 ///
 /// # Panics
 ///
@@ -408,7 +408,7 @@ pub fn announcement(store: &ChainStore, height: u64) -> Vec<u8> {
                     TxBody::Skeleton(_) => panic!("a held block serves whole"),
                 })
                 .collect(),
-            attestation_witness: body.attestation_witness,
+            bundle_references: body.bundle_references,
         },
         current_blockchain_height: count,
     };

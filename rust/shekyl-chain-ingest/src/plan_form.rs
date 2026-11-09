@@ -94,7 +94,7 @@ where
     let demoted_len = work.len();
     work.extend(plan.promoted.iter().map(|p| {
         let candidate = Candidate::new(p.block.clone(), p.transactions.clone())
-            .with_attestation_witness(p.witness.clone());
+            .with_bundle_references(p.references.clone());
         let references = plan.references_for(&p.at, &candidate);
         (candidate, p.at.clone(), references)
     }));

@@ -23,7 +23,7 @@ mod sync;
 mod types;
 
 pub use address::{NetworkAddress, ADDR_IPV4, ADDR_IPV6, ADDR_TOR};
-pub use block::{BlockCompleteEntry, TxBlobEntry, ATTESTATION_WITNESS_MAX_BYTES};
+pub use block::{BlockCompleteEntry, TxBlobEntry, MAX_BUNDLE_REFERENCES};
 pub use bundles::{
     HeldBundleBody, NewBundle, RequestBundleBodies, ResponseBundleBodies, CAP_NEW_BUNDLE,
     CAP_REQUEST_BUNDLE_BODIES, CAP_RESPONSE_BUNDLE_BODIES, MAX_BUNDLE_BODY_REQUEST_COUNT,

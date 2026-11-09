@@ -348,8 +348,9 @@ impl Secrets {
             height: facts.connecting,
             previous: facts.previous,
             curve_tree_root: facts.curve_tree_root,
-            // This node mints no attestation records, so every template
-            // commits the empty set's root (CEN-B4's witness-less arm).
+            // No template fills a section until the switch's C4, so every
+            // template commits the empty section's root (CEN-B4's arm for
+            // a block with no references).
             bundle_root: BundleRoot::from_bytes(empty_bundle_root()),
             major_version: rule_set.header_major_version(),
             now: producer.now,

@@ -298,7 +298,7 @@ fn the_unheld_bundle_root_is_not_the_empty_sections() {
     let IngestEvent::Extend(candidate) = ev.event else {
         panic!("Extend-only");
     };
-    assert!(candidate.attestation_witness.is_none(), "nothing supplied");
+    assert!(candidate.bundle_references.is_none(), "nothing supplied");
     let root = candidate.block.header.bundle_root;
     assert_eq!(root.as_bytes(), &UNHELD_BUNDLE_ROOT);
     assert_ne!(

@@ -1069,23 +1069,14 @@ D2, judges CEN-D1 against the claimed target, runs `tx_form` at every
 slot, then CEN-H19's batch; `validate` verifies the claims (the rule set,
 D3's seed, and the target — a mismatch is `Stale::Target`, not a second
 D1), derives C3/D4/D6/D7/D1b, then runs A2, B5, C1, C2,
-**B4** (slice 8 row 10, 2026-10-06: `rules::attestation::B4` over
-`Candidate::attestation_witness`, always in coverage — **`None` is the
-empty preimage against the header's `attestation_root`**, never a
-vacuous pass and never a gap; `Some(w)` is the recompute over the
-coinbase's record field paired with the witness plus every record's
-countersignature under the SF-D8 window, through the retention crate's
-`attestation_admission::AttestationSet`, the body the C++ shim marshals
-to; a non-empty root with nothing supplied refuses as B4, which is why
-CEN-A3 has no Rust rule of its own; and the empty set has **one**
-carrier — `None`, no store row — because the wire codec gives it no
-bytes and refuses a zero count (`WitnessError::ZeroCount`, 2026-10-07,
-review on #983), so a sidecar spelling it as eight zero bytes refuses
-as B4 instead of recording a row its peers do not; a hole below the
-predecessor, and a stored bond hybrid key that is not canonical, are
-`Corrupt` — `HoleBelowTip` on the block row and `BondHybridKeyMalformed`
-on `archival_bond` — because a conforming writer cannot produce either,
-so neither is a B4 refusal; a persona with no record stays the refusal),
+**B4** (`rules::attestation::B4` over the header's `bundle_root` and
+`Candidate::bundle_references`, always in coverage — **`None` is the empty
+section against the header's root**, never a vacuous pass and never a gap.
+Until admission is live (the switch's C3, `SO-D12` 4b) a block that carries
+references is refused here and the root must be `empty_bundle_root()`; the
+coinbase extra still parses here and its `0x0B` set must be empty. A
+non-empty root with nothing supplied refuses as B4, which is why CEN-A3 has
+no Rust rule of its own. B4 reads no view, so it has no `Corrupt` arm),
 E1, F4–F6, G1, then the slot loop. `StructurallyValid` carries the clock
 reading (`judged_at`) — **the
 verdict is time-dependent**: anything that caches or defers one lets CEN-C1's

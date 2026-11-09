@@ -330,8 +330,8 @@ fn judge_rules<'id, P, H: HeaderView<'id>>(
 
 /// A body matches its header: the block's identity, every carried
 /// transaction's txid (CEN-G2, a skeleton through
-/// [`Transaction::hash_with_supplied_components`]), and the witness's root
-/// (CEN-B4's stateless half). The countersignatures stay `validate`'s.
+/// [`Transaction::hash_with_supplied_components`]), and the header's root
+/// against the bundle references beside it (CEN-B4, stateless whole).
 ///
 /// A mismatch is the row `validate` would name. What a session does with
 /// it is the caller's.
@@ -353,7 +353,7 @@ pub fn bind_body(header: &HeaderJudged, body: &BlockBody) -> Verdict<()> {
     let root = *block.header.bundle_root.as_bytes();
     B4::bind_root(
         &block.miner_transaction.prefix.extra,
-        &body.attestation_witness,
+        &body.bundle_references,
         &root,
     )?;
     Ok(())

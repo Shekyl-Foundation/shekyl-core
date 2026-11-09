@@ -186,7 +186,7 @@ pub struct Mined {
 
 impl Mined {
     /// The block as a candidate: the template's block and listed bodies,
-    /// no witness (the driver mints no attestation records).
+    /// no references (the driver's blocks admit no bundle).
     #[must_use]
     pub fn candidate(&self) -> Candidate {
         Candidate::new(

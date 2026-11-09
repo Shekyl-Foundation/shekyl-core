@@ -325,7 +325,7 @@ pub(crate) trait BlockRule: Rule {
     /// is a new `ChainView` method. `?` on a view method lifts `V::Fault`
     /// into [`ViewRead::View`]; a parent-side hole goes through [`recorded`].
     ///
-    /// The type says every block rule can halt the writer; only B4 can. That
+    /// The type says every block rule can halt the writer; none can. That
     /// gap is held by `scripts/ci/check_block_rule_corrupt_sites.py`, which
     /// reads each rule impl — `impl BlockRule for X` and `impl HeaderRule
     /// for X` alike, the trait set derived from the blanket impl below

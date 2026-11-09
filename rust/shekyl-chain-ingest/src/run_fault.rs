@@ -63,7 +63,7 @@ pub enum PlanMismatchReason {
     IncumbentKept,
     /// The formed promotions are not one per alternative-chain entry.
     PromotedLength,
-    /// A formed promotion is not its alt row's identity or witness.
+    /// A formed promotion is not its alt row's identity or references.
     PromotedRow,
     /// The formed demotions are not the recorded chain above the fork.
     DemotedChain,
@@ -78,8 +78,8 @@ impl std::fmt::Display for PlanMismatchReason {
             Self::AlternativeTipRecorded => "the plan's alternative tip is a recorded block",
             Self::IncumbentKept => "the fork choice keeps the incumbent",
             Self::PromotedLength => "the promoted blocks are not the alternative chain's entries",
-            Self::PromotedRow => "a promoted block is not its alt row (identity or witness)",
-            Self::DemotedChain => "the demoted blocks are not the recorded chain above the fork point (identity or witness)",
+            Self::PromotedRow => "a promoted block is not its alt row (identity or references)",
+            Self::DemotedChain => "the demoted blocks are not the recorded chain above the fork point (identity or references)",
             Self::RefusedBlockUnheld => "the block form refused is not an entry of the alternative chain",
         })
     }

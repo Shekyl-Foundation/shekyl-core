@@ -165,12 +165,11 @@ pub enum Mutation {
     Orphan,
     /// `curve_tree_root` replaced by a root the tree never had.
     WrongRoot,
-    /// `bundle_root` replaced, nothing else: no witness, no `0x0B`
-    /// field, so the set is empty and the mined root is not the empty
-    /// set's. CEN-B4's empty-witness arm — CEN-A3's falsifier — at the
-    /// block (`CHAIN_RULES_SLICE_8.md` §5 row 10). The record arm has no
-    /// mutation: CEN-I20's coinbase grammar admits no `0x0B` field, so no
-    /// driven block carries a record to corrupt (slice 8's finding).
+    /// `bundle_root` replaced, nothing else: no references, no `0x0B`
+    /// field, so the section is empty and the mined root is not the empty
+    /// section's. CEN-B4's empty-section arm — CEN-A3's falsifier — at the
+    /// block. CEN-I20's coinbase grammar admits no `0x0B` field, so no
+    /// driven block carries a record to corrupt.
     WrongBundleRoot,
     /// `timestamp` = `clock + FTL + 1`: one second past the future-time
     /// limit the substrate's clock allows. Closes §5's FTL row.

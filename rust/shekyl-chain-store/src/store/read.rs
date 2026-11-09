@@ -1101,8 +1101,8 @@ impl ReadSnapshot<'_> {
     /// **SAL-13.** The recorded block at `height` as the candidate it was:
     /// the block, every listed transaction's whole wire bytes (`pruned ‖
     /// pqc_auths ‖ prunable`, [`TxRecord::wire_bytes`]) in the header's
-    /// order, and its attestation witness (A10; CEN-K5b: the witness is
-    /// captured off its height row before the pop). What a switch reads for
+    /// order, and its bundle references (A10; CEN-K5b: they are captured
+    /// off their height row before the pop). What a switch reads for
     /// each block it is about to demote, on the snapshot taken before the
     /// pops (`DRS_E5_POOL_ALT_PRUNE.md` §2.3): the cheap tier judges it, its
     /// row is written from that verdict, and its listed bodies go back to
@@ -1114,7 +1114,7 @@ impl ReadSnapshot<'_> {
     /// must hold is discarded (the retention prune keeps every body above
     /// the undo floor, so a body missing there is a store that disagrees
     /// with its own floor), the reassembled bytes do not parse as a
-    /// transaction, or the witness row is not a witness; whatever
+    /// transaction, or the references row is not a section; whatever
     /// [`block`](Self::block) and the per-transaction reads return; engine
     /// errors.
     pub fn candidate_at(
@@ -1162,29 +1162,25 @@ impl ReadSnapshot<'_> {
                 .map_err(|_| corrupt("txs_pruned", "the reassembled transaction does not parse"))?;
             transactions.push(tx);
         }
-        let witness = match self.attestation_witness_at(height)? {
-            AtHeight::Recorded(bytes) => bytes,
+        let references = match self.bundle_references_at(height)? {
+            AtHeight::Recorded(references) => references,
             AtHeight::AboveTip => unreachable!("the block at this height was just read"),
         };
-        let witness = witness
-            .map(shekyl_types::archival::AttestationWitness::new)
-            .transpose()
-            .map_err(|_| corrupt("archival_attestation_witness", "the row is not a witness"))?;
         Ok(AtHeight::Recorded(
             shekyl_chain_rules::Candidate::new(body.block, transactions)
-                .with_attestation_witness(witness),
+                .with_bundle_references(references),
         ))
     }
 
-    /// **A10.** Attestation witness bytes, unparsed. [`AtHeight::AboveTip`]
-    /// past the tip; `Recorded(None)` when the recorded block stored no row;
-    /// `Recorded(Some(bytes))` for a non-empty row within the witness cap.
-    /// An empty or over-cap row is SI-7.
-    pub fn attestation_witness_at(
+    /// **A10.** A recorded block's bundle references, undecoded.
+    /// [`AtHeight::AboveTip`] past the tip; `Recorded(None)` when the
+    /// recorded block admitted no bundle; `Recorded(Some(references))` for
+    /// a row that is a section. Any other row is SI-7.
+    pub fn bundle_references_at(
         &self,
         height: BlockHeight,
-    ) -> Result<AtHeight<Option<Vec<u8>>>, StoreError> {
-        archival_reads::attestation_witness_at(&self.txn, height)
+    ) -> Result<AtHeight<Option<shekyl_types::archival::BundleReferences>>, StoreError> {
+        archival_reads::bundle_references_at(&self.txn, height)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 

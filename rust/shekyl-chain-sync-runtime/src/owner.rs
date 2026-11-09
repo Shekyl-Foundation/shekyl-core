@@ -46,7 +46,7 @@
 //! - **Relay** is the model's decision ([`Command::Relay`]): a block that
 //!   connected as the new tip while this node, with it, is not `Behind`,
 //!   however it arrived. The owner builds that compact announcement (the
-//!   block and its witness, no transactions) and sends it as 2008 to every
+//!   block and its bundle references, no transactions) and sends it as 2008 to every
 //!   established session but the one that supplied it. A block no session
 //!   supplied, such as one this node mined, goes to every established
 //!   session.
@@ -1152,7 +1152,7 @@ where
     }
 
     /// An announced block (2008): the block, the transactions it
-    /// carried, and its witness. A payload that does not decode, or a
+    /// carried, and its bundle references. A payload that does not decode, or a
     /// pruned entry, is the sender's form failure.
     fn announce(&mut self, session: Session, payload: &[u8]) {
         let announced = match NewCompactBlock::load(payload) {
@@ -1176,14 +1176,14 @@ where
                 .into_iter()
                 .map(|tx| TxBody::Full(tx.blob))
                 .collect(),
-            attestation_witness: announced.b.attestation_witness,
+            bundle_references: announced.b.bundle_references,
         };
         self.event(Event::Announce { session, body });
     }
 
     /// Relay a block the model relays (module docs): the block with its
-    /// witness and no transactions, as 2008, to every established session
-    /// but `from`, its supplier. A block no session supplied, such as one
+    /// bundle references and no transactions, as 2008, to every established
+    /// session but `from`, its supplier. A block no session supplied, such as one
     /// this node mined, goes to every established session.
     fn relay(&mut self, hash: BlockHash, from: Option<Session>) {
         let compact = match relay::announcement(&self.store, &hash) {
@@ -1539,7 +1539,7 @@ where
                     judged: header,
                     block: body.block,
                     bodies: body.txs,
-                    attestation_witness: body.attestation_witness,
+                    bundle_references: body.bundle_references,
                 }
             })
             .collect();

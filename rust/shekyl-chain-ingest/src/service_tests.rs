@@ -201,7 +201,7 @@ pub(crate) fn arrival(tag: u64, session: u64, mined: &Mined) -> Arrival {
             .iter()
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
     }
 }
 
@@ -968,7 +968,7 @@ fn junk(tag: u64, session: u64, solicited: bool, len: usize) -> Arrival {
         },
         block: vec![0xA5; len],
         bodies: Vec::new(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
     }
 }
 
@@ -2408,22 +2408,23 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
             .iter()
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
     };
-    // The door bounds the block and its bodies; the witness is a sidecar
-    // with its own cap, and the caller's measure is the door's own.
+    // The door bounds the block and its bodies; the references are a
+    // sidecar with their own cap, a count, and the caller's measure is the
+    // door's own.
     let measured = bound.bytes();
-    let with_witness = super::BoundArrival {
-        attestation_witness: vec![0; 64],
+    let with_references = super::BoundArrival {
+        bundle_references: vec![vec![0; 80]; 3],
         ..bound.clone()
     };
-    assert_eq!(with_witness.bytes(), measured);
+    assert_eq!(with_references.bytes(), measured);
     assert_eq!(
         measured,
         bound.block.len() + bound.bodies.iter().map(Vec::len).sum::<usize>()
     );
     let over = super::BoundArrival {
-        attestation_witness: vec![0; shekyl_types::MAX_ATTESTATION_WITNESS_BYTES + 1],
+        bundle_references: vec![vec![0; 80]; shekyl_types::archival::MAX_SECTION_REFERENCES + 1],
         ..bound.clone()
     };
     assert_eq!(over.bytes(), measured);
@@ -2489,7 +2490,7 @@ async fn a_bound_span_is_seated_as_the_room_the_door_reported() {
             .iter()
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
     };
     let room = door.room();
     assert!(

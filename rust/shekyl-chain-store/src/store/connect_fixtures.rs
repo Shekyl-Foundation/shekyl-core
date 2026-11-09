@@ -82,8 +82,8 @@ pub(super) fn candidate_over(
             previous,
             nonce: 7,
             curve_tree_root: root,
-            // The empty set's root: a candidate carrying no witness is judged
-            // against it (CEN-B4, slice 8 row 10).
+            // The empty section's root: a candidate carrying no references is
+            // judged against it (CEN-B4).
             bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
         },
         miner_transaction: coinbase(height),

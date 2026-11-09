@@ -88,7 +88,7 @@ mod alt_tests;
 
 pub use alt::{AltBlock, AltBlockError, AltBlockFacts, AltBodies};
 pub use archival::{
-    AttestationWitnessBytes, BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest,
+    BlockDraws, BondRecord, BundleReferencesBytes, CompleteTreeSet, DrawableDigest,
     FirstPayingHeight, HeldShard, HeldShards, Holdings, HoldingsError, IssuedDigest, IssuedDraw,
     RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, SupportCount,
     SupportIssued, SupportSeats, MAX_BOND_KEY_BYTES,

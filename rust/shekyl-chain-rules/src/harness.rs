@@ -64,12 +64,11 @@ type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 ///    "a store fault propagates as a `Fault`, never a verdict" needs a view
 ///    that fails at height 7 ([`FaultingView`]); a real store will not.
 /// 3. **States a conforming store refuses to hold.** The assertion is the
-///    fault class, never a verdict. Two instruments: [`WithholdingView`]
+///    fault class, never a verdict. The instrument: [`WithholdingView`]
 ///    answers `AboveTip` for one per-height read ([`WithheldRead`]) while
-///    the tip still says the chain is dense; [`NonCanonicalBondView`]
-///    serves one persona a bond record whose hybrid key is not canonical
-///    bytes. A valid bond, a derived root, or a spent set is neither
-///    instrument — those are the real chain's to witness.
+///    the tip still says the chain is dense. A valid bond, a derived root,
+///    or a spent set is not this instrument's — those are the real chain's
+///    to witness.
 ///
 /// The line between the three and everything else is whether the chain is
 /// the subject. "This block exists", "this root is what the tree grew",
@@ -623,10 +622,7 @@ pub use assert::{
     expected_seed, expected_target, formed, formed_on, formed_on_network, formed_under,
     formed_under_network, infallible, judge_on, judged, token_for_one_rule, MockSubstrate,
 };
-pub use views::{
-    Faulted, FaultingView, NonCanonicalBondView, NonCanonicalHybridKey, WithheldRead,
-    WithholdingView,
-};
+pub use views::{Faulted, FaultingView, WithheldRead, WithholdingView};
 
 pub mod fixture;
 mod price;

@@ -408,7 +408,7 @@ fn a_bind_failure_closes_and_an_unavailable_block_does_not() {
         let body = BlockBody {
             block: raw,
             txs: vec![TxBody::Full(vec![1, 2, 3])],
-            attestation_witness: Vec::new(),
+            bundle_references: Vec::new(),
         };
         let bad = ResponseBodies {
             bodies: vec![body],

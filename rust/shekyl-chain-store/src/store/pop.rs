@@ -52,7 +52,7 @@ use super::undo::Replayed;
 use super::write::WriteBatch;
 
 /// What `pop` removed. The block itself is read through the view **before**
-/// popping, as the reorg already does for the witness (audit R-5); the
+/// popping, as the reorg already does for the references (audit R-5); the
 /// store hands nothing consensus-visible back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Popped {

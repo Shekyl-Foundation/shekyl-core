@@ -4160,17 +4160,19 @@ rather than a release.
 
 **The formula, written out, because "a fixed multiple of the weight limit" is
 not one.** A `block_complete_entry` is **not** bounded by block weight alone: it
-also carries `attestation_witness`, an opaque blob capped **independently of
-`pruned` and of weight** at `ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` =
-`8 + ARCHIVAL_MAX_ATTESTATION_RECORDS × (ARCHIVAL_ATTESTATION_PASS_NONCE_BYTES + ARCHIVAL_ATTESTATION_PASS_ANCHOR_HEIGHT_BYTES + ARCHIVAL_ATTESTATION_PASS_DELIVERY_DIGEST_BYTES + PQC_HYBRID_SINGLE_SIG_LEN)` = **885,000
-bytes** (`8 + 256 × 3,457`; per pass the witness carries `SF-D8`'s 32-byte
-nonce, 8-byte anchor height and 32-byte delivery digest ahead of the
-signature; the figures below are computed from that)
-(`src/cryptonote_config.h`, bounded at the codec by
-`archival_attestation_witness_within_transport_cap`).
+also carries `bundle_references`, the block's section
+(`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5), an array of undecoded references
+capped **independently of `pruned` and of weight**: at most
+`MAX_BUNDLE_REFERENCES` = `MAX_SECTION_REFERENCES` = 500 of them, `W₂`'s ruled
+upper edge, refused past that at the codec on both sides
+(`rust/shekyl-levin/src/payload/block.rs`). A reference is `80 + ⌈count / 8⌉
++ ⌈support count / 8⌉` bytes, and both counts are chain state (the economy
+count is bounded by the count cap `⌊9·D / SEB⌋ + 1`, §7.4), so the section's
+bytes, like the weight limit, are a function of the receiver's own chain
+state: `section_max` = 500 × the longest reference that state admits.
 
 > **`entry_max` = `margin` × `m_current_block_cumul_weight_limit`
-> + `ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` + KV encoding overhead.**
+> + `section_max` + KV encoding overhead.**
 >
 > - **2008** (one announce): `entry_max`.
 > - **2004** (a batch): **the byte budget**, *not* `n × entry_max` — see the

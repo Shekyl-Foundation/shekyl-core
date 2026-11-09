@@ -51,7 +51,7 @@ fn coinbase(raw: Vec<u8>) -> BlockBody {
     BlockBody {
         block: raw,
         txs: Vec::new(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
     }
 }
 
@@ -208,10 +208,10 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
             pqc_auth_hash: tx.pqc_auth_hash(),
             archival_len,
         })],
-        attestation_witness: candidate
-            .attestation_witness
+        bundle_references: candidate
+            .bundle_references
             .as_ref()
-            .map(|witness| witness.as_bytes().to_vec())
+            .map(|references| references.as_slice().to_vec())
             .unwrap_or_default(),
     };
     let out = drive(
