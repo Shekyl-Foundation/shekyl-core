@@ -509,7 +509,7 @@ defect; each needs a row or a reason it is not a departure.
 | Fee multiplier | design arm, only `×1` run | yes (capacity, usability): ESR-10 |
 | Rung mix; per-rung pool | **not modelled** (one-class pool) | yes: ESR-10, after `ESR10_PREDICTIONS.md` §0.1's pool |
 | Staking coupling (purse into the staking sim) | **not modelled**: the staking sim takes its purse by hand | yes: EUP-3 |
-| Challenge egress against the budget (H) | **not modelled** here (the staking sim has `--f34-calibrated`) | yes: EUP-3 |
+| Challenge egress against the budget (H) | **not modelled** here (the staking sim's `--f34-calibrated` was deleted 2026-11-08, last at `40f98fc44`) | yes: EUP-3 |
 | Tail criterion: per-block fee revenue, median and variance, to ≈ year 135 | **not modelled**; the sim prints yearly sums and a decade-sampled mean fee | yes: **no step builds it** |
 | Emission-gain stuffing at the window's edge | **not modelled** (scenario 4's fake volume is ordinary demand) | yes (goal 5 is graded at EUP-4), but it is placed at EUP-5 §4.2: **a sequencing gap** |
 | Demand elasticity, wallet rung escalation | not modelled, declared out | no: the wallet does not escalate, and the criteria read fixed demand schedules |
@@ -573,7 +573,7 @@ only.
 | tail multiple **`k`** | per-block fee revenue, median and variance, to ≈ year 135 | yearly sums (`A1YearAgg`) and a per-transaction mean fee at y10–y60 | the per-block distribution and the horizon: **EUP-4 prep**, after the zone closed form |
 | **F** knee and GF-7 asymptote | A1 clearance per candidate; A4 and A5; the knee band by its definitions on an uncapped chain | `print_escalation_family`, `a1_clearance_report`, A1-T and A1-L (`onset.rs`), `a4_stuffing_report`; the band is printed only by a test | no run with the escalation live (the ledger is flat); the band needs the uncapped chain (**ESR-10**) and its 135-year high (**EUP-4 prep**) |
 | **I** bond floor | A1 with a reward-proportional principal beside the fixed one; TJ-4 / TJ-7; the staking population fed this sim's purse | A1 burden at 0.75 × R6 × n × rate; A1-L; `cartel::tj_inequalities_report`; `--gate7` (≈ 900× low) | no reward-proportional arm (**EUP-4 prep**); the purse coupling (**EUP-3**) |
-| **H** challenge doctrine | L19i egress against `budget(E)` | only in the staking sim (`--f34-calibrated`) | egress as a burden term: **EUP-3** |
+| **H** challenge doctrine | L19i egress against `budget(E)` | was only in the staking sim (`--f34-calibrated`, deleted 2026-11-08, last at `40f98fc44`) | egress as a burden term: **EUP-3** |
 | 720-block window (umbrella §4.2) | step response, sub-window boom/bust, an edge-timed stuffer | the window is imported with no length knob; step response is a unit test | per-block traces, step and surge schedules, edge stuffer: **EUP-4 prep** |
 | fee lattice size | the lattice step as a fraction of the ordinary fee, against a bar | `FEE_DECIMAL_PLACES = 6`, inherited. ESR-15 landed: the production arm rounds, and `--stage2` prints the step (year-1 baseline 0.0084 bp; 169 bp where the fee prints 0.0001 SKL) | the size stays open for EUP-5; six decimals stay until that ruling |
 
