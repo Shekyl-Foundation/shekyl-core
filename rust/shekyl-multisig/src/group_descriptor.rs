@@ -8,8 +8,10 @@
 
 use serde::{Deserialize, Serialize};
 
-/// File format version.
-pub const GROUP_DESCRIPTOR_VERSION: u8 = 1;
+/// File format version. `2` adds the group KEM public key; a version `1`
+/// file has none and is refused with
+/// [`GroupDescriptorError::UnsupportedVersion`].
+pub const GROUP_DESCRIPTOR_VERSION: u8 = 2;
 
 /// Group descriptor: everything needed to restore a multisig group.
 ///
@@ -22,6 +24,9 @@ pub struct GroupDescriptor {
     pub n_total: u8,
     pub spend_auth_version: u8,
     pub participant_pubkeys: Vec<String>,
+    /// The group's hybrid KEM public key (hex): the key a payer's `0x06`
+    /// ciphertext goes to. Every member holds its secret.
+    pub group_kem_pubkey: String,
     /// The group's identity: the hex of `shekyl_address::address_fingerprint`
     /// over the group's `MultisigAddressPayload`. This is the single group
     /// identifier — it replaces the former opaque `group_id: String`, which was
@@ -38,6 +43,7 @@ impl GroupDescriptor {
         n_total: u8,
         spend_auth_version: u8,
         participant_pubkeys: Vec<String>,
+        group_kem_pubkey: String,
         address_fingerprint: String,
     ) -> Self {
         Self {
@@ -46,6 +52,7 @@ impl GroupDescriptor {
             n_total,
             spend_auth_version,
             participant_pubkeys,
+            group_kem_pubkey,
             address_fingerprint,
             created_at: 0,
             notes: None,
@@ -78,6 +85,9 @@ impl GroupDescriptor {
                 got: u8::try_from(desc.participant_pubkeys.len()).unwrap_or(u8::MAX),
             });
         }
+        if desc.group_kem_pubkey.is_empty() {
+            return Err(GroupDescriptorError::MissingGroupKemPubkey);
+        }
         if desc.address_fingerprint.is_empty() {
             return Err(GroupDescriptorError::MissingFingerprint);
         }
@@ -96,6 +106,8 @@ pub enum GroupDescriptorError {
     InvalidThreshold { m: u8, n: u8 },
     #[error("pubkey count mismatch: expected {expected}, got {got}")]
     PubkeyCountMismatch { expected: u8, got: u8 },
+    #[error("group_kem_pubkey is required")]
+    MissingGroupKemPubkey,
     #[error("address_fingerprint is required")]
     MissingFingerprint,
 }
@@ -111,6 +123,7 @@ mod tests {
             n_total: 3,
             spend_auth_version: 2,
             participant_pubkeys: vec!["pk1".into(), "pk2".into(), "pk3".into()],
+            group_kem_pubkey: "gk".into(),
             address_fingerprint: "deadbeef".into(),
             created_at: 1713000000,
             notes: Some("Test group".into()),
@@ -158,6 +171,24 @@ mod tests {
         assert!(matches!(
             GroupDescriptor::from_json(&json),
             Err(GroupDescriptorError::PubkeyCountMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_version_1_and_a_missing_group_kem_pubkey() {
+        let mut desc = make_test_descriptor();
+        desc.version = 1;
+        let json = serde_json::to_string(&desc).unwrap();
+        assert!(matches!(
+            GroupDescriptor::from_json(&json),
+            Err(GroupDescriptorError::UnsupportedVersion(1))
+        ));
+        let mut desc = make_test_descriptor();
+        desc.group_kem_pubkey = String::new();
+        let json = serde_json::to_string(&desc).unwrap();
+        assert!(matches!(
+            GroupDescriptor::from_json(&json),
+            Err(GroupDescriptorError::MissingGroupKemPubkey)
         ));
     }
 

@@ -23,6 +23,12 @@ build = "build.rs"
 [dependencies]
 shekyl-units = { path = "../shekyl-units" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# The member file (`member_file.rs`): the address payload it carries, and
+# `salt_for`, which binds the group transport secret to the network's name.
+# Neither reaches a transport crate (no tor, tokio-net or reqwest in either
+# tree), so the dependency list still enforces the "no transport" ban.
+shekyl-address = { path = "../shekyl-address" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 serde = { workspace = true }
 serde_json = "1"
 thiserror = { workspace = true }
