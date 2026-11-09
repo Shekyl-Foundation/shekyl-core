@@ -457,7 +457,7 @@ pub struct ScenarioResult {
     /// **Fee-era worst serving deep gap** (L13): peak serving deep under-target over the
     /// run's second half — the thinned-tail / death-spiral read. A sustained high value
     /// is a priority-1 durability failure (the deep tail is unfunded and going dark);
-    /// ≈0 means the decayed purse, adaptive servo, or foundation floor held the tail.
+    /// ≈0 means the decayed purse or the adaptive servo held the tail.
     pub fee_deep_under_peak: f64,
     /// **Post-shock worst serving deep gap** (L17): peak serving deep under-target from
     /// the shock epoch on — the acute damage. `0` outside the shock axis.
@@ -1017,24 +1017,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         // R10: release escrows tick before this epoch's best-responses, so an
         // exit at the end of epoch `e` has its bond back at `e + cooldown`.
         world.tick_releases();
-        // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
-        // agents react. Skip on the first epoch so the initial distribution settles.
+        // Age the window (age, retire, lock-decrement) before this epoch's
+        // best-response. The first epoch keeps the initial distribution.
         if cfg.dynamic && ep > 0 {
-            // The era a recycled slot is born into, chosen so the arm tests what it
-            // claims. A shard born at epoch `ep` will, at the final epoch `E`, have
-            // age `(E − ep) · epoch_aging`. Keying its era on that value makes era
-            // and age COINCIDE in the final snapshot — which is the only snapshot the
-            // verdict reads — so a heavy era genuinely sits at a chosen DEPTH there.
-            //
-            // Two wrong keys were measured before this one, and both produced
-            // confident nonsense. Keying on the shard's age at birth: every recycled
-            // slot is born at age 0, so the window fills with one era and the realized
-            // mean size ran to 2.22 (`S = 4`, Plateau). Keying on run-normalized time:
-            // a shard lives `1 / epoch_aging` = 50 epochs, so the final window spans
-            // only the last third of the run's eras — Plateau's window filled with
-            // newest-era heavies (mean 1.18–1.29, ADDING demand rather than
-            // redistributing it) while Burst's heavy era had aged out of frame
-            // entirely (mean 0.82–0.89), which is why it read "clear".
             world.advance_epoch(cfg.epoch_aging);
         }
 
@@ -1701,8 +1686,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             (0.0, 0.0, 0.0, 0.0)
         };
     // L12 bootstrap aggregates, taken over the WHOLE run (the cold-start transient is at
-    // the *start*, not in the steady-state window): the worst deep retrieval gap with and
-    // without the foundation floor, and the peak bonded-archiver count. `bonded_active_peak`
+    // the *start*, not in the steady-state window): the worst deep retrieval gap on the
+    // bare market, and the peak bonded-archiver count. `bonded_active_peak`
     // above the steady `bonded_active` is the **overshoot** — entrants the high early APR
     // pulled in beyond the steady-state set, which then shed (the early-churn risk).
     let boot_deep_under_peak = series_boot_deep_under
@@ -2632,8 +2617,8 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // new growing-window (the chain produces blocks from a small genesis core). The
     // questions: (a) does endogenous entry track the growing deep demand or OVERSHOOT
     // (high early APR pulls in entrants who shed at normalization, churning the youngest/
-    // thinnest deep history)? (b) does the population-decaying foundation floor cover the
-    // transient the market cannot yet? Reuses the L11 interior-feasible economics
+    // thinnest deep history)? (b) the arms are the bare market, so a transient the
+    // market cannot yet cover stays uncovered. Reuses the L11 interior-feasible economics
     // (ρ=0.02, budget=100, pool 240, entry 6/epoch). ---
     let l12_base = || {
         let mut c = l11_base();
@@ -2650,7 +2635,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c
     };
 
-    // (1) COLD-START, no floor: the bare-market transient. `boot_deep_under_peak` is the
+    // (1) COLD-START, bare market. `boot_deep_under_peak` is the
     // worst deep retrieval gap (deep history accrues before archivers do); the steady
     // `deep_und`/`bondA` show whether the market recovers to the L11 attractor; and
     // `bonded_active_peak` vs steady `bondA` is the OVERSHOOT read (the APR-inversion
@@ -2665,8 +2650,8 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // (4) GROWTH-RATE: the chain-growth vs. entry-rate race. Faster block production
     // (more shards/epoch) accrues deep demand faster while entry stays bandwidth-limited
     // (6/epoch), so the bare transient gap should widen with growth — the bootstrap
-    // stress is the growth/entry mismatch, not the economics. No floor, so the bare gap
-    // is visible. (Steady state is the same L11 attractor regardless of growth rate.)
+    // stress is the growth/entry mismatch, not the economics. The gap is the bare
+    // market's. (Steady state is the same L11 attractor regardless of growth rate.)
     for (label, growth) in [("slow", 3usize), ("mid", 6), ("fast", 12)] {
         let mut c = l12_base();
         c.name = format!("l12_growth_{label}");
@@ -2684,8 +2669,8 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // the OLDEST tail go under first (the irreplaceable band)? (b) with price coupling on,
     // does coverage collapse run away (death spiral) or stay bounded? (c) does the
     // adaptive reward-share servo (burn.rs template) damp it, and where does the fee-market
-    // ceiling turn damping into a graceful loud failure? (d) does the L12 foundation floor
-    // RE-ENGAGE as the market thins (its decay schedule run in reverse)? Reuses the L11
+    // ceiling turn damping into a graceful loud failure? (d) the arms are the bare
+    // market: nothing re-enters to cover the tail as the purse thins. Reuses the L11
     // interior economics (ρ=0.02, pool 240, entry 6/epoch), starting full and well-funded
     // (budget 200 ⇒ bondA well above the ~80 knee) so the decay sweeps DOWN through the
     // L11 transfer curve. ---
@@ -2704,7 +2689,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c
     };
 
-    // (1) DECAY / terminal-subsidy sweep: no servo, no coupling, no floor — the bare
+    // (1) DECAY / terminal-subsidy sweep: no servo, no coupling — the bare
     // shrinking-purse read. Vary the terminal `budget_floor` the subsidy decays to. As the
     // floor drops below the sustainable purse (~100 from the L11 transfer), the emergent
     // `bondA` thins and the deep tail goes under — `serving_oldest_under_max` should light
@@ -2872,7 +2857,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // complete? The price-coupling insight (token-denominated reward and bond cancel in
     // the APR ratio, so only *expected depreciation* bites) holds only if EVERY term is
     // token-denominated. The operational flow cost (bandwidth, storage hardware) is paid
-    // in fiat. With `flow_cost_fiat`, the exit APR is `R/B − F/(B·p)`: a low/falling price
+    // in fiat. With `flow_cost_fiat`, the exit APR is `R/B − K/B − F/(B·p)`: a low/falling price
     // raises the real flow-cost drag — a LEVEL channel that can ignite exit with NO
     // trust-loss trigger (`price_coupling = 0`). These scenarios fund the token side
     // ADEQUATELY (`budget_floor = 100`, the L11 knee) and set `price_coupling = 0`, so any
