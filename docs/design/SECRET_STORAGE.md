@@ -14,8 +14,8 @@ the questions the round answers; it does not answer them yet.
   `VirtualLock` on Windows) once, at construction. A `TxKey` constructor
   returns its `R`, and a from-seed constructor beside the random one serves
   the genesis tool; `x` comes from `derive_output_secrets`. Those
-  constructors retire all nine rows of `docs/ci/secret-byte-locality.tsv`,
-  which then holds none: the five `R = r·G` rows, the two `x = ho + b` rows
+  constructors retire all ten rows of `docs/ci/secret-byte-locality.tsv`,
+  which then holds none: the six `R = r·G` rows, the two `x = ho + b` rows
   and the genesis tool's two `txkey.rs` rows. This is the implementation
   [`35-secure-memory`](../../.cursor/rules/35-secure-memory.mdc)'s
   OS-level section names, and the move
@@ -40,7 +40,9 @@ the questions the round answers; it does not answer them yet.
   `ViewSecret`, `MlKem768DecapKey`, and the rest) and `AllKeysBlob`
   (`account.rs`), which is built by value and holds every key of one
   account.
-- The nine inventory rows: `shekyl-block-template` `lib.rs`;
+- The ten inventory rows: `shekyl-block-template` `lib.rs`;
+  `shekyl-chain-ingest` `emission_assembly.rs` (the emission claim's
+  `R`, compiled under `any(test, feature = "harness")`);
   `shekyl-engine-core` `drain_assembly.rs`, `sign_bridge.rs`,
   `stake_engine/bond_post_assemble.rs`, `stake_engine/claim.rs` (`R`);
   `shekyl-engine-core` `local_keys.rs`, `stake_engine/helpers.rs` (`x`);
@@ -59,8 +61,9 @@ the questions the round answers; it does not answer them yet.
   platform without it)?
 - `SSR-Q3` — The `TxKey` type: its random constructor and its from-seed
   constructor (the genesis tool's ceremony seed, reduced mod ℓ), what it
-  exposes besides `R`, and how each of the seven call sites changes (five
-  wallet and node sites, the genesis tool's two).
+  exposes besides `R`, and how each of the eight call sites changes (six
+  `R = r·G` sites — the block template, the four wallet assemblies, and
+  the emission claim — and the genesis tool's two).
 - `SSR-Q4` — The `x = ho + b` call sites against `derive_output_secrets`:
   what each one needs that the function does not yet return.
 - `SSR-Q5` — The tests that observe the locking from outside the process,
