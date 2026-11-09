@@ -4202,6 +4202,7 @@ dependencies = [
 name = "shekyl-daemon"
 version = "3.1.0"
 dependencies = [
+ "libc",
  "rustix",
  "shekyl-address",
  "shekyl-archival-retention",
