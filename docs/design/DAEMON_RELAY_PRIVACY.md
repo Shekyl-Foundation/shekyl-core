@@ -12649,9 +12649,9 @@ They are a separate surface and a separate curve.)*
 > and 19.9 µs at 8 in the same capture, and CEN-H18's cleartext balance). The
 > same capture's `adm` term, the masks-and-proof pair re-timed on the Rust
 > verifier at depth 2, reads 126.05 ms at 1 input and 402.11 ms at 8, 1.2 %
-> and 0.7 % above §85.3's cells; the cells keep §85.3's figures, because
-> §85.3 is the only sweep with the depth-7 column, and the difference is
-> BA-T10's to settle.
+> and 0.7 % above §85.3's cells; the cells keep §85.3's figures until
+> BA-T10 (ruled 2026-11-08), because §85.3 is the only sweep with the
+> depth-7 column, and BA-T10 includes the depth sweep.
 >
 > Every value derived from the cells moves with them: the clearnet hop is
 > 195 ms (144.31 + 0.96 ms of node crypto + 50 ms transit) and the Tor hop
@@ -14339,7 +14339,10 @@ zone to alias onto.
 >
 > **The shipped interim**: hop 1770 ms (BA-Q9, 2026-11-08), 6 ms from a
 > 1-second step (`tests/embargo_steps.rs`). Whether a step instance is
-> exercised is the checklist at §89.8.4, not restated here.
+> exercised is the checklist at §89.8.4, not restated here. The §94
+> candidate's modal hop, which does not ship, is now 736 ms and 15 ms from a
+> +12-second step (the same test), which matters only if that candidate is
+> adopted.
 >
 > *(Method note: an earlier draft of this section computed distances from a
 > closed form for the `h = 1` family alone. That form missed the harmonics from
@@ -15800,13 +15803,12 @@ adopted anonymity timer is **1176 s**
 (`shekyl-relay` `origin_retry_secs`, `graph/embargo.rs`).
 
 That is a constant with a live provenance rather than a point inside a bracket:
-if `alpha` moves the interval follows, instead of decoupling silently. It stays
-fixed at 1148 s through the DRS-X flip and the rebuild, and is revisited after
-the rebuild against the Rust relay as built (Rick, 2026-10-30; owner RD, the
-FOLLOWUPS row *Revisit the origin's first retry*). The derivation reads 1176 s
-since BA-Q9 (2026-11-08) put the door's signature and range proof into the hop
-it reads; whether that ruling held the value or the derivation is open
-(`BENCHMARK_ALIGNMENT.md` BA-Q9). Same
+if `alpha` moves the interval follows, instead of decoupling silently. Its
+derivation stays fixed through the DRS-X flip and the rebuild, and is revisited
+after the rebuild against the Rust relay as built (Rick, 2026-10-30; owner RD,
+the FOLLOWUPS row *Revisit the origin's first retry*). The retry follows the
+derivation, and no literal holds its value (Rick, 2026-11-08): it reads 1176 s
+since BA-Q9 put the door's signature and range proof into the hop it reads. Same
 shape as §94.8's argument for deriving rather than choosing, and it removes the
 self-invented bar this arc has been bitten by twice.
 

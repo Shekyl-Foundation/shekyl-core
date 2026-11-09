@@ -284,6 +284,9 @@ BA-T5.
 | **BA-I102** | `wss-q1b/verify_nominal_20260927T235515Z.json` | Root read, nominal density: 53.7 s unfrozen, 0.6 s frozen | floor | as BA-I101 | **Keep, tracked** |
 | **BA-I103** | `wss-q1b/verify_nominal_20260927T235515Z.txt` | Summary of BA-I102 | — | as BA-I101 | follows BA-I102 |
 | **BA-I106** | `ba_t33_fn_dsa_floor_device_20261015.md`, with its four sessions' `_env.tsv`, `_s2_env.tsv`, `_s3_env.tsv` and `_s4_env.tsv` | Hybrid scheme 3 on the floor: per-call sign 2.243 ms, held sign 1.698 ms, verify 568 µs, seeded key generation 45.68 ms, one persona slot's derivation 466 ms (criterion, n = 100 each); the stack each operation needs, by ladder; the scheme's vectors on the device | floor, shipping codegen, 1.8 GHz throughout | [`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) `FND-9`, `FND-12` | **Keep, tracked** (BA-T33's T3 arm) |
+| **BA-I110** | `gap7_block_verify_pi4_rust_20261108T232442Z.txt` | Shipped Bulletproofs+ verify with `Â` folded into the batch (#1319): 18.838 ms lone at 1-in/2-out, 18.882 ms at 8-in/2-out, 107.3 ms at 16 outputs, 3.659 ms per proof in a batch of 46 (criterion, 10 samples per point) | floor, flagless, at `78de6a14e2`, beside the resident daemon | `SPEC_VERIFY_COST`'s range-proof operands and the surge factor's Bp+ term (`DAEMON_RELAY_PRIVACY.md` §72.2; `block_connect_verify.rs`, FLOOR RESULTS) | **Keep, tracked** |
+| **BA-I111** | `gap7_block_verify_pi4_rust_eager_20261108T231752Z.txt` | The same cells on the pre-fold verifier, the control for BA-I110: 34.80 ms lone, 196.3 ms at 16 outputs, 19.63 ms per proof batched; within 1.5 % of BA-I77's lone cells | floor, flagless, same session as BA-I110 | The fold's measured saving and the batched figure's decomposition (`block_connect_verify.rs`, FLOOR RESULTS) | **Keep, tracked** |
+| **BA-I112** | `gap7_block_verify_pi4_rust_dalek32_20261108T234742Z.txt` | The BA-I110 cells under `curve25519-dalek`'s 32-bit field backend: 16.26 ms lone, 94.42 ms at 16 outputs, 3.238 ms per proof batched, 11 to 14 % under the shipped 64-bit backend | floor, flagless, same session as BA-I110 | None: **a candidate backend, reported only**. Nothing ships it; adopting a backend is its own decision | **Keep, tracked** |
 
 ### 2.9 `shekyl-gui-wallet`
 
@@ -405,7 +408,7 @@ a live node.
 
 | Id | Benchmark | Tier and device | Protocol beyond the common one | Replaces or extends | Owner lane |
 | --- | --- | --- | --- | --- | --- |
-| **BA-T1** | Pool-admission verify at the modal shape | T1, CI runner | gungraun; scope per BA-Q9 | BA-I10 | relay privacy |
+| **BA-T1** | Pool-admission verify at the modal shape: the door's whole sequence, masks and proof, the hybrid signatures and the lone range proof (BA-Q9; its own PR after #1319, before the cut) | T1, CI runner | gungraun | BA-I10 | relay privacy |
 | **BA-T2** | Block-connect verify terms: admission pair, hybrid signature, Bulletproofs+, parse, at the modal and the cost-densest shape | T1, CI runner | gungraun over the pinned fixtures | new; subject of BA-I20 | chain rules |
 | **BA-T3** | Serve one response at three shard sizes from an in-memory store; the work before the first byte at two; the chunked read-and-fold loop beside the one-shot digest at three. **Built 2026-10-06** on the single-pass serve: `shekyl-p-serve` `benches/serve_response_iai.rs`, five `crypto_bench_serve_*` functions (manifest §12; the signature's cost in its own cell since PR #1015, so a wire change cannot re-roll ML-DSA's trajectory under the serve cells) | T1, CI runner | gungraun | built (BA-G1) | archival serve |
 | **BA-T4** | Verify one fetched shard: delivery digest, hybrid check, content verification once it exists | T1, CI runner | gungraun | new (BA-G2) | archival fetch |
@@ -414,7 +417,7 @@ a live node.
 | **BA-T7** | Whole-shard fetch over Tor on the production serve and fetch path: time and miss rate by object size, with and without mining | T3, floor serving and an internal node reading | The size-ladder and one-device protocols already written in [`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §10 | BA-I35, BA-I91 to BA-I95 | archival serve |
 | **BA-T8** | P2P span distributions: clearnet dial, handshake, gap on a LAN and a long path; Tor dial; Tor inbound; write-stall samples | T3, floor | n = 100 per leg; each reopen rule evaluated and its verdict recorded | BA-I80 to BA-I88, BA-I106 to BA-I109 | P2P transport |
 | **BA-T9** | Tor stem hop: transit and node-local time | T3, floor | The runbook BA-I68; n ≥ 100; each sample mapped to a verify-cost cell | BA-I68 | relay privacy |
-| **BA-T10** | The floor verify surface: admission pair by input count and depth, hybrid signature, shipped Bulletproofs+ single and batched, parse, block-budget fill, AES throughput | T3, floor | Criterion, 10 samples per point; depth cells that are projections labelled so | BA-I20, BA-I21, BA-I30, BA-I42, BA-I58, BA-I73, BA-I75, BA-I77 | chain rules, relay privacy |
+| **BA-T10** | The floor verify surface: admission pair by input count and depth, hybrid signature, shipped Bulletproofs+ single and batched, parse, block-budget fill, AES throughput | T3, floor | Criterion, 10 samples per point; includes the depth sweep, so the admission pair's depth cells are measured, not projected (ruled 2026-11-08) | BA-I20, BA-I21, BA-I30, BA-I42, BA-I58, BA-I73, BA-I75, BA-I77 | chain rules, relay privacy |
 | **BA-T11** | Timer arm and poll cost, and the thread-budget legs: the smallest worker, blocking and executor counts that meet each duty | T3, floor | Per `docs/FOLLOWUPS.md:69`; criterion, 10 samples, for the timer | BA-I19, BA-I90; new (BA-G10) | P2P transport |
 | **BA-T12** | Rust `validate` plus store `connect` per block, ordinary and deadline block; with proof verification once it lands | T1 on a CI runner; T3 on the floor | Fixture as BA-I27; the proof-bearing fixture when it exists | BA-I27, BA-I28 | chain rules, daemon store |
 | **BA-T13** | IBD wall time, CPU, RSS and disk, LMDB against redb | T3; x86 dev as the design specifies, floor per BA-Q14 | `scripts/bench/drs_bench.py`, conditions-first | BA-I43, BA-I69 to BA-I71 | daemon store |
@@ -750,7 +753,8 @@ on review of PR #964; the change lands in its own PR.
 **BA-Q9 — Scope of the pool-admission bench (BA-D7).** Default: correct
 §72.2 to what admission runs, add the hybrid-signature and Bulletproofs+
 terms to BA-T1, and re-derive the hop from BA-T10's floor figures.
-**RULED 2026-11-08 for §72.2 and the hop; BA-T1's scope is not ruled.**
+**RULED 2026-11-08.** BA-T1 takes the signature and range-proof terms in
+its own PR, after #1319 and before the cut.
 §72.2 is amended to the Rust door's sequence. Each `SPEC_VERIFY_COST` cell
 is that sequence on the floor device: §85.3's masks-and-proof term, plus
 `n_in` hybrid signatures (971.86 µs per single-signer input at 1 input,
@@ -761,8 +765,10 @@ and the lone range proof at 2 outputs (18.838 ms, 18.882 ms, from
 the clearnet hop 195 ms, the Tor hop 1770 ms; the embargoes 194 s and
 511 s; the wallet wait 2352 s. Every value derived from the cells moved
 with them, through the production derivation (`DAEMON_RELAY_PRIVACY.md`
-§97's register). BA-T10's floor run re-times the door's sequence, and the
-masks-and-proof term with it, after `PL-D3`.
+§97's register). The masks-and-proof term stays at §85.3's figures until
+BA-T10's floor run, which re-times the door's sequence after `PL-D3` and
+includes the depth sweep. The origin retry follows the derivation
+(1176 s); no literal holds it.
 
 **Why the Rust range proof read 2.56× C++, and what it reads now
 (ruled 2026-11-08, landed in #1319).** The verifier evaluated `Â` with a
@@ -776,12 +782,18 @@ adds `Â`'s terms into the batch, verdict for verdict the same (a
 differential test holds it to the eager path), and the floor device reads,
 flagless: a lone 2-output proof 18.84 ms, **1.39×** C++; a 16-output proof
 107.3 ms; a batch of 46 two-output proofs 3.659 ms per proof, **2.10×**
-C++'s 1.745 ms. Part of the remaining gap is `curve25519-dalek`'s field
-backend on the Cortex-A72: under its 32-bit backend the same cells read
-16.26 ms lone (1.20×) and 3.238 ms batched (1.86×)
-(`gap7_block_verify_pi4_rust_dalek32_20261108T234742Z.txt`, reported, not
-adopted; choosing a backend is a separate decision). The rest is the
-batch's per-proof residue.
+C++'s 1.745 ms. The run sat beside the floor device's resident daemon,
+which held about two of its four cores; the same session's eager control
+reproduced the September lone cells within 1.5 %. The control's own
+decomposition explains the batched figure: per proof, about 2.9 ms of
+residue a batch cannot share and about 0.7 ms of the shared multiexp at
+46 proofs. The multiexp is a larger share of the lone cost on the floor
+device than on x86, so the fold amortises more there (0.19 of a lone
+proof batched, against 0.31 on x86). Part of the remaining gap to C++ is
+`curve25519-dalek`'s field backend on the Cortex-A72: under its 32-bit
+backend the same cells read 16.26 ms lone (1.20×) and 3.238 ms batched
+(1.86×) (BA-I112, a candidate, reported only; choosing a backend is a
+separate decision).
 
 **BA-Q10 — Re-measure verify cost on the floor after `PL-D3`.** Default: one
 BA-T10 run serves the surge factor, the zone, the hop surface and the input

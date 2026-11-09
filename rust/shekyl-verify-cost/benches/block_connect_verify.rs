@@ -271,19 +271,31 @@
 //! | lone, 16-out | 196.3 ms | 107.3 ms | 71.8 ms |
 //! | batch of 46 × 2-out, per proof | 19.63 ms | **3.659 ms** | 1.745 ms |
 //!
-//! The control is the same session's run with the pre-fold verifier
+//! The capture ran beside the floor device's resident daemon, which held
+//! about two of its four cores throughout. The control is the same
+//! session's run with the pre-fold verifier
 //! (`…_rust_eager_20261108T231752Z.txt`): it reproduces the September lone
-//! cells within 1.5 % under the host's resident load, so the folded figures
-//! are read against it. Eager lone minus folded lone is 15.96 ms, one `Â`
-//! multiexp; eager batch minus folded batch is 15.98 ms per proof: the fold
-//! removed exactly the 46 `Â` multiexps. Against C++ the folded verifier is
-//! 1.39× on a lone proof and 2.10× batched. Part of the rest is
-//! `curve25519-dalek`'s field backend on the Cortex-A72: the same cells
-//! under its 32-bit backend (`…_rust_dalek32_20261108T234742Z.txt`,
-//! reported and not adopted; adopting a backend is its own decision) read
-//! 16.26 ms lone (1.20× C++), 94.42 ms at 16 outputs and 3.238 ms per
-//! batched proof (1.86×), 11-14 % under the 64-bit backend. The rest is the
-//! batch's per-proof residue.
+//! cells within 1.5 %, so the load did not bend the cells, and the folded
+//! figures are read against it. Eager lone minus folded lone is 15.96 ms,
+//! one `Â` multiexp; eager batch minus folded batch is 15.98 ms per proof:
+//! the fold removed exactly the 46 `Â` multiexps.
+//!
+//! The control's decomposition also explains the batched figure. Per
+//! proof, a batch of 46 pays a residue of about 2.9 ms that it cannot
+//! share, and about 0.7 ms of the one shared multiexp; 2.9 + 0.7 is the
+//! 3.66 ms measured. A lone proof pays the whole multiexp, about 15.9 ms
+//! of its 18.84. The multiexp is a larger share of the lone cost on the
+//! floor device than on x86, so the fold amortises more there: the batched
+//! proof is 0.19 of a lone one on the floor device, and 0.31 on x86
+//! (1.52 ms lone, 0.465 ms batched).
+//!
+//! Against C++ the folded verifier is 1.39× on a lone proof and 2.10×
+//! batched. Part of that gap is `curve25519-dalek`'s field backend on the
+//! Cortex-A72: the same cells under its 32-bit backend
+//! (`…_rust_dalek32_20261108T234742Z.txt`, a candidate, reported and not
+//! adopted; adopting a backend is its own decision, BENCHMARK_ALIGNMENT
+//! BA-I112) read 16.26 ms lone (1.20× C++), 94.42 ms at 16 outputs and
+//! 3.238 ms per batched proof (1.86×), 11-14 % under the 64-bit backend.
 //!
 //! **verify_floor with the measured batched term.** Per argmax tx the Bp+
 //! term is 3.659 ms in place of C++'s 1.745: verify_floor ≈ 130.68 ms/tx
