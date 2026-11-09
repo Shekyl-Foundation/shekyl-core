@@ -747,9 +747,10 @@ commitments, then CEN-I15's `shekyl_fcmp::proof::verify` over the
 FCMP++ proof. Pinned to the admission path rather than to a
 primitive so the gate cannot drift from what admission actually
 costs when the calling code changes (`DAEMON_RELAY_PRIVACY.md`
-§72.6, §70.3). The door also runs one hybrid signature verification
-per input (CEN-I18) and the range proof as a batch of one
-(CEN-H19); those terms are outside this count and are timed by
+§72.6, §70.3). The door also runs one authorization check per input
+(CEN-I18: one hybrid signature verification for a single-signer
+input, M for an M-of-N multisig input) and the range proof as a
+batch of one (CEN-H19); those terms are outside this count and are timed by
 `block_connect_verify`'s per-term group (the bench header states
 the split).
 

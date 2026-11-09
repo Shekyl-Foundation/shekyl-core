@@ -173,8 +173,7 @@ pub(super) fn expected_target<'id, V: HeaderView<'id>>(
 ) -> Result<Target, V::Fault> {
     let connecting = BlockHeight::from_raw(view.tip()?.map_or(0, |tip| tip.height.to_raw() + 1));
     match target_claim(view, connecting, rules) {
-        Ok(Ok(target)) => Ok(target),
-        Ok(Err(refused)) => panic!("the fixture chain derives no target: {refused}"),
+        Ok(target) => Ok(target),
         Err(Fault::View(fault)) => Err(fault),
         Err(_) => panic!("the fixture chain's headers are not a chain"),
     }
