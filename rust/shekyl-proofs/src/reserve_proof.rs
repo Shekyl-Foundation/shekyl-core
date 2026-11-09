@@ -20,7 +20,9 @@
 #![deny(unsafe_code)]
 
 use curve25519_dalek::{
-    constants::ED25519_BASEPOINT_POINT as G_POINT, edwards::CompressedEdwardsY, scalar::Scalar,
+    constants::ED25519_BASEPOINT_POINT as G_POINT,
+    edwards::{CompressedEdwardsY, EdwardsPoint},
+    scalar::Scalar,
 };
 
 use shekyl_curve_generators::T as T_LAZY;
@@ -176,9 +178,8 @@ pub fn generate_reserve_proof(
         );
     }
 
-    let msg: Framed32 =
-        assemble_proof_message(network_id, address_bytes, user_message, &per_output_blob);
-    let sig = schnorr::sign(RESERVE_DOMAIN, &b_scalar, &b_point, msg.as_bytes());
+    let message = assemble_proof_message(network_id, address_bytes, user_message, &per_output_blob);
+    let sig = sign_reserve(&b_scalar, &b_point, &message);
 
     let mut proof = Vec::with_capacity(HEADER_SIZE + n * PER_OUTPUT_SIZE);
     proof.push(CURRENT_PROOF_VERSION);
@@ -187,6 +188,28 @@ pub fn generate_reserve_proof(
     proof.extend_from_slice(&per_output_blob);
 
     Ok(proof)
+}
+
+/// Sign a reserve proof's frame under [`RESERVE_DOMAIN`].
+///
+/// The domain lives here, beside the [`Framed32`] it signs, so a caller
+/// cannot apply it to bytes it assembled itself.
+fn sign_reserve(
+    secret: &Scalar,
+    public: &EdwardsPoint,
+    message: &Framed32,
+) -> [u8; schnorr::SIG_LEN] {
+    schnorr::sign(RESERVE_DOMAIN, secret, public, message.as_bytes())
+}
+
+/// Whether `signature` holds for a reserve proof's frame under
+/// [`RESERVE_DOMAIN`].
+fn reserve_holds(
+    public: &EdwardsPoint,
+    message: &Framed32,
+    signature: &[u8; schnorr::SIG_LEN],
+) -> bool {
+    schnorr::verify(RESERVE_DOMAIN, public, message.as_bytes(), signature)
 }
 
 fn assemble_dleq_context(
@@ -270,10 +293,9 @@ pub fn verify_reserve_proof(
         .decompress()
         .ok_or(ProofError::InvalidFormat("invalid spend pubkey".into()))?;
 
-    let msg: Framed32 =
-        assemble_proof_message(network_id, address_bytes, user_message, per_output_blob);
+    let message = assemble_proof_message(network_id, address_bytes, user_message, per_output_blob);
 
-    if !schnorr::verify(RESERVE_DOMAIN, &b_point, msg.as_bytes(), &sig) {
+    if !reserve_holds(&b_point, &message, &sig) {
         return Err(ProofError::SignatureFailed);
     }
 

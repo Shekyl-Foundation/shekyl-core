@@ -39,7 +39,9 @@
 #![deny(unsafe_code)]
 
 use curve25519_dalek::{
-    constants::ED25519_BASEPOINT_POINT as G_POINT, edwards::CompressedEdwardsY, scalar::Scalar,
+    constants::ED25519_BASEPOINT_POINT as G_POINT,
+    edwards::{CompressedEdwardsY, EdwardsPoint},
+    scalar::Scalar,
 };
 
 use shekyl_curve_generators::{H as H_POINT_LAZY, T as T_LAZY};
@@ -140,6 +142,47 @@ fn assemble_proof_message(
         network_id,
         [txid, address_bytes, user_message, per_output_data],
     )
+}
+
+/// Sign an outbound proof's frame under [`OUTBOUND_DOMAIN`].
+///
+/// The domain lives here, beside the [`Framed32`] it signs, so a caller
+/// cannot apply it to bytes it assembled itself.
+fn sign_outbound(
+    secret: &Scalar,
+    public: &EdwardsPoint,
+    message: &Framed32,
+) -> [u8; schnorr::SIG_LEN] {
+    schnorr::sign(OUTBOUND_DOMAIN, secret, public, message.as_bytes())
+}
+
+/// Whether `signature` holds for an outbound proof's frame under
+/// [`OUTBOUND_DOMAIN`].
+fn outbound_holds(
+    public: &EdwardsPoint,
+    message: &Framed32,
+    signature: &[u8; schnorr::SIG_LEN],
+) -> bool {
+    schnorr::verify(OUTBOUND_DOMAIN, public, message.as_bytes(), signature)
+}
+
+/// Sign an inbound proof's frame under [`INBOUND_DOMAIN`].
+fn sign_inbound(
+    secret: &Scalar,
+    public: &EdwardsPoint,
+    message: &Framed32,
+) -> [u8; schnorr::SIG_LEN] {
+    schnorr::sign(INBOUND_DOMAIN, secret, public, message.as_bytes())
+}
+
+/// Whether `signature` holds for an inbound proof's frame under
+/// [`INBOUND_DOMAIN`].
+fn inbound_holds(
+    public: &EdwardsPoint,
+    message: &Framed32,
+    signature: &[u8; schnorr::SIG_LEN],
+) -> bool {
+    schnorr::verify(INBOUND_DOMAIN, public, message.as_bytes(), signature)
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -248,7 +291,7 @@ pub fn generate_outbound_proof_with_secrets(
         // `ps` drops here; `ProofSecrets` is `ZeroizeOnDrop`.
     }
 
-    let msg: Framed32 = assemble_proof_message(
+    let message = assemble_proof_message(
         OUTBOUND_MESSAGE,
         network_id,
         txid,
@@ -262,7 +305,7 @@ pub fn generate_outbound_proof_with_secrets(
     )?;
     let pk_point = sk_scalar * G_POINT;
 
-    let sig = schnorr::sign(OUTBOUND_DOMAIN, &sk_scalar, &pk_point, msg.as_bytes());
+    let sig = sign_outbound(&sk_scalar, &pk_point, &message);
 
     let mut proof = Vec::with_capacity(OUTBOUND_HEADER_SIZE + n * PER_OUTPUT_SIZE);
     proof.push(CURRENT_PROOF_VERSION);
@@ -348,7 +391,7 @@ pub fn verify_outbound_proof(
 
     let per_output_blob = &proof_bytes[OUTBOUND_HEADER_SIZE..];
 
-    let msg: Framed32 = assemble_proof_message(
+    let message = assemble_proof_message(
         OUTBOUND_MESSAGE,
         network_id,
         txid,
@@ -362,7 +405,7 @@ pub fn verify_outbound_proof(
     )?;
     let pk_point = sk_scalar * G_POINT;
 
-    if !schnorr::verify(OUTBOUND_DOMAIN, &pk_point, msg.as_bytes(), &sig) {
+    if !outbound_holds(&pk_point, &message, &sig) {
         return Err(ProofError::SignatureFailed);
     }
 
@@ -499,7 +542,7 @@ pub fn generate_inbound_proof(
         write_per_output(*vout, ps, &mut per_output_blob);
     }
 
-    let msg: Framed32 = assemble_proof_message(
+    let message = assemble_proof_message(
         INBOUND_MESSAGE,
         network_id,
         txid,
@@ -513,7 +556,7 @@ pub fn generate_inbound_proof(
     )?;
     let pk_point = sk_scalar * G_POINT;
 
-    let sig = schnorr::sign(INBOUND_DOMAIN, &sk_scalar, &pk_point, msg.as_bytes());
+    let sig = sign_inbound(&sk_scalar, &pk_point, &message);
 
     let mut proof = Vec::with_capacity(INBOUND_HEADER_SIZE + n * PER_OUTPUT_SIZE);
     proof.push(CURRENT_PROOF_VERSION);
@@ -588,7 +631,7 @@ pub fn verify_inbound_proof(
         .decompress()
         .ok_or(ProofError::InvalidFormat("invalid view public key".into()))?;
 
-    let msg: Framed32 = assemble_proof_message(
+    let message = assemble_proof_message(
         INBOUND_MESSAGE,
         network_id,
         txid,
@@ -597,7 +640,7 @@ pub fn verify_inbound_proof(
         per_output_blob,
     );
 
-    if !schnorr::verify(INBOUND_DOMAIN, &view_pk, msg.as_bytes(), &sig) {
+    if !inbound_holds(&view_pk, &message, &sig) {
         return Err(ProofError::SignatureFailed);
     }
 
