@@ -90,43 +90,48 @@ jobs:
             host: x86_64-linux-gnu
             runner: ubuntu-latest
             exe: tor
-            client_floor: 9
+            client_floor: 10
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_reports_the_pinned_proof_of_work_hash
               control::actor::live_tests::the_managed_tor_inherits_its_control_end_and_nothing_else
           - label: linux-aarch64
             host: aarch64-linux-gnu
             runner: ubuntu-24.04-arm
             exe: tor
-            client_floor: 9
+            client_floor: 10
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_reports_the_pinned_proof_of_work_hash
               control::actor::live_tests::the_managed_tor_inherits_its_control_end_and_nothing_else
           - label: windows-x86_64
             host: x86_64-w64-mingw32
             runner: windows-latest
             exe: tor.exe
-            client_floor: 8
+            client_floor: 9
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_reports_the_pinned_proof_of_work_hash
           # macOS: the inheritance test is Linux-only
           # (`cfg(target_os = "linux")`).
           - label: macos-aarch64
             host: aarch64-apple-darwin11
             runner: macos-latest
             exe: tor
-            client_floor: 8
+            client_floor: 9
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_reports_the_pinned_proof_of_work_hash
           # The last x86_64 macOS image GitHub offers (retired with macOS 15
           # in 2027); the pin's x86_64 row is tested on Intel, not Rosetta.
           - label: macos-x86_64
             host: x86_64-apple-darwin11
             runner: macos-15-intel
             exe: tor
-            client_floor: 8
+            client_floor: 9
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_reports_the_pinned_proof_of_work_hash
     env:
       HOST: ${{ matrix.target.host }}
       TOR_EXE: ${{ matrix.target.exe }}
@@ -278,8 +283,8 @@ jobs:
           ../scripts/ci/require_live_tests.sh ignored-control.out ${{ matrix.target.client_tests }}
           # And guard the FULL set — not just that one — against a silent
           # coverage drop. Floor = this crate's current ignored count on the
-          # entry's platform: Linux 9 (pin + 7 actor + 1 launch), Windows 8,
-          # the descriptor-inheritance test being Linux-only.
+          # entry's platform: Linux 10 (pin + 8 actor + 1 launch), Windows
+          # and macOS 9, the descriptor-inheritance test being Linux-only.
           # `-ge` so a new live test does not fail the lane before this floor
           # is raised with it. Lower the floor only when a test is
           # deliberately removed. `sed ... q`, not a pipe into `head`: the

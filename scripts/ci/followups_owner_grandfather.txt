@@ -142,7 +142,6 @@ Raw-import archival/burn bookkeeping parity
 Serve-credit decision-site flip: Rust becomes the primary decision site for `blockchain.cpp:4247`/`:4312`/`:4889–4910`
 Remove or retain the orphaned `ActivityMetric.total_staked` observable (spawned Stage-1b `stake_factor` delete, commit `7256962`, 2026-07-24).
 Wallet file backup-exclusion markers (PR 6 lessons canvass §5.12 F1).
-Process core-dump disable at wallet-RPC startup (PR 6 §5.12 F2).
 Argon2 stack-resident secret copies — cryptographer review (PR 6 §5.12 F3).
 Async `Engine::close` / `change_password` lifecycle (PR 6 PR #83).
 RandomX v2 — Guix reproducible-build obligation pickup (trigger: Guix integration design pass lands).
