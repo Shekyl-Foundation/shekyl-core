@@ -4353,6 +4353,7 @@ dependencies = [
  "shekyl-block-template",
  "shekyl-chain-rules",
  "shekyl-chain-store",
+ "shekyl-crypto-pq",
  "shekyl-curve-tree",
  "shekyl-economics",
  "shekyl-fcmp",

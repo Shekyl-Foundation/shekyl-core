@@ -11,20 +11,31 @@
 //! assertion guard — it constructs nothing and unlocks nothing.
 
 /// Environment variable arming a pinned-fixture regenerator:
-/// `YYYY-MM-DD <rationale>`, the date naming the
-/// `docs/V3_WALLET_DECISION_LOG.md` entry that authorizes moving a pinned
-/// vector.
+/// `YYYY-MM-DD <rationale>`, the date naming the decision-log entry that
+/// authorizes moving a pinned vector.
 pub const PINNED_REGEN_DECISION_ENV: &str = "SHEKYL_PINNED_REGEN_DECISION";
 
+/// The decision log this crate's pinned vectors are moved under.
+pub const WALLET_DECISION_LOG: &str = "docs/V3_WALLET_DECISION_LOG.md";
+
 /// Refuse to regenerate `fixture` unless [`PINNED_REGEN_DECISION_ENV`] cites
-/// the decision-log entry that authorizes the move (rule 50: a regenerator
-/// that rewrites fixtures on request is a one-command silencer for a failing
-/// tripwire). Returns the citation for embedding in the regenerated file.
+/// the [`WALLET_DECISION_LOG`] entry that authorizes the move (rule 50: a
+/// regenerator that rewrites fixtures on request is a one-command silencer
+/// for a failing tripwire). Returns the citation for embedding in the
+/// regenerated file.
 ///
 /// The one validation body for every armed regenerator in this crate —
 /// `leaf_commitment.rs`, `wallet_envelope.rs`, `tests/scan_output_kat.rs`,
 /// `tests/kat_hybrid_v2.rs` all call here.
 pub fn regen_decision_or_refuse(fixture: &str) -> String {
+    regen_decision_in_log_or_refuse(fixture, WALLET_DECISION_LOG)
+}
+
+/// [`regen_decision_or_refuse`] for a crate whose pinned values move under
+/// another decision log: refuse unless [`PINNED_REGEN_DECISION_ENV`] cites
+/// the `log` entry that authorizes the move. The economics sim's narrations
+/// move under its rebase document's dated sections.
+pub fn regen_decision_in_log_or_refuse(fixture: &str, log: &str) -> String {
     let decision = std::env::var(PINNED_REGEN_DECISION_ENV).unwrap_or_default();
     let cited = decision.len() > 11
         && decision.as_bytes()[..10]
@@ -39,9 +50,8 @@ pub fn regen_decision_or_refuse(fixture: &str) -> String {
         cited,
         "refusing to regenerate {fixture}: set \
          {PINNED_REGEN_DECISION_ENV}=\"YYYY-MM-DD <rationale>\" citing the \
-         docs/V3_WALLET_DECISION_LOG.md entry that authorizes the move (got: \
-         {decision:?}). Moving a pinned vector is a format decision, not a test \
-         fix — see 50-testing.mdc."
+         {log} entry that authorizes the move (got: {decision:?}). Moving a \
+         pinned value is a decision, not a test fix — see 50-testing.mdc."
     );
     decision
 }
