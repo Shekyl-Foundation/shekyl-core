@@ -234,7 +234,7 @@ impl MlKem768DecapKey {
     /// hands the typed wrapper directly to the consumer rather
     /// than handing back raw `Zeroizing<[u8; N]>` and asking every
     /// call site to repeat the wrapping decision. Per
-    /// `.cursor/rules/35-secure-memory.mdc:21-22` and the
+    /// `.cursor/rules/35-secure-memory.mdc`'s hand-off section and the
     /// typed-wrapper discipline of
     /// `.cursor/rules/18-type-placement.mdc`.
     ///
@@ -251,7 +251,8 @@ impl MlKem768DecapKey {
     // caller's lifetime. Taking `&Zeroizing<[u8; N]>` would let the
     // caller retain a still-readable copy of the secret after the
     // hand-off, which is exactly what this API is designed to
-    // prevent. Per `.cursor/rules/35-secure-memory.mdc:21-22`.
+    // prevent. Per `.cursor/rules/35-secure-memory.mdc`'s hand-off
+    // section (the by-value `from_zeroizing` constructor).
     #[allow(clippy::needless_pass_by_value)]
     pub(crate) fn from_zeroizing(z: Zeroizing<[u8; ML_KEM_768_DK_LEN]>) -> Self {
         let mut out = Self([0u8; ML_KEM_768_DK_LEN]);

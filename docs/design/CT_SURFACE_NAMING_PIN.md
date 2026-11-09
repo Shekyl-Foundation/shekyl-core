@@ -345,7 +345,7 @@ Per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clau
 - **Substrate:** *moot* — this criterion existed to shrink the rename PR's
   scope if verifier logic migrated to Rust before Phase 5. The rename has
   landed, so there is no scope left to shrink. Verifier migration continues on
-  its own track ([`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc));
+  its own track ([`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md));
   it no longer interacts with this pin.
 
 ---

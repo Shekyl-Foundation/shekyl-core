@@ -81,6 +81,7 @@
 //! The worker never derives. The crate has no dataset mode
 //! (`RANDOMX_V2_RUST.md` §9, measure-first; `RD-F11`), so the rate
 //! [`MinerStatus`] reports is that mode's, over the window it states.
+#![deny(unsafe_code)]
 
 mod address;
 mod drain;

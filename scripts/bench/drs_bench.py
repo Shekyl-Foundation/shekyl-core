@@ -15,9 +15,9 @@
 # failure -- and equally must not let it read as a clean pass, which is why the
 # text report says so in as many words.
 #
-# Python, under `scripts/bench/`, deliberately. Rule 20 makes Rust the default
-# for the daemon codebase and its bug fixes; this spawns daemons and writes
-# JSON, the same job as `compare.py`. It is not a second copy of that script:
+# Python, under `scripts/bench/`, deliberately. Shekyl logic is Rust; this is
+# not Shekyl logic: it spawns daemons and writes JSON, the same job as
+# `compare.py`. It is not a second copy of that script:
 # compare.py is iai-callgrind only, and its ids cannot name a two-daemon IBD run.
 #
 # Vehicle: generateblocks needs a node that reads Synced, which a node

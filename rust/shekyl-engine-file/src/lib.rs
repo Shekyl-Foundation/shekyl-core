@@ -44,9 +44,6 @@
 //! - **[rule 35 — secure memory](../../../.cursor/rules/35-secure-memory.mdc):**
 //!   [`OpenedKeysFile`] stays in a [`Zeroizing`] container for the
 //!   handle's lifetime; passwords are borrowed, never cached.
-//! - **[rule 40 — FFI discipline](../../../.cursor/rules/40-ffi-discipline.mdc):**
-//!   this crate exposes only a Rust-native API. The FFI surface is
-//!   added in 2j as a thin wrapper on top.
 //!
 //! [`OpenedKeysFile`]: shekyl_crypto_pq::wallet_envelope::OpenedKeysFile
 //! [`Zeroizing`]: zeroize::Zeroizing

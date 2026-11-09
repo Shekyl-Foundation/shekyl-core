@@ -24,7 +24,7 @@ Per [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc)
 this document is the design-doc-first step before any Phase 3 code. It
 exists because the cutover touches a consensus-rule boundary (the PoW
 hash a validating node computes for every block) and the
-[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md)
 C/Rust boundary, both of which the sub-PR discipline requires be
 specified, surveyed, and reviewer-mapped before implementation.
 
@@ -318,7 +318,7 @@ sticky-pin so the canonical cache survives LRU eviction. The eager
 derive is the **internal** prewarm the user direction sanctioned
 (prewarm is forbidden as *FFI surface*, not as Rust-internal
 behavior); moving canonical-cache management into Rust is the
-[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md)
 forward cut.
 
 ### 4.4 Latency-profile change (named explicitly)

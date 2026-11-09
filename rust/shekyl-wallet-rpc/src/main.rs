@@ -10,6 +10,7 @@
 //! `shekyl-engine-rpc` wallet2-FFI bridge before it. The flag reference is
 //! `docs/EXECUTABLES.md` §3; the listen posture is
 //! `docs/design/RPC_TRANSPORT_POSTURE.md`.
+#![deny(unsafe_code)]
 
 use std::path::PathBuf;
 use std::str::FromStr;

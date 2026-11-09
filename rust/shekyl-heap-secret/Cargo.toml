@@ -1,0 +1,15 @@
+[package]
+name = "shekyl-heap-secret"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A fixed-length secret at one heap address, wiped there on drop"
+publish = false
+
+[dependencies]
+zeroize = { workspace = true }
+
+[lints]
+workspace = true

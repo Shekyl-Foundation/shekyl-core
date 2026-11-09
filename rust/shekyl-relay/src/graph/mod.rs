@@ -1246,7 +1246,7 @@ impl Relay {
     /// [`Self::plan_relay_with_refresh`] plus the carrier that serves it.
     ///
     /// The production shape: **one** call yielding phase *and* carrier *and*
-    /// slot, per rule 40's coarse-call rule.
+    /// slot, so no caller assembles the three.
     pub fn plan_dispatch_with_refresh<R: RelayRng + ?Sized>(
         &mut self,
         source: Option<ConnectionId>,

@@ -182,9 +182,10 @@ mod tests {
         assert_eq!(base32_lower(b"foobar"), "mzxw6ytboi");
     }
 
-    /// Golden KAT shared with `shekyl-tor-control-client`: this is the
-    /// public key its `service_id_golden_kat` derives from the hs-id seed
-    /// `[0x42; 32]`, and the address below is the literal that test pins.
+    /// Golden KAT shared with `shekyl-crypto-pq`: this is the public key
+    /// its `onion` module derives from the seed `[0x42; 32]`, and the
+    /// address below is the literal its
+    /// `the_address_for_a_fixed_seed_is_unchanged` pins.
     /// The persona publishes at the address tor confirms for this key; the
     /// daemon dials the address `v3_onion_hostname` derives from the
     /// record. Both pinned to one string, so a drift on either side is a

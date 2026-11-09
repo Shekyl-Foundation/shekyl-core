@@ -1,13 +1,12 @@
 ---
-description: Opt-in process disciplines for multi-round per-trait PRs (design rounds + pre-flight). Cite explicitly when scoping consensus-critical, FFI, or reference-port sub-PR work — not for single-commit refactors or doc-only PRs. Promoted from RandomX v2 Phase 2c.
+description: A new crate or consensus-boundary change is its own design doc, review, gates and PR (always). Opt-in process disciplines for multi-round per-trait PRs (design rounds + pre-flight). Cite explicitly when scoping consensus-critical or reference-port sub-PR work — not for single-commit refactors or doc-only PRs. Promoted from RandomX v2 Phase 2c.
 alwaysApply: false
 ---
 
 # Sub-PR design discipline
 
 Cite this rule explicitly when scoping or reviewing a multi-round
-per-trait PR: consensus behavior, an FFI boundary, or an inherited
-reference port. Single-commit additions, doc-only changes, and refactors
+per-trait PR: consensus behavior or an inherited reference port. Single-commit additions, doc-only changes, and refactors
 outside that scope do not invoke it. The injection model is the same as
 `07-consensus-atomic-cutovers.mdc`.
 
@@ -25,9 +24,24 @@ workload, is the failure B9 exists for.
 ## Scope
 
 Applies when work is split across short-lived PRs with design rounds
-before implementation, especially consensus, FFI, or a reference port.
+before implementation, especially consensus or a reference port.
 Trait-specific plan docs still carry the substrate enumeration. This
 rule is the process those docs follow.
+
+## A new subsystem is its own change
+
+This section applies whether or not the rest of this rule is cited.
+
+A new crate, or a change of consensus boundary, has:
+
+- Its own design document
+- Its own review
+- Its own test gates
+- Its own PR, separate from unrelated feature work
+
+Folding that into a feature PR produces unreviewable changes. Don't.
+`15-deletion-and-debt.mdc` is the scope guardrail: the touching PR's scope
+stays the change it set out to make.
 
 ## Pre-flight (Round 0)
 

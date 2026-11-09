@@ -18,8 +18,8 @@ license.workspace = true
 # parsed blob and owns only the daemon-parity post-parse validation
 # (`recon::extract_leaf_commitments`). Keeping scanner's heavy dependency
 # fan-in (rpc, crypto-pq, staking, ...) out of the curve-tree client
-# matches `20-rust-vs-cpp-policy.mdc` / `25-rust-architecture.mdc`
-# layering and the wallet/mobile consumption surface.
+# matches `25-rust-architecture.mdc` layering and the wallet/mobile
+# consumption surface.
 [dependencies]
 redb = { workspace = true }
 # Canonical curve-tree composition primitives: `construct_leaf`,

@@ -41,8 +41,8 @@ fn kept_blob() -> Vec<u8> {
 
 #[test]
 fn serve_credit_round_trips() {
-    // The KEPT half, as the opaque blob the C++ vin transports (RF-D1 /
-    // rule 40). The interior is `shekyl-archival-retention::wire`'s; this
+    // The KEPT half, as the opaque blob the vin carries (RF-D1). The
+    // interior is `shekyl-archival-retention::wire`'s; this
     // arm mirrors the emission arm: tag + length + bytes.
     let input = Input::ServeCredit {
         canonical_bytes: kept_blob(),

@@ -184,7 +184,7 @@ pub struct BlockHeaderAt {
 }
 
 /// Why a facts read could not be served. Each variant is a distinct class
-/// (rule 40: codes, not booleans), so the transport can choose between
+/// (a class, not a boolean), so the transport can choose between
 /// "try again" and "this daemon is broken".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FactsFault {

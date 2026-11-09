@@ -166,6 +166,7 @@
 //! The grading instruments live behind the `conformance` feature, which pulls
 //! `shekyl-stats` and the float-bearing goodness-of-fit machinery. The default
 //! build is the draws and the state machines only.
+#![deny(unsafe_code)]
 
 pub mod basis;
 pub mod derive;
