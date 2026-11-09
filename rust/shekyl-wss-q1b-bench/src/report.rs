@@ -107,11 +107,24 @@ use crate::timing::Series;
 ///   match; under `--window-leaves` they do not. The quotient is an observation
 ///   of that run. The measured advance is what a later run may compare.
 ///
+/// **v4 (CT-6, 2026-11-09)** — in a `ReplayWindow` [`AssembleEdgeRecord`],
+///   `rung_top` changed meaning. Through `v3` it was the window itself: the
+///   cited run (`docs/benchmarks/wss-q1b/assemble_edge_20261002T052942Z.json`,
+///   `BENCHMARK_ALIGNMENT.md` BA-I96) reads `rung_top` 765 600, which is
+///   `worst_case_window_leaves` at that day's surge factor. From `v4` the pair
+///   is the rung's own — `rung_top` is `separated_leaves` of the floor — and
+///   the window is a fifth arm, `window`, with its separation from the floor
+///   in [`AssembleEdgeRecord::window_separation`]. The role string is the same
+///   and the population is not, so a `v3` and a `v4` `rung_top` are not one
+///   axis. The bump re-labels spend, verify and open records whose meaning did
+///   not move; that costs a reader one line of this history, and leaving
+///   `rung_top` unflagged would cost them the comparison.
+///
 /// **No CI arm enforces this constant** — the `schema-snapshot` workflow's
 /// version-bump job covers `shekyl-chain-store`'s persisted schema, not this
 /// record. Bumping it is a reviewer obligation, which is why the history
 /// above is kept here rather than only in the changelog.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// The spend-edge budget's absolute floor, in seconds (§6.3.4 row 2).
 pub const SPEND_DELTA_FLOOR_S: f64 = 2.0;
@@ -566,9 +579,9 @@ pub struct AssembleEdgeRecord {
     pub call_site: &'static str,
     /// Which plan ran, as a type rather than prose.
     ///
-    /// Load-bearing. Every plan's arms carry the same roles and the same
+    /// Load-bearing. Every plan's pairs carry the same roles and the same
     /// criterion, so without this field a reader cannot tell a one-day-old
-    /// chain's figure from a rung chosen to fit in minutes.
+    /// chain's rung from a rung chosen to fit in minutes.
     pub plan: crate::assembleedge::PlanKind,
     /// What [`Self::plan`]'s figures do and do not mean, from
     /// [`crate::assembleedge::PlanKind::note`] — one source for the record and
@@ -578,6 +591,16 @@ pub struct AssembleEdgeRecord {
     pub criterion: crate::assembleedge::FlatnessCriterion,
     /// Every arm, in plan order.
     pub arms: Vec<AssembleArmRecord>,
+    /// The `window` arm's leaf count over the rung floor's, from
+    /// [`crate::assembleedge::window_separation`]; `None` for a plan with no
+    /// window arm.
+    ///
+    /// **Reported, never required.** The window is a reading inside the rung,
+    /// not a member of the same-rung pair, so no criterion reads this value.
+    /// The pair is the rung's own whatever the ratio; one below
+    /// [`crate::assembleedge::SAME_RUNG_SEPARATION`] says only that a pair
+    /// built on the window could not tell a slope from noise.
+    pub window_separation: Option<f64>,
     /// Change from the canonical owned count to `MAX_INPUTS` at one
     /// population, in percent — `#842`'s `n + k` claim, measured.
     ///

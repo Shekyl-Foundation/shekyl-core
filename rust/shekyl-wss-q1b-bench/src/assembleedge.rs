@@ -24,12 +24,14 @@
 //!   [`expected_cross_rung_ratio`]. The model treats every layer as the same
 //!   cost, and increment 6 re-derives it before a passing capture is graded.
 //!
-//! [`plan_at_replay_window`] is one day of chain. [`plan_at_depth`] is a
-//! cheaper rung, for the shape. The same-rung pair on the shape plan sits
-//! [`SAME_RUNG_SEPARATION`] apart; the window plan's separation is whatever
-//! the ladder produces, and it must clear that floor. The cross-rung pair
-//! differs by one leaf. Neither plan is the graded assembly population.
-//! That population is blocked on a ruled chain age.
+//! [`plan_at_depth`] measures one rung: the same-rung pair is the rung's
+//! floor and [`separated_leaves`] of it, [`SAME_RUNG_SEPARATION`] apart, and
+//! the cross-rung pair differs by one leaf. [`plan_at_replay_window`] is that
+//! plan on the rung one day of chain reaches, plus a fifth arm at the window
+//! itself. The window is a reading inside the rung, not a member of either
+//! pair: its separation from the floor is reported and never required.
+//! Neither plan is the graded assembly population. That population is
+//! blocked on a ruled chain age.
 //!
 //! ## What a run does not establish
 //!
@@ -116,7 +118,8 @@ impl Population {
 /// The roles are a family, not a list: [`Self::RungFloor`] pairs with
 /// [`Self::RungTop`] across `n` at one depth, and with [`Self::RungBelow`]
 /// across depth at one `n`. Each arm belongs to exactly one pair per axis, so
-/// neither comparison borrows a point chosen for the other.
+/// neither comparison borrows a point chosen for the other. [`Self::Window`]
+/// belongs to no pair.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ArmRole {
     /// The largest population one rung shallower: [`ArmRole::RungFloor`]'s
@@ -124,11 +127,9 @@ pub enum ArmRole {
     RungBelow,
     /// The fewest leaves that reach [`Self::RungTop`]'s depth.
     RungFloor,
-    /// The rung's upper population, at [`CANONICAL_OWNED_INPUTS`].
-    ///
-    /// In [`plan_at_replay_window`] this is one day of chain. In
-    /// [`plan_at_depth`] it is [`SAME_RUNG_SEPARATION`] above the floor.
-    /// Either way it is the arm the floor is compared against across `n`.
+    /// The rung's upper population, at [`CANONICAL_OWNED_INPUTS`]:
+    /// [`separated_leaves`] of the floor, in every plan. It is the arm the
+    /// floor is compared against across `n`.
     /// It is also the board-control subject: the run builds it last and times
     /// it twice, back to back, with no other rig resident.
     RungTop,
@@ -136,6 +137,16 @@ pub enum ArmRole {
     /// the `k` term beside `n` rather than asserting it is small (`#842`'s
     /// `n + k`).
     InputCap,
+    /// The replay window's population, at [`CANONICAL_OWNED_INPUTS`]: one day
+    /// of chain, in [`plan_at_replay_window`] only.
+    ///
+    /// A reading inside the rung, not a member of either pair. Where the
+    /// window falls in its rung is a consequence of the leaf rate, which
+    /// moves with the surge factor, so a same-rung pair built on it has a
+    /// separation the plan does not choose. The pair is therefore the rung's
+    /// own, and the window's separation from the floor is reported beside it,
+    /// never required ([`window_separation`]).
+    Window,
 }
 
 impl ArmRole {
@@ -147,6 +158,7 @@ impl ArmRole {
             Self::RungFloor => "rung_floor",
             Self::RungTop => "rung_top",
             Self::InputCap => "input_cap",
+            Self::Window => "window",
         }
     }
 }
@@ -167,9 +179,9 @@ pub struct Arm {
 /// Below this the pair is powerless: today's cost is linear in `n`, so a
 /// same-rung comparison can only see a slope that clears
 /// [`SAME_RUNG_TOLERANCE_PCT`], and `1.5×` in `n` puts a linear term at `50 %`
-/// — five times the bound. [`plan_at_replay_window`]'s separation is whatever
-/// the ladder produces, and it is checked against this floor rather than set
-/// by it. [`plan_at_depth`] builds its top at this multiple, rounded up.
+/// — five times the bound. Every plan builds its top at this multiple of the
+/// floor, rounded up ([`plan_at_depth`]). The replay window is not held to
+/// it: [`ArmRole::Window`] is a reading, not a pair member.
 ///
 /// This is the *display* form. Leaf counts are derived and compared through
 /// [`separated_leaves`], the exact integer form, so no plan arithmetic goes
@@ -226,15 +238,16 @@ pub fn rung_floor_is_representable(depth: u8) -> bool {
     min_leaves_for_depth(depth).is_some()
 }
 
-/// The arms at one replay window's worth of leaves — **not** the graded
-/// assembly population.
+/// The rung one replay window reaches, and the window itself as a fifth arm
+/// — **not** the graded assembly population.
 ///
 /// 725 blocks is about one day of chain at a 120 s target. Assembly's `n` is
-/// not windowed (module header), so this plan measures a one-day-old chain and
-/// nothing more. It is kept because it is the population every *neighbouring*
-/// figure in this harness is expressed in, which makes it the right arm to
-/// compare a spend-edge record against — and because naming it honestly is
-/// what stops the window's figure being read as the graded one.
+/// not windowed (module header), so this plan measures a one-day-old chain's
+/// rung and nothing more. It is kept because the window is the population
+/// every *neighbouring* figure in this harness is expressed in, which makes it
+/// the right reading to compare a spend-edge record against — and because
+/// naming it honestly is what stops the window's figure being read as the
+/// graded one.
 ///
 /// **The graded assembly population is blocked on a ruled chain age** (rule
 /// 22's named blocker): the cost grows without bound in chain length, so
@@ -242,34 +255,69 @@ pub fn rung_floor_is_representable(depth: u8) -> bool {
 /// spend on, not something this module can derive. Until that is ruled, no
 /// plan here is the graded plan, and `AssembleEdgeRecord::plan` says so.
 ///
+/// ## Two jobs, kept apart
+///
+/// The four pair arms are [`plan_at_depth`] at the window's depth, unchanged:
+/// the same-rung pair is the rung's floor and [`separated_leaves`] of it. The
+/// window is [`ArmRole::Window`], a fifth arm at the window's own population.
+/// It must sit on that rung, which is the only thing asserted about it. Its
+/// separation from the floor is whatever the leaf rate makes it, reported by
+/// [`window_separation`] and never required to clear
+/// [`SAME_RUNG_SEPARATION`].
+///
 /// Every population comes from a function that owns it:
-/// [`worst_case_window_leaves`] for the window's top, and
-/// [`min_leaves_for_depth`] for the rung floor — which is itself derived from
-/// `outputs_per_node`, the capacity function the widths live in. Nothing here
-/// restates a leaf count, so a width change moves the whole plan.
+/// [`worst_case_window_leaves`] for the window, and [`min_leaves_for_depth`]
+/// for the rung floor — which is itself derived from `outputs_per_node`, the
+/// capacity function the widths live in. Nothing here restates a leaf count,
+/// so a width change moves the whole plan.
 ///
 /// # Panics
 ///
-/// If the window top's depth has no rung floor, or if the window does not
-/// clear [`SAME_RUNG_SEPARATION`] above it — either means the ladder changed
-/// shape under the plan, which must stop a run rather than silently leave it
-/// with a comparison that cannot discriminate.
+/// As [`plan_at_depth`] does for the window's depth, or if the window does not
+/// sit on the rung that plan built — either means the ladder changed shape
+/// under the plan, which must stop a run rather than measure the wrong rung.
 #[must_use]
 pub fn plan_at_replay_window() -> Vec<Arm> {
-    let top = Population::at(worst_case_window_leaves(LEAF_RATE_MODEL_DEPTH));
-    let floor_leaves =
-        min_leaves_for_depth(top.depth).expect("the replay-window top sits on a rung with a floor");
-    assert!(
-        top.leaf_count >= separated_leaves(floor_leaves),
-        "the replay window ({} leaves) is less than {SAME_RUNG_SEPARATION}x its rung floor \
-         ({floor_leaves}); the same-rung pair could not tell a slope from noise",
-        top.leaf_count
+    let window = Population::at(worst_case_window_leaves(LEAF_RATE_MODEL_DEPTH));
+    let mut arms = plan_at_depth(window.depth);
+    let top = arms
+        .iter()
+        .find(|arm| arm.role == ArmRole::RungTop)
+        .expect("plan_at_depth builds a rung top")
+        .population;
+    assert_eq!(
+        window.depth, top.depth,
+        "the replay window ({} leaves) is not on the rung its own depth names",
+        window.leaf_count
     );
-    arms_for(top, floor_leaves)
+    arms.push(Arm {
+        role: ArmRole::Window,
+        population: window,
+        owned_inputs: CANONICAL_OWNED_INPUTS,
+    });
+    arms
 }
 
-/// The same four roles on `depth`'s rung, for establishing the shape at a
-/// population that fits in a coffee break.
+/// How far a plan's [`ArmRole::Window`] arm sits above its rung floor, as a
+/// ratio of leaf counts — `None` for a plan with no window arm.
+///
+/// Reported, never required: the window is a reading inside the rung, and the
+/// pair is the rung's own whatever this ratio is. A ratio below
+/// [`SAME_RUNG_SEPARATION`] says only that a pair built on the window could
+/// not tell a slope from noise.
+#[must_use]
+pub fn window_separation(arms: &[Arm]) -> Option<f64> {
+    let window = arms.iter().find(|arm| arm.role == ArmRole::Window)?;
+    let floor = arms
+        .iter()
+        .find(|arm| arm.role == ArmRole::RungFloor)
+        .expect("a plan with a window arm carries its rung floor");
+    Some(window.population.leaf_count as f64 / floor.population.leaf_count as f64)
+}
+
+/// The four pair roles on `depth`'s rung: the plan every run's pairs come
+/// from, and on a shallow rung the shape at a population that fits in a
+/// coffee break.
 ///
 /// The claim is about *shape*, and shape is a property of a rung, not of any
 /// one rung in particular: a cost constant across one rung, and no dearer
@@ -345,7 +393,8 @@ fn arms_for(top: Population, floor_leaves: u64) -> Vec<Arm> {
 /// the ruled figure must not be derived by sniffing the text that disclaims it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize)]
 pub enum PlanKind {
-    /// [`plan_at_replay_window`]: 725 blocks, about one day of chain.
+    /// [`plan_at_replay_window`]: the rung 725 blocks (about one day of
+    /// chain) reaches, with the window as a fifth arm.
     ReplayWindow,
     /// [`plan_at_depth`]: a shallower rung, measured for shape only.
     Shape {
@@ -369,10 +418,12 @@ impl PlanKind {
     pub fn note(self) -> &'static str {
         match self {
             Self::ReplayWindow => {
-                "REPLAY WINDOW — 725 blocks, about one day of chain. NOT the graded assembly \
-                 population: assembly's n is the whole chain, so a graded figure is a ruling \
-                 about chain age rather than a measurement. These seconds are a one-day-old \
-                 chain's."
+                "REPLAY WINDOW — the rung 725 blocks (about one day of chain) reaches, its pairs \
+                 built on the rung's floor, with the window as a fifth arm: a reading inside the \
+                 rung, its separation from the floor reported and not required. NOT the graded \
+                 assembly population: assembly's n is the whole chain, so a graded figure is a \
+                 ruling about chain age rather than a measurement. The window arm's seconds are \
+                 a one-day-old chain's."
             }
             Self::Shape { .. } => {
                 "SHAPE — a rung chosen to run in minutes. Flatness across the rung and the \
