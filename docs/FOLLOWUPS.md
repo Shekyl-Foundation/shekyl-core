@@ -1438,6 +1438,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: `CA-1` — [`CRYPTO_AUDIT.md`](design/CRYPTO_AUDIT.md) §1 (exposure, consumers, reopen criteria; the ignore is in `rust/.cargo/audit.toml`)
   - Target: pre-genesis
 
+- **S interim: `block_weight_short_term_surge_factor` re-derived at BA-T10 (floor re-run of the batched Bp+ term); closes when the measured d24 `surge_max` is recorded and S re-signed.** The interim (an Assumption, 2026-11-08) scales the C++ batched Bp+ term by 2.56× to the Rust verifier and puts d24 at about 3.92, under the signed S = 4; the conservative bracket on the single-proof Rust term is 3.43. The constant is unchanged until the floor run records the measured d24 value.
+  - Owner: `BA-T10` — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (the floor verify surface); the interim's arithmetic is in `rust/shekyl-verify-cost/benches/block_connect_verify.rs`
+  - Target: pre-genesis
+
 
 ## Post-genesis
 
