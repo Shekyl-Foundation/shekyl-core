@@ -32,6 +32,7 @@
 //! reaches the node through [`handles::Handles`], the p2p facts included.
 //! This crate owns HTTP, dispatch, restricted mode and every method.
 //! [`run::start`] binds and serves the configured section.
+#![deny(unsafe_code)]
 
 pub mod authority;
 pub mod ban_methods;

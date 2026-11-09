@@ -10,6 +10,7 @@
 //! CLI self-hosts an in-process RPC server over a private UDS socket;
 //! `--rpc-url` connects to an external `shekyl-wallet-rpc` daemon instead.
 //! There is no wallet2 / FFI path.
+#![deny(unsafe_code)]
 
 use std::io::Write as _;
 

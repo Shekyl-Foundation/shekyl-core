@@ -6,7 +6,7 @@ round. PR
 absorbed the linear-append review commits per round (Rounds 1, 2,
 3, 4a, 4b, 5 — at the upper bound of the 4–6 review-rounds rule
 per
-[`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc))
+[`.cursor/rules/20-rust-vs-cpp-policy.mdc`](completed/RULE_20_RUST_VS_CPP.md))
 and merged to `dev` on 2026-05-01 (merge commit `40093ac7a`). The
 Round 5 pre-drafting gap-check confirmed Case A (spec is
 structurally complete; Round 6 unnecessary unless post-draft
@@ -47,7 +47,7 @@ Subsequent per-trait PRs follow §8.1's within-stage-1 ordering and
   content originally landed on `dev` outside the review-round
   workflow as `c0a3b75ec` and was reverted by `3ed7ff2c7` to put the
   spec on the markdown-only PR-review path required by
-  [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc).
+  [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](completed/RULE_20_RUST_VS_CPP.md).
 - **Round 2 record:** `7bd91f402` (substantive revisions: §1.4
   actor-shape discipline, §2.3 `RefreshEngine` collapse to
   producer/driver, §2.5 two-trait `DaemonEngine`, §3.2 async-cascade
@@ -6215,5 +6215,5 @@ the threshold conditions is rejected as conjectural.
 - [`rust/shekyl-engine-core/src/engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs) — current `MockDaemon` (renamed from `MockRpc` in Stage 1 PR 1, extended into a full `DaemonEngine` implementor with submit dedup, fixed fee-estimate snapshot with override hook, and queued-error injection per §6.1; `ChaCha20Rng` reserved for future fee-jitter / synthetic-fork randomization per §6.2 but not yet consumed at this PR's contract surface) and `make_synthetic_block` scaffolding; `derive_seed` helper per §6.2.
 - [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) "Generic `DaemonClient`" — closed: spec by §2.5 (two-trait shape); Stage 1 implementation by PR 1 (§2.5 surface + `Engine<S, D>` parameterization + first hybrid test); production-constructor generalization remains pre-genesis (`Engine::create` / `Engine::open_full` still take a concrete `DaemonClient`), not coupled to trait-`pub` (reopen: second in-tree production crate without `Engine`).
 - [`docs/CI_BASELINE.md`](CI_BASELINE.md) — `shekyl-oxide` divergence-canary policy referenced in §2.5's upstream/downstream rationale.
-- [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc) — the "4–6 review rounds before any Rust" rule this document is run against.
+- [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](completed/RULE_20_RUST_VS_CPP.md) — the "4–6 review rounds before any Rust" rule this document is run against.
 - [PR #20](https://github.com/Shekyl-Foundation/shekyl-core/pull/20) — the spec's review-and-acceptance PR (merged 2026-05-01, merge commit `40093ac7a`; Interpretation D: linear-append commits per round, Rounds 1–5).

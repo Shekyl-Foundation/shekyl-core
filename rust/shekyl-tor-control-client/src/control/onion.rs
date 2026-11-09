@@ -88,10 +88,8 @@ pub const SERVICE_ID_CHARS: usize = 56;
 ///
 /// tor's `ED25519-V3` key blob is the expanded secret key — the clamped scalar
 /// concatenated with the hash prefix — which is what RFC 8032 §5.1.5 produces
-/// from a 32-byte seed via SHA-512 + clamping. Callers that hold a seed must
-/// perform that expansion; this type does not, because the expansion belongs
-/// with whatever owns the seed (and the seed is a different secret with a
-/// different lifetime).
+/// from a 32-byte seed via SHA-512 + clamping. The expansion is
+/// `shekyl-onion-key`'s (`OnionKeypair`); this type wraps its result.
 pub struct OnionKey([u8; ONION_KEY_BYTES]);
 
 impl OnionKey {

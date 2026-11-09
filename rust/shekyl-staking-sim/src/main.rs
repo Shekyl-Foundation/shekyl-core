@@ -30,6 +30,7 @@
 //! tripwire, no longer a K_COVER seal input); `--partition-adversary` (the §14.4
 //! founder-cover partition-adversary arm — gating lemma + witness-typed
 //! controls, per the same doc's §14/§17 launch-posture round).
+#![deny(unsafe_code)]
 
 mod agent;
 mod audit;

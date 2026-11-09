@@ -22,6 +22,7 @@
 //! vocabulary for the RPC and the option table.
 
 #![no_std]
+#![deny(unsafe_code)]
 
 /// One grant (`RPC_CHANNEL.md` §6.1's table, in its order).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

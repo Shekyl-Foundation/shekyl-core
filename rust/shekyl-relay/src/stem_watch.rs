@@ -88,7 +88,7 @@ impl TxId {
     }
 
     // A `from_blob` constructor briefly lived here, deriving the key from
-    // blob bytes on the rule-20 argument that the join is local. Deleted at
+    // blob bytes on the argument that the join is local. Deleted at
     // F-9 (§48): the join is local but its INPUTS are not — the stem side
     // hashes what it sent, the arrival side what the network returned, and
     // nothing enforces that intermediate nodes preserve encoding. The key

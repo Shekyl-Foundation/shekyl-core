@@ -22,7 +22,7 @@ WALLET_STATE_MIGRATION.md ·
 [15-deletion-and-debt.mdc](../.cursor/rules/15-deletion-and-debt.mdc) ·
 [30-cryptography.mdc](../.cursor/rules/30-cryptography.mdc) ·
 [35-secure-memory.mdc](../.cursor/rules/35-secure-memory.mdc) ·
-[40-ffi-discipline.mdc](../.cursor/rules/40-ffi-discipline.mdc) ·
+[40-ffi-discipline.mdc](completed/RULE_40_FFI_DISCIPLINE.md) ·
 [45-rust-lint-checks.mdc](../.cursor/rules/45-rust-lint-checks.mdc) ·
 [50-testing.mdc](../.cursor/rules/50-testing.mdc) ·
 [75-system-autonomy.mdc](../.cursor/rules/75-system-autonomy.mdc).
