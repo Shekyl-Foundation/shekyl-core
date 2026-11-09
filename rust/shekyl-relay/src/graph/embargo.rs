@@ -30,7 +30,7 @@
 //! failed) is held unsent, not shown and not fluffed (RX-2), and re-planned
 //! on the record's short grid ([`NEVER_SENT_RETRY_MS`]), at once when this
 //! node turns synchronised, and at once when a session is established. The
-//! 1,148 s interval is for a transaction that was sent (§92.5c).
+//! 1,176 s interval is for a transaction that was sent (§92.5c).
 //!
 //! **Bounded by the pool:** every pool departure releases the state
 //! (`Relay::release`, `DRS_X_STORE_FLIP.md` §2).
@@ -69,7 +69,7 @@ fn origin_terms() -> (u32, u32) {
 
 /// The origin's retry interval, in milliseconds: the 1-in-`origin_retry_one_in`
 /// survival quantile of the adopted anonymity timer over the longest
-/// declared transit (§92.5c; 1,148 s at the shipped terms). Asked at the
+/// declared transit (§92.5c; 1,176 s at the shipped terms). Asked at the
 /// same confidence a relay asks whether a stem completed.
 #[must_use]
 pub fn origin_retry_ms() -> Millis {

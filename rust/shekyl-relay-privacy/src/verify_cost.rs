@@ -8,8 +8,10 @@
 //!
 //! `hop`'s dominant measurable term is the FCMP++ verification a relay
 //! performs before forwarding (§71), and that cost is **sorted by transaction
-//! shape**: at the spec machine it spans 124.5 ms (1 input, genesis tree) to
-//! 791.9 ms (8 inputs, depth-7 tree) — §85.3. A scalar provisioned anywhere
+//! shape**: at the spec machine the pool door's sequence spans 144.3 ms
+//! (1 input, genesis tree) to 818.6 ms (8 inputs, depth-7 tree) — §85.3's
+//! membership-proof cells plus the door's signature and range-proof terms
+//! (§72.2, BA-Q9). A scalar provisioned anywhere
 //! on that range either over-provisions the modal transaction or
 //! under-provisions the tail, and the tail's gap *widens* with chain age
 //! (§82.3: 3.0× → 5.3× over the chain's life). So the adopted shape is a
@@ -125,10 +127,20 @@ pub enum TreeBasis {
 /// approximated.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VerifyCell {
-    /// Verification cost in milliseconds: the FCMP++ membership-proof verify
-    /// plus the per-output prime-order check, at `n_out = 2` (§72.3 measured
-    /// the output axis at ~0.07 ms per output — it cannot move the constant,
-    /// which is why it is excluded rather than an axis).
+    /// Verification cost in milliseconds of the pool door's sequence at this
+    /// shape and `n_out = 2` (§72.2, amended 2026-11-08): the FCMP++
+    /// membership proof with the output masks (§85.3's cell), `n_in` hybrid
+    /// Ed25519 + ML-DSA-65 signature verifications (CEN-I18), and the range
+    /// proof as a batch of one (CEN-H19 at `TxSlot::Lone`). See
+    /// [`DoorOperands`] for the sum and its sources.
+    ///
+    /// The output axis is excluded from the cell, not from the cost: the
+    /// masks term is ~0.07 ms per output (§72.3), and the range proof grows
+    /// with the padded output count (18.838 ms at 2 outputs, 107.3 ms at 16,
+    /// `bp_lone` in
+    /// `docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt`).
+    /// That is the unpriced output axis [`Self::msg_bytes`] names; a
+    /// wider-output cell is measured, never scaled from these.
     pub millis: f64,
     /// Which machine produced the number.
     pub provenance: Provenance,
@@ -265,6 +277,12 @@ const fn node_crypto_ms(msg_bytes: u32) -> f64 {
     msg_bytes as f64 * NODE_CRYPTO_PASSES / PI4_AES_BYTES_PER_SEC * 1_000.0
 }
 
+mod door;
+use door::{
+    DoorInputCount, DoorOperands, PI4_MASKS_AND_PROOF_1IN_D2_MS, PI4_MASKS_AND_PROOF_1IN_D7_MS,
+    PI4_MASKS_AND_PROOF_8IN_D2_MS, PI4_MASKS_AND_PROOF_8IN_D7_MS,
+};
+
 const fn pi4(millis: f64, basis: TreeBasis, msg_bytes: u32) -> VerifyCell {
     VerifyCell {
         millis,
@@ -299,7 +317,7 @@ const PI4_AES_BYTES_PER_SEC: f64 = 138_993_660.0;
 /// A populated cell must be a plausible per-hop verification cost: positive,
 /// finite, and under ten seconds. `millis > 0.0` is `false` for NaN, and the
 /// upper bound excludes `+inf` along with any figure that could not be a
-/// verification measurement (the deepest measured cell is 791.9 ms; ten
+/// verification measurement (the deepest cell is 818.6 ms; ten
 /// seconds is two orders of headroom, not a tuning bound).
 const fn cell_is_plausible(millis: f64) -> bool {
     millis > 0.0 && millis < 10_000.0
@@ -333,10 +351,17 @@ const _: () = {
 
 /// The adopted table (§80), populated with the spec machine's pinned cells.
 ///
-/// Values are §85.3's measurements: Pi 4 Model B, `performance` on all four
-/// cores, verify-check exit 0 on every fixture (no cell times a reject
-/// path), thermal max 69.6 °C against the 80 °C soft-throttle. Depth-7 cells
-/// are synthesized-tree projections per §81.2 and labelled so.
+/// Each cell is [`DoorOperands::millis`] over the `PI4_*` operands. The
+/// membership-proof terms are §85.3's measurements: Pi 4 Model B,
+/// `performance` on all four cores, verify-check exit 0 on every fixture (no
+/// cell times a reject path), thermal max 69.6 °C against the 80 °C
+/// soft-throttle. The signature terms are the 2026-09-05 floor capture's
+/// ([`door::PI4_HYBRID_SIG_1IN_MS`]). The range-proof terms are the 2026-11-08
+/// capture's ([`door::PI4_RANGE_PROOF_LONE_1IN_2OUT_MS`]), the verifier that folds
+/// `Â` into the batch (§72.2). Depth-7 cells are synthesized-tree projections
+/// per §81.2 and labelled so. The published sums are pinned in
+/// `tests/spec_decision_matrix.rs`, which recomputes them from a second
+/// transcription of these operands.
 pub const SPEC_VERIFY_COST: SpecVerifyCost = {
     const NONE: Option<VerifyCell> = None;
     const EMPTY_ROW: [Option<VerifyCell>; DEPTH_TIERS] = [NONE; DEPTH_TIERS];
@@ -346,13 +371,30 @@ pub const SPEC_VERIFY_COST: SpecVerifyCost = {
     // header (PWD-B5). Enforced by tests/carrier_window.rs against notify().
     // Re-derived 2026-09-14 under `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2:
     // 64-byte `0x07` entries and the proof's opening leg moved every shape);
-    // the `millis` are still §85.3's pre-`PL-D3` measurements — the
-    // floor-device re-measurement is owed (rule 76; §12.1 of the round doc).
-    cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis, 13_311));
-    cells[0][DEPTH_TIERS - 1] = Some(pi4(143.3, TreeBasis::SynthesizedProjection, 14_783));
+    // The masks-and-proof terms are still §85.3's pre-`PL-D3` measurements.
+    // The floor-device re-measurement of the door's whole sequence is owed
+    // (rule 76; §12.1 of the round doc; BA-T10).
+    cells[0][0] = Some(pi4(
+        DoorOperands::at(PI4_MASKS_AND_PROOF_1IN_D2_MS, DoorInputCount::One).millis(),
+        TreeBasis::Genesis,
+        13_311,
+    ));
+    cells[0][DEPTH_TIERS - 1] = Some(pi4(
+        DoorOperands::at(PI4_MASKS_AND_PROOF_1IN_D7_MS, DoorInputCount::One).millis(),
+        TreeBasis::SynthesizedProjection,
+        14_783,
+    ));
     // n_in = 8 (the consensus maximum): the tail §75's sorting is about.
-    cells[7][0] = Some(pi4(399.2, TreeBasis::Genesis, 58_897));
-    cells[7][DEPTH_TIERS - 1] = Some(pi4(791.9, TreeBasis::SynthesizedProjection, 62_097));
+    cells[7][0] = Some(pi4(
+        DoorOperands::at(PI4_MASKS_AND_PROOF_8IN_D2_MS, DoorInputCount::Eight).millis(),
+        TreeBasis::Genesis,
+        58_897,
+    ));
+    cells[7][DEPTH_TIERS - 1] = Some(pi4(
+        DoorOperands::at(PI4_MASKS_AND_PROOF_8IN_D7_MS, DoorInputCount::Eight).millis(),
+        TreeBasis::SynthesizedProjection,
+        62_097,
+    ));
     SpecVerifyCost { cells }
 };
 
@@ -437,7 +479,7 @@ impl SpecVerifyCost {
 /// **hardware**, so it cannot reintroduce the sorting the table and the Pi
 /// floor remove (§86.1 — recorded here per §87.4 because a check that only
 /// ever convicts is a worry, not an instrument; transit is its first
-/// acquittal). It is also dominated at the tail: 792 ms of verification
+/// acquittal). It is also dominated at the tail: 835 ms of verification
 /// against ~50 of transit at the 8-input depth-7 cell.
 ///
 /// > **Narrowed 2026-08-20 (§94.5).** This previously read "not of the
@@ -543,8 +585,9 @@ pub const fn transit_ms_for_connector(connector: MeasuredConnector) -> Derivatio
 ///
 /// **Provenance, and why it survives its own section.** §63.2 swept the
 /// anonymity path to *"ten times clearnet latency"*, `hop = 1750 ms`, as its
-/// worst case. Pairing this constant with the shared verification floor
-/// reproduces that hop exactly (124.5 + 1625 = 1749.5 → 1750).
+/// worst case. This constant is that hop less the membership-proof cell it
+/// was swept beside (1750 − 124.5 = 1625.5 → 1625); paired with the door's
+/// whole sequence (§72.2, BA-Q9) the Tor hop is 1770 ms.
 ///
 /// **§63.2's conclusion is retired and its sweep is not, and the distinction is
 /// the whole reason this citation is usable.** What §63.2 concluded — that the
@@ -749,32 +792,29 @@ mod tests {
         }
     }
 
-    /// The adopted modal hop reproduces the priced value: the Pi modal cell
-    /// plus the 50 ms transit assumption is 175 ms — numerically equal to
-    /// the inherited constant, by the arithmetic §71.3 noted (the inherited
-    /// number was never pure transit: ~80 ms Monero-era verification + one
-    /// ocean crossing; ours is 124.5 ms FCMP++ verification + the same
-    /// crossing). Same value, different provenance — which is the entire
-    /// point of the landing. If a table cell or the transit assumption
-    /// moves, this pin moves with the §80.2 price list, deliberately.
+    /// The adopted modal hop is the priced value: the modal cell's door
+    /// sequence (144.31 ms: 124.5 membership proof and masks, 0.97 one hybrid
+    /// signature, 18.84 the lone range proof), plus 0.96 ms of node crypto
+    /// over its 13,311 B message, plus the 50 ms transit assumption, is
+    /// 195.27 ms, 195. If a table cell or the transit assumption moves, this
+    /// pin moves with the §80.2 price list, deliberately.
     ///
-    /// **2026-08-23: the tail endpoint moved 449 -> 453**, and the modal one
-    /// did not move at all. Folding the node-crypto term into `f_ms` adds
-    /// 0.94 ms at the modal shape (175.44, still 175) and 4.26 ms at the
-    /// 8-input shape (453.46, was 449.2). The modal pin surviving is not luck
-    /// — it is the same fact the fold rests on: the crypto term scales with
-    /// message size, so it is small exactly where the message is.
+    /// The inherited `175` it replaced was ~80 ms of Monero-era verification
+    /// plus one ocean crossing (§71.3); the masks-and-proof cell alone plus
+    /// the same crossing reproduced it, and the door's two further terms
+    /// (§72.2) are the 20 ms between them.
     #[test]
-    fn the_adopted_modal_hop_is_the_priced_175() {
+    fn the_adopted_modal_hop_is_the_priced_195() {
         assert_eq!(
             adopted_hop_ms(1, GENESIS_TREE_DEPTH).map(DerivationMs::ms),
-            Ok(175)
+            Ok(195)
         );
-        // And the tail endpoint at genesis: 399.2 + 50 + 4.26 ms node crypto
-        // over that shape's 59,344 B message.
+        // And the tail endpoint at genesis: 425.86 ms door sequence
+        // (399.2 + 8 × 0.97228 + 18.882) + 4.24 ms node crypto over that
+        // shape's 58,897 B message + 50 ms transit = 480.10.
         assert_eq!(
             adopted_hop_ms(8, GENESIS_TREE_DEPTH).map(DerivationMs::ms),
-            Ok(453)
+            Ok(480)
         );
     }
 
@@ -840,10 +880,11 @@ mod tests {
     /// per-shape from that shape's own message — so the numbers below cannot
     /// drift silently even though no bar guards them.
     ///
-    /// For the record, like-for-like at the four populated cells: 0.75 %,
-    /// 0.78 %, **1.07 %** (8-in at genesis depth, the worst), 0.58 %. The worst
-    /// cell is max-inputs-at-min-depth because verification grows faster with
-    /// depth than message size does, so the cheapest verification pairs with an
+    /// For the record, like-for-like at the four populated cells: 0.66 %
+    /// (1-in, genesis), 0.65 % (1-in, depth 7), **0.995 %** (8-in at genesis
+    /// depth, the worst), 0.55 % (8-in, depth 7). The worst cell is
+    /// max-inputs-at-min-depth because verification grows faster with depth
+    /// than message size does, so the cheapest verification pairs with an
     /// already-large message — and it is a shape that exists today.
     ///
     /// What edit reds this: changing `NODE_CRYPTO_PASSES`,
@@ -864,9 +905,9 @@ mod tests {
             "the worst crypto fraction should be max-inputs at min-depth"
         );
         assert!(
-            (0.0105..0.0110).contains(&worst.2),
+            (0.0097..0.0101).contains(&worst.2),
             "worst-cell crypto fraction is {:.4} — outside the recorded \
-             1.07 % band, so the arithmetic moved",
+             0.995 % band, so the arithmetic moved",
             worst.2
         );
     }
