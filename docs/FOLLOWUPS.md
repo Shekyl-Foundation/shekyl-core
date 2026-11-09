@@ -1114,11 +1114,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
 
-- **The wallet's Tor recovery has never run on Windows: three live respawn tests are `#[cfg(unix)]`.** `crash_is_survived_respawn_reaches_ready_again`, `onion_is_republished_on_every_incarnation` and `degraded_episode_clears_only_after_sustained_ready` (`rust/shekyl-tor-control-wallet/src/service.rs`) kill the managed tor with `pkill`, which Windows does not have, so `tor-pin-verify`'s Windows entry runs one wallet live test, not four. The GUI wallet is the primary Windows wallet, so the supervisor's crash, respawn and degraded-episode paths are the ones Windows users will meet first. Needs a Windows termination path for the tests (the managed tor's process, terminated by its handle or PID), then the three tests ungated and the Windows wallet floor raised to 4. Falsify by: the Windows entry of `tor-pin-verify` running all four wallet live tests green. — [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-11`
-  - Target: pre-genesis
-  - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §7
-
-
 - **Measure `TSR-M4`'s set-`MaxMemInQueues` arm once increment 3 proposes a value.** The pre-flight measured Tor's memory at the §10 load at Tor's default cap (91.0 MiB on the floor device, 2026-10-19), not under a set one, because there is no candidate value to set yet. Blocker: increment 3, which proposes the value. Falsify by `TOR_SUPERVISOR.md` §10's `TSR-M4` row carrying the floor device's figure under the proposed `MaxMemInQueues`.
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §10 (`TSR-M4`)
   - Target: pre-genesis

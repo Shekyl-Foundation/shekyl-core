@@ -365,6 +365,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.0
         with:
           components: clippy
+      # Every Rust step below builds into rust/target, the CMake daemon
+      # build included (cmake/BuildRust.cmake sets CARGO_TARGET_DIR there),
+      # so one workspace entry covers the job. Without a cache each run
+      # compiled the dependency graph cold, once per profile and feature
+      # set. Saved by push runs only: a pull request's save is readable by
+      # that pull request alone and evicts the `dev` cache the others
+      # restore from (rust-audit-test.yml's cache step).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+          save-if: ${{ github.event_name == 'push' }}
       # WP-W1: the Windows security crate must compile for Windows, and this
       # is the only runner where that can be BLOCKING — the Linux boxes have no
       # C cross-compiler, so anything whose graph reaches `ring` (i.e. anything
@@ -506,6 +517,27 @@ jobs:
           $passed = Select-String -Path tsr-q7-launch.out -Pattern 'test result: ok\. (\d+) passed' | ForEach-Object { [int]$_.Matches[0].Groups[1].Value } | Select-Object -First 1
           if (-not $passed -or $passed -lt 6) {
             Write-Error "the launch module ran $passed tests on Windows; the floor is 6"
+            exit 1
+          }
+
+      # The outside kill on Windows (`outside_kill`): the PowerShell script
+      # that kills a Tor by its command line for the live tests. Its three
+      # tests are the only run of the script's "nothing was killed" and "not
+      # Tor" paths: `tor-pin-verify`'s live tests see only a kill. A script
+      # that no longer parses exits 1 and panics the first test, so a broken
+      # script fails here. Floor = the module's test count (3).
+      - name: "The outside kill's tests (Windows)"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p shekyl-tor-control-client --lib -- outside_kill::tests:: *> outside-kill.out
+          $rc = $LASTEXITCODE
+          Get-Content outside-kill.out
+          if ($rc -ne 0) { exit $rc }
+          $passed = Select-String -Path outside-kill.out -Pattern 'test result: ok\. (\d+) passed' | ForEach-Object { [int]$_.Matches[0].Groups[1].Value } | Select-Object -First 1
+          if (-not $passed -or $passed -lt 3) {
+            Write-Error "the outside kill ran $passed tests on Windows; the floor is 3"
             exit 1
           }
 
