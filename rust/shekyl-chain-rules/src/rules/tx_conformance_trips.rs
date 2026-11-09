@@ -269,22 +269,24 @@ pub(super) fn h9_output_amounts_overflow() -> Transaction {
 }
 
 /// An `extra` past the relay cap that **parses and satisfies I19**: the two
-/// PQC fields the outputs require, then a `0x09` view-tag-hints blob of
+/// PQC fields the outputs require, then a `0x0B` attestation blob of
 /// `MAX_TX_EXTRA` bytes. Raw filler (the first cut, `[0xEE; MAX + 1]`) would
 /// reach the twin's cap arm all the same — it checks the length before it
 /// parses — but the crate would refuse it on I19 for not parsing, and the
 /// entry would record a shape disagreement, not the policy one it is for.
-/// The `0x09` blob is admissible on a listed transaction under I19 (the
+/// The `0x0B` blob is admissible on a listed transaction under I19 (the
 /// general subject bounds the PQC fields and bans the nonce; the parser's
-/// `READ_LEN_CAP` is the only limit on a hints blob), which is itself a
-/// finding — recorded on the census-sweep FOLLOWUPS row.
+/// `READ_LEN_CAP` is the only limit on an attestation blob), which is itself
+/// a finding — recorded on the census-sweep FOLLOWUPS row. (This trip used a
+/// `0x09` blob until Option E′ retired that tag; its successor `0x0D` is
+/// bounded by the output count and cannot reach the cap.)
 pub(super) fn m4_extra_over_the_relay_cap() -> Transaction {
     let mut tx = spend2();
     let n = tx.prefix.outputs.len();
     tx.prefix.extra = tx_extra::serialize(&[
         TxExtraField::PqcKemCiphertext(vec![0x5A; HYBRID_KEM_CT_BYTES * n]),
         TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n)),
-        TxExtraField::PqcViewTagHints(vec![0x99; MAX_TX_EXTRA]),
+        TxExtraField::ArchivalAttestation(vec![0x99; MAX_TX_EXTRA]),
     ])
     .expect("three fields serialize");
     tx

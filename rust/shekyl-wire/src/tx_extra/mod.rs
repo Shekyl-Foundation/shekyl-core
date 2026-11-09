@@ -65,15 +65,11 @@ pub const TX_EXTRA_TAG_PQC_LEAF_ENTRIES: u8 = 0x07;
 // (`docs/PQC_MULTISIG.md` §7.4, "Reserved tags"): a reserved slot lives in
 // the spec's table with no code symbol until its producer is designed
 // (rule 23).
-/// `0x09` — PQC view-tag hints blob: one byte per multisig-recipient output.
-/// **Staged**: the producer is the multisig receive path
-/// (`docs/PQC_MULTISIG.md` §7.4; crate `shekyl-multisig`, MS-/MSW- rows);
-/// until it lands, single-sig outputs never carry this tag.
-pub const TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS: u8 = 0x09;
-/// `0x0A` — PQC spend-auth pubkeys blob: `spend_auth_version ‖ N × Y_i`,
-/// REQUIRED on every multisig-recipient output. **Staged** with the same
-/// producer as `0x09` (`docs/PQC_MULTISIG.md` §7.4).
-pub const TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS: u8 = 0x0A;
+// `0x09` was the Option D multisig view-tag hints and `0x0A` its per-member
+// spend-auth pubkeys. Option E′ replaced both with `0x0D` (one entry per
+// multisig output; `docs/PQC_MULTISIG.md` §7.4). Neither ever had a
+// producer. Both bytes stay retired like `0x03` / `0x05` / `0xDE` — never
+// reused — and parse as unknown tags.
 
 /// `0x0B` — archival attestation blob. A present tag with an empty payload
 /// encodes as two bytes (`0x0B 0x00`), not as an absent extra. The consensus
@@ -85,6 +81,21 @@ pub const TX_EXTRA_TAG_ARCHIVAL_ATTESTATION: u8 = 0x0B;
 /// the pubkey is encoded (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.2; `SO-D12i`).
 /// Required in every coinbase and refused everywhere else.
 pub const TX_EXTRA_TAG_DRAW_COMMITMENT: u8 = 0x0C;
+
+/// `0x0D` — the multisig entries: one [`MultisigEntry`] per output paid to
+/// a multisig group, sorted by output index (`docs/PQC_MULTISIG.md` §7.4).
+/// Each entry carries the group members' own KEM ciphertexts and the
+/// encrypted hashes of their per-output signing keys.
+pub const TX_EXTRA_TAG_PQC_MULTISIG: u8 = 0x0D;
+
+/// The most members a multisig group has. Pinned equal to
+/// `shekyl_crypto_pq::multisig::MAX_MULTISIG_PARTICIPANTS` in the test build
+/// (`kem_layout_pins`), for the same reason as the KEM sizes.
+pub const MULTISIG_MAX_MEMBERS: u8 = 5;
+/// Bytes of one member's per-output key hash in a [`MultisigEntry`].
+pub const MULTISIG_KEY_HASH_BYTES: usize = 32;
+/// Bytes of the AEAD tag that closes a [`MultisigEntry`]'s encrypted hashes.
+pub const MULTISIG_HASHES_TAG_BYTES: usize = 16;
 
 /// X25519 ciphertext bytes per output.
 pub const X25519_CT_BYTES: usize = 32;
@@ -119,6 +130,9 @@ mod kem_layout_pins {
     const _: () = assert!(
         super::PQC_LEAF_POINT_BYTES == shekyl_crypto_pq::leaf_commitment::PQC_LEAF_POINT_LEN
     );
+    const _: () = assert!(
+        super::MULTISIG_MAX_MEMBERS == shekyl_crypto_pq::multisig::MAX_MULTISIG_PARTICIPANTS
+    );
 }
 
 /// Max padding run in bytes, **including** the tag byte. Longer padding does
@@ -145,14 +159,12 @@ pub enum TxExtraField {
     PqcKemCiphertext(Vec<u8>),
     /// `0x07` — per-output PQC leaf entries (`CM ‖ record`), concatenated.
     PqcLeafEntries(Vec<u8>),
-    /// `0x09` — PQC view-tag hints blob.
-    PqcViewTagHints(Vec<u8>),
-    /// `0x0A` — PQC spend-auth pubkeys blob.
-    PqcSpendAuthPubkeys(Vec<u8>),
     /// `0x0B` — archival attestation blob.
     ArchivalAttestation(Vec<u8>),
     /// `0x0C` — the secret draw's commitment.
     DrawCommitment(DrawCommitment),
+    /// `0x0D` — the multisig entries, in wire order.
+    PqcMultisig(Vec<MultisigEntry>),
 }
 
 impl TxExtraField {
@@ -166,18 +178,17 @@ impl TxExtraField {
             Self::AdditionalPubKeys(_) => TX_EXTRA_TAG_ADDITIONAL_PUBKEYS,
             Self::PqcKemCiphertext(_) => TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT,
             Self::PqcLeafEntries(_) => TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
-            Self::PqcViewTagHints(_) => TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS,
-            Self::PqcSpendAuthPubkeys(_) => TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS,
             Self::ArchivalAttestation(_) => TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
             Self::DrawCommitment(_) => TX_EXTRA_TAG_DRAW_COMMITMENT,
+            Self::PqcMultisig(_) => TX_EXTRA_TAG_PQC_MULTISIG,
         }
     }
 
     /// The payload a reader of this field is handed.
     ///
     /// Padding is a length, not a payload, and returns `None`. Additional
-    /// pubkeys are owned because the enum stores them as separate keys; every
-    /// other payload is borrowed from the field.
+    /// pubkeys and multisig entries are owned because the enum stores them
+    /// parsed; every other payload is borrowed from the field.
     #[must_use]
     pub fn payload(&self) -> Option<Cow<'_, [u8]>> {
         match self {
@@ -191,11 +202,10 @@ impl TxExtraField {
                 }
                 Some(Cow::Owned(bytes))
             }
+            Self::PqcMultisig(entries) => Some(Cow::Owned(multisig_entries_bytes(entries))),
             Self::Nonce(bytes)
             | Self::PqcKemCiphertext(bytes)
             | Self::PqcLeafEntries(bytes)
-            | Self::PqcViewTagHints(bytes)
-            | Self::PqcSpendAuthPubkeys(bytes)
             | Self::ArchivalAttestation(bytes) => Some(Cow::Borrowed(bytes)),
         }
     }
@@ -209,6 +219,202 @@ pub struct KemCiphertext {
     /// ML-KEM-768 ciphertext — fixed size by spec, so a wrong length is
     /// unrepresentable (and the split avoids a per-output heap allocation).
     pub ml_kem: [u8; ML_KEM_768_CT_BYTES],
+}
+
+impl KemCiphertext {
+    /// The `x25519 ‖ ml_kem` wire bytes.
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; HYBRID_KEM_CT_BYTES] {
+        let mut out = [0u8; HYBRID_KEM_CT_BYTES];
+        out[..X25519_CT_BYTES].copy_from_slice(&self.x25519);
+        out[X25519_CT_BYTES..].copy_from_slice(&self.ml_kem);
+        out
+    }
+
+    /// Split `HYBRID_KEM_CT_BYTES` wire bytes.
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8; HYBRID_KEM_CT_BYTES]) -> Self {
+        let mut x25519 = [0u8; X25519_CT_BYTES];
+        x25519.copy_from_slice(&bytes[..X25519_CT_BYTES]);
+        let mut ml_kem = [0u8; ML_KEM_768_CT_BYTES];
+        ml_kem.copy_from_slice(&bytes[X25519_CT_BYTES..]);
+        Self { x25519, ml_kem }
+    }
+}
+
+/// One output's entry in the `0x0D` field:
+/// `out_idx ‖ n ‖ ct_1 … ct_n ‖ enc(h_1 … h_n)`.
+///
+/// - `out_idx` — the output this entry belongs to.
+/// - `n` — the group's member count, `1..=`[`MULTISIG_MAX_MEMBERS`]. It is on
+///   the wire so the field parses without the address; the entry's length is
+///   then exactly [`MultisigEntry::wire_len`]`(n)`.
+/// - `ct_i` — a hybrid KEM ciphertext to member `i`'s own KEM key. Member `i`
+///   alone recovers the per-output secret its signing key derives from.
+/// - `enc(h_1 … h_n)` — the members' per-output key hashes, encrypted under
+///   the output's group secret, then its [`MULTISIG_HASHES_TAG_BYTES`]-byte
+///   AEAD tag. Opaque here: the codec checks its length, the wallet opens it.
+///
+/// The fields are private and [`MultisigEntry::new`] checks both lengths, so
+/// an entry whose ciphertext count and hash blob disagree with `n` does not
+/// exist.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct MultisigEntry {
+    out_idx: u8,
+    member_cts: Vec<KemCiphertext>,
+    enc_key_hashes: Vec<u8>,
+}
+
+/// Why a [`MultisigEntry`] cannot be built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MultisigEntryError {
+    /// The member count is 0 or above [`MULTISIG_MAX_MEMBERS`].
+    MemberCount {
+        /// The count given.
+        n: usize,
+    },
+    /// The encrypted hash blob is not `n · 32 + 16` bytes.
+    EncryptedHashesLength {
+        /// The length given.
+        got: usize,
+        /// `n · MULTISIG_KEY_HASH_BYTES + MULTISIG_HASHES_TAG_BYTES`.
+        expected: usize,
+    },
+}
+
+impl std::fmt::Display for MultisigEntryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MemberCount { n } => write!(
+                f,
+                "multisig entry: {n} members; 1..={MULTISIG_MAX_MEMBERS} required"
+            ),
+            Self::EncryptedHashesLength { got, expected } => write!(
+                f,
+                "multisig entry: encrypted key hashes are {got} bytes; {expected} required"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MultisigEntryError {}
+
+impl MultisigEntry {
+    /// The encrypted hash blob's length for `n` members.
+    #[must_use]
+    pub const fn enc_key_hashes_len(n: u8) -> usize {
+        (n as usize) * MULTISIG_KEY_HASH_BYTES + MULTISIG_HASHES_TAG_BYTES
+    }
+
+    /// The entry's wire length for `n` members: `2 + n·1152 + 16`.
+    #[must_use]
+    pub const fn wire_len(n: u8) -> usize {
+        2 + (n as usize) * HYBRID_KEM_CT_BYTES + Self::enc_key_hashes_len(n)
+    }
+
+    /// Build an entry, checking the member count and the hash blob's length.
+    ///
+    /// # Errors
+    ///
+    /// [`MultisigEntryError`] when either length is wrong.
+    pub fn new(
+        out_idx: u8,
+        member_cts: Vec<KemCiphertext>,
+        enc_key_hashes: Vec<u8>,
+    ) -> Result<Self, MultisigEntryError> {
+        let n = member_cts.len();
+        let n_u8 = u8::try_from(n)
+            .ok()
+            .filter(|n| (1..=MULTISIG_MAX_MEMBERS).contains(n))
+            .ok_or(MultisigEntryError::MemberCount { n })?;
+        let expected = Self::enc_key_hashes_len(n_u8);
+        if enc_key_hashes.len() != expected {
+            return Err(MultisigEntryError::EncryptedHashesLength {
+                got: enc_key_hashes.len(),
+                expected,
+            });
+        }
+        Ok(Self {
+            out_idx,
+            member_cts,
+            enc_key_hashes,
+        })
+    }
+
+    /// The output this entry belongs to.
+    #[must_use]
+    pub const fn out_idx(&self) -> u8 {
+        self.out_idx
+    }
+
+    /// The member count `n`.
+    #[must_use]
+    pub fn n(&self) -> u8 {
+        u8::try_from(self.member_cts.len()).expect("checked at construction")
+    }
+
+    /// The members' KEM ciphertexts, member order.
+    #[must_use]
+    pub fn member_cts(&self) -> &[KemCiphertext] {
+        &self.member_cts
+    }
+
+    /// The encrypted key hashes followed by their AEAD tag.
+    #[must_use]
+    pub fn enc_key_hashes(&self) -> &[u8] {
+        &self.enc_key_hashes
+    }
+
+    fn write_to(&self, out: &mut Vec<u8>) {
+        out.push(self.out_idx);
+        out.push(self.n());
+        for ct in &self.member_cts {
+            out.extend_from_slice(&ct.to_bytes());
+        }
+        out.extend_from_slice(&self.enc_key_hashes);
+    }
+}
+
+fn multisig_entries_bytes(entries: &[MultisigEntry]) -> Vec<u8> {
+    let len = entries.iter().map(|e| MultisigEntry::wire_len(e.n())).sum();
+    let mut out = Vec::with_capacity(len);
+    for entry in entries {
+        entry.write_to(&mut out);
+    }
+    out
+}
+
+/// Split a `0x0D` payload into its entries. Every entry must be whole: a
+/// member count outside `1..=`[`MULTISIG_MAX_MEMBERS`] or a short tail is a
+/// parse error. Order and output indices are the shape rule's
+/// ([`check_pqc_field_shape_of`]), not the parser's.
+fn parse_multisig_entries(mut blob: &[u8]) -> io::Result<Vec<MultisigEntry>> {
+    let mut entries = Vec::new();
+    while !blob.is_empty() {
+        let out_idx = read_byte(&mut blob)?;
+        let n = read_byte(&mut blob)?;
+        if n == 0 || n > MULTISIG_MAX_MEMBERS {
+            return Err(io::Error::other(format!(
+                "tx_extra: 0x0d entry member count {n} not in 1..={MULTISIG_MAX_MEMBERS}"
+            )));
+        }
+        let mut member_cts = Vec::with_capacity(usize::from(n));
+        for _ in 0..n {
+            let ct: [u8; HYBRID_KEM_CT_BYTES] = read_array(&mut blob)?;
+            member_cts.push(KemCiphertext::from_bytes(&ct));
+        }
+        let hashes_len = MultisigEntry::enc_key_hashes_len(n);
+        if blob.len() < hashes_len {
+            return Err(io::Error::other("tx_extra: 0x0d entry truncated"));
+        }
+        let (hashes, rest) = blob.split_at(hashes_len);
+        blob = rest;
+        entries.push(
+            MultisigEntry::new(out_idx, member_cts, hashes.to_vec())
+                .expect("both lengths were read to n"),
+        );
+    }
+    Ok(entries)
 }
 
 fn read_blob<R: Read>(r: &mut R, what: &str) -> io::Result<Vec<u8>> {
@@ -290,18 +496,15 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
             TX_EXTRA_TAG_PQC_LEAF_ENTRIES => {
                 TxExtraField::PqcLeafEntries(read_blob(&mut cur, "pqc_leaf_hashes")?)
             }
-            TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS => {
-                TxExtraField::PqcViewTagHints(read_blob(&mut cur, "pqc_view_tag_hints")?)
-            }
-            TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS => {
-                TxExtraField::PqcSpendAuthPubkeys(read_blob(&mut cur, "pqc_spend_auth_pubkeys")?)
-            }
             TX_EXTRA_TAG_ARCHIVAL_ATTESTATION => {
                 TxExtraField::ArchivalAttestation(read_blob(&mut cur, "archival_attestation")?)
             }
             TX_EXTRA_TAG_DRAW_COMMITMENT => {
                 TxExtraField::DrawCommitment(DrawCommitment::from_bytes(read_array(&mut cur)?))
             }
+            TX_EXTRA_TAG_PQC_MULTISIG => TxExtraField::PqcMultisig(parse_multisig_entries(
+                &read_blob(&mut cur, "pqc_multisig")?,
+            )?),
             other => {
                 return Err(io::Error::other(format!(
                     "tx_extra: unknown tag {other:#04x}"
@@ -353,10 +556,19 @@ pub fn serialize(fields: &[TxExtraField]) -> io::Result<Vec<u8>> {
                     keys.len()
                 )));
             }
+            TxExtraField::PqcMultisig(entries)
+                if entries
+                    .iter()
+                    .map(|e| MultisigEntry::wire_len(e.n()))
+                    .sum::<usize>()
+                    > READ_LEN_CAP =>
+            {
+                return Err(io::Error::other(format!(
+                    "tx_extra: 0x0d multisig entries exceed cap {READ_LEN_CAP}"
+                )));
+            }
             TxExtraField::PqcKemCiphertext(b)
             | TxExtraField::PqcLeafEntries(b)
-            | TxExtraField::PqcViewTagHints(b)
-            | TxExtraField::PqcSpendAuthPubkeys(b)
             | TxExtraField::ArchivalAttestation(b)
                 if b.len() > READ_LEN_CAP =>
             {
@@ -410,10 +622,6 @@ fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {
             write_blob(w, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, blob)
         }
         TxExtraField::PqcLeafEntries(blob) => write_blob(w, TX_EXTRA_TAG_PQC_LEAF_ENTRIES, blob),
-        TxExtraField::PqcViewTagHints(blob) => write_blob(w, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS, blob),
-        TxExtraField::PqcSpendAuthPubkeys(blob) => {
-            write_blob(w, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS, blob)
-        }
         TxExtraField::ArchivalAttestation(blob) => {
             write_blob(w, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, blob)
         }
@@ -421,6 +629,11 @@ fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {
             w.write_all(&[TX_EXTRA_TAG_DRAW_COMMITMENT])?;
             w.write_all(commitment.as_bytes())
         }
+        TxExtraField::PqcMultisig(entries) => write_blob(
+            w,
+            TX_EXTRA_TAG_PQC_MULTISIG,
+            &multisig_entries_bytes(entries),
+        ),
     }
 }
 
@@ -553,6 +766,27 @@ pub enum PqcFieldShapeError {
         /// The blob length that was handed over.
         got: usize,
     },
+    /// More than one `0x0D` field. One field holds every entry.
+    MultisigDuplicate {
+        /// How many `0x0D` fields appeared.
+        count: usize,
+    },
+    /// A `0x0D` field with no entries.
+    MultisigEmpty,
+    /// The entry at `position` does not name a later output than the entry
+    /// before it. Entries are strictly ascending by output index, which also
+    /// makes a duplicate index unrepresentable.
+    MultisigOrder {
+        /// Position of the entry in the field.
+        position: usize,
+    },
+    /// An entry names an output the transaction does not have.
+    MultisigOutputIndex {
+        /// The output index the entry named.
+        out_idx: u8,
+        /// The transaction's output count.
+        n_outputs: usize,
+    },
 }
 
 impl std::fmt::Display for PqcFieldShapeError {
@@ -594,6 +828,20 @@ impl std::fmt::Display for PqcFieldShapeError {
                 f,
                 "tx_extra 0x07 content check: blob is {got} bytes; a whole, non-zero \
                  multiple of {PQC_LEAF_ENTRY_LEN} required"
+            ),
+            Self::MultisigDuplicate { count } => write!(
+                f,
+                "tx_extra 0x0d appears {count} times; at most one is admitted"
+            ),
+            Self::MultisigEmpty => write!(f, "tx_extra 0x0d is present with no entries"),
+            Self::MultisigOrder { position } => write!(
+                f,
+                "tx_extra 0x0d entry {position} does not follow the entry before it; \
+                 entries are strictly ascending by output index"
+            ),
+            Self::MultisigOutputIndex { out_idx, n_outputs } => write!(
+                f,
+                "tx_extra 0x0d entry names output {out_idx}; the transaction has {n_outputs}"
             ),
         }
     }
@@ -727,7 +975,51 @@ pub fn check_pqc_leaf_entries(blob: &[u8]) -> Result<(), PqcFieldShapeError> {
     Ok(())
 }
 
-/// [`check_pqc_field_shape`] then [`check_pqc_leaf_entries`] over parsed fields.
+/// The `0x0D` shape rule (CEN-I19's multisig clause): the field is optional;
+/// when present it is the only one, holds at least one entry, its entries
+/// are strictly ascending by output index, and each names an output the
+/// transaction has. Each entry's own length is exact by the parse.
+///
+/// A transaction carries `0x0D` only when it pays a multisig group, so the
+/// field's presence says so. That is inherent to Option E′ and was equally
+/// true of the retired `0x09` / `0x0A` (`docs/PQC_MULTISIG.md` §7.4).
+pub fn check_pqc_multisig_shape(
+    fields: &[TxExtraField],
+    n_outputs: usize,
+) -> Result<(), PqcFieldShapeError> {
+    let found: Vec<&[MultisigEntry]> = fields
+        .iter()
+        .filter_map(|f| match f {
+            TxExtraField::PqcMultisig(entries) => Some(entries.as_slice()),
+            _ => None,
+        })
+        .collect();
+    let entries = match found.as_slice() {
+        [] => return Ok(()),
+        [entries] => *entries,
+        many => {
+            return Err(PqcFieldShapeError::MultisigDuplicate { count: many.len() });
+        }
+    };
+    if entries.is_empty() {
+        return Err(PqcFieldShapeError::MultisigEmpty);
+    }
+    let mut previous: Option<u8> = None;
+    for (position, entry) in entries.iter().enumerate() {
+        let out_idx = entry.out_idx();
+        if previous.is_some_and(|p| out_idx <= p) {
+            return Err(PqcFieldShapeError::MultisigOrder { position });
+        }
+        if usize::from(out_idx) >= n_outputs {
+            return Err(PqcFieldShapeError::MultisigOutputIndex { out_idx, n_outputs });
+        }
+        previous = Some(out_idx);
+    }
+    Ok(())
+}
+
+/// [`check_pqc_field_shape`], [`check_pqc_leaf_entries`] and
+/// [`check_pqc_multisig_shape`] over parsed fields.
 pub fn check_pqc_field_shape_of(
     fields: &[TxExtraField],
     n_outputs: usize,
@@ -749,10 +1041,10 @@ pub fn check_pqc_field_shape_of(
     let leaf_lens: Vec<usize> = leaf.iter().map(|b| b.len()).collect();
     check_pqc_field_shape(n_outputs, &kem, &leaf_lens)?;
     // The shape rule admitted exactly one field (or none, with no outputs).
-    match leaf.as_slice() {
-        [blob] => check_pqc_leaf_entries(blob),
-        _ => Ok(()),
+    if let [blob] = leaf.as_slice() {
+        check_pqc_leaf_entries(blob)?;
     }
+    check_pqc_multisig_shape(fields, n_outputs)
 }
 
 /// The `0x07` blob a passing [`check_tx_extra_shape`] admitted.
@@ -822,6 +1114,61 @@ pub fn conforming_pqc_leaf_blob(n_outputs: usize) -> Vec<u8> {
 #[cfg(test)]
 mod pqc_field_shape {
     use super::*;
+
+    fn ms(out_idx: u8) -> MultisigEntry {
+        MultisigEntry::new(
+            out_idx,
+            vec![KemCiphertext::from_bytes(&[0x11; HYBRID_KEM_CT_BYTES])],
+            vec![0x22; MultisigEntry::enc_key_hashes_len(1)],
+        )
+        .expect("one member, right lengths")
+    }
+
+    #[test]
+    fn multisig_shape_admits_absent_and_ascending_entries() {
+        assert_eq!(check_pqc_multisig_shape(&[], 2), Ok(()));
+        let one = [TxExtraField::PqcMultisig(vec![ms(1)])];
+        assert_eq!(check_pqc_multisig_shape(&one, 2), Ok(()));
+        let two = [TxExtraField::PqcMultisig(vec![ms(0), ms(3)])];
+        assert_eq!(check_pqc_multisig_shape(&two, 4), Ok(()));
+    }
+
+    #[test]
+    fn multisig_shape_refusals_name_their_defect() {
+        let dup = [
+            TxExtraField::PqcMultisig(vec![ms(0)]),
+            TxExtraField::PqcMultisig(vec![ms(1)]),
+        ];
+        assert_eq!(
+            check_pqc_multisig_shape(&dup, 2),
+            Err(PqcFieldShapeError::MultisigDuplicate { count: 2 })
+        );
+        assert_eq!(
+            check_pqc_multisig_shape(&[TxExtraField::PqcMultisig(Vec::new())], 2),
+            Err(PqcFieldShapeError::MultisigEmpty)
+        );
+        for order in [vec![ms(1), ms(0)], vec![ms(1), ms(1)]] {
+            assert_eq!(
+                check_pqc_multisig_shape(&[TxExtraField::PqcMultisig(order)], 2),
+                Err(PqcFieldShapeError::MultisigOrder { position: 1 })
+            );
+        }
+        assert_eq!(
+            check_pqc_multisig_shape(&[TxExtraField::PqcMultisig(vec![ms(2)])], 2),
+            Err(PqcFieldShapeError::MultisigOutputIndex {
+                out_idx: 2,
+                n_outputs: 2
+            })
+        );
+        // No outputs: any entry names an output that does not exist.
+        assert_eq!(
+            check_pqc_multisig_shape(&[TxExtraField::PqcMultisig(vec![ms(0)])], 0),
+            Err(PqcFieldShapeError::MultisigOutputIndex {
+                out_idx: 0,
+                n_outputs: 0
+            })
+        );
+    }
 
     const K: usize = HYBRID_KEM_CT_BYTES;
     const L: usize = PQC_LEAF_ENTRY_LEN;

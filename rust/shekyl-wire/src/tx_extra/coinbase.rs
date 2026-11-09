@@ -467,8 +467,9 @@ mod tests {
     use crate::tx_extra::{
         admitted_leaf_blob, conforming_pqc_leaf_blob, PqcExtraField, PqcFieldShapeError,
         HYBRID_KEM_CT_BYTES, TX_EXTRA_TAG_ADDITIONAL_PUBKEYS, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
-        TX_EXTRA_TAG_PADDING, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS,
+        TX_EXTRA_TAG_PADDING, TX_EXTRA_TAG_PQC_MULTISIG,
     };
+    use crate::tx_extra::{KemCiphertext, MultisigEntry};
 
     use crate::tx_extra::CONFORMING_DRAW_COMMITMENT as COMMITMENT;
     use crate::tx_extra::DRAW_COMMITMENT_LEN;
@@ -667,12 +668,15 @@ mod tests {
                 TX_EXTRA_TAG_ADDITIONAL_PUBKEYS,
             ),
             (
-                TxExtraField::PqcViewTagHints(vec![1]),
-                TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS,
-            ),
-            (
-                TxExtraField::PqcSpendAuthPubkeys(vec![1]),
-                TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS,
+                // A coinbase cannot pay a multisig group: its grammar is
+                // closed, and `0x0D` is outside it.
+                TxExtraField::PqcMultisig(vec![MultisigEntry::new(
+                    0,
+                    vec![KemCiphertext::from_bytes(&[0x11; HYBRID_KEM_CT_BYTES])],
+                    vec![0x22; MultisigEntry::enc_key_hashes_len(1)],
+                )
+                .expect("one member, right lengths")]),
+                TX_EXTRA_TAG_PQC_MULTISIG,
             ),
             (
                 TxExtraField::ArchivalAttestation(Vec::new()),

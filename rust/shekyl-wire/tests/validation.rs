@@ -679,6 +679,37 @@ fn spend_with_extra(extra: Vec<u8>) -> Transaction {
     tx
 }
 
+/// The wiring falsifier for the `0x0D` clause: a conforming two-output spend
+/// validates with one multisig entry and is refused with an entry naming an
+/// output it does not have. Deleting the call from
+/// `check_pqc_field_shape_of` turns the second assertion red.
+#[test]
+fn validator_applies_the_multisig_entry_clause() {
+    use shekyl_wire::tx_extra::{
+        parse, serialize, KemCiphertext, MultisigEntry, TxExtraField, HYBRID_KEM_CT_BYTES,
+    };
+    let entry = |out_idx| {
+        MultisigEntry::new(
+            out_idx,
+            vec![KemCiphertext::from_bytes(&[0x11; HYBRID_KEM_CT_BYTES])],
+            vec![0x22; MultisigEntry::enc_key_hashes_len(1)],
+        )
+        .expect("one member, right lengths")
+    };
+    let with = |out_idx| {
+        let mut fields = parse(&conforming_pqc_extra(2)).expect("conforming extra parses");
+        fields.push(TxExtraField::PqcMultisig(vec![entry(out_idx)]));
+        spend_with_extra(serialize(&fields).expect("extra serializes"))
+    };
+    with(1)
+        .validate_context_free_pruned()
+        .expect("a 0x0d entry for an output the spend has must validate");
+    let err = with(2)
+        .validate_context_free_pruned()
+        .expect_err("a 0x0d entry for output 2 of 2 must be refused");
+    assert!(err.to_string().contains("0x0d"), "{err}");
+}
+
 fn pqc_fields(kem_len: usize, leaf_len: usize) -> Vec<u8> {
     use shekyl_wire::tx_extra::{serialize, TxExtraField};
     serialize(&[
