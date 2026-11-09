@@ -322,18 +322,95 @@ async fn socks_connect(socks: SocketAddr, host: &str, port: u16) -> std::io::Res
     Ok(s)
 }
 
-/// Cleanup policy, and it is NOT a drop guard on purpose.
+/// The tor data directory for one measurement session.
 ///
-/// A guard that removes the directory on every path would delete the two tor
-/// data dirs — including their `notice.log` — exactly when a run failed and
-/// those logs are the only evidence of why. Four runs failed during this
-/// round's bring-up and their logs were what identified a poisoned onion
-/// descriptor; a tidier cleanup would have thrown that away each time.
+/// Removed only when [`Self::finish`] sees success. An error keeps the
+/// directory and prints its path. The workspace builds this binary with
+/// `panic = "abort"` (`rust/Cargo.toml`, the `dev` and `release` profiles),
+/// so a panic never reaches `finish`, and a signal does not either. Both
+/// leave the directory in place.
 ///
-/// So: **removed on success, KEPT and announced on failure.** Splitting the
-/// body into `run` is what makes that uniform across every early return,
-/// rather than remembering to clean up at each one — which is the bug this
-/// replaces, where only the happy path and one failure arm removed it.
+/// That keep-on-failure is the point. A guard that removed the directory on
+/// every path would delete the two tor data dirs — including their
+/// `notice.log` — exactly when a run failed and those logs are the only
+/// evidence of why. Four runs failed during this round's bring-up and their
+/// logs were what identified a poisoned onion descriptor.
+struct SessionDir {
+    root: std::path::PathBuf,
+}
+
+impl SessionDir {
+    /// Directory-name prefix under the system temp directory.
+    const PREFIX: &'static str = "shekyl-transit-";
+    /// The client's tor data directory, inside the session directory.
+    const CLIENT: &'static str = "client";
+    /// The service's tor data directory, inside the session directory.
+    const SERVICE: &'static str = "service";
+
+    /// A fresh directory, with the client and service children created.
+    ///
+    /// The directory is persisted immediately. A failure while creating a
+    /// child is reported through [`Self::report`], so the path is printed
+    /// and the directory stays.
+    fn create() -> Result<Self, String> {
+        let built = tempfile::Builder::new()
+            .prefix(Self::PREFIX)
+            .tempdir()
+            .map_err(|e| e.to_string())?;
+        let session = Self { root: built.keep() };
+        if let Err(error) = session.prepare() {
+            session.report(&error);
+            return Err(error);
+        }
+        Ok(session)
+    }
+
+    fn prepare(&self) -> Result<(), String> {
+        for name in [Self::CLIENT, Self::SERVICE] {
+            std::fs::create_dir_all(self.root.join(name)).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// The client's tor data directory.
+    fn client(&self) -> std::path::PathBuf {
+        self.root.join(Self::CLIENT)
+    }
+
+    /// The service's tor data directory.
+    fn service(&self) -> std::path::PathBuf {
+        self.root.join(Self::SERVICE)
+    }
+
+    /// Prints the path. The directory stays: this value holds a plain path,
+    /// persisted when the session was created.
+    fn report(&self, error: &str) {
+        eprintln!(
+            "session failed ({error})\n  tor data dirs KEPT for diagnosis at {}\n  (cached-microdesc-consensus present = that daemon reached the directory;\n   absent = it never got that far. ManagedTor reports progress over the\n   control port, not a log file, so stderr above is the event record.)",
+            self.root.display()
+        );
+    }
+
+    /// Removes the directory when `result` is [`Ok`]. An error keeps it and
+    /// prints the path.
+    fn finish(self, result: Result<(), String>) -> Result<(), String> {
+        match &result {
+            Ok(()) => {
+                if let Err(error) = std::fs::remove_dir_all(&self.root) {
+                    eprintln!(
+                        "session succeeded; the tor data dirs could not be removed at {}: {error}",
+                        self.root.display()
+                    );
+                }
+            }
+            Err(error) => self.report(error),
+        }
+        result
+    }
+}
+
+/// One measurement session. The tor data directory is removed only when the
+/// session returns success; [`SessionDir`] holds that policy.
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let binary = std::env::var_os("SHEKYL_TEST_TOR_BINARY")
@@ -346,26 +423,9 @@ async fn main() -> Result<(), String> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(200);
 
-    // The directory removes itself when `root` drops, so a panic or an early
-    // return in `run` leaves nothing behind. A failure keeps it instead.
-    let root = tempfile::Builder::new()
-        .prefix("shekyl-transit-")
-        .tempdir()
-        .map_err(|e| e.to_string())?;
-    let client_dir = root.path().join("client");
-    let service_dir = root.path().join("service");
-    std::fs::create_dir_all(&client_dir).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&service_dir).map_err(|e| e.to_string())?;
-
-    let result = run(&binary, per_arm, client_dir, service_dir).await;
-    if let Err(e) = &result {
-        let kept = root.keep();
-        eprintln!(
-            "session failed ({e})\n  tor data dirs KEPT for diagnosis at {}\n  (cached-microdesc-consensus present = that daemon reached the directory;\n   absent = it never got that far. ManagedTor reports progress over the\n   control port, not a log file, so stderr above is the event record.)",
-            kept.display()
-        );
-    }
-    result
+    let dirs = SessionDir::create()?;
+    let result = run(&binary, per_arm, dirs.client(), dirs.service()).await;
+    dirs.finish(result)
 }
 
 async fn run(
@@ -381,8 +441,8 @@ async fn run(
     the other's progress rather than hiding behind it. */
     eprintln!("bringing up two tor daemons concurrently (separate guards) …");
     let (client, service) = tokio::try_join!(
-        bring_up("client", binary, client_dir),
-        bring_up("service", binary, service_dir)
+        bring_up(SessionDir::CLIENT, binary, client_dir),
+        bring_up(SessionDir::SERVICE, binary, service_dir)
     )?;
     let (client_tor, client_socks) = client;
     let (service_tor, _) = service;
