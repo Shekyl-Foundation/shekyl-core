@@ -423,7 +423,9 @@ across a sweep and flip a boundary-grazing metric — so the **full integer-swee
 comparison (PR 1.5)** was run on the *homeostasis* frame, which measures that
 propagation instead of assuming it: *does the integer backend keep the network
 within every homeostasis bound at least as well as the validated float model?*
-**Result (full 325-scenario sweep, `--curve-impl=integer` vs `=float`):** the
+**Result (full 325-scenario sweep, `--curve-impl=integer` vs `=float`; the
+plateau those backends evaluate is now the registered arm,
+`--reward-arm=registered-plateau`, since production credits linear work):** the
 load-bearing decentralization invariant `spread`/`spread_windowed`
 (`max_actor_share < 0.20`) is **325/325 clean** on both backends and integer is
 **never below float** on any aggregate. Integer is therefore **not worse** than

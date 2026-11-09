@@ -16,42 +16,33 @@
 //!
 //! Modes: `--timing-cluster` (ARCHIVAL_TIMING_CONSTANTS pin);
 //! `--failure-confirmation` (L14b Round-1 policy comparator per
-//! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); `--gf7-timeline` (the GF-7 graded
-//! measurement round — joint three-axis correlator + three arms + validity
-//! controls, graded against the a-priori `r < 2` bound per
-//! ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4); `--gf7-breakeven` (the
-//! effective-cover sensitivity sweep — `r(N)`/`P(link)` at the gate posture,
-//! the WI-4 §13.5 fifth conditional's measured shape; not a gate, and its
-//! parity line is an arithmetic identity, not a threshold);
+//! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); `--gf7-timeline` (the GF-7 joint
+//! timeline recorded through production's broadcast seam, its axis coverage,
+//! and the §19 leg-(b) wall-clock arm; ARCHIVAL_BOND_WI4_MEASUREMENT.md, WI-4);
 //! `--gf7-seal <artifact>` (also `--gf7-seal=<artifact>`; the §19.8 leg-(b)
-//! SEALING form — grades the receipts artifact the `shekyl-engine-core`
-//! `gf7_sealing_run` harness wrote from a live-driver run, same circular
-//! statistic and `r < 2` bound; per WI-4 §19.10 a dispersal-regression
-//! tripwire, no longer a K_COVER seal input); `--partition-adversary` (the §14.4
-//! founder-cover partition-adversary arm — gating lemma + witness-typed
-//! controls, per the same doc's §14/§17 launch-posture round).
+//! sealing-form grader of the receipts artifact the `shekyl-engine-core`
+//! `gf7_sealing_run` harness writes from a live-driver run; per WI-4 §19.10.3
+//! a dispersal-regression tripwire).
 #![deny(unsafe_code)]
 
 mod agent;
 mod audit;
 mod budget_throttle;
 mod clustering;
-mod cover;
 mod curve;
-mod f34_heavy_era;
 mod failure_confirmation;
 mod fingerprint;
-mod gf7_breakeven;
 mod gf7_seal;
 mod gf7_timeline;
 mod metrics;
 mod model;
 mod participation;
-mod partition_adversary;
 mod retrieval;
 mod reward;
-mod riders;
-use reward::CurveImpl;
+mod rng;
+use reward::{CurveImpl, RewardArm};
+#[cfg(test)]
+mod l11_l13_pin;
 mod scenarios;
 mod standoff;
 mod timing_cluster;
@@ -127,16 +118,13 @@ fn print_summary(results: &[ScenarioResult]) {
     );
     eprintln!("  (L11 free entry/exit; flat at full population when endogenous=false).");
     eprintln!(
-        "  bDU = BOOTSTRAP worst deep gap, unfloored (peak serving deep-under over the run);"
+        "  bDU = BOOTSTRAP worst deep gap (peak serving deep-under over the run); baPk = peak"
     );
-    eprintln!("  bDUf = same WITH the population-decaying foundation floor; baPk = peak bonded-");
     eprintln!(
-        "  archiver count (baPk - bondA is the OVERSHOOT). L12; all 0/=bondA outside bootstrap."
+        "  bonded-archiver count (baPk - bondA is the OVERSHOOT). L12; all 0/=bondA outside bootstrap."
     );
-    eprintln!("  boOld = OLDEST-band floored gap peak (P3); > bDUf ⇒ residual concentrates in the");
-    eprintln!(
-        "  irreplaceable tail; age-stratified floor (floor_age_tilt>0) pulls it toward bDUf."
-    );
+    eprintln!("  boOld = OLDEST-band gap peak (P3); > bDU ⇒ residual concentrates in the");
+    eprintln!("  irreplaceable tail.");
     eprintln!(
         "  feB = FEE-ERA realized purse at end (< budget = subsidy decayed; = ceiling = servo"
     );
@@ -150,12 +138,6 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!("  foundation retention guarantee (V3_STAKER_ARCHIVAL.md, complete trees held");
     eprintln!("  permanently) these are FOUNDATION-AS-SOLE-SOURCE transitions, not data loss;");
     eprintln!("  shkExt = the post-shock subset. swan-2/W1, re-read swan-4.");
-    eprintln!(
-        "  shkExF = post-shock wipe-outs NET OF THE MODELED SERVING FLOOR (counted only when"
-    );
-    eprintln!(
-        "  market holders AND floor are simultaneously zero; = shkExt when floor_replicas=0)."
-    );
     eprintln!(
         "  extB = shkExt binned by age band at wipe-out (b1/../b5, oldest last). swan-3/W12-13."
     );
@@ -192,14 +174,9 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!(
         "  on cold tail only); auOld = oldest-band cadence (P3). L14; 0 outside audit model."
     );
-    eprintln!(
-        "  szMn = realized MEAN shard size; szLo/szMd/szHi = frac_under within the light/\
-         mid/heavy SIZE tercile (PDM-Q-F34 composition axis; size tracks era density, so\
-         szHi is the young/dense end). 1.00/equal bands outside the composition axis."
-    );
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>6} {:>5} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>4} {:>6} {:>6} {:>14} {:>5} {:>5} {:>5} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>6} {:>5} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>4} {:>6} {:>14} {:>5} {:>5} {:>5} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
         "scenario",
         "axis",
         "bond",
@@ -230,7 +207,6 @@ fn print_summary(results: &[ScenarioResult]) {
         "actv",
         "bondA",
         "bDU",
-        "bDUf",
         "baPk",
         "boOld",
         "feB",
@@ -240,7 +216,6 @@ fn print_summary(results: &[ScenarioResult]) {
         "shkBA",
         "extT",
         "shkExt",
-        "shkExF",
         "extB",
         "ssSE",
         "ssMxW",
@@ -256,10 +231,6 @@ fn print_summary(results: &[ScenarioResult]) {
         "auC",
         "auDp",
         "auOld",
-        "szMn",
-        "szLo",
-        "szMd",
-        "szHi",
     );
 
     for r in results {
@@ -269,7 +240,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>6.3} {:>5.3} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.0} {:>5.0} {:>4.0} {:>6.0} {:>6.0} {:>14} {:>5.0} {:>5.0} {:>5.0} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3} | {:>5.2} {:>5.3} {:>5.3} {:>5.3}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>6.3} {:>5.3} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.0} {:>5.0} {:>4.0} {:>6.0} {:>14} {:>5.0} {:>5.0} {:>5.0} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -303,9 +274,8 @@ fn print_summary(results: &[ScenarioResult]) {
             r.active_frac,
             r.bonded_active,
             r.boot_deep_under_peak,
-            r.boot_deep_under_floored_peak,
             r.bonded_active_peak,
-            r.boot_oldest_floored_peak,
+            r.boot_oldest_under_peak,
             r.fee_budget_end,
             r.fee_deep_under_peak,
             r.shock_deep_under_peak,
@@ -313,7 +283,6 @@ fn print_summary(results: &[ScenarioResult]) {
             r.shock_bonded_trough,
             r.deep_extinct_total,
             r.shock_deep_extinct,
-            r.shock_deep_extinct_floored,
             r.shock_extinct_bands
                 .iter()
                 .map(|&x| format!("{}", x as usize))
@@ -333,10 +302,6 @@ fn print_summary(results: &[ScenarioResult]) {
             r.audit_oversight_credited,
             r.audit_deep_share,
             r.audit_oldest_cadence,
-            r.size_mean,
-            r.size_band_under_target[0],
-            r.size_band_under_target[1],
-            r.size_band_under_target[2],
         );
     }
 
@@ -528,208 +493,6 @@ fn print_failure_confirmation_report(axis_filter: Option<&str>) {
     }
 }
 
-/// **`--f34-heavy-era`** — `STAKER_ARCHIVAL_SIM.md` §L19a/§L19b: JSON to stdout, the
-/// graded table to stderr.
-fn print_f34_heavy_era_report() {
-    use f34_heavy_era::{BREACH_X, SEEDS};
-    let reports = f34_heavy_era::heavy_era_report();
-    match serde_json::to_string_pretty(&reports) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing f34 report: {e}"),
-    }
-    eprintln!("F34 heavy-era arm (§L19a): N = {SEEDS} paired seeds, BREACH iff min over seeds of max-over-cells (arm − control) > {BREACH_X}");
-    eprintln!("base      shape      S |  minDelta   diagMin | void mOff |  deepHeavy | VERDICT");
-    for r in &reports {
-        let dh: Vec<String> = r
-            .seeds
-            .iter()
-            .map(|s| format!("{}/{}", s.deep_heavy, s.heavy))
-            .collect();
-        eprintln!(
-            "{:<9} {:<8} {:>3.0} | {:>9} {:>9} | {:>4} {:>4} | {:>10} | {}",
-            r.base,
-            r.shape,
-            r.spread,
-            r.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.diag_min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.void_runs,
-            r.mean_off_one,
-            dh.first().cloned().unwrap_or_default(),
-            r.verdict
-        );
-    }
-}
-
-/// **`--f34-levers`** — §L19c/§L19d: the lever test on covered Burst. The table prints
-/// the seeds over `X` and the absolute arm/control state beside every registered
-/// verdict (§L19g).
-fn print_f34_levers_report() {
-    use f34_heavy_era::{slots, BREACH_X, SEEDS};
-    let rows = f34_heavy_era::lever_report();
-    match serde_json::to_string_pretty(&rows) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing f34 lever report: {e}"),
-    }
-    eprintln!("F34 lever test (§L19c), covered Burst: N = {SEEDS} paired seeds, BREACH iff min over seeds > {BREACH_X}");
-    eprintln!(
-        "lever       S  | scale   aw | slots   |  minDelta  median     max  >X | arm / ctl worst (median) | worst cell (seeds) | VERDICT"
-    );
-    for r in &rows {
-        eprintln!(
-            "{:<10} {:>3.0} | {:>5.2} {:>4.1} | {:>3}/{:<3} | {:>9} {:>7} {:>7} {:>3} | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {}",
-            r.lever,
-            r.spread,
-            r.levers.storage_scale,
-            r.levers.age_weight,
-            r.slots.0,
-            r.slots.1,
-            r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade
-                .median_delta
-                .map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade.seeds_over_x,
-            r.grade.median_arm_worst,
-            r.grade.median_ctl_worst,
-            r.grade.modal_worst_band,
-            r.grade.modal_worst_band_seeds,
-            SEEDS,
-            r.grade.verdict
-        );
-    }
-    for spread in [4.0, 10.0] {
-        let lowest = |lever: &str| {
-            rows.iter()
-                .filter(|r| r.lever == lever && r.spread == spread && r.grade.verdict == "clear")
-                .map(|r| r.levers)
-                .next()
-        };
-        eprintln!(
-            "S = {spread:.0}: lowest clearing headroom {} | lowest clearing age_weight {}",
-            lowest("headroom").map_or("none in ladder".into(), |l| format!(
-                "{:.2} (slots {:?})",
-                l.storage_scale,
-                slots(l.storage_scale)
-            )),
-            lowest("age_weight")
-                .map_or("none in ladder".into(), |l| format!("{:.1}", l.age_weight)),
-        );
-    }
-}
-
-/// **`--f34-l19j`** — §L19j: the two runs that settle §L19i's unresolved cells, graded
-/// by the governing verdict, with the over-`X` fraction and its binomial standard error.
-fn print_f34_l19j_report() {
-    use f34_heavy_era::BREACH_X;
-    let rows = f34_heavy_era::l19j_report();
-    match serde_json::to_string_pretty(&rows) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing f34 l19j report: {e}"),
-    }
-    eprintln!("F34 §L19j, covered Burst, X = {BREACH_X}");
-    eprintln!(
-        "run  S  | unit_cost |  N |  minDelta  median     max  >X  frac (±se) | arm / ctl worst (median) | worst cell (seeds) | GOVERNING"
-    );
-    for r in &rows {
-        let g = &r.point.grade;
-        let (over, n) = (g.seeds_over_x as f64, r.n_seeds as f64);
-        let frac = over / n;
-        let se = (frac * (1.0 - frac) / n).sqrt();
-        eprintln!(
-            " {}  {:>3.1} | {:>9.3} | {:>2} | {:>9} {:>7} {:>7} {:>3}  {:.3} (±{:.3}) | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {}",
-            r.run,
-            r.point.spread,
-            r.point.storage_unit_cost,
-            r.n_seeds,
-            g.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            g.median_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            g.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            g.seeds_over_x,
-            frac,
-            se,
-            g.median_arm_worst,
-            g.median_ctl_worst,
-            g.modal_worst_band,
-            g.modal_worst_band_seeds,
-            r.n_seeds,
-            g.governing_verdict
-        );
-    }
-}
-
-/// **`--f34-calibrated`** — §L19h: the realistic spreads across the calibrated
-/// `storage_unit_cost` grid. The governing (three-valued) verdict is the graded column;
-/// §L19a's registered verdict is printed beside it for continuity only.
-fn print_f34_calibrated_report() {
-    use f34_heavy_era::{BREACH_X, SEEDS};
-    let rows = f34_heavy_era::calibrated_report();
-    match serde_json::to_string_pretty(&rows) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing f34 calibrated report: {e}"),
-    }
-    eprintln!(
-        "F34 §L19h, covered Burst: calibrated storage_unit_cost grid, N = {SEEDS} paired seeds, X = {BREACH_X}"
-    );
-    eprintln!(
-        "  S  | unit_cost |  minDelta  median     max  >X | arm / ctl worst (median) | worst cell (seeds) | GOVERNING | (L19a rule)"
-    );
-    for r in &rows {
-        eprintln!(
-            "{:>4.1} | {:>9.3} | {:>9} {:>7} {:>7} {:>3} | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {} | ({})",
-            r.spread,
-            r.storage_unit_cost,
-            r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade
-                .median_delta
-                .map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade.seeds_over_x,
-            r.grade.median_arm_worst,
-            r.grade.median_ctl_worst,
-            r.grade.modal_worst_band,
-            r.grade.modal_worst_band_seeds,
-            SEEDS,
-            r.grade.governing_verdict,
-            r.grade.verdict
-        );
-    }
-}
-
-/// **`--f34-unit-cost`** — §L19e/§L19f: the `storage_unit_cost` sweep (item 7).
-fn print_f34_unit_cost_report() {
-    use f34_heavy_era::SEEDS;
-    let rows = f34_heavy_era::unit_cost_report();
-    match serde_json::to_string_pretty(&rows) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing f34 unit-cost report: {e}"),
-    }
-    eprintln!(
-        "F34 item 7 (§L19e), covered Burst: storage_unit_cost sweep, N = {SEEDS} paired seeds"
-    );
-    eprintln!(
-        "  S  | unit_cost |  minDelta  median     max  >X | arm / ctl worst (median) | worst cell (seeds) | VERDICT"
-    );
-    for r in &rows {
-        eprintln!(
-            "{:>3.0} | {:>9.2} | {:>9} {:>7} {:>7} {:>3} | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {}",
-            r.spread,
-            r.storage_unit_cost,
-            r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade
-                .median_delta
-                .map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
-            r.grade.seeds_over_x,
-            r.grade.median_arm_worst,
-            r.grade.median_ctl_worst,
-            r.grade.modal_worst_band,
-            r.grade.modal_worst_band_seeds,
-            SEEDS,
-            r.grade.verdict
-        );
-    }
-}
-
 fn print_timing_cluster_report() {
     let report = timing_cluster::verify();
     eprintln!("shekyl-staking-sim — archival timing cluster pin (ARCHIVAL_TIMING_CONSTANTS.md)");
@@ -793,13 +556,12 @@ fn print_standoff_report() {
     eprintln!("  latΕ = entry latency / epoch.");
     eprintln!();
     eprintln!(
-        "{:<20} {:<20} {:>6} {:>7} {:>6} {:>4} {:>4} | {:>6} {:>6} {:>6} {:>6} | {:>7} {:>5}",
+        "{:<20} {:<20} {:>6} {:>7} {:>6} {:>4} | {:>6} {:>6} {:>6} {:>6} | {:>7} {:>5}",
         "scenario",
         "axis",
         "win",
         "win_min",
         "rate",
-        "inv",
         "shr",
         "setMean",
         "setP05",
@@ -810,13 +572,12 @@ fn print_standoff_report() {
     );
     for r in &report.results {
         eprintln!(
-            "{:<20} {:<20} {:>6} {:>7.0} {:>6.3} {:>4} {:>4} | {:>6.2} {:>6.1} {:>6.3} {:>6.3} | {:>7.4} {:>5}",
+            "{:<20} {:<20} {:>6} {:>7.0} {:>6.3} {:>4} | {:>6.2} {:>6.1} {:>6.3} {:>6.3} | {:>7.4} {:>5}",
             r.name,
             r.axis,
             r.window_blocks,
             r.window_minutes,
             r.net_funding_rate_per_block,
-            if r.inversion { "Y" } else { "n" },
             if r.shared_trigger { "Y" } else { "n" },
             r.anon_set_mean,
             r.anon_set_p05,
@@ -828,7 +589,7 @@ fn print_standoff_report() {
     }
     eprintln!();
     eprintln!(
-        "Recommended window for set≥{:.0} (independent trigger, no inversion — conservative):",
+        "Recommended window for set≥{:.0} (independent trigger):",
         report.target_anon_set
     );
     eprintln!(
@@ -917,115 +678,16 @@ fn print_gf7_seal_report(report: &gf7_seal::GF7SealReport) {
 
 fn print_gf7_timeline_report() {
     let report = gf7_timeline::run_full_report();
-    eprintln!(
-        "shekyl-staking-sim — GF-7 measurement round (ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4)"
-    );
-    eprintln!(
-        "VERDICT WITHDRAWN (fail-closed; GF-7 coin retirement): the order coin and the funding-"
-    );
-    eprintln!(
-        "  send event this correlator graded were retired, so the entry-seam channel has no input"
-    );
-    eprintln!("  and the sim cannot emit a valid entry-seam verdict. Rows below are context only.");
-    eprintln!();
-    eprintln!(
-        "GRADED genesis gate for principal↔P funding-seam unlinkability. A-priori bound (§3,"
-    );
-    eprintln!(
-        "  committed before this correlator existed): r = P(link)·N < {:.1} — the modeled",
-        report.ratio_bound
-    );
-    eprintln!("  observer may at most double blind guessing (additive advantage A < 1/N).");
-    eprintln!(
-        "  N={} (baseline 1/N={:.3}, absolute bar P(link)<{:.3}), trials/point={}.",
-        report.n_principals,
-        1.0 / report.n_principals as f64,
-        report.ratio_bound / report.n_principals as f64,
-        report.trials,
-    );
+    eprintln!("shekyl-staking-sim — GF-7 joint timeline (ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4)");
+    eprintln!("  The sim's recorder of the production broadcast seam: one principal↔P timeline");
+    eprintln!("  through draw_entry_gap and bounded_uniform, all three GF-7 axes recorded. No");
+    eprintln!("  correlator and no verdict: the graded round was withdrawn with the order coin.");
     eprintln!(
         "  Axis coverage (one sample timeline): bond-post={} perP={} lifecycle={}.",
         report.coverage.axis_i_bond_post_events,
         report.coverage.axis_ii_per_p_submits,
         report.coverage.axis_iii_lifecycle_events
     );
-    eprintln!("  Conditional on: isolation holds (post-isolation timing residual); pessimistic");
-    eprintln!("  near-periodic lifecycle; N is realized cover (rate-driven, not a wallet choice).");
-    eprintln!();
-
-    // Controls gate the run's validity (§5).
-    eprintln!("Controls (must both pass or the run is INVALID — §5):");
-    for c in &report.controls {
-        eprintln!(
-            "  [{}] {:<28} P(link)={:.3} baseline={:.3}  ({})",
-            if c.passed { "ok" } else { "FAIL" },
-            c.name,
-            c.p_link,
-            c.baseline,
-            c.expectation,
-        );
-    }
-    eprintln!();
-    eprintln!(
-        "  Observer is POSTURE-CONDITIONED (§4.1): under the recommended local-daemon posture,"
-    );
-    eprintln!(
-        "  wallet session/refresh markers are loopback-invisible and are NOT direct anchors;"
-    );
-    eprintln!("  their cadence still reaches the observer through the chain-visible events it");
-    eprintln!("  co-triggers (funding/bond/drain/resume ride the session lattice — graded, see");
-    eprintln!("  blind at window 0). A remote/non-isolated daemon REOPENS this: markers become");
-    eprintln!("  anchors and the gate must be re-graded with them in (pre-fix shape: r≈5, fail).");
-    eprintln!();
-    eprintln!(
-        "  Arms: blind = funding-seam-blind null (§2 failure mode, observable cadence only);"
-    );
-    eprintln!("  s3 = modeled S-3 (joint MAP fusion). The funding seam is retired (GF-7 coin");
-    eprintln!("  retirement), so the S-3 fused set is the observable lifecycle cadence — the same");
-    eprintln!("  set blind scores, so blind == s3 now; lr = stress PANEL, an oracle-union upper");
-    eprintln!("  bound over {{MAP, density-corrected MAP}} — ≥ s3 by construction (the exact");
-    eprintln!("  seam-consistency-gated member is retired with the seam it filtered on).");
-    eprintln!("  The per-row grades are retained as context of the retracted arm; there is no");
-    eprintln!("  gate for any row to be relevant to — the entry-seam verdict is WITHDRAWN");
-    eprintln!("  (fail-closed) regardless of any row's score.");
-    eprintln!();
-    eprintln!(
-        "{:<10} {:>4} {:>5} {:>6} {:>6} | {:>7} {:>7} {:>7} | {:>4} {:>4}",
-        "group", "win", "disp", "draw", "regime", "blind", "s3", "lr", "r_lr", "pass",
-    );
-    for r in &report.rows {
-        eprintln!(
-            "{:<10} {:>4} {:>5} {:>6} {:>6} | {:>7.3} {:>7.3} {:>7.3} | {:>4.2} {:>4}",
-            r.group,
-            r.window_blocks,
-            r.dispersal_bound,
-            r.draw_shape,
-            r.regime,
-            r.blind.p_link,
-            r.modeled_s3.p_link,
-            r.lr_stress.p_link,
-            r.lr_stress.ratio,
-            if r.pass { "Y" } else { "N" },
-        );
-    }
-    eprintln!();
-    eprintln!("Gate status: {}", report.gate_status);
-    eprintln!(
-        "  Entry-seam verdict WITHDRAWN (fail-closed; GF-7 coin retirement) — the rows are \
-         context, not a pass/fail gate (§3.2/§3.3):"
-    );
-    eprintln!("  - low-activity/cold-start FAILS the bound, and cold-start is the genesis regime:");
-    eprintln!("    disposition is the §14 founder-cover launch posture (refuse the regime —");
-    eprintln!("    production-path-identical staggered founder cover, shard-schedule structural");
-    eprintln!("    gate, §14.4 partition-adversary arm; spec-committed, measurement gated on");
-    eprintln!(
-        "    review). This row stays graded as the counterfactual bracket — never a bar move."
-    );
-    eprintln!(
-        "  - the block-unit dispersal>0 rows are a coarse-tick counterfactual: real WI-3 dispersal"
-    );
-    eprintln!("    is U[0,60s) (sub-block), so the realistic block-time gate sits at dispersal=0.");
-    eprintln!("    The wall-clock sub-block channel is graded by the leg-(b) arm below (§19).");
     eprintln!();
 
     // Leg-(b) wall-clock sweep-phase arm (measurement doc §19).
@@ -1082,607 +744,10 @@ fn print_gf7_timeline_report() {
         );
     }
     eprintln!("  Leg-(b) status: {}", leg.status);
-    eprintln!();
-    if report.provisional {
-        eprintln!(
-            "  PROVISIONAL: grades the sim's synthesized dispatch (incl. modeled WI-3 dispersal"
-        );
-        eprintln!("  and the §19 wall-clock layer). Sealing re-run against WI-3's live emission =");
-        eprintln!("  reconvergence leg (b) sealing form (§19.1), tracked in docs/FOLLOWUPS.md.");
-    }
+    eprintln!("  A model-consistency check (WI-4 §19.10.2a), not a channel grade.");
     match serde_json::to_string_pretty(&report) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("error serializing gf7-timeline report: {e}"),
-    }
-}
-
-fn print_gf7_breakeven_report() {
-    let report = gf7_breakeven::run_full_report();
-    eprintln!(
-        "shekyl-staking-sim — GF-7 effective-cover sensitivity sweep (WI-4 §13.5 fifth conditional)"
-    );
-    eprintln!("Verdict: {}", report.verdict);
-    eprintln!("NOT A GATE. The WI-4 verdict (r = 1.86 < 2 at N = 10) it referenced is WITHDRAWN");
-    eprintln!("  (fail-closed; GF-7 coin retirement). It was computed at NOMINAL");
-    eprintln!("  cover (Gate-6 §11 qualifier (iv): an upper bound); effective post-isolation");
-    eprintln!("  cover is economics (§11.8 method note 3) — unmeasurable pre-genesis. This sweep");
-    eprintln!("  measures how the model's own r(N) and P(link) move with cover at the gate");
-    eprintln!("  posture — a property of the model (mechanism-class), derivable now.");
-    eprintln!(
-        "  Bound r < {:.1}; trials/point={}. Worst arm per row; controls re-run per N.",
-        report.ratio_bound, report.trials,
-    );
-    eprintln!();
-    eprintln!("  FINDING: r < 2 is structurally blind to cover — the ratio renormalizes by the");
-    eprintln!("  degraded baseline, so thin-cover harm cannot move it (r <= N caps it; a low-N");
-    eprintln!("  row 'clearing' the ratio is not passing in any useful sense). The exposure");
-    eprintln!(
-        "  figure {:.2} is the ratio bar evaluated at nominal N={} — back-derived arithmetic,",
-        report.nominal_exposure_identity, report.nominal_n,
-    );
-    eprintln!("  NOT a committed bound; the parity line below restates the nominal-cover");
-    eprintln!("  assumption and carries no independent content.");
-    eprintln!();
-    eprintln!(
-        "  {:>4} {:>6} {:>8} | {:>7} {:>7} {:>7} | {:>8} {:>9} {:>6}",
-        "N", "ctrls", "baseline", "blind", "s3", "lr", "worst_r", "worst_P", "clears",
-    );
-    for r in &report.rows {
-        eprintln!(
-            "  {:>4} {:>6} {:>8.3} | {:>7.3} {:>7.3} {:>7.3} | {:>8.2} {:>9.3} {:>6}",
-            r.n,
-            if r.controls_valid { "ok" } else { "FAIL" },
-            r.baseline,
-            r.blind.p_link,
-            r.modeled_s3.p_link,
-            r.lr_stress.p_link,
-            r.worst_ratio,
-            r.worst_p_link,
-            if r.clears_bound { "Y" } else { "N" },
-        );
-    }
-    eprintln!();
-    // A `None` selection is ambiguous between "every valid row misses" and
-    // "no row was valid at all" (controls failed everywhere — the sweep
-    // observed nothing); the two must never print as the same sentence.
-    let any_valid_rows = report.rows.iter().any(|r| r.controls_valid);
-    match (report.ratio_threshold_n, any_valid_rows) {
-        (Some(t), _) => eprintln!(
-            "  Ratio breakeven: worst arm clears r < {:.1} down to N = {} — if that is the \
-             bottom of the sweep, the relative leak is scale-invariant in-model (no ratio \
-             breakeven in range; cover was never gated by r).",
-            report.ratio_bound, t,
-        ),
-        (None, true) => eprintln!("  Ratio breakeven: NONE — every valid row breaches the bound."),
-        (None, false) => eprintln!(
-            "  Ratio breakeven: NO VALID ROWS — controls failed at every N; the sweep \
-             graded nothing and no conclusion about the bound was observed.",
-        ),
-    }
-    match (&report.nominal_parity, any_valid_rows) {
-        (Some(p), _) => eprintln!(
-            "  Nominal-exposure parity (arithmetic identity, not a threshold): worst-arm \
-             P(link) stays <= {:.2} down to N = {} (P = {:.3} there). Under flat r this must \
-             sit at N = nominal * (r / bound) by identity — it restates the nominal-cover \
-             assumption. Lifetime exposure is the aspiration's quantity (F-D4 Sect. 13.3); \
-             its instrument is the S-2 ledger, not this number.",
-            report.nominal_exposure_identity, p.n, p.worst_p_link,
-        ),
-        (None, true) => eprintln!(
-            "  Nominal-exposure parity: NONE — every valid row realizes more than the \
-             nominal-cover exposure.",
-        ),
-        (None, false) => eprintln!(
-            "  Nominal-exposure parity: NO VALID ROWS — controls failed at every N; \
-             nothing was observed.",
-        ),
-    }
-    if !report.failing_n.is_empty() {
-        eprintln!(
-            "  Failing cover levels (valid rows): {:?}",
-            report.failing_n
-        );
-    }
-    match serde_json::to_string_pretty(&report) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing gf7-breakeven report: {e}"),
-    }
-}
-
-fn print_partition_adversary_report() {
-    let report = partition_adversary::run_gating_witness_report();
-    eprintln!(
-        "shekyl-staking-sim — §14.4 partition-adversary arm (ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4)"
-    );
-    eprintln!(
-        "Co-first deliverables (R4/R5, committed before any sweep grades — §17.6 f.1 / §17.7 f.4):"
-    );
-    eprintln!();
-    eprintln!("Gating lemma — a-priori i.i.d. founder-clustering bound (no user-cohort reliance):");
-    eprintln!(
-        "  P(all M anchors within span c) ≤ M·((c+1)/(W+1))^(M−1) for M i.i.d. uniform draws"
-    );
-    eprintln!(
-        "  over {{0..W}}. At M={} c={} W={} (production entry-gap window, K-invariant per §17 P2):",
-        report.founder_count, report.cluster_span_blocks, report.entry_gap_window
-    );
-    eprintln!(
-        "  committed bound = {:.4e}  (exact range CDF {:.4e}; ceiling {:.0e}) — derivably small: {}",
-        report.gating_lemma_bound,
-        report.gating_lemma_exact,
-        report.gating_lemma_ceiling,
-        if report.derivably_small { "YES" } else { "NO" },
-    );
-    eprintln!("  Cited by: P2 no-mechanism disposition + §16.2 obligation-3 strip-row floor.");
-    eprintln!();
-    eprintln!(
-        "Witness-typed controls (compile-time un-constructible from the production founder-config"
-    );
-    eprintln!(
-        "  constructor — distinct ControlWitness type, no From bridge; deployed window = {} blk):",
-        report.deployed_window
-    );
-    for c in &report.controls {
-        eprintln!(
-            "  [{}] {:<30} aims at family member {}",
-            if c.witness_typed { "ok" } else { "FAIL" },
-            c.label,
-            c.aimed_member,
-        );
-    }
-    eprintln!();
-
-    // The graded arm: family members 1–7, the feature dictionary, the
-    // max-over-family statistic T, its permutation null, and bounds 1–3.
-    let graded = partition_adversary::run_partition_report();
-    eprintln!(
-        "Graded arm — N={} founders={} trials={} perms={} (bound 1 |lift|≤{:.2} AND no member \
-         flags; bound 2 whole-set lift≥{:.2} AND aimed flags / single-member aimed flags; \
-         any-member arm at family-wise α={:.2}, Bonferroni α/7, exact rank p):",
-        graded.n,
-        graded.founder_count,
-        graded.trials,
-        graded.permutations,
-        graded.bound1_tol,
-        graded.bound2_lift,
-        partition_adversary::FAMILY_ALPHA,
-    );
-    eprintln!(
-        "  Feature dictionary (§14.4, chain-visible only): seam |bond−funding|, dispatch phase,"
-    );
-    eprintln!(
-        "  sorted inter-event gap vector, cadence period, event count, resume spacing (z-scored)."
-    );
-    eprintln!(
-        "  Family: 1 k-means · 2 per-feature top-M · 3 cohesion-subset · 4 spectral · 5 seeded-NN"
-    );
-    eprintln!("          · 6 whitened joint-density isolation · 7 most-regular-subset.");
-    eprintln!();
-    eprintln!(
-        "  {:<26} {:>6} {:>6} {:>7} {:>5}  aimed  {:>6}   verdict",
-        "scenario", "T", "null", "lift", "bnd", "aimLft",
-    );
-    let row = |s: &partition_adversary::PartitionScenario| {
-        eprintln!(
-            "  {:<26} {:>6.3} {:>6.3} {:>+7.3} {:>5}  m{:<4} {:>+6.3}   {}",
-            s.label,
-            s.t_obs,
-            s.null_mean,
-            s.lift,
-            if s.aimed_member == 0 { "1" } else { "2" },
-            s.aimed_member,
-            s.aimed_member_lift,
-            if s.passed { "PASS" } else { "fail" },
-        );
-    };
-    row(&graded.deployed);
-    for c in &graded.controls {
-        row(c);
-    }
-    eprintln!();
-    eprintln!("  per-member agreement vs null (m1..m7), deployed then controls;");
-    eprintln!("  flg marks the any-member arm (rank p ≤ α/7 vs the member's own null-of-mean):");
-    let members = |s: &partition_adversary::PartitionScenario| {
-        let agr: Vec<String> = s
-            .member_agreements
-            .iter()
-            .map(|x| format!("{x:.2}"))
-            .collect();
-        let nul: Vec<String> = s
-            .member_null_means
-            .iter()
-            .map(|x| format!("{x:.2}"))
-            .collect();
-        let flg: Vec<String> = s
-            .member_flags
-            .iter()
-            .zip(s.member_p.iter())
-            .map(|(f, p)| {
-                if *f {
-                    format!("*{p:.3}")
-                } else {
-                    format!(" {p:.3}")
-                }
-            })
-            .collect();
-        eprintln!("    {:<12} agr=[{}]", s.scenario, agr.join(" "));
-        eprintln!("    {:<12} nul=[{}]", "", nul.join(" "));
-        eprintln!("    {:<12} flg=[{}]", "", flg.join(" "));
-    };
-    members(&graded.deployed);
-    for c in &graded.controls {
-        members(c);
-    }
-    eprintln!();
-    eprintln!("  STATUS: {}", graded.status);
-    for p in &graded.pinned_underspecifications {
-        eprintln!("  PIN: {p}");
-    }
-    eprintln!();
-
-    // The §14.4-round riders (same generator, extra axes): §16.7 N-sweep and
-    // M6.2 coupling control, §18.3-narrowed bridge grading, §18.4 lifetime
-    // accumulation.
-    let riders = riders::run_riders_report();
-    eprintln!(
-        "Riders (§16.7 items 2/4, §18.3 as narrowed by §18.8, §18.4) — \
-         sweep/coupling trials={} r-bound={:.1}:",
-        riders.trials, riders.ratio_bound,
-    );
-    eprintln!("  N-sweep (r < 2 at every swept N; growth with N = redesign signal):");
-    for row in &riders.n_sweep {
-        eprintln!(
-            "    N={:<3} baseline={:.3}  blind r={:.3}  s3 r={:.3}  lr r={:.3}  {}",
-            row.n,
-            row.baseline,
-            row.blind.ratio,
-            row.modeled_s3.ratio,
-            row.lr_stress.ratio,
-            if row.pass { "PASS" } else { "FAIL" },
-        );
-    }
-    eprintln!(
-        "  M6.2 coupling control: blind@window-0 P(link)={:.3} vs floor 2/N={:.3} — {}",
-        riders.coupling.blind_p_link,
-        riders.coupling.floor,
-        if riders.coupling.passed {
-            "coupled (ok)"
-        } else {
-            "DECOUPLED — INVALID"
-        },
-    );
-    eprintln!(
-        "  Attribute-bridge grading (strata as candidate bridge axes, never crowds; \
-         trials={} perms={}):",
-        riders.bridge_trials, riders.bridge_perms,
-    );
-    for b in &riders.bridge {
-        eprintln!(
-            "    {:<42} |corr|={:.3} null={:.3}  {}  [{}]",
-            b.scenario,
-            b.bridge_stat,
-            b.null_mean,
-            if b.passed { "ok" } else { "FAIL" },
-            b.expectation,
-        );
-    }
-    eprintln!(
-        "  Lifetime accumulation (per-post p={:.3}, strongest posture arm; §18.4 form):",
-        riders.lifetime_per_post_p,
-    );
-    for l in &riders.lifetime {
-        eprintln!(
-            "    events={:<3} cumulative={:.3}{}",
-            l.events,
-            l.cumulative,
-            if l.founder_anchor {
-                "  <- founder/long-lived pessimistic anchor"
-            } else {
-                ""
-            },
-        );
-    }
-    eprintln!();
-    eprintln!("  RIDERS STATUS: {}", riders.status);
-    eprintln!();
-
-    // Named-field envelope, not a tuple: a bare 3-array is not
-    // self-describing, and every other report on this binary serializes a
-    // keyed object — downstream parsers should never have to know positions.
-    #[derive(serde::Serialize)]
-    struct PartitionAdversaryArtifact<'a> {
-        gating_witness: &'a partition_adversary::GatingWitnessReport,
-        graded_arm: &'a partition_adversary::PartitionReport,
-        riders: &'a riders::RidersReport,
-    }
-    let artifact = PartitionAdversaryArtifact {
-        gating_witness: &report,
-        graded_arm: &graded,
-        riders: &riders,
-    };
-    match serde_json::to_string_pretty(&artifact) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing partition-adversary report: {e}"),
-    }
-}
-
-fn print_cover_report() {
-    use cover::Dispersion;
-    let disp = |d: Dispersion| match d {
-        Dispersion::Clustered => "clust",
-        Dispersion::Dispersed => "disp",
-    };
-    let report = cover::run_full_report();
-    eprintln!(
-        "shekyl-staking-sim — funding-seam cover-amount anonymity (ARCHIVAL_COVER_DRAW.md §7)"
-    );
-    eprintln!(
-        "Charter: hide principal ↔ P via A = bond_floor + cover. The attacker tests A − bond_floor"
-    );
-    eprintln!(
-        "  ∈ [C_min,C_max]; the candidate set is the k rungs straddling s_P (floor = {:.2} SKL/rung).",
-        report.floor_skl
-    );
-    eprintln!(
-        "  Per-rung DENSITY (clustered vs dispersed) is the SWEPT pre-testnet assumption, not a"
-    );
-    eprintln!("  measurement (the cover analogue of the standoff's background rate).");
-    eprintln!();
-    eprintln!(
-        "  set = candidate funders (1 target + in-window, timing-retained decoys); link = 1/set;"
-    );
-    eprintln!(
-        "  thin = P(set ≤ 2); tax = cover span / bond (k/s_P), worst = the rung-1 staker (§7.3);"
-    );
-    eprintln!("  rt = timing-retain (§1.1: 1.0 = amount-marginal upper bound).");
-    eprintln!();
-    eprintln!(
-        "{:<24} {:<16} {:>4} {:>5} {:>5} {:>4} {:>4} | {:>7} {:>6} {:>6} {:>6} | {:>6} {:>6}",
-        "scenario",
-        "axis",
-        "n_P",
-        "mean",
-        "dens",
-        "k",
-        "rt",
-        "covSKL",
-        "setMean",
-        "setP05",
-        "thin",
-        "taxMn",
-        "taxWst",
-    );
-    for r in &report.results {
-        eprintln!(
-            "{:<24} {:<16} {:>4} {:>5.0} {:>5} {:>4} {:>4.1} | {:>7.2} {:>6.2} {:>6.1} {:>6.3} | {:>6.2} {:>6.1}",
-            r.name,
-            r.axis,
-            r.n_p,
-            r.mean_shards,
-            disp(r.dispersion),
-            r.rungs_blurred,
-            r.timing_retain,
-            r.cover_span_skl,
-            r.anon_set_mean,
-            r.anon_set_p05,
-            r.thin_cover_frac,
-            r.tax_mean,
-            r.tax_worst,
-        );
-    }
-    eprintln!();
-    eprintln!(
-        "Saturation-knee pin (thin/dispersed corner): smallest k past which a rung of cover buys"
-    );
-    eprintln!(
-        "  < {:.2} set/rung. The pool saturates (satSet = reachable ceiling), so this is the PIN —",
-        report.marginal_cutoff
-    );
-    eprintln!(
-        "  past it capital is wasted and §7.5 opt-out makes it harmful. rt<1.0 is the JOINT corner"
-    );
-    eprintln!("  (the genesis-pin input); rt=1.0 amount-marginal is only a FLOOR. rch = target reachable.");
-    eprintln!(
-        "{:>4} {:>8} {:>8} {:>4} {:>8} {:>8} {:>8} {:>7}",
-        "rt", "knee_k", "satSet", "rch", "covSKL", "wstTax", "setMean", "thin",
-    );
-    for rec in &report.recommendations {
-        eprintln!(
-            "{:>4.1} {:>8} {:>8.2} {:>4} {:>8.2} {:>7.0}x {:>8.2} {:>7.3}",
-            rec.timing_retain,
-            rec.knee_rungs,
-            rec.saturation_set,
-            if rec.mean_target_reached { "Y" } else { "n" },
-            rec.cover_span_skl,
-            rec.worst_tax_multiple,
-            rec.anon_set_mean,
-            rec.thin_cover_frac,
-        );
-    }
-    eprintln!();
-    eprintln!(
-        "Economic participation (§7.5): cover-stays-with-P ⇒ a staker funds cover only if C_max ≤"
-    );
-    eprintln!(
-        "  beta x bond (rung ≥ k/beta); below it they take the cover==0 opt-out. Rung is PUBLIC, so"
-    );
-    eprintln!(
-        "  the attacker discounts opt-outs ⇒ realized payer set < honest. optOut = priced-out frac;"
-    );
-    eprintln!(
-        "  pyrSet/pyrThin = realized set/tail for PAYERS; honSet = honest-uniform set (contrast)."
-    );
-    eprintln!(
-        "{:>4} {:>4} {:>7} {:>8} {:>8} {:>8} {:>8} {:>8}",
-        "beta", "k", "covSKL", "minRung", "optOut", "pyrSet", "pyrThin", "honSet",
-    );
-    for p in &report.participation {
-        eprintln!(
-            "{:>4.1} {:>4} {:>7.2} {:>8} {:>8.3} {:>8.2} {:>8.3} {:>8.2}",
-            p.beta,
-            p.rungs_blurred,
-            p.cover_span_skl,
-            p.min_paying_rung,
-            p.opt_out_frac,
-            p.payer_set_mean,
-            p.payer_thin_frac,
-            p.honest_set_mean,
-        );
-    }
-    match serde_json::to_string_pretty(&report) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing cover report: {e}"),
-    }
-}
-
-fn print_cover_fn_report() {
-    use cover::Dispersion;
-    let disp = |d: Dispersion| match d {
-        Dispersion::Clustered => "clust",
-        Dispersion::Dispersed => "disp",
-    };
-    let report = cover::run_cover_fn_report();
-    eprintln!("shekyl-staking-sim — cover §7.6/§7.7: scalar-robustness vs pin-a-function");
-    eprintln!("Realized PAYER set under the FULL model (timing × participation), thin N_P corner.");
-    eprintln!();
-
-    // (A) Hump robustness across the pessimistic corners.
-    eprintln!(
-        "(A) Hump across corners (density × timing_retain × beta): k* = realized-set-max dial."
-    );
-    eprintln!(
-        "{:>6} {:>5} {:>5} | {:>6} {:>7}",
-        "dens", "rt", "beta", "k*", "peakSet",
-    );
-    for c in &report.hump.corners {
-        eprintln!(
-            "{:>6} {:>5.1} {:>5.1} | {:>6} {:>7.2}",
-            disp(c.density),
-            c.timing_retain,
-            c.beta,
-            c.k_star,
-            c.peak_set,
-        );
-    }
-    eprintln!(
-        "  k* spread across corners = {} rungs; robust k = {} holds {:.0}% of peak at the WORST",
-        report.hump.k_star_spread,
-        report.hump.robust_k,
-        report.hump.worst_corner_ratio * 100.0,
-    );
-    eprintln!(
-        "  corner ⇒ a single frozen scalar is {} the 90%-of-peak bar across all corners.",
-        if report.hump.robust_band_90 {
-            "WITHIN"
-        } else {
-            "OUTSIDE"
-        }
-    );
-    eprintln!();
-
-    // (B) Adaptive (population-conditioned) dial vs the frozen scalar.
-    eprintln!(
-        "(B) Adaptive D (per-density k*) vs frozen scalar k={} across sparse→dense (rt=0.5,b=2):",
-        report.hump.robust_k
-    );
-    eprintln!(
-        "{:>12} {:>4} {:>5} | {:>4} {:>7} {:>8} | {:>7} {:>8}",
-        "level", "n_P", "mean", "ak", "aSet", "aCovSKL", "fSet", "fCovSKL",
-    );
-    for d in &report.adaptive {
-        eprintln!(
-            "{:>12} {:>4} {:>5.0} | {:>4} {:>7.2} {:>8.2} | {:>7.2} {:>8.2}",
-            d.label,
-            d.n_p,
-            d.mean_shards,
-            d.adaptive_k,
-            d.adaptive_set,
-            d.adaptive_cover_skl,
-            d.frozen_set,
-            d.frozen_cover_skl,
-        );
-    }
-    eprintln!("  one frozen scalar can't serve both ends; adaptive sizes to local k* — the gap is");
-    eprintln!(
-        "  the set the frozen scalar leaves on the table (largest where it under-serves dense)."
-    );
-    eprintln!();
-
-    // (C) Net-leak bounding proxy.
-    eprintln!("(C) Net-leak proxy: a height-aware attacker exploiting per-height D drift across a");
-    eprintln!(
-        "  timing window. leak = set stripped. Realistic drift ≈ {:.2} (600-blk window / 10k epoch).",
-        report.realistic_drift
-    );
-    eprintln!(
-        "{:>6} {:>8} {:>9} {:>8}",
-        "drift", "frozSet", "adaptSet", "leak",
-    );
-    for p in &report.leak {
-        eprintln!(
-            "{:>6.2} {:>8.2} {:>9.2} {:>7.1}%",
-            p.drift,
-            p.frozen_set,
-            p.adaptive_set,
-            p.leak_frac * 100.0,
-        );
-    }
-    match serde_json::to_string_pretty(&report) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing cover-fn report: {e}"),
-    }
-}
-
-fn print_cover_targeting_report() {
-    let report = cover::run_targeting_report();
-    eprintln!("shekyl-staking-sim — statistic DQ: count-uniform vs histogram-per-rung (§7.8/§7.9)");
-    eprintln!(
-        "Rung-local suppression adversary: withdraw m own bonds (at the victim's rung for the"
-    );
-    eprintln!("  per-rung response, globally for the uniform one) across a closed epoch, so f's");
-    eprintln!(
-        "  epoch-close statistic sees the suppressed value. Thin N_P corner; lower set = more"
-    );
-    eprintln!(
-        "  narrowed cover = worse for the victim. MOD = a moderate (targetable) rung; thin rungs the"
-    );
-    eprintln!(
-        "  histogram already concedes and dense rungs swamp the attacker — the middle is where a"
-    );
-    eprintln!(
-        "  rung-local depopulation moves the dial. honest avg local occ (±{} rungs) = {:.2}.",
-        report.w_ref, report.honest_avg_local
-    );
-    eprintln!();
-    eprintln!(
-        "{:>4} | {:>9} {:>9} | {:>10} {:>10}",
-        "m", "cntSet", "histSet", "cntModSet", "histModSet",
-    );
-    for p in &report.points {
-        eprintln!(
-            "{:>4} | {:>9.2} {:>9.2} | {:>10.2} {:>10.2}",
-            p.attacker_bonds,
-            p.count_uniform_set,
-            p.histogram_set,
-            p.count_uniform_mod_set,
-            p.histogram_mod_set,
-        );
-    }
-    eprintln!();
-    let fmt_m = |o: Option<u64>| o.map(|m| format!("{m}")).unwrap_or_else(|| ">8".into());
-    eprintln!(
-        "Attacker bonds to HALVE a moderate victim's set: histogram = {}, count = {}.",
-        fmt_m(report.histogram_m_to_halve_mod),
-        fmt_m(report.count_m_to_halve_mod),
-    );
-    eprintln!(
-        "Decision: if histogram narrows the moderate victim materially more than count, the per-rung"
-    );
-    eprintln!("  targeting gain is MATERIAL ⇒ count-uniform confirmed. If neither moves (honest");
-    eprintln!("  occupancy swamps the attacker), the histogram is safe to take with eyes open.");
-    match serde_json::to_string_pretty(&report) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing cover-targeting report: {e}"),
     }
 }
 
@@ -1758,143 +823,6 @@ fn print_clustering_report() {
     match serde_json::to_string_pretty(&report) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("error serializing clustering report: {e}"),
-    }
-}
-
-fn print_cover_dispersion_report() {
-    use cover::Dispersion;
-    let shape = |d: Dispersion| match d {
-        Dispersion::Clustered => "clustered",
-        Dispersion::Dispersed => "dispersed",
-    };
-    let report = cover::run_dispersion_report();
-    eprintln!("shekyl-staking-sim — statistic DQ: does count need the dispersion scalar? (§7.9)");
-    eprintln!("Count alone can't tell clustered from dispersed (same N_P, different spread → same");
-    eprintln!(
-        "  uniform D). A global dispersion scalar (occupied-rungs) converts count → density. We"
-    );
-    eprintln!(
-        "  size for target set {:.0} at the thin N_P corner; count-only assumes a fixed reference",
-        report.target_set
-    );
-    eprintln!(
-        "  span ({:.1}), count+disp reads the realised occupied-rungs. set = victim realised set.",
-        report.span_ref
-    );
-    eprintln!();
-    eprintln!(
-        "{:>10} {:>8} | {:>8} {:>8} | {:>8} {:>8}",
-        "shape", "occRung", "cntWid", "cntSet", "dispWid", "dispSet",
-    );
-    for r in &report.rows {
-        eprintln!(
-            "{:>10} {:>8.1} | {:>8.1} {:>8.2} | {:>8.1} {:>8.2}",
-            shape(r.shape),
-            r.occ_rungs,
-            r.width_count_only,
-            r.set_count_only,
-            r.width_count_disp,
-            r.set_count_disp,
-        );
-    }
-    eprintln!();
-    eprintln!(
-        "Clustered↔dispersed realised-set gap: count-only = {:.2}, count+dispersion = {:.2}.",
-        report.gap_count_only, report.gap_count_disp
-    );
-    eprintln!(
-        "Decision: if count-only leaves a material gap that count+dispersion closes, the scalar"
-    );
-    eprintln!("  earns its place (still global ⇒ targeting-resistant, §7.9). If the gap is small,");
-    eprintln!("  count alone suffices — take the simpler statistic.");
-    match serde_json::to_string_pretty(&report) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing cover-dispersion report: {e}"),
-    }
-}
-
-fn print_cover_magnitudes_report() {
-    let report = cover::run_magnitude_report();
-    eprintln!("shekyl-staking-sim — §8 magnitude pass: K_sat(C) + derived C_boot (JOINT corner)");
-    eprintln!(
-        "Joint pessimistic corner: dispersed, timing_retain={:.1}, beta={:.0}, mean={:.0} (count is",
-        report.timing_retain, report.beta, report.mean_shards
-    );
-    eprintln!(
-        "  the x-axis). kSat = saturation knee at this count; covSKL = K_sat·floor; setKnee = joint"
-    );
-    eprintln!(
-        "  set there; base = k=0 (C_min-only) baseline; gain = setKnee−base; plat = robust plateau"
-    );
-    eprintln!(
-        "  width (dial rungs within 90% of peak — narrow ⇒ sharp optimum ⇒ widen conservatism)."
-    );
-    eprintln!();
-    eprintln!(
-        "{:>5} | {:>5} {:>7} {:>8} {:>6} {:>6} {:>6}",
-        "C", "kSat", "covSKL", "setKnee", "base", "gain", "plat",
-    );
-    for r in &report.rows {
-        eprintln!(
-            "{:>5} | {:>5} {:>7.2} {:>8.2} {:>6.2} {:>6.2} {:>6}",
-            r.count,
-            r.k_sat,
-            r.cover_span_skl,
-            r.set_at_knee,
-            r.baseline_set,
-            r.set_gain,
-            r.plateau_width_rungs,
-        );
-    }
-    eprintln!();
-    match report.c_boot_continuity {
-        Some(c) => eprintln!(
-            "C_boot (recommended) = {c}: first count with K_sat>0; below it K_sat=0, so k(C)=K_sat(C) \
-             is CONTINUOUS through the boundary (cover span at it = {:.2} SKL ramps up from 0 — no",
-            report.c_boot_continuity_cover_span_skl
-        ),
-        None => eprintln!("K_sat is 0 at every swept count — the joint corner buys no usable cover."),
-    }
-    eprintln!(
-        "  step). The bootstrap clause is the k=0 TAIL of K_sat, not a glued floor (§8.4/§8.5)."
-    );
-    if let Some(cs) = report.c_substantial {
-        eprintln!(
-            "  Context: cover becomes 'substantial' (gain ≥ baseline) only at C={cs} — but conceding"
-        );
-        eprintln!("  up to there would re-introduce the step (K_sat already large), so it is NOT the cutoff.");
-    }
-    eprintln!("  C_min is economic (runway, 2d-1 ramp) — out of this arm.");
-    match serde_json::to_string_pretty(&report) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("error serializing cover-magnitudes report: {e}"),
-    }
-}
-
-fn print_cover_dial_report() {
-    // The §8.8 float-free k(C) form: cover span (C_max−C_min) vs count C. The
-    // dial k = span/floor (floor = 0.75 SKL). Cubic-smoothstep: decays to 0 in the
-    // tail (no clamp kink) and joins the cap with zero slope — integer-exact.
-    eprintln!("shekyl-staking-sim — §8.8 k(C) form: cover span vs count (float-free smoothstep)");
-    eprintln!(
-        "span = C_max−C_min (atomic); kEff = span/floor rungs (floor=0.75 SKL). Decays to 0 below"
-    );
-    eprintln!("  C=13, caps at 7.5 SKL above C=79, with zero slope at both ends (no kink, §8.4).");
-    eprintln!();
-    eprintln!(
-        "{:>5} | {:>13} {:>9} {:>7}",
-        "C", "span(atomic)", "spanSKL", "kEff"
-    );
-    let floor_atomic = 750_000_000u64;
-    for c in [0u64, 13, 14, 16, 20, 25, 33, 46, 60, 79, 100, 154] {
-        let span = cover::cover_dial_span_atomic(c);
-        eprintln!(
-            "{:>5} | {:>13} {:>9.3} {:>7.2}",
-            c,
-            span,
-            span as f64 / 1e9,
-            span as f64 / floor_atomic as f64,
-        );
     }
 }
 
@@ -2018,15 +946,10 @@ fn main() {
         return;
     }
 
-    if std::env::args().any(|a| a == "--gf7-breakeven") {
-        print_gf7_breakeven_report();
-        return;
-    }
-
     // Both documented forms: `--gf7-seal=<path>` and `--gf7-seal <path>`.
     // A bare `--gf7-seal` with no path fails loudly — main() otherwise falls
-    // through to the default simulation, and a silently-wrong report on the
-    // K_COVER seal path is exactly what this mode must never produce.
+    // through to the default simulation, and a silently-wrong report from the
+    // dispersal tripwire is exactly what this mode must never produce.
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args
         .iter()
@@ -2048,66 +971,11 @@ fn main() {
         return;
     }
 
-    if std::env::args().any(|a| a == "--partition-adversary") {
-        print_partition_adversary_report();
-        return;
-    }
-
-    if std::env::args().any(|a| a == "--cover") {
-        print_cover_report();
-        return;
-    }
-
-    if std::env::args().any(|a| a == "--cover-fn") {
-        print_cover_fn_report();
-        return;
-    }
-
-    if std::env::args().any(|a| a == "--cover-targeting") {
-        print_cover_targeting_report();
-        return;
-    }
-
-    if std::env::args().any(|a| a == "--cover-dispersion") {
-        print_cover_dispersion_report();
-        return;
-    }
-
-    if std::env::args().any(|a| a == "--cover-magnitudes") {
-        print_cover_magnitudes_report();
-        return;
-    }
-
-    if std::env::args().any(|a| a == "--cover-dial") {
-        print_cover_dial_report();
-        return;
-    }
-
     if std::env::args().any(|a| a == "--clustering") {
         print_clustering_report();
         return;
     }
 
-    if std::env::args().any(|a| a == "--f34-l19j") {
-        print_f34_l19j_report();
-        return;
-    }
-    if std::env::args().any(|a| a == "--f34-calibrated") {
-        print_f34_calibrated_report();
-        return;
-    }
-    if std::env::args().any(|a| a == "--f34-unit-cost") {
-        print_f34_unit_cost_report();
-        return;
-    }
-    if std::env::args().any(|a| a == "--f34-levers") {
-        print_f34_levers_report();
-        return;
-    }
-    if std::env::args().any(|a| a == "--f34-heavy-era") {
-        print_f34_heavy_era_report();
-        return;
-    }
     if std::env::args().any(|a| a == "--budget-throttle") {
         print_budget_throttle_report();
         return;
@@ -2120,35 +988,69 @@ fn main() {
         return;
     }
 
-    // Integer is the authoritative backend: it is what the emission vin mints
-    // money with at zero tolerance (REWARD_EMISSION_VIN_PLAN.md §5.4), and PR 1.5
-    // (ARCHIVAL_SIM_ECONOMICS_VERDICT.md) showed float over-reads worst-shard
-    // redundancy by up to one replica. So sweeps default to integer; float is
-    // opt-in exploration only. An unrecognized value fails loudly rather than
-    // silently falling back to the non-authoritative backend.
-    let curve_impl =
-        match std::env::args().find_map(|a| a.strip_prefix("--curve-impl=").map(str::to_string)) {
-            None => CurveImpl::Integer,
+    // The reward arm. Production pays linear credited work on its integer
+    // operands, bonds every held shard and carries capital on the bond; it is
+    // the default. The registered arm runs the configuration L11/L13 were
+    // published on (plateau, deep-only bonds, flat carry; `arm_defaults`),
+    // reproduces their pins, and is on the retirement list (Appendix B, D1).
+    // An unrecognized value fails loudly.
+    let reward_arm =
+        match std::env::args().find_map(|a| a.strip_prefix("--reward-arm=").map(str::to_string)) {
+            None => RewardArm::Production,
             Some(v) => match v.as_str() {
-                "integer" => CurveImpl::Integer,
-                "float" => CurveImpl::Float,
+                "production" => RewardArm::Production,
+                "registered-plateau" => RewardArm::RegisteredPlateau,
                 other => {
                     eprintln!(
-                        "shekyl-staking-sim: unknown --curve-impl={other:?} \
-                     (expected `integer` (authoritative, default) or `float` (exploration only))"
+                        "shekyl-staking-sim: unknown --reward-arm={other:?} \
+                     (expected `production` (default) or `registered-plateau`)"
                     );
                     std::process::exit(2);
                 }
             },
         };
-    eprintln!(
-        "shekyl-staking-sim: curve backend = {curve_impl:?}{}",
-        match curve_impl {
-            CurveImpl::Integer => " (authoritative — canonical reward_arithmetic)",
-            CurveImpl::Float =>
-                " (exploration only — NOT authoritative; see ARCHIVAL_SIM_ECONOMICS_VERDICT.md)",
-        }
-    );
+    // The registered arm's plateau backend. Integer evaluates the banded curve
+    // with `curve_milli`; PR 1.5 (ARCHIVAL_SIM_ECONOMICS_VERDICT.md) showed the
+    // float mirror over-reads worst-shard redundancy by up to one replica, so
+    // float is opt-in. Production applies no plateau.
+    let curve_flag =
+        std::env::args().find_map(|a| a.strip_prefix("--curve-impl=").map(str::to_string));
+    // The backend selects nothing on the production arm, so a run that names
+    // one there would print production output under a backend's label. Refuse it.
+    if curve_flag.is_some() && reward_arm != RewardArm::RegisteredPlateau {
+        eprintln!(
+            "shekyl-staking-sim: --curve-impl selects the registered plateau arm's backend; \
+             add --reward-arm=registered-plateau (production credits linear work, no plateau)"
+        );
+        std::process::exit(2);
+    }
+    let curve_impl = match curve_flag {
+        None => CurveImpl::Integer,
+        Some(v) => match v.as_str() {
+            "integer" => CurveImpl::Integer,
+            "float" => CurveImpl::Float,
+            other => {
+                eprintln!(
+                    "shekyl-staking-sim: unknown --curve-impl={other:?} \
+                     (expected `integer` (authoritative, default) or `float` (exploration only))"
+                );
+                std::process::exit(2);
+            }
+        },
+    };
+    match reward_arm {
+        RewardArm::Production => eprintln!(
+            "shekyl-staking-sim: reward arm = Production (linear credited work, production integer arithmetic; every held shard bonds; capital carry on the bond; the exit waits the release cooldown)"
+        ),
+        RewardArm::RegisteredPlateau => eprintln!(
+            "shekyl-staking-sim: reward arm = RegisteredPlateau (retired plateau, deep-only bonds, flat carry, exit refunded at once; L11/L13 pins' control), curve backend = {curve_impl:?}{}",
+            match curve_impl {
+                CurveImpl::Integer => " (curve_milli)",
+                CurveImpl::Float =>
+                    " (float mirror, exploration only; see ARCHIVAL_SIM_ECONOMICS_VERDICT.md)",
+            }
+        ),
+    }
 
     let mut cfgs: Vec<_> = build_scenarios()
         .into_iter()
@@ -2161,6 +1063,7 @@ fn main() {
 
     for c in &mut cfgs {
         c.curve_impl = curve_impl;
+        c.reward_arm = reward_arm;
     }
 
     if cfgs.is_empty() {
@@ -2194,9 +1097,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use crate::metrics::gini;
-    use crate::model::{bond_age, bond_duration, g_age, r_target, World};
-    use crate::model::{Actor, CompositionParams, EraShape, Shard};
-    use crate::participation::{foundation_floor, foundation_floor_aged};
+    use crate::model::{bond_age, bond_duration, g_age, r_target, World, AGE_WEIGHT};
+    use crate::model::{Actor, Shard};
 
     #[test]
     fn gini_equal_is_zero() {
@@ -2265,18 +1167,7 @@ mod tests {
 
     #[test]
     fn advance_epoch_retires_oldest_and_decrements_locks() {
-        let shards = vec![
-            Shard {
-                age: 0.98,
-                size_seed: 0.0,
-                size: 1.0,
-            },
-            Shard {
-                age: 0.2,
-                size_seed: 0.0,
-                size: 1.0,
-            },
-        ];
+        let shards = vec![Shard { age: 0.98 }, Shard { age: 0.2 }];
         let actors = vec![Actor {
             storage_capacity: 4,
             capital: 10.0,
@@ -2288,16 +1179,7 @@ mod tests {
         w.locks[0][0] = 3;
         w.holdings[0][1] = true;
         w.locks[0][1] = 0;
-        w.advance_epoch(
-            0.05,
-            &CompositionParams {
-                spread: 1.0,
-                era_shape: EraShape::Monotone,
-                cv_tx: 0.0,
-                decorrelated: false,
-            },
-            0.0,
-        );
+        w.advance_epoch(0.05);
         // Shard 0 crossed age 1.0 → retired/recycled: age reset, holding+lock cleared.
         assert!((w.shards[0].age - 0.0).abs() < 1e-12);
         assert!(!w.holdings[0][0]);
@@ -2317,47 +1199,8 @@ mod tests {
     }
 
     #[test]
-    fn foundation_floor_aged_reduces_to_uniform_at_zero_tilt() {
-        // P3: tilt 0 ⇒ the aged floor is byte-identical to the uniform floor at every age.
-        // This is the invariant that keeps every pre-P3 scenario (floor_age_tilt default 0)
-        // unchanged.
-        let dt = 0.5;
-        for &pop in &[0usize, 40, 80] {
-            for age in [0.5, 0.7, 0.9, 1.0] {
-                assert_eq!(
-                    foundation_floor_aged(pop, 6, 80.0, 0.0, age, dt),
-                    foundation_floor(pop, 6, 80.0),
-                    "tilt-0 must equal uniform at pop={pop}, age={age}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn foundation_floor_aged_tilts_toward_oldest() {
-        // P3: a positive tilt steers replicas to the oldest band at the expense of the
-        // freshly-deepened band, pivoting about the deep midpoint (mean-preserving in the
-        // continuous form). At pop=0 the base floor is the full `floor0`.
-        let dt = 0.5;
-        let base = foundation_floor(0, 6, 80.0); // 6
-        let oldest = foundation_floor_aged(0, 6, 80.0, 0.6, 1.0, dt);
-        let youngest_deep = foundation_floor_aged(0, 6, 80.0, 0.6, dt, dt);
-        assert!(
-            oldest > base,
-            "oldest must be over-floored: {oldest} > {base}"
-        );
-        assert!(
-            youngest_deep < base,
-            "freshly-deepened must be under-floored: {youngest_deep} < {base}"
-        );
-        // A zero base floor (population at/above decay_pop) stays zero regardless of tilt —
-        // the tilt redistributes a floor, it does not create one.
-        assert_eq!(foundation_floor_aged(80, 6, 80.0, 0.9, 1.0, dt), 0);
-    }
-
-    #[test]
     fn reconciliation_curve_float_vs_integer() {
-        use crate::reward::{curve, CurveImpl, RewardParams};
+        use crate::reward::{curve, CurveImpl, RewardArm, RewardParams};
         use shekyl_archival_retention::WORK_MILLI_SCALE;
 
         // Two milli quanta: one for the integer backend's milli rounding, one
@@ -2367,8 +1210,9 @@ mod tests {
             budget: 100.0,
             cap: 8.0,
             pseudonym_cost: 0.05,
-            age_weight: 2.0,
+            age_weight: AGE_WEIGHT,
             curve_impl: CurveImpl::Integer,
+            arm: RewardArm::RegisteredPlateau,
         };
         let float_params = RewardParams {
             curve_impl: CurveImpl::Float,
