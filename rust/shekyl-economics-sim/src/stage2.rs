@@ -44,6 +44,7 @@ use crate::fee_model::OrdinaryTx;
 use crate::population::{
     attacker_capped_work_milli, honest_sigma_work_milli, honest_sigma_work_milli_deleted, DQ2H_TAIL,
 };
+use crate::rung_mix::{PerRung, RungTraffic};
 use crate::scenarios::all_scenarios;
 use shekyl_archival_retention::{reward_share_floor, MAX_HOLDINGS_SHARDS};
 
@@ -233,26 +234,15 @@ pub struct A1YearAgg {
     /// cheapest on the production arm (the floor falls with the reward), so
     /// this is the attacker-favouring sample of the year.
     pub admission_rate: PerByteRate,
-    /// Transactions the year's blocks carried — what the fill rule admitted
-    /// (ESR-6), the count the year's fees were paid on.
-    pub carried_txs: u128,
-    /// Transactions the scenario's schedule offered over the year.
-    pub demand_txs: u128,
-    /// Transactions whose reference left CEN-I11's window unserved over the
-    /// year (ESR-17).
-    pub expired_txs: u128,
-    /// Transactions CEN-M10 evicted over the year: for an arrival paying
-    /// more per weight, or to bring the pool within its limit.
-    pub evicted_txs: u128,
-    /// Arrivals the pool refused over the year: it was full of entries
-    /// paying at least as much per weight.
-    pub refused_txs: u128,
+    /// Each rung's traffic over the year (ESR-10). The year's totals are
+    /// their sums ([`Self::carried_txs`] and its siblings).
+    pub rungs: PerRung<RungTraffic<u128>>,
+    /// Each rung's bodies listed over the year by age at inclusion, in
+    /// blocks (index = age).
+    #[serde(skip)]
+    pub rung_ages: PerRung<Vec<u64>>,
     /// Transactions waiting after the year's last block.
     pub waiting_at_year_end: u64,
-    /// Bodies listed over the year by age at inclusion, in blocks (index =
-    /// age).
-    #[serde(skip)]
-    pub inclusion_ages: Vec<u64>,
     /// The long-term effective median (CEN-G6) at year end, bytes — the
     /// `M` the next block's fee divides by.
     pub long_term_median: u64,
@@ -263,11 +253,57 @@ pub struct A1YearAgg {
 }
 
 impl A1YearAgg {
+    fn total(&self, field: impl Fn(&RungTraffic<u128>) -> u128) -> u128 {
+        self.rungs.sum(field)
+    }
+
+    /// Transactions the year's blocks carried, every rung.
+    #[must_use]
+    pub fn carried_txs(&self) -> u128 {
+        self.total(|r| r.carried_txs)
+    }
+
+    /// Transactions the scenario's schedule offered over the year.
+    #[must_use]
+    pub fn demand_txs(&self) -> u128 {
+        self.total(|r| r.demand_txs)
+    }
+
+    /// Transactions whose reference left CEN-I11's window unserved.
+    #[must_use]
+    pub fn expired_txs(&self) -> u128 {
+        self.total(|r| r.expired_txs)
+    }
+
+    /// Transactions CEN-M10 evicted over the year.
+    #[must_use]
+    pub fn evicted_txs(&self) -> u128 {
+        self.total(|r| r.evicted_txs)
+    }
+
+    /// Arrivals the pool refused over the year.
+    #[must_use]
+    pub fn refused_txs(&self) -> u128 {
+        self.total(|r| r.refused_txs)
+    }
+
     /// Transactions that left the pool unserved over the year: expired,
     /// evicted or refused.
     #[must_use]
     pub fn dropped_txs(&self) -> u128 {
-        self.expired_txs + self.evicted_txs + self.refused_txs
+        self.total(RungTraffic::dropped_txs)
+    }
+
+    /// Bodies listed over the year by age at inclusion, every rung.
+    #[must_use]
+    pub fn inclusion_ages(&self) -> Vec<u64> {
+        let longest = self.rung_ages.iter().map(Vec::len).max().unwrap_or(0);
+        (0..longest)
+            .map(|age| {
+                self.rung_ages
+                    .sum(|ages| ages.get(age).copied().unwrap_or(0))
+            })
+            .collect()
     }
 }
 
@@ -414,11 +450,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
     let mut year_burn_atomic: u128 = 0;
     let mut year_fees_atomic: u128 = 0;
     let mut year_total_emission_atomic: u128 = 0;
-    let mut year_carried: u128 = 0;
-    let mut year_demand: u128 = 0;
-    let mut year_expired: u128 = 0;
-    let mut year_evicted: u128 = 0;
-    let mut year_refused: u128 = 0;
+    let mut year_rungs = PerRung::<RungTraffic<u128>>::default();
     let mut year_n_at_cap: Option<u64> = None;
     let mut aggs = Vec::with_capacity(config.sim_years as usize);
     let mut chain = ChainCursor::default();
@@ -455,12 +487,12 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             medians: priced.medians,
             honest_tx: priced.tx,
             bodies_weight: priced.filled.bodies_weight,
-            fees: priced.filled.fees,
+            fees: priced.filled.fees_atomic(),
             // Read only at year end, below.
             listed: Vec::new(),
         };
-        let total_fees = priced.filled.fees;
-        fold.add_block(priced.filled.included);
+        let total_fees = priced.filled.fees_atomic();
+        fold.add_block(priced.filled.carried_txs());
         note_cap_crossing(&mut year_n_at_cap, fold.closed_shard_count());
         let paid_reward = priced.paid_reward();
         let staker_emission = priced.paid.split.staker_emission;
@@ -473,11 +505,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         year_burn_atomic += u128::from(whole_burn);
         year_fees_atomic += u128::from(total_fees);
         year_total_emission_atomic += u128::from(paid_reward);
-        year_carried += u128::from(priced.filled.included);
-        year_demand += u128::from(demand);
-        year_expired += u128::from(priced.filled.expired);
-        year_evicted += u128::from(priced.filled.evicted);
-        year_refused += u128::from(priced.filled.refused);
+        year_rungs += priced.filled.rungs;
         let waiting = priced.filled.waiting;
         already_generated += u128::from(paid_reward);
         // The ledger advances by what production destroys at this block's
@@ -503,21 +531,12 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 whole_fees_atomic: year_fees_atomic,
                 total_emission_atomic: year_total_emission_atomic,
                 admission_rate: params.fee.admission_rate(&priced.fee_point),
-                carried_txs: year_carried,
-                demand_txs: year_demand,
-                expired_txs: year_expired,
-                evicted_txs: year_evicted,
-                refused_txs: year_refused,
+                rungs: core::mem::take(&mut year_rungs),
+                rung_ages: chain.take_ages(),
                 waiting_at_year_end: waiting,
-                inclusion_ages: chain.take_ages(),
                 long_term_median: chain.medians(economic).long_term_effective_median.to_raw(),
                 last_block,
             });
-            year_carried = 0;
-            year_demand = 0;
-            year_expired = 0;
-            year_evicted = 0;
-            year_refused = 0;
             year_emission_atomic = 0;
             year_burn_atomic = 0;
             year_fees_atomic = 0;
@@ -826,14 +845,13 @@ fn a1_clearance_report(
             uncleared.join(", ")
         },
         B = crate::onset::binding_rate_pct(),
-        KB = crate::burden::normal_tx_archival_bytes(
+        KB = kilobytes(crate::burden::normal_tx_archival_bytes(
             folded
                 .iter()
                 .find(|s| s.name == crate::scenarios::BASELINE_STEADY_STATE)
                 .and_then(|s| s.aggs.first())
                 .map_or(0, |a| a.cumulative_outputs)
-        ) as f64
-            / 1_000.0,
+        )),
     )?;
     if d2_case.is_empty() {
         writeln!(
@@ -849,6 +867,14 @@ fn a1_clearance_report(
         )?;
     }
     Ok(results)
+}
+
+/// Bytes in a printed kilobyte: every report prints weights in decimal KB.
+const BYTES_PER_KB: f64 = 1_000.0;
+
+/// `bytes` in decimal kilobytes, as the reports print a weight.
+pub(crate) fn kilobytes(bytes: u64) -> f64 {
+    bytes as f64 / BYTES_PER_KB
 }
 
 pub(crate) fn trunc(s: &str, n: usize) -> String {
@@ -2060,6 +2086,7 @@ pub struct Stage2Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::committed_fixture::{regenerate, Output};
     use shekyl_economics::burn::{compute_burn_split, compute_burn_split_at};
     use shekyl_economics::params::mul_scale;
     use shekyl_economics::ScaledShare;
@@ -2080,9 +2107,9 @@ mod tests {
         assert_eq!(short.len(), 1);
         assert_eq!(long.len(), 2);
         let (a, b) = (&short[0], &long[0]);
-        assert_eq!(a.carried_txs, b.carried_txs);
-        assert_eq!(a.demand_txs, b.demand_txs);
-        assert_eq!(a.expired_txs, b.expired_txs);
+        assert_eq!(a.carried_txs(), b.carried_txs());
+        assert_eq!(a.demand_txs(), b.demand_txs());
+        assert_eq!(a.expired_txs(), b.expired_txs());
         assert_eq!(a.n, b.n);
         assert_eq!(a.cumulative_outputs, b.cumulative_outputs);
         assert_eq!(a.cumulative_archival_bytes, b.cumulative_archival_bytes);
@@ -2555,41 +2582,33 @@ mod tests {
     }
 
     fn assert_narration_matches(arm: &PinnedArm) {
-        let committed = std::fs::read_to_string(arm.fixture).expect("read committed narration");
-        let current = stage2_narration(arm);
-        if committed != current {
-            let first = committed
-                .lines()
-                .zip(current.lines())
-                .position(|(a, b)| a != b)
-                .map_or_else(
-                    || committed.lines().count().min(current.lines().count()) + 1,
-                    |i| i + 1,
-                );
-            panic!(
-                "--stage2 narration drifted from {}; first differing line {first} ({} \
-                 committed lines, {} current). Regenerate with SHEKYL_REGEN_FIXTURES=1 and \
-                 read the diff.",
-                arm.fixture,
-                committed.lines().count(),
-                current.lines().count(),
-            );
-        }
+        crate::committed_fixture::assert_matches(
+            "--stage2 narration",
+            arm.fixture,
+            &stage2_narration(arm),
+        );
     }
 
-    /// Regenerate both committed narrations. Ignored by default; run with
-    /// `SHEKYL_REGEN_FIXTURES=1 cargo test --release -p shekyl-economics-sim
-    /// -- --ignored regen_stage2_narration_fixtures`.
+    /// Regenerate both committed narrations, armed (rule 50). Ignored by
+    /// default; run with `SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD
+    /// <rationale>" cargo test --release -p shekyl-economics-sim -- --ignored
+    /// regen_stage2_narration_fixtures`, the date naming the
+    /// `ECONOMICS_SIM_PRODUCTION_REBASE.md` entry that records what moved.
     #[test]
-    #[ignore = "regeneration helper; writes the committed fixtures"]
+    #[ignore = "armed regeneration helper; writes the committed fixtures; requires SHEKYL_PINNED_REGEN_DECISION"]
     fn regen_stage2_narration_fixtures() {
-        assert_eq!(
-            std::env::var("SHEKYL_REGEN_FIXTURES").as_deref(),
-            Ok("1"),
-            "set SHEKYL_REGEN_FIXTURES=1 to regenerate"
+        regenerate(
+            "the --stage2 narrations",
+            &[
+                Output {
+                    path: PRODUCTION_ARM.fixture,
+                    build: || stage2_narration(&PRODUCTION_ARM),
+                },
+                Output {
+                    path: FLAT_CONTROL_ARM.fixture,
+                    build: || stage2_narration(&FLAT_CONTROL_ARM),
+                },
+            ],
         );
-        for arm in [&PRODUCTION_ARM, &FLAT_CONTROL_ARM] {
-            std::fs::write(arm.fixture, stage2_narration(arm)).expect("write narration");
-        }
     }
 }

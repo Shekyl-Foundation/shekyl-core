@@ -60,7 +60,7 @@ impl FeeLadder {
 ///
 /// `base_reward` is the M_r-neutral total (`max(curve(remaining), TAIL)`);
 /// `median` is the long-term fee median; `c` is raw [`FeeCorrection`].
-/// Saturates outside the `u128` domain — see [`checked_corrected_fee_ladder`].
+/// Saturates outside the `u128` domain ([`super::fee_ladder_from`] refuses there).
 #[must_use]
 pub fn corrected_fee_ladder(
     base_reward: u64,
@@ -79,7 +79,7 @@ pub fn corrected_fee_ladder(
 /// through this arm: operands near `u64::MAX` overflow `u128` before any
 /// conversion fallback can see it.
 #[must_use]
-pub fn checked_corrected_fee_ladder(
+pub(super) fn checked_corrected_fee_ladder(
     base_reward: u64,
     median: u64,
     ref_tx_weight: u64,

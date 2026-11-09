@@ -48,15 +48,6 @@ pub struct AggregateRangeProof {
     pub(crate) wip: WipProof,
 }
 
-struct AHatComputation {
-    y: Scalar,
-    d_descending_y_plus_z: ScalarVector,
-    y_mn_plus_one: Scalar,
-    z: Scalar,
-    z_pow: ScalarVector,
-    A_hat: EdwardsPoint,
-}
-
 /// The scalars `Â` is built from, for `padded` commitments (a power of 2):
 ///
 /// `Â = A − z·Σ G_i + Σ d_y_z[i]·H_i + y^(mn+1)·Σ_j z^(2j)·V_j + g_const·g`
@@ -155,50 +146,59 @@ impl<'a> AggregateRangeStatement<'a> {
         }
     }
 
-    /// The prover's `Â`, evaluated.
+    /// The prover's `Â`, evaluated. The scalars are the same record the
+    /// verifier adds into the batch ([`Self::A_hat_terms`]).
     fn compute_A_hat(
         mut V: PointVector,
         generators: &BpPlusGenerators,
         transcript: &mut Scalar,
         A: CompressedPoint,
-    ) -> Option<AHatComputation> {
+    ) -> Option<(AHatScalars, EdwardsPoint)> {
         while V.len() < padded_pow_of_2(V.len()) {
             V.0.push(EdwardsPoint::identity());
         }
 
-        let AHatScalars {
-            y,
-            z,
-            z_pow,
-            d_descending_y_plus_z,
-            y_mn_plus_one,
-            g,
-        } = Self::A_hat_scalars(V.len(), transcript, A);
-
+        let scalars = Self::A_hat_scalars(V.len(), transcript, A);
         let A = A.decompress().as_ref().map(EdwardsPoint::mul_by_cofactor)?;
 
         let mut commitment_accum = EdwardsPoint::identity();
         for (j, commitment) in V.0.iter().enumerate() {
-            commitment_accum += *commitment * z_pow[j];
+            commitment_accum += *commitment * scalars.z_pow[j];
         }
 
-        let neg_z = -z;
+        let neg_z = -scalars.z;
         let mut A_terms = Vec::with_capacity((generators.len() * 2) + 2);
-        for (i, d_y_z) in d_descending_y_plus_z.0.iter().enumerate() {
+        for (i, d_y_z) in scalars.d_descending_y_plus_z.0.iter().enumerate() {
             A_terms.push((neg_z, generators.generator(GeneratorsList::GBold, i)));
             A_terms.push((*d_y_z, generators.generator(GeneratorsList::HBold, i)));
         }
-        A_terms.push((y_mn_plus_one, commitment_accum));
-        A_terms.push((g, BpPlusGenerators::g()));
+        A_terms.push((scalars.y_mn_plus_one, commitment_accum));
+        A_terms.push((scalars.g, BpPlusGenerators::g()));
 
-        Some(AHatComputation {
-            y,
-            d_descending_y_plus_z,
-            y_mn_plus_one,
-            z,
-            z_pow,
-            A_hat: A + multiexp_vartime(&A_terms),
-        })
+        Some((scalars, A + multiexp_vartime(&A_terms)))
+    }
+
+    /// Bold-vector length for `commitments` outputs: the count rounded up to
+    /// a power of two, times [`COMMITMENT_BITS`].
+    ///
+    /// The prover and both verifiers reduce their generators to this
+    /// ([`Self::generators_for`]). [`Self::A_hat_terms`] builds `g_bold` and
+    /// `h_bold` at it. One length, so a non-power-of-two output count cannot
+    /// give the terms a longer vector than the statement has generators.
+    fn padded_bold_len(commitments: usize) -> usize {
+        padded_pow_of_2(commitments) * COMMITMENT_BITS
+    }
+
+    /// [`BpPlusGenerators::reduce`] of [`Self::padded_bold_len`].
+    ///
+    /// `reduce` rounds a bit-length up to a power of two. This length is
+    /// already a power of two when [`COMMITMENT_BITS`] is, and the assert
+    /// pins that the view came back at the length the bold vectors use.
+    fn generators_for(generators: &BpPlusGenerators, commitments: usize) -> BpPlusGenerators {
+        let bold_len = Self::padded_bold_len(commitments);
+        let generators = generators.reduce(bold_len);
+        debug_assert_eq!(generators.len(), bold_len);
+        generators
     }
 
     /// The verifier's `Â`, as terms over the batch's slots (never evaluated):
@@ -229,24 +229,48 @@ impl<'a> AggregateRangeStatement<'a> {
             other.push((y_mn_plus_one * z_pow[j], *commitment));
         }
 
+        let bold_len = Self::padded_bold_len(V.len());
+        // `ScalarVector` zeroizes on drop, so the coefficients are taken out.
+        let h_bold = core::mem::take(&mut d_descending_y_plus_z.0);
+        debug_assert_eq!(h_bold.len(), bold_len);
         Some((
             y,
             BatchTerms {
                 g,
-                g_bold: vec![-z; padded * COMMITMENT_BITS],
-                h_bold: core::mem::take(&mut d_descending_y_plus_z.0),
+                g_bold: vec![-z; bold_len],
+                h_bold,
                 other,
             },
         ))
     }
 
-    /// `V·8⁻¹` for each commitment, the values the transcript hashes. The
-    /// commitments are public, so this is variable-time; its output is the
-    /// constant-time product's, byte for byte.
-    fn commitments_inv_eight(V: &[EdwardsPoint]) -> Vec<EdwardsPoint> {
-        V.iter()
-            .map(|V| multiexp_vartime(&[(INV_EIGHT(), *V)]))
-            .collect()
+    /// The transcript's opening: each commitment times `8⁻¹`, hashed, then
+    /// cofactor-cleared so the clear restores the value.
+    ///
+    /// Commitments are transmitted whole. The transcript hashes the `8⁻¹`
+    /// product. The prover and both verifiers call this, and the product is
+    /// constant-time, so the transcript does not depend on the path.
+    fn prepare_commitments(V: &[EdwardsPoint]) -> (Scalar, Vec<EdwardsPoint>) {
+        let scaled = V
+            .iter()
+            .map(|point| point * INV_EIGHT())
+            .collect::<Vec<_>>();
+        let transcript = initial_transcript(scaled.iter());
+        let cleared = scaled.iter().map(EdwardsPoint::mul_by_cofactor).collect();
+        (transcript, cleared)
+    }
+
+    /// [`Self::prepare_commitments`], then [`Self::generators_for`] at that
+    /// commitment count. Both verifiers open a statement this way. The prover
+    /// pads before it reduces, so it calls [`Self::prepare_commitments`] and
+    /// [`Self::generators_for`] itself.
+    fn open_verifier(
+        generators: &BpPlusGenerators,
+        V: &[EdwardsPoint],
+    ) -> (Scalar, Vec<EdwardsPoint>, BpPlusGenerators) {
+        let (transcript, points) = Self::prepare_commitments(V);
+        let generators = Self::generators_for(generators, points.len());
+        (transcript, points, generators)
     }
 
     pub(crate) fn prove<R: RngCore + CryptoRng>(
@@ -265,26 +289,14 @@ impl<'a> AggregateRangeStatement<'a> {
         }
 
         let Self { generators, V } = self;
-        // Monero expects all of these points to be torsion-free
-        // Generally, for Bulletproofs, it sends points * INV_EIGHT and then performs a torsion clear
-        // by multiplying by 8
-        // This also restores the original value due to the preprocessing
-        // Commitments aren't transmitted INV_EIGHT though, so this multiplies by INV_EIGHT to enable
-        // clearing its cofactor without mutating the value
-        // For some reason, these values are transcripted * INV_EIGHT, not as transmitted
-        let V = V.iter().map(|V| V * INV_EIGHT()).collect::<Vec<_>>();
-        let mut transcript = initial_transcript(V.iter());
-        let mut V = V
-            .iter()
-            .map(EdwardsPoint::mul_by_cofactor)
-            .collect::<Vec<_>>();
+        let (mut transcript, mut V) = Self::prepare_commitments(V);
 
         // Pad V
         while V.len() < padded_pow_of_2(V.len()) {
             V.push(EdwardsPoint::identity());
         }
 
-        let generators = generators.reduce(V.len() * COMMITMENT_BITS);
+        let generators = Self::generators_for(&generators, V.len());
 
         let mut d_js = Vec::with_capacity(V.len());
         let mut a_l = ScalarVector(Vec::with_capacity(V.len() * COMMITMENT_BITS));
@@ -323,14 +335,17 @@ impl<'a> AggregateRangeStatement<'a> {
 
         let A = CompressedPoint::from(A.compress());
 
-        let AHatComputation {
-            y,
-            d_descending_y_plus_z,
-            y_mn_plus_one,
-            z,
-            z_pow,
+        let (
+            AHatScalars {
+                y,
+                d_descending_y_plus_z,
+                y_mn_plus_one,
+                z,
+                z_pow,
+                ..
+            },
             A_hat,
-        } = Self::compute_A_hat(PointVector(V), &generators, &mut transcript, A)
+        ) = Self::compute_A_hat(PointVector(V), &generators, &mut transcript, A)
             .expect("A is a valid point as we just compressed it");
 
         let a_l = a_l - z;
@@ -362,26 +377,19 @@ impl<'a> AggregateRangeStatement<'a> {
         proof: AggregateRangeProof,
     ) -> bool {
         let Self { generators, V } = self;
+        let (mut transcript, V, generators) = Self::open_verifier(&generators, V);
 
-        let V = Self::commitments_inv_eight(V);
-        let mut transcript = initial_transcript(V.iter());
-        let V = V
-            .iter()
-            .map(EdwardsPoint::mul_by_cofactor)
-            .collect::<Vec<_>>();
-
-        let generators = generators.reduce(V.len() * COMMITMENT_BITS);
-
-        let Some((y, A_hat)) = Self::A_hat_terms(&V, &mut transcript, proof.A) else {
+        let Some((y, terms)) = Self::A_hat_terms(&V, &mut transcript, proof.A) else {
             return false;
         };
-        WipVerifierStatement::new(generators, A_hat, y).verify(rng, verifier, transcript, proof.wip)
+        WipVerifierStatement::new(generators, terms, y).verify(rng, verifier, transcript, proof.wip)
     }
 
-    /// The verifier as it was before `Â` was folded into the batch: `Â`
-    /// evaluated with its own multiscalar multiplication, and the commitments
-    /// multiplied by `8⁻¹` in constant time. The oracle the fold is held
-    /// against (`tests::fold`); never a production path.
+    /// The fold's oracle (`tests::fold`). Evaluates `Â` with its own
+    /// multiscalar multiplication, then adds that one point through
+    /// [`WipVerifierStatement`] at the weight the folded terms get.
+    /// Commitment preparation is [`Self::prepare_commitments`], the same
+    /// call [`Self::verify`] makes. Never a production path.
     #[cfg(test)]
     pub(crate) fn verify_eager<R: RngCore + CryptoRng>(
         self,
@@ -390,22 +398,14 @@ impl<'a> AggregateRangeStatement<'a> {
         proof: AggregateRangeProof,
     ) -> bool {
         let Self { generators, V } = self;
+        let (mut transcript, V, generators) = Self::open_verifier(&generators, V);
 
-        let V = V.iter().map(|V| V * INV_EIGHT()).collect::<Vec<_>>();
-        let mut transcript = initial_transcript(V.iter());
-        let V = V
-            .iter()
-            .map(EdwardsPoint::mul_by_cofactor)
-            .collect::<Vec<_>>();
-
-        let generators = generators.reduce(V.len() * COMMITMENT_BITS);
-
-        let Some(AHatComputation { y, A_hat, .. }) =
+        let Some((AHatScalars { y, .. }, a_hat)) =
             Self::compute_A_hat(PointVector(V), &generators, &mut transcript, proof.A)
         else {
             return false;
         };
-        WipVerifierStatement::new(generators, BatchTerms::point(A_hat), y)
+        WipVerifierStatement::new(generators, BatchTerms::point(a_hat), y)
             .verify(rng, verifier, transcript, proof.wip)
     }
 }

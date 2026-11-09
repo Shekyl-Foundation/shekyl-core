@@ -352,7 +352,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         );
         let burn_pct = priced.burn_pct;
 
-        outputs.accrue(priced.filled.included);
+        outputs.accrue(priced.filled.carried_txs());
         let paid_reward = priced.paid_reward();
         let miner_emission = priced.paid.split.miner_emission;
         let staker_emission = priced.paid.split.staker_emission;

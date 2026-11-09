@@ -331,7 +331,7 @@ pub(crate) fn at_horizon(mut config: ScenarioConfig) -> ScenarioConfig {
 /// The years the block-space table samples: dense early, where the
 /// production arm's median is held at the zone (§5.6 of the design
 /// document), then by decade.
-const BLOCK_SPACE_YEARS: [u64; 10] = [1, 4, 8, 10, 12, 15, 20, 30, 40, 60];
+pub(crate) const BLOCK_SPACE_YEARS: [u64; 10] = [1, 4, 8, 10, 12, 15, 20, 30, 40, 60];
 
 /// A1's selection rule, applied to one aggregate series: the band candidate
 /// with the greatest min clearance at the binding rate.
@@ -398,11 +398,36 @@ fn onset_of(ratios: impl Iterator<Item = (u64, f64)>) -> Onset {
     Onset { year, recovers }
 }
 
-fn fmt_onset(o: Onset) -> String {
+pub(crate) fn fmt_onset(o: Onset) -> String {
     match o.year {
         None => "never".to_string(),
         Some(y) if o.recovers => format!("y{y}*"),
         Some(y) => format!("y{y}"),
+    }
+}
+
+/// A1's onset at the binding rate on one aggregate series: under the
+/// shipped flat-25 budget and under the series' best band candidate (ESR-10's
+/// summary reads these, as A1-T prints them).
+pub(crate) struct BindingOnsets {
+    pub(crate) flat: Onset,
+    pub(crate) best: Onset,
+}
+
+/// [`BindingOnsets`] of `aggs`, by A1-T's own rule.
+pub(crate) fn binding_onsets(aggs: &[A1YearAgg], params: &SimParams) -> BindingOnsets {
+    let binding = OPP_COST_RATE_BAND[BINDING];
+    let onset = |c: EscalationCurve| {
+        onset_of(year_ratios(
+            aggs,
+            binding,
+            move |a: &A1YearAgg| a1_shipped_budget_atomic(a, &c),
+            params,
+        ))
+    };
+    BindingOnsets {
+        flat: onset(flat_25(params)),
+        best: onset(best_candidate(aggs, params)),
     }
 }
 
@@ -488,12 +513,12 @@ pub fn onset_report(
             aggs.iter()
                 .filter(|a| DECADES.contains(&a.year))
                 .map(|a| {
-                    if a.carried_txs == 0 {
+                    if a.carried_txs() == 0 {
                         "-".to_string()
                     } else {
                         format!(
                             "{:.4}",
-                            a.whole_fees_atomic as f64 / a.carried_txs as f64 / COIN
+                            a.whole_fees_atomic as f64 / a.carried_txs() as f64 / COIN
                         )
                     }
                 })
@@ -505,10 +530,10 @@ pub fn onset_report(
             aggs.iter()
                 .filter(|a| LATTICE_YEARS.contains(&a.year))
                 .map(|a| {
-                    if a.carried_txs == 0 || a.whole_fees_atomic == 0 {
+                    if a.carried_txs() == 0 || a.whole_fees_atomic == 0 {
                         "-".to_string()
                     } else {
-                        let mean = a.whole_fees_atomic as f64 / a.carried_txs as f64;
+                        let mean = a.whole_fees_atomic as f64 / a.carried_txs() as f64;
                         format!(
                             "{:.4}",
                             10_000.0
@@ -532,9 +557,9 @@ pub fn onset_report(
                 .map(|a| {
                     format!(
                         "{:>5.1}/{:<5.1} {:>4.0}K {:>4.1}",
-                        per_block(a.carried_txs),
-                        per_block(a.demand_txs),
-                        a.long_term_median as f64 / 1_000.0,
+                        per_block(a.carried_txs()),
+                        per_block(a.demand_txs()),
+                        crate::stage2::kilobytes(a.long_term_median),
                         per_block(a.dropped_txs()),
                     )
                 })
@@ -548,12 +573,12 @@ pub fn onset_report(
                 .map(|a| {
                     format!(
                         "{:>5.1}/{:>5.1}/{:>5.1} {:>6} {:>2}/{:>2}",
-                        per_block(a.expired_txs),
-                        per_block(a.evicted_txs),
-                        per_block(a.refused_txs),
+                        per_block(a.expired_txs()),
+                        per_block(a.evicted_txs()),
+                        per_block(a.refused_txs()),
                         a.waiting_at_year_end,
-                        age_quantile(&a.inclusion_ages, 50),
-                        age_quantile(&a.inclusion_ages, 95),
+                        age_quantile(&a.inclusion_ages(), 50),
+                        age_quantile(&a.inclusion_ages(), 95),
                     )
                 })
                 .collect::<Vec<_>>()
@@ -669,7 +694,7 @@ pub fn onset_report(
 
 /// The smallest age at or below which `percent` of the bodies in `ages`
 /// (index = age in blocks) were listed; `-` when none were.
-fn age_quantile(ages: &[u64], percent: u64) -> String {
+pub(crate) fn age_quantile(ages: &[u64], percent: u64) -> String {
     let total: u128 = ages.iter().map(|&n| u128::from(n)).sum();
     if total == 0 {
         return "-".to_string();
@@ -909,7 +934,7 @@ mod tests {
         // flat arm, where the fee does not fall as the traffic grows.
         let params = SimParams::section_12_14_control();
         let config = in_the_tail_era(all_scenarios(&params).remove(2));
-        assert_eq!(config.name, "sustained_growth");
+        assert_eq!(config.name, crate::scenarios::SUSTAINED_GROWTH);
         let aggs = a1_year_aggs(&params, &config);
         assert_tail_era(&params, &aggs);
         let last = aggs.last().expect("60 years");
@@ -998,7 +1023,7 @@ mod tests {
             KryderRate::Stall,
             &SimParams::default(),
         );
-        let carried: u128 = aggs.iter().map(|y| y.carried_txs).sum();
+        let carried: u128 = aggs.iter().map(|y| y.carried_txs()).sum();
         let traffic_years = carried as f64
             / (params.economic().tx_volume_baseline as f64 * params.blocks_per_year() as f64);
         let predicted = h / traffic_years;

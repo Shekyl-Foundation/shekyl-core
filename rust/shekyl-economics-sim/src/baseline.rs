@@ -360,6 +360,56 @@ pub const STAGE2_PRODUCTION_READS: &[Reader] = &{
     all
 };
 
+/// `--esr10`: the production arm's fold, which every cell runs, read by
+/// the narration's tables, and the Priority factor, which the rung mixes
+/// price Priority with. Measured on the reach probe
+/// (`esr10::run_reach_probe`), not assumed: of `--stage2`'s production
+/// readers, the four archival fields its archival sections read (the
+/// settlement epoch, the claim age and the failure window's `m` and `n`)
+/// reach no `--esr10` figure, on every scenario, and are not listed.
+pub const ESR10_READS: &[Reader] = &{
+    let stage2 = STAGE2_PRODUCTION_READS;
+    let mut all = [read("", 0); 23];
+    let mut i = 0;
+    let mut j = 0;
+    while i < stage2.len() {
+        if !const_str_eq(stage2[i].path, "archival.settlement_epoch_blocks")
+            && !const_str_eq(stage2[i].path, "archival.max_claim_age_w")
+            && !const_str_eq(stage2[i].path, "archival.failure_window_m")
+            && !const_str_eq(stage2[i].path, "archival.failure_window_n")
+        {
+            all[j] = stage2[i];
+            j += 1;
+        }
+        i += 1;
+    }
+    all[j] = read("relay.priority_factor", 3);
+    assert!(j + 1 == all.len(), "the list is exactly the readers kept");
+    all
+};
+
+/// `a == b` in a const context.
+const fn const_str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `--esr10`'s name and readers.
+#[must_use]
+pub fn esr10_reach() -> (&'static str, &'static [Reader]) {
+    ("--esr10", ESR10_READS)
+}
+
 /// `--stage2 --control-flat-fee`: the flat fee prices no ladder, so no
 /// relay field reaches it, and the long-term clamp moves no figure the
 /// control arm prints.
@@ -757,7 +807,7 @@ mod tests {
             Ok(())
         );
         // Every declared value passes its validator.
-        for (mode, reads) in [stage2_reach(false), stage2_reach(true)] {
+        for (mode, reads) in [stage2_reach(false), stage2_reach(true), esr10_reach()] {
             for r in reads {
                 let mut cell =
                     vec![Override::parse(&format!("{}={}", r.path, r.moves_at))
@@ -778,22 +828,36 @@ mod tests {
         }
     }
 
+    /// The modes the reader test narrates.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Mode {
+        Stage2,
+        Stage2Control,
+        /// `--esr10`'s reach probe (`esr10::run_reach_probe`).
+        Esr10,
+    }
+
     /// E16-7 per mode (the review of 2026-10-30): each field a mode
     /// declares as read moves that mode's report at its declared value, on
     /// the arm it is declared for. A field whose effect needs another
     /// setting is compared against a cell with that setting alone. The
-    /// cells run in parallel; each is a full `--stage2` narration.
+    /// cells run in parallel; each is a full `--stage2` narration, or
+    /// `--esr10`'s reach probe.
     #[test]
-    #[ignore = "one full --stage2 narration per declared field on both arms; run with --release --ignored; nightly economics-sim-ignored"]
+    #[ignore = "one full --stage2 narration per declared field on both arms, and one --esr10 probe per field; run with --release --ignored; nightly economics-sim-ignored"]
     fn every_declared_reader_moves_its_report() {
         use crate::engine::SimParams;
-        let narrate = |overrides: Vec<Override>, control: bool| -> String {
+        let narrate = |overrides: Vec<Override>, mode: Mode| -> String {
             let mut run = SimParams::with_overrides(overrides).expect("a declared value passes");
-            if control {
+            if mode == Mode::Stage2Control {
                 run.fee = SimParams::section_12_14_control().fee;
             }
             let mut out = String::new();
-            crate::stage2::run_stage2(&mut out, &run).expect("String sink");
+            if mode == Mode::Esr10 {
+                crate::esr10::run_reach_probe(&mut out, &run).expect("String sink");
+            } else {
+                crate::stage2::run_stage2(&mut out, &run).expect("String sink");
+            }
             out
         };
         let parse = |path: &str, value: u64| {
@@ -801,19 +865,23 @@ mod tests {
         };
         // Every narration the test needs, once: each arm's reference (the
         // baseline, or a field's companion alone) and each field's cell.
-        let mut narrations: Vec<(Vec<Override>, bool)> = Vec::new();
-        let mut index = |overrides: Vec<Override>, control: bool| -> usize {
+        let mut narrations: Vec<(Vec<Override>, Mode)> = Vec::new();
+        let mut index = |overrides: Vec<Override>, mode: Mode| -> usize {
             if let Some(i) = narrations
                 .iter()
-                .position(|(o, c)| *o == overrides && *c == control)
+                .position(|(o, m)| *o == overrides && *m == mode)
             {
                 return i;
             }
-            narrations.push((overrides, control));
+            narrations.push((overrides, mode));
             narrations.len() - 1
         };
         let mut pairs: Vec<(String, usize, usize)> = Vec::new();
-        for (control, (mode, reads)) in [(false, stage2_reach(false)), (true, stage2_reach(true))] {
+        for (control, (mode, reads)) in [
+            (Mode::Stage2, stage2_reach(false)),
+            (Mode::Stage2Control, stage2_reach(true)),
+            (Mode::Esr10, esr10_reach()),
+        ] {
             for r in reads {
                 let base: Vec<Override> = r
                     .only_if
@@ -825,22 +893,14 @@ mod tests {
                 pairs.push((format!("{mode}: {}={}", r.path, r.moves_at), b, c));
             }
         }
-        let threads = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
         // A cell whose fold panics is a failure named with the rest, not the
         // end of the run.
-        let mut text: Vec<Option<String>> = Vec::with_capacity(narrations.len());
-        for chunk in narrations.chunks(threads) {
-            let done: Vec<Option<String>> = std::thread::scope(|scope| {
-                let handles: Vec<_> = chunk
-                    .iter()
-                    .map(|(overrides, control)| {
-                        scope.spawn(move || narrate(overrides.clone(), *control))
-                    })
-                    .collect();
-                handles.into_iter().map(|h| h.join().ok()).collect()
-            });
-            text.extend(done);
-        }
+        let text: Vec<Option<String>> = crate::parallel::map(&narrations, |(overrides, mode)| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                narrate(overrides.clone(), *mode)
+            }))
+            .ok()
+        });
         let unmoved: Vec<String> = pairs
             .iter()
             .filter_map(|(name, b, c)| match (&text[*b], &text[*c]) {

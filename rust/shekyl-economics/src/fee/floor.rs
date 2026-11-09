@@ -124,9 +124,12 @@ fn base_reward_at(operands: FeeOperands, params: &EconomicParams) -> Option<u64>
     base_block_reward(operands.parent_coins_generated, params).ok()
 }
 
-/// The relay floor at the operands: `F = R·C·w_ref/M²`, floored at 1
-/// ([`checked_relay_fee_floor`]), `w_ref` the policy's. `None` when the
-/// parameters cannot price the tail or the scalars leave the `u128` domain.
+/// The relay floor at the operands: `F = R·C·w_ref/M²`, floored at 1,
+/// `w_ref` the policy's.
+///
+/// `None` when the parameters cannot price the tail or the scalars leave
+/// the `u128` domain. [`super::relay_fee_floor`] is the same formula and
+/// saturates there.
 #[must_use]
 pub fn relay_floor_from(
     operands: FeeOperands,
