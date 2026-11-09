@@ -141,6 +141,7 @@ stale_through = [
   { through = "682d97049c", note = "C++ removal (#1299): one module-doc paragraph in shekyl-fcmp's frost_sal.rs, naming the FOLLOWUPS rows that track the multisig spend path. Comment only; no code path changed, and nothing the capture priced has moved." },
   { through = "c42ef64a2d", note = "C++ removal (#1299): comments only in shekyl-crypto-pq signature.rs, shekyl-fcmp proof.rs, and shekyl-pow-randomx lib.rs and vm.rs; no code path changed, and nothing the capture priced has moved." },
   { through = "d6e8da7d44", note = "Rules after the C++ removal (#1308): shekyl-bulletproofs' crate root takes #![deny(unsafe_code)]; the crate holds no unsafe, so the attribute compiles to nothing and nothing the capture priced has moved." },
+  { through = "cebbb746f1", note = "Test-only publics (2026-11-08): in this path set, one doc comment in shekyl-fcmp's tree.rs (leaves_to_bytes no longer says LMDB storage). Comment only; no function, constant or code path changed, and nothing the capture priced has moved." },
 ]
 
 [[constant]]
@@ -974,6 +975,7 @@ stale_through = [
   { through = "11cff8aeb90695ccd843b62d6fae2231937271cc", note = "DISPATCHED_PROOF_LIFE in shekyl-curve-tree reference.rs is REFERENCE_BLOCK_MAX_AGE minus REBUILD_AT, a const subtraction beside the existing reference constants. No tree build, path assembly or prover work moved. Not measured; the rows stay stale." },
   { through = "682d97049c", note = "C++ removal (#1299): one module-doc paragraph in shekyl-fcmp's frost_sal.rs, naming the FOLLOWUPS rows that track the multisig spend path. Comment only; no code path changed, and nothing the capture priced has moved." },
   { through = "c42ef64a2d", note = "C++ removal (#1299): comments only in shekyl-fcmp proof.rs; no code path changed, and nothing the capture priced has moved." },
+  { through = "cebbb746f1", note = "Test-only publics (2026-11-08): in this path set, one doc comment in shekyl-fcmp's tree.rs (leaves_to_bytes no longer says LMDB storage). Comment only; no function, constant or code path changed, and nothing the capture priced has moved." },
 ]
 
 [[constant]]

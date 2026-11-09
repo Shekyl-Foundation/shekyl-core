@@ -201,25 +201,6 @@ impl TxExtraField {
     }
 }
 
-/// Whether `tag` names a field [`TxExtraField::payload`] can hand over.
-/// Padding and any byte the grammar does not model return `false` — asking
-/// for one is a caller bug, not a verdict about the bytes.
-#[must_use]
-pub fn tag_carries_payload(tag: u8) -> bool {
-    matches!(
-        tag,
-        TX_EXTRA_TAG_PUBKEY
-            | TX_EXTRA_TAG_NONCE
-            | TX_EXTRA_TAG_ADDITIONAL_PUBKEYS
-            | TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT
-            | TX_EXTRA_TAG_PQC_LEAF_ENTRIES
-            | TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS
-            | TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS
-            | TX_EXTRA_TAG_ARCHIVAL_ATTESTATION
-            | TX_EXTRA_TAG_DRAW_COMMITMENT
-    )
-}
-
 /// A per-output hybrid KEM ciphertext from a `0x06` field.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct KemCiphertext {
@@ -827,9 +808,8 @@ pub fn conforming_pqc_leaf_entry() -> [u8; PQC_LEAF_ENTRY_LEN] {
 /// The `0x0C` draw commitment every fixture coinbase carries: a fixed value
 /// with no opening, so a fixture block commits to a seed nobody reveals and
 /// issues no draw. Not zero, so a fixture cannot pass for the genesis
-/// block's commitment by accident. One constant for every crate's fixtures
-/// and for the C++ test writer, as [`conforming_pqc_leaf_entry`] is for the
-/// leaf entry.
+/// block's commitment by accident. One constant for every crate's fixtures,
+/// as [`conforming_pqc_leaf_entry`] is for the leaf entry.
 pub const CONFORMING_DRAW_COMMITMENT: DrawCommitment =
     DrawCommitment::from_bytes([0xDC; DRAW_COMMITMENT_LEN]);
 

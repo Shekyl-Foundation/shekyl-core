@@ -146,7 +146,9 @@ SCOPE = (
 # ceiling stood at 144 over a list of 141. 139 after `plant_listed` and
 # `plant_archival` took `BlockHeight` (2026-11-07): widening their path
 # parameter touched the recorded lines, and a touched site is typed.
-GRANDFATHER_CEILING = 139
+# 138 after `settlement_epoch_slash_deadline_height` was deleted
+# (2026-11-08): its one reader, a test, calls the schedule method.
+GRANDFATHER_CEILING = 138
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

@@ -35,11 +35,10 @@ pub use floor::{
     FeeOperands, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
 };
 pub use ladder::{
-    checked_corrected_fee_ladder, corrected_fee_ladder, FeeLadder, EMISSION_CLAIM_FEE_FLOOR,
-    STANDARD_RUNG_OVER_ECONOMY,
+    corrected_fee_ladder, FeeLadder, EMISSION_CLAIM_FEE_FLOOR, STANDARD_RUNG_OVER_ECONOMY,
 };
 pub use quantization::{quantized_fee, FEE_DECIMAL_PLACES, FEE_QUANTIZATION_MASK};
 pub use relay::{
-    checked_relay_fee_floor, relay_fee_floor, relay_floor_admits, RELAY_ADMISSION_SLACK_BP,
-    RELAY_FLOOR_LOOKBACK, RELAY_FLOOR_WINDOW,
+    relay_fee_floor, relay_floor_admits, RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_LOOKBACK,
+    RELAY_FLOOR_WINDOW,
 };

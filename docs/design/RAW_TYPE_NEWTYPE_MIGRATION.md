@@ -134,7 +134,6 @@ existing `AtomicUnits` everywhere a raw `u64` *amount* persists or flows.
 | `shekyl-wire` transaction `fee` | `fee: u64` | the oxide `fcmp.rs` `ProofBase.fee` was deleted in the slice-1 wire extraction; the fee now lives on the genesis tx in `shekyl-wire` (see the `tx-builder wire.rs:26` row below) |
 | [`tx-builder wire.rs:26`](../../rust/shekyl-tx-builder/src/wire.rs) | `fee: u64` | |
 | economics [`burn.rs:27-29`](../../rust/shekyl-economics/src/burn.rs), [`params.rs`](../../rust/shekyl-economics/src/params.rs) `EconomicParams::emission_curve_asymptote`, emission returns | reward/fee/supply | |
-| staking [`registry.rs:9`](../../rust/shekyl-consensus/src/registry.rs) `StakeEntry.amount` | | |
 
 ## 5. PR B — Secret-material hardening (Priority 1, security; `35-secure-memory.mdc`)
 
@@ -163,7 +162,6 @@ field per §1).
 | [`ledger_block.rs:107,140`](../../rust/shekyl-engine-state/src/ledger_block.rs) `tip_hash`, `ReorgBlocks` | persisted |
 | [`sync_state_block.rs:75,86`](../../rust/shekyl-engine-state/src/sync_state_block.rs) `creation_anchor_hash`, `pending_tx_hashes` | persisted |
 | [`tx_meta_block.rs:174,178`](../../rust/shekyl-engine-state/src/tx_meta_block.rs) map keys keyed by txid | persisted |
-| [`consensus types.rs:18,25`](../../rust/shekyl-consensus/src/types.rs) `prev_hash`, `top_hash` | |
 | `shekyl-wire` block `previous` / `curve_tree_root` / `transactions` | **LANDED — RTN-7** (2026-09-18): `BlockHash` / `CurveTreeRoot` / `Vec<TxHash>`, plus `attestation_root: AttestationRoot` and `BondPost.p_canonical_id: PCanonicalId`. Type-only; every parity KAT unchanged. |
 | `shekyl-wire` `Transaction::hash()` / `hash_with_supplied_*` **return**, `Block::hash()`, `prefix_hash()` | **LANDED — RTN-7** (2026-09-18): `TxHash`, `BlockHash`, and the new `PrefixHash` (the txid preimage's *first* component, minted beside `PqcAuthHash` and `PrunableHash` rather than as a signing-specific name — Q3). ~160 call sites in 12 crates; the component surface (`prunable_hash() -> PrunableHash`, `pqc_auth_hash() -> Option<PqcAuthHash>`) was typed with `PDM-Q-F26` the day before. Held by `scripts/ci/check_wire_raw_hash_surface.py`. |
 | curve-tree [`types.rs:189-191,245-250`](../../rust/shekyl-curve-tree/src/types.rs) `reference_block`/`tree_root`/`curve_tree_root` | |
