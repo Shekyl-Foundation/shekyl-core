@@ -113,12 +113,15 @@ use crate::timing::Series;
 ///   `BENCHMARK_ALIGNMENT.md` BA-I96) reads `rung_top` 765 600, which is
 ///   `worst_case_window_leaves` at that day's surge factor. From `v4` the pair
 ///   is the rung's own — `rung_top` is `separated_leaves` of the floor — and
-///   the window is a fifth arm, `window`, with its separation from the floor
-///   in [`AssembleEdgeRecord::window_separation`]. The role string is the same
-///   and the population is not, so a `v3` and a `v4` `rung_top` are not one
-///   axis. The bump re-labels spend, verify and open records whose meaning did
-///   not move; that costs a reader one line of this history, and leaving
-///   `rung_top` unflagged would cost them the comparison.
+///   the window is [`AssembleEdgeRecord::window`], its own recorded arm, not
+///   an element of `arms` and not a pair role. Its separation from the floor
+///   is the ratio of those two leaf counts: printed, never stored, never a
+///   criterion. No `v4` capture is cited, so this is the shape `v4` ships.
+///   The role string `rung_top` is the same and the population is not, so a
+///   `v3` and a `v4` `rung_top` are not one axis. The bump re-labels spend,
+///   verify and open records whose meaning did not move; that costs a reader
+///   one line of this history, and leaving `rung_top` unflagged would cost
+///   them the comparison.
 ///
 /// **No CI arm enforces this constant** — the `schema-snapshot` workflow's
 /// version-bump job covers `shekyl-chain-store`'s persisted schema, not this
@@ -589,18 +592,19 @@ pub struct AssembleEdgeRecord {
     pub plan_note: &'static str,
     /// The criterion, fixed before capture existed.
     pub criterion: crate::assembleedge::FlatnessCriterion,
-    /// Every arm, in plan order.
-    pub arms: Vec<AssembleArmRecord>,
-    /// The `window` arm's leaf count over the rung floor's, from
-    /// [`crate::assembleedge::window_separation`]; `None` for a plan with no
-    /// window arm.
+    /// The four pair arms, in plan order: below, floor, top, input cap.
     ///
-    /// **Reported, never required.** The window is a reading inside the rung,
-    /// not a member of the same-rung pair, so no criterion reads this value.
-    /// The pair is the rung's own whatever the ratio; one below
-    /// [`crate::assembleedge::SAME_RUNG_SEPARATION`] says only that a pair
-    /// built on the window could not tell a slope from noise.
-    pub window_separation: Option<f64>,
+    /// The window reading is not an element of this list.
+    pub arms: Vec<AssembleArmRecord>,
+    /// The replay-window reading, when the plan has one.
+    ///
+    /// Its role string is [`crate::assembleedge::WindowReading::RECORD_ROLE`].
+    /// Timed and recorded. Not a pair member: no criterion reads it, and its
+    /// separation from the floor is the ratio of this arm's leaf count to the
+    /// `rung_floor` arm's, printed from those counts rather than stored. A
+    /// ratio below [`crate::assembleedge::SAME_RUNG_SEPARATION`] says only
+    /// that a pair built on the window could not tell a slope from noise.
+    pub window: Option<AssembleArmRecord>,
     /// Change from the canonical owned count to `MAX_INPUTS` at one
     /// population, in percent — `#842`'s `n + k` claim, measured.
     ///

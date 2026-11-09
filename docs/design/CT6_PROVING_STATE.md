@@ -964,8 +964,10 @@ leaf** (a rung floor and its predecessor), which isolates the layer step from
 the population term entirely, and the same-rung pair separates ≥ 1.5×, where a
 linear term shows as ≥ 50 % against a 10 % bound. In the replay-window plan the
 window is a reading, not a pair member: the pairs are the window rung's own
-(its floor and `separated_leaves` of it), and the window is a fifth arm on that
-rung whose separation from the floor is reported, never required.
+(its floor and `separated_leaves` of it). The window is recorded beside that
+rung, and its separation from the floor is the ratio of the two leaf counts,
+printed and never required. It is not a pair role, and its series does not
+withhold the pair grade.
 
 `expected_cross_rung_ratio` is a **uniform-layer model** and says so: Selene
 nodes are 38 wide and Helios 18, so the true step is in chunk work. It is right
