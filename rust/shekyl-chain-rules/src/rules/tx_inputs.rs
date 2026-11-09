@@ -26,7 +26,7 @@ use crate::rules::{Rule, TxContext, TxRule, TxScope};
 use crate::verdict::{InvalidBlock, Verdict};
 use shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
-use shekyl_crypto_pq::multisig::HYBRID_SCHEME_ID_MULTISIG;
+use shekyl_crypto_pq::multisig::{HYBRID_SCHEME_ID_MULTISIG, MULTISIG_KEY_BLOB_MIN};
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
 use shekyl_wire::transaction::{
     ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES, MAX_FCMP_INPUTS, PQC_HYBRID_SINGLE_KEY_LEN,
@@ -272,20 +272,16 @@ impl TxRule for I14 {
     }
 }
 
-/// The least a multisig key blob can be: the container header
-/// (`tx_pqc_verify.cpp:56` `MULTISIG_KEY_HEADER_LEN = 3` — version,
-/// `n_total`, `threshold`). The exact container parse is `shekyl_crypto_pq::
-/// multisig`'s, run by CEN-I17/I18 when the signature is verified; this
-/// bound is the structural floor the C++ applies before that parse.
-const MULTISIG_KEY_BLOB_MIN: usize = 3;
-
-/// CEN-I16: every `pqc_auth`'s structure (`tx_pqc_verify.cpp:161–221`) —
+/// CEN-I16: every `pqc_auth`'s structure —
 /// `auth_version == 1`; `flags == 0`; `scheme_id` is the solo hybrid
 /// ([`HYBRID_SCHEME_ID_ED25519_ML_DSA_65`]) or the multisig container
 /// ([`HYBRID_SCHEME_ID_MULTISIG`]), with **no** cross-input agreement
 /// required (MSW-6 withdrawn); a solo key blob exactly
 /// [`PQC_HYBRID_SINGLE_KEY_LEN`]; a multisig key blob within
-/// `[MULTISIG_KEY_BLOB_MIN, PQC_MAX_PUBLIC_KEY_BLOB]`. Every class that
+/// `[MULTISIG_KEY_BLOB_MIN, PQC_MAX_PUBLIC_KEY_BLOB]`, the floor being
+/// crypto-pq's shortest legal blob (a 1-of-1 revealing its key; the
+/// submit verifier's K13 imports the same constant). The exact parse is
+/// `shekyl_crypto_pq::multisig`'s, run by CEN-I18. Every class that
 /// carries auths; a serve-credit response carries none (H20) and records
 /// as evaluated over the empty vector. The signature blob's own bound is a
 /// DoS ceiling on the wire, not a census row.

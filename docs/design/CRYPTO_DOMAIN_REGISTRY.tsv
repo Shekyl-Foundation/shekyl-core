@@ -142,6 +142,7 @@
 # ── Mechanism 1 — cSHAKE256 customization ─────────────────────────────
 1	shekyl/genesis-txkey-v3	rust/shekyl-genesis-tool/src/txkey.rs	GENESIS_TXKEY	shekyl-live	name	32	plain		the deterministic genesis tx key: frame(this domain, name_id, [recipients]) read to 32 bytes, reduced mod l; the recipients field is payment identity (spend/view/ek) and amount, never an address's spelling; genesis commits to the network's name through name_id (NI-R12; the signing envelope §2.4)
 1	shekyl/multisig-address-v3	rust/shekyl-address/src/multisig_address.rs	MULTISIG_ADDRESS_FINGERPRINT	shekyl-live	name	32	auth		the multisig group's fingerprint: frame(this domain, name_id, [canonical payload]) (the signing envelope §2.1, §2.6; NI-R15: derived from keys, so the name); replaces -v2, whose input was len(tag) ‖ tag ‖ payload
+1	shekyl/multisig-key-hash-v1	rust/shekyl-crypto-pq/src/multisig.rs	MULTISIG_KEY_HASH	shekyl-live	id	32	auth		a multisig member's per-output key hash: frame(this domain, network_id, [canonical hybrid public key]); the committed form an output's leaf binds is 0x02 ‖ n ‖ m ‖ h_1 … h_n, and verify_multisig (CEN-I18) checks each revealed signer key against its hash, so consensus compares it and it binds the chain's id (Option E′, R-3)
 1	shekyl/ek-bind-v1	rust/shekyl-address/src/address.rs	EK_BIND_DST	shekyl-live	input:SaltForKey	16	auth		
 1	shekyl/archival-serve-challenge-leaf-v2	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_LEAF_CUSTOMIZATION	shekyl-live	input:BlockHash	32	auth		PC-D3: preimage gained block_hash(h-1) so a pair-epoch's challenges draw their leaves independently (collisions mod leaf count allowed - independence, not distinctness, is the guarantee); -v1 label retired below
 1	shekyl/archival-serve-challenge-fire-v1	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_FIRE_CUSTOMIZATION	shekyl-live	input:BlockHash	32	auth		
@@ -242,11 +243,6 @@
 2	shekyl-archival-p-hs-id-ed25519-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_HS_ID_INFO	shekyl-live	name	-	plain		info
 2	shekyl-archival-p-receipt-ed25519-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_RECEIPT_ED_INFO	shekyl-live	name	-	plain		info
 2	shekyl-archival-p-receipt-fn-dsa-1024-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_RECEIPT_FN_DSA_INFO	shekyl-live	name	-	plain		info
-2	shekyl-v31-hybrid-sign	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_HYBRID_SIGN	shekyl-live	local:per-output-secret	-	plain		info
-2	shekyl-v31-classical-spend	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_CLASSICAL_SPEND	shekyl-live	local:per-output-secret	-	plain		info
-2	shekyl-v31-view-tag	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_VIEW_TAG	shekyl-live	local:per-output-secret	-	plain		info
-2	shekyl-v31-kem-seed	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_KEM_SEED	shekyl-live	local:per-output-secret	-	plain		info
-2	shekyl-v31-multisig-kem	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_MULTISIG_KEM	shekyl-live	local:per-output-secret	-	plain		info
 2	shekyl/msg-sign-seed-slh-dsa-192s-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIGN_SEED_DOMAIN	shekyl-live	name	-	plain		info (HKDF expand)
 2	shekyl-prefs-hmac-v1	rust/shekyl-engine-prefs/src/hmac_key.rs	HKDF_INFO_LABEL	shekyl-live	local:wallet-file-key	-	plain		info
 2	shekyl-region1-aead-v2	rust/shekyl-crypto-pq/src/wallet_envelope.rs	HKDF_INFO_REGION1_AEAD_V2	shekyl-live	local:wallet-file-key	-	plain		info

@@ -94,8 +94,8 @@ pub const SCHEME_DOMAIN_PQC_AUTH_TX: &[u8] = b"shekyl/pqc-auth-tx-v1";
 /// signed payload), but that is a caller-side property of the tx builder; the
 /// scheme owns its separation here so a signature made in one context cannot be
 /// reused in the other even for a caller that passes a bare payload to
-/// `verify_multisig`. `verify_multisig` and the (test-support) participant
-/// signer both use this constant; production multisig signing is unbuilt.
+/// `verify_multisig`. `verify_multisig` uses this constant; production
+/// multisig signing is unbuilt (slice 3).
 pub const SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG: &[u8] = b"shekyl/pqc-auth-tx-multisig-v1";
 /// Emission claim-role auth (surface C).
 pub const SCHEME_DOMAIN_EMISSION_CLAIM: &[u8] = b"shekyl/archival-emission-claim-scheme-v1";
@@ -488,9 +488,10 @@ impl SignatureScheme for HybridEd25519MlDsa {
 }
 
 /// One transaction `pqc_auths` slot's signature, verified — **the** body
-/// behind every consumer: the daemon's `shekyl_pqc_verify` FFI, the
-/// daemon-rpc submit verifier (K13) and the consensus validator (CEN-I18)
-/// all call this, so the three cannot disagree on what a valid slot is.
+/// behind every consumer: the daemon-rpc submit verifier (K13) and the
+/// consensus validator (CEN-I18) both call this, so they cannot disagree on
+/// what a valid slot is. `network` is the chain's id: a multisig slot's key
+/// hashes bind it ([`crate::multisig::MULTISIG_KEY_HASH`]).
 ///
 /// Dispatch on the container `scheme_id`:
 /// [`HYBRID_SCHEME_ID_ED25519_ML_DSA_65`] parses the single hybrid key and
@@ -518,6 +519,7 @@ pub fn verify_pqc_auth(
     public_key: &[u8],
     signature: &[u8],
     message: &SigningPayloadHash,
+    network: &shekyl_network::NetworkId,
 ) -> Result<(), PqcVerifyError> {
     match scheme_id {
         HYBRID_SCHEME_ID_ED25519_ML_DSA_65 => {
@@ -535,7 +537,40 @@ pub fn verify_pqc_auth(
                 .map_err(|_| PqcVerifyError::CryptoVerifyFailed)
         }
         crate::multisig::HYBRID_SCHEME_ID_MULTISIG => {
-            crate::multisig::verify_multisig(scheme_id, public_key, signature, message)
+            crate::multisig::verify_multisig(scheme_id, public_key, signature, message, network)
+        }
+        _ => Err(PqcVerifyError::SchemeMismatch),
+    }
+}
+
+/// The bytes of a `pqc_auth` key blob that the spent output's leaf commits
+/// to: `k = H_ℓ(these bytes)` (`PL-D3`). Both consensus verifiers derive `k`
+/// through this one function, so they cannot disagree about it.
+///
+/// - Scheme 1 (solo): the whole key blob, which must be exactly one
+///   canonical hybrid key.
+/// - Scheme 2 (multisig): the committed form at the front of the blob,
+///   `0x02 ‖ n ‖ m ‖ h_1 ‖ … ‖ h_n` — never the revealed signer keys, which
+///   a spend chooses and the output could not have committed to.
+///
+/// # Errors
+///
+/// [`PqcVerifyError::SchemeMismatch`] for an unknown scheme;
+/// [`PqcVerifyError::KeyBlobLength`] for a solo blob of the wrong length;
+/// the committed form's own parse errors for scheme 2. The slot is refused
+/// either way; these are the same refusals [`verify_pqc_auth`] makes.
+pub fn pqc_leaf_key_bytes(scheme_id: u8, key_blob: &[u8]) -> Result<&[u8], PqcVerifyError> {
+    match scheme_id {
+        HYBRID_SCHEME_ID_ED25519_ML_DSA_65 => {
+            if key_blob.len() == HybridPublicKey::CANONICAL_LEN {
+                Ok(key_blob)
+            } else {
+                Err(PqcVerifyError::KeyBlobLength)
+            }
+        }
+        crate::multisig::HYBRID_SCHEME_ID_MULTISIG => {
+            let len = crate::multisig::MultisigCommittedForm::prefix_len(key_blob)?;
+            Ok(&key_blob[..len])
         }
         _ => Err(PqcVerifyError::SchemeMismatch),
     }
@@ -645,6 +680,7 @@ mod tests {
             &pk_bytes,
             &sig_bytes,
             &SigningPayloadHash::from_bytes(msg),
+            &[0u8; 16],
         )
         .expect("a slot signed under the tx-auth domain verifies");
         assert_eq!(
@@ -652,7 +688,8 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes,
                 &sig_bytes,
-                &SigningPayloadHash::from_bytes([0x5b; 64])
+                &SigningPayloadHash::from_bytes([0x5b; 64]),
+                &[0u8; 16]
             ),
             Err(PqcVerifyError::CryptoVerifyFailed),
             "a different message"
@@ -664,7 +701,8 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes,
                 &forged,
-                &SigningPayloadHash::from_bytes(msg)
+                &SigningPayloadHash::from_bytes(msg),
+                &[0u8; 16]
             ),
             Err(PqcVerifyError::CryptoVerifyFailed),
             "a well-formed signature that does not verify"
@@ -674,7 +712,8 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes,
                 &sig_bytes[1..],
-                &SigningPayloadHash::from_bytes(msg)
+                &SigningPayloadHash::from_bytes(msg),
+                &[0u8; 16]
             ),
             Err(PqcVerifyError::DeserializationFailed),
             "a signature that does not parse"
@@ -684,7 +723,8 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes[1..],
                 &sig_bytes,
-                &SigningPayloadHash::from_bytes(msg)
+                &SigningPayloadHash::from_bytes(msg),
+                &[0u8; 16]
             ),
             Err(PqcVerifyError::DeserializationFailed),
             "a key that does not parse"
@@ -694,7 +734,8 @@ mod tests {
                 0x7f,
                 &pk_bytes,
                 &sig_bytes,
-                &SigningPayloadHash::from_bytes(msg)
+                &SigningPayloadHash::from_bytes(msg),
+                &[0u8; 16]
             ),
             Err(PqcVerifyError::SchemeMismatch),
             "an unknown scheme"
@@ -709,7 +750,8 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes,
                 &other.to_canonical_bytes().unwrap(),
-                &SigningPayloadHash::from_bytes(msg)
+                &SigningPayloadHash::from_bytes(msg),
+                &[0u8; 16]
             ),
             Err(PqcVerifyError::CryptoVerifyFailed),
             "another surface's domain"
