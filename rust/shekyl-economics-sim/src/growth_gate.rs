@@ -306,11 +306,22 @@ pub(crate) fn cell_gate(
 /// P2's `m*`: `⌈MILLI·θ/ρ⌉` thousandths at `year_one`'s last block, the
 /// least multiplier at which `m*·ρ(y1) ≥ θ(y1)` ([`multiplied_reaches_theta`]
 /// read for its multiplier).
-pub(crate) fn m_star(params: &SimParams, year_one: &A1YearAgg) -> StandardMultiplier {
+///
+/// `None` when no multiplier does: `ρ(y1)` is zero under a positive `θ`
+/// (a zero release multiplier leaves no fee correction, so every multiple
+/// of `ρ` is zero), or the least one exceeds the thousandths a multiplier
+/// carries.
+pub(crate) fn m_star(params: &SimParams, year_one: &A1YearAgg) -> Option<StandardMultiplier> {
     let block = GateBlock::from_agg(year_one);
-    let rho = rho_scaled(&block, params.economic());
-    let milli = theta_milli(&block).div_ceil(standard_rung_rho(params, rho));
-    StandardMultiplier::from_milli(u64::try_from(milli).expect("a multiplier fits"))
+    let theta = theta_milli(&block);
+    let rho = standard_rung_rho(params, rho_scaled(&block, params.economic()));
+    let milli = match rho {
+        0 => (theta == 0).then_some(0)?,
+        _ => theta.div_ceil(rho),
+    };
+    u64::try_from(milli)
+        .ok()
+        .map(StandardMultiplier::from_milli)
 }
 
 pub(crate) fn year_label(year: Option<u64>) -> String {

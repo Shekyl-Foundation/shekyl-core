@@ -3259,9 +3259,14 @@ plan's EUP-5 row):
   a multiplier near `m*` meets the ceiling; the default is 2.40×. The
   re-derived pair meets it at ×1 on every scenario, and stops meeting it
   between ×1.25 and ×1.352.
-- **Capacity.** The re-derived pair carries every scenario's demand from
-  genesis until sustained growth meets the block weight limit. The
-  inherited pair carries 22 to year 18 at ×1, and all from year 2 at `m*`.
+- **Capacity.** On the re-derived pair no all-Standard cell has a
+  constrained era (carried within one transaction a block of demand)
+  until sustained growth meets the block weight limit in years 26–29.
+  Nothing is refused or evicted; Standard expires at most 0.9 a block
+  (the stuffing attack's year 1 at ×1, falling to 0.2 at ×3) and 0.1 in
+  boom-bust, the late-chain tail and high-history. The mixes drop Economy
+  where demand passes the room (R6). The inherited pair carries 22 to
+  year 18 at ×1, and all from year 2 at `m*`.
 - **The pool cap.** Where the inherited chain is constrained and all
   Standard, the cap refuses about 2 a block; with Priority in the mix the
   stock stays under it and the drop is expiry. On the re-derived arm the

@@ -287,12 +287,14 @@ impl Cell {
     }
 }
 
-/// The cells: the swept multipliers with `m*` in its place among them, then
-/// the registered mixes.
-pub(crate) fn cells(m_star: StandardMultiplier) -> Vec<Cell> {
+/// The cells: the swept multipliers with `m*`, when one exists, in its place
+/// among them, then the registered mixes.
+pub(crate) fn cells(m_star: Option<StandardMultiplier>) -> Vec<Cell> {
     let mut multiplied: Vec<Cell> = SWEPT_MULTIPLIERS.into_iter().map(Cell::Swept).collect();
-    let at = multiplied.partition_point(|cell| cell.multiplier() <= m_star);
-    multiplied.insert(at, Cell::MStar(m_star));
+    if let Some(m_star) = m_star {
+        let at = multiplied.partition_point(|cell| cell.multiplier() <= m_star);
+        multiplied.insert(at, Cell::MStar(m_star));
+    }
     multiplied
         .into_iter()
         .chain(REGISTERED_MIXES.map(Cell::Mixed))
@@ -300,8 +302,9 @@ pub(crate) fn cells(m_star: StandardMultiplier) -> Vec<Cell> {
 }
 
 /// `m*` from the inherited arm's year 1 on the baseline scenario: one
-/// year of the unit cell's fold.
-pub(crate) fn m_star_from(base: &SimParams) -> StandardMultiplier {
+/// year of the unit cell's fold. `None` when no multiplier reaches `θ`
+/// there ([`m_star`]).
+pub(crate) fn m_star_from(base: &SimParams) -> Option<StandardMultiplier> {
     let mut config = scenario_named(base, BASELINE_STEADY_STATE);
     config.sim_years = 1;
     let year_one = a1_year_aggs(base, &config);
@@ -577,10 +580,15 @@ fn write_header(
             )?,
         }
     }
+    let m_star = if cells.iter().any(|cell| matches!(cell, Cell::MStar(_))) {
+        "m* = ceil(1000 theta(y1)/rho(y1))"
+    } else {
+        "m* none: no multiplier reaches theta(y1)"
+    };
     writeln!(
         out,
         "CELLS: {}.\n\
-         \x20 m* = ceil(1000 theta(y1)/rho(y1)) on the inherited arm's year 1. Mixes are Economy/Standard/Priority\n\
+         \x20 {m_star} on the inherited arm's year 1. Mixes are Economy/Standard/Priority\n\
          \x20 percent; demand splits by largest remainder on the cumulative target, and one block's arrivals are\n\
          \x20 admitted Priority, Standard, Economy: a declared order, which can move the pool (§5.29).",
         cells.iter().map(|c| c.label()).collect::<Vec<_>>().join(", "),
@@ -910,7 +918,7 @@ mod tests {
     /// 1.30–1.40 (`ESR10_PREDICTIONS.md` P2, amended 2026-11-08).
     #[test]
     fn m_star_is_in_the_registered_band() {
-        let m_star = m_star_from(&SimParams::default());
+        let m_star = m_star_from(&SimParams::default()).expect("year 1 prices an m*");
         assert!(
             (StandardMultiplier::from_milli(1_300)..=StandardMultiplier::from_milli(1_400))
                 .contains(&m_star),
@@ -920,7 +928,7 @@ mod tests {
 
     #[test]
     fn the_cells_are_the_briefs_in_order() {
-        let labels: Vec<String> = cells(StandardMultiplier::from_milli(1_352))
+        let labels: Vec<String> = cells(Some(StandardMultiplier::from_milli(1_352)))
             .iter()
             .map(|c| c.label())
             .collect();
@@ -940,6 +948,34 @@ mod tests {
         assert_eq!(
             Cell::Swept(StandardMultiplier::UNIT).fee(),
             FeeModel::PRODUCTION_DEFAULT
+        );
+    }
+
+    /// A zero release multiplier leaves no fee correction, so `ρ(y1)` is
+    /// zero and no multiplier reaches `θ(y1)`: the sweep runs without an
+    /// `m*` cell instead of dividing by zero, and its header says so.
+    #[test]
+    fn without_a_release_no_multiplier_is_m_star() {
+        let base = SimParams::default()
+            .with_more(
+                ["economic.release_min=0", "economic.release_max=0"]
+                    .map(|text| Override::parse(text).expect("well-formed"))
+                    .to_vec(),
+            )
+            .expect("a zero release passes the validators");
+        let m_star = m_star_from(&base);
+        assert_eq!(m_star, None);
+        let swept = cells(m_star);
+        assert!(!swept.iter().any(|cell| matches!(cell, Cell::MStar(_))));
+        assert_eq!(
+            swept.len(),
+            SWEPT_MULTIPLIERS.len() + REGISTERED_MIXES.len()
+        );
+        let mut header = String::new();
+        write_header(&mut header, &arms(&base), &swept, &[], false, 0).expect("a String sink");
+        assert!(
+            header.contains("m* none: no multiplier reaches theta(y1)"),
+            "{header}"
         );
     }
 
