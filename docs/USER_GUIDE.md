@@ -414,6 +414,17 @@ Wallet files live under `~/.shekyl/wallets/<network>/` by default, one
 directory per network, so a testnet wallet can never shadow a mainnet one.
 `--wallet-dir <path>` overrides the directory.
 
+**Crash dumps.** `shekyl-cli` and `shekyl-wallet-rpc` harden themselves as
+`shekyld` does, before they read an argument: on every Unix they write no
+core file whatever the system's limit, and on Linux and FreeBSD a process
+that is not root cannot attach a debugger to them. An open wallet holds
+its keys in memory; a crash does not copy them to disk. On Windows a
+fault or a stack overflow ends the process with the exception's code
+before Windows Error Reporting is consulted. The daemon's two further
+Windows lines, its own exit on a panic and the installer's reporting
+exclusion, are `shekyld.exe`'s only: on a machine with a **LocalDumps**
+policy, treat that folder as holding wallet secrets.
+
 ### Creating a new wallet
 
 At the prompt:

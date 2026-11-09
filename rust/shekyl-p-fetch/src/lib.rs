@@ -83,6 +83,7 @@
 //! `shekyl-archival-retention` for the transcript, its verifier and the
 //! view-hash fold, and nothing from the serving side.
 //! `scripts/ci/check_p_fetch_dep_cut.py` holds the edges.
+#![deny(unsafe_code)]
 
 mod body;
 pub mod client;

@@ -30,6 +30,7 @@
 //! A pass record is not built here. [`Read`] carries what one needs — the
 //! header, the delivery digest, `P`'s signature — and the caller that
 //! answers a challenge is the one that writes it.
+#![deny(unsafe_code)]
 
 mod draw;
 mod facts;

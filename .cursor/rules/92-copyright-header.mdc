@@ -1,14 +1,8 @@
 ---
 description: Copyright headers on all source files. Shekyl Foundation is the copyright holder. Never add Monero copyright to new files.
 globs:
-  - "src/**/*.cpp"
-  - "src/**/*.h"
-  - "src/**/*.c"
-  - "src/**/*.inl"
   - "cmake/**/*.cmake"
   - "rust/**/*.rs"
-  - "tests/**/*.cpp"
-  - "tests/**/*.h"
   - "src-tauri/**/*.rs"
 ---
 

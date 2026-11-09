@@ -336,7 +336,7 @@ commitment stand or fall together.
   to support *hosting* onion services as of early 2026 (Arti 2.x, committed LTS
   branch), which would let the archival pseudonym run a `.onion` responder
   **in-process** without a C dependency — fitting the Rust-canonical posture
-  ([`20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)). The
+  ([`20-rust-vs-cpp-policy.mdc`](completed/RULE_20_RUST_VS_CPP.md)). The
   older "Arti has no onion-service support" notes are claimed stale (client-only
   1.x line). **Verify at source before relying on it.**
 - **I2P — reasonable secondary.** Inward-facing (good for a closed P2P overlay),

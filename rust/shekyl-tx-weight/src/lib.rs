@@ -30,6 +30,7 @@
 //! no RPC or wallet types. The FCMP proof-size KAT's *validation* against real
 //! synthetic-tree measurements stays in engine-core (where the measurement
 //! machinery lives) and calls the `pub` [`fcmp_proof_size`] here.
+#![deny(unsafe_code)]
 
 use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
 use shekyl_curve_io::varint_len;

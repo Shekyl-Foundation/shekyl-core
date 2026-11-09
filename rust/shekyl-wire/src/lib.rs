@@ -48,6 +48,7 @@
 //! C++ oracle (the gate-(c) atomic cut — `VARIANT_TAG`s + the ct enum + the
 //! regenerated genesis blocks), and the live-oracle corpus is captured on these
 //! post-renumber bytes.
+#![deny(unsafe_code)]
 
 pub mod block;
 pub mod shard_frame;

@@ -33,6 +33,7 @@
 //! The *measured* half (control-port circuit-ID disjointness) lands with SP-T0's
 //! bundled-Tor harness; this crate is buildable and testable without a running Tor
 //! — constructing a [`PTorClient`] configures the SOCKS proxy but does not dial.
+#![deny(unsafe_code)]
 
 // The per-P circuit isolation is worthless if ureq lacks its SOCKS connector: it
 // then falls OPEN to a proxy-less TCP dial, deanonymizing every persona with no

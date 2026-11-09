@@ -431,7 +431,7 @@ pub const FAILURE_WINDOW_N: u32 = ARCHIVAL_FAILURE_WINDOW_N;
 /// at most `n` observations, so once more than `n − m` of them have passed,
 /// fewer than `m` misses remain possible no matter what the rest of the history
 /// says. Exposed as a computed constant rather than left to the caller so the
-/// arithmetic stays on this side of the FFI (`20-rust-vs-cpp-policy`).
+/// arithmetic has one home.
 ///
 /// At the Round-1 pin this is `2` — a healthy archiver's look-back ends after
 /// three reads, not thirteen. The shipped set's; a set's is

@@ -140,6 +140,7 @@ stale_through = [
   { through = "50e942a480", note = "C++ removal (#1299): in this path set, signature.rs loses sign_pqc_auth and sign_multisig_participant, the two sign entry points only shekyl-ffi called. The nested verify, the scheme domains and every signing path a caller still uses are unchanged, so nothing the capture priced has moved." },
   { through = "682d97049c", note = "C++ removal (#1299): one module-doc paragraph in shekyl-fcmp's frost_sal.rs, naming the FOLLOWUPS rows that track the multisig spend path. Comment only; no code path changed, and nothing the capture priced has moved." },
   { through = "c42ef64a2d", note = "C++ removal (#1299): comments only in shekyl-crypto-pq signature.rs, shekyl-fcmp proof.rs, and shekyl-pow-randomx lib.rs and vm.rs; no code path changed, and nothing the capture priced has moved." },
+  { through = "d6e8da7d44", note = "Rules after the C++ removal (#1308): shekyl-bulletproofs' crate root takes #![deny(unsafe_code)]; the crate holds no unsafe, so the attribute compiles to nothing and nothing the capture priced has moved." },
   { through = "cebbb746f1", note = "Test-only publics (2026-11-08): in this path set, one doc comment in shekyl-fcmp's tree.rs (leaves_to_bytes no longer says LMDB storage). Comment only; no function, constant or code path changed, and nothing the capture priced has moved." },
 ]
 
@@ -384,6 +385,7 @@ stale_through = [
   { through = "d85697a328", note = "The body-store actor leaves the engine runtime for its own one-worker runtime, sk-body-store, whose threads lower themselves to serving nice before they take work. The redb read and the chunk decrypt of a served body run there for the whole session. The endpoint thread still only waits, and the fetch client is unchanged. Not re-measured; the rows stay stale." },
   { through = "ec931d5858", note = "Only test files and the identity wire-pin fixtures changed: the fixtures were re-recorded because the derived persona keys moved (NI-R7). No serving or fetch code changed. Not re-measured." },
   { through = "a867b6840c", note = "Test fixtures only: the p-fetch and p-serve identity wire pins (src/wire_pin/*.hex) re-recorded because the derivation salt name_id || purpose moved the pinned persona keys. No serve or fetch code changed, no cost moved. Not re-measured." },
+  { through = "d6e8da7d44", note = "Rules after the C++ removal (#1308): shekyl-p-fetch's crate root takes #![deny(unsafe_code)]; the crate holds no unsafe, so the attribute compiles to nothing and nothing the captures priced has moved." },
 ]
 
 [[constant]]
@@ -794,6 +796,7 @@ cleared = [
   { through = "623fa03dce", reason = "Each connector publishes an admitted socket through a callback in place of the shared admission channel. The library listener still sends on that channel (publish_on), at the same point after the channel exists. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, and no deadline moved, so the 2026-10-14 capture still prices this tree." },
   { through = "63fcdd9d25", reason = "profile.rs: the doc comment on Tor's δ names its 60 s basis as shekyl-p2p-session's TIMED_SYNC_MIN plus half TIMED_SYNC_JITTER, in place of the deleted C++ P2P_DEFAULT_HANDSHAKE_INTERVAL. A comment only; no dial, handshake, gap or shutdown wait changes." },
   { through = "c42ef64a2d", reason = "C++ removal (#1299): comments only in shekyl-tor publish.rs; no code path changed, and nothing the capture priced has moved." },
+  { through = "1cd88d18ba", reason = "The onion keypair moves into shekyl-crypto-pq: OnionIdentity is built from a keypair and the daemon holds one for the boot instead of a seed, so an ADD_ONION no longer expands a seed first. The publish path only; no SOCKS dial, gap, shutdown wait or deadline changes, so the 2026-10-14 capture still prices this tree." },
 ]
 
 [[constant]]
@@ -1021,6 +1024,7 @@ cleared = [
   { through = "fc2d5eeba", reason = "SV-D (PR #1015): a doc comment on ShardAggregate::shard_hash names the view hash. No code changed on the render path." },
   { through = "ca38266f8", reason = "SV-D (PR #1015): a new binary, shekyl-shard-render, behind the `cli` feature, which calls the library's render_candidate_png on a JSON view from stdin; the crate doc is rewritten. The library's render path is untouched, and the binary is not on the shipped graph of any wallet." },
   { through = "5f857fadf", reason = "Doc comments in candidate.rs and params.rs, re-keyed off the Stage 5 framing. No code changed." },
+  { through = "d6e8da7d44", reason = "Rules after the C++ removal (#1308): shekyl-shard-visual's crate root takes #![deny(unsafe_code)]; the crate holds no unsafe, so the attribute compiles to nothing and the capture still prices this tree." },
 ]
 
 [[constant]]

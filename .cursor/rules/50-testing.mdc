@@ -4,9 +4,7 @@ globs:
   - rust/**/tests/**
   - tests/**
   - "**/test*.rs"
-  - "**/test*.cpp"
   - "**/*_test.rs"
-  - "**/*_test.cpp"
   # A gate, a ratchet row and a workflow assertion are checks too, and the
   # rule below was written because they never got the negative control that
   # tests get. Reaching only test files would miss every instance that
@@ -41,7 +39,7 @@ Every one of these was green, and none of them could have gone red:
 |---|---|
 | `if grep -rn PATTERN <paths>` | GNU grep exits **2** on a missing path and `if` cannot tell that from **1** (no match) — a deleted directory silently disabled the gate *including when the pattern was present* |
 | A pipeline gate, `grep … \| grep -v …` | a pipeline's status is the LAST command's, so the producer's verdict was discarded and never read |
-| An FFI boundary ratchet row | pinned to a file that had been deleted |
+| A ratchet row | pinned to a file that had been deleted |
 | A FOLLOWUPS retirement trigger | never coupled to the call site it named; it fired twice and retired nothing |
 | `#![deny(unsafe_code)]` | its subject was inside a `cfg(windows)` arm, compiled away on the machine the lint ran on |
 | A `#[test]` | deleted by an over-wide edit; a missing test compiles clean and reports nothing |
@@ -59,7 +57,7 @@ and the compiler learned of it too late to check the parse surface.
 
 That is where the second half applies: **encode the constraint in a type.**
 Gating the variant with `#[cfg(unix)]` turns silence into a build error. The
-same move as deleting `wallet2.cpp` rather than documenting that nobody should
+same move as deleting a module rather than documenting that nobody should
 extend it.
 
 ### What this subsumes
@@ -99,9 +97,7 @@ got slower, find out why.
 ## Test the production code, not a local re-implementation
 
 If a test defines local helpers that mirror production behavior, the test
-verifies the helpers, not the production code. Tests that exercise FFI
-surfaces must call the real FFI via `unsafe extern`, not a Rust-side
-reimplementation.
+verifies the helpers, not the production code.
 
 ## Test fixtures are spec-derived, not behavior-derived
 
@@ -113,7 +109,7 @@ documented tower structure, not observed empirically and pasted in.
 
 When a fixture and the code under test are both wrong in complementary ways,
 the test passes but verifies nothing. Surface this with property tests
-sampling unfamiliar values, FFI tests calling the production path, or review
+sampling unfamiliar values, tests calling the production path, or review
 by someone who didn't write the code.
 
 ## A fixture that constructs the state a rule reads back is not a test of the rule

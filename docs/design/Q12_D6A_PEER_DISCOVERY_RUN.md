@@ -275,7 +275,7 @@ the distinction the condition was reaching for.
 
 **Q12-R-W1 — repo PR (small, C++).** Delete the Monero onion and i2p seed
 lists (§2.4).
-[`20-rust-vs-cpp-policy`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc) is
+[`20-rust-vs-cpp-policy`](../completed/RULE_20_RUST_VS_CPP.md) is
 named explicitly rather than slid past: the p2p layer has no Rust counterpart
 and is not on the current migration front, and the change is a **data
 constant**. It adds no C++ surface area for the Rust rewrite to pay down.
@@ -3026,8 +3026,8 @@ would read as a defense** in the code and in the doc.
 #### The one mechanism with real scarcity, refused
 
 The only scarce resource in the tree that could supply peer-distinctness on Tor
-is the archival serving identity — `OnionIdentity::from_hs_id_seed`
-([`onion_identity.rs:124`](../../rust/shekyl-tor-control-client/src/onion_identity.rs#L124)),
+is the archival serving identity — `OnionIdentity::from_keypair`
+([`onion_identity.rs:75`](../../rust/shekyl-tor-control-client/src/onion_identity.rs#L75)),
 under the `StakeEngine`'s custody since #464. Binding relay peering to it would
 make p2p membership **paid**, give every relay peer a **persistent identity**,
 and **correlate a node's relay position with its archival service** across two

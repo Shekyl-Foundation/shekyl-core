@@ -43,6 +43,7 @@ use shekyl_tor_control_client::control::{
     ControlError, ControlReply, EventSink, LogEvent, LogSeverity, Resume, ServiceId, SocksTimeout,
     TorEvent, UploadRounds,
 };
+use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use shekyl_tor_control_client::supervisor::{
     clock_evidence_of, directory_content_input_of, held_at_start_sentence, input_of,
     install_sentence, render, Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning,
@@ -50,8 +51,8 @@ use shekyl_tor_control_client::supervisor::{
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
-    DaemonTorStartError, IsolationPair, KeptDataDir, KeptLog, OnionPow, OnionSeed, Retirement,
-    SpawnError, TombstoneEnd, TorDeath,
+    DaemonTorStartError, IsolationPair, KeptDataDir, KeptLog, OnionPow, Retirement, SpawnError,
+    TombstoneEnd, TorDeath,
 };
 use tokio::task::JoinHandle;
 
@@ -356,14 +357,14 @@ async fn drive(
             return;
         }
     };
-    let seed = match DaemonTorControl::mint_seed() {
-        Ok(seed) => seed,
+    let onion = match DaemonTorControl::mint_identity() {
+        Ok(onion) => onion,
         Err(error) => {
-            tracing::error!(target: "global", "the Tor supervisor has no onion seed: {error}");
+            tracing::error!(target: "global", "the Tor supervisor has no onion key: {error}");
             return;
         }
     };
-    // The probe's isolation pair, minted beside the seed and held with it
+    // The probe's isolation pair, minted beside the onion and held with it
     // for the boot (§4.5): the probe's circuits are its own.
     let probe_pair = match IsolationPair::mint() {
         Ok(pair) => pair,
@@ -392,7 +393,7 @@ async fn drive(
         inbox,
         timer,
         forward: None,
-        seed,
+        onion,
         probe_pair,
         virtual_port,
         network,
@@ -437,8 +438,10 @@ struct Drive {
     timer: Timer,
     /// The zone host's forward listener, once bound.
     forward: Option<SocketAddr>,
-    seed: OnionSeed,
-    /// The probe's isolation pair, held beside the seed for the boot.
+    /// The boot's onion identity: the keypair Tor is handed on every
+    /// publish, held until the daemon stops.
+    onion: OnionIdentity,
+    /// The probe's isolation pair, held beside the onion for the boot.
     probe_pair: IsolationPair,
     virtual_port: u16,
     /// The network the route, the onion and the inbound facet are
@@ -1095,7 +1098,7 @@ impl Drive {
         };
         match control
             .republish(
-                &self.seed,
+                &self.onion,
                 self.virtual_port,
                 forward,
                 MAX_STREAMS,

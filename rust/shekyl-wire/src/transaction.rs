@@ -467,7 +467,7 @@ pub enum Input {
         key_image: [u8; 32],
     },
     /// Archival serve-credit response (dense tag `0x02`) — the KEPT half of a
-    /// pass record as an opaque blob, `RF-D1` / rule 40. `canonical_bytes` is
+    /// pass record as an opaque blob, `RF-D1`. `canonical_bytes` is
     /// the complete retention-codec encoding, leading tag byte included, the
     /// same shape as [`Input::ArchivalRewardEmission`].
     ServeCredit {

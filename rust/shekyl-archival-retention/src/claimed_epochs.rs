@@ -7,13 +7,11 @@
 //! encoding pinned 2026-06-11; window maintenance folded into the dedup
 //! helper per the v4-schema review round, 2026-06-12).
 //!
-//! The set itself is stored as an inline field on the C++ `ArchivalBondValue`
-//! LMDB codec (`src/blockchain_db/shekyl_types.h`, v4) — a strictly
-//! increasing list of absolute settlement-epoch indices. The *semantics* of
+//! The set itself is the bond record's `claimed_settlement_epochs`
+//! (`shekyl-types` `archival::bond`), a strictly increasing list of absolute
+//! settlement-epoch indices; the store holds it as bytes. The *semantics* of
 //! mutating it are consensus rules and live here only, mirroring the
-//! `good_through` split: C++ stores bytes, Rust decides
-//! (`20-rust-vs-cpp-policy.mdc`; coarse-call FFI discipline). The FFI wrapper
-//! lands with its first caller, the emission vin's connect path.
+//! `good_through` split: the store keeps the shape, this module decides.
 //!
 //! Window maintenance is part of [`claimed_epochs_check_and_set`], not a
 //! separate sweep:
