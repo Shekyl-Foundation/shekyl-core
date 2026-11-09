@@ -603,11 +603,7 @@ where
             .unwrap_or(BlockHeight::ZERO);
         let seed = Self::seed_of(&view, connecting)?;
         let target = match target_claim(&view, connecting, &(self.rules)(connecting)) {
-            Ok(Ok(target)) => target,
-            Ok(Err(refused)) => {
-                self.close(session, CloseCause::HeaderRefused(refused.rule), out);
-                return Ok(None);
-            }
+            Ok(target) => target,
             Err(Fault::View(fault)) => return Err(fault),
             Err(Fault::Stale(_) | Fault::Corrupt(_)) => {
                 self.spend(session, Spent::Stale, out);

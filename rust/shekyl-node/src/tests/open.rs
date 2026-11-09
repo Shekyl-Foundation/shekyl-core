@@ -99,7 +99,7 @@ fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
         block,
         height: BlockHeight::from_raw(1),
         seed: BlockHash::from_bytes([1; 32]),
-        difficulty: Difficulty::from_raw(1),
+        difficulty: Difficulty::ONE,
     });
     assert!(node.mining.board.posted().is_some(), "the job was posted");
     node.stop();

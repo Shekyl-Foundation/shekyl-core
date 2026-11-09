@@ -304,17 +304,14 @@ fn judge_rules<'id, P, H: HeaderView<'id>>(
     trust: &Trust,
 ) -> Result<Verdict<(Derived, RuleCoverage)>, Fault<H::Fault>> {
     let mut coverage = RuleCoverage::EMPTY;
-    let derived = match header_ladder::derive(
+    let derived = header_ladder::derive(
         facts.seed(),
         facts.target(),
         facts.attempt(),
         view,
         rule_set,
         &mut coverage,
-    )? {
-        Ok(derived) => derived,
-        Err(refused) => return Ok(Err(refused)),
-    };
+    )?;
     // The context borrows `derived`'s window. It ends before `derived` moves.
     {
         let cx = HeaderContext::from_derived(facts, &derived, trust);

@@ -33,8 +33,6 @@ use std::path::PathBuf;
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{AddOnionReplyError, SocksTimeout};
 
-#[cfg(target_os = "linux")]
-use crate::ephemeral::tests::tor_under;
 use crate::ephemeral::tests::wait_for_the_network;
 use crate::probe::{probe_own_onion, IsolationPair, ProbeDial};
 use crate::test_support::tor_binary;
@@ -348,7 +346,6 @@ async fn a_cold_start_is_reachable_and_the_probe_is_on_its_own_circuit() {
 /// republishes the same onion from the held seed, and is reachable again
 /// within the remedy.
 #[tokio::test]
-#[cfg(target_os = "linux")]
 #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
 async fn a_respawn_republishes_the_same_onion_and_is_reachable_again() {
     let binary = VerifiedTorBinary::unchecked_for_test(tor_binary());
@@ -388,12 +385,10 @@ async fn a_respawn_republishes_the_same_onion_and_is_reachable_again() {
 
     // Kill Tor, as a crash does, and respawn into the kept directory.
     let death = tokio::spawn(boot.death());
-    let pid = tor_under(parent.path()).expect("the tor under this parent");
-    let status = shekyl_tor_control_client::spawn_lock::status(
-        std::process::Command::new("kill").args(["-9", &pid.to_string()]),
-    )
-    .expect("kill");
-    assert!(status.success());
+    assert!(
+        shekyl_tor_control_client::outside_kill::kill_tor_named_by(parent.path()),
+        "the tor under this parent was found and killed"
+    );
     tokio::time::timeout(Duration::from_secs(30), death)
         .await
         .expect("the death is heard")

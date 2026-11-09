@@ -70,7 +70,7 @@ pub fn lwma1_next(
     // share GENESIS_DIFFICULTY; the algorithm computes against the
     // window only once chain_height has reached N.
     if chain_height.to_raw() < N {
-        return Ok(Difficulty::from_raw(GENESIS_DIFFICULTY));
+        return Ok(GENESIS);
     }
 
     // §5.3 step 1 boundary: when chain_height >= N, the window MUST
@@ -237,5 +237,24 @@ pub fn lwma1_next(
         r /= 10;
     }
 
-    Ok(Difficulty::from_raw(next_d))
+    // §5.3 step 10: the floor at one — Shekyl's departure from canonical
+    // zawy12 LWMA-1, which has none (Rick, 2026-11-07). A difficulty is
+    // the expected number of hashes per block and a block costs at least
+    // one, so one is the least value the quantity has: the floor states
+    // what difficulty means, it does not price anything. Without it the
+    // formula's tail is zero for `avg_D <= 6` with every solvetime at the
+    // `+6T` clamp (and, below ~100, integer truncation rounds every step
+    // down), and from zero `avg_D * k` stays zero: a chain that mined
+    // slowly enough would never mine again. From one it recovers — at one
+    // every hash is a block, solvetimes fall to the minimum-L floor, and
+    // the next window is about ten times the last. Every output that is
+    // not zero is unchanged.
+    Ok(Difficulty::new(next_d).unwrap_or(Difficulty::ONE))
 }
+
+/// The pre-window difficulty, non-zero: `consts.rs` pins
+/// `GENESIS_DIFFICULTY > 1` at build time.
+const GENESIS: Difficulty = match Difficulty::new(GENESIS_DIFFICULTY) {
+    Some(genesis) => genesis,
+    None => unreachable!(),
+};

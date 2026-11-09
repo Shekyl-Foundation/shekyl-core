@@ -1336,11 +1336,14 @@ impl Core {
         announce::SayKey::new(self.shown(), &self.cause, self.inbound)
     }
 
-    /// The relay's verdict moved. The posture sentence follows whether a
-    /// local origin leaves, so only that change is said: a recovery at once,
-    /// a loss once under the cap. The class moving on its own says nothing.
-    /// The same routable state again is not a change. Health still follows
-    /// the stored verdict.
+    /// The relay's verdict moved. Only a change in whether a local origin
+    /// leaves is said. A loss is one announcement under the cap. A recovery
+    /// is said at once, unless it retires a loss that has not been said: that
+    /// once is forgiven and nothing is said, so churn inside the cap is
+    /// silent. The first recovery, and a recovery after a loss that was said,
+    /// have no armed once, so they are said. The class moving on its own says
+    /// nothing. The same routable state again is not a change. Health still
+    /// follows the stored verdict.
     fn origin_verdict(&mut self, verdict: OriginVerdict, now: u64) -> Vec<Action> {
         let was_leaving = self.origin.origin_leaves();
         let leaves = verdict.origin_leaves();
@@ -1348,7 +1351,13 @@ impl Core {
         if was_leaving == leaves {
             return Vec::new();
         }
-        self.say(now, if leaves { Cadence::Now } else { Cadence::Once })
+        if !leaves {
+            return self.say(now, Cadence::Once);
+        }
+        if self.announcements.forgive_once(self.repeats_announcement()) {
+            return Vec::new();
+        }
+        self.say(now, Cadence::Now)
     }
 
     fn repeats_announcement(&self) -> bool {

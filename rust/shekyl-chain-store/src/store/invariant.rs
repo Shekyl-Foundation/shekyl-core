@@ -137,7 +137,7 @@ pub enum StoreInvariant {
     /// **SI-10** — recorded cumulative work strictly increases with height:
     /// `block_info[h].cumulative_difficulty > block_info[h−1].cumulative_difficulty`
     /// for every recorded `h ≥ 1`, because every block's target is at least
-    /// one (CEN-D6, `Target` is `NonZeroU128`).
+    /// one (CEN-D6: `Difficulty` is non-zero and LWMA-1 floors at one).
     ///
     /// The belt beneath CEN-D4. Unlike the rows above it is **not armed by a
     /// store write site** — the store records the work the verdict carries

@@ -115,9 +115,7 @@ async fn hash_rate_per_slot() {
             .map(|height| {
                 let at = BlockHeight::from_raw(height);
                 let rule_set = rules.in_force(at);
-                let target = target_claim(&view, at, &rule_set)
-                    .expect("a read")
-                    .expect("a target");
+                let target = target_claim(&view, at, &rule_set).expect("a read");
                 ProveItem {
                     pow: held.block(height).pow_blob(),
                     seed: BlockHash::from_bytes([0x5e; 32]),
