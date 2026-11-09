@@ -55,9 +55,9 @@ pub(crate) fn tell(out: &mut impl Write, line: &str) {
 /// account.
 #[must_use]
 pub fn main(args: &[OsString], platform: &Platform) -> i32 {
-    // Before anything installs a handler: what the program that started
-    // this node asked of an interrupt (Rick, 2026-11-08).
-    let interrupt = signals::Interrupt::at_start();
+    // Before any handler: what this process can know about an inherited
+    // ignore. On Unix that is `SIGINT`'s disposition.
+    let interrupt = signals::InheritedInterrupt::at_start();
     let (program, rest) = match args.split_first() {
         Some((p, rest)) => (p.clone(), rest.to_vec()),
         None => (OsString::from("shekyld"), Vec::new()),
@@ -158,9 +158,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
         &walked.warnings,
     );
     announced.rest.extend(mining_notice(&config));
-    announced
-        .rest
-        .extend(interrupt.announcement().map(str::to_owned));
+    announced.rest.extend(interrupt.line().map(str::to_owned));
     let lines = announced.into_lines();
     announce_all(&lines);
 
@@ -635,7 +633,7 @@ mod tests {
         let pool =
             shekyl_runtime::runtime(budget, &ThreadName::new("test-signals").unwrap()).unwrap();
         // Clears a stop an earlier test latched.
-        signals::own(pool.handle(), signals::Interrupt::Owned).expect("own");
+        signals::own(pool.handle(), signals::InheritedInterrupt::ordinary()).expect("own");
         let requester = std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_millis(100));
             crate::signals::request_stop();
@@ -736,7 +734,7 @@ mod tests {
             .build()
             .expect("runtime");
         // Clears a stop an earlier test latched.
-        signals::own(rt.handle(), signals::Interrupt::Owned).expect("own");
+        signals::own(rt.handle(), signals::InheritedInterrupt::ordinary()).expect("own");
         let (ended_tx, mut ended) = watch::channel(None);
         ended_tx.send_replace(Some(shekyl_node::SyncEnded::Stopped));
         let waited = rt.block_on(async {
@@ -773,7 +771,7 @@ mod tests {
             .enable_all()
             .build()
             .expect("runtime");
-        signals::own(rt.handle(), signals::Interrupt::Owned).expect("own");
+        signals::own(rt.handle(), signals::InheritedInterrupt::ordinary()).expect("own");
         signals::fatal(shekyl_node::EndCause::EngineClosed);
         let (_ended_tx, mut ended) = watch::channel(None);
         let wait = rt.block_on(run_or_stop(&mut ended));

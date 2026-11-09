@@ -18,6 +18,11 @@
 //!
 //! The latch is per daemon start: [`own`] clears it, so a request made
 //! before the owner existed does not stop the daemon it was not meant for.
+//!
+//! [`InheritedInterrupt`] is what the start can know about an inherited
+//! request to ignore the interrupt, read before any handler. On Unix an
+//! ignored `SIGINT` is not given a stream, so the disposition stays
+//! `SIG_IGN`.
 
 use std::fmt;
 use std::sync::Mutex;
@@ -124,59 +129,91 @@ pub fn fatal(cause: EndCause) {
     latch(StopCause::Fatal(cause));
 }
 
-/// What the program that started this node asked of an interrupt (Rick,
-/// 2026-11-08: honour an inherited ignore on every platform, and say so).
+/// What the start can know about an inherited request to ignore the
+/// interrupt, fixed before this process installs a handler.
 ///
-/// A parent that starts a program in the background asks it to ignore an
-/// interrupt, so that one typed at the parent's terminal leaves it alone. The
-/// node keeps that request and says which stops work instead.
+/// On Unix the request is `SIGINT` already being `SIG_IGN`: a
+/// non-interactive background list sets that, and so does `trap "" INT`.
+/// An interactive `&` does not, and `nohup` ignores `SIGHUP` rather than
+/// `SIGINT`. On Windows the request is the inherited ignore-Ctrl-C
+/// attribute, which has no documented read. `start /b` does not set it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Interrupt {
-    /// The node owns the interrupt: `SIGINT` or Ctrl-C stops it.
-    Owned,
-    /// `SIGINT` was ignored when the node started. The node leaves it
-    /// ignored and does not open its stream.
+pub enum InheritedInterrupt {
+    /// `SIGINT` was not `SIG_IGN`. The node opens its stream, and `SIGINT`
+    /// stops it.
     #[cfg(unix)]
-    IgnoredByParent,
+    Owned,
+    /// `SIGINT` was `SIG_IGN`. The node opens no `SIGINT` stream, so the
+    /// disposition stays ignored.
+    #[cfg(unix)]
+    Ignored,
+    /// The inherited ignore-Ctrl-C attribute cannot be read. The node opens
+    /// every console handler. Windows delivers Ctrl-C only when the
+    /// attribute is clear, and installing a handler does not clear it.
+    #[cfg(windows)]
+    Unreadable,
 }
 
-impl Interrupt {
-    /// The request, read before anything in the node installs a handler.
-    /// On Windows it cannot be read: the inherited "ignore Ctrl-C"
-    /// attribute has no documented getter, so the node owns Ctrl-C and
-    /// Windows delivers it or not.
+/// Said when Unix leaves an inherited `SIG_IGN` in place (IG-14).
+#[cfg(unix)]
+const IGNORED_LINE: &str =
+    "Ctrl-C is off because the program that started this node asked for it. \
+     Stop it with SIGTERM or the service stop.";
+
+/// Said on every Windows start: the stops that work whether or not the
+/// unreadable attribute is set (IG-14).
+#[cfg(windows)]
+const UNREADABLE_LINE: &str =
+    "Stop this node with Ctrl-Break or by closing its window. Ctrl-C stops it \
+     too, unless the program that started it asked for Ctrl-C to be ignored, \
+     which Windows does not let this node read.";
+
+impl InheritedInterrupt {
+    /// The observation, before anything in the node installs a handler.
     #[must_use]
     pub fn at_start() -> Self {
         #[cfg(unix)]
-        if shekyl_process::interrupt::interrupt_ignored_at_start() {
-            return Self::IgnoredByParent;
-        }
-        Self::Owned
-    }
-
-    /// The line the start announces about it (IG-14). On Unix, only when
-    /// the parent asked for the interrupt to be ignored. On Windows always:
-    /// the node cannot tell, so it names the stops that work either way.
-    #[must_use]
-    pub fn announcement(self) -> Option<&'static str> {
-        #[cfg(unix)]
         {
-            match self {
-                Self::Owned => None,
-                Self::IgnoredByParent => Some(
-                    "Ctrl-C is off because the program that started this node asked for it. \
-                     Stop it with SIGTERM or the service stop.",
-                ),
+            if shekyl_process::interrupt::sigint_is_ignored() {
+                Self::Ignored
+            } else {
+                Self::Owned
             }
         }
         #[cfg(windows)]
         {
-            let Self::Owned = self;
-            Some(
-                "Stop this node with Ctrl-Break or by closing its window. Ctrl-C stops it \
-                 too, unless the program that started it asked for Ctrl-C to be ignored, \
-                 which Windows does not let this node read.",
-            )
+            Self::Unreadable
+        }
+    }
+
+    /// The IG-14 line this observation owes, if it owes one.
+    ///
+    /// Unix owes a line only when `SIGINT` was ignored. Windows owes its
+    /// line on every start, because the attribute cannot be read.
+    #[must_use]
+    pub fn line(self) -> Option<&'static str> {
+        match self {
+            #[cfg(unix)]
+            Self::Owned => None,
+            #[cfg(unix)]
+            Self::Ignored => Some(IGNORED_LINE),
+            #[cfg(windows)]
+            Self::Unreadable => Some(UNREADABLE_LINE),
+        }
+    }
+
+    /// What tests pass to [`own`] when the test is not about an inherited
+    /// ignore. On Unix the node takes `SIGINT`. On Windows the attribute
+    /// stays unreadable.
+    #[cfg(test)]
+    pub(crate) fn ordinary() -> Self {
+        #[cfg(unix)]
+        {
+            Self::Owned
+        }
+        #[cfg(windows)]
+        {
+            Self::Unreadable
         }
     }
 }
@@ -184,61 +221,82 @@ impl Interrupt {
 /// Install the owner of the operating system's stop triggers on `handle`:
 /// the streams are opened here, so a platform that refuses one refuses the
 /// start, and held by a task for the process's life. Clears the latch.
-/// `interrupt` is [`Interrupt::at_start`]: on Unix an interrupt the parent
-/// asked to ignore gets no stream, so its disposition stays `SIG_IGN`.
+/// `interrupt` is [`InheritedInterrupt::at_start`].
 ///
 /// # Errors
 /// The operating system refused a stream.
-pub fn own(handle: &tokio::runtime::Handle, interrupt: Interrupt) -> std::io::Result<()> {
+pub fn own(handle: &tokio::runtime::Handle, interrupt: InheritedInterrupt) -> std::io::Result<()> {
     *STOP
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-        let (interrupt, mut terminate) = handle.block_on(async {
-            let interrupt = match interrupt {
-                Interrupt::Owned => Some(signal(SignalKind::interrupt())?),
-                Interrupt::IgnoredByParent => None,
-            };
-            Ok::<_, std::io::Error>((interrupt, signal(SignalKind::terminate())?))
-        })?;
-        handle.spawn(async move {
-            let interrupted = async {
-                match interrupt {
-                    Some(mut stream) => stream.recv().await,
-                    None => std::future::pending().await,
-                }
-            };
-            tokio::select! {
-                _ = interrupted => latch(StopCause::Signal(Signal::Interrupt)),
-                _ = terminate.recv() => latch(StopCause::Signal(Signal::Terminate)),
-            }
-        });
+    match interrupt {
+        #[cfg(unix)]
+        InheritedInterrupt::Owned | InheritedInterrupt::Ignored => install_posix(handle, interrupt),
+        #[cfg(windows)]
+        InheritedInterrupt::Unreadable => install_console(handle),
     }
-    #[cfg(windows)]
-    {
-        use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_logoff, ctrl_shutdown};
-        let Interrupt::Owned = interrupt;
-        let (mut c, mut brk, mut close, mut logoff, mut shutdown) = handle.block_on(async {
-            Ok::<_, std::io::Error>((
-                ctrl_c()?,
-                ctrl_break()?,
-                ctrl_close()?,
-                ctrl_logoff()?,
-                ctrl_shutdown()?,
-            ))
-        })?;
-        handle.spawn(async move {
-            tokio::select! {
-                _ = c.recv() => latch(StopCause::Signal(Signal::CtrlC)),
-                _ = brk.recv() => latch(StopCause::Signal(Signal::CtrlBreak)),
-                _ = close.recv() => latch(StopCause::Signal(Signal::WindowClose)),
-                _ = logoff.recv() => latch(StopCause::Signal(Signal::Logoff)),
-                _ = shutdown.recv() => latch(StopCause::Signal(Signal::Shutdown)),
-            }
-        });
-    }
+}
+
+/// `SIGTERM`, and `SIGINT` when `interrupt` is [`InheritedInterrupt::Owned`].
+///
+/// An [`InheritedInterrupt::Ignored`] arm completes with `None` at once.
+/// `select` disables an arm whose pattern missed, so the task waits on
+/// `SIGTERM` only and the `SIG_IGN` disposition is never replaced.
+#[cfg(unix)]
+fn install_posix(
+    handle: &tokio::runtime::Handle,
+    interrupt: InheritedInterrupt,
+) -> std::io::Result<()> {
+    use tokio::signal::unix::{signal, SignalKind};
+    let (mut sigint, mut sigterm) = handle.block_on(async {
+        let sigint = match interrupt {
+            InheritedInterrupt::Owned => Some(signal(SignalKind::interrupt())?),
+            InheritedInterrupt::Ignored => None,
+        };
+        Ok::<_, std::io::Error>((sigint, signal(SignalKind::terminate())?))
+    })?;
+    handle.spawn(async move {
+        tokio::select! {
+            Some(()) = sigint_stop(&mut sigint) => latch(StopCause::Signal(Signal::Interrupt)),
+            _ = sigterm.recv() => latch(StopCause::Signal(Signal::Terminate)),
+        }
+    });
+    Ok(())
+}
+
+/// `Some` when `sigint` was opened and then fired. `None` at once when it
+/// was not opened, which disables the caller's `select` arm.
+#[cfg(unix)]
+async fn sigint_stop(sigint: &mut Option<tokio::signal::unix::Signal>) -> Option<()> {
+    let stream = sigint.as_mut()?;
+    stream.recv().await;
+    Some(())
+}
+
+/// Every Windows console event. The inherited ignore-Ctrl-C attribute is
+/// [`InheritedInterrupt::Unreadable`]; opening `ctrl_c` does not clear it,
+/// and Windows withholds Ctrl-C while it is set.
+#[cfg(windows)]
+fn install_console(handle: &tokio::runtime::Handle) -> std::io::Result<()> {
+    use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_logoff, ctrl_shutdown};
+    let (mut c, mut brk, mut close, mut logoff, mut shutdown) = handle.block_on(async {
+        Ok::<_, std::io::Error>((
+            ctrl_c()?,
+            ctrl_break()?,
+            ctrl_close()?,
+            ctrl_logoff()?,
+            ctrl_shutdown()?,
+        ))
+    })?;
+    handle.spawn(async move {
+        tokio::select! {
+            _ = c.recv() => latch(StopCause::Signal(Signal::CtrlC)),
+            _ = brk.recv() => latch(StopCause::Signal(Signal::CtrlBreak)),
+            _ = close.recv() => latch(StopCause::Signal(Signal::WindowClose)),
+            _ = logoff.recv() => latch(StopCause::Signal(Signal::Logoff)),
+            _ = shutdown.recv() => latch(StopCause::Signal(Signal::Shutdown)),
+        }
+    });
     Ok(())
 }
 
@@ -290,7 +348,7 @@ mod tests {
         let _serial = crate::run::hold_process_table();
         let rt = runtime();
         request_stop();
-        own(rt.handle(), Interrupt::Owned).expect("own");
+        own(rt.handle(), InheritedInterrupt::ordinary()).expect("own");
         let waited = rt.block_on(async {
             tokio::time::timeout(std::time::Duration::from_millis(50), stop_requested()).await
         });
@@ -307,17 +365,17 @@ mod tests {
     }
 
     /// What the start says about an interrupt. On Unix only an ignored
-    /// `SIGINT` is said, with the stop that works; on Windows the request
+    /// `SIGINT` is said, with the stop that works; on Windows the attribute
     /// cannot be read, so every start names the stops that always work.
     /// Red edits: say nothing on Windows, or say the Unix line when the node
-    /// owns `SIGINT`.
+    /// takes `SIGINT`.
     #[test]
     fn the_start_names_the_stops_that_work() {
         #[cfg(unix)]
         {
-            assert_eq!(Interrupt::Owned.announcement(), None);
-            let line = Interrupt::IgnoredByParent
-                .announcement()
+            assert_eq!(InheritedInterrupt::Owned.line(), None);
+            let line = InheritedInterrupt::Ignored
+                .line()
                 .expect("an ignored SIGINT is said");
             assert!(
                 line.contains("Ctrl-C is off") && line.contains("SIGTERM"),
@@ -326,8 +384,8 @@ mod tests {
         }
         #[cfg(windows)]
         {
-            let line = Interrupt::Owned
-                .announcement()
+            let line = InheritedInterrupt::Unreadable
+                .line()
                 .expect("every Windows start names its stops");
             assert!(
                 line.contains("Ctrl-Break") && line.contains("closing its window"),

@@ -253,32 +253,38 @@ What crosses the FFI after the cutover, and nothing else:
    is released last, after both. `run` and `stop` are `noexcept` and catch every C++ exception;
    `run` returns its status to Rust, which becomes the exit status.
 
-   **An interrupt the parent asked the daemon to ignore stays ignored, and
-   the start says so** (Rick, 2026-11-08). A parent that starts a program in
-   the background asks it to ignore an interrupt, so that one typed at the
-   parent's terminal leaves it alone: a shell's background job, `nohup`,
-   `start /b`. The request is inherited and is read once at start, before
-   anything installs a handler (`shekyl-process` `interrupt`,
-   `shekyl-daemon` `signals::Interrupt`).
+   **An inherited ignore of the interrupt stays ignored, and the start
+   says so** (Rick, 2026-11-08). The observation is `shekyl-daemon`
+   `signals::InheritedInterrupt`, read once at start, before anything
+   installs a handler. On Unix the read is `shekyl-process`
+   `interrupt::sigint_is_ignored`.
    - **Unix:** `SIGINT`'s disposition, read with `sigaction` and a null new
-     action. When it is `SIG_IGN` the `SIGINT` stream is not opened, so the
-     disposition stays as the parent left it, and the start announces
-     "Ctrl-C is off because the program that started this node asked for
-     it. Stop it with SIGTERM or the service stop." `SIGTERM` is unchanged.
-     Tested by a daemon started under `trap "" INT`
+     action. The request is `SIG_IGN`. A non-interactive shell sets that for
+     a background list (`sh -c 'shekyld &'`), and `trap "" INT` sets it too.
+     An interactive `&` does not: job control leaves the disposition alone,
+     and the terminal signals the foreground process group. `nohup` sets
+     `SIGHUP` to `SIG_IGN`, not `SIGINT`. When the disposition is `SIG_IGN`
+     the `SIGINT` stream is not opened, so it stays as the parent left it,
+     and the start announces "Ctrl-C is off because the program that started
+     this node asked for it. Stop it with SIGTERM or the service stop."
+     `SIGTERM` is unchanged. Tested by a daemon whose `SIGINT` is set to
+     `SIG_IGN` or `SIG_DFL` between fork and exec
      (`tests/interrupt_inherited_ignore.rs`).
    - **Windows:** the request is the inherited "ignore Ctrl-C" attribute
-     (`SetConsoleCtrlHandler(NULL, TRUE)`), and no documented call reads it
-     back. The daemon keeps honouring it, because Windows does not deliver
-     Ctrl-C to such a process, and every start announces the stops that work
-     whatever it holds: "Stop this node with Ctrl-Break or by closing its
-     window. Ctrl-C stops it too, unless the program that started it asked
-     for Ctrl-C to be ignored, which Windows does not let this node read."
-     `shekyld` has no service-control handler, so the line names no service
-     stop. Measured on Windows Server 2025, 2026-11-08: a daemon started from
-     a process chain that ignored Ctrl-C did not stop on it, and Tor, which
-     shares its console, did not either; with the attribute cleared before
-     the start, Ctrl-C stopped it in 1.5 s (`TOR_SUPERVISOR.md` §7).
+     (`SetConsoleCtrlHandler(NULL, TRUE)`). No documented call reads it, so
+     the observation is `Unreadable` and the node does not invent a value.
+     `start /b` does not set the attribute; it only shares the parent's
+     console. The daemon opens its console handlers either way. Opening them
+     does not clear the attribute, and Windows does not deliver Ctrl-C while
+     it is set. Every start announces the stops that work whatever it holds:
+     "Stop this node with Ctrl-Break or by closing its window. Ctrl-C stops
+     it too, unless the program that started it asked for Ctrl-C to be
+     ignored, which Windows does not let this node read." `shekyld` has no
+     service-control handler, so the line names no service stop. Measured on
+     Windows Server 2025, 2026-11-08: a daemon started from a process chain
+     that ignored Ctrl-C did not stop on it, and Tor, which shares its
+     console, did not either; with the attribute cleared before the start,
+     Ctrl-C stopped it in 1.5 s (`TOR_SUPERVISOR.md` §7).
 
 `tools::signal_handler::install` in `Daemon::run`
 (line 272 of `src/daemon/daemon.cpp` at `e8838b0095`) is deleted:

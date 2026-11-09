@@ -12,13 +12,17 @@
 //! - [`panic_hook`]: a panic is never silent under `panic = "abort"`.
 //! - [`platform`]: the account's home and the machine's roots from the
 //!   account interface, never `HOME`, `XDG_*` or `%APPDATA%` (IG-13).
-//! - [`interrupt`]: whether the program that started the daemon asked it to
-//!   ignore an interrupt, read before anything installs a handler.
 //!
-//! The `unsafe` here is the operating-system calls these four make; the
+//! On Unix, `interrupt` reads whether `SIGINT` is ignored, before a handler
+//! is installed. Windows has no documented read of the inherited
+//! ignore-Ctrl-C attribute, so that module is Unix-only; the daemon records
+//! the attribute as unreadable and does not pretend to have observed it.
+//!
+//! The `unsafe` here is the operating-system calls these modules make; the
 //! daemon that calls them is safe Rust.
 
 pub mod harden;
+#[cfg(unix)]
 pub mod interrupt;
 pub mod panic_hook;
 pub mod platform;

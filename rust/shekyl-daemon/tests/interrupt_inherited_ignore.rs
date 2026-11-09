@@ -3,52 +3,68 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The node honours an interrupt its parent asked it to ignore, and says so
-//! (Rick, 2026-11-08). A parent starts a program in the background with
-//! `SIGINT` ignored so that an interrupt typed at its terminal leaves the
-//! program alone; the node keeps that, announces that Ctrl-C is off and how
-//! to stop it, and still stops on `SIGTERM`. With no such request, `SIGINT`
-//! stops it as before.
+//! The node keeps `SIGINT` ignored when that is the disposition at start,
+//! and says so.
 //!
-//! Each test starts a whole daemon in a child process, offline on regtest:
-//! this test binary run again as [`the_daemon_child`], which runs the start
-//! sequence (`shekyl_daemon::run::main`). A disposition is process-wide and
-//! inherited across `exec`, so only a child shows what a parent's request
-//! does. The ignored disposition comes from `sh`'s `trap "" INT` before the
-//! `exec`, as a shell's background job gets it.
+//! The disposition is `SIG_IGN` for a non-interactive background list
+//! (`sh -c 'shekyld &'`) and for `trap "" INT`. An interactive `&` does not
+//! set it: job control leaves the disposition alone and the terminal signals
+//! the foreground process group. `nohup` ignores `SIGHUP`, not `SIGINT`.
+//!
+//! Each test re-executes itself. Between fork and exec it sets `SIGINT` to
+//! `SIG_IGN` or `SIG_DFL`, so the child inherits the arm's disposition and
+//! not this process's. The child runs `shekyl_daemon::run::main`. The
+//! announcement is queued, so the test waits until the line is in the log
+//! before it signals, and it judges the absence of the line only after the
+//! child has exited and flushed.
 
 #![cfg(unix)]
 
-use std::ffi::OsString;
+use std::fs::File;
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use shekyl_daemon_config::Platform;
 
-/// The child's working directory. Set only by the tests below.
+/// The child's working directory. Set only when this binary is the child.
 const CHILD_DIR: &str = "SHEKYL_TEST_INTERRUPT_CHILD_DIR";
-/// The child's admin RPC port: its bind is the sign that the stop owner is
-/// installed, because the start owns the stop triggers before the RPC starts.
+/// The child's admin RPC port. Its bind is the sign that the stop owner is
+/// installed: the start owns the stop triggers before the RPC listens.
 const CHILD_PORT: &str = "SHEKYL_TEST_INTERRUPT_CHILD_PORT";
 
-/// The line the start announces when `SIGINT` was ignored.
-const SHIELD_LINE: &str = "Ctrl-C is off because the program that started this node asked for it. \
-                           Stop it with SIGTERM or the service stop.";
+/// The line the start announces when `SIGINT` was `SIG_IGN`.
+const IGNORED_LINE: &str =
+    "Ctrl-C is off because the program that started this node asked for it. \
+     Stop it with SIGTERM or the service stop.";
 
-/// The daemon the tests below start. It runs only as their child: without
-/// [`CHILD_DIR`] it returns at once.
-#[test]
-#[ignore = "the daemon the interrupt tests start, as their child"]
-fn the_daemon_child() {
+/// How long the RPC may take to listen.
+const RPC_READY: Duration = Duration::from_secs(120);
+/// How long a queued announcement may take to reach the log after the RPC
+/// is up.
+const LINE_ON_DISK: Duration = Duration::from_secs(10);
+/// How long an ignored `SIGINT` must leave the node running.
+const IGNORED_HOLDS: Duration = Duration::from_secs(3);
+/// How long a real stop may take.
+const STOP_ARRIVES: Duration = Duration::from_secs(60);
+/// Spacing of the readiness polls.
+const POLL: Duration = Duration::from_millis(50);
+
+/// Run the daemon and exit with its status when this process is the child.
+/// A parent call, with neither variable set, returns.
+fn run_child_if_requested() {
     let (Some(dir), Some(port)) = (std::env::var_os(CHILD_DIR), std::env::var_os(CHILD_PORT))
     else {
         return;
     };
     let dir = PathBuf::from(dir);
     let port = port.into_string().expect("a port number");
-    let args: Vec<OsString> = [
+    let listen = format!("127.0.0.1:{port}");
+    let data_dir = dir.join("data");
+    let log_file = dir.join("shekyld.log");
+    let args: Vec<std::ffi::OsString> = [
         "shekyld",
         "--network",
         "regtest",
@@ -57,14 +73,14 @@ fn the_daemon_child() {
         "--tor",
         "off",
         "--rpc-admin-listen",
-        &format!("127.0.0.1:{port}"),
+        listen.as_str(),
         "--data-dir",
-        dir.join("data").to_str().expect("a UTF-8 path"),
+        data_dir.to_str().expect("a UTF-8 path"),
         "--log-file",
-        dir.join("shekyld.log").to_str().expect("a UTF-8 path"),
+        log_file.to_str().expect("a UTF-8 path"),
     ]
     .iter()
-    .map(OsString::from)
+    .map(std::ffi::OsString::from)
     .collect();
     let status = shekyl_daemon::run::main(
         &args,
@@ -84,29 +100,40 @@ struct Node {
 }
 
 impl Node {
-    /// Start [`the_daemon_child`], with `SIGINT` ignored at its start when
-    /// `ignored`, and return once its RPC answers.
-    fn start(ignored: bool) -> Self {
+    /// Start this test binary again as `test_name`, with `SIGINT` set to
+    /// `SIG_IGN` when `ignored` and to `SIG_DFL` otherwise. Returns once
+    /// the RPC accepts a connection.
+    fn start(test_name: &str, ignored: bool) -> Self {
         let dir = tempfile::tempdir().expect("a directory");
         let port = TcpListener::bind("127.0.0.1:0")
-            .and_then(|l| l.local_addr())
+            .and_then(|listener| listener.local_addr())
             .expect("a free port")
             .port();
-        let me = std::env::current_exe().expect("this test binary");
-        let mut command = if ignored {
-            let mut sh = Command::new("/bin/sh");
-            sh.args(["-c", r#"trap "" INT; exec "$0" "$@""#]).arg(&me);
-            sh
-        } else {
-            Command::new(&me)
-        };
+        let stderr = File::create(dir.path().join("stderr")).expect("the stderr file");
+        let mut command = Command::new(std::env::current_exe().expect("this test binary"));
         command
-            .args(["--exact", "the_daemon_child", "--ignored", "--nocapture"])
+            .args(["--exact", test_name, "--nocapture"])
             .env(CHILD_DIR, dir.path())
             .env(CHILD_PORT, port.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::from(stderr));
+        // SAFETY: the closure runs between fork and exec and calls only
+        // `signal`, which is async-signal-safe, plus the errno read on
+        // failure. It sets this child's `SIGINT` and no other state.
+        unsafe {
+            command.pre_exec(move || {
+                let disposition = if ignored {
+                    libc::SIG_IGN
+                } else {
+                    libc::SIG_DFL
+                };
+                if libc::signal(libc::SIGINT, disposition) == libc::SIG_ERR {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
         let child = shekyl_tor_control_client::spawn_lock::with(|| command.spawn())
             .expect("the daemon child starts");
         let mut node = Self { child, dir, port };
@@ -115,24 +142,56 @@ impl Node {
     }
 
     fn wait_for_rpc(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(120);
+        let deadline = Instant::now() + RPC_READY;
         while Instant::now() < deadline {
             if let Some(status) = self.child.try_wait().expect("the child's state") {
                 panic!(
                     "the daemon ended before its RPC answered: {status}\n{}",
-                    self.log()
+                    self.evidence()
                 );
             }
             if TcpStream::connect(("127.0.0.1", self.port)).is_ok() {
                 return;
             }
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(POLL);
         }
-        panic!("the daemon's RPC did not answer in 120 s\n{}", self.log());
+        panic!(
+            "the daemon's RPC did not answer in {} s\n{}",
+            RPC_READY.as_secs(),
+            self.evidence()
+        );
+    }
+
+    /// Wait until `line` is a whole log line, or the deadline passes.
+    /// The announcement is queued; the RPC being up does not mean the
+    /// writer has reached the file yet.
+    fn wait_for_line(&mut self, line: &str) -> bool {
+        let deadline = Instant::now() + LINE_ON_DISK;
+        while Instant::now() < deadline {
+            if let Some(status) = self.child.try_wait().expect("the child's state") {
+                panic!(
+                    "the daemon ended while the log was unread: {status}\n{}",
+                    self.evidence()
+                );
+            }
+            if self.log().lines().any(|entry| entry == line) {
+                return true;
+            }
+            std::thread::sleep(POLL);
+        }
+        false
     }
 
     fn log(&self) -> String {
         std::fs::read_to_string(self.dir.path().join("shekyld.log")).unwrap_or_default()
+    }
+
+    fn stderr(&self) -> String {
+        std::fs::read_to_string(self.dir.path().join("stderr")).unwrap_or_default()
+    }
+
+    fn evidence(&self) -> String {
+        format!("log:\n{}\nstderr:\n{}", self.log(), self.stderr())
     }
 
     /// Send `signal` (`INT` or `TERM`) with `kill`.
@@ -151,7 +210,7 @@ impl Node {
             if let Some(status) = self.child.try_wait().expect("the child's state") {
                 return Some(status);
             }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(POLL);
         }
         None
     }
@@ -166,50 +225,64 @@ impl Drop for Node {
     }
 }
 
-/// **`SIGINT` ignored at start:** the node announces that Ctrl-C is off and
-/// how to stop it, a `SIGINT` does not stop it, and `SIGTERM` stops it
-/// cleanly. Red edits: open the `SIGINT` stream whatever the parent asked
-/// (the node stops on `SIGINT`), or drop the announcement (no line).
+/// **`SIGINT` is `SIG_IGN` at start:** the node announces that Ctrl-C is off
+/// and how to stop it, a `SIGINT` does not stop it, and `SIGTERM` stops it
+/// cleanly. Red edits: open the `SIGINT` stream whatever the disposition
+/// was (the node stops on `SIGINT`), or drop the announcement (no line).
 #[test]
 fn an_interrupt_the_parent_ignored_does_not_stop_the_node() {
-    let mut node = Node::start(true);
-    let log = node.log();
-    assert!(log.lines().any(|line| line == SHIELD_LINE), "{log}");
+    const NAME: &str = "an_interrupt_the_parent_ignored_does_not_stop_the_node";
+    run_child_if_requested();
+    let mut node = Node::start(NAME, true);
+    assert!(
+        node.wait_for_line(IGNORED_LINE),
+        "the ignored-SIGINT line was not in the log within {} s\n{}",
+        LINE_ON_DISK.as_secs(),
+        node.evidence()
+    );
     node.send("INT");
     assert_eq!(
-        node.ended_within(Duration::from_secs(3)),
+        node.ended_within(IGNORED_HOLDS),
         None,
-        "SIGINT stopped a node whose parent asked it to ignore SIGINT\n{}",
-        node.log()
+        "SIGINT stopped a node whose SIGINT was SIG_IGN\n{}",
+        node.evidence()
     );
     node.send("TERM");
     let status = node
-        .ended_within(Duration::from_secs(60))
-        .unwrap_or_else(|| panic!("SIGTERM did not stop the node\n{}", node.log()));
-    assert!(status.success(), "{status}\n{}", node.log());
+        .ended_within(STOP_ARRIVES)
+        .unwrap_or_else(|| panic!("SIGTERM did not stop the node\n{}", node.evidence()));
+    assert!(status.success(), "{status}\n{}", node.evidence());
     let log = node.log();
     assert!(
         log.lines().any(|line| line == "stop requested by SIGTERM"),
-        "{log}"
+        "{}",
+        node.evidence()
     );
 }
 
-/// **No request:** `SIGINT` stops the node cleanly, and nothing is said
-/// about Ctrl-C. Red edit: never open the `SIGINT` stream (the node does
-/// not stop), or announce the line whatever the parent asked.
+/// **`SIGINT` is `SIG_DFL` at start:** `SIGINT` stops the node cleanly, and
+/// the ignored-SIGINT line is absent from the flushed log. Red edit: never
+/// open the `SIGINT` stream (the node does not stop), or announce the line
+/// on this arm.
 #[test]
 fn an_interrupt_with_no_request_stops_the_node() {
-    let mut node = Node::start(false);
-    let log = node.log();
-    assert!(!log.contains("Ctrl-C is off"), "{log}");
+    const NAME: &str = "an_interrupt_with_no_request_stops_the_node";
+    run_child_if_requested();
+    let mut node = Node::start(NAME, false);
     node.send("INT");
     let status = node
-        .ended_within(Duration::from_secs(60))
-        .unwrap_or_else(|| panic!("SIGINT did not stop the node\n{}", node.log()));
-    assert!(status.success(), "{status}\n{}", node.log());
+        .ended_within(STOP_ARRIVES)
+        .unwrap_or_else(|| panic!("SIGINT did not stop the node\n{}", node.evidence()));
+    assert!(status.success(), "{status}\n{}", node.evidence());
     let log = node.log();
     assert!(
         log.lines().any(|line| line == "stop requested by SIGINT"),
-        "{log}"
+        "{}",
+        node.evidence()
+    );
+    assert!(
+        !log.lines().any(|line| line == IGNORED_LINE),
+        "a default SIGINT announced that Ctrl-C was off\n{}",
+        node.evidence()
     );
 }
