@@ -11,8 +11,8 @@
 
 use shekyl_wire::tx_extra::{
     self, KemCiphertext, MultisigEntry, MultisigEntryError, TxExtraField, HYBRID_KEM_CT_BYTES,
-    ML_KEM_768_CT_BYTES, MULTISIG_MAX_MEMBERS, PQC_LEAF_ENTRY_LEN, TX_EXTRA_TAG_NONCE,
-    TX_EXTRA_TAG_PQC_MULTISIG,
+    ML_KEM_768_CT_BYTES, MULTISIG_HASHES_TAG_BYTES, MULTISIG_KEY_HASH_BYTES, MULTISIG_MAX_MEMBERS,
+    MULTISIG_MEMBER_WIRE_STRIDE, PQC_LEAF_ENTRY_LEN, TX_EXTRA_TAG_NONCE, TX_EXTRA_TAG_PQC_MULTISIG,
 };
 use shekyl_wire::Block;
 
@@ -507,7 +507,10 @@ fn multisig_entries_round_trip_at_their_exact_length() {
     // two-byte varint.
     assert_eq!(bytes.len(), 1 + 2 + payload);
     assert_eq!(tx_extra::parse(&bytes).unwrap(), fields);
-    assert_eq!(MultisigEntry::wire_len(3), 2 + 3 * 1152 + 16);
+    assert_eq!(
+        MultisigEntry::wire_len(3),
+        2 + 3 * MULTISIG_MEMBER_WIRE_STRIDE + MULTISIG_HASHES_TAG_BYTES
+    );
     let TxExtraField::PqcMultisig(parsed) = &tx_extra::parse(&bytes).unwrap()[0] else {
         panic!("0x0d parses to PqcMultisig");
     };
@@ -528,14 +531,14 @@ fn multisig_entry_refuses_a_bad_member_count_or_hash_length() {
     );
     let six = vec![ct.clone(); usize::from(MULTISIG_MAX_MEMBERS) + 1];
     assert_eq!(
-        MultisigEntry::new(0, six, vec![0; 6 * 32 + 16]),
+        MultisigEntry::new(0, six, vec![0; MultisigEntry::enc_key_hashes_len(6)]),
         Err(MultisigEntryError::MemberCount { n: 6 })
     );
     assert_eq!(
-        MultisigEntry::new(0, vec![ct], vec![0; 32]),
+        MultisigEntry::new(0, vec![ct], vec![0; MULTISIG_KEY_HASH_BYTES]),
         Err(MultisigEntryError::EncryptedHashesLength {
-            got: 32,
-            expected: 48
+            got: MULTISIG_KEY_HASH_BYTES,
+            expected: MultisigEntry::enc_key_hashes_len(1)
         })
     );
 }
