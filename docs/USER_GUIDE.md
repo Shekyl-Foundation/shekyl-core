@@ -858,7 +858,7 @@ the reward. This happens transparently -- no configuration needed.
 
 Shekyl's multisig requires M-of-N participants to authorise a spend. It
 uses the same hybrid Ed25519 + ML-DSA-65 signature scheme as single-signer
-transactions, with a maximum of 7 participants.
+transactions, with a maximum of 5 participants.
 
 ### How it works
 
@@ -901,8 +901,8 @@ authentication material (~5.4 KB solo baseline via `pqc_auth_weight()`).
 | 5-of-5 | ~27 KB | ~5.0× |
 
 Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
-5-of-5 — see `V3_ROLLOUT.md`. Target cap is
-`MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G; code still `= 7` until MSW-1).
+5-of-5 — see `V3_ROLLOUT.md`. The cap is
+`MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G).
 
 ### Use cases
 

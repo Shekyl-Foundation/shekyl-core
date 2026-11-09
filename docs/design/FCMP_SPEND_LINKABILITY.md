@@ -127,10 +127,10 @@ the hash-and-lookup chain. Each candidate was checked at source:
   the leaf's published scalar would fail verification. **A valid spend is
   therefore linkable by construction**; the two checks above are redundant
   with the proof's own correctness.
-- **Multisig (`PQC_SCHEME_MULTISIG`)?** Same. The leaf hash is over the
-  canonical `MultisigKeyContainer` and the spend must present it byte-identical
-  (`docs/PQC_MULTISIG.md:653–670`; `tx_pqc_verify.cpp:208–219` accepts the
-  blob and hashes it on the same path).
+- **Multisig (`PQC_SCHEME_MULTISIG`)?** Same. The leaf commits to the
+  container's committed form `0x02 ‖ n ‖ m ‖ h_1 … h_n`, and the spend must
+  present it byte-identical at the front of its key blob (`docs/PQC_MULTISIG.md`
+  §7.5; both verifiers derive `k` from it, `pqc_leaf_key_bytes`).
 - **Membership-only (emission backing)?** Same. `verify_membership_only`
   takes `pqc_pk_hashes` (`proof.rs:1118`); the emission vin reveals
   `backing_pubkey` and verify recomputes `hash_pqc_public_key` of it

@@ -7,19 +7,16 @@
 //! producing a signature share. Failure of any check aborts signing,
 //! publishes an InvariantViolation, and moves the intent to REJECTED.
 //!
-//! The invariants are numbered I1–I7 per the spec:
+//! The invariants are numbered per the spec:
 //!
 //! - I1: SpendIntent structural + group binding (§9.2)
 //! - I2: Chain state fingerprint agreement (§9.3)
 //! - I3: FCMP++ proof verification against signing_payload
 //! - I4: BP+ proof deterministic match (§10.2)
-//! - I7: Receive-time output validation (§8.3, enforced at scan time)
 //!
-//! I5 (prover assignment) and I6 (assembly consensus) belonged to the
-//! Option-D prover lineage and were excised with it under R1-F-6; Option E′
-//! (§15.4a) rewrites the spend-time and assembly-time checks fresh under
-//! MS-5, so the `InvariantId` discriminants 5 and 6 are intentionally left
-//! as gaps here (this enum is internal and never serialized — see below).
+//! Discriminants 5, 6 and 7 are gaps (this enum is internal and never
+//! serialized — see below). A multisig output's receive check is a scan
+//! verdict (§8.2, `shekyl-scanner`), not a signer invariant.
 
 use shekyl_units::AtomicUnits;
 
@@ -27,8 +24,8 @@ use shekyl_units::AtomicUnits;
 ///
 /// This enum is internal to honest-signer abort reporting and is **never
 /// serialized** (no `Serialize`/`Deserialize`; its wire consumer went out
-/// with the Option-D `InvariantViolation` struct). Discriminants 5 and 6
-/// (former I5/I6) are therefore free to remain gaps.
+/// with the Option-D `InvariantViolation` struct). Discriminants 5, 6 and 7
+/// are therefore free to remain gaps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum InvariantId {
@@ -36,7 +33,6 @@ pub enum InvariantId {
     I2ChainStateFingerprint = 2,
     I3FcmpProofVerification = 3,
     I4BpPlusDeterministic = 4,
-    I7ReceiveTimeValidation = 7,
 }
 
 impl InvariantId {
@@ -46,7 +42,6 @@ impl InvariantId {
             2 => Some(Self::I2ChainStateFingerprint),
             3 => Some(Self::I3FcmpProofVerification),
             4 => Some(Self::I4BpPlusDeterministic),
-            7 => Some(Self::I7ReceiveTimeValidation),
             _ => None,
         }
     }
@@ -57,7 +52,6 @@ impl InvariantId {
             Self::I2ChainStateFingerprint => "chain state fingerprint mismatch",
             Self::I3FcmpProofVerification => "FCMP++ proof verification failed",
             Self::I4BpPlusDeterministic => "BP+ proof deterministic mismatch",
-            Self::I7ReceiveTimeValidation => "receive-time output validation failed",
         }
     }
 }
@@ -103,10 +97,9 @@ pub struct InvariantCheckInput<'a> {
 
 /// Run the pre-signing invariant pipeline (I1, I2, I4).
 ///
-/// I3 (FCMP++ verification) is checked against the signing payload elsewhere;
-/// I7 (receive-time validation) was enforced at scan time. I5/I6 were removed
-/// with the Option-D prover lineage (R1-F-6); E′ reintroduces the spend-time
-/// and assembly-time checks under MS-5 (§15.4a).
+/// I3 (FCMP++ verification) is checked against the signing payload elsewhere.
+/// The spend-time and assembly-time checks of the E′ ceremony are slice 3's
+/// (§15.4a).
 pub fn check_pre_signing_invariants(
     intent: &super::intent::SpendIntent,
     input: &InvariantCheckInput<'_>,

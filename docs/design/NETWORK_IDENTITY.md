@@ -324,6 +324,7 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 | shekyl/bp-plus-batch-weights-v1 | `rust/shekyl-bulletproofs/src/derived.rs` | verifier's batch-weight seed | B | randomness inside the verifier; never shown to anyone |
 | shekyl/fcmp-pp-batch-weights-v1 | `rust/shekyl-fcmp/src/batch_weights.rs` | FCMP++ batch-weight seed | A | includes `tree_root` |
 | shekyl/fcmp-membership-only-batch-weights-v1 | `rust/shekyl-fcmp/src/batch_weights.rs` | membership-only batch-weight seed | A | includes `tree_root` |
+| shekyl/multisig-key-hash-v1 | `rust/shekyl-crypto-pq/src/multisig.rs` | a multisig member's per-output key hash | A | consensus compares it at every multisig spend; `frame` binds `network_id` |
 
 ### A.2 Mechanism 2: HKDF salt and info
 
@@ -345,7 +346,9 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 | shekyl-view-tag-prefilter (info) | `rust/shekyl-crypto-pq/src/derivation.rs` | view-tag byte | B | per-output |
 | shekyl-view-tag-x25519 (info) | `rust/shekyl-crypto-pq/src/derivation.rs` | counterfactual tag | B | example-only |
 | shekyl-archival-p-{ed25519-spend, ed25519-view, ml-kem-768, ed25519-account-sign, ml-dsa-65, bond-spend-ed25519, bond-spend-ml-dsa-65, hs-id-ed25519, receipt-ed25519, receipt-fn-dsa-1024}-v1 (10 rows) | `rust/shekyl-crypto-pq/src/archival_p.rs` | persona P's key seeds per slot | A ×10 | salt = `salt_for(net)` |
-| shekyl-v31-{hybrid-sign, classical-spend, view-tag, kem-seed, multisig-kem} (5 rows) | `rust/shekyl-crypto-pq/src/multisig_receiving.rs` | per-output multisig material from KEM secrets | B ×5 | per-output secrets |
+| shekyl-v31-hybrid-sign (info) | `rust/shekyl-crypto-pq/src/multisig_output.rs` | a multisig member's per-output signing seed, from its own KEM secret | B | per-output secret |
+| shekyl-output-multisig-key-hashes (info) | `rust/shekyl-crypto-pq/src/derivation.rs` | the AEAD key for a multisig output's member key hashes | B | per-output secret |
+| shekyl/multisig-transport-v1 (info) | `rust/shekyl-multisig/src/member_file.rs` | the group transport secret, from the dealer's group seed | A | salt = `salt_for(network)` |
 | shekyl/msg-sign-seed-slh-dsa-192s-v1 | `rust/shekyl-crypto-pq/src/message_signing.rs` | message-signing identity seed | A | salt = `salt_for(network)` |
 | shekyl-prefs-hmac-v1 | `rust/shekyl-engine-prefs/src/hmac_key.rs` | prefs HMAC key from file_kek | B | local file |
 | shekyl-region1-aead-v2 | `rust/shekyl-crypto-pq/src/wallet_envelope.rs` | wallet-file region 1 key | B | local |
