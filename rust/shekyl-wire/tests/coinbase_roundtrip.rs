@@ -12,9 +12,9 @@
 //! `UnexpectedEof`. See `docs/design/GENESIS_TX_WIRE_FORMAT.md` (§9, §11) and
 //! `tests/vectors/README.md`.
 //!
-//! Regenerated for the credit-wire cutover and the five-founder genesis re-pin
-//! (2026-08-04): the `block_header` gained `attestation_root` and `GENESIS_TX`
-//! changed, so all three heights were recaptured.
+//! The header's last 32 bytes are the bundle root (`SCS-P34`), and h0 is
+//! regtest's genesis, so the corpus is recaptured whenever genesis moves
+//! (`capture_coinbase.py`, against a daemon built at the same tree).
 //!
 //! Corpus shape: h0 **is** the mainnet genesis (regtest shares `GENESIS_TX`) and
 //! therefore carries five founder outputs; h1/h2 are mined regtest blocks with a

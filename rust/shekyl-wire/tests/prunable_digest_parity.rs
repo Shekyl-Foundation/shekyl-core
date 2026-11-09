@@ -194,15 +194,20 @@ fn subjects() -> Vec<Subject> {
 #[test]
 #[ignore = "writes tests/fixtures/prunable_digest_parity_v1.json"]
 fn regenerate_prunable_digest_parity_fixture() {
+    // A retired keyless bond post no longer parses, so its entry cannot be
+    // derived again: it is carried over from the committed pin unchanged.
+    let committed = json(FIXTURE);
+    let committed = committed["transactions"].as_array().expect("transactions");
     let entries: Vec<Value> = subjects()
         .into_iter()
         .map(|s| {
-            assert!(
-                !RETIRED_KEYLESS_BOND_POSTS.contains(&s.name.as_str()),
-                "{}: a retired keyless bond post cannot be re-derived here; the regenerator \
-                 needs a fixture without it, which is the C++ leg's change to make",
-                s.name
-            );
+            if RETIRED_KEYLESS_BOND_POSTS.contains(&s.name.as_str()) {
+                return committed
+                    .iter()
+                    .find(|entry| entry["name"].as_str() == Some(s.name.as_str()))
+                    .unwrap_or_else(|| panic!("{}: the committed pin holds it", s.name))
+                    .clone();
+            }
             let tx = Transaction::from_bytes(&s.bytes).expect("parses");
             let mut entry = serde_json::json!({
                 "name": s.name,
