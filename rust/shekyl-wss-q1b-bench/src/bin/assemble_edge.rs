@@ -24,8 +24,8 @@ use std::process::ExitCode;
 use clap::Parser;
 use shekyl_wss_q1b_bench::assembleedge::{
     plan_at_depth, plan_at_replay_window, read_flatness, rung_floor_is_representable,
-    signed_change_pct, spread_pct, Arm, ArmRole, AssembleRig, FlatnessCriterion, PlanKind,
-    LEAF_RATE_MODEL_DEPTH,
+    signed_change_pct, spread_pct, window_separation, Arm, ArmRole, AssembleRig, FlatnessCriterion,
+    PlanKind, LEAF_RATE_MODEL_DEPTH,
 };
 use shekyl_wss_q1b_bench::corpus::worst_case_leaves_per_block;
 use shekyl_wss_q1b_bench::report::{
@@ -53,8 +53,10 @@ struct Args {
 
     /// Measure the shape on this depth's rung instead of the replay-window plan.
     ///
-    /// The replay-window plan is one day of chain (`plan_at_replay_window`).
-    /// It costs hours to ingest, and its seconds are a one-day-old chain's.
+    /// The replay-window plan is the rung one day of chain reaches, with the
+    /// window as a fifth arm (`plan_at_replay_window`). It costs hours to
+    /// ingest. `--rung` at the window's own depth runs the same four pair arms
+    /// without the window.
     /// A shallower rung establishes the same shape — flat across a rung, and
     /// a cross-rung step no dearer than one layer — in minutes. Neither plan
     /// is the graded assembly population. That population is a ruled chain
@@ -172,11 +174,14 @@ fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
         .leaves_per_block
         .unwrap_or_else(|| worst_case_leaves_per_block(LEAF_RATE_MODEL_DEPTH).leaves_per_block);
 
+    // The four pair roles every plan carries. `window` is not among them: a
+    // shape plan has none, and the window plan's is read by
+    // `window_separation` and timed like any other arm.
     let find = |role: ArmRole| {
         *arms
             .iter()
             .find(|a| a.role == role)
-            .expect("the plan carries every role")
+            .expect("the plan carries every pair role")
     };
     let below = find(ArmRole::RungBelow);
     let floor = find(ArmRole::RungFloor);
@@ -283,6 +288,7 @@ fn run(args: &Args) -> Result<AssembleEdgeRecord, String> {
         plan_note: plan_kind.note(),
         criterion,
         input_cap_change_pct,
+        window_separation: window_separation(&arms),
         reading,
         control_series: top_again,
         arms: arm_records,
@@ -311,6 +317,12 @@ fn report(r: &AssembleEdgeRecord) {
         "  cross rung     {:.3}x measured, {:.3}x the one-layer ceiling (a pass is not a match)",
         r.reading.cross_rung_ratio, r.reading.cross_rung_expected
     );
+    if let Some(separation) = r.window_separation {
+        eprintln!(
+            "  window         {separation:.3}x its rung floor — a reading, not a pair member \
+             (reported, never required)"
+        );
+    }
     eprintln!(
         "  input cap      {:+.1} % to raise k to MAX_INPUTS at one population (#842's n + k; \
          negative means cheaper, so k is lost in n)",
@@ -341,13 +353,19 @@ fn main() -> ExitCode {
              tree depth is read from its own leaf count"
         );
         eprintln!("plan: {}", plan_kind.label());
-        for arm in arms {
+        for arm in &arms {
             eprintln!(
                 "  {:>11}  n={:<10} depth={}  k={}",
                 arm.role.as_str(),
                 arm.population.leaf_count,
                 arm.population.depth,
                 arm.owned_inputs
+            );
+        }
+        if let Some(separation) = window_separation(&arms) {
+            eprintln!(
+                "  window is {separation:.3}x its rung floor — a reading, not a pair member \
+                 (reported, never required)"
             );
         }
         return ExitCode::SUCCESS;

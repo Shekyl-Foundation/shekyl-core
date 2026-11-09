@@ -29,21 +29,55 @@ fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
 
+/// The arm a plan carries in `role`. Every plan carries each pair role once,
+/// and only the window plan carries [`ArmRole::Window`].
+fn arm(arms: &[Arm], role: ArmRole) -> Arm {
+    let mut found = arms.iter().filter(|a| a.role == role);
+    let first = *found
+        .next()
+        .unwrap_or_else(|| panic!("the plan carries no {}", role.as_str()));
+    assert!(
+        found.next().is_none(),
+        "the plan carries {} twice",
+        role.as_str()
+    );
+    first
+}
+
+/// The replay window's population, from the function that owns it.
+fn window_population() -> Population {
+    Population::at(worst_case_window_leaves(LEAF_RATE_MODEL_DEPTH))
+}
+
 #[test]
-fn the_window_plan_derives_four_arms_from_the_ladder() {
+fn the_window_plan_is_its_rungs_four_arms_and_the_window() {
+    // Two jobs, kept apart (CT-6 ruling, 2026-11-09): the pairs are the
+    // window rung's own plan, unchanged, and the window is a fifth arm.
     let arms = plan_at_replay_window();
-    assert_eq!(arms.len(), 4, "the plan is four arms");
-    assert_eq!(arms[0].role, ArmRole::RungBelow);
-    assert_eq!(arms[1].role, ArmRole::RungFloor);
-    assert_eq!(arms[2].role, ArmRole::RungTop);
-    assert_eq!(arms[3].role, ArmRole::InputCap);
+    assert_eq!(arms.len(), 5, "the plan is four pair arms and the window");
+    let roles: Vec<ArmRole> = arms.iter().map(|a| a.role).collect();
+    assert_eq!(
+        roles,
+        [
+            ArmRole::RungBelow,
+            ArmRole::RungFloor,
+            ArmRole::RungTop,
+            ArmRole::InputCap,
+            ArmRole::Window,
+        ]
+    );
+    assert_eq!(
+        arms[..4],
+        plan_at_depth(window_population().depth)[..],
+        "the pair arms must be the window rung's own plan, not built on the window"
+    );
 }
 
 #[test]
 fn the_cross_rung_pair_is_adjacent_in_n_and_one_layer_apart() {
     let arms = plan_at_replay_window();
-    let below = arms[0].population;
-    let floor = arms[1].population;
+    let below = arm(&arms, ArmRole::RungBelow).population;
+    let floor = arm(&arms, ArmRole::RungFloor).population;
     assert_eq!(
         below.leaf_count + 1,
         floor.leaf_count,
@@ -60,16 +94,17 @@ fn the_cross_rung_pair_is_adjacent_in_n_and_one_layer_apart() {
 #[test]
 fn the_same_rung_pair_shares_a_depth_and_separates_enough_to_discriminate() {
     let arms = plan_at_replay_window();
-    let floor = arms[1].population;
-    let top = arms[2].population;
+    let floor = arm(&arms, ArmRole::RungFloor).population;
+    let top = arm(&arms, ArmRole::RungTop).population;
     assert_eq!(
         floor.depth, top.depth,
         "the same-rung pair must share a depth, or it tests the wrong half"
     );
     // A same-rung pair only discriminates if `n` really grows across it: a
-    // slope in `n` has to be large enough to clear the noise bound. Pinned so
-    // a width change that collapsed the separation fails here rather than
-    // quietly producing a powerless comparison.
+    // slope in `n` has to be large enough to clear the noise bound. The pair
+    // is the rung's floor and `separated_leaves` of it, so the separation is
+    // the plan's choice, never the window's.
+    assert_eq!(top.leaf_count, separated_leaves(floor.leaf_count));
     let separation = top.leaf_count as f64 / floor.leaf_count as f64;
     assert!(
         separation >= SAME_RUNG_SEPARATION,
@@ -81,9 +116,38 @@ fn the_same_rung_pair_shares_a_depth_and_separates_enough_to_discriminate() {
 #[test]
 fn the_input_cap_arm_holds_the_population_and_raises_only_k() {
     let arms = plan_at_replay_window();
-    assert_eq!(arms[3].population, arms[2].population);
-    assert_eq!(arms[2].owned_inputs, CANONICAL_OWNED_INPUTS);
-    assert_eq!(arms[3].owned_inputs, MAX_INPUTS);
+    let top = arm(&arms, ArmRole::RungTop);
+    let cap = arm(&arms, ArmRole::InputCap);
+    assert_eq!(cap.population, top.population);
+    assert_eq!(top.owned_inputs, CANONICAL_OWNED_INPUTS);
+    assert_eq!(cap.owned_inputs, MAX_INPUTS);
+}
+
+#[test]
+fn the_window_is_a_reading_on_the_rung_not_a_pair_member() {
+    let arms = plan_at_replay_window();
+    let window = arm(&arms, ArmRole::Window);
+    let floor = arm(&arms, ArmRole::RungFloor).population;
+    let top = arm(&arms, ArmRole::RungTop).population;
+    assert_eq!(window.population, window_population());
+    assert_eq!(window.owned_inputs, CANONICAL_OWNED_INPUTS);
+    // The one thing asserted about the window: it sits on the rung.
+    assert_eq!(window.population.depth, top.depth);
+    assert!(window.population.leaf_count >= floor.leaf_count);
+    // Its separation is reported, and is exactly the leaf ratio. Nothing
+    // here holds it to `SAME_RUNG_SEPARATION`: where the window falls in its
+    // rung moves with the leaf rate, which is why no pair is built on it.
+    let separation = window_separation(&arms).expect("the window plan reports a separation");
+    let ratio = window.population.leaf_count as f64 / floor.leaf_count as f64;
+    assert!(
+        (separation - ratio).abs() < 1e-12,
+        "{separation} != {ratio}"
+    );
+    assert_eq!(
+        window_separation(&plan_at_depth(4)),
+        None,
+        "a shape plan has no window, so it reports no window separation"
+    );
 }
 
 #[test]
@@ -244,23 +308,28 @@ fn the_windows_tree_depth_does_not_depend_on_the_rate_model() {
 
 #[test]
 fn an_arms_depth_comes_from_its_population_not_the_rate_model() {
-    let arms = plan_at_replay_window();
-    let top = arms[2].population;
-    assert_eq!(
-        top.depth,
-        layer_count_for_leaves(top.leaf_count),
-        "an arm's depth must be read from its leaf count"
-    );
+    for a in plan_at_replay_window() {
+        assert_eq!(
+            a.population.depth,
+            layer_count_for_leaves(a.population.leaf_count),
+            "{}'s depth must be read from its leaf count",
+            a.role.as_str()
+        );
+    }
 }
 
 #[test]
-fn a_shape_rung_carries_the_same_four_roles_as_the_window_rung() {
+fn a_shape_rung_carries_the_window_plans_pair_roles() {
     let shape = plan_at_depth(4);
     let window = plan_at_replay_window();
     let roles: Vec<ArmRole> = shape.iter().map(|a| a.role).collect();
-    let window_roles: Vec<ArmRole> = window.iter().map(|a| a.role).collect();
+    let window_pair_roles: Vec<ArmRole> = window
+        .iter()
+        .map(|a| a.role)
+        .filter(|role| *role != ArmRole::Window)
+        .collect();
     assert_eq!(
-        roles, window_roles,
+        roles, window_pair_roles,
         "a shape run must exercise the same comparisons, or it establishes a \
          different claim than the one it is standing in for"
     );
@@ -270,18 +339,20 @@ fn a_shape_rung_carries_the_same_four_roles_as_the_window_rung() {
 fn a_shape_rung_is_cheaper_than_the_window_one_but_separates_as_much() {
     let shape = plan_at_depth(4);
     let window = plan_at_replay_window();
+    let shape_floor = arm(&shape, ArmRole::RungFloor).population;
+    let shape_top = arm(&shape, ArmRole::RungTop).population;
     assert!(
-        shape[2].population.leaf_count < window[2].population.leaf_count,
+        shape_top.leaf_count < arm(&window, ArmRole::RungTop).population.leaf_count,
         "a shape rung that is not cheaper buys nothing"
     );
-    let separation = shape[2].population.leaf_count as f64 / shape[1].population.leaf_count as f64;
+    let separation = shape_top.leaf_count as f64 / shape_floor.leaf_count as f64;
     assert!(
         separation >= SAME_RUNG_SEPARATION,
         "shape separation {separation:.3}x is below {SAME_RUNG_SEPARATION}x"
     );
     assert_eq!(
-        shape[0].population.depth + 1,
-        shape[1].population.depth,
+        arm(&shape, ArmRole::RungBelow).population.depth + 1,
+        shape_floor.depth,
         "the shape rung must still straddle a boundary"
     );
 }
@@ -315,15 +386,20 @@ fn no_plan_here_claims_to_be_the_graded_one() {
     let window = plan_at_replay_window();
     let shape = plan_at_depth(4);
     assert!(
-        shape[2].population.leaf_count < window[2].population.leaf_count,
+        arm(&shape, ArmRole::RungTop).population.leaf_count
+            < arm(&window, ArmRole::RungTop).population.leaf_count,
         "the shape rung must sit below the window rung"
     );
-    assert!(
-        window[2].population.leaf_count
-            < min_leaves_for_depth(LEAF_RATE_MODEL_DEPTH).expect("rate model rung floor"),
-        "the window plan must stay below the rate model's rung, or it has quietly \
-         become a claim about the chain"
-    );
+    let model_rung_floor =
+        min_leaves_for_depth(LEAF_RATE_MODEL_DEPTH).expect("rate model rung floor");
+    for a in &window {
+        assert!(
+            a.population.leaf_count < model_rung_floor,
+            "the window plan's {} must stay below the rate model's rung, or it has \
+             quietly become a claim about the chain",
+            a.role.as_str()
+        );
+    }
 }
 
 // ── Withholding, direction, and the plan's identity ─────────────────────────
