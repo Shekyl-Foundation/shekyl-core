@@ -36,9 +36,7 @@ fn item(seed: BlockHash) -> ProveItem {
     let block = candidate_on(&main, Vec::new()).block;
     main.with_view(|view| {
         let tip = view.tip().expect("answers").expect("a tip");
-        let target = target_claim(&view, tip.height + BlockCount::ONE, &rules)
-            .expect("answers")
-            .expect("claimed");
+        let target = target_claim(&view, tip.height + BlockCount::ONE, &rules).expect("answers");
         ProveItem {
             pow: block.pow_blob(),
             seed,

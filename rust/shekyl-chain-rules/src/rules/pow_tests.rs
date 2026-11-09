@@ -90,17 +90,21 @@ fn cen_d1b_the_comparison_is_the_ported_check_hash() {
     bytes[31] = 0x80;
     let pow = PowHash::from_bytes(bytes);
     let mut coverage = RuleCoverage::EMPTY;
-    let at_boundary = crate::rules::difficulty::D6::mint(Difficulty::from_raw(2), &mut coverage)
-        .expect("non-zero");
-    let below = crate::rules::difficulty::D6::mint(Difficulty::from_raw(1), &mut coverage)
-        .expect("non-zero");
+    let at_boundary = crate::rules::difficulty::D6::mint(
+        Difficulty::new(2).expect("a test difficulty is non-zero"),
+        &mut coverage,
+    );
+    let below = crate::rules::difficulty::D6::mint(Difficulty::ONE, &mut coverage);
     assert!(!D1b::satisfies(pow, at_boundary, &mut coverage));
     assert!(D1b::satisfies(pow, below, &mut coverage));
     assert!(coverage.contains(CenRow::D1b), "the definition records");
     // And the same answer as the one implementation, by name.
     assert_eq!(
         D1b::satisfies(pow, at_boundary, &mut coverage),
-        check_hash(pow.as_bytes(), Difficulty::from_raw(2))
+        check_hash(
+            pow.as_bytes(),
+            Difficulty::new(2).expect("a test difficulty is non-zero")
+        )
     );
 }
 
@@ -285,7 +289,7 @@ fn cen_d3_records_and_the_pow_rows_cover_on_a_passing_block() {
         }
         assert_eq!(
             valid.block().target().difficulty(),
-            Difficulty::from_raw(GENESIS_DIFFICULTY)
+            Difficulty::new(GENESIS_DIFFICULTY).expect("a test difficulty is non-zero")
         );
     });
 }

@@ -14,7 +14,6 @@ use crate::harness::fixture::{recorded, recorded_with_work, root};
 use crate::harness::{Faulted, FaultingView, MockChain};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
-use crate::verdict::Locus;
 use crate::FormClaims;
 use shekyl_difficulty::{GENESIS_DIFFICULTY, N};
 
@@ -46,8 +45,7 @@ fn target_on(chain: &MockChain) -> (Target, RuleCoverage) {
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
         let target = match D4::target(&view, connecting, &RuleSet::GENESIS, &mut coverage) {
-            Ok(Ok(target)) => target,
-            Ok(Err(refused)) => panic!("unexpected refusal: {refused:?}"),
+            Ok(target) => target,
             Err(fault) => panic!("unexpected fault: {fault}"),
         };
         (target, coverage)
@@ -63,7 +61,7 @@ fn cen_d4_the_genesis_block_is_judged_at_one_not_at_the_genesis_constant() {
     // GENESIS_DIFFICULTY > 1 to keep the two apart). Judging genesis at the
     // constant would refuse the shipped genesis block.
     let (target, coverage) = target_on(&MockChain::default());
-    assert_eq!(target.difficulty(), Difficulty::from_raw(1));
+    assert_eq!(target.difficulty(), Difficulty::ONE);
     // `shekyl-difficulty` const-asserts GENESIS_DIFFICULTY > 1 (consts.rs:94)
     // so the two subjects cannot collide; this fixture pins which one block
     // 0 gets.
@@ -79,7 +77,7 @@ fn cen_d4_block_one_is_the_first_judged_at_the_genesis_constant() {
     let (target, _) = target_on(&chain);
     assert_eq!(
         target.difficulty(),
-        Difficulty::from_raw(GENESIS_DIFFICULTY)
+        Difficulty::new(GENESIS_DIFFICULTY).expect("a test difficulty is non-zero")
     );
 }
 
@@ -90,7 +88,7 @@ fn cen_d4_below_n_blocks_is_the_genesis_constant() {
     let (target, _) = target_on(&chain);
     assert_eq!(
         target.difficulty(),
-        Difficulty::from_raw(GENESIS_DIFFICULTY)
+        Difficulty::new(GENESIS_DIFFICULTY).expect("a test difficulty is non-zero")
     );
 }
 
@@ -105,7 +103,7 @@ fn cen_d4_at_n_blocks_the_window_opens_and_matches_the_one_implementation() {
     assert_eq!(target.difficulty(), expected);
     assert_ne!(
         expected,
-        Difficulty::from_raw(GENESIS_DIFFICULTY),
+        Difficulty::new(GENESIS_DIFFICULTY).expect("a test difficulty is non-zero"),
         "the series is chosen so the window's output is observable"
     );
 }
@@ -244,31 +242,26 @@ fn cumulative_after_overflow_is_a_corrupt_view() {
 // --- CEN-D6 ---------------------------------------------------------------
 
 #[test]
-fn cen_d6_zero_cannot_become_a_target() {
-    // Zero at the mint is CEN-D6's refusal of the block — a verdict, as the
-    // census ratifies and the C++ does — not a fault (RD-F17).
+fn cen_d6_zero_is_not_a_difficulty_so_the_mint_cannot_refuse() {
+    // CEN-D6 is held by the types (Rick, 2026-11-07): a `Difficulty` is
+    // non-zero, so the mint has nothing to refuse and records the row on
+    // every target. Red edit: give `Difficulty::new(0)` a value.
+    assert_eq!(Difficulty::new(0), None);
     let mut coverage = RuleCoverage::EMPTY;
-    assert_eq!(
-        D6::mint(Difficulty::ZERO, &mut coverage),
-        Err(InvalidBlock::new(CenRow::D6, Locus::Block))
-    );
-    assert!(
-        coverage.contains(CenRow::D6),
-        "the row records even when it refuses"
-    );
-    let target = D6::mint(Difficulty::from_raw(1), &mut coverage).expect("one is a target");
-    assert_eq!(target.difficulty(), Difficulty::from_raw(1));
+    let target = D6::mint(Difficulty::ONE, &mut coverage);
+    assert_eq!(target.difficulty(), Difficulty::ONE);
+    assert!(coverage.contains(CenRow::D6), "the mint records the row");
 }
 
 #[test]
-fn cen_d6_a_slow_window_of_minimal_work_derives_zero_and_refuses_the_block() {
-    // RD-F17. LWMA-1 has no output floor: with every solvetime at the +6T
-    // clamp, `avg_D · 99·N·(N+1)·T / 200·L` is zero for avg_D ≤ 6. This view
-    // is CONFORMING — work strictly increases by one per block (SI-10
-    // holds), the timestamps are merely slow — and the ratified algorithm
-    // derives zero for the next block. The census ratifies the C++'s
-    // response (`blockchain.cpp:5494`): the block is refused. A verdict,
-    // never a corrupt-view fault and never a store halt.
+fn cen_d6_a_slow_window_of_minimal_work_floors_at_one() {
+    // RD-F17, answered. With every solvetime at the +6T clamp,
+    // `avg_D · 99·N·(N+1)·T / 200·L` is zero for avg_D ≤ 6, and the census
+    // used to refuse the block there — and so every successor: a chain that
+    // mined slowly enough died. LWMA-1 now floors at one (`DAA_LWMA1.md`
+    // §5.3 step 10), so this conforming view (work up by one per block,
+    // SI-10 holds; the timestamps are merely slow) derives a target of one.
+    // Red edit: drop step 10 from `lwma1_next`.
     let chain = (0..=N_USIZE).fold(MockChain::default(), |chain, i| {
         let i64 = u64::try_from(i).expect("small");
         chain.push(
@@ -282,20 +275,12 @@ fn cen_d6_a_slow_window_of_minimal_work_derives_zero_and_refuses_the_block() {
     let connecting = BlockHeight::from_raw(chain.tip().expect("blocks").height.to_raw() + 1);
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
-        match D4::target(&view, connecting, &RuleSet::GENESIS, &mut coverage) {
-            Ok(Err(refused)) => {
-                assert_eq!(refused.rule, CenRow::D6);
-                assert_eq!(refused.locus, Locus::Block);
-            }
-            other => panic!("expected CEN-D6's refusal, got {other:?}"),
-        }
+        let target = D4::target(&view, connecting, &RuleSet::GENESIS, &mut coverage)
+            .expect("a conforming view derives a target");
+        assert_eq!(target.difficulty(), Difficulty::ONE);
         assert!(coverage.contains(CenRow::D4));
-        assert!(
-            coverage.contains(CenRow::D6),
-            "D6 records at the refusing mint"
-        );
-        // The same window is NOT a corrupt view: SI-10's walk passes it.
-        // The refusal and the halt are different subjects.
+        assert!(coverage.contains(CenRow::D6), "D6 records at the mint");
+        // The same window is not a corrupt view: SI-10's walk passes it.
         assert!(D4::window(&view, BlockHeight::from_raw(connecting.to_raw() - 1)).is_ok());
     });
 }
@@ -307,7 +292,7 @@ fn a_recorded_block_with_no_work_is_still_a_valid_short_chain() {
     let (target, _) = target_on(&chain);
     assert_eq!(
         target.difficulty(),
-        Difficulty::from_raw(GENESIS_DIFFICULTY)
+        Difficulty::new(GENESIS_DIFFICULTY).expect("a test difficulty is non-zero")
     );
 }
 
@@ -325,10 +310,11 @@ fn cen_d7_a_fakechain_rule_set_fixes_the_target_and_forces_one_at_genesis() {
     let connecting = BlockHeight::from_raw(chain.tip().expect("blocks").height.to_raw() + 1);
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
-        let target = D4::target(&view, connecting, &seven, &mut coverage)
-            .expect("no fault")
-            .expect("no refusal");
-        assert_eq!(target.difficulty(), Difficulty::from_raw(7));
+        let target = D4::target(&view, connecting, &seven, &mut coverage).expect("no fault");
+        assert_eq!(
+            target.difficulty(),
+            Difficulty::new(7).expect("a test difficulty is non-zero")
+        );
         assert!(coverage.contains(CenRow::D7) && coverage.contains(CenRow::D4));
         assert!(
             coverage.contains(CenRow::D6),
@@ -338,10 +324,8 @@ fn cen_d7_a_fakechain_rule_set_fixes_the_target_and_forces_one_at_genesis() {
     // Height 0 is 1 under a fixed target (blockchain.cpp:975).
     MockChain::default().with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
-        let target = D4::target(&view, BlockHeight::ZERO, &seven, &mut coverage)
-            .expect("no fault")
-            .expect("no refusal");
-        assert_eq!(target.difficulty(), Difficulty::from_raw(1));
+        let target = D4::target(&view, BlockHeight::ZERO, &seven, &mut coverage).expect("no fault");
+        assert_eq!(target.difficulty(), Difficulty::ONE);
         assert!(
             coverage.contains(CenRow::D6),
             "every Target records D6, including the genesis-1 override"
@@ -356,7 +340,7 @@ fn cen_d7_records_under_an_issued_rule_set_and_overrides_nothing() {
     assert!(coverage.contains(CenRow::D7), "consulted on every block");
     assert_eq!(
         target.difficulty(),
-        Difficulty::from_raw(GENESIS_DIFFICULTY)
+        Difficulty::new(GENESIS_DIFFICULTY).expect("a test difficulty is non-zero")
     );
     assert_eq!(RuleSet::GENESIS.difficulty(), DifficultyRule::Lwma1);
 }
@@ -422,7 +406,10 @@ fn cen_d7_fakechain_validate_mints_past_n() {
         .expect("fakechain past N mints");
         assert!(valid.coverage().covers_landed(&seven));
         assert!(valid.coverage().contains(CenRow::D6));
-        assert_eq!(valid.block().target().difficulty(), Difficulty::from_raw(7));
+        assert_eq!(
+            valid.block().target().difficulty(),
+            Difficulty::new(7).expect("a test difficulty is non-zero")
+        );
     });
 }
 
@@ -446,6 +433,7 @@ fn cen_d4_a_monotone_window_at_u128_max_is_a_target_not_an_overflow() {
             root(u8::try_from(i % 250).expect("fits") + 1),
         );
     }
-    let (target, _) = target_on(&chain);
-    assert!(!target.difficulty().is_zero());
+    // Deriving at all is the pin: `target_on` panics on a fault.
+    let (_target, coverage) = target_on(&chain);
+    assert!(coverage.contains(CenRow::D4));
 }
