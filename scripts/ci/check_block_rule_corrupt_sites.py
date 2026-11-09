@@ -611,18 +611,24 @@ def _synthetic(*, b4_body: str = _B4, extra: dict[str, str] | None = None, n_pla
     return files
 
 
+# The synthetic tree models one Corrupt-capable rule, B4 lifting through
+# `anchor_window`, so the consistent and stale cases have an entry to judge
+# against. The production list is `CORRUPT_CAPABLE`, which may be empty.
+_SELFTEST_CAPABLE: dict[str, str] = {"B4": "anchor_window through recorded"}
+
+
 class _Probe:
     def __init__(self) -> None:
         self.refusals = 0
 
     def clean(self, name: str, files: dict[str, str]) -> None:
-        errs = judge(analyze(files))
+        errs = judge(analyze(files), _SELFTEST_CAPABLE)
         if errs:
             raise SystemExit(f"selftest {name}: expected clean, got:\n  " + "\n  ".join(errs))
 
     def red(self, name: str, files: dict[str, str], needle: str, *, subject: bool = False) -> None:
         try:
-            errs = judge(analyze(files))
+            errs = judge(analyze(files), _SELFTEST_CAPABLE)
         except Refused as e:
             if not subject:
                 raise SystemExit(f"selftest {name}: expected a finding, got a subject refusal: {e}")
