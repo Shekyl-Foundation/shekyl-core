@@ -75,13 +75,16 @@ message signed under scheme 1 and scheme 2 has **identical signing input**
   `verify_pqc_auth_slot` (`rust/shekyl-daemon-rpc/src/submit/verifier.rs`),
   both through `verify_pqc_auth` (`rust/shekyl-crypto-pq/src/signature.rs`),
   which reads `scheme_id` as a dispatch discriminant. The message is the
-  input's 32-byte signed hash, derived by `shekyl-wire`
+  input's `SigningPayloadHash`, 64 bytes, derived by `shekyl-wire`
   (`Transaction::pqc_signing_payload_hashes`). That preimage covers the auth's
   header (`auth_version ‖ scheme_id ‖ flags ‖ len ‖ pk`; `shekyl-wire`
   `transaction.rs`), so the scheme is bound by the signature even though the
   verifier reads it as a discriminant.
-- Consequence for SA-R-2: the signer and the verifier own the domain
-  constant; no caller carries a domain string it could get wrong.
+- `verify_pqc_auth` owns `SCHEME_DOMAIN_PQC_AUTH_TX`. The emission signers
+  own theirs (`sign_emission_claim`, `sign_emission_backing_for_output`).
+  The spend signer `sign_pqc_auth_for_output` takes the domain its caller
+  passes, and `shekyl-tx-builder` passes `SCHEME_DOMAIN_PQC_AUTH_TX`
+  (SA-R-2).
 
 ### 1.4 Blast-radius facts for the nested conversion
 

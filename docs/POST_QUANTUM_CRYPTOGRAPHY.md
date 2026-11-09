@@ -133,8 +133,12 @@ wire      = HybridSignature { ed25519: σ_ed, ml_dsa: σ_pq }   // sig_version 2
   frozen `SCHEME_DOMAIN_*` string (`shekyl/pqc-auth-tx-v1`,
   `shekyl/pqc-auth-tx-multisig-v1`, the archival emission/attestation/
   serve-credit/bond domains); a signature is valid only on the surface it was
-  minted for. The domain is applied inside the signer and the verifier; a
-  caller never carries a domain string (SA-R-2).
+  minted for. `verify_pqc_auth` applies `SCHEME_DOMAIN_PQC_AUTH_TX`, and the
+  multisig verifier applies `SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`.
+  `sign_emission_claim` and `sign_emission_backing_for_output` apply their
+  own constants. The spend signer `sign_pqc_auth_for_output` takes the
+  domain from its caller, and `shekyl-tx-builder` passes
+  `SCHEME_DOMAIN_PQC_AUTH_TX` (SA-R-2).
 - **`scheme_id` is inside the signed preimage** (SA-R-5), so cross-scheme
   reinterpretation of a signature's bytes is closed structurally.
 - **The preimage is 64 bytes, not 32.** The digest is the signed content, so
