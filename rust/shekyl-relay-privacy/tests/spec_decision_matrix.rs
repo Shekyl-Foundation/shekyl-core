@@ -335,9 +335,12 @@ fn the_measured_surface_covers_the_whole_consensus_domain() {
 
 /// Every cell the production table publishes, restated from its sources: the
 /// spec machine's masks-and-proof term (§85.3), the hybrid signature per input
-/// and the lone range proof at 2 outputs (the 2026-09-05 floor capture,
-/// `docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt`; §72.2,
-/// amended 2026-11-08).
+/// (the 2026-09-05 floor capture,
+/// `docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt`,
+/// `pqc_per_input`) and the lone range proof at 2 outputs (the 2026-11-08
+/// floor capture,
+/// `docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt`,
+/// `bp_lone`, the verifier that folds `Â` into the batch; §72.2).
 ///
 /// This is the gate `verify_cost.rs` delegates to when it says its own
 /// structural tests do "NOT check the numbers are *correct* Pi measurements —

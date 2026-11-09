@@ -132,14 +132,15 @@ pub struct VerifyCell {
     /// membership proof with the output masks (§85.3's cell), `n_in` hybrid
     /// Ed25519 + ML-DSA-65 signature verifications (CEN-I18), and the range
     /// proof as a batch of one (CEN-H19 at `TxSlot::Lone`). See
-    /// [`door_sequence_ms`] for the sum and its sources.
+    /// [`DoorOperands`] for the sum and its sources.
     ///
     /// The output axis is excluded from the cell, not from the cost: the
     /// masks term is ~0.07 ms per output (§72.3), and the range proof grows
-    /// with the padded output count (35.0 ms at 2 outputs, 193.4 ms at 16 on
-    /// the floor device). That is the unpriced output axis
-    /// [`Self::msg_bytes`] names; a wider-output cell is measured, never
-    /// scaled from these.
+    /// with the padded output count (18.838 ms at 2 outputs, 107.3 ms at 16,
+    /// `bp_lone` in
+    /// `docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt`).
+    /// That is the unpriced output axis [`Self::msg_bytes`] names; a
+    /// wider-output cell is measured, never scaled from these.
     pub millis: f64,
     /// Which machine produced the number.
     pub provenance: Provenance,
@@ -276,50 +277,11 @@ const fn node_crypto_ms(msg_bytes: u32) -> f64 {
     msg_bytes as f64 * NODE_CRYPTO_PASSES / PI4_AES_BYTES_PER_SEC * 1_000.0
 }
 
-/// One hybrid Ed25519 + ML-DSA-65 verification on the floor device, at the
-/// 1-input 2-output shape: `pqc_per_input` in
-/// `docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt`
-/// (criterion's point estimate, 971.86 µs; Rust verifier, rev `8af70a60a6`).
-const PI4_HYBRID_SIG_1IN_MS: f64 = 0.971_86;
-
-/// The same term at the 8-input 2-output shape, from the same capture
-/// (972.28 µs per verification).
-const PI4_HYBRID_SIG_8IN_MS: f64 = 0.972_28;
-
-/// The range proof as a batch of one (`verify_batch`, the shipped verifier
-/// the door runs at `TxSlot::Lone`) over 2 outputs, at the 1-input shape:
-/// `bp_lone` in `docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt`
-/// (criterion's point estimate, 18.838 ms; the verifier that folds `Â` into
-/// the batch, rev `78de6a14e2`). The eager verifier before the fold read
-/// 34.80 ms in the same session and 35.017 ms in the 2026-09-05 capture.
-const PI4_RANGE_PROOF_LONE_1IN_2OUT_MS: f64 = 18.838;
-
-/// The same term at the 8-input 2-output shape, from the same capture
-/// (18.882 ms; the range proof reads only the output commitments).
-const PI4_RANGE_PROOF_LONE_8IN_2OUT_MS: f64 = 18.882;
-
-/// The pool door's verification sequence at one shape, in milliseconds: the
-/// membership proof with the masks (§85.3's measured cell), plus `n_in`
-/// hybrid signatures, plus the lone range proof (§72.2, amended
-/// 2026-11-08; BA-Q9).
-///
-/// Every operand is measured on the floor device, so the sum is a floor
-/// figure; it is composed, not timed as one call. The signature and range
-/// proof read no tree, so the depth-7 cells add the terms measured at depth 2.
-/// What the sum leaves out is µs-class: `tx_form`'s parse (4.9 µs at 1 input,
-/// 19.9 µs at 8, the same capture) and the cleartext balance (CEN-H18).
-///
-/// The cast is exact for `n_in <= MAX_TABLE_INPUTS`; `f64::from` is not
-/// `const`.
-#[allow(clippy::cast_precision_loss)]
-const fn door_sequence_ms(
-    masks_and_proof_ms: f64,
-    n_in: usize,
-    sig_per_input_ms: f64,
-    range_proof_lone_ms: f64,
-) -> f64 {
-    masks_and_proof_ms + n_in as f64 * sig_per_input_ms + range_proof_lone_ms
-}
+mod door;
+use door::{
+    DoorInputCount, DoorOperands, PI4_MASKS_AND_PROOF_1IN_D2_MS, PI4_MASKS_AND_PROOF_1IN_D7_MS,
+    PI4_MASKS_AND_PROOF_8IN_D2_MS, PI4_MASKS_AND_PROOF_8IN_D7_MS,
+};
 
 const fn pi4(millis: f64, basis: TreeBasis, msg_bytes: u32) -> VerifyCell {
     VerifyCell {
@@ -389,21 +351,17 @@ const _: () = {
 
 /// The adopted table (§80), populated with the spec machine's pinned cells.
 ///
-/// Each cell is [`door_sequence_ms`] over floor-device operands. The
+/// Each cell is [`DoorOperands::millis`] over the `PI4_*` operands. The
 /// membership-proof terms are §85.3's measurements: Pi 4 Model B,
 /// `performance` on all four cores, verify-check exit 0 on every fixture (no
 /// cell times a reject path), thermal max 69.6 °C against the 80 °C
-/// soft-throttle. The signature terms are the 2026-09-05 floor capture's and
-/// the range-proof terms the 2026-11-08 capture's, the verifier that folds
+/// soft-throttle. The signature terms are the 2026-09-05 floor capture's
+/// ([`door::PI4_HYBRID_SIG_1IN_MS`]). The range-proof terms are the 2026-11-08
+/// capture's ([`door::PI4_RANGE_PROOF_LONE_1IN_2OUT_MS`]), the verifier that folds
 /// `Â` into the batch (§72.2). Depth-7 cells are synthesized-tree projections
-/// per §81.2 and labelled so.
-///
-/// | cell | masks + proof | signatures | range proof (lone) | `millis` |
-/// |---|---|---|---|---|
-/// | 1-in, depth 2 | 124.5 | 1 × 0.97186 | 18.838 | 144.310 |
-/// | 1-in, depth 7 | 143.3 | 1 × 0.97186 | 18.838 | 163.110 |
-/// | 8-in, depth 2 | 399.2 | 8 × 0.97228 | 18.882 | 425.860 |
-/// | 8-in, depth 7 | 791.9 | 8 × 0.97228 | 18.882 | 818.560 |
+/// per §81.2 and labelled so. The published sums are pinned in
+/// `tests/spec_decision_matrix.rs`, which recomputes them from a second
+/// transcription of these operands.
 pub const SPEC_VERIFY_COST: SpecVerifyCost = {
     const NONE: Option<VerifyCell> = None;
     const EMPTY_ROW: [Option<VerifyCell>; DEPTH_TIERS] = [NONE; DEPTH_TIERS];
@@ -413,32 +371,27 @@ pub const SPEC_VERIFY_COST: SpecVerifyCost = {
     // header (PWD-B5). Enforced by tests/carrier_window.rs against notify().
     // Re-derived 2026-09-14 under `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2:
     // 64-byte `0x07` entries and the proof's opening leg moved every shape);
-    // the masks-and-proof terms are still §85.3's pre-`PL-D3` measurements,
-    // and the signature and range-proof terms the 2026-09-05 capture's — the
-    // floor-device re-measurement of the door's sequence is owed (rule 76;
-    // §12.1 of the round doc; BA-T10).
-    const SIG_1: f64 = PI4_HYBRID_SIG_1IN_MS;
-    const BP_1: f64 = PI4_RANGE_PROOF_LONE_1IN_2OUT_MS;
-    const SIG_8: f64 = PI4_HYBRID_SIG_8IN_MS;
-    const BP_8: f64 = PI4_RANGE_PROOF_LONE_8IN_2OUT_MS;
+    // The masks-and-proof terms are still §85.3's pre-`PL-D3` measurements.
+    // The floor-device re-measurement of the door's whole sequence is owed
+    // (rule 76; §12.1 of the round doc; BA-T10).
     cells[0][0] = Some(pi4(
-        door_sequence_ms(124.5, 1, SIG_1, BP_1),
+        DoorOperands::at(PI4_MASKS_AND_PROOF_1IN_D2_MS, DoorInputCount::One).millis(),
         TreeBasis::Genesis,
         13_311,
     ));
     cells[0][DEPTH_TIERS - 1] = Some(pi4(
-        door_sequence_ms(143.3, 1, SIG_1, BP_1),
+        DoorOperands::at(PI4_MASKS_AND_PROOF_1IN_D7_MS, DoorInputCount::One).millis(),
         TreeBasis::SynthesizedProjection,
         14_783,
     ));
     // n_in = 8 (the consensus maximum): the tail §75's sorting is about.
     cells[7][0] = Some(pi4(
-        door_sequence_ms(399.2, 8, SIG_8, BP_8),
+        DoorOperands::at(PI4_MASKS_AND_PROOF_8IN_D2_MS, DoorInputCount::Eight).millis(),
         TreeBasis::Genesis,
         58_897,
     ));
     cells[7][DEPTH_TIERS - 1] = Some(pi4(
-        door_sequence_ms(791.9, 8, SIG_8, BP_8),
+        DoorOperands::at(PI4_MASKS_AND_PROOF_8IN_D7_MS, DoorInputCount::Eight).millis(),
         TreeBasis::SynthesizedProjection,
         62_097,
     ));
