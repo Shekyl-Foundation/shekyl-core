@@ -292,6 +292,29 @@ pub(super) fn m4_extra_over_the_relay_cap() -> Transaction {
     tx
 }
 
+/// The baseline spend's conforming PQC fields plus a `0x0D` multisig entry
+/// naming output 2 of its two: CEN-I19's multisig clause refuses it as
+/// `MultisigOutputIndex` (an entry for an output the transaction does not
+/// have). The `0x0D` successor of the trips that carried a `0x09` blob.
+pub(super) fn i19_multisig_entry_for_a_missing_output() -> Transaction {
+    use shekyl_wire::tx_extra::{KemCiphertext, MultisigEntry};
+    let mut tx = spend2();
+    let n = tx.prefix.outputs.len();
+    let entry = MultisigEntry::new(
+        u8::try_from(n).expect("two outputs"),
+        vec![KemCiphertext::from_bytes(&[0x11; HYBRID_KEM_CT_BYTES])],
+        vec![0x22; MultisigEntry::enc_key_hashes_len(1)],
+    )
+    .expect("one member, right lengths");
+    tx.prefix.extra = tx_extra::serialize(&[
+        TxExtraField::PqcKemCiphertext(vec![0x5A; HYBRID_KEM_CT_BYTES * n]),
+        TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n)),
+        TxExtraField::PqcMultisig(vec![entry]),
+    ])
+    .expect("three fields serialize");
+    tx
+}
+
 /// The baseline spend with its `extra` emptied: two outputs and no `0x06`
 /// / `0x07` fields, which CEN-I19 refuses as `Missing`.
 pub(super) fn i19_no_pqc_fields() -> Transaction {

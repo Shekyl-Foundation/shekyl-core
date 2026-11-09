@@ -43,6 +43,7 @@
 fn an_unencrypted_output_field_cannot_be_constructed_downstream() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/trybuild/enc_fields_cannot_be_overwritten.rs");
+    t.compile_fail("tests/trybuild/multisig_enc_fields_cannot_be_overwritten.rs");
     t.compile_fail("tests/trybuild/enc_fields_cannot_be_literal_constructed.rs");
     t.compile_fail("tests/trybuild/encrypted_field_has_no_byte_constructor.rs");
 }

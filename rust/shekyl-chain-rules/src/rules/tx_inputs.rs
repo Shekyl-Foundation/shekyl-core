@@ -38,8 +38,8 @@ use shekyl_wire::{Ct, Input};
 //
 // The input-side shape rules the C++ `check_tx_inputs` states before any
 // chain read (`blockchain.cpp`, the `reject_form` arms ahead of the
-// key-image and reference-block lookups) and `tx_pqc_verify.cpp`'s
-// structural pass over `pqc_auths`. Every one is decidable from the bytes,
+// key-image and reference-block lookups) and the structural pass over
+// `pqc_auths` (CEN-I16). Every one is decidable from the bytes,
 // so every one is `tx_form`'s. The view-bound rows (I7, I10–I13) and the
 // verification rows (I15, I17, I18) are `tx_against`'s, later commits.
 //

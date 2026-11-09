@@ -1075,16 +1075,14 @@ fn verify_fcmp(
     }
 }
 
-/// K13 proper: the `verify_transaction_pqc_auth` battery
-/// (`tx_pqc_verify.cpp`), natively.
+/// K13 proper: every `pqc_auths` slot verified, the same body as the
+/// validator's CEN-I18.
 ///
 /// Per auth: version pin, zero flags, known scheme id ∈ {1,2}, per-scheme
 /// key-blob length bounds, then the hybrid Ed25519+ML-DSA (or M-of-N multisig
 /// container) verification over the per-input signing-preimage hash — computed
 /// by `shekyl-wire`'s [`pqc_signing_payload_hashes`], the derivation of record
-/// (`PqcSigningPreimage`) that the daemon's `verify_transaction_pqc_auth` and
-/// the validator's CEN-I17 read too; the C++ assembly it once twinned is
-/// deleted (E6 slice 6 commit 7).
+/// (`PqcSigningPreimage`) that the validator's CEN-I17 reads too.
 ///
 /// MSW-6 (PQC_MULTISIG.md §16.3) withdrew the former tx-wide scheme-id
 /// agreement (every input matching `pqc_auths[0]`). Its stated scheme-downgrade
@@ -1101,7 +1099,7 @@ fn verify_fcmp(
 /// scalar; PL-D3 (the hiding leaf commitment opened in-circuit) restores it,
 /// and the conclusion stood on the scheme_id=2 precedent alone in between
 /// (docs/design/FCMP_SPEND_LINKABILITY.md §12, ruling 5).
-/// Dropped here in lockstep with the C++ battery so the K13 differential holds.
+/// The validator (CEN-I18) dropped it in lockstep, so the two agree.
 ///
 /// [`pqc_signing_payload_hashes`]: shekyl_wire::transaction::Transaction::pqc_signing_payload_hashes
 fn verify_pqc_auths(

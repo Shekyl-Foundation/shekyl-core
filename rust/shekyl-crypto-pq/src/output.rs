@@ -1378,12 +1378,13 @@ impl std::fmt::Debug for KeyImageResult {
 
 /// Compute the key image and output spend secret for a V3 output.
 ///
-/// Derives `ho` internally from `combined_ss` -- `ho` never crosses FFI.
+/// Derives `ho` internally from `combined_ss`; the caller never sees it.
 /// Returns both the key image `I = x * Hp(O)` and the output spend secret
 /// `x = ho + b` (needed for signing).
 ///
-/// `hp_of_output` is `Hp(O)` precomputed by C++ via `hash_to_ec` (Category 2
-/// Keccak, stays in C++). Must decompress to a prime-order point.
+/// `hp_of_output` is `Hp(O)`, which the caller computes
+/// (`shekyl_curve_generators::biased_hash_to_point`, as the scanner does).
+/// Must decompress to a prime-order point.
 pub fn compute_output_key_image(
     combined_ss: &[u8; 64],
     output_index: u64,
@@ -2342,7 +2343,7 @@ mod tests {
         let (ss, _, _) = rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, idx).unwrap();
 
         // Use a deterministic stand-in for Hp(O): hash output_key to a curve point
-        // In production, C++ provides this via hash_to_ec. For testing, we use
+        // In production the caller hashes O to the curve. For testing, we use
         // the basepoint scaled by a hash (guaranteed prime-order and non-identity).
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();

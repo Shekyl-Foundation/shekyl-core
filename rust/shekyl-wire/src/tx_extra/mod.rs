@@ -852,8 +852,7 @@ impl std::error::Error for PqcFieldShapeError {}
 /// Why a parsed `extra` is refused at admission: CEN-I19, the coinbase
 /// grammar, or a `0x02` on a transaction that is not a coinbase.
 ///
-/// One type so the daemon logs one [`Display`] and the FFI flattens one
-/// match. The variants do not overlap: a missing pubkey is
+/// One type so the daemon logs one [`Display`] and a caller matches once. The variants do not overlap: a missing pubkey is
 /// [`CoinbaseGrammarError::PubkeyMissing`], never [`PqcFieldShapeError::Missing`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExtraShapeError {

@@ -23,8 +23,8 @@
 //!
 //! `sign` / `verify` take a required non-empty `domain` — there is no bare-
 //! message path. Each signing surface has a named `SCHEME_DOMAIN_*` constant
-//! below. FFI exports apply the surface's constant in Rust so C++ never
-//! carries a domain string. Full surface table: `docs/design/SIGNATURE_ALIGNMENT.md`.
+//! below; a caller names the surface, never a domain string. Full surface
+//! table: `docs/design/SIGNATURE_ALIGNMENT.md`.
 //!
 //! # Version byte is the security boundary (SA-R-4)
 //!
@@ -80,9 +80,7 @@ pub const HYBRID_SCHEME_ID_ED25519_FN_DSA_1024: u8 = 3;
 /// applies to build `message`, and it gets its own string rather than reusing
 /// the inner one (a shared string across two layers would create a standing
 /// cross-parse proof obligation for no benefit). `sign`/`verify` take the
-/// domain as a required parameter so a caller cannot sign a bare message; the
-/// FFI exports apply the surface's constant internally so C++ never carries a
-/// domain string it could get wrong.
+/// domain as a required parameter so a caller cannot sign a bare message.
 pub const SCHEME_DOMAIN_PQC_AUTH_TX: &[u8] = b"shekyl/pqc-auth-tx-v1";
 /// Multisig participant auth (scheme 2), **distinct** from single-sig
 /// [`SCHEME_DOMAIN_PQC_AUTH_TX`] (SA-R-5). A multisig participant and a
@@ -507,9 +505,9 @@ impl SignatureScheme for HybridEd25519MlDsa {
 /// the slot to its network (`DOMAIN_BINDING_RATCHET.tsv`).
 ///
 /// `Result<()>`, never `Result<bool>` (SA-R-1): there is no `Ok(false)` to
-/// mishandle. The error is the discriminant the FFI has always exported —
-/// a parse failure is [`PqcVerifyError::DeserializationFailed`], a good
-/// parse that does not verify is [`PqcVerifyError::CryptoVerifyFailed`].
+/// mishandle. A parse failure is [`PqcVerifyError::DeserializationFailed`], a
+/// good parse that does not verify is [`PqcVerifyError::CryptoVerifyFailed`],
+/// and a multisig slot's own checks have their own variants.
 ///
 /// # Errors
 ///
@@ -663,8 +661,8 @@ mod tests {
     }
 
     /// The one slot verifier every consumer calls: scheme 1 verifies a
-    /// signature made under the tx-auth domain and refuses, by the FFI's
-    /// discriminants, a wrong message, a garbled signature, a garbled key
+    /// signature made under the tx-auth domain and refuses, by
+    /// [`PqcVerifyError`], a wrong message, a garbled signature, a garbled key
     /// and an unknown scheme. Scheme 2's arm is `verify_multisig`'s and is
     /// held by that module's tests.
     #[test]
