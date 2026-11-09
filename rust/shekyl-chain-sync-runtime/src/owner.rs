@@ -50,11 +50,19 @@
 //!   established session but the one that supplied it. A block no session
 //!   supplied, such as one this node mined, goes to every established
 //!   session.
+//! - **Bundles** (2015–2017, [`crate::bundles`]) travel between queues. A
+//!   peer's 2015 whose body is its reference's goes to the queue's
+//!   admission through the door, off this task, with its permit held to
+//!   the verdict; a bundle the queue admitted goes on as 2015 to every
+//!   established session but its supplier. A bundle this node filed
+//!   arrives on the door's feed and goes to every established session. A
+//!   2016 is served from the body store like any other request.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use shekyl_chain_ingest::connector::{BundleOffered, FiledBundle};
 use shekyl_chain_ingest::service::{
     Alarm, ArrivalTag, BoundArrival as EntryArrival, Door, Reply, SeedPair, SessionId,
 };
@@ -66,7 +74,7 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{
     CoreSyncData, GetTxpoolComplement, NewCompactBlock, PortableMap, RequestBodies,
-    RequestCompactMissingTx, RequestHeaders, HASH_SIZE,
+    RequestBundleBodies, RequestCompactMissingTx, RequestHeaders, HASH_SIZE,
 };
 use shekyl_p2p_session::{
     ClaimCarrier, CloseCause, CloseKind, Encoded, Established, Message, SocketId, SyncInbound,
@@ -80,6 +88,7 @@ use shekyl_wire::{BlockBody, TxBody};
 use tokio::sync::{mpsc, watch};
 use tracing::Instrument;
 
+use crate::bundles::{relay_message, relayed, serve_bundle_bodies};
 use crate::executor::Executor;
 use crate::outcome;
 use crate::port::Inbound;
@@ -378,6 +387,14 @@ enum Input {
         session: Session,
         served: Served,
     },
+    /// The queue's verdict on a bundle a session relayed, with the 2015
+    /// that relays it on when it was queued.
+    BundleOffered {
+        session: Session,
+        h: BlockHeight,
+        offered: Result<BundleOffered, String>,
+        relay: Option<Encoded>,
+    },
     /// The latch write a `RaiseAlarm` asked for was refused.
     AlarmRefused,
 }
@@ -411,6 +428,7 @@ enum ServeRequest {
     Headers(RequestHeaders),
     Bodies(RequestBodies),
     MissingTxs(RequestCompactMissingTx),
+    BundleBodies(RequestBundleBodies),
 }
 
 /// Frame an answer on the serving thread, so the owner's task sends it
@@ -540,6 +558,7 @@ async fn run<C, R>(
     let wakes = Arc::clone(&timer);
     let mut seeds = door.seeds();
     let seen_seeds = *seeds.borrow_and_update();
+    let mut filed = Some(door.filed());
     let mut owner = Owner {
         sync: Model::new(rules.trust(), schedule)
             .with_requesting(requesting)
@@ -613,6 +632,11 @@ async fn run<C, R>(
                 let pair = *seeds.borrow_and_update();
                 owner.seeds_published(pair);
             },
+            bundle = next_filed(&mut filed), if filed.is_some() => {
+                if let Some(bundle) = bundle {
+                    owner.relay_filed(&bundle);
+                }
+            },
             inbound_one = inbound.recv() => {
                 let Some(inbound_one) = inbound_one else {
                     end.how = Ended::Failed(EndCause::PortClosed);
@@ -661,6 +685,26 @@ async fn run<C, R>(
         );
     }
     let _gone = owner.timer.deregister();
+}
+
+/// The next bundle this node filed. A receiver that fell behind skips the
+/// bundles it missed and says how many; a feed whose sender is gone is
+/// the service stopping, and is not read again.
+async fn next_filed(
+    filed: &mut Option<tokio::sync::broadcast::Receiver<FiledBundle>>,
+) -> Option<FiledBundle> {
+    let receiver = filed.as_mut()?;
+    match receiver.recv().await {
+        Ok(bundle) => Some(bundle),
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+            tracing::warn!(missed, "the relay fell behind the bundles this node filed");
+            None
+        }
+        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+            *filed = None;
+            None
+        }
+    }
 }
 
 /// Whether the timing engine has delivered a wake. `Some` takes it, so the
@@ -848,9 +892,10 @@ where
         }
     }
 
-    /// One of the owner's six commands. A response goes to the model
+    /// One of the owner's nine commands. A response goes to the model
     /// now, and `taken` drops with it; a request is served, and `taken`
-    /// is held until the answer is sent.
+    /// is held until the answer is sent. A relayed bundle is held to the
+    /// queue's verdict the same way.
     fn message(&mut self, session: Session, message: SyncInbound, taken: Taken) {
         match message {
             SyncInbound::NewCompactBlock(payload) => {
@@ -921,6 +966,68 @@ where
                     self.close(session);
                 }
             },
+            SyncInbound::NewBundle(payload) => self.bundle_relayed(session, &payload, taken),
+            SyncInbound::RequestBundleBodies(payload) => {
+                match RequestBundleBodies::load(&payload) {
+                    Ok(request) => {
+                        self.serve(session, ServeRequest::BundleBodies(request), taken);
+                    }
+                    Err(err) => {
+                        tracing::debug!(%session, %err, "a bundle body request that does not decode");
+                        self.close(session);
+                    }
+                }
+            }
+            // This node asks for bundle bodies only for a block whose
+            // references it is connecting, and it has asked for none: an
+            // answer to no request is the sender's fault.
+            SyncInbound::ResponseBundleBodies(_) => {
+                tracing::debug!(%session, "a bundle body response nothing asked for");
+                drop(taken);
+                self.close(session);
+            }
+        }
+    }
+
+    /// A bundle a session relayed (2015): its body must be the one its
+    /// reference names, or the session closes. The queue judges the rest,
+    /// against this node's tip, off this task; `taken` is held until it
+    /// answers, so a session has one bundle being judged at a time.
+    fn bundle_relayed(&mut self, session: Session, payload: &[u8], taken: Taken) {
+        let (reference, body) = match relayed(payload) {
+            Ok(bundle) => bundle,
+            Err(refused) => {
+                tracing::debug!(%session, ?refused, "a relayed bundle that does not hold");
+                drop(taken);
+                self.close(session);
+                return;
+            }
+        };
+        let door = self.door.clone();
+        let inputs = self.inputs.clone();
+        let h = reference.h();
+        tokio::spawn(async move {
+            // Encoded before the offer takes the two: sent only if queued.
+            let relay = encode(&relay_message(&reference, &body)).ok();
+            let offered = door
+                .offer_bundle(reference, body)
+                .await
+                .map_err(|fault| fault.to_string());
+            let _gone = inputs.send(Input::BundleOffered {
+                session,
+                h,
+                offered,
+                relay,
+            });
+            drop(taken);
+        });
+    }
+
+    /// Relay a bundle this node filed (2015) to every established session.
+    fn relay_filed(&mut self, filed: &FiledBundle) {
+        match encode(&relay_message(&filed.reference, &filed.body)) {
+            Ok(encoded) => relay::fan_out(self.sessions.iter(), None, &encoded),
+            Err(err) => tracing::error!(%err, "a filed bundle did not encode"),
         }
     }
 
@@ -944,6 +1051,10 @@ where
                 ServeRequest::Bodies(request) => serve_bodies(&store, &request)
                     .map_err(|err| err.to_string())
                     .and_then(|response| encode(&Message::ResponseBodies(response)))
+                    .map(Served::Send),
+                ServeRequest::BundleBodies(request) => serve_bundle_bodies(&store, &request)
+                    .map_err(|err| err.to_string())
+                    .and_then(|response| encode(&Message::ResponseBundleBodies(response)))
                     .map(Served::Send),
                 ServeRequest::MissingTxs(request) => serve_missing_txs(&store, &request)
                     .map_err(|err| err.to_string())
@@ -996,6 +1107,29 @@ where
             // `event` would drop it when the store cannot be read, and
             // `Idle` is the only state that accepts new evidence.
             Input::AlarmRefused => self.alarm_refused(),
+            Input::BundleOffered {
+                session,
+                h,
+                offered,
+                relay,
+            } => match offered {
+                // Admitted against this node's tip: on to every other
+                // session, as the supplier had it (`SCS-P25`).
+                Ok(BundleOffered::Queued { .. }) => {
+                    if let Some(encoded) = relay {
+                        relay::fan_out(self.sessions.iter(), Some(session), &encoded);
+                    }
+                }
+                // Already held, already revealed, or refused against this
+                // node's tip: none of these is the sender's fault, since a
+                // tip that differs from ours can admit what ours refuses.
+                Ok(other) => {
+                    tracing::debug!(%session, h = h.to_raw(), ?other, "a relayed bundle not queued");
+                }
+                Err(err) => {
+                    tracing::error!(%err, h = h.to_raw(), "the queue did not answer a relayed bundle");
+                }
+            },
             Input::Served { session, served } => {
                 match served {
                     // A refused send is the transport's close, not sync's.

@@ -342,3 +342,46 @@ fn a_swallowed_retip_of_an_absent_entry_poisons_and_leaves_the_writer_live() {
         .expect("a later write proceeds");
     drop(store);
 }
+
+/// A body is read by its prunable hash, and a hash the store holds no body
+/// for is `None`; whether `h` is queued is a point read that follows the
+/// entry in and out. These are what a peer's body request is answered from
+/// and what admission asks before it judges a second bundle for `h`. Red
+/// edits: key the body read by `h`, or answer `bundle_queued` from the
+/// body table — the removal below then reads stale.
+#[test]
+fn a_body_reads_by_its_hash_and_a_queued_height_by_its_entry() {
+    let path = tmp("queue-point-reads");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let (reference, body) = bundle(40);
+    queue(&store, 40).expect("queued");
+    let snap = store.begin_read().expect("snapshot");
+    assert_eq!(
+        snap.bundle_body(reference.prunable_hash()).expect("reads"),
+        Some(body.clone())
+    );
+    assert_eq!(snap.bundle_body(&[0xEE; 32]).expect("reads"), None);
+    drop(snap);
+    let held = |h| {
+        store
+            .begin_read()
+            .expect("snapshot")
+            .bundle_queued(BlockHeight::from_raw(h))
+            .expect("reads")
+    };
+    assert!(held(40));
+    assert!(!held(41));
+    store
+        .write(|batch| batch.unqueue_bundle(BlockHeight::from_raw(40)))
+        .expect("removed");
+    assert!(!held(40));
+    assert_eq!(
+        store
+            .begin_read()
+            .expect("snapshot")
+            .bundle_body(reference.prunable_hash())
+            .expect("reads"),
+        None,
+        "the body leaves with its entry"
+    );
+}

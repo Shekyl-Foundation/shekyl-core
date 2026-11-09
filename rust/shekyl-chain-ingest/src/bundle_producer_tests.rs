@@ -151,6 +151,30 @@ async fn an_offered_bundle_is_queued_once() {
     scenario.close().await;
 }
 
+/// A node that holds `h`'s bundle drops any other for `h` before judging
+/// it (§9.1): a second bundle whose seed does not open the commitment is
+/// `AlreadyQueued`, not a J33 refusal, and the first stays. Red edit: move
+/// the held check after the judgment — the second offer is then `Refused`
+/// at J33, a signature check spent on a height already held.
+#[tokio::test]
+async fn a_second_bundle_for_a_queued_height_is_dropped_before_it_is_judged() {
+    let witness = Witness::new(0x36);
+    let (scenario, ours) = committed("bundle-queue-held-first", &witness, 3).await;
+    let first = witness.bundle(ours.height, witness.seed);
+    assert!(matches!(
+        offer(&scenario, first.clone()).await,
+        BundleOffered::Queued { .. }
+    ));
+    assert_eq!(
+        offer(&scenario, witness.bundle(ours.height, [0x77; 32])).await,
+        BundleOffered::AlreadyQueued { h: ours.height }
+    );
+    let entries = queued(&scenario);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].queued.reference, first.0, "the first one stays");
+    scenario.close().await;
+}
+
 /// A seed that does not open the block's `0x0C` is refused by the rule at
 /// J33, and nothing is queued: the queue's admission is the self-check.
 /// Red edit: compare the commitment against the wrong block — the bundle

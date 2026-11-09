@@ -33,7 +33,9 @@
 //! 4b, so nothing the queue admits is ever connected from it here.
 
 use kameo::message::{Context, Message};
-use shekyl_archival_retention::{bundle_root, BundleBody, BundleRef, PassStream};
+use shekyl_archival_retention::{
+    bundle_root, constants::W2_MAX_DEFENSIBLE_BLOCKS, BundleBody, BundleRef, PassStream,
+};
 use shekyl_bundle_producer::{DrawTarget, Targets};
 use shekyl_chain_rules::{
     draw_targets, judge_bundles, remember_window_epochs, AdmissionFault, AtHeight, BundleInvalid,
@@ -56,6 +58,71 @@ pub struct OfferBundle {
     pub reference: BundleRef,
     /// The body it names.
     pub body: BundleBody,
+}
+
+/// A bundle this node filed and the queue admitted: what the sync owner
+/// relays to its peers (§7.5, `SCS-P25`). A peer's bundle is relayed by the
+/// owner from its own offer's reply and does not pass through here.
+#[derive(Clone, Debug)]
+pub struct FiledBundle {
+    /// The reference the queue holds.
+    pub reference: BundleRef,
+    /// The body it names.
+    pub body: BundleBody,
+}
+
+/// How many filed bundles the relay feed holds for a receiver that has
+/// not read them: the queue's own bound. The queue holds at most `W₂`
+/// entries and `W₂` is at most [`W2_MAX_DEFENSIBLE_BLOCKS`] on every rule
+/// set `ArchivalParams::validate` admits, so a feed this long holds every
+/// bundle the queue can hold at once. A receiver further behind has
+/// missed a bundle whose window has already closed.
+// CLIPPY: cast_possible_truncation — W₂'s ruled upper edge is 500.
+#[allow(clippy::cast_possible_truncation)]
+pub const FILED_FEED_CAPACITY: usize = W2_MAX_DEFENSIBLE_BLOCKS as usize;
+
+/// Why an offer through the door got no answer.
+#[derive(Debug, thiserror::Error)]
+pub enum OfferFault {
+    /// The connector answered with a fault of its own.
+    #[error("the connector faulted: {0}")]
+    Connector(RunFault),
+    /// The connector has stopped.
+    #[error("the connector has stopped")]
+    Stopped,
+}
+
+/// File a bundle this node produced: offer it to the queue, and when the
+/// queue admits it, publish it on `filed` for the sync owner to relay
+/// (`SCS-P25`). The one filing path: the producer's task and the door's
+/// [`file_bundle`](crate::service::Door::file_bundle) both call it.
+///
+/// # Errors
+///
+/// [`OfferFault`] when the connector faulted or has stopped.
+pub async fn file_bundle(
+    connector: &kameo::actor::ActorRef<Connector>,
+    filed: &tokio::sync::broadcast::Sender<FiledBundle>,
+    reference: BundleRef,
+    body: BundleBody,
+) -> Result<BundleOffered, OfferFault> {
+    let filing = FiledBundle {
+        reference: reference.clone(),
+        body: body.clone(),
+    };
+    let offered = match connector.ask(OfferBundle { reference, body }).await {
+        Ok(offered) => offered,
+        Err(kameo::error::SendError::HandlerError(fault)) => {
+            return Err(OfferFault::Connector(fault))
+        }
+        Err(_) => return Err(OfferFault::Stopped),
+    };
+    if matches!(offered, BundleOffered::Queued { .. }) {
+        // No receiver is a node with no sync owner yet: the bundle stays
+        // queued, and nothing else is lost.
+        let _relayed = filed.send(filing);
+    }
+    Ok(offered)
 }
 
 /// What the queue did with an offer.
@@ -144,8 +211,31 @@ impl Message<OfferBundle> for Connector {
     ) -> Self::Reply {
         let rules = self.rules;
         let memo = &mut self.memo;
-        self.writer
-            .write(|batch| offer(batch, rules, memo, &msg.reference, &msg.body))
+        // Judged on a snapshot: a bundle the queue does not take opens no
+        // write, so a peer's refused bundle costs no commit. This actor is
+        // the store's single writer, so the snapshot's tip is the tip the
+        // batch below queues against.
+        let judged = self.writer.with_store(|store| {
+            let snapshot = store.begin_read().map_err(RunFault::Store)?;
+            judge_offer(store, &snapshot, rules, memo, &msg.reference, &msg.body)
+        })?;
+        match judged {
+            Offer::Decided(offered) => Ok(offered),
+            Offer::Admit {
+                tip_height,
+                tip_hash,
+                capacity,
+            } => self.writer.write(|batch| {
+                queue(
+                    batch,
+                    &msg.reference,
+                    &msg.body,
+                    tip_height,
+                    tip_hash,
+                    capacity,
+                )
+            }),
+        }
     }
 }
 
@@ -221,31 +311,10 @@ impl Connector {
     }
 }
 
-/// `h_incl`, the rule set in force there, and the tip it sits on.
-fn including(
-    batch: &WriteBatch<'_, '_>,
-    rules: ChainRules,
-) -> Result<
-    Option<(
-        BlockHeight,
-        BlockHash,
-        BlockHeight,
-        shekyl_chain_rules::RuleSet,
-    )>,
-    RunFault,
-> {
-    let Some(tip) = batch.chain_view().tip()? else {
-        return Ok(None);
-    };
-    let h_incl = tip
-        .height
-        .checked_add(BlockCount::ONE)
-        .ok_or(RunFault::NoNextHeight { tip: tip.height })?;
-    Ok(Some((tip.height, tip.hash, h_incl, rules.in_force(h_incl))))
-}
-
 /// A view read's fault, as the count raises it: a `Corrupt` halts the
-/// writer, a store fault is the store's.
+/// writer, a store fault is the store's. Only the staged admitting door
+/// reads on a batch.
+#[cfg(test)]
 fn view_fault(batch: &WriteBatch<'_, '_>, fault: ViewRead<StoreError>) -> RunFault {
     match fault {
         ViewRead::View(error) => RunFault::Store(error),
@@ -378,23 +447,6 @@ where
     ))
 }
 
-/// Judge one bundle against the tip, on this batch. A `Corrupt` poisons it.
-fn judge_batch(
-    batch: &WriteBatch<'_, '_>,
-    memo: &mut DrawableMemo,
-    judging: Judging<'_>,
-    reference: &BundleRef,
-    body: &BundleBody,
-) -> Result<Option<Refusal>, RunFault> {
-    let Judging {
-        h_incl, rule_set, ..
-    } = judging;
-    let view = batch.chain_view();
-    remember_window_epochs(&view, h_incl, rule_set, memo).map_err(|f| view_fault(batch, f))?;
-    let bundle_view = StoreBundleView::new(&view, memo, h_incl, rule_set.settlement_schedule());
-    judge_prepared(&bundle_view, judging, reference, body)
-}
-
 /// Judge one bundle against the tip, on a snapshot. A `Corrupt` latches
 /// and does not open a batch.
 fn judge_snapshot(
@@ -414,36 +466,84 @@ fn judge_snapshot(
     judge_prepared(&bundle_view, judging, reference, body)
 }
 
-fn offer(
-    batch: &WriteBatch<'_, '_>,
+/// What judging an offer on a snapshot decided.
+enum Offer {
+    /// The queue does not take it, and why.
+    Decided(BundleOffered),
+    /// The rule admits it against the tip: queue it there.
+    Admit {
+        tip_height: BlockHeight,
+        tip_hash: BlockHash,
+        capacity: u64,
+    },
+}
+
+/// Judge an offered bundle against the tip, on a snapshot.
+fn judge_offer(
+    store: &ChainStore,
+    snapshot: &ReadSnapshot<'_>,
     rules: ChainRules,
     memo: &mut DrawableMemo,
     reference: &BundleRef,
     body: &BundleBody,
-) -> Result<BundleOffered, RunFault> {
+) -> Result<Offer, RunFault> {
     let h = reference.h();
-    let Some((tip_height, tip_hash, h_incl, rule_set)) = including(batch, rules)? else {
-        return Ok(BundleOffered::Refused {
+    // One per `h`, the first valid one wins (§7.5): a node that holds
+    // `h`'s bundle drops another before any signature is checked (§9.1).
+    // A relayed bundle reaches a node from several peers, so this is the
+    // common case once bundles travel.
+    if snapshot.bundle_queued(h).map_err(RunFault::Store)? {
+        return Ok(Offer::Decided(BundleOffered::AlreadyQueued { h }));
+    }
+    let view = SnapshotView::new(snapshot);
+    let Some(tip) = view.tip()? else {
+        return Ok(Offer::Decided(BundleOffered::Refused {
             h,
             row: None,
             why: "the chain is empty".into(),
-        });
+        }));
     };
+    let h_incl = tip
+        .height
+        .checked_add(BlockCount::ONE)
+        .ok_or(RunFault::NoNextHeight { tip: tip.height })?;
+    let rule_set = rules.in_force(h_incl);
     let network_id = rules.trust().network_id();
     let judging = Judging {
         h_incl,
         rule_set: &rule_set,
         network_id: &network_id,
     };
-    match judge_batch(batch, memo, judging, reference, body)? {
+    match judge_snapshot(store, &view, memo, judging, reference, body)? {
         None => {}
-        Some(Refusal::AlreadyRevealed) => return Ok(BundleOffered::AlreadyRevealed { h }),
-        Some(Refusal::Rule { row, why }) => return Ok(BundleOffered::Refused { h, row, why }),
+        Some(Refusal::AlreadyRevealed) => {
+            return Ok(Offer::Decided(BundleOffered::AlreadyRevealed { h }))
+        }
+        Some(Refusal::Rule { row, why }) => {
+            return Ok(Offer::Decided(BundleOffered::Refused { h, row, why }))
+        }
     }
     let capacity = rule_set
         .settlement_schedule()
         .challenge_response_blocks()
         .map_or(0, core::num::NonZeroU64::get);
+    Ok(Offer::Admit {
+        tip_height: tip.height,
+        tip_hash: tip.hash,
+        capacity,
+    })
+}
+
+/// Queue a bundle the rule admitted against `(tip_height, tip_hash)`.
+fn queue(
+    batch: &WriteBatch<'_, '_>,
+    reference: &BundleRef,
+    body: &BundleBody,
+    tip_height: BlockHeight,
+    tip_hash: BlockHash,
+    capacity: u64,
+) -> Result<BundleOffered, RunFault> {
+    let h = reference.h();
     match batch.queue_bundle(reference, body, tip_height, tip_hash, capacity) {
         Ok(()) => Ok(BundleOffered::Queued { h, tip_height }),
         Err(StoreError::Cannot(StoreCannot::Queue(QueueCannot::Held { h }))) => {

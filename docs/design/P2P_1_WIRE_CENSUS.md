@@ -389,6 +389,20 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 > `payload_kats.rs`). Gate: `scripts/ci/check_no_stripe_engine.sh`. The row
 > above is the census reading, not the present.
 
+> **UPDATE 2026-11-09 — three commands added: 2015–2017, the bundle
+> transport (`SO-D12` 4b; `ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5, `SCS-P25`,
+> `SCS-P27`, `SCS-P28`).** Not inherited, so not census rows: recorded here
+> so the enumeration stays the whole live surface. 2015
+> `NOTIFY_NEW_BUNDLE` carries `reference` and `body`, both strings; 2016
+> `NOTIFY_REQUEST_BUNDLE_BODIES` carries `hashes`, prunable hashes as one
+> POD blob; 2017 `NOTIFY_RESPONSE_BUNDLE_BODIES` carries `bodies`, an
+> object array of `{hash, body}`. All three are notifications owned by
+> chain sync through the session layer's dispatch table
+> (`rust/shekyl-levin/src/payload/bundles.rs`,
+> `rust/shekyl-chain-sync-runtime/src/bundles.rs`). A bundle is fluffed:
+> it has no Dandelion++ stem, because `0x0C` already makes its author
+> public. Caps and their derivations are `SHEKYL_P2P_PROTOCOL.md` PWD-B3.
+
 > **Ruled 2026-09-09 — `SHEKYL_P2P_PROTOCOL.md` PWD-B6: 2001 `NOTIFY_NEW_BLOCK` is deleted, so eight notify commands survive, not nine.** Both were one handler at this pin; the command id was the only distinction. Live identifiers: `NOTIFY_NEW_COMPACT_BLOCK` (2008) and `NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009). `P2P_SUPPORT_FLAG_FLUFFY_BLOCKS` (0x01) fell with 2001; 0x01 is unassigned.
 
 ### 4.D Peerlist, peer identity, persisted store

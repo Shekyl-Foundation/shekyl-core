@@ -3,12 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! A relayed tip as a compact announcement (2008).
+//! A relayed tip as a compact announcement (2008), and the fan-out that
+//! relays it and a bundle (2015, [`crate::bundles`]).
 //!
 //! The block and its attestation witness, and no transactions. The owner
 //! sends that announcement to every established session but the supplier,
 //! and to every established session when no session supplied it. The model
-//! has already decided that the block is relayed.
+//! has already decided that the block is relayed. A bundle goes by the same
+//! fan-out once the queue has admitted it.
 
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::store::{ChainStore, StoreError};

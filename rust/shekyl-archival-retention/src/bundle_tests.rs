@@ -1033,3 +1033,45 @@ fn with_c(c: u64) -> ArchivalParams {
         ..ArchivalParams::SHIPPED
     }
 }
+
+// ------------------------------------------------------- a fetched body
+
+/// A body is accepted for its reference only at the length the
+/// reference's bitmaps fix and only on hash equality (§7.5). The length is
+/// read first: one byte short or long is `Length` whatever the bytes hash
+/// to. Red edits: accept `>=` the length (the long case is then accepted
+/// or reaches the hash), or skip the hash (the flipped byte is accepted).
+#[test]
+fn a_body_is_accepted_only_at_its_length_and_its_hash() {
+    let three = body(3);
+    let reference = BundleRef::new(kept_at(H, 3, &[0x07]), three.prunable_hash());
+    assert_eq!(reference.accept_body(three.as_bytes()), Ok(three.clone()));
+
+    let mut long = three.as_bytes().to_vec();
+    long.push(0);
+    assert_eq!(
+        reference.accept_body(&long),
+        Err(BodyRefused::Length {
+            expected: reference.body_len(),
+            found: long.len(),
+        })
+    );
+    let short = &three.as_bytes()[..three.as_bytes().len() - 1];
+    assert_eq!(
+        reference.accept_body(short),
+        Err(BodyRefused::Length {
+            expected: reference.body_len(),
+            found: short.len(),
+        })
+    );
+    // A whole record more is a body of a valid shape, of the wrong length
+    // for this reference.
+    assert!(matches!(
+        reference.accept_body(body(4).as_bytes()),
+        Err(BodyRefused::Length { .. })
+    ));
+
+    let mut flipped = three.as_bytes().to_vec();
+    flipped[BUNDLE_WITNESS_LEN] ^= 1;
+    assert_eq!(reference.accept_body(&flipped), Err(BodyRefused::Hash));
+}

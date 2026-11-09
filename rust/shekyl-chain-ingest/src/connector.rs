@@ -90,7 +90,10 @@ mod run_fault;
 mod switch;
 #[cfg(test)]
 pub(crate) use bundles::ApplyAdmitting;
-pub use bundles::{BundleOffered, LearnDraws, Learned, OfferBundle};
+pub use bundles::{
+    file_bundle, BundleOffered, FiledBundle, LearnDraws, Learned, OfferBundle, OfferFault,
+    FILED_FEED_CAPACITY,
+};
 pub(crate) use run_fault::{fault_reply, halt_on_corrupt};
 pub use run_fault::{PlanMismatchReason, RunEnd, RunFault};
 pub use switch::{

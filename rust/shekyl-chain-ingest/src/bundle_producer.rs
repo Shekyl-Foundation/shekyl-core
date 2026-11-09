@@ -51,7 +51,7 @@ use shekyl_types::{BlockCount, BlockHeight};
 use shekyl_wire::tx_extra::TxExtraField;
 use tokio::sync::{mpsc, watch};
 
-use crate::connector::{BundleOffered, Connector, LearnDraws, Learned, OfferBundle, TipChanged};
+use crate::connector::{BundleOffered, Connector, LearnDraws, Learned, TipChanged};
 use crate::schedule::ChainRules;
 
 /// One read through the daemon's fetch path: the due read in, its outcome
@@ -65,6 +65,8 @@ pub type ReadFn =
 pub struct ProducerParts {
     /// The connector: the draws and the queue's admission.
     pub connector: kameo::actor::ActorRef<Connector>,
+    /// Where a queued bundle is published for the sync owner to relay.
+    pub filed: tokio::sync::broadcast::Sender<crate::connector::FiledBundle>,
     /// The store, read for the blocks near the tip.
     pub store: Arc<shekyl_chain_store::store::ChainStore>,
     /// The rules by height.
@@ -378,7 +380,8 @@ async fn offer(parts: &ProducerParts, filing: Filing, scheme_logged: &mut Scheme
             h.to_raw()
         );
     }
-    let offered = parts.connector.ask(OfferBundle { reference, body }).await;
+    let offered =
+        crate::connector::file_bundle(&parts.connector, &parts.filed, reference, body).await;
     match offered {
         Ok(BundleOffered::Queued { tip_height, .. }) => tracing::info!(
             h = h.to_raw(),

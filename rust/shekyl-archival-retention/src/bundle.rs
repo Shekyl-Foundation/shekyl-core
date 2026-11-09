@@ -532,6 +532,56 @@ impl BundleRef {
             u64::from(self.kept.passes.popcount()) + u64::from(self.kept.support.popcount());
         BUNDLE_WITNESS_LEN as u64 + records * BUNDLE_RECORD_LEN as u64
     }
+
+    /// The body this reference names, from bytes a peer sent for it
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5): accepted only at exactly
+    /// [`Self::body_len`] bytes and only on hash equality.
+    ///
+    /// The length is checked before anything is hashed, so a body the
+    /// reference's bitmaps do not fix costs a comparison and no hash. A
+    /// body that passes both is not yet a valid bundle: the witness and
+    /// receipt checks are admission's (§9.1).
+    ///
+    /// # Errors
+    ///
+    /// [`BodyRefused::Length`] for any length but [`Self::body_len`];
+    /// [`BodyRefused::Hash`] when the bytes do not hash to the reference's
+    /// prunable hash.
+    pub fn accept_body(&self, bytes: &[u8]) -> Result<BundleBody, BodyRefused> {
+        let expected = self.body_len();
+        if u64::try_from(bytes.len()).ok() != Some(expected) {
+            return Err(BodyRefused::Length {
+                expected,
+                found: bytes.len(),
+            });
+        }
+        if bundle_prunable_hash(bytes) != self.prunable_hash {
+            return Err(BodyRefused::Hash);
+        }
+        // The exact length is the witness and a whole number of records,
+        // so this decode cannot refuse; its error is mapped, not unwrapped.
+        BundleBody::decode(bytes).map_err(|_| BodyRefused::Length {
+            expected,
+            found: bytes.len(),
+        })
+    }
+}
+
+/// Bytes refused as the body a reference names (§7.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum BodyRefused {
+    /// The reference's bitmaps fix the body's length, and these bytes are
+    /// another length.
+    #[error("the reference names a {expected}-byte body, not {found} bytes")]
+    Length {
+        /// [`BundleRef::body_len`].
+        expected: u64,
+        /// The bytes offered.
+        found: usize,
+    },
+    /// The bytes do not hash to the reference's prunable hash.
+    #[error("the body does not hash to the reference's prunable hash")]
+    Hash,
 }
 
 /// One pass record. It names nothing: its draw is the position of its bit,

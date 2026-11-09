@@ -100,6 +100,30 @@ fn queue_key(h: BlockHeight) -> u64 {
     h.to_raw()
 }
 
+/// Whether the queue table holds a row for `h`.
+fn bundle_queued<T: ReadTables>(txn: &T, h: BlockHeight) -> Result<bool, ReadFault> {
+    Ok(txn
+        .table(ARCHIVAL_BUNDLE_QUEUE)?
+        .get(queue_key(h))?
+        .is_some())
+}
+
+/// The body stored under `prunable_hash`, if any.
+fn bundle_body<T: ReadTables>(
+    txn: &T,
+    prunable_hash: &[u8; 32],
+) -> Result<Option<BundleBody>, ReadFault> {
+    let bodies = txn.table(ARCHIVAL_BUNDLE_BODY)?;
+    let Some(row) = bodies.get(*prunable_hash)? else {
+        return Ok(None);
+    };
+    let body = row
+        .value()
+        .decode()
+        .map_err(|cause| undecodable(BODY_CELL, cause))?;
+    Ok(Some(body.0))
+}
+
 /// Every entry, ascending by `h`, with the bodies held to them (SI-41).
 fn queued_bundles<T: ReadTables>(txn: &T) -> Result<Vec<QueueEntry>, ReadFault> {
     let queue = txn.table(ARCHIVAL_BUNDLE_QUEUE)?;
@@ -397,5 +421,29 @@ impl ReadSnapshot<'_> {
     /// decode; engine faults.
     pub fn queued_bundles(&self) -> Result<Vec<QueueEntry>, StoreError> {
         queued_bundles(self.txn()).map_err(ReadFault::into_plain)
+    }
+
+    /// Whether the queue holds a bundle for `h`: a point read of the queue
+    /// table, decoding nothing. The queue is one per `h` and the first
+    /// valid bundle wins (§7.5), so admission asks this before it judges
+    /// another: a node that holds `h`'s bundle spends no signature check
+    /// on a second one (§9.1).
+    ///
+    /// # Errors
+    ///
+    /// Engine faults.
+    pub fn bundle_queued(&self, h: BlockHeight) -> Result<bool, StoreError> {
+        bundle_queued(self.txn(), h).map_err(ReadFault::into_plain)
+    }
+
+    /// The body stored under `prunable_hash`, whichever holder keeps it
+    /// (§7.5): what a peer's body request is answered from. A point read
+    /// of the body table; the holders are not walked.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a row that does not decode; engine faults.
+    pub fn bundle_body(&self, prunable_hash: &[u8; 32]) -> Result<Option<BundleBody>, StoreError> {
+        bundle_body(self.txn(), prunable_hash).map_err(ReadFault::into_plain)
     }
 }

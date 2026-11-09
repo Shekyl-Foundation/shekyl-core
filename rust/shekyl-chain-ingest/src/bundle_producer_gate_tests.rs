@@ -251,6 +251,7 @@ async fn start(
     };
     let parts = ProducerParts {
         connector: scenario.connector().clone(),
+        filed: tokio::sync::broadcast::Sender::new(crate::connector::FILED_FEED_CAPACITY),
         store,
         rules: rules(),
     };

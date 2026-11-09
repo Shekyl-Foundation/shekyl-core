@@ -61,7 +61,8 @@ use tokio::task::JoinSet;
 
 use crate::admission::{ArrivalBound, Buckets};
 use crate::connector::{
-    Connector, ConnectorArgs, PopBeyondReorgCap, PopBlocks, Rewound, RunFault, WatchTip,
+    BundleOffered, Connector, ConnectorArgs, FiledBundle, OfferBundle, OfferFault,
+    PopBeyondReorgCap, PopBlocks, Rewound, RunFault, WatchTip, FILED_FEED_CAPACITY,
 };
 use crate::follower::JobSeat;
 use crate::schedule::ChainRules;
@@ -544,6 +545,8 @@ pub(crate) struct Shared<S: Substrate> {
     rules: ChainRules,
     substrate: Arc<S>,
     connector: ActorRef<Connector>,
+    /// The bundles this node filed and queued, for the sync owner to relay.
+    filed: tokio::sync::broadcast::Sender<FiledBundle>,
     /// The daemon's one hasher budget.
     budget: Budget,
     /// Set with [`Self::request_stop`]. The budget's waiters load it.
@@ -881,9 +884,54 @@ pub struct Door {
     room: Arc<crate::room::Room>,
     admission: Arc<Admission>,
     seeds: tokio::sync::watch::Receiver<Option<SeedPair>>,
+    connector: ActorRef<Connector>,
+    filed: tokio::sync::broadcast::Sender<FiledBundle>,
 }
 
 impl Door {
+    /// Offer a bundle a peer relayed to the queue (§7.5). Admission is the
+    /// bundle rule against the tip, the same rule this node's own bundles
+    /// meet ([`OfferBundle`]); the verdict is the reply. Only an admitted
+    /// bundle's body is stored.
+    ///
+    /// # Errors
+    ///
+    /// [`OfferFault`] when the connector faulted or has stopped.
+    pub async fn offer_bundle(
+        &self,
+        reference: shekyl_archival_retention::BundleRef,
+        body: shekyl_archival_retention::BundleBody,
+    ) -> Result<BundleOffered, OfferFault> {
+        match self.connector.ask(OfferBundle { reference, body }).await {
+            Ok(offered) => Ok(offered),
+            Err(kameo::error::SendError::HandlerError(fault)) => Err(OfferFault::Connector(fault)),
+            Err(_) => Err(OfferFault::Stopped),
+        }
+    }
+
+    /// File a bundle this node produced (§7.5): the queue's admission, and
+    /// on admission the relay feed ([`Self::filed`]). The producer's task
+    /// files through the same path.
+    ///
+    /// # Errors
+    ///
+    /// [`OfferFault`] when the connector faulted or has stopped.
+    pub async fn file_bundle(
+        &self,
+        reference: shekyl_archival_retention::BundleRef,
+        body: shekyl_archival_retention::BundleBody,
+    ) -> Result<BundleOffered, OfferFault> {
+        crate::connector::file_bundle(&self.connector, &self.filed, reference, body).await
+    }
+
+    /// The bundles this node files and queues from now on, for the sync
+    /// owner to relay (`SCS-P25`). A receiver that falls more than
+    /// [`FILED_FEED_CAPACITY`] behind misses the oldest.
+    #[must_use]
+    pub fn filed(&self) -> tokio::sync::broadcast::Receiver<FiledBundle> {
+        self.filed.subscribe()
+    }
+
     /// The seed window as last pinned and published: the pair the
     /// lookup-only longhash answers from. `None` until the first pair is
     /// pinned. A caller whose proof found a seed absent waits on this for
@@ -1272,6 +1320,7 @@ where
             rules,
             substrate,
             connector,
+            filed: tokio::sync::broadcast::Sender::new(FILED_FEED_CAPACITY),
             budget,
             stop_flag: Arc::new(AtomicBool::new(false)),
             stop: tokio::sync::watch::Sender::new(false),
@@ -1306,6 +1355,8 @@ where
             room: crate::room::Room::new(config.room.get()),
             admission,
             seeds: shared.seeds.subscribe(),
+            connector: shared.connector.clone(),
+            filed: shared.filed.clone(),
         };
         let loop_shared = Arc::clone(&shared);
         let loop_door = door.clone();
@@ -1317,6 +1368,7 @@ where
         let producing = follow.producer.map(|seat| {
             let parts = crate::bundle_producer::ProducerParts {
                 connector: shared.connector.clone(),
+                filed: shared.filed.clone(),
                 store: Arc::clone(&shared.store),
                 rules: shared.rules,
             };
