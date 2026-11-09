@@ -13,9 +13,16 @@
 //! - [`platform`]: the account's home and the machine's roots from the
 //!   account interface, never `HOME`, `XDG_*` or `%APPDATA%` (IG-13).
 //!
-//! The `unsafe` here is the operating-system calls these three make; the
+//! On Unix, `interrupt` reads whether `SIGINT` is ignored, before a handler
+//! is installed. Windows has no documented read of the inherited
+//! ignore-Ctrl-C attribute, so that module is Unix-only; the daemon records
+//! the attribute as unreadable and does not pretend to have observed it.
+//!
+//! The `unsafe` here is the operating-system calls these modules make; the
 //! daemon that calls them is safe Rust.
 
 pub mod harden;
+#[cfg(unix)]
+pub mod interrupt;
 pub mod panic_hook;
 pub mod platform;

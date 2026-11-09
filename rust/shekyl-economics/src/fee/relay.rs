@@ -44,7 +44,7 @@ pub(super) fn clamped_median(median: u64, params: &EconomicParams) -> u64 {
 /// Raw `C`, no rounding. `max(1)` is kept: a zero floor admits everything,
 /// and a failed block reward is not an admission.
 #[must_use]
-pub fn checked_relay_fee_floor(
+pub(super) fn checked_relay_fee_floor(
     base_reward: u64,
     median: u64,
     ref_tx_weight: u64,
@@ -60,7 +60,7 @@ pub fn checked_relay_fee_floor(
     Some(u64::try_from(num / m2s).unwrap_or(u64::MAX).max(1))
 }
 
-/// [`checked_relay_fee_floor`], saturating outside the domain.
+/// `F = R·C·w_ref/M²`, floored at 1; saturates outside the `u128` domain.
 #[must_use]
 pub fn relay_fee_floor(
     base_reward: u64,

@@ -578,7 +578,7 @@ pub fn key_image_generator(output_key: &[u8; 32]) -> [u8; 32] {
 // Leaf helpers
 // ---------------------------------------------------------------------------
 
-/// Convert Shekyl 4-scalar leaves into serialized byte format for LMDB storage.
+/// Concatenates the leaves' canonical encodings ([`ShekylLeaf::to_bytes`]) in order.
 pub fn leaves_to_bytes(leaves: &[ShekylLeaf]) -> Vec<u8> {
     let mut out = Vec::with_capacity(leaves.len() * ShekylLeaf::SIZE);
     for leaf in leaves {

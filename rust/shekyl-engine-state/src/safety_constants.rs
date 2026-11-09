@@ -30,7 +30,7 @@
 //! to a V3 fresh-start wallet and are deliberately absent from this
 //! struct. `70-modular-consensus.mdc` — this module lives in
 //! `shekyl-engine-state` rather than `shekyl-consensus` because
-//! `shekyl-consensus` is scoped to PoW proof validation; wallet safety
+//! `shekyl-consensus` holds only the consensus lock windows; wallet safety
 //! policy is a wallet-state concern.
 //!
 //! One set on every network (`NETWORK_IDENTITY.md` NI-R4; Rick,
