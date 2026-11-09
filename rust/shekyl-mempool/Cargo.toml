@@ -70,6 +70,9 @@ trybuild = "1"
 # under the pool file's own table definition.
 redb = { workspace = true }
 shekyl-store-codec = { path = "../shekyl-store-codec" }
+# Each test pool file's own directory (`test_paths.rs`), which takes the
+# store's `.creation-lock` with it when the test ends.
+tempfile = { workspace = true }
 
 # The trybuild programs name the pool's own types (`Pool`, `PoolView`,
 # `RelayView`), which exist only with `pool`. Without the feature the crate

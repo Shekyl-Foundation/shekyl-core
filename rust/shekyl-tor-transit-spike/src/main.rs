@@ -346,21 +346,24 @@ async fn main() -> Result<(), String> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(200);
 
-    let root = std::env::temp_dir().join(format!("shekyl-transit-{}", utc_ms()));
-    let client_dir = root.join("client");
-    let service_dir = root.join("service");
+    // The directory removes itself when `root` drops, so a panic or an early
+    // return in `run` leaves nothing behind. A failure keeps it instead.
+    let root = tempfile::Builder::new()
+        .prefix("shekyl-transit-")
+        .tempdir()
+        .map_err(|e| e.to_string())?;
+    let client_dir = root.path().join("client");
+    let service_dir = root.path().join("service");
     std::fs::create_dir_all(&client_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&service_dir).map_err(|e| e.to_string())?;
 
     let result = run(&binary, per_arm, client_dir, service_dir).await;
-    match &result {
-        Ok(()) => {
-            let _ = std::fs::remove_dir_all(&root);
-        }
-        Err(e) => eprintln!(
+    if let Err(e) = &result {
+        let kept = root.keep();
+        eprintln!(
             "session failed ({e})\n  tor data dirs KEPT for diagnosis at {}\n  (cached-microdesc-consensus present = that daemon reached the directory;\n   absent = it never got that far. ManagedTor reports progress over the\n   control port, not a log file, so stderr above is the event record.)",
-            root.display()
-        ),
+            kept.display()
+        );
     }
     result
 }

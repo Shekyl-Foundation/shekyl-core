@@ -4680,6 +4680,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "tempfile",
  "trybuild",
 ]
 
@@ -5468,6 +5469,7 @@ dependencies = [
  "kameo",
  "shekyl-onion-key",
  "shekyl-tor-control-client",
+ "tempfile",
  "tokio",
 ]
 
