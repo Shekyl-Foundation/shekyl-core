@@ -13,6 +13,7 @@ on:
           - proptest-exhaustive
           - store-ignored
           - economics-sim-ignored
+          - staking-sim-ignored
           - chain-ingest-ignored
           - wire-ignored
           - producer-gate
@@ -242,6 +243,41 @@ jobs:
           BRANCH: ${{ matrix.branch }}
         run: bash scripts/ci/ignored_set_economics_sim.sh
 
+  staking-sim-ignored:
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'staking-sim-ignored' }}
+    # The staking sim's `#[ignore]`d set: the five-seed L11/L13 pins on both
+    # reward arms (EUP-3 check half). The registered plateau arm is the check
+    # half's falsifier; the production arm is the default the documents
+    # quote. No lane ran either before this job. The set is read from the
+    # checked-out ref's scripts/ci/ignored_set_staking_sim.sh, as the
+    # economics sim's is, so each leg is judged by its own tree. About 35 s
+    # in release on a 16-core workstation; the budget is for a 4-vCPU runner
+    # building the workspace's dependencies.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: Run the staking sim's ignored tests
+        # The set and its assertions are scripts/ci/ignored_set_staking_sim.sh,
+        # in the tree under test: each branch judges itself.
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: bash scripts/ci/ignored_set_staking_sim.sh
+
   chain-ingest-ignored:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'chain-ingest-ignored' }}
     # The chain-ingest crate's `#[ignore]`d set: the scenarios that fill
@@ -345,7 +381,7 @@ jobs:
     #
     # Scheduled runs report. A dispatched run reports only when asked
     # (`report`): the person who dispatched it is reading it.
-    needs: [store-ignored, economics-sim-ignored, chain-ingest-ignored, wire-ignored, producer-gate]
+    needs: [store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, wire-ignored, producer-gate]
     if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
@@ -383,6 +419,14 @@ jobs:
                 lines: [
                   'The `wire-ignored` job failed. It runs two `#[ignore]`d tests of `shekyl-wire`: `rt_w10_listed_tx_parse` (the RT-W10 harness, with `RT_W10_OUT` unset) and `the_input_caps_cost_is_measured_not_inherited` (BA-I30).',
                   'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_wire.sh` whether the new test is run or is a helper.',
+                ],
+              },
+              'staking-sim-ignored': {
+                title: 'nightly staking-sim ignored tests RED',
+                lines: [
+                  'The `staking-sim-ignored` job failed. It runs two `#[ignore]`d tests of `shekyl-staking-sim`: `l11_l13_five_seed_pins` (the registered plateau arm, the EUP-3 check half\'s falsifier) and `l11_l13_five_seed_production_pins` (the production arm).',
+                  'A pin that moved is a sim change: predict it in `docs/design/STAKER_ARCHIVAL_SIM.md`, then re-pin; otherwise the sim drifted from its record.',
+                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_staking_sim.sh` whether the new test is run.',
                 ],
               },
               'economics-sim-ignored': {
