@@ -160,7 +160,8 @@ more purse manufactures nothing — only capacity does, per L8). So the lever is
 the raw pool. **P2 (flow-cost denomination):** `flow_cost` is **token-denominated** in the model
 (every term in the APR shares the `budget` unit), so the price-cancellation that made "only
 expected depreciation bites" was a modeling artifact, not an economic fact. Adding a
-**fiat-denominated** flow cost (`apr = R/B − F/(B·p)`) confirms the death spiral has a **second,
+**fiat-denominated** flow cost (`apr = R/B − F/(B·p)`; on the production arm the capital carry
+stays out of `F`, P11) confirms the death spiral has a **second,
 level-driven leg**: a price falling to 0.25 *with `price_coupling = 0` (no trust-loss trigger)*
 collapses deep coverage outright (`deep_und 1.0`, `bondA` 81→28) — the level channel ignites the
 loop with no expectation feedback at all. And it is the **more dangerous leg**: the
@@ -3371,6 +3372,24 @@ shape. At baseline (storage 0.03 per held shard, carry 0.03 per bond at
 - *Slashes.* On the swan rows the price gaps at the shock, so the path
   before it runs at p = 1 and is unchanged. `slashed_capital` holds
   (`swan_perfect` 270.8, `swan_perfect_servo` 172.5).
+
+**P11 outcome** (both sweeps at `49b8c622f8`, against `d4ce2c40da`).
+
+| P11 claim | Outcome | Grade |
+| --- | --- | --- |
+| Both pins hold; the registered sweep is byte-identical | Both pin tests pass; the registered sweep's 375 scenarios are byte-identical | Held |
+| Production rows without a fiat cost, and `p2_fiat_stable`, byte-identical | 364 of 375 unchanged, `p2_fiat_stable` among them | Held |
+| Exactly the eleven falling-price rows move, toward fewer exits | Exactly those eleven move. `bondA` rises on nine; it falls on `swan_price_gap_servo400` (59.93 → 59.80) and `swan4_vshape_reseed3` (94.20 → 91.17) | Held, two exceptions |
+| The unaided collapses keep `cDeepU` at 1 | `p2_fiat_fall` 1.000 (`bondA` 34.98 → 50.45, deep extinctions 593 → 350), `swan_perfect` 1.000 (26.18 → 28.13). `swan_price_gap` leaves the collapse: 1.000 → 0.938 (32.60 → 38.62) | Two of three |
+| The servo rows move most, `cDeepU` down | `swan_price_gap_servo` moves most of all: 0.872 → 0.554, `bondA` 40.40 → 49.12. `p2_fiat_fall_servo` 0.584 → 0.566. The two servo-400 rows go the other way: `swan_price_gap_servo400` 0.340 → 0.419, `swan4_servo400_reseed3` 0.370 → 0.389 | Wrong on the servo-400 rows |
+| The V-shape rows move least, the same way | `swan4_vshape_reseed12` 0.079 → 0.077. The other two lose coverage: `swan_price_vshape` 0.056 → 0.085 with `oUmx` 0.870 → 1.000, `swan4_vshape_reseed3` 0.024 → 0.082 with `oUmx` 0.650 → 1.000 | Wrong on two of three |
+| `slashed_capital` holds | 270.8 and 172.5, unchanged | Held |
+
+Fewer exits did not mean better coverage on the four rows where the
+servo's 400 ceiling or the price's recovery carries the coverage: there a
+lighter drag left the deep set and the oldest band less covered. Why is
+not diagnosed here. The coupling half re-reads these rows on the economics
+sim's purse.
 
 ## L14×L15 — proof-of-archival in harmony with retrieval (specification)
 

@@ -189,10 +189,11 @@ pub struct SimConfig {
     /// damps this loop (bounded) or it runs away (priority-1 durability failure).
     pub price_coupling: f64,
     /// **Fiat flow cost (P2 / second death-spiral leg).** When on, the per-actor flow
-    /// cost is fiat-denominated and divided by `token_price` in the exit APR
-    /// (`apr = R/B − F/(B·p)`), so a low/falling price raises the real flow-cost drag and
-    /// can force exit with **no** trust-loss trigger. Off ⇒ token-denominated flow cost
-    /// (the price cancels; every pre-P2 scenario), byte-identical.
+    /// expenses are fiat-denominated and divided by `token_price` in the exit APR
+    /// (`apr = R/B − K/B − F/(B·p)`; the capital carry `K` stays in tokens, P11), so a
+    /// low/falling price raises the real flow-cost drag and can force exit with **no**
+    /// trust-loss trigger. Off ⇒ token-denominated flow cost (the price cancels; every
+    /// pre-P2 scenario), byte-identical.
     pub flow_cost_fiat: bool,
     /// Initial token price (fiat per token) used when `flow_cost_fiat`. `1.0` ⇒ the fiat
     /// flow cost equals the token-denominated one (the cancellation case).
