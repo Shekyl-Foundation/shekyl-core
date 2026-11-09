@@ -865,8 +865,8 @@ pub struct InFlightEntry {
     /// Sends so far, the first included; `0` when never sent.
     pub attempts: u32,
     /// For `refused` and `expired`: the end date, after which the
-    /// transaction can never be mined. The funds return once
-    /// `pscan_synced_height` is greater than it. `null` in the other states,
+    /// transaction can never be mined. What the record holds (`reserved`)
+    /// returns once `pscan_synced_height` is greater than it. `null` in the other states,
     /// where no return is expected.
     pub funds_return_at: Nullable<i64>,
     /// What the record still holds (WR-Q6): the amounts of its reserved

@@ -764,6 +764,18 @@ moves; the totals were already on `staking_info`. No gindex, persona or
 slot reaches the wire. The engine's record redacts the amount from
 `Debug`, as the funding records it is summed from are redacted.
 
+**No sentence claims funds the field does not show.** Before WR-Q6 the
+engine's `refused` reason ended "Its funds stay set aside until its
+transaction can no longer be mined", and the CLI added "Its funds return
+once the staking scan passes height N" to every `refused` and `expired`
+line. Both are false for a zero-fee claim, which reserves nothing. The
+state cannot know what is held, so the `refused` reason now says only the
+refusal and that nothing more will be sent; `reserved` carries the funds.
+The CLI says a record holds funds that return at the end date only when
+`reserved` is above zero. At `"0"` it says the record holds nothing and
+when it is settled; at `null`, when it is settled and that the amount shows
+once the scan has run.
+
 **Overflow.** The inputs are the wallet's own distinct outputs, so a sum
 past `u64` is corrupt state. The read fails closed with the staking
 read's overflow error; a money total is never wrapped.
@@ -774,7 +786,10 @@ zero, and the redacted `Debug`); `an_in_flight_entry_carries_what_it_holds`
 (wire: a decimal string, `"0"`, `null`);
 `staking_info_refuses_a_reply_missing_a_required_member` (the field is
 required, `null` decodes, a JSON number does not);
-`an_in_flight_line_says_what_it_holds` (CLI).
+`an_in_flight_line_says_what_it_holds` (CLI: an amount, nothing, unknown,
+and on a `refused` line no claim of funds unless something is held);
+`reasons_are_user_sentences_and_linkage_follows_the_send` (no `refused`
+reason says funds are set aside).
 
 ---
 
@@ -904,7 +919,7 @@ and the review rulings of 2026-10-17 (§7.3).
 | WR-Q3 / WR-Q4: the release table, every kind | `pending_post_block` tests and `the_release_moves_each_kind_from_in_flight_to_outcomes` |
 | §7.3: a stake with every input spent holds; a partly spent one releases | `the_release_outcome_follows_the_precedence_table`; `a_stake_with_every_input_spent_reads_held` (ledger at the end date while the frontier is still behind it); the alarm from the two seals, `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |
 | §7.3: `spent_elsewhere` clears only on acknowledgement | `spent_elsewhere_survives_a_new_seal_and_a_new_ending`; its alarm survives a new seal in `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |
-| WR-Q6: an entry's `reserved` is what its reserved inputs still hold; `null` with no scan evidence | `staking_outcomes::tests::an_in_flight_record_reports_what_it_still_holds`; `staking::tests::an_in_flight_entry_carries_what_it_holds`; `types::tests::staking_info_refuses_a_reply_missing_a_required_member`; the CLI's `an_in_flight_line_says_what_it_holds` |
+| WR-Q6: an entry's `reserved` is what its reserved inputs still hold; `null` with no scan evidence | `staking_outcomes::tests::an_in_flight_record_reports_what_it_still_holds`; `staking::tests::an_in_flight_entry_carries_what_it_holds`; `types::tests::staking_info_refuses_a_reply_missing_a_required_member`; the CLI's `an_in_flight_line_says_what_it_holds`; `staking_outcomes::tests::reasons_are_user_sentences_and_linkage_follows_the_send` (no `refused` reason claims funds) |
 | WR-Q5: no persona, slot, delay or funding output on the wire; `p_slot` refused | `types::tests::staking_outcome_wire_names_no_persona_slot_or_funding_output`, `staking_reads_on_fresh_wallet_are_zero_and_offline` |
 
 ### 7.3 Review rulings — RULED 2026-10-17 (Rick, on #1109 at `c9ac6bf52`)

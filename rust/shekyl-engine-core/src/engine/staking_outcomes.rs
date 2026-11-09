@@ -96,11 +96,13 @@ pub enum InFlightState {
     Refused {
         /// What the daemon said.
         cause: TerminalCause,
-        /// The end date; the funds return once the staking scan is past it.
+        /// The end date; what the record holds returns once the staking scan
+        /// is past it.
         funds_return_at: BlockHeight,
     },
-    /// The end date has passed, so the transaction can never be mined. The
-    /// funds return once the staking scan is past `funds_return_at`.
+    /// The end date has passed, so the transaction can never be mined. What
+    /// the record holds returns once the staking scan is past
+    /// `funds_return_at`.
     Expired {
         /// The end date.
         funds_return_at: BlockHeight,
@@ -118,15 +120,14 @@ pub enum InFlightState {
 impl InFlightState {
     /// The user sentence for a refused or held record, and for an expired
     /// one a daemon refused (rule 81); `None` for every other state, which
-    /// needs none.
+    /// needs none. It never says the record holds funds: a zero-fee claim
+    /// reserves none, and only [`InFlightRecord::reserved`] knows (WR-Q6).
     #[must_use]
     pub fn reason(&self) -> Option<String> {
         match self {
-            Self::Refused { cause, .. } => Some(format!(
-                "{} Nothing more will be sent. Its funds stay set aside until \
-                 its transaction can no longer be mined.",
-                refusal(cause)
-            )),
+            Self::Refused { cause, .. } => {
+                Some(format!("{} Nothing more will be sent.", refusal(cause)))
+            }
             Self::Expired {
                 cause: Some(cause), ..
             } => Some(refusal(cause).into_owned()),

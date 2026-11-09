@@ -617,6 +617,9 @@ fn reasons_are_user_sentences_and_linkage_follows_the_send() {
         .expect("a refused record has a reason");
         assert!(seen.insert(refusal(&cause)), "{cause:?} shares a sentence");
         assert!(held.contains("Nothing more will be sent"), "{held}");
+        // A zero-fee claim reserves nothing, so the state cannot say funds
+        // are held; `InFlightRecord::reserved` says what is (WR-Q6).
+        assert!(!held.contains("set aside"), "{held}");
         for name in ["Refused", "TerminalCause", &format!("{cause:?}")] {
             assert!(!held.contains(name), "{name} leaked into: {held}");
         }
